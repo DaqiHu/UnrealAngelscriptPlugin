@@ -382,13 +382,39 @@ public:
 		ASSERT_THAT(AreEqual(2, Output.ProviderOutput.Functions.Num()));
 		ASSERT_THAT(IsTrue(Output.ProviderOutput.ProviderId
 			== Graph.Settings.ProviderId));
+		ASSERT_THAT(IsTrue(Output.Diagnostics.RequestedBackendId
+			== FAngelscriptStaticJITBackendId::TypedAST()));
+		ASSERT_THAT(IsTrue(Output.Diagnostics.CaptureProfile
+			== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR));
+		ASSERT_THAT(AreEqual(2, Output.Diagnostics.FallbackChain.Num()));
+		ASSERT_THAT(IsTrue(Output.Diagnostics.FallbackChain[0]
+			== FAngelscriptStaticJITBackendId::TypedAST()));
+		ASSERT_THAT(IsTrue(Output.Diagnostics.FallbackChain[1]
+			== FAngelscriptStaticJITBackendId::Bytecode()));
 		ASSERT_THAT(AreEqual(3, Output.Functions.Num()));
 		ASSERT_THAT(IsTrue(Output.Functions[0].ActualBackendId
 			== FAngelscriptStaticJITBackendId::TypedAST()));
 		ASSERT_THAT(IsTrue(Output.Functions[1].ActualBackendId
 			== FAngelscriptStaticJITBackendId::Bytecode()));
+		ASSERT_THAT(AreEqual(2, Output.Functions[1].BackendAttempts.Num()));
+		ASSERT_THAT(IsTrue(
+			Output.Functions[1].BackendAttempts[0].BackendId
+				== FAngelscriptStaticJITBackendId::TypedAST()));
+		ASSERT_THAT(IsTrue(
+			Output.Functions[1].BackendAttempts[0].Disposition
+				== EAngelscriptStaticJITFunctionDisposition::Unsupported));
+		ASSERT_THAT(AreEqual(
+			FString(TEXT("not supported by fake backend")),
+			Output.Functions[1].BackendAttempts[0].Detail));
+		ASSERT_THAT(IsTrue(
+			Output.Functions[1].BackendAttempts[1].BackendId
+				== FAngelscriptStaticJITBackendId::Bytecode()));
+		ASSERT_THAT(IsTrue(
+			Output.Functions[1].BackendAttempts[1].Disposition
+				== EAngelscriptStaticJITFunctionDisposition::Emitted));
 		ASSERT_THAT(IsTrue(Output.Functions[2].Disposition
 			== EAngelscriptStaticJITFunctionDisposition::Unsupported));
+		ASSERT_THAT(AreEqual(2, Output.Functions[2].BackendAttempts.Num()));
 		int32 ModuleSourceCount = 0;
 		for (const FAngelscriptJITGeneratedFile& File :
 			Output.ProviderOutput.Files)
@@ -453,6 +479,8 @@ public:
 		FString Error;
 		ASSERT_THAT(IsFalse(Generator.Generate(Request, Output, &Error)));
 		ASSERT_THAT(IsTrue(Error.Contains(TEXT("CaptureProfileMismatch"))));
+		ASSERT_THAT(IsTrue(Output.Diagnostics.TaskError.Contains(
+			TEXT("CaptureProfileMismatch"))));
 		ASSERT_THAT(AreEqual(0, TypedAST.CreateCount));
 		ASSERT_THAT(AreEqual(0, Bytecode.CreateCount));
 	}

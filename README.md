@@ -159,7 +159,84 @@ profile before packaging. They do not depend on Editor, Live Coding, or
 emission is currently disabled; calls continue through the current binding so
 stale code cannot bypass provider routing.
 
-Runtime diagnostics:
+### Unified coordinator and optional Runtime JIT
+
+Every `asIScriptEngine` installs exactly one Engine-owned
+`FAngelscriptJITCoordinator` as its `asIJITCompiler`. Static generators and
+optional Runtime backend plugins do not replace that compiler. The coordinator
+selects one execution tier per current function:
+
+```text
+Auto: exact Static AOT -> selected Runtime JIT -> VM
+VMOnly: VM
+StaticAOTOnly: exact Static AOT -> VM
+RuntimeOnly: selected Runtime JIT -> VM
+```
+
+Static and Runtime backends intentionally use independent contracts. The
+private synchronous Static contract consumes a complete generation graph and a
+separate emit set, then returns generated C++ and stable references. Its stable
+BackendIds are `bytecode` and `typed-ast`; a typed request uses the per-function
+fallback chain `typed-ast -> bytecode -> VM`. Generator diagnostics retain each
+function's ordered backend attempts and reasons as well as its final actual
+backend. Static generation runs in a
+dedicated generation-only Engine that replays sealed native bindings and
+performs descriptor/Entry-Plan analysis without creating script UObjects,
+publishing live routes, running reload/reinstancing, or attaching editor/runtime
+services.
+
+Runtime plugins register an `IAngelscriptRuntimeJITBackendFactory` modular
+feature and use the exported current-revision factory/session ABI in
+`Public/JIT/AngelscriptRuntimeJITBackend.h`. The coordinator selects an exact
+BackendId, copies and validates its metadata, and creates a separate session for
+each Engine. Workers consume owned immutable bytecode snapshots with stable
+identities and helper/reference tokens; they never retain AngelScript or Unreal
+object pointers. A successful result is a whole-function `VMEntry` plus a code
+lease and is published only when its Engine namespace, function revision, Entry
+ABI, configuration generation, and cancellation generation still match.
+Runtime code is not stored in Cache V2, emitted as a Static Provider, or shared
+between Engines.
+
+The initial Runtime slice supports three policies:
+
+- `EagerSync` compiles and publishes at the first authoritative route-ready
+  safe point before it returns.
+- `EagerBackground` retains VM, compiles in the background, and publishes only
+  at a later Engine safe point.
+- `LazyFirstCall` lets the claiming call retain and execute VM; only later calls
+  can observe a successfully published result.
+
+The five host execution paths are ordinary VM, Static `VMEntry`, Static
+`RawEntry`, Static `ParmsEntry`, and Runtime `VMEntry`. Runtime `RawEntry` and
+`ParmsEntry` are deliberately absent. Unsupported calls, managed values,
+object receivers, suspend/latent state, exception cleanup, or Entry ABI
+mismatch keep the whole function on VM. Debugger and CodeCoverage visibility
+gate Runtime entries without changing existing Static AOT behavior.
+
+Process configuration is explicit:
+
+```text
+-as-jit-mode=auto|vm|aot|runtime
+-as-runtime-jit-backend=none|<backend-id>
+-as-runtime-jit-compile=eager-sync|eager-background|lazy-first-call
+```
+
+An invalid execution mode fails closed to VM. An invalid Runtime backend or
+policy disables only Runtime compilation and does not suppress an otherwise
+exact Static AOT route. Runtime Backend ABI revision is frozen at `2` and Entry
+ABI revision at `1`; plugins such as future MIR/LLVM backends must compile
+against the repository header and pass the fake-backend contract/conformance
+tests before advertising that revision.
+
+Unreal ModuleManager remains responsible for backend DLL load/unload. During
+Engine shutdown the coordinator closes request admission, cancels the current
+session generation, drains all admitted synchronous/background/lazy work,
+retires bindings, waits for active readers, and only then releases code leases
+and the session. Individual function replacement stale-drops that exact result
+without generation-wide cancellation, so unrelated functions are not
+cancelled.
+
+Static AOT diagnostics remain available through:
 
 ```text
 as.StaticJIT.DumpDiagnostics
@@ -170,6 +247,22 @@ as.StaticJIT.DumpDiagnostics -Function=<canonical-declaration-or-function-key>
 The machine-readable format is schema revision 2 and reports Provider/module
 ownership, routes, mismatch reasons, VM/Raw/Parms publication, stable reference
 slots, execution counters, and refresh timings.
+
+Non-Shipping builds also expose unified coordinator/Runtime diagnostics:
+
+```text
+as.JIT.DumpDiagnostics
+as.JIT.DumpDiagnostics -Output=<json-file>
+as.JIT.DumpDiagnostics -Function=<canonical-declaration-or-function-key>
+```
+
+The pointer-free schema revision 1 reports execution mode, Runtime backend and
+policy, factory/session/gate availability, requested and actual tier, Static
+match, Runtime profile/state/reason, compile attempts/results/stale/cancel
+counts, latency, code size, execution markers, active operations, and
+live/retired code leases. `FAngelscriptStateDump` adds a `JITCoordinator`
+category through this public observer surface; it does not inspect private
+queues, sessions, or leases.
 
 ## Class Rename Redirects
 

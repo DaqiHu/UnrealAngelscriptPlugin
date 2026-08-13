@@ -8,11 +8,27 @@
 
 struct FAngelscriptStaticJITGenerationSnapshot;
 
+enum class EAngelscriptStaticJITCaptureProfile : uint8
+{
+	Bytecode = 0,
+	VerifiedTypedHIR,
+};
+
+struct FAngelscriptStaticJITGeneratorDiagnostics
+{
+	FAngelscriptStaticJITBackendId RequestedBackendId;
+	EAngelscriptStaticJITCaptureProfile CaptureProfile =
+		EAngelscriptStaticJITCaptureProfile::Bytecode;
+	TArray<FAngelscriptStaticJITBackendId> FallbackChain;
+	FString TaskError;
+};
+
 /** Provider artifacts plus pointer-free per-function backend diagnostics. */
 struct FAngelscriptStaticJITGeneratorOutput
 {
 	bool bHasProviderOutput = false;
 	FAngelscriptJITGenerationOutput ProviderOutput;
+	FAngelscriptStaticJITGeneratorDiagnostics Diagnostics;
 	TArray<FAngelscriptStaticJITFunctionResult> Functions;
 };
 
@@ -39,8 +55,21 @@ public:
 		FString* OutError = nullptr) const
 	{
 		OutOutput = {};
-		auto Fail = [OutError](const FString& Detail)
+		OutOutput.Diagnostics.RequestedBackendId = Request.RequestedBackendId;
+		OutOutput.Diagnostics.CaptureProfile =
+			Request.CompiledSourceGraph.bHasVerifiedTypedHIR
+				? EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR
+				: EAngelscriptStaticJITCaptureProfile::Bytecode;
+		OutOutput.Diagnostics.FallbackChain.Add(Request.RequestedBackendId);
+		if (Request.RequestedBackendId
+			== FAngelscriptStaticJITBackendId::TypedAST())
 		{
+			OutOutput.Diagnostics.FallbackChain.Add(
+				FAngelscriptStaticJITBackendId::Bytecode());
+		}
+		auto Fail = [&OutOutput, OutError](const FString& Detail)
+		{
+			OutOutput.Diagnostics.TaskError = Detail;
 			if (OutError != nullptr)
 			{
 				*OutError = Detail;
@@ -61,13 +90,8 @@ public:
 				"StaticJIT generation failed: CaptureProfileMismatch for typed-ast."));
 		}
 
-		TArray<FAngelscriptStaticJITBackendId> BackendChain;
-		BackendChain.Add(Request.RequestedBackendId);
-		if (Request.RequestedBackendId
-			== FAngelscriptStaticJITBackendId::TypedAST())
-		{
-			BackendChain.Add(FAngelscriptStaticJITBackendId::Bytecode());
-		}
+		const TArray<FAngelscriptStaticJITBackendId>& BackendChain =
+			OutOutput.Diagnostics.FallbackChain;
 
 		OutOutput.Functions.Reserve(
 			Request.CompiledSourceGraph.Functions.Num());
@@ -219,6 +243,14 @@ public:
 				{
 					continue;
 				}
+				TArray<FAngelscriptStaticJITBackendAttemptDiagnostic>
+					BackendAttempts = MoveTemp(Result->BackendAttempts);
+				FAngelscriptStaticJITBackendAttemptDiagnostic& Attempt =
+					BackendAttempts.Emplace_GetRef();
+				Attempt.BackendId = Candidate.ActualBackendId;
+				Attempt.Disposition = Candidate.Disposition;
+				Attempt.Detail = Candidate.Detail;
+				Candidate.BackendAttempts.Reset();
 				if (Candidate.Disposition
 					== EAngelscriptStaticJITFunctionDisposition::Emitted)
 				{
@@ -231,10 +263,12 @@ public:
 							*BackendId.ToString()));
 					}
 					*Result = MoveTemp(Candidate);
+					Result->BackendAttempts = MoveTemp(BackendAttempts);
 				}
 				else
 				{
 					*Result = MoveTemp(Candidate);
+					Result->BackendAttempts = MoveTemp(BackendAttempts);
 				}
 			}
 		}
@@ -262,8 +296,9 @@ public:
 	{
 		OutOutput.bHasProviderOutput = false;
 		OutOutput.ProviderOutput = {};
-		auto Fail = [OutError](const FString& Detail)
+		auto Fail = [&OutOutput, OutError](const FString& Detail)
 		{
+			OutOutput.Diagnostics.TaskError = Detail;
 			if (OutError != nullptr)
 			{
 				*OutError = Detail;

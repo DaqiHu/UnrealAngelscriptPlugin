@@ -11,6 +11,7 @@
 #include "HAL/PlatformProcess.h"
 #include "HAL/ThreadSafeCounter64.h"
 #include "Misc/ScopeLock.h"
+#include "RuntimeJIT/AngelscriptJITDiagnostics.h"
 #include "RuntimeJIT/AngelscriptRuntimeJITBindingContext.h"
 #include "RuntimeJIT/AngelscriptRuntimeJITSnapshot.h"
 #include "StaticJIT/AngelscriptJITBindingContext.h"
@@ -20,7 +21,8 @@ namespace
 {
 	FThreadSafeCounter64 GNextJITCoordinatorEngineNamespace;
 
-	bool RequiresRuntimeBytecodeVisibility(FAngelscriptEngine& Engine)
+	EAngelscriptRuntimeJITDiagnosticReason RuntimeBytecodeVisibilityReason(
+		FAngelscriptEngine& Engine)
 	{
 #if WITH_AS_DEBUGSERVER
 		if (Engine.DebugServer != nullptr
@@ -28,16 +30,16 @@ namespace
 				|| Engine.DebugServer->DataBreakpoints.Num() != 0
 				|| Engine.DebugServer->bBreakNextScriptLine))
 		{
-			return true;
+			return EAngelscriptRuntimeJITDiagnosticReason::DebuggerActive;
 		}
 #endif
 #if WITH_AS_COVERAGE
 		if (FAngelscriptCodeCoverageExtension::GetForEngine(Engine) != nullptr)
 		{
-			return true;
+			return EAngelscriptRuntimeJITDiagnosticReason::CoverageActive;
 		}
 #endif
-		return false;
+		return EAngelscriptRuntimeJITDiagnosticReason::None;
 	}
 }
 
@@ -474,7 +476,8 @@ bool FAngelscriptJITCoordinator::ProcessRuntimeSafePoint(
 	bool bAnyBindingChanged = false;
 	bool bPublicationSucceeded = true;
 	const bool bRuntimeRequiresBytecodeVisibility =
-		RequiresRuntimeBytecodeVisibility(Engine);
+		RuntimeBytecodeVisibilityReason(Engine)
+			!= EAngelscriptRuntimeJITDiagnosticReason::None;
 	TArray<asIScriptFunction*> PublishedFunctions;
 	for (const FAngelscriptFunctionRoute& Route : Routes->FunctionRoutes)
 	{
@@ -604,3 +607,155 @@ bool FAngelscriptJITCoordinator::ProcessRuntimeSafePoint(
 	}
 	return bPublicationSucceeded;
 }
+
+#if !UE_BUILD_SHIPPING
+FAngelscriptJITDiagnosticSnapshot
+FAngelscriptJITCoordinator::CaptureDiagnostics(FAngelscriptEngine& Engine)
+{
+	FAngelscriptJITDiagnosticSnapshot Snapshot;
+	Snapshot.bHasEngine = true;
+	Snapshot.bHasCoordinator = true;
+	Snapshot.ExecutionMode = Config.ExecutionMode;
+	Snapshot.bExecutionModeValid = Config.bExecutionModeValid;
+	Snapshot.bRuntimeConfigurationValid =
+		Config.bRuntimeConfigurationValid;
+	Snapshot.ConfigurationError = Config.ConfigurationError;
+	Snapshot.RuntimeBackendId = Config.RuntimeBackendId;
+	Snapshot.RuntimeCompilePolicy = Config.RuntimeCompilePolicy;
+	Snapshot.RuntimeGateReason = RuntimeBytecodeVisibilityReason(Engine);
+
+	FAngelscriptRuntimeJITStateDiagnosticSnapshot RuntimeDiagnostics;
+	if (RuntimeState.IsValid())
+	{
+		RuntimeDiagnostics = RuntimeState->CaptureDiagnostics();
+		Snapshot.bRuntimeFactoryAvailable =
+			RuntimeDiagnostics.bFactoryAvailable;
+		Snapshot.bRuntimeSessionAvailable =
+			RuntimeDiagnostics.bSessionAvailable;
+		Snapshot.RuntimeSessionReason = RuntimeDiagnostics.SessionReason;
+		Snapshot.TotalRuntimeCompileAttempts =
+			RuntimeDiagnostics.TotalCompileAttempts;
+		Snapshot.TotalRuntimeResults = RuntimeDiagnostics.TotalResults;
+		Snapshot.StaleRuntimeResultCount =
+			RuntimeDiagnostics.StaleResultCount;
+		Snapshot.CancelledRuntimeResultCount =
+			RuntimeDiagnostics.CancelledResultCount;
+		Snapshot.RuntimeCancellationRequestCount =
+			RuntimeDiagnostics.CancellationRequestCount;
+		Snapshot.ActiveRuntimeOperationCount =
+			RuntimeDiagnostics.ActiveOperationCount;
+	}
+
+	TMap<const void*, TSharedPtr<const FAngelscriptRuntimeJITBindingContext,
+		ESPMode::ThreadSafe>> RuntimeContexts;
+	{
+		FScopeLock Lock(&BindingMutex);
+		RuntimeContexts = ActiveRuntimeBindingContexts;
+	}
+	TSet<const void*> CurrentRuntimeContexts;
+
+	const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
+		ESPMode::ThreadSafe> Routes = Engine.GetFunctionRouteSnapshot();
+	if (!Routes.IsValid())
+	{
+		Snapshot.RetiredRuntimeCodeLeaseCount = RuntimeContexts.Num();
+		return Snapshot;
+	}
+
+	Snapshot.Functions.Reserve(Routes->FunctionRoutes.Num());
+	for (const FAngelscriptFunctionRoute& Route : Routes->FunctionRoutes)
+	{
+		if (Route.Function == nullptr
+			|| Route.Function->GetEngine() != OwnerScriptEngine
+			|| Route.Identity.FunctionKey.Hash.IsZero())
+		{
+			continue;
+		}
+
+		FAngelscriptJITFunctionDiagnosticRecord& Function =
+			Snapshot.Functions.Emplace_GetRef();
+		Function.ModuleKey = Route.ModuleKey;
+		Function.FunctionKey = Route.Identity.FunctionKey;
+		Function.CanonicalDeclaration = Route.CanonicalDeclaration;
+		Function.StaticMatchResult = Route.MatchResult;
+
+		const FAngelscriptRuntimeJITFunctionDiagnostic* RuntimeFunction =
+			RuntimeDiagnostics.Functions.FindByPredicate(
+				[&Function](
+					const FAngelscriptRuntimeJITFunctionDiagnostic& Candidate)
+				{
+					return Candidate.FunctionKey == Function.FunctionKey;
+				});
+		if (RuntimeFunction != nullptr)
+		{
+			Function.FunctionRevision = RuntimeFunction->FunctionRevision;
+			Function.RuntimeProfile = RuntimeFunction->FunctionProfile;
+			Function.RuntimeState = RuntimeFunction->State;
+			Function.RuntimeReason = RuntimeFunction->Reason;
+			Function.RuntimeCompileAttemptCount =
+				RuntimeFunction->CompileAttemptCount;
+			Function.CompileLatencyMicroseconds =
+				RuntimeFunction->CompileLatencyMicroseconds;
+			Function.CodeSize = RuntimeFunction->CodeSize;
+			Function.CodeLeaseReferenceCount =
+				RuntimeFunction->CodeLeaseReferenceCount;
+		}
+
+		const asSJITFunctionBinding Binding =
+			Route.Function->GetJITBinding();
+		const TSharedPtr<const FAngelscriptRuntimeJITBindingContext,
+			ESPMode::ThreadSafe>* RuntimeContext =
+			RuntimeContexts.Find(Binding.UserData);
+		const bool bHasRuntime = RuntimeContext != nullptr
+			&& RuntimeContext->IsValid()
+			&& (*RuntimeContext)->IsValid();
+		const bool bHasStatic = !bHasRuntime
+			&& FAngelscriptJITBindingContext::FromBindingUserData(
+				Binding.UserData) != nullptr;
+		if (bHasRuntime)
+		{
+			Function.ActualTier = EAngelscriptJITExecutionTier::Runtime;
+			Function.RuntimeExecutionCount =
+				(*RuntimeContext)->GetExecutionCount();
+			CurrentRuntimeContexts.Add(Binding.UserData);
+		}
+		else if (bHasStatic)
+		{
+			Function.ActualTier = EAngelscriptJITExecutionTier::StaticAOT;
+		}
+
+		switch (Config.ExecutionMode)
+		{
+		case EAngelscriptJITExecutionMode::StaticAOTOnly:
+			Function.RequestedTier =
+				EAngelscriptJITExecutionTier::StaticAOT;
+			break;
+		case EAngelscriptJITExecutionMode::RuntimeOnly:
+			Function.RequestedTier = EAngelscriptJITExecutionTier::Runtime;
+			break;
+		case EAngelscriptJITExecutionMode::Auto:
+			Function.RequestedTier = bHasStatic
+				? EAngelscriptJITExecutionTier::StaticAOT
+				: (AllowsRuntime()
+					? EAngelscriptJITExecutionTier::Runtime
+					: EAngelscriptJITExecutionTier::VM);
+			break;
+		case EAngelscriptJITExecutionMode::VMOnly:
+		default:
+			Function.RequestedTier = EAngelscriptJITExecutionTier::VM;
+			break;
+		}
+	}
+
+	Snapshot.LiveRuntimeCodeLeaseCount = CurrentRuntimeContexts.Num();
+	Snapshot.RetiredRuntimeCodeLeaseCount = FMath::Max(
+		0, RuntimeContexts.Num() - CurrentRuntimeContexts.Num());
+	Snapshot.Functions.Sort([](
+		const FAngelscriptJITFunctionDiagnosticRecord& Left,
+		const FAngelscriptJITFunctionDiagnosticRecord& Right)
+	{
+		return Left.FunctionKey.Hash < Right.FunctionKey.Hash;
+	});
+	return Snapshot;
+}
+#endif

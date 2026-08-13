@@ -67,12 +67,11 @@ namespace AngelscriptStaticJITAotGeneration
 		static TUniquePtr<FAngelscriptEngine> CreateUncompiledFixtureEngine(
 			const FString& FixtureRoot,
 			FString& OutError,
-			const bool bEnableCacheV2Persistence)
+			const bool bEnableCacheV2Persistence,
+			const EAngelscriptEnginePurpose Purpose)
 		{
 			FAngelscriptEngineConfig Config;
-			Config.Purpose = bEnableCacheV2Persistence
-				? EAngelscriptEnginePurpose::Runtime
-				: EAngelscriptEnginePurpose::StaticJITGeneration;
+			Config.Purpose = Purpose;
 			Config.bIsEditor = true;
 			Config.bDevelopmentMode = true;
 			Config.bSkipThreadedInitialize = true;
@@ -145,7 +144,8 @@ namespace AngelscriptStaticJITAotGeneration
 		static TUniquePtr<FAngelscriptEngine> CreateFixtureEngine(
 			FString& OutFixtureRoot,
 			FStaticJITAotGenerationResult& Result,
-			const bool bEnableCacheV2Persistence)
+			const bool bEnableCacheV2Persistence,
+			const EAngelscriptEnginePurpose Purpose)
 		{
 			OutFixtureRoot = FPaths::ConvertRelativePathToFull(FPaths::Combine(
 				FPaths::ProjectSavedDir(),
@@ -183,7 +183,7 @@ namespace AngelscriptStaticJITAotGeneration
 			TUniquePtr<FAngelscriptEngine> Engine =
 				CreateUncompiledFixtureEngine(
 					OutFixtureRoot, Result.Error,
-					bEnableCacheV2Persistence);
+					bEnableCacheV2Persistence, Purpose);
 			if (!Engine.IsValid())
 			{
 				return nullptr;
@@ -406,7 +406,8 @@ namespace AngelscriptStaticJITAotGeneration
 		FString CreateError;
 		TUniquePtr<FAngelscriptEngine> RestoredEngine =
 			CreateUncompiledFixtureEngine(
-				FixtureRoot, CreateError, true);
+				FixtureRoot, CreateError, true,
+				EAngelscriptEnginePurpose::Runtime);
 		if (!RestoredEngine.IsValid())
 		{
 			Error = CreateError;
@@ -558,7 +559,8 @@ namespace AngelscriptStaticJITAotGeneration
 		FStaticJITAotGenerationResult CreationResult;
 		Session->Engine = CreateFixtureEngine(
 			Session->FixtureRoot, CreationResult,
-			bEnableCacheV2Persistence);
+			bEnableCacheV2Persistence,
+			EAngelscriptEnginePurpose::Runtime);
 		Session->Error = MoveTemp(CreationResult.Error);
 		return Session;
 	}
@@ -567,7 +569,12 @@ namespace AngelscriptStaticJITAotGeneration
 	{
 		FStaticJITAotGenerationResult Result;
 		TUniquePtr<FStaticJITAotFixtureEngineSession> Session =
-			CreateFixtureEngineSession(false);
+			MakeUnique<FStaticJITAotFixtureEngineSession>();
+		FStaticJITAotGenerationResult CreationResult;
+		Session->Engine = CreateFixtureEngine(
+			Session->FixtureRoot, CreationResult, false,
+			EAngelscriptEnginePurpose::StaticJITGeneration);
+		Session->Error = MoveTemp(CreationResult.Error);
 		if (!Session.IsValid() || !Session->IsValid())
 		{
 			Result.Error = Session.IsValid()

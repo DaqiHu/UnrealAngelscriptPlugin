@@ -1,6 +1,8 @@
 #include "Dump/AngelscriptStateSnapshot.h"
 
 #include "Core/AngelscriptEngine.h"
+#include "RuntimeJIT/AngelscriptJITDiagnostics.h"
+#include "StaticJIT/StaticJITConfig.h"
 #if WITH_AS_COVERAGE
 #include "Extension/CodeCoverage/AngelscriptCodeCoverage.h"
 #endif
@@ -51,6 +53,20 @@ namespace
 		}
 	}
 
+	FString JITTierToString(const EAngelscriptJITExecutionTier Tier)
+	{
+		switch (Tier)
+		{
+		case EAngelscriptJITExecutionTier::StaticAOT:
+			return TEXT("StaticAOT");
+		case EAngelscriptJITExecutionTier::Runtime:
+			return TEXT("Runtime");
+		case EAngelscriptJITExecutionTier::VM:
+		default:
+			return TEXT("VM");
+		}
+	}
+
 	FString TypeIdentity(const asCTypeInfo* Type)
 	{
 		if (Type == nullptr)
@@ -73,6 +89,11 @@ namespace
 	}
 
 	void AddCountRow(FAngelscriptStateSnapshot& Snapshot, const FString& Category, const FString& Identity, const FString& Field, const int32 Count, const FString& Source)
+	{
+		Snapshot.AddRow(Category, Identity, Field, LexToString(Count), TEXT("Count"), Source);
+	}
+
+	void AddUInt64CountRow(FAngelscriptStateSnapshot& Snapshot, const FString& Category, const FString& Identity, const FString& Field, const uint64 Count, const FString& Source)
 	{
 		Snapshot.AddRow(Category, Identity, Field, LexToString(Count), TEXT("Count"), Source);
 	}
@@ -645,6 +666,45 @@ FAngelscriptStateSnapshot FAngelscriptStateSnapshotBuilder::Capture(FAngelscript
 	{
 		Snapshot.AddRow(TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("State"), TEXT("Unavailable"), TEXT("Unavailable"), TEXT("asCScriptEngine"));
 	}
+
+#if AS_WITH_STATIC_JIT_DIAGNOSTICS
+	const FAngelscriptJITDiagnosticSnapshot JIT =
+		FAngelscriptJITDiagnostics::CaptureSnapshot(&Engine);
+	const FString JITSource = TEXT("FAngelscriptJITDiagnostics");
+	AddUInt64CountRow(Snapshot, TEXT("JITCoordinator"), TEXT("Runtime"),
+		TEXT("TotalCompileAttempts"),
+		JIT.TotalRuntimeCompileAttempts, JITSource);
+	AddUInt64CountRow(Snapshot, TEXT("JITCoordinator"), TEXT("Runtime"),
+		TEXT("TotalResults"), JIT.TotalRuntimeResults,
+		JITSource);
+	AddCountRow(Snapshot, TEXT("JITCoordinator"), TEXT("Runtime"),
+		TEXT("LiveCodeLeaseCount"), JIT.LiveRuntimeCodeLeaseCount,
+		JITSource);
+	AddCountRow(Snapshot, TEXT("JITCoordinator"), TEXT("Runtime"),
+		TEXT("RetiredCodeLeaseCount"), JIT.RetiredRuntimeCodeLeaseCount,
+		JITSource);
+	for (const FAngelscriptJITFunctionDiagnosticRecord& Function :
+		JIT.Functions)
+	{
+		const FString Identity = Function.FunctionKey.Hash.ToHexString();
+		Snapshot.AddRow(TEXT("JITCoordinator"), Identity,
+			TEXT("CanonicalDeclaration"), Function.CanonicalDeclaration,
+			TEXT("String"), JITSource);
+		Snapshot.AddRow(TEXT("JITCoordinator"), Identity,
+			TEXT("RequestedTier"), JITTierToString(Function.RequestedTier),
+			TEXT("String"), JITSource);
+		Snapshot.AddRow(TEXT("JITCoordinator"), Identity,
+			TEXT("ActualTier"), JITTierToString(Function.ActualTier),
+			TEXT("String"), JITSource);
+		AddUInt64CountRow(Snapshot, TEXT("JITCoordinator"), Identity,
+			TEXT("RuntimeCompileAttemptCount"),
+			Function.RuntimeCompileAttemptCount,
+			JITSource);
+		AddUInt64CountRow(Snapshot, TEXT("JITCoordinator"), Identity,
+			TEXT("RuntimeExecutionCount"),
+			Function.RuntimeExecutionCount, JITSource);
+	}
+#endif
 
 	Snapshot.SortRows();
 	return Snapshot;

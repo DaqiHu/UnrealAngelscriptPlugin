@@ -4,6 +4,7 @@
 
 #include "Core/Artifacts/AngelscriptArtifactIdentity.h"
 #include "Core/Artifacts/AngelscriptArtifactReference.h"
+#include "StaticJIT/StaticJITConfig.h"
 
 #if AS_CAN_GENERATE_JIT
 

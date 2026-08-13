@@ -24,11 +24,22 @@ public:
 		return Published;
 	}
 
+	uint64 GetExecutionCount() const
+	{
+		return ExecutionCount.Load();
+	}
+
 	static const FAngelscriptRuntimeJITBindingContext* FromBindingUserData(
 		const void* UserData);
 
 private:
+	static void InvokeRuntimeEntry(
+		FScriptExecution& Execution,
+		asDWORD* FramePointer,
+		asQWORD* OutValue);
+
 	static constexpr uint64 LiveMagic = 0x415352544A495442ull; // ASRTJITB
 	uint64 Magic = LiveMagic;
 	FAngelscriptRuntimeJITPublishedCode Published;
+	mutable TAtomic<uint64> ExecutionCount { 0 };
 };

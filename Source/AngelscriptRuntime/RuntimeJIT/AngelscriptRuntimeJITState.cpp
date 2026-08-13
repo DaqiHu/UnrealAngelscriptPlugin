@@ -84,6 +84,7 @@ namespace AngelscriptRuntimeJITState_Private
 	struct FSelectedSession
 	{
 		FSessionPtr Session;
+		bool bFactoryAvailable = false;
 		EAngelscriptRuntimeJITDiagnosticReason Reason =
 			EAngelscriptRuntimeJITDiagnosticReason::BackendUnavailable;
 	};
@@ -106,6 +107,8 @@ namespace AngelscriptRuntimeJITState_Private
 		SessionConfig.EngineNamespace = Selection.EngineNamespace;
 		FAngelscriptRuntimeJITSessionCreateResult CreateResult =
 			FAngelscriptRuntimeJITBackendSessionOwner::Create(SessionConfig);
+		Result.bFactoryAvailable = CreateResult.Code
+			!= EAngelscriptRuntimeJITFactorySelectionCode::MissingBackend;
 		Result.Reason = SelectionReason(CreateResult);
 		if (CreateResult.IsCreated())
 		{
@@ -127,6 +130,8 @@ namespace AngelscriptRuntimeJITState_Private
 		FAngelscriptStableFunctionKey FunctionKey;
 		FAngelscriptHash256 FunctionRevision;
 		FAngelscriptHash256 EntryAbiHash;
+		EAngelscriptRuntimeJITFunctionProfile FunctionProfile =
+			EAngelscriptRuntimeJITFunctionProfile::Unknown;
 
 		static FRequestIdentity From(
 			const FAngelscriptRuntimeJITCompileSnapshotHeader& Header,
@@ -144,6 +149,7 @@ namespace AngelscriptRuntimeJITState_Private
 			Result.FunctionKey = Header.FunctionKey;
 			Result.FunctionRevision = Header.FunctionRevision;
 			Result.EntryAbiHash = Header.EntryAbiHash;
+			Result.FunctionProfile = Header.FunctionProfile;
 			return Result;
 		}
 
@@ -159,7 +165,8 @@ namespace AngelscriptRuntimeJITState_Private
 				&& ModuleKey == Other.ModuleKey
 				&& FunctionKey == Other.FunctionKey
 				&& FunctionRevision == Other.FunctionRevision
-				&& EntryAbiHash == Other.EntryAbiHash;
+				&& EntryAbiHash == Other.EntryAbiHash
+				&& FunctionProfile == Other.FunctionProfile;
 		}
 
 		bool MatchesQuery(
@@ -202,6 +209,7 @@ namespace AngelscriptRuntimeJITState_Private
 		TOptional<FAngelscriptRuntimeJITCompileSnapshot> LazySnapshot;
 		FSessionPtr ActiveSession;
 		FAngelscriptRuntimeJITPublishedCode Published;
+		uint64 CompileAttemptCount = 0;
 	};
 
 	static EAngelscriptRuntimeJITFunctionState StateForOutcome(
@@ -250,6 +258,7 @@ struct FAngelscriptRuntimeJITRequestStateMachine::FImpl
 		OperationsDrained->Trigger();
 		const FSelectedSession Selected = CreateSession(Selection);
 		Session = Selected.Session;
+		bFactoryAvailable = Selected.bFactoryAvailable;
 		SessionReason = Selected.Reason;
 	}
 
@@ -374,6 +383,7 @@ struct FAngelscriptRuntimeJITRequestStateMachine::FImpl
 	{
 		++OutResult.ProcessedCount;
 		FScopeLock Lock(&StateMutex);
+		++TotalResults;
 		FFunctionRecord* const Record = Functions.Find(
 			Completion.Identity.FunctionKey.Hash.Value);
 		if (bAdmissionClosed
@@ -385,6 +395,7 @@ struct FAngelscriptRuntimeJITRequestStateMachine::FImpl
 				!= Selection.CancellationGeneration)
 		{
 			++OutResult.StaleCount;
+			++StaleResultCount;
 			return;
 		}
 
@@ -419,12 +430,18 @@ struct FAngelscriptRuntimeJITRequestStateMachine::FImpl
 		}
 		else
 		{
+			if (Completion.Result.Outcome
+				== EAngelscriptRuntimeJITCompileOutcome::Cancelled)
+			{
+				++CancelledResultCount;
+			}
 			++OutResult.TerminalCount;
 		}
 	}
 
 	FAngelscriptRuntimeJITSelectionConfig Selection;
 	FSessionPtr Session;
+	bool bFactoryAvailable = false;
 	EAngelscriptRuntimeJITDiagnosticReason SessionReason =
 		EAngelscriptRuntimeJITDiagnosticReason::BackendUnavailable;
 	TSharedRef<FCompletionChannel, ESPMode::ThreadSafe> CompletionChannel;
@@ -437,6 +454,11 @@ struct FAngelscriptRuntimeJITRequestStateMachine::FImpl
 	FCriticalSection ShutdownMutex;
 	bool bAdmissionClosed = false;
 	bool bShutdownComplete = false;
+	uint64 TotalCompileAttempts = 0;
+	uint64 TotalResults = 0;
+	uint64 StaleResultCount = 0;
+	uint64 CancelledResultCount = 0;
+	uint64 CancellationRequestCount = 0;
 };
 
 FAngelscriptRuntimeJITRequestStateMachine::
@@ -501,11 +523,16 @@ bool FAngelscriptRuntimeJITRequestStateMachine::Reconfigure(
 		RetiredSession = MoveTemp(Impl->Session);
 		Impl->Selection = InSelection;
 		Impl->Session = Selected.Session;
+		Impl->bFactoryAvailable = Selected.bFactoryAvailable;
 		Impl->SessionReason = Selected.Reason;
 	}
 
 	if (RetiredSession.IsValid())
 	{
+		{
+			FScopeLock Lock(&Impl->StateMutex);
+			++Impl->CancellationRequestCount;
+		}
 		RetiredSession->Cancel(RetiredCancellationGeneration);
 	}
 	return true;
@@ -603,6 +630,8 @@ FAngelscriptRuntimeJITObserveResult
 			Record.State = EAngelscriptRuntimeJITFunctionState::Compiling;
 			Record.Reason = EAngelscriptRuntimeJITDiagnosticReason::None;
 			Record.ActiveSession = Impl->Session;
+			Record.CompileAttemptCount = 1;
+			++Impl->TotalCompileAttempts;
 			CompileRequest = FImpl::MakeCompileRequest(
 				RequestIdentity, MoveTemp(Snapshot), Impl->Session);
 			Result.Action = EAngelscriptRuntimeJITRequestAction::Started;
@@ -693,6 +722,8 @@ FAngelscriptRuntimeJITLazyCallResult
 		Record->LazySnapshot.Reset();
 		Record->State = EAngelscriptRuntimeJITFunctionState::Compiling;
 		Record->ActiveSession = Impl->Session;
+		++Record->CompileAttemptCount;
+		++Impl->TotalCompileAttempts;
 		Request = FImpl::MakeCompileRequest(
 			Record->Identity, MoveTemp(Snapshot), Impl->Session);
 		Impl->BeginOperationLocked();
@@ -767,6 +798,55 @@ bool FAngelscriptRuntimeJITRequestStateMachine::RetireFunction(
 	return true;
 }
 
+#if !UE_BUILD_SHIPPING
+FAngelscriptRuntimeJITStateDiagnosticSnapshot
+FAngelscriptRuntimeJITRequestStateMachine::CaptureDiagnostics() const
+{
+	FAngelscriptRuntimeJITStateDiagnosticSnapshot Snapshot;
+	FScopeLock Lock(&Impl->StateMutex);
+	Snapshot.Selection = Impl->Selection;
+	Snapshot.bFactoryAvailable = Impl->bFactoryAvailable;
+	Snapshot.bSessionAvailable = Impl->Session.IsValid();
+	Snapshot.SessionReason = Impl->SessionReason;
+	Snapshot.TotalCompileAttempts = Impl->TotalCompileAttempts;
+	Snapshot.TotalResults = Impl->TotalResults;
+	Snapshot.StaleResultCount = Impl->StaleResultCount;
+	Snapshot.CancelledResultCount = Impl->CancelledResultCount;
+	Snapshot.CancellationRequestCount = Impl->CancellationRequestCount;
+	Snapshot.ActiveOperationCount = Impl->ActiveOperationCount;
+	Snapshot.Functions.Reserve(Impl->Functions.Num());
+	for (const TPair<FBlake3Hash, FFunctionRecord>& Pair : Impl->Functions)
+	{
+		const FFunctionRecord& Record = Pair.Value;
+		FAngelscriptRuntimeJITFunctionDiagnostic& Function =
+			Snapshot.Functions.Emplace_GetRef();
+		Function.ModuleKey = Record.Identity.ModuleKey;
+		Function.FunctionKey = Record.Identity.FunctionKey;
+		Function.FunctionRevision = Record.Identity.FunctionRevision;
+		Function.PublicationOrdinal = Record.Identity.PublicationOrdinal;
+		Function.FunctionProfile = Record.Identity.FunctionProfile;
+		Function.State = Record.State;
+		Function.Reason = Record.Reason;
+		Function.CompileAttemptCount = Record.CompileAttemptCount;
+		if (Record.Published.IsValid())
+		{
+			Function.CompileLatencyMicroseconds =
+				Record.Published.CompileLatencyMicroseconds;
+			Function.CodeSize = Record.Published.CodeSize;
+			Function.CodeLeaseReferenceCount =
+				Record.Published.CodeLease.GetSharedReferenceCount();
+		}
+	}
+	Snapshot.Functions.Sort([](
+		const FAngelscriptRuntimeJITFunctionDiagnostic& Left,
+		const FAngelscriptRuntimeJITFunctionDiagnostic& Right)
+	{
+		return Left.FunctionKey.Hash < Right.FunctionKey.Hash;
+	});
+	return Snapshot;
+}
+#endif
+
 void FAngelscriptRuntimeJITRequestStateMachine::Shutdown()
 {
 	if (!Impl.IsValid())
@@ -798,6 +878,10 @@ void FAngelscriptRuntimeJITRequestStateMachine::Shutdown()
 
 	if (RetiredSession.IsValid())
 	{
+		{
+			FScopeLock Lock(&Impl->StateMutex);
+			++Impl->CancellationRequestCount;
+		}
 		RetiredSession->Cancel(RetiredCancellationGeneration);
 	}
 	Impl->OperationsDrained->Wait();

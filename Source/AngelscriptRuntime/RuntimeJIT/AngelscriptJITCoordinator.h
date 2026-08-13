@@ -6,6 +6,7 @@
 #include "RuntimeJIT/AngelscriptRuntimeJITState.h"
 
 struct FAngelscriptEngine;
+struct FAngelscriptJITDiagnosticSnapshot;
 
 /**
  * The one JIT lifecycle owner installed on an AngelScript Engine.
@@ -47,6 +48,12 @@ public:
 	/** Capture/consume Runtime work and publish exact results at an Engine-safe
 	 * route boundary. Returns true when no Runtime Binding publication failed. */
 	bool ProcessRuntimeSafePoint(FAngelscriptEngine& Engine);
+
+#if !UE_BUILD_SHIPPING
+	/** Copy pointer-free coordinator/runtime observations for diagnostics. */
+	FAngelscriptJITDiagnosticSnapshot CaptureDiagnostics(
+		FAngelscriptEngine& Engine);
+#endif
 
 	asIScriptEngine* GetOwnerScriptEngine() const
 	{

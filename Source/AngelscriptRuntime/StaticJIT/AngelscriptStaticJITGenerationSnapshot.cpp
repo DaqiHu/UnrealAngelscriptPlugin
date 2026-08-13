@@ -384,15 +384,33 @@ bool BuildAngelscriptStaticJITGenerationSnapshot(
 			{
 				Type->bTargetMaterializesScriptReflection = true;
 			}
-			const FAngelscriptHash256 TypeKey = Type != nullptr
+			FAngelscriptHash256 TypeKey = Type != nullptr
 				? Type->TypeKey.Hash : FAngelscriptHash256{};
+			FString TypeDeclaration = Type != nullptr
+				? Type->CanonicalDeclaration : ClassDesc->ClassName;
+			if (Type == nullptr && ClassDesc->bIsStaticsClass)
+			{
+				// Module statics classes are reflection-only descriptors synthesized
+				// for global UFUNCTIONs. They deliberately have no AngelScript
+				// object type, so reproduce the same stable type identity used by
+				// Cache clean capture instead of treating the missing ScriptType as
+				// an incomplete generation graph.
+				TypeDeclaration = FString::Printf(
+					TEXT("class %s"), *ClassDesc->ClassName);
+				FAngelscriptTypeIdentityDescriptor Identity;
+				Identity.ModuleKey = ModuleKey;
+				Identity.Namespace = ClassDesc->Namespace.Get(FString());
+				Identity.Kind = EAngelscriptArtifactEntityKind::Class;
+				Identity.CanonicalDeclaration = TypeDeclaration;
+				TypeKey = FAngelscriptArtifactIdentityBuilder::BuildTypeKey(
+					Identity).Hash;
+			}
 			AddDescriptor(*Snapshot, &ClassDesc.Get(),
 				ClassDesc->bIsStruct
 					? EAngelscriptStaticJITGenerationDescriptorKind::Struct
 					: EAngelscriptStaticJITGenerationDescriptorKind::Class,
 				TypeKey, ClassDesc->ClassName,
-				Type != nullptr ? Type->CanonicalDeclaration
-					: ClassDesc->ClassName,
+				MoveTemp(TypeDeclaration),
 				FString(), false, nullptr);
 
 			for (const TSharedRef<FAngelscriptPropertyDesc>& Property

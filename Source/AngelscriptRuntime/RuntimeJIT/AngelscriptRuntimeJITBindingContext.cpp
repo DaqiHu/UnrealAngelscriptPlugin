@@ -2,6 +2,10 @@
 
 #include "Misc/ScopeLock.h"
 
+#include "StartAngelscriptHeaders.h"
+#include "source/as_context.h"
+#include "EndAngelscriptHeaders.h"
+
 namespace
 {
 	FCriticalSection& GetRuntimeBindingContextRegistryMutex()
@@ -48,10 +52,26 @@ asSJITFunctionBinding FAngelscriptRuntimeJITBindingContext::BuildBinding() const
 	{
 		return Binding;
 	}
-	Binding.VMEntry = Published.VMEntry;
+	Binding.VMEntry = &FAngelscriptRuntimeJITBindingContext::InvokeRuntimeEntry;
 	Binding.UserData =
 		const_cast<FAngelscriptRuntimeJITBindingContext*>(this);
 	return Binding;
+}
+
+void FAngelscriptRuntimeJITBindingContext::InvokeRuntimeEntry(
+	FScriptExecution& Execution,
+	asDWORD* FramePointer,
+	asQWORD* OutValue)
+{
+	const FAngelscriptRuntimeJITBindingContext* const Context =
+		FromBindingUserData(Execution.jitBindingUserData);
+	if (Context == nullptr || !Context->IsValid()
+		|| Context->Published.VMEntry == nullptr)
+	{
+		return;
+	}
+	++Context->ExecutionCount;
+	Context->Published.VMEntry(Execution, FramePointer, OutValue);
 }
 
 const FAngelscriptRuntimeJITBindingContext*

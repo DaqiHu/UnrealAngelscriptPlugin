@@ -13,15 +13,20 @@
 #include "UObject/UObjectGlobals.h"
 #endif
 #include "Features/IModularFeatures.h"
+#include "Dump/AngelscriptStateSnapshot.h"
 #include "HAL/Event.h"
 #include "HAL/FileManager.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformProcess.h"
 #include "JIT/AngelscriptRuntimeJITBackend.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
+#include "Misc/OutputDeviceNull.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
 #include "RuntimeJIT/AngelscriptJITCoordinator.h"
+#include "RuntimeJIT/AngelscriptJITDiagnostics.h"
+#include "RuntimeJIT/AngelscriptRuntimeJITBindingContext.h"
 #include "StaticJIT/AngelscriptJITGeneration.h"
 #include "StaticJIT/AngelscriptJITProviderRegistry.h"
 #include "StaticJIT/AngelscriptJITProviderRouter.h"
@@ -66,6 +71,15 @@ private:
 
 	static void StaticRawEntry()
 	{
+	}
+
+	static bool IsRuntimeVmBinding(const asSJITFunctionBinding& Binding)
+	{
+		const FAngelscriptRuntimeJITBindingContext* const Context =
+			FAngelscriptRuntimeJITBindingContext::FromBindingUserData(
+				Binding.UserData);
+		return Context != nullptr
+			&& Context->GetPublished().VMEntry == &RuntimeVmEntry;
 	}
 
 	static void StaticParmsEntry(FScriptExecution&, void*, void*)
@@ -402,6 +416,125 @@ private:
 	}
 
 public:
+	TEST_METHOD(CoordinatorDiagnosticsExposeRuntimeTierMarkersAndObserverState)
+	{
+		FFactory Factory;
+		FScopedFactoryRegistration Registration(Factory);
+		FScopedProjectRoot Project;
+		ASSERT_THAT(IsTrue(Project.WriteSource()));
+		TUniquePtr<FAngelscriptEngine> Engine =
+			CreateScriptScanFreeFullEngineForTesting(
+				MakeRuntimeConfig(Project), MakeDependencies(Project));
+		ASSERT_THAT(IsNotNull(Engine.Get()));
+
+		{
+			FAngelscriptEngineScope Scope(*Engine);
+			Engine->InitialCompile();
+			const TSharedPtr<FAngelscriptModuleDesc> Module =
+				Engine->GetModuleByModuleName(TEXT("RuntimeCoordinator"));
+			ASSERT_THAT(IsTrue(Module.IsValid()));
+			asIScriptFunction* Function =
+				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
+			ASSERT_THAT(IsNotNull(Function));
+			int32 IgnoredResult = 0;
+			ASSERT_THAT(IsTrue(ExecuteAddOne(
+				*Engine, *Function, 41, IgnoredResult)));
+
+			FAngelscriptStableFunctionKey FunctionKey;
+			ASSERT_THAT(IsTrue(
+				Engine->TryResolveStableFunctionKey(Function, FunctionKey)));
+			const FAngelscriptJITDiagnosticSnapshot Snapshot =
+				FAngelscriptJITDiagnostics::CaptureSnapshot(Engine.Get());
+			ASSERT_THAT(IsTrue(Snapshot.bHasEngine));
+			ASSERT_THAT(IsTrue(
+				Snapshot.ExecutionMode
+					== EAngelscriptJITExecutionMode::RuntimeOnly));
+			ASSERT_THAT(IsTrue(
+				Snapshot.RuntimeBackendId == BackendId()));
+			ASSERT_THAT(IsTrue(Snapshot.bRuntimeFactoryAvailable));
+			ASSERT_THAT(IsTrue(Snapshot.bRuntimeSessionAvailable));
+			ASSERT_THAT(AreEqual(1ull,
+				Snapshot.TotalRuntimeCompileAttempts));
+			ASSERT_THAT(AreEqual(1ull,
+				Snapshot.TotalRuntimeResults));
+			ASSERT_THAT(AreEqual(1, Snapshot.LiveRuntimeCodeLeaseCount));
+			ASSERT_THAT(AreEqual(0, Snapshot.RetiredRuntimeCodeLeaseCount));
+
+			const FAngelscriptJITFunctionDiagnosticRecord* Record =
+				Snapshot.Functions.FindByPredicate(
+					[&FunctionKey](
+						const FAngelscriptJITFunctionDiagnosticRecord& Candidate)
+					{
+						return Candidate.FunctionKey == FunctionKey;
+					});
+			ASSERT_THAT(IsNotNull(Record));
+			ASSERT_THAT(IsTrue(
+				Record->ActualTier == EAngelscriptJITExecutionTier::Runtime));
+			ASSERT_THAT(IsTrue(
+				Record->RuntimeState
+					== EAngelscriptRuntimeJITFunctionState::Published));
+			ASSERT_THAT(IsTrue(
+				Record->RuntimeProfile
+					== EAngelscriptRuntimeJITFunctionProfile::ScalarWholeFunction));
+			ASSERT_THAT(AreEqual(1ull, Record->RuntimeCompileAttemptCount));
+			ASSERT_THAT(AreEqual(1ull, Record->RuntimeExecutionCount));
+			ASSERT_THAT(AreEqual(5ull, Record->CompileLatencyMicroseconds));
+			ASSERT_THAT(AreEqual(32ull, Record->CodeSize));
+			ASSERT_THAT(IsTrue(Record->CodeLeaseReferenceCount > 0));
+
+			const FAngelscriptJITDiagnostics::FJsonResult Json =
+				FAngelscriptJITDiagnostics::Serialize(Snapshot);
+			ASSERT_THAT(IsTrue(Json.IsSuccess(), Json.Detail));
+			ASSERT_THAT(IsTrue(Json.Json.Contains(TEXT("\"actualTier\":\"Runtime\""))));
+			ASSERT_THAT(IsTrue(Json.Json.Contains(TEXT("\"runtimeExecutionCount\":1"))));
+			IConsoleCommand* const CoordinatorDiagnosticCommand =
+				static_cast<IConsoleCommand*>(
+					IConsoleManager::Get().FindConsoleObject(
+						TEXT("as.JIT.DumpDiagnostics")));
+			ASSERT_THAT(IsNotNull(CoordinatorDiagnosticCommand));
+			ASSERT_THAT(IsNotNull(
+				IConsoleManager::Get().FindConsoleObject(
+					TEXT("as.StaticJIT.DumpDiagnostics"))));
+
+			const FString DiagnosticOutput = FPaths::CreateTempFilename(
+				*FPaths::ProjectIntermediateDir(),
+				TEXT("JITCoordinatorDiagnostics-"), TEXT(".json"));
+			ON_SCOPE_EXIT
+			{
+				IFileManager::Get().Delete(*DiagnosticOutput, false, true);
+			};
+			FOutputDeviceNull OutputDevice;
+			ASSERT_THAT(IsTrue(CoordinatorDiagnosticCommand->Execute(
+				{
+					FString::Printf(TEXT("-Function=%s"),
+						*FunctionKey.Hash.ToHexString()),
+					FString::Printf(TEXT("-Output=%s"), *DiagnosticOutput),
+				},
+				nullptr,
+				OutputDevice)));
+			FString WrittenDiagnosticJson;
+			ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(
+				WrittenDiagnosticJson, *DiagnosticOutput)));
+			ASSERT_THAT(IsTrue(WrittenDiagnosticJson.Contains(
+				FunctionKey.Hash.ToHexString())));
+			ASSERT_THAT(IsTrue(WrittenDiagnosticJson.Contains(
+				TEXT("\"runtimeExecutionCount\":1"))));
+
+			const FAngelscriptStateSnapshot StateSnapshot =
+				FAngelscriptStateSnapshotBuilder::Capture(*Engine);
+			ASSERT_THAT(IsTrue(StateSnapshot.Rows.ContainsByPredicate(
+				[](const FAngelscriptStateSnapshotRow& Row)
+				{
+					return Row.Category == TEXT("JITCoordinator")
+						&& Row.Field == TEXT("ActualTier")
+						&& Row.Value == TEXT("Runtime");
+				})));
+			ASSERT_THAT(IsTrue(Engine->DiscardModule(
+				TEXT("RuntimeCoordinator"))));
+		}
+		Engine.Reset();
+	}
+
 	TEST_METHOD(ShutdownWaitsForActiveRuntimeBindingReader)
 	{
 		FFactory Factory;
@@ -425,8 +558,8 @@ public:
 			Function =
 				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
 			ASSERT_THAT(IsNotNull(Function));
-			ASSERT_THAT(IsTrue(
-				Function->GetJITBinding().VMEntry == &RuntimeVmEntry));
+			ASSERT_THAT(IsTrue(IsRuntimeVmBinding(
+				Function->GetJITBinding())));
 		}
 
 		BlockingRuntimeEntryStarted =
@@ -553,8 +686,8 @@ public:
 			Function =
 				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
 			ASSERT_THAT(IsNotNull(Function));
-			ASSERT_THAT(IsTrue(
-				Function->GetJITBinding().VMEntry == &RuntimeVmEntry));
+			ASSERT_THAT(IsTrue(IsRuntimeVmBinding(
+				Function->GetJITBinding())));
 		}
 		const asSJITFunctionBinding FirstRuntimeBinding =
 			Function->GetJITBinding();
@@ -643,8 +776,7 @@ public:
 		}
 		const asSJITFunctionBinding SecondRuntimeBinding =
 			Function->GetJITBinding();
-		ASSERT_THAT(IsTrue(
-			SecondRuntimeBinding.VMEntry == &RuntimeVmEntry));
+		ASSERT_THAT(IsTrue(IsRuntimeVmBinding(SecondRuntimeBinding)));
 		ASSERT_THAT(IsTrue(SecondRuntimeBinding.UserData
 			!= FirstRuntimeBinding.UserData));
 		ASSERT_THAT(AreEqual(2,
@@ -715,7 +847,7 @@ public:
 			ASSERT_THAT(IsNotNull(FirstFunction));
 			const asSJITFunctionBinding Binding =
 				FirstFunction->GetJITBinding();
-			ASSERT_THAT(IsTrue(Binding.VMEntry == &RuntimeVmEntry));
+			ASSERT_THAT(IsTrue(IsRuntimeVmBinding(Binding)));
 			ASSERT_THAT(IsNull(Binding.RawEntry));
 			ASSERT_THAT(IsNull(Binding.ParmsEntry));
 			ASSERT_THAT(IsNotNull(Binding.UserData));
@@ -734,7 +866,7 @@ public:
 				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
 			ASSERT_THAT(IsNotNull(SecondFunction));
 			SecondBinding = SecondFunction->GetJITBinding();
-			ASSERT_THAT(IsTrue(SecondBinding.VMEntry == &RuntimeVmEntry));
+			ASSERT_THAT(IsTrue(IsRuntimeVmBinding(SecondBinding)));
 			ASSERT_THAT(IsNull(SecondBinding.RawEntry));
 			ASSERT_THAT(IsNull(SecondBinding.ParmsEntry));
 			ASSERT_THAT(IsNotNull(SecondBinding.UserData));
@@ -807,7 +939,7 @@ public:
 				Engine->GetJITCoordinator()->ProcessRuntimeSafePoint(*Engine)));
 			const asSJITFunctionBinding Published =
 				Function->GetJITBinding();
-			ASSERT_THAT(IsTrue(Published.VMEntry == &RuntimeVmEntry));
+			ASSERT_THAT(IsTrue(IsRuntimeVmBinding(Published)));
 			ASSERT_THAT(IsNull(Published.RawEntry));
 			ASSERT_THAT(IsNull(Published.ParmsEntry));
 			ASSERT_THAT(IsNotNull(Published.UserData));
@@ -859,7 +991,7 @@ public:
 				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
 			ASSERT_THAT(IsNotNull(Function));
 			const asSJITFunctionBinding Binding = Function->GetJITBinding();
-			ASSERT_THAT(IsTrue(Binding.VMEntry == &RuntimeVmEntry));
+			ASSERT_THAT(IsTrue(IsRuntimeVmBinding(Binding)));
 			ASSERT_THAT(IsNull(Binding.RawEntry));
 			ASSERT_THAT(IsNull(Binding.ParmsEntry));
 		}
@@ -975,7 +1107,7 @@ public:
 			ASSERT_THAT(IsTrue(Refresh.IsApplied(), Refresh.Detail));
 			const asSJITFunctionBinding RuntimeBinding =
 				Function->GetJITBinding();
-			ASSERT_THAT(IsTrue(RuntimeBinding.VMEntry == &RuntimeVmEntry));
+			ASSERT_THAT(IsTrue(IsRuntimeVmBinding(RuntimeBinding)));
 			ASSERT_THAT(IsNull(RuntimeBinding.RawEntry));
 			ASSERT_THAT(IsNull(RuntimeBinding.ParmsEntry));
 			ASSERT_THAT(AreEqual(1,
@@ -1196,7 +1328,7 @@ public:
 				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
 			ASSERT_THAT(IsNotNull(Function));
 			const asSJITFunctionBinding Binding = Function->GetJITBinding();
-			ASSERT_THAT(IsTrue(Binding.VMEntry == &RuntimeVmEntry));
+			ASSERT_THAT(IsTrue(IsRuntimeVmBinding(Binding)));
 			ASSERT_THAT(IsNull(Binding.RawEntry));
 			ASSERT_THAT(IsNull(Binding.ParmsEntry));
 		}
@@ -1255,8 +1387,8 @@ public:
 			asIScriptFunction* Function =
 				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
 			ASSERT_THAT(IsNotNull(Function));
-			ASSERT_THAT(IsTrue(
-				Function->GetJITBinding().VMEntry == &RuntimeVmEntry));
+			ASSERT_THAT(IsTrue(IsRuntimeVmBinding(
+				Function->GetJITBinding())));
 
 			const TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
 				ESPMode::ThreadSafe> AfterPublication = Registry.GetSnapshot();
@@ -1331,8 +1463,8 @@ public:
 			ASSERT_THAT(IsNotNull(Scalar));
 			ASSERT_THAT(IsNotNull(Call));
 			ASSERT_THAT(IsNotNull(Suspend));
-			ASSERT_THAT(IsTrue(
-				Scalar->GetJITBinding().VMEntry == &RuntimeVmEntry));
+			ASSERT_THAT(IsTrue(IsRuntimeVmBinding(
+				Scalar->GetJITBinding())));
 			for (asIScriptFunction* Unsupported : {Call, Suspend})
 			{
 				const asSJITFunctionBinding Binding =
@@ -1409,8 +1541,8 @@ public:
 			Engine->UpdateLineCallbackState();
 			ASSERT_THAT(IsTrue(
 				Engine->GetJITCoordinator()->ProcessRuntimeSafePoint(*Engine)));
-			ASSERT_THAT(IsTrue(
-				Function->GetJITBinding().VMEntry == &RuntimeVmEntry));
+			ASSERT_THAT(IsTrue(IsRuntimeVmBinding(
+				Function->GetJITBinding())));
 			ASSERT_THAT(AreEqual(1,
 				Factory.Control->CompileCount.GetValue()));
 			ASSERT_THAT(IsTrue(Engine->DiscardModule(

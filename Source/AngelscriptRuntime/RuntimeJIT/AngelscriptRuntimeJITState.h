@@ -112,6 +112,43 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptRuntimeJITProcessResult
 	int32 TerminalCount = 0;
 };
 
+#if !UE_BUILD_SHIPPING
+struct ANGELSCRIPTRUNTIME_API FAngelscriptRuntimeJITFunctionDiagnostic
+{
+	FAngelscriptStableModuleKey ModuleKey;
+	FAngelscriptStableFunctionKey FunctionKey;
+	FAngelscriptHash256 FunctionRevision;
+	uint64 PublicationOrdinal = 0;
+	EAngelscriptRuntimeJITFunctionProfile FunctionProfile =
+		EAngelscriptRuntimeJITFunctionProfile::Unknown;
+	EAngelscriptRuntimeJITFunctionState State =
+		EAngelscriptRuntimeJITFunctionState::Missing;
+	EAngelscriptRuntimeJITDiagnosticReason Reason =
+		EAngelscriptRuntimeJITDiagnosticReason::None;
+	uint64 CompileAttemptCount = 0;
+	uint64 CompileLatencyMicroseconds = 0;
+	uint64 CodeSize = 0;
+	int32 CodeLeaseReferenceCount = 0;
+};
+
+/** Pointer-free observer snapshot copied under the state-machine lock. */
+struct ANGELSCRIPTRUNTIME_API FAngelscriptRuntimeJITStateDiagnosticSnapshot
+{
+	FAngelscriptRuntimeJITSelectionConfig Selection;
+	bool bFactoryAvailable = false;
+	bool bSessionAvailable = false;
+	EAngelscriptRuntimeJITDiagnosticReason SessionReason =
+		EAngelscriptRuntimeJITDiagnosticReason::BackendUnavailable;
+	uint64 TotalCompileAttempts = 0;
+	uint64 TotalResults = 0;
+	uint64 StaleResultCount = 0;
+	uint64 CancelledResultCount = 0;
+	uint64 CancellationRequestCount = 0;
+	int32 ActiveOperationCount = 0;
+	TArray<FAngelscriptRuntimeJITFunctionDiagnostic> Functions;
+};
+#endif
+
 /**
  * Engine-local request/publication state. It never mutates an AngelScript
  * function directly; the future Coordinator consumes PublishedCode only at an
@@ -155,6 +192,10 @@ public:
 	bool RetireFunction(
 		const FAngelscriptStableFunctionKey& FunctionKey,
 		uint64 PublicationOrdinal);
+
+#if !UE_BUILD_SHIPPING
+	FAngelscriptRuntimeJITStateDiagnosticSnapshot CaptureDiagnostics() const;
+#endif
 
 	void Shutdown();
 

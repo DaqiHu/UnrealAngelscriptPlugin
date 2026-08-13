@@ -41,6 +41,10 @@ namespace AngelscriptStaticJITGenerationEngineTests
 	static const TCHAR* MethodName = TEXT("EvaluateGenerationOnly");
 	static const TCHAR* RawClassName =
 		TEXT("FJITGenerationOnlyRawBox_65C28A");
+	static const TCHAR* StaticsClassName =
+		TEXT("Module_StaticJIT_GenerationOnly_StaticJITGenerationOnlyStatics");
+	static const TCHAR* GlobalUFunctionName =
+		TEXT("EvaluateGlobalGenerationOnly_65C28A");
 	static const TCHAR* EmitModuleName =
 		TEXT("StaticJITGenerationEmit");
 
@@ -80,6 +84,12 @@ struct %s
 delegate void %s(%s Payload);
 
 const int GenerationOnlyGlobal_65C28A = 7;
+
+UFUNCTION()
+int EvaluateGlobalGenerationOnly_65C28A(int Value)
+{
+	return Value + GenerationOnlyGlobal_65C28A;
+}
 
 class %s
 {
@@ -295,10 +305,24 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITGenerationEngineTests,
 		const FAngelscriptStaticJITGenerationDescriptor* Method =
 			FindDescriptor(*Snapshot, MethodName,
 				EAngelscriptStaticJITGenerationDescriptorKind::Function);
+		const FAngelscriptStaticJITGenerationDescriptor* StaticsClass =
+			FindDescriptor(*Snapshot, StaticsClassName,
+				EAngelscriptStaticJITGenerationDescriptorKind::Class);
+		const FAngelscriptStaticJITGenerationDescriptor* GlobalUFunction =
+			FindDescriptor(*Snapshot, GlobalUFunctionName,
+				EAngelscriptStaticJITGenerationDescriptorKind::Function);
 		ASSERT_THAT(IsNotNull(Class));
 		ASSERT_THAT(IsNotNull(Struct));
 		ASSERT_THAT(IsNotNull(Delegate));
 		ASSERT_THAT(IsNotNull(Method));
+		ASSERT_THAT(IsNotNull(StaticsClass));
+		ASSERT_THAT(IsNotNull(GlobalUFunction));
+		ASSERT_THAT(IsFalse(StaticsClass->StableDescriptorKey.IsZero()));
+		ASSERT_THAT(AreEqual(
+			FString::Printf(TEXT("class %s"), StaticsClassName),
+			StaticsClass->CanonicalDeclaration));
+		ASSERT_THAT(IsTrue(GlobalUFunction->bUFunctionRoot));
+		ASSERT_THAT(IsTrue(GlobalUFunction->ReceiverCanonicalName.IsEmpty()));
 		ASSERT_THAT(IsTrue(Method->bUFunctionRoot));
 		ASSERT_THAT(AreEqual(FString(ClassName),
 			Method->ReceiverCanonicalName));

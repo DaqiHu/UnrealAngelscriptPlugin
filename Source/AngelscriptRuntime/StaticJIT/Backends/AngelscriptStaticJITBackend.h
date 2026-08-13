@@ -194,6 +194,15 @@ enum class EAngelscriptStaticJITFunctionDisposition : uint8
 	Failed,
 };
 
+/** Generator-owned pointer-free provenance for one backend attempt. */
+struct FAngelscriptStaticJITBackendAttemptDiagnostic
+{
+	FAngelscriptStaticJITBackendId BackendId;
+	EAngelscriptStaticJITFunctionDisposition Disposition =
+		EAngelscriptStaticJITFunctionDisposition::Unsupported;
+	FString Detail;
+};
+
 /** Pointer-free result for one stable function identity. */
 struct FAngelscriptStaticJITFunctionResult
 {
@@ -203,6 +212,7 @@ struct FAngelscriptStaticJITFunctionResult
 	FAngelscriptStableFunctionKey FunctionKey;
 	FString Detail;
 	TOptional<FAngelscriptJITGenerationFunction> EmittedFunction;
+	TArray<FAngelscriptStaticJITBackendAttemptDiagnostic> BackendAttempts;
 };
 
 enum class EAngelscriptStaticJITTaskDisposition : uint8
