@@ -14,6 +14,7 @@
 #include "StaticJIT/AngelscriptJITImmutableArtifactSet.h"
 #include "StaticJIT/AngelscriptJITProviderRouter.h"
 #include "StaticJIT/AngelscriptJITReferenceResolver.h"
+#include "StaticJIT/AngelscriptStaticJITGenerator.h"
 #include "StaticJIT/StaticJITHeader.h"
 
 #include "StaticJIT/BytecodeJIT/AngelscriptBytecodes.h"
@@ -3572,10 +3573,10 @@ namespace
 	}
 }
 
-static bool GenerateStaticJITProviderArtifactsImpl(
+static bool GenerateStaticJITProviderBackendOutputImpl(
 	TConstArrayView<asIScriptModule*> Modules,
 	const FAngelscriptJITProviderGenerationSettings& Settings,
-	FAngelscriptJITGenerationOutput& OutOutput,
+	FAngelscriptStaticJITBackendOutput& OutOutput,
 	FString* OutError,
 	const FAngelscriptFunctionRouteSnapshot* OverrideRouteSnapshot,
 	const FAngelscriptCacheSuccessfulPublicationDto* OverridePublication);
@@ -3587,8 +3588,8 @@ bool FAngelscriptBytecodeJIT::GenerateProviderArtifacts(
 	FString* OutError)
 {
 	asIScriptModule* Modules[] = {Module};
-	return GenerateProviderArtifacts(
-		MakeArrayView(Modules), Settings, OutOutput, OutError);
+	return GenerateProviderArtifacts(MakeArrayView(Modules),
+		Settings, OutOutput, OutError);
 }
 
 bool FAngelscriptBytecodeJIT::GenerateProviderArtifacts(
@@ -3597,8 +3598,27 @@ bool FAngelscriptBytecodeJIT::GenerateProviderArtifacts(
 	FAngelscriptJITGenerationOutput& OutOutput,
 	FString* OutError)
 {
-	return GenerateStaticJITProviderArtifactsImpl(
-		Modules, Settings, OutOutput, OutError, nullptr, nullptr);
+	FAngelscriptStaticJITProviderGenerationRequest Request;
+	Request.BackendId = FAngelscriptStaticJITBackendId::Bytecode();
+	Request.Settings = Settings;
+	Request.CompiledSourceGraph = Modules;
+	FAngelscriptStaticJITGeneratorOutput GeneratorOutput;
+	if (!GenerateStaticJITProviderArtifacts(
+		Request, GeneratorOutput, OutError))
+	{
+		return false;
+	}
+	if (!GeneratorOutput.bHasProviderOutput)
+	{
+		if (OutError != nullptr)
+		{
+			*OutError = TEXT(
+				"StaticJIT bytecode generation produced no Provider output.");
+		}
+		return false;
+	}
+	OutOutput = MoveTemp(GeneratorOutput.ProviderOutput);
+	return true;
 }
 
 bool GenerateStaticJITProviderArtifacts(
@@ -3621,10 +3641,10 @@ bool GenerateStaticJITProviderArtifacts(
 		Modules, Settings, OutOutput, OutError);
 }
 
-static bool GenerateStaticJITProviderArtifactsImpl(
+static bool GenerateStaticJITProviderBackendOutputImpl(
 	const TConstArrayView<asIScriptModule*> Modules,
 	const FAngelscriptJITProviderGenerationSettings& Settings,
-	FAngelscriptJITGenerationOutput& OutOutput,
+	FAngelscriptStaticJITBackendOutput& OutOutput,
 	FString* OutError,
 	const FAngelscriptFunctionRouteSnapshot* OverrideRouteSnapshot,
 	const FAngelscriptCacheSuccessfulPublicationDto* OverridePublication)
@@ -4182,8 +4202,201 @@ static bool GenerateStaticJITProviderArtifactsImpl(
 		Function.ImplementationTemplate += GeneratedCode.EmittedFunctionContent;
 	}
 
-	return FAngelscriptJITGeneration::Generate(
-		Request, OutOutput, OutError);
+	OutOutput.Modules = MoveTemp(Request.Modules);
+	OutOutput.ModuleSourcePreamble = MoveTemp(Request.ModuleSourcePreamble);
+	OutOutput.ModuleSourceFooter = MoveTemp(Request.ModuleSourceFooter);
+	OutOutput.ProviderSourcePreamble = MoveTemp(Request.ProviderSourcePreamble);
+	OutOutput.Functions.Reserve(Request.Functions.Num());
+	for (FAngelscriptJITGenerationFunction& Function : Request.Functions)
+	{
+		FAngelscriptStaticJITFunctionResult& Result =
+			OutOutput.Functions.Emplace_GetRef();
+		Result.Disposition =
+			EAngelscriptStaticJITFunctionDisposition::Emitted;
+		Result.ActualBackendId =
+			FAngelscriptStaticJITBackendId::Bytecode();
+		Result.FunctionKey = Function.FunctionKey;
+		Result.EmittedFunction = MoveTemp(Function);
+	}
+	return true;
+}
+
+namespace AngelscriptBytecodeStaticBackend_Private
+{
+	class FBackend final : public IAngelscriptStaticJITBackend
+	{
+	public:
+		bool Generate(
+			const FAngelscriptStaticJITBackendRequest& Request,
+			FAngelscriptStaticJITBackendOutput& OutOutput,
+			FString* OutError) override
+		{
+			return GenerateStaticJITProviderBackendOutputImpl(
+				Request.CompiledSourceGraph.Modules,
+				Request.CompiledSourceGraph.Settings,
+				OutOutput,
+				OutError,
+				nullptr,
+				nullptr);
+		}
+	};
+
+	class FFactory final : public IAngelscriptStaticJITBackendFactory
+	{
+	public:
+		FAngelscriptStaticJITBackendId GetBackendId() const override
+		{
+			return FAngelscriptStaticJITBackendId::Bytecode();
+		}
+
+		TUniquePtr<IAngelscriptStaticJITBackend> CreateBackend() const override
+		{
+			return MakeUnique<FBackend>();
+		}
+	};
+
+	static FFactory GFactory;
+}
+
+FAngelscriptStaticJITBackendRegistry&
+GetAngelscriptStaticJITBackendRegistry()
+{
+	static FAngelscriptStaticJITBackendRegistry Registry;
+	return Registry;
+}
+
+bool RegisterAngelscriptBytecodeJITBackend(FString* OutError)
+{
+	FAngelscriptStaticJITBackendRegistry& Registry =
+		GetAngelscriptStaticJITBackendRegistry();
+	const IAngelscriptStaticJITBackendFactory* const Existing =
+		Registry.FindFactory(FAngelscriptStaticJITBackendId::Bytecode());
+	if (Existing == &AngelscriptBytecodeStaticBackend_Private::GFactory)
+	{
+		return true;
+	}
+	if (Existing != nullptr)
+	{
+		if (OutError != nullptr)
+		{
+			*OutError = TEXT(
+				"StaticJIT backend registration rejected duplicate 'bytecode' factory.");
+		}
+		return false;
+	}
+
+	const FAngelscriptStaticJITBackendRegistrationResult Result =
+		Registry.RegisterFactory(
+			AngelscriptBytecodeStaticBackend_Private::GFactory);
+	if (!Result.IsAccepted())
+	{
+		if (OutError != nullptr)
+		{
+			*OutError = TEXT(
+				"StaticJIT failed to register the built-in 'bytecode' backend.");
+		}
+		return false;
+	}
+	return true;
+}
+
+bool GenerateStaticJITProviderArtifacts(
+	const FAngelscriptStaticJITProviderGenerationRequest& Request,
+	FAngelscriptStaticJITGeneratorOutput& OutOutput,
+	FString* OutError)
+{
+	OutOutput = {};
+	auto Fail = [OutError](const FString& Detail)
+	{
+		if (OutError != nullptr)
+		{
+			*OutError = Detail;
+		}
+		return false;
+	};
+
+	if (!Request.BackendId.IsValid())
+	{
+		return Fail(TEXT(
+			"StaticJIT generation requires a known Static BackendId."));
+	}
+	if (Request.CompiledSourceGraph.IsEmpty())
+	{
+		return Fail(TEXT(
+			"StaticJIT generation requires a complete compiled source graph."));
+	}
+	if (!RegisterAngelscriptBytecodeJITBackend(OutError))
+	{
+		return false;
+	}
+
+	asIScriptModule* const FirstModule = Request.CompiledSourceGraph[0];
+	asCScriptEngine* const ScriptEngine = FirstModule != nullptr
+		? reinterpret_cast<asCScriptEngine*>(FirstModule->GetEngine())
+		: nullptr;
+	FAngelscriptEngine* const RuntimeEngine =
+		FAngelscriptEngine::TryGetByScriptEngine(ScriptEngine);
+	if (ScriptEngine == nullptr || RuntimeEngine == nullptr)
+	{
+		return Fail(TEXT(
+			"StaticJIT compiled source graph has no Runtime Engine owner."));
+	}
+	for (asIScriptModule* Module : Request.CompiledSourceGraph)
+	{
+		if (Module == nullptr || Module->GetEngine() != ScriptEngine)
+		{
+			return Fail(TEXT(
+				"StaticJIT compiled source graph must belong to one Runtime Engine."));
+		}
+	}
+
+	const TConstArrayView<asIScriptModule*> EmitModules =
+		Request.EmitModuleSet.IsEmpty()
+		? Request.CompiledSourceGraph
+		: Request.EmitModuleSet;
+	const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
+		ESPMode::ThreadSafe> Routes = RuntimeEngine->GetFunctionRouteSnapshot();
+	if (!Routes.IsValid())
+	{
+		return Fail(TEXT(
+			"StaticJIT generation cannot resolve the current stable module routes."));
+	}
+	TArray<FAngelscriptStableModuleKey> EmitModuleKeys;
+	for (asIScriptModule* Module : EmitModules)
+	{
+		if (Module == nullptr
+			|| !Request.CompiledSourceGraph.Contains(Module))
+		{
+			return Fail(TEXT(
+				"StaticJIT EmitModuleSet must be a subset of CompiledSourceGraph."));
+		}
+		const FAngelscriptFunctionRoute* const Route =
+			Routes->FunctionRoutes.FindByPredicate(
+				[Module](const FAngelscriptFunctionRoute& Candidate)
+				{
+					return Candidate.Function != nullptr
+						&& Candidate.Function->GetModule() == Module
+						&& Candidate.bHasVerifiedArtifactIdentity;
+				});
+		if (Route == nullptr || Route->ModuleKey.Hash.IsZero())
+		{
+			return Fail(TEXT(
+				"StaticJIT EmitModuleSet contains a module with no stable route identity."));
+		}
+		EmitModuleKeys.AddUnique(Route->ModuleKey);
+	}
+
+	FAngelscriptStaticJITCompiledSourceGraph Graph;
+	Graph.Settings = Request.Settings;
+	Graph.Modules = Request.CompiledSourceGraph;
+	Graph.bHasVerifiedTypedHIR = Request.bHasVerifiedTypedHIR;
+	const FAngelscriptStaticJITBackendRequest BackendRequest{
+		Request.BackendId,
+		Graph,
+		EmitModuleKeys};
+	FAngelscriptStaticJITGenerator Generator(
+		GetAngelscriptStaticJITBackendRegistry());
+	return Generator.Generate(BackendRequest, OutOutput, OutError);
 }
 
 #if AS_WITH_STATIC_JIT_DIAGNOSTICS && AS_CAN_GENERATE_JIT
@@ -4341,13 +4554,36 @@ bool GenerateStaticJITSourceTextForDiagnostics(
 			BuildCurrentNativeEnvironmentFingerprint(Settings.TargetProfile);
 	Settings.bEmitDebugMetadata = bEmitDebugMetadata;
 
-	FAngelscriptJITGenerationOutput Output;
-	if (!GenerateStaticJITProviderArtifactsImpl(
-		MakeArrayView(&Module, 1), Settings, Output, OutError,
+	FAngelscriptStaticJITBackendOutput BackendOutput;
+	if (!GenerateStaticJITProviderBackendOutputImpl(
+		MakeArrayView(&Module, 1), Settings, BackendOutput, OutError,
 		&DiagnosticRoutes, &DiagnosticPublication))
 	{
 		return false;
 	}
+	FAngelscriptStaticJITCompiledSourceGraph Graph;
+	Graph.Settings = Settings;
+	Graph.Modules = MakeArrayView(&Module, 1);
+	const FAngelscriptStableModuleKey EmitModuleKeys[] = {
+		IdentityRoute->ModuleKey};
+	const FAngelscriptStaticJITBackendRequest BackendRequest{
+		FAngelscriptStaticJITBackendId::Bytecode(), Graph, EmitModuleKeys};
+	FAngelscriptStaticJITGeneratorOutput GeneratorOutput;
+	GeneratorOutput.Functions = BackendOutput.Functions;
+	if (!FAngelscriptStaticJITGenerator::PackageBackendResults(
+		BackendRequest,
+		BackendOutput.Modules,
+		GeneratorOutput.Functions,
+		MoveTemp(BackendOutput.ModuleSourcePreamble),
+		MoveTemp(BackendOutput.ModuleSourceFooter),
+		MoveTemp(BackendOutput.ProviderSourcePreamble),
+		GeneratorOutput,
+		OutError))
+	{
+		return false;
+	}
+	const FAngelscriptJITGenerationOutput& Output =
+		GeneratorOutput.ProviderOutput;
 
 	const FAngelscriptJITGeneratedModule* const GeneratedModule =
 		Output.Modules.FindByPredicate(

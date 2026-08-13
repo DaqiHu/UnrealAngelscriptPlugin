@@ -14,6 +14,7 @@
 #include "StaticJIT/AngelscriptJITGeneration.h"
 #include "StaticJIT/AngelscriptJITProviderMatcher.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
+#include "StaticJIT/AngelscriptStaticJITGenerator.h"
 #include "StaticJIT/StaticJITHeader.h"
 
 #include "StartAngelscriptHeaders.h"
@@ -613,12 +614,29 @@ public:
 		ASSERT_THAT(IsTrue(FAngelscriptBytecodeJIT::GenerateProviderArtifacts(
 			MakeArrayView(ProviderModules), Settings, DirectBytecodeOutput,
 			&DirectBytecodeError), DirectBytecodeError));
+		FAngelscriptStaticJITProviderGenerationRequest ExplicitRequest;
+		ExplicitRequest.BackendId =
+			FAngelscriptStaticJITBackendId::Bytecode();
+		ExplicitRequest.Settings = Settings;
+		ExplicitRequest.CompiledSourceGraph = MakeArrayView(ProviderModules);
+		ExplicitRequest.bHasVerifiedTypedHIR = false;
+		FAngelscriptStaticJITGeneratorOutput ExplicitOutput;
+		FString ExplicitError;
+		ASSERT_THAT(IsTrue(GenerateStaticJITProviderArtifacts(
+			ExplicitRequest, ExplicitOutput, &ExplicitError), ExplicitError));
+		ASSERT_THAT(IsTrue(ExplicitOutput.bHasProviderOutput));
 		ASSERT_THAT(AreEqual(
 			Output.ProviderGeneration.Hash.ToHexString(),
 			DirectBytecodeOutput.ProviderGeneration.Hash.ToHexString(),
 			TEXT("The compatibility entry point must delegate to the bytecode generator")));
+		ASSERT_THAT(AreEqual(
+			Output.ProviderGeneration.Hash.ToHexString(),
+			ExplicitOutput.ProviderOutput.ProviderGeneration.Hash.ToHexString(),
+			TEXT("Explicit bytecode selection must use the same Provider identity")));
 		ASSERT_THAT(AreEqual(Output.Files.Num(),
 			DirectBytecodeOutput.Files.Num()));
+		ASSERT_THAT(AreEqual(Output.Files.Num(),
+			ExplicitOutput.ProviderOutput.Files.Num()));
 		for (int32 FileIndex = 0; FileIndex < Output.Files.Num(); ++FileIndex)
 		{
 			ASSERT_THAT(AreEqual(Output.Files[FileIndex].RelativePath,
@@ -626,6 +644,11 @@ public:
 			ASSERT_THAT(AreEqual(Output.Files[FileIndex].Content,
 				DirectBytecodeOutput.Files[FileIndex].Content,
 				TEXT("Extracted BytecodeJIT output must remain byte-for-byte stable")));
+			ASSERT_THAT(AreEqual(Output.Files[FileIndex].RelativePath,
+				ExplicitOutput.ProviderOutput.Files[FileIndex].RelativePath));
+			ASSERT_THAT(AreEqual(Output.Files[FileIndex].Content,
+				ExplicitOutput.ProviderOutput.Files[FileIndex].Content,
+				TEXT("Backend-neutral generator output must remain byte-for-byte stable")));
 		}
 		ASSERT_THAT(AreEqual(4, Output.Functions.Num()));
 		ASSERT_THAT(AreEqual(2, Output.Modules.Num()));

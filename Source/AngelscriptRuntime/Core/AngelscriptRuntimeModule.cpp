@@ -6,6 +6,7 @@
 #include "Testing/AngelscriptScriptTestAutomation.h"
 #include "Testing/AngelscriptScriptTestRunner.h"
 #include "StaticJIT/AngelscriptJITProviderRegistry.h"
+#include "StaticJIT/AngelscriptStaticJITGenerator.h"
 #if WITH_AS_COVERAGE
 #include "Extension/CodeCoverage/AngelscriptCodeCoverage.h"
 #endif
@@ -22,6 +23,14 @@ FAngelscriptEngine* FAngelscriptRuntimeModule::InitializedOverrideEngineForTesti
 void FAngelscriptRuntimeModule::StartupModule()
 {
 	UE_LOG(Angelscript, Verbose, TEXT("[RuntimeStartup] StartupModule."));
+#if AS_CAN_GENERATE_JIT
+	FString StaticJITBackendError;
+	if (!RegisterAngelscriptBytecodeJITBackend(&StaticJITBackendError))
+	{
+		UE_LOG(Angelscript, Error,
+			TEXT("[RuntimeStartup] %s"), *StaticJITBackendError);
+	}
+#endif
 	FAngelscriptJITProviderRegistry::Get().StartModularFeatureDiscovery();
 	CrashSnapshotExtensionHandle = FAngelscriptCrashSnapshotExtension::Startup();
 	FAngelscriptScriptTestAutomation::Get().Startup();
