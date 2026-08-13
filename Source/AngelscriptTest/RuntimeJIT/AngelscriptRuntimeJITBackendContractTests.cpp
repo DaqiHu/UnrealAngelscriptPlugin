@@ -39,7 +39,21 @@ namespace AngelscriptRuntimeJITBackendContractTests_Private
 
 	static FAngelscriptRuntimeJITCompileSnapshotView MakeSnapshot()
 	{
-		static const asDWORD Bytecode[] = {0u, 1u, 2u};
+		static const asDWORD Bytecode[] = {
+			static_cast<asDWORD>(asBC_PshC4),
+			1u,
+			static_cast<asDWORD>(asBC_RET),
+		};
+		static const uint32 InstructionWordOffsets[] = {0u, 2u};
+		static const FAngelscriptRuntimeJITControlFlowEdge FallthroughEdge = []
+		{
+			FAngelscriptRuntimeJITControlFlowEdge Edge;
+			Edge.FromInstruction = 0;
+			Edge.ToInstruction = 1;
+			Edge.Kind =
+				EAngelscriptRuntimeJITControlFlowEdgeKind::Fallthrough;
+			return Edge;
+		}();
 		FAngelscriptRuntimeJITCompileSnapshotView Snapshot;
 		Snapshot.Header.BackendId = BackendId(TEXT("fake-runtime"));
 		Snapshot.Header.Platform =
@@ -51,7 +65,8 @@ namespace AngelscriptRuntimeJITBackendContractTests_Private
 			EAngelscriptRuntimeJITEndianness::Little;
 		Snapshot.Header.CallingConvention =
 			EAngelscriptRuntimeJITCallingConvention::AngelscriptVMEntry;
-		Snapshot.Header.EntryAbiRevision = 1;
+		Snapshot.Header.EntryAbiRevision =
+			FAngelscriptRuntimeJITBackendAbi::EntryAbiRevision;
 		Snapshot.Header.EngineNamespace = 17;
 		Snapshot.Header.PublicationOrdinal = 3;
 		Snapshot.Header.CancellationGeneration = 5;
@@ -61,6 +76,10 @@ namespace AngelscriptRuntimeJITBackendContractTests_Private
 		Snapshot.Header.EntryAbiHash = MakeHash(TEXT("entry-abi"));
 		Snapshot.Bytecode = Bytecode;
 		Snapshot.BytecodeWordCount = UE_ARRAY_COUNT(Bytecode);
+		Snapshot.InstructionWordOffsets = InstructionWordOffsets;
+		Snapshot.InstructionCount = UE_ARRAY_COUNT(InstructionWordOffsets);
+		Snapshot.ControlFlowEdges = &FallthroughEdge;
+		Snapshot.ControlFlowEdgeCount = 1;
 		return Snapshot;
 	}
 
@@ -243,6 +262,9 @@ public:
 	TEST_METHOD(BackendIdsAreStableValidatedAndTypeSeparated)
 	{
 		using namespace AngelscriptRuntimeJITBackendContractTests_Private;
+		ASSERT_THAT(AreEqual(static_cast<uint32>(2),
+			FAngelscriptRuntimeJITBackendAbi::Revision,
+			TEXT("Snapshot-header ABI changes require Runtime contract revision 2")));
 		FAngelscriptRuntimeJITBackendId Parsed;
 		ASSERT_THAT(IsTrue(FAngelscriptRuntimeJITBackendId::TryParse(
 			TEXT("angelsea-mir"), Parsed)));

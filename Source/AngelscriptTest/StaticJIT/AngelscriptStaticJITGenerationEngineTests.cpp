@@ -1,5 +1,6 @@
 #include "AngelscriptEngine.h"
 #include "AngelscriptTestEngineAcquisition.h"
+#include "Artifacts/AngelscriptFunctionRoute.h"
 #include "CQTest.h"
 #include "ClassGenerator/ASClass.h"
 #include "ClassGenerator/ASStruct.h"

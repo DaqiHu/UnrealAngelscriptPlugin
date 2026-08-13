@@ -219,14 +219,61 @@ FAngelscriptRuntimeJITCompileResult
 		Result.EntryAbiHash = Snapshot.Header.EntryAbiHash;
 		return Result;
 	};
-	if (!FAngelscriptRuntimeJITContract::ValidateSnapshot(Snapshot).IsValid()
-		|| Snapshot.Header.BackendId != Metadata.BackendId
+	const FAngelscriptRuntimeJITContractValidationResult SnapshotValidation =
+		FAngelscriptRuntimeJITContract::ValidateSnapshot(Snapshot);
+	if (!SnapshotValidation.IsValid())
+	{
+		return InvalidResult(
+			SnapshotValidation.Code
+				== EAngelscriptRuntimeJITContractValidationCode::InvalidEntryAbi
+					? EAngelscriptRuntimeJITDiagnosticReason::EntryAbiMismatch
+					: EAngelscriptRuntimeJITDiagnosticReason::MalformedSnapshot);
+	}
+	if (Snapshot.Header.BackendId != Metadata.BackendId
 		|| Snapshot.Header.EngineNamespace != EngineNamespace
 		|| Snapshot.Header.Platform != Platform
 		|| Snapshot.Header.Configuration != Configuration)
 	{
 		return InvalidResult(
 			EAngelscriptRuntimeJITDiagnosticReason::MalformedSnapshot);
+	}
+	if (Snapshot.Header.Receiver
+		!= EAngelscriptRuntimeJITReceiverKind::None)
+	{
+		FAngelscriptRuntimeJITCompileResult Result;
+		Result.Outcome = EAngelscriptRuntimeJITCompileOutcome::Unsupported;
+		Result.Reason =
+			EAngelscriptRuntimeJITDiagnosticReason::UnsupportedReceiver;
+		Result.FunctionRevision = Snapshot.Header.FunctionRevision;
+		Result.EntryAbiHash = Snapshot.Header.EntryAbiHash;
+		return Result;
+	}
+	if (Snapshot.Header.FunctionProfile
+		!= EAngelscriptRuntimeJITFunctionProfile::ScalarWholeFunction)
+	{
+		FAngelscriptRuntimeJITCompileResult Result;
+		Result.Outcome = EAngelscriptRuntimeJITCompileOutcome::Unsupported;
+		switch (Snapshot.Header.FunctionProfile)
+		{
+		case EAngelscriptRuntimeJITFunctionProfile::ManagedValues:
+			Result.Reason = EAngelscriptRuntimeJITDiagnosticReason::
+				UnsupportedManagedValue;
+			break;
+		case EAngelscriptRuntimeJITFunctionProfile::SuspendOrLatent:
+			Result.Reason =
+				EAngelscriptRuntimeJITDiagnosticReason::SuspendOrLatent;
+			break;
+		case EAngelscriptRuntimeJITFunctionProfile::ExceptionCleanup:
+			Result.Reason =
+				EAngelscriptRuntimeJITDiagnosticReason::ExceptionCleanup;
+			break;
+		default:
+			return InvalidResult(
+				EAngelscriptRuntimeJITDiagnosticReason::MalformedSnapshot);
+		}
+		Result.FunctionRevision = Snapshot.Header.FunctionRevision;
+		Result.EntryAbiHash = Snapshot.Header.EntryAbiHash;
+		return Result;
 	}
 
 	auto CompileAndValidate = [this, &Snapshot, &InvalidResult]()

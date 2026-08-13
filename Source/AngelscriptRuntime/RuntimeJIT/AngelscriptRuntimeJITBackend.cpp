@@ -1,4 +1,5 @@
 #include "JIT/AngelscriptRuntimeJITBackend.h"
+#include "RuntimeJIT/AngelscriptRuntimeJITSnapshot.h"
 
 namespace AngelscriptRuntimeJITBackend_Private
 {
@@ -363,7 +364,7 @@ FAngelscriptRuntimeJITContractValidationResult
 				static_cast<int32>(Index));
 		}
 	}
-	return {};
+	return FAngelscriptRuntimeJITCompileSnapshot::ValidateStructure(Snapshot);
 }
 
 FAngelscriptRuntimeJITContractValidationResult

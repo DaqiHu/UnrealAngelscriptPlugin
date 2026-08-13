@@ -9,7 +9,8 @@
 
 namespace FAngelscriptRuntimeJITBackendAbi
 {
-	inline constexpr uint32 Revision = 1;
+	inline constexpr uint32 Revision = 2;
+	inline constexpr uint32 EntryAbiRevision = 1;
 	inline constexpr uint32 BackendIdCapacity = 64;
 	inline constexpr uint32 MaximumBytecodeWordCount = 1u << 24;
 	inline constexpr uint32 MaximumFrameValueCount = 1u << 16;
@@ -233,7 +234,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptRuntimeJITCompileSnapshotHeader
 		EAngelscriptRuntimeJITReceiverKind::None;
 	EAngelscriptRuntimeJITFunctionProfile FunctionProfile =
 		EAngelscriptRuntimeJITFunctionProfile::ScalarWholeFunction;
-	uint16 Reserved = 0;
+	uint8 Reserved = 0;
+	int32 ReceiverParameterIndex = INDEX_NONE;
+	uint32 ParameterFrameByteSize = 0;
+	uint32 LocalFrameByteSize = 0;
+	uint32 ResultByteSize = 0;
 	uint32 EntryAbiRevision = 0;
 	uint64 EngineNamespace = 0;
 	uint64 PublicationOrdinal = 0;
@@ -369,6 +374,7 @@ enum class EAngelscriptRuntimeJITContractValidationCode : uint8
 	InvalidCallingConvention,
 	InvalidInvocation,
 	InvalidReceiver,
+	InvalidReceiverParameter,
 	InvalidFunctionProfile,
 	InvalidEngineNamespace,
 	InvalidFunctionIdentity,
@@ -377,12 +383,17 @@ enum class EAngelscriptRuntimeJITContractValidationCode : uint8
 	MissingBytecode,
 	InvalidFrameValueCount,
 	MissingFrameValues,
+	InvalidFrameValue,
+	InvalidFrameLayout,
 	InvalidInstructionCount,
 	MissingInstructionOffsets,
+	InvalidInstructionBoundary,
 	InvalidControlFlowCount,
 	MissingControlFlowEdges,
+	InvalidControlFlowEdge,
 	InvalidHelperTokenCount,
 	MissingHelperTokens,
+	InvalidHelperToken,
 	InvalidCodeLease,
 	InvalidCompileOutcome,
 	InvalidDiagnosticReason,
