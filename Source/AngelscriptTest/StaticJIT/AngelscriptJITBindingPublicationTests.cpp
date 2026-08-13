@@ -2,6 +2,8 @@
 #include "StaticJIT/AngelscriptJITProviderMatcher.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
 
+#include "AngelscriptTestMacros.h"
+
 #include "Async/Async.h"
 #include "CQTest.h"
 #include "HAL/Event.h"
