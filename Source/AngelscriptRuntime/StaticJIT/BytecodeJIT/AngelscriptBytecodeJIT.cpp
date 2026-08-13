@@ -55,20 +55,6 @@ asCString GetScriptClassName(asITypeInfo* Type)
 	return Str;
 }
 
-void FAngelscriptBytecodeJIT::ObserveFunctionReady(
-	asIScriptFunction* ScriptFunction)
-{
-#if AS_CAN_GENERATE_JIT
-	// In generate mode, output the C++ that represents the script function
-	if (bGenerateOutputCode)
-	{
-		FunctionsToGenerate.Add((asCScriptFunction*)ScriptFunction, FGenerateFunction());
-		return;
-	}
-#endif
-
-}
-
 bool FAngelscriptBytecodeJIT::CanGenerateParmsEntry(
 	const asIScriptFunction* ScriptFunction)
 {

@@ -15,7 +15,6 @@
 
 #include "Debugging/AngelscriptDebugServer.h"
 
-#include "StaticJIT/AngelscriptStaticJIT.h"
 #include "StaticJIT/StaticJITDiagnostics.h"
 
 #include "Testing/AngelscriptBindExecutionObservation.h"
@@ -1373,17 +1372,9 @@ FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpStaticJITState(FA
 	int32 SharedHeaderCount = 0;
 	int32 ComputedOffsetsCount = 0;
 
-#if AS_CAN_GENERATE_JIT
-	if (Engine.StaticJIT != nullptr)
-	{
-		const FAngelscriptBytecodeJIT& BytecodeJIT =
-			Engine.StaticJIT->GetBytecodeGenerator();
-		JITFileCount = BytecodeJIT.JITFiles.Num();
-		FunctionsToGenerateCount = BytecodeJIT.FunctionsToGenerate.Num();
-		SharedHeaderCount = BytecodeJIT.SharedHeaders.Num();
-		ComputedOffsetsCount = BytecodeJIT.ComputedOffsets.Num();
-	}
-#endif
+	// Static generators are task-local and intentionally are not Engine-owned
+	// services. Preserve the legacy table schema until generic coordinator
+	// diagnostics replace this compatibility table.
 
 	Writer.AddRow({
 		LexToString(JITFileCount),

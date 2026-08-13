@@ -760,7 +760,7 @@ FStaticJITDiagnostics::FSnapshot FStaticJITDiagnostics::CaptureSnapshot(FAngelsc
 					&& CurrentRoute.bHasVerifiedArtifactIdentity)
 				{
 					const bool bHasParmsEntry =
-						FAngelscriptStaticJIT::CanGenerateParmsEntry(
+						FAngelscriptBytecodeJIT::CanGenerateParmsEntry(
 							CurrentRoute.Function);
 					FAngelscriptJITFunctionMatchInput Input;
 					Input.ModuleKey = CurrentRoute.ModuleKey;

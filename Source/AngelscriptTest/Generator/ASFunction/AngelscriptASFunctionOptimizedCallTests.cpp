@@ -5,7 +5,7 @@
 #include "ClassGenerator/ASClass.h"
 #include "Misc/ScopeExit.h"
 #include "StaticJIT/AngelscriptJITExecutionContext.h"
-#include "StaticJIT/AngelscriptStaticJIT.h"
+#include "RuntimeJIT/AngelscriptJITCoordinator.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UnrealType.h"
 
@@ -460,7 +460,7 @@ public:
 		}
 
 		asIJITCompiler* OriginalCompiler = ScriptEngine->GetJITCompiler();
-		FAngelscriptStaticJIT CurrentBindingCompiler;
+		FAngelscriptJITCoordinator CurrentBindingCompiler(ScriptEngine);
 		ASSERT_THAT(AreEqual(asSUCCESS, ScriptEngine->SetJITCompiler(&CurrentBindingCompiler)));
 		ON_SCOPE_EXIT
 		{

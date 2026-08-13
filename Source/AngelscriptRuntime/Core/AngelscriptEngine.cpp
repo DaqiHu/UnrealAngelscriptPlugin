@@ -56,7 +56,7 @@
 
 #include "StaticJIT/AngelscriptJITProviderRouter.h"
 #include "StaticJIT/AngelscriptStaticJITGenerationSnapshot.h"
-#include "StaticJIT/AngelscriptStaticJIT.h"
+#include "RuntimeJIT/AngelscriptJITCoordinator.h"
 #include "StaticJIT/StaticJITHeader.h"
 #include "StaticJIT/BytecodeJIT/StaticJITBinds.h"
 
@@ -683,6 +683,51 @@ FAngelscriptCachePackPolicy ResolveAngelscriptCacheWriterPolicy(
 FAngelscriptEngineConfig FAngelscriptEngineConfig::FromCurrentProcess()
 {
 	FAngelscriptEngineConfig Config;
+	auto AddJITConfigurationError = [&Config](const FString& Error)
+	{
+		if (!Config.JITConfigurationError.IsEmpty())
+		{
+			Config.JITConfigurationError += TEXT("; ");
+		}
+		Config.JITConfigurationError += Error;
+	};
+	FString JITMode;
+	if (FParse::Value(FCommandLine::Get(), TEXT("-as-jit-mode="), JITMode)
+		&& !FAngelscriptJITConfiguration::TryParseExecutionMode(
+			JITMode, Config.JITExecutionMode))
+	{
+		Config.bJITExecutionModeValid = false;
+		Config.bRuntimeJITConfigurationValid = false;
+		Config.JITExecutionMode = EAngelscriptJITExecutionMode::VMOnly;
+		AddJITConfigurationError(FString::Printf(
+			TEXT("Unknown JIT execution mode '%s'"), *JITMode));
+	}
+	FString RuntimeBackend;
+	if (FParse::Value(
+		FCommandLine::Get(),
+		TEXT("-as-runtime-jit-backend="),
+		RuntimeBackend)
+		&& !RuntimeBackend.Equals(TEXT("none"), ESearchCase::IgnoreCase)
+		&& !FAngelscriptRuntimeJITBackendId::TryParse(
+			RuntimeBackend, Config.RuntimeJITBackend))
+	{
+		Config.bRuntimeJITConfigurationValid = false;
+		AddJITConfigurationError(FString::Printf(
+			TEXT("Invalid Runtime JIT BackendId '%s'"), *RuntimeBackend));
+	}
+	FString RuntimeCompilePolicy;
+	if (FParse::Value(
+		FCommandLine::Get(),
+		TEXT("-as-runtime-jit-compile="),
+		RuntimeCompilePolicy)
+		&& !FAngelscriptJITConfiguration::TryParseCompilePolicy(
+			RuntimeCompilePolicy, Config.RuntimeJITCompilePolicy))
+	{
+		Config.bRuntimeJITConfigurationValid = false;
+		AddJITConfigurationError(FString::Printf(
+			TEXT("Unknown Runtime JIT compile policy '%s'"),
+			*RuntimeCompilePolicy));
+	}
 	Config.bForceThreadedInitialize = FParse::Param(FCommandLine::Get(), TEXT("as-force-threaded-initialize"));
 	Config.bSkipThreadedInitialize = FParse::Param(FCommandLine::Get(), TEXT("as-skip-threaded-initialize"));
 	Config.bSimulateCooked = FParse::Param(FCommandLine::Get(), TEXT("as-simulate-cooked"));
@@ -1754,6 +1799,10 @@ bool FAngelscriptEngine::DiscardModule(const TCHAR* ModuleName)
 	//[UE++]: Remove module record from ActiveModules so GetModuleByModuleName returns null after discard
 	ActiveModules.Remove(InternalModuleName);
 	RebuildFunctionRouteSnapshot();
+	if (JITCoordinator != nullptr)
+	{
+		JITCoordinator->ProcessRuntimeSafePoint(*this);
+	}
 	//[UE--]
 	return true;
 }
@@ -1969,14 +2018,14 @@ void FAngelscriptEngine::Shutdown()
 	}
 #endif
 
-	if (bShouldReleaseOwnedEngine && StaticJIT != nullptr)
+	if (bShouldReleaseOwnedEngine && JITCoordinator != nullptr)
 	{
-		if (Engine != nullptr && Engine->GetJITCompiler() == StaticJIT)
+		if (Engine != nullptr && Engine->GetJITCompiler() == JITCoordinator)
 		{
 			Engine->SetJITCompiler(nullptr);
 		}
-		delete StaticJIT;
-		StaticJIT = nullptr;
+		delete JITCoordinator;
+		JITCoordinator = nullptr;
 	}
 
 	if (bShouldReleaseOwnedEngine
@@ -2089,7 +2138,7 @@ void FAngelscriptEngine::Shutdown()
 		Engine->ShutDownAndRelease();
 	}
 	Engine = nullptr;
-	StaticJIT = nullptr;
+	JITCoordinator = nullptr;
 #if WITH_AS_DEBUGSERVER
 	DebugServer = nullptr;
 #endif
@@ -2222,11 +2271,40 @@ void FAngelscriptEngine::PreInitialize_GameThread()
 		Engine->SetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS, 1);
 	checkf(IncludeJITInstructionsResult == asSUCCESS,
 		TEXT("AngelScript failed to enable the bytecode entry points required by StaticJIT Providers."));
-	check(StaticJIT == nullptr);
-	StaticJIT = new FAngelscriptStaticJIT();
-	const int SetJITCompilerResult = Engine->SetJITCompiler(StaticJIT);
+	check(JITCoordinator == nullptr);
+	FAngelscriptJITCoordinatorConfig CoordinatorConfig;
+	CoordinatorConfig.ExecutionMode = RuntimeConfig.JITExecutionMode;
+	CoordinatorConfig.RuntimeBackendId = RuntimeConfig.RuntimeJITBackend;
+	CoordinatorConfig.RuntimeCompilePolicy =
+		RuntimeConfig.RuntimeJITCompilePolicy;
+#if PLATFORM_WINDOWS
+	CoordinatorConfig.RuntimePlatform = EAngelscriptRuntimeJITPlatform::Win64;
+#elif PLATFORM_LINUX
+	CoordinatorConfig.RuntimePlatform = EAngelscriptRuntimeJITPlatform::Linux;
+#elif PLATFORM_MAC
+	CoordinatorConfig.RuntimePlatform = EAngelscriptRuntimeJITPlatform::Mac;
+#endif
+#if UE_BUILD_SHIPPING
+	CoordinatorConfig.RuntimeConfiguration =
+		EAngelscriptRuntimeJITBuildConfiguration::Shipping;
+#elif WITH_EDITOR
+	CoordinatorConfig.RuntimeConfiguration =
+		EAngelscriptRuntimeJITBuildConfiguration::EditorDevelopment;
+#else
+	CoordinatorConfig.RuntimeConfiguration =
+		EAngelscriptRuntimeJITBuildConfiguration::GameDevelopment;
+#endif
+	CoordinatorConfig.bExecutionModeValid =
+		RuntimeConfig.bJITExecutionModeValid;
+	CoordinatorConfig.bRuntimeConfigurationValid =
+		RuntimeConfig.bRuntimeJITConfigurationValid;
+	CoordinatorConfig.ConfigurationError =
+		RuntimeConfig.JITConfigurationError;
+	JITCoordinator = new FAngelscriptJITCoordinator(
+		Engine, CoordinatorConfig);
+	const int SetJITCompilerResult = Engine->SetJITCompiler(JITCoordinator);
 	checkf(SetJITCompilerResult == asSUCCESS,
-		TEXT("AngelScript failed to install its Engine-local StaticJIT Provider lifecycle adapter."));
+		TEXT("AngelScript failed to install its Engine-local JIT Coordinator."));
 	(void)IncludeJITInstructionsResult;
 	(void)SetJITCompilerResult;
 #endif
@@ -4801,6 +4879,10 @@ static bool HasGameWorld()
 void FAngelscriptEngine::Tick(float DeltaTime)
 {
 	TickPackagedRuntimeReload();
+	if (JITCoordinator != nullptr)
+	{
+		JITCoordinator->ProcessRuntimeSafePoint(*this);
+	}
 
 #if AS_CAN_HOTRELOAD
 	if (bScriptDevelopmentMode)

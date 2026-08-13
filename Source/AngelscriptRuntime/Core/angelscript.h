@@ -1589,6 +1589,10 @@ public:
 	// provider may call SetJITBinding immediately or publish later while this
 	// compiler remains installed on the function's engine.
 	virtual void OnFunctionReady(asIScriptFunction *function) = 0;
+	// Called when the VM reaches a JitEntry marker without a whole-function
+	// VMEntry Binding. Coordinators may use this as a lazy compilation trigger;
+	// the current invocation always continues through the VM.
+	virtual void OnJITEntry(asIScriptFunction *function) {}
 	// Called exactly once for each non-empty binding owned by this compiler when
 	// it is replaced, explicitly cleared, discarded, or destroyed. The function
 	// has already cleared the retired binding before this callback is entered.

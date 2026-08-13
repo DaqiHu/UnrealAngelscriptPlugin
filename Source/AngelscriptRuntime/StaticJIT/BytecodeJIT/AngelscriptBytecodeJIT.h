@@ -364,9 +364,6 @@ struct FStaticJITContext
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptBytecodeJIT
 {
-	/** Observe a function only when this task is collecting generated output. */
-	void ObserveFunctionReady(asIScriptFunction* ScriptFunction);
-
 	/** Shared generation/runtime predicate for the reflected Parms entry ABI. */
 	static bool CanGenerateParmsEntry(
 		const asIScriptFunction* ScriptFunction);

@@ -6,7 +6,7 @@
 #include "Misc/ScopeExit.h"
 #include "StaticJIT/AngelscriptJITBindingContext.h"
 #include "StaticJIT/AngelscriptJITImmutableArtifactSet.h"
-#include "StaticJIT/AngelscriptStaticJIT.h"
+#include "RuntimeJIT/AngelscriptJITCoordinator.h"
 #include "Support/AngelscriptNativeExecutionTestSupport.h"
 #include "Support/AngelscriptNativeLanguageCaseTestSupport.h"
 
@@ -356,7 +356,7 @@ public:
 			ScriptEngine->SetEngineProperty(
 				asEP_INCLUDE_JIT_INSTRUCTIONS,
 				1)));
-		FAngelscriptStaticJIT Compiler;
+		FAngelscriptJITCoordinator Compiler(ScriptEngine);
 		ASSERT_THAT(AreEqual(
 			asSUCCESS,
 			ScriptEngine->SetJITCompiler(&Compiler)));

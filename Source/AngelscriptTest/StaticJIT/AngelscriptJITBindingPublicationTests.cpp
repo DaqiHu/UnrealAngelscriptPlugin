@@ -1,6 +1,6 @@
 #include "StaticJIT/AngelscriptJITExecutionContext.h"
 #include "StaticJIT/AngelscriptJITProviderMatcher.h"
-#include "StaticJIT/AngelscriptStaticJIT.h"
+#include "RuntimeJIT/AngelscriptJITCoordinator.h"
 
 #include "AngelscriptTestMacros.h"
 
@@ -148,7 +148,7 @@ public:
 		}
 		ASSERT_THAT(AreEqual(asSUCCESS,
 			ScriptEngine->SetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS, 1)));
-		FAngelscriptStaticJIT Compiler;
+		FAngelscriptJITCoordinator Compiler(ScriptEngine);
 		ASSERT_THAT(AreEqual(asSUCCESS,
 			ScriptEngine->SetJITCompiler(&Compiler)));
 
@@ -241,7 +241,7 @@ public:
 		}
 		ASSERT_THAT(AreEqual(asSUCCESS,
 			ScriptEngine->SetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS, 1)));
-		FAngelscriptStaticJIT Compiler;
+		FAngelscriptJITCoordinator Compiler(ScriptEngine);
 		ASSERT_THAT(AreEqual(asSUCCESS,
 			ScriptEngine->SetJITCompiler(&Compiler)));
 		ON_SCOPE_EXIT
@@ -383,7 +383,7 @@ public:
 		}
 		ASSERT_THAT(AreEqual(asSUCCESS,
 			ScriptEngine->SetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS, 1)));
-		FAngelscriptStaticJIT Compiler;
+		FAngelscriptJITCoordinator Compiler(ScriptEngine);
 		ASSERT_THAT(AreEqual(asSUCCESS,
 			ScriptEngine->SetJITCompiler(&Compiler)));
 		ON_SCOPE_EXIT
@@ -475,7 +475,7 @@ public:
 		}
 		ASSERT_THAT(AreEqual(asSUCCESS,
 			ScriptEngine->SetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS, 1)));
-		FAngelscriptStaticJIT Compiler;
+		FAngelscriptJITCoordinator Compiler(ScriptEngine);
 		ASSERT_THAT(AreEqual(asSUCCESS,
 			ScriptEngine->SetJITCompiler(&Compiler)));
 		ON_SCOPE_EXIT
@@ -638,8 +638,8 @@ public:
 			asEP_INCLUDE_JIT_INSTRUCTIONS, 1)));
 		ASSERT_THAT(AreEqual(asSUCCESS, SecondScriptEngine->SetEngineProperty(
 			asEP_INCLUDE_JIT_INSTRUCTIONS, 1)));
-		FAngelscriptStaticJIT FirstCompiler;
-		FAngelscriptStaticJIT SecondCompiler;
+		FAngelscriptJITCoordinator FirstCompiler(FirstScriptEngine);
+		FAngelscriptJITCoordinator SecondCompiler(SecondScriptEngine);
 		ASSERT_THAT(AreEqual(asSUCCESS,
 			FirstScriptEngine->SetJITCompiler(&FirstCompiler)));
 		ASSERT_THAT(AreEqual(asSUCCESS,

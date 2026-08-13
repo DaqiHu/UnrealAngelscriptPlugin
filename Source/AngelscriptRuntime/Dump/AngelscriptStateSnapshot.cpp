@@ -394,7 +394,13 @@ FAngelscriptStateSnapshot FAngelscriptStateSnapshotBuilder::Capture(FAngelscript
 	AddPointerRow(Snapshot, TEXT("EngineMember"), TEXT("Services"), TEXT("ToStringList"), Engine.GetToStringList(), EngineSource);
 	AddPointerRow(Snapshot, TEXT("EngineMember"), TEXT("Services"), TEXT("BindDatabase"), Engine.GetBindDatabase(), EngineSource);
 	AddPointerRow(Snapshot, TEXT("EngineMember"), TEXT("Services"), TEXT("BlueprintEventSignatureRegistry"), Engine.GetBlueprintEventSignatureRegistry(), EngineSource);
-	AddPointerRow(Snapshot, TEXT("EngineMember"), TEXT("Services"), TEXT("StaticJIT"), Engine.StaticJIT, EngineSource);
+	AddPointerRow(
+		Snapshot,
+		TEXT("EngineMember"),
+		TEXT("Services"),
+		TEXT("JITCoordinator"),
+		Engine.JITCoordinator,
+		EngineSource);
 #if WITH_AS_COVERAGE
 	AddPointerRow(Snapshot, TEXT("EngineMember"), TEXT("Services"), TEXT("CodeCoverage"), FAngelscriptCodeCoverageExtension::GetForEngine(Engine), EngineSource);
 #else

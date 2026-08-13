@@ -175,7 +175,7 @@ namespace AngelscriptJITEditorRoutingTests_Private
 				Entry.NativeEnvironmentFingerprint =
 					View.NativeEnvironmentFingerprint;
 				const bool bHasParmsEntry =
-					FAngelscriptStaticJIT::CanGenerateParmsEntry(Route.Function);
+					FAngelscriptBytecodeJIT::CanGenerateParmsEntry(Route.Function);
 				Entry.EntryAbiHash = FAngelscriptJITGeneration::BuildEntryAbiHash(
 					Route.CanonicalDeclaration,
 					true,

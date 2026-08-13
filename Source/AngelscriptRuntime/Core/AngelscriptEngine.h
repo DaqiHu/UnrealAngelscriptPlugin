@@ -11,6 +11,7 @@
 #include "AngelscriptSourceProvider.h"
 #include "AngelscriptType.h"
 #include "AngelscriptMemoryTags.h"
+#include "RuntimeJIT/AngelscriptJITConfiguration.h"
 #include "StaticJIT/StaticJITConfig.h"
 
 #include "AngelscriptEngine.generated.h"
@@ -56,6 +57,7 @@ struct FAngelscriptEngineContextStack;
 struct FAngelscriptEngineScope;
 struct FAngelscriptFunctionRouteState;
 class FAngelscriptCacheService;
+class FAngelscriptJITCoordinator;
 class FAngelscriptJITProviderRouter;
 class IAngelscriptCacheRestoreFaultInjector;
 struct FAngelscriptCacheCompileCaptureContext;
@@ -134,6 +136,15 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngineConfig
 	/** Ordinary Runtime/Editor behavior remains the default. */
 	UPROPERTY()
 	EAngelscriptEnginePurpose Purpose = EAngelscriptEnginePurpose::Runtime;
+
+	EAngelscriptJITExecutionMode JITExecutionMode =
+		EAngelscriptJITExecutionMode::Auto;
+	FAngelscriptRuntimeJITBackendId RuntimeJITBackend;
+	EAngelscriptRuntimeJITCompilePolicy RuntimeJITCompilePolicy =
+		EAngelscriptRuntimeJITCompilePolicy::EagerSync;
+	bool bJITExecutionModeValid = true;
+	bool bRuntimeJITConfigurationValid = true;
+	FString JITConfigurationError;
 
 	UPROPERTY()
 	bool bForceThreadedInitialize = false;
@@ -684,6 +695,13 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngine
 		return (asIScriptEngine*)Engine;
 	}
 
+#if AS_CAN_GENERATE_JIT
+	FAngelscriptJITCoordinator* GetJITCoordinator() const
+	{
+		return JITCoordinator;
+	}
+#endif
+
 	UPackage* GetPackageInstance() const
 	{
 		return AngelscriptPackage;
@@ -1018,7 +1036,7 @@ public:
 	void ReplaceScriptAssetContent(FString AssetName, TArray<FString> AssetContent);
 
 	friend struct FAngelscriptPrecompiledData;
-	struct FAngelscriptStaticJIT* StaticJIT = nullptr;
+	class FAngelscriptJITCoordinator* JITCoordinator = nullptr;
 	bool bScriptDevelopmentMode = false;
 
 	static bool IsCollectingStaticJITCompatibilityBinds();

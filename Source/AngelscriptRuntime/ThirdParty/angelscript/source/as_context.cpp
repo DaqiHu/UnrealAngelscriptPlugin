@@ -3745,7 +3745,12 @@ void asCContext::ExecuteNext()
 
 	case asBC_JitEntry:
 		{
-			// Not a JIT resume point, treat as nop
+			// A lazy whole-function compiler may claim work here, but this
+			// invocation already owns the VM route and therefore continues as a
+			// nop. A later Engine safe point publishes any completed Binding.
+			asIJITCompiler *jit = m_engine->GetJITCompiler();
+			if( jit )
+				jit->OnJITEntry(m_currentFunction);
 			l_bc += 1+AS_PTR_SIZE;
 		}
 		break;

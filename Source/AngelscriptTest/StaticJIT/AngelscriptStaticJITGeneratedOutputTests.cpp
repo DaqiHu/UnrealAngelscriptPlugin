@@ -13,7 +13,7 @@
 #include "StaticJIT/BytecodeJIT/AngelscriptBytecodeJIT.h"
 #include "StaticJIT/AngelscriptJITGeneration.h"
 #include "StaticJIT/AngelscriptJITProviderMatcher.h"
-#include "StaticJIT/AngelscriptStaticJIT.h"
+#include "RuntimeJIT/AngelscriptJITCoordinator.h"
 #include "StaticJIT/AngelscriptStaticJITGenerator.h"
 #include "StaticJIT/StaticJITHeader.h"
 
@@ -327,7 +327,7 @@ public:
 		{ FAngelscriptEngineScope _AutoEngineScope(Engine);
 
 		asIScriptEngine* const ScriptEngine = Engine.GetScriptEngine();
-		FAngelscriptStaticJIT Compiler;
+		FAngelscriptJITCoordinator Compiler(ScriptEngine);
 		ASSERT_THAT(AreEqual(
 			asSUCCESS,
 			ScriptEngine->SetJITCompiler(&Compiler)));

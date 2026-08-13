@@ -4,7 +4,8 @@
 #include "StaticJIT/AngelscriptJITProviderMatcher.h"
 #include "StaticJIT/AngelscriptJITProviderRegistry.h"
 #include "StaticJIT/AngelscriptJITReferenceResolver.h"
-#include "StaticJIT/AngelscriptStaticJIT.h"
+#include "RuntimeJIT/AngelscriptJITCoordinator.h"
+#include "StaticJIT/BytecodeJIT/AngelscriptBytecodeJIT.h"
 
 #include "HAL/PlatformTime.h"
 
@@ -132,14 +133,17 @@ FAngelscriptJITProviderRouter::Refresh(
 		return Finish(TotalStart,
 			EAngelscriptJITProviderRouteRefreshCode::InvalidEngine, 0);
 	}
-	if (Engine.StaticJIT == nullptr
-		|| Engine.GetScriptEngine()->GetJITCompiler() != Engine.StaticJIT)
+	if (Engine.JITCoordinator == nullptr
+		|| Engine.GetScriptEngine()->GetJITCompiler()
+			!= Engine.JITCoordinator)
 	{
 		return Finish(TotalStart,
 			EAngelscriptJITProviderRouteRefreshCode::
 				MissingStaticJITCompiler,
 			0);
 	}
+	const bool bAllowsStaticAOT =
+		Engine.JITCoordinator->AllowsStaticAOT();
 
 	const double ProviderCatalogStart = FPlatformTime::Seconds();
 	const TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
@@ -209,8 +213,42 @@ FAngelscriptJITProviderRouter::Refresh(
 	Result.VerifiedRouteCount = static_cast<uint32>(VerifiedRoutes.Num());
 	if (VerifiedRoutes.IsEmpty())
 	{
+		Engine.JITCoordinator->ProcessRuntimeSafePoint(Engine);
 		return Finish(TotalStart,
 			EAngelscriptJITProviderRouteRefreshCode::NoRoutes,
+			ProviderCount);
+	}
+	if (!bAllowsStaticAOT)
+	{
+		bool bAnyBindingChanged = false;
+		for (const FAngelscriptFunctionRoute* Route : VerifiedRoutes)
+		{
+			FAngelscriptJITProviderRouteRecord& Record =
+				Result.Routes.AddDefaulted_GetRef();
+			Record.ModuleKey = Route->ModuleKey;
+			Record.FunctionKey = Route->Identity.FunctionKey;
+			bAnyBindingChanged |=
+				Engine.JITCoordinator->ClearProviderSelection(Route->Function);
+			++Result.VmFallbackCount;
+		}
+		if (bAnyBindingChanged
+			&& !Engine.RefreshFunctionRouteSnapshotAfterStaticJITChange(true))
+		{
+			return Finish(TotalStart,
+				EAngelscriptJITProviderRouteRefreshCode::RoutePublicationFailed,
+				ProviderCount);
+		}
+		Engine.JITCoordinator->ProcessRuntimeSafePoint(Engine);
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
+			ESPMode::ThreadSafe> PublishedRoutes =
+			Engine.GetFunctionRouteSnapshot();
+		Result.PublishedRouteGeneration = PublishedRoutes.IsValid()
+			? PublishedRoutes->Generation
+			: Result.SourceRouteGeneration;
+		Result.RouteMatchAndPublicationMs =
+			(FPlatformTime::Seconds() - ReferenceDiscoveryStart) * 1000.0;
+		return Finish(TotalStart,
+			EAngelscriptJITProviderRouteRefreshCode::Applied,
 			ProviderCount);
 	}
 
@@ -244,7 +282,7 @@ FAngelscriptJITProviderRouter::Refresh(
 		Record.FunctionKey = Route->Identity.FunctionKey;
 
 		const bool bHasParmsEntry =
-			FAngelscriptStaticJIT::CanGenerateParmsEntry(Route->Function);
+			FAngelscriptBytecodeJIT::CanGenerateParmsEntry(Route->Function);
 		FAngelscriptJITFunctionMatchInput Input;
 		Input.ModuleKey = Route->ModuleKey;
 		Input.Identity = Route->Identity;
@@ -263,9 +301,10 @@ FAngelscriptJITProviderRouter::Refresh(
 				EAngelscriptJITRequiredEntryPoints::Parms;
 		}
 
-		const FAngelscriptJITFunctionMatchResult Match =
-			FAngelscriptJITProviderMatcher::Match(
-				*Providers, Input, *ReferenceBuild.Resolver);
+		const FAngelscriptJITFunctionMatchResult Match = bAllowsStaticAOT
+			? FAngelscriptJITProviderMatcher::Match(
+				*Providers, Input, *ReferenceBuild.Resolver)
+			: FAngelscriptJITFunctionMatchResult{};
 		Record.MatchResult = Match.Result;
 		if (Match.Result == EAngelscriptArtifactMatchResult::Exact
 			&& Match.Selection.IsSet())
@@ -276,7 +315,7 @@ FAngelscriptJITProviderRouter::Refresh(
 			Record.ProviderId = Selection.Provider->ProviderId;
 			Record.ProviderGeneration =
 				Selection.Provider->ProviderGeneration;
-			if (Engine.StaticJIT->PublishProviderSelection(
+			if (Engine.JITCoordinator->PublishProviderSelection(
 					Route->Function, Selection))
 			{
 				Record.bBindingPublished = true;
@@ -289,7 +328,7 @@ FAngelscriptJITProviderRouter::Refresh(
 				EAngelscriptArtifactMatchResult::InvalidProvider;
 		}
 
-		bAnyBindingChanged |= Engine.StaticJIT->ClearProviderSelection(
+		bAnyBindingChanged |= Engine.JITCoordinator->ClearProviderSelection(
 			Route->Function);
 		++Result.VmFallbackCount;
 	}
@@ -299,7 +338,7 @@ FAngelscriptJITProviderRouter::Refresh(
 	{
 		for (asIScriptFunction* Function : PublishedFunctions)
 		{
-			Engine.StaticJIT->ClearProviderSelection(Function);
+			Engine.JITCoordinator->ClearProviderSelection(Function);
 		}
 		Result.PublishedNativeCount = 0;
 		Result.VmFallbackCount = Result.VerifiedRouteCount;
@@ -312,6 +351,16 @@ FAngelscriptJITProviderRouter::Refresh(
 		return Finish(TotalStart,
 			EAngelscriptJITProviderRouteRefreshCode::RoutePublicationFailed,
 			ProviderCount);
+	}
+
+	// Static Provider selection is authoritative and completes first. Runtime
+	// may consume only the resulting current routes, so Auto can never replace
+	// an exact AOT Binding merely because a backend result is also available.
+	if (!Engine.JITCoordinator->ProcessRuntimeSafePoint(Engine))
+	{
+		UE_LOG(Angelscript, Warning,
+			TEXT("[RuntimeJIT] Runtime safe-point publication failed for Engine=%p"),
+			&Engine);
 	}
 
 	const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,

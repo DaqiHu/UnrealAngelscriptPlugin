@@ -7,7 +7,7 @@
 #include "Binds/Bind_Helpers.h"
 #include "ClassGenerator/ASClass.h"
 #include "ClassGenerator/ASStruct.h"
-#include "StaticJIT/AngelscriptStaticJIT.h"
+#include "StaticJIT/BytecodeJIT/AngelscriptBytecodeJIT.h"
 
 #include "UObject/GarbageCollection.h"
 #include "UObject/GarbageCollectionSchema.h"
@@ -630,8 +630,7 @@ bool FUStructType::GetCppForm(const FAngelscriptTypeUsage& Usage, FCppForm& OutC
 #if AS_CAN_GENERATE_JIT
 		asCObjectType* ObjectType = (asCObjectType*)Usage.ScriptClass;
 		if (ObjectType != nullptr && (ObjectType->flags & asOBJ_POD) != 0
-			&& FAngelscriptEngine::Get().StaticJIT != nullptr
-			&& !FAngelscriptEngine::Get().StaticJIT->GetBytecodeGenerator()
+			&& !FAngelscriptBytecodeJIT()
 				.IsTypePotentiallyDifferent(ObjectType)
 			&& ObjectType->GetFirstMethod("opAssign") == nullptr
 		)
