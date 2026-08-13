@@ -1,6 +1,14 @@
 #include "RuntimeJIT/AngelscriptJITCoordinator.h"
 
 #include "AngelscriptEngine.h"
+#if WITH_AS_DEBUGSERVER
+#include "Debugging/AngelscriptDebugServer.h"
+#endif
+#if WITH_AS_COVERAGE
+#include "Extension/CodeCoverage/AngelscriptCodeCoverage.h"
+#endif
+#include "HAL/Event.h"
+#include "HAL/PlatformProcess.h"
 #include "HAL/ThreadSafeCounter64.h"
 #include "Misc/ScopeLock.h"
 #include "RuntimeJIT/AngelscriptRuntimeJITBindingContext.h"
@@ -11,6 +19,26 @@
 namespace
 {
 	FThreadSafeCounter64 GNextJITCoordinatorEngineNamespace;
+
+	bool RequiresRuntimeBytecodeVisibility(FAngelscriptEngine& Engine)
+	{
+#if WITH_AS_DEBUGSERVER
+		if (Engine.DebugServer != nullptr
+			&& (Engine.DebugServer->bIsDebugging
+				|| Engine.DebugServer->DataBreakpoints.Num() != 0
+				|| Engine.DebugServer->bBreakNextScriptLine))
+		{
+			return true;
+		}
+#endif
+#if WITH_AS_COVERAGE
+		if (FAngelscriptCodeCoverageExtension::GetForEngine(Engine) != nullptr)
+		{
+			return true;
+		}
+#endif
+		return false;
+	}
 }
 
 FAngelscriptJITCoordinator::FAngelscriptJITCoordinator(
@@ -22,6 +50,9 @@ FAngelscriptJITCoordinator::FAngelscriptJITCoordinator(
 		static_cast<uint64>(GNextJITCoordinatorEngineNamespace.Increment()))
 {
 	check(OwnerScriptEngine != nullptr);
+	BindingsDrainedEvent = FPlatformProcess::GetSynchEventFromPool(true);
+	check(BindingsDrainedEvent != nullptr);
+	BindingsDrainedEvent->Trigger();
 	auto AppendConfigurationError = [this](const TCHAR* Error)
 	{
 		if (!Config.ConfigurationError.IsEmpty())
@@ -70,16 +101,56 @@ FAngelscriptJITCoordinator::FAngelscriptJITCoordinator(
 
 FAngelscriptJITCoordinator::~FAngelscriptJITCoordinator()
 {
-	RuntimeState.Reset();
-	TMap<const void*, TSharedPtr<const FAngelscriptRuntimeJITBindingContext,
-		ESPMode::ThreadSafe>> RetiredRuntime;
-	TMap<const void*, TSharedPtr<const FAngelscriptJITBindingContext,
-		ESPMode::ThreadSafe>> RetiredProviders;
+	Shutdown();
+	FPlatformProcess::ReturnSynchEventToPool(BindingsDrainedEvent);
+	BindingsDrainedEvent = nullptr;
+}
+
+void FAngelscriptJITCoordinator::Shutdown()
+{
+	FScopeLock ShutdownLock(&ShutdownMutex);
+	if (bShutdownComplete)
+	{
+		return;
+	}
+
 	{
 		FScopeLock Lock(&BindingMutex);
-		RetiredRuntime = MoveTemp(ActiveRuntimeBindingContexts);
-		RetiredProviders = MoveTemp(ActiveProviderBindingContexts);
+		bShuttingDown = true;
+		UpdateBindingsDrainedEventLocked();
 	}
+
+	asIScriptEngine* const ScriptEngine = OwnerScriptEngine;
+	if (ScriptEngine != nullptr
+		&& ScriptEngine->GetJITCompiler() == this)
+	{
+		ScriptEngine->SetJITCompiler(nullptr);
+	}
+
+	if (RuntimeState.IsValid())
+	{
+		RuntimeState->Shutdown();
+		RuntimeState.Reset();
+	}
+	{
+		FScopeLock Lock(&RuntimeRecordMutex);
+		RuntimeFunctionRecords.Empty();
+	}
+
+	for (;;)
+	{
+		{
+			FScopeLock Lock(&BindingMutex);
+			if (AreBindingContextsDrainedLocked())
+			{
+				break;
+			}
+		}
+		BindingsDrainedEvent->Wait();
+	}
+
+	OwnerScriptEngine = nullptr;
+	bShutdownComplete = true;
 }
 
 bool FAngelscriptJITCoordinator::IsInstalledOwner(
@@ -173,7 +244,26 @@ void FAngelscriptJITCoordinator::ReleaseFunctionBinding(
 				Binding.UserData, RetiredProvider);
 			ActiveRuntimeBindingContexts.RemoveAndCopyValue(
 				Binding.UserData, RetiredRuntime);
+			UpdateBindingsDrainedEventLocked();
 		}
+	}
+}
+
+bool FAngelscriptJITCoordinator::AreBindingContextsDrainedLocked() const
+{
+	return ActiveProviderBindingContexts.IsEmpty()
+		&& ActiveRuntimeBindingContexts.IsEmpty();
+}
+
+void FAngelscriptJITCoordinator::UpdateBindingsDrainedEventLocked()
+{
+	if (AreBindingContextsDrainedLocked())
+	{
+		BindingsDrainedEvent->Trigger();
+	}
+	else
+	{
+		BindingsDrainedEvent->Reset();
 	}
 }
 
@@ -215,7 +305,12 @@ bool FAngelscriptJITCoordinator::PublishProviderSelection(
 	}
 	{
 		FScopeLock Lock(&BindingMutex);
+		if (bShuttingDown)
+		{
+			return false;
+		}
 		ActiveProviderBindingContexts.Add(Binding.UserData, Context);
+		UpdateBindingsDrainedEventLocked();
 	}
 	if (ScriptFunction->SetJITBinding(Binding) != asSUCCESS)
 	{
@@ -225,6 +320,7 @@ bool FAngelscriptJITCoordinator::PublishProviderSelection(
 			FScopeLock Lock(&BindingMutex);
 			ActiveProviderBindingContexts.RemoveAndCopyValue(
 				Binding.UserData, Retired);
+			UpdateBindingsDrainedEventLocked();
 		}
 		return false;
 	}
@@ -281,7 +377,12 @@ bool FAngelscriptJITCoordinator::PublishRuntimeSelection(
 	}
 	{
 		FScopeLock Lock(&BindingMutex);
+		if (bShuttingDown)
+		{
+			return false;
+		}
 		ActiveRuntimeBindingContexts.Add(Binding.UserData, Context);
+		UpdateBindingsDrainedEventLocked();
 	}
 	if (ScriptFunction->SetJITBinding(Binding) != asSUCCESS)
 	{
@@ -291,6 +392,7 @@ bool FAngelscriptJITCoordinator::PublishRuntimeSelection(
 			FScopeLock Lock(&BindingMutex);
 			ActiveRuntimeBindingContexts.RemoveAndCopyValue(
 				Binding.UserData, Retired);
+			UpdateBindingsDrainedEventLocked();
 		}
 		return false;
 	}
@@ -371,6 +473,8 @@ bool FAngelscriptJITCoordinator::ProcessRuntimeSafePoint(
 
 	bool bAnyBindingChanged = false;
 	bool bPublicationSucceeded = true;
+	const bool bRuntimeRequiresBytecodeVisibility =
+		RequiresRuntimeBytecodeVisibility(Engine);
 	TArray<asIScriptFunction*> PublishedFunctions;
 	for (const FAngelscriptFunctionRoute& Route : Routes->FunctionRoutes)
 	{
@@ -389,7 +493,8 @@ bool FAngelscriptJITCoordinator::ProcessRuntimeSafePoint(
 		const bool bHasStaticAOT =
 			FAngelscriptJITBindingContext::FromBindingUserData(
 				CurrentBinding.UserData) != nullptr;
-		const bool bShouldUseRuntime = RuntimeState.IsValid()
+		const bool bShouldUseRuntime = !bRuntimeRequiresBytecodeVisibility
+			&& RuntimeState.IsValid()
 			&& (Config.ExecutionMode
 					== EAngelscriptJITExecutionMode::RuntimeOnly
 				|| (Config.ExecutionMode

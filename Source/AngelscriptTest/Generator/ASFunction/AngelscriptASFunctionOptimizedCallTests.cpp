@@ -3,6 +3,7 @@
 
 #include "CQTest.h"
 #include "ClassGenerator/ASClass.h"
+#include "HAL/ThreadSafeCounter.h"
 #include "Misc/ScopeExit.h"
 #include "StaticJIT/AngelscriptJITExecutionContext.h"
 #include "RuntimeJIT/AngelscriptJITCoordinator.h"
@@ -23,6 +24,20 @@ namespace AngelscriptASFunctionOptimizedCallTests_Private
 	static asBYTE CurrentBindingByteReturn(FScriptExecution&, void*)
 	{
 		return 202;
+	}
+
+	static FThreadSafeCounter RuntimeVmOnlyEntryCount;
+
+	static void RuntimeVmOnlyEntry(
+		FScriptExecution&,
+		asDWORD*,
+		asQWORD* OutValue)
+	{
+		RuntimeVmOnlyEntryCount.Increment();
+		if (OutValue != nullptr)
+		{
+			*OutValue = 42;
+		}
 	}
 }
 
@@ -498,10 +513,41 @@ public:
 		ScriptFunction->SetJITBinding(ClearedBinding);
 
 		const uint8 FallbackResult = GetByteCodeFunction->OptimizedCall_ByteReturn(Instance);
-		ASSERT_THAT(AreEqual(
+		if (!this->Assert.AreEqual(
 			42,
 			static_cast<int32>(FallbackResult),
-			TEXT("Clearing the current Raw entry should fall back to current VM execution instead of invoking a stale cache")));
+			TEXT("Clearing the current Raw entry should fall back to current VM execution instead of invoking a stale cache")))
+		{
+			return;
+		}
+
+		RuntimeVmOnlyEntryCount.Reset();
+		asSJITFunctionBinding RuntimeVmOnlyBinding = CurrentBinding;
+		RuntimeVmOnlyBinding.VMEntry = &RuntimeVmOnlyEntry;
+		RuntimeVmOnlyBinding.RawEntry = nullptr;
+		RuntimeVmOnlyBinding.ParmsEntry = nullptr;
+		RuntimeVmOnlyBinding.UserData = nullptr;
+		ASSERT_THAT(AreEqual(
+			asSUCCESS,
+			ScriptFunction->SetJITBinding(RuntimeVmOnlyBinding)));
+		GetByteCodeFunction->JitFunction_Raw =
+			reinterpret_cast<asJITFunction_Raw>(&StaleCachedByteReturn);
+
+		const asSJITFunctionBinding PublishedVmOnly =
+			ScriptFunction->GetJITBinding();
+		ASSERT_THAT(IsTrue(PublishedVmOnly.VMEntry == &RuntimeVmOnlyEntry));
+		ASSERT_THAT(IsNull(PublishedVmOnly.RawEntry));
+		ASSERT_THAT(IsNull(PublishedVmOnly.ParmsEntry));
+		const uint8 RuntimeVmOnlyResult =
+			GetByteCodeFunction->OptimizedCall_ByteReturn(Instance);
+		ASSERT_THAT(AreEqual(
+			42,
+			static_cast<int32>(RuntimeVmOnlyResult),
+			TEXT("A VMEntry-only Runtime binding must keep reflected optimized-call execution on the VM/context path")));
+		ASSERT_THAT(AreEqual(
+			1,
+			RuntimeVmOnlyEntryCount.GetValue(),
+			TEXT("The VM/context path should still observe the current Runtime VMEntry exactly once")));
 	}
 };
 

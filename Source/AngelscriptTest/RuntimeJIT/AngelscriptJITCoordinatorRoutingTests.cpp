@@ -2,9 +2,20 @@
 #include "AngelscriptTestEngineAcquisition.h"
 #include "AngelscriptTestMacros.h"
 #include "AngelscriptTestUtilities.h"
+#include "Async/Async.h"
 #include "CQTest.h"
+#if WITH_AS_DEBUGSERVER
+#include "Debugging/AngelscriptDebugServer.h"
+#endif
+#if WITH_AS_COVERAGE
+#include "Extension/CodeCoverage/AngelscriptCodeCoverage.h"
+#include "Testing/AngelscriptTestSettings.h"
+#include "UObject/UObjectGlobals.h"
+#endif
 #include "Features/IModularFeatures.h"
+#include "HAL/Event.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformProcess.h"
 #include "JIT/AngelscriptRuntimeJITBackend.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
@@ -23,6 +34,11 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptJITCoordinatorRoutingTests,
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 private:
+	inline static FEvent* BlockingRuntimeEntryStarted = nullptr;
+	inline static FEvent* BlockingRuntimeEntryContinue = nullptr;
+	inline static FThreadSafeCounter BlockingRuntimeEntryBudget;
+	inline static FThreadSafeCounter StaticVmEntryCount;
+
 	static FAngelscriptRuntimeJITBackendId BackendId()
 	{
 		FAngelscriptRuntimeJITBackendId Result;
@@ -33,10 +49,19 @@ private:
 
 	static void RuntimeVmEntry(FScriptExecution&, asDWORD*, asQWORD*)
 	{
+		FEvent* const Started = BlockingRuntimeEntryStarted;
+		FEvent* const Continue = BlockingRuntimeEntryContinue;
+		if (Started != nullptr && Continue != nullptr
+			&& BlockingRuntimeEntryBudget.Decrement() >= 0)
+		{
+			Started->Trigger();
+			Continue->Wait();
+		}
 	}
 
 	static void StaticVmEntry(FScriptExecution&, asDWORD*, asQWORD*)
 	{
+		StaticVmEntryCount.Increment();
 	}
 
 	static void StaticRawEntry()
@@ -58,9 +83,11 @@ private:
 	struct FControl : TSharedFromThis<FControl, ESPMode::ThreadSafe>
 	{
 		FThreadSafeCounter CompileCount;
+		FThreadSafeCounter HelperTokenCompileCount;
 		FThreadSafeCounter SessionCreateCount;
 		FThreadSafeCounter SessionDestroyCount;
 		FThreadSafeCounter LeaseReleaseCount;
+		TAtomic<bool> bRejectHelperTokens { false };
 		FCriticalSection Mutex;
 		TArray<uint64> EngineNamespaces;
 	};
@@ -102,10 +129,22 @@ private:
 		{
 			Control->CompileCount.Increment();
 			FAngelscriptRuntimeJITCompileResult Result;
-			Result.Outcome = EAngelscriptRuntimeJITCompileOutcome::Compiled;
-			Result.Reason = EAngelscriptRuntimeJITDiagnosticReason::None;
 			Result.FunctionRevision = Snapshot.Header.FunctionRevision;
 			Result.EntryAbiHash = Snapshot.Header.EntryAbiHash;
+			if (Snapshot.HelperTokenCount != 0)
+			{
+				Control->HelperTokenCompileCount.Increment();
+				if (Control->bRejectHelperTokens.Load())
+				{
+					Result.Outcome =
+						EAngelscriptRuntimeJITCompileOutcome::Unsupported;
+					Result.Reason =
+						EAngelscriptRuntimeJITDiagnosticReason::UnsupportedOpcode;
+					return Result;
+				}
+			}
+			Result.Outcome = EAngelscriptRuntimeJITCompileOutcome::Compiled;
+			Result.Reason = EAngelscriptRuntimeJITDiagnosticReason::None;
 			Result.VMEntry = &RuntimeVmEntry;
 			Result.CodeSize = 32;
 			Result.CompileLatencyMicroseconds = 5;
@@ -172,12 +211,23 @@ private:
 
 		~FScopedFactoryRegistration()
 		{
+			Unregister();
+		}
+
+		void Unregister()
+		{
+			if (!bRegistered)
+			{
+				return;
+			}
 			IModularFeatures::Get().UnregisterModularFeature(
 				IAngelscriptRuntimeJITBackendFactory::FeatureName(), &Factory);
+			bRegistered = false;
 		}
 
 	private:
 		FFactory& Factory;
+		bool bRegistered = true;
 	};
 
 	class FExactRouteProvider final
@@ -270,14 +320,20 @@ private:
 			}
 		}
 
+		bool WriteSourceText(const FString& Source) const
+		{
+			return FFileHelper::SaveStringToFile(
+				Source, *(ScriptRoot / TEXT("RuntimeCoordinator.as")));
+		}
+
 		bool WriteSource() const
 		{
-			return FFileHelper::SaveStringToFile(ASTEST_AS(R"AS(
+			return WriteSourceText(ASTEST_AS(R"AS(
 				int AddOne(int Value)
 				{
 					return Value + 1;
 				}
-			)AS"), *(ScriptRoot / TEXT("RuntimeCoordinator.as")));
+			)AS"));
 		}
 
 		FString Root;
@@ -346,6 +402,276 @@ private:
 	}
 
 public:
+	TEST_METHOD(ShutdownWaitsForActiveRuntimeBindingReader)
+	{
+		FFactory Factory;
+		FScopedFactoryRegistration Registration(Factory);
+		FScopedProjectRoot Project;
+		ASSERT_THAT(IsTrue(Project.WriteSource()));
+		TUniquePtr<FAngelscriptEngine> Engine =
+			CreateScriptScanFreeFullEngineForTesting(
+				MakeRuntimeConfig(Project),
+				MakeDependencies(Project));
+		ASSERT_THAT(IsNotNull(Engine.Get()));
+
+		asIScriptFunction* Function = nullptr;
+		{
+			FAngelscriptEngineScope Scope(*Engine);
+			Engine->InitialCompile();
+			const TSharedPtr<FAngelscriptModuleDesc> Module =
+				Engine->GetModuleByModuleName(TEXT("RuntimeCoordinator"));
+			ASSERT_THAT(IsTrue(Module.IsValid()));
+			ASSERT_THAT(IsNotNull(Module->ScriptModule));
+			Function =
+				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
+			ASSERT_THAT(IsNotNull(Function));
+			ASSERT_THAT(IsTrue(
+				Function->GetJITBinding().VMEntry == &RuntimeVmEntry));
+		}
+
+		BlockingRuntimeEntryStarted =
+			FPlatformProcess::GetSynchEventFromPool(true);
+		BlockingRuntimeEntryContinue =
+			FPlatformProcess::GetSynchEventFromPool(true);
+		BlockingRuntimeEntryBudget.Reset();
+		BlockingRuntimeEntryBudget.Increment();
+		FEvent* const ShutdownStarted =
+			FPlatformProcess::GetSynchEventFromPool(true);
+		FEvent* const ShutdownReturned =
+			FPlatformProcess::GetSynchEventFromPool(true);
+		TFuture<int32> Execution;
+		TFuture<void> Shutdown;
+		ON_SCOPE_EXIT
+		{
+			BlockingRuntimeEntryContinue->Trigger();
+			if (Execution.IsValid())
+			{
+				Execution.Wait();
+			}
+			if (Shutdown.IsValid())
+			{
+				Shutdown.Wait();
+			}
+			FPlatformProcess::ReturnSynchEventToPool(
+				BlockingRuntimeEntryStarted);
+			FPlatformProcess::ReturnSynchEventToPool(
+				BlockingRuntimeEntryContinue);
+			FPlatformProcess::ReturnSynchEventToPool(ShutdownStarted);
+			FPlatformProcess::ReturnSynchEventToPool(ShutdownReturned);
+			BlockingRuntimeEntryStarted = nullptr;
+			BlockingRuntimeEntryContinue = nullptr;
+			BlockingRuntimeEntryBudget.Reset();
+		};
+
+		asIScriptContext* const Context =
+			Engine->GetScriptEngine()->CreateContext();
+		ASSERT_THAT(IsNotNull(Context));
+		ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(Function)));
+		ASSERT_THAT(AreEqual(asSUCCESS, Context->SetArgDWord(0, 41)));
+		Execution = Async(EAsyncExecution::Thread, [Context]()
+		{
+			const int32 Result = Context->Execute();
+			Context->Release();
+			return Result;
+		});
+		ASSERT_THAT(IsTrue(BlockingRuntimeEntryStarted->Wait(5000)));
+		Registration.Unregister();
+		ASSERT_THAT(AreEqual(0,
+			Factory.Control->LeaseReleaseCount.GetValue()));
+		ASSERT_THAT(AreEqual(0,
+			Factory.Control->SessionDestroyCount.GetValue()));
+
+		FAngelscriptJITCoordinator* const Coordinator =
+			Engine->GetJITCoordinator();
+		ASSERT_THAT(IsNotNull(Coordinator));
+		Shutdown = Async(EAsyncExecution::Thread,
+			[Coordinator, ShutdownStarted, ShutdownReturned]()
+			{
+				ShutdownStarted->Trigger();
+				Coordinator->Shutdown();
+				ShutdownReturned->Trigger();
+			});
+		ASSERT_THAT(IsTrue(ShutdownStarted->Wait(5000)));
+
+		const double DetachDeadline = FPlatformTime::Seconds() + 5.0;
+		while (Engine->GetScriptEngine()->GetJITCompiler() != nullptr
+			&& FPlatformTime::Seconds() < DetachDeadline)
+		{
+			FPlatformProcess::SleepNoStats(0.001f);
+		}
+		ASSERT_THAT(IsNull(Engine->GetScriptEngine()->GetJITCompiler()));
+		ASSERT_THAT(IsFalse(ShutdownReturned->Wait(50)));
+		ASSERT_THAT(AreEqual(0,
+			Factory.Control->LeaseReleaseCount.GetValue()));
+		ASSERT_THAT(AreEqual(0,
+			Factory.Control->SessionDestroyCount.GetValue()));
+
+		int32 VmResult = 0;
+		ASSERT_THAT(IsTrue(ExecuteAddOne(
+			*Engine, *Function, 41, VmResult)));
+		ASSERT_THAT(AreEqual(42, VmResult));
+
+		BlockingRuntimeEntryContinue->Trigger();
+		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Execution.Get()));
+		ASSERT_THAT(IsTrue(ShutdownReturned->Wait(5000)));
+		Shutdown.Wait();
+		ASSERT_THAT(AreEqual(1,
+			Factory.Control->LeaseReleaseCount.GetValue()));
+		ASSERT_THAT(AreEqual(1,
+			Factory.Control->SessionDestroyCount.GetValue()));
+
+		Engine.Reset();
+	}
+
+	TEST_METHOD(ActiveRuntimeCallSurvivesAotAndRuntimeReplacement)
+	{
+		FFactory Factory;
+		FScopedFactoryRegistration Registration(Factory);
+		FScopedProjectRoot Project;
+		ASSERT_THAT(IsTrue(Project.WriteSource()));
+		TUniquePtr<FAngelscriptEngine> Engine =
+			CreateScriptScanFreeFullEngineForTesting(
+				MakeRuntimeConfig(
+					Project,
+					EAngelscriptRuntimeJITCompilePolicy::EagerSync,
+					EAngelscriptJITExecutionMode::Auto),
+				MakeDependencies(Project));
+		ASSERT_THAT(IsNotNull(Engine.Get()));
+
+		asIScriptFunction* Function = nullptr;
+		TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
+			ESPMode::ThreadSafe> Routes;
+		{
+			FAngelscriptEngineScope Scope(*Engine);
+			Engine->InitialCompile();
+			Routes = Engine->GetFunctionRouteSnapshot();
+			ASSERT_THAT(IsTrue(Routes.IsValid()));
+			const TSharedPtr<FAngelscriptModuleDesc> Module =
+				Engine->GetModuleByModuleName(TEXT("RuntimeCoordinator"));
+			ASSERT_THAT(IsTrue(Module.IsValid()));
+			ASSERT_THAT(IsNotNull(Module->ScriptModule));
+			Function =
+				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
+			ASSERT_THAT(IsNotNull(Function));
+			ASSERT_THAT(IsTrue(
+				Function->GetJITBinding().VMEntry == &RuntimeVmEntry));
+		}
+		const asSJITFunctionBinding FirstRuntimeBinding =
+			Function->GetJITBinding();
+
+		BlockingRuntimeEntryStarted =
+			FPlatformProcess::GetSynchEventFromPool(true);
+		BlockingRuntimeEntryContinue =
+			FPlatformProcess::GetSynchEventFromPool(true);
+		BlockingRuntimeEntryBudget.Reset();
+		BlockingRuntimeEntryBudget.Increment();
+		StaticVmEntryCount.Reset();
+		TFuture<int32> OldExecution;
+		ON_SCOPE_EXIT
+		{
+			BlockingRuntimeEntryContinue->Trigger();
+			if (OldExecution.IsValid())
+			{
+				OldExecution.Wait();
+			}
+			FPlatformProcess::ReturnSynchEventToPool(
+				BlockingRuntimeEntryStarted);
+			FPlatformProcess::ReturnSynchEventToPool(
+				BlockingRuntimeEntryContinue);
+			BlockingRuntimeEntryStarted = nullptr;
+			BlockingRuntimeEntryContinue = nullptr;
+			BlockingRuntimeEntryBudget.Reset();
+			StaticVmEntryCount.Reset();
+		};
+
+		asIScriptContext* const Context =
+			Engine->GetScriptEngine()->CreateContext();
+		ASSERT_THAT(IsNotNull(Context));
+		ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(Function)));
+		ASSERT_THAT(AreEqual(asSUCCESS, Context->SetArgDWord(0, 41)));
+		OldExecution = Async(EAsyncExecution::Thread, [Context]()
+		{
+			const int32 Result = Context->Execute();
+			Context->Release();
+			return Result;
+		});
+		ASSERT_THAT(IsTrue(BlockingRuntimeEntryStarted->Wait(5000)));
+
+		FExactRouteProvider Provider(
+			*Routes,
+			FAngelscriptJITProviderRouter::ResolveTargetProfile(
+				Engine->GetRuntimeConfig()));
+		FAngelscriptJITProviderRegistry& Registry =
+			FAngelscriptJITProviderRegistry::Get();
+		ASSERT_THAT(IsTrue(
+			Registry.RegisterProvider(&Provider, Provider).IsAccepted()));
+		bool bProviderRegistered = true;
+		ON_SCOPE_EXIT
+		{
+			if (bProviderRegistered)
+			{
+				Registry.UnregisterOwner(&Provider);
+			}
+		};
+
+		{
+			FAngelscriptEngineScope Scope(*Engine);
+			const FAngelscriptJITProviderRouteRefreshResult Refresh =
+				FAngelscriptJITProviderRouter::Refresh(*Engine);
+			ASSERT_THAT(IsTrue(Refresh.IsApplied(), Refresh.Detail));
+		}
+		const asSJITFunctionBinding AotBinding = Function->GetJITBinding();
+		ASSERT_THAT(IsTrue(AotBinding.VMEntry == &StaticVmEntry));
+		ASSERT_THAT(IsTrue(AotBinding.RawEntry == &StaticRawEntry));
+		ASSERT_THAT(IsTrue(AotBinding.UserData
+			!= FirstRuntimeBinding.UserData));
+		ASSERT_THAT(AreEqual(0,
+			Factory.Control->LeaseReleaseCount.GetValue()));
+
+		int32 IgnoredAotResult = 0;
+		ASSERT_THAT(IsTrue(ExecuteAddOne(
+			*Engine, *Function, 41, IgnoredAotResult)));
+		ASSERT_THAT(AreEqual(1, StaticVmEntryCount.GetValue()));
+
+		ASSERT_THAT(IsTrue(Registry.UnregisterOwner(&Provider)));
+		bProviderRegistered = false;
+		{
+			FAngelscriptEngineScope Scope(*Engine);
+			const FAngelscriptJITProviderRouteRefreshResult Refresh =
+				FAngelscriptJITProviderRouter::Refresh(*Engine);
+			ASSERT_THAT(IsTrue(Refresh.IsApplied(), Refresh.Detail));
+		}
+		const asSJITFunctionBinding SecondRuntimeBinding =
+			Function->GetJITBinding();
+		ASSERT_THAT(IsTrue(
+			SecondRuntimeBinding.VMEntry == &RuntimeVmEntry));
+		ASSERT_THAT(IsTrue(SecondRuntimeBinding.UserData
+			!= FirstRuntimeBinding.UserData));
+		ASSERT_THAT(AreEqual(2,
+			Factory.Control->CompileCount.GetValue()));
+		ASSERT_THAT(AreEqual(0,
+			Factory.Control->LeaseReleaseCount.GetValue()));
+
+		int32 IgnoredRuntimeResult = 0;
+		ASSERT_THAT(IsTrue(ExecuteAddOne(
+			*Engine, *Function, 41, IgnoredRuntimeResult)));
+
+		BlockingRuntimeEntryContinue->Trigger();
+		ASSERT_THAT(AreEqual(
+			asEXECUTION_FINISHED, OldExecution.Get()));
+		ASSERT_THAT(AreEqual(1,
+			Factory.Control->LeaseReleaseCount.GetValue()));
+		ASSERT_THAT(AreEqual(0,
+			Factory.Control->SessionDestroyCount.GetValue()));
+
+		Engine->GetJITCoordinator()->Shutdown();
+		ASSERT_THAT(AreEqual(2,
+			Factory.Control->LeaseReleaseCount.GetValue()));
+		ASSERT_THAT(AreEqual(1,
+			Factory.Control->SessionDestroyCount.GetValue()));
+		Engine.Reset();
+	}
+
 	TEST_METHOD(TwoEnginesOwnIsolatedRuntimeSessionsBindingsAndTeardown)
 	{
 		FFactory Factory;
@@ -902,6 +1228,311 @@ public:
 		ASSERT_THAT(AreEqual(1,
 			Factory.Control->LeaseReleaseCount.GetValue()));
 	}
+
+	TEST_METHOD(RuntimePublicationDoesNotMutateTheAotProviderRegistry)
+	{
+		FFactory Factory;
+		FScopedFactoryRegistration Registration(Factory);
+		FScopedProjectRoot Project;
+		ASSERT_THAT(IsTrue(Project.WriteSource()));
+
+		FAngelscriptJITProviderRegistry& Registry =
+			FAngelscriptJITProviderRegistry::Get();
+		const TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
+			ESPMode::ThreadSafe> Before = Registry.GetSnapshot();
+		ASSERT_THAT(IsTrue(Before.IsValid()));
+
+		TUniquePtr<FAngelscriptEngine> Engine =
+			CreateScriptScanFreeFullEngineForTesting(
+				MakeRuntimeConfig(Project), MakeDependencies(Project));
+		ASSERT_THAT(IsNotNull(Engine.Get()));
+		{
+			FAngelscriptEngineScope Scope(*Engine);
+			Engine->InitialCompile();
+			const TSharedPtr<FAngelscriptModuleDesc> Module =
+				Engine->GetModuleByModuleName(TEXT("RuntimeCoordinator"));
+			ASSERT_THAT(IsTrue(Module.IsValid()));
+			asIScriptFunction* Function =
+				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
+			ASSERT_THAT(IsNotNull(Function));
+			ASSERT_THAT(IsTrue(
+				Function->GetJITBinding().VMEntry == &RuntimeVmEntry));
+
+			const TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
+				ESPMode::ThreadSafe> AfterPublication = Registry.GetSnapshot();
+			ASSERT_THAT(IsTrue(AfterPublication.IsValid()));
+			ASSERT_THAT(AreEqual(
+				Before->PublicationOrdinal,
+				AfterPublication->PublicationOrdinal,
+				TEXT("Engine-local Runtime publication must not publish an AOT Provider generation")));
+			ASSERT_THAT(AreEqual(
+				Before->Providers.Num(),
+				AfterPublication->Providers.Num(),
+				TEXT("Engine-local Runtime publication must not add an AOT Provider")));
+			ASSERT_THAT(IsTrue(Engine->DiscardModule(
+				TEXT("RuntimeCoordinator"))));
+		}
+		Engine.Reset();
+
+		const TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
+			ESPMode::ThreadSafe> AfterTeardown = Registry.GetSnapshot();
+		ASSERT_THAT(IsTrue(AfterTeardown.IsValid()));
+		ASSERT_THAT(AreEqual(
+			Before->PublicationOrdinal,
+			AfterTeardown->PublicationOrdinal,
+			TEXT("Runtime Engine teardown must not retire or republish AOT Provider state")));
+	}
+
+	TEST_METHOD(WholeFunctionEligibilityFallsBackWithoutPartialNativeEntries)
+	{
+		FFactory Factory;
+		Factory.Control->bRejectHelperTokens.Store(true);
+		FScopedFactoryRegistration Registration(Factory);
+		FScopedProjectRoot Project;
+		ASSERT_THAT(IsTrue(Project.WriteSourceText(ASTEST_AS(R"AS(
+			int ScalarEligible(int Value)
+			{
+				return Value + 1;
+			}
+
+			int UsesSystemCall(int Value)
+			{
+				return Math::Abs(Value);
+			}
+			int UsesSuspendBoundary(int Value)
+			{
+				int Sum = 0;
+				for (int Index = 0; Index < Value; ++Index)
+				{
+					Sum += Index;
+				}
+				return Sum;
+			}
+			)AS"))));
+
+		TUniquePtr<FAngelscriptEngine> Engine =
+			CreateScriptScanFreeFullEngineForTesting(
+				MakeRuntimeConfig(Project), MakeDependencies(Project));
+		ASSERT_THAT(IsNotNull(Engine.Get()));
+		{
+			FAngelscriptEngineScope Scope(*Engine);
+			Engine->InitialCompile();
+			const TSharedPtr<FAngelscriptModuleDesc> Module =
+				Engine->GetModuleByModuleName(TEXT("RuntimeCoordinator"));
+			ASSERT_THAT(IsTrue(Module.IsValid()));
+			ASSERT_THAT(IsNotNull(Module->ScriptModule));
+
+			asIScriptFunction* Scalar = Module->ScriptModule->GetFunctionByDecl(
+				"int ScalarEligible(int)");
+			asIScriptFunction* Call = Module->ScriptModule->GetFunctionByDecl(
+				"int UsesSystemCall(int)");
+			asIScriptFunction* Suspend = Module->ScriptModule->GetFunctionByDecl(
+				"int UsesSuspendBoundary(int)");
+			ASSERT_THAT(IsNotNull(Scalar));
+			ASSERT_THAT(IsNotNull(Call));
+			ASSERT_THAT(IsNotNull(Suspend));
+			ASSERT_THAT(IsTrue(
+				Scalar->GetJITBinding().VMEntry == &RuntimeVmEntry));
+			for (asIScriptFunction* Unsupported : {Call, Suspend})
+			{
+				const asSJITFunctionBinding Binding =
+					Unsupported->GetJITBinding();
+				ASSERT_THAT(IsNull(Binding.VMEntry));
+				ASSERT_THAT(IsNull(Binding.RawEntry));
+				ASSERT_THAT(IsNull(Binding.ParmsEntry));
+			}
+			ASSERT_THAT(AreEqual(1,
+				Factory.Control->HelperTokenCompileCount.GetValue(),
+				TEXT("The call-bearing function should reach the backend once as one whole-function request")));
+
+			int32 Result = 0;
+			ASSERT_THAT(IsTrue(ExecuteAddOne(
+				*Engine, *Call, -41, Result)));
+			ASSERT_THAT(AreEqual(41, Result,
+				TEXT("An unsupported call-bearing function must execute completely through VM")));
+			ASSERT_THAT(IsTrue(ExecuteAddOne(
+				*Engine, *Suspend, 3, Result)));
+			ASSERT_THAT(AreEqual(3, Result,
+				TEXT("A suspend-boundary function must execute completely through VM")));
+
+			const int32 CompileCount = Factory.Control->CompileCount.GetValue();
+			ASSERT_THAT(IsTrue(
+				Engine->GetJITCoordinator()->ProcessRuntimeSafePoint(*Engine)));
+			ASSERT_THAT(AreEqual(
+				CompileCount,
+				Factory.Control->CompileCount.GetValue(),
+				TEXT("Unchanged whole-function fallback decisions must be memoized")));
+			ASSERT_THAT(IsTrue(Engine->DiscardModule(
+				TEXT("RuntimeCoordinator"))));
+		}
+		Engine.Reset();
+	}
+
+#if WITH_AS_DEBUGSERVER
+	TEST_METHOD(ActiveDebuggerSuppressesRuntimeUntilBytecodeVisibilityIsReleased)
+	{
+		FFactory Factory;
+		FScopedFactoryRegistration Registration(Factory);
+		FScopedProjectRoot Project;
+		ASSERT_THAT(IsTrue(Project.WriteSource()));
+		TUniquePtr<FAngelscriptEngine> Engine =
+			CreateScriptScanFreeFullEngineForTesting(
+				MakeRuntimeConfig(Project), MakeDependencies(Project));
+		ASSERT_THAT(IsNotNull(Engine.Get()));
+		if (Engine->DebugServer == nullptr)
+		{
+			Engine->DebugServer = new FAngelscriptDebugServer(Engine.Get(), 0);
+		}
+		Engine->DebugServer->bIsDebugging = true;
+		Engine->UpdateLineCallbackState();
+
+		{
+			FAngelscriptEngineScope Scope(*Engine);
+			Engine->InitialCompile();
+			const TSharedPtr<FAngelscriptModuleDesc> Module =
+				Engine->GetModuleByModuleName(TEXT("RuntimeCoordinator"));
+			ASSERT_THAT(IsTrue(Module.IsValid()));
+			asIScriptFunction* Function =
+				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
+			ASSERT_THAT(IsNotNull(Function));
+			ASSERT_THAT(IsNull(Function->GetJITBinding().VMEntry));
+			ASSERT_THAT(AreEqual(0,
+				Factory.Control->CompileCount.GetValue(),
+				TEXT("Debugger bytecode visibility must suppress Runtime compilation")));
+
+			int32 Result = 0;
+			ASSERT_THAT(IsTrue(ExecuteAddOne(
+				*Engine, *Function, 41, Result)));
+			ASSERT_THAT(AreEqual(42, Result));
+
+			Engine->DebugServer->bIsDebugging = false;
+			Engine->UpdateLineCallbackState();
+			ASSERT_THAT(IsTrue(
+				Engine->GetJITCoordinator()->ProcessRuntimeSafePoint(*Engine)));
+			ASSERT_THAT(IsTrue(
+				Function->GetJITBinding().VMEntry == &RuntimeVmEntry));
+			ASSERT_THAT(AreEqual(1,
+				Factory.Control->CompileCount.GetValue()));
+			ASSERT_THAT(IsTrue(Engine->DiscardModule(
+				TEXT("RuntimeCoordinator"))));
+		}
+		Engine.Reset();
+	}
+#endif
+
+#if WITH_AS_COVERAGE
+	TEST_METHOD(CodeCoverageSuppressesRuntimeButPreservesExactAotSelection)
+	{
+		UAngelscriptTestSettings* Settings =
+			GetMutableDefault<UAngelscriptTestSettings>();
+		const bool bWasCoverageEnabled = Settings->bEnableCodeCoverage;
+		Settings->bEnableCodeCoverage = true;
+		ON_SCOPE_EXIT
+		{
+			Settings->bEnableCodeCoverage = bWasCoverageEnabled;
+		};
+
+		FFactory Factory;
+		FScopedFactoryRegistration Registration(Factory);
+		FScopedProjectRoot RuntimeProject;
+		ASSERT_THAT(IsTrue(RuntimeProject.WriteSource()));
+		TUniquePtr<FAngelscriptEngine> RuntimeEngine =
+			CreateScriptScanFreeFullEngineForTesting(
+				MakeRuntimeConfig(RuntimeProject),
+				MakeDependencies(RuntimeProject));
+		ASSERT_THAT(IsNotNull(RuntimeEngine.Get()));
+		{
+			FAngelscriptEngineScope Scope(*RuntimeEngine);
+			RuntimeEngine->InitialCompile();
+			ASSERT_THAT(IsNotNull(
+				FAngelscriptCodeCoverageExtension::GetForEngine(
+					*RuntimeEngine)));
+			const TSharedPtr<FAngelscriptModuleDesc> Module =
+				RuntimeEngine->GetModuleByModuleName(TEXT("RuntimeCoordinator"));
+			ASSERT_THAT(IsTrue(Module.IsValid()));
+			asIScriptFunction* Function =
+				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
+			ASSERT_THAT(IsNotNull(Function));
+			ASSERT_THAT(IsNull(Function->GetJITBinding().VMEntry));
+			ASSERT_THAT(AreEqual(0,
+				Factory.Control->CompileCount.GetValue(),
+				TEXT("Coverage bytecode visibility must suppress Runtime compilation")));
+			ASSERT_THAT(IsTrue(RuntimeEngine->DiscardModule(
+				TEXT("RuntimeCoordinator"))));
+		}
+		RuntimeEngine.Reset();
+
+		FScopedProjectRoot ProducerProject;
+		FScopedProjectRoot ConsumerProject;
+		ASSERT_THAT(IsTrue(ProducerProject.WriteSource()));
+		ASSERT_THAT(IsTrue(ConsumerProject.WriteSource()));
+		TUniquePtr<FAngelscriptEngine> Producer =
+			CreateScriptScanFreeFullEngineForTesting(
+				MakeRuntimeConfig(
+					ProducerProject,
+					EAngelscriptRuntimeJITCompilePolicy::EagerSync,
+					EAngelscriptJITExecutionMode::VMOnly),
+				MakeDependencies(ProducerProject));
+		ASSERT_THAT(IsNotNull(Producer.Get()));
+		TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
+			ESPMode::ThreadSafe> ProducerRoutes;
+		{
+			FAngelscriptEngineScope Scope(*Producer);
+			Producer->InitialCompile();
+			ProducerRoutes = Producer->GetFunctionRouteSnapshot();
+			ASSERT_THAT(IsTrue(ProducerRoutes.IsValid()));
+		}
+
+		FExactRouteProvider Provider(
+			*ProducerRoutes,
+			FAngelscriptJITProviderRouter::ResolveTargetProfile(
+				Producer->GetRuntimeConfig()));
+		FAngelscriptJITProviderRegistry& Registry =
+			FAngelscriptJITProviderRegistry::Get();
+		ASSERT_THAT(IsTrue(
+			Registry.RegisterProvider(&Provider, Provider).IsAccepted()));
+		ON_SCOPE_EXIT
+		{
+			Registry.UnregisterOwner(&Provider);
+		};
+
+		TUniquePtr<FAngelscriptEngine> Consumer =
+			CreateScriptScanFreeFullEngineForTesting(
+				MakeRuntimeConfig(
+					ConsumerProject,
+					EAngelscriptRuntimeJITCompilePolicy::EagerSync,
+					EAngelscriptJITExecutionMode::Auto),
+				MakeDependencies(ConsumerProject));
+		ASSERT_THAT(IsNotNull(Consumer.Get()));
+		{
+			FAngelscriptEngineScope Scope(*Consumer);
+			Consumer->InitialCompile();
+			ASSERT_THAT(IsNotNull(
+				FAngelscriptCodeCoverageExtension::GetForEngine(*Consumer)));
+			const TSharedPtr<FAngelscriptModuleDesc> Module =
+				Consumer->GetModuleByModuleName(TEXT("RuntimeCoordinator"));
+			ASSERT_THAT(IsTrue(Module.IsValid()));
+			asIScriptFunction* Function =
+				Module->ScriptModule->GetFunctionByDecl("int AddOne(int)");
+			ASSERT_THAT(IsNotNull(Function));
+			const asSJITFunctionBinding Binding = Function->GetJITBinding();
+			ASSERT_THAT(IsTrue(Binding.VMEntry == &StaticVmEntry));
+			ASSERT_THAT(IsTrue(Binding.RawEntry == &StaticRawEntry));
+			ASSERT_THAT(AreEqual(0,
+				Factory.Control->CompileCount.GetValue(),
+				TEXT("The Runtime-specific coverage gate must not redefine exact Static AOT policy")));
+			ASSERT_THAT(IsTrue(Consumer->DiscardModule(
+				TEXT("RuntimeCoordinator"))));
+		}
+		Consumer.Reset();
+		{
+			FAngelscriptEngineScope Scope(*Producer);
+			ASSERT_THAT(IsTrue(Producer->DiscardModule(
+				TEXT("RuntimeCoordinator"))));
+		}
+		Producer.Reset();
+	}
+#endif
 };
 
 #endif // WITH_ANGELSCRIPT_UNITTESTS && AS_CAN_GENERATE_JIT

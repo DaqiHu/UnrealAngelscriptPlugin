@@ -23,6 +23,13 @@ public:
 		const FAngelscriptJITCoordinatorConfig& InConfig = {});
 	~FAngelscriptJITCoordinator() override;
 
+	/**
+	 * Stop new publication, detach from the owner Engine, drain Runtime work,
+	 * and wait until every maintained-fork Binding execution reader releases
+	 * its retired Binding. Safe to call more than once.
+	 */
+	void Shutdown();
+
 	void OnFunctionReady(asIScriptFunction* ScriptFunction) override;
 	void OnJITEntry(asIScriptFunction* ScriptFunction) override;
 	void ReleaseFunctionBinding(
@@ -88,11 +95,17 @@ private:
 		asIScriptFunction* ScriptFunction,
 		const FAngelscriptRuntimeJITPublishedCode& Published);
 	bool ClearRuntimeSelection(asIScriptFunction* ScriptFunction);
+	bool AreBindingContextsDrainedLocked() const;
+	void UpdateBindingsDrainedEventLocked();
 
 	asIScriptEngine* OwnerScriptEngine = nullptr;
 	FAngelscriptJITCoordinatorConfig Config;
 	uint64 EngineNamespace = 0;
 	FCriticalSection BindingMutex;
+	FEvent* BindingsDrainedEvent = nullptr;
+	FCriticalSection ShutdownMutex;
+	bool bShuttingDown = false;
+	bool bShutdownComplete = false;
 	TMap<const void*, TSharedPtr<const class FAngelscriptJITBindingContext,
 		ESPMode::ThreadSafe>> ActiveProviderBindingContexts;
 	TMap<const void*, TSharedPtr<const class FAngelscriptRuntimeJITBindingContext,

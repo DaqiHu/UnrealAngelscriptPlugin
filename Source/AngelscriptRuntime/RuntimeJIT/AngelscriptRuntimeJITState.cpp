@@ -409,6 +409,7 @@ struct FAngelscriptRuntimeJITRequestStateMachine::FImpl
 				Completion.Identity.FunctionRevision;
 			Published.EntryAbiHash = Completion.Identity.EntryAbiHash;
 			Published.VMEntry = Completion.Result.VMEntry;
+			Published.SessionKeepAlive = Completion.SessionKeepAlive;
 			Published.CodeLease = MoveTemp(Completion.Result.CodeLease);
 			Published.CompileLatencyMicroseconds =
 				Completion.Result.CompileLatencyMicroseconds;

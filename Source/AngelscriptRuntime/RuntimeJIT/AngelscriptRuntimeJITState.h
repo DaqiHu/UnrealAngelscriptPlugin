@@ -84,6 +84,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptRuntimeJITPublishedCode
 	FAngelscriptHash256 FunctionRevision;
 	FAngelscriptHash256 EntryAbiHash;
 	asJITFunction VMEntry = nullptr;
+	TSharedPtr<FAngelscriptRuntimeJITBackendSessionOwner,
+		ESPMode::ThreadSafe> SessionKeepAlive;
 	FAngelscriptRuntimeJITCodeLease CodeLease;
 	uint64 CompileLatencyMicroseconds = 0;
 	uint64 CodeSize = 0;
@@ -97,6 +99,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptRuntimeJITPublishedCode
 			&& !FunctionRevision.IsZero()
 			&& !EntryAbiHash.IsZero()
 			&& VMEntry != nullptr
+			&& SessionKeepAlive.IsValid()
 			&& CodeLease.IsValid();
 	}
 };

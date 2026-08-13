@@ -2020,10 +2020,7 @@ void FAngelscriptEngine::Shutdown()
 
 	if (bShouldReleaseOwnedEngine && JITCoordinator != nullptr)
 	{
-		if (Engine != nullptr && Engine->GetJITCompiler() == JITCoordinator)
-		{
-			Engine->SetJITCompiler(nullptr);
-		}
+		JITCoordinator->Shutdown();
 		delete JITCoordinator;
 		JITCoordinator = nullptr;
 	}

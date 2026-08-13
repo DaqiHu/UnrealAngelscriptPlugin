@@ -344,6 +344,52 @@ public:
 			}), TEXT("Loop fixture should contain a verified CFG back edge")));
 	}
 
+	TEST_METHOD(CaptureClassifiesManagedValuesBeforeBackendWork)
+	{
+		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();
+		FAngelscriptEngineScope Scope(Engine);
+		const FString ScriptSource = ASTEST_AS(R"AS(
+			int ObserveManagedValue(const FString& Value)
+			{
+				return 1;
+			}
+			)AS");
+		FScopedAngelscriptModule ModuleScope(
+			*TestRunner,
+			Engine,
+			TEXT("ASRuntimeJITSnapshotManaged"),
+			ScriptSource);
+		ASSERT_THAT(IsTrue(ModuleScope.IsValid()));
+		asIScriptFunction* Function =
+			ModuleScope.GetModule().GetFunctionByName("ObserveManagedValue");
+		ASSERT_THAT(IsNotNull(Function));
+		const FAngelscriptFunctionRoute Route = MakeRoute(*Function);
+		FAngelscriptRuntimeJITCompileSnapshot Snapshot;
+		const FAngelscriptRuntimeJITSnapshotCaptureResult Capture =
+			CaptureScalar(*Function, Route, Snapshot);
+		ASSERT_THAT(IsTrue(Capture.IsCaptured()));
+		ASSERT_THAT(IsTrue(
+			Snapshot.GetHeader().FunctionProfile
+				== EAngelscriptRuntimeJITFunctionProfile::ManagedValues,
+			TEXT("Managed values require whole-function VM fallback")));
+
+		FCountingFactory Factory;
+		FScopedFactoryRegistration Registration(Factory);
+		FAngelscriptRuntimeJITSessionCreateResult Created = CreateSession();
+		ASSERT_THAT(IsTrue(Created.IsCreated()));
+		const FAngelscriptRuntimeJITCompileResult Result =
+			Created.Owner->Compile(Snapshot.GetView());
+		ASSERT_THAT(IsTrue(
+			Result.Outcome == EAngelscriptRuntimeJITCompileOutcome::Unsupported));
+		ASSERT_THAT(IsTrue(
+			Result.Reason
+				== EAngelscriptRuntimeJITDiagnosticReason::UnsupportedManagedValue));
+		ASSERT_THAT(AreEqual(
+			0,
+			Factory.LastSession->CompileCount,
+			TEXT("Managed-value snapshots must fail before concrete backend work")));
+	}
+
 	TEST_METHOD(CaptureCanonicalizesRepeatedDebugRecordsForOneLocalSlot)
 	{
 		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();
@@ -776,6 +822,34 @@ public:
 		Created.Owner->Compile(Owned(Header).GetView());
 		ASSERT_THAT(AreEqual(1, Factory.LastSession->CompileCount,
 			TEXT("Unknown profile must fail before the backend")));
+
+		struct FProfileFallbackCase
+		{
+			EAngelscriptRuntimeJITFunctionProfile Profile;
+			EAngelscriptRuntimeJITDiagnosticReason Reason;
+		};
+		const FProfileFallbackCase ProfileFallbackCases[] = {
+			{EAngelscriptRuntimeJITFunctionProfile::ManagedValues,
+				EAngelscriptRuntimeJITDiagnosticReason::UnsupportedManagedValue},
+			{EAngelscriptRuntimeJITFunctionProfile::SuspendOrLatent,
+				EAngelscriptRuntimeJITDiagnosticReason::SuspendOrLatent},
+			{EAngelscriptRuntimeJITFunctionProfile::ExceptionCleanup,
+				EAngelscriptRuntimeJITDiagnosticReason::ExceptionCleanup},
+		};
+		for (const FProfileFallbackCase& Fallback : ProfileFallbackCases)
+		{
+			Header.FunctionProfile = Fallback.Profile;
+			const FAngelscriptRuntimeJITCompileResult ProfileResult =
+				Created.Owner->Compile(Owned(Header).GetView());
+			ASSERT_THAT(IsTrue(
+				ProfileResult.Outcome
+					== EAngelscriptRuntimeJITCompileOutcome::Unsupported));
+			ASSERT_THAT(IsTrue(ProfileResult.Reason == Fallback.Reason));
+			ASSERT_THAT(AreEqual(
+				1,
+				Factory.LastSession->CompileCount,
+				TEXT("Non-scalar whole-function profiles must fail before the backend")));
+		}
 
 		Header.FunctionProfile =
 			EAngelscriptRuntimeJITFunctionProfile::ScalarWholeFunction;
