@@ -26,6 +26,8 @@ struct FAngelscriptClassGenerator
 	ANGELSCRIPTRUNTIME_API void AddModule(TSharedRef<FAngelscriptModuleDesc> Module);
 
 	ANGELSCRIPTRUNTIME_API EReloadRequirement Setup();
+	/** Analyze descriptors without reload planning or UObject materialization. */
+	ANGELSCRIPTRUNTIME_API bool SetupForStaticJITGeneration();
 
 	void PerformFullReload();
 	void PerformSoftReload();
@@ -127,6 +129,7 @@ private:
 
 	bool bIsDoingFullReload = false;
 	bool bReinstancingAny = false;
+	bool bStaticJITGenerationAnalysis = false;
 	int32 NextUniqueNumber = 0;
 
 	static int32 UniqueCounter();

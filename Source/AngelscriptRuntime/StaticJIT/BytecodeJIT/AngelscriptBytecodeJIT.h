@@ -392,6 +392,17 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBytecodeJIT
 	// Reloadable output routes every script-to-script call through Runtime.
 	// This may be enabled only for a separately validated immutable cooked set.
 	bool bUseImmutableDirectScriptCalls = false;
+	// Generation-only Engines deliberately leave script type UserData empty.
+	// Preserve the target Runtime's per-type reflection decision without
+	// treating ordinary non-reflected AngelScript classes as UObjects.
+	TSet<const asCObjectType*> TargetMaterializedScriptTypes;
+	bool IsRawScriptReference(const asCObjectType* ObjectType) const
+	{
+		return ObjectType != nullptr
+			&& (ObjectType->flags & asOBJ_SCRIPT_OBJECT) != 0
+			&& ObjectType->GetUserData() == nullptr
+			&& !TargetMaterializedScriptTypes.Contains(ObjectType);
+	}
 	// Provider entry symbols must be visible from Provider.generated.cpp.
 	bool bEmitProviderEntryLinkage = false;
 	// Provider slices resolve process-local dependencies through the current

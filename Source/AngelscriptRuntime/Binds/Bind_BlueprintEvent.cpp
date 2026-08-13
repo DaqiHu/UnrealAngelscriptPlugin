@@ -114,6 +114,15 @@ static bool TryExtractMulticastFunctionNames(const FMulticastScriptDelegate& Del
 
 TMap<UClass*, TMap<FString, UFunction*>> GBlueprintEventsByScriptName;
 
+static bool ShouldCacheBlueprintEventsForCurrentEngine()
+{
+	const FAngelscriptEngine* CurrentEngine =
+		FAngelscriptEngine::TryGetCurrentEngine();
+	return CurrentEngine == nullptr
+		|| CurrentEngine->GetPurpose()
+			!= EAngelscriptEnginePurpose::StaticJITGeneration;
+}
+
 // Diagnostic accessor used by the cross-cycle bounded-count regression
 // tests in AngelscriptTest. We don't export the global itself across module
 // boundaries; this single ANGELSCRIPTRUNTIME_API entry is enough for tests
@@ -177,7 +186,11 @@ UFunction* GetBlueprintEventByScriptName(UClass* Class, const FString& ScriptNam
 				&& Function->HasAnyFunctionFlags(FUNC_BlueprintEvent)
 				&& FAngelscriptFunctionSignature::GetScriptNameForFunction(Function) == ScriptName)
 			{
-				GBlueprintEventsByScriptName.FindOrAdd(CheckClass).Add(ScriptName, Function);
+				if (ShouldCacheBlueprintEventsForCurrentEngine())
+				{
+					GBlueprintEventsByScriptName.FindOrAdd(CheckClass).Add(
+						ScriptName, Function);
+				}
 				return Function;
 			}
 		}
@@ -796,7 +809,12 @@ static void CommitBlueprintEventBinding(
 	}
 #endif
 
-	GBlueprintEventsByScriptName.FindOrAdd(CastChecked<UClass>(Function->GetOuter())).Add(Signature.ScriptName, Function);
+	if (ShouldCacheBlueprintEventsForCurrentEngine())
+	{
+		GBlueprintEventsByScriptName.FindOrAdd(
+			CastChecked<UClass>(Function->GetOuter())).Add(
+				Signature.ScriptName, Function);
+	}
 
 	PrimaryBinding.NativeUFunction(Function, NativeFunctionName, false);
 }

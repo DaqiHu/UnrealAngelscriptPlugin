@@ -102,6 +102,11 @@ struct FAngelscriptStaticJITCompiledFunctionView
 	FStringView CanonicalDeclaration;
 	TConstArrayView<uint8> Bytecode;
 	TConstArrayView<uint8> VerifiedTypedHIR;
+	bool bHasVerifiedArtifactIdentity = false;
+	bool bHasVerifiedArtifactReferences = false;
+	bool bHasVMEntry = false;
+	bool bHasRawEntry = false;
+	bool bHasParmsEntry = false;
 };
 
 /** One type visible to task-wide analysis. EngineLocalType dies with the task. */
@@ -110,6 +115,7 @@ struct FAngelscriptStaticJITCompiledTypeView
 	asITypeInfo* EngineLocalType = nullptr;
 	FAngelscriptHash256 StableTypeKey;
 	FStringView CanonicalDeclaration;
+	bool bTargetMaterializesScriptReflection = false;
 };
 
 /** One global visible to task-wide analysis. */
@@ -120,6 +126,16 @@ struct FAngelscriptStaticJITCompiledGlobalView
 	FStringView CanonicalDeclaration;
 };
 
+enum class EAngelscriptStaticJITDescriptorKind : uint8
+{
+	Class = 0,
+	Struct,
+	Enum,
+	Delegate,
+	Property,
+	Function,
+};
+
 /** Pointer-free descriptor facts plus an optional synchronous local handle. */
 struct FAngelscriptStaticJITDescriptorView
 {
@@ -127,11 +143,20 @@ struct FAngelscriptStaticJITDescriptorView
 	FAngelscriptHash256 StableDescriptorKey;
 	FAngelscriptHash256 EntryPlanHash;
 	FStringView CanonicalDeclaration;
+	EAngelscriptStaticJITDescriptorKind Kind =
+		EAngelscriptStaticJITDescriptorKind::Class;
+	FStringView CanonicalName;
+	FStringView ReceiverCanonicalName;
+	bool bUFunctionRoot = false;
+	bool bHasVMEntry = false;
+	bool bHasRawEntry = false;
+	bool bHasParmsEntry = false;
 };
 
 /** Stable dependency or external native-call fact used by a backend. */
 struct FAngelscriptStaticJITDependencyView
 {
+	FAngelscriptStableFunctionKey OwnerFunctionKey;
 	FAngelscriptArtifactReference Reference;
 	FStringView CanonicalDeclaration;
 };

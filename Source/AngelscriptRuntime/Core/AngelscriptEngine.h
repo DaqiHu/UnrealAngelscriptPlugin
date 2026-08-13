@@ -65,6 +65,7 @@ struct FAngelscriptFunctionRouteSnapshot;
 struct FAngelscriptCachePackPolicy;
 struct FAngelscriptStableFunctionKey;
 struct FAngelscriptFunctionArtifactIdentity;
+struct FAngelscriptStaticJITGenerationSnapshot;
 
 struct FStaticJITDiagnostics;
 struct FAngelscriptStateSnapshotBuilder;
@@ -118,10 +119,21 @@ struct FInterfaceMethodSignature
 	FName FunctionName;
 };
 
+UENUM()
+enum class EAngelscriptEnginePurpose : uint8
+{
+	Runtime = 0,
+	StaticJITGeneration,
+};
+
 USTRUCT()
 struct ANGELSCRIPTRUNTIME_API FAngelscriptEngineConfig
 {
 	GENERATED_BODY()
+
+	/** Ordinary Runtime/Editor behavior remains the default. */
+	UPROPERTY()
+	EAngelscriptEnginePurpose Purpose = EAngelscriptEnginePurpose::Runtime;
 
 	UPROPERTY()
 	bool bForceThreadedInitialize = false;
@@ -872,6 +884,7 @@ private:
 
 #if !UE_BUILD_SHIPPING
 	void GetOnScreenMessages(TMultiMap<FCoreDelegates::EOnScreenMessageSeverity, FText>& OutMessages);
+	FDelegateHandle OnScreenMessagesHandle;
 #endif
 
 	// Counter for temporary generated module names
@@ -946,6 +959,11 @@ public:
 	bool IsInitialCompileFinished() const
 	{
 		return bIsInitialCompileFinished;
+	}
+
+	bool DidInitialCompileSucceed() const
+	{
+		return bDidInitialCompileSucceed;
 	}
 
 	struct FAngelscriptDebugFrame
@@ -1069,6 +1087,19 @@ public:
 		return RuntimeConfig;
 	}
 
+	EAngelscriptEnginePurpose GetPurpose() const
+	{
+		return RuntimeConfig.Purpose;
+	}
+
+#if AS_CAN_GENERATE_JIT
+	TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+		ESPMode::ThreadSafe> GetStaticJITGenerationSnapshot() const
+	{
+		return StaticJITGenerationSnapshot;
+	}
+#endif
+
 	// Runtime-owned source authority used by Cache V2 startup discovery and
 	// read-only diagnostics. Callers may observe through the interface but do not
 	// own or replace the configured provider.
@@ -1089,6 +1120,10 @@ private:
 	void WriteRequestedCacheV2ProcessReport() const;
 	FAngelscriptEngineConfig RuntimeConfig;
 	FAngelscriptEngineDependencies Dependencies;
+#if AS_CAN_GENERATE_JIT
+	TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+		ESPMode::ThreadSafe> StaticJITGenerationSnapshot;
+#endif
 	bool bCacheV2ShutdownFlushAttempted = false;
 
 	// Hook delegate fields. Field order/grouping kept identical to the

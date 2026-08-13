@@ -19,7 +19,7 @@ struct FAngelscriptBytecode
 	static TMap<asEBCInstr, FAngelscriptBytecode*>& GetBytecodeMap();
 	static FAngelscriptBytecode& GetBytecode(asEBCInstr Instr);
 
-	static FString GetInstrDebugString(asDWORD* BC);
+	static FString GetInstrDebugString(FStaticJITContext& Context);
 
 	virtual ~FAngelscriptBytecode() {}
 
@@ -50,7 +50,7 @@ struct FAngelscriptBytecodeImpl : FAngelscriptBytecode
 
 	virtual void WriteDebugComment(FStaticJITContext& Context) const override
 	{
-		FString DebugStr = GetInstrDebugString(Context.BC);
+		FString DebugStr = GetInstrDebugString(Context);
 		if(DebugStr.Len() != 0)
 			Context.Line("// {0}", DebugStr);
 	}

@@ -1189,7 +1189,8 @@ void ResetCachedEditorClasses()
 	GCachedEditorClasses.Empty();
 }
 
-static bool IsStructurallyEditorOnlyClass(UClass* Class)
+static bool IsStructurallyEditorOnlyClass(
+	FAngelscriptEngine& Engine, UClass* Class)
 {
 	if (Class == nullptr)
 		return false;
@@ -1224,15 +1225,22 @@ static bool IsStructurallyEditorOnlyClass(UClass* Class)
 	}
 
 	if (!bIsEditor && Class->GetSuperClass() != nullptr)
-		bIsEditor = IsStructurallyEditorOnlyClass(Class->GetSuperClass());
+	{
+		bIsEditor = IsStructurallyEditorOnlyClass(
+			Engine, Class->GetSuperClass());
+	}
 
-	CachedEditorClasses.Add(Class, bIsEditor);
+	if (Engine.GetPurpose()
+		!= EAngelscriptEnginePurpose::StaticJITGeneration)
+	{
+		CachedEditorClasses.Add(Class, bIsEditor);
+	}
 	return bIsEditor;
 }
 
 bool IsEditorOnlyClassForTarget(FAngelscriptEngine& Engine, UClass* Class)
 {
-	if (IsStructurallyEditorOnlyClass(Class))
+	if (IsStructurallyEditorOnlyClass(Engine, Class))
 		return true;
 
 	for (UClass* CheckClass = Class; CheckClass != nullptr; CheckClass = CheckClass->GetSuperClass())

@@ -61,3 +61,26 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCompilationEvents
 	static void UnregisterListener(FDelegateHandle Handle);
 	static void Broadcast(const FAngelscriptCompilationEvent& Event);
 };
+
+/**
+ * Thread-local event suppression used by analysis-only compiler hosts.
+ *
+ * A StaticJITGeneration engine performs a real preprocess/compile pass, but it
+ * is not a Runtime compilation lifecycle. Suppressing at the shared event
+ * boundary keeps preprocessor and compiler phase events consistent without
+ * teaching every producer about engine purpose.
+ */
+class ANGELSCRIPTRUNTIME_API FAngelscriptCompilationEventSuppressionScope
+{
+public:
+	explicit FAngelscriptCompilationEventSuppressionScope(bool bInSuppress);
+	~FAngelscriptCompilationEventSuppressionScope();
+
+	FAngelscriptCompilationEventSuppressionScope(
+		const FAngelscriptCompilationEventSuppressionScope&) = delete;
+	FAngelscriptCompilationEventSuppressionScope& operator=(
+		const FAngelscriptCompilationEventSuppressionScope&) = delete;
+
+private:
+	bool bSuppress = false;
+};

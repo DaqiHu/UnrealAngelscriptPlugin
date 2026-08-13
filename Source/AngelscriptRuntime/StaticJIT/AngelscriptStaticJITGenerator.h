@@ -6,6 +6,8 @@
 
 #if AS_CAN_GENERATE_JIT
 
+struct FAngelscriptStaticJITGenerationSnapshot;
+
 /** Provider artifacts plus pointer-free per-function backend diagnostics. */
 struct FAngelscriptStaticJITGeneratorOutput
 {
@@ -361,6 +363,8 @@ struct FAngelscriptStaticJITProviderGenerationRequest
 	FAngelscriptJITProviderGenerationSettings Settings;
 	TConstArrayView<asIScriptModule*> CompiledSourceGraph;
 	TConstArrayView<asIScriptModule*> EmitModuleSet;
+	TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+		ESPMode::ThreadSafe> GenerationSnapshot;
 	bool bHasVerifiedTypedHIR = false;
 };
 

@@ -14,6 +14,7 @@
 #include "ClassGenerator/ASStruct.h"
 #include "Cache/AngelscriptCacheDiagnostics.h"
 #include "Cache/AngelscriptCacheCompileReuse.h"
+#include "Cache/AngelscriptCacheCleanCapture.h"
 #include "Cache/AngelscriptCacheExactStartup.h"
 #include "Artifacts/AngelscriptFunctionRoute.h"
 #include "Cache/AngelscriptCacheEnvironmentProfile.h"
@@ -54,6 +55,7 @@
 #include "Binds/Helper_ToString.h"
 
 #include "StaticJIT/AngelscriptJITProviderRouter.h"
+#include "StaticJIT/AngelscriptStaticJITGenerationSnapshot.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
 #include "StaticJIT/StaticJITHeader.h"
 #include "StaticJIT/BytecodeJIT/StaticJITBinds.h"
@@ -1215,8 +1217,11 @@ bool FAngelscriptEngine::Initialize()
 
 	PostInitialize_GameThread();
 	bReadyForPublication = true;
-	FAngelscriptEngineExtensionRegistry::Get().AttachEngine(*this);
-	bExtensionsAttached = true;
+	if (RuntimeConfig.Purpose != EAngelscriptEnginePurpose::StaticJITGeneration)
+	{
+		FAngelscriptEngineExtensionRegistry::Get().AttachEngine(*this);
+		bExtensionsAttached = true;
+	}
 	#if WITH_DEV_AUTOMATION_TESTS
 	FAngelscriptBindExecutionObservation::RecordPublicationResult(this, true);
 	#endif
@@ -1337,25 +1342,35 @@ bool FAngelscriptEngine::InitializeWithoutInitialCompile()
 			return false;
 		}
 	}
-	GameThreadTLD->primaryContext = CreateContext();
+	if (RuntimeConfig.Purpose != EAngelscriptEnginePurpose::StaticJITGeneration)
+	{
+		GameThreadTLD->primaryContext = CreateContext();
+	}
 	bIsInitialCompileFinished = true;
 
 #if WITH_AS_DEBUGSERVER
-	if (RuntimeConfig.DebugServerPort > 0)
+	if (RuntimeConfig.Purpose != EAngelscriptEnginePurpose::StaticJITGeneration
+		&& RuntimeConfig.DebugServerPort > 0)
 	{
 		DebugServer = new FAngelscriptDebugServer(this, RuntimeConfig.DebugServerPort);
 	}
 #endif
 
 #if WITH_AS_COVERAGE
-	FAngelscriptCodeCoverageExtension::EnsureAttached(*this);
+	if (RuntimeConfig.Purpose != EAngelscriptEnginePurpose::StaticJITGeneration)
+	{
+		FAngelscriptCodeCoverageExtension::EnsureAttached(*this);
+	}
 #endif
 
 	bReadyForPublication = true;
 	check(CacheService.IsValid());
 	CacheService->TransitionToRuntimeGameThread();
-	FAngelscriptEngineExtensionRegistry::Get().AttachEngine(*this);
-	bExtensionsAttached = true;
+	if (RuntimeConfig.Purpose != EAngelscriptEnginePurpose::StaticJITGeneration)
+	{
+		FAngelscriptEngineExtensionRegistry::Get().AttachEngine(*this);
+		bExtensionsAttached = true;
+	}
 	#if WITH_DEV_AUTOMATION_TESTS
 	FAngelscriptBindExecutionObservation::RecordPublicationResult(this, true);
 	#endif
@@ -1796,6 +1811,8 @@ void FAngelscriptEngine::WriteRequestedCacheV2ProcessReport() const
 void FAngelscriptEngine::Shutdown()
 {
 	bReadyForPublication = false;
+	const bool bStaticJITGeneration = RuntimeConfig.Purpose
+		== EAngelscriptEnginePurpose::StaticJITGeneration;
 	const bool bHadAttachedExtensions = bExtensionsAttached;
 	bExtensionsAttached = false;
 	const bool bHadInitializedEngine = Engine != nullptr;
@@ -1895,7 +1912,7 @@ void FAngelscriptEngine::Shutdown()
 	GAngelscriptNativeModuleFunctionBindingUnregisterEngine(*this);
 #endif
 
-	if (bHadInitializedEngine && IsInGameThread())
+	if (!bStaticJITGeneration && bHadInitializedEngine && IsInGameThread())
 	{
 		// Active reflected tests retain script functions, suite instances, and
 		// callbacks owned by this engine. Cancel the leaves and close the
@@ -1928,7 +1945,19 @@ void FAngelscriptEngine::Shutdown()
 	// Full initialization can attach coverage before direct binding completes.
 	// Clean that one extension precisely when initialization fails before the
 	// registry lifecycle begins; never broadcast a detach to unrelated extensions.
-	FAngelscriptCodeCoverageExtension::EnsureDetached(*this);
+	if (!bStaticJITGeneration)
+	{
+		FAngelscriptCodeCoverageExtension::EnsureDetached(*this);
+	}
+#endif
+
+#if !UE_BUILD_SHIPPING
+	if (OnScreenMessagesHandle.IsValid())
+	{
+		FCoreDelegates::OnGetOnScreenMessages.Remove(
+			OnScreenMessagesHandle);
+		OnScreenMessagesHandle.Reset();
+	}
 #endif
 
 	// Single-owner releases: the engine releases its own fields directly.
@@ -1950,7 +1979,10 @@ void FAngelscriptEngine::Shutdown()
 		StaticJIT = nullptr;
 	}
 
-	if (bShouldReleaseOwnedEngine && GameThreadTLD != nullptr && GameThreadTLD->primaryContext != nullptr)
+	if (bShouldReleaseOwnedEngine
+		&& GameThreadTLD != nullptr
+		&& GameThreadTLD->primaryContext != nullptr
+		&& GameThreadTLD->primaryContext->GetEngine() == Engine)
 	{
 		GameThreadTLD->primaryContext->Release();
 		GameThreadTLD->primaryContext = nullptr;
@@ -2000,7 +2032,8 @@ void FAngelscriptEngine::Shutdown()
 		}
 	}
 
-	if (bShouldReleaseOwnedEngine && AngelscriptPackage != nullptr)
+	if (!bStaticJITGeneration
+		&& bShouldReleaseOwnedEngine && AngelscriptPackage != nullptr)
 	{
 		ForEachObjectWithPackage(AngelscriptPackage, [](UObject* Obj)
 		{
@@ -2076,22 +2109,23 @@ void FAngelscriptEngine::Shutdown()
 		StaticNames.Reset();
 		StaticNamesByIndex.Reset();
 
-		{
-			extern TMap<UClass*, TMap<FString, UFunction*>> GBlueprintEventsByScriptName;
-			GBlueprintEventsByScriptName.Empty();
-		}
 		BlueprintEventSignatureRegistry.Reset();
 		DocumentationState.Reset();
 #if AS_CAN_GENERATE_JIT
 		NativeFormState.Reset();
 #endif
 
-#if WITH_EDITOR
+		if (!bStaticJITGeneration)
 		{
+			extern TMap<UClass*, TMap<FString, UFunction*>>
+				GBlueprintEventsByScriptName;
+			GBlueprintEventsByScriptName.Empty();
+
+#if WITH_EDITOR
 			extern void ResetCachedEditorClasses();
 			ResetCachedEditorClasses();
-		}
 #endif
+		}
 
 	}
 
@@ -2101,7 +2135,8 @@ void FAngelscriptEngine::Shutdown()
 	QueuedFullReloadFiles.Empty();
 	PreviouslyFailedReloadFiles.Empty();
 
-	if (bShouldReleaseOwnedEngine && bHadInitializedEngine)
+	if (!bStaticJITGeneration
+		&& bShouldReleaseOwnedEngine && bHadInitializedEngine)
 	{
 		SyncAmbientWorldContextFromCurrentEngine();
 	}
@@ -2334,6 +2369,8 @@ TArray<FString> FAngelscriptEngine::MakeAllScriptRoots(bool bOnlyProjectRoot)
 
 bool FAngelscriptEngine::Initialize_AnyThread()
 {
+	const bool bStaticJITGeneration = RuntimeConfig.Purpose
+		== EAngelscriptEnginePurpose::StaticJITGeneration;
 	bSimulateCooked = RuntimeConfig.bSimulateCooked;
 	bTestErrors = RuntimeConfig.bTestErrors;
 	bForcePreprocessEditorCode = RuntimeConfig.bForcePreprocessEditorCode;
@@ -2407,14 +2444,17 @@ bool FAngelscriptEngine::Initialize_AnyThread()
 	Start the debug server that external tools can connect to.
 	*/
 #if WITH_AS_DEBUGSERVER
-	if (FApp::HasProjectName())
+	if (!bStaticJITGeneration && FApp::HasProjectName())
 	{
 		DebugServer = new FAngelscriptDebugServer(this, RuntimeConfig.DebugServerPort);
 	}
 #endif
 
 #if WITH_AS_COVERAGE
-	FAngelscriptCodeCoverageExtension::EnsureAttached(*this);
+	if (!bStaticJITGeneration)
+	{
+		FAngelscriptCodeCoverageExtension::EnsureAttached(*this);
+	}
 #endif
 
 	// The bind database must exist on this engine before Binds.Cache is loaded. The lifecycle
@@ -2479,9 +2519,12 @@ bool FAngelscriptEngine::Initialize_AnyThread()
 	
 #if !AS_USE_BIND_DB
 	// If we aren't using the database, write it during cook
-	const bool bSkipWriteBindDB = RuntimeConfig.bSkipWriteBindDB;
+	const bool bSkipWriteBindDB = RuntimeConfig.bSkipWriteBindDB
+		|| bStaticJITGeneration;
 	const bool bForceWriteBindDB = RuntimeConfig.bWriteBindDB;
-	if ((RuntimeConfig.bRunningCommandlet && !bSkipWriteBindDB) || bForceWriteBindDB)
+	if (!bStaticJITGeneration
+		&& ((RuntimeConfig.bRunningCommandlet && !bSkipWriteBindDB)
+			|| bForceWriteBindDB))
 	{
 		UE_LOG(Angelscript, Log, TEXT("Writing angelscript bind database to Binds.Cache file"));
 		BindDatabase->Save(GetScriptRootDirectory() / TEXT("Binds.Cache"));
@@ -2496,20 +2539,27 @@ bool FAngelscriptEngine::Initialize_AnyThread()
 	ReserveStaticNames(7000);
 
 	// Setup thread local data
-	GameThreadTLD->primaryContext = CreateContext();
+	if (!bStaticJITGeneration)
+	{
+		GameThreadTLD->primaryContext = CreateContext();
+	}
 
 	// Perform the initial compile of all script files
 	InitialCompile();
 
 #if AS_CAN_HOTRELOAD
-	ScriptTestHotReloadRunner =
-		new FAngelscriptScriptTestHotReloadRunner();
+	if (!bStaticJITGeneration)
+	{
+		ScriptTestHotReloadRunner =
+			new FAngelscriptScriptTestHotReloadRunner();
+	}
 #endif
 
 	// Use the checker thread if we want to detect hot reloads,
 	// but we don't have access to the editor. In editor, the AngelscriptEditor
 	// module will use the directory watcher system to detect reloads instead.
-	bUseHotReloadCheckerThread = bScriptDevelopmentMode
+	bUseHotReloadCheckerThread = !bStaticJITGeneration
+		&& bScriptDevelopmentMode
 		&& !RuntimeConfig.bIsEditor
 		&& PackagedRuntimeReloadMode ==
 			EAngelscriptPackagedRuntimeReloadMode::Disabled;
@@ -2517,7 +2567,12 @@ bool FAngelscriptEngine::Initialize_AnyThread()
 		StartHotReloadThread();
 
 #if !UE_BUILD_SHIPPING
-	FCoreDelegates::OnGetOnScreenMessages.AddRaw(this, &FAngelscriptEngine::GetOnScreenMessages);
+	if (!bStaticJITGeneration)
+	{
+		OnScreenMessagesHandle =
+			FCoreDelegates::OnGetOnScreenMessages.AddRaw(
+				this, &FAngelscriptEngine::GetOnScreenMessages);
+	}
 #endif
 	UpdateLineCallbackState();
 	return true;
@@ -2537,6 +2592,10 @@ void FAngelscriptEngine::PostInitialize_GameThread()
 {
 	check(CacheService.IsValid());
 	CacheService->TransitionToRuntimeGameThread();
+	if (RuntimeConfig.Purpose == EAngelscriptEnginePurpose::StaticJITGeneration)
+	{
+		return;
+	}
 	PrimePackagedRuntimeReloadState();
 	GetOnInitialCompileFinished().Broadcast();
 
@@ -3261,6 +3320,13 @@ namespace AngelscriptEngineExactStartup_Private
 void FAngelscriptEngine::InitialCompile()
 {
 	AS_PERF_SCOPE_COMPILE_INITIAL();
+	const bool bStaticJITGeneration = RuntimeConfig.Purpose
+		== EAngelscriptEnginePurpose::StaticJITGeneration;
+	FAngelscriptCompilationEventSuppressionScope SuppressCompilationEvents(
+		bStaticJITGeneration);
+#if AS_CAN_GENERATE_JIT
+	StaticJITGenerationSnapshot.Reset();
+#endif
 
 	bool bSuccess = true;
 	TArray<TSharedRef<FAngelscriptModuleDesc>> ModulesToCompile;
@@ -3293,7 +3359,9 @@ void FAngelscriptEngine::InitialCompile()
 			FAngelscriptPreprocessorContext::CreateFromCurrentEngineContext();
 		const bool bSkipDevelopmentScripts = !ShouldUseEditorScripts();
 		const AngelscriptEngineExactStartup_Private::EAttemptResult
-			ExactStartup = AngelscriptEngineExactStartup_Private::TryRestore(
+			ExactStartup = bStaticJITGeneration
+			? AngelscriptEngineExactStartup_Private::EAttemptResult::Miss
+			: AngelscriptEngineExactStartup_Private::TryRestore(
 				*this,
 				PreprocessorContext,
 				GetEffectiveScriptRootDescriptors(),
@@ -3388,7 +3456,7 @@ void FAngelscriptEngine::InitialCompile()
 		UE_LOG(Angelscript, Error, TEXT("Angelscript preprocessing failed!"));
 	}
 
-	if (bSuccess)
+	if (bSuccess && !bStaticJITGeneration)
 	{
 		const FAngelscriptJITProviderRouteRefreshResult StaticJITRouting =
 			FAngelscriptJITProviderRouter::Refresh(*this);
@@ -3619,24 +3687,27 @@ void FAngelscriptEngine::InitialCompile()
 	// In order to provide proper support for tests that need the AssetManager
 	// and UPrimaryDataAsset already created, we need to delay the test discovery
 	// until the initial scan is finished.
-	FCoreDelegates::GetOnPostEngineInit().AddLambda([&]()
+	if (!bStaticJITGeneration)
 	{
-		UAssetManager* AssetManager = UAssetManager::GetIfInitialized();
-		if (AssetManager != nullptr)
+		FCoreDelegates::GetOnPostEngineInit().AddLambda([&]()
 		{
-			AssetManager->CallOrRegister_OnCompletedInitialScan(
-				FSimpleMulticastDelegate::FDelegate::CreateLambda([&]() {
-					DiscoverTests();
-					bCompletedAssetScan = true;
-				})
-			);
-		}
-		else
-		{
-			UE_LOG(Angelscript, Warning, TEXT("Asset Manager was not ready in PostEngineInit. Tests are discovered without completing an initial asset scan."));
-			DiscoverTests();
-		}
-	});
+			UAssetManager* AssetManager = UAssetManager::GetIfInitialized();
+			if (AssetManager != nullptr)
+			{
+				AssetManager->CallOrRegister_OnCompletedInitialScan(
+					FSimpleMulticastDelegate::FDelegate::CreateLambda([&]() {
+						DiscoverTests();
+						bCompletedAssetScan = true;
+					})
+				);
+			}
+			else
+			{
+				UE_LOG(Angelscript, Warning, TEXT("Asset Manager was not ready in PostEngineInit. Tests are discovered without completing an initial asset scan."));
+				DiscoverTests();
+			}
+		});
+	}
 
 	bDidInitialCompileSucceed = bSuccess;
 	bIsInitialCompileFinished = true;
@@ -5112,8 +5183,11 @@ ECompileResult FAngelscriptEngine::CompileModules(
 {
 	AS_PERF_SCOPE_COMPILE_MODULES();
 	LLM_SCOPE_BYTAG(Angelscript);
+	const bool bStaticJITGeneration = RuntimeConfig.Purpose
+		== EAngelscriptEnginePurpose::StaticJITGeneration;
 	FAngelscriptCacheMutationGuard CacheMutationGuard;
-	if (CacheCaptureContext != nullptr && CacheService.IsValid())
+	if (!bStaticJITGeneration
+		&& CacheCaptureContext != nullptr && CacheService.IsValid())
 	{
 		CacheMutationGuard = CacheService->EnterMutation(
 			CompileType == ECompileType::Initial
@@ -5138,7 +5212,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 		CompileOptions,
 		InModules);
 
-	if (FAngelscriptCompilationEvents::HasListeners())
+	if (!bStaticJITGeneration
+		&& FAngelscriptCompilationEvents::HasListeners())
 	{
 		FAngelscriptCompilationEvent BeginEvent;
 		BeginEvent.Type = EAngelscriptCompilationEventType::CompileBegin;
@@ -5152,9 +5227,12 @@ ECompileResult FAngelscriptEngine::CompileModules(
 	// We allocate from the memstack in the script compiler, so use a MemMark to deallocate everything at the end
 	FMemMark MemoryMark(FMemStack::Get());
 
-	FAngelscriptCompilationDelegate& PreCompileDelegate = GetPreCompile();
-	if (PreCompileDelegate.IsBound())
-		PreCompileDelegate.Broadcast();
+	if (!bStaticJITGeneration)
+	{
+		FAngelscriptCompilationDelegate& PreCompileDelegate = GetPreCompile();
+		if (PreCompileDelegate.IsBound())
+			PreCompileDelegate.Broadcast();
+	}
 
 	// Create progress indicator
 	FScopedSlowTask SlowTask(3.f, FText::FromString(TEXT("Script Module Compilation")));
@@ -6149,7 +6227,10 @@ ECompileResult FAngelscriptEngine::CompileModules(
 			CompileType,
 			CompilationContext.GetCachePolicy(),
 			CompiledModules);
-		GetPreGenerateClasses().Broadcast(CompiledModules);
+		if (!bStaticJITGeneration)
+		{
+			GetPreGenerateClasses().Broadcast(CompiledModules);
+		}
 
 		for (auto Module : CompiledModules)
 		{
@@ -6163,8 +6244,14 @@ ECompileResult FAngelscriptEngine::CompileModules(
 		// Update progress indicator
 		SlowTask.EnterProgressFrame(0.5f, FText::FromString(TEXT("Class Generator Setup")));
 
-		// Perform the actual reload
-		auto ReloadReq = ClassGenerator.Setup();
+		// Generation Engines perform semantic descriptor analysis only. Ordinary
+		// Engines retain the established reload planning/materialization path.
+		const bool bDescriptorAnalysisSucceeded = bStaticJITGeneration
+			? ClassGenerator.SetupForStaticJITGeneration()
+			: true;
+		auto ReloadReq = bStaticJITGeneration
+			? FAngelscriptClassGenerator::EReloadRequirement::SoftReload
+			: ClassGenerator.Setup();
 
 		bool bVerifiedProperties = true;
 		if (GIsEditor || bScriptDevelopmentMode)
@@ -6173,7 +6260,7 @@ ECompileResult FAngelscriptEngine::CompileModules(
 			bVerifiedProperties = VerifyPropertySpecifiers(CompiledModules);
 		}
 
-		if (!bVerifiedProperties)
+		if (!bDescriptorAnalysisSucceeded || !bVerifiedProperties)
 		{
 			bShouldSwapInModules = false;
 			bHadCompileErrors = true;
@@ -6184,9 +6271,18 @@ ECompileResult FAngelscriptEngine::CompileModules(
 			EmitDiagnostics();
 
 			// Update progress indicator
-			SlowTask.EnterProgressFrame(1.5f, FText::FromString(TEXT("Class Generation")));
+			SlowTask.EnterProgressFrame(1.5f, FText::FromString(
+				bStaticJITGeneration
+					? TEXT("StaticJIT Descriptor Freeze")
+					: TEXT("Class Generation")));
 
-			switch (ReloadReq)
+			if (bStaticJITGeneration)
+			{
+				// Keep compiled AngelScript modules alive in this temporary Engine,
+				// but do not create/link/finalize any script reflection UObject.
+				SwapInModules(CompiledModules, DiscardedModules);
+			}
+			else switch (ReloadReq)
 			{
 				case FAngelscriptClassGenerator::EReloadRequirement::SoftReload:
 					SwapInModules(CompiledModules, DiscardedModules);
@@ -6292,7 +6388,7 @@ ECompileResult FAngelscriptEngine::CompileModules(
 	// fail-soft observer: no capture failure changes the established compile,
 	// activation or last-good behavior.
 	if (CacheCaptureContext != nullptr
-		&& CacheMutationGuard.IsEntered()
+		&& (bStaticJITGeneration || CacheMutationGuard.IsEntered())
 		&& !bHadCompileErrors)
 	{
 		const bool bPendingColdStart =
@@ -6456,26 +6552,57 @@ ECompileResult FAngelscriptEngine::CompileModules(
 					ValidatedCompileFunctionIdentities.Append(
 						Module.ValidatedFunctionArtifactIdentities);
 				}
-				const FAngelscriptCacheFreezePublicationResult Freeze =
-					CacheService->FreezeSuccessfulCompileArtifacts(
-						CacheMutationGuard.GetToken(),
-						MoveTemp(PublicationInput));
-				if (Freeze.IsSuccess())
+			}
+			if (bStaticJITGeneration)
+			{
+				FString SnapshotError;
+				if (!BuildAngelscriptStaticJITGenerationSnapshot(
+					*this,
+					CaptureModules,
+					PublicationInput.Modules,
+					PublicationInput.Profile,
+					StaticJITGenerationSnapshot,
+					&SnapshotError))
 				{
-					UE_LOG(Angelscript, Display,
-						TEXT("[CacheV2] Published compile transaction: Tx=%llu Kind=%u Disposition=%u Modules=%d SourceSnapshot=%s"),
-						Freeze.Publication->TransactionOrdinal,
-						static_cast<uint32>(Freeze.Publication->Kind),
-						static_cast<uint32>(Freeze.Publication->Disposition),
-						Freeze.Publication->Modules.Num(),
-						*Freeze.Publication->SourceSnapshot.ToHexString());
+					bShouldSwapInModules = false;
+					bHadCompileErrors = true;
+					UE_LOG(Angelscript, Error,
+						TEXT("[StaticJITGeneration] Snapshot freeze failed: %s"),
+						*SnapshotError);
 				}
 				else
 				{
-					UE_LOG(Angelscript, Warning,
-						TEXT("[CacheV2] Compile capture freeze rejected: Error=%u"),
-						static_cast<uint32>(Freeze.Error));
+					UE_LOG(Angelscript, Display,
+						TEXT("[StaticJITGeneration] Frozen Modules=%d Functions=%d Types=%d Globals=%d Descriptors=%d"),
+						StaticJITGenerationSnapshot->Modules.Num(),
+						StaticJITGenerationSnapshot->Functions.Num(),
+						StaticJITGenerationSnapshot->Types.Num(),
+						StaticJITGenerationSnapshot->Globals.Num(),
+						StaticJITGenerationSnapshot->Descriptors.Num());
 				}
+			}
+			else if (!PublicationInput.Modules.IsEmpty())
+			{
+					const FAngelscriptCacheFreezePublicationResult Freeze =
+						CacheService->FreezeSuccessfulCompileArtifacts(
+							CacheMutationGuard.GetToken(),
+							MoveTemp(PublicationInput));
+					if (Freeze.IsSuccess())
+					{
+						UE_LOG(Angelscript, Display,
+							TEXT("[CacheV2] Published compile transaction: Tx=%llu Kind=%u Disposition=%u Modules=%d SourceSnapshot=%s"),
+							Freeze.Publication->TransactionOrdinal,
+							static_cast<uint32>(Freeze.Publication->Kind),
+							static_cast<uint32>(Freeze.Publication->Disposition),
+							Freeze.Publication->Modules.Num(),
+							*Freeze.Publication->SourceSnapshot.ToHexString());
+					}
+					else
+					{
+						UE_LOG(Angelscript, Warning,
+							TEXT("[CacheV2] Compile capture freeze rejected: Error=%u"),
+							static_cast<uint32>(Freeze.Error));
+					}
 			}
 		}
 	}
@@ -6550,11 +6677,14 @@ ECompileResult FAngelscriptEngine::CompileModules(
 					Module->ScriptModule);
 			}
 		}
-		RebuildFunctionRouteSnapshot(
-			TConstArrayView<FAngelscriptFunctionRoute>(),
-			ValidatedCompileFunctionIdentities,
-			RebuiltRouteModules,
-			ArtifactInvalidatedRouteModules);
+		if (!bStaticJITGeneration)
+		{
+			RebuildFunctionRouteSnapshot(
+				TConstArrayView<FAngelscriptFunctionRoute>(),
+				ValidatedCompileFunctionIdentities,
+				RebuiltRouteModules,
+				ArtifactInvalidatedRouteModules);
+		}
 
 		// We changed some modules, so we should re-resolve all declared imports in all modules
 		//  Technically we could store dependencies for these as well and only re-resolve as needed,
@@ -6635,7 +6765,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 	else if (!bWasFullyHandled)
 		Result = ECompileResult::PartiallyHandled;
 
-	if (bShouldSwapInModules && !bHadCompileErrors)
+	if (bShouldSwapInModules && !bHadCompileErrors
+		&& !bStaticJITGeneration)
 	{
 		FAngelscriptCompilationDelegate& PostCompileDelegate = GetPostCompile();
 		if (PostCompileDelegate.IsBound())
@@ -6679,7 +6810,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 	CompilationContext.SetResult(Result);
 	OutCompiledModules = MoveTemp(CompiledModules);
 
-	if (FAngelscriptCompilationEvents::HasListeners())
+	if (!bStaticJITGeneration
+		&& FAngelscriptCompilationEvents::HasListeners())
 	{
 		FAngelscriptCompilationEvent EndEvent;
 		EndEvent.Type = EAngelscriptCompilationEventType::CompileEnd;

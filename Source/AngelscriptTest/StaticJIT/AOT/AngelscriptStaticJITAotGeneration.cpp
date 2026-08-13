@@ -9,6 +9,8 @@
 #include "StaticJIT/AngelscriptJITGeneratedFileStore.h"
 #include "StaticJIT/AngelscriptJITProviderRegistry.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
+#include "StaticJIT/AngelscriptStaticJITGenerationSnapshot.h"
+#include "StaticJIT/AngelscriptStaticJITGenerator.h"
 
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
@@ -68,6 +70,9 @@ namespace AngelscriptStaticJITAotGeneration
 			const bool bEnableCacheV2Persistence)
 		{
 			FAngelscriptEngineConfig Config;
+			Config.Purpose = bEnableCacheV2Persistence
+				? EAngelscriptEnginePurpose::Runtime
+				: EAngelscriptEnginePurpose::StaticJITGeneration;
 			Config.bIsEditor = true;
 			Config.bDevelopmentMode = true;
 			Config.bSkipThreadedInitialize = true;
@@ -252,21 +257,14 @@ namespace AngelscriptStaticJITAotGeneration
 				ScriptModules.Add(ModuleDesc->ScriptModule);
 			}
 
-			const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
-				ESPMode::ThreadSafe> Routes = Engine.GetFunctionRouteSnapshot();
-			const FAngelscriptFunctionRoute* IdentityRoute = Routes.IsValid()
-				? Routes->FunctionRoutes.FindByPredicate(
-					[](const FAngelscriptFunctionRoute& Route)
-					{
-						return Route.Function != nullptr
-							&& Route.bHasVerifiedArtifactIdentity
-							&& !Route.Identity.Profile.Hash.IsZero();
-					})
-				: nullptr;
-			if (IdentityRoute == nullptr)
+			const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+				ESPMode::ThreadSafe> GenerationSnapshot =
+				Engine.GetStaticJITGenerationSnapshot();
+			if (!GenerationSnapshot.IsValid()
+				|| !GenerationSnapshot->IsComplete())
 			{
 				Result.Error = TEXT(
-					"AngelscriptTestJIT fixture compile published no verified artifact identity.");
+					"AngelscriptTestJIT fixture compile produced no complete generation snapshot.");
 				return false;
 			}
 
@@ -277,19 +275,31 @@ namespace AngelscriptStaticJITAotGeneration
 				AngelscriptTestJITProbes::GetStableProviderId();
 			Settings.ProviderName = TEXT("AngelscriptTestJIT Fixtures");
 			Settings.OwnerModuleName = TEXT("AngelscriptTestJIT");
-			Settings.ArtifactProfile = IdentityRoute->Identity.Profile;
+			Settings.ArtifactProfile = GenerationSnapshot->ArtifactProfile;
 			Settings.NativeEnvironmentFingerprint =
 				FAngelscriptJITTargetProfiles::
 					BuildCurrentNativeEnvironmentFingerprint(
 						Settings.TargetProfile);
 
+			FAngelscriptStaticJITProviderGenerationRequest Request;
+			Request.Settings = Settings;
+			Request.CompiledSourceGraph = ScriptModules;
+			Request.GenerationSnapshot = GenerationSnapshot;
+			FAngelscriptStaticJITGeneratorOutput GeneratorOutput;
 			FString GenerationError;
 			if (!GenerateStaticJITProviderArtifacts(
-				ScriptModules, Settings, OutOutput, &GenerationError))
+				Request, GeneratorOutput, &GenerationError))
 			{
 				Result.Error = MoveTemp(GenerationError);
 				return false;
 			}
+			if (!GeneratorOutput.bHasProviderOutput)
+			{
+				Result.Error = TEXT(
+					"AngelscriptTestJIT generation produced no eligible Provider output.");
+				return false;
+			}
+			OutOutput = MoveTemp(GeneratorOutput.ProviderOutput);
 			Result.ProviderId = OutOutput.ProviderId.Hash.ToHexString();
 			Result.ProviderGeneration =
 				OutOutput.ProviderGeneration.Hash.ToHexString();
@@ -557,7 +567,7 @@ namespace AngelscriptStaticJITAotGeneration
 	{
 		FStaticJITAotGenerationResult Result;
 		TUniquePtr<FStaticJITAotFixtureEngineSession> Session =
-			CreateFixtureEngineSession();
+			CreateFixtureEngineSession(false);
 		if (!Session.IsValid() || !Session->IsValid())
 		{
 			Result.Error = Session.IsValid()

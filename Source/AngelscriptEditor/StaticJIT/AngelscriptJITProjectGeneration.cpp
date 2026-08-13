@@ -4,6 +4,8 @@
 #include "Artifacts/AngelscriptFunctionRoute.h"
 #include "StaticJIT/AngelscriptJITProjectScaffold.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
+#include "StaticJIT/AngelscriptStaticJITGenerationSnapshot.h"
+#include "StaticJIT/AngelscriptStaticJITGenerator.h"
 
 #include "HAL/FileManager.h"
 #include "GenericPlatform/GenericPlatformProperties.h"
@@ -357,6 +359,7 @@ namespace AngelscriptEditor::StaticJIT
 		};
 
 		FAngelscriptEngineConfig Config;
+		Config.Purpose = EAngelscriptEnginePurpose::StaticJITGeneration;
 		Config.bSkipThreadedInitialize = true;
 		Config.bIsEditor = Traits->bEditor;
 		Config.bRunningCommandlet = true;
@@ -369,6 +372,7 @@ namespace AngelscriptEditor::StaticJIT
 		Config.bTargetEditorOnlyData = Traits->bEditorOnlyData;
 		Config.bTargetRelease = Traits->bRelease;
 		Config.bTargetTest = Traits->bTest;
+		Config.bDisableCacheV2Persistence = true;
 		Config.CacheV2RootOverride = TemporaryCacheRoot;
 
 		FAngelscriptEngineDependencies Dependencies =
@@ -414,21 +418,14 @@ namespace AngelscriptEditor::StaticJIT
 				FAngelscriptJITTargetProfiles::ToString(TargetProfile)));
 		}
 
-		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
-			ESPMode::ThreadSafe> Routes = Engine->GetFunctionRouteSnapshot();
-		const FAngelscriptFunctionRoute* IdentityRoute = Routes.IsValid()
-			? Routes->FunctionRoutes.FindByPredicate(
-				[](const FAngelscriptFunctionRoute& Route)
-				{
-					return Route.Function != nullptr
-						&& Route.bHasVerifiedArtifactIdentity
-						&& !Route.Identity.Profile.Hash.IsZero();
-				})
-			: nullptr;
-		if (IdentityRoute == nullptr)
+		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+			ESPMode::ThreadSafe> GenerationSnapshot =
+			Engine->GetStaticJITGenerationSnapshot();
+		if (!GenerationSnapshot.IsValid()
+			|| !GenerationSnapshot->IsComplete())
 		{
 			return Fail(
-				TEXT("Project compile published no verified function artifact identity."));
+				TEXT("Project compile produced no complete StaticJIT generation snapshot."));
 		}
 
 		FAngelscriptJITProviderGenerationSettings Settings;
@@ -438,17 +435,28 @@ namespace AngelscriptEditor::StaticJIT
 		Settings.ProviderName = FPaths::GetBaseFilename(Descriptor)
 			+ TEXT(" StaticJIT");
 		Settings.OwnerModuleName = FAngelscriptJITProjectScaffold::ModuleName;
-		Settings.ArtifactProfile = IdentityRoute->Identity.Profile;
+		Settings.ArtifactProfile = GenerationSnapshot->ArtifactProfile;
 		Settings.NativeEnvironmentFingerprint =
 			FAngelscriptJITTargetProfiles::
 				BuildCurrentNativeEnvironmentFingerprint(TargetProfile);
 
+		FAngelscriptStaticJITProviderGenerationRequest Request;
+		Request.Settings = Settings;
+		Request.CompiledSourceGraph = ScriptModules;
+		Request.GenerationSnapshot = GenerationSnapshot;
+		FAngelscriptStaticJITGeneratorOutput GeneratorOutput;
 		FString GenerationError;
 		if (!GenerateStaticJITProviderArtifacts(
-			ScriptModules, Settings, OutGeneratedOutput, &GenerationError))
+			Request, GeneratorOutput, &GenerationError))
 		{
 			return Fail(GenerationError);
 		}
+		if (!GeneratorOutput.bHasProviderOutput)
+		{
+			return Fail(
+				TEXT("Project StaticJIT generation produced no eligible Provider output."));
+		}
+		OutGeneratedOutput = MoveTemp(GeneratorOutput.ProviderOutput);
 		if (OutError != nullptr)
 		{
 			OutError->Reset();

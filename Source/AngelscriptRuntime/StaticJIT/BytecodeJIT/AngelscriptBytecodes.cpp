@@ -2619,7 +2619,8 @@ IMPL_BYTECODE_BEGIN(asBC_CALL)
 	bool Implement(FStaticJITContext& Context) const override
 	{
 		int FunctionId = (int)asBC_DWORDARG(Context.BC);
-		auto* ScriptFunction = (asCScriptFunction*)FAngelscriptEngine::Get().Engine->GetFunctionById(FunctionId);
+		auto* ScriptFunction = (asCScriptFunction*)
+			Context.JIT->Engine->GetFunctionById(FunctionId);
 
 		FCallScriptFunction Call(ScriptFunction, FCallScriptFunction::ELookupType::IdArg,
 			/*IgnoreExceptions=*/false, /*ResolveVirtualFunction=*/false);
@@ -2631,7 +2632,8 @@ IMPL_BYTECODE_BEGIN(asBC_CALL)
 	virtual int32 GetStackSizeChange(FStaticJITContext& Context) const
 	{
 		int FunctionId = (int)asBC_DWORDARG(Context.BC);
-		auto* ScriptFunction = (asCScriptFunction*)FAngelscriptEngine::Get().Engine->GetFunctionById(FunctionId);
+		auto* ScriptFunction = (asCScriptFunction*)
+			Context.JIT->Engine->GetFunctionById(FunctionId);
 		return -ScriptFunction->totalSpaceBeforeFunction;
 	};
 };
@@ -3849,7 +3851,9 @@ IMPL_BYTECODE_BEGIN(asBC_CALLBND)
 	bool Implement(FStaticJITContext& Context) const override
 	{
 		int BindId = asBC_INTARG(Context.BC);
-		asCScriptFunction* ScriptFunction = ((asCScriptEngine*)FAngelscriptEngine::Get().Engine)->importedFunctions[(int)BindId & ~FUNC_IMPORTED]->importedFunctionSignature;
+		asCScriptFunction* ScriptFunction = Context.JIT->Engine->
+			importedFunctions[(int)BindId & ~FUNC_IMPORTED]->
+			importedFunctionSignature;
 
 		FCallScriptFunction Call(ScriptFunction, FCallScriptFunction::ELookupType::BindIdArg);
 		Call.MakeCall(Context);
@@ -3859,7 +3863,9 @@ IMPL_BYTECODE_BEGIN(asBC_CALLBND)
 	virtual int32 GetStackSizeChange(FStaticJITContext& Context) const
 	{
 		int BindId = asBC_INTARG(Context.BC);
-		asCScriptFunction* f = ((asCScriptEngine*)FAngelscriptEngine::Get().Engine)->importedFunctions[(int)BindId & ~FUNC_IMPORTED]->importedFunctionSignature;
+		asCScriptFunction* f = Context.JIT->Engine->
+			importedFunctions[(int)BindId & ~FUNC_IMPORTED]->
+			importedFunctionSignature;
 		if (f)
 			return -f->totalSpaceBeforeFunction;
 		else
@@ -3919,7 +3925,8 @@ IMPL_BYTECODE_BEGIN(asBC_ALLOC)
 	{
 		asCObjectType *objType = (asCObjectType*)asBC_PTRARG(Context.BC);
 		int func = asBC_INTARG(Context.BC + 2);
-		asCScriptFunction* f = (func == 0) ? nullptr : (asCScriptFunction*)FAngelscriptEngine::Get().Engine->GetFunctionById(func);
+		asCScriptFunction* f = (func == 0) ? nullptr
+			: (asCScriptFunction*)Context.JIT->Engine->GetFunctionById(func);
 
 		if ((objType->flags & asOBJ_SCRIPT_OBJECT) != 0)
 		{
@@ -3977,7 +3984,8 @@ IMPL_BYTECODE_BEGIN(asBC_ALLOC)
 	{
 		asCObjectType *objType = (asCObjectType*)asBC_PTRARG(Context.BC);
 		int func = asBC_INTARG(Context.BC + 2);
-		asCScriptFunction* f = (func == 0) ? nullptr : (asCScriptFunction*)FAngelscriptEngine::Get().Engine->GetFunctionById(func);
+		asCScriptFunction* f = (func == 0) ? nullptr
+			: (asCScriptFunction*)Context.JIT->Engine->GetFunctionById(func);
 		if ((objType->flags & asOBJ_SCRIPT_OBJECT) != 0)
 			return -(f->totalSpaceBeforeFunction - 2);
 		else if (f)
@@ -3995,7 +4003,7 @@ IMPL_BYTECODE_BEGIN(asBC_FREE)
 		check(Context.VArg_Type(0) == FStaticJITContext::EVariableType::Pointer);
 		asCObjectType *objType = (asCObjectType*)asBC_PTRARG(Context.BC);
 
-		if ((objType->flags & asOBJ_SCRIPT_OBJECT) != 0 && objType->GetUserData() == nullptr)
+		if (Context.JIT->IsRawScriptReference(objType))
 		{
 			Context.Line("{");
 			Context.Line("  void* obj = (void*){0};", Context.VArg_Var(0));
@@ -4125,8 +4133,7 @@ IMPL_BYTECODE_BEGIN(asBC_REFCPY)
 	{
 		asCObjectType* objType = (asCObjectType*)asBC_PTRARG(Context.BC);
 		const bool bRawScriptReference =
-			(objType->flags & asOBJ_SCRIPT_OBJECT) != 0
-			&& objType->GetUserData() == nullptr;
+			Context.JIT->IsRawScriptReference(objType);
 
 		Context.Line("{");
 		Context.Line("  asPWORD* d = (asPWORD*){0};", Context.StackValue_At(0, 2));
@@ -5623,7 +5630,8 @@ IMPL_BYTECODE_BEGIN(asBC_CALLINTF)
 	bool Implement(FStaticJITContext& Context) const override
 	{
 		int FunctionId = (int)asBC_DWORDARG(Context.BC);
-		auto* ScriptFunction = (asCScriptFunction*)FAngelscriptEngine::Get().Engine->GetFunctionById(FunctionId);
+		auto* ScriptFunction = (asCScriptFunction*)
+			Context.JIT->Engine->GetFunctionById(FunctionId);
 
 		FCallScriptFunction Call(ScriptFunction, FCallScriptFunction::ELookupType::IdArg);
 		Call.MakeCall(Context);
@@ -5633,7 +5641,8 @@ IMPL_BYTECODE_BEGIN(asBC_CALLINTF)
 	virtual int32 GetStackSizeChange(FStaticJITContext& Context) const
 	{
 		int FunctionId = (int)asBC_DWORDARG(Context.BC);
-		auto* ScriptFunction = (asCScriptFunction*)FAngelscriptEngine::Get().Engine->GetFunctionById(FunctionId);
+		auto* ScriptFunction = (asCScriptFunction*)
+			Context.JIT->Engine->GetFunctionById(FunctionId);
 		return -ScriptFunction->totalSpaceBeforeFunction;
 	};
 };
@@ -6417,8 +6426,7 @@ IMPL_BYTECODE_BEGIN(asBC_RefCpyV)
 	{
 		asCObjectType* objType = (asCObjectType*)asBC_PTRARG(Context.BC);
 		const bool bRawScriptReference =
-			(objType->flags & asOBJ_SCRIPT_OBJECT) != 0
-			&& objType->GetUserData() == nullptr;
+			Context.JIT->IsRawScriptReference(objType);
 
 		check(Context.VArg_Type(0) == FStaticJITContext::EVariableType::Pointer);
 		Context.Line("{");
@@ -6690,8 +6698,10 @@ IMPL_BYTECODE_BEGIN(asBC_ResolveObjectPtr)
 };
 IMPL_BYTECODE_END(asBC_ResolveObjectPtr)
 
-FString FAngelscriptBytecode::GetInstrDebugString(asDWORD* BC)
+FString FAngelscriptBytecode::GetInstrDebugString(
+	FStaticJITContext& Context)
 {
+	asDWORD* const BC = Context.BC;
 	asEBCInstr Instr = (asEBCInstr)*(asBYTE*)BC;
 	switch (Instr)
 	{
@@ -6702,7 +6712,7 @@ FString FAngelscriptBytecode::GetInstrDebugString(asDWORD* BC)
 		case asBC_PshGPtr:
 		{
 			void* GlobalPtr = (void*)asBC_PTRARG(BC);
-			auto* Engine = (asCScriptEngine*)FAngelscriptEngine::Get().Engine;
+			asCScriptEngine* const Engine = Context.JIT->Engine;
 
 			if (asCGlobalProperty** PropPtr = Engine->varAddressMap.Find(GlobalPtr))
 			{

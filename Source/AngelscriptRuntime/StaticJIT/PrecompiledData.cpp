@@ -2408,12 +2408,22 @@ FAngelscriptPrecompiledData::~FAngelscriptPrecompiledData()
 
 void FAngelscriptPrecompiledData::InitFromActiveScript()
 {
+	FAngelscriptEngine* const RuntimeEngine =
+		FAngelscriptEngine::TryGetByScriptEngine(Engine);
+	if (RuntimeEngine == nullptr)
+	{
+		return;
+	}
 	int32 ModuleCount = Engine->GetModuleCount();
 	Modules.Reserve(ModuleCount);
 	for (int32 i = 0; i < ModuleCount; ++i)
 	{
 		asCModule* Module = (asCModule*)Engine->GetModuleByIndex(i);
-		ModuleDesc = FAngelscriptEngine::Get().GetModule(Module);
+		ModuleDesc = RuntimeEngine->GetModule(Module);
+		if (!ModuleDesc.IsValid())
+		{
+			continue;
+		}
 
 		FString ModuleName = Module->GetName();
 		Modules.FindOrAdd(ModuleName).InitFrom(*this, Module);

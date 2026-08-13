@@ -15,6 +15,7 @@
 #include "StaticJIT/AngelscriptJITProviderRouter.h"
 #include "StaticJIT/AngelscriptJITReferenceResolver.h"
 #include "StaticJIT/AngelscriptStaticJITGenerator.h"
+#include "StaticJIT/AngelscriptStaticJITGenerationSnapshot.h"
 #include "StaticJIT/StaticJITHeader.h"
 
 #include "StaticJIT/BytecodeJIT/AngelscriptBytecodes.h"
@@ -46,7 +47,8 @@ asCString GetScriptClassName(asITypeInfo* Type)
 		{
 			if (i != 0)
 				Str += ",";
-			Str += FAngelscriptEngine::Get().Engine->GetTypeDeclaration(Type->GetSubTypeId(i));
+			Str += Type->GetEngine()->GetTypeDeclaration(
+				Type->GetSubTypeId(i));
 		}
 		Str += ">";
 	}
@@ -3579,7 +3581,8 @@ static bool GenerateStaticJITProviderBackendOutputImpl(
 	FAngelscriptStaticJITBackendOutput& OutOutput,
 	FString* OutError,
 	const FAngelscriptFunctionRouteSnapshot* OverrideRouteSnapshot,
-	const FAngelscriptCacheSuccessfulPublicationDto* OverridePublication);
+	const FAngelscriptCacheSuccessfulPublicationDto* OverridePublication,
+	TConstArrayView<asITypeInfo*> TargetMaterializedScriptTypes = {});
 
 bool FAngelscriptBytecodeJIT::GenerateProviderArtifacts(
 	asIScriptModule* Module,
@@ -3647,7 +3650,8 @@ static bool GenerateStaticJITProviderBackendOutputImpl(
 	FAngelscriptStaticJITBackendOutput& OutOutput,
 	FString* OutError,
 	const FAngelscriptFunctionRouteSnapshot* OverrideRouteSnapshot,
-	const FAngelscriptCacheSuccessfulPublicationDto* OverridePublication)
+	const FAngelscriptCacheSuccessfulPublicationDto* OverridePublication,
+	const TConstArrayView<asITypeInfo*> TargetMaterializedScriptTypes)
 {
 	OutOutput = {};
 	auto Fail = [OutError](const FString& Message)
@@ -3707,6 +3711,14 @@ static bool GenerateStaticJITProviderBackendOutputImpl(
 	JIT.bEmitDebugMetadataInOutput = Settings.bEmitDebugMetadata;
 	JIT.bEmitProviderEntryLinkage = true;
 	JIT.bUseImmutableDirectScriptCalls = false;
+	for (asITypeInfo* Type : TargetMaterializedScriptTypes)
+	{
+		if (Type != nullptr)
+		{
+			JIT.TargetMaterializedScriptTypes.Add(
+				static_cast<const asCObjectType*>(Type));
+		}
+	}
 	TSet<asCModule*> SeenModules;
 	for (asIScriptModule* Module : Modules)
 	{
@@ -4223,6 +4235,94 @@ static bool GenerateStaticJITProviderBackendOutputImpl(
 
 namespace AngelscriptBytecodeStaticBackend_Private
 {
+	static bool BuildGenerationSnapshotAdapters(
+		const FAngelscriptStaticJITBackendRequest& Request,
+		FAngelscriptFunctionRouteSnapshot& OutRoutes,
+		FAngelscriptCacheSuccessfulPublicationDto& OutPublication,
+		FString* OutError)
+	{
+		OutRoutes = {};
+		OutRoutes.Generation.Value = 1;
+		OutPublication = {};
+		OutPublication.Kind =
+			EAngelscriptCacheSuccessfulCompileKind::Initial;
+		OutPublication.Disposition =
+			EAngelscriptCachePublicationDisposition::Current;
+		OutPublication.Profile = Request.CompiledSourceGraph.Settings.
+			ArtifactProfile;
+
+		for (const FAngelscriptStaticJITCompiledFunctionView& Function
+			: Request.CompiledSourceGraph.Functions)
+		{
+			if (!Function.bHasVerifiedArtifactIdentity
+				|| !Function.bHasVerifiedArtifactReferences)
+			{
+				continue;
+			}
+			if (Function.EngineLocalFunction == nullptr
+				|| Function.ModuleKey.Hash.IsZero()
+				|| Function.FunctionKey.Hash.IsZero())
+			{
+				if (OutError != nullptr)
+				{
+					*OutError = TEXT(
+						"StaticJIT generation snapshot contains an invalid verified function view.");
+				}
+				return false;
+			}
+
+			FAngelscriptFunctionRoute& Route =
+				OutRoutes.FunctionRoutes.Emplace_GetRef();
+			Route.Generation = OutRoutes.Generation;
+			Route.ModuleKey = Function.ModuleKey;
+			Route.Identity.FunctionKey = Function.FunctionKey;
+			Route.Identity.Content.Execution = Function.ExecutionHash;
+			Route.Identity.Content.Debug = Function.DebugHash;
+			Route.Identity.Profile = OutPublication.Profile;
+			Route.CanonicalDeclaration = Function.CanonicalDeclaration;
+			Route.Function = Function.EngineLocalFunction;
+			Route.NumericFunctionId = Function.EngineLocalFunction->GetId();
+			Route.bHasVerifiedArtifactIdentity = true;
+
+			FAngelscriptCacheCleanModuleArtifacts* Module =
+				OutPublication.Modules.FindByPredicate(
+					[&Function](const auto& Candidate)
+					{
+						return Candidate.ModuleKey == Function.ModuleKey;
+					});
+			if (Module == nullptr)
+			{
+				Module = &OutPublication.Modules.Emplace_GetRef();
+				Module->ModuleKey = Function.ModuleKey;
+				Module->CanonicalModuleName = UTF8_TO_TCHAR(
+					Function.EngineLocalFunction->GetModuleName());
+			}
+			FAngelscriptFunctionArtifactIdentity Identity;
+			Identity.FunctionKey = Function.FunctionKey;
+			Identity.Content.Execution = Function.ExecutionHash;
+			Identity.Content.Debug = Function.DebugHash;
+			Identity.Profile = OutPublication.Profile;
+			Module->ValidatedFunctionArtifactIdentities.Add(Identity);
+
+			FAngelscriptFunctionArtifactReferenceSet& References =
+				Module->ValidatedFunctionArtifactReferenceSets.
+					Emplace_GetRef();
+			References.FunctionKey = Function.FunctionKey;
+			for (const FAngelscriptStaticJITDependencyView& Dependency
+				: Request.CompiledSourceGraph.Dependencies)
+			{
+				if (Dependency.OwnerFunctionKey == Function.FunctionKey)
+				{
+					References.RequiredReferences.AddUnique(
+						Dependency.Reference);
+				}
+			}
+			References.RequiredReferences.Sort();
+		}
+		OutRoutes.VmRouteCount = OutRoutes.FunctionRoutes.Num();
+		return true;
+	}
+
 	class FBackend final : public IAngelscriptStaticJITBackend
 	{
 	public:
@@ -4231,6 +4331,33 @@ namespace AngelscriptBytecodeStaticBackend_Private
 			FAngelscriptStaticJITBackendOutput& OutOutput,
 			FString* OutError) override
 		{
+			if (!Request.CompiledSourceGraph.Functions.IsEmpty())
+			{
+				FAngelscriptFunctionRouteSnapshot Routes;
+				FAngelscriptCacheSuccessfulPublicationDto Publication;
+				TArray<asITypeInfo*> TargetMaterializedScriptTypes;
+				for (const FAngelscriptStaticJITCompiledTypeView& Type
+					: Request.CompiledSourceGraph.Types)
+				{
+					if (Type.bTargetMaterializesScriptReflection)
+					{
+						TargetMaterializedScriptTypes.Add(Type.EngineLocalType);
+					}
+				}
+				if (!BuildGenerationSnapshotAdapters(
+					Request, Routes, Publication, OutError))
+				{
+					return false;
+				}
+				return GenerateStaticJITProviderBackendOutputImpl(
+					Request.CompiledSourceGraph.Modules,
+					Request.CompiledSourceGraph.Settings,
+					OutOutput,
+					OutError,
+					&Routes,
+					&Publication,
+					TargetMaterializedScriptTypes);
+			}
 			return GenerateStaticJITProviderBackendOutputImpl(
 				Request.CompiledSourceGraph.Modules,
 				Request.CompiledSourceGraph.Settings,
@@ -4349,17 +4476,28 @@ bool GenerateStaticJITProviderArtifacts(
 				"StaticJIT compiled source graph must belong to one Runtime Engine."));
 		}
 	}
+	FAngelscriptEngineScope RuntimeEngineScope(*RuntimeEngine);
 
 	const TConstArrayView<asIScriptModule*> EmitModules =
 		Request.EmitModuleSet.IsEmpty()
 		? Request.CompiledSourceGraph
 		: Request.EmitModuleSet;
-	const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
-		ESPMode::ThreadSafe> Routes = RuntimeEngine->GetFunctionRouteSnapshot();
-	if (!Routes.IsValid())
+	const FAngelscriptStaticJITGenerationSnapshot* const GenerationSnapshot =
+		Request.GenerationSnapshot.Get();
+	if (GenerationSnapshot != nullptr
+		&& !(GenerationSnapshot->ArtifactProfile.Hash
+			== Request.Settings.ArtifactProfile.Hash))
 	{
 		return Fail(TEXT(
-			"StaticJIT generation cannot resolve the current stable module routes."));
+			"StaticJIT generation snapshot uses a different artifact Profile."));
+	}
+	const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
+		ESPMode::ThreadSafe> Routes = GenerationSnapshot == nullptr
+		? RuntimeEngine->GetFunctionRouteSnapshot() : nullptr;
+	if (GenerationSnapshot == nullptr && !Routes.IsValid())
+	{
+		return Fail(TEXT(
+			"StaticJIT generation cannot resolve stable module identities."));
 	}
 	TArray<FAngelscriptStableModuleKey> EmitModuleKeys;
 	for (asIScriptModule* Module : EmitModules)
@@ -4370,26 +4508,161 @@ bool GenerateStaticJITProviderArtifacts(
 			return Fail(TEXT(
 				"StaticJIT EmitModuleSet must be a subset of CompiledSourceGraph."));
 		}
-		const FAngelscriptFunctionRoute* const Route =
-			Routes->FunctionRoutes.FindByPredicate(
-				[Module](const FAngelscriptFunctionRoute& Candidate)
-				{
-					return Candidate.Function != nullptr
-						&& Candidate.Function->GetModule() == Module
-						&& Candidate.bHasVerifiedArtifactIdentity;
-				});
-		if (Route == nullptr || Route->ModuleKey.Hash.IsZero())
+		FAngelscriptStableModuleKey ModuleKey;
+		if (GenerationSnapshot != nullptr)
+		{
+			const FAngelscriptStaticJITGenerationModule* const SnapshotModule =
+				GenerationSnapshot->Modules.FindByPredicate(
+					[Module](const auto& Candidate)
+					{
+						return Candidate.EngineLocalModule == Module;
+					});
+			if (SnapshotModule != nullptr)
+			{
+				ModuleKey = SnapshotModule->ModuleKey;
+			}
+		}
+		else
+		{
+			const FAngelscriptFunctionRoute* const Route =
+				Routes->FunctionRoutes.FindByPredicate(
+					[Module](const FAngelscriptFunctionRoute& Candidate)
+					{
+						return Candidate.Function != nullptr
+							&& Candidate.Function->GetModule() == Module
+							&& Candidate.bHasVerifiedArtifactIdentity;
+					});
+			if (Route != nullptr)
+			{
+				ModuleKey = Route->ModuleKey;
+			}
+		}
+		if (ModuleKey.Hash.IsZero())
 		{
 			return Fail(TEXT(
-				"StaticJIT EmitModuleSet contains a module with no stable route identity."));
+				"StaticJIT EmitModuleSet contains a module with no stable identity."));
 		}
-		EmitModuleKeys.AddUnique(Route->ModuleKey);
+		EmitModuleKeys.AddUnique(ModuleKey);
 	}
 
 	FAngelscriptStaticJITCompiledSourceGraph Graph;
 	Graph.Settings = Request.Settings;
 	Graph.Modules = Request.CompiledSourceGraph;
-	Graph.bHasVerifiedTypedHIR = Request.bHasVerifiedTypedHIR;
+	TArray<FAngelscriptStaticJITCompiledFunctionView> FunctionViews;
+	TArray<FAngelscriptStaticJITCompiledTypeView> TypeViews;
+	TArray<FAngelscriptStaticJITCompiledGlobalView> GlobalViews;
+	TArray<FAngelscriptStaticJITDescriptorView> DescriptorViews;
+	TArray<FAngelscriptStaticJITDependencyView> DependencyViews;
+	TArray<FAngelscriptStaticJITDependencyView> ExternalNativeCallViews;
+	auto MapDescriptorKind = [](
+		const EAngelscriptStaticJITGenerationDescriptorKind Kind)
+	{
+		switch (Kind)
+		{
+		case EAngelscriptStaticJITGenerationDescriptorKind::Class:
+			return EAngelscriptStaticJITDescriptorKind::Class;
+		case EAngelscriptStaticJITGenerationDescriptorKind::Struct:
+			return EAngelscriptStaticJITDescriptorKind::Struct;
+		case EAngelscriptStaticJITGenerationDescriptorKind::Enum:
+			return EAngelscriptStaticJITDescriptorKind::Enum;
+		case EAngelscriptStaticJITGenerationDescriptorKind::Delegate:
+			return EAngelscriptStaticJITDescriptorKind::Delegate;
+		case EAngelscriptStaticJITGenerationDescriptorKind::Property:
+			return EAngelscriptStaticJITDescriptorKind::Property;
+		case EAngelscriptStaticJITGenerationDescriptorKind::Function:
+			return EAngelscriptStaticJITDescriptorKind::Function;
+		}
+		checkNoEntry();
+		return EAngelscriptStaticJITDescriptorKind::Class;
+	};
+	if (GenerationSnapshot != nullptr)
+	{
+		for (const FAngelscriptStaticJITGenerationModule& Module
+			: GenerationSnapshot->Modules)
+		{
+			if (Module.EngineLocalModule == nullptr
+				|| !Request.CompiledSourceGraph.Contains(
+					Module.EngineLocalModule))
+			{
+				return Fail(TEXT(
+					"StaticJIT generation snapshot does not match the complete compiled source graph."));
+			}
+		}
+		for (const FAngelscriptStaticJITGenerationFunction& Function
+			: GenerationSnapshot->Functions)
+		{
+			FunctionViews.Add({
+				Function.EngineLocalFunction,
+				Function.ModuleKey,
+				Function.FunctionKey,
+				Function.ExecutionHash,
+				Function.DebugHash,
+				Function.EntryAbiHash,
+				Function.CanonicalDeclaration,
+				Function.Bytecode,
+				{},
+				Function.bHasVerifiedArtifactIdentity,
+				Function.bHasVerifiedArtifactReferences,
+				Function.bHasVMEntry,
+				Function.bHasRawEntry,
+				Function.bHasParmsEntry});
+		}
+		for (const FAngelscriptStaticJITGenerationType& Type
+			: GenerationSnapshot->Types)
+		{
+			TypeViews.Add({Type.EngineLocalType, Type.TypeKey.Hash,
+				Type.CanonicalDeclaration,
+				Type.bTargetMaterializesScriptReflection});
+		}
+		for (const FAngelscriptStaticJITGenerationGlobal& Global
+			: GenerationSnapshot->Globals)
+		{
+			GlobalViews.Add({Global.EngineLocalGlobal, Global.GlobalKey.Hash,
+				Global.CanonicalDeclaration});
+		}
+		for (const FAngelscriptStaticJITGenerationDescriptor& Descriptor
+			: GenerationSnapshot->Descriptors)
+		{
+			DescriptorViews.Add({Descriptor.EngineLocalDescriptor,
+				Descriptor.StableDescriptorKey,
+				Descriptor.EntryPlan.EntryPlanHash,
+				Descriptor.CanonicalDeclaration,
+				MapDescriptorKind(Descriptor.Kind),
+				Descriptor.CanonicalName,
+				Descriptor.ReceiverCanonicalName,
+				Descriptor.bUFunctionRoot,
+				Descriptor.EntryPlan.bHasVMEntry,
+				Descriptor.EntryPlan.bHasRawEntry,
+				Descriptor.EntryPlan.bHasParmsEntry});
+		}
+		auto AppendDependencies = [](
+			const TConstArrayView<FAngelscriptStaticJITGenerationDependency>
+				Source,
+			TArray<FAngelscriptStaticJITDependencyView>& Target)
+		{
+			for (const FAngelscriptStaticJITGenerationDependency& Dependency
+				: Source)
+			{
+				Target.Add({Dependency.OwnerFunctionKey,
+					Dependency.Reference,
+					Dependency.CanonicalDeclaration});
+			}
+		};
+		AppendDependencies(
+			GenerationSnapshot->Dependencies, DependencyViews);
+		AppendDependencies(
+			GenerationSnapshot->ExternalNativeCalls,
+			ExternalNativeCallViews);
+		Graph.Functions = FunctionViews;
+		Graph.Types = TypeViews;
+		Graph.Globals = GlobalViews;
+		Graph.Descriptors = DescriptorViews;
+		Graph.Dependencies = DependencyViews;
+		Graph.ExternalNativeCalls = ExternalNativeCallViews;
+	}
+	Graph.bHasVerifiedTypedHIR = GenerationSnapshot != nullptr
+		? GenerationSnapshot->bHasVerifiedTypedHIR
+		: Request.bHasVerifiedTypedHIR;
 	const FAngelscriptStaticJITBackendRequest BackendRequest{
 		Request.BackendId,
 		Graph,

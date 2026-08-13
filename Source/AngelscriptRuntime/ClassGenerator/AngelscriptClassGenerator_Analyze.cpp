@@ -95,8 +95,11 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FClassData& Cl
 
 	// Make sure the previous class is actually replacable
 	FString UnrealName = GetUnrealName(ClassData.NewClass->bIsStruct, ClassData.NewClass->ClassName);
-	UObject* ReplacedObj = FindObject<UObject>(FAngelscriptEngine::GetPackage(), *UnrealName);
-	if (ReplacedObj != nullptr)
+	UObject* ReplacedObj = bStaticJITGenerationAnalysis
+		? nullptr
+		: FindObject<UObject>(
+			FAngelscriptEngine::GetPackage(), *UnrealName);
+	if (!bStaticJITGenerationAnalysis && ReplacedObj != nullptr)
 	{
 		if (ClassData.NewClass->bIsStruct)
 		{
@@ -1039,7 +1042,8 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FClassData& Cl
 			PrevStruct = ClassData.OldClass->Struct;
 	}
 #if AS_CAN_HOTRELOAD
-	else if (FAngelscriptEngine::Get().bIsInitialCompileFinished)
+	else if (!bStaticJITGenerationAnalysis
+		&& FAngelscriptEngine::Get().bIsInitialCompileFinished)
 	{
 		UASClass* ReplacedClass = FindObject<UASClass>(FAngelscriptEngine::GetPackage(), *UnrealName);
 		if (ReplacedClass != nullptr)
@@ -1986,5 +1990,30 @@ FAngelscriptClassGenerator::EReloadRequirement FAngelscriptClassGenerator::Setup
 			ReloadReq = ModuleData.ReloadReq;
 	}
 	return ReloadReq;
+}
+
+bool FAngelscriptClassGenerator::SetupForStaticJITGeneration()
+{
+	AS_PERF_SCOPE_CLASS_GENERATOR_SETUP();
+	FAngelscriptScopeTimer Timer(
+		TEXT("static jit descriptor analysis"));
+	bStaticJITGenerationAnalysis = true;
+
+	for (FModuleData& ModuleData : Modules)
+	{
+		SetupModule(ModuleData);
+	}
+	for (FModuleData& ModuleData : Modules)
+	{
+		Analyze(ModuleData);
+	}
+	for (const FModuleData& ModuleData : Modules)
+	{
+		if (ModuleData.ReloadReq == EReloadRequirement::Error)
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
