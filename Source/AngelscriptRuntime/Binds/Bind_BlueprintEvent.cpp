@@ -1066,7 +1066,17 @@ void BindDelegateEvent(FAngelscriptBinds& Binds, UFunction* Function, bool bIsMu
 		else
 		{
 			ArgumentTypes.Add(Type);
-			ArgumentNames.Add(Property->GetName());
+
+			// Reflected parameter names are diagnostic only for delegate calls,
+			// but they still have to parse as AngelScript identifiers. Unreal may
+			// legally expose a parameter such as `float`, which the AS tokenizer
+			// classifies as a reserved keyword. Ask the target Engine's tokenizer
+			// instead of maintaining a second keyword list in the binding layer.
+			ArgumentNames.Add(FAngelscriptType::BuildSafeFunctionArgumentName(
+				Binds.GetTargetScriptEngine(),
+				Property->GetName(),
+				ArgumentNames.Num(),
+				ArgumentNames));
 
 			// This is a hack!
 			//  We want to add the &in to the parameter if it is a const reference,

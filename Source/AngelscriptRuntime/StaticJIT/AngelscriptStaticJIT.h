@@ -2,6 +2,7 @@
 #include "CoreMinimal.h"
 
 #include "AngelscriptType.h"
+#include "Artifacts/AngelscriptArtifactReference.h"
 
 #include "StartAngelscriptHeaders.h"
 #include "AngelscriptInclude.h"
@@ -15,32 +16,6 @@
 
 #include "StaticJIT/StaticJITConfig.h"
 
-struct FJITDatabase
-{
-	struct FJITFunctions
-	{
-		asJITFunction VMEntry;
-		asJITFunction_ParmsEntry ParmsEntry;
-		asJITFunction_Raw RawFunction;
-	};
-
-	TMap<uint32, FJITFunctions> Functions;
-	TArray<struct FJitRef_Function*> FunctionLookups;
-	TArray<struct FJitRef_SystemFunctionPointer*> SystemFunctionPointerLookups;
-	TArray<struct FJitRef_GlobalVar*> GlobalVarLookups;
-	TArray<struct FJitRef_Type*> TypeInfoLookups;
-	TArray<TPair<uint64, uint32*>> PropertyOffsetLookups;
-
-#if AS_JIT_VERIFY_PROPERTY_OFFSETS
-	TArray<TPair<uint64, SIZE_T>> VerifyPropertyOffsets;
-	TArray<TPair<uint64, SIZE_T>> VerifyTypeSizes;
-	TArray<TPair<uint64, SIZE_T>> VerifyTypeAlignments;
-#endif
-
-	static void Clear();
-	static FJITDatabase& Get();
-};
-
 #if AS_CAN_GENERATE_JIT
 struct FJITFile
 {
@@ -50,8 +25,6 @@ struct FJITFile
 	TArray<FString> Content;
 	TSet<FString> Headers;
 	TSet<FString> SharedHeaderDependencies;
-	TMap<void*, FString> ExternalDeclarations;
-	TMap<asCScriptFunction*, FString> ExternalSystemFunctionPointerDeclarations;
 	TSet<asCScriptFunction*> ExternFunctions;
 };
 
@@ -391,22 +364,70 @@ struct FStaticJITContext
 };
 #endif
 
-struct FAngelscriptStaticJIT : public asIJITCompiler
+struct ANGELSCRIPTRUNTIME_API FAngelscriptStaticJIT : public asIJITCompiler
 {
 	// Interface for asIJITCompiler
-	int CompileFunction(asIScriptFunction* ScriptFunction, asJITFunction* OutJITFunction) override;
-    void ReleaseJITFunction(asJITFunction JITFunction) override;
+	void OnFunctionReady(asIScriptFunction* ScriptFunction) override;
+	void ReleaseFunctionBinding(
+		asIScriptFunction* ScriptFunction,
+		const asSJITFunctionBinding& Binding) override;
+
+	/**
+	 * Publish one already matched Engine-local Provider selection. Entries with
+	 * content-specific direct links require an accepted complete immutable-set
+	 * validation; ordinary reloadable selections do not.
+	 */
+	bool PublishProviderSelection(
+		asIScriptFunction* ScriptFunction,
+		const struct FAngelscriptJITArtifactSelection& Selection,
+		const class FAngelscriptJITImmutableArtifactSetValidationResult*
+			ImmutableValidation = nullptr);
+
+	/** Clear only a Runtime Provider binding. */
+	bool ClearProviderSelection(asIScriptFunction* ScriptFunction);
+
+	/** Shared generation/runtime predicate for the reflected Parms entry ABI. */
+	static bool CanGenerateParmsEntry(
+		const asIScriptFunction* ScriptFunction);
+
+private:
+	FCriticalSection ProviderBindingMutex;
+	TMap<const void*, TSharedPtr<const class FAngelscriptJITBindingContext,
+		ESPMode::ThreadSafe>> ActiveProviderBindingContexts;
+
+public:
 
 	struct FAngelscriptPrecompiledData* PrecompiledData = nullptr;
 
 #if AS_CAN_GENERATE_JIT
 	bool bGenerateOutputCode = false;
 	bool bEmitDebugMetadataInOutput = true;
-#if AS_WITH_STATIC_JIT_DIAGNOSTICS
-	bool bEmitDiagnosticEntryMarkersInOutput = false;
-#endif
 	bool bAllowDevirtualize = true;
 	bool bAllowComprehensiveJIT = true;
+	// Reloadable output routes every script-to-script call through Runtime.
+	// This may be enabled only for a separately validated immutable cooked set.
+	bool bUseImmutableDirectScriptCalls = false;
+	// Provider entry symbols must be visible from Provider.generated.cpp.
+	bool bEmitProviderEntryLinkage = false;
+	// Provider slices resolve process-local dependencies through the current
+	// Binding's stable reference table instead of archive-local FJitRef objects.
+	FString StableProviderReferenceError;
+	// Final, deterministically sorted slot descriptors used by both generated
+	// expressions and Provider metadata. No live pointer is emitted from these.
+	TMap<asCScriptFunction*, TArray<FAngelscriptArtifactReference>>
+		StableProviderReferences;
+	TMap<class asCModule*, FAngelscriptStableModuleKey>
+		StableProviderModuleKeys;
+	TMap<asCScriptFunction*, TMap<asCScriptFunction*, uint32>>
+		StableProviderFunctionReferenceSlots;
+	TOptional<uint32> FindStableProviderReferenceSlot(
+		asCScriptFunction* Caller,
+		const FAngelscriptArtifactReference& Reference,
+		bool bRequireExpectedAbi = true) const;
+	TOptional<uint32> FindStableProviderReferenceSlot(
+		asCScriptFunction* Caller,
+		EAngelscriptArtifactReferenceKind Kind,
+		const FAngelscriptHash256& StableKey) const;
 
 	TMap<asIScriptModule*, TSharedPtr<FJITFile>> JITFiles;
 	TSet<FString> UsedUniqueNames;
@@ -416,17 +437,16 @@ struct FAngelscriptStaticJIT : public asIJITCompiler
 	{
 		FString FunctionSymbolName;
 		FString FunctionDeclaration;
+		FString EmittedFunctionContent;
+		bool bHasParmsEntry = false;
 	};
 
 	TMap<asCScriptFunction*, FGenerateFunction> FunctionsToGenerate;
 	TSet<asCScriptFunction*> FunctionsWithVirtualOverrides;
+	void CollectModuleFunctionsForGeneration(asIScriptModule* Module);
 
 	asCScriptFunction* DevirtualizeFunction(asCScriptFunction* VirtualFunction);
 	bool IsFunctionAlwaysJIT(asCScriptFunction* VirtualFunction);
-
-	TMap<void*, FString> ExternalReferenceNames;
-	TMap<asCScriptFunction*, FString> ExternalSystemFunctionPointerReferenceNames;
-	TSet<void*> VerifiedExternalReferences;
 
 	FJITFile& GetFile(asIScriptModule* Module);
 	FString GetUniqueFunctionName(FJITFile& File, asIScriptFunction* Function, int32 EntryCount);
@@ -487,8 +507,6 @@ struct FAngelscriptStaticJIT : public asIJITCompiler
 	bool IsTypePotentiallyDifferent(asITypeInfo* ObjectType);
 
 	void GenerateCppCode(asIScriptFunction* ScriptFunction, FGenerateFunction& Generate);
-	void WriteOutputCode(TMap<FString, FString>* OutGeneratedFiles = nullptr);
-
 	void SanitizeSymbolName(FString& InOutSymbol);
 
 	void DetectScriptType(asCObjectType* ObjectType);
@@ -503,19 +521,4 @@ ANGELSCRIPTRUNTIME_API bool GenerateStaticJITSourceTextForDiagnostics(
 	bool bEmitDebugMetadata,
 	FString* OutError = nullptr);
 
-ANGELSCRIPTRUNTIME_API bool GenerateStaticJITFilesForDiagnostics(
-	class asIScriptModule* Module,
-	TMap<FString, FString>& OutGeneratedFiles,
-	bool bEmitDebugMetadata,
-	bool bEmitDiagnosticEntryMarkers,
-	FString* OutError = nullptr);
-
-ANGELSCRIPTRUNTIME_API bool GenerateStaticJITAotArtifactsForDiagnostics(
-	class asIScriptModule* Module,
-	const FString& PrecompiledCacheFilename,
-	const FGuid& PrecompiledDataGuid,
-	TMap<FString, FString>& OutGeneratedFiles,
-	bool bEmitDebugMetadata,
-	bool bEmitDiagnosticEntryMarkers,
-	FString* OutError = nullptr);
 #endif

@@ -4,12 +4,27 @@
 #include "CQTest.h"
 #include "ClassGenerator/ASClass.h"
 #include "Misc/ScopeExit.h"
+#include "StaticJIT/AngelscriptJITExecutionContext.h"
+#include "StaticJIT/AngelscriptStaticJIT.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UnrealType.h"
 
 #include <limits>
 
 #if WITH_ANGELSCRIPT_UNITTESTS
+
+namespace AngelscriptASFunctionOptimizedCallTests_Private
+{
+	static asBYTE StaleCachedByteReturn(FScriptExecution&, void*)
+	{
+		return 201;
+	}
+
+	static asBYTE CurrentBindingByteReturn(FScriptExecution&, void*)
+	{
+		return 202;
+	}
+}
 
 TEST_CLASS_WITH_FLAGS(FAngelscriptASFunctionOptimizedCallTests,
 	"Angelscript.TestModule.Generator.ASFunction.OptimizedCall",
@@ -400,6 +415,93 @@ public:
 		const uint8 ByteResultAfterDiscard = GetByteCodeFunction->OptimizedCall_ByteReturn(Instance);
 		ASSERT_THAT(AreEqual(0, static_cast<int32>(ByteResultAfterDiscard), TEXT("OptimizedCall_ByteReturn should return fallback byte value after discard")));
 
+	}
+
+	TEST_METHOD(OptimizedCallReadsCurrentBindingInsteadOfCachedRawEntry)
+	{
+		using namespace AngelscriptASFunctionOptimizedCallTests_Private;
+
+		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();
+		FAngelscriptEngineScope EngineScope(Engine);
+
+		ON_SCOPE_EXIT
+		{
+			Engine.DiscardModule(*FAngelscriptASFunctionOptimizedCallTests::ModuleName.ToString());
+		};
+
+		UASClass* ScriptClass = FAngelscriptASFunctionOptimizedCallTests::CompileOptimizedCallTarget(*TestRunner, Engine);
+		ASSERT_THAT(IsNotNull(ScriptClass, TEXT("Current-binding optimized-call test should compile to a UASClass")));
+		if (ScriptClass == nullptr)
+		{
+			return;
+		}
+
+		UASFunction* GetByteCodeFunction = FAngelscriptASFunctionOptimizedCallTests::RequireGeneratedScriptFunction(
+			*TestRunner, ScriptClass, TEXT("GetByteCode"));
+		UObject* Instance = NewObject<UObject>(GetTransientPackage(), ScriptClass, TEXT("OptimizedCallCurrentBindingTarget"));
+		ASSERT_THAT(IsNotNull(GetByteCodeFunction, TEXT("Current-binding test should expose GetByteCode")));
+		ASSERT_THAT(IsNotNull(Instance, TEXT("Current-binding test should instantiate its script class")));
+		if (GetByteCodeFunction == nullptr || Instance == nullptr)
+		{
+			return;
+		}
+
+		asCScriptFunction* ScriptFunction = static_cast<asCScriptFunction*>(GetByteCodeFunction->ScriptFunction);
+		ASSERT_THAT(IsNotNull(ScriptFunction, TEXT("Current-binding test should retain its AS script function")));
+		if (ScriptFunction == nullptr)
+		{
+			return;
+		}
+		asIScriptEngine* ScriptEngine = ScriptFunction->GetEngine();
+		ASSERT_THAT(IsNotNull(ScriptEngine, TEXT("Current-binding test should retain its AS engine")));
+		if (ScriptEngine == nullptr)
+		{
+			return;
+		}
+
+		asIJITCompiler* OriginalCompiler = ScriptEngine->GetJITCompiler();
+		FAngelscriptStaticJIT CurrentBindingCompiler;
+		ASSERT_THAT(AreEqual(asSUCCESS, ScriptEngine->SetJITCompiler(&CurrentBindingCompiler)));
+		ON_SCOPE_EXIT
+		{
+			ScriptEngine->SetJITCompiler(OriginalCompiler);
+		};
+
+		const asSJITFunctionBinding OriginalBinding = ScriptFunction->GetJITBinding();
+		const asJITFunction OriginalCachedVM = GetByteCodeFunction->JitFunction;
+		const asJITFunction_ParmsEntry OriginalCachedParms = GetByteCodeFunction->JitFunction_ParmsEntry;
+		const asJITFunction_Raw OriginalCachedRaw = GetByteCodeFunction->JitFunction_Raw;
+		ON_SCOPE_EXIT
+		{
+			ScriptFunction->SetJITBinding(OriginalBinding);
+			GetByteCodeFunction->JitFunction = OriginalCachedVM;
+			GetByteCodeFunction->JitFunction_ParmsEntry = OriginalCachedParms;
+			GetByteCodeFunction->JitFunction_Raw = OriginalCachedRaw;
+		};
+
+		asSJITFunctionBinding CurrentBinding = OriginalBinding;
+		CurrentBinding.RawEntry = reinterpret_cast<asJITFunction_Raw>(&CurrentBindingByteReturn);
+		ScriptFunction->SetJITBinding(CurrentBinding);
+		GetByteCodeFunction->JitFunction_Raw = reinterpret_cast<asJITFunction_Raw>(&StaleCachedByteReturn);
+
+		const uint8 CurrentResult = GetByteCodeFunction->OptimizedCall_ByteReturn(Instance);
+		if (!this->Assert.AreEqual(
+				202,
+				static_cast<int32>(CurrentResult),
+				TEXT("OptimizedCall should invoke the Raw entry from the current AS binding, never the cached UASFunction entry")))
+		{
+			return;
+		}
+
+		asSJITFunctionBinding ClearedBinding = CurrentBinding;
+		ClearedBinding.RawEntry = nullptr;
+		ScriptFunction->SetJITBinding(ClearedBinding);
+
+		const uint8 FallbackResult = GetByteCodeFunction->OptimizedCall_ByteReturn(Instance);
+		ASSERT_THAT(AreEqual(
+			42,
+			static_cast<int32>(FallbackResult),
+			TEXT("Clearing the current Raw entry should fall back to current VM execution instead of invoking a stale cache")));
 	}
 };
 

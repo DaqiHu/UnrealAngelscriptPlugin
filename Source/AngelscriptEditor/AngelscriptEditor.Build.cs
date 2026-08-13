@@ -50,6 +50,11 @@ namespace UnrealBuildTool.Rules
 				"CQTest",
 				"AutomationController",
             });
+
+			if (Target.Platform == UnrealTargetPlatform.Win64)
+			{
+				PrivateDependencyModuleNames.Add("LiveCoding");
+			}
 		}
 	}
 }

@@ -15,9 +15,8 @@
 #include "Cache/AngelscriptCacheDiagnostics.h"
 #include "Cache/AngelscriptCacheCompileReuse.h"
 #include "Cache/AngelscriptCacheExactStartup.h"
-#include "Cache/Private/AngelscriptCacheRuntimeState.h"
+#include "Artifacts/AngelscriptFunctionRoute.h"
 #include "Cache/AngelscriptCacheEnvironmentProfile.h"
-#include "Cache/AngelscriptCacheLegacyCutover.h"
 #include "Cache/AngelscriptCacheManifestPack.h"
 #include "Cache/AngelscriptCacheService.h"
 #include "Cache/AngelscriptCacheSettings.h"
@@ -54,7 +53,7 @@
 #include "AngelscriptBindDatabase.h"
 #include "Binds/Helper_ToString.h"
 
-#include "StaticJIT/PrecompiledData.h"
+#include "StaticJIT/AngelscriptJITProviderRouter.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
 #include "StaticJIT/StaticJITHeader.h"
 #include "StaticJIT/StaticJITBinds.h"
@@ -114,7 +113,6 @@ static int32 GAngelscriptAssetsPackageRefCount = 0;
 FAngelscriptEngine::FAngelscriptDebugStack* GAngelscriptStack = nullptr;
 // GAngelscriptEngine removed — engine resolution now uses FAngelscriptEngineContextStack
 static bool GAngelscriptLineReentry = false;
-bool FAngelscriptEngine::bStaticJITTranspiledCodeLoaded = false;
 
 namespace AngelscriptStaticTypeInfo_Private
 {
@@ -994,6 +992,33 @@ FAngelscriptEngine* FAngelscriptEngine::TryGetCurrentEngine()
 	return nullptr;
 }
 
+namespace
+{
+	uint8 GAngelscriptRuntimeEngineOwnerUserDataKey = 0;
+
+	asPWORD GetAngelscriptRuntimeEngineOwnerUserDataType()
+	{
+		return reinterpret_cast<asPWORD>(
+			& GAngelscriptRuntimeEngineOwnerUserDataKey);
+	}
+}
+
+FAngelscriptEngine* FAngelscriptEngine::TryGetByScriptEngine(
+	const asIScriptEngine* ScriptEngine)
+{
+	if (ScriptEngine == nullptr)
+	{
+		return nullptr;
+	}
+
+	FAngelscriptEngine* const Owner = static_cast<FAngelscriptEngine*>(
+		ScriptEngine->GetUserData(
+			GetAngelscriptRuntimeEngineOwnerUserDataType()));
+	return Owner != nullptr && Owner->Engine == ScriptEngine
+		? Owner
+		: nullptr;
+}
+
 FAngelscriptEngine* FAngelscriptEngine::TryGetGlobalEngine()
 {
 	return TryGetCurrentEngine();
@@ -1210,13 +1235,18 @@ bool FAngelscriptEngine::InitializeWithoutInitialCompile()
 	bSimulateCooked = RuntimeConfig.bSimulateCooked;
 	bTestErrors = RuntimeConfig.bTestErrors;
 	bForcePreprocessEditorCode = RuntimeConfig.bForcePreprocessEditorCode;
+	bOverrideTargetPreprocessorFlags =
+		RuntimeConfig.bOverrideTargetPreprocessorFlags;
+	bTargetEditor = RuntimeConfig.bTargetEditor;
+	bTargetEditorOnlyData = RuntimeConfig.bTargetEditorOnlyData;
+	bTargetRelease = RuntimeConfig.bTargetRelease;
+	bTargetTest = RuntimeConfig.bTargetTest;
 	bUseEditorScripts = WITH_EDITOR
 		&& ((RuntimeConfig.bIsEditor && !RuntimeConfig.bRunningCommandlet) || bForcePreprocessEditorCode)
 		&& !bSimulateCooked;
 	bCollectStaticJITCompatibilityBinds =
 		RuntimeConfig.bCollectStaticJITCompatibilityBinds;
 	bScriptDevelopmentMode = RuntimeConfig.bIsEditor || RuntimeConfig.bDevelopmentMode;
-	bUseStaticJITCompatibilityData = false;
 
 	PreInitialize_GameThread();
 
@@ -1244,6 +1274,20 @@ bool FAngelscriptEngine::InitializeWithoutInitialCompile()
 	if (ShouldUseAutomaticImportMethod())
 	{
 		Engine->SetEngineProperty(asEP_AUTOMATIC_IMPORTS, 1);
+	}
+
+	// Editor-hosted generation must configure target-dependent bytecode
+	// properties exactly as the requested packaged target would. Shipping/Test
+	// builds omit line cues even though the commandlet host has debug support.
+#if UE_BUILD_SHIPPING || UE_BUILD_TEST
+	const bool bBuildWithoutLineCues = true;
+#else
+	const bool bBuildWithoutLineCues =
+		bOverrideTargetPreprocessorFlags && bTargetRelease;
+#endif
+	if (bBuildWithoutLineCues)
+	{
+		Engine->SetEngineProperty(asEP_BUILD_WITHOUT_LINE_CUES, 1);
 	}
 
 	Engine->SetMessageCallback(asFUNCTION(LogAngelscriptError), 0, asCALL_CDECL);
@@ -1898,14 +1942,12 @@ void FAngelscriptEngine::Shutdown()
 
 	if (bShouldReleaseOwnedEngine && StaticJIT != nullptr)
 	{
+		if (Engine != nullptr && Engine->GetJITCompiler() == StaticJIT)
+		{
+			Engine->SetJITCompiler(nullptr);
+		}
 		delete StaticJIT;
 		StaticJIT = nullptr;
-	}
-
-	if (bShouldReleaseOwnedEngine && PrecompiledData != nullptr)
-	{
-		delete PrecompiledData;
-		PrecompiledData = nullptr;
 	}
 
 	if (bShouldReleaseOwnedEngine && GameThreadTLD != nullptr && GameThreadTLD->primaryContext != nullptr)
@@ -2004,6 +2046,9 @@ void FAngelscriptEngine::Shutdown()
 			GAngelscriptEnginesReleasedForExit = true;
 		}
 
+		Engine->SetUserData(
+			nullptr,
+			GetAngelscriptRuntimeEngineOwnerUserDataType());
 		FAngelscriptStaticTypeInfoRegistry::ClearForEngine(Engine);
 		// Drop script-enum -> asITypeInfo* entries before AS engine release so
 		// any late access in the teardown window cannot read a dangling pointer.
@@ -2012,7 +2057,6 @@ void FAngelscriptEngine::Shutdown()
 	}
 	Engine = nullptr;
 	StaticJIT = nullptr;
-	PrecompiledData = nullptr;
 #if WITH_AS_DEBUGSERVER
 	DebugServer = nullptr;
 #endif
@@ -2127,6 +2171,30 @@ void FAngelscriptEngine::PreInitialize_GameThread()
 	 * and compile script modules.
 	 */
 	Engine = (asCScriptEngine*)asCreateScriptEngine(ANGELSCRIPT_VERSION);
+	Engine->SetUserData(
+		this,
+		GetAngelscriptRuntimeEngineOwnerUserDataType());
+
+#if AS_CAN_GENERATE_JIT
+	// Provider bindings are published after authoritative source/Cache V2
+	// compilation, but the VM entry instructions must be retained while that
+	// bytecode is built. Every FAngelscriptEngine owns one lifecycle adapter so
+	// provider publication and retirement remain engine-local.
+	// Do not hide either mutating call inside check/checkf: those expressions
+	// are compiled out in Shipping, while Provider routing still needs the VM
+	// entry instructions and the Engine-local compiler adapter.
+	const int IncludeJITInstructionsResult =
+		Engine->SetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS, 1);
+	checkf(IncludeJITInstructionsResult == asSUCCESS,
+		TEXT("AngelScript failed to enable the bytecode entry points required by StaticJIT Providers."));
+	check(StaticJIT == nullptr);
+	StaticJIT = new FAngelscriptStaticJIT();
+	const int SetJITCompilerResult = Engine->SetJITCompiler(StaticJIT);
+	checkf(SetJITCompilerResult == asSUCCESS,
+		TEXT("AngelScript failed to install its Engine-local StaticJIT Provider lifecycle adapter."));
+	(void)IncludeJITInstructionsResult;
+	(void)SetJITCompilerResult;
+#endif
 
 	// Set up thread local data for game thread
 	GameThreadTLD = asCThreadManager::GetLocalData();
@@ -2269,6 +2337,12 @@ bool FAngelscriptEngine::Initialize_AnyThread()
 	bSimulateCooked = RuntimeConfig.bSimulateCooked;
 	bTestErrors = RuntimeConfig.bTestErrors;
 	bForcePreprocessEditorCode = RuntimeConfig.bForcePreprocessEditorCode;
+	bOverrideTargetPreprocessorFlags =
+		RuntimeConfig.bOverrideTargetPreprocessorFlags;
+	bTargetEditor = RuntimeConfig.bTargetEditor;
+	bTargetEditorOnlyData = RuntimeConfig.bTargetEditorOnlyData;
+	bTargetRelease = RuntimeConfig.bTargetRelease;
+	bTargetTest = RuntimeConfig.bTargetTest;
 	bUseEditorScripts = WITH_EDITOR
 		&& ((RuntimeConfig.bIsEditor && !RuntimeConfig.bRunningCommandlet) || bForcePreprocessEditorCode)
 		&& !bSimulateCooked;
@@ -2303,9 +2377,16 @@ bool FAngelscriptEngine::Initialize_AnyThread()
 	if (ShouldUseAutomaticImportMethod())
 		Engine->SetEngineProperty(asEP_AUTOMATIC_IMPORTS, 1);
 
-#if !WITH_AS_DEBUGSERVER && !WITH_AS_DEBUGVALUES
-	Engine->SetEngineProperty(asEP_BUILD_WITHOUT_LINE_CUES, 1);
+#if UE_BUILD_SHIPPING || UE_BUILD_TEST
+	const bool bBuildWithoutLineCues = true;
+#else
+	const bool bBuildWithoutLineCues =
+		bOverrideTargetPreprocessorFlags && bTargetRelease;
 #endif
+	if (bBuildWithoutLineCues)
+	{
+		Engine->SetEngineProperty(asEP_BUILD_WITHOUT_LINE_CUES, 1);
+	}
 
 	Engine->SetMessageCallback(asFUNCTION(LogAngelscriptError), 0, asCALL_CDECL);
 	Engine->SetContextCallbacks(&AngelscriptRequestContext, &AngelscriptReturnContext, nullptr);
@@ -2313,7 +2394,6 @@ bool FAngelscriptEngine::Initialize_AnyThread()
 	bCollectStaticJITCompatibilityBinds =
 		RuntimeConfig.bCollectStaticJITCompatibilityBinds;
 	bScriptDevelopmentMode = RuntimeConfig.bIsEditor || RuntimeConfig.bDevelopmentMode;
-	bUseStaticJITCompatibilityData = false;
 
 	// Wait with the plugin script roots until we know we need them
 	AllScriptRoots = DiscoverScriptRootDescriptors(/*bOnlyProjectRoot =*/ true);
@@ -3209,15 +3289,6 @@ void FAngelscriptEngine::InitialCompile()
 		{
 			UE_LOG(Angelscript, Display, TEXT("Angelscript root path: %s"), *Path);
 		}
-		const FAngelscriptLegacyCacheInspection LegacyInspection =
-			InspectAngelscriptLegacyCacheArtifactsFromDisk(AllRootPaths);
-		if (LegacyInspection.HasRejectedLegacyScriptCache())
-		{
-			UE_LOG(Angelscript, Warning,
-				TEXT("[CacheV2][LegacyRejected] %s"),
-				*LegacyInspection.FormatDiagnostic());
-		}
-
 		const FAngelscriptPreprocessorContext PreprocessorContext =
 			FAngelscriptPreprocessorContext::CreateFromCurrentEngineContext();
 		const bool bSkipDevelopmentScripts = !ShouldUseEditorScripts();
@@ -3315,6 +3386,27 @@ void FAngelscriptEngine::InitialCompile()
 	else if (!bSuccess)
 	{
 		UE_LOG(Angelscript, Error, TEXT("Angelscript preprocessing failed!"));
+	}
+
+	if (bSuccess)
+	{
+		const FAngelscriptJITProviderRouteRefreshResult StaticJITRouting =
+			FAngelscriptJITProviderRouter::Refresh(*this);
+		if (!StaticJITRouting.IsApplied())
+		{
+			UE_LOG(Angelscript, Warning, TEXT("%s"),
+				*StaticJITRouting.Detail);
+		}
+		else if (StaticJITRouting.PublishedNativeCount > 0)
+		{
+			UE_LOG(Angelscript, Display, TEXT("%s"),
+				*StaticJITRouting.Detail);
+		}
+		else
+		{
+			UE_LOG(Angelscript, Verbose, TEXT("%s"),
+				*StaticJITRouting.Detail);
+		}
 	}
 
 	bool bInteractiveStartupRetryAvailable = false;
@@ -3904,6 +3996,26 @@ bool FAngelscriptEngine::PerformHotReload(
 	else if (Result == ECompileResult::Error)
 	{
 		return false;
+	}
+
+	// CompileModules has now returned, so the Cache V2 compile mutation guard is
+	// released and the accepted module swap/current-function snapshot is the
+	// authoritative Engine state. Re-match copied Provider catalogs here before
+	// post-compile consumers observe the hot-reload result. A failed compile
+	// returns above and therefore cannot replace the last-good bindings.
+	const FAngelscriptJITProviderRouteRefreshResult StaticJITRouting =
+		FAngelscriptJITProviderRouter::Refresh(*this);
+	if (!StaticJITRouting.IsApplied())
+	{
+		UE_LOG(Angelscript, Warning, TEXT("%s"), *StaticJITRouting.Detail);
+	}
+	else if (StaticJITRouting.PublishedNativeCount > 0)
+	{
+		UE_LOG(Angelscript, Display, TEXT("%s"), *StaticJITRouting.Detail);
+	}
+	else
+	{
+		UE_LOG(Angelscript, Verbose, TEXT("%s"), *StaticJITRouting.Detail);
 	}
 
 	// In the scenario where the initial compile fails and the user presses "Try Again" GEngine is nullptr.
@@ -5017,7 +5129,6 @@ ECompileResult FAngelscriptEngine::CompileModules(
 	{
 		for (const TSharedRef<FAngelscriptModuleDesc>& Module : InModules)
 		{
-			Module->PrecompiledData = nullptr;
 			Module->bLoadedPrecompiledCode = false;
 			Module->bLoadedIncrementalCache = false;
 		}
@@ -5455,7 +5566,6 @@ ECompileResult FAngelscriptEngine::CompileModules(
 								// Create a copy of the old module's preprocessor data so we can re-compile it
 								TSharedRef<FAngelscriptModuleDesc> NewModule = MakeShared<FAngelscriptModuleDesc>(*OldModule);
 								NewModule->ScriptModule = nullptr;
-								NewModule->PrecompiledData = nullptr;
 								NewModule->bCompileError = false;
 								NewModule->bLoadedPrecompiledCode = false;
 								NewModule->bLoadedIncrementalCache = false;
@@ -5805,6 +5915,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				&& CacheCaptureContext != nullptr
 				&& !CompileOptions.IsForcedClean())
 			{
+				TArray<TSharedRef<FAngelscriptModuleDesc>> CachePrepareModules;
+				TArray<FAngelscriptStableModuleKey> CachePrepareModuleKeys;
 				for (const TSharedRef<FAngelscriptModuleDesc>& Module
 					: CompiledModules)
 				{
@@ -5822,10 +5934,36 @@ ECompileResult FAngelscriptEngine::CompileModules(
 					{
 						continue;
 					}
+					CachePrepareModules.Add(Module);
+					CachePrepareModuleKeys.Add(ModuleKey.GetValue());
+				}
+				TArray<FAngelscriptStableModuleKey> OrderedCacheModuleKeys;
+				FString CacheOrderFailure;
+				if (!CacheReuseContext->TryBuildDependencyOrderedModuleKeys(
+						CachePrepareModuleKeys, OrderedCacheModuleKeys,
+						CacheOrderFailure))
+				{
+					UE_LOG(Angelscript, Warning,
+						TEXT("[CacheV2][FunctionReuse] %s; candidates will fail closed in compiler order"),
+						*CacheOrderFailure);
+					OrderedCacheModuleKeys = CachePrepareModuleKeys;
+				}
+
+				for (const FAngelscriptStableModuleKey& OrderedModuleKey
+					: OrderedCacheModuleKeys)
+				{
+					const int32 ModuleIndex =
+						CachePrepareModuleKeys.IndexOfByKey(OrderedModuleKey);
+					if (!CachePrepareModules.IsValidIndex(ModuleIndex))
+					{
+						continue;
+					}
+					const TSharedRef<FAngelscriptModuleDesc>& Module =
+						CachePrepareModules[ModuleIndex];
 					const FAngelscriptCacheCompileReusePrepareResult Prepare =
 						CacheReuseContext->PrepareModule(
 							Module,
-							ModuleKey.GetValue(),
+							OrderedModuleKey,
 							CacheCaptureContext->AuthoritativeSourceIndex.
 								SourceSnapshot,
 							CacheService.Get());
@@ -5920,14 +6058,6 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				if (Module->bCompileError)
 					bHadCompileErrors = true;
 			}
-		}
-
-		// If we added any precompiled modules, finalize them now
-		if (!CompileOptions.IsForcedClean()
-			&& PrecompiledData != nullptr
-			&& bUseStaticJITCompatibilityData)
-		{
-			PrecompiledData->PrepareToFinalizePrecompiledModules();
 		}
 
 		{
@@ -6217,6 +6347,28 @@ ECompileResult FAngelscriptEngine::CompileModules(
 
 			int32 SkippedCaptureCount = 0;
 			uint32 GraphCarriedDependencyFunctionCount = 0;
+			FAngelscriptCacheCrossModuleFunctionAuthority
+				CrossModuleFunctionAuthority;
+			const FAngelscriptCacheCleanCaptureResult CrossModuleAuthorityResult =
+				BuildAngelscriptCacheCrossModuleFunctionAuthority(
+					CaptureModules,
+					CacheCaptureContext->Environment.CaptureOptions,
+					CrossModuleFunctionAuthority);
+			const FAngelscriptCacheCrossModuleFunctionAuthority*
+				CrossModuleFunctions = CrossModuleAuthorityResult.IsSuccess()
+					? &CrossModuleFunctionAuthority
+					: nullptr;
+			if (!CrossModuleAuthorityResult.IsSuccess())
+			{
+				// The successful compile remains authoritative. Cross-module
+				// capture is an observer and therefore fails soft; affected
+				// modules will reject their own capture below instead of
+				// publishing a generation with unresolved foreign pointers.
+				UE_LOG(Angelscript, Warning,
+					TEXT("[CacheV2] Cross-module function authority preparation failed: Error=%u Detail=%s"),
+					static_cast<uint32>(CrossModuleAuthorityResult.Error),
+					*CrossModuleAuthorityResult.Detail);
+			}
 			for (const TSharedRef<FAngelscriptModuleDesc>& Candidate :
 				CaptureModules)
 			{
@@ -6227,6 +6379,7 @@ ECompileResult FAngelscriptEngine::CompileModules(
 					CacheCaptureContext->Environment.CaptureOptions,
 					CacheCaptureContext->AuthoritativeSourceIndex,
 					CacheReuseContext,
+					CrossModuleFunctions,
 					Artifacts);
 				if (!CaptureResult.IsSuccess())
 				{
@@ -6398,7 +6551,7 @@ ECompileResult FAngelscriptEngine::CompileModules(
 			}
 		}
 		RebuildFunctionRouteSnapshot(
-			TConstArrayView<FAngelscriptCacheLiveFunctionRoute>(),
+			TConstArrayView<FAngelscriptFunctionRoute>(),
 			ValidatedCompileFunctionIdentities,
 			RebuiltRouteModules,
 			ArtifactInvalidatedRouteModules);
@@ -6615,55 +6768,17 @@ void FAngelscriptEngine::CompileModule_Types_Stage1(
 	Module->CombinedDependencyHash = Module->CodeHash;
 
 	// Add stuff from all imported modules into the newly generated module
-	bool bAllImportsPreCompiled = true;
 	for (auto ImportModule : ImportedModules)
 	{
 		if (ensure(ImportModule->ScriptModule != nullptr))
 		{
 			ImportIntoModule(ScriptModule, ImportModule->ScriptModule);
 		}
-
-		// If any of our imports are not precompiled, we should not use precompiled code either
-		if (!ImportModule->bLoadedPrecompiledCode)
-		{
-			bAllImportsPreCompiled = false;
-		}
-
 		// Combine the hash of the imported module into our own dependency hash
 		Module->CombinedDependencyHash ^= ImportModule->CombinedDependencyHash;
 	}
 
-	// Check if we have precompiled data for this module and use it if we can
-	if (!CompileOptions.IsForcedClean()
-		&& PrecompiledData != nullptr
-		&& bAllImportsPreCompiled
-		&& bUseStaticJITCompatibilityData)
-	{
-		const FAngelscriptPrecompiledModule* CompiledModule = PrecompiledData->Modules.Find(Module->ModuleName);
-		if (CompiledModule != nullptr)
-		{
-			// Check if file content hashes are the same or not
-			if (CompiledModule->CodeHash == Module->CodeHash)
-			{
-				CompiledModule->ApplyToModule_Stage1(*PrecompiledData, ScriptModule);
-
-				Module->PrecompiledData = CompiledModule;
-				Module->bCompileError = false;
-				Module->ScriptModule = ScriptModule;
-				Module->bLoadedPrecompiledCode = true;
-
-				return;
-			}
-			else
-			{
-				UE_LOG(Angelscript, Warning, TEXT("Angelscript precompiled data for module '%s' did not match script as loaded from file. Discarding precompiled data."), *Module->ModuleName);
-			}
-		}
-		else
-		{
-			UE_LOG(Angelscript, Warning, TEXT("Angelscript precompiled data did not include any code for module '%s'."), *Module->ModuleName);
-		}
-	}
+	(void)CompileOptions;
 
 	// Set up proper pre-class data, this tells angelscript how
 	// to treat compilation for classes derived from code classes.
@@ -6734,12 +6849,6 @@ void FAngelscriptEngine::CompileModule_Functions_Stage2(ECompileType CompileType
 	if (ScriptModule == nullptr)
 		return;
 
-	if (Module->bLoadedPrecompiledCode)
-	{
-		Module->PrecompiledData->ApplyToModule_Stage2(*PrecompiledData, ScriptModule);
-		return;
-	}
-
 	auto Result = ScriptModule->builder->BuildGenerateFunctions();
 	if (Result != asSUCCESS)
 		Module->bCompileError = true;
@@ -6750,12 +6859,6 @@ void FAngelscriptEngine::CompileModule_Code_Stage3(ECompileType CompileType, TSh
 	auto* ScriptModule = (asCModule*)Module->ScriptModule;
 	if (ScriptModule == nullptr)
 		return;
-
-	if (Module->bLoadedPrecompiledCode)
-	{
-		Module->PrecompiledData->ApplyToModule_Stage3(*PrecompiledData, ScriptModule);
-		return;
-	}
 
 	auto Result = ScriptModule->builder->BuildCompileCode();
 	if (Result != asSUCCESS)
@@ -8028,7 +8131,7 @@ void FAngelscriptEngine::GetAngelscriptExecutionFileAndLine(FString& OutFilename
 	{
 #if AS_JIT_DEBUG_CALLSTACKS
 		auto* DebugStack = (FScopeJITDebugCallstack*)tld->activeExecution->debugCallStack;
-		if (DebugStack == nullptr)
+		if (DebugStack != nullptr)
 		{
 			OutFilename = ANSI_TO_TCHAR(DebugStack->Filename);
 			OutLineNumber = DebugStack->LineNumber;

@@ -13,8 +13,8 @@ namespace AngelscriptCacheDependencyPropagation_Private
 
 	struct FDeclarationAuthority
 	{
-		EAngelscriptCacheReferenceKind Kind =
-			EAngelscriptCacheReferenceKind::Invalid;
+		EAngelscriptArtifactReferenceKind Kind =
+			EAngelscriptArtifactReferenceKind::Invalid;
 		FAngelscriptHash256 StableKey;
 		const FAngelscriptCachedDeclaration* Declaration = nullptr;
 	};
@@ -51,8 +51,8 @@ namespace AngelscriptCacheDependencyPropagation_Private
 
 	struct FHardValueAuthority
 	{
-		EAngelscriptCacheReferenceKind Kind =
-			EAngelscriptCacheReferenceKind::Invalid;
+		EAngelscriptArtifactReferenceKind Kind =
+			EAngelscriptArtifactReferenceKind::Invalid;
 		FAngelscriptHash256 StableKey;
 		const FAngelscriptCachedHardValue* HardValue = nullptr;
 	};
@@ -91,8 +91,8 @@ namespace AngelscriptCacheDependencyPropagation_Private
 
 	struct FExternalMemo
 	{
-		EAngelscriptCacheReferenceKind Kind =
-			EAngelscriptCacheReferenceKind::Invalid;
+		EAngelscriptArtifactReferenceKind Kind =
+			EAngelscriptArtifactReferenceKind::Invalid;
 		FAngelscriptHash256 StableKey;
 		bool bFound = false;
 		FAngelscriptCacheCurrentSymbol Symbol;
@@ -120,9 +120,9 @@ namespace AngelscriptCacheDependencyPropagation_Private
 	}
 
 	static int32 CompareReferenceIdentity(
-		const EAngelscriptCacheReferenceKind LeftKind,
+		const EAngelscriptArtifactReferenceKind LeftKind,
 		const FAngelscriptHash256& LeftKey,
-		const EAngelscriptCacheReferenceKind RightKind,
+		const EAngelscriptArtifactReferenceKind RightKind,
 		const FAngelscriptHash256& RightKey)
 	{
 		if (LeftKind != RightKind)
@@ -183,19 +183,19 @@ namespace AngelscriptCacheDependencyPropagation_Private
 			&& Modules[Index].ModuleKey == ModuleKey ? Index : INDEX_NONE;
 	}
 
-	static TOptional<EAngelscriptCacheReferenceKind> ReferenceKindForDeclaration(
+	static TOptional<EAngelscriptArtifactReferenceKind> ReferenceKindForDeclaration(
 		const EAngelscriptCacheDeclarationKind Kind)
 	{
 		switch (Kind)
 		{
 		case EAngelscriptCacheDeclarationKind::Type:
-			return EAngelscriptCacheReferenceKind::ScriptType;
+			return EAngelscriptArtifactReferenceKind::ScriptType;
 		case EAngelscriptCacheDeclarationKind::Function:
-			return EAngelscriptCacheReferenceKind::ScriptFunction;
+			return EAngelscriptArtifactReferenceKind::ScriptFunction;
 		case EAngelscriptCacheDeclarationKind::Global:
-			return EAngelscriptCacheReferenceKind::ScriptGlobal;
+			return EAngelscriptArtifactReferenceKind::ScriptGlobal;
 		case EAngelscriptCacheDeclarationKind::Property:
-			return EAngelscriptCacheReferenceKind::ScriptProperty;
+			return EAngelscriptArtifactReferenceKind::ScriptProperty;
 		default:
 			return {};
 		}
@@ -332,7 +332,7 @@ namespace AngelscriptCacheDependencyPropagation_Private
 			for (const FAngelscriptCachedDeclaration& Declaration :
 				Module.Interface->Declarations)
 			{
-				const TOptional<EAngelscriptCacheReferenceKind> Kind =
+				const TOptional<EAngelscriptArtifactReferenceKind> Kind =
 					ReferenceKindForDeclaration(Declaration.DeclarationKind);
 				if (!Kind.IsSet())
 				{
@@ -432,7 +432,7 @@ namespace AngelscriptCacheDependencyPropagation_Private
 
 	static const FDeclarationAuthority* FindDeclaration(
 		const FCatalog& Catalog,
-		const EAngelscriptCacheReferenceKind Kind,
+		const EAngelscriptArtifactReferenceKind Kind,
 		const FAngelscriptHash256& StableKey)
 	{
 		int32 First = 0;
@@ -462,7 +462,7 @@ namespace AngelscriptCacheDependencyPropagation_Private
 
 	static const FHardValueAuthority* FindHardValue(
 		const FCatalog& Catalog,
-		const EAngelscriptCacheReferenceKind Kind,
+		const EAngelscriptArtifactReferenceKind Kind,
 		const FAngelscriptHash256& StableKey)
 	{
 		int32 First = 0;
@@ -512,15 +512,15 @@ namespace AngelscriptCacheDependencyPropagation_Private
 			const FAngelscriptCacheSemanticDependency& Dependency) const
 		{
 			FResolvedAuthority Result;
-			const EAngelscriptCacheReferenceKind Kind = Dependency.Target.Kind;
+			const EAngelscriptArtifactReferenceKind Kind = Dependency.Target.Kind;
 			const FAngelscriptHash256& Key = Dependency.Target.StableKey;
-			if (Kind == EAngelscriptCacheReferenceKind::CanonicalName
-				|| Kind == EAngelscriptCacheReferenceKind::StringLiteral)
+			if (Kind == EAngelscriptArtifactReferenceKind::CanonicalName
+				|| Kind == EAngelscriptArtifactReferenceKind::StringLiteral)
 			{
 				Result.bFound = true;
 				return Result;
 			}
-			if (Kind == EAngelscriptCacheReferenceKind::ScriptModule)
+			if (Kind == EAngelscriptArtifactReferenceKind::ScriptModule)
 			{
 				const FModuleAuthority* Module = FindHash(
 					Catalog.Modules, Key,
@@ -545,7 +545,7 @@ namespace AngelscriptCacheDependencyPropagation_Private
 			Result.bFound = true;
 			Result.Abi = Declaration->Declaration->SignatureHash;
 
-			if (Kind == EAngelscriptCacheReferenceKind::ScriptType)
+			if (Kind == EAngelscriptArtifactReferenceKind::ScriptType)
 			{
 				if (Dependency.Kind
 					== EAngelscriptCacheSemanticDependencyKind::ValueLayout)
@@ -575,7 +575,7 @@ namespace AngelscriptCacheDependencyPropagation_Private
 				return Result;
 			}
 
-			if (Kind == EAngelscriptCacheReferenceKind::ScriptProperty)
+			if (Kind == EAngelscriptArtifactReferenceKind::ScriptProperty)
 			{
 				if (Dependency.Kind
 					== EAngelscriptCacheSemanticDependencyKind::PropertyLayout)
@@ -596,7 +596,7 @@ namespace AngelscriptCacheDependencyPropagation_Private
 				return Result;
 			}
 
-			if (Kind == EAngelscriptCacheReferenceKind::ScriptGlobal)
+			if (Kind == EAngelscriptArtifactReferenceKind::ScriptGlobal)
 			{
 				if (Dependency.Kind
 					== EAngelscriptCacheSemanticDependencyKind::GlobalStorage)
@@ -625,7 +625,7 @@ namespace AngelscriptCacheDependencyPropagation_Private
 				return Result;
 			}
 
-			if (Kind == EAngelscriptCacheReferenceKind::ScriptFunction)
+			if (Kind == EAngelscriptArtifactReferenceKind::ScriptFunction)
 			{
 				if (Dependency.Kind
 					== EAngelscriptCacheSemanticDependencyKind::Initializer)
@@ -660,7 +660,7 @@ namespace AngelscriptCacheDependencyPropagation_Private
 		}
 
 		FResolvedAuthority ResolveExternal(
-			const EAngelscriptCacheReferenceKind Kind,
+			const EAngelscriptArtifactReferenceKind Kind,
 			const FAngelscriptHash256& StableKey)
 		{
 			int32 First = 0;
@@ -721,7 +721,7 @@ namespace AngelscriptCacheDependencyPropagation_Private
 				return {};
 			}
 			if (Dependency.Target.Kind
-				== EAngelscriptCacheReferenceKind::ScriptImport)
+				== EAngelscriptArtifactReferenceKind::ScriptImport)
 			{
 				const FImportAuthority* Import = FindHash(
 					Catalog.Imports, Dependency.Target.StableKey,
@@ -804,9 +804,9 @@ namespace AngelscriptCacheDependencyPropagation_Private
 		TArray<FAngelscriptCacheDependencyMiss>& OutReasons)
 	{
 		if (Dependency.Target.Kind
-				== EAngelscriptCacheReferenceKind::CanonicalName
+				== EAngelscriptArtifactReferenceKind::CanonicalName
 			|| Dependency.Target.Kind
-				== EAngelscriptCacheReferenceKind::StringLiteral)
+				== EAngelscriptArtifactReferenceKind::StringLiteral)
 		{
 			return;
 		}
@@ -882,7 +882,7 @@ namespace AngelscriptCacheDependencyPropagation_Private
 				Module.Interface->Imports[ImportOrdinal];
 			FAngelscriptCacheSemanticDependency Dependency;
 			Dependency.Kind = EAngelscriptCacheSemanticDependencyKind::Import;
-			Dependency.Target.Kind = EAngelscriptCacheReferenceKind::ScriptImport;
+			Dependency.Target.Kind = EAngelscriptArtifactReferenceKind::ScriptImport;
 			Dependency.Target.StableKey = Import.ImportKey.Hash;
 			Dependency.Target.ExpectedAbi =
 				Import.TargetDeclaration.ExpectedAbi;

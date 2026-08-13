@@ -555,8 +555,8 @@ namespace AngelscriptCacheClassGraphDeclarationOrderTests_Private
 		FString CanonicalDeclaration;
 		FAngelscriptHash256 Execution;
 		FAngelscriptArtifactProfileKey Profile;
-		EAngelscriptCacheFunctionExecutionRoute Route =
-			EAngelscriptCacheFunctionExecutionRoute::Vm;
+		EAngelscriptFunctionExecutionRoute Route =
+			EAngelscriptFunctionExecutionRoute::Vm;
 		int32 NumericFunctionId = -1;
 		bool bVerified = false;
 	};
@@ -696,14 +696,14 @@ namespace AngelscriptCacheClassGraphDeclarationOrderTests_Private
 			return false;
 		}
 
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> Routes =
 			Consumer.GetEngine().GetFunctionRouteSnapshot();
 		if (!Routes.IsValid())
 		{
 			return false;
 		}
-		for (const FAngelscriptCacheLiveFunctionRoute& Route
+		for (const FAngelscriptFunctionRoute& Route
 			: Routes->FunctionRoutes)
 		{
 			if (Route.ModuleKey != Artifacts.ModuleKey)

@@ -196,7 +196,7 @@ namespace
 		AddBoolRow(Snapshot, TEXT("AsFunctionInternal"), Identity, TEXT("bIsPrivate"), Function->IsPrivate(), Source);
 		AddBoolRow(Snapshot, TEXT("AsFunctionInternal"), Identity, TEXT("bIsProtected"), Function->IsProtected(), Source);
 		AddBoolRow(Snapshot, TEXT("AsFunctionInternal"), Identity, TEXT("bIsMixin"), Function->IsMixin(), Source);
-		AddBoolRow(Snapshot, TEXT("AsFunctionInternal"), Identity, TEXT("bHasJITFunction"), Function->jitFunction != nullptr, Source);
+		AddBoolRow(Snapshot, TEXT("AsFunctionInternal"), Identity, TEXT("bHasJITFunction"), Function->GetJITBinding().VMEntry != nullptr, Source);
 		AddCountRow(Snapshot, TEXT("AsFunctionInternal"), Identity, TEXT("DefaultArgCount"), AsArrayCount(Function->defaultArgs), Source);
 		AddCountRow(Snapshot, TEXT("AsFunctionInternal"), Identity, TEXT("ParameterTypeCount"), AsArrayCount(Function->parameterTypes), Source);
 		AddCountRow(Snapshot, TEXT("AsFunctionInternal"), Identity, TEXT("TemplateSubTypeCount"), AsArrayCount(Function->templateSubTypes), Source);
@@ -381,7 +381,6 @@ FAngelscriptStateSnapshot FAngelscriptStateSnapshotBuilder::Capture(FAngelscript
 	AddBoolRow(Snapshot, TEXT("EngineMember"), TEXT("Mode"), TEXT("bUseEditorScripts"), Engine.bUseEditorScripts, EngineSource);
 	AddBoolRow(Snapshot, TEXT("EngineMember"), TEXT("Mode"), TEXT("bUseAutomaticImportMethod"), Engine.bUseAutomaticImportMethod, EngineSource);
 	AddBoolRow(Snapshot, TEXT("EngineMember"), TEXT("StaticJITCompatibility"), TEXT("bCollectStaticJITCompatibilityBinds"), Engine.bCollectStaticJITCompatibilityBinds, EngineSource);
-	AddBoolRow(Snapshot, TEXT("EngineMember"), TEXT("StaticJITCompatibility"), TEXT("bUseStaticJITCompatibilityData"), Engine.bUseStaticJITCompatibilityData, EngineSource);
 	AddBoolRow(Snapshot, TEXT("EngineMember"), TEXT("Mode"), TEXT("bScriptDevelopmentMode"), Engine.bScriptDevelopmentMode, EngineSource);
 	AddBoolRow(Snapshot, TEXT("EngineMember"), TEXT("Mode"), TEXT("bHotReloadThreadStarted"), Engine.bHotReloadThreadStarted, EngineSource);
 	AddBoolRow(Snapshot, TEXT("EngineMember"), TEXT("Diagnostics"), TEXT("bDiagnosticsDirty"), Engine.bDiagnosticsDirty, EngineSource);
@@ -395,7 +394,6 @@ FAngelscriptStateSnapshot FAngelscriptStateSnapshotBuilder::Capture(FAngelscript
 	AddPointerRow(Snapshot, TEXT("EngineMember"), TEXT("Services"), TEXT("ToStringList"), Engine.GetToStringList(), EngineSource);
 	AddPointerRow(Snapshot, TEXT("EngineMember"), TEXT("Services"), TEXT("BindDatabase"), Engine.GetBindDatabase(), EngineSource);
 	AddPointerRow(Snapshot, TEXT("EngineMember"), TEXT("Services"), TEXT("BlueprintEventSignatureRegistry"), Engine.GetBlueprintEventSignatureRegistry(), EngineSource);
-	AddPointerRow(Snapshot, TEXT("EngineMember"), TEXT("Services"), TEXT("PrecompiledData"), Engine.PrecompiledData, EngineSource);
 	AddPointerRow(Snapshot, TEXT("EngineMember"), TEXT("Services"), TEXT("StaticJIT"), Engine.StaticJIT, EngineSource);
 #if WITH_AS_COVERAGE
 	AddPointerRow(Snapshot, TEXT("EngineMember"), TEXT("Services"), TEXT("CodeCoverage"), FAngelscriptCodeCoverageExtension::GetForEngine(Engine), EngineSource);

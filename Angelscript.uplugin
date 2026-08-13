@@ -27,6 +27,11 @@
 			"LoadingPhase": "PostDefault"
 		},
 		{
+			"Name": "AngelscriptTestJIT",
+			"Type": "Editor",
+			"LoadingPhase": "PostDefault"
+		},
+		{
 			"Name": "AngelscriptTest",
 			"Type": "Editor",
 			"LoadingPhase": "PostDefault"

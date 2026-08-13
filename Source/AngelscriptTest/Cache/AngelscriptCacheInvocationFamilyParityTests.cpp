@@ -367,7 +367,7 @@ int RunExplicitParityBehavior()
 
 		bool TryBuildLocalTypeReference(
 			const asCTypeInfo* Type,
-			FAngelscriptCacheStableReference& OutReference) const
+			FAngelscriptArtifactReference& OutReference) const
 		{
 			OutReference = {};
 			FAngelscriptStableTypeKey TypeKey;
@@ -377,7 +377,7 @@ int RunExplicitParityBehavior()
 			{
 				return false;
 			}
-			OutReference.Kind = EAngelscriptCacheReferenceKind::ScriptType;
+			OutReference.Kind = EAngelscriptArtifactReferenceKind::ScriptType;
 			OutReference.StableKey = TypeKey.Hash;
 			OutReference.ExpectedAbi = BuildFingerprint(
 				TEXT("cache-v2-v55-test-type-abi"), TypeKey.Hash);
@@ -461,7 +461,7 @@ int RunExplicitParityBehavior()
 				return false;
 			}
 			Out.Kind = EAngelscriptCacheSemanticDependencyKind::PropertyLayout;
-			Out.Target.Kind = EAngelscriptCacheReferenceKind::ScriptProperty;
+			Out.Target.Kind = EAngelscriptArtifactReferenceKind::ScriptProperty;
 			Out.Target.StableKey = PropertyKey.Hash;
 			Out.Target.ExpectedAbi = BuildFingerprint(
 				TEXT("cache-v2-v55-test-property-abi"), PropertyKey.Hash);
@@ -498,7 +498,7 @@ int RunExplicitParityBehavior()
 			{
 				return false;
 			}
-			Out.Target.Kind = EAngelscriptCacheReferenceKind::ScriptGlobal;
+			Out.Target.Kind = EAngelscriptArtifactReferenceKind::ScriptGlobal;
 			Out.Target.StableKey = GlobalKey.Hash;
 			Out.Target.ExpectedAbi = BuildFingerprint(
 				TEXT("cache-v2-v55-test-global-abi"), GlobalKey.Hash);
@@ -565,7 +565,7 @@ int RunExplicitParityBehavior()
 			{
 				return false;
 			}
-			Out.Target.Kind = EAngelscriptCacheReferenceKind::ScriptFunction;
+			Out.Target.Kind = EAngelscriptArtifactReferenceKind::ScriptFunction;
 			Out.Target.StableKey = FunctionKey.Hash;
 			Out.Target.ExpectedAbi = BuildFingerprint(
 				TEXT("cache-v2-v55-test-function-abi"), FunctionKey.Hash);

@@ -23,8 +23,8 @@ private:
 		return FAngelscriptHash256{FBlake3Hash(Bytes)};
 	}
 
-	static FAngelscriptCacheStableReference MakeSentinelReference(
-		const EAngelscriptCacheReferenceKind Kind,
+	static FAngelscriptArtifactReference MakeSentinelReference(
+		const EAngelscriptArtifactReferenceKind Kind,
 		const uint8 KeyFill,
 		const uint8 AbiFill)
 	{
@@ -40,7 +40,7 @@ private:
 		Type.Kind = EAngelscriptCachedDataTypeKind::EnvironmentType;
 		Type.Primitive = EAngelscriptCachedPrimitiveType::UInt16;
 		Type.TypeReference = MakeSentinelReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, KeyFill, KeyFill + 1);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, KeyFill, KeyFill + 1);
 		Type.QualifierFlags = QualifierFlags;
 		Type.OrderedSubTypes.SetNum(SubTypeCount);
 		return Type;
@@ -642,7 +642,7 @@ private:
 				|| std::is_same_v<Type, FAngelscriptHash256>
 				|| std::is_same_v<Type, FAngelscriptStableGlobalKey>
 				|| std::is_same_v<Type, FAngelscriptCachedDataType>
-				|| std::is_same_v<Type, FAngelscriptCacheStableReference>
+				|| std::is_same_v<Type, FAngelscriptArtifactReference>
 				|| std::is_same_v<Type, FAngelscriptStableFunctionKey>
 				|| std::is_same_v<Type, FAngelscriptCacheSemanticDependency>
 				|| std::is_same_v<Type, FAngelscriptStableModuleKey>
@@ -1247,7 +1247,7 @@ public:
 				decltype(Owner), decltype(Type), decltype(CanonicalValue),
 				decltype(HardValueHash)>,
 				std::tuple<EAngelscriptCachedHardValueKind,
-					FAngelscriptCacheStableReference, FAngelscriptCachedDataType,
+					FAngelscriptArtifactReference, FAngelscriptCachedDataType,
 					TOptional<FAngelscriptCachedCanonicalValue>, FAngelscriptHash256>>);
 			static_assert(AreRecursivelyOwnedMembers<decltype(HardValueKind),
 				decltype(Owner), decltype(Type), decltype(CanonicalValue),
@@ -1276,7 +1276,7 @@ public:
 			static_assert(std::is_same_v<TMemberTypeTuple<decltype(ActionOrdinal),
 				decltype(ActionKind), decltype(Target), decltype(Dependencies)>,
 				std::tuple<uint32, EAngelscriptCachedInitializationActionKind,
-					FAngelscriptCacheStableReference,
+					FAngelscriptArtifactReference,
 					TArray<FAngelscriptCacheSemanticDependency>>>);
 			static_assert(AreRecursivelyOwnedMembers<decltype(ActionOrdinal),
 				decltype(ActionKind), decltype(Target), decltype(Dependencies)>);
@@ -1286,7 +1286,7 @@ public:
 			auto& [PostInitOrdinal, Function] = Value;
 			static_assert(std::is_same_v<TMemberTypeTuple<
 				decltype(PostInitOrdinal), decltype(Function)>,
-				std::tuple<uint32, FAngelscriptCacheStableReference>>);
+				std::tuple<uint32, FAngelscriptArtifactReference>>);
 			static_assert(AreRecursivelyOwnedMembers<
 				decltype(PostInitOrdinal), decltype(Function)>);
 		}
@@ -1453,7 +1453,7 @@ public:
 
 		const FAngelscriptCachedHardValue HardValue{
 			EAngelscriptCachedHardValueKind::EnumAuthority,
-			MakeSentinelReference(EAngelscriptCacheReferenceKind::ScriptGlobal, 0x31, 0x32),
+			MakeSentinelReference(EAngelscriptArtifactReferenceKind::ScriptGlobal, 0x31, 0x32),
 			MakeSentinelDataType(0x33, 0x341u, 2),
 			TOptional<FAngelscriptCachedCanonicalValue>(CanonicalValue),
 			MakeSentinelHash(0x35),
@@ -1489,13 +1489,13 @@ public:
 
 		const FAngelscriptCacheSemanticDependency ActionDependency{
 			EAngelscriptCacheSemanticDependencyKind::Initializer,
-			MakeSentinelReference(EAngelscriptCacheReferenceKind::ScriptFunction, 0x51, 0x52),
+			MakeSentinelReference(EAngelscriptArtifactReferenceKind::ScriptFunction, 0x51, 0x52),
 			TOptional<FAngelscriptHash256>(MakeSentinelHash(0x53)),
 		};
 		const FAngelscriptCachedInitializationAction Action{
 			0x541u,
 			EAngelscriptCachedInitializationActionKind::ExecuteInitializer,
-			MakeSentinelReference(EAngelscriptCacheReferenceKind::ScriptGlobal, 0x55, 0x56),
+			MakeSentinelReference(EAngelscriptArtifactReferenceKind::ScriptGlobal, 0x55, 0x56),
 			TArray<FAngelscriptCacheSemanticDependency>{ActionDependency},
 		};
 		ASSERT_THAT(AreEqual(uint32(0x541), Action.ActionOrdinal));
@@ -1509,7 +1509,7 @@ public:
 
 		const FAngelscriptCachedPostInitFunction PostInit{
 			0x611u,
-			MakeSentinelReference(EAngelscriptCacheReferenceKind::ScriptFunction, 0x62, 0x63),
+			MakeSentinelReference(EAngelscriptArtifactReferenceKind::ScriptFunction, 0x62, 0x63),
 		};
 		ASSERT_THAT(AreEqual(uint32(0x611), PostInit.PostInitOrdinal));
 		ASSERT_THAT(IsTrue(PostInit.Function.StableKey == MakeSentinelHash(0x62)));
@@ -2191,7 +2191,7 @@ public:
 		static_assert(std::is_same_v<decltype(std::declval<
 			FAngelscriptCachedHardValue&>().HardValueKind), EAngelscriptCachedHardValueKind>);
 		static_assert(std::is_same_v<decltype(std::declval<
-			FAngelscriptCachedHardValue&>().Owner), FAngelscriptCacheStableReference>);
+			FAngelscriptCachedHardValue&>().Owner), FAngelscriptArtifactReference>);
 		static_assert(std::is_same_v<decltype(std::declval<
 			FAngelscriptCachedHardValue&>().Type), FAngelscriptCachedDataType>);
 		static_assert(std::is_same_v<decltype(std::declval<
@@ -2222,7 +2222,7 @@ public:
 			EAngelscriptCachedInitializationActionKind>);
 		static_assert(std::is_same_v<decltype(std::declval<
 			FAngelscriptCachedInitializationAction&>().Target),
-			FAngelscriptCacheStableReference>);
+			FAngelscriptArtifactReference>);
 		static_assert(std::is_same_v<decltype(std::declval<
 			FAngelscriptCachedInitializationAction&>().Dependencies),
 			TArray<FAngelscriptCacheSemanticDependency>>);
@@ -2230,7 +2230,7 @@ public:
 			FAngelscriptCachedPostInitFunction&>().PostInitOrdinal), uint32>);
 		static_assert(std::is_same_v<decltype(std::declval<
 			FAngelscriptCachedPostInitFunction&>().Function),
-			FAngelscriptCacheStableReference>);
+			FAngelscriptArtifactReference>);
 		static_assert(std::is_same_v<decltype(std::declval<
 			FAngelscriptCachedModuleState&>().PayloadSchemaVersion), uint32>);
 		static_assert(std::is_same_v<decltype(std::declval<
@@ -2389,7 +2389,7 @@ public:
 
 		const FAngelscriptCachedHardValue HardValue;
 		ASSERT_THAT(IsTrue(HardValue.HardValueKind == EAngelscriptCachedHardValueKind::Invalid));
-		ASSERT_THAT(IsTrue(HardValue.Owner.Kind == EAngelscriptCacheReferenceKind::Invalid));
+		ASSERT_THAT(IsTrue(HardValue.Owner.Kind == EAngelscriptArtifactReferenceKind::Invalid));
 		ASSERT_THAT(IsTrue(HardValue.Owner.StableKey.IsZero()));
 		ASSERT_THAT(IsTrue(HardValue.Owner.ExpectedAbi.IsZero()));
 		ASSERT_THAT(IsTrue(HardValue.Type.Kind == EAngelscriptCachedDataTypeKind::Invalid));
@@ -2409,12 +2409,12 @@ public:
 		ASSERT_THAT(AreEqual(uint32(0), Action.ActionOrdinal));
 		ASSERT_THAT(IsTrue(Action.ActionKind
 			== EAngelscriptCachedInitializationActionKind::Invalid));
-		ASSERT_THAT(IsTrue(Action.Target.Kind == EAngelscriptCacheReferenceKind::Invalid));
+		ASSERT_THAT(IsTrue(Action.Target.Kind == EAngelscriptArtifactReferenceKind::Invalid));
 		ASSERT_THAT(AreEqual(int32(0), Action.Dependencies.Num()));
 
 		const FAngelscriptCachedPostInitFunction PostInit;
 		ASSERT_THAT(AreEqual(uint32(0), PostInit.PostInitOrdinal));
-		ASSERT_THAT(IsTrue(PostInit.Function.Kind == EAngelscriptCacheReferenceKind::Invalid));
+		ASSERT_THAT(IsTrue(PostInit.Function.Kind == EAngelscriptArtifactReferenceKind::Invalid));
 		ASSERT_THAT(IsTrue(PostInit.Function.StableKey.IsZero()));
 		ASSERT_THAT(IsTrue(PostInit.Function.ExpectedAbi.IsZero()));
 

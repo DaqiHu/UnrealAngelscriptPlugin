@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Artifacts/AngelscriptFunctionRoute.h"
 #include "Cache/AngelscriptCacheManifestPack.h"
 #include "Cache/AngelscriptCacheSourceDiscovery.h"
 
@@ -47,36 +48,6 @@ public:
 		EAngelscriptCacheRestoreFaultPoint Point,
 		uint32 ModuleOrdinal,
 		const FAngelscriptStableModuleKey& ModuleKey) = 0;
-};
-
-enum class EAngelscriptCacheFunctionExecutionRoute : uint8
-{
-	Vm = 1,
-	Native = 2,
-};
-
-struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheLiveFunctionRoute
-{
-	FAngelscriptStableModuleKey ModuleKey;
-	FAngelscriptFunctionArtifactIdentity Identity;
-	FString CanonicalDeclaration;
-	asIScriptFunction* Function = nullptr;
-	int32 NumericFunctionId = -1;
-	EAngelscriptCacheFunctionExecutionRoute SelectedExecutionRoute =
-		EAngelscriptCacheFunctionExecutionRoute::Vm;
-	bool bHasVerifiedArtifactIdentity = false;
-};
-
-// One Engine-session publication. Entries are immutable after publication and
-// sorted by the full StableFunctionKey. Function pointers and numeric ids are
-// intentionally transient; only StableFunctionKey/artifact identity may cross
-// process or persistence boundaries.
-struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheFunctionRouteSnapshot
-{
-	uint64 PublicationOrdinal = 0;
-	uint32 VmRouteCount = 0;
-	uint32 NativeRouteCount = 0;
-	TArray<FAngelscriptCacheLiveFunctionRoute> FunctionRoutes;
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheRestoreResult

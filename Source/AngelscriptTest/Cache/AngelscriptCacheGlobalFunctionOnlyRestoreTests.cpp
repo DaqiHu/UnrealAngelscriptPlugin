@@ -70,7 +70,7 @@ private:
 	}
 
 public:
-	TEST_METHOD(MultipleGlobalFunctionsRoundTripWithoutSyntheticType)
+	TEST_METHOD(GlobalFunctionsWithParametersRoundTripWithoutSyntheticType)
 	{
 		const FAngelscriptCacheCleanCaptureOptions Options =
 			MakeCaptureOptions();
@@ -90,6 +90,16 @@ public:
 				int SecondFixtureValue()
 				{
 					return 42;
+				}
+
+				int AddFixtureValue(int Value)
+				{
+					return Value + 1;
+				}
+
+				int ParameterFixtureEntry()
+				{
+					return AddFixtureValue(41);
 				}
 			)AS");
 			asIScriptModule* ScriptModule = Producer.BuildModule(
@@ -163,7 +173,7 @@ public:
 		ASSERT_THAT(IsTrue(Restore.IsSuccess(),
 			TEXT("A fresh Engine should restore the complete global-only module")));
 		ASSERT_THAT(AreEqual(uint32(0), Restore.RestoredTypeCount));
-		ASSERT_THAT(AreEqual(uint32(2), Restore.RestoredFunctionCount));
+		ASSERT_THAT(AreEqual(uint32(4), Restore.RestoredFunctionCount));
 
 		TSharedPtr<FAngelscriptModuleDesc> RestoredModule =
 			Consumer.GetEngine().GetModuleByModuleName(
@@ -179,23 +189,31 @@ public:
 		asIScriptFunction* Second =
 			RestoredModule->ScriptModule->GetFunctionByDecl(
 				"int SecondFixtureValue()");
+		asIScriptFunction* ParameterEntry =
+			RestoredModule->ScriptModule->GetFunctionByDecl(
+				"int ParameterFixtureEntry()");
 		ASSERT_THAT(IsNotNull(First));
 		ASSERT_THAT(IsNotNull(Second));
+		ASSERT_THAT(IsNotNull(ParameterEntry));
 		int32 FirstValue = 0;
 		int32 SecondValue = 0;
+		int32 ParameterValue = 0;
 		ASSERT_THAT(IsTrue(Consumer.ExecuteInt(*First, FirstValue)));
 		ASSERT_THAT(IsTrue(Consumer.ExecuteInt(*Second, SecondValue)));
+		ASSERT_THAT(IsTrue(Consumer.ExecuteInt(
+			*ParameterEntry, ParameterValue)));
 		ASSERT_THAT(AreEqual(41, FirstValue));
 		ASSERT_THAT(AreEqual(42, SecondValue));
+		ASSERT_THAT(AreEqual(42, ParameterValue));
 
 		ASSERT_THAT(AreEqual(
-			2, Artifacts.ValidatedFunctionArtifactIdentities.Num()));
-		FAngelscriptCacheLiveFunctionRoute FirstRoute;
-		FAngelscriptCacheLiveFunctionRoute SecondRoute;
-		ASSERT_THAT(IsTrue(Consumer.GetEngine().ResolveCacheFunctionRoute(
+			4, Artifacts.ValidatedFunctionArtifactIdentities.Num()));
+		FAngelscriptFunctionRoute FirstRoute;
+		FAngelscriptFunctionRoute SecondRoute;
+		ASSERT_THAT(IsTrue(Consumer.GetEngine().ResolveFunctionRoute(
 			Artifacts.ValidatedFunctionArtifactIdentities[0].FunctionKey,
 			FirstRoute)));
-		ASSERT_THAT(IsTrue(Consumer.GetEngine().ResolveCacheFunctionRoute(
+		ASSERT_THAT(IsTrue(Consumer.GetEngine().ResolveFunctionRoute(
 			Artifacts.ValidatedFunctionArtifactIdentities[1].FunctionKey,
 			SecondRoute)));
 		ASSERT_THAT(IsFalse(

@@ -512,12 +512,11 @@ void FAngelscriptClassGenerator::DoFullReloadClass(FModuleData& ModuleData, FCla
 		NewFunction->ParmsSize = 0;
 		NewFunction->bIsNoOp = FunctionDesc->bIsNoOp;
 
-		if (ScriptFunction->traits.GetTrait(asTRAIT_FINAL))
-		{
-			NewFunction->JitFunction = ScriptFunction->jitFunction;
-			NewFunction->JitFunction_Raw = ScriptFunction->jitFunction_Raw;
-			NewFunction->JitFunction_ParmsEntry = ScriptFunction->jitFunction_ParmsEntry;
-		}
+		// Reloadable UFunctions retain only the current ScriptFunction association.
+		// Content-specific VM/Raw/Parms addresses belong to that function's
+		// replaceable Binding and must never be copied into this long-lived UObject.
+		// A future immutable cooked direct path may cache an entry only after the
+		// complete provider artifact set has been validated.
 		NewFunction->FunctionFlags |= FUNC_Native;
 		NewFunction->SetNativeFunc(&UASFunctionNativeThunk);
 

@@ -1,5 +1,9 @@
 #include "StaticJIT/StaticJITHeader.h"
 #include "AngelscriptStaticJIT.h"
+#include "Artifacts/AngelscriptFunctionRoute.h"
+#include "ClassGenerator/ASClass.h"
+#include "StaticJIT/AngelscriptJITExecutionContext.h"
+#include "UObject/Class.h"
 
 #include "StartAngelscriptHeaders.h"
 //#include "as_context.h"
@@ -16,94 +20,191 @@
 #include "source/as_texts.h"
 #include "EndAngelscriptHeaders.h"
 
-static const FStaticJITCompiledInfo*& GetActiveCompiledInfo()
+FStaticJITCurrentFunctionCall::FStaticJITCurrentFunctionCall(
+	FScriptExecution& Execution,
+	const FAngelscriptStableFunctionKey& FunctionKey,
+	asCScriptFunction* ReferencedFunction,
+	void* CallObject,
+	const bool bResolveVirtualFunction)
 {
-	static const FStaticJITCompiledInfo* ActiveInfo = nullptr;
-	return ActiveInfo;
+	asIScriptEngine* const ScriptEngine = Execution.jitEngine;
+	FAngelscriptEngine* const RuntimeEngine =
+		FAngelscriptEngine::TryGetByScriptEngine(ScriptEngine);
+
+	asCScriptFunction* CurrentFunction = nullptr;
+	if (RuntimeEngine != nullptr && !FunctionKey.Hash.IsZero())
+	{
+		FAngelscriptFunctionRoute Route;
+		if (RuntimeEngine->ResolveFunctionRoute(FunctionKey, Route))
+		{
+			CurrentFunction = static_cast<asCScriptFunction*>(Route.Function);
+		}
+	}
+
+	// Some bootstrap/test-only modules can execute before a stable route has
+	// been published. A reference is usable only while it is still the exact
+	// live function at its current id in this same Engine.
+	if (CurrentFunction == nullptr
+		&& ReferencedFunction != nullptr
+		&& ReferencedFunction->GetEngine() == ScriptEngine
+		&& ScriptEngine != nullptr
+		&& ScriptEngine->GetFunctionById(ReferencedFunction->GetId())
+			== ReferencedFunction)
+	{
+		CurrentFunction = ReferencedFunction;
+	}
+
+	if (CurrentFunction == nullptr
+		|| CurrentFunction->GetEngine() != ScriptEngine)
+	{
+		return;
+	}
+
+	if (bResolveVirtualFunction
+		&& CallObject != nullptr
+		&& CurrentFunction->vfTableIdx >= 0)
+	{
+		UObject* const Object = static_cast<UObject*>(CallObject);
+		UASClass* const ScriptClass = UASClass::GetFirstASClass(Object);
+		asCObjectType* const ObjectType = ScriptClass != nullptr
+			? static_cast<asCObjectType*>(ScriptClass->ScriptTypePtr)
+			: nullptr;
+		if (ObjectType != nullptr
+			&& CurrentFunction->vfTableIdx
+				< static_cast<int32>(ObjectType->virtualFunctionTable.GetLength()))
+		{
+			asCScriptFunction* const Override =
+				ObjectType->virtualFunctionTable[CurrentFunction->vfTableIdx];
+			if (Override != nullptr && Override->GetEngine() == ScriptEngine)
+			{
+				CurrentFunction = Override;
+			}
+		}
+	}
+
+	CurrentFunction->AddRef();
+	Function = CurrentFunction;
 }
 
-FStaticJITCompiledInfo::FStaticJITCompiledInfo(FGuid Guid)
-	: PrecompiledDataGuid(Guid)
+FStaticJITCurrentFunctionCall::~FStaticJITCurrentFunctionCall()
 {
-	const FStaticJITCompiledInfo*& ActiveInfo = GetActiveCompiledInfo();
-	checkf(ActiveInfo == nullptr, TEXT("Only one angelscript static JIT info can be compiled in!"))
-	ActiveInfo = this;
+	if (Function != nullptr)
+	{
+		Function->Release();
+	}
 }
 
-const FStaticJITCompiledInfo* FStaticJITCompiledInfo::Get()
+namespace
 {
-	return GetActiveCompiledInfo();
+	static const FAngelscriptJITResolvedReferenceSlot* GetGeneratedReferenceSlot(
+		const FScriptExecution& Execution,
+		const uint32 SlotIndex)
+	{
+		const FAngelscriptJITResolvedReferenceTable* const Table =
+			FAngelscriptJITExecutionContext::GetReferenceTable(Execution);
+		if (Table == nullptr || !Table->Slots.IsValidIndex(
+			static_cast<int32>(SlotIndex)))
+		{
+			return nullptr;
+		}
+		const FAngelscriptJITResolvedReferenceSlot& Slot =
+			Table->Slots[SlotIndex];
+		return Slot.SlotIndex == SlotIndex ? &Slot : nullptr;
+	}
 }
 
-FStaticJITFunction::FStaticJITFunction(uint32 FunctionId, asJITFunction InVMEntry, asJITFunction_ParmsEntry InParmsEntry, asJITFunction_Raw InRawFunction)
+asCScriptFunction* FAngelscriptJITGeneratedReferenceAccess::GetScriptFunction(
+	const FScriptExecution& Execution,
+	const uint32 SlotIndex)
 {
-	FJITDatabase::FJITFunctions Funcs;
-	Funcs.VMEntry = InVMEntry;
-	Funcs.ParmsEntry = InParmsEntry;
-	Funcs.RawFunction = InRawFunction;
-
-	auto& JITDatabase = FJITDatabase::Get();
-	JITDatabase.Functions.Add(FunctionId, Funcs);
+	const FAngelscriptJITResolvedReferenceSlot* const Slot =
+		GetGeneratedReferenceSlot(Execution, SlotIndex);
+	if (Slot == nullptr
+		|| (Slot->Kind != EAngelscriptArtifactReferenceKind::ScriptFunction
+			&& Slot->Kind
+				!= EAngelscriptArtifactReferenceKind::EnvironmentSymbol))
+	{
+		return nullptr;
+	}
+	return static_cast<asCScriptFunction*>(const_cast<void*>(Slot->Value));
 }
 
-FJitRef_Function::FJitRef_Function(uint64 FunctionRef)
+FAngelscriptJITResolvedSystemFunctionPointer
+FAngelscriptJITGeneratedReferenceAccess::GetSystemFunctionPointer(
+	const FScriptExecution& Execution,
+	const uint32 SlotIndex)
 {
-	Reference = FunctionRef;
-	Pointer = (void*)FunctionRef;
-
-	auto& JITDatabase = FJITDatabase::Get();
-	JITDatabase.FunctionLookups.Add(this);
+	const FAngelscriptJITResolvedReferenceSlot* const Slot =
+		GetGeneratedReferenceSlot(Execution, SlotIndex);
+	if (Slot == nullptr
+		|| Slot->Kind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol)
+	{
+		return {};
+	}
+	const asCScriptFunction* const Function =
+		static_cast<const asCScriptFunction*>(Slot->Value);
+	if (Function == nullptr || Function->sysFuncIntf == nullptr)
+	{
+		return {};
+	}
+	return {Function->sysFuncIntf->func, Function->sysFuncIntf->method};
 }
 
-FJitRef_SystemFunctionPointer::FJitRef_SystemFunctionPointer(uint64 FunctionRef)
+asCTypeInfo* FAngelscriptJITGeneratedReferenceAccess::GetTypeInfo(
+	const FScriptExecution& Execution,
+	const uint32 SlotIndex)
 {
-	Reference = FunctionRef;
-	Pointer = (void*)FunctionRef;
-
-	auto& JITDatabase = FJITDatabase::Get();
-	JITDatabase.SystemFunctionPointerLookups.Add(this);
+	const FAngelscriptJITResolvedReferenceSlot* const Slot =
+		GetGeneratedReferenceSlot(Execution, SlotIndex);
+	if (Slot == nullptr
+		|| (Slot->Kind != EAngelscriptArtifactReferenceKind::ScriptType
+			&& Slot->Kind
+				!= EAngelscriptArtifactReferenceKind::EnvironmentSymbol))
+	{
+		return nullptr;
+	}
+	return static_cast<asCTypeInfo*>(const_cast<void*>(Slot->Value));
 }
 
-FJitRef_Type::FJitRef_Type(uint64 TypeRef)
+asCObjectType* FAngelscriptJITGeneratedReferenceAccess::GetObjectType(
+	const FScriptExecution& Execution,
+	const uint32 SlotIndex)
 {
-	Reference = TypeRef;
-	Pointer = (void*)TypeRef;
-
-	auto& JITDatabase = FJITDatabase::Get();
-	JITDatabase.TypeInfoLookups.Add(this);
+	return CastToObjectType(GetTypeInfo(Execution, SlotIndex));
 }
 
-FJitRef_GlobalVar::FJitRef_GlobalVar(uint64 GlobalRef)
+void* FAngelscriptJITGeneratedReferenceAccess::GetGlobalStorage(
+	const FScriptExecution& Execution,
+	const uint32 SlotIndex)
 {
-	Reference = GlobalRef;
-	Pointer = (void*)GlobalRef;
-
-	auto& JITDatabase = FJITDatabase::Get();
-	JITDatabase.GlobalVarLookups.Add(this);
+	const FAngelscriptJITResolvedReferenceSlot* const Slot =
+		GetGeneratedReferenceSlot(Execution, SlotIndex);
+	if (Slot == nullptr
+		|| (Slot->Kind != EAngelscriptArtifactReferenceKind::ScriptGlobal
+			&& Slot->Kind
+				!= EAngelscriptArtifactReferenceKind::StringLiteral))
+	{
+		return nullptr;
+	}
+	return const_cast<void*>(Slot->Value);
 }
 
-FJitRef_PropertyOffset::FJitRef_PropertyOffset(uint64 PropertyRef)
+uint32 FAngelscriptJITGeneratedReferenceAccess::GetPropertyOffset(
+	const FScriptExecution& Execution,
+	const uint32 SlotIndex)
 {
-	Offset = 0xffff;
-
-	auto& JITDatabase = FJITDatabase::Get();
-	JITDatabase.PropertyOffsetLookups.Add(TPair<uint64,uint32*>(PropertyRef, &Offset));
+	const FAngelscriptJITResolvedReferenceSlot* const Slot =
+		GetGeneratedReferenceSlot(Execution, SlotIndex);
+	if (Slot == nullptr
+		|| Slot->Kind != EAngelscriptArtifactReferenceKind::ScriptProperty)
+	{
+		return 0;
+	}
+	const asCObjectProperty* const Property =
+		static_cast<const asCObjectProperty*>(Slot->Value);
+	return Property != nullptr && Property->byteOffset >= 0
+		? static_cast<uint32>(Property->byteOffset) : 0;
 }
-
-#if AS_JIT_VERIFY_PROPERTY_OFFSETS
-FJitVerifyPropertyOffset::FJitVerifyPropertyOffset(uint64 PropertyRef, SIZE_T ComputedOffset)
-{
-	auto& JITDatabase = FJITDatabase::Get();
-	JITDatabase.VerifyPropertyOffsets.Add(TPair<uint64,SIZE_T>(PropertyRef, ComputedOffset));
-}
-
-FJitVerifyTypeSize::FJitVerifyTypeSize(uint64 TypeRef, SIZE_T ComputedSize, SIZE_T ComputedAlignment)
-{
-	auto& JITDatabase = FJITDatabase::Get();
-	JITDatabase.VerifyTypeSizes.Add(TPair<uint64,SIZE_T>(TypeRef, ComputedSize));
-	JITDatabase.VerifyTypeAlignments.Add(TPair<uint64,SIZE_T>(TypeRef, ComputedAlignment));
-}
-#endif
 
 void FStaticJITFunction::SetException(FScriptExecution& Execution, EJITException Exception)
 {

@@ -54,13 +54,14 @@ class FBlueprintEventSignatureRegistry;
 struct FAngelscriptEngineLifetimeToken;
 struct FAngelscriptEngineContextStack;
 struct FAngelscriptEngineScope;
-struct FAngelscriptCacheRuntimeState;
+struct FAngelscriptFunctionRouteState;
 class FAngelscriptCacheService;
+class FAngelscriptJITProviderRouter;
 class IAngelscriptCacheRestoreFaultInjector;
 struct FAngelscriptCacheCompileCaptureContext;
 class FAngelscriptCacheCompileReuseContext;
-struct FAngelscriptCacheLiveFunctionRoute;
-struct FAngelscriptCacheFunctionRouteSnapshot;
+struct FAngelscriptFunctionRoute;
+struct FAngelscriptFunctionRouteSnapshot;
 struct FAngelscriptCachePackPolicy;
 struct FAngelscriptStableFunctionKey;
 struct FAngelscriptFunctionArtifactIdentity;
@@ -149,9 +150,26 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngineConfig
 	UPROPERTY()
 	bool bDevelopmentMode = false;
 
-	// Temporary sibling-StaticJIT compatibility switch used by isolated tests that
-	// collect native-form bindings. It is not a script-cache generator or Runtime
-	// startup selection flag and never reads/writes PrecompiledScript.Cache.
+	// Tool-owned isolated target override. This is deliberately four explicit
+	// facts so an Editor commandlet can compile Development and Shipping script
+	// surfaces without inheriting the host executable's UE_BUILD_* macros.
+	UPROPERTY()
+	bool bOverrideTargetPreprocessorFlags = false;
+
+	UPROPERTY()
+	bool bTargetEditor = false;
+
+	UPROPERTY()
+	bool bTargetEditorOnlyData = false;
+
+	UPROPERTY()
+	bool bTargetRelease = false;
+
+	UPROPERTY()
+	bool bTargetTest = false;
+
+	// Isolated-test switch used to collect native-form bindings without publishing
+	// them into the live Engine route snapshot.
 	UPROPERTY()
 	bool bCollectStaticJITCompatibilityBinds = false;
 
@@ -360,6 +378,13 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngine
 
 	static TUniquePtr<FAngelscriptEngine> Create(const FAngelscriptEngineConfig& InConfig, const FAngelscriptEngineDependencies& InDependencies);
 	static FAngelscriptEngine* TryGetCurrentEngine();
+
+	/**
+	 * Resolve the Runtime owner of one exact AngelScript engine. This lookup is
+	 * Engine-local and does not consult the ambient/current Engine context.
+	 */
+	static FAngelscriptEngine* TryGetByScriptEngine(
+		const asIScriptEngine* ScriptEngine);
 	static FAngelscriptEngine& Get();
 	static bool IsInitialized();
 	static FString GetScriptRootDirectory();
@@ -375,7 +400,6 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngine
 	// running script destructors to avoid dereferencing a freed engine.
 	static bool AreEnginesReleasedForExit();
 	static class asCThreadLocalData* GameThreadTLD;
-	static bool bStaticJITTranspiledCodeLoaded;
 
 	// Hook accessors. Previously these lived on a separate hooks
 	// container exposed via an accessor; inlined here because the
@@ -457,6 +481,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngine
 	bool bUseEditorScripts = false;
 	bool bUseAutomaticImportMethod = false;
 	bool bCollectStaticJITCompatibilityBinds = false;
+	bool bOverrideTargetPreprocessorFlags = false;
+	bool bTargetEditor = false;
+	bool bTargetEditorOnlyData = false;
+	bool bTargetRelease = false;
+	bool bTargetTest = false;
 
 	static bool IsSimulatingCookedForCurrentContext();
 	static bool IsTestingErrorsForCurrentContext();
@@ -678,13 +707,18 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngine
 
 	TSharedPtr<struct FAngelscriptModuleDesc> GetModuleByFilenameOrModuleName(const FString& Filename, const FString& ModuleName);
 
-	/** Resolve a Cache V2 stable key only through this Engine's live route table. */
-	bool ResolveCacheFunctionRoute(
+	/** Resolve a stable key only through this Engine's neutral live route table. */
+	bool ResolveFunctionRoute(
 		const FAngelscriptStableFunctionKey& FunctionKey,
-		FAngelscriptCacheLiveFunctionRoute& OutRoute) const;
+		FAngelscriptFunctionRoute& OutRoute) const;
+
+	/** Resolve/build the stable key for one exact live function in this Engine. */
+	bool TryResolveStableFunctionKey(
+		const asIScriptFunction* Function,
+		FAngelscriptStableFunctionKey& OutFunctionKey);
 
 	/** Capture the current immutable per-Engine StableFunctionKey route map. */
-	TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+	TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 		ESPMode::ThreadSafe> GetFunctionRouteSnapshot() const;
 
 	/**
@@ -823,7 +857,7 @@ private:
 	void ResolveAllDeclaredImports();
 	void ResolveDeclaredImports(class asIScriptModule* Module);
 	void RebuildFunctionRouteSnapshot(
-		TConstArrayView<FAngelscriptCacheLiveFunctionRoute>
+		TConstArrayView<FAngelscriptFunctionRoute>
 			VerifiedArtifactRoutes = {},
 		TConstArrayView<FAngelscriptFunctionArtifactIdentity>
 			ValidatedArtifactIdentities = {},
@@ -856,7 +890,7 @@ private:
 #if AS_CAN_GENERATE_JIT
 	TUniquePtr<FAngelscriptNativeFormState> NativeFormState;
 #endif
-	TUniquePtr<FAngelscriptCacheRuntimeState> CacheRuntimeState;
+	TUniquePtr<FAngelscriptFunctionRouteState> FunctionRouteState;
 	TUniquePtr<FAngelscriptCacheService> CacheService;
 	TArray<FName> StaticNames;
 	TMap<FName, int32> StaticNamesByIndex;
@@ -891,6 +925,7 @@ private:
 	friend struct FAngelscriptCacheChangedModuleTestAccess;
 	friend struct FAngelscriptEngineScope;
 	friend class FAngelscriptCacheModuleRestorer;
+	friend class FAngelscriptJITProviderRouter;
 	friend struct FAngelscriptTestEngineScopeAccess;
 	friend struct FStaticJITDiagnostics;
 	friend struct FAngelscriptStateSnapshotBuilder;
@@ -965,11 +1000,7 @@ public:
 	void ReplaceScriptAssetContent(FString AssetName, TArray<FString> AssetContent);
 
 	friend struct FAngelscriptPrecompiledData;
-	struct FAngelscriptPrecompiledData* PrecompiledData = nullptr;
 	struct FAngelscriptStaticJIT* StaticJIT = nullptr;
-	// Explicit compatibility transport used only by StaticJIT diagnostics while the
-	// sibling provider change still owns its cutover. Production startup never sets it.
-	bool bUseStaticJITCompatibilityData = false;
 	bool bScriptDevelopmentMode = false;
 
 	static bool IsCollectingStaticJITCompatibilityBinds();
@@ -1784,7 +1815,6 @@ struct FAngelscriptModuleDesc
 
 	/* Internal angelscript data that get set during compilation. */
 	class asCModule* ScriptModule = nullptr;
-	const struct FAngelscriptPrecompiledModule* PrecompiledData = nullptr;
 	bool bCompileError = false;
 	bool bLoadedPrecompiledCode = false;
 	bool bLoadedIncrementalCache = false;

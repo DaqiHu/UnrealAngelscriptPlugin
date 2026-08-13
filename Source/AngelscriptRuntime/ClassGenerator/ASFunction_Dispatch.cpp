@@ -15,11 +15,12 @@ void UASFunction_NoParams::RuntimeCallFunction(UObject* Object, FFrame& Stack, R
 		P_FINISH;
 		return;
 	}
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		P_FINISH;
 
-		MakeRawJITCall_NoParam(Object, JitFunc);
+		MakeRawJITCall_NoParam(Object, JitCall);
 	}
 	else
 	{
@@ -45,9 +46,10 @@ void UASFunction_NoParams::RuntimeCallEvent(UObject* Object, void* Parms)
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
 	if (UNLIKELY(RealFunction == nullptr))
 		return;
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
-		MakeRawJITCall_NoParam(Object, JitFunc);
+		MakeRawJITCall_NoParam(Object, JitCall);
 	}
 	else
 	{
@@ -69,14 +71,15 @@ void UASFunction_DWordArg::RuntimeCallFunction(UObject* Object, FFrame& Stack, R
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		asDWORD ArgumentValue;
 		Stack.StepCompiledIn<FProperty>(&ArgumentValue);
 
 		P_FINISH;
 
-		MakeRawJITCall_Arg<asDWORD>(Object, JitFunc, ArgumentValue);
+		MakeRawJITCall_Arg<asDWORD>(Object, JitCall, ArgumentValue);
 	}
 	else
 	{
@@ -106,10 +109,11 @@ void UASFunction_DWordArg::RuntimeCallEvent(UObject* Object, void* Parms)
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		asDWORD ArgumentValue = *(asDWORD*)Parms;
-		MakeRawJITCall_Arg<asDWORD>(Object, JitFunc, ArgumentValue);
+		MakeRawJITCall_Arg<asDWORD>(Object, JitCall, ArgumentValue);
 	}
 	else
 	{
@@ -138,14 +142,15 @@ void UASFunction_FloatArg::RuntimeCallFunction(UObject* Object, FFrame& Stack, R
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		float ArgumentValue;
 		Stack.StepCompiledIn<FProperty>(&ArgumentValue);
 
 		P_FINISH;
 
-		MakeRawJITCall_Arg<float>(Object, JitFunc, ArgumentValue);
+		MakeRawJITCall_Arg<float>(Object, JitCall, ArgumentValue);
 	}
 	else
 	{
@@ -175,10 +180,11 @@ void UASFunction_FloatArg::RuntimeCallEvent(UObject* Object, void* Parms)
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		float ArgumentValue = *(float*)Parms;
-		MakeRawJITCall_Arg<float>(Object, JitFunc, ArgumentValue);
+		MakeRawJITCall_Arg<float>(Object, JitCall, ArgumentValue);
 	}
 	else
 	{
@@ -207,14 +213,15 @@ void UASFunction_DoubleArg::RuntimeCallFunction(UObject* Object, FFrame& Stack, 
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		double ArgumentValue;
 		Stack.StepCompiledIn<FProperty>(&ArgumentValue);
 
 		P_FINISH;
 
-		MakeRawJITCall_Arg<double>(Object, JitFunc, ArgumentValue);
+		MakeRawJITCall_Arg<double>(Object, JitCall, ArgumentValue);
 	}
 	else
 	{
@@ -244,10 +251,11 @@ void UASFunction_DoubleArg::RuntimeCallEvent(UObject* Object, void* Parms)
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		double ArgumentValue = *(double*)Parms;
-		MakeRawJITCall_Arg<double>(Object, JitFunc, ArgumentValue);
+		MakeRawJITCall_Arg<double>(Object, JitCall, ArgumentValue);
 	}
 	else
 	{
@@ -276,14 +284,15 @@ void UASFunction_FloatExtendedToDoubleArg::RuntimeCallFunction(UObject* Object, 
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		float ArgumentValue;
 		Stack.StepCompiledIn<FProperty>(&ArgumentValue);
 
 		P_FINISH;
 
-		MakeRawJITCall_Arg<double>(Object, JitFunc, (double)ArgumentValue);
+		MakeRawJITCall_Arg<double>(Object, JitCall, (double)ArgumentValue);
 	}
 	else
 	{
@@ -313,10 +322,11 @@ void UASFunction_FloatExtendedToDoubleArg::RuntimeCallEvent(UObject* Object, voi
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		float ArgumentValue = *(float*)Parms;
-		MakeRawJITCall_Arg<double>(Object, JitFunc, (double)ArgumentValue);
+		MakeRawJITCall_Arg<double>(Object, JitCall, (double)ArgumentValue);
 	}
 	else
 	{
@@ -345,14 +355,15 @@ void UASFunction_QWordArg::RuntimeCallFunction(UObject* Object, FFrame& Stack, R
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		asQWORD ArgumentValue;
 		Stack.StepCompiledIn<FProperty>(&ArgumentValue);
 
 		P_FINISH;
 
-		MakeRawJITCall_Arg<asQWORD>(Object, JitFunc, ArgumentValue);
+		MakeRawJITCall_Arg<asQWORD>(Object, JitCall, ArgumentValue);
 	}
 	else
 	{
@@ -382,10 +393,11 @@ void UASFunction_QWordArg::RuntimeCallEvent(UObject* Object, void* Parms)
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		asQWORD ArgumentValue = *(asQWORD*)Parms;
-		MakeRawJITCall_Arg<asQWORD>(Object, JitFunc, ArgumentValue);
+		MakeRawJITCall_Arg<asQWORD>(Object, JitCall, ArgumentValue);
 	}
 	else
 	{
@@ -414,14 +426,15 @@ void UASFunction_ByteArg::RuntimeCallFunction(UObject* Object, FFrame& Stack, RE
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		asDWORD ArgumentValue;
 		Stack.StepCompiledIn<FProperty>(&ArgumentValue);
 
 		P_FINISH;
 
-		MakeRawJITCall_Arg<asBYTE>(Object, JitFunc, (asBYTE&)ArgumentValue);
+		MakeRawJITCall_Arg<asBYTE>(Object, JitCall, (asBYTE&)ArgumentValue);
 	}
 	else
 	{
@@ -451,9 +464,10 @@ void UASFunction_ByteArg::RuntimeCallEvent(UObject* Object, void* Parms)
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
-		MakeRawJITCall_Arg<asBYTE>(Object, JitFunc, *(asBYTE*)Parms);
+		MakeRawJITCall_Arg<asBYTE>(Object, JitCall, *(asBYTE*)Parms);
 	}
 	else
 	{
@@ -487,9 +501,10 @@ void UASFunction_ReferenceArg::RuntimeCallEvent(UObject* Object, void* Parms)
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
-		MakeRawJITCall_Arg<void*>(Object, JitFunc, Parms);
+		MakeRawJITCall_Arg<void*>(Object, JitCall, Parms);
 	}
 	else
 	{
@@ -519,11 +534,12 @@ void UASFunction_ObjectReturn::RuntimeCallFunction(UObject* Object, FFrame& Stac
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		P_FINISH;
 
-		*(UObject**)RESULT_PARAM = MakeRawJITCall_ReturnValue<UObject*>(Object, JitFunc);
+		*(UObject**)RESULT_PARAM = MakeRawJITCall_ReturnValue<UObject*>(Object, JitCall);
 	}
 	else
 	{
@@ -555,12 +571,13 @@ void UASFunction_ObjectReturn::RuntimeCallEvent(UObject* Object, void* Parms)
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		checkSlow(ReturnArgument.PosInParmStruct == 0);
 		checkSlow(ReturnArgument.ParmBehavior == EArgumentParmBehavior::ReturnObjectPointer);
 
-		*(UObject**)Parms = MakeRawJITCall_ReturnValue<UObject*>(Object, JitFunc);
+		*(UObject**)Parms = MakeRawJITCall_ReturnValue<UObject*>(Object, JitCall);
 	}
 	else
 	{
@@ -599,11 +616,12 @@ void UASFunction_DWordReturn::RuntimeCallFunction(UObject* Object, FFrame& Stack
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		P_FINISH;
 
-		*(asDWORD*)RESULT_PARAM = MakeRawJITCall_ReturnValue<asDWORD>(Object, JitFunc);
+		*(asDWORD*)RESULT_PARAM = MakeRawJITCall_ReturnValue<asDWORD>(Object, JitCall);
 	}
 	else
 	{
@@ -636,12 +654,13 @@ void UASFunction_DWordReturn::RuntimeCallEvent(UObject* Object, void* Parms)
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		checkSlow(ReturnArgument.PosInParmStruct == 0);
 		checkSlow(ReturnArgument.ParmBehavior == EArgumentParmBehavior::Value4Byte);
 
-		*(asDWORD*)Parms = MakeRawJITCall_ReturnValue<asDWORD>(Object, JitFunc);
+		*(asDWORD*)Parms = MakeRawJITCall_ReturnValue<asDWORD>(Object, JitCall);
 	}
 	else
 	{
@@ -677,11 +696,12 @@ void UASFunction_FloatExtendedToDoubleReturn::RuntimeCallFunction(UObject* Objec
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		P_FINISH;
 
-		*(float*)RESULT_PARAM = (float)MakeRawJITCall_ReturnValue<double>(Object, JitFunc);
+		*(float*)RESULT_PARAM = (float)MakeRawJITCall_ReturnValue<double>(Object, JitCall);
 	}
 	else
 	{
@@ -714,12 +734,13 @@ void UASFunction_FloatExtendedToDoubleReturn::RuntimeCallEvent(UObject* Object, 
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		checkSlow(ReturnArgument.PosInParmStruct == 0);
 		checkSlow(ReturnArgument.ParmBehavior == EArgumentParmBehavior::FloatExtendedToDouble);
 
-		*(float*)Parms = (float)MakeRawJITCall_ReturnValue<double>(Object, JitFunc);
+		*(float*)Parms = (float)MakeRawJITCall_ReturnValue<double>(Object, JitCall);
 	}
 	else
 	{
@@ -752,11 +773,12 @@ void UASFunction_FloatReturn::RuntimeCallFunction(UObject* Object, FFrame& Stack
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		P_FINISH;
 
-		*(float*)RESULT_PARAM = MakeRawJITCall_ReturnValue<float>(Object, JitFunc);
+		*(float*)RESULT_PARAM = MakeRawJITCall_ReturnValue<float>(Object, JitCall);
 	}
 	else
 	{
@@ -788,12 +810,13 @@ void UASFunction_FloatReturn::RuntimeCallEvent(UObject* Object, void* Parms)
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		checkSlow(ReturnArgument.PosInParmStruct == 0);
 		checkSlow(ReturnArgument.ParmBehavior == EArgumentParmBehavior::Value4Byte);
 
-		*(float*)Parms = MakeRawJITCall_ReturnValue<float>(Object, JitFunc);
+		*(float*)Parms = MakeRawJITCall_ReturnValue<float>(Object, JitCall);
 	}
 	else
 	{
@@ -826,11 +849,12 @@ void UASFunction_DoubleReturn::RuntimeCallFunction(UObject* Object, FFrame& Stac
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		P_FINISH;
 
-		*(double*)RESULT_PARAM = MakeRawJITCall_ReturnValue<double>(Object, JitFunc);
+		*(double*)RESULT_PARAM = MakeRawJITCall_ReturnValue<double>(Object, JitCall);
 	}
 	else
 	{
@@ -862,12 +886,13 @@ void UASFunction_DoubleReturn::RuntimeCallEvent(UObject* Object, void* Parms)
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		checkSlow(ReturnArgument.PosInParmStruct == 0);
 		checkSlow(ReturnArgument.ParmBehavior == EArgumentParmBehavior::Value8Byte);
 
-		*(double*)Parms = MakeRawJITCall_ReturnValue<double>(Object, JitFunc);
+		*(double*)Parms = MakeRawJITCall_ReturnValue<double>(Object, JitCall);
 	}
 	else
 	{
@@ -900,11 +925,12 @@ void UASFunction_ByteReturn::RuntimeCallFunction(UObject* Object, FFrame& Stack,
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		P_FINISH;
 
-		*(asBYTE*)RESULT_PARAM = MakeRawJITCall_ReturnValue<asBYTE>(Object, JitFunc);
+		*(asBYTE*)RESULT_PARAM = MakeRawJITCall_ReturnValue<asBYTE>(Object, JitCall);
 	}
 	else
 	{
@@ -936,12 +962,13 @@ void UASFunction_ByteReturn::RuntimeCallEvent(UObject* Object, void* Parms)
 		return;
 
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	FAngelscriptCurrentRawJITCall JitCall(RealFunction);
+	if (JitCall)
 	{
 		checkSlow(ReturnArgument.PosInParmStruct == 0);
 		checkSlow(ReturnArgument.ParmBehavior == EArgumentParmBehavior::Value1Byte);
 
-		*(asBYTE*)Parms = MakeRawJITCall_ReturnValue<asBYTE>(Object, JitFunc);
+		*(asBYTE*)Parms = MakeRawJITCall_ReturnValue<asBYTE>(Object, JitCall);
 	}
 	else
 	{

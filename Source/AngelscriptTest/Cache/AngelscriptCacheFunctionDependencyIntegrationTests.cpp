@@ -248,7 +248,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheFunctionDependencyIntegrationTests,
 			EAngelscriptCacheSemanticDependencyKind::HardValue,
 			BaselineDependency.Kind));
 		ASSERT_THAT(AreEqual(
-			EAngelscriptCacheReferenceKind::ScriptGlobal,
+			EAngelscriptArtifactReferenceKind::ScriptGlobal,
 			BaselineDependency.Target.Kind));
 		ASSERT_THAT(IsTrue(BaselineDependency.Target.StableKey
 			== Baseline.State.HardValues[0].Owner.StableKey));

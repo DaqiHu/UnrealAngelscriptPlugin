@@ -219,6 +219,18 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheClassGraphFunctionSignatureRestoreTests,
 				*TestRunner, ETestEngineMode::IsolatedFull);
 			ASSERT_THAT(IsTrue(Producer.IsValid()));
 			const FString Source = ASTEST_AS(R"AS(
+				UFUNCTION()
+				int AddGlobal(int Value)
+				{
+					return Value + 7;
+				}
+
+				UFUNCTION()
+				int AcceptEnvironmentObject(UObject Value)
+				{
+					return Value == nullptr ? 42 : 7;
+				}
+
 				UCLASS()
 				class UCacheV2SignaturePeer : UObject
 				{
@@ -242,14 +254,28 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheClassGraphFunctionSignatureRestoreTests,
 			TSharedPtr<FAngelscriptModuleDesc> Module =
 				Producer.GetEngine().GetModule(ScriptModule);
 			ASSERT_THAT(IsTrue(Module.IsValid()));
-			ASSERT_THAT(AreEqual(2, Module->Classes.Num()));
+			ASSERT_THAT(AreEqual(3, Module->Classes.Num()));
 
 			const TSharedRef<FAngelscriptClassDesc>* ProducerOwner =
 				FindClass(*Module, TEXT("UCacheV2SignatureOwner"));
 			const TSharedRef<FAngelscriptClassDesc>* ProducerPeer =
 				FindClass(*Module, TEXT("UCacheV2SignaturePeer"));
+			const TSharedRef<FAngelscriptClassDesc>* ProducerStatics =
+				Module->Classes.FindByPredicate(
+					[](const TSharedRef<FAngelscriptClassDesc>& Candidate)
+					{
+						return Candidate->bIsStaticsClass;
+					});
 			ASSERT_THAT(IsNotNull(ProducerOwner));
 			ASSERT_THAT(IsNotNull(ProducerPeer));
+			ASSERT_THAT(IsNotNull(ProducerStatics));
+			ASSERT_THAT(IsNull((*ProducerStatics)->ScriptType));
+			ASSERT_THAT(IsNotNull((*ProducerStatics)->Class));
+			ASSERT_THAT(IsNotNull(
+				(*ProducerStatics)->Class->FindFunctionByName(TEXT("AddGlobal"))));
+			ASSERT_THAT(IsNotNull(
+				(*ProducerStatics)->Class->FindFunctionByName(
+					TEXT("AcceptEnvironmentObject"))));
 			asCScriptFunction* ProducerFunction = nullptr;
 			ASSERT_THAT(IsTrue(CheckVmSignature(
 				*TestRunner,
@@ -308,7 +334,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheClassGraphFunctionSignatureRestoreTests,
 			Restore.RestoredFunctionCount,
 			*Restore.Detail));
 		ASSERT_THAT(IsTrue(Restore.IsSuccess()));
-		ASSERT_THAT(AreEqual(uint32(2), Restore.RestoredTypeCount));
+		ASSERT_THAT(AreEqual(uint32(3), Restore.RestoredTypeCount));
 
 		TSharedPtr<FAngelscriptModuleDesc> RestoredModule =
 			Consumer.GetEngine().GetModuleByModuleName(
@@ -318,12 +344,26 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheClassGraphFunctionSignatureRestoreTests,
 			FindClass(*RestoredModule, TEXT("UCacheV2SignatureOwner"));
 		const TSharedRef<FAngelscriptClassDesc>* ConsumerPeer =
 			FindClass(*RestoredModule, TEXT("UCacheV2SignaturePeer"));
+		const TSharedRef<FAngelscriptClassDesc>* ConsumerStatics =
+			RestoredModule->Classes.FindByPredicate(
+				[](const TSharedRef<FAngelscriptClassDesc>& Candidate)
+				{
+					return Candidate->bIsStaticsClass;
+				});
 		ASSERT_THAT(IsNotNull(ConsumerOwner));
 		ASSERT_THAT(IsNotNull(ConsumerPeer));
+		ASSERT_THAT(IsNotNull(ConsumerStatics));
 		ASSERT_THAT(IsNotNull((*ConsumerOwner)->ScriptType));
 		ASSERT_THAT(IsNotNull((*ConsumerPeer)->ScriptType));
 		ASSERT_THAT(IsNotNull((*ConsumerOwner)->Class));
 		ASSERT_THAT(IsNotNull((*ConsumerPeer)->Class));
+		ASSERT_THAT(IsNull((*ConsumerStatics)->ScriptType));
+		ASSERT_THAT(IsNotNull((*ConsumerStatics)->Class));
+		ASSERT_THAT(IsNotNull(
+			(*ConsumerStatics)->Class->FindFunctionByName(TEXT("AddGlobal"))));
+		ASSERT_THAT(IsNotNull(
+			(*ConsumerStatics)->Class->FindFunctionByName(
+				TEXT("AcceptEnvironmentObject"))));
 
 		asCScriptFunction* ConsumerFunction = nullptr;
 		ASSERT_THAT(IsTrue(CheckVmSignature(
@@ -378,6 +418,32 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheClassGraphFunctionSignatureRestoreTests,
 			PeerObject,
 			Invoker.CallAndReturn<UObject*>(nullptr),
 			TEXT("The restored reflected method should return the consumer peer object")));
+
+		asIScriptFunction* GlobalFunction =
+			RestoredModule->ScriptModule->GetFunctionByDecl("int AddGlobal(int)");
+		ASSERT_THAT(IsNotNull(GlobalFunction));
+		asIScriptContext* Context =
+			Consumer.GetEngine().GetScriptEngine()->CreateContext();
+		ASSERT_THAT(IsNotNull(Context));
+		ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(GlobalFunction)));
+		ASSERT_THAT(AreEqual(asSUCCESS, Context->SetArgDWord(0, 35)));
+		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
+		ASSERT_THAT(AreEqual(42, static_cast<int32>(Context->GetReturnDWord()),
+			TEXT("The mixed class-graph module should restore and execute its global function")));
+		Context->Release();
+
+		asIScriptFunction* EnvironmentFunction =
+			RestoredModule->ScriptModule->GetFunctionByDecl(
+				"int AcceptEnvironmentObject(UObject)");
+		ASSERT_THAT(IsNotNull(EnvironmentFunction));
+		Context = Consumer.GetEngine().GetScriptEngine()->CreateContext();
+		ASSERT_THAT(IsNotNull(Context));
+		ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(EnvironmentFunction)));
+		ASSERT_THAT(AreEqual(asSUCCESS, Context->SetArgObject(0, nullptr)));
+		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
+		ASSERT_THAT(AreEqual(42, static_cast<int32>(Context->GetReturnDWord()),
+			TEXT("The restored global function should resolve its UObject environment parameter")));
+		Context->Release();
 	}
 };
 

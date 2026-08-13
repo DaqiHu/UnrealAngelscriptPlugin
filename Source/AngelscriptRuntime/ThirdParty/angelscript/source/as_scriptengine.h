@@ -538,7 +538,6 @@ public:
 		bool   ignoreDuplicateSharedIntf;
 		bool   noDebugOutput;
 		bool   disableScriptClassGC;
-		asUINT jitInterfaceVersion;
 		asUINT alwaysImplDefaultCopy;
 		asUINT alwaysImplDefaultCopyConstruct;
 		asUINT memberInitMode;

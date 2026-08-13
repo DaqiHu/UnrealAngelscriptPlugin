@@ -324,10 +324,12 @@ static const asBYTE AS_BYTECODE_STREAM_MAGIC = 0xE3;
 static const asBYTE AS_BYTECODE_STREAM_VERSION = 2;
 
 //[UE++]: The detached function-artifact envelope is intentionally independent
-// from the full module bytecode version. Version four adds the complete root
-// function trait word; the historical function-signature codec only carries a
-// subset and therefore cannot reproduce constructor/destructor/generated traits.
-static const asBYTE AS_FUNCTION_ARTIFACT_STREAM_VERSION = 4;
+// from the full module bytecode version. Version four added the complete root
+// function trait word. Version five distinguishes a foreign script-module
+// function from a function owned by the artifact's module and persists only the
+// target module's semantic base name plus its signature; the reader resolves
+// that pair against the current Engine before the host validates its stable key.
+static const asBYTE AS_FUNCTION_ARTIFACT_STREAM_VERSION = 5;
 static const asUINT AS_FUNCTION_ARTIFACT_MINIMUM_SIZE = 13;
 static const asDWORD AS_FUNCTION_ARTIFACT_KNOWN_TRAITS = 0x07FFFFFFu;
 //[UE--]
@@ -1582,7 +1584,43 @@ void asCReader::ReadUsedFunctions()
 		}
 		else
 		{
-			asCScriptFunction func(engine, c == 'm' ? module : 0, asFUNC_DUMMY);
+			asCModule *functionModule = c == 'm' ? module : 0;
+			if( c == 'x' )
+			{
+				if( !validatingFunctionArtifact )
+				{
+					Error(TXT_INVALID_BYTECODE_d);
+					return;
+				}
+				asCString baseModuleName;
+				ReadString(&baseModuleName);
+				for( asUINT moduleIndex = 0;
+					moduleIndex < engine->scriptModules.GetLength(); ++moduleIndex )
+				{
+					asCModule *candidate = engine->scriptModules[moduleIndex];
+					if( candidate == 0 || candidate == module
+						|| candidate->discarded
+						|| candidate->ReloadNewModule != 0
+						|| candidate->baseModuleName != baseModuleName )
+						continue;
+					if( functionModule != 0 )
+					{
+						// A semantic module name must identify exactly one current
+						// module. A hot-reload predecessor is excluded above through
+						// ReloadNewModule; any remaining overlap still fails closed and
+						// lets the compiler rebuild the function normally.
+						Error(TXT_INVALID_BYTECODE_d);
+						return;
+					}
+					functionModule = candidate;
+				}
+				if( functionModule == 0 )
+				{
+					Error(TXT_INVALID_BYTECODE_d);
+					return;
+				}
+			}
+			asCScriptFunction func(engine, functionModule, asFUNC_DUMMY);
 			asCObjectType *parentClass = 0;
 			ReadFunctionSignature(&func, &parentClass);
 			if( error )
@@ -1592,15 +1630,15 @@ void asCReader::ReadUsedFunctions()
 			}
 
 			// Find the correct function
-			if( c == 'm' )
+			if( c == 'm' || c == 'x' )
 			{
 				asASSERT(func.templateSubTypes.GetLength() == 0);
 
 				if( func.funcType == asFUNC_IMPORTED )
 				{
-					for( asUINT i = 0; i < module->m_bindInformations.GetLength(); i++ )
+					for( asUINT i = 0; i < functionModule->m_bindInformations.GetLength(); i++ )
 					{
-						asCScriptFunction *f = module->m_bindInformations[i]->importedFunctionSignature;
+						asCScriptFunction *f = functionModule->m_bindInformations[i]->importedFunctionSignature;
 						if( func.objectType != f->objectType ||
 							func.funcType != f->funcType ||
 							func.nameSpace != f->nameSpace ||
@@ -1613,7 +1651,7 @@ void asCReader::ReadUsedFunctions()
 				}
 				else if( func.funcType == asFUNC_FUNCDEF )
 				{
-					const asCArray<asCFuncdefType *> &funcs = module->m_funcDefs;
+					const asCArray<asCFuncdefType *> &funcs = functionModule->m_funcDefs;
 					for( asUINT i = 0; i < funcs.GetLength(); i++ )
 					{
 						asCScriptFunction *f = funcs[i]->funcdef;
@@ -1634,9 +1672,9 @@ void asCReader::ReadUsedFunctions()
 					// TODO: optimize: Global functions should be searched for in module->globalFunctions
 					// TODO: optimize: funcdefs should be searched for in module->funcDefs
 					// TODO: optimize: object methods should be searched for directly in the object type
-					for( asUINT i = 0; i < module->m_scriptFunctions.GetLength(); i++ )
+					for( asUINT i = 0; i < functionModule->m_scriptFunctions.GetLength(); i++ )
 					{
-						asCScriptFunction *f = module->m_scriptFunctions[i];
+						asCScriptFunction *f = functionModule->m_scriptFunctions[i];
 						if( func.objectType != f->objectType ||
 							func.funcType != f->funcType ||
 							func.nameSpace != f->nameSpace ||
@@ -1721,22 +1759,35 @@ void asCReader::ReadUsedFunctions()
 							// See asCCompiler::PerformFunctionCall
 							for (asUINT i = 0; i < func.objectType->beh.constructors.GetLength(); i++)
 							{
-							asCScriptFunction *f = engine->scriptFunctions[func.objectType->beh.constructors[i]];
+								const asUINT constructorId = func.objectType->beh.constructors[i];
+								if (constructorId >= engine->scriptFunctions.GetLength())
+									continue;
+								asCScriptFunction *f = engine->scriptFunctions[constructorId];
+								if (f == 0 || f->scriptData == 0)
+									continue;
 
 								// Find the id of the real constructor and not the generated stub
 								asUINT id = 0;
-								asDWORD *bc = f->scriptData->byteCode.AddressOf();
-								while (bc)
+								asUINT bcOffset = 0;
+								while (bcOffset < f->scriptData->byteCode.GetLength())
 								{
+									asDWORD *bc = f->scriptData->byteCode.AddressOf() + bcOffset;
+									const asUINT instructionSize =
+										asBCTypeSize[asBCInfo[*(asBYTE*)bc].type];
+									if (instructionSize == 0 ||
+										bcOffset + instructionSize > f->scriptData->byteCode.GetLength())
+										break;
 									if ((*(asBYTE*)bc) == asBC_CALLSYS)
 									{
 										asCScriptFunction *called = (asCScriptFunction*)asBC_PTRARG(bc);
 										id = called ? asUINT(called->id) : 0;
 										break;
 									}
-									bc += asBCTypeSize[asBCInfo[*(asBYTE*)bc].type];
+									bcOffset += instructionSize;
 								}
 
+								if (id >= engine->scriptFunctions.GetLength())
+									continue;
 								f = engine->scriptFunctions[id];
 								if (f == 0 ||
 									!func.IsSignatureExceptNameAndObjectTypeEqual(f))
@@ -1752,7 +1803,10 @@ void asCReader::ReadUsedFunctions()
 							// This is a class constructor, so we can search directly in the object type's constructors
 							for (asUINT i = 0; i < func.objectType->beh.constructors.GetLength(); i++)
 							{
-								asCScriptFunction *f = engine->scriptFunctions[func.objectType->beh.constructors[i]];
+								const asUINT constructorId = func.objectType->beh.constructors[i];
+								if (constructorId >= engine->scriptFunctions.GetLength())
+									continue;
+								asCScriptFunction *f = engine->scriptFunctions[constructorId];
 								if (f == 0 ||
 									!func.IsSignatureExceptNameAndObjectTypeEqual(f))
 									continue;
@@ -5116,7 +5170,7 @@ asCTypeInfo *asCReader::FindType(int idx)
 #ifndef AS_NO_COMPILER
 
 asCWriter::asCWriter(asCModule* _module, asIBinaryStream* _stream, asCScriptEngine* _engine, bool _stripDebug)
-	: module(_module), stream(_stream), engine(_engine), stripDebugInfo(_stripDebug), error(false), bytesWritten(0), lastWasComposite(false)
+	: module(_module), stream(_stream), engine(_engine), stripDebugInfo(_stripDebug), error(false), bytesWritten(0), writingFunctionArtifact(false), lastWasComposite(false)
 {
 }
 
@@ -5330,6 +5384,7 @@ int asCWriter::Write()
 int asCWriter::WriteFunctionArtifact(asCScriptFunction *func,
 	asSFunctionArtifactWriteDiagnostics *diagnostics)
 {
+	writingFunctionArtifact = true;
 	auto UpdateDiagnostics = [this, diagnostics](int result, asUINT stage)
 	{
 		if( diagnostics == 0 )
@@ -5526,6 +5581,9 @@ void asCWriter::WriteUsedFunctions()
 		{
 			// Is the function from the module or the application?
 			c = func->module ? 'm' : 'a';
+			if( writingFunctionArtifact && func->module != 0
+				&& func->module != module )
+				c = 'x';
 
 			// Functions and methods that are shared should be stored as 's' as the bytecode
 			// may be imported from other modules (even if the current module have received ownership)
@@ -5533,6 +5591,15 @@ void asCWriter::WriteUsedFunctions()
 				c = 's';
 
 			WriteData(&c, 1);
+			if( c == 'x' )
+			{
+				if( func->module->baseModuleName.GetLength() == 0 )
+				{
+					Error(TXT_INVALID_BYTECODE_d);
+					return;
+				}
+				WriteString(&func->module->baseModuleName);
+			}
 			WriteFunctionSignature(func);
 		}
 		else

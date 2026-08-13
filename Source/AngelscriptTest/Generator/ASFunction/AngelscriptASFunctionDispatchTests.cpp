@@ -4,11 +4,79 @@
 #include "CQTest.h"
 #include "ClassGenerator/ASClass.h"
 #include "Misc/ScopeExit.h"
+#include "StaticJIT/AngelscriptJITExecutionContext.h"
 #include "UObject/StructOnScope.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UnrealType.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS
+
+namespace AngelscriptASFunctionDispatchTests_Private
+{
+	static void InitialVMEntry(FScriptExecution&, asDWORD*, asQWORD* OutValue)
+	{
+		if (OutValue != nullptr)
+		{
+			*OutValue = 101;
+		}
+	}
+
+	static asDWORD InitialRawEntry(FScriptExecution&, void*)
+	{
+		return 101;
+	}
+
+	static void InitialParmsEntry(FScriptExecution&, void*, void* Parms)
+	{
+		*static_cast<asDWORD*>(Parms) = 101;
+	}
+
+	static void ReplacementVMEntry(FScriptExecution&, asDWORD*, asQWORD* OutValue)
+	{
+		if (OutValue != nullptr)
+		{
+			*OutValue = 202;
+		}
+	}
+
+	static asDWORD ReplacementRawEntry(FScriptExecution&, void*)
+	{
+		return 202;
+	}
+
+	static void ReplacementParmsEntry(FScriptExecution&, void*, void* Parms)
+	{
+		*static_cast<asDWORD*>(Parms) = 202;
+	}
+
+	class FCurrentBindingTestCompiler final : public asIJITCompiler
+	{
+	public:
+		bool bBindNewFunctions = false;
+
+		void OnFunctionReady(asIScriptFunction* Function) override
+		{
+			if (!bBindNewFunctions
+				|| Function == nullptr
+				|| FCStringAnsi::Strcmp(Function->GetName(), "GetCurrentValue") != 0)
+			{
+				return;
+			}
+
+			asSJITFunctionBinding Binding;
+			Binding.VMEntry = &InitialVMEntry;
+			Binding.RawEntry = reinterpret_cast<asJITFunction_Raw>(&InitialRawEntry);
+			Binding.ParmsEntry = &InitialParmsEntry;
+			Function->SetJITBinding(Binding);
+		}
+
+		void ReleaseFunctionBinding(
+			asIScriptFunction*,
+			const asSJITFunctionBinding&) override
+		{
+		}
+	};
+}
 
 TEST_CLASS_WITH_FLAGS(FAngelscriptASFunctionDispatchTests,
 	"Angelscript.TestModule.Generator.ASFunction.Dispatch",
@@ -378,7 +446,7 @@ public:
 			{ TEXT("ReturnObject"), UASFunction_ObjectReturn::StaticClass(), TEXT("object return") },
 			{ TEXT("GenericTwoArgs"), UASFunction_NotThreadSafe::StaticClass(), TEXT("multi-argument generic fallback") },
 			{ TEXT("ThreadSafeReturn"), UASFunction::StaticClass(), TEXT("thread-safe generic wrapper") },
-			{ TEXT("VirtualReturn"), UASFunction_DWordReturn::StaticClass(), TEXT("virtual non-JIT wrapper") },
+			{ TEXT("VirtualReturn"), UASFunction_NotThreadSafe::StaticClass(), TEXT("virtual generic current-route wrapper") },
 		};
 
 		for (const FAngelscriptASFunctionDispatchTests::FMatrixCase& TestCase : InstanceCases)
@@ -418,6 +486,121 @@ public:
 
 		ASSERT_THAT(AreEqual(11, Result, TEXT("Representative dispatch matrix wrapper should preserve script behavior")));
 
+	}
+
+	TEST_METHOD(JITWrapperReadsReplacementBindingAndFallsBackAfterClear)
+	{
+		using namespace AngelscriptASFunctionDispatchTests_Private;
+
+		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();
+		FAngelscriptEngineScope EngineScope(Engine);
+		asIScriptEngine* ScriptEngine = Engine.GetScriptEngine();
+		ASSERT_THAT(IsNotNull(ScriptEngine, TEXT("Current-binding dispatch test should retain its AS engine")));
+		if (ScriptEngine == nullptr)
+		{
+			return;
+		}
+
+		const asPWORD OriginalIncludeJIT = ScriptEngine->GetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS);
+		asIJITCompiler* OriginalCompiler = ScriptEngine->GetJITCompiler();
+		FCurrentBindingTestCompiler Compiler;
+		ASSERT_THAT(AreEqual(asSUCCESS, ScriptEngine->SetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS, 1)));
+		ASSERT_THAT(AreEqual(asSUCCESS, ScriptEngine->SetJITCompiler(&Compiler)));
+		ON_SCOPE_EXIT
+		{
+			ScriptEngine->SetJITCompiler(OriginalCompiler);
+			ScriptEngine->SetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS, OriginalIncludeJIT);
+		};
+		Compiler.bBindNewFunctions = true;
+
+		const FName ModuleName(TEXT("ASFunctionCurrentBindingDispatch"));
+		ON_SCOPE_EXIT
+		{
+			Engine.DiscardModule(*ModuleName.ToString());
+		};
+
+		const FString Source = ASTEST_AS(R"AS(
+			UCLASS()
+			class UASFunctionCurrentBindingDispatch : UObject
+			{
+				UFUNCTION()
+				int GetCurrentValue()
+				{
+					return 42;
+				}
+			}
+			)AS");
+		UClass* ScriptClass = AngelscriptFunctionalTestUtils::CompileScriptModule(
+			*TestRunner,
+			Engine,
+			ModuleName,
+			TEXT("ASFunctionCurrentBindingDispatch.as"),
+			Source,
+			TEXT("UASFunctionCurrentBindingDispatch"));
+		ASSERT_THAT(IsNotNull(ScriptClass, TEXT("Current-binding dispatch test should compile its script class")));
+		if (ScriptClass == nullptr)
+		{
+			return;
+		}
+
+		UASFunction* Function = Cast<UASFunction>(::FindGeneratedFunction(ScriptClass, TEXT("GetCurrentValue")));
+		UObject* Instance = NewObject<UObject>(GetTransientPackage(), ScriptClass, TEXT("ASFunctionCurrentBindingDispatchInstance"));
+		ASSERT_THAT(IsNotNull(Function, TEXT("Current-binding dispatch test should expose GetCurrentValue")));
+		ASSERT_THAT(IsNotNull(Instance, TEXT("Current-binding dispatch test should instantiate its class")));
+		if (Function == nullptr || Instance == nullptr)
+		{
+			return;
+		}
+		asIScriptFunction* ScriptFunction = Function->ScriptFunction;
+		ASSERT_THAT(IsNotNull(ScriptFunction, TEXT("Current-binding dispatch test should retain its script function")));
+		if (ScriptFunction == nullptr)
+		{
+			return;
+		}
+
+		asSJITFunctionBinding InitialBinding;
+		InitialBinding.VMEntry = &InitialVMEntry;
+		InitialBinding.RawEntry = reinterpret_cast<asJITFunction_Raw>(&InitialRawEntry);
+		InitialBinding.ParmsEntry = &InitialParmsEntry;
+		ASSERT_THAT(AreEqual(asSUCCESS, ScriptFunction->SetJITBinding(InitialBinding)));
+
+		UASFunction_DWordReturn_JIT* RetainedJITWrapper = NewObject<UASFunction_DWordReturn_JIT>(
+			ScriptClass,
+			TEXT("RetainedCurrentBindingJITWrapper"));
+		ASSERT_THAT(IsNotNull(RetainedJITWrapper, TEXT("Current-binding dispatch test should construct a retained JIT wrapper")));
+		if (RetainedJITWrapper == nullptr)
+		{
+			return;
+		}
+		RetainedJITWrapper->ScriptFunction = ScriptFunction;
+		RetainedJITWrapper->Arguments = Function->Arguments;
+		RetainedJITWrapper->DestroyArguments = Function->DestroyArguments;
+		RetainedJITWrapper->ArgStackSize = Function->ArgStackSize;
+		RetainedJITWrapper->ReturnArgument = Function->ReturnArgument;
+		RetainedJITWrapper->JitFunction = InitialBinding.VMEntry;
+		RetainedJITWrapper->JitFunction_Raw = InitialBinding.RawEntry;
+		RetainedJITWrapper->JitFunction_ParmsEntry = InitialBinding.ParmsEntry;
+
+		asSJITFunctionBinding ReplacementBinding;
+		ReplacementBinding.VMEntry = &ReplacementVMEntry;
+		ReplacementBinding.RawEntry = reinterpret_cast<asJITFunction_Raw>(&ReplacementRawEntry);
+		ReplacementBinding.ParmsEntry = &ReplacementParmsEntry;
+		ASSERT_THAT(AreEqual(asSUCCESS, ScriptFunction->SetJITBinding(ReplacementBinding)));
+
+		int32 ReplacementResult = 0;
+		RetainedJITWrapper->RuntimeCallEvent(Instance, &ReplacementResult);
+		ASSERT_THAT(AreEqual(
+			202,
+			ReplacementResult,
+			TEXT("A retained JIT wrapper should execute the replacement Binding, not its construction-time entry")));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, ScriptFunction->SetJITBinding(asSJITFunctionBinding())));
+		int32 FallbackResult = 0;
+		RetainedJITWrapper->RuntimeCallEvent(Instance, &FallbackResult);
+		ASSERT_THAT(AreEqual(
+			42,
+			FallbackResult,
+			TEXT("A retained JIT wrapper should fall back to current VM execution after its Binding is cleared")));
 	}
 };
 

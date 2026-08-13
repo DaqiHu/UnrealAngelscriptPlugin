@@ -93,7 +93,7 @@ namespace AngelscriptCacheCompilerBridge_Private
 		{
 		case EAngelscriptCacheSemanticDependencyKind::ValueLayout:
 			if (Dependency.Target.Kind ==
-					EAngelscriptCacheReferenceKind::ScriptType
+					EAngelscriptArtifactReferenceKind::ScriptType
 				&& Declaration != nullptr)
 			{
 				const FAngelscriptCachedTypeSchema* Type =
@@ -114,7 +114,7 @@ namespace AngelscriptCacheCompilerBridge_Private
 
 		case EAngelscriptCacheSemanticDependencyKind::Inheritance:
 			if (Dependency.Target.Kind
-					== EAngelscriptCacheReferenceKind::ScriptType
+					== EAngelscriptArtifactReferenceKind::ScriptType
 				&& Declaration != nullptr)
 			{
 				return FAngelscriptCacheCurrentSymbol{
@@ -237,7 +237,7 @@ namespace AngelscriptCacheCompilerBridge_Private
 		case EAngelscriptCacheSemanticDependencyKind::Import:
 			if (Authorities.ModuleInterface != nullptr
 				&& Dependency.Target.Kind ==
-					EAngelscriptCacheReferenceKind::ScriptModule
+					EAngelscriptArtifactReferenceKind::ScriptModule
 				&& Authorities.ModuleInterface->ModuleKey.Hash == Key)
 			{
 				return FAngelscriptCacheCurrentSymbol{
@@ -641,7 +641,8 @@ FAngelscriptCacheCompilerBridge::TryRestoreFunctionFromValidatedGraph(
 		*Debug,
 		Limits,
 		Budget,
-		Result.Detail);
+		Result.Detail,
+		CurrentAuthorities.ExternalFunctions);
 	if (Result.RestoreResult == asBUILD_ARTIFACT_RESTORE_RESTORED)
 	{
 		Result.Status =
@@ -676,7 +677,9 @@ FAngelscriptCacheCompilerBridge::TryRestoreFunctionArtifact(
 	const FAngelscriptCachedDebugSidecar& CachedDebug,
 	const FAngelscriptCacheReadLimits& Limits,
 	FAngelscriptCacheReadBudget& Budget,
-	FString& OutDetail)
+	FString& OutDetail,
+	const IAngelscriptFunctionArtifactExternalFunctionResolver*
+		ExternalFunctions)
 {
 	OutDetail.Reset();
 	if (!Invocation.IsCacheable())
@@ -721,7 +724,7 @@ FAngelscriptCacheCompilerBridge::TryRestoreFunctionArtifact(
 	}
 
 	FAngelscriptFunctionArtifactCodec Codec(
-		*TargetFunction.module, *TargetFunction.engine);
+		*TargetFunction.module, *TargetFunction.engine, ExternalFunctions);
 	const FAngelscriptCacheValidationResult Restore =
 		Codec.RestoreFunctionIntoExisting(
 			CachedBody.CanonicalExecutionPayload,

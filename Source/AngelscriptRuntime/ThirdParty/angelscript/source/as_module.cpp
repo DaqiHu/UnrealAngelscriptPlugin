@@ -137,6 +137,14 @@ void asCModule::Discard()
 	// so the application must keep that in mind before discarding a module.
 	CallExit();
 
+	// A discarded module is no longer an authoritative source of native entry
+	// points. Retire its complete JIT Bindings immediately even when external
+	// references keep the script functions alive for interpreted execution.
+	asSJITFunctionBinding emptyBinding;
+	for( asUINT n = 0; n < scriptFunctions.GetLength(); n++ )
+		if( scriptFunctions[n] )
+			scriptFunctions[n]->SetJITBinding(emptyBinding);
+
 	// Keep a local copy of the engine pointer, because once the module is moved do the discarded
 	// pile, it is possible that another thread might discard it while we are still in here. So no
 	// further access to members may be done after that
@@ -1869,6 +1877,8 @@ int asCModule::CompileFunction(const char *sectionName, const char *code, int li
 	asCString str = code;
 	asCScriptFunction *func = 0;
 	r = funcBuilder.CompileFunction(sectionName, str.AddressOf(), lineOffset, compileFlags, &func);
+	if( r >= 0 && func )
+		func->JITCompile();
 
 	engine->BuildCompleted();
 

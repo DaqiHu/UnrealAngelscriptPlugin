@@ -18,7 +18,7 @@ namespace AngelscriptCacheFunctionInputAuthorityTests_Private
 
 	static FAngelscriptCacheSemanticDependency MakeContentDependency(
 		const EAngelscriptCacheSemanticDependencyKind Kind,
-		const EAngelscriptCacheReferenceKind ReferenceKind,
+		const EAngelscriptArtifactReferenceKind ReferenceKind,
 		const FAngelscriptHash256& StableKey,
 		const FAngelscriptHash256& DeclarationAbi,
 		const FAngelscriptHash256& Content)
@@ -90,15 +90,15 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheFunctionInputAuthorityTests,
 		TArray<FAngelscriptCacheSemanticDependency> Observed = {
 			MakeContentDependency(
 				EAngelscriptCacheSemanticDependencyKind::GlobalStorage,
-				EAngelscriptCacheReferenceKind::ScriptGlobal,
+				EAngelscriptArtifactReferenceKind::ScriptGlobal,
 				GlobalKey, GlobalAbi, GlobalStorage),
 			MakeContentDependency(
 				EAngelscriptCacheSemanticDependencyKind::PropertyLayout,
-				EAngelscriptCacheReferenceKind::ScriptProperty,
+				EAngelscriptArtifactReferenceKind::ScriptProperty,
 				PropertyKey, PropertyAbi, PropertyLayout),
 			MakeContentDependency(
 				EAngelscriptCacheSemanticDependencyKind::ValueLayout,
-				EAngelscriptCacheReferenceKind::ScriptType,
+				EAngelscriptArtifactReferenceKind::ScriptType,
 				TypeKey, TypeAbi, TypeLayout),
 		};
 		ASSERT_THAT(IsTrue(

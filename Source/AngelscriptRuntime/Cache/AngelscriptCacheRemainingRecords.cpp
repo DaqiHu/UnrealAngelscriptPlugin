@@ -591,7 +591,7 @@ namespace AngelscriptCacheRemainingRecords_Private
 				GetOffset(2));
 		}
 		const bool bRequiresAbi = RawReferenceKind
-			<= static_cast<uint8>(EAngelscriptCacheReferenceKind::EnvironmentSymbol);
+			<= static_cast<uint8>(EAngelscriptArtifactReferenceKind::EnvironmentSymbol);
 		if (bRequiresAbi && Value.Target.ExpectedAbi.IsZero())
 		{
 			return RecordFailure(
@@ -628,7 +628,7 @@ namespace AngelscriptCacheRemainingRecords_Private
 		}
 		if (Value.Kind == EAngelscriptCacheSemanticDependencyKind::FunctionContent
 			&& Value.Target.Kind
-				!= EAngelscriptCacheReferenceKind::ScriptFunction)
+				!= EAngelscriptArtifactReferenceKind::ScriptFunction)
 		{
 			return RecordFailure(
 				EAngelscriptCacheValidationError::WrongReferenceKind,
@@ -838,7 +838,7 @@ namespace AngelscriptCacheRemainingRecords_Private
 
 	static void WriteStableReference(
 		FAngelscriptArtifactCanonicalWriter& Writer,
-		const FAngelscriptCacheStableReference& Value)
+		const FAngelscriptArtifactReference& Value)
 	{
 		Writer.WriteUInt8(static_cast<uint8>(Value.Kind));
 		Writer.WriteHash(Value.StableKey);
@@ -1225,7 +1225,7 @@ namespace AngelscriptCacheRemainingRecords_Private
 
 	template <typename OffsetProviderType>
 	static FAngelscriptCacheValidationResult ValidateModuleStateStableReference(
-		const FAngelscriptCacheStableReference& Value,
+		const FAngelscriptArtifactReference& Value,
 		const EAngelscriptModuleStateCapturedField KindField,
 		const EAngelscriptModuleStateCapturedField StableKeyField,
 		const EAngelscriptModuleStateCapturedField ExpectedAbiField,
@@ -1251,7 +1251,7 @@ namespace AngelscriptCacheRemainingRecords_Private
 				GetOffset(StableKeyField, PrimaryIndex, SecondaryIndex));
 		}
 		const bool bRequiresAbi = RawKind
-			<= static_cast<uint8>(EAngelscriptCacheReferenceKind::EnvironmentSymbol);
+			<= static_cast<uint8>(EAngelscriptArtifactReferenceKind::EnvironmentSymbol);
 		if (bRequiresAbi == Value.ExpectedAbi.IsZero())
 		{
 			return RecordFailure(
@@ -1373,10 +1373,10 @@ namespace AngelscriptCacheRemainingRecords_Private
 			}
 			if ((Value.Kind == EAngelscriptCachedDataTypeKind::ScriptType
 					&& Value.TypeReference->Kind
-						!= EAngelscriptCacheReferenceKind::ScriptType)
+						!= EAngelscriptArtifactReferenceKind::ScriptType)
 				|| (Value.Kind == EAngelscriptCachedDataTypeKind::EnvironmentType
 					&& Value.TypeReference->Kind
-						!= EAngelscriptCacheReferenceKind::EnvironmentSymbol))
+						!= EAngelscriptArtifactReferenceKind::EnvironmentSymbol))
 			{
 				return RecordFailure(
 					EAngelscriptCacheValidationError::WrongReferenceKind,
@@ -1566,11 +1566,11 @@ namespace AngelscriptCacheRemainingRecords_Private
 			}
 			if ((HardValue.HardValueKind == EAngelscriptCachedHardValueKind::GlobalConstant
 					&& HardValue.Owner.Kind
-						!= EAngelscriptCacheReferenceKind::ScriptGlobal)
+						!= EAngelscriptArtifactReferenceKind::ScriptGlobal)
 				|| (HardValue.HardValueKind
 						== EAngelscriptCachedHardValueKind::EnumAuthority
 					&& HardValue.Owner.Kind
-						!= EAngelscriptCacheReferenceKind::ScriptType))
+						!= EAngelscriptArtifactReferenceKind::ScriptType))
 			{
 				return Fail(EAngelscriptCacheValidationError::WrongReferenceKind,
 					EField::HardValueOwnerReferenceKind, Index);
@@ -1705,11 +1705,11 @@ namespace AngelscriptCacheRemainingRecords_Private
 			{
 				return ReferenceResult;
 			}
-			const EAngelscriptCacheReferenceKind RequiredKind =
+			const EAngelscriptArtifactReferenceKind RequiredKind =
 				Action.ActionKind
 					== EAngelscriptCachedInitializationActionKind::DefaultConstructGlobal
-				? EAngelscriptCacheReferenceKind::ScriptGlobal
-				: EAngelscriptCacheReferenceKind::ScriptFunction;
+				? EAngelscriptArtifactReferenceKind::ScriptGlobal
+				: EAngelscriptArtifactReferenceKind::ScriptFunction;
 			if (Action.Target.Kind != RequiredKind)
 			{
 				return Fail(EAngelscriptCacheValidationError::WrongReferenceKind,
@@ -1761,14 +1761,14 @@ namespace AngelscriptCacheRemainingRecords_Private
 			{
 				return ReferenceResult;
 			}
-			if (PostInit.Function.Kind != EAngelscriptCacheReferenceKind::ScriptFunction)
+			if (PostInit.Function.Kind != EAngelscriptArtifactReferenceKind::ScriptFunction)
 			{
 				return Fail(EAngelscriptCacheValidationError::WrongReferenceKind,
 					EField::PostInitFunctionReferenceKind, Index);
 			}
 			for (int32 PreviousIndex = 0; PreviousIndex < Index; ++PreviousIndex)
 			{
-				const FAngelscriptCacheStableReference& Previous =
+				const FAngelscriptArtifactReference& Previous =
 					Value.OrderedPostInitFunctions[PreviousIndex].Function;
 				if (Previous.StableKey == PostInit.Function.StableKey)
 				{
@@ -2223,7 +2223,7 @@ namespace AngelscriptCacheRemainingRecords_Private
 		if (ReferenceTag == 1)
 		{
 			ReferenceOffset = Reader.GetOffset();
-			FAngelscriptCacheStableReference Reference;
+			FAngelscriptArtifactReference Reference;
 			if (!Reader.ConsumeReference()
 				|| !ReadEnum(Reader, Reference.Kind, 1, 9)
 				|| !Reader.ReadHash(Reference.StableKey)
@@ -3749,7 +3749,7 @@ FAngelscriptCacheRemainingRecordArchive::ComputeGlobalConstantHardValueHash(
 	using namespace AngelscriptCacheRemainingRecords_Private;
 	OutHash = {};
 	if (HardValue.HardValueKind != EAngelscriptCachedHardValueKind::GlobalConstant
-		|| HardValue.Owner.Kind != EAngelscriptCacheReferenceKind::ScriptGlobal)
+		|| HardValue.Owner.Kind != EAngelscriptArtifactReferenceKind::ScriptGlobal)
 	{
 		return RecordFailure(
 			EAngelscriptCacheValidationError::WrongReferenceKind,

@@ -91,7 +91,7 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 		OutCanonicalType.Reset();
 		OutLayoutDependency = {};
 		asCTypeInfo* TypeInfo = ScriptDataType.GetTypeInfo();
-		FAngelscriptCacheStableReference EnvironmentReference;
+		FAngelscriptArtifactReference EnvironmentReference;
 		if (TypeInfo == nullptr || TypeInfo->module != nullptr
 			|| ScriptDataType.IsReference() || ScriptDataType.IsAuto()
 			|| !FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
@@ -163,7 +163,7 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 		return Writer.FinalizeHash();
 	}
 
-	static FAngelscriptCacheStableReference BuildCodeRootReference(
+	static FAngelscriptArtifactReference BuildCodeRootReference(
 		const UClass& CodeRoot)
 	{
 		TArray<FString> AbiInputs;
@@ -171,7 +171,7 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 		AbiInputs.Add(CodeRoot.GetSuperClass() != nullptr
 			? CodeRoot.GetSuperClass()->GetPathName() : FString());
 		return {
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 			HashOneString(
 				TEXT("cache-v2-environment-code-root-key-v1"),
 				CodeRoot.GetPathName()),
@@ -488,72 +488,85 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 		return Flags;
 	}
 
+	static bool TryMapPrimitiveFunctionDataType(
+		const asCDataType& ScriptDataType,
+		FAngelscriptCachedDataType& OutType)
+	{
+		OutType = {};
+		if (!ScriptDataType.IsPrimitive())
+		{
+			return false;
+		}
+		OutType.Kind = EAngelscriptCachedDataTypeKind::Primitive;
+		switch (ScriptDataType.GetTokenType())
+		{
+		case ttVoid:
+			OutType.Primitive = EAngelscriptCachedPrimitiveType::Void;
+			break;
+		case ttBool:
+			OutType.Primitive = EAngelscriptCachedPrimitiveType::Bool;
+			break;
+		case ttInt8:
+			OutType.Primitive = EAngelscriptCachedPrimitiveType::Int8;
+			break;
+		case ttInt16:
+			OutType.Primitive = EAngelscriptCachedPrimitiveType::Int16;
+			break;
+		case ttInt:
+			OutType.Primitive = EAngelscriptCachedPrimitiveType::Int32;
+			break;
+		case ttInt64:
+			OutType.Primitive = EAngelscriptCachedPrimitiveType::Int64;
+			break;
+		case ttUInt8:
+			OutType.Primitive = EAngelscriptCachedPrimitiveType::UInt8;
+			break;
+		case ttUInt16:
+			OutType.Primitive = EAngelscriptCachedPrimitiveType::UInt16;
+			break;
+		case ttUInt:
+			OutType.Primitive = EAngelscriptCachedPrimitiveType::UInt32;
+			break;
+		case ttUInt64:
+			OutType.Primitive = EAngelscriptCachedPrimitiveType::UInt64;
+			break;
+		case ttFloat:
+		case ttFloat32:
+			OutType.Primitive = EAngelscriptCachedPrimitiveType::Float32;
+			break;
+		case ttDouble:
+		case ttFloat64:
+			OutType.Primitive = EAngelscriptCachedPrimitiveType::Float64;
+			break;
+		default:
+			return false;
+		}
+		if (ScriptDataType.IsReference())
+		{
+			OutType.QualifierFlags |= static_cast<uint32>(
+				EAngelscriptCachedTypeQualifierFlags::Reference);
+		}
+		if (ScriptDataType.IsObjectConst())
+		{
+			OutType.QualifierFlags |= static_cast<uint32>(
+				EAngelscriptCachedTypeQualifierFlags::ObjectConst);
+		}
+		return !ScriptDataType.IsObjectHandle()
+			&& !ScriptDataType.IsAuto();
+	}
+
 	static bool TryMapRootFunctionDataType(
 		const asCDataType& ScriptDataType,
 		const asCObjectType& RootType,
 		const FAngelscriptCachedDeclaration& TypeDeclaration,
 		FAngelscriptCachedDataType& OutType)
 	{
-		OutType = {};
 		if (ScriptDataType.IsPrimitive())
 		{
-			OutType.Kind = EAngelscriptCachedDataTypeKind::Primitive;
-			switch (ScriptDataType.GetTokenType())
-			{
-			case ttVoid:
-				OutType.Primitive = EAngelscriptCachedPrimitiveType::Void;
-				break;
-			case ttBool:
-				OutType.Primitive = EAngelscriptCachedPrimitiveType::Bool;
-				break;
-			case ttInt8:
-				OutType.Primitive = EAngelscriptCachedPrimitiveType::Int8;
-				break;
-			case ttInt16:
-				OutType.Primitive = EAngelscriptCachedPrimitiveType::Int16;
-				break;
-			case ttInt:
-				OutType.Primitive = EAngelscriptCachedPrimitiveType::Int32;
-				break;
-			case ttInt64:
-				OutType.Primitive = EAngelscriptCachedPrimitiveType::Int64;
-				break;
-			case ttUInt8:
-				OutType.Primitive = EAngelscriptCachedPrimitiveType::UInt8;
-				break;
-			case ttUInt16:
-				OutType.Primitive = EAngelscriptCachedPrimitiveType::UInt16;
-				break;
-			case ttUInt:
-				OutType.Primitive = EAngelscriptCachedPrimitiveType::UInt32;
-				break;
-			case ttUInt64:
-				OutType.Primitive = EAngelscriptCachedPrimitiveType::UInt64;
-				break;
-			case ttFloat:
-			case ttFloat32:
-				OutType.Primitive = EAngelscriptCachedPrimitiveType::Float32;
-				break;
-			case ttDouble:
-			case ttFloat64:
-				OutType.Primitive = EAngelscriptCachedPrimitiveType::Float64;
-				break;
-			default:
-				return false;
-			}
-			if (ScriptDataType.IsReference())
-			{
-				OutType.QualifierFlags |= static_cast<uint32>(
-					EAngelscriptCachedTypeQualifierFlags::Reference);
-			}
-			if (ScriptDataType.IsObjectConst())
-			{
-				OutType.QualifierFlags |= static_cast<uint32>(
-					EAngelscriptCachedTypeQualifierFlags::ObjectConst);
-			}
-			return !ScriptDataType.IsObjectHandle()
-				&& !ScriptDataType.IsAuto();
+			return TryMapPrimitiveFunctionDataType(ScriptDataType, OutType);
 		}
+
+		OutType = {};
 
 		if (ScriptDataType.IsAuto()
 			|| ScriptDataType.GetTypeInfo() != &RootType)
@@ -561,8 +574,8 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 			return false;
 		}
 		OutType.Kind = EAngelscriptCachedDataTypeKind::ScriptType;
-		OutType.TypeReference = FAngelscriptCacheStableReference{
-			EAngelscriptCacheReferenceKind::ScriptType,
+		OutType.TypeReference = FAngelscriptArtifactReference{
+			EAngelscriptArtifactReferenceKind::ScriptType,
 			TypeDeclaration.StableKey,
 			TypeDeclaration.SignatureHash,
 		};
@@ -600,6 +613,54 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 		const FAngelscriptCachedDeclaration* TypeDeclaration = nullptr;
 	};
 
+	static bool TryMapEnvironmentFunctionDataType(
+		const asCDataType& ScriptDataType,
+		FAngelscriptCachedDataType& OutType)
+	{
+		OutType = {};
+		asCTypeInfo* TypeInfo = ScriptDataType.GetTypeInfo();
+		FAngelscriptArtifactReference EnvironmentReference;
+		// Match clean capture exactly: class-graph callable signatures currently
+		// admit external object handles, while environment values/references stay
+		// outside this restore contract and fail closed.
+		if (TypeInfo == nullptr || TypeInfo->module != nullptr
+			|| ScriptDataType.IsAuto() || !ScriptDataType.IsObjectHandle()
+			|| !FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
+				*TypeInfo, EnvironmentReference))
+		{
+			return false;
+		}
+
+		OutType.Kind = EAngelscriptCachedDataTypeKind::EnvironmentType;
+		OutType.TypeReference = EnvironmentReference;
+		if (ScriptDataType.IsReference())
+		{
+			OutType.QualifierFlags |= static_cast<uint32>(
+				EAngelscriptCachedTypeQualifierFlags::Reference);
+		}
+		if (ScriptDataType.IsObjectConst())
+		{
+			OutType.QualifierFlags |= static_cast<uint32>(
+				EAngelscriptCachedTypeQualifierFlags::ObjectConst);
+		}
+		if (ScriptDataType.IsObjectHandle())
+		{
+			OutType.QualifierFlags |= static_cast<uint32>(
+				EAngelscriptCachedTypeQualifierFlags::ObjectHandle);
+		}
+		if (ScriptDataType.IsHandleToConst())
+		{
+			OutType.QualifierFlags |= static_cast<uint32>(
+				EAngelscriptCachedTypeQualifierFlags::ConstHandle);
+		}
+		if (ScriptDataType.HasIfHandleThenConst())
+		{
+			OutType.QualifierFlags |= static_cast<uint32>(
+				EAngelscriptCachedTypeQualifierFlags::IfHandleThenConst);
+		}
+		return true;
+	}
+
 	static bool TryMapClassGraphFunctionDataType(
 		const asCDataType& ScriptDataType,
 		const TConstArrayView<FClassGraphTypeAuthority> Authorities,
@@ -630,7 +691,7 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 					OutType);
 			}
 		}
-		return false;
+		return TryMapEnvironmentFunctionDataType(ScriptDataType, OutType);
 	}
 
 	static bool TryMapClassGraphPropertyDataType(
@@ -964,8 +1025,8 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 			if (Class.BaseClassIndex != INDEX_NONE)
 			{
 				const FClassPlan& Base = Classes[Class.BaseClassIndex];
-				const FAngelscriptCacheStableReference BaseReference{
-					EAngelscriptCacheReferenceKind::ScriptType,
+				const FAngelscriptArtifactReference BaseReference{
+					EAngelscriptArtifactReferenceKind::ScriptType,
 					Base.TypeDeclaration.StableKey,
 					Base.TypeDeclaration.SignatureHash};
 				Schema.Relations.Add({
@@ -995,7 +1056,7 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 					BaseReference, {}});
 			}
 
-			const FAngelscriptCacheStableReference CodeRoot =
+			const FAngelscriptArtifactReference CodeRoot =
 				BuildCodeRootReference(*Class.ClassDesc->CodeSuperClass);
 			Schema.Relations.Add({
 				EAngelscriptCachedTypeRelationKind::ShadowSuper, {}, CodeRoot});
@@ -1547,8 +1608,8 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 		};
 		auto MakeFunctionReference = [](const FFunctionPlan& Plan)
 		{
-			return FAngelscriptCacheStableReference{
-				EAngelscriptCacheReferenceKind::ScriptFunction,
+			return FAngelscriptArtifactReference{
+				EAngelscriptArtifactReferenceKind::ScriptFunction,
 				Plan.Authority.Declaration.StableKey,
 				Plan.Authority.Declaration.SignatureHash};
 		};
@@ -1558,7 +1619,7 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 			FClassPlan& Class = Classes[ClassIndex];
 			FAngelscriptCachedTypeSchema& Schema = Class.TypeSchema;
 			auto AddDeclarationDependency = [&Schema](
-				const FAngelscriptCacheStableReference& Target)
+				const FAngelscriptArtifactReference& Target)
 			{
 				FAngelscriptCacheSemanticDependency Dependency;
 				Dependency.Kind =
@@ -2001,7 +2062,7 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 		TypeSchema.Reflection.StaticClassGlobalName =
 			ClassDesc->StaticClassGlobalVariableName;
 
-		const FAngelscriptCacheStableReference CodeRoot =
+		const FAngelscriptArtifactReference CodeRoot =
 			BuildCodeRootReference(*ClassDesc->CodeSuperClass);
 		TypeSchema.Relations.Add({
 			EAngelscriptCachedTypeRelationKind::ShadowSuper, {}, CodeRoot});
@@ -2529,15 +2590,15 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 		auto MakeLocalFunctionReference = [](
 			const FFunctionPlan& Plan)
 		{
-			return FAngelscriptCacheStableReference{
-				EAngelscriptCacheReferenceKind::ScriptFunction,
+			return FAngelscriptArtifactReference{
+				EAngelscriptArtifactReferenceKind::ScriptFunction,
 				Plan.Authority.Declaration.StableKey,
 				Plan.Authority.Declaration.SignatureHash,
 			};
 		};
 		auto AddSchemaDependency = [&TypeSchema](
 			const EAngelscriptCacheSemanticDependencyKind Kind,
-			const FAngelscriptCacheStableReference& Target)
+			const FAngelscriptArtifactReference& Target)
 		{
 			FAngelscriptCacheSemanticDependency Dependency;
 			Dependency.Kind = Kind;
@@ -2989,18 +3050,17 @@ BuildAngelscriptCacheCurrentModuleAuthority(
 			ScriptModule->GetFunctionByIndex(FunctionIndex);
 		if (PublicFunction == nullptr
 			|| PublicFunction->GetFuncType() != asFUNC_SCRIPT
-			|| PublicFunction->GetObjectType() != nullptr
-			|| PublicFunction->GetParamCount() != 0
-			|| PublicFunction->GetReturnTypeId() != asTYPEID_INT32)
+			|| PublicFunction->GetObjectType() != nullptr)
 		{
 			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
-				TEXT("Every current authority function must be a global int function with no parameters"));
+				TEXT("Every current authority function must be a script global function"));
 		}
+		asCScriptFunction* Function =
+			static_cast<asCScriptFunction*>(PublicFunction);
 
 		FAngelscriptCacheCurrentFunctionAuthority& FunctionAuthority =
 			OutAuthority.Functions.AddDefaulted_GetRef();
-		FunctionAuthority.Function =
-			static_cast<asCScriptFunction*>(PublicFunction);
+		FunctionAuthority.Function = Function;
 		FAngelscriptCachedDeclaration& Declaration =
 			FunctionAuthority.Declaration;
 		Declaration.DeclarationKind = EAngelscriptCacheDeclarationKind::Function;
@@ -3015,7 +3075,68 @@ BuildAngelscriptCacheCurrentModuleAuthority(
 		Declaration.CanonicalName = UTF8_TO_TCHAR(PublicFunction->GetName());
 		Declaration.CanonicalDeclaration =
 			UTF8_TO_TCHAR(PublicFunction->GetDeclaration(false, false, false));
-		Declaration.DeclaredType = MakeInt32Type();
+		Declaration.TraitFlags = BuildFunctionDeclarationTraitFlags(*Function);
+		FAngelscriptCachedDataType ReturnType;
+		if (!TryMapPrimitiveFunctionDataType(
+			Function->returnType, ReturnType))
+		{
+			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+				FString::Printf(
+					TEXT("Global function %s has a non-primitive return type"),
+					*Declaration.CanonicalDeclaration));
+		}
+		Declaration.DeclaredType = MoveTemp(ReturnType);
+		for (asUINT ParameterIndex = 0;
+			ParameterIndex < Function->parameterTypes.GetLength();
+			++ParameterIndex)
+		{
+			FAngelscriptCachedParameter& Parameter =
+				Declaration.OrderedParameters.AddDefaulted_GetRef();
+			Parameter.Ordinal = ParameterIndex;
+			Parameter.CanonicalName = ParameterIndex
+				< Function->parameterNames.GetLength()
+				&& Function->parameterNames[ParameterIndex].GetLength() != 0
+					? UTF8_TO_TCHAR(
+						Function->parameterNames[ParameterIndex].AddressOf())
+					: FString::Printf(TEXT("arg%u"), ParameterIndex);
+			if (!TryMapPrimitiveFunctionDataType(
+				Function->parameterTypes[ParameterIndex], Parameter.Type))
+			{
+				return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+					FString::Printf(
+						TEXT("Global function %s parameter %u has a non-primitive type"),
+						*Declaration.CanonicalDeclaration, ParameterIndex));
+			}
+			const asETypeModifiers Passing = ParameterIndex
+				< Function->inOutFlags.GetLength()
+					? static_cast<asETypeModifiers>(
+						Function->inOutFlags[ParameterIndex] & asTM_INOUTREF)
+					: asTM_NONE;
+			switch (Passing)
+			{
+			case asTM_NONE:
+				Parameter.Passing =
+					EAngelscriptCachedParameterPassing::Value;
+				break;
+			case asTM_INREF:
+				Parameter.Passing =
+					EAngelscriptCachedParameterPassing::InReference;
+				break;
+			case asTM_OUTREF:
+				Parameter.Passing =
+					EAngelscriptCachedParameterPassing::OutReference;
+				break;
+			case asTM_INOUTREF:
+				Parameter.Passing =
+					EAngelscriptCachedParameterPassing::InOutReference;
+				break;
+			default:
+				return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+					FString::Printf(
+						TEXT("Global function %s parameter %u has an unsupported passing mode"),
+						*Declaration.CanonicalDeclaration, ParameterIndex));
+			}
+		}
 		Declaration.Slots.Add({
 			EAngelscriptCacheDeclarationSlotKind::Function, FunctionIndex});
 		FAngelscriptFunctionIdentityDescriptor FunctionIdentity;

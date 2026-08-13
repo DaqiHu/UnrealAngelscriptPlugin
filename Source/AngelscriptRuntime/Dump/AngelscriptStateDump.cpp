@@ -16,7 +16,7 @@
 #include "Debugging/AngelscriptDebugServer.h"
 
 #include "StaticJIT/AngelscriptStaticJIT.h"
-#include "StaticJIT/PrecompiledData.h"
+#include "StaticJIT/StaticJITDiagnostics.h"
 
 #include "Testing/AngelscriptBindExecutionObservation.h"
 
@@ -265,8 +265,8 @@ FString FAngelscriptStateDump::DumpAll(FAngelscriptEngine& Engine, const FString
 	TableResults.Add(DumpDocumentationStats(Engine, ResolvedOutputDir));
 	TableResults.Add(DumpEngineSettings(Engine, ResolvedOutputDir));
 	TableResults.Add(DumpHotReloadState(Engine, ResolvedOutputDir));
-	TableResults.Add(DumpJITDatabase(Engine, ResolvedOutputDir));
-	TableResults.Add(DumpPrecompiledData(Engine, ResolvedOutputDir));
+	TableResults.Add(DumpJITProviders(Engine, ResolvedOutputDir));
+	TableResults.Add(DumpJITRoutes(Engine, ResolvedOutputDir));
 	TableResults.Add(DumpStaticJITState(Engine, ResolvedOutputDir));
 	TableResults.Add(DumpDebugServerState(Engine, ResolvedOutputDir));
 	TableResults.Add(DumpDebugBreakpoints(Engine, ResolvedOutputDir));
@@ -514,7 +514,6 @@ FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpEngineOverview(FA
 		TEXT("bIsHotReloading"),
 		TEXT("bScriptDevelopmentMode"),
 		TEXT("bCollectStaticJITCompatibilityBinds"),
-		TEXT("bUseStaticJITCompatibilityData"),
 		TEXT("bCompletedAssetScan"),
 		TEXT("ActiveModuleCount"),
 		TEXT("TotalClassCount"),
@@ -539,7 +538,6 @@ FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpEngineOverview(FA
 		BoolToString(Engine.bIsHotReloading),
 		BoolToString(Engine.bScriptDevelopmentMode),
 		BoolToString(Engine.bCollectStaticJITCompatibilityBinds),
-		BoolToString(Engine.bUseStaticJITCompatibilityData),
 		BoolToString(Engine.bCompletedAssetScan),
 		LexToString(ActiveModules.Num()),
 		LexToString(TotalClassCount),
@@ -547,7 +545,7 @@ FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpEngineOverview(FA
 		LexToString(TotalDelegateCount),
 		LexToString(FAngelscriptType::GetTypes().Num()),
 		LexToString(FAngelscriptBind::GetRegisteredBindMetadata().Num()),
-		LexToString(FJITDatabase::Get().Functions.Num()),
+		LexToString(FStaticJITDiagnostics::CaptureSnapshot(&Engine).NativeRouteCount),
 		MoveTemp(DebugServerClientState),
 		JoinStrings(Engine.AllRootPaths),
 		LexToString(Engine.Diagnostics.Num()),
@@ -1273,54 +1271,91 @@ FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpHotReloadState(FA
 	return Result;
 }
 
-FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpJITDatabase(FAngelscriptEngine& Engine, const FString& OutputDir)
-{
-	const FJITDatabase& JITDatabase = FJITDatabase::Get();
-
-	FCSVWriter Writer;
-	Writer.AddHeader({
-		TEXT("Category"),
-		TEXT("EntryCount"),
-		TEXT("Details")
-	});
-
-	Writer.AddRow({ TEXT("Functions"), LexToString(JITDatabase.Functions.Num()), FString() });
-	Writer.AddRow({ TEXT("FunctionLookups"), LexToString(JITDatabase.FunctionLookups.Num()), FString() });
-	Writer.AddRow({ TEXT("SystemFunctionPointerLookups"), LexToString(JITDatabase.SystemFunctionPointerLookups.Num()), FString() });
-	Writer.AddRow({ TEXT("GlobalVarLookups"), LexToString(JITDatabase.GlobalVarLookups.Num()), FString() });
-	Writer.AddRow({ TEXT("TypeInfoLookups"), LexToString(JITDatabase.TypeInfoLookups.Num()), FString() });
-	Writer.AddRow({ TEXT("PropertyOffsetLookups"), LexToString(JITDatabase.PropertyOffsetLookups.Num()), FString() });
-
-	return SaveTable(OutputDir, TEXT("JITDatabase.csv"), Writer);
-}
-
-FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpPrecompiledData(FAngelscriptEngine& Engine, const FString& OutputDir)
+FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpJITProviders(FAngelscriptEngine& Engine, const FString& OutputDir)
 {
 	FCSVWriter Writer;
 	Writer.AddHeader({
-		TEXT("DataGuid"),
-		TEXT("ModuleCount"),
-		TEXT("FunctionMappingCount"),
-		TEXT("ClassesLoadedCount"),
-		TEXT("TimingData")
+		TEXT("ProviderId"),
+		TEXT("ProviderGeneration"),
+		TEXT("ProviderName"),
+		TEXT("OwnerModuleName"),
+		TEXT("ArtifactSetDigest"),
+		TEXT("ArtifactProfile"),
+		TEXT("NativeEnvironment"),
+		TEXT("ASModuleCount"),
+		TEXT("EntryCount")
 	});
 
-	if (Engine.PrecompiledData == nullptr)
-	{
-		Writer.AddRow({ TEXT("NotLoaded"), TEXT("0"), TEXT("0"), TEXT("0"), FString() });
-	}
-	else
+	const FStaticJITDiagnostics::FSnapshot Snapshot =
+		FStaticJITDiagnostics::CaptureSnapshot(&Engine);
+	for (const FStaticJITDiagnostics::FProviderRecord& Provider
+		: Snapshot.Providers)
 	{
 		Writer.AddRow({
-			Engine.PrecompiledData->DataGuid.ToString(EGuidFormats::DigitsWithHyphens),
-			LexToString(Engine.PrecompiledData->Modules.Num()),
-			LexToString(Engine.PrecompiledData->FunctionReferences.Num()),
-			LexToString(Engine.PrecompiledData->ClassesLoadedFromPrecompiledData.Num()),
-			FString()
+			Provider.ProviderId.Hash.ToHexString(),
+			Provider.ProviderGeneration.Hash.ToHexString(),
+			Provider.ProviderName,
+			Provider.OwnerModuleName,
+			Provider.ArtifactSetDigest.ToHexString(),
+			Provider.ArtifactProfile.Hash.ToHexString(),
+			Provider.NativeEnvironmentFingerprint.ToHexString(),
+			LexToString(Provider.Modules.Num()),
+			LexToString(Provider.Entries.Num())
 		});
 	}
 
-	return SaveTable(OutputDir, TEXT("PrecompiledData.csv"), Writer);
+	return SaveTable(OutputDir, TEXT("JITProviders.csv"), Writer);
+}
+
+FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpJITRoutes(FAngelscriptEngine& Engine, const FString& OutputDir)
+{
+	FCSVWriter Writer;
+	Writer.AddHeader({
+		TEXT("StableModuleKey"),
+		TEXT("StableFunctionKey"),
+		TEXT("CanonicalDeclaration"),
+		TEXT("TransientFunctionId"),
+		TEXT("SelectedRoute"),
+		TEXT("MatchResult"),
+		TEXT("ProviderId"),
+		TEXT("ProviderGeneration"),
+		TEXT("VMEntry"),
+		TEXT("RawEntry"),
+		TEXT("ParmsEntry"),
+		TEXT("ReferenceSlots"),
+		TEXT("ResolvedReferenceSlots"),
+		TEXT("VMExecutions"),
+		TEXT("RawExecutions"),
+		TEXT("ParmsExecutions")
+	});
+
+	const FStaticJITDiagnostics::FSnapshot Snapshot =
+		FStaticJITDiagnostics::CaptureSnapshot(&Engine);
+	for (const FStaticJITDiagnostics::FRouteRecord& Route : Snapshot.Routes)
+	{
+		Writer.AddRow({
+			Route.ModuleKey.Hash.ToHexString(),
+			Route.Identity.FunctionKey.Hash.ToHexString(),
+			Route.CanonicalDeclaration,
+			LexToString(Route.NumericFunctionId),
+			Route.SelectedExecutionRoute ==
+				EAngelscriptFunctionExecutionRoute::Native
+				? TEXT("Native") : TEXT("Vm"),
+			LexToString(static_cast<uint8>(Route.MatchResult)),
+			Route.ProviderId.Hash.ToHexString(),
+			Route.ProviderGeneration.Hash.ToHexString(),
+			BoolToString(Route.bHasVMEntry),
+			BoolToString(Route.bHasRawEntry),
+			BoolToString(Route.bHasParmsEntry),
+			LexToString(Route.ReferenceSlotCount),
+			LexToString(Route.ResolvedReferenceSlotCount),
+			LexToString(Route.VMExecutionCount),
+			LexToString(Route.RawExecutionCount),
+			LexToString(Route.ParmsExecutionCount)
+		});
+	}
+
+	return SaveTable(OutputDir, TEXT("JITRoutes.csv"), Writer);
 }
 
 FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpStaticJITState(FAngelscriptEngine& Engine, const FString& OutputDir)

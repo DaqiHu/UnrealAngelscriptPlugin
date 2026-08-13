@@ -29,8 +29,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheDependencyMiss
 	uint32 DependencyOrdinal = 0;
 	EAngelscriptCacheSemanticDependencyKind DependencyKind =
 		EAngelscriptCacheSemanticDependencyKind::Invalid;
-	EAngelscriptCacheReferenceKind TargetKind =
-		EAngelscriptCacheReferenceKind::Invalid;
+	EAngelscriptArtifactReferenceKind TargetKind =
+		EAngelscriptArtifactReferenceKind::Invalid;
 	FAngelscriptHash256 TargetStableKey;
 	FAngelscriptHash256 ExpectedAbi;
 	TOptional<FAngelscriptHash256> CurrentAbi;

@@ -323,7 +323,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedHardValue
 {
 	EAngelscriptCachedHardValueKind HardValueKind =
 		EAngelscriptCachedHardValueKind::Invalid;
-	FAngelscriptCacheStableReference Owner;
+	FAngelscriptArtifactReference Owner;
 	FAngelscriptCachedDataType Type;
 	TOptional<FAngelscriptCachedCanonicalValue> CanonicalValue;
 	FAngelscriptHash256 HardValueHash;
@@ -345,14 +345,14 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedInitializationAction
 	uint32 ActionOrdinal = 0;
 	EAngelscriptCachedInitializationActionKind ActionKind =
 		EAngelscriptCachedInitializationActionKind::Invalid;
-	FAngelscriptCacheStableReference Target;
+	FAngelscriptArtifactReference Target;
 	TArray<FAngelscriptCacheSemanticDependency> Dependencies;
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedPostInitFunction
 {
 	uint32 PostInitOrdinal = 0;
-	FAngelscriptCacheStableReference Function;
+	FAngelscriptArtifactReference Function;
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedModuleState

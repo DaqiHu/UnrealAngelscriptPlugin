@@ -445,6 +445,9 @@ void asCScriptFunction::DestroyHalfCreated()
 // internal
 void asCScriptFunction::DestroyInternal()
 {
+	asSJITFunctionBinding emptyBinding;
+	SetJITBinding(emptyBinding);
+
 	// Release all references the function holds to other objects
 	ReleaseReferences();
 	for( asUINT subtypeIndex = 0; subtypeIndex < templateSubTypes.GetLength(); ++subtypeIndex )
@@ -1551,17 +1554,152 @@ asDWORD asCScriptFunction::GetAccessMask() const
 // internal
 void asCScriptFunction::JITCompile()
 {
-	if( funcType != asFUNC_SCRIPT )
+	if( funcType != asFUNC_SCRIPT || scriptData == 0 )
+		return;
+
+	bool hasJITEntry = false;
+	for( asUINT n = 0; n < scriptData->byteCode.GetLength(); )
+	{
+		const asEBCInstr op = static_cast<asEBCInstr>(*(asBYTE*)&scriptData->byteCode[n]);
+		if( op == asBC_JitEntry )
+		{
+			hasJITEntry = true;
+			break;
+		}
+
+		n += asBCTypeSize[asBCInfo[op].type];
+	}
+	if( !hasJITEntry )
 		return;
 
 	asIJITCompiler *jit = engine->GetJITCompiler();
 	if( !jit )
 		return;
 
-	// Compile for native system
-	int r = jit->CompileFunction(this, &jitFunction);
-	if( r < 0 )
-		asASSERT( jitFunction == 0 );
+	jit->OnFunctionReady(this);
+}
+
+// interface
+int asCScriptFunction::SetJITBinding(const asSJITFunctionBinding &binding)
+{
+	asSJITFunctionBinding previousBinding;
+	asIJITCompiler *previousOwner = 0;
+	bool releasePreviousImmediately = false;
+	bool publishNewAfterImmediateRelease = false;
+	bool invalidNewOwner = false;
+	const bool hasNewBinding =
+		binding.VMEntry != 0 ||
+		binding.RawEntry != 0 ||
+		binding.ParmsEntry != 0 ||
+		binding.UserData != 0;
+	{
+		std::lock_guard<std::mutex> guard(jitBindingMutex);
+		previousBinding = jitBinding;
+		const bool isSameBinding =
+			previousBinding.VMEntry == binding.VMEntry &&
+			previousBinding.RawEntry == binding.RawEntry &&
+			previousBinding.ParmsEntry == binding.ParmsEntry &&
+			previousBinding.UserData == binding.UserData;
+		if( isSameBinding )
+			return asSUCCESS;
+
+		const bool hadPreviousBinding =
+			previousBinding.VMEntry != 0 ||
+			previousBinding.RawEntry != 0 ||
+			previousBinding.ParmsEntry != 0 ||
+			previousBinding.UserData != 0;
+		previousOwner = jitBindingOwner;
+
+		// Make the complete retired Binding unavailable before invoking user code.
+		// Active readers keep the previous generation alive until they exit.
+		jitBinding = asSJITFunctionBinding();
+		jitBindingOwner = 0;
+		if( hadPreviousBinding && previousOwner != 0 )
+		{
+			if( activeJITBindingReaders != 0 )
+			{
+				SRetiredJITBinding retired;
+				retired.Binding = previousBinding;
+				retired.Owner = previousOwner;
+				retiredJITBindings.PushLast(retired);
+			}
+			else
+				releasePreviousImmediately = true;
+		}
+
+		if( hasNewBinding )
+		{
+			if( releasePreviousImmediately )
+			{
+				// Preserve the maintained lifecycle's re-entrant contract:
+				// the release callback observes an empty current Binding, and
+				// only after it returns does the replacement become visible.
+				publishNewAfterImmediateRelease = true;
+			}
+			else if( engine == 0 || engine->GetJITCompiler() == 0 )
+			{
+				invalidNewOwner = true;
+			}
+			else
+			{
+				jitBinding = binding;
+				jitBindingOwner = engine->GetJITCompiler();
+			}
+		}
+	}
+
+	if( releasePreviousImmediately )
+		previousOwner->ReleaseFunctionBinding(this, previousBinding);
+	if( publishNewAfterImmediateRelease )
+	{
+		std::lock_guard<std::mutex> guard(jitBindingMutex);
+		if( engine == 0 || engine->GetJITCompiler() == 0 )
+			invalidNewOwner = true;
+		else
+		{
+			jitBinding = binding;
+			jitBindingOwner = engine->GetJITCompiler();
+		}
+	}
+	return invalidNewOwner ? asERROR : asSUCCESS;
+}
+
+// interface
+asSJITFunctionBinding asCScriptFunction::GetJITBinding() const
+{
+	std::lock_guard<std::mutex> guard(jitBindingMutex);
+	return jitBinding;
+}
+
+asSJITFunctionBinding asCScriptFunction::AcquireJITBindingForExecution() const
+{
+	std::lock_guard<std::mutex> guard(jitBindingMutex);
+	++activeJITBindingReaders;
+	return jitBinding;
+}
+
+void asCScriptFunction::ReleaseJITBindingAfterExecution() const
+{
+	asCArray<SRetiredJITBinding> releases;
+	{
+		std::lock_guard<std::mutex> guard(jitBindingMutex);
+		asASSERT(activeJITBindingReaders != 0);
+		if( activeJITBindingReaders == 0 )
+			return;
+		--activeJITBindingReaders;
+		if( activeJITBindingReaders == 0 )
+		{
+			for( asUINT n = 0; n < retiredJITBindings.GetLength(); ++n )
+				releases.PushLast(retiredJITBindings[n]);
+			retiredJITBindings.SetLength(0);
+		}
+	}
+	for( asUINT n = 0; n < releases.GetLength(); ++n )
+	{
+		if( releases[n].Owner != 0 )
+			releases[n].Owner->ReleaseFunctionBinding(
+				const_cast<asCScriptFunction*>(this), releases[n].Binding);
+	}
 }
 
 // interface

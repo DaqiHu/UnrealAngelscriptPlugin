@@ -6,6 +6,22 @@ class asCModule;
 class asCScriptEngine;
 class asCScriptFunction;
 
+// Resolves a script function owned by another AS module to the stable
+// declaration reference used by Cache V2. The VM artifact reader may observe a
+// current-Engine pointer while relocating its private symbol table, but only
+// this pointer-free reference is allowed into the canonical relocation
+// manifest.
+class ANGELSCRIPTRUNTIME_API
+	IAngelscriptFunctionArtifactExternalFunctionResolver
+{
+public:
+	virtual ~IAngelscriptFunctionArtifactExternalFunctionResolver() = default;
+
+	virtual bool TryResolveExternalScriptFunction(
+		const asCScriptFunction& Function,
+		FAngelscriptArtifactReference& OutReference) const = 0;
+};
+
 struct ANGELSCRIPTRUNTIME_API FAngelscriptFunctionDebugTransition
 {
 	uint32 ProgramPosition = 0;
@@ -39,12 +55,14 @@ class ANGELSCRIPTRUNTIME_API FAngelscriptFunctionArtifactCodec final
 	: public IAngelscriptCacheOpaquePayloadValidator
 {
 public:
-	static constexpr uint32 ExecutionCodecVersion = 5;
+	static constexpr uint32 ExecutionCodecVersion = 6;
 	static constexpr uint32 DebugCodecVersion = 2;
 
 	FAngelscriptFunctionArtifactCodec(
 		asCModule& InModule,
-		asCScriptEngine& InEngine);
+		asCScriptEngine& InEngine,
+		const IAngelscriptFunctionArtifactExternalFunctionResolver*
+			InExternalFunctions = nullptr);
 
 	static FAngelscriptCacheValidationResult EncodeDebugArtifact(
 		const FAngelscriptFunctionDebugArtifact& Artifact,
@@ -112,5 +130,7 @@ private:
 
 	asCModule* Module = nullptr;
 	asCScriptEngine* Engine = nullptr;
+	const IAngelscriptFunctionArtifactExternalFunctionResolver*
+		ExternalFunctions = nullptr;
 	mutable FString LastExecutionFailureDetail;
 };

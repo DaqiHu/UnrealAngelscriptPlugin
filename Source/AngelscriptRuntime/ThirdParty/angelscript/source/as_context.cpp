@@ -975,10 +975,24 @@ int asCContext::Execute()
 		if( m_currentFunction->funcType == asFUNC_SCRIPT )
 		{
 			// Try to call the JIT function directly
-			auto* jitFunction = m_currentFunction->jitFunction;
+			const asSJITFunctionBinding jitBinding =
+				m_currentFunction->AcquireJITBindingForExecution();
+			auto* jitFunction = jitBinding.VMEntry;
 			if (jitFunction != nullptr)
 			{
+				struct FReleaseJITBinding
+				{
+					asCScriptFunction* Function;
+					~FReleaseJITBinding()
+					{
+						Function->ReleaseJITBindingAfterExecution();
+					}
+				} ReleaseJITBinding{m_currentFunction};
 				FScriptExecution Execution(this);
+				Execution.jitEngine = m_engine;
+				Execution.jitFunction = m_currentFunction;
+				Execution.jitBinding = &jitBinding;
+				Execution.jitBindingUserData = jitBinding.UserData;
 
 				asQWORD outValue = 0;
 				jitFunction(
@@ -1009,6 +1023,7 @@ int asCContext::Execute()
 			}
 			else
 			{
+				m_currentFunction->ReleaseJITBindingAfterExecution();
 				m_regs.programPointer = m_currentFunction->scriptData->byteCode.AddressOf();
 
 				// Set up the internal registers for executing the script function
@@ -1458,10 +1473,24 @@ bool asCContext::ReserveStackSpace(asUINT size)
 void asCContext::CallScriptFunction(asCScriptFunction *func)
 {
 	// Try to call the JIT function directly
-	auto* jitFunction = func->jitFunction;
+	const asSJITFunctionBinding jitBinding =
+		func->AcquireJITBindingForExecution();
+	auto* jitFunction = jitBinding.VMEntry;
 	if (jitFunction != nullptr)
 	{
+		struct FReleaseJITBinding
+		{
+			asCScriptFunction* Function;
+			~FReleaseJITBinding()
+			{
+				Function->ReleaseJITBindingAfterExecution();
+			}
+		} ReleaseJITBinding{func};
 		FScriptExecution Execution(this);
+		Execution.jitEngine = m_engine;
+		Execution.jitFunction = func;
+		Execution.jitBinding = &jitBinding;
+		Execution.jitBindingUserData = jitBinding.UserData;
 
 		asQWORD outValue = 0;
 		jitFunction(
@@ -1489,6 +1518,7 @@ void asCContext::CallScriptFunction(asCScriptFunction *func)
 			return;
 		}
 	}
+	func->ReleaseJITBindingAfterExecution();
 
 	// We don't allow recursion beyond the point of sanity.
 	// This lets scripters see better exceptions when they create infinite recursion.

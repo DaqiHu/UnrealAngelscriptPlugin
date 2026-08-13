@@ -24,6 +24,8 @@ namespace UnrealBuildTool.Rules
 			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Preprocessor"));
 			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Generator"));
 			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Shared"));
+			PrivateIncludePaths.Add(Path.GetFullPath(Path.Combine(
+				ModuleDirectory, "..", "AngelscriptTestJIT")));
 
 			PublicDependencyModuleNames.AddRange(new string[]
 			{
@@ -58,6 +60,7 @@ namespace UnrealBuildTool.Rules
 					"Sockets",
 					"UnrealEd",
 					"AngelscriptEditor",
+					"AngelscriptTestJIT",
 				});
 			}
 		}

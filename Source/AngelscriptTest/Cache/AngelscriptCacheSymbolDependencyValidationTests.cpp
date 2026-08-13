@@ -808,7 +808,7 @@ int ReadGeneratedStaticClassCall()
 			if (Dependency.Kind
 					== EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi
 				&& Dependency.Target.Kind
-					== EAngelscriptCacheReferenceKind::EnvironmentSymbol)
+					== EAngelscriptArtifactReferenceKind::EnvironmentSymbol)
 			{
 				++EnvironmentDependencyCount;
 			}
@@ -940,7 +940,7 @@ int ReadCacheValueLayout(FCacheValueLayout Value)
 		ValueLayoutDependency.Kind =
 			EAngelscriptCacheSemanticDependencyKind::ValueLayout;
 		ValueLayoutDependency.Target = {
-			EAngelscriptCacheReferenceKind::ScriptType,
+			EAngelscriptArtifactReferenceKind::ScriptType,
 			TypeKey.Hash,
 			MakeCoordinateHash(
 				TEXT("cache-v2-v55-value-type-abi"),
@@ -953,7 +953,7 @@ int ReadCacheValueLayout(FCacheValueLayout Value)
 		PropertyDependency.Kind =
 			EAngelscriptCacheSemanticDependencyKind::PropertyLayout;
 		PropertyDependency.Target = {
-			EAngelscriptCacheReferenceKind::ScriptProperty,
+			EAngelscriptArtifactReferenceKind::ScriptProperty,
 			PropertyKey.Hash,
 			MakeCoordinateHash(
 				TEXT("cache-v2-v55-value-property-abi"),
@@ -987,7 +987,7 @@ int ReadCacheValueLayout(FCacheValueLayout Value)
 				return Relocation.DependencyKind
 						== EAngelscriptCacheSemanticDependencyKind::ValueLayout
 					&& Relocation.ReferenceKind
-						== EAngelscriptCacheReferenceKind::ScriptType
+						== EAngelscriptArtifactReferenceKind::ScriptType
 					&& Relocation.StableKey == TypeKey.Hash;
 			})));
 

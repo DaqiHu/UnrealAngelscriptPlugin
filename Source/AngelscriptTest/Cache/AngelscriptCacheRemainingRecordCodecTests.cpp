@@ -113,7 +113,7 @@ private:
 
 	static FAngelscriptCacheSemanticDependency MakeFunctionDependency(
 		const EAngelscriptCacheSemanticDependencyKind DependencyKind,
-		const EAngelscriptCacheReferenceKind ReferenceKind,
+		const EAngelscriptArtifactReferenceKind ReferenceKind,
 		const uint8 KeySeed,
 		const uint8 AbiSeed,
 		const TOptional<FAngelscriptHash256>& ExpectedContent = {})
@@ -500,12 +500,12 @@ public:
 				SourceValue.Identity.Profile);
 		const FAngelscriptCacheSemanticDependency Declaration = MakeFunctionDependency(
 			EAngelscriptCacheSemanticDependencyKind::Declaration,
-			EAngelscriptCacheReferenceKind::ScriptFunction,
+			EAngelscriptArtifactReferenceKind::ScriptFunction,
 			0x13,
 			0x33);
 		const FAngelscriptCacheSemanticDependency HardValue = MakeFunctionDependency(
 			EAngelscriptCacheSemanticDependencyKind::HardValue,
-			EAngelscriptCacheReferenceKind::ScriptGlobal,
+			EAngelscriptArtifactReferenceKind::ScriptGlobal,
 			0x53,
 			0x73,
 			MakeHash(0x93));

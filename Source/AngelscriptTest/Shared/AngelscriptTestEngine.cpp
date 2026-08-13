@@ -30,7 +30,8 @@ TUniquePtr<FAngelscriptEngine> FAngelscriptTestEngine::Create(
 	// destructor shutdown. Tests that provide an explicit isolated root opt into
 	// the production shutdown publication path.
 	LocalConfig.bDisableCacheV2Persistence =
-		LocalConfig.CacheV2RootOverride.IsEmpty();
+		LocalConfig.bDisableCacheV2Persistence
+		|| LocalConfig.CacheV2RootOverride.IsEmpty();
 	TUniquePtr<FAngelscriptEngine> Engine = FAngelscriptEngine::Create(LocalConfig, Dependencies);
 	UE_LOG(Angelscript, Verbose, TEXT("[TestEngine] FAngelscriptTestEngine::Create produced engine %p"), Engine.Get());
 	return Engine;
@@ -145,4 +146,12 @@ void FAngelscriptTestEngine::ResetModules(FAngelscriptEngine& Engine)
 	}
 
 	CollectGarbage(RF_NoFlags, true);
+
+	// Precompiled modules rebuild this per-engine table from their serialized
+	// static-name list. A shared test engine must not carry those module-owned
+	// indices into the next test after all of its modules have been discarded.
+	{
+		FAngelscriptEngineScope EngineScope(Engine);
+		FAngelscriptEngine::ResetStaticNames();
+	}
 }

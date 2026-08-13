@@ -4,6 +4,7 @@
 
 #include "AngelscriptEngine.h"
 #include "AngelscriptPerformanceStats.h"
+#include "StaticJIT/AngelscriptJITExecutionContext.h"
 
 #include "UObject/ScriptMacros.h"
 
@@ -132,18 +133,15 @@ static FORCEINLINE_DEBUGGABLE void AngelscriptCallFromBPVM(UASFunction* ASFuncti
 	}
 
 	asCScriptFunction* ScriptFunction = (asCScriptFunction*)ASFunction->ScriptFunction;
-	asJITFunction JitFunction = nullptr;
-	if constexpr (TNonVirtual)
-	{
-		JitFunction = ASFunction->JitFunction;
-	}
-	else
+	if constexpr (!TNonVirtual)
 	{
 		ScriptFunction = ResolveScriptVirtual(ASFunction, Object);
-		JitFunction = ScriptFunction->jitFunction;
 	}
+	FAngelscriptJITBindingExecutionLease JITBindingLease(
+		!TThreadSafe ? ScriptFunction : nullptr);
+	const asSJITFunctionBinding& JITBinding = JITBindingLease.GetBinding();
 
-	if (!TThreadSafe && JitFunction != nullptr)
+	if (!TThreadSafe && JITBinding.VMEntry != nullptr)
 	{
 		AS_PERF_SCOPE_RUNTIME_CALL_BPVM_JIT();
 
@@ -276,7 +274,13 @@ static FORCEINLINE_DEBUGGABLE void AngelscriptCallFromBPVM(UASFunction* ASFuncti
 
 		asQWORD OutValue = 0;
 		FAngelscriptGameThreadScopeWorldContext WorldContext(NewWorldContext);
-		(JitFunction)(Execution, VMArgStart, &OutValue);
+		FAngelscriptJITExecutionContext::InvokeVM(
+			Execution,
+			ScriptFunction->GetEngine(),
+			ScriptFunction,
+			JITBinding,
+			VMArgStart,
+			&OutValue);
 
 		switch (ASFunction->ReturnArgument.VMBehavior)
 		{
@@ -459,19 +463,15 @@ static FORCEINLINE_DEBUGGABLE void AngelscriptCallFromParms(UASFunction* ASFunct
 	}
 
 	asCScriptFunction* ScriptFunction = (asCScriptFunction*)ASFunction->ScriptFunction;
-	asJITFunction_ParmsEntry JitFunction;
-
-	if constexpr (TNonVirtual)
-	{
-		JitFunction = ASFunction->JitFunction_ParmsEntry;
-	}
-	else
+	if constexpr (!TNonVirtual)
 	{
 		ScriptFunction = ResolveScriptVirtual(ASFunction, Object);
-		JitFunction = ScriptFunction->jitFunction_ParmsEntry;
 	}
+	FAngelscriptJITBindingExecutionLease JITBindingLease(
+		!TThreadSafe ? ScriptFunction : nullptr);
+	const asSJITFunctionBinding& JITBinding = JITBindingLease.GetBinding();
 
-	if (!TThreadSafe && JitFunction != nullptr)
+	if (!TThreadSafe && JITBinding.ParmsEntry != nullptr)
 	{
 		UObject* NewWorldContext = nullptr;
 		if (!ASFunction->HasAnyFunctionFlags(FUNC_Static))
@@ -487,7 +487,13 @@ static FORCEINLINE_DEBUGGABLE void AngelscriptCallFromParms(UASFunction* ASFunct
 		FAngelscriptGameThreadScopeWorldContext WorldContext(NewWorldContext);
 		FScriptExecution Execution(FAngelscriptEngine::GameThreadTLD);
 
-		(JitFunction)(Execution, Object, Parms);
+		FAngelscriptJITExecutionContext::InvokeParms(
+			Execution,
+			ScriptFunction->GetEngine(),
+			ScriptFunction,
+			JITBinding,
+			Object,
+			Parms);
 	}
 	else
 	{
@@ -642,61 +648,168 @@ static FORCEINLINE_DEBUGGABLE void AngelscriptCallFromParms(UASFunction* ASFunct
 	}
 }
 
-FORCEINLINE void MakeRawJITCall_NoParam(UObject* Object, asJITFunction_Raw InFunction)
+class FAngelscriptCurrentRawJITCall final
 {
+public:
+	explicit FAngelscriptCurrentRawJITCall(asCScriptFunction* InFunction)
+		: Function(InFunction)
+		, BindingLease(InFunction)
+	{
+	}
 
-	checkSlow(FAngelscriptEngine::GameThreadTLD == asCThreadManager::GetLocalData());
+	explicit operator bool() const
+	{
+		return Function != nullptr && BindingLease.GetBinding().RawEntry != nullptr;
+	}
 
-	FAngelscriptGameThreadScopeWorldContext WorldContext(Object);
-	FScriptExecution Execution(FAngelscriptEngine::GameThreadTLD);
+	template<typename TInvoker>
+	bool Invoke(UObject* Object, TInvoker&& Invoker)
+	{
+		checkSlow(FAngelscriptEngine::GameThreadTLD == asCThreadManager::GetLocalData());
+		if (!static_cast<bool>(*this))
+		{
+			return false;
+		}
 
-	using TFuncPtr = void(*)(FScriptExecution&, void*);
-	((TFuncPtr)InFunction)(
-		Execution, Object
-	);
+		FAngelscriptGameThreadScopeWorldContext WorldContext(Object);
+		FScriptExecution Execution(FAngelscriptEngine::GameThreadTLD);
+		return FAngelscriptJITExecutionContext::InvokeRaw(
+			Execution,
+			Function->GetEngine(),
+			Function,
+			BindingLease.GetBinding(),
+			Forward<TInvoker>(Invoker));
+	}
+
+private:
+	asCScriptFunction* Function = nullptr;
+	FAngelscriptJITBindingExecutionLease BindingLease;
+};
+
+FORCEINLINE void MakeRawJITCall_NoParam(
+	UObject* Object,
+	FAngelscriptCurrentRawJITCall& CurrentCall)
+{
+	const bool bInvoked = CurrentCall.Invoke(
+		Object,
+		[Object](asJITFunction_Raw RawEntry, FScriptExecution& Execution)
+		{
+			using TFuncPtr = void(*)(FScriptExecution&, void*);
+			(reinterpret_cast<TFuncPtr>(RawEntry))(Execution, Object);
+		});
+	checkSlow(bInvoked);
 }
 
 template<typename TArgument>
-FORCEINLINE void MakeRawJITCall_Arg(UObject* Object, asJITFunction_Raw InFunction, TArgument ArgValue)
+FORCEINLINE void MakeRawJITCall_Arg(
+	UObject* Object,
+	FAngelscriptCurrentRawJITCall& CurrentCall,
+	TArgument ArgValue)
 {
-
-	checkSlow(FAngelscriptEngine::GameThreadTLD == asCThreadManager::GetLocalData());
-
-	FAngelscriptGameThreadScopeWorldContext WorldContext(Object);
-	FScriptExecution Execution(FAngelscriptEngine::GameThreadTLD);
-
-	using TFuncPtr = void(*)(FScriptExecution&, void*, TArgument Arg);
-	((TFuncPtr)InFunction)(
-		Execution, Object, ArgValue
-	);
+	const bool bInvoked = CurrentCall.Invoke(
+		Object,
+		[Object, ArgValue](asJITFunction_Raw RawEntry, FScriptExecution& Execution)
+		{
+			using TFuncPtr = void(*)(FScriptExecution&, void*, TArgument);
+			(reinterpret_cast<TFuncPtr>(RawEntry))(Execution, Object, ArgValue);
+		});
+	checkSlow(bInvoked);
 }
 
 template<typename TReturnValue>
-FORCEINLINE TReturnValue MakeRawJITCall_ReturnValue(UObject* Object, asJITFunction_Raw InFunction)
+FORCEINLINE TReturnValue MakeRawJITCall_ReturnValue(
+	UObject* Object,
+	FAngelscriptCurrentRawJITCall& CurrentCall)
 {
-
-	checkSlow(FAngelscriptEngine::GameThreadTLD == asCThreadManager::GetLocalData());
-
-	FAngelscriptGameThreadScopeWorldContext WorldContext(Object);
-	FScriptExecution Execution(FAngelscriptEngine::GameThreadTLD);
-
-	using TFuncPtr = TReturnValue(*)(FScriptExecution&, void*);
-	return ((TFuncPtr)InFunction)(
-		Execution, Object
-	);
+	TReturnValue ReturnValue = TReturnValue();
+	const bool bInvoked = CurrentCall.Invoke(
+		Object,
+		[Object, &ReturnValue](asJITFunction_Raw RawEntry, FScriptExecution& Execution)
+		{
+			using TFuncPtr = TReturnValue(*)(FScriptExecution&, void*);
+			ReturnValue = (reinterpret_cast<TFuncPtr>(RawEntry))(Execution, Object);
+		});
+	checkSlow(bInvoked);
+	return ReturnValue;
 }
 
 template<typename TArgument, typename TReturnValue>
-FORCEINLINE TReturnValue MakeRawJITCall_Arg_ReturnValue(UObject* Object, asJITFunction_Raw InFunction, TArgument ArgValue)
+FORCEINLINE TReturnValue MakeRawJITCall_Arg_ReturnValue(
+	UObject* Object,
+	FAngelscriptCurrentRawJITCall& CurrentCall,
+	TArgument ArgValue)
 {
+	TReturnValue ReturnValue = TReturnValue();
+	const bool bInvoked = CurrentCall.Invoke(
+		Object,
+		[Object, ArgValue, &ReturnValue](asJITFunction_Raw RawEntry, FScriptExecution& Execution)
+		{
+			using TFuncPtr = TReturnValue(*)(FScriptExecution&, void*, TArgument);
+			ReturnValue = (reinterpret_cast<TFuncPtr>(RawEntry))(Execution, Object, ArgValue);
+		});
+	checkSlow(bInvoked);
+	return ReturnValue;
+}
 
-	checkSlow(FAngelscriptEngine::GameThreadTLD == asCThreadManager::GetLocalData());
+FORCEINLINE bool TryMakeRawJITCall_NoParam(
+	UObject* Object,
+	asCScriptFunction* Function)
+{
+	FAngelscriptCurrentRawJITCall CurrentCall(Function);
+	return CurrentCall.Invoke(
+		Object,
+		[Object](asJITFunction_Raw RawEntry, FScriptExecution& Execution)
+		{
+			using TFuncPtr = void(*)(FScriptExecution&, void*);
+			(reinterpret_cast<TFuncPtr>(RawEntry))(Execution, Object);
+		});
+}
 
-	FAngelscriptGameThreadScopeWorldContext WorldContext(Object);
-	FScriptExecution Execution(FAngelscriptEngine::GameThreadTLD);
+template<typename TArgument>
+FORCEINLINE bool TryMakeRawJITCall_Arg(
+	UObject* Object,
+	asCScriptFunction* Function,
+	TArgument ArgValue)
+{
+	FAngelscriptCurrentRawJITCall CurrentCall(Function);
+	return CurrentCall.Invoke(
+		Object,
+		[Object, ArgValue](asJITFunction_Raw RawEntry, FScriptExecution& Execution)
+		{
+			using TFuncPtr = void(*)(FScriptExecution&, void*, TArgument);
+			(reinterpret_cast<TFuncPtr>(RawEntry))(Execution, Object, ArgValue);
+		});
+}
 
-	using TFuncPtr = TReturnValue(*)(FScriptExecution&, void*, TArgument Arg);
-	return ((TFuncPtr)InFunction)(
-		Execution, Object, ArgValue
-	);
+template<typename TReturnValue>
+FORCEINLINE bool TryMakeRawJITCall_ReturnValue(
+	UObject* Object,
+	asCScriptFunction* Function,
+	TReturnValue& OutReturnValue)
+{
+	FAngelscriptCurrentRawJITCall CurrentCall(Function);
+	return CurrentCall.Invoke(
+		Object,
+		[Object, &OutReturnValue](asJITFunction_Raw RawEntry, FScriptExecution& Execution)
+		{
+			using TFuncPtr = TReturnValue(*)(FScriptExecution&, void*);
+			OutReturnValue = (reinterpret_cast<TFuncPtr>(RawEntry))(Execution, Object);
+		});
+}
+
+template<typename TArgument, typename TReturnValue>
+FORCEINLINE bool TryMakeRawJITCall_Arg_ReturnValue(
+	UObject* Object,
+	asCScriptFunction* Function,
+	TArgument ArgValue,
+	TReturnValue& OutReturnValue)
+{
+	FAngelscriptCurrentRawJITCall CurrentCall(Function);
+	return CurrentCall.Invoke(
+		Object,
+		[Object, ArgValue, &OutReturnValue](asJITFunction_Raw RawEntry, FScriptExecution& Execution)
+		{
+			using TFuncPtr = TReturnValue(*)(FScriptExecution&, void*, TArgument);
+			OutReturnValue = (reinterpret_cast<TFuncPtr>(RawEntry))(Execution, Object, ArgValue);
+		});
 }

@@ -1,6 +1,8 @@
 #include "ClassGenerator/ASFunction.h"
 #include "ClassGenerator/ASFunction_CallHelpers.h"
 
+#include "StaticJIT/AngelscriptJITBindingContext.h"
+
 #include "UObject/CoreNet.h"
 #include "UObject/StructOnScope.h"
 
@@ -214,18 +216,14 @@ uint8 UASFunction::OptimizedCall_ByteReturn(UObject* Object)
 		return 0;
 #endif
 
-	if (JitFunction_Raw != nullptr)
-	{
-		return MakeRawJITCall_ReturnValue<asBYTE>(Object, JitFunction_Raw);
-	}
-
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (RealFunction->jitFunction_Raw != nullptr)
+	asBYTE RawReturnValue = 0;
+	if (TryMakeRawJITCall_ReturnValue(Object, RealFunction, RawReturnValue))
 	{
 		checkSlow(ReturnArgument.PosInParmStruct == 0);
 		checkSlow(ReturnArgument.ParmBehavior == EArgumentParmBehavior::Value1Byte);
 
-		return MakeRawJITCall_ReturnValue<asBYTE>(Object, RealFunction->jitFunction_Raw);
+		return RawReturnValue;
 	}
 	else
 	{
@@ -251,16 +249,10 @@ void UASFunction::OptimizedCall_FloatArg(UObject* Object, float Argument)
 		return;
 #endif
 
-	if (JitFunction_Raw != nullptr)
-	{
-		MakeRawJITCall_Arg<float>(Object, JitFunction_Raw, Argument);
-		return;
-	}
-
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (RealFunction->jitFunction_Raw != nullptr)
+	if (TryMakeRawJITCall_Arg<float>(Object, RealFunction, Argument))
 	{
-		MakeRawJITCall_Arg<float>(Object, RealFunction->jitFunction_Raw, Argument);
+		return;
 	}
 	else
 	{
@@ -285,16 +277,10 @@ void UASFunction::OptimizedCall_DoubleArg(UObject* Object, double Argument)
 		return;
 #endif
 
-	if (JitFunction_Raw != nullptr)
-	{
-		MakeRawJITCall_Arg<double>(Object, JitFunction_Raw, Argument);
-		return;
-	}
-
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	if (TryMakeRawJITCall_Arg<double>(Object, RealFunction, Argument))
 	{
-		MakeRawJITCall_Arg<double>(Object, JitFunc, Argument);
+		return;
 	}
 	else
 	{
@@ -319,16 +305,10 @@ void UASFunction::OptimizedCall(UObject* Object)
 		return;
 #endif
 
-	if (JitFunction_Raw != nullptr)
-	{
-		MakeRawJITCall_NoParam(Object, JitFunction_Raw);
-		return;
-	}
-
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	if (TryMakeRawJITCall_NoParam(Object, RealFunction))
 	{
-		MakeRawJITCall_NoParam(Object, JitFunc);
+		return;
 	}
 	else
 	{
@@ -346,15 +326,11 @@ uint8 UASFunction::OptimizedCall_RefArg_ByteReturn(UObject* Object, void* Argume
 		return 0;
 #endif
 
-	if (JitFunction_Raw != nullptr)
-	{
-		return MakeRawJITCall_Arg_ReturnValue<void*,uint8>(Object, JitFunction_Raw, Argument);
-	}
-
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	uint8 RawReturnValue = 0;
+	if (TryMakeRawJITCall_Arg_ReturnValue<void*, uint8>(Object, RealFunction, Argument, RawReturnValue))
 	{
-		return MakeRawJITCall_Arg_ReturnValue<void*,uint8>(Object, JitFunc, Argument);
+		return RawReturnValue;
 	}
 	else
 	{
@@ -379,16 +355,10 @@ void UASFunction::OptimizedCall_RefArg(UObject* Object, void* Argument)
 		return;
 #endif
 
-	if (JitFunction_Raw != nullptr)
-	{
-		MakeRawJITCall_Arg<void*>(Object, JitFunction_Raw, Argument);
-		return;
-	}
-
 	asCScriptFunction* RealFunction = ResolveScriptVirtual(this, Object);
-	if (auto* JitFunc = RealFunction->jitFunction_Raw)
+	if (TryMakeRawJITCall_Arg<void*>(Object, RealFunction, Argument))
 	{
-		MakeRawJITCall_Arg<void*>(Object, JitFunc, Argument);
+		return;
 	}
 	else
 	{
@@ -405,10 +375,20 @@ void UASFunction::OptimizedCall_RefArg(UObject* Object, void* Argument)
 UASFunction* UASFunction::AllocateFunctionFor(UClass* InClass, FName ObjectName, TSharedPtr<FAngelscriptFunctionDesc> FunctionDesc)
 {
 	asCScriptFunction* ScriptFunction = (asCScriptFunction*)FunctionDesc->ScriptFunction;
+	const asSJITFunctionBinding Binding = ScriptFunction != nullptr
+		? ScriptFunction->GetJITBinding()
+		: asSJITFunctionBinding();
+	const FAngelscriptJITBindingContext* const BindingContext =
+		FAngelscriptJITBindingContext::FromBindingUserData(Binding.UserData);
+	// `_JIT` subclasses are the immutable cooked direct-wrapper family. A
+	// complete reloadable Binding is still invoked through the ordinary
+	// route-aware wrapper so its current ScriptFunction can be replaced.
 	const bool bHasNonVirtualJitFunction = ScriptFunction != nullptr
-		&& ScriptFunction->jitFunction != nullptr
-		&& ScriptFunction->jitFunction_Raw != nullptr
-		&& ScriptFunction->jitFunction_ParmsEntry != nullptr
+		&& BindingContext != nullptr
+		&& BindingContext->IsImmutableCookedDirectDispatch()
+		&& Binding.VMEntry != nullptr
+		&& Binding.RawEntry != nullptr
+		&& Binding.ParmsEntry != nullptr
 		&& ScriptFunction->traits.GetTrait(asTRAIT_FINAL)
 	;
 
@@ -419,6 +399,16 @@ UASFunction* UASFunction::AllocateFunctionFor(UClass* InClass, FName ObjectName,
 			return NewObject<UASFunction_JIT>(InClass, ObjectName, RF_Public);
 		else
 			return NewObject<UASFunction>(InClass, ObjectName, RF_Public);
+	}
+
+	// Reflected Blueprint events must preserve current virtual dispatch before
+	// choosing any specialized ABI path. Ordinary AngelScript methods are not
+	// necessarily marked final, so finality alone cannot identify this boundary.
+	// The generic wrapper resolves the current override and then reads that
+	// function's current complete Binding.
+	if (FunctionDesc->bBlueprintEvent || FunctionDesc->bBlueprintOverride)
+	{
+		return NewObject<UASFunction_NotThreadSafe>(InClass, ObjectName, RF_Public);
 	}
 
 	if (!FunctionDesc->bIsStatic)

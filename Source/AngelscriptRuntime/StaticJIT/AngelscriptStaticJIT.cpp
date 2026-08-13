@@ -3,8 +3,17 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 
+#include "Cache/AngelscriptCacheService.h"
+#include "Cache/AngelscriptCacheEnvironment.h"
+#include "Cache/AngelscriptCacheEnvironmentProfile.h"
+#include "Cache/AngelscriptCacheStableSymbolIdentity.h"
+#include "Preprocessor/AngelscriptPreprocessor.h"
 #include "StaticJIT/PrecompiledData.h"
-#include "StaticJIT/StaticJITDiagnostics.h"
+#include "StaticJIT/AngelscriptJITBindingContext.h"
+#include "StaticJIT/AngelscriptJITGeneration.h"
+#include "StaticJIT/AngelscriptJITImmutableArtifactSet.h"
+#include "StaticJIT/AngelscriptJITProviderRouter.h"
+#include "StaticJIT/AngelscriptJITReferenceResolver.h"
 #include "StaticJIT/StaticJITHeader.h"
 
 #include "AngelscriptBytecodes.h"
@@ -19,39 +28,10 @@
 #include "source/as_datatype.h"
 #include "source/as_scriptfunction.h"
 #include "source/as_module.h"
+#include "source/as_property.h"
 #include "source/as_scriptengine.h"
 #include "source/as_objecttype.h"
 #include "EndAngelscriptHeaders.h"
-
-void FJITDatabase::Clear()
-{
-	auto& Database = FJITDatabase::Get();
-	Database.Functions.Empty();
-	Database.FunctionLookups.Empty();
-	Database.SystemFunctionPointerLookups.Empty();
-	Database.GlobalVarLookups.Empty();
-	Database.TypeInfoLookups.Empty();
-	Database.PropertyOffsetLookups.Empty();
-
-#if AS_JIT_VERIFY_PROPERTY_OFFSETS
-	Database.VerifyPropertyOffsets.Empty();
-	Database.VerifyTypeSizes.Empty();
-	Database.VerifyTypeAlignments.Empty();
-#endif
-}
-
-FJITDatabase& FJITDatabase::Get()
-{
-	static FJITDatabase Database;
-	return Database;
-}
-
-#if AS_WITH_STATIC_JIT_DIAGNOSTICS
-void FStaticJITDiagnosticEntryMarkers::MarkEntry(uint32 FunctionId)
-{
-	FStaticJITDiagnostics::MarkEntry(FunctionId);
-}
-#endif
 
 asCString GetScriptClassName(asITypeInfo* Type)
 {
@@ -72,28 +52,163 @@ asCString GetScriptClassName(asITypeInfo* Type)
 	return Str;
 }
 
-int FAngelscriptStaticJIT::CompileFunction(asIScriptFunction* ScriptFunction, asJITFunction* OutJITFunction)
+void FAngelscriptStaticJIT::OnFunctionReady(asIScriptFunction* ScriptFunction)
 {
 #if AS_CAN_GENERATE_JIT
 	// In generate mode, output the C++ that represents the script function
 	if (bGenerateOutputCode)
 	{
 		FunctionsToGenerate.Add((asCScriptFunction*)ScriptFunction, FGenerateFunction());
-		*OutJITFunction = nullptr;
-		return 1;
+		return;
 	}
 #endif
 
-	check(false);
-	return 0;
+	// Runtime bindings are selected exclusively by the engine-local Provider
+	// router after authoritative compilation. This compiler is only an
+	// observer when generating C++ and never reattaches by numeric FunctionId.
 }
 
-void FAngelscriptStaticJIT::ReleaseJITFunction(asJITFunction JITFunction)
+void FAngelscriptStaticJIT::ReleaseFunctionBinding(
+	asIScriptFunction*,
+	const asSJITFunctionBinding& Binding)
 {
-	// Doesn't do anything, we can't exactly release C++ functions
+	// Provider bindings retire only the exact immutable context stored in
+	// UserData.
+	if (Binding.UserData != nullptr)
+	{
+		FScopeLock Lock(&ProviderBindingMutex);
+		ActiveProviderBindingContexts.Remove(Binding.UserData);
+	}
+}
+
+bool FAngelscriptStaticJIT::PublishProviderSelection(
+	asIScriptFunction* ScriptFunction,
+	const FAngelscriptJITArtifactSelection& Selection,
+	const FAngelscriptJITImmutableArtifactSetValidationResult*
+		ImmutableValidation)
+{
+	if (ScriptFunction == nullptr
+		|| ScriptFunction->GetEngine() == nullptr
+		|| ScriptFunction->GetEngine()->GetJITCompiler() != this)
+	{
+		return false;
+	}
+	if (!Selection.Provider.IsValid()
+		|| !Selection.Provider->Entries.IsValidIndex(Selection.EntryIndex))
+	{
+		return false;
+	}
+	const FAngelscriptJITProviderCatalogEntry& Entry =
+		Selection.Provider->Entries[Selection.EntryIndex];
+	if (EnumHasAnyFlags(
+			Entry.Flags,
+			EAngelscriptJITArtifactEntryFlags::ImmutableDirectCallSet)
+		&& (ImmutableValidation == nullptr
+			|| !ImmutableValidation->AllowsDirectSelection(Selection)))
+	{
+		return false;
+	}
+	TSharedRef<const FAngelscriptJITBindingContext, ESPMode::ThreadSafe>
+		Context = MakeShared<FAngelscriptJITBindingContext,
+			ESPMode::ThreadSafe>(Selection, ImmutableValidation);
+	const asSJITFunctionBinding Binding = Context->BuildBinding();
+	if (!Context->IsValid()
+		|| (Binding.VMEntry == nullptr
+			&& Binding.RawEntry == nullptr
+			&& Binding.ParmsEntry == nullptr))
+	{
+		return false;
+	}
+	{
+		FScopeLock Lock(&ProviderBindingMutex);
+		ActiveProviderBindingContexts.Add(Binding.UserData, Context);
+	}
+	if (ScriptFunction->SetJITBinding(Binding) != asSUCCESS)
+	{
+		FScopeLock Lock(&ProviderBindingMutex);
+		ActiveProviderBindingContexts.Remove(Binding.UserData);
+		return false;
+	}
+	return true;
+}
+
+bool FAngelscriptStaticJIT::ClearProviderSelection(
+	asIScriptFunction* ScriptFunction)
+{
+	if (ScriptFunction == nullptr
+		|| ScriptFunction->GetEngine() == nullptr
+		|| ScriptFunction->GetEngine()->GetJITCompiler() != this)
+	{
+		return false;
+	}
+	const asSJITFunctionBinding Current = ScriptFunction->GetJITBinding();
+	if (FAngelscriptJITBindingContext::FromBindingUserData(
+		Current.UserData) == nullptr)
+	{
+		return false;
+	}
+	return ScriptFunction->SetJITBinding(asSJITFunctionBinding())
+		== asSUCCESS;
+}
+
+bool FAngelscriptStaticJIT::CanGenerateParmsEntry(
+	const asIScriptFunction* ScriptFunction)
+{
+	if (ScriptFunction == nullptr
+		|| ScriptFunction->GetFuncType() != asFUNC_SCRIPT)
+	{
+		return false;
+	}
+	const asCScriptFunction* const Function =
+		static_cast<const asCScriptFunction*>(ScriptFunction);
+	for (asUINT ParameterIndex = 0;
+		ParameterIndex < Function->parameterTypes.GetLength();
+		++ParameterIndex)
+	{
+		const asCDataType& DataType =
+			Function->parameterTypes[ParameterIndex];
+		if ((DataType.IsObject() || DataType.IsReference())
+			&& DataType.GetSizeInMemoryBytes() < 4
+			&& !DataType.IsObject())
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
 #if AS_CAN_GENERATE_JIT
+void FAngelscriptStaticJIT::CollectModuleFunctionsForGeneration(asIScriptModule* Module)
+{
+	asCModule* const ScriptModule = reinterpret_cast<asCModule*>(Module);
+	if (ScriptModule == nullptr)
+	{
+		return;
+	}
+
+	asCScriptEngine* const ModuleEngine =
+		reinterpret_cast<asCScriptEngine*>(ScriptModule->GetEngine());
+	if (Engine == nullptr)
+	{
+		Engine = ModuleEngine;
+	}
+	else
+	{
+		check(Engine == ModuleEngine);
+	}
+
+	for (asUINT Index = 0; Index < ScriptModule->scriptFunctions.GetLength(); ++Index)
+	{
+		asCScriptFunction* const Function = ScriptModule->scriptFunctions[Index];
+		if (Function != nullptr
+			&& Function->funcType == asFUNC_SCRIPT
+			&& Function->scriptData != nullptr)
+		{
+			FunctionsToGenerate.FindOrAdd(Function);
+		}
+	}
+}
+
 const FString STANDARD_HEADER =
 TEXT("#include \"StaticJIT/StaticJITConfig.h\"\n")
 #if UE_BUILD_DEBUG
@@ -114,6 +229,19 @@ TEXT("#include \"StaticJIT/StaticJITHeader.h\"\n")
 
 const FString STANDARD_FOOTER =
 TEXT("#endif\n")
+TEXT("#endif\n")
+;
+
+// Provider module sources already have an explicit target-profile guard from
+// FAngelscriptJITGeneration. Reusing STANDARD_HEADER here would freeze the
+// Editor commandlet's own build configuration as a second, contradictory
+// guard (for example UE_BUILD_DEVELOPMENT inside GameShipping output).
+const FString PROVIDER_STANDARD_HEADER =
+TEXT("#include \"StaticJIT/StaticJITConfig.h\"\n")
+TEXT("#ifndef AS_SKIP_JITTED_CODE\n\n")
+;
+
+const FString PROVIDER_STANDARD_FOOTER =
 TEXT("#endif\n")
 ;
 
@@ -275,6 +403,40 @@ FString FAngelscriptStaticJIT::GetUniqueSymbolName(const FString& InBaseName)
 	return Name;
 }
 
+TOptional<uint32> FAngelscriptStaticJIT::FindStableProviderReferenceSlot(
+	asCScriptFunction* Caller,
+	const FAngelscriptArtifactReference& Reference,
+	const bool bRequireExpectedAbi) const
+{
+	const TArray<FAngelscriptArtifactReference>* const References =
+		StableProviderReferences.Find(Caller);
+	if (References == nullptr)
+	{
+		return {};
+	}
+	for (int32 Index = 0; Index < References->Num(); ++Index)
+	{
+		const FAngelscriptArtifactReference& Candidate = (*References)[Index];
+		if (Candidate.Kind == Reference.Kind
+			&& Candidate.StableKey == Reference.StableKey
+			&& (!bRequireExpectedAbi
+				|| Candidate.ExpectedAbi == Reference.ExpectedAbi))
+		{
+			return static_cast<uint32>(Index);
+		}
+	}
+	return {};
+}
+
+TOptional<uint32> FAngelscriptStaticJIT::FindStableProviderReferenceSlot(
+	asCScriptFunction* Caller,
+	const EAngelscriptArtifactReferenceKind Kind,
+	const FAngelscriptHash256& StableKey) const
+{
+	return FindStableProviderReferenceSlot(
+		Caller, FAngelscriptArtifactReference{Kind, StableKey, {}}, false);
+}
+
 void FStaticJITContext::AdvanceBC(int32 AdvanceAmount)
 {
 	BC += AdvanceAmount;
@@ -395,13 +557,6 @@ void FStaticJITContext::GenerateNewFunction(asIScriptFunction* InScriptFunction)
 			(ScriptFunction->GetLineNumber(0, nullptr) & 0xFFFFF));
 	}
 	FunctionHead += TEXT("SCRIPT_ASSUME_NO_EXCEPTION()\n");
-#if AS_WITH_STATIC_JIT_DIAGNOSTICS
-	if (JIT->bEmitDiagnosticEntryMarkersInOutput)
-	{
-		FunctionHead += FString::Printf(TEXT("FStaticJITDiagnosticEntryMarkers::MarkEntry(0x%xu);\n"), FunctionId);
-	}
-#endif
-
 	// Create the local stack space
 	if (LocalStackSize > 0)
 		FunctionHead += FString::Printf(TEXT("alignas(8) asBYTE l_stack[%d];\n"), LocalStackSize * 4);
@@ -1198,35 +1353,38 @@ void FStaticJITContext::GenerateNewFunction(asIScriptFunction* InScriptFunction)
 		RepresentStackVariable(Offset, DataType, asCString());
 	}
 
-	FunctionHead = FString::Printf(TEXT("%s %s(FScriptExecution& Execution%s)\n{\n"), *FunctionReturnType, *FunctionName, *CppEntryInArgs) + FunctionHead;
+	const TCHAR* RawEntryComment = JIT->bEmitProviderEntryLinkage
+		? TEXT("{RAW_ENTRY_COMMENT}") : TEXT("");
+	FunctionHead = FString(RawEntryComment)
+		+ FString::Printf(TEXT("%s %s(FScriptExecution& Execution%s)\n{\n"), *FunctionReturnType, *FunctionName, *CppEntryInArgs)
+		+ FunctionHead;
 	FunctionDecl = FString::Printf(TEXT("%s %s(FScriptExecution& Execution%s)"), *FunctionReturnType, *FunctionName, *CppEntryInArgs);
 
 	// Generate the stub entries
 	FunctionFoot += TEXT("}\n");
-	FunctionFoot += FString::Printf(TEXT("static void %s_VMEntry(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)\n{\n"), *FunctionName);
+	const TCHAR* EntryLinkage = JIT->bEmitProviderEntryLinkage
+		? TEXT("") : TEXT("static ");
+	if (JIT->bEmitProviderEntryLinkage)
+	{
+		FunctionFoot += TEXT("{VM_ENTRY_COMMENT}");
+	}
+	FunctionFoot += FString::Printf(TEXT("%svoid %s_VMEntry(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)\n{\n"), EntryLinkage, *FunctionName);
 	FunctionFoot += FString::Printf(TEXT("\t%s%s(Execution%s);\n"), *VMEntryAssignment, *FunctionName, *VMEntryOutArgs);
 	FunctionFoot += VMEntryFooter;
 	FunctionFoot += TEXT("}\n");
 
-	FString ParmsFunc = TEXT("nullptr");
 	if (bParmsEntryValid)
 	{
-		FunctionFoot += FString::Printf(TEXT("static void %s_ParmsEntry(FScriptExecution& Execution, void* Object, void* Parms)\n{\n"), *FunctionName);
+		if (JIT->bEmitProviderEntryLinkage)
+		{
+			FunctionFoot += TEXT("{PARMS_ENTRY_COMMENT}");
+		}
+		FunctionFoot += FString::Printf(TEXT("%svoid %s_ParmsEntry(FScriptExecution& Execution, void* Object, void* Parms)\n{\n"), EntryLinkage, *FunctionName);
 		FunctionFoot += ParmsEntryHeader;
 		FunctionFoot += FString::Printf(TEXT("\t%s%s(Execution%s);\n"), *ParmsEntryAssignment, *FunctionName, *ParmsEntryOutArgs);
 		FunctionFoot += ParmsEntryFooter;
 		FunctionFoot += TEXT("}\n");
-
-		ParmsFunc = FString::Printf(TEXT("&%s_ParmsEntry"), *FunctionName);
 	}
-
-	// Make sure we're registering the function to the JIT
-	FunctionFoot += FString::Printf(TEXT("AS_FORCE_LINK static const FStaticJITFunction %s_Register(0x%xu, &%s_VMEntry, %s, (asJITFunction_Raw)(void*)&%s);\n\n"),
-		*FunctionName,
-		FunctionId,
-		*FunctionName,
-		*ParmsFunc,
-		*FunctionName);
 }
 
 void FStaticJITContext::NewInstruction()
@@ -1584,156 +1742,226 @@ inline FString GetSymbolNameForObjectType(asCTypeInfo* TypeInfo)
 	return SymbolName;
 }
 
+namespace
+{
+	static void SetStableProviderReferenceError(
+		FAngelscriptStaticJIT& JIT,
+		const asCScriptFunction* Caller,
+		const TCHAR* UseKind,
+		const FStringView Target)
+	{
+		if (JIT.StableProviderReferenceError.IsEmpty())
+		{
+			JIT.StableProviderReferenceError = FString::Printf(
+				TEXT("Provider generation has no stable %s slot for caller '%s' and target '%.*s'."),
+				UseKind,
+				Caller != nullptr
+					? ANSI_TO_TCHAR(Caller->GetDeclaration()) : TEXT("<null>"),
+				Target.Len(), Target.GetData());
+		}
+	}
+
+	static bool TryBuildStableProviderTypeReference(
+		const FAngelscriptStaticJIT& JIT,
+		asITypeInfo* TypeInfo,
+		FAngelscriptArtifactReference& OutReference,
+		bool& bOutHasCompleteAbi)
+	{
+		OutReference = {};
+		bOutHasCompleteAbi = false;
+		asCTypeInfo* const Type = static_cast<asCTypeInfo*>(TypeInfo);
+		if (Type == nullptr)
+		{
+			return false;
+		}
+		if (Type->module == nullptr)
+		{
+			bOutHasCompleteAbi =
+				FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
+					*Type, OutReference);
+			return bOutHasCompleteAbi;
+		}
+
+		const FAngelscriptStableModuleKey* const ModuleKey =
+			JIT.StableProviderModuleKeys.Find(Type->module);
+		FAngelscriptStableTypeKey TypeKey;
+		if (ModuleKey == nullptr
+			|| !FAngelscriptCacheStableSymbolIdentity::TryBuildLocalTypeKey(
+				*ModuleKey, *Type, TypeKey))
+		{
+			return false;
+		}
+		OutReference.Kind = EAngelscriptArtifactReferenceKind::ScriptType;
+		OutReference.StableKey = TypeKey.Hash;
+		return true;
+	}
+
+	static bool TryBuildStableProviderGlobalReference(
+		const FAngelscriptStaticJIT& JIT,
+		void* GlobalStorage,
+		FAngelscriptArtifactReference& OutReference,
+		bool& bOutHasCompleteAbi)
+	{
+		OutReference = {};
+		bOutHasCompleteAbi = false;
+		if (GlobalStorage == nullptr || JIT.Engine == nullptr)
+		{
+			return false;
+		}
+
+		asCGlobalProperty* const* const PropertyPtr =
+			JIT.Engine->varAddressMap.Find(GlobalStorage);
+		if (PropertyPtr == nullptr)
+		{
+			const FString& Literal = *static_cast<const FString*>(GlobalStorage);
+			OutReference =
+				FAngelscriptJITReferenceDescriptorBuilder::ForStringLiteral(Literal);
+			bOutHasCompleteAbi = true;
+			return OutReference.IsValid() && !OutReference.ExpectedAbi.IsZero();
+		}
+
+		const asCGlobalProperty* const Property = *PropertyPtr;
+		const FAngelscriptStableModuleKey* const ModuleKey = Property != nullptr
+			? JIT.StableProviderModuleKeys.Find(Property->module) : nullptr;
+		if (Property == nullptr || ModuleKey == nullptr)
+		{
+			return false;
+		}
+		const asCString CanonicalType = Property->type.Format(
+			Property->nameSpace, false, false);
+		FAngelscriptGlobalIdentityDescriptor Identity;
+		Identity.ModuleKey = *ModuleKey;
+		Identity.Namespace = Property->nameSpace != nullptr
+			? UTF8_TO_TCHAR(Property->nameSpace->name.AddressOf()) : FString();
+		Identity.Kind = EAngelscriptArtifactEntityKind::GlobalVariable;
+		Identity.Name = UTF8_TO_TCHAR(Property->name.AddressOf());
+		Identity.CanonicalType = UTF8_TO_TCHAR(CanonicalType.AddressOf());
+		OutReference.Kind = EAngelscriptArtifactReferenceKind::ScriptGlobal;
+		OutReference.StableKey =
+			FAngelscriptArtifactIdentityBuilder::BuildGlobalKey(Identity).Hash;
+		return !OutReference.StableKey.IsZero();
+	}
+
+	static bool TryBuildStableProviderPropertyReference(
+		const FAngelscriptStaticJIT& JIT,
+		const asCTypeInfo* OwnerType,
+		const asCObjectProperty* Property,
+		FAngelscriptArtifactReference& OutReference)
+	{
+		OutReference = {};
+		const FAngelscriptStableModuleKey* const ModuleKey = OwnerType != nullptr
+			? JIT.StableProviderModuleKeys.Find(OwnerType->module) : nullptr;
+		FAngelscriptStableTypeKey OwnerTypeKey;
+		if (ModuleKey == nullptr || Property == nullptr
+			|| !FAngelscriptCacheStableSymbolIdentity::TryBuildLocalTypeKey(
+				*ModuleKey, *OwnerType, OwnerTypeKey))
+		{
+			return false;
+		}
+		const asCString CanonicalType = Property->type.Format(
+			OwnerType->nameSpace, false, false);
+		FAngelscriptPropertyIdentityDescriptor Identity;
+		Identity.OwnerTypeKey = OwnerTypeKey;
+		Identity.Kind = EAngelscriptArtifactEntityKind::Property;
+		Identity.Name = UTF8_TO_TCHAR(Property->name.AddressOf());
+		Identity.CanonicalType = UTF8_TO_TCHAR(CanonicalType.AddressOf());
+		OutReference.Kind = EAngelscriptArtifactReferenceKind::ScriptProperty;
+		OutReference.StableKey =
+			FAngelscriptArtifactIdentityBuilder::BuildPropertyKey(Identity).Hash;
+		return !OutReference.StableKey.IsZero();
+	}
+}
+
 FString FStaticJITContext::ReferenceFunction(asCScriptFunction* Function)
 {
-	FString* ExistingName = JIT->ExternalReferenceNames.Find(Function);
-	if (ExistingName != nullptr)
+	if (Function != nullptr && Function->module == nullptr)
 	{
-		// Existing reference, see if we've already imported it into our file
-		if (!File->ExternalDeclarations.Contains(Function))
+		FAngelscriptArtifactReference Reference;
+		const bool bBuilt =
+			FAngelscriptCacheEnvironmentIdentity::TryBuildFunctionReference(
+				*Function, Reference);
+		const TOptional<uint32> SlotIndex = bBuilt
+			? JIT->FindStableProviderReferenceSlot(
+				ScriptFunction, Reference, true)
+			: TOptional<uint32>();
+		if (!SlotIndex.IsSet())
 		{
-			// Need to forward declare it in our file before we can use it
-			File->ExternalDeclarations.Add(
-				Function,
-				FString::Printf(
-					TEXT("extern FJitRef_Function %s;"),
-					**ExistingName
-				)
-			);
+			SetStableProviderReferenceError(
+				*JIT, ScriptFunction,
+				TEXT("EnvironmentSymbol function object"),
+				FStringView(ANSI_TO_TCHAR(Function->GetDeclaration())));
+			return TEXT("nullptr");
 		}
-
-		return FString::Printf(TEXT("%s.Get()"), **ExistingName);
+		return FString::Printf(
+			TEXT("FAngelscriptJITGeneratedReferenceAccess::GetScriptFunction(Execution, %uu)"),
+			SlotIndex.GetValue());
 	}
-	else
+
+	const TMap<asCScriptFunction*, uint32>* const FunctionSlots =
+		JIT->StableProviderFunctionReferenceSlots.Find(ScriptFunction);
+	const uint32* const SlotIndex = FunctionSlots != nullptr
+		&& Function != nullptr ? FunctionSlots->Find(Function) : nullptr;
+	if (SlotIndex == nullptr)
 	{
-		// Create a new reference for this function
-		FString SymbolName;
-		if (Function->objectType != nullptr)
-		{
-			SymbolName = FString::Printf(
-				TEXT("FREF_%s__%s"),
-				*GetSymbolNameForObjectType(Function->objectType),
-				ANSI_TO_TCHAR(Function->name.AddressOf())
-			);
-		}
-		else
-		{
-			SymbolName = FString::Printf(
-				TEXT("FREF_%s"),
-				ANSI_TO_TCHAR(Function->name.AddressOf())
-			);
-		}
-
-		SymbolName = JIT->GetUniqueSymbolName(SymbolName);
-
-		// Add reference to precompiled data
-		auto Ref = JIT->PrecompiledData->ReferenceFunction(Function);
-
-		FString Decl = FString::Printf(TEXT("AS_FORCE_LINK FJitRef_Function %s(0x%llx);"), *SymbolName, Ref.OldReference);
-		File->ExternalDeclarations.Add(Function, Decl);
-		JIT->ExternalReferenceNames.Add(Function, SymbolName);
-
-		return FString::Printf(TEXT("%s.Get()"), *SymbolName);
+		SetStableProviderReferenceError(
+			*JIT, ScriptFunction, TEXT("ScriptFunction"),
+			Function != nullptr
+				? FStringView(ANSI_TO_TCHAR(Function->GetDeclaration()))
+				: FStringView(TEXT("<null>")));
+		return TEXT("nullptr");
 	}
+	return FString::Printf(
+		TEXT("FAngelscriptJITGeneratedReferenceAccess::GetScriptFunction(Execution, %uu)"),
+		*SlotIndex);
+
 }
-
 FString FStaticJITContext::ReferenceSystemFunctionPointer(asCScriptFunction* Function)
 {
-	// Use script-function identity, not raw sysFuncIntf->func, since multiple
-	// AS functions can share a native entry but require distinct JIT refs.
-	FString* ExistingName = JIT->ExternalSystemFunctionPointerReferenceNames.Find(Function);
-
-	if (ExistingName != nullptr)
+	FAngelscriptArtifactReference Reference;
+	const bool bBuilt = Function != nullptr
+		&& FAngelscriptCacheEnvironmentIdentity::TryBuildFunctionReference(
+			*Function, Reference);
+	const TOptional<uint32> SlotIndex = bBuilt
+		? JIT->FindStableProviderReferenceSlot(
+			ScriptFunction, Reference, true) : TOptional<uint32>();
+	if (!SlotIndex.IsSet())
 	{
-		// Existing reference, see if we've already imported it into our file
-		if (!File->ExternalSystemFunctionPointerDeclarations.Contains(Function))
-		{
-			// Need to forward declare it in our file before we can use it
-			File->ExternalSystemFunctionPointerDeclarations.Add(
-				Function,
-				FString::Printf(
-					TEXT("extern FJitRef_SystemFunctionPointer %s;"),
-					**ExistingName
-				)
-			);
-		}
-
-		return *ExistingName;
+		SetStableProviderReferenceError(
+			*JIT, ScriptFunction, TEXT("EnvironmentSymbol function"),
+			Function != nullptr
+				? FStringView(ANSI_TO_TCHAR(Function->GetDeclaration()))
+				: FStringView(TEXT("<null>")));
+		return TEXT("asSFuncPtr()");
 	}
-	else
-	{
-		// Create a new reference for this function
-		FString SymbolName;
-		if (Function->objectType != nullptr)
-		{
-			SymbolName = FString::Printf(
-				TEXT("SYSPTR_%s__%s"),
-				*GetSymbolNameForObjectType(Function->objectType),
-				ANSI_TO_TCHAR(Function->name.AddressOf())
-			);
-		}
-		else
-		{
-			SymbolName = FString::Printf(
-				TEXT("SYSPTR_%s"),
-				ANSI_TO_TCHAR(Function->name.AddressOf())
-			);
-		}
+	return FString::Printf(
+		TEXT("FAngelscriptJITGeneratedReferenceAccess::GetSystemFunctionPointer(Execution, %uu)"),
+		SlotIndex.GetValue());
 
-		SymbolName = JIT->GetUniqueSymbolName(SymbolName);
-
-		// Add reference to precompiled data
-		auto Ref = JIT->PrecompiledData->ReferenceFunction(Function);
-
-		FString Decl = FString::Printf(TEXT("AS_FORCE_LINK FJitRef_SystemFunctionPointer %s(0x%llx);"), *SymbolName, Ref.OldReference);
-		File->ExternalSystemFunctionPointerDeclarations.Add(Function, Decl);
-		JIT->ExternalSystemFunctionPointerReferenceNames.Add(Function, SymbolName);
-
-		return SymbolName;
-	}
 }
-
 FString FStaticJITContext::ReferenceTypeInfo(asITypeInfo* TypeInfo)
 {
-	FString* ExistingName = JIT->ExternalReferenceNames.Find(TypeInfo);
-	if (ExistingName != nullptr)
+	FAngelscriptArtifactReference Reference;
+	bool bHasCompleteAbi = false;
+	const bool bBuilt = TryBuildStableProviderTypeReference(
+		*JIT, TypeInfo, Reference, bHasCompleteAbi);
+	const TOptional<uint32> SlotIndex = bBuilt
+		? JIT->FindStableProviderReferenceSlot(
+			ScriptFunction, Reference, bHasCompleteAbi)
+		: TOptional<uint32>();
+	if (!SlotIndex.IsSet())
 	{
-		// Existing reference, see if we've already imported it into our file
-		if (!File->ExternalDeclarations.Contains(TypeInfo))
-		{
-			// Need to forward declare it in our file before we can use it
-			File->ExternalDeclarations.Add(
-				TypeInfo,
-				FString::Printf(
-					TEXT("extern FJitRef_Type %s;"),
-					**ExistingName
-				)
-			);
-		}
-
-		return FString::Printf(TEXT("%s.Get()"), **ExistingName);
+		SetStableProviderReferenceError(
+			*JIT, ScriptFunction, TEXT("type"),
+			TypeInfo != nullptr
+				? FStringView(UTF8_TO_TCHAR(TypeInfo->GetName()))
+				: FStringView(TEXT("<null>")));
+		return TEXT("nullptr");
 	}
-	else
-	{
-		// Create a new reference for this function
-		FString SymbolName = FString::Printf(
-			TEXT("TREF_%s"),
-			*GetSymbolNameForObjectType((asCTypeInfo*)TypeInfo)
-		);
+	return FString::Printf(
+		TEXT("FAngelscriptJITGeneratedReferenceAccess::GetTypeInfo(Execution, %uu)"),
+		SlotIndex.GetValue());
 
-		SymbolName = JIT->GetUniqueSymbolName(SymbolName);
-
-		// Add reference to precompiled data
-		auto Ref = JIT->PrecompiledData->ReferenceTypeInfo(TypeInfo);
-
-		FString Decl = FString::Printf(TEXT("AS_FORCE_LINK FJitRef_Type %s(0x%llx);"), *SymbolName, Ref.OldReference);
-		File->ExternalDeclarations.Add(TypeInfo, Decl);
-		JIT->ExternalReferenceNames.Add(TypeInfo, SymbolName);
-
-		return FString::Printf(TEXT("%s.Get()"), *SymbolName);
-	}
 }
-
 FString FStaticJITContext::ReferenceTypeSize(asITypeInfo* TypeInfo)
 {
 	if (!JIT->IsTypePotentiallyDifferent(TypeInfo))
@@ -1746,39 +1974,20 @@ FString FStaticJITContext::ReferenceTypeSize(asITypeInfo* TypeInfo)
 		if (ComputedOffsets.IsValid() && (ComputedOffsets->bCanHardcodeSize || ComputedOffsets->bHasComputedSize))
 		{
 			FString SizeExpr;
-			FString AlignmentExpr;
 
 			if (ComputedOffsets->bCanHardcodeSize)
 			{
 				SizeExpr = FString::Printf(TEXT("%d"), ComputedOffsets->HardcodedSize);
-				AlignmentExpr = FString::Printf(TEXT("%d"), ComputedOffsets->HardcodedAlignment);
 			}
 			else if (ComputedOffsets->bHasComputedSize)
 			{
 				SizeExpr = ComputedOffsets->ComputedSizeVariable;
-				AlignmentExpr = ComputedOffsets->ComputedAlignmentVariable;
 
 				if (!ComputedOffsets->ContainingSharedHeader.IsEmpty())
 					File->SharedHeaderDependencies.Add(ComputedOffsets->ContainingSharedHeader);
 				if (!ComputedOffsets->AdditionalHeader.IsEmpty())
 					File->Headers.Add(ComputedOffsets->AdditionalHeader);
 			}
-
-#if AS_JIT_VERIFY_PROPERTY_OFFSETS
-			if (!JIT->VerifiedExternalReferences.Contains(ObjectType))
-			{
-				auto Ref = JIT->PrecompiledData->ReferenceTypeInfo(TypeInfo);
-				File->Content.Add(
-					FString::Printf(
-						TEXT("AS_FORCE_LINK FJitVerifyTypeSize TSIZEVERIFY_%s(0x%llx, %s, %s);\n"),
-						*GetSymbolNameForObjectType(ObjectType),
-						Ref.OldReference, *SizeExpr, *AlignmentExpr
-					)
-				);
-				JIT->VerifiedExternalReferences.Add(ObjectType);
-			}
-#endif
-
 			return SizeExpr;
 		}
 	}
@@ -1797,17 +2006,14 @@ FString FStaticJITContext::ReferenceTypeAlignment(asITypeInfo* TypeInfo)
 		auto ComputedOffsets = JIT->GetComputedOffsets(ObjectType);
 		if (ComputedOffsets.IsValid() && (ComputedOffsets->bCanHardcodeSize || ComputedOffsets->bHasComputedSize))
 		{
-			FString SizeExpr;
 			FString AlignmentExpr;
 
 			if (ComputedOffsets->bCanHardcodeSize)
 			{
-				SizeExpr = FString::Printf(TEXT("%d"), ComputedOffsets->HardcodedSize);
 				AlignmentExpr = FString::Printf(TEXT("%d"), ComputedOffsets->HardcodedAlignment);
 			}
 			else if (ComputedOffsets->bHasComputedSize)
 			{
-				SizeExpr = ComputedOffsets->ComputedSizeVariable;
 				AlignmentExpr = ComputedOffsets->ComputedAlignmentVariable;
 
 				if (!ComputedOffsets->ContainingSharedHeader.IsEmpty())
@@ -1815,22 +2021,6 @@ FString FStaticJITContext::ReferenceTypeAlignment(asITypeInfo* TypeInfo)
 				if (!ComputedOffsets->AdditionalHeader.IsEmpty())
 					File->Headers.Add(ComputedOffsets->AdditionalHeader);
 			}
-
-#if AS_JIT_VERIFY_PROPERTY_OFFSETS
-			if (!JIT->VerifiedExternalReferences.Contains(ObjectType))
-			{
-				auto Ref = JIT->PrecompiledData->ReferenceTypeInfo(TypeInfo);
-				File->Content.Add(
-					FString::Printf(
-						TEXT("AS_FORCE_LINK FJitVerifyTypeSize TSIZEVERIFY_%s(0x%llx, %s, %s);\n"),
-						*GetSymbolNameForObjectType(ObjectType),
-						Ref.OldReference, *SizeExpr, *AlignmentExpr
-					)
-				);
-				JIT->VerifiedExternalReferences.Add(ObjectType);
-			}
-#endif
-
 			return AlignmentExpr;
 		}
 	}
@@ -1841,46 +2031,28 @@ FString FStaticJITContext::ReferenceTypeAlignment(asITypeInfo* TypeInfo)
 FString FStaticJITContext::ReferenceObjectType(asITypeInfo* TypeInfo)
 {
 	check((TypeInfo->GetFlags() & (asOBJ_VALUE | asOBJ_REF)) != 0);
-
-	FString* ExistingName = JIT->ExternalReferenceNames.Find(TypeInfo);
-	if (ExistingName != nullptr)
+		FAngelscriptArtifactReference Reference;
+	bool bHasCompleteAbi = false;
+	const bool bBuilt = TryBuildStableProviderTypeReference(
+		*JIT, TypeInfo, Reference, bHasCompleteAbi);
+	const TOptional<uint32> SlotIndex = bBuilt
+		? JIT->FindStableProviderReferenceSlot(
+			ScriptFunction, Reference, bHasCompleteAbi)
+		: TOptional<uint32>();
+	if (!SlotIndex.IsSet())
 	{
-		// Existing reference, see if we've already imported it into our file
-		if (!File->ExternalDeclarations.Contains(TypeInfo))
-		{
-			// Need to forward declare it in our file before we can use it
-			File->ExternalDeclarations.Add(
-				TypeInfo,
-				FString::Printf(
-					TEXT("extern FJitRef_Type %s;"),
-					**ExistingName
-				)
-			);
-		}
-
-		return FString::Printf(TEXT("%s.GetObjectType()"), **ExistingName);
+		SetStableProviderReferenceError(
+			*JIT, ScriptFunction, TEXT("object type"),
+			TypeInfo != nullptr
+				? FStringView(UTF8_TO_TCHAR(TypeInfo->GetName()))
+				: FStringView(TEXT("<null>")));
+		return TEXT("nullptr");
 	}
-	else
-	{
-		// Create a new reference for this function
-		FString SymbolName = FString::Printf(
-			TEXT("TREF_%s"),
-			*GetSymbolNameForObjectType((asCTypeInfo*)TypeInfo)
-		);
+	return FString::Printf(
+		TEXT("FAngelscriptJITGeneratedReferenceAccess::GetObjectType(Execution, %uu)"),
+		SlotIndex.GetValue());
 
-		SymbolName = JIT->GetUniqueSymbolName(SymbolName);
-
-		// Add reference to precompiled data
-		auto Ref = JIT->PrecompiledData->ReferenceTypeInfo(TypeInfo);
-
-		FString Decl = FString::Printf(TEXT("AS_FORCE_LINK FJitRef_Type %s(0x%llx);"), *SymbolName, Ref.OldReference);
-		File->ExternalDeclarations.Add(TypeInfo, Decl);
-		JIT->ExternalReferenceNames.Add(TypeInfo, SymbolName);
-
-		return FString::Printf(TEXT("%s.GetObjectType()"), *SymbolName);
-	}
 }
-
 FString FStaticJITContext::ReferenceTypeId(asDWORD TypeId)
 {
 	if (TypeId <= asTYPEID_LAST_PRIMITIVE)
@@ -1904,53 +2076,28 @@ FString FStaticJITContext::ReferenceTypeId(asDWORD TypeId)
 
 FString FStaticJITContext::ReferenceGlobalVariable(void* GlobalVar)
 {
-	FString* ExistingName = JIT->ExternalReferenceNames.Find(GlobalVar);
-	if (ExistingName != nullptr)
+		FAngelscriptArtifactReference Reference;
+	bool bHasCompleteAbi = false;
+	const bool bBuilt = TryBuildStableProviderGlobalReference(
+		*JIT, GlobalVar, Reference, bHasCompleteAbi);
+	const TOptional<uint32> SlotIndex = bBuilt
+		? JIT->FindStableProviderReferenceSlot(
+			ScriptFunction, Reference, bHasCompleteAbi)
+		: TOptional<uint32>();
+	if (!SlotIndex.IsSet())
 	{
-		// Existing reference, see if we've already imported it into our file
-		if (!File->ExternalDeclarations.Contains(GlobalVar))
-		{
-			// Need to forward declare it in our file before we can use it
-			File->ExternalDeclarations.Add(
-				GlobalVar,
-				FString::Printf(
-					TEXT("extern FJitRef_GlobalVar %s;"),
-					**ExistingName
-				)
-			);
-		}
-
-		return FString::Printf(TEXT("%s.Get()"), **ExistingName);
+		SetStableProviderReferenceError(
+			*JIT, ScriptFunction, TEXT("global storage"),
+			Reference.IsValid()
+				? FStringView(Reference.StableKey.ToHexString())
+				: FStringView(TEXT("<unresolved>")));
+		return TEXT("nullptr");
 	}
-	else
-	{
-		// Add reference to precompiled data
-		FString VarName;
-		auto Ref = JIT->PrecompiledData->ReferenceGlobalVariable(GlobalVar, &VarName);
+	return FString::Printf(
+		TEXT("FAngelscriptJITGeneratedReferenceAccess::GetGlobalStorage(Execution, %uu)"),
+		SlotIndex.GetValue());
 
-		if (VarName.Len() == 0)
-			VarName = FString::Printf(TEXT("%x"), GlobalVar);
-
-		// Some strings are long and shouldn't get super long variable names
-		if (VarName.Len() >= 50)
-			VarName = VarName.Mid(0, 50);
-
-		// Create a new reference for this function
-		FString SymbolName = FString::Printf(
-			TEXT("GREF_%s"),
-			*VarName
-		);
-
-		SymbolName = JIT->GetUniqueSymbolName(SymbolName);
-
-		FString Decl = FString::Printf(TEXT("AS_FORCE_LINK FJitRef_GlobalVar %s(0x%llx);"), *SymbolName, Ref.OldReference);
-		File->ExternalDeclarations.Add(GlobalVar, Decl);
-		JIT->ExternalReferenceNames.Add(GlobalVar, SymbolName);
-
-		return FString::Printf(TEXT("%s.Get()"), *SymbolName);
-	}
 }
-
 FString FStaticJITContext::ReferencePropertyOffset(short Offset, int TypeId)
 {
 	asCObjectType* ObjectType = (asCObjectType*)GetEngine()->GetTypeInfoById(TypeId);
@@ -2022,71 +2169,30 @@ FString FStaticJITContext::ReferencePropertyOffset(short Offset, int TypeId)
 				OffsetExpr = PropOffset->ComputedOffsetVariable;
 			}
 
-			asCObjectProperty* Property = nullptr;
-			auto Ref = JIT->PrecompiledData->ReferenceProperty(Offset, TypeId, &Property, &InType);
-			void* PropertyId = (void*)Ref.OldReference;
-
-#if AS_JIT_VERIFY_PROPERTY_OFFSETS
-			if (!JIT->VerifiedExternalReferences.Contains(PropertyId))
-			{
-				FString TypeName = ANSI_TO_TCHAR(InType->name.AddressOf());
-				File->Content.Add(
-					FString::Printf(
-						TEXT("AS_FORCE_LINK FJitVerifyPropertyOffset PVERIFY_%s_%s(0x%llx, %s);\n"),
-						*GetSymbolNameForObjectType(InType),
-						*PropertyName,
-						Ref.OldReference, *OffsetExpr
-					)
-				);
-				JIT->VerifiedExternalReferences.Add(PropertyId);
-			}
-#endif
-
 			return OffsetExpr;
 		}
 	}
 
-	asCObjectProperty* Property = nullptr;
-	auto Ref = JIT->PrecompiledData->ReferenceProperty(Offset, TypeId, &Property, &InType);
-	void* PropertyId = (void*)Ref.OldReference;
-
-	FString* ExistingName = JIT->ExternalReferenceNames.Find(PropertyId);
-	if (ExistingName != nullptr)
+		FAngelscriptArtifactReference Reference;
+	const bool bBuilt = TryBuildStableProviderPropertyReference(
+		*JIT, InType, ASProperty, Reference);
+	const TOptional<uint32> SlotIndex = bBuilt
+		? JIT->FindStableProviderReferenceSlot(
+			ScriptFunction, Reference, false) : TOptional<uint32>();
+	if (!SlotIndex.IsSet())
 	{
-		// Existing reference, see if we've already imported it into our file
-		if (!File->ExternalDeclarations.Contains(PropertyId))
-		{
-			// Need to forward declare it in our file before we can use it
-			File->ExternalDeclarations.Add(
-				PropertyId,
-				FString::Printf(
-					TEXT("extern FJitRef_PropertyOffset %s;"),
-					**ExistingName
-				)
-			);
-		}
-
-		return FString::Printf(TEXT("%s.Get()"), **ExistingName);
+		SetStableProviderReferenceError(
+			*JIT, ScriptFunction, TEXT("property"),
+			ASProperty != nullptr
+				? FStringView(UTF8_TO_TCHAR(ASProperty->name.AddressOf()))
+				: FStringView(TEXT("<null>")));
+		return TEXT("0u");
 	}
-	else
-	{
-		// Create a new reference for this function
-		FString SymbolName = FString::Printf(
-			TEXT("PREF_%s_%s"),
-			*GetSymbolNameForObjectType(InType),
-			ANSI_TO_TCHAR(Property->name.AddressOf())
-		);
+	return FString::Printf(
+		TEXT("FAngelscriptJITGeneratedReferenceAccess::GetPropertyOffset(Execution, %uu)"),
+		SlotIndex.GetValue());
 
-		SymbolName = JIT->GetUniqueSymbolName(SymbolName);
-
-		FString Decl = FString::Printf(TEXT("AS_FORCE_LINK FJitRef_PropertyOffset %s(0x%llx);"), *SymbolName, Ref.OldReference);
-		File->ExternalDeclarations.Add(PropertyId, Decl);
-		JIT->ExternalReferenceNames.Add(PropertyId, SymbolName);
-
-		return FString::Printf(TEXT("%s.Get()"), *SymbolName);
-	}
 }
-
 FString FStaticJITContext::VArg(int32 ArgumentIndex)
 {
 	if (ArgumentIndex == 0)
@@ -3235,6 +3341,7 @@ void FAngelscriptStaticJIT::GenerateCppCode(asIScriptFunction* ScriptFunction, F
 
 	uint32 FunctionId = PrecompiledData->CreateFunctionId(ScriptFunction);
 	FJITFile& File = GetFile(ScriptFunction->GetModule());
+	const int32 FirstFunctionContentIndex = File.Content.Num();
 
 	FString Code;
 
@@ -3369,7 +3476,11 @@ void FAngelscriptStaticJIT::GenerateCppCode(asIScriptFunction* ScriptFunction, F
 		{
 			FString Variables;
 			for (int Pos : Cleanup.Positions)
-				Variables += FString::Printf(TEXT("%d, "), Pos);
+			{
+				if (!Variables.IsEmpty())
+					Variables += TEXT(", ");
+				Variables += FString::FromInt(Pos);
+			}
 
 			Context.Line("{0}:", Cleanup.Label);
 			Context.Line("// Exception cleanup for variables {0}", Variables);
@@ -3402,6 +3513,25 @@ void FAngelscriptStaticJIT::GenerateCppCode(asIScriptFunction* ScriptFunction, F
 	}
 
 	Context.WriteOutFunction();
+	const bool bEmittedParmsEntry = File.Content.ContainsByPredicate(
+		[&Generate](const FString& Content)
+		{
+			return Content.Contains(
+				Generate.FunctionSymbolName + TEXT("_ParmsEntry"));
+		});
+	const bool bExpectedParmsEntry =
+		FAngelscriptStaticJIT::CanGenerateParmsEntry(ScriptFunction);
+	ensureMsgf(bEmittedParmsEntry == bExpectedParmsEntry,
+		TEXT("StaticJIT Parms-entry capability drifted between emission and Runtime ABI derivation for %s."),
+		UTF8_TO_TCHAR(ScriptFunction->GetDeclaration()));
+	Generate.bHasParmsEntry = bEmittedParmsEntry;
+	Generate.EmittedFunctionContent.Reset();
+	for (int32 ContentIndex = FirstFunctionContentIndex;
+		ContentIndex < File.Content.Num();
+		++ContentIndex)
+	{
+		Generate.EmittedFunctionContent += File.Content[ContentIndex];
+	}
 }
 
 void FAngelscriptStaticJIT::DetectScriptType(asCObjectType* ObjectType)
@@ -3477,7 +3607,11 @@ bool FAngelscriptStaticJIT::IsFunctionAlwaysJIT(asCScriptFunction* VirtualFuncti
 void FAngelscriptStaticJIT::AnalyzeScriptFunction(asCScriptFunction* ScriptFunction, FGenerateFunction& Generate)
 {
 	FJITFile& File = GetFile(ScriptFunction->GetModule());
-	Generate.FunctionSymbolName = GetUniqueFunctionName(File, ScriptFunction, 0);
+	if (Generate.FunctionSymbolName.IsEmpty())
+	{
+		Generate.FunctionSymbolName = GetUniqueFunctionName(
+			File, ScriptFunction, 0);
+	}
 
 	// If nothing overrides this method, we mark it as final, this allows some runtime
 	// devirtualization optimizations to happen when loading from precompiled scripts.
@@ -3491,450 +3625,828 @@ void FAngelscriptStaticJIT::AnalyzeScriptFunction(asCScriptFunction* ScriptFunct
 	}
 }
 
-void FAngelscriptStaticJIT::WriteOutputCode(TMap<FString, FString>* OutGeneratedFiles)
-{
-	Engine = (asCScriptEngine*)FAngelscriptEngine::Get().Engine;
-	bAllowDevirtualize = true;
-	bAllowComprehensiveJIT = true;
-
-	// Detect all script types in the engine
-	for (int32 i = 0, Count = Engine->scriptModules.GetLength(); i < Count; ++i)
-	{
-		auto* Module = Engine->scriptModules[i];
-		if (Module == nullptr)
-			continue;
-		for (int32 j = 0, jCount = Module->classTypes.GetLength(); j < jCount; ++j)
-		{
-			asCObjectType* objType = Module->classTypes[j];
-			if (objType == nullptr)
-				continue;
-			DetectScriptType(objType);
-		}
-	}
-
-	// Pre-Analyze the functions we're going to generate
-	for (auto& Elem : FunctionsToGenerate)
-		AnalyzeScriptFunction(Elem.Key, Elem.Value);
-
-	// Run all scriptfunctions through the generate process
-	for (auto& Elem : FunctionsToGenerate)
-		GenerateCppCode(Elem.Key, Elem.Value);
-
-	FString GenDir;
-	IFileManager* FileManager = nullptr;
-	TArray<FString> PreviousFiles;
-	if (OutGeneratedFiles == nullptr)
-	{
-		GenDir = FPaths::RootDir() / TEXT("AS_JITTED_CODE");
-
-		// Delete and recreate the folder so we don't keep any old code
-		FileManager = &IFileManager::Get();
-		FileManager->MakeDirectory(*GenDir, true);
-		FileManager->FindFiles(PreviousFiles, *GenDir);
-	}
-
-	TSet<FString> CurrentFiles;
-
-	int32 CombinedFileIndex = 0;
-	int32 LinesInCombinedFile = 0;
-
-	TArray<FString> FilesToCombine;
-
-	// Mark which shader headers are used by more than one module
-	for(auto ModuleElem : JITFiles)
-	{
-		for (const FString& HeaderName : ModuleElem.Value->SharedHeaderDependencies)
-		{
-			auto Header = SharedHeaders[HeaderName];
-			Header->DependentModules.Add(ModuleElem.Key);
-		}
-	}
-
-	// Write the shared header files to disk
-	for (auto& HeaderElem : SharedHeaders)
-	{
-		FSharedHeader& Header = *HeaderElem.Value.Get();
-		if (Header.Content.IsEmpty())
-			continue;
-		if (Header.DependentModules.Num() == 0)
-			continue;
-
-		// If there's only one dependency, we can add the header straight into the module's code file
-		if (Header.DependentModules.Num() == 1 && !Header.bHasDependentSharedHeaders)
-		{
-			for (asIScriptModule* Dependent : Header.DependentModules)
-			{
-				TSharedPtr<FJITFile> DependentFile = JITFiles[Dependent];
-				for (auto& Include : Header.Includes)
-					DependentFile->Headers.Add(Include);
-				for (auto& SharedHeaderDependency : Header.SharedHeaderDependencies)
-					DependentFile->SharedHeaderDependencies.Add(SharedHeaderDependency);
-
-				DependentFile->Content.Insert(Header.Content, 0);
-				DependentFile->SharedHeaderDependencies.Remove(HeaderElem.Key);
-			}
-
-			continue;
-		}
-
-		FString FullContent = TEXT("#pragma once\n\n");
-		for (const FString& Content : Header.Includes)
-			FullContent.Append(Content+TEXT("\n"));
-		for (const FString& Content : Header.SharedHeaderDependencies)
-			FullContent.Append(FString::Printf(TEXT("#include \"%s\"\n"), *Content));
-		FullContent += TEXT("\n");
-		for (const FString& Content : Header.Content)
-			FullContent.Append(Content);
-		FullContent.Append(TEXT("\n\n"));
-
-		CurrentFiles.Add(Header.Filename);
-		if (OutGeneratedFiles != nullptr)
-		{
-			OutGeneratedFiles->Add(Header.Filename, FullContent);
-		}
-		else
-		{
-			const FString FullFilename = GenDir / Header.Filename;
-			bool bWriteOutFile = true;
-
-			FString ExistingFile;
-			if (FFileHelper::LoadFileToString(ExistingFile, *FullFilename))
-			{
-				if (ExistingFile == FullContent)
-					bWriteOutFile = false;
-			}
-
-			if (bWriteOutFile)
-				FFileHelper::SaveStringToFile(FullContent, *FullFilename);
-		}
-	}
-
-	// Write each file we have generate code for
-	int32 FileCount = JITFiles.Num();
-	int32 FileIndex = 0;
-	for(auto ModuleElem : JITFiles)
-	{
-		FJITFile& File = *ModuleElem.Value;
-
-		FString FullContent = STANDARD_HEADER;
-		for (const FString& Content : File.Headers)
-			FullContent.Append(Content+"\n");
-		FullContent += TEXT("\n");
-		FullContent += STANDARD_INCLUDES;
-		FullContent += TEXT("\n");
-		for (const FString& Content : File.SharedHeaderDependencies)
-			FullContent.Append(FString::Printf(TEXT("#include \"%s\"\n"), *Content));
-		FullContent += TEXT("\n");
-		for (auto& Elem : File.ExternalDeclarations)
-		{
-			FullContent.Append(Elem.Value + "\n");
-		}
-		for (auto& Elem : File.ExternalSystemFunctionPointerDeclarations)
-		{
-			FullContent.Append(Elem.Value + "\n");
-		}
-		FullContent += TEXT("\n");
-		for (auto* ExternFunc : File.ExternFunctions)
-		{
-			FGenerateFunction& GenerateData = FunctionsToGenerate.FindChecked(ExternFunc);
-			check(GenerateData.FunctionDeclaration.Len() != 0);
-			FullContent.Append(FString::Printf(TEXT("extern %s;\n"), *GenerateData.FunctionDeclaration));
-		}
-		FullContent.Append(TEXT("\n\n"));
-
-		if (bEmitDebugMetadataInOutput)
-		{
-			FString FilenameSymbol = GetUniqueSymbolName(TEXT("MODULENAME_") + File.ModuleName);
-			FullContent.Append(FString::Printf(
-				TEXT("#if AS_JIT_DEBUG_CALLSTACKS\n")
-				TEXT("#undef SCRIPT_DEBUG_FILENAME\n")
-				TEXT("static const char* %s = \"%s\";\n")
-				TEXT("#define SCRIPT_DEBUG_FILENAME %s\n")
-				TEXT("#endif\n"),
-				*FilenameSymbol,
-				*File.ModuleName,
-				*FilenameSymbol
-			));
-		}
-
-		FullContent.Append(TEXT("\n\n"));
-		for (const FString& Content : File.Content)
-			FullContent.Append(Content);
-		FullContent += STANDARD_FOOTER;
-
-		CurrentFiles.Add(File.Filename);
-		if (OutGeneratedFiles != nullptr)
-		{
-			OutGeneratedFiles->Add(File.Filename, FullContent);
-		}
-		else
-		{
-			const FString FullFilename = GenDir / File.Filename;
-			bool bWriteOutFile = true;
-
-			FString ExistingFile;
-			if (FFileHelper::LoadFileToString(ExistingFile, *FullFilename))
-			{
-				if (ExistingFile == FullContent)
-					bWriteOutFile = false;
-			}
-
-			if (bWriteOutFile)
-				FFileHelper::SaveStringToFile(FullContent, *FullFilename);
-		}
-
-		// Output combined unity build files
-		FilesToCombine.Add(File.Filename);
-
-		{
-			LinesInCombinedFile += File.Content.Num();
-
-			if (LinesInCombinedFile > 200000 || FileIndex == (FileCount-1))
-			{
-				FString CombinedFilename = FString::Printf(TEXT("AngelscriptJitCode_%d.jit.cpp"), CombinedFileIndex);
-				CurrentFiles.Add(CombinedFilename);
-
-				FString CombinedContent;
-				for (const FString& FileToInclude : FilesToCombine)
-					CombinedContent += FString::Printf(TEXT("#include \"%s\"\n"), *FileToInclude);
-
-				if (OutGeneratedFiles != nullptr)
-				{
-					OutGeneratedFiles->Add(CombinedFilename, CombinedContent);
-				}
-				else
-				{
-					const FString CombinedPath = GenDir / CombinedFilename;
-					bool bWriteOutFile = true;
-
-					FString ExistingContent;
-					if (FFileHelper::LoadFileToString(ExistingContent, *CombinedPath))
-					{
-						if (ExistingContent == CombinedContent)
-							bWriteOutFile = false;
-					}
-
-					if (bWriteOutFile)
-						FFileHelper::SaveStringToFile(CombinedContent, *CombinedPath);
-				}
-
-				LinesInCombinedFile = 0;
-				CombinedFileIndex += 1;
-				FilesToCombine.Reset();
-			}
-		}
-
-		FileIndex += 1;
-	}
-
-	// Output information about which precompiled data was compiled in
-	FString InfoFile = TEXT("AngelscriptJitInfo.jit.cpp");
-	FString InfoContent = FString::Printf(
-		TEXT("#include \"StaticJIT/StaticJITHeader.h\"\n")
-		TEXT("\n")
-		TEXT("AS_FORCE_LINK static const FStaticJITCompiledInfo JitInfo(FGuid(%d, %d, %d, %d));\n"),
-		PrecompiledData->DataGuid.A,
-		PrecompiledData->DataGuid.B,
-		PrecompiledData->DataGuid.C,
-		PrecompiledData->DataGuid.D
-	);
-
-	CurrentFiles.Add(InfoFile);
-	if (OutGeneratedFiles != nullptr)
-	{
-		OutGeneratedFiles->Add(InfoFile, InfoContent);
-	}
-	else
-	{
-		FFileHelper::SaveStringToFile(InfoContent, *(GenDir / InfoFile));
-	}
-
-	// Delete files we no longer want to have
-	if (OutGeneratedFiles == nullptr)
-	{
-		for (const FString& PrevFile : PreviousFiles)
-		{
-			if (!CurrentFiles.Contains(PrevFile))
-				FileManager->Delete(*(GenDir / PrevFile));
-		}
-	}
-}
-
-#if AS_WITH_STATIC_JIT_DIAGNOSTICS && AS_CAN_GENERATE_JIT
 namespace
 {
-	bool GenerateStaticJITFilesForDiagnosticsInternal(
-		asIScriptModule* Module,
-		TMap<FString, FString>& OutGeneratedFiles,
-		bool bEmitDebugMetadata,
-		bool bEmitDiagnosticEntryMarkers,
-		FString* OutError)
+	static void CollectStableProviderStringLiteralReferences(
+		const asCScriptFunction& Function,
+		const asCScriptEngine& Engine,
+		TArray<FAngelscriptArtifactReference>& InOutReferences)
 	{
-		OutGeneratedFiles.Reset();
-
-		asCModule* ScriptModule = reinterpret_cast<asCModule*>(Module);
-		if (ScriptModule == nullptr)
+		if (Function.scriptData == nullptr)
 		{
-			if (OutError != nullptr)
-			{
-				*OutError = TEXT("GenerateStaticJITFilesForDiagnostics failed: module was null.");
-			}
-			return false;
+			return;
 		}
-
-		asCScriptEngine* ScriptEngine = reinterpret_cast<asCScriptEngine*>(ScriptModule->GetEngine());
-		if (ScriptEngine == nullptr)
+		asDWORD* Bytecode = Function.scriptData->byteCode.AddressOf();
+		asDWORD* const BytecodeEnd = Bytecode
+			+ Function.scriptData->byteCode.GetLength();
+		while (Bytecode < BytecodeEnd)
 		{
-			if (OutError != nullptr)
+			const asEBCInstr Instruction =
+				static_cast<asEBCInstr>(*reinterpret_cast<asBYTE*>(Bytecode));
+			if (Instruction == asBC_PGA || Instruction == asBC_PshGPtr)
 			{
-				*OutError = TEXT("GenerateStaticJITFilesForDiagnostics failed: script engine was null.");
+				void* const Storage = reinterpret_cast<void*>(asBC_PTRARG(Bytecode));
+				if (Storage != nullptr && Engine.varAddressMap.Find(Storage) == nullptr)
+				{
+					const FString& Literal = *static_cast<const FString*>(Storage);
+					InOutReferences.AddUnique(
+						FAngelscriptJITReferenceDescriptorBuilder::ForStringLiteral(
+							Literal));
+				}
 			}
-			return false;
+			Bytecode += asBCTypeSize[asBCInfo[Instruction].type];
 		}
-
-		FAngelscriptStaticJIT JIT;
-		FAngelscriptPrecompiledData PrecompiledData(ScriptEngine);
-		JIT.PrecompiledData = &PrecompiledData;
-		JIT.bGenerateOutputCode = true;
-		JIT.bEmitDebugMetadataInOutput = bEmitDebugMetadata;
-		JIT.bEmitDiagnosticEntryMarkersInOutput = bEmitDiagnosticEntryMarkers;
-
-		asIJITCompiler* PreviousJITCompiler = ScriptEngine->GetJITCompiler();
-		ScriptEngine->SetJITCompiler(&JIT);
-		ON_SCOPE_EXIT
-		{
-			ScriptEngine->SetJITCompiler(PreviousJITCompiler);
-		};
-
-		ScriptModule->JITCompile();
-		JIT.WriteOutputCode(&OutGeneratedFiles);
-
-		const TSharedPtr<FJITFile>* JITFile = JIT.JITFiles.Find(ScriptModule);
-		if (JITFile == nullptr || !JITFile->IsValid())
-		{
-			if (OutError != nullptr)
-			{
-				*OutError = TEXT("GenerateStaticJITFilesForDiagnostics failed: module did not produce a JIT file.");
-			}
-			return false;
-		}
-
-		if (!OutGeneratedFiles.Contains((*JITFile)->Filename))
-		{
-			if (OutError != nullptr)
-			{
-				*OutError = FString::Printf(TEXT("GenerateStaticJITFilesForDiagnostics failed: generated source file '%s' was missing."), *(*JITFile)->Filename);
-			}
-			return false;
-		}
-
-		return true;
 	}
 }
 
-bool GenerateStaticJITSourceTextForDiagnostics(asIScriptModule* Module, FString& OutSourceText, bool bEmitDebugMetadata, FString* OutError)
+bool GenerateStaticJITProviderArtifacts(
+	asIScriptModule* Module,
+	const FAngelscriptJITProviderGenerationSettings& Settings,
+	FAngelscriptJITGenerationOutput& OutOutput,
+	FString* OutError)
+
 {
-	OutSourceText.Reset();
+	asIScriptModule* Modules[] = {Module};
+	return GenerateStaticJITProviderArtifacts(
+		MakeArrayView(Modules), Settings, OutOutput, OutError);
+}
 
-	TMap<FString, FString> GeneratedFiles;
-	if (!GenerateStaticJITFilesForDiagnosticsInternal(Module, GeneratedFiles, bEmitDebugMetadata, false, OutError))
-	{
-		return false;
-	}
+static bool GenerateStaticJITProviderArtifactsImpl(
+	TConstArrayView<asIScriptModule*> Modules,
+	const FAngelscriptJITProviderGenerationSettings& Settings,
+	FAngelscriptJITGenerationOutput& OutOutput,
+	FString* OutError,
+	const FAngelscriptFunctionRouteSnapshot* OverrideRouteSnapshot,
+	const FAngelscriptCacheSuccessfulPublicationDto* OverridePublication);
 
-	FString SourceFilename;
-	for (const TPair<FString, FString>& GeneratedFile : GeneratedFiles)
-	{
-		if (GeneratedFile.Key.EndsWith(TEXT(".as.jit.hpp")))
-		{
-			SourceFilename = GeneratedFile.Key;
-			break;
-		}
-	}
+bool GenerateStaticJITProviderArtifacts(
+	const TConstArrayView<asIScriptModule*> Modules,
+	const FAngelscriptJITProviderGenerationSettings& Settings,
+	FAngelscriptJITGenerationOutput& OutOutput,
+	FString* OutError)
+{
+	return GenerateStaticJITProviderArtifactsImpl(
+		Modules, Settings, OutOutput, OutError, nullptr, nullptr);
+}
 
-	const FString* GeneratedSource = GeneratedFiles.Find(SourceFilename);
-	if (GeneratedSource == nullptr)
+static bool GenerateStaticJITProviderArtifactsImpl(
+	const TConstArrayView<asIScriptModule*> Modules,
+	const FAngelscriptJITProviderGenerationSettings& Settings,
+	FAngelscriptJITGenerationOutput& OutOutput,
+	FString* OutError,
+	const FAngelscriptFunctionRouteSnapshot* OverrideRouteSnapshot,
+	const FAngelscriptCacheSuccessfulPublicationDto* OverridePublication)
+{
+	OutOutput = {};
+	auto Fail = [OutError](const FString& Message)
 	{
 		if (OutError != nullptr)
 		{
-			*OutError = TEXT("GenerateStaticJITSourceTextForDiagnostics failed: generated module source was missing.");
+			*OutError = Message;
 		}
 		return false;
+	};
+
+	if (Modules.IsEmpty())
+	{
+		return Fail(TEXT("StaticJIT Provider generation failed: no modules were supplied."));
 	}
-
-	OutSourceText = *GeneratedSource;
-	return true;
-}
-
-bool GenerateStaticJITFilesForDiagnostics(
-	asIScriptModule* Module,
-	TMap<FString, FString>& OutGeneratedFiles,
-	bool bEmitDebugMetadata,
-	bool bEmitDiagnosticEntryMarkers,
-	FString* OutError)
-{
-	return GenerateStaticJITFilesForDiagnosticsInternal(Module, OutGeneratedFiles, bEmitDebugMetadata, bEmitDiagnosticEntryMarkers, OutError);
-}
-
-bool GenerateStaticJITAotArtifactsForDiagnostics(
-	asIScriptModule* Module,
-	const FString& PrecompiledCacheFilename,
-	const FGuid& PrecompiledDataGuid,
-	TMap<FString, FString>& OutGeneratedFiles,
-	bool bEmitDebugMetadata,
-	bool bEmitDiagnosticEntryMarkers,
-	FString* OutError)
-{
-	OutGeneratedFiles.Reset();
-
-	asCModule* ScriptModule = reinterpret_cast<asCModule*>(Module);
+	asCModule* const ScriptModule =
+		reinterpret_cast<asCModule*>(Modules[0]);
 	if (ScriptModule == nullptr)
 	{
-		if (OutError != nullptr)
-		{
-			*OutError = TEXT("GenerateStaticJITAotArtifactsForDiagnostics failed: module was null.");
-		}
-		return false;
+		return Fail(TEXT("StaticJIT Provider generation failed: module was null."));
+	}
+	asCScriptEngine* const ScriptEngine =
+		reinterpret_cast<asCScriptEngine*>(ScriptModule->GetEngine());
+	FAngelscriptEngine* const RuntimeEngine =
+		FAngelscriptEngine::TryGetByScriptEngine(ScriptEngine);
+	if (ScriptEngine == nullptr || RuntimeEngine == nullptr)
+	{
+		return Fail(TEXT("StaticJIT Provider generation failed: module has no Runtime Engine owner."));
+	}
+	if (!Settings.ProviderId.IsValid()
+		|| !FAngelscriptJITTargetProfiles::GetTraits(
+			Settings.TargetProfile).IsSet()
+		|| Settings.ProviderName.IsEmpty()
+		|| Settings.OwnerModuleName.IsEmpty()
+		|| Settings.ArtifactProfile.Hash.IsZero()
+		|| Settings.NativeEnvironmentFingerprint.IsZero())
+	{
+		return Fail(TEXT("StaticJIT Provider generation failed: Provider settings are incomplete."));
 	}
 
-	asCScriptEngine* ScriptEngine = reinterpret_cast<asCScriptEngine*>(ScriptModule->GetEngine());
-	if (ScriptEngine == nullptr)
+	const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
+		ESPMode::ThreadSafe> RouteSnapshot =
+		RuntimeEngine->GetFunctionRouteSnapshot();
+	const FAngelscriptFunctionRouteSnapshot* const ActiveRouteSnapshot =
+		OverrideRouteSnapshot != nullptr
+		? OverrideRouteSnapshot : RouteSnapshot.Get();
+	if (ActiveRouteSnapshot == nullptr)
 	{
-		if (OutError != nullptr)
-		{
-			*OutError = TEXT("GenerateStaticJITAotArtifactsForDiagnostics failed: script engine was null.");
-		}
-		return false;
+		return Fail(TEXT("StaticJIT Provider generation failed: current function routes are unavailable."));
 	}
 
 	FAngelscriptStaticJIT JIT;
 	FAngelscriptPrecompiledData PrecompiledData(ScriptEngine);
-	PrecompiledData.DataGuid = PrecompiledDataGuid;
+	JIT.Engine = ScriptEngine;
 	JIT.PrecompiledData = &PrecompiledData;
 	JIT.bGenerateOutputCode = true;
-	JIT.bEmitDebugMetadataInOutput = bEmitDebugMetadata;
-	JIT.bEmitDiagnosticEntryMarkersInOutput = bEmitDiagnosticEntryMarkers;
-
-	asIJITCompiler* PreviousJITCompiler = ScriptEngine->GetJITCompiler();
-	ScriptEngine->SetJITCompiler(&JIT);
-	ON_SCOPE_EXIT
+	JIT.bEmitDebugMetadataInOutput = Settings.bEmitDebugMetadata;
+	JIT.bEmitProviderEntryLinkage = true;
+	JIT.bUseImmutableDirectScriptCalls = false;
+	TSet<asCModule*> SeenModules;
+	for (asIScriptModule* Module : Modules)
 	{
-		ScriptEngine->SetJITCompiler(PreviousJITCompiler);
-	};
-
-	ScriptModule->JITCompile();
+		asCModule* const CurrentModule = reinterpret_cast<asCModule*>(Module);
+		if (CurrentModule == nullptr
+			|| CurrentModule->GetEngine() != ScriptEngine)
+		{
+			return Fail(
+				TEXT("StaticJIT Provider generation failed: every module must belong to one Runtime Engine."));
+		}
+		if (!SeenModules.Contains(CurrentModule))
+		{
+			SeenModules.Add(CurrentModule);
+			JIT.CollectModuleFunctionsForGeneration(CurrentModule);
+		}
+	}
 	PrecompiledData.InitFromActiveScript();
-	JIT.WriteOutputCode(&OutGeneratedFiles);
-	if (OutGeneratedFiles.Num() == 0)
+
+	struct FFunctionAndRoute
+	{
+		asCScriptFunction* Function = nullptr;
+		const FAngelscriptFunctionRoute* Route = nullptr;
+	};
+	TArray<FFunctionAndRoute> OrderedFunctions;
+	OrderedFunctions.Reserve(JIT.FunctionsToGenerate.Num());
+	for (const TPair<asCScriptFunction*,
+		FAngelscriptStaticJIT::FGenerateFunction>& FunctionPair :
+		JIT.FunctionsToGenerate)
+	{
+		const FAngelscriptFunctionRoute* const Route =
+			ActiveRouteSnapshot->FunctionRoutes.FindByPredicate(
+				[Function = FunctionPair.Key](
+					const FAngelscriptFunctionRoute& Candidate)
+				{
+					return Candidate.Function == Function;
+				});
+		// CollectModuleFunctionsForGeneration also sees VM-generated helpers
+		// such as a script class' synthetic StaticClass function. A Provider is
+		// defined by the current verified artifact publication, so candidates
+		// with no verified route are intentionally outside this generation.
+		if (Route == nullptr || !Route->bHasVerifiedArtifactIdentity)
+		{
+			continue;
+		}
+		if (Route->ModuleKey.Hash.IsZero()
+			|| Route->Identity.FunctionKey.Hash.IsZero()
+			|| Route->Identity.Content.Execution.IsZero()
+			|| Route->Identity.Content.Debug.IsZero())
+		{
+			return Fail(FString::Printf(
+				TEXT("StaticJIT Provider generation failed: function '%s' has no complete current stable artifact identity."),
+				ANSI_TO_TCHAR(FunctionPair.Key->GetDeclaration())));
+		}
+		if (!(Route->Identity.Profile.Hash
+			== Settings.ArtifactProfile.Hash))
+		{
+			return Fail(FString::Printf(
+				TEXT("StaticJIT Provider generation failed: function %s uses profile %s, expected %s."),
+				*Route->Identity.FunctionKey.Hash.ToHexString(),
+				*Route->Identity.Profile.Hash.ToHexString(),
+				*Settings.ArtifactProfile.Hash.ToHexString()));
+		}
+		OrderedFunctions.Add({FunctionPair.Key, Route});
+	}
+	if (OrderedFunctions.IsEmpty())
+	{
+		return Fail(TEXT("StaticJIT Provider generation failed: module has no eligible script functions."));
+	}
+	OrderedFunctions.Sort([](
+		const FFunctionAndRoute& Left,
+		const FFunctionAndRoute& Right)
+	{
+		if (!(Left.Route->ModuleKey == Right.Route->ModuleKey))
+		{
+			return Left.Route->ModuleKey.Hash < Right.Route->ModuleKey.Hash;
+		}
+		return Left.Route->Identity.FunctionKey.Hash
+			< Right.Route->Identity.FunctionKey.Hash;
+	});
+
+	FAngelscriptCacheService* const CacheService =
+		RuntimeEngine->GetCacheService();
+	const FAngelscriptCacheLifecyclePublications Publications =
+		CacheService != nullptr
+			? CacheService->GetLifecyclePublications()
+			: FAngelscriptCacheLifecyclePublications{};
+	const FAngelscriptCacheSuccessfulPublicationDto* const CurrentPublication =
+		OverridePublication != nullptr
+		? OverridePublication : Publications.Current.Get();
+	if (CurrentPublication == nullptr)
+	{
+		return Fail(TEXT("StaticJIT Provider generation failed: the current verified artifact publication is unavailable."));
+	}
+	if (!(CurrentPublication->Profile.Hash
+		== Settings.ArtifactProfile.Hash))
+	{
+		return Fail(TEXT("StaticJIT Provider generation failed: the current artifact publication uses a different profile."));
+	}
+	for (const FFunctionAndRoute& FunctionAndRoute : OrderedFunctions)
+	{
+		const FAngelscriptCacheCleanModuleArtifacts* const PublishedModule =
+			CurrentPublication->Modules.FindByPredicate(
+				[ModuleKey = FunctionAndRoute.Route->ModuleKey](
+					const FAngelscriptCacheCleanModuleArtifacts& Candidate)
+				{
+					return Candidate.ModuleKey == ModuleKey;
+				});
+		const FAngelscriptFunctionArtifactReferenceSet* const ReferenceSet =
+			PublishedModule != nullptr
+				? PublishedModule->ValidatedFunctionArtifactReferenceSets.
+					FindByPredicate(
+						[FunctionKey = FunctionAndRoute.Route->Identity.FunctionKey](
+							const FAngelscriptFunctionArtifactReferenceSet& Candidate)
+						{
+							return Candidate.FunctionKey == FunctionKey;
+						})
+				: nullptr;
+		if (ReferenceSet == nullptr)
+		{
+			return Fail(FString::Printf(
+				TEXT("StaticJIT Provider generation failed: function %s has no verified stable reference set."),
+				*FunctionAndRoute.Route->Identity.FunctionKey.Hash.ToHexString()));
+		}
+		if (PublishedModule == nullptr
+			|| FunctionAndRoute.Function == nullptr
+			|| FunctionAndRoute.Function->module == nullptr)
+		{
+			return Fail(TEXT("StaticJIT Provider generation failed: verified function has no published module owner."));
+		}
+		JIT.StableProviderModuleKeys.FindOrAdd(
+			FunctionAndRoute.Function->module) = PublishedModule->ModuleKey;
+		TArray<FAngelscriptArtifactReference>& EffectiveReferences =
+			JIT.StableProviderReferences.FindOrAdd(FunctionAndRoute.Function);
+		EffectiveReferences = ReferenceSet->RequiredReferences;
+		CollectStableProviderStringLiteralReferences(
+			*FunctionAndRoute.Function, *ScriptEngine, EffectiveReferences);
+		EffectiveReferences.Sort();
+		for (int32 ReferenceIndex = 0;
+			ReferenceIndex < EffectiveReferences.Num();
+			++ReferenceIndex)
+		{
+			const FAngelscriptArtifactReference& Reference =
+				EffectiveReferences[ReferenceIndex];
+			if (Reference.Kind
+				!= EAngelscriptArtifactReferenceKind::ScriptFunction)
+			{
+				continue;
+			}
+			const FAngelscriptFunctionRoute* const ReferencedRoute =
+				ActiveRouteSnapshot->FunctionRoutes.FindByPredicate(
+					[StableKey = Reference.StableKey](
+						const FAngelscriptFunctionRoute& Candidate)
+					{
+						return Candidate.Function != nullptr
+							&& Candidate.Identity.FunctionKey.Hash == StableKey;
+					});
+			if (ReferencedRoute != nullptr)
+			{
+				JIT.StableProviderFunctionReferenceSlots.
+					FindOrAdd(FunctionAndRoute.Function).Add(
+						static_cast<asCScriptFunction*>(ReferencedRoute->Function),
+						static_cast<uint32>(ReferenceIndex));
+			}
+		}
+	}
+	for (asUINT ModuleIndex = 0;
+		ModuleIndex < ScriptEngine->scriptModules.GetLength();
+		++ModuleIndex)
+	{
+		asCModule* const CurrentModule =
+			ScriptEngine->scriptModules[ModuleIndex];
+		if (CurrentModule == nullptr)
+		{
+			continue;
+		}
+		for (asUINT TypeIndex = 0;
+			TypeIndex < CurrentModule->classTypes.GetLength();
+			++TypeIndex)
+		{
+			if (asCObjectType* const ObjectType =
+				CurrentModule->classTypes[TypeIndex])
+			{
+				JIT.DetectScriptType(ObjectType);
+			}
+		}
+	}
+
+	for (const FFunctionAndRoute& FunctionAndRoute : OrderedFunctions)
+	{
+		FAngelscriptStaticJIT::FGenerateFunction& Generate =
+			JIT.FunctionsToGenerate.FindChecked(FunctionAndRoute.Function);
+		Generate.FunctionSymbolName =
+			FAngelscriptJITGeneration::BuildSymbolPrefix(
+				FunctionAndRoute.Route->Identity.FunctionKey,
+				FunctionAndRoute.Route->Identity.Content.Execution);
+		JIT.UsedUniqueNames.Add(Generate.FunctionSymbolName);
+		JIT.AnalyzeScriptFunction(FunctionAndRoute.Function, Generate);
+	}
+	for (const FFunctionAndRoute& FunctionAndRoute : OrderedFunctions)
+	{
+		FAngelscriptStaticJIT::FGenerateFunction& Generate =
+			JIT.FunctionsToGenerate.FindChecked(FunctionAndRoute.Function);
+		JIT.GenerateCppCode(FunctionAndRoute.Function, Generate);
+	}
+	if (!JIT.StableProviderReferenceError.IsEmpty())
+	{
+		return Fail(JIT.StableProviderReferenceError);
+	}
+
+	FAngelscriptJITGenerationRequest Request;
+	Request.TargetProfile = Settings.TargetProfile;
+	Request.ProviderId = Settings.ProviderId;
+	Request.ProviderName = Settings.ProviderName;
+	Request.OwnerModuleName = Settings.OwnerModuleName;
+	Request.ArtifactProfile = Settings.ArtifactProfile;
+	Request.NativeEnvironmentFingerprint =
+		Settings.NativeEnvironmentFingerprint;
+	TMap<asIScriptModule*, TSharedPtr<FAngelscriptModuleDesc>> ModuleDescs;
+	for (const FFunctionAndRoute& FunctionAndRoute : OrderedFunctions)
+	{
+		const FAngelscriptCacheCleanModuleArtifacts* const PublishedModule =
+			CurrentPublication->Modules.FindByPredicate(
+				[ModuleKey = FunctionAndRoute.Route->ModuleKey](
+					const FAngelscriptCacheCleanModuleArtifacts& Candidate)
+				{
+					return Candidate.ModuleKey == ModuleKey;
+				});
+		if (PublishedModule == nullptr
+			|| PublishedModule->CanonicalModuleName.IsEmpty())
+		{
+			return Fail(FString::Printf(
+				TEXT("StaticJIT Provider generation failed: current publication does not name module %s."),
+				*FunctionAndRoute.Route->ModuleKey.Hash.ToHexString()));
+		}
+		asIScriptModule* const ScriptFunctionModule =
+			FunctionAndRoute.Function->GetModule();
+		TSharedPtr<FAngelscriptModuleDesc>& ModuleDesc =
+			ModuleDescs.FindOrAdd(ScriptFunctionModule);
+		if (!ModuleDesc.IsValid())
+		{
+			ModuleDesc = RuntimeEngine->GetModule(ScriptFunctionModule);
+		}
+		if (!ModuleDesc.IsValid() || ModuleDesc->Code.Num() != 1
+			|| ModuleDesc->Code[0].VirtualPath.IsEmpty())
+		{
+			return Fail(FString::Printf(
+				TEXT("StaticJIT Provider generation requires module %s to resolve to exactly one virtual AngelScript source."),
+				*PublishedModule->CanonicalModuleName));
+		}
+		if (!Request.Modules.ContainsByPredicate(
+			[ModuleKey = PublishedModule->ModuleKey](
+				const FAngelscriptJITGenerationModule& Candidate)
+			{
+				return Candidate.ModuleKey == ModuleKey;
+			}))
+		{
+			Request.Modules.Add({PublishedModule->ModuleKey,
+				PublishedModule->CanonicalModuleName,
+				ModuleDesc->Code[0].VirtualPath});
+		}
+	}
+
+	TSet<FString> HeaderSet;
+	for (const TPair<asIScriptModule*, TSharedPtr<FJITFile>>& FilePair :
+		JIT.JITFiles)
+	{
+		if (!FilePair.Value.IsValid())
+		{
+			continue;
+		}
+		for (const FString& Header : FilePair.Value->Headers)
+		{
+			HeaderSet.Add(Header);
+		}
+	}
+	for (const TPair<FString, TSharedPtr<
+		FAngelscriptStaticJIT::FSharedHeader>>& HeaderPair : JIT.SharedHeaders)
+	{
+		if (!HeaderPair.Value.IsValid())
+		{
+			continue;
+		}
+		for (const FString& Include : HeaderPair.Value->Includes)
+		{
+			HeaderSet.Add(Include);
+		}
+	}
+
+	TArray<FString> SortedHeaders = HeaderSet.Array();
+	auto StableStringLess = [](const FString& Left, const FString& Right)
+	{
+		return FAngelscriptArtifactCanonicalWriter::CompareCanonicalUtf8Strings(
+			Left, Right) < 0;
+	};
+	SortedHeaders.Sort(StableStringLess);
+
+	Request.ModuleSourcePreamble = PROVIDER_STANDARD_HEADER;
+	for (const FString& Header : SortedHeaders)
+	{
+		Request.ModuleSourcePreamble += Header + TEXT("\n");
+	}
+	Request.ModuleSourcePreamble += TEXT("\n") + STANDARD_INCLUDES + TEXT("\n");
+	Request.ModuleSourcePreamble += TEXT("\n");
+
+	TArray<TPair<FString, TSharedPtr<
+		FAngelscriptStaticJIT::FSharedHeader>>> SortedSharedHeaders;
+	for (const TPair<FString, TSharedPtr<
+		FAngelscriptStaticJIT::FSharedHeader>>& HeaderPair : JIT.SharedHeaders)
+	{
+		SortedSharedHeaders.Add(HeaderPair);
+	}
+	SortedSharedHeaders.Sort([&StableStringLess](const auto& Left, const auto& Right)
+	{
+		return StableStringLess(Left.Key, Right.Key);
+	});
+	for (const auto& HeaderPair : SortedSharedHeaders)
+	{
+		if (!HeaderPair.Value.IsValid())
+		{
+			continue;
+		}
+		for (const FString& Content : HeaderPair.Value->Content)
+		{
+			Request.ModuleSourcePreamble += Content;
+			if (!Content.EndsWith(TEXT("\n")))
+			{
+				Request.ModuleSourcePreamble += TEXT("\n");
+			}
+		}
+	}
+	Request.ModuleSourceFooter = PROVIDER_STANDARD_FOOTER;
+	Request.ProviderSourcePreamble =
+		TEXT("#include \"StaticJIT/StaticJITHeader.h\"\n\n");
+
+	for (const FFunctionAndRoute& FunctionAndRoute : OrderedFunctions)
+	{
+		const FAngelscriptStaticJIT::FGenerateFunction& GeneratedCode =
+			JIT.FunctionsToGenerate.FindChecked(FunctionAndRoute.Function);
+		FAngelscriptJITGenerationFunction& Function =
+			Request.Functions.Emplace_GetRef();
+		Function.ModuleKey = FunctionAndRoute.Route->ModuleKey;
+		Function.FunctionKey =
+			FunctionAndRoute.Route->Identity.FunctionKey;
+		Function.ExecutionHash =
+			FunctionAndRoute.Route->Identity.Content.Execution;
+		Function.DebugHash =
+			FunctionAndRoute.Route->Identity.Content.Debug;
+		Function.CanonicalDeclaration =
+			FunctionAndRoute.Route->CanonicalDeclaration;
+		const TSharedPtr<FAngelscriptModuleDesc>* const ModuleDescPtr =
+			ModuleDescs.Find(FunctionAndRoute.Function->GetModule());
+		const char* const ScriptSectionAnsi =
+			FunctionAndRoute.Function->GetScriptSectionName();
+		if (ModuleDescPtr == nullptr || !ModuleDescPtr->IsValid()
+			|| ScriptSectionAnsi == nullptr)
+		{
+			return Fail(FString::Printf(
+				TEXT("StaticJIT Provider generation cannot resolve source metadata for function %s."),
+				*Function.FunctionKey.Hash.ToHexString()));
+		}
+		const FString ScriptSection = ANSI_TO_TCHAR(ScriptSectionAnsi);
+		const FAngelscriptModuleDesc::FCodeSection* const CodeSection =
+			(*ModuleDescPtr)->Code.FindByPredicate(
+				[&ScriptSection](
+					const FAngelscriptModuleDesc::FCodeSection& Candidate)
+				{
+					return ScriptSection.Equals(Candidate.AbsoluteFilename,
+							ESearchCase::CaseSensitive)
+						|| ScriptSection.Equals(Candidate.VirtualPath,
+							ESearchCase::CaseSensitive)
+						|| ScriptSection.Equals(Candidate.RelativeFilename,
+							ESearchCase::CaseSensitive)
+						|| (!Candidate.AbsoluteFilename.IsEmpty()
+							&& ScriptSection.Equals(Candidate.AbsoluteFilename,
+								ESearchCase::IgnoreCase));
+				});
+		if (CodeSection == nullptr || CodeSection->VirtualPath.IsEmpty())
+		{
+			return Fail(FString::Printf(
+				TEXT("StaticJIT Provider generation cannot map section %s to a virtual source for function %s."),
+				*ScriptSection,
+				*Function.FunctionKey.Hash.ToHexString()));
+		}
+		Function.SourceSection = CodeSection->VirtualPath;
+		// Prefer the declaration itself over the first bytecode line. Compiler-
+		// generated class functions (default constructors, factories,
+		// __InitDefaults, and destructors) intentionally carry declaredAt=0 in
+		// this AngelScript fork, so map those back to their owning/returned type's
+		// declaration before falling back to the preprocessor's class descriptor
+		// and finally bytecode debug information.
+		asCTypeInfo* DeclaringType =
+			FunctionAndRoute.Function->objectType;
+		if (DeclaringType == nullptr)
+		{
+			DeclaringType =
+				FunctionAndRoute.Function->returnType.GetTypeInfo();
+		}
+		int32 PackedSourceLocation =
+			FunctionAndRoute.Function->scriptData != nullptr
+				? FunctionAndRoute.Function->scriptData->declaredAt : 0;
+		if ((PackedSourceLocation & 0xFFFFF) == 0)
+		{
+			if (DeclaringType != nullptr
+				&& (DeclaringType->declaredAt & 0xFFFFF) != 0)
+			{
+				PackedSourceLocation = DeclaringType->declaredAt;
+			}
+		}
+		if ((PackedSourceLocation & 0xFFFFF) == 0
+			&& DeclaringType != nullptr)
+		{
+			const TSharedRef<FAngelscriptClassDesc>* const ClassDesc =
+				(*ModuleDescPtr)->Classes.FindByPredicate(
+					[DeclaringType](
+						const TSharedRef<FAngelscriptClassDesc>& Candidate)
+					{
+						return Candidate->ScriptType == DeclaringType;
+					});
+			if (ClassDesc != nullptr && (*ClassDesc)->LineNumber > 0)
+			{
+				PackedSourceLocation = (*ClassDesc)->LineNumber & 0xFFFFF;
+			}
+		}
+		if ((PackedSourceLocation & 0xFFFFF) == 0)
+		{
+			PackedSourceLocation =
+				FunctionAndRoute.Function->GetLineNumber(0, nullptr);
+		}
+		Function.SourceLine = static_cast<uint32>(
+			FMath::Max(0, PackedSourceLocation & 0xFFFFF));
+		Function.SourceColumn = static_cast<uint32>(
+			FMath::Max(0, PackedSourceLocation >> 20));
+		Function.bHasVMEntry = true;
+		Function.bHasRawEntry = true;
+		Function.bHasParmsEntry = GeneratedCode.bHasParmsEntry;
+		Function.EntryAbiHash =
+			FAngelscriptJITGeneration::BuildEntryAbiHash(
+				FunctionAndRoute.Route->CanonicalDeclaration,
+				Function.bHasVMEntry,
+				Function.bHasRawEntry,
+				Function.bHasParmsEntry);
+		Function.VMEntrySymbol =
+			GeneratedCode.FunctionSymbolName + TEXT("_VMEntry");
+		Function.RawEntrySymbol = GeneratedCode.FunctionSymbolName;
+		Function.ParmsEntrySymbol = GeneratedCode.bHasParmsEntry
+			? GeneratedCode.FunctionSymbolName + TEXT("_ParmsEntry") : FString();
+		Function.RawEntryDeclaration = GeneratedCode.FunctionDeclaration;
+		const FAngelscriptCacheCleanModuleArtifacts* const PublishedModule =
+			CurrentPublication->Modules.FindByPredicate(
+				[ModuleKey = Function.ModuleKey](
+					const FAngelscriptCacheCleanModuleArtifacts& Candidate)
+				{
+					return Candidate.ModuleKey == ModuleKey;
+				});
+		if (PublishedModule == nullptr)
+		{
+			return Fail(FString::Printf(
+				TEXT("StaticJIT Provider generation failed: current publication does not contain module %s."),
+				*Function.ModuleKey.Hash.ToHexString()));
+		}
+		const TArray<FAngelscriptArtifactReference>* const EffectiveReferences =
+			JIT.StableProviderReferences.Find(FunctionAndRoute.Function);
+		if (EffectiveReferences == nullptr)
+		{
+			return Fail(FString::Printf(
+				TEXT("StaticJIT Provider generation failed: function %s has no verified stable reference set."),
+				*Function.FunctionKey.Hash.ToHexString()));
+		}
+		for (const FAngelscriptArtifactReference& Reference
+			: *EffectiveReferences)
+		{
+			if (!Reference.IsValid() || Reference.ExpectedAbi.IsZero())
+			{
+				return Fail(FString::Printf(
+					TEXT("StaticJIT Provider generation failed: function %s has an incomplete stable reference."),
+					*Function.FunctionKey.Hash.ToHexString()));
+			}
+			Function.References.Add({
+				EAngelscriptJITReferenceSlotFlags::None,
+				Reference});
+		}
+		const FString DebugFilenameSymbol =
+			TEXT("MODULENAME_") + GeneratedCode.FunctionSymbolName;
+		Function.ImplementationTemplate = FString::Printf(
+			TEXT("#if AS_JIT_DEBUG_CALLSTACKS\n")
+			TEXT("#undef SCRIPT_DEBUG_FILENAME\n")
+			TEXT("static const char* %s = \"%s\";\n")
+			TEXT("#define SCRIPT_DEBUG_FILENAME %s\n")
+			TEXT("#endif\n\n"),
+			*DebugFilenameSymbol,
+			ANSI_TO_TCHAR(FunctionAndRoute.Function->GetModuleName()),
+			*DebugFilenameSymbol);
+		Function.ImplementationTemplate += GeneratedCode.EmittedFunctionContent;
+	}
+
+	return FAngelscriptJITGeneration::Generate(
+		Request, OutOutput, OutError);
+}
+
+#if AS_WITH_STATIC_JIT_DIAGNOSTICS && AS_CAN_GENERATE_JIT
+bool GenerateStaticJITSourceTextForDiagnostics(
+	asIScriptModule* Module,
+	FString& OutSourceText,
+	const bool bEmitDebugMetadata,
+	FString* OutError)
+{
+	OutSourceText.Reset();
+	auto Fail = [OutError](const FString& Message)
 	{
 		if (OutError != nullptr)
 		{
-			*OutError = TEXT("GenerateStaticJITAotArtifactsForDiagnostics failed: no generated files were produced.");
+			*OutError = Message;
 		}
+		return false;
+	};
+
+	asCModule* const ScriptModule = reinterpret_cast<asCModule*>(Module);
+	if (ScriptModule == nullptr)
+	{
+		return Fail(TEXT(
+			"GenerateStaticJITSourceTextForDiagnostics failed: module was null."));
+	}
+
+	asCScriptEngine* const ScriptEngine =
+		reinterpret_cast<asCScriptEngine*>(ScriptModule->GetEngine());
+	FAngelscriptEngine* const RuntimeEngine =
+		FAngelscriptEngine::TryGetByScriptEngine(ScriptEngine);
+	if (ScriptEngine == nullptr || RuntimeEngine == nullptr)
+	{
+		return Fail(TEXT(
+			"GenerateStaticJITSourceTextForDiagnostics failed: module has no Runtime Engine owner."));
+	}
+
+	const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
+		ESPMode::ThreadSafe> Routes =
+		RuntimeEngine->GetFunctionRouteSnapshot();
+	if (!Routes.IsValid())
+	{
+		return Fail(TEXT(
+			"GenerateStaticJITSourceTextForDiagnostics failed: current function routes are unavailable."));
+	}
+
+	const TSharedPtr<FAngelscriptModuleDesc> ModuleDesc =
+		RuntimeEngine->GetModuleByModuleName(
+			ANSI_TO_TCHAR(ScriptModule->GetName()));
+	if (!ModuleDesc.IsValid() || ModuleDesc->ScriptModule != ScriptModule)
+	{
+		return Fail(TEXT(
+			"GenerateStaticJITSourceTextForDiagnostics failed: module has no current Runtime descriptor."));
+	}
+
+	FAngelscriptCacheService* const CacheService =
+		RuntimeEngine->GetCacheService();
+	const FAngelscriptCacheLifecyclePublications Publications =
+		CacheService != nullptr
+		? CacheService->GetLifecyclePublications()
+		: FAngelscriptCacheLifecyclePublications{};
+	FAngelscriptCacheCleanCaptureOptions CaptureOptions;
+	if (Publications.Current.IsValid())
+	{
+		CaptureOptions.Compatibility = Publications.Current->Compatibility;
+		CaptureOptions.Context = Publications.Current->Context;
+		CaptureOptions.Profile = Publications.Current->Profile;
+	}
+	else
+	{
+		FAngelscriptCacheEnvironmentProfile DiagnosticProfile;
+		const FAngelscriptPreprocessorContext PreprocessorContext =
+			FAngelscriptPreprocessorContext::CreateFromCurrentEngineContext();
+		const TArray<FAngelscriptSourceRoot> DiagnosticRoots{
+			FAngelscriptSourceRoot::FromGameRoot(
+				FPaths::Combine(FPaths::ProjectSavedDir(),
+					TEXT("StaticJITDiagnostics")))
+		};
+		const FAngelscriptCacheEnvironmentProfileResult ProfileResult =
+			BuildAngelscriptCacheEnvironmentProfile(
+				*RuntimeEngine, PreprocessorContext, DiagnosticRoots,
+				DiagnosticProfile);
+		if (!ProfileResult.IsSuccess())
+		{
+			return Fail(FString::Printf(TEXT(
+				"GenerateStaticJITSourceTextForDiagnostics failed to build the current Engine profile: %s"),
+				*ProfileResult.Detail));
+		}
+		CaptureOptions = MoveTemp(DiagnosticProfile.CaptureOptions);
+	}
+	FAngelscriptCacheCleanModuleArtifacts DiagnosticArtifacts;
+	const FAngelscriptCacheCleanCaptureResult CaptureResult =
+		CaptureAngelscriptCurrentModuleFunctionArtifactsForDiagnostics(
+			ModuleDesc.ToSharedRef(), CaptureOptions, DiagnosticArtifacts);
+	if (!CaptureResult.IsSuccess())
+	{
+		return Fail(FString::Printf(TEXT(
+			"GenerateStaticJITSourceTextForDiagnostics failed to validate current module artifacts: %s"),
+			*CaptureResult.Detail));
+	}
+
+	FAngelscriptFunctionRouteSnapshot DiagnosticRoutes;
+	DiagnosticRoutes.Generation = Routes->Generation;
+	for (const FAngelscriptFunctionRoute& CurrentRoute
+		: Routes->FunctionRoutes)
+	{
+		if (CurrentRoute.Function == nullptr
+			|| CurrentRoute.Function->GetModule() != Module)
+		{
+			continue;
+		}
+		const FAngelscriptFunctionArtifactIdentity* const Identity =
+			DiagnosticArtifacts.ValidatedFunctionArtifactIdentities.
+				FindByPredicate(
+					[&CurrentRoute](
+						const FAngelscriptFunctionArtifactIdentity& Candidate)
+					{
+						return Candidate.FunctionKey
+							== CurrentRoute.Identity.FunctionKey;
+					});
+		if (Identity == nullptr)
+		{
+			continue;
+		}
+		FAngelscriptFunctionRoute Route = CurrentRoute;
+		Route.ModuleKey = DiagnosticArtifacts.ModuleKey;
+		Route.Identity = *Identity;
+		Route.bHasVerifiedArtifactIdentity = true;
+		DiagnosticRoutes.FunctionRoutes.Add(MoveTemp(Route));
+	}
+	const FAngelscriptFunctionRoute* const IdentityRoute =
+		DiagnosticRoutes.FunctionRoutes.IsEmpty()
+		? nullptr : &DiagnosticRoutes.FunctionRoutes[0];
+	if (IdentityRoute == nullptr)
+	{
+		return Fail(TEXT(
+			"GenerateStaticJITSourceTextForDiagnostics failed: validated artifacts did not match a current module function."));
+	}
+
+	FAngelscriptCacheSuccessfulPublicationDto DiagnosticPublication;
+	DiagnosticPublication.Compatibility = CaptureOptions.Compatibility;
+	DiagnosticPublication.Context = CaptureOptions.Context;
+	DiagnosticPublication.Profile = CaptureOptions.Profile;
+	DiagnosticPublication.Modules.Add(MoveTemp(DiagnosticArtifacts));
+
+	FAngelscriptJITProviderGenerationSettings Settings;
+	Settings.TargetProfile =
+		FAngelscriptJITProviderRouter::ResolveTargetProfile(
+			RuntimeEngine->GetRuntimeConfig());
+	Settings.ProviderId.Hash = IdentityRoute->ModuleKey.Hash;
+	Settings.ProviderName = TEXT("StaticJIT Diagnostics");
+	Settings.OwnerModuleName = TEXT("AngelscriptRuntime");
+	Settings.ArtifactProfile = IdentityRoute->Identity.Profile;
+	Settings.NativeEnvironmentFingerprint =
+		FAngelscriptJITTargetProfiles::
+			BuildCurrentNativeEnvironmentFingerprint(Settings.TargetProfile);
+	Settings.bEmitDebugMetadata = bEmitDebugMetadata;
+
+	FAngelscriptJITGenerationOutput Output;
+	if (!GenerateStaticJITProviderArtifactsImpl(
+		MakeArrayView(&Module, 1), Settings, Output, OutError,
+		&DiagnosticRoutes, &DiagnosticPublication))
+	{
 		return false;
 	}
 
-	PrecompiledData.Save(PrecompiledCacheFilename);
+	const FAngelscriptJITGeneratedModule* const GeneratedModule =
+		Output.Modules.FindByPredicate(
+			[&IdentityRoute](
+				const FAngelscriptJITGeneratedModule& Candidate)
+			{
+				return Candidate.ModuleKey == IdentityRoute->ModuleKey;
+			});
+	if (GeneratedModule == nullptr)
+	{
+		return Fail(TEXT(
+			"GenerateStaticJITSourceTextForDiagnostics failed: current Provider output omitted the requested AS module."));
+	}
+
+	const FAngelscriptJITGeneratedFile* const GeneratedSource =
+		Output.Files.FindByPredicate(
+			[GeneratedModule](
+				const FAngelscriptJITGeneratedFile& Candidate)
+			{
+				return Candidate.Kind
+						== EAngelscriptJITGeneratedFileKind::ModuleSource
+					&& Candidate.RelativePath
+						== GeneratedModule->SourceRelativePath;
+			});
+	if (GeneratedSource == nullptr)
+	{
+		return Fail(TEXT(
+			"GenerateStaticJITSourceTextForDiagnostics failed: current Provider module source was missing."));
+	}
+
+	OutSourceText = GeneratedSource->Content;
 	return true;
 }
 #endif

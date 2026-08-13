@@ -1,20 +1,7 @@
 #pragma once
 
+#include "Artifacts/AngelscriptArtifactReference.h"
 #include "Cache/AngelscriptCacheTypes.h"
-
-enum class EAngelscriptCacheReferenceKind : uint8
-{
-	Invalid = 0,
-	ScriptModule = 1,
-	ScriptType = 2,
-	ScriptFunction = 3,
-	ScriptGlobal = 4,
-	ScriptProperty = 5,
-	ScriptImport = 6,
-	EnvironmentSymbol = 7,
-	CanonicalName = 8,
-	StringLiteral = 9,
-};
 
 enum class EAngelscriptCachedDataTypeKind : uint8
 {
@@ -331,33 +318,10 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptImportIdentityInput
 	FAngelscriptStableFunctionKey TargetFunctionKey;
 };
 
-struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheStableReference
-{
-	EAngelscriptCacheReferenceKind Kind = EAngelscriptCacheReferenceKind::Invalid;
-	FAngelscriptHash256 StableKey;
-	FAngelscriptHash256 ExpectedAbi;
-
-	friend bool operator==(
-		const FAngelscriptCacheStableReference& Left,
-		const FAngelscriptCacheStableReference& Right)
-	{
-		return Left.Kind == Right.Kind
-			&& Left.StableKey == Right.StableKey
-			&& Left.ExpectedAbi == Right.ExpectedAbi;
-	}
-
-	friend bool operator!=(
-		const FAngelscriptCacheStableReference& Left,
-		const FAngelscriptCacheStableReference& Right)
-	{
-		return !(Left == Right);
-	}
-};
-
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheSemanticDependency
 {
 	EAngelscriptCacheSemanticDependencyKind Kind = EAngelscriptCacheSemanticDependencyKind::Invalid;
-	FAngelscriptCacheStableReference Target;
+	FAngelscriptArtifactReference Target;
 	TOptional<FAngelscriptHash256> ExpectedContentOrValue;
 
 	friend bool operator==(
@@ -388,7 +352,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedDataType
 {
 	EAngelscriptCachedDataTypeKind Kind = EAngelscriptCachedDataTypeKind::Invalid;
 	EAngelscriptCachedPrimitiveType Primitive = EAngelscriptCachedPrimitiveType::Invalid;
-	TOptional<FAngelscriptCacheStableReference> TypeReference;
+	TOptional<FAngelscriptArtifactReference> TypeReference;
 	uint32 QualifierFlags = 0;
 	TArray<FAngelscriptCachedDataType> OrderedSubTypes;
 };
@@ -600,7 +564,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedImportDeclaration
 	FString CanonicalName;
 	FString CanonicalSignature;
 	FAngelscriptStableModuleKey TargetModuleKey;
-	FAngelscriptCacheStableReference TargetDeclaration;
+	FAngelscriptArtifactReference TargetDeclaration;
 	TArray<FAngelscriptCachedDeclarationSlot> Slots;
 };
 
@@ -747,7 +711,7 @@ public:
 			FAngelscriptCachedDataType& OutValue);
 #endif
 	static FAngelscriptCacheValidationResult SerializeStableReference(
-		const FAngelscriptCacheStableReference& Value, TArray<uint8>& OutBytes);
+		const FAngelscriptArtifactReference& Value, TArray<uint8>& OutBytes);
 	static FAngelscriptCacheValidationResult SerializeSemanticDependency(
 		const FAngelscriptCacheSemanticDependency& Value, TArray<uint8>& OutBytes);
 	static FAngelscriptCacheValidationResult SerializeMetadataEntry(

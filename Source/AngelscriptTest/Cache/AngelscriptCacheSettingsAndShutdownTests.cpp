@@ -72,7 +72,8 @@ namespace AngelscriptCacheSettingsAndShutdownTests_Private
 	static TUniquePtr<FAngelscriptEngine> CreateEngine(
 		const FString& ProjectRoot,
 		const FString& CacheRoot,
-		const FString& ReportPath = FString())
+		const FString& ReportPath = FString(),
+		const bool bDisableCacheV2Persistence = false)
 	{
 		FAngelscriptEngineConfig Config;
 		Config.bIsEditor = true;
@@ -80,6 +81,7 @@ namespace AngelscriptCacheSettingsAndShutdownTests_Private
 		Config.bSkipThreadedInitialize = true;
 		Config.CacheV2RootOverride = CacheRoot;
 		Config.CacheV2ReportPathOverride = ReportPath;
+		Config.bDisableCacheV2Persistence = bDisableCacheV2Persistence;
 
 		FAngelscriptEngineDependencies Dependencies =
 			FAngelscriptEngineDependencies::CreateDefault();
@@ -192,6 +194,43 @@ int ReadCacheShutdown%sValue()
 		TestRunner->AddInfo(FString::Printf(
 			TEXT("V6.3 Engine shutdown Store publication: Generation=%s"),
 			*CurrentGeneration->ToHexString()));
+	}
+
+	TEST_METHOD(DisabledPersistenceRetainsInMemoryCaptureButSkipsStorePublication)
+	{
+		using namespace AngelscriptCacheSettingsAndShutdownTests_Private;
+		FScopedProjectRoot Project;
+		const FString Unique = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+		ASSERT_THAT(IsTrue(Project.WriteSource(FString::Printf(TEXT(R"AS(
+enum ECacheDisabled%sState
+{
+	Ready = 1,
+}
+
+int ReadCacheDisabled%sValue()
+{
+	return 303;
+}
+)AS"), *Unique, *Unique))));
+
+		TUniquePtr<FAngelscriptEngine> Engine = CreateEngine(
+			Project.Root, Project.CacheRoot, FString(), true);
+		ASSERT_THAT(IsNotNull(Engine.Get()));
+		FAngelscriptEngineScope EngineScope(*Engine);
+		Engine->InitialCompile();
+		FAngelscriptCacheService* const Service = Engine->GetCacheService();
+		ASSERT_THAT(IsNotNull(Service));
+		const FAngelscriptCacheLifecyclePublications Publications =
+			Service->GetLifecyclePublications();
+		ASSERT_THAT(IsTrue(Publications.Current.IsValid()));
+		ASSERT_THAT(IsFalse(
+			Service->CaptureFunctionReuseSummary().bPresent));
+
+		Engine->Shutdown();
+		TArray<FString> PersistedFiles;
+		IFileManager::Get().FindFilesRecursive(
+			PersistedFiles, *Project.CacheRoot, TEXT("*"), true, false);
+		ASSERT_THAT(AreEqual(0, PersistedFiles.Num()));
 	}
 
 	TEST_METHOD(EngineShutdownWritesRequestedStableSessionJsonAfterFlush)

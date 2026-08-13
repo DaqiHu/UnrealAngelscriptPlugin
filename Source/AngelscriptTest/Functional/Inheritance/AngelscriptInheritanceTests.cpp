@@ -44,7 +44,9 @@ TEST_CLASS_WITH_FLAGS(
 			*Function,
 			TEXT("Inheritance.Basic"),
 			TEXT("Null pointer access"),
-			TEXT("int Test() | Line 1 | Col 227"))));
+			// `Derived Instance` has no constructed script object. The first
+			// dereference is Instance.SetBase(10), which starts at column 205.
+			TEXT("int Test() | Line 1 | Col 205"))));
 	}
 
 	TEST_METHOD(Interface)

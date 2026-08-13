@@ -675,6 +675,42 @@ FString FAngelscriptType::BuildFunctionDeclaration(const FAngelscriptTypeUsage& 
 	return Declaration;
 }
 
+FString FAngelscriptType::BuildSafeFunctionArgumentName(
+	asIScriptEngine& ScriptEngine,
+	const FStringView ReflectedName,
+	const int32 ArgumentIndex,
+	const TConstArrayView<FString> ExistingArgumentNames)
+{
+	const FString ReflectedNameString(ReflectedName);
+	const FTCHARToUTF8 ReflectedNameUtf8(*ReflectedNameString);
+	asUINT TokenLength = 0;
+	FString Candidate = ReflectedNameString;
+	if (ScriptEngine.ParseToken(
+			ReflectedNameUtf8.Get(),
+			ReflectedNameUtf8.Length(),
+			&TokenLength) != asTC_IDENTIFIER
+		|| TokenLength != static_cast<asUINT>(ReflectedNameUtf8.Length()))
+	{
+		Candidate = FString::Printf(TEXT("__ASArg%d"), ArgumentIndex);
+	}
+
+	auto IsAlreadyUsed = [&ExistingArgumentNames](const FString& Value)
+	{
+		return ExistingArgumentNames.ContainsByPredicate(
+			[&Value](const FString& Existing)
+			{
+				FString ExistingIdentifier = Existing;
+				ExistingIdentifier.RemoveFromStart(TEXT("in "));
+				return ExistingIdentifier == Value;
+			});
+	};
+	while (IsAlreadyUsed(Candidate))
+	{
+		Candidate += TEXT("_");
+	}
+	return Candidate;
+}
+
 asIScriptFunction* FAngelscriptType::FindScriptStructHashFunction(asITypeInfo* ScriptType)
 {
 	if (ScriptType == nullptr)

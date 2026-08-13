@@ -84,10 +84,71 @@ namespace AngelscriptCacheCompileReuse_Private
 				"UClass StaticClass()") == 0
 			&& Function.traits.GetTrait(asTRAIT_GENERATED_FUNCTION);
 	}
+
+	static bool AreArtifactAliasParameterTypesEquivalent(
+		const asCDataType& Left,
+		const asCDataType& Right)
+	{
+		if (Left == Right)
+		{
+			return true;
+		}
+		// Top-level const on a by-value parameter does not change the callable
+		// contract. AngelScript's full-module bytecode restore can retain it on
+		// the previous module generation even when the replacement source
+		// function prints the unqualified value type. Const on references or
+		// handles remains semantic and must not be normalized here.
+		return !Left.IsReference() && !Right.IsReference()
+			&& !Left.IsObjectHandle() && !Right.IsObjectHandle()
+			&& Left.IsEqualExceptConst(Right);
+	}
+
+	static bool AreArtifactAliasSignaturesEquivalent(
+		const asCScriptFunction& Left,
+		const asCScriptFunction& Right)
+	{
+		if (Left.name != Right.name
+			|| Left.returnType != Right.returnType
+			|| Left.IsReadOnly() != Right.IsReadOnly()
+			|| Left.inOutFlags != Right.inOutFlags
+			|| Left.parameterTypes.GetLength()
+				!= Right.parameterTypes.GetLength()
+			|| (Left.objectType != nullptr) != (Right.objectType != nullptr))
+		{
+			return false;
+		}
+		if (Left.objectType != nullptr
+			&& (FCStringAnsi::Strcmp(Left.objectType->GetName(),
+					Right.objectType->GetName()) != 0
+				|| FCStringAnsi::Strcmp(Left.objectType->GetNamespace(),
+					Right.objectType->GetNamespace()) != 0))
+		{
+			return false;
+		}
+		for (asUINT ParameterIndex = 0;
+			ParameterIndex < Left.parameterTypes.GetLength();
+			++ParameterIndex)
+		{
+			if (!AreArtifactAliasParameterTypesEquivalent(
+				Left.parameterTypes[ParameterIndex],
+				Right.parameterTypes[ParameterIndex]))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
 }
 
 struct FAngelscriptCacheCompileReuseContext::FImpl
 {
+	struct FPreparedExternalFunction final
+	{
+		const asCScriptFunction* Function = nullptr;
+		FAngelscriptArtifactReference Reference;
+		FAngelscriptHash256 ExecutionContent;
+	};
+
 	struct FModuleState final
 	{
 		FImpl* Owner = nullptr;
@@ -97,6 +158,7 @@ struct FAngelscriptCacheCompileReuseContext::FImpl
 		TArray<FAngelscriptCachedTypeSchema> CurrentTypes;
 		FAngelscriptCachedModuleState CurrentState;
 		TArray<FAngelscriptCachedFunctionBody> CurrentFunctions;
+		TArray<FPreparedExternalFunction> PreparedExternalFunctions;
 		TUniquePtr<FAngelscriptCacheEngineEnvironmentResolver> ExternalSymbols;
 		FAngelscriptCacheService* Service = nullptr;
 		mutable FCriticalSection RestoredDependenciesMutex;
@@ -112,6 +174,294 @@ struct FAngelscriptCacheCompileReuseContext::FImpl
 	TArray<TUniquePtr<FModuleState>> Modules;
 	mutable FCriticalSection SummaryMutex;
 	FAngelscriptCacheFunctionReuseSummary Summary;
+
+	// Combines immutable application registrations with exact-source script
+	// functions prepared earlier in this compile-reuse transaction. The
+	// compiler prepares dependency modules before their consumers, so a
+	// consumer can validate and relocate a foreign ScriptFunction without
+	// publishing any partially compiled module as global Engine authority.
+	class FPreparedFunctionAuthority final
+		: public IAngelscriptCacheCurrentSymbolResolver
+		, public IAngelscriptFunctionArtifactExternalFunctionResolver
+	{
+	public:
+		FPreparedFunctionAuthority(
+			const FAngelscriptCacheEngineEnvironmentResolver& InEnvironment,
+			const FImpl& InOwner)
+			: Environment(InEnvironment)
+			, Owner(InOwner)
+		{
+		}
+
+		virtual TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
+			const EAngelscriptArtifactReferenceKind ReferenceKind,
+			const FAngelscriptHash256& StableKey) const override
+		{
+			if (ReferenceKind
+				== EAngelscriptArtifactReferenceKind::ScriptFunction)
+			{
+				const FPreparedExternalFunction* Match = nullptr;
+				for (const TUniquePtr<FModuleState>& State : Owner.Modules)
+				{
+					if (!State.IsValid())
+					{
+						continue;
+					}
+					for (const FPreparedExternalFunction& Function
+						: State->PreparedExternalFunctions)
+					{
+						if (Function.Reference.StableKey != StableKey)
+						{
+							continue;
+						}
+						if (Match != nullptr
+							&& (Match->Reference != Function.Reference
+								|| Match->ExecutionContent
+									!= Function.ExecutionContent))
+						{
+							return {};
+						}
+						Match = &Function;
+					}
+				}
+				if (Match != nullptr)
+				{
+					return FAngelscriptCacheCurrentSymbol{
+						Match->Reference.ExpectedAbi,
+						Match->ExecutionContent,
+						{}};
+				}
+			}
+			return Environment.Resolve(ReferenceKind, StableKey);
+		}
+
+		virtual bool TryResolveExternalScriptFunction(
+			const asCScriptFunction& Function,
+			FAngelscriptArtifactReference& OutReference) const override
+		{
+			OutReference = {};
+			const FPreparedExternalFunction* Match = nullptr;
+			auto MatchPreparedFunction = [this, &Match](
+				const asCScriptFunction* Target) -> bool
+			{
+				if (Target == nullptr)
+				{
+					return true;
+				}
+				for (const TUniquePtr<FModuleState>& State : Owner.Modules)
+				{
+					if (!State.IsValid())
+					{
+						continue;
+					}
+					for (const FPreparedExternalFunction& Candidate
+						: State->PreparedExternalFunctions)
+					{
+						if (Candidate.Function != Target)
+						{
+							continue;
+						}
+						if (Match != nullptr
+							&& Match->Reference != Candidate.Reference)
+						{
+							return false;
+						}
+						Match = &Candidate;
+					}
+				}
+				return true;
+			};
+
+			if (!MatchPreparedFunction(&Function))
+			{
+				return false;
+			}
+
+			// VM bytecode refers to an imported function through the import
+			// signature object. That object is intentionally distinct from the
+			// provider's scriptFunctions-table entry and may print harmless
+			// declaration normalization differences such as a top-level const.
+			// Follow the current Engine's exact boundFunctionId instead of
+			// guessing declaration equivalence, then require that provider target
+			// to be one prepared exact-source authority in this transaction.
+			if (Match == nullptr && (Function.id & FUNC_IMPORTED) != 0
+				&& Function.engine != nullptr)
+			{
+				const int32 ImportIndex = Function.id & ~FUNC_IMPORTED;
+				if (ImportIndex < 0
+					|| ImportIndex >= static_cast<int32>(
+						Function.engine->importedFunctions.GetLength()))
+				{
+					return false;
+				}
+				const sBindInfo* BindInfo =
+					Function.engine->importedFunctions[ImportIndex];
+				if (BindInfo == nullptr
+					|| BindInfo->importedFunctionSignature != &Function
+					|| BindInfo->boundFunctionId < 0)
+				{
+					return false;
+				}
+				if (!MatchPreparedFunction(Function.engine->GetScriptFunction(
+					BindInfo->boundFunctionId)))
+				{
+					return false;
+				}
+			}
+
+			// Function-artifact restore resolves an `x` reference against the
+			// Engine's currently published module. During compile reuse that can
+			// still be the previous exact-source module object, while the prepared
+			// authority belongs to the replacement module staged by this
+			// transaction. Match those generations by the same semantic module and
+			// exact provider-local stable key first. The narrow structural fallback
+			// handles only full-bytecode normalization such as top-level const on a
+			// by-value parameter. The final stable key/ABI always comes from the one
+			// prepared candidate; duplicate matches are rejected rather than selected
+			// by order.
+			if (Match == nullptr && Function.module != nullptr
+				&& Function.module->baseModuleName.GetLength() != 0)
+			{
+				for (const TUniquePtr<FModuleState>& State : Owner.Modules)
+				{
+					if (!State.IsValid())
+					{
+						continue;
+					}
+					FAngelscriptStableFunctionKey AliasKey;
+					const bool bHasExactAliasKey =
+						FAngelscriptCacheStableSymbolIdentity::TryBuildFunctionKey(
+							State->ModuleKey, Function, AliasKey);
+					for (const FPreparedExternalFunction& Candidate
+						: State->PreparedExternalFunctions)
+					{
+						if (Candidate.Function == nullptr
+							|| Candidate.Function->module == nullptr
+							|| Candidate.Function->module->baseModuleName
+								!= Function.module->baseModuleName
+							|| (!(bHasExactAliasKey
+									&& Candidate.Reference.StableKey
+										== AliasKey.Hash)
+								&& (Candidate.Function->funcType != Function.funcType
+									|| Candidate.Function->artifactInvocationKind
+										!= Function.artifactInvocationKind
+									|| FCStringAnsi::Strcmp(
+										Candidate.Function->GetNamespace(),
+										Function.GetNamespace()) != 0
+									|| !AngelscriptCacheCompileReuse_Private::
+										AreArtifactAliasSignaturesEquivalent(
+											Function, *Candidate.Function))))
+						{
+							continue;
+						}
+						if (Match != nullptr
+							&& Match->Reference != Candidate.Reference)
+						{
+							return false;
+						}
+						Match = &Candidate;
+					}
+				}
+			}
+			if (Match == nullptr
+				|| Match->Reference.Kind
+					!= EAngelscriptArtifactReferenceKind::ScriptFunction
+				|| Match->Reference.StableKey.IsZero()
+				|| Match->Reference.ExpectedAbi.IsZero())
+			{
+				return false;
+			}
+			OutReference = Match->Reference;
+			return true;
+		}
+
+	private:
+		const FAngelscriptCacheEngineEnvironmentResolver& Environment;
+		const FImpl& Owner;
+	};
+
+	static bool BuildPreparedExternalFunctions(
+		FModuleState& State,
+		asCModule& ScriptModule,
+		FString& OutFailure)
+	{
+		State.PreparedExternalFunctions.Reset();
+		OutFailure.Reset();
+		for (asUINT FunctionIndex = 0;
+			FunctionIndex < ScriptModule.scriptFunctions.GetLength();
+			++FunctionIndex)
+		{
+			asCScriptFunction* Function =
+				ScriptModule.scriptFunctions[FunctionIndex];
+			if (Function == nullptr || Function->module != &ScriptModule)
+			{
+				OutFailure = TEXT(
+					"The staged module function table contains a null or foreign entry");
+				return false;
+			}
+
+			FAngelscriptStableFunctionKey FunctionKey;
+			FString KeyFailure;
+			if (!FAngelscriptCacheStableSymbolIdentity::TryBuildFunctionKey(
+				State.ModuleKey, *Function, FunctionKey, &KeyFailure))
+			{
+				OutFailure = FString::Printf(
+					TEXT("Staged function has no stable key: %s"), *KeyFailure);
+				return false;
+			}
+
+			const FAngelscriptCachedFunctionBody* MatchingBody = nullptr;
+			for (const FAngelscriptCachedFunctionBody& Body
+				: State.CurrentFunctions)
+			{
+				if (Body.Identity.FunctionKey != FunctionKey)
+				{
+					continue;
+				}
+				if (MatchingBody != nullptr)
+				{
+					OutFailure = FString::Printf(
+						TEXT("Stable function key %s has ambiguous exact-source bodies"),
+						*FunctionKey.Hash.ToHexString());
+					return false;
+				}
+				MatchingBody = &Body;
+			}
+			// Generated helpers such as derived StaticClass are intentionally not
+			// persisted as FunctionBody records and therefore publish no authority.
+			if (MatchingBody == nullptr)
+			{
+				continue;
+			}
+			if (MatchingBody->ModuleKey != State.ModuleKey
+				|| MatchingBody->ExpectedDeclarationAbi.IsZero()
+				|| MatchingBody->Identity.Content.Execution.IsZero()
+				|| State.PreparedExternalFunctions.ContainsByPredicate(
+					[&FunctionKey](const FPreparedExternalFunction& Existing)
+					{
+						return Existing.Reference.StableKey
+							== FunctionKey.Hash;
+					}))
+			{
+				OutFailure = FString::Printf(
+					TEXT("Stable function key %s has invalid or duplicate exact-source authority"),
+					*FunctionKey.Hash.ToHexString());
+				return false;
+			}
+
+			FPreparedExternalFunction& Prepared =
+				State.PreparedExternalFunctions.AddDefaulted_GetRef();
+			Prepared.Function = Function;
+			Prepared.Reference.Kind =
+				EAngelscriptArtifactReferenceKind::ScriptFunction;
+			Prepared.Reference.StableKey = FunctionKey.Hash;
+			Prepared.Reference.ExpectedAbi =
+				MatchingBody->ExpectedDeclarationAbi;
+			Prepared.ExecutionContent =
+				MatchingBody->Identity.Content.Execution;
+		}
+		return true;
+	}
 
 	static void RecordLookup(
 		FModuleState& State,
@@ -221,7 +571,10 @@ struct FAngelscriptCacheCompileReuseContext::FImpl
 		Authorities.TypeSchemas = State.CurrentTypes;
 		Authorities.ModuleState = &State.CurrentState;
 		Authorities.FunctionBodies = State.CurrentFunctions;
-		Authorities.ExternalSymbols = State.ExternalSymbols.Get();
+		FPreparedFunctionAuthority CurrentSymbols(
+			*State.ExternalSymbols, *State.Owner);
+		Authorities.ExternalSymbols = &CurrentSymbols;
+		Authorities.ExternalFunctions = &CurrentSymbols;
 		const FAngelscriptCacheFunctionCandidateLookupResult Lookup =
 			FAngelscriptCacheCompilerBridge::TryRestoreFunctionFromValidatedGraph(
 				State.Graph,
@@ -345,6 +698,167 @@ FAngelscriptCacheCompileReuseContext::CaptureSummary() const
 	return Impl->Summary;
 }
 
+bool FAngelscriptCacheCompileReuseContext::
+TryBuildDependencyOrderedModuleKeys(
+	const TConstArrayView<FAngelscriptStableModuleKey> SelectedKeys,
+	TArray<FAngelscriptStableModuleKey>& OutOrderedKeys,
+	FString& OutFailure) const
+{
+	struct FFunctionOwner final
+	{
+		FAngelscriptHash256 FunctionKey;
+		FAngelscriptStableModuleKey ModuleKey;
+	};
+	struct FModuleOrderNode final
+	{
+		FAngelscriptStableModuleKey ModuleKey;
+		TArray<int32> ProviderIndices;
+		bool bEmitted = false;
+	};
+
+	OutOrderedKeys.Reset();
+	OutFailure.Reset();
+	if (!IsValid())
+	{
+		OutFailure = TEXT("Compile-reuse ordering requires a selected Generation");
+		return false;
+	}
+
+	TArray<FModuleOrderNode> Nodes;
+	Nodes.Reserve(SelectedKeys.Num());
+	for (const FAngelscriptStableModuleKey& Key : SelectedKeys)
+	{
+		if (Key.Hash.IsZero()
+			|| Nodes.ContainsByPredicate(
+				[&Key](const FModuleOrderNode& Existing)
+				{
+					return Existing.ModuleKey == Key;
+				}))
+		{
+			OutFailure = TEXT(
+				"Compile-reuse ordering received a zero or duplicate module key");
+			return false;
+		}
+		Nodes.Add({Key, {}, false});
+	}
+	const auto FindSelectedModuleIndex = [&Nodes](
+		const FAngelscriptStableModuleKey& Key) -> int32
+	{
+		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+		{
+			if (Nodes[Index].ModuleKey == Key)
+			{
+				return Index;
+			}
+		}
+		return INDEX_NONE;
+	};
+
+	const FAngelscriptValidatedGeneration& Generation =
+		Impl->Session->GetGeneration();
+	TArray<FFunctionOwner> Owners;
+	for (const FAngelscriptDecodedCacheRecordHandle& Record
+		: Generation.ReachableRecords)
+	{
+		const FAngelscriptCachedFunctionBody* Body =
+			Record->TryGetFunctionBody();
+		if (Body == nullptr)
+		{
+			continue;
+		}
+		const FFunctionOwner* Existing = Owners.FindByPredicate(
+			[Body](const FFunctionOwner& Owner)
+			{
+				return Owner.FunctionKey
+					== Body->Identity.FunctionKey.Hash;
+			});
+		if (Existing != nullptr && Existing->ModuleKey != Body->ModuleKey)
+		{
+			OutFailure = TEXT(
+				"A stable function key has more than one module owner");
+			return false;
+		}
+		if (Existing == nullptr)
+		{
+			Owners.Add({Body->Identity.FunctionKey.Hash, Body->ModuleKey});
+		}
+	}
+
+	for (const FAngelscriptDecodedCacheRecordHandle& Record
+		: Generation.ReachableRecords)
+	{
+		const FAngelscriptCachedFunctionBody* Body =
+			Record->TryGetFunctionBody();
+		const int32 ConsumerIndex = Body != nullptr
+			? FindSelectedModuleIndex(Body->ModuleKey) : INDEX_NONE;
+		if (Body == nullptr || ConsumerIndex == INDEX_NONE)
+		{
+			continue;
+		}
+		for (const FAngelscriptCacheSemanticDependency& Dependency
+			: Body->ActualDependencies)
+		{
+			if (Dependency.Target.Kind
+				!= EAngelscriptArtifactReferenceKind::ScriptFunction)
+			{
+				continue;
+			}
+			const FFunctionOwner* Provider = Owners.FindByPredicate(
+				[&Dependency](const FFunctionOwner& Owner)
+				{
+					return Owner.FunctionKey
+						== Dependency.Target.StableKey;
+				});
+			if (Provider == nullptr || Provider->ModuleKey == Body->ModuleKey)
+			{
+				continue;
+			}
+			const int32 ProviderIndex =
+				FindSelectedModuleIndex(Provider->ModuleKey);
+			if (ProviderIndex == INDEX_NONE)
+			{
+				OutFailure = TEXT(
+					"A selected module requires an unselected script-function provider");
+				return false;
+			}
+			Nodes[ConsumerIndex].ProviderIndices.AddUnique(ProviderIndex);
+		}
+	}
+
+	OutOrderedKeys.Reserve(Nodes.Num());
+	while (OutOrderedKeys.Num() < Nodes.Num())
+	{
+		int32 ReadyIndex = INDEX_NONE;
+		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+		{
+			if (Nodes[Index].bEmitted)
+			{
+				continue;
+			}
+			bool bProvidersReady = true;
+			for (const int32 ProviderIndex : Nodes[Index].ProviderIndices)
+			{
+				bProvidersReady &= Nodes[ProviderIndex].bEmitted;
+			}
+			if (bProvidersReady)
+			{
+				ReadyIndex = Index;
+				break;
+			}
+		}
+		if (ReadyIndex == INDEX_NONE)
+		{
+			OutOrderedKeys.Reset();
+			OutFailure = TEXT(
+				"Cross-module function dependencies contain a compile-reuse cycle");
+			return false;
+		}
+		Nodes[ReadyIndex].bEmitted = true;
+		OutOrderedKeys.Add(Nodes[ReadyIndex].ModuleKey);
+	}
+	return true;
+}
+
 bool FAngelscriptCacheCompileReuseContext::TryCopyActualDependencies(
 	const FAngelscriptStableModuleKey& ModuleKey,
 	const FAngelscriptStableFunctionKey& FunctionKey,
@@ -430,10 +944,12 @@ FAngelscriptCacheCompileReuseContext::PrepareModule(
 
 	asCScriptEngine& ScriptEngine = *Module->ScriptModule->engine;
 	asCModule ValidationModule("__CacheV2CompileReuseValidation", &ScriptEngine);
-	FAngelscriptCacheEngineEnvironmentResolver CurrentSymbols(ScriptEngine);
+	FAngelscriptCacheEngineEnvironmentResolver CurrentEnvironment(ScriptEngine);
+	FImpl::FPreparedFunctionAuthority CurrentSymbols(
+		CurrentEnvironment, *Impl);
 	FAngelscriptCacheEngineLayoutResolver CurrentLayouts(ScriptEngine);
 	FAngelscriptFunctionArtifactCodec OpaqueValidator(
-		ValidationModule, ScriptEngine);
+		ValidationModule, ScriptEngine, &CurrentSymbols);
 	FAngelscriptCacheModuleGraphValidationContext GraphContext;
 	GraphContext.SelectedProfile = Generation.Manifest.Profile;
 	GraphContext.SelectedSourceSnapshot = Generation.Manifest.SourceSnapshot;
@@ -545,6 +1061,19 @@ FAngelscriptCacheCompileReuseContext::PrepareModule(
 	}
 	State->ExternalSymbols =
 		MakeUnique<FAngelscriptCacheEngineEnvironmentResolver>(ScriptEngine);
+	if (bExactSource)
+	{
+		FString ExternalAuthorityFailure;
+		if (!FImpl::BuildPreparedExternalFunctions(
+			*State, *Module->ScriptModule, ExternalAuthorityFailure))
+		{
+			return Failure(
+				EAngelscriptCacheCompileReusePrepareError::CurrentAuthorityMissing,
+				FString::Printf(
+					TEXT("Exact-source function authority rejected module: %s"),
+					*ExternalAuthorityFailure));
+		}
+	}
 
 	FImpl::FModuleState* CallbackState = State.Get();
 	Impl->Modules.Add(MoveTemp(State));

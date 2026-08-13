@@ -172,7 +172,7 @@ namespace AngelscriptCacheModuleGraphDependencyTests_Private
 		Dependency.Kind = bRequireContent
 			? EAngelscriptCacheSemanticDependencyKind::CompileOption
 			: EAngelscriptCacheSemanticDependencyKind::Declaration;
-		Dependency.Target.Kind = EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+		Dependency.Target.Kind = EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 		Dependency.Target.StableKey = MakeHash(0x90);
 		Dependency.Target.ExpectedAbi = MakeHash(0x91);
 		if (bRequireContent)
@@ -202,7 +202,7 @@ namespace AngelscriptCacheModuleGraphDependencyTests_Private
 	{
 		FAngelscriptCacheSemanticDependency Dependency;
 		Dependency.Kind = EAngelscriptCacheSemanticDependencyKind::Declaration;
-		Dependency.Target.Kind = EAngelscriptCacheReferenceKind::ScriptFunction;
+		Dependency.Target.Kind = EAngelscriptArtifactReferenceKind::ScriptFunction;
 		Dependency.Target.StableKey = Declaration.StableKey;
 		Dependency.Target.ExpectedAbi = bWrongAbi
 			? MakeHash(0x96) : Declaration.SignatureHash;
@@ -371,12 +371,12 @@ namespace AngelscriptCacheModuleGraphDependencyTests_Private
 		TOptional<FAngelscriptHash256> Content;
 
 		virtual TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
-			const EAngelscriptCacheReferenceKind ReferenceKind,
+			const EAngelscriptArtifactReferenceKind ReferenceKind,
 			const FAngelscriptHash256& StableKey) const override
 		{
 			++CallCount;
 			check(ReferenceKind
-				== EAngelscriptCacheReferenceKind::EnvironmentSymbol);
+				== EAngelscriptArtifactReferenceKind::EnvironmentSymbol);
 			check(StableKey == MakeHash(0x90));
 			if (bMissing)
 			{
@@ -403,7 +403,7 @@ namespace AngelscriptCacheModuleGraphDependencyTests_Private
 		virtual TOptional<FAngelscriptCacheResolvedTypeLayoutInput>
 		ResolveTypeLayoutInput(
 			EAngelscriptCachedTypeLayoutInputKind,
-			EAngelscriptCacheReferenceKind,
+			EAngelscriptArtifactReferenceKind,
 			const FAngelscriptHash256&) const override
 		{
 			return {};

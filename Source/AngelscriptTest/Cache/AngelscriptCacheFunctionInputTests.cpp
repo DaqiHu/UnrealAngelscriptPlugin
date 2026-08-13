@@ -21,11 +21,11 @@ namespace AngelscriptCacheFunctionInputTests_Private
 	{
 	public:
 		TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
-			const EAngelscriptCacheReferenceKind ReferenceKind,
+			const EAngelscriptArtifactReferenceKind ReferenceKind,
 			const FAngelscriptHash256& StableKey) const override
 		{
 			++ResolveCount;
-			if (ReferenceKind == EAngelscriptCacheReferenceKind::EnvironmentSymbol
+			if (ReferenceKind == EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 				&& StableKey == ExpectedKey)
 			{
 				return FAngelscriptCacheCurrentSymbol{CurrentAbi, {}, {}};
@@ -40,7 +40,7 @@ namespace AngelscriptCacheFunctionInputTests_Private
 
 	static FAngelscriptCacheSemanticDependency MakeDependency(
 		const EAngelscriptCacheSemanticDependencyKind Kind,
-		const EAngelscriptCacheReferenceKind ReferenceKind,
+		const EAngelscriptArtifactReferenceKind ReferenceKind,
 		const FAngelscriptHash256& StableKey,
 		const FAngelscriptHash256& Abi,
 		const TOptional<FAngelscriptHash256>& Content = {})
@@ -76,7 +76,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheFunctionInputTests,
 		FAngelscriptCachedHardValue& HardValue =
 			State.HardValues.AddDefaulted_GetRef();
 		HardValue.Owner = {
-			EAngelscriptCacheReferenceKind::ScriptGlobal,
+			EAngelscriptArtifactReferenceKind::ScriptGlobal,
 			GlobalKey,
 			GlobalAbi,
 		};
@@ -90,11 +90,11 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheFunctionInputTests,
 		CachedBody.FunctionSourceDigest.Hash = MakeHash(0x70);
 		const FAngelscriptCacheSemanticDependency GlobalDependency = MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::HardValue,
-			EAngelscriptCacheReferenceKind::ScriptGlobal,
+			EAngelscriptArtifactReferenceKind::ScriptGlobal,
 			GlobalKey, GlobalAbi, GlobalValue);
 		const FAngelscriptCacheSemanticDependency EnvironmentDependency = MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi,
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 			EnvironmentKey, EnvironmentAbi);
 		TArray<FAngelscriptCacheSemanticDependency> Observed = {
 			EnvironmentDependency,

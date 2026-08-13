@@ -27,6 +27,7 @@ This repository is imported from `TDGameStudio/AngelscriptProject` as a clean pl
 - `Angelscript.uplugin` - Unreal plugin descriptor.
 - `Source/AngelscriptRuntime/` - runtime integration, bindings, type system, script compilation, debugging, code coverage, static JIT, and dump support.
 - `Source/AngelscriptEditor/` - editor integration, hot reload, content browser, source navigation, and tooling.
+- `Source/AngelscriptTestJIT/` - Editor-only fixed StaticJIT provider used by plugin automation; never included in non-Editor targets.
 - `Source/AngelscriptTest/` - automation tests for the plugin.
 - `Source/AngelscriptUHTTool/` - UHT integration toolchain.
 - `Standalone/` - the no-Unreal CMake build, native runner, and offline compiler/analysis delivery surface.
@@ -82,6 +83,93 @@ pointer-free process report. The read-only offline inspector is documented at
 `Tools/CacheV2Dump/README.md`; it validates and dumps pointer, Manifest, Pack,
 record, generation, and stable-route data without starting Unreal or mutating
 the Store.
+
+## StaticJIT providers
+
+StaticJIT is a static AOT path: compiled AngelScript bytecode is translated to
+C++, built by Unreal Build Tool, and exposed at runtime by an
+`IAngelscriptJITArtifactProvider`. It does not generate machine code in the
+running process and no longer uses the legacy `FJITDatabase`, numeric
+FunctionId registration, whole-cache `DataGuid`, `.jit.hpp`, or paired
+`PrecompiledScript.Cache` protocol.
+
+A host project that opts into generated StaticJIT owns a small Runtime carrier
+module, conventionally named `AngelscriptJIT`. Generation writes exactly one
+source per non-empty AS module and target profile:
+
+```text
+Source/AngelscriptJIT/Generated/
+├── Provider.generated.h
+├── Provider.generated.cpp
+└── <Profile>/
+    ├── Provider.generated.h
+    ├── Provider.generated.inl
+    ├── ProviderManifest.generated.json
+    ├── OwnedFiles.generated.json
+    ├── Tests/Test_Handles.07a7af43.<Profile>.jit.cpp
+    └── Examples/Core/Example_Math.7fca3709.<Profile>.jit.cpp
+```
+
+All global functions and class methods owned by one AS module share its single
+`.jit.cpp`; generated file count scales with AS module count, not function
+count. A body edit retains the module path and preserves unrelated module bytes
+and timestamps. Adding or removing an AS module changes the UBT source set and
+requires a normal full build.
+
+Game virtual paths map directly beneath the profile root; plugin and memory
+modules use `Plugin/<Name>` and `Memory/<Provider>` domains. The filename key
+starts at eight hex characters and extends deterministically on a
+case-insensitive basename collision. Full module/function/content identities
+remain in schema-3 manifests, generated metadata blocks, and internal
+`ASJIT_<FunctionKey>_<ExecutionHash>` symbols. Legacy
+`Private/Generated/<Profile>` and `Private/Generated/Profiles/<Profile>` output
+is Verify-only stale input and is retired by Generate only through a valid
+revision-2 owned-file inventory; migration requires a normal build. The fixed
+module source and generated selector also live directly under the module root;
+the carrier has no semantic `Private` wrapper.
+
+At module startup, the carrier registers its Provider through Unreal Modular
+Features. `AngelscriptRuntime` validates and copies the view into an immutable
+multi-provider Registry snapshot. After source compilation or Cache V2 restore,
+each Engine independently matches stable module/function identity, execution
+content, target profile, native environment, entry ABI, and stable references.
+Only an unambiguous exact entry publishes a complete VM/Raw/Parms binding;
+missing, stale, conflicting, or unresolved entries fall back only the affected
+function to VM. Cache V2 remains authoritative for script restoration and never
+stores Provider code pointers.
+
+`EditorDevelopment`, `GameDevelopment`, and `GameShipping` are isolated
+profiles. Editor/PIE can consume `EditorDevelopment` providers. Saving `.as`
+invalidates and reroutes functions but intentionally does not generate C++ or
+trigger Live Coding on every save. An explicit Generate/Refresh action may use
+Live Coding when all generated `.jit.cpp` paths are already in the active
+target; a new/removed AS module, unavailable Live Coding, a failed patch, or a
+stale Provider generation leaves VM behavior correct and requires a normal
+build where applicable.
+
+Unreal ModuleManager owns provider DLL load/unload. Owner unregistration removes
+the Provider from future Registry snapshots, while existing bindings retain a
+code-image lifetime lease until the last in-flight execution releases it. Live
+Coding patch images are retained by entry address; monolithic code naturally
+lives for the process lifetime.
+
+Packaged Development and Shipping builds must generate and compile the matching
+profile before packaging. They do not depend on Editor, Live Coding, or
+`AngelscriptTestJIT`. Production script-to-script content-specific direct-call
+emission is currently disabled; calls continue through the current binding so
+stale code cannot bypass provider routing.
+
+Runtime diagnostics:
+
+```text
+as.StaticJIT.DumpDiagnostics
+as.StaticJIT.DumpDiagnostics -Output=<json-file>
+as.StaticJIT.DumpDiagnostics -Function=<canonical-declaration-or-function-key>
+```
+
+The machine-readable format is schema revision 2 and reports Provider/module
+ownership, routes, mismatch reasons, VM/Raw/Parms publication, stable reference
+slots, execution counters, and refresh timings.
 
 ## Class Rename Redirects
 

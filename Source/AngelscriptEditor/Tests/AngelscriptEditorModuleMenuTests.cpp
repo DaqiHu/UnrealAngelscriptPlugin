@@ -1,9 +1,11 @@
 #include "CQTest.h"
 #include "Core/AngelscriptEditorModule.h"
 
+#include "HAL/IConsoleManager.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
+#include "Misc/StringOutputDevice.h"
 #include "ToolMenu.h"
 #include "ToolMenuEntry.h"
 #include "ToolMenuOwner.h"
@@ -69,15 +71,18 @@ static bool RunRegisterToolsMenuEntriesAddsWorkspaceSnippetAndLegacyBindCommands
 	const FToolMenuOwner ModuleOwner(&Module);
 	TArray<FPlatformExecuteCall> PlatformExecuteCalls;
 	bool bSnippetRunnerOpened = false;
+	bool bStaticJITRefreshRequested = false;
 
 	FAngelscriptEditorModuleTestAccess::ResetPlatformExecuteOverride();
 	FAngelscriptEditorModuleTestAccess::ResetSnippetRunnerOpenOverride();
+	FAngelscriptEditorModuleTestAccess::ResetStaticJITRefreshOverride();
 	UToolMenus::UnregisterOwner(&Module);
 
 	ON_SCOPE_EXIT
 	{
 		FAngelscriptEditorModuleTestAccess::ResetPlatformExecuteOverride();
 		FAngelscriptEditorModuleTestAccess::ResetSnippetRunnerOpenOverride();
+		FAngelscriptEditorModuleTestAccess::ResetStaticJITRefreshOverride();
 		UToolMenus::UnregisterOwner(&Module);
 	};
 
@@ -95,6 +100,11 @@ static bool RunRegisterToolsMenuEntriesAddsWorkspaceSnippetAndLegacyBindCommands
 		{
 			bSnippetRunnerOpened = true;
 		});
+	FAngelscriptEditorModuleTestAccess::SetStaticJITRefreshOverride(
+		[&bStaticJITRefreshRequested]()
+		{
+			bStaticJITRefreshRequested = true;
+		});
 
 	FAngelscriptEditorModuleTestAccess::RegisterToolsMenuEntries(Module);
 
@@ -108,17 +118,19 @@ static bool RunRegisterToolsMenuEntriesAddsWorkspaceSnippetAndLegacyBindCommands
 
 	const FToolMenuEntry* OpenCodeEntry = FindOwnedEntry(*ProgrammingSection, "ASOpenCode", ModuleOwner);
 	const FToolMenuEntry* RunSnippetEntry = FindOwnedEntry(*ProgrammingSection, "ASRunSnippet", ModuleOwner);
+	const FToolMenuEntry* StaticJITRefreshEntry = FindOwnedEntry(*ProgrammingSection, "ASGenerateRefreshStaticJIT", ModuleOwner);
 	const FToolMenuEntry* FunctionTestsEntry = FindOwnedEntry(*ProgrammingSection, "Function Tests", ModuleOwner);
 	const FToolMenuEntry* GenerateBindingsEntry = FindOwnedEntry(*ProgrammingBindsSection, "ASGenerateBindings", ModuleOwner);
 	if (!TestNotNull(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should register ASOpenCode in the Programming section"), OpenCodeEntry)
 		|| !TestNotNull(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should register ASRunSnippet in the Programming section"), RunSnippetEntry)
+		|| !TestNotNull(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should register ASGenerateRefreshStaticJIT in the Programming section"), StaticJITRefreshEntry)
 		|| !TestNotNull(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should register Function Tests in the Programming section"), FunctionTestsEntry)
 		|| !TestNotNull(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should register ASGenerateBindings in the Programming Binds section"), GenerateBindingsEntry))
 	{
 		return false;
 	}
 
-	if (!TestEqual(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should contribute exactly three entries to the Programming section"), CountOwnedEntries(*ProgrammingSection, ModuleOwner), 3)
+	if (!TestEqual(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should contribute exactly four entries to the Programming section"), CountOwnedEntries(*ProgrammingSection, ModuleOwner), 4)
 		|| !TestEqual(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should contribute exactly one entry to the Programming Binds section"), CountOwnedEntries(*ProgrammingBindsSection, ModuleOwner), 1))
 	{
 		return false;
@@ -126,6 +138,7 @@ static bool RunRegisterToolsMenuEntriesAddsWorkspaceSnippetAndLegacyBindCommands
 
 	if (!TestEqual(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should preserve the workspace label"), OpenCodeEntry->Label.Get().ToString(), FString(TEXT("Open Angelscript workspace (VS Code)")))
 		|| !TestEqual(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should preserve the snippet runner label"), RunSnippetEntry->Label.Get().ToString(), FString(TEXT("Run Angelscript Snippet")))
+		|| !TestEqual(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should preserve the StaticJIT refresh label"), StaticJITRefreshEntry->Label.Get().ToString(), FString(TEXT("Generate/Refresh AngelScript JIT")))
 		|| !TestEqual(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should preserve the function-tests label"), FunctionTestsEntry->Label.Get().ToString(), FString(TEXT("Run Function Tests")))
 		|| !TestEqual(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should preserve the legacy-bind label"), GenerateBindingsEntry->Label.Get().ToString(), FString(TEXT("Legacy Native Bind Generator (Debug Only)"))))
 	{
@@ -135,6 +148,25 @@ static bool RunRegisterToolsMenuEntriesAddsWorkspaceSnippetAndLegacyBindCommands
 	FToolMenuEntry* MutableRunSnippetEntry = const_cast<FToolMenuEntry*>(RunSnippetEntry);
 	if (!TestTrue(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should execute the ASRunSnippet action"), MutableRunSnippetEntry->TryExecuteToolUIAction(FToolMenuContext()))
 		|| !TestTrue(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should open the snippet runner window"), bSnippetRunnerOpened))
+	{
+		return false;
+	}
+
+	FToolMenuEntry* MutableStaticJITRefreshEntry =
+		const_cast<FToolMenuEntry*>(StaticJITRefreshEntry);
+	if (!TestTrue(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should execute the explicit StaticJIT refresh action"), MutableStaticJITRefreshEntry->TryExecuteToolUIAction(FToolMenuContext()))
+		|| !TestTrue(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should invoke StaticJIT refresh only through its explicit action"), bStaticJITRefreshRequested))
+	{
+		return false;
+	}
+
+	bStaticJITRefreshRequested = false;
+	FStringOutputDevice ConsoleOutput;
+	if (!TestTrue(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should expose the explicit StaticJIT refresh action as a console command"),
+		IConsoleManager::Get().ProcessUserConsoleInput(
+			TEXT("as.StaticJIT.EditorRefresh"), ConsoleOutput, nullptr))
+		|| !TestTrue(TEXT("Editor.Module.RegisterToolsMenuEntriesAddsWorkspaceAndLegacyBindCommands should route the console command through the same StaticJIT refresh action"),
+			bStaticJITRefreshRequested))
 	{
 		return false;
 	}

@@ -5,8 +5,14 @@
 #include "Modules/ModuleManager.h"
 
 class IDirectoryWatcher;
+class IConsoleObject;
 class UObject;
 class UASClass;
+
+namespace AngelscriptEditor::StaticJIT
+{
+	class FAngelscriptJITRefreshService;
+}
 
 #if WITH_DEV_AUTOMATION_TESTS
 class UPackage;
@@ -94,12 +100,16 @@ private:
 	friend struct FAngelscriptEditorModuleTestAccess;
 #endif
 	void RegisterToolsMenuEntries();
+	void GenerateRefreshStaticJIT();
 	TArray<TPair<FString, FDelegateHandle>> DirectoryWatchHandles;
 	FDelegateHandle StateDumpExtensionHandle;
 	FDelegateHandle DebugListAssetsBridgeHandle;
 	FDelegateHandle EditorCreateBlueprintBridgeHandle;
 	TUniquePtr<FAngelscriptScriptTestAutomationRefresh>
 		ScriptTestAutomationRefresh;
+	TSharedPtr<AngelscriptEditor::StaticJIT::FAngelscriptJITRefreshService>
+		StaticJITRefreshService;
+	IConsoleObject* StaticJITRefreshConsoleCommand = nullptr;
 };
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -117,6 +127,8 @@ struct FAngelscriptEditorModuleTestAccess
 	static void ResetPlatformExecuteOverride();
 	static void SetSnippetRunnerOpenOverride(TFunction<void()> InOverride);
 	static void ResetSnippetRunnerOpenOverride();
+	static void SetStaticJITRefreshOverride(TFunction<void()> InOverride);
+	static void ResetStaticJITRefreshOverride();
 	static void SetClassViewerRefreshOverride(TFunction<void()> InOverride);
 	static void ResetClassViewerRefreshOverride();
 	static void SetOnEngineInitDoneOverride(TFunction<void()> InOverride);

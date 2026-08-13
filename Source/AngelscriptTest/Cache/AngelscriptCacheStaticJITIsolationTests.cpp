@@ -94,13 +94,13 @@ int ReadStaticJITIsolationB()
 		return CreateScriptScanFreeFullEngineForTesting(Config, Dependencies);
 	}
 
-	static const FAngelscriptCacheLiveFunctionRoute* FindRoute(
-		const FAngelscriptCacheFunctionRouteSnapshot& Snapshot,
+	static const FAngelscriptFunctionRoute* FindRoute(
+		const FAngelscriptFunctionRouteSnapshot& Snapshot,
 		const FString& CanonicalDeclaration)
 	{
 		return Snapshot.FunctionRoutes.FindByPredicate(
 			[&CanonicalDeclaration](
-				const FAngelscriptCacheLiveFunctionRoute& Route)
+				const FAngelscriptFunctionRoute& Route)
 			{
 				return Route.CanonicalDeclaration == CanonicalDeclaration;
 			});
@@ -121,23 +121,56 @@ int ReadStaticJITIsolationB()
 	{
 	}
 
+	class FScopedSyntheticJitCompiler final : public asIJITCompiler
+	{
+	public:
+		explicit FScopedSyntheticJitCompiler(FAngelscriptEngine& Engine)
+			: ScriptEngine(Engine.GetScriptEngine())
+		{
+			check(ScriptEngine != nullptr);
+			check(ScriptEngine->SetJITCompiler(this) == asSUCCESS);
+		}
+
+		~FScopedSyntheticJitCompiler() override
+		{
+			check(ScriptEngine->SetJITCompiler(nullptr) == asSUCCESS);
+		}
+
+		void OnFunctionReady(asIScriptFunction*) override
+		{
+		}
+
+		void ReleaseFunctionBinding(
+			asIScriptFunction*,
+			const asSJITFunctionBinding&) override
+		{
+		}
+
+	private:
+		asIScriptEngine* ScriptEngine = nullptr;
+	};
+
 	static void SetSyntheticNativeEntries(
-		const FAngelscriptCacheLiveFunctionRoute& Route,
+		const FAngelscriptFunctionRoute& Route,
 		const bool bNative)
 	{
 		check(Route.Function != nullptr);
 		asCScriptFunction* Function =
 			static_cast<asCScriptFunction*>(Route.Function);
-		Function->jitFunction = bNative ? &SyntheticVmEntry : nullptr;
-		Function->jitFunction_ParmsEntry =
-			bNative ? &SyntheticParmsEntry : nullptr;
-		Function->jitFunction_Raw = bNative ? &SyntheticRawEntry : nullptr;
+		asSJITFunctionBinding Binding;
+		if (bNative)
+		{
+			Binding.VMEntry = &SyntheticVmEntry;
+			Binding.RawEntry = &SyntheticRawEntry;
+			Binding.ParmsEntry = &SyntheticParmsEntry;
+		}
+		check(Function->SetJITBinding(Binding) == asSUCCESS);
 	}
 
 	class FScopedSyntheticEntryCleanup final
 	{
 	public:
-		void Add(const FAngelscriptCacheLiveFunctionRoute& Route)
+		void Add(const FAngelscriptFunctionRoute& Route)
 		{
 			check(Route.Function != nullptr);
 			Functions.AddUnique(
@@ -150,9 +183,7 @@ int ReadStaticJITIsolationB()
 			{
 				if (Function != nullptr)
 				{
-					Function->jitFunction = nullptr;
-					Function->jitFunction_ParmsEntry = nullptr;
-					Function->jitFunction_Raw = nullptr;
+					check(Function->SetJITBinding(asSJITFunctionBinding()) == asSUCCESS);
 				}
 			}
 		}
@@ -188,37 +219,38 @@ public:
 		Engine->InitialCompile();
 		FAngelscriptCacheService* Service = Engine->GetCacheService();
 		ASSERT_THAT(IsNotNull(Service));
+		FScopedSyntheticJitCompiler SyntheticCompiler(*Engine);
 		const FAngelscriptCacheLifecyclePublications LifecycleBefore =
 			Service->GetLifecyclePublications();
 		ASSERT_THAT(IsTrue(LifecycleBefore.Current.IsValid()));
 
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> Initial = Engine->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(Initial.IsValid()));
-		const FAngelscriptCacheLiveFunctionRoute* InitialA = FindRoute(
+		const FAngelscriptFunctionRoute* InitialA = FindRoute(
 			*Initial, TEXT("int ReadStaticJITIsolationA()"));
-		const FAngelscriptCacheLiveFunctionRoute* InitialB = FindRoute(
+		const FAngelscriptFunctionRoute* InitialB = FindRoute(
 			*Initial, TEXT("int ReadStaticJITIsolationB()"));
 		ASSERT_THAT(IsNotNull(InitialA));
 		ASSERT_THAT(IsNotNull(InitialB));
 		FScopedSyntheticEntryCleanup SyntheticCleanup;
 		SyntheticCleanup.Add(*InitialA);
 		SyntheticCleanup.Add(*InitialB);
-		ASSERT_THAT(AreEqual(EAngelscriptCacheFunctionExecutionRoute::Vm,
+		ASSERT_THAT(AreEqual(EAngelscriptFunctionExecutionRoute::Vm,
 			InitialA->SelectedExecutionRoute));
-		ASSERT_THAT(AreEqual(EAngelscriptCacheFunctionExecutionRoute::Vm,
+		ASSERT_THAT(AreEqual(EAngelscriptFunctionExecutionRoute::Vm,
 			InitialB->SelectedExecutionRoute));
 
 		SetSyntheticNativeEntries(*InitialA, true);
 		ASSERT_THAT(IsTrue(
 			Engine->RefreshFunctionRouteSnapshotAfterStaticJITChange(true)));
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> Native = Engine->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(Native.IsValid()));
 		ASSERT_THAT(IsTrue(Native != Initial));
 		ASSERT_THAT(AreEqual(1u, Native->NativeRouteCount));
 		ASSERT_THAT(AreEqual(1u, Native->VmRouteCount));
-		const FAngelscriptCacheLiveFunctionRoute* NativeA = FindRoute(
+		const FAngelscriptFunctionRoute* NativeA = FindRoute(
 			*Native, TEXT("int ReadStaticJITIsolationA()"));
 		ASSERT_THAT(IsNotNull(NativeA));
 		ASSERT_THAT(IsTrue(
@@ -227,7 +259,7 @@ public:
 			LifecycleBefore, Service->GetLifecyclePublications())));
 		TestRunner->AddInfo(FString::Printf(
 			TEXT("[CacheV2][StaticJITIsolation] Outcome=ExactNative RouteOrdinal=%llu VM=%u Native=%u CurrentTx=%llu"),
-			static_cast<unsigned long long>(Native->PublicationOrdinal),
+			static_cast<unsigned long long>(Native->Generation.Value),
 			Native->VmRouteCount,
 			Native->NativeRouteCount,
 			static_cast<unsigned long long>(
@@ -236,7 +268,7 @@ public:
 		SetSyntheticNativeEntries(*NativeA, false);
 		ASSERT_THAT(IsTrue(
 			Engine->RefreshFunctionRouteSnapshotAfterStaticJITChange(true)));
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> Removed = Engine->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(Removed.IsValid()));
 		ASSERT_THAT(IsTrue(Removed != Native));
@@ -246,7 +278,7 @@ public:
 			LifecycleBefore, Service->GetLifecyclePublications())));
 		TestRunner->AddInfo(FString::Printf(
 			TEXT("[CacheV2][StaticJITIsolation] Outcome=ProviderDeparture RouteOrdinal=%llu VM=%u Native=%u CurrentTx=%llu"),
-			static_cast<unsigned long long>(Removed->PublicationOrdinal),
+			static_cast<unsigned long long>(Removed->Generation.Value),
 			Removed->VmRouteCount,
 			Removed->NativeRouteCount,
 			static_cast<unsigned long long>(
@@ -265,14 +297,15 @@ public:
 		Engine->InitialCompile();
 		FAngelscriptCacheService* Service = Engine->GetCacheService();
 		ASSERT_THAT(IsNotNull(Service));
+		FScopedSyntheticJitCompiler SyntheticCompiler(*Engine);
 		const FAngelscriptCacheLifecyclePublications LifecycleBefore =
 			Service->GetLifecyclePublications();
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> Initial = Engine->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(Initial.IsValid()));
-		const FAngelscriptCacheLiveFunctionRoute* InitialA = FindRoute(
+		const FAngelscriptFunctionRoute* InitialA = FindRoute(
 			*Initial, TEXT("int ReadStaticJITIsolationA()"));
-		const FAngelscriptCacheLiveFunctionRoute* InitialB = FindRoute(
+		const FAngelscriptFunctionRoute* InitialB = FindRoute(
 			*Initial, TEXT("int ReadStaticJITIsolationB()"));
 		ASSERT_THAT(IsNotNull(InitialA));
 		ASSERT_THAT(IsNotNull(InitialB));
@@ -290,13 +323,13 @@ public:
 		};
 		for (const TCHAR* InjectedOutcome : InjectedMissOutcomes)
 		{
-			const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+			const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 				ESPMode::ThreadSafe> Before =
 				Engine->GetFunctionRouteSnapshot();
 			ASSERT_THAT(IsTrue(Before.IsValid()));
-			const FAngelscriptCacheLiveFunctionRoute* RouteA = FindRoute(
+			const FAngelscriptFunctionRoute* RouteA = FindRoute(
 				*Before, TEXT("int ReadStaticJITIsolationA()"));
-			const FAngelscriptCacheLiveFunctionRoute* RouteB = FindRoute(
+			const FAngelscriptFunctionRoute* RouteB = FindRoute(
 				*Before, TEXT("int ReadStaticJITIsolationB()"));
 			ASSERT_THAT(IsNotNull(RouteA));
 			ASSERT_THAT(IsNotNull(RouteB));
@@ -309,40 +342,40 @@ public:
 			ASSERT_THAT(IsTrue(
 				Engine->RefreshFunctionRouteSnapshotAfterStaticJITChange(true)));
 
-			const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+			const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 				ESPMode::ThreadSafe> After =
 				Engine->GetFunctionRouteSnapshot();
 			ASSERT_THAT(IsTrue(After.IsValid()));
 			ASSERT_THAT(IsTrue(After != Before));
 			ASSERT_THAT(AreEqual(1u, After->NativeRouteCount));
 			ASSERT_THAT(AreEqual(1u, After->VmRouteCount));
-			const FAngelscriptCacheLiveFunctionRoute* AfterA = FindRoute(
+			const FAngelscriptFunctionRoute* AfterA = FindRoute(
 				*After, TEXT("int ReadStaticJITIsolationA()"));
-			const FAngelscriptCacheLiveFunctionRoute* AfterB = FindRoute(
+			const FAngelscriptFunctionRoute* AfterB = FindRoute(
 				*After, TEXT("int ReadStaticJITIsolationB()"));
 			ASSERT_THAT(IsNotNull(AfterA));
 			ASSERT_THAT(IsNotNull(AfterB));
 			ASSERT_THAT(AreEqual(
-				EAngelscriptCacheFunctionExecutionRoute::Vm,
+				EAngelscriptFunctionExecutionRoute::Vm,
 				AfterA->SelectedExecutionRoute));
 			ASSERT_THAT(AreEqual(
-				EAngelscriptCacheFunctionExecutionRoute::Native,
+				EAngelscriptFunctionExecutionRoute::Native,
 				AfterB->SelectedExecutionRoute));
 			ASSERT_THAT(IsTrue(IsLifecycleUnchanged(
 				LifecycleBefore, Service->GetLifecyclePublications())));
 			TestRunner->AddInfo(FString::Printf(
 				TEXT("[CacheV2][StaticJITIsolation] Outcome=%s RouteOrdinal=%llu VM=%u Native=%u CurrentTx=%llu"),
 				InjectedOutcome,
-				static_cast<unsigned long long>(After->PublicationOrdinal),
+				static_cast<unsigned long long>(After->Generation.Value),
 				After->VmRouteCount,
 				After->NativeRouteCount,
 				static_cast<unsigned long long>(
 					LifecycleBefore.Current->TransactionOrdinal)));
 		}
 
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> Final = Engine->GetFunctionRouteSnapshot();
-		const FAngelscriptCacheLiveFunctionRoute* FinalB = FindRoute(
+		const FAngelscriptFunctionRoute* FinalB = FindRoute(
 			*Final, TEXT("int ReadStaticJITIsolationB()"));
 		ASSERT_THAT(IsNotNull(FinalB));
 		SetSyntheticNativeEntries(*FinalB, false);
@@ -362,7 +395,7 @@ public:
 		ASSERT_THAT(IsNotNull(Service));
 		const FAngelscriptCacheLifecyclePublications LifecycleBefore =
 			Service->GetLifecyclePublications();
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> RoutesBefore =
 			Engine->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(RoutesBefore.IsValid()));
@@ -377,7 +410,7 @@ public:
 			LifecycleBefore, Service->GetLifecyclePublications())));
 		TestRunner->AddInfo(FString::Printf(
 			TEXT("[CacheV2][StaticJITIsolation] Outcome=LiveCodingFailure RouteOrdinal=%llu SnapshotRetained=1 CurrentTx=%llu"),
-			static_cast<unsigned long long>(RoutesBefore->PublicationOrdinal),
+			static_cast<unsigned long long>(RoutesBefore->Generation.Value),
 			static_cast<unsigned long long>(
 				LifecycleBefore.Current->TransactionOrdinal)));
 	}

@@ -98,6 +98,15 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptType : TSharedFromThis<FAngelscriptTyp
 	// Helper to build an angelscript function declaration
 	static FString BuildFunctionDeclaration(const FAngelscriptTypeUsage& ReturnType, const FString& FunctionName, const TArray<FAngelscriptTypeUsage>& ArgumentTypes, const TArray<FString>& ArgumentNames, const TArray<FString>& ArgumentDefaults, bool bConstMethod = false);
 
+	// Reflected names may be legal Unreal identifiers but AngelScript keywords.
+	// Parameter names are diagnostic-only, so replace an invalid token with a
+	// deterministic positional name without changing the reflected property.
+	static FString BuildSafeFunctionArgumentName(
+		class asIScriptEngine& ScriptEngine,
+		FStringView ReflectedName,
+		int32 ArgumentIndex,
+		TConstArrayView<FString> ExistingArgumentNames = {});
+
 	// Helper to find the script-side Hash() declaration used by script structs.
 	static class asIScriptFunction* FindScriptStructHashFunction(class asITypeInfo* ScriptType);
 

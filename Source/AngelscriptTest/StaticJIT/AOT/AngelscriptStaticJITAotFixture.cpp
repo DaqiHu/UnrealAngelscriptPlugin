@@ -3,8 +3,6 @@
 #include "AngelscriptTestMacros.h"
 #include "Core/FunctionCallers.h"
 #include "Core/angelscript.h"
-#include "HAL/FileManager.h"
-#include "Misc/Paths.h"
 
 namespace AngelscriptStaticJITAotFixture
 {
@@ -38,17 +36,6 @@ namespace AngelscriptStaticJITAotFixture
 			ObjectLastNativeObservation.ObjectValue = Address->Value;
 		}
 
-		bool SetGeneratedOutputError(FString* OutError, const FString& Detail)
-		{
-			if (OutError != nullptr)
-			{
-				*OutError = FString::Printf(
-					TEXT("%s\nStaticJIT AOT test artifacts are generated locally; run the setup workflow before running the AOT tests:\n%s"),
-					*Detail,
-					*GetGeneratedSetupInstructions());
-			}
-			return false;
-		}
 	}
 
 	const FName& GetModuleName()
@@ -63,9 +50,39 @@ namespace AngelscriptStaticJITAotFixture
 		return SourceFilename;
 	}
 
+	const FName& GetImportProviderModuleName()
+	{
+		static const FName ModuleName(TEXT("ASStaticJITAotImportProvider"));
+		return ModuleName;
+	}
+
+	const FString& GetImportProviderSourceFilename()
+	{
+		static const FString SourceFilename(TEXT("ASStaticJITAotImportProvider.as"));
+		return SourceFilename;
+	}
+
+	const FString& GetImportProviderScriptSource()
+	{
+		static const FString ScriptSource = ASTEST_AS(R"AS(
+			int ImportedValueForAOT(int Value)
+			{
+				return Value + 77;
+			}
+
+			int IndependentModuleEntryForAOT()
+			{
+				return 87;
+			}
+			)AS");
+		return ScriptSource;
+	}
+
 	const FString& GetScriptSource()
 	{
 		static const FString ScriptSource = ASTEST_AS(R"AS(
+			import int ImportedValueForAOT(int Value) from "ASStaticJITAotImportProvider";
+
 			int AddForAOT(int Value)
 			{
 				return Value + 7;
@@ -92,11 +109,139 @@ namespace AngelscriptStaticJITAotFixture
 				return Value.Value;
 			}
 
+			void FailForAOT()
+			{
+				throw("StaticJITAotNestedFailure");
+			}
+
+			int ExceptionEntryForAOT()
+			{
+				FailForAOT();
+				return 99;
+			}
+
+			int BumpReferenceForAOT(int& Value)
+			{
+				Value += 5;
+				return Value * 2;
+			}
+
+			int ReferenceEntryForAOT()
+			{
+				int Value = 7;
+				int Returned = BumpReferenceForAOT(Value);
+				return Value * 100 + Returned;
+			}
+
+			int ObjectLifetimeEntryForAOT()
+			{
+				FString Original = "route";
+				FString Decorated = Original + "!";
+				return (Original == "route" ? 100 : 0) + Decorated.Len();
+			}
+
+			int RecurseForAOT(int Value)
+			{
+				if (Value == 0)
+				{
+					return 0;
+				}
+				return Value + RecurseForAOT(Value - 1) * 10;
+			}
+
+			int RecursionEntryForAOT()
+			{
+				return RecurseForAOT(4);
+			}
+
+			int ImportEntryForAOT()
+			{
+				return ImportedValueForAOT(10);
+			}
+
 			UCLASS()
 			class UStaticJITAotFunctionCarrier : UObject
 			{
 				UPROPERTY()
-				int StoredValue = 0;
+					int StoredValue;
+
+				int AddForAOT(int Value)
+				{
+					return Value + 7;
+				}
+
+				UFUNCTION()
+					int Entry()
+				{
+					return AddForAOT(35);
+				}
+
+				int64 DoubleToInt64ForAOT(double Value)
+				{
+					return int64(Value);
+				}
+
+				uint64 DoubleToUint64ForAOT(double Value)
+				{
+					return uint64(Value);
+				}
+
+				int ObjectLastNativeForAOT()
+				{
+					FAotObjectLastProbe Value(39, 97);
+					return Value.Value;
+				}
+
+				void FailForAOT()
+				{
+					throw("StaticJITAotNestedFailure");
+				}
+
+				int ExceptionEntryForAOT()
+				{
+					FailForAOT();
+					return 99;
+				}
+
+				int BumpReferenceForAOT(int& Value)
+				{
+					Value += 5;
+					return Value * 2;
+				}
+
+				int ReferenceEntryForAOT()
+				{
+					int Value = 7;
+					int Returned = BumpReferenceForAOT(Value);
+					return Value * 100 + Returned;
+				}
+
+				int ObjectLifetimeEntryForAOT()
+				{
+					FString Original = "route";
+					FString Decorated = Original + "!";
+					return (Original == "route" ? 100 : 0) + Decorated.Len();
+				}
+
+				int RecurseForAOT(int Value)
+				{
+					if (Value == 0)
+					{
+						return 0;
+					}
+					return Value + RecurseForAOT(Value - 1) * 10;
+				}
+
+				int RecursionEntryForAOT()
+				{
+					return RecurseForAOT(4);
+				}
+
+				UFUNCTION()
+				void ResetStoredValue()
+				{
+					StoredValue = 71;
+				}
 
 				UFUNCTION()
 				void StorePrimitiveArg(int Value)
@@ -111,6 +256,13 @@ namespace AngelscriptStaticJITAotFixture
 				}
 
 				UFUNCTION()
+				void IncrementReference(int& Value)
+				{
+					Value += 9;
+					StoredValue = Value;
+				}
+
+				UFUNCTION()
 				int BumpReference(int& Value)
 				{
 					Value += 5;
@@ -119,9 +271,48 @@ namespace AngelscriptStaticJITAotFixture
 				}
 
 				UFUNCTION()
-				UObject ReturnSelfObject()
+				UStaticJITAotFunctionCarrier ReturnSelfObject()
 				{
 					return this;
+				}
+
+				UFUNCTION()
+				int AddTwo(int A, int B)
+				{
+					return A + B;
+				}
+
+				UFUNCTION(meta = (BlueprintThreadSafe))
+				int ThreadSafeReturn()
+				{
+					return 73;
+				}
+
+			}
+
+			UCLASS()
+			class UStaticJITAotVirtualParent : UObject
+			{
+				UFUNCTION(BlueprintEvent)
+					int GetVirtualValue()
+				{
+					return 21;
+				}
+
+				UFUNCTION()
+				int CallVirtualValue()
+				{
+					return GetVirtualValue();
+				}
+			}
+
+			UCLASS()
+			class UStaticJITAotVirtualChild : UStaticJITAotVirtualParent
+			{
+				UFUNCTION(BlueprintOverride)
+					int GetVirtualValue()
+				{
+					return 217;
 				}
 			}
 
@@ -134,6 +325,7 @@ namespace AngelscriptStaticJITAotFixture
 				}
 				return Value + 2;
 			}
+
 			)AS");
 		return ScriptSource;
 	}
@@ -141,6 +333,18 @@ namespace AngelscriptStaticJITAotFixture
 	const FName& GetGeneratedClassName()
 	{
 		static const FName ClassName(TEXT("UStaticJITAotFunctionCarrier"));
+		return ClassName;
+	}
+
+	const FName& GetVirtualParentClassName()
+	{
+		static const FName ClassName(TEXT("UStaticJITAotVirtualParent"));
+		return ClassName;
+	}
+
+	const FName& GetVirtualChildClassName()
+	{
+		static const FName ClassName(TEXT("UStaticJITAotVirtualChild"));
 		return ClassName;
 	}
 
@@ -168,6 +372,60 @@ namespace AngelscriptStaticJITAotFixture
 		return Declaration;
 	}
 
+	const FString& GetExceptionEntryDeclaration()
+	{
+		static const FString Declaration(TEXT("int ExceptionEntryForAOT()"));
+		return Declaration;
+	}
+
+	const FString& GetReferenceEntryDeclaration()
+	{
+		static const FString Declaration(TEXT("int ReferenceEntryForAOT()"));
+		return Declaration;
+	}
+
+	const FString& GetObjectLifetimeEntryDeclaration()
+	{
+		static const FString Declaration(TEXT("int ObjectLifetimeEntryForAOT()"));
+		return Declaration;
+	}
+
+	const FString& GetRecursionEntryDeclaration()
+	{
+		static const FString Declaration(TEXT("int RecursionEntryForAOT()"));
+		return Declaration;
+	}
+
+	const FString& GetImportEntryDeclaration()
+	{
+		static const FString Declaration(TEXT("int ImportEntryForAOT()"));
+		return Declaration;
+	}
+
+	const FString& GetVirtualCallDeclaration()
+	{
+		static const FString Declaration(TEXT("int CallVirtualValue()"));
+		return Declaration;
+	}
+
+	const FString& GetVirtualOverrideDeclaration()
+	{
+		static const FString Declaration(TEXT("int GetVirtualValue()"));
+		return Declaration;
+	}
+
+	const FString& GetVirtualOverrideImplementationDeclaration()
+	{
+		static const FString Declaration(TEXT("int GetVirtualValue_Implementation()"));
+		return Declaration;
+	}
+
+	const FString& GetMethodNoParamsDeclaration()
+	{
+		static const FString Declaration(TEXT("void ResetStoredValue()"));
+		return Declaration;
+	}
+
 	const FString& GetMethodPrimitiveArgDeclaration()
 	{
 		static const FString Declaration(TEXT("void StorePrimitiveArg(int)"));
@@ -180,6 +438,12 @@ namespace AngelscriptStaticJITAotFixture
 		return Declaration;
 	}
 
+	const FString& GetMethodReferenceArgDeclaration()
+	{
+		static const FString Declaration(TEXT("void IncrementReference(int&inout)"));
+		return Declaration;
+	}
+
 	const FString& GetMethodReferenceDeclaration()
 	{
 		static const FString Declaration(TEXT("int BumpReference(int&inout)"));
@@ -188,7 +452,20 @@ namespace AngelscriptStaticJITAotFixture
 
 	const FString& GetMethodObjectReturnDeclaration()
 	{
-		static const FString Declaration(TEXT("UObject@ ReturnSelfObject()"));
+		static const FString Declaration(
+			TEXT("UStaticJITAotFunctionCarrier@ ReturnSelfObject()"));
+		return Declaration;
+	}
+
+	const FString& GetMethodMultiArgDeclaration()
+	{
+		static const FString Declaration(TEXT("int AddTwo(int, int)"));
+		return Declaration;
+	}
+
+	const FString& GetMethodThreadSafeDeclaration()
+	{
+		static const FString Declaration(TEXT("int ThreadSafeReturn()"));
 		return Declaration;
 	}
 
@@ -198,15 +475,14 @@ namespace AngelscriptStaticJITAotFixture
 		return Declaration;
 	}
 
-	const FGuid& GetPrecompiledDataGuid()
-	{
-		static const FGuid Guid(0x2f90f2a1, 0x6df34d23, 0x9bc4474a, 0xa05de08c);
-		return Guid;
-	}
-
 	int32 GetExpectedEntryResult()
 	{
 		return 42;
+	}
+
+	int32 GetExpectedNoParamsStoredValue()
+	{
+		return 71;
 	}
 
 	int32 GetExpectedPrimitiveArgStoredValue()
@@ -219,9 +495,24 @@ namespace AngelscriptStaticJITAotFixture
 		return 61;
 	}
 
+	int32 GetExpectedReferenceArgValue()
+	{
+		return 22;
+	}
+
 	int32 GetExpectedReferenceReturnValue()
 	{
 		return 18;
+	}
+
+	int32 GetExpectedMultiArgResult()
+	{
+		return 42;
+	}
+
+	int32 GetExpectedThreadSafeResult()
+	{
+		return 73;
 	}
 
 	int32 GetExpectedStaticWorldContextResult()
@@ -232,6 +523,37 @@ namespace AngelscriptStaticJITAotFixture
 	int32 GetExpectedObjectLastNativeResult()
 	{
 		return 39097;
+	}
+
+	const FString& GetExpectedExceptionText()
+	{
+		static const FString ExceptionText(TEXT("StaticJITAotNestedFailure"));
+		return ExceptionText;
+	}
+
+	int32 GetExpectedReferenceEntryResult()
+	{
+		return 1224;
+	}
+
+	int32 GetExpectedObjectLifetimeResult()
+	{
+		return 106;
+	}
+
+	int32 GetExpectedRecursionResult()
+	{
+		return 1234;
+	}
+
+	int32 GetExpectedImportResult()
+	{
+		return 87;
+	}
+
+	int32 GetExpectedVirtualOverrideResult()
+	{
+		return 217;
 	}
 
 	bool RegisterObjectLastNativeSurface(asIScriptEngine& ScriptEngine)
@@ -288,56 +610,4 @@ namespace AngelscriptStaticJITAotFixture
 		return ObjectLastNativeObservation.ObjectValue;
 	}
 
-	FString GetGeneratedDirectory()
-	{
-		return FPaths::ConvertRelativePathToFull(FPaths::Combine(
-			FPaths::ProjectDir(),
-			TEXT("Plugins/Angelscript/Source/AngelscriptTest/StaticJIT/AOT/Generated")));
-	}
-
-	FString GetPrecompiledCacheFilename()
-	{
-		return FPaths::Combine(GetGeneratedDirectory(), TEXT("StaticJITAotFixture.Cache"));
-	}
-
-	const FString& GetGeneratedSetupInstructions()
-	{
-		static const FString Instructions =
-			TEXT("powershell.exe -NoProfile -ExecutionPolicy Bypass -File Tools\\RunStaticJITTests.ps1 -LabelPrefix staticjit-aot\n")
-			TEXT("The AOT cache and generated .jit.cpp/.jit.hpp files are a matched build pair; do not regenerate the cache at runtime or skip the generated-source rebuild.");
-		return Instructions;
-	}
-
-	bool IsGeneratedOutputAvailable(FString* OutError)
-	{
-		const FString GeneratedDirectory = GetGeneratedDirectory();
-		if (!IFileManager::Get().DirectoryExists(*GeneratedDirectory))
-		{
-			return SetGeneratedOutputError(OutError, FString::Printf(TEXT("StaticJIT AOT generated directory does not exist: %s"), *GeneratedDirectory));
-		}
-
-		const TArray<FString> RequiredGeneratedFiles =
-		{
-			TEXT("ASStaticJITAotFixture.as.jit.hpp"),
-			TEXT("AngelscriptJitCode_0.jit.cpp"),
-			TEXT("AngelscriptJitInfo.jit.cpp"),
-		};
-
-		for (const FString& RequiredGeneratedFile : RequiredGeneratedFiles)
-		{
-			const FString GeneratedFile = FPaths::Combine(GeneratedDirectory, RequiredGeneratedFile);
-			if (!IFileManager::Get().FileExists(*GeneratedFile))
-			{
-				return SetGeneratedOutputError(OutError, FString::Printf(TEXT("StaticJIT AOT generated file does not exist: %s"), *GeneratedFile));
-			}
-		}
-
-		const FString PrecompiledCache = GetPrecompiledCacheFilename();
-		if (!IFileManager::Get().FileExists(*PrecompiledCache))
-		{
-			return SetGeneratedOutputError(OutError, FString::Printf(TEXT("StaticJIT AOT local precompiled cache does not exist: %s"), *PrecompiledCache));
-		}
-
-		return true;
-	}
 }

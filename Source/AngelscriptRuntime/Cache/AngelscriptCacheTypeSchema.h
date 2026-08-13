@@ -173,13 +173,13 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedTypeRelation
 {
 	EAngelscriptCachedTypeRelationKind RelationKind = EAngelscriptCachedTypeRelationKind::Invalid;
 	TOptional<uint32> SemanticOrdinal;
-	FAngelscriptCacheStableReference Target;
+	FAngelscriptArtifactReference Target;
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedTypeLayoutInput
 {
 	EAngelscriptCachedTypeLayoutInputKind InputKind = EAngelscriptCachedTypeLayoutInputKind::Invalid;
-	FAngelscriptCacheStableReference Target;
+	FAngelscriptArtifactReference Target;
 	TOptional<uint32> BoundaryContribution;
 	TOptional<uint32> AlignmentContribution;
 	FAngelscriptHash256 LayoutInputHash;
@@ -234,7 +234,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedBehaviorSlot
 {
 	EAngelscriptCachedBehaviorKind BehaviorKind = EAngelscriptCachedBehaviorKind::Invalid;
 	uint32 SlotOrdinal = 0;
-	FAngelscriptCacheStableReference Target;
+	FAngelscriptArtifactReference Target;
 	TOptional<FAngelscriptStableTypeKey> DeclaringOwner;
 };
 
@@ -284,7 +284,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedReflectedFunctionMember
 	FString CanonicalOriginalFunctionName;
 	// Exact AngelScript function name resolved by Target.
 	FString CanonicalScriptFunctionName;
-	FAngelscriptCacheStableReference Target;
+	FAngelscriptArtifactReference Target;
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedTypeReflection
@@ -378,7 +378,7 @@ public:
 		const IAngelscriptCacheProspectiveTypeLayoutView& LocalLayouts) const = 0;
 	virtual TOptional<FAngelscriptCacheResolvedTypeLayoutInput> ResolveTypeLayoutInput(
 		EAngelscriptCachedTypeLayoutInputKind InputKind,
-		EAngelscriptCacheReferenceKind ReferenceKind,
+		EAngelscriptArtifactReferenceKind ReferenceKind,
 		const FAngelscriptHash256& StableKey) const = 0;
 };
 

@@ -33,6 +33,10 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheEnvironmentProfile
 {
 	FAngelscriptCacheCleanCaptureOptions CaptureOptions;
 	FAngelscriptCacheProductionSourceDiscoveryConfig DiscoveryConfig;
+	// Exact sorted inputs retained for pointer-free diagnostics. These are the
+	// strings hashed into Context; source bytes and absolute host paths remain
+	// excluded by construction.
+	TArray<FString> CanonicalContextInputs;
 };
 
 enum class EAngelscriptCacheCompileCapturePreparationError : uint8

@@ -533,8 +533,8 @@ public:
 		const FAngelscriptCachedFunctionBody* FunctionBody =
 			FindOnlyFunctionBody(Session->GetGeneration());
 		ASSERT_THAT(IsNotNull(FunctionBody));
-		FAngelscriptCacheLiveFunctionRoute Route;
-		ASSERT_THAT(IsTrue(Consumer.GetEngine().ResolveCacheFunctionRoute(
+		FAngelscriptFunctionRoute Route;
+		ASSERT_THAT(IsTrue(Consumer.GetEngine().ResolveFunctionRoute(
 			FunctionBody->Identity.FunctionKey, Route)));
 		ASSERT_THAT(AreEqual(Answer->GetId(), Route.NumericFunctionId));
 

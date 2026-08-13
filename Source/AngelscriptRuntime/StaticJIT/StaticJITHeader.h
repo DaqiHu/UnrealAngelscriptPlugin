@@ -1,4 +1,6 @@
 #pragma once
+
+#include "Artifacts/AngelscriptArtifactIdentity.h"
 #include "CoreMinimal.h"
 
 #include <cmath>
@@ -21,6 +23,7 @@
 #include "source/as_callfunc.h"
 #include "source/as_typeinfo.h"
 #include "source/as_context.h"
+#include "source/as_property.h"
 #include "source/as_scriptengine.h"
 #include "source/as_scriptobject.h"
 #include "EndAngelscriptHeaders.h"
@@ -71,22 +74,73 @@ enum class EJITException : uint8
 	OutOfBounds,
 };
 
-struct ANGELSCRIPTRUNTIME_API FStaticJITCompiledInfo
+/**
+ * Holds the current Engine-local callee for one reloadable generated call.
+ * The stable route is resolved before virtual dispatch and the resulting
+ * function is retained until the nested call has finished.
+ */
+class ANGELSCRIPTRUNTIME_API FStaticJITCurrentFunctionCall
 {
-	FGuid PrecompiledDataGuid;
+public:
+	FStaticJITCurrentFunctionCall(
+		FScriptExecution& Execution,
+		const struct FAngelscriptStableFunctionKey& FunctionKey,
+		asCScriptFunction* ReferencedFunction,
+		void* CallObject,
+		bool bResolveVirtualFunction);
+	~FStaticJITCurrentFunctionCall();
 
-	FStaticJITCompiledInfo(FGuid Guid);
-	static const FStaticJITCompiledInfo* Get();
+	FStaticJITCurrentFunctionCall(
+		const FStaticJITCurrentFunctionCall&) = delete;
+	FStaticJITCurrentFunctionCall& operator=(
+		const FStaticJITCurrentFunctionCall&) = delete;
+
+	asCScriptFunction* Get() const
+	{
+		return Function;
+	}
+
+private:
+	asCScriptFunction* Function = nullptr;
+};
+
+struct FAngelscriptJITResolvedSystemFunctionPointer
+{
+	asFUNCTION_t Function = nullptr;
+	asMETHOD_t Method = nullptr;
+
+	FORCEINLINE asFUNCTION_t GetFunction() const { return Function; }
+	FORCEINLINE asMETHOD_t GetMethod() const { return Method; }
+};
+
+/** Stable-slot access used only by relocatable Provider-generated code. */
+struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGeneratedReferenceAccess
+{
+	// Returns the current Engine's function object for either a script-function
+	// slot or an application-registered EnvironmentSymbol function slot.
+	static asCScriptFunction* GetScriptFunction(
+		const FScriptExecution& Execution,
+		uint32 SlotIndex);
+	static FAngelscriptJITResolvedSystemFunctionPointer
+	GetSystemFunctionPointer(
+		const FScriptExecution& Execution,
+		uint32 SlotIndex);
+	static asCTypeInfo* GetTypeInfo(
+		const FScriptExecution& Execution,
+		uint32 SlotIndex);
+	static asCObjectType* GetObjectType(
+		const FScriptExecution& Execution,
+		uint32 SlotIndex);
+	static void* GetGlobalStorage(
+		const FScriptExecution& Execution,
+		uint32 SlotIndex);
+	static uint32 GetPropertyOffset(
+		const FScriptExecution& Execution,
+		uint32 SlotIndex);
 };
 
 struct ANGELSCRIPTRUNTIME_API FStaticJITFunction
 {
-	FStaticJITFunction(uint32 FunctionId,
-		asJITFunction VMEntry,
-		asJITFunction_ParmsEntry ParmsEntry,
-		asJITFunction_Raw RawFunction
-	);
-
 	FORCENOINLINE static void ScriptFinishConstruct(FScriptExecution& Execution, asIScriptObject* Object, asITypeInfo* TypeInfo);
 	FORCENOINLINE static void ScriptCallNative(FScriptExecution& Execution, asCScriptFunction* Function, asBYTE* l_sp, asQWORD* valueRegister, void** objectRegister);
 	FORCENOINLINE static void SetException(FScriptExecution& Execution, EJITException Exception);
@@ -97,87 +151,6 @@ struct ANGELSCRIPTRUNTIME_API FStaticJITFunction
 	FORCENOINLINE static void SetOutOfBoundsException(FScriptExecution& Execution);
 	FORCENOINLINE static void SetSwitchValueInvalidException(FScriptExecution& Execution);
 	FORCENOINLINE static void SetUnknownException(FScriptExecution& Execution);
-};
-
-struct FAngelscriptPrecompiledData;
-
-#if AS_WITH_STATIC_JIT_DIAGNOSTICS
-struct FStaticJITDiagnostics;
-
-struct ANGELSCRIPTRUNTIME_API FStaticJITDiagnosticEntryMarkers
-{
-	static void MarkEntry(uint32 FunctionId);
-};
-#endif
-
-struct ANGELSCRIPTRUNTIME_API FJitRef_Function
-{
-	// Stable precompiled reference used to resolve Pointer for the current engine/module lifetime.
-	uint64 Reference;
-	void* Pointer;
-	FJitRef_Function(uint64 FunctionRef);
-	FORCEINLINE asCScriptFunction* Get() const { return (asCScriptFunction*)Pointer;  }
-};
-
-struct ANGELSCRIPTRUNTIME_API FJitRef_SystemFunctionPointer
-{
-	// Stable precompiled function reference used to refresh the native function pointer.
-	uint64 Reference;
-	union
-	{
-		asFUNCTION_t Func;
-		asMETHOD_t Method;
-		void* Pointer;
-	};
-
-	FJitRef_SystemFunctionPointer(uint64 FunctionRef);
-	FORCEINLINE asFUNCTION_t GetFunction() const { return Func;  }
-	FORCEINLINE asMETHOD_t GetMethod() const { return Method;  }
-};
-
-struct ANGELSCRIPTRUNTIME_API FJitRef_Type
-{
-	// Stable precompiled reference used to resolve Pointer for the current engine/module lifetime.
-	uint64 Reference;
-	void* Pointer;
-	FJitRef_Type(uint64 TypeRef);
-	FORCEINLINE asCTypeInfo* Get() const { return (asCTypeInfo*)Pointer;  }
-	FORCEINLINE asCObjectType* GetObjectType() const { return (asCObjectType*)Pointer;  }
-};
-
-struct ANGELSCRIPTRUNTIME_API FJitRef_GlobalVar
-{
-	// Stable precompiled reference used to resolve Pointer for the current engine/module lifetime.
-	uint64 Reference;
-	void* Pointer;
-	FJitRef_GlobalVar(uint64 GlobalRef);
-	FORCEINLINE void* Get() const { return Pointer;  }
-};
-
-struct ANGELSCRIPTRUNTIME_API FJitRef_PropertyOffset
-{
-	uint32 Offset;
-
-	FJitRef_PropertyOffset(uint64 PropertyRef);
-	FORCEINLINE uint32 Get() const { return Offset;  }
-};
-
-struct ANGELSCRIPTRUNTIME_API FJitVerifyPropertyOffset
-{
-#if AS_JIT_VERIFY_PROPERTY_OFFSETS
-	FJitVerifyPropertyOffset(uint64 PropertyRef, SIZE_T ComputedOffset);
-#else
-	FJitVerifyPropertyOffset(uint64 PropertyRef, SIZE_T ComputedOffset) {}
-#endif
-};
-
-struct ANGELSCRIPTRUNTIME_API FJitVerifyTypeSize
-{
-#if AS_JIT_VERIFY_PROPERTY_OFFSETS
-	FJitVerifyTypeSize(uint64 TypeRef, SIZE_T ComputedSize, SIZE_T ComputedAlignment);
-#else
-	FJitVerifyTypeSize(uint64 TypeRef, SIZE_T ComputedSize, SIZE_T ComputedAlignment) {}
-#endif
 };
 
 struct FUnknownValueType

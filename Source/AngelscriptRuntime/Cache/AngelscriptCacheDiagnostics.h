@@ -281,8 +281,10 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheDiagnosticFunctionRoute final
 	FAngelscriptStableModuleKey ModuleKey;
 	FAngelscriptFunctionArtifactIdentity Identity;
 	FString CanonicalDeclaration;
-	EAngelscriptCacheFunctionExecutionRoute SelectedExecutionRoute =
-		EAngelscriptCacheFunctionExecutionRoute::Vm;
+	EAngelscriptFunctionExecutionRoute SelectedExecutionRoute =
+		EAngelscriptFunctionExecutionRoute::Vm;
+	EAngelscriptArtifactMatchResult MatchResult =
+		EAngelscriptArtifactMatchResult::MissingProviderEntry;
 	bool bHasVerifiedArtifactIdentity = false;
 };
 
@@ -294,6 +296,17 @@ struct ANGELSCRIPTRUNTIME_API
 	uint32 VmRouteCount = 0;
 	uint32 NativeRouteCount = 0;
 	TArray<FAngelscriptCacheDiagnosticFunctionRoute> Routes;
+};
+
+struct ANGELSCRIPTRUNTIME_API
+	FAngelscriptCacheDiagnosticEnvironmentProfile final
+{
+	bool bPresent = false;
+	FAngelscriptCacheCompatibilityKey Compatibility;
+	FAngelscriptCacheContextKey Context;
+	FAngelscriptArtifactProfileKey Profile;
+	TArray<FString> CanonicalCompileOptions;
+	TArray<FString> CanonicalContextInputs;
 };
 
 struct ANGELSCRIPTRUNTIME_API
@@ -323,12 +336,13 @@ struct ANGELSCRIPTRUNTIME_API
 // AngelScript FunctionIds so the JSON can correlate separate Editor/game runs.
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheDiagnosticSnapshot final
 {
-	static constexpr uint32 CurrentSchemaVersion = 4;
+	static constexpr uint32 CurrentSchemaVersion = 5;
 
 	uint32 SchemaVersion = CurrentSchemaVersion;
 	EAngelscriptCacheMutationPhase MutationPhase =
 		EAngelscriptCacheMutationPhase::InitializingAnyThread;
 	uint64 LastTransactionOrdinal = 0;
+	FAngelscriptCacheDiagnosticEnvironmentProfile EnvironmentProfile;
 	FAngelscriptCacheDiagnosticPublicationSummary Current;
 	FAngelscriptCacheDiagnosticPublicationSummary PendingColdStart;
 	FAngelscriptCacheDiagnosticPublicationSummary LatestSuccessful;
@@ -341,7 +355,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheDiagnosticSnapshot final
 // the live Engine publication. AS pointers and numeric FunctionIds are omitted.
 ANGELSCRIPTRUNTIME_API FAngelscriptCacheDiagnosticFunctionRouteSnapshot
 BuildAngelscriptCacheDiagnosticFunctionRoutes(
-	const FAngelscriptCacheFunctionRouteSnapshot& Routes);
+	const FAngelscriptFunctionRouteSnapshot& Routes);
 
 // Constructs summaries only from immutable publication DTOs. Callers that own a
 // service should prefer FAngelscriptCacheService::CaptureDiagnosticSnapshot(),

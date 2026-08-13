@@ -259,6 +259,13 @@ struct FScriptExecution
 	class asCThreadLocalData* tld;
 	FScriptExecution* prevExecution;
 	class asCContext* prevContext;
+	// Runtime-owned, call-scoped StaticJIT context. Generated code may inspect
+	// these values but must never retain them beyond the current entry call.
+	asIScriptEngine* jitEngine = nullptr;
+	asIScriptFunction* jitFunction = nullptr;
+	const asSJITFunctionBinding* jitBinding = nullptr;
+	void* jitBindingUserData = nullptr;
+	const void* jitReferenceTable = nullptr;
 #if !UE_BUILD_SHIPPING
 	void* debugCallStack = nullptr;
 #endif

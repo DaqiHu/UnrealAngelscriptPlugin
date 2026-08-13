@@ -16,8 +16,6 @@
 // "Shared/AngelscriptTestUtilities.h"` (or the specific themed sub-header
 // they actually need) directly.
 
-struct FAngelscriptPrecompiledData;
-
 struct FAngelscriptCompileTraceDiagnosticSummary
 {
 	FString Section;
@@ -41,20 +39,6 @@ struct FAngelscriptCompileTraceSummary
 	TArray<FAngelscriptCompileTraceDiagnosticSummary> Diagnostics;
 };
 
-struct FScopedTempPrecompiledCacheFile
-{
-	explicit FScopedTempPrecompiledCacheFile(FString InLabel = TEXT("PrecompiledData"));
-	~FScopedTempPrecompiledCacheFile();
-
-	const FString& GetFilename() const
-	{
-		return Filename;
-	}
-
-private:
-	FString Filename;
-};
-
 ANGELSCRIPTTEST_API bool CompileModuleWithResult(FAngelscriptEngine* Engine, ECompileType CompileType, FName ModuleName, FString Filename, FString Script, ECompileResult& OutCompileResult);
 ANGELSCRIPTTEST_API bool CompileModuleWithSummary(FAngelscriptEngine* Engine, ECompileType CompileType, FName ModuleName, FString Filename, FString Script, bool bUsePreprocessor, FAngelscriptCompileTraceSummary& OutSummary, bool bSuppressCompileErrorLogs = false);
 ANGELSCRIPTTEST_API bool AnalyzeReloadFromMemory(FAngelscriptEngine* Engine, FName ModuleName, FString Filename, FString Script, FAngelscriptClassGenerator::EReloadRequirement& OutReloadRequirement, bool& bOutWantsFullReload, bool& bOutNeedsFullReload);
@@ -63,7 +47,6 @@ ANGELSCRIPTTEST_API bool CompileModuleFromMemory(FAngelscriptEngine* Engine, FNa
 ANGELSCRIPTTEST_API bool CompileMemorySource(FAngelscriptEngine* Engine, const FString& VirtualPath, FString Script);
 ANGELSCRIPTTEST_API bool CompileAnnotatedModuleFromMemory(FAngelscriptEngine* Engine, FName ModuleName, FString Filename, FString Script);
 ANGELSCRIPTTEST_API bool GenerateStaticJITSourceText(FAngelscriptEngine* Engine, FName ModuleName, FString& OutSourceText, bool bEmitDebugMetadata, FString* OutError = nullptr);
-ANGELSCRIPTTEST_API bool SaveAndReloadPrecompiledData(FAngelscriptEngine* Engine, FAngelscriptPrecompiledData& SourceData, const FString& Filename, TUniquePtr<FAngelscriptPrecompiledData>& OutLoadedData, FString* OutError = nullptr);
 ANGELSCRIPTTEST_API bool ExecuteIntFunction(FAngelscriptEngine* Engine, FString Filename, FName ModuleName, FString Decl, int32& OutResult);
 ANGELSCRIPTTEST_API bool ExecuteGeneratedIntEventOnGameThread(FAngelscriptEngine* Engine, UObject* Object, UFunction* Function, int32& OutResult);
 inline bool ExecuteGeneratedIntEventOnGameThread(UObject* Object, UFunction* Function, int32& OutResult)

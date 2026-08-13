@@ -21,8 +21,8 @@ private:
 		return FAngelscriptHash256{FBlake3Hash(Bytes)};
 	}
 
-	static FAngelscriptCacheStableReference MakeReference(
-		const EAngelscriptCacheReferenceKind Kind,
+	static FAngelscriptArtifactReference MakeReference(
+		const EAngelscriptArtifactReferenceKind Kind,
 		const uint8 KeySeed,
 		const uint8 AbiSeed)
 	{
@@ -100,7 +100,7 @@ public:
 		InvalidHardValue.HardValueKind =
 			EAngelscriptCachedHardValueKind::GlobalConstant;
 		InvalidHardValue.Owner = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptGlobal, 0x40, 0x50);
+			EAngelscriptArtifactReferenceKind::ScriptGlobal, 0x40, 0x50);
 		InvalidHardValue.CanonicalValue.Emplace();
 		InvalidHardValue.CanonicalValue->ValueKind =
 			EAngelscriptCachedCanonicalValueKind::SignedInteger;
@@ -124,11 +124,11 @@ public:
 		FAngelscriptCachedModuleState Forward = MakeOneGlobalState();
 		const FAngelscriptCacheSemanticDependency ModuleDependency{
 			EAngelscriptCacheSemanticDependencyKind::Declaration,
-			MakeReference(EAngelscriptCacheReferenceKind::ScriptModule, 0x70, 0x80),
+			MakeReference(EAngelscriptArtifactReferenceKind::ScriptModule, 0x70, 0x80),
 			{}};
 		const FAngelscriptCacheSemanticDependency FunctionDependency{
 			EAngelscriptCacheSemanticDependencyKind::Declaration,
-			MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction, 0x90, 0xa0),
+			MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction, 0x90, 0xa0),
 			{}};
 		Forward.Dependencies = {ModuleDependency, FunctionDependency};
 		check(FAngelscriptCacheRemainingRecordArchive::ComputeModuleStateInputHash(

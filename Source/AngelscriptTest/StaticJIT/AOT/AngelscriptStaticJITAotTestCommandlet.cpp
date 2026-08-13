@@ -4,7 +4,7 @@
 
 #include "Misc/Parse.h"
 
-int32 UAngelscriptStaticJITAotTestCommandlet::Main(const FString& Params)
+int32 UAngelscriptTestJITCommandlet::Main(const FString& Params)
 {
 	FString ModeText;
 	FParse::Value(*Params, TEXT("Mode="), ModeText);
@@ -17,7 +17,7 @@ int32 UAngelscriptStaticJITAotTestCommandlet::Main(const FString& Params)
 	const bool bVerify = ModeText.Equals(TEXT("Verify"), ESearchCase::IgnoreCase);
 	if (!bGenerate && !bVerify)
 	{
-		UE_LOG(LogTemp, Error, TEXT("Invalid StaticJIT AOT commandlet Mode='%s'. Expected Generate or Verify."), *ModeText);
+		UE_LOG(LogTemp, Error, TEXT("Invalid AngelscriptTestJIT Mode='%s'. Expected Generate or Verify."), *ModeText);
 		return 2;
 	}
 
@@ -34,7 +34,27 @@ int32 UAngelscriptStaticJITAotTestCommandlet::Main(const FString& Params)
 
 	for (const FString& Filename : Result.WrittenFiles)
 	{
-		UE_LOG(LogTemp, Display, TEXT("StaticJIT AOT wrote %s"), *Filename);
+		UE_LOG(LogTemp, Display, TEXT("AngelscriptTestJIT wrote %s"), *Filename);
+	}
+	for (const FString& Filename : Result.UnchangedFiles)
+	{
+		UE_LOG(LogTemp, Display, TEXT("AngelscriptTestJIT unchanged %s"), *Filename);
+	}
+	for (const FString& Filename : Result.RemovedFiles)
+	{
+		UE_LOG(LogTemp, Display, TEXT("AngelscriptTestJIT removed %s"), *Filename);
+	}
+	UE_LOG(LogTemp, Display,
+		TEXT("AngelscriptTestJIT ProviderId=%s ProviderGeneration=%s"),
+		*Result.ProviderId, *Result.ProviderGeneration);
+	for (const FString& Module : Result.GeneratedModules)
+	{
+		UE_LOG(LogTemp, Display, TEXT("AngelscriptTestJIT module %s"), *Module);
+	}
+	for (const FString& FunctionKey : Result.GeneratedFunctionKeys)
+	{
+		UE_LOG(LogTemp, Display,
+			TEXT("AngelscriptTestJIT function %s"), *FunctionKey);
 	}
 
 	return 0;

@@ -302,12 +302,12 @@ namespace AngelscriptCachePIELifecycleTests_Private
 				Context, ExpectedValue));
 	}
 
-	static const FAngelscriptCacheLiveFunctionRoute* FindGetValueRoute(
-		const FAngelscriptCacheFunctionRouteSnapshot& Snapshot,
+	static const FAngelscriptFunctionRoute* FindGetValueRoute(
+		const FAngelscriptFunctionRouteSnapshot& Snapshot,
 		const FAngelscriptStableModuleKey& ModuleKey)
 	{
 		return Snapshot.FunctionRoutes.FindByPredicate(
-			[&ModuleKey](const FAngelscriptCacheLiveFunctionRoute& Route)
+			[&ModuleKey](const FAngelscriptFunctionRoute& Route)
 			{
 				return Route.ModuleKey == ModuleKey
 					&& Route.CanonicalDeclaration.Contains(TEXT("GetValue("));
@@ -330,7 +330,7 @@ namespace AngelscriptCachePIELifecycleTests_Private
 		}
 		const FAngelscriptCacheLifecyclePublications Publications =
 			Service->GetLifecyclePublications();
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> Routes = Engine.GetFunctionRouteSnapshot();
 		const FAngelscriptCacheDiagnosticJsonResult Diagnostic =
 			CaptureAngelscriptCacheDiagnosticJson(&Engine);
@@ -355,7 +355,7 @@ namespace AngelscriptCachePIELifecycleTests_Private
 				? Publications.Current->Modules.Num() : 0,
 			Publications.PendingColdStart.IsValid()
 				? Publications.PendingColdStart->Modules.Num() : 0,
-			Routes.IsValid() ? Routes->PublicationOrdinal : 0,
+			Routes.IsValid() ? Routes->Generation.Value : 0,
 			Routes.IsValid() ? Routes->VmRouteCount : 0,
 			Routes.IsValid() ? Routes->NativeRouteCount : 0,
 			ObservedValue, Diagnostic.Json.Len()));
@@ -585,11 +585,11 @@ public:
 		ASSERT_THAT(IsTrue(Initial.Current.IsValid()));
 		ASSERT_THAT(AreEqual(1, Initial.Current->Modules.Num()));
 		State->InitialCurrent = Initial.Current;
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> InitialRoutes =
 			State->Engine->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(InitialRoutes.IsValid()));
-		const FAngelscriptCacheLiveFunctionRoute* InitialRoute =
+		const FAngelscriptFunctionRoute* InitialRoute =
 			FindGetValueRoute(*InitialRoutes, Initial.Current->Modules[0].ModuleKey);
 		ASSERT_THAT(IsNotNull(InitialRoute));
 		ASSERT_THAT(IsTrue(InitialRoute->bHasVerifiedArtifactIdentity));
@@ -631,11 +631,11 @@ public:
 				ASSERT_THAT(IsFalse(Publications.PendingColdStart.IsValid()));
 				State->BodyCurrent = Publications.Current;
 
-				const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+				const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 					ESPMode::ThreadSafe> Routes =
 					State->Engine->GetFunctionRouteSnapshot();
 				ASSERT_THAT(IsTrue(Routes.IsValid()));
-				const FAngelscriptCacheLiveFunctionRoute* Route = FindGetValueRoute(
+				const FAngelscriptFunctionRoute* Route = FindGetValueRoute(
 					*Routes, Publications.Current->Modules[0].ModuleKey);
 				ASSERT_THAT(IsNotNull(Route));
 				ASSERT_THAT(IsTrue(Route->Identity.FunctionKey

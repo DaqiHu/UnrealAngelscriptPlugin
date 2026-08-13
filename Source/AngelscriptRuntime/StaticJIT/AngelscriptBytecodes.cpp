@@ -3,6 +3,7 @@
 #include "StaticJIT/StaticJITBinds.h"
 #include "AngelscriptType.h"
 #include "AngelscriptEngine.h"
+#include "Artifacts/AngelscriptFunctionRoute.h"
 
 #include "StartAngelscriptHeaders.h"
 //#include "as_scriptfunction.h"
@@ -1175,7 +1176,8 @@ struct FCallScriptFunction
 			RealFunction = ScriptFunction;
 
 		bool bDoDynamicCall = true;
-		if (RealFunction != nullptr)
+		if (Context.JIT->bUseImmutableDirectScriptCalls
+			&& RealFunction != nullptr)
 		{
 			auto* GenerateData = Context.JIT->FunctionsToGenerate.Find(RealFunction);
 			if (GenerateData != nullptr)
@@ -1184,7 +1186,8 @@ struct FCallScriptFunction
 				bDoDynamicCall = false;
 			}
 		}
-		else if (Context.JIT->IsFunctionAlwaysJIT(ScriptFunction))
+		else if (Context.JIT->bUseImmutableDirectScriptCalls
+			&& Context.JIT->IsFunctionAlwaysJIT(ScriptFunction))
 		{
 			WriteDirectCall(Context, nullptr, nullptr);
 			bDoDynamicCall = false;
@@ -1454,7 +1457,7 @@ struct FCallScriptFunction
 		{
 			Context.Line("asCObjectType* CallObjectType = (asCObjectType*)(((UObject*)CallObject)->GetClass()->ScriptTypePtr);");
 			Context.Line("asCScriptFunction* CallRealFunction = CallObjectType->virtualFunctionTable[{0}];", ScriptFunction->vfTableIdx);
-			Context.Line("auto CastedCallFunction = ({0}(*)(FScriptExecution&{1}))CallRealFunction->jitFunction_Raw;", ReturnTypeString, ArgumentTypeString);
+			Context.Line("auto CastedCallFunction = ({0}(*)(FScriptExecution&{1}))CallRealFunction->GetJITBinding().RawEntry;", ReturnTypeString, ArgumentTypeString);
 			Context.Line("{1} CastedCallFunction(Execution{0});{2}", ArgumentString, HeadCode, FootCode);
 		}
 
@@ -1484,6 +1487,20 @@ struct FCallScriptFunction
 
 	void WriteDynamicCall(FStaticJITContext& Context)
 	{
+		bool bUseCurrentFunctionRoute = false;
+		FAngelscriptStableFunctionKey StableFunctionKey;
+		if (LookupType != ELookupType::BindIdArg
+			&& ScriptFunction->funcType == asFUNC_SCRIPT)
+		{
+			FAngelscriptEngine* const RuntimeEngine =
+				FAngelscriptEngine::TryGetByScriptEngine(
+					ScriptFunction->GetEngine());
+			bUseCurrentFunctionRoute = RuntimeEngine != nullptr
+				&& RuntimeEngine->TryResolveStableFunctionKey(
+					ScriptFunction,
+					StableFunctionKey);
+		}
+
 		if (LookupType == ELookupType::BindIdArg)
 		{
 			Context.Line("  asCScriptFunction* SignatureFunc = {0};", Context.ReferenceFunction(ScriptFunction));
@@ -1498,6 +1515,32 @@ struct FCallScriptFunction
 		else
 		{
 			Context.Line("  asCScriptFunction* CallFunction = {0};", Context.ReferenceFunction(ScriptFunction));
+		}
+
+		if (bUseCurrentFunctionRoute)
+		{
+			const FString CallObjectExpression = ScriptFunction->objectType == nullptr
+				? TEXT("nullptr")
+				: OverrideObjectAddress.Len() != 0
+					? FString::Printf(TEXT("(void*)(%s)"), *OverrideObjectAddress)
+					: FString::Printf(
+						TEXT("(void*)(%s)"),
+						*Context.StackValue_At(0, 2));
+			const FString StableKeyHex =
+				StableFunctionKey.Hash.ToHexString();
+			Context.Line(
+				"  FStaticJITCurrentFunctionCall CurrentFunctionCall(Execution, FAngelscriptStableFunctionKey{{FAngelscriptHash256{{FBlake3Hash(FWideStringView(TEXT(\"{0}\")))}}}}, CallFunction, {1}, {2});",
+				StableKeyHex,
+				CallObjectExpression,
+				bResolveVirtualFunction ? TEXT("true") : TEXT("false"));
+			Context.Line("  CallFunction = CurrentFunctionCall.Get();");
+			Context.Line("  if (CallFunction == nullptr) [[unlikely]]");
+			Context.Line("  {");
+			Context.Line("     SCRIPT_UNBOUND_EXCEPTION();");
+			Context.ExceptionCleanupAndReturn(
+				/*bAfterCurrentOp=*/bIsDestructor,
+				/*bSetNullptrException=*/false);
+			Context.Line("  }");
 		}
 
 		Context.Line("  FAngelscriptContext CallContext(CallFunction->GetEngine());");
@@ -1564,8 +1607,9 @@ struct FCallScriptFunction
 
 		if (!bIgnoreExceptions)
 		{
-			Context.Line("  if (CallContext->m_status != asEXECUTION_FINISHED)");
+			Context.Line("  if (Execution.bExceptionThrown || CallContext->m_status != asEXECUTION_FINISHED)");
 			Context.Line("  {");
+			Context.Line("     Execution.bExceptionThrown = true;");
 			Context.ExceptionCleanupAndReturn(/*bAfterCurrentOp=*/bIsDestructor, /*bSetNullptrException=*/false);
 			Context.Line("  }");
 		}
@@ -3833,6 +3877,19 @@ IMPL_BYTECODE_BEGIN(asBC_SUSPEND)
 };
 IMPL_BYTECODE_END(asBC_SUSPEND)
 
+IMPL_BYTECODE_BEGIN(asBC_JitEntry)
+{
+	bool Implement(FStaticJITContext& Context) const override
+	{
+		// The maintained VM enters a generated function through its per-function
+		// VMEntry binding. Any JitEntry instructions left in the bytecode are
+		// resume markers for the interpreter and are no-ops in the full-function
+		// C++ output, matching asCContext::ExecuteNext().
+		return true;
+	}
+};
+IMPL_BYTECODE_END(asBC_JitEntry)
+
 IMPL_BYTECODE_BEGIN(asBC_FinConstruct)
 {
 	bool Implement(FStaticJITContext& Context) const override
@@ -4044,7 +4101,7 @@ IMPL_BYTECODE_BEGIN(asBC_GETOBJ)
 			check(VarLiteral == VarOffset);
 
 			Context.Line("  asPWORD v = (asPWORD){0};", Context.VAddress(VarLiteral));
-			Expr.Expression = TEXT("*v");
+			Expr.Expression = TEXT("*(asPWORD*)v");
 
 			Context.MaterializeStackAtOffset(Offset);
 			Context.Line("  *(asPWORD*)v = 0;");
@@ -4598,7 +4655,7 @@ void ByteCode_CpyRToV(FStaticJITContext& Context)
 		else
 		{
 			Context.MaterializeValueRegister();
-			Context.Line("memcpy({0}, &l_dwordRegister, 1);", Context.VArg_Address(0));
+			Context.Line("memcpy({0}, &l_valueRegister, 4);", Context.VArg_Address(0));
 		}
 	}
 	break;
@@ -4627,7 +4684,7 @@ void ByteCode_CpyRToV(FStaticJITContext& Context)
 		else
 		{
 			Context.MaterializeValueRegister();
-			Context.Line("memcpy({0}, &l_valueRegister, 4);", Context.VArg_Address(0));
+			Context.Line("memcpy({0}, &l_valueRegister, 8);", Context.VArg_Address(0));
 		}
 	}
 	break;

@@ -27,10 +27,10 @@ namespace AngelscriptCachePrimitiveTests_Private
 		return Type;
 	}
 
-	static FAngelscriptCacheStableReference MakeFunctionReference()
+	static FAngelscriptArtifactReference MakeFunctionReference()
 	{
-		FAngelscriptCacheStableReference Reference;
-		Reference.Kind = EAngelscriptCacheReferenceKind::ScriptFunction;
+		FAngelscriptArtifactReference Reference;
+		Reference.Kind = EAngelscriptArtifactReferenceKind::ScriptFunction;
 		Reference.StableKey = MakeHash(0x11);
 		Reference.ExpectedAbi = MakeHash(0x22);
 		return Reference;
@@ -90,15 +90,15 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheArchivePrimitiveTests,
 public:
 	TEST_METHOD(WireEnumsFlagsAndValidationClassesAreFrozen)
 	{
-		ASSERT_THAT(AreEqual(1, static_cast<int32>(EAngelscriptCacheReferenceKind::ScriptModule)));
-		ASSERT_THAT(AreEqual(2, static_cast<int32>(EAngelscriptCacheReferenceKind::ScriptType)));
-		ASSERT_THAT(AreEqual(3, static_cast<int32>(EAngelscriptCacheReferenceKind::ScriptFunction)));
-		ASSERT_THAT(AreEqual(4, static_cast<int32>(EAngelscriptCacheReferenceKind::ScriptGlobal)));
-		ASSERT_THAT(AreEqual(5, static_cast<int32>(EAngelscriptCacheReferenceKind::ScriptProperty)));
-		ASSERT_THAT(AreEqual(6, static_cast<int32>(EAngelscriptCacheReferenceKind::ScriptImport)));
-		ASSERT_THAT(AreEqual(7, static_cast<int32>(EAngelscriptCacheReferenceKind::EnvironmentSymbol)));
-		ASSERT_THAT(AreEqual(8, static_cast<int32>(EAngelscriptCacheReferenceKind::CanonicalName)));
-		ASSERT_THAT(AreEqual(9, static_cast<int32>(EAngelscriptCacheReferenceKind::StringLiteral)));
+		ASSERT_THAT(AreEqual(1, static_cast<int32>(EAngelscriptArtifactReferenceKind::ScriptModule)));
+		ASSERT_THAT(AreEqual(2, static_cast<int32>(EAngelscriptArtifactReferenceKind::ScriptType)));
+		ASSERT_THAT(AreEqual(3, static_cast<int32>(EAngelscriptArtifactReferenceKind::ScriptFunction)));
+		ASSERT_THAT(AreEqual(4, static_cast<int32>(EAngelscriptArtifactReferenceKind::ScriptGlobal)));
+		ASSERT_THAT(AreEqual(5, static_cast<int32>(EAngelscriptArtifactReferenceKind::ScriptProperty)));
+		ASSERT_THAT(AreEqual(6, static_cast<int32>(EAngelscriptArtifactReferenceKind::ScriptImport)));
+		ASSERT_THAT(AreEqual(7, static_cast<int32>(EAngelscriptArtifactReferenceKind::EnvironmentSymbol)));
+		ASSERT_THAT(AreEqual(8, static_cast<int32>(EAngelscriptArtifactReferenceKind::CanonicalName)));
+		ASSERT_THAT(AreEqual(9, static_cast<int32>(EAngelscriptArtifactReferenceKind::StringLiteral)));
 		ASSERT_THAT(AreEqual(1, static_cast<int32>(EAngelscriptCachedDataTypeKind::Primitive)));
 		ASSERT_THAT(AreEqual(4, static_cast<int32>(EAngelscriptCachedDataTypeKind::Auto)));
 		ASSERT_THAT(AreEqual(1, static_cast<int32>(EAngelscriptCachedPrimitiveType::Void)));
@@ -446,8 +446,8 @@ public:
 		using namespace AngelscriptCachePrimitiveTests_Private;
 		FAngelscriptCachedDataType Original;
 		Original.Kind = EAngelscriptCachedDataTypeKind::ScriptType;
-		Original.TypeReference = FAngelscriptCacheStableReference{
-			EAngelscriptCacheReferenceKind::ScriptType, MakeHash(0x41), MakeHash(0x42)};
+		Original.TypeReference = FAngelscriptArtifactReference{
+			EAngelscriptArtifactReferenceKind::ScriptType, MakeHash(0x41), MakeHash(0x42)};
 		Original.QualifierFlags = static_cast<uint32>(EAngelscriptCachedTypeQualifierFlags::ObjectHandle)
 			| static_cast<uint32>(EAngelscriptCachedTypeQualifierFlags::ConstHandle);
 		Original.OrderedSubTypes.Add(MakeInt32Type());
@@ -474,7 +474,7 @@ public:
 		using namespace AngelscriptCachePrimitiveTests_Private;
 		TArray<uint8> Bytes = {0xde, 0xad};
 
-		FAngelscriptCacheStableReference Reference = MakeFunctionReference();
+		FAngelscriptArtifactReference Reference = MakeFunctionReference();
 		Reference.StableKey = {};
 		FAngelscriptCacheValidationResult Result =
 			FAngelscriptCacheSemanticArchive::SerializeStableReference(Reference, Bytes);
@@ -486,7 +486,7 @@ public:
 		Result = FAngelscriptCacheSemanticArchive::SerializeStableReference(Reference, Bytes);
 		ASSERT_THAT(AreEqual(EAngelscriptCacheValidationError::MissingExpectedAbi, Result.Error));
 
-		Reference.Kind = EAngelscriptCacheReferenceKind::CanonicalName;
+		Reference.Kind = EAngelscriptArtifactReferenceKind::CanonicalName;
 		Reference.ExpectedAbi = MakeHash(0x22);
 		Result = FAngelscriptCacheSemanticArchive::SerializeStableReference(Reference, Bytes);
 		ASSERT_THAT(AreEqual(EAngelscriptCacheValidationError::ForbiddenExpectedAbi, Result.Error));
@@ -527,7 +527,7 @@ public:
 		Dependency = {};
 		Dependency.Kind = EAngelscriptCacheSemanticDependencyKind::FunctionContent;
 		Dependency.Target = MakeFunctionReference();
-		Dependency.Target.Kind = EAngelscriptCacheReferenceKind::ScriptType;
+		Dependency.Target.Kind = EAngelscriptArtifactReferenceKind::ScriptType;
 		Dependency.ExpectedContentOrValue = MakeHash(0x7f);
 		Result = FAngelscriptCacheSemanticArchive::SerializeSemanticDependency(
 			Dependency, Bytes);

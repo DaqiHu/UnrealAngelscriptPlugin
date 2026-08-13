@@ -70,6 +70,14 @@ public:
 	bool IsValid() const;
 	FAngelscriptCacheFunctionReuseSummary CaptureSummary() const;
 
+	// Orders the selected compile candidates from script-function providers to
+	// consumers using the graph-validated semantic dependencies of the pinned
+	// Generation. Cross-module cycles and omitted providers fail closed.
+	bool TryBuildDependencyOrderedModuleKeys(
+		TConstArrayView<FAngelscriptStableModuleKey> SelectedKeys,
+		TArray<FAngelscriptStableModuleKey>& OutOrderedKeys,
+		FString& OutFailure) const;
+
 	virtual bool TryCopyActualDependencies(
 		const FAngelscriptStableModuleKey& ModuleKey,
 		const FAngelscriptStableFunctionKey& FunctionKey,

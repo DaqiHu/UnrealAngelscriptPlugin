@@ -167,7 +167,7 @@ namespace AngelscriptCacheClassGraphRollbackTests_Private
 				bDescriptorsAbsentAtStop =
 					!ObservedEngine->GetClass(LeftClassName).IsValid()
 					&& !ObservedEngine->GetClass(RightClassName).IsValid();
-				const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+				const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 					ESPMode::ThreadSafe> RoutesAtStop =
 					ObservedEngine->GetFunctionRouteSnapshot();
 				bRoutePublicationUnchangedAtStop =
@@ -177,7 +177,7 @@ namespace AngelscriptCacheClassGraphRollbackTests_Private
 		}
 
 		FAngelscriptEngine* ObservedEngine = nullptr;
-		TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> RoutesBefore;
 		FAngelscriptStableModuleKey ObservedModuleKey;
 		uint32 ObservedOrdinal = MAX_uint32;
@@ -295,7 +295,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheClassGraphRollbackTests,
 			CaptureVmModules(*ScriptEngine);
 		const TArray<FString> VmTypesBefore =
 			CaptureVmObjectTypes(*ScriptEngine);
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> RoutesBefore =
 			Engine.GetFunctionRouteSnapshot();
 		UClass* const LeftUClassBefore = FindObject<UClass>(
@@ -367,15 +367,15 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheClassGraphRollbackTests,
 			Engine.GetPackageInstance(), LeftClassName) == LeftUClassBefore));
 		ASSERT_THAT(IsTrue(FindObject<UClass>(
 			Engine.GetPackageInstance(), RightClassName) == RightUClassBefore));
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> RoutesAfterFailure =
 			Engine.GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(RoutesAfterFailure.Get() == RoutesBefore.Get()));
 		for (const FAngelscriptFunctionArtifactIdentity& Identity
 			: Artifacts.ValidatedFunctionArtifactIdentities)
 		{
-			FAngelscriptCacheLiveFunctionRoute LeakedRoute;
-			ASSERT_THAT(IsFalse(Engine.ResolveCacheFunctionRoute(
+			FAngelscriptFunctionRoute LeakedRoute;
+			ASSERT_THAT(IsFalse(Engine.ResolveFunctionRoute(
 				Identity.FunctionKey, LeakedRoute)));
 		}
 

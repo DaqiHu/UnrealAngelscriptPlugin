@@ -257,7 +257,7 @@ namespace AngelscriptCacheCleanCaptureInvocationFamilyTests_Private
 				if (Dependency.function != nullptr
 					&& Dependency.function->module == nullptr)
 				{
-					FAngelscriptCacheStableReference EnvironmentReference;
+					FAngelscriptArtifactReference EnvironmentReference;
 					const bool bEnvironmentReference =
 						FAngelscriptCacheEnvironmentIdentity::
 							TryBuildFunctionReference(
@@ -293,7 +293,7 @@ namespace AngelscriptCacheCleanCaptureInvocationFamilyTests_Private
 						{
 							const asCScriptFunction* Candidate =
 								ScriptModule->engine->scriptFunctions[CandidateIndex];
-							FAngelscriptCacheStableReference CandidateReference;
+							FAngelscriptArtifactReference CandidateReference;
 							if (Candidate == nullptr || Candidate->module != nullptr
 								|| !FAngelscriptCacheEnvironmentIdentity::
 									TryBuildFunctionReference(
@@ -325,7 +325,7 @@ namespace AngelscriptCacheCleanCaptureInvocationFamilyTests_Private
 							*ScriptModule->engine);
 						const TOptional<FAngelscriptCacheCurrentSymbol> Current =
 							CurrentResolver.Resolve(
-								EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+								EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 								EnvironmentReference.StableKey);
 						Test.AddInfo(FString::Printf(
 							TEXT("V5.5 environment function resolver: Case=%s Function=%s StableCandidates=%d SameObjectCandidates=%d Current=%d AbiEqual=%d"),

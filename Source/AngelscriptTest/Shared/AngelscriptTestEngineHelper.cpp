@@ -12,7 +12,6 @@
 #include "Misc/Guid.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
-#include "StaticJIT/PrecompiledData.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -157,6 +156,11 @@ namespace
 		ModuleDesc->ModuleName = ModuleNameString;
 
 		FAngelscriptModuleDesc::FCodeSection& Section = ModuleDesc->Code.AddDefaulted_GetRef();
+		FAngelscriptVirtualPath VirtualPath;
+		if (FAngelscriptVirtualPath::TryParse(Filename, VirtualPath))
+		{
+			Section.VirtualPath = Filename;
+		}
 		Section.RelativeFilename = RelativeFilename;
 		Section.AbsoluteFilename = AbsoluteFilename;
 		Section.Code = MoveTemp(Script);
@@ -458,28 +462,6 @@ bool CompileModuleFromDiskPath(FAngelscriptEngine* Engine, FName ModuleName, con
 	return Engine->GetModuleByFilenameOrModuleName(TargetFile->AbsolutePath, ModuleName.ToString()).IsValid();
 }
 
-FScopedTempPrecompiledCacheFile::FScopedTempPrecompiledCacheFile(FString InLabel)
-{
-	if (InLabel.IsEmpty())
-	{
-		InLabel = TEXT("PrecompiledData");
-	}
-
-	const FString CacheDirectory = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Automation"), TEXT("StaticJIT"));
-	IFileManager::Get().MakeDirectory(*CacheDirectory, true);
-
-	const FString UniqueSuffix = FGuid::NewGuid().ToString(EGuidFormats::Digits);
-	Filename = FPaths::Combine(CacheDirectory, FString::Printf(TEXT("%s_%s.Cache"), *InLabel, *UniqueSuffix));
-}
-
-FScopedTempPrecompiledCacheFile::~FScopedTempPrecompiledCacheFile()
-{
-	if (!Filename.IsEmpty())
-	{
-		IFileManager::Get().Delete(*Filename, false, true, true);
-	}
-}
-
 bool CompileModuleFromMemory(FAngelscriptEngine* Engine, FName ModuleName, FString Filename, FString Script)
 {
 	return CompileModuleInternal(Engine, ECompileType::SoftReloadOnly, ModuleName, MoveTemp(Filename), MoveTemp(Script));
@@ -523,53 +505,6 @@ bool CompileAnnotatedModuleFromMemory(FAngelscriptEngine* Engine, FName ModuleNa
 		return false;
 	}
 	return PreprocessAndCompile(Engine, ECompileType::FullReload, MoveTemp(Filename), MoveTemp(Script));
-}
-
-bool SaveAndReloadPrecompiledData(FAngelscriptEngine* Engine, FAngelscriptPrecompiledData& SourceData, const FString& Filename, TUniquePtr<FAngelscriptPrecompiledData>& OutLoadedData, FString* OutError)
-{
-	OutLoadedData.Reset();
-
-	if (Engine == nullptr)
-	{
-		if (OutError != nullptr)
-		{
-			*OutError = TEXT("SaveAndReloadPrecompiledData failed: engine was null.");
-		}
-		return false;
-	}
-
-	if (Filename.IsEmpty())
-	{
-		if (OutError != nullptr)
-		{
-			*OutError = TEXT("SaveAndReloadPrecompiledData failed: filename was empty.");
-		}
-		return false;
-	}
-
-	asIScriptEngine* ScriptEngine = Engine->GetScriptEngine();
-	if (ScriptEngine == nullptr)
-	{
-		if (OutError != nullptr)
-		{
-			*OutError = TEXT("SaveAndReloadPrecompiledData failed: script engine was null.");
-		}
-		return false;
-	}
-
-	SourceData.Save(Filename);
-	if (!IFileManager::Get().FileExists(*Filename))
-	{
-		if (OutError != nullptr)
-		{
-			*OutError = FString::Printf(TEXT("SaveAndReloadPrecompiledData failed: cache file was not created at '%s'."), *Filename);
-		}
-		return false;
-	}
-
-	OutLoadedData = MakeUnique<FAngelscriptPrecompiledData>(ScriptEngine);
-	OutLoadedData->Load(Filename);
-	return true;
 }
 
 bool GenerateStaticJITSourceText(FAngelscriptEngine* Engine, FName ModuleName, FString& OutSourceText, bool bEmitDebugMetadata, FString* OutError)

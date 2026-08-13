@@ -153,8 +153,8 @@ namespace AngelscriptCacheModuleGraphLayoutTests_Private
 	{
 		FAngelscriptCachedDataType Type;
 		Type.Kind = EAngelscriptCachedDataTypeKind::EnvironmentType;
-		Type.TypeReference = FAngelscriptCacheStableReference{
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+		Type.TypeReference = FAngelscriptArtifactReference{
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 			MakeHash(0xa0), MakeHash(0xa1)};
 		return Type;
 	}
@@ -208,8 +208,8 @@ namespace AngelscriptCacheModuleGraphLayoutTests_Private
 	{
 		FAngelscriptCachedDataType Type;
 		Type.Kind = EAngelscriptCachedDataTypeKind::ScriptType;
-		Type.TypeReference = FAngelscriptCacheStableReference{
-			EAngelscriptCacheReferenceKind::ScriptType,
+		Type.TypeReference = FAngelscriptArtifactReference{
+			EAngelscriptArtifactReferenceKind::ScriptType,
 			Target.StableKey,
 			bWrongTargetAbi ? MakeHash(0xb2) : Target.SignatureHash};
 		return Type;
@@ -263,8 +263,8 @@ namespace AngelscriptCacheModuleGraphLayoutTests_Private
 		const TOptional<FAngelscriptCachedDeclaration>& PropertyDeclaration,
 		const bool bWrongPrimitiveLayout)
 	{
-		const FAngelscriptCacheStableReference CodeRoot{
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+		const FAngelscriptArtifactReference CodeRoot{
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 			MakeHash(0x90), MakeHash(0x91)};
 
 		FAngelscriptCachedTypeSchema Schema;
@@ -514,12 +514,12 @@ namespace AngelscriptCacheModuleGraphLayoutTests_Private
 		const bool bWrongBaseAbi,
 		const bool bWrongBaseLayout)
 	{
-		const FAngelscriptCacheStableReference BaseReference{
-			EAngelscriptCacheReferenceKind::ScriptType,
+		const FAngelscriptArtifactReference BaseReference{
+			EAngelscriptArtifactReferenceKind::ScriptType,
 			BaseDeclaration.StableKey,
 			bWrongBaseAbi ? MakeHash(0xb0) : BaseDeclaration.SignatureHash};
-		const FAngelscriptCacheStableReference CodeRoot{
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+		const FAngelscriptArtifactReference CodeRoot{
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 			MakeHash(0x90), MakeHash(0x91)};
 
 		FAngelscriptCachedTypeSchema Schema;
@@ -877,7 +877,7 @@ namespace AngelscriptCacheModuleGraphLayoutTests_Private
 			PropertyLayout.Kind =
 				EAngelscriptCacheSemanticDependencyKind::PropertyLayout;
 			PropertyLayout.Target.Kind =
-				EAngelscriptCacheReferenceKind::ScriptProperty;
+				EAngelscriptArtifactReferenceKind::ScriptProperty;
 			PropertyLayout.Target.StableKey = LeafPropertyDeclaration.StableKey;
 			PropertyLayout.Target.ExpectedAbi =
 				LeafPropertyDeclaration.SignatureHash;
@@ -951,12 +951,12 @@ namespace AngelscriptCacheModuleGraphLayoutTests_Private
 		mutable uint32 CallCount = 0;
 
 		virtual TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
-			const EAngelscriptCacheReferenceKind ReferenceKind,
+			const EAngelscriptArtifactReferenceKind ReferenceKind,
 			const FAngelscriptHash256& StableKey) const override
 		{
 			++CallCount;
 			check(ReferenceKind
-				== EAngelscriptCacheReferenceKind::EnvironmentSymbol);
+				== EAngelscriptArtifactReferenceKind::EnvironmentSymbol);
 			check(StableKey == MakeHash(0x90)
 				|| StableKey == MakeHash(0xa0));
 			FAngelscriptCacheCurrentSymbol Symbol;
@@ -1005,7 +1005,7 @@ namespace AngelscriptCacheModuleGraphLayoutTests_Private
 			check(DataType.Kind == EAngelscriptCachedDataTypeKind::EnvironmentType);
 			check(DataType.TypeReference.IsSet());
 			check(DataType.TypeReference->Kind
-				== EAngelscriptCacheReferenceKind::EnvironmentSymbol);
+				== EAngelscriptArtifactReferenceKind::EnvironmentSymbol);
 			check(DataType.TypeReference->StableKey == MakeHash(0xa0));
 			if (DataResult == EDataLayoutResult::Missing)
 			{
@@ -1026,13 +1026,13 @@ namespace AngelscriptCacheModuleGraphLayoutTests_Private
 		virtual TOptional<FAngelscriptCacheResolvedTypeLayoutInput>
 		ResolveTypeLayoutInput(
 			const EAngelscriptCachedTypeLayoutInputKind InputKind,
-			const EAngelscriptCacheReferenceKind ReferenceKind,
+			const EAngelscriptArtifactReferenceKind ReferenceKind,
 			const FAngelscriptHash256& StableKey) const override
 		{
 			++InputCallCount;
 			check(InputKind == EAngelscriptCachedTypeLayoutInputKind::CodeRoot);
 			check(ReferenceKind
-				== EAngelscriptCacheReferenceKind::EnvironmentSymbol);
+				== EAngelscriptArtifactReferenceKind::EnvironmentSymbol);
 			check(StableKey == MakeHash(0x90));
 			if (Result == ELayoutResult::Missing)
 			{

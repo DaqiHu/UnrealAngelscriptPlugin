@@ -29,7 +29,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheFunctionReuseDiagnosticsTests,
 		const FAngelscriptCacheDiagnosticSnapshot Snapshot =
 			Service.CaptureDiagnosticSnapshot();
 
-		ASSERT_THAT(AreEqual(uint32(4), Snapshot.SchemaVersion));
+		ASSERT_THAT(AreEqual(uint32(5), Snapshot.SchemaVersion));
 		ASSERT_THAT(IsFalse(Snapshot.FunctionReuse.bPresent));
 
 		FString Json;

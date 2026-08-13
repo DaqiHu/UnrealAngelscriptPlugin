@@ -502,7 +502,7 @@ public:
 		ASSERT_THAT(IsTrue(Consumer.IsValid()));
 		const int32 ActiveModulesBefore =
 			Consumer.GetEngine().GetActiveModules().Num();
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> RoutesBefore =
 			Consumer.GetEngine().GetFunctionRouteSnapshot();
 
@@ -540,8 +540,8 @@ public:
 			TEXT("ASCacheV2FreshEngineRollback")).IsValid()));
 		ASSERT_THAT(IsFalse(Consumer.GetEngine().GetEnum(
 			TEXT("ECacheV2RollbackState")).IsValid()));
-		FAngelscriptCacheLiveFunctionRoute RejectedRoute;
-		ASSERT_THAT(IsFalse(Consumer.GetEngine().ResolveCacheFunctionRoute(
+		FAngelscriptFunctionRoute RejectedRoute;
+		ASSERT_THAT(IsFalse(Consumer.GetEngine().ResolveFunctionRoute(
 			FunctionKey, RejectedRoute)));
 
 		const FString AuthoritativeSource = ASTEST_AS(R"AS(

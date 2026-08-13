@@ -47,6 +47,8 @@
 #include "as_atomic.h"
 #include "as_buildartifact.h"
 
+#include <mutex>
+
 BEGIN_AS_NAMESPACE
 
 class asCScriptEngine;
@@ -303,6 +305,12 @@ public:
 	bool      DoesReturnOnStack() const;
 
 	void      JITCompile();
+	virtual int SetJITBinding(const asSJITFunctionBinding &binding);
+	virtual asSJITFunctionBinding GetJITBinding() const;
+	// Internal execution lease. Retired bindings are released only after the
+	// last active reader exits, so UserData and provider code stay reachable.
+	asSJITFunctionBinding AcquireJITBindingForExecution() const;
+	void ReleaseJITBindingAfterExecution() const;
 
 	void      AddReferences();
 	void      ReleaseReferences();
@@ -361,10 +369,21 @@ public:
 	// Used by list factory behaviour
 	static asSListPatternNode *listPattern;
 
-	// JIT compiled code of this function
-	asJITFunction                   jitFunction = 0;
-	asJITFunction_ParmsEntry        jitFunction_ParmsEntry = 0;
-	asJITFunction_Raw               jitFunction_Raw = 0;
+	// The complete JIT Binding is retired and published only through the
+	// lifecycle methods. Keeping it private prevents entry generations from
+	// being mutated independently by Runtime consumers.
+private:
+	asSJITFunctionBinding           jitBinding;
+	asIJITCompiler                 *jitBindingOwner = 0;
+	struct SRetiredJITBinding
+	{
+		asSJITFunctionBinding Binding;
+		asIJITCompiler *Owner = 0;
+	};
+	mutable std::mutex              jitBindingMutex;
+	mutable asUINT                  activeJITBindingReaders = 0;
+	mutable asCArray<SRetiredJITBinding> retiredJITBindings;
+public:
 
 	// Used by asFUNC_SCRIPT
 	struct ScriptFunctionData

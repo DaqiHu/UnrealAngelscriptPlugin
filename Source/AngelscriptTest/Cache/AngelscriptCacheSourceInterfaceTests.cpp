@@ -853,8 +853,8 @@ namespace AngelscriptCacheSourceInterfaceTests_Private
 		Import.CanonicalName = TEXT("Log");
 		Import.CanonicalSignature = TEXT("void Log(const string&in Message)");
 		Import.TargetModuleKey = FAngelscriptStableModuleKey{MakeHash(0x81)};
-		Import.TargetDeclaration = FAngelscriptCacheStableReference{
-			EAngelscriptCacheReferenceKind::ScriptFunction, MakeHash(0x82), MakeHash(0x83)};
+		Import.TargetDeclaration = FAngelscriptArtifactReference{
+			EAngelscriptArtifactReferenceKind::ScriptFunction, MakeHash(0x82), MakeHash(0x83)};
 		Import.Slots.Add({EAngelscriptCacheDeclarationSlotKind::Import, 0});
 		const FAngelscriptImportIdentityInput IdentityInput{
 			OwningModuleKey, Import.CanonicalNamespace, Import.CanonicalName,
@@ -879,14 +879,14 @@ namespace AngelscriptCacheSourceInterfaceTests_Private
 
 		FAngelscriptCacheSemanticDependency DeclarationDependency;
 		DeclarationDependency.Kind = EAngelscriptCacheSemanticDependencyKind::Declaration;
-		DeclarationDependency.Target = FAngelscriptCacheStableReference{
-			EAngelscriptCacheReferenceKind::ScriptType, MakeHash(0x91), MakeHash(0x92)};
+		DeclarationDependency.Target = FAngelscriptArtifactReference{
+			EAngelscriptArtifactReferenceKind::ScriptType, MakeHash(0x91), MakeHash(0x92)};
 		Interface.Dependencies.Add(DeclarationDependency);
 
 		FAngelscriptCacheSemanticDependency HardValueDependency;
 		HardValueDependency.Kind = EAngelscriptCacheSemanticDependencyKind::HardValue;
-		HardValueDependency.Target = FAngelscriptCacheStableReference{
-			EAngelscriptCacheReferenceKind::ScriptGlobal, MakeHash(0x93), MakeHash(0x94)};
+		HardValueDependency.Target = FAngelscriptArtifactReference{
+			EAngelscriptArtifactReferenceKind::ScriptGlobal, MakeHash(0x93), MakeHash(0x94)};
 		HardValueDependency.ExpectedContentOrValue = MakeHash(0x95);
 		Interface.Dependencies.Add(HardValueDependency);
 
@@ -2355,7 +2355,7 @@ public:
 		ASSERT_THAT(IsTrue(Key.Hash.IsZero()));
 
 		Interface = MakeModuleInterface();
-		Interface.Imports[0].TargetDeclaration.Kind = EAngelscriptCacheReferenceKind::ScriptType;
+		Interface.Imports[0].TargetDeclaration.Kind = EAngelscriptArtifactReferenceKind::ScriptType;
 		ASSERT_THAT(AreEqual(EAngelscriptCacheValidationError::WrongReferenceKind,
 			FAngelscriptCacheSemanticArchive::SerializeModuleInterface(Interface, Bytes).Error));
 		Interface = MakeModuleInterface();
@@ -4002,8 +4002,8 @@ public:
 		FAngelscriptCachedModuleInterface Interface = MakeModuleInterface();
 		FAngelscriptCacheSemanticDependency GlobalStorage;
 		GlobalStorage.Kind = EAngelscriptCacheSemanticDependencyKind::GlobalStorage;
-		GlobalStorage.Target = FAngelscriptCacheStableReference{
-			EAngelscriptCacheReferenceKind::ScriptGlobal, MakeHash(0xa1), MakeHash(0xa2)};
+		GlobalStorage.Target = FAngelscriptArtifactReference{
+			EAngelscriptArtifactReferenceKind::ScriptGlobal, MakeHash(0xa1), MakeHash(0xa2)};
 		GlobalStorage.ExpectedContentOrValue = MakeHash(0xa3);
 		Interface.Dependencies.Add(GlobalStorage);
 

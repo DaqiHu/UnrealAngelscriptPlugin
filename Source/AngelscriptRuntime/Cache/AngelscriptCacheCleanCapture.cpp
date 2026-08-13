@@ -477,8 +477,8 @@ namespace AngelscriptCacheCleanCapture_Private
 			return false;
 		}
 		OutType.Kind = EAngelscriptCachedDataTypeKind::ScriptType;
-		OutType.TypeReference = FAngelscriptCacheStableReference{
-			EAngelscriptCacheReferenceKind::ScriptType,
+		OutType.TypeReference = FAngelscriptArtifactReference{
+			EAngelscriptArtifactReferenceKind::ScriptType,
 			TypeDeclaration.StableKey,
 			TypeDeclaration.SignatureHash,
 		};
@@ -516,6 +516,55 @@ namespace AngelscriptCacheCleanCapture_Private
 		const FAngelscriptCachedDeclaration* TypeDeclaration = nullptr;
 	};
 
+	static bool TryMapEnvironmentFunctionDataType(
+		const asCDataType& ScriptDataType,
+		FAngelscriptCachedDataType& OutType)
+	{
+		OutType = {};
+		asCTypeInfo* TypeInfo = ScriptDataType.GetTypeInfo();
+		FAngelscriptArtifactReference EnvironmentReference;
+		// The current class-graph restore contract supports external object
+		// handles in callable signatures. Environment values/references need the
+		// wider layout/dependency contract and must fail closed before the VM
+		// artifact writer is entered.
+		if (TypeInfo == nullptr || TypeInfo->module != nullptr
+			|| ScriptDataType.IsAuto() || !ScriptDataType.IsObjectHandle()
+			|| !FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
+				*TypeInfo, EnvironmentReference))
+		{
+			return false;
+		}
+
+		OutType.Kind = EAngelscriptCachedDataTypeKind::EnvironmentType;
+		OutType.TypeReference = EnvironmentReference;
+		if (ScriptDataType.IsReference())
+		{
+			OutType.QualifierFlags |= static_cast<uint32>(
+				EAngelscriptCachedTypeQualifierFlags::Reference);
+		}
+		if (ScriptDataType.IsObjectConst())
+		{
+			OutType.QualifierFlags |= static_cast<uint32>(
+				EAngelscriptCachedTypeQualifierFlags::ObjectConst);
+		}
+		if (ScriptDataType.IsObjectHandle())
+		{
+			OutType.QualifierFlags |= static_cast<uint32>(
+				EAngelscriptCachedTypeQualifierFlags::ObjectHandle);
+		}
+		if (ScriptDataType.IsHandleToConst())
+		{
+			OutType.QualifierFlags |= static_cast<uint32>(
+				EAngelscriptCachedTypeQualifierFlags::ConstHandle);
+		}
+		if (ScriptDataType.HasIfHandleThenConst())
+		{
+			OutType.QualifierFlags |= static_cast<uint32>(
+				EAngelscriptCachedTypeQualifierFlags::IfHandleThenConst);
+		}
+		return true;
+	}
+
 	static bool TryMapClassGraphFunctionDataType(
 		const asCDataType& ScriptDataType,
 		const TConstArrayView<FClassGraphTypeAuthority> Authorities,
@@ -546,7 +595,7 @@ namespace AngelscriptCacheCleanCapture_Private
 					OutType);
 			}
 		}
-		return false;
+		return TryMapEnvironmentFunctionDataType(ScriptDataType, OutType);
 	}
 
 	static bool TryMapClassGraphPropertyDataType(
@@ -616,7 +665,7 @@ namespace AngelscriptCacheCleanCapture_Private
 		OutCanonicalType.Reset();
 		OutLayoutDependency = {};
 		asCTypeInfo* TypeInfo = ScriptDataType.GetTypeInfo();
-		FAngelscriptCacheStableReference EnvironmentReference;
+		FAngelscriptArtifactReference EnvironmentReference;
 		if (TypeInfo == nullptr || TypeInfo->module != nullptr
 			|| ScriptDataType.IsReference() || ScriptDataType.IsAuto()
 			|| !FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
@@ -706,11 +755,11 @@ namespace AngelscriptCacheCleanCapture_Private
 			TEXT("cache-v2-environment-code-root-declaration-abi-v1"), Inputs);
 	}
 
-	static FAngelscriptCacheStableReference BuildCodeRootReference(
+	static FAngelscriptArtifactReference BuildCodeRootReference(
 		const UClass& CodeRoot)
 	{
 		return {
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 			BuildCodeRootStableKey(CodeRoot),
 			BuildCodeRootDeclarationAbi(CodeRoot),
 		};
@@ -889,7 +938,10 @@ namespace AngelscriptCacheCleanCapture_Private
 	{
 	public:
 		explicit FCleanCaptureCurrentSymbols(
-			const FAngelscriptModuleDesc& Module)
+			const FAngelscriptModuleDesc& Module,
+			const FAngelscriptCacheCrossModuleFunctionAuthority*
+				InCrossModuleFunctions = nullptr)
+			: CrossModuleFunctions(InCrossModuleFunctions)
 		{
 			if (Module.ScriptModule != nullptr
 				&& Module.ScriptModule->engine != nullptr)
@@ -912,13 +964,23 @@ namespace AngelscriptCacheCleanCapture_Private
 		}
 
 		virtual TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
-			const EAngelscriptCacheReferenceKind ReferenceKind,
+			const EAngelscriptArtifactReferenceKind ReferenceKind,
 			const FAngelscriptHash256& StableKey) const override
 		{
 			LastReferenceKind = ReferenceKind;
 			LastStableKey = StableKey;
 			bLastResolved = false;
-			if (ReferenceKind != EAngelscriptCacheReferenceKind::EnvironmentSymbol)
+			if (CrossModuleFunctions != nullptr)
+			{
+				const TOptional<FAngelscriptCacheCurrentSymbol> CrossModule =
+					CrossModuleFunctions->Resolve(ReferenceKind, StableKey);
+				if (CrossModule.IsSet())
+				{
+					bLastResolved = true;
+					return CrossModule;
+				}
+			}
+			if (ReferenceKind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol)
 			{
 				return {};
 			}
@@ -968,10 +1030,47 @@ namespace AngelscriptCacheCleanCapture_Private
 		TArray<FEntry> Entries;
 		TUniquePtr<FAngelscriptCacheEngineEnvironmentResolver>
 			EnvironmentSymbols;
-		mutable EAngelscriptCacheReferenceKind LastReferenceKind =
-			static_cast<EAngelscriptCacheReferenceKind>(0);
+		const FAngelscriptCacheCrossModuleFunctionAuthority*
+			CrossModuleFunctions = nullptr;
+		mutable EAngelscriptArtifactReferenceKind LastReferenceKind =
+			static_cast<EAngelscriptArtifactReferenceKind>(0);
 		mutable FAngelscriptHash256 LastStableKey;
 		mutable bool bLastResolved = false;
+	};
+
+	class FCleanCaptureExternalSymbols final
+		: public IAngelscriptCacheCurrentSymbolResolver
+	{
+	public:
+		FCleanCaptureExternalSymbols(
+			const asCScriptEngine& Engine,
+			const FAngelscriptCacheCrossModuleFunctionAuthority*
+				InCrossModuleFunctions)
+			: Environment(Engine)
+			, CrossModuleFunctions(InCrossModuleFunctions)
+		{
+		}
+
+		virtual TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
+			const EAngelscriptArtifactReferenceKind ReferenceKind,
+			const FAngelscriptHash256& StableKey) const override
+		{
+			if (CrossModuleFunctions != nullptr)
+			{
+				const TOptional<FAngelscriptCacheCurrentSymbol> CrossModule =
+					CrossModuleFunctions->Resolve(ReferenceKind, StableKey);
+				if (CrossModule.IsSet())
+				{
+					return CrossModule;
+				}
+			}
+			return Environment.Resolve(ReferenceKind, StableKey);
+		}
+
+	private:
+		FAngelscriptCacheEngineEnvironmentResolver Environment;
+		const FAngelscriptCacheCrossModuleFunctionAuthority*
+			CrossModuleFunctions = nullptr;
 	};
 
 	// Maps the compiler's engine-local pointer observations to the stable
@@ -981,9 +1080,15 @@ namespace AngelscriptCacheCleanCapture_Private
 		: public IAngelscriptCacheBuildDependencyResolver
 	{
 	public:
+		void SetCrossModuleFunctions(
+			const FAngelscriptCacheCrossModuleFunctionAuthority* InAuthority)
+		{
+			CrossModuleFunctions = InAuthority;
+		}
+
 		void AddType(
 			const asCTypeInfo* Type,
-			const FAngelscriptCacheStableReference& Declaration,
+			const FAngelscriptArtifactReference& Declaration,
 			const FAngelscriptHash256& Layout)
 		{
 			Types.Add({Type, Declaration, Layout});
@@ -992,7 +1097,7 @@ namespace AngelscriptCacheCleanCapture_Private
 		void AddProperty(
 			const asCTypeInfo* OwnerType,
 			const asCObjectProperty* Property,
-			const FAngelscriptCacheStableReference& Declaration,
+			const FAngelscriptArtifactReference& Declaration,
 			const FAngelscriptHash256& Layout)
 		{
 			Properties.Add({OwnerType, Property, Declaration, Layout});
@@ -1000,7 +1105,7 @@ namespace AngelscriptCacheCleanCapture_Private
 
 		void AddGlobal(
 			const asCGlobalProperty* Global,
-			const FAngelscriptCacheStableReference& Declaration,
+			const FAngelscriptArtifactReference& Declaration,
 			const FAngelscriptHash256& StorageLayout,
 			const TOptional<FAngelscriptHash256>& HardValue)
 		{
@@ -1009,7 +1114,7 @@ namespace AngelscriptCacheCleanCapture_Private
 
 		void AddFunction(
 			const asCScriptFunction* Function,
-			const FAngelscriptCacheStableReference& Declaration,
+			const FAngelscriptArtifactReference& Declaration,
 			const TOptional<FAngelscriptHash256>& Content = {})
 		{
 			Functions.Add({Function, Declaration, Content});
@@ -1017,14 +1122,14 @@ namespace AngelscriptCacheCleanCapture_Private
 
 		void AddDerivedStaticClassGlobal(
 			const asCGlobalProperty* Global,
-			const FAngelscriptCacheStableReference& OwningTypeDeclaration)
+			const FAngelscriptArtifactReference& OwningTypeDeclaration)
 		{
 			DerivedStaticClassGlobals.Add({Global, OwningTypeDeclaration});
 		}
 
 		void AddDerivedStaticClassFunction(
 			const asCScriptFunction* Function,
-			const FAngelscriptCacheStableReference& OwningTypeDeclaration)
+			const FAngelscriptArtifactReference& OwningTypeDeclaration)
 		{
 			DerivedStaticClassFunctions.Add({Function, OwningTypeDeclaration});
 		}
@@ -1058,7 +1163,7 @@ namespace AngelscriptCacheCleanCapture_Private
 					});
 				if (Entry == nullptr)
 				{
-					FAngelscriptCacheStableReference EnvironmentType;
+					FAngelscriptArtifactReference EnvironmentType;
 					if (RawDependency.type->module != nullptr
 						|| !FAngelscriptCacheEnvironmentIdentity::
 							TryBuildTypeReference(
@@ -1117,6 +1222,19 @@ namespace AngelscriptCacheCleanCapture_Private
 					});
 				if (Entry == nullptr)
 				{
+					FAngelscriptArtifactReference EnvironmentProperty;
+					if (RawDependency.propertyOwnerType->module == nullptr
+						&& FAngelscriptCacheEnvironmentIdentity::
+							TryBuildPropertyReference(
+								*RawDependency.propertyOwnerType,
+								*RawDependency.objectProperty,
+								EnvironmentProperty))
+					{
+						OutDependency.Kind =
+							EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi;
+						OutDependency.Target = EnvironmentProperty;
+						return true;
+					}
 					return false;
 				}
 				OutDependency.Kind =
@@ -1256,7 +1374,36 @@ namespace AngelscriptCacheCleanCapture_Private
 					});
 				if (Entry == nullptr)
 				{
-					FAngelscriptCacheStableReference EnvironmentFunction;
+					FAngelscriptArtifactReference CrossModuleReference;
+					FAngelscriptHash256 CrossModuleContent;
+					if (RawDependency.function->module != nullptr
+						&& CrossModuleFunctions != nullptr
+						&& CrossModuleFunctions->TryResolveFunctionDependency(
+							*RawDependency.function,
+							CrossModuleReference,
+							CrossModuleContent))
+					{
+						if (RawDependency.kind
+							== asBUILD_ARTIFACT_DEPENDENCY_SIGNATURE)
+						{
+							OutDependency.Kind =
+								EAngelscriptCacheSemanticDependencyKind::Signature;
+							OutDependency.Target = CrossModuleReference;
+							return true;
+						}
+						if (RawDependency.kind
+							== asBUILD_ARTIFACT_DEPENDENCY_FUNCTION_CONTENT)
+						{
+							OutDependency.Kind =
+								EAngelscriptCacheSemanticDependencyKind::FunctionContent;
+							OutDependency.Target = CrossModuleReference;
+							OutDependency.ExpectedContentOrValue =
+								CrossModuleContent;
+							return true;
+						}
+						return false;
+					}
+					FAngelscriptArtifactReference EnvironmentFunction;
 					if (RawDependency.function->module == nullptr
 						&& (RawDependency.kind
 								== asBUILD_ARTIFACT_DEPENDENCY_SIGNATURE
@@ -1303,7 +1450,7 @@ namespace AngelscriptCacheCleanCapture_Private
 		struct FTypeEntry final
 		{
 			const asCTypeInfo* Type = nullptr;
-			FAngelscriptCacheStableReference Declaration;
+			FAngelscriptArtifactReference Declaration;
 			FAngelscriptHash256 Layout;
 		};
 
@@ -1311,14 +1458,14 @@ namespace AngelscriptCacheCleanCapture_Private
 		{
 			const asCTypeInfo* OwnerType = nullptr;
 			const asCObjectProperty* Property = nullptr;
-			FAngelscriptCacheStableReference Declaration;
+			FAngelscriptArtifactReference Declaration;
 			FAngelscriptHash256 Layout;
 		};
 
 		struct FGlobalEntry final
 		{
 			const asCGlobalProperty* Global = nullptr;
-			FAngelscriptCacheStableReference Declaration;
+			FAngelscriptArtifactReference Declaration;
 			FAngelscriptHash256 StorageLayout;
 			TOptional<FAngelscriptHash256> HardValue;
 		};
@@ -1326,20 +1473,20 @@ namespace AngelscriptCacheCleanCapture_Private
 		struct FFunctionEntry final
 		{
 			const asCScriptFunction* Function = nullptr;
-			FAngelscriptCacheStableReference Declaration;
+			FAngelscriptArtifactReference Declaration;
 			TOptional<FAngelscriptHash256> Content;
 		};
 
 		struct FDerivedStaticClassGlobalEntry final
 		{
 			const asCGlobalProperty* Global = nullptr;
-			FAngelscriptCacheStableReference OwningTypeDeclaration;
+			FAngelscriptArtifactReference OwningTypeDeclaration;
 		};
 
 		struct FDerivedStaticClassFunctionEntry final
 		{
 			const asCScriptFunction* Function = nullptr;
-			FAngelscriptCacheStableReference OwningTypeDeclaration;
+			FAngelscriptArtifactReference OwningTypeDeclaration;
 		};
 
 		TArray<FTypeEntry> Types;
@@ -1348,6 +1495,8 @@ namespace AngelscriptCacheCleanCapture_Private
 		TArray<FFunctionEntry> Functions;
 		TArray<FDerivedStaticClassGlobalEntry> DerivedStaticClassGlobals;
 		TArray<FDerivedStaticClassFunctionEntry> DerivedStaticClassFunctions;
+		const FAngelscriptCacheCrossModuleFunctionAuthority*
+			CrossModuleFunctions = nullptr;
 	};
 
 	class FCleanCaptureCurrentLayouts final
@@ -1363,7 +1512,7 @@ namespace AngelscriptCacheCleanCapture_Private
 				Module.ScriptModule->engine->allRegisteredTypes.IterateAll(
 					[this](asCTypeInfo* Type)
 					{
-						FAngelscriptCacheStableReference Reference;
+						FAngelscriptArtifactReference Reference;
 						if (Type == nullptr || Type->module != nullptr
 							|| !FAngelscriptCacheEnvironmentIdentity::
 								TryBuildTypeReference(*Type, Reference))
@@ -1416,10 +1565,10 @@ namespace AngelscriptCacheCleanCapture_Private
 			{
 				return {};
 			}
-			const FAngelscriptCacheStableReference& TypeReference =
+			const FAngelscriptArtifactReference& TypeReference =
 				DataType.TypeReference.GetValue();
 			if (TypeReference.Kind
-					!= EAngelscriptCacheReferenceKind::EnvironmentSymbol
+					!= EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 				|| TypeReference.StableKey.IsZero()
 				|| TypeReference.ExpectedAbi.IsZero())
 			{
@@ -1479,12 +1628,12 @@ namespace AngelscriptCacheCleanCapture_Private
 		virtual TOptional<FAngelscriptCacheResolvedTypeLayoutInput>
 		ResolveTypeLayoutInput(
 			const EAngelscriptCachedTypeLayoutInputKind InputKind,
-			const EAngelscriptCacheReferenceKind ReferenceKind,
+			const EAngelscriptArtifactReferenceKind ReferenceKind,
 			const FAngelscriptHash256& StableKey) const override
 		{
 			if (InputKind != EAngelscriptCachedTypeLayoutInputKind::CodeRoot
 				|| ReferenceKind
-					!= EAngelscriptCacheReferenceKind::EnvironmentSymbol)
+					!= EAngelscriptArtifactReferenceKind::EnvironmentSymbol)
 			{
 				return {};
 			}
@@ -1522,7 +1671,7 @@ namespace AngelscriptCacheCleanCapture_Private
 		};
 		struct FEnvironmentEntry
 		{
-			FAngelscriptCacheStableReference Reference;
+			FAngelscriptArtifactReference Reference;
 			uint32 SemanticStorageSize = 0;
 			uint32 SemanticStorageAlignment = 0;
 		};
@@ -1534,6 +1683,8 @@ namespace AngelscriptCacheCleanCapture_Private
 		const FAngelscriptModuleDesc& Module,
 		const FAngelscriptCacheCleanCaptureOptions& Options,
 		const FAngelscriptCacheCleanModuleArtifacts& Artifacts,
+		const FAngelscriptCacheCrossModuleFunctionAuthority*
+			CrossModuleFunctions,
 		const FAngelscriptCacheReadLimits& Limits,
 		FAngelscriptCacheReadBudget& Budget,
 		FAngelscriptValidatedModuleGraph& OutGraph,
@@ -1596,10 +1747,11 @@ namespace AngelscriptCacheCleanCapture_Private
 			return false;
 		}
 
-		FCleanCaptureCurrentSymbols CurrentSymbols(Module);
+		FCleanCaptureCurrentSymbols CurrentSymbols(
+			Module, CrossModuleFunctions);
 		FCleanCaptureCurrentLayouts CurrentLayouts(Module);
 		FAngelscriptFunctionArtifactCodec OpaquePayloads(
-			*ScriptModule, *ScriptModule->engine);
+			*ScriptModule, *ScriptModule->engine, CrossModuleFunctions);
 		FAngelscriptCacheModuleGraphValidationContext Context;
 		Context.SelectedProfile = Options.Profile;
 		Context.SelectedSourceSnapshot = Artifacts.SourceSnapshot;
@@ -1746,12 +1898,17 @@ namespace AngelscriptCacheCleanCapture_Private
 		const FAngelscriptModuleDesc& Module,
 		const FAngelscriptCacheCleanCaptureOptions& Options,
 		const FAngelscriptCacheCleanModuleArtifacts& Artifacts,
+		const FAngelscriptCacheCrossModuleFunctionAuthority*
+			CrossModuleFunctions,
 		uint32& OutReachableRecordCount,
 		TArray<FAngelscriptFunctionArtifactIdentity>&
 			OutFunctionArtifactIdentities,
+		TArray<FAngelscriptFunctionArtifactReferenceSet>&
+			OutFunctionArtifactReferenceSets,
 		FAngelscriptCacheCleanCaptureResult& OutError)
 	{
 		OutFunctionArtifactIdentities.Reset();
+		OutFunctionArtifactReferenceSets.Reset();
 		FAngelscriptCacheReadLimits Limits;
 		FAngelscriptCacheReadBudget Budget;
 		FAngelscriptValidatedModuleGraph Graph;
@@ -1759,6 +1916,7 @@ namespace AngelscriptCacheCleanCapture_Private
 			Module,
 			Options,
 			Artifacts,
+			CrossModuleFunctions,
 			Limits,
 			Budget,
 			Graph,
@@ -1769,6 +1927,8 @@ namespace AngelscriptCacheCleanCapture_Private
 		}
 
 		TArray<FAngelscriptFunctionArtifactIdentity> ValidatedIdentities;
+		TArray<FAngelscriptFunctionArtifactReferenceSet>
+			ValidatedReferenceSets;
 		for (const FAngelscriptDecodedCacheRecordHandle& Record
 			: Graph.GetReachableRecords())
 		{
@@ -1777,11 +1937,26 @@ namespace AngelscriptCacheCleanCapture_Private
 			if (FunctionBody != nullptr)
 			{
 				ValidatedIdentities.Add(FunctionBody->Identity);
+				FAngelscriptFunctionArtifactReferenceSet& ReferenceSet =
+					ValidatedReferenceSets.AddDefaulted_GetRef();
+				ReferenceSet.FunctionKey = FunctionBody->Identity.FunctionKey;
+				for (const FAngelscriptCacheSemanticDependency& Dependency
+					: FunctionBody->ActualDependencies)
+				{
+					ReferenceSet.RequiredReferences.AddUnique(Dependency.Target);
+				}
+				ReferenceSet.RequiredReferences.Sort();
 			}
 		}
 		ValidatedIdentities.Sort([](
 			const FAngelscriptFunctionArtifactIdentity& Left,
 			const FAngelscriptFunctionArtifactIdentity& Right)
+		{
+			return Left.FunctionKey.Hash < Right.FunctionKey.Hash;
+		});
+		ValidatedReferenceSets.Sort([](
+			const FAngelscriptFunctionArtifactReferenceSet& Left,
+			const FAngelscriptFunctionArtifactReferenceSet& Right)
 		{
 			return Left.FunctionKey.Hash < Right.FunctionKey.Hash;
 		});
@@ -1797,6 +1972,7 @@ namespace AngelscriptCacheCleanCapture_Private
 			}
 		}
 		OutFunctionArtifactIdentities = MoveTemp(ValidatedIdentities);
+		OutFunctionArtifactReferenceSets = MoveTemp(ValidatedReferenceSets);
 		return true;
 	}
 
@@ -2001,20 +2177,52 @@ namespace AngelscriptCacheCleanCapture_Private
 		const FAngelscriptStableModuleKey& ModuleKey,
 		const IAngelscriptCacheRestoredFunctionDependencySource*
 			RestoredDependencies,
+		const FAngelscriptCacheCrossModuleFunctionAuthority*
+			CrossModuleFunctions,
 		FAngelscriptCacheCleanModuleArtifacts& OutArtifacts)
 	{
 		asCModule* ScriptModule = Module->ScriptModule;
-		if (Module->Classes.Num() < 2 || !Module->Enums.IsEmpty()
+		const FAngelscriptClassDesc* StaticsClassDesc = nullptr;
+		int32 OrdinaryClassCount = 0;
+		for (const TSharedRef<FAngelscriptClassDesc>& Class : Module->Classes)
+		{
+			if (!Class->bIsStaticsClass)
+			{
+				++OrdinaryClassCount;
+				continue;
+			}
+			if (StaticsClassDesc != nullptr)
+			{
+				return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+					TEXT("The class-graph capture vertical admits at most one module StaticsClass descriptor"));
+			}
+			StaticsClassDesc = &Class.Get();
+		}
+		if (OrdinaryClassCount < 2 || !Module->Enums.IsEmpty()
 			|| !Module->Delegates.IsEmpty() || !Module->ImportedModules.IsEmpty()
 			|| !Module->PostInitFunctions.IsEmpty()
 			|| ScriptModule->GetObjectTypeCount()
-				!= static_cast<asUINT>(Module->Classes.Num())
+				!= static_cast<asUINT>(OrdinaryClassCount)
 			|| ScriptModule->GetEnumCount() != 0
 			|| ScriptModule->GetTypedefCount() != 0
 			|| ScriptModule->GetImportedFunctionCount() != 0)
 		{
 			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
-				TEXT("The class-graph capture vertical requires two or more classes and no enum, delegate, import, typedef or post-init declaration"));
+				TEXT("The class-graph capture vertical requires two or more VM classes, an optional reflection-only module StaticsClass, and no enum, delegate, import, typedef or post-init declaration"));
+		}
+		if (StaticsClassDesc != nullptr
+			&& (StaticsClassDesc->ScriptType != nullptr
+				|| !StaticsClassDesc->bSuperIsCodeClass
+				|| StaticsClassDesc->CodeSuperClass == nullptr
+				|| StaticsClassDesc->Methods.IsEmpty()
+				|| !StaticsClassDesc->Properties.IsEmpty()
+				|| !StaticsClassDesc->ImplementedInterfaces.IsEmpty()
+				|| !StaticsClassDesc->ComposeOntoClass.IsEmpty()
+				|| StaticsClassDesc->bIsStruct
+				|| !StaticsClassDesc->StaticClassGlobalVariableName.IsEmpty()))
+		{
+			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+				TEXT("The module StaticsClass descriptor is outside the reflection-only global-UFunction shape"));
 		}
 
 		struct FClassCapture
@@ -2031,15 +2239,27 @@ namespace AngelscriptCacheCleanCapture_Private
 			asCScriptFunction* GeneratedStaticClassFunction = nullptr;
 			FAngelscriptPreparedRecord TypeRecord;
 		};
+		struct FStaticsClassCapture
+		{
+			const FAngelscriptClassDesc* ClassDesc = nullptr;
+			FAngelscriptCachedDeclaration TypeDeclaration;
+			FAngelscriptCachedTypeSchema TypeSchema;
+			FAngelscriptPreparedRecord TypeRecord;
+		};
+		FStaticsClassCapture StaticsClass;
+		StaticsClass.ClassDesc = StaticsClassDesc;
 
 		TArray<const FAngelscriptClassDesc*> PendingClasses;
-		PendingClasses.Reserve(Module->Classes.Num());
+		PendingClasses.Reserve(OrdinaryClassCount);
 		for (const TSharedRef<FAngelscriptClassDesc>& Class : Module->Classes)
 		{
-			PendingClasses.Add(&Class.Get());
+			if (!Class->bIsStaticsClass)
+			{
+				PendingClasses.Add(&Class.Get());
+			}
 		}
 		TArray<FClassCapture> Classes;
-		Classes.Reserve(Module->Classes.Num());
+		Classes.Reserve(OrdinaryClassCount);
 		while (!PendingClasses.IsEmpty())
 		{
 			int32 SelectedPendingIndex = INDEX_NONE;
@@ -2182,6 +2402,47 @@ namespace AngelscriptCacheCleanCapture_Private
 					TEXT("Class-graph type declaration hashes"), HashResult);
 			}
 		}
+		if (StaticsClass.ClassDesc != nullptr)
+		{
+			FAngelscriptCachedDeclaration& Declaration =
+				StaticsClass.TypeDeclaration;
+			Declaration.DeclarationKind = EAngelscriptCacheDeclarationKind::Type;
+			Declaration.EntityKind = EAngelscriptArtifactEntityKind::Class;
+			Declaration.SchemaCoverage = EAngelscriptCacheSchemaCoverage::Required;
+			Declaration.BodyCoverage = EAngelscriptCacheBodyCoverage::Forbidden;
+			Declaration.OwnerKind = EAngelscriptFunctionOwnerKind::Module;
+			Declaration.OwnerKey = ModuleKey.Hash;
+			Declaration.ModuleKey = ModuleKey;
+			Declaration.CanonicalNamespace =
+				StaticsClass.ClassDesc->Namespace.Get(FString());
+			Declaration.CanonicalName = StaticsClass.ClassDesc->ClassName;
+			Declaration.CanonicalDeclaration = FString::Printf(
+				TEXT("class %s"), *Declaration.CanonicalName);
+			Declaration.TraitFlags = static_cast<uint32>(
+				EAngelscriptCachedDeclarationTraitFlags::Generated);
+			AppendMetadata(
+				StaticsClass.ClassDesc->Meta, Declaration.Metadata);
+			Declaration.Slots.Add({
+				EAngelscriptCacheDeclarationSlotKind::Declaration,
+				NextDeclarationSlot++});
+			FAngelscriptTypeIdentityDescriptor Identity;
+			Identity.ModuleKey = ModuleKey;
+			Identity.Namespace = Declaration.CanonicalNamespace;
+			Identity.Kind = Declaration.EntityKind;
+			Identity.CanonicalDeclaration = Declaration.CanonicalDeclaration;
+			Declaration.StableKey =
+				FAngelscriptArtifactIdentityBuilder::BuildTypeKey(Identity).Hash;
+			const FAngelscriptCacheValidationResult HashResult =
+				FAngelscriptCacheSemanticArchive::ComputeDeclarationHashes(
+					Declaration, Declaration.SignatureHash,
+					Declaration.TraitsHash);
+			if (!HashResult.IsSuccess())
+			{
+				return ValidationFailure(
+					EAngelscriptCacheCleanCaptureError::RecordEncodingFailed,
+					TEXT("StaticsClass type declaration hashes"), HashResult);
+			}
+		}
 
 		TArray<FClassGraphTypeAuthority> TypeAuthorities;
 		TypeAuthorities.Reserve(Classes.Num());
@@ -2230,8 +2491,8 @@ namespace AngelscriptCacheCleanCapture_Private
 			if (Class.BaseCaptureIndex != INDEX_NONE)
 			{
 				const FClassCapture& Base = Classes[Class.BaseCaptureIndex];
-				const FAngelscriptCacheStableReference BaseReference{
-					EAngelscriptCacheReferenceKind::ScriptType,
+				const FAngelscriptArtifactReference BaseReference{
+					EAngelscriptArtifactReferenceKind::ScriptType,
 					Base.TypeDeclaration.StableKey,
 					Base.TypeDeclaration.SignatureHash};
 				Schema.Relations.Add({
@@ -2258,7 +2519,7 @@ namespace AngelscriptCacheCleanCapture_Private
 					BaseReference, {}});
 			}
 
-			const FAngelscriptCacheStableReference CodeRoot =
+			const FAngelscriptArtifactReference CodeRoot =
 				BuildCodeRootReference(*Class.ClassDesc->CodeSuperClass);
 			Schema.Relations.Add({
 				EAngelscriptCachedTypeRelationKind::ShadowSuper, {}, CodeRoot});
@@ -2520,6 +2781,7 @@ namespace AngelscriptCacheCleanCapture_Private
 		TArray<FClassFunctionCapture> FunctionCaptures;
 		TArray<TSet<const FAngelscriptFunctionDesc*>> MatchedFunctionDescs;
 		MatchedFunctionDescs.SetNum(Classes.Num());
+		TSet<const FAngelscriptFunctionDesc*> MatchedStaticsFunctionDescs;
 		for (asUINT FunctionIndex = 0;
 			FunctionIndex < ScriptModule->scriptFunctions.GetLength(); ++FunctionIndex)
 		{
@@ -2570,14 +2832,21 @@ namespace AngelscriptCacheCleanCapture_Private
 				MapFunctionEntityKind(Function->artifactInvocationKind);
 			const TOptional<EAngelscriptCachedFunctionInvocationKind> InvocationKind =
 				MapCachedFunctionInvocationKind(Function->artifactInvocationKind);
-			if (OwnerClassIndex == INDEX_NONE
+			const bool bGlobalFunction = OwnerType == nullptr
+				&& EntityKind.IsSet()
+				&& EntityKind.GetValue()
+					== EAngelscriptArtifactEntityKind::GlobalFunction
+				&& InvocationKind.IsSet()
+				&& InvocationKind.GetValue()
+					== EAngelscriptCachedFunctionInvocationKind::GlobalFunction;
+			if ((!bGlobalFunction && OwnerClassIndex == INDEX_NONE)
 				|| Function->GetFuncType() != asFUNC_SCRIPT
 				|| Function->scriptData == nullptr
 				|| !EntityKind.IsSet() || !InvocationKind.IsSet()
 				|| Function->scriptData->artifactCanonicalSource.GetLength() == 0)
 			{
 				return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
-					FString::Printf(TEXT("Class-graph function %s has no complete stable type owner/invocation/source authority"), *CanonicalDeclaration));
+					FString::Printf(TEXT("Class-graph function %s has no complete stable module-or-type owner/invocation/source authority"), *CanonicalDeclaration));
 			}
 
 			FAngelscriptStableFunctionKey StableFunctionKey;
@@ -2595,18 +2864,40 @@ namespace AngelscriptCacheCleanCapture_Private
 			Capture.Function = Function;
 			Capture.OwnerClassIndex = OwnerClassIndex;
 			Capture.InvocationKind = InvocationKind.GetValue();
-			for (const TSharedRef<FAngelscriptFunctionDesc>& Candidate
-				: Classes[OwnerClassIndex].ClassDesc->Methods)
+			if (!bGlobalFunction)
 			{
-				if (Candidate->ScriptFunction == Function)
+				for (const TSharedRef<FAngelscriptFunctionDesc>& Candidate
+					: Classes[OwnerClassIndex].ClassDesc->Methods)
 				{
+					if (Candidate->ScriptFunction == Function)
+					{
+						if (Capture.ReflectedFunction != nullptr)
+						{
+							return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+								TEXT("More than one reflected method maps to one class-graph VM function"));
+						}
+						Capture.ReflectedFunction = &Candidate.Get();
+						MatchedFunctionDescs[OwnerClassIndex].Add(
+							Capture.ReflectedFunction);
+					}
+				}
+			}
+			else if (StaticsClass.ClassDesc != nullptr)
+			{
+				for (const TSharedRef<FAngelscriptFunctionDesc>& Candidate
+					: StaticsClass.ClassDesc->Methods)
+				{
+					if (Candidate->ScriptFunction != Function)
+					{
+						continue;
+					}
 					if (Capture.ReflectedFunction != nullptr)
 					{
 						return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
-							TEXT("More than one reflected method maps to one class-graph VM function"));
+							TEXT("More than one reflected module UFunction maps to one global VM function"));
 					}
 					Capture.ReflectedFunction = &Candidate.Get();
-					MatchedFunctionDescs[OwnerClassIndex].Add(Capture.ReflectedFunction);
+					MatchedStaticsFunctionDescs.Add(Capture.ReflectedFunction);
 				}
 			}
 
@@ -2615,8 +2906,12 @@ namespace AngelscriptCacheCleanCapture_Private
 			Declaration.EntityKind = EntityKind.GetValue();
 			Declaration.SchemaCoverage = EAngelscriptCacheSchemaCoverage::Forbidden;
 			Declaration.BodyCoverage = EAngelscriptCacheBodyCoverage::Required;
-			Declaration.OwnerKind = EAngelscriptFunctionOwnerKind::Type;
-			Declaration.OwnerKey = Classes[OwnerClassIndex].TypeDeclaration.StableKey;
+			Declaration.OwnerKind = bGlobalFunction
+				? EAngelscriptFunctionOwnerKind::Module
+				: EAngelscriptFunctionOwnerKind::Type;
+			Declaration.OwnerKey = bGlobalFunction
+				? ModuleKey.Hash
+				: Classes[OwnerClassIndex].TypeDeclaration.StableKey;
 			Declaration.ModuleKey = ModuleKey;
 			Declaration.CanonicalNamespace = UTF8_TO_TCHAR(Function->GetNamespace());
 			Declaration.CanonicalName = FunctionName;
@@ -2736,6 +3031,13 @@ namespace AngelscriptCacheCleanCapture_Private
 					TEXT("A class-graph StaticClass helper or reflected function descriptor could not be classified exactly"));
 			}
 		}
+		if (StaticsClass.ClassDesc != nullptr
+			&& MatchedStaticsFunctionDescs.Num()
+				!= StaticsClass.ClassDesc->Methods.Num())
+		{
+			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+				TEXT("A reflected module UFunction has no matching cacheable global VM function"));
+		}
 		FunctionCaptures.StableSort([](
 			const FClassFunctionCapture& Left,
 			const FClassFunctionCapture& Right)
@@ -2761,8 +3063,8 @@ namespace AngelscriptCacheCleanCapture_Private
 		auto MakeFunctionReference = [](
 			const FClassFunctionCapture& Capture)
 		{
-			return FAngelscriptCacheStableReference{
-				EAngelscriptCacheReferenceKind::ScriptFunction,
+			return FAngelscriptArtifactReference{
+				EAngelscriptArtifactReferenceKind::ScriptFunction,
 				Capture.Declaration.StableKey,
 				Capture.Declaration.SignatureHash};
 		};
@@ -2772,7 +3074,7 @@ namespace AngelscriptCacheCleanCapture_Private
 			FClassCapture& Class = Classes[ClassIndex];
 			FAngelscriptCachedTypeSchema& Schema = Class.TypeSchema;
 			auto AddDeclarationDependency = [&Schema](
-				const FAngelscriptCacheStableReference& Target)
+				const FAngelscriptArtifactReference& Target)
 			{
 				FAngelscriptCacheSemanticDependency Dependency;
 				Dependency.Kind = EAngelscriptCacheSemanticDependencyKind::Declaration;
@@ -3010,6 +3312,86 @@ namespace AngelscriptCacheCleanCapture_Private
 					TEXT("Class-graph type layout hash"), IdentityResult);
 			}
 		}
+		if (StaticsClass.ClassDesc != nullptr)
+		{
+			FAngelscriptCachedTypeSchema& Schema = StaticsClass.TypeSchema;
+			Schema.PayloadSchemaVersion =
+				FAngelscriptCacheTypeSchemaArchive::TypeSchemaPayloadSchemaVersion;
+			Schema.ModuleKey = ModuleKey;
+			Schema.TypeKey = FAngelscriptStableTypeKey{
+				StaticsClass.TypeDeclaration.StableKey};
+			Schema.TypeKind = EAngelscriptCachedTypeKind::Class;
+			Schema.CanonicalNamespace =
+				StaticsClass.TypeDeclaration.CanonicalNamespace;
+			Schema.CanonicalName = StaticsClass.TypeDeclaration.CanonicalName;
+			Schema.CanonicalDeclaration =
+				StaticsClass.TypeDeclaration.CanonicalDeclaration;
+			Schema.TypeSemanticFlags = static_cast<uint32>(
+				EAngelscriptCachedTypeSemanticFlags::Generated)
+				| static_cast<uint32>(
+					EAngelscriptCachedTypeSemanticFlags::ReferenceType);
+			Schema.Metadata = StaticsClass.TypeDeclaration.Metadata;
+			Schema.Layout.SemanticSize = 0;
+			Schema.Layout.SemanticAlignment = 1;
+			Schema.Layout.BasePropertyBoundary = 0;
+			Schema.Reflection.ReflectionKind =
+				EAngelscriptCachedReflectionKind::UClass;
+			Schema.Reflection.ClassReflectionFlags =
+				BuildClassReflectionFlags(*StaticsClass.ClassDesc);
+
+			const FAngelscriptArtifactReference CodeRoot =
+				BuildCodeRootReference(*StaticsClass.ClassDesc->CodeSuperClass);
+			Schema.Relations.Add({
+				EAngelscriptCachedTypeRelationKind::CodeSuper, {}, CodeRoot});
+			Schema.Dependencies.Add({
+				EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi,
+				CodeRoot, {}});
+
+			for (int32 ReflectionIndex = 0;
+				ReflectionIndex < StaticsClass.ClassDesc->Methods.Num();
+				++ReflectionIndex)
+			{
+				const FAngelscriptFunctionDesc& Reflected =
+					StaticsClass.ClassDesc->Methods[ReflectionIndex].Get();
+				FClassFunctionCapture* FunctionCapture = FindFunctionCapture(
+					static_cast<asCScriptFunction*>(Reflected.ScriptFunction));
+				if (FunctionCapture == nullptr
+					|| FunctionCapture->OwnerClassIndex != INDEX_NONE
+					|| FunctionCapture->ReflectedFunction != &Reflected)
+				{
+					return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+						TEXT("A reflected module UFunction is not a cacheable module-global function"));
+				}
+				FAngelscriptCachedReflectedFunctionMember& Member =
+					Schema.Reflection.OrderedUFunctionMembers.AddDefaulted_GetRef();
+				Member.ReflectionOrdinal = static_cast<uint32>(ReflectionIndex);
+				Member.CanonicalFunctionName = Reflected.FunctionName;
+				Member.CanonicalOriginalFunctionName =
+					Reflected.OriginalFunctionName;
+				Member.CanonicalScriptFunctionName =
+					Reflected.ScriptFunctionName;
+				Member.Target = MakeFunctionReference(*FunctionCapture);
+				Schema.Dependencies.AddUnique({
+					EAngelscriptCacheSemanticDependencyKind::Declaration,
+					Member.Target, {}});
+			}
+			Schema.Dependencies.Sort([](
+				const FAngelscriptCacheSemanticDependency& Left,
+				const FAngelscriptCacheSemanticDependency& Right)
+			{
+				return FAngelscriptCacheTypeSchemaArchive::CompareDependencies(
+					Left, Right) < 0;
+			});
+			IdentityResult =
+				FAngelscriptCacheTypeSchemaArchive::ComputeTypeLayoutHash(
+					Schema, Schema.Layout.TypeLayoutHash);
+			if (!IdentityResult.IsSuccess())
+			{
+				return ValidationFailure(
+					EAngelscriptCacheCleanCaptureError::RecordEncodingFailed,
+					TEXT("StaticsClass type layout hash"), IdentityResult);
+			}
+		}
 
 		FAngelscriptCachedModuleInterface ModuleInterface;
 		ModuleInterface.PayloadSchemaVersion =
@@ -3024,6 +3406,15 @@ namespace AngelscriptCacheCleanCapture_Private
 			}
 			ModuleInterface.Declarations.Add(Class.TypeDeclaration);
 			ModuleInterface.Declarations.Append(Class.PropertyDeclarations);
+		}
+		if (StaticsClass.ClassDesc != nullptr)
+		{
+			if (!StaticsClass.TypeDeclaration.CanonicalNamespace.IsEmpty())
+			{
+				ModuleInterface.CanonicalNamespaces.AddUnique(
+					StaticsClass.TypeDeclaration.CanonicalNamespace);
+			}
+			ModuleInterface.Declarations.Add(StaticsClass.TypeDeclaration);
 		}
 		for (const FClassFunctionCapture& Capture : FunctionCaptures)
 		{
@@ -3090,12 +3481,19 @@ namespace AngelscriptCacheCleanCapture_Private
 				return EncodingError;
 			}
 		}
+		if (StaticsClass.ClassDesc != nullptr
+			&& !TrySerializeTypeSchemaRecord(
+				StaticsClass.TypeSchema, StaticsClass.TypeRecord, EncodingError))
+		{
+			return EncodingError;
+		}
 
 		FCleanCaptureBuildDependencyResolver BuildDependencyResolver;
+		BuildDependencyResolver.SetCrossModuleFunctions(CrossModuleFunctions);
 		for (FClassCapture& Class : Classes)
 		{
-			const FAngelscriptCacheStableReference TypeReference{
-				EAngelscriptCacheReferenceKind::ScriptType,
+			const FAngelscriptArtifactReference TypeReference{
+				EAngelscriptArtifactReferenceKind::ScriptType,
 				Class.TypeDeclaration.StableKey,
 				Class.TypeDeclaration.SignatureHash};
 			BuildDependencyResolver.AddType(
@@ -3111,7 +3509,7 @@ namespace AngelscriptCacheCleanCapture_Private
 				BuildDependencyResolver.AddProperty(
 					Class.ScriptType,
 					Class.ScriptType->localProperties[PropertyIndex],
-					{EAngelscriptCacheReferenceKind::ScriptProperty,
+					{EAngelscriptArtifactReferenceKind::ScriptProperty,
 						Class.PropertyDeclarations[PropertyIndex].StableKey,
 						Class.PropertyDeclarations[PropertyIndex].SignatureHash},
 					Class.TypeSchema.OrderedProperties[PropertyIndex].
@@ -3195,17 +3593,22 @@ namespace AngelscriptCacheCleanCapture_Private
 		{
 			BuildDependencyResolver.AddFunction(
 				Capture.Function,
-				{EAngelscriptCacheReferenceKind::ScriptFunction,
+				{EAngelscriptArtifactReferenceKind::ScriptFunction,
 					Capture.Declaration.StableKey,
 					Capture.Declaration.SignatureHash},
 				Capture.Body.Identity.Content.Execution);
 		}
 
 		TArray<FAngelscriptCachedTypeSchema> TypeAuthoritySchemas;
-		TypeAuthoritySchemas.Reserve(Classes.Num());
+		TypeAuthoritySchemas.Reserve(
+			Classes.Num() + (StaticsClass.ClassDesc != nullptr ? 1 : 0));
 		for (const FClassCapture& Class : Classes)
 		{
 			TypeAuthoritySchemas.Add(Class.TypeSchema);
+		}
+		if (StaticsClass.ClassDesc != nullptr)
+		{
+			TypeAuthoritySchemas.Add(StaticsClass.TypeSchema);
 		}
 		TArray<FAngelscriptCachedFunctionBody> FunctionAuthorityBodies;
 		FunctionAuthorityBodies.Reserve(FunctionCaptures.Num());
@@ -3218,9 +3621,9 @@ namespace AngelscriptCacheCleanCapture_Private
 		FunctionAuthorities.TypeSchemas = TypeAuthoritySchemas;
 		FunctionAuthorities.ModuleState = &ModuleState;
 		FunctionAuthorities.FunctionBodies = FunctionAuthorityBodies;
-		FAngelscriptCacheEngineEnvironmentResolver EnvironmentSymbols(
-			*ScriptModule->engine);
-		FunctionAuthorities.ExternalSymbols = &EnvironmentSymbols;
+		FCleanCaptureExternalSymbols ExternalSymbols(
+			*ScriptModule->engine, CrossModuleFunctions);
+		FunctionAuthorities.ExternalSymbols = &ExternalSymbols;
 		uint32 GraphCarriedDependencyFunctionCount = 0;
 		for (FClassFunctionCapture& Capture : FunctionCaptures)
 		{
@@ -3258,7 +3661,8 @@ namespace AngelscriptCacheCleanCapture_Private
 			}
 			Capture.Body.FunctionInputDigest = InputResolution.CurrentInputDigest;
 			FAngelscriptFunctionArtifactCodec ExecutionCodec(
-				*ScriptModule, *ScriptModule->engine);
+				*ScriptModule, *ScriptModule->engine,
+				CrossModuleFunctions);
 			FAngelscriptHash256 EncodedExecutionHash;
 			const FAngelscriptCacheValidationResult ExecutionResult =
 				ExecutionCodec.EncodeExecutionArtifact(
@@ -3308,6 +3712,12 @@ namespace AngelscriptCacheCleanCapture_Private
 			Snapshot.TypeSchemas.Add({
 				Class.TypeSchema.TypeKey, Class.TypeRecord.RecordId});
 		}
+		if (StaticsClass.ClassDesc != nullptr)
+		{
+			Snapshot.TypeSchemas.Add({
+				StaticsClass.TypeSchema.TypeKey,
+				StaticsClass.TypeRecord.RecordId});
+		}
 		Snapshot.TypeSchemas.Sort([](
 			const FAngelscriptCachedTypeSchemaLink& Left,
 			const FAngelscriptCachedTypeSchemaLink& Right)
@@ -3341,12 +3751,18 @@ namespace AngelscriptCacheCleanCapture_Private
 		CandidateArtifacts.SourceIndexRecordId = SourceRecord.RecordId;
 		CandidateArtifacts.ModuleSnapshot = {ModuleKey, SnapshotRecord.RecordId};
 		CandidateArtifacts.Records.Reserve(
-			4 + Classes.Num() + FunctionCaptures.Num() * 2);
+			4 + Classes.Num() + (StaticsClass.ClassDesc != nullptr ? 1 : 0)
+				+ FunctionCaptures.Num() * 2);
 		CandidateArtifacts.Records.Add(MoveTemp(SourceRecord));
 		CandidateArtifacts.Records.Add(MoveTemp(InterfaceRecord));
 		for (FClassCapture& Class : Classes)
 		{
 			CandidateArtifacts.Records.Add(MoveTemp(Class.TypeRecord));
+		}
+		if (StaticsClass.ClassDesc != nullptr)
+		{
+			CandidateArtifacts.Records.Add(
+				MoveTemp(StaticsClass.TypeRecord));
 		}
 		CandidateArtifacts.Records.Add(MoveTemp(StateRecord));
 		for (FClassFunctionCapture& Capture : FunctionCaptures)
@@ -3357,14 +3773,16 @@ namespace AngelscriptCacheCleanCapture_Private
 		CandidateArtifacts.Records.Add(MoveTemp(SnapshotRecord));
 		FAngelscriptCacheCleanCaptureResult Result =
 			ValidateAndPromoteAngelscriptCleanCompiledModuleArtifacts(
-				Module, Options, MoveTemp(CandidateArtifacts), OutArtifacts);
+				Module, Options, MoveTemp(CandidateArtifacts), OutArtifacts,
+				CrossModuleFunctions);
 		if (Result.IsSuccess())
 		{
 			Result.GraphCarriedDependencyFunctionCount =
 				GraphCarriedDependencyFunctionCount;
 			Result.Detail = FString::Printf(
-				TEXT("Captured %d base-before-derived classes and %d stable functions (%u graph-carried dependency sets) as %u graph-validated Cache V2 records"),
-				Classes.Num(), FunctionCaptures.Num(),
+				TEXT("Captured %d base-before-derived VM classes, %d reflection-only StaticsClass descriptor and %d stable functions (%u graph-carried dependency sets) as %u graph-validated Cache V2 records"),
+				Classes.Num(), StaticsClass.ClassDesc != nullptr ? 1 : 0,
+				FunctionCaptures.Num(),
 				GraphCarriedDependencyFunctionCount,
 				Result.ValidatedGraphRecordCount);
 		}
@@ -3379,6 +3797,8 @@ namespace AngelscriptCacheCleanCapture_Private
 		const FAngelscriptStableModuleKey& ModuleKey,
 		const IAngelscriptCacheRestoredFunctionDependencySource*
 			RestoredDependencies,
+		const FAngelscriptCacheCrossModuleFunctionAuthority*
+			CrossModuleFunctions,
 		FAngelscriptCacheCleanModuleArtifacts& OutArtifacts)
 	{
 		asCModule* ScriptModule = Module->ScriptModule;
@@ -3492,7 +3912,7 @@ namespace AngelscriptCacheCleanCapture_Private
 		TypeSchema.Reflection.StaticClassGlobalName =
 			ClassDesc->StaticClassGlobalVariableName;
 
-		const FAngelscriptCacheStableReference CodeRoot =
+		const FAngelscriptArtifactReference CodeRoot =
 			BuildCodeRootReference(*ClassDesc->CodeSuperClass);
 		TypeSchema.Relations.Add({
 			EAngelscriptCachedTypeRelationKind::ShadowSuper, {}, CodeRoot});
@@ -3816,7 +4236,7 @@ namespace AngelscriptCacheCleanCapture_Private
 			HardValue = &ModuleState.HardValues.AddDefaulted_GetRef();
 			HardValue->HardValueKind = EAngelscriptCachedHardValueKind::GlobalConstant;
 			HardValue->Owner = {
-			EAngelscriptCacheReferenceKind::ScriptGlobal,
+			EAngelscriptArtifactReferenceKind::ScriptGlobal,
 			GlobalDeclaration.StableKey,
 			GlobalDeclaration.SignatureHash,
 		};
@@ -4121,15 +4541,15 @@ namespace AngelscriptCacheCleanCapture_Private
 		auto MakeLocalFunctionReference = [](
 			const FRootFunctionCapture& Capture)
 		{
-			return FAngelscriptCacheStableReference{
-				EAngelscriptCacheReferenceKind::ScriptFunction,
+			return FAngelscriptArtifactReference{
+				EAngelscriptArtifactReferenceKind::ScriptFunction,
 				Capture.Declaration.StableKey,
 				Capture.Declaration.SignatureHash,
 			};
 		};
 		auto AddSchemaDependency = [&TypeSchema](
 			const EAngelscriptCacheSemanticDependencyKind Kind,
-			const FAngelscriptCacheStableReference& Target)
+			const FAngelscriptArtifactReference& Target)
 		{
 			FAngelscriptCacheSemanticDependency Dependency;
 			Dependency.Kind = Kind;
@@ -4409,8 +4829,9 @@ namespace AngelscriptCacheCleanCapture_Private
 		}
 
 		FCleanCaptureBuildDependencyResolver BuildDependencyResolver;
-		const FAngelscriptCacheStableReference TypeDeclarationReference{
-			EAngelscriptCacheReferenceKind::ScriptType,
+		BuildDependencyResolver.SetCrossModuleFunctions(CrossModuleFunctions);
+		const FAngelscriptArtifactReference TypeDeclarationReference{
+			EAngelscriptArtifactReferenceKind::ScriptType,
 			TypeDeclaration.StableKey,
 			TypeDeclaration.SignatureHash,
 		};
@@ -4429,7 +4850,7 @@ namespace AngelscriptCacheCleanCapture_Private
 				ScriptType,
 				ScriptType->localProperties[static_cast<asUINT>(PropertyIndex)],
 				{
-					EAngelscriptCacheReferenceKind::ScriptProperty,
+					EAngelscriptArtifactReferenceKind::ScriptProperty,
 					PropertyDeclarations[PropertyIndex].StableKey,
 					PropertyDeclarations[PropertyIndex].SignatureHash,
 				},
@@ -4442,7 +4863,7 @@ namespace AngelscriptCacheCleanCapture_Private
 			BuildDependencyResolver.AddGlobal(
 				UserGlobal,
 				{
-					EAngelscriptCacheReferenceKind::ScriptGlobal,
+					EAngelscriptArtifactReferenceKind::ScriptGlobal,
 					GlobalDeclaration.StableKey,
 					GlobalDeclaration.SignatureHash,
 				},
@@ -4545,7 +4966,7 @@ namespace AngelscriptCacheCleanCapture_Private
 			BuildDependencyResolver.AddFunction(
 				Capture.Function,
 				{
-					EAngelscriptCacheReferenceKind::ScriptFunction,
+					EAngelscriptArtifactReferenceKind::ScriptFunction,
 					Capture.Declaration.StableKey,
 					Capture.Declaration.SignatureHash,
 				},
@@ -4565,9 +4986,9 @@ namespace AngelscriptCacheCleanCapture_Private
 			TConstArrayView<FAngelscriptCachedTypeSchema>(&TypeSchema, 1);
 		FunctionAuthorities.ModuleState = &ModuleState;
 		FunctionAuthorities.FunctionBodies = FunctionAuthorityBodies;
-		FAngelscriptCacheEngineEnvironmentResolver EnvironmentSymbols(
-			*ScriptModule->engine);
-		FunctionAuthorities.ExternalSymbols = &EnvironmentSymbols;
+		FCleanCaptureExternalSymbols ExternalSymbols(
+			*ScriptModule->engine, CrossModuleFunctions);
+		FunctionAuthorities.ExternalSymbols = &ExternalSymbols;
 		uint32 GraphCarriedDependencyFunctionCount = 0;
 		for (FRootFunctionCapture& Capture : FunctionCaptures)
 		{
@@ -4611,7 +5032,8 @@ namespace AngelscriptCacheCleanCapture_Private
 			}
 			Capture.Body.FunctionInputDigest = InputResolution.CurrentInputDigest;
 			FAngelscriptFunctionArtifactCodec ExecutionCodec(
-				*ScriptModule, *ScriptModule->engine);
+				*ScriptModule, *ScriptModule->engine,
+				CrossModuleFunctions);
 			FAngelscriptHash256 EncodedExecutionHash;
 			const FAngelscriptCacheValidationResult ExecutionResult =
 				ExecutionCodec.EncodeExecutionArtifact(
@@ -4702,7 +5124,8 @@ namespace AngelscriptCacheCleanCapture_Private
 		CandidateArtifacts.Records.Add(MoveTemp(SnapshotRecord));
 		FAngelscriptCacheCleanCaptureResult Result =
 			ValidateAndPromoteAngelscriptCleanCompiledModuleArtifacts(
-				Module, Options, MoveTemp(CandidateArtifacts), OutArtifacts);
+				Module, Options, MoveTemp(CandidateArtifacts), OutArtifacts,
+				CrossModuleFunctions);
 		if (Result.IsSuccess())
 		{
 			Result.GraphCarriedDependencyFunctionCount =
@@ -4720,12 +5143,352 @@ namespace AngelscriptCacheCleanCapture_Private
 	}
 }
 
+void FAngelscriptCacheCrossModuleFunctionAuthority::Reset()
+{
+	Entries.Reset();
+}
+
+bool FAngelscriptCacheCrossModuleFunctionAuthority::IsEmpty() const
+{
+	return Entries.IsEmpty();
+}
+
+TOptional<FAngelscriptCacheCurrentSymbol>
+FAngelscriptCacheCrossModuleFunctionAuthority::Resolve(
+	const EAngelscriptArtifactReferenceKind ReferenceKind,
+	const FAngelscriptHash256& StableKey) const
+{
+	if (ReferenceKind != EAngelscriptArtifactReferenceKind::ScriptFunction
+		|| StableKey.IsZero())
+	{
+		return {};
+	}
+	const FEntry* Match = nullptr;
+	for (const FEntry& Entry : Entries)
+	{
+		if (Entry.Reference.StableKey != StableKey)
+		{
+			continue;
+		}
+		if (Match != nullptr
+			&& (Match->Reference.ExpectedAbi != Entry.Reference.ExpectedAbi
+				|| Match->ExecutionContent != Entry.ExecutionContent))
+		{
+			return {};
+		}
+		Match = &Entry;
+	}
+	if (Match == nullptr)
+	{
+		return {};
+	}
+	return FAngelscriptCacheCurrentSymbol{
+		Match->Reference.ExpectedAbi,
+		Match->ExecutionContent,
+		{}};
+}
+
+bool FAngelscriptCacheCrossModuleFunctionAuthority::
+TryResolveExternalScriptFunction(
+	const asCScriptFunction& Function,
+	FAngelscriptArtifactReference& OutReference) const
+{
+	FAngelscriptHash256 IgnoredContent;
+	return TryResolveFunctionDependency(
+		Function, OutReference, IgnoredContent);
+}
+
+bool FAngelscriptCacheCrossModuleFunctionAuthority::
+TryResolveFunctionDependency(
+	const asCScriptFunction& Function,
+	FAngelscriptArtifactReference& OutReference,
+	FAngelscriptHash256& OutExecutionContent) const
+{
+	OutReference = {};
+	OutExecutionContent = {};
+	const FEntry* Match = nullptr;
+	for (const FEntry& Entry : Entries)
+	{
+		if (Entry.Function != &Function)
+		{
+			continue;
+		}
+		if (Match != nullptr
+			&& (Match->Reference != Entry.Reference
+				|| Match->ExecutionContent != Entry.ExecutionContent))
+		{
+			return false;
+		}
+		Match = &Entry;
+	}
+	if (Match == nullptr
+		|| Match->Reference.Kind
+			!= EAngelscriptArtifactReferenceKind::ScriptFunction
+		|| Match->Reference.StableKey.IsZero()
+		|| Match->Reference.ExpectedAbi.IsZero()
+		|| Match->ExecutionContent.IsZero())
+	{
+		return false;
+	}
+	OutReference = Match->Reference;
+	OutExecutionContent = Match->ExecutionContent;
+	return true;
+}
+
+struct FAngelscriptCacheCrossModuleFunctionAuthorityBuilderAccess
+{
+	static void Add(
+		FAngelscriptCacheCrossModuleFunctionAuthority& Authority,
+		const asCScriptFunction& Function,
+		const FAngelscriptArtifactReference& Reference,
+		const FAngelscriptHash256& ExecutionContent)
+	{
+		FAngelscriptCacheCrossModuleFunctionAuthority::FEntry Entry;
+		Entry.Function = &Function;
+		Entry.Reference = Reference;
+		Entry.ExecutionContent = ExecutionContent;
+		Authority.Entries.Add(MoveTemp(Entry));
+	}
+
+	static void Sort(
+		FAngelscriptCacheCrossModuleFunctionAuthority& Authority)
+	{
+		Authority.Entries.Sort([](
+			const FAngelscriptCacheCrossModuleFunctionAuthority::FEntry& Left,
+			const FAngelscriptCacheCrossModuleFunctionAuthority::FEntry& Right)
+		{
+			return Left.Reference.StableKey < Right.Reference.StableKey;
+		});
+	}
+};
+
+FAngelscriptCacheCleanCaptureResult
+BuildAngelscriptCacheCrossModuleFunctionAuthority(
+	const TConstArrayView<TSharedRef<FAngelscriptModuleDesc>> Modules,
+	const FAngelscriptCacheCleanCaptureOptions& Options,
+	FAngelscriptCacheCrossModuleFunctionAuthority& OutAuthority)
+{
+	using namespace AngelscriptCacheCleanCapture_Private;
+	OutAuthority.Reset();
+	if (Modules.IsEmpty() || Options.Profile.Hash.IsZero())
+	{
+		return Failure(EAngelscriptCacheCleanCaptureError::InvalidInput,
+			TEXT("Cross-module function authority requires compiled modules and a Profile"));
+	}
+
+	TArray<const asCScriptFunction*> ForeignTargets;
+	for (const TSharedRef<FAngelscriptModuleDesc>& Module : Modules)
+	{
+		asCModule* ScriptModule = Module->ScriptModule;
+		if (ScriptModule == nullptr || ScriptModule->engine == nullptr)
+		{
+			continue;
+		}
+		for (asUINT FunctionIndex = 0;
+			FunctionIndex < ScriptModule->scriptFunctions.GetLength();
+			++FunctionIndex)
+		{
+			const asCScriptFunction* Function =
+				ScriptModule->scriptFunctions[FunctionIndex];
+			if (Function == nullptr || Function->module != ScriptModule
+				|| Function->scriptData == nullptr)
+			{
+				continue;
+			}
+			for (asUINT DependencyIndex = 0;
+				DependencyIndex
+					< Function->scriptData->artifactDependencies.GetLength();
+				++DependencyIndex)
+			{
+				const asSBuildArtifactDependency& Dependency =
+					Function->scriptData->artifactDependencies[DependencyIndex];
+				if (Dependency.referenceKind
+						!= asBUILD_ARTIFACT_REFERENCE_FUNCTION
+					|| Dependency.function == nullptr
+					|| Dependency.function->module == nullptr
+					|| Dependency.function->module == ScriptModule)
+				{
+					continue;
+				}
+				ForeignTargets.AddUnique(Dependency.function);
+			}
+		}
+	}
+
+	struct FOwnerAuthority
+	{
+		// An unchanged module may still point at the predecessor VM module that
+		// was discarded when another module was hot reloaded. Keep that source
+		// pointer solely as a transaction-local lookup key; all published
+		// authority comes from the current module descriptor below.
+		const asCModule* DependencyModule = nullptr;
+		TSharedPtr<FAngelscriptModuleDesc> Module;
+		FAngelscriptStableModuleKey ModuleKey;
+		FAngelscriptCacheCurrentModuleAuthority Authority;
+	};
+	TArray<FOwnerAuthority> OwnerAuthorities;
+	for (const asCScriptFunction* Target : ForeignTargets)
+	{
+		TSharedPtr<FAngelscriptModuleDesc> OwnerModule;
+		const FString TargetModuleName = UTF8_TO_TCHAR(
+			Target->module->baseModuleName.AddressOf());
+		for (const TSharedRef<FAngelscriptModuleDesc>& Candidate : Modules)
+		{
+			const bool bExactLiveModule =
+				Candidate->ScriptModule == Target->module;
+			const bool bCurrentSuccessorModule =
+				!bExactLiveModule
+				&& Candidate->ModuleName.Equals(
+					TargetModuleName, ESearchCase::CaseSensitive);
+			if (bExactLiveModule || bCurrentSuccessorModule)
+			{
+				if (OwnerModule.IsValid())
+				{
+					return Failure(
+						EAngelscriptCacheCleanCaptureError::NotCacheable,
+						TEXT("A foreign script function maps to more than one compiled module descriptor"));
+				}
+				OwnerModule = Candidate;
+			}
+		}
+		if (!OwnerModule.IsValid())
+		{
+			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+				TEXT("A referenced foreign script function is outside the successful compile transaction"));
+		}
+
+		FOwnerAuthority* Owner = OwnerAuthorities.FindByPredicate(
+			[Target](const FOwnerAuthority& Candidate)
+			{
+				return Candidate.DependencyModule == Target->module;
+			});
+		if (Owner == nullptr)
+		{
+			FOwnerAuthority& NewOwner = OwnerAuthorities.AddDefaulted_GetRef();
+			NewOwner.DependencyModule = Target->module;
+			NewOwner.Module = OwnerModule;
+			FString ModuleKeyFailure;
+			if (!FAngelscriptCacheStableSymbolIdentity::TryBuildModuleKey(
+					*OwnerModule, NewOwner.ModuleKey, &ModuleKeyFailure))
+			{
+				return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+					FString::Printf(
+						TEXT("Foreign function module identity failed: %s"),
+						*ModuleKeyFailure));
+			}
+			const FAngelscriptCacheCleanCaptureResult AuthorityResult =
+				BuildAngelscriptCacheCurrentModuleAuthority(
+					OwnerModule.ToSharedRef(), Options, NewOwner.ModuleKey,
+					NewOwner.Authority);
+			if (!AuthorityResult.IsSuccess())
+			{
+				return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+					FString::Printf(
+						TEXT("Foreign function authority rejected module %s: %s"),
+						*OwnerModule->ModuleName, *AuthorityResult.Detail));
+			}
+			Owner = &NewOwner;
+		}
+
+		const FAngelscriptCacheCurrentFunctionAuthority* FunctionAuthority =
+			Owner->Authority.Functions.FindByPredicate(
+				[Target](
+					const FAngelscriptCacheCurrentFunctionAuthority& Candidate)
+				{
+					return Candidate.Function == Target;
+				});
+		if (FunctionAuthority == nullptr)
+		{
+			// Hot reload swaps the changed owner module but leaves bytecode in
+			// unchanged consumers pointing at the predecessor function object.
+			// Rebuild that predecessor's stable key under the current module key,
+			// then resolve it against the current successor declaration authority.
+			// A signature/owner change intentionally finds no match and remains
+			// non-cacheable.
+			FAngelscriptStableFunctionKey DependencyFunctionKey;
+			FString FunctionKeyFailure;
+			if (!FAngelscriptCacheStableSymbolIdentity::TryBuildFunctionKey(
+					Owner->ModuleKey,
+					*Target,
+					DependencyFunctionKey,
+					&FunctionKeyFailure))
+			{
+				return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+					FString::Printf(
+						TEXT("A predecessor foreign script function has no stable current key: %s"),
+						*FunctionKeyFailure));
+			}
+			FunctionAuthority = Owner->Authority.Functions.FindByPredicate(
+				[&DependencyFunctionKey](
+					const FAngelscriptCacheCurrentFunctionAuthority& Candidate)
+				{
+					return Candidate.Declaration.StableKey
+						== DependencyFunctionKey.Hash;
+				});
+		}
+		if (FunctionAuthority == nullptr
+			|| FunctionAuthority->Declaration.StableKey.IsZero()
+			|| FunctionAuthority->Declaration.SignatureHash.IsZero()
+			|| FunctionAuthority->Function == nullptr)
+		{
+			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+				TEXT("A foreign script function has no stable current declaration authority"));
+		}
+
+		FFunctionArtifactStream ExecutionStream;
+		const asCScriptFunction* CurrentTarget = FunctionAuthority->Function;
+		asCWriter Writer(CurrentTarget->module, &ExecutionStream,
+			CurrentTarget->module->engine, true);
+		const int WriteResult = Writer.WriteFunctionArtifact(
+			const_cast<asCScriptFunction*>(CurrentTarget));
+		if (WriteResult < 0 || ExecutionStream.Bytes.IsEmpty())
+		{
+			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+				FString::Printf(
+					TEXT("Foreign function artifact prepass failed for %s with %d"),
+					UTF8_TO_TCHAR(CurrentTarget->GetDeclaration(false, false, false)),
+					WriteResult));
+		}
+
+		FAngelscriptArtifactReference Reference;
+		Reference.Kind =
+			EAngelscriptArtifactReferenceKind::ScriptFunction;
+		Reference.StableKey =
+			FunctionAuthority->Declaration.StableKey;
+		Reference.ExpectedAbi =
+			FunctionAuthority->Declaration.SignatureHash;
+		const FAngelscriptHash256 ExecutionContent =
+			FAngelscriptArtifactIdentityBuilder::BuildFunctionContentHash(
+				ExecutionStream.Bytes, {}).Execution;
+		FAngelscriptCacheCrossModuleFunctionAuthorityBuilderAccess::Add(
+			OutAuthority, *Target, Reference, ExecutionContent);
+		if (CurrentTarget != Target)
+		{
+			// The compiler dependency table can retain the predecessor pointer
+			// while reference-updated bytecode already names the successor. Both
+			// are transaction-local aliases for exactly one stable authority.
+			FAngelscriptCacheCrossModuleFunctionAuthorityBuilderAccess::Add(
+				OutAuthority, *CurrentTarget, Reference, ExecutionContent);
+		}
+	}
+	FAngelscriptCacheCrossModuleFunctionAuthorityBuilderAccess::Sort(
+		OutAuthority);
+
+	FAngelscriptCacheCleanCaptureResult Result;
+	Result.Detail = FString::Printf(
+		TEXT("Prepared %d cross-module script function authorities"),
+		ForeignTargets.Num());
+	return Result;
+}
+
 FAngelscriptCacheCleanCaptureResult
 ValidateAndPromoteAngelscriptCleanCompiledModuleArtifacts(
 	const TSharedRef<FAngelscriptModuleDesc>& Module,
 	const FAngelscriptCacheCleanCaptureOptions& Options,
 	FAngelscriptCacheCleanModuleArtifacts CandidateArtifacts,
-	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts)
+	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts,
+	const FAngelscriptCacheCrossModuleFunctionAuthority*
+		CrossModuleFunctions)
 {
 	using namespace AngelscriptCacheCleanCapture_Private;
 
@@ -4733,13 +5496,17 @@ ValidateAndPromoteAngelscriptCleanCompiledModuleArtifacts(
 	uint32 ValidatedGraphRecordCount = 0;
 	TArray<FAngelscriptFunctionArtifactIdentity>
 		ValidatedFunctionArtifactIdentities;
+	TArray<FAngelscriptFunctionArtifactReferenceSet>
+		ValidatedFunctionArtifactReferenceSets;
 	FAngelscriptCacheCleanCaptureResult Result;
 	if (!TryValidateCapturedGraph(
 		*Module,
 		Options,
 		CandidateArtifacts,
+		CrossModuleFunctions,
 		ValidatedGraphRecordCount,
 		ValidatedFunctionArtifactIdentities,
+		ValidatedFunctionArtifactReferenceSets,
 		Result))
 	{
 		return Result;
@@ -4748,6 +5515,8 @@ ValidateAndPromoteAngelscriptCleanCompiledModuleArtifacts(
 	OutArtifacts = MoveTemp(CandidateArtifacts);
 	OutArtifacts.ValidatedFunctionArtifactIdentities =
 		MoveTemp(ValidatedFunctionArtifactIdentities);
+	OutArtifacts.ValidatedFunctionArtifactReferenceSets =
+		MoveTemp(ValidatedFunctionArtifactReferenceSets);
 	Result.ValidatedGraphRecordCount = ValidatedGraphRecordCount;
 	Result.Detail = FString::Printf(
 		TEXT("Validated and promoted module %s as %u pointer-free Cache V2 records"),
@@ -4762,7 +5531,9 @@ OpenAngelscriptValidatedModuleGraphFromCleanArtifacts(
 	const FAngelscriptCacheCleanModuleArtifacts& Artifacts,
 	const FAngelscriptCacheReadLimits& Limits,
 	FAngelscriptCacheReadBudget& Budget,
-	FAngelscriptValidatedModuleGraph& OutGraph)
+	FAngelscriptValidatedModuleGraph& OutGraph,
+	const FAngelscriptCacheCrossModuleFunctionAuthority*
+		CrossModuleFunctions)
 {
 	using namespace AngelscriptCacheCleanCapture_Private;
 	FAngelscriptCacheCleanCaptureResult Result;
@@ -4770,6 +5541,7 @@ OpenAngelscriptValidatedModuleGraphFromCleanArtifacts(
 		*Module,
 		Options,
 		Artifacts,
+		CrossModuleFunctions,
 		Limits,
 		Budget,
 		OutGraph,
@@ -4792,6 +5564,8 @@ CaptureAngelscriptCleanCompiledModuleImpl(
 	const FAngelscriptCachedSourceIndex* AuthoritativeSourceIndex,
 	const IAngelscriptCacheRestoredFunctionDependencySource*
 		RestoredDependencies,
+	const FAngelscriptCacheCrossModuleFunctionAuthority*
+		CrossModuleFunctions,
 	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts)
 {
 	using namespace AngelscriptCacheCleanCapture_Private;
@@ -5051,13 +5825,15 @@ CaptureAngelscriptCleanCompiledModuleImpl(
 	{
 		return CaptureRootClassPrimitiveVertical(
 			Module, Options, SourceIndex, SourceFile,
-			ModuleKey.GetValue(), RestoredDependencies, OutArtifacts);
+			ModuleKey.GetValue(), RestoredDependencies,
+			CrossModuleFunctions, OutArtifacts);
 	}
 	if (bClassGraphPrimitiveVertical)
 	{
 		return CaptureClassGraphPrimitiveVertical(
 			Module, Options, SourceIndex, SourceFile,
-			ModuleKey.GetValue(), RestoredDependencies, OutArtifacts);
+			ModuleKey.GetValue(), RestoredDependencies,
+			CrossModuleFunctions, OutArtifacts);
 	}
 
 	asCModule* ScriptModule = Module->ScriptModule;
@@ -5127,12 +5903,13 @@ CaptureAngelscriptCleanCompiledModuleImpl(
 	}
 
 	FCleanCaptureBuildDependencyResolver BuildDependencyResolver;
+	BuildDependencyResolver.SetCrossModuleFunctions(CrossModuleFunctions);
 	for (const FFunctionCapture& Capture : FunctionCaptures)
 	{
 		BuildDependencyResolver.AddFunction(
 			Capture.Function,
 			{
-				EAngelscriptCacheReferenceKind::ScriptFunction,
+				EAngelscriptArtifactReferenceKind::ScriptFunction,
 				Capture.Declaration.StableKey,
 				Capture.Declaration.SignatureHash,
 			});
@@ -5269,9 +6046,9 @@ CaptureAngelscriptCleanCompiledModuleImpl(
 					&TypeSchema.GetValue(), 1);
 		}
 		FunctionAuthorities.ModuleState = &ModuleState;
-		FAngelscriptCacheEngineEnvironmentResolver EnvironmentSymbols(
-			*ScriptModule->engine);
-		FunctionAuthorities.ExternalSymbols = &EnvironmentSymbols;
+		FCleanCaptureExternalSymbols ExternalSymbols(
+			*ScriptModule->engine, CrossModuleFunctions);
+		FunctionAuthorities.ExternalSymbols = &ExternalSymbols;
 		const FAngelscriptCacheFunctionInputResolution InputResolution =
 			FAngelscriptCacheCompilerBridge::ResolveCurrentFunctionInput(
 				Capture.Body,
@@ -5299,7 +6076,8 @@ CaptureAngelscriptCleanCompiledModuleImpl(
 		Capture.Body.VmExecutionCodecVersion =
 			FAngelscriptFunctionArtifactCodec::ExecutionCodecVersion;
 		FAngelscriptFunctionArtifactCodec ExecutionCodec(
-			*ScriptModule, *ScriptModule->engine);
+			*ScriptModule, *ScriptModule->engine,
+			CrossModuleFunctions);
 		FAngelscriptHash256 EncodedExecutionHash;
 		const FAngelscriptCacheValidationResult ExecutionResult =
 			ExecutionCodec.EncodeExecutionArtifact(
@@ -5310,9 +6088,17 @@ CaptureAngelscriptCleanCompiledModuleImpl(
 				EncodedExecutionHash);
 		if (!ExecutionResult.IsSuccess())
 		{
+			FString ExecutionDetail =
+				TEXT("Function stable execution envelope");
+			if (!ExecutionCodec.GetLastExecutionFailureDetail().IsEmpty())
+			{
+				ExecutionDetail += TEXT(": ");
+				ExecutionDetail +=
+					ExecutionCodec.GetLastExecutionFailureDetail();
+			}
 			return ValidationFailure(
 				EAngelscriptCacheCleanCaptureError::FunctionArtifactFailed,
-				TEXT("Function stable execution envelope"),
+				*ExecutionDetail,
 				ExecutionResult);
 		}
 		Capture.Body.DebugSidecar = Capture.DebugRecord.RecordId;
@@ -5388,7 +6174,8 @@ CaptureAngelscriptCleanCompiledModuleImpl(
 
 	FAngelscriptCacheCleanCaptureResult Result =
 		ValidateAndPromoteAngelscriptCleanCompiledModuleArtifacts(
-			Module, Options, MoveTemp(CandidateArtifacts), OutArtifacts);
+			Module, Options, MoveTemp(CandidateArtifacts), OutArtifacts,
+			CrossModuleFunctions);
 	if (!Result.IsSuccess())
 	{
 		return Result;
@@ -5410,7 +6197,174 @@ FAngelscriptCacheCleanCaptureResult CaptureAngelscriptCleanCompiledModule(
 	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts)
 {
 	return CaptureAngelscriptCleanCompiledModuleImpl(
-		Module, Options, nullptr, nullptr, OutArtifacts);
+		Module, Options, nullptr, nullptr, nullptr, OutArtifacts);
+}
+
+FAngelscriptCacheCleanCaptureResult
+CaptureAngelscriptCurrentModuleFunctionArtifactsForDiagnostics(
+	const TSharedRef<FAngelscriptModuleDesc>& Module,
+	const FAngelscriptCacheCleanCaptureOptions& Options,
+	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts)
+{
+	using namespace AngelscriptCacheCleanCapture_Private;
+
+	OutArtifacts.Reset();
+	if (Options.Profile.Hash.IsZero() || Module->ScriptModule == nullptr
+		|| Module->bCompileError || Module->ModuleName.IsEmpty())
+	{
+		return Failure(EAngelscriptCacheCleanCaptureError::InvalidInput,
+			TEXT("Diagnostic function-artifact capture requires a successful current module and Profile"));
+	}
+
+	FAngelscriptStableModuleKey ModuleKey;
+	FString ModuleKeyFailure;
+	if (!FAngelscriptCacheStableSymbolIdentity::TryBuildModuleKey(
+		*Module, ModuleKey, &ModuleKeyFailure))
+	{
+		return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+			FString::Printf(TEXT("Diagnostic module identity failed: %s"),
+				*ModuleKeyFailure));
+	}
+
+	FAngelscriptCacheCurrentModuleAuthority CurrentAuthority;
+	const FAngelscriptCacheCleanCaptureResult AuthorityResult =
+		BuildAngelscriptCacheCurrentModuleAuthority(
+			Module, Options, ModuleKey, CurrentAuthority);
+	if (!AuthorityResult.IsSuccess())
+	{
+		return AuthorityResult;
+	}
+
+	FCleanCaptureBuildDependencyResolver DependencyResolver;
+	for (const FAngelscriptCacheCurrentFunctionAuthority& FunctionAuthority
+		: CurrentAuthority.Functions)
+	{
+		if (FunctionAuthority.Function == nullptr
+			|| FunctionAuthority.Declaration.StableKey.IsZero()
+			|| FunctionAuthority.Declaration.SignatureHash.IsZero())
+		{
+			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+				TEXT("Diagnostic function authority was incomplete"));
+		}
+		DependencyResolver.AddFunction(
+			FunctionAuthority.Function,
+			{
+				EAngelscriptArtifactReferenceKind::ScriptFunction,
+				FunctionAuthority.Declaration.StableKey,
+				FunctionAuthority.Declaration.SignatureHash,
+			});
+	}
+
+	asCModule* const ScriptModule = Module->ScriptModule;
+	for (const FAngelscriptCacheCurrentFunctionAuthority& FunctionAuthority
+		: CurrentAuthority.Functions)
+	{
+		asCScriptFunction* const Function = FunctionAuthority.Function;
+		if (Function == nullptr || Function->scriptData == nullptr
+			|| Function->scriptData->artifactCanonicalSource.GetLength() == 0)
+		{
+			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+				TEXT("Diagnostic function capture requires retained canonical token slices"));
+		}
+
+		FFunctionArtifactStream ExecutionStream;
+		asCWriter FunctionWriter(
+			ScriptModule, &ExecutionStream, ScriptModule->engine, true);
+		const int FunctionArtifactResult =
+			FunctionWriter.WriteFunctionArtifact(Function);
+		if (FunctionArtifactResult < 0 || ExecutionStream.Bytes.IsEmpty())
+		{
+			return Failure(
+				EAngelscriptCacheCleanCaptureError::FunctionArtifactFailed,
+				FString::Printf(
+					TEXT("Diagnostic function artifact writer failed for %s with %d"),
+					*FunctionAuthority.Declaration.CanonicalDeclaration,
+					FunctionArtifactResult));
+		}
+
+		const FAngelscriptStableFunctionKey FunctionKey{
+			FunctionAuthority.Declaration.StableKey};
+		TArray<FAngelscriptCacheSemanticDependency> ActualDependencies;
+		bool bUsedGraphCarriedDependencies = false;
+		const FAngelscriptCacheValidationResult DependencyResult =
+			CaptureActualDependencies(
+				*Function, DependencyResolver, ModuleKey, FunctionKey,
+				nullptr, ActualDependencies,
+				bUsedGraphCarriedDependencies);
+		if (!DependencyResult.IsSuccess())
+		{
+			return ValidationFailure(
+				EAngelscriptCacheCleanCaptureError::NotCacheable,
+				TEXT("Diagnostic function dependency capture"),
+				DependencyResult);
+		}
+
+		FAngelscriptFunctionArtifactCodec ExecutionCodec(
+			*ScriptModule, *ScriptModule->engine, nullptr);
+		TArray<uint8> CanonicalExecutionPayload;
+		FAngelscriptHash256 ExecutionHash;
+		const FAngelscriptCacheValidationResult ExecutionResult =
+			ExecutionCodec.EncodeExecutionArtifact(
+				ExecutionStream.Bytes, ModuleKey, ActualDependencies,
+				CanonicalExecutionPayload, ExecutionHash);
+		if (!ExecutionResult.IsSuccess())
+		{
+			return ValidationFailure(
+				EAngelscriptCacheCleanCaptureError::FunctionArtifactFailed,
+				TEXT("Diagnostic function stable execution envelope"),
+				ExecutionResult);
+		}
+
+		const asCString& CanonicalSource =
+			Function->scriptData->artifactCanonicalSource;
+		TArray<uint8> CanonicalDebugPayload;
+		CanonicalDebugPayload.Append(
+			reinterpret_cast<const uint8*>(CanonicalSource.AddressOf()),
+			static_cast<int32>(CanonicalSource.GetLength()));
+		const FAngelscriptFunctionContentHash ContentHash =
+			FAngelscriptArtifactIdentityBuilder::BuildFunctionContentHash(
+				CanonicalExecutionPayload, CanonicalDebugPayload);
+
+		FAngelscriptFunctionArtifactIdentity& Identity =
+			OutArtifacts.ValidatedFunctionArtifactIdentities.
+				AddDefaulted_GetRef();
+		Identity.FunctionKey = FunctionKey;
+		Identity.Content.Execution = ExecutionHash;
+		Identity.Content.Debug = ContentHash.Debug;
+		Identity.Profile = Options.Profile;
+
+		FAngelscriptFunctionArtifactReferenceSet& ReferenceSet =
+			OutArtifacts.ValidatedFunctionArtifactReferenceSets.
+				AddDefaulted_GetRef();
+		ReferenceSet.FunctionKey = FunctionKey;
+		for (const FAngelscriptCacheSemanticDependency& Dependency
+			: ActualDependencies)
+		{
+			ReferenceSet.RequiredReferences.AddUnique(Dependency.Target);
+		}
+		ReferenceSet.RequiredReferences.Sort();
+	}
+
+	OutArtifacts.ModuleKey = ModuleKey;
+	OutArtifacts.CanonicalModuleName = Module->ModuleName;
+	OutArtifacts.ValidatedFunctionArtifactIdentities.Sort([](
+		const FAngelscriptFunctionArtifactIdentity& Left,
+		const FAngelscriptFunctionArtifactIdentity& Right)
+	{
+		return Left.FunctionKey.Hash < Right.FunctionKey.Hash;
+	});
+	OutArtifacts.ValidatedFunctionArtifactReferenceSets.Sort([](
+		const FAngelscriptFunctionArtifactReferenceSet& Left,
+		const FAngelscriptFunctionArtifactReferenceSet& Right)
+	{
+		return Left.FunctionKey.Hash < Right.FunctionKey.Hash;
+	});
+
+	FAngelscriptCacheCleanCaptureResult Result;
+	Result.Detail = FString::Printf(
+		TEXT("Captured %d current function identities for Provider diagnostics"),
+		OutArtifacts.ValidatedFunctionArtifactIdentities.Num());
+	return Result;
 }
 
 FAngelscriptCacheCleanCaptureResult CaptureAngelscriptCleanCompiledModule(
@@ -5420,7 +6374,8 @@ FAngelscriptCacheCleanCaptureResult CaptureAngelscriptCleanCompiledModule(
 	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts)
 {
 	return CaptureAngelscriptCleanCompiledModuleImpl(
-		Module, Options, &AuthoritativeSourceIndex, nullptr, OutArtifacts);
+		Module, Options, &AuthoritativeSourceIndex, nullptr, nullptr,
+		OutArtifacts);
 }
 
 FAngelscriptCacheCleanCaptureResult CaptureAngelscriptCleanCompiledModule(
@@ -5433,7 +6388,22 @@ FAngelscriptCacheCleanCaptureResult CaptureAngelscriptCleanCompiledModule(
 {
 	return CaptureAngelscriptCleanCompiledModuleImpl(
 		Module, Options, &AuthoritativeSourceIndex, RestoredDependencies,
-		OutArtifacts);
+		nullptr, OutArtifacts);
+}
+
+FAngelscriptCacheCleanCaptureResult CaptureAngelscriptCleanCompiledModule(
+	const TSharedRef<FAngelscriptModuleDesc>& Module,
+	const FAngelscriptCacheCleanCaptureOptions& Options,
+	const FAngelscriptCachedSourceIndex& AuthoritativeSourceIndex,
+	const IAngelscriptCacheRestoredFunctionDependencySource*
+		RestoredDependencies,
+	const FAngelscriptCacheCrossModuleFunctionAuthority*
+		CrossModuleFunctions,
+	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts)
+{
+	return CaptureAngelscriptCleanCompiledModuleImpl(
+		Module, Options, &AuthoritativeSourceIndex, RestoredDependencies,
+		CrossModuleFunctions, OutArtifacts);
 }
 
 FAngelscriptCacheCleanCaptureResult PrepareAngelscriptCacheColdGeneration(

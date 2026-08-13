@@ -1,5 +1,6 @@
 #include "Cache/AngelscriptCacheRestore.h"
 #include "Cache/AngelscriptCacheDiagnostics.h"
+#include "Cache/AngelscriptCacheEnvironment.h"
 #include "Cache/AngelscriptCacheService.h"
 
 #include "AngelscriptEngine.h"
@@ -11,6 +12,8 @@
 #include "Shared/AngelscriptTestEngineAcquisition.h"
 
 #include "angelscript.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS
 
@@ -79,13 +82,13 @@ namespace AngelscriptCacheFunctionRouteSnapshotTests_Private
 		return CreateScriptScanFreeFullEngineForTesting(Config, Dependencies);
 	}
 
-	static const FAngelscriptCacheLiveFunctionRoute* FindRoute(
-		const FAngelscriptCacheFunctionRouteSnapshot& Snapshot,
+	static const FAngelscriptFunctionRoute* FindRoute(
+		const FAngelscriptFunctionRouteSnapshot& Snapshot,
 		const FString& CanonicalDeclaration)
 	{
 		return Snapshot.FunctionRoutes.FindByPredicate(
 			[&CanonicalDeclaration](
-				const FAngelscriptCacheLiveFunctionRoute& Route)
+				const FAngelscriptFunctionRoute& Route)
 			{
 				return Route.CanonicalDeclaration == CanonicalDeclaration;
 			});
@@ -122,9 +125,50 @@ namespace AngelscriptCacheFunctionRouteSnapshotTests_Private
 		Context->Release();
 		return bSuccess;
 	}
+
+	static bool ConsumeOneFunctionId(FAngelscriptEngine& Engine)
+	{
+		asIScriptModule* const PaddingModule =
+			Engine.GetScriptEngine()->GetModule(
+				"NeutralRouteFunctionIdPadding", asGM_ALWAYS_CREATE);
+		if (PaddingModule == nullptr)
+		{
+			return false;
+		}
+		static constexpr const char* PaddingSource =
+			"int ConsumeFunctionId() { return 1; }";
+		return PaddingModule->AddScriptSection(
+				"NeutralRouteFunctionIdPadding", PaddingSource) >= 0
+			&& PaddingModule->Build() >= 0;
+	}
+
+	static bool FindEnvironmentFunctionReference(
+		FAngelscriptEngine& Engine,
+		FAngelscriptArtifactReference& OutReference,
+		asCScriptFunction*& OutFunction)
+	{
+		OutReference = {};
+		OutFunction = nullptr;
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.GetScriptEngine());
+		for (asUINT Index = 0;
+			Index < ScriptEngine->scriptFunctions.GetLength(); ++Index)
+		{
+			asCScriptFunction* const Function =
+				ScriptEngine->scriptFunctions[Index];
+			if (Function != nullptr && Function->module == nullptr
+				&& FAngelscriptCacheEnvironmentIdentity::
+					TryBuildFunctionReference(*Function, OutReference))
+			{
+				OutFunction = Function;
+				return true;
+			}
+		}
+		return false;
+	}
 }
 
-TEST_CLASS_WITH_FLAGS(FAngelscriptCacheFunctionRouteSnapshotTests,
+TEST_CLASS_WITH_FLAGS(FAngelscriptFunctionRouteSnapshotTests,
 	"Angelscript.TestModule.Cache.FunctionRouteSnapshot",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
@@ -151,11 +195,11 @@ int ReadFunctionRouteValue()
 		Engine->GetCacheService()->ConfigureDecisionTrace(true, 64);
 		Engine->InitialCompile();
 
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> Snapshot = Engine->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
-		ASSERT_THAT(IsTrue(Snapshot->PublicationOrdinal > 0));
-		const FAngelscriptCacheLiveFunctionRoute* Route = FindRoute(
+		ASSERT_THAT(IsTrue(Snapshot->Generation.IsValid()));
+		const FAngelscriptFunctionRoute* Route = FindRoute(
 			*Snapshot, TEXT("int ReadFunctionRouteValue()"));
 		ASSERT_THAT(IsNotNull(Route));
 		ASSERT_THAT(IsFalse(Route->Identity.FunctionKey.Hash.IsZero()));
@@ -164,7 +208,7 @@ int ReadFunctionRouteValue()
 		ASSERT_THAT(IsFalse(Route->Identity.Content.Debug.IsZero()));
 		ASSERT_THAT(IsFalse(Route->Identity.Profile.Hash.IsZero()));
 		ASSERT_THAT(AreEqual(
-			EAngelscriptCacheFunctionExecutionRoute::Vm,
+			EAngelscriptFunctionExecutionRoute::Vm,
 			Route->SelectedExecutionRoute));
 		ASSERT_THAT(IsNotNull(Route->Function));
 		ASSERT_THAT(AreEqual(
@@ -192,7 +236,7 @@ int ReadFunctionRouteValue()
 			EAngelscriptCacheDecisionReasonDomain::StableRoute,
 			RouteEvent->ReasonDomain));
 		ASSERT_THAT(AreEqual(
-			static_cast<uint32>(EAngelscriptCacheFunctionExecutionRoute::Vm),
+			static_cast<uint32>(EAngelscriptFunctionExecutionRoute::Vm),
 			RouteEvent->ReasonCode));
 		ASSERT_THAT(IsTrue(RouteEvent->CurrentCoordinate.IsSet()));
 		ASSERT_THAT(IsTrue(RouteEvent->CurrentCoordinate.GetValue()
@@ -221,10 +265,10 @@ int ReadFunctionRouteValue()
 		ASSERT_THAT(IsNotNull(Engine.Get()));
 		FAngelscriptEngineScope Scope(*Engine);
 		Engine->InitialCompile();
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> Before = Engine->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(Before.IsValid()));
-		const FAngelscriptCacheLiveFunctionRoute* BeforeRoute = FindRoute(
+		const FAngelscriptFunctionRoute* BeforeRoute = FindRoute(
 			*Before, TEXT("int ReadFunctionRouteValue()"));
 		ASSERT_THAT(IsNotNull(BeforeRoute));
 		const FAngelscriptStableFunctionKey StableKey =
@@ -251,13 +295,13 @@ int ReadFunctionRouteValue()
 			ForceCleanAngelscriptCache(Engine.Get(), TEXT("FunctionRoute"));
 		ASSERT_THAT(IsTrue(Reload.IsSuccess()));
 
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> After = Engine->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(After.IsValid()));
 		ASSERT_THAT(IsTrue(After != Before));
 		ASSERT_THAT(IsTrue(
-			After->PublicationOrdinal > Before->PublicationOrdinal));
-		const FAngelscriptCacheLiveFunctionRoute* AfterRoute = FindRoute(
+			Before->Generation < After->Generation));
+		const FAngelscriptFunctionRoute* AfterRoute = FindRoute(
 			*After, TEXT("int ReadFunctionRouteValue()"));
 		ASSERT_THAT(IsNotNull(AfterRoute));
 		ASSERT_THAT(IsTrue(AfterRoute->Identity.FunctionKey == StableKey));
@@ -298,7 +342,7 @@ int ReadFunctionRouteValue()
 		ASSERT_THAT(IsNotNull(Engine.Get()));
 		FAngelscriptEngineScope Scope(*Engine);
 		Engine->InitialCompile();
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> Before = Engine->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(Before.IsValid()));
 
@@ -321,7 +365,7 @@ int ReadFunctionRouteValue(
 			ForceCleanAngelscriptCache(Engine.Get(), TEXT("FunctionRoute"));
 		ASSERT_THAT(IsFalse(Reload.IsSuccess()));
 
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> After = Engine->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(After == Before));
 		int32 Value = 0;
@@ -357,18 +401,18 @@ int ReadFunctionRouteValue()
 			EngineB->InitialCompile();
 		}
 
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> SnapshotA =
 			EngineA->GetFunctionRouteSnapshot();
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> SnapshotB =
 			EngineB->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(SnapshotA.IsValid()));
 		ASSERT_THAT(IsTrue(SnapshotB.IsValid()));
 		ASSERT_THAT(IsTrue(SnapshotA != SnapshotB));
-		const FAngelscriptCacheLiveFunctionRoute* RouteA = FindRoute(
+		const FAngelscriptFunctionRoute* RouteA = FindRoute(
 			*SnapshotA, TEXT("int ReadFunctionRouteValue()"));
-		const FAngelscriptCacheLiveFunctionRoute* RouteB = FindRoute(
+		const FAngelscriptFunctionRoute* RouteB = FindRoute(
 			*SnapshotB, TEXT("int ReadFunctionRouteValue()"));
 		ASSERT_THAT(IsNotNull(RouteA));
 		ASSERT_THAT(IsNotNull(RouteB));
@@ -383,6 +427,82 @@ int ReadFunctionRouteValue()
 			RouteA->NumericFunctionId) == RouteA->Function));
 		ASSERT_THAT(IsTrue(EngineB->GetScriptEngine()->GetFunctionById(
 			RouteB->NumericFunctionId) == RouteB->Function));
+	}
+
+	TEST_METHOD(ReorderedFunctionIdsKeepIdentityAndReferenceResolutionEngineLocal)
+	{
+		using namespace AngelscriptCacheFunctionRouteSnapshotTests_Private;
+		FScopedProjectRoot ProjectA;
+		FScopedProjectRoot ProjectB;
+		const FString Source = TEXT(R"AS(
+int ReadFunctionRouteValue()
+{
+	return 605;
+}
+)AS");
+		ASSERT_THAT(IsTrue(ProjectA.WriteSource(Source)));
+		ASSERT_THAT(IsTrue(ProjectB.WriteSource(Source)));
+
+		TUniquePtr<FAngelscriptEngine> EngineA = CreateEngine(ProjectA);
+		TUniquePtr<FAngelscriptEngine> EngineB = CreateEngine(ProjectB);
+		ASSERT_THAT(IsNotNull(EngineA.Get()));
+		ASSERT_THAT(IsNotNull(EngineB.Get()));
+		ASSERT_THAT(IsTrue(ConsumeOneFunctionId(*EngineB),
+			TEXT("The second Engine should consume one transient FunctionId first")));
+		{
+			FAngelscriptEngineScope ScopeA(*EngineA);
+			EngineA->InitialCompile();
+		}
+		{
+			FAngelscriptEngineScope ScopeB(*EngineB);
+			EngineB->InitialCompile();
+		}
+
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
+			ESPMode::ThreadSafe> SnapshotA = EngineA->GetFunctionRouteSnapshot();
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
+			ESPMode::ThreadSafe> SnapshotB = EngineB->GetFunctionRouteSnapshot();
+		ASSERT_THAT(IsTrue(SnapshotA.IsValid()));
+		ASSERT_THAT(IsTrue(SnapshotB.IsValid()));
+		const FAngelscriptFunctionRoute* const RouteA = FindRoute(
+			*SnapshotA, TEXT("int ReadFunctionRouteValue()"));
+		const FAngelscriptFunctionRoute* const RouteB = FindRoute(
+			*SnapshotB, TEXT("int ReadFunctionRouteValue()"));
+		ASSERT_THAT(IsNotNull(RouteA));
+		ASSERT_THAT(IsNotNull(RouteB));
+		ASSERT_THAT(IsTrue(
+			RouteA->Identity.FunctionKey == RouteB->Identity.FunctionKey));
+		ASSERT_THAT(IsTrue(
+			RouteA->Identity.Content.Execution
+				== RouteB->Identity.Content.Execution));
+		ASSERT_THAT(IsTrue(
+			RouteA->Identity.Profile.Hash == RouteB->Identity.Profile.Hash));
+		ASSERT_THAT(IsTrue(
+			RouteA->NumericFunctionId != RouteB->NumericFunctionId,
+			TEXT("Stable identity should survive intentionally reordered FunctionIds")));
+		ASSERT_THAT(IsTrue(RouteA->Function != RouteB->Function));
+		ASSERT_THAT(IsTrue(EngineA->GetScriptEngine()->GetFunctionById(
+			RouteA->NumericFunctionId) == RouteA->Function));
+		ASSERT_THAT(IsTrue(EngineB->GetScriptEngine()->GetFunctionById(
+			RouteB->NumericFunctionId) == RouteB->Function));
+
+		FAngelscriptArtifactReference EnvironmentReference;
+		asCScriptFunction* SourceEnvironmentFunction = nullptr;
+		ASSERT_THAT(IsTrue(FindEnvironmentFunctionReference(
+			*EngineA, EnvironmentReference, SourceEnvironmentFunction)));
+		FAngelscriptCacheEngineEnvironmentResolver ResolverA(
+			*static_cast<asCScriptEngine*>(EngineA->GetScriptEngine()));
+		FAngelscriptCacheEngineEnvironmentResolver ResolverB(
+			*static_cast<asCScriptEngine*>(EngineB->GetScriptEngine()));
+		asCScriptFunction* const ResolvedA =
+			ResolverA.ResolveFunctionReference(EnvironmentReference);
+		asCScriptFunction* const ResolvedB =
+			ResolverB.ResolveFunctionReference(EnvironmentReference);
+		ASSERT_THAT(IsNotNull(ResolvedA));
+		ASSERT_THAT(IsNotNull(ResolvedB));
+		ASSERT_THAT(IsTrue(ResolvedA == SourceEnvironmentFunction));
+		ASSERT_THAT(IsTrue(ResolvedA != ResolvedB,
+			TEXT("One stable reference descriptor should resolve to Engine-local objects")));
 	}
 };
 

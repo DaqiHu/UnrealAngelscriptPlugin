@@ -90,7 +90,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 	}
 
 	static FAngelscriptCacheValidationResult ValidateStableReference(
-		const FAngelscriptCacheStableReference& Value)
+		const FAngelscriptArtifactReference& Value)
 	{
 		const uint8 Kind = static_cast<uint8>(Value.Kind);
 		if (Kind < 1 || Kind > 9)
@@ -102,7 +102,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 			return Failure(EAngelscriptCacheValidationError::ZeroStableKey);
 		}
 		const bool bRequiresAbi = Kind <= static_cast<uint8>(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol);
 		if (bRequiresAbi && Value.ExpectedAbi.IsZero())
 		{
 			return Failure(EAngelscriptCacheValidationError::MissingExpectedAbi);
@@ -167,10 +167,10 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 			}
 			if ((Value.Kind == EAngelscriptCachedDataTypeKind::ScriptType
 					&& Value.TypeReference->Kind
-						!= EAngelscriptCacheReferenceKind::ScriptType)
+						!= EAngelscriptArtifactReferenceKind::ScriptType)
 				|| (Value.Kind == EAngelscriptCachedDataTypeKind::EnvironmentType
 					&& Value.TypeReference->Kind
-						!= EAngelscriptCacheReferenceKind::EnvironmentSymbol))
+						!= EAngelscriptArtifactReferenceKind::EnvironmentSymbol))
 			{
 				return Failure(EAngelscriptCacheValidationError::WrongReferenceKind);
 			}
@@ -204,7 +204,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 
 	static void WriteStableReference(
 		FWriter& Writer,
-		const FAngelscriptCacheStableReference& Value)
+		const FAngelscriptArtifactReference& Value)
 	{
 		Writer.WriteUInt8(static_cast<uint8>(Value.Kind));
 		Writer.WriteHash(Value.StableKey);
@@ -282,7 +282,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 
 	static void WriteHashReference(
 		FAngelscriptArtifactCanonicalWriter& Writer,
-		const FAngelscriptCacheStableReference& Value)
+		const FAngelscriptArtifactReference& Value)
 	{
 		Writer.WriteUInt8(static_cast<uint8>(Value.Kind));
 		Writer.WriteHash(Value.StableKey);
@@ -431,7 +431,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 		}
 		if (Value.Kind == EAngelscriptCacheSemanticDependencyKind::FunctionContent
 			&& Value.Target.Kind
-				!= EAngelscriptCacheReferenceKind::ScriptFunction)
+				!= EAngelscriptArtifactReferenceKind::ScriptFunction)
 		{
 			return Failure(EAngelscriptCacheValidationError::WrongReferenceKind);
 		}
@@ -451,7 +451,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 	static bool DependencyMatches(
 		const FAngelscriptCacheSemanticDependency& Dependency,
 		const EAngelscriptCacheSemanticDependencyKind Kind,
-		const FAngelscriptCacheStableReference& Target)
+		const FAngelscriptArtifactReference& Target)
 	{
 		return Dependency.Kind == Kind
 			&& Dependency.Target == Target;
@@ -460,19 +460,19 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 	static bool DependencyHasSameCoordinate(
 		const FAngelscriptCacheSemanticDependency& Dependency,
 		const EAngelscriptCacheSemanticDependencyKind Kind,
-		const FAngelscriptCacheStableReference& Target)
+		const FAngelscriptArtifactReference& Target)
 	{
 		return Dependency.Kind == Kind
 			&& Dependency.Target.Kind == Target.Kind
 			&& Dependency.Target.StableKey == Target.StableKey;
 	}
 
-	static FAngelscriptCacheStableReference MakeScriptFunctionReference(
+	static FAngelscriptArtifactReference MakeScriptFunctionReference(
 		const FAngelscriptStableFunctionKey& FunctionKey,
 		const FAngelscriptHash256& ExpectedDeclarationAbi)
 	{
 		return {
-			EAngelscriptCacheReferenceKind::ScriptFunction,
+			EAngelscriptArtifactReferenceKind::ScriptFunction,
 			FunctionKey.Hash,
 			ExpectedDeclarationAbi,
 		};
@@ -530,7 +530,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 		for (const FAngelscriptCachedTypeRelation& Relation : Value.Relations)
 		{
 			const EAngelscriptCacheSemanticDependencyKind Kind =
-				Relation.Target.Kind == EAngelscriptCacheReferenceKind::ScriptType
+				Relation.Target.Kind == EAngelscriptArtifactReferenceKind::ScriptType
 					? EAngelscriptCacheSemanticDependencyKind::Inheritance
 					: EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi;
 			if (DependencyMatches(Dependency, Kind, Relation.Target))
@@ -585,7 +585,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 		for (const FAngelscriptCachedBehaviorSlot& Slot : Value.OrderedBehaviorSlots)
 		{
 			const EAngelscriptCacheSemanticDependencyKind Kind =
-				Slot.Target.Kind == EAngelscriptCacheReferenceKind::ScriptFunction
+				Slot.Target.Kind == EAngelscriptArtifactReferenceKind::ScriptFunction
 					? EAngelscriptCacheSemanticDependencyKind::Declaration
 					: EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi;
 			if (DependencyMatches(Dependency, Kind, Slot.Target))
@@ -623,7 +623,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 	static FAngelscriptCacheValidationResult RequireDependency(
 		const FAngelscriptCachedTypeSchema& Value,
 		const EAngelscriptCacheSemanticDependencyKind Kind,
-		const FAngelscriptCacheStableReference& Target,
+		const FAngelscriptArtifactReference& Target,
 		FAngelscriptTypeSchemaFieldCoordinate* OutFailureCoordinate)
 	{
 		for (int32 Index = 0; Index < Value.Dependencies.Num(); ++Index)
@@ -695,7 +695,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 		for (const FAngelscriptCachedTypeRelation& Relation : Value.Relations)
 		{
 			const EAngelscriptCacheSemanticDependencyKind Kind =
-				Relation.Target.Kind == EAngelscriptCacheReferenceKind::ScriptType
+				Relation.Target.Kind == EAngelscriptArtifactReferenceKind::ScriptType
 					? EAngelscriptCacheSemanticDependencyKind::Inheritance
 					: EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi;
 			if (const FAngelscriptCacheValidationResult Result = RequireDependency(
@@ -756,7 +756,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 		for (const FAngelscriptCachedBehaviorSlot& Slot : Value.OrderedBehaviorSlots)
 		{
 			const EAngelscriptCacheSemanticDependencyKind Kind =
-				Slot.Target.Kind == EAngelscriptCacheReferenceKind::ScriptFunction
+				Slot.Target.Kind == EAngelscriptArtifactReferenceKind::ScriptFunction
 					? EAngelscriptCacheSemanticDependencyKind::Declaration
 					: EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi;
 			if (const FAngelscriptCacheValidationResult Result = RequireDependency(
@@ -981,15 +981,15 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 				return FailureAt(Result.Error, OutFailureCoordinate,
 					EAngelscriptTypeSchemaCapturedField::Relation, Index);
 			}
-			if (Relation.Target.Kind != EAngelscriptCacheReferenceKind::ScriptType
+			if (Relation.Target.Kind != EAngelscriptArtifactReferenceKind::ScriptType
 				&& Relation.Target.Kind
-					!= EAngelscriptCacheReferenceKind::EnvironmentSymbol)
+					!= EAngelscriptArtifactReferenceKind::EnvironmentSymbol)
 			{
 				return FailureAt(EAngelscriptCacheValidationError::WrongReferenceKind,
 					OutFailureCoordinate,
 					EAngelscriptTypeSchemaCapturedField::Relation, Index);
 			}
-			if (Relation.Target.Kind == EAngelscriptCacheReferenceKind::ScriptType
+			if (Relation.Target.Kind == EAngelscriptArtifactReferenceKind::ScriptType
 				&& Relation.Target.StableKey == Value.TypeKey.Hash)
 			{
 				return FailureAt(EAngelscriptCacheValidationError::ConflictingKey,
@@ -1119,8 +1119,8 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 		bool bAllowed = false;
 		bool bExactlyOne = false;
 		bool bMany = false;
-		EAngelscriptCacheReferenceKind TargetKind =
-			EAngelscriptCacheReferenceKind::Invalid;
+		EAngelscriptArtifactReferenceKind TargetKind =
+			EAngelscriptArtifactReferenceKind::Invalid;
 	};
 
 	static FRelationFormRule GetRelationFormRule(
@@ -1134,7 +1134,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 				|| Kind == EAngelscriptCachedTypeRelationKind::ImplementedInterface;
 			Rule.bMany = Kind
 				== EAngelscriptCachedTypeRelationKind::ImplementedInterface;
-			Rule.TargetKind = EAngelscriptCacheReferenceKind::ScriptType;
+			Rule.TargetKind = EAngelscriptArtifactReferenceKind::ScriptType;
 		}
 		else if (Form == ERelationForm::OrdinaryUClass)
 		{
@@ -1144,21 +1144,21 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 			Rule.bMany = Kind
 				== EAngelscriptCachedTypeRelationKind::ImplementedInterface;
 			Rule.TargetKind = Kind == EAngelscriptCachedTypeRelationKind::Base
-				? EAngelscriptCacheReferenceKind::ScriptType
-				: EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+				? EAngelscriptArtifactReferenceKind::ScriptType
+				: EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 		}
 		else if (Form == ERelationForm::StaticsUClass)
 		{
 			Rule.bAllowed = Kind == EAngelscriptCachedTypeRelationKind::CodeSuper;
 			Rule.bExactlyOne = Rule.bAllowed;
-			Rule.TargetKind = EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+			Rule.TargetKind = EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 		}
 		else if (Form == ERelationForm::InterfaceNone)
 		{
 			Rule.bAllowed = Kind
 				== EAngelscriptCachedTypeRelationKind::ImplementedInterface;
 			Rule.bMany = Rule.bAllowed;
-			Rule.TargetKind = EAngelscriptCacheReferenceKind::ScriptType;
+			Rule.TargetKind = EAngelscriptArtifactReferenceKind::ScriptType;
 		}
 		return Rule;
 	}
@@ -1264,12 +1264,12 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 			&& InputKind == EAngelscriptCachedTypeLayoutInputKind::StructHeader;
 	}
 
-	static EAngelscriptCacheReferenceKind GetLayoutInputTargetKind(
+	static EAngelscriptArtifactReferenceKind GetLayoutInputTargetKind(
 		const EAngelscriptCachedTypeLayoutInputKind InputKind)
 	{
 		return InputKind == EAngelscriptCachedTypeLayoutInputKind::BaseType
-			? EAngelscriptCacheReferenceKind::ScriptType
-			: EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+			? EAngelscriptArtifactReferenceKind::ScriptType
+			: EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 	}
 
 	static FAngelscriptCacheValidationResult ValidateLayoutInputsFieldLocal(
@@ -1558,7 +1558,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 				Value, EAngelscriptCachedTypeRelationKind::ShadowSuper);
 			const int32 CodeRelationIndex = FindRelationIndex(
 				Value, EAngelscriptCachedTypeRelationKind::CodeSuper);
-			const FAngelscriptCacheStableReference& InputTarget =
+			const FAngelscriptArtifactReference& InputTarget =
 				Value.LayoutInputs[CodeInputIndex].Target;
 			if (ShadowRelationIndex == INDEX_NONE || CodeRelationIndex == INDEX_NONE
 				|| !(InputTarget == Value.Relations[ShadowRelationIndex].Target)
@@ -2424,7 +2424,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 					EAngelscriptTypeSchemaCapturedField::ReflectedFunctionTarget,
 					Index);
 			}
-			if (Member.Target.Kind != EAngelscriptCacheReferenceKind::ScriptFunction)
+			if (Member.Target.Kind != EAngelscriptArtifactReferenceKind::ScriptFunction)
 			{
 				return FailureAt(EAngelscriptCacheValidationError::WrongReferenceKind,
 					OutFailureCoordinate,
@@ -2735,10 +2735,10 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 
 	static bool IsBehaviorTargetKindAllowed(
 		const EAngelscriptCachedBehaviorKind BehaviorKind,
-		const EAngelscriptCacheReferenceKind TargetKind)
+		const EAngelscriptArtifactReferenceKind TargetKind)
 	{
-		if (TargetKind != EAngelscriptCacheReferenceKind::ScriptFunction
-			&& TargetKind != EAngelscriptCacheReferenceKind::EnvironmentSymbol)
+		if (TargetKind != EAngelscriptArtifactReferenceKind::ScriptFunction
+			&& TargetKind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol)
 		{
 			return false;
 		}
@@ -2746,7 +2746,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 		{
 			return false;
 		}
-		if (TargetKind == EAngelscriptCacheReferenceKind::EnvironmentSymbol)
+		if (TargetKind == EAngelscriptArtifactReferenceKind::EnvironmentSymbol)
 		{
 			return BehaviorKind != EAngelscriptCachedBehaviorKind::Construct
 				&& BehaviorKind != EAngelscriptCachedBehaviorKind::ListConstruct
@@ -2804,7 +2804,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 				return FailureAt(Result.Error, OutFailureCoordinate,
 					EAngelscriptTypeSchemaCapturedField::BehaviorTarget, Index);
 			}
-			if (Slot.Target.Kind == EAngelscriptCacheReferenceKind::ScriptFunction
+			if (Slot.Target.Kind == EAngelscriptArtifactReferenceKind::ScriptFunction
 				&& Slot.DeclaringOwner.IsSet()
 				&& Slot.DeclaringOwner->Hash.IsZero())
 			{
@@ -2871,7 +2871,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 		for (int32 Index = 0; Index < Value.OrderedBehaviorSlots.Num(); ++Index)
 		{
 			const FAngelscriptCachedBehaviorSlot& Slot = Value.OrderedBehaviorSlots[Index];
-			if (Slot.Target.Kind == EAngelscriptCacheReferenceKind::EnvironmentSymbol
+			if (Slot.Target.Kind == EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 				&& Slot.DeclaringOwner.IsSet())
 			{
 				return FailureAt(EAngelscriptCacheValidationError::InvalidPresence,
@@ -2881,8 +2881,8 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 			if (!IsBehaviorTargetKindAllowed(Slot.BehaviorKind, Slot.Target.Kind))
 			{
 				const bool bKnownBehaviorTarget =
-					Slot.Target.Kind == EAngelscriptCacheReferenceKind::ScriptFunction
-					|| Slot.Target.Kind == EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+					Slot.Target.Kind == EAngelscriptArtifactReferenceKind::ScriptFunction
+					|| Slot.Target.Kind == EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 				return FailureAt(bKnownBehaviorTarget
 						? EAngelscriptCacheValidationError::InvalidPresence
 						: EAngelscriptCacheValidationError::WrongReferenceKind,
@@ -2892,7 +2892,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 						: EAngelscriptTypeSchemaCapturedField::BehaviorTarget,
 					Index);
 			}
-			if (Slot.Target.Kind == EAngelscriptCacheReferenceKind::ScriptFunction)
+			if (Slot.Target.Kind == EAngelscriptArtifactReferenceKind::ScriptFunction)
 			{
 				if (!Slot.DeclaringOwner.IsSet())
 				{
@@ -2972,7 +2972,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 		for (int32 Index = 0; Index < Value.OrderedBehaviorSlots.Num(); ++Index)
 		{
 			const FAngelscriptCachedBehaviorSlot& Slot = Value.OrderedBehaviorSlots[Index];
-			if (Slot.Target.Kind != EAngelscriptCacheReferenceKind::ScriptFunction)
+			if (Slot.Target.Kind != EAngelscriptArtifactReferenceKind::ScriptFunction)
 			{
 				continue;
 			}
@@ -4074,7 +4074,7 @@ namespace AngelscriptCacheTypeSchema_Private
 			return true;
 		}
 
-		bool ReadStableReference(FAngelscriptCacheStableReference& OutValue)
+		bool ReadStableReference(FAngelscriptArtifactReference& OutValue)
 		{
 			const uint64 ReferenceOffset = Reader.GetOffset();
 			if (!Reader.ConsumeReference())
@@ -4266,7 +4266,7 @@ namespace AngelscriptCacheTypeSchema_Private
 			}
 			if (HasReference == 1)
 			{
-				FAngelscriptCacheStableReference Reference;
+				FAngelscriptArtifactReference Reference;
 				if (!ReadStableReference(Reference))
 				{
 					return false;

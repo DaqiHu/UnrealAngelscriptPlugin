@@ -3,6 +3,8 @@
 #include "Cache/AngelscriptCacheDecodedRecord.h"
 #include "as_buildartifact.h"
 
+class IAngelscriptFunctionArtifactExternalFunctionResolver;
+
 enum class EAngelscriptCacheFunctionInputStatus : uint8
 {
 	Invalid = 0,
@@ -19,6 +21,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheFunctionInputAuthorities
 	const FAngelscriptCachedModuleState* ModuleState = nullptr;
 	TConstArrayView<FAngelscriptCachedFunctionBody> FunctionBodies;
 	const IAngelscriptCacheCurrentSymbolResolver* ExternalSymbols = nullptr;
+	const IAngelscriptFunctionArtifactExternalFunctionResolver*
+		ExternalFunctions = nullptr;
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheFunctionInputResolution
@@ -131,5 +135,7 @@ public:
 		const FAngelscriptCachedDebugSidecar& CachedDebug,
 		const FAngelscriptCacheReadLimits& Limits,
 		FAngelscriptCacheReadBudget& Budget,
-		FString& OutDetail);
+		FString& OutDetail,
+		const IAngelscriptFunctionArtifactExternalFunctionResolver*
+			ExternalFunctions = nullptr);
 };

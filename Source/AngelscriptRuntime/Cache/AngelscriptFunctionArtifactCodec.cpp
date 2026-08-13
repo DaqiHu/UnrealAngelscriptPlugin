@@ -206,12 +206,33 @@ namespace AngelscriptFunctionArtifactCodec_Private
 		const asCModule& CurrentModule,
 		const FAngelscriptStableModuleKey& ModuleKey,
 		const asCScriptFunction* Function,
+		const IAngelscriptFunctionArtifactExternalFunctionResolver*
+			ExternalFunctions,
 		FAngelscriptStableFunctionKey& OutKey)
 	{
 		OutKey = {};
-		return Function != nullptr && Function->module == &CurrentModule
-			&& FAngelscriptCacheStableSymbolIdentity::TryBuildFunctionKey(
+		if (Function == nullptr)
+		{
+			return false;
+		}
+		if (Function->module == &CurrentModule)
+		{
+			return FAngelscriptCacheStableSymbolIdentity::TryBuildFunctionKey(
 				ModuleKey, *Function, OutKey);
+		}
+		FAngelscriptArtifactReference Reference;
+		if (Function->module == nullptr || ExternalFunctions == nullptr
+			|| !ExternalFunctions->TryResolveExternalScriptFunction(
+				*Function, Reference)
+			|| Reference.Kind
+				!= EAngelscriptArtifactReferenceKind::ScriptFunction
+			|| Reference.StableKey.IsZero()
+			|| Reference.ExpectedAbi.IsZero())
+		{
+			return false;
+		}
+		OutKey.Hash = Reference.StableKey;
+		return true;
 	}
 
 	class FFunctionArtifactReadStream final : public asIBinaryStream
@@ -516,9 +537,9 @@ namespace AngelscriptFunctionArtifactCodec_Private
 				|| DependencyKind > static_cast<uint8>(
 					EAngelscriptCacheSemanticDependencyKind::FunctionContent)
 				|| ReferenceKind <= static_cast<uint8>(
-					EAngelscriptCacheReferenceKind::Invalid)
+					EAngelscriptArtifactReferenceKind::Invalid)
 				|| ReferenceKind > static_cast<uint8>(
-					EAngelscriptCacheReferenceKind::StringLiteral)
+					EAngelscriptArtifactReferenceKind::StringLiteral)
 				|| HasExpectedContent > 1
 				|| Relocation.StableKey.IsZero()
 				|| Relocation.ExpectedAbi.IsZero())
@@ -532,7 +553,7 @@ namespace AngelscriptFunctionArtifactCodec_Private
 			Relocation.DependencyKind =
 				static_cast<EAngelscriptCacheSemanticDependencyKind>(DependencyKind);
 			Relocation.ReferenceKind =
-				static_cast<EAngelscriptCacheReferenceKind>(ReferenceKind);
+				static_cast<EAngelscriptArtifactReferenceKind>(ReferenceKind);
 			if (HasExpectedContent != 0)
 			{
 				FAngelscriptHash256 ExpectedContent;
@@ -1107,9 +1128,12 @@ namespace AngelscriptFunctionArtifactCodec_Private
 
 FAngelscriptFunctionArtifactCodec::FAngelscriptFunctionArtifactCodec(
 	asCModule& InModule,
-	asCScriptEngine& InEngine)
+	asCScriptEngine& InEngine,
+	const IAngelscriptFunctionArtifactExternalFunctionResolver*
+		InExternalFunctions)
 	: Module(&InModule)
 	, Engine(&InEngine)
+	, ExternalFunctions(InExternalFunctions)
 {
 }
 
@@ -1415,8 +1439,8 @@ FAngelscriptFunctionArtifactCodec::ValidateRawExecutionArtifact(
 
 		EAngelscriptCacheSemanticDependencyKind ExpectedDependencyKind =
 			EAngelscriptCacheSemanticDependencyKind::Invalid;
-		EAngelscriptCacheReferenceKind ExpectedReferenceKind =
-			static_cast<EAngelscriptCacheReferenceKind>(0);
+		EAngelscriptArtifactReferenceKind ExpectedReferenceKind =
+			static_cast<EAngelscriptArtifactReferenceKind>(0);
 		FAngelscriptHash256 CurrentStableKey;
 		bool bResolvedStableIdentity = false;
 		switch (RawUse->kind)
@@ -1440,11 +1464,11 @@ FAngelscriptFunctionArtifactCodec::ValidateRawExecutionArtifact(
 					? EAngelscriptCacheSemanticDependencyKind::ValueLayout
 					: EAngelscriptCacheSemanticDependencyKind::Declaration;
 				ExpectedReferenceKind =
-					EAngelscriptCacheReferenceKind::ScriptType;
+					EAngelscriptArtifactReferenceKind::ScriptType;
 			}
 			else if (bValidShape && RawUse->type->module == nullptr)
 			{
-				FAngelscriptCacheStableReference EnvironmentType;
+				FAngelscriptArtifactReference EnvironmentType;
 				bResolvedStableIdentity =
 					FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
 						*RawUse->type, EnvironmentType);
@@ -1452,7 +1476,7 @@ FAngelscriptFunctionArtifactCodec::ValidateRawExecutionArtifact(
 				ExpectedDependencyKind =
 					EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi;
 				ExpectedReferenceKind =
-					EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 			}
 			break;
 		}
@@ -1475,11 +1499,11 @@ FAngelscriptFunctionArtifactCodec::ValidateRawExecutionArtifact(
 				ExpectedDependencyKind =
 					EAngelscriptCacheSemanticDependencyKind::Declaration;
 				ExpectedReferenceKind =
-					EAngelscriptCacheReferenceKind::ScriptType;
+					EAngelscriptArtifactReferenceKind::ScriptType;
 			}
 			else
 			{
-				FAngelscriptCacheStableReference EnvironmentFunction;
+				FAngelscriptArtifactReference EnvironmentFunction;
 				if (bValidShape && RawUse->function->module == nullptr
 					&& FAngelscriptCacheEnvironmentIdentity::
 						TryBuildFunctionReference(
@@ -1490,7 +1514,7 @@ FAngelscriptFunctionArtifactCodec::ValidateRawExecutionArtifact(
 					ExpectedDependencyKind =
 						EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi;
 					ExpectedReferenceKind =
-						EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+						EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 				}
 				else
 				{
@@ -1498,12 +1522,13 @@ FAngelscriptFunctionArtifactCodec::ValidateRawExecutionArtifact(
 					bResolvedStableIdentity = bValidShape
 						&& TryBuildCurrentFunctionKey(
 							*Module, Request.ModuleKey,
-							RawUse->function, FunctionKey);
+							RawUse->function, ExternalFunctions,
+							FunctionKey);
 					CurrentStableKey = FunctionKey.Hash;
 					ExpectedDependencyKind =
 						EAngelscriptCacheSemanticDependencyKind::Signature;
 					ExpectedReferenceKind =
-						EAngelscriptCacheReferenceKind::ScriptFunction;
+						EAngelscriptArtifactReferenceKind::ScriptFunction;
 				}
 			}
 			break;
@@ -1528,7 +1553,7 @@ FAngelscriptFunctionArtifactCodec::ValidateRawExecutionArtifact(
 				ExpectedDependencyKind =
 					EAngelscriptCacheSemanticDependencyKind::Declaration;
 				ExpectedReferenceKind =
-					EAngelscriptCacheReferenceKind::ScriptType;
+					EAngelscriptArtifactReferenceKind::ScriptType;
 			}
 			else
 			{
@@ -1541,27 +1566,46 @@ FAngelscriptFunctionArtifactCodec::ValidateRawExecutionArtifact(
 				ExpectedDependencyKind =
 					EAngelscriptCacheSemanticDependencyKind::GlobalStorage;
 				ExpectedReferenceKind =
-					EAngelscriptCacheReferenceKind::ScriptGlobal;
+					EAngelscriptArtifactReferenceKind::ScriptGlobal;
 			}
 			break;
 		}
 		case asFUNCTION_ARTIFACT_SYMBOL_PROPERTY_LAYOUT:
 		{
-			FAngelscriptStablePropertyKey PropertyKey;
-			bResolvedStableIdentity = RawUse->type == nullptr
+			const bool bValidShape = RawUse->type == nullptr
 				&& RawUse->function == nullptr
 				&& RawUse->globalProperty == nullptr
 				&& RawUse->propertyOwnerType != nullptr
-				&& RawUse->objectProperty != nullptr
-				&& TryBuildCurrentPropertyKey(
-					*Module, Request.ModuleKey,
-					RawUse->propertyOwnerType,
-					RawUse->objectProperty, PropertyKey);
-			CurrentStableKey = PropertyKey.Hash;
-			ExpectedDependencyKind =
-				EAngelscriptCacheSemanticDependencyKind::PropertyLayout;
-			ExpectedReferenceKind =
-				EAngelscriptCacheReferenceKind::ScriptProperty;
+				&& RawUse->objectProperty != nullptr;
+			FAngelscriptArtifactReference EnvironmentProperty;
+			if (bValidShape && RawUse->propertyOwnerType->module == nullptr
+				&& FAngelscriptCacheEnvironmentIdentity::
+					TryBuildPropertyReference(
+						*RawUse->propertyOwnerType,
+						*RawUse->objectProperty,
+						EnvironmentProperty))
+			{
+				bResolvedStableIdentity = true;
+				CurrentStableKey = EnvironmentProperty.StableKey;
+				ExpectedDependencyKind =
+					EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi;
+				ExpectedReferenceKind =
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
+			}
+			else
+			{
+				FAngelscriptStablePropertyKey PropertyKey;
+				bResolvedStableIdentity = bValidShape
+					&& TryBuildCurrentPropertyKey(
+						*Module, Request.ModuleKey,
+						RawUse->propertyOwnerType,
+						RawUse->objectProperty, PropertyKey);
+				CurrentStableKey = PropertyKey.Hash;
+				ExpectedDependencyKind =
+					EAngelscriptCacheSemanticDependencyKind::PropertyLayout;
+				ExpectedReferenceKind =
+					EAngelscriptArtifactReferenceKind::ScriptProperty;
+			}
 			break;
 		}
 		default:
@@ -1587,13 +1631,21 @@ FAngelscriptFunctionArtifactCodec::ValidateRawExecutionArtifact(
 					&& FAngelscriptCacheStableSymbolIdentity::TryBuildFunctionKey(
 						Request.ModuleKey, Function, DiagnosticFunctionKey,
 						&FunctionKeyFailure);
+				const FString BaseModuleName = Function.module != nullptr
+					? UTF8_TO_TCHAR(
+						Function.module->baseModuleName.AddressOf())
+					: TEXT("<none>");
 				SymbolDetail = FString::Printf(
-					TEXT("function=%s namespace=%s module=%s invocation=%u "
+					TEXT("function=%s id=%d funcType=%u namespace=%s module=%s "
+						"baseModule=%s invocation=%u "
 						"objectType=%s artifactOwner=%s traits=0x%08x "
 						"currentKey=%s keyFailure=%s"),
 					UTF8_TO_TCHAR(Function.GetDeclaration(false, false, false)),
+					Function.id,
+					static_cast<uint32>(Function.funcType),
 					UTF8_TO_TCHAR(Function.GetNamespace()),
 					*ModuleOwner,
+					*BaseModuleName,
 					static_cast<uint32>(Function.artifactInvocationKind),
 					Function.objectType != nullptr
 						? UTF8_TO_TCHAR(Function.objectType->GetName()) : TEXT("<none>"),

@@ -158,11 +158,17 @@ static bool RunOnScriptFileChangesGuardsEngineInitAndQueuesRootScripts(FAutomati
 	TUniquePtr<FAngelscriptEngine> Engine = MakeEditorModuleTestEngine(RootPath);
 	TUniquePtr<FAngelscriptEngineScope> EngineScope;
 	TArray<FAngelscriptEngine*> SavedStack = FAngelscriptEngineContextStack::SnapshotAndClear();
+	int32 StaticJITRefreshRequests = 0;
 
 	FAngelscriptEditorModuleTestAccess::SetDirectoryWatcherResolver([&DirectoryWatcher]()
 	{
 		return &DirectoryWatcher;
 	});
+	FAngelscriptEditorModuleTestAccess::SetStaticJITRefreshOverride(
+		[&StaticJITRefreshRequests]()
+		{
+			++StaticJITRefreshRequests;
+		});
 
 	ON_SCOPE_EXIT
 	{
@@ -172,6 +178,7 @@ static bool RunOnScriptFileChangesGuardsEngineInitAndQueuesRootScripts(FAutomati
 			Module.ShutdownModule();
 		}
 		FAngelscriptEditorModuleTestAccess::ResetDirectoryWatcherResolver();
+		FAngelscriptEditorModuleTestAccess::ResetStaticJITRefreshOverride();
 		FAngelscriptEngineContextStack::RestoreSnapshot(MoveTemp(SavedStack));
 		FileManager.DeleteDirectory(*RootPath, false, true);
 	};
@@ -239,6 +246,10 @@ static bool RunOnScriptFileChangesGuardsEngineInitAndQueuesRootScripts(FAutomati
 	{
 		return false;
 	}
+	if (!TestEqual(TEXT("Editor.Module.OnScriptFileChangesGuardsEngineInitAndQueuesRootScripts should not invoke explicit StaticJIT generation or Live Coding on save"), StaticJITRefreshRequests, 0))
+	{
+		return false;
+	}
 
 	Engine->FileChangesDetectedForReload.Reset();
 	Engine->FileDeletionsDetectedForReload.Reset();
@@ -258,7 +269,7 @@ static bool RunOnScriptFileChangesGuardsEngineInitAndQueuesRootScripts(FAutomati
 		return false;
 	}
 
-	return true;
+	return TestEqual(TEXT("Editor.Module.OnScriptFileChangesGuardsEngineInitAndQueuesRootScripts should keep save-time handling silent for StaticJIT generation and Live Coding"), StaticJITRefreshRequests, 0);
 }
 
 #undef TestTrue

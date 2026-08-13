@@ -1,9 +1,11 @@
 #pragma once
 
 #include "Cache/AngelscriptCacheManifestPack.h"
+#include "Cache/AngelscriptFunctionArtifactCodec.h"
 
 struct FAngelscriptModuleDesc;
 class IAngelscriptCacheRestoredFunctionDependencySource;
+class asCScriptFunction;
 
 enum class EAngelscriptCacheCleanCaptureError : uint8
 {
@@ -53,6 +55,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheCleanModuleArtifacts
 	// another persisted identity or record authority.
 	TArray<FAngelscriptFunctionArtifactIdentity>
 		ValidatedFunctionArtifactIdentities;
+	// Storage-neutral companion to the verified identities above. References
+	// are complete stable kind/key/ABI values, sorted and deduplicated per
+	// function; no Cache record coordinate or live pointer crosses this handoff.
+	TArray<FAngelscriptFunctionArtifactReferenceSet>
+		ValidatedFunctionArtifactReferenceSets;
 
 	void Reset()
 	{
@@ -63,6 +70,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheCleanModuleArtifacts
 		ModuleSnapshot = {};
 		Records.Reset();
 		ValidatedFunctionArtifactIdentities.Reset();
+		ValidatedFunctionArtifactReferenceSets.Reset();
 	}
 };
 
@@ -80,8 +88,64 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCachePreparedColdGeneration
 	}
 };
 
+class FAngelscriptCacheCrossModuleFunctionAuthority;
+
+ANGELSCRIPTRUNTIME_API FAngelscriptCacheCleanCaptureResult
+BuildAngelscriptCacheCrossModuleFunctionAuthority(
+	TConstArrayView<TSharedRef<FAngelscriptModuleDesc>> Modules,
+	const FAngelscriptCacheCleanCaptureOptions& Options,
+	FAngelscriptCacheCrossModuleFunctionAuthority& OutAuthority);
+
+// Compile-transaction authority for script functions referenced across AS
+// module boundaries. Entries retain live pointers only while the successful
+// compile transaction is being frozen; persisted records receive only the
+// stable ScriptFunction reference and execution-content hash.
+class ANGELSCRIPTRUNTIME_API FAngelscriptCacheCrossModuleFunctionAuthority final
+	: public IAngelscriptCacheCurrentSymbolResolver
+	, public IAngelscriptFunctionArtifactExternalFunctionResolver
+{
+public:
+	void Reset();
+	bool IsEmpty() const;
+
+	virtual TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
+		EAngelscriptArtifactReferenceKind ReferenceKind,
+		const FAngelscriptHash256& StableKey) const override;
+
+	virtual bool TryResolveExternalScriptFunction(
+		const asCScriptFunction& Function,
+		FAngelscriptArtifactReference& OutReference) const override;
+
+	bool TryResolveFunctionDependency(
+		const asCScriptFunction& Function,
+		FAngelscriptArtifactReference& OutReference,
+		FAngelscriptHash256& OutExecutionContent) const;
+
+private:
+	struct FEntry
+	{
+		const asCScriptFunction* Function = nullptr;
+		FAngelscriptArtifactReference Reference;
+		FAngelscriptHash256 ExecutionContent;
+	};
+	TArray<FEntry> Entries;
+
+	friend struct
+		FAngelscriptCacheCrossModuleFunctionAuthorityBuilderAccess;
+};
+
 ANGELSCRIPTRUNTIME_API FAngelscriptCacheCleanCaptureResult
 CaptureAngelscriptCleanCompiledModule(
+	const TSharedRef<FAngelscriptModuleDesc>& Module,
+	const FAngelscriptCacheCleanCaptureOptions& Options,
+	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts);
+
+// Read-only diagnostics seam for an already compiled module, including memory
+// fixtures. It derives only the stable module/function identities and required
+// reference sets consumed by Provider source generation. It deliberately does
+// not synthesize a SourceIndex, Cache records, or a lifecycle publication.
+ANGELSCRIPTRUNTIME_API FAngelscriptCacheCleanCaptureResult
+CaptureAngelscriptCurrentModuleFunctionArtifactsForDiagnostics(
 	const TSharedRef<FAngelscriptModuleDesc>& Module,
 	const FAngelscriptCacheCleanCaptureOptions& Options,
 	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts);
@@ -110,11 +174,24 @@ CaptureAngelscriptCleanCompiledModule(
 	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts);
 
 ANGELSCRIPTRUNTIME_API FAngelscriptCacheCleanCaptureResult
+CaptureAngelscriptCleanCompiledModule(
+	const TSharedRef<FAngelscriptModuleDesc>& Module,
+	const FAngelscriptCacheCleanCaptureOptions& Options,
+	const FAngelscriptCachedSourceIndex& AuthoritativeSourceIndex,
+	const IAngelscriptCacheRestoredFunctionDependencySource*
+		RestoredDependencies,
+	const FAngelscriptCacheCrossModuleFunctionAuthority*
+		CrossModuleFunctions,
+	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts);
+
+ANGELSCRIPTRUNTIME_API FAngelscriptCacheCleanCaptureResult
 ValidateAndPromoteAngelscriptCleanCompiledModuleArtifacts(
 	const TSharedRef<FAngelscriptModuleDesc>& Module,
 	const FAngelscriptCacheCleanCaptureOptions& Options,
 	FAngelscriptCacheCleanModuleArtifacts CandidateArtifacts,
-	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts);
+	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts,
+	const FAngelscriptCacheCrossModuleFunctionAuthority*
+		CrossModuleFunctions = nullptr);
 
 // Reopens pointer-free clean artifacts through the same decoder, current-
 // symbol/layout authorities and opaque VM validator used by capture. The
@@ -128,7 +205,9 @@ OpenAngelscriptValidatedModuleGraphFromCleanArtifacts(
 	const FAngelscriptCacheCleanModuleArtifacts& Artifacts,
 	const FAngelscriptCacheReadLimits& Limits,
 	FAngelscriptCacheReadBudget& Budget,
-	FAngelscriptValidatedModuleGraph& OutGraph);
+	FAngelscriptValidatedModuleGraph& OutGraph,
+	const FAngelscriptCacheCrossModuleFunctionAuthority*
+		CrossModuleFunctions = nullptr);
 
 ANGELSCRIPTRUNTIME_API FAngelscriptCacheCleanCaptureResult
 PrepareAngelscriptCacheColdGeneration(

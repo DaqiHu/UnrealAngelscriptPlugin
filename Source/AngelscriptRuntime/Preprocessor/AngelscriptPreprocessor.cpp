@@ -125,6 +125,21 @@ FAngelscriptPreprocessorContext FAngelscriptPreprocessorContext::CreateFromCurre
 	}
 #endif
 
+	if (FAngelscriptEngine* CurrentEngine =
+		FAngelscriptEngine::TryGetCurrentEngine();
+		CurrentEngine != nullptr
+		&& CurrentEngine->bOverrideTargetPreprocessorFlags)
+	{
+		Context.PreprocessorFlags.Add(
+			TEXT("EDITOR"), CurrentEngine->bTargetEditor);
+		Context.PreprocessorFlags.Add(
+			TEXT("EDITORONLY_DATA"), CurrentEngine->bTargetEditorOnlyData);
+		Context.PreprocessorFlags.Add(
+			TEXT("RELEASE"), CurrentEngine->bTargetRelease);
+		Context.PreprocessorFlags.Add(
+			TEXT("TEST"), CurrentEngine->bTargetTest);
+	}
+
 	return Context;
 }
 

@@ -74,12 +74,12 @@ private:
 		return FAngelscriptHash256{FBlake3Hash(Bytes)};
 	}
 
-	static FAngelscriptCacheStableReference MakeReference(
-		const EAngelscriptCacheReferenceKind Kind,
+	static FAngelscriptArtifactReference MakeReference(
+		const EAngelscriptArtifactReferenceKind Kind,
 		const uint8 KeyFill,
 		const uint8 AbiFill)
 	{
-		return FAngelscriptCacheStableReference{Kind, MakeHash(KeyFill), MakeHash(AbiFill)};
+		return FAngelscriptArtifactReference{Kind, MakeHash(KeyFill), MakeHash(AbiFill)};
 	}
 
 	static FString Hex(const TConstArrayView<uint8> Bytes)
@@ -104,14 +104,14 @@ private:
 		FAngelscriptCachedDataType Type;
 		Type.Kind = EAngelscriptCachedDataTypeKind::ScriptType;
 		Type.TypeReference = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptType, KeyFill, AbiFill);
+			EAngelscriptArtifactReferenceKind::ScriptType, KeyFill, AbiFill);
 		Type.QualifierFlags = QualifierFlags;
 		return Type;
 	}
 
 	static FAngelscriptCacheSemanticDependency MakeDependency(
 		const EAngelscriptCacheSemanticDependencyKind Kind,
-		const FAngelscriptCacheStableReference& Target)
+		const FAngelscriptArtifactReference& Target)
 	{
 		FAngelscriptCacheSemanticDependency Dependency;
 		Dependency.Kind = Kind;
@@ -343,7 +343,7 @@ private:
 		Constructor.BehaviorKind = EAngelscriptCachedBehaviorKind::Construct;
 		Constructor.SlotOrdinal = 0;
 		Constructor.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptFunction, 0x32, 0x33);
+			EAngelscriptArtifactReferenceKind::ScriptFunction, 0x32, 0x33);
 		Constructor.DeclaringOwner = Schema.TypeKey;
 		Schema.OrderedBehaviorSlots.Add(Constructor);
 
@@ -351,7 +351,7 @@ private:
 		Copy.BehaviorKind = EAngelscriptCachedBehaviorKind::Copy;
 		Copy.SlotOrdinal = 0;
 		Copy.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptFunction, 0x30, 0x31);
+			EAngelscriptArtifactReferenceKind::ScriptFunction, 0x30, 0x31);
 		Copy.DeclaringOwner = Schema.TypeKey;
 		Schema.OrderedBehaviorSlots.Add(Copy);
 
@@ -364,11 +364,11 @@ private:
 		Schema.Reflection.ReflectionKind = EAngelscriptCachedReflectionKind::UDelegate;
 		Schema.Dependencies = {
 			MakeDependency(EAngelscriptCacheSemanticDependencyKind::Declaration,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction, 0x30, 0x31)),
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction, 0x30, 0x31)),
 			MakeDependency(EAngelscriptCacheSemanticDependencyKind::Declaration,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction, 0x32, 0x33)),
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction, 0x32, 0x33)),
 			MakeDependency(EAngelscriptCacheSemanticDependencyKind::Signature,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction, 0x34, 0x35)),
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction, 0x34, 0x35)),
 		};
 
 		FinalizeValidFixtureHashes(Schema);
@@ -469,7 +469,7 @@ private:
 				FAngelscriptStableFunctionKey{MakeHash(0x61)}, MakeHash(0x62), false};
 			Schema.Dependencies.Add(MakeDependency(
 				EAngelscriptCacheSemanticDependencyKind::Signature,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction, 0x61, 0x62)));
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction, 0x61, 0x62)));
 			Schema.Reflection.ReflectionKind = EAngelscriptCachedReflectionKind::None;
 			break;
 		default:
@@ -492,7 +492,7 @@ private:
 		Member.CanonicalOriginalFunctionName = Member.CanonicalFunctionName;
 		Member.CanonicalScriptFunctionName = Member.CanonicalFunctionName;
 		Member.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptFunction, KeyFill, AbiFill);
+			EAngelscriptArtifactReferenceKind::ScriptFunction, KeyFill, AbiFill);
 		return Member;
 	}
 
@@ -514,7 +514,7 @@ private:
 			FAngelscriptCachedTypeRelation Base;
 			Base.RelationKind = EAngelscriptCachedTypeRelationKind::Base;
 			Base.Target = MakeReference(
-				EAngelscriptCacheReferenceKind::ScriptType, 0xa2, 0xa3);
+				EAngelscriptArtifactReferenceKind::ScriptType, 0xa2, 0xa3);
 			Schema.Relations.Add(Base);
 			FAngelscriptCachedTypeLayoutInput BaseInput;
 			BaseInput.InputKind = EAngelscriptCachedTypeLayoutInputKind::BaseType;
@@ -526,8 +526,8 @@ private:
 				EAngelscriptCacheSemanticDependencyKind::Inheritance, Base.Target));
 		}
 
-		const FAngelscriptCacheStableReference CodeRoot = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xa4, 0xa5);
+		const FAngelscriptArtifactReference CodeRoot = MakeReference(
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xa4, 0xa5);
 		FAngelscriptCachedTypeRelation Shadow;
 		Shadow.RelationKind = EAngelscriptCachedTypeRelationKind::ShadowSuper;
 		Shadow.Target = CodeRoot;
@@ -606,7 +606,7 @@ private:
 		FAngelscriptCachedTypeRelation Code;
 		Code.RelationKind = EAngelscriptCachedTypeRelationKind::CodeSuper;
 		Code.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xb0, 0xb1);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xb0, 0xb1);
 		Schema.Relations.Add(Code);
 		Schema.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi, Code.Target));
@@ -643,7 +643,7 @@ private:
 		FAngelscriptCachedTypeLayoutInput Header;
 		Header.InputKind = EAngelscriptCachedTypeLayoutInputKind::StructHeader;
 		Header.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xc0, 0xc1);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xc0, 0xc1);
 		Header.BoundaryContribution = 16;
 		Schema.LayoutInputs.Add(Header);
 		Schema.Layout.BasePropertyBoundary = 16;
@@ -1049,7 +1049,7 @@ private:
 			Slot.BehaviorKind = Kind;
 			Slot.SlotOrdinal = 0;
 			Slot.Target = MakeReference(
-				EAngelscriptCacheReferenceKind::ScriptFunction, KeyFill, AbiFill);
+				EAngelscriptArtifactReferenceKind::ScriptFunction, KeyFill, AbiFill);
 			Slot.DeclaringOwner = Schema.TypeKey;
 			Schema.OrderedBehaviorSlots.Add(Slot);
 			Schema.Dependencies.Add(MakeDependency(
@@ -1088,7 +1088,7 @@ private:
 
 	static bool DataTypeReferencesTargetForTests(
 		const FAngelscriptCachedDataType& DataType,
-		const FAngelscriptCacheStableReference& Target)
+		const FAngelscriptArtifactReference& Target)
 	{
 		if (DataType.TypeReference.IsSet()
 			&& DataType.TypeReference.GetValue() == Target)
@@ -1107,7 +1107,7 @@ private:
 
 	static bool SchemaReferencesTargetOutsideDependenciesForTests(
 		const FAngelscriptCachedTypeSchema& Schema,
-		const FAngelscriptCacheStableReference& Target)
+		const FAngelscriptArtifactReference& Target)
 	{
 		for (const FAngelscriptCachedTypeRelation& Relation : Schema.Relations)
 		{
@@ -1130,7 +1130,7 @@ private:
 				return true;
 			}
 		}
-		if (Target.Kind == EAngelscriptCacheReferenceKind::ScriptFunction)
+		if (Target.Kind == EAngelscriptArtifactReferenceKind::ScriptFunction)
 		{
 			for (const FAngelscriptCachedMethodEntry& Method : Schema.OrderedMethods)
 			{
@@ -1185,7 +1185,7 @@ private:
 	static void ClearBehaviorOwnedStateForTests(
 		FAngelscriptCachedTypeSchema& Schema)
 	{
-		TArray<FAngelscriptCacheStableReference> RemovedBehaviorTargets;
+		TArray<FAngelscriptArtifactReference> RemovedBehaviorTargets;
 		for (const FAngelscriptCachedBehaviorSlot& Slot : Schema.OrderedBehaviorSlots)
 		{
 			RemovedBehaviorTargets.AddUnique(Slot.Target);
@@ -1208,18 +1208,18 @@ private:
 	static void ClearMethodAndVftOwnedStateForTests(
 		FAngelscriptCachedTypeSchema& Schema)
 	{
-		TArray<FAngelscriptCacheStableReference> RemovedTargets;
+		TArray<FAngelscriptArtifactReference> RemovedTargets;
 		for (const FAngelscriptCachedMethodEntry& Method : Schema.OrderedMethods)
 		{
-			RemovedTargets.AddUnique(FAngelscriptCacheStableReference{
-				EAngelscriptCacheReferenceKind::ScriptFunction,
+			RemovedTargets.AddUnique(FAngelscriptArtifactReference{
+				EAngelscriptArtifactReferenceKind::ScriptFunction,
 				Method.FunctionKey.Hash, Method.ExpectedDeclarationAbi});
 		}
 		for (const FAngelscriptCachedVirtualFunctionSlot& Slot :
 			Schema.VirtualFunctionTable)
 		{
-			RemovedTargets.AddUnique(FAngelscriptCacheStableReference{
-				EAngelscriptCacheReferenceKind::ScriptFunction,
+			RemovedTargets.AddUnique(FAngelscriptArtifactReference{
+				EAngelscriptArtifactReferenceKind::ScriptFunction,
 				Slot.FunctionKey.Hash, Slot.ExpectedDeclarationAbi});
 		}
 		Schema.OrderedMethods.Reset();
@@ -1248,8 +1248,8 @@ private:
 		{
 			Schema.Dependencies.AddUnique(MakeDependency(
 				EAngelscriptCacheSemanticDependencyKind::Declaration,
-				FAngelscriptCacheStableReference{
-					EAngelscriptCacheReferenceKind::ScriptFunction,
+				FAngelscriptArtifactReference{
+					EAngelscriptArtifactReferenceKind::ScriptFunction,
 					Method.FunctionKey.Hash, Method.ExpectedDeclarationAbi}));
 		}
 		for (const FAngelscriptCachedVirtualFunctionSlot& Slot :
@@ -1257,8 +1257,8 @@ private:
 		{
 			Schema.Dependencies.AddUnique(MakeDependency(
 				EAngelscriptCacheSemanticDependencyKind::Declaration,
-				FAngelscriptCacheStableReference{
-					EAngelscriptCacheReferenceKind::ScriptFunction,
+				FAngelscriptArtifactReference{
+					EAngelscriptArtifactReferenceKind::ScriptFunction,
 					Slot.FunctionKey.Hash, Slot.ExpectedDeclarationAbi}));
 		}
 	}
@@ -1297,7 +1297,7 @@ private:
 		EAngelscriptCachedTypeKind TypeKind;
 		EAngelscriptCachedBehaviorKind BehaviorKind;
 		uint32 Cardinality;
-		EAngelscriptCacheReferenceKind TargetKind;
+		EAngelscriptArtifactReferenceKind TargetKind;
 		uint8 SuccessOwnerMask;
 	};
 
@@ -1306,7 +1306,7 @@ private:
 	{
 		using T = EAngelscriptCachedTypeKind;
 		using B = EAngelscriptCachedBehaviorKind;
-		using R = EAngelscriptCacheReferenceKind;
+		using R = EAngelscriptArtifactReferenceKind;
 		constexpr uint8 ScriptOwners = 0x0e;
 		constexpr uint8 EnvironmentOwnerAbsent = 0x01;
 		static const FBehaviorProductCellForTests Cells[] = {
@@ -1377,7 +1377,7 @@ private:
 		const EAngelscriptCachedTypeKind TypeKind,
 		const EAngelscriptCachedBehaviorKind BehaviorKind,
 		const uint32 Cardinality,
-		const EAngelscriptCacheReferenceKind TargetKind)
+		const EAngelscriptArtifactReferenceKind TargetKind)
 	{
 		for (const FBehaviorProductCellForTests& Cell :
 			GetBehaviorProductCellsForTests())
@@ -1397,7 +1397,7 @@ private:
 	{
 		EAngelscriptCachedTypeKind TypeKind;
 		EAngelscriptCachedBehaviorKind BehaviorKind;
-		EAngelscriptCacheReferenceKind TargetKind;
+		EAngelscriptArtifactReferenceKind TargetKind;
 		uint8 OwnerMask;
 		EBehaviorCompanionRecipeForTests Recipe;
 	};
@@ -1405,12 +1405,12 @@ private:
 	static EBehaviorCompanionRecipeForTests FindBehaviorCompanionRecipeForTests(
 		const EAngelscriptCachedTypeKind TypeKind,
 		const EAngelscriptCachedBehaviorKind BehaviorKind,
-		const EAngelscriptCacheReferenceKind TargetKind,
+		const EAngelscriptArtifactReferenceKind TargetKind,
 		const uint8 OwnerCase)
 	{
 		using T = EAngelscriptCachedTypeKind;
 		using B = EAngelscriptCachedBehaviorKind;
-		using R = EAngelscriptCacheReferenceKind;
+		using R = EAngelscriptArtifactReferenceKind;
 		using C = EBehaviorCompanionRecipeForTests;
 		static const FBehaviorCompanionRuleForTests Rules[] = {
 			{T::Class, B::Construct, R::Invalid, 0x0f,
@@ -1445,7 +1445,7 @@ private:
 		FAngelscriptCachedTypeSchema& Schema,
 		const EAngelscriptCachedBehaviorKind BehaviorKind,
 		const uint32 Ordinal,
-		const FAngelscriptCacheStableReference& Target,
+		const FAngelscriptArtifactReference& Target,
 		const TOptional<FAngelscriptStableTypeKey>& DeclaringOwner)
 	{
 		FAngelscriptCachedBehaviorSlot Slot;
@@ -1455,7 +1455,7 @@ private:
 		Slot.DeclaringOwner = DeclaringOwner;
 		Schema.OrderedBehaviorSlots.Add(Slot);
 		Schema.Dependencies.AddUnique(MakeDependency(
-			Target.Kind == EAngelscriptCacheReferenceKind::ScriptFunction
+			Target.Kind == EAngelscriptArtifactReferenceKind::ScriptFunction
 				? EAngelscriptCacheSemanticDependencyKind::Declaration
 				: EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi,
 			Target));
@@ -1479,7 +1479,7 @@ private:
 		{
 			Schema.Dependencies.AddUnique(MakeDependency(
 				Slot.Target.Kind
-					== EAngelscriptCacheReferenceKind::ScriptFunction
+					== EAngelscriptArtifactReferenceKind::ScriptFunction
 					? EAngelscriptCacheSemanticDependencyKind::Declaration
 					: EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi,
 				Slot.Target));
@@ -1504,7 +1504,7 @@ private:
 		const EAngelscriptCachedTypeKind TypeKind,
 		const EAngelscriptCachedBehaviorKind BehaviorKind,
 		const uint32 Cardinality,
-		const EAngelscriptCacheReferenceKind TargetKind,
+		const EAngelscriptArtifactReferenceKind TargetKind,
 		const uint8 OwnerCase)
 	{
 		FAngelscriptCachedTypeSchema Schema = MakeMinimalSchema(TypeKind);
@@ -1521,7 +1521,7 @@ private:
 		TArray<FAngelscriptCachedBehaviorSlot> PrimarySlots;
 		for (uint32 Index = 0; Index < Cardinality; ++Index)
 		{
-			const FAngelscriptCacheStableReference Target = MakeReference(
+			const FAngelscriptArtifactReference Target = MakeReference(
 				TargetKind, static_cast<uint8>(0xa0 + Index * 2),
 				static_cast<uint8>(0xa1 + Index * 2));
 			AddBehaviorSlotForTests(
@@ -1539,7 +1539,7 @@ private:
 			{
 				AddBehaviorSlotForTests(
 					Schema, EAngelscriptCachedBehaviorKind::Factory, Index,
-					MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+					MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 						static_cast<uint8>(0xb0 + Index * 2),
 						static_cast<uint8>(0xb1 + Index * 2)),
 					Schema.TypeKey);
@@ -1550,7 +1550,7 @@ private:
 			{
 				AddBehaviorSlotForTests(
 					Schema, EAngelscriptCachedBehaviorKind::Construct, Index,
-					MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+					MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 						static_cast<uint8>(0xb0 + Index * 2),
 						static_cast<uint8>(0xb1 + Index * 2)),
 					Schema.TypeKey);
@@ -1577,7 +1577,7 @@ private:
 				AddBehaviorSlotForTests(
 					Schema, EAngelscriptCachedBehaviorKind::Construct,
 					Primary.SlotOrdinal,
-					MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+					MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 						static_cast<uint8>(0xc0 + Primary.SlotOrdinal * 2),
 						static_cast<uint8>(0xc1 + Primary.SlotOrdinal * 2)),
 					Schema.TypeKey);
@@ -1596,7 +1596,7 @@ private:
 		const FAngelscriptCachedTypeSchema& Schema,
 		const EAngelscriptCachedBehaviorKind BehaviorKind,
 		const uint32 Ordinal,
-		const FAngelscriptCacheStableReference& Target)
+		const FAngelscriptArtifactReference& Target)
 	{
 		for (int32 Index = 0; Index < Schema.OrderedBehaviorSlots.Num(); ++Index)
 		{
@@ -1811,23 +1811,23 @@ private:
 		FAngelscriptCachedDataType NestedEnvironment;
 		NestedEnvironment.Kind = EAngelscriptCachedDataTypeKind::EnvironmentType;
 		NestedEnvironment.TypeReference = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0x90, 0x91);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0x90, 0x91);
 		NestedEnvironment.OrderedSubTypes.Add(
 			MakePrimitive(EAngelscriptCachedPrimitiveType::Int16));
 		FAngelscriptCachedDataType RootEnvironment;
 		RootEnvironment.Kind = EAngelscriptCachedDataTypeKind::EnvironmentType;
 		RootEnvironment.TypeReference = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0x92, 0x93);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0x92, 0x93);
 		RootEnvironment.OrderedSubTypes.Add(MoveTemp(NestedEnvironment));
 		RootEnvironment.OrderedSubTypes.Add(
 			MakePrimitive(EAngelscriptCachedPrimitiveType::UInt8));
 		Property.Type = MoveTemp(RootEnvironment);
 		Schema.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::ValueLayout,
-			MakeReference(EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0x90, 0x91)));
+			MakeReference(EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0x90, 0x91)));
 		Schema.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::ValueLayout,
-			MakeReference(EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0x92, 0x93)));
+			MakeReference(EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0x92, 0x93)));
 		Schema.Dependencies.Sort([](const auto& A, const auto& B)
 		{
 			const uint8 AKind = static_cast<uint8>(A.Kind);
@@ -1908,7 +1908,7 @@ private:
 				Schema.OrderedMethods.Add(Method);
 				Schema.Dependencies.AddUnique(MakeDependency(
 					EAngelscriptCacheSemanticDependencyKind::Declaration,
-					MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+					MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 						static_cast<uint8>(0x40 + Index),
 						static_cast<uint8>(0x80 + Index))));
 			}
@@ -1960,8 +1960,8 @@ private:
 					== EAngelscriptCachedTypeRelationKind::ShadowSuper
 					|| RelationKind == EAngelscriptCachedTypeRelationKind::CodeSuper;
 				Relation.Target = MakeReference(bEnvironment
-					? EAngelscriptCacheReferenceKind::EnvironmentSymbol
-					: EAngelscriptCacheReferenceKind::ScriptType,
+					? EAngelscriptArtifactReferenceKind::EnvironmentSymbol
+					: EAngelscriptArtifactReferenceKind::ScriptType,
 					static_cast<uint8>(0x20 + Index), static_cast<uint8>(0x80 + Index));
 				if (Index == 0 && (Variant == 1 || Variant == 2))
 				{
@@ -2023,7 +2023,7 @@ private:
 					FAngelscriptCachedTypeRelation Base;
 					Base.RelationKind = EAngelscriptCachedTypeRelationKind::Base;
 					Base.Target = MakeReference(
-						EAngelscriptCacheReferenceKind::ScriptType, 0x20, 0x21);
+						EAngelscriptArtifactReferenceKind::ScriptType, 0x20, 0x21);
 					Schema.Relations.Add(Base);
 					FAngelscriptCachedTypeLayoutInput Input;
 					Input.InputKind = EAngelscriptCachedTypeLayoutInputKind::BaseType;
@@ -2081,8 +2081,8 @@ private:
 					MakePrimitive(EAngelscriptCachedPrimitiveType::Int32);
 				for (uint32 Depth = 0; Depth < Cardinality; ++Depth)
 				{
-					const FAngelscriptCacheStableReference Target = MakeReference(
-						EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+					const FAngelscriptArtifactReference Target = MakeReference(
+						EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 						static_cast<uint8>(0x30 + Depth),
 						static_cast<uint8>(0x70 + Depth));
 					FAngelscriptCachedDataType Parent;
@@ -2100,7 +2100,7 @@ private:
 				FAngelscriptCachedDataType Wide;
 				Wide.Kind = EAngelscriptCachedDataTypeKind::EnvironmentType;
 				Wide.TypeReference = MakeReference(
-					EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0x30, 0x70);
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0x30, 0x70);
 				Schema.Dependencies.AddUnique(MakeDependency(
 					EAngelscriptCacheSemanticDependencyKind::ValueLayout,
 					Wide.TypeReference.GetValue()));
@@ -2140,7 +2140,7 @@ private:
 				Schema.VirtualFunctionTable.Add(Slot);
 				Schema.Dependencies.AddUnique(MakeDependency(
 					EAngelscriptCacheSemanticDependencyKind::Declaration,
-					MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+					MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 						static_cast<uint8>(0x40 + Index),
 						static_cast<uint8>(0x80 + Index))));
 			}
@@ -2170,7 +2170,7 @@ private:
 				Schema.OrderedBehaviorSlots.Reset();
 				const auto AddBehavior = [&](const EAngelscriptCachedBehaviorKind Kind,
 					const uint32 Ordinal,
-					const FAngelscriptCacheStableReference& Target)
+					const FAngelscriptArtifactReference& Target)
 				{
 					FAngelscriptCachedBehaviorSlot Slot;
 					Slot.BehaviorKind = Kind;
@@ -2190,8 +2190,8 @@ private:
 			for (uint32 Index = 0; Index < Cardinality; ++Index)
 			{
 				AddBehavior(BehaviorKind, Index, MakeReference(bEnvironment
-					? EAngelscriptCacheReferenceKind::EnvironmentSymbol
-					: EAngelscriptCacheReferenceKind::ScriptFunction,
+					? EAngelscriptArtifactReferenceKind::EnvironmentSymbol
+					: EAngelscriptArtifactReferenceKind::ScriptFunction,
 					static_cast<uint8>(0x40 + Index), static_cast<uint8>(0x80 + Index)));
 			}
 				const bool bSingleton = BehaviorKind
@@ -2237,7 +2237,7 @@ private:
 					for (uint32 Index = 0; Index < Cardinality; ++Index)
 					{
 						AddBehavior(EAngelscriptCachedBehaviorKind::Construct, Index,
-							MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+							MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 								static_cast<uint8>(0x60 + Index),
 								static_cast<uint8>(0xa0 + Index)));
 					}
@@ -2251,7 +2251,7 @@ private:
 				if (bExpectedLocalSuccess && Cardinality == 1 && !bEnvironment
 					&& BehaviorKind == EAngelscriptCachedBehaviorKind::CopyFactory)
 				{
-					const FAngelscriptCacheStableReference AliasTarget =
+					const FAngelscriptArtifactReference AliasTarget =
 						Schema.OrderedBehaviorSlots[0].Target;
 					AddBehavior(EAngelscriptCachedBehaviorKind::Construct, 0, AliasTarget);
 					AddBehavior(EAngelscriptCachedBehaviorKind::Factory, 0, AliasTarget);
@@ -2346,19 +2346,19 @@ private:
 			{
 				const EAngelscriptCacheSemanticDependencyKind DependencyKind =
 					static_cast<EAngelscriptCacheSemanticDependencyKind>(Variant + 1);
-				const EAngelscriptCacheReferenceKind TargetKinds[] = {
-					EAngelscriptCacheReferenceKind::Invalid,
-					EAngelscriptCacheReferenceKind::ScriptImport,
-					EAngelscriptCacheReferenceKind::ScriptFunction,
-					EAngelscriptCacheReferenceKind::ScriptFunction,
-					EAngelscriptCacheReferenceKind::ScriptType,
-					EAngelscriptCacheReferenceKind::ScriptType,
-					EAngelscriptCacheReferenceKind::ScriptProperty,
-					EAngelscriptCacheReferenceKind::ScriptGlobal,
-					EAngelscriptCacheReferenceKind::EnvironmentSymbol,
-					EAngelscriptCacheReferenceKind::ScriptFunction,
-					EAngelscriptCacheReferenceKind::EnvironmentSymbol,
-					EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+				const EAngelscriptArtifactReferenceKind TargetKinds[] = {
+					EAngelscriptArtifactReferenceKind::Invalid,
+					EAngelscriptArtifactReferenceKind::ScriptImport,
+					EAngelscriptArtifactReferenceKind::ScriptFunction,
+					EAngelscriptArtifactReferenceKind::ScriptFunction,
+					EAngelscriptArtifactReferenceKind::ScriptType,
+					EAngelscriptArtifactReferenceKind::ScriptType,
+					EAngelscriptArtifactReferenceKind::ScriptProperty,
+					EAngelscriptArtifactReferenceKind::ScriptGlobal,
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
+					EAngelscriptArtifactReferenceKind::ScriptFunction,
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 				};
 				if (DependencyKind == EAngelscriptCacheSemanticDependencyKind::Declaration)
 				{
@@ -2385,7 +2385,7 @@ private:
 						// reached 0x51 at index 17 and accidentally modeled
 						// self-inheritance instead of allocator slack.
 						Relation.Target = MakeReference(
-							EAngelscriptCacheReferenceKind::ScriptType,
+							EAngelscriptArtifactReferenceKind::ScriptType,
 							static_cast<uint8>(0x80 + Index),
 							static_cast<uint8>(0xa0 + Index));
 						Schema.Relations.Add(Relation);
@@ -2398,8 +2398,8 @@ private:
 					AddProperties(Cardinality, 0);
 					for (uint32 Index = 0; Index < Cardinality; ++Index)
 					{
-						const FAngelscriptCacheStableReference Target = MakeReference(
-							EAngelscriptCacheReferenceKind::ScriptType,
+						const FAngelscriptArtifactReference Target = MakeReference(
+							EAngelscriptArtifactReferenceKind::ScriptType,
 							static_cast<uint8>(0x40 + Index),
 							static_cast<uint8>(0x80 + Index));
 						Schema.OrderedProperties[Index].Type = MakeScriptType(
@@ -2459,7 +2459,7 @@ private:
 						EAngelscriptCachedTypeRelationKind::ImplementedInterface;
 					Relation.SemanticOrdinal = Index;
 					Relation.Target = MakeReference(
-						EAngelscriptCacheReferenceKind::ScriptType,
+						EAngelscriptArtifactReferenceKind::ScriptType,
 						static_cast<uint8>(0x40 + Index),
 						static_cast<uint8>(0x80 + Index));
 					Schema.Relations.Add(Relation);
@@ -2534,7 +2534,7 @@ private:
 					Schema.VirtualFunctionTable.Add(Slot);
 					Schema.Dependencies.AddUnique(MakeDependency(
 						EAngelscriptCacheSemanticDependencyKind::Declaration,
-						MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+						MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 							static_cast<uint8>(0x40 + Index),
 							static_cast<uint8>(0x80 + Index))));
 				}
@@ -2547,7 +2547,7 @@ private:
 					Slot.BehaviorKind = EAngelscriptCachedBehaviorKind::Construct;
 					Slot.SlotOrdinal = Index;
 					Slot.Target = MakeReference(
-						EAngelscriptCacheReferenceKind::ScriptFunction,
+						EAngelscriptArtifactReferenceKind::ScriptFunction,
 						static_cast<uint8>(0x50 + Index),
 						static_cast<uint8>(0x90 + Index));
 					Slot.DeclaringOwner = Schema.TypeKey;
@@ -2560,7 +2560,7 @@ private:
 						FAngelscriptCachedBehaviorSlot Factory = Slot;
 						Factory.BehaviorKind = EAngelscriptCachedBehaviorKind::Factory;
 						Factory.Target = MakeReference(
-							EAngelscriptCacheReferenceKind::ScriptFunction,
+							EAngelscriptArtifactReferenceKind::ScriptFunction,
 							static_cast<uint8>(0x70 + Index),
 							static_cast<uint8>(0xb0 + Index));
 						Schema.OrderedBehaviorSlots.Add(Factory);
@@ -6545,7 +6545,7 @@ public:
 		FAngelscriptCachedTypeLayoutInput LayoutInputVector;
 		LayoutInputVector.InputKind = EAngelscriptCachedTypeLayoutInputKind::CodeRoot;
 		LayoutInputVector.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xa4, 0xa5);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xa4, 0xa5);
 		LayoutInputVector.BoundaryContribution = 0;
 		LayoutInputVector.AlignmentContribution = 8;
 		FAngelscriptHash256 LayoutInputHash;
@@ -6735,11 +6735,11 @@ public:
 			EAngelscriptCachedTypeRelationKind::ImplementedInterface;
 		FirstDirectInterface.SemanticOrdinal = 0;
 		FirstDirectInterface.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptType, 0xf2, 0xf3);
+			EAngelscriptArtifactReferenceKind::ScriptType, 0xf2, 0xf3);
 		FAngelscriptCachedTypeRelation SecondDirectInterface = FirstDirectInterface;
 		SecondDirectInterface.SemanticOrdinal = 1;
 		SecondDirectInterface.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptType, 0xe2, 0xe3);
+			EAngelscriptArtifactReferenceKind::ScriptType, 0xe2, 0xe3);
 		DirectInterfaces.Relations = {FirstDirectInterface, SecondDirectInterface};
 		DirectInterfaces.Dependencies = {
 			MakeDependency(EAngelscriptCacheSemanticDependencyKind::Inheritance,
@@ -6853,7 +6853,7 @@ public:
 		Invalid = MakeOrdinaryUClassSchema(true);
 		FAngelscriptCachedTypeRelation ConflictingRelation = Invalid.Relations[0];
 		ConflictingRelation.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptType, 0xd0, 0xd1);
+			EAngelscriptArtifactReferenceKind::ScriptType, 0xd0, 0xd1);
 		Invalid.Relations.Add(ConflictingRelation);
 		FinalizeValidFixtureHashes(Invalid);
 		bPassed &= ExpectExactProducerFailureAndInputUnchanged(*TestRunner, Invalid,
@@ -6869,7 +6869,7 @@ public:
 		Invalid = MakeOrdinaryUClassSchema(false);
 		FAngelscriptCachedTypeLayoutInput ConflictingInput = Invalid.LayoutInputs[0];
 		ConflictingInput.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xd2, 0xd3);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xd2, 0xd3);
 		Invalid.LayoutInputs.Add(ConflictingInput);
 		FinalizeValidFixtureHashes(Invalid);
 		bPassed &= ExpectExactProducerFailureAndInputUnchanged(*TestRunner, Invalid,
@@ -7612,14 +7612,14 @@ public:
 		{
 			ERelationForm Form;
 			const TCHAR* Name;
-			EAngelscriptCacheReferenceKind TargetKinds[5];
+			EAngelscriptArtifactReferenceKind TargetKinds[5];
 			FError Expected[5][3];
 		};
 
-		constexpr EAngelscriptCacheReferenceKind Script =
-			EAngelscriptCacheReferenceKind::ScriptType;
-		constexpr EAngelscriptCacheReferenceKind Environment =
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+		constexpr EAngelscriptArtifactReferenceKind Script =
+			EAngelscriptArtifactReferenceKind::ScriptType;
+		constexpr EAngelscriptArtifactReferenceKind Environment =
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 		const FRelationFormRow FormRows[] = {
 			{ERelationForm::ClassNone, TEXT("Class+None"),
 				{Script, Script, Script, Script, Script},
@@ -7699,10 +7699,10 @@ public:
 		const auto MakeRelationFixture = [&](const ERelationForm Form,
 			const EAngelscriptCachedTypeRelationKind Kind,
 			const uint32 Cardinality,
-			const EAngelscriptCacheReferenceKind TargetKind)
+			const EAngelscriptArtifactReferenceKind TargetKind)
 		{
 			FAngelscriptCachedTypeSchema Schema = MakeFormSchema(Form);
-			TArray<FAngelscriptCacheStableReference> RemovedTargets;
+			TArray<FAngelscriptArtifactReference> RemovedTargets;
 			for (const FAngelscriptCachedTypeRelation& Relation : Schema.Relations)
 			{
 				if (Relation.RelationKind == Kind)
@@ -7741,11 +7741,11 @@ public:
 
 			for (uint32 Index = 0; Index < Cardinality; ++Index)
 			{
-				FAngelscriptCacheStableReference Target = MakeReference(
+				FAngelscriptArtifactReference Target = MakeReference(
 					TargetKind, static_cast<uint8>(0xd0 + Index * 2),
 					static_cast<uint8>(0xd1 + Index * 2));
 				if (Index == 0
-					&& TargetKind == EAngelscriptCacheReferenceKind::EnvironmentSymbol
+					&& TargetKind == EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 					&& (Kind == EAngelscriptCachedTypeRelationKind::ShadowSuper
 						|| Kind == EAngelscriptCachedTypeRelationKind::CodeSuper))
 				{
@@ -7772,7 +7772,7 @@ public:
 				}
 				Schema.Relations.Add(Relation);
 				Schema.Dependencies.Add(MakeDependency(
-					Target.Kind == EAngelscriptCacheReferenceKind::ScriptType
+					Target.Kind == EAngelscriptArtifactReferenceKind::ScriptType
 						? EAngelscriptCacheSemanticDependencyKind::Inheritance
 						: EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi,
 					Target));
@@ -7874,7 +7874,7 @@ public:
 		{
 			return MakeRelationFixture(ERelationForm::ClassNone,
 				EAngelscriptCachedTypeRelationKind::ImplementedInterface,
-				Count, EAngelscriptCacheReferenceKind::ScriptType);
+				Count, EAngelscriptArtifactReferenceKind::ScriptType);
 		};
 
 		int32 AdditionalCalls = 0;
@@ -7894,7 +7894,7 @@ public:
 
 		FAngelscriptCachedTypeSchema Invalid = MakeRelationFixture(
 			ERelationForm::ClassNone, EAngelscriptCachedTypeRelationKind::Base,
-			1, EAngelscriptCacheReferenceKind::ScriptType);
+			1, EAngelscriptArtifactReferenceKind::ScriptType);
 		Invalid.Relations[0].SemanticOrdinal = 0;
 		FinalizeValidFixtureHashes(Invalid);
 		bPassed &= ExpectExactProducerFailureAndInputUnchanged(*TestRunner, Invalid,
@@ -7987,44 +7987,44 @@ public:
 		{
 			ERelationForm Form;
 			EAngelscriptCachedTypeRelationKind Kind;
-			EAngelscriptCacheReferenceKind WrongKinds[2];
+			EAngelscriptArtifactReferenceKind WrongKinds[2];
 			const TCHAR* Name;
 		};
 		const FWrongRelationReferenceRow WrongReferenceRows[] = {
 			{ERelationForm::ClassNone, EAngelscriptCachedTypeRelationKind::Base,
-				{Environment, EAngelscriptCacheReferenceKind::ScriptFunction},
+				{Environment, EAngelscriptArtifactReferenceKind::ScriptFunction},
 				TEXT("Class+None Base")},
 			{ERelationForm::ClassNone,
 				EAngelscriptCachedTypeRelationKind::ImplementedInterface,
-				{Environment, EAngelscriptCacheReferenceKind::ScriptFunction},
+				{Environment, EAngelscriptArtifactReferenceKind::ScriptFunction},
 				TEXT("Class+None ImplementedInterface")},
 			{ERelationForm::OrdinaryUClass, EAngelscriptCachedTypeRelationKind::Base,
-				{Environment, EAngelscriptCacheReferenceKind::ScriptFunction},
+				{Environment, EAngelscriptArtifactReferenceKind::ScriptFunction},
 				TEXT("ordinary UClass Base")},
 			{ERelationForm::OrdinaryUClass,
 				EAngelscriptCachedTypeRelationKind::ShadowSuper,
-				{Script, EAngelscriptCacheReferenceKind::ScriptFunction},
+				{Script, EAngelscriptArtifactReferenceKind::ScriptFunction},
 				TEXT("ordinary UClass ShadowSuper")},
 			{ERelationForm::OrdinaryUClass,
 				EAngelscriptCachedTypeRelationKind::CodeSuper,
-				{Script, EAngelscriptCacheReferenceKind::ScriptFunction},
+				{Script, EAngelscriptArtifactReferenceKind::ScriptFunction},
 				TEXT("ordinary UClass CodeSuper")},
 			{ERelationForm::OrdinaryUClass,
 				EAngelscriptCachedTypeRelationKind::ImplementedInterface,
-				{Script, EAngelscriptCacheReferenceKind::ScriptFunction},
+				{Script, EAngelscriptArtifactReferenceKind::ScriptFunction},
 				TEXT("ordinary UClass ImplementedInterface")},
 			{ERelationForm::StaticsUClass, EAngelscriptCachedTypeRelationKind::CodeSuper,
-				{Script, EAngelscriptCacheReferenceKind::ScriptFunction},
+				{Script, EAngelscriptArtifactReferenceKind::ScriptFunction},
 				TEXT("statics UClass CodeSuper")},
 			{ERelationForm::InterfaceNone,
 				EAngelscriptCachedTypeRelationKind::ImplementedInterface,
-				{Environment, EAngelscriptCacheReferenceKind::ScriptFunction},
+				{Environment, EAngelscriptArtifactReferenceKind::ScriptFunction},
 				TEXT("Interface+None ImplementedInterface")},
 		};
 		int32 WrongReferenceCalls = 0;
 		for (const FWrongRelationReferenceRow& Row : WrongReferenceRows)
 		{
-			for (const EAngelscriptCacheReferenceKind WrongKind : Row.WrongKinds)
+			for (const EAngelscriptArtifactReferenceKind WrongKind : Row.WrongKinds)
 			{
 				const FAngelscriptCachedTypeSchema Wrong = MakeRelationFixture(
 					Row.Form, Row.Kind, 1, WrongKind);
@@ -8073,7 +8073,7 @@ public:
 			FAngelscriptCachedTypeRelation Base;
 			Base.RelationKind = EAngelscriptCachedTypeRelationKind::Base;
 			Base.Target = MakeReference(
-				EAngelscriptCacheReferenceKind::ScriptType, 0xe0, 0xe1);
+				EAngelscriptArtifactReferenceKind::ScriptType, 0xe0, 0xe1);
 			Schema.Relations.Add(Base);
 			FAngelscriptCachedTypeLayoutInput Input;
 			Input.InputKind = EAngelscriptCachedTypeLayoutInputKind::BaseType;
@@ -8157,19 +8157,19 @@ public:
 			{
 			case EAngelscriptCachedTypeLayoutInputKind::BaseType:
 				Input.Target = MakeReference(
-					EAngelscriptCacheReferenceKind::ScriptType, 0xe2, 0xe3);
+					EAngelscriptArtifactReferenceKind::ScriptType, 0xe2, 0xe3);
 				Input.BoundaryContribution = 0;
 				Input.AlignmentContribution = 8;
 				break;
 			case EAngelscriptCachedTypeLayoutInputKind::CodeRoot:
 				Input.Target = MakeReference(
-					EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xe4, 0xe5);
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xe4, 0xe5);
 				Input.BoundaryContribution = 0;
 				Input.AlignmentContribution = 8;
 				break;
 			case EAngelscriptCachedTypeLayoutInputKind::StructHeader:
 				Input.Target = MakeReference(
-					EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xe6, 0xe7);
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xe6, 0xe7);
 				Input.BoundaryContribution = 16;
 				break;
 			default:
@@ -8532,27 +8532,27 @@ public:
 		{
 			FAngelscriptCachedTypeSchema Schema;
 			EAngelscriptCachedTypeLayoutInputKind Kind;
-			EAngelscriptCacheReferenceKind WrongKind;
+			EAngelscriptArtifactReferenceKind WrongKind;
 			const TCHAR* Context;
 		};
 		const FWrongInputReferenceRow WrongReferenceRows[] = {
 			{PlainClassWithBase, EAngelscriptCachedTypeLayoutInputKind::BaseType,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 				TEXT("BaseType EnvironmentSymbol target")},
 			{PlainClassWithBase, EAngelscriptCachedTypeLayoutInputKind::BaseType,
-				EAngelscriptCacheReferenceKind::ScriptFunction,
+				EAngelscriptArtifactReferenceKind::ScriptFunction,
 				TEXT("BaseType ScriptFunction target")},
 			{OrdinaryRoot, EAngelscriptCachedTypeLayoutInputKind::CodeRoot,
-				EAngelscriptCacheReferenceKind::ScriptType,
+				EAngelscriptArtifactReferenceKind::ScriptType,
 				TEXT("CodeRoot ScriptType target")},
 			{OrdinaryRoot, EAngelscriptCachedTypeLayoutInputKind::CodeRoot,
-				EAngelscriptCacheReferenceKind::ScriptFunction,
+				EAngelscriptArtifactReferenceKind::ScriptFunction,
 				TEXT("CodeRoot ScriptFunction target")},
 			{ReflectedUStruct, EAngelscriptCachedTypeLayoutInputKind::StructHeader,
-				EAngelscriptCacheReferenceKind::ScriptType,
+				EAngelscriptArtifactReferenceKind::ScriptType,
 				TEXT("StructHeader ScriptType target")},
 			{ReflectedUStruct, EAngelscriptCachedTypeLayoutInputKind::StructHeader,
-				EAngelscriptCacheReferenceKind::ScriptFunction,
+				EAngelscriptArtifactReferenceKind::ScriptFunction,
 				TEXT("StructHeader ScriptFunction target")},
 		};
 		int32 WrongReferenceCalls = 0;
@@ -8899,24 +8899,24 @@ public:
 
 		Invalid = PlainStruct;
 		Invalid.OrderedProperties[0].Type.TypeReference = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptType, 0xe0, 0xe1);
+			EAngelscriptArtifactReferenceKind::ScriptType, 0xe0, 0xe1);
 		ExpectFailure(Invalid, FError::InvalidPresence,
 			TEXT("Primitive datatype carries TypeReference"));
 
 		struct FReferenceKindRow
 		{
 			EAngelscriptCachedDataTypeKind DataTypeKind;
-			EAngelscriptCacheReferenceKind ExpectedReferenceKind;
-			EAngelscriptCacheReferenceKind WrongReferenceKind;
+			EAngelscriptArtifactReferenceKind ExpectedReferenceKind;
+			EAngelscriptArtifactReferenceKind WrongReferenceKind;
 			const TCHAR* Name;
 		};
 		const FReferenceKindRow ReferenceKindRows[] = {
 			{EAngelscriptCachedDataTypeKind::ScriptType,
-				EAngelscriptCacheReferenceKind::ScriptType,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, TEXT("ScriptType")},
+				EAngelscriptArtifactReferenceKind::ScriptType,
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, TEXT("ScriptType")},
 			{EAngelscriptCachedDataTypeKind::EnvironmentType,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol,
-				EAngelscriptCacheReferenceKind::ScriptType, TEXT("EnvironmentType")},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
+				EAngelscriptArtifactReferenceKind::ScriptType, TEXT("EnvironmentType")},
 		};
 		for (const FReferenceKindRow& Row : ReferenceKindRows)
 		{
@@ -8986,7 +8986,7 @@ public:
 		Invalid.OrderedProperties[0].Type.Primitive =
 			EAngelscriptCachedPrimitiveType::Invalid;
 		Invalid.OrderedProperties[0].Type.TypeReference = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptType, 0xea, 0xeb);
+			EAngelscriptArtifactReferenceKind::ScriptType, 0xea, 0xeb);
 		ExpectFailure(Invalid, FError::InvalidQualifierCombination,
 			TEXT("Auto datatype carries TypeReference"));
 
@@ -9075,12 +9075,12 @@ public:
 			if (DataTypeKind == EAngelscriptCachedDataTypeKind::ScriptType)
 			{
 				Property.Type.TypeReference = MakeReference(
-					EAngelscriptCacheReferenceKind::ScriptType, 0xf0, 0xf1);
+					EAngelscriptArtifactReferenceKind::ScriptType, 0xf0, 0xf1);
 			}
 			if (DataTypeKind == EAngelscriptCachedDataTypeKind::EnvironmentType)
 			{
 				Property.Type.TypeReference = MakeReference(
-					EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xf2, 0xf3);
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xf2, 0xf3);
 			}
 			if (Property.Type.TypeReference.IsSet())
 			{
@@ -10035,7 +10035,7 @@ public:
 		Invalid = MakeOrdinaryUClassSchema(false);
 		FAngelscriptCachedTypeLayoutInput ConflictingInput = Invalid.LayoutInputs[0];
 		ConflictingInput.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xd0, 0xd1);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xd0, 0xd1);
 		Invalid.LayoutInputs.Add(MoveTemp(ConflictingInput));
 		FinalizeValidFixtureHashes(Invalid);
 		ASSERT_THAT(IsTrue(ExpectExactProducerFailureAndInputUnchanged(*TestRunner,
@@ -10050,7 +10050,7 @@ public:
 				EAngelscriptCachedTypeRelationKind::ImplementedInterface;
 			Relation.SemanticOrdinal = Ordinal;
 			Relation.Target = MakeReference(
-				EAngelscriptCacheReferenceKind::ScriptType,
+				EAngelscriptArtifactReferenceKind::ScriptType,
 				static_cast<uint8>(0xd2 + Ordinal),
 				static_cast<uint8>(0xe2 + Ordinal));
 			Invalid.Dependencies.Add(MakeDependency(
@@ -10067,7 +10067,7 @@ public:
 		FAngelscriptCachedTypeRelation ForbiddenBase;
 		ForbiddenBase.RelationKind = EAngelscriptCachedTypeRelationKind::Base;
 		ForbiddenBase.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptType, 0xd4, 0xe4);
+			EAngelscriptArtifactReferenceKind::ScriptType, 0xd4, 0xe4);
 		Invalid.Relations.Add(ForbiddenBase);
 		Invalid.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::Inheritance,
@@ -10187,7 +10187,7 @@ public:
 			Schema.VirtualFunctionTable.Add(Slot);
 			Schema.Dependencies.Add(MakeDependency(
 				EAngelscriptCacheSemanticDependencyKind::Declaration,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xd6, 0xe6)));
 			FinalizeValidFixtureHashes(Schema);
 			return Schema;
@@ -10283,7 +10283,7 @@ public:
 
 		Invalid = MakeOrdinaryUClassSchema(false);
 		Invalid.Reflection.OrderedUFunctionMembers[0].Target = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xd8, 0xe8);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xd8, 0xe8);
 		FinalizeValidFixtureHashes(Invalid);
 		ASSERT_THAT(IsTrue(ExpectExactProducerFailureAndInputUnchanged(*TestRunner,
 			Invalid, EAngelscriptCacheValidationError::WrongReferenceKind,
@@ -10315,7 +10315,7 @@ public:
 		Invalid = MakeCompleteDelegateSchema();
 		Invalid.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::ValueLayout,
-			MakeReference(EAngelscriptCacheReferenceKind::ScriptType, 0xd9, 0xe9)));
+			MakeReference(EAngelscriptArtifactReferenceKind::ScriptType, 0xd9, 0xe9)));
 		ASSERT_THAT(IsTrue(ExpectExactProducerFailureAndInputUnchanged(*TestRunner,
 			Invalid, EAngelscriptCacheValidationError::UnexpectedRecord,
 			TEXT("extra derived dependency"))));
@@ -10985,7 +10985,7 @@ public:
 
 		FAngelscriptCachedTypeSchema Invalid = MakeOrdinaryUClassSchema(false);
 		Invalid.Reflection.OrderedUFunctionMembers[0].Target.Kind =
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 		FMalformedDecodeOutcome Outcome = DecodePhysicalOnlyFixture(Invalid);
 		ASSERT_THAT(IsTrue(ExpectExactFailureAndReset(*TestRunner, Outcome,
 			EAngelscriptCacheValidationError::WrongReferenceKind,
@@ -11087,7 +11087,7 @@ public:
 			FAngelscriptCachedTypeRelation Relation;
 			Relation.RelationKind = EAngelscriptCachedTypeRelationKind::ImplementedInterface;
 			Relation.SemanticOrdinal = Ordinal;
-			Relation.Target = MakeReference(EAngelscriptCacheReferenceKind::ScriptType,
+			Relation.Target = MakeReference(EAngelscriptArtifactReferenceKind::ScriptType,
 				static_cast<uint8>(0x70 + Ordinal), static_cast<uint8>(0x80 + Ordinal));
 			Schema.Relations.Add(Relation);
 			Schema.Dependencies.Add(MakeDependency(
@@ -11152,7 +11152,7 @@ public:
 		Invalid = MakeMinimalSchema(EAngelscriptCachedTypeKind::Class);
 		FAngelscriptCachedTypeRelation Compose;
 		Compose.RelationKind = EAngelscriptCachedTypeRelationKind::Compose;
-		Compose.Target = MakeReference(EAngelscriptCacheReferenceKind::ScriptType, 0x75, 0x85);
+		Compose.Target = MakeReference(EAngelscriptArtifactReferenceKind::ScriptType, 0x75, 0x85);
 		Invalid.Relations.Add(Compose);
 		Outcome = DecodePhysicalOnlyFixture(Invalid);
 		ASSERT_THAT(IsTrue(ExpectExactFailureAndReset(*TestRunner, Outcome,
@@ -11172,7 +11172,7 @@ public:
 			Relation.RelationKind =
 				EAngelscriptCachedTypeRelationKind::ImplementedInterface;
 			Relation.SemanticOrdinal = Index;
-			Relation.Target = MakeReference(EAngelscriptCacheReferenceKind::ScriptType,
+			Relation.Target = MakeReference(EAngelscriptArtifactReferenceKind::ScriptType,
 				static_cast<uint8>(0x70 + Index), static_cast<uint8>(0x80 + Index));
 			Valid.Relations.Add(Relation);
 			Valid.Dependencies.Add(MakeDependency(
@@ -11252,7 +11252,7 @@ public:
 				EAngelscriptCachedTypeRelationKind::ImplementedInterface;
 			Relation.SemanticOrdinal = 0;
 			Relation.Target = MakeReference(
-				EAngelscriptCacheReferenceKind::ScriptType, 0x71, 0x81);
+				EAngelscriptArtifactReferenceKind::ScriptType, 0x71, 0x81);
 			Schema.Relations.Add(Relation);
 			Schema.Dependencies.Add(MakeDependency(
 				EAngelscriptCacheSemanticDependencyKind::Inheritance,
@@ -11405,7 +11405,7 @@ public:
 					for (uint8 ReferenceCase = 0; ReferenceCase < 3; ++ReferenceCase)
 					{
 						FAngelscriptCachedTypeSchema Schema = FormFixture.Schema;
-						TArray<FAngelscriptCacheStableReference> RemovedTargets;
+						TArray<FAngelscriptArtifactReference> RemovedTargets;
 						for (const FAngelscriptCachedTypeRelation& Relation : Schema.Relations)
 						{
 							if (Relation.RelationKind == Kind)
@@ -11444,17 +11444,17 @@ public:
 
 						for (uint32 Index = 0; Index < Cardinality; ++Index)
 						{
-							EAngelscriptCacheReferenceKind ReferenceKind =
+							EAngelscriptArtifactReferenceKind ReferenceKind =
 								ReferenceCase == 0
-								? EAngelscriptCacheReferenceKind::ScriptType
+								? EAngelscriptArtifactReferenceKind::ScriptType
 								: ReferenceCase == 1
-									? EAngelscriptCacheReferenceKind::EnvironmentSymbol
-									: EAngelscriptCacheReferenceKind::ScriptFunction;
-							FAngelscriptCacheStableReference Target = MakeReference(
+									? EAngelscriptArtifactReferenceKind::EnvironmentSymbol
+									: EAngelscriptArtifactReferenceKind::ScriptFunction;
+							FAngelscriptArtifactReference Target = MakeReference(
 								ReferenceKind, static_cast<uint8>(0xd0 + Index * 2),
 								static_cast<uint8>(0xd1 + Index * 2));
 							if (FormFixture.Form == EForm::OrdinaryUClass
-								&& ReferenceKind == EAngelscriptCacheReferenceKind::EnvironmentSymbol
+								&& ReferenceKind == EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 								&& Index == 0
 								&& (Kind == EAngelscriptCachedTypeRelationKind::ShadowSuper
 									|| Kind == EAngelscriptCachedTypeRelationKind::CodeSuper))
@@ -11481,7 +11481,7 @@ public:
 							}
 							Schema.Relations.Add(Relation);
 							Schema.Dependencies.Add(MakeDependency(
-								Target.Kind == EAngelscriptCacheReferenceKind::ScriptType
+								Target.Kind == EAngelscriptArtifactReferenceKind::ScriptType
 									? EAngelscriptCacheSemanticDependencyKind::Inheritance
 									: EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi,
 								Target));
@@ -11491,9 +11491,9 @@ public:
 								FAngelscriptCachedTypeLayoutInput Input;
 								Input.InputKind = EAngelscriptCachedTypeLayoutInputKind::BaseType;
 								Input.Target = ReferenceKind
-									== EAngelscriptCacheReferenceKind::ScriptType
+									== EAngelscriptArtifactReferenceKind::ScriptType
 									? Target
-									: MakeReference(EAngelscriptCacheReferenceKind::ScriptType,
+									: MakeReference(EAngelscriptArtifactReferenceKind::ScriptType,
 										0xe8, 0xe9);
 								Input.BoundaryContribution = 0;
 								Input.AlignmentContribution = 8;
@@ -11506,10 +11506,10 @@ public:
 								FAngelscriptCachedTypeLayoutInput Input;
 								Input.InputKind = EAngelscriptCachedTypeLayoutInputKind::CodeRoot;
 								Input.Target = ReferenceKind
-									== EAngelscriptCacheReferenceKind::EnvironmentSymbol
+									== EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 									? Target
 									: MakeReference(
-										EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+										EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 										0xea, 0xeb);
 								Input.BoundaryContribution = 0;
 								Input.AlignmentContribution = 8;
@@ -11690,7 +11690,7 @@ public:
 			EAngelscriptCachedTypeKind::Class);
 		FAngelscriptCachedTypeRelation Base;
 		Base.RelationKind = EAngelscriptCachedTypeRelationKind::Base;
-		Base.Target = MakeReference(EAngelscriptCacheReferenceKind::ScriptType, 0x70, 0x71);
+		Base.Target = MakeReference(EAngelscriptArtifactReferenceKind::ScriptType, 0x70, 0x71);
 		Schema.Relations.Add(Base);
 		FAngelscriptCachedTypeLayoutInput Input;
 		Input.InputKind = EAngelscriptCachedTypeLayoutInputKind::BaseType;
@@ -11761,7 +11761,7 @@ public:
 			"target-checks=16 missing-checks=4 expected-total=36"));
 		static_assert(std::is_same_v<
 			decltype(FAngelscriptCachedTypeLayoutInput::Target),
-			FAngelscriptCacheStableReference>,
+			FAngelscriptArtifactReference>,
 			"LayoutInput Target is a required direct stable reference");
 		struct FRoleFixture
 		{
@@ -11777,7 +11777,7 @@ public:
 					EAngelscriptCachedTypeKind::Class);
 				FAngelscriptCachedTypeRelation Base;
 				Base.RelationKind = EAngelscriptCachedTypeRelationKind::Base;
-				Base.Target = MakeReference(EAngelscriptCacheReferenceKind::ScriptType,
+				Base.Target = MakeReference(EAngelscriptArtifactReferenceKind::ScriptType,
 					0x70, 0x71);
 				Schema.Relations.Add(Base);
 				FAngelscriptCachedTypeLayoutInput Input;
@@ -11859,7 +11859,7 @@ public:
 
 			InvalidTarget = Fixture.Schema;
 			InvalidTarget.LayoutInputs[Fixture.InputIndex].Target.Kind =
-				EAngelscriptCacheReferenceKind::Invalid;
+				EAngelscriptArtifactReferenceKind::Invalid;
 			TargetOutcome = DecodePhysicalOnlyFixture(InvalidTarget);
 			ASSERT_THAT(IsTrue(ExpectExactFailureAndReset(*TestRunner, TargetOutcome,
 				EAngelscriptCacheValidationError::UnknownEnumValue,
@@ -11871,7 +11871,7 @@ public:
 
 			InvalidTarget = Fixture.Schema;
 			InvalidTarget.LayoutInputs[Fixture.InputIndex].Target.Kind =
-				EAngelscriptCacheReferenceKind::ScriptFunction;
+				EAngelscriptArtifactReferenceKind::ScriptFunction;
 			TargetOutcome = DecodePhysicalOnlyFixture(InvalidTarget);
 			ASSERT_THAT(IsTrue(ExpectExactFailureAndReset(*TestRunner, TargetOutcome,
 				EAngelscriptCacheValidationError::WrongReferenceKind,
@@ -11941,7 +11941,7 @@ public:
 			FAngelscriptCachedTypeRelation Base;
 			Base.RelationKind = EAngelscriptCachedTypeRelationKind::Base;
 			Base.Target = MakeReference(
-				EAngelscriptCacheReferenceKind::ScriptType, 0x70, 0x71);
+				EAngelscriptArtifactReferenceKind::ScriptType, 0x70, 0x71);
 			Schema.Relations.Add(Base);
 			FAngelscriptCachedTypeLayoutInput Input;
 			Input.InputKind = EAngelscriptCachedTypeLayoutInputKind::BaseType;
@@ -12545,12 +12545,12 @@ public:
 					if (Property.Type.Kind == EAngelscriptCachedDataTypeKind::ScriptType)
 					{
 						Property.Type.TypeReference = MakeReference(
-							EAngelscriptCacheReferenceKind::ScriptType, 0xd0, 0xd1);
+							EAngelscriptArtifactReferenceKind::ScriptType, 0xd0, 0xd1);
 					}
 					if (Property.Type.Kind == EAngelscriptCachedDataTypeKind::EnvironmentType)
 					{
 						Property.Type.TypeReference = MakeReference(
-							EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xd2, 0xd3);
+							EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xd2, 0xd3);
 					}
 					if (Property.Type.TypeReference.IsSet())
 					{
@@ -12667,7 +12667,7 @@ public:
 			Schema.OrderedMethods.Add(Method);
 			Schema.Dependencies.Add(MakeDependency(
 				EAngelscriptCacheSemanticDependencyKind::Declaration,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					static_cast<uint8>(0x90 + Ordinal * 2),
 					static_cast<uint8>(0x91 + Ordinal * 2))));
 		}
@@ -12735,7 +12735,7 @@ public:
 		FAngelscriptCachedBehaviorSlot EngineCopy;
 		EngineCopy.BehaviorKind = EAngelscriptCachedBehaviorKind::Copy;
 		EngineCopy.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xa0, 0xa1);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xa0, 0xa1);
 		EngineCopy.DeclaringOwner = Invalid.TypeKey;
 		Invalid.OrderedBehaviorSlots.Add(EngineCopy);
 		Invalid.Dependencies.Add(MakeDependency(
@@ -13256,9 +13256,9 @@ public:
 					static_cast<EAngelscriptCachedTypeKind>(RawTypeKind);
 				for (const uint32 Cardinality : {uint32(1), uint32(2)})
 				{
-					for (const EAngelscriptCacheReferenceKind TargetKind : {
-						EAngelscriptCacheReferenceKind::ScriptFunction,
-						EAngelscriptCacheReferenceKind::EnvironmentSymbol})
+					for (const EAngelscriptArtifactReferenceKind TargetKind : {
+						EAngelscriptArtifactReferenceKind::ScriptFunction,
+						EAngelscriptArtifactReferenceKind::EnvironmentSymbol})
 					{
 						for (uint8 OwnerCase = 0; OwnerCase < 4; ++OwnerCase)
 						{
@@ -13268,7 +13268,7 @@ public:
 									== EAngelscriptCachedBehaviorKind::Construct
 								&& Cardinality == 1
 								&& TargetKind
-									== EAngelscriptCacheReferenceKind::ScriptFunction
+									== EAngelscriptArtifactReferenceKind::ScriptFunction
 								&& OwnerCase == 0;
 							const bool bRetainedB1DelegateTemplateCallbackSelf =
 								TypeKind == EAngelscriptCachedTypeKind::Delegate
@@ -13276,7 +13276,7 @@ public:
 									== EAngelscriptCachedBehaviorKind::TemplateCallback
 								&& Cardinality == 1
 								&& TargetKind
-									== EAngelscriptCacheReferenceKind::ScriptFunction
+									== EAngelscriptArtifactReferenceKind::ScriptFunction
 								&& OwnerCase == 1;
 							if (bRetainedB1DelegateConstructAbsent
 								|| bRetainedB1DelegateTemplateCallbackSelf)
@@ -13358,7 +13358,7 @@ public:
 			const FAngelscriptCachedTypeSchema OrdinaryClass =
 				BuildBehaviorProductFixtureForTests(
 					EAngelscriptCachedTypeKind::Class, BehaviorKind, 1,
-					EAngelscriptCacheReferenceKind::ScriptFunction, 1);
+					EAngelscriptArtifactReferenceKind::ScriptFunction, 1);
 			FAngelscriptCachedTypeSchema Statics = MakeStaticsUClassSchema();
 			ClearBehaviorOwnedStateForTests(Statics);
 			// Statics UClass forbids both the behavior rows and their
@@ -13397,7 +13397,7 @@ public:
 			ClearBehaviorOwnedStateForTests(Schema);
 			AddBehaviorSlotForTests(Schema,
 				static_cast<EAngelscriptCachedBehaviorKind>(RawKind), 0,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xd0, 0xd1),
 				Schema.TypeKey);
 			RunProducerCase(MoveTemp(Schema), FError::UnknownEnumValue,
@@ -13415,11 +13415,11 @@ public:
 			FAngelscriptCachedTypeSchema Schema = MakeMinimalSchema(
 				EAngelscriptCachedTypeKind::Struct);
 			ClearBehaviorOwnedStateForTests(Schema);
-			FAngelscriptCacheStableReference Target =
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+			FAngelscriptArtifactReference Target =
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xd2, 0xd3);
 			Target.Kind =
-				static_cast<EAngelscriptCacheReferenceKind>(RawReferenceKind);
+				static_cast<EAngelscriptArtifactReferenceKind>(RawReferenceKind);
 			AddBehaviorSlotForTests(Schema,
 				EAngelscriptCachedBehaviorKind::Construct, 0,
 				Target, Schema.TypeKey);
@@ -13432,7 +13432,7 @@ public:
 			ClearBehaviorOwnedStateForTests(Schema);
 			AddBehaviorSlotForTests(Schema,
 				EAngelscriptCachedBehaviorKind::Construct, 0,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptType,
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptType,
 					0xd2, 0xd3),
 				Schema.TypeKey);
 			RunProducerCase(MoveTemp(Schema), FError::WrongReferenceKind,
@@ -13442,8 +13442,8 @@ public:
 			FAngelscriptCachedTypeSchema Schema = MakeMinimalSchema(
 				EAngelscriptCachedTypeKind::Struct);
 			ClearBehaviorOwnedStateForTests(Schema);
-			FAngelscriptCacheStableReference Target =
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+			FAngelscriptArtifactReference Target =
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xd2, 0xd3);
 			Target.StableKey = {};
 			AddBehaviorSlotForTests(Schema,
@@ -13456,8 +13456,8 @@ public:
 			FAngelscriptCachedTypeSchema Schema = MakeMinimalSchema(
 				EAngelscriptCachedTypeKind::Struct);
 			ClearBehaviorOwnedStateForTests(Schema);
-			FAngelscriptCacheStableReference Target =
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+			FAngelscriptArtifactReference Target =
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xd2, 0xd3);
 			Target.ExpectedAbi = {};
 			AddBehaviorSlotForTests(Schema,
@@ -13474,59 +13474,59 @@ public:
 		{
 			EAngelscriptCachedTypeKind TypeKind;
 			EAngelscriptCachedBehaviorKind BehaviorKind;
-			EAngelscriptCacheReferenceKind TargetKind;
+			EAngelscriptArtifactReferenceKind TargetKind;
 			uint8 OwnerCase;
 			bool bPresentZeroOwner;
 		};
 		const FBehaviorGapRow GapRows[] = {
 			{EAngelscriptCachedTypeKind::Struct,
 				EAngelscriptCachedBehaviorKind::ListConstruct,
-				EAngelscriptCacheReferenceKind::ScriptFunction, 0, false},
+				EAngelscriptArtifactReferenceKind::ScriptFunction, 0, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::Destruct,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0, false},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::Factory,
-				EAngelscriptCacheReferenceKind::ScriptFunction, 1, false},
+				EAngelscriptArtifactReferenceKind::ScriptFunction, 1, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::ListFactory,
-				EAngelscriptCacheReferenceKind::ScriptFunction, 1, false},
+				EAngelscriptArtifactReferenceKind::ScriptFunction, 1, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::AddRef,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 1, true},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 1, true},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::Release,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 1, false},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 1, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::GetWeakRefFlag,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0, false},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::TemplateCallback,
-				EAngelscriptCacheReferenceKind::ScriptFunction, 1, false},
+				EAngelscriptArtifactReferenceKind::ScriptFunction, 1, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::GetRefCount,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0, false},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::SetGcFlag,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0, false},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::GetGcFlag,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0, false},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::EnumRefs,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0, false},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::ReleaseRefs,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0, false},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::Copy,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0, false},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0, false},
 			{EAngelscriptCachedTypeKind::Struct,
 				EAngelscriptCachedBehaviorKind::CopyConstruct,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0, false},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0, false},
 			{EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::CopyFactory,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0, false},
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0, false},
 		};
 		PartitionCalls = TotalCalls;
 		PartitionSuccess = SuccessCalls;
@@ -13537,7 +13537,7 @@ public:
 				BuildBehaviorProductFixtureForTests(
 					Row.TypeKind, Row.BehaviorKind, 2,
 					Row.TargetKind, Row.OwnerCase);
-			const FAngelscriptCacheStableReference SecondTarget =
+			const FAngelscriptArtifactReference SecondTarget =
 				MakeReference(Row.TargetKind, 0xa2, 0xa3);
 			const int32 SecondIndex = FindBehaviorPhysicalIndexForTests(
 				Schema, Row.BehaviorKind, 1, SecondTarget);
@@ -13564,9 +13564,9 @@ public:
 			FAngelscriptCachedTypeSchema Schema =
 				BuildBehaviorProductFixtureForTests(
 					EAngelscriptCachedTypeKind::Class, BehaviorKind, 2,
-					EAngelscriptCacheReferenceKind::ScriptFunction, 1);
-			const FAngelscriptCacheStableReference SecondTarget =
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+					EAngelscriptArtifactReferenceKind::ScriptFunction, 1);
+			const FAngelscriptArtifactReference SecondTarget =
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xa2, 0xa3);
 			const int32 SecondIndex = FindBehaviorPhysicalIndexForTests(
 				Schema, BehaviorKind, 1, SecondTarget);
@@ -13579,14 +13579,14 @@ public:
 				BuildBehaviorProductFixtureForTests(
 					EAngelscriptCachedTypeKind::Class,
 					EAngelscriptCachedBehaviorKind::Construct, 2,
-					EAngelscriptCacheReferenceKind::ScriptFunction, 1);
+					EAngelscriptArtifactReferenceKind::ScriptFunction, 1);
 			const int32 FirstIndex = FindBehaviorPhysicalIndexForTests(
 				Schema, EAngelscriptCachedBehaviorKind::Construct, 0,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xa0, 0xa1));
 			const int32 SecondIndex = FindBehaviorPhysicalIndexForTests(
 				Schema, EAngelscriptCachedBehaviorKind::Construct, 1,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xa2, 0xa3));
 			Swap(Schema.OrderedBehaviorSlots[FirstIndex],
 				Schema.OrderedBehaviorSlots[SecondIndex]);
@@ -13599,12 +13599,12 @@ public:
 			ClearBehaviorOwnedStateForTests(Schema);
 			AddBehaviorSlotForTests(Schema,
 				EAngelscriptCachedBehaviorKind::Copy, 0,
-				MakeReference(EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+				MakeReference(EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 					0xd4, 0xd5),
 				{});
 			AddBehaviorSlotForTests(Schema,
 				EAngelscriptCachedBehaviorKind::Construct, 0,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xd6, 0xd7),
 				Schema.TypeKey);
 			RunProducerCase(MoveTemp(Schema), FError::NonCanonicalOrder,
@@ -13625,7 +13625,7 @@ public:
 			{
 				AddBehaviorSlotForTests(Schema,
 					EAngelscriptCachedBehaviorKind::Construct, Index,
-					MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+					MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 						static_cast<uint8>(0xb0 + Index * 2),
 						static_cast<uint8>(0xb1 + Index * 2)),
 					Schema.TypeKey);
@@ -13634,7 +13634,7 @@ public:
 			{
 				AddBehaviorSlotForTests(Schema,
 					EAngelscriptCachedBehaviorKind::Factory, Index,
-					MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+					MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 						static_cast<uint8>(0xc0 + Index * 2),
 						static_cast<uint8>(0xc1 + Index * 2)),
 					Schema.TypeKey);
@@ -13671,14 +13671,14 @@ public:
 			{
 				return BuildBehaviorProductFixtureForTests(
 					TypeKind, CopyKind, 1,
-					EAngelscriptCacheReferenceKind::ScriptFunction, 1);
+					EAngelscriptArtifactReferenceKind::ScriptFunction, 1);
 			};
 			FAngelscriptCachedTypeSchema KeyMismatch = MakeCopyFixture();
 			FAngelscriptCachedTypeSchema AbiMismatch = KeyMismatch;
 			FAngelscriptCachedTypeSchema OwnerMismatch = KeyMismatch;
 			FAngelscriptCachedTypeSchema NoPeer = KeyMismatch;
-			const FAngelscriptCacheStableReference PrimaryTarget =
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+			const FAngelscriptArtifactReference PrimaryTarget =
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xa0, 0xa1);
 			const int32 CopyIndex = FindBehaviorPhysicalIndexForTests(
 				KeyMismatch, CopyKind, 0, PrimaryTarget);
@@ -13736,11 +13736,11 @@ public:
 				BuildBehaviorProductFixtureForTests(
 					EAngelscriptCachedTypeKind::Class,
 					EAngelscriptCachedBehaviorKind::AddRef, 1,
-					EAngelscriptCacheReferenceKind::EnvironmentSymbol, 1);
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 1);
 			const int32 PrimaryIndex = FindBehaviorPhysicalIndexForTests(
 				EnvironmentPresentZero,
 				EAngelscriptCachedBehaviorKind::AddRef, 0,
-				MakeReference(EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+				MakeReference(EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 					0xa0, 0xa1));
 			EnvironmentPresentZero.OrderedBehaviorSlots[PrimaryIndex].
 				DeclaringOwner = FAngelscriptStableTypeKey{};
@@ -13753,7 +13753,7 @@ public:
 				BuildBehaviorProductFixtureForTests(
 					EAngelscriptCachedTypeKind::Class,
 					EAngelscriptCachedBehaviorKind::GetRefCount, 2,
-					EAngelscriptCacheReferenceKind::ScriptFunction, 1);
+					EAngelscriptArtifactReferenceKind::ScriptFunction, 1);
 			const FAngelscriptStableTypeKey ZeroOwner{};
 			for (FAngelscriptCachedBehaviorSlot& Slot :
 				ScriptPresentZeroGap.OrderedBehaviorSlots)
@@ -13767,7 +13767,7 @@ public:
 			const int32 SecondIndex = FindBehaviorPhysicalIndexForTests(
 				ScriptPresentZeroGap,
 				EAngelscriptCachedBehaviorKind::GetRefCount, 1,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xa2, 0xa3));
 			ScriptPresentZeroGap.OrderedBehaviorSlots[SecondIndex].SlotOrdinal = 2;
 			RunProducerCase(MoveTemp(ScriptPresentZeroGap),
@@ -13787,16 +13787,16 @@ public:
 				BuildBehaviorProductFixtureForTests(
 					EAngelscriptCachedTypeKind::Struct,
 					EAngelscriptCachedBehaviorKind::CopyConstruct, 1,
-					EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0);
-			const FAngelscriptCacheStableReference EnvironmentTarget =
-				MakeReference(EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0);
+			const FAngelscriptArtifactReference EnvironmentTarget =
+				MakeReference(EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 					0xa0, 0xa1);
-			const FAngelscriptCacheStableReference ScriptPeer =
+			const FAngelscriptArtifactReference ScriptPeer =
 				bEqualStableBytes
-				? FAngelscriptCacheStableReference{
-					EAngelscriptCacheReferenceKind::ScriptFunction,
+				? FAngelscriptArtifactReference{
+					EAngelscriptArtifactReferenceKind::ScriptFunction,
 					EnvironmentTarget.StableKey, EnvironmentTarget.ExpectedAbi}
-				: MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+				: MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xd8, 0xd9);
 			AddBehaviorSlotForTests(CopyConstruct,
 				EAngelscriptCachedBehaviorKind::Construct, 0,
@@ -13809,13 +13809,13 @@ public:
 				BuildBehaviorProductFixtureForTests(
 					EAngelscriptCachedTypeKind::Class,
 					EAngelscriptCachedBehaviorKind::CopyFactory, 1,
-					EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0);
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0);
 			AddBehaviorSlotForTests(CopyFactory,
 				EAngelscriptCachedBehaviorKind::Factory, 0,
 				ScriptPeer, CopyFactory.TypeKey);
 			AddBehaviorSlotForTests(CopyFactory,
 				EAngelscriptCachedBehaviorKind::Construct, 0,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xde, 0xdf),
 				CopyFactory.TypeKey);
 			CanonicalSortBehaviorSlotsForTests(CopyFactory);
@@ -13839,12 +13839,12 @@ public:
 				EAngelscriptCachedClassReflectionFlags::Abstract);
 			AddBehaviorSlotForTests(AbstractClass,
 				EAngelscriptCachedBehaviorKind::Construct, 0,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xe8, 0xe9),
 				AbstractClass.TypeKey);
 			AddBehaviorSlotForTests(AbstractClass,
 				EAngelscriptCachedBehaviorKind::Factory, 0,
-				MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+				MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 					0xea, 0xeb),
 				AbstractClass.TypeKey);
 			RunProducerCase(MoveTemp(AbstractClass), FError::None,
@@ -13873,8 +13873,8 @@ public:
 			CrossRole.VirtualFunctionTable.Add(Vft);
 			AddBehaviorSlotForTests(CrossRole,
 				EAngelscriptCachedBehaviorKind::Copy, 0,
-				FAngelscriptCacheStableReference{
-					EAngelscriptCacheReferenceKind::ScriptFunction,
+				FAngelscriptArtifactReference{
+					EAngelscriptArtifactReferenceKind::ScriptFunction,
 					SharedKey.Hash, SharedAbi},
 				CrossRole.TypeKey);
 			RebuildMethodAndVftDependenciesForTests(CrossRole);
@@ -14062,7 +14062,7 @@ public:
 				}
 				Schema.Dependencies.Add(MakeDependency(
 					EAngelscriptCacheSemanticDependencyKind::Declaration,
-					MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+					MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 						KeyFill, AbiFill)));
 			}
 			FinalizeValidFixtureHashes(Schema);
@@ -14174,7 +14174,7 @@ public:
 				Schema.OrderedMethods.Add(Method);
 				Schema.Dependencies.Add(MakeDependency(
 					EAngelscriptCacheSemanticDependencyKind::Declaration,
-					MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction, 0xe1, 0xe2)));
+					MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction, 0xe1, 0xe2)));
 				const bool bExpected =
 					(Kind == EAngelscriptCachedMethodSlotKind::LocalMethod && bDeclaringSelf)
 					|| (Kind == EAngelscriptCachedMethodSlotKind::Inherited && !bDeclaringSelf);
@@ -14213,7 +14213,7 @@ public:
 					Schema.VirtualFunctionTable.Add(Slot);
 					Schema.Dependencies.Add(MakeDependency(
 						EAngelscriptCacheSemanticDependencyKind::Declaration,
-						MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+						MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 							0xe3, 0xe4)));
 					const bool bExpected =
 						(Kind == EAngelscriptCachedMethodSlotKind::VirtualDeclaration
@@ -14299,10 +14299,10 @@ public:
 					{
 						for (uint8 OwnerCase = 0; OwnerCase < 4; ++OwnerCase)
 						{
-							const EAngelscriptCacheReferenceKind TargetKind =
+							const EAngelscriptArtifactReferenceKind TargetKind =
 								bEnvironmentTarget
-								? EAngelscriptCacheReferenceKind::EnvironmentSymbol
-								: EAngelscriptCacheReferenceKind::ScriptFunction;
+								? EAngelscriptArtifactReferenceKind::EnvironmentSymbol
+								: EAngelscriptArtifactReferenceKind::ScriptFunction;
 							FAngelscriptCachedTypeSchema Schema =
 								BuildBehaviorProductFixtureForTests(
 									TypeKind, Kind, Cardinality, TargetKind, OwnerCase);
@@ -14339,7 +14339,7 @@ public:
 								{
 									ProvingOrdinal = 1;
 								}
-								const FAngelscriptCacheStableReference ProvingTarget =
+								const FAngelscriptArtifactReference ProvingTarget =
 									MakeReference(TargetKind,
 										static_cast<uint8>(0xa0 + ProvingOrdinal * 2),
 										static_cast<uint8>(0xa1 + ProvingOrdinal * 2));
@@ -14348,7 +14348,7 @@ public:
 										Schema, Kind, ProvingOrdinal, ProvingTarget);
 								const EAngelscriptCacheTypeSchemaTestField FailureField =
 									TargetKind
-										== EAngelscriptCacheReferenceKind::EnvironmentSymbol
+										== EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 										&& OwnerCase != 0
 										? EAngelscriptCacheTypeSchemaTestField::
 											BehaviorDeclaringOwnerOptionalTag
@@ -14378,7 +14378,7 @@ public:
 			const FAngelscriptCachedTypeSchema OrdinaryClass =
 				BuildBehaviorProductFixtureForTests(
 					EAngelscriptCachedTypeKind::Class, BehaviorKind, 1,
-					EAngelscriptCacheReferenceKind::ScriptFunction, 1);
+					EAngelscriptArtifactReferenceKind::ScriptFunction, 1);
 			FAngelscriptCachedTypeSchema Statics = MakeStaticsUClassSchema();
 			ClearBehaviorOwnedStateForTests(Statics);
 			// Keep the valid Statics form flags. Copying HasDestructor here
@@ -14416,7 +14416,7 @@ public:
 			Slot.BehaviorKind = Kind;
 			Slot.SlotOrdinal = Ordinal;
 			Slot.Target = MakeReference(
-				EAngelscriptCacheReferenceKind::ScriptFunction, KeyFill, AbiFill);
+				EAngelscriptArtifactReferenceKind::ScriptFunction, KeyFill, AbiFill);
 			Slot.DeclaringOwner = Schema.TypeKey;
 			Schema.OrderedBehaviorSlots.Add(Slot);
 			Schema.Dependencies.AddUnique(MakeDependency(
@@ -14508,7 +14508,7 @@ public:
 			Payload, Limits, Budget, Output).IsSuccess()));
 		Invalid = Schema;
 		Invalid.OrderedBehaviorSlots[1].Target = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptFunction, 0xc2, 0xc3);
+			EAngelscriptArtifactReferenceKind::ScriptFunction, 0xc2, 0xc3);
 		RebuildBehaviorDependenciesForTests(Invalid);
 		CanonicalizeDependenciesAndFinalizeForTests(Invalid);
 		AssertBehaviorFailure(Invalid,
@@ -14521,7 +14521,7 @@ public:
 		EnvironmentCopyConstruct.BehaviorKind =
 			EAngelscriptCachedBehaviorKind::CopyConstruct;
 		EnvironmentCopyConstruct.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0xc4, 0xc5);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0xc4, 0xc5);
 		Schema.OrderedBehaviorSlots.Add(EnvironmentCopyConstruct);
 		Schema.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi,
@@ -14536,7 +14536,7 @@ public:
 
 		Invalid = Schema;
 		Invalid.OrderedBehaviorSlots[0].Target.Kind =
-			EAngelscriptCacheReferenceKind::ScriptType;
+			EAngelscriptArtifactReferenceKind::ScriptType;
 		RebuildBehaviorDependenciesForTests(Invalid);
 		CanonicalizeDependenciesAndFinalizeForTests(Invalid);
 		AssertBehaviorFailure(Invalid,
@@ -14556,7 +14556,7 @@ public:
 			BuildBehaviorProductFixtureForTests(
 				EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::AddRef, 1,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 1);
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 1);
 		EnvironmentPresentZero.OrderedBehaviorSlots[0].DeclaringOwner =
 			FAngelscriptStableTypeKey{};
 		CanonicalizeDependenciesAndFinalizeForTests(EnvironmentPresentZero);
@@ -14570,7 +14570,7 @@ public:
 			BuildBehaviorProductFixtureForTests(
 				EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::GetRefCount, 2,
-				EAngelscriptCacheReferenceKind::ScriptFunction, 1);
+				EAngelscriptArtifactReferenceKind::ScriptFunction, 1);
 		for (FAngelscriptCachedBehaviorSlot& Slot :
 			ScriptPresentZeroGap.OrderedBehaviorSlots)
 		{
@@ -14588,7 +14588,7 @@ public:
 			BuildBehaviorProductFixtureForTests(
 				EAngelscriptCachedTypeKind::Struct,
 				EAngelscriptCachedBehaviorKind::ListConstruct, 2,
-				EAngelscriptCacheReferenceKind::ScriptFunction, 0);
+				EAngelscriptArtifactReferenceKind::ScriptFunction, 0);
 		ScriptAbsentGap.OrderedBehaviorSlots[1].SlotOrdinal = 2;
 		CanonicalizeDependenciesAndFinalizeForTests(ScriptAbsentGap);
 		AssertBehaviorFailure(ScriptAbsentGap,
@@ -14600,7 +14600,7 @@ public:
 			BuildBehaviorProductFixtureForTests(
 				EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::AddRef, 2,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 1);
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 1);
 		for (FAngelscriptCachedBehaviorSlot& Slot :
 			EnvironmentPresentZeroGap.OrderedBehaviorSlots)
 		{
@@ -14617,7 +14617,7 @@ public:
 			BuildBehaviorProductFixtureForTests(
 				EAngelscriptCachedTypeKind::Class,
 				EAngelscriptCachedBehaviorKind::Release, 2,
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol, 1);
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 1);
 		EnvironmentPresentNonzeroGap.OrderedBehaviorSlots[1].SlotOrdinal = 2;
 		CanonicalizeDependenciesAndFinalizeForTests(EnvironmentPresentNonzeroGap);
 		AssertBehaviorFailure(EnvironmentPresentNonzeroGap,
@@ -14635,7 +14635,7 @@ public:
 			FAngelscriptCachedBehaviorSlot Slot;
 			Slot.BehaviorKind = Kind;
 			Slot.SlotOrdinal = 0;
-			Slot.Target = MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+			Slot.Target = MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 				KeyFill, static_cast<uint8>(KeyFill + 1));
 			Slot.DeclaringOwner = Schema.TypeKey;
 			Schema.OrderedBehaviorSlots.Add(Slot);

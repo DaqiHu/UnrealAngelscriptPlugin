@@ -18,8 +18,8 @@ private:
 		return FAngelscriptHash256{FBlake3Hash(Bytes)};
 	}
 
-	static FAngelscriptCacheStableReference MakeReference(
-		const EAngelscriptCacheReferenceKind Kind,
+	static FAngelscriptArtifactReference MakeReference(
+		const EAngelscriptArtifactReferenceKind Kind,
 		const uint8 KeyFill,
 		const uint8 AbiFill)
 	{
@@ -28,7 +28,7 @@ private:
 
 	static FAngelscriptCacheSemanticDependency MakeDependency(
 		const EAngelscriptCacheSemanticDependencyKind Kind,
-		const FAngelscriptCacheStableReference& Target)
+		const FAngelscriptArtifactReference& Target)
 	{
 		FAngelscriptCacheSemanticDependency Dependency;
 		Dependency.Kind = Kind;
@@ -134,7 +134,7 @@ private:
 		Schema.OrderedMethods.Add(Method);
 		Schema.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::Declaration,
-			MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+			MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 				0x21, 0x22)));
 		FinalizeFixture(Schema);
 		return Schema;
@@ -148,7 +148,7 @@ private:
 			FAngelscriptStableFunctionKey{MakeHash(0x31)}, MakeHash(0x32), false};
 		Schema.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::Signature,
-			MakeReference(EAngelscriptCacheReferenceKind::ScriptFunction,
+			MakeReference(EAngelscriptArtifactReferenceKind::ScriptFunction,
 				0x31, 0x32)));
 		FinalizeFixture(Schema);
 		return Schema;
@@ -163,7 +163,7 @@ private:
 			EAngelscriptCachedTypeRelationKind::ImplementedInterface;
 		Interface.SemanticOrdinal = 0;
 		Interface.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptType, 0x41, 0x42);
+			EAngelscriptArtifactReferenceKind::ScriptType, 0x41, 0x42);
 		Schema.Relations.Add(Interface);
 		Schema.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::Inheritance,
@@ -181,11 +181,11 @@ private:
 		FAngelscriptCachedDataType ScriptElement;
 		ScriptElement.Kind = EAngelscriptCachedDataTypeKind::ScriptType;
 		ScriptElement.TypeReference = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptType, 0x51, 0x52);
+			EAngelscriptArtifactReferenceKind::ScriptType, 0x51, 0x52);
 		FAngelscriptCachedDataType EnvironmentContainer;
 		EnvironmentContainer.Kind = EAngelscriptCachedDataTypeKind::EnvironmentType;
 		EnvironmentContainer.TypeReference = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0x53, 0x54);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0x53, 0x54);
 		EnvironmentContainer.OrderedSubTypes.Add(ScriptElement);
 
 		FAngelscriptCachedPropertySchema Property;
@@ -205,7 +205,7 @@ private:
 		EnvironmentCopyConstruct.BehaviorKind =
 			EAngelscriptCachedBehaviorKind::CopyConstruct;
 		EnvironmentCopyConstruct.Target = MakeReference(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol, 0x56, 0x57);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0x56, 0x57);
 		Schema.OrderedBehaviorSlots.Add(EnvironmentCopyConstruct);
 
 		Schema.Dependencies = {
@@ -243,8 +243,8 @@ private:
 		Property.Type.Kind = DataTypeKind;
 		Property.Type.TypeReference = MakeReference(
 			DataTypeKind == EAngelscriptCachedDataTypeKind::ScriptType
-				? EAngelscriptCacheReferenceKind::ScriptType
-				: EAngelscriptCacheReferenceKind::EnvironmentSymbol,
+				? EAngelscriptArtifactReferenceKind::ScriptType
+				: EAngelscriptArtifactReferenceKind::EnvironmentSymbol,
 			0x73, 0x74);
 		Property.Type.QualifierFlags = static_cast<uint32>(
 			EAngelscriptCachedTypeQualifierFlags::ObjectHandle);
@@ -427,7 +427,7 @@ public:
 		Invalid = Baselines[1];
 		Invalid.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::ValueLayout,
-			MakeReference(EAngelscriptCacheReferenceKind::ScriptType,
+			MakeReference(EAngelscriptArtifactReferenceKind::ScriptType,
 				0x63, 0x64)));
 		FinalizeFixture(Invalid);
 		bPassed &= ExpectProducerFailure(*TestRunner, Invalid,
@@ -437,7 +437,7 @@ public:
 		Invalid = Baselines[0];
 		FAngelscriptCacheSemanticDependency Unsupported = MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::HardValue,
-			MakeReference(EAngelscriptCacheReferenceKind::ScriptType,
+			MakeReference(EAngelscriptArtifactReferenceKind::ScriptType,
 				0x65, 0x66));
 		Unsupported.ExpectedContentOrValue = MakeHash(0x67);
 		Invalid.Dependencies.Add(Unsupported);

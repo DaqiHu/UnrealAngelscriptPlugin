@@ -51,8 +51,8 @@ private:
 	static FTableResult DumpDocumentationStats(FAngelscriptEngine& Engine, const FString& OutputDir);
 	static FTableResult DumpEngineSettings(FAngelscriptEngine& Engine, const FString& OutputDir);
 	static FTableResult DumpHotReloadState(FAngelscriptEngine& Engine, const FString& OutputDir);
-	static FTableResult DumpJITDatabase(FAngelscriptEngine& Engine, const FString& OutputDir);
-	static FTableResult DumpPrecompiledData(FAngelscriptEngine& Engine, const FString& OutputDir);
+	static FTableResult DumpJITProviders(FAngelscriptEngine& Engine, const FString& OutputDir);
+	static FTableResult DumpJITRoutes(FAngelscriptEngine& Engine, const FString& OutputDir);
 	static FTableResult DumpStaticJITState(FAngelscriptEngine& Engine, const FString& OutputDir);
 	static FTableResult DumpDebugServerState(FAngelscriptEngine& Engine, const FString& OutputDir);
 	static FTableResult DumpDebugBreakpoints(FAngelscriptEngine& Engine, const FString& OutputDir);

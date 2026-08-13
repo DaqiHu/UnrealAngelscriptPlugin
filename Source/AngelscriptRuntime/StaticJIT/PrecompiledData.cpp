@@ -1,14 +1,6 @@
 #include "PrecompiledData.h"
 
-#include "Misc/FileHelper.h"
-#include "HAL/FileManager.h"
-#include "Serialization/MemoryWriter.h"
-#include "Serialization/MemoryReader.h"
-
 #include "AngelscriptEngine.h"
-#include "AngelscriptPerformanceStats.h"
-#include "StaticJIT/StaticJITConfig.h"
-#include "StaticJIT/StaticJITHeader.h"
 
 #include "StartAngelscriptHeaders.h"
 //#include "as_scriptfunction.h"
@@ -49,7 +41,6 @@ double   TIMER_TypeReferenceFind = 0.0;
 double TIMER_FunctionLookup = 0.0;
 double TIMER_GlobalLookup = 0.0;
 double TIMER_PropertyLookup = 0.0;
-double TIMER_GetModulesToCompile = 0.0;
 
 FMemStackBase GScriptPreallocatedMemStack;
 
@@ -527,18 +518,9 @@ asCScriptFunction* FAngelscriptPrecompiledFunction::Create(FAngelscriptPrecompil
 
 	Function->traits.traits = (asDWORD)FunctionTraits;
 
-	bool bHasJITFunctions = false;
-	auto& JITDatabase = FJITDatabase::Get();
-	auto* JITFunctions = JITDatabase.Functions.Find(Id);
-	if (JITFunctions != nullptr && !FAngelscriptEngine::IsScriptDevelopmentModeForCurrentContext())
-	{
-		Function->jitFunction = JITFunctions->VMEntry;
-		Function->jitFunction_ParmsEntry = JITFunctions->ParmsEntry;
-		Function->jitFunction_Raw= JITFunctions->RawFunction;
-		bHasJITFunctions = true;
-	}
-
-	if (!bHasJITFunctions)
+	// Restored script functions always own bytecode. Runtime Provider routing is
+	// rebuilt from stable identities after authoritative compilation; numeric
+	// archive ids never attach native entries here.
 	{
 		Function->AllocateScriptFunctionData();
 		auto* scriptData = Function->scriptData;
@@ -1183,8 +1165,7 @@ void FAngelscriptPrecompiledClass::ProcessFunctions(FAngelscriptPrecompiledData&
 	// Fill out behavior functions
 	int32 BehIndex = 0;
 	auto& beh = Type->beh;
-	// Behavior slots own references just like the normal builder path, and
-	// ClearUnneededRuntimeData() keeps only functions marked as in use.
+	// Behavior slots own references just like the normal builder path.
 	auto RestoreBehavior = [&Context](const FAngelscriptPrecompiledReference& Reference)
 	{
 		return Context.GetFunctionId(Reference, true, true);
@@ -2415,284 +2396,18 @@ void FAngelscriptPrecompiledData::AddRefTo(const class asCDataType& DataType)
 		TypeInfo->AddRefInternal();
 }
 
-void FAngelscriptPrecompiledData::PrepareToFinalizePrecompiledModules()
-{
-	if (FAngelscriptEngine::IsScriptDevelopmentModeForCurrentContext())
-		return;
-
-	FJITDatabase& Database = FJITDatabase::Get();
-	// JIT refs keep the archive reference separate from the resolved pointer so
-	// finalization can refresh runtime addresses without losing the stable key.
-	for (FJitRef_Function* JitRef : Database.FunctionLookups)
-	{
-		JitRef->Pointer = GetFunction(
-			FAngelscriptPrecompiledReference{ (int64)JitRef->Reference },
-			false
-		);
-	}
-
-	for (FJitRef_SystemFunctionPointer* JitRef : Database.SystemFunctionPointerLookups)
-	{
-		asCScriptFunction* Function = GetFunction(
-			FAngelscriptPrecompiledReference{ (int64)JitRef->Reference },
-			false
-		);
-
-		asSSystemFunctionInterface* SysFunc = Function->sysFuncIntf;
-		switch (SysFunc->callConv)
-		{
-		case ICC_THISCALL:
-		case ICC_THISCALL_RETURNINMEM:
-		case ICC_VIRTUAL_THISCALL:
-		case ICC_VIRTUAL_THISCALL_RETURNINMEM:
-			JitRef->Method = SysFunc->method;
-		break;
-		default:
-			JitRef->Func = SysFunc->func;
-		break;
-		}
-	}
-
-	for (FJitRef_Type* JitRef : Database.TypeInfoLookups)
-	{
-		JitRef->Pointer = GetTypeInfo(
-			FAngelscriptPrecompiledReference{ (int64)JitRef->Reference },
-			false
-		);
-	}
-
-	for (FJitRef_GlobalVar* JitRef : Database.GlobalVarLookups)
-	{
-		JitRef->Pointer = GetGlobalVariable(
-			FAngelscriptPrecompiledReference{ (int64)JitRef->Reference },
-			nullptr
-		);
-	}
-
-	for (TPair<uint64,uint32*> OffsetPtr : Database.PropertyOffsetLookups)
-	{
-		*OffsetPtr.Value = (uint32)(SIZE_T)GetPropertyOffset(
-			FAngelscriptPrecompiledReference{ (int64)OffsetPtr.Key }
-		);
-	}
-
-	check(FAngelscriptEngine::GetStaticNameCount() == 0);
-	FAngelscriptEngine::ReserveStaticNames(StaticNames.Num());
-	for (const FStringInArchive& StaticName : StaticNames)
-	{
-		FAngelscriptEngine::AddStaticNameFromPrecompiled(FName(*StaticName.UnrealString()));
-	}
-
-#if AS_JIT_VERIFY_PROPERTY_OFFSETS
-	for (TPair<uint64,SIZE_T> Element : Database.VerifyPropertyOffsets)
-	{
-		FAngelscriptPropertyReference* Ref = PropertyReferences.Find(Element.Key);
-		if (!ensure(Ref != nullptr))
-			continue;
-
-		int32 TypeId = GetTypeId(FAngelscriptPrecompiledReference{ Ref->OldTypeId });
-		auto* TypeInfo = (asCObjectType*)Engine->GetTypeInfoById(TypeId);
-		check(TypeInfo != nullptr);
-
-		asCObjectProperty* Property = TypeInfo->GetFirstProperty(*Ref->Name);
-		check(Property != nullptr);
-
-		checkf(Property->byteOffset == Element.Value, TEXT("Property offset for %s::%s differs between compile time and runtime"),
-			StringCast<TCHAR>(TypeInfo->GetName()).Get(), StringCast<TCHAR>(Property->GetName()).Get());
-	}
-
-	for (TPair<uint64,SIZE_T> Element : Database.VerifyTypeSizes)
-	{
-		asCTypeInfo* TypeInfo = GetTypeInfo(FAngelscriptPrecompiledReference{ (int64)Element.Key }, false);
-		check(TypeInfo != nullptr);
-
-		checkf(TypeInfo->size == Element.Value, TEXT("Type size for %s differs between compile time and runtime"),
-			StringCast<TCHAR>(TypeInfo->GetName()).Get());
-	}
-
-	for (TPair<uint64,SIZE_T> Element : Database.VerifyTypeAlignments)
-	{
-		asCTypeInfo* TypeInfo = GetTypeInfo(FAngelscriptPrecompiledReference{ (int64)Element.Key }, false);
-		check(TypeInfo != nullptr);
-
-		checkf(TypeInfo->alignment == Element.Value, TEXT("Type size for %s differs between compile time and runtime"),
-			StringCast<TCHAR>(TypeInfo->GetName()).Get());
-	}
-#endif
-}
-
-void FAngelscriptPrecompiledData::ClearUnneededRuntimeData()
-{
-	FAngelscriptScopeTimer Timer(TEXT("ClearUnneededRuntimeData"));
-
-	auto ClearObjectType = [&](asCObjectType* objType)
-	{
-		objType->propertyTable.EraseAll();
-		objType->methodTable.EraseAll();
-	};
-
-	auto ClearEnumType = [](asCEnumType* enumType)
-	{
-		for (int32 i = 0, Count = enumType->enumValues.GetLength(); i < Count; ++i)
-			asDELETE(enumType->enumValues[i], asSEnumValue);
-		enumType->enumValues.Allocate(0, false);
-	};
-
-	for (int32 i = 0, Count = Engine->registeredObjTypes.GetLength(); i < Count; ++i)
-	{
-		asCObjectType* objType = Engine->registeredObjTypes[i];
-		if (objType == nullptr)
-			continue;
-		ClearObjectType(objType);
-	}
-
-	for (int32 i = 0, Count = Engine->registeredEnums.GetLength(); i < Count; ++i)
-	{
-		asCEnumType* enumType = Engine->registeredEnums[i];
-		if (enumType == nullptr)
-			continue;
-		ClearEnumType(enumType);
-	}
-
-	for (int32 i = 0, Count = Engine->scriptFunctions.GetLength(); i < Count; ++i)
-	{
-		asCScriptFunction* func = Engine->scriptFunctions[i];
-		if (func == nullptr)
-			continue;
-		if (func->funcType == asFUNC_SYSTEM)
-		{
-			if (!func->isInUse)
-			{
-				asCObjectType* objType = func->objectType;
-				bool bCanDelete = true;
-				if (objType != nullptr)
-				{
-					if (objType->beh.construct == func->id)
-						bCanDelete = false;
-					else if (objType->beh.copy == func->id)
-						bCanDelete = false;
-					else if (objType->beh.factory == func->id)
-						bCanDelete = false;
-					else if (objType->beh.destruct == func->id)
-						bCanDelete = false;
-				}
-
-				if (bCanDelete)
-				{
-					func->id = 0;
-					asDELETE(func, asCScriptFunction);
-					continue;
-				}
-			}
-		}
-
-		func->defaultArgs.Allocate(0, false);
-		func->parameterNames.Allocate(0, false);
-		func->hiddenArgumentDefault.Allocate(0, false);
-	}
-
-	for (int32 i = 0, Count = Engine->scriptModules.GetLength(); i < Count; ++i)
-	{
-		auto* Module = Engine->scriptModules[i];
-		if (Module == nullptr)
-			continue;
-
-		for (int32 j = 0, jCount = Module->classTypes.GetLength(); j < jCount; ++j)
-		{
-			asCObjectType* objType = Module->classTypes[j];
-			if (objType == nullptr)
-				continue;
-			ClearObjectType(objType);
-		}
-
-		for (int32 j = 0, jCount = Module->enumTypes.GetLength(); j < jCount; ++j)
-		{
-			asCEnumType* enumType = Module->enumTypes[j];
-			if (enumType == nullptr)
-				continue;
-			ClearEnumType(enumType);
-		}
-
-		Module->scriptGlobals.EraseAll();
-		Module->scriptGlobalsList.SetLength(0);
-		Module->globalFunctions.EraseAll();
-		Module->globalFunctionList.SetLength(0);
-		Module->allLocalTypes.EraseAll();
-		Module->importedModules.AllocateNoConstruct(0, false);
-		Module->classTypes.AllocateNoConstruct(0, false);
-		Module->enumTypes.AllocateNoConstruct(0, false);
-		Module->scriptFunctions.AllocateNoConstruct(0, false);
-		Module->bindInformations.AllocateNoConstruct(0, false);
-		Module->PreClassData.Empty();
-	}
-
-	Engine->nameSpacesByName.EraseAll();
-	Engine->scriptModulesByName.EraseAll();
-	Engine->templateInstanceBuckets.Empty();
-	Engine->allRegisteredTypesByName.EraseAll();
-	Engine->allRegisteredTypes.EraseAll();
-	Engine->registeredTemplateTypes.AllocateNoConstruct(0, false);
-	Engine->registeredGlobalFuncs.SetLength(0);
-	Engine->registeredGlobalFuncTable.EraseAll();
-	Engine->registeredGlobalProps.SetLength(0);
-	Engine->registeredGlobalPropTable.EraseAll();
-	Engine->registeredEnums.AllocateNoConstruct(0, false);
-	Engine->registeredTypeDefs.AllocateNoConstruct(0, false);
-	Engine->registeredObjTypes.AllocateNoConstruct(0, false);
-	Engine->nameSpaces.AllocateNoConstruct(1, false);
-	Engine->varAddressMap.Empty();
-
-	auto& Manager = FAngelscriptEngine::Get();
-	Manager.ActiveModules.Empty();
-	Manager.BoundBlueprintEventArgumentSpecializations.Empty();
-	Manager.ModulesByScriptModule.Empty();
-#if AS_CAN_HOTRELOAD
-	Manager.ActiveClassesByName.Empty();
-	Manager.ActiveDelegatesByName.Empty();
-	Manager.ActiveEnumsByName.Empty();
-#endif
-
-	extern TMap<UClass*, TMap<FString, UFunction*>> GBlueprintEventsByScriptName;
-	GBlueprintEventsByScriptName.Empty();
-}
-
 FAngelscriptPrecompiledData::FAngelscriptPrecompiledData(asIScriptEngine* InEngine)
 	: AllocMark(GScriptPreallocatedMemStack)
 	, Engine((asCScriptEngine*)InEngine)
 {
-	DataGuid = FGuid::NewGuid();
 }
 
 FAngelscriptPrecompiledData::~FAngelscriptPrecompiledData()
 {
 }
 
-int32 FAngelscriptPrecompiledData::GetCurrentBuildIdentifier()
-{
-	constexpr int32 SchemaVersion = 10;
-
-#if UE_BUILD_DEBUG
-	return SchemaVersion * 10 + 1;
-#elif UE_BUILD_DEVELOPMENT
-	return SchemaVersion * 10 + 2;
-#elif UE_BUILD_TEST
-	return SchemaVersion * 10 + 3;
-#elif UE_BUILD_SHIPPING
-	return SchemaVersion * 10 + 4;
-#else
-	return -1;
-#endif
-}
-
-bool FAngelscriptPrecompiledData::IsValidForCurrentBuild()
-{
-	return BuildIdentifier == GetCurrentBuildIdentifier() && BuildIdentifier != -1;
-}
-
 void FAngelscriptPrecompiledData::InitFromActiveScript()
 {
-	BuildIdentifier = GetCurrentBuildIdentifier();
-
 	int32 ModuleCount = Engine->GetModuleCount();
 	Modules.Reserve(ModuleCount);
 	for (int32 i = 0; i < ModuleCount; ++i)
@@ -2706,60 +2421,6 @@ void FAngelscriptPrecompiledData::InitFromActiveScript()
 
 	for (const FName& StaticName : FAngelscriptEngine::GetStaticNames())
 		StaticNames.Add(StaticName.ToString());
-}
-
-void FAngelscriptPrecompiledData::Save(const FString& Filename)
-{
-	TArray<uint8> Data;
-	FMemoryWriter Writer(Data, true);
-	Writer.SetIsPersistent(true);
-	Writer.SetWantBinaryPropertySerialization(true);
-
-	Writer << *this;
-
-	FFileHelper::SaveArrayToFile(Data, *Filename);
-}
-
-void FAngelscriptPrecompiledData::Load(const FString& Filename)
-{
-	CachedPointerReferences.Reserve(32000);
-	ProcessedFunctionToId.Reserve(16000);
-
-	FFileHelper::LoadFileToArray(LoadedData, *Filename);
-
-	FMemoryReaderWithPtr Reader(LoadedData);
-	Reader.SetIsPersistent(true);
-	Reader.SetWantBinaryPropertySerialization(true);
-
-	Reader << *this;
-	// Loaded archives contain old function/type/global references, but any
-	// resolved pointers cached during a previous load belong to that previous
-	// engine/module lifetime. Clear transient lookup state so repeated loads
-	// re-resolve against the current engine during finalization.
-	ResetRuntimeState();
-}
-
-void FAngelscriptPrecompiledData::ResetRuntimeState()
-{
-	CachedPointerReferences.Reset();
-	CachedPointerReferences.Reserve(32000);
-
-	ProcessedFunctionToId.Reset();
-	ProcessedFunctionToId.Reserve(16000);
-	ProcessedIdToFunction.Reset();
-
-	ClassesLoadedFromPrecompiledData.Reset();
-	ModuleDesc.Reset();
-	ClassDesc.Reset();
-	PropertyDesc.Reset();
-	FunctionDesc.Reset();
-	ScriptSectionIdx = -1;
-	ScriptRelativeFilename = nullptr;
-
-	for (TPair<FString, FAngelscriptPrecompiledModule>& ModulePair : Modules)
-	{
-		ModulePair.Value.ResetRuntimeState();
-	}
 }
 
 uint32 FAngelscriptPrecompiledData::CreateFunctionId(asIScriptFunction* Function)
@@ -2802,16 +2463,6 @@ uint32 FAngelscriptPrecompiledData::CreateFunctionId(asIScriptFunction* Function
 	return Id;
 }
 
-bool FAngelscriptPrecompiledData::GetIdForFunction(asIScriptFunction* Function, uint32& OutId)
-{
-	uint32* Found = ProcessedFunctionToId.Find(Function);
-	if (Found == nullptr)
-		return false;
-
-	OutId = *Found;
-	return true;
-}
-
 void FAngelscriptPrecompiledData::MapFunctionId(asIScriptFunction* Function, uint32 Id)
 {
 	ProcessedFunctionToId.Add(Function, Id);
@@ -2820,188 +2471,6 @@ void FAngelscriptPrecompiledData::MapFunctionId(asIScriptFunction* Function, uin
 	check(PreviousFunction == nullptr);
 
 	ProcessedIdToFunction.Add(Id, Function);
-}
-
-TArray<TSharedRef<FAngelscriptModuleDesc>> FAngelscriptPrecompiledData::GetModulesToCompile()
-{
-	AS_PERF_SCOPE_STATIC_JIT_PRECOMPILED_DATA();
-
-	FAngelscriptScopeTotalTimer Timer(TIMER_GetModulesToCompile);
-
-	TArray<TSharedRef<FAngelscriptModuleDesc>> ModuleDescs;
-	TMap<FString, TSharedPtr<FAngelscriptModuleDesc>> ModuleDescByName;
-	FString ScriptRootDir = FAngelscriptEngine::GetScriptRootDirectory();
-
-	struct FDelayCompose
-	{
-		TSharedPtr<FAngelscriptClassDesc> ClassDesc;
-		FStringInArchive ModuleName;
-		FStringInArchive ClassName;
-	};
-
-	for (auto Elem : Modules)
-	{
-		FAngelscriptPrecompiledModule& Module = Elem.Value;
-
-		ModuleDesc = MakeShared<FAngelscriptModuleDesc>();
-		ModuleDesc->ModuleName = Module.ModuleName.UnrealString();
-		ModuleDesc->CodeHash = Module.CodeHash;
-
-		// * Look up all imported modules that this relies on
-		for (FStringInArchive& ImportStr : Module.ImportedModules)
-			ModuleDesc->ImportedModules.Add(ImportStr.UnrealString());
-		
-		// * Handle any functions that need to be called post init
-		for (FStringInArchive& FunctionStr : Module.PostInitFunctions)
-			ModuleDesc->PostInitFunctions.Add(FunctionStr.UnrealString());
-
-		// * Add the statics class for this module
-		TSharedPtr<FAngelscriptClassDesc> StaticsClass;
-		if (Module.StaticsClassName.Len() != 0)
-		{
-			StaticsClass = MakeShared<FAngelscriptClassDesc>();
-			StaticsClass->ClassName = Module.StaticsClassName.UnrealString();
-			StaticsClass->SuperClass = TEXT("UObject");
-			StaticsClass->bIsStaticsClass = true;
-			StaticsClass->bSuperIsCodeClass = true;
-			StaticsClass->CodeSuperClass = UObject::StaticClass();
-			StaticsClass->Meta.Add(TEXT("NotBlueprintable"), TEXT("true"));
-			StaticsClass->Meta.Add(TEXT("IsBlueprintBase"), TEXT("false"));
-
-			ModuleDesc->Classes.Add(StaticsClass.ToSharedRef());
-		}
-
-		// * Add static functions that were in the pre-processor
-		for (FAngelscriptPrecompiledFunction& GlobalFunction : Module.Functions)
-		{
-			auto NewFunction = GlobalFunction.MakeDesc();
-			if (NewFunction.IsValid())
-				StaticsClass->Methods.Add(NewFunction.ToSharedRef());
-		}
-
-		// * Add classes that were in the pre-processor
-		for (FAngelscriptPrecompiledClass& Class : Module.Classes)
-		{
-			if (!Class.bIsInPreprocessor)
-				continue;
-
-			ClassDesc = MakeShared<FAngelscriptClassDesc>();
-			ClassDesc->ClassName = Class.ClassName.UnrealString();
-			ClassDesc->SuperClass = Class.SuperClass.UnrealString();
-			ClassDesc->bSuperIsCodeClass = Class.bSuperIsCodeClass;
-
-			if(Class.CodeSuperClass.Len() != 0)
-			{
-				ClassDesc->CodeSuperClass = FindObject<UClass>(nullptr, ANSI_TO_TCHAR(*Class.CodeSuperClass));
-				check(ClassDesc->CodeSuperClass != nullptr);
-			}
-
-			ClassDesc->bAbstract = Class.bAbstract;
-			ClassDesc->bTransient = Class.bTransient;
-			ClassDesc->bHideDropdown = Class.bHideDropdown;
-			ClassDesc->bIsDeprecatedClass = Class.bIsDeprecatedClass;
-			ClassDesc->ConfigName = Class.ConfigName.UnrealString();
-			ClassDesc->bIsStruct = (Class.Flags & asOBJ_VALUE) != 0;
-			ClassDesc->StaticClassGlobalVariableName = Class.StaticClassGlobalVariableName.UnrealString();
-			ClassDesc->bPlaceable = Class.bPlaceable;
-			ClassDesc->bDefaultToInstanced = Class.bDefaultToInstanced;
-			ClassDesc->bEditInlineNew = Class.bEditInlineNew;
-			
-			if (Class.Namespace.Len() > 0)
-			{
-				ClassDesc->Namespace = TOptional<FString>(Class.Namespace.UnrealString());
-			}
-			else
-			{
-				ClassDesc->Namespace = TOptional<FString>();
-			}
-
-			if (Class.ComposeOntoClassName.Len() != 0)
-				ClassDesc->ComposeOntoClass = Class.ComposeOntoClassName.UnrealString();
-
-			for (int32 i = 0, MetaCount = Class.MetaSpec.Num(); i < MetaCount; ++i)
-			{
-				ClassDesc->Meta.Add(
-					ANSI_TO_TCHAR(*Class.MetaSpec[i]),
-					Class.MetaValues[i].UnrealString()
-				);
-			}
-
-			// * Add properties into the class
-			for (FAngelscriptPrecompiledProperty& Property : Class.Properties)
-			{
-				if (!Property.bIsUnrealProperty)
-					continue;
-
-				PropertyDesc = MakeShared<FAngelscriptPropertyDesc>();
-				PropertyDesc->PropertyName = Property.Name.UnrealString();
-
-				for (int32 i = 0, MetaCount = Property.MetaSpec.Num(); i < MetaCount; ++i)
-				{
-					PropertyDesc->Meta.Add(
-						ANSI_TO_TCHAR(*Property.MetaSpec[i]),
-						Property.MetaValues[i].UnrealString()
-					);
-				}
-
-				PropertyDesc->bBlueprintReadable = Property.bBlueprintReadable;
-				PropertyDesc->bBlueprintWritable = Property.bBlueprintWritable;
-				PropertyDesc->bEditConst = Property.bEditConst;
-				PropertyDesc->bEditableOnDefaults = Property.bEditableOnDefaults;
-				PropertyDesc->bEditableOnInstance = Property.bEditableOnInstance;
-				PropertyDesc->bInstancedReference = Property.bInstancedReference;
-				PropertyDesc->bPersistentInstance = Property.bPersistentInstance;
-				PropertyDesc->bAdvancedDisplay = Property.bAdvancedDisplay;
-				PropertyDesc->bTransient = Property.bTransient;
-				PropertyDesc->bReplicated = Property.bReplicated;
-				if (Property.bReplicated)
-				{
-					PropertyDesc->ReplicationCondition = (ELifetimeCondition)Property.ReplicationCondition;
-					PropertyDesc->bRepNotify = Property.bRepNotify;
-				}
-				PropertyDesc->bSkipReplication = Property.bSkipReplication;
-				PropertyDesc->bSkipSerialization = Property.bSkipSerialization;
-				PropertyDesc->bSaveGame = Property.bSaveGame;
-				PropertyDesc->bConfig = Property.bConfig;
-				PropertyDesc->bInterp = Property.bInterp;
-				PropertyDesc->bAssetRegistrySearchable = Property.bAssetRegistrySearchable;
-
-				ClassDesc->Properties.Add(PropertyDesc.ToSharedRef());
-			}
-
-			// * Add functions into the class
-			for (FAngelscriptPrecompiledFunction& Function : Class.Methods)
-			{
-				auto NewFunction = Function.MakeDesc();
-				if(NewFunction.IsValid())
-					ClassDesc->Methods.Add(NewFunction.ToSharedRef());
-			}
-
-			ModuleDesc->Classes.Add(ClassDesc.ToSharedRef());
-		}
-
-		// * Add delegate descriptors for this module
-		for (FStringInArchive& Event : Module.DeclaredEvents)
-		{
-			auto DelegateDesc = MakeShared<FAngelscriptDelegateDesc>();
-			DelegateDesc->DelegateName = Event.UnrealString();
-			DelegateDesc->bIsMulticast = true;
-			ModuleDesc->Delegates.Add(DelegateDesc);
-		}
-
-		for (FStringInArchive& Delegate : Module.DeclaredDelegates)
-		{
-			auto DelegateDesc = MakeShared<FAngelscriptDelegateDesc>();
-			DelegateDesc->DelegateName = Delegate.UnrealString();
-			DelegateDesc->bIsMulticast = false;
-			ModuleDesc->Delegates.Add(DelegateDesc);
-		}
-
-		ModuleDescs.Add(ModuleDesc.ToSharedRef());
-		ModuleDescByName.Add(ModuleDesc->ModuleName, ModuleDesc);
-	}
-
-	return ModuleDescs;
 }
 
 TSharedPtr<FAngelscriptFunctionDesc> FAngelscriptPrecompiledFunction::MakeDesc() const
@@ -3069,5 +2538,4 @@ void FAngelscriptPrecompiledData::OutputTimingData()
 	FAngelscriptScopeTimer::OutputTime(TEXT("FunctionLookup"), TIMER_FunctionLookup);
 	FAngelscriptScopeTimer::OutputTime(TEXT("GlobalLookup"), TIMER_GlobalLookup);
 	FAngelscriptScopeTimer::OutputTime(TEXT("PropertyLookup"), TIMER_PropertyLookup);
-	FAngelscriptScopeTimer::OutputTime(TEXT("GetModulesToCompile"), TIMER_GetModulesToCompile);
 }

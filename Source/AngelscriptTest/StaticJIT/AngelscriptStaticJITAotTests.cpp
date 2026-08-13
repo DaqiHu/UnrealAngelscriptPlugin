@@ -2,10 +2,15 @@
 
 #include "AngelscriptTestEngineAcquisition.h"
 #include "AngelscriptTestEngineHelper.h"
+#include "AngelscriptTestJITProbes.h"
 #include "AngelscriptTestMacros.h"
 #include "ClassGenerator/ASClass.h"
+#include "ClassGenerator/ASFunction.h"
 #include "StaticJIT/AOT/AngelscriptStaticJITAotFixture.h"
 #include "StaticJIT/AOT/AngelscriptStaticJITAotGeneration.h"
+#include "StaticJIT/AngelscriptJITBindingContext.h"
+#include "StaticJIT/AngelscriptJITProviderRegistry.h"
+#include "StaticJIT/AngelscriptJITReferenceResolver.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
 #include "StaticJIT/StaticJITDiagnostics.h"
 #include "StaticJIT/StaticJITHeader.h"
@@ -39,6 +44,13 @@ private:
 		int32 Value = 0;
 	};
 
+	struct FTwoPrimitiveParams
+	{
+		int32 A = 0;
+		int32 B = 0;
+		int32 ReturnValue = 0;
+	};
+
 	struct FReferenceParams
 	{
 		int32 Value = 0;
@@ -57,6 +69,9 @@ private:
 		int64 SignedValue = 0;
 		uint64 UnsignedValue = 0;
 	};
+
+	inline static TUniquePtr<AngelscriptStaticJITAotGeneration::
+		FStaticJITAotFixtureEngineSession> SharedFixtureSession;
 
 	static void DiscardActiveModules(FAngelscriptEngine& Engine)
 	{
@@ -324,60 +339,105 @@ private:
 			return false;
 		}
 
-		if (!Test.TestTrue(*FString::Printf(TEXT("StaticJIT.AOT %s should expose a StaticJIT function id"), Label), FStaticJITDiagnostics::ResolveFunctionId(Engine, Function, OutFunctionId)))
+		OutFunctionId = static_cast<uint32>(Function->GetId());
+		FAngelscriptStableFunctionKey FunctionKey;
+		if (!Test.TestTrue(
+				*FString::Printf(
+					TEXT("StaticJIT.AOT %s should expose a stable function key"),
+					Label),
+				Engine.TryResolveStableFunctionKey(Function, FunctionKey)))
 		{
 			return false;
 		}
 
-		return Test.TestTrue(*FString::Printf(TEXT("StaticJIT.AOT %s should register generated C++"), Label), FStaticJITDiagnostics::IsFunctionRegistered(OutFunctionId))
-			&& Test.TestNotNull(*FString::Printf(TEXT("StaticJIT.AOT %s should attach jitFunction"), Label), Function->jitFunction)
-			&& Test.TestNotNull(*FString::Printf(TEXT("StaticJIT.AOT %s should attach jitFunction_Raw"), Label), Function->jitFunction_Raw)
-			&& Test.TestNotNull(*FString::Printf(TEXT("StaticJIT.AOT %s should attach jitFunction_ParmsEntry"), Label), Function->jitFunction_ParmsEntry);
+		const asSJITFunctionBinding Binding = Function->GetJITBinding();
+		FAngelscriptFunctionRoute Route;
+		return Test.TestTrue(
+				*FString::Printf(
+					TEXT("StaticJIT.AOT %s should resolve its current route"), Label),
+				Engine.ResolveFunctionRoute(FunctionKey, Route))
+			&& Test.TestTrue(
+				*FString::Printf(
+					TEXT("StaticJIT.AOT %s should select generated Native code"), Label),
+				Route.IsNative())
+			&& Test.TestNotNull(*FString::Printf(TEXT("StaticJIT.AOT %s should attach VM entry"), Label), Binding.VMEntry)
+			&& Test.TestNotNull(*FString::Printf(TEXT("StaticJIT.AOT %s should attach Raw entry"), Label), Binding.RawEntry)
+			&& Test.TestNotNull(*FString::Printf(TEXT("StaticJIT.AOT %s should attach Parms entry"), Label), Binding.ParmsEntry)
+			&& Test.TestNotNull(
+				*FString::Printf(
+					TEXT("StaticJIT.AOT %s should retain current binding context"), Label),
+				FAngelscriptJITBindingContext::FromBindingUserData(
+					Binding.UserData));
 	}
 
-	static bool LoadAotFixtureFromPrecompiledData(FAutomationTestBase& Test, FAngelscriptEngine& Engine)
+	static bool RequireFunctionClass(
+		FAutomationTestBase& Test,
+		UClass* OwnerClass,
+		const FName FunctionName,
+		UClass* ExpectedFunctionClass,
+		const TCHAR* Label)
 	{
+		UASFunction* const Function = Cast<UASFunction>(FindGeneratedFunction(
+			OwnerClass,
+			FunctionName));
+		if (!Test.TestNotNull(
+				*FString::Printf(TEXT("StaticJIT.AOT %s should expose reflected function '%s'"), Label, *FunctionName.ToString()),
+				Function))
+		{
+			return false;
+		}
+
+		return Test.TestTrue(
+			*FString::Printf(
+				TEXT("StaticJIT.AOT %s should select %s (actual: %s)"),
+				Label,
+				*GetNameSafe(ExpectedFunctionClass),
+				*GetNameSafe(Function->GetClass())),
+			Function->GetClass() == ExpectedFunctionClass);
+	}
+
+	static FAngelscriptEngine* GetSharedAotFixtureEngine(
+			FAutomationTestBase& Test)
+	{
+		if (!Test.TestNotNull(
+				TEXT("StaticJIT.AOT test section should own one shared isolated source fixture session"),
+				SharedFixtureSession.Get()))
+		{
+			return nullptr;
+		}
 		if (!Test.TestTrue(
-				TEXT("StaticJIT.AOT should register the object-last native fixture surface before loading"),
-				AngelscriptStaticJITAotFixture::RegisterObjectLastNativeSurface(
-					*Engine.GetScriptEngine())))
+				TEXT("StaticJIT.AOT shared source fixture session should compile and publish current Provider routes"),
+				SharedFixtureSession->IsValid()))
 		{
-			return false;
+			Test.AddError(SharedFixtureSession->Error);
+			return nullptr;
 		}
-
-		FString AvailabilityError;
-		if (!Test.TestTrue(TEXT("StaticJIT.AOT generated output and local cache should be available before runtime verification"), AngelscriptStaticJITAotFixture::IsGeneratedOutputAvailable(&AvailabilityError)))
-		{
-			Test.AddError(AvailabilityError);
-			return false;
-		}
-
-		FString LoadError;
-		if (!Test.TestTrue(TEXT("StaticJIT.AOT should load fixture precompiled data"), FStaticJITDiagnostics::LoadPrecompiledData(Engine, AngelscriptStaticJITAotFixture::GetPrecompiledCacheFilename(), &LoadError)))
-		{
-			Test.AddError(LoadError);
-			return false;
-		}
-
-		FString CompileError;
-		if (!Test.TestTrue(TEXT("StaticJIT.AOT should compile fixture from precompiled data"), FStaticJITDiagnostics::CompileLoadedPrecompiledData(Engine, ECompileType::Initial, &CompileError)))
-		{
-			Test.AddError(CompileError);
-			return false;
-		}
-
-		return true;
+		return SharedFixtureSession->Engine.Get();
 	}
 
 	static bool RunGeneratedOutputVerify(FAutomationTestBase& Test);
 	static bool RunRuntimeRegistration(FAutomationTestBase& Test);
 	static bool RunRuntimeExecution(FAutomationTestBase& Test);
+	static bool RunNestedExceptionPropagation(FAutomationTestBase& Test);
+	static bool RunNestedReferenceLifetimeAndRecursion(FAutomationTestBase& Test);
+	static bool RunCurrentVirtualOverride(FAutomationTestBase& Test);
 	static bool RunUASFunctionJitEntryAttachment(FAutomationTestBase& Test);
 	static bool RunUASFunctionRuntimeCallEvent(FAutomationTestBase& Test);
 	static bool RunStaticWorldContextRuntimeCallEvent(FAutomationTestBase& Test);
 	static bool RunMultiEngineSequentialLoad(FAutomationTestBase& Test);
 
 public:
+	BEFORE_ALL()
+	{
+		SharedFixtureSession =
+			AngelscriptStaticJITAotGeneration::CreateFixtureEngineSession(false);
+	}
+
+	AFTER_ALL()
+	{
+		SharedFixtureSession.Reset();
+	}
+
 	TEST_METHOD(GeneratedOutputVerify)
 	{
 		ASSERT_THAT(IsTrue(RunGeneratedOutputVerify(*TestRunner)));
@@ -388,9 +448,282 @@ public:
 		ASSERT_THAT(IsTrue(RunRuntimeRegistration(*TestRunner)));
 	}
 
+	TEST_METHOD(CurrentSourceEngineResolvesEveryCommittedProviderReferenceSlot)
+	{
+		FAngelscriptEngine* const SourceEngine =
+			GetSharedAotFixtureEngine(*TestRunner);
+		ASSERT_THAT(IsNotNull(SourceEngine));
+		if (SourceEngine == nullptr)
+		{
+			return;
+		}
+
+		FAngelscriptEngineScope SourceScope(*SourceEngine);
+
+		const TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
+			ESPMode::ThreadSafe> Providers =
+			FAngelscriptJITProviderRegistry::Get().GetSnapshot();
+		ASSERT_THAT(IsTrue(Providers.IsValid()));
+		const TSharedPtr<const FAngelscriptJITProviderCatalog,
+			ESPMode::ThreadSafe>* const Provider = Providers.IsValid()
+			? Providers->Providers.FindByPredicate(
+				[](const TSharedPtr<const FAngelscriptJITProviderCatalog,
+					ESPMode::ThreadSafe>& Candidate)
+				{
+					return Candidate.IsValid()
+						&& Candidate->ProviderId
+							== AngelscriptTestJITProbes::GetStableProviderId();
+				})
+			: nullptr;
+		ASSERT_THAT(IsNotNull(Provider));
+		if (Provider == nullptr || !Provider->IsValid())
+		{
+			return;
+		}
+
+		TArray<FAngelscriptArtifactReference> RequiredReferences;
+		for (const FAngelscriptJITProviderCatalogEntry& Entry
+			: (*Provider)->Entries)
+		{
+			for (const FAngelscriptJITReferenceSlot& Slot : Entry.ReferenceSlots)
+			{
+				RequiredReferences.AddUnique(Slot.Reference);
+			}
+		}
+		const FAngelscriptJITCurrentEngineReferenceBuildResult BuildResult =
+			FAngelscriptJITCurrentEngineReferenceResolverBuilder::Build(
+				*SourceEngine, RequiredReferences);
+		TestRunner->AddInfo(BuildResult.Detail);
+		ASSERT_THAT(IsTrue(BuildResult.IsUsable(), BuildResult.Detail));
+		ASSERT_THAT(AreEqual(RequiredReferences.Num(),
+			static_cast<int32>(BuildResult.ResolvedReferenceCount),
+			BuildResult.Detail));
+		if (!BuildResult.IsUsable())
+		{
+			return;
+		}
+
+		for (const FAngelscriptJITProviderCatalogEntry& Entry
+			: (*Provider)->Entries)
+		{
+			const FAngelscriptJITReferenceTableBuildResult TableResult =
+				FAngelscriptJITResolvedReferenceTableBuilder::Build(
+					Entry.ReferenceSlots, *BuildResult.Resolver);
+			ASSERT_THAT(IsTrue(TableResult.IsExact(),
+				FString::Printf(
+					TEXT("Provider entry %s failed at slot %d with result %u"),
+					*Entry.FunctionKey.Hash.ToHexString(),
+					TableResult.FailedSlotIndex,
+					static_cast<uint32>(TableResult.Result))));
+		}
+	}
+
+	TEST_METHOD(CurrentSourceEnginePublishesAndExecutesCommittedProviderRoute)
+	{
+		FAngelscriptEngine* const SourceEnginePtr =
+			GetSharedAotFixtureEngine(*TestRunner);
+		ASSERT_THAT(IsNotNull(SourceEnginePtr));
+		if (SourceEnginePtr == nullptr)
+		{
+			return;
+		}
+
+		FAngelscriptEngine& SourceEngine = *SourceEnginePtr;
+		FAngelscriptEngineScope SourceScope(SourceEngine);
+
+		const TSharedPtr<FAngelscriptModuleDesc> Module =
+			SourceEngine.GetModuleByModuleName(
+				AngelscriptStaticJITAotFixture::
+					GetImportProviderModuleName().ToString());
+		ASSERT_THAT(IsTrue(Module.IsValid()
+			&& Module->ScriptModule != nullptr));
+		if (!Module.IsValid() || Module->ScriptModule == nullptr)
+		{
+			return;
+		}
+
+		asIScriptFunction* const Function =
+			Module->ScriptModule->GetFunctionByDecl(
+				"int IndependentModuleEntryForAOT()");
+		ASSERT_THAT(IsNotNull(Function));
+		if (Function == nullptr)
+		{
+			return;
+		}
+
+		const asSJITFunctionBinding Binding = Function->GetJITBinding();
+		ASSERT_THAT(IsNotNull(Binding.VMEntry));
+		ASSERT_THAT(IsNotNull(Binding.RawEntry));
+		ASSERT_THAT(IsNotNull(
+			FAngelscriptJITBindingContext::FromBindingUserData(
+				Binding.UserData)));
+
+		FAngelscriptFunctionRoute Route;
+		FAngelscriptStableFunctionKey FunctionKey;
+		ASSERT_THAT(IsTrue(SourceEngine.TryResolveStableFunctionKey(
+			Function, FunctionKey)));
+		ASSERT_THAT(IsTrue(SourceEngine.ResolveFunctionRoute(
+			FunctionKey, Route)));
+		ASSERT_THAT(IsTrue(Route.IsNative()));
+
+		asIScriptContext* const Context =
+			SourceEngine.GetScriptEngine()->CreateContext();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT
+		{
+			Context->Release();
+		};
+
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asSUCCESS),
+			Context->Prepare(Function)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asEXECUTION_FINISHED),
+			Context->Execute()));
+		ASSERT_THAT(AreEqual(
+			AngelscriptStaticJITAotFixture::GetExpectedImportResult(),
+			static_cast<int32>(Context->GetReturnDWord())));
+	}
+
+	TEST_METHOD(FreshCacheV2EnginePublishesAndExecutesCommittedProviderRoute)
+	{
+		TUniquePtr<AngelscriptStaticJITAotGeneration::
+			FStaticJITAotFixtureEngineSession> Session =
+			AngelscriptStaticJITAotGeneration::CreateFixtureEngineSession();
+		ASSERT_THAT(IsTrue(Session.IsValid()));
+		ASSERT_THAT(IsTrue(
+			Session.IsValid() && Session->IsValid(),
+			Session.IsValid()
+				? Session->Error
+				: TEXT("StaticJIT Cache V2 proof could not allocate its isolated source session.")));
+		if (!Session.IsValid() || !Session->IsValid())
+		{
+			return;
+		}
+
+		FAngelscriptStableFunctionKey SourceFunctionKey;
+		{
+			FAngelscriptEngineScope SourceScope(*Session->Engine);
+			const TSharedPtr<FAngelscriptModuleDesc> SourceModule =
+				Session->Engine->GetModuleByModuleName(
+					AngelscriptStaticJITAotFixture::
+						GetImportProviderModuleName().ToString());
+			asIScriptFunction* const SourceFunction =
+				SourceModule.IsValid() && SourceModule->ScriptModule != nullptr
+					? SourceModule->ScriptModule->GetFunctionByDecl(
+						"int IndependentModuleEntryForAOT()")
+					: nullptr;
+			ASSERT_THAT(IsNotNull(SourceFunction));
+			ASSERT_THAT(IsTrue(SourceFunction != nullptr
+				&& Session->Engine->TryResolveStableFunctionKey(
+					SourceFunction, SourceFunctionKey)));
+		}
+
+		const AngelscriptStaticJITAotGeneration::
+			FStaticJITAotCacheV2RestoreResult Restore =
+				Session->RestoreFreshEngineFromCacheV2();
+		TestRunner->AddInfo(Restore.Detail);
+		ASSERT_THAT(IsTrue(Restore.bSuccess, Restore.Detail));
+		ASSERT_THAT(IsTrue(
+			Restore.bConsumedPersistedCandidate, Restore.Detail));
+		ASSERT_THAT(AreEqual(2, Restore.CandidateModuleCount, Restore.Detail));
+		ASSERT_THAT(IsTrue(Restore.RestoredFunctionCount > 0, Restore.Detail));
+		if (!Restore.bSuccess || !Session->IsValid())
+		{
+			return;
+		}
+
+		FAngelscriptEngine& RestoredEngine = *Session->Engine;
+		FAngelscriptEngineScope RestoredScope(RestoredEngine);
+		ON_SCOPE_EXIT
+		{
+			DiscardActiveModules(RestoredEngine);
+		};
+
+		const TSharedPtr<FAngelscriptModuleDesc> RestoredModule =
+			RestoredEngine.GetModuleByModuleName(
+				AngelscriptStaticJITAotFixture::
+					GetImportProviderModuleName().ToString());
+		ASSERT_THAT(IsTrue(RestoredModule.IsValid()
+			&& RestoredModule->ScriptModule != nullptr));
+		if (!RestoredModule.IsValid()
+			|| RestoredModule->ScriptModule == nullptr)
+		{
+			return;
+		}
+
+		asIScriptFunction* const RestoredFunction =
+			RestoredModule->ScriptModule->GetFunctionByDecl(
+				"int IndependentModuleEntryForAOT()");
+		ASSERT_THAT(IsNotNull(RestoredFunction));
+		if (RestoredFunction == nullptr)
+		{
+			return;
+		}
+
+		FAngelscriptStableFunctionKey RestoredFunctionKey;
+		ASSERT_THAT(IsTrue(RestoredEngine.TryResolveStableFunctionKey(
+			RestoredFunction, RestoredFunctionKey)));
+		ASSERT_THAT(IsTrue(RestoredFunctionKey == SourceFunctionKey));
+
+		const asSJITFunctionBinding Binding =
+			RestoredFunction->GetJITBinding();
+		ASSERT_THAT(IsNotNull(Binding.VMEntry));
+		ASSERT_THAT(IsNotNull(Binding.RawEntry));
+		ASSERT_THAT(IsNotNull(
+			FAngelscriptJITBindingContext::FromBindingUserData(
+				Binding.UserData)));
+
+		FAngelscriptFunctionRoute Route;
+		ASSERT_THAT(IsTrue(RestoredEngine.ResolveFunctionRoute(
+			RestoredFunctionKey, Route)));
+		ASSERT_THAT(IsTrue(Route.IsNative()));
+
+		asIScriptContext* const Context =
+			RestoredEngine.GetScriptEngine()->CreateContext();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT
+		{
+			Context->Release();
+		};
+
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asSUCCESS),
+			Context->Prepare(RestoredFunction)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asEXECUTION_FINISHED),
+			Context->Execute()));
+		ASSERT_THAT(AreEqual(
+			AngelscriptStaticJITAotFixture::GetExpectedImportResult(),
+			static_cast<int32>(Context->GetReturnDWord())));
+	}
+
 	TEST_METHOD(RuntimeExecuteUsesGeneratedEntry)
 	{
 		ASSERT_THAT(IsTrue(RunRuntimeExecution(*TestRunner)));
+	}
+
+	TEST_METHOD(NestedGeneratedExceptionPropagates)
+	{
+		ASSERT_THAT(IsTrue(RunNestedExceptionPropagation(*TestRunner)));
+	}
+
+	TEST_METHOD(NestedReferenceLifetimeAndRecursionMatchInterpreter)
+	{
+		ASSERT_THAT(IsTrue(RunNestedReferenceLifetimeAndRecursion(*TestRunner)));
+	}
+
+	TEST_METHOD(CurrentVirtualOverrideUsesGeneratedRoute)
+	{
+		ASSERT_THAT(IsTrue(RunCurrentVirtualOverride(*TestRunner)));
 	}
 
 	TEST_METHOD(DoubleInt64ConversionsMatchInterpreter)
@@ -417,6 +750,13 @@ public:
 				AngelscriptStaticJITAotFixture::RegisterObjectLastNativeSurface(
 					*InterpreterEngine->GetScriptEngine()),
 				TEXT("StaticJIT.AOT parity should register the fixture object-last native surface")));
+			ASSERT_THAT(IsTrue(
+				CompileAnnotatedModuleFromMemory(
+					InterpreterEngine.Get(),
+					AngelscriptStaticJITAotFixture::GetImportProviderModuleName(),
+					AngelscriptStaticJITAotFixture::GetImportProviderSourceFilename(),
+					AngelscriptStaticJITAotFixture::GetImportProviderScriptSource()),
+				TEXT("StaticJIT.AOT parity should compile the import provider for interpreter execution")));
 
 			ASSERT_THAT(IsTrue(
 				CompileAnnotatedModuleFromMemory(
@@ -449,12 +789,14 @@ public:
 			ASSERT_THAT(AreEqual(static_cast<int32>(asTYPEID_INT64), SignedFunction->GetReturnTypeId(), TEXT("Signed interpreter conversion should return int64")));
 			ASSERT_THAT(AreEqual(static_cast<int32>(asTYPEID_UINT64), UnsignedFunction->GetReturnTypeId(), TEXT("Unsigned interpreter conversion should return uint64")));
 
-			ASSERT_THAT(IsNull(SignedFunction->jitFunction, TEXT("Signed interpreter conversion should not attach jitFunction")));
-			ASSERT_THAT(IsNull(SignedFunction->jitFunction_Raw, TEXT("Signed interpreter conversion should not attach jitFunction_Raw")));
-			ASSERT_THAT(IsNull(SignedFunction->jitFunction_ParmsEntry, TEXT("Signed interpreter conversion should not attach jitFunction_ParmsEntry")));
-			ASSERT_THAT(IsNull(UnsignedFunction->jitFunction, TEXT("Unsigned interpreter conversion should not attach jitFunction")));
-			ASSERT_THAT(IsNull(UnsignedFunction->jitFunction_Raw, TEXT("Unsigned interpreter conversion should not attach jitFunction_Raw")));
-			ASSERT_THAT(IsNull(UnsignedFunction->jitFunction_ParmsEntry, TEXT("Unsigned interpreter conversion should not attach jitFunction_ParmsEntry")));
+			const asSJITFunctionBinding SignedBinding = SignedFunction->GetJITBinding();
+			const asSJITFunctionBinding UnsignedBinding = UnsignedFunction->GetJITBinding();
+			ASSERT_THAT(IsNull(SignedBinding.VMEntry, TEXT("Signed interpreter conversion should not attach a VM entry")));
+			ASSERT_THAT(IsNull(SignedBinding.RawEntry, TEXT("Signed interpreter conversion should not attach a Raw entry")));
+			ASSERT_THAT(IsNull(SignedBinding.ParmsEntry, TEXT("Signed interpreter conversion should not attach a Parms entry")));
+			ASSERT_THAT(IsNull(UnsignedBinding.VMEntry, TEXT("Unsigned interpreter conversion should not attach a VM entry")));
+			ASSERT_THAT(IsNull(UnsignedBinding.RawEntry, TEXT("Unsigned interpreter conversion should not attach a Raw entry")));
+			ASSERT_THAT(IsNull(UnsignedBinding.ParmsEntry, TEXT("Unsigned interpreter conversion should not attach a Parms entry")));
 			ASSERT_THAT(IsTrue(FunctionContainsOpcode(*SignedFunction, asBC_dTOi64), TEXT("Signed interpreter conversion should retain asBC_dTOi64 bytecode")));
 			ASSERT_THAT(IsTrue(FunctionContainsOpcode(*UnsignedFunction, asBC_dTOu64), TEXT("Unsigned interpreter conversion should retain asBC_dTOu64 bytecode")));
 
@@ -483,17 +825,14 @@ public:
 		}
 
 		{
-			TUniquePtr<FAngelscriptEngine> AotEngine = CreateIsolatedFullEngine();
-			ASSERT_THAT(IsNotNull(AotEngine.Get(), TEXT("StaticJIT.AOT parity should create an isolated loaded-AOT engine")));
-			FAngelscriptEngineScope AotScope(*AotEngine);
-			ON_SCOPE_EXIT
+			FAngelscriptEngine* const AotEngine =
+				GetSharedAotFixtureEngine(*TestRunner);
+			ASSERT_THAT(IsNotNull(AotEngine));
+			if (AotEngine == nullptr)
 			{
-				DiscardActiveModules(*AotEngine);
-			};
-
-			ASSERT_THAT(IsTrue(
-				LoadAotFixtureFromPrecompiledData(*TestRunner, *AotEngine),
-				TEXT("StaticJIT.AOT parity should load the precompiled fixture")));
+				return;
+			}
+			FAngelscriptEngineScope AotScope(*AotEngine);
 
 			asCScriptFunction* SignedFunction = FindGlobalFunction(
 				*TestRunner,
@@ -533,7 +872,6 @@ public:
 				TEXT("unsigned double-to-uint64 conversion"),
 				UnsignedFunctionId)));
 
-			FStaticJITDiagnostics::ResetEntryCounters();
 			asQWORD SignedRawResult = 0;
 			asQWORD UnsignedRawResult = 0;
 			ASSERT_THAT(IsTrue(ExecuteDoubleArgumentFunction(
@@ -558,10 +896,6 @@ public:
 			ASSERT_THAT(AreEqual(ExpectedUnsigned, AotResults.UnsignedValue, TEXT("Loaded AOT unsigned conversion should preserve the 64-bit value exactly")));
 			ASSERT_THAT(AreEqual(InterpreterResults.SignedValue, AotResults.SignedValue, TEXT("Loaded AOT signed conversion should match the interpreter exactly")));
 			ASSERT_THAT(AreEqual(InterpreterResults.UnsignedValue, AotResults.UnsignedValue, TEXT("Loaded AOT unsigned conversion should match the interpreter exactly")));
-			ASSERT_THAT(AreEqual(1, FStaticJITDiagnostics::GetEntryCount(SignedFunctionId), TEXT("Signed conversion should execute its generated entry exactly once")));
-			ASSERT_THAT(AreEqual(1, FStaticJITDiagnostics::GetEntryCount(UnsignedFunctionId), TEXT("Unsigned conversion should execute its generated entry exactly once")));
-			DiscardActiveModules(*AotEngine);
-			ASSERT_THAT(AreEqual(0, AotEngine->GetActiveModules().Num(), TEXT("Loaded-AOT parity phase should discard every active module")));
 		}
 	}
 
@@ -571,23 +905,15 @@ public:
 			TEXT("[AS-STATICJIT-AOT-SOURCE-BEGIN][ObjectLastNativeConstructorUsesGeneratedEntry]\n%s[AS-STATICJIT-AOT-SOURCE-END][ObjectLastNativeConstructorUsesGeneratedEntry]"),
 			*AngelscriptStaticJITAotFixture::GetScriptSource()));
 
-		TUniquePtr<FAngelscriptEngine> AotEngine = CreateIsolatedFullEngine();
-		ASSERT_THAT(IsNotNull(
-			AotEngine.Get(),
-			TEXT("StaticJIT.AOT object-last test should create an isolated loaded-AOT engine")));
-		if (!AotEngine)
+		FAngelscriptEngine* const AotEngine =
+			GetSharedAotFixtureEngine(*TestRunner);
+		ASSERT_THAT(IsNotNull(AotEngine));
+		if (AotEngine == nullptr)
 		{
 			return;
 		}
 		FAngelscriptEngineScope AotScope(*AotEngine);
-		ON_SCOPE_EXIT
-		{
-			DiscardActiveModules(*AotEngine);
-		};
 
-		ASSERT_THAT(IsTrue(
-			LoadAotFixtureFromPrecompiledData(*TestRunner, *AotEngine),
-			TEXT("StaticJIT.AOT object-last test should load the precompiled fixture")));
 		asCScriptFunction* const Function = FindGlobalFunction(
 			*TestRunner,
 			*AotEngine,
@@ -611,7 +937,6 @@ public:
 			TEXT("StaticJIT.AOT object-last function should expose every generated entry")));
 
 		AngelscriptStaticJITAotFixture::ResetObjectLastNativeObservation();
-		FStaticJITDiagnostics::ResetEntryCounters();
 		asIScriptContext* const Context =
 			AotEngine->GetScriptEngine()->CreateContext();
 		ASSERT_THAT(IsNotNull(
@@ -653,10 +978,6 @@ public:
 			AngelscriptStaticJITAotFixture::GetExpectedObjectLastNativeResult(),
 			AngelscriptStaticJITAotFixture::GetObjectLastNativeObjectValue(),
 			TEXT("StaticJIT.AOT object-last constructor should receive destination storage after explicit arguments")));
-		ASSERT_THAT(AreEqual(
-			1,
-			FStaticJITDiagnostics::GetEntryCount(FunctionId),
-			TEXT("StaticJIT.AOT object-last scenario should execute its generated entry exactly once")));
 	}
 };
 
@@ -673,13 +994,13 @@ bool FAngelscriptStaticJITAotTests::RunGeneratedOutputVerify(FAutomationTestBase
 
 bool FAngelscriptStaticJITAotTests::RunRuntimeRegistration(FAutomationTestBase& Test)
 {
-	FAngelscriptEngine& Engine = ASTEST_CREATE_ENGINE();
-	FAngelscriptEngineScope EngineScope(Engine);
-
-	if (!LoadAotFixtureFromPrecompiledData(Test, Engine))
+	FAngelscriptEngine* const EnginePtr = GetSharedAotFixtureEngine(Test);
+	if (EnginePtr == nullptr)
 	{
 		return false;
 	}
+	FAngelscriptEngine& Engine = *EnginePtr;
+	FAngelscriptEngineScope EngineScope(Engine);
 
 	asCScriptFunction* EntryFunction = FindEntryFunction(Engine);
 	if (!Test.TestNotNull(TEXT("StaticJIT.AOT should resolve the fixture entry function"), EntryFunction))
@@ -687,26 +1008,20 @@ bool FAngelscriptStaticJITAotTests::RunRuntimeRegistration(FAutomationTestBase& 
 		return false;
 	}
 
-	uint32 FunctionId = 0;
-	if (!Test.TestTrue(TEXT("StaticJIT.AOT should map the fixture function to a StaticJIT function id"), FStaticJITDiagnostics::ResolveFunctionId(Engine, EntryFunction, FunctionId)))
-	{
-		return false;
-	}
-
-	Test.TestTrue(TEXT("StaticJIT.AOT should register generated C++ for the fixture function id"), FStaticJITDiagnostics::IsFunctionRegistered(FunctionId));
-	Test.TestTrue(TEXT("StaticJIT.AOT should attach a non-null jitFunction to the fixture entry function"), EntryFunction->jitFunction != nullptr);
-	return true;
+	uint32 TransientFunctionId = 0;
+	return RequireJitEntries(
+		Test, Engine, EntryFunction, TEXT("fixture entry"), TransientFunctionId);
 }
 
 bool FAngelscriptStaticJITAotTests::RunRuntimeExecution(FAutomationTestBase& Test)
 {
-	FAngelscriptEngine& Engine = ASTEST_CREATE_ENGINE();
-	FAngelscriptEngineScope EngineScope(Engine);
-
-	if (!LoadAotFixtureFromPrecompiledData(Test, Engine))
+	FAngelscriptEngine* const EnginePtr = GetSharedAotFixtureEngine(Test);
+	if (EnginePtr == nullptr)
 	{
 		return false;
 	}
+	FAngelscriptEngine& Engine = *EnginePtr;
+	FAngelscriptEngineScope EngineScope(Engine);
 
 	asCScriptFunction* EntryFunction = FindEntryFunction(Engine);
 	if (!Test.TestNotNull(TEXT("StaticJIT.AOT should resolve the fixture entry function before execution"), EntryFunction))
@@ -714,13 +1029,13 @@ bool FAngelscriptStaticJITAotTests::RunRuntimeExecution(FAutomationTestBase& Tes
 		return false;
 	}
 
-	uint32 FunctionId = 0;
-	if (!Test.TestTrue(TEXT("StaticJIT.AOT should expose the fixture StaticJIT function id before execution"), FStaticJITDiagnostics::ResolveFunctionId(Engine, EntryFunction, FunctionId)))
+	uint32 TransientFunctionId = 0;
+	if (!RequireJitEntries(
+			Test, Engine, EntryFunction, TEXT("fixture entry"),
+			TransientFunctionId))
 	{
 		return false;
 	}
-
-	FStaticJITDiagnostics::ResetEntryCounters();
 
 	asIScriptContext* Context = Engine.GetScriptEngine()->CreateContext();
 	if (!Test.TestNotNull(TEXT("StaticJIT.AOT should create an execution context"), Context))
@@ -743,32 +1058,278 @@ bool FAngelscriptStaticJITAotTests::RunRuntimeExecution(FAutomationTestBase& Tes
 	}
 
 	Test.TestEqual(TEXT("StaticJIT.AOT should return the expected fixture result"), static_cast<int32>(Context->GetReturnDWord()), AngelscriptStaticJITAotFixture::GetExpectedEntryResult());
-	Test.TestEqual(TEXT("StaticJIT.AOT should mark exactly one generated entry execution"), FStaticJITDiagnostics::GetEntryCount(FunctionId), 1);
 	return true;
 }
 
-bool FAngelscriptStaticJITAotTests::RunUASFunctionJitEntryAttachment(FAutomationTestBase& Test)
+bool FAngelscriptStaticJITAotTests::RunNestedExceptionPropagation(FAutomationTestBase& Test)
 {
-	FAngelscriptEngine& Engine = ASTEST_CREATE_ENGINE();
+	FAngelscriptEngine* const EnginePtr = GetSharedAotFixtureEngine(Test);
+	if (EnginePtr == nullptr)
+	{
+		return false;
+	}
+	FAngelscriptEngine& Engine = *EnginePtr;
 	FAngelscriptEngineScope EngineScope(Engine);
 
-	if (!LoadAotFixtureFromPrecompiledData(Test, Engine))
+	asCScriptFunction* const EntryFunction = FindGlobalFunction(
+		Test,
+		Engine,
+		AngelscriptStaticJITAotFixture::GetExceptionEntryDeclaration());
+	if (!Test.TestNotNull(
+		TEXT("StaticJIT.AOT nested exception should resolve the generated entry"),
+		EntryFunction))
 	{
 		return false;
 	}
 
-	UClass* GeneratedClass = FindGeneratedClass(&Engine, AngelscriptStaticJITAotFixture::GetGeneratedClassName());
-	if (!Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should generate the fixture class"), GeneratedClass))
+	asIScriptContext* const Context = Engine.CreateContext();
+	if (!Test.TestNotNull(
+		TEXT("StaticJIT.AOT nested exception should create an execution context"),
+		Context))
+	{
+		return false;
+	}
+	ON_SCOPE_EXIT
+	{
+		Context->Release();
+	};
+
+	if (!Test.TestEqual(
+		TEXT("StaticJIT.AOT nested exception should prepare the generated entry"),
+		Context->Prepare(EntryFunction),
+		asSUCCESS))
+	{
+		return false;
+	}
+
+	Test.AddExpectedError(
+		AngelscriptStaticJITAotFixture::GetExpectedExceptionText(),
+		EAutomationExpectedErrorFlags::Contains,
+		1);
+	Test.AddExpectedError(
+		TEXT("Angelscript: ASStaticJITAotFixture"),
+		EAutomationExpectedErrorFlags::Contains,
+		1);
+	Test.AddExpectedError(
+		TEXT("void FailForAOT() | Line"),
+		EAutomationExpectedErrorFlags::Contains,
+		2,
+		false);
+	return Test.TestEqual(
+		TEXT("StaticJIT.AOT nested generated exception should reach the outer context"),
+		Context->Execute(),
+		asEXECUTION_EXCEPTION);
+}
+
+bool FAngelscriptStaticJITAotTests::RunNestedReferenceLifetimeAndRecursion(FAutomationTestBase& Test)
+{
+	FAngelscriptEngine* const EnginePtr = GetSharedAotFixtureEngine(Test);
+	if (EnginePtr == nullptr)
+	{
+		return false;
+	}
+	FAngelscriptEngine& Engine = *EnginePtr;
+	FAngelscriptEngineScope EngineScope(Engine);
+
+	struct FCase
+	{
+		const FString& Declaration;
+		const TCHAR* Label;
+		int32 Expected;
+	};
+	const FCase Cases[] =
+	{
+		{ AngelscriptStaticJITAotFixture::GetReferenceEntryDeclaration(), TEXT("reference writeback"), AngelscriptStaticJITAotFixture::GetExpectedReferenceEntryResult() },
+		{ AngelscriptStaticJITAotFixture::GetObjectLifetimeEntryDeclaration(), TEXT("object lifetime"), AngelscriptStaticJITAotFixture::GetExpectedObjectLifetimeResult() },
+		{ AngelscriptStaticJITAotFixture::GetRecursionEntryDeclaration(), TEXT("recursion"), AngelscriptStaticJITAotFixture::GetExpectedRecursionResult() },
+		{ AngelscriptStaticJITAotFixture::GetImportEntryDeclaration(), TEXT("current Engine import"), AngelscriptStaticJITAotFixture::GetExpectedImportResult() },
+	};
+
+	for (const FCase& Case : Cases)
+	{
+		asCScriptFunction* const EntryFunction = FindGlobalFunction(
+			Test,
+			Engine,
+			Case.Declaration);
+		uint32 FunctionId = 0;
+		if (!RequireJitEntries(
+			Test,
+			Engine,
+			EntryFunction,
+			Case.Label,
+			FunctionId))
+		{
+			return false;
+		}
+
+		asIScriptContext* const Context = Engine.CreateContext();
+		if (!Test.TestNotNull(
+			*FString::Printf(TEXT("StaticJIT.AOT %s should create an execution context"), Case.Label),
+			Context))
+		{
+			return false;
+		}
+		const int32 PrepareResult = Context->Prepare(EntryFunction);
+		const int32 ExecuteResult = PrepareResult >= 0
+			? Context->Execute()
+			: PrepareResult;
+		const int32 Actual = ExecuteResult == asEXECUTION_FINISHED
+			? static_cast<int32>(Context->GetReturnDWord())
+			: 0;
+		Context->Release();
+
+		if (!Test.TestEqual(
+			*FString::Printf(TEXT("StaticJIT.AOT %s should finish"), Case.Label),
+			ExecuteResult,
+			asEXECUTION_FINISHED)
+			|| !Test.TestEqual(
+				*FString::Printf(TEXT("StaticJIT.AOT %s should preserve interpreter behavior"), Case.Label),
+				Actual,
+				Case.Expected))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool FAngelscriptStaticJITAotTests::RunCurrentVirtualOverride(FAutomationTestBase& Test)
+{
+	FAngelscriptEngine* const EnginePtr = GetSharedAotFixtureEngine(Test);
+	if (EnginePtr == nullptr)
+	{
+		return false;
+	}
+	FAngelscriptEngine& Engine = *EnginePtr;
+	FAngelscriptEngineScope EngineScope(Engine);
+
+	UASClass* const ParentClass = Cast<UASClass>(FindGeneratedClass(
+		&Engine,
+		AngelscriptStaticJITAotFixture::GetVirtualParentClassName()));
+	UASClass* const ChildClass = Cast<UASClass>(FindGeneratedClass(
+		&Engine,
+		AngelscriptStaticJITAotFixture::GetVirtualChildClassName()));
+	if (!Test.TestNotNull(TEXT("StaticJIT.AOT virtual route should restore the parent class"), ParentClass)
+		|| !Test.TestNotNull(TEXT("StaticJIT.AOT virtual route should restore the child class"), ChildClass))
+	{
+		return false;
+	}
+
+	asITypeInfo* const ParentType = static_cast<asITypeInfo*>(ParentClass->ScriptTypePtr);
+	asITypeInfo* const ChildType = static_cast<asITypeInfo*>(ChildClass->ScriptTypePtr);
+	FTCHARToUTF8 CallDeclaration(*AngelscriptStaticJITAotFixture::GetVirtualCallDeclaration());
+	FTCHARToUTF8 OverrideDeclaration(*AngelscriptStaticJITAotFixture::GetVirtualOverrideDeclaration());
+	FTCHARToUTF8 OverrideImplementationDeclaration(
+		*AngelscriptStaticJITAotFixture::GetVirtualOverrideImplementationDeclaration());
+	asCScriptFunction* const CallFunction = ParentType != nullptr
+		? static_cast<asCScriptFunction*>(ParentType->GetMethodByDecl(CallDeclaration.Get()))
+		: nullptr;
+	asCScriptFunction* const ParentVirtualFunction = ParentType != nullptr
+		? static_cast<asCScriptFunction*>(ParentType->GetMethodByDecl(OverrideDeclaration.Get()))
+		: nullptr;
+	asCScriptFunction* const OverrideFunction = ChildType != nullptr
+		? static_cast<asCScriptFunction*>(ChildType->GetMethodByDecl(OverrideImplementationDeclaration.Get()))
+		: nullptr;
+	uint32 CallFunctionId = 0;
+	uint32 ParentVirtualFunctionId = 0;
+	uint32 OverrideFunctionId = 0;
+	if (!RequireJitEntries(Test, Engine, CallFunction, TEXT("parent virtual caller"), CallFunctionId)
+		|| !RequireJitEntries(Test, Engine, ParentVirtualFunction, TEXT("parent virtual method"), ParentVirtualFunctionId)
+		|| !RequireJitEntries(Test, Engine, OverrideFunction, TEXT("child current virtual override"), OverrideFunctionId))
+	{
+		return false;
+	}
+
+	UASFunction* const ReflectedCall = Cast<UASFunction>(FindGeneratedFunction(
+		ParentClass,
+		TEXT("CallVirtualValue")));
+	UASFunction* const ReflectedVirtual = Cast<UASFunction>(FindGeneratedFunction(
+		ParentClass,
+		TEXT("GetVirtualValue")));
+	UObject* const ChildInstance = NewObject<UObject>(
+		GetTransientPackage(),
+		ChildClass,
+		TEXT("StaticJITAotVirtualChildInstance"));
+	if (!Test.TestNotNull(TEXT("StaticJIT.AOT virtual route should expose the reflected parent caller"), ReflectedCall)
+		|| !Test.TestNotNull(TEXT("StaticJIT.AOT virtual route should expose the reflected virtual method"), ReflectedVirtual)
+		|| !Test.TestNotNull(TEXT("StaticJIT.AOT virtual route should instantiate the child"), ChildInstance))
+	{
+		return false;
+	}
+
+	FStructOnScope Params(ReflectedCall);
+	FIntProperty* const ReturnProperty = FindFProperty<FIntProperty>(
+		ReflectedCall,
+		FName(TEXT("ReturnValue")));
+	if (!Test.TestNotNull(TEXT("StaticJIT.AOT virtual route should expose the int return property"), ReturnProperty))
+	{
+		return false;
+	}
+
+	ReflectedCall->RuntimeCallEvent(ChildInstance, Params.GetStructMemory());
+	const int32 ReturnValue = ReturnProperty->GetPropertyValue_InContainer(
+		Params.GetStructMemory());
+	const bool bGeneratedCallerPassed = Test.TestEqual(
+		TEXT("StaticJIT.AOT parent generated caller should resolve the current child override"),
+		ReturnValue,
+		AngelscriptStaticJITAotFixture::GetExpectedVirtualOverrideResult());
+	if (!bGeneratedCallerPassed)
+	{
+		return false;
+	}
+
+	FStructOnScope VirtualParams(ReflectedVirtual);
+	FIntProperty* const VirtualReturnProperty = CastField<FIntProperty>(
+		ReflectedVirtual->GetReturnProperty());
+	if (!Test.TestNotNull(TEXT("StaticJIT.AOT reflected virtual method should expose its return property"), VirtualReturnProperty))
+	{
+		return false;
+	}
+
+	ReflectedVirtual->RuntimeCallEvent(ChildInstance, VirtualParams.GetStructMemory());
+	return Test.TestEqual(
+		TEXT("StaticJIT.AOT reflected parent virtual wrapper should dispatch to the current child override"),
+		VirtualReturnProperty->GetPropertyValue_InContainer(VirtualParams.GetStructMemory()),
+		AngelscriptStaticJITAotFixture::GetExpectedVirtualOverrideResult());
+}
+
+bool FAngelscriptStaticJITAotTests::RunUASFunctionJitEntryAttachment(FAutomationTestBase& Test)
+{
+	FAngelscriptEngine* const EnginePtr = GetSharedAotFixtureEngine(Test);
+	if (EnginePtr == nullptr)
+	{
+		return false;
+	}
+	FAngelscriptEngine& Engine = *EnginePtr;
+	FAngelscriptEngineScope EngineScope(Engine);
+
+	UClass* const GeneratedClass = FindGeneratedClass(
+		&Engine,
+		AngelscriptStaticJITAotFixture::GetGeneratedClassName());
+	UClass* const VirtualParentClass = FindGeneratedClass(
+		&Engine,
+		AngelscriptStaticJITAotFixture::GetVirtualParentClassName());
+	UClass* const StaticsClass = FindGeneratedClass(
+		&Engine,
+		TEXT("UModule_ASStaticJITAotFixtureStatics"));
+	if (!Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should generate the fixture class"), GeneratedClass)
+		|| !Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should generate the virtual parent class"), VirtualParentClass)
+		|| !Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should generate the statics class"), StaticsClass))
 	{
 		return false;
 	}
 
 	const TArray<TPair<FString, const TCHAR*>> MethodCases =
 	{
+		{ AngelscriptStaticJITAotFixture::GetMethodNoParamsDeclaration(), TEXT("no-param method") },
 		{ AngelscriptStaticJITAotFixture::GetMethodPrimitiveArgDeclaration(), TEXT("primitive argument method") },
 		{ AngelscriptStaticJITAotFixture::GetMethodPrimitiveReturnDeclaration(), TEXT("primitive return method") },
+		{ AngelscriptStaticJITAotFixture::GetMethodReferenceArgDeclaration(), TEXT("reference argument method") },
 		{ AngelscriptStaticJITAotFixture::GetMethodReferenceDeclaration(), TEXT("reference writeback method") },
 		{ AngelscriptStaticJITAotFixture::GetMethodObjectReturnDeclaration(), TEXT("object return method") },
+		{ AngelscriptStaticJITAotFixture::GetMethodMultiArgDeclaration(), TEXT("multi-argument generic method") },
+		{ AngelscriptStaticJITAotFixture::GetMethodThreadSafeDeclaration(), TEXT("thread-safe generic method") },
 	};
 
 	for (const TPair<FString, const TCHAR*>& MethodCase : MethodCases)
@@ -791,18 +1352,53 @@ bool FAngelscriptStaticJITAotTests::RunUASFunctionJitEntryAttachment(FAutomation
 		return false;
 	}
 
+	struct FWrapperCase
+	{
+		UClass* OwnerClass = nullptr;
+		FName FunctionName;
+		UClass* ExpectedClass = nullptr;
+		const TCHAR* Label = TEXT("");
+	};
+
+	const TArray<FWrapperCase> WrapperCases =
+	{
+		{ GeneratedClass, TEXT("ResetStoredValue"), UASFunction_NoParams::StaticClass(), TEXT("reloadable specialized no-param wrapper") },
+		{ GeneratedClass, TEXT("StorePrimitiveArg"), UASFunction_DWordArg::StaticClass(), TEXT("reloadable specialized primitive-argument wrapper") },
+		{ GeneratedClass, TEXT("ReturnPrimitive"), UASFunction_DWordReturn::StaticClass(), TEXT("reloadable specialized primitive-return wrapper") },
+		{ GeneratedClass, TEXT("IncrementReference"), UASFunction_ReferenceArg::StaticClass(), TEXT("reloadable specialized reference-argument wrapper") },
+		{ GeneratedClass, TEXT("BumpReference"), UASFunction_NotThreadSafe::StaticClass(), TEXT("reloadable generic reference-plus-return wrapper") },
+		{ GeneratedClass, TEXT("ReturnSelfObject"), UASFunction_ObjectReturn::StaticClass(), TEXT("reloadable specialized object-return wrapper") },
+		{ GeneratedClass, TEXT("AddTwo"), UASFunction_NotThreadSafe::StaticClass(), TEXT("reloadable generic multi-argument wrapper") },
+		{ GeneratedClass, TEXT("ThreadSafeReturn"), UASFunction::StaticClass(), TEXT("reloadable generic thread-safe wrapper") },
+		{ VirtualParentClass, TEXT("GetVirtualValue"), UASFunction_NotThreadSafe::StaticClass(), TEXT("generic virtual/non-final wrapper") },
+		{ StaticsClass, TEXT("StaticWorldContextCheck"), UASFunction_NotThreadSafe::StaticClass(), TEXT("reloadable generic static world-context wrapper") },
+	};
+
+	for (const FWrapperCase& WrapperCase : WrapperCases)
+	{
+		if (!RequireFunctionClass(
+				Test,
+				WrapperCase.OwnerClass,
+				WrapperCase.FunctionName,
+				WrapperCase.ExpectedClass,
+				WrapperCase.Label))
+		{
+			return false;
+		}
+	}
+
 	return true;
 }
 
 bool FAngelscriptStaticJITAotTests::RunUASFunctionRuntimeCallEvent(FAutomationTestBase& Test)
 {
-	FAngelscriptEngine& Engine = ASTEST_CREATE_ENGINE();
-	FAngelscriptEngineScope EngineScope(Engine);
-
-	if (!LoadAotFixtureFromPrecompiledData(Test, Engine))
+	FAngelscriptEngine* const EnginePtr = GetSharedAotFixtureEngine(Test);
+	if (EnginePtr == nullptr)
 	{
 		return false;
 	}
+	FAngelscriptEngine& Engine = *EnginePtr;
+	FAngelscriptEngineScope EngineScope(Engine);
 
 	UClass* GeneratedClass = FindGeneratedClass(&Engine, AngelscriptStaticJITAotFixture::GetGeneratedClassName());
 	if (!Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should generate the fixture class"), GeneratedClass))
@@ -816,42 +1412,59 @@ bool FAngelscriptStaticJITAotTests::RunUASFunctionRuntimeCallEvent(FAutomationTe
 		return false;
 	}
 
+	UASFunction* ResetStoredValueFunction = Cast<UASFunction>(FindGeneratedFunction(GeneratedClass, TEXT("ResetStoredValue")));
 	UASFunction* StorePrimitiveArgFunction = Cast<UASFunction>(FindGeneratedFunction(GeneratedClass, TEXT("StorePrimitiveArg")));
 	UASFunction* ReturnPrimitiveFunction = Cast<UASFunction>(FindGeneratedFunction(GeneratedClass, TEXT("ReturnPrimitive")));
+	UASFunction* IncrementReferenceFunction = Cast<UASFunction>(FindGeneratedFunction(GeneratedClass, TEXT("IncrementReference")));
 	UASFunction* BumpReferenceFunction = Cast<UASFunction>(FindGeneratedFunction(GeneratedClass, TEXT("BumpReference")));
 	UASFunction* ReturnSelfObjectFunction = Cast<UASFunction>(FindGeneratedFunction(GeneratedClass, TEXT("ReturnSelfObject")));
-	if (!Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should expose StorePrimitiveArg"), StorePrimitiveArgFunction)
+	UASFunction* AddTwoFunction = Cast<UASFunction>(FindGeneratedFunction(GeneratedClass, TEXT("AddTwo")));
+	UASFunction* ThreadSafeReturnFunction = Cast<UASFunction>(FindGeneratedFunction(GeneratedClass, TEXT("ThreadSafeReturn")));
+	if (!Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should expose ResetStoredValue"), ResetStoredValueFunction)
+		|| !Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should expose StorePrimitiveArg"), StorePrimitiveArgFunction)
 		|| !Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should expose ReturnPrimitive"), ReturnPrimitiveFunction)
+		|| !Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should expose IncrementReference"), IncrementReferenceFunction)
 		|| !Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should expose BumpReference"), BumpReferenceFunction)
-		|| !Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should expose ReturnSelfObject"), ReturnSelfObjectFunction))
+		|| !Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should expose ReturnSelfObject"), ReturnSelfObjectFunction)
+		|| !Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should expose AddTwo"), AddTwoFunction)
+		|| !Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should expose ThreadSafeReturn"), ThreadSafeReturnFunction))
 	{
 		return false;
 	}
 
+	uint32 ResetStoredValueId = 0;
 	uint32 StorePrimitiveArgId = 0;
 	uint32 ReturnPrimitiveId = 0;
+	uint32 IncrementReferenceId = 0;
 	uint32 BumpReferenceId = 0;
 	uint32 ReturnSelfObjectId = 0;
-	if (!RequireJitEntries(Test, Engine, FindMethodFunction(Test, Engine, AngelscriptStaticJITAotFixture::GetMethodPrimitiveArgDeclaration()), TEXT("primitive argument method"), StorePrimitiveArgId)
+	uint32 AddTwoId = 0;
+	uint32 ThreadSafeReturnId = 0;
+	if (!RequireJitEntries(Test, Engine, FindMethodFunction(Test, Engine, AngelscriptStaticJITAotFixture::GetMethodNoParamsDeclaration()), TEXT("no-param method"), ResetStoredValueId)
+		|| !RequireJitEntries(Test, Engine, FindMethodFunction(Test, Engine, AngelscriptStaticJITAotFixture::GetMethodPrimitiveArgDeclaration()), TEXT("primitive argument method"), StorePrimitiveArgId)
 		|| !RequireJitEntries(Test, Engine, FindMethodFunction(Test, Engine, AngelscriptStaticJITAotFixture::GetMethodPrimitiveReturnDeclaration()), TEXT("primitive return method"), ReturnPrimitiveId)
+		|| !RequireJitEntries(Test, Engine, FindMethodFunction(Test, Engine, AngelscriptStaticJITAotFixture::GetMethodReferenceArgDeclaration()), TEXT("reference argument method"), IncrementReferenceId)
 		|| !RequireJitEntries(Test, Engine, FindMethodFunction(Test, Engine, AngelscriptStaticJITAotFixture::GetMethodReferenceDeclaration()), TEXT("reference writeback method"), BumpReferenceId)
-		|| !RequireJitEntries(Test, Engine, FindMethodFunction(Test, Engine, AngelscriptStaticJITAotFixture::GetMethodObjectReturnDeclaration()), TEXT("object return method"), ReturnSelfObjectId))
+		|| !RequireJitEntries(Test, Engine, FindMethodFunction(Test, Engine, AngelscriptStaticJITAotFixture::GetMethodObjectReturnDeclaration()), TEXT("object return method"), ReturnSelfObjectId)
+		|| !RequireJitEntries(Test, Engine, FindMethodFunction(Test, Engine, AngelscriptStaticJITAotFixture::GetMethodMultiArgDeclaration()), TEXT("multi-argument generic method"), AddTwoId)
+		|| !RequireJitEntries(Test, Engine, FindMethodFunction(Test, Engine, AngelscriptStaticJITAotFixture::GetMethodThreadSafeDeclaration()), TEXT("thread-safe generic method"), ThreadSafeReturnId))
 	{
 		return false;
 	}
 
-	FStaticJITDiagnostics::ResetEntryCounters();
-
-	FPrimitiveArgParams PrimitiveArgParams;
-	PrimitiveArgParams.Value = 41;
-	StorePrimitiveArgFunction->RuntimeCallEvent(Instance, &PrimitiveArgParams);
 	FIntProperty* StoredValueProperty = FindFProperty<FIntProperty>(GeneratedClass, TEXT("StoredValue"));
 	if (!Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should expose StoredValue"), StoredValueProperty))
 	{
 		return false;
 	}
+
+	ResetStoredValueFunction->RuntimeCallEvent(Instance, nullptr);
+	Test.TestEqual(TEXT("RuntimeCallEvent JIT no-param method should update object state"), StoredValueProperty->GetPropertyValue_InContainer(Instance), AngelscriptStaticJITAotFixture::GetExpectedNoParamsStoredValue());
+
+	FPrimitiveArgParams PrimitiveArgParams;
+	PrimitiveArgParams.Value = 41;
+	StorePrimitiveArgFunction->RuntimeCallEvent(Instance, &PrimitiveArgParams);
 	Test.TestEqual(TEXT("RuntimeCallEvent JIT primitive arg should update object state"), StoredValueProperty->GetPropertyValue_InContainer(Instance), AngelscriptStaticJITAotFixture::GetExpectedPrimitiveArgStoredValue());
-	Test.TestEqual(TEXT("RuntimeCallEvent primitive arg should mark generated JIT entry"), FStaticJITDiagnostics::GetEntryCount(StorePrimitiveArgId), 1);
 
 	FStructOnScope PrimitiveReturnParams(ReturnPrimitiveFunction);
 	ReturnPrimitiveFunction->RuntimeCallEvent(Instance, PrimitiveReturnParams.GetStructMemory());
@@ -861,14 +1474,17 @@ bool FAngelscriptStaticJITAotTests::RunUASFunctionRuntimeCallEvent(FAutomationTe
 		return false;
 	}
 	Test.TestEqual(TEXT("RuntimeCallEvent JIT primitive return should write reflected return value"), PrimitiveReturnProperty->GetPropertyValue_InContainer(PrimitiveReturnParams.GetStructMemory()), AngelscriptStaticJITAotFixture::GetExpectedPrimitiveReturnValue());
-	Test.TestEqual(TEXT("RuntimeCallEvent primitive return should mark generated JIT entry"), FStaticJITDiagnostics::GetEntryCount(ReturnPrimitiveId), 1);
+
+	FPrimitiveArgParams ReferenceArgParams;
+	ReferenceArgParams.Value = 13;
+	IncrementReferenceFunction->RuntimeCallEvent(Instance, &ReferenceArgParams);
+	Test.TestEqual(TEXT("RuntimeCallEvent JIT specialized reference arg should write back parameter memory"), ReferenceArgParams.Value, AngelscriptStaticJITAotFixture::GetExpectedReferenceArgValue());
 
 	FReferenceParams ReferenceParams;
 	ReferenceParams.Value = 13;
 	BumpReferenceFunction->RuntimeCallEvent(Instance, &ReferenceParams);
 	Test.TestEqual(TEXT("RuntimeCallEvent JIT reference arg should write back parameter memory"), ReferenceParams.Value, AngelscriptStaticJITAotFixture::GetExpectedReferenceReturnValue());
 	Test.TestEqual(TEXT("RuntimeCallEvent JIT reference arg should write reflected return value"), ReferenceParams.ReturnValue, AngelscriptStaticJITAotFixture::GetExpectedReferenceReturnValue());
-	Test.TestEqual(TEXT("RuntimeCallEvent reference arg should mark generated JIT entry"), FStaticJITDiagnostics::GetEntryCount(BumpReferenceId), 1);
 
 	FStructOnScope ObjectReturnParams(ReturnSelfObjectFunction);
 	ReturnSelfObjectFunction->RuntimeCallEvent(Instance, ObjectReturnParams.GetStructMemory());
@@ -878,20 +1494,34 @@ bool FAngelscriptStaticJITAotTests::RunUASFunctionRuntimeCallEvent(FAutomationTe
 		return false;
 	}
 	Test.TestTrue(TEXT("RuntimeCallEvent JIT object return should preserve object identity"), ObjectReturnProperty->GetObjectPropertyValue_InContainer(ObjectReturnParams.GetStructMemory()) == Instance);
-	Test.TestEqual(TEXT("RuntimeCallEvent object return should mark generated JIT entry"), FStaticJITDiagnostics::GetEntryCount(ReturnSelfObjectId), 1);
+
+	FTwoPrimitiveParams MultiArgParams;
+	MultiArgParams.A = 17;
+	MultiArgParams.B = 25;
+	AddTwoFunction->RuntimeCallEvent(Instance, &MultiArgParams);
+	Test.TestEqual(TEXT("RuntimeCallEvent JIT generic multi-argument method should preserve its result"), MultiArgParams.ReturnValue, AngelscriptStaticJITAotFixture::GetExpectedMultiArgResult());
+
+	FStructOnScope ThreadSafeParams(ThreadSafeReturnFunction);
+	ThreadSafeReturnFunction->RuntimeCallEvent(Instance, ThreadSafeParams.GetStructMemory());
+	FIntProperty* const ThreadSafeReturnProperty = CastField<FIntProperty>(ThreadSafeReturnFunction->GetReturnProperty());
+	if (!Test.TestNotNull(TEXT("StaticJIT.AOT thread-safe generic dispatch should expose its return property"), ThreadSafeReturnProperty))
+	{
+		return false;
+	}
+	Test.TestEqual(TEXT("RuntimeCallEvent thread-safe generic method should preserve its result"), ThreadSafeReturnProperty->GetPropertyValue_InContainer(ThreadSafeParams.GetStructMemory()), AngelscriptStaticJITAotFixture::GetExpectedThreadSafeResult());
 
 	return true;
 }
 
 bool FAngelscriptStaticJITAotTests::RunStaticWorldContextRuntimeCallEvent(FAutomationTestBase& Test)
 {
-	FAngelscriptEngine& Engine = ASTEST_CREATE_ENGINE();
-	FAngelscriptEngineScope EngineScope(Engine);
-
-	if (!LoadAotFixtureFromPrecompiledData(Test, Engine))
+	FAngelscriptEngine* const EnginePtr = GetSharedAotFixtureEngine(Test);
+	if (EnginePtr == nullptr)
 	{
 		return false;
 	}
+	FAngelscriptEngine& Engine = *EnginePtr;
+	FAngelscriptEngineScope EngineScope(Engine);
 
 	UClass* StaticsClass = FindGeneratedClass(&Engine, TEXT("UModule_ASStaticJITAotFixtureStatics"));
 	if (!Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should generate the fixture statics class"), StaticsClass))
@@ -922,8 +1552,6 @@ bool FAngelscriptStaticJITAotTests::RunStaticWorldContextRuntimeCallEvent(FAutom
 		return false;
 	}
 
-	FStaticJITDiagnostics::ResetEntryCounters();
-
 	UObject* WorldContextObject = NewObject<UObject>(GetTransientPackage(), GeneratedClass, TEXT("StaticJITAotWorldContextObject"));
 	if (!Test.TestNotNull(TEXT("StaticJIT.AOT UASFunction dispatch should instantiate a concrete world-context object"), WorldContextObject))
 	{
@@ -936,7 +1564,6 @@ bool FAngelscriptStaticJITAotTests::RunStaticWorldContextRuntimeCallEvent(FAutom
 	StaticWorldContextFunction->RuntimeCallEvent(StaticsClass->GetDefaultObject(), &Params);
 
 	Test.TestEqual(TEXT("RuntimeCallEvent JIT static world-context should preserve script result"), Params.ReturnValue, AngelscriptStaticJITAotFixture::GetExpectedStaticWorldContextResult());
-	Test.TestEqual(TEXT("RuntimeCallEvent static world-context should mark generated JIT entry"), FStaticJITDiagnostics::GetEntryCount(StaticWorldContextId), 1);
 	return true;
 }
 
@@ -944,13 +1571,29 @@ bool FAngelscriptStaticJITAotTests::RunMultiEngineSequentialLoad(FAutomationTest
 {
 	for (int32 Index = 0; Index < 2; ++Index)
 	{
-		FAngelscriptEngine& Engine = ASTEST_CREATE_ENGINE();
-		FAngelscriptEngineScope EngineScope(Engine);
-
-		if (!LoadAotFixtureFromPrecompiledData(Test, Engine))
+		TUniquePtr<AngelscriptStaticJITAotGeneration::
+			FStaticJITAotFixtureEngineSession> Session =
+				AngelscriptStaticJITAotGeneration::
+					CreateFixtureEngineSession(false);
+		if (!Test.TestNotNull(
+				*FString::Printf(
+					TEXT("StaticJIT.AOT multi-engine pass %d should create an isolated source fixture session"),
+					Index),
+				Session.Get())
+			|| !Test.TestTrue(
+				*FString::Printf(
+					TEXT("StaticJIT.AOT multi-engine pass %d should publish current Provider routes"),
+					Index),
+				Session.IsValid() && Session->IsValid()))
 		{
+			if (Session.IsValid())
+			{
+				Test.AddError(Session->Error);
+			}
 			return false;
 		}
+		FAngelscriptEngine& Engine = *Session->Engine;
+		FAngelscriptEngineScope EngineScope(Engine);
 
 		asCScriptFunction* EntryFunction = FindEntryFunction(Engine);
 		if (!Test.TestNotNull(*FString::Printf(TEXT("StaticJIT.AOT multi-engine pass %d should resolve the fixture entry function"), Index), EntryFunction))
@@ -958,13 +1601,11 @@ bool FAngelscriptStaticJITAotTests::RunMultiEngineSequentialLoad(FAutomationTest
 			return false;
 		}
 
-		uint32 FunctionId = 0;
-		if (!Test.TestTrue(*FString::Printf(TEXT("StaticJIT.AOT multi-engine pass %d should expose the fixture function id"), Index), FStaticJITDiagnostics::ResolveFunctionId(Engine, EntryFunction, FunctionId)))
-		{
-			return false;
-		}
-
-		if (!Test.TestTrue(*FString::Printf(TEXT("StaticJIT.AOT multi-engine pass %d should keep generated registry visible"), Index), FStaticJITDiagnostics::IsFunctionRegistered(FunctionId)))
+		uint32 TransientFunctionId = 0;
+		if (!RequireJitEntries(
+				Test, Engine, EntryFunction,
+				*FString::Printf(TEXT("multi-engine pass %d fixture entry"), Index),
+				TransientFunctionId))
 		{
 			return false;
 		}
@@ -977,6 +1618,17 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotUASFunctionDispatchTests,
 	"Angelscript.TestModule.StaticJIT.AOT.UASFunctionDispatch",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
+	BEFORE_ALL()
+	{
+		FAngelscriptStaticJITAotTests::SharedFixtureSession =
+			AngelscriptStaticJITAotGeneration::CreateFixtureEngineSession(false);
+	}
+
+	AFTER_ALL()
+	{
+		FAngelscriptStaticJITAotTests::SharedFixtureSession.Reset();
+	}
+
 	TEST_METHOD(ExposesJitEntries)
 	{
 		ASSERT_THAT(IsTrue(FAngelscriptStaticJITAotTests::RunUASFunctionJitEntryAttachment(*TestRunner)));

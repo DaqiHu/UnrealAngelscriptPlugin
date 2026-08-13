@@ -290,7 +290,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 	using AngelscriptCacheCanonicalCodec_Private::ReadEnum;
 
 	static FAngelscriptCacheValidationResult ValidateStableReference(
-		const FAngelscriptCacheStableReference& Value)
+		const FAngelscriptArtifactReference& Value)
 	{
 		const uint8 RawKind = static_cast<uint8>(Value.Kind);
 		if (RawKind < 1 || RawKind > 9)
@@ -301,7 +301,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 		{
 			return Failure(EAngelscriptCacheValidationError::ZeroStableKey);
 		}
-		const bool bRequiresAbi = RawKind <= static_cast<uint8>(EAngelscriptCacheReferenceKind::EnvironmentSymbol);
+		const bool bRequiresAbi = RawKind <= static_cast<uint8>(EAngelscriptArtifactReferenceKind::EnvironmentSymbol);
 		if (bRequiresAbi && Value.ExpectedAbi.IsZero())
 		{
 			return Failure(EAngelscriptCacheValidationError::MissingExpectedAbi);
@@ -313,14 +313,14 @@ namespace AngelscriptCacheSemanticRecords_Private
 		return {};
 	}
 
-	static void WriteStableReference(FWriter& Writer, const FAngelscriptCacheStableReference& Value)
+	static void WriteStableReference(FWriter& Writer, const FAngelscriptArtifactReference& Value)
 	{
 		Writer.WriteUInt8(static_cast<uint8>(Value.Kind));
 		Writer.WriteHash(Value.StableKey);
 		Writer.WriteHash(Value.ExpectedAbi);
 	}
 
-	static bool ReadStableReference(FReader& Reader, FAngelscriptCacheStableReference& OutValue)
+	static bool ReadStableReference(FReader& Reader, FAngelscriptArtifactReference& OutValue)
 	{
 		if (!Reader.ConsumeReference()
 			|| !ReadEnum(Reader, OutValue.Kind, 1, 9)
@@ -385,7 +385,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 		}
 		if (Value.Kind == EAngelscriptCacheSemanticDependencyKind::FunctionContent
 			&& Value.Target.Kind
-				!= EAngelscriptCacheReferenceKind::ScriptFunction)
+				!= EAngelscriptArtifactReferenceKind::ScriptFunction)
 		{
 			return Failure(EAngelscriptCacheValidationError::WrongReferenceKind);
 		}
@@ -474,9 +474,9 @@ namespace AngelscriptCacheSemanticRecords_Private
 				return Failure(EAngelscriptCacheValidationError::InvalidPresence);
 			}
 			if ((Value.Kind == EAngelscriptCachedDataTypeKind::ScriptType
-					&& Value.TypeReference->Kind != EAngelscriptCacheReferenceKind::ScriptType)
+					&& Value.TypeReference->Kind != EAngelscriptArtifactReferenceKind::ScriptType)
 				|| (Value.Kind == EAngelscriptCachedDataTypeKind::EnvironmentType
-					&& Value.TypeReference->Kind != EAngelscriptCacheReferenceKind::EnvironmentSymbol))
+					&& Value.TypeReference->Kind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol))
 			{
 				return Failure(EAngelscriptCacheValidationError::WrongReferenceKind);
 			}
@@ -563,7 +563,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 		}
 		if (OptionalTag == 1)
 		{
-			FAngelscriptCacheStableReference Reference;
+			FAngelscriptArtifactReference Reference;
 			if (!ReadStableReference(Reader, Reference))
 			{
 				return false;
@@ -3784,7 +3784,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 
 	static void WriteArtifactStableReference(
 		FAngelscriptArtifactCanonicalWriter& Writer,
-		const FAngelscriptCacheStableReference& Value)
+		const FAngelscriptArtifactReference& Value)
 	{
 		Writer.WriteUInt8(static_cast<uint8>(Value.Kind));
 		Writer.WriteHash(Value.StableKey);
@@ -3976,7 +3976,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 			*InOutSemanticFieldOffset = Offset.GetValue();
 		};
 		const auto ValidateExactStableReference = [&SetExactOffset](
-			const FAngelscriptCacheStableReference& Reference,
+			const FAngelscriptArtifactReference& Reference,
 			const FAngelscriptModuleInterfaceFieldCoordinate& KindCoordinate,
 			const FAngelscriptModuleInterfaceFieldCoordinate& StableKeyCoordinate,
 			const FAngelscriptModuleInterfaceFieldCoordinate& ExpectedAbiCoordinate)
@@ -3995,7 +3995,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 			}
 			SetExactOffset(ExpectedAbiCoordinate);
 			const bool bRequiresAbi = RawKind <= static_cast<uint8>(
-				EAngelscriptCacheReferenceKind::EnvironmentSymbol);
+				EAngelscriptArtifactReferenceKind::EnvironmentSymbol);
 			if (bRequiresAbi && Reference.ExpectedAbi.IsZero())
 			{
 				return Failure(EAngelscriptCacheValidationError::MissingExpectedAbi);
@@ -4119,9 +4119,9 @@ namespace AngelscriptCacheSemanticRecords_Private
 				Select(EAngelscriptModuleInterfaceCapturedField::DeclarationDeclaredTypeReferenceKind,
 					EAngelscriptModuleInterfaceCapturedField::DeclarationParameterTypeReferenceKind);
 				if ((Type.Kind == EAngelscriptCachedDataTypeKind::ScriptType
-						&& Type.TypeReference->Kind != EAngelscriptCacheReferenceKind::ScriptType)
+						&& Type.TypeReference->Kind != EAngelscriptArtifactReferenceKind::ScriptType)
 					|| (Type.Kind == EAngelscriptCachedDataTypeKind::EnvironmentType
-						&& Type.TypeReference->Kind != EAngelscriptCacheReferenceKind::EnvironmentSymbol))
+						&& Type.TypeReference->Kind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol))
 				{
 					return Failure(EAngelscriptCacheValidationError::WrongReferenceKind);
 				}
@@ -4675,7 +4675,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 			EAngelscriptModuleInterfaceCapturedField::ImportTargetDeclarationExpectedAbi,
 			ImportIndex});
 		const bool bRequiresAbi = TargetReferenceKind <= static_cast<uint8>(
-			EAngelscriptCacheReferenceKind::EnvironmentSymbol);
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol);
 		if (bRequiresAbi && Value.TargetDeclaration.ExpectedAbi.IsZero())
 		{
 			return Failure(EAngelscriptCacheValidationError::MissingExpectedAbi);
@@ -4687,7 +4687,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 		SetExactOffset({
 			EAngelscriptModuleInterfaceCapturedField::ImportTargetDeclarationReferenceKind,
 			ImportIndex});
-		if (Value.TargetDeclaration.Kind != EAngelscriptCacheReferenceKind::ScriptFunction)
+		if (Value.TargetDeclaration.Kind != EAngelscriptArtifactReferenceKind::ScriptFunction)
 		{
 			return Failure(EAngelscriptCacheValidationError::WrongReferenceKind);
 		}
@@ -5298,7 +5298,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 					EAngelscriptModuleInterfaceCapturedField::DependencyTargetExpectedAbi,
 					static_cast<uint32>(DependencyIndex)});
 				const bool bRequiresAbi = RawReferenceKind <= static_cast<uint8>(
-					EAngelscriptCacheReferenceKind::EnvironmentSymbol);
+					EAngelscriptArtifactReferenceKind::EnvironmentSymbol);
 				if (bRequiresAbi && Dependency.Target.ExpectedAbi.IsZero())
 				{
 					return Failure(EAngelscriptCacheValidationError::MissingExpectedAbi);
@@ -5350,8 +5350,8 @@ namespace AngelscriptCacheSemanticRecords_Private
 			SetExactOffset({
 				EAngelscriptModuleInterfaceCapturedField::DependencyTargetReferenceKind,
 				static_cast<uint32>(DependencyIndex)});
-			if (Dependency.Target.Kind == EAngelscriptCacheReferenceKind::CanonicalName
-				|| Dependency.Target.Kind == EAngelscriptCacheReferenceKind::StringLiteral)
+			if (Dependency.Target.Kind == EAngelscriptArtifactReferenceKind::CanonicalName
+				|| Dependency.Target.Kind == EAngelscriptArtifactReferenceKind::StringLiteral)
 			{
 				return Failure(EAngelscriptCacheValidationError::WrongReferenceKind);
 			}
@@ -5570,7 +5570,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 				EAngelscriptModuleInterfaceCapturedField::DeclarationParameterTypeReferenceKind),
 				ReferenceOffset);
 			OutOffsets.ReferenceKind = Entry;
-			FAngelscriptCacheStableReference Reference;
+			FAngelscriptArtifactReference Reference;
 			if (!ReadEnum(Reader, Reference.Kind, 1, 9))
 			{
 				return false;
@@ -6520,7 +6520,7 @@ FAngelscriptCacheValidationResult FAngelscriptCacheSemanticArchive::
 #endif
 
 FAngelscriptCacheValidationResult FAngelscriptCacheSemanticArchive::SerializeStableReference(
-	const FAngelscriptCacheStableReference& Value,
+	const FAngelscriptArtifactReference& Value,
 	TArray<uint8>& OutBytes)
 {
 	OutBytes.Reset();

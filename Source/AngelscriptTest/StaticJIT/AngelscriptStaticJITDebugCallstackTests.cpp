@@ -224,4 +224,55 @@ bool FAngelscriptStaticJITDebugCallstackTests::RunDebugCallstackScopePushPop(FAu
 	return bPassed;
 }
 
+TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITExecutionPositionTests,
+	"Angelscript.TestModule.StaticJIT.DebugCallstack.ExecutionPosition",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+{
+public:
+	BEFORE_ALL()
+	{
+		ASTEST_CREATE_ENGINE();
+	}
+
+	AFTER_ALL()
+	{
+		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();
+		ASTEST_RESET_ENGINE(Engine);
+	}
+
+	TEST_METHOD(FileAndLineUsesLiveTopFrame)
+	{
+		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();
+		FAngelscriptEngineScope Scope(Engine);
+
+		asCThreadLocalData* ThreadLocalData = FAngelscriptEngine::GameThreadTLD;
+		ASSERT_THAT(IsNotNull(
+			ThreadLocalData,
+			TEXT("StaticJIT execution-position lookup requires game-thread local data")));
+
+		FScriptExecution Execution(ThreadLocalData);
+		FScopeJITDebugCallstack Frame(
+			Execution,
+			"ExecutionPosition.as",
+			"ObservePosition",
+			73,
+			nullptr);
+
+		FString Filename = TEXT("Unchanged");
+		int32 LineNumber = -2;
+		FAngelscriptEngine::GetAngelscriptExecutionFileAndLine(
+			Filename,
+			LineNumber);
+
+		ASSERT_THAT(AreEqual(
+			FString(TEXT("ExecutionPosition.as")),
+			Filename,
+			TEXT("JIT execution-position lookup should return the live top-frame filename")));
+		ASSERT_THAT(AreEqual(
+			73,
+			LineNumber,
+			TEXT("JIT execution-position lookup should return the live top-frame line")));
+	}
+};
+
 #endif

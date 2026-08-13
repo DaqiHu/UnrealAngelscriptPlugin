@@ -2,6 +2,7 @@
 
 #include "AngelscriptEngine.h"
 #include "Cache/AngelscriptCacheDecodedRecord.h"
+#include "Cache/AngelscriptCacheEnvironmentProfile.h"
 #include "Cache/AngelscriptCacheSettings.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformProcess.h"
@@ -12,6 +13,7 @@
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
+#include "Preprocessor/AngelscriptPreprocessor.h"
 #include "Serialization/JsonWriter.h"
 
 namespace AngelscriptCacheDiagnostics_Private
@@ -158,7 +160,7 @@ namespace AngelscriptCacheDiagnostics_Private
 	}
 
 	static const TCHAR* ReferenceKindName(
-		const EAngelscriptCacheReferenceKind Value)
+		const EAngelscriptArtifactReferenceKind Value)
 	{
 		static constexpr const TCHAR* Names[] = {
 			TEXT("Invalid"), TEXT("ScriptModule"), TEXT("ScriptType"),
@@ -211,13 +213,13 @@ namespace AngelscriptCacheDiagnostics_Private
 	}
 
 	static const TCHAR* RouteName(
-		const EAngelscriptCacheFunctionExecutionRoute Value)
+		const EAngelscriptFunctionExecutionRoute Value)
 	{
 		switch (Value)
 		{
-		case EAngelscriptCacheFunctionExecutionRoute::Vm:
+		case EAngelscriptFunctionExecutionRoute::Vm:
 			return TEXT("Vm");
-		case EAngelscriptCacheFunctionExecutionRoute::Native:
+		case EAngelscriptFunctionExecutionRoute::Native:
 			return TEXT("Native");
 		default:
 			return TEXT("Unknown");
@@ -569,7 +571,7 @@ namespace AngelscriptCacheDiagnostics_Private
 	static void WriteStableReference(
 		FJsonWriter& Writer,
 		const TCHAR* FieldName,
-		const FAngelscriptCacheStableReference& Reference)
+		const FAngelscriptArtifactReference& Reference)
 	{
 		Writer.WriteObjectStart(FieldName);
 		Writer.WriteValue(TEXT("kind"),
@@ -1031,9 +1033,41 @@ namespace AngelscriptCacheDiagnostics_Private
 					static_cast<uint32>(Route.SelectedExecutionRoute));
 				Writer.WriteValue(TEXT("selectedRouteName"),
 					RouteName(Route.SelectedExecutionRoute));
+				Writer.WriteValue(TEXT("artifactMatchResult"),
+					static_cast<uint32>(Route.MatchResult));
 				Writer.WriteValue(TEXT("verifiedArtifactIdentity"),
 					Route.bHasVerifiedArtifactIdentity);
 				Writer.WriteObjectEnd();
+			}
+			Writer.WriteArrayEnd();
+		}
+		Writer.WriteObjectEnd();
+	}
+
+	static void WriteEnvironmentProfile(
+		FJsonWriter& Writer,
+		const FAngelscriptCacheDiagnosticEnvironmentProfile& Environment)
+	{
+		Writer.WriteObjectStart(TEXT("environmentProfile"));
+		Writer.WriteValue(TEXT("present"), Environment.bPresent);
+		if (Environment.bPresent)
+		{
+			Writer.WriteValue(TEXT("compatibility"),
+				Environment.Compatibility.Hash.ToHexString());
+			Writer.WriteValue(TEXT("context"),
+				Environment.Context.Hash.ToHexString());
+			Writer.WriteValue(TEXT("profile"),
+				Environment.Profile.Hash.ToHexString());
+			Writer.WriteArrayStart(TEXT("canonicalCompileOptions"));
+			for (const FString& Input : Environment.CanonicalCompileOptions)
+			{
+				Writer.WriteValue(Input);
+			}
+			Writer.WriteArrayEnd();
+			Writer.WriteArrayStart(TEXT("canonicalContextInputs"));
+			for (const FString& Input : Environment.CanonicalContextInputs)
+			{
+				Writer.WriteValue(Input);
 			}
 			Writer.WriteArrayEnd();
 		}
@@ -1353,13 +1387,13 @@ namespace AngelscriptCacheDiagnostics_Private
 
 FAngelscriptCacheDiagnosticFunctionRouteSnapshot
 BuildAngelscriptCacheDiagnosticFunctionRoutes(
-	const FAngelscriptCacheFunctionRouteSnapshot& Routes)
+	const FAngelscriptFunctionRouteSnapshot& Routes)
 {
 	FAngelscriptCacheDiagnosticFunctionRouteSnapshot Snapshot;
 	Snapshot.bPresent = true;
-	Snapshot.PublicationOrdinal = Routes.PublicationOrdinal;
+	Snapshot.PublicationOrdinal = Routes.Generation.Value;
 	Snapshot.Routes.Reserve(Routes.FunctionRoutes.Num());
-	for (const FAngelscriptCacheLiveFunctionRoute& LiveRoute :
+	for (const FAngelscriptFunctionRoute& LiveRoute :
 		Routes.FunctionRoutes)
 	{
 		FAngelscriptCacheDiagnosticFunctionRoute& Route =
@@ -1368,10 +1402,11 @@ BuildAngelscriptCacheDiagnosticFunctionRoutes(
 		Route.Identity = LiveRoute.Identity;
 		Route.CanonicalDeclaration = LiveRoute.CanonicalDeclaration;
 		Route.SelectedExecutionRoute = LiveRoute.SelectedExecutionRoute;
+		Route.MatchResult = LiveRoute.MatchResult;
 		Route.bHasVerifiedArtifactIdentity =
 			LiveRoute.bHasVerifiedArtifactIdentity;
 		if (Route.SelectedExecutionRoute ==
-			EAngelscriptCacheFunctionExecutionRoute::Native)
+			EAngelscriptFunctionExecutionRoute::Native)
 		{
 			++Snapshot.NativeRouteCount;
 		}
@@ -1426,6 +1461,7 @@ bool SerializeAngelscriptCacheDiagnosticSnapshotJson(
 		MutationPhaseName(Snapshot.MutationPhase));
 	Writer->WriteValue(TEXT("lastTransactionOrdinal"),
 		UInt64String(Snapshot.LastTransactionOrdinal));
+	WriteEnvironmentProfile(*Writer, Snapshot.EnvironmentProfile);
 	WritePublication(*Writer, TEXT("current"), Snapshot.Current);
 	WritePublication(*Writer, TEXT("pendingColdStart"),
 		Snapshot.PendingColdStart);
@@ -1630,7 +1666,33 @@ FAngelscriptCacheDiagnosticJsonResult CaptureAngelscriptCacheDiagnosticJson(
 
 	FAngelscriptCacheDiagnosticSnapshot Snapshot =
 		Service->CaptureDiagnosticSnapshot();
-	const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+	{
+		FAngelscriptEngine& MutableEngine =
+			*const_cast<FAngelscriptEngine*>(Engine);
+		FAngelscriptEngineScope EngineScope(MutableEngine);
+		const FAngelscriptPreprocessorContext PreprocessorContext =
+			FAngelscriptPreprocessorContext::CreateFromCurrentEngineContext();
+		FAngelscriptCacheEnvironmentProfile Environment;
+		const FAngelscriptCacheEnvironmentProfileResult EnvironmentResult =
+			BuildAngelscriptCacheEnvironmentProfile(
+				*Engine, PreprocessorContext,
+				Engine->GetEffectiveScriptRootDescriptors(), Environment);
+		if (EnvironmentResult.IsSuccess())
+		{
+			Snapshot.EnvironmentProfile.bPresent = true;
+			Snapshot.EnvironmentProfile.Compatibility =
+				Environment.CaptureOptions.Compatibility;
+			Snapshot.EnvironmentProfile.Context =
+				Environment.CaptureOptions.Context;
+			Snapshot.EnvironmentProfile.Profile =
+				Environment.CaptureOptions.Profile;
+			Snapshot.EnvironmentProfile.CanonicalCompileOptions =
+				Environment.CaptureOptions.CanonicalCompileOptions;
+			Snapshot.EnvironmentProfile.CanonicalContextInputs =
+				Environment.CanonicalContextInputs;
+		}
+	}
+	const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 		ESPMode::ThreadSafe> LiveRoutes = Engine->GetFunctionRouteSnapshot();
 	if (LiveRoutes.IsValid())
 	{

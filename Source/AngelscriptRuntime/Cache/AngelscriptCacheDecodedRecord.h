@@ -677,7 +677,7 @@ class ANGELSCRIPTRUNTIME_API IAngelscriptCacheCurrentSymbolResolver
 public:
 	virtual ~IAngelscriptCacheCurrentSymbolResolver() = default;
 	virtual TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
-		EAngelscriptCacheReferenceKind ReferenceKind,
+		EAngelscriptArtifactReferenceKind ReferenceKind,
 		const FAngelscriptHash256& StableKey) const = 0;
 };
 
@@ -699,8 +699,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheRelocationUse
 	uint16 OperandSlot = 0;
 	EAngelscriptCacheSemanticDependencyKind DependencyKind =
 		EAngelscriptCacheSemanticDependencyKind::Invalid;
-	EAngelscriptCacheReferenceKind ReferenceKind =
-		static_cast<EAngelscriptCacheReferenceKind>(0);
+	EAngelscriptArtifactReferenceKind ReferenceKind =
+		static_cast<EAngelscriptArtifactReferenceKind>(0);
 	FAngelscriptHash256 StableKey;
 	FAngelscriptHash256 ExpectedAbi;
 	TOptional<FAngelscriptHash256> ExpectedContentOrValue;
@@ -708,8 +708,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheRelocationUse
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheOwnedOpaqueBytes
 {
-	EAngelscriptCacheReferenceKind ReferenceKind =
-		static_cast<EAngelscriptCacheReferenceKind>(0);
+	EAngelscriptArtifactReferenceKind ReferenceKind =
+		static_cast<EAngelscriptArtifactReferenceKind>(0);
 	FAngelscriptHash256 StableKey;
 	TArray<uint8> CanonicalUtf8Bytes;
 };

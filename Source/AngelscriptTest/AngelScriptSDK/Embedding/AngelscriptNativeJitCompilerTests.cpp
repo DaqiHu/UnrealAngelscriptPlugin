@@ -14,33 +14,33 @@ private:
 	class FRecordingJitCompiler final : public asIJITCompiler
 	{
 	public:
-		int CompileResult = asSUCCESS;
 		bool bPublishFunction = false;
 		int32 CompileCount = 0;
 		int32 ReleaseCount = 0;
 		TArray<FString> CompiledDeclarations;
-		TArray<asJITFunction> ReleasedFunctions;
+		TArray<asSJITFunctionBinding> ReleasedBindings;
 
-		int CompileFunction(
-			asIScriptFunction* Function,
-			asJITFunction* Output) override
+		void OnFunctionReady(asIScriptFunction* Function) override
 		{
 			++CompileCount;
 			CompiledDeclarations.Add(
 				Function != nullptr && Function->GetDeclaration() != nullptr
 					? UTF8_TO_TCHAR(Function->GetDeclaration())
 					: TEXT("<null>"));
-			if (Output != nullptr)
+			if (bPublishFunction && Function != nullptr)
 			{
-				*Output = bPublishFunction ? &SentinelJitFunction : nullptr;
+				asSJITFunctionBinding Binding;
+				Binding.VMEntry = &SentinelJitFunction;
+				Function->SetJITBinding(Binding);
 			}
-			return CompileResult;
 		}
 
-		void ReleaseJITFunction(asJITFunction Function) override
+		void ReleaseFunctionBinding(
+			asIScriptFunction*,
+			const asSJITFunctionBinding& Binding) override
 		{
 			++ReleaseCount;
-			ReleasedFunctions.Add(Function);
+			ReleasedBindings.Add(Binding);
 		}
 
 		static void SentinelJitFunction(
@@ -102,6 +102,10 @@ public:
 		{
 			return;
 		}
+		ASSERT_THAT(AreEqual(
+			asSUCCESS,
+			ScriptEngine->SetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS, 1),
+			TEXT("JIT lifecycle product should explicitly retain JIT entry instructions")));
 		FRecordingJitCompiler PrimaryCompiler;
 		FRecordingJitCompiler ReplacementCompiler;
 		ON_SCOPE_EXIT
@@ -214,104 +218,6 @@ public:
 			TEXT("JIT lifecycle product should not call a compiler after clear")));
 	}
 
-	TEST_METHOD(CompileFailureAndReleaseBoundary)
-	{
-		using namespace AngelscriptNativeTestSupport;
-
-		FNativeTestEngine Engine;
-		Engine.Create(*TestRunner);
-		ON_SCOPE_EXIT
-		{
-			Engine.Destroy();
-		};
-
-		AS_NATIVE_PRODUCT("EMBED-JIT-FAILURE-RELEASE-BOUNDARY",
-			ENativeEvidence::Compile
-			| ENativeEvidence::Runtime
-			| ENativeEvidence::Metadata
-			| ENativeEvidence::Lifecycle
-			| ENativeEvidence::Cleanup
-			| ENativeEvidence::Isolation);
-
-		asIScriptEngine* const ScriptEngine = Engine.Get();
-		ASSERT_THAT(IsNotNull(ScriptEngine, TEXT("JIT failure product should create a raw SDK engine")));
-		if (ScriptEngine == nullptr)
-		{
-			return;
-		}
-		FRecordingJitCompiler FailingCompiler;
-		FRecordingJitCompiler PublishingCompiler;
-		ON_SCOPE_EXIT
-		{
-			ScriptEngine->SetJITCompiler(nullptr);
-		};
-
-		FailingCompiler.CompileResult = asERROR;
-		ASSERT_THAT(AreEqual(asSUCCESS, ScriptEngine->SetJITCompiler(&FailingCompiler), TEXT("JIT failure product should install the failing compiler")));
-		asIJITCompiler* const FailingCompilerInterface = &FailingCompiler;
-		asJITFunction DirectFailureOutput = nullptr;
-		ASSERT_THAT(AreEqual(
-			asERROR,
-			FailingCompilerInterface->CompileFunction(nullptr, &DirectFailureOutput),
-			TEXT("JIT failure product should expose the rejecting CompileFunction interface directly")));
-		ASSERT_THAT(IsTrue(
-			DirectFailureOutput == nullptr,
-			TEXT("JIT failure product should leave the direct failure output null")));
-
-		const std::string FailureSource = BuildSource(44);
-		PrintSource(*TestRunner, TEXT("EMBED-JIT.compile-failure"), "NativeJitCompileFailure", FailureSource);
-		{
-			FScopedNativeModule FailureModule(*TestRunner, Engine, "NativeJitCompileFailure", FailureSource);
-			ASSERT_THAT(IsTrue(FailureModule.IsValid(), TEXT("JIT failure product should retain interpreted module compilation when the JIT callback rejects a function")));
-			AngelscriptSDKTestSupport::FSdkFunctionInvoker Invoker(
-				*TestRunner,
-				ScriptEngine,
-				FailureModule,
-				"int Entry()");
-			ASSERT_THAT(IsTrue(
-				Invoker.IsValid(),
-				TEXT("JIT failure product should prepare the interpreted fallback entry")));
-			if (Invoker.IsValid())
-			{
-				ASSERT_THAT(AreEqual(
-					44,
-					Invoker.CallAndReturn<int32>(INDEX_NONE),
-					TEXT("Rejected JIT compilation should preserve exact interpreted runtime behavior")));
-			}
-		}
-		ASSERT_THAT(IsNull(
-			ScriptEngine->GetModule("NativeJitCompileFailure", asGM_ONLY_IF_EXISTS),
-			TEXT("Rejected-JIT fallback module should be absent after scoped cleanup")));
-		ASSERT_THAT(IsTrue(FailingCompiler.CompileCount > 0, TEXT("JIT failure product should invoke the rejecting compiler")));
-		ASSERT_THAT(AreEqual(0, FailingCompiler.ReleaseCount, TEXT("JIT failure product should not release a null function after a rejected compile")));
-
-		PublishingCompiler.bPublishFunction = true;
-		ASSERT_THAT(AreEqual(asSUCCESS, ScriptEngine->SetJITCompiler(&PublishingCompiler), TEXT("JIT release product should install a compiler that publishes a function")));
-
-		const std::string ReleaseSource = BuildSource(55);
-		PrintSource(*TestRunner, TEXT("EMBED-JIT.release-boundary"), "NativeJitReleaseBoundary", ReleaseSource);
-		{
-			FScopedNativeModule ReleaseModule(*TestRunner, Engine, "NativeJitReleaseBoundary", ReleaseSource);
-			ASSERT_THAT(IsTrue(ReleaseModule.IsValid(), TEXT("JIT release product should compile a module with a published sentinel function")));
-		}
-		ASSERT_THAT(IsNull(
-			ScriptEngine->GetModule("NativeJitReleaseBoundary", asGM_ONLY_IF_EXISTS),
-			TEXT("Published-JIT module should be absent after scoped cleanup")));
-		ASSERT_THAT(IsTrue(PublishingCompiler.CompileCount > 0, TEXT("JIT release product should publish at least one sentinel function")));
-		ASSERT_THAT(AreEqual(
-			0,
-			PublishingCompiler.ReleaseCount,
-			TEXT("JIT release product should retain the current fork boundary where module discard does not call ReleaseJITFunction")));
-		TestRunner->AddInfo(TEXT("[AS-FORK-LIMITATION] Module discard does not call asIJITCompiler::ReleaseJITFunction in this fork; explicit interface invocation is tested separately so the missing engine-owned release remains visible"));
-
-		asIJITCompiler* const CompilerInterface = &PublishingCompiler;
-		CompilerInterface->ReleaseJITFunction(&FRecordingJitCompiler::SentinelJitFunction);
-		ASSERT_THAT(AreEqual(1, PublishingCompiler.ReleaseCount, TEXT("JIT release product should expose direct ReleaseJITFunction interface dispatch")));
-		ASSERT_THAT(AreEqual(
-			static_cast<asJITFunction>(&FRecordingJitCompiler::SentinelJitFunction),
-			PublishingCompiler.ReleasedFunctions[0],
-			TEXT("JIT release product should preserve the exact explicitly released function pointer")));
-	}
 };
 
 #endif // WITH_ANGELSCRIPT_UNITTESTS

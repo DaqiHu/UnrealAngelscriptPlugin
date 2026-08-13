@@ -29,8 +29,8 @@ private:
 		return Type;
 	}
 
-	static FAngelscriptCacheStableReference MakeReference(
-		const EAngelscriptCacheReferenceKind Kind,
+	static FAngelscriptArtifactReference MakeReference(
+		const EAngelscriptArtifactReferenceKind Kind,
 		const FAngelscriptHash256& StableKey,
 		const uint8 AbiSeed)
 	{
@@ -39,7 +39,7 @@ private:
 
 	static FAngelscriptCacheSemanticDependency MakeDependency(
 		const EAngelscriptCacheSemanticDependencyKind Kind,
-		const FAngelscriptCacheStableReference& Target,
+		const FAngelscriptArtifactReference& Target,
 		const TOptional<FAngelscriptHash256>& Content = {})
 	{
 		FAngelscriptCacheSemanticDependency Dependency;
@@ -72,8 +72,8 @@ private:
 				State.ModuleKey, Global, Global.StorageLayoutFingerprint).IsSuccess());
 		State.OrderedGlobals.Add(Global);
 
-		const FAngelscriptCacheStableReference GlobalReference = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptGlobal, Global.GlobalKey.Hash, 0x70);
+		const FAngelscriptArtifactReference GlobalReference = MakeReference(
+			EAngelscriptArtifactReferenceKind::ScriptGlobal, Global.GlobalKey.Hash, 0x70);
 		FAngelscriptCachedHardValue HardValue;
 		HardValue.HardValueKind = EAngelscriptCachedHardValueKind::GlobalConstant;
 		HardValue.Owner = GlobalReference;
@@ -98,8 +98,8 @@ private:
 			Initializer.InitializerExecutionHash).IsSuccess());
 		State.Initializers.Add(Initializer);
 
-		const FAngelscriptCacheStableReference InitializerReference = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptFunction,
+		const FAngelscriptArtifactReference InitializerReference = MakeReference(
+			EAngelscriptArtifactReferenceKind::ScriptFunction,
 			Initializer.InitializerKey.Hash,
 			0xb0);
 		FAngelscriptCachedInitializationAction Action;
@@ -112,12 +112,12 @@ private:
 			Global.StorageLayoutFingerprint));
 		State.OrderedInitializationActions.Add(Action);
 
-		const FAngelscriptCacheStableReference PostInitReference = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptFunction, MakeHash(0xd0), 0xf0);
+		const FAngelscriptArtifactReference PostInitReference = MakeReference(
+			EAngelscriptArtifactReferenceKind::ScriptFunction, MakeHash(0xd0), 0xf0);
 		State.OrderedPostInitFunctions.Add({0, PostInitReference});
 
-		const FAngelscriptCacheStableReference ModuleReference = MakeReference(
-			EAngelscriptCacheReferenceKind::ScriptModule, State.ModuleKey.Hash, 0x20);
+		const FAngelscriptArtifactReference ModuleReference = MakeReference(
+			EAngelscriptArtifactReferenceKind::ScriptModule, State.ModuleKey.Hash, 0x20);
 		const FAngelscriptCacheSemanticDependency DeclarationModule = MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::Declaration, ModuleReference);
 		const FAngelscriptCacheSemanticDependency DeclarationInitializer = MakeDependency(

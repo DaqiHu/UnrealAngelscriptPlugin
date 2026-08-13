@@ -345,6 +345,7 @@ protected:
 	bool             stripDebugInfo;
 	bool             error;
 	asUINT           bytesWritten;
+	bool             writingFunctionArtifact;
 
 	int              Error(const char *msg);
 

@@ -25,7 +25,8 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITNativeFormTests,
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 private:
-	inline static constexpr TCHAR SourceFilename[] = TEXT("StaticJITTArrayIndexCustomCall.as");
+	inline static constexpr TCHAR SourceFilename[] = TEXT(
+		"/Angelscript/Memory/StaticJITNativeForms/TArrayIndexCustomCall.as");
 	inline static const FName ModuleName = FName(TEXT("ASStaticJITTArrayIndexCustomCall"));
 
 	static FString MakeScriptSource()

@@ -395,8 +395,8 @@ namespace AngelscriptCacheSourceInterfaceCapturedOffsetTests_Private
 		Import.CanonicalName = TEXT("Log");
 		Import.CanonicalSignature = TEXT("void Log(const string&in Message)");
 		Import.TargetModuleKey = FAngelscriptStableModuleKey{MakeHash(0x70)};
-		Import.TargetDeclaration = FAngelscriptCacheStableReference{
-			EAngelscriptCacheReferenceKind::ScriptFunction,
+		Import.TargetDeclaration = FAngelscriptArtifactReference{
+			EAngelscriptArtifactReferenceKind::ScriptFunction,
 			MakeHash(0x71), MakeHash(0x72)};
 		Import.Slots.Add({EAngelscriptCacheDeclarationSlotKind::Import, 0});
 		check(FAngelscriptCacheSemanticArchive::TryBuildImportKey(
@@ -409,8 +409,8 @@ namespace AngelscriptCacheSourceInterfaceCapturedOffsetTests_Private
 
 		FAngelscriptCacheSemanticDependency Dependency;
 		Dependency.Kind = EAngelscriptCacheSemanticDependencyKind::HardValue;
-		Dependency.Target = FAngelscriptCacheStableReference{
-			EAngelscriptCacheReferenceKind::ScriptGlobal,
+		Dependency.Target = FAngelscriptArtifactReference{
+			EAngelscriptArtifactReferenceKind::ScriptGlobal,
 			MakeHash(0x73), MakeHash(0x74)};
 		Dependency.ExpectedContentOrValue = MakeHash(0x75);
 		Value.Dependencies.Add(Dependency);

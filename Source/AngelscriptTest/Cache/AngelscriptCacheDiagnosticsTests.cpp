@@ -121,7 +121,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheDiagnosticsTests,
 		FAngelscriptCacheService Service;
 		const FAngelscriptCacheDiagnosticSnapshot Snapshot =
 			Service.CaptureDiagnosticSnapshot();
-		ASSERT_THAT(AreEqual(uint32(4), Snapshot.SchemaVersion));
+		ASSERT_THAT(AreEqual(uint32(5), Snapshot.SchemaVersion));
 		ASSERT_THAT(AreEqual(
 			EAngelscriptCacheMutationPhase::InitializingAnyThread,
 			Snapshot.MutationPhase));
@@ -137,7 +137,9 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheDiagnosticsTests,
 		ASSERT_THAT(IsTrue(SerializeAngelscriptCacheDiagnosticSnapshotJson(
 			Snapshot, JsonB)));
 		ASSERT_THAT(IsTrue(JsonA == JsonB));
-		ASSERT_THAT(IsTrue(JsonA.Contains(TEXT("\"schemaVersion\":4"))));
+		ASSERT_THAT(IsTrue(JsonA.Contains(TEXT("\"schemaVersion\":5"))));
+		ASSERT_THAT(IsTrue(JsonA.Contains(
+			TEXT("\"environmentProfile\":{\"present\":false}"))));
 		ASSERT_THAT(IsTrue(JsonA.Contains(
 			TEXT("\"functionReuse\":{\"present\":false}"))));
 		ASSERT_THAT(IsTrue(JsonA.Contains(TEXT("\"mutationPhase\":1"))));
@@ -145,6 +147,25 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheDiagnosticsTests,
 			TEXT("\"current\":{\"present\":false}"))));
 		ASSERT_THAT(IsFalse(JsonA.Contains(TEXT("serviceIdentity"))));
 		ASSERT_THAT(IsFalse(JsonA.Contains(TEXT("functionId"))));
+	}
+
+	TEST_METHOD(EngineCaptureIncludesCanonicalEnvironmentInputs)
+	{
+		FAngelscriptTestFixture Fixture(
+			*TestRunner, ETestEngineMode::IsolatedFull);
+		ASSERT_THAT(IsTrue(Fixture.IsValid()));
+
+		const FAngelscriptCacheDiagnosticJsonResult Diagnostic =
+			CaptureAngelscriptCacheDiagnosticJson(&Fixture.GetEngine());
+		ASSERT_THAT(IsTrue(Diagnostic.IsSuccess()));
+		ASSERT_THAT(IsTrue(Diagnostic.Json.Contains(
+			TEXT("\"environmentProfile\":{\"present\":true"))));
+		ASSERT_THAT(IsTrue(Diagnostic.Json.Contains(
+			TEXT("\"canonicalContextInputs\":["))));
+		ASSERT_THAT(IsTrue(Diagnostic.Json.Contains(
+			TEXT("EngineProperty.8="))));
+		ASSERT_THAT(IsTrue(Diagnostic.Json.Contains(
+			TEXT("\"canonicalCompileOptions\":["))));
 	}
 
 	TEST_METHOD(PublishedSlotsProduceDeterministicPointerFreeSummaries)
@@ -260,10 +281,10 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheDiagnosticsTests,
 	TEST_METHOD(RouteAndValidationDiagnosticsRemainStablePointerFreeValues)
 	{
 		using namespace AngelscriptCacheDiagnosticsTests_Private;
-		FAngelscriptCacheFunctionRouteSnapshot LiveRoutes;
-		LiveRoutes.PublicationOrdinal = 17;
+		FAngelscriptFunctionRouteSnapshot LiveRoutes;
+		LiveRoutes.Generation = FAngelscriptFunctionRouteGeneration{17};
 		LiveRoutes.VmRouteCount = 1;
-		FAngelscriptCacheLiveFunctionRoute& LiveRoute =
+		FAngelscriptFunctionRoute& LiveRoute =
 			LiveRoutes.FunctionRoutes.AddDefaulted_GetRef();
 		LiveRoute.ModuleKey = FAngelscriptStableModuleKey{MakeHash(1)};
 		LiveRoute.Identity.FunctionKey =

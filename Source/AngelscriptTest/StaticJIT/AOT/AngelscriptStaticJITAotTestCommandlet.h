@@ -5,7 +5,7 @@
 #include "AngelscriptStaticJITAotTestCommandlet.generated.h"
 
 UCLASS()
-class UAngelscriptStaticJITAotTestCommandlet : public UCommandlet
+class UAngelscriptTestJITCommandlet : public UCommandlet
 {
 	GENERATED_BODY()
 

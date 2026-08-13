@@ -106,7 +106,7 @@ namespace AngelscriptCacheProductionWarmStartupTests_Private
 				{
 					ActiveModuleCountAtStop =
 						ObservedEngine->GetActiveModules().Num();
-					const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+					const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 						ESPMode::ThreadSafe> Routes =
 						ObservedEngine->GetFunctionRouteSnapshot();
 					RouteCountAtStop = Routes.IsValid()
@@ -259,7 +259,7 @@ int ReadCacheProductionWarmSecond%sValue()
 		ASSERT_THAT(IsTrue(FirstModule->bLoadedIncrementalCache));
 		ASSERT_THAT(IsTrue(SecondModule->bLoadedIncrementalCache));
 		ASSERT_THAT(AreEqual(0, CountFrontendEvents(Events)));
-		const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+		const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe> RouteSnapshot =
 			Warm->GetFunctionRouteSnapshot();
 		ASSERT_THAT(IsTrue(RouteSnapshot.IsValid()));

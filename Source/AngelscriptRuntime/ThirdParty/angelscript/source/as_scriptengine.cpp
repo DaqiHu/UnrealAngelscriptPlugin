@@ -502,12 +502,6 @@ int asCScriptEngine::SetEngineProperty(asEEngineProp property, asPWORD value)
 		ep.disableScriptClassGC = value ? true : false;
 		break;
 
-	case asEP_JIT_INTERFACE_VERSION:
-		if (value < 1 || value > 2)
-			return asINVALID_ARG;
-		ep.jitInterfaceVersion = (asUINT)value;
-		break;
-
 	case asEP_ALWAYS_IMPL_DEFAULT_COPY:
 		if (value > 2)
 			return asINVALID_ARG;
@@ -677,9 +671,6 @@ asPWORD asCScriptEngine::GetEngineProperty(asEEngineProp property) const
 	case asEP_DISABLE_SCRIPT_CLASS_GC:
 		return ep.disableScriptClassGC;
 
-	case asEP_JIT_INTERFACE_VERSION:
-		return ep.jitInterfaceVersion;
-
 	case asEP_ALWAYS_IMPL_DEFAULT_COPY:
 		return ep.alwaysImplDefaultCopy;
 
@@ -782,7 +773,6 @@ asCScriptEngine::asCScriptEngine()
 		ep.ignoreDuplicateSharedIntf     = false;
 		ep.noDebugOutput                 = false;
 		ep.disableScriptClassGC          = false;
-		ep.jitInterfaceVersion           = 1;
 		ep.alwaysImplDefaultCopy         = 0;
 		ep.alwaysImplDefaultCopyConstruct = 0;
 		ep.memberInitMode                = 1;
@@ -1475,7 +1465,22 @@ int asCScriptEngine::WriteMessage(const char *section, int row, int col, asEMsgT
 
 int asCScriptEngine::SetJITCompiler(asIJITCompiler *compiler)
 {
+	if( jitCompiler == compiler )
+		return asSUCCESS;
+
+	asSJITFunctionBinding emptyBinding;
+	for( asUINT n = 0; n < scriptFunctions.GetLength(); n++ )
+		if( scriptFunctions[n] )
+			scriptFunctions[n]->SetJITBinding(emptyBinding);
+
 	jitCompiler = compiler;
+	if( jitCompiler )
+	{
+		for( asUINT n = 0; n < scriptFunctions.GetLength(); n++ )
+			if( scriptFunctions[n] )
+				scriptFunctions[n]->JITCompile();
+	}
+
 	return asSUCCESS;
 }
 

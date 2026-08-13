@@ -200,6 +200,16 @@ namespace AngelscriptCacheExactStartup_Private
 				}
 				Artifacts.ValidatedFunctionArtifactIdentities.Add(
 					Body->Identity);
+				FAngelscriptFunctionArtifactReferenceSet& ReferenceSet =
+					Artifacts.ValidatedFunctionArtifactReferenceSets.
+						AddDefaulted_GetRef();
+				ReferenceSet.FunctionKey = Body->Identity.FunctionKey;
+				for (const FAngelscriptCacheSemanticDependency& Dependency
+					: Body->ActualDependencies)
+				{
+					ReferenceSet.RequiredReferences.AddUnique(Dependency.Target);
+				}
+				ReferenceSet.RequiredReferences.Sort();
 				if (Body->DebugSidecar.IsSet()
 					&& !AddPreparedRecord(
 						Generation,

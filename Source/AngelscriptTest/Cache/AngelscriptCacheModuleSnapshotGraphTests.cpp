@@ -513,7 +513,7 @@ namespace AngelscriptCacheModuleSnapshotGraphTests_Private
 			Action.ActionOrdinal = 0;
 			Action.ActionKind =
 				EAngelscriptCachedInitializationActionKind::ExecuteInitializer;
-			Action.Target.Kind = EAngelscriptCacheReferenceKind::ScriptFunction;
+			Action.Target.Kind = EAngelscriptArtifactReferenceKind::ScriptFunction;
 			Action.Target.StableKey = Initializer.InitializerKey.Hash;
 			Action.Target.ExpectedAbi = bWrongInitializerAbi
 				? MakeHash(0xe4)
@@ -808,7 +808,7 @@ namespace AngelscriptCacheModuleSnapshotGraphTests_Private
 	{
 	public:
 		virtual TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
-			EAngelscriptCacheReferenceKind,
+			EAngelscriptArtifactReferenceKind,
 			const FAngelscriptHash256&) const override
 		{
 			return {};
@@ -827,7 +827,7 @@ namespace AngelscriptCacheModuleSnapshotGraphTests_Private
 
 		virtual TOptional<FAngelscriptCacheResolvedTypeLayoutInput> ResolveTypeLayoutInput(
 			EAngelscriptCachedTypeLayoutInputKind,
-			EAngelscriptCacheReferenceKind,
+			EAngelscriptArtifactReferenceKind,
 			const FAngelscriptHash256&) const override
 		{
 			return {};

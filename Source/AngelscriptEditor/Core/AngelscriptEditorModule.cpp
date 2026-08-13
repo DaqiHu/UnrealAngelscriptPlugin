@@ -10,6 +10,7 @@
 #include "ClassGenerator/ASClass.h"
 #include "EditorMenuExtensions/ScriptEditorMenuExtension.h"
 #include "Snippet/AngelscriptSnippetRunnerWindow.h"
+#include "StaticJIT/AngelscriptJITRefreshService.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "KismetCompilerModule.h"
 #include "FileHelpers.h"
@@ -18,6 +19,7 @@
 #include "ISettingsModule.h"
 #include "ISettingsSection.h"
 #include "HAL/FileManager.h"
+#include "HAL/IConsoleManager.h"
 #include "Modules/ModuleManager.h"
 #include "IDirectoryWatcher.h"
 #include "DirectoryWatcherModule.h"
@@ -28,6 +30,7 @@
 #include "Framework/Application/MenuStack.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "Framework/Notifications/NotificationManager.h"
 #include "LevelEditor.h"
 #include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
@@ -43,6 +46,7 @@
 #include "AngelscriptBinds.h"
 #include "UObject/ObjectSaveContext.h"
 #include "UObject/UObjectGlobals.h"
+#include "Widgets/Notifications/SNotificationList.h"
 
 IMPLEMENT_MODULE(FAngelscriptEditorModule, AngelscriptEditor);
 
@@ -71,6 +75,7 @@ namespace
 	FAngelscriptEditorModuleLiteralAssetSaveTestHooks GLiteralAssetSaveTestHooks;
 	TFunction<bool(const TCHAR*, const TCHAR*, const TCHAR*)> GPlatformExecuteOverrideForTesting;
 	TFunction<void()> GSnippetRunnerOpenOverrideForTesting;
+	TFunction<void()> GStaticJITRefreshOverrideForTesting;
 	TFunction<void()> GClassViewerRefreshOverrideForTesting;
 	TFunction<void()> GOnEngineInitDoneOverrideForTesting;
 	int32 GOnPostEngineInitRegistrationCountForTesting = 0;
@@ -548,6 +553,17 @@ void FAngelscriptEditorModuleTestAccess::ResetSnippetRunnerOpenOverride()
 	GSnippetRunnerOpenOverrideForTesting = nullptr;
 }
 
+void FAngelscriptEditorModuleTestAccess::SetStaticJITRefreshOverride(
+	TFunction<void()> InOverride)
+{
+	GStaticJITRefreshOverrideForTesting = MoveTemp(InOverride);
+}
+
+void FAngelscriptEditorModuleTestAccess::ResetStaticJITRefreshOverride()
+{
+	GStaticJITRefreshOverrideForTesting = nullptr;
+}
+
 void FAngelscriptEditorModuleTestAccess::SetClassViewerRefreshOverride(TFunction<void()> InOverride)
 {
 	GClassViewerRefreshOverrideForTesting = MoveTemp(InOverride);
@@ -908,6 +924,23 @@ void FAngelscriptEditorModule::StartupModule()
 {
 	FClassReloadHelper::Init();
 	RegisterAngelscriptSourceNavigation();
+	if (!StaticJITRefreshService.IsValid())
+	{
+		StaticJITRefreshService =
+			AngelscriptEditor::StaticJIT::FAngelscriptJITRefreshService::
+				CreateDefault();
+	}
+	if (IConsoleManager::Get().FindConsoleObject(
+		TEXT("as.StaticJIT.EditorRefresh")) == nullptr)
+	{
+		StaticJITRefreshConsoleCommand =
+			IConsoleManager::Get().RegisterConsoleCommand(
+				TEXT("as.StaticJIT.EditorRefresh"),
+				TEXT("Explicitly generate or refresh project AngelScript JIT sources and request a Live Coding patch."),
+				FConsoleCommandDelegate::CreateRaw(
+					this,
+					&FAngelscriptEditorModule::GenerateRefreshStaticJIT));
+	}
 	if (!ScriptTestAutomationRefresh.IsValid())
 	{
 		ScriptTestAutomationRefresh =
@@ -1185,6 +1218,15 @@ void FAngelscriptEditorModule::ShowAssetListPopup(const TArray<FString>& AssetPa
 
 void FAngelscriptEditorModule::ShutdownModule()
 {
+	if (StaticJITRefreshConsoleCommand != nullptr)
+	{
+		IConsoleManager::Get().UnregisterConsoleObject(
+			StaticJITRefreshConsoleCommand,
+			false);
+		StaticJITRefreshConsoleCommand = nullptr;
+	}
+	StaticJITRefreshService.Reset();
+
 	if (ScriptTestAutomationRefresh.IsValid())
 	{
 		ScriptTestAutomationRefresh->Shutdown();
@@ -1272,6 +1314,24 @@ void FAngelscriptEditorModule::RegisterToolsMenuEntries()
 		SnippetAction
 	);
 
+	FToolUIActionChoice StaticJITRefreshAction(
+		FToolMenuExecuteAction::CreateLambda(
+			[this](const FToolMenuContext&)
+			{
+				GenerateRefreshStaticJIT();
+			}));
+
+	Section.AddMenuEntry
+	(
+		"ASGenerateRefreshStaticJIT",
+		NSLOCTEXT("Angelscript", "GenerateRefreshStaticJIT.Label",
+			"Generate/Refresh AngelScript JIT"),
+		NSLOCTEXT("Angelscript", "GenerateRefreshStaticJIT.ToolTip",
+			"Compiles authoritative AngelScript, updates the existing per-module JIT sources, and explicitly requests a Live Coding patch. Adding or removing an AS module requires one normal full build."),
+		FSourceCodeNavigation::GetOpenSourceCodeIDEIcon(),
+		StaticJITRefreshAction
+	);
+
 	FToolUIActionChoice GenerateAction(FExecuteAction::CreateLambda([]() { GenerateNativeBinds(); }));
 
 	FToolMenuSection& BindSection = Menu->FindOrAddSection("Programming Binds");
@@ -1295,5 +1355,46 @@ void FAngelscriptEditorModule::RegisterToolsMenuEntries()
 		FSourceCodeNavigation::GetOpenSourceCodeIDEIcon(),
 		TestAction
 	);
+}
+
+void FAngelscriptEditorModule::GenerateRefreshStaticJIT()
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	if (GStaticJITRefreshOverrideForTesting)
+	{
+		GStaticJITRefreshOverrideForTesting();
+		return;
+	}
+#endif
+
+	if (!StaticJITRefreshService.IsValid())
+	{
+		StaticJITRefreshService =
+			AngelscriptEditor::StaticJIT::FAngelscriptJITRefreshService::
+				CreateDefault();
+	}
+	StaticJITRefreshService->Start(FPaths::GetProjectFilePath());
+	const AngelscriptEditor::StaticJIT::FAngelscriptJITRefreshResult& Result =
+		StaticJITRefreshService->GetLastResult();
+	if (Result.IsSuccess())
+	{
+		UE_LOG(LogTemp, Display, TEXT("%s"), *Result.Detail);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *Result.Detail);
+	}
+
+	FNotificationInfo Notification(FText::FromString(Result.Detail));
+	Notification.ExpireDuration = Result.IsSuccess() ? 6.0f : 10.0f;
+	Notification.bUseSuccessFailIcons = true;
+	const TSharedPtr<SNotificationItem> Item =
+		FSlateNotificationManager::Get().AddNotification(Notification);
+	if (Item.IsValid())
+	{
+		Item->SetCompletionState(Result.IsSuccess()
+			? SNotificationItem::CS_Success
+			: SNotificationItem::CS_Fail);
+	}
 }
 

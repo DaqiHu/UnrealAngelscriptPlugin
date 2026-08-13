@@ -1,0 +1,14 @@
+{
+  "ownershipRevision": 2,
+  "targetProfile": "EditorDevelopment",
+  "providerId": "7dc70fd55a76cc55d726e32d5c2434713bd93755a32e4dd524a4b7c39c8b5d44",
+  "providerGeneration": "a9125d664d1c623d2849978a57ee35c19253f27c4ac146cc2768d3cefeb6bf90",
+  "files": [
+    "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
+    "ASStaticJITAotImportProvider.363ba981.EditorDevelopment.jit.cpp",
+    "OwnedFiles.generated.json",
+    "Provider.generated.cpp",
+    "Provider.generated.h",
+    "ProviderManifest.generated.json"
+  ]
+}

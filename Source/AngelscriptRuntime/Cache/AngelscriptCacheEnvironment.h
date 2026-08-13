@@ -5,6 +5,7 @@
 
 class asCScriptEngine;
 class asCScriptFunction;
+class asCObjectProperty;
 class asCTypeInfo;
 class UClass;
 
@@ -14,17 +15,30 @@ class UClass;
 class ANGELSCRIPTRUNTIME_API FAngelscriptCacheEnvironmentIdentity final
 {
 public:
+	// Enumerates only the functions that are reachable from the Engine's
+	// current application-registration surface. scriptFunctions is an ID/history
+	// table and can retain removed config-group functions while external
+	// references are alive, so environment scans must not use it as a registry.
+	static void CollectCurrentRegisteredFunctions(
+		const asCScriptEngine& Engine,
+		TArray<asCScriptFunction*>& OutFunctions);
+
 	static bool TryBuildTypeReference(
 		const asCTypeInfo& Type,
-		FAngelscriptCacheStableReference& OutReference);
+		FAngelscriptArtifactReference& OutReference);
 
 	static bool TryBuildFunctionReference(
 		const asCScriptFunction& Function,
-		FAngelscriptCacheStableReference& OutReference);
+		FAngelscriptArtifactReference& OutReference);
+
+	static bool TryBuildPropertyReference(
+		const asCTypeInfo& OwnerType,
+		const asCObjectProperty& Property,
+		FAngelscriptArtifactReference& OutReference);
 
 	static bool TryBuildCodeRootReference(
 		const UClass& CodeRoot,
-		FAngelscriptCacheStableReference& OutReference);
+		FAngelscriptArtifactReference& OutReference);
 };
 
 // Resolves a persisted EnvironmentSymbol against the application-registered
@@ -37,18 +51,21 @@ public:
 		const asCScriptEngine& InEngine);
 
 	virtual TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
-		EAngelscriptCacheReferenceKind ReferenceKind,
+		EAngelscriptArtifactReferenceKind ReferenceKind,
 		const FAngelscriptHash256& StableKey) const override;
 
 	// Materialization-time companions to Resolve(). These return current-Engine
 	// objects only after both the stable key and expected ABI match exactly.
 	// Ambiguous references fail closed just like the validation-only resolver.
 	asCTypeInfo* ResolveTypeReference(
-		const FAngelscriptCacheStableReference& Expected) const;
+		const FAngelscriptArtifactReference& Expected) const;
 	asCScriptFunction* ResolveFunctionReference(
-		const FAngelscriptCacheStableReference& Expected) const;
+		const FAngelscriptArtifactReference& Expected) const;
+	asCObjectProperty* ResolvePropertyReference(
+		const FAngelscriptArtifactReference& Expected,
+		asCTypeInfo** OutOwnerType = nullptr) const;
 	UClass* ResolveCodeRootReference(
-		const FAngelscriptCacheStableReference& Expected) const;
+		const FAngelscriptArtifactReference& Expected) const;
 
 private:
 	const asCScriptEngine* Engine = nullptr;
@@ -73,7 +90,7 @@ public:
 	virtual TOptional<FAngelscriptCacheResolvedTypeLayoutInput>
 	ResolveTypeLayoutInput(
 		EAngelscriptCachedTypeLayoutInputKind InputKind,
-		EAngelscriptCacheReferenceKind ReferenceKind,
+		EAngelscriptArtifactReferenceKind ReferenceKind,
 		const FAngelscriptHash256& StableKey) const override;
 
 private:

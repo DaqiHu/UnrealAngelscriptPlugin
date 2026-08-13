@@ -322,8 +322,8 @@ public:
 		ASSERT_THAT(IsTrue(Consumer.ExecuteInt(*Answer, AnswerValue)));
 		ASSERT_THAT(AreEqual(42, AnswerValue));
 
-		FAngelscriptCacheLiveFunctionRoute Route;
-		ASSERT_THAT(IsTrue(Consumer.GetEngine().ResolveCacheFunctionRoute(
+		FAngelscriptFunctionRoute Route;
+		ASSERT_THAT(IsTrue(Consumer.GetEngine().ResolveFunctionRoute(
 			FunctionBody->Identity.FunctionKey, Route)));
 		ASSERT_THAT(IsTrue(Route.Function == Answer));
 		ASSERT_THAT(AreEqual(Answer->GetId(), Route.NumericFunctionId));
@@ -371,8 +371,8 @@ public:
 		ASSERT_THAT(IsTrue(RestoreAngelscriptCacheModule(
 			Consumer.GetEngine(), Generation, ModuleKey, Limits).IsSuccess()));
 
-		FAngelscriptCacheLiveFunctionRoute OriginalRoute;
-		ASSERT_THAT(IsTrue(Consumer.GetEngine().ResolveCacheFunctionRoute(
+		FAngelscriptFunctionRoute OriginalRoute;
+		ASSERT_THAT(IsTrue(Consumer.GetEngine().ResolveFunctionRoute(
 			FunctionBody->Identity.FunctionKey, OriginalRoute)));
 		const FAngelscriptCacheRestoreResult Duplicate =
 			RestoreAngelscriptCacheModule(
@@ -389,8 +389,8 @@ public:
 		ASSERT_THAT(IsTrue(Duplicate.Detail.Contains(
 			TEXT("stable function route"))));
 
-		FAngelscriptCacheLiveFunctionRoute RouteAfterRejection;
-		ASSERT_THAT(IsTrue(Consumer.GetEngine().ResolveCacheFunctionRoute(
+		FAngelscriptFunctionRoute RouteAfterRejection;
+		ASSERT_THAT(IsTrue(Consumer.GetEngine().ResolveFunctionRoute(
 			FunctionBody->Identity.FunctionKey, RouteAfterRejection)));
 		ASSERT_THAT(IsTrue(
 			RouteAfterRejection.Function == OriginalRoute.Function));
@@ -405,8 +405,8 @@ public:
 			TEXT("ASCacheV2FreshEngineRestore")).IsValid()));
 		ASSERT_THAT(IsFalse(Consumer.GetEngine().GetEnum(
 			TEXT("ECacheV2RestoreState")).IsValid()));
-		FAngelscriptCacheLiveFunctionRoute RemovedRoute;
-		ASSERT_THAT(IsFalse(Consumer.GetEngine().ResolveCacheFunctionRoute(
+		FAngelscriptFunctionRoute RemovedRoute;
+		ASSERT_THAT(IsFalse(Consumer.GetEngine().ResolveFunctionRoute(
 			FunctionBody->Identity.FunctionKey, RemovedRoute)));
 		TestRunner->AddInfo(FString::Printf(
 			TEXT("Fresh restore discard: ModuleRemoved=1 RouteRemoved=1 PreviousFunctionId=%d"),
@@ -445,11 +445,11 @@ public:
 		ASSERT_THAT(IsTrue(RestoreAngelscriptCacheModule(
 			ConsumerB.GetEngine(), Generation, ModuleKey, Limits).IsSuccess()));
 
-		FAngelscriptCacheLiveFunctionRoute RouteA;
-		FAngelscriptCacheLiveFunctionRoute RouteB;
-		ASSERT_THAT(IsTrue(ConsumerA.GetEngine().ResolveCacheFunctionRoute(
+		FAngelscriptFunctionRoute RouteA;
+		FAngelscriptFunctionRoute RouteB;
+		ASSERT_THAT(IsTrue(ConsumerA.GetEngine().ResolveFunctionRoute(
 			FunctionBody->Identity.FunctionKey, RouteA)));
-		ASSERT_THAT(IsTrue(ConsumerB.GetEngine().ResolveCacheFunctionRoute(
+		ASSERT_THAT(IsTrue(ConsumerB.GetEngine().ResolveFunctionRoute(
 			FunctionBody->Identity.FunctionKey, RouteB)));
 		ASSERT_THAT(IsTrue(RouteA.Function != RouteB.Function));
 		ASSERT_THAT(IsTrue(RouteA.Function->GetEngine()
@@ -466,9 +466,9 @@ public:
 		FAngelscriptTestFixture UnrelatedConsumer(
 			*TestRunner, ETestEngineMode::IsolatedFull);
 		ASSERT_THAT(IsTrue(UnrelatedConsumer.IsValid()));
-		FAngelscriptCacheLiveFunctionRoute UnrelatedRoute;
+		FAngelscriptFunctionRoute UnrelatedRoute;
 		ASSERT_THAT(IsFalse(
-			UnrelatedConsumer.GetEngine().ResolveCacheFunctionRoute(
+			UnrelatedConsumer.GetEngine().ResolveFunctionRoute(
 				FunctionBody->Identity.FunctionKey, UnrelatedRoute)));
 		TestRunner->AddInfo(FString::Printf(
 			TEXT("Fresh restore Engine route isolation: FunctionIdA=%d FunctionIdB=%d PointerA=%p PointerB=%p"),

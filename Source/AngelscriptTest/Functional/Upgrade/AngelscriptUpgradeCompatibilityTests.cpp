@@ -95,8 +95,7 @@ public:
 		ASSERT_THAT(AreEqual(32, static_cast<int32>(asEP_IGNORE_DUPLICATE_SHARED_INTF), TEXT("Stock 2.38 duplicate shared interface property id should remain available")));
 		ASSERT_THAT(AreEqual(33, static_cast<int32>(asEP_NO_DEBUG_OUTPUT), TEXT("Stock 2.38 no debug output property id should remain available")));
 		ASSERT_THAT(AreEqual(34, static_cast<int32>(asEP_DISABLE_SCRIPT_CLASS_GC), TEXT("Stock 2.38 disable script class GC property id should remain available")));
-		ASSERT_THAT(AreEqual(35, static_cast<int32>(asEP_JIT_INTERFACE_VERSION), TEXT("Stock 2.38 JIT interface version property id should remain available")));
-		ASSERT_THAT(AreEqual(36, static_cast<int32>(asEP_ALWAYS_IMPL_DEFAULT_COPY), TEXT("Stock 2.38 default copy property id should remain available")));
+		ASSERT_THAT(AreEqual(36, static_cast<int32>(asEP_ALWAYS_IMPL_DEFAULT_COPY), TEXT("Maintained fork should preserve later property ids after removing JIT interface version selection")));
 		ASSERT_THAT(AreEqual(37, static_cast<int32>(asEP_ALWAYS_IMPL_DEFAULT_COPY_CONSTRUCT), TEXT("Stock 2.38 default copy construct property id should remain available")));
 		ASSERT_THAT(AreEqual(38, static_cast<int32>(asEP_MEMBER_INIT_MODE), TEXT("Stock 2.38 member init mode property id should remain available")));
 		ASSERT_THAT(AreEqual(39, static_cast<int32>(asEP_BOOL_CONVERSION_MODE), TEXT("Stock 2.38 bool conversion mode property id should remain available")));
@@ -163,7 +162,6 @@ public:
 		{ asEP_IGNORE_DUPLICATE_SHARED_INTF, 1 },
 		{ asEP_NO_DEBUG_OUTPUT, 1 },
 		{ asEP_DISABLE_SCRIPT_CLASS_GC, 1 },
-		{ asEP_JIT_INTERFACE_VERSION, 2 },
 		{ asEP_ALWAYS_IMPL_DEFAULT_COPY, 1 },
 		{ asEP_ALWAYS_IMPL_DEFAULT_COPY_CONSTRUCT, 2 },
 		{ asEP_MEMBER_INIT_MODE, 1 },

@@ -7,6 +7,7 @@
 #include "as_callfunc.h"
 #include "as_datatype.h"
 #include "as_objecttype.h"
+#include "as_property.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
 #include "as_typeinfo.h"
@@ -244,7 +245,7 @@ namespace AngelscriptCacheEnvironment_Private
 		const asCScriptFunction& Function,
 		FAngelscriptHash256& OutStableKey,
 		FString* OutCanonicalDeclaration = nullptr,
-		TOptional<FAngelscriptCacheStableReference>* OutOwner = nullptr)
+		TOptional<FAngelscriptArtifactReference>* OutOwner = nullptr)
 	{
 		OutStableKey = {};
 		if (OutCanonicalDeclaration != nullptr)
@@ -268,10 +269,10 @@ namespace AngelscriptCacheEnvironment_Private
 		{
 			return false;
 		}
-		TOptional<FAngelscriptCacheStableReference> Owner;
+		TOptional<FAngelscriptArtifactReference> Owner;
 		if (Function.objectType != nullptr)
 		{
-			FAngelscriptCacheStableReference OwnerReference;
+			FAngelscriptArtifactReference OwnerReference;
 			if (!FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
 				*Function.objectType, OwnerReference))
 			{
@@ -308,7 +309,7 @@ namespace AngelscriptCacheEnvironment_Private
 		const asCScriptFunction& Function,
 		const FAngelscriptHash256& StableKey,
 		const FStringView CanonicalDeclaration,
-		const TOptional<FAngelscriptCacheStableReference>& Owner,
+		const TOptional<FAngelscriptArtifactReference>& Owner,
 		FAngelscriptHash256& OutAbi)
 	{
 		OutAbi = {};
@@ -364,7 +365,7 @@ namespace AngelscriptCacheEnvironment_Private
 		{
 			const asSSystemFunctionInterface::SClean& Clean =
 				Interface.cleanArgs[Index];
-			FAngelscriptCacheStableReference CleanType;
+			FAngelscriptArtifactReference CleanType;
 			if (Clean.ot == nullptr
 				|| !FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
 					*Clean.ot, CleanType))
@@ -380,11 +381,185 @@ namespace AngelscriptCacheEnvironment_Private
 		OutAbi = Writer.FinalizeHash();
 		return !OutAbi.IsZero();
 	}
+
+	static bool TryBuildPropertyStableKey(
+		const asCTypeInfo& OwnerType,
+		const asCObjectProperty& Property,
+		FAngelscriptHash256& OutStableKey,
+		FString* OutCanonicalType = nullptr,
+		TOptional<FAngelscriptArtifactReference>* OutOwner = nullptr)
+	{
+		OutStableKey = {};
+		if (OutCanonicalType != nullptr)
+		{
+			OutCanonicalType->Reset();
+		}
+		if (OutOwner != nullptr)
+		{
+			OutOwner->Reset();
+		}
+
+		const asCObjectType* ObjectType = CastToObjectType(
+			const_cast<asCTypeInfo*>(&OwnerType));
+		if (ObjectType == nullptr || OwnerType.module != nullptr
+			|| OwnerType.engine == nullptr || Property.name.GetLength() == 0)
+		{
+			return false;
+		}
+
+		uint32 MatchingPropertyCount = 0;
+		for (asUINT Index = 0; Index < ObjectType->properties.GetLength(); ++Index)
+		{
+			MatchingPropertyCount += ObjectType->properties[Index] == &Property
+				? 1u : 0u;
+		}
+		if (MatchingPropertyCount != 1)
+		{
+			return false;
+		}
+
+		FAngelscriptArtifactReference Owner;
+		if (!FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
+			OwnerType, Owner))
+		{
+			return false;
+		}
+		const asCString FormattedType = Property.type.Format(
+			OwnerType.nameSpace, false, false);
+		const FString CanonicalType = UTF8_TO_TCHAR(
+			FormattedType.AddressOf());
+		if (CanonicalType.IsEmpty())
+		{
+			return false;
+		}
+
+		FAngelscriptArtifactCanonicalWriter Writer(
+			TEXT("cache-v2-environment-property-key-v1"));
+		Writer.WriteHash(Owner.StableKey);
+		Writer.WriteString(UTF8_TO_TCHAR(Property.name.AddressOf()));
+		Writer.WriteString(CanonicalType);
+		OutStableKey = Writer.FinalizeHash();
+		if (OutCanonicalType != nullptr)
+		{
+			*OutCanonicalType = CanonicalType;
+		}
+		if (OutOwner != nullptr)
+		{
+			*OutOwner = Owner;
+		}
+		return !OutStableKey.IsZero();
+	}
+
+	static bool TryBuildPropertyAbi(
+		const asCObjectProperty& Property,
+		const FAngelscriptHash256& StableKey,
+		const FStringView CanonicalType,
+		const TOptional<FAngelscriptArtifactReference>& Owner,
+		FAngelscriptHash256& OutAbi)
+	{
+		OutAbi = {};
+		if (StableKey.IsZero() || CanonicalType.IsEmpty() || !Owner.IsSet()
+			|| Property.byteOffset < 0 || Property.compositeOffset < 0)
+		{
+			return false;
+		}
+
+		FAngelscriptArtifactCanonicalWriter Writer(
+			TEXT("cache-v2-environment-property-abi-v1"));
+		Writer.WriteHash(StableKey);
+		Writer.WriteHash(Owner->ExpectedAbi);
+		Writer.WriteString(CanonicalType);
+		Writer.WriteUInt32(static_cast<uint32>(Property.byteOffset));
+		Writer.WriteUInt32(static_cast<uint32>(Property.compositeOffset));
+		Writer.WriteUInt32(Property.accessMask);
+		Writer.WriteUInt32(Property.exposedType);
+		Writer.WriteBool(Property.isCompositeIndirect);
+		Writer.WriteBool(Property.isPrivate);
+		Writer.WriteBool(Property.isProtected);
+		Writer.WriteBool(Property.isInherited);
+		Writer.WriteBool(Property.isAppBindProperty);
+		OutAbi = Writer.FinalizeHash();
+		return !OutAbi.IsZero();
+	}
+}
+
+void FAngelscriptCacheEnvironmentIdentity::CollectCurrentRegisteredFunctions(
+	const asCScriptEngine& Engine,
+	TArray<asCScriptFunction*>& OutFunctions)
+{
+	TArray<asCObjectType*> CurrentObjectTypes;
+	Engine.allRegisteredTypes.IterateAll(
+		[&](asCTypeInfo* Type)
+		{
+			if (Type == nullptr || Type->engine != &Engine
+				|| Type->module != nullptr)
+			{
+				return;
+			}
+			if (asCObjectType* const ObjectType = CastToObjectType(Type))
+			{
+				CurrentObjectTypes.Add(ObjectType);
+			}
+		});
+	// These two engine-owned pseudo types are deliberately absent from
+	// allRegisteredTypes, but their behaviours are part of the live compiler
+	// environment for the entire engine lifetime.
+	CurrentObjectTypes.AddUnique(
+		const_cast<asCObjectType*>(&Engine.scriptTypeBehaviours));
+	CurrentObjectTypes.AddUnique(
+		const_cast<asCObjectType*>(&Engine.functionBehaviours));
+
+	TSet<asCScriptFunction*> CurrentFunctions;
+	auto AddCurrentFunction = [&Engine, &CurrentFunctions](
+		asIScriptFunction* Candidate)
+	{
+		asCScriptFunction* const Function =
+			static_cast<asCScriptFunction*>(Candidate);
+		if (Function == nullptr || Function->engine != &Engine
+			|| Function->module != nullptr
+			|| Function->GetFuncType() != asFUNC_SYSTEM)
+		{
+			return;
+		}
+		CurrentFunctions.Add(Function);
+	};
+
+	for (asUINT Index = 0;
+		Index < Engine.registeredGlobalFuncs.GetLength(); ++Index)
+	{
+		AddCurrentFunction(Engine.registeredGlobalFuncs[Index]);
+	}
+
+	for (asCObjectType* const ObjectType : CurrentObjectTypes)
+	{
+		for (asUINT Index = 0;
+			Index < ObjectType->GetFactoryCount(); ++Index)
+		{
+			AddCurrentFunction(ObjectType->GetFactoryByIndex(Index));
+		}
+		for (asUINT Index = 0;
+			Index < ObjectType->GetMethodCount(); ++Index)
+		{
+			AddCurrentFunction(ObjectType->GetMethodByIndex(Index));
+		}
+		for (asUINT Index = 0;
+			Index < ObjectType->GetBehaviourCount(); ++Index)
+		{
+			AddCurrentFunction(ObjectType->GetBehaviourByIndex(Index, nullptr));
+		}
+	}
+
+	OutFunctions = CurrentFunctions.Array();
+	OutFunctions.Sort(
+		[](const asCScriptFunction& Left, const asCScriptFunction& Right)
+		{
+			return Left.GetId() < Right.GetId();
+		});
 }
 
 bool FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
 	const asCTypeInfo& Type,
-	FAngelscriptCacheStableReference& OutReference)
+	FAngelscriptArtifactReference& OutReference)
 {
 	using namespace AngelscriptCacheEnvironment_Private;
 	OutReference = {};
@@ -398,18 +573,18 @@ bool FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
 		OutReference = {};
 		return false;
 	}
-	OutReference.Kind = EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+	OutReference.Kind = EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 	return true;
 }
 
 bool FAngelscriptCacheEnvironmentIdentity::TryBuildFunctionReference(
 	const asCScriptFunction& Function,
-	FAngelscriptCacheStableReference& OutReference)
+	FAngelscriptArtifactReference& OutReference)
 {
 	using namespace AngelscriptCacheEnvironment_Private;
 	OutReference = {};
 	FString CanonicalDeclaration;
-	TOptional<FAngelscriptCacheStableReference> Owner;
+	TOptional<FAngelscriptArtifactReference> Owner;
 	if (!TryBuildFunctionStableKey(
 		Function, OutReference.StableKey, &CanonicalDeclaration, &Owner)
 		|| !TryBuildFunctionAbi(
@@ -422,13 +597,36 @@ bool FAngelscriptCacheEnvironmentIdentity::TryBuildFunctionReference(
 		OutReference = {};
 		return false;
 	}
-	OutReference.Kind = EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+	OutReference.Kind = EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
+	return true;
+}
+
+bool FAngelscriptCacheEnvironmentIdentity::TryBuildPropertyReference(
+	const asCTypeInfo& OwnerType,
+	const asCObjectProperty& Property,
+	FAngelscriptArtifactReference& OutReference)
+{
+	using namespace AngelscriptCacheEnvironment_Private;
+	OutReference = {};
+	FString CanonicalType;
+	TOptional<FAngelscriptArtifactReference> Owner;
+	if (!TryBuildPropertyStableKey(
+		OwnerType, Property, OutReference.StableKey,
+		&CanonicalType, &Owner)
+		|| !TryBuildPropertyAbi(
+			Property, OutReference.StableKey,
+			CanonicalType, Owner, OutReference.ExpectedAbi))
+	{
+		OutReference = {};
+		return false;
+	}
+	OutReference.Kind = EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 	return true;
 }
 
 bool FAngelscriptCacheEnvironmentIdentity::TryBuildCodeRootReference(
 	const UClass& CodeRoot,
-	FAngelscriptCacheStableReference& OutReference)
+	FAngelscriptArtifactReference& OutReference)
 {
 	OutReference = {};
 	const FString Path = CodeRoot.GetPathName();
@@ -448,7 +646,7 @@ bool FAngelscriptCacheEnvironmentIdentity::TryBuildCodeRootReference(
 	AbiWriter.WriteString(CodeRoot.GetSuperClass() != nullptr
 		? CodeRoot.GetSuperClass()->GetPathName() : FString());
 	OutReference.ExpectedAbi = AbiWriter.FinalizeHash();
-	OutReference.Kind = EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+	OutReference.Kind = EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 	return !OutReference.StableKey.IsZero()
 		&& !OutReference.ExpectedAbi.IsZero();
 }
@@ -461,11 +659,11 @@ FAngelscriptCacheEngineEnvironmentResolver::
 
 TOptional<FAngelscriptCacheCurrentSymbol>
 FAngelscriptCacheEngineEnvironmentResolver::Resolve(
-	const EAngelscriptCacheReferenceKind ReferenceKind,
+	const EAngelscriptArtifactReferenceKind ReferenceKind,
 	const FAngelscriptHash256& StableKey) const
 {
 	using namespace AngelscriptCacheEnvironment_Private;
-	if (ReferenceKind != EAngelscriptCacheReferenceKind::EnvironmentSymbol
+	if (ReferenceKind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 		|| StableKey.IsZero() || Engine == nullptr)
 	{
 		return {};
@@ -474,7 +672,7 @@ FAngelscriptCacheEngineEnvironmentResolver::Resolve(
 	TOptional<FAngelscriptCacheCurrentSymbol> Match;
 	bool bAmbiguous = false;
 	auto ConsiderReference = [&Match, &bAmbiguous, &StableKey](
-		const FAngelscriptCacheStableReference& Reference)
+		const FAngelscriptArtifactReference& Reference)
 	{
 		if (bAmbiguous || !(Reference.StableKey == StableKey))
 		{
@@ -493,7 +691,7 @@ FAngelscriptCacheEngineEnvironmentResolver::Resolve(
 	};
 	for (TObjectIterator<UClass> It; !bAmbiguous && It; ++It)
 	{
-		FAngelscriptCacheStableReference Reference;
+		FAngelscriptArtifactReference Reference;
 		if (FAngelscriptCacheEnvironmentIdentity::TryBuildCodeRootReference(
 			**It, Reference))
 		{
@@ -507,31 +705,42 @@ FAngelscriptCacheEngineEnvironmentResolver::Resolve(
 			{
 				return;
 			}
-			FAngelscriptHash256 CandidateKey;
-			if (!TryBuildTypeStableKey(*Type, CandidateKey)
-				|| !(CandidateKey == StableKey))
-			{
-				return;
-			}
-			FAngelscriptCacheStableReference Reference;
+			FAngelscriptArtifactReference Reference;
 			if (!FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
 				*Type, Reference))
 			{
-				bAmbiguous = true;
-				Match.Reset();
 				return;
 			}
 			ConsiderReference(Reference);
+
+			const asCObjectType* ObjectType = CastToObjectType(Type);
+			if (ObjectType == nullptr)
+			{
+				return;
+			}
+			for (asUINT PropertyIndex = 0;
+				!bAmbiguous
+					&& PropertyIndex < ObjectType->properties.GetLength();
+				++PropertyIndex)
+			{
+				const asCObjectProperty* Property =
+					ObjectType->properties[PropertyIndex];
+				FAngelscriptArtifactReference PropertyReference;
+				if (Property != nullptr
+					&& FAngelscriptCacheEnvironmentIdentity::
+						TryBuildPropertyReference(
+							*Type, *Property, PropertyReference))
+				{
+					ConsiderReference(PropertyReference);
+				}
+			}
 		});
-	for (asUINT Index = 0;
-		!bAmbiguous && Index < Engine->scriptFunctions.GetLength(); ++Index)
+	TArray<asCScriptFunction*> CurrentFunctions;
+	FAngelscriptCacheEnvironmentIdentity::CollectCurrentRegisteredFunctions(
+		*Engine, CurrentFunctions);
+	for (asCScriptFunction* Function : CurrentFunctions)
 	{
-		asCScriptFunction* Function = Engine->scriptFunctions[Index];
-		if (Function == nullptr || Function->module != nullptr)
-		{
-			continue;
-		}
-		FAngelscriptCacheStableReference Reference;
+		FAngelscriptArtifactReference Reference;
 		if (FAngelscriptCacheEnvironmentIdentity::TryBuildFunctionReference(
 			*Function, Reference))
 		{
@@ -542,10 +751,10 @@ FAngelscriptCacheEngineEnvironmentResolver::Resolve(
 }
 
 asCTypeInfo* FAngelscriptCacheEngineEnvironmentResolver::ResolveTypeReference(
-	const FAngelscriptCacheStableReference& Expected) const
+	const FAngelscriptArtifactReference& Expected) const
 {
 	if (Engine == nullptr
-		|| Expected.Kind != EAngelscriptCacheReferenceKind::EnvironmentSymbol
+		|| Expected.Kind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 		|| Expected.StableKey.IsZero() || Expected.ExpectedAbi.IsZero())
 	{
 		return nullptr;
@@ -560,7 +769,7 @@ asCTypeInfo* FAngelscriptCacheEngineEnvironmentResolver::ResolveTypeReference(
 			{
 				return;
 			}
-			FAngelscriptCacheStableReference Current;
+			FAngelscriptArtifactReference Current;
 			if (!FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
 					*Type, Current)
 				|| Current.StableKey != Expected.StableKey
@@ -581,24 +790,22 @@ asCTypeInfo* FAngelscriptCacheEngineEnvironmentResolver::ResolveTypeReference(
 
 asCScriptFunction*
 FAngelscriptCacheEngineEnvironmentResolver::ResolveFunctionReference(
-	const FAngelscriptCacheStableReference& Expected) const
+	const FAngelscriptArtifactReference& Expected) const
 {
 	if (Engine == nullptr
-		|| Expected.Kind != EAngelscriptCacheReferenceKind::EnvironmentSymbol
+		|| Expected.Kind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 		|| Expected.StableKey.IsZero() || Expected.ExpectedAbi.IsZero())
 	{
 		return nullptr;
 	}
 
 	asCScriptFunction* Match = nullptr;
-	for (asUINT Index = 0; Index < Engine->scriptFunctions.GetLength(); ++Index)
+	TArray<asCScriptFunction*> CurrentFunctions;
+	FAngelscriptCacheEnvironmentIdentity::CollectCurrentRegisteredFunctions(
+		*Engine, CurrentFunctions);
+	for (asCScriptFunction* Function : CurrentFunctions)
 	{
-		asCScriptFunction* Function = Engine->scriptFunctions[Index];
-		if (Function == nullptr || Function->module != nullptr)
-		{
-			continue;
-		}
-		FAngelscriptCacheStableReference Current;
+		FAngelscriptArtifactReference Current;
 		if (!FAngelscriptCacheEnvironmentIdentity::TryBuildFunctionReference(
 				*Function, Current)
 			|| Current.StableKey != Expected.StableKey
@@ -615,11 +822,74 @@ FAngelscriptCacheEngineEnvironmentResolver::ResolveFunctionReference(
 	return Match;
 }
 
+asCObjectProperty*
+FAngelscriptCacheEngineEnvironmentResolver::ResolvePropertyReference(
+	const FAngelscriptArtifactReference& Expected,
+	asCTypeInfo** OutOwnerType) const
+{
+	if (OutOwnerType != nullptr)
+	{
+		*OutOwnerType = nullptr;
+	}
+	if (Engine == nullptr
+		|| Expected.Kind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol
+		|| Expected.StableKey.IsZero() || Expected.ExpectedAbi.IsZero())
+	{
+		return nullptr;
+	}
+
+	asCObjectProperty* Match = nullptr;
+	asCTypeInfo* MatchOwner = nullptr;
+	bool bAmbiguous = false;
+	Engine->allRegisteredTypes.IterateAll(
+		[&](asCTypeInfo* Type)
+		{
+			if (bAmbiguous || Type == nullptr || Type->module != nullptr)
+			{
+				return;
+			}
+			asCObjectType* const ObjectType = CastToObjectType(Type);
+			if (ObjectType == nullptr)
+			{
+				return;
+			}
+			for (asUINT Index = 0;
+				!bAmbiguous && Index < ObjectType->properties.GetLength();
+				++Index)
+			{
+				asCObjectProperty* const Property = ObjectType->properties[Index];
+				FAngelscriptArtifactReference Current;
+				if (Property == nullptr
+					|| !FAngelscriptCacheEnvironmentIdentity::
+						TryBuildPropertyReference(*Type, *Property, Current)
+					|| Current.StableKey != Expected.StableKey
+					|| Current.ExpectedAbi != Expected.ExpectedAbi)
+				{
+					continue;
+				}
+				if (Match != nullptr)
+				{
+					Match = nullptr;
+					MatchOwner = nullptr;
+					bAmbiguous = true;
+					return;
+				}
+				Match = Property;
+				MatchOwner = Type;
+			}
+		});
+	if (!bAmbiguous && Match != nullptr && OutOwnerType != nullptr)
+	{
+		*OutOwnerType = MatchOwner;
+	}
+	return bAmbiguous ? nullptr : Match;
+}
+
 UClass* FAngelscriptCacheEngineEnvironmentResolver::ResolveCodeRootReference(
-	const FAngelscriptCacheStableReference& Expected) const
+	const FAngelscriptArtifactReference& Expected) const
 {
 	if (Engine == nullptr
-		|| Expected.Kind != EAngelscriptCacheReferenceKind::EnvironmentSymbol
+		|| Expected.Kind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 		|| Expected.StableKey.IsZero() || Expected.ExpectedAbi.IsZero())
 	{
 		return nullptr;
@@ -628,7 +898,7 @@ UClass* FAngelscriptCacheEngineEnvironmentResolver::ResolveCodeRootReference(
 	UClass* Match = nullptr;
 	for (TObjectIterator<UClass> It; It; ++It)
 	{
-		FAngelscriptCacheStableReference Current;
+		FAngelscriptArtifactReference Current;
 		if (!FAngelscriptCacheEnvironmentIdentity::TryBuildCodeRootReference(
 				**It, Current)
 			|| Current.StableKey != Expected.StableKey
@@ -662,9 +932,9 @@ FAngelscriptCacheEngineLayoutResolver::ResolveDataTypeLayout(
 	{
 		return {};
 	}
-	const FAngelscriptCacheStableReference& Expected =
+	const FAngelscriptArtifactReference& Expected =
 		DataType.TypeReference.GetValue();
-	if (Expected.Kind != EAngelscriptCacheReferenceKind::EnvironmentSymbol
+	if (Expected.Kind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 		|| Expected.StableKey.IsZero() || Expected.ExpectedAbi.IsZero())
 	{
 		return {};
@@ -679,7 +949,7 @@ FAngelscriptCacheEngineLayoutResolver::ResolveDataTypeLayout(
 			{
 				return;
 			}
-			FAngelscriptCacheStableReference Current;
+			FAngelscriptArtifactReference Current;
 			if (!FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
 					*Type, Current)
 				|| !(Current.StableKey == Expected.StableKey)
@@ -740,12 +1010,12 @@ FAngelscriptCacheEngineLayoutResolver::ResolveDataTypeLayout(
 TOptional<FAngelscriptCacheResolvedTypeLayoutInput>
 FAngelscriptCacheEngineLayoutResolver::ResolveTypeLayoutInput(
 	const EAngelscriptCachedTypeLayoutInputKind InputKind,
-	const EAngelscriptCacheReferenceKind ReferenceKind,
+	const EAngelscriptArtifactReferenceKind ReferenceKind,
 	const FAngelscriptHash256& StableKey) const
 {
 	if (Engine == nullptr
 		|| InputKind != EAngelscriptCachedTypeLayoutInputKind::CodeRoot
-		|| ReferenceKind != EAngelscriptCacheReferenceKind::EnvironmentSymbol
+		|| ReferenceKind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 		|| StableKey.IsZero())
 	{
 		return {};
@@ -755,7 +1025,7 @@ FAngelscriptCacheEngineLayoutResolver::ResolveTypeLayoutInput(
 	bool bAmbiguous = false;
 	for (TObjectIterator<UClass> It; !bAmbiguous && It; ++It)
 	{
-		FAngelscriptCacheStableReference Reference;
+		FAngelscriptArtifactReference Reference;
 		if (!FAngelscriptCacheEnvironmentIdentity::TryBuildCodeRootReference(
 				**It, Reference)
 			|| !(Reference.StableKey == StableKey))

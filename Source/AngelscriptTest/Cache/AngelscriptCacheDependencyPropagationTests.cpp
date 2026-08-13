@@ -335,7 +335,7 @@ namespace AngelscriptCacheDependencyPropagationTests_Private
 		Dependency.Kind = ExpectedContent.IsSet()
 			? EAngelscriptCacheSemanticDependencyKind::FunctionContent
 			: EAngelscriptCacheSemanticDependencyKind::Declaration;
-		Dependency.Target.Kind = EAngelscriptCacheReferenceKind::ScriptFunction;
+		Dependency.Target.Kind = EAngelscriptArtifactReferenceKind::ScriptFunction;
 		Dependency.Target.StableKey = Target.StableKey;
 		Dependency.Target.ExpectedAbi = Target.SignatureHash;
 		Dependency.ExpectedContentOrValue = ExpectedContent;
@@ -346,7 +346,7 @@ namespace AngelscriptCacheDependencyPropagationTests_Private
 	{
 		FAngelscriptCacheSemanticDependency Dependency;
 		Dependency.Kind = EAngelscriptCacheSemanticDependencyKind::Declaration;
-		Dependency.Target.Kind = EAngelscriptCacheReferenceKind::ScriptFunction;
+		Dependency.Target.Kind = EAngelscriptArtifactReferenceKind::ScriptFunction;
 		Dependency.Target.StableKey = MakeHash(0xe0);
 		Dependency.Target.ExpectedAbi = MakeHash(0xe1);
 		return Dependency;
@@ -359,7 +359,7 @@ namespace AngelscriptCacheDependencyPropagationTests_Private
 		Dependency.Kind = bWithContent
 			? EAngelscriptCacheSemanticDependencyKind::CompileOption
 			: EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi;
-		Dependency.Target.Kind = EAngelscriptCacheReferenceKind::EnvironmentSymbol;
+		Dependency.Target.Kind = EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
 		Dependency.Target.StableKey = MakeHash(0xd0);
 		Dependency.Target.ExpectedAbi = MakeHash(0xd1);
 		if (bWithContent)
@@ -371,7 +371,7 @@ namespace AngelscriptCacheDependencyPropagationTests_Private
 
 	static FAngelscriptCacheSemanticDependency MakeDependency(
 		const EAngelscriptCacheSemanticDependencyKind Kind,
-		const EAngelscriptCacheReferenceKind TargetKind,
+		const EAngelscriptArtifactReferenceKind TargetKind,
 		const FAngelscriptHash256& TargetKey,
 		const FAngelscriptHash256& ExpectedAbi,
 		const TOptional<FAngelscriptHash256>& ExpectedContent = {})
@@ -396,7 +396,7 @@ namespace AngelscriptCacheDependencyPropagationTests_Private
 		Import.CanonicalSignature = TargetDeclaration.CanonicalDeclaration;
 		Import.TargetModuleKey = Target.ModuleKey;
 		Import.TargetDeclaration.Kind =
-			EAngelscriptCacheReferenceKind::ScriptFunction;
+			EAngelscriptArtifactReferenceKind::ScriptFunction;
 		Import.TargetDeclaration.StableKey = TargetDeclaration.StableKey;
 		Import.TargetDeclaration.ExpectedAbi = TargetDeclaration.SignatureHash;
 		Import.Slots.Add({EAngelscriptCacheDeclarationSlotKind::Import, 0});
@@ -446,7 +446,7 @@ namespace AngelscriptCacheDependencyPropagationTests_Private
 		FAngelscriptCachedHardValue HardValue;
 		HardValue.HardValueKind =
 			EAngelscriptCachedHardValueKind::GlobalConstant;
-		HardValue.Owner.Kind = EAngelscriptCacheReferenceKind::ScriptGlobal;
+		HardValue.Owner.Kind = EAngelscriptArtifactReferenceKind::ScriptGlobal;
 		HardValue.Owner.StableKey = Declaration.StableKey;
 		HardValue.Owner.ExpectedAbi = Declaration.SignatureHash;
 		HardValue.Type = Declaration.DeclaredType.GetValue();
@@ -745,7 +745,7 @@ namespace AngelscriptCacheDependencyPropagationTests_Private
 				Action.ActionKind =
 					EAngelscriptCachedInitializationActionKind::ExecuteInitializer;
 				Action.Target.Kind =
-					EAngelscriptCacheReferenceKind::ScriptFunction;
+					EAngelscriptArtifactReferenceKind::ScriptFunction;
 				Action.Target.StableKey =
 					InitializerDeclaration->StableKey;
 				Action.Target.ExpectedAbi =
@@ -874,12 +874,12 @@ namespace AngelscriptCacheDependencyPropagationTests_Private
 		TOptional<FAngelscriptHash256> Content = MakeHash(0xd2);
 
 		virtual TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
-			const EAngelscriptCacheReferenceKind ReferenceKind,
+			const EAngelscriptArtifactReferenceKind ReferenceKind,
 			const FAngelscriptHash256& StableKey) const override
 		{
 			++CallCount;
 			check(ReferenceKind
-				== EAngelscriptCacheReferenceKind::EnvironmentSymbol);
+				== EAngelscriptArtifactReferenceKind::EnvironmentSymbol);
 			check(StableKey == MakeHash(0xd0));
 			if (bMissing)
 			{
@@ -1104,7 +1104,7 @@ public:
 			EAngelscriptCachedPrimitiveType::Invalid;
 		EmbeddedProviderValue.Type.TypeReference.Emplace();
 		EmbeddedProviderValue.Type.TypeReference->Kind =
-			EAngelscriptCacheReferenceKind::ScriptType;
+			EAngelscriptArtifactReferenceKind::ScriptType;
 		EmbeddedProviderValue.Type.TypeReference->StableKey =
 			ProviderType.StableKey;
 		EmbeddedProviderValue.Type.TypeReference->ExpectedAbi =
@@ -1125,7 +1125,7 @@ public:
 				EmbeddedProviderValue.PropertyLayoutFingerprint).IsSuccess());
 		ConsumerSchema.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::ValueLayout,
-			EAngelscriptCacheReferenceKind::ScriptType,
+			EAngelscriptArtifactReferenceKind::ScriptType,
 			ProviderType.StableKey,
 			ProviderType.SignatureHash,
 			OldProviderSchema.Layout.TypeLayoutHash));
@@ -1133,7 +1133,7 @@ public:
 			ConsumerSchema, ConsumerSchema.Layout.TypeLayoutHash).IsSuccess());
 		Consumer.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::PropertyLayout,
-			EAngelscriptCacheReferenceKind::ScriptProperty,
+			EAngelscriptArtifactReferenceKind::ScriptProperty,
 			ProviderProperty.StableKey,
 			ProviderProperty.SignatureHash,
 			OldProviderSchema.OrderedProperties[0]
@@ -1180,7 +1180,7 @@ public:
 			TEXT("Consume"), 0x41);
 		Consumer.StateDependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::HardValue,
-			EAngelscriptCacheReferenceKind::ScriptGlobal,
+			EAngelscriptArtifactReferenceKind::ScriptGlobal,
 			GlobalDeclaration.StableKey,
 			GlobalDeclaration.SignatureHash,
 			MakeGlobalHardValue(GlobalDeclaration, 42).HardValueHash));
@@ -1190,7 +1190,7 @@ public:
 		Consumer.ModuleInitializerSeed = 0x61;
 		Consumer.InitializationActionDependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::Initializer,
-			EAngelscriptCacheReferenceKind::ScriptFunction,
+			EAngelscriptArtifactReferenceKind::ScriptFunction,
 			InitializerDeclaration.StableKey,
 			InitializerDeclaration.SignatureHash,
 			MakeInitializer(Provider, InitializerDeclaration, 0x91)
@@ -1256,7 +1256,7 @@ public:
 			TEXT("Consume"), 0x41);
 		Consumer.Dependencies.Add(MakeDependency(
 			EAngelscriptCacheSemanticDependencyKind::FunctionContent,
-			EAngelscriptCacheReferenceKind::ScriptFunction,
+			EAngelscriptArtifactReferenceKind::ScriptFunction,
 			DeclarationOnly.StableKey,
 			DeclarationOnly.SignatureHash,
 			MakeHash(0xa1)));

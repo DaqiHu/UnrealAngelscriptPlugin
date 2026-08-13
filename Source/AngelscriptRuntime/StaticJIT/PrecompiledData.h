@@ -564,7 +564,6 @@ struct FAngelscriptPrecompiledData
 	{};
 
 	// Saved data
-	FGuid DataGuid;
 	TMap<FString, FAngelscriptPrecompiledModule> Modules;
 	TMapAsPtr<int64, FAngelscriptTypeReference> TypeReferences;
 	TMap<int, int64> TypeIdReferenceToPointer;
@@ -573,29 +572,9 @@ struct FAngelscriptPrecompiledData
 	TMapAsPtr<int64, FAngelscriptGlobalReference> GlobalReferences;
 	TMapAsPtr<int64, FAngelscriptPropertyReference> PropertyReferences;
 	TArray<FStringInArchive> StaticNames;
-	int32 BuildIdentifier = -1;
-
-	// We keep the original loaded data so we can reference strings inside it
-	TArray<uint8> LoadedData;
-
 	// Minimize memory usage mode reduces the amount of memory we spend on
 	// angelscript data, but removes some debugging information.
 	bool bMinimizeMemoryUsage = false;
-
-	inline friend FArchive& operator<<(FArchive& Ar, FAngelscriptPrecompiledData& Data)
-	{
-		Ar << Data.DataGuid;
-		Ar << Data.BuildIdentifier;
-		Ar << Data.Modules;
-		Ar << Data.TypeReferences;
-		Ar << Data.TypeIdReferenceToPointer;
-		Ar << Data.FunctionReferences;
-		Ar << Data.FunctionIdReferenceToPointer;
-		Ar << Data.GlobalReferences;
-		Ar << Data.StaticNames;
-		Ar << Data.PropertyReferences;
-		return Ar;
-	}
 
 	ANGELSCRIPTRUNTIME_API FAngelscriptPrecompiledData(asIScriptEngine* InEngine);
 	ANGELSCRIPTRUNTIME_API ~FAngelscriptPrecompiledData();
@@ -603,22 +582,8 @@ struct FAngelscriptPrecompiledData
 	ANGELSCRIPTRUNTIME_API void InitFromActiveScript();
 	static void OutputTimingData();
 
-	ANGELSCRIPTRUNTIME_API int32 GetCurrentBuildIdentifier();
-	ANGELSCRIPTRUNTIME_API bool IsValidForCurrentBuild();
-
-	ANGELSCRIPTRUNTIME_API void Save(const FString& Filename);
-	ANGELSCRIPTRUNTIME_API void Load(const FString& Filename);
-
 	struct asSNameSpace* GetNamespace(const FStringInArchive& Namespace);
 	void AddRefTo(const class asCDataType& DataType);
-
-	void PrepareToFinalizePrecompiledModules();
-	void ClearUnneededRuntimeData();
-	// Clears resolved runtime pointers and lookup caches, while preserving serialized archive data.
-	void ResetRuntimeState();
-
-	// Serve loaded data that would normally come from preprocessor
-	TArray<TSharedRef<FAngelscriptModuleDesc>> GetModulesToCompile();
 
 	// Processed function id maps
 	TMap<asIScriptFunction*, uint32> ProcessedFunctionToId;
@@ -629,8 +594,6 @@ struct FAngelscriptPrecompiledData
 
 	uint32 CreateFunctionId(asIScriptFunction* Function);
 	void MapFunctionId(asIScriptFunction* Function, uint32 Id);
-
-	bool GetIdForFunction(asIScriptFunction* Function, uint32& OutId);
 
 	// Context state and reference maps
 	asCScriptEngine* Engine = nullptr;

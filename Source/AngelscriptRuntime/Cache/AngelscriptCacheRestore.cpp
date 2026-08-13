@@ -5,7 +5,6 @@
 #include "Cache/AngelscriptFunctionArtifactCodec.h"
 #include "Cache/AngelscriptCacheService.h"
 #include "Cache/AngelscriptCacheStableSymbolIdentity.h"
-#include "Cache/Private/AngelscriptCacheRuntimeState.h"
 #include "ClassGenerator/AngelscriptClassGenerator.h"
 #include "Core/AngelscriptType.h"
 #include "Hash/Blake3.h"
@@ -123,7 +122,7 @@ namespace AngelscriptCacheRestore_Private
 	{
 	public:
 		virtual TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
-			EAngelscriptCacheReferenceKind,
+			EAngelscriptArtifactReferenceKind,
 			const FAngelscriptHash256&) const override
 		{
 			return {};
@@ -145,7 +144,7 @@ namespace AngelscriptCacheRestore_Private
 		virtual TOptional<FAngelscriptCacheResolvedTypeLayoutInput>
 		ResolveTypeLayoutInput(
 			EAngelscriptCachedTypeLayoutInputKind,
-			EAngelscriptCacheReferenceKind,
+			EAngelscriptArtifactReferenceKind,
 			const FAngelscriptHash256&) const override
 		{
 			return {};
@@ -261,15 +260,46 @@ namespace AngelscriptCacheRestore_Private
 	static bool IsSupportedPrimitiveGlobalDeclaration(
 		const FAngelscriptCachedDeclaration& Declaration)
 	{
-		return Declaration.DeclarationKind
+		if (Declaration.DeclarationKind
 				== EAngelscriptCacheDeclarationKind::Function
 			&& Declaration.EntityKind
 				== EAngelscriptArtifactEntityKind::GlobalFunction
 			&& Declaration.OwnerKind == EAngelscriptFunctionOwnerKind::Module
 			&& Declaration.DeclaredType.IsSet()
 			&& Declaration.DeclaredType->Kind
-				== EAngelscriptCachedDataTypeKind::Primitive
-			&& Declaration.OrderedParameters.IsEmpty();
+				== EAngelscriptCachedDataTypeKind::Primitive)
+		{
+			for (int32 ParameterIndex = 0;
+				ParameterIndex < Declaration.OrderedParameters.Num();
+				++ParameterIndex)
+			{
+				const FAngelscriptCachedParameter& Parameter =
+					Declaration.OrderedParameters[ParameterIndex];
+				if (Parameter.Ordinal != static_cast<uint32>(ParameterIndex)
+					|| Parameter.Type.Kind
+						!= EAngelscriptCachedDataTypeKind::Primitive
+					|| Parameter.Passing
+						== EAngelscriptCachedParameterPassing::Invalid)
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+		return false;
+	}
+
+	static bool IsSupportedClassGraphGlobalDeclaration(
+		const FAngelscriptCachedDeclaration& Declaration,
+		const FAngelscriptStableModuleKey& ModuleKey)
+	{
+		return Declaration.DeclarationKind
+				== EAngelscriptCacheDeclarationKind::Function
+			&& Declaration.EntityKind
+				== EAngelscriptArtifactEntityKind::GlobalFunction
+			&& Declaration.OwnerKind == EAngelscriptFunctionOwnerKind::Module
+			&& Declaration.OwnerKey == ModuleKey.Hash
+			&& Declaration.DeclaredType.IsSet();
 	}
 
 	static bool DoesLiveFunctionMatchDeclaration(
@@ -284,7 +314,8 @@ namespace AngelscriptCacheRestore_Private
 			&& Declaration.CanonicalDeclaration.Equals(
 				UTF8_TO_TCHAR(Function.GetDeclaration(false, false, false)),
 				ESearchCase::CaseSensitive)
-			&& Function.GetParamCount() == 0
+			&& Function.GetParamCount()
+				== static_cast<asUINT>(Declaration.OrderedParameters.Num())
 			&& Function.GetObjectType() == nullptr;
 	}
 
@@ -328,6 +359,16 @@ namespace AngelscriptCacheRestore_Private
 		const EAngelscriptCachedParameterTraitFlags Flag)
 	{
 		return (Value & static_cast<uint32>(Flag)) != 0;
+	}
+
+	static bool IsStaticsClassSchema(
+		const FAngelscriptCachedTypeSchema& Schema)
+	{
+		return Schema.TypeKind == EAngelscriptCachedTypeKind::Class
+			&& Schema.Reflection.ReflectionKind
+				== EAngelscriptCachedReflectionKind::UClass
+			&& HasFlag(Schema.Reflection.ClassReflectionFlags,
+				EAngelscriptCachedClassReflectionFlags::StaticsClass);
 	}
 
 	static bool TryMapPrimitiveToken(
@@ -378,7 +419,7 @@ namespace AngelscriptCacheRestore_Private
 		{
 			if (!Cached.TypeReference.IsSet()
 				|| Cached.TypeReference->Kind
-					!= EAngelscriptCacheReferenceKind::ScriptType)
+					!= EAngelscriptArtifactReferenceKind::ScriptType)
 			{
 				return false;
 			}
@@ -586,8 +627,8 @@ namespace AngelscriptCacheRestore_Private
 	{
 		OutCodeRoot = nullptr;
 		OutShadowType = nullptr;
-		const FAngelscriptCacheStableReference* CodeSuper = nullptr;
-		const FAngelscriptCacheStableReference* ShadowSuper = nullptr;
+		const FAngelscriptArtifactReference* CodeSuper = nullptr;
+		const FAngelscriptArtifactReference* ShadowSuper = nullptr;
 		for (const FAngelscriptCachedTypeRelation& Relation
 			: TypeSchema.Relations)
 		{
@@ -627,11 +668,16 @@ namespace AngelscriptCacheRestore_Private
 				return false;
 			}
 		}
-		if (CodeSuper == nullptr || ShadowSuper == nullptr
-			|| CodeSuper->StableKey != ShadowSuper->StableKey
-			|| CodeSuper->ExpectedAbi != ShadowSuper->ExpectedAbi)
+		const bool bStaticsClass = IsStaticsClassSchema(TypeSchema);
+		if (CodeSuper == nullptr
+			|| (bStaticsClass && ShadowSuper != nullptr)
+			|| (!bStaticsClass && (ShadowSuper == nullptr
+				|| CodeSuper->StableKey != ShadowSuper->StableKey
+				|| CodeSuper->ExpectedAbi != ShadowSuper->ExpectedAbi)))
 		{
-			OutFailure = TEXT("The cached class has no single matching code/shadow root");
+			OutFailure = bStaticsClass
+				? TEXT("The cached StaticsClass has no single code root")
+				: TEXT("The cached class has no single matching code/shadow root");
 			return false;
 		}
 
@@ -640,6 +686,10 @@ namespace AngelscriptCacheRestore_Private
 		{
 			OutFailure = TEXT("The cached native code root is absent or ambiguous in the current process");
 			return false;
+		}
+		if (bStaticsClass)
+		{
+			return true;
 		}
 		const FString BoundName = FAngelscriptType::GetBoundClassName(OutCodeRoot);
 		OutShadowType = CastToObjectType(
@@ -806,19 +856,22 @@ namespace AngelscriptCacheRestore_Private
 	{
 		for (FFunctionRestoreInput& Input : Inputs)
 		{
-			if (Input.Declaration != nullptr
-				&& Input.Declaration->OwnerKind
-					== EAngelscriptFunctionOwnerKind::Type
-				&& Input.Declaration->OwnerKey != TypeSchema.TypeKey.Hash)
+			if (Input.Declaration == nullptr || Input.Body == nullptr)
+			{
+				OutFailure = TEXT("A cached function has no declaration or body");
+				return false;
+			}
+			if (Input.Declaration->OwnerKind
+				!= EAngelscriptFunctionOwnerKind::Type)
 			{
 				continue;
 			}
-			if (Input.Declaration == nullptr || Input.Body == nullptr
-				|| Input.Declaration->DeclarationKind
+			if (Input.Declaration->OwnerKey != TypeSchema.TypeKey.Hash)
+			{
+				continue;
+			}
+			if (Input.Declaration->DeclarationKind
 					!= EAngelscriptCacheDeclarationKind::Function
-				|| Input.Declaration->OwnerKind
-					!= EAngelscriptFunctionOwnerKind::Type
-				|| Input.Declaration->OwnerKey != TypeSchema.TypeKey.Hash
 				|| !Input.Declaration->DeclaredType.IsSet())
 			{
 				OutFailure = TEXT("A cached class function has no exact type owner or return declaration");
@@ -945,12 +998,151 @@ namespace AngelscriptCacheRestore_Private
 		return true;
 	}
 
+	static bool CreateGlobalFunctionSkeletons(
+		asCScriptEngine& ScriptEngine,
+		asCModule& Module,
+		const FAngelscriptCacheEngineEnvironmentResolver& Environment,
+		const TConstArrayView<FClassRestoreType> ClassTypes,
+		TArray<FFunctionRestoreInput>& Inputs,
+		FString& OutFailure)
+	{
+		for (FFunctionRestoreInput& Input : Inputs)
+		{
+			if (Input.Declaration == nullptr || Input.Body == nullptr)
+			{
+				OutFailure = TEXT("A cached global function has no declaration or body");
+				return false;
+			}
+			if (Input.Declaration->OwnerKind
+				!= EAngelscriptFunctionOwnerKind::Module)
+			{
+				continue;
+			}
+			if (Input.Declaration->DeclarationKind
+					!= EAngelscriptCacheDeclarationKind::Function
+				|| !Input.Declaration->DeclaredType.IsSet()
+				|| Input.Body->InvocationKind
+					!= EAngelscriptCachedFunctionInvocationKind::GlobalFunction)
+			{
+				OutFailure = TEXT(
+					"A cached global function has no exact return or invocation declaration");
+				return false;
+			}
+
+			asCDataType ReturnType;
+			if (!TryMaterializeDataType(
+				Input.Declaration->DeclaredType.GetValue(), ClassTypes,
+				Environment, ReturnType))
+			{
+				OutFailure = FString::Printf(
+					TEXT("Global function %s has no materializable return type"),
+					*Input.Declaration->CanonicalDeclaration);
+				return false;
+			}
+
+			const int32 ParameterCount =
+				Input.Declaration->OrderedParameters.Num();
+			asCArray<asCDataType> Parameters;
+			asCArray<asCString> ParameterNames;
+			asCArray<asETypeModifiers> InOutFlags;
+			asCArray<asCString*> DefaultArgs;
+			Parameters.SetLength(ParameterCount);
+			ParameterNames.SetLength(ParameterCount);
+			InOutFlags.SetLength(ParameterCount);
+			DefaultArgs.SetLength(ParameterCount);
+			for (int32 ParameterIndex = 0;
+				ParameterIndex < ParameterCount; ++ParameterIndex)
+			{
+				const FAngelscriptCachedParameter& Parameter =
+					Input.Declaration->OrderedParameters[ParameterIndex];
+				DefaultArgs[ParameterIndex] = nullptr;
+				if (Parameter.Ordinal != static_cast<uint32>(ParameterIndex)
+					|| !TryMaterializeDataType(
+						Parameter.Type, ClassTypes, Environment,
+						Parameters[ParameterIndex]))
+				{
+					OutFailure = FString::Printf(
+						TEXT("Global function %s parameter %d is not materializable"),
+						*Input.Declaration->CanonicalDeclaration, ParameterIndex);
+					return false;
+				}
+				ParameterNames[ParameterIndex] =
+					TCHAR_TO_UTF8(*Parameter.CanonicalName);
+				switch (Parameter.Passing)
+				{
+				case EAngelscriptCachedParameterPassing::Value:
+					InOutFlags[ParameterIndex] = asTM_NONE;
+					break;
+				case EAngelscriptCachedParameterPassing::InReference:
+					InOutFlags[ParameterIndex] = asTM_INREF;
+					break;
+				case EAngelscriptCachedParameterPassing::OutReference:
+					InOutFlags[ParameterIndex] = asTM_OUTREF;
+					break;
+				case EAngelscriptCachedParameterPassing::InOutReference:
+					InOutFlags[ParameterIndex] = asTM_INOUTREF;
+					break;
+				default:
+					OutFailure = TEXT(
+						"A cached global function parameter has an invalid passing mode");
+					return false;
+				}
+				if (Parameter.CanonicalDefaultExpression.IsSet())
+				{
+					DefaultArgs[ParameterIndex] = asNEW(asCString)(
+						TCHAR_TO_UTF8(
+							*Parameter.CanonicalDefaultExpression.GetValue()));
+				}
+			}
+
+			const int FunctionId = ScriptEngine.GetNextScriptFunctionId();
+			const int AddResult = Module.AddScriptFunction(
+				0, 0, FunctionId,
+				TCHAR_TO_UTF8(*Input.Declaration->CanonicalName),
+				ReturnType, Parameters, ParameterNames, InOutFlags, DefaultArgs,
+				false, nullptr, true,
+				BuildFunctionTraits(*Input.Declaration),
+				ScriptEngine.AddNameSpace(
+					TCHAR_TO_UTF8(*Input.Declaration->CanonicalNamespace)));
+			if (AddResult < 0)
+			{
+				OutFailure = FString::Printf(
+					TEXT("The target VM rejected global function skeleton %s"),
+					*Input.Declaration->CanonicalDeclaration);
+				return false;
+			}
+			Input.LiveFunction = ScriptEngine.GetScriptFunction(FunctionId);
+			if (Input.LiveFunction == nullptr)
+			{
+				OutFailure = TEXT(
+					"The target VM lost a newly registered global function skeleton");
+				return false;
+			}
+			Input.LiveFunction->artifactInvocationKind =
+				asBUILD_ARTIFACT_INVOCATION_GLOBAL_FUNCTION;
+			Input.LiveFunction->artifactOwnerType = nullptr;
+			Input.LiveFunction->CalculateParameterOffsets();
+			if (!Input.Declaration->CanonicalDeclaration.Equals(
+				UTF8_TO_TCHAR(Input.LiveFunction->GetDeclaration(
+					false, false, false)), ESearchCase::CaseSensitive))
+			{
+				OutFailure = FString::Printf(
+					TEXT("Global function skeleton declaration mismatch: expected %s, current %s"),
+					*Input.Declaration->CanonicalDeclaration,
+					UTF8_TO_TCHAR(Input.LiveFunction->GetDeclaration(
+						false, false, false)));
+				return false;
+			}
+		}
+		return true;
+	}
+
 	static asCScriptFunction* ResolveBehaviorFunction(
-		const FAngelscriptCacheStableReference& Reference,
+		const FAngelscriptArtifactReference& Reference,
 		const TConstArrayView<FFunctionRestoreInput> Inputs,
 		const FAngelscriptCacheEngineEnvironmentResolver& Environment)
 	{
-		if (Reference.Kind == EAngelscriptCacheReferenceKind::ScriptFunction)
+		if (Reference.Kind == EAngelscriptArtifactReferenceKind::ScriptFunction)
 		{
 			const FFunctionRestoreInput* Input = FindFunctionInput(
 				Inputs, Reference.StableKey);
@@ -959,7 +1151,7 @@ namespace AngelscriptCacheRestore_Private
 				&& Input->Declaration->SignatureHash == Reference.ExpectedAbi
 					? Input->LiveFunction : nullptr;
 		}
-		if (Reference.Kind == EAngelscriptCacheReferenceKind::EnvironmentSymbol)
+		if (Reference.Kind == EAngelscriptArtifactReferenceKind::EnvironmentSymbol)
 		{
 			return Environment.ResolveFunctionReference(Reference);
 		}
@@ -1263,12 +1455,20 @@ namespace AngelscriptCacheRestore_Private
 		const FAngelscriptCachedModuleInterface& ModuleInterface,
 		const FAngelscriptCachedTypeSchema& TypeSchema,
 		const FAngelscriptCachedTypeSchema* BaseSchema,
-		asCObjectType& LiveType,
+		asCObjectType* LiveType,
 		UClass& CodeRoot,
 		const TArray<FFunctionRestoreInput>& Inputs,
 		TSharedRef<FAngelscriptClassDesc>& OutClass,
 		FString& OutFailure)
 	{
+		const bool bStaticsClass = IsStaticsClassSchema(TypeSchema);
+		if ((!bStaticsClass && LiveType == nullptr)
+			|| (bStaticsClass && (LiveType != nullptr || BaseSchema != nullptr)))
+		{
+			OutFailure = TEXT(
+				"A cached class descriptor has an invalid VM-type/statics shape");
+			return false;
+		}
 		TSharedRef<FAngelscriptClassDesc> Class =
 			MakeShared<FAngelscriptClassDesc>();
 		Class->ClassName = TypeSchema.CanonicalName;
@@ -1276,7 +1476,7 @@ namespace AngelscriptCacheRestore_Private
 			? BaseSchema->CanonicalName
 			: FAngelscriptType::GetBoundClassName(&CodeRoot);
 		Class->CodeSuperClass = &CodeRoot;
-		Class->ScriptType = &LiveType;
+		Class->ScriptType = LiveType;
 		if (!TypeSchema.CanonicalNamespace.IsEmpty())
 		{
 			Class->Namespace = TypeSchema.CanonicalNamespace;
@@ -1323,14 +1523,15 @@ namespace AngelscriptCacheRestore_Private
 			if (!HasFlag(CachedProperty.PropertySemanticFlags,
 				EAngelscriptCachedPropertySemanticFlags::HasUnrealProperty)
 				|| Index < 0
+				|| LiveType == nullptr
 				|| Index >= static_cast<int32>(
-					LiveType.localProperties.GetLength()))
+					LiveType->localProperties.GetLength()))
 			{
 				continue;
 			}
 			const FAngelscriptCachedDeclaration* Declaration = FindDeclaration(
 				ModuleInterface, CachedProperty.PropertyKey.Hash);
-			asCObjectProperty* LiveProperty = LiveType.localProperties[Index];
+			asCObjectProperty* LiveProperty = LiveType->localProperties[Index];
 			if (Declaration == nullptr || LiveProperty == nullptr
 				|| Declaration->DeclarationKind
 					!= EAngelscriptCacheDeclarationKind::Property)
@@ -1501,15 +1702,260 @@ namespace AngelscriptCacheRestore_Private
 		StagingModule = nullptr;
 	}
 
+	struct FPreparedExternalFunction final
+	{
+		const asCScriptFunction* Function = nullptr;
+		FAngelscriptArtifactReference Reference;
+		FAngelscriptHash256 ExecutionContent;
+	};
+
 	struct FPreparedModule final
 	{
 		FAngelscriptStableModuleKey ModuleKey;
 		TSharedPtr<FAngelscriptModuleDesc> ModuleDesc;
 		asCModule* StagingModule = nullptr;
-		TArray<FAngelscriptCacheLiveFunctionRoute> CandidateRoutes;
+		TArray<FAngelscriptFunctionRoute> CandidateRoutes;
+		TArray<FPreparedExternalFunction> ExternalFunctions;
 		uint32 RestoredTypeCount = 0;
 		uint32 RestoredFunctionCount = 0;
 	};
+
+	// Combines immutable application registrations with script functions that
+	// have already been reconstructed earlier in this restore transaction.
+	// Nothing from this authority is published before the complete batch commits.
+	class FPreparedFunctionAuthority final
+		: public IAngelscriptCacheCurrentSymbolResolver
+		, public IAngelscriptFunctionArtifactExternalFunctionResolver
+	{
+	public:
+		FPreparedFunctionAuthority(
+			const FAngelscriptCacheEngineEnvironmentResolver& InEnvironment,
+			const TConstArrayView<FPreparedModule> InPreparedModules)
+			: Environment(InEnvironment)
+			, PreparedModules(InPreparedModules)
+		{
+		}
+
+		virtual TOptional<FAngelscriptCacheCurrentSymbol> Resolve(
+			const EAngelscriptArtifactReferenceKind ReferenceKind,
+			const FAngelscriptHash256& StableKey) const override
+		{
+			if (ReferenceKind
+				== EAngelscriptArtifactReferenceKind::ScriptFunction)
+			{
+				const FPreparedExternalFunction* Match = nullptr;
+				for (const FPreparedModule& Module : PreparedModules)
+				{
+					for (const FPreparedExternalFunction& Function
+						: Module.ExternalFunctions)
+					{
+						if (Function.Reference.StableKey != StableKey)
+						{
+							continue;
+						}
+						if (Match != nullptr
+							&& (Match->Reference != Function.Reference
+								|| Match->ExecutionContent
+									!= Function.ExecutionContent))
+						{
+							return {};
+						}
+						Match = &Function;
+					}
+				}
+				if (Match != nullptr)
+				{
+					return FAngelscriptCacheCurrentSymbol{
+						Match->Reference.ExpectedAbi,
+						Match->ExecutionContent,
+						{}};
+				}
+			}
+			return Environment.Resolve(ReferenceKind, StableKey);
+		}
+
+		virtual bool TryResolveExternalScriptFunction(
+			const asCScriptFunction& Function,
+			FAngelscriptArtifactReference& OutReference) const override
+		{
+			OutReference = {};
+			const FPreparedExternalFunction* Match = nullptr;
+			for (const FPreparedModule& Module : PreparedModules)
+			{
+				for (const FPreparedExternalFunction& Candidate
+					: Module.ExternalFunctions)
+				{
+					if (Candidate.Function != &Function)
+					{
+						continue;
+					}
+					if (Match != nullptr
+						&& Match->Reference != Candidate.Reference)
+					{
+						return false;
+					}
+					Match = &Candidate;
+				}
+			}
+			if (Match == nullptr
+				|| Match->Reference.Kind
+					!= EAngelscriptArtifactReferenceKind::ScriptFunction
+				|| Match->Reference.StableKey.IsZero()
+				|| Match->Reference.ExpectedAbi.IsZero())
+			{
+				return false;
+			}
+			OutReference = Match->Reference;
+			return true;
+		}
+
+	private:
+		const FAngelscriptCacheEngineEnvironmentResolver& Environment;
+		TConstArrayView<FPreparedModule> PreparedModules;
+	};
+
+	static bool BuildDependencyOrderedModuleKeys(
+		const FAngelscriptValidatedGeneration& Generation,
+		const TConstArrayView<FAngelscriptStableModuleKey> SelectedKeys,
+		TArray<FAngelscriptStableModuleKey>& OutOrderedKeys,
+		FString& OutFailure)
+	{
+		struct FFunctionOwner
+		{
+			FAngelscriptHash256 FunctionKey;
+			FAngelscriptStableModuleKey ModuleKey;
+		};
+		struct FModuleOrderNode
+		{
+			FAngelscriptStableModuleKey ModuleKey;
+			TArray<int32> ProviderIndices;
+			bool bEmitted = false;
+		};
+
+		OutOrderedKeys.Reset();
+		OutFailure.Reset();
+		TArray<FModuleOrderNode> Nodes;
+		Nodes.Reserve(SelectedKeys.Num());
+		for (const FAngelscriptStableModuleKey& Key : SelectedKeys)
+		{
+			Nodes.Add({Key, {}, false});
+		}
+		const auto FindSelectedModuleIndex = [&Nodes](
+			const FAngelscriptStableModuleKey& Key) -> int32
+		{
+			for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+			{
+				if (Nodes[Index].ModuleKey == Key)
+				{
+					return Index;
+				}
+			}
+			return static_cast<int32>(INDEX_NONE);
+		};
+
+		TArray<FFunctionOwner> Owners;
+		for (const FAngelscriptDecodedCacheRecordHandle& Record
+			: Generation.ReachableRecords)
+		{
+			const FAngelscriptCachedFunctionBody* Body =
+				Record->TryGetFunctionBody();
+			if (Body == nullptr)
+			{
+				continue;
+			}
+			const FFunctionOwner* Existing = Owners.FindByPredicate(
+				[Body](const FFunctionOwner& Owner)
+				{
+					return Owner.FunctionKey
+						== Body->Identity.FunctionKey.Hash;
+				});
+			if (Existing != nullptr && Existing->ModuleKey != Body->ModuleKey)
+			{
+				OutFailure = TEXT(
+					"A stable function key has more than one module owner");
+				return false;
+			}
+			if (Existing == nullptr)
+			{
+				Owners.Add({Body->Identity.FunctionKey.Hash, Body->ModuleKey});
+			}
+		}
+
+		for (const FAngelscriptDecodedCacheRecordHandle& Record
+			: Generation.ReachableRecords)
+		{
+			const FAngelscriptCachedFunctionBody* Body =
+				Record->TryGetFunctionBody();
+			const int32 ConsumerIndex = Body != nullptr
+				? FindSelectedModuleIndex(Body->ModuleKey) : INDEX_NONE;
+			if (Body == nullptr || ConsumerIndex == INDEX_NONE)
+			{
+				continue;
+			}
+			for (const FAngelscriptCacheSemanticDependency& Dependency
+				: Body->ActualDependencies)
+			{
+				if (Dependency.Target.Kind
+					!= EAngelscriptArtifactReferenceKind::ScriptFunction)
+				{
+					continue;
+				}
+				const FFunctionOwner* Provider = Owners.FindByPredicate(
+					[&Dependency](const FFunctionOwner& Owner)
+					{
+						return Owner.FunctionKey
+							== Dependency.Target.StableKey;
+					});
+				if (Provider == nullptr || Provider->ModuleKey == Body->ModuleKey)
+				{
+					continue;
+				}
+				const int32 ProviderIndex =
+					FindSelectedModuleIndex(Provider->ModuleKey);
+				if (ProviderIndex == INDEX_NONE)
+				{
+					OutFailure = TEXT(
+						"A selected module requires an unselected script-function provider");
+					return false;
+				}
+				Nodes[ConsumerIndex].ProviderIndices.AddUnique(ProviderIndex);
+			}
+		}
+
+		OutOrderedKeys.Reserve(Nodes.Num());
+		while (OutOrderedKeys.Num() < Nodes.Num())
+		{
+			int32 ReadyIndex = INDEX_NONE;
+			for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+			{
+				if (Nodes[Index].bEmitted)
+				{
+					continue;
+				}
+				bool bProvidersReady = true;
+				for (const int32 ProviderIndex
+					: Nodes[Index].ProviderIndices)
+				{
+					bProvidersReady &= Nodes[ProviderIndex].bEmitted;
+				}
+				if (bProvidersReady)
+				{
+					ReadyIndex = Index;
+					break;
+				}
+			}
+			if (ReadyIndex == INDEX_NONE)
+			{
+				OutFailure = TEXT(
+					"Cross-module function dependencies contain a restore cycle");
+				OutOrderedKeys.Reset();
+				return false;
+			}
+			Nodes[ReadyIndex].bEmitted = true;
+			OutOrderedKeys.Add(Nodes[ReadyIndex].ModuleKey);
+		}
+		return true;
+	}
 
 	static void DiscardPreparedModule(
 		asCScriptEngine& ScriptEngine,
@@ -1521,6 +1967,7 @@ namespace AngelscriptCacheRestore_Private
 			Prepared.ModuleDesc->ScriptModule = nullptr;
 		}
 		Prepared.CandidateRoutes.Reset();
+		Prepared.ExternalFunctions.Reset();
 	}
 
 	static void DiscardPreparedModules(
@@ -1545,6 +1992,8 @@ public:
 		const TConstArrayView<FAngelscriptCacheCurrentSourceProjection>
 			CurrentSources,
 		const FAngelscriptCacheReadLimits& Limits,
+		const TConstArrayView<AngelscriptCacheRestore_Private::FPreparedModule>
+			PreparedDependencies,
 		IAngelscriptCacheRestoreFaultInjector* FaultInjector,
 		const uint32 ModuleOrdinal,
 		AngelscriptCacheRestore_Private::FPreparedModule& OutPrepared)
@@ -1612,10 +2061,12 @@ public:
 
 		asCScriptEngine& ScriptEngine = *TargetEngine.Engine;
 		asCModule ValidationModule("__CacheV2Validation", &ScriptEngine);
-		FAngelscriptCacheEngineEnvironmentResolver CurrentSymbols(ScriptEngine);
+		FAngelscriptCacheEngineEnvironmentResolver Environment(ScriptEngine);
+		FPreparedFunctionAuthority CurrentSymbols(
+			Environment, PreparedDependencies);
 		FAngelscriptCacheEngineLayoutResolver CurrentLayouts(ScriptEngine);
 		FAngelscriptFunctionArtifactCodec ValidationOpaque(
-			ValidationModule, ScriptEngine);
+			ValidationModule, ScriptEngine, &CurrentSymbols);
 		FAngelscriptCacheModuleGraphValidationContext GraphContext;
 		GraphContext.SelectedProfile = Generation.Manifest.Profile;
 		GraphContext.SelectedSourceSnapshot =
@@ -1752,7 +2203,7 @@ public:
 			{
 				const FAngelscriptCachedTypeSchema* Schema =
 					PendingClassSchemas[PendingIndex];
-				const FAngelscriptCacheStableReference* BaseReference = nullptr;
+				const FAngelscriptArtifactReference* BaseReference = nullptr;
 				for (const FAngelscriptCachedTypeRelation& Relation : Schema->Relations)
 				{
 					if (Relation.RelationKind
@@ -1833,9 +2284,9 @@ public:
 					TConstArrayView<FClassRestoreType>(ClassTypes),
 					FunctionDeclaration.OwnerKey)
 				: nullptr;
-			const bool bClassFunction = !ClassTypes.IsEmpty();
-			const bool bSupportedDeclaration = bClassFunction
-				? FunctionDeclaration.DeclarationKind
+			const bool bHasClassGraph = !ClassTypes.IsEmpty();
+			const bool bSupportedClassFunction = bHasClassGraph
+				&& FunctionDeclaration.DeclarationKind
 						== EAngelscriptCacheDeclarationKind::Function
 					&& FunctionDeclaration.OwnerKind
 						== EAngelscriptFunctionOwnerKind::Type
@@ -1845,10 +2296,16 @@ public:
 						!= EAngelscriptCachedFunctionInvocationKind::GlobalFunction
 					&& FunctionBody->InvocationKind
 						!= EAngelscriptCachedFunctionInvocationKind::Invalid
-				: IsSupportedPrimitiveGlobalDeclaration(FunctionDeclaration)
-					&& FunctionBody != nullptr
-					&& FunctionBody->InvocationKind
-						== EAngelscriptCachedFunctionInvocationKind::GlobalFunction;
+					;
+			const bool bSupportedGlobalFunction = FunctionBody != nullptr
+				&& FunctionBody->InvocationKind
+					== EAngelscriptCachedFunctionInvocationKind::GlobalFunction
+				&& (bHasClassGraph
+					? IsSupportedClassGraphGlobalDeclaration(
+						FunctionDeclaration, ModuleKey)
+					: IsSupportedPrimitiveGlobalDeclaration(FunctionDeclaration));
+			const bool bSupportedDeclaration = bSupportedClassFunction
+				|| bSupportedGlobalFunction;
 			if (!bSupportedDeclaration || DebugSidecar == nullptr
 				|| FunctionBody->VmExecutionCodecVersion
 					!= FAngelscriptFunctionArtifactCodec::ExecutionCodecVersion
@@ -1872,8 +2329,8 @@ public:
 						DebugSidecar != nullptr
 							? DebugSidecar->VmDebugCodecVersion : 0u));
 			}
-			FAngelscriptCacheLiveFunctionRoute ExistingRoute;
-			if (TargetEngine.ResolveCacheFunctionRoute(
+			FAngelscriptFunctionRoute ExistingRoute;
+			if (TargetEngine.ResolveFunctionRoute(
 				FunctionBody->Identity.FunctionKey, ExistingRoute))
 			{
 				return Failure(
@@ -1949,6 +2406,7 @@ public:
 				TEXT("The target VM could not create a staging module"));
 		}
 		StagingModule->baseModuleName = TCHAR_TO_UTF8(*ModuleDesc->ModuleName);
+		FString MaterializationFailure;
 
 		if (EnumTypeSchema != nullptr)
 		{
@@ -2000,9 +2458,27 @@ public:
 		}
 		else if (!ClassTypes.IsEmpty())
 		{
-			FString MaterializationFailure;
 			for (FClassRestoreType& Type : ClassTypes)
 			{
+				if (Type.Schema != nullptr
+					&& IsStaticsClassSchema(*Type.Schema))
+				{
+					asCObjectType* ShadowType = nullptr;
+					if (Type.BaseSchema != nullptr
+						|| !ResolveCodeRoot(
+							ScriptEngine, *Type.Schema, Environment,
+							Type.CodeRoot, ShadowType, MaterializationFailure)
+						|| Type.CodeRoot == nullptr || ShadowType != nullptr)
+					{
+						DiscardStagingModule(ScriptEngine, StagingModule);
+						return Failure(EAngelscriptCacheRestoreError::ActivationFailed,
+							EAngelscriptCacheRestoreStage::MaterializeTypes,
+							MaterializationFailure.IsEmpty()
+								? FString(TEXT("A cached StaticsClass code root could not be resolved"))
+								: MoveTemp(MaterializationFailure));
+					}
+					continue;
+				}
 				const FClassRestoreType* BaseType = Type.BaseSchema != nullptr
 					? FindClassRestoreType(
 						TConstArrayView<FClassRestoreType>(ClassTypes),
@@ -2013,7 +2489,7 @@ public:
 				if (Type.Schema == nullptr
 					|| !MaterializeClassType(
 						ScriptEngine, *StagingModule, *Type.Schema,
-						CurrentSymbols,
+						Environment,
 						BaseType != nullptr ? BaseType->LiveType : nullptr,
 						TArrayView<FClassRestoreType>(ClassTypes),
 						LiveType, CodeRoot, MaterializationFailure)
@@ -2029,11 +2505,24 @@ public:
 			}
 			for (FClassRestoreType& Type : ClassTypes)
 			{
+				if (Type.Schema != nullptr
+					&& IsStaticsClassSchema(*Type.Schema))
+				{
+					if (Type.LiveType != nullptr
+						|| !Type.Schema->OrderedProperties.IsEmpty())
+					{
+						DiscardStagingModule(ScriptEngine, StagingModule);
+						return Failure(EAngelscriptCacheRestoreError::ActivationFailed,
+							EAngelscriptCacheRestoreStage::MaterializeTypes,
+							TEXT("A cached StaticsClass unexpectedly owns VM properties"));
+					}
+					continue;
+				}
 				if (Type.Schema == nullptr || Type.LiveType == nullptr
 					|| !MaterializeClassProperties(
 						*Type.Schema, *Type.LiveType,
 						TConstArrayView<FClassRestoreType>(ClassTypes),
-						CurrentSymbols, MaterializationFailure))
+						Environment, MaterializationFailure))
 				{
 					DiscardStagingModule(ScriptEngine, StagingModule);
 					return Failure(EAngelscriptCacheRestoreError::ActivationFailed,
@@ -2045,10 +2534,15 @@ public:
 			}
 			for (FClassRestoreType& Type : ClassTypes)
 			{
+				if (Type.Schema != nullptr
+					&& IsStaticsClassSchema(*Type.Schema))
+				{
+					continue;
+				}
 				if (Type.Schema == nullptr || Type.LiveType == nullptr
 					|| !CreateClassFunctionSkeletons(
 						ScriptEngine, *StagingModule, *Type.Schema,
-						CurrentSymbols, *Type.LiveType,
+						Environment, *Type.LiveType,
 						TConstArrayView<FClassRestoreType>(ClassTypes),
 						FunctionInputs, MaterializationFailure))
 				{
@@ -2058,23 +2552,36 @@ public:
 						MoveTemp(MaterializationFailure));
 				}
 			}
+			if (!CreateGlobalFunctionSkeletons(
+				ScriptEngine, *StagingModule, Environment,
+				TConstArrayView<FClassRestoreType>(ClassTypes),
+				FunctionInputs, MaterializationFailure))
+			{
+				DiscardStagingModule(ScriptEngine, StagingModule);
+				return Failure(EAngelscriptCacheRestoreError::ActivationFailed,
+					EAngelscriptCacheRestoreStage::MaterializeTypes,
+					MoveTemp(MaterializationFailure));
+			}
 			for (FClassRestoreType& Type : ClassTypes)
 			{
 				TSharedRef<FAngelscriptClassDesc> ClassDesc =
 					MakeShared<FAngelscriptClassDesc>();
-				if (Type.Schema == nullptr || Type.LiveType == nullptr
-					|| Type.CodeRoot == nullptr
-					|| !WireClassMethodsAndBehaviors(
+				const bool bStaticsClass = Type.Schema != nullptr
+					&& IsStaticsClassSchema(*Type.Schema);
+				if (Type.Schema == nullptr || Type.CodeRoot == nullptr
+					|| (!bStaticsClass && Type.LiveType == nullptr)
+					|| (bStaticsClass && Type.LiveType != nullptr)
+					|| (!bStaticsClass && !WireClassMethodsAndBehaviors(
 						*Type.LiveType, *Type.Schema,
 						TConstArrayView<FClassRestoreType>(ClassTypes),
-						FunctionInputs, CurrentSymbols,
-						MaterializationFailure)
-					|| !AllocateStaticClassGlobal(
+						FunctionInputs, Environment,
+						MaterializationFailure))
+					|| (!bStaticsClass && !AllocateStaticClassGlobal(
 						ScriptEngine, *StagingModule, *Type.Schema,
-						MaterializationFailure)
+						MaterializationFailure))
 					|| !BuildClassDescriptor(
 						*ModuleInterface, *Type.Schema, Type.BaseSchema,
-						*Type.LiveType, *Type.CodeRoot, FunctionInputs,
+						Type.LiveType, *Type.CodeRoot, FunctionInputs,
 						ClassDesc, MaterializationFailure))
 				{
 					DiscardStagingModule(ScriptEngine, StagingModule);
@@ -2090,12 +2597,24 @@ public:
 				ModuleDesc->Classes.Add(ClassDesc);
 			}
 		}
+		if (ClassTypes.IsEmpty() && !CreateGlobalFunctionSkeletons(
+			ScriptEngine, *StagingModule, Environment,
+			TConstArrayView<FClassRestoreType>(ClassTypes),
+			FunctionInputs, MaterializationFailure))
+		{
+			DiscardStagingModule(ScriptEngine, StagingModule);
+			return Failure(EAngelscriptCacheRestoreError::ActivationFailed,
+				EAngelscriptCacheRestoreStage::MaterializeTypes,
+				MoveTemp(MaterializationFailure));
+		}
 		ModuleDesc->ScriptModule = StagingModule;
 
 		FAngelscriptFunctionArtifactCodec RestoreCodec(
-			*StagingModule, ScriptEngine);
-		TArray<FAngelscriptCacheLiveFunctionRoute> CandidateRoutes;
+			*StagingModule, ScriptEngine, &CurrentSymbols);
+		TArray<FAngelscriptFunctionRoute> CandidateRoutes;
+		TArray<FPreparedExternalFunction> CandidateExternalFunctions;
 		CandidateRoutes.Reserve(FunctionInputs.Num());
+		CandidateExternalFunctions.Reserve(FunctionInputs.Num());
 		for (FFunctionRestoreInput& Input : FunctionInputs)
 		{
 			asCScriptFunction* LiveFunction = nullptr;
@@ -2162,12 +2681,13 @@ public:
 					EAngelscriptCacheRestoreStage::RestoreFunctions,
 					TEXT("An opaque function signature does not match its stable declaration"));
 			}
-			if (Input.LiveFunction == nullptr)
+			if (Input.Declaration->OwnerKind
+				== EAngelscriptFunctionOwnerKind::Module)
 			{
 				ScriptEngine.allScriptGlobalFunctions.Add(LiveFunction);
 			}
 
-			FAngelscriptCacheLiveFunctionRoute& CandidateRoute =
+			FAngelscriptFunctionRoute& CandidateRoute =
 				CandidateRoutes.AddDefaulted_GetRef();
 			CandidateRoute.ModuleKey = ModuleKey;
 			CandidateRoute.Identity = Input.Body->Identity;
@@ -2176,10 +2696,21 @@ public:
 			CandidateRoute.Function = LiveFunction;
 			CandidateRoute.NumericFunctionId = LiveFunction->GetId();
 			CandidateRoute.SelectedExecutionRoute =
-				LiveFunction->jitFunction != nullptr
-					? EAngelscriptCacheFunctionExecutionRoute::Native
-					: EAngelscriptCacheFunctionExecutionRoute::Vm;
+				LiveFunction->GetJITBinding().VMEntry != nullptr
+					? EAngelscriptFunctionExecutionRoute::Native
+					: EAngelscriptFunctionExecutionRoute::Vm;
 			CandidateRoute.bHasVerifiedArtifactIdentity = true;
+			FPreparedExternalFunction& ExternalFunction =
+				CandidateExternalFunctions.AddDefaulted_GetRef();
+			ExternalFunction.Function = LiveFunction;
+			ExternalFunction.Reference.Kind =
+				EAngelscriptArtifactReferenceKind::ScriptFunction;
+			ExternalFunction.Reference.StableKey =
+				Input.Body->Identity.FunctionKey.Hash;
+			ExternalFunction.Reference.ExpectedAbi =
+				Input.Declaration->SignatureHash;
+			ExternalFunction.ExecutionContent =
+				Input.Body->Identity.Content.Execution;
 			if (CandidateRoute.NumericFunctionId < 0
 				|| Input.Ordinal->FunctionKey
 					!= CandidateRoute.Identity.FunctionKey)
@@ -2217,11 +2748,11 @@ public:
 				TEXT("Injected restore failure after module preparation"));
 		}
 
-		for (const FAngelscriptCacheLiveFunctionRoute& CandidateRoute
+		for (const FAngelscriptFunctionRoute& CandidateRoute
 			: CandidateRoutes)
 		{
-			FAngelscriptCacheLiveFunctionRoute ConflictingRoute;
-			if (TargetEngine.ResolveCacheFunctionRoute(
+			FAngelscriptFunctionRoute ConflictingRoute;
+			if (TargetEngine.ResolveFunctionRoute(
 				CandidateRoute.Identity.FunctionKey, ConflictingRoute))
 			{
 				DiscardStagingModule(ScriptEngine, StagingModule);
@@ -2236,6 +2767,8 @@ public:
 		OutPrepared.ModuleDesc = ModuleDesc;
 		OutPrepared.StagingModule = StagingModule;
 		OutPrepared.CandidateRoutes = MoveTemp(CandidateRoutes);
+		OutPrepared.ExternalFunctions =
+			MoveTemp(CandidateExternalFunctions);
 		OutPrepared.RestoredTypeCount = static_cast<uint32>(ClassTypes.Num())
 			+ (EnumTypeSchema != nullptr ? 1u : 0u);
 		OutPrepared.RestoredFunctionCount =
@@ -2289,17 +2822,29 @@ public:
 		}
 
 		asCScriptEngine& ScriptEngine = *TargetEngine.Engine;
+		TArray<FAngelscriptStableModuleKey> OrderedModuleKeys;
+		FString OrderingFailure;
+		if (!BuildDependencyOrderedModuleKeys(
+			Generation, ModuleKeys, OrderedModuleKeys, OrderingFailure))
+		{
+			return Failure(
+				EAngelscriptCacheRestoreError::UnsupportedRecordShape,
+				EAngelscriptCacheRestoreStage::SelectModule,
+				MoveTemp(OrderingFailure));
+		}
 		TArray<FPreparedModule> PreparedModules;
-		PreparedModules.Reserve(ModuleKeys.Num());
-		for (int32 ModuleIndex = 0; ModuleIndex < ModuleKeys.Num(); ++ModuleIndex)
+		PreparedModules.Reserve(OrderedModuleKeys.Num());
+		for (int32 ModuleIndex = 0;
+			ModuleIndex < OrderedModuleKeys.Num(); ++ModuleIndex)
 		{
 			FPreparedModule Prepared;
 			const FAngelscriptCacheRestoreResult PrepareResult = Prepare(
 				TargetEngine,
 				Generation,
-				ModuleKeys[ModuleIndex],
+				OrderedModuleKeys[ModuleIndex],
 				CurrentSources,
 				Limits,
+				PreparedModules,
 				FaultInjector,
 				static_cast<uint32>(ModuleIndex),
 				Prepared);
@@ -2310,10 +2855,10 @@ public:
 			}
 			for (const FPreparedModule& Existing : PreparedModules)
 			{
-				for (const FAngelscriptCacheLiveFunctionRoute& ExistingRoute
+				for (const FAngelscriptFunctionRoute& ExistingRoute
 					: Existing.CandidateRoutes)
 				{
-					for (const FAngelscriptCacheLiveFunctionRoute& PreparedRoute
+					for (const FAngelscriptFunctionRoute& PreparedRoute
 						: Prepared.CandidateRoutes)
 					{
 						if (ExistingRoute.Identity.FunctionKey
@@ -2335,7 +2880,7 @@ public:
 		}
 
 		TArray<TSharedRef<FAngelscriptModuleDesc>> RestoredModules;
-		TArray<FAngelscriptCacheLiveFunctionRoute> CandidateRoutes;
+		TArray<FAngelscriptFunctionRoute> CandidateRoutes;
 		RestoredModules.Reserve(PreparedModules.Num());
 		int32 CandidateRouteCount = 0;
 		for (const FPreparedModule& Prepared : PreparedModules)
@@ -2386,11 +2931,11 @@ public:
 					EAngelscriptCacheRestoreStage::ActivateModule,
 					TEXT("The target Engine changed before atomic restore commit"));
 			}
-			for (const FAngelscriptCacheLiveFunctionRoute& CandidateRoute
+			for (const FAngelscriptFunctionRoute& CandidateRoute
 				: Prepared.CandidateRoutes)
 			{
-				FAngelscriptCacheLiveFunctionRoute ConflictingRoute;
-				if (TargetEngine.ResolveCacheFunctionRoute(
+				FAngelscriptFunctionRoute ConflictingRoute;
+				if (TargetEngine.ResolveFunctionRoute(
 					CandidateRoute.Identity.FunctionKey, ConflictingRoute))
 				{
 					DiscardPreparedModules(
@@ -2506,18 +3051,17 @@ FAngelscriptCacheRestoreResult RestoreAngelscriptCacheModule(
 		FaultInjector);
 }
 
-bool FAngelscriptEngine::ResolveCacheFunctionRoute(
+bool FAngelscriptEngine::ResolveFunctionRoute(
 	const FAngelscriptStableFunctionKey& FunctionKey,
-	FAngelscriptCacheLiveFunctionRoute& OutRoute) const
+	FAngelscriptFunctionRoute& OutRoute) const
 {
 	OutRoute = {};
-	if (!CacheRuntimeState.IsValid()
-		|| !CacheRuntimeState->FunctionRouteSnapshot.IsValid())
+	if (!FunctionRouteState.IsValid() || !FunctionRouteState->Snapshot.IsValid())
 	{
 		return false;
 	}
-	const TArray<FAngelscriptCacheLiveFunctionRoute>& Routes =
-		CacheRuntimeState->FunctionRouteSnapshot->FunctionRoutes;
+	const TArray<FAngelscriptFunctionRoute>& Routes =
+		FunctionRouteState->Snapshot->FunctionRoutes;
 	int32 Lower = 0;
 	int32 Upper = Routes.Num();
 	while (Lower < Upper)
@@ -2536,7 +3080,7 @@ bool FAngelscriptEngine::ResolveCacheFunctionRoute(
 	{
 		return false;
 	}
-	const FAngelscriptCacheLiveFunctionRoute& Route = Routes[Lower];
+	const FAngelscriptFunctionRoute& Route = Routes[Lower];
 	if (Route.Identity.FunctionKey != FunctionKey
 		|| Route.Function == nullptr
 		|| Route.Function->GetEngine() != Engine
@@ -2549,12 +3093,57 @@ bool FAngelscriptEngine::ResolveCacheFunctionRoute(
 	return true;
 }
 
-TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+bool FAngelscriptEngine::TryResolveStableFunctionKey(
+	const asIScriptFunction* Function,
+	FAngelscriptStableFunctionKey& OutFunctionKey)
+{
+	OutFunctionKey = {};
+	if (Function == nullptr
+		|| Function->GetEngine() != Engine
+		|| Function->GetModule() == nullptr)
+	{
+		return false;
+	}
+
+	if (FunctionRouteState.IsValid()
+		&& FunctionRouteState->Snapshot.IsValid())
+	{
+		const FAngelscriptFunctionRoute* const Existing =
+			FunctionRouteState->Snapshot->FunctionRoutes.FindByPredicate(
+				[Function](const FAngelscriptFunctionRoute& Route)
+				{
+					return Route.Function == Function;
+				});
+		if (Existing != nullptr
+			&& !Existing->Identity.FunctionKey.Hash.IsZero())
+		{
+			OutFunctionKey = Existing->Identity.FunctionKey;
+			return true;
+		}
+	}
+
+	TSharedPtr<FAngelscriptModuleDesc> Module = GetModule(
+		Function->GetModule());
+	if (!Module.IsValid())
+	{
+		return false;
+	}
+
+	FAngelscriptStableModuleKey ModuleKey;
+	return FAngelscriptCacheStableSymbolIdentity::TryBuildModuleKey(
+			*Module, ModuleKey)
+		&& FAngelscriptCacheStableSymbolIdentity::TryBuildFunctionKey(
+			ModuleKey,
+			*static_cast<const asCScriptFunction*>(Function),
+			OutFunctionKey);
+}
+
+TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 	ESPMode::ThreadSafe> FAngelscriptEngine::GetFunctionRouteSnapshot() const
 {
-	return CacheRuntimeState.IsValid()
-		? CacheRuntimeState->FunctionRouteSnapshot
-		: TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+	return FunctionRouteState.IsValid()
+		? FunctionRouteState->Snapshot
+		: TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe>();
 }
 
@@ -2585,22 +3174,22 @@ bool FAngelscriptEngine::RefreshFunctionRouteSnapshotAfterStaticJITChange(
 }
 
 void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
-	const TConstArrayView<FAngelscriptCacheLiveFunctionRoute>
+	const TConstArrayView<FAngelscriptFunctionRoute>
 		VerifiedArtifactRoutes,
 	const TConstArrayView<FAngelscriptFunctionArtifactIdentity>
 		ValidatedArtifactIdentities,
 	const TConstArrayView<asIScriptModule*> RebuiltModules,
 	const TConstArrayView<asIScriptModule*> ArtifactInvalidatedModules)
 {
-	if (!CacheRuntimeState.IsValid())
+	if (!FunctionRouteState.IsValid())
 	{
-		CacheRuntimeState = MakeUnique<FAngelscriptCacheRuntimeState>();
+		FunctionRouteState = MakeUnique<FAngelscriptFunctionRouteState>();
 	}
 
-	TArray<FAngelscriptCacheLiveFunctionRoute> CandidateRoutes;
-	const TSharedPtr<const FAngelscriptCacheFunctionRouteSnapshot,
+	TArray<FAngelscriptFunctionRoute> CandidateRoutes;
+	const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 		ESPMode::ThreadSafe> PreviousSnapshot =
-		CacheRuntimeState->FunctionRouteSnapshot;
+		FunctionRouteState->Snapshot;
 	const auto ContainsModule = [](
 		const TConstArrayView<asIScriptModule*> Modules,
 		const asIScriptModule* Candidate)
@@ -2632,7 +3221,7 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 		}
 
 		FAngelscriptStableModuleKey ModuleKey;
-		for (const FAngelscriptCacheLiveFunctionRoute& Verified
+		for (const FAngelscriptFunctionRoute& Verified
 			: VerifiedArtifactRoutes)
 		{
 			if (Verified.Function != nullptr
@@ -2673,23 +3262,27 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 			// A graph-validated restored route is already the identity authority for
 			// this exact current function. Reuse it without formatting live AS type
 			// metadata, which may not be enumerable during reconstruction.
-			const FAngelscriptCacheLiveFunctionRoute* VerifiedByFunction =
+			const FAngelscriptFunctionRoute* VerifiedByFunction =
 				VerifiedArtifactRoutes.FindByPredicate(
 					[Function](
-						const FAngelscriptCacheLiveFunctionRoute& Entry)
+						const FAngelscriptFunctionRoute& Entry)
 					{
 						return Entry.Function == Function
 							&& !Entry.Identity.FunctionKey.Hash.IsZero();
 					});
 			if (VerifiedByFunction != nullptr)
 			{
-				FAngelscriptCacheLiveFunctionRoute Route = *VerifiedByFunction;
+				FAngelscriptFunctionRoute Route = *VerifiedByFunction;
 				Route.ModuleKey = ModuleKey;
 				Route.Function = Function;
 				Route.NumericFunctionId = Function->GetId();
-				Route.SelectedExecutionRoute = Function->jitFunction != nullptr
-					? EAngelscriptCacheFunctionExecutionRoute::Native
-					: EAngelscriptCacheFunctionExecutionRoute::Vm;
+				Route.SelectedExecutionRoute = Function->GetJITBinding().VMEntry != nullptr
+					? EAngelscriptFunctionExecutionRoute::Native
+					: EAngelscriptFunctionExecutionRoute::Vm;
+				Route.MatchResult = Route.SelectedExecutionRoute
+						== EAngelscriptFunctionExecutionRoute::Native
+					? EAngelscriptArtifactMatchResult::Exact
+					: EAngelscriptArtifactMatchResult::MissingProviderEntry;
 				Route.bHasVerifiedArtifactIdentity = true;
 				CandidateRoutes.Add(MoveTemp(Route));
 				continue;
@@ -2701,24 +3294,28 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 			// remains safe; calling GetDeclaration() here can traverse an already
 			// released old asCTypeInfo. A rebuilt module must derive its current key
 			// from the new compiler output instead of taking this reuse path.
-			const FAngelscriptCacheLiveFunctionRoute* PreviousByFunction =
+			const FAngelscriptFunctionRoute* PreviousByFunction =
 				PreviousSnapshot.IsValid()
 				? PreviousSnapshot->FunctionRoutes.FindByPredicate(
 					[Function](
-						const FAngelscriptCacheLiveFunctionRoute& Entry)
+						const FAngelscriptFunctionRoute& Entry)
 					{
 						return Entry.Function == Function;
 					})
 				: nullptr;
 			if (!bModuleWasRebuilt && PreviousByFunction != nullptr)
 			{
-				FAngelscriptCacheLiveFunctionRoute Route = *PreviousByFunction;
+				FAngelscriptFunctionRoute Route = *PreviousByFunction;
 				Route.ModuleKey = ModuleKey;
 				Route.Function = Function;
 				Route.NumericFunctionId = Function->GetId();
-				Route.SelectedExecutionRoute = Function->jitFunction != nullptr
-					? EAngelscriptCacheFunctionExecutionRoute::Native
-					: EAngelscriptCacheFunctionExecutionRoute::Vm;
+				Route.SelectedExecutionRoute = Function->GetJITBinding().VMEntry != nullptr
+					? EAngelscriptFunctionExecutionRoute::Native
+					: EAngelscriptFunctionExecutionRoute::Vm;
+				Route.MatchResult = Route.SelectedExecutionRoute
+						== EAngelscriptFunctionExecutionRoute::Native
+					? EAngelscriptArtifactMatchResult::Exact
+					: EAngelscriptArtifactMatchResult::MissingProviderEntry;
 				if (bModuleArtifactWasInvalidated)
 				{
 					const FAngelscriptStableFunctionKey StableKey =
@@ -2727,7 +3324,9 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 					Route.Identity.FunctionKey = StableKey;
 					Route.bHasVerifiedArtifactIdentity = false;
 					Route.SelectedExecutionRoute =
-						EAngelscriptCacheFunctionExecutionRoute::Vm;
+						EAngelscriptFunctionExecutionRoute::Vm;
+					Route.MatchResult =
+						EAngelscriptArtifactMatchResult::MissingArtifactIdentity;
 				}
 				CandidateRoutes.Add(MoveTemp(Route));
 				continue;
@@ -2746,20 +3345,24 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 				continue;
 			}
 
-			FAngelscriptCacheLiveFunctionRoute Route;
+			FAngelscriptFunctionRoute Route;
 			Route.ModuleKey = ModuleKey;
 			Route.Identity.FunctionKey = FunctionKey;
 			Route.CanonicalDeclaration = UTF8_TO_TCHAR(
 				Function->GetDeclaration(false, false, false));
 			Route.Function = Function;
 			Route.NumericFunctionId = Function->GetId();
-			Route.SelectedExecutionRoute = Function->jitFunction != nullptr
-				? EAngelscriptCacheFunctionExecutionRoute::Native
-				: EAngelscriptCacheFunctionExecutionRoute::Vm;
+			Route.SelectedExecutionRoute = Function->GetJITBinding().VMEntry != nullptr
+				? EAngelscriptFunctionExecutionRoute::Native
+				: EAngelscriptFunctionExecutionRoute::Vm;
+			Route.MatchResult = Route.SelectedExecutionRoute
+					== EAngelscriptFunctionExecutionRoute::Native
+				? EAngelscriptArtifactMatchResult::Exact
+				: EAngelscriptArtifactMatchResult::MissingProviderEntry;
 
-			const FAngelscriptCacheLiveFunctionRoute* Verified =
+			const FAngelscriptFunctionRoute* Verified =
 				VerifiedArtifactRoutes.FindByPredicate(
-					[&Route](const FAngelscriptCacheLiveFunctionRoute& Entry)
+					[&Route](const FAngelscriptFunctionRoute& Entry)
 					{
 						return Entry.Function == Route.Function
 							&& Entry.Identity.FunctionKey
@@ -2771,13 +3374,13 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 				Route.Identity = Verified->Identity;
 				Route.bHasVerifiedArtifactIdentity = true;
 			}
-			else if (CacheRuntimeState->FunctionRouteSnapshot.IsValid())
+			else if (FunctionRouteState->Snapshot.IsValid())
 			{
-				const FAngelscriptCacheLiveFunctionRoute* Previous =
-					CacheRuntimeState->FunctionRouteSnapshot->FunctionRoutes.
+				const FAngelscriptFunctionRoute* Previous =
+					FunctionRouteState->Snapshot->FunctionRoutes.
 						FindByPredicate(
 							[&Route](
-								const FAngelscriptCacheLiveFunctionRoute& Entry)
+								const FAngelscriptFunctionRoute& Entry)
 							{
 								return Entry.Function == Route.Function
 									&& Entry.Identity.FunctionKey
@@ -2799,7 +3402,7 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 	// identity path. The restore DTO is already the authoritative stable
 	// identity; merge it only after proving that its transient route belongs to
 	// this Engine and to one of the newly active modules.
-	for (const FAngelscriptCacheLiveFunctionRoute& Verified
+	for (const FAngelscriptFunctionRoute& Verified
 		: VerifiedArtifactRoutes)
 	{
 		if (Verified.Function == nullptr
@@ -2812,17 +3415,21 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 			continue;
 		}
 		CandidateRoutes.RemoveAll(
-			[&Verified](const FAngelscriptCacheLiveFunctionRoute& Candidate)
+			[&Verified](const FAngelscriptFunctionRoute& Candidate)
 			{
 				return Candidate.Function == Verified.Function;
 		});
-		FAngelscriptCacheLiveFunctionRoute Route = Verified;
+		FAngelscriptFunctionRoute Route = Verified;
 		Route.NumericFunctionId = Route.Function->GetId();
 		asCScriptFunction* LiveFunction =
 			static_cast<asCScriptFunction*>(Route.Function);
-		Route.SelectedExecutionRoute = LiveFunction->jitFunction != nullptr
-			? EAngelscriptCacheFunctionExecutionRoute::Native
-			: EAngelscriptCacheFunctionExecutionRoute::Vm;
+		Route.SelectedExecutionRoute = LiveFunction->GetJITBinding().VMEntry != nullptr
+			? EAngelscriptFunctionExecutionRoute::Native
+			: EAngelscriptFunctionExecutionRoute::Vm;
+		Route.MatchResult = Route.SelectedExecutionRoute
+				== EAngelscriptFunctionExecutionRoute::Native
+			? EAngelscriptArtifactMatchResult::Exact
+			: EAngelscriptArtifactMatchResult::MissingProviderEntry;
 		Route.bHasVerifiedArtifactIdentity = true;
 		if (Route.CanonicalDeclaration.IsEmpty())
 		{
@@ -2846,10 +3453,10 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 		{
 			continue;
 		}
-		FAngelscriptCacheLiveFunctionRoute* Route =
+		FAngelscriptFunctionRoute* Route =
 			CandidateRoutes.FindByPredicate(
 				[&ValidatedIdentity](
-					FAngelscriptCacheLiveFunctionRoute& Candidate)
+					FAngelscriptFunctionRoute& Candidate)
 				{
 					return Candidate.Identity.FunctionKey
 						== ValidatedIdentity.FunctionKey;
@@ -2862,19 +3469,19 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 	}
 
 	CandidateRoutes.Sort([](
-		const FAngelscriptCacheLiveFunctionRoute& Left,
-		const FAngelscriptCacheLiveFunctionRoute& Right)
+		const FAngelscriptFunctionRoute& Left,
+		const FAngelscriptFunctionRoute& Right)
 	{
 		return Left.Identity.FunctionKey.Hash
 			< Right.Identity.FunctionKey.Hash;
 	});
 
-	TSharedRef<FAngelscriptCacheFunctionRouteSnapshot,
+	TSharedRef<FAngelscriptFunctionRouteSnapshot,
 		ESPMode::ThreadSafe> Published =
-		MakeShared<FAngelscriptCacheFunctionRouteSnapshot,
+		MakeShared<FAngelscriptFunctionRouteSnapshot,
 			ESPMode::ThreadSafe>();
-	Published->PublicationOrdinal =
-		CacheRuntimeState->NextFunctionRoutePublicationOrdinal++;
+	Published->Generation = FAngelscriptFunctionRouteGeneration{
+		FunctionRouteState->NextGenerationValue++};
 	for (int32 Index = 0; Index < CandidateRoutes.Num();)
 	{
 		int32 DuplicateEnd = Index + 1;
@@ -2886,11 +3493,12 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 		}
 		if (DuplicateEnd == Index + 1)
 		{
-			FAngelscriptCacheLiveFunctionRoute& Route =
+			FAngelscriptFunctionRoute& Route =
 				Published->FunctionRoutes.Add_GetRef(
 					MoveTemp(CandidateRoutes[Index]));
+			Route.Generation = Published->Generation;
 			if (Route.SelectedExecutionRoute
-				== EAngelscriptCacheFunctionExecutionRoute::Native)
+				== EAngelscriptFunctionExecutionRoute::Native)
 			{
 				++Published->NativeRouteCount;
 			}
@@ -2909,14 +3517,14 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 		Index = DuplicateEnd;
 	}
 
-	CacheRuntimeState->FunctionRouteSnapshot = Published;
+	FunctionRouteState->Snapshot = Published;
 	if (CacheService.IsValid())
 	{
-		for (const FAngelscriptCacheLiveFunctionRoute& Route
+		for (const FAngelscriptFunctionRoute& Route
 			: Published->FunctionRoutes)
 		{
 			FAngelscriptCacheDecisionEvent Event;
-			Event.TransactionOrdinal = Published->PublicationOrdinal;
+			Event.TransactionOrdinal = Published->Generation.Value;
 			Event.Stage = EAngelscriptCacheDecisionStage::StableRoute;
 			Event.Outcome = EAngelscriptCacheDecisionOutcome::Published;
 			Event.ReasonDomain =
@@ -2938,7 +3546,7 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 	UE_LOG(Angelscript, Verbose,
 		TEXT("[CacheV2][StableRoute] Published Engine=%p Revision=%llu Routes=%d VM=%u Native=%u"),
 		this,
-		Published->PublicationOrdinal,
+		Published->Generation.Value,
 		Published->FunctionRoutes.Num(),
 		Published->VmRouteCount,
 		Published->NativeRouteCount);

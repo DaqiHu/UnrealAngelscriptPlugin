@@ -1,5 +1,6 @@
 #include "Testing/AngelscriptScriptTestRegistry.h"
 
+#include "AngelscriptInclude.h"
 #include "Core/AngelscriptEngine.h"
 #include "Testing/AngelscriptScriptTestAutomation.h"
 #include "Testing/AngelscriptTestSuite.h"

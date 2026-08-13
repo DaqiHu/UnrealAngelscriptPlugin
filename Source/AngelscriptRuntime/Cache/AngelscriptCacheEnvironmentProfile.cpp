@@ -46,8 +46,39 @@ namespace AngelscriptCacheEnvironmentProfile_Private
 #endif
 	}
 
-	static FString BuildConfigurationText()
+	static FString PlatformText(const FAngelscriptEngine& Engine)
 	{
+		const FAngelscriptEngineConfig& Config = Engine.GetRuntimeConfig();
+		if (Config.bOverrideTargetPreprocessorFlags && !Config.bTargetEditor)
+		{
+			// Editor-hosted target generation must describe the game platform,
+			// not the host executable's WindowsEditor-style platform variant.
+			return UTF8_TO_TCHAR(FPlatformProperties::IniPlatformName());
+		}
+		return UTF8_TO_TCHAR(FPlatformProperties::PlatformName());
+	}
+
+	static FString TargetText(const FAngelscriptEngine& Engine)
+	{
+		const FAngelscriptEngineConfig& Config = Engine.GetRuntimeConfig();
+		if (Config.bOverrideTargetPreprocessorFlags)
+		{
+			return Config.bTargetEditor ? TEXT("Editor") : TEXT("Game");
+		}
+		return WITH_EDITOR ? TEXT("Editor") : TEXT("Game");
+	}
+
+	static FString BuildConfigurationText(const FAngelscriptEngine& Engine)
+	{
+		const FAngelscriptEngineConfig& Config = Engine.GetRuntimeConfig();
+		if (Config.bOverrideTargetPreprocessorFlags)
+		{
+			if (Config.bTargetRelease)
+			{
+				return Config.bTargetTest ? TEXT("Test") : TEXT("Shipping");
+			}
+			return TEXT("Development");
+		}
 #if UE_BUILD_SHIPPING
 		return TEXT("Shipping");
 #elif UE_BUILD_TEST
@@ -120,8 +151,7 @@ BuildAngelscriptCacheEnvironmentProfile(
 		FString::Printf(TEXT("UE=%u.%u"),
 			static_cast<uint32>(ENGINE_MAJOR_VERSION),
 			static_cast<uint32>(ENGINE_MINOR_VERSION)),
-		FString::Printf(TEXT("Platform=%s"),
-			UTF8_TO_TCHAR(FPlatformProperties::PlatformName())),
+		FString::Printf(TEXT("Platform=%s"), *PlatformText(Engine)),
 		FString::Printf(TEXT("Architecture=%s"), *ArchitectureText()),
 		FString::Printf(TEXT("PointerBits=%u"),
 			static_cast<uint32>(sizeof(void*) * 8)),
@@ -193,9 +223,9 @@ BuildAngelscriptCacheEnvironmentProfile(
 	FAngelscriptContextDescriptor Context;
 	Context.CanonicalInputs = OutProfile.CaptureOptions.CanonicalCompileOptions;
 	Context.CanonicalInputs.Add(FString::Printf(TEXT("Target=%s"),
-		WITH_EDITOR ? TEXT("Editor") : TEXT("Game")));
+		*TargetText(Engine)));
 	Context.CanonicalInputs.Add(FString::Printf(TEXT("Configuration=%s"),
-		*BuildConfigurationText()));
+		*BuildConfigurationText(Engine)));
 	Context.CanonicalInputs.Add(TEXT("SourceProviderAuthority=SourceIndex.v1"));
 	for (int32 Property = 1;
 		Property < static_cast<int32>(asEP_LAST_PROPERTY); ++Property)
@@ -220,6 +250,13 @@ BuildAngelscriptCacheEnvironmentProfile(
 			TEXT("SourceMount.%u=%s"),
 			static_cast<uint32>(Root.SourceKind), *Root.MountName));
 	}
+	OutProfile.CanonicalContextInputs = Context.CanonicalInputs;
+	OutProfile.CanonicalContextInputs.Sort(
+		[](const FString& Left, const FString& Right)
+		{
+			return FAngelscriptArtifactCanonicalWriter::
+				CompareCanonicalUtf8Strings(Left, Right) < 0;
+		});
 	OutProfile.CaptureOptions.Context =
 		FAngelscriptArtifactIdentityBuilder::BuildContextKey(Context);
 	OutProfile.CaptureOptions.Profile =

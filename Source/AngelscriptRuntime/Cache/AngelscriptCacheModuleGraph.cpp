@@ -124,8 +124,8 @@ namespace
 
 	struct FCurrentSymbolMemo
 	{
-		EAngelscriptCacheReferenceKind ReferenceKind =
-			EAngelscriptCacheReferenceKind::Invalid;
+		EAngelscriptArtifactReferenceKind ReferenceKind =
+			EAngelscriptArtifactReferenceKind::Invalid;
 		FAngelscriptHash256 StableKey;
 		FAngelscriptCacheCurrentSymbol Symbol;
 	};
@@ -134,8 +134,8 @@ namespace
 	{
 		EAngelscriptCachedTypeLayoutInputKind InputKind =
 			EAngelscriptCachedTypeLayoutInputKind::Invalid;
-		EAngelscriptCacheReferenceKind ReferenceKind =
-			EAngelscriptCacheReferenceKind::Invalid;
+		EAngelscriptArtifactReferenceKind ReferenceKind =
+			EAngelscriptArtifactReferenceKind::Invalid;
 		FAngelscriptHash256 StableKey;
 		FAngelscriptCacheResolvedTypeLayoutInput Layout;
 	};
@@ -411,7 +411,7 @@ namespace
 
 	static int32 CompareCurrentSymbolMemoIdentity(
 		const FCurrentSymbolMemo& Memo,
-		const EAngelscriptCacheReferenceKind ReferenceKind,
+		const EAngelscriptArtifactReferenceKind ReferenceKind,
 		const FAngelscriptHash256& StableKey)
 	{
 		if (Memo.ReferenceKind != ReferenceKind)
@@ -424,7 +424,7 @@ namespace
 
 	static int32 LowerBoundCurrentSymbolMemo(
 		const TArray<FCurrentSymbolMemo>& Memos,
-		const EAngelscriptCacheReferenceKind ReferenceKind,
+		const EAngelscriptArtifactReferenceKind ReferenceKind,
 		const FAngelscriptHash256& StableKey)
 	{
 		int32 First = 0;
@@ -448,7 +448,7 @@ namespace
 	static int32 CompareCurrentLayoutInputMemoIdentity(
 		const FCurrentLayoutInputMemo& Memo,
 		const EAngelscriptCachedTypeLayoutInputKind InputKind,
-		const EAngelscriptCacheReferenceKind ReferenceKind,
+		const EAngelscriptArtifactReferenceKind ReferenceKind,
 		const FAngelscriptHash256& StableKey)
 	{
 		if (Memo.InputKind != InputKind)
@@ -467,7 +467,7 @@ namespace
 	static int32 LowerBoundCurrentLayoutInputMemo(
 		const TArray<FCurrentLayoutInputMemo>& Memos,
 		const EAngelscriptCachedTypeLayoutInputKind InputKind,
-		const EAngelscriptCacheReferenceKind ReferenceKind,
+		const EAngelscriptArtifactReferenceKind ReferenceKind,
 		const FAngelscriptHash256& StableKey)
 	{
 		int32 First = 0;
@@ -553,13 +553,13 @@ namespace
 
 	static bool IsSelectedModuleReference(
 		const FAngelscriptCachedModuleInterface& Interface,
-		const FAngelscriptCacheStableReference& Reference)
+		const FAngelscriptArtifactReference& Reference)
 	{
 		switch (Reference.Kind)
 		{
-		case EAngelscriptCacheReferenceKind::ScriptModule:
+		case EAngelscriptArtifactReferenceKind::ScriptModule:
 			return Reference.StableKey == Interface.ModuleKey.Hash;
-		case EAngelscriptCacheReferenceKind::ScriptImport:
+		case EAngelscriptArtifactReferenceKind::ScriptImport:
 			for (const FAngelscriptCachedImportDeclaration& Import : Interface.Imports)
 			{
 				if (Import.ImportKey.Hash == Reference.StableKey)
@@ -568,10 +568,10 @@ namespace
 				}
 			}
 			return false;
-		case EAngelscriptCacheReferenceKind::ScriptType:
-		case EAngelscriptCacheReferenceKind::ScriptFunction:
-		case EAngelscriptCacheReferenceKind::ScriptGlobal:
-		case EAngelscriptCacheReferenceKind::ScriptProperty:
+		case EAngelscriptArtifactReferenceKind::ScriptType:
+		case EAngelscriptArtifactReferenceKind::ScriptFunction:
+		case EAngelscriptArtifactReferenceKind::ScriptGlobal:
+		case EAngelscriptArtifactReferenceKind::ScriptProperty:
 			for (const FAngelscriptCachedDeclaration& Declaration :
 				Interface.Declarations)
 			{
@@ -744,9 +744,9 @@ namespace
 		}
 		if (Left.TypeReference.IsSet())
 		{
-			const FAngelscriptCacheStableReference& LeftReference =
+			const FAngelscriptArtifactReference& LeftReference =
 				Left.TypeReference.GetValue();
-			const FAngelscriptCacheStableReference& RightReference =
+			const FAngelscriptArtifactReference& RightReference =
 				Right.TypeReference.GetValue();
 			if (LeftReference.Kind != RightReference.Kind)
 			{
@@ -2036,7 +2036,8 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 			&FunctionDeclarations, Interface, Snapshot](
 			const FAngelscriptStableFunctionKey& FunctionKey,
 			const FAngelscriptHash256& ExpectedAbi,
-			const FAngelscriptStableTypeKey& ExpectedOwner,
+			const EAngelscriptFunctionOwnerKind ExpectedOwnerKind,
+			const FAngelscriptHash256& ExpectedOwnerKey,
 			const uint64 DiagnosticOffset,
 			const FAngelscriptCachedDeclaration*& OutDeclaration)
 			-> FAngelscriptCacheValidationResult
@@ -2065,9 +2066,8 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 					EAngelscriptCacheValidationError::CrossModuleOwner,
 					DiagnosticOffset);
 			}
-			if (FunctionDeclaration.OwnerKind
-					!= EAngelscriptFunctionOwnerKind::Type
-				|| !(FunctionDeclaration.OwnerKey == ExpectedOwner.Hash))
+			if (FunctionDeclaration.OwnerKind != ExpectedOwnerKind
+				|| !(FunctionDeclaration.OwnerKey == ExpectedOwnerKey))
 			{
 				return GraphFailure(
 					EAngelscriptCacheValidationError::MissingOwner,
@@ -2144,7 +2144,8 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 				ResolveOwnedScriptFunction(
 					Method.FunctionKey,
 					Method.ExpectedDeclarationAbi,
-					Method.DeclaringOwner,
+					EAngelscriptFunctionOwnerKind::Type,
+					Method.DeclaringOwner.Hash,
 					TypeSchemaOffset(*TypeRecord,
 						EAngelscriptTypeSchemaCapturedField::MethodFunction,
 						static_cast<uint32>(MethodOrdinal)),
@@ -2239,7 +2240,8 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 				ResolveOwnedScriptFunction(
 					Slot.FunctionKey,
 					Slot.ExpectedDeclarationAbi,
-					Slot.ImplementingOwner,
+					EAngelscriptFunctionOwnerKind::Type,
+					Slot.ImplementingOwner.Hash,
 					TypeSchemaOffset(*TypeRecord,
 						EAngelscriptTypeSchemaCapturedField::VirtualFunction,
 						static_cast<uint32>(VftOrdinal)),
@@ -2315,12 +2317,23 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 		{
 			const FAngelscriptCachedReflectedFunctionMember& Member =
 				Type.Reflection.OrderedUFunctionMembers[ReflectionOrdinal];
+			const bool bStaticsClass = Type.TypeKind
+					== EAngelscriptCachedTypeKind::Class
+				&& Type.Reflection.ReflectionKind
+					== EAngelscriptCachedReflectionKind::UClass
+				&& (Type.Reflection.ClassReflectionFlags
+					& static_cast<uint32>(
+						EAngelscriptCachedClassReflectionFlags::StaticsClass)) != 0;
 			const FAngelscriptCachedDeclaration* FunctionDeclaration = nullptr;
 			const FAngelscriptCacheValidationResult FunctionResult =
 				ResolveOwnedScriptFunction(
 					FAngelscriptStableFunctionKey{Member.Target.StableKey},
 					Member.Target.ExpectedAbi,
-					Type.TypeKey,
+					bStaticsClass
+						? EAngelscriptFunctionOwnerKind::Module
+						: EAngelscriptFunctionOwnerKind::Type,
+					bStaticsClass
+						? Snapshot->ModuleKey.Hash : Type.TypeKey.Hash,
 					TypeSchemaOffset(*TypeRecord,
 						EAngelscriptTypeSchemaCapturedField::ReflectedFunctionTarget,
 						static_cast<uint32>(ReflectionOrdinal)),
@@ -2330,7 +2343,9 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 				return FunctionResult;
 			}
 			if (FunctionDeclaration->EntityKind
-				!= EAngelscriptArtifactEntityKind::Method)
+				!= (bStaticsClass
+					? EAngelscriptArtifactEntityKind::GlobalFunction
+					: EAngelscriptArtifactEntityKind::Method))
 			{
 				return GraphFailure(
 					EAngelscriptCacheValidationError::WrongReferenceKind,
@@ -2415,19 +2430,20 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 			const FAngelscriptCachedBehaviorSlot& Slot =
 				Type.OrderedBehaviorSlots[BehaviorOrdinal];
 			if (Slot.Target.Kind
-				== EAngelscriptCacheReferenceKind::EnvironmentSymbol)
+				== EAngelscriptArtifactReferenceKind::EnvironmentSymbol)
 			{
 				continue;
 			}
 			check(Slot.Target.Kind
-				== EAngelscriptCacheReferenceKind::ScriptFunction);
+				== EAngelscriptArtifactReferenceKind::ScriptFunction);
 			check(Slot.DeclaringOwner.IsSet());
 			const FAngelscriptCachedDeclaration* FunctionDeclaration = nullptr;
 			const FAngelscriptCacheValidationResult FunctionResult =
 				ResolveOwnedScriptFunction(
 					FAngelscriptStableFunctionKey{Slot.Target.StableKey},
 					Slot.Target.ExpectedAbi,
-					Slot.DeclaringOwner.GetValue(),
+					EAngelscriptFunctionOwnerKind::Type,
+					Slot.DeclaringOwner->Hash,
 					TypeSchemaOffset(*TypeRecord,
 						EAngelscriptTypeSchemaCapturedField::BehaviorTarget,
 						static_cast<uint32>(BehaviorOrdinal)),
@@ -2470,7 +2486,7 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 				}
 				if (FactorySlot == nullptr
 					|| FactorySlot->Target.Kind
-						!= EAngelscriptCacheReferenceKind::ScriptFunction
+						!= EAngelscriptArtifactReferenceKind::ScriptFunction
 					|| !FactorySlot->DeclaringOwner.IsSet())
 				{
 					return GraphFailure(
@@ -2485,7 +2501,8 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 						FAngelscriptStableFunctionKey{
 							FactorySlot->Target.StableKey},
 						FactorySlot->Target.ExpectedAbi,
-						FactorySlot->DeclaringOwner.GetValue(),
+						EAngelscriptFunctionOwnerKind::Type,
+						FactorySlot->DeclaringOwner->Hash,
 						TypeSchemaOffset(*TypeRecord,
 							EAngelscriptTypeSchemaCapturedField::BehaviorTarget,
 							static_cast<uint32>(
@@ -2535,11 +2552,11 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 		{
 			bGraphSupportedRelations &=
 				Relation.Target.Kind
-					== EAngelscriptCacheReferenceKind::EnvironmentSymbol
+					== EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 				|| (Relation.RelationKind
 						== EAngelscriptCachedTypeRelationKind::Base
 					&& Relation.Target.Kind
-						== EAngelscriptCacheReferenceKind::ScriptType
+						== EAngelscriptArtifactReferenceKind::ScriptType
 					&& IsSelectedModuleReference(*Interface, Relation.Target));
 		}
 		bool bGraphSupportedLayoutInputs = true;
@@ -2550,11 +2567,11 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 					|| Input.InputKind
 						== EAngelscriptCachedTypeLayoutInputKind::StructHeader)
 					&& Input.Target.Kind
-						== EAngelscriptCacheReferenceKind::EnvironmentSymbol)
+						== EAngelscriptArtifactReferenceKind::EnvironmentSymbol)
 				|| (Input.InputKind
 						== EAngelscriptCachedTypeLayoutInputKind::BaseType
 					&& Input.Target.Kind
-						== EAngelscriptCacheReferenceKind::ScriptType
+						== EAngelscriptArtifactReferenceKind::ScriptType
 					&& IsSelectedModuleReference(*Interface, Input.Target));
 		}
 		bool bGraphSupportedDependencies = true;
@@ -2562,16 +2579,16 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 			Type.Dependencies)
 		{
 			bGraphSupportedDependencies &= Dependency.Target.Kind
-					== EAngelscriptCacheReferenceKind::EnvironmentSymbol
+					== EAngelscriptArtifactReferenceKind::EnvironmentSymbol
 				|| Dependency.Target.Kind
-					== EAngelscriptCacheReferenceKind::CanonicalName
+					== EAngelscriptArtifactReferenceKind::CanonicalName
 				|| Dependency.Target.Kind
-					== EAngelscriptCacheReferenceKind::StringLiteral
+					== EAngelscriptArtifactReferenceKind::StringLiteral
 				|| (Dependency.Target.Kind
-						== EAngelscriptCacheReferenceKind::ScriptFunction
+						== EAngelscriptArtifactReferenceKind::ScriptFunction
 					&& IsSelectedModuleReference(*Interface, Dependency.Target))
 				|| (Dependency.Target.Kind
-						== EAngelscriptCacheReferenceKind::ScriptType
+						== EAngelscriptArtifactReferenceKind::ScriptType
 					&& IsSelectedModuleReference(*Interface, Dependency.Target));
 		}
 		const bool bGraphSupportedObjectType =
@@ -2757,7 +2774,7 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 					HardValueOrdinal));
 		}
 		if (HardValue.Owner.Kind
-			!= EAngelscriptCacheReferenceKind::ScriptGlobal)
+			!= EAngelscriptArtifactReferenceKind::ScriptGlobal)
 		{
 			return GraphFailure(
 				EAngelscriptCacheValidationError::GlobalCoverageMismatch,
@@ -2897,7 +2914,7 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 			|| Action.ActionKind
 				!= EAngelscriptCachedInitializationActionKind::ExecuteInitializer
 			|| Action.Target.Kind
-				!= EAngelscriptCacheReferenceKind::ScriptFunction
+				!= EAngelscriptArtifactReferenceKind::ScriptFunction
 			|| !(Action.Target.StableKey == Initializer.InitializerKey.Hash)
 			|| !(Action.Target.ExpectedAbi == Declaration.SignatureHash))
 		{
@@ -3222,7 +3239,7 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 		}
 
 		if (Dependency.Target.Kind
-			== EAngelscriptCacheReferenceKind::ScriptModule)
+			== EAngelscriptArtifactReferenceKind::ScriptModule)
 		{
 			return Dependency.Target.ExpectedAbi == Interface->InterfaceAbi
 				&& !Dependency.ExpectedContentOrValue.IsSet()
@@ -3232,7 +3249,7 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 		}
 
 		if (Dependency.Target.Kind
-			== EAngelscriptCacheReferenceKind::ScriptType)
+			== EAngelscriptArtifactReferenceKind::ScriptType)
 		{
 			const FRequiredTypeDeclaration* TargetType =
 				FindRequiredTypeDeclaration(
@@ -3300,7 +3317,7 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 		}
 
 		if (Dependency.Target.Kind
-			== EAngelscriptCacheReferenceKind::ScriptProperty)
+			== EAngelscriptArtifactReferenceKind::ScriptProperty)
 		{
 			FPropertyDeclaration* TargetProperty = FindPropertyDeclaration(
 				PropertyDeclarations,
@@ -3356,7 +3373,7 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 		}
 
 		if (Dependency.Target.Kind
-			== EAngelscriptCacheReferenceKind::ScriptGlobal)
+			== EAngelscriptArtifactReferenceKind::ScriptGlobal)
 		{
 			const FGlobalDeclaration* TargetGlobal = FindGlobalDeclaration(
 				GlobalDeclarations, Dependency.Target.StableKey);
@@ -3426,7 +3443,7 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 					: State->HardValues)
 				{
 					if (HardValue.Owner.Kind
-							== EAngelscriptCacheReferenceKind::ScriptGlobal
+							== EAngelscriptArtifactReferenceKind::ScriptGlobal
 						&& HardValue.Owner.StableKey
 							== Dependency.Target.StableKey)
 					{
@@ -3454,7 +3471,7 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 		}
 
 		if (Dependency.Target.Kind
-			!= EAngelscriptCacheReferenceKind::ScriptFunction)
+			!= EAngelscriptArtifactReferenceKind::ScriptFunction)
 		{
 			return GraphFailure(
 				EAngelscriptCacheValidationError::GraphAbiMismatch,
@@ -4000,9 +4017,9 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 			-> FAngelscriptCacheValidationResult
 		{
 			if (Dependency.Target.Kind
-					== EAngelscriptCacheReferenceKind::CanonicalName
+					== EAngelscriptArtifactReferenceKind::CanonicalName
 				|| Dependency.Target.Kind
-					== EAngelscriptCacheReferenceKind::StringLiteral
+					== EAngelscriptArtifactReferenceKind::StringLiteral
 				|| IsSelectedModuleReference(*Interface, Dependency.Target))
 			{
 				return {};

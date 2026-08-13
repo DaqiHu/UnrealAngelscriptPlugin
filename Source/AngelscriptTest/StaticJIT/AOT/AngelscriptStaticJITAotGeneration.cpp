@@ -1,494 +1,646 @@
 #include "StaticJIT/AOT/AngelscriptStaticJITAotGeneration.h"
 
-#include "AngelscriptTestEngineHelper.h"
 #include "AngelscriptTestEngineAcquisition.h"
+#include "AngelscriptTestJITProbes.h"
+#include "Cache/AngelscriptCacheDiagnostics.h"
+#include "Cache/AngelscriptCacheService.h"
+#include "Compilation/AngelscriptCompilationEvents.h"
 #include "StaticJIT/AOT/AngelscriptStaticJITAotFixture.h"
+#include "StaticJIT/AngelscriptJITGeneratedFileStore.h"
+#include "StaticJIT/AngelscriptJITProviderRegistry.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
-#include "StaticJIT/PrecompiledData.h"
+
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Guid.h"
+#include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_module.h"
 #include "EndAngelscriptHeaders.h"
 
-#include "HAL/FileManager.h"
-#include "Misc/FileHelper.h"
-#include "Misc/Paths.h"
-
 namespace AngelscriptStaticJITAotGeneration
 {
 	namespace
 	{
-		bool CompileFixture(FAngelscriptEngine& Engine, FStaticJITAotGenerationResult& Result)
+		static FString GetTestJITModuleRoot()
 		{
-			if (!AngelscriptStaticJITAotFixture::RegisterObjectLastNativeSurface(
-					*Engine.GetScriptEngine()))
-			{
-				Result.Error = TEXT("StaticJIT AOT fixture failed to register its object-last native surface.");
-				return false;
-			}
-
-			const bool bCompiled = CompileAnnotatedModuleFromMemory(
-				&Engine,
-				AngelscriptStaticJITAotFixture::GetModuleName(),
-				AngelscriptStaticJITAotFixture::GetSourceFilename(),
-				AngelscriptStaticJITAotFixture::GetScriptSource());
-			if (!bCompiled)
-			{
-				Result.Error = TEXT("StaticJIT AOT fixture failed to compile.");
-				return false;
-			}
-
-			return true;
+			return FPaths::ConvertRelativePathToFull(FPaths::Combine(
+				FPaths::ProjectDir(),
+				TEXT("Plugins/Angelscript/Source/AngelscriptTestJIT")));
 		}
 
-		FString GetVerifyCacheFilename()
+		static FString GetGeneratedProfileRoot()
 		{
 			return FPaths::Combine(
-				FPaths::ProjectSavedDir(),
-				TEXT("StaticJIT/AOT/Verify"),
-				TEXT("StaticJITAotFixture.Cache"));
+				GetTestJITModuleRoot(), TEXT("Generated/EditorDevelopment"));
 		}
 
-		bool GenerateFilesAndCache(FAngelscriptEngine& Engine, const FString& CacheFilename, TMap<FString, FString>& OutGeneratedFiles, FStaticJITAotGenerationResult& Result)
+		static TArray<FString> GetLegacyGeneratedProfileRoots()
 		{
-			TSharedPtr<FAngelscriptModuleDesc> ModuleDesc = Engine.GetModuleByModuleName(AngelscriptStaticJITAotFixture::GetModuleName().ToString());
-			if (!ModuleDesc.IsValid() || ModuleDesc->ScriptModule == nullptr)
-			{
-				Result.Error = TEXT("StaticJIT AOT fixture module was not available after compile.");
-				return false;
-			}
-
-			const FString CacheDirectory = FPaths::GetPath(CacheFilename);
-			if (!CacheDirectory.IsEmpty())
-			{
-				IFileManager::Get().MakeDirectory(*CacheDirectory, true);
-			}
-
-			FString GenerationError;
-			if (!GenerateStaticJITAotArtifactsForDiagnostics(
-				ModuleDesc->ScriptModule,
-				CacheFilename,
-				AngelscriptStaticJITAotFixture::GetPrecompiledDataGuid(),
-				OutGeneratedFiles,
-				/*bEmitDebugMetadata=*/true,
-				/*bEmitDiagnosticEntryMarkers=*/true,
-				&GenerationError))
-			{
-				Result.Error = GenerationError;
-				return false;
-			}
-
-			IFileManager::Get().MakeDirectory(*AngelscriptStaticJITAotFixture::GetGeneratedDirectory(), true);
-			return true;
+			return {
+				FPaths::Combine(GetTestJITModuleRoot(),
+					TEXT("Private/Generated/EditorDevelopment")),
+				FPaths::Combine(GetTestJITModuleRoot(),
+					TEXT("Private/Generated/Profiles/EditorDevelopment")),
+			};
 		}
 
-		bool WriteGeneratedFiles(const TMap<FString, FString>& GeneratedFiles, FStaticJITAotGenerationResult& Result)
+		static void RemoveEmptyLegacyPrivateWrappers()
 		{
-			const FString GeneratedDirectory = AngelscriptStaticJITAotFixture::GetGeneratedDirectory();
-			IFileManager::Get().MakeDirectory(*GeneratedDirectory, true);
-
-			for (const TPair<FString, FString>& GeneratedFile : GeneratedFiles)
-			{
-				const FString OutputPath = FPaths::Combine(GeneratedDirectory, GeneratedFile.Key);
-				if (!FFileHelper::SaveStringToFile(GeneratedFile.Value, *OutputPath))
-				{
-					Result.Error = FString::Printf(TEXT("Failed to write generated StaticJIT AOT file: %s"), *OutputPath);
-					return false;
-				}
-				Result.WrittenFiles.Add(OutputPath);
-			}
-
-			Result.WrittenFiles.Add(AngelscriptStaticJITAotFixture::GetPrecompiledCacheFilename());
-			return true;
+			const FString PrivateRoot = FPaths::Combine(
+				GetTestJITModuleRoot(), TEXT("Private"));
+			const FString GeneratedRoot = FPaths::Combine(
+				PrivateRoot, TEXT("Generated"));
+			IFileManager::Get().DeleteDirectory(
+				*FPaths::Combine(GeneratedRoot, TEXT("Profiles")),
+				false, false);
+			IFileManager::Get().DeleteDirectory(
+				*GeneratedRoot, false, false);
+			IFileManager::Get().DeleteDirectory(
+				*PrivateRoot, false, false);
 		}
 
-		bool IsSameArchiveString(const FStringInArchive& Left, const FStringInArchive& Right)
+		static TUniquePtr<FAngelscriptEngine> CreateUncompiledFixtureEngine(
+			const FString& FixtureRoot,
+			FString& OutError,
+			const bool bEnableCacheV2Persistence)
 		{
-			return Left.UnrealString() == Right.UnrealString();
-		}
+			FAngelscriptEngineConfig Config;
+			Config.bIsEditor = true;
+			Config.bDevelopmentMode = true;
+			Config.bSkipThreadedInitialize = true;
+			Config.bRunningCommandlet = true;
+			Config.bIsUnattended = true;
+			Config.CacheV2RootOverride = FPaths::Combine(
+				FixtureRoot, TEXT("CacheV2"));
+			Config.bDisableCacheV2Persistence =
+				!bEnableCacheV2Persistence;
+			// Automation invokes this synchronously on the game thread. Serial
+			// preparation avoids starving TaskGraph writer workers while preserving
+			// the exact same deterministic capture bytes and Store contract.
+			Config.bForceSerialCacheV2Preparation = true;
 
-		template <typename StringArrayType>
-		bool IsSameArchiveStringArray(const StringArrayType& Left, const StringArrayType& Right)
-		{
-			if (Left.Num() != Right.Num())
+			FAngelscriptEngineDependencies Dependencies =
+				FAngelscriptEngineDependencies::CreateDefault();
+			Dependencies.GetProjectDir = [FixtureRoot]()
 			{
-				return false;
-			}
-
-			for (int32 Index = 0; Index < Left.Num(); ++Index)
+				return FixtureRoot;
+			};
+			Dependencies.GetEnabledPluginScriptRoots = []()
 			{
-				if (!IsSameArchiveString(Left[Index], Right[Index]))
-				{
-					return false;
-				}
-			}
-
-			return true;
-		}
-
-		bool IsSamePrecompiledDataType(const FAngelscriptPrecompiledDataType& Left, const FAngelscriptPrecompiledDataType& Right)
-		{
-			return Left.bIsReference == Right.bIsReference
-				&& Left.bIsObjectConst == Right.bIsObjectConst
-				&& Left.bIsObjectHandle == Right.bIsObjectHandle
-				&& Left.bIsConstHandle == Right.bIsConstHandle
-				&& Left.bIsAuto == Right.bIsAuto
-				&& Left.bIfHandleThenConst == Right.bIfHandleThenConst
-				&& Left.TokenType == Right.TokenType
-				&& Left.TypeInfo.IsNull() == Right.TypeInfo.IsNull();
-		}
-
-		template <typename TypeArrayType>
-		bool IsSamePrecompiledDataTypeArray(const TypeArrayType& Left, const TypeArrayType& Right)
-		{
-			if (Left.Num() != Right.Num())
+				return TArray<FString>();
+			};
+			Dependencies.GetEnabledPluginScriptRootDescriptors = []()
 			{
-				return false;
-			}
-
-			for (int32 Index = 0; Index < Left.Num(); ++Index)
-			{
-				if (!IsSamePrecompiledDataType(Left[Index], Right[Index]))
-				{
-					return false;
-				}
-			}
-
-			return true;
-		}
-
-		bool IsSamePrecompiledFunction(const FAngelscriptPrecompiledFunction& Left, const FAngelscriptPrecompiledFunction& Right)
-		{
-			return IsSameArchiveString(Left.FunctionName, Right.FunctionName)
-				&& IsSameArchiveString(Left.Namespace, Right.Namespace)
-				&& IsSamePrecompiledDataType(Left.ReturnType, Right.ReturnType)
-				&& IsSamePrecompiledDataTypeArray(Left.ParameterTypes, Right.ParameterTypes)
-				&& IsSameArchiveStringArray(Left.ParameterNames, Right.ParameterNames)
-				&& Left.ParameterFlags == Right.ParameterFlags
-				&& IsSameArchiveStringArray(Left.ParameterDefaultArgs, Right.ParameterDefaultArgs)
-				&& Left.FunctionTraits == Right.FunctionTraits
-				&& Left.VariableSpace == Right.VariableSpace
-				&& Left.ObjVariablePos == Right.ObjVariablePos
-				&& Left.ObjVariablesOnHeap == Right.ObjVariablesOnHeap
-				&& Left.VariableInfoProgramPos == Right.VariableInfoProgramPos
-				&& Left.VariableInfoOffset == Right.VariableInfoOffset
-				&& Left.VariableInfoOption == Right.VariableInfoOption
-				&& Left.StackNeeded == Right.StackNeeded
-				&& Left.Id == Right.Id
-				&& Left.bIsUFunction == Right.bIsUFunction;
-		}
-
-		const FAngelscriptPrecompiledFunction* FindFunctionByName(const FAngelscriptPrecompiledModule& Module, const FString& FunctionName)
-		{
-			for (const FAngelscriptPrecompiledFunction& Function : Module.Functions)
-			{
-				if (Function.FunctionName.UnrealString() == FunctionName)
-				{
-					return &Function;
-				}
-			}
-
-			return nullptr;
-		}
-
-		const FAngelscriptPrecompiledClass* FindClassByName(const FAngelscriptPrecompiledModule& Module, const FString& ClassName)
-		{
-			for (const FAngelscriptPrecompiledClass& Class : Module.Classes)
-			{
-				if (Class.ClassName.UnrealString() == ClassName)
-				{
-					return &Class;
-				}
-			}
-
-			return nullptr;
-		}
-
-		const FAngelscriptPrecompiledFunction* FindMethodByName(const FAngelscriptPrecompiledClass& Class, const FString& FunctionName)
-		{
-			for (const FAngelscriptPrecompiledFunction& Method : Class.Methods)
-			{
-				if (Method.FunctionName.UnrealString() == FunctionName)
-				{
-					return &Method;
-				}
-			}
-
-			return nullptr;
-		}
-
-		bool VerifyPrecompiledCacheSemantics(FAngelscriptEngine& Engine, const FString& LocalCacheFilename, const FString& GeneratedCacheFilename, FString& OutError)
-		{
-			if (!IFileManager::Get().FileExists(*LocalCacheFilename))
-			{
-				OutError = FString::Printf(
-					TEXT("StaticJIT AOT local precompiled cache is missing: %s\n%s"),
-					*LocalCacheFilename,
-					*AngelscriptStaticJITAotFixture::GetGeneratedSetupInstructions());
-				return false;
-			}
-
-			if (!IFileManager::Get().FileExists(*GeneratedCacheFilename))
-			{
-				OutError = FString::Printf(TEXT("StaticJIT AOT generated verification cache is missing: %s"), *GeneratedCacheFilename);
-				return false;
-			}
-
-			FAngelscriptPrecompiledData LocalCache(Engine.GetScriptEngine());
-			FAngelscriptPrecompiledData GeneratedCache(Engine.GetScriptEngine());
-			LocalCache.Load(LocalCacheFilename);
-			GeneratedCache.Load(GeneratedCacheFilename);
-
-			const FGuid& ExpectedGuid = AngelscriptStaticJITAotFixture::GetPrecompiledDataGuid();
-			if (LocalCache.DataGuid != ExpectedGuid || GeneratedCache.DataGuid != ExpectedGuid)
-			{
-				OutError = TEXT("StaticJIT AOT cache GUID does not match the fixture GUID.");
-				return false;
-			}
-
-			if (!LocalCache.IsValidForCurrentBuild() || !GeneratedCache.IsValidForCurrentBuild())
-			{
-				OutError = TEXT("StaticJIT AOT cache build identifier does not match the current build.");
-				return false;
-			}
-
-			const FString ModuleName = AngelscriptStaticJITAotFixture::GetModuleName().ToString();
-			const FAngelscriptPrecompiledModule* LocalModule = LocalCache.Modules.Find(ModuleName);
-			const FAngelscriptPrecompiledModule* GeneratedModule = GeneratedCache.Modules.Find(ModuleName);
-			if (LocalModule == nullptr || GeneratedModule == nullptr)
-			{
-				OutError = FString::Printf(TEXT("StaticJIT AOT cache does not contain fixture module '%s'."), *ModuleName);
-				return false;
-			}
-
-			if (!IsSameArchiveString(LocalModule->ModuleName, GeneratedModule->ModuleName)
-				|| LocalModule->Functions.Num() != GeneratedModule->Functions.Num()
-				|| LocalModule->Classes.Num() != GeneratedModule->Classes.Num()
-				|| LocalModule->Enums.Num() != GeneratedModule->Enums.Num()
-				|| LocalModule->GlobalVariables.Num() != GeneratedModule->GlobalVariables.Num()
-				|| LocalModule->FunctionImports.Num() != GeneratedModule->FunctionImports.Num()
-				|| LocalModule->CodeHash != GeneratedModule->CodeHash
-				|| !IsSameArchiveStringArray(LocalModule->ImportedModules, GeneratedModule->ImportedModules)
-				|| !IsSameArchiveString(LocalModule->StaticsClassName, GeneratedModule->StaticsClassName)
-				|| !IsSameArchiveStringArray(LocalModule->DeclaredEvents, GeneratedModule->DeclaredEvents)
-				|| !IsSameArchiveStringArray(LocalModule->DeclaredDelegates, GeneratedModule->DeclaredDelegates)
-				|| !IsSameArchiveString(LocalModule->ScriptRelativeFilename, GeneratedModule->ScriptRelativeFilename)
-				|| !IsSameArchiveStringArray(LocalModule->PostInitFunctions, GeneratedModule->PostInitFunctions))
-			{
-				OutError = TEXT("StaticJIT AOT cache fixture module metadata differs from regenerated output.");
-				return false;
-			}
-
-			const TArray<FString> RequiredFunctions =
-			{
-				TEXT("AddForAOT"),
-				TEXT("DoubleToInt64ForAOT"),
-				TEXT("DoubleToUint64ForAOT"),
-				TEXT("Entry"),
-				TEXT("ObjectLastNativeForAOT"),
-				TEXT("StaticWorldContextCheck"),
+				return TArray<FAngelscriptPluginScriptRoot>();
 			};
 
-			for (const FString& FunctionName : RequiredFunctions)
+			TUniquePtr<FAngelscriptEngine> Engine =
+				CreateScriptScanFreeFullEngineForTesting(Config, Dependencies);
+			if (!Engine.IsValid())
 			{
-				const FAngelscriptPrecompiledFunction* LocalFunction = FindFunctionByName(*LocalModule, FunctionName);
-				const FAngelscriptPrecompiledFunction* GeneratedFunction = FindFunctionByName(*GeneratedModule, FunctionName);
-				if (LocalFunction == nullptr || GeneratedFunction == nullptr)
-				{
-					OutError = FString::Printf(TEXT("StaticJIT AOT cache does not contain fixture function '%s'."), *FunctionName);
-					return false;
-				}
-
-				if (!IsSamePrecompiledFunction(*LocalFunction, *GeneratedFunction))
-				{
-					OutError = FString::Printf(TEXT("StaticJIT AOT cache fixture function '%s' differs from regenerated output."), *FunctionName);
-					return false;
-				}
+				OutError = TEXT(
+					"Failed to create the isolated AngelscriptTestJIT fixture Engine.");
+				return nullptr;
+			}
+			if (!AngelscriptStaticJITAotFixture::RegisterObjectLastNativeSurface(
+				*Engine->GetScriptEngine()))
+			{
+				OutError = TEXT(
+					"AngelscriptTestJIT fixture could not register its native probe surface.");
+				return nullptr;
 			}
 
-			const FString RequiredClassName = AngelscriptStaticJITAotFixture::GetGeneratedClassName().ToString();
-			const FAngelscriptPrecompiledClass* LocalClass = FindClassByName(*LocalModule, RequiredClassName);
-			const FAngelscriptPrecompiledClass* GeneratedClass = FindClassByName(*GeneratedModule, RequiredClassName);
-			if (LocalClass == nullptr || GeneratedClass == nullptr)
-			{
-				OutError = FString::Printf(TEXT("StaticJIT AOT cache does not contain fixture class '%s'."), *RequiredClassName);
-				return false;
-			}
-
-			const TArray<FString> RequiredMethods =
-			{
-				TEXT("StorePrimitiveArg"),
-				TEXT("ReturnPrimitive"),
-				TEXT("BumpReference"),
-				TEXT("ReturnSelfObject"),
-			};
-
-			for (const FString& MethodName : RequiredMethods)
-			{
-				const FAngelscriptPrecompiledFunction* LocalMethod = FindMethodByName(*LocalClass, MethodName);
-				const FAngelscriptPrecompiledFunction* GeneratedMethod = FindMethodByName(*GeneratedClass, MethodName);
-				if (LocalMethod == nullptr || GeneratedMethod == nullptr)
-				{
-					OutError = FString::Printf(TEXT("StaticJIT AOT cache does not contain fixture method '%s::%s'."), *RequiredClassName, *MethodName);
-					return false;
-				}
-
-				if (!IsSamePrecompiledFunction(*LocalMethod, *GeneratedMethod))
-				{
-					OutError = FString::Printf(TEXT("StaticJIT AOT cache fixture method '%s::%s' differs from regenerated output."), *RequiredClassName, *MethodName);
-					return false;
-				}
-			}
-
-			return true;
+			return Engine;
 		}
 
-		void NormalizeConstructorArguments(FString& Content, const FString& Prefix, bool bOnlyFirstArgument)
+		static int32 CountFrontendEvents(
+			const TConstArrayView<FAngelscriptCompilationEvent> Events)
 		{
-			int32 SearchIndex = 0;
-			while (SearchIndex < Content.Len())
+			int32 Count = 0;
+			for (const FAngelscriptCompilationEvent& Event : Events)
 			{
-				const int32 PrefixIndex = Content.Find(Prefix, ESearchCase::CaseSensitive, ESearchDir::FromStart, SearchIndex);
-				if (PrefixIndex == INDEX_NONE)
+				switch (Event.Type)
 				{
+				case EAngelscriptCompilationEventType::PreprocessProcessChunks:
+				case EAngelscriptCompilationEventType::PreprocessPostProcessCode:
+				case EAngelscriptCompilationEventType::CompileModuleParse:
+				case EAngelscriptCompilationEventType::CompileModuleCompileCode:
+					++Count;
+					break;
+				default:
 					break;
 				}
-
-				const int32 OpenParenIndex = Content.Find(TEXT("("), ESearchCase::CaseSensitive, ESearchDir::FromStart, PrefixIndex + Prefix.Len());
-				const int32 CloseParenIndex = OpenParenIndex == INDEX_NONE
-					? INDEX_NONE
-					: Content.Find(TEXT(")"), ESearchCase::CaseSensitive, ESearchDir::FromStart, OpenParenIndex + 1);
-				if (OpenParenIndex == INDEX_NONE || CloseParenIndex == INDEX_NONE)
-				{
-					SearchIndex = PrefixIndex + Prefix.Len();
-					continue;
-				}
-
-				int32 ReplaceEndIndex = CloseParenIndex;
-				if (bOnlyFirstArgument)
-				{
-					const int32 CommaIndex = Content.Find(TEXT(","), ESearchCase::CaseSensitive, ESearchDir::FromStart, OpenParenIndex + 1);
-					ReplaceEndIndex = CommaIndex == INDEX_NONE || CommaIndex > CloseParenIndex
-						? INDEX_NONE
-						: CommaIndex;
-				}
-
-				if (ReplaceEndIndex == INDEX_NONE)
-				{
-					SearchIndex = PrefixIndex + Prefix.Len();
-					continue;
-				}
-
-				const FString StablePlaceholder = TEXT("STATIC_JIT_REFERENCE");
-				Content.RemoveAt(OpenParenIndex + 1, ReplaceEndIndex - OpenParenIndex - 1, EAllowShrinking::No);
-				Content.InsertAt(OpenParenIndex + 1, StablePlaceholder);
-				SearchIndex = OpenParenIndex + StablePlaceholder.Len() + 2;
 			}
+			return Count;
 		}
 
-		FString NormalizeGeneratedFileForComparison(const FString& Filename, const FString& Content)
+		static TUniquePtr<FAngelscriptEngine> CreateFixtureEngine(
+			FString& OutFixtureRoot,
+			FStaticJITAotGenerationResult& Result,
+			const bool bEnableCacheV2Persistence)
 		{
-			if (!Filename.EndsWith(TEXT(".jit.hpp")))
+			OutFixtureRoot = FPaths::ConvertRelativePathToFull(FPaths::Combine(
+				FPaths::ProjectSavedDir(),
+				TEXT("Automation/AngelscriptTestJITGeneration"),
+				FGuid::NewGuid().ToString(EGuidFormats::Digits)));
+			FPaths::NormalizeDirectoryName(OutFixtureRoot);
+			if (!OutFixtureRoot.Contains(
+				TEXT("/Saved/Automation/AngelscriptTestJITGeneration/")))
 			{
-				return Content;
+				Result.Error = TEXT(
+					"AngelscriptTestJIT fixture root escaped its isolated Saved directory.");
+				return nullptr;
 			}
 
-			FString Normalized = Content;
-			const TArray<FString> SingleArgumentRefPrefixes =
+			const FString ScriptRoot = FPaths::Combine(
+				OutFixtureRoot, TEXT("Script"));
+			if (!IFileManager::Get().MakeDirectory(*ScriptRoot, true)
+				|| !FFileHelper::SaveStringToFile(
+					AngelscriptStaticJITAotFixture::GetImportProviderScriptSource(),
+					*FPaths::Combine(
+						ScriptRoot,
+						AngelscriptStaticJITAotFixture::
+							GetImportProviderSourceFilename()))
+				|| !FFileHelper::SaveStringToFile(
+					AngelscriptStaticJITAotFixture::GetScriptSource(),
+					*FPaths::Combine(
+						ScriptRoot,
+						AngelscriptStaticJITAotFixture::GetSourceFilename())))
 			{
-				TEXT("AS_FORCE_LINK FJitRef_Function "),
-				TEXT("AS_FORCE_LINK FJitRef_SystemFunctionPointer "),
-				TEXT("AS_FORCE_LINK FJitRef_Type "),
-				TEXT("AS_FORCE_LINK FJitRef_GlobalVar "),
-			};
-
-			for (const FString& Prefix : SingleArgumentRefPrefixes)
-			{
-				NormalizeConstructorArguments(Normalized, Prefix, /*bOnlyFirstArgument=*/false);
+				Result.Error = TEXT(
+					"AngelscriptTestJIT could not materialize its committed fixture sources.");
+				return nullptr;
 			}
 
-			const TArray<FString> FirstArgumentRefPrefixes =
+			TUniquePtr<FAngelscriptEngine> Engine =
+				CreateUncompiledFixtureEngine(
+					OutFixtureRoot, Result.Error,
+					bEnableCacheV2Persistence);
+			if (!Engine.IsValid())
 			{
-				TEXT("AS_FORCE_LINK FJitVerifyPropertyOffset "),
-				TEXT("AS_FORCE_LINK FJitVerifyTypeSize "),
-			};
-
-			for (const FString& Prefix : FirstArgumentRefPrefixes)
-			{
-				NormalizeConstructorArguments(Normalized, Prefix, /*bOnlyFirstArgument=*/true);
+				return nullptr;
 			}
 
-			return Normalized;
+			{
+				FAngelscriptEngineScope EngineScope(*Engine);
+				Engine->InitialCompile();
+			}
+
+			if (!Engine->GetModuleByModuleName(
+					AngelscriptStaticJITAotFixture::
+						GetImportProviderModuleName().ToString()).IsValid()
+				|| !Engine->GetModuleByModuleName(
+					AngelscriptStaticJITAotFixture::
+						GetModuleName().ToString()).IsValid())
+			{
+				Result.Error = TEXT(
+					"AngelscriptTestJIT isolated fixture source compilation failed.");
+				return nullptr;
+			}
+			const TSharedPtr<FAngelscriptModuleDesc> PrimaryModule =
+				Engine->GetModuleByModuleName(
+					AngelscriptStaticJITAotFixture::GetModuleName().ToString());
+			const asCModule* const PrimaryScriptModule =
+				PrimaryModule.IsValid()
+					? static_cast<const asCModule*>(PrimaryModule->ScriptModule)
+					: nullptr;
+			if (PrimaryModule.IsValid() && PrimaryScriptModule != nullptr)
+			{
+				UE_LOG(Angelscript, Verbose,
+					TEXT("[TestJITGeneration] Primary capture shape: Classes=%d Enums=%d Delegates=%d ImportedModules=%d PostInitFunctions=%d ObjectTypes=%u ScriptEnums=%u Typedefs=%u ImportedFunctions=%u"),
+					PrimaryModule->Classes.Num(), PrimaryModule->Enums.Num(),
+					PrimaryModule->Delegates.Num(),
+					PrimaryModule->ImportedModules.Num(),
+					PrimaryModule->PostInitFunctions.Num(),
+					PrimaryScriptModule->GetObjectTypeCount(),
+					PrimaryScriptModule->GetEnumCount(),
+					PrimaryScriptModule->GetTypedefCount(),
+					PrimaryScriptModule->GetImportedFunctionCount());
+			}
+			return Engine;
 		}
 
-		bool VerifyGeneratedFiles(FAngelscriptEngine& Engine, const TMap<FString, FString>& GeneratedFiles, const FString& GeneratedCacheFilename, FStaticJITAotGenerationResult& Result)
+		static bool BuildExpectedOutput(
+			FAngelscriptEngine& Engine,
+			FAngelscriptJITGenerationOutput& OutOutput,
+			FStaticJITAotGenerationResult& Result)
 		{
-			const FString GeneratedDirectory = AngelscriptStaticJITAotFixture::GetGeneratedDirectory();
-			for (const TPair<FString, FString>& GeneratedFile : GeneratedFiles)
+#if !AS_CAN_GENERATE_JIT
+			Result.Error = TEXT(
+				"AngelscriptTestJIT generation is unavailable in this build.");
+			return false;
+#else
+			TArray<asIScriptModule*> ScriptModules;
+			const FName FixtureModuleNames[] = {
+				AngelscriptStaticJITAotFixture::GetImportProviderModuleName(),
+				AngelscriptStaticJITAotFixture::GetModuleName(),
+			};
+			for (const FName ModuleName : FixtureModuleNames)
 			{
-				const FString OutputPath = FPaths::Combine(GeneratedDirectory, GeneratedFile.Key);
-				FString ExistingContent;
-				if (!FFileHelper::LoadFileToString(ExistingContent, *OutputPath)
-					|| NormalizeGeneratedFileForComparison(GeneratedFile.Key, ExistingContent) != NormalizeGeneratedFileForComparison(GeneratedFile.Key, GeneratedFile.Value))
+				const TSharedPtr<FAngelscriptModuleDesc> ModuleDesc =
+					Engine.GetModuleByModuleName(ModuleName.ToString());
+				if (!ModuleDesc.IsValid() || ModuleDesc->ScriptModule == nullptr)
 				{
-					Result.StaleFiles.Add(OutputPath);
+					Result.Error = FString::Printf(
+						TEXT("AngelscriptTestJIT fixture module '%s' is unavailable after compile."),
+						*ModuleName.ToString());
+					return false;
 				}
+				ScriptModules.Add(ModuleDesc->ScriptModule);
 			}
 
-			const FString LocalCacheFilename = AngelscriptStaticJITAotFixture::GetPrecompiledCacheFilename();
-			FString CacheError;
-			if (!VerifyPrecompiledCacheSemantics(Engine, LocalCacheFilename, GeneratedCacheFilename, CacheError))
+			const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
+				ESPMode::ThreadSafe> Routes = Engine.GetFunctionRouteSnapshot();
+			const FAngelscriptFunctionRoute* IdentityRoute = Routes.IsValid()
+				? Routes->FunctionRoutes.FindByPredicate(
+					[](const FAngelscriptFunctionRoute& Route)
+					{
+						return Route.Function != nullptr
+							&& Route.bHasVerifiedArtifactIdentity
+							&& !Route.Identity.Profile.Hash.IsZero();
+					})
+				: nullptr;
+			if (IdentityRoute == nullptr)
 			{
-				Result.StaleFiles.Add(LocalCacheFilename);
-				if (!CacheError.IsEmpty())
-				{
-					Result.Error = CacheError;
-				}
-			}
-
-			if (Result.StaleFiles.Num() > 0)
-			{
-				const FString Detail = Result.Error.IsEmpty()
-					? FString()
-					: FString::Printf(TEXT(" (%s)"), *Result.Error);
-				Result.Error = FString::Printf(TEXT("StaticJIT AOT generated files are stale or incomplete: %s%s"), *FString::Join(Result.StaleFiles, TEXT(", ")), *Detail);
+				Result.Error = TEXT(
+					"AngelscriptTestJIT fixture compile published no verified artifact identity.");
 				return false;
 			}
 
+			FAngelscriptJITProviderGenerationSettings Settings;
+			Settings.TargetProfile =
+				EAngelscriptJITTargetProfile::EditorDevelopment;
+			Settings.ProviderId =
+				AngelscriptTestJITProbes::GetStableProviderId();
+			Settings.ProviderName = TEXT("AngelscriptTestJIT Fixtures");
+			Settings.OwnerModuleName = TEXT("AngelscriptTestJIT");
+			Settings.ArtifactProfile = IdentityRoute->Identity.Profile;
+			Settings.NativeEnvironmentFingerprint =
+				FAngelscriptJITTargetProfiles::
+					BuildCurrentNativeEnvironmentFingerprint(
+						Settings.TargetProfile);
+
+			FString GenerationError;
+			if (!GenerateStaticJITProviderArtifacts(
+				ScriptModules, Settings, OutOutput, &GenerationError))
+			{
+				Result.Error = MoveTemp(GenerationError);
+				return false;
+			}
+			Result.ProviderId = OutOutput.ProviderId.Hash.ToHexString();
+			Result.ProviderGeneration =
+				OutOutput.ProviderGeneration.Hash.ToHexString();
+			for (const FAngelscriptJITGeneratedModule& Module : OutOutput.Modules)
+			{
+				Result.GeneratedModules.Add(FString::Printf(
+					TEXT("%s [%s] -> %s (%u functions)"),
+					*Module.CanonicalModuleName,
+					*Module.ModuleKey.Hash.ToHexString(),
+					*Module.SourceRelativePath,
+					Module.FunctionCount));
+			}
+			for (const FAngelscriptJITGeneratedFunction& Function :
+				OutOutput.Functions)
+			{
+				Result.GeneratedFunctionKeys.Add(
+					Function.FunctionKey.Hash.ToHexString());
+			}
 			return true;
+#endif
+		}
+
+		static FString DescribeDifferences(
+			const FAngelscriptJITGeneratedFileComparison& Comparison)
+		{
+			TArray<FString> Lines;
+			for (const FAngelscriptJITGeneratedFileDifferenceRecord& Difference :
+				Comparison.Differences)
+			{
+				Lines.Add(FString::Printf(TEXT("%s: %s"),
+					*Difference.RelativePath, *Difference.Detail));
+			}
+			return FString::Join(Lines, TEXT("; "));
 		}
 	}
 
-	FStaticJITAotGenerationResult Run(EStaticJITAotGenerationMode Mode)
+	FStaticJITAotFixtureEngineSession::~FStaticJITAotFixtureEngineSession()
+	{
+		Engine.Reset();
+		if (FixtureRoot.Contains(
+			TEXT("/Saved/Automation/AngelscriptTestJITGeneration/")))
+		{
+			IFileManager::Get().DeleteDirectory(*FixtureRoot, false, true);
+		}
+	}
+
+	FStaticJITAotCacheV2RestoreResult
+	FStaticJITAotFixtureEngineSession::RestoreFreshEngineFromCacheV2()
+	{
+		FStaticJITAotCacheV2RestoreResult Result;
+		const auto Fail = [&Result](const FString& Detail)
+		{
+			Result.Detail = Detail;
+			return Result;
+		};
+
+		if (!IsValid())
+		{
+			return Fail(TEXT(
+				"StaticJIT Cache V2 restore requires a valid source fixture Engine."));
+		}
+
+		const FAngelscriptCacheFlushApiResult Flush =
+			FlushAngelscriptCacheToStore(Engine.Get(), 5.0);
+		if (!Flush.IsSuccess() || !Flush.Flush.Current.IsSuccess())
+		{
+			return Fail(FString::Printf(
+				TEXT("StaticJIT Cache V2 producer flush failed: ApiError=%u LifecycleError=%u Detail=%s"),
+				static_cast<uint32>(Flush.Error),
+				static_cast<uint32>(Flush.Flush.Error),
+				*Flush.Detail));
+		}
+		const FAngelscriptHash256 ProducerGeneration =
+			Flush.Flush.Current.GenerationId;
+		int32 ExpectedProviderFunctionCount = 0;
+		const TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
+			ESPMode::ThreadSafe> ProviderSnapshot =
+				FAngelscriptJITProviderRegistry::Get().GetSnapshot();
+		if (ProviderSnapshot.IsValid())
+		{
+			for (const TSharedPtr<const FAngelscriptJITProviderCatalog,
+				ESPMode::ThreadSafe>& Provider : ProviderSnapshot->Providers)
+			{
+				if (Provider.IsValid()
+					&& Provider->ProviderId
+						== AngelscriptTestJITProbes::GetStableProviderId())
+				{
+					ExpectedProviderFunctionCount = Provider->Entries.Num();
+					break;
+				}
+			}
+		}
+		if (ExpectedProviderFunctionCount <= 0)
+		{
+			return Fail(TEXT(
+				"StaticJIT Cache V2 proof could not resolve the committed TestJIT Provider entry count."));
+		}
+
+		// The producer and all of its Engine-local function/reference objects are
+		// gone before the consumer is allocated. Only source files and the
+		// persisted Cache V2 generation remain below FixtureRoot.
+		Engine.Reset();
+
+		FString CreateError;
+		TUniquePtr<FAngelscriptEngine> RestoredEngine =
+			CreateUncompiledFixtureEngine(
+				FixtureRoot, CreateError, true);
+		if (!RestoredEngine.IsValid())
+		{
+			Error = CreateError;
+			return Fail(CreateError);
+		}
+		FAngelscriptCacheService* const CacheService =
+			RestoredEngine->GetCacheService();
+		if (CacheService != nullptr)
+		{
+			// Preserve the complete two-module lookup sequence plus the subsequent
+			// stable-route publication events so a late failure still names its
+			// original function-level rejection.
+			CacheService->ConfigureDecisionTrace(true, 512);
+		}
+
+		TArray<FAngelscriptCompilationEvent> Events;
+		const FDelegateHandle Listener =
+			FAngelscriptCompilationEvents::RegisterListener(
+				[&Events](const FAngelscriptCompilationEvent& Event)
+				{
+					Events.Add(Event);
+				});
+		{
+			ON_SCOPE_EXIT
+			{
+				FAngelscriptCompilationEvents::UnregisterListener(Listener);
+			};
+			FAngelscriptEngineScope EngineScope(*RestoredEngine);
+			RestoredEngine->InitialCompile();
+		}
+		Result.FrontendEventCount = CountFrontendEvents(Events);
+
+		const TSharedPtr<FAngelscriptModuleDesc> ImportModule =
+			RestoredEngine->GetModuleByModuleName(
+				AngelscriptStaticJITAotFixture::
+					GetImportProviderModuleName().ToString());
+		const TSharedPtr<FAngelscriptModuleDesc> PrimaryModule =
+			RestoredEngine->GetModuleByModuleName(
+				AngelscriptStaticJITAotFixture::GetModuleName().ToString());
+		const FAngelscriptCacheFunctionReuseSummary FunctionReuse =
+			CacheService != nullptr
+				? CacheService->CaptureFunctionReuseSummary()
+				: FAngelscriptCacheFunctionReuseSummary{};
+		Result.bConsumedPersistedCandidate = FunctionReuse.bPresent;
+		Result.CandidateModuleCount = static_cast<int32>(
+			FunctionReuse.CandidateModuleCount);
+		Result.RestoredFunctionCount = static_cast<int32>(
+			FunctionReuse.RestoredFunctionCount);
+		Result.CompiledMissCount = static_cast<int32>(
+			FunctionReuse.CompiledMissCount);
+		Result.NotCacheableCount = static_cast<int32>(
+			FunctionReuse.NotCacheableCount);
+
+		const FAngelscriptCacheLifecyclePublications Publications =
+			CacheService != nullptr
+				? CacheService->GetLifecyclePublications()
+				: FAngelscriptCacheLifecyclePublications{};
+		const FAngelscriptHash256 CandidateGeneration =
+			FunctionReuse.CandidateGenerationId;
+		Result.GenerationId = CandidateGeneration.ToHexString();
+		TArray<FString> DecisionParts;
+		if (CacheService != nullptr)
+		{
+			const FAngelscriptCacheDecisionTraceSnapshot Trace =
+				CacheService->CaptureDecisionTrace();
+			for (const FAngelscriptCacheDecisionEvent& Event : Trace.Events)
+			{
+				const bool bStartupDecision =
+					Event.Stage
+						== EAngelscriptCacheDecisionStage::StartupSelection
+					|| Event.Stage
+						== EAngelscriptCacheDecisionStage::StartupRestore;
+				const bool bFailedFunctionDecision =
+					Event.Stage
+						== EAngelscriptCacheDecisionStage::FunctionLookup
+					&& Event.Outcome
+						!= EAngelscriptCacheDecisionOutcome::Restored;
+				if (!bStartupDecision && !bFailedFunctionDecision)
+				{
+					continue;
+				}
+				DecisionParts.Add(FString::Printf(
+					TEXT("stage=%u outcome=%u domain=%u reason=%u expected=%s current=%s detail=%s"),
+					static_cast<uint32>(Event.Stage),
+					static_cast<uint32>(Event.Outcome),
+					static_cast<uint32>(Event.ReasonDomain),
+					Event.ReasonCode,
+					Event.ExpectedCoordinate.IsSet()
+						? *Event.ExpectedCoordinate->ToHexString() : TEXT("none"),
+					Event.CurrentCoordinate.IsSet()
+						? *Event.CurrentCoordinate->ToHexString() : TEXT("none"),
+					*Event.Detail));
+			}
+		}
+		const FString DecisionDetail = DecisionParts.IsEmpty()
+			? TEXT("no startup or failed function decision events")
+			: FString::Join(DecisionParts, TEXT(" | "));
+
+		// The primary fixture deliberately contains reflected classes and many
+		// functions. Cache V2's executable exact-start vertical currently accepts
+		// only its narrow enum/global shape, so this production-shaped module uses
+		// the normal typed hybrid path: select the persisted Generation, rebuild
+		// current module/class authority, and restore every cacheable function body
+		// into the fresh Engine's own function objects. Do not misreport that as an
+		// exact whole-module bLoadedIncrementalCache restoration.
+		if (!ImportModule.IsValid() || !PrimaryModule.IsValid()
+			|| !Result.bConsumedPersistedCandidate
+			|| Result.CandidateModuleCount != 2
+			|| Result.RestoredFunctionCount != ExpectedProviderFunctionCount
+			|| CandidateGeneration != ProducerGeneration
+			|| !Publications.Current.IsValid()
+			|| Publications.Current->bRestoredFromStore)
+		{
+			return Fail(FString::Printf(
+				TEXT("StaticJIT Cache V2 fresh Engine reuse rejected: Producer=%s Candidate=%s Consumed=%d Modules=%d RestoredFunctions=%d/%d CompiledMisses=%d NotCacheable=%d ExactModules=%d FrontendEvents=%d Decisions=[%s]"),
+				*ProducerGeneration.ToHexString(),
+				*CandidateGeneration.ToHexString(),
+				Result.bConsumedPersistedCandidate ? 1 : 0,
+				Result.CandidateModuleCount,
+				Result.RestoredFunctionCount,
+				ExpectedProviderFunctionCount,
+				Result.CompiledMissCount,
+				Result.NotCacheableCount,
+				Publications.Current.IsValid()
+					&& Publications.Current->bRestoredFromStore ? 1 : 0,
+				Result.FrontendEventCount,
+				*DecisionDetail));
+		}
+
+		Engine = MoveTemp(RestoredEngine);
+		Error.Reset();
+		Result.bSuccess = true;
+		Result.Detail = FString::Printf(
+			TEXT("StaticJIT Cache V2 fresh Engine reused: Generation=%s Modules=%d RestoredFunctions=%d CompiledMisses=%d NotCacheable=%d FrontendEvents=%d"),
+			*Result.GenerationId,
+			Result.CandidateModuleCount,
+			Result.RestoredFunctionCount,
+			Result.CompiledMissCount,
+			Result.NotCacheableCount,
+			Result.FrontendEventCount);
+		return Result;
+	}
+
+	TUniquePtr<FStaticJITAotFixtureEngineSession>
+	CreateFixtureEngineSession(const bool bEnableCacheV2Persistence)
+	{
+		TUniquePtr<FStaticJITAotFixtureEngineSession> Session =
+			MakeUnique<FStaticJITAotFixtureEngineSession>();
+		FStaticJITAotGenerationResult CreationResult;
+		Session->Engine = CreateFixtureEngine(
+			Session->FixtureRoot, CreationResult,
+			bEnableCacheV2Persistence);
+		Session->Error = MoveTemp(CreationResult.Error);
+		return Session;
+	}
+
+	FStaticJITAotGenerationResult Run(const EStaticJITAotGenerationMode Mode)
 	{
 		FStaticJITAotGenerationResult Result;
-
-		TUniquePtr<FAngelscriptEngine> Engine = CreateIsolatedFullEngine();
-		if (!Engine.IsValid())
+		TUniquePtr<FStaticJITAotFixtureEngineSession> Session =
+			CreateFixtureEngineSession();
+		if (!Session.IsValid() || !Session->IsValid())
 		{
-			Result.Error = TEXT("Failed to create StaticJIT AOT generation engine.");
+			Result.Error = Session.IsValid()
+				? Session->Error
+				: TEXT("Failed to allocate the TestJIT fixture Engine session.");
 			return Result;
 		}
 
-		FAngelscriptEngineScope EngineScope(*Engine);
-		if (!CompileFixture(*Engine, Result))
-		{
-			return Result;
-		}
-
-		const FString CacheFilename = Mode == EStaticJITAotGenerationMode::Generate
-			? AngelscriptStaticJITAotFixture::GetPrecompiledCacheFilename()
-			: GetVerifyCacheFilename();
-
-		TMap<FString, FString> GeneratedFiles;
-		if (!GenerateFilesAndCache(*Engine, CacheFilename, GeneratedFiles, Result))
+		FAngelscriptEngineScope EngineScope(*Session->Engine);
+		FAngelscriptJITGenerationOutput Output;
+		if (!BuildExpectedOutput(*Session->Engine, Output, Result))
 		{
 			return Result;
 		}
 
-		Result.bSuccess = Mode == EStaticJITAotGenerationMode::Generate
-			? WriteGeneratedFiles(GeneratedFiles, Result)
-			: VerifyGeneratedFiles(*Engine, GeneratedFiles, CacheFilename, Result);
+		const FString OutputRoot = GetGeneratedProfileRoot();
+		const TArray<FString> LegacyRoots = GetLegacyGeneratedProfileRoots();
+		TArray<FAngelscriptJITOwnedOutputInspection> LegacyInspections;
+		LegacyInspections.Reserve(LegacyRoots.Num());
+		for (const FString& LegacyRoot : LegacyRoots)
+		{
+			const FAngelscriptJITOwnedOutputInspection Inspection =
+				FAngelscriptJITGeneratedFileStore::InspectOwnedOutput(
+					LegacyRoot, Output.TargetProfile, Output.ProviderId);
+			LegacyInspections.Add(Inspection);
+			if (!Inspection.bValid)
+			{
+				Result.Error = FString::Printf(
+					TEXT("AngelscriptTestJIT legacy output '%s' cannot be migrated: %s"),
+					*LegacyRoot, *Inspection.Error);
+				return Result;
+			}
+		}
+		if (Mode == EStaticJITAotGenerationMode::Generate)
+		{
+			const FAngelscriptJITGeneratedFilePublication Publication =
+				FAngelscriptJITGeneratedFileStore::Publish(OutputRoot, Output);
+			Result.bSuccess = Publication.bSuccess;
+			Result.Error = Publication.Error;
+			Result.WrittenFiles = Publication.WrittenFiles;
+			Result.UnchangedFiles = Publication.UnchangedFiles;
+			Result.RemovedFiles = Publication.RemovedFiles;
+			for (int32 LegacyIndex = 0;
+				Result.bSuccess && LegacyIndex < LegacyRoots.Num(); ++LegacyIndex)
+			{
+				if (!LegacyInspections[LegacyIndex].bExists)
+				{
+					continue;
+				}
+				const FAngelscriptJITOwnedOutputRetirement Retired =
+					FAngelscriptJITGeneratedFileStore::RetireOwnedOutput(
+						LegacyRoots[LegacyIndex], Output.TargetProfile,
+						Output.ProviderId);
+				Result.bSuccess = Retired.bSuccess;
+				Result.Error = Retired.Error;
+				Result.RemovedFiles.Append(Retired.RemovedFiles);
+				Result.RemovedFiles.Sort();
+			}
+			if (Result.bSuccess)
+			{
+				RemoveEmptyLegacyPrivateWrappers();
+			}
+			return Result;
+		}
+
+		const FAngelscriptJITGeneratedFileComparison Comparison =
+			FAngelscriptJITGeneratedFileStore::Compare(OutputRoot, Output);
+		const bool bLegacyCurrent = LegacyInspections.ContainsByPredicate(
+			[](const FAngelscriptJITOwnedOutputInspection& Inspection)
+			{
+				return !Inspection.bValid || Inspection.bExists;
+			}) == false;
+		Result.bSuccess = Comparison.IsCurrent() && bLegacyCurrent;
+		if (!Result.bSuccess)
+		{
+			Result.Error = TEXT("AngelscriptTestJIT Verify found stale output: ")
+				+ DescribeDifferences(Comparison);
+			if (!bLegacyCurrent)
+			{
+				Result.Error +=
+					TEXT("; legacy Private generated output remains or is invalid");
+			}
+		}
 		return Result;
 	}
 }
