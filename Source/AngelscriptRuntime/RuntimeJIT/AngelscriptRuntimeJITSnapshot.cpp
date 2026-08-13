@@ -341,13 +341,18 @@ namespace AngelscriptRuntimeJITSnapshot_Private
 		}
 	}
 
-	static uint32 ReadFunctionTokenSlot(
+	static bool FunctionTokenSlotMatches(
 		const asDWORD* Instruction,
-		const asEBCInstr Opcode)
+		const asEBCInstr Opcode,
+		const uint32 ExpectedSlot)
 	{
-		return UsesFunctionIdOperand(Opcode)
-			? static_cast<uint32>(asBC_INTARG(Instruction))
-			: static_cast<uint32>(asBC_PTRARG(Instruction));
+		if (UsesFunctionIdOperand(Opcode))
+		{
+			const int32 Slot = asBC_INTARG(Instruction);
+			return Slot >= 0 && static_cast<uint32>(Slot) == ExpectedSlot;
+		}
+		return asBC_PTRARG(Instruction) ==
+			static_cast<asPWORD>(ExpectedSlot);
 	}
 
 	static FAngelscriptHash256 BuildEntryAbiHash(
@@ -1130,7 +1135,8 @@ FAngelscriptRuntimeJITContractValidationResult
 		}
 		const FAngelscriptRuntimeJITHelperToken& Token =
 			Snapshot.HelperTokens[ExpectedTokenSlot];
-		if (ReadFunctionTokenSlot(Instruction, Opcode) != ExpectedTokenSlot
+		if (!FunctionTokenSlotMatches(
+				Instruction, Opcode, ExpectedTokenSlot)
 			|| Token.SlotIndex != ExpectedTokenSlot
 			|| !IsValidTokenKindForOpcode(Opcode, Token.Kind))
 		{

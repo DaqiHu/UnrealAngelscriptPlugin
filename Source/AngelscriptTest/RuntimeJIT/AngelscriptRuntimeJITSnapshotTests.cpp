@@ -619,6 +619,58 @@ public:
 			EAngelscriptRuntimeJITContractValidationCode::InvalidHelperToken));
 	}
 
+	TEST_METHOD(StructuralValidationRejectsHighBitsInPointerTokenSlots)
+	{
+		FAngelscriptRuntimeJITCompileSnapshotHeader Header;
+		Header.BackendId = BackendId();
+		Header.Platform = EAngelscriptRuntimeJITPlatform::Win64;
+		Header.Configuration =
+			EAngelscriptRuntimeJITBuildConfiguration::EditorDevelopment;
+		Header.PointerWidth = sizeof(void*);
+		Header.Endianness = EAngelscriptRuntimeJITEndianness::Little;
+		Header.CallingConvention =
+			EAngelscriptRuntimeJITCallingConvention::AngelscriptVMEntry;
+		Header.Invocation = EAngelscriptRuntimeJITInvocationKind::Global;
+		Header.Receiver = EAngelscriptRuntimeJITReceiverKind::None;
+		Header.FunctionProfile =
+			EAngelscriptRuntimeJITFunctionProfile::ScalarWholeFunction;
+		Header.EntryAbiRevision =
+			FAngelscriptRuntimeJITBackendAbi::EntryAbiRevision;
+		Header.EngineNamespace = 901;
+		Header.ModuleKey.Hash = MakeHash(TEXT("module"));
+		Header.FunctionKey.Hash = MakeHash(TEXT("function"));
+		Header.FunctionRevision = MakeHash(TEXT("revision"));
+		Header.EntryAbiHash = MakeHash(TEXT("abi"));
+
+		const int32 CallWordCount =
+			asBCTypeSize[asBCInfo[asBC_CALLSYS].type];
+		TArray<asDWORD> Bytecode;
+		Bytecode.SetNumZeroed(CallWordCount + 1);
+		*reinterpret_cast<uint8*>(&Bytecode[0]) =
+			static_cast<uint8>(asBC_CALLSYS);
+		asBC_PTRARG(Bytecode.GetData()) = static_cast<asPWORD>(
+			static_cast<uint64>(MAX_uint32) + 1ull);
+		Bytecode[CallWordCount] = static_cast<asDWORD>(asBC_RET);
+
+		TArray<uint32> Offsets{0, static_cast<uint32>(CallWordCount)};
+		FAngelscriptRuntimeJITControlFlowEdge Edge;
+		Edge.FromInstruction = 0;
+		Edge.ToInstruction = 1;
+		Edge.Kind = EAngelscriptRuntimeJITControlFlowEdgeKind::Fallthrough;
+		FAngelscriptRuntimeJITHelperToken Token;
+		Token.Kind = EAngelscriptRuntimeJITHelperTokenKind::SystemFunction;
+		Token.StableKey = MakeHash(TEXT("system-function"));
+		Token.ExpectedAbi = MakeHash(TEXT("system-function-abi"));
+
+		const FAngelscriptRuntimeJITCompileSnapshot Snapshot =
+			FAngelscriptRuntimeJITCompileSnapshot::FromOwnedData(
+				Header, MoveTemp(Bytecode), {}, MoveTemp(Offsets), {Edge}, {Token});
+		ASSERT_THAT(IsTrue(Snapshot.Validate().Code ==
+			EAngelscriptRuntimeJITContractValidationCode::InvalidHelperToken,
+			TEXT("A pointer-bearing opcode must not hide raw high bits behind "
+				"a matching 32-bit token slot")));
+	}
+
 	TEST_METHOD(ReceiverAndInvalidSnapshotsNeverReachConcreteBackend)
 	{
 		FCountingFactory Factory;
@@ -660,6 +712,64 @@ public:
 		Created.Owner->Compile(Valid.GetView());
 		ASSERT_THAT(AreEqual(1, Factory.LastSession->CompileCount,
 			TEXT("Valid scalar snapshot should reach the concrete backend")));
+
+		TArray<asDWORD> TruncatedBytecode{
+			static_cast<asDWORD>(asBC_PshC4)};
+		TArray<uint32> TruncatedOffsets{0};
+		const FAngelscriptRuntimeJITCompileSnapshot MalformedBytecode =
+			FAngelscriptRuntimeJITCompileSnapshot::FromOwnedData(
+				Header, MoveTemp(TruncatedBytecode), {},
+				MoveTemp(TruncatedOffsets), {}, {});
+		Created.Owner->Compile(MalformedBytecode.GetView());
+		ASSERT_THAT(AreEqual(1, Factory.LastSession->CompileCount,
+			TEXT("Truncated bytecode must fail before the backend")));
+
+		TArray<asDWORD> BranchBytecode{
+			static_cast<asDWORD>(asBC_PshC4), 42,
+			static_cast<asDWORD>(asBC_RET)};
+		TArray<uint32> BranchOffsets{0, 2};
+		FAngelscriptRuntimeJITControlFlowEdge InvalidEdge;
+		InvalidEdge.FromInstruction = 0;
+		InvalidEdge.ToInstruction = 0;
+		InvalidEdge.Kind =
+			EAngelscriptRuntimeJITControlFlowEdgeKind::Fallthrough;
+		const FAngelscriptRuntimeJITCompileSnapshot InvalidControlFlow =
+			FAngelscriptRuntimeJITCompileSnapshot::FromOwnedData(
+				Header, MoveTemp(BranchBytecode), {},
+				MoveTemp(BranchOffsets), {InvalidEdge}, {});
+		Created.Owner->Compile(InvalidControlFlow.GetView());
+		ASSERT_THAT(AreEqual(1, Factory.LastSession->CompileCount,
+			TEXT("Invalid control flow must fail before the backend")));
+
+		Header.ParameterFrameByteSize = 4;
+		FAngelscriptRuntimeJITFrameValue FirstFrameValue;
+		FirstFrameValue.Kind = EAngelscriptRuntimeJITScalarKind::Int32;
+		FirstFrameValue.Flags =
+			EAngelscriptRuntimeJITFrameValueFlags::Parameter;
+		FirstFrameValue.ByteSize = 4;
+		FirstFrameValue.Alignment = 4;
+		FAngelscriptRuntimeJITFrameValue OverlappingFrameValue =
+			FirstFrameValue;
+		OverlappingFrameValue.SourceIndex = 1;
+		Created.Owner->Compile(Owned(
+			Header, {FirstFrameValue, OverlappingFrameValue}).GetView());
+		ASSERT_THAT(AreEqual(1, Factory.LastSession->CompileCount,
+			TEXT("Overlapping frame values must fail before the backend")));
+		Header.ParameterFrameByteSize = 0;
+
+		Header.Invocation =
+			static_cast<EAngelscriptRuntimeJITInvocationKind>(MAX_uint8);
+		Created.Owner->Compile(Owned(Header).GetView());
+		ASSERT_THAT(AreEqual(1, Factory.LastSession->CompileCount,
+			TEXT("Unknown invocation kinds must fail before the backend")));
+		Header.Invocation = EAngelscriptRuntimeJITInvocationKind::Global;
+
+		Header.Receiver =
+			static_cast<EAngelscriptRuntimeJITReceiverKind>(MAX_uint8);
+		Created.Owner->Compile(Owned(Header).GetView());
+		ASSERT_THAT(AreEqual(1, Factory.LastSession->CompileCount,
+			TEXT("Unknown receiver kinds must fail before the backend")));
+		Header.Receiver = EAngelscriptRuntimeJITReceiverKind::None;
 
 		Header.FunctionProfile =
 			static_cast<EAngelscriptRuntimeJITFunctionProfile>(MAX_uint8);
@@ -750,6 +860,21 @@ public:
 		ASSERT_THAT(IsTrue(EnumHasAnyFlags(Snapshot.GetFrameValues()[1].Flags,
 			EAngelscriptRuntimeJITFrameValueFlags::ReceiverAlias),
 			TEXT("Declared parameter zero should carry the receiver-alias marker")));
+
+		FCountingFactory Factory;
+		FScopedFactoryRegistration Registration(Factory);
+		FAngelscriptRuntimeJITSessionCreateResult Created = CreateSession();
+		ASSERT_THAT(IsTrue(Created.IsCreated(),
+			TEXT("External receiver rejection session should be created")));
+		const FAngelscriptRuntimeJITCompileResult CompileResult =
+			Created.Owner->Compile(Snapshot.GetView());
+		ASSERT_THAT(IsTrue(CompileResult.Outcome ==
+			EAngelscriptRuntimeJITCompileOutcome::Unsupported));
+		ASSERT_THAT(IsTrue(CompileResult.Reason ==
+			EAngelscriptRuntimeJITDiagnosticReason::UnsupportedReceiver));
+		ASSERT_THAT(AreEqual(0, Factory.LastSession->CompileCount,
+			TEXT("A captured external implicit receiver must fall back before "
+				"the concrete backend")));
 	}
 
 	TEST_METHOD(QueuedSnapshotSurvivesImmediateModuleDiscard)
