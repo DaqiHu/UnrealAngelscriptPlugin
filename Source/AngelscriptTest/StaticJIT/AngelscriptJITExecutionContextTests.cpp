@@ -5,6 +5,7 @@
 #include "Misc/ScopeExit.h"
 #include "Support/AngelscriptNativeExecutionTestSupport.h"
 #include "Support/AngelscriptNativeLanguageCaseTestSupport.h"
+#include "Shared/AngelscriptTestMacros.h"
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_context.h"
