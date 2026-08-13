@@ -144,6 +144,90 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptJITGenerationDeterminismTests,
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 public:
+	TEST_METHOD(CompleteGenerationContractIsFrozenBeforeBackendExtraction)
+	{
+		using namespace AngelscriptJITGenerationDeterminismTests;
+		FAngelscriptJITGenerationRequest Request = MakeRequest();
+		Request.ModuleSourcePreamble = TEXT("// frozen-module-preamble\n");
+		Request.ModuleSourceFooter = TEXT("// frozen-module-footer\n");
+		Request.ProviderSourcePreamble = TEXT("// frozen-provider-preamble\n");
+		Request.Modules.Add(MakeModule(
+			0x11,
+			TEXT("Golden.Module"),
+			TEXT("/Angelscript/Game/Golden/GoldenModule.as")));
+		FAngelscriptJITGenerationFunction Function =
+			MakeFunction(0x11, 0x25, 0x33);
+		Function.CanonicalDeclaration = TEXT("int Golden::Run(int Value)");
+		Function.SourceSection =
+			TEXT("/Angelscript/Game/Golden/GoldenModule.as");
+		Function.SourceLine = 42;
+		Function.SourceColumn = 7;
+		Function.ImplementationTemplate += TEXT("// frozen-implementation\n");
+		Function.References.Add(MakeReference(
+			EAngelscriptArtifactReferenceKind::RuntimeHelper, 0x77, 0x88));
+		Function.References.Add(MakeReference(
+			EAngelscriptArtifactReferenceKind::ScriptFunction, 0x66, 0x99,
+			EAngelscriptJITReferenceSlotFlags::Optional));
+		Request.Functions.Add(MoveTemp(Function));
+
+		FAngelscriptJITGenerationOutput First;
+		FAngelscriptJITGenerationOutput Second;
+		FString Error;
+		ASSERT_THAT(IsTrue(FAngelscriptJITGeneration::Generate(
+			Request, First, &Error), Error));
+		ASSERT_THAT(IsTrue(FAngelscriptJITGeneration::Generate(
+			Request, Second, &Error), Error));
+		AssertOutputsEqual(*TestRunner, First, Second);
+
+		ASSERT_THAT(AreEqual(Request.TargetProfile, First.TargetProfile));
+		ASSERT_THAT(IsTrue(Request.ProviderId == First.ProviderId));
+		ASSERT_THAT(IsTrue(Request.ArtifactProfile.Hash
+			== First.ArtifactProfile.Hash));
+		ASSERT_THAT(IsTrue(Request.NativeEnvironmentFingerprint
+			== First.NativeEnvironmentFingerprint));
+		ASSERT_THAT(AreEqual(1, First.Modules.Num()));
+		ASSERT_THAT(AreEqual(1, First.Functions.Num()));
+		ASSERT_THAT(AreEqual(5, First.Files.Num()));
+		ASSERT_THAT(AreEqual(5, First.OwnedFiles.Num()));
+
+		const FString ModulePath =
+			TEXT("Golden/GoldenModule.11111111.EditorDevelopment.jit.cpp");
+		const FAngelscriptJITGeneratedFile* ModuleSource =
+			FindFile(First, ModulePath);
+		ASSERT_THAT(IsNotNull(ModuleSource));
+		ASSERT_THAT(IsTrue(ModuleSource->Content.Contains(
+			TEXT("// frozen-module-preamble\n"))));
+		ASSERT_THAT(IsTrue(ModuleSource->Content.Contains(
+			TEXT("// frozen-implementation\n"))));
+		ASSERT_THAT(IsTrue(ModuleSource->Content.Contains(
+			TEXT("// frozen-module-footer\n"))));
+		ASSERT_THAT(AreEqual(2, First.Functions[0].ReferenceSlots.Num()));
+		ASSERT_THAT(AreEqual(FAngelscriptJITGeneration::BuildSymbolPrefix(
+			First.Functions[0].FunctionKey,
+			First.Functions[0].ExecutionHash),
+			First.Functions[0].SymbolPrefix));
+
+		const FAngelscriptJITGeneratedFile* ProviderSource =
+			FindFile(First, TEXT("Provider.generated.cpp"));
+		const FAngelscriptJITGeneratedFile* Manifest =
+			FindFile(First, TEXT("ProviderManifest.generated.json"));
+		const FAngelscriptJITGeneratedFile* Inventory =
+			FindFile(First, TEXT("OwnedFiles.generated.json"));
+		ASSERT_THAT(IsNotNull(ProviderSource));
+		ASSERT_THAT(IsNotNull(Manifest));
+		ASSERT_THAT(IsNotNull(Inventory));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			TEXT("// frozen-provider-preamble\n"))));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			First.Functions[0].SymbolPrefix)));
+		ASSERT_THAT(IsTrue(Manifest->Content.Contains(
+			First.ProviderGeneration.Hash.ToHexString())));
+		for (const FString& OwnedFile : First.OwnedFiles)
+		{
+			ASSERT_THAT(IsTrue(Inventory->Content.Contains(OwnedFile)));
+		}
+	}
+
 	TEST_METHOD(StrictLayoutEmitsExactlyOneImplementationFilePerScriptModule)
 	{
 		using namespace AngelscriptJITGenerationDeterminismTests;

@@ -1,6 +1,7 @@
 #pragma once
+
 #include "CoreMinimal.h"
-#include "AngelscriptStaticJIT.h"
+#include "StaticJIT/BytecodeJIT/AngelscriptBytecodeJIT.h"
 
 #if AS_CAN_GENERATE_JIT
 

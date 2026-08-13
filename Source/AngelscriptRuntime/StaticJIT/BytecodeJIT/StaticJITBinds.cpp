@@ -1,5 +1,5 @@
-#include "StaticJIT/StaticJITBinds.h"
-#include "StaticJIT/AngelscriptBytecodes.h"
+#include "StaticJIT/BytecodeJIT/StaticJITBinds.h"
+#include "StaticJIT/BytecodeJIT/AngelscriptBytecodes.h"
 #if AS_CAN_GENERATE_JIT
 #include "ClassGenerator/ASStruct.h"
 #include "Core/AngelscriptBindDatabase.h"

@@ -1,6 +1,6 @@
 #pragma once
 #include "CoreMinimal.h"
-#include "StaticJITConfig.h"
+#include "StaticJIT/StaticJITConfig.h"
 
 #if AS_CAN_GENERATE_JIT
 

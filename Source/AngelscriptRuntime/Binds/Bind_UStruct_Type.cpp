@@ -631,7 +631,8 @@ bool FUStructType::GetCppForm(const FAngelscriptTypeUsage& Usage, FCppForm& OutC
 		asCObjectType* ObjectType = (asCObjectType*)Usage.ScriptClass;
 		if (ObjectType != nullptr && (ObjectType->flags & asOBJ_POD) != 0
 			&& FAngelscriptEngine::Get().StaticJIT != nullptr
-			&& !FAngelscriptEngine::Get().StaticJIT->IsTypePotentiallyDifferent(ObjectType)
+			&& !FAngelscriptEngine::Get().StaticJIT->GetBytecodeGenerator()
+				.IsTypePotentiallyDifferent(ObjectType)
 			&& ObjectType->GetFirstMethod("opAssign") == nullptr
 		)
 		{

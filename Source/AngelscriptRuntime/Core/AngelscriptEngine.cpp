@@ -56,7 +56,7 @@
 #include "StaticJIT/AngelscriptJITProviderRouter.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
 #include "StaticJIT/StaticJITHeader.h"
-#include "StaticJIT/StaticJITBinds.h"
+#include "StaticJIT/BytecodeJIT/StaticJITBinds.h"
 
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/ThreadSafeBool.h"

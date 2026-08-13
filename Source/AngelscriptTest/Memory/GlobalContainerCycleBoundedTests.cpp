@@ -24,7 +24,7 @@
 #include "AngelscriptDocs.h"
 #include "AngelscriptEngine.h"
 #include "ClassGenerator/ASClass.h"
-#include "StaticJIT/StaticJITBinds.h"
+#include "StaticJIT/BytecodeJIT/StaticJITBinds.h"
 
 #include "HAL/UnrealMemory.h"
 #include "Misc/AutomationTest.h"

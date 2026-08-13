@@ -10,6 +10,7 @@
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
 #include "Shared/AngelscriptTestEngineAcquisition.h"
+#include "StaticJIT/BytecodeJIT/AngelscriptBytecodeJIT.h"
 #include "StaticJIT/AngelscriptJITGeneration.h"
 #include "StaticJIT/AngelscriptJITProviderMatcher.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
@@ -18,6 +19,8 @@
 #include "StartAngelscriptHeaders.h"
 #include "source/as_thread.h"
 #include "EndAngelscriptHeaders.h"
+
+#include <type_traits>
 
 #if WITH_ANGELSCRIPT_UNITTESTS
 
@@ -486,6 +489,9 @@ public:
 
 	TEST_METHOD(CompiledFunctionsEmitProviderSlicesAndExactlyThirtyTwoBuckets)
 	{
+		static_assert(!std::is_base_of_v<
+			asIJITCompiler, FAngelscriptBytecodeJIT>,
+			"The extracted bytecode generator must not own Engine JIT lifecycle callbacks.");
 		const FString Root = FPaths::ConvertRelativePathToFull(FPaths::Combine(
 			FPaths::ProjectSavedDir(),
 			TEXT("Automation/StaticJITProviderGeneration"),
@@ -602,6 +608,25 @@ public:
 		asIScriptModule* ProviderModules[] = {Module, SecondModule};
 		ASSERT_THAT(IsTrue(GenerateStaticJITProviderArtifacts(
 			MakeArrayView(ProviderModules), Settings, Output, &Error), Error));
+		FAngelscriptJITGenerationOutput DirectBytecodeOutput;
+		FString DirectBytecodeError;
+		ASSERT_THAT(IsTrue(FAngelscriptBytecodeJIT::GenerateProviderArtifacts(
+			MakeArrayView(ProviderModules), Settings, DirectBytecodeOutput,
+			&DirectBytecodeError), DirectBytecodeError));
+		ASSERT_THAT(AreEqual(
+			Output.ProviderGeneration.Hash.ToHexString(),
+			DirectBytecodeOutput.ProviderGeneration.Hash.ToHexString(),
+			TEXT("The compatibility entry point must delegate to the bytecode generator")));
+		ASSERT_THAT(AreEqual(Output.Files.Num(),
+			DirectBytecodeOutput.Files.Num()));
+		for (int32 FileIndex = 0; FileIndex < Output.Files.Num(); ++FileIndex)
+		{
+			ASSERT_THAT(AreEqual(Output.Files[FileIndex].RelativePath,
+				DirectBytecodeOutput.Files[FileIndex].RelativePath));
+			ASSERT_THAT(AreEqual(Output.Files[FileIndex].Content,
+				DirectBytecodeOutput.Files[FileIndex].Content,
+				TEXT("Extracted BytecodeJIT output must remain byte-for-byte stable")));
+		}
 		ASSERT_THAT(AreEqual(4, Output.Functions.Num()));
 		ASSERT_THAT(AreEqual(2, Output.Modules.Num()));
 		ASSERT_THAT(AreEqual(6, Output.Files.Num(),
@@ -719,8 +744,14 @@ public:
 			TEXT("FAngelscriptJITReferenceSlot GReferences_"))));
 		for (const FAngelscriptJITGeneratedFunction& Function : Output.Functions)
 		{
+			const FString ModuleKeyPrefix =
+				Function.ModuleKey.Hash.ToHexString().Left(8);
 			ASSERT_THAT(IsTrue(Function.ModuleSourceRelativePath.Contains(
-				Function.ModuleKey.Hash.ToHexString())));
+				ModuleKeyPrefix),
+				FString::Printf(
+					TEXT("Module source '%s' should contain stable ModuleKey prefix '%s'"),
+					*Function.ModuleSourceRelativePath,
+					*ModuleKeyPrefix)));
 			ASSERT_THAT(IsFalse(Function.ModuleSourceRelativePath.Contains(
 				Function.FunctionKey.Hash.ToHexString())));
 			ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(

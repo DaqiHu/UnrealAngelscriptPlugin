@@ -13,7 +13,7 @@
 #include "AngelscriptBindDatabase.h"
 #include "AngelscriptBindString.h"
 #include "AngelscriptType.h"
-#include "StaticJIT/StaticJITBinds.h"
+#include "StaticJIT/BytecodeJIT/StaticJITBinds.h"
 #include "FunctionCallers.h"
 
 // Need to disable some casting warnings. Trust us MSVC we know what we're doing

@@ -9,7 +9,7 @@
 #include "EnhancedInputComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/BlueprintPathsLibrary.h"
-#include "StaticJIT/StaticJITBinds.h"
+#include "StaticJIT/BytecodeJIT/StaticJITBinds.h"
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_callfunc.h"

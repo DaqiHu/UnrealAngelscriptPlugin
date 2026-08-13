@@ -1376,10 +1376,12 @@ FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpStaticJITState(FA
 #if AS_CAN_GENERATE_JIT
 	if (Engine.StaticJIT != nullptr)
 	{
-		JITFileCount = Engine.StaticJIT->JITFiles.Num();
-		FunctionsToGenerateCount = Engine.StaticJIT->FunctionsToGenerate.Num();
-		SharedHeaderCount = Engine.StaticJIT->SharedHeaders.Num();
-		ComputedOffsetsCount = Engine.StaticJIT->ComputedOffsets.Num();
+		const FAngelscriptBytecodeJIT& BytecodeJIT =
+			Engine.StaticJIT->GetBytecodeGenerator();
+		JITFileCount = BytecodeJIT.JITFiles.Num();
+		FunctionsToGenerateCount = BytecodeJIT.FunctionsToGenerate.Num();
+		SharedHeaderCount = BytecodeJIT.SharedHeaders.Num();
+		ComputedOffsetsCount = BytecodeJIT.ComputedOffsets.Num();
 	}
 #endif
 

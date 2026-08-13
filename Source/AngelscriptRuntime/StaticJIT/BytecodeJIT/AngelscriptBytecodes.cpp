@@ -1,6 +1,6 @@
 #include "AngelscriptBytecodes.h"
 #if AS_CAN_GENERATE_JIT
-#include "StaticJIT/StaticJITBinds.h"
+#include "StaticJIT/BytecodeJIT/StaticJITBinds.h"
 #include "AngelscriptType.h"
 #include "AngelscriptEngine.h"
 #include "Artifacts/AngelscriptFunctionRoute.h"
@@ -1202,7 +1202,7 @@ struct FCallScriptFunction
 			Context.PopMultiple(ScriptFunction->totalSpaceBeforeFunction);
 	}
 
-	void WriteDirectCall(FStaticJITContext& Context, asCScriptFunction* RealFunction, FAngelscriptStaticJIT::FGenerateFunction* GenerateData)
+	void WriteDirectCall(FStaticJITContext& Context, asCScriptFunction* RealFunction, FAngelscriptBytecodeJIT::FGenerateFunction* GenerateData)
 	{
 		FString ArgumentString;
 		FString ArgumentTypeString;
