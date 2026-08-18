@@ -44,6 +44,37 @@ namespace AngelscriptJITGenerationDeterminismTests
 		return Result;
 	}
 
+	static FAngelscriptJITGenerationNativeCallSite MakeDirectCallSite()
+	{
+		FAngelscriptJITGenerationNativeCallSite Result;
+		Result.Route =
+			EAngelscriptJITNativeCallSiteRoute::DirectExported;
+		Result.CanonicalDeclaration = TEXT("int DaysInMonth(int, int)");
+		Result.EmittedCppCallee = TEXT("FDateTime::DaysInMonth");
+		Result.RegisteredTarget = TEXT("FDateTime::DaysInMonth");
+		return Result;
+	}
+
+	static FAngelscriptJITGenerationNativeCallSite MakeBridgeCallSite(
+		const FAngelscriptJITGenerationReference& Reference,
+		const int32 ReferenceSlotIndex)
+	{
+		FAngelscriptJITGenerationNativeCallSite Result;
+		Result.Route = EAngelscriptJITNativeCallSiteRoute::Bridge;
+		Result.CanonicalDeclaration = TEXT("int ProviderPrivateAdd(int, int)");
+		Result.EmittedCppCallee = TEXT(
+			"AngelscriptTypedASTJIT::InvokeBound<int32, int32, int32>");
+		Result.RuntimeDllCore =
+			TEXT("AngelscriptTypedASTJIT::InvokeBoundViaVM");
+		Result.MetadataRowSymbol =
+			TEXT("ASJIT_Call_ProviderPrivateAdd_deadbeef");
+		Result.RegisteredTarget = TEXT("FPrivateProvider::Add");
+		Result.StableTargetKey = Reference.Reference.StableKey;
+		Result.ExpectedAbi = Reference.Reference.ExpectedAbi;
+		Result.ReferenceSlotIndex = ReferenceSlotIndex;
+		return Result;
+	}
+
 	static FAngelscriptJITGenerationFunction MakeFunction(
 		const uint8 ModuleByte,
 		const uint8 FunctionByte,
@@ -164,10 +195,13 @@ public:
 		Function.SourceColumn = 7;
 		Function.ImplementationTemplate += TEXT("// frozen-implementation\n");
 		Function.References.Add(MakeReference(
-			EAngelscriptArtifactReferenceKind::RuntimeHelper, 0x77, 0x88));
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol, 0x77, 0x88));
 		Function.References.Add(MakeReference(
 			EAngelscriptArtifactReferenceKind::ScriptFunction, 0x66, 0x99,
 			EAngelscriptJITReferenceSlotFlags::Optional));
+		Function.NativeCallSites.Add(MakeDirectCallSite());
+		Function.NativeCallSites.Add(MakeBridgeCallSite(
+			Function.References[0], 1));
 		Request.Functions.Add(MoveTemp(Function));
 
 		FAngelscriptJITGenerationOutput First;
@@ -202,6 +236,7 @@ public:
 		ASSERT_THAT(IsTrue(ModuleSource->Content.Contains(
 			TEXT("// frozen-module-footer\n"))));
 		ASSERT_THAT(AreEqual(2, First.Functions[0].ReferenceSlots.Num()));
+		ASSERT_THAT(AreEqual(2, First.Functions[0].NativeCallSites.Num()));
 		ASSERT_THAT(AreEqual(FAngelscriptJITGeneration::BuildSymbolPrefix(
 			First.Functions[0].FunctionKey,
 			First.Functions[0].ExecutionHash),
@@ -222,6 +257,14 @@ public:
 			First.Functions[0].SymbolPrefix)));
 		ASSERT_THAT(IsTrue(Manifest->Content.Contains(
 			First.ProviderGeneration.Hash.ToHexString())));
+		ASSERT_THAT(IsTrue(Manifest->Content.Contains(
+			TEXT("\"nativeCallSites\""))));
+		ASSERT_THAT(IsTrue(Manifest->Content.Contains(
+			TEXT("\"emittedCppCallee\": \"FDateTime::DaysInMonth\""))));
+		ASSERT_THAT(IsTrue(Manifest->Content.Contains(
+			TEXT("\"route\": \"DirectExported\""))));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			TEXT("FAngelscriptJITNativeCallSite"))));
 		for (const FString& OwnedFile : First.OwnedFiles)
 		{
 			ASSERT_THAT(IsTrue(Inventory->Content.Contains(OwnedFile)));
@@ -425,7 +468,8 @@ public:
 			Output, TEXT("ProviderManifest.generated.json"));
 		ASSERT_THAT(IsNotNull(Manifest));
 		ASSERT_THAT(IsTrue(Manifest->Content.Contains(
-			TEXT("\"schemaRevision\": 3"))));
+			FString::Printf(TEXT("\"schemaRevision\": %u"),
+				FAngelscriptJITGeneration::SchemaRevision))));
 		ASSERT_THAT(IsTrue(Manifest->Content.Contains(ExpectedFunctionHex)));
 		ASSERT_THAT(IsTrue(Manifest->Content.Contains(ExpectedExecutionHex)));
 		ASSERT_THAT(IsTrue(Manifest->Content.Contains(

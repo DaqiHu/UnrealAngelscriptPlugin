@@ -1,4 +1,8 @@
 #include "StaticJIT/BytecodeJIT/AngelscriptBytecodeJIT.h"
+#include "StaticJIT/AngelscriptStaticJITEntryPlan.h"
+#if WITH_ANGELSCRIPT_UNITTESTS
+#include "StaticJIT/AngelscriptStaticJITBytecodeAccessAudit.h"
+#endif
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -15,6 +19,7 @@
 #include "StaticJIT/AngelscriptJITProviderRouter.h"
 #include "StaticJIT/AngelscriptJITReferenceResolver.h"
 #include "StaticJIT/AngelscriptStaticJITGenerator.h"
+#include "StaticJIT/AngelscriptStaticJITGenerationProfile.h"
 #include "StaticJIT/AngelscriptStaticJITGenerationSnapshot.h"
 #include "StaticJIT/StaticJITHeader.h"
 
@@ -58,27 +63,8 @@ asCString GetScriptClassName(asITypeInfo* Type)
 bool FAngelscriptBytecodeJIT::CanGenerateParmsEntry(
 	const asIScriptFunction* ScriptFunction)
 {
-	if (ScriptFunction == nullptr
-		|| ScriptFunction->GetFuncType() != asFUNC_SCRIPT)
-	{
-		return false;
-	}
-	const asCScriptFunction* const Function =
-		static_cast<const asCScriptFunction*>(ScriptFunction);
-	for (asUINT ParameterIndex = 0;
-		ParameterIndex < Function->parameterTypes.GetLength();
-		++ParameterIndex)
-	{
-		const asCDataType& DataType =
-			Function->parameterTypes[ParameterIndex];
-		if ((DataType.IsObject() || DataType.IsReference())
-			&& DataType.GetSizeInMemoryBytes() < 4
-			&& !DataType.IsObject())
-		{
-			return false;
-		}
-	}
-	return true;
+	return CanGenerateAngelscriptStaticJITParmsEntry(
+		static_cast<const asCScriptFunction*>(ScriptFunction));
 }
 
 #if AS_CAN_GENERATE_JIT
@@ -416,19 +402,40 @@ void FStaticJITContext::DebugLineNumber()
 		return;
 	}
 
-	int32 LineNumber = ScriptFunction->GetLineNumber(
-		(BC - BC_FunctionStart), nullptr
-	) & 0xFFFFF;
+	const int32 PackedSourcePosition = ScriptFunction->GetLineNumber(
+		(BC - BC_FunctionStart), nullptr);
+	const int32 LineNumber = PackedSourcePosition & 0xFFFFF;
+	const int32 ColumnNumber = PackedSourcePosition >> 20;
 
-	Line("SCRIPT_DEBUG_CALLSTACK_LINE({0});", LineNumber);
+	Line("SCRIPT_DEBUG_CALLSTACK_POSITION({0}, {1});",
+		LineNumber, ColumnNumber);
 }
 
-void FStaticJITContext::GenerateNewFunction(asIScriptFunction* InScriptFunction)
+void FStaticJITContext::GenerateNewFunction(
+	asIScriptFunction* InScriptFunction,
+	const bool bSuppressParmsEntry)
 {
 	// Init the state for this entry
 	BC_EntryStart = BC;
 	UsageFlags = 0;
 	ScriptFunction = (asCScriptFunction*)InScriptFunction;
+	const FStaticJITEntryPlan* const SharedEntryPlan =
+		JIT->SharedEntryPlans.FindRef(ScriptFunction);
+	const bool bUseSharedEntryAdapter = SharedEntryPlan != nullptr
+		&& SharedEntryPlan->bTypedAdapterRepresentable;
+	if (SharedEntryPlan != nullptr)
+	{
+		checkf(SharedEntryPlan->IsStructurallyComplete(),
+			TEXT("BytecodeJIT received an incomplete shared Entry Plan."));
+		checkf(SharedEntryPlan->Parameters.Num()
+				== static_cast<int32>(ScriptFunction->parameterTypes.GetLength()),
+			TEXT("BytecodeJIT shared Entry Plan parameter count drifted for %s."),
+			UTF8_TO_TCHAR(ScriptFunction->GetDeclaration()));
+		for (const FString& Include : SharedEntryPlan->RequiredIncludes)
+		{
+			AddHeader(Include);
+		}
+	}
 
 	// Generate the surrounding code for the new function
 	check(FunctionHead.Len() == 0);
@@ -447,18 +454,27 @@ void FStaticJITContext::GenerateNewFunction(asIScriptFunction* InScriptFunction)
 	FString CppEntryInArgs;
 	FString FunctionReturnType = TEXT("void");
 
-	bool bParmsEntryValid = true;
+	bool bParmsEntryValid = !bSuppressParmsEntry
+		&& (SharedEntryPlan == nullptr || SharedEntryPlan->bHasParmsEntry);
 
 	// Generate the actual C++ code for the main function
 	FunctionHead += FString::Printf(TEXT("// == Jit at BC %d ==\n"), (asDWORD)(BC - BC_FunctionStart));
 	if (JIT->bEmitDebugMetadataInOutput)
 	{
-		FunctionHead += FString::Printf(TEXT("%s(\"%s\", %d);\n"),
+		const FString DebugDeclaration = SharedEntryPlan != nullptr
+			? SharedEntryPlan->CanonicalDeclaration
+			: ANSI_TO_TCHAR(ScriptFunction->GetDeclarationStr(
+				true, true, false, true, false).AddressOf());
+		const uint32 DebugLine = SharedEntryPlan != nullptr
+			? SharedEntryPlan->SourceLine
+			: static_cast<uint32>(
+				ScriptFunction->GetLineNumber(0, nullptr) & 0xFFFFF);
+		FunctionHead += FString::Printf(TEXT("%s(\"%s\", %u);\n"),
 			(ScriptFunction->objectType != nullptr && (ScriptFunction->objectType->GetFlags() & asOBJ_REF) != 0)
 				? TEXT("SCRIPT_DEBUG_CALLSTACK_FRAME_UOBJECT")
 				: TEXT("SCRIPT_DEBUG_CALLSTACK_FRAME"),
-			ANSI_TO_TCHAR(ScriptFunction->GetDeclarationStr(true, true, false, true, false).AddressOf()),
-			(ScriptFunction->GetLineNumber(0, nullptr) & 0xFFFFF));
+			*DebugDeclaration,
+			DebugLine);
 	}
 	FunctionHead += TEXT("SCRIPT_ASSUME_NO_EXCEPTION()\n");
 	// Create the local stack space
@@ -473,8 +489,12 @@ void FStaticJITContext::GenerateNewFunction(asIScriptFunction* InScriptFunction)
 	FunctionHead += TEXT("void* l_objectRegister = nullptr;\n");
 
 	// Populate the object pointer if we have it
-	if (ScriptFunction->objectType != nullptr)
+	if (SharedEntryPlan != nullptr
+		? SharedEntryPlan->bHasNativeObjectSlot
+		: ScriptFunction->objectType != nullptr)
 	{
+		checkf(ScriptFunction->objectType != nullptr,
+			TEXT("BytecodeJIT shared Entry Plan declared a native object slot for a global function."));
 		FAngelscriptTypeUsage ObjectType = FAngelscriptTypeUsage::FromTypeId(ScriptFunction->objectType->GetTypeId());
 		FString LiteralType;
 
@@ -510,13 +530,27 @@ void FStaticJITContext::GenerateNewFunction(asIScriptFunction* InScriptFunction)
 
 	for (int i = 0, Count = ScriptFunction->parameterTypes.GetLength(); i < Count; ++i)
 	{
-		int32 Offset = -ScriptFunction->parameterOffsets[i];
+		const FStaticJITEntryParameterPlan* const SharedParameter =
+			bUseSharedEntryAdapter ? &SharedEntryPlan->Parameters[i] : nullptr;
+		if (SharedParameter != nullptr)
+		{
+			checkf(SharedParameter->FormalParameterIndex == i,
+				TEXT("BytecodeJIT shared Entry Plan formal order drifted for %s."),
+				UTF8_TO_TCHAR(ScriptFunction->GetDeclaration()));
+		}
+		int32 Offset = -(SharedParameter != nullptr
+			? SharedParameter->VMFrameOffsetDWords
+			: ScriptFunction->parameterOffsets[i]);
 		auto DataType = ScriptFunction->parameterTypes[i];
 
-		FString ParmsEntryParamOffsetVar = FString::Printf(TEXT("ParmOffset_%d_%s"), i, ANSI_TO_TCHAR(ScriptFunction->parameterNames[i].AddressOf()));
+		const FString ParameterName = SharedParameter != nullptr
+			? SharedParameter->CanonicalName
+			: ANSI_TO_TCHAR(ScriptFunction->parameterNames[i].AddressOf());
+		FString ParmsEntryParamOffsetVar = FString::Printf(
+			TEXT("ParmOffset_%d_%s"), i, *ParameterName);
 
 		FVariableAsLocal Param;
-		Param.LocalName = ANSI_TO_TCHAR(ScriptFunction->parameterNames[i].AddressOf());
+		Param.LocalName = ParameterName;
 		Param.LocalName = TEXT("p_") + Param.LocalName;
 		Param.bIsConstant = true;
 
@@ -541,6 +575,11 @@ void FStaticJITContext::GenerateNewFunction(asIScriptFunction* InScriptFunction)
 			{
 				Param.LiteralType = CppForm.CppGenericType;
 			}
+		}
+		if (SharedParameter != nullptr
+			&& !SharedParameter->ReflectedStorageCppType.IsEmpty())
+		{
+			Param.LiteralType = SharedParameter->ReflectedStorageCppType;
 		}
 
 		if (DataType.IsReference() && DataType.IsReferenceType())
@@ -693,6 +732,10 @@ void FStaticJITContext::GenerateNewFunction(asIScriptFunction* InScriptFunction)
 			break;
 			default: check(false); break;
 			}
+			if (SharedParameter != nullptr)
+			{
+				VMType = SharedParameter->EntryCppType;
+			}
 
 			if (Param.LiteralType.Len() == 0)
 				Param.LiteralType = VMType;
@@ -721,7 +764,9 @@ void FStaticJITContext::GenerateNewFunction(asIScriptFunction* InScriptFunction)
 		FAngelscriptTypeUsage ReturnType = FAngelscriptTypeUsage::FromReturn(ScriptFunction);
 		FString LiteralType;
 
-		int32 VMOffset = (ScriptFunction->objectType != nullptr) ? 2 : 0;
+		int32 VMOffset = bUseSharedEntryAdapter
+			? SharedEntryPlan->Return.VMResultOffsetDWords
+			: (ScriptFunction->objectType != nullptr ? 2 : 0);
 
 		bool bHasNativeCppForm = false;
 		FString ParmsEntryParamOffsetVar = TEXT("ReturnParmOffset");
@@ -743,6 +788,11 @@ void FStaticJITContext::GenerateNewFunction(asIScriptFunction* InScriptFunction)
 			{
 				LiteralType = CppForm.CppGenericType;
 			}
+		}
+		if (bUseSharedEntryAdapter
+			&& !SharedEntryPlan->Return.ReflectedStorageCppType.IsEmpty())
+		{
+			LiteralType = SharedEntryPlan->Return.ReflectedStorageCppType;
 		}
 
 		if (ScriptFunction->returnType.IsReference() && ScriptFunction->returnType.IsReferenceType())
@@ -1730,15 +1780,19 @@ namespace
 		{
 			return false;
 		}
-		const asCString CanonicalType = Property->type.Format(
-			Property->nameSpace, false, false);
+		const char* const CanonicalType = JIT.Engine->GetTypeDeclaration(
+			JIT.Engine->GetTypeIdFromDataType(Property->type), true);
+		if (CanonicalType == nullptr)
+		{
+			return false;
+		}
 		FAngelscriptGlobalIdentityDescriptor Identity;
 		Identity.ModuleKey = *ModuleKey;
 		Identity.Namespace = Property->nameSpace != nullptr
 			? UTF8_TO_TCHAR(Property->nameSpace->name.AddressOf()) : FString();
 		Identity.Kind = EAngelscriptArtifactEntityKind::GlobalVariable;
 		Identity.Name = UTF8_TO_TCHAR(Property->name.AddressOf());
-		Identity.CanonicalType = UTF8_TO_TCHAR(CanonicalType.AddressOf());
+		Identity.CanonicalType = UTF8_TO_TCHAR(CanonicalType);
 		OutReference.Kind = EAngelscriptArtifactReferenceKind::ScriptGlobal;
 		OutReference.StableKey =
 			FAngelscriptArtifactIdentityBuilder::BuildGlobalKey(Identity).Hash;
@@ -1773,10 +1827,82 @@ namespace
 			FAngelscriptArtifactIdentityBuilder::BuildPropertyKey(Identity).Hash;
 		return !OutReference.StableKey.IsZero();
 	}
+
+	static bool TryBuildStableProviderImportReference(
+		const FAngelscriptBytecodeJIT& JIT,
+		const asCScriptFunction* Signature,
+		FAngelscriptArtifactReference& OutReference)
+	{
+		OutReference = {};
+		const asCModule* const ConsumerModule = Signature != nullptr
+			? Signature->module : nullptr;
+		const FAngelscriptStableModuleKey* const ConsumerModuleKey =
+			ConsumerModule != nullptr
+				? JIT.StableProviderModuleKeys.Find(
+					const_cast<asCModule*>(ConsumerModule))
+				: nullptr;
+		if (Signature == nullptr || ConsumerModule == nullptr
+			|| ConsumerModuleKey == nullptr
+			|| Signature->funcType != asFUNC_IMPORTED
+			|| (Signature->id & FUNC_IMPORTED) == 0)
+		{
+			return false;
+		}
+
+		const sBindInfo* Match = nullptr;
+		for (asUINT ImportIndex = 0;
+			ImportIndex < ConsumerModule->bindInformations.GetLength();
+			++ImportIndex)
+		{
+			const sBindInfo* const Candidate =
+				ConsumerModule->bindInformations[ImportIndex];
+			if (Candidate != nullptr
+				&& Candidate->importedFunctionSignature == Signature)
+			{
+				if (Match != nullptr)
+				{
+					return false;
+				}
+				Match = Candidate;
+			}
+		}
+		if (Match == nullptr || Match->importFromModule.GetLength() == 0)
+		{
+			return false;
+		}
+
+		OutReference = FAngelscriptJITReferenceDescriptorBuilder::ForImportSlot(
+			*ConsumerModuleKey,
+			UTF8_TO_TCHAR(Signature->GetNamespace()),
+			UTF8_TO_TCHAR(Signature->GetDeclaration(false, false, false)),
+			UTF8_TO_TCHAR(Match->importFromModule.AddressOf()));
+		return OutReference.IsValid() && !OutReference.ExpectedAbi.IsZero();
+	}
 }
 
 FString FStaticJITContext::ReferenceFunction(asCScriptFunction* Function)
 {
+	if (Function != nullptr && Function->funcType == asFUNC_IMPORTED)
+	{
+		FAngelscriptArtifactReference Reference;
+		const bool bBuilt = TryBuildStableProviderImportReference(
+			*JIT, Function, Reference);
+		const TOptional<uint32> SlotIndex = bBuilt
+			? JIT->FindStableProviderReferenceSlot(
+				ScriptFunction, Reference, true)
+			: TOptional<uint32>();
+		if (!SlotIndex.IsSet())
+		{
+			SetStableProviderReferenceError(
+				*JIT, ScriptFunction, TEXT("ScriptImport slot"),
+				FStringView(ANSI_TO_TCHAR(Function->GetDeclaration())));
+			return TEXT("nullptr");
+		}
+		return FString::Printf(
+			TEXT("FAngelscriptJITGeneratedReferenceAccess::GetScriptFunction(Execution, %uu)"),
+			SlotIndex.GetValue());
+	}
+
 	if (Function != nullptr && Function->module == nullptr)
 	{
 		FAngelscriptArtifactReference Reference;
@@ -3245,6 +3371,8 @@ void FAngelscriptBytecodeJIT::GenerateCppCode(asIScriptFunction* ScriptFunction,
 	uint32 FunctionId = PrecompiledData->CreateFunctionId(ScriptFunction);
 	FJITFile& File = GetFile(ScriptFunction->GetModule());
 	const int32 FirstFunctionContentIndex = File.Content.Num();
+	const FStaticJITEntryPlan* const SharedEntryPlan =
+		SharedEntryPlans.FindRef(static_cast<asCScriptFunction*>(ScriptFunction));
 
 	FString Code;
 
@@ -3256,6 +3384,9 @@ void FAngelscriptBytecodeJIT::GenerateCppCode(asIScriptFunction* ScriptFunction,
 	Context.File = &File;
 	Context.FunctionName = Generate.FunctionSymbolName;
 	Context.JIT = this;
+#if WITH_ANGELSCRIPT_UNITTESTS
+	FAngelscriptStaticJITBytecodeAccessAudit::RecordGetByteCode();
+#endif
 	Context.BC = ScriptFunction->GetByteCode(&BytecodeLength);
 	Context.BC_FunctionStart = Context.BC;
 	Context.BC_End = Context.BC + BytecodeLength;
@@ -3351,7 +3482,8 @@ void FAngelscriptBytecodeJIT::GenerateCppCode(asIScriptFunction* ScriptFunction,
 	Context.BC = Context.BC_FunctionStart;
 
 	// Start a new function
-	Context.GenerateNewFunction(ScriptFunction);
+	Context.GenerateNewFunction(
+		ScriptFunction, Generate.bSuppressParmsEntry);
 	Generate.FunctionDeclaration = Context.FunctionDecl;
 
 	for (int32 i = 0, Count = Context.Instructions.Num(); i < Count; ++i)
@@ -3402,7 +3534,7 @@ void FAngelscriptBytecodeJIT::GenerateCppCode(asIScriptFunction* ScriptFunction,
 				}
 			}
 
-			for (int i = 0, Count = Cleanup.Positions.Num(); i < Count; ++i)
+			for (int i = Cleanup.Positions.Num() - 1; i >= 0; --i)
 			{
 				int Pos = Cleanup.Positions[i];
 				asCObjectType* ObjectType = Cleanup.Types[i];
@@ -3423,7 +3555,10 @@ void FAngelscriptBytecodeJIT::GenerateCppCode(asIScriptFunction* ScriptFunction,
 				Generate.FunctionSymbolName + TEXT("_ParmsEntry"));
 		});
 	const bool bExpectedParmsEntry =
-		FAngelscriptBytecodeJIT::CanGenerateParmsEntry(ScriptFunction);
+		!Generate.bSuppressParmsEntry
+		&& (SharedEntryPlan != nullptr
+			? SharedEntryPlan->bHasParmsEntry
+			: FAngelscriptBytecodeJIT::CanGenerateParmsEntry(ScriptFunction));
 	ensureMsgf(bEmittedParmsEntry == bExpectedParmsEntry,
 		TEXT("StaticJIT Parms-entry capability drifted between emission and Runtime ABI derivation for %s."),
 		UTF8_TO_TCHAR(ScriptFunction->GetDeclaration()));
@@ -3508,6 +3643,9 @@ bool FAngelscriptBytecodeJIT::IsFunctionAlwaysJIT(asCScriptFunction* VirtualFunc
 
 void FAngelscriptBytecodeJIT::AnalyzeScriptFunction(asCScriptFunction* ScriptFunction, FGenerateFunction& Generate)
 {
+#if WITH_ANGELSCRIPT_UNITTESTS
+	FAngelscriptStaticJITBytecodeAccessAudit::RecordBytecodeAnalysis();
+#endif
 	FJITFile& File = GetFile(ScriptFunction->GetModule());
 	if (Generate.FunctionSymbolName.IsEmpty())
 	{
@@ -3534,6 +3672,10 @@ namespace
 		const asCScriptEngine& Engine,
 		TArray<FAngelscriptArtifactReference>& InOutReferences)
 	{
+#if WITH_ANGELSCRIPT_UNITTESTS
+		FAngelscriptStaticJITBytecodeAccessAudit::
+			RecordBytecodeReferenceScan();
+#endif
 		if (Function.scriptData == nullptr)
 		{
 			return;
@@ -3568,7 +3710,10 @@ static bool GenerateStaticJITProviderBackendOutputImpl(
 	FString* OutError,
 	const FAngelscriptFunctionRouteSnapshot* OverrideRouteSnapshot,
 	const FAngelscriptCacheSuccessfulPublicationDto* OverridePublication,
-	TConstArrayView<asITypeInfo*> TargetMaterializedScriptTypes = {});
+	TConstArrayView<asITypeInfo*> TargetMaterializedScriptTypes = {},
+	TConstArrayView<asIScriptFunction*> SuppressedParmsEntryFunctions = {},
+	TConstArrayView<FAngelscriptStaticJITCompiledFunctionView>
+		SharedEntryPlanFunctions = {});
 
 bool FAngelscriptBytecodeJIT::GenerateProviderArtifacts(
 	asIScriptModule* Module,
@@ -3637,7 +3782,10 @@ static bool GenerateStaticJITProviderBackendOutputImpl(
 	FString* OutError,
 	const FAngelscriptFunctionRouteSnapshot* OverrideRouteSnapshot,
 	const FAngelscriptCacheSuccessfulPublicationDto* OverridePublication,
-	const TConstArrayView<asITypeInfo*> TargetMaterializedScriptTypes)
+	const TConstArrayView<asITypeInfo*> TargetMaterializedScriptTypes,
+	const TConstArrayView<asIScriptFunction*> SuppressedParmsEntryFunctions,
+	const TConstArrayView<FAngelscriptStaticJITCompiledFunctionView>
+		SharedEntryPlanFunctions)
 {
 	OutOutput = {};
 	auto Fail = [OutError](const FString& Message)
@@ -3697,6 +3845,20 @@ static bool GenerateStaticJITProviderBackendOutputImpl(
 	JIT.bEmitDebugMetadataInOutput = Settings.bEmitDebugMetadata;
 	JIT.bEmitProviderEntryLinkage = true;
 	JIT.bUseImmutableDirectScriptCalls = false;
+	for (const FAngelscriptStaticJITCompiledFunctionView& FunctionView
+		: SharedEntryPlanFunctions)
+	{
+		asCScriptFunction* const Function =
+			static_cast<asCScriptFunction*>(FunctionView.EngineLocalFunction);
+		if (Function == nullptr || Function->GetEngine() != ScriptEngine
+			|| FunctionView.EntryPlan == nullptr
+			|| !FunctionView.EntryPlan->IsStructurallyComplete())
+		{
+			return Fail(TEXT(
+				"StaticJIT Provider generation received an incomplete shared Entry Plan."));
+		}
+		JIT.SharedEntryPlans.Add(Function, FunctionView.EntryPlan);
+	}
 	for (asITypeInfo* Type : TargetMaterializedScriptTypes)
 	{
 		if (Type != nullptr)
@@ -3720,6 +3882,27 @@ static bool GenerateStaticJITProviderBackendOutputImpl(
 			SeenModules.Add(CurrentModule);
 			JIT.CollectModuleFunctionsForGeneration(CurrentModule);
 		}
+	}
+	for (asIScriptFunction* const SuppressedFunction
+		: SuppressedParmsEntryFunctions)
+	{
+		if (SuppressedFunction == nullptr
+			|| SuppressedFunction->GetEngine() != ScriptEngine)
+		{
+			return Fail(TEXT(
+				"StaticJIT Provider generation received an invalid Parms-entry suppression function."));
+		}
+		asCScriptFunction* const InternalFunction =
+			static_cast<asCScriptFunction*>(SuppressedFunction);
+		FAngelscriptBytecodeJIT::FGenerateFunction* const Generate =
+			JIT.FunctionsToGenerate.Find(InternalFunction);
+		if (Generate == nullptr)
+		{
+			return Fail(FString::Printf(TEXT(
+				"StaticJIT Provider generation cannot suppress Parms entry for function outside the compiled module set: %s."),
+				ANSI_TO_TCHAR(SuppressedFunction->GetDeclaration())));
+		}
+		Generate->bSuppressParmsEntry = true;
 	}
 	PrecompiledData.InitFromActiveScript();
 
@@ -4221,6 +4404,62 @@ static bool GenerateStaticJITProviderBackendOutputImpl(
 
 namespace AngelscriptBytecodeStaticBackend_Private
 {
+	static bool UsesGeneratedWorldContextParameter(
+		const FAngelscriptFunctionDesc& Descriptor)
+	{
+		if (!Descriptor.bIsStatic || Descriptor.ScriptFunction == nullptr)
+		{
+			return false;
+		}
+		const FString* const ExplicitWorldContext =
+			Descriptor.Meta.Find(FName(TEXT("WorldContext")));
+		if (ExplicitWorldContext == nullptr
+			|| ExplicitWorldContext->IsEmpty())
+		{
+			return true;
+		}
+		return !Descriptor.Arguments.ContainsByPredicate(
+			[ExplicitWorldContext](
+				const FAngelscriptArgumentDesc& Argument)
+			{
+				return Argument.ArgumentName == *ExplicitWorldContext;
+			});
+	}
+
+	static void CollectGeneratedWorldContextParmsSuppressions(
+		const FAngelscriptStaticJITCompiledSourceGraph& Graph,
+		TArray<asIScriptFunction*>& OutFunctions)
+	{
+		for (const FAngelscriptModuleDesc* const ModuleDesc
+			: Graph.ResolvedModuleDescriptors)
+		{
+			if (ModuleDesc == nullptr)
+			{
+				continue;
+			}
+			for (const TSharedRef<FAngelscriptClassDesc>& ClassRef
+				: ModuleDesc->Classes)
+			{
+				const FAngelscriptClassDesc& ClassDesc = ClassRef.Get();
+				if (!ClassDesc.bIsStaticsClass)
+				{
+					continue;
+				}
+				for (const TSharedRef<FAngelscriptFunctionDesc>& FunctionRef
+					: ClassDesc.Methods)
+				{
+					const FAngelscriptFunctionDesc& FunctionDesc =
+						FunctionRef.Get();
+					if (UsesGeneratedWorldContextParameter(FunctionDesc))
+					{
+						OutFunctions.AddUnique(
+							FunctionDesc.ScriptFunction);
+					}
+				}
+			}
+		}
+	}
+
 	static bool BuildGenerationSnapshotAdapters(
 		const FAngelscriptStaticJITBackendRequest& Request,
 		FAngelscriptFunctionRouteSnapshot& OutRoutes,
@@ -4304,6 +4543,21 @@ namespace AngelscriptBytecodeStaticBackend_Private
 				}
 			}
 			References.RequiredReferences.Sort();
+			for (const FAngelscriptStaticJITSemanticDependencyView& Dependency
+				: Request.CompiledSourceGraph.SemanticDependencies)
+			{
+				if (Dependency.OwnerFunctionKey != Function.FunctionKey)
+				{
+					continue;
+				}
+				FAngelscriptArtifactSemanticDependency Semantic;
+				Semantic.Kind = Dependency.Kind;
+				Semantic.Target = Dependency.Reference;
+				Semantic.ExpectedContentOrValue =
+					Dependency.ExpectedContentOrValue;
+				References.SemanticDependencies.AddUnique(Semantic);
+			}
+			References.SemanticDependencies.Sort();
 		}
 		OutRoutes.VmRouteCount = OutRoutes.FunctionRoutes.Num();
 		return true;
@@ -4322,6 +4576,8 @@ namespace AngelscriptBytecodeStaticBackend_Private
 				FAngelscriptFunctionRouteSnapshot Routes;
 				FAngelscriptCacheSuccessfulPublicationDto Publication;
 				TArray<asITypeInfo*> TargetMaterializedScriptTypes;
+				TArray<asIScriptFunction*>
+					SuppressedParmsEntryFunctions;
 				for (const FAngelscriptStaticJITCompiledTypeView& Type
 					: Request.CompiledSourceGraph.Types)
 				{
@@ -4335,6 +4591,9 @@ namespace AngelscriptBytecodeStaticBackend_Private
 				{
 					return false;
 				}
+				CollectGeneratedWorldContextParmsSuppressions(
+					Request.CompiledSourceGraph,
+					SuppressedParmsEntryFunctions);
 				return GenerateStaticJITProviderBackendOutputImpl(
 					Request.CompiledSourceGraph.Modules,
 					Request.CompiledSourceGraph.Settings,
@@ -4342,7 +4601,9 @@ namespace AngelscriptBytecodeStaticBackend_Private
 					OutError,
 					&Routes,
 					&Publication,
-					TargetMaterializedScriptTypes);
+					TargetMaterializedScriptTypes,
+					SuppressedParmsEntryFunctions,
+					Request.CompiledSourceGraph.Functions);
 			}
 			return GenerateStaticJITProviderBackendOutputImpl(
 				Request.CompiledSourceGraph.Modules,
@@ -4428,10 +4689,13 @@ bool GenerateStaticJITProviderArtifacts(
 		return false;
 	};
 
-	if (!Request.BackendId.IsValid())
+	FAngelscriptStaticJITGenerationProfile RequiredProfile;
+	FString ProfileError;
+	if (!FAngelscriptStaticJITGenerationProfile::TryCreate(
+		Request.BackendId, Request.Settings.TargetProfile,
+		RequiredProfile, &ProfileError))
 	{
-		return Fail(TEXT(
-			"StaticJIT generation requires a known Static BackendId."));
+		return Fail(ProfileError);
 	}
 	if (Request.CompiledSourceGraph.IsEmpty())
 	{
@@ -4439,6 +4703,18 @@ bool GenerateStaticJITProviderArtifacts(
 			"StaticJIT generation requires a complete compiled source graph."));
 	}
 	if (!RegisterAngelscriptBytecodeJITBackend(OutError))
+	{
+		return false;
+	}
+	if (Request.BackendId == FAngelscriptStaticJITBackendId::TypedAST()
+		&& (!Request.TypedASTJITCapabilityProfile.IsValid()
+			|| !Request.TypedASTJITExecutionRequirements.IsValid()))
+	{
+		return Fail(TEXT(
+			"TypedASTJIT generation requires one explicit valid capability profile and execution-requirements snapshot."));
+	}
+	if (Request.BackendId == FAngelscriptStaticJITBackendId::TypedAST()
+		&& !RegisterAngelscriptTypedASTJITBackend(OutError))
 	{
 		return false;
 	}
@@ -4476,6 +4752,15 @@ bool GenerateStaticJITProviderArtifacts(
 	{
 		return Fail(TEXT(
 			"StaticJIT generation snapshot uses a different artifact Profile."));
+	}
+	if (GenerationSnapshot != nullptr
+		&& GenerationSnapshot->Modules.Num()
+			!= Request.CompiledSourceGraph.Num())
+	{
+		return Fail(FString::Printf(TEXT(
+			"StaticJIT generation snapshot must exactly match the complete compiled source graph: SnapshotModules=%d CompiledModules=%d."),
+			GenerationSnapshot->Modules.Num(),
+			Request.CompiledSourceGraph.Num()));
 	}
 	const TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
 		ESPMode::ThreadSafe> Routes = GenerationSnapshot == nullptr
@@ -4533,12 +4818,19 @@ bool GenerateStaticJITProviderArtifacts(
 
 	FAngelscriptStaticJITCompiledSourceGraph Graph;
 	Graph.Settings = Request.Settings;
+	Graph.TypedASTJITCapabilityProfile =
+		Request.TypedASTJITCapabilityProfile;
+	Graph.TypedASTJITExecutionRequirements =
+		Request.TypedASTJITExecutionRequirements;
 	Graph.Modules = Request.CompiledSourceGraph;
+	TArray<const FAngelscriptModuleDesc*> ResolvedModuleDescriptorViews;
 	TArray<FAngelscriptStaticJITCompiledFunctionView> FunctionViews;
 	TArray<FAngelscriptStaticJITCompiledTypeView> TypeViews;
 	TArray<FAngelscriptStaticJITCompiledGlobalView> GlobalViews;
 	TArray<FAngelscriptStaticJITDescriptorView> DescriptorViews;
 	TArray<FAngelscriptStaticJITDependencyView> DependencyViews;
+	TArray<FAngelscriptStaticJITSemanticDependencyView>
+		SemanticDependencyViews;
 	TArray<FAngelscriptStaticJITDependencyView> ExternalNativeCallViews;
 	auto MapDescriptorKind = [](
 		const EAngelscriptStaticJITGenerationDescriptorKind Kind)
@@ -4563,16 +4855,23 @@ bool GenerateStaticJITProviderArtifacts(
 	};
 	if (GenerationSnapshot != nullptr)
 	{
-		for (const FAngelscriptStaticJITGenerationModule& Module
-			: GenerationSnapshot->Modules)
+		for (asIScriptModule* const ScriptModule
+			: Request.CompiledSourceGraph)
 		{
-			if (Module.EngineLocalModule == nullptr
-				|| !Request.CompiledSourceGraph.Contains(
-					Module.EngineLocalModule))
+			const FAngelscriptStaticJITGenerationModule* const SnapshotModule =
+				GenerationSnapshot->Modules.FindByPredicate(
+					[ScriptModule](const auto& Candidate)
+					{
+						return Candidate.EngineLocalModule == ScriptModule;
+					});
+			if (SnapshotModule == nullptr
+				|| SnapshotModule->EngineLocalDescriptor == nullptr)
 			{
 				return Fail(TEXT(
 					"StaticJIT generation snapshot does not match the complete compiled source graph."));
 			}
+			ResolvedModuleDescriptorViews.Add(
+				SnapshotModule->EngineLocalDescriptor);
 		}
 		for (const FAngelscriptStaticJITGenerationFunction& Function
 			: GenerationSnapshot->Functions)
@@ -4586,12 +4885,14 @@ bool GenerateStaticJITProviderArtifacts(
 				Function.EntryAbiHash,
 				Function.CanonicalDeclaration,
 				Function.Bytecode,
-				{},
+				Function.VerifiedTypedHIR,
 				Function.bHasVerifiedArtifactIdentity,
 				Function.bHasVerifiedArtifactReferences,
 				Function.bHasVMEntry,
 				Function.bHasRawEntry,
-				Function.bHasParmsEntry});
+				Function.bHasParmsEntry,
+				Function.LiteralAssetRole,
+				&Function.EntryPlan});
 		}
 		for (const FAngelscriptStaticJITGenerationType& Type
 			: GenerationSnapshot->Types)
@@ -4603,8 +4904,9 @@ bool GenerateStaticJITProviderArtifacts(
 		for (const FAngelscriptStaticJITGenerationGlobal& Global
 			: GenerationSnapshot->Globals)
 		{
-			GlobalViews.Add({Global.EngineLocalGlobal, Global.GlobalKey.Hash,
-				Global.CanonicalDeclaration});
+			GlobalViews.Add({Global.EngineLocalGlobal,
+				Global.EngineLocalGlobalPropertyId,
+				Global.GlobalKey.Hash, Global.CanonicalDeclaration});
 		}
 		for (const FAngelscriptStaticJITGenerationDescriptor& Descriptor
 			: GenerationSnapshot->Descriptors)
@@ -4619,7 +4921,8 @@ bool GenerateStaticJITProviderArtifacts(
 				Descriptor.bUFunctionRoot,
 				Descriptor.EntryPlan.bHasVMEntry,
 				Descriptor.EntryPlan.bHasRawEntry,
-				Descriptor.EntryPlan.bHasParmsEntry});
+				Descriptor.EntryPlan.bHasParmsEntry,
+				&Descriptor.EntryPlan});
 		}
 		auto AppendDependencies = [](
 			const TConstArrayView<FAngelscriptStaticJITGenerationDependency>
@@ -4636,19 +4939,34 @@ bool GenerateStaticJITProviderArtifacts(
 		};
 		AppendDependencies(
 			GenerationSnapshot->Dependencies, DependencyViews);
+		for (const FAngelscriptStaticJITGenerationSemanticDependency&
+			Dependency : GenerationSnapshot->SemanticDependencies)
+		{
+			SemanticDependencyViews.Add({
+				Dependency.OwnerFunctionKey,
+				Dependency.Kind,
+				Dependency.Reference,
+				Dependency.ExpectedContentOrValue,
+				Dependency.EngineLocalGlobalPropertyId});
+		}
 		AppendDependencies(
 			GenerationSnapshot->ExternalNativeCalls,
 			ExternalNativeCallViews);
+		Graph.ResolvedModuleDescriptors = ResolvedModuleDescriptorViews;
 		Graph.Functions = FunctionViews;
 		Graph.Types = TypeViews;
 		Graph.Globals = GlobalViews;
 		Graph.Descriptors = DescriptorViews;
 		Graph.Dependencies = DependencyViews;
+		Graph.SemanticDependencies = SemanticDependencyViews;
 		Graph.ExternalNativeCalls = ExternalNativeCallViews;
+		Graph.NativeCallTargets = GenerationSnapshot->NativeCallTargets;
+		Graph.SourceCompilePassCount =
+			GenerationSnapshot->SourceCompilePassCount;
 	}
-	Graph.bHasVerifiedTypedHIR = GenerationSnapshot != nullptr
-		? GenerationSnapshot->bHasVerifiedTypedHIR
-		: Request.bHasVerifiedTypedHIR;
+	Graph.CaptureProfile = GenerationSnapshot != nullptr
+		? GenerationSnapshot->CaptureProfile
+		: Request.CaptureProfile;
 	const FAngelscriptStaticJITBackendRequest BackendRequest{
 		Request.BackendId,
 		Graph,

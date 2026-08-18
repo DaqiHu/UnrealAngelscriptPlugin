@@ -1,4 +1,5 @@
 #include "StaticJIT/AngelscriptJITGeneration.h"
+#include "StaticJIT/AngelscriptJITProviderDiagnostics.h"
 
 #include "HAL/PlatformProperties.h"
 #include "Misc/EngineVersion.h"
@@ -131,6 +132,26 @@ namespace AngelscriptJITGeneration_Private
 		}
 	}
 
+	static const TCHAR* NativeCallSiteRouteName(
+		const EAngelscriptJITNativeCallSiteRoute Route)
+	{
+		switch (Route)
+		{
+		case EAngelscriptJITNativeCallSiteRoute::DirectExported:
+			return TEXT("DirectExported");
+		case EAngelscriptJITNativeCallSiteRoute::DirectInline:
+			return TEXT("DirectInline");
+		case EAngelscriptJITNativeCallSiteRoute::RuntimeThunk:
+			return TEXT("RuntimeThunk");
+		case EAngelscriptJITNativeCallSiteRoute::Bridge:
+			return TEXT("Bridge");
+		case EAngelscriptJITNativeCallSiteRoute::CurrentNativeBinding:
+			return TEXT("CurrentNativeBinding");
+		default:
+			return TEXT("Invalid");
+		}
+	}
+
 	static FString HashExpression(const FAngelscriptHash256& Hash)
 	{
 		return FString::Printf(
@@ -197,6 +218,9 @@ namespace AngelscriptJITGeneration_Private
 			TEXT(" * ExecutionHash      : %s\n")
 			TEXT(" * DebugHash          : %s\n")
 			TEXT(" * EntryAbiHash       : %s\n")
+			TEXT(" * ExecutionCaps      : %u\n")
+			TEXT(" * RuntimeTriggers    : %u\n")
+			TEXT(" * CapabilityHash     : %s\n")
 			TEXT(" */\n"),
 			*OneLineCommentValue(Function.CanonicalDeclaration),
 			*OneLineCommentValue(Function.SourceSection),
@@ -205,7 +229,11 @@ namespace AngelscriptJITGeneration_Private
 			*Function.FunctionKey.Hash.ToHexString(),
 			*Function.ExecutionHash.ToHexString(),
 			*Function.DebugHash.ToHexString(),
-			*Function.EntryAbiHash.ToHexString());
+			*Function.EntryAbiHash.ToHexString(),
+			static_cast<uint32>(Function.AvailableExecutionCapabilities),
+			static_cast<uint32>(
+				Function.RuntimeExecutionRequirementTriggers),
+			*Function.ExecutionCapabilityProfileHash.ToHexString());
 	}
 
 	static FString BuildModuleMetadataBlock(
@@ -460,6 +488,29 @@ namespace AngelscriptJITGeneration_Private
 				Function.bHasVMEntry ? TEXT("true") : TEXT("false"),
 				Function.bHasRawEntry ? TEXT("true") : TEXT("false"),
 				Function.bHasParmsEntry ? TEXT("true") : TEXT("false"));
+			Json += TEXT("      \"nativeCallSites\": [\n");
+			for (int32 CallSiteIndex = 0;
+				CallSiteIndex < Function.NativeCallSites.Num();
+				++CallSiteIndex)
+			{
+				const FAngelscriptJITGenerationNativeCallSite& CallSite =
+					Function.NativeCallSites[CallSiteIndex];
+				Json += FString::Printf(TEXT(
+					"        {\"callSiteIndex\": %d, \"route\": \"%s\", \"canonicalDeclaration\": \"%s\", \"emittedCppCallee\": \"%s\", \"runtimeDllCore\": \"%s\", \"metadataRowSymbol\": \"%s\", \"registeredTarget\": \"%s\", \"stableTargetKey\": \"%s\", \"expectedAbi\": \"%s\", \"referenceSlotIndex\": %d}%s\n"),
+					CallSiteIndex,
+					NativeCallSiteRouteName(CallSite.Route),
+					*EscapeJson(CallSite.CanonicalDeclaration),
+					*EscapeJson(CallSite.EmittedCppCallee),
+					*EscapeJson(CallSite.RuntimeDllCore),
+					*EscapeJson(CallSite.MetadataRowSymbol),
+					*EscapeJson(CallSite.RegisteredTarget),
+					*CallSite.StableTargetKey.ToHexString(),
+					*CallSite.ExpectedAbi.ToHexString(),
+					CallSite.ReferenceSlotIndex,
+					CallSiteIndex + 1 < Function.NativeCallSites.Num()
+						? TEXT(",") : TEXT(""));
+			}
+			Json += TEXT("      ],\n");
 			Json += TEXT("      \"references\": [\n");
 			for (int32 ReferenceIndex = 0;
 				ReferenceIndex < Function.ReferenceSlots.Num();
@@ -475,6 +526,29 @@ namespace AngelscriptJITGeneration_Private
 					*Slot.Reference.StableKey.ToHexString(),
 					*Slot.Reference.ExpectedAbi.ToHexString(),
 					ReferenceIndex + 1 < Function.ReferenceSlots.Num()
+						? TEXT(",") : TEXT(""));
+			}
+			Json += TEXT("      ],\n");
+			Json += TEXT("      \"semanticDependencies\": [\n");
+			for (int32 DependencyIndex = 0;
+				DependencyIndex < Function.SemanticDependencies.Num();
+				++DependencyIndex)
+			{
+				const FAngelscriptArtifactSemanticDependency& Dependency =
+					Function.SemanticDependencies[DependencyIndex];
+				const FString Expected =
+					Dependency.ExpectedContentOrValue.IsSet()
+						? Dependency.ExpectedContentOrValue.GetValue().
+							ToHexString()
+						: FString();
+				Json += FString::Printf(
+					TEXT("        {\"kind\": %u, \"targetKind\": %u, \"stableKey\": \"%s\", \"expectedAbi\": \"%s\", \"expectedContentOrValue\": \"%s\"}%s\n"),
+					static_cast<uint32>(Dependency.Kind),
+					static_cast<uint32>(Dependency.Target.Kind),
+					*Dependency.Target.StableKey.ToHexString(),
+					*Dependency.Target.ExpectedAbi.ToHexString(),
+					*Expected,
+					DependencyIndex + 1 < Function.SemanticDependencies.Num()
 						? TEXT(",") : TEXT(""));
 			}
 			Json += TEXT("      ]\n");
@@ -495,6 +569,647 @@ namespace AngelscriptJITGeneration_Private
 			+ TEXT("FAngelscriptJITProviderView GetGeneratedAngelscriptJITProviderView();\n");
 	}
 
+	struct FProviderDiagnosticFlatView
+	{
+		TArray<const TCHAR*> FallbackChain;
+		TArray<FAngelscriptJITProviderFunctionDiagnostic> Functions;
+		TArray<FAngelscriptJITProviderBackendAttemptDiagnostic> BackendAttempts;
+		TArray<FAngelscriptJITProviderTypedSemanticFunctionDiagnostic>
+			SemanticFunctions;
+		TArray<FAngelscriptJITProviderTypedCallDiagnostic> Calls;
+		FAngelscriptJITProviderDiagnostics View;
+	};
+
+	static FAngelscriptJITProviderDiagnosticSource MakeDiagnosticSource(
+		const FAngelscriptJITGenerationDiagnosticSource& Source)
+	{
+		FAngelscriptJITProviderDiagnosticSource Result;
+		Result.Section = *Source.Section;
+		Result.Row = Source.Row;
+		Result.Column = Source.Column;
+		return Result;
+	}
+
+	static bool NormalizeProviderDiagnostics(
+		const TConstArrayView<FAngelscriptJITGeneratedFunction> Functions,
+		const FAngelscriptJITGenerationDiagnostics& Source,
+		FAngelscriptJITGenerationDiagnostics& OutDiagnostics,
+		FString& OutError)
+	{
+		if (Source.Functions.Num() != Functions.Num())
+		{
+			OutError = FString::Printf(TEXT(
+				"Provider diagnostics contain %d function rows for %d emitted entries."),
+				Source.Functions.Num(), Functions.Num());
+			return false;
+		}
+
+		OutDiagnostics = Source;
+		OutDiagnostics.Functions.Reset();
+		OutDiagnostics.Functions.Reserve(Functions.Num());
+		TArray<uint8> Used;
+		Used.SetNumZeroed(Source.Functions.Num());
+		for (const FAngelscriptJITGeneratedFunction& Function : Functions)
+		{
+			int32 MatchIndex = INDEX_NONE;
+			for (int32 CandidateIndex = 0;
+				CandidateIndex < Source.Functions.Num(); ++CandidateIndex)
+			{
+				if (Source.Functions[CandidateIndex].FunctionKey
+					== Function.FunctionKey)
+				{
+					if (MatchIndex != INDEX_NONE)
+					{
+						OutError = FString::Printf(TEXT(
+							"Provider diagnostics contain duplicate function key %s."),
+							*Function.FunctionKey.Hash.ToHexString());
+						return false;
+					}
+					MatchIndex = CandidateIndex;
+				}
+			}
+			if (MatchIndex == INDEX_NONE)
+			{
+				OutError = FString::Printf(TEXT(
+					"Provider diagnostics are missing emitted function key %s."),
+					*Function.FunctionKey.Hash.ToHexString());
+				return false;
+			}
+			Used[MatchIndex] = 1;
+			OutDiagnostics.Functions.Add(Source.Functions[MatchIndex]);
+		}
+		for (int32 Index = 0; Index < Used.Num(); ++Index)
+		{
+			if (Used[Index] == 0)
+			{
+				OutError = FString::Printf(TEXT(
+					"Provider diagnostics contain non-emitted function key %s."),
+					*Source.Functions[Index].FunctionKey.Hash.ToHexString());
+				return false;
+			}
+		}
+		return true;
+	}
+
+	static bool BuildProviderDiagnosticFlatView(
+		const FAngelscriptJITGenerationDiagnostics& Diagnostics,
+		FProviderDiagnosticFlatView& OutFlat,
+		FString& OutError)
+	{
+		OutFlat = {};
+		OutFlat.FallbackChain.Reserve(Diagnostics.FallbackChain.Num());
+		for (const FString& BackendId : Diagnostics.FallbackChain)
+		{
+			OutFlat.FallbackChain.Add(*BackendId);
+		}
+
+		OutFlat.Functions.Reserve(Diagnostics.Functions.Num());
+		for (const FAngelscriptJITGenerationFunctionDiagnostic& Function
+			: Diagnostics.Functions)
+		{
+			FAngelscriptJITProviderFunctionDiagnostic& FlatFunction =
+				OutFlat.Functions.AddDefaulted_GetRef();
+			FlatFunction.FunctionKey = Function.FunctionKey;
+			FlatFunction.ActualBackendId = *Function.ActualBackendId;
+			FlatFunction.Disposition = *Function.Disposition;
+			FlatFunction.Detail = *Function.Detail;
+			FlatFunction.BackendAttemptStart =
+				static_cast<uint32>(OutFlat.BackendAttempts.Num());
+			FlatFunction.BackendAttemptCount =
+				static_cast<uint32>(Function.BackendAttempts.Num());
+
+			for (const FAngelscriptJITGenerationBackendAttemptDiagnostic& Attempt
+				: Function.BackendAttempts)
+			{
+				FAngelscriptJITProviderBackendAttemptDiagnostic& FlatAttempt =
+					OutFlat.BackendAttempts.AddDefaulted_GetRef();
+				FlatAttempt.BackendId = *Attempt.BackendId;
+				FlatAttempt.Disposition = *Attempt.Disposition;
+				FlatAttempt.Detail = *Attempt.Detail;
+				if (Attempt.bHasTypedDiagnostic)
+				{
+					FlatAttempt.Flags |=
+						EAngelscriptJITProviderDiagnosticAttemptFlags::
+							HasTypedDiagnostic;
+				}
+				if (!Attempt.SemanticFunctions.IsEmpty())
+				{
+					FlatAttempt.Flags |=
+						EAngelscriptJITProviderDiagnosticAttemptFlags::
+							HasSemanticFunction;
+				}
+				if (!Attempt.Calls.IsEmpty())
+				{
+					FlatAttempt.Flags |=
+						EAngelscriptJITProviderDiagnosticAttemptFlags::
+							HasCallClosure;
+				}
+				FlatAttempt.FallbackReason = *Attempt.FallbackReason;
+				FlatAttempt.TypedDetail = *Attempt.TypedDetail;
+				FlatAttempt.ProcessedSource =
+					MakeDiagnosticSource(Attempt.ProcessedSource);
+				FlatAttempt.SemanticFunctionStart =
+					static_cast<uint32>(OutFlat.SemanticFunctions.Num());
+				FlatAttempt.SemanticFunctionCount =
+					static_cast<uint32>(Attempt.SemanticFunctions.Num());
+				if (Attempt.PrimarySemanticFunctionIndex != INDEX_NONE)
+				{
+					if (!Attempt.SemanticFunctions.IsValidIndex(
+						Attempt.PrimarySemanticFunctionIndex))
+					{
+						OutError = FString::Printf(TEXT(
+							"Diagnostic backend %s has invalid primary semantic index %d."),
+							*Attempt.BackendId,
+							Attempt.PrimarySemanticFunctionIndex);
+						return false;
+					}
+					FlatAttempt.PrimarySemanticFunctionIndex =
+						static_cast<int32>(FlatAttempt.SemanticFunctionStart)
+						+ Attempt.PrimarySemanticFunctionIndex;
+				}
+				FlatAttempt.CallStart =
+					static_cast<uint32>(OutFlat.Calls.Num());
+				FlatAttempt.CallCount =
+					static_cast<uint32>(Attempt.Calls.Num());
+				FlatAttempt.RequiredCapabilities =
+					Attempt.RequiredCapabilities;
+				FlatAttempt.AvailableCapabilities =
+					Attempt.AvailableCapabilities;
+				FlatAttempt.ExecutionRequirementsIdentity =
+					Attempt.ExecutionRequirementsIdentity;
+				FlatAttempt.AvailableCapabilityProfileIdentity =
+					Attempt.AvailableCapabilityProfileIdentity;
+				FlatAttempt.ProfileKind = *Attempt.ProfileKind;
+				FlatAttempt.ExceptionControlState =
+					*Attempt.ExceptionControlState;
+				FlatAttempt.ExceptionPayloadState =
+					*Attempt.ExceptionPayloadState;
+				FlatAttempt.bRecursionGuardAvailable =
+					Attempt.bRecursionGuardAvailable ? 1u : 0u;
+
+				for (const auto& Semantic : Attempt.SemanticFunctions)
+				{
+					FAngelscriptJITProviderTypedSemanticFunctionDiagnostic&
+						FlatSemantic =
+							OutFlat.SemanticFunctions.AddDefaulted_GetRef();
+					FlatSemantic.FunctionKey = Semantic.FunctionKey;
+					FlatSemantic.Role = *Semantic.Role;
+					FlatSemantic.RawTraitBits = Semantic.RawTraitBits;
+					FlatSemantic.UnknownTraitBits = Semantic.UnknownTraitBits;
+					FlatSemantic.InvocationKind = *Semantic.InvocationKind;
+					FlatSemantic.ReceiverKind = *Semantic.ReceiverKind;
+					FlatSemantic.ReceiverParameterIndex =
+						Semantic.ReceiverParameterIndex;
+					FlatSemantic.HIRState = *Semantic.HIRState;
+					FlatSemantic.CleanupPlanState = *Semantic.CleanupPlanState;
+					FlatSemantic.bHasSuspendState =
+						Semantic.bHasSuspendState ? 1u : 0u;
+					FlatSemantic.bHasExceptionCleanup =
+						Semantic.bHasExceptionCleanup ? 1u : 0u;
+					FlatSemantic.bCleanupPlanCoversAllTransfers =
+						Semantic.bCleanupPlanCoversAllTransfers ? 1u : 0u;
+					FlatSemantic.ComponentIndex = Semantic.ComponentIndex;
+					FlatSemantic.bRecursiveComponent =
+						Semantic.bRecursiveComponent ? 1u : 0u;
+					FlatSemantic.EligibilityReason =
+						*Semantic.EligibilityReason;
+					FlatSemantic.EligibilityDetail =
+						*Semantic.EligibilityDetail;
+					FlatSemantic.EligibilitySource =
+						MakeDiagnosticSource(Semantic.EligibilitySource);
+				}
+
+				for (const auto& Call : Attempt.Calls)
+				{
+					FAngelscriptJITProviderTypedCallDiagnostic& FlatCall =
+						OutFlat.Calls.AddDefaulted_GetRef();
+					FlatCall.CallerFunctionKey = Call.CallerFunctionKey;
+					FlatCall.CalleeFunctionKey = Call.CalleeFunctionKey;
+					FlatCall.ExpressionIndex = Call.ExpressionIndex;
+					FlatCall.ProcessedSource =
+						MakeDiagnosticSource(Call.ProcessedSource);
+					if (Call.AuthoredSource.IsSet())
+					{
+						FlatCall.SourceFlags |=
+							EAngelscriptJITProviderDiagnosticSourceFlags::
+								HasAuthoredSource;
+						FlatCall.AuthoredSource = MakeDiagnosticSource(
+							Call.AuthoredSource.GetValue());
+					}
+					if (Call.GeneratedSource.IsSet())
+					{
+						FlatCall.SourceFlags |=
+							EAngelscriptJITProviderDiagnosticSourceFlags::
+								HasGeneratedSource;
+						FlatCall.GeneratedSource = MakeDiagnosticSource(
+							Call.GeneratedSource.GetValue());
+					}
+					FlatCall.TargetKind = *Call.TargetKind;
+					FlatCall.Disposition = *Call.Disposition;
+					FlatCall.CalleeEligibilityReason =
+						*Call.CalleeEligibilityReason;
+					FlatCall.CalleeEligibilityDetail =
+						*Call.CalleeEligibilityDetail;
+					FlatCall.CalleeEligibilitySource =
+						MakeDiagnosticSource(Call.CalleeEligibilitySource);
+					FlatCall.bHasNativeLinkageValidation =
+						Call.bHasNativeLinkageValidation ? 1u : 0u;
+					FlatCall.NativeLinkageValidation =
+						*Call.NativeLinkageValidation;
+					FlatCall.NativeLinkageValidationDetail =
+						*Call.NativeLinkageValidationDetail;
+					FlatCall.CanonicalDeclaration =
+						*Call.CanonicalDeclaration;
+					FlatCall.EmittedRoute = Call.EmittedRoute;
+					FlatCall.EmittedCppCallee = *Call.EmittedCppCallee;
+					FlatCall.RuntimeDllCore = *Call.RuntimeDllCore;
+					FlatCall.MetadataRowSymbol = *Call.MetadataRowSymbol;
+					FlatCall.RegisteredTarget = *Call.RegisteredTarget;
+					FlatCall.DirectCppSymbol = *Call.DirectCppSymbol;
+					FlatCall.StableTargetKey = Call.StableTargetKey;
+					FlatCall.ExpectedAbi = Call.ExpectedAbi;
+					FlatCall.ReferenceSlotIndex = Call.ReferenceSlotIndex;
+				}
+			}
+		}
+
+		OutFlat.View.RequestKind = *Diagnostics.RequestKind;
+		OutFlat.View.RequestedBackendId = *Diagnostics.RequestedBackendId;
+		OutFlat.View.CaptureState = *Diagnostics.CaptureState;
+		OutFlat.View.FallbackChain = OutFlat.FallbackChain.GetData();
+		OutFlat.View.FallbackChainCount =
+			static_cast<uint32>(OutFlat.FallbackChain.Num());
+		OutFlat.View.SourceCompilePassCount =
+			Diagnostics.SourceCompilePassCount;
+		OutFlat.View.CompiledModuleCount = Diagnostics.CompiledModuleCount;
+		OutFlat.View.CompiledFunctionCount = Diagnostics.CompiledFunctionCount;
+		OutFlat.View.CompiledTypeCount = Diagnostics.CompiledTypeCount;
+		OutFlat.View.CompiledGlobalCount = Diagnostics.CompiledGlobalCount;
+		OutFlat.View.CompiledDescriptorCount =
+			Diagnostics.CompiledDescriptorCount;
+		OutFlat.View.CompiledDependencyCount =
+			Diagnostics.CompiledDependencyCount;
+		OutFlat.View.CompiledExternalNativeCallCount =
+			Diagnostics.CompiledExternalNativeCallCount;
+		OutFlat.View.EmitModuleCount = Diagnostics.EmitModuleCount;
+		OutFlat.View.bHasVerifiedTypedHIR =
+			Diagnostics.bHasVerifiedTypedHIR ? 1u : 0u;
+		OutFlat.View.TaskError = *Diagnostics.TaskError;
+		OutFlat.View.Functions = OutFlat.Functions.GetData();
+		OutFlat.View.FunctionCount =
+			static_cast<uint32>(OutFlat.Functions.Num());
+		OutFlat.View.BackendAttempts = OutFlat.BackendAttempts.GetData();
+		OutFlat.View.BackendAttemptCount =
+			static_cast<uint32>(OutFlat.BackendAttempts.Num());
+		OutFlat.View.SemanticFunctions = OutFlat.SemanticFunctions.GetData();
+		OutFlat.View.SemanticFunctionCount =
+			static_cast<uint32>(OutFlat.SemanticFunctions.Num());
+		OutFlat.View.Calls = OutFlat.Calls.GetData();
+		OutFlat.View.CallCount = static_cast<uint32>(OutFlat.Calls.Num());
+		OutFlat.View.DiagnosticDigest =
+			FAngelscriptJITProviderManifest::BuildDiagnosticsDigest(OutFlat.View);
+		return true;
+	}
+
+	static void AppendDiagnosticSourceAssignment(
+		FString& Source,
+		const FString& Target,
+		const FAngelscriptJITProviderDiagnosticSource& Value)
+	{
+		Source += FString::Printf(TEXT(
+			"\t%s = {sizeof(FAngelscriptJITProviderDiagnosticSource), TEXT(\"%s\"), %u, %u};\n"),
+			*Target,
+			*EscapeJson(Value.Section != nullptr ? Value.Section : TEXT("")),
+			Value.Row,
+			Value.Column);
+	}
+
+	static void AppendProviderDiagnosticsSource(
+		FString& Source,
+		const FAngelscriptJITGenerationOutput& Output)
+	{
+		if (!Output.Diagnostics.IsSet())
+		{
+			return;
+		}
+
+		FProviderDiagnosticFlatView Flat;
+		FString Error;
+		const bool bBuilt = BuildProviderDiagnosticFlatView(
+			Output.Diagnostics.GetValue(), Flat, Error);
+		checkf(bBuilt, TEXT("Validated Provider diagnostics failed to flatten: %s"),
+			*Error);
+		check(Flat.View.DiagnosticDigest == Output.DiagnosticDigest);
+
+		if (!Flat.FallbackChain.IsEmpty())
+		{
+			Source += FString::Printf(TEXT(
+				"\tstatic thread_local const TCHAR* GDiagnosticFallbackChain[%d];\n"),
+				Flat.FallbackChain.Num());
+			for (int32 Index = 0; Index < Flat.FallbackChain.Num(); ++Index)
+			{
+				Source += FString::Printf(TEXT(
+					"\tGDiagnosticFallbackChain[%d] = TEXT(\"%s\");\n"),
+					Index,
+					*EscapeJson(Flat.FallbackChain[Index]));
+			}
+		}
+
+		if (!Flat.SemanticFunctions.IsEmpty())
+		{
+			Source += FString::Printf(TEXT(
+				"\tstatic thread_local FAngelscriptJITProviderTypedSemanticFunctionDiagnostic GDiagnosticSemanticFunctions[%d];\n"),
+				Flat.SemanticFunctions.Num());
+			for (int32 Index = 0; Index < Flat.SemanticFunctions.Num(); ++Index)
+			{
+				const auto& Semantic = Flat.SemanticFunctions[Index];
+				const FString Prefix = FString::Printf(
+					TEXT("GDiagnosticSemanticFunctions[%d]"), Index);
+				Source += FString::Printf(TEXT("\t%s = {};\n"), *Prefix);
+				Source += FString::Printf(TEXT("\t%s.FunctionKey = {%s};\n"),
+					*Prefix, *HashExpression(Semantic.FunctionKey.Hash));
+				Source += FString::Printf(TEXT("\t%s.Role = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Semantic.Role));
+				Source += FString::Printf(TEXT("\t%s.RawTraitBits = %u;\n"),
+					*Prefix, Semantic.RawTraitBits);
+				Source += FString::Printf(TEXT("\t%s.UnknownTraitBits = %u;\n"),
+					*Prefix, Semantic.UnknownTraitBits);
+				Source += FString::Printf(TEXT("\t%s.InvocationKind = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Semantic.InvocationKind));
+				Source += FString::Printf(TEXT("\t%s.ReceiverKind = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Semantic.ReceiverKind));
+				Source += FString::Printf(TEXT("\t%s.ReceiverParameterIndex = %d;\n"),
+					*Prefix, Semantic.ReceiverParameterIndex);
+				Source += FString::Printf(TEXT("\t%s.HIRState = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Semantic.HIRState));
+				Source += FString::Printf(TEXT("\t%s.CleanupPlanState = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Semantic.CleanupPlanState));
+				Source += FString::Printf(TEXT("\t%s.bHasSuspendState = %u;\n"),
+					*Prefix, Semantic.bHasSuspendState);
+				Source += FString::Printf(TEXT("\t%s.bHasExceptionCleanup = %u;\n"),
+					*Prefix, Semantic.bHasExceptionCleanup);
+				Source += FString::Printf(TEXT(
+					"\t%s.bCleanupPlanCoversAllTransfers = %u;\n"),
+					*Prefix, Semantic.bCleanupPlanCoversAllTransfers);
+				Source += FString::Printf(TEXT("\t%s.ComponentIndex = %d;\n"),
+					*Prefix, Semantic.ComponentIndex);
+				Source += FString::Printf(TEXT("\t%s.bRecursiveComponent = %u;\n"),
+					*Prefix, Semantic.bRecursiveComponent);
+				Source += FString::Printf(TEXT(
+					"\t%s.EligibilityReason = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Semantic.EligibilityReason));
+				Source += FString::Printf(TEXT(
+					"\t%s.EligibilityDetail = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Semantic.EligibilityDetail));
+				AppendDiagnosticSourceAssignment(Source,
+					Prefix + TEXT(".EligibilitySource"),
+					Semantic.EligibilitySource);
+			}
+		}
+
+		if (!Flat.Calls.IsEmpty())
+		{
+			Source += FString::Printf(TEXT(
+				"\tstatic thread_local FAngelscriptJITProviderTypedCallDiagnostic GDiagnosticCalls[%d];\n"),
+				Flat.Calls.Num());
+			for (int32 Index = 0; Index < Flat.Calls.Num(); ++Index)
+			{
+				const auto& Call = Flat.Calls[Index];
+				const FString Prefix = FString::Printf(
+					TEXT("GDiagnosticCalls[%d]"), Index);
+				Source += FString::Printf(TEXT("\t%s = {};\n"), *Prefix);
+				Source += FString::Printf(TEXT("\t%s.CallerFunctionKey = {%s};\n"),
+					*Prefix, *HashExpression(Call.CallerFunctionKey.Hash));
+				Source += FString::Printf(TEXT("\t%s.CalleeFunctionKey = {%s};\n"),
+					*Prefix, *HashExpression(Call.CalleeFunctionKey.Hash));
+				Source += FString::Printf(TEXT("\t%s.ExpressionIndex = %u;\n"),
+					*Prefix, Call.ExpressionIndex);
+				Source += FString::Printf(TEXT(
+					"\t%s.SourceFlags = static_cast<EAngelscriptJITProviderDiagnosticSourceFlags>(%u);\n"),
+					*Prefix, static_cast<uint32>(Call.SourceFlags));
+				AppendDiagnosticSourceAssignment(Source,
+					Prefix + TEXT(".ProcessedSource"), Call.ProcessedSource);
+				AppendDiagnosticSourceAssignment(Source,
+					Prefix + TEXT(".AuthoredSource"), Call.AuthoredSource);
+				AppendDiagnosticSourceAssignment(Source,
+					Prefix + TEXT(".GeneratedSource"), Call.GeneratedSource);
+				Source += FString::Printf(TEXT("\t%s.TargetKind = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Call.TargetKind));
+				Source += FString::Printf(TEXT("\t%s.Disposition = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Call.Disposition));
+				Source += FString::Printf(TEXT(
+					"\t%s.CalleeEligibilityReason = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Call.CalleeEligibilityReason));
+				Source += FString::Printf(TEXT(
+					"\t%s.CalleeEligibilityDetail = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Call.CalleeEligibilityDetail));
+				AppendDiagnosticSourceAssignment(Source,
+					Prefix + TEXT(".CalleeEligibilitySource"),
+					Call.CalleeEligibilitySource);
+				Source += FString::Printf(TEXT(
+					"\t%s.bHasNativeLinkageValidation = %u;\n"),
+					*Prefix, Call.bHasNativeLinkageValidation);
+				Source += FString::Printf(TEXT(
+					"\t%s.NativeLinkageValidation = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Call.NativeLinkageValidation));
+				Source += FString::Printf(TEXT(
+					"\t%s.NativeLinkageValidationDetail = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Call.NativeLinkageValidationDetail));
+				Source += FString::Printf(TEXT(
+					"\t%s.CanonicalDeclaration = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Call.CanonicalDeclaration));
+				Source += FString::Printf(TEXT(
+					"\t%s.EmittedRoute = static_cast<EAngelscriptJITNativeCallSiteRoute>(%u);\n"),
+					*Prefix, static_cast<uint32>(Call.EmittedRoute));
+				Source += FString::Printf(TEXT(
+					"\t%s.EmittedCppCallee = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Call.EmittedCppCallee));
+				Source += FString::Printf(TEXT("\t%s.RuntimeDllCore = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Call.RuntimeDllCore));
+				Source += FString::Printf(TEXT(
+					"\t%s.MetadataRowSymbol = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Call.MetadataRowSymbol));
+				Source += FString::Printf(TEXT("\t%s.RegisteredTarget = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Call.RegisteredTarget));
+				Source += FString::Printf(TEXT("\t%s.DirectCppSymbol = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Call.DirectCppSymbol));
+				Source += FString::Printf(TEXT("\t%s.StableTargetKey = %s;\n"),
+					*Prefix, *HashExpression(Call.StableTargetKey));
+				Source += FString::Printf(TEXT("\t%s.ExpectedAbi = %s;\n"),
+					*Prefix, *HashExpression(Call.ExpectedAbi));
+				Source += FString::Printf(TEXT("\t%s.ReferenceSlotIndex = %d;\n"),
+					*Prefix, Call.ReferenceSlotIndex);
+			}
+		}
+
+		if (!Flat.BackendAttempts.IsEmpty())
+		{
+			Source += FString::Printf(TEXT(
+				"\tstatic thread_local FAngelscriptJITProviderBackendAttemptDiagnostic GDiagnosticBackendAttempts[%d];\n"),
+				Flat.BackendAttempts.Num());
+			for (int32 Index = 0; Index < Flat.BackendAttempts.Num(); ++Index)
+			{
+				const auto& Attempt = Flat.BackendAttempts[Index];
+				const FString Prefix = FString::Printf(
+					TEXT("GDiagnosticBackendAttempts[%d]"), Index);
+				Source += FString::Printf(TEXT("\t%s = {};\n"), *Prefix);
+				Source += FString::Printf(TEXT("\t%s.BackendId = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Attempt.BackendId));
+				Source += FString::Printf(TEXT("\t%s.Disposition = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Attempt.Disposition));
+				Source += FString::Printf(TEXT("\t%s.Detail = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Attempt.Detail));
+				Source += FString::Printf(TEXT(
+					"\t%s.Flags = static_cast<EAngelscriptJITProviderDiagnosticAttemptFlags>(%u);\n"),
+					*Prefix, static_cast<uint32>(Attempt.Flags));
+				Source += FString::Printf(TEXT("\t%s.FallbackReason = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Attempt.FallbackReason));
+				Source += FString::Printf(TEXT("\t%s.TypedDetail = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Attempt.TypedDetail));
+				AppendDiagnosticSourceAssignment(Source,
+					Prefix + TEXT(".ProcessedSource"), Attempt.ProcessedSource);
+				Source += FString::Printf(TEXT(
+					"\t%s.PrimarySemanticFunctionIndex = %d;\n"),
+					*Prefix, Attempt.PrimarySemanticFunctionIndex);
+				Source += FString::Printf(TEXT("\t%s.SemanticFunctionStart = %u;\n"),
+					*Prefix, Attempt.SemanticFunctionStart);
+				Source += FString::Printf(TEXT("\t%s.SemanticFunctionCount = %u;\n"),
+					*Prefix, Attempt.SemanticFunctionCount);
+				Source += FString::Printf(TEXT("\t%s.CallStart = %u;\n"),
+					*Prefix, Attempt.CallStart);
+				Source += FString::Printf(TEXT("\t%s.CallCount = %u;\n"),
+					*Prefix, Attempt.CallCount);
+				Source += FString::Printf(TEXT(
+					"\t%s.RequiredCapabilities = static_cast<EAngelscriptJITExecutionCapability>(%u);\n"),
+					*Prefix, static_cast<uint32>(Attempt.RequiredCapabilities));
+				Source += FString::Printf(TEXT(
+					"\t%s.AvailableCapabilities = static_cast<EAngelscriptJITExecutionCapability>(%u);\n"),
+					*Prefix, static_cast<uint32>(Attempt.AvailableCapabilities));
+				Source += FString::Printf(TEXT(
+					"\t%s.ExecutionRequirementsIdentity = %s;\n"),
+					*Prefix, *HashExpression(Attempt.ExecutionRequirementsIdentity));
+				Source += FString::Printf(TEXT(
+					"\t%s.AvailableCapabilityProfileIdentity = %s;\n"),
+					*Prefix,
+					*HashExpression(Attempt.AvailableCapabilityProfileIdentity));
+				Source += FString::Printf(TEXT("\t%s.ProfileKind = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Attempt.ProfileKind));
+				Source += FString::Printf(TEXT(
+					"\t%s.ExceptionControlState = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Attempt.ExceptionControlState));
+				Source += FString::Printf(TEXT(
+					"\t%s.ExceptionPayloadState = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Attempt.ExceptionPayloadState));
+				Source += FString::Printf(TEXT(
+					"\t%s.bRecursionGuardAvailable = %u;\n"),
+					*Prefix, Attempt.bRecursionGuardAvailable);
+			}
+		}
+
+		Source += FString::Printf(TEXT(
+			"\tstatic thread_local FAngelscriptJITProviderFunctionDiagnostic GDiagnosticFunctions[%d];\n"),
+			Flat.Functions.Num());
+		for (int32 Index = 0; Index < Flat.Functions.Num(); ++Index)
+		{
+			const auto& Function = Flat.Functions[Index];
+			const FString Prefix = FString::Printf(
+				TEXT("GDiagnosticFunctions[%d]"), Index);
+			Source += FString::Printf(TEXT("\t%s = {};\n"), *Prefix);
+			Source += FString::Printf(TEXT("\t%s.FunctionKey = {%s};\n"),
+				*Prefix, *HashExpression(Function.FunctionKey.Hash));
+			Source += FString::Printf(TEXT("\t%s.ActualBackendId = TEXT(\"%s\");\n"),
+				*Prefix, *EscapeJson(Function.ActualBackendId));
+			Source += FString::Printf(TEXT("\t%s.Disposition = TEXT(\"%s\");\n"),
+				*Prefix, *EscapeJson(Function.Disposition));
+			Source += FString::Printf(TEXT("\t%s.Detail = TEXT(\"%s\");\n"),
+				*Prefix, *EscapeJson(Function.Detail));
+			Source += FString::Printf(TEXT("\t%s.BackendAttemptStart = %u;\n"),
+				*Prefix, Function.BackendAttemptStart);
+			Source += FString::Printf(TEXT("\t%s.BackendAttemptCount = %u;\n"),
+				*Prefix, Function.BackendAttemptCount);
+		}
+
+		const FAngelscriptJITProviderDiagnostics& Diagnostics = Flat.View;
+		Source += TEXT("\tstatic thread_local FAngelscriptJITProviderDiagnostics GProviderDiagnostics;\n");
+		Source += TEXT("\tGProviderDiagnostics = {};\n");
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.DiagnosticDigest = %s;\n"),
+			*HashExpression(Diagnostics.DiagnosticDigest));
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.RequestKind = TEXT(\"%s\");\n"),
+			*EscapeJson(Diagnostics.RequestKind));
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.RequestedBackendId = TEXT(\"%s\");\n"),
+			*EscapeJson(Diagnostics.RequestedBackendId));
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.CaptureState = TEXT(\"%s\");\n"),
+			*EscapeJson(Diagnostics.CaptureState));
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.FallbackChain = %s;\n"),
+			Flat.FallbackChain.IsEmpty()
+				? TEXT("nullptr") : TEXT("GDiagnosticFallbackChain"));
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.FallbackChainCount = %u;\n"),
+			Diagnostics.FallbackChainCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.SourceCompilePassCount = %u;\n"),
+			Diagnostics.SourceCompilePassCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.CompiledModuleCount = %u;\n"),
+			Diagnostics.CompiledModuleCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.CompiledFunctionCount = %u;\n"),
+			Diagnostics.CompiledFunctionCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.CompiledTypeCount = %u;\n"),
+			Diagnostics.CompiledTypeCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.CompiledGlobalCount = %u;\n"),
+			Diagnostics.CompiledGlobalCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.CompiledDescriptorCount = %u;\n"),
+			Diagnostics.CompiledDescriptorCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.CompiledDependencyCount = %u;\n"),
+			Diagnostics.CompiledDependencyCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.CompiledExternalNativeCallCount = %u;\n"),
+			Diagnostics.CompiledExternalNativeCallCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.EmitModuleCount = %u;\n"),
+			Diagnostics.EmitModuleCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.bHasVerifiedTypedHIR = %u;\n"),
+			Diagnostics.bHasVerifiedTypedHIR);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.TaskError = TEXT(\"%s\");\n"),
+			*EscapeJson(Diagnostics.TaskError));
+		Source += TEXT("\tGProviderDiagnostics.Functions = GDiagnosticFunctions;\n");
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.FunctionCount = %u;\n"),
+			Diagnostics.FunctionCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.BackendAttempts = %s;\n"),
+			Flat.BackendAttempts.IsEmpty()
+				? TEXT("nullptr") : TEXT("GDiagnosticBackendAttempts"));
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.BackendAttemptCount = %u;\n"),
+			Diagnostics.BackendAttemptCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.SemanticFunctions = %s;\n"),
+			Flat.SemanticFunctions.IsEmpty()
+				? TEXT("nullptr") : TEXT("GDiagnosticSemanticFunctions"));
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.SemanticFunctionCount = %u;\n"),
+			Diagnostics.SemanticFunctionCount);
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.Calls = %s;\n"),
+			Flat.Calls.IsEmpty() ? TEXT("nullptr") : TEXT("GDiagnosticCalls"));
+		Source += FString::Printf(TEXT(
+			"\tGProviderDiagnostics.CallCount = %u;\n"),
+			Diagnostics.CallCount);
+	}
+
 	static FString BuildProviderSource(
 		const FAngelscriptJITGenerationRequest& Request,
 		const FAngelscriptJITGenerationOutput& Output)
@@ -502,6 +1217,11 @@ namespace AngelscriptJITGeneration_Private
 		FString Source = FString(OwnershipPrefix)
 			+ TEXT("provider-source\n")
 			+ TEXT("#include \"Provider.generated.h\"\n\n");
+		if (Output.Diagnostics.IsSet())
+		{
+			Source += TEXT(
+				"#include \"StaticJIT/AngelscriptJITProviderDiagnostics.h\"\n\n");
+		}
 		Source += Request.ProviderSourcePreamble;
 		if (!Request.ProviderSourcePreamble.IsEmpty()
 			&& !Request.ProviderSourcePreamble.EndsWith(TEXT("\n")))
@@ -574,6 +1294,89 @@ namespace AngelscriptJITGeneration_Private
 					*HashExpression(Slot.Reference.ExpectedAbi));
 			}
 		}
+		for (int32 FunctionIndex = 0;
+			FunctionIndex < Output.Functions.Num();
+			++FunctionIndex)
+		{
+			const FAngelscriptJITGeneratedFunction& Function =
+				Output.Functions[FunctionIndex];
+			if (Function.NativeCallSites.IsEmpty())
+			{
+				continue;
+			}
+			Source += FString::Printf(
+				TEXT("\tstatic thread_local FAngelscriptJITNativeCallSite GNativeCallSites_%d[%d];\n"),
+				FunctionIndex,
+				Function.NativeCallSites.Num());
+			for (int32 CallSiteIndex = 0;
+				CallSiteIndex < Function.NativeCallSites.Num();
+				++CallSiteIndex)
+			{
+				const FAngelscriptJITGenerationNativeCallSite& CallSite =
+					Function.NativeCallSites[CallSiteIndex];
+				const FString RuntimeCoreExpression =
+					CallSite.RuntimeDllCore.IsEmpty()
+						? TEXT("nullptr")
+						: FString::Printf(TEXT("TEXT(\"%s\")"),
+							*EscapeJson(CallSite.RuntimeDllCore));
+				const FString MetadataRowExpression =
+					CallSite.MetadataRowSymbol.IsEmpty()
+						? TEXT("nullptr")
+						: FString::Printf(TEXT("TEXT(\"%s\")"),
+							*EscapeJson(CallSite.MetadataRowSymbol));
+				Source += FString::Printf(TEXT(
+					"\tGNativeCallSites_%d[%d] = {sizeof(FAngelscriptJITNativeCallSite), %d, static_cast<EAngelscriptJITNativeCallSiteRoute>(%u), TEXT(\"%s\"), TEXT(\"%s\"), %s, %s, TEXT(\"%s\"), %s, %s, %d, 0};\n"),
+					FunctionIndex,
+					CallSiteIndex,
+					CallSiteIndex,
+					static_cast<uint32>(CallSite.Route),
+					*EscapeJson(CallSite.CanonicalDeclaration),
+					*EscapeJson(CallSite.EmittedCppCallee),
+					*RuntimeCoreExpression,
+					*MetadataRowExpression,
+					*EscapeJson(CallSite.RegisteredTarget),
+					*HashExpression(CallSite.StableTargetKey),
+					*HashExpression(CallSite.ExpectedAbi),
+					CallSite.ReferenceSlotIndex);
+			}
+		}
+		AppendProviderDiagnosticsSource(Source, Output);
+		int32 SemanticDependencyCount = 0;
+		for (const FAngelscriptJITGeneratedFunction& Function : Output.Functions)
+		{
+			SemanticDependencyCount += Function.SemanticDependencies.Num();
+		}
+		if (SemanticDependencyCount > 0)
+		{
+			Source += FString::Printf(
+				TEXT("\tstatic thread_local FAngelscriptJITSemanticDependencyRow GSemanticDependencies[%d];\n"),
+				SemanticDependencyCount);
+			int32 EmittedDependencyIndex = 0;
+			for (const FAngelscriptJITGeneratedFunction& Function
+				: Output.Functions)
+			{
+				for (const FAngelscriptArtifactSemanticDependency& Dependency
+					: Function.SemanticDependencies)
+				{
+					FAngelscriptJITSemanticDependencyRow Row;
+					FAngelscriptJITProviderManifest::FillSemanticDependencyRow(
+						Dependency,
+						static_cast<uint32>(EmittedDependencyIndex),
+						Row);
+					Source += FString::Printf(
+						TEXT("\tGSemanticDependencies[%d] = {sizeof(FAngelscriptJITSemanticDependencyRow), %u, static_cast<EAngelscriptArtifactSemanticDependencyKind>(%u), static_cast<EAngelscriptArtifactReferenceKind>(%u), static_cast<EAngelscriptJITSemanticDependencyFlags>(%u), 0, %s, %s, %s};\n"),
+						EmittedDependencyIndex,
+						Row.RowIndex,
+						static_cast<uint32>(Row.Kind),
+						static_cast<uint32>(Row.TargetKind),
+						static_cast<uint32>(Row.Flags),
+						*HashExpression(Row.TargetStableKey),
+						*HashExpression(Row.ExpectedAbi),
+						*HashExpression(Row.ExpectedContentOrValue));
+					++EmittedDependencyIndex;
+				}
+			}
+		}
 		Source += FString::Printf(
 			TEXT("\tstatic thread_local FAngelscriptJITArtifactEntry GEntries[%d];\n"),
 			Output.Functions.Num());
@@ -593,8 +1396,12 @@ namespace AngelscriptJITGeneration_Private
 			const FString ReferenceExpression = Function.ReferenceSlots.IsEmpty()
 				? TEXT("nullptr")
 				: FString::Printf(TEXT("GReferences_%d"), FunctionIndex);
+			const FString NativeCallSiteExpression =
+				Function.NativeCallSites.IsEmpty()
+					? TEXT("nullptr")
+					: FString::Printf(TEXT("GNativeCallSites_%d"), FunctionIndex);
 			Source += FString::Printf(
-				TEXT("\tGEntries[%d] = {sizeof(FAngelscriptJITArtifactEntry), static_cast<EAngelscriptJITArtifactEntryFlags>(%u), {%s}, {%s}, %s, %s, {%s}, %s, %s, {%s, %s, %s}, %s, %d, 0};\n"),
+				TEXT("\tGEntries[%d] = {sizeof(FAngelscriptJITArtifactEntry), static_cast<EAngelscriptJITArtifactEntryFlags>(%u), {%s}, {%s}, %s, %s, {%s}, %s, %s, {%s, %s, %s}, %s, %d, %s, %d, 0, static_cast<EAngelscriptJITExecutionCapability>(%u), %s, static_cast<EAngelscriptJITExecutionCapability>(%u), %u, %u};\n"),
 				FunctionIndex,
 				static_cast<uint32>(Function.Flags),
 				*HashExpression(Function.ModuleKey.Hash),
@@ -608,7 +1415,16 @@ namespace AngelscriptJITGeneration_Private
 				*RawExpression,
 				*ParmsExpression,
 				*ReferenceExpression,
-				Function.ReferenceSlots.Num());
+				Function.ReferenceSlots.Num(),
+				*NativeCallSiteExpression,
+				Function.NativeCallSites.Num(),
+				static_cast<uint32>(
+					Function.AvailableExecutionCapabilities),
+				*HashExpression(Function.ExecutionCapabilityProfileHash),
+				static_cast<uint32>(
+					Function.RuntimeExecutionRequirementTriggers),
+				Function.SemanticDependencyStartIndex,
+				Function.SemanticDependencyCount);
 		}
 		Source += TEXT("\n");
 		Source += TEXT("\treturn\n\t{\n");
@@ -630,7 +1446,20 @@ namespace AngelscriptJITGeneration_Private
 		Source += FString::Printf(TEXT("\t\tTEXT(\"%s\"),\n"),
 			*EscapeJson(Request.OwnerModuleName));
 		Source += TEXT("\t\tGEntries,\n");
-		Source += FString::Printf(TEXT("\t\t%u\n"), Output.Functions.Num());
+		Source += FString::Printf(TEXT("\t\t%u,\n"), Output.Functions.Num());
+		Source += Output.Diagnostics.IsSet()
+			? TEXT("\t\t&GProviderDiagnostics,\n")
+			: TEXT("\t\tnullptr,\n");
+		if (SemanticDependencyCount > 0)
+		{
+			Source += TEXT("\t\tGSemanticDependencies,\n");
+		}
+		else
+		{
+			Source += TEXT("\t\tnullptr,\n");
+		}
+		Source += FString::Printf(TEXT("\t\t%u\n"),
+			static_cast<uint32>(SemanticDependencyCount));
 		Source += TEXT("\t};\n}\n");
 		return Source;
 	}
@@ -921,10 +1750,13 @@ bool FAngelscriptJITGeneration::Generate(
 		Request.NativeEnvironmentFingerprint;
 
 	TArray<TArray<FAngelscriptJITReferenceSlot>> DigestReferences;
+	TArray<TArray<FAngelscriptJITNativeCallSite>> DigestNativeCallSites;
+	TArray<FAngelscriptJITSemanticDependencyRow> DigestSemanticDependencies;
 	TArray<FAngelscriptJITArtifactEntry> DigestEntries;
 	TArray<FString> Implementations;
 	TArray<uint32> ModuleFunctionCounts;
 	DigestReferences.SetNum(Functions.Num());
+	DigestNativeCallSites.SetNum(Functions.Num());
 	DigestEntries.SetNum(Functions.Num());
 	Implementations.SetNum(Functions.Num());
 	ModuleFunctionCounts.SetNumZeroed(Modules.Num());
@@ -959,6 +1791,28 @@ bool FAngelscriptJITGeneration::Generate(
 				*OneLineCommentValue(Function.SourceSection),
 				Function.SourceLine,
 				Function.SourceColumn));
+		}
+		const bool bHasExecutionCapabilityProfile = EnumHasAnyFlags(
+			Function.Flags,
+			EAngelscriptJITArtifactEntryFlags::HasExecutionCapabilityProfile);
+		const uint32 AvailableExecutionCapabilities = static_cast<uint32>(
+			Function.AvailableExecutionCapabilities);
+		const uint32 RuntimeExecutionRequirementTriggers =
+			static_cast<uint32>(
+				Function.RuntimeExecutionRequirementTriggers);
+		if ((AvailableExecutionCapabilities
+				& ~FAngelscriptJITExecutionCapabilityMask::All) != 0
+			|| (RuntimeExecutionRequirementTriggers
+				& ~FAngelscriptJITExecutionCapabilityMask::All) != 0
+			|| (!bHasExecutionCapabilityProfile
+				&& (AvailableExecutionCapabilities != 0
+					|| RuntimeExecutionRequirementTriggers != 0))
+			|| (bHasExecutionCapabilityProfile
+				== Function.ExecutionCapabilityProfileHash.IsZero()))
+		{
+			return Fail(FString::Printf(TEXT(
+				"Generated function %s has an invalid execution capability profile."),
+				*Function.FunctionKey.Hash.ToHexString()));
 		}
 		const int32 ModuleIndex = Modules.IndexOfByPredicate(
 			[ModuleKey = Function.ModuleKey](
@@ -1004,6 +1858,12 @@ bool FAngelscriptJITGeneration::Generate(
 		Generated.ExecutionHash = Function.ExecutionHash;
 		Generated.DebugHash = Function.DebugHash;
 		Generated.EntryAbiHash = Function.EntryAbiHash;
+		Generated.AvailableExecutionCapabilities =
+			Function.AvailableExecutionCapabilities;
+		Generated.ExecutionCapabilityProfileHash =
+			Function.ExecutionCapabilityProfileHash;
+		Generated.RuntimeExecutionRequirementTriggers =
+			Function.RuntimeExecutionRequirementTriggers;
 		Generated.bHasVMEntry = Function.bHasVMEntry;
 		Generated.bHasRawEntry = Function.bHasRawEntry;
 		Generated.bHasParmsEntry = Function.bHasParmsEntry;
@@ -1047,6 +1907,38 @@ bool FAngelscriptJITGeneration::Generate(
 			Slot.Reference = Reference.Reference;
 		}
 		DigestReferences[FunctionIndex] = Generated.ReferenceSlots;
+		Generated.NativeCallSites = Function.NativeCallSites;
+		DigestNativeCallSites[FunctionIndex].Reserve(
+			Generated.NativeCallSites.Num());
+		for (int32 CallSiteIndex = 0;
+			CallSiteIndex < Generated.NativeCallSites.Num();
+			++CallSiteIndex)
+		{
+			const FAngelscriptJITGenerationNativeCallSite& SourceCallSite =
+				Generated.NativeCallSites[CallSiteIndex];
+			FAngelscriptJITNativeCallSite& DigestCallSite =
+				DigestNativeCallSites[FunctionIndex].Emplace_GetRef();
+			DigestCallSite.CallSiteIndex =
+				static_cast<uint32>(CallSiteIndex);
+			DigestCallSite.Route = SourceCallSite.Route;
+			DigestCallSite.CanonicalDeclaration =
+				*SourceCallSite.CanonicalDeclaration;
+			DigestCallSite.EmittedCppCallee =
+				*SourceCallSite.EmittedCppCallee;
+			DigestCallSite.RuntimeDllCore =
+				SourceCallSite.RuntimeDllCore.IsEmpty()
+					? nullptr : *SourceCallSite.RuntimeDllCore;
+			DigestCallSite.MetadataRowSymbol =
+				SourceCallSite.MetadataRowSymbol.IsEmpty()
+					? nullptr : *SourceCallSite.MetadataRowSymbol;
+			DigestCallSite.RegisteredTarget =
+				*SourceCallSite.RegisteredTarget;
+			DigestCallSite.StableTargetKey =
+				SourceCallSite.StableTargetKey;
+			DigestCallSite.ExpectedAbi = SourceCallSite.ExpectedAbi;
+			DigestCallSite.ReferenceSlotIndex =
+				SourceCallSite.ReferenceSlotIndex;
+		}
 
 		FAngelscriptJITArtifactEntry& DigestEntry =
 			DigestEntries[FunctionIndex];
@@ -1057,6 +1949,12 @@ bool FAngelscriptJITGeneration::Generate(
 		DigestEntry.DebugHash = Generated.DebugHash;
 		DigestEntry.ArtifactProfile = Request.ArtifactProfile;
 		DigestEntry.EntryAbiHash = Generated.EntryAbiHash;
+		DigestEntry.AvailableExecutionCapabilities =
+			Generated.AvailableExecutionCapabilities;
+		DigestEntry.ExecutionCapabilityProfileHash =
+			Generated.ExecutionCapabilityProfileHash;
+		DigestEntry.RuntimeExecutionRequirementTriggers =
+			Generated.RuntimeExecutionRequirementTriggers;
 		DigestEntry.NativeEnvironmentFingerprint =
 			Request.NativeEnvironmentFingerprint;
 		DigestEntry.EntryPoints.VMEntry = Generated.bHasVMEntry
@@ -1068,6 +1966,41 @@ bool FAngelscriptJITGeneration::Generate(
 		DigestEntry.ReferenceSlots = DigestReferences[FunctionIndex].GetData();
 		DigestEntry.ReferenceSlotCount =
 			DigestReferences[FunctionIndex].Num();
+		DigestEntry.NativeCallSites =
+			DigestNativeCallSites[FunctionIndex].GetData();
+		DigestEntry.NativeCallSiteCount =
+			DigestNativeCallSites[FunctionIndex].Num();
+
+		const FAngelscriptJITSemanticDependencyCanonicalResult Canonical =
+			FAngelscriptJITProviderManifest::CanonicalizeSemanticDependencies(
+				Function.SemanticDependencies);
+		if (!Canonical.IsValid())
+		{
+			return Fail(FString::Printf(TEXT(
+				"Generated function %s has invalid semantic dependencies (%u)."),
+				*Function.FunctionKey.Hash.ToHexString(),
+				static_cast<uint32>(Canonical.Code)));
+		}
+		Generated.SemanticDependencies = Canonical.Rows;
+		Generated.SemanticDependencyStartIndex =
+			static_cast<uint32>(DigestSemanticDependencies.Num());
+		Generated.SemanticDependencyCount =
+			static_cast<uint32>(Canonical.Rows.Num());
+		for (int32 DependencyIndex = 0;
+			DependencyIndex < Canonical.Rows.Num();
+			++DependencyIndex)
+		{
+			FAngelscriptJITSemanticDependencyRow& Row =
+				DigestSemanticDependencies.Emplace_GetRef();
+			FAngelscriptJITProviderManifest::FillSemanticDependencyRow(
+				Canonical.Rows[DependencyIndex],
+				static_cast<uint32>(DigestSemanticDependencies.Num() - 1),
+				Row);
+		}
+		DigestEntry.SemanticDependencyStartIndex =
+			Generated.SemanticDependencyStartIndex;
+		DigestEntry.SemanticDependencyCount =
+			Generated.SemanticDependencyCount;
 
 		FString Implementation = Function.ImplementationTemplate;
 		Implementation.ReplaceInline(TEXT("{SYMBOL_PREFIX}"),
@@ -1156,7 +2089,9 @@ bool FAngelscriptJITGeneration::Generate(
 	}
 
 	OutOutput.ArtifactSetDigest =
-		FAngelscriptJITProviderManifest::BuildArtifactSetDigest(DigestEntries);
+		FAngelscriptJITProviderManifest::BuildArtifactSetDigest(
+			DigestEntries,
+			DigestSemanticDependencies);
 	FAngelscriptJITProviderView DigestView;
 	DigestView.ProviderId = Request.ProviderId;
 	DigestView.ArtifactSetDigest = OutOutput.ArtifactSetDigest;
@@ -1167,8 +2102,54 @@ bool FAngelscriptJITGeneration::Generate(
 	DigestView.OwnerModuleName = *Request.OwnerModuleName;
 	DigestView.Entries = DigestEntries.GetData();
 	DigestView.EntryCount = DigestEntries.Num();
+	DigestView.SemanticDependencies = DigestSemanticDependencies.Num() > 0
+		? DigestSemanticDependencies.GetData() : nullptr;
+	DigestView.SemanticDependencyCount =
+		static_cast<uint32>(DigestSemanticDependencies.Num());
 	OutOutput.ProviderGeneration =
 		FAngelscriptJITProviderManifest::BuildProviderGeneration(DigestView);
+	DigestView.ProviderGeneration = OutOutput.ProviderGeneration;
+	FProviderDiagnosticFlatView DiagnosticFlatView;
+	if (Request.TargetProfile != EAngelscriptJITTargetProfile::GameShipping
+		&& Request.Diagnostics.IsSet())
+	{
+		FAngelscriptJITGenerationDiagnostics NormalizedDiagnostics;
+		FString DiagnosticError;
+		if (!NormalizeProviderDiagnostics(
+			OutOutput.Functions,
+			Request.Diagnostics.GetValue(),
+			NormalizedDiagnostics,
+			DiagnosticError))
+		{
+			return Fail(DiagnosticError);
+		}
+		OutOutput.Diagnostics = MoveTemp(NormalizedDiagnostics);
+		if (!BuildProviderDiagnosticFlatView(
+			OutOutput.Diagnostics.GetValue(),
+			DiagnosticFlatView,
+			DiagnosticError))
+		{
+			return Fail(DiagnosticError);
+		}
+		OutOutput.DiagnosticDigest =
+			DiagnosticFlatView.View.DiagnosticDigest;
+		DigestView.Diagnostics = &DiagnosticFlatView.View;
+	}
+	const FAngelscriptJITProviderValidationResult DigestValidation =
+		FAngelscriptJITProviderManifest::Validate(DigestView);
+	if (!DigestValidation.IsValid())
+	{
+		return Fail(FString::Printf(TEXT(
+			"Generated Provider view failed validation: Code=%u Entry=%d Reference=%d NativeCallSite=%d DiagnosticFunction=%d DiagnosticAttempt=%d DiagnosticSemantic=%d DiagnosticCall=%d."),
+			static_cast<uint32>(DigestValidation.Code),
+			DigestValidation.EntryIndex,
+			DigestValidation.ReferenceIndex,
+			DigestValidation.NativeCallSiteIndex,
+			DigestValidation.DiagnosticFunctionIndex,
+			DigestValidation.DiagnosticAttemptIndex,
+			DigestValidation.DiagnosticSemanticIndex,
+			DigestValidation.DiagnosticCallIndex));
+	}
 
 	OutOutput.Files.Add({TEXT("Provider.generated.h"),
 		BuildProviderHeader(),

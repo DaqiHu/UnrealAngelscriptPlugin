@@ -8,6 +8,7 @@
 #include "ClassGenerator/AngelscriptClassGenerator.h"
 #include "Core/AngelscriptType.h"
 #include "Hash/Blake3.h"
+#include "Misc/FileHelper.h"
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_module.h"
@@ -2378,6 +2379,7 @@ public:
 				ModuleDesc->Code.AddDefaulted_GetRef();
 			Section.VirtualPath = BuildLogicalVirtualPath(*SourceIndex, File);
 			Section.RelativeFilename = File.RelativeLogicalPath;
+			FString CurrentSourceText;
 			for (const FAngelscriptCacheCurrentSourceProjection* Current
 				: CurrentModuleSources)
 			{
@@ -2387,6 +2389,19 @@ public:
 					Section.VirtualPath = Current->VirtualPath;
 					Section.RelativeFilename = Current->RelativeFilename;
 					Section.AbsoluteFilename = Current->AbsoluteFilename;
+					if (Current->RawSourceBytes.IsEmpty())
+					{
+						CurrentSourceText.Reset();
+					}
+					else
+					{
+						FFileHelper::BufferToString(
+							CurrentSourceText,
+							Current->RawSourceBytes.GetData(),
+							Current->RawSourceBytes.Num());
+					}
+					Section.SourceTextHash =
+						BuildAngelscriptSourceTextHash(CurrentSourceText);
 					break;
 				}
 			}
@@ -3179,7 +3194,9 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 	const TConstArrayView<FAngelscriptFunctionArtifactIdentity>
 		ValidatedArtifactIdentities,
 	const TConstArrayView<asIScriptModule*> RebuiltModules,
-	const TConstArrayView<asIScriptModule*> ArtifactInvalidatedModules)
+	const TConstArrayView<asIScriptModule*> ArtifactInvalidatedModules,
+	const TConstArrayView<FAngelscriptFunctionArtifactReferenceSet>
+		ValidatedArtifactReferenceSets)
 {
 	if (!FunctionRouteState.IsValid())
 	{
@@ -3482,6 +3499,42 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 			ESPMode::ThreadSafe>();
 	Published->Generation = FAngelscriptFunctionRouteGeneration{
 		FunctionRouteState->NextGenerationValue++};
+	const bool bRouteOnlyRefresh = VerifiedArtifactRoutes.IsEmpty()
+		&& ValidatedArtifactIdentities.IsEmpty()
+		&& RebuiltModules.IsEmpty()
+		&& ArtifactInvalidatedModules.IsEmpty()
+		&& ValidatedArtifactReferenceSets.IsEmpty();
+	if (bRouteOnlyRefresh && PreviousSnapshot.IsValid())
+	{
+		Published->ValidatedFunctionArtifactReferenceSets =
+			PreviousSnapshot->ValidatedFunctionArtifactReferenceSets;
+	}
+	else
+	{
+		for (const FAngelscriptFunctionArtifactReferenceSet& ReferenceSet
+			: ValidatedArtifactReferenceSets)
+		{
+			const FAngelscriptFunctionRoute* const VerifiedRoute =
+				CandidateRoutes.FindByPredicate(
+					[&ReferenceSet](const FAngelscriptFunctionRoute& Candidate)
+					{
+						return Candidate.bHasVerifiedArtifactIdentity
+							&& Candidate.Identity.FunctionKey
+								== ReferenceSet.FunctionKey;
+					});
+			if (VerifiedRoute != nullptr)
+			{
+				Published->ValidatedFunctionArtifactReferenceSets.Add(
+					ReferenceSet);
+			}
+		}
+		Published->ValidatedFunctionArtifactReferenceSets.Sort([](
+			const FAngelscriptFunctionArtifactReferenceSet& Left,
+			const FAngelscriptFunctionArtifactReferenceSet& Right)
+		{
+			return Left.FunctionKey.Hash < Right.FunctionKey.Hash;
+		});
+	}
 	for (int32 Index = 0; Index < CandidateRoutes.Num();)
 	{
 		int32 DuplicateEnd = Index + 1;

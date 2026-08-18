@@ -99,6 +99,24 @@ namespace AngelscriptNativeTestSupport
 		return Result;
 	}
 
+	inline TArray<asDWORD> CopyNativeBytecode(asIScriptFunction* Function)
+	{
+		TArray<asDWORD> Result;
+		if (Function == nullptr)
+		{
+			return Result;
+		}
+
+		asUINT BytecodeLength = 0;
+		const asDWORD* const Bytecode =
+			Function->GetByteCode(&BytecodeLength);
+		if (Bytecode != nullptr && BytecodeLength != 0)
+		{
+			Result.Append(Bytecode, static_cast<int32>(BytecodeLength));
+		}
+		return Result;
+	}
+
 	inline FString CollectFunctionDeclarations(asIScriptModule* Module)
 	{
 		if (Module == nullptr)

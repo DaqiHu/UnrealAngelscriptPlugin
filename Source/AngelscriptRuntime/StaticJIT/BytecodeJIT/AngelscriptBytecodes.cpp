@@ -1,5 +1,8 @@
 #include "AngelscriptBytecodes.h"
 #if AS_CAN_GENERATE_JIT
+#if WITH_ANGELSCRIPT_UNITTESTS
+#include "StaticJIT/AngelscriptStaticJITBytecodeAccessAudit.h"
+#endif
 #include "StaticJIT/BytecodeJIT/StaticJITBinds.h"
 #include "AngelscriptType.h"
 #include "AngelscriptEngine.h"
@@ -26,6 +29,9 @@ TMap<asEBCInstr, FAngelscriptBytecode*>& FAngelscriptBytecode::GetBytecodeMap()
 
 FAngelscriptBytecode& FAngelscriptBytecode::GetBytecode(asEBCInstr Instr)
 {
+#if WITH_ANGELSCRIPT_UNITTESTS
+	FAngelscriptStaticJITBytecodeAccessAudit::RecordBytecodeDispatch();
+#endif
 	FAngelscriptBytecode** Bytecode = GetBytecodeMap().Find(Instr);
 	if (Bytecode == nullptr)
 		return UnimplementedBytecode;
@@ -1504,6 +1510,11 @@ struct FCallScriptFunction
 		if (LookupType == ELookupType::BindIdArg)
 		{
 			Context.Line("  asCScriptFunction* SignatureFunc = {0};", Context.ReferenceFunction(ScriptFunction));
+			Context.Line("  if (SignatureFunc == nullptr) [[unlikely]]");
+			Context.Line("  {");
+			Context.Line("     SCRIPT_UNBOUND_EXCEPTION();");
+			Context.ExceptionCleanupAndReturn(/*bAfterCurrentOp=*/bIsDestructor, /*bSetNullptrException=*/false);
+			Context.Line("  }");
 			Context.Line("  int FunctionId = SCRIPT_ENGINE->importedFunctions[SignatureFunc->GetId() & ~FUNC_IMPORTED]->boundFunctionId;");
 			Context.Line("  if (FunctionId == -1) [[unlikely]]");
 			Context.Line("  {");
@@ -1603,12 +1614,23 @@ struct FCallScriptFunction
 			}
 		}
 
-		Context.Line("  CallContext->Execute();");
+		if (bIgnoreExceptions)
+		{
+			Context.Line("  CallContext->Execute();");
+		}
+		else
+		{
+			Context.Line("  {");
+			Context.Line("     FScopeStaticJITNestedExceptionAdoption ExceptionAdoption(*CallContext);");
+			Context.Line("     CallContext->Execute();");
+			Context.Line("  }");
+		}
 
 		if (!bIgnoreExceptions)
 		{
 			Context.Line("  if (Execution.bExceptionThrown || CallContext->m_status != asEXECUTION_FINISHED)");
 			Context.Line("  {");
+			Context.Line("     FStaticJITFunction::AdoptContextException(Execution, *CallContext);");
 			Context.Line("     Execution.bExceptionThrown = true;");
 			Context.ExceptionCleanupAndReturn(/*bAfterCurrentOp=*/bIsDestructor, /*bSetNullptrException=*/false);
 			Context.Line("  }");
@@ -1784,10 +1806,13 @@ void FDestructorCall::CallDestroy(FStaticJITContext& Context, const FString& Add
 		}
 	}
 
-	// Script struct type
-	FCallScriptFunction ScriptCall(DestroyFunc, FCallScriptFunction::ELookupType::NoLookup, /*bIgnoreExceptions=*/true);
-	ScriptCall.OverrideObjectAddress = AddressExpression;
-	ScriptCall.MakeCall(Context);
+	// Script struct type: isolate from the already-failed Execution so a
+	// generated destructor prolog never sees SCRIPT_ASSUME_NO_EXCEPTION
+	// violated, and a cleanup exception cannot replace the primary failure.
+	Context.Line(
+		"AngelscriptDestroyScriptObjectIsolated(Execution, SCRIPT_ENGINE, {0}, (void*){1});",
+		Context.ReferenceTypeInfo(ObjectType),
+		AddressExpression);
 }
 
 void FDefaultConstructCall::CallDefaultConstruct(FStaticJITContext& Context, const FString& AddressExpression)
@@ -5052,6 +5077,7 @@ IMPL_BYTECODE_BEGIN(asBC_ThrowException)
 {
 	bool Implement(FStaticJITContext& Context) const override
 	{
+		Context.DebugLineNumber();
 		int32 Type = asBC_WORDARG0(Context.BC);
 		if (Type == 0)
 			Context.Line("SCRIPT_SWITCH_VALUE_INVALID_EXCEPTION();");
@@ -6625,12 +6651,17 @@ IMPL_BYTECODE_BEGIN(asBC_POWf)
 {
 	bool Implement(FStaticJITContext& Context) const override
 	{
-		// NB: We skip checking for HUGE_VAL, no point
 		check(Context.VArg_Type(0) == FStaticJITContext::EVariableType::Float);
 		check(Context.VArg_Type(1) == FStaticJITContext::EVariableType::Float);
 		check(Context.VArg_Type(2) == FStaticJITContext::EVariableType::Float);
 
-		Context.Line("{0} = Math::Pow({1}, {2});", Context.VArg_Var(0), Context.VArg_Var(1), Context.VArg_Var(2));
+		Context.Line("{0} = FMath::Pow({1}, {2});", Context.VArg_Var(0), Context.VArg_Var(1), Context.VArg_Var(2));
+		Context.Line("if ({0} == static_cast<float>(HUGE_VAL)) [[unlikely]]", Context.VArg_Var(0));
+		Context.Line("{");
+		Context.DebugLineNumber();
+		Context.Line("  SCRIPT_POWER_OVERFLOW_EXCEPTION();");
+		Context.ExceptionCleanupAndReturn(/*bAfterCurrentOp=*/false, /*bSetNullptrException=*/false);
+		Context.Line("}");
 		return true;
 	}
 };
@@ -6640,13 +6671,18 @@ IMPL_BYTECODE_BEGIN(asBC_POWd)
 {
 	bool Implement(FStaticJITContext& Context) const override
 	{
-		// NB: We skip checking for HUGE_VAL, no point
 		check(Context.VArg_Type(0) == FStaticJITContext::EVariableType::Double);
 		check(Context.VArg_Type(1) == FStaticJITContext::EVariableType::Double);
 		check(Context.VArg_Type(2) == FStaticJITContext::EVariableType::Double);
 
-		Context.Line("{0} = Math::Pow({1}, {2});", Context.VArg_Var(0), Context.VArg_Var(1), Context.VArg_Var(2));
-		return false;
+		Context.Line("{0} = FMath::Pow({1}, {2});", Context.VArg_Var(0), Context.VArg_Var(1), Context.VArg_Var(2));
+		Context.Line("if ({0} == HUGE_VAL) [[unlikely]]", Context.VArg_Var(0));
+		Context.Line("{");
+		Context.DebugLineNumber();
+		Context.Line("  SCRIPT_POWER_OVERFLOW_EXCEPTION();");
+		Context.ExceptionCleanupAndReturn(/*bAfterCurrentOp=*/false, /*bSetNullptrException=*/false);
+		Context.Line("}");
+		return true;
 	}
 };
 IMPL_BYTECODE_END(asBC_POWd)
@@ -6655,13 +6691,18 @@ IMPL_BYTECODE_BEGIN(asBC_POWdi)
 {
 	bool Implement(FStaticJITContext& Context) const override
 	{
-		// NB: We skip checking for HUGE_VAL, no point
 		check(Context.VArg_Type(0) == FStaticJITContext::EVariableType::Double);
 		check(Context.VArg_Type(1) == FStaticJITContext::EVariableType::Double);
-		check(Context.VArg_Type(2) == FStaticJITContext::EVariableType::Double);
+		check(Context.VArg_Type(2) == FStaticJITContext::EVariableType::DWord);
 
-		Context.Line("{0} = Math::Pow({1}, (double){2});", Context.VArg_Var(0), Context.VArg_Var(1), Context.VArg_SignedVar(2));
-		return false;
+		Context.Line("{0} = FMath::Pow({1}, static_cast<double>({2}));", Context.VArg_Var(0), Context.VArg_Var(1), Context.VArg_SignedVar(2));
+		Context.Line("if ({0} == HUGE_VAL) [[unlikely]]", Context.VArg_Var(0));
+		Context.Line("{");
+		Context.DebugLineNumber();
+		Context.Line("  SCRIPT_POWER_OVERFLOW_EXCEPTION();");
+		Context.ExceptionCleanupAndReturn(/*bAfterCurrentOp=*/false, /*bSetNullptrException=*/false);
+		Context.Line("}");
+		return true;
 	}
 };
 IMPL_BYTECODE_END(asBC_POWdi)

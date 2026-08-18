@@ -210,6 +210,16 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptPreprocessor
 		int32 FileLineNumber = -1;
 	};
 
+	struct FGeneratedCode
+	{
+		FString Code;
+		EAngelscriptGeneratedSourceKind Kind =
+			EAngelscriptGeneratedSourceKind::ClassHelper;
+		FString GeneratorName;
+		bool bHasAuthoredAnchor = false;
+		FAngelscriptSourceProvenanceAnchor AuthoredAnchor;
+	};
+
 	struct FFile
 	{
 		// Final data structure after preprocessing is done
@@ -225,6 +235,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptPreprocessor
 
 		// Raw code read directly from the module file
 		FString RawCode;
+		// Frozen before ParseIntoChunks mutates RawCode for imports/macros.
+		FAngelscriptHash256 SourceTextHash;
 
 		// Chunked representation of raw code
 		TChunkedArray<FChunk> ChunkedCode;
@@ -233,7 +245,12 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptPreprocessor
 		FString ProcessedCode;
 
 		// Generated code to be added to the module
-		TArray<FString> GeneratedCode;
+		TArray<FGeneratedCode> GeneratedCode;
+
+		// Non-overlapping origins in final ProcessedCode. Range coordinates use
+		// TCHAR code units until the Engine installs the UTF-8 script section.
+		TArray<FAngelscriptProcessedSourceProvenanceRange>
+			ProcessedSourceProvenance;
 
 		// Imported modulse
 		TArray<FImport> Imports;

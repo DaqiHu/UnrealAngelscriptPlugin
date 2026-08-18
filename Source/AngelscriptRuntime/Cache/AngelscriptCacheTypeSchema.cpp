@@ -4550,7 +4550,11 @@ namespace AngelscriptCacheTypeSchema_Private
 			{
 				FAngelscriptCachedEnumTypePayload EnumPayload;
 				uint32 Count = 0;
-				if (!Reader.ReadArrayCountAndReserve(48,
+				// One compact enumerator is ordinal + empty string length + signed
+				// value + empty metadata count. This is a wire-size lower bound, not
+				// sizeof(FAngelscriptCachedEnumEnumerator); short names with no
+				// metadata are valid and are checked field-by-field below.
+				if (!Reader.ReadArrayCountAndReserve(16,
 					EnumPayload.OrderedEnumerators, Count))
 				{
 					return false;

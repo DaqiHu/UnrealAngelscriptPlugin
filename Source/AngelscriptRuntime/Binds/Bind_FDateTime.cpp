@@ -20,6 +20,52 @@ struct FAngelscriptFDateTimeBinds
 #include "AngelscriptBinds.h"
 
 #include "Helper_ToString.h"
+#include "StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallDescriptor.h"
+
+namespace
+{
+#if AS_CAN_GENERATE_JIT
+	void AttachDaysInMonthExternalCallDescriptor(
+		FAngelscriptBoundFunction& BoundFunction)
+	{
+		if (!BoundFunction.IsValid()
+			|| !BoundFunction.GetTargetEngine().
+				bCollectStaticJITCompatibilityBinds)
+		{
+			return;
+		}
+
+		FAngelscriptStaticJITNativeCallDescriptor Descriptor;
+		Descriptor.Linkage =
+			EAngelscriptStaticJITNativeCallLinkage::ExportedSymbol;
+		Descriptor.Visibility =
+			EAngelscriptStaticJITNativeCallVisibility::External;
+		Descriptor.Symbol = TEXT("FDateTime::DaysInMonth");
+		Descriptor.Include = TEXT("Misc/DateTime.h");
+		Descriptor.OwningModule = FName(TEXT("Core"));
+		Descriptor.ApiMacro = TEXT("CORE_API");
+		Descriptor.CppCallableSignature = TEXT("int32(int32, int32)");
+		Descriptor.ABIDomain =
+			EAngelscriptStaticJITNativeCallABIDomain::Scalar;
+		Descriptor.ExceptionPolicy =
+			EAngelscriptStaticJITNativeCallExceptionPolicy::
+				DoesNotSetScriptException;
+		Descriptor.RouteFlags =
+			EAngelscriptStaticJITNativeCallRouteFlags::DirectCall;
+		Descriptor.LifetimeFlags =
+			EAngelscriptStaticJITNativeCallLifetimeFlags::ByValueScalarOnly
+			| EAngelscriptStaticJITNativeCallLifetimeFlags::NoRetainedReferences
+			| EAngelscriptStaticJITNativeCallLifetimeFlags::NoEngineLocalCapture;
+		if (TryBuildAngelscriptStaticJITNativeABIIdentity(
+				*BoundFunction.GetFunction(), Descriptor.NativeABI)
+			&& TryBuildAngelscriptStaticJITScalarABIIdentity(
+				*BoundFunction.GetFunction(), Descriptor.ScalarABI))
+		{
+			BoundFunction.ExternalNativeCall(Descriptor);
+		}
+	}
+#endif
+}
 
 /**
  * FDateTime binding surface.
@@ -165,7 +211,13 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FDateTime(
 		FDateTime_.Method("FDateTime& opSubAssign(const FTimespan& Other)", METHODPR_TRIVIAL(FDateTime&, FDateTime, operator-=, (const FTimespan&)));
 
 		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FDateTime");
-		Binds.BindGlobalFunctionForTarget("int DaysInMonth(int Year, int Month) no_discard", FUNC_TRIVIAL(FDateTime::DaysInMonth));
+		FAngelscriptBoundFunction DaysInMonthFunction =
+			Binds.BindGlobalFunctionForTarget(
+				"int DaysInMonth(int Year, int Month) no_discard",
+				FUNC_TRIVIAL(FDateTime::DaysInMonth));
+#if AS_CAN_GENERATE_JIT
+		AttachDaysInMonthExternalCallDescriptor(DaysInMonthFunction);
+#endif
 		Binds.BindGlobalFunctionForTarget("int DaysInYear(int Year) no_discard", FUNC_TRIVIAL(FDateTime::DaysInYear));
 		Binds.BindGlobalFunctionForTarget("bool IsLeapYear(int Year) no_discard", FUNC_TRIVIAL(FDateTime::IsLeapYear));
 		Binds.BindGlobalFunctionForTarget("FDateTime FromUnixTimestamp(int64 UnixTime) no_discard", FUNC_TRIVIAL(FDateTime::FromUnixTimestamp));

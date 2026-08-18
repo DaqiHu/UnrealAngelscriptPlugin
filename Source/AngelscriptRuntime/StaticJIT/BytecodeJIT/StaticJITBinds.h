@@ -1,6 +1,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "StaticJIT/StaticJITConfig.h"
+#include "StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallDescriptor.h"
 
 #if AS_CAN_GENERATE_JIT
 
@@ -23,7 +24,6 @@ enum class EScriptFunctionCallMethod : uint8
 	PointerCall,
 };
 
-#if WITH_DEV_AUTOMATION_TESTS
 enum class EAngelscriptNativeFormKind : uint8
 {
 	Unknown,
@@ -46,20 +46,40 @@ enum class EAngelscriptNativeFormKind : uint8
 	PushArgumentRef,
 };
 
-struct ANGELSCRIPTRUNTIME_API FAngelscriptNativeFormDebugInfo
+/**
+ * Authoritative Unreal routing facts copied from a reflected UFunction while
+ * the owning Engine is alive. Any of these routes must retain Unreal event,
+ * RPC, or ProcessEvent semantics and cannot be replaced by a raw C++ call.
+ */
+enum class EAngelscriptNativeUFunctionRouteFlags : uint8
+{
+	None = 0,
+	RpcOrNet = 1 << 0,
+	Event = 1 << 1,
+	BlueprintEvent = 1 << 2,
+};
+ENUM_CLASS_FLAGS(EAngelscriptNativeUFunctionRouteFlags);
+
+/**
+ * Owned, pointer-free description of the native form attached to one
+ * installed AngelScript function. Generation snapshots may retain this after
+ * the disposable Engine and any reflected UFunction have been released.
+ */
+struct ANGELSCRIPTRUNTIME_API FAngelscriptNativeFormDescription
 {
 	EAngelscriptNativeFormKind Kind = EAngelscriptNativeFormKind::Unknown;
 	FString Name;
 	FString CustomForm;
 	FString TargetType;
 	FString Header;
-	const UFunction* UnrealFunction = nullptr;
+	FString UnrealFunctionPath;
+	EAngelscriptNativeUFunctionRouteFlags UFunctionRouteFlags =
+		EAngelscriptNativeUFunctionRouteFlags::None;
 	bool bTrivial = false;
 	bool bGuaranteed = false;
 	bool bNeedsCompare = false;
 	bool bNeedsCopy = false;
 };
-#endif
 
 struct ANGELSCRIPTRUNTIME_API FScriptFunctionNativeForm
 {
@@ -75,9 +95,7 @@ struct ANGELSCRIPTRUNTIME_API FScriptFunctionNativeForm
 	virtual bool CanCallCustom(const FNativeFunctionContext& Context) const { return false; }
 	virtual bool ShouldCustomLookupScriptFunction(const FNativeFunctionContext& Context) const { return false; }
 	virtual FNativeFunctionCall GenerateCustomCall(FNativeFunctionContext& Context, struct FStaticJITContext& JITContext) const { return FNativeFunctionCall{}; }
-#if WITH_DEV_AUTOMATION_TESTS
-	virtual FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const = 0;
-#endif
+	virtual FAngelscriptNativeFormDescription Describe() const = 0;
 
 	static FScriptFunctionNativeForm* GetNativeForm(class asIScriptFunction* ScriptFunction);
 
@@ -111,6 +129,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptNativeFormState
 {
 	~FAngelscriptNativeFormState();
 	TMap<asIScriptFunction*, FScriptFunctionNativeForm*> Forms;
+	TMap<asIScriptFunction*, FAngelscriptStaticJITNativeCallDescriptor>
+		ExternalCallDescriptors;
 };
 
 #endif // AS_CAN_GENERATE_JIT

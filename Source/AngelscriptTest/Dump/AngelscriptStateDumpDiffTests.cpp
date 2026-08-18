@@ -55,6 +55,34 @@ public:
 		ASTEST_RESET_ENGINE(Engine);
 	}
 
+	TEST_METHOD(CaptureSnapshotDoesNotAssignLazyTypeIds)
+	{
+		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();
+		FAngelscriptEngineScope EngineScope(Engine);
+
+		const FAngelscriptStateSnapshot First =
+			FAngelscriptStateDump::CaptureSnapshot(Engine);
+		const FAngelscriptStateSnapshot Second =
+			FAngelscriptStateDump::CaptureSnapshot(Engine);
+		const FAngelscriptStateDiff Diff =
+			FAngelscriptStateDump::DiffSnapshots(First, Second);
+
+		ASSERT_THAT(IsFalse(ContainsDiff(
+			Diff,
+			TEXT("AsEngineInternal"),
+			TEXT("ScriptEngine"),
+			TEXT("TypeIdSeqNbr"),
+			EAngelscriptStateDiffChangeType::Changed),
+			TEXT("Capturing a diagnostic snapshot must not allocate lazy type IDs")));
+		ASSERT_THAT(IsFalse(Diff.Rows.ContainsByPredicate(
+			[](const FAngelscriptStateDiffRow& Row)
+			{
+				return Row.Category == TEXT("AsEngineInternal")
+					&& Row.Identity.StartsWith(TEXT("TypeIdMap/"));
+			}),
+			TEXT("Capturing a diagnostic snapshot must not add type-ID map entries")));
+	}
+
 	TEST_METHOD(CaptureSnapshotProducesDeterministicRows)
 	{
 		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();

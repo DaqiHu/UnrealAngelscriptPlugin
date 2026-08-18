@@ -16,12 +16,28 @@ class asCScriptFunction;
 // coverage_summary.json package consumed by external tools.
 struct FAngelscriptCodeCoverage
 {
+	explicit FAngelscriptCodeCoverage(
+		FAngelscriptEngine* InOwnerEngine = nullptr)
+		: OwnerEngine(InOwnerEngine)
+	{
+	}
+
 	ANGELSCRIPTRUNTIME_API ~FAngelscriptCodeCoverage();
 
 	static ANGELSCRIPTRUNTIME_API bool CoverageEnabled();
 
 	// Starts recording (HitLine calls are ignored unless we're recording).
 	ANGELSCRIPTRUNTIME_API void StartRecording();
+
+	// Stops recording without writing a report. This is useful for scoped
+	// recording sessions and keeps the owning Engine's line-callback state in
+	// sync with IsRecording().
+	ANGELSCRIPTRUNTIME_API void StopRecording();
+
+	bool IsRecording() const
+	{
+		return bRecording;
+	}
 
 	// Stops recording and writes coverage to OutputDir.
 	ANGELSCRIPTRUNTIME_API void StopRecordingAndWriteReport(const FString& OutputDir);
@@ -70,6 +86,7 @@ private:
 	// Map of relative filename to coverage info.
 	TMap<FString, FLineCoverage> FilesToCoverage;
 
+	FAngelscriptEngine* OwnerEngine = nullptr;
 	bool bRecording = false;
 
 #if WITH_EDITOR

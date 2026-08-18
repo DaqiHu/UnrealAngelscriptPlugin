@@ -41,6 +41,7 @@
 #ifndef AS_NO_COMPILER
 
 #include "as_compiler.h"
+#include "as_objecttype.h"
 #include "as_tokendef.h"
 #include "as_tokenizer.h"
 #include "as_string_util.h"
@@ -48,6 +49,7 @@
 #include "as_parser.h"
 #include "as_debug.h"
 #include "as_context.h"  // as_powi()
+#include "as_callfunc.h"
 #include "AngelscriptEngine.h"
 #include "AngelscriptSettings.h"
 
@@ -56,6 +58,2641 @@
 #include "as_config.h"
 
 BEGIN_AS_NAMESPACE
+
+namespace
+{
+	asSTypedSemanticSourceSpan MakeTypedSemanticSpan(
+		asCScriptCode* Source,
+		asCScriptNode* Node)
+	{
+		asSTypedSemanticSourceSpan Span;
+		Span.section = Source && Source->name.GetLength() != 0
+			? Source->name
+			: asCString("<unknown>");
+		if( Node )
+		{
+			Span.sourceOffset = asUINT(Node->tokenPos);
+			Span.sourceLength = asUINT(Node->tokenLength);
+			if( Span.sourceLength == 0 )
+				Span.sourceLength = 1;
+			if( Source )
+			{
+				int Row = 0;
+				int Column = 0;
+				Source->ConvertPosToRowCol(Node->tokenPos, &Row, &Column);
+				Span.row = Row > 0 ? asUINT(Row) : 0;
+				Span.column = Column > 0 ? asUINT(Column) : 0;
+			}
+		}
+		else
+		{
+			Span.sourceLength = 1;
+		}
+		if( Source )
+			Source->ApplySourceProvenance(Span);
+		return Span;
+	}
+
+	asCScriptNode* FindTypedSemanticParameterSourceNode(
+		asCScriptNode* FunctionNode,
+		asUINT ParameterIndex)
+	{
+		if( FunctionNode == 0 )
+			return 0;
+
+		asCScriptNode* ParameterList = FunctionNode->firstChild;
+		while( ParameterList != 0
+			&& ParameterList->nodeType != snParameterList )
+		{
+			ParameterList = ParameterList->next;
+		}
+		if( ParameterList == 0 )
+			return FunctionNode;
+
+		asCScriptNode* Cursor = ParameterList->firstChild;
+		for( asUINT CurrentIndex = 0; Cursor != 0; ++CurrentIndex )
+		{
+			// ParseParameterList stores each parameter as TYPE, TYPEMOD,
+			// optional IDENTIFIER, and optional default EXPRESSION. Parameter
+			// provenance belongs to the declaration token, not the enclosing
+			// function span, which can cross generated/authored boundaries.
+			asCScriptNode* const TypeNode = Cursor;
+			if( TypeNode->nodeType != snDataType )
+				return FunctionNode;
+			Cursor = Cursor->next;
+			if( Cursor == 0 || Cursor->nodeType != snDataType )
+				return FunctionNode;
+			Cursor = Cursor->next;
+
+			asCScriptNode* IdentifierNode = 0;
+			if( Cursor != 0 && Cursor->nodeType == snIdentifier )
+			{
+				IdentifierNode = Cursor;
+				Cursor = Cursor->next;
+			}
+			if( CurrentIndex == ParameterIndex )
+				return IdentifierNode != 0 ? IdentifierNode : TypeNode;
+
+			if( Cursor != 0 && Cursor->nodeType == snExpression )
+				Cursor = Cursor->next;
+		}
+		return FunctionNode;
+	}
+
+	asCString GetTypedSemanticTokenText(
+		asCScriptCode* Source,
+		asCScriptNode* Node,
+		eTokenType Token)
+	{
+		if( Source && Node && Node->tokenLength > 0 )
+			return asCString(&Source->code[Node->tokenPos], Node->tokenLength);
+
+		switch( Token )
+		{
+		case ttPlus: return "+";
+		case ttMinus: return "-";
+		case ttStar: return "*";
+		case ttSlash: return "/";
+		case ttPercent: return "%";
+		case ttEqual: return "==";
+		case ttNotEqual: return "!=";
+		case ttLessThan: return "<";
+		case ttLessThanOrEqual: return "<=";
+		case ttGreaterThan: return ">";
+		case ttGreaterThanOrEqual: return ">=";
+		case ttAnd: return "&&";
+		case ttOr: return "||";
+		case ttNot: return "!";
+		case ttBitNot: return "~";
+		case ttInc: return "++";
+		case ttDec: return "--";
+		default: return "<operator>";
+		}
+	}
+
+	bool IsTypedSemanticByValueScalarType(
+		const asCDataType& Type,
+		const bool AllowVoid)
+	{
+		if( !Type.IsValid() || Type.IsReference() || Type.IsObjectHandle() )
+			return false;
+		if( AllowVoid && Type.GetTokenType() == ttVoid )
+			return true;
+		if( Type.IsEnumType() )
+			return true;
+		switch( Type.GetTokenType() )
+		{
+		case ttBool:
+		case ttInt8:
+		case ttUInt8:
+		case ttInt16:
+		case ttUInt16:
+		case ttInt:
+		case ttUInt:
+		case ttInt64:
+		case ttUInt64:
+		case ttFloat32:
+		case ttFloat64:
+			return Type.GetTypeInfo() == 0;
+		default:
+			return false;
+		}
+	}
+
+	bool IsTypedSemanticCleanupFreeValueType(const asCDataType& Type)
+	{
+		if( IsTypedSemanticByValueScalarType(Type, false) )
+			return true;
+
+		const asCTypeInfo* TypeInfo = Type.GetTypeInfo();
+		return Type.IsValid()
+			&& !Type.IsReference()
+			&& !Type.IsObjectHandle()
+			&& Type.IsObject()
+			&& TypeInfo != 0
+			&& (TypeInfo->flags & asOBJ_VALUE) != 0
+			&& (TypeInfo->flags & asOBJ_POD) != 0;
+	}
+
+	bool IsTypedSemanticCleanupFreeObjectType(const asCTypeInfo* TypeInfo)
+	{
+		return TypeInfo != 0
+			&& (TypeInfo->flags & asOBJ_VALUE) != 0
+			&& (TypeInfo->flags & asOBJ_POD) != 0;
+	}
+
+	bool IsTypedSemanticContainerType(const asCDataType& Type)
+	{
+		const asCTypeInfo* const TypeInfo = Type.GetTypeInfo();
+		return Type.IsArrayType()
+			|| (TypeInfo != 0
+				&& (TypeInfo->name == "TArray"
+					|| TypeInfo->name == "TSet"
+					|| TypeInfo->name == "TMap"));
+	}
+
+	bool IsTypedSemanticCleanupFreeParameter(
+		const asCDataType& Type,
+		const asETypeModifiers Modifier)
+	{
+		if( IsTypedSemanticCleanupFreeValueType(Type)
+			&& Modifier == asTM_NONE )
+		{
+			return true;
+		}
+
+		// An &in parameter is borrowed from the caller. The callee neither owns
+		// nor destroys the referenced value, so it contributes no cleanup action
+		// even when the referenced value is an object type. Keep this deliberately
+		// narrower than all references: mutable/out references and handles remain
+		// outside the verified-empty proof.
+		return Type.IsReference()
+			&& !Type.IsObjectHandle()
+			&& Modifier == asTM_INREF;
+	}
+
+	void RecordUnsupportedCompilerSynthesizedFunction(
+		asCScriptEngine* Engine,
+		asCScriptFunction* Function,
+		const char* Disposition)
+	{
+		if( Engine == 0
+			|| Function == 0
+			|| Function->scriptData == 0
+			|| Disposition == 0
+			|| !Engine->IsTypedSemanticIRCaptureEnabled() )
+		{
+			return;
+		}
+
+		Function->SetTypedSemanticFunction(0);
+		Function->scriptData->typedSemanticCaptureDiagnostic.Format(
+			"unsupported compiler-synthesized function: %s",
+			Disposition);
+	}
+
+#if WITH_ANGELSCRIPT_UNITTESTS
+	void InjectTypedSemanticExceptionRegionForTesting(
+		asCScriptEngine* Engine,
+		asCScriptFunction* Function)
+	{
+		static const asPWORD ExceptionRegionMetadataUserDataSlot =
+			static_cast<asPWORD>(0x5453495245584350ull);
+		if( Engine == 0
+			|| Function == 0
+			|| Function->scriptData == 0
+			|| Engine->GetUserData(ExceptionRegionMetadataUserDataSlot) == 0
+			|| Function->scriptData->tryCatchInfo.GetLength() != 0 )
+		{
+			return;
+		}
+
+		// Test only the post-finalization consumer boundary. This does not add a
+		// parser/tokenizer producer or executable handler bytecode.
+		asSTryCatchInfo Region;
+		Region.tryPos = 0;
+		Region.catchPos = Function->scriptData->byteCode.GetLength();
+		Region.stackOffset = 0;
+		Function->scriptData->tryCatchInfo.PushLast(Region);
+	}
+#endif
+}
+
+// Function-local, provisional capture builder. It deliberately keeps its
+// transient compiler-variable mapping separate from the function model: the
+// mapping is useful only while the compiler owns those variables and is never
+// transferred to a worker-visible or function-owned sidecar.
+class asCTypedSemanticIRBuilder
+{
+public:
+	struct FSymbolBinding
+	{
+		const sVariable* variable = 0;
+		asTypedSemanticSymbolId symbol;
+	};
+
+	struct FBlockFrame
+	{
+		asSTypedSemanticSourceSpan span;
+		asCArray<asTypedSemanticStatementId> children;
+	};
+
+	struct FControlTargetFrame
+	{
+		bool supportsContinue = false;
+		asCArray<asTypedSemanticStatementId> breakTransfers;
+		asCArray<asTypedSemanticStatementId> continueTransfers;
+	};
+
+	asCTypedSemanticIRBuilder(
+		asCScriptFunction* OutFunction,
+		const asSTypedSemanticSourceSpan& FunctionSpan)
+		: function(asNEW(asCTypedSemanticFunction)())
+		, supported(OutFunction != 0)
+	{
+		if( function == 0 || OutFunction == 0 )
+		{
+			supported = false;
+			return;
+		}
+
+		function->declaration = OutFunction->GetDeclaration(false, false, true, false);
+		function->header.declaredTraitBits = OutFunction->traits.traits;
+		function->header.traitSummary =
+			ClassifyTypedSemanticFunctionTraits(OutFunction->traits.traits);
+		callingModule = OutFunction->module;
+		if( callingModule != 0 )
+			function->header.callingModule = callingModule->name;
+		if( OutFunction->traits.GetTrait(asTRAIT_EXTERNAL)
+			|| OutFunction->scriptData == 0 )
+		{
+			function->header.bodyAvailability =
+				asETypedSemanticBodyAvailability::NoScriptBody;
+			function->header.bodyOwnership =
+				asETypedSemanticBodyOwnership::None;
+		}
+		else
+		{
+			function->header.bodyAvailability =
+				asETypedSemanticBodyAvailability::ScriptBody;
+			function->header.bodyOwnership = OutFunction->IsShared()
+				? asETypedSemanticBodyOwnership::SharedOwner
+				: asETypedSemanticBodyOwnership::CallingModule;
+			if( OutFunction->module != 0 )
+				function->header.bodyOwnerModule = OutFunction->module->name;
+		}
+		function->header.returnsOnStack = OutFunction->DoesReturnOnStack();
+		function->header.hiddenArgumentIndex =
+			OutFunction->hiddenArgumentIndex;
+		function->header.determinesOutputTypeArgumentIndex =
+			OutFunction->determinesOutputTypeArgumentIndex;
+		functionSpan = FunctionSpan;
+
+		const bool HasExternalImplicitThis =
+			OutFunction->traits.GetTrait(asTRAIT_EXTERNAL_IMPLICIT_THIS);
+		const bool HasMixin = OutFunction->traits.GetTrait(asTRAIT_MIXIN);
+		if( HasExternalImplicitThis && HasMixin )
+		{
+			supported = false;
+		}
+
+		if( OutFunction->objectType != 0 )
+		{
+			if( HasExternalImplicitThis || HasMixin )
+				supported = false;
+
+			if( OutFunction->traits.GetTrait(asTRAIT_CONSTRUCTOR) )
+			{
+				function->header.invocationKind =
+					asETypedSemanticInvocationKind::Constructor;
+			}
+			else if( OutFunction->traits.GetTrait(asTRAIT_DESTRUCTOR) )
+			{
+				function->header.invocationKind =
+					asETypedSemanticInvocationKind::Destructor;
+			}
+			else
+			{
+				function->header.invocationKind =
+					asETypedSemanticInvocationKind::InstanceMethod;
+			}
+
+			asSTypedSemanticSymbol ReceiverSymbol;
+			ReceiverSymbol.kind = asETypedSemanticSymbolKind::Receiver;
+			ReceiverSymbol.name = "this";
+			ReceiverSymbol.type = asCDataType::CreateType(
+				OutFunction->objectType,
+				OutFunction->IsReadOnly());
+			ReceiverSymbol.span = FunctionSpan;
+			const asTypedSemanticSymbolId ReceiverId =
+				function->AddSymbol(ReceiverSymbol);
+			function->header.receiver.kind =
+				asETypedSemanticReceiverKind::NativeObjectThis;
+			function->header.receiver.symbol = ReceiverId;
+			function->header.receiver.parameterIndex = -1;
+			function->header.receiver.type = ReceiverSymbol.type;
+		}
+		else
+		{
+			function->header.invocationKind =
+				asETypedSemanticInvocationKind::Global;
+		}
+
+		switch( OutFunction->compileOutType )
+		{
+		case asECompileOutType::CompileOutEntirely:
+			function->header.compileOutKind = asETypedSemanticCompileOutKind::CompileOutEntirely;
+			break;
+		case asECompileOutType::ReplaceWithFirstParam:
+			function->header.compileOutKind = asETypedSemanticCompileOutKind::ReplaceWithFirstParam;
+			break;
+		case asECompileOutType::CompileOutAsMethodChain:
+			function->header.compileOutKind = asETypedSemanticCompileOutKind::CompileOutAsMethodChain;
+			break;
+		default:
+			function->header.compileOutKind = asETypedSemanticCompileOutKind::CompileCalls;
+			break;
+		}
+
+		if( OutFunction->traits.GetTrait(asTRAIT_GENERATED_FUNCTION) )
+			MarkUnsupportedCompilerSynthesizedFunction();
+	}
+
+	~asCTypedSemanticIRBuilder()
+	{
+		for( asUINT Index = 0; Index < blocks.GetLength(); ++Index )
+			asDELETE(blocks[Index], FBlockFrame);
+		blocks.SetLength(0);
+		for( asUINT Index = 0; Index < controlTargets.GetLength(); ++Index )
+			asDELETE(controlTargets[Index], FControlTargetFrame);
+		controlTargets.SetLength(0);
+		if( function )
+			asDELETE(function, asCTypedSemanticFunction);
+	}
+
+	asTypedSemanticSymbolId AddSymbol(
+		const sVariable* Variable,
+		asETypedSemanticSymbolKind Kind,
+		const asCString& Name,
+		const asCDataType& Type,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0 || Variable == 0 || Name.GetLength() == 0 )
+		{
+			supported = false;
+			return asTypedSemanticSymbolId();
+		}
+
+		asSTypedSemanticSymbol Symbol;
+		Symbol.kind = Kind;
+		Symbol.name = Name;
+		Symbol.type = Type;
+		Symbol.span = Span;
+		const asTypedSemanticSymbolId Id = function->AddSymbol(Symbol);
+
+		FSymbolBinding Binding;
+		Binding.variable = Variable;
+		Binding.symbol = Id;
+		bindings.PushLast(Binding);
+		AddUnsupportedTypeMarkers(Id, Type, Span);
+		return Id;
+	}
+
+	void BindParameterReceiver(
+		const asUINT ParameterIndex,
+		const asTypedSemanticSymbolId Symbol,
+		const asCDataType& Type)
+	{
+		if( function == 0 || ParameterIndex != 0 )
+			return;
+
+		const bool HasExternalImplicitThis =
+			(function->header.declaredTraitBits
+				& asTRAIT_EXTERNAL_IMPLICIT_THIS) != 0;
+		const bool HasMixin =
+			(function->header.declaredTraitBits & asTRAIT_MIXIN) != 0;
+		if( !HasExternalImplicitThis && !HasMixin )
+			return;
+		if( HasExternalImplicitThis == HasMixin
+			|| !Symbol.IsValid()
+			|| !Type.IsObject() )
+		{
+			supported = false;
+			failureDiagnostic =
+				"InvalidEffectiveReceiver: receiver trait requires object parameter zero";
+			return;
+		}
+
+		function->header.receiver.kind = HasExternalImplicitThis
+			? asETypedSemanticReceiverKind::ExternalImplicitThis
+			: asETypedSemanticReceiverKind::MixinFirstParameter;
+		function->header.receiver.symbol = Symbol;
+		function->header.receiver.parameterIndex = 0;
+		function->header.receiver.type = Type;
+	}
+
+	void FinalizeParameterReceiver()
+	{
+		if( function == 0 )
+			return;
+		const bool HasExternalImplicitThis =
+			(function->header.declaredTraitBits
+				& asTRAIT_EXTERNAL_IMPLICIT_THIS) != 0;
+		const bool HasMixin =
+			(function->header.declaredTraitBits & asTRAIT_MIXIN) != 0;
+		if( (HasExternalImplicitThis || HasMixin)
+			&& function->header.receiver.kind
+				== asETypedSemanticReceiverKind::None )
+		{
+			supported = false;
+			failureDiagnostic =
+				"InvalidEffectiveReceiver: receiver trait requires declared object parameter zero";
+		}
+	}
+
+	void SetInvocationKind(const asETypedSemanticInvocationKind Kind)
+	{
+		if( function == 0 )
+		{
+			supported = false;
+			return;
+		}
+		function->header.invocationKind = Kind;
+	}
+
+	asTypedSemanticExpressionId AddSymbolExpression(
+		const sVariable* Variable,
+		const asCDataType& Type,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		for( asUINT Index = bindings.GetLength(); Index-- > 0; )
+		{
+			if( bindings[Index].variable == Variable )
+			{
+				asSTypedSemanticExpression Expression;
+				Expression.kind = asETypedSemanticExpressionKind::Symbol;
+				Expression.type = Type;
+				Expression.span = Span;
+				Expression.symbol = bindings[Index].symbol;
+				return function->AddExpression(Expression);
+			}
+		}
+
+		supported = false;
+		return asTypedSemanticExpressionId();
+	}
+
+	asTypedSemanticExpressionId AddLiteral(
+		const asCDataType& Type,
+		const asCString& Literal,
+		const asQWORD LiteralBits,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0 || !Type.IsValid() || Literal.GetLength() == 0 )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Literal;
+		Expression.type = Type;
+		Expression.span = Span;
+		Expression.literal = Literal;
+		Expression.literalBits = LiteralBits;
+		return function->AddExpression(Expression);
+	}
+
+	asTypedSemanticExpressionId AddFoldedGlobalConstant(
+		const int GlobalPropertyId,
+		const asCDataType& Type,
+		const asQWORD LiteralBits,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0 || GlobalPropertyId < 0 || !Type.IsValid() )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+		asSTypedSemanticExpression Expression;
+		Expression.kind =
+			asETypedSemanticExpressionKind::FoldedGlobalConstant;
+		Expression.type = Type;
+		Expression.span = Span;
+		Expression.resolvedGlobalPropertyId = GlobalPropertyId;
+		Expression.literalBits = LiteralBits;
+		return function->AddExpression(Expression);
+	}
+
+	asTypedSemanticExpressionId AddGlobalStorage(
+		const int GlobalPropertyId,
+		const asCDataType& Type,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0 || GlobalPropertyId < 0 || !Type.IsValid() )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::GlobalStorage;
+		Expression.type = Type;
+		Expression.span = Span;
+		Expression.resolvedGlobalPropertyId = GlobalPropertyId;
+		return function->AddExpression(Expression);
+	}
+
+	void AddEvaluationStep(
+		asSTypedSemanticExpression& Expression,
+		const asETypedSemanticEvaluationRole Role,
+		const asTypedSemanticExpressionId Input,
+		const int FormalParameterIndex = -1,
+		const int SourceArgumentOrdinal = -1)
+	{
+		asSTypedSemanticEvaluationStep Step;
+		Step.role = Role;
+		Step.expression = Input;
+		Step.formalParameterIndex = FormalParameterIndex;
+		Step.sourceArgumentOrdinal = SourceArgumentOrdinal;
+		Expression.evaluationSteps.PushLast(Step);
+	}
+
+	asTypedSemanticExpressionId AddBinary(
+		asTypedSemanticExpressionId Left,
+		asTypedSemanticExpressionId Right,
+		const asCDataType& Type,
+		const asCString& Operator,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( loweredMutationOperatorDepth != 0 )
+			return asTypedSemanticExpressionId();
+		if( function == 0 || !Left.IsValid() || !Right.IsValid() || Operator.GetLength() == 0 )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Binary;
+		Expression.type = Type;
+		Expression.span = Span;
+		Expression.operatorToken = Operator;
+		Expression.operands.PushLast(Left);
+		Expression.operands.PushLast(Right);
+		AddEvaluationStep(
+			Expression,
+			asETypedSemanticEvaluationRole::Operand,
+			Left);
+		AddEvaluationStep(
+			Expression,
+			asETypedSemanticEvaluationRole::Operand,
+			Right);
+		return function->AddExpression(Expression);
+	}
+
+	asTypedSemanticExpressionId AddUnary(
+		asTypedSemanticExpressionId Operand,
+		const asCDataType& Type,
+		const asCString& Operator,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| !Operand.IsValid()
+			|| Operand.value >= function->expressions.GetLength()
+			|| !Type.IsValid()
+			|| Operator.GetLength() == 0 )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Unary;
+		Expression.type = Type;
+		Expression.span = Span;
+		Expression.operatorToken = Operator;
+		Expression.operands.PushLast(Operand);
+		AddEvaluationStep(
+			Expression,
+			asETypedSemanticEvaluationRole::Operand,
+			Operand);
+		return function->AddExpression(Expression);
+	}
+
+	asTypedSemanticExpressionId AddConversion(
+		asTypedSemanticExpressionId Operand,
+		const asCDataType& Type,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| !Operand.IsValid()
+			|| Operand.value >= function->expressions.GetLength()
+			|| !Type.IsValid() )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Conversion;
+		Expression.type = Type;
+		Expression.span = Span;
+		Expression.operands.PushLast(Operand);
+		AddEvaluationStep(
+			Expression,
+			asETypedSemanticEvaluationRole::Operand,
+			Operand);
+		return function->AddExpression(Expression);
+	}
+
+	asTypedSemanticExpressionId ApplyImplicitScalarConversion(
+		asTypedSemanticExpressionId Operand,
+		const asCDataType& BeforeType,
+		const asCDataType& AfterType,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( !Operand.IsValid()
+			|| BeforeType.IsEqualExceptRefAndConst(AfterType)
+			|| !IsTypedSemanticByValueScalarType(BeforeType, false)
+			|| !IsTypedSemanticByValueScalarType(AfterType, false) )
+		{
+			return Operand;
+		}
+		if( function == 0
+			|| Operand.value >= function->expressions.GetLength()
+			|| !function->expressions[Operand.value].type
+				.IsEqualExceptRefAndConst(BeforeType) )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+		return AddConversion(Operand, AfterType, Span);
+	}
+
+	bool OwnsExpression(const asTypedSemanticExpressionId Expression) const
+	{
+		return function != 0
+			&& Expression.IsValid()
+			&& Expression.value < function->expressions.GetLength();
+	}
+
+	asTypedSemanticExpressionId AddShortCircuit(
+		asTypedSemanticExpressionId Left,
+		asTypedSemanticExpressionId Right,
+		const asCString& Operator,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| !Left.IsValid()
+			|| !Right.IsValid()
+			|| (Operator != "&&" && Operator != "||") )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::ShortCircuit;
+		Expression.type = asCDataType::CreatePrimitive(ttBool, false);
+		Expression.span = Span;
+		Expression.operatorToken = Operator;
+		Expression.operands.PushLast(Left);
+		Expression.operands.PushLast(Right);
+		return function->AddExpression(Expression);
+	}
+
+	asTypedSemanticExpressionId AddUnsupportedTernary(
+		asTypedSemanticExpressionId Condition,
+		asTypedSemanticExpressionId TrueExpression,
+		asTypedSemanticExpressionId FalseExpression,
+		const asCDataType& Type,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| !Condition.IsValid()
+			|| !TrueExpression.IsValid()
+			|| !FalseExpression.IsValid()
+			|| Condition.value >= function->expressions.GetLength()
+			|| TrueExpression.value >= function->expressions.GetLength()
+			|| FalseExpression.value >= function->expressions.GetLength()
+			|| !Type.IsValid() )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Unsupported;
+		Expression.unsupportedKind = asETypedSemanticUnsupportedKind::Ternary;
+		Expression.type = Type;
+		Expression.span = Span;
+		Expression.operands.PushLast(Condition);
+		Expression.operands.PushLast(TrueExpression);
+		Expression.operands.PushLast(FalseExpression);
+		return function->AddExpression(Expression);
+	}
+
+	asTypedSemanticExpressionId AddUnsupportedEffectiveReceiverAccess(
+		const asCDataType& Type,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| function->header.receiver.kind
+				== asETypedSemanticReceiverKind::None
+			|| !function->header.receiver.symbol.IsValid()
+			|| function->header.receiver.symbol.value
+				>= function->symbols.GetLength()
+			|| !Type.IsValid()
+			|| Type.GetTypeInfo() == 0
+			|| Type.GetTypeInfo()
+				!= function->header.receiver.type.GetTypeInfo() )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+
+		asSTypedSemanticExpression Receiver;
+		Receiver.kind = asETypedSemanticExpressionKind::Symbol;
+		Receiver.type = function->header.receiver.type;
+		Receiver.span = Span;
+		Receiver.symbol = function->header.receiver.symbol;
+		const asTypedSemanticExpressionId ReceiverId =
+			function->AddExpression(Receiver);
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Unsupported;
+		Expression.unsupportedKind =
+			asETypedSemanticUnsupportedKind::ObjectAccess;
+		Expression.type = Type;
+		Expression.span = Span;
+		Expression.resolvedTarget =
+			function->header.receiver.type.Format(0, true);
+		Expression.resolvedTarget += "::this";
+		Expression.operands.PushLast(ReceiverId);
+		return function->AddExpression(Expression);
+	}
+
+	asTypedSemanticExpressionId AddUnsupportedEffectiveReceiverAccess(
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0 )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+		return AddUnsupportedEffectiveReceiverAccess(
+			function->header.receiver.type,
+			Span);
+	}
+
+	asTypedSemanticExpressionId AddUnsupportedPropertyAccess(
+		asTypedSemanticExpressionId Receiver,
+		const asCString& ResolvedTarget,
+		const asCDataType& Type,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| !Receiver.IsValid()
+			|| Receiver.value >= function->expressions.GetLength()
+			|| ResolvedTarget.GetLength() == 0
+			|| !Type.IsValid() )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Unsupported;
+		Expression.unsupportedKind =
+			asETypedSemanticUnsupportedKind::PropertyAccess;
+		Expression.type = Type;
+		Expression.span = Span;
+		Expression.resolvedTarget = ResolvedTarget;
+		Expression.operands.PushLast(Receiver);
+		return function->AddExpression(Expression);
+	}
+
+	asTypedSemanticExpressionId AddUnsupportedConstructionOrLifetime(
+		const asCDataType& Type,
+		const asSTypedSemanticSourceSpan& Span,
+		const asTypedSemanticExpressionId Construction =
+			asTypedSemanticExpressionId())
+	{
+		if( function == 0
+			|| !Type.IsValid()
+			|| Type.GetTypeInfo() == 0
+			|| Type.IsFuncdef()
+			|| (Construction.IsValid()
+				&& Construction.value >= function->expressions.GetLength()) )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Unsupported;
+		Expression.unsupportedKind =
+			asETypedSemanticUnsupportedKind::ConstructionOrLifetime;
+		Expression.type = Type;
+		Expression.span = Span;
+		Expression.resolvedTarget = Type.Format(0, true);
+		if( Construction.IsValid()
+			&& function->expressions[Construction.value].kind
+				== asETypedSemanticExpressionKind::ResolvedCall )
+		{
+			Expression.operands.PushLast(Construction);
+			AddEvaluationStep(
+				Expression,
+				asETypedSemanticEvaluationRole::Operand,
+				Construction);
+		}
+		return function->AddExpression(Expression);
+	}
+
+	void MarkUnsupportedManagedCleanup()
+	{
+		if( function == 0 )
+		{
+			supported = false;
+			return;
+		}
+		if( function->header.hasExceptionCleanup )
+			return;
+
+		function->header.hasExceptionCleanup = true;
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Unsupported;
+		Expression.unsupportedKind =
+			asETypedSemanticUnsupportedKind::ExceptionCleanup;
+		Expression.type = asCDataType::CreatePrimitive(ttVoid, false);
+		Expression.span = functionSpan;
+		Expression.resolvedTarget = "managed-cleanup";
+		function->AddExpression(Expression);
+	}
+
+	void MarkUnsupportedCompilerExceptionRegion()
+	{
+		if( function == 0
+			|| function->header.cleanupPlanState
+				!= asETypedSemanticCleanupPlanState::Unverified
+			|| function->cleanupPlans.GetLength() != 0 )
+		{
+			supported = false;
+			return;
+		}
+
+		function->header.hasExceptionCleanup = true;
+		asSTypedSemanticCleanupPlan RegionPlan;
+		function->header.universalCleanupPlan =
+			function->AddCleanupPlan(RegionPlan);
+		function->header.cleanupPlanState =
+			asETypedSemanticCleanupPlanState::CompilerExceptionRegion;
+		function->header.cleanupPlanCoversAllTransfers = false;
+		for( asUINT StatementIndex = 0;
+			StatementIndex < function->statements.GetLength();
+			++StatementIndex )
+		{
+			asSTypedSemanticStatement& Statement =
+				function->statements[StatementIndex];
+			if( Statement.kind == asETypedSemanticStatementKind::Break
+				|| Statement.kind
+					== asETypedSemanticStatementKind::Continue
+				|| Statement.kind
+					== asETypedSemanticStatementKind::Return )
+			{
+				Statement.cleanupPlan =
+					function->header.universalCleanupPlan;
+			}
+		}
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Unsupported;
+		Expression.unsupportedKind =
+			asETypedSemanticUnsupportedKind::ExceptionCleanup;
+		Expression.type = asCDataType::CreatePrimitive(ttVoid, false);
+		Expression.span = functionSpan;
+		Expression.resolvedTarget = "compiler-exception-region";
+		function->AddExpression(Expression);
+	}
+
+	void MarkUnsupportedCompilerSynthesizedFunction()
+	{
+		if( function == 0 )
+		{
+			supported = false;
+			return;
+		}
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Unsupported;
+		Expression.unsupportedKind =
+			asETypedSemanticUnsupportedKind::CompilerSynthesizedFunction;
+		Expression.type = asCDataType::CreatePrimitive(ttVoid, false);
+		Expression.span = functionSpan;
+		Expression.resolvedTarget = "__generated";
+		function->AddExpression(Expression);
+	}
+
+	void BeginLoweredMutationOperator()
+	{
+		++loweredMutationOperatorDepth;
+	}
+
+	void EndLoweredMutationOperator()
+	{
+		asASSERT(loweredMutationOperatorDepth != 0);
+		--loweredMutationOperatorDepth;
+	}
+
+	asTypedSemanticExpressionId AddMutation(
+		asTypedSemanticExpressionId Target,
+		asTypedSemanticExpressionId Value,
+		const asCString& Operator,
+		bool ReturnsOldValue,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		const bool IsIncrementOrDecrement =
+			Operator == "++" || Operator == "--";
+		if( function == 0
+			|| !Target.IsValid()
+			|| Target.value >= function->expressions.GetLength()
+			|| Operator.GetLength() == 0
+			|| (IsIncrementOrDecrement && Value.IsValid())
+			|| (!IsIncrementOrDecrement && !Value.IsValid())
+			|| (Value.IsValid()
+				&& Value.value >= function->expressions.GetLength()) )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Assignment;
+		Expression.type = function->expressions[Target.value].type;
+		Expression.span = Span;
+		Expression.operatorToken = Operator;
+		Expression.mutationTarget = Target;
+		Expression.mutationValue = Value;
+		Expression.mutationReturnsOldValue = ReturnsOldValue;
+		if( Value.IsValid() )
+		{
+			AddEvaluationStep(
+				Expression,
+				asETypedSemanticEvaluationRole::MutationValue,
+				Value);
+		}
+		AddEvaluationStep(
+			Expression,
+			asETypedSemanticEvaluationRole::MutationTarget,
+			Target);
+		return function->AddExpression(Expression);
+	}
+
+	bool PopulateCallTarget(
+		asSTypedSemanticExpression& Expression,
+		const asCScriptFunction* Target,
+		const bool CaptureNativeRequirements)
+	{
+		if( Target == 0 || Target->id < 0 )
+			return false;
+
+		Expression.targetProvenance.declaredTraitBits = Target->traits.traits;
+		switch( Target->funcType )
+		{
+		case asFUNC_SCRIPT:
+			Expression.callTargetKind =
+				asETypedSemanticCallTargetKind::ScriptFunction;
+			Expression.targetProvenance.canonicalDeclaration =
+				Target->GetDeclarationStr(true, true, false, false, false);
+			if( Target->module != 0 )
+			{
+				Expression.targetProvenance.declarationModule =
+					Target->module->name;
+			}
+			if( Target->scriptData == 0 )
+			{
+				Expression.targetProvenance.bodyAvailability =
+					asETypedSemanticBodyAvailability::NoScriptBody;
+				Expression.targetProvenance.bodyOwnership =
+					asETypedSemanticBodyOwnership::None;
+				break;
+			}
+			Expression.targetProvenance.bodyAvailability =
+				asETypedSemanticBodyAvailability::ScriptBody;
+			if( Target->module != 0 )
+			{
+				Expression.targetProvenance.bodyOwnerModule =
+					Target->module->name;
+			}
+			if( callingModule != 0
+				&& callingModule->externalFunctions.IndexOf(
+					const_cast<asCScriptFunction*>(Target)) >= 0 )
+			{
+				Expression.targetProvenance.bodyOwnership =
+					asETypedSemanticBodyOwnership::ExternalBorrowed;
+				Expression.targetProvenance.declarationModule =
+					callingModule->name;
+			}
+			else if( Target->IsShared()
+				&& Target->module != callingModule
+				&& callingModule != 0
+				&& callingModule->globalFunctionList.IndexOf(
+					const_cast<asCScriptFunction*>(Target)) >= 0 )
+			{
+				Expression.targetProvenance.bodyOwnership =
+					asETypedSemanticBodyOwnership::SharedBorrowed;
+				Expression.targetProvenance.declarationModule =
+					callingModule->name;
+			}
+			else if( Target->IsShared() && Target->module == callingModule )
+			{
+				Expression.targetProvenance.bodyOwnership =
+					asETypedSemanticBodyOwnership::SharedOwner;
+			}
+			else if( Target->module != callingModule )
+			{
+				Expression.targetProvenance.bodyOwnership =
+					asETypedSemanticBodyOwnership::OtherModule;
+			}
+			else
+			{
+				Expression.targetProvenance.bodyOwnership =
+					asETypedSemanticBodyOwnership::CallingModule;
+			}
+			break;
+		case asFUNC_SYSTEM:
+			Expression.callTargetKind =
+				asETypedSemanticCallTargetKind::SystemFunction;
+			Expression.targetProvenance.canonicalDeclaration =
+				Target->GetDeclarationStr(true, true, false, false, false);
+			Expression.targetProvenance.bodyAvailability =
+				asETypedSemanticBodyAvailability::RegisteredNative;
+			Expression.targetProvenance.bodyOwnership =
+				asETypedSemanticBodyOwnership::NativeRuntime;
+			break;
+		case asFUNC_IMPORTED:
+			// The imported signature ID is the mutable binding-slot
+			// coordinate. Never read boundFunctionId into compiler-owned HIR.
+			Expression.callTargetKind =
+				asETypedSemanticCallTargetKind::ImportedFunction;
+			if( (Target->id & FUNC_IMPORTED) == 0
+				|| Target->engine == 0 )
+			{
+				return false;
+			}
+			{
+				const int ImportedSlot = Target->id & ~FUNC_IMPORTED;
+				if( ImportedSlot < 0
+					|| asUINT(ImportedSlot)
+						>= Target->engine->importedFunctions.GetLength() )
+				{
+					return false;
+				}
+				const sBindInfo* const Import =
+					Target->engine->importedFunctions[ImportedSlot];
+				if( Import == 0
+					|| Import->importedFunctionSignature == 0 )
+				{
+					return false;
+				}
+				Expression.targetProvenance.canonicalDeclaration =
+					Import->importedFunctionSignature->GetDeclarationStr(
+						true, true, false, false, false);
+				Expression.targetProvenance.importedCanonicalSignature =
+					Expression.targetProvenance.canonicalDeclaration;
+				Expression.targetProvenance.importedSourceModule =
+					Import->importFromModule;
+			}
+			if( Target->module != 0 )
+			{
+				Expression.targetProvenance.declarationModule =
+					Target->module->name;
+			}
+			Expression.targetProvenance.bodyAvailability =
+				asETypedSemanticBodyAvailability::NoScriptBody;
+			Expression.targetProvenance.bodyOwnership =
+				asETypedSemanticBodyOwnership::None;
+			break;
+		default:
+			return false;
+		}
+
+		Expression.resolvedFunctionId = Target->id;
+		Expression.hiddenArgumentIndex = Target->hiddenArgumentIndex;
+		Expression.determinesOutputTypeArgumentIndex =
+			Target->determinesOutputTypeArgumentIndex;
+		if( !CaptureNativeRequirements || Target->funcType != asFUNC_SYSTEM )
+			return true;
+		if( Target->sysFuncIntf == 0 )
+			return false;
+
+		const asSSystemFunctionInterface& Native = *Target->sysFuncIntf;
+		Expression.nativeCall.isSystemFunction = true;
+		Expression.nativeCall.callConvention = int(Native.callConv);
+		Expression.nativeCall.baseOffset = Native.baseOffset;
+		Expression.nativeCall.scriptReturnSize = Native.scriptReturnSize;
+		Expression.nativeCall.parameterSize = Native.paramSize;
+		switch( Native.passFirstParamMetaData )
+		{
+		case asEFirstParamMetaData::None:
+			Expression.nativeCall.firstParamMetadata =
+				asETypedSemanticFirstParamMetadata::None;
+			break;
+		case asEFirstParamMetaData::ScriptFunction:
+			Expression.nativeCall.firstParamMetadata =
+				asETypedSemanticFirstParamMetadata::ScriptFunction;
+			break;
+		case asEFirstParamMetaData::ScriptObjectType:
+			Expression.nativeCall.firstParamMetadata =
+				asETypedSemanticFirstParamMetadata::ScriptObjectType;
+			break;
+		default:
+			return false;
+		}
+		Expression.nativeCall.usesGenericContext =
+			Native.callConv == ICC_GENERIC_FUNC
+			|| Native.callConv == ICC_GENERIC_METHOD;
+		Expression.nativeCall.hasFunctionUserData = Target->userData != 0;
+		Expression.nativeCall.hasFunctionCaller = Native.caller.IsBound();
+		Expression.nativeCall.returnsOnStack = Target->DoesReturnOnStack();
+		Expression.nativeCall.cleanupArgumentCount =
+			Native.cleanArgs.GetLength();
+		return true;
+	}
+
+	asTypedSemanticExpressionId AddCallRewrite(
+		const asCScriptFunction* Target,
+		const asETypedSemanticCompileOutKind RewriteKind,
+		const asTypedSemanticExpressionId FinalValue,
+		const asCDataType& ResultType,
+		const asSTypedSemanticSourceSpan& Span,
+		const asTypedSemanticExpressionId Receiver =
+			asTypedSemanticExpressionId())
+	{
+		if( function == 0
+			|| Target == 0
+			|| RewriteKind == asETypedSemanticCompileOutKind::CompileCalls
+			|| !ResultType.IsValid()
+			|| (FinalValue.IsValid()
+				&& FinalValue.value >= function->expressions.GetLength())
+			|| (Receiver.IsValid()
+				&& (!FinalValue.IsValid() || Receiver != FinalValue))
+			|| (RewriteKind
+					== asETypedSemanticCompileOutKind::CompileOutEntirely
+				&& FinalValue.IsValid())
+			|| (RewriteKind
+					== asETypedSemanticCompileOutKind::ReplaceWithFirstParam
+				&& !FinalValue.IsValid()) )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::CallRewrite;
+		Expression.type = ResultType;
+		Expression.span = Span;
+		Expression.callRewriteKind = RewriteKind;
+		Expression.receiverExpression = Receiver;
+		if( !PopulateCallTarget(Expression, Target, false) )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+		if( FinalValue.IsValid() )
+		{
+			Expression.operands.PushLast(FinalValue);
+			Expression.sourceArgumentOrdinals.PushLast(-1);
+			Expression.argumentOrigins.PushLast(
+				Receiver.IsValid()
+					? asETypedSemanticArgumentOrigin::Receiver
+					: asETypedSemanticArgumentOrigin::SourcePositional);
+			Expression.evaluationSequence.PushLast(0);
+			AddEvaluationStep(
+				Expression,
+				Receiver.IsValid()
+					? asETypedSemanticEvaluationRole::Receiver
+					: asETypedSemanticEvaluationRole::Argument,
+				FinalValue);
+		}
+		return function->AddExpression(Expression);
+	}
+
+	asTypedSemanticExpressionId AddResolvedCall(
+		const asCScriptFunction* Target,
+		const asCArray<asCExprContext*>& Arguments,
+		const asCDataType& ResultType,
+		const asSTypedSemanticSourceSpan& Span,
+		const asTypedSemanticExpressionId Receiver)
+	{
+		if( function == 0
+			|| Target == 0
+			|| (Target->funcType != asFUNC_SCRIPT
+				&& Target->funcType != asFUNC_SYSTEM
+				&& Target->funcType != asFUNC_IMPORTED)
+			|| Target->id < 0
+			|| !ResultType.IsValid()
+			|| (Receiver.IsValid()
+				&& Receiver.value >= function->expressions.GetLength())
+			|| (Target->objectType != 0
+				&& !Receiver.IsValid()
+				&& !Target->traits.GetTrait(asTRAIT_CONSTRUCTOR)) )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::ResolvedCall;
+		Expression.type = ResultType;
+		Expression.span = Span;
+		Expression.safePointRole = asETypedSemanticSafePointRole::Call;
+		if( !PopulateCallTarget(Expression, Target, true) )
+		{
+			supported = false;
+			return asTypedSemanticExpressionId();
+		}
+		Expression.receiverExpression = Receiver;
+		bool ReceiverAliasesFormal = false;
+		for( asUINT FormalIndex = 0;
+			FormalIndex < Arguments.GetLength(); ++FormalIndex )
+		{
+			const asCExprContext* Argument = Arguments[FormalIndex];
+			if( Argument == 0
+				|| !Argument->typedSemanticExpression.IsValid() )
+			{
+				supported = false;
+				return asTypedSemanticExpressionId();
+			}
+			Expression.operands.PushLast(
+				Argument->typedSemanticExpression);
+			Expression.formalParameterIndices.PushLast(
+				int(FormalIndex));
+
+			asSTypedSemanticArgumentProvenance Provenance =
+				Argument->typedSemanticArgumentProvenance;
+			const bool IsHidden =
+				Target->hiddenArgumentIndex == int(FormalIndex);
+			const bool IsReceiver = Receiver.IsValid()
+				&& Argument->typedSemanticExpression == Receiver;
+			if( IsHidden )
+			{
+				Provenance.origin =
+					asETypedSemanticArgumentOrigin::HostHidden;
+				Provenance.sourceArgumentOrdinal = -1;
+				Provenance.sourceArgumentName.Clear();
+				Provenance.processedSpan = Span;
+			}
+			else if( IsReceiver )
+			{
+				Provenance = asSTypedSemanticArgumentProvenance();
+				Provenance.origin =
+					asETypedSemanticArgumentOrigin::Receiver;
+				Provenance.processedSpan =
+					function->expressions[Receiver.value].span;
+			}
+			else if( Provenance.origin
+				== asETypedSemanticArgumentOrigin::None )
+			{
+				if( Argument->typedSemanticSourceArgumentOrdinal >= 0 )
+				{
+					Provenance.origin =
+						asETypedSemanticArgumentOrigin::SourcePositional;
+					Provenance.sourceArgumentOrdinal =
+						Argument->typedSemanticSourceArgumentOrdinal;
+					Provenance.processedSpan = function->expressions[
+						Argument->typedSemanticExpression.value].span;
+				}
+				else if( FormalIndex < Target->defaultArgs.GetLength()
+					&& Target->defaultArgs[FormalIndex] != 0 )
+				{
+					Provenance.origin =
+						asETypedSemanticArgumentOrigin::Default;
+					Provenance.processedSpan = Span;
+					Provenance.canonicalExpression =
+						*Target->defaultArgs[FormalIndex];
+				}
+				else
+				{
+					supported = false;
+					return asTypedSemanticExpressionId();
+				}
+			}
+
+			if( Provenance.origin == asETypedSemanticArgumentOrigin::Default
+				|| Provenance.origin
+					== asETypedSemanticArgumentOrigin::HostHidden )
+			{
+				Provenance.calleeFunctionId = Target->id;
+				Provenance.calleeDeclaration =
+					Target->GetDeclarationStr(true, true, true, false, false);
+				Provenance.calleeParameterIndex = int(FormalIndex);
+				if( FormalIndex < Target->parameterNames.GetLength() )
+					Provenance.calleeParameterName =
+						Target->parameterNames[FormalIndex];
+				if( Provenance.origin
+					== asETypedSemanticArgumentOrigin::HostHidden )
+				{
+					Provenance.canonicalExpression =
+						Target->hiddenArgumentDefault;
+				}
+			}
+
+			Expression.sourceArgumentOrdinals.PushLast(
+				Provenance.sourceArgumentOrdinal);
+			Expression.argumentOrigins.PushLast(Provenance.origin);
+			Expression.argumentProvenance.PushLast(Provenance);
+			const asETypedSemanticArgumentOrigin Origin = Provenance.origin;
+			ReceiverAliasesFormal = ReceiverAliasesFormal
+				|| Origin == asETypedSemanticArgumentOrigin::Receiver;
+		}
+		for( asUINT BindingIndex = 0;
+			BindingIndex < Arguments.GetLength(); ++BindingIndex )
+		{
+			// PrepareFunctionCall() is the maintained authority: ordinary
+			// arguments execute in reverse formal order as they are pushed.
+			Expression.evaluationSequence.PushLast(
+				Arguments.GetLength() - BindingIndex - 1);
+		}
+		for( asUINT EvaluationOrdinal = 0;
+			EvaluationOrdinal < Arguments.GetLength(); ++EvaluationOrdinal )
+		{
+			const asUINT BindingIndex =
+				Arguments.GetLength() - EvaluationOrdinal - 1;
+			const asETypedSemanticArgumentOrigin Origin =
+				Expression.argumentOrigins[BindingIndex];
+			AddEvaluationStep(
+				Expression,
+				Origin == asETypedSemanticArgumentOrigin::Receiver
+					? asETypedSemanticEvaluationRole::Receiver
+					: Origin == asETypedSemanticArgumentOrigin::HostHidden
+						? asETypedSemanticEvaluationRole::HiddenArgument
+						: asETypedSemanticEvaluationRole::Argument,
+				Expression.operands[BindingIndex],
+				Expression.formalParameterIndices[BindingIndex],
+				Expression.sourceArgumentOrdinals[BindingIndex]);
+		}
+		if( Receiver.IsValid() && !ReceiverAliasesFormal )
+		{
+			// MakeFunctionCall() appends the saved object bytecode after argument
+			// preparation. Instance/index receivers therefore execute after the
+			// reverse-formal argument list, while mixin receiver formal zero is
+			// already represented by the argument step above.
+			AddEvaluationStep(
+				Expression,
+				asETypedSemanticEvaluationRole::Receiver,
+				Receiver);
+		}
+		return function->AddExpression(Expression);
+	}
+
+	void BeginBlock(const asSTypedSemanticSourceSpan& Span)
+	{
+		FBlockFrame* Frame = asNEW(FBlockFrame)();
+		if( Frame == 0 )
+		{
+			supported = false;
+			return;
+		}
+		Frame->span = Span;
+		blocks.PushLast(Frame);
+	}
+
+	void EndBlock()
+	{
+		if( function == 0 || blocks.GetLength() == 0 )
+		{
+			supported = false;
+			return;
+		}
+
+		FBlockFrame* Frame = blocks[blocks.GetLength() - 1];
+		blocks.SetLength(blocks.GetLength() - 1);
+		asSTypedSemanticStatement Statement;
+		Statement.kind = asETypedSemanticStatementKind::Block;
+		Statement.span = Frame->span;
+		Statement.children = Frame->children;
+		if( blocks.GetLength() == 0
+			&& !function->rootStatement.IsValid() )
+		{
+			Statement.safePointRole =
+				asETypedSemanticSafePointRole::FunctionEntry;
+		}
+		const asTypedSemanticStatementId Id = function->AddStatement(Statement);
+		asDELETE(Frame, FBlockFrame);
+
+		if( blocks.GetLength() != 0 )
+			blocks[blocks.GetLength() - 1]->children.PushLast(Id);
+		else if( !function->rootStatement.IsValid() )
+			function->rootStatement = Id;
+		else
+			supported = false;
+	}
+
+	asUINT MarkCurrentBlock() const
+	{
+		return blocks.GetLength() != 0
+			? blocks[blocks.GetLength() - 1]->children.GetLength()
+			: 0;
+	}
+
+	void BeginLoopTarget()
+	{
+		FControlTargetFrame* Frame = asNEW(FControlTargetFrame)();
+		if( Frame == 0 )
+		{
+			supported = false;
+			return;
+		}
+		Frame->supportsContinue = true;
+		controlTargets.PushLast(Frame);
+	}
+
+	void BeginSwitchTarget()
+	{
+		FControlTargetFrame* Frame = asNEW(FControlTargetFrame)();
+		if( Frame == 0 )
+		{
+			supported = false;
+			failureDiagnostic =
+				"switch capture could not allocate a control-target frame";
+			return;
+		}
+		Frame->supportsContinue = false;
+		controlTargets.PushLast(Frame);
+	}
+
+	void AddBreak(
+		const asUINT ExitedScopeCount,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		AddControlTransfer(
+			asETypedSemanticStatementKind::Break,
+			ExitedScopeCount,
+			Span);
+	}
+
+	void AddContinue(
+		const asUINT ExitedScopeCount,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		AddControlTransfer(
+			asETypedSemanticStatementKind::Continue,
+			ExitedScopeCount,
+			Span);
+	}
+
+	asTypedSemanticStatementId DetachSince(
+		asUINT Mark,
+		const asSTypedSemanticSourceSpan& Span,
+		const bool ForceBlock = false,
+		const bool AllowEmpty = false)
+	{
+		if( function == 0 || blocks.GetLength() == 0 )
+		{
+			supported = false;
+			return asTypedSemanticStatementId();
+		}
+
+		FBlockFrame* Frame = blocks[blocks.GetLength() - 1];
+		if( Mark > Frame->children.GetLength()
+			|| (Mark == Frame->children.GetLength() && !AllowEmpty) )
+		{
+			supported = false;
+			return asTypedSemanticStatementId();
+		}
+		if( Mark == Frame->children.GetLength() )
+			return asTypedSemanticStatementId();
+
+		if( Frame->children.GetLength() == Mark + 1
+			&& (!ForceBlock
+				|| function->statements[Frame->children[Mark].value].kind
+					== asETypedSemanticStatementKind::Block) )
+		{
+			const asTypedSemanticStatementId Id = Frame->children[Mark];
+			Frame->children.SetLength(Mark);
+			return Id;
+		}
+
+		asSTypedSemanticStatement Block;
+		Block.kind = asETypedSemanticStatementKind::Block;
+		Block.span = Span;
+		for( asUINT Index = Mark; Index < Frame->children.GetLength(); ++Index )
+			Block.children.PushLast(Frame->children[Index]);
+		Frame->children.SetLength(Mark);
+		return function->AddStatement(Block);
+	}
+
+	void AddLocalDeclaration(
+		asTypedSemanticSymbolId Symbol,
+		asTypedSemanticExpressionId Initializer,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| !Symbol.IsValid()
+			|| Symbol.value >= function->symbols.GetLength()
+			|| !OwnsExpression(Initializer) )
+		{
+			supported = false;
+			const char* const SymbolName =
+				function != 0
+				&& Symbol.IsValid()
+				&& Symbol.value < function->symbols.GetLength()
+					? function->symbols[Symbol.value].name.AddressOf()
+					: "<unknown>";
+			failureDiagnostic.Format(
+				"local initializer capture is not owned by the current function: local=%s expression=%u expressionArena=%u at %s:%u:%u",
+				SymbolName,
+				Initializer.value,
+				function != 0 ? function->expressions.GetLength() : 0,
+				Span.section.AddressOf(),
+				Span.row,
+				Span.column);
+			return;
+		}
+		asSTypedSemanticStatement Statement;
+		Statement.kind = asETypedSemanticStatementKind::LocalDeclaration;
+		Statement.span = Span;
+		Statement.safePointRole = asETypedSemanticSafePointRole::Statement;
+		Statement.symbol = Symbol;
+		Statement.initializerExpression = Initializer;
+		AppendStatement(Statement);
+	}
+
+	void AddReturn(
+		asTypedSemanticExpressionId Value,
+		const asUINT ExitedScopeCount,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		asSTypedSemanticStatement Statement;
+		Statement.kind = asETypedSemanticStatementKind::Return;
+		Statement.span = Span;
+		Statement.safePointRole = asETypedSemanticSafePointRole::Return;
+		Statement.valueExpression = Value;
+		Statement.exitedScopeCount = ExitedScopeCount;
+		AppendStatement(Statement);
+	}
+
+	void AddExpressionStatement(
+		asTypedSemanticExpressionId Value,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( !Value.IsValid() )
+		{
+			supported = false;
+			return;
+		}
+		asSTypedSemanticStatement Statement;
+		Statement.kind = asETypedSemanticStatementKind::Expression;
+		Statement.span = Span;
+		Statement.safePointRole = asETypedSemanticSafePointRole::Statement;
+		Statement.valueExpression = Value;
+		AppendStatement(Statement);
+	}
+
+	void AddIf(
+		asTypedSemanticExpressionId Condition,
+		asTypedSemanticStatementId Then,
+		asTypedSemanticStatementId Else,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		asSTypedSemanticStatement Statement;
+		Statement.kind = asETypedSemanticStatementKind::If;
+		Statement.span = Span;
+		Statement.safePointRole = asETypedSemanticSafePointRole::Statement;
+		Statement.conditionExpression = Condition;
+		Statement.thenStatement = Then;
+		Statement.elseStatement = Else;
+		AppendStatement(Statement);
+	}
+
+	void AddWhile(
+		asTypedSemanticExpressionId Condition,
+		asTypedSemanticStatementId Body,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| !Condition.IsValid()
+			|| Condition.value >= function->expressions.GetLength()
+			|| !Body.IsValid()
+			|| Body.value >= function->statements.GetLength() )
+		{
+			supported = false;
+			return;
+		}
+
+		asSTypedSemanticStatement& BodyStatement =
+			function->statements[Body.value];
+		if( BodyStatement.kind != asETypedSemanticStatementKind::Block )
+		{
+			supported = false;
+			return;
+		}
+		BodyStatement.loopPhase = asETypedSemanticLoopPhase::Body;
+		BodyStatement.safePointRole =
+			asETypedSemanticSafePointRole::LoopEntry;
+
+		asSTypedSemanticStatement Statement;
+		Statement.kind = asETypedSemanticStatementKind::While;
+		Statement.span = Span;
+		Statement.loopPhase = asETypedSemanticLoopPhase::Condition;
+		Statement.safePointRole =
+			asETypedSemanticSafePointRole::LoopBackedge;
+		Statement.conditionExpression = Condition;
+		Statement.bodyStatement = Body;
+		CompleteLoopTarget(AppendStatement(Statement));
+	}
+
+	void AddDoWhile(
+		asTypedSemanticStatementId Body,
+		asTypedSemanticExpressionId Condition,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| !Body.IsValid()
+			|| Body.value >= function->statements.GetLength()
+			|| !Condition.IsValid()
+			|| Condition.value >= function->expressions.GetLength() )
+		{
+			supported = false;
+			return;
+		}
+
+		asSTypedSemanticStatement& BodyStatement =
+			function->statements[Body.value];
+		if( BodyStatement.kind != asETypedSemanticStatementKind::Block )
+		{
+			supported = false;
+			return;
+		}
+		BodyStatement.loopPhase = asETypedSemanticLoopPhase::Body;
+		BodyStatement.safePointRole =
+			asETypedSemanticSafePointRole::LoopEntry;
+
+		asSTypedSemanticStatement Statement;
+		Statement.kind = asETypedSemanticStatementKind::DoWhile;
+		Statement.span = Span;
+		Statement.loopPhase = asETypedSemanticLoopPhase::Condition;
+		Statement.safePointRole =
+			asETypedSemanticSafePointRole::LoopBackedge;
+		Statement.bodyStatement = Body;
+		Statement.conditionExpression = Condition;
+		CompleteLoopTarget(AppendStatement(Statement));
+	}
+
+	void AddFor(
+		asTypedSemanticStatementId Initializer,
+		asTypedSemanticExpressionId Condition,
+		asTypedSemanticStatementId Increment,
+		asTypedSemanticStatementId Body,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| (Initializer.IsValid()
+				&& Initializer.value >= function->statements.GetLength())
+			|| (Condition.IsValid()
+				&& Condition.value >= function->expressions.GetLength())
+			|| (Increment.IsValid()
+				&& Increment.value >= function->statements.GetLength())
+			|| !Body.IsValid()
+			|| Body.value >= function->statements.GetLength() )
+		{
+			supported = false;
+			return;
+		}
+
+		if( Initializer.IsValid() )
+		{
+			function->statements[Initializer.value].loopPhase =
+				asETypedSemanticLoopPhase::Initializer;
+		}
+
+		asCArray<asTypedSemanticExpressionId> IncrementExpressions;
+		if( Increment.IsValid() )
+		{
+			asSTypedSemanticStatement& IncrementBlock =
+				function->statements[Increment.value];
+			if( IncrementBlock.kind != asETypedSemanticStatementKind::Block )
+			{
+				supported = false;
+				return;
+			}
+			IncrementBlock.loopPhase = asETypedSemanticLoopPhase::Increment;
+			for( asUINT ChildIndex = 0;
+				ChildIndex < IncrementBlock.children.GetLength();
+				++ChildIndex )
+			{
+				const asTypedSemanticStatementId ChildId =
+					IncrementBlock.children[ChildIndex];
+				if( !ChildId.IsValid()
+					|| ChildId.value >= function->statements.GetLength()
+					|| function->statements[ChildId.value].kind
+						!= asETypedSemanticStatementKind::Expression
+					|| !function->statements[ChildId.value]
+						.valueExpression.IsValid() )
+				{
+					supported = false;
+					return;
+				}
+				IncrementExpressions.PushLast(
+					function->statements[ChildId.value].valueExpression);
+			}
+		}
+
+		asSTypedSemanticStatement& BodyStatement =
+			function->statements[Body.value];
+		if( BodyStatement.kind != asETypedSemanticStatementKind::Block )
+		{
+			supported = false;
+			return;
+		}
+		BodyStatement.loopPhase = asETypedSemanticLoopPhase::Body;
+		BodyStatement.safePointRole =
+			asETypedSemanticSafePointRole::LoopEntry;
+
+		asSTypedSemanticStatement Statement;
+		Statement.kind = asETypedSemanticStatementKind::For;
+		Statement.span = Span;
+		Statement.loopPhase = asETypedSemanticLoopPhase::Condition;
+		Statement.safePointRole =
+			asETypedSemanticSafePointRole::LoopBackedge;
+		Statement.initializerStatement = Initializer;
+		Statement.conditionExpression = Condition;
+		Statement.incrementStatement = Increment;
+		Statement.incrementExpressions = IncrementExpressions;
+		Statement.bodyStatement = Body;
+		CompleteLoopTarget(AppendStatement(Statement));
+	}
+
+	asTypedSemanticStatementId AddCase(
+		asTypedSemanticExpressionId Value,
+		const int ConstantValue,
+		const bool IsDefault,
+		asTypedSemanticStatementId Body,
+		const bool FallsThrough,
+		const bool HasExplicitFallthrough,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| (!IsDefault
+				&& (!Value.IsValid()
+					|| Value.value >= function->expressions.GetLength()))
+			|| (IsDefault && Value.IsValid())
+			|| HasExplicitFallthrough && !FallsThrough )
+		{
+			supported = false;
+			failureDiagnostic.Format(
+				"switch case capture has invalid metadata: value=%u expressions=%u default=%d fallsThrough=%d explicit=%d",
+				Value.value,
+				function != 0 ? function->expressions.GetLength() : 0,
+				IsDefault ? 1 : 0,
+				FallsThrough ? 1 : 0,
+				HasExplicitFallthrough ? 1 : 0);
+			return asTypedSemanticStatementId();
+		}
+
+		if( !Body.IsValid() )
+		{
+			asSTypedSemanticStatement EmptyBody;
+			EmptyBody.kind = asETypedSemanticStatementKind::Block;
+			EmptyBody.span = Span;
+			Body = function->AddStatement(EmptyBody);
+		}
+		if( Body.value >= function->statements.GetLength()
+			|| function->statements[Body.value].kind
+				!= asETypedSemanticStatementKind::Block )
+		{
+			supported = false;
+			failureDiagnostic =
+				"switch case capture did not normalize its body to a block";
+			return asTypedSemanticStatementId();
+		}
+
+		asSTypedSemanticStatement Statement;
+		Statement.kind = asETypedSemanticStatementKind::Case;
+		Statement.span = Span;
+		Statement.safePointRole =
+			asETypedSemanticSafePointRole::Statement;
+		Statement.valueExpression = Value;
+		Statement.bodyStatement = Body;
+		Statement.caseConstantValue = ConstantValue;
+		Statement.isDefaultCase = IsDefault;
+		Statement.fallsThrough = FallsThrough;
+		Statement.hasExplicitFallthrough = HasExplicitFallthrough;
+		return function->AddStatement(Statement);
+	}
+
+	void AddSwitch(
+		asTypedSemanticExpressionId Selector,
+		const asCArray<asTypedSemanticStatementId>& Cases,
+		const asETypedSemanticSwitchNormalization Normalization,
+		const bool HasDefault,
+		const bool IsExhaustive,
+		const bool HasInvalidEnumValueEdge,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| !Selector.IsValid()
+			|| Selector.value >= function->expressions.GetLength()
+			|| Cases.GetLength() == 0
+			|| Normalization
+				== asETypedSemanticSwitchNormalization::None )
+		{
+			supported = false;
+			failureDiagnostic =
+				"switch capture is missing its selector, cases, or normalization";
+			DiscardSwitchTarget();
+			return;
+		}
+		for( asUINT CaseIndex = 0; CaseIndex < Cases.GetLength(); ++CaseIndex )
+		{
+			if( !Cases[CaseIndex].IsValid()
+				|| Cases[CaseIndex].value >= function->statements.GetLength()
+				|| function->statements[Cases[CaseIndex].value].kind
+					!= asETypedSemanticStatementKind::Case )
+			{
+				supported = false;
+				if( failureDiagnostic.GetLength() == 0 )
+				{
+					failureDiagnostic.Format(
+						"switch capture case %u references a non-case statement id %u",
+						CaseIndex,
+						Cases[CaseIndex].value);
+				}
+				DiscardSwitchTarget();
+				return;
+			}
+		}
+
+		asSTypedSemanticStatement Statement;
+		Statement.kind = asETypedSemanticStatementKind::Switch;
+		Statement.span = Span;
+		Statement.safePointRole = HasInvalidEnumValueEdge
+			? asETypedSemanticSafePointRole::SwitchInvalidValue
+			: asETypedSemanticSafePointRole::Statement;
+		Statement.conditionExpression = Selector;
+		Statement.children = Cases;
+		Statement.switchNormalization = Normalization;
+		Statement.switchHasDefault = HasDefault;
+		Statement.switchIsExhaustive = IsExhaustive;
+		Statement.switchHasInvalidEnumValueEdge =
+			HasInvalidEnumValueEdge;
+		CompleteSwitchTarget(AppendStatement(Statement));
+	}
+
+	static void CopyUintArray(
+		const asCArray<asUINT>& From,
+		asCArray<asUINT>& To)
+	{
+		To.SetLength(From.GetLength());
+		for( asUINT Index = 0; Index < From.GetLength(); ++Index )
+			To[Index] = From[Index];
+	}
+
+	static void ReverseLiveSlots(
+		const asCArray<asUINT>& Live,
+		asCArray<asUINT>& OutReverse)
+	{
+		OutReverse.SetLength(0);
+		for( asUINT Index = Live.GetLength(); Index > 0; --Index )
+			OutReverse.PushLast(Live[Index - 1]);
+	}
+
+	static bool SameSlotList(
+		const asCArray<asUINT>& Left,
+		const asCArray<asUINT>& Right)
+	{
+		if( Left.GetLength() != Right.GetLength() )
+			return false;
+		for( asUINT Index = 0; Index < Left.GetLength(); ++Index )
+		{
+			if( Left[Index] != Right[Index] )
+				return false;
+		}
+		return true;
+	}
+
+	asTypedSemanticCleanupPlanId AddReverseLivePlan(
+		const asCArray<asUINT>& Live)
+	{
+		asSTypedSemanticCleanupPlan Plan;
+		ReverseLiveSlots(Live, Plan.reverseLiveLifetimeSlots);
+		return function->AddCleanupPlan(Plan);
+	}
+
+	bool IsManagedLocalDeclaration(
+		const asSTypedSemanticStatement& Statement) const
+	{
+		if( function == 0
+			|| Statement.kind != asETypedSemanticStatementKind::LocalDeclaration
+			|| !Statement.symbol.IsValid()
+			|| Statement.symbol.value >= function->symbols.GetLength() )
+		{
+			return false;
+		}
+		return !IsTypedSemanticCleanupFreeValueType(
+			function->symbols[Statement.symbol.value].type);
+	}
+
+	bool TypeHasScriptValueDestructor(const asCDataType& Type) const
+	{
+		asCObjectType* const ObjectType =
+			CastToObjectType(Type.GetTypeInfo());
+		if( ObjectType == 0
+			|| ObjectType->beh.destruct == 0
+			|| callingModule == 0 )
+		{
+			return false;
+		}
+		asCScriptEngine* const Engine =
+			static_cast<asCScriptEngine*>(callingModule->GetEngine());
+		if( Engine == 0
+			|| ObjectType->beh.destruct
+				>= (int)Engine->scriptFunctions.GetLength() )
+		{
+			return false;
+		}
+		asCScriptFunction* const Destructor =
+			Engine->scriptFunctions[ObjectType->beh.destruct];
+		return Destructor != 0
+			&& Destructor->scriptData != 0
+			&& !Destructor->traits.GetTrait(asTRAIT_GENERATED_FUNCTION);
+	}
+
+	bool TypeHasUserConstructor(const asCDataType& Type) const
+	{
+		asCObjectType* const ObjectType =
+			CastToObjectType(Type.GetTypeInfo());
+		if( ObjectType == 0
+			|| ObjectType->beh.construct == 0
+			|| callingModule == 0 )
+		{
+			return false;
+		}
+		asCScriptEngine* const Engine =
+			static_cast<asCScriptEngine*>(callingModule->GetEngine());
+		if( Engine == 0
+			|| ObjectType->beh.construct
+				>= (int)Engine->scriptFunctions.GetLength() )
+		{
+			return false;
+		}
+		asCScriptFunction* const Constructor =
+			Engine->scriptFunctions[ObjectType->beh.construct];
+		return Constructor != 0
+			&& Constructor->scriptData != 0
+			&& Constructor->traits.GetTrait(asTRAIT_CONSTRUCTOR)
+			&& !Constructor->traits.GetTrait(asTRAIT_GENERATED_FUNCTION);
+	}
+
+	void ExcludeReturnedOwnership(
+		const asSTypedSemanticStatement& Statement,
+		const asCArray<asUINT>& SymbolSlot,
+		asCArray<asUINT>& Live) const
+	{
+		if( function == 0
+			|| !function->header.returnsOnStack
+			|| !Statement.valueExpression.IsValid()
+			|| Statement.valueExpression.value
+				>= function->expressions.GetLength() )
+		{
+			return;
+		}
+
+		asTypedSemanticExpressionId ExpressionId = Statement.valueExpression;
+		const asSTypedSemanticExpression* Expression =
+			&function->expressions[ExpressionId.value];
+		if( Expression->kind == asETypedSemanticExpressionKind::Conversion
+			&& Expression->operands.GetLength() == 1
+			&& Expression->operands[0].IsValid()
+			&& Expression->operands[0].value
+				< function->expressions.GetLength() )
+		{
+			ExpressionId = Expression->operands[0];
+			Expression = &function->expressions[ExpressionId.value];
+		}
+		if( Expression->kind != asETypedSemanticExpressionKind::Symbol
+			|| !Expression->symbol.IsValid()
+			|| Expression->symbol.value >= SymbolSlot.GetLength()
+			|| SymbolSlot[Expression->symbol.value] == asUINT(-1) )
+		{
+			return;
+		}
+
+		const asUINT Omit = SymbolSlot[Expression->symbol.value];
+		asCArray<asUINT> Filtered;
+		for( asUINT Index = 0; Index < Live.GetLength(); ++Index )
+		{
+			if( Live[Index] != Omit )
+				Filtered.PushLast(Live[Index]);
+		}
+		CopyUintArray(Filtered, Live);
+	}
+
+	void WalkManagedCleanup(
+		const asTypedSemanticStatementId StatementId,
+		asCArray<asUINT>& Live,
+		asCArray<asUINT>& SymbolSlot,
+		asUINT& NextSlot,
+		bool& bPartialConstruction,
+		bool& bScriptDestructor)
+	{
+		if( function == 0
+			|| !StatementId.IsValid()
+			|| StatementId.value >= function->statements.GetLength() )
+		{
+			return;
+		}
+
+		asSTypedSemanticStatement& Statement =
+			function->statements[StatementId.value];
+		switch( Statement.kind )
+		{
+		case asETypedSemanticStatementKind::Block:
+		{
+			const asUINT Mark = Live.GetLength();
+			for( asUINT ChildIndex = 0;
+				ChildIndex < Statement.children.GetLength();
+				++ChildIndex )
+			{
+				WalkManagedCleanup(
+					Statement.children[ChildIndex],
+					Live,
+					SymbolSlot,
+					NextSlot,
+					bPartialConstruction,
+					bScriptDestructor);
+			}
+			Live.SetLength(Mark);
+			break;
+		}
+		case asETypedSemanticStatementKind::LocalDeclaration:
+			if( IsManagedLocalDeclaration(Statement) )
+			{
+				const asCDataType& Type =
+					function->symbols[Statement.symbol.value].type;
+				if( Live.GetLength() != 0
+					&& TypeHasUserConstructor(Type) )
+				{
+					Statement.cleanupPlan = AddReverseLivePlan(Live);
+					bPartialConstruction = true;
+				}
+				if( TypeHasScriptValueDestructor(Type) )
+					bScriptDestructor = true;
+				const asUINT Slot = NextSlot++;
+				SymbolSlot[Statement.symbol.value] = Slot;
+				Live.PushLast(Slot);
+			}
+			break;
+		case asETypedSemanticStatementKind::Return:
+		{
+			asCArray<asUINT> ReturnLive;
+			CopyUintArray(Live, ReturnLive);
+			ExcludeReturnedOwnership(Statement, SymbolSlot, ReturnLive);
+			Statement.cleanupPlan = AddReverseLivePlan(ReturnLive);
+			break;
+		}
+		case asETypedSemanticStatementKind::Break:
+		case asETypedSemanticStatementKind::Continue:
+			Statement.cleanupPlan = AddReverseLivePlan(Live);
+			break;
+		case asETypedSemanticStatementKind::If:
+		{
+			asCArray<asUINT> ThenLive;
+			CopyUintArray(Live, ThenLive);
+			WalkManagedCleanup(
+				Statement.thenStatement,
+				ThenLive,
+				SymbolSlot,
+				NextSlot,
+				bPartialConstruction,
+				bScriptDestructor);
+			asCArray<asUINT> ElseLive;
+			CopyUintArray(Live, ElseLive);
+			WalkManagedCleanup(
+				Statement.elseStatement,
+				ElseLive,
+				SymbolSlot,
+				NextSlot,
+				bPartialConstruction,
+				bScriptDestructor);
+			break;
+		}
+		case asETypedSemanticStatementKind::While:
+		case asETypedSemanticStatementKind::DoWhile:
+		{
+			asCArray<asUINT> BodyLive;
+			CopyUintArray(Live, BodyLive);
+			WalkManagedCleanup(
+				Statement.bodyStatement,
+				BodyLive,
+				SymbolSlot,
+				NextSlot,
+				bPartialConstruction,
+				bScriptDestructor);
+			break;
+		}
+		case asETypedSemanticStatementKind::For:
+		{
+			WalkManagedCleanup(
+				Statement.initializerStatement,
+				Live,
+				SymbolSlot,
+				NextSlot,
+				bPartialConstruction,
+				bScriptDestructor);
+			asCArray<asUINT> BodyLive;
+			CopyUintArray(Live, BodyLive);
+			WalkManagedCleanup(
+				Statement.bodyStatement,
+				BodyLive,
+				SymbolSlot,
+				NextSlot,
+				bPartialConstruction,
+				bScriptDestructor);
+			WalkManagedCleanup(
+				Statement.incrementStatement,
+				BodyLive,
+				SymbolSlot,
+				NextSlot,
+				bPartialConstruction,
+				bScriptDestructor);
+			break;
+		}
+		case asETypedSemanticStatementKind::Switch:
+			for( asUINT ChildIndex = 0;
+				ChildIndex < Statement.children.GetLength();
+				++ChildIndex )
+			{
+				asCArray<asUINT> CaseLive;
+				CopyUintArray(Live, CaseLive);
+				WalkManagedCleanup(
+					Statement.children[ChildIndex],
+					CaseLive,
+					SymbolSlot,
+					NextSlot,
+					bPartialConstruction,
+					bScriptDestructor);
+			}
+			break;
+		case asETypedSemanticStatementKind::Case:
+			WalkManagedCleanup(
+				Statement.bodyStatement,
+				Live,
+				SymbolSlot,
+				NextSlot,
+				bPartialConstruction,
+				bScriptDestructor);
+			break;
+		default:
+			break;
+		}
+	}
+
+	void PublishManagedCleanupPlans()
+	{
+		if( function == 0
+			|| function->header.cleanupPlanState
+				!= asETypedSemanticCleanupPlanState::Unverified
+			|| function->cleanupPlans.GetLength() != 0
+			|| !function->rootStatement.IsValid() )
+		{
+			return;
+		}
+
+		asCArray<asUINT> SymbolSlot;
+		SymbolSlot.SetLength(function->symbols.GetLength());
+		for( asUINT Index = 0; Index < SymbolSlot.GetLength(); ++Index )
+			SymbolSlot[Index] = asUINT(-1);
+
+		asCArray<asUINT> Live;
+		asUINT NextSlot = 0;
+		bool bPartialConstruction = false;
+		bool bScriptDestructor = false;
+		WalkManagedCleanup(
+			function->rootStatement,
+			Live,
+			SymbolSlot,
+			NextSlot,
+			bPartialConstruction,
+			bScriptDestructor);
+		if( NextSlot == 0 )
+		{
+			// Transfer edges still receive empty reverse-live plans during the
+			// walk. Unverified cleanup cannot claim those plans when no managed
+			// local ever opened a slot.
+			function->cleanupPlans.SetLength(0);
+			for( asUINT Index = 0;
+				Index < function->statements.GetLength();
+				++Index )
+			{
+				function->statements[Index].cleanupPlan =
+					asTypedSemanticCleanupPlanId();
+			}
+			return;
+		}
+
+		asTypedSemanticCleanupPlanId WidestPlan;
+		asUINT WidestCount = 0;
+		for( asUINT Index = 0;
+			Index < function->cleanupPlans.GetLength();
+			++Index )
+		{
+			const asUINT Count = function->cleanupPlans[Index]
+				.reverseLiveLifetimeSlots.GetLength();
+			if( !WidestPlan.IsValid() || Count >= WidestCount )
+			{
+				WidestPlan = function->cleanupPlans[Index].id;
+				WidestCount = Count;
+			}
+		}
+		if( !WidestPlan.IsValid() )
+		{
+			asCArray<asUINT> Declared;
+			for( asUINT Slot = 0; Slot < NextSlot; ++Slot )
+				Declared.PushLast(Slot);
+			WidestPlan = AddReverseLivePlan(Declared);
+		}
+
+		function->header.universalCleanupPlan = WidestPlan;
+		if( bScriptDestructor )
+		{
+			function->header.cleanupPlanState =
+				asETypedSemanticCleanupPlanState::ScriptDestructor;
+		}
+		else if( bPartialConstruction )
+		{
+			function->header.cleanupPlanState =
+				asETypedSemanticCleanupPlanState::PartialConstruction;
+		}
+		else
+		{
+			function->header.cleanupPlanState =
+				asETypedSemanticCleanupPlanState::NonEmpty;
+		}
+
+		const asSTypedSemanticCleanupPlan& Universal =
+			function->cleanupPlans[WidestPlan.value];
+		bool bCoversAll = !bPartialConstruction
+			&& function->cleanupPlans.GetLength() != 0;
+		for( asUINT Index = 0;
+			bCoversAll && Index < function->statements.GetLength();
+			++Index )
+		{
+			const asSTypedSemanticStatement& Statement =
+				function->statements[Index];
+			if( Statement.kind != asETypedSemanticStatementKind::Break
+				&& Statement.kind
+					!= asETypedSemanticStatementKind::Continue
+				&& Statement.kind
+					!= asETypedSemanticStatementKind::Return )
+			{
+				continue;
+			}
+			if( !Statement.cleanupPlan.IsValid()
+				|| Statement.cleanupPlan.value
+					>= function->cleanupPlans.GetLength()
+				|| !SameSlotList(
+					function->cleanupPlans[Statement.cleanupPlan.value]
+						.reverseLiveLifetimeSlots,
+					Universal.reverseLiveLifetimeSlots) )
+			{
+				bCoversAll = false;
+			}
+		}
+		function->header.cleanupPlanCoversAllTransfers = bCoversAll;
+	}
+
+	void MarkVerifiedEmptyCleanupPlan()
+	{
+		if( function == 0
+			|| function->header.cleanupPlanState
+				!= asETypedSemanticCleanupPlanState::Unverified
+			|| function->cleanupPlans.GetLength() != 0 )
+		{
+			supported = false;
+			return;
+		}
+
+		asSTypedSemanticCleanupPlan EmptyPlan;
+		function->header.universalCleanupPlan =
+			function->AddCleanupPlan(EmptyPlan);
+		function->header.cleanupPlanState =
+			asETypedSemanticCleanupPlanState::VerifiedEmpty;
+		function->header.cleanupPlanCoversAllTransfers = true;
+		for( asUINT StatementIndex = 0;
+			StatementIndex < function->statements.GetLength();
+			++StatementIndex )
+		{
+			asSTypedSemanticStatement& Statement =
+				function->statements[StatementIndex];
+			if( Statement.kind == asETypedSemanticStatementKind::Break
+				|| Statement.kind
+					== asETypedSemanticStatementKind::Continue
+				|| Statement.kind
+					== asETypedSemanticStatementKind::Return )
+			{
+				Statement.cleanupPlan =
+					function->header.universalCleanupPlan;
+			}
+		}
+	}
+
+	asCTypedSemanticFunction* TakeVerifiedFunction(asCString& OutDiagnostic)
+	{
+		OutDiagnostic = "";
+		if( function == 0 )
+		{
+			OutDiagnostic = "semantic capture owns no function model";
+			return 0;
+		}
+		if( !supported )
+		{
+			OutDiagnostic = failureDiagnostic.GetLength() != 0
+				? failureDiagnostic
+				: "semantic capture encountered an unrepresentable compiler state";
+			return 0;
+		}
+		if( blocks.GetLength() != 0 )
+		{
+			OutDiagnostic = "semantic capture ended with an open statement block";
+			return 0;
+		}
+		if( controlTargets.GetLength() != 0 )
+		{
+			OutDiagnostic =
+				"semantic capture ended with an open control target";
+			return 0;
+		}
+		const asSTypedSemanticVerificationResult Verification =
+			VerifyTypedSemanticFunction(*function);
+		if( !Verification.IsValid() )
+		{
+			asCString ExpressionTail;
+			const asUINT ExpressionCount = function->expressions.GetLength();
+			const asUINT TailBegin = ExpressionCount > 16
+				? ExpressionCount - 16
+				: 0;
+			for( asUINT Index = TailBegin; Index < ExpressionCount; ++Index )
+			{
+				const asSTypedSemanticExpression& Expression =
+					function->expressions[Index];
+				asCString Entry;
+				Entry.Format(
+					"%sE%u:k%u:op=%s@%u:%u",
+					ExpressionTail.GetLength() == 0 ? "" : ",",
+					Index,
+					asUINT(Expression.kind),
+					Expression.operatorToken.GetLength() == 0
+						? "-"
+						: Expression.operatorToken.AddressOf(),
+					Expression.span.row,
+					Expression.span.column);
+				ExpressionTail += Entry;
+			}
+			OutDiagnostic.Format(
+				"semantic verification failed at %s:%u:%u statement=%u expression=%u symbol=%u: %s; expressionArena=%u tail=[%s]",
+				Verification.span.section.AddressOf(),
+				Verification.span.row,
+				Verification.span.column,
+				Verification.statement.value,
+				Verification.expression.value,
+				Verification.symbol.value,
+				Verification.detail.AddressOf(),
+				ExpressionCount,
+				ExpressionTail.AddressOf());
+			return 0;
+		}
+		asCTypedSemanticFunction* Result = function;
+		function = 0;
+		return Result;
+	}
+
+#if WITH_ANGELSCRIPT_UNITTESTS
+	void InvalidateFunctionRootForTesting()
+	{
+		if( function != 0 )
+			function->rootStatement = asTypedSemanticStatementId();
+	}
+#endif
+
+private:
+	void AddControlTransfer(
+		const asETypedSemanticStatementKind Kind,
+		const asUINT ExitedScopeCount,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| (Kind != asETypedSemanticStatementKind::Break
+				&& Kind != asETypedSemanticStatementKind::Continue)
+			|| controlTargets.GetLength() == 0 )
+		{
+			supported = false;
+			failureDiagnostic =
+				"control transfer capture has no compatible enclosing target";
+			return;
+		}
+
+		asUINT TargetIndex = controlTargets.GetLength();
+		if( Kind == asETypedSemanticStatementKind::Break )
+		{
+			TargetIndex = controlTargets.GetLength() - 1;
+		}
+		else
+		{
+			for( asUINT Candidate = controlTargets.GetLength();
+				Candidate-- > 0; )
+			{
+				if( controlTargets[Candidate]->supportsContinue )
+				{
+					TargetIndex = Candidate;
+					break;
+				}
+			}
+		}
+		if( TargetIndex >= controlTargets.GetLength() )
+		{
+			supported = false;
+			failureDiagnostic =
+				"continue capture has no enclosing loop target";
+			return;
+		}
+
+		asSTypedSemanticStatement Statement;
+		Statement.kind = Kind;
+		Statement.span = Span;
+		Statement.safePointRole = asETypedSemanticSafePointRole::Transfer;
+		Statement.exitedScopeCount = ExitedScopeCount;
+		const asTypedSemanticStatementId Transfer =
+			AppendStatement(Statement);
+		if( !Transfer.IsValid() )
+			return;
+
+		if( Kind == asETypedSemanticStatementKind::Break )
+			controlTargets[TargetIndex]->breakTransfers.PushLast(Transfer);
+		else
+			controlTargets[TargetIndex]->continueTransfers.PushLast(Transfer);
+	}
+
+	void CompleteControlTarget(
+		const asTypedSemanticStatementId Target,
+		const bool ExpectedSupportsContinue)
+	{
+		if( function == 0
+			|| !Target.IsValid()
+			|| Target.value >= function->statements.GetLength()
+			|| controlTargets.GetLength() == 0
+			|| controlTargets[controlTargets.GetLength() - 1]
+				->supportsContinue != ExpectedSupportsContinue )
+		{
+			supported = false;
+			failureDiagnostic = ExpectedSupportsContinue
+				? "loop capture could not complete its control target"
+				: "switch capture could not complete its control target";
+			return;
+		}
+
+		FControlTargetFrame* Frame =
+			controlTargets[controlTargets.GetLength() - 1];
+		controlTargets.SetLength(controlTargets.GetLength() - 1);
+		for( asUINT TransferIndex = 0;
+			TransferIndex < Frame->breakTransfers.GetLength();
+			++TransferIndex )
+		{
+			function->statements[Frame->breakTransfers[TransferIndex].value]
+				.targetStatement = Target;
+		}
+		for( asUINT TransferIndex = 0;
+			TransferIndex < Frame->continueTransfers.GetLength();
+			++TransferIndex )
+		{
+			function->statements[Frame->continueTransfers[TransferIndex].value]
+				.targetStatement = Target;
+		}
+		asDELETE(Frame, FControlTargetFrame);
+	}
+
+	void CompleteLoopTarget(const asTypedSemanticStatementId Target)
+	{
+		CompleteControlTarget(Target, true);
+	}
+
+	void CompleteSwitchTarget(const asTypedSemanticStatementId Target)
+	{
+		CompleteControlTarget(Target, false);
+	}
+
+	void DiscardSwitchTarget()
+	{
+		if( controlTargets.GetLength() == 0
+			|| controlTargets[controlTargets.GetLength() - 1]
+				->supportsContinue )
+		{
+			return;
+		}
+		FControlTargetFrame* Frame =
+			controlTargets[controlTargets.GetLength() - 1];
+		controlTargets.SetLength(controlTargets.GetLength() - 1);
+		asDELETE(Frame, FControlTargetFrame);
+	}
+
+	void AddUnsupportedTypeMarker(
+		const asTypedSemanticSymbolId Symbol,
+		const asETypedSemanticUnsupportedKind Kind,
+		const asCDataType& Type,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( function == 0
+			|| !Symbol.IsValid()
+			|| Symbol.value >= function->symbols.GetLength()
+			|| Kind == asETypedSemanticUnsupportedKind::None
+			|| !Type.IsValid() )
+		{
+			supported = false;
+			return;
+		}
+
+		asSTypedSemanticExpression Expression;
+		Expression.kind = asETypedSemanticExpressionKind::Unsupported;
+		Expression.unsupportedKind = Kind;
+		Expression.type = Type;
+		Expression.span = Span;
+		Expression.symbol = Symbol;
+		function->AddExpression(Expression);
+	}
+
+	void AddUnsupportedTypeMarkers(
+		const asTypedSemanticSymbolId Symbol,
+		const asCDataType& Type,
+		const asSTypedSemanticSourceSpan& Span)
+	{
+		if( Type.IsReference() )
+		{
+			AddUnsupportedTypeMarker(
+				Symbol,
+				asETypedSemanticUnsupportedKind::Reference,
+				Type,
+				Span);
+		}
+		if( Type.IsObjectHandle() )
+		{
+			AddUnsupportedTypeMarker(
+				Symbol,
+				asETypedSemanticUnsupportedKind::Handle,
+				Type,
+				Span);
+		}
+		if( IsTypedSemanticContainerType(Type) )
+		{
+			AddUnsupportedTypeMarker(
+				Symbol,
+				asETypedSemanticUnsupportedKind::Container,
+				Type,
+				Span);
+		}
+	}
+
+	asTypedSemanticStatementId AppendStatement(
+		const asSTypedSemanticStatement& Statement)
+	{
+		if( function == 0 || blocks.GetLength() == 0 )
+		{
+			supported = false;
+			return asTypedSemanticStatementId();
+		}
+		const asTypedSemanticStatementId Id = function->AddStatement(Statement);
+		blocks[blocks.GetLength() - 1]->children.PushLast(Id);
+		return Id;
+	}
+
+	asCTypedSemanticFunction* function = 0;
+	asCModule* callingModule = 0;
+	bool supported = true;
+	asCString failureDiagnostic;
+	asUINT loweredMutationOperatorDepth = 0;
+	asSTypedSemanticSourceSpan functionSpan;
+	asCArray<FSymbolBinding> bindings;
+	asCArray<FBlockFrame*> blocks;
+	asCArray<FControlTargetFrame*> controlTargets;
+};
 
 //
 // The calling convention rules for script functions:
@@ -91,10 +2728,16 @@ asCCompiler::asCCompiler(asCBuilder* in_builder) : byteCode(in_builder)
 	isCompilingDefaultArg = false;
 	noCodeOutput = 0;
 	allowEditPropertyAccess = false;
+	typedSemanticBuilder = 0;
+	lastTypedSemanticInitializer = asTypedSemanticExpressionId();
 }
 
 asCCompiler::~asCCompiler()
 {
+	if( typedSemanticBuilder )
+		asDELETE(typedSemanticBuilder, asCTypedSemanticIRBuilder);
+	typedSemanticBuilder = 0;
+
 	while( variables )
 	{
 		asCVariableScope *var = variables;
@@ -110,12 +2753,30 @@ asCCompiler::~asCCompiler()
 	usedStringConstants.SetLength(0);
 }
 
-void asCCompiler::Reset(asCBuilder *in_builder, asCScriptCode *in_script, asCScriptFunction *in_outFunc)
+void asCCompiler::Reset(
+	asCBuilder *in_builder,
+	asCScriptCode *in_script,
+	asCScriptFunction *in_outFunc,
+	asCScriptNode *in_typedSemanticRoot,
+	bool in_beginTypedSemanticTransaction)
 {
+	if( typedSemanticBuilder )
+		asDELETE(typedSemanticBuilder, asCTypedSemanticIRBuilder);
+	typedSemanticBuilder = 0;
+	lastTypedSemanticInitializer = asTypedSemanticExpressionId();
+
 	this->builder = in_builder;
 	this->engine = in_builder->engine;
 	this->script = in_script;
 	this->outFunc = in_outFunc;
+	if( in_beginTypedSemanticTransaction
+		&& engine->IsTypedSemanticIRCaptureEnabled()
+		&& outFunc != 0 )
+	{
+		typedSemanticBuilder = asNEW(asCTypedSemanticIRBuilder)(
+			outFunc,
+			MakeTypedSemanticSpan(script, in_typedSemanticRoot));
+	}
 
 	hasCompileErrors = false;
 
@@ -275,6 +2936,8 @@ void asCCompiler::ObserveConstantString(
 int asCCompiler::CompileDefaultConstructor(asCBuilder *in_builder, asCScriptCode *in_script, asCScriptNode *in_node, asCScriptFunction *in_outFunc, sClassDeclaration *in_classDecl)
 {
 	Reset(in_builder, in_script, in_outFunc);
+	RecordUnsupportedCompilerSynthesizedFunction(
+		engine, outFunc, "default-constructor");
 
 	// Constructors should make hard dependencies, so the value gets updated if the source functions change
 	TGuardValue<bool> ScopeMakeHardDependencies(builder->bValueDependenciesAreHard, true);
@@ -349,6 +3012,8 @@ int asCCompiler::CompileDefaultConstructor(asCBuilder *in_builder, asCScriptCode
 int asCCompiler::CompileDefaultDestructor(asCBuilder *in_builder, asCScriptCode *in_script, asCScriptNode *in_node, asCScriptFunction *in_outFunc, sClassDeclaration *in_classDecl)
 {
 	Reset(in_builder, in_script, in_outFunc);
+	RecordUnsupportedCompilerSynthesizedFunction(
+		engine, outFunc, "default-destructor");
 
 	m_classDecl = in_classDecl;
 
@@ -460,6 +3125,8 @@ int asCCompiler::CompileDefaultDestructor(asCBuilder *in_builder, asCScriptCode 
 int asCCompiler::CompileFactory(asCBuilder *in_builder, asCScriptCode *in_script, asCScriptFunction *in_outFunc)
 {
 	Reset(in_builder, in_script, in_outFunc);
+	RecordUnsupportedCompilerSynthesizedFunction(
+		engine, outFunc, "factory");
 
 	// Insert a JitEntry at the start of the function for JIT compilers
 	byteCode.InstrPTR(asBC_JitEntry, 0);
@@ -1196,11 +3863,25 @@ int asCCompiler::CompileFunction(asCBuilder *in_builder, asCScriptCode *in_scrip
 {
 	TimeIt("asCCompiler::CompileFunction");
 
-	Reset(in_builder, in_script, in_outFunc);
+	const bool BeginTypedSemanticTransaction =
+		in_outFunc != 0 && in_outFunc->name != "__InitDefaults";
+	Reset(
+		in_builder,
+		in_script,
+		in_outFunc,
+		in_func,
+		BeginTypedSemanticTransaction);
+	if( in_outFunc != 0 && in_outFunc->scriptData != 0 )
+		in_outFunc->scriptData->typedSemanticCaptureDiagnostic = "";
 	int buildErrors = builder->numErrors;
 
 	// When properties are marked as editable, you are allowed to write to them at certain locations in the script
 	m_isInitDefaults = in_outFunc->name == "__InitDefaults";
+	if( m_isInitDefaults )
+	{
+		RecordUnsupportedCompilerSynthesizedFunction(
+			engine, in_outFunc, "init-defaults");
+	}
 	allowEditPropertyAccess = m_isInitDefaults || in_outFunc->name == "ConstructionScript_Implementation"
 			|| in_outFunc->name.StartsWith("__Init_")
 			|| in_outFunc->name == "OnActorModifiedInEditor_Implementation"
@@ -1211,6 +3892,33 @@ int asCCompiler::CompileFunction(asCBuilder *in_builder, asCScriptCode *in_scrip
 
 
 	int stackPos = SetupParametersAndReturnVariable(in_parameterNames, in_func);
+	if( typedSemanticBuilder )
+	{
+		for( asUINT ParameterIndex = 0;
+			ParameterIndex < in_parameterNames.GetLength();
+			++ParameterIndex )
+		{
+			const asCString& Name = in_parameterNames[ParameterIndex];
+			if( Name.GetLength() == 0 )
+				continue;
+			sVariable* Variable = variables->GetVariable(Name.AddressOf());
+			const asTypedSemanticSymbolId Symbol =
+				typedSemanticBuilder->AddSymbol(
+				Variable,
+				asETypedSemanticSymbolKind::Parameter,
+				Name,
+				in_outFunc->parameterTypes[ParameterIndex],
+				MakeTypedSemanticSpan(
+					script,
+					FindTypedSemanticParameterSourceNode(
+						in_func, ParameterIndex)));
+			typedSemanticBuilder->BindParameterReceiver(
+				ParameterIndex,
+				Symbol,
+				in_outFunc->parameterTypes[ParameterIndex]);
+		}
+		typedSemanticBuilder->FinalizeParameterReceiver();
+	}
 
 	// Constructors and init defaults should make hard dependencies, so the value gets updated if the source functions change
 	bool bIsDefaultsOrDefaultConstructor = m_isInitDefaults || (m_isConstructor && in_outFunc->parameterTypes.GetLength() == 0);
@@ -1452,6 +4160,98 @@ int asCCompiler::CompileFunction(asCBuilder *in_builder, asCScriptCode *in_scrip
 	byteCode.Ret(-stackPos);
 
 	FinalizeFunction();
+
+	if( typedSemanticBuilder )
+	{
+#if WITH_ANGELSCRIPT_UNITTESTS
+		InjectTypedSemanticExceptionRegionForTesting(engine, outFunc);
+#endif
+		bool CanVerifyEmptyCleanup =
+			!m_isConstructor
+			&& !m_isDestructor
+			&& !outFunc->DoesReturnOnStack()
+			&& IsTypedSemanticByValueScalarType(outFunc->returnType, true)
+			&& outFunc->scriptData != 0
+			&& outFunc->scriptData->tryCatchInfo.GetLength() == 0;
+		// objVariableInfo also owns lexical asBC_Block markers. Those markers are
+		// present for ordinary nested scalar blocks and do not imply a lifetime
+		// cleanup when objVariableTypes is empty. The type checks below still
+		// reject every owned object, handle, mutable/out reference, and other
+		// non-scalar allocation. Read-only &in parameters are borrowed and do not
+		// contribute a callee-owned cleanup action.
+		for( asUINT Index = 0;
+			CanVerifyEmptyCleanup && Index < outFunc->parameterTypes.GetLength();
+			++Index )
+		{
+			const asETypeModifiers Modifier =
+				Index < outFunc->inOutFlags.GetLength()
+					? outFunc->inOutFlags[Index]
+					: asTM_NONE;
+			CanVerifyEmptyCleanup = IsTypedSemanticCleanupFreeParameter(
+				outFunc->parameterTypes[Index], Modifier);
+		}
+		for( asUINT Index = 0;
+			CanVerifyEmptyCleanup
+				&& Index < outFunc->scriptData->objVariableTypes.GetLength();
+			++Index )
+		{
+			CanVerifyEmptyCleanup = IsTypedSemanticCleanupFreeObjectType(
+				outFunc->scriptData->objVariableTypes[Index]);
+		}
+		for( asUINT Index = 0;
+			CanVerifyEmptyCleanup && Index < variableAllocations.GetLength();
+			++Index )
+		{
+			CanVerifyEmptyCleanup = IsTypedSemanticCleanupFreeValueType(
+				variableAllocations[Index]);
+		}
+
+		bool HasManagedCleanup = false;
+		for( asUINT Index = 0;
+			Index < outFunc->scriptData->objVariableTypes.GetLength();
+			++Index )
+		{
+			if( !IsTypedSemanticCleanupFreeObjectType(
+					outFunc->scriptData->objVariableTypes[Index]) )
+			{
+				HasManagedCleanup = true;
+				break;
+			}
+		}
+		for( asUINT Index = 0;
+			!HasManagedCleanup && Index < variableAllocations.GetLength();
+			++Index )
+		{
+			HasManagedCleanup = variableAllocations[Index].IsObject()
+				&& !IsTypedSemanticCleanupFreeValueType(
+					variableAllocations[Index]);
+		}
+		if( HasManagedCleanup )
+			typedSemanticBuilder->MarkUnsupportedManagedCleanup();
+		if( outFunc->scriptData->tryCatchInfo.GetLength() != 0 )
+			typedSemanticBuilder->MarkUnsupportedCompilerExceptionRegion();
+		else if( HasManagedCleanup )
+			typedSemanticBuilder->PublishManagedCleanupPlans();
+		if( CanVerifyEmptyCleanup )
+			typedSemanticBuilder->MarkVerifiedEmptyCleanupPlan();
+
+#if WITH_ANGELSCRIPT_UNITTESTS
+		static const asPWORD InvalidProvisionalHIRUserDataSlot =
+			static_cast<asPWORD>(0x54534952494E564Cull);
+		if( engine->GetUserData(InvalidProvisionalHIRUserDataSlot) != 0 )
+			typedSemanticBuilder->InvalidateFunctionRootForTesting();
+#endif
+
+		asCString CaptureDiagnostic;
+		asCTypedSemanticFunction* Captured =
+			typedSemanticBuilder->TakeVerifiedFunction(CaptureDiagnostic);
+		asDELETE(typedSemanticBuilder, asCTypedSemanticIRBuilder);
+		typedSemanticBuilder = 0;
+		if( Captured )
+			outFunc->SetTypedSemanticFunction(Captured);
+		else if( outFunc->scriptData != 0 )
+			outFunc->scriptData->typedSemanticCaptureDiagnostic = CaptureDiagnostic;
+	}
 
 #ifdef AS_DEBUG
 	// DEBUG: output byte code
@@ -1901,6 +4701,9 @@ void asCCompiler::LineInstr(asCByteCode *bc, size_t pos)
 
 void asCCompiler::CompileStatementBlock(asCScriptNode *block, bool ownVariableScope, FStopCondition& stopCondition, asCByteCode *bc)
 {
+	if( typedSemanticBuilder )
+		typedSemanticBuilder->BeginBlock(MakeTypedSemanticSpan(script, block));
+
 	stopCondition.Reset();
 	bool isFinished = false;
 	bool hasUnreachableCode = false;
@@ -1981,12 +4784,20 @@ void asCCompiler::CompileStatementBlock(asCScriptNode *block, bool ownVariableSc
 		RemoveVariableScope();
 		bc->Block(false);
 	}
+
+	if( typedSemanticBuilder )
+		typedSemanticBuilder->EndBlock();
 }
 
 // Entry
 int asCCompiler::CompileGlobalVariable(asCBuilder *in_builder, asCScriptCode *in_script, asCScriptNode *in_node, sGlobalVariableDescription *in_gvar, asCScriptFunction *in_outFunc)
 {
-	Reset(in_builder, in_script, in_outFunc);
+	asCScriptNode* CaptureNode = in_gvar->declaredAtNode != 0
+		? in_gvar->declaredAtNode
+		: in_node;
+	Reset(in_builder, in_script, in_outFunc, CaptureNode, true);
+	if( in_outFunc != 0 && in_outFunc->scriptData != 0 )
+		in_outFunc->scriptData->typedSemanticCaptureDiagnostic = "";
 	m_globalVar = in_gvar;
 
 	in_builder->MarkDependency(in_gvar->datatype.GetTypeInfo(), in_node, in_script);
@@ -2035,6 +4846,14 @@ int asCCompiler::CompileGlobalVariable(asCBuilder *in_builder, asCScriptCode *in
 		}
 	}
 
+	if( typedSemanticBuilder )
+	{
+		typedSemanticBuilder->SetInvocationKind(
+			asETypedSemanticInvocationKind::GlobalInitializer);
+		typedSemanticBuilder->BeginBlock(
+			MakeTypedSemanticSpan(script, CaptureNode));
+	}
+
 	// Compile the expression
 	asCExprContext ctx(builder);
 	asQWORD constantValue = 0;
@@ -2049,6 +4868,34 @@ int asCCompiler::CompileGlobalVariable(asCBuilder *in_builder, asCScriptCode *in
 			in_gvar->property->storage = constantValue;
 			in_gvar->property->isPureConstant = true;
 		}
+	}
+	if( typedSemanticBuilder )
+	{
+		if( lastTypedSemanticInitializer.IsValid() )
+		{
+			const asSTypedSemanticSourceSpan InitializerSpan =
+				MakeTypedSemanticSpan(
+					script,
+					in_gvar->initializationNode != 0
+						? in_gvar->initializationNode
+						: in_gvar->declaredAtNode);
+			const asTypedSemanticExpressionId Target =
+				typedSemanticBuilder->AddGlobalStorage(
+					in_gvar->property->id,
+					in_gvar->property->type,
+					InitializerSpan);
+			const asTypedSemanticExpressionId Assignment =
+				typedSemanticBuilder->AddMutation(
+					Target,
+					lastTypedSemanticInitializer,
+					"=",
+					false,
+					InitializerSpan);
+			typedSemanticBuilder->AddExpressionStatement(
+				Assignment,
+				InitializerSpan);
+		}
+		typedSemanticBuilder->EndBlock();
 	}
 
 	// Value types that haven't received any value should be default initialized
@@ -2100,6 +4947,47 @@ int asCCompiler::CompileGlobalVariable(asCBuilder *in_builder, asCScriptCode *in
 	byteCode.Ret(0);
 
 	FinalizeFunction();
+
+	if( typedSemanticBuilder )
+	{
+#if WITH_ANGELSCRIPT_UNITTESTS
+		InjectTypedSemanticExceptionRegionForTesting(engine, outFunc);
+#endif
+		bool CanVerifyEmptyCleanup =
+			in_gvar->datatype.IsPrimitive()
+			&& outFunc->scriptData != 0
+			&& outFunc->scriptData->tryCatchInfo.GetLength() == 0
+			&& outFunc->scriptData->objVariableTypes.GetLength() == 0;
+		for( asUINT Index = 0;
+			CanVerifyEmptyCleanup && Index < variableAllocations.GetLength();
+			++Index )
+		{
+			CanVerifyEmptyCleanup = IsTypedSemanticCleanupFreeValueType(
+				variableAllocations[Index]);
+		}
+		if( outFunc->scriptData->tryCatchInfo.GetLength() != 0 )
+			typedSemanticBuilder->MarkUnsupportedCompilerExceptionRegion();
+		if( CanVerifyEmptyCleanup )
+			typedSemanticBuilder->MarkVerifiedEmptyCleanupPlan();
+
+#if WITH_ANGELSCRIPT_UNITTESTS
+		static const asPWORD InvalidProvisionalHIRUserDataSlot =
+			static_cast<asPWORD>(0x54534952494E564Cull);
+		if( engine->GetUserData(InvalidProvisionalHIRUserDataSlot) != 0 )
+			typedSemanticBuilder->InvalidateFunctionRootForTesting();
+#endif
+
+		asCString CaptureDiagnostic;
+		asCTypedSemanticFunction* Captured =
+			typedSemanticBuilder->TakeVerifiedFunction(CaptureDiagnostic);
+		asDELETE(typedSemanticBuilder, asCTypedSemanticIRBuilder);
+		typedSemanticBuilder = 0;
+		if( Captured )
+			outFunc->SetTypedSemanticFunction(Captured);
+		else if( outFunc->scriptData != 0 )
+			outFunc->scriptData->typedSemanticCaptureDiagnostic =
+				CaptureDiagnostic;
+	}
 
 #ifdef AS_DEBUG
 	// DEBUG: output byte code
@@ -2596,8 +5484,10 @@ int asCCompiler::CompileArgumentList(asCScriptNode *node, asCArray<asCExprContex
 	// Count arguments
 	asCScriptNode *arg = node->firstChild;
 	int argCount = 0;
+	int sourceArgumentCount = 0;
 	while( arg )
 	{
+		sourceArgumentCount++;
 		if( arg->nodeType != snNamedArgument )
 			argCount++;
 		arg = arg->next;
@@ -2614,6 +5504,7 @@ int asCCompiler::CompileArgumentList(asCScriptNode *node, asCArray<asCExprContex
 	// Compile the arguments in reverse order (as they will be pushed on the stack)
 	bool anyErrors = false, inPositionalArguments = false;
 	arg = node->lastChild;
+	int sourceArgumentOrdinal = sourceArgumentCount - 1;
 	while( arg )
 	{
 		asCScriptNode *asgNode = arg, *namedNode = 0;
@@ -2644,6 +5535,22 @@ int asCCompiler::CompileArgumentList(asCScriptNode *node, asCArray<asCExprContex
 			return -1;
 		}
 		MergeExprBytecodeAndType(ctx, &expr);
+		ctx->typedSemanticSourceArgumentOrdinal = sourceArgumentOrdinal;
+		ctx->typedSemanticArgumentProvenance.origin = namedNode != 0
+			? asETypedSemanticArgumentOrigin::SourceNamed
+			: asETypedSemanticArgumentOrigin::SourcePositional;
+		ctx->typedSemanticArgumentProvenance.sourceArgumentOrdinal =
+			sourceArgumentOrdinal;
+		ctx->typedSemanticArgumentProvenance.processedSpan =
+			MakeTypedSemanticSpan(script, arg);
+		if( namedNode != 0 )
+		{
+			ctx->typedSemanticArgumentProvenance.sourceArgumentName =
+				asCString(
+					&script->code[namedNode->tokenPos],
+					namedNode->tokenLength);
+		}
+		--sourceArgumentOrdinal;
 
 		if( inPositionalArguments )
 		{
@@ -2833,6 +5740,21 @@ int asCCompiler::CompileDefaultAndNamedArgs(asCScriptNode *node, asCArray<asCExp
 		}
 
 		MergeExprBytecodeAndType(args[n], &expr);
+		args[n]->typedSemanticSourceArgumentOrdinal = -1;
+		asSTypedSemanticArgumentProvenance& Provenance =
+			args[n]->typedSemanticArgumentProvenance;
+		Provenance = asSTypedSemanticArgumentProvenance();
+		Provenance.origin = n == func->hiddenArgumentIndex
+			? asETypedSemanticArgumentOrigin::HostHidden
+			: asETypedSemanticArgumentOrigin::Default;
+		Provenance.processedSpan = MakeTypedSemanticSpan(script, node);
+		Provenance.calleeFunctionId = func->id;
+		Provenance.calleeDeclaration =
+			func->GetDeclarationStr(true, true, true, false, false);
+		Provenance.calleeParameterIndex = n;
+		if( asUINT(n) < func->parameterNames.GetLength() )
+			Provenance.calleeParameterName = func->parameterNames[n];
+		Provenance.canonicalExpression = *defaultValue;
 	}
 
 	reservedVariables.SetLength(prevReservedVars);
@@ -3652,6 +6574,17 @@ void asCCompiler::CompileDeclaration(asCScriptNode *decl, asCByteCode *bc)
 
 		sVariable* compiledVariable = variables->GetVariableByOffset(offset);
 		compiledVariable->pendingInitialization = true;
+		asTypedSemanticSymbolId TypedSemanticSymbol;
+		if( typedSemanticBuilder )
+		{
+			TypedSemanticSymbol = typedSemanticBuilder->AddSymbol(
+				compiledVariable,
+				asETypedSemanticSymbolKind::Local,
+				name,
+				type,
+				MakeTypedSemanticSpan(script, varNode));
+		}
+		lastTypedSemanticInitializer = asTypedSemanticExpressionId();
 
 		if( node == 0 || node->nodeType == snIdentifier )
 		{
@@ -3665,6 +6598,21 @@ void asCCompiler::CompileDeclaration(asCScriptNode *decl, asCByteCode *bc)
 
 			// Initialize with default constructor
 			CompileInitialization(0, bc, type, varNode, offset, 0, 0);
+			if( typedSemanticBuilder
+				&& !lastTypedSemanticInitializer.IsValid()
+				&& type.IsObject()
+				&& !type.IsObjectHandle()
+				&& !type.IsFuncdef() )
+			{
+				// The no-node initialization path emits the authoritative VM default
+				// constructor directly and therefore has no expression context to
+				// transfer. Retain that lifetime boundary explicitly instead of
+				// publishing a local declaration with a fabricated initializer.
+				lastTypedSemanticInitializer =
+					typedSemanticBuilder->AddUnsupportedConstructionOrLifetime(
+						type,
+						MakeTypedSemanticSpan(script, varNode));
+			}
 		}
 		else
 		{
@@ -3684,6 +6632,13 @@ void asCCompiler::CompileDeclaration(asCScriptNode *decl, asCByteCode *bc)
 		}
 
 		compiledVariable->pendingInitialization = false;
+		if( typedSemanticBuilder )
+		{
+			typedSemanticBuilder->AddLocalDeclaration(
+				TypedSemanticSymbol,
+				lastTypedSemanticInitializer,
+				MakeTypedSemanticSpan(script, varNode));
+		}
 	}
 
 	bc->OptimizeLocally(tempVariableOffsets);
@@ -3895,6 +6850,9 @@ bool asCCompiler::CompileInitialization(asCScriptNode *node, asCByteCode *bc, co
 			expr = &newExpr;
 			r = CompileAssignment(node, expr);
 		}
+		if( typedSemanticBuilder
+			&& (isVarGlobOrMem == 0 || isVarGlobOrMem == 1) )
+			lastTypedSemanticInitializer = expr->typedSemanticExpression;
 
 		if (type.IsReference())
 		{
@@ -4293,7 +7251,18 @@ bool asCCompiler::CompileInitialization(asCScriptNode *node, asCByteCode *bc, co
 					lctx.type.dataType.MakeReadOnly(false);
 					lctx.type.isLValue = true;
 
-					DoAssignment(&ctx, &lctx, expr, node, node, ttAssignment, node);
+					DoAssignment(
+						&ctx,
+						&lctx,
+						expr,
+						node,
+						node,
+						ttAssignment,
+						node,
+						typedSemanticBuilder
+							&& (isVarGlobOrMem == 0 || isVarGlobOrMem == 1)
+								? &lastTypedSemanticInitializer
+								: 0);
 					ProcessDeferredParams(&ctx);
 				}
 				else
@@ -4425,6 +7394,7 @@ bool asCCompiler::CompileInitialization(asCScriptNode *node, asCByteCode *bc, co
 
 			bc->AddCode(&ctx.bc);
 		}
+
 	}
 	else
 	{
@@ -5105,6 +8075,12 @@ void asCCompiler::CompileSwitchStatement(asCScriptNode *snode, FStopCondition& s
 		to.SetTokenType(ttUInt);
 	if (expr.type.dataType.IsEnumType())
 		to.SetAnyImplicitIntegerType(true);
+	const asTypedSemanticExpressionId TypedSemanticSelector =
+		expr.typedSemanticExpression;
+	const asETypedSemanticSwitchNormalization TypedSemanticNormalization =
+		to.IsUnsignedType()
+			? asETypedSemanticSwitchNormalization::UnsignedInt32
+			: asETypedSemanticSwitchNormalization::SignedInt32;
 
 	// Save the original type info of the expression if this is an enum, so we can typecheck against it later
 	asCTypeInfo* originalTypeInfo = nullptr;
@@ -5138,6 +8114,9 @@ void asCCompiler::CompileSwitchStatement(asCScriptNode *snode, FStopCondition& s
 
 	asCArray<int> caseValues;
 	asCArray<int> caseLabels;
+	asCArray<asTypedSemanticExpressionId> TypedSemanticCaseValues;
+	asCArray<int> TypedSemanticCaseConstants;
+	asCArray<asBYTE> TypedSemanticDefaultCases;
 
 	// Compile all case comparisons and make them jump to the right label
 	asCScriptNode *cnode = snode->firstChild->next;
@@ -5149,6 +8128,9 @@ void asCCompiler::CompileSwitchStatement(asCScriptNode *snode, FStopCondition& s
 			// Compile expression
 			asCExprContext c(builder);
 			CompileExpression(cnode->firstChild, &c);
+			asTypedSemanticExpressionId TypedSemanticCaseValue =
+				c.typedSemanticExpression;
+			int TypedSemanticCaseConstant = 0;
 
 			// Verify that the result is a constant
 			if( !c.type.isConstant )
@@ -5168,6 +8150,32 @@ void asCCompiler::CompileSwitchStatement(asCScriptNode *snode, FStopCondition& s
 			else
 			{
 				ImplicitConversion(&c, to, cnode->firstChild, asIC_IMPLICIT_CONV, true);
+				TypedSemanticCaseConstant = int(c.type.GetConstantDW());
+				if( typedSemanticBuilder
+					&& !TypedSemanticCaseValue.IsValid() )
+				{
+					asCString CanonicalCaseLiteral;
+					if( to.IsUnsignedType() )
+					{
+						CanonicalCaseLiteral.Format(
+							"%u",
+							asUINT(c.type.GetConstantDW()));
+					}
+					else
+					{
+						CanonicalCaseLiteral.Format(
+							"%d",
+							TypedSemanticCaseConstant);
+					}
+					TypedSemanticCaseValue =
+						typedSemanticBuilder->AddLiteral(
+							to,
+							CanonicalCaseLiteral,
+							c.type.GetConstantData(),
+							MakeTypedSemanticSpan(
+								script,
+								cnode->firstChild));
+				}
 
 				// Has this case been declared already?
 				if (caseValues.IndexOf(c.type.GetConstantDW()) >= 0)
@@ -5181,6 +8189,9 @@ void asCCompiler::CompileSwitchStatement(asCScriptNode *snode, FStopCondition& s
 				// Reserve label for this case
 				caseLabels.PushLast(nextLabel++);
 			}
+			TypedSemanticCaseValues.PushLast(TypedSemanticCaseValue);
+			TypedSemanticCaseConstants.PushLast(TypedSemanticCaseConstant);
+			TypedSemanticDefaultCases.PushLast(0);
 		}
 		else
 		{
@@ -5195,6 +8206,10 @@ void asCCompiler::CompileSwitchStatement(asCScriptNode *snode, FStopCondition& s
 			// Reserve label for this case
 			defaultLabel = nextLabel++;
 			bHasDefaultLabel = true;
+			TypedSemanticCaseValues.PushLast(
+				asTypedSemanticExpressionId());
+			TypedSemanticCaseConstants.PushLast(0);
+			TypedSemanticDefaultCases.PushLast(1);
 		}
 
 		cnode = cnode->next;
@@ -5398,6 +8413,10 @@ void asCCompiler::CompileSwitchStatement(asCScriptNode *snode, FStopCondition& s
 
 	// Compile case implementations, each one with the label before it
 	bool bAllCasesHaveReturn = true;
+	asCArray<asTypedSemanticStatementId> TypedSemanticCases;
+	asUINT TypedSemanticCaseIndex = 0;
+	if( typedSemanticBuilder )
+		typedSemanticBuilder->BeginSwitchTarget();
 
 	cnode = snode->firstChild->next;
 	while( cnode )
@@ -5406,6 +8425,9 @@ void asCCompiler::CompileSwitchStatement(asCScriptNode *snode, FStopCondition& s
 		FStopCondition CaseStopCondition;
 		bool bCaseHasFallthrough = true;
 		bool bCaseIsEmpty = false;
+		const asUINT TypedSemanticCaseMark = typedSemanticBuilder
+			? typedSemanticBuilder->MarkCurrentBlock()
+			: 0;
 
 		if( cnode->firstChild && cnode->firstChild->nodeType == snExpression )
 		{
@@ -5449,7 +8471,58 @@ void asCCompiler::CompileSwitchStatement(asCScriptNode *snode, FStopCondition& s
 		if (bCaseHasFallthrough && exceptionLabel != 0 && cnode->next == nullptr)
 			expr.bc.InstrINT(asBC_JMP, breakLabel);
 
+		if( typedSemanticBuilder )
+		{
+			const asTypedSemanticStatementId TypedSemanticCaseBody =
+				typedSemanticBuilder->DetachSince(
+					TypedSemanticCaseMark,
+					MakeTypedSemanticSpan(script, cnode),
+					true,
+					true);
+			const bool TypedSemanticFallsThrough =
+				bCaseHasFallthrough && cnode->next != 0;
+			const bool TypedSemanticExplicitFallthrough =
+				TypedSemanticFallsThrough
+				&& cnode->lastChild != 0
+				&& cnode->lastChild->nodeType == snFallthrough;
+			const asTypedSemanticExpressionId TypedSemanticCaseValue =
+				TypedSemanticCaseIndex
+					< TypedSemanticCaseValues.GetLength()
+					? TypedSemanticCaseValues[TypedSemanticCaseIndex]
+					: asTypedSemanticExpressionId();
+			const int TypedSemanticCaseConstant =
+				TypedSemanticCaseIndex
+					< TypedSemanticCaseConstants.GetLength()
+					? TypedSemanticCaseConstants[TypedSemanticCaseIndex]
+					: 0;
+			const bool TypedSemanticIsDefault =
+				TypedSemanticCaseIndex
+					< TypedSemanticDefaultCases.GetLength()
+				&& TypedSemanticDefaultCases[TypedSemanticCaseIndex] != 0;
+			TypedSemanticCases.PushLast(
+				typedSemanticBuilder->AddCase(
+					TypedSemanticCaseValue,
+					TypedSemanticCaseConstant,
+					TypedSemanticIsDefault,
+					TypedSemanticCaseBody,
+					TypedSemanticFallsThrough,
+					TypedSemanticExplicitFallthrough,
+					MakeTypedSemanticSpan(script, cnode)));
+			++TypedSemanticCaseIndex;
+		}
+
 		cnode = cnode->next;
+	}
+	if( typedSemanticBuilder )
+	{
+		typedSemanticBuilder->AddSwitch(
+			TypedSemanticSelector,
+			TypedSemanticCases,
+			TypedSemanticNormalization,
+			bHasDefaultLabel,
+			bSwitchIsExhaustive,
+			exceptionLabel != 0,
+			MakeTypedSemanticSpan(script, snode));
 	}
 
 	//--------------------------------
@@ -5460,6 +8533,10 @@ void asCCompiler::CompileSwitchStatement(asCScriptNode *snode, FStopCondition& s
 	if (exceptionLabel != 0)
 	{
 		bc->Label((short)exceptionLabel);
+		// The invalid-value edge is synthesized after all case bodies. Publish
+		// the switch token's position explicitly so the ThrowException bytecode
+		// cannot inherit the last case's source location.
+		LineInstr(bc, snode->tokenPos);
 		bc->InstrWORD(asBC_ThrowException, 0);
 	}
 
@@ -5549,6 +8626,10 @@ void asCCompiler::CompileIfStatement(asCScriptNode *inode, FStopCondition& stopC
 	// Compile the expression
 	asCExprContext expr(builder);
 	int r = CompileCondition(inode->firstChild, &expr);
+	asTypedSemanticExpressionId TypedSemanticCondition =
+		expr.typedSemanticExpression;
+	asTypedSemanticStatementId TypedSemanticThen;
+	asTypedSemanticStatementId TypedSemanticElse;
 	if( r == 0 )
 	{
 		// Allow value types to be converted to bool using 'bool opImplConv()'
@@ -5601,7 +8682,16 @@ void asCCompiler::CompileIfStatement(asCScriptNode *inode, FStopCondition& stopC
 	bool bPrevRecordInitializedVariables = bRecordInitializedVariables;
 	bRecordInitializedVariables = true;
 
+	const asUINT TypedSemanticThenMark = typedSemanticBuilder
+		? typedSemanticBuilder->MarkCurrentBlock()
+		: 0;
 	CompileStatement(inode->firstChild->next, stopCondition1, &ifBC);
+	if( typedSemanticBuilder )
+	{
+		TypedSemanticThen = typedSemanticBuilder->DetachSince(
+			TypedSemanticThenMark,
+			MakeTypedSemanticSpan(script, inode->firstChild->next));
+	}
 
 	FBlockInitializedVariables IfInitializedVariables = MoveTemp(BlockInitializedVariables);
 	FBlockInitializedVariables ElseInitializedVariables;
@@ -5645,7 +8735,16 @@ void asCCompiler::CompileIfStatement(asCScriptNode *inode, FStopCondition& stopC
 		FStopCondition stopCondition2;
 		asCByteCode elseBC(builder);
 
+		const asUINT TypedSemanticElseMark = typedSemanticBuilder
+			? typedSemanticBuilder->MarkCurrentBlock()
+			: 0;
 		CompileStatement(inode->lastChild, stopCondition2, &elseBC);
+		if( typedSemanticBuilder )
+		{
+			TypedSemanticElse = typedSemanticBuilder->DetachSince(
+				TypedSemanticElseMark,
+				MakeTypedSemanticSpan(script, inode->lastChild));
+		}
 
 		ElseInitializedVariables = MoveTemp(BlockInitializedVariables);
 		UndoInitializedVariables(ElseInitializedVariables);
@@ -5706,12 +8805,23 @@ void asCCompiler::CompileIfStatement(asCScriptNode *inode, FStopCondition& stopC
 	}
 
 	m_isConstructorCalled = origIsConstructorCalled || constructorCall1 || constructorCall2;
+
+	if( typedSemanticBuilder )
+	{
+		typedSemanticBuilder->AddIf(
+			TypedSemanticCondition,
+			TypedSemanticThen,
+			TypedSemanticElse,
+			MakeTypedSemanticSpan(script, inode));
+	}
 }
 
 void asCCompiler::CompileForStatement(asCScriptNode *fnode, asCByteCode *bc)
 {
 	// Add a variable scope that will be used by CompileBreak/Continue to know where to stop deallocating variables
 	AddVariableScope(true, true);
+	if( typedSemanticBuilder )
+		typedSemanticBuilder->BeginLoopTarget();
 
 	// We will use three labels for the for loop
 	int conditionLabel = nextLabel++;
@@ -5729,6 +8839,9 @@ void asCCompiler::CompileForStatement(asCScriptNode *fnode, asCByteCode *bc)
 	//---------------------------------------
 	// Compile the initialization statement
 	asCByteCode initBC(builder);
+	const asUINT TypedSemanticInitializerMark = typedSemanticBuilder
+		? typedSemanticBuilder->MarkCurrentBlock()
+		: 0;
 
 	bDelayTempVariableDeallocs = true;
 	asUINT StartIndexTempVariableDeallocs = DelayedTempVariableDeallocs.GetLength();
@@ -5738,6 +8851,15 @@ void asCCompiler::CompileForStatement(asCScriptNode *fnode, asCByteCode *bc)
 		CompileDeclaration(fnode->firstChild, &initBC);
 	else
 		CompileExpressionStatement(fnode->firstChild, &initBC);
+	asTypedSemanticStatementId TypedSemanticInitializer;
+	if( typedSemanticBuilder )
+	{
+		TypedSemanticInitializer = typedSemanticBuilder->DetachSince(
+			TypedSemanticInitializerMark,
+			MakeTypedSemanticSpan(script, fnode->firstChild),
+			false,
+			true);
+	}
 
 	bDelayTempVariableDeallocs = false;
 
@@ -5781,23 +8903,48 @@ void asCCompiler::CompileForStatement(asCScriptNode *fnode, asCByteCode *bc)
 			}
 		}
 	}
+	const asTypedSemanticExpressionId TypedSemanticCondition =
+		expr.typedSemanticExpression;
 
 	//---------------------------
 	// Compile the increment statement(s)
 	asCByteCode nextBC(builder);
 	asCScriptNode *cnode = second->next;
+	const asUINT TypedSemanticIncrementMark = typedSemanticBuilder
+		? typedSemanticBuilder->MarkCurrentBlock()
+		: 0;
 	while( cnode && cnode->nodeType == snExpressionStatement && cnode != fnode->lastChild )
 	{
 		LineInstr(&nextBC, cnode->tokenPos);
 		CompileExpressionStatement(cnode, &nextBC);
 		cnode = cnode->next;
 	}
+	asTypedSemanticStatementId TypedSemanticIncrement;
+	if( typedSemanticBuilder )
+	{
+		TypedSemanticIncrement = typedSemanticBuilder->DetachSince(
+			TypedSemanticIncrementMark,
+			MakeTypedSemanticSpan(script, fnode),
+			true,
+			true);
+	}
 
 	//------------------------------
 	// Compile loop statement
 	FStopCondition stopCondition;
 	asCByteCode forBC(builder);
+	const asUINT TypedSemanticBodyMark = typedSemanticBuilder
+		? typedSemanticBuilder->MarkCurrentBlock()
+		: 0;
 	CompileStatement(fnode->lastChild, stopCondition, &forBC);
+	asTypedSemanticStatementId TypedSemanticBody;
+	if( typedSemanticBuilder )
+	{
+		TypedSemanticBody = typedSemanticBuilder->DetachSince(
+			TypedSemanticBodyMark,
+			MakeTypedSemanticSpan(script, fnode->lastChild),
+			true);
+	}
 
 	if( fnode->lastChild->nodeType == snExpressionStatement && fnode->lastChild->firstChild == 0 )
 	{
@@ -5857,6 +9004,16 @@ void asCCompiler::CompileForStatement(asCScriptNode *fnode, asCByteCode *bc)
 	UndoInitializedVariables(BlockInitializedVariables);
 	bRecordInitializedVariables = bPrevRecordInitializedVariables;
 	BlockInitializedVariables = MoveTemp(PrevInitializedVariables);
+
+	if( typedSemanticBuilder )
+	{
+		typedSemanticBuilder->AddFor(
+			TypedSemanticInitializer,
+			TypedSemanticCondition,
+			TypedSemanticIncrement,
+			TypedSemanticBody,
+			MakeTypedSemanticSpan(script, fnode));
+	}
 }
 
 //[UE++]: Lower stock foreach(...) syntax into regular script using opFor* methods.
@@ -5971,6 +9128,8 @@ void asCCompiler::CompileWhileStatement(asCScriptNode *wnode, asCByteCode *bc)
 {
 	// Add a variable scope that will be used by CompileBreak/Continue to know where to stop deallocating variables
 	AddVariableScope(true, true);
+	if( typedSemanticBuilder )
+		typedSemanticBuilder->BeginLoopTarget();
 
 	FBlockInitializedVariables PrevInitializedVariables = MoveTemp(BlockInitializedVariables);
 	bool bPrevRecordInitializedVariables = bRecordInitializedVariables;
@@ -6017,6 +9176,8 @@ void asCCompiler::CompileWhileStatement(asCScriptNode *wnode, asCByteCode *bc)
 			bc->AddCode(&expr.bc);
 		}
 	}
+	const asTypedSemanticExpressionId TypedSemanticCondition =
+		expr.typedSemanticExpression;
 
 	if( wnode->firstChild->next->nodeType == snExpressionStatement && wnode->firstChild->next->firstChild == 0 )
 	{
@@ -6032,7 +9193,18 @@ void asCCompiler::CompileWhileStatement(asCScriptNode *wnode, asCByteCode *bc)
 	// Compile statement
 	FStopCondition stopCondition;
 	asCByteCode whileBC(builder);
+	const asUINT TypedSemanticBodyMark = typedSemanticBuilder
+		? typedSemanticBuilder->MarkCurrentBlock()
+		: 0;
 	CompileStatement(wnode->lastChild, stopCondition, &whileBC);
+	asTypedSemanticStatementId TypedSemanticBody;
+	if( typedSemanticBuilder )
+	{
+		TypedSemanticBody = typedSemanticBuilder->DetachSince(
+			TypedSemanticBodyMark,
+			MakeTypedSemanticSpan(script, wnode->lastChild),
+			true);
+	}
 
 	// Add byte code for the statement
 	LineInstr(bc, wnode->lastChild->tokenPos);
@@ -6052,12 +9224,22 @@ void asCCompiler::CompileWhileStatement(asCScriptNode *wnode, asCByteCode *bc)
 	UndoInitializedVariables(BlockInitializedVariables);
 	bRecordInitializedVariables = bPrevRecordInitializedVariables;
 	BlockInitializedVariables = MoveTemp(PrevInitializedVariables);
+
+	if( typedSemanticBuilder )
+	{
+		typedSemanticBuilder->AddWhile(
+			TypedSemanticCondition,
+			TypedSemanticBody,
+			MakeTypedSemanticSpan(script, wnode));
+	}
 }
 
 void asCCompiler::CompileDoWhileStatement(asCScriptNode *wnode, asCByteCode *bc)
 {
 	// Add a variable scope that will be used by CompileBreak/Continue to know where to stop deallocating variables
 	AddVariableScope(true, true);
+	if( typedSemanticBuilder )
+		typedSemanticBuilder->BeginLoopTarget();
 
 	// We will use two labels for the while loop
 	int beforeLabel = nextLabel++;
@@ -6073,7 +9255,18 @@ void asCCompiler::CompileDoWhileStatement(asCScriptNode *wnode, asCByteCode *bc)
 	// Compile statement
 	FStopCondition stopCondition;
 	asCByteCode whileBC(builder);
+	const asUINT TypedSemanticBodyMark = typedSemanticBuilder
+		? typedSemanticBuilder->MarkCurrentBlock()
+		: 0;
 	CompileStatement(wnode->firstChild, stopCondition, &whileBC);
+	asTypedSemanticStatementId TypedSemanticBody;
+	if( typedSemanticBuilder )
+	{
+		TypedSemanticBody = typedSemanticBuilder->DetachSince(
+			TypedSemanticBodyMark,
+			MakeTypedSemanticSpan(script, wnode->firstChild),
+			true);
+	}
 
 	// Add byte code for the statement
 	LineInstr(bc, wnode->firstChild->tokenPos);
@@ -6119,6 +9312,8 @@ void asCCompiler::CompileDoWhileStatement(asCScriptNode *wnode, asCByteCode *bc)
 		expr.bc.OptimizeLocally(tempVariableOffsets);
 		bc->AddCode(&expr.bc);
 	}
+	const asTypedSemanticExpressionId TypedSemanticCondition =
+		expr.typedSemanticExpression;
 
 	// Add label after the statement
 	bc->Label((short)afterLabel);
@@ -6127,6 +9322,14 @@ void asCCompiler::CompileDoWhileStatement(asCScriptNode *wnode, asCByteCode *bc)
 	breakLabels.PopLast();
 
 	RemoveVariableScope();
+
+	if( typedSemanticBuilder )
+	{
+		typedSemanticBuilder->AddDoWhile(
+			TypedSemanticBody,
+			TypedSemanticCondition,
+			MakeTypedSemanticSpan(script, wnode));
+	}
 }
 
 void asCCompiler::CompileBreakStatement(asCScriptNode *node, asCByteCode *bc)
@@ -6141,16 +9344,24 @@ void asCCompiler::CompileBreakStatement(asCScriptNode *node, asCByteCode *bc)
 	// Put this clean up in a block to allow exception handler to understand them
 	bc->Block(true);
 	asCVariableScope *vs = variables;
+	asUINT TypedSemanticExitedScopeCount = 0;
 	while( !vs->isBreakScope )
 	{
 		for( int n = (int)vs->variables.GetLength() - 1; n >= 0; n-- )
 			CallDestructor(vs->variables[n]->type, vs->variables[n]->stackOffset, vs->variables[n]->onHeap, bc);
 
 		vs = vs->parent;
+		++TypedSemanticExitedScopeCount;
 	}
 	bc->Block(false);
 
 	bc->InstrINT(asBC_JMP, breakLabels[breakLabels.GetLength()-1]);
+	if( typedSemanticBuilder )
+	{
+		typedSemanticBuilder->AddBreak(
+			TypedSemanticExitedScopeCount,
+			MakeTypedSemanticSpan(script, node));
+	}
 }
 
 void asCCompiler::CompileContinueStatement(asCScriptNode *node, asCByteCode *bc)
@@ -6165,16 +9376,24 @@ void asCCompiler::CompileContinueStatement(asCScriptNode *node, asCByteCode *bc)
 	// Put this clean up in a block to allow exception handler to understand them
 	bc->Block(true);
 	asCVariableScope *vs = variables;
+	asUINT TypedSemanticExitedScopeCount = 0;
 	while( !vs->isContinueScope )
 	{
 		for( int n = (int)vs->variables.GetLength() - 1; n >= 0; n-- )
 			CallDestructor(vs->variables[n]->type, vs->variables[n]->stackOffset, vs->variables[n]->onHeap, bc);
 
 		vs = vs->parent;
+		++TypedSemanticExitedScopeCount;
 	}
 	bc->Block(false);
 
 	bc->InstrINT(asBC_JMP, continueLabels[continueLabels.GetLength()-1]);
+	if( typedSemanticBuilder )
+	{
+		typedSemanticBuilder->AddContinue(
+			TypedSemanticExitedScopeCount,
+			MakeTypedSemanticSpan(script, node));
+	}
 }
 
 void asCCompiler::CompileExpressionStatement(asCScriptNode *enode, asCByteCode *bc)
@@ -6250,6 +9469,13 @@ void asCCompiler::CompileExpressionStatement(asCScriptNode *enode, asCByteCode *
 		// already a compile error, or we might report an error that is not valid
 		if( !hasCompileErrors )
 			ProcessPropertyGetAccessor(&expr, enode);
+
+		if( typedSemanticBuilder )
+		{
+			typedSemanticBuilder->AddExpressionStatement(
+				expr.typedSemanticExpression,
+				MakeTypedSemanticSpan(script, enode));
+		}
 
 		// Pop the value from the stack
 		if( !expr.type.dataType.IsPrimitive() )
@@ -6330,6 +9556,14 @@ void asCCompiler::CompileReturnStatement(asCScriptNode *rnode, asCByteCode *bc)
 {
 	// Get return type and location
 	sVariable *v = variables->GetVariable("return");
+	asTypedSemanticExpressionId TypedSemanticValue;
+	asUINT TypedSemanticExitedScopeCount = 0;
+	for( asCVariableScope *Scope = variables;
+		Scope != 0;
+		Scope = Scope->parent )
+	{
+		++TypedSemanticExitedScopeCount;
+	}
 
 	// Basic validations
 	if( v->type.GetSizeOnStackDWords() > 0 && !rnode->firstChild )
@@ -6565,6 +9799,7 @@ void asCCompiler::CompileReturnStatement(asCScriptNode *rnode, asCByteCode *bc)
 			}
 		}
 
+		TypedSemanticValue = expr.typedSemanticExpression;
 		expr.bc.OptimizeLocally(tempVariableOffsets);
 		bc->AddCode(&expr.bc);
 	}
@@ -6573,6 +9808,14 @@ void asCCompiler::CompileReturnStatement(asCScriptNode *rnode, asCByteCode *bc)
 		// For functions that don't return anything
 		// we just detroy the local variables
 		DestroyVariables(bc);
+	}
+
+	if( typedSemanticBuilder )
+	{
+		typedSemanticBuilder->AddReturn(
+			TypedSemanticValue,
+			TypedSemanticExitedScopeCount,
+			MakeTypedSemanticSpan(script, rnode));
 	}
 
 	bc->InstrINT(asBC_JMP, 0);
@@ -8335,9 +11578,29 @@ asUINT asCCompiler::ImplicitConversion(asCExprContext *ctx, const asCDataType &t
 	asASSERT( ctx->type.dataType.GetTokenType() != ttUnrecognizedToken ||
 		      ctx->type.dataType.IsNullHandle() ||
 		      ctx->IsAnonymousInitList() );
+	const asCDataType TypedSemanticBeforeType = ctx->type.dataType;
+	const asTypedSemanticExpressionId TypedSemanticBeforeExpression =
+		ctx->typedSemanticExpression;
+	auto FinishConversion = [&](const asUINT Cost) -> asUINT
+	{
+		if( typedSemanticBuilder
+			&& generateCode
+			&& (convType == asIC_IMPLICIT_CONV
+				|| convType == asIC_IMPLICIT_CONV_ALLOW_NARROWING) )
+		{
+			ctx->typedSemanticExpression =
+				typedSemanticBuilder->ApplyImplicitScalarConversion(
+					TypedSemanticBeforeExpression,
+					TypedSemanticBeforeType,
+					ctx->type.dataType,
+					MakeTypedSemanticSpan(script, node));
+		}
+		return Cost;
+	};
 
 	if( to.IsFuncdef() && ctx->IsLambda() )
-		return ImplicitConvLambdaToFunc(ctx, to, node, convType, generateCode);
+		return FinishConversion(
+			ImplicitConvLambdaToFunc(ctx, to, node, convType, generateCode));
 
 	if (ctx->IsAnonymousInitList())
 	{
@@ -8348,16 +11611,16 @@ asUINT asCCompiler::ImplicitConversion(asCExprContext *ctx, const asCDataType &t
 			else
 				ctx->type.dataType = to;
 		}
-		return asCC_NO_CONV;
+		return FinishConversion(asCC_NO_CONV);
 	}
 
 	// No conversion from void to any other type
 	if( ctx->type.dataType.GetTokenType() == ttVoid )
-		return asCC_NO_CONV;
+		return FinishConversion(asCC_NO_CONV);
 
 	// No conversion from class method to any type (it requires delegate)
 	if( ctx->IsClassMethod() )
-		return asCC_NO_CONV;
+		return FinishConversion(asCC_NO_CONV);
 
 	// Do we want a var type?
 	if( to.GetTokenType() == ttQuestion )
@@ -8367,25 +11630,43 @@ asUINT asCCompiler::ImplicitConversion(asCExprContext *ctx, const asCDataType &t
 
 		ctx->type.dataType = to;
 
-		return asCC_VARIABLE_CONV;
+		return FinishConversion(asCC_VARIABLE_CONV);
 	}
 	// Do we want a primitive?
 	else if( to.IsPrimitive() )
 	{
 		if( !ctx->type.dataType.IsPrimitive() )
-			return ImplicitConvObjectToPrimitive(ctx, to, node, convType, generateCode);
+			return FinishConversion(
+				ImplicitConvObjectToPrimitive(
+					ctx, to, node, convType, generateCode));
 		else
-			return ImplicitConvPrimitiveToPrimitive(ctx, to, node, convType, generateCode);
+			return FinishConversion(
+				ImplicitConvPrimitiveToPrimitive(
+					ctx, to, node, convType, generateCode));
 	}
 	else // The target is a complex type
 	{
 		if( ctx->type.dataType.IsPrimitive() )
-			return ImplicitConvPrimitiveToObject(ctx, to, node, convType, generateCode, allowObjectConstruct);
+			return FinishConversion(
+				ImplicitConvPrimitiveToObject(
+					ctx,
+					to,
+					node,
+					convType,
+					generateCode,
+					allowObjectConstruct));
 		else if( ctx->type.IsNullConstant() || ctx->type.dataType.GetTypeInfo() )
-			return ImplicitConvObjectToObject(ctx, to, node, convType, generateCode, allowObjectConstruct);
+			return FinishConversion(
+				ImplicitConvObjectToObject(
+					ctx,
+					to,
+					node,
+					convType,
+					generateCode,
+					allowObjectConstruct));
 	}
 
-	return asCC_NO_CONV;
+	return FinishConversion(asCC_NO_CONV);
 }
 
 asUINT asCCompiler::ImplicitConvObjectToPrimitive(asCExprContext *ctx, const asCDataType &to, asCScriptNode *node, EImplicitConv convType, bool generateCode)
@@ -10151,7 +13432,7 @@ void asCCompiler::ImplicitConversionConstant(asCExprContext *from, const asCData
 	}
 }
 
-int asCCompiler::DoAssignment(asCExprContext *ctx, asCExprContext *lctx, asCExprContext *rctx, asCScriptNode *lexpr, asCScriptNode *rexpr, eTokenType op, asCScriptNode *opNode)
+int asCCompiler::DoAssignment(asCExprContext *ctx, asCExprContext *lctx, asCExprContext *rctx, asCScriptNode *lexpr, asCScriptNode *rexpr, eTokenType op, asCScriptNode *opNode, asTypedSemanticExpressionId *outFinalRValue)
 {
 	// Don't allow any operators on expressions that take address of class method
 	// If methodName is set but the type is not an object, then it is a global function
@@ -10285,7 +13566,11 @@ int asCCompiler::DoAssignment(asCExprContext *ctx, asCExprContext *lctx, asCExpr
 			}
 
 			asCExprContext o(builder);
+			if( typedSemanticBuilder )
+				typedSemanticBuilder->BeginLoweredMutationOperator();
 			CompileOperator(opNode, lctx, rctx, &o);
+			if( typedSemanticBuilder )
+				typedSemanticBuilder->EndLoweredMutationOperator();
 			MergeExprBytecode(rctx, &o);
 			rctx->type = o.type;
 
@@ -10301,6 +13586,11 @@ int asCCompiler::DoAssignment(asCExprContext *ctx, asCExprContext *lctx, asCExpr
 		{
 			// Convert the rvalue to the right type and validate it
 			PrepareForAssignment(&lctx->type.dataType, rctx, rexpr, false, lctx, allowNarrowing);
+			if( outFinalRValue
+				&& typedSemanticBuilder
+				&& typedSemanticBuilder->OwnsExpression(
+					rctx->typedSemanticExpression) )
+				*outFinalRValue = rctx->typedSemanticExpression;
 
 			MergeExprBytecode(ctx, rctx);
 			MergeExprBytecode(ctx, lctx);
@@ -10535,7 +13825,35 @@ int asCCompiler::CompileAssignment(asCScriptNode *expr, asCExprContext *ctx, boo
 		int lr = CompileCondition(lexpr, &lctx);
 
 		if( lr >= 0 && rr >= 0 )
-			return DoAssignment(ctx, &lctx, &rctx, lexpr, lexpr->next->next, lexpr->next->tokenType, lexpr->next);
+		{
+			const asTypedSemanticExpressionId TypedSemanticTarget =
+				lctx.typedSemanticExpression;
+			const asTypedSemanticExpressionId TypedSemanticValue =
+				rctx.typedSemanticExpression;
+			const int Result = DoAssignment(
+				ctx,
+				&lctx,
+				&rctx,
+				lexpr,
+				lexpr->next->next,
+				lexpr->next->tokenType,
+				lexpr->next);
+			if( Result >= 0
+				&& typedSemanticBuilder
+				&& lctx.type.dataType.IsPrimitive() )
+			{
+				ctx->typedSemanticExpression = typedSemanticBuilder->AddMutation(
+					TypedSemanticTarget,
+					TypedSemanticValue,
+					GetTypedSemanticTokenText(
+						script,
+						lexpr->next,
+						lexpr->next->tokenType),
+					false,
+					MakeTypedSemanticSpan(script, lexpr->next));
+			}
+			return Result;
+		}
 
 		// Since the operands failed, the assignment was not computed
 		ctx->type.SetDummy();
@@ -10971,6 +14289,17 @@ int asCCompiler::CompileCondition(asCScriptNode *expr, asCExprContext *ctx, bool
 					ctx->type.isConstant = false;
 				}
 			}
+
+			if( typedSemanticBuilder )
+			{
+				ctx->typedSemanticExpression =
+					typedSemanticBuilder->AddUnsupportedTernary(
+						e.typedSemanticExpression,
+						le.typedSemanticExpression,
+						re.typedSemanticExpression,
+						ctx->type.dataType,
+						MakeTypedSemanticSpan(script, expr));
+			}
 		}
 		else
 		{
@@ -11298,6 +14627,15 @@ int asCCompiler::CompileVariableAccess(const asCString &name, const asCString &s
 			if (!v->type.IsReadOnly())
 				ctx->type.isLValue = true;
 		}
+
+		if( typedSemanticBuilder )
+		{
+			ctx->typedSemanticExpression =
+				typedSemanticBuilder->AddSymbolExpression(
+					v,
+					ctx->type.dataType,
+					MakeTypedSemanticSpan(script, errNode));
+		}
 	}
 
 	asCObjectType* ThisObjectType = nullptr;
@@ -11345,6 +14683,14 @@ int asCCompiler::CompileVariableAccess(const asCString &name, const asCString &s
 			}
 
 			found = true;
+			if( typedSemanticBuilder )
+			{
+				ctx->typedSemanticExpression =
+					typedSemanticBuilder
+						->AddUnsupportedEffectiveReceiverAccess(
+							ctx->type.dataType,
+							MakeTypedSemanticSpan(script, errNode));
+			}
 		}
 
 		if( !found )
@@ -11365,6 +14711,13 @@ int asCCompiler::CompileVariableAccess(const asCString &name, const asCString &s
 			asCObjectProperty *prop = builder->GetObjectProperty(dt, name.AddressOf());
 			if( prop )
 			{
+				asTypedSemanticExpressionId TypedSemanticReceiver;
+				if( typedSemanticBuilder && !objType )
+				{
+					TypedSemanticReceiver = typedSemanticBuilder
+						->AddUnsupportedEffectiveReceiverAccess(
+							MakeTypedSemanticSpan(script, errNode));
+				}
 				builder->MarkPropertyDependency(inType, prop);
 				// If we're compiling member initializers, don't allow access to members after the current member
 				if (compilingMemberInitializationOffset != -1 && prop->byteOffset >= compilingMemberInitializationOffset)
@@ -11478,6 +14831,19 @@ int asCCompiler::CompileVariableAccess(const asCString &name, const asCString &s
 				// If the object reference is const, the property will also be const
 				ctx->type.dataType.MakeReadOnly(outFunc->IsReadOnly() || (prop->type.IsReadOnly() && !m_isConstructor && !m_isInitDefaults) || makeConst);
 
+				if( typedSemanticBuilder && !objType )
+				{
+					asCString ResolvedTarget = inType->name;
+					ResolvedTarget += "::";
+					ResolvedTarget += prop->name;
+					ctx->typedSemanticExpression =
+						typedSemanticBuilder->AddUnsupportedPropertyAccess(
+							TypedSemanticReceiver,
+							ResolvedTarget,
+							ctx->type.dataType,
+							MakeTypedSemanticSpan(script, errNode));
+				}
+
 				found = true;
 			}
 		}
@@ -11506,6 +14872,13 @@ int asCCompiler::CompileVariableAccess(const asCString &name, const asCString &s
 					// Prepare the bytecode for the member access
 					// This is only done when accessing through the implicit this pointer
 					ctx->bc.InstrSHORT(asBC_PSF, ThisObjectStackOffset);
+					if( typedSemanticBuilder )
+					{
+						access.typedSemanticExpression =
+							typedSemanticBuilder
+								->AddUnsupportedEffectiveReceiverAccess(
+									MakeTypedSemanticSpan(script, errNode));
+					}
 				}
 				MergeExprBytecodeAndType(ctx, &access);
 
@@ -11690,6 +15063,22 @@ int asCCompiler::CompileVariableAccess(const asCString &name, const asCString &s
 									ctx->type.dataType = ApplyDeterminesOutputType(ctx->type.dataType, asCDataType::CreateObjectHandle(ReferencedStaticType, false), false);
 							}
 						}
+
+						if( typedSemanticBuilder )
+						{
+							const asSTypedSemanticSourceSpan GlobalSpan =
+								MakeTypedSemanticSpan(script, errNode);
+							ctx->typedSemanticExpression = isPureConstant
+								? typedSemanticBuilder->AddFoldedGlobalConstant(
+									prop->id,
+									prop->type,
+									constantValue,
+									GlobalSpan)
+								: typedSemanticBuilder->AddGlobalStorage(
+									prop->id,
+									prop->type,
+									GlobalSpan);
+						}
 					}
 					else
 					{
@@ -11779,6 +15168,16 @@ int asCCompiler::CompileVariableAccess(const asCString &name, const asCString &s
 
 				// an enum value was resolved
 				ctx->type.SetConstantB(dt, (asBYTE)value);
+				if( typedSemanticBuilder )
+				{
+					asCString Literal;
+					Literal.Format("%d", static_cast<int>(value));
+					ctx->typedSemanticExpression = typedSemanticBuilder->AddLiteral(
+						dt,
+						Literal,
+						ctx->type.GetConstantData(),
+						MakeTypedSemanticSpan(script, errNode));
+				}
 			}
 			else
 			{
@@ -12207,6 +15606,24 @@ int asCCompiler::CompileExpressionValue(asCScriptNode *node, asCExprContext *ctx
 		}
 		else
 			asASSERT(false);
+
+		if( typedSemanticBuilder && ctx->type.dataType.IsValid() )
+		{
+			asCString Literal = GetTypedSemanticTokenText(
+				script,
+				vnode,
+				vnode->tokenType);
+			const asQWORD LiteralBits = ctx->type.isConstant
+				&& IsTypedSemanticByValueScalarType(
+					ctx->type.dataType, false)
+				? ctx->type.GetConstantData()
+				: asQWORD(0);
+			ctx->typedSemanticExpression = typedSemanticBuilder->AddLiteral(
+				ctx->type.dataType,
+				Literal,
+				LiteralBits,
+				MakeTypedSemanticSpan(script, vnode));
+		}
 	}
 	else if( vnode->nodeType == snFunctionCall )
 	{
@@ -12217,7 +15634,27 @@ int asCCompiler::CompileExpressionValue(asCScriptNode *node, asCExprContext *ctx
 	}
 	else if( vnode->nodeType == snConstructCall )
 	{
-		return CompileConstructCall(vnode, ctx);
+		const int Result = CompileConstructCall(vnode, ctx);
+		if( Result >= 0
+			&& typedSemanticBuilder
+			&& ctx->type.dataType.GetTypeInfo() != 0
+			&& !ctx->type.dataType.IsFuncdef()
+			&& !IsTypedSemanticByValueScalarType(
+				ctx->type.dataType, false) )
+		{
+			// Enum construction syntax is compiled as an explicit scalar
+			// conversion even though the enum owns type information. Preserve
+			// that authoritative Conversion node; only real object construction
+			// and lifetime work belongs behind the unsupported boundary.
+			const asTypedSemanticExpressionId Construction =
+				ctx->typedSemanticExpression;
+			ctx->typedSemanticExpression =
+				typedSemanticBuilder->AddUnsupportedConstructionOrLifetime(
+					ctx->type.dataType,
+					MakeTypedSemanticSpan(script, vnode),
+					Construction);
+		}
+		return Result;
 	}
 	else if( vnode->nodeType == snCondition )
 	{
@@ -12515,6 +15952,7 @@ void asCCompiler::ProcessHeredocStringConstant(asCString &str, asCScriptNode *no
 int asCCompiler::CompileConversion(asCScriptNode *node, asCExprContext *ctx)
 {
 	asCExprContext expr(builder);
+	asTypedSemanticExpressionId typedSemanticOperand;
 	asCDataType to;
 	bool anyErrors = false;
 	EImplicitConv convType;
@@ -12599,6 +16037,17 @@ int asCCompiler::CompileConversion(asCScriptNode *node, asCExprContext *ctx)
 	}
 
 	ProcessPropertyGetAccessor(&expr, node);
+	typedSemanticOperand = expr.typedSemanticExpression;
+	auto CaptureTypedSemanticConversion = [&]()
+	{
+		if( typedSemanticBuilder )
+		{
+			ctx->typedSemanticExpression = typedSemanticBuilder->AddConversion(
+				typedSemanticOperand,
+				ctx->type.dataType,
+				MakeTypedSemanticSpan(script, node));
+		}
+	};
 
 	// Don't allow any operators on expressions that take address of class method
 	if( expr.IsClassMethod() )
@@ -12626,6 +16075,7 @@ int asCCompiler::CompileConversion(asCScriptNode *node, asCExprContext *ctx)
 		// This will keep information about constant type
 		MergeExprBytecode(ctx, &expr);
 		ctx->type = expr.type;
+		CaptureTypedSemanticConversion();
 		return 0;
 	}
 
@@ -12634,6 +16084,7 @@ int asCCompiler::CompileConversion(asCScriptNode *node, asCExprContext *ctx)
 		MergeExprBytecode(ctx, &expr);
 		ctx->type = expr.type;
 		ctx->type.dataType.MakeReadOnly(true);
+		CaptureTypedSemanticConversion();
 		return 0;
 	}
 
@@ -12658,7 +16109,10 @@ int asCCompiler::CompileConversion(asCScriptNode *node, asCExprContext *ctx)
 	}
 
 	if( conversionOK )
+	{
+		CaptureTypedSemanticConversion();
 		return 0;
+	}
 
 	// Conversion not available
 	ctx->type.SetDummy();
@@ -13083,6 +16537,24 @@ int asCCompiler::CompileConstructCall(asCScriptNode *node, asCExprContext *ctx)
 					// Call the factory to create the reference type
 					PerformFunctionCall(funcs[0], ctx, false, &args);
 				}
+
+				if( typedSemanticBuilder
+					&& ctx->type.dataType.GetTypeInfo() != 0
+					&& !ctx->type.dataType.IsFuncdef() )
+				{
+					asCScriptFunction* const Target =
+						builder->GetFunctionDescription(funcs[0]);
+					const asSTypedSemanticSourceSpan Span =
+						MakeTypedSemanticSpan(script, node);
+					const asTypedSemanticExpressionId Call =
+						typedSemanticBuilder->AddResolvedCall(
+							Target,
+							args,
+							ctx->type.dataType,
+							Span,
+							asTypedSemanticExpressionId());
+					ctx->typedSemanticExpression = Call;
+				}
 			}
 			else
 				error = true;
@@ -13308,6 +16780,13 @@ int asCCompiler::CompileFunctionCall(asCScriptNode *node, asCExprContext *ctx, a
 				ctx->bc.InstrSHORT(asBC_PSF, ThisObjectStackOffset);
 				ctx->type.SetVariable(dt, ThisObjectStackOffset, false);
 				ctx->type.dataType.MakeReference(true);
+				if( typedSemanticBuilder )
+				{
+					ctx->typedSemanticExpression =
+						typedSemanticBuilder
+							->AddUnsupportedEffectiveReceiverAccess(
+								MakeTypedSemanticSpan(script, node));
+				}
 
 				Dereference(ctx, true);
 			}
@@ -13448,6 +16927,16 @@ int asCCompiler::CompileFunctionCall(asCScriptNode *node, asCExprContext *ctx, a
 		if (firstFunc->compileOutType == asECompileOutType::CompileOutEntirely)
 		{
 			ctx->SetVoidExpression();
+			if( typedSemanticBuilder )
+			{
+				ctx->typedSemanticExpression =
+					typedSemanticBuilder->AddCallRewrite(
+						firstFunc,
+						asETypedSemanticCompileOutKind::CompileOutEntirely,
+						asTypedSemanticExpressionId(),
+						ctx->type.dataType,
+						MakeTypedSemanticSpan(script, node));
+			}
 			return 0;
 		}
 		else if (firstFunc->compileOutType == asECompileOutType::CompileOutAsMethodChain)
@@ -13459,6 +16948,21 @@ int asCCompiler::CompileFunctionCall(asCScriptNode *node, asCExprContext *ctx, a
 				asCDataType Type = firstFunc->returnType;
 				ctx->bc.Instr(asBC_PshNull);
 				ctx->type.Set(Type);
+			}
+			if( typedSemanticBuilder )
+			{
+				const asTypedSemanticExpressionId FinalValue =
+					objectType != nullptr
+						? ctx->typedSemanticExpression
+						: asTypedSemanticExpressionId();
+				ctx->typedSemanticExpression =
+					typedSemanticBuilder->AddCallRewrite(
+						firstFunc,
+						asETypedSemanticCompileOutKind::CompileOutAsMethodChain,
+						FinalValue,
+						ctx->type.dataType,
+						MakeTypedSemanticSpan(script, node),
+						FinalValue);
 			}
 
 			return 0;
@@ -13484,6 +16988,16 @@ int asCCompiler::CompileFunctionCall(asCScriptNode *node, asCExprContext *ctx, a
 				if (r < 0) return r;
 
 				MergeExprBytecodeAndType(ctx, &expr);
+				if( typedSemanticBuilder )
+				{
+					ctx->typedSemanticExpression =
+						typedSemanticBuilder->AddCallRewrite(
+							firstFunc,
+							asETypedSemanticCompileOutKind::ReplaceWithFirstParam,
+							ctx->typedSemanticExpression,
+							ctx->type.dataType,
+							MakeTypedSemanticSpan(script, node));
+				}
 				return 0;
 			}
 
@@ -13572,7 +17086,28 @@ int asCCompiler::CompileFunctionCall(asCScriptNode *node, asCExprContext *ctx, a
 		bool isValid = false;
 		asCDataType dt = builder->CreateDataTypeFromNode(node->firstChild, script, outFunc->nameSpace, false, 0, false, &isValid);
 		if (isValid)
-			return CompileConstructCall(node, ctx);
+		{
+			const int Result = CompileConstructCall(node, ctx);
+			if( Result >= 0
+				&& typedSemanticBuilder
+				&& ctx->type.dataType.GetTypeInfo() != 0
+				&& !ctx->type.dataType.IsFuncdef()
+				&& !IsTypedSemanticByValueScalarType(
+					ctx->type.dataType, false) )
+			{
+				// A named enum conversion reaches this construct-call fallback,
+				// but it is still cleanup-free scalar work. Do not overwrite the
+				// compiler-selected Conversion with an object-lifetime sentinel.
+				const asTypedSemanticExpressionId Construction =
+					ctx->typedSemanticExpression;
+				ctx->typedSemanticExpression =
+					typedSemanticBuilder->AddUnsupportedConstructionOrLifetime(
+						ctx->type.dataType,
+						MakeTypedSemanticSpan(script, node),
+						Construction);
+			}
+			return Result;
+		}
 	}
 
 	// Compile the arguments
@@ -13654,7 +17189,24 @@ int asCCompiler::CompileFunctionCall(asCScriptNode *node, asCExprContext *ctx, a
 				}
 
 				bool virtualCall = (scope.GetLength() == 0);
+				const asTypedSemanticExpressionId TypedSemanticReceiver =
+					typedSemanticBuilder && isMixinCall
+						&& args.GetLength() != 0 && args[0] != 0
+					? args[0]->typedSemanticExpression
+					: typedSemanticBuilder && objectType != 0
+						? ctx->typedSemanticExpression
+						: asTypedSemanticExpressionId();
 				MakeFunctionCall(ctx, funcs[0], isMixinCall ? nullptr : objectType, args, node, false, 0, funcExpr.type.stackOffset, virtualCall);
+				if( typedSemanticBuilder )
+				{
+					ctx->typedSemanticExpression =
+						typedSemanticBuilder->AddResolvedCall(
+							func,
+							args,
+							ctx->type.dataType,
+							MakeTypedSemanticSpan(script, node),
+							TypedSemanticReceiver);
+				}
 			}
 			else
 				isOK = false;
@@ -13769,6 +17321,22 @@ asSNameSpace *asCCompiler::DetermineNameSpace(const asCString &scope)
 int asCCompiler::CompileExpressionPreOp(asCScriptNode *node, asCExprContext *ctx, bool bIsStatementRoot)
 {
 	int op = node->tokenType;
+	const asTypedSemanticExpressionId TypedSemanticOperand =
+		ctx->typedSemanticExpression;
+	auto CaptureTypedSemanticPrimitiveUnary = [&]()
+	{
+		if( typedSemanticBuilder )
+		{
+			ctx->typedSemanticExpression = typedSemanticBuilder->AddUnary(
+				TypedSemanticOperand,
+				ctx->type.dataType,
+				GetTypedSemanticTokenText(
+					script,
+					node,
+					static_cast<eTokenType>(op)),
+				MakeTypedSemanticSpan(script, node));
+		}
+	};
 
 	// Don't allow any prefix operators except handle on expressions that take address of class method
 	if( ctx->IsClassMethod() && op != ttHandle )
@@ -14004,6 +17572,7 @@ int asCCompiler::CompileExpressionPreOp(asCScriptNode *node, asCExprContext *ctx
 					return -1;
 				}
 
+				CaptureTypedSemanticPrimitiveUnary();
 				return 0;
 			}
 		}
@@ -14032,9 +17601,12 @@ int asCCompiler::CompileExpressionPreOp(asCScriptNode *node, asCExprContext *ctx
 					return -1;
 				}
 
+				CaptureTypedSemanticPrimitiveUnary();
 				return 0;
 			}
 		}
+
+		CaptureTypedSemanticPrimitiveUnary();
 	}
 	else if( op == ttNot )
 	{
@@ -14051,6 +17623,7 @@ int asCCompiler::CompileExpressionPreOp(asCScriptNode *node, asCExprContext *ctx
 				#else
 					ctx->type.SetConstantDW(ctx->type.GetConstantDW() == 0 ? VALUE_OF_BOOLEAN_TRUE : 0);
 				#endif
+				CaptureTypedSemanticPrimitiveUnary();
 				return 0;
 			}
 
@@ -14066,6 +17639,8 @@ int asCCompiler::CompileExpressionPreOp(asCScriptNode *node, asCExprContext *ctx
 			Error(TXT_ILLEGAL_OPERATION, node);
 			return -1;
 		}
+
+		CaptureTypedSemanticPrimitiveUnary();
 	}
 	else if( op == ttBitNot )
 	{
@@ -14085,6 +17660,7 @@ int asCCompiler::CompileExpressionPreOp(asCScriptNode *node, asCExprContext *ctx
 					ctx->type.SetConstantDW(~ctx->type.GetConstantDW());
 				else
 					ctx->type.SetConstantQW(~ctx->type.GetConstantQW());
+				CaptureTypedSemanticPrimitiveUnary();
 				return 0;
 			}
 
@@ -14101,6 +17677,8 @@ int asCCompiler::CompileExpressionPreOp(asCScriptNode *node, asCExprContext *ctx
 			Error(TXT_ILLEGAL_OPERATION, node);
 			return -1;
 		}
+
+		CaptureTypedSemanticPrimitiveUnary();
 	}
 	else if( op == ttInc || op == ttDec )
 	{
@@ -14218,6 +17796,19 @@ int asCCompiler::CompileExpressionPreOp(asCScriptNode *node, asCExprContext *ctx
 		{
 			Error(TXT_ILLEGAL_OPERATION, node);
 			return -1;
+		}
+
+		if( typedSemanticBuilder )
+		{
+			ctx->typedSemanticExpression = typedSemanticBuilder->AddMutation(
+				TypedSemanticOperand,
+				asTypedSemanticExpressionId(),
+				GetTypedSemanticTokenText(
+					script,
+					node,
+					static_cast<eTokenType>(op)),
+				false,
+				MakeTypedSemanticSpan(script, node));
 		}
 	}
 	else
@@ -14957,9 +18548,22 @@ void asCCompiler::ProcessPropertyGetAccessor(asCExprContext *ctx, asCScriptNode 
 
 	// The explicit handle flag must be remembered
 	bool isExplicitHandle = ctx->type.isExplicitHandle;
+	const asTypedSemanticExpressionId TypedSemanticReceiver =
+		typedSemanticBuilder && func->objectType != 0
+		? ctx->typedSemanticExpression
+		: asTypedSemanticExpressionId();
 
 	// Call the accessor
 	MakeFunctionCall(ctx, ctx->property_get, func->objectType, args, node);
+	if( typedSemanticBuilder )
+	{
+		ctx->typedSemanticExpression = typedSemanticBuilder->AddResolvedCall(
+			func,
+			args,
+			ctx->type.dataType,
+			MakeTypedSemanticSpan(script, node),
+			TypedSemanticReceiver);
+	}
 	if( isExplicitHandle )
 		ctx->type.isExplicitHandle = true;
 
@@ -14980,6 +18584,9 @@ void asCCompiler::ProcessPropertyGetAccessor(asCExprContext *ctx, asCScriptNode 
 
 int asCCompiler::CompileExpressionPostOp(asCScriptNode *node, asCExprContext *ctx, bool bIsStatementRoot)
 {
+	const asTypedSemanticExpressionId TypedSemanticOperand =
+		ctx->typedSemanticExpression;
+
 	// Don't allow any postfix operators on expressions that take address of class method
 	if( ctx->IsClassMethod() )
 	{
@@ -15176,6 +18783,18 @@ int asCCompiler::CompileExpressionPostOp(asCScriptNode *node, asCExprContext *ct
 		}
 
 		if( op == ttInc ) ctx->bc.Instr(iInc); else ctx->bc.Instr(iDec);
+		if( typedSemanticBuilder )
+		{
+			ctx->typedSemanticExpression = typedSemanticBuilder->AddMutation(
+				TypedSemanticOperand,
+				asTypedSemanticExpressionId(),
+				GetTypedSemanticTokenText(
+					script,
+					node,
+					static_cast<eTokenType>(op)),
+				true,
+				MakeTypedSemanticSpan(script, node));
+		}
 	}
 	else if( op == ttDot )
 	{
@@ -15379,6 +18998,20 @@ int asCCompiler::CompileExpressionPostOp(asCScriptNode *node, asCExprContext *ct
 					if (!outFunc->traits.GetTrait(asTRAIT_GENERATED_FUNCTION))
 						builder->CheckEditorOnlyProperty(prop, node, script);
 					ctx->noDiscardExpression = true;
+
+					if( typedSemanticBuilder )
+					{
+						asCString ResolvedTarget = inType->name;
+						ResolvedTarget += "::";
+						ResolvedTarget += prop->name;
+						ctx->typedSemanticExpression =
+							typedSemanticBuilder
+								->AddUnsupportedPropertyAccess(
+									TypedSemanticOperand,
+									ResolvedTarget,
+									ctx->type.dataType,
+									MakeTypedSemanticSpan(script, node));
+					}
 				}
 				else
 				{
@@ -15523,7 +19156,23 @@ int asCCompiler::CompileExpressionPostOp(asCScriptNode *node, asCExprContext *ct
 						int r = CompileDefaultAndNamedArgs(node, args, funcs[0], objectType);
 
 						if( r == 0 )
+						{
+							const asTypedSemanticExpressionId TypedSemanticReceiver =
+								typedSemanticBuilder
+									? ctx->typedSemanticExpression
+									: asTypedSemanticExpressionId();
 							MakeFunctionCall(ctx, funcs[0], objectType, args, node, false, 0, ctx->type.stackOffset);
+							if( typedSemanticBuilder )
+							{
+								ctx->typedSemanticExpression =
+									typedSemanticBuilder->AddResolvedCall(
+										builder->GetFunctionDescription(funcs[0]),
+										args,
+										ctx->type.dataType,
+										MakeTypedSemanticSpan(script, node),
+										TypedSemanticReceiver);
+							}
+						}
 						else
 							isOK = false;
 					}
@@ -15641,6 +19290,11 @@ int asCCompiler::CompileExpressionPostOp(asCScriptNode *node, asCExprContext *ct
 				// by first storing the function pointer in a local variable (if it isn't already in one)
 				if( r == asSUCCESS )
 				{
+					const bool IsObjectCall = !ctx->type.dataType.IsFuncdef();
+					const asTypedSemanticExpressionId TypedSemanticReceiver =
+						typedSemanticBuilder && IsObjectCall
+							? ctx->typedSemanticExpression
+							: asTypedSemanticExpressionId();
 					Dereference(ctx, true);
 					if( ctx->type.dataType.IsFuncdef() )
 					{
@@ -15652,6 +19306,16 @@ int asCCompiler::CompileExpressionPostOp(asCScriptNode *node, asCExprContext *ct
 					}
 
 					MakeFunctionCall(ctx, funcs[0], ctx->type.dataType.IsFuncdef() ? 0 : CastToObjectType(ctx->type.dataType.GetTypeInfo()), args, node, false, 0, ctx->type.stackOffset);
+					if( typedSemanticBuilder && IsObjectCall )
+					{
+						ctx->typedSemanticExpression =
+							typedSemanticBuilder->AddResolvedCall(
+								builder->GetFunctionDescription(funcs[0]),
+								args,
+								ctx->type.dataType,
+								MakeTypedSemanticSpan(script, node),
+								TypedSemanticReceiver);
+					}
 				}
 			}
 		}
@@ -17225,6 +20889,16 @@ void asCCompiler::CompileMathOperator(asCScriptNode *node, asCExprContext *lctx,
 		ctx->noDiscardExpression = false;
 		ctx->noDiscardFunction.Clear();
 	}
+
+	if( typedSemanticBuilder )
+	{
+		ctx->typedSemanticExpression = typedSemanticBuilder->AddBinary(
+			lctx->typedSemanticExpression,
+			rctx->typedSemanticExpression,
+			ctx->type.dataType,
+			GetTypedSemanticTokenText(script, node, op),
+			MakeTypedSemanticSpan(script, node));
+	}
 }
 
 void asCCompiler::CompileBitwiseOperator(asCScriptNode *node, asCExprContext *lctx, asCExprContext *rctx, asCExprContext *ctx, eTokenType op)
@@ -17553,6 +21227,16 @@ void asCCompiler::CompileBitwiseOperator(asCScriptNode *node, asCExprContext *lc
 	{
 		ctx->noDiscardFunction.Clear();
 		ctx->noDiscardExpression = false;
+	}
+
+	if( typedSemanticBuilder )
+	{
+		ctx->typedSemanticExpression = typedSemanticBuilder->AddBinary(
+			lctx->typedSemanticExpression,
+			rctx->typedSemanticExpression,
+			ctx->type.dataType,
+			GetTypedSemanticTokenText(script, node, op),
+			MakeTypedSemanticSpan(script, node));
 	}
 }
 
@@ -17934,6 +21618,16 @@ void asCCompiler::CompileComparisonOperator(asCScriptNode *node, asCExprContext 
 			#endif
 		}
 	}
+
+	if( typedSemanticBuilder )
+	{
+		ctx->typedSemanticExpression = typedSemanticBuilder->AddBinary(
+			lctx->typedSemanticExpression,
+			rctx->typedSemanticExpression,
+			ctx->type.dataType,
+			GetTypedSemanticTokenText(script, node, op),
+			MakeTypedSemanticSpan(script, node));
+	}
 }
 
 void asCCompiler::PushVariableOnStack(asCExprContext *ctx, bool asReference)
@@ -18115,6 +21809,28 @@ void asCCompiler::CompileBooleanOperator(asCScriptNode *node, asCExprContext *lc
 			ctx->type.isConstant = true;
 			ctx->type.SetConstantDW(v);
 #endif
+		}
+	}
+
+	if( typedSemanticBuilder )
+	{
+		if( op == ttAnd || op == ttOr )
+		{
+			ctx->typedSemanticExpression =
+				typedSemanticBuilder->AddShortCircuit(
+					lctx->typedSemanticExpression,
+					rctx->typedSemanticExpression,
+					GetTypedSemanticTokenText(script, node, op),
+					MakeTypedSemanticSpan(script, node));
+		}
+		else if( op == ttXor )
+		{
+			ctx->typedSemanticExpression = typedSemanticBuilder->AddBinary(
+				lctx->typedSemanticExpression,
+				rctx->typedSemanticExpression,
+				ctx->type.dataType,
+				GetTypedSemanticTokenText(script, node, op),
+				MakeTypedSemanticSpan(script, node));
 		}
 	}
 }
@@ -19116,6 +22832,10 @@ void asCExprContext::Clear()
 	origCode = nullptr;
 	noDiscardFunction.Clear();
 	noDiscardExpression = false;
+	typedSemanticExpression = asTypedSemanticExpressionId();
+	typedSemanticSourceArgumentOrdinal = -1;
+	typedSemanticArgumentProvenance =
+		asSTypedSemanticArgumentProvenance();
 }
 
 bool asCExprContext::IsClassMethod() const
@@ -19206,6 +22926,11 @@ void asCExprContext::Copy(asCExprContext *other)
 	noDiscardFunction = other->noDiscardFunction;
 	noDiscardExpression = other->noDiscardExpression;
 	origCode = other->origCode;
+	typedSemanticExpression = other->typedSemanticExpression;
+	typedSemanticSourceArgumentOrdinal =
+		other->typedSemanticSourceArgumentOrdinal;
+	typedSemanticArgumentProvenance =
+		other->typedSemanticArgumentProvenance;
 }
 
 void asCExprContext::Merge(asCExprContext *after)

@@ -86,6 +86,20 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptExplicitBindContextTests,
 	"Angelscript.TestModule.Engine.BindingArchitecture.ExplicitContext",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
+	TEST_METHOD(OrdinaryRuntimeEngineDoesNotAllocateGenerationFunctionProvenance)
+	{
+		const FAngelscriptEngineConfig Config;
+		const FAngelscriptEngineDependencies Dependencies =
+			FAngelscriptEngineDependencies::CreateDefault();
+		TUniquePtr<FAngelscriptEngine> Engine =
+			FAngelscriptTestEngine::Create(Config, Dependencies);
+		ASSERT_THAT(IsNotNull(Engine.Get(),
+			TEXT("The ordinary Runtime engine should be created")));
+		ASSERT_THAT(IsNull(
+			Engine->GetBindState()->GenerationFunctionProvenance.Get(),
+			TEXT("Ordinary Runtime engines must not allocate the broad StaticJIT generation provenance table")));
+	}
+
 	TEST_METHOD(ExplicitContextTargetsOnlyTheSelectedEngine)
 	{
 		const FAngelscriptEngineConfig Config;

@@ -74,7 +74,7 @@ namespace
 			return TEXT("<null-type>");
 		}
 
-		return FString::Printf(TEXT("TypeId%d::%s"), Type->GetTypeId(), *CharToString(Type->GetName()));
+		return FString::Printf(TEXT("TypeId%d::%s"), Type->typeId, *CharToString(Type->GetName()));
 	}
 
 	FString FunctionIdentity(const asCScriptFunction* Function)
@@ -166,7 +166,7 @@ namespace
 		const FString Identity = TypeIdentity(Type);
 		Snapshot.AddRow(TEXT("AsTypeInternal"), Identity, TEXT("Name"), CharToString(Type->GetName()), TEXT("String"), Source);
 		Snapshot.AddRow(TEXT("AsTypeInternal"), Identity, TEXT("Namespace"), NameSpaceToString(Type->nameSpace), TEXT("String"), Source);
-		Snapshot.AddRow(TEXT("AsTypeInternal"), Identity, TEXT("TypeId"), LexToString(Type->GetTypeId()), TEXT("Integer"), Source);
+		Snapshot.AddRow(TEXT("AsTypeInternal"), Identity, TEXT("TypeId"), LexToString(Type->typeId), TEXT("Integer"), Source);
 		Snapshot.AddRow(TEXT("AsTypeInternal"), Identity, TEXT("Flags"), LexToString(Type->GetFlags()), TEXT("Integer"), Source);
 		Snapshot.AddRow(TEXT("AsTypeInternal"), Identity, TEXT("Size"), LexToString(Type->GetSize()), TEXT("Integer"), Source);
 		AddPointerRow(Snapshot, TEXT("AsTypeInternal"), Identity, TEXT("Pointer"), Type, Source);

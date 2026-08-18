@@ -348,6 +348,60 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheSemanticDependency
 	}
 };
 
+/** Convert the persisted Cache vocabulary into the storage-neutral Runtime handoff. */
+inline FAngelscriptArtifactSemanticDependency
+ToAngelscriptArtifactSemanticDependency(
+	const FAngelscriptCacheSemanticDependency& Dependency)
+{
+	FAngelscriptArtifactSemanticDependency Result;
+	switch (Dependency.Kind)
+	{
+	case EAngelscriptCacheSemanticDependencyKind::Import:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::Import;
+		break;
+	case EAngelscriptCacheSemanticDependencyKind::Declaration:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::Declaration;
+		break;
+	case EAngelscriptCacheSemanticDependencyKind::Signature:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::Signature;
+		break;
+	case EAngelscriptCacheSemanticDependencyKind::Inheritance:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::Inheritance;
+		break;
+	case EAngelscriptCacheSemanticDependencyKind::ValueLayout:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::ValueLayout;
+		break;
+	case EAngelscriptCacheSemanticDependencyKind::PropertyLayout:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::PropertyLayout;
+		break;
+	case EAngelscriptCacheSemanticDependencyKind::GlobalStorage:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::GlobalStorage;
+		break;
+	case EAngelscriptCacheSemanticDependencyKind::HardValue:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::HardValue;
+		break;
+	case EAngelscriptCacheSemanticDependencyKind::Initializer:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::Initializer;
+		break;
+	case EAngelscriptCacheSemanticDependencyKind::CompileOption:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::CompileOption;
+		break;
+	case EAngelscriptCacheSemanticDependencyKind::EnvironmentAbi:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::EnvironmentAbi;
+		break;
+	case EAngelscriptCacheSemanticDependencyKind::FunctionContent:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::FunctionContent;
+		break;
+	case EAngelscriptCacheSemanticDependencyKind::Invalid:
+	default:
+		Result.Kind = EAngelscriptArtifactSemanticDependencyKind::Invalid;
+		break;
+	}
+	Result.Target = Dependency.Target;
+	Result.ExpectedContentOrValue = Dependency.ExpectedContentOrValue;
+	return Result;
+}
+
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedDataType
 {
 	EAngelscriptCachedDataTypeKind Kind = EAngelscriptCachedDataTypeKind::Invalid;

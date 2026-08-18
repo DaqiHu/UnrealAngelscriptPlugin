@@ -43,6 +43,8 @@ class asIScriptFunction;
 class asIScriptObject;
 class asITypeInfo;
 class asCContext;
+struct asSJITFunctionBinding;
+enum class EAngelscriptJITExecutionCapability : uint32;
 class FAngelscriptBindDatabase;
 struct FAngelscriptTypeDatabase;
 struct FAngelscriptBindState;
@@ -137,6 +139,9 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngineConfig
 	UPROPERTY()
 	EAngelscriptEnginePurpose Purpose = EAngelscriptEnginePurpose::Runtime;
 
+	/** Frozen before Engine creation; used only by source-owning JIT generation. */
+	bool bCaptureTypedSemanticIR = false;
+
 	EAngelscriptJITExecutionMode JITExecutionMode =
 		EAngelscriptJITExecutionMode::Auto;
 	FAngelscriptRuntimeJITBackendId RuntimeJITBackend;
@@ -221,6 +226,10 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngineConfig
 	// Test-only fault injection used to prove binding failures cannot publish a
 	// partially initialized engine. Production configuration has no equivalent.
 	bool bInjectDirectBindFailureForTesting = false;
+	// Corrupts one generation-owned, otherwise verified HIR root immediately
+	// before snapshot verification. This proves the real verifier failure path
+	// without allowing invalid source HIR to become a supported compiler state.
+	bool bInjectInvalidTypedSemanticIRForTesting = false;
 #endif
 	// Captured once from FApp::IsUnattended() for startup-failure policy. Tests
 	// set this explicitly so the policy can be verified without process globals.
@@ -330,6 +339,15 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptPluginScriptRoot
 	FString ScriptRoot;
 };
 
+#if WITH_DEV_AUTOMATION_TESTS
+/** Read-only observation of process package ownership used by containment tests. */
+struct ANGELSCRIPTRUNTIME_API FAngelscriptProcessPackageReferenceCounts
+{
+	int32 AngelscriptPackage = 0;
+	int32 AngelscriptAssetsPackage = 0;
+};
+#endif
+
 struct ANGELSCRIPTRUNTIME_API FAngelscriptEngineDependencies
 {
 	TFunction<FString()> GetProjectDir;
@@ -339,6 +357,10 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngineDependencies
 	TFunction<TArray<FString>()> GetEnabledPluginScriptRoots;
 	TFunction<TArray<FAngelscriptPluginScriptRoot>()> GetEnabledPluginScriptRootDescriptors;
 	TSharedPtr<IAngelscriptSourceProvider> SourceProvider;
+	// Owns the process-level side effect for a deterministic startup failure.
+	// Tests may replace it to observe the request without terminating their host.
+	TFunction<void(const FAngelscriptStartupCompileFailureExitRequest&)>
+		HandleStartupCompileFailureExit;
 
 #if WITH_ANGELSCRIPT_UNITTESTS
 	// Per-Engine, caller-owned exact-restore fault seam. Production dependencies
@@ -892,7 +914,9 @@ private:
 		TConstArrayView<FAngelscriptFunctionArtifactIdentity>
 			ValidatedArtifactIdentities = {},
 		TConstArrayView<asIScriptModule*> RebuiltModules = {},
-		TConstArrayView<asIScriptModule*> ArtifactInvalidatedModules = {});
+		TConstArrayView<asIScriptModule*> ArtifactInvalidatedModules = {},
+		TConstArrayView<FAngelscriptFunctionArtifactReferenceSet>
+			ValidatedArtifactReferenceSets = {});
 
 #if WITH_EDITOR
 	void CheckUsageRestrictions(const TArray<TSharedRef<struct FAngelscriptModuleDesc>>& Modules);
@@ -1054,6 +1078,10 @@ public:
 	static void HandleExceptionFromJIT(const ANSICHAR* ExceptionString);
 	asCContext* CreateContext();
 	void UpdateLineCallbackState();
+	EAngelscriptJITExecutionCapability CaptureCurrentJITExecutionRequirements();
+	static bool AllowsJITBindingExecution(
+		asIScriptEngine* ScriptEngine,
+		const asSJITFunctionBinding& Binding);
 
 	FAngelscriptTypeDatabase* GetTypeDatabase() const;
 	FAngelscriptBindState* GetBindState() const;
@@ -1072,6 +1100,24 @@ public:
 	int32 GetToStringEntryCountForTesting() const;
 	FAngelscriptBindDatabase& GetBindDatabaseForTesting() const;
 	static int32 GetLocalPooledContextCountForTesting(asIScriptEngine* ScriptEngine);
+	static FAngelscriptProcessPackageReferenceCounts
+	GetProcessPackageReferenceCountsForTesting();
+	bool HasDebugServerForTesting() const
+	{
+#if WITH_AS_DEBUGSERVER
+		return DebugServer != nullptr;
+#else
+		return false;
+#endif
+	}
+	bool HasAttachedExtensionsForTesting() const
+	{
+		return bExtensionsAttached;
+	}
+	bool HasHotReloadThreadStartedForTesting() const
+	{
+		return bHotReloadThreadStarted;
+	}
 	void SetUseEditorScriptsForTesting(bool bEnabled);
 	void SetAutomaticImportMethodForTesting(bool bEnabled);
 	void SetBlueprintLibraryNamespaceSettingsForTesting(bool bUseScriptName, TArray<FString> PrefixesToStrip, TArray<FString> SuffixesToStrip);
@@ -1116,6 +1162,11 @@ public:
 	{
 		return StaticJITGenerationSnapshot;
 	}
+
+	uint32 GetStaticJITGenerationCompilePassCount() const
+	{
+		return StaticJITGenerationCompilePassCount;
+	}
 #endif
 
 	// Runtime-owned source authority used by Cache V2 startup discovery and
@@ -1141,6 +1192,7 @@ private:
 #if AS_CAN_GENERATE_JIT
 	TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
 		ESPMode::ThreadSafe> StaticJITGenerationSnapshot;
+	uint32 StaticJITGenerationCompilePassCount = 0;
 #endif
 	bool bCacheV2ShutdownFlushAttempted = false;
 
@@ -1812,6 +1864,60 @@ struct FAngelscriptDelegateDesc
 	int32 LineNumber = 1;
 };
 
+/** Exact generated function pair for one literal-asset declaration. */
+struct FAngelscriptLiteralAssetFunctionDesc
+{
+	FString AssetName;
+	FString DeclaredTypeName;
+	FString GetterFunctionName;
+	FString InitializerFunctionName;
+	int32 PostInitFunctionIndex = INDEX_NONE;
+};
+
+/** Origin class for preprocessor-generated processed source. */
+enum class EAngelscriptGeneratedSourceKind : uint8
+{
+	None = 0,
+	LiteralAsset,
+	SubsystemAccessor,
+	ClassHelper,
+	StaticClassHelper,
+	DelegateHelper,
+	RangeBasedFor,
+};
+
+/**
+ * Stable source anchor. Offsets and lengths are UTF-8 bytes so the maintained
+ * compiler and Unreal diagnostics observe the same coordinate system.
+ */
+struct FAngelscriptSourceProvenanceAnchor
+{
+	FString Section;
+	uint32 SourceOffset = 0;
+	uint32 SourceLength = 0;
+	uint32 Row = 0;
+	uint32 Column = 0;
+};
+
+/**
+ * One non-overlapping range in FCodeSection::Code. Processed range positions
+ * remain TCHAR code units until the final UTF-8 script section is installed;
+ * optional origins are already frozen as UTF-8 coordinates.
+ */
+struct FAngelscriptProcessedSourceProvenanceRange
+{
+	int32 ProcessedCodeUnitOffset = 0;
+	int32 ProcessedCodeUnitLength = 0;
+	bool bHasAuthoredOrigin = false;
+	FAngelscriptSourceProvenanceAnchor AuthoredOrigin;
+	bool bHasGeneratedOrigin = false;
+	EAngelscriptGeneratedSourceKind GeneratedKind =
+		EAngelscriptGeneratedSourceKind::None;
+	FString GeneratorName;
+	bool bHasGeneratedAuthoredAnchor = false;
+	FAngelscriptSourceProvenanceAnchor GeneratedAuthoredAnchor;
+};
+
 /**
  * Description of a script module during preprocessing.
  */
@@ -1827,7 +1933,11 @@ struct FAngelscriptModuleDesc
 		FString RelativeFilename;
 		FString AbsoluteFilename;
 		FString Code;
-		int64 CodeHash;
+		int64 CodeHash = 0;
+		/** Exact raw TCHAR input consumed by this compile, before preprocessing. */
+		FAngelscriptHash256 SourceTextHash;
+		/** Honest optional origins for ranges within the processed code. */
+		TArray<FAngelscriptProcessedSourceProvenanceRange> SourceProvenance;
 	};
 
 	TArray<FCodeSection> Code;
@@ -1851,6 +1961,9 @@ struct FAngelscriptModuleDesc
 
 	/* Names of functions in this module that should be executed after CDOs for classes are created. */
 	TArray<FString> PostInitFunctions;
+
+	/* Exact literal-asset Getter/Initializer pairs in PostInitFunctions order. */
+	TArray<FAngelscriptLiteralAssetFunctionDesc> LiteralAssetFunctions;
 
 #if WITH_EDITOR
 	/* Usage restrictions specified in this file with preprocessor macros. */

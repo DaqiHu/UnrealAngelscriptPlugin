@@ -30,7 +30,6 @@ struct FAngelscriptLoggingBinds
 
 	static void Throw(const FString& Text);
 	static void ThrowIf(bool bCondition, const FString& Text);
-	static void Print(const FString& Text, float Duration, FLinearColor Color);
 	static void PrintFromObject(const UObject* WorldContextObject, const FString& Text, float Duration, FLinearColor Color);
 	static void PrintToScreen(const FString& Text, float Duration, FLinearColor Color);
 	static void PrintDirectToScreen(const FString& Text, float Duration, FLinearColor Color);

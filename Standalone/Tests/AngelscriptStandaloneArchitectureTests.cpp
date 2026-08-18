@@ -131,6 +131,32 @@ namespace
 		return false;
 	}
 
+	bool HasTypedSnapshotBackendContamination(std::string_view Text)
+	{
+		static constexpr std::string_view Patterns[] = {
+			"StaticJIT",
+			"TypedASTJIT",
+			"BytecodeJIT",
+			"Provider",
+			"UObject",
+			"FAngelscriptEngine",
+			"asCreateScriptEngine",
+			"GetModule(",
+			"AddScriptSection",
+			"CreateContext(",
+			"FFileHelper",
+			"IFileManager",
+		};
+		for (const std::string_view Pattern : Patterns)
+		{
+			if (Text.find(Pattern) != std::string_view::npos)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	std::string RemoveCommentOnlyLines(std::string_view Text)
 	{
 		std::string Result;
@@ -171,6 +197,12 @@ int main()
 		PluginRoot / "Source/AngelscriptRuntime/Language";
 	const fs::path UEPreprocessor =
 		PluginRoot / "Source/AngelscriptRuntime/Preprocessor/AngelscriptPreprocessor.cpp";
+	const fs::path ParserHeader = ForkRoot / "as_parser.h";
+	const fs::path ParserSource = ForkRoot / "as_parser.cpp";
+	const fs::path ScriptFunctionHeader = ForkRoot / "as_scriptfunction.h";
+	const fs::path ScriptFunctionSource = ForkRoot / "as_scriptfunction.cpp";
+	const fs::path RestoreSource = ForkRoot / "as_restore.cpp";
+	const fs::path TypedSemanticHeader = ForkRoot / "as_typed_semantic_ir.h";
 	const fs::path BindingRoot =
 		PluginRoot / "Source/AngelscriptRuntime/Binds";
 	const fs::path ClassGeneratorRoot =
@@ -191,6 +223,9 @@ int main()
 	bPassed &= Require(
 		HasForkPortabilityContamination("#include \"as_host_services.h\"\n"),
 		"fork detector did not reject the obsolete host-service seam");
+	bPassed &= Require(
+		HasTypedSnapshotBackendContamination("Provider->GenerateStaticJIT();\n"),
+		"typed snapshot detector did not reject backend/provider behavior");
 	bPassed &= Require(
 		!HasForkPortabilityContamination("TArray<int> Values;\nFMemory::Malloc(4);\n"),
 		"fork detector rejected the preserved UE-spelled boundary");
@@ -216,6 +251,8 @@ int main()
 		"as_scriptcode.cpp",
 		"as_scriptengine.cpp",
 		"as_scriptfunction.cpp",
+		"as_typed_semantic_ir.cpp",
+		"as_typed_semantic_ir.h",
 		"as_scriptnode.cpp",
 		"as_scriptobject.cpp",
 		"as_string.cpp",
@@ -236,6 +273,117 @@ int main()
 	bPassed &= Require(
 		ReadText(PublicHeader).find("#include \"FunctionCallers.h\"") != std::string::npos,
 		"maintained public header no longer preserves FunctionCallers inclusion");
+	bPassed &= Require(
+		ReadText(PublicHeader).find("TypedSemantic") == std::string::npos
+			&& ReadText(PublicHeader).find("typedSemantic") == std::string::npos,
+		"fork-private typed semantic HIR leaked into the public angelscript.h ABI");
+
+	const std::string ParserHeaderText =
+		RemoveCommentOnlyLines(ReadText(ParserHeader));
+	const std::string ParserSourceText =
+		RemoveCommentOnlyLines(ReadText(ParserSource));
+	bPassed &= Require(
+		ParserHeaderText.find("FMemStackBase MemStack;") != std::string::npos
+			&& ParserSourceText.find(
+				"MemStack.Alloc(sizeof(asCScriptNode), alignof(asCScriptNode))")
+				!= std::string::npos,
+		"asCParser no longer owns raw syntax nodes through its local FMemStackBase");
+
+	const std::string ScriptFunctionHeaderText =
+		RemoveCommentOnlyLines(ReadText(ScriptFunctionHeader));
+	const std::size_t ScriptDataBegin =
+		ScriptFunctionHeaderText.find("struct ScriptFunctionData");
+	const std::size_t ScriptDataEnd = ScriptDataBegin == std::string::npos
+		? std::string::npos
+		: ScriptFunctionHeaderText.find(
+			"ScriptFunctionData          *scriptData;",
+			ScriptDataBegin);
+	bPassed &= Require(
+		ScriptDataBegin != std::string::npos
+			&& ScriptDataEnd != std::string::npos,
+		"asCScriptFunction::ScriptFunctionData source boundary is missing");
+	if (ScriptDataBegin != std::string::npos
+		&& ScriptDataEnd != std::string::npos)
+	{
+		const std::string_view ScriptDataView(
+			ScriptFunctionHeaderText.data() + ScriptDataBegin,
+			ScriptDataEnd - ScriptDataBegin);
+		bPassed &= Require(
+			ScriptDataView.find("asCScriptNode") == std::string_view::npos,
+			"ScriptFunctionData retained a raw parser syntax node pointer");
+	}
+	bPassed &= Require(
+		RemoveCommentOnlyLines(ReadText(TypedSemanticHeader)).find("asCScriptNode")
+			== std::string::npos,
+		"function-owned typed HIR retained a raw parser syntax node pointer");
+
+	const std::string ScriptFunctionSourceText =
+		RemoveCommentOnlyLines(ReadText(ScriptFunctionSource));
+	const std::size_t DestroyInternalBegin = ScriptFunctionSourceText.find(
+		"void asCScriptFunction::DestroyInternal()");
+	const std::size_t DestroyInternalEnd = DestroyInternalBegin
+		== std::string::npos
+		? std::string::npos
+		: ScriptFunctionSourceText.find(
+			"int asCScriptFunction::GetId()", DestroyInternalBegin);
+	bPassed &= Require(
+		DestroyInternalBegin != std::string::npos
+			&& DestroyInternalEnd != std::string::npos,
+		"asCScriptFunction::DestroyInternal source boundary is missing");
+	if (DestroyInternalBegin != std::string::npos
+		&& DestroyInternalEnd != std::string::npos)
+	{
+		const std::string_view DestroyInternal(
+			ScriptFunctionSourceText.data() + DestroyInternalBegin,
+			DestroyInternalEnd - DestroyInternalBegin);
+		const std::size_t DiscardHIR = DestroyInternal.find(
+			"DiscardTypedSemanticFunction();");
+		const std::size_t ReleaseReferences = DestroyInternal.find(
+			"ReleaseReferences();");
+		const std::size_t ReleaseObjectType = DestroyInternal.find(
+			"objectType->ReleaseInternal();");
+		bPassed &= Require(
+			DiscardHIR != std::string_view::npos
+				&& ReleaseReferences != std::string_view::npos
+				&& ReleaseObjectType != std::string_view::npos
+				&& DiscardHIR < ReleaseReferences
+				&& DiscardHIR < ReleaseObjectType,
+			"function-owned typed HIR must be destroyed before function/type references are released");
+	}
+
+	const std::string RestoreSourceText =
+		RemoveCommentOnlyLines(ReadText(RestoreSource));
+	const std::size_t CommitBegin = RestoreSourceText.find(
+		"int asCReader::CommitFunctionArtifactToExisting(");
+	const std::size_t CommitEnd = CommitBegin == std::string::npos
+		? std::string::npos
+		: RestoreSourceText.find("RestoreGlobalFunctionArtifact", CommitBegin);
+	bPassed &= Require(
+		CommitBegin != std::string::npos && CommitEnd != std::string::npos,
+		"Cache donor commit source boundary is missing");
+	if (CommitBegin != std::string::npos && CommitEnd != std::string::npos)
+	{
+		const std::string_view Commit(
+			RestoreSourceText.data() + CommitBegin,
+			CommitEnd - CommitBegin);
+		const std::size_t DiscardDonorHIR = Commit.find(
+			"artifact->DiscardTypedSemanticFunction();");
+		const std::size_t DiscardTargetHIR = Commit.find(
+			"target->DiscardTypedSemanticFunction();");
+		const std::size_t SwapScriptData = Commit.find(
+			"target->scriptData = artifact->scriptData;");
+		const std::size_t DestroyDonor = Commit.find(
+			"artifact->DestroyHalfCreated();");
+		bPassed &= Require(
+			DiscardDonorHIR != std::string_view::npos
+				&& DiscardTargetHIR != std::string_view::npos
+				&& SwapScriptData != std::string_view::npos
+				&& DestroyDonor != std::string_view::npos
+				&& DiscardDonorHIR < SwapScriptData
+				&& DiscardTargetHIR < SwapScriptData
+				&& SwapScriptData < DestroyDonor,
+			"Cache donor commit must explicitly discard both HIR owners before swapping private script data");
+	}
 
 	for (const std::string& SourceName : MaintainedSources)
 	{
@@ -247,6 +395,18 @@ int main()
 				!HasForkPortabilityContamination(RemoveCommentOnlyLines(ReadText(SourcePath))),
 				"maintained source contains standalone portability contamination: " + SourcePath.string());
 		}
+	}
+
+	for (const fs::path& SnapshotSource : {
+		ForkRoot / "as_typed_semantic_ir.h",
+		ForkRoot / "as_typed_semantic_ir.cpp",
+	})
+	{
+		bPassed &= Require(
+			!HasTypedSnapshotBackendContamination(
+				RemoveCommentOnlyLines(ReadText(SnapshotSource))),
+			"fork-private HIR snapshot helper gained backend, UE, file, or runtime execution behavior: "
+				+ SnapshotSource.string());
 	}
 
 	for (const fs::path& ObsoleteForkFile : {

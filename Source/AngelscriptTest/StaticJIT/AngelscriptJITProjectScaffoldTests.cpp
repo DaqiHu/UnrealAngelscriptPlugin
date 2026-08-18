@@ -184,6 +184,9 @@ public:
 			*FPaths::Combine(Result.ModuleDirectory,
 				TEXT("AngelscriptJIT.Build.cs")))));
 		ASSERT_THAT(IsTrue(BuildRules.Contains(
+			TEXT("PublicDependencyModuleNames")),
+			TEXT("Generated direct-call includes must be backed by public module dependencies")));
+		ASSERT_THAT(IsFalse(BuildRules.Contains(
 			TEXT("PrivateDependencyModuleNames"))));
 		ASSERT_THAT(IsTrue(BuildRules.Contains(TEXT("\"AngelscriptRuntime\""))));
 		ASSERT_THAT(IsTrue(BuildRules.Contains(

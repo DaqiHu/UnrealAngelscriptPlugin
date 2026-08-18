@@ -2,6 +2,7 @@
 #include "AngelscriptStaticJIT.h"
 #include "Artifacts/AngelscriptFunctionRoute.h"
 #include "ClassGenerator/ASClass.h"
+#include "StaticJIT/AngelscriptJITBindingContext.h"
 #include "StaticJIT/AngelscriptJITExecutionContext.h"
 #include "UObject/Class.h"
 
@@ -13,12 +14,342 @@
 //#include "as_generic.h"
 //#include "as_texts.h"
 #include "source/as_context.h"
+#include "source/as_objecttype.h"
 #include "source/as_scriptengine.h"
 #include "source/as_scriptobject.h"
+#include "source/as_thread.h"
 #include "source/as_callfunc.h"
 #include "source/as_generic.h"
 #include "source/as_texts.h"
 #include "EndAngelscriptHeaders.h"
+
+namespace
+{
+	void CaptureFirstJITFailureStack(FScriptExecution& Execution)
+	{
+#if AS_JIT_DEBUG_CALLSTACKS
+		asSJITFailureRecord* const FailureRecord = Execution.FailureRecord;
+		if (FailureRecord == nullptr
+			|| !FailureRecord->bHasFailure
+			|| FailureRecord->CapturedStackFrames.GetLength() != 0)
+		{
+			return;
+		}
+
+		auto AppendExecution = [FailureRecord](FScriptExecution* ActiveExecution)
+		{
+			if (ActiveExecution == nullptr)
+			{
+				return;
+			}
+
+			const FScopeJITDebugCallstack* DebugFrame =
+				static_cast<const FScopeJITDebugCallstack*>(
+					ActiveExecution->debugCallStack);
+			while (DebugFrame != nullptr)
+			{
+				asCString Frame;
+				Frame.Format("  %s | Line %d",
+					DebugFrame->FunctionName != nullptr
+						? DebugFrame->FunctionName : "",
+					DebugFrame->LineNumber);
+				FailureRecord->CapturedStackFrames.PushLast(Frame);
+				if (FailureRecord->CapturedStackModule.GetLength() == 0
+					&& DebugFrame->Filename != nullptr)
+				{
+					FailureRecord->CapturedStackModule = DebugFrame->Filename;
+				}
+				DebugFrame = DebugFrame->PrevFrame;
+			}
+		};
+
+		auto AppendContext = [FailureRecord](asCContext* Context)
+		{
+			if (Context == nullptr)
+			{
+				return;
+			}
+
+			const asUINT FrameCount = FMath::Min(
+				Context->GetCallstackSize(), asUINT(64));
+			for (asUINT FrameIndex = 0; FrameIndex < FrameCount; ++FrameIndex)
+			{
+				asIScriptFunction* const ScriptFunction =
+					Context->GetFunction(FrameIndex);
+				if (ScriptFunction == nullptr)
+				{
+					continue;
+				}
+
+				int Column = 0;
+				const int Line = Context->GetLineNumber(
+					FrameIndex, &Column, nullptr);
+				asCString Frame;
+				Frame.Format("  %s | Line %d | Col %d",
+					ScriptFunction->GetDeclaration(
+						true, false, false, true),
+					Line,
+					Column);
+				FailureRecord->CapturedStackFrames.PushLast(Frame);
+				if (FailureRecord->CapturedStackModule.GetLength() == 0)
+				{
+					FailureRecord->CapturedStackModule =
+						ScriptFunction->GetModuleName();
+				}
+			}
+		};
+
+		if (Execution.tld != nullptr
+			&& Execution.tld->activeActivation != nullptr)
+		{
+			for (FScriptActivation* Activation =
+					Execution.tld->activeActivation;
+				Activation != nullptr;
+				Activation = Activation->Previous)
+			{
+				if (Activation->Execution != nullptr)
+				{
+					AppendExecution(Activation->Execution);
+				}
+				else
+				{
+					AppendContext(Activation->Context);
+				}
+			}
+		}
+		else
+		{
+			asCContext* PreviousContext = nullptr;
+			for (FScriptExecution* ActiveExecution = &Execution;
+				ActiveExecution != nullptr;
+				ActiveExecution = ActiveExecution->prevExecution)
+			{
+				AppendExecution(ActiveExecution);
+				PreviousContext = ActiveExecution->prevContext;
+			}
+			AppendContext(PreviousContext);
+		}
+#else
+		static_cast<void>(Execution);
+#endif
+	}
+
+	bool TryResolveStableSectionName(
+		FAngelscriptEngine& RuntimeEngine,
+		asIScriptFunction* Function,
+		const ANSICHAR* SectionName,
+		FString& OutSectionName)
+	{
+		OutSectionName.Reset();
+		if (Function == nullptr || Function->GetModule() == nullptr
+			|| SectionName == nullptr || SectionName[0] == '\0')
+		{
+			return false;
+		}
+
+		const TSharedPtr<FAngelscriptModuleDesc> Module =
+			RuntimeEngine.GetModule(Function->GetModule());
+		if (!Module.IsValid())
+		{
+			return false;
+		}
+
+		auto TryMatchSection = [&Module, &OutSectionName](
+			const FStringView SourceSection)
+		{
+			for (const FAngelscriptModuleDesc::FCodeSection& CodeSection
+				: Module->Code)
+			{
+				if (SourceSection.Equals(CodeSection.AbsoluteFilename,
+						ESearchCase::CaseSensitive)
+					|| SourceSection.Equals(CodeSection.VirtualPath,
+						ESearchCase::CaseSensitive)
+					|| SourceSection.Equals(CodeSection.RelativeFilename,
+						ESearchCase::CaseSensitive)
+					|| (!CodeSection.AbsoluteFilename.IsEmpty()
+						&& SourceSection.Equals(CodeSection.AbsoluteFilename,
+							ESearchCase::IgnoreCase)))
+				{
+					OutSectionName = CodeSection.VirtualPath;
+					return !OutSectionName.IsEmpty();
+				}
+			}
+			return false;
+		};
+
+		if (TryMatchSection(FStringView(ANSI_TO_TCHAR(SectionName))))
+		{
+			return true;
+		}
+
+		const ANSICHAR* const FunctionSectionName =
+			Function->GetScriptSectionName();
+		return FunctionSectionName != nullptr
+			&& FunctionSectionName[0] != '\0'
+			&& TryMatchSection(FStringView(
+				ANSI_TO_TCHAR(FunctionSectionName)));
+	}
+
+	bool RecordJITException(
+		FScriptExecution& Execution,
+		const ANSICHAR* Message,
+		const ANSICHAR* RouteOrigin,
+		asIScriptFunction* FunctionOverride = nullptr,
+		const ANSICHAR* SectionOverride = nullptr,
+		const int32 LineOverride = 0)
+	{
+		asIScriptFunction* const Function = FunctionOverride != nullptr
+			? FunctionOverride
+			: (Execution.tld != nullptr
+				&& Execution.tld->activeFunction != nullptr
+					? Execution.tld->activeFunction
+					: Execution.jitFunction);
+		FString StableIdentity;
+		FAngelscriptEngine* const RuntimeEngine =
+			FAngelscriptEngine::TryGetByScriptEngine(Execution.jitEngine);
+		if (RuntimeEngine != nullptr)
+		{
+			FAngelscriptStableFunctionKey FunctionKey;
+			if (RuntimeEngine->TryResolveStableFunctionKey(
+				Function, FunctionKey))
+			{
+				StableIdentity = FunctionKey.Hash.ToHexString();
+			}
+		}
+
+		FString BackendOrigin(TEXT("static-jit"));
+		if (const FAngelscriptJITBindingContext* const BindingContext =
+			FAngelscriptJITBindingContext::FromBindingUserData(
+				Execution.jitBindingUserData))
+		{
+			const TSharedPtr<const FAngelscriptJITProviderCatalog,
+				ESPMode::ThreadSafe>& Provider = BindingContext->GetProvider();
+			if (Provider.IsValid() && !Provider->ProviderName.IsEmpty())
+			{
+				BackendOrigin = Provider->ProviderName;
+			}
+		}
+
+		int32 Line = LineOverride;
+		int32 Column = 0;
+		const char* SectionName = SectionOverride;
+		if (SectionName == nullptr && Execution.prevContext != nullptr)
+		{
+			const int32 ContextLine = Execution.prevContext->GetLineNumber(
+				0, &Column, &SectionName);
+			if (Line <= 0 && ContextLine > 0)
+			{
+				Line = ContextLine;
+			}
+		}
+#if AS_JIT_DEBUG_CALLSTACKS
+		if (const FScopeJITDebugCallstack* const DebugFrame =
+			static_cast<const FScopeJITDebugCallstack*>(
+				Execution.debugCallStack))
+		{
+			Line = DebugFrame->LineNumber;
+			Column = DebugFrame->ColumnNumber;
+			if (DebugFrame->Filename != nullptr
+				&& DebugFrame->Filename[0] != '\0')
+			{
+				SectionName = DebugFrame->Filename;
+			}
+		}
+#endif
+
+		FString StableSectionName;
+		if (RuntimeEngine != nullptr)
+		{
+			TryResolveStableSectionName(
+				*RuntimeEngine, Function, SectionName, StableSectionName);
+		}
+
+		FTCHARToUTF8 StableIdentityUtf8(*StableIdentity);
+		FTCHARToUTF8 StableSectionNameUtf8(*StableSectionName);
+		FTCHARToUTF8 BackendOriginUtf8(*BackendOrigin);
+		// A context-owned entry publishes through that context so its configured
+		// exception callback observes the same one-shot event as VM execution.
+		// Context-free raw/parameter entries have no later publication point and
+		// therefore report the primary failure here.
+		const bool bReportImmediately =
+			!Execution.HasContextExceptionPublisher();
+		if (!Execution.TryRecordException(
+			Message,
+			Function,
+			StableIdentityUtf8.Get(),
+			!StableSectionName.IsEmpty()
+				? StableSectionNameUtf8.Get() : SectionName,
+			Line,
+			Column,
+			RouteOrigin,
+			BackendOriginUtf8.Get(),
+			bReportImmediately))
+		{
+			return false;
+		}
+		CaptureFirstJITFailureStack(Execution);
+
+		if (bReportImmediately)
+		{
+			FAngelscriptEngine::HandleExceptionFromJIT(Message);
+		}
+		return true;
+	}
+}
+
+FScopeTypedASTJITExecutionFrame::FScopeTypedASTJITExecutionFrame(
+	FScriptExecution& InExecution,
+	asIScriptFunction* InFunction,
+	const ANSICHAR* InFilename,
+	const ANSICHAR* InFunctionName,
+	const int32 InLineNumber,
+	void* InThisObject,
+	const bool bPublishSourcePosition)
+	: Execution(InExecution)
+	, Function(InFunction)
+#if AS_JIT_DEBUG_CALLSTACKS
+	, DebugFrame(
+		InExecution,
+		InFilename,
+		InFunctionName,
+		InLineNumber,
+		InThisObject,
+		bPublishSourcePosition)
+#endif
+{
+	if (Execution.tld != nullptr)
+	{
+		PreviousActiveFunction = Execution.tld->activeFunction;
+		if (Function != nullptr)
+		{
+			Execution.tld->activeFunction = Function;
+		}
+	}
+
+	bActive = Execution.TryEnterNativeJITFrame();
+	if (!bActive)
+	{
+		RecordJITException(
+			Execution,
+			"Stack overflow: potential infinite recursion detected?",
+			"typed-ast-recursion-budget",
+			Function,
+			InFilename,
+			InLineNumber);
+	}
+}
+
+FScopeTypedASTJITExecutionFrame::~FScopeTypedASTJITExecutionFrame()
+{
+	if (bActive)
+	{
+		Execution.LeaveNativeJITFrame();
+	}
+	if (Execution.tld != nullptr)
+	{
+		Execution.tld->activeFunction = PreviousActiveFunction;
+	}
+}
 
 FStaticJITCurrentFunctionCall::FStaticJITCurrentFunctionCall(
 	FScriptExecution& Execution,
@@ -121,6 +452,7 @@ asCScriptFunction* FAngelscriptJITGeneratedReferenceAccess::GetScriptFunction(
 		GetGeneratedReferenceSlot(Execution, SlotIndex);
 	if (Slot == nullptr
 		|| (Slot->Kind != EAngelscriptArtifactReferenceKind::ScriptFunction
+			&& Slot->Kind != EAngelscriptArtifactReferenceKind::ScriptImport
 			&& Slot->Kind
 				!= EAngelscriptArtifactReferenceKind::EnvironmentSymbol))
 	{
@@ -189,6 +521,24 @@ void* FAngelscriptJITGeneratedReferenceAccess::GetGlobalStorage(
 	return const_cast<void*>(Slot->Value);
 }
 
+FScopeStaticJITNestedExceptionAdoption::
+	FScopeStaticJITNestedExceptionAdoption(asIScriptContext& InContext)
+	: Context(static_cast<asCContext&>(InContext))
+	, bPreviousExceptionCallback(Context.m_exceptionCallback)
+	, PreviousExceptionCallbackFunction(Context.m_exceptionCallbackFunc)
+	, PreviousExceptionCallbackObject(Context.m_exceptionCallbackObj)
+{
+	Context.m_exceptionCallback = false;
+}
+
+FScopeStaticJITNestedExceptionAdoption::
+	~FScopeStaticJITNestedExceptionAdoption()
+{
+	Context.m_exceptionCallback = bPreviousExceptionCallback;
+	Context.m_exceptionCallbackFunc = PreviousExceptionCallbackFunction;
+	Context.m_exceptionCallbackObj = PreviousExceptionCallbackObject;
+}
+
 uint32 FAngelscriptJITGeneratedReferenceAccess::GetPropertyOffset(
 	const FScriptExecution& Execution,
 	const uint32 SlotIndex)
@@ -206,64 +556,120 @@ uint32 FAngelscriptJITGeneratedReferenceAccess::GetPropertyOffset(
 		? static_cast<uint32>(Property->byteOffset) : 0;
 }
 
+void FStaticJITFunction::AdoptContextException(
+	FScriptExecution& Execution,
+	asIScriptContext& Context)
+{
+	const bool bAdopted = Execution.AdoptException(Context);
+	if (Execution.FailureRecord == nullptr
+		|| !Execution.FailureRecord->bHasFailure)
+	{
+		return;
+	}
+
+	if (bAdopted)
+	{
+		asIScriptFunction* const Function = Context.GetExceptionFunction();
+		FAngelscriptEngine* const RuntimeEngine =
+			FAngelscriptEngine::TryGetByScriptEngine(Execution.jitEngine);
+		if (RuntimeEngine != nullptr)
+		{
+			FAngelscriptStableFunctionKey FunctionKey;
+			if (RuntimeEngine->TryResolveStableFunctionKey(Function, FunctionKey))
+			{
+				FTCHARToUTF8 StableIdentity(*FunctionKey.Hash.ToHexString());
+				Execution.FailureRecord->StableFunctionIdentity =
+					StableIdentity.Get();
+			}
+
+			FString StableSectionName;
+			if (TryResolveStableSectionName(
+				*RuntimeEngine,
+				Function,
+				Execution.FailureRecord->SectionName.AddressOf(),
+				StableSectionName))
+			{
+				FTCHARToUTF8 StableSectionNameUtf8(*StableSectionName);
+				Execution.FailureRecord->SectionName =
+					StableSectionNameUtf8.Get();
+			}
+		}
+	}
+
+	// A public caller publishes the shared first failure through its own
+	// configured callback.  Context-free Raw/Parms/bridge calls have no later
+	// publication point, including when a nested JIT entry populated the record
+	// before this adoption attempt, so report that still-unreported failure here.
+	if (!Execution.HasContextExceptionPublisher()
+		&& !Execution.FailureRecord->bReported)
+	{
+		Execution.FailureRecord->bReported = true;
+		FAngelscriptEngine::HandleExceptionFromJIT(
+			Execution.FailureRecord->Message.AddressOf());
+	}
+}
+
+void FStaticJITFunction::SetExternalException(
+	FScriptExecution& Execution,
+	const ANSICHAR* Message)
+{
+	RecordJITException(Execution, Message, "generated-native-call");
+}
+
 void FStaticJITFunction::SetException(FScriptExecution& Execution, EJITException Exception)
 {
-	Execution.bExceptionThrown = true;
-
 	if (Exception == EJITException::NullPointer)
-		FAngelscriptEngine::HandleExceptionFromJIT(TXT_NULL_POINTER_ACCESS);
+		SetExternalException(Execution, TXT_NULL_POINTER_ACCESS);
 	else if (Exception == EJITException::Div0)
-		FAngelscriptEngine::HandleExceptionFromJIT(TXT_DIVIDE_BY_ZERO);
+		SetExternalException(Execution, TXT_DIVIDE_BY_ZERO);
 	else if (Exception == EJITException::Overflow)
-		FAngelscriptEngine::HandleExceptionFromJIT(TXT_DIVIDE_OVERFLOW);
+		SetExternalException(Execution, TXT_DIVIDE_OVERFLOW);
 	else if (Exception == EJITException::UnboundFunction)
-		FAngelscriptEngine::HandleExceptionFromJIT(TXT_UNBOUND_FUNCTION);
+		SetExternalException(Execution, TXT_UNBOUND_FUNCTION);
 	else if (Exception == EJITException::OutOfBounds)
-		FAngelscriptEngine::HandleExceptionFromJIT("Index out of bounds.");
+		SetExternalException(Execution, "Index out of bounds.");
 	else
-		FAngelscriptEngine::HandleExceptionFromJIT("Unknown exception.");
+		SetExternalException(Execution, "Unknown exception.");
 }
 
 void FStaticJITFunction::SetNullPointerException(FScriptExecution& Execution)
 {
-	Execution.bExceptionThrown = true;
-	FAngelscriptEngine::HandleExceptionFromJIT(TXT_NULL_POINTER_ACCESS);
+	SetExternalException(Execution, TXT_NULL_POINTER_ACCESS);
 }
 
 void FStaticJITFunction::SetDivByZeroException(FScriptExecution& Execution)
 {
-	Execution.bExceptionThrown = true;
-	FAngelscriptEngine::HandleExceptionFromJIT(TXT_DIVIDE_BY_ZERO);
+	SetExternalException(Execution, TXT_DIVIDE_BY_ZERO);
 }
 
 void FStaticJITFunction::SetOverflowException(FScriptExecution& Execution)
 {
-	Execution.bExceptionThrown = true;
-	FAngelscriptEngine::HandleExceptionFromJIT(TXT_DIVIDE_OVERFLOW);
+	SetExternalException(Execution, TXT_DIVIDE_OVERFLOW);
+}
+
+void FStaticJITFunction::SetPowerOverflowException(FScriptExecution& Execution)
+{
+	SetExternalException(Execution, TXT_POW_OVERFLOW);
 }
 
 void FStaticJITFunction::SetUnboundFunctionException(FScriptExecution& Execution)
 {
-	Execution.bExceptionThrown = true;
-	FAngelscriptEngine::HandleExceptionFromJIT(TXT_UNBOUND_FUNCTION);
+	SetExternalException(Execution, TXT_UNBOUND_FUNCTION);
 }
 
 void FStaticJITFunction::SetOutOfBoundsException(FScriptExecution& Execution)
 {
-	Execution.bExceptionThrown = true;
-	FAngelscriptEngine::HandleExceptionFromJIT("Index out of bounds.");
+	SetExternalException(Execution, "Index out of bounds.");
 }
 
 void FStaticJITFunction::SetSwitchValueInvalidException(FScriptExecution& Execution)
 {
-	Execution.bExceptionThrown = true;
-	FAngelscriptEngine::HandleExceptionFromJIT("Invalid enum value passed to switch");
+	SetExternalException(Execution, "Invalid enum value passed to switch");
 }
 
 void FStaticJITFunction::SetUnknownException(FScriptExecution& Execution)
 {
-	Execution.bExceptionThrown = true;
-	FAngelscriptEngine::HandleExceptionFromJIT("Unknown exception.");
+	SetExternalException(Execution, "Unknown exception.");
 }
 
 void FStaticJITFunction::ScriptFinishConstruct(FScriptExecution& Execution, asIScriptObject* Object, asITypeInfo* TypeInfo)
@@ -423,4 +829,86 @@ void FStaticJITFunction::ScriptCallNative(FScriptExecution& Execution, asCScript
 	checkf(false,
 		TEXT("Function %s had no way to call it. Needs to be either generic or have a Caller."),
 		ANSI_TO_TCHAR(Function->GetName()));
+}
+
+void AngelscriptDestroyScriptObjectIsolated(
+	FScriptExecution& OuterExecution,
+	asIScriptEngine* Engine,
+	asITypeInfo* ObjectType,
+	void* Object)
+{
+	// The outer execution already owns the primary exception. This helper
+	// must not adopt a destructor failure into that record, and must not
+	// reuse the JIT-active context (its generated prolog assumes no
+	// incoming exception).
+	(void)OuterExecution;
+	if (Object == nullptr || ObjectType == nullptr)
+	{
+		return;
+	}
+
+	asCObjectType* const TypedObjectType =
+		static_cast<asCObjectType*>(ObjectType);
+	if (TypedObjectType->beh.destruct == 0)
+	{
+		return;
+	}
+
+	asCScriptEngine* const ScriptEngine = Engine != nullptr
+		? static_cast<asCScriptEngine*>(Engine)
+		: TypedObjectType->engine;
+	if (ScriptEngine == nullptr
+		|| TypedObjectType->beh.destruct
+			>= static_cast<int>(ScriptEngine->scriptFunctions.GetLength()))
+	{
+		return;
+	}
+
+	asCScriptFunction* const Destructor =
+		ScriptEngine->scriptFunctions[TypedObjectType->beh.destruct];
+	if (Destructor == nullptr)
+	{
+		return;
+	}
+
+	if (Destructor->sysFuncIntf != nullptr)
+	{
+		ScriptEngine->CallObjectMethod(Object, TypedObjectType->beh.destruct);
+		return;
+	}
+
+	asIScriptContext* const IsolatedContext = ScriptEngine->RequestContext();
+	if (IsolatedContext == nullptr)
+	{
+		return;
+	}
+
+	asCContext* const IsolatedScriptContext =
+		static_cast<asCContext*>(IsolatedContext);
+	IsolatedScriptContext->ClearExceptionCallback();
+
+	asCThreadLocalData* const ThreadLocalData =
+		asCThreadManager::GetLocalData();
+	FScriptExecution* SavedExecution = nullptr;
+	asCContext* SavedContext = nullptr;
+	if (ThreadLocalData != nullptr)
+	{
+		SavedExecution = ThreadLocalData->activeExecution;
+		SavedContext = ThreadLocalData->activeContext;
+		ThreadLocalData->activeExecution = nullptr;
+		ThreadLocalData->activeContext = IsolatedScriptContext;
+	}
+
+	if (IsolatedContext->Prepare(Destructor) >= 0)
+	{
+		IsolatedContext->SetObject(Object);
+		IsolatedContext->Execute();
+	}
+
+	if (ThreadLocalData != nullptr)
+	{
+		ThreadLocalData->activeExecution = SavedExecution;
+		ThreadLocalData->activeContext = SavedContext;
+	}
+	ScriptEngine->ReturnContext(IsolatedContext);
 }

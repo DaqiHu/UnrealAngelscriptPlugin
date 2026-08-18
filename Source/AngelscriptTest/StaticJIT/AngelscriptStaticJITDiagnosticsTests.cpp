@@ -9,6 +9,7 @@
 #include "StaticJIT/StaticJITDiagnostics.h"
 
 #include "HAL/IConsoleManager.h"
+#include "Internationalization/Regex.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/OutputDeviceNull.h"
@@ -117,6 +118,114 @@ public:
 		ASSERT_THAT(IsTrue(RunDiagnosticsSchemaCompleteness(*TestRunner)));
 	}
 
+	TEST_METHOD(NativeCallSiteMappingSerialization)
+	{
+		const auto MakeHash = [](const FStringView Value)
+		{
+			FAngelscriptArtifactCanonicalWriter Writer(
+				TEXT("static-jit-native-call-site-diagnostics-test"));
+			Writer.WriteString(Value);
+			return Writer.FinalizeHash();
+		};
+
+		FStaticJITDiagnostics::FSnapshot Snapshot;
+		FStaticJITDiagnostics::FProviderRecord& Provider =
+			Snapshot.Providers.AddDefaulted_GetRef();
+		Provider.ProviderId.Hash = MakeHash(TEXT("Provider"));
+		Provider.ProviderGeneration.Hash = MakeHash(TEXT("Generation"));
+		Provider.ArtifactSetDigest = MakeHash(TEXT("ArtifactSet"));
+		Provider.ArtifactProfile.Hash = MakeHash(TEXT("Profile"));
+		Provider.NativeEnvironmentFingerprint = MakeHash(TEXT("Environment"));
+		Provider.ProviderName = TEXT("NativeCallSiteProvider");
+		Provider.OwnerModuleName = TEXT("AngelscriptTestJIT");
+
+		FStaticJITDiagnostics::FProviderEntryRecord& Entry =
+			Provider.Entries.AddDefaulted_GetRef();
+		Entry.ModuleKey.Hash = MakeHash(TEXT("Module"));
+		Entry.FunctionKey.Hash = MakeHash(TEXT("Function"));
+		Entry.ExecutionHash = MakeHash(TEXT("Execution"));
+		Entry.DebugHash = MakeHash(TEXT("Debug"));
+		Entry.ArtifactProfile = Provider.ArtifactProfile;
+		Entry.EntryAbiHash = MakeHash(TEXT("EntryAbi"));
+		Entry.NativeEnvironmentFingerprint =
+			Provider.NativeEnvironmentFingerprint;
+
+		const FAngelscriptHash256 BridgeKey = MakeHash(TEXT("BridgeKey"));
+		const FAngelscriptHash256 BridgeAbi = MakeHash(TEXT("BridgeAbi"));
+		FStaticJITDiagnostics::FReferenceRecord& Reference =
+			Entry.References.AddDefaulted_GetRef();
+		Reference.SlotIndex = 4;
+		Reference.Reference.Kind =
+			EAngelscriptArtifactReferenceKind::EnvironmentSymbol;
+		Reference.Reference.StableKey = BridgeKey;
+		Reference.Reference.ExpectedAbi = BridgeAbi;
+		Reference.bResolved = true;
+		Reference.CurrentResolution =
+			EAngelscriptJITReferenceResolutionCode::Exact;
+		Reference.AdoptionState =
+			FStaticJITDiagnostics::EReferenceAdoptionState::Bound;
+		Reference.CurrentTargetDeclaration =
+			TEXT("int TypedASTProviderPrivateAdd(int, int)");
+		Reference.CurrentTargetKind = TEXT("SystemFunction");
+
+		FStaticJITDiagnostics::FNativeCallSiteRecord& Direct =
+			Entry.NativeCallSites.AddDefaulted_GetRef();
+		Direct.CallSiteIndex = 0;
+		Direct.Route = EAngelscriptJITNativeCallSiteRoute::DirectExported;
+		Direct.CanonicalDeclaration = TEXT("int DaysInMonth(int, int)");
+		Direct.EmittedCppCallee = TEXT("FDateTime::DaysInMonth");
+		Direct.RegisteredTarget = TEXT("FDateTime::DaysInMonth");
+		Direct.bResolved = true;
+		Direct.CurrentResolution =
+			EAngelscriptJITReferenceResolutionCode::Exact;
+		Direct.AdoptionState =
+			FStaticJITDiagnostics::EReferenceAdoptionState::Bound;
+		Direct.CurrentTargetDeclaration = TEXT("FDateTime::DaysInMonth");
+		Direct.CurrentTargetKind = TEXT("ImportedSymbol");
+
+		FStaticJITDiagnostics::FNativeCallSiteRecord& Bridge =
+			Entry.NativeCallSites.AddDefaulted_GetRef();
+		Bridge.CallSiteIndex = 1;
+		Bridge.Route = EAngelscriptJITNativeCallSiteRoute::Bridge;
+		Bridge.CanonicalDeclaration =
+			TEXT("int TypedASTProviderPrivateAdd(int, int)");
+		Bridge.EmittedCppCallee = TEXT(
+			"AngelscriptTypedASTJIT::InvokeBound<int32, int32, int32>");
+		Bridge.RuntimeDllCore =
+			TEXT("AngelscriptTypedASTJIT::InvokeBoundViaVM");
+		Bridge.MetadataRowSymbol =
+			TEXT("ASJIT_Call_TypedASTProviderPrivateAdd_deadbeef");
+		Bridge.RegisteredTarget = TEXT("TypedASTProviderPrivateAdd");
+		Bridge.StableTargetKey = BridgeKey;
+		Bridge.ExpectedAbi = BridgeAbi;
+		Bridge.ReferenceSlotIndex = 4;
+		Bridge.bResolved = true;
+		Bridge.CurrentResolution =
+			EAngelscriptJITReferenceResolutionCode::Exact;
+		Bridge.AdoptionState =
+			FStaticJITDiagnostics::EReferenceAdoptionState::Bound;
+		Bridge.CurrentTargetDeclaration = Reference.CurrentTargetDeclaration;
+		Bridge.CurrentTargetKind = Reference.CurrentTargetKind;
+
+		const FStaticJITDiagnostics::FJsonResult Result =
+			FStaticJITDiagnostics::Serialize(Snapshot);
+		ASSERT_THAT(IsTrue(Result.IsSuccess(), Result.Detail));
+		ASSERT_THAT(IsTrue(Result.Json.Contains(
+			TEXT("\"schemaVersion\":9"))));
+		ASSERT_THAT(IsTrue(Result.Json.Contains(
+			TEXT("\"route\":\"DirectExported\""))));
+		ASSERT_THAT(IsTrue(Result.Json.Contains(TEXT(
+			"\"mapping\":\"int DaysInMonth(int, int) -> FDateTime::DaysInMonth -> DirectExported -> FDateTime::DaysInMonth\""))));
+		ASSERT_THAT(IsTrue(Result.Json.Contains(
+			TEXT("\"route\":\"Bridge\""))));
+		ASSERT_THAT(IsTrue(Result.Json.Contains(TEXT(
+			"\"runtimeDllCore\":\"AngelscriptTypedASTJIT::InvokeBoundViaVM\""))));
+		ASSERT_THAT(IsTrue(Result.Json.Contains(TEXT(
+			"\"metadataRowSymbol\":\"ASJIT_Call_TypedASTProviderPrivateAdd_deadbeef\""))));
+		ASSERT_THAT(IsTrue(Result.Json.Contains(TEXT(
+			"\"mapping\":\"int TypedASTProviderPrivateAdd(int, int) -> AngelscriptTypedASTJIT::InvokeBound<int32, int32, int32> -> AngelscriptTypedASTJIT::InvokeBoundViaVM -> slot[4] -> int TypedASTProviderPrivateAdd(int, int)\""))));
+	}
+
 	TEST_METHOD(MultipleProviderConflictSerialization)
 	{
 		ASSERT_THAT(IsTrue(
@@ -213,8 +322,8 @@ bool FAngelscriptStaticJITAotDiagnosticTests::RunDiagnosticsSchemaCompleteness(
 
 	bool bPassed = true;
 	bPassed &= Test.TestTrue(
-		TEXT("StaticJIT diagnostics should publish schema revision 2"),
-		Result.Json.Contains(TEXT("\"schemaVersion\":2")));
+		TEXT("StaticJIT diagnostics should publish schema revision 9"),
+			Result.Json.Contains(TEXT("\"schemaVersion\":9")));
 	bPassed &= Test.TestTrue(
 		TEXT("StaticJIT diagnostics should publish the Provider ABI revision"),
 		Result.Json.Contains(TEXT("\"providerAbiRevision\":")));
@@ -231,8 +340,35 @@ bool FAngelscriptStaticJITAotDiagnosticTests::RunDiagnosticsSchemaCompleteness(
 		TEXT("StaticJIT diagnostics should expose resolved stable reference slots"),
 		Result.Json.Contains(TEXT("\"resolved\":true")));
 	bPassed &= Test.TestTrue(
-		TEXT("StaticJIT diagnostics should keep process addresses out of JSON"),
-		!Result.Json.Contains(TEXT("0x"), ESearchCase::IgnoreCase));
+		TEXT("StaticJIT diagnostics should distinguish current resolution from route adoption"),
+		Result.Json.Contains(TEXT("\"currentResolution\":\"Exact\""))
+		&& Result.Json.Contains(TEXT("\"adoptionState\":\"Bound\"")));
+	bPassed &= Test.TestTrue(
+		TEXT("StaticJIT diagnostics should identify the current registered AS target behind a private bridge slot"),
+		Result.Json.Contains(TEXT(
+			"\"currentTargetDeclaration\":\"int TypedASTProviderPrivateAdd(int, int)\""))
+		&& Result.Json.Contains(TEXT(
+			"\"currentTargetKind\":\"SystemFunction\"")));
+	bPassed &= Test.TestTrue(
+		TEXT("StaticJIT diagnostics should map the generated private call through its immutable row and current slot"),
+		Result.Json.Contains(TEXT("\"nativeCallSites\":["))
+		&& Result.Json.Contains(TEXT("\"route\":\"Bridge\""))
+		&& Result.Json.Contains(TEXT(
+			"\"runtimeDllCore\":\"AngelscriptTypedASTJIT::InvokeBoundViaVM\""))
+		&& Result.Json.Contains(TEXT(
+			"\"metadataRowSymbol\":\"ASJIT_Call_TypedASTProviderPrivateAdd_"))
+		&& Result.Json.Contains(TEXT("\"referenceSlotIndex\":"))
+		&& Result.Json.Contains(TEXT(
+			" -> AngelscriptTypedASTJIT::InvokeBoundViaVM -> slot[")));
+	FRegexMatcher PointerLikeAddress(
+		FRegexPattern(TEXT("0x[0-9a-fA-F]{12,16}")), Result.Json);
+	const bool bFoundPointerLikeAddress = PointerLikeAddress.FindNext();
+	bPassed &= Test.TestTrue(
+		*FString::Printf(
+			TEXT("StaticJIT diagnostics should keep process-like addresses out of JSON (match='%s')"),
+			bFoundPointerLikeAddress
+				? *PointerLikeAddress.GetCaptureGroup(0) : TEXT("<none>")),
+		!bFoundPointerLikeAddress);
 	return bPassed;
 }
 

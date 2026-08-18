@@ -640,6 +640,15 @@ int asCReader::CommitFunctionArtifactToExisting(
 		target->scriptData->artifactCanonicalSource;
 	artifact->scriptData->artifactDependencies.SetLength(0);
 
+	// HIR is valid only for the exact source compilation that created its
+	// function owner. A Cache donor is reconstructed from persisted VM state and
+	// must never donate an injected/stale sidecar; the target's provisional
+	// sidecar likewise cannot survive replacement by restored bytecode. Clear
+	// both owners explicitly before swapping ScriptFunctionData so this remains
+	// fail-closed even if a future donor construction path starts with HIR.
+	artifact->DiscardTypedSemanticFunction();
+	target->DiscardTypedSemanticFunction();
+
 	// From this point no validation can fail. Swap complete private state and
 	// debug parameter names, add the normal compiled-function references, then
 	// destroy the donor together with the target's previous empty state.
@@ -7275,6 +7284,15 @@ int asCWriter::FindObjectPropIndex(short offset, int typeId, asDWORD *bc)
 	}
 
 	asCObjectType *objType = engine->GetObjectTypeFromTypeId(typeId);
+	if( objType == 0 )
+	{
+		//[UE++] Function artifacts are an optional fail-closed observer. A
+		// malformed or currently unsupported property operand must reject the
+		// artifact instead of dereferencing an unresolved engine-local type.
+		error = true;
+		return 0;
+		//[UE--]
+	}
 	asCObjectProperty *objProp = 0;
 
 	// Look for composite properties first
@@ -7323,7 +7341,17 @@ int asCWriter::FindObjectPropIndex(short offset, int typeId, asDWORD *bc)
 			objProp = objType->properties[n];
 	}
 
-	asASSERT(objProp);
+	//[UE++] The generic module writer historically treated this as an internal
+	// invariant. Per-function artifact capture also runs against selectively
+	// admitted module shapes, where an optimized/inherited property offset may
+	// not be representable in the writer's symbolic property table. Reject that
+	// artifact and let the caller fall back instead of crashing the process.
+	if( objProp == 0 )
+	{
+		error = true;
+		return 0;
+	}
+	//[UE--]
 
 	// Remember if this is a composite property as the next call will then be for the same property
 	if (objProp->compositeOffset || objProp->isCompositeIndirect)

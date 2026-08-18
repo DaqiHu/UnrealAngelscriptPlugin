@@ -1,3 +1,4 @@
+#include "../Support/AngelscriptNativeCaseTestSupport.h"
 #include "../Support/AngelscriptNativeExecutionTestSupport.h"
 #include "AngelscriptTestMacros.h"
 

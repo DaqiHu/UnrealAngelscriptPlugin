@@ -48,17 +48,32 @@
 BEGIN_AS_NAMESPACE
 
 class asIScriptContext;
+class asCContext;
+struct FScriptExecution;
+
+//[UE++]: One transient node in the thread's mixed VM/JIT activation chain.
+// The node is owned by the corresponding execution scope and is valid only
+// while that scope is active. Public execution queries can follow this chain
+// without guessing across private VM/JIT scope state.
+struct FScriptActivation
+{
+	asCContext* Context = nullptr;
+	FScriptExecution* Execution = nullptr;
+	FScriptActivation* Previous = nullptr;
+};
+//[UE--]
 
 //[UE++]: Export thread-local internals for the AngelscriptTest module without changing layout.
 class ANGELSCRIPTRUNTIME_API asCThreadLocalData
 //[UE--]
 {
 public:
-	class asCContext* activeContext = nullptr;
+	asCContext* activeContext = nullptr;
 	class asCContext* primaryContext = nullptr;
 	asCString string;
 	asIScriptFunction* activeFunction = nullptr;
-	struct FScriptExecution* activeExecution = nullptr;
+	FScriptExecution* activeExecution = nullptr;
+	FScriptActivation* activeActivation = nullptr;
 
 protected:
 

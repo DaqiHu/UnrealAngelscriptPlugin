@@ -1,26 +1,61 @@
 {
   "ownershipRevision": 2,
-  "schemaRevision": 3,
-  "providerAbiRevision": 2,
+  "schemaRevision": 8,
+  "providerAbiRevision": 8,
   "targetProfile": "EditorDevelopment",
   "providerId": "7dc70fd55a76cc55d726e32d5c2434713bd93755a32e4dd524a4b7c39c8b5d44",
-  "providerGeneration": "a9125d664d1c623d2849978a57ee35c19253f27c4ac146cc2768d3cefeb6bf90",
-  "artifactSetDigest": "6dee38cb3bb476ae112c861c7e6d0f34b655586843125e1f71e56aaadd478b22",
+  "providerGeneration": "fdedabc0829f419f210ee44e0ca1730ee38229fd23f36cdf4d4456affa57961a",
+  "artifactSetDigest": "9e2a2dc2c5fb89424572428c89b05600c8931309d489a29957d974d37dac9cc7",
   "artifactProfile": "b58efc4c9f40879f0b98bcb54704d1b342ae56948a00e9ddbaa709787226e0c8",
-  "nativeEnvironment": "c8d9638e7c34100b327617ea9a4769bd7692413e17eb4705818e6b120acc9651",
+  "nativeEnvironment": "76d620ec7d0db38aa2028996e595f75523f201e7e560c05d8c9000d60d04cd73",
   "providerName": "AngelscriptTestJIT Fixtures",
   "ownerModuleName": "AngelscriptTestJIT",
   "modules": [
-    {"moduleKey": "363ba981d7c3e864c636826dc571c5d7e306f994e52ec1db353151967b367751", "canonicalName": "ASStaticJITAotImportProvider", "virtualSourcePath": "/Angelscript/Game/ASStaticJITAotImportProvider.as", "source": "ASStaticJITAotImportProvider.363ba981.EditorDevelopment.jit.cpp", "contentHash": "5de2fef69ca41e215ba4363dc2815ebbd900e78c95f7bb80fa8cd689965261b0", "functionCount": 2},
-    {"moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed", "canonicalName": "ASStaticJITAotFixture", "virtualSourcePath": "/Angelscript/Game/ASStaticJITAotFixture.as", "source": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp", "contentHash": "d56a6331104660445520088a4a7edb85dc496999ea491f5e31b377a66129604a", "functionCount": 44}
+    {"moduleKey": "1710fe388041380445cd2bdea17ac27dff4806c8272518ee43733cd4175ca1cc", "canonicalName": "ASStaticJITTypedPrintFixture", "virtualSourcePath": "/Angelscript/Game/ASStaticJITTypedPrintFixture.as", "source": "ASStaticJITTypedPrintFixture.1710fe38.EditorDevelopment.jit.cpp", "contentHash": "6e44a8a88018727d637c6df5070e12c5bb6a82a9e8ccb1ad983c3fc975d32342", "functionCount": 1},
+    {"moduleKey": "363ba981d7c3e864c636826dc571c5d7e306f994e52ec1db353151967b367751", "canonicalName": "ASStaticJITAotImportProvider", "virtualSourcePath": "/Angelscript/Game/ASStaticJITAotImportProvider.as", "source": "ASStaticJITAotImportProvider.363ba981.EditorDevelopment.jit.cpp", "contentHash": "7dd5f7d790c6591807dc8d51bbbcb90e2ba0a0efc35ccc51e87c14a64dd62989", "functionCount": 2},
+    {"moduleKey": "9d65c50b9c49e0b94a37b8336c334b41aafa52f6ae48344103e7a94fbd32231a", "canonicalName": "ASStaticJITTypedPrivateBridgeFixture", "virtualSourcePath": "/Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as", "source": "ASStaticJITTypedPrivateBridgeFixture.9d65c50b.EditorDevelopment.jit.cpp", "contentHash": "2daa4e0ceb5a6f13f36e2fd95f1facda6f1a383a62d20de1db4758f200758913", "functionCount": 5},
+    {"moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed", "canonicalName": "ASStaticJITAotFixture", "virtualSourcePath": "/Angelscript/Game/ASStaticJITAotFixture.as", "source": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp", "contentHash": "20d00546539b8f283773a3bf13ed222e684e30ae1778656ec466307bc7d4e7c5", "functionCount": 54},
+    {"moduleKey": "d19c9e37621a0cc17f805a0553f41936f2c1f716ef5c91f346c4ce5cc8f6b8b5", "canonicalName": "ASStaticJITTypedRecursionFixture", "virtualSourcePath": "/Angelscript/Game/ASStaticJITTypedRecursionFixture.as", "source": "ASStaticJITTypedRecursionFixture.d19c9e37.EditorDevelopment.jit.cpp", "contentHash": "b81a6743527cb68d386e4a33950df547f76ca23794b35d1c14816479ba175d08", "functionCount": 7},
+    {"moduleKey": "d5fc286cb1b96446cf9ab866b8485d617ca75fc6ed7bfa9cf90f88338e6e615a", "canonicalName": "ASStaticJITTypedFinalScalarFixture", "virtualSourcePath": "/Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as", "source": "ASStaticJITTypedFinalScalarFixture.d5fc286c.EditorDevelopment.jit.cpp", "contentHash": "92329cd8ebf2bc9443299ea0feb8feb205ba2431a59752638a373bc8da17b1ce", "functionCount": 7},
+    {"moduleKey": "e3b08a3c509f1eb5fad8ca63479dcc6c2638c01694af2a1048e06e1de36d5c99", "canonicalName": "ASStaticJITTypedControlFlowFixture", "virtualSourcePath": "/Angelscript/Game/ASStaticJITTypedControlFlowFixture.as", "source": "ASStaticJITTypedControlFlowFixture.e3b08a3c.EditorDevelopment.jit.cpp", "contentHash": "512be0798d9dcc625f01f7a9a758cdaccb24f80e2eb07dab2b26ffd502641de6", "functionCount": 4}
   ],
   "functions": [
+    {
+      "moduleKey": "1710fe388041380445cd2bdea17ac27dff4806c8272518ee43733cd4175ca1cc",
+      "functionKey": "9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4",
+      "executionHash": "3d287fec96570ae323b5be5f87799c96aff6472b47dfb88cd4de99ab40b03762",
+      "debugHash": "636443155f3600493c3c1febfd095150c987de2da9db64ac7a9fb82658c7520b",
+      "entryAbiHash": "97fbcd10bc26610e92f0705696227e7d6c0a85c0ece2feeca0b53d76f314e25a",
+      "canonicalDeclaration": "int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedPrintFixture.as",
+      "sourceLine": 2,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedPrintFixture.1710fe38.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_3d287fec96570ae323b5be5f87799c96aff6472b47dfb88cd4de99ab40b03762",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+        {"callSiteIndex": 0, "route": "DirectExported", "canonicalDeclaration": "void Print(const FString&inout, float32 = 5.f, FLinearColor = FLinearColor :: LucBlue)", "emittedCppCallee": "AngelscriptStaticJITNativeCallables::Print", "runtimeDllCore": "", "metadataRowSymbol": "", "registeredTarget": "AngelscriptStaticJITNativeCallables::Print", "stableTargetKey": "0000000000000000000000000000000000000000000000000000000000000000", "expectedAbi": "0000000000000000000000000000000000000000000000000000000000000000", "referenceSlotIndex": -1}
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "415ec867beab32a47d558983ab77291ac493547168161b93836dc77a357f059a", "expectedAbi": "4966ab4336cca1891b1b828360f0d1a587dad0189ac8dc042b1dde592cb032d5"},
+        {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "cc621ee62270e50578779a415d2789dc2b5e1a70d1ea5a785cbd60e43233c192", "expectedAbi": "dfcf882626eca6dff9e5a227f732555955dceaef4baf13aa55a7b1e7839c39ef"},
+        {"slot": 2, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "cffdb228484b4358e4f3d607d572055b99963e418b0765f6dd934433adcbfca3", "expectedAbi": "86168bbdfe709e4f79413ae5fcdfb97fb18587ec710ec2cd4727e5bb6913597d"},
+        {"slot": 3, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080", "expectedAbi": "207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56"}
+      ],
+      "semanticDependencies": [
+        {"kind": 11, "targetKind": 7, "stableKey": "415ec867beab32a47d558983ab77291ac493547168161b93836dc77a357f059a", "expectedAbi": "4966ab4336cca1891b1b828360f0d1a587dad0189ac8dc042b1dde592cb032d5", "expectedContentOrValue": ""},
+        {"kind": 11, "targetKind": 7, "stableKey": "cc621ee62270e50578779a415d2789dc2b5e1a70d1ea5a785cbd60e43233c192", "expectedAbi": "dfcf882626eca6dff9e5a227f732555955dceaef4baf13aa55a7b1e7839c39ef", "expectedContentOrValue": ""},
+        {"kind": 11, "targetKind": 7, "stableKey": "cffdb228484b4358e4f3d607d572055b99963e418b0765f6dd934433adcbfca3", "expectedAbi": "86168bbdfe709e4f79413ae5fcdfb97fb18587ec710ec2cd4727e5bb6913597d", "expectedContentOrValue": ""},
+        {"kind": 11, "targetKind": 7, "stableKey": "fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080", "expectedAbi": "207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56", "expectedContentOrValue": ""}
+      ]
+    },
     {
       "moduleKey": "363ba981d7c3e864c636826dc571c5d7e306f994e52ec1db353151967b367751",
       "functionKey": "69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304",
       "executionHash": "ee7830a9de56f70fda6397fbd582a13fe0e06765496d8709f73959ffd657d386",
       "debugHash": "c92a72a1bc65d3358bb45389aa0f5115f6ec3e39794a7b31ea28c102a2067eac",
-      "entryAbiHash": "6d09f7b9082eb4f76d6e496f456be2ced48f7280b340a8e8918d15ba719fbe7e",
+      "entryAbiHash": "ea282433da811db8e11096c0eb4d74a8ad9f3e312688cd7887a915f4447e361e",
       "canonicalDeclaration": "int ImportedValueForAOT(const int)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotImportProvider.as",
       "sourceLine": 1,
@@ -29,7 +64,11 @@
       "moduleSource": "ASStaticJITAotImportProvider.363ba981.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_ee7830a9de56f70fda6397fbd582a13fe0e06765496d8709f73959ffd657d386",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
+      ],
+      "semanticDependencies": [
       ]
     },
     {
@@ -37,7 +76,7 @@
       "functionKey": "6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17",
       "executionHash": "bfad2118806f08778b608ba288c00d6bbc4c4f48f942cf52dc1faa6cfc2e03b9",
       "debugHash": "b8ef3acb6782a01fd239a3e7d291977ba1ebdef595f70d4ce322ae69ac52488a",
-      "entryAbiHash": "7f083a9b1dd768e533b45cb3475599ddebd6427cb28a84f1cceb7b80435c2a67",
+      "entryAbiHash": "bb45c9109478b2a9359d66c35fcbf092a8728f92b5800436659d51e95cc228a8",
       "canonicalDeclaration": "int IndependentModuleEntryForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotImportProvider.as",
       "sourceLine": 6,
@@ -46,24 +85,156 @@
       "moduleSource": "ASStaticJITAotImportProvider.363ba981.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_bfad2118806f08778b608ba288c00d6bbc4c4f48f942cf52dc1faa6cfc2e03b9",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "9d65c50b9c49e0b94a37b8336c334b41aafa52f6ae48344103e7a94fbd32231a",
+      "functionKey": "59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e",
+      "executionHash": "903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6",
+      "debugHash": "84c4c455833d298a19e72e37e3dd5fd456053781b60624be02a142f198bb4733",
+      "entryAbiHash": "eafaed37b176f7dc1025f3c86200feb10fb066ef6f083b8ce31d94120dc42f21",
+      "canonicalDeclaration": "int TypedASTRuntimeThunkShowcase(const FString&in)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as",
+      "sourceLine": 8,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedPrivateBridgeFixture.9d65c50b.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+        {"callSiteIndex": 0, "route": "RuntimeThunk", "canonicalDeclaration": "int TypedASTRuntimeThunkProbe(const FString&in)", "emittedCppCallee": "AngelscriptStaticJITNativeCallables::RuntimeThunkProbe", "runtimeDllCore": "", "metadataRowSymbol": "", "registeredTarget": "AngelscriptStaticJITNativeCallables::RuntimeThunkProbe", "stableTargetKey": "0000000000000000000000000000000000000000000000000000000000000000", "expectedAbi": "0000000000000000000000000000000000000000000000000000000000000000", "referenceSlotIndex": -1}
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "11b5263801f1c0eff5669352b69d7e14aefdbe45bf94da7108751575993f81d4", "expectedAbi": "fe6ff001ec000eaef3a24f1ace9e45af7036e1e072a9b26ad0c923488701363b"},
+        {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080", "expectedAbi": "207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56"}
+      ],
+      "semanticDependencies": [
+        {"kind": 11, "targetKind": 7, "stableKey": "11b5263801f1c0eff5669352b69d7e14aefdbe45bf94da7108751575993f81d4", "expectedAbi": "fe6ff001ec000eaef3a24f1ace9e45af7036e1e072a9b26ad0c923488701363b", "expectedContentOrValue": ""},
+        {"kind": 11, "targetKind": 7, "stableKey": "fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080", "expectedAbi": "207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56", "expectedContentOrValue": ""}
+      ]
+    },
+    {
+      "moduleKey": "9d65c50b9c49e0b94a37b8336c334b41aafa52f6ae48344103e7a94fbd32231a",
+      "functionKey": "6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e",
+      "executionHash": "41fe6656ff1dcc4b64399ccd16d4fb070a4c5f98f8028039779d2f452a183753",
+      "debugHash": "85a5bdbe8d14c58398fc7a11eb45675f1e7584d0d5677b4c8c09f8ed282af10d",
+      "entryAbiHash": "32c0c27f47fe1029322c0ce7e17536b36a031cc3ce9c01a4ee37be56f1b14a15",
+      "canonicalDeclaration": "int TypedASTPrivateBridgeShowcase(const int, const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as",
+      "sourceLine": 2,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedPrivateBridgeFixture.9d65c50b.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_41fe6656ff1dcc4b64399ccd16d4fb070a4c5f98f8028039779d2f452a183753",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+        {"callSiteIndex": 0, "route": "CurrentNativeBinding", "canonicalDeclaration": "int TypedASTProviderPrivateAdd(int, int)", "emittedCppCallee": "AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32, int32>", "runtimeDllCore": "AngelscriptTypedASTJIT::ResolveBoundNative", "metadataRowSymbol": "ASJIT_Call_TypedASTProviderPrivateAdd_6b00a476_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e", "registeredTarget": "AngelscriptStaticJITAotFixture::TypedASTProviderPrivateAdd", "stableTargetKey": "6b00a476bd57a82fb216373cb0eef27d00c4acb64af32b342c47c9b7dee91aac", "expectedAbi": "304fbe10a2078ab14e2f67d70c35fd3322a0e9ce8b25e1915cebe00e271b6e96", "referenceSlotIndex": 0}
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "6b00a476bd57a82fb216373cb0eef27d00c4acb64af32b342c47c9b7dee91aac", "expectedAbi": "304fbe10a2078ab14e2f67d70c35fd3322a0e9ce8b25e1915cebe00e271b6e96"}
+      ],
+      "semanticDependencies": [
+        {"kind": 11, "targetKind": 7, "stableKey": "6b00a476bd57a82fb216373cb0eef27d00c4acb64af32b342c47c9b7dee91aac", "expectedAbi": "304fbe10a2078ab14e2f67d70c35fd3322a0e9ce8b25e1915cebe00e271b6e96", "expectedContentOrValue": ""}
+      ]
+    },
+    {
+      "moduleKey": "9d65c50b9c49e0b94a37b8336c334b41aafa52f6ae48344103e7a94fbd32231a",
+      "functionKey": "6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e",
+      "executionHash": "2324792fb0f2db6ab8bc9f893e7b3cbe5cae4fa30287c5dd799abdd5a15968c4",
+      "debugHash": "ba85cc8259d645508ea9683c087ee1a3dd471f271c0d87a1171e64c4cacc8f4e",
+      "entryAbiHash": "952945aab19a52aa87e0363f0c98f326892eee81f714fdb4ffad4f6e2f460a75",
+      "canonicalDeclaration": "float32 TypedASTOrdinaryBridgeSqrt(const float32)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as",
+      "sourceLine": 28,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedPrivateBridgeFixture.9d65c50b.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_2324792fb0f2db6ab8bc9f893e7b3cbe5cae4fa30287c5dd799abdd5a15968c4",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+        {"callSiteIndex": 0, "route": "Bridge", "canonicalDeclaration": "float32 Sqrt(float32)", "emittedCppCallee": "AngelscriptTypedASTJIT::InvokeBound<float, float>", "runtimeDllCore": "AngelscriptTypedASTJIT::InvokeBoundViaVM", "metadataRowSymbol": "ASJIT_Call_Sqrt_000f5a28_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e", "registeredTarget": "FMath::Sqrt", "stableTargetKey": "000f5a286aed98174036c0f28f63aacbeaa6419aeacc1f82f95f1f5761d67f5f", "expectedAbi": "4b41de3d4cf1aaf3ad57a76332392fba66c9e3f18dcf7f398c837f6819fbb107", "referenceSlotIndex": 0}
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "000f5a286aed98174036c0f28f63aacbeaa6419aeacc1f82f95f1f5761d67f5f", "expectedAbi": "4b41de3d4cf1aaf3ad57a76332392fba66c9e3f18dcf7f398c837f6819fbb107"}
+      ],
+      "semanticDependencies": [
+        {"kind": 11, "targetKind": 7, "stableKey": "000f5a286aed98174036c0f28f63aacbeaa6419aeacc1f82f95f1f5761d67f5f", "expectedAbi": "4b41de3d4cf1aaf3ad57a76332392fba66c9e3f18dcf7f398c837f6819fbb107", "expectedContentOrValue": ""}
+      ]
+    },
+    {
+      "moduleKey": "9d65c50b9c49e0b94a37b8336c334b41aafa52f6ae48344103e7a94fbd32231a",
+      "functionKey": "b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151",
+      "executionHash": "8f65bcc7986569e5633cc61f4f45fdcaddd25f3663a8e59a6019f7c76abe92ea",
+      "debugHash": "9165c8c4d9384458363bc3ebef2e2c24eb5634e60ad65856a6a7081c2ae7e87e",
+      "entryAbiHash": "76649d45394c9fe464a49e2719a1afabbb0fdc9e8b0de6622e622d4ebfa0d800",
+      "canonicalDeclaration": "int TypedASTPrivateBridgeException(const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as",
+      "sourceLine": 14,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedPrivateBridgeFixture.9d65c50b.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_8f65bcc7986569e5633cc61f4f45fdcaddd25f3663a8e59a6019f7c76abe92ea",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+        {"callSiteIndex": 0, "route": "Bridge", "canonicalDeclaration": "int TypedASTProviderPrivateFail(int)", "emittedCppCallee": "AngelscriptTypedASTJIT::InvokeBound<int32, int32>", "runtimeDllCore": "AngelscriptTypedASTJIT::InvokeBoundViaVM", "metadataRowSymbol": "ASJIT_Call_TypedASTProviderPrivateFail_fc7ed8ea_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151", "registeredTarget": "AngelscriptStaticJITAotFixture::TypedASTProviderPrivateFail", "stableTargetKey": "fc7ed8ea4c660ec30658e3fa4626a8a93add6e870b7f100e3b08cace133511b4", "expectedAbi": "e3326c3f43f4aa53f1d1840bf07e12368bbd0ed6e1ecf53819152d6fc2914a47", "referenceSlotIndex": 1},
+        {"callSiteIndex": 1, "route": "CurrentNativeBinding", "canonicalDeclaration": "int TypedASTProviderPrivateAdd(int, int)", "emittedCppCallee": "AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32, int32>", "runtimeDllCore": "AngelscriptTypedASTJIT::ResolveBoundNative", "metadataRowSymbol": "ASJIT_Call_TypedASTProviderPrivateAdd_6b00a476_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151", "registeredTarget": "AngelscriptStaticJITAotFixture::TypedASTProviderPrivateAdd", "stableTargetKey": "6b00a476bd57a82fb216373cb0eef27d00c4acb64af32b342c47c9b7dee91aac", "expectedAbi": "304fbe10a2078ab14e2f67d70c35fd3322a0e9ce8b25e1915cebe00e271b6e96", "referenceSlotIndex": 0}
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "6b00a476bd57a82fb216373cb0eef27d00c4acb64af32b342c47c9b7dee91aac", "expectedAbi": "304fbe10a2078ab14e2f67d70c35fd3322a0e9ce8b25e1915cebe00e271b6e96"},
+        {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "fc7ed8ea4c660ec30658e3fa4626a8a93add6e870b7f100e3b08cace133511b4", "expectedAbi": "e3326c3f43f4aa53f1d1840bf07e12368bbd0ed6e1ecf53819152d6fc2914a47"}
+      ],
+      "semanticDependencies": [
+        {"kind": 11, "targetKind": 7, "stableKey": "6b00a476bd57a82fb216373cb0eef27d00c4acb64af32b342c47c9b7dee91aac", "expectedAbi": "304fbe10a2078ab14e2f67d70c35fd3322a0e9ce8b25e1915cebe00e271b6e96", "expectedContentOrValue": ""},
+        {"kind": 11, "targetKind": 7, "stableKey": "fc7ed8ea4c660ec30658e3fa4626a8a93add6e870b7f100e3b08cace133511b4", "expectedAbi": "e3326c3f43f4aa53f1d1840bf07e12368bbd0ed6e1ecf53819152d6fc2914a47", "expectedContentOrValue": ""}
+      ]
+    },
+    {
+      "moduleKey": "9d65c50b9c49e0b94a37b8336c334b41aafa52f6ae48344103e7a94fbd32231a",
+      "functionKey": "d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af",
+      "executionHash": "837ba82648f990929e747be3d031a425fbe2d3f28120e8113cef2b6922245046",
+      "debugHash": "5ea377172c317af7d0b619bf3785990a6f6164fea778126773508e021c9fa31d",
+      "entryAbiHash": "8e7cfb4c503bbc4c146b962a4462542c886d3df8bba3eb584a9ef3ccce444fc7",
+      "canonicalDeclaration": "void TypedASTPublicUASFunctionExceptionEntry(const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as",
+      "sourceLine": 21,
+      "sourceColumn": 1,
+      "flags": 0,
+      "moduleSource": "ASStaticJITTypedPrivateBridgeFixture.9d65c50b.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_837ba82648f990929e747be3d031a425fbe2d3f28120e8113cef2b6922245046",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "6b00a476bd57a82fb216373cb0eef27d00c4acb64af32b342c47c9b7dee91aac", "expectedAbi": "304fbe10a2078ab14e2f67d70c35fd3322a0e9ce8b25e1915cebe00e271b6e96"},
+        {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "f66a09a2a0d1f5e9790841889d3f17f19c66749ccbeb11393ed28c942c6c0a78", "expectedAbi": "df4aa1a07bdb43156d96cb723a554b5d7a89ac779236ef030607f85ddf483416"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "04656056b181615ce098ab4f0b249d3bfc60df346f3f2531c82d9ecffe190d29",
       "executionHash": "731ebcfc6e1ae2e5f16413e8e02b51ce0c34139e6530879c3d632720567416d6",
-      "debugHash": "54cf152f876eb02dadf36f8d6a4182486ffc908293850b867c94568a6f2b83f3",
-      "entryAbiHash": "6f4f7e6615f922448dfa37b3c2b25936c0efef3f3655e58bd8cd07adf451eb00",
+      "debugHash": "63ef133fed1ae03934d94125ef46263148488799545c7011a1864f4901c3130c",
+      "entryAbiHash": "5e708ac1a7afdc6a24646cbb3780e38d2f6639308f316ff6b2ba697920d65899",
       "canonicalDeclaration": "uint64 DoubleToUint64ForAOT(const float)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 18,
+      "sourceLine": 93,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_04656056b181615ce098ab4f0b249d3bfc60df346f3f2531c82d9ecffe190d29_731ebcfc6e1ae2e5f16413e8e02b51ce0c34139e6530879c3d632720567416d6",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
+      ],
+      "semanticDependencies": [
       ]
     },
     {
@@ -71,184 +242,243 @@
       "functionKey": "0d70786b00bbff45f906a90947a9586f5e66a13baf5d9bcf79ceeeabb01aa1fe",
       "executionHash": "5ff14395e534561f56d7569924ccefed5ca7db316e28b96e960c783d4963dbbe",
       "debugHash": "e99c1b7c1598b7ed5632a3ec913c738a97522a396a8ed5610511320c8b6818b1",
-      "entryAbiHash": "f4ea6bf6dce35401edbfb9140c0645eef885586f4d70b43ce14a5fd70e37976f",
+      "entryAbiHash": "1cdfabcf3e8a6c5b336a09064baa4231093ea1b1252679df79c5a50f263c311d",
       "canonicalDeclaration": "UStaticJITAotVirtualChild UStaticJITAotVirtualChild()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 227,
+      "sourceLine": 309,
       "sourceColumn": 0,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_0d70786b00bbff45f906a90947a9586f5e66a13baf5d9bcf79ceeeabb01aa1fe_5ff14395e534561f56d7569924ccefed5ca7db316e28b96e960c783d4963dbbe",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "f87eccbad424c0a40434ab6e70eb92bc917cda31950ff302f98206f127a701e5", "expectedAbi": "869d4e3ddb0a18b0ca831336a9d1c933829e829ea09561bc71493341b3612994"},
         {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "521eab370f221a5ed98d7359d2be6175ef3c5a9ee0343d41e18d6d4b5b5f4cf7", "expectedAbi": "2620dfd2e99f3ccfdb4d652b1db1701fd89cbe6341bf8776dbcf553efa7941ff"}
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
+      "functionKey": "0f4f686d35d79037c5fdb84b4d056398147e22806d5928a3a4ee942458eda86a",
+      "executionHash": "f42c1d8d7a8a4ef05d516a4519365e6f4393b1ec90eac28fc9ec71a275298a35",
+      "debugHash": "0cb215108d15f1e335ade65578b983f7b1fe7a89a90ee16d505875ad8bd5997b",
+      "entryAbiHash": "baec52322166f9d9a578e658e1d6db3e7012f171953f1f761c1b35fa1d15862f",
+      "canonicalDeclaration": "float32 SemanticPowerFloat(const float32, const float32)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
+      "sourceLine": 28,
+      "sourceColumn": 1,
+      "flags": 0,
+      "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_0f4f686d35d79037c5fdb84b4d056398147e22806d5928a3a4ee942458eda86a_f42c1d8d7a8a4ef05d516a4519365e6f4393b1ec90eac28fc9ec71a275298a35",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "13805b7f4695cd00c381752f76d1e724d269499b752fbf0c68780993237a7a5c",
       "executionHash": "48d363b5454e3ef4da6a26fbaf9dc9113da26d724fc20ec8a3d016b950b2d9d6",
-      "debugHash": "87069aba39581f19f492b3e6750f601c971eef51ad0928a459702d5892034d95",
-      "entryAbiHash": "9f485de7d7b887e42e4be9c65cdea010c43234c198082f955ad363bccb9952f0",
+      "debugHash": "19adf894fd7441d9e6c9881e90d8280e86173e58aa12b4455b3ddb8e67123860",
+      "entryAbiHash": "9807be95f7b037b5a524626bf011302bd0844098a4a72bbe407d8cd5e21fa5ae",
       "canonicalDeclaration": "int RecursionEntryForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 151,
+      "sourceLine": 227,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_13805b7f4695cd00c381752f76d1e724d269499b752fbf0c68780993237a7a5c_48d363b5454e3ef4da6a26fbaf9dc9113da26d724fc20ec8a3d016b950b2d9d6",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "947430d3dda2641a6a6fa7990b225bd55cdac3fcb9717fac45077c92c4048cf7", "expectedAbi": "1c416cd276ffeef7ab9be9a317d461e206a61a97a35ffa3fb719b1c8223d57da"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "191b01d814077af27a0fcedc634df0861216db35b52b9fd0e358c119049572d5",
       "executionHash": "4bd3c1036a3f94095c4d862d4ad7636a344a6cb39d21e9879d8235c00b1f8772",
-      "debugHash": "9e8ec365ac3042782e302640b6a8110b1bda250c80ead6569a835ee981a923d9",
-      "entryAbiHash": "93970f84a6aa1bac802f6979d57ff2163ff4f46543f8fc9ab6574d7e2f0d4e63",
+      "debugHash": "a7c54f633942df98e0b7d62174bbbd402058e5833eb794051535e4bd2177567d",
+      "entryAbiHash": "507cc902edc1d9bd3e2f2572fe86bb7d02b96a550445798d3f067222eb350188",
       "canonicalDeclaration": "int GetVirtualValue_Implementation()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 212,
+      "sourceLine": 294,
       "sourceColumn": 3,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_191b01d814077af27a0fcedc634df0861216db35b52b9fd0e358c119049572d5_4bd3c1036a3f94095c4d862d4ad7636a344a6cb39d21e9879d8235c00b1f8772",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "3d7eb857e6607fc45a1549c16bdab4ace696af400169ab3330b277c542b1bc4e", "expectedAbi": "f686f69c5e4582f2ef2fc221389a23d2f08860fe99f9c2a8baf2b7f3082f5fd7"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "1f604268ad8bae0a35618644e03534c6f753062e1f13814655013f2e6b63c15f",
       "executionHash": "f23fb7fb95649c31568b374d896d6d0cfbd204e8d2b30b4fa4e7b9e779061880",
-      "debugHash": "b310d190a258fb3b43c812e15ca59f190f7d9a291d61d1049b507d54dc63892b",
-      "entryAbiHash": "cfd6270223e115f05bd9303f7ac38a55aae7a365f523814f643a93593cef6158",
+      "debugHash": "7ec0516948804868f689e6bcd58bcc1160a55a913ca43863c25a15a8e8f92722",
+      "entryAbiHash": "37241b3ba70d4b0f0af53358d5dcd4fda67f64c6db1715fe217a46674e3ba526",
       "canonicalDeclaration": "int ObjectLastNativeForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 105,
+      "sourceLine": 180,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_1f604268ad8bae0a35618644e03534c6f753062e1f13814655013f2e6b63c15f_f23fb7fb95649c31568b374d896d6d0cfbd204e8d2b30b4fa4e7b9e779061880",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "2f276f7b9e40589a95c2dc6eec4746b4406d1869d603f626e693055828bae918", "expectedAbi": "664a52c8218dd00a29f18200f1bae4dfb8cfbafb9bbcc96957d19f600273bbcb"},
         {"slot": 2, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "da58ad493d82275221d7b4f83054b219dad97e7df066d87b801c0a01b9b813c3", "expectedAbi": "5a5bea7299150b4597946af68421cc7a66642c72522640c5f2d4eb4be22b1d2b"},
         {"slot": 3, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "fb782abdc7bc2165cb75160cf047111ba3a29079ef1a57627bb5c54710f303b8", "expectedAbi": "051fe8097f976bba9698f3195870396bef49413aff90a93e1fd3dc4c720f65ad"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "2693c34fd3fe777fb146ac3c9ae6bcc0ca35e0c91513e8aa67749d7760db38a5",
       "executionHash": "87e8e30475f9cbded1fa2410dfa61a9fa9ca8726cd71c4173e2bef0ab315039e",
-      "debugHash": "c6523acd6794d06ffd57a151470649397ae09f6fc7999567a1751d184f6a6d9a",
-      "entryAbiHash": "9c054d8b7509b3db28b755f4a912c3b9368acf7b6b5a56b3141baa6e6afbded7",
+      "debugHash": "75500131f3999402087e2169ec0b1a66581c92b2efdbf19d51a1487df27ee773",
+      "entryAbiHash": "73a436254e2d895a203c53bb56b8bd06ea4085e6086c3b045fabf536dcbc0131",
       "canonicalDeclaration": "int AddForAOT(const int)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 84,
+      "sourceLine": 159,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_2693c34fd3fe777fb146ac3c9ae6bcc0ca35e0c91513e8aa67749d7760db38a5_87e8e30475f9cbded1fa2410dfa61a9fa9ca8726cd71c4173e2bef0ab315039e",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "2957df48067da70f007536544c759372c24cebdf8c13d22b7bcfbab8d45a19c9",
       "executionHash": "e73ef907c33b0fc6c37c610a5e074617f248d291b078002f51991fe36eec5674",
-      "debugHash": "3161109723ceb6667c4c828f61bd28d355770672355553b0aac0a31c27977546",
-      "entryAbiHash": "821f49e8200c05323110360fc816375596ff5caaa0e0b3a7583f8c90b8e600f7",
+      "debugHash": "74aeb2893c5c297beac24d9a38bd15d0ee4fe1ab2fdabdb34dd90b1f21a834b2",
+      "entryAbiHash": "eb88e947baa4860face1585fa0d6b66fc0a33ee288c7ad728b2271e86a77d1e6",
       "canonicalDeclaration": "int ReferenceEntryForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 46,
+      "sourceLine": 121,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_2957df48067da70f007536544c759372c24cebdf8c13d22b7bcfbab8d45a19c9_e73ef907c33b0fc6c37c610a5e074617f248d291b078002f51991fe36eec5674",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptFunction", "stableKey": "9a847cdbcb6a205cf6e821b4060b98db55641e2eb760aa0ea4db56859ec0ea05", "expectedAbi": "9a3009a0b8c3997a93a8bc852ade163b815481912127a4c5be0d9109fad2377c"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "30446f73aab3e43d2469b8b54f7edd9be9c8ab8606336a0a771471c1aa7a508c",
       "executionHash": "974769158959206c4fbb982fd641349ba8f108266ac90ad1787b06d55e150876",
-      "debugHash": "175960bfeb1aca9c5e425e0cc78463bc2625b8706401e39763d3c5d3949130db",
-      "entryAbiHash": "331f1f4848cecb7fcef6fc7a39b5607f3e77b7bbaed38d45c4308c28ba5e2fdc",
+      "debugHash": "83a08fc0d01041f52a5391f522f4671a45a7eb9bedd7cf0e3dbc79386cf32d43",
+      "entryAbiHash": "c5fdf7c9de85d7a785dfc3e36e262ff979f7b922c419614f25625ceaf01dc6bd",
       "canonicalDeclaration": "int AddTwo(const int, const int)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 196,
+      "sourceLine": 272,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_30446f73aab3e43d2469b8b54f7edd9be9c8ab8606336a0a771471c1aa7a508c_974769158959206c4fbb982fd641349ba8f108266ac90ad1787b06d55e150876",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "34715362da7aad5998bedecc1ec030d2b259a17300a75124152daacf24e4c54f",
       "executionHash": "fabd5fa6aad88b7821a069f290857dc6bce85d88e48d44a9e9657b2eee35c1a0",
-      "debugHash": "339e0d5b6080801255146730686d007c2c64e20a066eb0b7ecdc50a134a77c95",
-      "entryAbiHash": "105cf35ee25eb110af27107d43aba405d91a3d33de666332164d5436f152e063",
+      "debugHash": "c76b6973808ada74cc1d61368d9f1b05dea2e103fabe51ddc492d3a8fea8749b",
+      "entryAbiHash": "5c88cfe1c954db11e6955527a1273af1e6e20436cb7527444616a92e521bcb4d",
       "canonicalDeclaration": "void FailForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 29,
+      "sourceLine": 104,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_34715362da7aad5998bedecc1ec030d2b259a17300a75124152daacf24e4c54f_fabd5fa6aad88b7821a069f290857dc6bce85d88e48d44a9e9657b2eee35c1a0",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "a95a9f50d5675f7dba13e0a08d425548ae04cc5b5eecd48be9fe83838345ad3c", "expectedAbi": "1a1c7a21d57755538bc9c56509c05aedb6b9169fd0ed5b7457d90e6df4200071"},
         {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080", "expectedAbi": "207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56"},
         {"slot": 2, "flags": 0, "kind": "StringLiteral", "stableKey": "858b20bd85694bef5cbaed388e2c56a407bf1b6fe43ce726178adc561a803bd2", "expectedAbi": "c18f370622ee4112f8a6884e1b0dd30066d1283d660e7757c4711946bebbb016"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "3d027f30fbfebd291c60460ba22437b8b1c8a83663cd4cec9001b3b31f195df5",
       "executionHash": "e25691bf1c6694ad7ed2809095608dd750fb4f658eb9106dc9346f07810da1e1",
-      "debugHash": "a0adcc0eda7e24b1ba0469752d6f34280598c830c43e699ac7f71b755386d9eb",
-      "entryAbiHash": "9f485de7d7b887e42e4be9c65cdea010c43234c198082f955ad363bccb9952f0",
+      "debugHash": "831046fe2f23cf083aaeb17ca76a200e3af3ab8e19a0b309383c62db4a308dc2",
+      "entryAbiHash": "9807be95f7b037b5a524626bf011302bd0844098a4a72bbe407d8cd5e21fa5ae",
       "canonicalDeclaration": "int RecursionEntryForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 69,
+      "sourceLine": 144,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_3d027f30fbfebd291c60460ba22437b8b1c8a83663cd4cec9001b3b31f195df5_e25691bf1c6694ad7ed2809095608dd750fb4f658eb9106dc9346f07810da1e1",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptFunction", "stableKey": "f07760e6464f68dc2af2fc2d0905bfa86578c126fb4a72316819ab24818d9556", "expectedAbi": "aaaba80b1381606f8ceb778999c32ef3c7c42a7ae34610b88a70efabf08d9f7b"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "40cb4932749f765ebd772672edd8b799321a5128acb7b63a1a307ee878c93135",
       "executionHash": "0b9e1f34b7f61af8d6807ddc1048c145b5001e3240c90d3c036b90465f9a167f",
-      "debugHash": "cf8377f6c2d2538f568c55f16ec71727583e8ae6ad85a37aabc23fbe143c4c83",
-      "entryAbiHash": "ad7dac870b2eb6d42697eb4d504c8b5072ece4829ebea8db79cafb9cfe196aee",
+      "debugHash": "520cb5ce57bb03da73995cf65975a2380fafa275dff0bbb946e4c2828111e624",
+      "entryAbiHash": "c8041da3cad4a3fdc7be0bd5795a7456826fc964a0eeef2d2d35507862c860f0",
       "canonicalDeclaration": "int ObjectLifetimeEntryForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 135,
+      "sourceLine": 211,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_40cb4932749f765ebd772672edd8b799321a5128acb7b63a1a307ee878c93135_0b9e1f34b7f61af8d6807ddc1048c145b5001e3240c90d3c036b90465f9a167f",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "2071f1c292b51a50997b9defeadfd6851f6f169bc3a75afc7568416331306b51", "expectedAbi": "aa5f504594a16775a528a07ddf7bd05069acb1ddceeca3fae8722b44d15a83af"},
@@ -259,24 +489,30 @@
         {"slot": 6, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080", "expectedAbi": "207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56"},
         {"slot": 7, "flags": 0, "kind": "StringLiteral", "stableKey": "3cda9504f984d1f1f6007c67b59b4dc9cdf83e4555aa2cb790802b289b8b50d1", "expectedAbi": "4589f60b3dadd3a976c12bd303caf20d03ad9d7292a03b96bba7bbf3d0ae13fe"},
         {"slot": 8, "flags": 0, "kind": "StringLiteral", "stableKey": "eab9a79a77ecaa03fe33125c038f2f52863651588376c722a5ba50fb5b691501", "expectedAbi": "878cd416dece4e46e79d60741ea6211ae281fedd77a23319b136e5bfe3e49573"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "486927bfa5514bd2b6d8e65e12c708bc75e9dbfc7fe369b7ad69cab09c846b52",
       "executionHash": "f1d8185b41d4aff3510fd1255a5b7478b0a0845e9a45b7e1c21dd42d0f341f8f",
-      "debugHash": "6144026a285e45049aece2640becfb3806a62e4611772ea21f47be10551ad2f5",
-      "entryAbiHash": "f7c84efcc7befb568753c74a139052d8deac838b1132e7123423cb9bd27b6830",
+      "debugHash": "8ef2103331b138e2c90a58e738fe4ffd5ada6bec8cda9446a8aec182df7fe172",
+      "entryAbiHash": "a1d1604b170c8afa6d8aebaea217a68d24d4f67ff1cce99952cd0a22877c25f4",
       "canonicalDeclaration": "int64 DoubleToInt64ForAOT(const float)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 95,
+      "sourceLine": 170,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_486927bfa5514bd2b6d8e65e12c708bc75e9dbfc7fe369b7ad69cab09c846b52_f1d8185b41d4aff3510fd1255a5b7478b0a0845e9a45b7e1c21dd42d0f341f8f",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
@@ -284,7 +520,7 @@
       "functionKey": "4b125aabee97028e61ca8ddce0932f818e07f9454a679f4de650a7adbdf53f30",
       "executionHash": "8cd694ba8a03a3e3e79bbc4bc33a2f8874cb43658794fff89ed0fc55799f1342",
       "debugHash": "a51151f33be0f065b6b70f9816f5a3fe62f5ce21c7c8c1637abec3c4139e781b",
-      "entryAbiHash": "9c054d8b7509b3db28b755f4a912c3b9368acf7b6b5a56b3141baa6e6afbded7",
+      "entryAbiHash": "73a436254e2d895a203c53bb56b8bd06ea4085e6086c3b045fabf536dcbc0131",
       "canonicalDeclaration": "int AddForAOT(const int)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
       "sourceLine": 3,
@@ -293,25 +529,54 @@
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_4b125aabee97028e61ca8ddce0932f818e07f9454a679f4de650a7adbdf53f30_8cd694ba8a03a3e3e79bbc4bc33a2f8874cb43658794fff89ed0fc55799f1342",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
+      "functionKey": "4fa1dcdc68283850ec78bf0d4c0772b0dc4319d91d9d7fd793b339ef8afb21d4",
+      "executionHash": "3c12d161e3d40eea5b8c990ac8c7eaa0388a55436b51618b8594df7108707d90",
+      "debugHash": "eccba4f1e1e23806e14afc14cd7c20ec4659f637f48fa7ba5a5b8b65bac45193",
+      "entryAbiHash": "45c016e37ac90d9198599858f3806eb4651e70a0969f759160a4683df7eee13c",
+      "canonicalDeclaration": "int SemanticMutationParity(const int, const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
+      "sourceLine": 18,
+      "sourceColumn": 1,
+      "flags": 0,
+      "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_4fa1dcdc68283850ec78bf0d4c0772b0dc4319d91d9d7fd793b339ef8afb21d4_3c12d161e3d40eea5b8c990ac8c7eaa0388a55436b51618b8594df7108707d90",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "5192396f1de5ca755a03a0309eb930bb0941aa4be9ff9c67fe7f4c3851acad65",
       "executionHash": "0e62174e7a6ac532611bb5c523304c0baefade0a901b22ab785d62af07152acc",
-      "debugHash": "8758b7a946b282e5621a0afd85a5fbc3ceb5cbd810b81df33404dd3a63a302e6",
-      "entryAbiHash": "23a5665d2df5aa33bee9688695cf69ffc76a8b14539a9c65bbffe8c7a386a9ef",
+      "debugHash": "18c42e648e7ed22ea5d970260276f206d27554fb09a9afeec042fdacae09eeaf",
+      "entryAbiHash": "b80efaaa778ead65430c5702610f23a7b6dccd414f3c044078aa45e30f15b055",
       "canonicalDeclaration": "int BumpReferenceForAOT(int&inout)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 122,
+      "sourceLine": 197,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_5192396f1de5ca755a03a0309eb930bb0941aa4be9ff9c67fe7f4c3851acad65_0e62174e7a6ac532611bb5c523304c0baefade0a901b22ab785d62af07152acc",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
@@ -319,73 +584,87 @@
       "functionKey": "521eab370f221a5ed98d7359d2be6175ef3c5a9ee0343d41e18d6d4b5b5f4cf7",
       "executionHash": "08e5d45dc20b81f5eed1bfd2dffc742af8fbde6e6be8fa295cc4db70f9dabd4e",
       "debugHash": "e99c1b7c1598b7ed5632a3ec913c738a97522a396a8ed5610511320c8b6818b1",
-      "entryAbiHash": "de44051d2af792a134ff30c580328c695d9c142e2535b3b3e4536ddc17b6db77",
+      "entryAbiHash": "847e0fd88661ad9588f2e5b3a2e560f536b2c027896b3664ab7a3f99a32fee92",
       "canonicalDeclaration": "UStaticJITAotVirtualChild()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 227,
+      "sourceLine": 309,
       "sourceColumn": 0,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_521eab370f221a5ed98d7359d2be6175ef3c5a9ee0343d41e18d6d4b5b5f4cf7_08e5d45dc20b81f5eed1bfd2dffc742af8fbde6e6be8fa295cc4db70f9dabd4e",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "f87eccbad424c0a40434ab6e70eb92bc917cda31950ff302f98206f127a701e5", "expectedAbi": "869d4e3ddb0a18b0ca831336a9d1c933829e829ea09561bc71493341b3612994"},
         {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "f4a3e236ba32d7ce2785c71c5606b807f64c64fd981b3330bed70cd39c6146ef", "expectedAbi": "bec7046d5cf67cb7ff350458631a0c42320696d04ce0d8f830998f0b877c78b0"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "5559c341f686950af4ae1125538df84b3a24dfe0926a00ead46cf1610b0911fa",
       "executionHash": "59c8c94c7be658662a71a29a388ac68fe8dfd9c1b43aa31eb7f3877d1758cbf9",
-      "debugHash": "f1a9ca9f519e0006c2b1f4a330a5c00b157bdee9df3b64f611398bffc1a6fc84",
-      "entryAbiHash": "6f792c4fe2aa60b4f207a2ef231a3b0a50254004a3a9776bafd7b167237c85ae",
+      "debugHash": "3e21d3af5c5cfb08483851c8bb1b53a547ff080490619146be4cf2acb3362b00",
+      "entryAbiHash": "db0c8f3058412e5bdc683b188ff132b140d00caf79e3e0658bda0254082fdee0",
       "canonicalDeclaration": "int Entry()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 8,
+      "sourceLine": 83,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_5559c341f686950af4ae1125538df84b3a24dfe0926a00ead46cf1610b0911fa_59c8c94c7be658662a71a29a388ac68fe8dfd9c1b43aa31eb7f3877d1758cbf9",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptFunction", "stableKey": "4b125aabee97028e61ca8ddce0932f818e07f9454a679f4de650a7adbdf53f30", "expectedAbi": "5279bdaed3d5cbf591896d8af56a53c37f96b78aa67b2c93f71d824681a13c11"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "58a0dd2f4cd4cc11df5f18d605cdee91ac5735bab888c6a3fd318ff5e4f419c9",
       "executionHash": "68246c952cd8e1da3ce4bf073623a504479ab8131a58e607cd2e8186928d1f00",
-      "debugHash": "9c8fe440a8a408b99fd4965baba4419e4cbb98fff74907a1cf6e22de700fcf3a",
-      "entryAbiHash": "105cf35ee25eb110af27107d43aba405d91a3d33de666332164d5436f152e063",
+      "debugHash": "28f98b27045bf896f77c156b2de79065648c8e4444ec87e711d84113777ce3d5",
+      "entryAbiHash": "5c88cfe1c954db11e6955527a1273af1e6e20436cb7527444616a92e521bcb4d",
       "canonicalDeclaration": "void FailForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 111,
+      "sourceLine": 186,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_58a0dd2f4cd4cc11df5f18d605cdee91ac5735bab888c6a3fd318ff5e4f419c9_68246c952cd8e1da3ce4bf073623a504479ab8131a58e607cd2e8186928d1f00",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "a95a9f50d5675f7dba13e0a08d425548ae04cc5b5eecd48be9fe83838345ad3c", "expectedAbi": "1a1c7a21d57755538bc9c56509c05aedb6b9169fd0ed5b7457d90e6df4200071"},
         {"slot": 2, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080", "expectedAbi": "207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56"},
         {"slot": 3, "flags": 0, "kind": "StringLiteral", "stableKey": "858b20bd85694bef5cbaed388e2c56a407bf1b6fe43ce726178adc561a803bd2", "expectedAbi": "c18f370622ee4112f8a6884e1b0dd30066d1283d660e7757c4711946bebbb016"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "598df8bb10d25347acf7f679783e5c13250cbaa02b1ebe130b2b9e419fe2e03c",
-      "executionHash": "615b01359e479a32f07c45857015bbd879132d9bc0ef0f750de64842abff27ba",
-      "debugHash": "97bedbd3591c0530d632465df66da118085e8dde4202e76a04b573478937da0d",
-      "entryAbiHash": "d58dd33638f8ddba31b892eb3c70a7cce7d0c3d142f2bdd5e90ac408e17f567f",
+      "executionHash": "161433a112646699b48a9161175b1156d5479b763d25cf71e7795de8c8731f2e",
+      "debugHash": "3d40835b6df7855101e5a66b1f0405e8c461b81a9de292b98d76bf8749362c78",
+      "entryAbiHash": "3c7da2556903a2aede2bf7c4a70e333223d38b106a790953f977db702ff61900",
       "canonicalDeclaration": "int GetVirtualValue()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 211,
+      "sourceLine": 293,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
-      "symbol": "ASJIT_598df8bb10d25347acf7f679783e5c13250cbaa02b1ebe130b2b9e419fe2e03c_615b01359e479a32f07c45857015bbd879132d9bc0ef0f750de64842abff27ba",
+      "symbol": "ASJIT_598df8bb10d25347acf7f679783e5c13250cbaa02b1ebe130b2b9e419fe2e03c_161433a112646699b48a9161175b1156d5479b763d25cf71e7795de8c8731f2e",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "3d7eb857e6607fc45a1549c16bdab4ace696af400169ab3330b277c542b1bc4e", "expectedAbi": "f686f69c5e4582f2ef2fc221389a23d2f08860fe99f9c2a8baf2b7f3082f5fd7"},
         {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "64779193f54090d70553ca94c4aa4c7f48bd29738e238c207e2739ee8e256151", "expectedAbi": "a127d790b8c9b0da91213e66399ae35a98f0fb6634e07b8ede492183378d6ced"},
@@ -395,40 +674,48 @@
         {"slot": 5, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "efcc82d23b499fa1cdd52931661158a23f5e9be93b6cd36ef3a38193ad5fc369", "expectedAbi": "a5106ce305bf404c30be86046a0bd97f3c07763a559d34377d0b299758c24bd1"},
         {"slot": 6, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080", "expectedAbi": "207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56"},
         {"slot": 7, "flags": 0, "kind": "StringLiteral", "stableKey": "a41c49a070d31f6fa75300a39ce58c872cf216451072cb2009e48fa7c24fef88", "expectedAbi": "29206f750950647c4ce2593e9caf02f3ae9464d2a4a54ceca7d7759004305496"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "5b773e32f9e00349bf6af077f499168d794e04d84f5b415ee4618690b9f8520f",
       "executionHash": "3018370c1d5e1cc9de3fd683fadb75e7761f78e06dd8ce7987c9330a1bce062b",
-      "debugHash": "5a7aed7d3a3b6dc4fd8532150fd59d8c67193e5d2d42cdc0983036ff9d364b98",
-      "entryAbiHash": "4c07500ea3eb9c950f7093e694d9e17047a36a253901002753e0996b8efe2c8b",
+      "debugHash": "3fdf6c8a27aa66040729e360f04f3ace30d4eb86ede5d23502ac973db7c645d0",
+      "entryAbiHash": "30ea0052fcb05cde2ff76d0f9f168b4c15908ca08694ae1622949ba51c05132e",
       "canonicalDeclaration": "UStaticJITAotFunctionCarrier ReturnSelfObject()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 190,
+      "sourceLine": 266,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_5b773e32f9e00349bf6af077f499168d794e04d84f5b415ee4618690b9f8520f_3018370c1d5e1cc9de3fd683fadb75e7761f78e06dd8ce7987c9330a1bce062b",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "5c613d356269432b6e605bb2642deba24520165e2b3d0d0e49a95a3a80f2b22d",
       "executionHash": "558ba86db59491db742bc487a8c7901ae4d87cef1db86f96ea7e5c0761de4eef",
-      "debugHash": "78999fb135e3d81268c3a1b02017bddc3aecab81fdd1d718d75dc7b677092532",
-      "entryAbiHash": "ad7dac870b2eb6d42697eb4d504c8b5072ece4829ebea8db79cafb9cfe196aee",
+      "debugHash": "06201126460fc03761ea3f11227edf85a6f198dc567103236424d0f1d41266cd",
+      "entryAbiHash": "c8041da3cad4a3fdc7be0bd5795a7456826fc964a0eeef2d2d35507862c860f0",
       "canonicalDeclaration": "int ObjectLifetimeEntryForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 53,
+      "sourceLine": 128,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_5c613d356269432b6e605bb2642deba24520165e2b3d0d0e49a95a3a80f2b22d_558ba86db59491db742bc487a8c7901ae4d87cef1db86f96ea7e5c0761de4eef",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "2071f1c292b51a50997b9defeadfd6851f6f169bc3a75afc7568416331306b51", "expectedAbi": "aa5f504594a16775a528a07ddf7bd05069acb1ddceeca3fae8722b44d15a83af"},
         {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "53fa3f8b6c42f16d13e0ea54034f4ffd82c4edc67553d7f3219bc749e29765ce", "expectedAbi": "52fcd9f87521c9665b859b7e1ad2047538760c79d7eb4cd0f33d0093e1d9f9f0"},
@@ -438,25 +725,31 @@
         {"slot": 5, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080", "expectedAbi": "207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56"},
         {"slot": 6, "flags": 0, "kind": "StringLiteral", "stableKey": "3cda9504f984d1f1f6007c67b59b4dc9cdf83e4555aa2cb790802b289b8b50d1", "expectedAbi": "4589f60b3dadd3a976c12bd303caf20d03ad9d7292a03b96bba7bbf3d0ae13fe"},
         {"slot": 7, "flags": 0, "kind": "StringLiteral", "stableKey": "eab9a79a77ecaa03fe33125c038f2f52863651588376c722a5ba50fb5b691501", "expectedAbi": "878cd416dece4e46e79d60741ea6211ae281fedd77a23319b136e5bfe3e49573"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "635bd31fd9c1491607e4044ecd2e683fed66d4f0765045d47b7ca3b47ec88cb1",
       "executionHash": "b9b9cf20c0c6ef3cd5642c43083fc7bf8266b6b8b2df8437b2603377d837b03e",
-      "debugHash": "3160298098a8abf96612cb20dd8c2d8af74345f272444932d158ced1da8f2e5d",
-      "entryAbiHash": "7bbec1f84c5078a225350baa7ae2d7cfa7aa5c6502c6e51b34b94618b10cb5e8",
+      "debugHash": "7a2ab2848a816f22a3935278fe271a014b51b7ce2fcb4f06da7b416c842bbc6e",
+      "entryAbiHash": "59029a9011b50bdad9e86b6ca1d8d31868558cdf84799ffea7ef7660667c250a",
       "canonicalDeclaration": "int BumpReference(int&inout)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 182,
+      "sourceLine": 258,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_635bd31fd9c1491607e4044ecd2e683fed66d4f0765045d47b7ca3b47ec88cb1_b9b9cf20c0c6ef3cd5642c43083fc7bf8266b6b8b2df8437b2603377d837b03e",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "ScriptProperty", "stableKey": "d8d78f242d39fd1ebab3da9d1c5f72ca4e4854a9f870dfc327e91f9b8a6e8b9f", "expectedAbi": "347d4f4cd95c28cc5789506625865b59dafc1bc15fb26d766f47f84de6a91781"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
@@ -464,256 +757,431 @@
       "functionKey": "6a1d712788d1f9e6d19f814446686b67c2646e32117f3f6b9629aa80c0c38060",
       "executionHash": "fb05ff1cd40b005becc20bdca090866a9a681873a5ef622458c77a1146814bec",
       "debugHash": "e99c1b7c1598b7ed5632a3ec913c738a97522a396a8ed5610511320c8b6818b1",
-      "entryAbiHash": "c015745a127a499898453c626f0da9b3c8a945e2d009adeea0f5065f9117604c",
+      "entryAbiHash": "b064ff3e8589a401db170315cb55c048d06915739f55618b8165aeca3b2dc0f1",
       "canonicalDeclaration": "UStaticJITAotFunctionCarrier UStaticJITAotFunctionCarrier()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 80,
+      "sourceLine": 155,
       "sourceColumn": 0,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_6a1d712788d1f9e6d19f814446686b67c2646e32117f3f6b9629aa80c0c38060_fb05ff1cd40b005becc20bdca090866a9a681873a5ef622458c77a1146814bec",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "c5c802cbf4c8a38a7b3faa86efda41f60157ec97b9bf469cb71c1cb577e4aae5", "expectedAbi": "638585a27b307bbd293ff8477eb3a687b7a4995b7974d846972aabafa86e9b97"}
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
+      "functionKey": "73513764b7734eab1039f73f42a0624f5c32ba4af3544db4466a3263c2d1e795",
+      "executionHash": "e1f3ddcce67ec6a308007c17a95e2baf679cfc66c7a8c3627d3d235d989b3ae2",
+      "debugHash": "8d22bdc57beacd09150892181f521b7d68e0f22c64dd1915e8a57723de0f8063",
+      "entryAbiHash": "9309f3438eca43da589c8d5ac23b06a58e143747a47d2f54ff811daf7b2e9706",
+      "canonicalDeclaration": "int TypedASTExportedSymbolShowcase(const int, const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
+      "sourceLine": 44,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_73513764b7734eab1039f73f42a0624f5c32ba4af3544db4466a3263c2d1e795_e1f3ddcce67ec6a308007c17a95e2baf679cfc66c7a8c3627d3d235d989b3ae2",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+        {"callSiteIndex": 0, "route": "CurrentNativeBinding", "canonicalDeclaration": "int DaysInMonth(int, int)", "emittedCppCallee": "AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32, int32>", "runtimeDllCore": "AngelscriptTypedASTJIT::ResolveBoundNative", "metadataRowSymbol": "ASJIT_Call_DaysInMonth_a23d24f5_73513764b7734eab1039f73f42a0624f5c32ba4af3544db4466a3263c2d1e795", "registeredTarget": "FDateTime::DaysInMonth", "stableTargetKey": "a23d24f5578bcda99902f5751c10969f2ce363c52ba277760f88484adeb965b3", "expectedAbi": "0b2738fee86236a40456adc468988e2e71464459685e587540372da2c4eaca13", "referenceSlotIndex": 0}
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "a23d24f5578bcda99902f5751c10969f2ce363c52ba277760f88484adeb965b3", "expectedAbi": "0b2738fee86236a40456adc468988e2e71464459685e587540372da2c4eaca13"}
+      ],
+      "semanticDependencies": [
+        {"kind": 11, "targetKind": 7, "stableKey": "a23d24f5578bcda99902f5751c10969f2ce363c52ba277760f88484adeb965b3", "expectedAbi": "0b2738fee86236a40456adc468988e2e71464459685e587540372da2c4eaca13", "expectedContentOrValue": ""}
+      ]
+    },
+    {
+      "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
+      "functionKey": "75fed72a536fa8de4e4c4209cf0461899c8cf1afd105e24d240e22e1133b6d5f",
+      "executionHash": "90a1fc318f267fc8f5e2b3073e52e781ebd72ad0117f706062b82d517a9d0848",
+      "debugHash": "7803600e49438af8e8cd92e8edda6b696fe2fb6a6906b8f1b850ca39def4b5cf",
+      "entryAbiHash": "db0465d360843dd633375f902a889661f9e22535246942bafbda919d3c3cbcf1",
+      "canonicalDeclaration": "float SemanticPowerDoubleInt(const float, const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
+      "sourceLine": 38,
+      "sourceColumn": 1,
+      "flags": 0,
+      "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_75fed72a536fa8de4e4c4209cf0461899c8cf1afd105e24d240e22e1133b6d5f_90a1fc318f267fc8f5e2b3073e52e781ebd72ad0117f706062b82d517a9d0848",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
+      "functionKey": "794176cc22220a890ca5552273721e71218367d2b1315751c06a78166f946f43",
+      "executionHash": "48cea96ba0a986d0ad01106cf0cf4dfb83b96cbe754b2e295e2df31f57afb992",
+      "debugHash": "5e66cad00ad2353fbe348978d9a5f8903edc1560e791cfa08c2cbb9c7ed5bd8e",
+      "entryAbiHash": "802462d137df2242b59cb2b901557e6d9f177fed1caae7e133b299f6f631b506",
+      "canonicalDeclaration": "float SemanticPowerDouble(const float, const float)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
+      "sourceLine": 33,
+      "sourceColumn": 1,
+      "flags": 0,
+      "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_794176cc22220a890ca5552273721e71218367d2b1315751c06a78166f946f43_48cea96ba0a986d0ad01106cf0cf4dfb83b96cbe754b2e295e2df31f57afb992",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "89af2a983148ab5615f6efba1837fdc9b306cb37cdd12898193e7d44b6439652",
       "executionHash": "8d91fd16350ec4e44575077d45598ce8ae04e9b9a5c5158835a0dae927ccd053",
-      "debugHash": "1f8819dd2a0a840d31918aec02ecde6b3fb298210e1b721f1abf0a7a3f0277e5",
-      "entryAbiHash": "a339ee8b7ca83360352f8578e18fc7848ddcb9edb253a5c295f1110c9c23c618",
+      "debugHash": "b8c46940f17d3bc305943ac076fd24a05b7c3d347ce684fae051e01a0a93f649",
+      "entryAbiHash": "43bf555b1cdd803979e0fcaa94ab1a10d69fba57c0e1e44934d93cb64c5eb6d1",
       "canonicalDeclaration": "int StaticWorldContextCheck(UObject, const int)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 235,
+      "sourceLine": 324,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_89af2a983148ab5615f6efba1837fdc9b306cb37cdd12898193e7d44b6439652_8d91fd16350ec4e44575077d45598ce8ae04e9b9a5c5158835a0dae927ccd053",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "0217b51bdc40257133d5eec0a87d3c4c450846be405b50bc2680fe9c3a30964a", "expectedAbi": "311fcfa1c5ce10d16fcee43196cd196f44463dd5d96f1432f57b07b06d02fa05"},
         {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "9f4e2162e8e8a7c99180c6f55e16689aba071a2343784ec5cd2dee74ac2bc35e", "expectedAbi": "eb31bfceedb6a806d3e5b706f7950be323eff353fa29dfe5c66d7563f0592e0a"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "8a3604f71e882b6abb85571af48a797c711a59f3ce5d97af8d1f32e4360effaf",
       "executionHash": "8ebf159adfc3c0b241459d0fa1d50a697cd4b805685a94068e4eb11124e56f03",
-      "debugHash": "64c09ddeabdccd3abdba34018db4b626a8b8f83dc27ae3540f71d2e6159e5778",
-      "entryAbiHash": "a552bbee02f0912539b7eadd7d97b3a59881289d5cff573d94b06a63de16344e",
+      "debugHash": "23ee88938aabf14e26e28997d16e6dcd17a36f7c5fa5f97982fc2124a2a0a592",
+      "entryAbiHash": "59c253776ca706e4b802002aa63a0562f899465e5e8dcb6976ad0e14745f555a",
       "canonicalDeclaration": "void StorePrimitiveArg(const int)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 163,
+      "sourceLine": 239,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_8a3604f71e882b6abb85571af48a797c711a59f3ce5d97af8d1f32e4360effaf_8ebf159adfc3c0b241459d0fa1d50a697cd4b805685a94068e4eb11124e56f03",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "ScriptProperty", "stableKey": "d8d78f242d39fd1ebab3da9d1c5f72ca4e4854a9f870dfc327e91f9b8a6e8b9f", "expectedAbi": "347d4f4cd95c28cc5789506625865b59dafc1bc15fb26d766f47f84de6a91781"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "91ead9fa14e7b5c2ffc1e318a63f46c64c38fd28c17cf8648a985806c9311277",
       "executionHash": "37f8b3d211d13533245d7e8e2c19aa9094d05556c2240e1289b057acd844c5d7",
-      "debugHash": "ffcc6196c22883662189d42a26a6e2a862aa9b652396663bc99c4f95a1eccab8",
-      "entryAbiHash": "baf6fd1e8422cd3e2b6430c8afc94f6e4387239e34ddfd17e19fd34b0e5603b9",
+      "debugHash": "523e1087e636c4e8b3fd20f68eabafb8d532c41ee0e45afa01ba4ff14b25fdb9",
+      "entryAbiHash": "8e204c65d868a3511f949a72a8040d1e58f2c414351b97e6ddef4ad8bc9d5b08",
       "canonicalDeclaration": "int ExceptionEntryForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 116,
+      "sourceLine": 191,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_91ead9fa14e7b5c2ffc1e318a63f46c64c38fd28c17cf8648a985806c9311277_37f8b3d211d13533245d7e8e2c19aa9094d05556c2240e1289b057acd844c5d7",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "58a0dd2f4cd4cc11df5f18d605cdee91ac5735bab888c6a3fd318ff5e4f419c9", "expectedAbi": "ad2dff2fa37e2cbb29c682211305483e6850aca539673832bec797ca2374d5ba"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "947430d3dda2641a6a6fa7990b225bd55cdac3fcb9717fac45077c92c4048cf7",
       "executionHash": "e2a0dedd7d7ebfe498830d40c0881570ab0cefd2eb6f2de8c3ffcdbf87c37157",
-      "debugHash": "5dc127f003403df7e86dc52029521e727f61775dba544da2108ebf3b86861488",
-      "entryAbiHash": "156f37a674a4191f173f4119b1ed1aa15583248d6f4331c86b6ebd608c713fd0",
+      "debugHash": "375d74be85cb27dd373f5a6972393f822c4d0814e4ebb5bdb7d6995f26cdacea",
+      "entryAbiHash": "805d2b5d622dfc1d79e7a6e1f19c0e4068732e3afa951e3f3b429e924ed5af85",
       "canonicalDeclaration": "int RecurseForAOT(const int)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 142,
+      "sourceLine": 218,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_947430d3dda2641a6a6fa7990b225bd55cdac3fcb9717fac45077c92c4048cf7_e2a0dedd7d7ebfe498830d40c0881570ab0cefd2eb6f2de8c3ffcdbf87c37157",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "947430d3dda2641a6a6fa7990b225bd55cdac3fcb9717fac45077c92c4048cf7", "expectedAbi": "1c416cd276ffeef7ab9be9a317d461e206a61a97a35ffa3fb719b1c8223d57da"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "980bd73503b215e1d3fc564495191651205d2d744a5a70f5e7dc7c0071d02ff1",
       "executionHash": "d7eaf1c7675e62f28fd59cc6748fb409101a0ee62f733b718a57f18f9eefb57e",
-      "debugHash": "a1cbb1de41cb375a507b5be08c7bef7784818b8f384eb624dfdd0fc7a28129bf",
-      "entryAbiHash": "93970f84a6aa1bac802f6979d57ff2163ff4f46543f8fc9ab6574d7e2f0d4e63",
+      "debugHash": "04becc36e30601421672c73a1ae5f2433d3db8f187b88446ac96997ed69dc4d7",
+      "entryAbiHash": "507cc902edc1d9bd3e2f2572fe86bb7d02b96a550445798d3f067222eb350188",
       "canonicalDeclaration": "int GetVirtualValue_Implementation()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 228,
+      "sourceLine": 310,
       "sourceColumn": 3,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_980bd73503b215e1d3fc564495191651205d2d744a5a70f5e7dc7c0071d02ff1_d7eaf1c7675e62f28fd59cc6748fb409101a0ee62f733b718a57f18f9eefb57e",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "f87eccbad424c0a40434ab6e70eb92bc917cda31950ff302f98206f127a701e5", "expectedAbi": "869d4e3ddb0a18b0ca831336a9d1c933829e829ea09561bc71493341b3612994"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "9a847cdbcb6a205cf6e821b4060b98db55641e2eb760aa0ea4db56859ec0ea05",
       "executionHash": "9e0ee7c8a454f7220efc004fa5e64d9f4a3b896d4cc8dc9597c518621b86e70c",
-      "debugHash": "3a7f04c667df892cb11f364dfaef8888ad346e4f6b666ff25fba3f4aa472fe02",
-      "entryAbiHash": "23a5665d2df5aa33bee9688695cf69ffc76a8b14539a9c65bbffe8c7a386a9ef",
+      "debugHash": "e6ebce0032bf30692e643d9698bb60e13ede42d0828bee2cd8cf02c5349d3487",
+      "entryAbiHash": "b80efaaa778ead65430c5702610f23a7b6dccd414f3c044078aa45e30f15b055",
       "canonicalDeclaration": "int BumpReferenceForAOT(int&inout)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 40,
+      "sourceLine": 115,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_9a847cdbcb6a205cf6e821b4060b98db55641e2eb760aa0ea4db56859ec0ea05_9e0ee7c8a454f7220efc004fa5e64d9f4a3b896d4cc8dc9597c518621b86e70c",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "9bf32d35743c453ab252bde2cf30b5a04b2c0ee664b3995f90ed3b071da50e3a",
       "executionHash": "f643f2af98b5abccabf8ba607388698dce70fef161600767865f502ab4ba7ec1",
-      "debugHash": "28dc38e2497b964988d0426df2ef014de165fb3f27d81b4f5f76afb50bd53f9e",
-      "entryAbiHash": "ac60f1864c77f2def1e11a94b3749762971cd3004b15141de7114b872311cffb",
+      "debugHash": "01120825f1c3a2e1f289bb68407e79dc79dc5c95b1138ff192d2fc027562015d",
+      "entryAbiHash": "4b531289681eab0fc4f4f249dee5c27f1a8dedc1b24ed061e98876f5dedce042",
       "canonicalDeclaration": "int ImportEntryForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 74,
+      "sourceLine": 149,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_9bf32d35743c453ab252bde2cf30b5a04b2c0ee664b3995f90ed3b071da50e3a_f643f2af98b5abccabf8ba607388698dce70fef161600767865f502ab4ba7ec1",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptFunction", "stableKey": "69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304", "expectedAbi": "17c4224b840b8fd12125712ba4233fafcde6d42a2539fe6dc55c1db507223f48"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "9cd3c344535a331f8ccdca49c1927750f2dd23fa6b1e3d447de2551994623ed7",
       "executionHash": "aa09074ddab30af509e57b20a66e3301fd95e90c0f53585e7954a5d76bec975c",
-      "debugHash": "594be3e15a310f5d46d1e6535bdb708c96c54ca8ec629dc80635a32d49670f0f",
-      "entryAbiHash": "fde794e2dd799e81eb6f23c8d202194ce3c63752c57b73c1ac3445f0fef39ffd",
+      "debugHash": "4926cbd43899f0deff7d8fa15b03eca6f16af4cec4abd8b3cd7578d9c5d4e41e",
+      "entryAbiHash": "dc83c109706793b798e437d104797c6bd2946d45dd2a7a22bc5dc94aa6809a03",
       "canonicalDeclaration": "int ThreadSafeReturn()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 202,
+      "sourceLine": 278,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_9cd3c344535a331f8ccdca49c1927750f2dd23fa6b1e3d447de2551994623ed7_aa09074ddab30af509e57b20a66e3301fd95e90c0f53585e7954a5d76bec975c",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "9e3e038bd73ec0c0b4c52e7fbb25ef63dc33a457a64d9420e557afacc04fe03e",
       "executionHash": "4db4ef9a2b689826b018585d8640d54df2ab20c17fcd503eebf7f94a30d515f1",
-      "debugHash": "18e39c15702a5aa3a0ec69189925683cf52885665046d9da30787d98ee87f716",
-      "entryAbiHash": "264e9eee824472a6265e57ce03ba9bd446edbd73c77692de2bee50c963181c06",
+      "debugHash": "a53146aa6c6628f0b203845062678771a5bd464533da9f3c44c538028c485ae6",
+      "entryAbiHash": "edfd275150d177872c0521a27feaed2db8935ff989a49d20f43a3627044ec161",
       "canonicalDeclaration": "void IncrementReference(int&inout)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 175,
+      "sourceLine": 251,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_9e3e038bd73ec0c0b4c52e7fbb25ef63dc33a457a64d9420e557afacc04fe03e_4db4ef9a2b689826b018585d8640d54df2ab20c17fcd503eebf7f94a30d515f1",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "ScriptProperty", "stableKey": "d8d78f242d39fd1ebab3da9d1c5f72ca4e4854a9f870dfc327e91f9b8a6e8b9f", "expectedAbi": "347d4f4cd95c28cc5789506625865b59dafc1bc15fb26d766f47f84de6a91781"}
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
+      "functionKey": "a0700964917ac302b09c2bbc5e47cf1d01e9b65e39c619ec0d30af07ff9340a9",
+      "executionHash": "66b34169a0f72d658c4febf83548ea1a8edc0d55d86c772677e821ce0ccf3cf4",
+      "debugHash": "6b439672315ecba878b5faebb82211687f7c0e535564f04d748e3e6a6dbeef84",
+      "entryAbiHash": "97c4a3b9d12b23ba1b0401fc6dc59e5b24fabb6eb7c3ce760a58844d3692b2f9",
+      "canonicalDeclaration": "void ClientStoreRpcValue(const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
+      "sourceLine": 283,
+      "sourceColumn": 2,
+      "flags": 0,
+      "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_a0700964917ac302b09c2bbc5e47cf1d01e9b65e39c619ec0d30af07ff9340a9_66b34169a0f72d658c4febf83548ea1a8edc0d55d86c772677e821ce0ccf3cf4",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
+        {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "15b00c8c1ef43fafc4b65edabaee8b2f22b9b5b59b54ea565ca22b7f684ff69e", "expectedAbi": "3782307c964001de9514554149323d095fd2d9025c81184724831055b08ca606"},
+        {"slot": 2, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "64779193f54090d70553ca94c4aa4c7f48bd29738e238c207e2739ee8e256151", "expectedAbi": "a127d790b8c9b0da91213e66399ae35a98f0fb6634e07b8ede492183378d6ced"},
+        {"slot": 3, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "7517cca2e21c2b15edfaea4049e59416c32059f8383fc4381d786ce2fffedb50", "expectedAbi": "8c7b58a5467ce7f9597d05219ff627ac27605af35cb4cbd7da4601665b7c5858"},
+        {"slot": 4, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "9f4e2162e8e8a7c99180c6f55e16689aba071a2343784ec5cd2dee74ac2bc35e", "expectedAbi": "eb31bfceedb6a806d3e5b706f7950be323eff353fa29dfe5c66d7563f0592e0a"},
+        {"slot": 5, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "efcc82d23b499fa1cdd52931661158a23f5e9be93b6cd36ef3a38193ad5fc369", "expectedAbi": "a5106ce305bf404c30be86046a0bd97f3c07763a559d34377d0b299758c24bd1"},
+        {"slot": 6, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080", "expectedAbi": "207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56"},
+        {"slot": 7, "flags": 0, "kind": "StringLiteral", "stableKey": "fc5ed7e1741b7af6c5dd91849147cb9e0af7a6febd5b9287887d06373535a114", "expectedAbi": "7db3a84b19045b2b891d3d22b28b78df23b9c3af8b2d00a03e23340d410556f5"}
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
+      "functionKey": "a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b",
+      "executionHash": "f7ee08ffb0af7fd6427bebd4c9dfc21fb9ec36a2a04aabc61d7c2a60a1097872",
+      "debugHash": "b13cf30324227b9a171896dc6287854a35be6e5d2dfefde39170521d32f42fb8",
+      "entryAbiHash": "315429bd98bc57e8264be8ad0e7bc5007a550d671431aa6b3c1f76f34b2aa667",
+      "canonicalDeclaration": "int TypedASTCapabilityShowcase(const int, const int, const bool, const bool)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
+      "sourceLine": 50,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_f7ee08ffb0af7fd6427bebd4c9dfc21fb9ec36a2a04aabc61d7c2a60a1097872",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+        {"callSiteIndex": 0, "route": "DirectInline", "canonicalDeclaration": "bool IsRunningCommandlet()", "emittedCppCallee": "IsRunningCommandlet", "runtimeDllCore": "", "metadataRowSymbol": "", "registeredTarget": "IsRunningCommandlet", "stableTargetKey": "0000000000000000000000000000000000000000000000000000000000000000", "expectedAbi": "0000000000000000000000000000000000000000000000000000000000000000", "referenceSlotIndex": -1}
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "d29d598a9a8a090fd329db0c1d3fe9a9feaa707f0f7f52e7c6ed766e9a0324fe", "expectedAbi": "fbe6e43e9bfbf5b301c74de7f09a0baea8de4212da0cbc901a1e39c68e1b8eb5"}
+      ],
+      "semanticDependencies": [
+        {"kind": 11, "targetKind": 7, "stableKey": "d29d598a9a8a090fd329db0c1d3fe9a9feaa707f0f7f52e7c6ed766e9a0324fe", "expectedAbi": "fbe6e43e9bfbf5b301c74de7f09a0baea8de4212da0cbc901a1e39c68e1b8eb5", "expectedContentOrValue": ""}
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "a8cb30d75fe6eeb5c3a33f74ee94f2cc4dd32734ccde7a26dac377dc469a3be6",
       "executionHash": "1139879851ec9364c88ba97c5f45668c3573553687be5d11c833c21e62a3094c",
-      "debugHash": "ce00f2f5579de6b582feb5e28c9632482fbb82a8239e403653f2f4052f2eb7b1",
-      "entryAbiHash": "f7c84efcc7befb568753c74a139052d8deac838b1132e7123423cb9bd27b6830",
+      "debugHash": "ea434923de3f1b88da9b0cc7773ec00f75f8e6ae99c0983ff8346132d3c8fe4a",
+      "entryAbiHash": "a1d1604b170c8afa6d8aebaea217a68d24d4f67ff1cce99952cd0a22877c25f4",
       "canonicalDeclaration": "int64 DoubleToInt64ForAOT(const float)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 13,
+      "sourceLine": 88,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_a8cb30d75fe6eeb5c3a33f74ee94f2cc4dd32734ccde7a26dac377dc469a3be6_1139879851ec9364c88ba97c5f45668c3573553687be5d11c833c21e62a3094c",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "aee0a322f61d0b83ad7b791ea0f64e54eb9b4a9ca74aabad5c7f78cd25d329fb",
       "executionHash": "e8872a3f3978b619f364a8c7013e3ff22283632f0fa56397688987ca97239a05",
-      "debugHash": "795a1c109049a637a0ce35f9babecf8644727545c52dd0949e913f24a4c46cc8",
-      "entryAbiHash": "6f4f7e6615f922448dfa37b3c2b25936c0efef3f3655e58bd8cd07adf451eb00",
+      "debugHash": "a3fa1e7709a3abc01ff26c871c4cf7e49fa5246cef4df1bdc119260b2eda72b1",
+      "entryAbiHash": "5e708ac1a7afdc6a24646cbb3780e38d2f6639308f316ff6b2ba697920d65899",
       "canonicalDeclaration": "uint64 DoubleToUint64ForAOT(const float)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 100,
+      "sourceLine": 175,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_aee0a322f61d0b83ad7b791ea0f64e54eb9b4a9ca74aabad5c7f78cd25d329fb_e8872a3f3978b619f364a8c7013e3ff22283632f0fa56397688987ca97239a05",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "b28505eef133171edbe5c882ea10d79c713ca6cb87f351cbd70cae422f8fb367",
       "executionHash": "55a527ed5db1a4ef9e97408837341ff2dec3c63487f911516686b4396a516004",
-      "debugHash": "ebe7ae37f8914b2772b732723ee7d7efd1427de3b3ece31a340b6c8ffe0dabe6",
-      "entryAbiHash": "39088ac2abc617a5ddb6a46c03eca42dc48d094e759b6c318b2c049aee9d18cb",
+      "debugHash": "0db6e626c0b79847658f77dc974bf6af359b70fff51a244c175a16e361542d17",
+      "entryAbiHash": "020eef17e1be8204de01770a557fc8e26ac1d841e9e33088abf1b7cb9f3456b4",
       "canonicalDeclaration": "int ReturnPrimitive()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 169,
+      "sourceLine": 245,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_b28505eef133171edbe5c882ea10d79c713ca6cb87f351cbd70cae422f8fb367_55a527ed5db1a4ef9e97408837341ff2dec3c63487f911516686b4396a516004",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "bb41c2bfbc095a9d60f2625418818fc13bf04ec1a0bb79f469cc74d941bf7726",
       "executionHash": "da38e64d8c8f99763e5ab028d7619561e42eafd63cd1855f7b3fd97328ac6cba",
-      "debugHash": "d745fd2ffc47ebd384656bb8d0bf2b98b49965a951e94c1d20b7896e28b3f66c",
-      "entryAbiHash": "821f49e8200c05323110360fc816375596ff5caaa0e0b3a7583f8c90b8e600f7",
+      "debugHash": "bfa0fbd10d4779bad7016de2dc0306c3a0c4b250af4de1128774092bac8e534d",
+      "entryAbiHash": "eb88e947baa4860face1585fa0d6b66fc0a33ee288c7ad728b2271e86a77d1e6",
       "canonicalDeclaration": "int ReferenceEntryForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 128,
+      "sourceLine": 203,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_bb41c2bfbc095a9d60f2625418818fc13bf04ec1a0bb79f469cc74d941bf7726_da38e64d8c8f99763e5ab028d7619561e42eafd63cd1855f7b3fd97328ac6cba",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "5192396f1de5ca755a03a0309eb930bb0941aa4be9ff9c67fe7f4c3851acad65", "expectedAbi": "5607e024832cf0ec5098141ebaa71803d602bde0025505a17057f540b529ec99"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
@@ -721,18 +1189,22 @@
       "functionKey": "c5c802cbf4c8a38a7b3faa86efda41f60157ec97b9bf469cb71c1cb577e4aae5",
       "executionHash": "51381d117be50d31068f645cd70db749143ad7a4aaef927b0b010ad6fbee923e",
       "debugHash": "e99c1b7c1598b7ed5632a3ec913c738a97522a396a8ed5610511320c8b6818b1",
-      "entryAbiHash": "ac9fa97b0776d138c00d924aef0d8dfc047f7c4bdda25bda69b2e33cfc48a163",
+      "entryAbiHash": "fbabfad5e9e11fb97c083af33dc177e642e8c4e4d0b3a67f937cb34fa1ead35a",
       "canonicalDeclaration": "UStaticJITAotFunctionCarrier()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 80,
+      "sourceLine": 155,
       "sourceColumn": 0,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_c5c802cbf4c8a38a7b3faa86efda41f60157ec97b9bf469cb71c1cb577e4aae5_51381d117be50d31068f645cd70db749143ad7a4aaef927b0b010ad6fbee923e",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "ScriptProperty", "stableKey": "d8d78f242d39fd1ebab3da9d1c5f72ca4e4854a9f870dfc327e91f9b8a6e8b9f", "expectedAbi": "347d4f4cd95c28cc5789506625865b59dafc1bc15fb26d766f47f84de6a91781"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
@@ -740,93 +1212,157 @@
       "functionKey": "dd7185ee5ff69babce6b309d7a2954364368cd6df09defe19d4e81ff56fbe844",
       "executionHash": "ba6d296ea9a313ef441f8ef0185fb102be4ae81d8554a1bff61480bf2ac8043b",
       "debugHash": "e99c1b7c1598b7ed5632a3ec913c738a97522a396a8ed5610511320c8b6818b1",
-      "entryAbiHash": "1d69eae6e736fa942165f3d0cbe3f72ba5f301ca36d6dfb309911c3e80acd55e",
+      "entryAbiHash": "75e09447a98126f68ca8f0632eb507b4066408116c83b331b7f0978c55324dfc",
       "canonicalDeclaration": "UStaticJITAotVirtualParent UStaticJITAotVirtualParent()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 211,
+      "sourceLine": 293,
       "sourceColumn": 0,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_dd7185ee5ff69babce6b309d7a2954364368cd6df09defe19d4e81ff56fbe844_ba6d296ea9a313ef441f8ef0185fb102be4ae81d8554a1bff61480bf2ac8043b",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "3d7eb857e6607fc45a1549c16bdab4ace696af400169ab3330b277c542b1bc4e", "expectedAbi": "f686f69c5e4582f2ef2fc221389a23d2f08860fe99f9c2a8baf2b7f3082f5fd7"},
         {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "f4a3e236ba32d7ce2785c71c5606b807f64c64fd981b3330bed70cd39c6146ef", "expectedAbi": "bec7046d5cf67cb7ff350458631a0c42320696d04ce0d8f830998f0b877c78b0"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "e7c817db4faceebe6230e85891473fe7f0309ef2d506e473da9d141c0d7f5ac7",
       "executionHash": "8ae3aa1c4fdc8fcec04ac3db1312bb42a62728e9d6db911ef21f63abd00c8ac2",
-      "debugHash": "adc24f03f71011c0dbf6248c75a359f8617db2ba907be36f543984fee59202a1",
-      "entryAbiHash": "baf6fd1e8422cd3e2b6430c8afc94f6e4387239e34ddfd17e19fd34b0e5603b9",
+      "debugHash": "b50aa2eaacd265f8166d7c18ef45a5edd6d017c247c616a03cd5289480d3f1da",
+      "entryAbiHash": "8e204c65d868a3511f949a72a8040d1e58f2c414351b97e6ddef4ad8bc9d5b08",
       "canonicalDeclaration": "int ExceptionEntryForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 34,
+      "sourceLine": 109,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_e7c817db4faceebe6230e85891473fe7f0309ef2d506e473da9d141c0d7f5ac7_8ae3aa1c4fdc8fcec04ac3db1312bb42a62728e9d6db911ef21f63abd00c8ac2",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptFunction", "stableKey": "34715362da7aad5998bedecc1ec030d2b259a17300a75124152daacf24e4c54f", "expectedAbi": "3908045c351f0a4c21970eb742cf3697b08a169d3062edd3c027dcbd2de01b5e"}
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
+      "functionKey": "edbf45b913acfefb2f99e93af3f48a2289ff929fa30c7476c74cc6fd4017ab72",
+      "executionHash": "115485552d69f37b25a471131db7b58cb5db52564aea662922e73474132c6d65",
+      "debugHash": "69fd3990f4490e69daccd321fe8b030ae5d245be870bd613f84d1e867dd081bb",
+      "entryAbiHash": "66bc09dfe9cf807bdbf1d43484d609be4abf09f8f99f244b39083673e669630d",
+      "canonicalDeclaration": "void ClientStoreRpcValue_Implementation(const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
+      "sourceLine": 284,
+      "sourceColumn": 2,
+      "flags": 0,
+      "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_edbf45b913acfefb2f99e93af3f48a2289ff929fa30c7476c74cc6fd4017ab72_115485552d69f37b25a471131db7b58cb5db52564aea662922e73474132c6d65",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
+        {"slot": 1, "flags": 0, "kind": "ScriptProperty", "stableKey": "d8d78f242d39fd1ebab3da9d1c5f72ca4e4854a9f870dfc327e91f9b8a6e8b9f", "expectedAbi": "347d4f4cd95c28cc5789506625865b59dafc1bc15fb26d766f47f84de6a91781"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "f07760e6464f68dc2af2fc2d0905bfa86578c126fb4a72316819ab24818d9556",
       "executionHash": "5aa1b5a0852c6ecb240e1926879919b0136db143d20d6c93f65de9c8ba52c402",
-      "debugHash": "9913145e597402cbf8116a6ba65b3d5889b7eed82b7b5ef9c95bb201f5d64836",
-      "entryAbiHash": "156f37a674a4191f173f4119b1ed1aa15583248d6f4331c86b6ebd608c713fd0",
+      "debugHash": "956f2dc65bed6ce18d3f418905fc2879f13d47cd85b55299892711b6eb88c205",
+      "entryAbiHash": "805d2b5d622dfc1d79e7a6e1f19c0e4068732e3afa951e3f3b429e924ed5af85",
       "canonicalDeclaration": "int RecurseForAOT(const int)",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 60,
+      "sourceLine": 135,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_f07760e6464f68dc2af2fc2d0905bfa86578c126fb4a72316819ab24818d9556_5aa1b5a0852c6ecb240e1926879919b0136db143d20d6c93f65de9c8ba52c402",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptFunction", "stableKey": "f07760e6464f68dc2af2fc2d0905bfa86578c126fb4a72316819ab24818d9556", "expectedAbi": "aaaba80b1381606f8ceb778999c32ef3c7c42a7ae34610b88a70efabf08d9f7b"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "f0e5d16c553aa4d9219681c7ddd1448bcecf226c1022dfed50547ac81b9a04df",
       "executionHash": "dd5551c67767322a161767993cc5b559e3c62f067170cfc0e60df8016f3650e4",
-      "debugHash": "0e79d5a6769e4f107da8302495f0948d77fd6f3890aae3b4ab3398f044c19381",
-      "entryAbiHash": "cfd6270223e115f05bd9303f7ac38a55aae7a365f523814f643a93593cef6158",
+      "debugHash": "dd4a552510b187e587eb45a47ffb491e2da85024ed0be2193692dc4e647bd811",
+      "entryAbiHash": "37241b3ba70d4b0f0af53358d5dcd4fda67f64c6db1715fe217a46674e3ba526",
       "canonicalDeclaration": "int ObjectLastNativeForAOT()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 23,
+      "sourceLine": 98,
       "sourceColumn": 1,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_f0e5d16c553aa4d9219681c7ddd1448bcecf226c1022dfed50547ac81b9a04df_dd5551c67767322a161767993cc5b559e3c62f067170cfc0e60df8016f3650e4",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "2f276f7b9e40589a95c2dc6eec4746b4406d1869d603f626e693055828bae918", "expectedAbi": "664a52c8218dd00a29f18200f1bae4dfb8cfbafb9bbcc96957d19f600273bbcb"},
         {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "da58ad493d82275221d7b4f83054b219dad97e7df066d87b801c0a01b9b813c3", "expectedAbi": "5a5bea7299150b4597946af68421cc7a66642c72522640c5f2d4eb4be22b1d2b"},
         {"slot": 2, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "fb782abdc7bc2165cb75160cf047111ba3a29079ef1a57627bb5c54710f303b8", "expectedAbi": "051fe8097f976bba9698f3195870396bef49413aff90a93e1fd3dc4c720f65ad"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "f26d69183a6e80c744b40df88fced3c8dcefb76b4aff9b91a8beb4fd10af47a9",
       "executionHash": "818820abe70c5eec2aeba72ed9ac354275077d2745ecc7386c49e318a16f91bb",
-      "debugHash": "d832f6dd7a3aa91ebc59d741340d4c59501411bb87869f5a430af1fc86cb287e",
-      "entryAbiHash": "6f792c4fe2aa60b4f207a2ef231a3b0a50254004a3a9776bafd7b167237c85ae",
+      "debugHash": "3190280cdaac712d752b1c66c6eed16f707291b58228bff84b081a315a50e0a3",
+      "entryAbiHash": "db0c8f3058412e5bdc683b188ff132b140d00caf79e3e0658bda0254082fdee0",
       "canonicalDeclaration": "int Entry()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 90,
+      "sourceLine": 165,
       "sourceColumn": 3,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_f26d69183a6e80c744b40df88fced3c8dcefb76b4aff9b91a8beb4fd10af47a9_818820abe70c5eec2aeba72ed9ac354275077d2745ecc7386c49e318a16f91bb",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "2693c34fd3fe777fb146ac3c9ae6bcc0ca35e0c91513e8aa67749d7760db38a5", "expectedAbi": "cac37eeb731b312fa6f3e73fae28c030024f63a98c5fbef9068c2a94276913db"}
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
+      "functionKey": "f27dbbf19f895fff90a610aba95f8894aac43049ffbb56ff2c0464841c1c4e2e",
+      "executionHash": "22b3a11e5998369c4c01cb1cfdcd7404a0e6c1e56b461f121a2954a16debaf40",
+      "debugHash": "ad4bdd8d752118754bff8ee15fb7e2f21f7d800fcd5a978dff48b5897d47737d",
+      "entryAbiHash": "108ad1ef8d5103b1a80d679116c872a1dc9d3ee674beaa1115ec65b288287e69",
+      "canonicalDeclaration": "int SemanticScalarBranch(const int, const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
+      "sourceLine": 8,
+      "sourceColumn": 1,
+      "flags": 0,
+      "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_f27dbbf19f895fff90a610aba95f8894aac43049ffbb56ff2c0464841c1c4e2e_22b3a11e5998369c4c01cb1cfdcd7404a0e6c1e56b461f121a2954a16debaf40",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+      ],
+      "semanticDependencies": [
       ]
     },
     {
@@ -834,55 +1370,513 @@
       "functionKey": "f4a3e236ba32d7ce2785c71c5606b807f64c64fd981b3330bed70cd39c6146ef",
       "executionHash": "bbdf063a311ff21aa3fdd76875261a96989372d8d66d7a8034aff45ccf38428e",
       "debugHash": "e99c1b7c1598b7ed5632a3ec913c738a97522a396a8ed5610511320c8b6818b1",
-      "entryAbiHash": "636c5e547f5a6d78df0183cb6a977500ba2eb0b9eadabad66498aafee4a4a9d8",
+      "entryAbiHash": "1075e6d88a0fee09d9074b0d2222d8f08c7b158c0d6f762b28f4e154db4d37e2",
       "canonicalDeclaration": "UStaticJITAotVirtualParent()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 211,
+      "sourceLine": 293,
       "sourceColumn": 0,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_f4a3e236ba32d7ce2785c71c5606b807f64c64fd981b3330bed70cd39c6146ef_bbdf063a311ff21aa3fdd76875261a96989372d8d66d7a8034aff45ccf38428e",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "3d7eb857e6607fc45a1549c16bdab4ace696af400169ab3330b277c542b1bc4e", "expectedAbi": "f686f69c5e4582f2ef2fc221389a23d2f08860fe99f9c2a8baf2b7f3082f5fd7"}
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
+      "functionKey": "f509813c02da6025acae1af26ea86c8f9e3130851803399d0b2db25a166e56ae",
+      "executionHash": "ac3d6db70d8eda0b2d0022704b5000e941f97d62310effe493dd2782fd442533",
+      "debugHash": "805704ff3ed9cc038b3431281557fc7e8d3bc09bd6c221a96a20c98fc1c9e06f",
+      "entryAbiHash": "d9d9e18805e2fe81f0ff248a92bd9d347eefb34eb7a9fd3b93213e2e4ea0cbbc",
+      "canonicalDeclaration": "int BytecodeFallbackGeneratedWorldContext(const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
+      "sourceLine": 317,
+      "sourceColumn": 1,
+      "flags": 0,
+      "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_f509813c02da6025acae1af26ea86c8f9e3130851803399d0b2db25a166e56ae_ac3d6db70d8eda0b2d0022704b5000e941f97d62310effe493dd2782fd442533",
+      "entryPoints": {"vm": true, "raw": true, "parms": false},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "5dd2e37454d592763ad2d32ca5788dc8ad3b050821c766703d27811006302af6", "expectedAbi": "c2eef674729b3c17f587027aa11896993e6fdc8037718474badf89fceb01feab"},
+        {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "b398101ce849d6db6d2b5e92620a89400d72baee53472b8c5bfdf5993d7c7678", "expectedAbi": "9047fc103939a6e61f0656c8d93858c8a8496b0ced371bd5970009d8fc7baa11"},
+        {"slot": 2, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "e731004bd133685602f75244d801f909af28b1dcd90018baf773c4c430495d07", "expectedAbi": "3861b8c53e15fb2e5603d87da407d5b7b31907e0d12252661461e029e269f5ad"},
+        {"slot": 3, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080", "expectedAbi": "207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56"},
+        {"slot": 4, "flags": 0, "kind": "StringLiteral", "stableKey": "1fec636e891847d993f3d42136953ae82917898087b4adb42a0745b58552f9a5", "expectedAbi": "8caa1b57e39ac858ebc8bfa4adbd59bb32a5841d2a703a0fd8e1a1abc2e2aedf"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "f5fdb43143a055e61bfd4d0dbd516cd29cc90eab1a26caac51f9fa7d498c58d7",
       "executionHash": "31ab68e2d91d0c1e9600288f6f39222c55d3afeace5b10932325a2d3bb666edd",
-      "debugHash": "1bafdad49d2239d770b18dc83d8858ec083c0055d48bb172727d46f5320adebf",
-      "entryAbiHash": "bb78e4e405ca12441fcd3fdb2951f57bb074f51b2a79b1f2da54ba07009d53ce",
+      "debugHash": "852ed095a9fff8eab96146813a114e252a9b75fc100a3b195022c872088c5334",
+      "entryAbiHash": "9b0857b686ac6c0536f6c1b33a7f4ce1dbb76c78831fe5af95fb30829626a6c6",
       "canonicalDeclaration": "void ResetStoredValue()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 157,
+      "sourceLine": 233,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_f5fdb43143a055e61bfd4d0dbd516cd29cc90eab1a26caac51f9fa7d498c58d7_31ab68e2d91d0c1e9600288f6f39222c55d3afeace5b10932325a2d3bb666edd",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "2fe0adf8d2412b901dcee16e34e717d008f4d3fa50ec99dfd1d5fd090c3c276a", "expectedAbi": "ab3318c69346e322988a6e57925efe8d2bfcfe6e8be23280342e55d10309a722"},
         {"slot": 1, "flags": 0, "kind": "ScriptProperty", "stableKey": "d8d78f242d39fd1ebab3da9d1c5f72ca4e4854a9f870dfc327e91f9b8a6e8b9f", "expectedAbi": "347d4f4cd95c28cc5789506625865b59dafc1bc15fb26d766f47f84de6a91781"}
+      ],
+      "semanticDependencies": [
       ]
     },
     {
       "moduleKey": "c8f2291154afd48cf9d8c267f8bfcf5bff307741bbaa61ea978863ed08f780ed",
       "functionKey": "fc5c737f9c2f346afa06bf44f10947349896efdec9559444f1d0016e8288b1ce",
       "executionHash": "bf6aff981e022f413c315d1e1b0769d78612f114820c8c21b4f50467c94ab465",
-      "debugHash": "2e168a60e9e546020537ecb0d303d6d415b43f61df686a39c5559df1dae7a142",
-      "entryAbiHash": "d590750907d0aa468de5a448d6b1ac3b81119aca733e4c67e3ddd7290923ca36",
+      "debugHash": "0a324441978b6e5f41ed8510b501b43bf1a4ce95189f0760d60238fe217a6966",
+      "entryAbiHash": "6031fb726462dbf41570b41d3d37659d395e860ef3d2bc07067ce4b4bce8b1ad",
       "canonicalDeclaration": "int CallVirtualValue()",
       "sourceSection": "/Angelscript/Game/ASStaticJITAotFixture.as",
-      "sourceLine": 218,
+      "sourceLine": 300,
       "sourceColumn": 2,
       "flags": 0,
       "moduleSource": "ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp",
       "symbol": "ASJIT_fc5c737f9c2f346afa06bf44f10947349896efdec9559444f1d0016e8288b1ce_bf6aff981e022f413c315d1e1b0769d78612f114820c8c21b4f50467c94ab465",
       "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
       "references": [
         {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "3d7eb857e6607fc45a1549c16bdab4ace696af400169ab3330b277c542b1bc4e", "expectedAbi": "f686f69c5e4582f2ef2fc221389a23d2f08860fe99f9c2a8baf2b7f3082f5fd7"},
         {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "598df8bb10d25347acf7f679783e5c13250cbaa02b1ebe130b2b9e419fe2e03c", "expectedAbi": "ac0d8ee966f289848c19d69993fb9eacb9a18fe198b523424778e684fe7d28ad"}
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "d19c9e37621a0cc17f805a0553f41936f2c1f716ef5c91f346c4ce5cc8f6b8b5",
+      "functionKey": "69188dd501ca6ad04292b14ffce76fe7ee5a023a8dea4e9b1078a27e0ba5effb",
+      "executionHash": "b566ccbace9238fd4965399cda9bd95da29d8663fb901f80b3747f4b8569797d",
+      "debugHash": "36c5e4c6c38aa2bb0aed3322653ddec5eb0d8183af14f8a76fdc60890b1b078b",
+      "entryAbiHash": "0bb8561a88e967bd0b6be6e0c1b70319bb70e04b1ecab786122674ec9f725c03",
+      "canonicalDeclaration": "int TypedASTExceptionEntry(const int, const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedRecursionFixture.as",
+      "sourceLine": 50,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedRecursionFixture.d19c9e37.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_69188dd501ca6ad04292b14ffce76fe7ee5a023a8dea4e9b1078a27e0ba5effb_b566ccbace9238fd4965399cda9bd95da29d8663fb901f80b3747f4b8569797d",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+        {"callSiteIndex": 0, "route": "CurrentNativeBinding", "canonicalDeclaration": "int TypedASTProviderPrivateAdd(int, int)", "emittedCppCallee": "AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32, int32>", "runtimeDllCore": "AngelscriptTypedASTJIT::ResolveBoundNative", "metadataRowSymbol": "ASJIT_Call_TypedASTProviderPrivateAdd_6b00a476_69188dd501ca6ad04292b14ffce76fe7ee5a023a8dea4e9b1078a27e0ba5effb", "registeredTarget": "AngelscriptStaticJITAotFixture::TypedASTProviderPrivateAdd", "stableTargetKey": "6b00a476bd57a82fb216373cb0eef27d00c4acb64af32b342c47c9b7dee91aac", "expectedAbi": "304fbe10a2078ab14e2f67d70c35fd3322a0e9ce8b25e1915cebe00e271b6e96", "referenceSlotIndex": 1}
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptFunction", "stableKey": "b235edf227be8a1fa8e69b94d443101d0fd4d4e751e28a4da8e14671f2d11381", "expectedAbi": "02af1a31c3581791f840a4a91a49c260853ce1680f1e8e3a8cda9aea69133b05"},
+        {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "6b00a476bd57a82fb216373cb0eef27d00c4acb64af32b342c47c9b7dee91aac", "expectedAbi": "304fbe10a2078ab14e2f67d70c35fd3322a0e9ce8b25e1915cebe00e271b6e96"}
+      ],
+      "semanticDependencies": [
+        {"kind": 3, "targetKind": 3, "stableKey": "b235edf227be8a1fa8e69b94d443101d0fd4d4e751e28a4da8e14671f2d11381", "expectedAbi": "8a222551660204d8aa9ac9261fac2964b81809e1be0ba8355d19dccb11dd9971", "expectedContentOrValue": ""},
+        {"kind": 11, "targetKind": 7, "stableKey": "6b00a476bd57a82fb216373cb0eef27d00c4acb64af32b342c47c9b7dee91aac", "expectedAbi": "304fbe10a2078ab14e2f67d70c35fd3322a0e9ce8b25e1915cebe00e271b6e96", "expectedContentOrValue": ""},
+        {"kind": 12, "targetKind": 3, "stableKey": "b235edf227be8a1fa8e69b94d443101d0fd4d4e751e28a4da8e14671f2d11381", "expectedAbi": "8a222551660204d8aa9ac9261fac2964b81809e1be0ba8355d19dccb11dd9971", "expectedContentOrValue": "0f9a39a00703748131e087eaf9890b64818033e40d6d74e5c70b5c3d85605c04"}
+      ]
+    },
+    {
+      "moduleKey": "d19c9e37621a0cc17f805a0553f41936f2c1f716ef5c91f346c4ce5cc8f6b8b5",
+      "functionKey": "837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72d62",
+      "executionHash": "8f546f57002beeecac8101d1c0fd2ed2327afc15a81c3889681a48a26adaf331",
+      "debugHash": "07692adf2053d369f225cf479c93c3b8d7059bc8a64f36ff4f6c15afa6cd5e9f",
+      "entryAbiHash": "9a370f34ced1e1b098f2f4b339f10de3f95ee0620d3cf38fd90049284735ef6e",
+      "canonicalDeclaration": "int TypedASTFrameEntry(const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedRecursionFixture.as",
+      "sourceLine": 36,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedRecursionFixture.d19c9e37.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72d62_8f546f57002beeecac8101d1c0fd2ed2327afc15a81c3889681a48a26adaf331",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+        {"callSiteIndex": 0, "route": "CurrentNativeBinding", "canonicalDeclaration": "int TypedASTObserveFrame(int)", "emittedCppCallee": "AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32>", "runtimeDllCore": "AngelscriptTypedASTJIT::ResolveBoundNative", "metadataRowSymbol": "ASJIT_Call_TypedASTObserveFrame_b9dfce83_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72d62", "registeredTarget": "AngelscriptStaticJITAotFixture::TypedASTObserveFrame", "stableTargetKey": "b9dfce8349f066078db688faeb9fcce492a9552cd0aef127f54cab83379b520a", "expectedAbi": "7dd3aae3e651d873f66c3811cadc5922fed9cd6c0029f9e89432fa6ba3e4837c", "referenceSlotIndex": 1},
+        {"callSiteIndex": 1, "route": "CurrentNativeBinding", "canonicalDeclaration": "int TypedASTObserveFrame(int)", "emittedCppCallee": "AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32>", "runtimeDllCore": "AngelscriptTypedASTJIT::ResolveBoundNative", "metadataRowSymbol": "ASJIT_Call_TypedASTObserveFrame_b9dfce83_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72d62", "registeredTarget": "AngelscriptStaticJITAotFixture::TypedASTObserveFrame", "stableTargetKey": "b9dfce8349f066078db688faeb9fcce492a9552cd0aef127f54cab83379b520a", "expectedAbi": "7dd3aae3e651d873f66c3811cadc5922fed9cd6c0029f9e89432fa6ba3e4837c", "referenceSlotIndex": 1},
+        {"callSiteIndex": 2, "route": "CurrentNativeBinding", "canonicalDeclaration": "int TypedASTObserveFrame(int)", "emittedCppCallee": "AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32>", "runtimeDllCore": "AngelscriptTypedASTJIT::ResolveBoundNative", "metadataRowSymbol": "ASJIT_Call_TypedASTObserveFrame_b9dfce83_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72d62", "registeredTarget": "AngelscriptStaticJITAotFixture::TypedASTObserveFrame", "stableTargetKey": "b9dfce8349f066078db688faeb9fcce492a9552cd0aef127f54cab83379b520a", "expectedAbi": "7dd3aae3e651d873f66c3811cadc5922fed9cd6c0029f9e89432fa6ba3e4837c", "referenceSlotIndex": 1}
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptFunction", "stableKey": "abfbff5b1d349921fd716663a12ea7b62451daf41490b03f25b11166037418dd", "expectedAbi": "6a7dd5428192fb18d0f5519a3e372226a338a2bb6f7696ab36a0ed8c5dd28170"},
+        {"slot": 1, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "b9dfce8349f066078db688faeb9fcce492a9552cd0aef127f54cab83379b520a", "expectedAbi": "7dd3aae3e651d873f66c3811cadc5922fed9cd6c0029f9e89432fa6ba3e4837c"}
+      ],
+      "semanticDependencies": [
+        {"kind": 3, "targetKind": 3, "stableKey": "abfbff5b1d349921fd716663a12ea7b62451daf41490b03f25b11166037418dd", "expectedAbi": "d445a389231e20b52c85114adb522d9422b08dc0a58b16efe7f59cb9513ee324", "expectedContentOrValue": ""},
+        {"kind": 11, "targetKind": 7, "stableKey": "b9dfce8349f066078db688faeb9fcce492a9552cd0aef127f54cab83379b520a", "expectedAbi": "7dd3aae3e651d873f66c3811cadc5922fed9cd6c0029f9e89432fa6ba3e4837c", "expectedContentOrValue": ""},
+        {"kind": 12, "targetKind": 3, "stableKey": "abfbff5b1d349921fd716663a12ea7b62451daf41490b03f25b11166037418dd", "expectedAbi": "d445a389231e20b52c85114adb522d9422b08dc0a58b16efe7f59cb9513ee324", "expectedContentOrValue": "c776e2b663841326350de7154fe3ed6c647b3e38acafdcf47638049faaee0816"}
+      ]
+    },
+    {
+      "moduleKey": "d19c9e37621a0cc17f805a0553f41936f2c1f716ef5c91f346c4ce5cc8f6b8b5",
+      "functionKey": "9b21b2a1cce2fd681ac9c627b4e5c9f95e5d810ef4c2438e7c9de235a94e5b78",
+      "executionHash": "779579186b6f2e8210c89914729510719cc3f80be2c8ff32b6d254033958dcad",
+      "debugHash": "002a5d2b4b1b39c84879e2b18381c8deb713e703c0082510b974a6faa7d69e30",
+      "entryAbiHash": "bf59be51292578d00c3cd680f28bc0c167217588050f08dd410162b09320888d",
+      "canonicalDeclaration": "int TypedASTMutualOdd(const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedRecursionFixture.as",
+      "sourceLine": 11,
+      "sourceColumn": 1,
+      "flags": 0,
+      "moduleSource": "ASStaticJITTypedRecursionFixture.d19c9e37.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_9b21b2a1cce2fd681ac9c627b4e5c9f95e5d810ef4c2438e7c9de235a94e5b78_779579186b6f2e8210c89914729510719cc3f80be2c8ff32b6d254033958dcad",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptFunction", "stableKey": "f3cd404bfc2f5d0cb21bd27c84491cb3feaeaa4979c279113354ebbfe88eebce", "expectedAbi": "3e8e9d3103b114c70a6d5cc52b98c6c256fe02d525a2c461662ebb18d8633326"}
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "d19c9e37621a0cc17f805a0553f41936f2c1f716ef5c91f346c4ce5cc8f6b8b5",
+      "functionKey": "abfbff5b1d349921fd716663a12ea7b62451daf41490b03f25b11166037418dd",
+      "executionHash": "c776e2b663841326350de7154fe3ed6c647b3e38acafdcf47638049faaee0816",
+      "debugHash": "66cf1836d74e06aec1737331fb81b4ea3198b8a728dffd5eac620592779b5097",
+      "entryAbiHash": "d445a389231e20b52c85114adb522d9422b08dc0a58b16efe7f59cb9513ee324",
+      "canonicalDeclaration": "int TypedASTFrameHelper(const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedRecursionFixture.as",
+      "sourceLine": 30,
+      "sourceColumn": 1,
+      "flags": 0,
+      "moduleSource": "ASStaticJITTypedRecursionFixture.d19c9e37.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_abfbff5b1d349921fd716663a12ea7b62451daf41490b03f25b11166037418dd_c776e2b663841326350de7154fe3ed6c647b3e38acafdcf47638049faaee0816",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "EnvironmentSymbol", "stableKey": "b9dfce8349f066078db688faeb9fcce492a9552cd0aef127f54cab83379b520a", "expectedAbi": "7dd3aae3e651d873f66c3811cadc5922fed9cd6c0029f9e89432fa6ba3e4837c"}
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "d19c9e37621a0cc17f805a0553f41936f2c1f716ef5c91f346c4ce5cc8f6b8b5",
+      "functionKey": "b235edf227be8a1fa8e69b94d443101d0fd4d4e751e28a4da8e14671f2d11381",
+      "executionHash": "0f9a39a00703748131e087eaf9890b64818033e40d6d74e5c70b5c3d85605c04",
+      "debugHash": "8493f052e587d24972b501354759a3068dbfb4205d6668121a8ad11b6f39a26e",
+      "entryAbiHash": "8a222551660204d8aa9ac9261fac2964b81809e1be0ba8355d19dccb11dd9971",
+      "canonicalDeclaration": "int TypedASTExceptionHelper(const int, const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedRecursionFixture.as",
+      "sourceLine": 44,
+      "sourceColumn": 1,
+      "flags": 0,
+      "moduleSource": "ASStaticJITTypedRecursionFixture.d19c9e37.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_b235edf227be8a1fa8e69b94d443101d0fd4d4e751e28a4da8e14671f2d11381_0f9a39a00703748131e087eaf9890b64818033e40d6d74e5c70b5c3d85605c04",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "d19c9e37621a0cc17f805a0553f41936f2c1f716ef5c91f346c4ce5cc8f6b8b5",
+      "functionKey": "efe75e2004503ee73f7d821394e777a4f886f4fed6fbc653757ce63fbaf27733",
+      "executionHash": "91d2efd59a18658bebbba425b8d1b2e680d7cf9445b9afdf7ff20d7a3ca4a16d",
+      "debugHash": "6a33eab70d8ce206db713ec5d7b1883d84a32a2f206822487c6da8ade97b6d9c",
+      "entryAbiHash": "6d11fd1ead83143bf8f550656196082956507d4c82dc84aeb65e3e9c5bde4cb5",
+      "canonicalDeclaration": "int TypedASTSelfRecursion(const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedRecursionFixture.as",
+      "sourceLine": 2,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedRecursionFixture.d19c9e37.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_efe75e2004503ee73f7d821394e777a4f886f4fed6fbc653757ce63fbaf27733_91d2efd59a18658bebbba425b8d1b2e680d7cf9445b9afdf7ff20d7a3ca4a16d",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptFunction", "stableKey": "efe75e2004503ee73f7d821394e777a4f886f4fed6fbc653757ce63fbaf27733", "expectedAbi": "4e81fdc5d117c4f5d0efd756a2196d8f3aeec796b7d504fcb41fec2e5ba2ef82"}
+      ],
+      "semanticDependencies": [
+        {"kind": 3, "targetKind": 3, "stableKey": "efe75e2004503ee73f7d821394e777a4f886f4fed6fbc653757ce63fbaf27733", "expectedAbi": "6d11fd1ead83143bf8f550656196082956507d4c82dc84aeb65e3e9c5bde4cb5", "expectedContentOrValue": ""}
+      ]
+    },
+    {
+      "moduleKey": "d19c9e37621a0cc17f805a0553f41936f2c1f716ef5c91f346c4ce5cc8f6b8b5",
+      "functionKey": "f3cd404bfc2f5d0cb21bd27c84491cb3feaeaa4979c279113354ebbfe88eebce",
+      "executionHash": "de8a9f27d062164b0e5cd7b867de2654db03486fadca8fb13990539a7afe9788",
+      "debugHash": "88a975ac11b1fcc348e0ac88cd1b3ea7a6aed46b9d9949c6a74f50170621a862",
+      "entryAbiHash": "fa5cbe60f891ca77e110682e6c1613af4186ed9e47cbc9d0531d8dde05cd3a5c",
+      "canonicalDeclaration": "int TypedASTMutualEven(const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedRecursionFixture.as",
+      "sourceLine": 21,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedRecursionFixture.d19c9e37.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_f3cd404bfc2f5d0cb21bd27c84491cb3feaeaa4979c279113354ebbfe88eebce_de8a9f27d062164b0e5cd7b867de2654db03486fadca8fb13990539a7afe9788",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptFunction", "stableKey": "9b21b2a1cce2fd681ac9c627b4e5c9f95e5d810ef4c2438e7c9de235a94e5b78", "expectedAbi": "9ee406a5862afb4f58703112d5b5943edf37f0aa2edb9eec3f6ab2ef0d354a7f"},
+        {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "f3cd404bfc2f5d0cb21bd27c84491cb3feaeaa4979c279113354ebbfe88eebce", "expectedAbi": "3e8e9d3103b114c70a6d5cc52b98c6c256fe02d525a2c461662ebb18d8633326"}
+      ],
+      "semanticDependencies": [
+        {"kind": 3, "targetKind": 3, "stableKey": "9b21b2a1cce2fd681ac9c627b4e5c9f95e5d810ef4c2438e7c9de235a94e5b78", "expectedAbi": "bf59be51292578d00c3cd680f28bc0c167217588050f08dd410162b09320888d", "expectedContentOrValue": ""},
+        {"kind": 12, "targetKind": 3, "stableKey": "9b21b2a1cce2fd681ac9c627b4e5c9f95e5d810ef4c2438e7c9de235a94e5b78", "expectedAbi": "bf59be51292578d00c3cd680f28bc0c167217588050f08dd410162b09320888d", "expectedContentOrValue": "779579186b6f2e8210c89914729510719cc3f80be2c8ff32b6d254033958dcad"}
+      ]
+    },
+    {
+      "moduleKey": "d5fc286cb1b96446cf9ab866b8485d617ca75fc6ed7bfa9cf90f88338e6e615a",
+      "functionKey": "23f1e6dec794e6d7cc42917a3dd1fc6f8bae9cee3cb91a0bb0338624ad3b6b67",
+      "executionHash": "817a41df8f6f47eff93c571e9dcb61b107ba9c4cdf34531109218faacc9080e3",
+      "debugHash": "b09e16ad5f9a3216822a51e060ae2a349bff1f29c5fca30db7ced65dd95ffeb8",
+      "entryAbiHash": "5bdf2107db2403a739f0c1ec988a215ef8d4496714c3a85248de4057037ca025",
+      "canonicalDeclaration": "float SemanticPowerBoundary(const float, const float)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as",
+      "sourceLine": 73,
+      "sourceColumn": 2,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedFinalScalarFixture.d5fc286c.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_23f1e6dec794e6d7cc42917a3dd1fc6f8bae9cee3cb91a0bb0338624ad3b6b67_817a41df8f6f47eff93c571e9dcb61b107ba9c4cdf34531109218faacc9080e3",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "fad89b1b314e72fddfda397e555d92b3e881dce5158330451090697253e7b4e8", "expectedAbi": "85b780d3d0320f0320f21f66806418c53611e2e04d160beb79f3c8a598f7a9bd"}
+      ],
+      "semanticDependencies": [
+        {"kind": 2, "targetKind": 2, "stableKey": "fad89b1b314e72fddfda397e555d92b3e881dce5158330451090697253e7b4e8", "expectedAbi": "85b780d3d0320f0320f21f66806418c53611e2e04d160beb79f3c8a598f7a9bd", "expectedContentOrValue": ""}
+      ]
+    },
+    {
+      "moduleKey": "d5fc286cb1b96446cf9ab866b8485d617ca75fc6ed7bfa9cf90f88338e6e615a",
+      "functionKey": "b151d3ee1bae6ef99ba4c4ede361b6c537b3764b6d0b663d59032e9069386a7f",
+      "executionHash": "8d59a3666cb1e9468ba047e44d12e822bc32d189c66e2841f3e0d28c530e714e",
+      "debugHash": "61e622bd99778e23d4a7ed2ae92ae79a5925d441a62be32d381cd879e9f774fe",
+      "entryAbiHash": "5d9f493ad48c6524ca33a73c311249bdf7a4315a86649957cedb5fedfe5acda5",
+      "canonicalDeclaration": "UTypedASTFinalScalarReceiver UTypedASTFinalScalarReceiver()",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as",
+      "sourceLine": 6,
+      "sourceColumn": 0,
+      "flags": 0,
+      "moduleSource": "ASStaticJITTypedFinalScalarFixture.d5fc286c.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_b151d3ee1bae6ef99ba4c4ede361b6c537b3764b6d0b663d59032e9069386a7f_8d59a3666cb1e9468ba047e44d12e822bc32d189c66e2841f3e0d28c530e714e",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "fad89b1b314e72fddfda397e555d92b3e881dce5158330451090697253e7b4e8", "expectedAbi": "85b780d3d0320f0320f21f66806418c53611e2e04d160beb79f3c8a598f7a9bd"},
+        {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "d0a9afe3c2a8d4f8b63ca637092ad281bf29da9fbd0dc92708b4581525261609", "expectedAbi": "0381a78a2bd5c484c1c385afd05deeb063c59e76d1bb210d405f4d2b611a5bc3"}
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "d5fc286cb1b96446cf9ab866b8485d617ca75fc6ed7bfa9cf90f88338e6e615a",
+      "functionKey": "bcc16a42d6581e28f5fd897a3719e70c37469f91213349e84390b2ae478ef35b",
+      "executionHash": "24397a70f048c17cf8cc8051d54e6394dc379c349573bc515f4253b4d6d503ae",
+      "debugHash": "7e95ff287f42acc18ce60419452b035698306752b09373a328b1d598db200f98",
+      "entryAbiHash": "dabb76ccb243078a57121d4c3a40ed732a70a68cca7584d9e9320a1fd5a679c4",
+      "canonicalDeclaration": "int DifferentialScalarValue(const int, const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as",
+      "sourceLine": 14,
+      "sourceColumn": 2,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedFinalScalarFixture.d5fc286c.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_bcc16a42d6581e28f5fd897a3719e70c37469f91213349e84390b2ae478ef35b_24397a70f048c17cf8cc8051d54e6394dc379c349573bc515f4253b4d6d503ae",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "fad89b1b314e72fddfda397e555d92b3e881dce5158330451090697253e7b4e8", "expectedAbi": "85b780d3d0320f0320f21f66806418c53611e2e04d160beb79f3c8a598f7a9bd"}
+      ],
+      "semanticDependencies": [
+        {"kind": 2, "targetKind": 2, "stableKey": "fad89b1b314e72fddfda397e555d92b3e881dce5158330451090697253e7b4e8", "expectedAbi": "85b780d3d0320f0320f21f66806418c53611e2e04d160beb79f3c8a598f7a9bd", "expectedContentOrValue": ""}
+      ]
+    },
+    {
+      "moduleKey": "d5fc286cb1b96446cf9ab866b8485d617ca75fc6ed7bfa9cf90f88338e6e615a",
+      "functionKey": "cc438c3e7ddfcc3025b48910f03aa06f782d90388781b3b7ac3ef3303476b746",
+      "executionHash": "6dceb6b02db4f3cc8af890b8fb3b98bc8045876aa95de5cf744cbbc064c6d0db",
+      "debugHash": "4e812d41acefcdde1a5d04df3f8a0ddbbcb2dee67d6a67d001583b4ee7660916",
+      "entryAbiHash": "a4b711dd5134aeaca25a93796be749414190495c109eeba3fb1015c75b1a90b1",
+      "canonicalDeclaration": "int SemanticImportedBinding(const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as",
+      "sourceLine": 20,
+      "sourceColumn": 2,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedFinalScalarFixture.d5fc286c.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_cc438c3e7ddfcc3025b48910f03aa06f782d90388781b3b7ac3ef3303476b746_6dceb6b02db4f3cc8af890b8fb3b98bc8045876aa95de5cf744cbbc064c6d0db",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "fad89b1b314e72fddfda397e555d92b3e881dce5158330451090697253e7b4e8", "expectedAbi": "85b780d3d0320f0320f21f66806418c53611e2e04d160beb79f3c8a598f7a9bd"},
+        {"slot": 1, "flags": 0, "kind": "ScriptFunction", "stableKey": "69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304", "expectedAbi": "17c4224b840b8fd12125712ba4233fafcde6d42a2539fe6dc55c1db507223f48"}
+      ],
+      "semanticDependencies": [
+        {"kind": 2, "targetKind": 2, "stableKey": "fad89b1b314e72fddfda397e555d92b3e881dce5158330451090697253e7b4e8", "expectedAbi": "85b780d3d0320f0320f21f66806418c53611e2e04d160beb79f3c8a598f7a9bd", "expectedContentOrValue": ""},
+        {"kind": 3, "targetKind": 3, "stableKey": "69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304", "expectedAbi": "ea282433da811db8e11096c0eb4d74a8ad9f3e312688cd7887a915f4447e361e", "expectedContentOrValue": ""},
+        {"kind": 12, "targetKind": 3, "stableKey": "69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304", "expectedAbi": "ea282433da811db8e11096c0eb4d74a8ad9f3e312688cd7887a915f4447e361e", "expectedContentOrValue": "ee7830a9de56f70fda6397fbd582a13fe0e06765496d8709f73959ffd657d386"}
+      ]
+    },
+    {
+      "moduleKey": "d5fc286cb1b96446cf9ab866b8485d617ca75fc6ed7bfa9cf90f88338e6e615a",
+      "functionKey": "d0a9afe3c2a8d4f8b63ca637092ad281bf29da9fbd0dc92708b4581525261609",
+      "executionHash": "a8d405185ad471e29551d89d8cdd792471125c8887e1ba52e64543ab2066a855",
+      "debugHash": "61e622bd99778e23d4a7ed2ae92ae79a5925d441a62be32d381cd879e9f774fe",
+      "entryAbiHash": "e7fe3e49a0111396d17b5901011b806a76bd6f4b076fedbb28cc2e4f38d7d5b5",
+      "canonicalDeclaration": "UTypedASTFinalScalarReceiver()",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as",
+      "sourceLine": 6,
+      "sourceColumn": 0,
+      "flags": 0,
+      "moduleSource": "ASStaticJITTypedFinalScalarFixture.d5fc286c.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_d0a9afe3c2a8d4f8b63ca637092ad281bf29da9fbd0dc92708b4581525261609_a8d405185ad471e29551d89d8cdd792471125c8887e1ba52e64543ab2066a855",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "fad89b1b314e72fddfda397e555d92b3e881dce5158330451090697253e7b4e8", "expectedAbi": "85b780d3d0320f0320f21f66806418c53611e2e04d160beb79f3c8a598f7a9bd"}
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "d5fc286cb1b96446cf9ab866b8485d617ca75fc6ed7bfa9cf90f88338e6e615a",
+      "functionKey": "d74f30e1ae71314f26368c240d19def1d94ff8cc64de8b012050f846e9cf5dd0",
+      "executionHash": "d71e9179f1fc35d0d447f8ed3b9a98c01f3b4fa9e93e54bbc29019ff8af780d2",
+      "debugHash": "aa4b5c7a3a4434a646e73c23ef537d880a045338ad3e3dce76f776a94161b3bc",
+      "entryAbiHash": "855bd98169313400b8f1d6686e5875bbad13825c3cc12fdde4e9ad4afcdbc31f",
+      "canonicalDeclaration": "int TypedFinalRawValue()",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as",
+      "sourceLine": 8,
+      "sourceColumn": 2,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedFinalScalarFixture.d5fc286c.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_d74f30e1ae71314f26368c240d19def1d94ff8cc64de8b012050f846e9cf5dd0_d71e9179f1fc35d0d447f8ed3b9a98c01f3b4fa9e93e54bbc29019ff8af780d2",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "fad89b1b314e72fddfda397e555d92b3e881dce5158330451090697253e7b4e8", "expectedAbi": "85b780d3d0320f0320f21f66806418c53611e2e04d160beb79f3c8a598f7a9bd"}
+      ],
+      "semanticDependencies": [
+        {"kind": 2, "targetKind": 2, "stableKey": "fad89b1b314e72fddfda397e555d92b3e881dce5158330451090697253e7b4e8", "expectedAbi": "85b780d3d0320f0320f21f66806418c53611e2e04d160beb79f3c8a598f7a9bd", "expectedContentOrValue": ""}
+      ]
+    },
+    {
+      "moduleKey": "d5fc286cb1b96446cf9ab866b8485d617ca75fc6ed7bfa9cf90f88338e6e615a",
+      "functionKey": "de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc256e",
+      "executionHash": "58539743e28e50faa5d5ee3e50261836e051b1dd0a7d68b805bab6072fd2d80a",
+      "debugHash": "33ab9e7722bfe134d36a9e683a832e75cb1a6a5322a13ab18e7bd23d86aea50f",
+      "entryAbiHash": "ce69b03c30f4aba54525c218c4551a91f6dfe1f289fefa74e6e6ea01b1bab739",
+      "canonicalDeclaration": "int SemanticNumericBoundary(const int, const int, const int, const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as",
+      "sourceLine": 26,
+      "sourceColumn": 2,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedFinalScalarFixture.d5fc286c.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc256e_58539743e28e50faa5d5ee3e50261836e051b1dd0a7d68b805bab6072fd2d80a",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "fad89b1b314e72fddfda397e555d92b3e881dce5158330451090697253e7b4e8", "expectedAbi": "85b780d3d0320f0320f21f66806418c53611e2e04d160beb79f3c8a598f7a9bd"},
+        {"slot": 1, "flags": 0, "kind": "ScriptGlobal", "stableKey": "a5da6844fd295dd05d5a22cf9b50196a15b6cea4f30ae1fdebd1d0bac4766088", "expectedAbi": "e7ef2b212521fee9013b2a9d94e54b7c7f48664d236c66b55651dc822f29b690"}
+      ],
+      "semanticDependencies": [
+        {"kind": 2, "targetKind": 2, "stableKey": "fad89b1b314e72fddfda397e555d92b3e881dce5158330451090697253e7b4e8", "expectedAbi": "85b780d3d0320f0320f21f66806418c53611e2e04d160beb79f3c8a598f7a9bd", "expectedContentOrValue": ""},
+        {"kind": 8, "targetKind": 4, "stableKey": "a5da6844fd295dd05d5a22cf9b50196a15b6cea4f30ae1fdebd1d0bac4766088", "expectedAbi": "e7ef2b212521fee9013b2a9d94e54b7c7f48664d236c66b55651dc822f29b690", "expectedContentOrValue": "c36c0ca1100bc58782895b6c2137cfe34f1589fa2d36cb8bc5401201e9df4770"}
+      ]
+    },
+    {
+      "moduleKey": "e3b08a3c509f1eb5fad8ca63479dcc6c2638c01694af2a1048e06e1de36d5c99",
+      "functionKey": "0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4",
+      "executionHash": "52de55a9a6328e299cf7f8704913c970b8ca29f9de21e7623850392073ca7ecd",
+      "debugHash": "68708e5118144807270fa93f1ddeb85a92b89ed2a131c0fed467dc787a1fbf1b",
+      "entryAbiHash": "ac5e9740aa5289dba47d6e5ba3f40c6f1f11e575d2ab2615b198bbbc11568b3d",
+      "canonicalDeclaration": "int SemanticExhaustiveEnum(const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedControlFlowFixture.as",
+      "sourceLine": 101,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedControlFlowFixture.e3b08a3c.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4_52de55a9a6328e299cf7f8704913c970b8ca29f9de21e7623850392073ca7ecd",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+        {"slot": 0, "flags": 0, "kind": "ScriptType", "stableKey": "da204858ced604390176b13c9258e987373f2b4e798ef2bae576892d1387d4a8", "expectedAbi": "8746c9775c41ecdcb7c63d6370d6a1a82a6d6c81fab94b0d5db855661c5b9865"}
+      ],
+      "semanticDependencies": [
+        {"kind": 5, "targetKind": 2, "stableKey": "da204858ced604390176b13c9258e987373f2b4e798ef2bae576892d1387d4a8", "expectedAbi": "8746c9775c41ecdcb7c63d6370d6a1a82a6d6c81fab94b0d5db855661c5b9865", "expectedContentOrValue": "928df2a7d3355ce697e498b7ce7c83d86d242220c78b24a20c18606f5f1b7b9d"}
+      ]
+    },
+    {
+      "moduleKey": "e3b08a3c509f1eb5fad8ca63479dcc6c2638c01694af2a1048e06e1de36d5c99",
+      "functionKey": "169ac06f87b6ff4213bade0bb8d12b1d533553178b5660298da6a6e66fd90855",
+      "executionHash": "7e06d65381801c5779762d86540527e4762fac83929ecf664601b8c302cdb58d",
+      "debugHash": "0d781fb6790454ef631cc4fe361f310dc379e15f5b83eaa513bcc7a04adeff43",
+      "entryAbiHash": "3d05f1b7e35a8891df3c73e1ce6d43c897b0603db3baca8a2f98651f018854ce",
+      "canonicalDeclaration": "int SemanticCloneableState(const int, const int, const bool, const bool)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedControlFlowFixture.as",
+      "sourceLine": 122,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedControlFlowFixture.e3b08a3c.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_169ac06f87b6ff4213bade0bb8d12b1d533553178b5660298da6a6e66fd90855_7e06d65381801c5779762d86540527e4762fac83929ecf664601b8c302cdb58d",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "e3b08a3c509f1eb5fad8ca63479dcc6c2638c01694af2a1048e06e1de36d5c99",
+      "functionKey": "5371ead826b6cbce067d143d869aca985b0442c720e75dda0d4be73d528acb43",
+      "executionHash": "8ee164ff884cc04a0c650eaaa01566f915ed8a2216dc0bb0eaccdd309e6c084f",
+      "debugHash": "8d35a65a64a001041fb0da6768d44ae2a42b7a3af618d20ffed20a8e49b4e5b8",
+      "entryAbiHash": "2fe16db0121b593e09cfa3e040d4124228d3d043449cc2ba5580b68918773fef",
+      "canonicalDeclaration": "int SemanticStructuredControlFlow(const int, const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedControlFlowFixture.as",
+      "sourceLine": 9,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedControlFlowFixture.e3b08a3c.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_5371ead826b6cbce067d143d869aca985b0442c720e75dda0d4be73d528acb43_8ee164ff884cc04a0c650eaaa01566f915ed8a2216dc0bb0eaccdd309e6c084f",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+      ],
+      "semanticDependencies": [
+      ]
+    },
+    {
+      "moduleKey": "e3b08a3c509f1eb5fad8ca63479dcc6c2638c01694af2a1048e06e1de36d5c99",
+      "functionKey": "a17ec19a98294d0303cc3ef87a4c4c4c3966667c2d6e59668fe556b0282624d5",
+      "executionHash": "3c9395cb48100816600076228d1517860b80fdd10e52295aac2a31f1b9af6f3d",
+      "debugHash": "7be5fa7ce3d293b37a860e95bb2fc9f0448c71efd8c89d5f7d190ea0fd86bf06",
+      "entryAbiHash": "34574e76e092ff59a9ab137303c6c8a1a00f50e50bf9ce931ed07453463297ff",
+      "canonicalDeclaration": "int SemanticCheckedDivide(const int, const int)",
+      "sourceSection": "/Angelscript/Game/ASStaticJITTypedControlFlowFixture.as",
+      "sourceLine": 116,
+      "sourceColumn": 1,
+      "flags": 4,
+      "moduleSource": "ASStaticJITTypedControlFlowFixture.e3b08a3c.EditorDevelopment.jit.cpp",
+      "symbol": "ASJIT_a17ec19a98294d0303cc3ef87a4c4c4c3966667c2d6e59668fe556b0282624d5_3c9395cb48100816600076228d1517860b80fdd10e52295aac2a31f1b9af6f3d",
+      "entryPoints": {"vm": true, "raw": true, "parms": true},
+      "nativeCallSites": [
+      ],
+      "references": [
+      ],
+      "semanticDependencies": [
       ]
     }
   ]

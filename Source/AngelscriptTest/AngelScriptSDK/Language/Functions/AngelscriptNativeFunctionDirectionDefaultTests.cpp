@@ -1,6 +1,7 @@
 #include "../../Support/AngelscriptNativeCaseTestSupport.h"
 #include "../../Support/AngelscriptNativeCoreTestSupport.h"
 #include "../../Support/AngelscriptNativeExecutionTestSupport.h"
+#include "../../Support/AngelscriptNativeLanguageCaseTestSupport.h"
 
 #include "CQTest.h"
 

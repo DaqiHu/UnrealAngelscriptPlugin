@@ -148,7 +148,9 @@ struct FStaticJITContext
 	asDWORD* GetNextBC(asDWORD* FromBC);
 	asEBCInstr GetInstr(asDWORD* FromBC);
 
-	void GenerateNewFunction(asIScriptFunction* ScriptFunction);
+	void GenerateNewFunction(
+		asIScriptFunction* ScriptFunction,
+		bool bSuppressParmsEntry);
 	void WriteOutFunction();
 
 	bool bInLocalState = false;
@@ -409,6 +411,9 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBytecodeJIT
 	// expressions and Provider metadata. No live pointer is emitted from these.
 	TMap<asCScriptFunction*, TArray<FAngelscriptArtifactReference>>
 		StableProviderReferences;
+	/** Shared Runtime-owned entry plans for backend-neutral generation tasks. */
+	TMap<asCScriptFunction*, const struct FStaticJITEntryPlan*>
+		SharedEntryPlans;
 	TMap<class asCModule*, FAngelscriptStableModuleKey>
 		StableProviderModuleKeys;
 	TMap<asCScriptFunction*, TMap<asCScriptFunction*, uint32>>
@@ -431,6 +436,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBytecodeJIT
 		FString FunctionSymbolName;
 		FString FunctionDeclaration;
 		FString EmittedFunctionContent;
+		bool bSuppressParmsEntry = false;
 		bool bHasParmsEntry = false;
 	};
 

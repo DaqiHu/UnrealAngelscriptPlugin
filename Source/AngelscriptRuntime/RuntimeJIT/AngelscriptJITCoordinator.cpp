@@ -34,7 +34,9 @@ namespace
 		}
 #endif
 #if WITH_AS_COVERAGE
-		if (FAngelscriptCodeCoverageExtension::GetForEngine(Engine) != nullptr)
+		if (const FAngelscriptCodeCoverage* const Coverage =
+			FAngelscriptCodeCoverageExtension::GetForEngine(Engine);
+			Coverage != nullptr && Coverage->IsRecording())
 		{
 			return EAngelscriptRuntimeJITDiagnosticReason::CoverageActive;
 		}
@@ -759,3 +761,27 @@ FAngelscriptJITCoordinator::CaptureDiagnostics(FAngelscriptEngine& Engine)
 	return Snapshot;
 }
 #endif
+
+void FAngelscriptJITCoordinator::ReplaceSemanticDependents(
+	TArray<FSemanticDependentRecord>&& InDependents)
+{
+	SemanticDependents = MoveTemp(InDependents);
+}
+
+bool FAngelscriptJITCoordinator::CollectSemanticDependents(
+	const EAngelscriptArtifactSemanticDependencyKind Kind,
+	const FAngelscriptHash256& TargetStableKey,
+	TArray<FAngelscriptStableFunctionKey>& OutDependents) const
+{
+	OutDependents.Reset();
+	for (const FSemanticDependentRecord& Record : SemanticDependents)
+	{
+		if (Record.Kind == Kind
+			&& Record.TargetStableKey == TargetStableKey)
+		{
+			OutDependents = Record.Dependents;
+			return true;
+		}
+	}
+	return false;
+}

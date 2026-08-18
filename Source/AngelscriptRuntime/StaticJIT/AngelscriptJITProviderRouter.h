@@ -80,4 +80,14 @@ public:
 	static FAngelscriptJITProviderRouteRefreshResult Refresh(
 		FAngelscriptEngine& Engine,
 		EAngelscriptJITTargetProfile TargetProfile);
+
+	/**
+	 * Engine-local reverse-index query. Dependents are the currently published
+	 * Provider entries that recorded a forward semantic row of this kind/key.
+	 */
+	static bool CollectSemanticDependents(
+		const FAngelscriptEngine& Engine,
+		EAngelscriptArtifactSemanticDependencyKind Kind,
+		const FAngelscriptHash256& TargetStableKey,
+		TArray<FAngelscriptStableFunctionKey>& OutDependents);
 };

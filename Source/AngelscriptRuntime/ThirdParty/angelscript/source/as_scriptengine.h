@@ -213,6 +213,21 @@ public:
 	asCScriptEngine();
 	virtual ~asCScriptEngine();
 
+	// Maintained-fork compiler sidecar. This is deliberately not part of the
+	// public asIScriptEngine ABI and must be selected before source compilation.
+	bool SetTypedSemanticIRCapture(bool enabled)
+	{
+		if( typedSemanticIRCaptureFrozen )
+			return false;
+		ep.captureTypedSemanticIR = enabled;
+		return true;
+	}
+
+	bool IsTypedSemanticIRCaptureEnabled() const
+	{
+		return ep.captureTypedSemanticIR;
+	}
+
 //protected:
 	friend class asCBuilder;
 	friend class asCCompiler;
@@ -405,6 +420,9 @@ public:
 	// This flag is true if a script is currently being compiled. It is used to prevent multiple
 	// threads from requesting builds at the same time (without blocking)
 	bool                   isBuilding;
+	// The capture profile is Engine-wide and becomes immutable when the first
+	// source/archive build acquires the Engine build slot.
+	bool                   typedSemanticIRCaptureFrozen;
 	// Synchronized with engineRWLock
 	// This array holds modules that have been discard (thus are no longer visible to the application)
 	// but cannot yet be deleted due to having external references to some of the entities in them
@@ -548,6 +566,7 @@ public:
 		bool   floatIsFloat64;
 		bool   warnOnFloatConstantsForDoubles;
 		bool   warnIntegerDivision;
+		bool   captureTypedSemanticIR;
 	} ep;
 
 	// Callbacks

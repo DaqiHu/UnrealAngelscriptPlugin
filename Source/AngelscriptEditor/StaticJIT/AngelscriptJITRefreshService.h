@@ -5,6 +5,8 @@
 #include "StaticJIT/AngelscriptJITProjectGeneration.h"
 #include "StaticJIT/AngelscriptJITProviderRegistry.h"
 #include "StaticJIT/AngelscriptJITProviderRouter.h"
+#include "StaticJIT/AngelscriptJITSourceAuthority.h"
+#include "StaticJIT/StaticJITDiagnostics.h"
 
 namespace AngelscriptEditor::StaticJIT
 {
@@ -44,6 +46,7 @@ namespace AngelscriptEditor::StaticJIT
 		AlreadyCurrent,
 		AlreadyInProgress,
 		EngineUnavailable,
+		AuthoritativeEngineStale,
 		ScriptCompileFailed,
 		ScaffoldRequired,
 		GenerationFailed,
@@ -70,6 +73,8 @@ namespace AngelscriptEditor::StaticJIT
 		EAngelscriptJITRefreshCode FailureCode =
 			EAngelscriptJITRefreshCode::GenerationFailed;
 		FString Detail;
+		TOptional<FStaticJITDiagnostics::FPrePublicationFailureRecord>
+			PrePublicationFailure;
 		bool bHostModuleLoaded = false;
 		FAngelscriptJITGenerationOutput GeneratedOutput;
 		FAngelscriptJITProjectGenerationResult Publication;
@@ -90,6 +95,8 @@ namespace AngelscriptEditor::StaticJIT
 	{
 		EAngelscriptJITRefreshCode Code = EAngelscriptJITRefreshCode::Idle;
 		FString Detail;
+		TOptional<FStaticJITDiagnostics::FPrePublicationFailureRecord>
+			PrePublicationFailure;
 		FAngelscriptJITProviderId ProviderId;
 		FAngelscriptJITProviderGeneration PreviousGeneration;
 		FAngelscriptJITProviderGeneration ExpectedGeneration;
@@ -111,8 +118,12 @@ namespace AngelscriptEditor::StaticJIT
 		}
 	};
 
+	using FAngelscriptJITRefreshSourceAuthority = TFunction<
+		FAngelscriptJITSourceAuthoritySnapshot(FStringView)>;
 	using FAngelscriptJITRefreshPrepare = TFunction<
-		FAngelscriptJITRefreshPreparation(FStringView)>;
+		FAngelscriptJITRefreshPreparation(
+			FStringView,
+			const FAngelscriptJITSourceAuthoritySnapshot&)>;
 	using FAngelscriptJITRefreshProviderSnapshot = TFunction<
 		TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
 			ESPMode::ThreadSafe>()>;
@@ -127,6 +138,7 @@ namespace AngelscriptEditor::StaticJIT
 
 	struct FAngelscriptJITRefreshDependencies
 	{
+		FAngelscriptJITRefreshSourceAuthority CaptureAuthority;
 		FAngelscriptJITRefreshPrepare Prepare;
 		FAngelscriptJITRefreshProviderSnapshot GetProviderSnapshot;
 		FAngelscriptJITRefreshProviderObservation ObserveProvider;

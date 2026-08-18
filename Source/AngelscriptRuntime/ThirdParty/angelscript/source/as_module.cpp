@@ -283,6 +283,53 @@ int asCModule::AddScriptSection(const char *in_name, const char *in_code, size_t
 #endif
 }
 
+// internal: add one processed section and its pointer-free provenance before
+// parsing. The public asIScriptModule ABI intentionally remains unchanged.
+int asCModule::AddScriptSectionWithSourceProvenance(
+	const char *in_name,
+	const char *in_code,
+	size_t in_codeLength,
+	int in_lineOffset,
+	const asSTypedSemanticSourceProvenanceRange *ranges,
+	asUINT rangeCount)
+{
+#ifdef AS_NO_COMPILER
+	UNUSED_VAR(in_name);
+	UNUSED_VAR(in_code);
+	UNUSED_VAR(in_codeLength);
+	UNUSED_VAR(in_lineOffset);
+	UNUSED_VAR(ranges);
+	UNUSED_VAR(rangeCount);
+	return asNOT_SUPPORTED;
+#else
+	if( !builder )
+	{
+		builder = asNEW(asCBuilder)(engine, this);
+		if( builder == 0 )
+			return asOUT_OF_MEMORY;
+	}
+
+	const int result = builder->AddCode(
+		in_name,
+		in_code,
+		(int)in_codeLength,
+		in_lineOffset,
+		(int)engine->GetScriptSectionNameIndex(in_name ? in_name : ""),
+		engine->ep.copyScriptSections);
+	if( result < 0 )
+		return result;
+
+	asCScriptCode *script = builder->scripts[builder->scripts.GetLength() - 1];
+	if( !script->SetSourceProvenanceRanges(ranges, rangeCount) )
+	{
+		builder->scripts.PopLast();
+		asDELETE(script, asCScriptCode);
+		return asINVALID_ARG;
+	}
+	return asSUCCESS;
+#endif
+}
+
 // internal
 void asCModule::JITCompile()
 {

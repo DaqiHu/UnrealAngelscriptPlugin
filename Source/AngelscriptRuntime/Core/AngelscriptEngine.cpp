@@ -15,6 +15,7 @@
 #include "Cache/AngelscriptCacheDiagnostics.h"
 #include "Cache/AngelscriptCacheCompileReuse.h"
 #include "Cache/AngelscriptCacheCleanCapture.h"
+#include "Cache/AngelscriptCacheEnvironment.h"
 #include "Cache/AngelscriptCacheExactStartup.h"
 #include "Artifacts/AngelscriptFunctionRoute.h"
 #include "Cache/AngelscriptCacheEnvironmentProfile.h"
@@ -55,6 +56,8 @@
 #include "Binds/Helper_ToString.h"
 
 #include "StaticJIT/AngelscriptJITProviderRouter.h"
+#include "StaticJIT/AngelscriptJITProviderRegistry.h"
+#include "StaticJIT/AngelscriptJITBindingContext.h"
 #include "StaticJIT/AngelscriptStaticJITGenerationSnapshot.h"
 #include "RuntimeJIT/AngelscriptJITCoordinator.h"
 #include "StaticJIT/StaticJITHeader.h"
@@ -122,7 +125,7 @@ namespace AngelscriptStaticTypeInfo_Private
 	{
 		static TArray<FAngelscriptStaticTypeInfoClearer> Clearers;
 		return Clearers;
-	}
+		}
 }
 
 void FAngelscriptStaticTypeInfoRegistry::RegisterClearer(FAngelscriptStaticTypeInfoClearer Clearer)
@@ -847,6 +850,14 @@ FAngelscriptEngineDependencies FAngelscriptEngineDependencies::CreateDefault()
 		return ScriptRoots;
 	};
 	Dependencies.SourceProvider = MakeShared<FAngelscriptDiskSourceProvider>();
+	Dependencies.HandleStartupCompileFailureExit =
+		[](const FAngelscriptStartupCompileFailureExitRequest& Request)
+		{
+			GIsCriticalError = true;
+			FPlatformMisc::RequestExitWithStatus(
+				Request.bForce,
+				Request.Status);
+		};
 	return Dependencies;
 }
 
@@ -1547,6 +1558,15 @@ int32 FAngelscriptEngine::GetLocalPooledContextCountForTesting(asIScriptEngine* 
 	return MatchCount;
 }
 
+FAngelscriptProcessPackageReferenceCounts
+FAngelscriptEngine::GetProcessPackageReferenceCountsForTesting()
+{
+	FAngelscriptProcessPackageReferenceCounts Counts;
+	Counts.AngelscriptPackage = GAngelscriptPackageRefCount;
+	Counts.AngelscriptAssetsPackage = GAngelscriptAssetsPackageRefCount;
+	return Counts;
+}
+
 int32 FAngelscriptEngine::GetToStringEntryCountForTesting() const
 {
 	if (TArray<FToStringType>* List = GetToStringList())
@@ -2229,6 +2249,8 @@ void FAngelscriptEngine::ReleaseInterfaceMethodSignature(FInterfaceMethodSignatu
 
 void FAngelscriptEngine::PreInitialize_GameThread()
 {
+	const bool bStaticJITGeneration = RuntimeConfig.Purpose
+		== EAngelscriptEnginePurpose::StaticJITGeneration;
 	/**
 	 * Tell angelscript to use the appropriate allocators.
 	 */
@@ -2236,7 +2258,14 @@ void FAngelscriptEngine::PreInitialize_GameThread()
 
 	// A new full engine starts a fresh script-engine epoch. Dropping thread-local free
 	// contexts here prevents later engine allocations from aliasing stale pooled entries.
-	ReleaseAllContextsInPool(GAngelscriptContextPool.FreeContexts);
+	// A disposable generation Engine is not a new process epoch and must leave
+	// contexts owned by the primary Engine untouched. Request/return already
+	// filters by exact asIScriptEngine, and generation teardown removes only its
+	// own entries.
+	if (!bStaticJITGeneration)
+	{
+		ReleaseAllContextsInPool(GAngelscriptContextPool.FreeContexts);
+	}
 
 	ConfigSettings = GetMutableDefault<UAngelscriptSettings>();
 	bUseAutomaticImportMethod = ConfigSettings->bAutomaticImports;
@@ -2255,6 +2284,8 @@ void FAngelscriptEngine::PreInitialize_GameThread()
 	Engine->SetUserData(
 		this,
 		GetAngelscriptRuntimeEngineOwnerUserDataType());
+	Engine->SetTypedSemanticIRCapture(
+		RuntimeConfig.bCaptureTypedSemanticIR);
 
 #if AS_CAN_GENERATE_JIT
 	// Provider bindings are published after authoritative source/Cache V2
@@ -2309,7 +2340,19 @@ void FAngelscriptEngine::PreInitialize_GameThread()
 	// Set up thread local data for game thread
 	GameThreadTLD = asCThreadManager::GetLocalData();
 
-	AcquireProcessPackages();
+	if (bStaticJITGeneration)
+	{
+		// Generation observes any packages owned by the primary Runtime Engine;
+		// it neither creates nor roots them and therefore has nothing shared to
+		// release on teardown.
+		using namespace AngelscriptEnginePackages_Private;
+		AngelscriptPackage = FindPackage(nullptr, ScriptPackageName);
+		AssetsPackage = FindPackage(nullptr, AssetsPackageName);
+	}
+	else
+	{
+		AcquireProcessPackages();
+	}
 }
 
 TArray<FString> FAngelscriptEngine::DiscoverScriptRoots(bool bOnlyProjectRoot) const
@@ -3401,6 +3444,7 @@ void FAngelscriptEngine::InitialCompile()
 		bStaticJITGeneration);
 #if AS_CAN_GENERATE_JIT
 	StaticJITGenerationSnapshot.Reset();
+	StaticJITGenerationCompilePassCount = 0;
 #endif
 
 	bool bSuccess = true;
@@ -3593,10 +3637,7 @@ void FAngelscriptEngine::InitialCompile()
 			RuntimeConfig.bIsUnattended ? TEXT("true") : TEXT("false"),
 			bInteractiveStartupRetryAvailable ? TEXT("true") : TEXT("false"));
 
-		GIsCriticalError = true;
-		FPlatformMisc::RequestExitWithStatus(
-			ExitRequest.bForce,
-			ExitRequest.Status);
+		Dependencies.HandleStartupCompileFailureExit(ExitRequest);
 	}
 	else if (!bSuccess)
 	{
@@ -5264,6 +5305,12 @@ ECompileResult FAngelscriptEngine::CompileModules(
 	LLM_SCOPE_BYTAG(Angelscript);
 	const bool bStaticJITGeneration = RuntimeConfig.Purpose
 		== EAngelscriptEnginePurpose::StaticJITGeneration;
+#if AS_CAN_GENERATE_JIT
+	if (bStaticJITGeneration)
+	{
+		++StaticJITGenerationCompilePassCount;
+	}
+#endif
 	FAngelscriptCacheMutationGuard CacheMutationGuard;
 	if (!bStaticJITGeneration
 		&& CacheCaptureContext != nullptr && CacheService.IsValid())
@@ -6296,6 +6343,12 @@ ECompileResult FAngelscriptEngine::CompileModules(
 
 	if (bShouldSwapInModules)
 	{
+		// Keep this timer outside (and declared before) ClassGenerator so its
+		// destructor is included. The inner setup/reload timers intentionally do
+		// not cover destruction of the analyzed descriptor graph, which made a
+		// long post-reload/pre-cache gap otherwise invisible in test engines.
+		FAngelscriptScopeTimer ClassGeneratorLifecycleTimer(
+			TEXT("class generator lifecycle"));
 		FAngelscriptClassGenerator ClassGenerator;
 
 		// Run the delegate that the game might hook to provide more errors/warnings
@@ -6461,6 +6514,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 
 	TArray<FAngelscriptFunctionArtifactIdentity>
 		ValidatedCompileFunctionIdentities;
+	TArray<FAngelscriptFunctionArtifactReferenceSet>
+		ValidatedCompileFunctionReferenceSets;
 
 	// Freeze only after the final ClassGenerator/reinstancing decision, while
 	// every compiled candidate still owns its complete VM state. This is a
@@ -6522,6 +6577,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 
 			int32 SkippedCaptureCount = 0;
 			uint32 GraphCarriedDependencyFunctionCount = 0;
+			const double CaptureBatchStartedSeconds =
+				FPlatformTime::Seconds();
 			FAngelscriptCacheCrossModuleFunctionAuthority
 				CrossModuleFunctionAuthority;
 			const FAngelscriptCacheCleanCaptureResult CrossModuleAuthorityResult =
@@ -6529,6 +6586,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 					CaptureModules,
 					CacheCaptureContext->Environment.CaptureOptions,
 					CrossModuleFunctionAuthority);
+			const double CrossModuleAuthorityFinishedSeconds =
+				FPlatformTime::Seconds();
 			const FAngelscriptCacheCrossModuleFunctionAuthority*
 				CrossModuleFunctions = CrossModuleAuthorityResult.IsSuccess()
 					? &CrossModuleFunctionAuthority
@@ -6544,21 +6603,81 @@ ECompileResult FAngelscriptEngine::CompileModules(
 					static_cast<uint32>(CrossModuleAuthorityResult.Error),
 					*CrossModuleAuthorityResult.Detail);
 			}
+			TArray<FString> ModuleCaptureTimings;
+			// One immutable-on-first-use view of the registered Engine surface is
+			// shared by the complete compile transaction. Modules with no external
+			// dependencies never pay to build it, while dependency-heavy modules do
+			// not repeat the same global UClass/type/property/function scan.
+			FAngelscriptCacheEngineEnvironmentResolver
+				CaptureEnvironmentSymbols(*ScriptEngine);
+			TArray<FAngelscriptHash256> ProviderBackedModuleKeys;
+			if (!bStaticJITGeneration)
+			{
+				const TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
+					ESPMode::ThreadSafe> ProviderSnapshot =
+					FAngelscriptJITProviderRegistry::Get().GetSnapshot();
+				if (ProviderSnapshot.IsValid())
+				{
+					for (const TSharedPtr<const FAngelscriptJITProviderCatalog,
+						ESPMode::ThreadSafe>& Provider
+						: ProviderSnapshot->Providers)
+					{
+						if (!Provider.IsValid())
+						{
+							continue;
+						}
+						for (const FAngelscriptJITProviderCatalogEntry& Entry
+							: Provider->Entries)
+						{
+							if (!Entry.ModuleKey.Hash.IsZero())
+							{
+								ProviderBackedModuleKeys.AddUnique(
+									Entry.ModuleKey.Hash);
+							}
+						}
+					}
+				}
+			}
 			for (const TSharedRef<FAngelscriptModuleDesc>& Candidate :
 				CaptureModules)
 			{
+				const double ModuleCaptureStartedSeconds =
+					FPlatformTime::Seconds();
 				FAngelscriptCacheCleanModuleArtifacts Artifacts;
 				const FAngelscriptCacheCleanCaptureResult CaptureResult =
-					CaptureAngelscriptCleanCompiledModule(
-					Candidate,
-					CacheCaptureContext->Environment.CaptureOptions,
-					CacheCaptureContext->AuthoritativeSourceIndex,
-					CacheReuseContext,
-					CrossModuleFunctions,
-					Artifacts);
+					bStaticJITGeneration
+						? CaptureAngelscriptCurrentModuleFunctionFacts(
+							Candidate,
+							CacheCaptureContext->Environment.CaptureOptions,
+							CacheCaptureContext->AuthoritativeSourceIndex,
+							CrossModuleFunctions,
+							Artifacts,
+							&CaptureEnvironmentSymbols)
+						: CaptureAngelscriptCleanCompiledModule(
+							Candidate,
+							CacheCaptureContext->Environment.CaptureOptions,
+							CacheCaptureContext->AuthoritativeSourceIndex,
+							CacheReuseContext,
+							CrossModuleFunctions,
+							Artifacts,
+							&CaptureEnvironmentSymbols);
+				ModuleCaptureTimings.Add(FString::Printf(
+					TEXT("%s=%.3f"),
+					*Candidate->ModuleName,
+					(FPlatformTime::Seconds()
+						- ModuleCaptureStartedSeconds) * 1000.0));
 				if (!CaptureResult.IsSuccess())
 				{
 					++SkippedCaptureCount;
+					if (bStaticJITGeneration)
+					{
+						UE_LOG(Angelscript, Warning,
+							TEXT("[StaticJITGeneration] Function fact capture skipped module: Module=%s Error=%u Detail=%s"),
+							*Candidate->ModuleName,
+							static_cast<uint32>(CaptureResult.Error),
+							*CaptureResult.Detail);
+						continue;
+					}
 					FAngelscriptCacheDecisionEvent Decision;
 					Decision.Stage = CompileType == ECompileType::Initial
 						? EAngelscriptCacheDecisionStage::SuccessfulPublication
@@ -6581,6 +6700,47 @@ ECompileResult FAngelscriptEngine::CompileModules(
 						AngelscriptEngineCacheCapture_Private::FindModuleKey(
 							*Candidate,
 							CacheCaptureContext->AuthoritativeSourceIndex);
+					if (ModuleKey.IsSet()
+						&& ProviderBackedModuleKeys.Contains(ModuleKey->Hash))
+					{
+						// A Provider-backed module may be ineligible for the
+						// restorable Cache graph while its current compiled functions
+						// still have complete stable facts. Capture only that requested
+						// module's immutable identities. They never enter
+						// PublicationInput, so Cache eligibility and lifecycle remain
+						// fail-closed and unrelated scripts are not re-serialized.
+						FAngelscriptCacheCleanModuleArtifacts IdentityOnlyArtifacts;
+						const FAngelscriptCacheCleanCaptureResult IdentityOnlyResult =
+							CaptureAngelscriptCurrentModuleFunctionFacts(
+								Candidate,
+								CacheCaptureContext->Environment.CaptureOptions,
+								CacheCaptureContext->AuthoritativeSourceIndex,
+								CrossModuleFunctions,
+								IdentityOnlyArtifacts,
+								&CaptureEnvironmentSymbols);
+						if (IdentityOnlyResult.IsSuccess())
+						{
+							ValidatedCompileFunctionIdentities.Append(
+								IdentityOnlyArtifacts.
+									ValidatedFunctionArtifactIdentities);
+							ValidatedCompileFunctionReferenceSets.Append(
+								IdentityOnlyArtifacts.
+									ValidatedFunctionArtifactReferenceSets);
+							UE_LOG(Angelscript, Verbose,
+								TEXT("[StaticJIT] Captured Provider-requested identity-only fallback: Module=%s Functions=%d"),
+								*Candidate->ModuleName,
+								IdentityOnlyArtifacts.
+									ValidatedFunctionArtifactIdentities.Num());
+						}
+						else
+						{
+							UE_LOG(Angelscript, Verbose,
+								TEXT("[StaticJIT] Provider-requested identity-only fallback skipped module: Module=%s Error=%u Detail=%s"),
+								*Candidate->ModuleName,
+								static_cast<uint32>(IdentityOnlyResult.Error),
+								*IdentityOnlyResult.Detail);
+						}
+					}
 					if (ModuleKey.IsSet())
 					{
 						Decision.ModuleKeys.Add(ModuleKey.GetValue());
@@ -6618,11 +6778,46 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				PublicationInput.Modules.Add(MoveTemp(Artifacts));
 			}
 
-			UE_LOG(Angelscript, Display,
-				TEXT("[CacheV2] Compile capture batch: Candidates=%d Captured=%d Skipped=%d GraphCarriedDependencyFunctions=%u"),
-				CaptureModules.Num(), PublicationInput.Modules.Num(),
-				SkippedCaptureCount,
-				GraphCarriedDependencyFunctionCount);
+			if (bStaticJITGeneration)
+			{
+				UE_LOG(Angelscript, Display,
+					TEXT("[StaticJITGeneration] Function fact batch: Candidates=%d Captured=%d Skipped=%d"),
+					CaptureModules.Num(), PublicationInput.Modules.Num(),
+					SkippedCaptureCount);
+				UE_LOG(Angelscript, Display,
+					TEXT("[StaticJITGeneration] Snapshot input timings_ms=[authority=%.3f,function_facts=%.3f,total=%.3f] environment_index=[builds=%u,symbols=%d] modules=[%s]"),
+					(CrossModuleAuthorityFinishedSeconds
+						- CaptureBatchStartedSeconds) * 1000.0,
+					(FPlatformTime::Seconds()
+						- CrossModuleAuthorityFinishedSeconds) * 1000.0,
+					(FPlatformTime::Seconds()
+						- CaptureBatchStartedSeconds) * 1000.0,
+					CaptureEnvironmentSymbols.
+						GetSymbolIndexBuildCountForDiagnostics(),
+					CaptureEnvironmentSymbols.
+						GetIndexedSymbolCountForDiagnostics(),
+					*FString::Join(
+						ModuleCaptureTimings, TEXT(",")));
+			}
+			else
+			{
+				UE_LOG(Angelscript, Display,
+					TEXT("[CacheV2] Compile capture batch: Candidates=%d Captured=%d Skipped=%d GraphCarriedDependencyFunctions=%u timings_ms=[authority=%.3f,module_artifacts=%.3f,total=%.3f] environment_index=[builds=%u,symbols=%d] modules=[%s]"),
+					CaptureModules.Num(), PublicationInput.Modules.Num(),
+					SkippedCaptureCount,
+					GraphCarriedDependencyFunctionCount,
+					(CrossModuleAuthorityFinishedSeconds
+						- CaptureBatchStartedSeconds) * 1000.0,
+					(FPlatformTime::Seconds()
+						- CrossModuleAuthorityFinishedSeconds) * 1000.0,
+					(FPlatformTime::Seconds()
+						- CaptureBatchStartedSeconds) * 1000.0,
+					CaptureEnvironmentSymbols.
+						GetSymbolIndexBuildCountForDiagnostics(),
+					CaptureEnvironmentSymbols.
+						GetIndexedSymbolCountForDiagnostics(),
+					*FString::Join(ModuleCaptureTimings, TEXT(",")));
+			}
 			if (!PublicationInput.Modules.IsEmpty())
 			{
 				for (const FAngelscriptCacheCleanModuleArtifacts& Module
@@ -6630,6 +6825,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				{
 					ValidatedCompileFunctionIdentities.Append(
 						Module.ValidatedFunctionArtifactIdentities);
+					ValidatedCompileFunctionReferenceSets.Append(
+						Module.ValidatedFunctionArtifactReferenceSets);
 				}
 			}
 			if (bStaticJITGeneration)
@@ -6762,7 +6959,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				TConstArrayView<FAngelscriptFunctionRoute>(),
 				ValidatedCompileFunctionIdentities,
 				RebuiltRouteModules,
-				ArtifactInvalidatedRouteModules);
+				ArtifactInvalidatedRouteModules,
+				ValidatedCompileFunctionReferenceSets);
 		}
 
 		// We changed some modules, so we should re-resolve all declared imports in all modules
@@ -7035,7 +7233,99 @@ void FAngelscriptEngine::CompileModule_Types_Stage1(
 	for (auto& Section : Module->Code)
 	{
 		const FString SectionName = Section.AbsoluteFilename.IsEmpty() ? Section.VirtualPath : Section.AbsoluteFilename;
-		ScriptModule->AddScriptSection(TCHAR_TO_ANSI(*SectionName), TCHAR_TO_UTF8(*Section.Code), 0, 0);
+		TArray<asSTypedSemanticSourceProvenanceRange> Provenance;
+		Provenance.Reserve(Section.SourceProvenance.Num());
+		const auto ConvertAnchor = [](
+			const FAngelscriptSourceProvenanceAnchor& Source)
+		{
+			asSTypedSemanticSourceAnchor Target;
+			Target.section = TCHAR_TO_UTF8(*Source.Section);
+			Target.sourceOffset = Source.SourceOffset;
+			Target.sourceLength = Source.SourceLength;
+			Target.row = Source.Row;
+			Target.column = Source.Column;
+			return Target;
+		};
+		const auto ConvertGeneratedKind = [](
+			const EAngelscriptGeneratedSourceKind Kind)
+		{
+			switch (Kind)
+			{
+			case EAngelscriptGeneratedSourceKind::LiteralAsset:
+				return asETypedSemanticGeneratedSourceKind::LiteralAsset;
+			case EAngelscriptGeneratedSourceKind::SubsystemAccessor:
+				return asETypedSemanticGeneratedSourceKind::SubsystemAccessor;
+			case EAngelscriptGeneratedSourceKind::ClassHelper:
+				return asETypedSemanticGeneratedSourceKind::ClassHelper;
+			case EAngelscriptGeneratedSourceKind::StaticClassHelper:
+				return asETypedSemanticGeneratedSourceKind::StaticClassHelper;
+			case EAngelscriptGeneratedSourceKind::DelegateHelper:
+				return asETypedSemanticGeneratedSourceKind::DelegateHelper;
+			case EAngelscriptGeneratedSourceKind::RangeBasedFor:
+				return asETypedSemanticGeneratedSourceKind::RangeBasedFor;
+			case EAngelscriptGeneratedSourceKind::None:
+			default:
+				return asETypedSemanticGeneratedSourceKind::None;
+			}
+		};
+
+		for (const FAngelscriptProcessedSourceProvenanceRange& Source
+			: Section.SourceProvenance)
+		{
+			checkf(Source.ProcessedCodeUnitOffset >= 0
+				&& Source.ProcessedCodeUnitLength > 0
+				&& Source.ProcessedCodeUnitOffset <= Section.Code.Len()
+				&& Source.ProcessedCodeUnitLength
+					<= Section.Code.Len() - Source.ProcessedCodeUnitOffset,
+				TEXT("Invalid processed source provenance range for %s."),
+				*SectionName);
+			const FString Prefix = Section.Code.Left(
+				Source.ProcessedCodeUnitOffset);
+			const FString Slice = Section.Code.Mid(
+				Source.ProcessedCodeUnitOffset,
+				Source.ProcessedCodeUnitLength);
+			const FTCHARToUTF8 PrefixUtf8(*Prefix);
+			const FTCHARToUTF8 SliceUtf8(*Slice);
+
+			asSTypedSemanticSourceProvenanceRange& Target =
+				Provenance.Emplace_GetRef();
+			Target.processedOffset = asUINT(PrefixUtf8.Length());
+			Target.processedLength = asUINT(SliceUtf8.Length());
+			Target.hasAuthoredOrigin = Source.bHasAuthoredOrigin;
+			if (Source.bHasAuthoredOrigin)
+			{
+				Target.authoredOrigin = ConvertAnchor(Source.AuthoredOrigin);
+			}
+			Target.hasGeneratedOrigin = Source.bHasGeneratedOrigin;
+			if (Source.bHasGeneratedOrigin)
+			{
+				Target.generatedOrigin.kind =
+					ConvertGeneratedKind(Source.GeneratedKind);
+				Target.generatedOrigin.generatorName =
+					TCHAR_TO_UTF8(*Source.GeneratorName);
+				Target.generatedOrigin.hasAuthoredAnchor =
+					Source.bHasGeneratedAuthoredAnchor;
+				if (Source.bHasGeneratedAuthoredAnchor)
+				{
+					Target.generatedOrigin.authoredAnchor =
+						ConvertAnchor(Source.GeneratedAuthoredAnchor);
+				}
+			}
+		}
+
+		const FTCHARToUTF8 ProcessedUtf8(*Section.Code);
+		const int AddResult = ScriptModule->
+			AddScriptSectionWithSourceProvenance(
+				TCHAR_TO_ANSI(*SectionName),
+				ProcessedUtf8.Get(),
+				ProcessedUtf8.Length(),
+				0,
+				Provenance.GetData(),
+				asUINT(Provenance.Num()));
+		checkf(AddResult >= 0,
+			TEXT("Failed to install source provenance for %s (error %d)."),
+			*SectionName,
+			AddResult);
 	}
 	
 	// Set the code hash as userdata so we can find it later
@@ -7595,8 +7885,8 @@ void FAngelscriptEngine::Throw(const ANSICHAR* Exception)
 	auto* tld = asCThreadManager::GetLocalData();
 	if (tld->activeExecution != nullptr)
 	{
-		tld->activeExecution->bExceptionThrown = true;
-		HandleExceptionFromJIT(Exception);
+		FStaticJITFunction::SetExternalException(
+			*tld->activeExecution, Exception);
 	}
 	else if (tld->activeContext != nullptr)
 	{
@@ -7765,10 +8055,57 @@ void LogAngelscriptError(asSMessageInfo* Message, void* DataPtr)
 	}
 }
 
-void GetStackTrace(TArray<FString>& OutTrace)
+void GetStackTrace(
+	TArray<FString>& OutTrace,
+	const asSJITFailureRecord* CapturedFailureOverride = nullptr)
 {
 	auto* tld = asCThreadManager::GetLocalData();
-	asCContext* Context = nullptr;
+
+	// A temporary nested VM/JIT context can unwind before the public caller
+	// invokes its one-shot exception callback.  When the live active function
+	// no longer matches the first throwing function, use the pointer-free stack
+	// snapshot captured with that first failure instead of reporting only the
+	// surviving outer frame.
+	const asSJITFailureRecord* CapturedFailure =
+		CapturedFailureOverride != nullptr
+		&& CapturedFailureOverride->bHasFailure
+		&& CapturedFailureOverride->CapturedStackFrames.GetLength() != 0
+			? CapturedFailureOverride : nullptr;
+	if (CapturedFailure == nullptr
+		&& tld->activeExecution != nullptr
+		&& tld->activeExecution->FailureRecord != nullptr)
+	{
+		const asSJITFailureRecord* const Candidate =
+			tld->activeExecution->FailureRecord;
+		// FunctionId < 0 means the first-failure record did not capture a
+		// real engine-owned function. Do not call GetId() on TLD sentinels.
+		const bool bLiveFunctionMatchesFailure =
+			Candidate->FunctionId >= 0
+			&& tld->activeFunction != nullptr
+			&& tld->activeFunction->GetId() == Candidate->FunctionId;
+		if (Candidate->bHasFailure
+			&& Candidate->CapturedStackFrames.GetLength() != 0
+			&& !bLiveFunctionMatchesFailure)
+		{
+			CapturedFailure = Candidate;
+		}
+	}
+	if (CapturedFailure != nullptr)
+	{
+		if (CapturedFailure->CapturedStackModule.GetLength() != 0)
+		{
+			OutTrace.Add(ANSI_TO_TCHAR(
+				CapturedFailure->CapturedStackModule.AddressOf()));
+		}
+		for (asUINT FrameIndex = 0;
+			FrameIndex < CapturedFailure->CapturedStackFrames.GetLength();
+			++FrameIndex)
+		{
+			OutTrace.Add(ANSI_TO_TCHAR(
+				CapturedFailure->CapturedStackFrames[FrameIndex].AddressOf()));
+		}
+		return;
+	}
 
 	struct FStackFrameDescription
 	{
@@ -7779,45 +8116,39 @@ void GetStackTrace(TArray<FString>& OutTrace)
 
 	TArray<FStackFrameDescription, TInlineAllocator<16>> Stack;
 
-	if (tld->activeExecution != nullptr)
+	auto AppendExecution = [&Stack](FScriptExecution* Execution)
 	{
-		FScriptExecution* Execution = tld->activeExecution;
-		while (Execution != nullptr)
+		if (Execution == nullptr)
 		{
-#if AS_JIT_DEBUG_CALLSTACKS
-			auto* DebugStack = (FScopeJITDebugCallstack*)Execution->debugCallStack;
-			while (DebugStack != nullptr)
-			{
-				auto* ThisObject = (UObject*)DebugStack->ThisObject;
-
-				Stack.Add({
-					FString::Printf(TEXT("  %s | Line %d"),
-									ANSI_TO_TCHAR(DebugStack->FunctionName),
-									DebugStack->LineNumber),
-					ANSI_TO_TCHAR(DebugStack->Filename),
-					ThisObject
-				});
-
-				DebugStack = DebugStack->PrevFrame;
-			}
-#endif
-
-			Context = Execution->prevContext;
-			Execution = Execution->prevExecution;
-		}
-	}
-	else
-	{
-		Context = tld->activeContext;
-		if (Context == nullptr)
-		{
-			OutTrace.Add(TEXT("No Angelscript Context"));
 			return;
 		}
-	}
 
-	if (Context != nullptr)
+#if AS_JIT_DEBUG_CALLSTACKS
+		auto* DebugStack = (FScopeJITDebugCallstack*)Execution->debugCallStack;
+		while (DebugStack != nullptr)
+		{
+			auto* ThisObject = (UObject*)DebugStack->ThisObject;
+
+			Stack.Add({
+				FString::Printf(TEXT("  %s | Line %d"),
+								ANSI_TO_TCHAR(DebugStack->FunctionName),
+								DebugStack->LineNumber),
+				ANSI_TO_TCHAR(DebugStack->Filename),
+				ThisObject
+			});
+
+			DebugStack = DebugStack->PrevFrame;
+		}
+#endif
+	};
+
+	auto AppendContext = [&Stack](asCContext* Context)
 	{
+		if (Context == nullptr)
+		{
+			return;
+		}
+
 		int32 FrameCount = FMath::Min((int32)Context->GetCallstackSize(), 64);
 		for (int32 i = 0; i < FrameCount; ++i)
 		{
@@ -7847,6 +8178,44 @@ void GetStackTrace(TArray<FString>& OutTrace)
 				}
 			}
 		}
+	};
+
+	if (tld->activeActivation != nullptr)
+	{
+		for (FScriptActivation* Activation = tld->activeActivation;
+			Activation != nullptr;
+			Activation = Activation->Previous)
+		{
+			if (Activation->Execution != nullptr)
+			{
+				AppendExecution(Activation->Execution);
+			}
+			else
+			{
+				AppendContext(Activation->Context);
+			}
+		}
+	}
+	else if (tld->activeExecution != nullptr)
+	{
+		asCContext* PreviousContext = nullptr;
+		for (FScriptExecution* Execution = tld->activeExecution;
+			Execution != nullptr;
+			Execution = Execution->prevExecution)
+		{
+			AppendExecution(Execution);
+			PreviousContext = Execution->prevContext;
+		}
+		AppendContext(PreviousContext);
+	}
+	else if (tld->activeContext != nullptr)
+	{
+		AppendContext(tld->activeContext);
+	}
+	else
+	{
+		OutTrace.Add(TEXT("No Angelscript Context"));
+		return;
 	}
 
 	AActor* PreviousThisActor = nullptr;
@@ -7920,7 +8289,9 @@ FString GetScriptStack()
 	return FString::Join(Trace, TEXT("\n"));
 }
 
-void LogAngelscriptException(const ANSICHAR* ExceptionString)
+void LogAngelscriptExceptionWithCapturedStack(
+	const ANSICHAR* ExceptionString,
+	const asSJITFailureRecord* CapturedFailure)
 {
 	if (FAngelscriptScriptTestRunner::IsControlledException(ExceptionString)
 		|| FAngelscriptScriptTestRunner::
@@ -7942,7 +8313,7 @@ void LogAngelscriptException(const ANSICHAR* ExceptionString)
 	UE_LOG(Angelscript, Error, TEXT("%s"), ANSI_TO_TCHAR(ExceptionString));
 
 	TArray<FString> Trace;
-	GetStackTrace(Trace);
+	GetStackTrace(Trace, CapturedFailure);
 
 	for (FString& Line : Trace)
 		UE_LOG(Angelscript, Error, TEXT("%s"),*Line);
@@ -7962,6 +8333,11 @@ void LogAngelscriptException(const ANSICHAR* ExceptionString)
 
 }
 
+void LogAngelscriptException(const ANSICHAR* ExceptionString)
+{
+	LogAngelscriptExceptionWithCapturedStack(ExceptionString, nullptr);
+}
+
 void LogAngelscriptException(asIScriptContext* Context)
 {
 	const ANSICHAR* ExceptionString = Context->GetExceptionString();
@@ -7971,7 +8347,11 @@ void LogAngelscriptException(asIScriptContext* Context)
 	{
 		return;
 	}
-	LogAngelscriptException(ExceptionString);
+	const asSJITFailureRecord& JITFailure =
+		static_cast<asCContext*>(Context)->m_jitFailureRecord;
+	LogAngelscriptExceptionWithCapturedStack(
+		ExceptionString,
+		JITFailure.bHasFailure ? &JITFailure : nullptr);
 
 #if WITH_AS_DEBUGSERVER
 	if (IsInGameThread())
@@ -8117,7 +8497,9 @@ void FAngelscriptEngine::UpdateLineCallbackState()
 #endif
 
 #if WITH_AS_COVERAGE
-	if (FAngelscriptCodeCoverageExtension::GetForEngine(*this) != nullptr)
+	if (const FAngelscriptCodeCoverage* const Coverage =
+		FAngelscriptCodeCoverageExtension::GetForEngine(*this);
+		Coverage != nullptr && Coverage->IsRecording())
 	{
 		bEverRunLineCallback = true;
 		bAlwaysRunLineCallback = true;
@@ -8133,6 +8515,83 @@ void FAngelscriptEngine::UpdateLineCallbackState()
 	asCContext::ShouldAlwaysRunLineCallback = bAlwaysRunLineCallback;
 }
 
+EAngelscriptJITExecutionCapability
+FAngelscriptEngine::CaptureCurrentJITExecutionRequirements()
+{
+	EAngelscriptJITExecutionCapability Required =
+		EAngelscriptJITExecutionCapability::None;
+	if (RuntimeConfig.bIsEditor || RuntimeConfig.bDevelopmentMode)
+	{
+		Required |= EAngelscriptJITExecutionCapability::FramePosition;
+	}
+
+#if WITH_AS_DEBUGSERVER
+	if (DebugServer != nullptr)
+	{
+		if (DebugServer->bIsDebugging)
+		{
+			Required |= EAngelscriptJITExecutionCapability::LineCallback;
+			Required |= EAngelscriptJITExecutionCapability::DebuggerStep;
+			Required |= EAngelscriptJITExecutionCapability::DebuggerLocals;
+		}
+		if (DebugServer->bBreakNextScriptLine)
+		{
+			Required |= EAngelscriptJITExecutionCapability::LineCallback;
+			Required |= EAngelscriptJITExecutionCapability::DebuggerStep;
+		}
+		if (!DebugServer->DataBreakpoints.IsEmpty())
+		{
+			Required |= EAngelscriptJITExecutionCapability::LineCallback;
+			Required |= EAngelscriptJITExecutionCapability::DebuggerLocals;
+		}
+	}
+#endif
+
+#if WITH_AS_COVERAGE
+	if (const FAngelscriptCodeCoverage* const Coverage =
+		FAngelscriptCodeCoverageExtension::GetForEngine(
+			*this);
+		Coverage != nullptr && Coverage->IsRecording())
+	{
+		Required |= EAngelscriptJITExecutionCapability::LineCallback;
+		Required |= EAngelscriptJITExecutionCapability::Coverage;
+	}
+#endif
+	return Required;
+}
+
+bool FAngelscriptEngine::AllowsJITBindingExecution(
+	asIScriptEngine* const ScriptEngine,
+	const asSJITFunctionBinding& Binding)
+{
+	const FAngelscriptJITBindingContext* const BindingContext =
+		FAngelscriptJITBindingContext::FromBindingUserData(Binding.UserData);
+	if (BindingContext == nullptr
+		|| !BindingContext->HasExecutionCapabilityProfile())
+	{
+		return true;
+	}
+
+	FAngelscriptEngine* const CurrentEngine = TryGetCurrentEngine();
+	if (CurrentEngine == nullptr
+		|| CurrentEngine->GetScriptEngine() != ScriptEngine)
+	{
+		return false;
+	}
+	EAngelscriptJITExecutionCapability Required =
+		CurrentEngine->CaptureCurrentJITExecutionRequirements();
+	const EAngelscriptJITExecutionCapability RuntimeTriggers =
+		BindingContext->GetRuntimeExecutionRequirementTriggers();
+	if (EnumHasAnyFlags(
+			RuntimeTriggers,
+			EAngelscriptJITExecutionCapability::LoopTimeout)
+		&& UAngelscriptSettings::Get().EditorMaximumScriptExecutionTime > 0.0f)
+	{
+		Required |= EAngelscriptJITExecutionCapability::LoopTimeout;
+	}
+	return BindingContext->AllowsExecutionCapabilities(Required);
+}
+
 void AngelscriptLineCallback(asCContext* Context)
 {
 	// Only do this for things running on the game thread
@@ -8145,7 +8604,13 @@ void AngelscriptLineCallback(asCContext* Context)
 		return;
 	GAngelscriptLineReentry = true;
 
-	FAngelscriptEngine& AngelscriptManager = FAngelscriptEngine::Get();
+	FAngelscriptEngine* const AngelscriptManager =
+		FAngelscriptEngine::TryGetByScriptEngine(Context->GetEngine());
+	if (AngelscriptManager == nullptr)
+	{
+		GAngelscriptLineReentry = false;
+		return;
+	}
 
 #if WITH_AS_DEBUGVALUES
 	auto& Stack = GetStack(Context);
@@ -8205,18 +8670,20 @@ void AngelscriptLineCallback(asCContext* Context)
 #endif
 
 #if WITH_AS_DEBUGSERVER
-	if (auto* DebugServer = AngelscriptManager.DebugServer)
+	if (auto* DebugServer = AngelscriptManager->DebugServer)
 		DebugServer->ProcessScriptLine(Context);
 #endif
 
 #if WITH_AS_COVERAGE
-	if (FAngelscriptCodeCoverage* CodeCoverage = FAngelscriptCodeCoverageExtension::GetForEngine(AngelscriptManager))
+	if (FAngelscriptCodeCoverage* CodeCoverage =
+		FAngelscriptCodeCoverageExtension::GetForEngine(*AngelscriptManager))
 	{
 		int Column;
 		int Line = Context->GetLineNumber(0, &Column, nullptr);
 		asIScriptFunction* CurrentFunction = Context->GetFunction(0);
 		FString ModuleName = ANSI_TO_TCHAR(CurrentFunction->GetModuleName());
-		TSharedPtr<struct FAngelscriptModuleDesc> Module = AngelscriptManager.GetModule(ModuleName);
+		TSharedPtr<struct FAngelscriptModuleDesc> Module =
+			AngelscriptManager->GetModule(ModuleName);
 		if (Module != nullptr)
 		{
 			CodeCoverage->HitLine(*Module, Line);
@@ -8230,9 +8697,16 @@ void AngelscriptLineCallback(asCContext* Context)
 void AngelscriptStackPopCallback(asCContext* Context, void* OldStackFrameStart, void* OldStackFrameEnd)
 {
 #if WITH_AS_DEBUGSERVER
-	FAngelscriptEngine& AngelscriptManager = FAngelscriptEngine::Get();
-	if (auto* DebugServer = AngelscriptManager.DebugServer)
-		DebugServer->ProcessScriptStackPop(Context, OldStackFrameStart, OldStackFrameEnd);
+	FAngelscriptEngine* const AngelscriptManager =
+		FAngelscriptEngine::TryGetByScriptEngine(Context->GetEngine());
+	if (AngelscriptManager != nullptr)
+	{
+		if (auto* DebugServer = AngelscriptManager->DebugServer)
+		{
+			DebugServer->ProcessScriptStackPop(
+				Context, OldStackFrameStart, OldStackFrameEnd);
+		}
+	}
 #endif
 }
 
@@ -8372,18 +8846,101 @@ void FAngelscriptEngine::GetAngelscriptExecutionFileAndLine(FString& OutFilename
 
 UObject* FAngelscriptEngine::GetAngelscriptExecutionThisObject(int32 StackFrame)
 {
-	auto* Context = asGetActiveContext();
-	if (Context == nullptr)
+	if (StackFrame < 0)
 		return nullptr;
 
-	void* ThisPtr = Context->GetThisPointer(StackFrame);
-	if (ThisPtr != nullptr)
+	auto* tld = asCThreadManager::GetLocalData();
+	auto TryResolveExecutionFrame = [&StackFrame](
+		FScriptExecution* Execution,
+		UObject*& OutThisObject) -> bool
 	{
-		asITypeInfo* ThisType = Context->GetEngine()->GetTypeInfoById(Context->GetThisTypeId(StackFrame));
-		if (ThisType != nullptr && (ThisType->GetFlags() & asOBJ_REF) != 0)
+		if (Execution == nullptr)
 		{
-			return (UObject*)ThisPtr;
+			return false;
 		}
+
+#if AS_JIT_DEBUG_CALLSTACKS
+		auto* DebugStack = (FScopeJITDebugCallstack*)Execution->debugCallStack;
+		while (DebugStack != nullptr)
+		{
+			if (StackFrame == 0)
+			{
+				OutThisObject = (UObject*)DebugStack->ThisObject;
+				return true;
+			}
+
+			--StackFrame;
+			DebugStack = DebugStack->PrevFrame;
+		}
+#endif
+		return false;
+	};
+
+	auto TryResolveContextFrame = [&StackFrame](
+		asCContext* Context,
+		UObject*& OutThisObject) -> bool
+	{
+		if (Context == nullptr)
+		{
+			return false;
+		}
+
+		const int32 FrameCount = (int32)Context->GetCallstackSize();
+		if (StackFrame >= FrameCount)
+		{
+			StackFrame -= FrameCount;
+			return false;
+		}
+
+		void* ThisPtr = Context->GetThisPointer(StackFrame);
+		if (ThisPtr != nullptr)
+		{
+			asITypeInfo* ThisType = Context->GetEngine()->GetTypeInfoById(
+				Context->GetThisTypeId(StackFrame));
+			if (ThisType != nullptr && (ThisType->GetFlags() & asOBJ_REF) != 0)
+			{
+				OutThisObject = (UObject*)ThisPtr;
+			}
+		}
+		return true;
+	};
+
+	UObject* ThisObject = nullptr;
+	if (tld->activeActivation != nullptr)
+	{
+		for (FScriptActivation* Activation = tld->activeActivation;
+			Activation != nullptr;
+			Activation = Activation->Previous)
+		{
+			const bool bResolved = Activation->Execution != nullptr
+				? TryResolveExecutionFrame(Activation->Execution, ThisObject)
+				: TryResolveContextFrame(Activation->Context, ThisObject);
+			if (bResolved)
+			{
+				return ThisObject;
+			}
+		}
+		return nullptr;
+	}
+
+	asCContext* PreviousContext = nullptr;
+	for (FScriptExecution* Execution = tld->activeExecution;
+		Execution != nullptr;
+		Execution = Execution->prevExecution)
+	{
+		if (TryResolveExecutionFrame(Execution, ThisObject))
+		{
+			return ThisObject;
+		}
+		PreviousContext = Execution->prevContext;
+	}
+	if (PreviousContext == nullptr)
+	{
+		PreviousContext = tld->activeContext;
+	}
+	if (TryResolveContextFrame(PreviousContext, ThisObject))
+	{
+		return ThisObject;
 	}
 	return nullptr;
 }

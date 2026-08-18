@@ -125,12 +125,44 @@ namespace AngelscriptJITGeneratedFileStore_Private
 			Bytes.GetData(), static_cast<uint64>(Bytes.Num()))};
 	}
 
+	static bool StartsWithJsonOwnershipPrefix(
+		const FString& Content,
+		const FStringView Prefix)
+	{
+		const FString CanonicalPrefix(Prefix);
+		if (Content.StartsWith(CanonicalPrefix, ESearchCase::CaseSensitive))
+		{
+			return true;
+		}
+		FString CrlfPrefix = CanonicalPrefix;
+		CrlfPrefix.ReplaceInline(
+			TEXT("\n"), TEXT("\r\n"), ESearchCase::CaseSensitive);
+		return Content.StartsWith(CrlfPrefix, ESearchCase::CaseSensitive);
+	}
+
 	static bool HasCurrentOwnershipMarker(const FString& Content)
 	{
 		return Content.StartsWith(TextOwnershipPrefix,
 				ESearchCase::CaseSensitive)
-			|| Content.StartsWith(JsonOwnershipPrefix,
-				ESearchCase::CaseSensitive);
+			|| StartsWithJsonOwnershipPrefix(
+				Content, JsonOwnershipPrefix);
+	}
+
+	static bool StartsWithTextOwnershipMarkerLine(
+		const FString& Content,
+		const FString& Marker)
+	{
+		if (Marker.IsEmpty()
+			|| !Content.StartsWith(Marker, ESearchCase::CaseSensitive))
+		{
+			return false;
+		}
+		if (Content.Len() == Marker.Len())
+		{
+			return true;
+		}
+		const TCHAR Terminator = Content[Marker.Len()];
+		return Terminator == TEXT('\n') || Terminator == TEXT('\r');
 	}
 
 	static bool HasExpectedLegacyOwnershipMarker(
@@ -145,17 +177,18 @@ namespace AngelscriptJITGeneratedFileStore_Private
 			{
 				return false;
 			}
-			FString LegacyMarker = Expected.Content.Left(End + 1);
+			FString LegacyMarker = Expected.Content.Left(End);
+			LegacyMarker.RemoveFromEnd(TEXT("\r"));
 			LegacyMarker.ReplaceInline(
 				TEXT("revision=2"), TEXT("revision=1"),
 				ESearchCase::CaseSensitive);
-			return ActualContent.StartsWith(
-				LegacyMarker, ESearchCase::CaseSensitive);
+			return StartsWithTextOwnershipMarkerLine(
+				ActualContent, LegacyMarker);
 		}
-		return Expected.Content.StartsWith(JsonOwnershipPrefix,
-				ESearchCase::CaseSensitive)
-			&& ActualContent.StartsWith(LegacyJsonOwnershipPrefix,
-				ESearchCase::CaseSensitive);
+		return StartsWithJsonOwnershipPrefix(
+				Expected.Content, JsonOwnershipPrefix)
+			&& StartsWithJsonOwnershipPrefix(
+				ActualContent, LegacyJsonOwnershipPrefix);
 	}
 
 	static bool IsRecognizedLegacyRemovalFile(
@@ -190,11 +223,13 @@ namespace AngelscriptJITGeneratedFileStore_Private
 			int32 End = INDEX_NONE;
 			if (Expected.Content.FindChar(TEXT('\n'), End))
 			{
-				return Expected.Content.Left(End + 1);
+				FString Marker = Expected.Content.Left(End);
+				Marker.RemoveFromEnd(TEXT("\r"));
+				return Marker;
 			}
 		}
-		if (Expected.Content.StartsWith(JsonOwnershipPrefix,
-			ESearchCase::CaseSensitive))
+		if (StartsWithJsonOwnershipPrefix(
+			Expected.Content, JsonOwnershipPrefix))
 		{
 			return JsonOwnershipPrefix;
 		}
@@ -206,8 +241,11 @@ namespace AngelscriptJITGeneratedFileStore_Private
 		const FString& ActualContent)
 	{
 		const FString Marker = ExpectedOwnershipMarker(Expected);
-		return !Marker.IsEmpty()
-			&& ActualContent.StartsWith(Marker, ESearchCase::CaseSensitive);
+		return Expected.Content.StartsWith(
+				TextOwnershipPrefix, ESearchCase::CaseSensitive)
+			? StartsWithTextOwnershipMarkerLine(ActualContent, Marker)
+			: !Marker.IsEmpty()
+				&& StartsWithJsonOwnershipPrefix(ActualContent, Marker);
 	}
 
 	static void AddDifference(
@@ -240,10 +278,10 @@ namespace AngelscriptJITGeneratedFileStore_Private
 		FString& OutError)
 	{
 		OutInventory = {};
-		const bool bCurrentMarker = Content.StartsWith(
-			JsonOwnershipPrefix, ESearchCase::CaseSensitive);
-		const bool bLegacyMarker = Content.StartsWith(
-			LegacyJsonOwnershipPrefix, ESearchCase::CaseSensitive);
+		const bool bCurrentMarker = StartsWithJsonOwnershipPrefix(
+			Content, JsonOwnershipPrefix);
+		const bool bLegacyMarker = StartsWithJsonOwnershipPrefix(
+			Content, LegacyJsonOwnershipPrefix);
 		if (!bCurrentMarker
 			&& !(bAllowLegacyRemovalInventory && bLegacyMarker))
 		{

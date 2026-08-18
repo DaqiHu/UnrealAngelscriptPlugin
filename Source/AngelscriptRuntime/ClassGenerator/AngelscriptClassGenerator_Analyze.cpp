@@ -166,7 +166,9 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FClassData& Cl
 	}
 	UsedUnrealNames.Add(UnrealName);
 
-	auto AngelscriptSettings = UAngelscriptSettings::StaticClass()->GetDefaultObject<UAngelscriptSettings>();
+	const UAngelscriptSettings* const AngelscriptSettings =
+		FAngelscriptEngine::Get().ConfigSettings;
+	check(AngelscriptSettings != nullptr);
 
 	// Some properties without a UPROPERTY() should be added as 
 	// hidden properties, for garbage collection purposes.
@@ -259,7 +261,26 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FClassData& Cl
 			{
 				// If the property is a default component and a subobject of that name exists in the code parent, error
 				UClass* CodeSuperClass = ClassData.NewClass->CodeSuperClass;
-				UObject* CodeCDO = CodeSuperClass != nullptr ? CodeSuperClass->GetDefaultObject() : nullptr;
+				UObject* CodeCDO = CodeSuperClass != nullptr
+					? CodeSuperClass->GetDefaultObject(
+						!bStaticJITGenerationAnalysis)
+					: nullptr;
+				const bool bMissingGenerationCodeCDO =
+					bStaticJITGenerationAnalysis
+					&& CodeSuperClass != nullptr
+					&& CodeCDO == nullptr;
+				if (bMissingGenerationCodeCDO)
+				{
+					FAngelscriptEngine::Get().ScriptCompileError(
+						ModuleData.NewModule,
+						PropertyDesc->LineNumber,
+						FString::Printf(
+							TEXT("Static JIT generation cannot analyze component metadata because native superclass %s has no existing CDO; refusing to materialize it while analyzing DefaultComponent %s::%s."),
+							*CodeSuperClass->GetName(),
+							*ClassData.NewClass->ClassName,
+							*PropertyDesc->PropertyName));
+					ClassData.ReloadReq = EReloadRequirement::Error;
+				}
 				if (CodeCDO != nullptr && CodeCDO->GetDefaultSubobjectByName(*PropertyDesc->PropertyName) != nullptr)
 				{
 					FAngelscriptEngine::Get().ScriptCompileError(ModuleData.NewModule, PropertyDesc->LineNumber, FString::Printf(
@@ -289,12 +310,13 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FClassData& Cl
 						bAttachParentExists = AttachProperty->Meta.Contains(NAME_Actor_DefaultComponent);
 					}
 
-					if (!bAttachParentExists)
+					if (!bAttachParentExists && CodeCDO != nullptr)
 					{
 						bAttachParentExists = CodeCDO->GetDefaultSubobjectByName(**AttachParentName) != nullptr;
 					}
 
-					if (!bAttachParentExists)
+					if (!bAttachParentExists
+						&& !bMissingGenerationCodeCDO)
 					{
 						FAngelscriptEngine::Get().ScriptCompileError(
 							ModuleData.NewModule,
@@ -317,6 +339,8 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FClassData& Cl
 					&& PropertyCodeSuper->IsChildOf(UActorComponent::StaticClass()))
 				{
 					bool bOverrideTargetExists = false;
+					bool bMissingGenerationCodeCDO = false;
+					FString MissingGenerationCodeClassName;
 
 					TSharedPtr<FAngelscriptClassDesc> CheckSuperClass = AngelscriptSuperClass;
 					while (CheckSuperClass.IsValid())
@@ -340,14 +364,6 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FClassData& Cl
 							CheckCodeSuperClass != nullptr;
 							CheckCodeSuperClass = CheckCodeSuperClass->GetSuperClass())
 						{
-							UObject* CheckCodeCDO = CheckCodeSuperClass->GetDefaultObject();
-							if (CheckCodeCDO != nullptr
-								&& CheckCodeCDO->GetDefaultSubobjectByName(**OverrideComponentName) != nullptr)
-							{
-								bOverrideTargetExists = true;
-								break;
-							}
-
 							for (TFieldIterator<FProperty> It(CheckCodeSuperClass, EFieldIteratorFlags::ExcludeSuper); It; ++It)
 							{
 								FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(*It);
@@ -366,19 +382,53 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FClassData& Cl
 							{
 								break;
 							}
+
+							UObject* const CheckCodeCDO =
+								CheckCodeSuperClass->GetDefaultObject(
+									!bStaticJITGenerationAnalysis);
+							if (CheckCodeCDO != nullptr
+								&& CheckCodeCDO->GetDefaultSubobjectByName(
+									**OverrideComponentName) != nullptr)
+							{
+								bOverrideTargetExists = true;
+								break;
+							}
+							if (bStaticJITGenerationAnalysis
+								&& CheckCodeCDO == nullptr
+								&& !bMissingGenerationCodeCDO)
+							{
+								bMissingGenerationCodeCDO = true;
+								MissingGenerationCodeClassName =
+									CheckCodeSuperClass->GetName();
+							}
 						}
 					}
 
 					if (!bOverrideTargetExists)
 					{
-						FAngelscriptEngine::Get().ScriptCompileError(
-							ModuleData.NewModule,
-							PropertyDesc->LineNumber,
-							FString::Printf(
-								TEXT("OverrideComponent %s::%s could not find component %s in base class to override."),
-								*ClassData.NewClass->ClassName,
-								*PropertyDesc->PropertyName,
-								**OverrideComponentName));
+						if (bMissingGenerationCodeCDO)
+						{
+							FAngelscriptEngine::Get().ScriptCompileError(
+								ModuleData.NewModule,
+								PropertyDesc->LineNumber,
+								FString::Printf(
+									TEXT("Static JIT generation cannot analyze component metadata because native superclass %s has no existing CDO; refusing to materialize it while analyzing OverrideComponent %s::%s targeting %s."),
+									*MissingGenerationCodeClassName,
+									*ClassData.NewClass->ClassName,
+									*PropertyDesc->PropertyName,
+									**OverrideComponentName));
+						}
+						else
+						{
+							FAngelscriptEngine::Get().ScriptCompileError(
+								ModuleData.NewModule,
+								PropertyDesc->LineNumber,
+								FString::Printf(
+									TEXT("OverrideComponent %s::%s could not find component %s in base class to override."),
+									*ClassData.NewClass->ClassName,
+									*PropertyDesc->PropertyName,
+									**OverrideComponentName));
+						}
 						ClassData.ReloadReq = EReloadRequirement::Error;
 					}
 				}

@@ -18,6 +18,14 @@ namespace AngelscriptJITProviderMatchTests_Private
 	{
 	}
 
+	static void RawEntry()
+	{
+	}
+
+	static void ParmsEntry(FScriptExecution&, void*, void*)
+	{
+	}
+
 	class FResolver : public IAngelscriptJITReferenceResolver
 	{
 	public:
@@ -153,6 +161,47 @@ public:
 			EAngelscriptJITRequiredEntryPoints::Raw;
 		ASSERT_THAT(IsTrue(Fixture.Match().Result
 			== EAngelscriptArtifactMatchResult::MissingEntryPoint));
+	}
+
+	TEST_METHOD(PreferredParmsShapeWinsAndExactVmRawFallbackIsAccepted)
+	{
+		using namespace AngelscriptJITProviderMatchTests_Private;
+		FFixture Fixture;
+		Fixture.Entry().EntryPoints.RawEntry = &RawEntry;
+
+		FAngelscriptJITFunctionMatchInput FallbackInput = Fixture.Input;
+		FallbackInput.RequiredEntryPoints =
+			EAngelscriptJITRequiredEntryPoints::VM
+			| EAngelscriptJITRequiredEntryPoints::Raw;
+		FAngelscriptJITFunctionMatchInput PreferredInput = FallbackInput;
+		PreferredInput.EntryAbiHash = MakeHash(TEXT("preferred-parms-abi"));
+		PreferredInput.RequiredEntryPoints |=
+			EAngelscriptJITRequiredEntryPoints::Parms;
+
+		FAngelscriptJITFunctionMatchResult Result =
+			FAngelscriptJITProviderMatcher::MatchPreferredThenFallback(
+				*Fixture.Snapshot,
+				PreferredInput,
+				FallbackInput,
+				Fixture.Resolver);
+		ASSERT_THAT(IsTrue(Result.Result
+			== EAngelscriptArtifactMatchResult::Exact));
+		ASSERT_THAT(IsTrue(Result.Selection.IsSet()));
+		ASSERT_THAT(AreEqual(0, Result.Selection.GetValue().EntryIndex));
+
+		FFixture PreferredFixture;
+		PreferredFixture.Entry().EntryPoints.RawEntry = &RawEntry;
+		PreferredFixture.Entry().EntryPoints.ParmsEntry = &ParmsEntry;
+		PreferredFixture.Entry().EntryAbiHash = PreferredInput.EntryAbiHash;
+		Result = FAngelscriptJITProviderMatcher::MatchPreferredThenFallback(
+			*PreferredFixture.Snapshot,
+			PreferredInput,
+			FallbackInput,
+			PreferredFixture.Resolver);
+		ASSERT_THAT(IsTrue(Result.Result
+			== EAngelscriptArtifactMatchResult::Exact));
+		ASSERT_THAT(IsTrue(Result.Selection.IsSet()));
+		ASSERT_THAT(AreEqual(0, Result.Selection.GetValue().EntryIndex));
 	}
 
 	TEST_METHOD(ReferenceFailuresAreIsolatedAndOptionalMissingIsExplicit)

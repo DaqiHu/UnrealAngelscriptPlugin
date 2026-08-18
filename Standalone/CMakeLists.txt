@@ -27,6 +27,7 @@ set(ANGELSCRIPT_MAINTAINED_FORK_SOURCES
 	"${ANGELSCRIPT_FORK_ROOT}/as_bytecode.cpp"
 	"${ANGELSCRIPT_FORK_ROOT}/as_callfunc.cpp"
 	"${ANGELSCRIPT_FORK_ROOT}/as_compiler.cpp"
+	"${ANGELSCRIPT_FORK_ROOT}/as_typed_semantic_ir.cpp"
 	"${ANGELSCRIPT_FORK_ROOT}/as_configgroup.cpp"
 	"${ANGELSCRIPT_FORK_ROOT}/as_context.cpp"
 	"${ANGELSCRIPT_FORK_ROOT}/as_datatype.cpp"
@@ -241,6 +242,21 @@ target_link_libraries(AngelscriptStandaloneSmokeTests PRIVATE AngelscriptMaintai
 
 add_test(NAME AngelscriptStandalone.Smoke COMMAND AngelscriptStandaloneSmokeTests)
 set_tests_properties(AngelscriptStandalone.Smoke PROPERTIES LABELS "standalone;native-core;smoke")
+
+add_executable(
+	AngelscriptTypedSemanticIRTests
+	"${CMAKE_CURRENT_LIST_DIR}/Tests/AngelscriptTypedSemanticIRTests.cpp"
+)
+target_link_libraries(AngelscriptTypedSemanticIRTests PRIVATE AngelscriptMaintainedFork)
+add_test(
+	NAME AngelscriptStandalone.TypedSemanticIR
+	COMMAND AngelscriptTypedSemanticIRTests
+)
+set_tests_properties(
+	AngelscriptStandalone.TypedSemanticIR
+	PROPERTIES
+		LABELS "standalone;native-core;typed-semantic-ir"
+)
 
 add_executable(
 	AngelscriptSemanticObserverTests
@@ -693,6 +709,7 @@ set(ANGELSCRIPT_STANDALONE_COMPAT_CONSUMERS
 	AngelscriptStandaloneHost
 	AngelscriptStandaloneCli
 	AngelscriptStandaloneSmokeTests
+	AngelscriptTypedSemanticIRTests
 	AngelscriptSemanticObserverTests
 	AngelscriptStandaloneAddonsTests
 	AngelscriptStandaloneCliTests

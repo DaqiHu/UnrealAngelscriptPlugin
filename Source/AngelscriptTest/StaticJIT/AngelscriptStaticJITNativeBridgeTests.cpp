@@ -3,6 +3,9 @@
 #include "AngelscriptTestEngineHelper.h"
 #include "AngelscriptTestMacros.h"
 
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "StaticJIT/StaticJITHeader.h"
 
 #include "StartAngelscriptHeaders.h"
@@ -366,5 +369,120 @@ bool FAngelscriptStaticJITNativeBridgeTests::RunNativeBridgeGenericMethodNullThi
 	}
 	return bPassed;
 }
+
+TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITNativeBridgePublishedGoldenTests,
+	"Angelscript.TestModule.StaticJIT.NativeBridge.PublishedGoldens",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+{
+private:
+	static FString GetGeneratedProfileRoot()
+	{
+		return FPaths::ConvertRelativePathToFull(FPaths::Combine(
+			FPaths::ProjectPluginsDir(),
+			TEXT("Angelscript"),
+			TEXT("Source/AngelscriptTestJIT/Generated/EditorDevelopment")));
+	}
+
+	static bool TryLoadGeneratedFixture(
+		const TCHAR* FileStemPrefix,
+		FString& OutPath,
+		FString& OutText)
+	{
+		TArray<FString> Files;
+		IFileManager::Get().FindFiles(
+			Files,
+			*FPaths::Combine(GetGeneratedProfileRoot(), TEXT("*.jit.cpp")),
+			true,
+			false);
+		for (const FString& FileName : Files)
+		{
+			if (!FileName.StartsWith(FileStemPrefix, ESearchCase::CaseSensitive))
+			{
+				continue;
+			}
+			OutPath = FPaths::Combine(GetGeneratedProfileRoot(), FileName);
+			return FFileHelper::LoadFileToString(OutText, *OutPath);
+		}
+		return false;
+	}
+
+public:
+	TEST_METHOD(PublishedRecursionFixtureKeepsDirectScriptHelperRawCall)
+	{
+		FString Path;
+		FString Text;
+		ASSERT_THAT(IsTrue(
+			TryLoadGeneratedFixture(TEXT("ASStaticJITTypedRecursionFixture."), Path, Text),
+			TEXT("The checked TestJIT recursion fixture must exist")));
+		ASSERT_THAT(IsTrue(Text.Contains(
+			TEXT("ASJIT_Helper_TypedASTFrameHelper_")),
+			TEXT("Ordinary non-UFUNCTION helper must be a direct internal symbol")));
+		const int32 CallPosition = Text.Find(
+			TEXT("ASJIT_Helper_TypedASTFrameHelper_"));
+		const int32 ExecutionArgPosition = Text.Find(
+			TEXT("(Execution, as_sem_e3_arg0);"),
+			ESearchCase::CaseSensitive,
+			ESearchDir::FromStart,
+			CallPosition == INDEX_NONE ? 0 : CallPosition);
+		const int32 ExceptionCheckPosition = Text.Find(
+			TEXT("if (UNLIKELY(Execution.bExceptionThrown))"),
+			ESearchCase::CaseSensitive,
+			ESearchDir::FromStart,
+			ExecutionArgPosition == INDEX_NONE ? 0 : ExecutionArgPosition);
+		ASSERT_THAT(IsTrue(
+			CallPosition != INDEX_NONE
+			&& ExecutionArgPosition > CallPosition
+			&& ExceptionCheckPosition > ExecutionArgPosition,
+			TEXT("The helper raw call must pass Execution, then check failure immediately")));
+		ASSERT_THAT(IsFalse(Text.Contains(
+			TEXT("FAngelscriptJITExecutionContext")),
+			TEXT("Typed helper bodies must not name FAngelscriptJITExecutionContext")));
+	}
+
+	TEST_METHOD(PublishedBridgeFixtureKeepsNamedInvokeBoundRow)
+	{
+		FString Path;
+		FString Text;
+		ASSERT_THAT(IsTrue(
+			TryLoadGeneratedFixture(
+				TEXT("ASStaticJITTypedPrivateBridgeFixture."), Path, Text),
+			TEXT("The checked TestJIT private-bridge fixture must exist")));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT(
+			"static const FAngelscriptTypedASTJITBoundCallSite ASJIT_Call_Sqrt_")),
+			TEXT("Bridge output must declare an immutable named call-site row")));
+		ASSERT_THAT(IsTrue(Text.Contains(
+			TEXT(" * AS Declaration      : float32 Sqrt(float32)"))));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT(
+			" * Emitted C++ Callee  : AngelscriptTypedASTJIT::InvokeBound<float, float>"))));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT(
+			" * Runtime DLL Core    : AngelscriptTypedASTJIT::InvokeBoundViaVM"))));
+		ASSERT_THAT(IsTrue(Text.Contains(
+			TEXT(" * Route               : Bridge"))));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT(
+			"AngelscriptTypedASTJIT::InvokeBound<float, float>(\n")
+			TEXT("\t\t\tExecution, ASJIT_Call_Sqrt_")),
+			TEXT("The expression must pass Execution and the named row, not a bare declaration string")));
+		ASSERT_THAT(IsFalse(Text.Contains(
+			TEXT("FAngelscriptJITExecutionContext"))));
+		ASSERT_THAT(IsFalse(Text.Contains(TEXT("extern ")),
+			TEXT("A bridged private/unexported target must not guess a linkable extern")));
+	}
+
+	TEST_METHOD(PublishedCoreFixtureKeepsHeaderInlineDirectSymbol)
+	{
+		FString Path;
+		FString Text;
+		ASSERT_THAT(IsTrue(
+			TryLoadGeneratedFixture(TEXT("ASStaticJITAotFixture."), Path, Text),
+			TEXT("The checked TestJIT core fixture must exist")));
+		ASSERT_THAT(IsTrue(Text.Contains(
+			TEXT(" * Emitted C++ Callee  : IsRunningCommandlet"))));
+		ASSERT_THAT(IsTrue(Text.Contains(
+			TEXT("return IsRunningCommandlet();")),
+			TEXT("HeaderInline must invoke the exact imported/inline symbol")));
+		ASSERT_THAT(IsFalse(Text.Contains(
+			TEXT("FAngelscriptJITExecutionContext"))));
+	}
+};
 
 #endif

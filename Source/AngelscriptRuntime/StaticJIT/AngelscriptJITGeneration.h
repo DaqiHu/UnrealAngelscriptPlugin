@@ -77,6 +77,21 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationReference
 	FAngelscriptArtifactReference Reference;
 };
 
+/** Owned generation-time form of one immutable Provider native call site. */
+struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationNativeCallSite
+{
+	EAngelscriptJITNativeCallSiteRoute Route =
+		EAngelscriptJITNativeCallSiteRoute::Invalid;
+	FString CanonicalDeclaration;
+	FString EmittedCppCallee;
+	FString RuntimeDllCore;
+	FString MetadataRowSymbol;
+	FString RegisteredTarget;
+	FAngelscriptHash256 StableTargetKey;
+	FAngelscriptHash256 ExpectedAbi;
+	int32 ReferenceSlotIndex = INDEX_NONE;
+};
+
 /**
  * One already-emitted script function plus the complete stable metadata needed
  * to place it in a provider. The implementation template may use
@@ -94,6 +109,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationFunction
 	FAngelscriptHash256 ExecutionHash;
 	FAngelscriptHash256 DebugHash;
 	FAngelscriptHash256 EntryAbiHash;
+	EAngelscriptJITExecutionCapability AvailableExecutionCapabilities =
+		EAngelscriptJITExecutionCapability::None;
+	FAngelscriptHash256 ExecutionCapabilityProfileHash;
+	EAngelscriptJITExecutionCapability RuntimeExecutionRequirementTriggers =
+		EAngelscriptJITExecutionCapability::None;
 	FString CanonicalDeclaration;
 	FString SourceSection;
 	uint32 SourceLine = 0;
@@ -106,7 +126,124 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationFunction
 	FString ParmsEntrySymbol;
 	FString RawEntryDeclaration;
 	TArray<FAngelscriptJITGenerationReference> References;
+	TArray<FAngelscriptJITGenerationNativeCallSite> NativeCallSites;
+	TArray<FAngelscriptArtifactSemanticDependency> SemanticDependencies;
 	FString ImplementationTemplate;
+};
+
+/** Owned, pointer-free source coordinate used while packaging diagnostics. */
+struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationDiagnosticSource
+{
+	FString Section;
+	uint32 Row = 0;
+	uint32 Column = 0;
+};
+
+struct ANGELSCRIPTRUNTIME_API
+FAngelscriptJITGenerationTypedSemanticFunctionDiagnostic
+{
+	FAngelscriptStableFunctionKey FunctionKey;
+	FString Role;
+	uint32 RawTraitBits = 0;
+	uint32 UnknownTraitBits = 0;
+	FString InvocationKind;
+	FString ReceiverKind;
+	int32 ReceiverParameterIndex = INDEX_NONE;
+	FString HIRState;
+	FString CleanupPlanState;
+	bool bHasSuspendState = false;
+	bool bHasExceptionCleanup = false;
+	bool bCleanupPlanCoversAllTransfers = false;
+	int32 ComponentIndex = INDEX_NONE;
+	bool bRecursiveComponent = false;
+	FString EligibilityReason;
+	FString EligibilityDetail;
+	FAngelscriptJITGenerationDiagnosticSource EligibilitySource;
+};
+
+struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationTypedCallDiagnostic
+{
+	FAngelscriptStableFunctionKey CallerFunctionKey;
+	FAngelscriptStableFunctionKey CalleeFunctionKey;
+	uint32 ExpressionIndex = MAX_uint32;
+	TOptional<FAngelscriptJITGenerationDiagnosticSource> AuthoredSource;
+	TOptional<FAngelscriptJITGenerationDiagnosticSource> GeneratedSource;
+	FAngelscriptJITGenerationDiagnosticSource ProcessedSource;
+	FString TargetKind;
+	FString Disposition;
+	FString CalleeEligibilityReason;
+	FString CalleeEligibilityDetail;
+	FAngelscriptJITGenerationDiagnosticSource CalleeEligibilitySource;
+	bool bHasNativeLinkageValidation = false;
+	FString NativeLinkageValidation;
+	FString NativeLinkageValidationDetail;
+	FString CanonicalDeclaration;
+	EAngelscriptJITNativeCallSiteRoute EmittedRoute =
+		EAngelscriptJITNativeCallSiteRoute::Invalid;
+	FString EmittedCppCallee;
+	FString RuntimeDllCore;
+	FString MetadataRowSymbol;
+	FString RegisteredTarget;
+	FString DirectCppSymbol;
+	FAngelscriptHash256 StableTargetKey;
+	FAngelscriptHash256 ExpectedAbi;
+	int32 ReferenceSlotIndex = INDEX_NONE;
+};
+
+struct ANGELSCRIPTRUNTIME_API
+FAngelscriptJITGenerationBackendAttemptDiagnostic
+{
+	FString BackendId;
+	FString Disposition;
+	FString Detail;
+	bool bHasTypedDiagnostic = false;
+	FString FallbackReason;
+	FString TypedDetail;
+	FAngelscriptJITGenerationDiagnosticSource ProcessedSource;
+	int32 PrimarySemanticFunctionIndex = INDEX_NONE;
+	EAngelscriptJITExecutionCapability RequiredCapabilities =
+		EAngelscriptJITExecutionCapability::None;
+	EAngelscriptJITExecutionCapability AvailableCapabilities =
+		EAngelscriptJITExecutionCapability::None;
+	FAngelscriptHash256 ExecutionRequirementsIdentity;
+	FAngelscriptHash256 AvailableCapabilityProfileIdentity;
+	FString ProfileKind;
+	FString ExceptionControlState;
+	FString ExceptionPayloadState;
+	bool bRecursionGuardAvailable = false;
+	TArray<FAngelscriptJITGenerationTypedSemanticFunctionDiagnostic>
+		SemanticFunctions;
+	TArray<FAngelscriptJITGenerationTypedCallDiagnostic> Calls;
+};
+
+struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationFunctionDiagnostic
+{
+	FAngelscriptStableFunctionKey FunctionKey;
+	FString ActualBackendId;
+	FString Disposition;
+	FString Detail;
+	TArray<FAngelscriptJITGenerationBackendAttemptDiagnostic> BackendAttempts;
+};
+
+/** Optional non-Shipping diagnostic payload excluded from execution identity. */
+struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationDiagnostics
+{
+	FString RequestKind = TEXT("StaticJITArtifact");
+	FString RequestedBackendId;
+	FString CaptureState;
+	TArray<FString> FallbackChain;
+	uint32 SourceCompilePassCount = 0;
+	uint32 CompiledModuleCount = 0;
+	uint32 CompiledFunctionCount = 0;
+	uint32 CompiledTypeCount = 0;
+	uint32 CompiledGlobalCount = 0;
+	uint32 CompiledDescriptorCount = 0;
+	uint32 CompiledDependencyCount = 0;
+	uint32 CompiledExternalNativeCallCount = 0;
+	uint32 EmitModuleCount = 0;
+	bool bHasVerifiedTypedHIR = false;
+	FString TaskError;
+	TArray<FAngelscriptJITGenerationFunctionDiagnostic> Functions;
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationRequest
@@ -123,6 +260,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationRequest
 	FString ModuleSourcePreamble;
 	FString ModuleSourceFooter;
 	FString ProviderSourcePreamble;
+	TOptional<FAngelscriptJITGenerationDiagnostics> Diagnostics;
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGeneratedFunction
@@ -134,6 +272,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGeneratedFunction
 	FAngelscriptHash256 ExecutionHash;
 	FAngelscriptHash256 DebugHash;
 	FAngelscriptHash256 EntryAbiHash;
+	EAngelscriptJITExecutionCapability AvailableExecutionCapabilities =
+		EAngelscriptJITExecutionCapability::None;
+	FAngelscriptHash256 ExecutionCapabilityProfileHash;
+	EAngelscriptJITExecutionCapability RuntimeExecutionRequirementTriggers =
+		EAngelscriptJITExecutionCapability::None;
 	bool bHasVMEntry = false;
 	bool bHasRawEntry = false;
 	bool bHasParmsEntry = false;
@@ -148,6 +291,10 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGeneratedFunction
 	uint32 SourceLine = 0;
 	uint32 SourceColumn = 0;
 	TArray<FAngelscriptJITReferenceSlot> ReferenceSlots;
+	TArray<FAngelscriptJITGenerationNativeCallSite> NativeCallSites;
+	TArray<FAngelscriptArtifactSemanticDependency> SemanticDependencies;
+	uint32 SemanticDependencyStartIndex = 0;
+	uint32 SemanticDependencyCount = 0;
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGeneratedModule
@@ -181,13 +328,15 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationOutput
 	TArray<FAngelscriptJITGeneratedFunction> Functions;
 	TArray<FAngelscriptJITGeneratedFile> Files;
 	TArray<FString> OwnedFiles;
+	TOptional<FAngelscriptJITGenerationDiagnostics> Diagnostics;
+	FAngelscriptHash256 DiagnosticDigest;
 };
 
 /** Runtime-only deterministic emission primitives shared by project and test orchestration. */
 class ANGELSCRIPTRUNTIME_API FAngelscriptJITGeneration
 {
 public:
-	static constexpr uint32 SchemaRevision = 3;
+	static constexpr uint32 SchemaRevision = 8;
 	static constexpr uint32 OwnershipRevision = 2;
 
 	static FString BuildSymbolPrefix(
@@ -228,6 +377,10 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITProviderGenerationSettings
 	FString OwnerModuleName;
 	FAngelscriptArtifactProfileKey ArtifactProfile;
 	FAngelscriptHash256 NativeEnvironmentFingerprint;
+	/** Modules known to the generated consumer for external-call validation. */
+	TSet<FName> KnownNativeCallModules;
+	/** Exact public dependencies that make cross-module direct calls legal. */
+	TSet<FName> PublicNativeCallDependencyModules;
 	bool bEmitDebugMetadata = true;
 };
 

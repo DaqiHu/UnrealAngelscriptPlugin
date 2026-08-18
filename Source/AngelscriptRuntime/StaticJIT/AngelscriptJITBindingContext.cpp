@@ -68,6 +68,45 @@ asSJITFunctionBinding FAngelscriptJITBindingContext::BuildBinding() const
 	return Binding;
 }
 
+bool FAngelscriptJITBindingContext::HasExecutionCapabilityProfile() const
+{
+	return IsValid()
+		&& EnumHasAnyFlags(
+			Selection.Provider->Entries[Selection.EntryIndex].Flags,
+			EAngelscriptJITArtifactEntryFlags::HasExecutionCapabilityProfile);
+}
+
+EAngelscriptJITExecutionCapability
+FAngelscriptJITBindingContext::GetAvailableExecutionCapabilities() const
+{
+	return HasExecutionCapabilityProfile()
+		? Selection.Provider->Entries[Selection.EntryIndex].
+			AvailableExecutionCapabilities
+		: EAngelscriptJITExecutionCapability::None;
+}
+
+EAngelscriptJITExecutionCapability
+FAngelscriptJITBindingContext::GetRuntimeExecutionRequirementTriggers() const
+{
+	return HasExecutionCapabilityProfile()
+		? Selection.Provider->Entries[Selection.EntryIndex].
+			RuntimeExecutionRequirementTriggers
+		: EAngelscriptJITExecutionCapability::None;
+}
+
+bool FAngelscriptJITBindingContext::AllowsExecutionCapabilities(
+	const EAngelscriptJITExecutionCapability RequiredCapabilities) const
+{
+	if (!HasExecutionCapabilityProfile())
+	{
+		return true;
+	}
+	const uint32 Required = static_cast<uint32>(RequiredCapabilities);
+	const uint32 Available = static_cast<uint32>(
+		GetAvailableExecutionCapabilities());
+	return (Required & ~Available) == 0;
+}
+
 void FAngelscriptJITBindingContext::MarkExecution(const EEntryKind Kind) const
 {
 	switch (Kind)

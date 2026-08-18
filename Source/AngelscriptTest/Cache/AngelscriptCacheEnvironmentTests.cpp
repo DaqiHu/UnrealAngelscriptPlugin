@@ -477,6 +477,73 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheEnvironmentTests,
 		ASSERT_THAT(IsNull(ShiftedResolver.ResolvePropertyReference(
 			FirstReference)));
 	}
+
+	TEST_METHOD(EnvironmentResolverBuildsOneStableSymbolIndexPerSession)
+	{
+		using namespace AngelscriptCacheEnvironmentTests_Private;
+		asIScriptEngine* const PublicEngine = asCreateScriptEngine();
+		ASSERT_THAT(IsNotNull(PublicEngine));
+		if (PublicEngine == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT
+		{
+			PublicEngine->ShutDownAndRelease();
+		};
+
+		asCObjectType* RegisteredType = nullptr;
+		asCObjectProperty* RegisteredProperty = nullptr;
+		ASSERT_THAT(IsTrue(RegisterPropertyProbe(
+			*PublicEngine,
+			STRUCT_OFFSET(FRegisteredPropertyProbe, Value),
+			RegisteredType,
+			RegisteredProperty)));
+		const int32 FunctionId = PublicEngine->RegisterGlobalFunction(
+			"int IndexedEnvironmentFunction(int)",
+			asFUNCTION(EnvironmentFunctionProbe), asCALL_CDECL);
+		ASSERT_THAT(IsTrue(FunctionId >= 0));
+
+		FAngelscriptArtifactReference PropertyReference;
+		FAngelscriptArtifactReference FunctionReference;
+		ASSERT_THAT(IsTrue(
+			FAngelscriptCacheEnvironmentIdentity::TryBuildPropertyReference(
+				*RegisteredType, *RegisteredProperty, PropertyReference)));
+		asCScriptFunction* const RegisteredFunction =
+			static_cast<asCScriptFunction*>(
+				PublicEngine->GetFunctionById(FunctionId));
+		ASSERT_THAT(IsNotNull(RegisteredFunction));
+		ASSERT_THAT(IsTrue(
+			FAngelscriptCacheEnvironmentIdentity::TryBuildFunctionReference(
+				*RegisteredFunction, FunctionReference)));
+
+		const FAngelscriptCacheEngineEnvironmentResolver Resolver(
+			*static_cast<asCScriptEngine*>(PublicEngine));
+		ASSERT_THAT(AreEqual(
+			0u, Resolver.GetSymbolIndexBuildCountForDiagnostics()));
+		ASSERT_THAT(AreEqual(
+			0, Resolver.GetIndexedSymbolCountForDiagnostics()));
+		const TOptional<FAngelscriptCacheCurrentSymbol> FirstProperty =
+			Resolver.Resolve(
+				PropertyReference.Kind, PropertyReference.StableKey);
+		const TOptional<FAngelscriptCacheCurrentSymbol> Function =
+			Resolver.Resolve(
+				FunctionReference.Kind, FunctionReference.StableKey);
+		const TOptional<FAngelscriptCacheCurrentSymbol> SecondProperty =
+			Resolver.Resolve(
+				PropertyReference.Kind, PropertyReference.StableKey);
+		ASSERT_THAT(IsTrue(FirstProperty.IsSet()));
+		ASSERT_THAT(IsTrue(Function.IsSet()));
+		ASSERT_THAT(IsTrue(SecondProperty.IsSet()));
+		ASSERT_THAT(IsTrue(FirstProperty->CurrentAbi
+			== PropertyReference.ExpectedAbi));
+		ASSERT_THAT(IsTrue(Function->CurrentAbi
+			== FunctionReference.ExpectedAbi));
+		ASSERT_THAT(AreEqual(
+			1u, Resolver.GetSymbolIndexBuildCountForDiagnostics()));
+		ASSERT_THAT(IsTrue(
+			Resolver.GetIndexedSymbolCountForDiagnostics() >= 2));
+	}
 };
 
 #endif

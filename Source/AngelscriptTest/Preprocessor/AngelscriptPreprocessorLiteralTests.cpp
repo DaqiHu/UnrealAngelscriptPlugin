@@ -238,6 +238,17 @@ int Entry()
 			{
 				ASSERT_THAT(AreEqual(FString(TEXT("GetPreviewAsset")), Module->PostInitFunctions[0], TEXT("PostInitFunction should be GetPreviewAsset")));
 			}
+
+			ASSERT_THAT(AreEqual(1, Module->LiteralAssetFunctions.Num(), TEXT("Should retain one authoritative literal-asset function pair")));
+			if (Module->LiteralAssetFunctions.Num() == 1)
+			{
+				const FAngelscriptLiteralAssetFunctionDesc& LiteralAsset = Module->LiteralAssetFunctions[0];
+				ASSERT_THAT(AreEqual(FString(TEXT("PreviewAsset")), LiteralAsset.AssetName, TEXT("Should retain the literal-asset source name")));
+				ASSERT_THAT(AreEqual(FString(TEXT("UObject")), LiteralAsset.DeclaredTypeName, TEXT("Should retain the declared literal-asset type")));
+				ASSERT_THAT(AreEqual(FString(TEXT("GetPreviewAsset")), LiteralAsset.GetterFunctionName, TEXT("Should retain the exact generated getter")));
+				ASSERT_THAT(AreEqual(FString(TEXT("__Init_PreviewAsset")), LiteralAsset.InitializerFunctionName, TEXT("Should retain the exact generated initializer")));
+				ASSERT_THAT(AreEqual(0, LiteralAsset.PostInitFunctionIndex, TEXT("Should retain the exact PostInitFunctions index")));
+			}
 		}
 
 		}

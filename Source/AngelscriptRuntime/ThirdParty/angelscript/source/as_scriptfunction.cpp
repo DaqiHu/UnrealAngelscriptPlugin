@@ -38,6 +38,7 @@
 
 
 #include "as_scriptfunction.h"
+#include "as_typed_semantic_ir.h"
 #include "as_config.h"
 #include "as_tokendef.h"
 #include "as_scriptengine.h"
@@ -398,12 +399,51 @@ void asCScriptFunction::DeallocateScriptFunctionData()
 {
 	if( !scriptData ) return;
 
+	// DestroyInternal normally clears this before type/function references are
+	// released. Keep this defensive path for half-created or donor state.
+	DiscardTypedSemanticFunction();
+
 	for( asUINT n = 0; n < scriptData->variables.GetLength(); n++ )
 		asDELETE(scriptData->variables[n],asSScriptVariable);
 	scriptData->variables.SetLength(0);
 
 	asDELETE(scriptData, ScriptFunctionData);
 	scriptData = 0;
+}
+
+void asCScriptFunction::SetTypedSemanticFunction(asCTypedSemanticFunction* Function)
+{
+	if( scriptData == 0 || scriptData->typedSemanticFunction == Function )
+		return;
+
+	DiscardTypedSemanticFunction();
+	scriptData->typedSemanticFunction = Function;
+}
+
+void asCScriptFunction::DiscardTypedSemanticFunction()
+{
+	if( scriptData == 0 || scriptData->typedSemanticFunction == 0 )
+		return;
+
+	asDELETE(scriptData->typedSemanticFunction, asCTypedSemanticFunction);
+	scriptData->typedSemanticFunction = 0;
+}
+
+asCTypedSemanticFunction* asCScriptFunction::GetTypedSemanticFunction()
+{
+	return scriptData != 0 ? scriptData->typedSemanticFunction : 0;
+}
+
+const asCTypedSemanticFunction* asCScriptFunction::GetTypedSemanticFunction() const
+{
+	return scriptData != 0 ? scriptData->typedSemanticFunction : 0;
+}
+
+const asCString& asCScriptFunction::GetTypedSemanticCaptureDiagnostic() const
+{
+	static const asCString Empty;
+	return scriptData != 0
+		? scriptData->typedSemanticCaptureDiagnostic : Empty;
 }
 
 // internal
@@ -445,6 +485,11 @@ void asCScriptFunction::DestroyHalfCreated()
 // internal
 void asCScriptFunction::DestroyInternal()
 {
+	// The HIR contains non-owning semantic type descriptors and engine-local
+	// function IDs, so it must be gone before ReleaseReferences tears down the
+	// authoritative function/type graph.
+	DiscardTypedSemanticFunction();
+
 	asSJITFunctionBinding emptyBinding;
 	SetJITBinding(emptyBinding);
 
@@ -1862,7 +1907,6 @@ asUINT asCScriptFunction::GenerateExposedType(bool editable, bool readable, bool
 asCFuncdefType * asCScriptFunction::funcdefType = nullptr;
 void * asCScriptFunction::objForDelegate = nullptr;
 asCScriptFunction * asCScriptFunction::funcForDelegate = nullptr;
-asSListPatternNode * asCScriptFunction::listPattern = nullptr;
 
 END_AS_NAMESPACE
 

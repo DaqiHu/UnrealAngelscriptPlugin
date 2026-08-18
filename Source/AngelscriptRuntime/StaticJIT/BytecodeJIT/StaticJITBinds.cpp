@@ -27,6 +27,7 @@
 namespace
 {
 	std::atomic<int32> GNativeFormCount{0};
+	std::atomic<int32> GExternalNativeCallDescriptorCount{0};
 	uint8 GNativeFormUserDataKey = 0;
 
 	asPWORD GetNativeFormUserDataType()
@@ -34,12 +35,10 @@ namespace
 		return reinterpret_cast<asPWORD>(&GNativeFormUserDataKey);
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FString MakeNativeFormDebugString(const ANSICHAR* Value)
+	FString MakeNativeFormDescriptionString(const ANSICHAR* Value)
 	{
 		return Value != nullptr ? FString(ANSI_TO_TCHAR(Value)) : FString();
 	}
-#endif
 
 	void AddNativeForm(FAngelscriptEngine& Engine, asIScriptFunction* ScriptFunction, FScriptFunctionNativeForm* NativeForm)
 	{
@@ -69,10 +68,77 @@ namespace
 FAngelscriptNativeFormState::~FAngelscriptNativeFormState()
 {
 	GNativeFormCount.fetch_sub(Forms.Num(), std::memory_order_relaxed);
+	GExternalNativeCallDescriptorCount.fetch_sub(
+		ExternalCallDescriptors.Num(), std::memory_order_relaxed);
 	for (const TPair<asIScriptFunction*, FScriptFunctionNativeForm*>& Pair : Forms)
 	{
 		delete Pair.Value;
 	}
+}
+
+bool FAngelscriptStaticJITNativeCallRegistry::Attach(
+	FAngelscriptEngine& Engine,
+	asIScriptFunction* ScriptFunction,
+	const FAngelscriptStaticJITNativeCallDescriptor& Descriptor)
+{
+	if (ScriptFunction == nullptr
+		|| !Engine.bCollectStaticJITCompatibilityBinds
+		|| ScriptFunction->GetEngine() != Engine.GetScriptEngine()
+		|| Descriptor.IsAbsent())
+	{
+		return false;
+	}
+	FAngelscriptStaticJITNativeABIIdentity CurrentNativeABI;
+	if (!TryBuildAngelscriptStaticJITNativeABIIdentity(
+			*ScriptFunction, CurrentNativeABI)
+		|| !Descriptor.NativeABI.IsValid()
+		|| !(Descriptor.NativeABI == CurrentNativeABI))
+	{
+		// Attachment is the authority boundary: a descriptor authored for a
+		// different registered call shape must never enter Engine-owned state.
+		return false;
+	}
+
+	FAngelscriptNativeFormState* State = Engine.GetNativeFormState();
+	check(State != nullptr);
+	Engine.GetScriptEngine()->SetUserData(State, GetNativeFormUserDataType());
+	if (FAngelscriptStaticJITNativeCallDescriptor* Existing =
+		State->ExternalCallDescriptors.Find(ScriptFunction))
+	{
+		*Existing = Descriptor;
+	}
+	else
+	{
+		State->ExternalCallDescriptors.Add(ScriptFunction, Descriptor);
+		GExternalNativeCallDescriptorCount.fetch_add(
+			1, std::memory_order_relaxed);
+	}
+	return true;
+}
+
+const FAngelscriptStaticJITNativeCallDescriptor*
+FAngelscriptStaticJITNativeCallRegistry::Find(
+	asIScriptFunction* ScriptFunction)
+{
+	if (ScriptFunction == nullptr)
+	{
+		return nullptr;
+	}
+
+	auto* ConcreteFunction = static_cast<asCScriptFunction*>(ScriptFunction);
+	FAngelscriptNativeFormState* State =
+		static_cast<FAngelscriptNativeFormState*>(
+			ConcreteFunction->engine->GetUserData(
+				GetNativeFormUserDataType()));
+	return State != nullptr
+		? State->ExternalCallDescriptors.Find(ScriptFunction)
+		: nullptr;
+}
+
+int32 FAngelscriptStaticJITNativeCallRegistry::NumDescriptors()
+{
+	return GExternalNativeCallDescriptorCount.load(
+		std::memory_order_relaxed);
 }
 
 FScriptFunctionNativeForm* FScriptFunctionNativeForm::GetNativeForm(class asIScriptFunction* InScriptFunction)
@@ -142,17 +208,15 @@ struct FScriptNativeConstructor : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::Constructor;
-		Info.Name = MakeNativeFormDebugString(Name);
-		Info.CustomForm = MakeNativeFormDebugString(CustomForm);
+		Info.Name = MakeNativeFormDescriptionString(Name);
+		Info.CustomForm = MakeNativeFormDescriptionString(CustomForm);
 		Info.bTrivial = bTrivial;
 		return Info;
 	}
-#endif
 
 	bool ShouldIgnoreObjectArgument() const override
 	{
@@ -195,16 +259,14 @@ struct FScriptNativeDestructor : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::Destructor;
-		Info.Name = MakeNativeFormDebugString(Name);
+		Info.Name = MakeNativeFormDescriptionString(Name);
 		Info.bTrivial = bTrivial;
 		return Info;
 	}
-#endif
 
 	bool ShouldIgnoreObjectArgument() const override
 	{
@@ -248,16 +310,14 @@ struct FScriptNativeAssignment : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::Assignment;
-		Info.Name = MakeNativeFormDebugString(Name);
+		Info.Name = MakeNativeFormDescriptionString(Name);
 		Info.bTrivial = bTrivial;
 		return Info;
 	}
-#endif
 
 	bool ShouldIgnoreObjectArgument() const override
 	{
@@ -300,16 +360,14 @@ struct FScriptNativeUObjectCast : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::UObjectCast;
 		Info.TargetType = TargetType;
 		Info.bGuaranteed = bGuaranteed;
 		return Info;
 	}
-#endif
 
 	bool ShouldIgnoreObjectArgument() const override
 	{
@@ -440,16 +498,14 @@ struct FScriptNativeMethod : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::Method;
-		Info.Name = MakeNativeFormDebugString(Name);
+		Info.Name = MakeNativeFormDescriptionString(Name);
 		Info.bTrivial = bTrivial;
 		return Info;
 	}
-#endif
 
 	bool ShouldIgnoreObjectArgument() const override
 	{
@@ -487,16 +543,14 @@ struct FScriptNativeFunction : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::Function;
-		Info.Name = MakeNativeFormDebugString(Name);
+		Info.Name = MakeNativeFormDescriptionString(Name);
 		Info.bTrivial = bTrivial;
 		return Info;
 	}
-#endif
 
 	bool IsTrivialFunction(EScriptFunctionCallMethod Method) const override
 	{
@@ -530,17 +584,15 @@ struct FScriptNativeFunctionHeader : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::FunctionHeader;
-		Info.Name = MakeNativeFormDebugString(Name);
-		Info.Header = MakeNativeFormDebugString(Header);
+		Info.Name = MakeNativeFormDescriptionString(Name);
+		Info.Header = MakeNativeFormDescriptionString(Header);
 		Info.bTrivial = bTrivial;
 		return Info;
 	}
-#endif
 
 	bool IsTrivialFunction(EScriptFunctionCallMethod Method) const override
 	{
@@ -580,17 +632,35 @@ struct FScriptNativeUFunction : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::UFunction;
 		Info.Name = Name;
-		Info.UnrealFunction = Function;
+		Info.UnrealFunctionPath = Function != nullptr
+			? Function->GetPathName()
+			: FString();
+		if (Function != nullptr)
+		{
+			if (Function->HasAnyFunctionFlags(FUNC_Net))
+			{
+				Info.UFunctionRouteFlags |=
+					EAngelscriptNativeUFunctionRouteFlags::RpcOrNet;
+			}
+			if (Function->HasAnyFunctionFlags(FUNC_Event))
+			{
+				Info.UFunctionRouteFlags |=
+					EAngelscriptNativeUFunctionRouteFlags::Event;
+			}
+			if (Function->HasAnyFunctionFlags(FUNC_BlueprintEvent))
+			{
+				Info.UFunctionRouteFlags |=
+					EAngelscriptNativeUFunctionRouteFlags::BlueprintEvent;
+			}
+		}
 		Info.bTrivial = bTrivial;
 		return Info;
 	}
-#endif
 
 	bool CanSkipInformSystemFunction() const override
 	{
@@ -674,14 +744,12 @@ struct FScriptNativeTArrayIteratorProceed : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::TArrayIteratorProceed;
 		return Info;
 	}
-#endif
 
 	bool CanCallCustom(const FNativeFunctionContext& Context) const override
 	{
@@ -749,18 +817,16 @@ struct FScriptNativeTemplateInstantiation : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::TemplateInstantiatedCall;
-		Info.Name = MakeNativeFormDebugString(Name);
+		Info.Name = MakeNativeFormDescriptionString(Name);
 		Info.bTrivial = bTrivial;
 		Info.bNeedsCompare = bNeedsCompare;
 		Info.bNeedsCopy = bNeedsCopy;
 		return Info;
 	}
-#endif
 
 	bool IsTrivialFunction(EScriptFunctionCallMethod Method) const override
 	{
@@ -871,14 +937,12 @@ struct FScriptNativeTArrayIteratorCreate : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::TArrayIteratorCreate;
 		return Info;
 	}
-#endif
 
 	bool CanCallCustom(const FNativeFunctionContext& Context) const override
 	{
@@ -948,14 +1012,12 @@ void FScriptFunctionNativeForm::BindTArrayIteratorCreate(FAngelscriptEngine& Eng
 
 struct FScriptNativeTArrayIndex : public FScriptFunctionNativeForm
 {
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::TArrayIndex;
 		return Info;
 	}
-#endif
 
 	bool IsTrivialFunction(EScriptFunctionCallMethod Method) const override
 	{
@@ -1053,14 +1115,12 @@ struct FScriptNativePushArg : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::PushArgument;
 		return Info;
 	}
-#endif
 
 	bool CanCallCustom(const FNativeFunctionContext& Context) const override
 	{
@@ -1090,14 +1150,12 @@ struct FScriptNativePushArgRef : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::PushArgumentRef;
 		return Info;
 	}
-#endif
 
 	bool CanCallCustom(const FNativeFunctionContext& Context) const override
 	{
@@ -1127,14 +1185,12 @@ struct FScriptNativeDelegateExecute : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::DelegateExecute;
 		return Info;
 	}
-#endif
 
 	bool CanCallCustom(const FNativeFunctionContext& Context) const override
 	{
@@ -1164,14 +1220,12 @@ struct FScriptNativeMulticastExecute : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::MulticastExecute;
 		return Info;
 	}
-#endif
 
 	bool CanCallCustom(const FNativeFunctionContext& Context) const override
 	{
@@ -1201,14 +1255,12 @@ struct FScriptNativeEventFunctionExecute : public FScriptFunctionNativeForm
 	{
 	}
 
-#if WITH_DEV_AUTOMATION_TESTS
-	FAngelscriptNativeFormDebugInfo GetDebugInfoForTesting() const override
+	FAngelscriptNativeFormDescription Describe() const override
 	{
-		FAngelscriptNativeFormDebugInfo Info;
+		FAngelscriptNativeFormDescription Info;
 		Info.Kind = EAngelscriptNativeFormKind::EventFunctionExecute;
 		return Info;
 	}
-#endif
 
 	bool CanCallCustom(const FNativeFunctionContext& Context) const override
 	{

@@ -33,6 +33,62 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptJITReferenceSlotTests,
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 public:
+	TEST_METHOD(ImportSlotDescriptorTracksConsumerSlotWithoutFreezingProvider)
+	{
+		using namespace AngelscriptJITReferenceSlotTests_Private;
+		const FAngelscriptStableModuleKey ConsumerA{
+			MakeHash(TEXT("consumer-a"))};
+		const FAngelscriptStableModuleKey ConsumerB{
+			MakeHash(TEXT("consumer-b"))};
+		const FAngelscriptArtifactReference First =
+			FAngelscriptJITReferenceDescriptorBuilder::ForImportSlot(
+				ConsumerA,
+				TEXT("Combat"),
+				TEXT("int ImportedDamage(int)"),
+				TEXT("DamageProvider"));
+		const FAngelscriptArtifactReference Same =
+			FAngelscriptJITReferenceDescriptorBuilder::ForImportSlot(
+				ConsumerA,
+				TEXT("Combat"),
+				TEXT("int ImportedDamage(int)"),
+				TEXT("DamageProvider"));
+		const FAngelscriptArtifactReference DifferentConsumer =
+			FAngelscriptJITReferenceDescriptorBuilder::ForImportSlot(
+				ConsumerB,
+				TEXT("Combat"),
+				TEXT("int ImportedDamage(int)"),
+				TEXT("DamageProvider"));
+		const FAngelscriptArtifactReference DifferentDeclaredSource =
+			FAngelscriptJITReferenceDescriptorBuilder::ForImportSlot(
+				ConsumerA,
+				TEXT("Combat"),
+				TEXT("int ImportedDamage(int)"),
+				TEXT("ReplacementProvider"));
+
+		ASSERT_THAT(IsTrue(First.IsValid()));
+		ASSERT_THAT(IsTrue(First == Same));
+		ASSERT_THAT(IsFalse(
+			First.StableKey == DifferentConsumer.StableKey));
+		ASSERT_THAT(IsFalse(
+			First.StableKey == DifferentDeclaredSource.StableKey));
+		ASSERT_THAT(IsTrue(
+			First.ExpectedAbi == DifferentConsumer.ExpectedAbi));
+		ASSERT_THAT(IsTrue(
+			First.ExpectedAbi == DifferentDeclaredSource.ExpectedAbi));
+		ASSERT_THAT(IsFalse(
+			FAngelscriptJITReferenceDescriptorBuilder::ForImportSlot(
+				{}, TEXT("Combat"), TEXT("int ImportedDamage(int)"),
+				TEXT("DamageProvider")).IsValid()));
+		ASSERT_THAT(IsFalse(
+			FAngelscriptJITReferenceDescriptorBuilder::ForImportSlot(
+				ConsumerA, TEXT("Combat"), FStringView(),
+				TEXT("DamageProvider")).IsValid()));
+		ASSERT_THAT(IsFalse(
+			FAngelscriptJITReferenceDescriptorBuilder::ForImportSlot(
+				ConsumerA, TEXT("Combat"), TEXT("int ImportedDamage(int)"),
+				FStringView()).IsValid()));
+	}
+
 	TEST_METHOD(StableDescriptorKindsResolveIntoOrderedImmutableSlots)
 	{
 		using namespace AngelscriptJITReferenceSlotTests_Private;

@@ -7,6 +7,8 @@
 
 #if WITH_ANGELSCRIPT_UNITTESTS
 
+using AngelscriptNativeTestSupport::AppendGeneratedAsLine;
+
 TEST_CLASS_WITH_FLAGS(FForeachProtocolTests,
 	"Angelscript.TestModule.AngelScriptSDK.Language.Foreach.Protocol",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

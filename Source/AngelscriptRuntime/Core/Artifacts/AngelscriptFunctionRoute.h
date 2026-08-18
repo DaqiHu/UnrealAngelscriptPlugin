@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Artifacts/AngelscriptArtifactIdentity.h"
+#include "Artifacts/AngelscriptArtifactReference.h"
 
 class asIScriptFunction;
 
@@ -33,6 +34,7 @@ enum class EAngelscriptArtifactMatchResult : uint8
 	ArtifactSetMismatch = 15,
 	InvalidProvider = 16,
 	MissingEntryPoint = 17,
+	SemanticDependencyMismatch = 18,
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptFunctionRouteGeneration
@@ -96,6 +98,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptFunctionRouteSnapshot
 	uint32 VmRouteCount = 0;
 	uint32 NativeRouteCount = 0;
 	TArray<FAngelscriptFunctionRoute> FunctionRoutes;
+	// Transient current-compile ABI authority for Provider-backed modules whose
+	// complete semantic graph is intentionally absent from Cache publication.
+	// Entries are accepted only for a verified route identity and never persist.
+	TArray<FAngelscriptFunctionArtifactReferenceSet>
+		ValidatedFunctionArtifactReferenceSets;
 };
 
 // Mutable publication owner kept private to one FAngelscriptEngine. Published

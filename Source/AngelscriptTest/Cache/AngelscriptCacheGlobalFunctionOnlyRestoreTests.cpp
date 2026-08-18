@@ -221,6 +221,171 @@ public:
 				== SecondRoute.Identity.FunctionKey.Hash,
 			TEXT("The two declarations must retain distinct stable routes")));
 	}
+
+	TEST_METHOD(GlobalFunctionDependingOnLocalEnumRoundTrips)
+	{
+		const FAngelscriptCacheCleanCaptureOptions Options =
+			MakeCaptureOptions();
+		FAngelscriptCacheCleanModuleArtifacts Artifacts;
+		FAngelscriptCacheCleanModuleArtifacts DiagnosticFacts;
+		{
+			FAngelscriptTestFixture Producer(
+				*TestRunner, ETestEngineMode::IsolatedFull);
+			ASSERT_THAT(IsTrue(Producer.IsValid(),
+				TEXT("Producer Engine should initialize")));
+
+			const FString ScriptSource = ASTEST_AS(R"AS(
+				enum EASCacheV2GlobalOnlyLocalEnumMode
+				{
+					Zero,
+					One,
+					Two,
+				}
+
+				int EnumFixtureEntry()
+				{
+					EASCacheV2GlobalOnlyLocalEnumMode Mode =
+						EASCacheV2GlobalOnlyLocalEnumMode(1);
+					switch (Mode)
+					{
+					case EASCacheV2GlobalOnlyLocalEnumMode::Zero:
+						return 10;
+					case EASCacheV2GlobalOnlyLocalEnumMode::One:
+						return 20;
+					case EASCacheV2GlobalOnlyLocalEnumMode::Two:
+						return 30;
+					}
+				}
+			)AS");
+			asIScriptModule* ScriptModule = Producer.BuildModule(
+				"ASCacheV2GlobalFunctionLocalEnumRestore", ScriptSource);
+			ASSERT_THAT(IsNotNull(ScriptModule,
+				TEXT("Local-enum global-function producer module should compile")));
+			TSharedPtr<FAngelscriptModuleDesc> Module =
+				Producer.GetEngine().GetModule(ScriptModule);
+			ASSERT_THAT(IsTrue(Module.IsValid(),
+				TEXT("Producer should retain the compiled module descriptor")));
+
+			const FAngelscriptCacheCleanCaptureResult Capture =
+				CaptureAngelscriptCleanCompiledModule(
+					Module.ToSharedRef(), Options, Artifacts);
+			TestRunner->AddInfo(FString::Printf(
+				TEXT("Global local-enum capture: Error=%u Records=%d GraphRecords=%u Detail=%s"),
+				static_cast<uint32>(Capture.Error),
+				Artifacts.Records.Num(),
+				Capture.ValidatedGraphRecordCount,
+				*Capture.Detail));
+			ASSERT_THAT(IsTrue(Capture.IsSuccess(),
+				TEXT("A global function depending on its module-local enum should be cacheable")));
+
+			const FAngelscriptCacheCleanCaptureResult DiagnosticCapture =
+				CaptureAngelscriptCurrentModuleFunctionArtifactsForDiagnostics(
+					Module.ToSharedRef(), Options, DiagnosticFacts);
+			TestRunner->AddInfo(FString::Printf(
+				TEXT("Global local-enum diagnostic facts: Error=%u Functions=%d References=%d Detail=%s"),
+				static_cast<uint32>(DiagnosticCapture.Error),
+				DiagnosticFacts.ValidatedFunctionArtifactIdentities.Num(),
+				DiagnosticFacts.ValidatedFunctionArtifactReferenceSets.Num(),
+				*DiagnosticCapture.Detail));
+			ASSERT_THAT(IsTrue(DiagnosticCapture.IsSuccess(),
+				TEXT("Provider diagnostics should resolve the same module-local enum authority")));
+		}
+
+		ASSERT_THAT(AreEqual(
+			1, Artifacts.ValidatedFunctionArtifactReferenceSets.Num()));
+		const FAngelscriptFunctionArtifactReferenceSet& ReferenceSet =
+			Artifacts.ValidatedFunctionArtifactReferenceSets[0];
+		ASSERT_THAT(IsTrue(ReferenceSet.RequiredReferences.ContainsByPredicate(
+			[](const FAngelscriptArtifactReference& Reference)
+			{
+				return Reference.Kind
+					== EAngelscriptArtifactReferenceKind::ScriptType
+					&& !Reference.StableKey.IsZero()
+					&& !Reference.ExpectedAbi.IsZero();
+			}),
+			TEXT("The verified function reference set should retain the local enum stable key and ABI")));
+		ASSERT_THAT(AreEqual(
+			1, DiagnosticFacts.ValidatedFunctionArtifactReferenceSets.Num()));
+		ASSERT_THAT(IsTrue(
+			DiagnosticFacts.ValidatedFunctionArtifactReferenceSets[0].
+				RequiredReferences.ContainsByPredicate(
+				[](const FAngelscriptArtifactReference& Reference)
+				{
+					return Reference.Kind
+						== EAngelscriptArtifactReferenceKind::ScriptType
+						&& !Reference.StableKey.IsZero()
+						&& !Reference.ExpectedAbi.IsZero();
+				}),
+			TEXT("The diagnostic Provider facts should retain the same local enum reference")));
+
+		FAngelscriptCachePackPolicy PackPolicy;
+		PackPolicy.CompressionPolicy =
+			EAngelscriptCachePackCompressionPolicy::ForceNoneForTest;
+		FAngelscriptUnrealZlibCacheStorageCodec Codec;
+		FAngelscriptCachePreparedColdGeneration Prepared;
+		const FAngelscriptCacheCleanCaptureResult Preparation =
+			PrepareAngelscriptCacheColdGeneration(
+				Artifacts, Options, PackPolicy, Codec, Prepared);
+		ASSERT_THAT(IsTrue(Preparation.IsSuccess(),
+			TEXT("Local-enum artifacts should form a generation")));
+
+		FPackSource Packs(Prepared.Packs);
+		FAngelscriptCacheReadLimits Limits;
+		FAngelscriptCacheReadBudget Budget;
+		TOptional<FAngelscriptValidatedGeneration> Validated;
+		const FAngelscriptCacheValidationResult Validation =
+			ValidateAngelscriptCacheGeneration(
+				Prepared.EncodedManifest.CompleteBytes,
+				Prepared.EncodedManifest.ComputedGenerationId,
+				Packs,
+				Limits,
+				Budget,
+				Codec,
+				Validated);
+		ASSERT_THAT(IsTrue(Validation.IsSuccess(),
+			TEXT("Local-enum generation should validate")));
+		ASSERT_THAT(IsTrue(Validated.IsSet(),
+			TEXT("Validation should promote the local-enum generation")));
+
+		FAngelscriptTestFixture Consumer(
+			*TestRunner, ETestEngineMode::IsolatedFull);
+		ASSERT_THAT(IsTrue(Consumer.IsValid(),
+			TEXT("Consumer Engine should initialize")));
+		const FAngelscriptCacheRestoreResult Restore =
+			RestoreAngelscriptCacheModule(
+				Consumer.GetEngine(),
+				Validated.GetValue(),
+				Artifacts.ModuleKey,
+				Limits);
+		TestRunner->AddInfo(FString::Printf(
+			TEXT("Global local-enum restore: Error=%u Stage=%u Types=%u Functions=%u Detail=%s"),
+			static_cast<uint32>(Restore.Error),
+			static_cast<uint32>(Restore.Stage),
+			Restore.RestoredTypeCount,
+			Restore.RestoredFunctionCount,
+			*Restore.Detail));
+		ASSERT_THAT(IsTrue(Restore.IsSuccess(),
+			TEXT("A fresh Engine should restore the local enum and dependent function")));
+		ASSERT_THAT(AreEqual(uint32(1), Restore.RestoredTypeCount));
+		ASSERT_THAT(AreEqual(uint32(1), Restore.RestoredFunctionCount));
+
+		TSharedPtr<FAngelscriptModuleDesc> RestoredModule =
+			Consumer.GetEngine().GetModuleByModuleName(
+				TEXT("ASCacheV2GlobalFunctionLocalEnumRestore"));
+		ASSERT_THAT(IsTrue(RestoredModule.IsValid()));
+		ASSERT_THAT(IsNotNull(RestoredModule->ScriptModule));
+		ASSERT_THAT(AreEqual(1, RestoredModule->Enums.Num()));
+		ASSERT_THAT(AreEqual(asUINT(1),
+			RestoredModule->ScriptModule->GetEnumCount()));
+
+		asIScriptFunction* Entry =
+			RestoredModule->ScriptModule->GetFunctionByDecl(
+				"int EnumFixtureEntry()");
+		ASSERT_THAT(IsNotNull(Entry));
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(Consumer.ExecuteInt(*Entry, Value)));
+		ASSERT_THAT(AreEqual(20, Value));
+	}
 };
 
 #endif // WITH_ANGELSCRIPT_UNITTESTS

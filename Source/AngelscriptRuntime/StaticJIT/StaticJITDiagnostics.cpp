@@ -1,11 +1,13 @@
 #include "StaticJIT/StaticJITDiagnostics.h"
 
+#include "Cache/AngelscriptCacheEnvironment.h"
 #include "StaticJIT/AngelscriptJITBindingContext.h"
 #include "StaticJIT/AngelscriptJITGeneration.h"
 #include "StaticJIT/AngelscriptJITProviderMatcher.h"
 #include "StaticJIT/AngelscriptJITProviderRegistry.h"
 #include "StaticJIT/AngelscriptJITProviderRouter.h"
 #include "StaticJIT/AngelscriptJITReferenceResolver.h"
+#include "StaticJIT/AngelscriptStaticJITGenerator.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
 
 #include "Artifacts/AngelscriptArtifactIdentity.h"
@@ -17,6 +19,7 @@
 #include "Serialization/JsonWriter.h"
 
 #include "StartAngelscriptHeaders.h"
+#include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
@@ -57,6 +60,7 @@ namespace
 			TEXT("StaleProviderGeneration"), TEXT("DuplicateProviderEntry"),
 			TEXT("AmbiguousExactProvider"), TEXT("ArtifactSetMismatch"),
 			TEXT("InvalidProvider"), TEXT("MissingEntryPoint"),
+			TEXT("SemanticDependencyMismatch"),
 		};
 		const uint8 Index = static_cast<uint8>(Result);
 		return Index < UE_ARRAY_COUNT(Names) ? Names[Index] : TEXT("Unknown");
@@ -74,6 +78,375 @@ namespace
 		};
 		const uint8 Index = static_cast<uint8>(Kind);
 		return Index < UE_ARRAY_COUNT(Names) ? Names[Index] : TEXT("Unknown");
+	}
+
+	const TCHAR* ArtifactRequestKindName(
+		const FStaticJITDiagnostics::EArtifactRequestKind RequestKind)
+	{
+		switch (RequestKind)
+		{
+		case FStaticJITDiagnostics::EArtifactRequestKind::StaticJITArtifact:
+			return TEXT("StaticJITArtifact");
+		default:
+			return TEXT("Unknown");
+		}
+	}
+
+	const TCHAR* PrePublicationFailureCategoryName(
+		const FStaticJITDiagnostics::EPrePublicationFailureCategory Category)
+	{
+		switch (Category)
+		{
+		case FStaticJITDiagnostics::EPrePublicationFailureCategory::Invalid:
+			return TEXT("Invalid");
+		case FStaticJITDiagnostics::EPrePublicationFailureCategory::
+			AuthoritativeEngineStale:
+			return TEXT("AuthoritativeEngineStale");
+		case FStaticJITDiagnostics::EPrePublicationFailureCategory::
+			GenerationContainmentFailure:
+			return TEXT("GenerationContainmentFailure");
+		default:
+			return TEXT("Unknown");
+		}
+	}
+
+	const TCHAR* PrePublicationBoundaryName(
+		const FStaticJITDiagnostics::EPrePublicationBoundary Boundary)
+	{
+		static constexpr const TCHAR* Names[] = {
+			TEXT("Invalid"),
+			TEXT("PrimarySourceAuthority"),
+			TEXT("PrimaryPackageOwnership"),
+			TEXT("ProviderRegistry"),
+			TEXT("PrimaryCache"),
+			TEXT("PrimaryRoute"),
+			TEXT("UObjectState"),
+			TEXT("DelegateState"),
+			TEXT("WorldState"),
+			TEXT("PooledContext"),
+		};
+		const uint8 Index = static_cast<uint8>(Boundary);
+		return Index < UE_ARRAY_COUNT(Names) ? Names[Index] : TEXT("Unknown");
+	}
+
+	FString ExecutionCapabilityNames(
+		const EAngelscriptJITExecutionCapability Capabilities)
+	{
+		if (Capabilities == EAngelscriptJITExecutionCapability::None)
+		{
+			return TEXT("None");
+		}
+		TArray<FString> Names;
+		const auto AddIfPresent = [&Names, Capabilities](
+			const EAngelscriptJITExecutionCapability Capability,
+			const TCHAR* Name)
+		{
+			if (EnumHasAnyFlags(Capabilities, Capability))
+			{
+				Names.Emplace(Name);
+			}
+		};
+		AddIfPresent(EAngelscriptJITExecutionCapability::FramePosition,
+			TEXT("FramePosition"));
+		AddIfPresent(EAngelscriptJITExecutionCapability::LineCallback,
+			TEXT("LineCallback"));
+		AddIfPresent(EAngelscriptJITExecutionCapability::DebuggerStep,
+			TEXT("DebuggerStep"));
+		AddIfPresent(EAngelscriptJITExecutionCapability::DebuggerLocals,
+			TEXT("DebuggerLocals"));
+		AddIfPresent(EAngelscriptJITExecutionCapability::Coverage,
+			TEXT("Coverage"));
+		AddIfPresent(EAngelscriptJITExecutionCapability::LoopTimeout,
+			TEXT("LoopTimeout"));
+		AddIfPresent(EAngelscriptJITExecutionCapability::AbortSuspend,
+			TEXT("AbortSuspend"));
+		AddIfPresent(EAngelscriptJITExecutionCapability::RecursionBudget,
+			TEXT("RecursionBudget"));
+		return FString::Join(Names, TEXT("|"));
+	}
+
+	const TCHAR* ArtifactCaptureStateName(
+		const FStaticJITDiagnostics::EArtifactCaptureState CaptureState)
+	{
+		switch (CaptureState)
+		{
+		case FStaticJITDiagnostics::EArtifactCaptureState::Bytecode:
+			return TEXT("Bytecode");
+		case FStaticJITDiagnostics::EArtifactCaptureState::VerifiedTypedHIR:
+			return TEXT("VerifiedTypedHIR");
+		default:
+			return TEXT("Unknown");
+		}
+	}
+
+	const TCHAR* ArtifactFunctionDispositionName(
+		const FStaticJITDiagnostics::EArtifactFunctionDisposition Disposition)
+	{
+		switch (Disposition)
+		{
+		case FStaticJITDiagnostics::EArtifactFunctionDisposition::Emitted:
+			return TEXT("Emitted");
+		case FStaticJITDiagnostics::EArtifactFunctionDisposition::Unsupported:
+			return TEXT("Unsupported");
+		case FStaticJITDiagnostics::EArtifactFunctionDisposition::Failed:
+			return TEXT("Failed");
+		default:
+			return TEXT("Unknown");
+		}
+	}
+
+	const TCHAR* ReferenceResolutionName(
+		const EAngelscriptJITReferenceResolutionCode Code)
+	{
+		static constexpr const TCHAR* Names[] = {
+			TEXT("Exact"), TEXT("Missing"), TEXT("Ambiguous"),
+			TEXT("WrongKind"), TEXT("AbiMismatch"),
+		};
+		const uint8 Index = static_cast<uint8>(Code);
+		return Index < UE_ARRAY_COUNT(Names) ? Names[Index] : TEXT("Unknown");
+	}
+
+	const TCHAR* ReferenceAdoptionStateName(
+		const FStaticJITDiagnostics::EReferenceAdoptionState State)
+	{
+		static constexpr const TCHAR* Names[] = {
+			TEXT("Unavailable"), TEXT("Unbound"),
+			TEXT("ResolvedNotAdopted"), TEXT("Bound"), TEXT("Stale"),
+			TEXT("Rejected"),
+		};
+		const uint8 Index = static_cast<uint8>(State);
+		return Index < UE_ARRAY_COUNT(Names) ? Names[Index] : TEXT("Unknown");
+	}
+
+	const TCHAR* NativeCallSiteRouteName(
+		const EAngelscriptJITNativeCallSiteRoute Route)
+	{
+		switch (Route)
+		{
+		case EAngelscriptJITNativeCallSiteRoute::DirectExported:
+			return TEXT("DirectExported");
+		case EAngelscriptJITNativeCallSiteRoute::DirectInline:
+			return TEXT("DirectInline");
+		case EAngelscriptJITNativeCallSiteRoute::RuntimeThunk:
+			return TEXT("RuntimeThunk");
+		case EAngelscriptJITNativeCallSiteRoute::Bridge:
+			return TEXT("Bridge");
+		case EAngelscriptJITNativeCallSiteRoute::CurrentNativeBinding:
+			return TEXT("CurrentNativeBinding");
+		default:
+			return TEXT("Invalid");
+		}
+	}
+
+#if AS_CAN_GENERATE_JIT
+	const TCHAR* TypedCallTargetKindName(
+		const asETypedSemanticCallTargetKind Kind)
+	{
+		switch (Kind)
+		{
+		case asETypedSemanticCallTargetKind::ScriptFunction:
+			return TEXT("ScriptFunction");
+		case asETypedSemanticCallTargetKind::SystemFunction:
+			return TEXT("SystemFunction");
+		case asETypedSemanticCallTargetKind::ImportedFunction:
+			return TEXT("ImportedFunction");
+		case asETypedSemanticCallTargetKind::Unspecified:
+		default:
+			return TEXT("Unspecified");
+		}
+	}
+
+	const TCHAR* TypedCallDispositionName(
+		const EAngelscriptStaticJITTypedCallDisposition Disposition)
+	{
+		switch (Disposition)
+		{
+		case EAngelscriptStaticJITTypedCallDisposition::DirectScript:
+			return TEXT("DirectScript");
+		case EAngelscriptStaticJITTypedCallDisposition::
+			InternalSemanticHelper:
+			return TEXT("InternalSemanticHelper");
+		case EAngelscriptStaticJITTypedCallDisposition::DirectExported:
+			return TEXT("DirectExported");
+		case EAngelscriptStaticJITTypedCallDisposition::DirectInline:
+			return TEXT("DirectInline");
+		case EAngelscriptStaticJITTypedCallDisposition::RuntimeThunk:
+			return TEXT("RuntimeThunk");
+		case EAngelscriptStaticJITTypedCallDisposition::CurrentNativeBinding:
+			return TEXT("CurrentNativeBinding");
+		case EAngelscriptStaticJITTypedCallDisposition::Bridge:
+			return TEXT("Bridge");
+		case EAngelscriptStaticJITTypedCallDisposition::Unsupported:
+		default:
+			return TEXT("Unsupported");
+		}
+	}
+
+	const TCHAR* NativeCallValidationName(
+		const EAngelscriptStaticJITNativeCallValidationCode Code)
+	{
+		switch (Code)
+		{
+#define AS_TYPED_CALL_VALIDATION_NAME(Value) \
+		case EAngelscriptStaticJITNativeCallValidationCode::Value: \
+			return TEXT(#Value)
+		AS_TYPED_CALL_VALIDATION_NAME(Valid);
+		AS_TYPED_CALL_VALIDATION_NAME(Absent);
+		AS_TYPED_CALL_VALIDATION_NAME(UnknownLinkage);
+		AS_TYPED_CALL_VALIDATION_NAME(UnknownVisibility);
+		AS_TYPED_CALL_VALIDATION_NAME(InvalidAbsentMetadata);
+		AS_TYPED_CALL_VALIDATION_NAME(InvalidVisibility);
+		AS_TYPED_CALL_VALIDATION_NAME(MissingSymbol);
+		AS_TYPED_CALL_VALIDATION_NAME(InvalidSymbol);
+		AS_TYPED_CALL_VALIDATION_NAME(MissingInclude);
+		AS_TYPED_CALL_VALIDATION_NAME(InvalidInclude);
+		AS_TYPED_CALL_VALIDATION_NAME(MissingOwningModule);
+		AS_TYPED_CALL_VALIDATION_NAME(UnknownOwningModule);
+		AS_TYPED_CALL_VALIDATION_NAME(PrivateDependency);
+		AS_TYPED_CALL_VALIDATION_NAME(InternalLinkage);
+		AS_TYPED_CALL_VALIDATION_NAME(MissingApiMacro);
+		AS_TYPED_CALL_VALIDATION_NAME(InvalidApiMacro);
+		AS_TYPED_CALL_VALIDATION_NAME(UnexpectedApiMacro);
+		AS_TYPED_CALL_VALIDATION_NAME(MissingCppCallableSignature);
+		AS_TYPED_CALL_VALIDATION_NAME(InvalidCppCallableSignature);
+		AS_TYPED_CALL_VALIDATION_NAME(MissingNativeABI);
+		AS_TYPED_CALL_VALIDATION_NAME(InvalidNativeABI);
+		AS_TYPED_CALL_VALIDATION_NAME(NativeABIMismatch);
+		AS_TYPED_CALL_VALIDATION_NAME(UnknownABIDomain);
+		AS_TYPED_CALL_VALIDATION_NAME(InvalidCallSemantics);
+		AS_TYPED_CALL_VALIDATION_NAME(MissingScalarABI);
+		AS_TYPED_CALL_VALIDATION_NAME(InvalidScalarABI);
+		AS_TYPED_CALL_VALIDATION_NAME(ScalarABIMismatch);
+		AS_TYPED_CALL_VALIDATION_NAME(UnknownRouteFlags);
+		AS_TYPED_CALL_VALIDATION_NAME(UnsafeRouting);
+		AS_TYPED_CALL_VALIDATION_NAME(UnknownLifetimeFlags);
+		AS_TYPED_CALL_VALIDATION_NAME(UnsafeLifetime);
+		AS_TYPED_CALL_VALIDATION_NAME(TypedABIUnavailable);
+#undef AS_TYPED_CALL_VALIDATION_NAME
+		default:
+			return TEXT("Unknown");
+		}
+	}
+#endif
+
+	FString BuildTypedCallMapping(
+		const FStaticJITDiagnostics::FTypedCallDiagnosticRecord& Call)
+	{
+		const FString Target = Call.RegisteredTarget.IsEmpty()
+			? TEXT("<unresolved>") : Call.RegisteredTarget;
+		if (Call.EmittedRoute == TEXT("Bridge")
+			|| Call.EmittedRoute == TEXT("CurrentNativeBinding"))
+		{
+			return FString::Printf(TEXT("%s -> %s -> %s -> slot %d -> %s"),
+				*Call.CanonicalDeclaration,
+				*Call.EmittedCppCallee,
+				*Call.RuntimeDllCore,
+				Call.ReferenceSlotIndex,
+				*Target);
+		}
+		return FString::Printf(TEXT("%s -> %s -> %s -> %s"),
+			*Call.CanonicalDeclaration,
+			*Call.EmittedCppCallee,
+			*Call.Disposition,
+			*Target);
+	}
+
+	FString BuildNativeCallSiteMapping(
+		const FStaticJITDiagnostics::FNativeCallSiteRecord& CallSite)
+	{
+		const FString EffectiveTarget =
+			!CallSite.CurrentTargetDeclaration.IsEmpty()
+				? CallSite.CurrentTargetDeclaration
+				: (!CallSite.RegisteredTarget.IsEmpty()
+					? CallSite.RegisteredTarget : TEXT("<unresolved>"));
+		if (CallSite.Route == EAngelscriptJITNativeCallSiteRoute::Bridge
+			|| CallSite.Route
+				== EAngelscriptJITNativeCallSiteRoute::CurrentNativeBinding)
+		{
+			return FString::Printf(TEXT("%s -> %s -> %s -> slot[%d] -> %s"),
+				*CallSite.CanonicalDeclaration,
+				*CallSite.EmittedCppCallee,
+				*CallSite.RuntimeDllCore,
+				CallSite.ReferenceSlotIndex,
+				*EffectiveTarget);
+		}
+		return FString::Printf(TEXT("%s -> %s -> %s -> %s"),
+			*CallSite.CanonicalDeclaration,
+			*CallSite.EmittedCppCallee,
+			NativeCallSiteRouteName(CallSite.Route),
+			*EffectiveTarget);
+	}
+
+	void SynchronizeNativeCallSiteState(
+		FStaticJITDiagnostics::FProviderEntryRecord& Entry)
+	{
+		for (FStaticJITDiagnostics::FNativeCallSiteRecord& CallSite
+			: Entry.NativeCallSites)
+		{
+			if (CallSite.Route != EAngelscriptJITNativeCallSiteRoute::Bridge
+				&& CallSite.Route
+					!= EAngelscriptJITNativeCallSiteRoute::CurrentNativeBinding)
+			{
+				CallSite.bResolved = true;
+				CallSite.CurrentResolution =
+					EAngelscriptJITReferenceResolutionCode::Exact;
+				CallSite.AdoptionState =
+					FStaticJITDiagnostics::EReferenceAdoptionState::Bound;
+				CallSite.CurrentTargetDeclaration = CallSite.RegisteredTarget;
+				switch (CallSite.Route)
+				{
+				case EAngelscriptJITNativeCallSiteRoute::DirectExported:
+					CallSite.CurrentTargetKind = TEXT("ImportedSymbol");
+					break;
+				case EAngelscriptJITNativeCallSiteRoute::DirectInline:
+					CallSite.CurrentTargetKind = TEXT("HeaderInline");
+					break;
+				case EAngelscriptJITNativeCallSiteRoute::RuntimeThunk:
+					CallSite.CurrentTargetKind = TEXT("RuntimeThunk");
+					break;
+				default:
+					CallSite.bResolved = false;
+					CallSite.CurrentResolution =
+						EAngelscriptJITReferenceResolutionCode::Missing;
+					CallSite.AdoptionState =
+						FStaticJITDiagnostics::EReferenceAdoptionState::Unavailable;
+					CallSite.CurrentTargetDeclaration.Reset();
+					CallSite.CurrentTargetKind.Reset();
+					break;
+				}
+				continue;
+			}
+
+			const FStaticJITDiagnostics::FReferenceRecord* const Reference =
+				Entry.References.FindByPredicate(
+					[&CallSite](
+						const FStaticJITDiagnostics::FReferenceRecord& Candidate)
+					{
+						return static_cast<int32>(Candidate.SlotIndex)
+								== CallSite.ReferenceSlotIndex
+							&& Candidate.Reference.StableKey
+								== CallSite.StableTargetKey
+							&& Candidate.Reference.ExpectedAbi
+								== CallSite.ExpectedAbi;
+					});
+			if (Reference == nullptr)
+			{
+				CallSite.bResolved = false;
+				CallSite.CurrentResolution =
+					EAngelscriptJITReferenceResolutionCode::Missing;
+				CallSite.AdoptionState =
+					FStaticJITDiagnostics::EReferenceAdoptionState::Unavailable;
+				CallSite.CurrentTargetDeclaration.Reset();
+				CallSite.CurrentTargetKind.Reset();
+				continue;
+			}
+			CallSite.bResolved = Reference->bResolved;
+			CallSite.CurrentResolution = Reference->CurrentResolution;
+			CallSite.AdoptionState = Reference->AdoptionState;
+			CallSite.CurrentTargetDeclaration =
+				Reference->CurrentTargetDeclaration;
+			CallSite.CurrentTargetKind = Reference->CurrentTargetKind;
+		}
 	}
 
 	FAngelscriptHash256 BuildModuleArtifactDigest(
@@ -96,7 +469,7 @@ namespace
 		});
 
 		FAngelscriptArtifactCanonicalWriter Writer(
-			TEXT("Angelscript.StaticJIT.Diagnostics.ModuleArtifact.v1"));
+			TEXT("Angelscript.StaticJIT.Diagnostics.ModuleArtifact.v2"));
 		Writer.WriteHash(ModuleKey.Hash);
 		Writer.WriteUInt32(static_cast<uint32>(ModuleEntries.Num()));
 		for (const FStaticJITDiagnostics::FProviderEntryRecord* Entry
@@ -121,6 +494,23 @@ namespace
 				Writer.WriteUInt8(static_cast<uint8>(Reference.Reference.Kind));
 				Writer.WriteHash(Reference.Reference.StableKey);
 				Writer.WriteHash(Reference.Reference.ExpectedAbi);
+			}
+			Writer.WriteUInt32(static_cast<uint32>(
+				Entry->NativeCallSites.Num()));
+			for (const FStaticJITDiagnostics::FNativeCallSiteRecord& CallSite
+				: Entry->NativeCallSites)
+			{
+				Writer.WriteUInt32(CallSite.CallSiteIndex);
+				Writer.WriteUInt32(static_cast<uint32>(CallSite.Route));
+				Writer.WriteString(CallSite.CanonicalDeclaration);
+				Writer.WriteString(CallSite.EmittedCppCallee);
+				Writer.WriteString(CallSite.RuntimeDllCore);
+				Writer.WriteString(CallSite.MetadataRowSymbol);
+				Writer.WriteString(CallSite.RegisteredTarget);
+				Writer.WriteHash(CallSite.StableTargetKey);
+				Writer.WriteHash(CallSite.ExpectedAbi);
+				Writer.WriteUInt32(static_cast<uint32>(
+					CallSite.ReferenceSlotIndex));
 			}
 		}
 		return Writer.FinalizeHash();
@@ -150,9 +540,27 @@ namespace
 		const FStaticJITDiagnostics::FSnapshot& Source)
 	{
 		FStaticJITDiagnostics::FSnapshot Ordered = Source;
+		if (Ordered.ArtifactRequest.IsSet())
+		{
+			Ordered.ArtifactRequest->Functions.Sort([](
+				const FStaticJITDiagnostics::FArtifactFunctionRecord& Left,
+				const FStaticJITDiagnostics::FArtifactFunctionRecord& Right)
+			{
+				return Left.FunctionKey.Hash < Right.FunctionKey.Hash;
+			});
+		}
 		for (FStaticJITDiagnostics::FProviderRecord& Provider
 			: Ordered.Providers)
 		{
+			if (Provider.GenerationDiagnostics.IsSet())
+			{
+				Provider.GenerationDiagnostics->Functions.Sort([](
+					const FAngelscriptJITProviderCatalogFunctionDiagnostic& Left,
+					const FAngelscriptJITProviderCatalogFunctionDiagnostic& Right)
+				{
+					return Left.FunctionKey.Hash < Right.FunctionKey.Hash;
+				});
+			}
 			Provider.Modules.Sort([](
 				const FStaticJITDiagnostics::FProviderModuleRecord& Left,
 				const FStaticJITDiagnostics::FProviderModuleRecord& Right)
@@ -191,6 +599,12 @@ namespace
 					}
 					return Left.Reference.StableKey
 						< Right.Reference.StableKey;
+				});
+				Entry.NativeCallSites.Sort([](
+					const FStaticJITDiagnostics::FNativeCallSiteRecord& Left,
+					const FStaticJITDiagnostics::FNativeCallSiteRecord& Right)
+				{
+					return Left.CallSiteIndex < Right.CallSiteIndex;
 				});
 			}
 		}
@@ -289,6 +703,16 @@ namespace
 		for (FStaticJITDiagnostics::FProviderRecord& Provider
 			: Filtered.Providers)
 		{
+			if (Provider.GenerationDiagnostics.IsSet())
+			{
+				Provider.GenerationDiagnostics->Functions.RemoveAll(
+					[&SelectedKeys](
+						const FAngelscriptJITProviderCatalogFunctionDiagnostic&
+							Function)
+					{
+						return !SelectedKeys.Contains(Function.FunctionKey);
+					});
+			}
 			Provider.Entries.RemoveAll(
 				[&SelectedKeys](
 					const FStaticJITDiagnostics::FProviderEntryRecord& Entry)
@@ -375,6 +799,530 @@ namespace
 		Writer->WriteValue(TEXT("expectedAbi"),
 			Reference.Reference.ExpectedAbi.ToHexString());
 		Writer->WriteValue(TEXT("resolved"), Reference.bResolved);
+		Writer->WriteValue(TEXT("currentResolution"),
+			ReferenceResolutionName(Reference.CurrentResolution));
+		Writer->WriteValue(TEXT("adoptionState"),
+			ReferenceAdoptionStateName(Reference.AdoptionState));
+		Writer->WriteValue(TEXT("currentTargetDeclaration"),
+			Reference.CurrentTargetDeclaration);
+		Writer->WriteValue(TEXT("currentTargetKind"),
+			Reference.CurrentTargetKind);
+		Writer->WriteObjectEnd();
+	}
+
+	void WriteNativeCallSite(
+		const TSharedRef<FDiagnosticJsonWriter>& Writer,
+		const FStaticJITDiagnostics::FNativeCallSiteRecord& CallSite)
+	{
+		Writer->WriteObjectStart();
+		Writer->WriteValue(TEXT("callSiteIndex"), CallSite.CallSiteIndex);
+		Writer->WriteValue(TEXT("route"),
+			NativeCallSiteRouteName(CallSite.Route));
+		Writer->WriteValue(TEXT("canonicalDeclaration"),
+			CallSite.CanonicalDeclaration);
+		Writer->WriteValue(TEXT("emittedCppCallee"),
+			CallSite.EmittedCppCallee);
+		Writer->WriteValue(TEXT("runtimeDllCore"), CallSite.RuntimeDllCore);
+		Writer->WriteValue(TEXT("metadataRowSymbol"),
+			CallSite.MetadataRowSymbol);
+		Writer->WriteValue(TEXT("registeredTarget"),
+			CallSite.RegisteredTarget);
+		Writer->WriteValue(TEXT("stableTargetKey"),
+			CallSite.StableTargetKey.ToHexString());
+		Writer->WriteValue(TEXT("expectedAbi"),
+			CallSite.ExpectedAbi.ToHexString());
+		Writer->WriteValue(TEXT("referenceSlotIndex"),
+			CallSite.ReferenceSlotIndex);
+		Writer->WriteValue(TEXT("resolved"), CallSite.bResolved);
+		Writer->WriteValue(TEXT("currentResolution"),
+			ReferenceResolutionName(CallSite.CurrentResolution));
+		Writer->WriteValue(TEXT("adoptionState"),
+			ReferenceAdoptionStateName(CallSite.AdoptionState));
+		Writer->WriteValue(TEXT("currentTargetDeclaration"),
+			CallSite.CurrentTargetDeclaration);
+		Writer->WriteValue(TEXT("currentTargetKind"),
+			CallSite.CurrentTargetKind);
+		Writer->WriteValue(TEXT("mapping"),
+			BuildNativeCallSiteMapping(CallSite));
+		Writer->WriteObjectEnd();
+	}
+
+	void WriteProcessedSourceRecord(
+		const TSharedRef<FDiagnosticJsonWriter>& Writer,
+		const TCHAR* FieldName,
+		const FStaticJITDiagnostics::FProcessedSourceRecord& Source)
+	{
+		Writer->WriteObjectStart(FieldName);
+		Writer->WriteValue(TEXT("section"), Source.Section);
+		Writer->WriteValue(TEXT("row"), Source.Row);
+		Writer->WriteValue(TEXT("column"), Source.Column);
+		Writer->WriteObjectEnd();
+	}
+
+	void WriteTypedSemanticFunctionDiagnostic(
+		const TSharedRef<FDiagnosticJsonWriter>& Writer,
+		const FStaticJITDiagnostics::FTypedSemanticFunctionDiagnosticRecord&
+			Diagnostic,
+		const TCHAR* FieldName = nullptr)
+	{
+		if (FieldName != nullptr)
+		{
+			Writer->WriteObjectStart(FieldName);
+		}
+		else
+		{
+			Writer->WriteObjectStart();
+		}
+		Writer->WriteValue(TEXT("functionKey"),
+			Diagnostic.FunctionKey.Hash.ToHexString());
+		Writer->WriteValue(TEXT("role"), Diagnostic.Role);
+		Writer->WriteValue(TEXT("rawTraitBits"), FString::Printf(
+			TEXT("0x%08x"), Diagnostic.RawTraitBits));
+		Writer->WriteValue(TEXT("unknownTraitBits"), FString::Printf(
+			TEXT("0x%08x"), Diagnostic.UnknownTraitBits));
+		Writer->WriteValue(TEXT("invocationKind"),
+			Diagnostic.InvocationKind);
+		Writer->WriteValue(TEXT("receiverKind"), Diagnostic.ReceiverKind);
+		Writer->WriteValue(TEXT("receiverParameterIndex"),
+			Diagnostic.ReceiverParameterIndex);
+		Writer->WriteValue(TEXT("hirState"), Diagnostic.HIRState);
+		Writer->WriteValue(TEXT("cleanupPlanState"),
+			Diagnostic.CleanupPlanState);
+		Writer->WriteValue(TEXT("hasSuspendState"),
+			Diagnostic.bHasSuspendState);
+		Writer->WriteValue(TEXT("hasExceptionCleanup"),
+			Diagnostic.bHasExceptionCleanup);
+		Writer->WriteValue(TEXT("cleanupPlanCoversAllTransfers"),
+			Diagnostic.bCleanupPlanCoversAllTransfers);
+		Writer->WriteValue(TEXT("componentIndex"),
+			Diagnostic.ComponentIndex);
+		Writer->WriteValue(TEXT("recursiveComponent"),
+			Diagnostic.bRecursiveComponent);
+		Writer->WriteValue(TEXT("eligibilityReason"),
+			Diagnostic.EligibilityReason);
+		Writer->WriteValue(TEXT("eligibilityDetail"),
+			Diagnostic.EligibilityDetail);
+		WriteProcessedSourceRecord(Writer, TEXT("eligibilitySource"),
+			Diagnostic.EligibilitySource);
+		Writer->WriteObjectEnd();
+	}
+
+	void WriteTypedCallDiagnostic(
+		const TSharedRef<FDiagnosticJsonWriter>& Writer,
+		const FStaticJITDiagnostics::FTypedCallDiagnosticRecord& Diagnostic)
+	{
+		Writer->WriteObjectStart();
+		Writer->WriteValue(TEXT("callerFunctionKey"),
+			Diagnostic.CallerFunctionKey.Hash.ToHexString());
+		Writer->WriteValue(TEXT("calleeFunctionKey"),
+			Diagnostic.CalleeFunctionKey.Hash.ToHexString());
+		Writer->WriteValue(TEXT("expressionIndex"),
+			Diagnostic.ExpressionIndex);
+		WriteProcessedSourceRecord(Writer, TEXT("processedSource"),
+			Diagnostic.ProcessedSource);
+		if (Diagnostic.AuthoredSource.IsSet())
+		{
+			WriteProcessedSourceRecord(Writer, TEXT("authoredSource"),
+				Diagnostic.AuthoredSource.GetValue());
+		}
+		if (Diagnostic.GeneratedSource.IsSet())
+		{
+			WriteProcessedSourceRecord(Writer, TEXT("generatedSource"),
+				Diagnostic.GeneratedSource.GetValue());
+		}
+		Writer->WriteValue(TEXT("targetKind"), Diagnostic.TargetKind);
+		Writer->WriteValue(TEXT("disposition"), Diagnostic.Disposition);
+		Writer->WriteValue(TEXT("calleeEligibilityReason"),
+			Diagnostic.CalleeEligibilityReason);
+		Writer->WriteValue(TEXT("calleeEligibilityDetail"),
+			Diagnostic.CalleeEligibilityDetail);
+		WriteProcessedSourceRecord(Writer, TEXT("calleeEligibilitySource"),
+			Diagnostic.CalleeEligibilitySource);
+		Writer->WriteValue(TEXT("nativeLinkageValidation"),
+			Diagnostic.NativeLinkageValidation);
+		Writer->WriteValue(TEXT("nativeLinkageValidationDetail"),
+			Diagnostic.NativeLinkageValidationDetail);
+		Writer->WriteValue(TEXT("canonicalDeclaration"),
+			Diagnostic.CanonicalDeclaration);
+		Writer->WriteValue(TEXT("emittedRoute"), Diagnostic.EmittedRoute);
+		Writer->WriteValue(TEXT("emittedCppCallee"),
+			Diagnostic.EmittedCppCallee);
+		Writer->WriteValue(TEXT("runtimeDllCore"),
+			Diagnostic.RuntimeDllCore);
+		Writer->WriteValue(TEXT("metadataRowSymbol"),
+			Diagnostic.MetadataRowSymbol);
+		Writer->WriteValue(TEXT("registeredTarget"),
+			Diagnostic.RegisteredTarget);
+		Writer->WriteValue(TEXT("directCppSymbol"),
+			Diagnostic.DirectCppSymbol);
+		Writer->WriteValue(TEXT("stableTargetKey"),
+			Diagnostic.StableTargetKey.ToHexString());
+		Writer->WriteValue(TEXT("expectedAbi"),
+			Diagnostic.ExpectedAbi.ToHexString());
+		Writer->WriteValue(TEXT("referenceSlotIndex"),
+			Diagnostic.ReferenceSlotIndex);
+		Writer->WriteValue(TEXT("mapping"),
+			BuildTypedCallMapping(Diagnostic));
+		Writer->WriteObjectEnd();
+	}
+
+	void WriteTypedFunctionDiagnostic(
+		const TSharedRef<FDiagnosticJsonWriter>& Writer,
+		const FStaticJITDiagnostics::FTypedFunctionDiagnosticRecord& Diagnostic)
+	{
+		Writer->WriteObjectStart(TEXT("typedDiagnostic"));
+		Writer->WriteValue(TEXT("fallbackReason"),
+			Diagnostic.FallbackReason);
+		Writer->WriteValue(TEXT("detail"), Diagnostic.Detail);
+		WriteProcessedSourceRecord(Writer, TEXT("processedSource"),
+			Diagnostic.ProcessedSource);
+		if (Diagnostic.SemanticFunction.IsSet())
+		{
+			WriteTypedSemanticFunctionDiagnostic(Writer,
+				Diagnostic.SemanticFunction.GetValue(),
+				TEXT("semanticFunction"));
+		}
+		if (Diagnostic.CallClosure.IsSet())
+		{
+			const FStaticJITDiagnostics::FTypedCallClosureDiagnosticRecord&
+				Closure = Diagnostic.CallClosure.GetValue();
+			Writer->WriteObjectStart(TEXT("callClosure"));
+			Writer->WriteValue(TEXT("eligible"), Closure.bEligible);
+			Writer->WriteValue(TEXT("requiredCapabilities"),
+				Closure.RequiredCapabilities);
+			Writer->WriteValue(TEXT("availableCapabilities"),
+				Closure.AvailableCapabilities);
+			Writer->WriteValue(TEXT("executionRequirementsIdentity"),
+				Closure.ExecutionRequirementsIdentity);
+			Writer->WriteValue(TEXT("availableCapabilityProfileIdentity"),
+				Closure.AvailableCapabilityProfileIdentity);
+			Writer->WriteValue(TEXT("profileKind"), Closure.ProfileKind);
+			Writer->WriteValue(TEXT("exceptionControlState"),
+				Closure.ExceptionControlState);
+			Writer->WriteValue(TEXT("exceptionPayloadState"),
+				Closure.ExceptionPayloadState);
+			Writer->WriteValue(TEXT("recursionGuardAvailable"),
+				Closure.bRecursionGuardAvailable);
+			Writer->WriteArrayStart(TEXT("functions"));
+			for (const FStaticJITDiagnostics::
+				FTypedSemanticFunctionDiagnosticRecord& Function
+				: Closure.Functions)
+			{
+				WriteTypedSemanticFunctionDiagnostic(Writer, Function);
+			}
+			Writer->WriteArrayEnd();
+			Writer->WriteArrayStart(TEXT("calls"));
+			for (const FStaticJITDiagnostics::FTypedCallDiagnosticRecord& Call
+				: Closure.Calls)
+			{
+				WriteTypedCallDiagnostic(Writer, Call);
+			}
+			Writer->WriteArrayEnd();
+			Writer->WriteObjectEnd();
+		}
+		Writer->WriteObjectEnd();
+	}
+
+	void WriteProviderDiagnosticSource(
+		const TSharedRef<FDiagnosticJsonWriter>& Writer,
+		const TCHAR* FieldName,
+		const FAngelscriptJITProviderCatalogDiagnosticSource& Source)
+	{
+		Writer->WriteObjectStart(FieldName);
+		Writer->WriteValue(TEXT("section"), Source.Section);
+		Writer->WriteValue(TEXT("row"), Source.Row);
+		Writer->WriteValue(TEXT("column"), Source.Column);
+		Writer->WriteObjectEnd();
+	}
+
+	void WriteProviderSemanticDiagnostic(
+		const TSharedRef<FDiagnosticJsonWriter>& Writer,
+		const FAngelscriptJITProviderCatalogTypedSemanticFunctionDiagnostic&
+			Diagnostic,
+		const TCHAR* FieldName = nullptr)
+	{
+		if (FieldName != nullptr)
+		{
+			Writer->WriteObjectStart(FieldName);
+		}
+		else
+		{
+			Writer->WriteObjectStart();
+		}
+		Writer->WriteValue(TEXT("functionKey"),
+			Diagnostic.FunctionKey.Hash.ToHexString());
+		Writer->WriteValue(TEXT("role"), Diagnostic.Role);
+		Writer->WriteValue(TEXT("rawTraitBits"), Diagnostic.RawTraitBits);
+		Writer->WriteValue(TEXT("unknownTraitBits"), Diagnostic.UnknownTraitBits);
+		Writer->WriteValue(TEXT("invocationKind"), Diagnostic.InvocationKind);
+		Writer->WriteValue(TEXT("receiverKind"), Diagnostic.ReceiverKind);
+		Writer->WriteValue(TEXT("receiverParameterIndex"),
+			Diagnostic.ReceiverParameterIndex);
+		Writer->WriteValue(TEXT("hirState"), Diagnostic.HIRState);
+		Writer->WriteValue(TEXT("cleanupPlanState"),
+			Diagnostic.CleanupPlanState);
+		Writer->WriteValue(TEXT("hasSuspendState"),
+			Diagnostic.bHasSuspendState);
+		Writer->WriteValue(TEXT("hasExceptionCleanup"),
+			Diagnostic.bHasExceptionCleanup);
+		Writer->WriteValue(TEXT("cleanupPlanCoversAllTransfers"),
+			Diagnostic.bCleanupPlanCoversAllTransfers);
+		Writer->WriteValue(TEXT("componentIndex"), Diagnostic.ComponentIndex);
+		Writer->WriteValue(TEXT("recursiveComponent"),
+			Diagnostic.bRecursiveComponent);
+		Writer->WriteValue(TEXT("eligibilityReason"),
+			Diagnostic.EligibilityReason);
+		Writer->WriteValue(TEXT("eligibilityDetail"),
+			Diagnostic.EligibilityDetail);
+		WriteProviderDiagnosticSource(Writer, TEXT("eligibilitySource"),
+			Diagnostic.EligibilitySource);
+		Writer->WriteObjectEnd();
+	}
+
+	FString BuildProviderCallMapping(
+		const FAngelscriptJITProviderCatalogTypedCallDiagnostic& Call)
+	{
+		const FString Target = !Call.RegisteredTarget.IsEmpty()
+			? Call.RegisteredTarget
+			: (!Call.DirectCppSymbol.IsEmpty()
+				? Call.DirectCppSymbol : TEXT("<unresolved>"));
+		if (Call.EmittedRoute == EAngelscriptJITNativeCallSiteRoute::Bridge
+			|| Call.EmittedRoute
+				== EAngelscriptJITNativeCallSiteRoute::CurrentNativeBinding)
+		{
+			return FString::Printf(TEXT("%s -> %s -> %s -> slot[%d] -> %s"),
+				*Call.CanonicalDeclaration,
+				*Call.EmittedCppCallee,
+				*Call.RuntimeDllCore,
+				Call.ReferenceSlotIndex,
+				*Target);
+		}
+		return FString::Printf(TEXT("%s -> %s -> %s -> %s"),
+			*Call.CanonicalDeclaration,
+			*Call.EmittedCppCallee,
+			NativeCallSiteRouteName(Call.EmittedRoute),
+			*Target);
+	}
+
+	void WriteProviderCallDiagnostic(
+		const TSharedRef<FDiagnosticJsonWriter>& Writer,
+		const FAngelscriptJITProviderCatalogTypedCallDiagnostic& Diagnostic)
+	{
+		Writer->WriteObjectStart();
+		Writer->WriteValue(TEXT("callerFunctionKey"),
+			Diagnostic.CallerFunctionKey.Hash.ToHexString());
+		Writer->WriteValue(TEXT("calleeFunctionKey"),
+			Diagnostic.CalleeFunctionKey.Hash.ToHexString());
+		Writer->WriteValue(TEXT("expressionIndex"),
+			Diagnostic.ExpressionIndex);
+		WriteProviderDiagnosticSource(Writer, TEXT("processedSource"),
+			Diagnostic.ProcessedSource);
+		if (EnumHasAnyFlags(Diagnostic.SourceFlags,
+			EAngelscriptJITProviderDiagnosticSourceFlags::HasAuthoredSource))
+		{
+			WriteProviderDiagnosticSource(Writer, TEXT("authoredSource"),
+				Diagnostic.AuthoredSource);
+		}
+		if (EnumHasAnyFlags(Diagnostic.SourceFlags,
+			EAngelscriptJITProviderDiagnosticSourceFlags::HasGeneratedSource))
+		{
+			WriteProviderDiagnosticSource(Writer, TEXT("generatedSource"),
+				Diagnostic.GeneratedSource);
+		}
+		Writer->WriteValue(TEXT("targetKind"), Diagnostic.TargetKind);
+		Writer->WriteValue(TEXT("disposition"), Diagnostic.Disposition);
+		Writer->WriteValue(TEXT("calleeEligibilityReason"),
+			Diagnostic.CalleeEligibilityReason);
+		Writer->WriteValue(TEXT("calleeEligibilityDetail"),
+			Diagnostic.CalleeEligibilityDetail);
+		WriteProviderDiagnosticSource(Writer, TEXT("calleeEligibilitySource"),
+			Diagnostic.CalleeEligibilitySource);
+		Writer->WriteValue(TEXT("hasNativeLinkageValidation"),
+			Diagnostic.bHasNativeLinkageValidation);
+		Writer->WriteValue(TEXT("nativeLinkageValidation"),
+			Diagnostic.NativeLinkageValidation);
+		Writer->WriteValue(TEXT("nativeLinkageValidationDetail"),
+			Diagnostic.NativeLinkageValidationDetail);
+		Writer->WriteValue(TEXT("canonicalDeclaration"),
+			Diagnostic.CanonicalDeclaration);
+		Writer->WriteValue(TEXT("emittedRoute"),
+			NativeCallSiteRouteName(Diagnostic.EmittedRoute));
+		Writer->WriteValue(TEXT("emittedCppCallee"),
+			Diagnostic.EmittedCppCallee);
+		Writer->WriteValue(TEXT("runtimeDllCore"), Diagnostic.RuntimeDllCore);
+		Writer->WriteValue(TEXT("metadataRowSymbol"),
+			Diagnostic.MetadataRowSymbol);
+		Writer->WriteValue(TEXT("registeredTarget"),
+			Diagnostic.RegisteredTarget);
+		Writer->WriteValue(TEXT("directCppSymbol"),
+			Diagnostic.DirectCppSymbol);
+		Writer->WriteValue(TEXT("stableTargetKey"),
+			Diagnostic.StableTargetKey.ToHexString());
+		Writer->WriteValue(TEXT("expectedAbi"),
+			Diagnostic.ExpectedAbi.ToHexString());
+		Writer->WriteValue(TEXT("referenceSlotIndex"),
+			Diagnostic.ReferenceSlotIndex);
+		Writer->WriteValue(TEXT("mapping"),
+			BuildProviderCallMapping(Diagnostic));
+		Writer->WriteObjectEnd();
+	}
+
+	void WriteProviderGenerationDiagnostics(
+		const TSharedRef<FDiagnosticJsonWriter>& Writer,
+		const FAngelscriptJITProviderCatalogDiagnostics& Diagnostics)
+	{
+		Writer->WriteObjectStart(TEXT("generationDiagnostics"));
+		Writer->WriteValue(TEXT("schemaRevision"), Diagnostics.SchemaRevision);
+		Writer->WriteValue(TEXT("diagnosticDigest"),
+			Diagnostics.DiagnosticDigest.ToHexString());
+		Writer->WriteValue(TEXT("requestKind"), Diagnostics.RequestKind);
+		Writer->WriteValue(TEXT("requestedBackend"),
+			Diagnostics.RequestedBackendId);
+		Writer->WriteValue(TEXT("captureState"), Diagnostics.CaptureState);
+		Writer->WriteArrayStart(TEXT("fallbackChain"));
+		for (const FString& BackendId : Diagnostics.FallbackChain)
+		{
+			Writer->WriteValue(BackendId);
+		}
+		Writer->WriteArrayEnd();
+		Writer->WriteObjectStart(TEXT("compiledSourceGraph"));
+		Writer->WriteValue(TEXT("sourceCompilePassCount"),
+			Diagnostics.SourceCompilePassCount);
+		Writer->WriteValue(TEXT("moduleCount"),
+			Diagnostics.CompiledModuleCount);
+		Writer->WriteValue(TEXT("functionCount"),
+			Diagnostics.CompiledFunctionCount);
+		Writer->WriteValue(TEXT("typeCount"), Diagnostics.CompiledTypeCount);
+		Writer->WriteValue(TEXT("globalCount"),
+			Diagnostics.CompiledGlobalCount);
+		Writer->WriteValue(TEXT("descriptorCount"),
+			Diagnostics.CompiledDescriptorCount);
+		Writer->WriteValue(TEXT("dependencyCount"),
+			Diagnostics.CompiledDependencyCount);
+		Writer->WriteValue(TEXT("externalNativeCallCount"),
+			Diagnostics.CompiledExternalNativeCallCount);
+		Writer->WriteValue(TEXT("emitModuleCount"),
+			Diagnostics.EmitModuleCount);
+		Writer->WriteValue(TEXT("hasVerifiedTypedHIR"),
+			Diagnostics.bHasVerifiedTypedHIR);
+		Writer->WriteObjectEnd();
+		Writer->WriteValue(TEXT("taskError"), Diagnostics.TaskError);
+		Writer->WriteArrayStart(TEXT("functions"));
+		for (const FAngelscriptJITProviderCatalogFunctionDiagnostic& Function
+			: Diagnostics.Functions)
+		{
+			Writer->WriteObjectStart();
+			Writer->WriteValue(TEXT("functionKey"),
+				Function.FunctionKey.Hash.ToHexString());
+			Writer->WriteValue(TEXT("actualBackend"),
+				Function.ActualBackendId);
+			Writer->WriteValue(TEXT("disposition"), Function.Disposition);
+			Writer->WriteValue(TEXT("detail"), Function.Detail);
+			Writer->WriteArrayStart(TEXT("backendAttempts"));
+			for (uint32 Offset = 0; Offset < Function.BackendAttemptCount;
+				++Offset)
+			{
+				const int32 AttemptIndex = static_cast<int32>(
+					Function.BackendAttemptStart + Offset);
+				if (!Diagnostics.BackendAttempts.IsValidIndex(AttemptIndex))
+				{
+					break;
+				}
+				const FAngelscriptJITProviderCatalogBackendAttemptDiagnostic&
+					Attempt = Diagnostics.BackendAttempts[AttemptIndex];
+				Writer->WriteObjectStart();
+				Writer->WriteValue(TEXT("backend"), Attempt.BackendId);
+				Writer->WriteValue(TEXT("disposition"), Attempt.Disposition);
+				Writer->WriteValue(TEXT("detail"), Attempt.Detail);
+				if (EnumHasAnyFlags(Attempt.Flags,
+					EAngelscriptJITProviderDiagnosticAttemptFlags::
+						HasTypedDiagnostic))
+				{
+					Writer->WriteObjectStart(TEXT("typedDiagnostic"));
+					Writer->WriteValue(TEXT("fallbackReason"),
+						Attempt.FallbackReason);
+					Writer->WriteValue(TEXT("detail"), Attempt.TypedDetail);
+					WriteProviderDiagnosticSource(Writer,
+						TEXT("processedSource"), Attempt.ProcessedSource);
+					if (EnumHasAnyFlags(Attempt.Flags,
+						EAngelscriptJITProviderDiagnosticAttemptFlags::
+							HasSemanticFunction)
+						&& Diagnostics.SemanticFunctions.IsValidIndex(
+							Attempt.PrimarySemanticFunctionIndex))
+					{
+						WriteProviderSemanticDiagnostic(Writer,
+							Diagnostics.SemanticFunctions[
+								Attempt.PrimarySemanticFunctionIndex],
+							TEXT("semanticFunction"));
+					}
+					if (EnumHasAnyFlags(Attempt.Flags,
+						EAngelscriptJITProviderDiagnosticAttemptFlags::
+							HasCallClosure))
+					{
+						Writer->WriteObjectStart(TEXT("callClosure"));
+						Writer->WriteValue(TEXT("eligible"),
+							Attempt.Disposition == TEXT("Emitted"));
+						Writer->WriteValue(TEXT("requiredCapabilities"),
+							ExecutionCapabilityNames(
+								Attempt.RequiredCapabilities));
+						Writer->WriteValue(TEXT("availableCapabilities"),
+							ExecutionCapabilityNames(
+								Attempt.AvailableCapabilities));
+						Writer->WriteValue(
+							TEXT("executionRequirementsIdentity"),
+							Attempt.ExecutionRequirementsIdentity.ToHexString());
+						Writer->WriteValue(
+							TEXT("availableCapabilityProfileIdentity"),
+							Attempt.AvailableCapabilityProfileIdentity
+								.ToHexString());
+						Writer->WriteValue(TEXT("profileKind"),
+							Attempt.ProfileKind);
+						Writer->WriteValue(TEXT("exceptionControlState"),
+							Attempt.ExceptionControlState);
+						Writer->WriteValue(TEXT("exceptionPayloadState"),
+							Attempt.ExceptionPayloadState);
+						Writer->WriteValue(TEXT("recursionGuardAvailable"),
+							Attempt.bRecursionGuardAvailable);
+						Writer->WriteArrayStart(TEXT("functions"));
+						for (uint32 SemanticOffset = 0;
+							SemanticOffset < Attempt.SemanticFunctionCount;
+							++SemanticOffset)
+						{
+							const int32 SemanticIndex = static_cast<int32>(
+								Attempt.SemanticFunctionStart + SemanticOffset);
+							if (!Diagnostics.SemanticFunctions.IsValidIndex(
+								SemanticIndex))
+							{
+								break;
+							}
+							WriteProviderSemanticDiagnostic(Writer,
+								Diagnostics.SemanticFunctions[SemanticIndex]);
+						}
+						Writer->WriteArrayEnd();
+						Writer->WriteArrayStart(TEXT("calls"));
+						for (uint32 CallOffset = 0;
+							CallOffset < Attempt.CallCount; ++CallOffset)
+						{
+							const int32 CallIndex = static_cast<int32>(
+								Attempt.CallStart + CallOffset);
+							if (!Diagnostics.Calls.IsValidIndex(CallIndex))
+							{
+								break;
+							}
+							WriteProviderCallDiagnostic(Writer,
+								Diagnostics.Calls[CallIndex]);
+						}
+						Writer->WriteArrayEnd();
+						Writer->WriteObjectEnd();
+					}
+					Writer->WriteObjectEnd();
+				}
+				Writer->WriteObjectEnd();
+			}
+			Writer->WriteArrayEnd();
+			Writer->WriteObjectEnd();
+		}
+		Writer->WriteArrayEnd();
 		Writer->WriteObjectEnd();
 	}
 
@@ -404,6 +1352,111 @@ namespace
 			FString::Printf(TEXT("%llu"), Snapshot.RouteGeneration));
 		Writer->WriteValue(TEXT("vmRouteCount"), Snapshot.VmRouteCount);
 		Writer->WriteValue(TEXT("nativeRouteCount"), Snapshot.NativeRouteCount);
+		if (Snapshot.PrePublicationFailure.IsSet())
+		{
+			const FStaticJITDiagnostics::FPrePublicationFailureRecord& Failure =
+				Snapshot.PrePublicationFailure.GetValue();
+			Writer->WriteObjectStart(TEXT("prePublicationFailure"));
+			Writer->WriteValue(TEXT("category"),
+				PrePublicationFailureCategoryName(Failure.Category));
+			Writer->WriteValue(TEXT("affectedBoundary"),
+				PrePublicationBoundaryName(Failure.AffectedBoundary));
+			Writer->WriteValue(TEXT("detail"), Failure.Detail);
+			Writer->WriteValue(TEXT("generationEngineCreated"),
+				Failure.bGenerationEngineCreated);
+			Writer->WriteValue(TEXT("providerPackagingStarted"),
+				Failure.bProviderPackagingStarted);
+			Writer->WriteValue(TEXT("providerPublished"),
+				Failure.bProviderPublished);
+			Writer->WriteObjectEnd();
+		}
+		if (Snapshot.ArtifactRequest.IsSet())
+		{
+			const FStaticJITDiagnostics::FArtifactRequestRecord& Request =
+				Snapshot.ArtifactRequest.GetValue();
+			Writer->WriteObjectStart(TEXT("artifactRequest"));
+			Writer->WriteValue(TEXT("requestKind"),
+				ArtifactRequestKindName(Request.RequestKind));
+			Writer->WriteValue(TEXT("requestedBackend"),
+				Request.RequestedBackendId);
+			Writer->WriteValue(TEXT("captureState"),
+				ArtifactCaptureStateName(Request.CaptureState));
+			Writer->WriteValue(TEXT("hirCaptureEnabled"),
+				Request.bHIRCaptureEnabled);
+			Writer->WriteArrayStart(TEXT("fallbackChain"));
+			for (const FString& BackendId : Request.FallbackChain)
+			{
+				Writer->WriteValue(BackendId);
+			}
+			Writer->WriteArrayEnd();
+			Writer->WriteObjectStart(TEXT("compiledSourceGraph"));
+			Writer->WriteValue(TEXT("sourceCompilePassCount"),
+				Request.CompiledSourceGraph.SourceCompilePassCount);
+			Writer->WriteValue(TEXT("moduleCount"),
+				Request.CompiledSourceGraph.ModuleCount);
+			Writer->WriteValue(TEXT("functionCount"),
+				Request.CompiledSourceGraph.FunctionCount);
+			Writer->WriteValue(TEXT("typeCount"),
+				Request.CompiledSourceGraph.TypeCount);
+			Writer->WriteValue(TEXT("globalCount"),
+				Request.CompiledSourceGraph.GlobalCount);
+			Writer->WriteValue(TEXT("descriptorCount"),
+				Request.CompiledSourceGraph.DescriptorCount);
+			Writer->WriteValue(TEXT("dependencyCount"),
+				Request.CompiledSourceGraph.DependencyCount);
+			Writer->WriteValue(TEXT("externalNativeCallCount"),
+				Request.CompiledSourceGraph.ExternalNativeCallCount);
+			Writer->WriteValue(TEXT("emitModuleCount"),
+				Request.CompiledSourceGraph.EmitModuleCount);
+			Writer->WriteValue(TEXT("hasVerifiedTypedHIR"),
+				Request.CompiledSourceGraph.bHasVerifiedTypedHIR);
+			Writer->WriteObjectEnd();
+			Writer->WriteValue(TEXT("taskError"), Request.TaskError);
+			Writer->WriteArrayStart(TEXT("functions"));
+			for (const FStaticJITDiagnostics::FArtifactFunctionRecord& Function
+				: Request.Functions)
+			{
+				Writer->WriteObjectStart();
+				Writer->WriteValue(TEXT("functionKey"),
+					Function.FunctionKey.Hash.ToHexString());
+				Writer->WriteValue(TEXT("actualBackend"),
+					Function.ActualBackendId);
+				Writer->WriteValue(TEXT("disposition"),
+					ArtifactFunctionDispositionName(Function.Disposition));
+				Writer->WriteValue(TEXT("detail"), Function.Detail);
+				Writer->WriteValue(TEXT("hasVMEntry"),
+					Function.bHasVMEntry);
+				Writer->WriteValue(TEXT("hasRawEntry"),
+					Function.bHasRawEntry);
+				Writer->WriteValue(TEXT("hasParmsEntry"),
+					Function.bHasParmsEntry);
+				if (Function.TypedDiagnostic.IsSet())
+				{
+					WriteTypedFunctionDiagnostic(Writer,
+						Function.TypedDiagnostic.GetValue());
+				}
+				Writer->WriteArrayStart(TEXT("backendAttempts"));
+				for (const FStaticJITDiagnostics::FArtifactBackendAttemptRecord& Attempt
+					: Function.BackendAttempts)
+				{
+					Writer->WriteObjectStart();
+					Writer->WriteValue(TEXT("backend"), Attempt.BackendId);
+					Writer->WriteValue(TEXT("disposition"),
+						ArtifactFunctionDispositionName(Attempt.Disposition));
+					Writer->WriteValue(TEXT("detail"), Attempt.Detail);
+					if (Attempt.TypedDiagnostic.IsSet())
+					{
+						WriteTypedFunctionDiagnostic(Writer,
+							Attempt.TypedDiagnostic.GetValue());
+					}
+					Writer->WriteObjectEnd();
+				}
+				Writer->WriteArrayEnd();
+				Writer->WriteObjectEnd();
+			}
+			Writer->WriteArrayEnd();
+			Writer->WriteObjectEnd();
+		}
 		Writer->WriteObjectStart(TEXT("matchResultCounts"));
 		for (uint8 MatchIndex = 0;
 			MatchIndex <= static_cast<uint8>(
@@ -445,6 +1498,11 @@ namespace
 				Provider.RejectedEntryCount);
 			Writer->WriteValue(TEXT("conflictingEntryCount"),
 				Provider.ConflictingEntryCount);
+			if (Provider.GenerationDiagnostics.IsSet())
+			{
+				WriteProviderGenerationDiagnostics(Writer,
+					Provider.GenerationDiagnostics.GetValue());
+			}
 			Writer->WriteArrayStart(TEXT("modules"));
 			for (const FStaticJITDiagnostics::FProviderModuleRecord& Module
 				: Provider.Modules)
@@ -495,6 +1553,13 @@ namespace
 					: Entry.References)
 				{
 					WriteReference(Writer, Reference);
+				}
+				Writer->WriteArrayEnd();
+				Writer->WriteArrayStart(TEXT("nativeCallSites"));
+				for (const FStaticJITDiagnostics::FNativeCallSiteRecord& CallSite
+					: Entry.NativeCallSites)
+				{
+					WriteNativeCallSite(Writer, CallSite);
 				}
 				Writer->WriteArrayEnd();
 				Writer->WriteObjectEnd();
@@ -578,11 +1643,646 @@ bool FStaticJITDiagnostics::HasJitFunction(asCScriptFunction* Function)
 	return Function != nullptr && Function->GetJITBinding().VMEntry != nullptr;
 }
 
+#if AS_CAN_GENERATE_JIT
+FStaticJITDiagnostics::FArtifactRequestRecord
+FStaticJITDiagnostics::BuildArtifactRequestRecord(
+	const FAngelscriptStaticJITGeneratorOutput& GeneratorOutput)
+{
+	const auto ConvertDisposition = [](
+		const EAngelscriptStaticJITFunctionDisposition Disposition)
+	{
+		switch (Disposition)
+		{
+		case EAngelscriptStaticJITFunctionDisposition::Emitted:
+			return EArtifactFunctionDisposition::Emitted;
+		case EAngelscriptStaticJITFunctionDisposition::Failed:
+			return EArtifactFunctionDisposition::Failed;
+		case EAngelscriptStaticJITFunctionDisposition::Unsupported:
+		default:
+			return EArtifactFunctionDisposition::Unsupported;
+		}
+	};
+	const auto TypedHIRStateName = [](
+		const EAngelscriptStaticJITTypedHIRState State)
+	{
+		switch (State)
+		{
+		case EAngelscriptStaticJITTypedHIRState::Verified:
+			return TEXT("Verified");
+		case EAngelscriptStaticJITTypedHIRState::Invalid:
+			return TEXT("Invalid");
+		case EAngelscriptStaticJITTypedHIRState::Missing:
+		default:
+			return TEXT("Missing");
+		}
+	};
+	const auto TypedFunctionRoleName = [](
+		const EAngelscriptStaticJITTypedClosureFunctionRole Role)
+	{
+		switch (Role)
+		{
+		case EAngelscriptStaticJITTypedClosureFunctionRole::UFunctionRoot:
+			return TEXT("UFunctionRoot");
+		case EAngelscriptStaticJITTypedClosureFunctionRole::DirectScript:
+			return TEXT("DirectScript");
+		case EAngelscriptStaticJITTypedClosureFunctionRole::
+			InternalSemanticHelper:
+			return TEXT("InternalSemanticHelper");
+		case EAngelscriptStaticJITTypedClosureFunctionRole::Bridge:
+			return TEXT("Bridge");
+		case EAngelscriptStaticJITTypedClosureFunctionRole::Unsupported:
+			return TEXT("Unsupported");
+		case EAngelscriptStaticJITTypedClosureFunctionRole::NonRoot:
+		default:
+			return TEXT("NonRoot");
+		}
+	};
+	const auto InvocationKindName = [](
+		const asETypedSemanticInvocationKind Kind)
+	{
+		switch (Kind)
+		{
+		case asETypedSemanticInvocationKind::GlobalInitializer:
+			return TEXT("GlobalInitializer");
+		case asETypedSemanticInvocationKind::InstanceMethod:
+			return TEXT("InstanceMethod");
+		case asETypedSemanticInvocationKind::Constructor:
+			return TEXT("Constructor");
+		case asETypedSemanticInvocationKind::Destructor:
+			return TEXT("Destructor");
+		case asETypedSemanticInvocationKind::Factory:
+			return TEXT("Factory");
+		case asETypedSemanticInvocationKind::Imported:
+			return TEXT("Imported");
+		case asETypedSemanticInvocationKind::System:
+			return TEXT("System");
+		case asETypedSemanticInvocationKind::Funcdef:
+			return TEXT("Funcdef");
+		case asETypedSemanticInvocationKind::Synthesized:
+			return TEXT("Synthesized");
+		case asETypedSemanticInvocationKind::Global:
+		default:
+			return TEXT("Global");
+		}
+	};
+	const auto ReceiverKindName = [](
+		const asETypedSemanticReceiverKind Kind)
+	{
+		switch (Kind)
+		{
+		case asETypedSemanticReceiverKind::NativeObjectThis:
+			return TEXT("NativeObjectThis");
+		case asETypedSemanticReceiverKind::ExternalImplicitThis:
+			return TEXT("ExternalImplicitThis");
+		case asETypedSemanticReceiverKind::MixinFirstParameter:
+			return TEXT("MixinFirstParameter");
+		case asETypedSemanticReceiverKind::None:
+		default:
+			return TEXT("None");
+		}
+	};
+	const auto CleanupPlanStateName = [](
+		const asETypedSemanticCleanupPlanState State)
+	{
+		switch (State)
+		{
+		case asETypedSemanticCleanupPlanState::VerifiedEmpty:
+			return TEXT("VerifiedEmpty");
+		case asETypedSemanticCleanupPlanState::NonEmpty:
+			return TEXT("NonEmpty");
+		case asETypedSemanticCleanupPlanState::PartialConstruction:
+			return TEXT("PartialConstruction");
+		case asETypedSemanticCleanupPlanState::ScriptDestructor:
+			return TEXT("ScriptDestructor");
+		case asETypedSemanticCleanupPlanState::CompilerExceptionRegion:
+			return TEXT("CompilerExceptionRegion");
+		case asETypedSemanticCleanupPlanState::Unverified:
+		default:
+			return TEXT("Unverified");
+		}
+	};
+	const auto ProfileKindName = [](
+		const EAngelscriptStaticJITTypedExecutionProfileKind Kind)
+	{
+		switch (Kind)
+		{
+		case EAngelscriptStaticJITTypedExecutionProfileKind::PositionOnly:
+			return TEXT("PositionOnly");
+		case EAngelscriptStaticJITTypedExecutionProfileKind::Instrumented:
+			return TEXT("Instrumented");
+		case EAngelscriptStaticJITTypedExecutionProfileKind::Unavailable:
+		default:
+			return TEXT("Unavailable");
+		}
+	};
+	const auto ExceptionControlStateName = [](
+		const EAngelscriptStaticJITExceptionControlState State)
+	{
+		switch (State)
+		{
+		case EAngelscriptStaticJITExceptionControlState::NotRequired:
+			return TEXT("NotRequired");
+		case EAngelscriptStaticJITExceptionControlState::
+			DirectExecutionState:
+			return TEXT("DirectExecutionState");
+		case EAngelscriptStaticJITExceptionControlState::Unavailable:
+		default:
+			return TEXT("Unavailable");
+		}
+	};
+	const auto ExceptionPayloadStateName = [](
+		const EAngelscriptStaticJITExceptionPayloadState State)
+	{
+		switch (State)
+		{
+		case EAngelscriptStaticJITExceptionPayloadState::NotRequired:
+			return TEXT("NotRequired");
+		case EAngelscriptStaticJITExceptionPayloadState::DirectFailureRecord:
+			return TEXT("DirectFailureRecord");
+		case EAngelscriptStaticJITExceptionPayloadState::NestedBridgeAdoption:
+			return TEXT("NestedBridgeAdoption");
+		case EAngelscriptStaticJITExceptionPayloadState::Unavailable:
+		default:
+			return TEXT("Unavailable");
+		}
+	};
+	const auto ConvertProcessedSource = [](
+		const FAngelscriptStaticJITProcessedSource& Source)
+	{
+		FProcessedSourceRecord Record;
+		Record.Section = Source.Section;
+		Record.Row = Source.Row;
+		Record.Column = Source.Column;
+		return Record;
+	};
+	const auto ConvertSemanticFunction = [&]
+		(const FAngelscriptStaticJITTypedSemanticFunctionDiagnostic& Source)
+	{
+		FTypedSemanticFunctionDiagnosticRecord Record;
+		Record.FunctionKey = Source.FunctionKey;
+		Record.Role = TypedFunctionRoleName(Source.Role);
+		Record.RawTraitBits = Source.RawTraitBits;
+		Record.UnknownTraitBits = Source.UnknownTraitBits;
+		Record.InvocationKind = InvocationKindName(Source.InvocationKind);
+		Record.ReceiverKind = ReceiverKindName(Source.ReceiverKind);
+		Record.ReceiverParameterIndex = Source.ReceiverParameterIndex;
+		Record.HIRState = TypedHIRStateName(Source.HIRState);
+		Record.CleanupPlanState = CleanupPlanStateName(
+			Source.CleanupPlanState);
+		Record.bHasSuspendState = Source.bHasSuspendState;
+		Record.bHasExceptionCleanup = Source.bHasExceptionCleanup;
+		Record.bCleanupPlanCoversAllTransfers =
+			Source.bCleanupPlanCoversAllTransfers;
+		Record.ComponentIndex = Source.ComponentIndex;
+		Record.bRecursiveComponent = Source.bRecursiveComponent;
+		Record.EligibilityReason = LexToString(Source.EligibilityReason);
+		Record.EligibilityDetail = Source.EligibilityDetail;
+		Record.EligibilitySource = ConvertProcessedSource(
+			Source.EligibilitySource);
+		return Record;
+	};
+	const auto ConvertTypedCall = [&]
+		(const FAngelscriptStaticJITTypedCallDiagnostic& Source)
+	{
+		FTypedCallDiagnosticRecord Record;
+		Record.CallerFunctionKey = Source.CallerFunctionKey;
+		Record.CalleeFunctionKey = Source.CalleeFunctionKey;
+		Record.ExpressionIndex = Source.ExpressionIndex;
+		Record.ProcessedSource = ConvertProcessedSource(Source.ProcessedSource);
+		if (Source.AuthoredSource.IsSet())
+		{
+			Record.AuthoredSource = ConvertProcessedSource(
+				Source.AuthoredSource.GetValue());
+		}
+		if (Source.GeneratedSource.IsSet())
+		{
+			Record.GeneratedSource = ConvertProcessedSource(
+				Source.GeneratedSource.GetValue());
+		}
+		Record.TargetKind = TypedCallTargetKindName(Source.TargetKind);
+		Record.Disposition = TypedCallDispositionName(Source.Disposition);
+		Record.CalleeEligibilityReason = LexToString(
+			Source.CalleeEligibilityReason);
+		Record.CalleeEligibilityDetail = Source.CalleeEligibilityDetail;
+		Record.CalleeEligibilitySource = ConvertProcessedSource(
+			Source.CalleeEligibilitySource);
+		Record.NativeLinkageValidation = Source.bHasNativeLinkageValidation
+			? NativeCallValidationName(Source.NativeLinkageValidation)
+			: TEXT("NotApplicable");
+		Record.NativeLinkageValidationDetail =
+			Source.NativeLinkageValidationDetail;
+		Record.CanonicalDeclaration = Source.CanonicalDeclaration;
+		Record.EmittedRoute = NativeCallSiteRouteName(Source.EmittedRoute);
+		Record.EmittedCppCallee = Source.EmittedCppCallee;
+		Record.RuntimeDllCore = Source.RuntimeDllCore;
+		Record.MetadataRowSymbol = Source.MetadataRowSymbol;
+		Record.RegisteredTarget = Source.RegisteredTarget;
+		Record.DirectCppSymbol = Source.DirectCppSymbol;
+		Record.StableTargetKey = Source.StableTargetKey;
+		Record.ExpectedAbi = Source.ExpectedAbi;
+		Record.ReferenceSlotIndex = Source.ReferenceSlotIndex;
+		return Record;
+	};
+	const auto ConvertCallClosure = [&]
+		(const FAngelscriptStaticJITTypedCallClosureDiagnostic& Source)
+	{
+		FTypedCallClosureDiagnosticRecord Record;
+		Record.bEligible = Source.bEligible;
+		Record.RequiredCapabilities = LexToString(
+			Source.RequiredCapabilities);
+		Record.AvailableCapabilities = LexToString(
+			Source.AvailableCapabilities);
+		Record.ExecutionRequirementsIdentity =
+			Source.ExecutionRequirementsIdentityHash.ToHexString();
+		Record.AvailableCapabilityProfileIdentity =
+			Source.AvailableCapabilityProfileIdentityHash.ToHexString();
+		Record.ProfileKind = ProfileKindName(Source.ProfileKind);
+		Record.ExceptionControlState = ExceptionControlStateName(
+			Source.ExceptionControlState);
+		Record.ExceptionPayloadState = ExceptionPayloadStateName(
+			Source.ExceptionPayloadState);
+		Record.bRecursionGuardAvailable =
+			Source.bRecursionGuardAvailable;
+		Record.Functions.Reserve(Source.Functions.Num());
+		for (const FAngelscriptStaticJITTypedSemanticFunctionDiagnostic&
+			Function : Source.Functions)
+		{
+			Record.Functions.Add(ConvertSemanticFunction(Function));
+		}
+		Record.Functions.Sort([](const auto& Left, const auto& Right)
+		{
+			return Left.FunctionKey.Hash.ToHexString()
+				< Right.FunctionKey.Hash.ToHexString();
+		});
+		Record.Calls.Reserve(Source.Calls.Num());
+		for (const FAngelscriptStaticJITTypedCallDiagnostic& Call
+			: Source.Calls)
+		{
+			Record.Calls.Add(ConvertTypedCall(Call));
+		}
+		Record.Calls.Sort([](const auto& Left, const auto& Right)
+		{
+			if (Left.CallerFunctionKey.Hash != Right.CallerFunctionKey.Hash)
+			{
+				return Left.CallerFunctionKey.Hash
+					< Right.CallerFunctionKey.Hash;
+			}
+			if (Left.ExpressionIndex != Right.ExpressionIndex)
+			{
+				return Left.ExpressionIndex < Right.ExpressionIndex;
+			}
+			return Left.CalleeFunctionKey.Hash
+				< Right.CalleeFunctionKey.Hash;
+		});
+		return Record;
+	};
+	const auto ConvertTypedDiagnostic = [&](
+		const FAngelscriptStaticJITTypedFunctionDiagnostic& Source)
+	{
+		FTypedFunctionDiagnosticRecord Record;
+		Record.FallbackReason = LexToString(Source.FallbackReason);
+		Record.Detail = Source.Detail;
+		Record.ProcessedSource = ConvertProcessedSource(
+			Source.ProcessedSource);
+		if (Source.SemanticFunction.IsSet())
+		{
+			Record.SemanticFunction = ConvertSemanticFunction(
+				Source.SemanticFunction.GetValue());
+		}
+		if (Source.CallClosure.IsSet())
+		{
+			Record.CallClosure = ConvertCallClosure(
+				Source.CallClosure.GetValue());
+		}
+		return Record;
+	};
+
+	FArtifactRequestRecord Record;
+	Record.RequestedBackendId =
+		GeneratorOutput.Diagnostics.RequestedBackendId.ToString();
+	Record.CaptureState = GeneratorOutput.Diagnostics.CaptureProfile
+		== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR
+		? EArtifactCaptureState::VerifiedTypedHIR
+		: EArtifactCaptureState::Bytecode;
+	Record.bHIRCaptureEnabled = Record.CaptureState
+		== EArtifactCaptureState::VerifiedTypedHIR;
+	Record.FallbackChain.Reserve(
+		GeneratorOutput.Diagnostics.FallbackChain.Num());
+	for (const FAngelscriptStaticJITBackendId& BackendId
+		: GeneratorOutput.Diagnostics.FallbackChain)
+	{
+		Record.FallbackChain.Add(BackendId.ToString());
+	}
+	Record.CompiledSourceGraph.SourceCompilePassCount =
+		GeneratorOutput.Diagnostics.CompiledSourceGraph.SourceCompilePassCount;
+	Record.CompiledSourceGraph.ModuleCount =
+		GeneratorOutput.Diagnostics.CompiledSourceGraph.ModuleCount;
+	Record.CompiledSourceGraph.FunctionCount =
+		GeneratorOutput.Diagnostics.CompiledSourceGraph.FunctionCount;
+	Record.CompiledSourceGraph.TypeCount =
+		GeneratorOutput.Diagnostics.CompiledSourceGraph.TypeCount;
+	Record.CompiledSourceGraph.GlobalCount =
+		GeneratorOutput.Diagnostics.CompiledSourceGraph.GlobalCount;
+	Record.CompiledSourceGraph.DescriptorCount =
+		GeneratorOutput.Diagnostics.CompiledSourceGraph.DescriptorCount;
+	Record.CompiledSourceGraph.DependencyCount =
+		GeneratorOutput.Diagnostics.CompiledSourceGraph.DependencyCount;
+	Record.CompiledSourceGraph.ExternalNativeCallCount =
+		GeneratorOutput.Diagnostics.CompiledSourceGraph.ExternalNativeCallCount;
+	Record.CompiledSourceGraph.EmitModuleCount =
+		GeneratorOutput.Diagnostics.CompiledSourceGraph.EmitModuleCount;
+	Record.CompiledSourceGraph.bHasVerifiedTypedHIR =
+		GeneratorOutput.Diagnostics.CompiledSourceGraph.bHasVerifiedTypedHIR;
+	Record.TaskError = GeneratorOutput.Diagnostics.TaskError;
+	Record.Functions.Reserve(GeneratorOutput.Functions.Num());
+	for (const FAngelscriptStaticJITFunctionResult& Function
+		: GeneratorOutput.Functions)
+	{
+		FArtifactFunctionRecord& FunctionRecord =
+			Record.Functions.AddDefaulted_GetRef();
+		FunctionRecord.FunctionKey = Function.FunctionKey;
+		FunctionRecord.ActualBackendId = Function.ActualBackendId.ToString();
+		FunctionRecord.Disposition = ConvertDisposition(Function.Disposition);
+		FunctionRecord.Detail = Function.Detail;
+		if (Function.TypedDiagnostic.IsSet())
+		{
+			FunctionRecord.TypedDiagnostic = ConvertTypedDiagnostic(
+				Function.TypedDiagnostic.GetValue());
+		}
+		if (Function.EmittedFunction.IsSet())
+		{
+			FunctionRecord.bHasVMEntry =
+				Function.EmittedFunction->bHasVMEntry;
+			FunctionRecord.bHasRawEntry =
+				Function.EmittedFunction->bHasRawEntry;
+			FunctionRecord.bHasParmsEntry =
+				Function.EmittedFunction->bHasParmsEntry;
+		}
+		FunctionRecord.BackendAttempts.Reserve(
+			Function.BackendAttempts.Num());
+		for (const FAngelscriptStaticJITBackendAttemptDiagnostic& Attempt
+			: Function.BackendAttempts)
+		{
+			FArtifactBackendAttemptRecord& AttemptRecord =
+				FunctionRecord.BackendAttempts.AddDefaulted_GetRef();
+			AttemptRecord.BackendId = Attempt.BackendId.ToString();
+			AttemptRecord.Disposition =
+				ConvertDisposition(Attempt.Disposition);
+			AttemptRecord.Detail = Attempt.Detail;
+			if (Attempt.TypedDiagnostic.IsSet())
+			{
+				AttemptRecord.TypedDiagnostic = ConvertTypedDiagnostic(
+					Attempt.TypedDiagnostic.GetValue());
+			}
+		}
+	}
+	return Record;
+}
+
+FAngelscriptJITGenerationDiagnostics
+BuildAngelscriptStaticJITGenerationDiagnostics(
+	const FAngelscriptStaticJITGeneratorOutput& GeneratorOutput,
+	const TConstArrayView<FAngelscriptStableFunctionKey> EmittedFunctionKeys)
+{
+	const FStaticJITDiagnostics::FArtifactRequestRecord Record =
+		FStaticJITDiagnostics::BuildArtifactRequestRecord(GeneratorOutput);
+	FAngelscriptJITGenerationDiagnostics Result;
+	Result.RequestKind = TEXT("StaticJITArtifact");
+	Result.RequestedBackendId = Record.RequestedBackendId;
+	Result.CaptureState = Record.CaptureState
+		== FStaticJITDiagnostics::EArtifactCaptureState::VerifiedTypedHIR
+		? TEXT("VerifiedTypedHIR") : TEXT("Bytecode");
+	Result.FallbackChain = Record.FallbackChain;
+	Result.SourceCompilePassCount =
+		Record.CompiledSourceGraph.SourceCompilePassCount;
+	Result.CompiledModuleCount = Record.CompiledSourceGraph.ModuleCount;
+	Result.CompiledFunctionCount = Record.CompiledSourceGraph.FunctionCount;
+	Result.CompiledTypeCount = Record.CompiledSourceGraph.TypeCount;
+	Result.CompiledGlobalCount = Record.CompiledSourceGraph.GlobalCount;
+	Result.CompiledDescriptorCount = Record.CompiledSourceGraph.DescriptorCount;
+	Result.CompiledDependencyCount = Record.CompiledSourceGraph.DependencyCount;
+	Result.CompiledExternalNativeCallCount =
+		Record.CompiledSourceGraph.ExternalNativeCallCount;
+	Result.EmitModuleCount = Record.CompiledSourceGraph.EmitModuleCount;
+	Result.bHasVerifiedTypedHIR =
+		Record.CompiledSourceGraph.bHasVerifiedTypedHIR;
+	Result.TaskError = Record.TaskError;
+
+	const auto CopySource = [](
+		const FStaticJITDiagnostics::FProcessedSourceRecord& Source)
+	{
+		FAngelscriptJITGenerationDiagnosticSource Copy;
+		Copy.Section = Source.Section;
+		Copy.Row = Source.Row;
+		Copy.Column = Source.Column;
+		return Copy;
+	};
+	const auto CopySemantic = [&](const auto& Source)
+	{
+		FAngelscriptJITGenerationTypedSemanticFunctionDiagnostic Copy;
+		Copy.FunctionKey = Source.FunctionKey;
+		Copy.Role = Source.Role;
+		Copy.RawTraitBits = Source.RawTraitBits;
+		Copy.UnknownTraitBits = Source.UnknownTraitBits;
+		Copy.InvocationKind = Source.InvocationKind;
+		Copy.ReceiverKind = Source.ReceiverKind;
+		Copy.ReceiverParameterIndex = Source.ReceiverParameterIndex;
+		Copy.HIRState = Source.HIRState;
+		Copy.CleanupPlanState = Source.CleanupPlanState;
+		Copy.bHasSuspendState = Source.bHasSuspendState;
+		Copy.bHasExceptionCleanup = Source.bHasExceptionCleanup;
+		Copy.bCleanupPlanCoversAllTransfers =
+			Source.bCleanupPlanCoversAllTransfers;
+		Copy.ComponentIndex = Source.ComponentIndex;
+		Copy.bRecursiveComponent = Source.bRecursiveComponent;
+		Copy.EligibilityReason = Source.EligibilityReason;
+		Copy.EligibilityDetail = Source.EligibilityDetail;
+		Copy.EligibilitySource = CopySource(Source.EligibilitySource);
+		return Copy;
+	};
+
+	TArray<FAngelscriptStableFunctionKey> SortedKeys(EmittedFunctionKeys);
+	SortedKeys.Sort([](const auto& Left, const auto& Right)
+	{
+		return Left.Hash < Right.Hash;
+	});
+	for (const FAngelscriptStableFunctionKey& FunctionKey : SortedKeys)
+	{
+		const FStaticJITDiagnostics::FArtifactFunctionRecord* const Source =
+			Record.Functions.FindByPredicate([&](const auto& Candidate)
+			{
+				return Candidate.FunctionKey == FunctionKey;
+			});
+		const FAngelscriptStaticJITFunctionResult* const RawSource =
+			GeneratorOutput.Functions.FindByPredicate([&](const auto& Candidate)
+			{
+				return Candidate.FunctionKey == FunctionKey;
+			});
+		if (Source == nullptr || RawSource == nullptr)
+		{
+			continue;
+		}
+
+		FAngelscriptJITGenerationFunctionDiagnostic& Function =
+			Result.Functions.AddDefaulted_GetRef();
+		Function.FunctionKey = FunctionKey;
+		Function.ActualBackendId = Source->ActualBackendId;
+		Function.Disposition = ArtifactFunctionDispositionName(
+			Source->Disposition);
+		Function.Detail = Source->Detail;
+		for (int32 AttemptIndex = 0;
+			AttemptIndex < Source->BackendAttempts.Num(); ++AttemptIndex)
+		{
+			const FStaticJITDiagnostics::FArtifactBackendAttemptRecord&
+				SourceAttempt = Source->BackendAttempts[AttemptIndex];
+			if (!RawSource->BackendAttempts.IsValidIndex(AttemptIndex))
+			{
+				continue;
+			}
+			const FAngelscriptStaticJITBackendAttemptDiagnostic& RawAttempt =
+				RawSource->BackendAttempts[AttemptIndex];
+			FAngelscriptJITGenerationBackendAttemptDiagnostic& Attempt =
+				Function.BackendAttempts.AddDefaulted_GetRef();
+			Attempt.BackendId = SourceAttempt.BackendId;
+			Attempt.Disposition = ArtifactFunctionDispositionName(
+				SourceAttempt.Disposition);
+			Attempt.Detail = SourceAttempt.Detail;
+			if (!SourceAttempt.TypedDiagnostic.IsSet()
+				|| !RawAttempt.TypedDiagnostic.IsSet())
+			{
+				Attempt.FallbackReason = TEXT("");
+				Attempt.TypedDetail = TEXT("");
+				Attempt.ProfileKind = TEXT("Unavailable");
+				Attempt.ExceptionControlState = TEXT("Unavailable");
+				Attempt.ExceptionPayloadState = TEXT("Unavailable");
+				continue;
+			}
+
+			Attempt.bHasTypedDiagnostic = true;
+			const FStaticJITDiagnostics::FTypedFunctionDiagnosticRecord&
+				Typed = SourceAttempt.TypedDiagnostic.GetValue();
+			const FAngelscriptStaticJITTypedFunctionDiagnostic& RawTyped =
+				RawAttempt.TypedDiagnostic.GetValue();
+			Attempt.FallbackReason = Typed.FallbackReason;
+			Attempt.TypedDetail = Typed.Detail;
+			Attempt.ProcessedSource = CopySource(Typed.ProcessedSource);
+			if (Typed.CallClosure.IsSet() && RawTyped.CallClosure.IsSet())
+			{
+				const FStaticJITDiagnostics::FTypedCallClosureDiagnosticRecord&
+					Closure = Typed.CallClosure.GetValue();
+				const FAngelscriptStaticJITTypedCallClosureDiagnostic& RawClosure =
+					RawTyped.CallClosure.GetValue();
+				Attempt.RequiredCapabilities =
+					static_cast<EAngelscriptJITExecutionCapability>(
+						static_cast<uint32>(RawClosure.RequiredCapabilities));
+				Attempt.AvailableCapabilities =
+					static_cast<EAngelscriptJITExecutionCapability>(
+						static_cast<uint32>(RawClosure.AvailableCapabilities));
+				Attempt.ExecutionRequirementsIdentity =
+					RawClosure.ExecutionRequirementsIdentityHash;
+				Attempt.AvailableCapabilityProfileIdentity =
+					RawClosure.AvailableCapabilityProfileIdentityHash;
+				Attempt.ProfileKind = Closure.ProfileKind;
+				Attempt.ExceptionControlState = Closure.ExceptionControlState;
+				Attempt.ExceptionPayloadState = Closure.ExceptionPayloadState;
+				Attempt.bRecursionGuardAvailable =
+					Closure.bRecursionGuardAvailable;
+				for (const auto& Semantic : Closure.Functions)
+				{
+					Attempt.SemanticFunctions.Add(CopySemantic(Semantic));
+				}
+				if (Typed.SemanticFunction.IsSet())
+				{
+					Attempt.PrimarySemanticFunctionIndex =
+						Attempt.SemanticFunctions.IndexOfByPredicate(
+							[&](const auto& Candidate)
+							{
+								return Candidate.FunctionKey
+									== Typed.SemanticFunction->FunctionKey;
+							});
+				}
+				for (const auto& Call : Closure.Calls)
+				{
+					const FAngelscriptStaticJITTypedCallDiagnostic* const RawCall =
+						RawClosure.Calls.FindByPredicate([&](const auto& Candidate)
+						{
+							return Candidate.CallerFunctionKey
+								== Call.CallerFunctionKey
+								&& Candidate.CalleeFunctionKey
+									== Call.CalleeFunctionKey
+								&& Candidate.ExpressionIndex
+									== Call.ExpressionIndex;
+						});
+					if (RawCall == nullptr)
+					{
+						continue;
+					}
+					FAngelscriptJITGenerationTypedCallDiagnostic& Copy =
+						Attempt.Calls.AddDefaulted_GetRef();
+					Copy.CallerFunctionKey = Call.CallerFunctionKey;
+					Copy.CalleeFunctionKey = Call.CalleeFunctionKey;
+					Copy.ExpressionIndex = Call.ExpressionIndex;
+					Copy.ProcessedSource = CopySource(Call.ProcessedSource);
+					if (Call.AuthoredSource.IsSet())
+					{
+						Copy.AuthoredSource =
+							CopySource(Call.AuthoredSource.GetValue());
+					}
+					if (Call.GeneratedSource.IsSet())
+					{
+						Copy.GeneratedSource =
+							CopySource(Call.GeneratedSource.GetValue());
+					}
+					Copy.TargetKind = Call.TargetKind;
+					Copy.Disposition = Call.Disposition;
+					Copy.CalleeEligibilityReason =
+						Call.CalleeEligibilityReason;
+					Copy.CalleeEligibilityDetail =
+						Call.CalleeEligibilityDetail;
+					Copy.CalleeEligibilitySource =
+						CopySource(Call.CalleeEligibilitySource);
+					Copy.bHasNativeLinkageValidation =
+						RawCall->bHasNativeLinkageValidation;
+					Copy.NativeLinkageValidation =
+						Call.NativeLinkageValidation;
+					Copy.NativeLinkageValidationDetail =
+						Call.NativeLinkageValidationDetail;
+					Copy.CanonicalDeclaration = Call.CanonicalDeclaration;
+					Copy.EmittedRoute = RawCall->EmittedRoute;
+					Copy.EmittedCppCallee = Call.EmittedCppCallee;
+					Copy.RuntimeDllCore = Call.RuntimeDllCore;
+					Copy.MetadataRowSymbol = Call.MetadataRowSymbol;
+					Copy.RegisteredTarget = Call.RegisteredTarget;
+					Copy.DirectCppSymbol = Call.DirectCppSymbol;
+					Copy.StableTargetKey = Call.StableTargetKey;
+					Copy.ExpectedAbi = Call.ExpectedAbi;
+					Copy.ReferenceSlotIndex = Call.ReferenceSlotIndex;
+				}
+			}
+			else
+			{
+				Attempt.ProfileKind = TEXT("Unavailable");
+				Attempt.ExceptionControlState = TEXT("Unavailable");
+				Attempt.ExceptionPayloadState = TEXT("Unavailable");
+				if (Typed.SemanticFunction.IsSet())
+				{
+					Attempt.SemanticFunctions.Add(
+						CopySemantic(Typed.SemanticFunction.GetValue()));
+					Attempt.PrimarySemanticFunctionIndex = 0;
+				}
+			}
+		}
+	}
+	return Result;
+}
+#endif
+
 FStaticJITDiagnostics::FSnapshot FStaticJITDiagnostics::CaptureSnapshot(FAngelscriptEngine* Engine)
 {
 	FAngelscriptEngine* CurrentEngine = Engine != nullptr ? Engine : FAngelscriptEngine::TryGetCurrentEngine();
 
 	FSnapshot Snapshot;
+	Snapshot.ArtifactRequest = FArtifactRequestRecord();
 	Snapshot.bHasCurrentEngine = CurrentEngine != nullptr;
 	Snapshot.bHasScriptEngine = CurrentEngine != nullptr && CurrentEngine->GetScriptEngine() != nullptr;
 
@@ -617,6 +2317,7 @@ FStaticJITDiagnostics::FSnapshot FStaticJITDiagnostics::CaptureSnapshot(FAngelsc
 				Catalog->NativeEnvironmentFingerprint;
 			Provider.ProviderName = Catalog->ProviderName;
 			Provider.OwnerModuleName = Catalog->OwnerModuleName;
+			Provider.GenerationDiagnostics = Catalog->Diagnostics;
 			Provider.Entries.Reserve(Catalog->Entries.Num());
 			for (const FAngelscriptJITProviderCatalogEntry& CatalogEntry
 				: Catalog->Entries)
@@ -657,6 +2358,30 @@ FStaticJITDiagnostics::FSnapshot FStaticJITDiagnostics::CaptureSnapshot(FAngelsc
 					Reference.SlotIndex = CatalogReference.SlotIndex;
 					Reference.Flags = CatalogReference.Flags;
 					Reference.Reference = CatalogReference.Reference;
+				}
+				Entry.NativeCallSites.Reserve(
+					CatalogEntry.NativeCallSites.Num());
+				for (const FAngelscriptJITProviderCatalogNativeCallSite&
+					CatalogCallSite : CatalogEntry.NativeCallSites)
+				{
+					FNativeCallSiteRecord& CallSite =
+						Entry.NativeCallSites.AddDefaulted_GetRef();
+					CallSite.CallSiteIndex = CatalogCallSite.CallSiteIndex;
+					CallSite.Route = CatalogCallSite.Route;
+					CallSite.CanonicalDeclaration =
+						CatalogCallSite.CanonicalDeclaration;
+					CallSite.EmittedCppCallee =
+						CatalogCallSite.EmittedCppCallee;
+					CallSite.RuntimeDllCore = CatalogCallSite.RuntimeDllCore;
+					CallSite.MetadataRowSymbol =
+						CatalogCallSite.MetadataRowSymbol;
+					CallSite.RegisteredTarget =
+						CatalogCallSite.RegisteredTarget;
+					CallSite.StableTargetKey =
+						CatalogCallSite.StableTargetKey;
+					CallSite.ExpectedAbi = CatalogCallSite.ExpectedAbi;
+					CallSite.ReferenceSlotIndex =
+						CatalogCallSite.ReferenceSlotIndex;
 				}
 			}
 
@@ -728,6 +2453,64 @@ FStaticJITDiagnostics::FSnapshot FStaticJITDiagnostics::CaptureSnapshot(FAngelsc
 					FAngelscriptJITCurrentEngineReferenceResolverBuilder::Build(
 						*CurrentEngine,
 						RequiredReferences);
+			TMap<const void*, FString> CurrentSystemFunctionDeclarations;
+			if (ReferenceBuild.IsUsable())
+			{
+				TArray<asCScriptFunction*> CurrentSystemFunctions;
+				FAngelscriptCacheEnvironmentIdentity::
+					CollectCurrentRegisteredFunctions(
+						*static_cast<asCScriptEngine*>(
+							CurrentEngine->GetScriptEngine()),
+						CurrentSystemFunctions);
+				CurrentSystemFunctionDeclarations.Reserve(
+					CurrentSystemFunctions.Num());
+				for (asCScriptFunction* const Function : CurrentSystemFunctions)
+				{
+					if (Function != nullptr)
+					{
+						CurrentSystemFunctionDeclarations.Add(
+							Function,
+							UTF8_TO_TCHAR(Function->GetDeclaration(
+								false, false, false)));
+					}
+				}
+
+				for (FProviderRecord& Provider : Snapshot.Providers)
+				{
+					for (FProviderEntryRecord& Entry : Provider.Entries)
+					{
+						for (FReferenceRecord& Reference : Entry.References)
+						{
+							const FAngelscriptJITReferenceResolution Resolution =
+								ReferenceBuild.Resolver->Resolve(
+									Reference.Reference);
+							Reference.CurrentResolution = Resolution.Code;
+							Reference.bResolved =
+								Resolution.Code
+									== EAngelscriptJITReferenceResolutionCode::Exact
+								&& Resolution.Value != nullptr;
+							Reference.AdoptionState = Reference.bResolved
+								? EReferenceAdoptionState::ResolvedNotAdopted
+								: (Resolution.Code
+										== EAngelscriptJITReferenceResolutionCode::Missing
+									? EReferenceAdoptionState::Unbound
+									: EReferenceAdoptionState::Rejected);
+							if (Reference.bResolved)
+							{
+								if (const FString* const Declaration =
+									CurrentSystemFunctionDeclarations.Find(
+										Resolution.Value))
+								{
+									Reference.CurrentTargetDeclaration =
+										*Declaration;
+									Reference.CurrentTargetKind =
+										TEXT("SystemFunction");
+								}
+							}
+						}
+					}
+				}
+			}
 			const FAngelscriptHash256 NativeEnvironmentFingerprint =
 				Snapshot.TargetProfile != EAngelscriptJITTargetProfile::Invalid
 					? FAngelscriptJITTargetProfiles::
@@ -781,11 +2564,32 @@ FStaticJITDiagnostics::FSnapshot FStaticJITDiagnostics::CaptureSnapshot(FAngelsc
 						Input.RequiredEntryPoints |=
 							EAngelscriptJITRequiredEntryPoints::Parms;
 					}
-					const FAngelscriptJITFunctionMatchResult Match =
-						FAngelscriptJITProviderMatcher::Match(
+					FAngelscriptJITFunctionMatchResult Match;
+					if (bHasParmsEntry)
+					{
+						FAngelscriptJITFunctionMatchInput
+							VMRawFallbackInput = Input;
+						VMRawFallbackInput.EntryAbiHash =
+							FAngelscriptJITGeneration::BuildEntryAbiHash(
+								CurrentRoute.CanonicalDeclaration,
+								true, true, false);
+						VMRawFallbackInput.RequiredEntryPoints =
+							EAngelscriptJITRequiredEntryPoints::VM
+							| EAngelscriptJITRequiredEntryPoints::Raw;
+						Match = FAngelscriptJITProviderMatcher::
+							MatchPreferredThenFallback(
+								*ProviderSnapshot,
+								Input,
+								VMRawFallbackInput,
+								*ReferenceBuild.Resolver);
+					}
+					else
+					{
+						Match = FAngelscriptJITProviderMatcher::Match(
 							*ProviderSnapshot,
 							Input,
 							*ReferenceBuild.Resolver);
+					}
 					Route.Candidates.Reserve(Match.Candidates.Num());
 					for (const FAngelscriptJITArtifactMatchCandidate& Candidate
 						: Match.Candidates)
@@ -873,12 +2677,34 @@ FStaticJITDiagnostics::FSnapshot FStaticJITDiagnostics::CaptureSnapshot(FAngelsc
 							: Provider.Entries[
 								Route.ProviderEntryIndex].References)
 						{
-							Reference.bResolved = Table->Slots.ContainsByPredicate(
+							const FAngelscriptJITResolvedReferenceSlot* const Slot =
+								Table->Slots.FindByPredicate(
 								[&Reference](
 									const FAngelscriptJITResolvedReferenceSlot& Slot)
 								{
 									return Slot.SlotIndex == Reference.SlotIndex;
 								});
+							if (Slot == nullptr || Slot->Value == nullptr)
+							{
+								continue;
+							}
+							if (!ReferenceBuild.IsUsable())
+							{
+								Reference.AdoptionState =
+									EReferenceAdoptionState::Stale;
+								continue;
+							}
+							const FAngelscriptJITReferenceResolution Resolution =
+								ReferenceBuild.Resolver->Resolve(Reference.Reference);
+							Reference.CurrentResolution = Resolution.Code;
+							Reference.bResolved =
+								Resolution.Code
+									== EAngelscriptJITReferenceResolutionCode::Exact
+								&& Resolution.Value != nullptr;
+							Reference.AdoptionState = Reference.bResolved
+								&& Resolution.Value == Slot->Value
+								? EReferenceAdoptionState::Bound
+								: EReferenceAdoptionState::Stale;
 						}
 						break;
 					}
@@ -900,6 +2726,14 @@ FStaticJITDiagnostics::FSnapshot FStaticJITDiagnostics::CaptureSnapshot(FAngelsc
 				return Left.Identity.FunctionKey.Hash
 					< Right.Identity.FunctionKey.Hash;
 			});
+		}
+	}
+
+	for (FProviderRecord& Provider : Snapshot.Providers)
+	{
+		for (FProviderEntryRecord& Entry : Provider.Entries)
+		{
+			SynchronizeNativeCallSiteState(Entry);
 		}
 	}
 

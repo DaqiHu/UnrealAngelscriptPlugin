@@ -7,18 +7,19 @@
  * StableModuleKey     : 363ba981d7c3e864c636826dc571c5d7e306f994e52ec1db353151967b367751
  * ProviderId          : 7dc70fd55a76cc55d726e32d5c2434713bd93755a32e4dd524a4b7c39c8b5d44
  * ArtifactProfile     : b58efc4c9f40879f0b98bcb54704d1b342ae56948a00e9ddbaa709787226e0c8
- * NativeEnvironment   : c8d9638e7c34100b327617ea9a4769bd7692413e17eb4705818e6b120acc9651
+ * NativeEnvironment   : 76d620ec7d0db38aa2028996e595f75523f201e7e560c05d8c9000d60d04cd73
  * FunctionCount       : 2
  */
 
 #if WITH_EDITOR && UE_BUILD_DEVELOPMENT
 #include "StaticJIT/StaticJITConfig.h"
 #ifndef AS_SKIP_JITTED_CODE
-
-
+#include "CoreGlobals.h"
+#include "CoreMinimal.h"
+#include "StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallables.h"
 #include "StaticJIT/StaticJITHeader.h"
-
-
+#include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITCallBridge.h"
+#include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITScalarOps.h"
 constexpr SIZE_T POFFSET_UStaticJITAotFunctionCarrier_StoredValue = Align(sizeof(UObject) + 0, 4);
 constexpr SIZE_T PALIGN_UStaticJITAotFunctionCarrier_StoredValue = AlignmentMax(alignof(UObject), 4);
 constexpr SIZE_T TALIGN_UStaticJITAotFunctionCarrier = PALIGN_UStaticJITAotFunctionCarrier_StoredValue;
@@ -30,7 +31,10 @@ constexpr SIZE_T TSIZE_UStaticJITAotFunctionCarrier = Align(POFFSET_UStaticJITAo
  * StableFunctionKey  : 69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304
  * ExecutionHash      : ee7830a9de56f70fda6397fbd582a13fe0e06765496d8709f73959ffd657d386
  * DebugHash          : c92a72a1bc65d3358bb45389aa0f5115f6ec3e39794a7b31ea28c102a2067eac
- * EntryAbiHash       : 6d09f7b9082eb4f76d6e496f456be2ced48f7280b340a8e8918d15ba719fbe7e
+ * EntryAbiHash       : ea282433da811db8e11096c0eb4d74a8ad9f3e312688cd7887a915f4447e361e
+ * ExecutionCaps      : 0
+ * RuntimeTriggers    : 0
+ * CapabilityHash     : 0000000000000000000000000000000000000000000000000000000000000000
  */
 #if AS_JIT_DEBUG_CALLSTACKS
 #undef SCRIPT_DEBUG_FILENAME
@@ -91,7 +95,10 @@ void ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_ee78
  * StableFunctionKey  : 6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17
  * ExecutionHash      : bfad2118806f08778b608ba288c00d6bbc4c4f48f942cf52dc1faa6cfc2e03b9
  * DebugHash          : b8ef3acb6782a01fd239a3e7d291977ba1ebdef595f70d4ce322ae69ac52488a
- * EntryAbiHash       : 7f083a9b1dd768e533b45cb3475599ddebd6427cb28a84f1cceb7b80435c2a67
+ * EntryAbiHash       : bb45c9109478b2a9359d66c35fcbf092a8728f92b5800436659d51e95cc228a8
+ * ExecutionCaps      : 0
+ * RuntimeTriggers    : 0
+ * CapabilityHash     : 0000000000000000000000000000000000000000000000000000000000000000
  */
 #if AS_JIT_DEBUG_CALLSTACKS
 #undef SCRIPT_DEBUG_FILENAME

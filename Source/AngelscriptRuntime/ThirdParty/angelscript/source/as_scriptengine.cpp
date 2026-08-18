@@ -783,6 +783,7 @@ asCScriptEngine::asCScriptEngine()
 		ep.allowDoubleType       = false;
 		ep.warnOnFloatConstantsForDoubles       = false;
 		ep.warnIntegerDivision       = true;
+		ep.captureTypedSemanticIR        = false;
 		ep.maxNestedCalls                = 100;
 		ep.genericCallMode               = 1;         // 0 = old (pre 2.33.0) behavior where generic ignored auto handles, 1 = treat handles like in native call
 	}
@@ -797,6 +798,7 @@ asCScriptEngine::asCScriptEngine()
 	configFailed = false;
 	isPrepared = false;
 	isBuilding = false;
+	typedSemanticIRCaptureFrozen = false;
 	deferValidationOfTemplateTypes = false;
 
 	typeIdSeqNbr      = 0;
@@ -3323,6 +3325,7 @@ int asCScriptEngine::RequestBuild()
 		return asBUILD_IN_PROGRESS;
 	}
 
+	typedSemanticIRCaptureFrozen = true;
 	isBuilding = true;
 	return 0;
 }

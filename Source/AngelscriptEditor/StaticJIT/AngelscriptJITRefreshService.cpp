@@ -1,6 +1,7 @@
 #include "StaticJIT/AngelscriptJITRefreshService.h"
 
 #include "AngelscriptEngine.h"
+#include "AngelscriptSubsystem.h"
 #include "StaticJIT/AngelscriptJITProjectScaffold.h"
 
 #include "Features/IModularFeatures.h"
@@ -165,8 +166,30 @@ namespace AngelscriptEditor::StaticJIT
 			}
 		};
 
-		FAngelscriptJITRefreshPreparation PrepareProject(
+		FAngelscriptJITSourceAuthoritySnapshot CaptureProjectAuthority(
 			const FStringView InProjectFile)
+		{
+			UAngelscriptSubsystem* const Subsystem =
+				UAngelscriptSubsystem::Get();
+			FAngelscriptEngine* const PrimaryEngine =
+				Subsystem != nullptr ? Subsystem->GetEngine() : nullptr;
+			if (PrimaryEngine == nullptr)
+			{
+				FAngelscriptJITSourceAuthoritySnapshot Result;
+				Result.Code =
+					EAngelscriptJITSourceAuthorityCode::EngineUnavailable;
+				Result.Detail =
+					TEXT("The authoritative AngelScript Engine is unavailable.");
+				return Result;
+			}
+			return FAngelscriptJITSourceAuthority::Capture(
+				*PrimaryEngine, InProjectFile,
+				EAngelscriptJITTargetProfile::EditorDevelopment);
+		}
+
+		FAngelscriptJITRefreshPreparation PrepareProject(
+			const FStringView InProjectFile,
+			const FAngelscriptJITSourceAuthoritySnapshot& Authority)
 		{
 			FAngelscriptJITRefreshPreparation Result;
 			FString ProjectFile(InProjectFile);
@@ -190,27 +213,20 @@ namespace AngelscriptEditor::StaticJIT
 				return Result;
 			}
 
-			if (!FAngelscriptEngine::IsInitialized()
-				|| !FAngelscriptEngine::Get().IsInitialCompileFinished())
+			if (!Authority.IsCurrent()
+				|| !Authority.FrozenSourceProvider.IsValid())
 			{
 				Result.FailureCode =
-					EAngelscriptJITRefreshCode::EngineUnavailable;
+					EAngelscriptJITRefreshCode::AuthoritativeEngineStale;
 				Result.Detail =
-					TEXT("The authoritative AngelScript Engine is not ready.");
-				return Result;
-			}
-
-			ECompileResult CompileResult = ECompileResult::Error;
-			if (!FAngelscriptEngine::Get().ForceCleanCacheModules(
-					TConstArrayView<FString>(), CompileResult)
-				|| (CompileResult != ECompileResult::FullyHandled
-					&& CompileResult != ECompileResult::PartiallyHandled))
-			{
-				Result.FailureCode =
-					EAngelscriptJITRefreshCode::ScriptCompileFailed;
-				Result.Detail = FString::Printf(
-					TEXT("Authoritative AngelScript compilation failed (result=%u)."),
-					static_cast<uint32>(CompileResult));
+					TEXT("The authoritative AngelScript source snapshot is unavailable.");
+				FStaticJITDiagnostics::FPrePublicationFailureRecord& Failure =
+					Result.PrePublicationFailure.Emplace();
+				Failure.Category = FStaticJITDiagnostics::
+					EPrePublicationFailureCategory::AuthoritativeEngineStale;
+				Failure.AffectedBoundary = FStaticJITDiagnostics::
+					EPrePublicationBoundary::PrimarySourceAuthority;
+				Failure.Detail = Result.Detail;
 				return Result;
 			}
 
@@ -219,6 +235,7 @@ namespace AngelscriptEditor::StaticJIT
 			if (!FAngelscriptJITProjectGeneration::BuildProjectArtifacts(
 					ProjectFile,
 					EAngelscriptJITTargetProfile::EditorDevelopment,
+					Authority.FrozenSourceProvider,
 					RuntimeOutput,
 					&Error))
 			{
@@ -333,6 +350,7 @@ namespace AngelscriptEditor::StaticJIT
 		FAngelscriptJITRefreshDependencies DefaultDependencies()
 		{
 			FAngelscriptJITRefreshDependencies Result;
+			Result.CaptureAuthority = &CaptureProjectAuthority;
 			Result.Prepare = &PrepareProject;
 			Result.GetProviderSnapshot = []()
 			{
@@ -342,7 +360,11 @@ namespace AngelscriptEditor::StaticJIT
 			Result.RefreshProvider = &RefreshProjectProvider;
 			Result.RefreshRoutes = []()
 			{
-				if (!FAngelscriptEngine::IsInitialized())
+				UAngelscriptSubsystem* const Subsystem =
+					UAngelscriptSubsystem::Get();
+				FAngelscriptEngine* const PrimaryEngine =
+					Subsystem != nullptr ? Subsystem->GetEngine() : nullptr;
+				if (PrimaryEngine == nullptr)
 				{
 					FAngelscriptJITProviderRouteRefreshResult Failed;
 					Failed.Code =
@@ -351,7 +373,7 @@ namespace AngelscriptEditor::StaticJIT
 					return Failed;
 				}
 				return FAngelscriptJITProviderRouter::Refresh(
-					FAngelscriptEngine::Get(),
+					*PrimaryEngine,
 					EAngelscriptJITTargetProfile::EditorDevelopment);
 			};
 			return Result;
@@ -388,7 +410,8 @@ namespace AngelscriptEditor::StaticJIT
 				TEXT("A Generate/Refresh AngelScript JIT request is already active.");
 			return false;
 		}
-		if (!Dependencies.Prepare
+		if (!Dependencies.CaptureAuthority
+			|| !Dependencies.Prepare
 			|| !Dependencies.GetProviderSnapshot
 			|| !Dependencies.ObserveProvider
 			|| !Dependencies.RefreshProvider
@@ -403,10 +426,29 @@ namespace AngelscriptEditor::StaticJIT
 		LastResult = {};
 		ExpectedOutput = {};
 		bRequestActive = true;
+		const FAngelscriptJITSourceAuthoritySnapshot Authority =
+			Dependencies.CaptureAuthority(ProjectFile);
+		if (!Authority.IsCurrent())
+		{
+			FString Detail = Authority.Detail
+				+ TEXT(" Run the existing AngelScript Hot Reload/recompile flow, then retry Generate/Refresh.");
+			FStaticJITDiagnostics::FPrePublicationFailureRecord& Failure =
+				LastResult.PrePublicationFailure.Emplace();
+			Failure.Category = FStaticJITDiagnostics::
+				EPrePublicationFailureCategory::AuthoritativeEngineStale;
+			Failure.AffectedBoundary = FStaticJITDiagnostics::
+				EPrePublicationBoundary::PrimarySourceAuthority;
+			Failure.Detail = Detail;
+			Finish(EAngelscriptJITRefreshCode::AuthoritativeEngineStale,
+				MoveTemp(Detail));
+			return false;
+		}
 		const FAngelscriptJITRefreshPreparation Preparation =
-			Dependencies.Prepare(ProjectFile);
+			Dependencies.Prepare(ProjectFile, Authority);
 		if (!Preparation.bSuccess)
 		{
+			LastResult.PrePublicationFailure =
+				Preparation.PrePublicationFailure;
 			Finish(Preparation.FailureCode, Preparation.Detail);
 			return false;
 		}

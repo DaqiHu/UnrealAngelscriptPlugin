@@ -208,8 +208,11 @@ namespace AngelscriptCacheExactStartup_Private
 					: Body->ActualDependencies)
 				{
 					ReferenceSet.RequiredReferences.AddUnique(Dependency.Target);
+					ReferenceSet.SemanticDependencies.AddUnique(
+						ToAngelscriptArtifactSemanticDependency(Dependency));
 				}
 				ReferenceSet.RequiredReferences.Sort();
+				ReferenceSet.SemanticDependencies.Sort();
 				if (Body->DebugSidecar.IsSet()
 					&& !AddPreparedRecord(
 						Generation,

@@ -60,6 +60,29 @@ namespace UE::Angelscript::Private
 		}
 	}
 
+	static FString NormalizeGenerationBindSourcePath(const ANSICHAR* SourceFile)
+	{
+		if (SourceFile == nullptr || SourceFile[0] == '\0')
+		{
+			return FString();
+		}
+		FString Result = ANSI_TO_TCHAR(SourceFile);
+		Result.ReplaceInline(TEXT("\\"), TEXT("/"),
+			ESearchCase::CaseSensitive);
+		const int32 SourceRoot = Result.Find(
+			TEXT("/Source/"), ESearchCase::IgnoreCase,
+			ESearchDir::FromEnd);
+		if (SourceRoot != INDEX_NONE)
+		{
+			Result.RightChopInline(SourceRoot + 1, EAllowShrinking::No);
+		}
+		while (Result.StartsWith(TEXT("./")))
+		{
+			Result.RightChopInline(2, EAllowShrinking::No);
+		}
+		return Result;
+	}
+
 	static FString DescribeBindRecord(const FAngelscriptBindRecord& Record)
 	{
 		return FString::Printf(
@@ -792,6 +815,20 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeFunctionHeader(const
 	return *this;
 }
 
+#if AS_CAN_GENERATE_JIT
+FAngelscriptBoundFunction& FAngelscriptBoundFunction::ExternalNativeCall(
+	const FAngelscriptStaticJITNativeCallDescriptor& Descriptor)
+{
+	if (IsValid())
+	{
+		FAngelscriptStaticJITNativeCallRegistry::Attach(
+			GetTargetEngine(), GetFunction(), Descriptor);
+	}
+
+	return *this;
+}
+#endif
+
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeUFunction(UFunction* Function, const FString& Name, const bool bTrivial)
 {
 #if AS_CAN_GENERATE_JIT
@@ -1437,10 +1474,17 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindBehaviour(asEBehaviours Beh, FB
 	}
 	auto& Manager = ResolveTargetEngine();
 	int FunctionId = Manager.Engine->RegisterObjectBehaviour(ClassName.ToCString(), Beh, Signature.ToCString(), Ptr, asCALL_THISCALL, *(asFunctionCaller*)&Caller);
-	return OnBindForTarget(FunctionId, nullptr, nullptr, TEXT("object behaviour"), Signature);
+	return OnBindForTarget(FunctionId, nullptr, nullptr,
+		TEXT("object behaviour"), Signature, Beh);
 }
 
-FAngelscriptBoundFunction FAngelscriptBinds::OnBindForTarget(const int32 FunctionId, void* UserData, const FAngelscriptType::FBindParams* BindParams, const TCHAR* Operation, const FBindString Declaration)
+FAngelscriptBoundFunction FAngelscriptBinds::OnBindForTarget(
+	const int32 FunctionId,
+	void* UserData,
+	const FAngelscriptType::FBindParams* BindParams,
+	const TCHAR* Operation,
+	const FBindString Declaration,
+	const asEBehaviours RegisteredBehaviour)
 {
 	FAngelscriptEngine& Manager = ResolveTargetEngine();
 	if (TargetEngine != nullptr && FunctionId < 0)
@@ -1457,17 +1501,58 @@ FAngelscriptBoundFunction FAngelscriptBinds::OnBindForTarget(const int32 Functio
 		if (Provenance.Origin == EAngelscriptFunctionBindingOrigin::Unknown)
 		{
 			Provenance.Provider = BindState.ActiveBindProvider;
-			if (!Provenance.Provider.IsNone())
+			if (BindState.ActiveBindPhase
+					== EAngelscriptBindPhase::GeneratedBindings
+				|| (!Provenance.Provider.IsNone()
+					&& Provenance.Provider.ToString().StartsWith(
+						TEXT("UHT.FunctionBinding."))))
 			{
-				const FString ProviderName = Provenance.Provider.ToString();
-				if (ProviderName.StartsWith(TEXT("UHT.FunctionBinding.")))
-				{
-					Provenance.Origin = EAngelscriptFunctionBindingOrigin::Generated;
-				}
-				else if (!ProviderName.StartsWith(TEXT("Bind_BlueprintType")))
-				{
-					Provenance.Origin = EAngelscriptFunctionBindingOrigin::Manual;
-				}
+				Provenance.Origin = EAngelscriptFunctionBindingOrigin::Generated;
+			}
+			else if (BindState.ActiveBindPhase
+					== EAngelscriptBindPhase::ReflectionBindings
+				|| BindState.ActiveBindPhase
+					== EAngelscriptBindPhase::PostReflectionBindings
+				|| (!Provenance.Provider.IsNone()
+					&& Provenance.Provider.ToString().StartsWith(
+						TEXT("Bind_BlueprintType"))))
+			{
+				Provenance.Origin = EAngelscriptFunctionBindingOrigin::Reflective;
+			}
+			else
+			{
+				Provenance.Origin = EAngelscriptFunctionBindingOrigin::Manual;
+			}
+		}
+		if (Manager.GetPurpose()
+			== EAngelscriptEnginePurpose::StaticJITGeneration)
+		{
+			if (!BindState.GenerationFunctionProvenance.IsValid())
+			{
+				BindState.GenerationFunctionProvenance =
+					MakeUnique<FAngelscriptGenerationFunctionProvenanceState>();
+			}
+			FAngelscriptGenerationFunctionProvenance GenerationProvenance;
+			GenerationProvenance.Origin = Provenance.Origin;
+			GenerationProvenance.OwnerModule =
+				BindState.ActiveBindOwnerModule;
+			GenerationProvenance.Provider = Provenance.Provider;
+			GenerationProvenance.Phase = BindState.ActiveBindPhase;
+			GenerationProvenance.RegisteredBehaviour =
+				RegisteredBehaviour;
+			GenerationProvenance.ProviderSourceFile =
+				UE::Angelscript::Private::NormalizeGenerationBindSourcePath(
+					BindState.ActiveBindSourceFile);
+			GenerationProvenance.ProviderSourceLine =
+				BindState.ActiveBindSourceLine;
+			if (!BindState.GenerationFunctionProvenance->TryAddFunction(
+				FunctionId, MoveTemp(GenerationProvenance)))
+			{
+				RecordRegistrationFailure(
+					TEXT("generation function provenance"),
+					Declaration, asALREADY_REGISTERED);
+				return FAngelscriptBoundFunction(
+					&Manager, asALREADY_REGISTERED);
 			}
 		}
 		BindState.FunctionProvenanceByPointer.Add(ScriptFunction, Provenance);
@@ -1491,7 +1576,8 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindExternBehaviour(asEBehaviours B
 	}
 	auto& Manager = ResolveTargetEngine();
 	int FunctionId = Manager.Engine->RegisterObjectBehaviour(ClassName.ToCString(), Beh, Signature.ToCString(), Ptr, asCALL_CDECL_OBJFIRST, *(asFunctionCaller*)&Caller);
-	return OnBindForTarget(FunctionId, UserData, nullptr, TEXT("object behaviour"), Signature);
+	return OnBindForTarget(FunctionId, UserData, nullptr,
+		TEXT("object behaviour"), Signature, Beh);
 }
 
 FAngelscriptBoundFunction FAngelscriptBinds::BindStaticBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
@@ -1502,7 +1588,8 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindStaticBehaviour(asEBehaviours B
 	}
 	auto& Manager = ResolveTargetEngine();
 	int FunctionId = Manager.Engine->RegisterObjectBehaviour(ClassName.ToCString(), Beh, Signature.ToCString(), Ptr, asCALL_CDECL, *(asFunctionCaller*)&Caller);
-	return OnBindForTarget(FunctionId, UserData, nullptr, TEXT("static behaviour"), Signature);
+	return OnBindForTarget(FunctionId, UserData, nullptr,
+		TEXT("static behaviour"), Signature, Beh);
 }
 
 FAngelscriptBoundFunction FAngelscriptBinds::BindMethod(FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)

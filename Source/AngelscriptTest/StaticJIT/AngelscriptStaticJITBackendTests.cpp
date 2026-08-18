@@ -1,5 +1,8 @@
 #include "StaticJIT/Backends/AngelscriptStaticJITBackend.h"
 #include "StaticJIT/AngelscriptStaticJITGenerator.h"
+#include "StaticJIT/AngelscriptStaticJITGenerationProfile.h"
+
+#include "AngelscriptEngine.h"
 
 #include "CQTest.h"
 
@@ -180,14 +183,15 @@ namespace AngelscriptStaticJITBackendTests_Private
 
 	static FAngelscriptStaticJITFunctionResult Unsupported(
 		const FAngelscriptStaticJITBackendId BackendId,
-		const FAngelscriptStableFunctionKey& FunctionKey)
+		const FAngelscriptStableFunctionKey& FunctionKey,
+		const FStringView Detail = TEXTVIEW("not supported by fake backend"))
 	{
 		FAngelscriptStaticJITFunctionResult Result;
 		Result.Disposition =
 			EAngelscriptStaticJITFunctionDisposition::Unsupported;
 		Result.ActualBackendId = BackendId;
 		Result.FunctionKey = FunctionKey;
-		Result.Detail = TEXT("not supported by fake backend");
+		Result.Detail = Detail;
 		return Result;
 	}
 }
@@ -213,6 +217,9 @@ public:
 		static_assert(!std::is_same_v<
 			FAngelscriptStaticJITBackendId,
 			FAngelscriptRuntimeJITBackendId>);
+		static_assert(std::is_const_v<std::remove_reference_t<decltype(
+			std::declval<FAngelscriptStaticJITBackendRequest>().
+				CompiledSourceGraph)>>);
 	}
 
 	TEST_METHOD(EmptyUnknownCaseVariantsAndDualAreRejected)
@@ -230,6 +237,96 @@ public:
 			TEXT("dual"), Parsed)));
 		ASSERT_THAT(IsFalse(FAngelscriptStaticJITBackendId::TryParse(
 			TEXT("unknown"), Parsed)));
+	}
+
+	TEST_METHOD(BackendSelectionFreezesOneRequiredCaptureProfile)
+	{
+		FAngelscriptStaticJITGenerationProfile BytecodeProfile;
+		FString Error;
+		ASSERT_THAT(IsTrue(
+			FAngelscriptStaticJITGenerationProfile::TryCreate(
+				FAngelscriptStaticJITBackendId::Bytecode(),
+				EAngelscriptJITTargetProfile::EditorDevelopment,
+				BytecodeProfile, &Error), Error));
+		ASSERT_THAT(IsTrue(BytecodeProfile.BackendId
+			== FAngelscriptStaticJITBackendId::Bytecode()));
+		ASSERT_THAT(IsTrue(BytecodeProfile.CaptureProfile
+			== EAngelscriptStaticJITCaptureProfile::Bytecode));
+		ASSERT_THAT(IsFalse(
+			BytecodeProfile.RequiresTypedSemanticIRCapture()));
+		FAngelscriptEngineConfig BytecodeConfig;
+		BytecodeProfile.ApplyToEngineConfig(BytecodeConfig);
+		ASSERT_THAT(IsTrue(
+			BytecodeConfig.bCollectStaticJITCompatibilityBinds,
+			TEXT("A generation Engine must collect exact Engine-local native-call metadata without enabling cache persistence")));
+
+		FAngelscriptStaticJITGenerationProfile TypedASTProfile;
+		ASSERT_THAT(IsTrue(
+			FAngelscriptStaticJITGenerationProfile::TryCreate(
+				FAngelscriptStaticJITBackendId::TypedAST(),
+				EAngelscriptJITTargetProfile::EditorDevelopment,
+				TypedASTProfile, &Error), Error));
+		ASSERT_THAT(IsTrue(TypedASTProfile.BackendId
+			== FAngelscriptStaticJITBackendId::TypedAST()));
+		ASSERT_THAT(IsTrue(TypedASTProfile.CaptureProfile
+			== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR));
+		ASSERT_THAT(IsTrue(
+			TypedASTProfile.RequiresTypedSemanticIRCapture()));
+		const EAngelscriptTypedASTJITDirectCapability
+			ExpectedTypedASTCapabilities =
+				EAngelscriptTypedASTJITDirectCapability::FramePosition
+				| EAngelscriptTypedASTJITDirectCapability::RecursionBudget;
+		ASSERT_THAT(AreEqual(
+			ExpectedTypedASTCapabilities,
+			TypedASTProfile.TypedASTJITCapabilityProfile.
+				AvailableCapabilities,
+			TEXT("Every emitted TypedASTJIT root now owns position metadata and the shared native recursion guard")));
+		FAngelscriptEngineConfig TypedASTConfig;
+		TypedASTProfile.ApplyToEngineConfig(TypedASTConfig);
+		ASSERT_THAT(IsTrue(
+			TypedASTConfig.bCollectStaticJITCompatibilityBinds,
+			TEXT("Typed HIR capture must freeze the matching registered native-call descriptors")));
+
+		FAngelscriptStaticJITGenerationProfile GameDevelopmentProfile;
+		ASSERT_THAT(IsTrue(
+			FAngelscriptStaticJITGenerationProfile::TryCreate(
+				FAngelscriptStaticJITBackendId::TypedAST(),
+				EAngelscriptJITTargetProfile::GameDevelopment,
+				GameDevelopmentProfile, &Error), Error));
+		ASSERT_THAT(AreEqual(
+			ExpectedTypedASTCapabilities,
+			GameDevelopmentProfile.TypedASTJITCapabilityProfile.
+				AvailableCapabilities,
+			TEXT("GameDevelopment retains the non-Shipping position frame and recursion budget")));
+
+		FAngelscriptStaticJITGenerationProfile GameShippingProfile;
+		ASSERT_THAT(IsTrue(
+			FAngelscriptStaticJITGenerationProfile::TryCreate(
+				FAngelscriptStaticJITBackendId::TypedAST(),
+				EAngelscriptJITTargetProfile::GameShipping,
+				GameShippingProfile, &Error), Error));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITDirectCapability::RecursionBudget,
+			GameShippingProfile.TypedASTJITCapabilityProfile.
+				AvailableCapabilities,
+			TEXT("Shipping preserves the native recursion guard without advertising the compiled-out debug position frame")));
+
+		FAngelscriptStaticJITGenerationProfile InvalidTargetProfile;
+		ASSERT_THAT(IsFalse(
+			FAngelscriptStaticJITGenerationProfile::TryCreate(
+				FAngelscriptStaticJITBackendId::TypedAST(),
+				EAngelscriptJITTargetProfile::All,
+				InvalidTargetProfile, &Error)));
+		ASSERT_THAT(IsTrue(Error.Contains(TEXT("concrete target profile"))));
+
+		FAngelscriptStaticJITGenerationProfile InvalidProfile;
+		ASSERT_THAT(IsFalse(
+			FAngelscriptStaticJITGenerationProfile::TryCreate(
+				FAngelscriptStaticJITBackendId(),
+				EAngelscriptJITTargetProfile::EditorDevelopment,
+				InvalidProfile, &Error)));
+		ASSERT_THAT(IsTrue(Error.Contains(TEXT("bytecode"))));
+		ASSERT_THAT(IsTrue(Error.Contains(TEXT("typed-ast"))));
 	}
 
 	TEST_METHOD(FactoryRegistrationIsDeterministicAndRejectsDuplicates)
@@ -325,11 +422,12 @@ public:
 		const FAngelscriptJITGenerationModule Module =
 			MakeModule(0x41, TEXT("MixedModule"));
 		const FAngelscriptJITGenerationFunction TypedFunction =
-			MakeFunction(0x41, 0x51, TEXT("TypedFunction"));
+			MakeFunction(0x41, 0x51, TEXT("EligibleTypedRoot"));
 		const FAngelscriptJITGenerationFunction BytecodeFunction =
-			MakeFunction(0x41, 0x52, TEXT("BytecodeFunction"));
+			MakeFunction(0x41, 0x52,
+				TEXT("RequiredCalleeFallbackRoot"));
 		const FAngelscriptJITGenerationFunction VmFunction =
-			MakeFunction(0x41, 0x53, TEXT("VmFunction"));
+			MakeFunction(0x41, 0x53, TEXT("VmFallbackRoot"));
 		TArray<FAngelscriptStaticJITCompiledFunctionView> FunctionViews;
 		for (const FAngelscriptJITGenerationFunction* Function :
 			{&TypedFunction, &BytecodeFunction, &VmFunction})
@@ -341,7 +439,8 @@ public:
 		}
 		FAngelscriptStaticJITCompiledSourceGraph Graph =
 			MakeGraph(FunctionViews);
-		Graph.bHasVerifiedTypedHIR = true;
+		Graph.CaptureProfile =
+			EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR;
 		const FAngelscriptStableModuleKey EmitModules[] = {Module.ModuleKey};
 		const FAngelscriptStaticJITBackendRequest Request{
 			FAngelscriptStaticJITBackendId::TypedAST(), Graph, EmitModules};
@@ -352,9 +451,16 @@ public:
 		TypedAST.Output.Functions.Add(Emitted(
 			TypedAST.BackendId, TypedFunction));
 		TypedAST.Output.Functions.Add(Unsupported(
-			TypedAST.BackendId, BytecodeFunction.FunctionKey));
+			TypedAST.BackendId, BytecodeFunction.FunctionKey,
+			TEXTVIEW("UnsupportedCall: RequiredCalleeUnsupported at 42:13")));
 		TypedAST.Output.Functions.Add(Unsupported(
-			TypedAST.BackendId, VmFunction.FunctionKey));
+			TypedAST.BackendId, VmFunction.FunctionKey,
+			TEXTVIEW("UnsupportedSignature: object parameter")));
+		TypedAST.Output.ModuleSourcePreamble =
+			TEXT("#include \"StaticJIT/StaticJITConfig.h\"\n")
+			TEXT("#ifndef AS_SKIP_JITTED_CODE\n")
+			TEXT("#include \"TypedBackend.h\"\n");
+		TypedAST.Output.ModuleSourceFooter = TEXT("#endif\n");
 
 		FRecordingFactory Bytecode(
 			FAngelscriptStaticJITBackendId::Bytecode());
@@ -363,6 +469,11 @@ public:
 			Bytecode.BackendId, BytecodeFunction));
 		Bytecode.Output.Functions.Add(Unsupported(
 			Bytecode.BackendId, VmFunction.FunctionKey));
+		Bytecode.Output.ModuleSourcePreamble =
+			TEXT("#include \"StaticJIT/StaticJITConfig.h\"\n")
+			TEXT("#ifndef AS_SKIP_JITTED_CODE\n")
+			TEXT("#include \"BytecodeBackend.h\"\n");
+		Bytecode.Output.ModuleSourceFooter = TEXT("#endif\n");
 
 		FAngelscriptStaticJITBackendRegistry Registry;
 		ASSERT_THAT(IsTrue(Registry.RegisterFactory(Bytecode).IsAccepted()));
@@ -394,6 +505,13 @@ public:
 		ASSERT_THAT(AreEqual(3, Output.Functions.Num()));
 		ASSERT_THAT(IsTrue(Output.Functions[0].ActualBackendId
 			== FAngelscriptStaticJITBackendId::TypedAST()));
+		ASSERT_THAT(IsTrue(Output.Functions[0].Disposition
+			== EAngelscriptStaticJITFunctionDisposition::Emitted));
+		ASSERT_THAT(AreEqual(1,
+			Output.Functions[0].BackendAttempts.Num()));
+		ASSERT_THAT(IsTrue(
+			Output.Functions[0].BackendAttempts[0].BackendId
+				== FAngelscriptStaticJITBackendId::TypedAST()));
 		ASSERT_THAT(IsTrue(Output.Functions[1].ActualBackendId
 			== FAngelscriptStaticJITBackendId::Bytecode()));
 		ASSERT_THAT(AreEqual(2, Output.Functions[1].BackendAttempts.Num()));
@@ -403,9 +521,12 @@ public:
 		ASSERT_THAT(IsTrue(
 			Output.Functions[1].BackendAttempts[0].Disposition
 				== EAngelscriptStaticJITFunctionDisposition::Unsupported));
-		ASSERT_THAT(AreEqual(
-			FString(TEXT("not supported by fake backend")),
-			Output.Functions[1].BackendAttempts[0].Detail));
+		ASSERT_THAT(IsTrue(
+			Output.Functions[1].BackendAttempts[0].Detail.Contains(
+				TEXT("UnsupportedCall: RequiredCalleeUnsupported"))));
+		ASSERT_THAT(IsTrue(
+			Output.Functions[1].BackendAttempts[0].Detail.Contains(
+				TEXT("42:13"))));
 		ASSERT_THAT(IsTrue(
 			Output.Functions[1].BackendAttempts[1].BackendId
 				== FAngelscriptStaticJITBackendId::Bytecode()));
@@ -414,7 +535,13 @@ public:
 				== EAngelscriptStaticJITFunctionDisposition::Emitted));
 		ASSERT_THAT(IsTrue(Output.Functions[2].Disposition
 			== EAngelscriptStaticJITFunctionDisposition::Unsupported));
+		ASSERT_THAT(IsTrue(Output.Functions[2].ActualBackendId
+			== FAngelscriptStaticJITBackendId::Bytecode()));
+		ASSERT_THAT(IsFalse(Output.Functions[2].EmittedFunction.IsSet()));
 		ASSERT_THAT(AreEqual(2, Output.Functions[2].BackendAttempts.Num()));
+		ASSERT_THAT(IsTrue(
+			Output.Functions[2].BackendAttempts[0].Detail.Contains(
+				TEXT("UnsupportedSignature"))));
 		int32 ModuleSourceCount = 0;
 		for (const FAngelscriptJITGeneratedFile& File :
 			Output.ProviderOutput.Files)
@@ -422,6 +549,33 @@ public:
 			if (File.Kind == EAngelscriptJITGeneratedFileKind::ModuleSource)
 			{
 				++ModuleSourceCount;
+				auto CountToken = [&File](const FStringView Token)
+				{
+					int32 Count = 0;
+					int32 SearchFrom = 0;
+					while (SearchFrom < File.Content.Len())
+					{
+						const int32 Found = File.Content.Find(
+							FString(Token), ESearchCase::CaseSensitive,
+							ESearchDir::FromStart, SearchFrom);
+						if (Found == INDEX_NONE)
+						{
+							break;
+						}
+						++Count;
+						SearchFrom = Found + Token.Len();
+					}
+					return Count;
+				};
+				ASSERT_THAT(AreEqual(1, CountToken(
+					TEXTVIEW("#ifndef AS_SKIP_JITTED_CODE")),
+					TEXT("Mixed backends must share one module guard")));
+				ASSERT_THAT(AreEqual(2, CountToken(TEXTVIEW("#endif")),
+					TEXT("The shared backend guard and target guard must balance")));
+				ASSERT_THAT(IsTrue(File.Content.Contains(
+					TEXT("#include \"TypedBackend.h\""))));
+				ASSERT_THAT(IsTrue(File.Content.Contains(
+					TEXT("#include \"BytecodeBackend.h\""))));
 			}
 		}
 		ASSERT_THAT(AreEqual(1, ModuleSourceCount));
@@ -433,7 +587,8 @@ public:
 		TArray<FAngelscriptStaticJITCompiledFunctionView> Functions;
 		FAngelscriptStaticJITCompiledSourceGraph Graph =
 			MakeGraph(Functions);
-		Graph.bHasVerifiedTypedHIR = true;
+		Graph.CaptureProfile =
+			EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR;
 		const FAngelscriptStaticJITBackendRequest Request{
 			FAngelscriptStaticJITBackendId::TypedAST(), Graph, {}};
 
@@ -483,6 +638,43 @@ public:
 			TEXT("CaptureProfileMismatch"))));
 		ASSERT_THAT(AreEqual(0, TypedAST.CreateCount));
 		ASSERT_THAT(AreEqual(0, Bytecode.CreateCount));
+	}
+
+	TEST_METHOD(PackagingFailureIsReportedThroughGeneratorDiagnostics)
+	{
+		using namespace AngelscriptStaticJITBackendTests_Private;
+		const FAngelscriptJITGenerationModule Module =
+			MakeModule(0x61, TEXT("InvalidPackageModule"));
+		const FAngelscriptJITGenerationFunction Function =
+			MakeFunction(0x61, 0x71, TEXT("InvalidPackageFunction"));
+		TArray<FAngelscriptStaticJITCompiledFunctionView> FunctionViews;
+		FunctionViews.Add({nullptr, Function.ModuleKey,
+			Function.FunctionKey, Function.ExecutionHash,
+			Function.DebugHash, Function.EntryAbiHash,
+			Function.CanonicalDeclaration});
+		FAngelscriptStaticJITCompiledSourceGraph Graph =
+			MakeGraph(FunctionViews);
+		Graph.Settings.ProviderId = {};
+		const FAngelscriptStableModuleKey EmitModules[] = {Module.ModuleKey};
+		const FAngelscriptStaticJITBackendRequest Request{
+			FAngelscriptStaticJITBackendId::Bytecode(), Graph, EmitModules};
+
+		FRecordingFactory Bytecode(
+			FAngelscriptStaticJITBackendId::Bytecode());
+		Bytecode.Output.Modules = {Module};
+		Bytecode.Output.Functions.Add(Emitted(
+			Bytecode.BackendId, Function));
+		FAngelscriptStaticJITBackendRegistry Registry;
+		ASSERT_THAT(IsTrue(Registry.RegisterFactory(Bytecode).IsAccepted()));
+
+		FAngelscriptStaticJITGenerator Generator(Registry);
+		FAngelscriptStaticJITGeneratorOutput Output;
+		FString Error;
+		ASSERT_THAT(IsFalse(Generator.Generate(Request, Output, &Error)));
+		ASSERT_THAT(IsFalse(Error.IsEmpty()));
+		ASSERT_THAT(AreEqual(Error, Output.Diagnostics.TaskError));
+		ASSERT_THAT(IsFalse(Output.bHasProviderOutput));
+		ASSERT_THAT(IsTrue(Output.ProviderOutput.Files.IsEmpty()));
 	}
 };
 

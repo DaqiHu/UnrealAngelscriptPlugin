@@ -4,6 +4,8 @@
 #include "UObject/Object.h"
 
 class asITypeInfo;
+class asIScriptEngine;
+struct asSJITFunctionBinding;
 
 class FAngelscriptEngine
 {
@@ -27,6 +29,12 @@ public:
 	static bool IsSimulatingCookedForCurrentContext()
 	{
 		return false;
+	}
+
+	static bool AllowsJITBindingExecution(
+		asIScriptEngine*, const asSJITFunctionBinding&)
+	{
+		return true;
 	}
 
 	static bool CanCastScriptObjectToUnrealInterface(

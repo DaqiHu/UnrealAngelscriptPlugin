@@ -4,6 +4,7 @@
 #include "AngelscriptTestMacros.h"
 
 #include "StaticJIT/StaticJITHeader.h"
+#include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITScalarOps.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS
 
@@ -150,6 +151,10 @@ private:
 	static bool RunExceptionHelpersMapExpectedErrors(FAutomationTestBase& Test);
 	static bool RunExceptionHelpersWrapperParity(FAutomationTestBase& Test);
 	static bool RunExceptionHelpersSwitchValueInvalid(FAutomationTestBase& Test);
+	static bool RunTypedIntegralFailuresUseSharedContract(
+		FAutomationTestBase& Test);
+	static bool RunFirstFailureWinsAcrossNestedExecution(
+		FAutomationTestBase& Test);
 
 public:
 	TEST_METHOD(MapExpectedErrors)
@@ -165,6 +170,18 @@ public:
 	TEST_METHOD(SwitchValueInvalidUsesDedicatedMessage)
 	{
 		ASSERT_THAT(IsTrue(RunExceptionHelpersSwitchValueInvalid(*TestRunner)));
+	}
+
+	TEST_METHOD(TypedIntegralFailuresUseSharedExceptionContract)
+	{
+		ASSERT_THAT(IsTrue(
+			RunTypedIntegralFailuresUseSharedContract(*TestRunner)));
+	}
+
+	TEST_METHOD(FirstFailureWinsAcrossNestedExecution)
+	{
+		ASSERT_THAT(IsTrue(
+			RunFirstFailureWinsAcrossNestedExecution(*TestRunner)));
 	}
 };
 
@@ -283,6 +300,171 @@ bool FAngelscriptStaticJITExceptionHelperTests::RunExceptionHelpersSwitchValueIn
 	}
 	while (false);
 
+	}
+	return bPassed;
+}
+
+bool FAngelscriptStaticJITExceptionHelperTests::
+	RunTypedIntegralFailuresUseSharedContract(FAutomationTestBase& Test)
+{
+	bool bPassed = false;
+	FAngelscriptEngine& Engine = ASTEST_CREATE_ENGINE_FULL();
+	{
+		FAngelscriptEngineScope _AutoEngineScope(Engine);
+		ON_SCOPE_EXIT
+		{
+			const TArray<TSharedRef<FAngelscriptModuleDesc>> _ActiveModules =
+				Engine.GetActiveModules();
+			for (const TSharedRef<FAngelscriptModuleDesc>& _Module
+				: _ActiveModules)
+			{
+				Engine.DiscardModule(*_Module->ModuleName);
+			}
+		};
+
+		do
+		{
+			asCThreadLocalData* const ThreadLocalData =
+				FAngelscriptEngine::GameThreadTLD;
+			if (!RunExceptionCase(
+					Test,
+					ThreadLocalData,
+					TEXT("StaticJIT.ExceptionHelpers.TypedIntegral divide-by-zero"),
+					TEXT("Divide by zero"),
+					[&Test](FScriptExecution& Execution)
+					{
+						const int32 Result =
+							AngelscriptTypedASTJIT::CheckedDivide<int32>(
+								Execution, 7, 0);
+						Test.TestEqual(
+							TEXT("Checked divide should return its deterministic failure value"),
+							Result,
+							0);
+					})
+				|| !RunExceptionCase(
+					Test,
+					ThreadLocalData,
+					TEXT("StaticJIT.ExceptionHelpers.TypedIntegral remainder-overflow"),
+					TEXT("Overflow in integer division"),
+					[&Test](FScriptExecution& Execution)
+					{
+						const int64 Result =
+							AngelscriptTypedASTJIT::CheckedRemainder<int64>(
+								Execution, MIN_int64, int64{-1});
+						Test.TestEqual(
+							TEXT("Checked remainder should return its deterministic failure value"),
+							Result,
+							int64{0});
+					}))
+			{
+				break;
+			}
+
+			bPassed = true;
+		}
+		while (false);
+	}
+	return bPassed;
+}
+
+bool FAngelscriptStaticJITExceptionHelperTests::
+	RunFirstFailureWinsAcrossNestedExecution(FAutomationTestBase& Test)
+{
+	bool bPassed = false;
+	FAngelscriptEngine& Engine = ASTEST_CREATE_ENGINE_FULL();
+	{
+		FAngelscriptEngineScope _AutoEngineScope(Engine);
+		ON_SCOPE_EXIT
+		{
+			const TArray<TSharedRef<FAngelscriptModuleDesc>> _ActiveModules =
+				Engine.GetActiveModules();
+			for (const TSharedRef<FAngelscriptModuleDesc>& _Module
+				: _ActiveModules)
+			{
+				Engine.DiscardModule(*_Module->ModuleName);
+			}
+		};
+
+		do
+		{
+			asCThreadLocalData* const ThreadLocalData =
+				FAngelscriptEngine::GameThreadTLD;
+			if (!Test.TestNotNull(
+				TEXT("StaticJIT.ExceptionHelpers.FirstFailure should have thread-local data"),
+				ThreadLocalData))
+			{
+				break;
+			}
+
+			FScriptExecution* const PreviousExecution =
+				ThreadLocalData->activeExecution;
+			asCContext* const PreviousContext = ThreadLocalData->activeContext;
+			{
+				FScriptExecution OuterExecution(ThreadLocalData);
+				Test.AddExpectedErrorPlain(
+					TEXT("StaticJITFirstFailure"),
+					EAutomationExpectedErrorFlags::Contains,
+					1);
+
+				{
+					FScriptExecution NestedExecution(ThreadLocalData);
+					if (!Test.TestTrue(
+						TEXT("Nested JIT execution should share the active failure record"),
+						NestedExecution.FailureRecord
+							== OuterExecution.FailureRecord))
+					{
+						break;
+					}
+					FStaticJITFunction::SetExternalException(
+						NestedExecution, "StaticJITFirstFailure");
+				}
+				if (!Test.TestTrue(
+						TEXT("A nested JIT failure should stop the parent execution"),
+						OuterExecution.bExceptionThrown))
+				{
+					break;
+				}
+				FStaticJITFunction::SetExternalException(
+					OuterExecution, "StaticJITLaterFailure");
+
+				const asSJITFailureRecord* const Failure =
+					OuterExecution.FailureRecord;
+				if (!Test.TestNotNull(
+						TEXT("The active JIT execution should own a failure record"),
+						Failure)
+					|| !Test.TestTrue(
+						TEXT("The first JIT failure should be retained"),
+						Failure != nullptr && Failure->bHasFailure)
+					|| !Test.TestTrue(
+						TEXT("The first JIT failure should be reported exactly once"),
+						Failure != nullptr && Failure->bReported)
+					|| !Test.TestFalse(
+						TEXT("A directly shared JIT failure should not be marked adopted"),
+						Failure != nullptr && Failure->bAdopted)
+					|| !Test.TestEqual(
+						TEXT("A later nested failure must not replace the first message"),
+						FString(UTF8_TO_TCHAR(
+							Failure != nullptr
+								? Failure->Message.AddressOf() : "")),
+						FString(TEXT("StaticJITFirstFailure"))))
+				{
+					break;
+				}
+			}
+
+			if (!Test.TestTrue(
+					TEXT("First-failure test should restore the prior execution"),
+					ThreadLocalData->activeExecution == PreviousExecution)
+				|| !Test.TestTrue(
+					TEXT("First-failure test should restore the prior context"),
+					ThreadLocalData->activeContext == PreviousContext))
+			{
+				break;
+			}
+
+			bPassed = true;
+		}
+		while (false);
 	}
 	return bPassed;
 }

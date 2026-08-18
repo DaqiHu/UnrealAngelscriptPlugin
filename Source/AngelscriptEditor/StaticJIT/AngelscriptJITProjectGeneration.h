@@ -4,6 +4,8 @@
 
 #include "StaticJIT/AngelscriptJITGeneratedFileStore.h"
 
+struct IAngelscriptSourceProvider;
+
 namespace AngelscriptEditor::StaticJIT
 {
 	struct FAngelscriptJITProjectGenerationResult
@@ -43,6 +45,14 @@ namespace AngelscriptEditor::StaticJIT
 		static bool BuildProjectArtifacts(
 			FStringView ProjectFile,
 			EAngelscriptJITTargetProfile TargetProfile,
+			FAngelscriptJITGenerationOutput& OutGeneratedOutput,
+			FString* OutError = nullptr);
+
+		/** Build from one already-validated immutable Editor source snapshot. */
+		static bool BuildProjectArtifacts(
+			FStringView ProjectFile,
+			EAngelscriptJITTargetProfile TargetProfile,
+			TSharedPtr<IAngelscriptSourceProvider> SourceProviderOverride,
 			FAngelscriptJITGenerationOutput& OutGeneratedOutput,
 			FString* OutError = nullptr);
 

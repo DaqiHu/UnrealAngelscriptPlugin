@@ -12,10 +12,12 @@ namespace UnrealBuildTool.Rules
 			// safe to merge into a UBT unity source.
 			bUseUnity = false;
 			PrivateDefinitions.Add("AS_ENABLE_EDITOR_JITTED_CODE=1");
+			PrivateIncludePaths.Add(ModuleDirectory);
 
 			PublicDependencyModuleNames.AddRange(new string[]
 			{
 				"Core",
+				"CoreUObject",
 				"AngelscriptRuntime",
 			});
 		}

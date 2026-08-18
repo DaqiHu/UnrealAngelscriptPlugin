@@ -141,7 +141,10 @@ static FORCEINLINE_DEBUGGABLE void AngelscriptCallFromBPVM(UASFunction* ASFuncti
 		!TThreadSafe ? ScriptFunction : nullptr);
 	const asSJITFunctionBinding& JITBinding = JITBindingLease.GetBinding();
 
-	if (!TThreadSafe && JITBinding.VMEntry != nullptr)
+	if (!TThreadSafe
+		&& JITBinding.VMEntry != nullptr
+		&& FAngelscriptEngine::AllowsJITBindingExecution(
+			ScriptFunction->GetEngine(), JITBinding))
 	{
 		AS_PERF_SCOPE_RUNTIME_CALL_BPVM_JIT();
 
@@ -471,7 +474,10 @@ static FORCEINLINE_DEBUGGABLE void AngelscriptCallFromParms(UASFunction* ASFunct
 		!TThreadSafe ? ScriptFunction : nullptr);
 	const asSJITFunctionBinding& JITBinding = JITBindingLease.GetBinding();
 
-	if (!TThreadSafe && JITBinding.ParmsEntry != nullptr)
+	if (!TThreadSafe
+		&& JITBinding.ParmsEntry != nullptr
+		&& FAngelscriptEngine::AllowsJITBindingExecution(
+			ScriptFunction->GetEngine(), JITBinding))
 	{
 		UObject* NewWorldContext = nullptr;
 		if (!ASFunction->HasAnyFunctionFlags(FUNC_Static))
@@ -659,7 +665,10 @@ public:
 
 	explicit operator bool() const
 	{
-		return Function != nullptr && BindingLease.GetBinding().RawEntry != nullptr;
+		return Function != nullptr
+			&& BindingLease.GetBinding().RawEntry != nullptr
+			&& FAngelscriptEngine::AllowsJITBindingExecution(
+				Function->GetEngine(), BindingLease.GetBinding());
 	}
 
 	template<typename TInvoker>

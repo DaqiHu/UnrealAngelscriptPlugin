@@ -54,6 +54,12 @@ public:
 		EAngelscriptArtifactReferenceKind ReferenceKind,
 		const FAngelscriptHash256& StableKey) const override;
 
+	// Read-only diagnostics for cache capture profiling and regression tests.
+	// The environment surface is indexed exactly once per resolver session;
+	// Resolve() never rebuilds or mutates this snapshot.
+	uint32 GetSymbolIndexBuildCountForDiagnostics() const;
+	int32 GetIndexedSymbolCountForDiagnostics() const;
+
 	// Materialization-time companions to Resolve(). These return current-Engine
 	// objects only after both the stable key and expected ABI match exactly.
 	// Ambiguous references fail closed just like the validation-only resolver.
@@ -68,7 +74,19 @@ public:
 		const FAngelscriptArtifactReference& Expected) const;
 
 private:
+	struct FIndexedSymbol
+	{
+		FAngelscriptHash256 StableKey;
+		FAngelscriptCacheCurrentSymbol Current;
+		bool bAmbiguous = false;
+	};
+
+	void BuildSymbolIndexLocked() const;
+
 	const asCScriptEngine* Engine = nullptr;
+	mutable FCriticalSection SymbolIndexMutex;
+	mutable TArray<FIndexedSymbol> SymbolIndex;
+	mutable uint32 SymbolIndexBuildCount = 0;
 };
 
 // Resolves the storage facts that are external to a selected script module:

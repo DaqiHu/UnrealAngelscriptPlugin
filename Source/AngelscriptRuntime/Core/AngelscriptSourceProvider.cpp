@@ -29,6 +29,14 @@ namespace AngelscriptSourceProvider_Private
 	}
 }
 
+FAngelscriptHash256 BuildAngelscriptSourceTextHash(const FStringView SourceText)
+{
+	FAngelscriptArtifactCanonicalWriter Writer(
+		TEXT("angelscript-compiled-source-text-v1"));
+	Writer.WriteString(SourceText);
+	return Writer.FinalizeHash();
+}
+
 bool IAngelscriptSourceProvider::LoadSourceBytes(
 	const FAngelscriptSource& Source,
 	TArray<uint8>& OutSourceBytes)

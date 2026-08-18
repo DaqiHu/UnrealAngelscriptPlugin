@@ -177,7 +177,22 @@ Static and Runtime backends intentionally use independent contracts. The
 private synchronous Static contract consumes a complete generation graph and a
 separate emit set, then returns generated C++ and stable references. Its stable
 BackendIds are `bytecode` and `typed-ast`; a typed request uses the per-function
-fallback chain `typed-ast -> bytecode -> VM`. Generator diagnostics retain each
+fallback chain `typed-ast -> bytecode -> VM`. There is no production `dual`
+backend. TypedASTJIT complements BytecodeJIT/VM rather than removing them, and
+it is not a Runtime JIT: it consumes verified typed HIR captured in memory
+before that same generation Engine compiles source, and it never reads
+`.hir.txt` / `.hir.json` back. Ordinary call arguments materialize in reverse
+formal order rather than left-to-right; mutation targets are single-evaluation;
+loop/switch transfers keep explicit phases and targets. Debug-frame position is
+not debugger, coverage, or loop-timeout parity. Direct recursion needs a native
+frame budget. A JIT exception boolean (`bExceptionThrown`) is not a complete
+public exception payload. Cleanup plans are explicit, reverse, and live-only;
+C++ lexical scope is not an AngelScript cleanup plan. Current source-level
+`try`/`catch` remains rejected. Mutable globals and import slots need lifecycle
+routes. A native-form display name does not prove external DLL linkability:
+only `HeaderInline` embeds a symbol; non-inline exports use
+`CurrentNativeBinding` / `InvokeBoundNative`; unexported scalars use
+`InvokeBound` -> `InvokeBoundViaVM`. Generator diagnostics retain each
 function's ordered backend attempts and reasons as well as its final actual
 backend. Static generation runs in a
 dedicated generation-only Engine that replays sealed native bindings and

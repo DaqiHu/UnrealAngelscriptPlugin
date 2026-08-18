@@ -615,16 +615,20 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 
 	static bool TryMapEnvironmentFunctionDataType(
 		const asCDataType& ScriptDataType,
+		const bool bAllowFunctionFactsValueType,
 		FAngelscriptCachedDataType& OutType)
 	{
 		OutType = {};
 		asCTypeInfo* TypeInfo = ScriptDataType.GetTypeInfo();
 		FAngelscriptArtifactReference EnvironmentReference;
-		// Match clean capture exactly: class-graph callable signatures currently
-		// admit external object handles, while environment values/references stay
-		// outside this restore contract and fail closed.
+		// Restorable authority admits external object handles only. Function-facts
+		// capture writes no Cache record and may also retain stable environment
+		// value/reference identities for Provider matching; the JIT backend still
+		// proves the exact ABI and layout before emission.
 		if (TypeInfo == nullptr || TypeInfo->module != nullptr
-			|| ScriptDataType.IsAuto() || !ScriptDataType.IsObjectHandle()
+			|| ScriptDataType.IsAuto()
+			|| (!bAllowFunctionFactsValueType
+				&& !ScriptDataType.IsObjectHandle())
 			|| !FAngelscriptCacheEnvironmentIdentity::TryBuildTypeReference(
 				*TypeInfo, EnvironmentReference))
 		{
@@ -691,7 +695,8 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 					OutType);
 			}
 		}
-		return TryMapEnvironmentFunctionDataType(ScriptDataType, OutType);
+		return TryMapEnvironmentFunctionDataType(
+			ScriptDataType, false, OutType);
 	}
 
 	static bool TryMapClassGraphPropertyDataType(
@@ -741,17 +746,20 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 		const TSharedRef<FAngelscriptModuleDesc>& Module,
 		const FAngelscriptCacheCleanCaptureOptions& Options,
 		const FAngelscriptStableModuleKey& ModuleKey,
+		const bool bFunctionFactsOnly,
 		FAngelscriptCacheCurrentModuleAuthority& OutAuthority)
 	{
 		asCModule* ScriptModule = Module->ScriptModule;
 		if (Module->Classes.Num() < 2 || !Module->Enums.IsEmpty()
-			|| !Module->Delegates.IsEmpty() || !Module->ImportedModules.IsEmpty()
+			|| !Module->Delegates.IsEmpty()
+			|| (!bFunctionFactsOnly && !Module->ImportedModules.IsEmpty())
 			|| !Module->PostInitFunctions.IsEmpty()
 			|| ScriptModule->GetObjectTypeCount()
 				!= static_cast<asUINT>(Module->Classes.Num())
 			|| ScriptModule->GetEnumCount() != 0
 			|| ScriptModule->GetTypedefCount() != 0
-			|| ScriptModule->GetImportedFunctionCount() != 0)
+			|| (!bFunctionFactsOnly
+				&& ScriptModule->GetImportedFunctionCount() != 0))
 		{
 			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
 				TEXT("Current class-graph authority requires two or more classes and no enum, delegate, import, typedef or post-init declaration"));
@@ -1939,16 +1947,19 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 		const TSharedRef<FAngelscriptModuleDesc>& Module,
 		const FAngelscriptCacheCleanCaptureOptions& Options,
 		const FAngelscriptStableModuleKey& ModuleKey,
+		const bool bFunctionFactsOnly,
 		FAngelscriptCacheCurrentModuleAuthority& OutAuthority)
 	{
 		asCModule* ScriptModule = Module->ScriptModule;
 		if (Module->Classes.Num() != 1 || !Module->Enums.IsEmpty()
-			|| !Module->Delegates.IsEmpty() || !Module->ImportedModules.IsEmpty()
+			|| !Module->Delegates.IsEmpty()
+			|| (!bFunctionFactsOnly && !Module->ImportedModules.IsEmpty())
 			|| !Module->PostInitFunctions.IsEmpty()
 			|| ScriptModule->GetObjectTypeCount() != 1
 			|| ScriptModule->GetEnumCount() != 0
 			|| ScriptModule->GetTypedefCount() != 0
-			|| ScriptModule->GetImportedFunctionCount() != 0)
+			|| (!bFunctionFactsOnly
+				&& ScriptModule->GetImportedFunctionCount() != 0))
 		{
 			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
 				TEXT("Current root-class authority requires one class and no enum, delegate, import, typedef or post-init declaration"));
@@ -2880,7 +2891,8 @@ BuildAngelscriptCacheCurrentModuleAuthority(
 	const TSharedRef<FAngelscriptModuleDesc>& Module,
 	const FAngelscriptCacheCleanCaptureOptions& Options,
 	const FAngelscriptStableModuleKey& ModuleKey,
-	FAngelscriptCacheCurrentModuleAuthority& OutAuthority)
+	FAngelscriptCacheCurrentModuleAuthority& OutAuthority,
+	const bool bFunctionFactsOnly)
 {
 	using namespace AngelscriptCacheCurrentModuleAuthority_Private;
 	OutAuthority.Reset();
@@ -2891,18 +2903,26 @@ BuildAngelscriptCacheCurrentModuleAuthority(
 		return Failure(EAngelscriptCacheCleanCaptureError::InvalidInput,
 			TEXT("Current module authority requires a successful staged module, Profile and ModuleKey"));
 	}
+	const bool bReflectionOnlyGlobalStaticsSurface =
+		Module->Classes.Num() == 1
+		&& Module->Classes[0]->bIsStaticsClass
+		&& Module->Classes[0]->ScriptType == nullptr;
 	if (Module->Classes.Num() >= 2)
 	{
 		return BuildClassGraphMethodAuthority(
-			Module, Options, ModuleKey, OutAuthority);
+			Module, Options, ModuleKey, bFunctionFactsOnly, OutAuthority);
 	}
-	if (Module->Classes.Num() == 1)
+	if (Module->Classes.Num() == 1
+		&& !bReflectionOnlyGlobalStaticsSurface)
 	{
 		return BuildRootClassMethodAuthority(
-			Module, Options, ModuleKey, OutAuthority);
+			Module, Options, ModuleKey, bFunctionFactsOnly, OutAuthority);
 	}
-	if (Module->Enums.Num() > 1 || !Module->Classes.IsEmpty()
-		|| !Module->Delegates.IsEmpty() || !Module->ImportedModules.IsEmpty()
+	if (Module->Enums.Num() > 1
+		|| (!Module->Classes.IsEmpty()
+			&& !bReflectionOnlyGlobalStaticsSurface)
+		|| !Module->Delegates.IsEmpty()
+		|| (!bFunctionFactsOnly && !Module->ImportedModules.IsEmpty())
 		|| !Module->PostInitFunctions.IsEmpty())
 	{
 		return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
@@ -2913,7 +2933,8 @@ BuildAngelscriptCacheCurrentModuleAuthority(
 	if (ScriptModule->GetObjectTypeCount() != 0
 		|| ScriptModule->GetTypedefCount() != 0
 		|| ScriptModule->GetGlobalVarCount() != 0
-		|| ScriptModule->GetImportedFunctionCount() != 0
+		|| (!bFunctionFactsOnly
+			&& ScriptModule->GetImportedFunctionCount() != 0)
 		|| ScriptModule->GetEnumCount()
 			!= static_cast<asUINT>(Module->Enums.Num())
 		|| ScriptModule->GetFunctionCount() == 0)
@@ -3078,7 +3099,10 @@ BuildAngelscriptCacheCurrentModuleAuthority(
 		Declaration.TraitFlags = BuildFunctionDeclarationTraitFlags(*Function);
 		FAngelscriptCachedDataType ReturnType;
 		if (!TryMapPrimitiveFunctionDataType(
-			Function->returnType, ReturnType))
+				Function->returnType, ReturnType)
+			&& (!bFunctionFactsOnly
+				|| !TryMapEnvironmentFunctionDataType(
+					Function->returnType, true, ReturnType)))
 		{
 			return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
 				FString::Printf(
@@ -3100,7 +3124,12 @@ BuildAngelscriptCacheCurrentModuleAuthority(
 						Function->parameterNames[ParameterIndex].AddressOf())
 					: FString::Printf(TEXT("arg%u"), ParameterIndex);
 			if (!TryMapPrimitiveFunctionDataType(
-				Function->parameterTypes[ParameterIndex], Parameter.Type))
+					Function->parameterTypes[ParameterIndex], Parameter.Type)
+				&& (!bFunctionFactsOnly
+					|| !TryMapEnvironmentFunctionDataType(
+						Function->parameterTypes[ParameterIndex],
+						true,
+						Parameter.Type)))
 			{
 				return Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
 					FString::Printf(

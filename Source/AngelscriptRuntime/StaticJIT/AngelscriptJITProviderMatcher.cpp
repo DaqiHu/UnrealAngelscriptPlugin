@@ -1,5 +1,8 @@
 #include "StaticJIT/AngelscriptJITProviderMatcher.h"
 
+#include "StaticJIT/AngelscriptJITGeneration.h"
+#include "StaticJIT/BytecodeJIT/AngelscriptBytecodeJIT.h"
+
 namespace
 {
 	struct FEvaluatedCandidate
@@ -8,6 +11,122 @@ namespace
 		TOptional<FAngelscriptJITArtifactSelection> Selection;
 		int32 MatchDepth = 0;
 	};
+
+	static FAngelscriptHash256 MakeRouteEntryAbi(
+		const FAngelscriptFunctionRoute& Route)
+	{
+		const bool bHasParmsEntry =
+			FAngelscriptBytecodeJIT::CanGenerateParmsEntry(Route.Function);
+		return FAngelscriptJITGeneration::BuildEntryAbiHash(
+			Route.CanonicalDeclaration,
+			true,
+			true,
+			bHasParmsEntry);
+	}
+
+	static EAngelscriptArtifactMatchResult EvaluateSemanticDependency(
+		const FAngelscriptJITSemanticDependencyRow& Row,
+		const FAngelscriptFunctionRouteSnapshot* const Routes,
+		const IAngelscriptJITReferenceResolver* const Resolver)
+	{
+		if (Routes == nullptr)
+		{
+			return EAngelscriptArtifactMatchResult::SemanticDependencyMismatch;
+		}
+
+		if (Row.TargetKind == EAngelscriptArtifactReferenceKind::ScriptFunction)
+		{
+			TArray<const FAngelscriptFunctionRoute*, TInlineAllocator<2>> Matches;
+			for (const FAngelscriptFunctionRoute& Route : Routes->FunctionRoutes)
+			{
+				if (Route.bHasVerifiedArtifactIdentity
+					&& Route.Identity.FunctionKey.Hash == Row.TargetStableKey)
+				{
+					Matches.Add(&Route);
+				}
+			}
+			if (Matches.Num() != 1)
+			{
+				return EAngelscriptArtifactMatchResult::SemanticDependencyMismatch;
+			}
+			const FAngelscriptFunctionRoute& Target = *Matches[0];
+			if (!(MakeRouteEntryAbi(Target) == Row.ExpectedAbi))
+			{
+				return EAngelscriptArtifactMatchResult::SemanticDependencyMismatch;
+			}
+			if (Row.Kind == EAngelscriptArtifactSemanticDependencyKind::FunctionContent
+				&& !(Target.Identity.Content.Execution == Row.ExpectedContentOrValue))
+			{
+				return EAngelscriptArtifactMatchResult::SemanticDependencyMismatch;
+			}
+			return EAngelscriptArtifactMatchResult::Exact;
+		}
+
+		int32 Hits = 0;
+		TOptional<FAngelscriptHash256> CurrentValue;
+		FAngelscriptHash256 CurrentAbi;
+		bool bConflict = false;
+		for (const FAngelscriptFunctionArtifactReferenceSet& Set
+			: Routes->ValidatedFunctionArtifactReferenceSets)
+		{
+			for (const FAngelscriptArtifactSemanticDependency& Dependency
+				: Set.SemanticDependencies)
+			{
+				if (Dependency.Kind != Row.Kind
+					|| Dependency.Target.Kind != Row.TargetKind
+					|| !(Dependency.Target.StableKey == Row.TargetStableKey))
+				{
+					continue;
+				}
+				++Hits;
+				if (Hits == 1)
+				{
+					CurrentAbi = Dependency.Target.ExpectedAbi;
+					CurrentValue = Dependency.ExpectedContentOrValue;
+				}
+				else if (!(CurrentAbi == Dependency.Target.ExpectedAbi)
+					|| CurrentValue != Dependency.ExpectedContentOrValue)
+				{
+					bConflict = true;
+				}
+			}
+		}
+		if (Hits == 0
+			&& !bConflict
+			&& Resolver != nullptr
+			&& Row.TargetKind
+				== EAngelscriptArtifactReferenceKind::EnvironmentSymbol)
+		{
+			FAngelscriptArtifactReference Reference;
+			Reference.Kind = Row.TargetKind;
+			Reference.StableKey = Row.TargetStableKey;
+			Reference.ExpectedAbi = Row.ExpectedAbi;
+			const FAngelscriptJITReferenceResolution Resolution =
+				Resolver->Resolve(Reference);
+			if (Resolution.Code == EAngelscriptJITReferenceResolutionCode::Exact
+				&& Resolution.Value != nullptr)
+			{
+				return EAngelscriptArtifactMatchResult::Exact;
+			}
+			return EAngelscriptArtifactMatchResult::SemanticDependencyMismatch;
+		}
+		if (Hits == 0 || bConflict)
+		{
+			return EAngelscriptArtifactMatchResult::SemanticDependencyMismatch;
+		}
+		if (!(CurrentAbi == Row.ExpectedAbi))
+		{
+			return EAngelscriptArtifactMatchResult::SemanticDependencyMismatch;
+		}
+		if (FAngelscriptJITProviderManifest::SemanticDependencyRequiresExpectedContent(
+				Row.Kind)
+			&& (!CurrentValue.IsSet()
+				|| !(CurrentValue.GetValue() == Row.ExpectedContentOrValue)))
+		{
+			return EAngelscriptArtifactMatchResult::SemanticDependencyMismatch;
+		}
+		return EAngelscriptArtifactMatchResult::Exact;
+	}
 
 	static bool HasEntryPoint(
 		const FAngelscriptJITEntryPoints& EntryPoints,
@@ -97,6 +216,20 @@ namespace
 			return Result;
 		}
 		Result.MatchDepth = 7;
+
+		for (const FAngelscriptJITSemanticDependencyRow& Row
+			: Entry.SemanticDependencies)
+		{
+			const EAngelscriptArtifactMatchResult DependencyResult =
+				EvaluateSemanticDependency(
+					Row, Input.CurrentRoutes.Get(), &ReferenceResolver);
+			if (DependencyResult != EAngelscriptArtifactMatchResult::Exact)
+			{
+				Result.Diagnostic.Result = DependencyResult;
+				return Result;
+			}
+		}
+		Result.MatchDepth = 8;
 
 		const FAngelscriptJITReferenceTableBuildResult ReferenceResult =
 			FAngelscriptJITResolvedReferenceTableBuilder::Build(
@@ -221,4 +354,33 @@ FAngelscriptJITFunctionMatchResult FAngelscriptJITProviderMatcher::Match(
 	}
 	Result.Result = Best->Diagnostic.Result;
 	return Result;
+}
+
+FAngelscriptJITFunctionMatchResult
+FAngelscriptJITProviderMatcher::MatchPreferredThenFallback(
+	const FAngelscriptJITProviderRegistrySnapshot& Providers,
+	const FAngelscriptJITFunctionMatchInput& PreferredInput,
+	const FAngelscriptJITFunctionMatchInput& FallbackInput,
+	const IAngelscriptJITReferenceResolver& ReferenceResolver)
+{
+	FAngelscriptJITFunctionMatchResult Preferred = Match(
+		Providers, PreferredInput, ReferenceResolver);
+	if (Preferred.Result == EAngelscriptArtifactMatchResult::Exact
+		|| Preferred.Result
+			== EAngelscriptArtifactMatchResult::AmbiguousExactProvider
+		|| Preferred.Result
+			== EAngelscriptArtifactMatchResult::DuplicateProviderEntry)
+	{
+		return Preferred;
+	}
+
+	FAngelscriptJITFunctionMatchResult Fallback = Match(
+		Providers, FallbackInput, ReferenceResolver);
+	if (Fallback.Result == EAngelscriptArtifactMatchResult::Exact
+		|| Fallback.Result
+			== EAngelscriptArtifactMatchResult::AmbiguousExactProvider)
+	{
+		return Fallback;
+	}
+	return Preferred;
 }

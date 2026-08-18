@@ -62,6 +62,7 @@ class asCConfigGroup;
 class asCTypedefType;
 class asCFuncdefType;
 struct asSNameSpace;
+struct asSTypedSemanticSourceProvenanceRange;
 
 struct sBindInfo
 {
@@ -122,6 +123,14 @@ public:
 
 	// Compilation
 	virtual int         AddScriptSection(const char *name, const char *code, size_t codeLength, int lineOffset);
+	// Fork-private overload. This does not extend asIScriptModule public ABI.
+	int                 AddScriptSectionWithSourceProvenance(
+		const char *name,
+		const char *code,
+		size_t codeLength,
+		int lineOffset,
+		const asSTypedSemanticSourceProvenanceRange *ranges,
+		asUINT rangeCount);
 	virtual int         Build();
 	virtual int         CompileFunction(const char *sectionName, const char *code, int lineOffset, asDWORD reserved, asIScriptFunction **outFunc);
 	void                SetBuildArtifactInvocationCallback(

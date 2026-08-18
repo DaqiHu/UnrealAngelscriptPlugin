@@ -103,11 +103,24 @@ void FAngelscriptCodeCoverage::StartRecording()
 	UE_LOG(Angelscript, Display, TEXT("Starting new test run, resetting code coverage"));
 	ResetHits();
 	bRecording = true;
+	if (OwnerEngine != nullptr)
+	{
+		OwnerEngine->UpdateLineCallbackState();
+	}
+}
+
+void FAngelscriptCodeCoverage::StopRecording()
+{
+	bRecording = false;
+	if (OwnerEngine != nullptr)
+	{
+		OwnerEngine->UpdateLineCallbackState();
+	}
 }
 
 void FAngelscriptCodeCoverage::StopRecordingAndWriteReport(const FString& OutputDir)
 {
-	bRecording = false;
+	StopRecording();
 	UE_LOG(Angelscript, Display, TEXT("Tests complete, writing coverage report to %s."), *OutputDir);
 	if (!WriteCoverageJson(OutputDir))
 	{
@@ -250,7 +263,8 @@ void FAngelscriptCodeCoverageExtension::OnEngineAttached(FAngelscriptEngine& Eng
 	{
 		FEngineCoverage& EngineCoverage = Coverages.AddDefaulted_GetRef();
 		EngineCoverage.Engine = &Engine;
-		EngineCoverage.Coverage = MakeUnique<FAngelscriptCodeCoverage>();
+		EngineCoverage.Coverage =
+			MakeUnique<FAngelscriptCodeCoverage>(&Engine);
 		{
 			FScopeLock Lock(&GCodeCoverageExtensionCriticalSection);
 			GCodeCoverageExtensionsByEngine.Add(&Engine, this);

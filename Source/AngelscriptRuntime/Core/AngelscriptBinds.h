@@ -193,6 +193,37 @@ struct FAngelscriptRegisteredFunctionProvenance
 	FName Provider;
 };
 
+struct FAngelscriptGenerationFunctionProvenance
+{
+	EAngelscriptFunctionBindingOrigin Origin =
+		EAngelscriptFunctionBindingOrigin::Unknown;
+	FName OwnerModule;
+	FName Provider;
+	EAngelscriptBindPhase Phase = EAngelscriptBindPhase::TypeDeclarations;
+	asEBehaviours RegisteredBehaviour = asBEHAVE_MAX;
+	FString ProviderSourceFile;
+	int32 ProviderSourceLine = 0;
+};
+
+struct FAngelscriptGenerationFunctionProvenanceState
+{
+	TMap<int32, FAngelscriptGenerationFunctionProvenance> Functions;
+	TSet<int32> DuplicateFunctionIds;
+
+	bool TryAddFunction(
+		const int32 FunctionId,
+		FAngelscriptGenerationFunctionProvenance Provenance)
+	{
+		if (Functions.Contains(FunctionId))
+		{
+			DuplicateFunctionIds.Add(FunctionId);
+			return false;
+		}
+		Functions.Add(FunctionId, MoveTemp(Provenance));
+		return true;
+	}
+};
+
 struct ANGELSCRIPTRUNTIME_API FAngelscriptBindState
 {
 	TMap<UClass*, TMap<FString, FAngelscriptFunctionBinding>> ClassFunctionBindings;
@@ -210,6 +241,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBindState
 	TMap<int32, FAngelscriptRegisteredFunctionProvenance> FunctionProvenance;
 	TMap<const asIScriptFunction*, FAngelscriptRegisteredFunctionProvenance>
 		FunctionProvenanceByPointer;
+	// The broad provider/source inventory is required only while a disposable
+	// StaticJITGeneration Engine is alive. Ordinary Runtime/Editor Engines keep
+	// this null and retain the compact origin/provider rows above.
+	TUniquePtr<FAngelscriptGenerationFunctionProvenanceState>
+		GenerationFunctionProvenance;
 	FName ActiveBindOwnerModule;
 	FName ActiveBindProvider;
 	EAngelscriptBindPhase ActiveBindPhase = EAngelscriptBindPhase::TypeDeclarations;
@@ -257,6 +293,10 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBoundFunction
 	FAngelscriptBoundFunction& NativeMethod(const ANSICHAR* Name, bool bTrivial = false);
 	FAngelscriptBoundFunction& NativeFunction(const ANSICHAR* Name, bool bTrivial = false);
 	FAngelscriptBoundFunction& NativeFunctionHeader(const ANSICHAR* Name, const ANSICHAR* Header, bool bTrivial = false);
+#if AS_CAN_GENERATE_JIT
+	FAngelscriptBoundFunction& ExternalNativeCall(
+		const FAngelscriptStaticJITNativeCallDescriptor& Descriptor);
+#endif
 	FAngelscriptBoundFunction& NativeUFunction(UFunction* Function, const FString& Name, bool bTrivial = false);
 	FAngelscriptBoundFunction& NativeTArrayIndex();
 	FAngelscriptBoundFunction& NativeTArrayIteratorCreate();
@@ -732,7 +772,7 @@ private:
 
 	FAngelscriptEngine& ResolveTargetEngine() const;
 	void RecordRegistrationFailure(const TCHAR* Operation, FBindString Declaration, int32 Result);
-	FAngelscriptBoundFunction OnBindForTarget(int32 FunctionId, void* UserData, const FAngelscriptType::FBindParams* BindParams, const TCHAR* Operation, FBindString Declaration);
+	FAngelscriptBoundFunction OnBindForTarget(int32 FunctionId, void* UserData, const FAngelscriptType::FBindParams* BindParams, const TCHAR* Operation, FBindString Declaration, asEBehaviours RegisteredBehaviour = asBEHAVE_MAX);
 	FAngelscriptBoundFunction BindGlobalFunctionForTarget(FBindString Signature, asSFuncPtr Function, ASAutoCaller::FunctionCaller Caller, void* UserData);
 
 	FAngelscriptBoundFunction BindBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller);

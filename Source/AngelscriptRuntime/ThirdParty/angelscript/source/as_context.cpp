@@ -49,6 +49,7 @@
 
 #include "AngelscriptSettings.h"
 #include "AngelscriptEngine.h"
+#include "StaticJIT/AngelscriptJITExecutionContext.h"
 #include <math.h> // fmodf() pow()
 
 #ifdef _MSC_VER
@@ -166,22 +167,172 @@ struct FScopeSetActiveContext
 	asCThreadLocalData* tld;
 	FScriptExecution* prevExecution;
 	asCContext* prevContext;
+	FScriptActivation Activation;
 
 	FScopeSetActiveContext(asCThreadLocalData* InTld, asCContext* NewContext)
 		: tld(InTld)
 		, prevExecution(InTld->activeExecution)
 		, prevContext(InTld->activeContext)
 	{
+		Activation.Context = NewContext;
+		Activation.Previous = InTld->activeActivation;
+		InTld->activeActivation = &Activation;
 		InTld->activeContext = NewContext;
 		InTld->activeExecution = nullptr;
 	}
 
 	~FScopeSetActiveContext()
 	{
+		asASSERT(tld->activeActivation == &Activation);
+		tld->activeActivation = Activation.Previous;
 		tld->activeContext = prevContext;
 		tld->activeExecution = prevExecution;
 	}
 };
+
+bool FScriptExecution::TryRecordException(
+	const char* InMessage,
+	asIScriptFunction* Function,
+	const char* InStableFunctionIdentity,
+	const char* InSectionName,
+	const int InLine,
+	const int InColumn,
+	const char* InRouteOrigin,
+	const char* InBackendOrigin,
+	const bool bInReported,
+	const bool bInAdopted)
+{
+	bExceptionThrown = true;
+	if (FailureRecord == nullptr)
+		FailureRecord = &OwnedFailureRecord;
+	if (FailureRecord->bHasFailure)
+		return false;
+
+	FailureRecord->bHasFailure = true;
+	FailureRecord->bReported = bInReported;
+	FailureRecord->bAdopted = bInAdopted;
+	// Only query GetId() for a function owned by this execution's engine.
+	// Context-free test executions leave jitEngine null and may install
+	// sentinel function pointers in the TLD; those must not enter a vtable.
+	FailureRecord->FunctionId = -1;
+	if (Function != nullptr
+		&& jitEngine != nullptr
+		&& Function->GetEngine() == jitEngine)
+	{
+		FailureRecord->FunctionId = Function->GetId();
+	}
+	FailureRecord->Line = InLine;
+	FailureRecord->Column = InColumn;
+	FailureRecord->Message = InMessage != nullptr ? InMessage : "Unknown exception.";
+	FailureRecord->StableFunctionIdentity = InStableFunctionIdentity != nullptr
+		? InStableFunctionIdentity : "";
+	FailureRecord->SectionName = InSectionName != nullptr ? InSectionName : "";
+	FailureRecord->RouteOrigin = InRouteOrigin != nullptr ? InRouteOrigin : "";
+	FailureRecord->BackendOrigin = InBackendOrigin != nullptr ? InBackendOrigin : "";
+	return true;
+}
+
+bool FScriptExecution::AdoptException(asIScriptContext& Context)
+{
+	if (Context.GetState() != asEXECUTION_EXCEPTION)
+		return false;
+
+	const asSJITFailureRecord& NestedJITFailure =
+		static_cast<asCContext&>(Context).m_jitFailureRecord;
+	if (NestedJITFailure.bHasFailure)
+	{
+		const bool bRecorded = TryRecordException(
+			NestedJITFailure.Message.AddressOf(),
+			Context.GetExceptionFunction(),
+			NestedJITFailure.StableFunctionIdentity.AddressOf(),
+			NestedJITFailure.SectionName.AddressOf(),
+			NestedJITFailure.Line,
+			NestedJITFailure.Column,
+			NestedJITFailure.RouteOrigin.AddressOf(),
+			NestedJITFailure.BackendOrigin.AddressOf(),
+			NestedJITFailure.bReported,
+			NestedJITFailure.bAdopted);
+		if (bRecorded && FailureRecord != nullptr)
+		{
+			// The temporary context has already unwound the live JIT frames by
+			// the time its caller adopts the exception. Preserve the owned,
+			// pointer-free first-failure snapshot together with the scalar
+			// diagnostic payload. A pre-existing outer failure still wins and
+			// is never overwritten.
+			FailureRecord->CapturedStackModule =
+				NestedJITFailure.CapturedStackModule;
+			FailureRecord->CapturedStackFrames =
+				NestedJITFailure.CapturedStackFrames;
+		}
+		return bRecorded;
+	}
+
+	int Column = 0;
+	const char* SectionName = nullptr;
+	const int Line = Context.GetExceptionLineNumber(&Column, &SectionName);
+	asIScriptFunction* const Function = Context.GetExceptionFunction();
+	return TryRecordException(
+		Context.GetExceptionString(),
+		Function,
+		nullptr,
+		SectionName,
+		Line >= 0 ? Line : 0,
+		Column,
+		"context-adoption",
+		"vm",
+		false,
+		true);
+}
+
+bool FScriptExecution::PublishException(asCContext& Context)
+{
+	if (FailureRecord == nullptr || !FailureRecord->bHasFailure)
+		return false;
+
+	Context.m_status = asEXECUTION_EXCEPTION;
+	Context.m_exceptionString = FailureRecord->Message;
+	if (FailureRecord->FunctionId >= 0
+		&& asUINT(FailureRecord->FunctionId)
+			< Context.m_engine->scriptFunctions.GetLength()
+		&& Context.m_engine->scriptFunctions[FailureRecord->FunctionId] != nullptr)
+	{
+		Context.m_exceptionFunction = FailureRecord->FunctionId;
+	}
+	else if (Context.m_currentFunction != nullptr)
+	{
+		Context.m_exceptionFunction = Context.m_currentFunction->id;
+	}
+
+	Context.m_exceptionSectionIdx = -1;
+	if (FailureRecord->SectionName.GetLength() != 0)
+	{
+		Context.m_exceptionSectionIdx =
+			Context.m_engine->GetScriptSectionNameIndex(
+				FailureRecord->SectionName.AddressOf());
+	}
+	Context.m_exceptionLine = FailureRecord->Line;
+	Context.m_exceptionColumn = FailureRecord->Column;
+	Context.m_exceptionWillBeCaught = false;
+
+#if AS_REFERENCE_DEBUGGING
+	Context.TrackedReferences.Reset();
+#endif
+
+	if (Context.m_exceptionCallback && !FailureRecord->bReported)
+	{
+		FailureRecord->bReported = true;
+		// Publish the owned diagnostic payload before invoking the callback so
+		// callback-side logging can recover a nested JIT stack after the
+		// temporary FScriptExecution scopes have already unwound.
+		Context.m_jitFailureRecord = *FailureRecord;
+		Context.CallExceptionCallback();
+	}
+	else
+	{
+		Context.m_jitFailureRecord = *FailureRecord;
+	}
+	return true;
+}
 
 asCContext::asCContext(asCScriptEngine *engine, bool holdRef)
 {
@@ -530,6 +681,7 @@ int asCContext::Prepare(asIScriptFunction *func)
 		m_doAbort                 = false;
 		m_externalSuspendRequest  = false;
 	}
+	m_jitFailureRecord = asSJITFailureRecord();
 	m_status = asEXECUTION_PREPARED;
 	m_executeVirtualCall = true;
 	m_regs.programPointer = 0;
@@ -622,6 +774,7 @@ int asCContext::Unprepare()
 	m_initialFunction = 0;
 	m_currentFunction = 0;
 	m_exceptionFunction = 0;
+	m_jitFailureRecord = asSJITFailureRecord();
 	m_regs.programPointer = 0;
 
 	// Reset status
@@ -978,7 +1131,9 @@ int asCContext::Execute()
 			const asSJITFunctionBinding jitBinding =
 				m_currentFunction->AcquireJITBindingForExecution();
 			auto* jitFunction = jitBinding.VMEntry;
-			if (jitFunction != nullptr)
+			if (jitFunction != nullptr
+				&& FAngelscriptEngine::AllowsJITBindingExecution(
+					m_engine, jitBinding))
 			{
 				struct FReleaseJITBinding
 				{
@@ -995,8 +1150,11 @@ int asCContext::Execute()
 				Execution.jitBindingUserData = jitBinding.UserData;
 
 				asQWORD outValue = 0;
-				jitFunction(
+				FAngelscriptJITExecutionContext::InvokeVM(
 					Execution,
+					m_engine,
+					m_currentFunction,
+					jitBinding,
 					m_regs.stackFramePointer,
 					&outValue);
 
@@ -1017,7 +1175,8 @@ int asCContext::Execute()
 				}
 				else
 				{
-					m_status = asEXECUTION_EXCEPTION;
+					if (!Execution.PublishException(*this))
+						m_status = asEXECUTION_EXCEPTION;
 					return m_status;
 				}
 			}
@@ -1476,7 +1635,9 @@ void asCContext::CallScriptFunction(asCScriptFunction *func)
 	const asSJITFunctionBinding jitBinding =
 		func->AcquireJITBindingForExecution();
 	auto* jitFunction = jitBinding.VMEntry;
-	if (jitFunction != nullptr)
+	if (jitFunction != nullptr
+		&& FAngelscriptEngine::AllowsJITBindingExecution(
+			m_engine, jitBinding))
 	{
 		struct FReleaseJITBinding
 		{
@@ -1493,8 +1654,11 @@ void asCContext::CallScriptFunction(asCScriptFunction *func)
 		Execution.jitBindingUserData = jitBinding.UserData;
 
 		asQWORD outValue = 0;
-		jitFunction(
+		FAngelscriptJITExecutionContext::InvokeVM(
 			Execution,
+			m_engine,
+			func,
+			jitBinding,
 			m_regs.stackPointer,
 			&outValue);
 
@@ -1514,7 +1678,8 @@ void asCContext::CallScriptFunction(asCScriptFunction *func)
 		}
 		else
 		{
-			m_status = asEXECUTION_EXCEPTION;
+			if (!Execution.PublishException(*this))
+				m_status = asEXECUTION_EXCEPTION;
 			return;
 		}
 	}
@@ -4444,14 +4609,19 @@ void asCContext::ExecuteNext()
 
 	case asBC_ThrowException:
 		{
+			// SetInternalException snapshots m_regs.programPointer. The VM loop
+			// executes through local register copies, so synchronize the exact
+			// synthesized throw instruction before publishing its source position.
+			m_regs.programPointer    = l_bc;
+			m_regs.stackPointer      = l_sp;
+			m_regs.stackFramePointer = l_fp;
 			int Type = asBC_WORDARG0(l_bc);
 			if (Type == 0)
 				SetInternalException("Invalid enum value passed to switch");
 			else
 				SetInternalException("Unknown exception");
-			l_bc++;
+			return;
 		}
-		break;
 
 	// Don't let the optimizer optimize for size,
 	// since it requires extra conditions and jumps
@@ -4544,6 +4714,7 @@ void asCContext::SetInternalException(const char *descr, bool allowCatch)
 	m_status                = asEXECUTION_EXCEPTION;
 	m_exceptionString       = descr;
 	m_exceptionFunction     = m_currentFunction->id;
+	m_jitFailureRecord      = asSJITFailureRecord();
 
 #if AS_REFERENCE_DEBUGGING
 	TrackedReferences.Reset();
@@ -4557,7 +4728,7 @@ void asCContext::SetInternalException(const char *descr, bool allowCatch)
 	}
 	else
 	{
-		m_exceptionSectionIdx = 0;
+		m_exceptionSectionIdx = -1;
 		m_exceptionLine       = 0;
 		m_exceptionColumn     = 0;
 	}
@@ -5217,7 +5388,9 @@ int asCContext::GetExceptionLineNumber(int *column, const char **sectionName)
 	if( sectionName )
 	{
 		// The section index can be -1 if the exception was raised in a generated function, e.g. $fact for templates
-		if( m_exceptionSectionIdx >= 0 )
+		if( m_exceptionSectionIdx >= 0 &&
+			asUINT(m_exceptionSectionIdx) < m_engine->scriptSectionNames.GetLength() &&
+			m_engine->scriptSectionNames[m_exceptionSectionIdx] != 0 )
 			*sectionName = m_engine->scriptSectionNames[m_exceptionSectionIdx]->AddressOf();
 		else
 			*sectionName = 0;

@@ -150,6 +150,22 @@ CaptureAngelscriptCurrentModuleFunctionArtifactsForDiagnostics(
 	const FAngelscriptCacheCleanCaptureOptions& Options,
 	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts);
 
+// Lightweight compile-transaction seam for StaticJIT generation. It retains
+// the exact stable identity/reference facts needed by generated Providers but
+// deliberately builds no SourceIndex, semantic records, packs, manifest, or
+// Cache lifecycle publication. CrossModuleFunctions is the complete current
+// compile-transaction authority and never escapes into OutArtifacts.
+ANGELSCRIPTRUNTIME_API FAngelscriptCacheCleanCaptureResult
+CaptureAngelscriptCurrentModuleFunctionFacts(
+	const TSharedRef<FAngelscriptModuleDesc>& Module,
+	const FAngelscriptCacheCleanCaptureOptions& Options,
+	const FAngelscriptCachedSourceIndex& AuthoritativeSourceIndex,
+	const FAngelscriptCacheCrossModuleFunctionAuthority*
+		CrossModuleFunctions,
+	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts,
+	const IAngelscriptCacheCurrentSymbolResolver*
+		EnvironmentSymbols = nullptr);
+
 // Production capture overload. The SourceIndex must be the authoritative
 // candidate built from current source discovery plus captured preprocessing
 // dependencies; capture validates that the compiled module is one of its exact
@@ -182,7 +198,9 @@ CaptureAngelscriptCleanCompiledModule(
 		RestoredDependencies,
 	const FAngelscriptCacheCrossModuleFunctionAuthority*
 		CrossModuleFunctions,
-	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts);
+	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts,
+	const IAngelscriptCacheCurrentSymbolResolver*
+		EnvironmentSymbols = nullptr);
 
 ANGELSCRIPTRUNTIME_API FAngelscriptCacheCleanCaptureResult
 ValidateAndPromoteAngelscriptCleanCompiledModuleArtifacts(
@@ -191,7 +209,9 @@ ValidateAndPromoteAngelscriptCleanCompiledModuleArtifacts(
 	FAngelscriptCacheCleanModuleArtifacts CandidateArtifacts,
 	FAngelscriptCacheCleanModuleArtifacts& OutArtifacts,
 	const FAngelscriptCacheCrossModuleFunctionAuthority*
-		CrossModuleFunctions = nullptr);
+		CrossModuleFunctions = nullptr,
+	const IAngelscriptCacheCurrentSymbolResolver*
+		EnvironmentSymbols = nullptr);
 
 // Reopens pointer-free clean artifacts through the same decoder, current-
 // symbol/layout authorities and opaque VM validator used by capture. The

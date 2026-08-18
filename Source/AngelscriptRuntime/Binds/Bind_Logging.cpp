@@ -1,6 +1,8 @@
 #include "Bind_Logging.h"
 
 #include "AngelscriptBinds.h"
+#include "StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallables.h"
+#include "StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallDescriptor.h"
 
 /**
  * Global logging, exception, and on-screen diagnostic binding surface.
@@ -165,11 +167,50 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Logging(
 		Binds.BindGlobalFunctionForTarget("void Throw(const FString& Text)", &FAngelscriptLoggingBinds::Throw);
 		Binds.BindGlobalFunctionForTarget("void ThrowIf(bool Condition, const FString& Text)", &FAngelscriptLoggingBinds::ThrowIf);
 
-		Binds.BindGlobalFunctionForTarget(
+		FAngelscriptBoundFunction PrintFunction =
+			Binds.BindGlobalFunctionForTarget(
 			"void Print(const FString& Text, float32 Duration = 5.f, FLinearColor Color = FLinearColor::LucBlue)",
-			&FAngelscriptLoggingBinds::Print)
+			&AngelscriptStaticJITNativeCallables::Print)
 			.CompileOutIfNoLog()
 			.WorldContext();
+#if AS_CAN_GENERATE_JIT
+		FAngelscriptStaticJITNativeCallDescriptor PrintDescriptor;
+		PrintDescriptor.Linkage =
+			EAngelscriptStaticJITNativeCallLinkage::ExportedRuntimeCallable;
+		PrintDescriptor.Visibility =
+			EAngelscriptStaticJITNativeCallVisibility::External;
+		PrintDescriptor.Symbol =
+			TEXT("AngelscriptStaticJITNativeCallables::Print");
+		PrintDescriptor.Include = TEXT(
+			"StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallables.h");
+		PrintDescriptor.OwningModule = FName(TEXT("AngelscriptRuntime"));
+		PrintDescriptor.ApiMacro = TEXT("ANGELSCRIPTRUNTIME_API");
+		PrintDescriptor.CppCallableSignature =
+			TEXT("void(const FString&, float, FLinearColor)");
+		PrintDescriptor.ABIDomain =
+			EAngelscriptStaticJITNativeCallABIDomain::BorrowedManagedPOD;
+		PrintDescriptor.CompileOutPolicy =
+			EAngelscriptStaticJITNativeCallCompileOutPolicy::IfNoLog;
+		PrintDescriptor.DefaultArgumentPolicy =
+			EAngelscriptStaticJITNativeCallDefaultArgumentPolicy::CallerMaterializes;
+		PrintDescriptor.DefaultArgumentCount = 2;
+		PrintDescriptor.WorldContextPolicy =
+			EAngelscriptStaticJITNativeCallWorldContextPolicy::RuntimeCurrentWorld;
+		PrintDescriptor.ExceptionPolicy =
+			EAngelscriptStaticJITNativeCallExceptionPolicy::DoesNotSetScriptException;
+		PrintDescriptor.RouteFlags =
+			EAngelscriptStaticJITNativeCallRouteFlags::DirectCall;
+		PrintDescriptor.LifetimeFlags =
+			EAngelscriptStaticJITNativeCallLifetimeFlags::NoRetainedReferences
+			| EAngelscriptStaticJITNativeCallLifetimeFlags::NoEngineLocalCapture
+			| EAngelscriptStaticJITNativeCallLifetimeFlags::BorrowedInputReferences
+			| EAngelscriptStaticJITNativeCallLifetimeFlags::ByValueObjectArguments;
+		if (TryBuildAngelscriptStaticJITNativeABIIdentity(
+			*PrintFunction.GetFunction(), PrintDescriptor.NativeABI))
+		{
+			PrintFunction.ExternalNativeCall(PrintDescriptor);
+		}
+#endif
 		Binds.BindGlobalFunctionForTarget(
 			"void PrintFromObject(const UObject WorldContextObject, const FString& Text, float32 Duration = 0.f, FLinearColor Color = FLinearColor::LucBlue)",
 			&FAngelscriptLoggingBinds::PrintFromObject)

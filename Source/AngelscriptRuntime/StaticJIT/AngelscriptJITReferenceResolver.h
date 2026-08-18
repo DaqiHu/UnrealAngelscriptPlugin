@@ -73,6 +73,17 @@ public:
 	static FAngelscriptArtifactReference ForImport(
 		const FAngelscriptHash256& ImportKey,
 		const FAngelscriptHash256& ExpectedAbi);
+	/**
+	 * Build the Engine-local mutable import-slot descriptor used by generated
+	 * code. The stable key identifies the consumer-owned slot; ExpectedAbi
+	 * describes only the callable signature and never the currently bound
+	 * provider.
+	 */
+	static FAngelscriptArtifactReference ForImportSlot(
+		const FAngelscriptStableModuleKey& ConsumerModuleKey,
+		FStringView CanonicalNamespace,
+		FStringView CanonicalDeclaration,
+		FStringView DeclaredSourceModule);
 	static FAngelscriptArtifactReference ForStringLiteral(
 		FStringView Value,
 		const FAngelscriptHash256& ExpectedAbi);

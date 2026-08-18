@@ -49,6 +49,13 @@ public:
 		return Selection.EntryIndex;
 	}
 
+	bool HasExecutionCapabilityProfile() const;
+	EAngelscriptJITExecutionCapability GetAvailableExecutionCapabilities() const;
+	EAngelscriptJITExecutionCapability
+		GetRuntimeExecutionRequirementTriggers() const;
+	bool AllowsExecutionCapabilities(
+		EAngelscriptJITExecutionCapability RequiredCapabilities) const;
+
 	void MarkExecution(EEntryKind Kind) const;
 	uint64 GetExecutionCount(EEntryKind Kind) const;
 

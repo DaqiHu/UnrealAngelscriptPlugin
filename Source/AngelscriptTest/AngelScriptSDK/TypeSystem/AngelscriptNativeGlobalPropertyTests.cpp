@@ -1,5 +1,6 @@
 #include "Support/AngelscriptNativeExecutionTestSupport.h"
 #include "Support/AngelscriptNativeCaseTestSupport.h"
+#include "Support/AngelscriptNativeLanguageCaseTestSupport.h"
 #include "AngelscriptTestMacros.h"
 
 // Raw SDK global-property coverage.

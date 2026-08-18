@@ -191,7 +191,7 @@ private:
 	static TArray<int32> ExtractGeneratedLineMarkers(const FString& GeneratedSource)
 	{
 		TArray<int32> LineMarkers;
-		const FString Needle = TEXT("SCRIPT_DEBUG_CALLSTACK_LINE(");
+		const FString Needle = TEXT("SCRIPT_DEBUG_CALLSTACK_POSITION(");
 		int32 SearchFrom = 0;
 		while (SearchFrom < GeneratedSource.Len())
 		{
@@ -202,7 +202,7 @@ private:
 			}
 
 			const int32 ValueStart = MarkerStart + Needle.Len();
-			int32 ValueEnd = GeneratedSource.Find(TEXT(");"), ESearchCase::CaseSensitive, ESearchDir::FromStart, ValueStart);
+			int32 ValueEnd = GeneratedSource.Find(TEXT(","), ESearchCase::CaseSensitive, ESearchDir::FromStart, ValueStart);
 			if (ValueEnd == INDEX_NONE)
 			{
 				break;
@@ -210,7 +210,7 @@ private:
 
 			const FString ValueText = GeneratedSource.Mid(ValueStart, ValueEnd - ValueStart);
 			LineMarkers.Add(FCString::Atoi(*ValueText));
-			SearchFrom = ValueEnd + 2;
+			SearchFrom = ValueEnd + 1;
 		}
 
 		return LineMarkers;
@@ -619,7 +619,8 @@ public:
 			FAngelscriptStaticJITBackendId::Bytecode();
 		ExplicitRequest.Settings = Settings;
 		ExplicitRequest.CompiledSourceGraph = MakeArrayView(ProviderModules);
-		ExplicitRequest.bHasVerifiedTypedHIR = false;
+		ExplicitRequest.CaptureProfile =
+			EAngelscriptStaticJITCaptureProfile::Bytecode;
 		FAngelscriptStaticJITGeneratorOutput ExplicitOutput;
 		FString ExplicitError;
 		ASSERT_THAT(IsTrue(GenerateStaticJITProviderArtifacts(
@@ -683,8 +684,11 @@ public:
 				ASSERT_THAT(IsFalse(File.Content.Contains(
 					TEXT("\n#if UE_BUILD_DEVELOPMENT\n#ifndef AS_SKIP_JITTED_CODE")),
 					TEXT("Provider output must not inherit the commandlet process configuration as a second guard")));
-				ASSERT_THAT(IsFalse(File.Content.Contains(TEXT("FStaticJITFunction")),
-					TEXT("Provider module sources must not retain numeric FunctionId registration")));
+				ASSERT_THAT(IsFalse(File.Content.Contains(
+					TEXT("AS_FORCE_LINK static const FStaticJITFunction ")),
+					TEXT("Provider module sources must not retain legacy numeric FunctionId registration objects")));
+				ASSERT_THAT(IsFalse(File.Content.Contains(TEXT("_Register(0x")),
+					TEXT("Provider module sources must not persist a hexadecimal numeric FunctionId")));
 			}
 		}
 		ASSERT_THAT(AreEqual(2, ModuleSourceCount));
@@ -909,8 +913,8 @@ bool FAngelscriptStaticJITGeneratedOutputTests::RunGeneratedOutputDebugMetadataH
 		}
 
 		const FString FrameNeedle = TEXT("SCRIPT_DEBUG_CALLSTACK_FRAME(\"int Entry()\"");
-		const FString FirstCallLineNeedle = FString::Printf(TEXT("SCRIPT_DEBUG_CALLSTACK_LINE(%d);"), FirstCallLine);
-		const FString SecondCallLineNeedle = FString::Printf(TEXT("SCRIPT_DEBUG_CALLSTACK_LINE(%d);"), SecondCallLine);
+		const FString FirstCallLineNeedle = FString::Printf(TEXT("SCRIPT_DEBUG_CALLSTACK_POSITION(%d, "), FirstCallLine);
+		const FString SecondCallLineNeedle = FString::Printf(TEXT("SCRIPT_DEBUG_CALLSTACK_POSITION(%d, "), SecondCallLine);
 		const TArray<int32> ObservedLineMarkers = ExtractGeneratedLineMarkers(SourceWithDebugMetadata);
 
 		if (!Test.TestTrue(TEXT("StaticJIT.GeneratedOutput.DebugMetadataHooks should emit a frame macro when debug metadata is enabled"), SourceWithDebugMetadata.Contains(FrameNeedle))
@@ -939,7 +943,7 @@ bool FAngelscriptStaticJITGeneratedOutputTests::RunGeneratedOutputDebugMetadataH
 		}
 
 		if (!Test.TestFalse(TEXT("StaticJIT.GeneratedOutput.DebugMetadataHooks should omit frame macros when debug metadata is disabled"), SourceWithoutDebugMetadata.Contains(TEXT("SCRIPT_DEBUG_CALLSTACK_FRAME(")))
-			|| !Test.TestFalse(TEXT("StaticJIT.GeneratedOutput.DebugMetadataHooks should omit line markers when debug metadata is disabled"), SourceWithoutDebugMetadata.Contains(TEXT("SCRIPT_DEBUG_CALLSTACK_LINE("))))
+			|| !Test.TestFalse(TEXT("StaticJIT.GeneratedOutput.DebugMetadataHooks should omit position markers when debug metadata is disabled"), SourceWithoutDebugMetadata.Contains(TEXT("SCRIPT_DEBUG_CALLSTACK_POSITION("))))
 		{
 			break;
 		}

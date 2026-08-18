@@ -45,4 +45,5 @@ BuildAngelscriptCacheCurrentModuleAuthority(
 	const TSharedRef<FAngelscriptModuleDesc>& Module,
 	const FAngelscriptCacheCleanCaptureOptions& Options,
 	const FAngelscriptStableModuleKey& ModuleKey,
-	FAngelscriptCacheCurrentModuleAuthority& OutAuthority);
+	FAngelscriptCacheCurrentModuleAuthority& OutAuthority,
+	bool bFunctionFactsOnly = false);

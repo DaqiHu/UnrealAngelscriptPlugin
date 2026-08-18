@@ -1,5 +1,6 @@
 #include "AngelscriptTestMacros.h"
 #include "CQTest.h"
+#include "../Support/AngelscriptNativeCaseTestSupport.h"
 #include "../Support/AngelscriptNativeCoreTestSupport.h"
 
 // Raw SDK thread-manager and thread-local-data coverage.

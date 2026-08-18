@@ -3,15 +3,25 @@
 #include "CoreMinimal.h"
 
 #include "StaticJIT/Backends/AngelscriptStaticJITBackend.h"
+#include "StaticJIT/AngelscriptStaticJITGenerationProfile.h"
 
 #if AS_CAN_GENERATE_JIT
 
 struct FAngelscriptStaticJITGenerationSnapshot;
 
-enum class EAngelscriptStaticJITCaptureProfile : uint8
+/** Pointer-free audit of the exact immutable graph delivered to a backend. */
+struct FAngelscriptStaticJITCompiledSourceGraphSummary
 {
-	Bytecode = 0,
-	VerifiedTypedHIR,
+	uint32 SourceCompilePassCount = 0;
+	int32 ModuleCount = 0;
+	int32 FunctionCount = 0;
+	int32 TypeCount = 0;
+	int32 GlobalCount = 0;
+	int32 DescriptorCount = 0;
+	int32 DependencyCount = 0;
+	int32 ExternalNativeCallCount = 0;
+	int32 EmitModuleCount = 0;
+	bool bHasVerifiedTypedHIR = false;
 };
 
 struct FAngelscriptStaticJITGeneratorDiagnostics
@@ -20,6 +30,7 @@ struct FAngelscriptStaticJITGeneratorDiagnostics
 	EAngelscriptStaticJITCaptureProfile CaptureProfile =
 		EAngelscriptStaticJITCaptureProfile::Bytecode;
 	TArray<FAngelscriptStaticJITBackendId> FallbackChain;
+	FAngelscriptStaticJITCompiledSourceGraphSummary CompiledSourceGraph;
 	FString TaskError;
 };
 
@@ -31,6 +42,12 @@ struct FAngelscriptStaticJITGeneratorOutput
 	FAngelscriptStaticJITGeneratorDiagnostics Diagnostics;
 	TArray<FAngelscriptStaticJITFunctionResult> Functions;
 };
+
+/** Convert generator-owned backend facts into the Provider packaging model. */
+ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationDiagnostics
+BuildAngelscriptStaticJITGenerationDiagnostics(
+	const FAngelscriptStaticJITGeneratorOutput& GeneratorOutput,
+	TConstArrayView<FAngelscriptStableFunctionKey> EmittedFunctionKeys);
 
 /**
  * Internal backend-neutral StaticJIT task orchestrator.
@@ -57,9 +74,30 @@ public:
 		OutOutput = {};
 		OutOutput.Diagnostics.RequestedBackendId = Request.RequestedBackendId;
 		OutOutput.Diagnostics.CaptureProfile =
-			Request.CompiledSourceGraph.bHasVerifiedTypedHIR
-				? EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR
-				: EAngelscriptStaticJITCaptureProfile::Bytecode;
+			Request.CompiledSourceGraph.CaptureProfile;
+		FAngelscriptStaticJITCompiledSourceGraphSummary& GraphSummary =
+			OutOutput.Diagnostics.CompiledSourceGraph;
+		GraphSummary.SourceCompilePassCount =
+			Request.CompiledSourceGraph.SourceCompilePassCount;
+		GraphSummary.ModuleCount = Request.CompiledSourceGraph.Modules.Num();
+		GraphSummary.FunctionCount = Request.CompiledSourceGraph.Functions.Num();
+		GraphSummary.TypeCount = Request.CompiledSourceGraph.Types.Num();
+		GraphSummary.GlobalCount = Request.CompiledSourceGraph.Globals.Num();
+		GraphSummary.DescriptorCount =
+			Request.CompiledSourceGraph.Descriptors.Num();
+		GraphSummary.DependencyCount =
+			Request.CompiledSourceGraph.Dependencies.Num();
+		GraphSummary.ExternalNativeCallCount =
+			Request.CompiledSourceGraph.ExternalNativeCalls.Num();
+		GraphSummary.EmitModuleCount = Request.EmitModuleSet.Num();
+		GraphSummary.bHasVerifiedTypedHIR =
+			Request.CompiledSourceGraph.CaptureProfile
+				== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR
+			&& Request.CompiledSourceGraph.Functions.ContainsByPredicate(
+				[](const FAngelscriptStaticJITCompiledFunctionView& Function)
+				{
+					return Function.VerifiedTypedHIR != nullptr;
+				});
 		OutOutput.Diagnostics.FallbackChain.Add(Request.RequestedBackendId);
 		if (Request.RequestedBackendId
 			== FAngelscriptStaticJITBackendId::TypedAST())
@@ -77,17 +115,32 @@ public:
 			return false;
 		};
 
-		if (!Request.RequestedBackendId.IsValid())
+		FAngelscriptStaticJITGenerationProfile RequiredProfile;
+		FString ProfileError;
+		if (!FAngelscriptStaticJITGenerationProfile::TryCreate(
+			Request.RequestedBackendId,
+			Request.CompiledSourceGraph.Settings.TargetProfile,
+			RequiredProfile, &ProfileError))
 		{
-			return Fail(TEXT(
-				"StaticJIT generation requires a valid Static BackendId."));
+			return Fail(ProfileError);
 		}
-		if (Request.RequestedBackendId
-				== FAngelscriptStaticJITBackendId::TypedAST()
-			&& !Request.CompiledSourceGraph.bHasVerifiedTypedHIR)
+		if (Request.CompiledSourceGraph.CaptureProfile
+			!= RequiredProfile.CaptureProfile)
 		{
-			return Fail(TEXT(
-				"StaticJIT generation failed: CaptureProfileMismatch for typed-ast."));
+			const TCHAR* const RequiredCaptureProfile =
+				RequiredProfile.RequiresTypedSemanticIRCapture()
+					? TEXT("verified-typed-hir")
+					: TEXT("bytecode");
+			const TCHAR* const ActualCaptureProfile =
+				Request.CompiledSourceGraph.CaptureProfile
+					== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR
+					? TEXT("verified-typed-hir")
+					: TEXT("bytecode");
+			return Fail(FString::Printf(TEXT(
+				"StaticJIT generation failed: CaptureProfileMismatch; backend '%s' requires '%s' but the compiled graph uses '%s'."),
+				*Request.RequestedBackendId.ToString(),
+				RequiredCaptureProfile,
+				ActualCaptureProfile));
 		}
 
 		const TArray<FAngelscriptStaticJITBackendId>& BackendChain =
@@ -250,6 +303,7 @@ public:
 				Attempt.BackendId = Candidate.ActualBackendId;
 				Attempt.Disposition = Candidate.Disposition;
 				Attempt.Detail = Candidate.Detail;
+				Attempt.TypedDiagnostic = Candidate.TypedDiagnostic;
 				Candidate.BackendAttempts.Reset();
 				if (Candidate.Disposition
 					== EAngelscriptStaticJITFunctionDisposition::Emitted)
@@ -305,6 +359,25 @@ public:
 			}
 			return false;
 		};
+		// Direct callers (GenerateStaticJITSourceTextForDiagnostics) skip
+		// Generate() and therefore never copy RequestedBackendId onto the
+		// output diagnostics. Provider validation treats an empty backend id
+		// as InvalidDiagnosticString (code 65).
+		if (!OutOutput.Diagnostics.RequestedBackendId.IsValid())
+		{
+			OutOutput.Diagnostics.RequestedBackendId = Request.RequestedBackendId;
+		}
+		if (OutOutput.Diagnostics.FallbackChain.IsEmpty()
+			&& Request.RequestedBackendId.IsValid())
+		{
+			OutOutput.Diagnostics.FallbackChain.Add(Request.RequestedBackendId);
+			if (Request.RequestedBackendId
+				== FAngelscriptStaticJITBackendId::TypedAST())
+			{
+				OutOutput.Diagnostics.FallbackChain.Add(
+					FAngelscriptStaticJITBackendId::Bytecode());
+			}
+		}
 
 		FAngelscriptJITGenerationRequest PackageRequest;
 		const FAngelscriptJITProviderGenerationSettings& Settings =
@@ -346,6 +419,20 @@ public:
 				PackageRequest.Functions.Add(*Result.EmittedFunction);
 			}
 		}
+		if (PackageRequest.TargetProfile
+			!= EAngelscriptJITTargetProfile::GameShipping)
+		{
+			TArray<FAngelscriptStableFunctionKey> EmittedFunctionKeys;
+			EmittedFunctionKeys.Reserve(PackageRequest.Functions.Num());
+			for (const FAngelscriptJITGenerationFunction& Function
+				: PackageRequest.Functions)
+			{
+				EmittedFunctionKeys.Add(Function.FunctionKey);
+			}
+			PackageRequest.Diagnostics =
+				BuildAngelscriptStaticJITGenerationDiagnostics(
+					OutOutput, EmittedFunctionKeys);
+		}
 
 		if (PackageRequest.Functions.IsEmpty())
 		{
@@ -356,10 +443,13 @@ public:
 			return Fail(TEXT(
 				"StaticJIT backends emitted functions without an emitted module."));
 		}
+		FString PackageError;
 		if (!FAngelscriptJITGeneration::Generate(
-			PackageRequest, OutOutput.ProviderOutput, OutError))
+			PackageRequest, OutOutput.ProviderOutput, &PackageError))
 		{
-			return false;
+			return Fail(PackageError.IsEmpty()
+				? TEXT("StaticJIT Provider packaging failed.")
+				: PackageError);
 		}
 		OutOutput.bHasProviderOutput = true;
 		return true;
@@ -372,14 +462,28 @@ private:
 		{
 			return;
 		}
-		FString Normalized = Fragment;
-		if (!Normalized.EndsWith(TEXT("\n")))
+
+		// Every backend contributes to one module translation unit. Merge shared
+		// include/guard lines individually so a TypedAST + Bytecode fallback does
+		// not open the same AS_SKIP_JITTED_CODE guard twice but close it once.
+		// Preserve duplicate lines inside one backend fragment; only lines already
+		// contributed by an earlier backend are suppressed.
+		TArray<FString> ExistingLines;
+		Target.ParseIntoArrayLines(ExistingLines, false);
+		TArray<FString> FragmentLines;
+		Fragment.ParseIntoArrayLines(FragmentLines, false);
+		for (const FString& Line : FragmentLines)
 		{
-			Normalized += TEXT("\n");
-		}
-		if (!Target.Contains(Normalized, ESearchCase::CaseSensitive))
-		{
-			Target += Normalized;
+			if (!Line.IsEmpty()
+				&& !ExistingLines.ContainsByPredicate(
+					[&Line](const FString& Existing)
+					{
+						return Existing.Equals(
+							Line, ESearchCase::CaseSensitive);
+					}))
+			{
+				Target += Line + TEXT("\n");
+			}
 		}
 	}
 
@@ -396,11 +500,16 @@ struct FAngelscriptStaticJITProviderGenerationRequest
 	FAngelscriptStaticJITBackendId BackendId =
 		FAngelscriptStaticJITBackendId::Bytecode();
 	FAngelscriptJITProviderGenerationSettings Settings;
+	FAngelscriptTypedASTJITGenerationCapabilityProfile
+		TypedASTJITCapabilityProfile;
+	FAngelscriptTypedASTJITExecutionRequirementsSnapshot
+		TypedASTJITExecutionRequirements;
 	TConstArrayView<asIScriptModule*> CompiledSourceGraph;
 	TConstArrayView<asIScriptModule*> EmitModuleSet;
 	TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
 		ESPMode::ThreadSafe> GenerationSnapshot;
-	bool bHasVerifiedTypedHIR = false;
+	EAngelscriptStaticJITCaptureProfile CaptureProfile =
+		EAngelscriptStaticJITCaptureProfile::Bytecode;
 };
 
 /** Runtime-module-owned registry. Static backends are registered explicitly. */
@@ -409,6 +518,10 @@ GetAngelscriptStaticJITBackendRegistry();
 
 /** Idempotently register the built-in bytecode backend. */
 ANGELSCRIPTRUNTIME_API bool RegisterAngelscriptBytecodeJITBackend(
+	FString* OutError = nullptr);
+
+/** Idempotently register the task-local typed semantic fallback backend. */
+ANGELSCRIPTRUNTIME_API bool RegisterAngelscriptTypedASTJITBackend(
 	FString* OutError = nullptr);
 
 /** Explicit BackendId/capture generation entry point for programmatic callers. */

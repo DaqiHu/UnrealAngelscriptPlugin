@@ -2,6 +2,7 @@
 
 #include "StaticJIT/AngelscriptJITCommand.h"
 #include "StaticJIT/AngelscriptJITCommandlet.h"
+#include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITBackend.h"
 
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
@@ -282,6 +283,7 @@ public:
 			*ScriptRoot, true)));
 		ASSERT_THAT(IsTrue(FFileHelper::SaveStringToFile(
 			TEXT("int ProjectHelper() { return 17; }\n")
+			TEXT("UFUNCTION()\n")
 			TEXT("int ProjectEntry() { return ProjectHelper(); }\n"),
 			*FPaths::Combine(ScriptRoot, TEXT("ProjectProvider.as")),
 			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM)));
@@ -309,10 +311,38 @@ public:
 				}
 				return bBuilt;
 			};
+		FAngelscriptTypedASTJIT::ResetTaskObservationForTesting();
 		const FAngelscriptJITCommandResult Generated =
 			FAngelscriptJITCommand::Execute(
 				GenerateRequest, ProductionBuilder);
 		ASSERT_THAT(IsTrue(Generated.IsSuccess(), Generated.Error));
+		const FAngelscriptTypedASTJITTaskObservation
+			GenerateObservation =
+				FAngelscriptTypedASTJIT::GetTaskObservationForTesting();
+		ASSERT_THAT(AreEqual(1,
+			GenerateObservation.CreatedInstanceCount));
+		ASSERT_THAT(AreEqual(1,
+			GenerateObservation.GenerateInvocationCount));
+		ASSERT_THAT(AreEqual(1,
+			GenerateObservation.DestroyedInstanceCount));
+		ASSERT_THAT(AreEqual(1,
+			GenerateObservation.AcceptedTaskCount));
+		ASSERT_THAT(AreEqual(0,
+			GenerateObservation.RejectedTaskCount));
+		ASSERT_THAT(IsTrue(
+			GenerateObservation.LastVerifiedTypedHIRCount > 0));
+		ASSERT_THAT(IsTrue(
+			GenerateObservation.bLastTaskUsedOnlySameCompilationHIR));
+		ASSERT_THAT(AreEqual(
+			GenerateObservation.LastUFunctionRootCount,
+			GenerateObservation.LastCallClosurePlanCount,
+			TEXT("Every selected production root should own one closure plan")));
+		ASSERT_THAT(IsTrue(
+			GenerateObservation.LastPlannedCallCount > 0,
+			TEXT("The real ProjectEntry -> ProjectHelper edge should enter the production closure")));
+		ASSERT_THAT(IsTrue(
+			GenerateObservation.LastInternalSemanticHelperCallCount > 0,
+			TEXT("The real non-root same-task helper should be planned as an internal semantic helper")));
 		ASSERT_THAT(AreEqual(1, Generated.Profiles.Num()));
 		ASSERT_THAT(IsTrue(Generated.bRequiresFullBuild));
 		ASSERT_THAT(IsTrue(Generated.Profiles[0].bRequiresFullBuild));
@@ -334,9 +364,27 @@ public:
 		ASSERT_THAT(IsTrue(FAngelscriptJITCommand::Parse(
 			TEXT("Mode=Verify Profile=EditorDevelopment"),
 			ProjectFile, VerifyRequest, Error), Error));
+		FAngelscriptTypedASTJIT::ResetTaskObservationForTesting();
 		const FAngelscriptJITCommandResult Verified =
 			FAngelscriptJITCommand::Execute(
 				VerifyRequest, ProductionBuilder);
+		const FAngelscriptTypedASTJITTaskObservation VerifyObservation =
+			FAngelscriptTypedASTJIT::GetTaskObservationForTesting();
+		ASSERT_THAT(AreEqual(1, VerifyObservation.CreatedInstanceCount));
+		ASSERT_THAT(AreEqual(1, VerifyObservation.GenerateInvocationCount));
+		ASSERT_THAT(AreEqual(1, VerifyObservation.DestroyedInstanceCount));
+		ASSERT_THAT(AreEqual(1, VerifyObservation.AcceptedTaskCount));
+		ASSERT_THAT(AreEqual(0, VerifyObservation.RejectedTaskCount));
+		ASSERT_THAT(IsTrue(VerifyObservation.LastVerifiedTypedHIRCount > 0));
+		ASSERT_THAT(IsTrue(
+			VerifyObservation.bLastTaskUsedOnlySameCompilationHIR));
+		ASSERT_THAT(AreEqual(
+			VerifyObservation.LastUFunctionRootCount,
+			VerifyObservation.LastCallClosurePlanCount));
+		ASSERT_THAT(IsTrue(
+			VerifyObservation.LastPlannedCallCount > 0));
+		ASSERT_THAT(IsTrue(
+			VerifyObservation.LastInternalSemanticHelperCallCount > 0));
 		ASSERT_THAT(AreEqual(2, BuiltOutputs.Num()));
 		ASSERT_THAT(AreEqual(
 			BuiltOutputs[0].ProviderGeneration.Hash.ToHexString(),
@@ -354,13 +402,30 @@ public:
 		ASSERT_THAT(IsTrue(FirstProvider->Content == SecondProvider->Content,
 			DescribeFirstDifference(
 				FirstProvider->Content, SecondProvider->Content)));
+		const FAngelscriptJITGeneratedFunction* const ProjectEntry =
+			BuiltOutputs[0].Functions.FindByPredicate(
+				[](const FAngelscriptJITGeneratedFunction& Function)
+				{
+					return Function.CanonicalDeclaration.Contains(
+						TEXT("ProjectEntry"));
+				});
+		ASSERT_THAT(IsNotNull(ProjectEntry));
+		ASSERT_THAT(AreEqual(1, ProjectEntry->ReferenceSlots.Num(),
+			TEXT("The project entry should retain exactly its direct helper identity")));
+		ASSERT_THAT(AreEqual(0u, ProjectEntry->ReferenceSlots[0].SlotIndex));
+		ASSERT_THAT(IsTrue(
+			ProjectEntry->ReferenceSlots[0].Reference.Kind
+				== EAngelscriptArtifactReferenceKind::ScriptFunction));
+		ASSERT_THAT(IsFalse(
+			ProjectEntry->ReferenceSlots[0].Reference.ExpectedAbi.IsZero()));
 		const bool bUsesStableFunctionSlot = BuiltOutputs[0].Files.ContainsByPredicate(
 			[](const FAngelscriptJITGeneratedFile& File)
 			{
 				return File.Kind
 						== EAngelscriptJITGeneratedFileKind::ModuleSource
 					&& File.Content.Contains(
-						TEXT("FAngelscriptJITGeneratedReferenceAccess::GetScriptFunction(Execution, 0u)"));
+						TEXT("FAngelscriptJITGeneratedReferenceAccess::GetScriptFunction(\n"
+							"\t\t\tExecution, 0u)"));
 			});
 		ASSERT_THAT(IsTrue(bUsesStableFunctionSlot,
 			TEXT("Project caller should resolve its callee through stable slot zero")));

@@ -1,6 +1,12 @@
 #include "CQTest.h"
 
+#include "AngelscriptEngine.h"
+#include "AngelscriptSubsystem.h"
+#include "Compilation/AngelscriptCompilationEvents.h"
 #include "StaticJIT/AngelscriptJITRefreshService.h"
+
+#include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS
 
@@ -125,6 +131,8 @@ namespace AngelscriptJITRefreshServiceTests_Private
 			ESPMode::ThreadSafe> PatchedCatalog;
 		FAngelscriptJITProviderRegistrationResult Registration;
 		FAngelscriptJITProviderRouteRefreshResult RouteRefresh;
+		FAngelscriptJITSourceAuthoritySnapshot SourceAuthority;
+		int32 CaptureAuthorityCount = 0;
 		int32 PrepareCount = 0;
 		int32 RegisterCount = 0;
 		int32 RouteRefreshCount = 0;
@@ -137,6 +145,8 @@ namespace AngelscriptJITRefreshServiceTests_Private
 
 		TSharedRef<FAngelscriptJITRefreshService> MakeService()
 		{
+			SourceAuthority.Code =
+				EAngelscriptJITSourceAuthorityCode::Current;
 			Preparation.bSuccess = true;
 			Preparation.bHostModuleLoaded = true;
 			Preparation.GeneratedOutput = MakeOutput(TEXT("new"));
@@ -148,8 +158,16 @@ namespace AngelscriptJITRefreshServiceTests_Private
 			RouteRefresh.PublishedNativeCount = 1;
 
 			FAngelscriptJITRefreshDependencies Dependencies;
-			Dependencies.Prepare = [this](FStringView)
+			Dependencies.CaptureAuthority = [this](FStringView)
 			{
+				++CaptureAuthorityCount;
+				return SourceAuthority;
+			};
+			Dependencies.Prepare = [this](
+				FStringView,
+				const FAngelscriptJITSourceAuthoritySnapshot& Authority)
+			{
+				check(Authority.IsCurrent());
 				++PrepareCount;
 				return Preparation;
 			};
@@ -200,6 +218,166 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptJITRefreshServiceTests,
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 public:
+	TEST_METHOD(CurrentPrimaryEngineFreezesOneContainedGenerationInput)
+	{
+		using namespace AngelscriptEditor::StaticJIT;
+		UAngelscriptSubsystem* const Subsystem = UAngelscriptSubsystem::Get();
+		ASSERT_THAT(IsNotNull(Subsystem));
+		FAngelscriptEngine* const PrimaryEnginePtr =
+			Subsystem != nullptr ? Subsystem->GetEngine() : nullptr;
+		ASSERT_THAT(IsNotNull(PrimaryEnginePtr));
+		if (PrimaryEnginePtr == nullptr)
+		{
+			return;
+		}
+		FAngelscriptEngine& PrimaryEngine = *PrimaryEnginePtr;
+		const int32 ActiveModuleCountBefore =
+			PrimaryEngine.GetActiveModules().Num();
+		const TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
+			ESPMode::ThreadSafe> RegistryBefore =
+			FAngelscriptJITProviderRegistry::Get().GetSnapshot();
+		int32 CompilationEventCount = 0;
+		const FDelegateHandle CompilationEventHandle =
+			FAngelscriptCompilationEvents::RegisterListener(
+				[&CompilationEventCount](const auto&)
+				{
+					++CompilationEventCount;
+				});
+		ON_SCOPE_EXIT
+		{
+			FAngelscriptCompilationEvents::UnregisterListener(
+				CompilationEventHandle);
+		};
+
+		const FString ProjectFile = FPaths::ConvertRelativePathToFull(
+			FPaths::GetProjectFilePath());
+		const FAngelscriptJITSourceAuthoritySnapshot Authority =
+			FAngelscriptJITSourceAuthority::Capture(
+				PrimaryEngine, ProjectFile,
+				EAngelscriptJITTargetProfile::EditorDevelopment);
+		ASSERT_THAT(IsTrue(Authority.IsCurrent(), Authority.Detail));
+		ASSERT_THAT(IsTrue(Authority.FrozenSourceProvider.IsValid()));
+		ASSERT_THAT(IsTrue(Authority.SourceCount > 0));
+		ASSERT_THAT(IsFalse(Authority.ProfileIdentity.IsZero()));
+		ASSERT_THAT(IsFalse(Authority.InventoryIdentity.IsZero()));
+		ASSERT_THAT(IsFalse(Authority.ContentIdentity.IsZero()));
+		ASSERT_THAT(AreEqual(0, CompilationEventCount));
+		ASSERT_THAT(AreEqual(ActiveModuleCountBefore,
+			PrimaryEngine.GetActiveModules().Num()));
+
+		const FAngelscriptJITSourceAuthoritySnapshot WrongProfile =
+			FAngelscriptJITSourceAuthority::Capture(
+				PrimaryEngine, ProjectFile,
+				EAngelscriptJITTargetProfile::GameDevelopment);
+		ASSERT_THAT(IsTrue(WrongProfile.Code
+			== EAngelscriptJITSourceAuthorityCode::ProfileMismatch));
+		ASSERT_THAT(IsFalse(WrongProfile.FrozenSourceProvider.IsValid()));
+
+		FAngelscriptJITGenerationOutput GeneratedOutput;
+		FString GenerationError;
+		ASSERT_THAT(IsTrue(
+			FAngelscriptJITProjectGeneration::BuildProjectArtifacts(
+				ProjectFile,
+				EAngelscriptJITTargetProfile::EditorDevelopment,
+				Authority.FrozenSourceProvider,
+				GeneratedOutput,
+				&GenerationError),
+			GenerationError));
+		ASSERT_THAT(IsTrue(!GeneratedOutput.Modules.IsEmpty()));
+		ASSERT_THAT(AreEqual(0, CompilationEventCount));
+		ASSERT_THAT(AreEqual(ActiveModuleCountBefore,
+			PrimaryEngine.GetActiveModules().Num()));
+		const TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
+			ESPMode::ThreadSafe> RegistryAfter =
+			FAngelscriptJITProviderRegistry::Get().GetSnapshot();
+		ASSERT_THAT(AreEqual(RegistryBefore->PublicationOrdinal,
+			RegistryAfter->PublicationOrdinal));
+		ASSERT_THAT(AreEqual(RegistryBefore->Providers.Num(),
+			RegistryAfter->Providers.Num()));
+	}
+
+	TEST_METHOD(AuthoritativeSourceGateRunsBeforeGenerationAndFailsClosed)
+	{
+		using namespace AngelscriptJITRefreshServiceTests_Private;
+
+		FFixture Stale;
+		Stale.SourceAuthority.Code =
+			EAngelscriptJITSourceAuthorityCode::ContentMismatch;
+		Stale.SourceAuthority.Detail =
+			TEXT("The source on disk is newer than the authoritative Engine.");
+		ASSERT_THAT(IsFalse(Stale.Service->Start(TEXT("Project.uproject"))));
+		ASSERT_THAT(IsTrue(Stale.Service->GetLastResult().Code
+			== EAngelscriptJITRefreshCode::AuthoritativeEngineStale));
+		ASSERT_THAT(IsTrue(Stale.Service->GetLastResult().Detail.Contains(
+			TEXT("Hot Reload"))));
+		ASSERT_THAT(IsTrue(
+			Stale.Service->GetLastResult().PrePublicationFailure.IsSet()));
+		ASSERT_THAT(IsTrue(Stale.Service->GetLastResult()
+			.PrePublicationFailure->Category == FStaticJITDiagnostics::
+				EPrePublicationFailureCategory::AuthoritativeEngineStale));
+		ASSERT_THAT(IsTrue(Stale.Service->GetLastResult()
+			.PrePublicationFailure->AffectedBoundary == FStaticJITDiagnostics::
+				EPrePublicationBoundary::PrimarySourceAuthority));
+		ASSERT_THAT(IsFalse(Stale.Service->GetLastResult()
+			.PrePublicationFailure->bGenerationEngineCreated));
+		ASSERT_THAT(IsFalse(Stale.Service->GetLastResult()
+			.PrePublicationFailure->bProviderPackagingStarted));
+		ASSERT_THAT(IsFalse(Stale.Service->GetLastResult()
+			.PrePublicationFailure->bProviderPublished));
+		ASSERT_THAT(AreEqual(1, Stale.CaptureAuthorityCount));
+		ASSERT_THAT(AreEqual(0, Stale.PrepareCount));
+		ASSERT_THAT(AreEqual(0, Stale.Backend->RequestCount));
+		ASSERT_THAT(AreEqual(0, Stale.RegisterCount));
+		ASSERT_THAT(AreEqual(0, Stale.RouteRefreshCount));
+
+		FFixture Current;
+		Current.SetPrior();
+		ASSERT_THAT(IsTrue(Current.Service->Start(TEXT("Project.uproject"))));
+		ASSERT_THAT(AreEqual(1, Current.CaptureAuthorityCount));
+		ASSERT_THAT(AreEqual(1, Current.PrepareCount));
+	}
+
+	TEST_METHOD(GenerationContainmentFailureIsTypedAndNeverPublishes)
+	{
+		using namespace AngelscriptJITRefreshServiceTests_Private;
+		FFixture Fixture;
+		Fixture.Preparation.bSuccess = false;
+		Fixture.Preparation.FailureCode =
+			EAngelscriptJITRefreshCode::GenerationFailed;
+		Fixture.Preparation.Detail = TEXT(
+			"Generation changed the primary Provider Registry snapshot.");
+		FStaticJITDiagnostics::FPrePublicationFailureRecord& Failure =
+			Fixture.Preparation.PrePublicationFailure.Emplace();
+		Failure.Category = FStaticJITDiagnostics::
+			EPrePublicationFailureCategory::GenerationContainmentFailure;
+		Failure.AffectedBoundary = FStaticJITDiagnostics::
+			EPrePublicationBoundary::ProviderRegistry;
+		Failure.Detail = Fixture.Preparation.Detail;
+		Failure.bGenerationEngineCreated = true;
+
+		ASSERT_THAT(IsFalse(Fixture.Service->Start(TEXT("Project.uproject"))));
+		const FAngelscriptJITRefreshResult& Result =
+			Fixture.Service->GetLastResult();
+		ASSERT_THAT(IsTrue(Result.Code
+			== EAngelscriptJITRefreshCode::GenerationFailed));
+		ASSERT_THAT(IsTrue(Result.PrePublicationFailure.IsSet()));
+		ASSERT_THAT(IsTrue(Result.PrePublicationFailure->Category
+			== FStaticJITDiagnostics::EPrePublicationFailureCategory::
+				GenerationContainmentFailure));
+		ASSERT_THAT(IsTrue(Result.PrePublicationFailure->AffectedBoundary
+			== FStaticJITDiagnostics::EPrePublicationBoundary::ProviderRegistry));
+		ASSERT_THAT(IsTrue(
+			Result.PrePublicationFailure->bGenerationEngineCreated));
+		ASSERT_THAT(IsFalse(
+			Result.PrePublicationFailure->bProviderPackagingStarted));
+		ASSERT_THAT(IsFalse(Result.PrePublicationFailure->bProviderPublished));
+		ASSERT_THAT(AreEqual(1, Fixture.PrepareCount));
+		ASSERT_THAT(AreEqual(0, Fixture.Backend->RequestCount));
+		ASSERT_THAT(AreEqual(0, Fixture.RegisterCount));
+		ASSERT_THAT(AreEqual(0, Fixture.RouteRefreshCount));
+		ASSERT_THAT(AreEqual(0, Fixture.Snapshot->Providers.Num()));
+	}
+
 	TEST_METHOD(StartsIdleAndRejectsOverlappingRequests)
 	{
 		using namespace AngelscriptJITRefreshServiceTests_Private;

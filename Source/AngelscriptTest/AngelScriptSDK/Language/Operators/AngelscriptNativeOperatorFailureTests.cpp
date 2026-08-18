@@ -27,6 +27,7 @@ private:
 		ModuloZero,
 		InvalidShiftCount,
 		SignedOverflow,
+		SignedRemainderOverflow,
 		PowerOverflow,
 		InvalidLValue,
 		ConstMutation,
@@ -101,6 +102,7 @@ private:
 		{"modulo_zero", EFailureFamily::ModuloZero, EFailureOutcome::RuntimeException, TEXT("Divide by zero")},
 		{"invalid_shift_count", EFailureFamily::InvalidShiftCount, EFailureOutcome::MaskedShiftExecution, nullptr},
 		{"signed_overflow", EFailureFamily::SignedOverflow, EFailureOutcome::RuntimeException, TEXT("Overflow in integer division")},
+		{"signed_remainder_overflow", EFailureFamily::SignedRemainderOverflow, EFailureOutcome::RuntimeException, TEXT("Overflow in integer division")},
 		{"power_overflow", EFailureFamily::PowerOverflow, EFailureOutcome::RuntimeException, TEXT("Overflow in exponent operation")},
 		{"invalid_lvalue", EFailureFamily::InvalidLValue, EFailureOutcome::CompileRejected, nullptr},
 		{"const_mutation", EFailureFamily::ConstMutation, EFailureOutcome::CompileRejected, nullptr},
@@ -276,6 +278,14 @@ private:
 			AppendGeneratedAsLine(Source, TEXT("\tint64 Numerator = -9223372036854775807 - 1;"));
 			AppendGeneratedAsLine(Source, TEXT("\tint64 Divisor = -1;"));
 			AppendGeneratedAsLine(Source, TEXT("\treturn int(Numerator / Divisor) + RecordOperatorStage(9); // OP_CAUSE"));
+			AppendGeneratedAsLine(Source, TEXT("}"));
+			break;
+
+		case EFailureFamily::SignedRemainderOverflow:
+			AppendRunEntryStart(Source, TEXT("int"));
+			AppendGeneratedAsLine(Source, TEXT("\tint64 Dividend = -9223372036854775807 - 1;"));
+			AppendGeneratedAsLine(Source, TEXT("\tint64 Divisor = -1;"));
+			AppendGeneratedAsLine(Source, TEXT("\treturn int(Dividend % Divisor) + RecordOperatorStage(9); // OP_CAUSE"));
 			AppendGeneratedAsLine(Source, TEXT("}"));
 			break;
 
@@ -979,9 +989,12 @@ public:
 			}
 		}
 
-		ASSERT_THAT(AreEqual(96,
+		const int32 ExpectedCaseCount = UE_ARRAY_COUNT(FailureCases)
+			* UE_ARRAY_COUNT(RecoveryCases)
+			* UE_ARRAY_COUNT(ObservationCases);
+		ASSERT_THAT(AreEqual(ExpectedCaseCount,
 			ConstructedIds.Num(),
-			TEXT("operator failure product should construct all ninety-six catalog IDs")));
+			TEXT("operator failure product should construct every catalog dimension")));
 		ASSERT_THAT(AreEqual(ConstructedIds.Num(),
 			UniqueIds.Num(),
 			TEXT("operator failure product should construct no duplicate catalog IDs")));

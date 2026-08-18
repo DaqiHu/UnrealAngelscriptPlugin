@@ -3,8 +3,13 @@
 #include "CoreMinimal.h"
 
 #include "AngelscriptSource.h"
+#include "Core/Artifacts/AngelscriptArtifactIdentity.h"
 
 class IFileManager;
+
+/** Strong identity of the exact TCHAR source text consumed by preprocessing. */
+ANGELSCRIPTRUNTIME_API FAngelscriptHash256 BuildAngelscriptSourceTextHash(
+	FStringView SourceText);
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptSourceState
 {

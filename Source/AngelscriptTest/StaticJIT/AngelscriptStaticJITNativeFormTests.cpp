@@ -235,17 +235,24 @@ public:
 		ASSERT_THAT(IsNotNull(NativeForm,
 			TEXT("StaticJIT.NativeForms.ReflectedBlueprintCallable should retain its native form")));
 
-		const FAngelscriptNativeFormDebugInfo NativeFormInfo = NativeForm->GetDebugInfoForTesting();
+		const FAngelscriptNativeFormDescription NativeFormInfo =
+			NativeForm->Describe();
 		ASSERT_THAT(AreEqual(
 			EAngelscriptNativeFormKind::UFunction,
 			NativeFormInfo.Kind,
 			TEXT("StaticJIT.NativeForms.ReflectedBlueprintCallable should retain UFunction native-form kind")));
-		ASSERT_THAT(IsTrue(NativeFormInfo.UnrealFunction == BaseFilenameFunction,
-			TEXT("StaticJIT.NativeForms.ReflectedBlueprintCallable should retain the exact UFunction")));
+		ASSERT_THAT(AreEqual(
+			BaseFilenameFunction->GetPathName(),
+			NativeFormInfo.UnrealFunctionPath,
+			TEXT("StaticJIT.NativeForms.ReflectedBlueprintCallable should expose the exact UFunction path without retaining a pointer in the description")));
 		ASSERT_THAT(AreEqual(
 			BaseFilenameFunction->GetName(),
 			NativeFormInfo.Name,
 			TEXT("StaticJIT.NativeForms.ReflectedBlueprintCallable should retain the exact native name")));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptNativeUFunctionRouteFlags::None,
+			NativeFormInfo.UFunctionRouteFlags,
+			TEXT("StaticJIT.NativeForms.ReflectedBlueprintCallable should not invent routed event or RPC facts")));
 		ASSERT_THAT(IsFalse(NativeFormInfo.bTrivial,
 			TEXT("StaticJIT.NativeForms.ReflectedBlueprintCallable should remain nontrivial")));
 	}
@@ -328,7 +335,8 @@ public:
 
 			FScriptFunctionNativeForm* CandidateNativeForm = FScriptFunctionNativeForm::GetNativeForm(Candidate);
 			if (CandidateNativeForm != nullptr
-				&& CandidateNativeForm->GetDebugInfoForTesting().UnrealFunction == ClientSetHUDFunction)
+				&& CandidateNativeForm->Describe().UnrealFunctionPath
+					== ClientSetHUDFunction->GetPathName())
 			{
 				ScriptFunction = Candidate;
 				break;
@@ -351,17 +359,24 @@ public:
 		ASSERT_THAT(IsNotNull(NativeForm,
 			TEXT("StaticJIT.NativeForms.NetUFunction should retain its native form")));
 
-		const FAngelscriptNativeFormDebugInfo NativeFormInfo = NativeForm->GetDebugInfoForTesting();
+		const FAngelscriptNativeFormDescription NativeFormInfo =
+			NativeForm->Describe();
 		ASSERT_THAT(AreEqual(
 			EAngelscriptNativeFormKind::UFunction,
 			NativeFormInfo.Kind,
 			TEXT("StaticJIT.NativeForms.NetUFunction should retain UFunction native-form kind")));
-		ASSERT_THAT(IsTrue(NativeFormInfo.UnrealFunction == ClientSetHUDFunction,
-			TEXT("StaticJIT.NativeForms.NetUFunction should retain the exact RPC UFunction")));
+		ASSERT_THAT(AreEqual(
+			ClientSetHUDFunction->GetPathName(),
+			NativeFormInfo.UnrealFunctionPath,
+			TEXT("StaticJIT.NativeForms.NetUFunction should expose the exact RPC UFunction path without retaining a pointer in the description")));
 		ASSERT_THAT(AreEqual(
 			ClientSetHUDFunction->GetName(),
 			NativeFormInfo.Name,
 			TEXT("StaticJIT.NativeForms.NetUFunction should retain the exact native name")));
+		ASSERT_THAT(IsTrue(EnumHasAnyFlags(
+			NativeFormInfo.UFunctionRouteFlags,
+			EAngelscriptNativeUFunctionRouteFlags::RpcOrNet),
+			TEXT("StaticJIT.NativeForms.NetUFunction should snapshot its authoritative RPC route fact")));
 		ASSERT_THAT(IsFalse(NativeFormInfo.bTrivial,
 			TEXT("StaticJIT.NativeForms.NetUFunction should remain nontrivial")));
 	}

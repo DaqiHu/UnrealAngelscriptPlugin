@@ -1,10 +1,21 @@
 #include "Bind_Logging.h"
+#include "StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallables.h"
 
 #include "CoreGlobals.h"
 #include "Engine/Engine.h"
 #include "Kismet/KismetSystemLibrary.h"
 
 #include "AngelscriptEngine.h"
+
+#include <atomic>
+
+#if WITH_ANGELSCRIPT_UNITTESTS
+namespace
+{
+	std::atomic<int32> GStaticJITPrintCallCountForTesting{0};
+	std::atomic<int32> GStaticJITRuntimeThunkProbeCountForTesting{0};
+}
+#endif
 
 void FAngelscriptLoggingBinds::Log(const FString& Text)
 {
@@ -164,11 +175,15 @@ void FAngelscriptLoggingBinds::ThrowIf(const bool bCondition, const FString& Tex
 	}
 }
 
-void FAngelscriptLoggingBinds::Print(
+void AngelscriptStaticJITNativeCallables::Print(
 	const FString& Text,
 	const float Duration,
 	const FLinearColor Color)
 {
+#if WITH_ANGELSCRIPT_UNITTESTS
+	GStaticJITPrintCallCountForTesting.fetch_add(
+		1, std::memory_order_release);
+#endif
 	UKismetSystemLibrary::PrintString(
 		FAngelscriptEngine::TryGetCurrentWorldContextObject(),
 		Text,
@@ -177,6 +192,40 @@ void FAngelscriptLoggingBinds::Print(
 		Color,
 		Duration);
 }
+
+#if WITH_ANGELSCRIPT_UNITTESTS
+int32 AngelscriptStaticJITNativeCallables::RuntimeThunkProbe(
+	const FString& Text)
+{
+	GStaticJITRuntimeThunkProbeCountForTesting.fetch_add(
+		1, std::memory_order_release);
+	return Text.Len() * 3 + 5;
+}
+
+void AngelscriptStaticJITNativeCallables::ResetRuntimeThunkProbeCountForTesting()
+{
+	GStaticJITRuntimeThunkProbeCountForTesting.store(
+		0, std::memory_order_release);
+}
+
+int32 AngelscriptStaticJITNativeCallables::GetRuntimeThunkProbeCountForTesting()
+{
+	return GStaticJITRuntimeThunkProbeCountForTesting.load(
+		std::memory_order_acquire);
+}
+
+void AngelscriptStaticJITNativeCallables::ResetPrintCallCountForTesting()
+{
+	GStaticJITPrintCallCountForTesting.store(
+		0, std::memory_order_release);
+}
+
+int32 AngelscriptStaticJITNativeCallables::GetPrintCallCountForTesting()
+{
+	return GStaticJITPrintCallCountForTesting.load(
+		std::memory_order_acquire);
+}
+#endif
 
 void FAngelscriptLoggingBinds::PrintFromObject(
 	const UObject* WorldContextObject,

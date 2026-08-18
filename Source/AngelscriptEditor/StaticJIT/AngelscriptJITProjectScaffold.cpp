@@ -186,7 +186,7 @@ namespace AngelscriptEditor::StaticJIT
 				+ TEXT("\t\t{\n")
 				+ TEXT("\t\t\tPrivateDefinitions.Add(\"AS_ENABLE_EDITOR_JITTED_CODE=1\");\n")
 				+ TEXT("\t\t}\n")
-				+ TEXT("\t\tPrivateDependencyModuleNames.AddRange(new string[]\n")
+				+ TEXT("\t\tPublicDependencyModuleNames.AddRange(new string[]\n")
 				+ TEXT("\t\t{\n")
 				+ TEXT("\t\t\t\"Core\",\n")
 				+ TEXT("\t\t\t\"AngelscriptRuntime\",\n")
@@ -325,14 +325,21 @@ namespace AngelscriptEditor::StaticJIT
 			const FString& Expected,
 			const FString& Actual)
 		{
-			int32 MarkerEnd = INDEX_NONE;
+			int32 ExpectedMarkerEnd = INDEX_NONE;
 			if (!Expected.StartsWith(OwnershipPrefix, ESearchCase::CaseSensitive)
-				|| !Expected.FindChar(TEXT('\n'), MarkerEnd))
+				|| !Expected.FindChar(TEXT('\n'), ExpectedMarkerEnd))
 			{
 				return false;
 			}
-			return Actual.StartsWith(
-				Expected.Left(MarkerEnd + 1), ESearchCase::CaseSensitive);
+			int32 ActualMarkerEnd = INDEX_NONE;
+			if (!Actual.FindChar(TEXT('\n'), ActualMarkerEnd))
+			{
+				return false;
+			}
+			FString ActualMarker = Actual.Left(ActualMarkerEnd);
+			ActualMarker.RemoveFromEnd(TEXT("\r"), ESearchCase::CaseSensitive);
+			return ActualMarker.Equals(
+				Expected.Left(ExpectedMarkerEnd), ESearchCase::CaseSensitive);
 		}
 
 		bool IsLegacyBucketPath(const FStringView RelativePath)

@@ -24,6 +24,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITFunctionMatchInput
 	FAngelscriptHash256 CurrentArtifactSetDigest;
 	EAngelscriptJITRequiredEntryPoints RequiredEntryPoints =
 		EAngelscriptJITRequiredEntryPoints::VM;
+	TSharedPtr<const FAngelscriptFunctionRouteSnapshot,
+		ESPMode::ThreadSafe> CurrentRoutes;
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptJITArtifactMatchCandidate
@@ -58,5 +60,16 @@ public:
 	static FAngelscriptJITFunctionMatchResult Match(
 		const FAngelscriptJITProviderRegistrySnapshot& Providers,
 		const FAngelscriptJITFunctionMatchInput& Input,
+		const IAngelscriptJITReferenceResolver& ReferenceResolver);
+
+	/**
+	 * Prefer the complete entry shape, but accept an explicitly supplied safe
+	 * fallback shape when no exact preferred Provider exists. Structural
+	 * ambiguity is never hidden by the fallback attempt.
+	 */
+	static FAngelscriptJITFunctionMatchResult MatchPreferredThenFallback(
+		const FAngelscriptJITProviderRegistrySnapshot& Providers,
+		const FAngelscriptJITFunctionMatchInput& PreferredInput,
+		const FAngelscriptJITFunctionMatchInput& FallbackInput,
 		const IAngelscriptJITReferenceResolver& ReferenceResolver);
 };

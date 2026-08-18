@@ -42,6 +42,7 @@
 
 #include "as_array.h"
 #include "as_string.h"
+#include "as_typed_semantic_ir.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -57,6 +58,10 @@ public:
 	int SetCode(const char *name, const char *code, size_t length, bool makeCopy);
 
 	void ConvertPosToRowCol(size_t pos, int *row, int *col);
+	bool SetSourceProvenanceRanges(
+		const asSTypedSemanticSourceProvenanceRange* ranges,
+		asUINT rangeCount);
+	void ApplySourceProvenance(asSTypedSemanticSourceSpan& span) const;
 
 	bool TokenEquals(size_t pos, size_t len, const char *str);
 
@@ -67,6 +72,7 @@ public:
 	int              idx;
 	int              lineOffset;
 	asCArray<size_t> linePositions;
+	asCArray<asSTypedSemanticSourceProvenanceRange> sourceProvenanceRanges;
 };
 
 END_AS_NAMESPACE

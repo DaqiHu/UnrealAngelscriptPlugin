@@ -397,6 +397,11 @@ public:
 		};
 
 		const FString ScriptSource = ASTEST_AS(R"AS(
+			class FCompilationEventsStagesType
+			{
+				int Value;
+			}
+
 			int Entry()
 			{
 				return 17;
@@ -456,9 +461,9 @@ public:
 				StateArtifacts.Diff,
 				TEXT("AsEngineInternal"),
 				TEXT("ScriptEngine"),
-				TEXT("TypeIdMapCount"),
+				TEXT("AllScriptDeclaredTypeCount"),
 				EAngelscriptStateDiffChangeType::Changed),
-			TEXT("Compiler event state diff should include AS engine type-id map impact")));
+			TEXT("Compiler event state diff should include AS engine declared-type impact")));
 		ASSERT_THAT(IsTrue(
 			FAngelscriptStateDumpDiffTestHelper::ContainsDiff(
 				StateArtifacts.Diff,

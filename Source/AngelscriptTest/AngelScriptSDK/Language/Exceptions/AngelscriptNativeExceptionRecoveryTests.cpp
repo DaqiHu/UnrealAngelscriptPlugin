@@ -67,6 +67,8 @@ private:
 		const FNamedCase& FollowUpCase,
 		const FNamedCase& NestedStateCase)
 	{
+		using AngelscriptNativeTestSupport::AppendGeneratedAsLine;
+
 		FString Source;
 		AppendGeneratedAsLine(Source, TEXT("void RaiseCleanup()"));
 		AppendGeneratedAsLine(Source, TEXT("{"));

@@ -273,6 +273,45 @@ public:
 		ASSERT_THAT(AreEqual(0, TemporaryFiles.Num()));
 	}
 
+	TEST_METHOD(CrlfCheckoutKeepsOwnedMarkerRecognizableForRegeneration)
+	{
+		using namespace AngelscriptJITProjectGenerationTests;
+		const FString TestRoot = MakeTestRoot();
+		ON_SCOPE_EXIT
+		{
+			IFileManager::Get().DeleteDirectory(*TestRoot, false, true);
+		};
+		const FString OutputRoot = FPaths::Combine(TestRoot, TEXT("Generated"));
+		const FAngelscriptJITGenerationOutput Output = MakeOutput(
+			EAngelscriptJITTargetProfile::EditorDevelopment);
+		ASSERT_THAT(IsTrue(
+			FAngelscriptJITGeneratedFileStore::Publish(
+				OutputRoot, Output).bSuccess));
+
+		for (const FAngelscriptJITGeneratedFile& File : Output.Files)
+		{
+			FString CrlfContent = File.Content;
+			CrlfContent.ReplaceInline(TEXT("\n"), TEXT("\r\n"),
+				ESearchCase::CaseSensitive);
+			ASSERT_THAT(IsTrue(FFileHelper::SaveStringToFile(
+				CrlfContent,
+				*FPaths::Combine(OutputRoot, File.RelativePath),
+				FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM)));
+		}
+
+		const FAngelscriptJITGeneratedFileComparison Comparison =
+			FAngelscriptJITGeneratedFileStore::Compare(OutputRoot, Output);
+		ASSERT_THAT(IsFalse(HasDifference(
+			Comparison,
+			EAngelscriptJITGeneratedFileDifference::OwnershipConflict)));
+		ASSERT_THAT(IsTrue(HasDifference(
+			Comparison,
+			EAngelscriptJITGeneratedFileDifference::ContentMismatch)));
+		const FAngelscriptJITGeneratedFilePublication Publication =
+			FAngelscriptJITGeneratedFileStore::Publish(OutputRoot, Output);
+		ASSERT_THAT(IsTrue(Publication.bSuccess, Publication.Error));
+	}
+
 	TEST_METHOD(GeneratePreflightsUserAndCrossProfileConflictsWithoutPartialWrites)
 	{
 		using namespace AngelscriptJITProjectGenerationTests;

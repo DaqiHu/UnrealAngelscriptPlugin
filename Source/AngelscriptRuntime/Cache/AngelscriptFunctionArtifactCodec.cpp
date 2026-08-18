@@ -189,15 +189,23 @@ namespace AngelscriptFunctionArtifactCodec_Private
 			return false;
 		}
 
-		const asCString CanonicalType = Global->type.Format(
-			Global->nameSpace, false, false);
+		const asCScriptEngine* const ScriptEngine =
+			static_cast<const asCScriptEngine*>(CurrentModule.GetEngine());
+		const char* const CanonicalType = ScriptEngine != nullptr
+			? ScriptEngine->GetTypeDeclaration(
+				ScriptEngine->GetTypeIdFromDataType(Global->type), true)
+			: nullptr;
+		if (CanonicalType == nullptr)
+		{
+			return false;
+		}
 		FAngelscriptGlobalIdentityDescriptor Identity;
 		Identity.ModuleKey = ModuleKey;
 		Identity.Namespace = Global->nameSpace != nullptr
 			? UTF8_TO_TCHAR(Global->nameSpace->name.AddressOf()) : FString();
 		Identity.Kind = EAngelscriptArtifactEntityKind::GlobalVariable;
 		Identity.Name = UTF8_TO_TCHAR(Global->name.AddressOf());
-		Identity.CanonicalType = UTF8_TO_TCHAR(CanonicalType.AddressOf());
+		Identity.CanonicalType = UTF8_TO_TCHAR(CanonicalType);
 		OutKey = FAngelscriptArtifactIdentityBuilder::BuildGlobalKey(Identity);
 		return !OutKey.Hash.IsZero();
 	}

@@ -57,6 +57,7 @@ class asCConfigGroup;
 class asCGlobalProperty;
 class asCScriptNode;
 class asCFuncdefType;
+class asCTypedSemanticFunction;
 struct asSNameSpace;
 
 struct asSScriptVariable
@@ -317,6 +318,11 @@ public:
 
 	void      AllocateScriptFunctionData();
 	void      DeallocateScriptFunctionData();
+	void      SetTypedSemanticFunction(asCTypedSemanticFunction* Function);
+	void      DiscardTypedSemanticFunction();
+	asCTypedSemanticFunction* GetTypedSemanticFunction();
+	const asCTypedSemanticFunction* GetTypedSemanticFunction() const;
+	const asCString& GetTypedSemanticCaptureDiagnostic() const;
 
 	asCGlobalProperty *GetPropertyByGlobalVarPtr(void *gvarPtr);
 
@@ -367,7 +373,7 @@ public:
 	static asCScriptFunction *funcForDelegate;
 
 	// Used by list factory behaviour
-	static asSListPatternNode *listPattern;
+	asSListPatternNode *listPattern;
 
 	// The complete JIT Binding is retired and published only through the
 	// lifecycle methods. Keeping it private prevents entry generations from
@@ -439,6 +445,12 @@ public:
 		// empty. The Runtime bridge maps these pointers to stable semantic keys before
 		// anything is persisted.
 		asCArray<asSBuildArtifactDependency> artifactDependencies;
+
+		// Optional function-owned compiler semantic sidecar. It is private to the
+		// maintained fork, never serialized, and is destroyed before existing
+		// function/type references are released.
+		asCTypedSemanticFunction* typedSemanticFunction = 0;
+		asCString typedSemanticCaptureDiagnostic;
 	};
 	ScriptFunctionData          *scriptData;
 

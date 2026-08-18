@@ -2,6 +2,7 @@
 #include "../Support/AngelscriptNativeCoreTestSupport.h"
 #include "../Support/AngelscriptNativeExecutionTestSupport.h"
 #include "../Support/AngelscriptNativeFixtureTestSupport.h"
+#include "../Support/AngelscriptNativeLanguageCaseTestSupport.h"
 
 #include "CQTest.h"
 

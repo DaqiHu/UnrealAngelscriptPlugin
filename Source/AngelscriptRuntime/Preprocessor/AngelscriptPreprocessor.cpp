@@ -38,6 +38,308 @@ FOnAngelscriptPreprocessHook FAngelscriptPreprocessor::OnPostProcessCode;
 
 namespace AngelscriptPreprocessor_Private
 {
+	struct FProcessedSourceEdit
+	{
+		int32 OldStart = 0;
+		int32 OldEnd = 0;
+		int32 NewStart = 0;
+		int32 NewEnd = 0;
+	};
+
+	FString SourceSectionName(const FAngelscriptPreprocessor::FFile& File)
+	{
+		if (!File.AbsoluteFilename.IsEmpty())
+		{
+			return File.AbsoluteFilename;
+		}
+		if (!File.VirtualPath.IsEmpty())
+		{
+			return File.VirtualPath;
+		}
+		return File.RelativeFilename;
+	}
+
+	FAngelscriptSourceProvenanceAnchor MakeAuthoredAnchor(
+		const FAngelscriptPreprocessor::FFile& File,
+		const int32 SourceOffset,
+		const int32 SourceLength)
+	{
+		FAngelscriptSourceProvenanceAnchor Anchor;
+		if (SourceOffset < 0 || SourceLength <= 0
+			|| SourceOffset > File.RawCode.Len()
+			|| SourceLength > File.RawCode.Len() - SourceOffset)
+		{
+			return Anchor;
+		}
+
+		Anchor.Section = SourceSectionName(File);
+		const FString Prefix = File.RawCode.Left(SourceOffset);
+		const FString SourceSlice = File.RawCode.Mid(SourceOffset, SourceLength);
+		const FTCHARToUTF8 PrefixUtf8(*Prefix);
+		const FTCHARToUTF8 SliceUtf8(*SourceSlice);
+		Anchor.SourceOffset = uint32(PrefixUtf8.Length());
+		Anchor.SourceLength = uint32(SliceUtf8.Length());
+
+		Anchor.Row = 1;
+		Anchor.Column = 1;
+		for (int32 Index = 0; Index < SourceOffset; ++Index)
+		{
+			if (File.RawCode[Index] == TEXT('\n'))
+			{
+				++Anchor.Row;
+				Anchor.Column = 1;
+			}
+			else
+			{
+				++Anchor.Column;
+			}
+		}
+		return Anchor;
+	}
+
+	bool IsCodePosition(const FString& Source, const int32 TargetPosition)
+	{
+		bool bInString = false;
+		bool bInLineComment = false;
+		bool bInBlockComment = false;
+		for (int32 Position = 0;
+			Position < TargetPosition && Position < Source.Len();
+			++Position)
+		{
+			const TCHAR Character = Source[Position];
+			const TCHAR Next = Position + 1 < Source.Len()
+				? Source[Position + 1] : 0;
+			if (bInLineComment)
+			{
+				if (Character == TEXT('\n'))
+				{
+					bInLineComment = false;
+				}
+				continue;
+			}
+			if (bInBlockComment)
+			{
+				if (Character == TEXT('*') && Next == TEXT('/'))
+				{
+					bInBlockComment = false;
+					++Position;
+				}
+				continue;
+			}
+			if (bInString)
+			{
+				if (Character == TEXT('"'))
+				{
+					int32 EscapeCount = 0;
+					for (int32 Check = Position - 1;
+						Check >= 0 && Source[Check] == TEXT('\\');
+						--Check)
+					{
+						++EscapeCount;
+					}
+					if ((EscapeCount & 1) == 0)
+					{
+						bInString = false;
+					}
+				}
+				continue;
+			}
+			if (Character == TEXT('/') && Next == TEXT('/'))
+			{
+				bInLineComment = true;
+				++Position;
+				continue;
+			}
+			if (Character == TEXT('/') && Next == TEXT('*'))
+			{
+				bInBlockComment = true;
+				++Position;
+				continue;
+			}
+			if (Character == TEXT('"'))
+			{
+				bInString = true;
+			}
+		}
+		return !bInString && !bInLineComment && !bInBlockComment;
+	}
+
+	bool TryFindLiteralAssetAuthoredAnchor(
+		const FAngelscriptPreprocessor::FFile& File,
+		const FString& AssetName,
+		const FString& TypeName,
+		int32& InOutSearchOffset,
+		FAngelscriptSourceProvenanceAnchor& OutAnchor)
+	{
+		static const FRegexPattern Pattern(
+			TEXT("asset\\s+([A-Za-z0-9_]+)\\s+of\\s+([A-Za-z0-9]+)\\s*($|\\r|\\n)"));
+		FRegexMatcher Matcher(Pattern, File.RawCode);
+		Matcher.SetLimits(InOutSearchOffset, File.RawCode.Len());
+		while (Matcher.FindNext())
+		{
+			const int32 Start = Matcher.GetMatchBeginning();
+			const int32 End = Matcher.GetMatchEnding();
+			if (Matcher.GetCaptureGroup(1) != AssetName
+				|| Matcher.GetCaptureGroup(2) != TypeName
+				|| !IsCodePosition(File.RawCode, Start))
+			{
+				continue;
+			}
+			InOutSearchOffset = End;
+			OutAnchor = MakeAuthoredAnchor(File, Start, End - Start);
+			return !OutAnchor.Section.IsEmpty();
+		}
+		return false;
+	}
+
+	void AddGeneratedCode(
+		FAngelscriptPreprocessor::FFile& File,
+		FString Code,
+		const EAngelscriptGeneratedSourceKind Kind,
+		FString GeneratorName,
+		const FAngelscriptSourceProvenanceAnchor* const AuthoredAnchor = nullptr)
+	{
+		FAngelscriptPreprocessor::FGeneratedCode& Generated =
+			File.GeneratedCode.Emplace_GetRef();
+		Generated.Code = MoveTemp(Code);
+		Generated.Kind = Kind;
+		Generated.GeneratorName = MoveTemp(GeneratorName);
+		if (AuthoredAnchor != nullptr && !AuthoredAnchor->Section.IsEmpty()
+			&& AuthoredAnchor->SourceLength != 0)
+		{
+			Generated.bHasAuthoredAnchor = true;
+			Generated.AuthoredAnchor = *AuthoredAnchor;
+		}
+	}
+
+	void AddGeneratedRange(
+		TArray<FAngelscriptProcessedSourceProvenanceRange>& Ranges,
+		const int32 Start,
+		const int32 Length,
+		const EAngelscriptGeneratedSourceKind Kind,
+		const FString& GeneratorName,
+		const FAngelscriptSourceProvenanceAnchor* const AuthoredAnchor = nullptr)
+	{
+		if (Start < 0 || Length <= 0)
+		{
+			return;
+		}
+		FAngelscriptProcessedSourceProvenanceRange& Range =
+			Ranges.Emplace_GetRef();
+		Range.ProcessedCodeUnitOffset = Start;
+		Range.ProcessedCodeUnitLength = Length;
+		Range.bHasGeneratedOrigin = true;
+		Range.GeneratedKind = Kind;
+		Range.GeneratorName = GeneratorName;
+		if (AuthoredAnchor != nullptr && !AuthoredAnchor->Section.IsEmpty()
+			&& AuthoredAnchor->SourceLength != 0)
+		{
+			Range.bHasGeneratedAuthoredAnchor = true;
+			Range.GeneratedAuthoredAnchor = *AuthoredAnchor;
+		}
+	}
+
+	int32 RemapBoundary(
+		const int32 Position,
+		const bool bEndBoundary,
+		const TArray<FProcessedSourceEdit>& Edits)
+	{
+		int32 Delta = 0;
+		for (const FProcessedSourceEdit& Edit : Edits)
+		{
+			if (Position < Edit.OldStart)
+			{
+				return Position + Delta;
+			}
+			if (Position == Edit.OldStart)
+			{
+				return Edit.NewStart;
+			}
+			if (Position < Edit.OldEnd)
+			{
+				return bEndBoundary ? Edit.NewEnd : Edit.NewStart;
+			}
+			if (Position == Edit.OldEnd)
+			{
+				return Edit.NewEnd;
+			}
+			Delta += (Edit.NewEnd - Edit.NewStart)
+				- (Edit.OldEnd - Edit.OldStart);
+		}
+		return Position + Delta;
+	}
+
+	void RemapProvenanceRanges(
+		TArray<FAngelscriptProcessedSourceProvenanceRange>& Ranges,
+		const TArray<FProcessedSourceEdit>& Edits)
+	{
+		if (Edits.IsEmpty())
+		{
+			return;
+		}
+		for (FAngelscriptProcessedSourceProvenanceRange& Range : Ranges)
+		{
+			const int32 OldStart = Range.ProcessedCodeUnitOffset;
+			const int32 OldEnd = OldStart + Range.ProcessedCodeUnitLength;
+			const int32 NewStart = RemapBoundary(OldStart, false, Edits);
+			const int32 NewEnd = RemapBoundary(OldEnd, true, Edits);
+			Range.ProcessedCodeUnitOffset = NewStart;
+			Range.ProcessedCodeUnitLength = FMath::Max(0, NewEnd - NewStart);
+		}
+		Ranges.RemoveAll([](const FAngelscriptProcessedSourceProvenanceRange& Range)
+		{
+			return Range.ProcessedCodeUnitLength <= 0;
+		});
+		Ranges.Sort([](
+			const FAngelscriptProcessedSourceProvenanceRange& Left,
+			const FAngelscriptProcessedSourceProvenanceRange& Right)
+		{
+			return Left.ProcessedCodeUnitOffset < Right.ProcessedCodeUnitOffset;
+		});
+	}
+
+	void RemapProvenanceAfterProcessedCodeRewrite(
+		TArray<FAngelscriptProcessedSourceProvenanceRange>& Ranges,
+		const FString& OldCode,
+		const FString& NewCode)
+	{
+		if (Ranges.IsEmpty() || OldCode.Equals(NewCode, ESearchCase::CaseSensitive))
+		{
+			return;
+		}
+
+		const int32 OldLen = OldCode.Len();
+		const int32 NewLen = NewCode.Len();
+		int32 Prefix = 0;
+		const int32 MaxPrefix = FMath::Min(OldLen, NewLen);
+		while (Prefix < MaxPrefix && OldCode[Prefix] == NewCode[Prefix])
+		{
+			++Prefix;
+		}
+
+		int32 OldSuffix = OldLen;
+		int32 NewSuffix = NewLen;
+		while (OldSuffix > Prefix && NewSuffix > Prefix
+			&& OldCode[OldSuffix - 1] == NewCode[NewSuffix - 1])
+		{
+			--OldSuffix;
+			--NewSuffix;
+		}
+
+		TArray<FProcessedSourceEdit> Edits;
+		Edits.Add({Prefix, OldSuffix, Prefix, NewSuffix});
+		RemapProvenanceRanges(Ranges, Edits);
+		Ranges.RemoveAll([&NewCode](
+			const FAngelscriptProcessedSourceProvenanceRange& Range)
+		{
+			return Range.ProcessedCodeUnitOffset < 0
+				|| Range.ProcessedCodeUnitLength <= 0
+				|| Range.ProcessedCodeUnitOffset > NewCode.Len()
+				|| Range.ProcessedCodeUnitLength
+					> NewCode.Len() - Range.ProcessedCodeUnitOffset;
+		});
+	}
+
 	void BroadcastPreprocessorCompilationEvent(
 		EAngelscriptCompilationEventType EventType,
 		FName Phase,
@@ -193,9 +495,9 @@ FAngelscriptPreprocessorSummary FAngelscriptPreprocessor::GetSummary() const
 		FileSummary.GeneratedCodeSectionCount = File.GeneratedCode.Num();
 		FileSummary.ProcessedCodeCharacterCount = File.ProcessedCode.Len();
 
-		for (const FString& GeneratedCode : File.GeneratedCode)
+		for (const FGeneratedCode& GeneratedCode : File.GeneratedCode)
 		{
-			FileSummary.GeneratedCodeCharacterCount += GeneratedCode.Len();
+			FileSummary.GeneratedCodeCharacterCount += GeneratedCode.Code.Len();
 		}
 
 		Summary.ChunkCount += FileSummary.ChunkCount;
@@ -483,6 +785,10 @@ bool FAngelscriptPreprocessor::Preprocess()
 	// Do asynchronous loads if we queued them
 	if (bLoadingAnyFilesAsynchronous)
 		PerformAsynchronousLoads();
+	for (FFile& File : Files)
+	{
+		File.SourceTextHash = BuildAngelscriptSourceTextHash(File.RawCode);
+	}
 
 	// First step, parse into chunks
 	for (FFile& File : Files)
@@ -566,7 +872,20 @@ bool FAngelscriptPreprocessor::Preprocess()
 		EAngelscriptCompilationEventType::PreprocessPostProcessCode,
 		TEXT("Preprocess.PostProcessCode"),
 		*this);
+	TArray<FString, TInlineAllocator<8>> ProcessedCodeBeforeHook;
+	ProcessedCodeBeforeHook.Reserve(Files.Num());
+	for (const FFile& File : Files)
+	{
+		ProcessedCodeBeforeHook.Add(File.ProcessedCode);
+	}
 	OnPostProcessCode.Broadcast(*this);
+	for (int32 FileIndex = 0; FileIndex < Files.Num(); ++FileIndex)
+	{
+		AngelscriptPreprocessor_Private::RemapProvenanceAfterProcessedCodeRewrite(
+			Files[FileIndex].ProcessedSourceProvenance,
+			ProcessedCodeBeforeHook[FileIndex],
+			Files[FileIndex].ProcessedCode);
+	}
 
 	// Add the processed code into the module
 	for (FFile& File : Files)
@@ -576,6 +895,8 @@ bool FAngelscriptPreprocessor::Preprocess()
 		Section.RelativeFilename = File.RelativeFilename;
 		Section.AbsoluteFilename = File.AbsoluteFilename;
 		Section.Code = File.ProcessedCode;
+		Section.SourceProvenance = File.ProcessedSourceProvenance;
+		Section.SourceTextHash = File.SourceTextHash;
 		Section.CodeHash = 0;
 
 		if (File.ProcessedCode.Len() > 0)
@@ -1000,7 +1321,18 @@ void FAngelscriptPreprocessor::ProcessDelegates(FFile& File)
 			TEXT("void Clear() __generated { _Inner.Clear(); }")
 			TEXT("};");
 
-		File.GeneratedCode.Add(GeneratedCode);
+		const FChunk& DelegateChunk = File.ChunkedCode[Delegate.ChunkIndex];
+		const FAngelscriptSourceProvenanceAnchor DelegateAnchor =
+			AngelscriptPreprocessor_Private::MakeAuthoredAnchor(
+				File,
+				DelegateChunk.ChunkStartPos + Delegate.StartPosInChunk,
+				Delegate.EndPosInChunk - Delegate.StartPosInChunk + 1);
+		AngelscriptPreprocessor_Private::AddGeneratedCode(
+			File,
+			MoveTemp(GeneratedCode),
+			EAngelscriptGeneratedSourceKind::DelegateHelper,
+			TEXT("DelegateHelper:") + DelegateName,
+			&DelegateAnchor);
 
 		ReplaceWithBlank(File.ChunkedCode[Delegate.ChunkIndex], Delegate.StartPosInChunk, Delegate.EndPosInChunk+1);
 	}
@@ -1161,17 +1493,34 @@ void FAngelscriptPreprocessor::DetectClasses(FFile& File, FChunk& Chunk)
 	{
 		FString ClassVar = FString::Printf(TEXT("__StaticType_%s"), *ClassDesc->ClassName);
 		ClassDesc->StaticClassGlobalVariableName = ClassVar;
+		const FAngelscriptSourceProvenanceAnchor ClassAnchor =
+			AngelscriptPreprocessor_Private::MakeAuthoredAnchor(
+				File,
+				Chunk.ChunkStartPos,
+				Chunk.ChunkEndPos - Chunk.ChunkStartPos);
+		const FString StaticClassGenerator =
+			TEXT("StaticClassHelper:") + ClassDesc->ClassName;
 
 		if (StaticClassDeprecation == EAngelscriptStaticClassMode::Disallowed)
 		{
 			if (ClassDesc->Namespace.IsSet())
 			{
-				File.GeneratedCode.Add(FString::Printf(TEXT("namespace %s { const TSubclassOf<UObject> %s; }"),
-					*ClassDesc->Namespace.GetValue(), *ClassVar));
+				AngelscriptPreprocessor_Private::AddGeneratedCode(
+					File,
+					FString::Printf(TEXT("namespace %s { const TSubclassOf<UObject> %s; }"),
+						*ClassDesc->Namespace.GetValue(), *ClassVar),
+					EAngelscriptGeneratedSourceKind::StaticClassHelper,
+					StaticClassGenerator,
+					&ClassAnchor);
 			}
 			else
 			{
-				File.GeneratedCode.Add(FString::Printf(TEXT("const TSubclassOf<UObject> %s;"), *ClassVar));
+				AngelscriptPreprocessor_Private::AddGeneratedCode(
+					File,
+					FString::Printf(TEXT("const TSubclassOf<UObject> %s;"), *ClassVar),
+					EAngelscriptGeneratedSourceKind::StaticClassHelper,
+					StaticClassGenerator,
+					&ClassAnchor);
 			}
 		}
 		else
@@ -1182,13 +1531,23 @@ void FAngelscriptPreprocessor::DetectClasses(FFile& File, FChunk& Chunk)
 
 			if (ClassDesc->Namespace.IsSet())
 			{
-				File.GeneratedCode.Add(FString::Printf(TEXT("namespace %s { const TSubclassOf<UObject> %s; namespace %s { UClass StaticClass() __generated%s { return %s; } } }"),
-					*ClassDesc->Namespace.GetValue(), *ClassVar, *ClassDesc->ClassName, *FunctionSpecifiers, *ClassVar));
+				AngelscriptPreprocessor_Private::AddGeneratedCode(
+					File,
+					FString::Printf(TEXT("namespace %s { const TSubclassOf<UObject> %s; namespace %s { UClass StaticClass() __generated%s { return %s; } } }"),
+						*ClassDesc->Namespace.GetValue(), *ClassVar, *ClassDesc->ClassName, *FunctionSpecifiers, *ClassVar),
+					EAngelscriptGeneratedSourceKind::StaticClassHelper,
+					StaticClassGenerator,
+					&ClassAnchor);
 			}
 			else
 			{
-				File.GeneratedCode.Add(FString::Printf(TEXT("const TSubclassOf<UObject> %s; namespace %s { UClass StaticClass() __generated%s { return %s; } }"),
-					*ClassVar, *ClassDesc->ClassName, *FunctionSpecifiers, *ClassVar));
+				AngelscriptPreprocessor_Private::AddGeneratedCode(
+					File,
+					FString::Printf(TEXT("const TSubclassOf<UObject> %s; namespace %s { UClass StaticClass() __generated%s { return %s; } }"),
+						*ClassVar, *ClassDesc->ClassName, *FunctionSpecifiers, *ClassVar),
+					EAngelscriptGeneratedSourceKind::StaticClassHelper,
+					StaticClassGenerator,
+					&ClassAnchor);
 			}
 		}
 	}
@@ -1461,7 +1820,25 @@ void FAngelscriptPreprocessor::AnalyzeClasses(FFile& File, FChunk& Chunk)
 		GeneratedStatics += TEXT("}");
 
 		if (bHasStatics)
-			File.GeneratedCode.Add(GeneratedStatics);
+		{
+			const bool bSubsystemAccessor =
+				ClassDesc->CodeSuperClass->IsChildOf(USubsystem::StaticClass());
+			const FAngelscriptSourceProvenanceAnchor ClassAnchor =
+				AngelscriptPreprocessor_Private::MakeAuthoredAnchor(
+					File,
+					Chunk.ChunkStartPos,
+					Chunk.ChunkEndPos - Chunk.ChunkStartPos);
+			AngelscriptPreprocessor_Private::AddGeneratedCode(
+				File,
+				MoveTemp(GeneratedStatics),
+				bSubsystemAccessor
+					? EAngelscriptGeneratedSourceKind::SubsystemAccessor
+					: EAngelscriptGeneratedSourceKind::ClassHelper,
+				(bSubsystemAccessor
+					? TEXT("SubsystemAccessor:")
+					: TEXT("ClassHelper:")) + ClassDesc->ClassName,
+				&ClassAnchor);
+		}
 	}
 }
 
@@ -4250,9 +4627,10 @@ void FAngelscriptPreprocessor::CondenseFromChunks(FFile& File)
 	int32 CodeSize = 0;
 	for (auto& Chunk : File.ChunkedCode)
 		CodeSize += Chunk.Content.Len();
-	for (FString& Generated : File.GeneratedCode)
-		CodeSize += Generated.Len() + 2;
+	for (const FGeneratedCode& Generated : File.GeneratedCode)
+		CodeSize += Generated.Code.Len() + 2;
 	File.ProcessedCode.Reset(CodeSize);
+	File.ProcessedSourceProvenance.Reset();
 
 	// Concat all chunks into final code
 	for (auto& Chunk : File.ChunkedCode)
@@ -4262,10 +4640,18 @@ void FAngelscriptPreprocessor::CondenseFromChunks(FFile& File)
 	}
 
 	// Concat generated code at the end
-	for (FString& Generated : File.GeneratedCode)
+	for (const FGeneratedCode& Generated : File.GeneratedCode)
 	{
 		File.ProcessedCode += TEXT("\n\n");
-		File.ProcessedCode += Generated;
+		const int32 GeneratedStart = File.ProcessedCode.Len();
+		File.ProcessedCode += Generated.Code;
+		AngelscriptPreprocessor_Private::AddGeneratedRange(
+			File.ProcessedSourceProvenance,
+			GeneratedStart,
+			Generated.Code.Len(),
+			Generated.Kind,
+			Generated.GeneratorName,
+			Generated.bHasAuthoredAnchor ? &Generated.AuthoredAnchor : nullptr);
 	}
 }
 
@@ -4348,6 +4734,10 @@ void FAngelscriptPreprocessor::PostProcessRangeBasedFor(FFile& File)
 
 	FString NewCode;
 	int32 PrevPosition = 0;
+	TArray<AngelscriptPreprocessor_Private::FProcessedSourceEdit>
+		ProvenanceEdits;
+	TArray<FAngelscriptProcessedSourceProvenanceRange>
+		NewGeneratedRanges;
 	FRegexMatcher MatchFor(RangeBasedForPattern, File.ProcessedCode);
 
 	while (MatchFor.FindNext())
@@ -4406,6 +4796,18 @@ void FAngelscriptPreprocessor::PostProcessRangeBasedFor(FFile& File)
 			SuffixGroup = TEXT(";");
 		}
 
+		const bool bInsideExistingGeneratedRange =
+			File.ProcessedSourceProvenance.ContainsByPredicate(
+				[ForStart, MatchEnd](
+					const FAngelscriptProcessedSourceProvenanceRange& Range)
+				{
+					const int32 RangeEnd = Range.ProcessedCodeUnitOffset
+						+ Range.ProcessedCodeUnitLength;
+					return Range.bHasGeneratedOrigin
+						&& ForStart >= Range.ProcessedCodeUnitOffset
+						&& MatchEnd <= RangeEnd;
+				});
+		const int32 GeneratedStart = NewCode.Len();
 		NewCode += FString::Printf(
 			TEXT("for%s(auto _Iterator = %s.Iterator();")
 			TEXT("_Iterator.CanProceed; )")
@@ -4423,6 +4825,18 @@ void FAngelscriptPreprocessor::PostProcessRangeBasedFor(FFile& File)
 			NewCode += FinalGroup;
 			NewCode += TEXT("}");
 		}
+		const int32 GeneratedEnd = NewCode.Len();
+		ProvenanceEdits.Add({
+			ForStart, MatchEnd, GeneratedStart, GeneratedEnd});
+		if (!bInsideExistingGeneratedRange)
+		{
+			AngelscriptPreprocessor_Private::AddGeneratedRange(
+				NewGeneratedRanges,
+				GeneratedStart,
+				GeneratedEnd - GeneratedStart,
+				EAngelscriptGeneratedSourceKind::RangeBasedFor,
+				TEXT("RangeBasedFor:PostProcessRangeBasedFor"));
+		}
 
 		AdvanceLexState(ForStart, MatchEnd);
 		PrevPosition = MatchEnd;
@@ -4434,6 +4848,15 @@ void FAngelscriptPreprocessor::PostProcessRangeBasedFor(FFile& File)
 
 	if(PrevPosition < File.ProcessedCode.Len())
 		NewCode += File.ProcessedCode.Mid(PrevPosition);
+	AngelscriptPreprocessor_Private::RemapProvenanceRanges(
+		File.ProcessedSourceProvenance, ProvenanceEdits);
+	File.ProcessedSourceProvenance.Append(MoveTemp(NewGeneratedRanges));
+	File.ProcessedSourceProvenance.Sort([](
+		const FAngelscriptProcessedSourceProvenanceRange& Left,
+		const FAngelscriptProcessedSourceProvenanceRange& Right)
+	{
+		return Left.ProcessedCodeUnitOffset < Right.ProcessedCodeUnitOffset;
+	});
 	File.ProcessedCode = NewCode;
 }
 
@@ -4516,6 +4939,11 @@ void FAngelscriptPreprocessor::PostProcessLiteralAssets(FFile& File)
 
 	FString NewCode;
 	int32 PrevPosition = 0;
+	int32 AuthoredAnchorSearchOffset = 0;
+	TArray<AngelscriptPreprocessor_Private::FProcessedSourceEdit>
+		ProvenanceEdits;
+	TArray<FAngelscriptProcessedSourceProvenanceRange>
+		NewGeneratedRanges;
 	FRegexMatcher MatchSettings(LiteralAssetsPattern, File.ProcessedCode);
 
 	while (MatchSettings.FindNext())
@@ -4561,12 +4989,43 @@ void FAngelscriptPreprocessor::PostProcessLiteralAssets(FFile& File)
 		Args.Add(TEXT("Name"), AssetName);
 		Args.Add(TEXT("Type"), SettingsType);
 
+		const int32 GeneratedStart = NewCode.Len();
 		NewCode += FString::Format(FormatStr, Args);
+		const int32 GeneratedEnd = NewCode.Len();
+		ProvenanceEdits.Add({
+			ForStart, MatchEnd, GeneratedStart, GeneratedEnd});
+
+		FAngelscriptSourceProvenanceAnchor AuthoredAnchor;
+		const bool bHasAuthoredAnchor =
+			AngelscriptPreprocessor_Private::TryFindLiteralAssetAuthoredAnchor(
+				File,
+				AssetName,
+				SettingsType,
+				AuthoredAnchorSearchOffset,
+				AuthoredAnchor);
+		AngelscriptPreprocessor_Private::AddGeneratedRange(
+			NewGeneratedRanges,
+			GeneratedStart,
+			GeneratedEnd - GeneratedStart,
+			EAngelscriptGeneratedSourceKind::LiteralAsset,
+			TEXT("LiteralAsset:") + AssetName,
+			bHasAuthoredAnchor ? &AuthoredAnchor : nullptr);
 		AdvanceLexState(ForStart, MatchEnd);
 		PrevPosition = MatchEnd;
 
-		// Execute the getter as a postinit function so we ensure the asset is created
-		File.Module->PostInitFunctions.Add(TEXT("Get") + AssetName);
+		// Execute the getter as a postinit function so we ensure the asset is created.
+		// Preserve the exact generated pair here; downstream generation must not
+		// reconstruct literal-asset identity from Get*/__Init_* name prefixes.
+		const FString GetterFunctionName = TEXT("Get") + AssetName;
+		const FString InitializerFunctionName = TEXT("__Init_") + AssetName;
+		FAngelscriptLiteralAssetFunctionDesc& LiteralAsset =
+			File.Module->LiteralAssetFunctions.Emplace_GetRef();
+		LiteralAsset.AssetName = AssetName;
+		LiteralAsset.DeclaredTypeName = SettingsType;
+		LiteralAsset.GetterFunctionName = GetterFunctionName;
+		LiteralAsset.InitializerFunctionName = InitializerFunctionName;
+		LiteralAsset.PostInitFunctionIndex =
+			File.Module->PostInitFunctions.Add(GetterFunctionName);
 	}
 
 	// If no matches were found at all, don't need to do anything
@@ -4575,6 +5034,15 @@ void FAngelscriptPreprocessor::PostProcessLiteralAssets(FFile& File)
 
 	if(PrevPosition < File.ProcessedCode.Len())
 		NewCode += File.ProcessedCode.Mid(PrevPosition);
+	AngelscriptPreprocessor_Private::RemapProvenanceRanges(
+		File.ProcessedSourceProvenance, ProvenanceEdits);
+	File.ProcessedSourceProvenance.Append(MoveTemp(NewGeneratedRanges));
+	File.ProcessedSourceProvenance.Sort([](
+		const FAngelscriptProcessedSourceProvenanceRange& Left,
+		const FAngelscriptProcessedSourceProvenanceRange& Right)
+	{
+		return Left.ProcessedCodeUnitOffset < Right.ProcessedCodeUnitOffset;
+	});
 	File.ProcessedCode = NewCode;
 }
 

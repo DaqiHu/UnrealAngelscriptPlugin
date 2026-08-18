@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 
+#include "Artifacts/AngelscriptArtifactIdentity.h"
+#include "Artifacts/AngelscriptArtifactReference.h"
 #include "RuntimeJIT/AngelscriptJITConfiguration.h"
 #include "RuntimeJIT/AngelscriptRuntimeJITState.h"
 
@@ -88,6 +90,22 @@ public:
 					== EAngelscriptJITExecutionMode::RuntimeOnly);
 	}
 
+	struct FSemanticDependentRecord
+	{
+		EAngelscriptArtifactSemanticDependencyKind Kind =
+			EAngelscriptArtifactSemanticDependencyKind::Invalid;
+		FAngelscriptHash256 TargetStableKey;
+		TArray<FAngelscriptStableFunctionKey> Dependents;
+	};
+
+	void ReplaceSemanticDependents(
+		TArray<FSemanticDependentRecord>&& InDependents);
+
+	bool CollectSemanticDependents(
+		EAngelscriptArtifactSemanticDependencyKind Kind,
+		const FAngelscriptHash256& TargetStableKey,
+		TArray<FAngelscriptStableFunctionKey>& OutDependents) const;
+
 private:
 	struct FRuntimeFunctionRecord
 	{
@@ -121,4 +139,5 @@ private:
 	TMap<asIScriptFunction*, FRuntimeFunctionRecord> RuntimeFunctionRecords;
 	uint64 NextPublicationOrdinal = 1;
 	TUniquePtr<FAngelscriptRuntimeJITRequestStateMachine> RuntimeState;
+	TArray<FSemanticDependentRecord> SemanticDependents;
 };

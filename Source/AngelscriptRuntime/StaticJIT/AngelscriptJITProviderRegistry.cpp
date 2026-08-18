@@ -259,6 +259,16 @@ FAngelscriptJITProviderLifetime::AcquireForLoadedProvider(
 
 namespace
 {
+	static FAngelscriptJITProviderCatalogDiagnosticSource CopyDiagnosticSource(
+		const FAngelscriptJITProviderDiagnosticSource& Source)
+	{
+		FAngelscriptJITProviderCatalogDiagnosticSource Copy;
+		Copy.Section = Source.Section;
+		Copy.Row = Source.Row;
+		Copy.Column = Source.Column;
+		return Copy;
+	}
+
 	static TSharedPtr<const FAngelscriptJITProviderCatalog,
 		ESPMode::ThreadSafe> CopyCatalog(
 		const FAngelscriptJITProviderView& View,
@@ -294,14 +304,226 @@ namespace
 			Entry.NativeEnvironmentFingerprint =
 				Source.NativeEnvironmentFingerprint;
 			Entry.EntryPoints = Source.EntryPoints;
+			Entry.AvailableExecutionCapabilities =
+				Source.AvailableExecutionCapabilities;
+			Entry.ExecutionCapabilityProfileHash =
+				Source.ExecutionCapabilityProfileHash;
+			Entry.RuntimeExecutionRequirementTriggers =
+				Source.RuntimeExecutionRequirementTriggers;
 			if (Source.ReferenceSlotCount > 0)
 			{
 				Entry.ReferenceSlots.Append(
 					Source.ReferenceSlots,
 					static_cast<int32>(Source.ReferenceSlotCount));
 			}
+			if (Source.SemanticDependencyCount > 0
+				&& View.SemanticDependencies != nullptr)
+			{
+				const uint32 Start = Source.SemanticDependencyStartIndex;
+				const uint32 Count = Source.SemanticDependencyCount;
+				if (Start + Count <= View.SemanticDependencyCount)
+				{
+					Entry.SemanticDependencies.Append(
+						View.SemanticDependencies + Start,
+						static_cast<int32>(Count));
+				}
+			}
+			Entry.NativeCallSites.Reserve(Source.NativeCallSiteCount);
+			for (uint32 CallSiteIndex = 0;
+				CallSiteIndex < Source.NativeCallSiteCount;
+				++CallSiteIndex)
+			{
+				const FAngelscriptJITNativeCallSite& SourceCallSite =
+					Source.NativeCallSites[CallSiteIndex];
+				FAngelscriptJITProviderCatalogNativeCallSite& CallSite =
+					Entry.NativeCallSites.AddDefaulted_GetRef();
+				CallSite.CallSiteIndex = SourceCallSite.CallSiteIndex;
+				CallSite.Route = SourceCallSite.Route;
+				CallSite.CanonicalDeclaration =
+					SourceCallSite.CanonicalDeclaration;
+				CallSite.EmittedCppCallee = SourceCallSite.EmittedCppCallee;
+				CallSite.RuntimeDllCore = SourceCallSite.RuntimeDllCore != nullptr
+					? SourceCallSite.RuntimeDllCore : TEXT("");
+				CallSite.MetadataRowSymbol =
+					SourceCallSite.MetadataRowSymbol != nullptr
+						? SourceCallSite.MetadataRowSymbol : TEXT("");
+				CallSite.RegisteredTarget = SourceCallSite.RegisteredTarget;
+				CallSite.StableTargetKey = SourceCallSite.StableTargetKey;
+				CallSite.ExpectedAbi = SourceCallSite.ExpectedAbi;
+				CallSite.ReferenceSlotIndex =
+					SourceCallSite.ReferenceSlotIndex;
+			}
+		}
+
+		if (View.Diagnostics != nullptr)
+		{
+			const FAngelscriptJITProviderDiagnostics& Source = *View.Diagnostics;
+			FAngelscriptJITProviderCatalogDiagnostics& Diagnostics =
+				Catalog->Diagnostics.Emplace();
+			Diagnostics.SchemaRevision = Source.SchemaRevision;
+			Diagnostics.DiagnosticDigest = Source.DiagnosticDigest;
+			Diagnostics.RequestKind = Source.RequestKind;
+			Diagnostics.RequestedBackendId = Source.RequestedBackendId;
+			Diagnostics.CaptureState = Source.CaptureState;
+			Diagnostics.FallbackChain.Reserve(Source.FallbackChainCount);
+			for (uint32 Index = 0; Index < Source.FallbackChainCount; ++Index)
+			{
+				Diagnostics.FallbackChain.Add(Source.FallbackChain[Index]);
+			}
+			Diagnostics.SourceCompilePassCount = Source.SourceCompilePassCount;
+			Diagnostics.CompiledModuleCount = Source.CompiledModuleCount;
+			Diagnostics.CompiledFunctionCount = Source.CompiledFunctionCount;
+			Diagnostics.CompiledTypeCount = Source.CompiledTypeCount;
+			Diagnostics.CompiledGlobalCount = Source.CompiledGlobalCount;
+			Diagnostics.CompiledDescriptorCount = Source.CompiledDescriptorCount;
+			Diagnostics.CompiledDependencyCount = Source.CompiledDependencyCount;
+			Diagnostics.CompiledExternalNativeCallCount =
+				Source.CompiledExternalNativeCallCount;
+			Diagnostics.EmitModuleCount = Source.EmitModuleCount;
+			Diagnostics.bHasVerifiedTypedHIR =
+				Source.bHasVerifiedTypedHIR != 0;
+			Diagnostics.TaskError = Source.TaskError;
+
+			Diagnostics.Functions.Reserve(Source.FunctionCount);
+			for (uint32 Index = 0; Index < Source.FunctionCount; ++Index)
+			{
+				const FAngelscriptJITProviderFunctionDiagnostic& SourceFunction =
+					Source.Functions[Index];
+				FAngelscriptJITProviderCatalogFunctionDiagnostic& Function =
+					Diagnostics.Functions.AddDefaulted_GetRef();
+				Function.FunctionKey = SourceFunction.FunctionKey;
+				Function.ActualBackendId = SourceFunction.ActualBackendId;
+				Function.Disposition = SourceFunction.Disposition;
+				Function.Detail = SourceFunction.Detail;
+				Function.BackendAttemptStart =
+					SourceFunction.BackendAttemptStart;
+				Function.BackendAttemptCount =
+					SourceFunction.BackendAttemptCount;
+			}
+
+			Diagnostics.BackendAttempts.Reserve(Source.BackendAttemptCount);
+			for (uint32 Index = 0; Index < Source.BackendAttemptCount; ++Index)
+			{
+				const FAngelscriptJITProviderBackendAttemptDiagnostic& SourceAttempt =
+					Source.BackendAttempts[Index];
+				FAngelscriptJITProviderCatalogBackendAttemptDiagnostic& Attempt =
+					Diagnostics.BackendAttempts.AddDefaulted_GetRef();
+				Attempt.BackendId = SourceAttempt.BackendId;
+				Attempt.Disposition = SourceAttempt.Disposition;
+				Attempt.Detail = SourceAttempt.Detail;
+				Attempt.Flags = SourceAttempt.Flags;
+				Attempt.FallbackReason = SourceAttempt.FallbackReason;
+				Attempt.TypedDetail = SourceAttempt.TypedDetail;
+				Attempt.ProcessedSource =
+					CopyDiagnosticSource(SourceAttempt.ProcessedSource);
+				Attempt.PrimarySemanticFunctionIndex =
+					SourceAttempt.PrimarySemanticFunctionIndex;
+				Attempt.SemanticFunctionStart =
+					SourceAttempt.SemanticFunctionStart;
+				Attempt.SemanticFunctionCount =
+					SourceAttempt.SemanticFunctionCount;
+				Attempt.CallStart = SourceAttempt.CallStart;
+				Attempt.CallCount = SourceAttempt.CallCount;
+				Attempt.RequiredCapabilities = SourceAttempt.RequiredCapabilities;
+				Attempt.AvailableCapabilities = SourceAttempt.AvailableCapabilities;
+				Attempt.ExecutionRequirementsIdentity =
+					SourceAttempt.ExecutionRequirementsIdentity;
+				Attempt.AvailableCapabilityProfileIdentity =
+					SourceAttempt.AvailableCapabilityProfileIdentity;
+				Attempt.ProfileKind = SourceAttempt.ProfileKind;
+				Attempt.ExceptionControlState =
+					SourceAttempt.ExceptionControlState;
+				Attempt.ExceptionPayloadState =
+					SourceAttempt.ExceptionPayloadState;
+				Attempt.bRecursionGuardAvailable =
+					SourceAttempt.bRecursionGuardAvailable != 0;
+			}
+
+			Diagnostics.SemanticFunctions.Reserve(Source.SemanticFunctionCount);
+			for (uint32 Index = 0; Index < Source.SemanticFunctionCount; ++Index)
+			{
+				const FAngelscriptJITProviderTypedSemanticFunctionDiagnostic&
+					SourceFunction = Source.SemanticFunctions[Index];
+				FAngelscriptJITProviderCatalogTypedSemanticFunctionDiagnostic&
+					Function = Diagnostics.SemanticFunctions.AddDefaulted_GetRef();
+				Function.FunctionKey = SourceFunction.FunctionKey;
+				Function.Role = SourceFunction.Role;
+				Function.RawTraitBits = SourceFunction.RawTraitBits;
+				Function.UnknownTraitBits = SourceFunction.UnknownTraitBits;
+				Function.InvocationKind = SourceFunction.InvocationKind;
+				Function.ReceiverKind = SourceFunction.ReceiverKind;
+				Function.ReceiverParameterIndex =
+					SourceFunction.ReceiverParameterIndex;
+				Function.HIRState = SourceFunction.HIRState;
+				Function.CleanupPlanState = SourceFunction.CleanupPlanState;
+				Function.bHasSuspendState = SourceFunction.bHasSuspendState != 0;
+				Function.bHasExceptionCleanup =
+					SourceFunction.bHasExceptionCleanup != 0;
+				Function.bCleanupPlanCoversAllTransfers =
+					SourceFunction.bCleanupPlanCoversAllTransfers != 0;
+				Function.ComponentIndex = SourceFunction.ComponentIndex;
+				Function.bRecursiveComponent =
+					SourceFunction.bRecursiveComponent != 0;
+				Function.EligibilityReason = SourceFunction.EligibilityReason;
+				Function.EligibilityDetail = SourceFunction.EligibilityDetail;
+				Function.EligibilitySource =
+					CopyDiagnosticSource(SourceFunction.EligibilitySource);
+			}
+
+			Diagnostics.Calls.Reserve(Source.CallCount);
+			for (uint32 Index = 0; Index < Source.CallCount; ++Index)
+			{
+				const FAngelscriptJITProviderTypedCallDiagnostic& SourceCall =
+					Source.Calls[Index];
+				FAngelscriptJITProviderCatalogTypedCallDiagnostic& Call =
+					Diagnostics.Calls.AddDefaulted_GetRef();
+				Call.CallerFunctionKey = SourceCall.CallerFunctionKey;
+				Call.CalleeFunctionKey = SourceCall.CalleeFunctionKey;
+				Call.ExpressionIndex = SourceCall.ExpressionIndex;
+				Call.SourceFlags = SourceCall.SourceFlags;
+				Call.ProcessedSource =
+					CopyDiagnosticSource(SourceCall.ProcessedSource);
+				Call.AuthoredSource =
+					CopyDiagnosticSource(SourceCall.AuthoredSource);
+				Call.GeneratedSource =
+					CopyDiagnosticSource(SourceCall.GeneratedSource);
+				Call.TargetKind = SourceCall.TargetKind;
+				Call.Disposition = SourceCall.Disposition;
+				Call.CalleeEligibilityReason = SourceCall.CalleeEligibilityReason;
+				Call.CalleeEligibilityDetail = SourceCall.CalleeEligibilityDetail;
+				Call.CalleeEligibilitySource =
+					CopyDiagnosticSource(SourceCall.CalleeEligibilitySource);
+				Call.bHasNativeLinkageValidation =
+					SourceCall.bHasNativeLinkageValidation != 0;
+				Call.NativeLinkageValidation = SourceCall.NativeLinkageValidation;
+				Call.NativeLinkageValidationDetail =
+					SourceCall.NativeLinkageValidationDetail;
+				Call.CanonicalDeclaration = SourceCall.CanonicalDeclaration;
+				Call.EmittedRoute = SourceCall.EmittedRoute;
+				Call.EmittedCppCallee = SourceCall.EmittedCppCallee;
+				Call.RuntimeDllCore = SourceCall.RuntimeDllCore;
+				Call.MetadataRowSymbol = SourceCall.MetadataRowSymbol;
+				Call.RegisteredTarget = SourceCall.RegisteredTarget;
+				Call.DirectCppSymbol = SourceCall.DirectCppSymbol;
+				Call.StableTargetKey = SourceCall.StableTargetKey;
+				Call.ExpectedAbi = SourceCall.ExpectedAbi;
+				Call.ReferenceSlotIndex = SourceCall.ReferenceSlotIndex;
+			}
 		}
 		return Catalog;
+	}
+
+	static bool DiagnosticCatalogsEquivalent(
+		const FAngelscriptJITProviderCatalog& Left,
+		const FAngelscriptJITProviderCatalog& Right)
+	{
+		if (Left.Diagnostics.IsSet() != Right.Diagnostics.IsSet())
+		{
+			return false;
+		}
+		return !Left.Diagnostics.IsSet()
+			|| Left.Diagnostics->DiagnosticDigest
+				== Right.Diagnostics->DiagnosticDigest;
 	}
 
 	static bool CatalogsEquivalent(
@@ -338,10 +560,17 @@ namespace
 				|| !(A.EntryAbiHash == B.EntryAbiHash)
 				|| !(A.NativeEnvironmentFingerprint
 					== B.NativeEnvironmentFingerprint)
+				|| A.AvailableExecutionCapabilities
+					!= B.AvailableExecutionCapabilities
+				|| !(A.ExecutionCapabilityProfileHash
+					== B.ExecutionCapabilityProfileHash)
+				|| A.RuntimeExecutionRequirementTriggers
+					!= B.RuntimeExecutionRequirementTriggers
 				|| A.EntryPoints.VMEntry != B.EntryPoints.VMEntry
 				|| A.EntryPoints.RawEntry != B.EntryPoints.RawEntry
 				|| A.EntryPoints.ParmsEntry != B.EntryPoints.ParmsEntry
-				|| A.ReferenceSlots.Num() != B.ReferenceSlots.Num())
+				|| A.ReferenceSlots.Num() != B.ReferenceSlots.Num()
+				|| A.NativeCallSites.Num() != B.NativeCallSites.Num())
 			{
 				return false;
 			}
@@ -356,6 +585,34 @@ namespace
 				if (AReference.SlotIndex != BReference.SlotIndex
 					|| AReference.Flags != BReference.Flags
 					|| AReference.Reference != BReference.Reference)
+				{
+					return false;
+				}
+			}
+			for (int32 CallSiteIndex = 0;
+				CallSiteIndex < A.NativeCallSites.Num();
+				++CallSiteIndex)
+			{
+				const FAngelscriptJITProviderCatalogNativeCallSite& ACallSite =
+					A.NativeCallSites[CallSiteIndex];
+				const FAngelscriptJITProviderCatalogNativeCallSite& BCallSite =
+					B.NativeCallSites[CallSiteIndex];
+				if (ACallSite.CallSiteIndex != BCallSite.CallSiteIndex
+					|| ACallSite.Route != BCallSite.Route
+					|| ACallSite.CanonicalDeclaration
+						!= BCallSite.CanonicalDeclaration
+					|| ACallSite.EmittedCppCallee
+						!= BCallSite.EmittedCppCallee
+					|| ACallSite.RuntimeDllCore != BCallSite.RuntimeDllCore
+					|| ACallSite.MetadataRowSymbol
+						!= BCallSite.MetadataRowSymbol
+					|| ACallSite.RegisteredTarget
+						!= BCallSite.RegisteredTarget
+					|| !(ACallSite.StableTargetKey
+						== BCallSite.StableTargetKey)
+					|| !(ACallSite.ExpectedAbi == BCallSite.ExpectedAbi)
+					|| ACallSite.ReferenceSlotIndex
+						!= BCallSite.ReferenceSlotIndex)
 				{
 					return false;
 				}
@@ -479,7 +736,14 @@ FAngelscriptJITProviderRegistry::RegisterProvider(
 			if (ExistingCatalog->ProviderGeneration
 				== Candidate->ProviderGeneration)
 			{
-				if (CatalogsEquivalent(*ExistingCatalog, *Candidate))
+				if (!CatalogsEquivalent(*ExistingCatalog, *Candidate))
+				{
+					Result.Code =
+						EAngelscriptJITProviderRegistrationCode::AmbiguousGeneration;
+					return Result;
+				}
+				if (DiagnosticCatalogsEquivalent(
+						*ExistingCatalog, *Candidate))
 				{
 					if (bTransfersIdentityOwner)
 					{
@@ -491,8 +755,21 @@ FAngelscriptJITProviderRegistry::RegisterProvider(
 						EAngelscriptJITProviderRegistrationCode::Unchanged;
 					return Result;
 				}
+
+				RetiredCatalog = ExistingCatalog;
+				if (bTransfersIdentityOwner)
+				{
+					CatalogsByOwner.Remove(PreviousIdentityOwner);
+					CatalogsByOwner.Add(Owner, Candidate);
+					ModularFeatureOwners.Remove(PreviousIdentityOwner);
+				}
+				else
+				{
+					*ExistingForOwner = Candidate;
+				}
 				Result.Code =
-					EAngelscriptJITProviderRegistrationCode::AmbiguousGeneration;
+					EAngelscriptJITProviderRegistrationCode::Replaced;
+				RetiredSnapshot = PublishSnapshotLocked();
 				return Result;
 			}
 			RetiredCatalog = ExistingCatalog;

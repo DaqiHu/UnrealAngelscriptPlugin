@@ -1,5 +1,6 @@
 #include "../Support/AngelscriptNativeCoreTestSupport.h"
 #include "../Support/AngelscriptNativeCaseTestSupport.h"
+#include "../Support/AngelscriptNativeLanguageCaseTestSupport.h"
 #include "AngelscriptTestMacros.h"
 #include "CQTest.h"
 #include "Misc/ScopeExit.h"

@@ -5,6 +5,12 @@
 #include "CQTest.h"
 #include "Misc/ScopeExit.h"
 
+#include "StartAngelscriptHeaders.h"
+#include "source/as_scriptengine.h"
+#include "source/as_scriptfunction.h"
+#include "source/as_typed_semantic_ir.h"
+#include "EndAngelscriptHeaders.h"
+
 #if WITH_ANGELSCRIPT_UNITTESTS
 
 TEST_CLASS_WITH_FLAGS(FIncrementOperatorTests,
@@ -1086,6 +1092,72 @@ private:
 		{
 			return false;
 		}
+		const bool bReviewedTypedMutation =
+			CategoryCase.Category == EWritableCategory::Local
+			&& (TypeCase.Category == ENativeValueCategory::SignedInteger
+				|| TypeCase.Category == ENativeValueCategory::UnsignedInteger);
+		if (bReviewedTypedMutation)
+		{
+			const asCScriptFunction* const InternalEntry =
+				static_cast<const asCScriptFunction*>(Entry);
+			const asCTypedSemanticFunction* const HIR =
+				InternalEntry->GetTypedSemanticFunction();
+			if (!Assert.IsNotNull(HIR,
+					*Case.Describe(TEXT(
+						"reviewed local increment should publish typed semantic HIR"))))
+			{
+				return false;
+			}
+			const asSTypedSemanticVerificationResult Verification =
+				VerifyTypedSemanticFunction(*HIR);
+			if (!Assert.IsTrue(Verification.IsValid(),
+					*Case.Describe(*FString::Printf(TEXT(
+						"reviewed local increment HIR should verify: %hs"),
+						Verification.detail.AddressOf()))))
+			{
+				return false;
+			}
+
+			const FString ExpectedToken =
+				OperatorCase.Operator == EIncrementOperator::PreIncrement
+					|| OperatorCase.Operator == EIncrementOperator::PostIncrement
+				? TEXT("++")
+				: TEXT("--");
+			const FTCHARToUTF8 ExpectedTokenUtf8(*ExpectedToken);
+			const asSTypedSemanticExpression* Mutation = nullptr;
+			for (asUINT ExpressionIndex = 0;
+				ExpressionIndex < HIR->expressions.GetLength();
+				++ExpressionIndex)
+			{
+				const asSTypedSemanticExpression& Expression =
+					HIR->expressions[ExpressionIndex];
+				if (Expression.kind
+						== asETypedSemanticExpressionKind::Assignment
+					&& Expression.operatorToken == ExpectedTokenUtf8.Get())
+				{
+					Mutation = &Expression;
+					break;
+				}
+			}
+			if (!Assert.IsNotNull(Mutation,
+					*Case.Describe(TEXT(
+						"reviewed local increment should retain its exact mutation token"))))
+			{
+				return false;
+			}
+			const bool bExpectedOldValue =
+				OperatorCase.Operator == EIncrementOperator::PostIncrement
+				|| OperatorCase.Operator == EIncrementOperator::PostDecrement;
+			if (!Assert.IsTrue(
+				Mutation->mutationTarget.IsValid()
+					&& !Mutation->mutationValue.IsValid()
+					&& Mutation->mutationReturnsOldValue == bExpectedOldValue,
+				*Case.Describe(TEXT(
+					"increment mutation should retain one target and exact prefix/postfix result identity"))))
+			{
+				return false;
+			}
+		}
 		State.ResetRuntime(InitialBits(TypeCase));
 		bool bPassed = Assert.AreEqual(asSUCCESS,
 			Context.Prepare(Entry),
@@ -1335,6 +1407,10 @@ public:
 		{
 			return;
 		}
+		asCScriptEngine* const InternalEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(InternalEngine->SetTypedSemanticIRCapture(true),
+			TEXT("increment product should enable typed semantic capture before its first build")));
 
 		TArray<const FNativeTypeCase*> NumericTypes;
 		const FNativeTypeCase* BoolType = nullptr;

@@ -2,6 +2,7 @@
 
 #include "Core/Artifacts/AngelscriptArtifactIdentity.h"
 #include "Core/AngelscriptType.h"
+#include "Misc/ScopeLock.h"
 #include "UObject/UObjectIterator.h"
 
 #include "as_callfunc.h"
@@ -657,51 +658,57 @@ FAngelscriptCacheEngineEnvironmentResolver::
 {
 }
 
-TOptional<FAngelscriptCacheCurrentSymbol>
-FAngelscriptCacheEngineEnvironmentResolver::Resolve(
-	const EAngelscriptArtifactReferenceKind ReferenceKind,
-	const FAngelscriptHash256& StableKey) const
+uint32 FAngelscriptCacheEngineEnvironmentResolver::
+	GetSymbolIndexBuildCountForDiagnostics() const
+{
+	const FScopeLock Lock(&SymbolIndexMutex);
+	return SymbolIndexBuildCount;
+}
+
+int32 FAngelscriptCacheEngineEnvironmentResolver::
+	GetIndexedSymbolCountForDiagnostics() const
+{
+	const FScopeLock Lock(&SymbolIndexMutex);
+	return SymbolIndex.Num();
+}
+
+void FAngelscriptCacheEngineEnvironmentResolver::BuildSymbolIndexLocked() const
 {
 	using namespace AngelscriptCacheEnvironment_Private;
-	if (ReferenceKind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol
-		|| StableKey.IsZero() || Engine == nullptr)
+	SymbolIndex.Reset();
+	++SymbolIndexBuildCount;
+	if (Engine == nullptr)
 	{
-		return {};
+		return;
 	}
 
-	TOptional<FAngelscriptCacheCurrentSymbol> Match;
-	bool bAmbiguous = false;
-	auto ConsiderReference = [&Match, &bAmbiguous, &StableKey](
+	TArray<FAngelscriptArtifactReference> References;
+	auto AddReference = [&References](
 		const FAngelscriptArtifactReference& Reference)
 	{
-		if (bAmbiguous || !(Reference.StableKey == StableKey))
+		if (Reference.Kind
+				!= EAngelscriptArtifactReferenceKind::EnvironmentSymbol
+			|| Reference.StableKey.IsZero()
+			|| Reference.ExpectedAbi.IsZero())
 		{
 			return;
 		}
-		if (Match.IsSet())
-		{
-			bAmbiguous = true;
-			Match.Reset();
-			return;
-		}
-		FAngelscriptCacheCurrentSymbol Current;
-		Current.CurrentAbi = Reference.ExpectedAbi;
-		Current.CurrentContentOrValue = Reference.ExpectedAbi;
-		Match = MoveTemp(Current);
+		References.Add(Reference);
 	};
-	for (TObjectIterator<UClass> It; !bAmbiguous && It; ++It)
+
+	for (TObjectIterator<UClass> It; It; ++It)
 	{
 		FAngelscriptArtifactReference Reference;
 		if (FAngelscriptCacheEnvironmentIdentity::TryBuildCodeRootReference(
 			**It, Reference))
 		{
-			ConsiderReference(Reference);
+			AddReference(Reference);
 		}
 	}
 	Engine->allRegisteredTypes.IterateAll(
 		[&](asCTypeInfo* Type)
 		{
-			if (bAmbiguous || Type == nullptr || Type->module != nullptr)
+			if (Type == nullptr || Type->module != nullptr)
 			{
 				return;
 			}
@@ -711,7 +718,7 @@ FAngelscriptCacheEngineEnvironmentResolver::Resolve(
 			{
 				return;
 			}
-			ConsiderReference(Reference);
+			AddReference(Reference);
 
 			const asCObjectType* ObjectType = CastToObjectType(Type);
 			if (ObjectType == nullptr)
@@ -719,8 +726,7 @@ FAngelscriptCacheEngineEnvironmentResolver::Resolve(
 				return;
 			}
 			for (asUINT PropertyIndex = 0;
-				!bAmbiguous
-					&& PropertyIndex < ObjectType->properties.GetLength();
+				PropertyIndex < ObjectType->properties.GetLength();
 				++PropertyIndex)
 			{
 				const asCObjectProperty* Property =
@@ -731,7 +737,7 @@ FAngelscriptCacheEngineEnvironmentResolver::Resolve(
 						TryBuildPropertyReference(
 							*Type, *Property, PropertyReference))
 				{
-					ConsiderReference(PropertyReference);
+					AddReference(PropertyReference);
 				}
 			}
 		});
@@ -744,10 +750,81 @@ FAngelscriptCacheEngineEnvironmentResolver::Resolve(
 		if (FAngelscriptCacheEnvironmentIdentity::TryBuildFunctionReference(
 			*Function, Reference))
 		{
-			ConsiderReference(Reference);
+			AddReference(Reference);
 		}
 	}
-	return bAmbiguous ? TOptional<FAngelscriptCacheCurrentSymbol>() : Match;
+
+	References.Sort(
+		[](const FAngelscriptArtifactReference& Left,
+			const FAngelscriptArtifactReference& Right)
+		{
+			if (!(Left.StableKey == Right.StableKey))
+			{
+				return Left.StableKey < Right.StableKey;
+			}
+			return Left.ExpectedAbi < Right.ExpectedAbi;
+		});
+	SymbolIndex.Reserve(References.Num());
+	for (int32 Index = 0; Index < References.Num();)
+	{
+		int32 EndIndex = Index + 1;
+		while (EndIndex < References.Num()
+			&& References[EndIndex].StableKey
+				== References[Index].StableKey)
+		{
+			++EndIndex;
+		}
+
+		FIndexedSymbol& Indexed = SymbolIndex.AddDefaulted_GetRef();
+		Indexed.StableKey = References[Index].StableKey;
+		Indexed.bAmbiguous = EndIndex - Index > 1;
+		if (!Indexed.bAmbiguous)
+		{
+			Indexed.Current.CurrentAbi = References[Index].ExpectedAbi;
+			Indexed.Current.CurrentContentOrValue =
+				References[Index].ExpectedAbi;
+		}
+		Index = EndIndex;
+	}
+}
+
+TOptional<FAngelscriptCacheCurrentSymbol>
+FAngelscriptCacheEngineEnvironmentResolver::Resolve(
+	const EAngelscriptArtifactReferenceKind ReferenceKind,
+	const FAngelscriptHash256& StableKey) const
+{
+	if (ReferenceKind != EAngelscriptArtifactReferenceKind::EnvironmentSymbol
+		|| StableKey.IsZero() || Engine == nullptr)
+	{
+		return {};
+	}
+	const FScopeLock Lock(&SymbolIndexMutex);
+	if (SymbolIndexBuildCount == 0)
+	{
+		BuildSymbolIndexLocked();
+	}
+
+	int32 Lower = 0;
+	int32 Upper = SymbolIndex.Num();
+	while (Lower < Upper)
+	{
+		const int32 Middle = Lower + (Upper - Lower) / 2;
+		if (SymbolIndex[Middle].StableKey < StableKey)
+		{
+			Lower = Middle + 1;
+		}
+		else
+		{
+			Upper = Middle;
+		}
+	}
+	if (!SymbolIndex.IsValidIndex(Lower)
+		|| !(SymbolIndex[Lower].StableKey == StableKey)
+		|| SymbolIndex[Lower].bAmbiguous)
+	{
+		return {};
+	}
+	return SymbolIndex[Lower].Current;
 }
 
 asCTypeInfo* FAngelscriptCacheEngineEnvironmentResolver::ResolveTypeReference(

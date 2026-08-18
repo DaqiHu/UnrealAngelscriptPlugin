@@ -32,6 +32,8 @@ private:
 		One,
 		SourceWidthMinusOne,
 		SourceWidth,
+		SourceWidthPlusOne,
+		Large,
 		Negative,
 	};
 
@@ -92,6 +94,8 @@ private:
 		{"one", ERightPartition::One},
 		{"source_width_minus_one", ERightPartition::SourceWidthMinusOne},
 		{"source_width", ERightPartition::SourceWidth},
+		{"source_width_plus_one", ERightPartition::SourceWidthPlusOne},
+		{"large", ERightPartition::Large},
 		{"negative", ERightPartition::Negative},
 	};
 
@@ -601,6 +605,10 @@ private:
 			return SourceWidth - 1;
 		case ERightPartition::SourceWidth:
 			return SourceWidth;
+		case ERightPartition::SourceWidthPlusOne:
+			return SourceWidth + 1;
+		case ERightPartition::Large:
+			return 100000;
 		case ERightPartition::Negative:
 			return -1;
 		default:
@@ -947,9 +955,13 @@ public:
 			}
 		}
 
-		ASSERT_THAT(AreEqual(1200,
+		const int32 ExpectedCaseCount = IntegralTypes.Num()
+			* UE_ARRAY_COUNT(OperatorCases)
+			* UE_ARRAY_COUNT(RightCases)
+			* UE_ARRAY_COUNT(CategoryCases);
+		ASSERT_THAT(AreEqual(ExpectedCaseCount,
 			ConstructedIds.Num(),
-			TEXT("bitwise product should construct all 1,200 catalog IDs")));
+			TEXT("bitwise product should construct every catalog dimension")));
 		ASSERT_THAT(AreEqual(ConstructedIds.Num(),
 			UniqueIds.Num(),
 			TEXT("bitwise product should construct no duplicate IDs")));

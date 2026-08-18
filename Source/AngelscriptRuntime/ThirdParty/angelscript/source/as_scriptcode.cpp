@@ -67,6 +67,7 @@ int asCScriptCode::SetCode(const char *in_name, const char *in_code, size_t in_l
 {
 	if( !in_code) return asINVALID_ARG;
 	this->name = in_name ? in_name : "";
+	sourceProvenanceRanges.SetLength(0);
 	if( !sharedCode && code ) 
 		asDELETEARRAY(code);
 
@@ -95,6 +96,58 @@ int asCScriptCode::SetCode(const char *in_name, const char *in_code, size_t in_l
 	linePositions.PushLast(in_length);
 
 	return asSUCCESS;
+}
+
+bool asCScriptCode::SetSourceProvenanceRanges(
+	const asSTypedSemanticSourceProvenanceRange* ranges,
+	asUINT rangeCount)
+{
+	if( rangeCount != 0 && ranges == 0 )
+		return false;
+
+	asUINT previousEnd = 0;
+	for( asUINT index = 0; index < rangeCount; ++index )
+	{
+		const asSTypedSemanticSourceProvenanceRange &range = ranges[index];
+		if( range.processedLength == 0
+			|| range.processedOffset > codeLength
+			|| range.processedLength > codeLength - range.processedOffset
+			|| (index != 0 && range.processedOffset < previousEnd) )
+		{
+			return false;
+		}
+		previousEnd = range.processedOffset + range.processedLength;
+	}
+
+	sourceProvenanceRanges.SetLength(rangeCount);
+	for( asUINT index = 0; index < rangeCount; ++index )
+		sourceProvenanceRanges[index] = ranges[index];
+	return true;
+}
+
+void asCScriptCode::ApplySourceProvenance(
+	asSTypedSemanticSourceSpan& span) const
+{
+	const asUINT spanEnd = span.sourceOffset + span.sourceLength;
+	if( spanEnd < span.sourceOffset )
+		return;
+
+	for( asUINT index = 0; index < sourceProvenanceRanges.GetLength(); ++index )
+	{
+		const asSTypedSemanticSourceProvenanceRange &range =
+			sourceProvenanceRanges[index];
+		const asUINT rangeEnd = range.processedOffset + range.processedLength;
+		if( span.sourceOffset < range.processedOffset )
+			break;
+		if( span.sourceOffset >= range.processedOffset && spanEnd <= rangeEnd )
+		{
+			span.hasAuthoredOrigin = range.hasAuthoredOrigin;
+			span.authoredOrigin = range.authoredOrigin;
+			span.hasGeneratedOrigin = range.hasGeneratedOrigin;
+			span.generatedOrigin = range.generatedOrigin;
+			return;
+		}
+	}
 }
 
 void asCScriptCode::ConvertPosToRowCol(size_t pos, int *row, int *col)

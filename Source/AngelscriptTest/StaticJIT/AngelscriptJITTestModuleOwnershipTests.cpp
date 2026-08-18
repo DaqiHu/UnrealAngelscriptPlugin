@@ -264,7 +264,7 @@ public:
 			*Root,
 			TEXT("*.jit.cpp"),
 			true, false);
-		ASSERT_THAT(AreEqual(2, ModuleSources.Num()));
+		ASSERT_THAT(AreEqual(7, ModuleSources.Num()));
 		ASSERT_THAT(IsFalse(IFileManager::Get().DirectoryExists(
 			*FPaths::Combine(Root, TEXT("Modules")))));
 
@@ -282,6 +282,12 @@ public:
 		ASSERT_THAT(IsTrue(IFileManager::Get().FileExists(
 			*FPaths::Combine(Root, TEXT("Provider.generated.cpp")))));
 		ASSERT_THAT(IsTrue(IFileManager::Get().FileExists(
+			*FPaths::Combine(
+				Root, TEXT("TypedASTJITScalarProbe.generated.cpp")))));
+		ASSERT_THAT(IsTrue(IFileManager::Get().FileExists(
+			*FPaths::Combine(
+				Root, TEXT("TypedASTJITProviderProbe.generated.cpp")))));
+		ASSERT_THAT(IsTrue(IFileManager::Get().FileExists(
 			*FPaths::Combine(Root, TEXT("OwnedFiles.generated.json")))));
 	}
 
@@ -292,7 +298,7 @@ public:
 		TArray<FString> GeneratedSources;
 		IFileManager::Get().FindFilesRecursive(
 			GeneratedSources, *Root, TEXT("*.cpp"), true, false);
-		ASSERT_THAT(AreEqual(3, GeneratedSources.Num()));
+		ASSERT_THAT(AreEqual(31, GeneratedSources.Num()));
 
 		bool bUsesSystemFunctionSlot = false;
 		bool bUsesTypeSlot = false;

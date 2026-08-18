@@ -3,7 +3,9 @@
 #include "AngelscriptEngine.h"
 #include "Artifacts/AngelscriptFunctionRoute.h"
 #include "StaticJIT/AngelscriptJITProjectScaffold.h"
+#include "StaticJIT/AngelscriptProjectSourceGraph.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
+#include "StaticJIT/AngelscriptStaticJITGenerationProfile.h"
 #include "StaticJIT/AngelscriptStaticJITGenerationSnapshot.h"
 #include "StaticJIT/AngelscriptStaticJITGenerator.h"
 
@@ -306,6 +308,17 @@ namespace AngelscriptEditor::StaticJIT
 		FAngelscriptJITGenerationOutput& OutGeneratedOutput,
 		FString* OutError)
 	{
+		return BuildProjectArtifacts(ProjectFile, TargetProfile, nullptr,
+			OutGeneratedOutput, OutError);
+	}
+
+	bool FAngelscriptJITProjectGeneration::BuildProjectArtifacts(
+		const FStringView ProjectFile,
+		const EAngelscriptJITTargetProfile TargetProfile,
+		TSharedPtr<IAngelscriptSourceProvider> SourceProviderOverride,
+		FAngelscriptJITGenerationOutput& OutGeneratedOutput,
+		FString* OutError)
+	{
 		OutGeneratedOutput = {};
 		auto Fail = [OutError](const FString& Message)
 		{
@@ -320,148 +333,78 @@ namespace AngelscriptEditor::StaticJIT
 		return Fail(
 			TEXT("Project StaticJIT generation is unavailable in this host build."));
 #else
-		const TOptional<FAngelscriptJITTargetProfileTraits> Traits =
-			FAngelscriptJITTargetProfiles::GetTraits(TargetProfile);
-		FString Descriptor(ProjectFile);
-		Descriptor.TrimStartAndEndInline();
-		if (!Traits.IsSet() || Descriptor.IsEmpty())
+		FAngelscriptStaticJITGenerationProfile GenerationProfile;
+		FString ProfileError;
+		if (!FAngelscriptStaticJITGenerationProfile::TryCreate(
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			TargetProfile,
+			GenerationProfile, &ProfileError))
 		{
-			return Fail(
-				TEXT("Project StaticJIT generation requires one concrete target profile and project descriptor."));
+			return Fail(ProfileError);
 		}
-		Descriptor = FPaths::ConvertRelativePathToFull(Descriptor);
-		FPaths::NormalizeFilename(Descriptor);
-		if (!IFileManager::Get().FileExists(*Descriptor))
-		{
-			return Fail(FString::Printf(
-				TEXT("Project descriptor does not exist: %s."), *Descriptor));
-		}
-		const FString ProjectDirectory = FPaths::GetPath(Descriptor);
-		const FString ScriptRoot = FPaths::Combine(
-			ProjectDirectory, TEXT("Script"));
-		if (!IFileManager::Get().DirectoryExists(*ScriptRoot))
-		{
-			return Fail(FString::Printf(
-				TEXT("Project Script root does not exist: %s."), *ScriptRoot));
-		}
-
-		const FString TemporaryCacheRoot = FPaths::Combine(
-			ProjectDirectory,
-			TEXT("Saved/Angelscript/JITGeneration"),
-			FAngelscriptJITTargetProfiles::ToString(TargetProfile),
-			FGuid::NewGuid().ToString(EGuidFormats::Digits));
-		TUniquePtr<FAngelscriptEngine> Engine;
-		ON_SCOPE_EXIT
-		{
-			Engine.Reset();
-			IFileManager::Get().DeleteDirectory(
-				*TemporaryCacheRoot, false, true);
-		};
-
-		FAngelscriptEngineConfig Config;
-		Config.Purpose = EAngelscriptEnginePurpose::StaticJITGeneration;
-		Config.bSkipThreadedInitialize = true;
-		Config.bIsEditor = Traits->bEditor;
-		Config.bRunningCommandlet = true;
-		Config.bIsUnattended = true;
-		Config.bSimulateCooked = Traits->bUseCookedBindings;
-		Config.bForcePreprocessEditorCode = Traits->bIncludeEditorScripts;
-		Config.bDevelopmentMode = Traits->bIncludeDevelopmentScripts;
-		Config.bOverrideTargetPreprocessorFlags = true;
-		Config.bTargetEditor = Traits->bEditor;
-		Config.bTargetEditorOnlyData = Traits->bEditorOnlyData;
-		Config.bTargetRelease = Traits->bRelease;
-		Config.bTargetTest = Traits->bTest;
-		Config.bDisableCacheV2Persistence = true;
-		Config.CacheV2RootOverride = TemporaryCacheRoot;
-
-		FAngelscriptEngineDependencies Dependencies =
-			FAngelscriptEngineDependencies::CreateDefault();
-		Dependencies.GetProjectDir = [ProjectDirectory]()
-		{
-			return ProjectDirectory;
-		};
-		// A project Provider owns only the host Script/ domain. Enabled plugin
-		// Providers remain separate Registry entries.
-		Dependencies.GetEnabledPluginScriptRoots = []()
-		{
-			return TArray<FString>();
-		};
-		Dependencies.GetEnabledPluginScriptRootDescriptors = []()
-		{
-			return TArray<FAngelscriptPluginScriptRoot>();
-		};
-
-		Engine = FAngelscriptEngine::Create(Config, Dependencies);
-		if (!Engine.IsValid())
-		{
-			return Fail(FString::Printf(
-				TEXT("Project scripts failed to compile for %s."),
-				FAngelscriptJITTargetProfiles::ToString(TargetProfile)));
-		}
-		FAngelscriptEngineScope EngineScope(*Engine);
-		const TArray<TSharedRef<FAngelscriptModuleDesc>> ActiveModules =
-			Engine->GetActiveModules();
-		TArray<asIScriptModule*> ScriptModules;
-		for (const TSharedRef<FAngelscriptModuleDesc>& Module : ActiveModules)
-		{
-			if (!Module->bCompileError && Module->ScriptModule != nullptr)
+		FAngelscriptProjectSourceGraphCompileRequest CompileRequest;
+		CompileRequest.RequestKind =
+			EAngelscriptProjectSourceGraphRequestKind::StaticJITArtifact;
+		CompileRequest.ProjectFile = FString(ProjectFile);
+		CompileRequest.TargetProfile = TargetProfile;
+		CompileRequest.CaptureProfile = GenerationProfile.CaptureProfile;
+		CompileRequest.SourceProviderOverride = MoveTemp(SourceProviderOverride);
+		return FAngelscriptProjectSourceGraph::Compile(
+			CompileRequest,
+			[&OutGeneratedOutput, &GenerationProfile, TargetProfile](
+				const FAngelscriptProjectSourceGraphCompileView& View,
+				FString* ConsumerError)
 			{
-				ScriptModules.Add(reinterpret_cast<asIScriptModule*>(
-					Module->ScriptModule));
-			}
-		}
-		if (ScriptModules.IsEmpty())
-		{
-			return Fail(FString::Printf(
-				TEXT("Project Script root compiled no modules for %s."),
-				FAngelscriptJITTargetProfiles::ToString(TargetProfile)));
-		}
+				FAngelscriptJITProviderGenerationSettings Settings;
+				Settings.TargetProfile = TargetProfile;
+				Settings.ProviderId =
+					FAngelscriptJITProjectScaffold::BuildProviderId(
+						View.ProjectFile);
+				Settings.ProviderName = FPaths::GetBaseFilename(
+					FString(View.ProjectFile)) + TEXT(" StaticJIT");
+				Settings.OwnerModuleName =
+					FAngelscriptJITProjectScaffold::ModuleName;
+				Settings.KnownNativeCallModules = {
+					FName(TEXT("Core")),
+					FName(TEXT("AngelscriptRuntime")),
+				};
+				Settings.PublicNativeCallDependencyModules =
+					Settings.KnownNativeCallModules;
+				Settings.ArtifactProfile = View.Snapshot->ArtifactProfile;
+				Settings.NativeEnvironmentFingerprint =
+					FAngelscriptJITTargetProfiles::
+						BuildCurrentNativeEnvironmentFingerprint(
+							TargetProfile);
 
-		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
-			ESPMode::ThreadSafe> GenerationSnapshot =
-			Engine->GetStaticJITGenerationSnapshot();
-		if (!GenerationSnapshot.IsValid()
-			|| !GenerationSnapshot->IsComplete())
-		{
-			return Fail(
-				TEXT("Project compile produced no complete StaticJIT generation snapshot."));
-		}
-
-		FAngelscriptJITProviderGenerationSettings Settings;
-		Settings.TargetProfile = TargetProfile;
-		Settings.ProviderId =
-			FAngelscriptJITProjectScaffold::BuildProviderId(Descriptor);
-		Settings.ProviderName = FPaths::GetBaseFilename(Descriptor)
-			+ TEXT(" StaticJIT");
-		Settings.OwnerModuleName = FAngelscriptJITProjectScaffold::ModuleName;
-		Settings.ArtifactProfile = GenerationSnapshot->ArtifactProfile;
-		Settings.NativeEnvironmentFingerprint =
-			FAngelscriptJITTargetProfiles::
-				BuildCurrentNativeEnvironmentFingerprint(TargetProfile);
-
-		FAngelscriptStaticJITProviderGenerationRequest Request;
-		Request.Settings = Settings;
-		Request.CompiledSourceGraph = ScriptModules;
-		Request.GenerationSnapshot = GenerationSnapshot;
-		FAngelscriptStaticJITGeneratorOutput GeneratorOutput;
-		FString GenerationError;
-		if (!GenerateStaticJITProviderArtifacts(
-			Request, GeneratorOutput, &GenerationError))
-		{
-			return Fail(GenerationError);
-		}
-		if (!GeneratorOutput.bHasProviderOutput)
-		{
-			return Fail(
-				TEXT("Project StaticJIT generation produced no eligible Provider output."));
-		}
-		OutGeneratedOutput = MoveTemp(GeneratorOutput.ProviderOutput);
-		if (OutError != nullptr)
-		{
-			OutError->Reset();
-		}
-		return true;
+				FAngelscriptStaticJITProviderGenerationRequest Request;
+				Request.BackendId = FAngelscriptStaticJITBackendId::TypedAST();
+				Request.Settings = Settings;
+				Request.TypedASTJITCapabilityProfile =
+					GenerationProfile.TypedASTJITCapabilityProfile;
+				Request.TypedASTJITExecutionRequirements =
+					GenerationProfile.TypedASTJITExecutionRequirements;
+				Request.CompiledSourceGraph = View.Modules;
+				Request.GenerationSnapshot = View.Snapshot;
+				FAngelscriptStaticJITGeneratorOutput GeneratorOutput;
+				if (!GenerateStaticJITProviderArtifacts(
+					Request, GeneratorOutput, ConsumerError))
+				{
+					return false;
+				}
+				if (!GeneratorOutput.bHasProviderOutput)
+				{
+					if (ConsumerError != nullptr)
+					{
+						*ConsumerError = TEXT(
+							"Project StaticJIT generation produced no eligible Provider output.");
+					}
+					return false;
+				}
+				OutGeneratedOutput = MoveTemp(
+					GeneratorOutput.ProviderOutput);
+				return true;
+			},
+			OutError);
 #endif
 	}
 

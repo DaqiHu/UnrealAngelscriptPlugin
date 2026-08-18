@@ -52,6 +52,33 @@ BEGIN_AS_NAMESPACE
 
 class asCScriptFunction;
 class asCScriptEngine;
+struct FScriptExecution;
+
+// Call-scoped exception payload shared by direct JIT calls. Context-mediated
+// calls copy their first public exception into the caller's record exactly
+// once. The bool on FScriptExecution remains the generated-code fast path;
+// this record retains the diagnostic identity needed when control returns to
+// the public asIScriptContext.
+struct asSJITFailureRecord
+{
+	bool bHasFailure = false;
+	bool bReported = false;
+	bool bAdopted = false;
+	int FunctionId = -1;
+	int Line = 0;
+	int Column = 0;
+	asCString Message;
+	asCString StableFunctionIdentity;
+	asCString SectionName;
+	asCString RouteOrigin;
+	asCString BackendOrigin;
+	// Owned, pointer-free diagnostic lines captured at the first JIT failure.
+	// A nested temporary context may unwind its live debug-frame chain before
+	// the public caller publishes the shared exception, so delayed reporting
+	// must not retain FScopeJITDebugCallstack or UObject pointers.
+	asCString CapturedStackModule;
+	asCArray<asCString> CapturedStackFrames;
+};
 
 
 using asLineCallback = void(*)(asCContext*);
@@ -153,6 +180,7 @@ public:
 
 //protected:
 	friend class asCScriptEngine;
+	friend struct FScriptExecution;
 
 	void CallExceptionCallback();
 
@@ -222,6 +250,9 @@ public:
 	int       m_exceptionLine;
 	int       m_exceptionColumn;
 	bool      m_exceptionWillBeCaught;
+	// Preserves Runtime-owned diagnostic provenance across a temporary
+	// context boundary. Standard VM exceptions leave this record empty.
+	asSJITFailureRecord m_jitFailureRecord;
 
 	// The last prepared function, and some cached values related to it
 	asCScriptFunction *m_initialFunction;
@@ -256,6 +287,12 @@ public:
 
 struct FScriptExecution
 {
+	// Match the maintained VM nested-call sanity limit: m_callStack uses ten
+	// words per frame and rejects once its length grows beyond 10000. Native
+	// TypedASTJIT helpers do not grow that VM array, so they share this explicit
+	// call-scoped frame counter instead.
+	static constexpr asUINT DefaultNativeJITFrameLimit = 1000;
+
 	class asCThreadLocalData* tld;
 	FScriptExecution* prevExecution;
 	class asCContext* prevContext;
@@ -271,6 +308,61 @@ struct FScriptExecution
 #endif
 
 	bool bExceptionThrown;
+	asSJITFailureRecord OwnedFailureRecord;
+	asSJITFailureRecord* FailureRecord = nullptr;
+	asUINT OwnedNativeJITFrameDepth = 0;
+	asUINT OwnedNativeJITFrameLimit = DefaultNativeJITFrameLimit;
+	asUINT* NativeJITFrameDepth = &OwnedNativeJITFrameDepth;
+	asUINT* NativeJITFrameLimit = &OwnedNativeJITFrameLimit;
+	FScriptActivation Activation;
+
+	bool TryRecordException(
+		const char* Message,
+		asIScriptFunction* Function,
+		const char* StableFunctionIdentity,
+		const char* SectionName,
+		int Line,
+		int Column,
+		const char* RouteOrigin,
+		const char* BackendOrigin,
+		bool bReported,
+		bool bAdopted = false);
+	bool AdoptException(asIScriptContext& Context);
+	bool PublishException(asCContext& Context);
+
+	bool TryEnterNativeJITFrame()
+	{
+		if (NativeJITFrameDepth == nullptr || NativeJITFrameLimit == nullptr
+			|| *NativeJITFrameDepth >= *NativeJITFrameLimit)
+			return false;
+		++*NativeJITFrameDepth;
+		return true;
+	}
+
+	void LeaveNativeJITFrame()
+	{
+		asASSERT(NativeJITFrameDepth != nullptr
+			&& *NativeJITFrameDepth > 0);
+		--*NativeJITFrameDepth;
+	}
+
+	asUINT GetNativeJITFrameDepth() const
+	{
+		return NativeJITFrameDepth != nullptr
+			? *NativeJITFrameDepth : 0;
+	}
+
+	bool HasContextExceptionPublisher() const
+	{
+		for (const FScriptExecution* Execution = this;
+			Execution != nullptr;
+			Execution = Execution->prevExecution)
+		{
+			if (Execution->prevContext != nullptr)
+				return true;
+		}
+		return false;
+	}
 
 	FScriptExecution(asCContext* ctx)
 		: tld(ctx->m_regs.tld)
@@ -278,6 +370,17 @@ struct FScriptExecution
 	{
 		prevExecution = tld->activeExecution;
 		prevContext = tld->activeContext;
+		FailureRecord = prevExecution != nullptr
+			&& prevExecution->FailureRecord != nullptr
+			? prevExecution->FailureRecord : &OwnedFailureRecord;
+		if (prevExecution != nullptr)
+		{
+			NativeJITFrameDepth = prevExecution->NativeJITFrameDepth;
+			NativeJITFrameLimit = prevExecution->NativeJITFrameLimit;
+		}
+		Activation.Execution = this;
+		Activation.Previous = tld->activeActivation;
+		tld->activeActivation = &Activation;
 		tld->activeExecution = this;
 		tld->activeContext = nullptr;
 	}
@@ -288,12 +391,32 @@ struct FScriptExecution
 	{
 		prevExecution = tld->activeExecution;
 		prevContext = tld->activeContext;
+		FailureRecord = prevExecution != nullptr
+			&& prevExecution->FailureRecord != nullptr
+			? prevExecution->FailureRecord : &OwnedFailureRecord;
+		if (prevExecution != nullptr)
+		{
+			NativeJITFrameDepth = prevExecution->NativeJITFrameDepth;
+			NativeJITFrameLimit = prevExecution->NativeJITFrameLimit;
+		}
+		Activation.Execution = this;
+		Activation.Previous = tld->activeActivation;
+		tld->activeActivation = &Activation;
 		tld->activeExecution = this;
 		tld->activeContext = nullptr;
 	}
 
 	~FScriptExecution()
 	{
+		asASSERT(tld->activeActivation == &Activation);
+		if (bExceptionThrown && prevExecution != nullptr)
+		{
+			// Nested native/JIT entry points share the first-failure record, but
+			// generated callers branch on their own fast-path boolean. Propagate
+			// the stop signal while leaving the shared diagnostic payload intact.
+			prevExecution->bExceptionThrown = true;
+		}
+		tld->activeActivation = Activation.Previous;
 		tld->activeExecution = prevExecution;
 		tld->activeContext = prevContext;
 	}

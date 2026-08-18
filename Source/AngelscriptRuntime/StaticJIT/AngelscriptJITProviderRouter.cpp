@@ -27,7 +27,7 @@ namespace
 		MatchResultCounts.Init(
 			0,
 			static_cast<int32>(
-				EAngelscriptArtifactMatchResult::MissingEntryPoint) + 1);
+				EAngelscriptArtifactMatchResult::SemanticDependencyMismatch) + 1);
 		for (const FAngelscriptJITProviderRouteRecord& Route : Result.Routes)
 		{
 			const int32 MatchResultIndex = static_cast<int32>(Route.MatchResult);
@@ -213,6 +213,7 @@ FAngelscriptJITProviderRouter::Refresh(
 	Result.VerifiedRouteCount = static_cast<uint32>(VerifiedRoutes.Num());
 	if (VerifiedRoutes.IsEmpty())
 	{
+		Engine.JITCoordinator->ReplaceSemanticDependents({});
 		Engine.JITCoordinator->ProcessRuntimeSafePoint(Engine);
 		return Finish(TotalStart,
 			EAngelscriptJITProviderRouteRefreshCode::NoRoutes,
@@ -220,6 +221,7 @@ FAngelscriptJITProviderRouter::Refresh(
 	}
 	if (!bAllowsStaticAOT)
 	{
+		Engine.JITCoordinator->ReplaceSemanticDependents({});
 		bool bAnyBindingChanged = false;
 		for (const FAngelscriptFunctionRoute* Route : VerifiedRoutes)
 		{
@@ -272,6 +274,7 @@ FAngelscriptJITProviderRouter::Refresh(
 		FAngelscriptJITTargetProfiles::
 			BuildCurrentNativeEnvironmentFingerprint(TargetProfile);
 	TArray<asIScriptFunction*> PublishedFunctions;
+	TArray<FAngelscriptJITCoordinator::FSemanticDependentRecord> Dependents;
 	bool bAnyBindingChanged = false;
 	const double RouteMatchStart = FPlatformTime::Seconds();
 	for (const FAngelscriptFunctionRoute* Route : VerifiedRoutes)
@@ -292,6 +295,7 @@ FAngelscriptJITProviderRouter::Refresh(
 			true,
 			bHasParmsEntry);
 		Input.NativeEnvironmentFingerprint = NativeEnvironmentFingerprint;
+		Input.CurrentRoutes = SourceRoutes;
 		Input.RequiredEntryPoints =
 			EAngelscriptJITRequiredEntryPoints::VM
 			| EAngelscriptJITRequiredEntryPoints::Raw;
@@ -301,10 +305,28 @@ FAngelscriptJITProviderRouter::Refresh(
 				EAngelscriptJITRequiredEntryPoints::Parms;
 		}
 
-		const FAngelscriptJITFunctionMatchResult Match = bAllowsStaticAOT
-			? FAngelscriptJITProviderMatcher::Match(
-				*Providers, Input, *ReferenceBuild.Resolver)
-			: FAngelscriptJITFunctionMatchResult{};
+		FAngelscriptJITFunctionMatchResult Match;
+		if (bAllowsStaticAOT && bHasParmsEntry)
+		{
+			FAngelscriptJITFunctionMatchInput VMRawFallbackInput = Input;
+			VMRawFallbackInput.EntryAbiHash =
+				FAngelscriptJITGeneration::BuildEntryAbiHash(
+					Route->CanonicalDeclaration, true, true, false);
+			VMRawFallbackInput.RequiredEntryPoints =
+				EAngelscriptJITRequiredEntryPoints::VM
+				| EAngelscriptJITRequiredEntryPoints::Raw;
+			Match = FAngelscriptJITProviderMatcher::
+				MatchPreferredThenFallback(
+					*Providers,
+					Input,
+					VMRawFallbackInput,
+					*ReferenceBuild.Resolver);
+		}
+		else if (bAllowsStaticAOT)
+		{
+			Match = FAngelscriptJITProviderMatcher::Match(
+				*Providers, Input, *ReferenceBuild.Resolver);
+		}
 		Record.MatchResult = Match.Result;
 		if (Match.Result == EAngelscriptArtifactMatchResult::Exact
 			&& Match.Selection.IsSet())
@@ -322,6 +344,28 @@ FAngelscriptJITProviderRouter::Refresh(
 				PublishedFunctions.Add(Route->Function);
 				++Result.PublishedNativeCount;
 				bAnyBindingChanged = true;
+				const FAngelscriptJITProviderCatalogEntry& PublishedEntry =
+					Selection.Provider->Entries[Selection.EntryIndex];
+				for (const FAngelscriptJITSemanticDependencyRow& Row
+					: PublishedEntry.SemanticDependencies)
+				{
+					FAngelscriptJITCoordinator::FSemanticDependentRecord* Existing =
+						Dependents.FindByPredicate(
+							[&Row](const FAngelscriptJITCoordinator::
+								FSemanticDependentRecord& Candidate)
+							{
+								return Candidate.Kind == Row.Kind
+									&& Candidate.TargetStableKey
+										== Row.TargetStableKey;
+							});
+					if (Existing == nullptr)
+					{
+						Existing = &Dependents.AddDefaulted_GetRef();
+						Existing->Kind = Row.Kind;
+						Existing->TargetStableKey = Row.TargetStableKey;
+					}
+					Existing->Dependents.AddUnique(Route->Identity.FunctionKey);
+				}
 				continue;
 			}
 			Record.MatchResult =
@@ -333,9 +377,12 @@ FAngelscriptJITProviderRouter::Refresh(
 		++Result.VmFallbackCount;
 	}
 
+	Engine.JITCoordinator->ReplaceSemanticDependents(MoveTemp(Dependents));
+
 	if (bAnyBindingChanged
 		&& !Engine.RefreshFunctionRouteSnapshotAfterStaticJITChange(true))
 	{
+		Engine.JITCoordinator->ReplaceSemanticDependents({});
 		for (asIScriptFunction* Function : PublishedFunctions)
 		{
 			Engine.JITCoordinator->ClearProviderSelection(Function);
@@ -373,4 +420,20 @@ FAngelscriptJITProviderRouter::Refresh(
 	return Finish(TotalStart,
 		EAngelscriptJITProviderRouteRefreshCode::Applied,
 		ProviderCount);
+}
+
+bool FAngelscriptJITProviderRouter::CollectSemanticDependents(
+	const FAngelscriptEngine& Engine,
+	const EAngelscriptArtifactSemanticDependencyKind Kind,
+	const FAngelscriptHash256& TargetStableKey,
+	TArray<FAngelscriptStableFunctionKey>& OutDependents)
+{
+	OutDependents.Reset();
+	FAngelscriptJITCoordinator* const Coordinator = Engine.GetJITCoordinator();
+	if (Coordinator == nullptr)
+	{
+		return false;
+	}
+	return Coordinator->CollectSemanticDependents(
+		Kind, TargetStableKey, OutDependents);
 }

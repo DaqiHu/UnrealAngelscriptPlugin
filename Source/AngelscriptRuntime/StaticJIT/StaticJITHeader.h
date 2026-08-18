@@ -113,6 +113,34 @@ struct FAngelscriptJITResolvedSystemFunctionPointer
 	FORCEINLINE asMETHOD_t GetMethod() const { return Method; }
 };
 
+/**
+ * Keeps a pooled nested context from consuming the public exception callback.
+ *
+ * StaticJIT call bridges execute a temporary context and then adopt its first
+ * failure into the owning FScriptExecution.  The temporary context must still
+ * retain its exception payload, but the public caller owns the one-shot
+ * callback.  The exact pooled callback state is restored before the context is
+ * returned, including when Execute exits through an exception.
+ */
+class ANGELSCRIPTRUNTIME_API FScopeStaticJITNestedExceptionAdoption
+{
+public:
+	explicit FScopeStaticJITNestedExceptionAdoption(
+		asIScriptContext& InContext);
+	~FScopeStaticJITNestedExceptionAdoption();
+
+	FScopeStaticJITNestedExceptionAdoption(
+		const FScopeStaticJITNestedExceptionAdoption&) = delete;
+	FScopeStaticJITNestedExceptionAdoption& operator=(
+		const FScopeStaticJITNestedExceptionAdoption&) = delete;
+
+private:
+	asCContext& Context;
+	bool bPreviousExceptionCallback = false;
+	asSSystemFunctionInterface PreviousExceptionCallbackFunction;
+	void* PreviousExceptionCallbackObject = nullptr;
+};
+
 /** Stable-slot access used only by relocatable Provider-generated code. */
 struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGeneratedReferenceAccess
 {
@@ -143,10 +171,13 @@ struct ANGELSCRIPTRUNTIME_API FStaticJITFunction
 {
 	FORCENOINLINE static void ScriptFinishConstruct(FScriptExecution& Execution, asIScriptObject* Object, asITypeInfo* TypeInfo);
 	FORCENOINLINE static void ScriptCallNative(FScriptExecution& Execution, asCScriptFunction* Function, asBYTE* l_sp, asQWORD* valueRegister, void** objectRegister);
+	FORCENOINLINE static void AdoptContextException(FScriptExecution& Execution, asIScriptContext& Context);
+	FORCENOINLINE static void SetExternalException(FScriptExecution& Execution, const ANSICHAR* Message);
 	FORCENOINLINE static void SetException(FScriptExecution& Execution, EJITException Exception);
 	FORCENOINLINE static void SetNullPointerException(FScriptExecution& Execution);
 	FORCENOINLINE static void SetDivByZeroException(FScriptExecution& Execution);
 	FORCENOINLINE static void SetOverflowException(FScriptExecution& Execution);
+	FORCENOINLINE static void SetPowerOverflowException(FScriptExecution& Execution);
 	FORCENOINLINE static void SetUnboundFunctionException(FScriptExecution& Execution);
 	FORCENOINLINE static void SetOutOfBoundsException(FScriptExecution& Execution);
 	FORCENOINLINE static void SetSwitchValueInvalidException(FScriptExecution& Execution);
@@ -189,26 +220,97 @@ struct FScopeJITDebugCallstack
 	const char* FunctionName;
 	void* ThisObject;
 	int32 LineNumber;
+	int32 ColumnNumber;
 	FScopeJITDebugCallstack* PrevFrame;
 	FScriptExecution& Execution;
+	bool bLinked = false;
 
-	FORCEINLINE FScopeJITDebugCallstack(FScriptExecution& InExecution, const char* InFilename, const char* InFunctionName, int32 InLineNumber, void* InThisObject)
+	FORCEINLINE FScopeJITDebugCallstack(FScriptExecution& InExecution, const char* InFilename, const char* InFunctionName, int32 InLineNumber, void* InThisObject, bool bLinkFrame = true)
 		: Execution(InExecution)
 	{
 		Filename = InFilename;
 		FunctionName = InFunctionName;
 		LineNumber = InLineNumber;
+		ColumnNumber = 0;
 		PrevFrame = (FScopeJITDebugCallstack*)Execution.debugCallStack;
-		Execution.debugCallStack = this;
 		ThisObject = InThisObject;
+		bLinked = bLinkFrame;
+		if (bLinked)
+		{
+			Execution.debugCallStack = this;
+		}
 	}
 
 	FORCEINLINE ~FScopeJITDebugCallstack()
 	{
-		Execution.debugCallStack = PrevFrame;
+		if (bLinked)
+		{
+			Execution.debugCallStack = PrevFrame;
+		}
 	}
 };
 #endif
+
+/**
+ * One maintained execution frame for a TypedASTJIT root or direct helper.
+ *
+ * The scope shares FScriptExecution's call-scoped native depth budget across
+ * direct helpers and nested JIT executions, publishes the current script
+ * function through the existing TLD contract, and (when available) links the
+ * existing non-Shipping debug frame. The destructor restores every piece of
+ * outer state on all C++ exits.
+ */
+struct ANGELSCRIPTRUNTIME_API FScopeTypedASTJITExecutionFrame
+{
+	FScopeTypedASTJITExecutionFrame(
+		FScriptExecution& InExecution,
+		asIScriptFunction* InFunction,
+		const ANSICHAR* InFilename,
+		const ANSICHAR* InFunctionName,
+		int32 InLineNumber,
+		void* InThisObject,
+		bool bPublishSourcePosition = true);
+	~FScopeTypedASTJITExecutionFrame();
+
+	FScopeTypedASTJITExecutionFrame(
+		const FScopeTypedASTJITExecutionFrame&) = delete;
+	FScopeTypedASTJITExecutionFrame& operator=(
+		const FScopeTypedASTJITExecutionFrame&) = delete;
+
+	bool IsActive() const
+	{
+		return bActive;
+	}
+
+	/** Position-only metadata update; never invokes line/coverage callbacks. */
+	void SetLineNumber(const int32 InLineNumber)
+	{
+		SetSourcePosition(InLineNumber, 0);
+	}
+
+	/** Position-only metadata update; never invokes line/coverage callbacks. */
+	void SetSourcePosition(
+		const int32 InLineNumber,
+		const int32 InColumnNumber)
+	{
+#if AS_JIT_DEBUG_CALLSTACKS
+		DebugFrame.LineNumber = InLineNumber;
+		DebugFrame.ColumnNumber = InColumnNumber;
+#else
+		static_cast<void>(InLineNumber);
+		static_cast<void>(InColumnNumber);
+#endif
+	}
+
+private:
+	FScriptExecution& Execution;
+	asIScriptFunction* Function = nullptr;
+	asIScriptFunction* PreviousActiveFunction = nullptr;
+	bool bActive = false;
+#if AS_JIT_DEBUG_CALLSTACKS
+	FScopeJITDebugCallstack DebugFrame;
+#endif
+};
 
 template<typename T>
 struct TAutoDereference
@@ -330,10 +432,16 @@ constexpr SIZE_T AlignmentMax(SIZE_T A, SIZE_T B)
 #define SCRIPT_DEBUG_CALLSTACK_FRAME(FunctionName, LineNumber) FScopeJITDebugCallstack DebugCallstack(Execution, SCRIPT_DEBUG_FILENAME, FunctionName, LineNumber, nullptr);
 #define SCRIPT_DEBUG_CALLSTACK_FRAME_UOBJECT(FunctionName, LineNumber) FScopeJITDebugCallstack DebugCallstack(Execution, SCRIPT_DEBUG_FILENAME, FunctionName, LineNumber, l_This);
 #define SCRIPT_DEBUG_CALLSTACK_LINE(InLineNumber) DebugCallstack.LineNumber = InLineNumber;
+#define SCRIPT_DEBUG_CALLSTACK_POSITION(InLineNumber, InColumnNumber) \
+	do { \
+		DebugCallstack.LineNumber = InLineNumber; \
+		DebugCallstack.ColumnNumber = InColumnNumber; \
+	} while (false)
 #else
 #define SCRIPT_DEBUG_CALLSTACK_FRAME(FunctionName, LineNumber) 
 #define SCRIPT_DEBUG_CALLSTACK_FRAME_UOBJECT(FunctionName, LineNumber) 
 #define SCRIPT_DEBUG_CALLSTACK_LINE(LineNumber) 
+#define SCRIPT_DEBUG_CALLSTACK_POSITION(LineNumber, ColumnNumber)
 #endif
 
 #define SCRIPT_NULL_POINTER_EXCEPTION() \
@@ -351,6 +459,9 @@ constexpr SIZE_T AlignmentMax(SIZE_T A, SIZE_T B)
 #define SCRIPT_OVERFLOW_EXCEPTION() \
 	FStaticJITFunction::SetOverflowException(Execution);
 
+#define SCRIPT_POWER_OVERFLOW_EXCEPTION() \
+	FStaticJITFunction::SetPowerOverflowException(Execution);
+
 #define SCRIPT_UNBOUND_EXCEPTION() \
 	FStaticJITFunction::SetUnboundFunctionException(Execution);
 
@@ -364,3 +475,12 @@ constexpr SIZE_T AlignmentMax(SIZE_T A, SIZE_T B)
 	FStaticJITFunction::SetUnknownException(Execution);
 
 #define SCRIPT_ASSUME_NO_EXCEPTION() SCRIPT_ASSUME(Execution.bExceptionThrown == false)
+
+// Isolated child/VM cleanup bridge: never enter a generated destructor
+// prolog with an already-failed FScriptExecution. Cleanup exceptions are
+// discarded and must not replace the outer primary failure record.
+ANGELSCRIPTRUNTIME_API void AngelscriptDestroyScriptObjectIsolated(
+	FScriptExecution& OuterExecution,
+	asIScriptEngine* Engine,
+	asITypeInfo* ObjectType,
+	void* Object);

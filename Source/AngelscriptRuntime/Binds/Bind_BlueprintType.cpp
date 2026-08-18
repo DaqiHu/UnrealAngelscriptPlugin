@@ -1184,6 +1184,13 @@ static const TArray<TObjectPtr<UClass>>& GetOrCaptureBlueprintTypeClasses(FAngel
 #if WITH_EDITOR
 static TMap<UClass*, bool> GCachedEditorClasses;
 
+#if WITH_DEV_AUTOMATION_TESTS
+ANGELSCRIPTRUNTIME_API int32 GetCachedEditorClassCountForTesting()
+{
+	return GCachedEditorClasses.Num();
+}
+#endif
+
 void ResetCachedEditorClasses()
 {
 	GCachedEditorClasses.Empty();

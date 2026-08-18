@@ -552,7 +552,7 @@ public:
 		ExpectedTrivial[FunctionHeaderIndex] = true;
 		ExpectedTrivial[UFunctionIndex] = true;
 
-		TArray<FAngelscriptNativeFormDebugInfo> ObservedForms;
+		TArray<FAngelscriptNativeFormDescription> ObservedForms;
 		ObservedForms.Reserve(TargetFunctions.Num());
 		for (int32 FormIndex = 0; FormIndex < TargetFunctions.Num(); ++FormIndex)
 		{
@@ -560,7 +560,8 @@ public:
 			ASSERT_THAT(IsNotNull(
 				NativeForm,
 				TEXT("Each exact native form should attach to its exact target")));
-			const FAngelscriptNativeFormDebugInfo ObservedForm = NativeForm->GetDebugInfoForTesting();
+			const FAngelscriptNativeFormDescription ObservedForm =
+				NativeForm->Describe();
 			ObservedForms.Add(ObservedForm);
 			ASSERT_THAT(IsTrue(
 				ObservedForm.Kind == ExpectedKinds[FormIndex],
@@ -595,9 +596,10 @@ public:
 			FString(TEXT("FluentFunctionHeader.h")),
 			ObservedForms[FunctionHeaderIndex].Header,
 			TEXT("The function-header form must preserve its header")));
-		ASSERT_THAT(IsTrue(
-			ObservedForms[UFunctionIndex].UnrealFunction == ReflectedFunction,
-			TEXT("The UFunction form must preserve its reflected function pointer")));
+		ASSERT_THAT(AreEqual(
+			ReflectedFunction->GetPathName(),
+			ObservedForms[UFunctionIndex].UnrealFunctionPath,
+			TEXT("The UFunction form must expose a stable reflected function path without retaining a pointer in the description")));
 		ASSERT_THAT(IsTrue(
 			ObservedForms[TemplateCallIndex].bNeedsCompare && !ObservedForms[TemplateCallIndex].bNeedsCopy,
 			TEXT("The first template form must preserve compare-only configuration")));
@@ -612,8 +614,9 @@ public:
 			NativeFormCountBeforeTest + TargetFunctions.Num(),
 			FScriptFunctionNativeForm::NumNativeForms(),
 			TEXT("Replacing a native form on the same function must not increase the native-form count")));
-		const FAngelscriptNativeFormDebugInfo ReplacedTemplateForm =
-			FScriptFunctionNativeForm::GetNativeForm(TargetFunctions[TemplateCallIndex].GetFunction())->GetDebugInfoForTesting();
+		const FAngelscriptNativeFormDescription ReplacedTemplateForm =
+			FScriptFunctionNativeForm::GetNativeForm(
+				TargetFunctions[TemplateCallIndex].GetFunction())->Describe();
 		ASSERT_THAT(IsTrue(
 			ReplacedTemplateForm.Kind == EAngelscriptNativeFormKind::TemplateInstantiatedCall,
 			TEXT("Replacing a template form must retain the concrete template kind")));
@@ -630,7 +633,8 @@ public:
 			.NativeFunctionHeader("FDirectFluentValue::EngineBFunctionHeader", "EngineBFluentFunctionHeader.h", false);
 		FScriptFunctionNativeForm* EngineBForm = FScriptFunctionNativeForm::GetNativeForm(OtherEngineFunctions[FunctionHeaderIndex].GetFunction());
 		ASSERT_THAT(IsNotNull(EngineBForm, TEXT("Engine B should own its independently requested specialized form")));
-		const FAngelscriptNativeFormDebugInfo EngineBFormInfo = EngineBForm->GetDebugInfoForTesting();
+		const FAngelscriptNativeFormDescription EngineBFormInfo =
+			EngineBForm->Describe();
 		ASSERT_THAT(IsTrue(
 			EngineBFormInfo.Kind == EAngelscriptNativeFormKind::FunctionHeader
 				&& EngineBFormInfo.Name == TEXT("FDirectFluentValue::EngineBFunctionHeader")

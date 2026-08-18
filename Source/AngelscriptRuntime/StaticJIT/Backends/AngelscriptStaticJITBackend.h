@@ -2,6 +2,12 @@
 
 #include "CoreMinimal.h"
 
+#include "StaticJIT/AngelscriptStaticJITCaptureProfile.h"
+#include "StaticJIT/AngelscriptStaticJITEntryPlan.h"
+#include "StaticJIT/AngelscriptStaticJITFunctionMetadata.h"
+#include "StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallTarget.h"
+#include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITExecutionProfile.h"
+
 #include "StaticJIT/AngelscriptJITGeneration.h"
 
 #if AS_CAN_GENERATE_JIT
@@ -9,6 +15,8 @@
 class asIScriptFunction;
 class asIScriptModule;
 class asITypeInfo;
+class asCTypedSemanticFunction;
+struct FAngelscriptModuleDesc;
 
 /**
  * Stable identifier for an internal, build-time StaticJIT backend.
@@ -101,12 +109,16 @@ struct FAngelscriptStaticJITCompiledFunctionView
 	FAngelscriptHash256 EntryAbiHash;
 	FStringView CanonicalDeclaration;
 	TConstArrayView<uint8> Bytecode;
-	TConstArrayView<uint8> VerifiedTypedHIR;
+	const asCTypedSemanticFunction* VerifiedTypedHIR = nullptr;
 	bool bHasVerifiedArtifactIdentity = false;
 	bool bHasVerifiedArtifactReferences = false;
 	bool bHasVMEntry = false;
 	bool bHasRawEntry = false;
 	bool bHasParmsEntry = false;
+	EAngelscriptStaticJITLiteralAssetFunctionRole LiteralAssetRole =
+		EAngelscriptStaticJITLiteralAssetFunctionRole::None;
+	/** Exact pointer-free plan owned by the synchronous generation snapshot. */
+	const FStaticJITEntryPlan* EntryPlan = nullptr;
 };
 
 /** One type visible to task-wide analysis. EngineLocalType dies with the task. */
@@ -122,6 +134,7 @@ struct FAngelscriptStaticJITCompiledTypeView
 struct FAngelscriptStaticJITCompiledGlobalView
 {
 	const void* EngineLocalGlobal = nullptr;
+	int32 EngineLocalGlobalPropertyId = INDEX_NONE;
 	FAngelscriptHash256 StableGlobalKey;
 	FStringView CanonicalDeclaration;
 };
@@ -151,6 +164,8 @@ struct FAngelscriptStaticJITDescriptorView
 	bool bHasVMEntry = false;
 	bool bHasRawEntry = false;
 	bool bHasParmsEntry = false;
+	/** Descriptor-specific overlay, including reflected generated parameters. */
+	const FStaticJITEntryPlan* EntryPlan = nullptr;
 };
 
 /** Stable dependency or external native-call fact used by a backend. */
@@ -161,6 +176,17 @@ struct FAngelscriptStaticJITDependencyView
 	FStringView CanonicalDeclaration;
 };
 
+/** Typed semantic dependency with an optional current-Engine global coordinate. */
+struct FAngelscriptStaticJITSemanticDependencyView
+{
+	FAngelscriptStableFunctionKey OwnerFunctionKey;
+	EAngelscriptArtifactSemanticDependencyKind Kind =
+		EAngelscriptArtifactSemanticDependencyKind::Invalid;
+	FAngelscriptArtifactReference Reference;
+	TOptional<FAngelscriptHash256> ExpectedContentOrValue;
+	int32 EngineLocalGlobalPropertyId = INDEX_NONE;
+};
+
 /**
  * Complete Provider-domain graph available to a backend before any function
  * is emitted. Engine-local pointers are synchronous views only; backend
@@ -169,14 +195,31 @@ struct FAngelscriptStaticJITDependencyView
 struct FAngelscriptStaticJITCompiledSourceGraph
 {
 	FAngelscriptJITProviderGenerationSettings Settings;
+	/** Typed-only internal profile; not a ProviderId or Cache ArtifactProfile. */
+	FAngelscriptTypedASTJITGenerationCapabilityProfile
+		TypedASTJITCapabilityProfile;
+	/** Frozen requirements for the exact generation/selection decision. */
+	FAngelscriptTypedASTJITExecutionRequirementsSnapshot
+		TypedASTJITExecutionRequirements;
 	TConstArrayView<asIScriptModule*> Modules;
+	/**
+	 * Exact descriptor roots that produced Modules. Valid only for this
+	 * synchronous generation task and never retained by backend output.
+	 */
+	TConstArrayView<const FAngelscriptModuleDesc*>
+		ResolvedModuleDescriptors;
 	TConstArrayView<FAngelscriptStaticJITCompiledFunctionView> Functions;
 	TConstArrayView<FAngelscriptStaticJITCompiledTypeView> Types;
 	TConstArrayView<FAngelscriptStaticJITCompiledGlobalView> Globals;
 	TConstArrayView<FAngelscriptStaticJITDescriptorView> Descriptors;
 	TConstArrayView<FAngelscriptStaticJITDependencyView> Dependencies;
+	TConstArrayView<FAngelscriptStaticJITSemanticDependencyView>
+		SemanticDependencies;
 	TConstArrayView<FAngelscriptStaticJITDependencyView> ExternalNativeCalls;
-	bool bHasVerifiedTypedHIR = false;
+	TConstArrayView<FAngelscriptStaticJITNativeCallTarget> NativeCallTargets;
+	uint32 SourceCompilePassCount = 0;
+	EAngelscriptStaticJITCaptureProfile CaptureProfile =
+		EAngelscriptStaticJITCaptureProfile::Bytecode;
 };
 
 /** Immutable task-wide input; EmitModuleSet restricts output, not analysis. */
@@ -194,6 +237,160 @@ enum class EAngelscriptStaticJITFunctionDisposition : uint8
 	Failed,
 };
 
+/** Owned processed-source coordinate; no parser/HIR pointer crosses the task. */
+struct FAngelscriptStaticJITProcessedSource
+{
+	FString Section;
+	uint32 Row = 0;
+	uint32 Column = 0;
+};
+
+enum class EAngelscriptStaticJITTypedHIRState : uint8
+{
+	Missing = 0,
+	Verified,
+	Invalid,
+};
+
+enum class EAngelscriptStaticJITTypedClosureFunctionRole : uint8
+{
+	NonRoot = 0,
+	UFunctionRoot,
+	DirectScript,
+	InternalSemanticHelper,
+	Bridge,
+	Unsupported,
+};
+
+enum class EAngelscriptStaticJITTypedExecutionProfileKind : uint8
+{
+	Unavailable = 0,
+	PositionOnly,
+	Instrumented,
+};
+
+enum class EAngelscriptStaticJITExceptionControlState : uint8
+{
+	Unavailable = 0,
+	NotRequired,
+	DirectExecutionState,
+};
+
+enum class EAngelscriptStaticJITExceptionPayloadState : uint8
+{
+	Unavailable = 0,
+	NotRequired,
+	DirectFailureRecord,
+	NestedBridgeAdoption,
+};
+
+enum class EAngelscriptStaticJITTypedCallDisposition : uint8
+{
+	DirectScript = 0,
+	InternalSemanticHelper,
+	DirectExported,
+	DirectInline,
+	RuntimeThunk,
+	CurrentNativeBinding,
+	Bridge,
+	Unsupported,
+};
+
+/** Pointer-free plan plus actual emitted spelling for one Typed call edge. */
+struct FAngelscriptStaticJITTypedCallDiagnostic
+{
+	FAngelscriptStableFunctionKey CallerFunctionKey;
+	FAngelscriptStableFunctionKey CalleeFunctionKey;
+	uint32 ExpressionIndex = MAX_uint32;
+	FAngelscriptStaticJITProcessedSource ProcessedSource;
+	TOptional<FAngelscriptStaticJITProcessedSource> AuthoredSource;
+	TOptional<FAngelscriptStaticJITProcessedSource> GeneratedSource;
+	asETypedSemanticCallTargetKind TargetKind =
+		asETypedSemanticCallTargetKind::Unspecified;
+	EAngelscriptStaticJITTypedCallDisposition Disposition =
+		EAngelscriptStaticJITTypedCallDisposition::Unsupported;
+	EAngelscriptTypedASTJITFallbackReason CalleeEligibilityReason =
+		EAngelscriptTypedASTJITFallbackReason::None;
+	FString CalleeEligibilityDetail;
+	FAngelscriptStaticJITProcessedSource CalleeEligibilitySource;
+	bool bHasNativeLinkageValidation = false;
+	EAngelscriptStaticJITNativeCallValidationCode NativeLinkageValidation =
+		EAngelscriptStaticJITNativeCallValidationCode::Absent;
+	FString NativeLinkageValidationDetail;
+	FString CanonicalDeclaration;
+	EAngelscriptJITNativeCallSiteRoute EmittedRoute =
+		EAngelscriptJITNativeCallSiteRoute::Invalid;
+	FString EmittedCppCallee;
+	FString RuntimeDllCore;
+	FString MetadataRowSymbol;
+	FString RegisteredTarget;
+	FString DirectCppSymbol;
+	FAngelscriptHash256 StableTargetKey;
+	FAngelscriptHash256 ExpectedAbi;
+	int32 ReferenceSlotIndex = INDEX_NONE;
+};
+
+/** Owned semantic facts copied while the generation HIR is still alive. */
+struct FAngelscriptStaticJITTypedSemanticFunctionDiagnostic
+{
+	FAngelscriptStableFunctionKey FunctionKey;
+	EAngelscriptStaticJITTypedClosureFunctionRole Role =
+		EAngelscriptStaticJITTypedClosureFunctionRole::NonRoot;
+	uint32 RawTraitBits = 0;
+	uint32 UnknownTraitBits = 0;
+	asETypedSemanticInvocationKind InvocationKind =
+		asETypedSemanticInvocationKind::Global;
+	asETypedSemanticReceiverKind ReceiverKind =
+		asETypedSemanticReceiverKind::None;
+	int32 ReceiverParameterIndex = INDEX_NONE;
+	EAngelscriptStaticJITTypedHIRState HIRState =
+		EAngelscriptStaticJITTypedHIRState::Missing;
+	asETypedSemanticCleanupPlanState CleanupPlanState =
+		asETypedSemanticCleanupPlanState::Unverified;
+	bool bHasSuspendState = false;
+	bool bHasExceptionCleanup = false;
+	bool bCleanupPlanCoversAllTransfers = false;
+	int32 ComponentIndex = INDEX_NONE;
+	bool bRecursiveComponent = false;
+	EAngelscriptTypedASTJITFallbackReason EligibilityReason =
+		EAngelscriptTypedASTJITFallbackReason::None;
+	FString EligibilityDetail;
+	FAngelscriptStaticJITProcessedSource EligibilitySource;
+};
+
+/** Complete pointer-free root/helper closure facts for one Typed attempt. */
+struct FAngelscriptStaticJITTypedCallClosureDiagnostic
+{
+	bool bEligible = false;
+	EAngelscriptTypedASTJITDirectCapability RequiredCapabilities =
+		EAngelscriptTypedASTJITDirectCapability::None;
+	EAngelscriptTypedASTJITDirectCapability AvailableCapabilities =
+		EAngelscriptTypedASTJITDirectCapability::None;
+	FAngelscriptHash256 ExecutionRequirementsIdentityHash;
+	FAngelscriptHash256 AvailableCapabilityProfileIdentityHash;
+	EAngelscriptStaticJITTypedExecutionProfileKind ProfileKind =
+		EAngelscriptStaticJITTypedExecutionProfileKind::Unavailable;
+	EAngelscriptStaticJITExceptionControlState ExceptionControlState =
+		EAngelscriptStaticJITExceptionControlState::Unavailable;
+	EAngelscriptStaticJITExceptionPayloadState ExceptionPayloadState =
+		EAngelscriptStaticJITExceptionPayloadState::Unavailable;
+	bool bRecursionGuardAvailable = false;
+	TArray<FAngelscriptStaticJITTypedSemanticFunctionDiagnostic> Functions;
+	TArray<FAngelscriptStaticJITTypedCallDiagnostic> Calls;
+};
+
+/** Structured TypedAST selection/fallback facts owned by backend output. */
+struct FAngelscriptStaticJITTypedFunctionDiagnostic
+{
+	EAngelscriptTypedASTJITFallbackReason FallbackReason =
+		EAngelscriptTypedASTJITFallbackReason::None;
+	FString Detail;
+	FAngelscriptStaticJITProcessedSource ProcessedSource;
+	TOptional<FAngelscriptStaticJITTypedSemanticFunctionDiagnostic>
+		SemanticFunction;
+	TOptional<FAngelscriptStaticJITTypedCallClosureDiagnostic> CallClosure;
+};
+
 /** Generator-owned pointer-free provenance for one backend attempt. */
 struct FAngelscriptStaticJITBackendAttemptDiagnostic
 {
@@ -201,6 +398,7 @@ struct FAngelscriptStaticJITBackendAttemptDiagnostic
 	EAngelscriptStaticJITFunctionDisposition Disposition =
 		EAngelscriptStaticJITFunctionDisposition::Unsupported;
 	FString Detail;
+	TOptional<FAngelscriptStaticJITTypedFunctionDiagnostic> TypedDiagnostic;
 };
 
 /** Pointer-free result for one stable function identity. */
@@ -213,6 +411,7 @@ struct FAngelscriptStaticJITFunctionResult
 	FString Detail;
 	TOptional<FAngelscriptJITGenerationFunction> EmittedFunction;
 	TArray<FAngelscriptStaticJITBackendAttemptDiagnostic> BackendAttempts;
+	TOptional<FAngelscriptStaticJITTypedFunctionDiagnostic> TypedDiagnostic;
 };
 
 enum class EAngelscriptStaticJITTaskDisposition : uint8
