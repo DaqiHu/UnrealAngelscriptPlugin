@@ -17,9 +17,14 @@ public:
 	virtual FName GetContainerName() const override { return FName("Project"); }
 	virtual FName GetCategoryName() const override { return FName("Plugins"); }
 
-	/** Generate and consume Cache V2 in Editor and packaged Runtime. */
+	/**
+	 * Generate and consume the experimental Cache V2 in Editor and packaged
+	 * Runtime. Disabled by default while the persistence and cross-Engine
+	 * restore contracts are being redesigned; disabled engines compile from
+	 * authoritative script source.
+	 */
 	UPROPERTY(EditAnywhere, Config, Category="Cache V2")
-	bool bEnableCacheV2 = true;
+	bool bEnableCacheV2 = false;
 
 	/** Packaged builds never watch/reload loose script unless explicitly enabled. */
 	UPROPERTY(EditAnywhere, Config, Category="Runtime Reload")

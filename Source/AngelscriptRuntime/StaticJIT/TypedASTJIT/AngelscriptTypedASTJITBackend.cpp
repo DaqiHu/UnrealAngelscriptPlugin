@@ -6,6 +6,7 @@
 #include "StaticJIT/AngelscriptStaticJITBytecodeAccessAudit.h"
 #endif
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITCallClosure.h"
+#include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITCanonical.h"
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITDependencies.h"
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITEmitter.h"
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITEligibility.h"
@@ -14,6 +15,10 @@
 #include "Misc/ScopeLock.h"
 
 #include "StartAngelscriptHeaders.h"
+#include "source/as_ast_context.h"
+#include "source/as_namespace.h"
+#include "source/as_property.h"
+#include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
@@ -21,6 +26,11 @@
 
 namespace AngelscriptTypedASTJITBackend_Private
 {
+	// asEFuncTrait currently occupies bits 0..26. Keep unknown-trait reporting
+	// local to the Canonical backend instead of depending on the retired HIR
+	// classifier.
+	constexpr asDWORD KnownFunctionTraitBits = 0x07FFFFFFu;
+
 #if WITH_ANGELSCRIPT_UNITTESTS
 	FCriticalSection GTaskObservationMutex;
 	FAngelscriptTypedASTJITTaskObservation GTaskObservation;
@@ -46,7 +56,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 			Request.CompiledSourceGraph.Modules.Num();
 		GTaskObservation.LastFunctionCount =
 			Request.CompiledSourceGraph.Functions.Num();
-		GTaskObservation.LastVerifiedTypedHIRCount = 0;
+		GTaskObservation.LastVerifiedCanonicalASTCount = 0;
 		GTaskObservation.LastUFunctionRootCount = 0;
 		GTaskObservation.LastCallClosurePlanCount = 0;
 		GTaskObservation.LastEligibleCallClosurePlanCount = 0;
@@ -55,7 +65,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 		GTaskObservation.LastInternalSemanticHelperCallCount = 0;
 		GTaskObservation.LastBridgeCallCount = 0;
 		GTaskObservation.LastUnsupportedCallCount = 0;
-		GTaskObservation.bLastTaskUsedOnlySameCompilationHIR = false;
+		GTaskObservation.bLastTaskUsedOnlySameCompilationAST = false;
 		GTaskObservation.LastFailure.Reset();
 	}
 
@@ -67,14 +77,15 @@ namespace AngelscriptTypedASTJITBackend_Private
 	}
 
 	void RecordAcceptedTask(
-		const int32 VerifiedTypedHIRCount,
+		const int32 VerifiedCanonicalASTCount,
 		const int32 UFunctionRootCount,
 		const TConstArrayView<FAngelscriptTypedASTJITCallClosurePlan>
 			CallClosurePlans)
 	{
 		FScopeLock Lock(&GTaskObservationMutex);
 		++GTaskObservation.AcceptedTaskCount;
-		GTaskObservation.LastVerifiedTypedHIRCount = VerifiedTypedHIRCount;
+		GTaskObservation.LastVerifiedCanonicalASTCount =
+			VerifiedCanonicalASTCount;
 		GTaskObservation.LastUFunctionRootCount = UFunctionRootCount;
 		GTaskObservation.LastCallClosurePlanCount =
 			CallClosurePlans.Num();
@@ -106,7 +117,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 				}
 			}
 		}
-		GTaskObservation.bLastTaskUsedOnlySameCompilationHIR = true;
+		GTaskObservation.bLastTaskUsedOnlySameCompilationAST = true;
 		GTaskObservation.LastFailure.Reset();
 	}
 
@@ -136,7 +147,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 					== EAngelscriptStaticJITExceptionPayloadState::
 						DirectFailureRecord
 				? 1 : 0;
-			for (const FAngelscriptStaticJITTypedSemanticFunctionDiagnostic&
+			for (const FAngelscriptStaticJITCanonicalFunctionDiagnostic&
 				SemanticFunction : Closure.Functions)
 			{
 				GTaskObservation.StructuredHelperDiagnosticCount +=
@@ -144,9 +155,10 @@ namespace AngelscriptTypedASTJITBackend_Private
 						== EAngelscriptStaticJITTypedClosureFunctionRole::
 							InternalSemanticHelper
 					? 1 : 0;
-				GTaskObservation.StructuredVerifiedHIRDiagnosticCount +=
-					SemanticFunction.HIRState
-						== EAngelscriptStaticJITTypedHIRState::Verified
+				GTaskObservation.
+					StructuredVerifiedCanonicalASTDiagnosticCount +=
+					SemanticFunction.CanonicalASTState
+						== EAngelscriptStaticJITCanonicalASTState::Verified
 						? 1 : 0;
 			}
 			GTaskObservation.StructuredCallDiagnosticCount +=
@@ -195,12 +207,12 @@ namespace AngelscriptTypedASTJITBackend_Private
 
 	FAngelscriptStaticJITTypedFunctionDiagnostic BuildTypedDiagnostic(
 		const EAngelscriptTypedASTJITFallbackReason Reason,
-		const asSTypedSemanticSourceSpan& SourceSpan,
+		const asSSourceSpan& SourceSpan,
 		const FString& Detail,
 		const FAngelscriptStaticJITCompiledSourceGraph& Graph);
 
 	FString ResolveStableDiagnosticSourceSection(
-		const asSTypedSemanticSourceSpan& SourceSpan,
+		const asSSourceSpan& SourceSpan,
 		const FAngelscriptStaticJITCompiledSourceGraph& Graph)
 	{
 		if (SourceSpan.section.GetLength() == 0)
@@ -272,7 +284,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 	}
 
 	FAngelscriptStaticJITProcessedSource BuildProcessedSource(
-		const asSTypedSemanticSourceSpan& SourceSpan,
+		const asSSourceSpan& SourceSpan,
 		const FAngelscriptStaticJITCompiledSourceGraph& Graph)
 	{
 		FAngelscriptStaticJITProcessedSource Source;
@@ -284,10 +296,10 @@ namespace AngelscriptTypedASTJITBackend_Private
 	}
 
 	FAngelscriptStaticJITProcessedSource BuildSourceAnchor(
-		const asSTypedSemanticSourceAnchor& SourceAnchor,
+		const asSSourceAnchor& SourceAnchor,
 		const FAngelscriptStaticJITCompiledSourceGraph& Graph)
 	{
-		asSTypedSemanticSourceSpan Span;
+		asSSourceSpan Span;
 		Span.section = SourceAnchor.section;
 		Span.sourceOffset = SourceAnchor.sourceOffset;
 		Span.sourceLength = SourceAnchor.sourceLength;
@@ -297,7 +309,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 	}
 
 	void PopulateDiagnosticSourceProvenance(
-		const asSTypedSemanticSourceSpan& SourceSpan,
+		const asSSourceSpan& SourceSpan,
 		const FAngelscriptStaticJITCompiledSourceGraph& Graph,
 		FAngelscriptStaticJITTypedCallDiagnostic& OutDiagnostic)
 	{
@@ -317,7 +329,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 
 	FAngelscriptStaticJITTypedFunctionDiagnostic BuildTypedDiagnostic(
 		const EAngelscriptTypedASTJITFallbackReason Reason,
-		const asSTypedSemanticSourceSpan& SourceSpan,
+		const asSSourceSpan& SourceSpan,
 		const FString& Detail,
 		const FAngelscriptStaticJITCompiledSourceGraph& Graph)
 	{
@@ -427,7 +439,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 		Diagnostic.CalleeEligibilitySource = BuildProcessedSource(
 			Call.CalleeEligibility.SourceSpan, Graph);
 		Diagnostic.bHasNativeLinkageValidation = Call.TargetKind
-			!= asETypedSemanticCallTargetKind::ScriptFunction;
+			!= EAngelscriptTypedASTJITCallTargetKind::ScriptFunction;
 		Diagnostic.NativeLinkageValidation = Call.ExternalCallValidation.Code;
 		Diagnostic.NativeLinkageValidationDetail =
 			Call.ExternalCallValidation.Detail;
@@ -466,7 +478,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 		return Diagnostic;
 	}
 
-	FAngelscriptStaticJITTypedSemanticFunctionDiagnostic
+	FAngelscriptStaticJITCanonicalFunctionDiagnostic
 	BuildSemanticFunctionDiagnostic(
 		const FAngelscriptTypedASTJITCallClosureFunctionInput& Input,
 		const EAngelscriptStaticJITTypedClosureFunctionRole Role,
@@ -475,54 +487,53 @@ namespace AngelscriptTypedASTJITBackend_Private
 		const int32 ComponentIndex = INDEX_NONE,
 		const bool bRecursiveComponent = false)
 	{
-		FAngelscriptStaticJITTypedSemanticFunctionDiagnostic Diagnostic;
+		FAngelscriptStaticJITCanonicalFunctionDiagnostic Diagnostic;
 		Diagnostic.FunctionKey = Input.FunctionKey;
 		Diagnostic.Role = Role;
-		Diagnostic.RawTraitBits = static_cast<uint32>(
-			Input.Eligibility.RawTraitBits);
+		Diagnostic.RawTraitBits = static_cast<uint32>(Input.Eligibility.RawTraitBits);
 		Diagnostic.UnknownTraitBits = static_cast<uint32>(
-			ClassifyTypedSemanticFunctionTraits(
-				Input.Eligibility.RawTraitBits).
-				unknownTraitBits);
+			Input.Eligibility.RawTraitBits & ~KnownFunctionTraitBits);
 		Diagnostic.InvocationKind = Input.Eligibility.Shape.InvocationKind;
 		Diagnostic.ReceiverKind = Input.Eligibility.Shape.ReceiverKind;
-		Diagnostic.ReceiverParameterIndex =
-			Input.Eligibility.Shape.ReceiverParameterIndex;
+		Diagnostic.ReceiverParameterIndex = Input.Eligibility.Shape.ReceiverParameterIndex;
 		Diagnostic.ComponentIndex = ComponentIndex;
 		Diagnostic.bRecursiveComponent = bRecursiveComponent;
 		Diagnostic.EligibilityReason = Eligibility.Reason;
 		Diagnostic.EligibilityDetail = Eligibility.Detail;
-		Diagnostic.EligibilitySource = BuildProcessedSource(
-			Eligibility.SourceSpan, Graph);
-		if (Input.Eligibility.TypedHIR != nullptr)
+		Diagnostic.EligibilitySource = BuildProcessedSource(Eligibility.SourceSpan, Graph);
+		if (Input.Eligibility.SealedAST != nullptr)
 		{
-			Diagnostic.HIRState =
-				EAngelscriptStaticJITTypedHIRState::Verified;
-			Diagnostic.CleanupPlanState =
-				Input.Eligibility.TypedHIR->header.cleanupPlanState;
-			Diagnostic.bHasSuspendState =
-				Input.Eligibility.TypedHIR->header.hasSuspendState;
-			Diagnostic.bHasExceptionCleanup =
-				Input.Eligibility.TypedHIR->header.hasExceptionCleanup;
-			Diagnostic.bCleanupPlanCoversAllTransfers =
-				Input.Eligibility.TypedHIR->header.
-					cleanupPlanCoversAllTransfers;
+			const bool bSealed = Input.Eligibility.SealedAST->IsPublishable();
+			const bool bHasExactFunction = Input.Eligibility.CanonicalFunctionDecl.IsValid() &&
+										   Input.Eligibility.SealedAST->GetDecl(
+											   Input.Eligibility.CanonicalFunctionDecl) != nullptr;
+			Diagnostic.CanonicalASTState = bSealed && bHasExactFunction
+											   ? EAngelscriptStaticJITCanonicalASTState::Verified
+											   : EAngelscriptStaticJITCanonicalASTState::Invalid;
+			if (Diagnostic.CanonicalASTState
+				== EAngelscriptStaticJITCanonicalASTState::Verified)
+			{
+				const FAngelscriptTypedASTJITCanonicalLifetimeFacts Facts =
+					AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+						*Input.Eligibility.SealedAST,
+						Input.Eligibility.CanonicalFunctionDecl);
+				Diagnostic.CleanupPlanState = Facts.CleanupPlanState;
+				Diagnostic.bHasSuspendState = Facts.bHasSuspendState;
+				Diagnostic.bHasExceptionCleanup = Facts.bHasExceptionCleanup;
+				Diagnostic.bCleanupPlanCoversAllTransfers =
+					Facts.bCleanupPlanCoversAllTransfers;
+			}
 		}
 		return Diagnostic;
 	}
 
-	const FAngelscriptTypedASTJITCallClosureFunctionInput*
-	FindClosureInput(
-		const TConstArrayView<FAngelscriptTypedASTJITCallClosureFunctionInput>
-			Inputs,
+	const FAngelscriptTypedASTJITCallClosureFunctionInput* FindClosureInput(
+		const TConstArrayView<FAngelscriptTypedASTJITCallClosureFunctionInput> Inputs,
 		const FAngelscriptStableFunctionKey& FunctionKey)
 	{
 		return Inputs.FindByPredicate(
-			[&FunctionKey](
-				const FAngelscriptTypedASTJITCallClosureFunctionInput& Candidate)
-			{
-				return Candidate.FunctionKey == FunctionKey;
-			});
+			[&FunctionKey](const FAngelscriptTypedASTJITCallClosureFunctionInput& Candidate)
+			{ return Candidate.FunctionKey == FunctionKey; });
 	}
 
 	FAngelscriptStaticJITTypedFunctionDiagnostic BuildTypedDiagnostic(
@@ -592,7 +603,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 	void UpdateTypedFallback(
 		FAngelscriptStaticJITTypedFunctionDiagnostic& Diagnostic,
 		const EAngelscriptTypedASTJITFallbackReason Reason,
-		const asSTypedSemanticSourceSpan& SourceSpan,
+		const asSSourceSpan& SourceSpan,
 		const FString& Detail,
 		const FAngelscriptStaticJITCompiledSourceGraph& Graph)
 	{
@@ -691,22 +702,6 @@ namespace AngelscriptTypedASTJITBackend_Private
 			|| Disposition
 				== EAngelscriptTypedASTJITClosureFunctionDisposition::
 					InternalSemanticHelper;
-	}
-
-	bool ContainsLoopBackedge(
-		const asCTypedSemanticFunction& Function)
-	{
-		for (asUINT StatementIndex = 0;
-			StatementIndex < Function.statements.GetLength();
-			++StatementIndex)
-		{
-			if (Function.statements[StatementIndex].safePointRole
-				== asETypedSemanticSafePointRole::LoopBackedge)
-			{
-				return true;
-			}
-		}
-		return false;
 	}
 
 	const FAngelscriptStaticJITCompiledFunctionView* FindCompiledFunction(
@@ -815,15 +810,15 @@ namespace AngelscriptTypedASTJITBackend_Private
 				Function.EngineLocalFunction);
 		OutShape.SymbolName = SymbolName;
 		OutShape.ReturnType = ScriptFunction->returnType;
-		OutShape.InvocationKind =
-			Function.VerifiedTypedHIR->header.invocationKind;
-		OutShape.ReceiverKind =
-			Function.VerifiedTypedHIR->header.receiver.kind;
-		OutShape.ReceiverParameterIndex =
-			Function.VerifiedTypedHIR->header.receiver.parameterIndex;
+		OutShape.InvocationKind = ScriptFunction->objectType != nullptr
+			? EAngelscriptTypedASTJITInvocationKind::InstanceMethod
+			: EAngelscriptTypedASTJITInvocationKind::Global;
+		OutShape.ReceiverKind = ScriptFunction->objectType != nullptr
+			? EAngelscriptTypedASTJITReceiverKind::NativeObjectThis
+			: EAngelscriptTypedASTJITReceiverKind::None;
+		OutShape.ReceiverParameterIndex = INDEX_NONE;
+		OutShape.bReturnsOnStack = ScriptFunction->DoesReturnOnStack();
 		OutShape.bHasNativeObjectSlot = ScriptFunction->objectType != nullptr;
-		OutShape.bReturnsOnStack =
-			Function.VerifiedTypedHIR->header.returnsOnStack;
 		for (asUINT ParameterIndex = 0;
 			ParameterIndex < ScriptFunction->parameterTypes.GetLength();
 			++ParameterIndex)
@@ -855,7 +850,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 	FAngelscriptStaticJITTypedCallDiagnostic* FindCallDiagnostic(
 		FAngelscriptStaticJITTypedCallClosureDiagnostic& Closure,
 		const FAngelscriptStableFunctionKey& CallerFunctionKey,
-		const asTypedSemanticExpressionId Expression)
+		const asASTExprId Expression)
 	{
 		return Closure.Calls.FindByPredicate(
 			[&](const FAngelscriptStaticJITTypedCallDiagnostic& Candidate)
@@ -961,10 +956,10 @@ bool FAngelscriptTypedASTJIT::Generate(
 	if (Request.RequestedBackendId
 			!= FAngelscriptStaticJITBackendId::TypedAST()
 		|| Request.CompiledSourceGraph.CaptureProfile
-			!= EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR)
+			!= EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST)
 	{
 		return Reject(TEXT(
-			"TypedASTJITCaptureProfileMismatch: the backend requires the verified-typed-hir capture profile."));
+			"TypedASTJITCaptureProfileMismatch: the backend requires the verified-canonical-ast capture profile."));
 	}
 	if (Request.CompiledSourceGraph.Modules.IsEmpty())
 	{
@@ -974,7 +969,7 @@ bool FAngelscriptTypedASTJIT::Generate(
 	if (Request.CompiledSourceGraph.SourceCompilePassCount != 1u)
 	{
 		return Reject(TEXT(
-			"TypedASTJITSourceCompilePassMismatch: same-compilation HIR requires exactly one authoritative source compile pass."));
+			"TypedASTJITSourceCompilePassMismatch: same-compilation canonical AST requires exactly one authoritative source compile pass."));
 	}
 
 	asIScriptEngine* ScriptEngine = nullptr;
@@ -997,7 +992,7 @@ bool FAngelscriptTypedASTJIT::Generate(
 		}
 	}
 
-	int32 VerifiedTypedHIRCount = 0;
+	int32 VerifiedCanonicalASTCount = 0;
 	for (const FAngelscriptStaticJITCompiledFunctionView& Function
 		: Request.CompiledSourceGraph.Functions)
 	{
@@ -1015,21 +1010,21 @@ bool FAngelscriptTypedASTJIT::Generate(
 			return Reject(TEXT(
 				"TypedASTJITTaskGraphMismatch: every compiled function must belong to the exact task module graph."));
 		}
-		if (Function.VerifiedTypedHIR == nullptr)
+		if (Function.bRequiresCanonicalAST
+			&& (Function.SealedAST == nullptr
+				|| !Function.SealedAST->IsPublishable()
+				|| Function.CanonicalFunctionDeclValue == 0
+				|| Function.SealedAST->GetDecl(asASTDeclId(
+					Function.CanonicalFunctionDeclValue)) == nullptr))
+		{
+			return Reject(TEXT(
+				"TypedASTJITSameCompilationASTRequired: a sealed AST and exact function declaration identity are required."));
+		}
+		if (!FunctionHasTypedASTJITCanonicalBody(Function))
 		{
 			continue;
 		}
-
-		const asCScriptFunction* const ScriptFunction =
-			static_cast<const asCScriptFunction*>(
-				Function.EngineLocalFunction);
-		if (ScriptFunction->GetTypedSemanticFunction()
-			!= Function.VerifiedTypedHIR)
-		{
-			return Reject(TEXT(
-				"TypedASTJITSameCompilationHIRRequired: serialized, reconstructed, stale, or cross-Engine HIR is rejected."));
-		}
-		++VerifiedTypedHIRCount;
+		++VerifiedCanonicalASTCount;
 	}
 
 	FAngelscriptTypedASTJITRootIndex RootIndex;
@@ -1077,7 +1072,7 @@ bool FAngelscriptTypedASTJIT::Generate(
 
 #if WITH_ANGELSCRIPT_UNITTESTS
 	AngelscriptTypedASTJITBackend_Private::RecordAcceptedTask(
-		VerifiedTypedHIRCount, RootIndex.Roots.Num(), CallClosurePlans);
+		VerifiedCanonicalASTCount, RootIndex.Roots.Num(), CallClosurePlans);
 #endif
 	OutOutput.Functions.Reserve(
 		Request.CompiledSourceGraph.Functions.Num());
@@ -1178,10 +1173,10 @@ bool FAngelscriptTypedASTJIT::Generate(
 					Request.CompiledSourceGraph,
 					PlannedFunction.FunctionKey);
 			if (CompiledFunction == nullptr
-				|| CompiledFunction->VerifiedTypedHIR == nullptr)
+				|| !FunctionHasTypedASTJITCanonicalBody(*CompiledFunction))
 			{
 				ClosureEmissionError = TEXT(
-					"TypedASTJITProviderClosureFunctionMissing: every direct closure member requires the exact same-compilation HIR view.");
+					"TypedASTJITProviderClosureFunctionMissing: every direct closure member requires the exact same-compilation sealed Canonical AST view.");
 				break;
 			}
 
@@ -1215,6 +1210,28 @@ bool FAngelscriptTypedASTJIT::Generate(
 					Member.GlobalDependencies.Emplace_GetRef();
 				Global.EngineLocalGlobalPropertyId =
 					Dependency.EngineLocalGlobalPropertyId;
+				const asCScriptEngine* const InternalEngine =
+					static_cast<const asCScriptEngine*>(ScriptEngine);
+				if (Global.EngineLocalGlobalPropertyId >= 0
+					&& static_cast<asUINT>(
+						Global.EngineLocalGlobalPropertyId)
+						< InternalEngine->globalProperties.GetLength())
+				{
+					const asCGlobalProperty* const Property =
+						InternalEngine->globalProperties[
+							Global.EngineLocalGlobalPropertyId];
+					if (Property != nullptr)
+					{
+						const FString Namespace = Property->nameSpace != nullptr
+							? UTF8_TO_TCHAR(
+								Property->nameSpace->name.AddressOf())
+							: FString();
+						const FString Name =
+							UTF8_TO_TCHAR(Property->name.AddressOf());
+						Global.CanonicalASTDeclKey = Namespace.IsEmpty()
+							? Name : Namespace + TEXT("::") + Name;
+					}
+				}
 				Global.Kind = Dependency.Kind;
 				Global.Reference = Dependency.Reference;
 				Global.ExpectedContentOrValue =
@@ -1527,7 +1544,7 @@ bool FAngelscriptTypedASTJIT::Generate(
 			NativeCall.ReferenceSlotIndex = ReferenceSlotIndex;
 		}
 		bool bSemanticDependencyFailure = false;
-		asSTypedSemanticSourceSpan SemanticDependencyFailureSpan;
+		asSSourceSpan SemanticDependencyFailureSpan;
 		for (FDirectClosureMemberEmission& Member : DirectMembers)
 		{
 			if (!ClosureEmissionError.IsEmpty())
@@ -1558,7 +1575,8 @@ bool FAngelscriptTypedASTJIT::Generate(
 			BuildFunctionShape(*Member.Function, Member.BodySymbol, Shape);
 			Member.DependencyAnalysis =
 				AnalyzeAngelscriptTypedASTJITDependencies(
-					*Member.Function->VerifiedTypedHIR,
+					*Member.Function->SealedAST,
+					asASTDeclId(Member.Function->CanonicalFunctionDeclValue),
 					Shape,
 					*Member.Function,
 					Request.CompiledSourceGraph,
@@ -1669,7 +1687,8 @@ bool FAngelscriptTypedASTJIT::Generate(
 				&Request.CompiledSourceGraph.TypedASTJITCapabilityProfile;
 			EmitOptions.bEmitBridgeCallSiteRows = false;
 			Member.Body = EmitTypedASTJITFunction(
-				*Member.Function->VerifiedTypedHIR,
+				*Member.Function->SealedAST,
+				asASTDeclId(Member.Function->CanonicalFunctionDeclValue),
 				Shape,
 				EmitOptions);
 			if (!Member.Body.bSuccess)
@@ -1845,7 +1864,11 @@ bool FAngelscriptTypedASTJIT::Generate(
 			Request.CompiledSourceGraph.TypedASTJITCapabilityProfile.IdentityHash;
 		for (const FDirectClosureMemberEmission& Member : DirectMembers)
 		{
-			if (ContainsLoopBackedge(*Member.Function->VerifiedTypedHIR))
+			if (Member.Function->SealedAST != nullptr
+				&& Member.Function->SealedAST->IsPublishable()
+				&& AngelscriptTypedASTJITCanonicalHasLoopBackedge(
+					*Member.Function->SealedAST,
+					asASTDeclId(Member.Function->CanonicalFunctionDeclValue)))
 			{
 				GeneratedFunction.RuntimeExecutionRequirementTriggers |=
 					EAngelscriptJITExecutionCapability::LoopTimeout;
@@ -2138,7 +2161,7 @@ FAngelscriptTypedASTJIT::GetTaskObservationForTesting()
 
 FAngelscriptStaticJITTypedCallDiagnostic
 FAngelscriptTypedASTJIT::BuildSourceProvenanceDiagnosticForTesting(
-	const asSTypedSemanticSourceSpan& SourceSpan)
+	const asSSourceSpan& SourceSpan)
 {
 	FAngelscriptStaticJITTypedCallDiagnostic Diagnostic;
 	FAngelscriptStaticJITCompiledSourceGraph EmptyGraph;

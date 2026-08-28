@@ -1,0 +1,4 @@
+#include "as_stmt.h"
+
+BEGIN_AS_NAMESPACE
+END_AS_NAMESPACE

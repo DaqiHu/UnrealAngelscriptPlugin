@@ -351,6 +351,10 @@ public:
 
 		asIScriptEngine* ScriptEngine = Engine.Get();
 		ASSERT_THAT(IsNotNull(ScriptEngine, TEXT("Builder compile test should create a standalone SDK engine")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine != nullptr
+				&& static_cast<asCScriptEngine*>(ScriptEngine)->SetCompilerPipeline(asCOMPILER_PIPELINE_LEGACY),
+			TEXT("direct asCBuilder stage inspection must select the LEGACY implementation it is testing")));
 
 		const int IsolationControlResult = ScriptEngine->RegisterObjectType(
 			"BuilderLayoutIsolationControl",
@@ -501,10 +505,25 @@ public:
 			ScriptEngine->GetModule(ModuleScope.Get(), asGM_ONLY_IF_EXISTS),
 			TEXT("Builder class-layout staged module should be absent after explicit discard")));
 
+		FNativeTestEngine CanonicalEngine;
+		CanonicalEngine.Create(*TestRunner);
+		ON_SCOPE_EXIT
+		{
+			CanonicalEngine.Destroy();
+		};
+		asIScriptEngine* const CanonicalScriptEngine = CanonicalEngine.Get();
+		ASSERT_THAT(IsNotNull(
+			CanonicalScriptEngine,
+			TEXT("Builder class-layout runtime counterpart should create an isolated Canonical engine")));
+		ASSERT_THAT(IsTrue(
+			CanonicalScriptEngine != nullptr
+				&& static_cast<asCScriptEngine*>(CanonicalScriptEngine)->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("Builder class-layout runtime counterpart must explicitly select CANONICAL")));
+
 		{
 			FScopedNativeModule RuntimeModuleScope(
 				*TestRunner,
-				Engine,
+				CanonicalEngine,
 				"BuilderClassLayoutRuntime",
 				CompilePipelineSource);
 			ASSERT_THAT(IsTrue(
@@ -514,12 +533,43 @@ public:
 				RuntimeModuleScope.IsValid()
 					? RuntimeModuleScope->GetTypeInfoByDecl("Counter")
 					: nullptr;
+			asITypeInfo* const RuntimeBaseType =
+				RuntimeModuleScope.IsValid()
+					? RuntimeModuleScope->GetTypeInfoByDecl("BaseCounter")
+					: nullptr;
 			ASSERT_THAT(IsNotNull(
 				RuntimeCounterType,
 				TEXT("Builder class-layout runtime counterpart should expose Counter")));
+			ASSERT_THAT(IsNotNull(
+				RuntimeBaseType,
+				TEXT("Builder class-layout runtime counterpart should expose BaseCounter")));
+			ASSERT_THAT(AreEqual(
+				RuntimeBaseType,
+				RuntimeCounterType != nullptr ? RuntimeCounterType->GetBaseType() : nullptr,
+				TEXT("Canonical CodeGen must publish the sealed exact base edge")));
+			ASSERT_THAT(AreEqual(
+				2,
+				static_cast<int32>(RuntimeCounterType != nullptr
+					? RuntimeCounterType->GetPropertyCount()
+					: 0),
+				TEXT("Canonical CodeGen must publish local and inherited property views")));
+			ASSERT_THAT(IsNotNull(
+				FindTypeMethodByNameAndParamCount(RuntimeCounterType, "ReadBase", 0),
+				TEXT("Canonical CodeGen must publish inherited base methods on Counter")));
+			ASSERT_THAT(AreEqual(
+				1,
+				static_cast<int32>(RuntimeCounterType != nullptr
+					? RuntimeCounterType->GetFactoryCount()
+					: 0),
+				TEXT("Canonical CodeGen must publish one default factory paired with the default constructor")));
+			ASSERT_THAT(IsNotNull(
+				RuntimeCounterType != nullptr
+					? RuntimeCounterType->GetFactoryByIndex(0)
+					: nullptr,
+				TEXT("Canonical CodeGen must publish a callable default factory")));
 			void* const CounterObject =
 				RuntimeCounterType != nullptr
-					? ScriptEngine->CreateScriptObject(RuntimeCounterType)
+					? CanonicalScriptEngine->CreateScriptObject(RuntimeCounterType)
 					: nullptr;
 			ASSERT_THAT(IsNotNull(
 				CounterObject,
@@ -531,14 +581,14 @@ public:
 			{
 				ON_SCOPE_EXIT
 				{
-					ScriptEngine->ReleaseScriptObject(
+					CanonicalScriptEngine->ReleaseScriptObject(
 						CounterObject,
 						RuntimeCounterType);
 				};
 
 				FSdkFunctionInvoker Invoker(
 					*TestRunner,
-					ScriptEngine,
+					CanonicalScriptEngine,
 					RuntimeModuleScope.Get(),
 					"int Entry(Counter)");
 				const int32 Result = Invoker
@@ -556,7 +606,7 @@ public:
 				RuntimeModuleScope.Discard(),
 				TEXT("Builder class-layout cleanup should explicitly discard the runtime module")));
 			ASSERT_THAT(IsNull(
-				ScriptEngine->GetModule("BuilderClassLayoutRuntime", asGM_ONLY_IF_EXISTS),
+				CanonicalScriptEngine->GetModule("BuilderClassLayoutRuntime", asGM_ONLY_IF_EXISTS),
 				TEXT("Builder class-layout runtime module should be absent after explicit discard")));
 		}
 

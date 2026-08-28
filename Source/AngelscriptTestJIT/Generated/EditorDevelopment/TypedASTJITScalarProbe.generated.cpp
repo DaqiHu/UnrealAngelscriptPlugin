@@ -15,415 +15,546 @@
  */
 #include "AngelscriptTestJITProbes.h"
 #include "CoreMinimal.h"
-#include "StaticJIT/StaticJITHeader.h"
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITCallBridge.h"
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITScalarOps.h"
 
 namespace
 {
 static int32 AS_Test_Semantic_SemanticScalarBranch(
-	const int32 as_sem_s0,
-	const int32 as_sem_s1)
+	const int32 as_ast_d7,
+	const int32 as_ast_d8)
 {
-	const int32 as_sem_s2 = ([&]() -> int32
+	int32 as_ast_d9;
 	{
-		const int32 as_sem_e2_left = as_sem_s0;
-		const int32 as_sem_e2_right = as_sem_s1;
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e2_left, as_sem_e2_right);
-	}());
-	if (([&]() -> bool
-	{
-		const int32 as_sem_e5_left = as_sem_s2;
-		const int32 as_sem_e5_right = int32(10);
-		return (as_sem_e5_left > as_sem_e5_right);
-	}()))
-	{
-		return ([&]() -> int32
+		([&]() -> int32
 		{
-			const int32 as_sem_e8_left = as_sem_s2;
-			const int32 as_sem_e8_right = int32(2);
-			return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_sem_e8_left, as_sem_e8_right);
+			const int32 as_ast_e9_value = ([&]() -> int32
+		{
+			const int32 as_ast_e7_left = as_ast_d7;
+			const int32 as_ast_e7_right = as_ast_d8;
+			return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e7_left, as_ast_e7_right);
+		}());
+			int32& as_ast_e9_target = as_ast_d9;
+			as_ast_e9_target = as_ast_e9_value;
+			return as_ast_e9_target;
+		}());
+	}
+	{
+		if (([&]() -> bool
+		{
+			const int32 as_ast_e12_left = as_ast_d9;
+			const int32 as_ast_e12_right = int32(10);
+			return (as_ast_e12_left > as_ast_e12_right);
+		}()))
+		{
+			return ([&]() -> int32
+			{
+				const int32 as_ast_e15_left = as_ast_d9;
+				const int32 as_ast_e15_right = int32(2);
+				return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e15_left, as_ast_e15_right);
+			}());
+		}
+	}
+	return ([&]() -> int32
+	{
+		const int32 as_ast_e21_left = as_ast_d9;
+		const int32 as_ast_e21_right = int32(1);
+		return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e21_left, as_ast_e21_right);
+	}());
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return int32{};
+}
+
+static int32 AS_Test_Semantic_SemanticMutationParity(
+	const int32 as_ast_d14,
+	const int32 as_ast_d15)
+{
+	int32 as_ast_d16;
+	{
+		([&]() -> int32
+		{
+			const int32 as_ast_e25_value = as_ast_d14;
+			int32& as_ast_e25_target = as_ast_d16;
+			as_ast_e25_target = as_ast_e25_value;
+			return as_ast_e25_target;
+		}());
+	}
+	{
+		([&]() -> int32
+		{
+			const int32 as_ast_e28_value = as_ast_d15;
+			int32& as_ast_e28_target = as_ast_d16;
+			as_ast_e28_target = as_ast_e28_value;
+			return as_ast_e28_target;
+		}());
+	}
+	{
+		([&]() -> int32
+		{
+			const int32 as_ast_e33_value = int32(3);
+			int32& as_ast_e33_target = as_ast_d16;
+			as_ast_e33_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e33_target, as_ast_e33_value);
+			return as_ast_e33_target;
+		}());
+	}
+	int32 as_ast_d17;
+	{
+		([&]() -> int32
+		{
+			const int32 as_ast_e39_value = AngelscriptTypedASTJIT::WrapPreIncrement<int32>(as_ast_d16);
+			int32& as_ast_e39_target = as_ast_d17;
+			as_ast_e39_target = as_ast_e39_value;
+			return as_ast_e39_target;
+		}());
+	}
+	int32 as_ast_d18;
+	{
+		([&]() -> int32
+		{
+			const int32 as_ast_e44_value = (as_ast_d16, AngelscriptTypedASTJIT::WrapPostIncrement<int32>(as_ast_d16));
+			int32& as_ast_e44_target = as_ast_d18;
+			as_ast_e44_target = as_ast_e44_value;
+			return as_ast_e44_target;
 		}());
 	}
 	return ([&]() -> int32
 	{
-		const int32 as_sem_e11_left = as_sem_s2;
-		const int32 as_sem_e11_right = int32(1);
-		return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_sem_e11_left, as_sem_e11_right);
-	}());
-}
-
-static int32 AS_Test_Semantic_SemanticMutationParity(
-	const int32 as_sem_s0,
-	const int32 as_sem_s1)
-{
-	int32 as_sem_s2 = as_sem_s0;
-	([&]() -> int32
+		const int32 as_ast_e53_left = ([&]() -> int32
 	{
-		const int32 as_sem_e3_value = as_sem_s1;
-		int32& as_sem_e3_target = as_sem_s2;
-		as_sem_e3_target = as_sem_e3_value;
-		return as_sem_e3_target;
-	}());
-	([&]() -> int32
+		const int32 as_ast_e52_left = ([&]() -> int32
 	{
-		const int32 as_sem_e6_value = int32(3);
-		int32& as_sem_e6_target = as_sem_s2;
-		as_sem_e6_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e6_target, as_sem_e6_value);
-		return as_sem_e6_target;
+		const int32 as_ast_e49_left = as_ast_d16;
+		const int32 as_ast_e49_right = int32(1000);
+		return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e49_left, as_ast_e49_right);
 	}());
-	const int32 as_sem_s3 = ([&]() -> int32
+		const int32 as_ast_e52_right = ([&]() -> int32
 	{
-		int32& as_sem_e8_target = as_sem_s2;
-		as_sem_e8_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e8_target, int32(1));
-		return as_sem_e8_target;
+		const int32 as_ast_e51_left = as_ast_d17;
+		const int32 as_ast_e51_right = int32(100);
+		return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e51_left, as_ast_e51_right);
 	}());
-	const int32 as_sem_s4 = ([&]() -> int32
-	{
-		int32& as_sem_e10_target = as_sem_s2;
-		const int32 as_sem_e10_old = as_sem_e10_target;
-		as_sem_e10_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e10_old, int32(1));
-		return as_sem_e10_old;
+		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e52_left, as_ast_e52_right);
 	}());
-	return ([&]() -> int32
-	{
-		const int32 as_sem_e19_left = ([&]() -> int32
-	{
-		const int32 as_sem_e17_left = ([&]() -> int32
-	{
-		const int32 as_sem_e13_left = as_sem_s2;
-		const int32 as_sem_e13_right = int32(1000);
-		return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_sem_e13_left, as_sem_e13_right);
+		const int32 as_ast_e53_right = as_ast_d18;
+		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e53_left, as_ast_e53_right);
 	}());
-		const int32 as_sem_e17_right = ([&]() -> int32
-	{
-		const int32 as_sem_e16_left = as_sem_s3;
-		const int32 as_sem_e16_right = int32(100);
-		return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_sem_e16_left, as_sem_e16_right);
-	}());
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e17_left, as_sem_e17_right);
-	}());
-		const int32 as_sem_e19_right = as_sem_s4;
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e19_left, as_sem_e19_right);
-	}());
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return int32{};
 }
 
 static float AS_Test_Semantic_SemanticPowerFloat(
 	FScriptExecution& Execution,
-	const float as_sem_s0,
-	const float as_sem_s1)
+	const float as_ast_d20,
+	const float as_ast_d21)
 {
 	return ([&]() -> float
 	{
-		const float as_sem_e2_left = as_sem_s0;
-		const float as_sem_e2_right = as_sem_s1;
-		return AngelscriptTypedASTJIT::CheckedPower<float>(Execution, as_sem_e2_left, as_sem_e2_right);
+		const float as_ast_e58_left = as_ast_d20;
+		if (UNLIKELY(Execution.bExceptionThrown))
+		{
+			return float{};
+		}
+		const float as_ast_e58_right = as_ast_d21;
+		if (UNLIKELY(Execution.bExceptionThrown))
+		{
+			return float{};
+		}
+		return AngelscriptTypedASTJIT::CheckedPower<float>(Execution, as_ast_e58_left, as_ast_e58_right);
 	}());
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return float{};
 }
 
 static double AS_Test_Semantic_SemanticPowerDouble(
 	FScriptExecution& Execution,
-	const double as_sem_s0,
-	const double as_sem_s1)
+	const double as_ast_d23,
+	const double as_ast_d24)
 {
 	return ([&]() -> double
 	{
-		const double as_sem_e2_left = as_sem_s0;
-		const double as_sem_e2_right = as_sem_s1;
-		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_sem_e2_left, as_sem_e2_right);
+		const double as_ast_e61_left = as_ast_d23;
+		if (UNLIKELY(Execution.bExceptionThrown))
+		{
+			return double{};
+		}
+		const double as_ast_e61_right = as_ast_d24;
+		if (UNLIKELY(Execution.bExceptionThrown))
+		{
+			return double{};
+		}
+		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_ast_e61_left, as_ast_e61_right);
 	}());
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return double{};
 }
 
 static double AS_Test_Semantic_SemanticPowerDoubleInt(
 	FScriptExecution& Execution,
-	const double as_sem_s0,
-	const int32 as_sem_s1)
+	const double as_ast_d26,
+	const int32 as_ast_d27)
 {
 	return ([&]() -> double
 	{
-		const double as_sem_e2_left = as_sem_s0;
-		const int32 as_sem_e2_right = as_sem_s1;
-		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_sem_e2_left, as_sem_e2_right);
+		const double as_ast_e65_left = as_ast_d26;
+		if (UNLIKELY(Execution.bExceptionThrown))
+		{
+			return double{};
+		}
+		const double as_ast_e65_right = static_cast<double>(as_ast_d27);
+		if (UNLIKELY(Execution.bExceptionThrown))
+		{
+			return double{};
+		}
+		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_ast_e65_left, as_ast_e65_right);
 	}());
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return double{};
 }
 
 static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
-	const int32 as_sem_s0,
-	const int32 as_sem_s1)
+	const int32 as_ast_d7,
+	const int32 as_ast_d8)
 {
-	int32 as_sem_s2 = int32(0);
+	int32 as_ast_d9;
 	{
-		int32 as_sem_s3 = int32(0);
-		for (; ([&]() -> bool
-				{
-					const int32 as_sem_e4_left = as_sem_s3;
-					const int32 as_sem_e4_right = as_sem_s0;
-					return (as_sem_e4_left < as_sem_e4_right);
-				}()); ([&]() -> int32
-			{
-				int32& as_sem_e6_target = as_sem_s3;
-				as_sem_e6_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e6_target, int32(1));
-				return as_sem_e6_target;
-			}()))
+		([&]() -> int32
 		{
-			if (([&]() -> bool
+			const int32 as_ast_e3_value = int32(0);
+			int32& as_ast_e3_target = as_ast_d9;
+			as_ast_e3_target = as_ast_e3_value;
+			return as_ast_e3_target;
+		}());
+	}
+	{
+		int32 as_ast_d10;
+		{
+			([&]() -> int32
 			{
-				const int32 as_sem_e9_left = as_sem_s3;
-				const int32 as_sem_e9_right = int32(1);
-				return (as_sem_e9_left == as_sem_e9_right);
-			}()))
+				const int32 as_ast_e6_value = int32(0);
+				int32& as_ast_e6_target = as_ast_d10;
+				as_ast_e6_target = as_ast_e6_value;
+				return as_ast_e6_target;
+			}());
+		}
+		for ( ; ([&]() -> bool
+	{
+		const int32 as_ast_e9_left = as_ast_d10;
+		const int32 as_ast_e9_right = as_ast_d7;
+		return (as_ast_e9_left < as_ast_e9_right);
+	}()) ; AngelscriptTypedASTJIT::WrapPreIncrement<int32>(as_ast_d10) )
+		{
 			{
-				continue;
+				if (([&]() -> bool
+				{
+					const int32 as_ast_e14_left = as_ast_d10;
+					const int32 as_ast_e14_right = int32(1);
+					return (as_ast_e14_left == as_ast_e14_right);
+				}()))
+				{
+					continue;
+				}
 			}
-			const int32 as_sem_switch_selector_19 = static_cast<int32>(as_sem_s3);
-			switch (as_sem_switch_selector_19)
 			{
-				case int32(2):
-					{
-						([&]() -> int32
+				switch (as_ast_d10)
+				{
+					case int32(2):
 						{
-							const int32 as_sem_e15_value = int32(20);
-							int32& as_sem_e15_target = as_sem_s2;
-							as_sem_e15_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e15_target, as_sem_e15_value);
-							return as_sem_e15_target;
-						}());
+							([&]() -> int32
+							{
+								const int32 as_ast_e22_value = int32(20);
+								int32& as_ast_e22_target = as_ast_d9;
+								as_ast_e22_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e22_target, as_ast_e22_value);
+								return as_ast_e22_target;
+							}());
+						}
 						break;
-					}
-					break;
-				case int32(3):
-					{
-						([&]() -> int32
+					case int32(3):
 						{
-							const int32 as_sem_e18_value = int32(30);
-							int32& as_sem_e18_target = as_sem_s2;
-							as_sem_e18_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e18_target, as_sem_e18_value);
-							return as_sem_e18_target;
-						}());
+							([&]() -> int32
+							{
+								const int32 as_ast_e30_value = int32(30);
+								int32& as_ast_e30_target = as_ast_d9;
+								as_ast_e30_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e30_target, as_ast_e30_value);
+								return as_ast_e30_target;
+							}());
+						}
 						continue;
-					}
-					break;
-				default:
-					{
-						([&]() -> int32
+					default:
 						{
-							const int32 as_sem_e21_value = as_sem_s3;
-							int32& as_sem_e21_target = as_sem_s2;
-							as_sem_e21_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e21_target, as_sem_e21_value);
-							return as_sem_e21_target;
-						}());
+							([&]() -> int32
+							{
+								const int32 as_ast_e37_value = as_ast_d10;
+								int32& as_ast_e37_target = as_ast_d9;
+								as_ast_e37_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e37_target, as_ast_e37_value);
+								return as_ast_e37_target;
+							}());
+						}
 						break;
-					}
+				}
+			}
+			{
+				if (([&]() -> bool
+				{
+					const int32 as_ast_e41_left = as_ast_d9;
+					const int32 as_ast_e41_right = int32(45);
+					return (as_ast_e41_left > as_ast_e41_right);
+				}()))
+				{
 					break;
-			}
-			if (([&]() -> bool
-			{
-				const int32 as_sem_e24_left = as_sem_s2;
-				const int32 as_sem_e24_right = int32(45);
-				return (as_sem_e24_left > as_sem_e24_right);
-			}()))
-			{
-				break;
+				}
 			}
 		}
 	}
-	int32 as_sem_s4 = int32(0);
-	while (([&]() -> bool
-			{
-				const int32 as_sem_e28_left = as_sem_s4;
-				const int32 as_sem_e28_right = as_sem_s0;
-				return (as_sem_e28_left < as_sem_e28_right);
-			}()))
+	int32 as_ast_d11;
 	{
 		([&]() -> int32
 		{
-			int32& as_sem_e30_target = as_sem_s4;
-			as_sem_e30_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e30_target, int32(1));
-			return as_sem_e30_target;
-		}());
-		if (([&]() -> bool
-		{
-			const int32 as_sem_e33_left = as_sem_s4;
-			const int32 as_sem_e33_right = int32(2);
-			return (as_sem_e33_left == as_sem_e33_right);
-		}()))
-		{
-			continue;
-		}
-		([&]() -> int32
-		{
-			const int32 as_sem_e36_value = int32(3);
-			int32& as_sem_e36_target = as_sem_s2;
-			as_sem_e36_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e36_target, as_sem_e36_value);
-			return as_sem_e36_target;
-		}());
-		if (([&]() -> bool
-		{
-			const int32 as_sem_e39_left = as_sem_s4;
-			const int32 as_sem_e39_right = int32(4);
-			return (as_sem_e39_left >= as_sem_e39_right);
-		}()))
-		{
-			break;
-		}
-	}
-	int32 as_sem_s5 = int32(0);
-	do
-	{
-		([&]() -> int32
-		{
-			int32& as_sem_e42_target = as_sem_s5;
-			as_sem_e42_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e42_target, int32(1));
-			return as_sem_e42_target;
-		}());
-		if (([&]() -> bool
-		{
-			const int32 as_sem_e45_left = as_sem_s5;
-			const int32 as_sem_e45_right = int32(1);
-			return (as_sem_e45_left == as_sem_e45_right);
-		}()))
-		{
-			continue;
-		}
-		([&]() -> int32
-		{
-			const int32 as_sem_e48_value = int32(5);
-			int32& as_sem_e48_target = as_sem_s2;
-			as_sem_e48_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e48_target, as_sem_e48_value);
-			return as_sem_e48_target;
+			const int32 as_ast_e46_value = int32(0);
+			int32& as_ast_e46_target = as_ast_d11;
+			as_ast_e46_target = as_ast_e46_value;
+			return as_ast_e46_target;
 		}());
 	}
-	while (([&]() -> bool
-			{
-				const int32 as_sem_e51_left = as_sem_s5;
-				const int32 as_sem_e51_right = int32(2);
-				return (as_sem_e51_left < as_sem_e51_right);
-			}()));
-	const int32 as_sem_switch_selector_72 = static_cast<int32>(as_sem_s1);
-	switch (as_sem_switch_selector_72)
 	{
-		case int32(0):
+		while (([&]() -> bool
+		{
+			const int32 as_ast_e49_left = as_ast_d11;
+			const int32 as_ast_e49_right = as_ast_d7;
+			return (as_ast_e49_left < as_ast_e49_right);
+		}()))
+		{
+			{
+				AngelscriptTypedASTJIT::WrapPreIncrement<int32>(as_ast_d11);
+			}
+			{
+				if (([&]() -> bool
+				{
+					const int32 as_ast_e54_left = as_ast_d11;
+					const int32 as_ast_e54_right = int32(2);
+					return (as_ast_e54_left == as_ast_e54_right);
+				}()))
+				{
+					continue;
+				}
+			}
 			{
 				([&]() -> int32
 				{
-					const int32 as_sem_e59_value = int32(100);
-					int32& as_sem_e59_target = as_sem_s2;
-					as_sem_e59_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e59_target, as_sem_e59_value);
-					return as_sem_e59_target;
+					const int32 as_ast_e61_value = int32(3);
+					int32& as_ast_e61_target = as_ast_d9;
+					as_ast_e61_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e61_target, as_ast_e61_value);
+					return as_ast_e61_target;
 				}());
-				break;
 			}
-			break;
-		case int32(1):
+			{
+				if (([&]() -> bool
+				{
+					const int32 as_ast_e66_left = as_ast_d11;
+					const int32 as_ast_e66_right = int32(4);
+					return (as_ast_e66_left >= as_ast_e66_right);
+				}()))
+				{
+					break;
+				}
+			}
+		}
+	}
+	int32 as_ast_d12;
+	{
+		([&]() -> int32
+		{
+			const int32 as_ast_e71_value = int32(0);
+			int32& as_ast_e71_target = as_ast_d12;
+			as_ast_e71_target = as_ast_e71_value;
+			return as_ast_e71_target;
+		}());
+	}
+	{
+		do
+		{
+			{
+				AngelscriptTypedASTJIT::WrapPreIncrement<int32>(as_ast_d12);
+			}
+			{
+				if (([&]() -> bool
+				{
+					const int32 as_ast_e76_left = as_ast_d12;
+					const int32 as_ast_e76_right = int32(1);
+					return (as_ast_e76_left == as_ast_e76_right);
+				}()))
+				{
+					continue;
+				}
+			}
 			{
 				([&]() -> int32
 				{
-					const int32 as_sem_e62_value = int32(200);
-					int32& as_sem_e62_target = as_sem_s2;
-					as_sem_e62_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e62_target, as_sem_e62_value);
-					return as_sem_e62_target;
+					const int32 as_ast_e83_value = int32(5);
+					int32& as_ast_e83_target = as_ast_d9;
+					as_ast_e83_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e83_target, as_ast_e83_value);
+					return as_ast_e83_target;
 				}());
 			}
-		case int32(2):
-			{
-				const int32 as_sem_s6 = int32(20);
-				([&]() -> int32
-				{
-					const int32 as_sem_e66_value = as_sem_s6;
-					int32& as_sem_e66_target = as_sem_s2;
-					as_sem_e66_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e66_target, as_sem_e66_value);
-					return as_sem_e66_target;
-				}());
-				break;
-			}
-			break;
-		case int32(3):
-			{
-				int32 as_sem_s7 = int32(0);
-				while (([&]() -> bool
-						{
-							const int32 as_sem_e70_left = as_sem_s7;
-							const int32 as_sem_e70_right = int32(2);
-							return (as_sem_e70_left < as_sem_e70_right);
-						}()))
+		}
+		while (([&]() -> bool
+		{
+			const int32 as_ast_e88_left = as_ast_d12;
+			const int32 as_ast_e88_right = int32(2);
+			return (as_ast_e88_left < as_ast_e88_right);
+		}()));
+	}
+	{
+		switch (as_ast_d8)
+		{
+			case int32(0):
 				{
 					([&]() -> int32
 					{
-						const int32 as_sem_e73_value = int32(7);
-						int32& as_sem_e73_target = as_sem_s2;
-						as_sem_e73_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e73_target, as_sem_e73_value);
-						return as_sem_e73_target;
+						const int32 as_ast_e96_value = int32(100);
+						int32& as_ast_e96_target = as_ast_d9;
+						as_ast_e96_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e96_target, as_ast_e96_value);
+						return as_ast_e96_target;
 					}());
+				}
+				break;
+			case int32(1):
+				{
 					([&]() -> int32
 					{
-						int32& as_sem_e75_target = as_sem_s7;
-						as_sem_e75_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e75_target, int32(1));
-						return as_sem_e75_target;
+						const int32 as_ast_e104_value = int32(200);
+						int32& as_ast_e104_target = as_ast_d9;
+						as_ast_e104_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e104_target, as_ast_e104_value);
+						return as_ast_e104_target;
 					}());
-					if (([&]() -> bool
+				}
+			case int32(2):
+				{
+					int32 as_ast_d13;
 					{
-						const int32 as_sem_e78_left = as_sem_s7;
-						const int32 as_sem_e78_right = int32(1);
-						return (as_sem_e78_left == as_sem_e78_right);
-					}()))
+						([&]() -> int32
+						{
+							const int32 as_ast_e110_value = int32(20);
+							int32& as_ast_e110_target = as_ast_d13;
+							as_ast_e110_target = as_ast_e110_value;
+							return as_ast_e110_target;
+						}());
+					}
 					{
-						continue;
+						([&]() -> int32
+						{
+							const int32 as_ast_e114_value = as_ast_d13;
+							int32& as_ast_e114_target = as_ast_d9;
+							as_ast_e114_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e114_target, as_ast_e114_value);
+							return as_ast_e114_target;
+						}());
 					}
 					break;
 				}
-				break;
-			}
-			break;
-		default:
-			{
-				([&]() -> int32
+			case int32(3):
 				{
-					const int32 as_sem_e81_value = int32(9);
-					int32& as_sem_e81_target = as_sem_s2;
-					as_sem_e81_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e81_target, as_sem_e81_value);
-					return as_sem_e81_target;
-				}());
+					int32 as_ast_d14;
+					{
+						([&]() -> int32
+						{
+							const int32 as_ast_e119_value = int32(0);
+							int32& as_ast_e119_target = as_ast_d14;
+							as_ast_e119_target = as_ast_e119_value;
+							return as_ast_e119_target;
+						}());
+					}
+					{
+						while (([&]() -> bool
+						{
+							const int32 as_ast_e122_left = as_ast_d14;
+							const int32 as_ast_e122_right = int32(2);
+							return (as_ast_e122_left < as_ast_e122_right);
+						}()))
+						{
+							{
+								([&]() -> int32
+								{
+									const int32 as_ast_e127_value = int32(7);
+									int32& as_ast_e127_target = as_ast_d9;
+									as_ast_e127_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e127_target, as_ast_e127_value);
+									return as_ast_e127_target;
+								}());
+							}
+							{
+								AngelscriptTypedASTJIT::WrapPreIncrement<int32>(as_ast_d14);
+							}
+							{
+								if (([&]() -> bool
+								{
+									const int32 as_ast_e134_left = as_ast_d14;
+									const int32 as_ast_e134_right = int32(1);
+									return (as_ast_e134_left == as_ast_e134_right);
+								}()))
+								{
+									continue;
+								}
+							}
+							break;
+						}
+					}
+					break;
+				}
+			default:
+				{
+					([&]() -> int32
+					{
+						const int32 as_ast_e144_value = int32(9);
+						int32& as_ast_e144_target = as_ast_d9;
+						as_ast_e144_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e144_target, as_ast_e144_value);
+						return as_ast_e144_target;
+					}());
+				}
 				break;
-			}
-			break;
+		}
 	}
-	return as_sem_s2;
+	return as_ast_d9;
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return int32{};
 }
 
 static int32 AS_Test_Semantic_SemanticExhaustiveEnum(
 	FScriptExecution& Execution,
-	const int32 as_sem_s0)
+	const int32 as_ast_d16)
 {
-	const int8 as_sem_s1 = AngelscriptTypedASTJIT::WrapNarrow<int8>(as_sem_s0);
-	if (UNLIKELY(Execution.bExceptionThrown))
+	int8 as_ast_d17;
 	{
-		return int32{};
+		([&]() -> int8
+		{
+			const int8 as_ast_e151_value = AngelscriptTypedASTJIT::WrapNarrow<int8>(as_ast_d16);
+			int8& as_ast_e151_target = as_ast_d17;
+			as_ast_e151_target = as_ast_e151_value;
+			return as_ast_e151_target;
+		}());
 	}
-	const int32 as_sem_switch_selector_10 = static_cast<int32>(as_sem_s1);
-	if (UNLIKELY(Execution.bExceptionThrown))
 	{
-		return int32{};
-	}
-	switch (as_sem_switch_selector_10)
-	{
-		case int32(0):
-			{
+		const auto as_ast_stmt_84_condition = as_ast_d17;
+		if (UNLIKELY(Execution.bExceptionThrown))
+		{
+			return {};
+		}
+		switch (as_ast_stmt_84_condition)
+		{
+			case int8(0):
 				return int32(10);
-			}
-			break;
-		case int32(1):
-			{
+			case int8(1):
 				return int32(20);
-			}
-			break;
-		case int32(2):
-			{
+			case int8(2):
 				return int32(30);
-			}
-			break;
-		default:
-			FStaticJITFunction::SetSwitchValueInvalidException(Execution);
-			return int32{};
+			default:
+				FStaticJITFunction::SetSwitchValueInvalidException(Execution);
+				return {};
+		}
+		if (UNLIKELY(Execution.bExceptionThrown))
+		{
+			return {};
+		}
 	}
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return int32{};
 }
 
 	struct FTypedASTScalarProbeRegistration

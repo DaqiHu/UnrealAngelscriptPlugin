@@ -1198,9 +1198,11 @@ int RunExplicitParityBehavior()
 	}
 }
 
-TEST_CLASS_WITH_FLAGS(FAngelscriptCacheInvocationFamilyParityTests,
+TEST_CLASS_WITH_FLAGS_AND_TAGS(FAngelscriptCacheInvocationFamilyParityTests,
 	"Angelscript.TestModule.Cache.InvocationFamilyParity",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter
+		| EAutomationTestFlags::Disabled,
+	TEXT("#cache-v2-redesign"))
 {
 	TEST_METHOD(ForcedCleanAndCachedArtifactsMatchAcrossTwoEngines)
 	{

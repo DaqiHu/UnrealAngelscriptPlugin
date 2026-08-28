@@ -1,8 +1,10 @@
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITEligibility.h"
+#include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITCanonical.h"
 
 #include "Core/AngelscriptEngine.h"
 
 #include "StartAngelscriptHeaders.h"
+#include "source/as_ast_context.h"
 #include "source/as_scriptfunction.h"
 #include "source/as_typeinfo.h"
 #include "EndAngelscriptHeaders.h"
@@ -11,29 +13,9 @@
 
 namespace AngelscriptTypedASTJITEligibility_Private
 {
-	static asSTypedSemanticSourceSpan FunctionSpan(
-		const asCTypedSemanticFunction* Function)
-	{
-		if (Function != nullptr
-			&& Function->rootStatement.IsValid()
-			&& Function->rootStatement.value < Function->statements.GetLength())
-		{
-			return Function->statements[Function->rootStatement.value].span;
-		}
-		if (Function != nullptr && Function->statements.GetLength() != 0)
-		{
-			return Function->statements[0].span;
-		}
-		if (Function != nullptr && Function->expressions.GetLength() != 0)
-		{
-			return Function->expressions[0].span;
-		}
-		return {};
-	}
-
 	static FAngelscriptTypedASTJITEligibility Reject(
 		const EAngelscriptTypedASTJITFallbackReason Reason,
-		const asSTypedSemanticSourceSpan& Span,
+		const asSSourceSpan& Span,
 		const FString& Detail)
 	{
 		FAngelscriptTypedASTJITEligibility Result;
@@ -41,107 +23,6 @@ namespace AngelscriptTypedASTJITEligibility_Private
 		Result.SourceSpan = Span;
 		Result.Detail = Detail;
 		return Result;
-	}
-
-	static bool IsByValueScalarOrEnum(
-		const asCDataType& Type,
-		const bool bAllowVoid)
-	{
-		if (!Type.IsValid() || Type.IsReference() || Type.IsObjectHandle())
-		{
-			return false;
-		}
-		if (bAllowVoid && Type.GetTokenType() == ttVoid)
-		{
-			return true;
-		}
-		if (Type.IsEnumType())
-		{
-			const int32 Size = Type.GetSizeInMemoryBytes();
-			return Size == 1 || Size == 2 || Size == 4 || Size == 8;
-		}
-		if (Type.GetTypeInfo() != nullptr)
-		{
-			return false;
-		}
-		switch (Type.GetTokenType())
-		{
-		case ttBool:
-		case ttInt8:
-		case ttUInt8:
-		case ttInt16:
-		case ttUInt16:
-		case ttInt:
-		case ttUInt:
-		case ttInt64:
-		case ttUInt64:
-		case ttFloat32:
-		case ttFloat64:
-			return true;
-		default:
-			return false;
-		}
-	}
-
-	static bool IsReviewedManagedInput(const asCDataType& Type)
-	{
-		const asCTypeInfo* const TypeInfo = Type.GetTypeInfo();
-		return TypeInfo != nullptr
-			&& TypeInfo->module == nullptr
-			&& Type.IsObject()
-			&& Type.IsReference()
-			&& Type.IsReadOnly()
-			&& !Type.IsObjectHandle()
-			&& (TypeInfo->name == "FString"
-				|| TypeInfo->name == "FLinearColor");
-	}
-
-	static bool IsReviewedParameterType(const asCDataType& Type)
-	{
-		return IsByValueScalarOrEnum(Type, false)
-			|| IsReviewedManagedInput(Type);
-	}
-
-	static int32 FindParameterOrdinal(
-		const asCTypedSemanticFunction& Function,
-		const asTypedSemanticSymbolId SymbolId)
-	{
-		int32 Ordinal = 0;
-		for (asUINT SymbolIndex = 0;
-			SymbolIndex < Function.symbols.GetLength(); ++SymbolIndex)
-		{
-			const asSTypedSemanticSymbol& Symbol =
-				Function.symbols[SymbolIndex];
-			if (Symbol.kind != asETypedSemanticSymbolKind::Parameter)
-			{
-				continue;
-			}
-			if (Symbol.id == SymbolId)
-			{
-				return Ordinal;
-			}
-			++Ordinal;
-		}
-		return INDEX_NONE;
-	}
-
-	static EAngelscriptTypedASTJITFallbackReason UnsupportedKindReason(
-		const asETypedSemanticUnsupportedKind Kind,
-		const EAngelscriptTypedASTJITFallbackReason DefaultReason)
-	{
-		switch (Kind)
-		{
-		case asETypedSemanticUnsupportedKind::ConstructionOrLifetime:
-			return EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime;
-		case asETypedSemanticUnsupportedKind::ExceptionCleanup:
-			return EAngelscriptTypedASTJITFallbackReason::UnsupportedExceptionRegion;
-		case asETypedSemanticUnsupportedKind::SuspendPoint:
-			return EAngelscriptTypedASTJITFallbackReason::SuspendOrExceptionState;
-		case asETypedSemanticUnsupportedKind::CompilerSynthesizedFunction:
-			return EAngelscriptTypedASTJITFallbackReason::UnsupportedFunctionKind;
-		default:
-			return DefaultReason;
-		}
 	}
 
 	static FString UFunctionFlagDetail(
@@ -267,370 +148,7 @@ FAngelscriptTypedASTJITEligibility EvaluateAngelscriptTypedASTJITEligibility(
 		return Reject(EAngelscriptTypedASTJITFallbackReason::NotUFunctionRoot,
 			{}, TEXT("No exact resolved FunctionDesc root exists."));
 	}
-	if (Input.TypedHIR == nullptr)
-	{
-		return Reject(EAngelscriptTypedASTJITFallbackReason::MissingTypedHIR,
-			{}, TEXT("No same-compilation verified typed HIR is available."));
-	}
-
-	const asCTypedSemanticFunction& Function = *Input.TypedHIR;
-	const asSTypedSemanticVerificationResult Verification =
-		VerifyTypedSemanticFunction(Function);
-	if (!Verification.IsValid())
-	{
-		EAngelscriptTypedASTJITFallbackReason Reason =
-			EAngelscriptTypedASTJITFallbackReason::InvalidTypedHIR;
-		if (Verification.error
-			== asETypedSemanticVerificationError::InvalidEffectiveReceiver)
-		{
-			Reason = EAngelscriptTypedASTJITFallbackReason::InvalidEffectiveReceiver;
-		}
-		else if (Verification.error
-			== asETypedSemanticVerificationError::InvalidCleanupPlan)
-		{
-			Reason = EAngelscriptTypedASTJITFallbackReason::InvalidCleanupPlan;
-		}
-		else if (Verification.error
-			== asETypedSemanticVerificationError::InvalidCallEvaluationSequence)
-		{
-			Reason = EAngelscriptTypedASTJITFallbackReason::InvalidCallEvaluationSequence;
-		}
-		return Reject(Reason,
-			Verification.span.section.GetLength() != 0
-				? Verification.span : FunctionSpan(&Function),
-			UTF8_TO_TCHAR(Verification.detail.AddressOf()));
-	}
-
-	const asSTypedSemanticSourceSpan RootSpan = FunctionSpan(&Function);
-	if (Function.header.declaredTraitBits != Input.RawTraitBits)
-	{
-		return Reject(
-			EAngelscriptTypedASTJITFallbackReason::SemanticDependencyMismatch,
-			RootSpan, TEXT("Resolved trait bits disagree with captured HIR."));
-	}
-	if (Function.header.invocationKind != Input.Shape.InvocationKind)
-	{
-		return Reject(
-			EAngelscriptTypedASTJITFallbackReason::SemanticDependencyMismatch,
-			RootSpan, TEXT("Resolved invocation kind disagrees with captured HIR."));
-	}
-	if (Function.header.invocationKind
-		== asETypedSemanticInvocationKind::GlobalInitializer)
-	{
-		return Reject(
-			EAngelscriptTypedASTJITFallbackReason::
-				UnsupportedGlobalInitializer,
-			RootSpan,
-			TEXT("The initial TypedASTJIT profile does not emit global initializer bodies."));
-	}
-	const bool bGlobalInvocation = Function.header.invocationKind
-		== asETypedSemanticInvocationKind::Global;
-	const bool bFinalInstanceInvocation = Function.header.invocationKind
-		== asETypedSemanticInvocationKind::InstanceMethod;
-	if (!bGlobalInvocation && !bFinalInstanceInvocation)
-	{
-		return Reject(
-			EAngelscriptTypedASTJITFallbackReason::UnsupportedFunctionKind,
-			RootSpan,
-			TEXT("The scalar profile accepts ordinary global functions and final non-virtual instance methods only."));
-	}
-
-	constexpr asDWORD KnownTraitBits =
-		asTRAIT_CONSTRUCTOR | asTRAIT_DESTRUCTOR | asTRAIT_CONST
-		| asTRAIT_PRIVATE | asTRAIT_PROTECTED | asTRAIT_FINAL
-		| asTRAIT_OVERRIDE | asTRAIT_SHARED | asTRAIT_EXTERNAL
-		| asTRAIT_PROPERTY | asTRAIT_IMPLICITCONSTRUCTOR | asTRAIT_MIXIN
-		| asTRAIT_LOCAL | asTRAIT_NODISCARD | asTRAIT_DEPRECATED
-		| asTRAIT_GENERIC_TEMPLATE_FUNCTION | asTRAIT_USES_WORLDCONTEXT
-		| asTRAIT_ACCEPT_TEMPORARY_OBJECT | asTRAIT_GENERATED_FUNCTION
-		| asTRAIT_NOT_CALLABLE | asTRAIT_FORCE_CONST_ARGUMENT_EXPRESSIONS
-		| asTRAIT_EXTERNAL_IMPLICIT_THIS | asTRAIT_ALLOWDISCARD
-		| asTRAIT_EDITOR_ONLY | asTRAIT_EXPLICIT
-		| asTRAIT_UNSAFE_DURING_CONSTRUCTION | asTRAIT_DEFAULTS_ONLY;
-	constexpr asDWORD UnsupportedTraitBits =
-		asTRAIT_CONSTRUCTOR | asTRAIT_DESTRUCTOR | asTRAIT_OVERRIDE
-		| asTRAIT_EXTERNAL | asTRAIT_IMPLICITCONSTRUCTOR | asTRAIT_MIXIN
-		| asTRAIT_LOCAL | asTRAIT_GENERIC_TEMPLATE_FUNCTION
-		| asTRAIT_USES_WORLDCONTEXT | asTRAIT_ACCEPT_TEMPORARY_OBJECT
-		| asTRAIT_GENERATED_FUNCTION | asTRAIT_NOT_CALLABLE
-		| asTRAIT_FORCE_CONST_ARGUMENT_EXPRESSIONS
-		| asTRAIT_EXTERNAL_IMPLICIT_THIS
-		| asTRAIT_UNSAFE_DURING_CONSTRUCTION | asTRAIT_DEFAULTS_ONLY;
-	const asDWORD UnknownTraitBits = Input.RawTraitBits & ~KnownTraitBits;
-	const asDWORD RejectedTraitBits = Input.RawTraitBits & UnsupportedTraitBits;
-	if (UnknownTraitBits != 0 || RejectedTraitBits != 0
-		|| Input.bVirtualOrNonFinal)
-	{
-		return Reject(
-			EAngelscriptTypedASTJITFallbackReason::UnsupportedFunctionTrait,
-			RootSpan,
-			FString::Printf(TEXT(
-				"RawTraits=0x%08x Unknown=0x%08x Unsupported=0x%08x VirtualOrNonFinal=%s"),
-				Input.RawTraitBits, UnknownTraitBits, RejectedTraitBits,
-				Input.bVirtualOrNonFinal ? TEXT("true") : TEXT("false")));
-	}
-	if (Input.UFunctionFlags
-		!= EAngelscriptTypedASTJITUFunctionFlags::None)
-	{
-		return Reject(
-			EAngelscriptTypedASTJITFallbackReason::UnsupportedUFunctionFlags,
-			RootSpan, UFunctionFlagDetail(Input.UFunctionFlags));
-	}
-	if (Function.header.receiver.kind != Input.Shape.ReceiverKind)
-	{
-		return Reject(
-			EAngelscriptTypedASTJITFallbackReason::InvalidEffectiveReceiver,
-			RootSpan, TEXT("Resolved receiver disagrees with captured HIR."));
-	}
-	if (bGlobalInvocation
-		&& (Input.Shape.ReceiverKind
-				!= asETypedSemanticReceiverKind::None
-			|| Input.Shape.ReceiverParameterIndex != INDEX_NONE
-			|| Input.Shape.bHasNativeObjectSlot))
-	{
-		return Reject(EAngelscriptTypedASTJITFallbackReason::UnsupportedReceiver,
-			RootSpan,
-			TEXT("A global scalar root must not carry an effective receiver."));
-	}
-	if (bFinalInstanceInvocation
-		&& (Input.Shape.ReceiverKind
-				!= asETypedSemanticReceiverKind::NativeObjectThis
-			|| Input.Shape.ReceiverParameterIndex != INDEX_NONE
-			|| !Input.Shape.bHasNativeObjectSlot))
-	{
-		return Reject(EAngelscriptTypedASTJITFallbackReason::UnsupportedReceiver,
-			RootSpan,
-			TEXT("A final instance scalar root requires the exact native object-this slot."));
-	}
-	if (bFinalInstanceInvocation)
-	{
-		const asTypedSemanticSymbolId ReceiverSymbol =
-			Function.header.receiver.symbol;
-		for (asUINT ExpressionIndex = 0;
-			ExpressionIndex < Function.expressions.GetLength();
-			++ExpressionIndex)
-		{
-			const asSTypedSemanticExpression& Expression =
-				Function.expressions[ExpressionIndex];
-			if (Expression.symbol.IsValid()
-				&& Expression.symbol == ReceiverSymbol)
-			{
-				return Reject(
-					EAngelscriptTypedASTJITFallbackReason::UnsupportedReceiver,
-					Expression.span,
-					TEXT("The reviewed instance slice preserves object identity but does not read native receiver storage."));
-			}
-		}
-	}
-
-	const bool bHasReviewedManagedInput =
-		Input.Shape.ParameterTypes.ContainsByPredicate(
-			[](const asCDataType& ParameterType)
-			{
-				return IsReviewedManagedInput(ParameterType);
-			});
-	if ((EnumHasAnyFlags(Input.SignatureFlags,
-			EAngelscriptTypedASTJITSignatureFlags::Reference)
-			&& !bHasReviewedManagedInput)
-		|| EnumHasAnyFlags(Input.SignatureFlags,
-			EAngelscriptTypedASTJITSignatureFlags::OutParameter
-			| EAngelscriptTypedASTJITSignatureFlags::ReturnOnStack)
-		|| Function.header.returnsOnStack != Input.Shape.bReturnsOnStack)
-	{
-		return Reject(EAngelscriptTypedASTJITFallbackReason::UnsupportedSignature,
-			RootSpan, SignatureFlagDetail(Input.SignatureFlags));
-	}
-	if (EnumHasAnyFlags(Input.SignatureFlags,
-		EAngelscriptTypedASTJITSignatureFlags::Object
-		| EAngelscriptTypedASTJITSignatureFlags::Container
-		| EAngelscriptTypedASTJITSignatureFlags::Delegate)
-		|| (EnumHasAnyFlags(Input.SignatureFlags,
-				EAngelscriptTypedASTJITSignatureFlags::Struct)
-			&& !bHasReviewedManagedInput))
-	{
-		return Reject(EAngelscriptTypedASTJITFallbackReason::UnsupportedType,
-			RootSpan, SignatureFlagDetail(Input.SignatureFlags));
-	}
-	if (!IsByValueScalarOrEnum(Input.Shape.ReturnType, true))
-	{
-		return Reject(EAngelscriptTypedASTJITFallbackReason::UnsupportedType,
-			RootSpan, TEXT("Return type is not a by-value scalar or enum."));
-	}
-	for (const asCDataType& ParameterType : Input.Shape.ParameterTypes)
-	{
-		if (!IsReviewedParameterType(ParameterType))
-		{
-			return Reject(EAngelscriptTypedASTJITFallbackReason::UnsupportedType,
-				RootSpan, TEXT("Parameter type is neither a by-value scalar/enum nor a reviewed const FString/FLinearColor input."));
-		}
-	}
-	int32 ParameterOrdinal = 0;
-	for (asUINT SymbolIndex = 0;
-		SymbolIndex < Function.symbols.GetLength(); ++SymbolIndex)
-	{
-		const asSTypedSemanticSymbol& Symbol = Function.symbols[SymbolIndex];
-		if (Symbol.kind != asETypedSemanticSymbolKind::Parameter)
-		{
-			continue;
-		}
-		if (ParameterOrdinal >= Input.Shape.ParameterTypes.Num()
-			|| !Symbol.type.IsEqualExceptRefAndConst(
-				Input.Shape.ParameterTypes[ParameterOrdinal]))
-		{
-			return Reject(EAngelscriptTypedASTJITFallbackReason::UnsupportedSignature,
-				Symbol.span, TEXT("HIR parameter order/type disagrees with the resolved signature."));
-		}
-		++ParameterOrdinal;
-	}
-	if (ParameterOrdinal != Input.Shape.ParameterTypes.Num())
-	{
-		return Reject(EAngelscriptTypedASTJITFallbackReason::UnsupportedSignature,
-			RootSpan, TEXT("HIR parameter count disagrees with the resolved signature."));
-	}
-
-	if (Function.header.hasSuspendState)
-	{
-		return Reject(
-			EAngelscriptTypedASTJITFallbackReason::SuspendOrExceptionState,
-			RootSpan, TEXT("The function carries suspend or resumable state."));
-	}
-	switch (Function.header.cleanupPlanState)
-	{
-	case asETypedSemanticCleanupPlanState::VerifiedEmpty:
-		break;
-	case asETypedSemanticCleanupPlanState::Unverified:
-		return Reject(EAngelscriptTypedASTJITFallbackReason::InvalidCleanupPlan,
-			RootSpan, TEXT("The compiler did not verify a cleanup plan."));
-	case asETypedSemanticCleanupPlanState::NonEmpty:
-	case asETypedSemanticCleanupPlanState::PartialConstruction:
-	case asETypedSemanticCleanupPlanState::ScriptDestructor:
-		return Reject(EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
-			RootSpan, TEXT("The scalar profile requires an explicitly empty cleanup plan."));
-	case asETypedSemanticCleanupPlanState::CompilerExceptionRegion:
-		return Reject(
-			EAngelscriptTypedASTJITFallbackReason::UnsupportedExceptionRegion,
-			RootSpan, TEXT("Compiler-internal exception regions are outside the scalar profile."));
-	default:
-		return Reject(EAngelscriptTypedASTJITFallbackReason::InvalidCleanupPlan,
-			RootSpan, TEXT("Cleanup plan state is outside the supported contract."));
-	}
-
-	for (asUINT Index = 0; Index < Function.expressions.GetLength(); ++Index)
-	{
-		const asSTypedSemanticExpression& Expression = Function.expressions[Index];
-		switch (Expression.kind)
-		{
-		case asETypedSemanticExpressionKind::ResolvedCall:
-			if (Input.Purpose
-				== EAngelscriptTypedASTJITEligibilityPurpose::StandaloneRoot)
-			{
-				return Reject(
-					EAngelscriptTypedASTJITFallbackReason::UnsupportedCall,
-					Expression.span,
-					TEXT("Resolved calls require whole-root closure planning."));
-			}
-			break;
-		case asETypedSemanticExpressionKind::CallRewrite:
-			if (Expression.callRewriteKind
-					!= asETypedSemanticCompileOutKind::CompileOutEntirely
-				&& !IsByValueScalarOrEnum(Expression.type, false))
-			{
-				return Reject(
-					EAngelscriptTypedASTJITFallbackReason::UnsupportedType,
-					Expression.span,
-					TEXT("Retained call-rewrite value is outside the reviewed scalar/enum slice."));
-			}
-			break;
-		case asETypedSemanticExpressionKind::FoldedGlobalConstant:
-		{
-			FString DependencyError;
-			if (!ValidateAngelscriptTypedASTJITFoldedGlobalDependency(
-					Input.GlobalDependencies,
-					Expression.resolvedGlobalPropertyId,
-					&DependencyError))
-			{
-				return Reject(
-					EAngelscriptTypedASTJITFallbackReason::
-						SemanticDependencyMismatch,
-					Expression.span, DependencyError);
-			}
-			break;
-		}
-		case asETypedSemanticExpressionKind::GlobalStorage:
-			return Reject(
-				EAngelscriptTypedASTJITFallbackReason::
-					UnsupportedGlobalStorage,
-				Expression.span,
-				TEXT("The initial TypedASTJIT profile does not read or mutate runtime global storage."));
-		case asETypedSemanticExpressionKind::Literal:
-		case asETypedSemanticExpressionKind::Symbol:
-		case asETypedSemanticExpressionKind::Conversion:
-		case asETypedSemanticExpressionKind::Assignment:
-		case asETypedSemanticExpressionKind::Unary:
-		case asETypedSemanticExpressionKind::Binary:
-		case asETypedSemanticExpressionKind::ShortCircuit:
-			break;
-		case asETypedSemanticExpressionKind::Unsupported:
-			if (Expression.unsupportedKind
-					== asETypedSemanticUnsupportedKind::Reference
-				&& Expression.symbol.IsValid()
-				&& FindParameterOrdinal(Function, Expression.symbol)
-					!= INDEX_NONE
-				&& Expression.symbol.value < Function.symbols.GetLength()
-				&& Function.symbols[Expression.symbol.value].kind
-					== asETypedSemanticSymbolKind::Parameter
-				&& IsReviewedManagedInput(Expression.type)
-				&& IsReviewedManagedInput(
-					Function.symbols[Expression.symbol.value].type)
-				&& Expression.type.IsEqualExceptRefAndConst(
-					Function.symbols[Expression.symbol.value].type))
-			{
-				// The maintained HIR intentionally preserves a typed reference
-				// marker. This backend separately reviews exact borrowed
-				// FString/FLinearColor parameters; every other reference marker
-				// remains a deterministic fallback below.
-				break;
-			}
-			return Reject(UnsupportedKindReason(Expression.unsupportedKind,
-				EAngelscriptTypedASTJITFallbackReason::UnsupportedExpression),
-				Expression.span, TEXT("HIR contains an unsupported expression category."));
-		default:
-			return Reject(EAngelscriptTypedASTJITFallbackReason::UnsupportedExpression,
-				Expression.span, TEXT("Expression kind is outside the reviewed scalar profile."));
-		}
-	}
-	for (asUINT Index = 0; Index < Function.statements.GetLength(); ++Index)
-	{
-		const asSTypedSemanticStatement& Statement = Function.statements[Index];
-		if (Statement.kind == asETypedSemanticStatementKind::Unsupported)
-		{
-			return Reject(UnsupportedKindReason(Statement.unsupportedKind,
-				EAngelscriptTypedASTJITFallbackReason::UnsupportedStatement),
-				Statement.span, TEXT("HIR contains an unsupported statement category."));
-		}
-		if (Statement.kind != asETypedSemanticStatementKind::Block
-			&& Statement.kind != asETypedSemanticStatementKind::LocalDeclaration
-			&& Statement.kind != asETypedSemanticStatementKind::Expression
-			&& Statement.kind != asETypedSemanticStatementKind::If
-			&& Statement.kind != asETypedSemanticStatementKind::Return
-			&& Statement.kind != asETypedSemanticStatementKind::For
-			&& Statement.kind != asETypedSemanticStatementKind::While
-			&& Statement.kind != asETypedSemanticStatementKind::DoWhile
-			&& Statement.kind != asETypedSemanticStatementKind::Switch
-			&& Statement.kind != asETypedSemanticStatementKind::Case
-			&& Statement.kind != asETypedSemanticStatementKind::Break
-			&& Statement.kind != asETypedSemanticStatementKind::Continue)
-		{
-			return Reject(EAngelscriptTypedASTJITFallbackReason::UnsupportedStatement,
-				Statement.span, TEXT("Statement kind is outside the reviewed scalar profile."));
-		}
-	}
-
-	FAngelscriptTypedASTJITEligibility Result;
-	Result.bEligible = true;
-	Result.SourceSpan = RootSpan;
-	Result.Detail = TEXT("Verified scalar return and scalar/enum or reviewed const managed-input signature with an explicit empty cleanup plan.");
-	return Result;
+	return EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(Input);
 }
 
 FAngelscriptTypedASTJITEligibilityInput
@@ -641,7 +159,8 @@ BuildAngelscriptTypedASTJITEligibilityInput(
 	using namespace AngelscriptTypedASTJITEligibility_Private;
 	FAngelscriptTypedASTJITEligibilityInput Input;
 	Input.bIsUFunctionRoot = Root != nullptr;
-	Input.TypedHIR = Function.VerifiedTypedHIR;
+	Input.SealedAST = Function.SealedAST;
+	Input.CanonicalFunctionDecl = asASTDeclId(Function.CanonicalFunctionDeclValue);
 	if (Function.EngineLocalFunction == nullptr)
 	{
 		return Input;
@@ -658,14 +177,14 @@ BuildAngelscriptTypedASTJITEligibilityInput(
 	{
 		Input.Shape.ParameterTypes.Add(ScriptFunction->parameterTypes[Index]);
 	}
-	if (Input.TypedHIR != nullptr)
-	{
-		Input.Shape.InvocationKind = Input.TypedHIR->header.invocationKind;
-		Input.Shape.ReceiverKind = Input.TypedHIR->header.receiver.kind;
-		Input.Shape.ReceiverParameterIndex =
-			Input.TypedHIR->header.receiver.parameterIndex;
-	}
 	Input.Shape.bHasNativeObjectSlot = ScriptFunction->objectType != nullptr;
+	Input.Shape.InvocationKind = Input.Shape.bHasNativeObjectSlot
+		? EAngelscriptTypedASTJITInvocationKind::InstanceMethod
+		: EAngelscriptTypedASTJITInvocationKind::Global;
+	Input.Shape.ReceiverKind = Input.Shape.bHasNativeObjectSlot
+		? EAngelscriptTypedASTJITReceiverKind::NativeObjectThis
+		: EAngelscriptTypedASTJITReceiverKind::None;
+	Input.Shape.ReceiverParameterIndex = INDEX_NONE;
 	Input.bVirtualOrNonFinal =
 		ScriptFunction->funcType == asFUNC_VIRTUAL
 		|| (ScriptFunction->objectType != nullptr

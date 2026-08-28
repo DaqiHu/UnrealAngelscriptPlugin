@@ -1,0 +1,4 @@
+#include "as_expr.h"
+
+BEGIN_AS_NAMESPACE
+END_AS_NAMESPACE

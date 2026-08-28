@@ -181,6 +181,17 @@ public:
 		InnerMap.Empty();
 	}
 
+	// Module generation promotion must transfer a complete local-type index
+	// without allocating or rebuilding it after the prior generation is gone.
+	// Keep this alongside the existing SwapWith helpers on asCArray and
+	// asCSymbolMap rather than exposing TMultiMap ownership to callers.
+	inline void SwapWith(asCMapByName& Other)
+	{
+		TMultiMap<TKey, OBJ> TempMap = MoveTemp(InnerMap);
+		InnerMap = MoveTemp(Other.InnerMap);
+		Other.InnerMap = MoveTemp(TempMap);
+	}
+
 	inline void Add(OBJ value)
 	{
 		TKey Key = GetKey(value);

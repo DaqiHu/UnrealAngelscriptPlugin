@@ -1,9 +1,14 @@
 #include "../../Support/AngelscriptNativeDebugTestSupport.h"
-#include "../../Support/AngelscriptNativeDebugTestSupport.h"
+#include "../../Support/AngelscriptNativeCanonicalASTTestSupport.h"
 #include "../../Support/AngelscriptNativeLanguageCaseTestSupport.h"
 
 #include "CQTest.h"
 #include "Misc/ScopeExit.h"
+
+#include "StartAngelscriptHeaders.h"
+#include "source/as_ast_public_view.h"
+#include "source/as_bytecode_codegen.h"
+#include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS
 
@@ -153,9 +158,24 @@ public:
 		const FTCHARToUTF8 StrippedModuleNameUtf8(*StrippedModuleName);
 		const FTCHARToUTF8 ImportProviderSourceUtf8(*ImportProviderSource);
 		const FTCHARToUTF8 ImportConsumerSourceUtf8(*ImportConsumerSource);
-		asIScriptModule* Module = nullptr;
+		asIScriptModule* Module = ScriptEngine->GetModule(
+			ModuleNameUtf8.Get(), asGM_ALWAYS_CREATE);
 		ReportGeneratedModule(*TestRunner, ModuleName, Source);
-		const int BuildResult = CompileNativeModule(ScriptEngine, ModuleNameUtf8.Get(), SourceUtf8.Get(), Module);
+		ASSERT_THAT(IsNotNull(Module,
+			TEXT("Function debug metadata source should create its candidate module")));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT),
+			TEXT("Function debug metadata must retain the sealed AST used by Canonical CodeGen")));
+		const int AddSectionResult = Module->AddScriptSection(
+			ModuleNameUtf8.Get(), SourceUtf8.Get(),
+			static_cast<unsigned int>(std::strlen(SourceUtf8.Get())));
+		ASSERT_THAT(AreEqual(asSUCCESS, AddSectionResult,
+			TEXT("Function debug metadata source should add its candidate section")));
+		const int BuildResult = AddSectionResult >= 0 ? Module->Build() : AddSectionResult;
 		ASSERT_THAT(IsTrue(BuildResult >= 0, TEXT("Function debug metadata source should compile")));
 		ASSERT_THAT(IsNotNull(Module, TEXT("Function debug metadata source should publish a module")));
 		if (BuildResult < 0 || Module == nullptr)
@@ -194,6 +214,96 @@ public:
 			return;
 		}
 
+		asCModule* const ConcreteModule = static_cast<asCModule*>(Module);
+		ASSERT_THAT(AreEqual(asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			ConcreteModule->GetLastBytecodePublisher(),
+			TEXT("Function debug metadata must come from Canonical CodeGen")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ConcreteModule->GetLastLegacyCompilerInvocationCount(),
+			TEXT("Function debug metadata must not be reconstructed by the legacy compiler")));
+
+		asIASTSnapshot* const Snapshot = Module->AcquireASTSnapshot(asAST_API_VERSION_1);
+		ASSERT_THAT(IsNotNull(Snapshot,
+			TEXT("Function debug metadata must retain the exact sealed Canonical AST generation")));
+		ON_SCOPE_EXIT
+		{
+			if (Snapshot != nullptr)
+			{
+				Snapshot->Release();
+			}
+		};
+		const asCASTContext* const AST = Snapshot != nullptr
+			? static_cast<const asCASTSnapshot*>(Snapshot)->GetContext()
+			: nullptr;
+		ASSERT_THAT(IsNotNull(AST,
+			TEXT("Function debug metadata snapshot must expose its immutable AST context")));
+		const asCDecl* ASTFunction = nullptr;
+		const asCDecl* ASTParameter = nullptr;
+		const asCDecl* ASTLocal = nullptr;
+		bool bLocalDeclStmtUsesExactDecl = false;
+		if (AST != nullptr)
+		{
+			for (asUINT DeclIndex = 1; DeclIndex <= AST->GetDeclCount(); ++DeclIndex)
+			{
+				const asCDecl* const Candidate = AST->GetDecl(asASTDeclId(DeclIndex));
+				if (Candidate != nullptr
+					&& Candidate->kind == asAST_DECL_FUNCTION
+					&& Candidate->name.Equals("Inspectable"))
+				{
+					ASSERT_THAT(IsNull(ASTFunction,
+						TEXT("Function debug metadata AST must contain one exact Inspectable declaration")));
+					ASTFunction = Candidate;
+				}
+			}
+			if (ASTFunction != nullptr)
+			{
+				for (asUINT ChildIndex = 0;
+					ChildIndex < ASTFunction->children.GetLength(); ++ChildIndex)
+				{
+					const asCDecl* const Child = AST->GetDecl(ASTFunction->children[ChildIndex]);
+					if (Child != nullptr && Child->kind == asAST_DECL_PARAM
+						&& Child->name.Equals("Parameter"))
+					{
+						ASTParameter = Child;
+					}
+					else if (Child != nullptr && Child->kind == asAST_DECL_VAR
+						&& Child->name.Equals("Local"))
+					{
+						ASTLocal = Child;
+					}
+				}
+			}
+			if (ASTLocal != nullptr)
+			{
+				for (asUINT StmtIndex = 1; StmtIndex <= AST->GetStmtCount(); ++StmtIndex)
+				{
+					const asCStmt* const Statement = AST->GetStmt(asASTStmtId(StmtIndex));
+					if (Statement != nullptr && Statement->kind == asAST_STMT_DECL
+						&& Statement->decl == ASTLocal->id)
+					{
+						bLocalDeclStmtUsesExactDecl = true;
+						break;
+					}
+				}
+			}
+		}
+		ASSERT_THAT(IsNotNull(ASTFunction,
+			TEXT("Function debug metadata AST must retain Inspectable")));
+		ASSERT_THAT(IsNotNull(ASTParameter,
+			TEXT("Function debug metadata AST must retain the named parameter declaration")));
+		ASSERT_THAT(IsNotNull(ASTLocal,
+			TEXT("Function debug metadata AST must retain the named local declaration")));
+		ASSERT_THAT(IsTrue(ASTFunction != nullptr
+			&& ASTParameter != nullptr && ASTLocal != nullptr
+			&& ASTParameter->id != ASTLocal->id
+			&& ASTParameter->parent == ASTFunction->id
+			&& ASTLocal->parent == ASTFunction->id
+			&& ASTParameter->type.IsValid()
+			&& ASTParameter->type == ASTLocal->type,
+			TEXT("Function debug metadata AST must provide distinct, typed, function-owned declaration identities")));
+		ASSERT_THAT(IsTrue(bLocalDeclStmtUsesExactDecl,
+			TEXT("Function debug metadata AST DeclStmt must reference the exact Local DeclId")));
+
 		ASSERT_THAT(IsTrue(Inspectable->GetId() >= 0, TEXT("Function debug metadata should publish a stable function id")));
 		ASSERT_THAT(AreEqual(static_cast<int32>(asFUNC_SCRIPT), static_cast<int32>(Inspectable->GetFuncType()), TEXT("Function debug metadata should identify the script function kind")));
 		ASSERT_THAT(AreEqual(Module, Inspectable->GetModule(), TEXT("Function debug metadata should retain its owning module")));
@@ -204,9 +314,49 @@ public:
 		ASSERT_THAT(AreEqual(FString(TEXT("int Inspectable(const int)")), FString(UTF8_TO_TCHAR(Inspectable->GetDeclaration())), TEXT("Function debug metadata should retain its exact fork-normalized declaration")));
 		ASSERT_THAT(IsNull(Inspectable->GetObjectType(), TEXT("Global function debug metadata should have no receiver type")));
 		ASSERT_THAT(IsTrue(Inspectable->GetObjectName() == nullptr, TEXT("Global function debug metadata should have no receiver name")));
-		ASSERT_THAT(IsTrue(Inspectable->GetVarCount() >= 2, TEXT("Function debug metadata should expose parameter and local slots")));
+		ASSERT_THAT(AreEqual(2, static_cast<int32>(Inspectable->GetVarCount()),
+			TEXT("Function debug metadata should expose exactly its named parameter and local")));
 		ASSERT_THAT(IsTrue(HasNamedVariable(Inspectable, "Parameter", "const int Parameter"), TEXT("Function debug metadata should expose the fork-normalized parameter declaration")));
 		ASSERT_THAT(IsTrue(HasNamedVariable(Inspectable, "Local", "int Local"), TEXT("Function debug metadata should expose the local declaration")));
+		const asCScriptFunction* const ConcreteInspectable =
+			static_cast<const asCScriptFunction*>(Inspectable);
+		ASSERT_THAT(IsTrue(ConcreteInspectable->scriptData != nullptr
+			&& ConcreteInspectable->scriptData->variables.GetLength() == 2,
+			TEXT("Function debug metadata should publish one transactional ScriptFunctionData variable table")));
+		if (ConcreteInspectable->scriptData != nullptr
+			&& ConcreteInspectable->scriptData->variables.GetLength() == 2)
+		{
+			const asSScriptVariable* const ParameterVariable =
+				ConcreteInspectable->scriptData->variables[0];
+			const asSScriptVariable* const LocalVariable =
+				ConcreteInspectable->scriptData->variables[1];
+			ASSERT_THAT(IsTrue(ParameterVariable != nullptr && LocalVariable != nullptr,
+				TEXT("Function debug metadata should own both variable records")));
+			ASSERT_THAT(IsTrue(ParameterVariable != nullptr
+				&& ParameterVariable->name.Equals("Parameter")
+				&& ParameterVariable->stackOffset <= 0,
+				TEXT("Function debug metadata parameter record should target the Runtime argument slot")));
+			ASSERT_THAT(IsTrue(LocalVariable != nullptr
+				&& LocalVariable->name.Equals("Local")
+				&& LocalVariable->stackOffset > 0,
+				TEXT("Function debug metadata local record should target Canonical local storage")));
+			ASSERT_THAT(IsTrue(ParameterVariable != nullptr && LocalVariable != nullptr
+				&& ParameterVariable->stackOffset != LocalVariable->stackOffset
+				&& LocalVariable->declaredAtProgramPos >= ParameterVariable->declaredAtProgramPos,
+				TEXT("Function debug metadata should preserve distinct slots and nondecreasing declaration order")));
+		}
+		asCString FunctionDump;
+		asCBytecodeCodeGenDumpFunction(ConcreteInspectable, FunctionDump);
+		const FString FunctionDumpText = UTF8_TO_TCHAR(
+			FunctionDump.AddressOf() != nullptr ? FunctionDump.AddressOf() : "");
+		ASSERT_THAT(IsTrue(FunctionDumpText.Contains(TEXT("debugVariables=2"))
+			&& FunctionDumpText.Contains(TEXT("name=Parameter"))
+			&& FunctionDumpText.Contains(TEXT("type=const int"))
+			&& FunctionDumpText.Contains(TEXT("name=Local"))
+			&& FunctionDumpText.Contains(TEXT("type=int"))
+			&& FunctionDumpText.Contains(TEXT("declaredPc=")),
+			*FString::Printf(TEXT("Function debug dump should expose variable identity, type, slot and declaration PC:\n%s"),
+				*FunctionDumpText)));
 		// The SDK query is relative to the function declaration; a line before the
 		// declaration is intentionally rejected by the current fork.
 		const int FirstExecutableLine = Inspectable->FindNextLineWithCode(3);

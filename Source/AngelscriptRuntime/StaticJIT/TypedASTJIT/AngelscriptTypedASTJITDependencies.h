@@ -5,7 +5,7 @@
 
 #if AS_CAN_GENERATE_JIT
 
-/** Semantic reason one verified HIR node requires stable artifact authority. */
+/** Semantic reason one verified Canonical node requires stable artifact authority. */
 enum class EAngelscriptTypedASTJITSemanticUseKind : uint8
 {
 	Invalid = 0,
@@ -26,7 +26,7 @@ enum class EAngelscriptTypedASTJITSemanticUseKind : uint8
 ANGELSCRIPTRUNTIME_API const TCHAR* LexToString(
 	EAngelscriptTypedASTJITSemanticUseKind Kind);
 
-/** Pointer-free manifest row derived from one verified HIR semantic use. */
+/** Pointer-free manifest row derived from one verified Canonical semantic use. */
 struct FAngelscriptTypedASTJITSemanticUse
 {
 	EAngelscriptTypedASTJITSemanticUseKind Kind =
@@ -34,7 +34,7 @@ struct FAngelscriptTypedASTJITSemanticUse
 	EAngelscriptArtifactSemanticDependencyKind RequiredDependencyKind =
 		EAngelscriptArtifactSemanticDependencyKind::Invalid;
 	FAngelscriptArtifactReference Reference;
-	asSTypedSemanticSourceSpan SourceSpan;
+	asSSourceSpan SourceSpan;
 	int32 EngineLocalCoordinate = INDEX_NONE;
 	FString Target;
 };
@@ -43,7 +43,7 @@ struct FAngelscriptTypedASTJITSemanticUse
  * Complete same-compilation dependency result for one TypedASTJIT body.
  *
  * ArtifactDependencies and RequiredReferences deliberately retain compiler
- * entries which have no direct HIR node. The semantic-use rows prove coverage;
+ * entries which have no direct Canonical node. The semantic-use rows prove coverage;
  * they are not a replacement dependency source.
  */
 struct FAngelscriptTypedASTJITSemanticUseManifest
@@ -59,7 +59,7 @@ struct FAngelscriptTypedASTJITDependencyAnalysis
 	bool bValid = false;
 	EAngelscriptTypedASTJITFallbackReason FailureReason =
 		EAngelscriptTypedASTJITFallbackReason::None;
-	asSTypedSemanticSourceSpan FailureSpan;
+	asSSourceSpan FailureSpan;
 	FString FailureDetail;
 	FAngelscriptTypedASTJITSemanticUseManifest Manifest;
 };
@@ -68,17 +68,4 @@ struct FAngelscriptTypedASTJITDependencyAnalysis
  * Builds and reconciles the TypedASTJIT semantic-use manifest without reading
  * Function.Bytecode or invoking any BytecodeJIT analyzer/reference scanner.
  */
-ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJITDependencyAnalysis
-AnalyzeAngelscriptTypedASTJITDependencies(
-	const asCTypedSemanticFunction& HIR,
-	const FAngelscriptTypedASTJITFunctionShape& Shape,
-	const FAngelscriptStaticJITCompiledFunctionView& Function,
-	const FAngelscriptStaticJITCompiledSourceGraph& Graph,
-	TConstArrayView<FAngelscriptTypedASTJITNativeCallEmissionPlan>
-		NativeCalls = {},
-	TConstArrayView<FAngelscriptTypedASTJITScriptCallEmissionPlan>
-		ScriptCalls = {},
-	TConstArrayView<FAngelscriptTypedASTJITGlobalDependency>
-		GlobalDependencies = {});
-
 #endif // AS_CAN_GENERATE_JIT

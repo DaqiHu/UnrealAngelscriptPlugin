@@ -43,15 +43,17 @@ enum class EAngelscriptTypedASTJITEligibilityPurpose : uint8
 
 /**
  * Task-local normalized facts consumed synchronously by the deterministic
- * evaluator. TypedHIR is borrowed only for this call; the returned diagnostic
- * is pointer-free and may cross the backend output boundary.
+ * production evaluator. The sealed canonical AST is the only body-semantic
+ * input; the returned diagnostic is pointer-free and may cross the backend
+ * output boundary.
  */
 struct ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJITEligibilityInput
 {
 	bool bIsUFunctionRoot = false;
 	EAngelscriptTypedASTJITEligibilityPurpose Purpose =
 		EAngelscriptTypedASTJITEligibilityPurpose::StandaloneRoot;
-	const asCTypedSemanticFunction* TypedHIR = nullptr;
+	const class asCASTContext* SealedAST = nullptr;
+	asASTDeclId CanonicalFunctionDecl;
 	FAngelscriptTypedASTJITFunctionShape Shape;
 	asDWORD RawTraitBits = 0;
 	bool bVirtualOrNonFinal = false;
@@ -69,7 +71,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJITEligibility
 	bool bEligible = false;
 	EAngelscriptTypedASTJITFallbackReason Reason =
 		EAngelscriptTypedASTJITFallbackReason::None;
-	asSTypedSemanticSourceSpan SourceSpan;
+	asSSourceSpan SourceSpan;
 	FString Detail;
 
 	FString ToDiagnosticString() const;

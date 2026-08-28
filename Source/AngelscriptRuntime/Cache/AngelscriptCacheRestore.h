@@ -17,6 +17,7 @@ enum class EAngelscriptCacheRestoreError : uint8
 	VmRestoreFailed = 5,
 	ActivationFailed = 6,
 	CurrentSourceProjectionMismatch = 7,
+	CanonicalAstRestoreFailed = 8,
 };
 
 enum class EAngelscriptCacheRestoreStage : uint8
@@ -29,6 +30,7 @@ enum class EAngelscriptCacheRestoreStage : uint8
 	RestoreFunctions = 5,
 	FinalizeModule = 6,
 	ActivateModule = 7,
+	RestoreCanonicalAST = 8,
 };
 
 enum class EAngelscriptCacheRestoreFaultPoint : uint8

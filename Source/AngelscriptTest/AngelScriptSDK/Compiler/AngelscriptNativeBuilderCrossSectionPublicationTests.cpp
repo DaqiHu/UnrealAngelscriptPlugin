@@ -82,6 +82,10 @@ public:
 		{
 			return;
 		}
+		ASSERT_THAT(IsTrue(
+			static_cast<asCScriptEngine*>(ScriptEngine)->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_LEGACY),
+			TEXT("direct builder-stage ownership coverage explicitly selects LEGACY")));
 
 		{
 			const std::string ProviderSource = ASTEST_AS_ANSI(R"AS(
@@ -399,6 +403,7 @@ public:
 						RuntimeModule,
 						TEXT("Type/helper/entry runtime shape should create its module")));
 					bool bRuntimeBuilt = RuntimeModule != nullptr;
+					int RuntimeBuildResult = asERROR;
 					if (RuntimeModule != nullptr)
 					{
 						bRuntimeBuilt &=
@@ -419,8 +424,18 @@ public:
 								TypesSource.c_str(),
 								static_cast<asUINT>(TypesSource.size()))
 							>= 0;
-						bRuntimeBuilt &=
-							RuntimeModule->Build() >= 0;
+						if (bRuntimeBuilt)
+						{
+							RuntimeBuildResult = RuntimeModule->Build();
+							bRuntimeBuilt = RuntimeBuildResult >= 0;
+						}
+					}
+					if (!bRuntimeBuilt)
+					{
+						AddInfo(FString::Printf(
+							TEXT("[Builder][CrossSectionOwner.TypeHelperEntry.RuntimeBuild] result=%d"),
+							RuntimeBuildResult));
+						ReportBuilderFailureDiagnostics(Engine);
 					}
 					ASSERT_THAT(IsTrue(
 						bRuntimeBuilt,

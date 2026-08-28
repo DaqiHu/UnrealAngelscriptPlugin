@@ -7,7 +7,6 @@
 #include "StartAngelscriptHeaders.h"
 #include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
-#include "source/as_typed_semantic_ir.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS
@@ -1247,77 +1246,6 @@ private:
 		{
 			return false;
 		}
-
-		const bool bReviewedTypedMutation =
-			CategoryCase.Category == EAssignmentCategory::Local
-			&& (OperationTypeCase.Operation->Operation
-					== EAssignmentOperation::Assign
-				|| ((OperationTypeCase.Operation->Operation
-						== EAssignmentOperation::Add
-					|| OperationTypeCase.Operation->Operation
-						== EAssignmentOperation::Subtract
-					|| OperationTypeCase.Operation->Operation
-						== EAssignmentOperation::Multiply)
-					&& (OperationTypeCase.Type->Category
-							== ENativeValueCategory::SignedInteger
-						|| OperationTypeCase.Type->Category
-							== ENativeValueCategory::UnsignedInteger)));
-		if (bReviewedTypedMutation)
-		{
-			const asCScriptFunction* const InternalEntry =
-				static_cast<const asCScriptFunction*>(Entry);
-			const asCTypedSemanticFunction* const HIR =
-				InternalEntry->GetTypedSemanticFunction();
-			if (!Assert.IsNotNull(HIR,
-					*Case.Describe(TEXT(
-						"reviewed local assignment should publish typed semantic HIR"))))
-			{
-				return false;
-			}
-			const asSTypedSemanticVerificationResult Verification =
-				VerifyTypedSemanticFunction(*HIR);
-			if (!Assert.IsTrue(Verification.IsValid(),
-					*Case.Describe(*FString::Printf(TEXT(
-						"reviewed local assignment HIR should verify: %hs"),
-						Verification.detail.AddressOf()))))
-			{
-				return false;
-			}
-
-			const FTCHARToUTF8 ExpectedTokenUtf8(
-				OperationTypeCase.Operation->Token);
-			const asSTypedSemanticExpression* Mutation = nullptr;
-			for (asUINT ExpressionIndex = 0;
-				ExpressionIndex < HIR->expressions.GetLength();
-				++ExpressionIndex)
-			{
-				const asSTypedSemanticExpression& Expression =
-					HIR->expressions[ExpressionIndex];
-				if (Expression.kind
-						== asETypedSemanticExpressionKind::Assignment
-					&& Expression.operatorToken
-						== ExpectedTokenUtf8.Get())
-				{
-					Mutation = &Expression;
-					break;
-				}
-			}
-			if (!Assert.IsNotNull(Mutation,
-					*Case.Describe(TEXT(
-						"reviewed local assignment should retain its exact mutation token"))))
-			{
-				return false;
-			}
-			if (!Assert.IsTrue(
-				Mutation->mutationTarget.IsValid()
-					&& Mutation->mutationValue.IsValid()
-					&& !Mutation->mutationReturnsOldValue,
-				*Case.Describe(TEXT(
-					"assignment mutation should retain one target, one RHS, and the updated result"))))
-			{
-				return false;
-			}
-		}
 		const FNativeTypeCase& TypeCase = *OperationTypeCase.Type;
 		const uint64 Initial = InitialBits(TypeCase);
 		const uint64 Source = SourceBits(TypeCase);
@@ -1599,10 +1527,6 @@ public:
 		{
 			return;
 		}
-		asCScriptEngine* const InternalEngine =
-			static_cast<asCScriptEngine*>(Engine.Get());
-		ASSERT_THAT(IsTrue(InternalEngine->SetTypedSemanticIRCapture(true),
-			TEXT("assignment product should enable typed semantic capture before its first build")));
 		const TArray<const FNativeTypeCase*> PrimitiveTypes = CollectPrimitiveTypes();
 		ASSERT_THAT(AreEqual(11,
 			PrimitiveTypes.Num(),

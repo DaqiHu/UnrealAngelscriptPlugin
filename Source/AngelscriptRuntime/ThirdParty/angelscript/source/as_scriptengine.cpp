@@ -783,7 +783,7 @@ asCScriptEngine::asCScriptEngine()
 		ep.allowDoubleType       = false;
 		ep.warnOnFloatConstantsForDoubles       = false;
 		ep.warnIntegerDivision       = true;
-		ep.captureTypedSemanticIR        = false;
+		ep.canonicalCompilerPipeline     = false;
 		ep.maxNestedCalls                = 100;
 		ep.genericCallMode               = 1;         // 0 = old (pre 2.33.0) behavior where generic ignored auto handles, 1 = treat handles like in native call
 	}
@@ -798,7 +798,6 @@ asCScriptEngine::asCScriptEngine()
 	configFailed = false;
 	isPrepared = false;
 	isBuilding = false;
-	typedSemanticIRCaptureFrozen = false;
 	deferValidationOfTemplateTypes = false;
 
 	typeIdSeqNbr      = 0;
@@ -3325,7 +3324,6 @@ int asCScriptEngine::RequestBuild()
 		return asBUILD_IN_PROGRESS;
 	}
 
-	typedSemanticIRCaptureFrozen = true;
 	isBuilding = true;
 	return 0;
 }
@@ -6369,6 +6367,18 @@ asCObjectType *asCScriptEngine::GetListPatternType(int listPatternFuncId)
 	if( ot == 0 )
 		ot = CastToObjectType(scriptFunctions[listPatternFuncId]->returnType.GetTypeInfo());
 	asASSERT( ot );
+	return GetListPatternTypeForObjectType(ot);
+
+}
+
+// internal
+asCObjectType *asCScriptEngine::GetListPatternTypeForObjectType(
+	asCObjectType *ot, bool *outCreated)
+{
+	if( outCreated )
+		*outCreated = false;
+	if( ot == 0 )
+		return 0;
 
 	// Check if this object type already has a list pattern type
 	for( asUINT n = 0; n < listPatternTypes.GetLength(); n++ )
@@ -6382,6 +6392,8 @@ asCObjectType *asCScriptEngine::GetListPatternType(int listPatternFuncId)
 	lpt->templateSubTypes.PushLast(asCDataType::CreateType(ot, false));
 	lpt->flags = asOBJ_LIST_PATTERN;
 	listPatternTypes.PushLast(lpt);
+	if( outCreated )
+		*outCreated = true;
 
 	return lpt;
 }

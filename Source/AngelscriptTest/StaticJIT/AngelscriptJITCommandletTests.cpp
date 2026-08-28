@@ -330,9 +330,9 @@ public:
 		ASSERT_THAT(AreEqual(0,
 			GenerateObservation.RejectedTaskCount));
 		ASSERT_THAT(IsTrue(
-			GenerateObservation.LastVerifiedTypedHIRCount > 0));
+			GenerateObservation.LastVerifiedCanonicalASTCount > 0));
 		ASSERT_THAT(IsTrue(
-			GenerateObservation.bLastTaskUsedOnlySameCompilationHIR));
+			GenerateObservation.bLastTaskUsedOnlySameCompilationAST));
 		ASSERT_THAT(AreEqual(
 			GenerateObservation.LastUFunctionRootCount,
 			GenerateObservation.LastCallClosurePlanCount,
@@ -375,9 +375,10 @@ public:
 		ASSERT_THAT(AreEqual(1, VerifyObservation.DestroyedInstanceCount));
 		ASSERT_THAT(AreEqual(1, VerifyObservation.AcceptedTaskCount));
 		ASSERT_THAT(AreEqual(0, VerifyObservation.RejectedTaskCount));
-		ASSERT_THAT(IsTrue(VerifyObservation.LastVerifiedTypedHIRCount > 0));
 		ASSERT_THAT(IsTrue(
-			VerifyObservation.bLastTaskUsedOnlySameCompilationHIR));
+			VerifyObservation.LastVerifiedCanonicalASTCount > 0));
+		ASSERT_THAT(IsTrue(
+			VerifyObservation.bLastTaskUsedOnlySameCompilationAST));
 		ASSERT_THAT(AreEqual(
 			VerifyObservation.LastUFunctionRootCount,
 			VerifyObservation.LastCallClosurePlanCount));

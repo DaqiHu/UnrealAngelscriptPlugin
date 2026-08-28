@@ -1298,6 +1298,16 @@ void FStaticJITContext::GenerateNewFunction(
 	}
 
 	// Create variables for any temporary variables in the function
+	for (int i = 0, Count = ScriptFunction->scriptData->pointerVariablePos.GetLength();
+		i < Count; ++i)
+	{
+		RepresentStackVariable(
+			ScriptFunction->scriptData->pointerVariablePos[i],
+			asCDataType::CreateNullHandle(),
+			asCString());
+	}
+
+	// Create variables for scalar temporary variables in the function.
 	for (int i = 0, Count = ScriptFunction->scriptData->temporaryVariables.GetLength(); i < Count; ++i)
 	{
 		int32 Offset = ScriptFunction->scriptData->temporaryVariables[i].Offset;
@@ -2351,7 +2361,26 @@ FStaticJITContext::EVariableType FStaticJITContext::VArg_Type(int32 ArgumentInde
 		return ReturnVariableType;
 	}
 
-	check(false);
+	checkf(false,
+		TEXT("StaticJIT could not resolve VM variable type: function=%s bytecodeOffset=%d opcode=%d variableOffset=%d explicitVariables=%d objectVariables=%d temporaryVariables=%d localInventory=%d"),
+		ScriptFunction != nullptr
+			? UTF8_TO_TCHAR(ScriptFunction->GetDeclaration())
+			: TEXT("<null>"),
+		BC != nullptr && BC_FunctionStart != nullptr
+			? static_cast<int32>(BC - BC_FunctionStart)
+			: -1,
+		BC != nullptr ? static_cast<int32>(GetInstr()) : -1,
+		VariableOffset,
+		ScriptFunction != nullptr && ScriptFunction->scriptData != nullptr
+			? static_cast<int32>(ScriptFunction->scriptData->variables.GetLength())
+			: -1,
+		ScriptFunction != nullptr && ScriptFunction->scriptData != nullptr
+			? static_cast<int32>(ScriptFunction->scriptData->objVariableTypes.GetLength())
+			: -1,
+		ScriptFunction != nullptr && ScriptFunction->scriptData != nullptr
+			? static_cast<int32>(ScriptFunction->scriptData->temporaryVariables.GetLength())
+			: -1,
+		LocalVariables.Num());
 	return EVariableType::Byte;
 }
 
@@ -4885,7 +4914,9 @@ bool GenerateStaticJITProviderArtifacts(
 				Function.EntryAbiHash,
 				Function.CanonicalDeclaration,
 				Function.Bytecode,
-				Function.VerifiedTypedHIR,
+				Function.SealedAST,
+				Function.CanonicalFunctionDeclValue,
+				Function.bRequiresCanonicalAST,
 				Function.bHasVerifiedArtifactIdentity,
 				Function.bHasVerifiedArtifactReferences,
 				Function.bHasVMEntry,

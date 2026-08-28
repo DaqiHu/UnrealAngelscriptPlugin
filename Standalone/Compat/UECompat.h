@@ -782,6 +782,23 @@ struct FPlatformAtomics
 	{
 		return --std::atomic_ref<int32>(*Value);
 	}
+
+	static int32 InterlockedExchange(volatile int32* Value, const int32 Exchange)
+	{
+		return std::atomic_ref<int32>(*const_cast<int32*>(Value)).exchange(Exchange);
+	}
+
+	static int32 InterlockedCompareExchange(
+		volatile int32* Destination,
+		const int32 Exchange,
+		const int32 Comparand)
+	{
+		int32 Expected = Comparand;
+		std::atomic_ref<int32>(*const_cast<int32*>(Destination)).compare_exchange_strong(
+			Expected,
+			Exchange);
+		return Expected;
+	}
 };
 
 struct FMath

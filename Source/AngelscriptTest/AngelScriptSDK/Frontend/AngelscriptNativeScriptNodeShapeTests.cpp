@@ -123,6 +123,37 @@ public:
 		});
 	}
 
+	TEST_METHOD(LambdaExpressionRetainsNativeFunctionNodeShape)
+	{
+		AS_NATIVE_NON_PRODUCT("LegacyCompatibility",
+			"Retained lambda syntax tree protects the explicit LEGACY pipeline and syntax/recovery reference surface while CANONICAL uses typed actions.");
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT
+		{
+			Engine.Destroy();
+		};
+
+		asCScriptEngine* BareEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsNotNull(BareEngine, TEXT("Lambda script-node shape test should use the case-owned raw SDK engine")));
+		if (BareEngine == nullptr)
+		{
+			return;
+		}
+
+		ParseStatement(*TestRunner, this->Assert, BareEngine, "ScriptNodeShapeLambda",
+			"function() { return 1; };", [&](const asCScriptNode& Root)
+		{
+			ASSERT_THAT(AreEqual(1, AngelscriptNativeTestSupport::CountNodesOfType(&Root, snFunction),
+				TEXT("Lambda expression must retain one native snFunction syntax node")));
+			ASSERT_THAT(AreEqual(1, AngelscriptNativeTestSupport::CountNodesOfType(&Root, snParameterList),
+				TEXT("Lambda expression must retain its native parameter-list node")));
+			ASSERT_THAT(AreEqual(1, AngelscriptNativeTestSupport::CountNodesOfType(&Root, snStatementBlock),
+				TEXT("Lambda expression must retain its native statement-block node")));
+		});
+	}
+
 	TEST_METHOD(ParameterListNodeShape)
 	{
 		AS_NATIVE_NON_PRODUCT("LegacyCompatibility",
@@ -416,14 +447,13 @@ public:
 			return;
 		}
 
-		asCModule* Module = CreateSdkModule(BareEngine, "ScriptNodeShapeInterface");
-		asCBuilder Builder(BareEngine, Module);
-		Builder.silent = true;
-		asCScriptCode Code;
-		Code.SetCode("ScriptNodeShapeInterface", "interface IThing { void Run(); }", true);
-		AngelscriptNativeTestSupport::FParserAccessor Parser(&Builder);
-		ASSERT_THAT(IsTrue(Parser.ParseScript(&Code) < 0,
-			TEXT("Script-level interface declaration should remain rejected in this native parser mode")));
+		ParseShapeScript(*TestRunner, this->Assert, BareEngine, "ScriptNodeShapeInterface", "interface IThing { void Run(); }", [&](const asCScriptNode& Root)
+		{
+			ASSERT_THAT(AreEqual(1, AngelscriptNativeTestSupport::CountNodesOfType(&Root, snInterface),
+				TEXT("Interface declaration should produce one interface node")));
+			ASSERT_THAT(AreEqual(1, AngelscriptNativeTestSupport::CountNodesOfType(&Root, snFunction),
+				TEXT("Interface declaration should retain its method signature")));
+		});
 	}
 
 	TEST_METHOD(ScriptNodeShapeImportNodeShape)
@@ -512,14 +542,11 @@ public:
 			return;
 		}
 
-		asCModule* Module = CreateSdkModule(BareEngine, "ScriptNodeShapeTypedef");
-		asCBuilder Builder(BareEngine, Module);
-		Builder.silent = true;
-		asCScriptCode Code;
-		Code.SetCode("ScriptNodeShapeTypedef", "typedef int32 FScore;", true);
-		AngelscriptNativeTestSupport::FParserAccessor Parser(&Builder);
-		ASSERT_THAT(IsTrue(Parser.ParseScript(&Code) < 0,
-			TEXT("Script-level typedef declaration should remain rejected in this native parser mode")));
+		ParseShapeScript(*TestRunner, this->Assert, BareEngine, "ScriptNodeShapeTypedef", "typedef int32 FScore;", [&](const asCScriptNode& Root)
+		{
+			ASSERT_THAT(AreEqual(1, AngelscriptNativeTestSupport::CountNodesOfType(&Root, snTypedef),
+				TEXT("Typedef declaration should produce one typedef node")));
+		});
 	}
 
 	TEST_METHOD(VirtualPropertyNodeShape)

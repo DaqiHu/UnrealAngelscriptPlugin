@@ -204,6 +204,8 @@ int GetIncrementalAnswer()
 			return TEXT("DebugSidecar");
 		case EAngelscriptCacheRecordKind::ModuleSnapshot:
 			return TEXT("ModuleSnapshot");
+		case EAngelscriptCacheRecordKind::ASTBodySidecar:
+			return TEXT("ASTBodySidecar");
 		default:
 			return TEXT("Invalid");
 		}

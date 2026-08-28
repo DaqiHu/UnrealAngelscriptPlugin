@@ -94,6 +94,9 @@ public:
 	int  GetLastInstr();
 	int  RemoveLastInstr();
 	asDWORD GetLastInstrValueDW();
+	// Candidate-local metadata used by Canonical CodeGen to carry a stable
+	// relocation ordinal through bytecode optimization. It is never emitted.
+	void SetLastInstructionRelocationIndex(int relocationIndex);
 
 	void InsertIfNotExists(asCArray<int> &vars, int var);
 	void GetVarsUsed(asCArray<int> &vars);
@@ -198,6 +201,7 @@ public:
 	short wArg[3];
 	int size;
 	int stackInc;
+	int relocationIndex;
 
 	// Testing
 	bool marked;

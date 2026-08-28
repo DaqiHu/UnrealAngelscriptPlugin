@@ -26,6 +26,20 @@ namespace
 			std::istreambuf_iterator<char>());
 	}
 
+	std::string NormalizeLineEndings(std::string Text)
+	{
+		std::string Result;
+		Result.reserve(Text.size());
+		for (const char Character : Text)
+		{
+			if (Character != '\r')
+			{
+				Result.push_back(Character);
+			}
+		}
+		return Result;
+	}
+
 	bool HasForbiddenCoreDependency(std::string_view Text)
 	{
 		static constexpr std::string_view Patterns[] = {
@@ -199,10 +213,22 @@ int main()
 		PluginRoot / "Source/AngelscriptRuntime/Preprocessor/AngelscriptPreprocessor.cpp";
 	const fs::path ParserHeader = ForkRoot / "as_parser.h";
 	const fs::path ParserSource = ForkRoot / "as_parser.cpp";
+	const fs::path BuilderSource = ForkRoot / "as_builder.cpp";
+	const fs::path ModuleHeader = ForkRoot / "as_module.h";
+	const fs::path ModuleSource = ForkRoot / "as_module.cpp";
+	const fs::path ASTPublicViewHeader = ForkRoot / "as_ast_public_view.h";
+	const fs::path ASTPublicViewSource = ForkRoot / "as_ast_public_view.cpp";
+	const fs::path ASTDiagnosticsSource =
+		PluginRoot / "Source/AngelscriptRuntime/Dump/AngelscriptASTDiagnostics.cpp";
+	const fs::path StaticJITGenerationSnapshotHeader =
+		PluginRoot / "Source/AngelscriptRuntime/StaticJIT/AngelscriptStaticJITGenerationSnapshot.h";
+	const fs::path StaticJITGenerationSnapshotSource =
+		PluginRoot / "Source/AngelscriptRuntime/StaticJIT/AngelscriptStaticJITGenerationSnapshot.cpp";
+	const fs::path CacheCleanCaptureSource =
+		PluginRoot / "Source/AngelscriptRuntime/Cache/AngelscriptCacheCleanCapture.cpp";
 	const fs::path ScriptFunctionHeader = ForkRoot / "as_scriptfunction.h";
 	const fs::path ScriptFunctionSource = ForkRoot / "as_scriptfunction.cpp";
 	const fs::path RestoreSource = ForkRoot / "as_restore.cpp";
-	const fs::path TypedSemanticHeader = ForkRoot / "as_typed_semantic_ir.h";
 	const fs::path BindingRoot =
 		PluginRoot / "Source/AngelscriptRuntime/Binds";
 	const fs::path ClassGeneratorRoot =
@@ -210,6 +236,21 @@ int main()
 	const fs::path BuildRoot = fs::path(ANGELSCRIPT_STANDALONE_BUILD_ROOT);
 
 	bool bPassed = true;
+	const std::string PublicHeaderText = ReadText(PublicHeader);
+	bPassed &= Require(
+		fs::exists(ASTDiagnosticsSource),
+		"canonical AST diagnostics source is missing");
+	for (const fs::path& RetiredHIRDumpSurface : {
+		PluginRoot / "Source/AngelscriptEditor/StaticJIT/AngelscriptHIRDumpCommand.cpp",
+		PluginRoot / "Source/AngelscriptEditor/StaticJIT/AngelscriptHIRDumpCommand.h",
+		PluginRoot / "Source/AngelscriptEditor/StaticJIT/AngelscriptHIRDumpCommandlet.cpp",
+		PluginRoot / "Source/AngelscriptEditor/StaticJIT/AngelscriptHIRDumpCommandlet.h",
+		PluginRoot / "Source/AngelscriptTest/StaticJIT/AngelscriptHIRDumpCommandletTests.cpp"})
+	{
+		bPassed &= Require(
+			!fs::exists(RetiredHIRDumpSurface),
+			"retired HIR dump surface remains: " + RetiredHIRDumpSurface.string());
+	}
 
 	// Detector self-tests are deliberately bad fixtures. UE spellings remain
 	// forbidden in the private frontend and ordinary standalone host code, but are
@@ -236,6 +277,23 @@ int main()
 		"as_bytecode.cpp",
 		"as_callfunc.cpp",
 		"as_compiler.cpp",
+		"as_source_manager.cpp",
+		"as_ast_type.cpp",
+		"as_decl.cpp",
+		"as_stmt.cpp",
+		"as_expr.cpp",
+		"as_ast_context.cpp",
+		"as_ast_verifier.cpp",
+		"as_ast_dump.cpp",
+		"as_ast_sidecar.cpp",
+		"as_ast_public_view.cpp",
+		"as_runtime_type_bridge.cpp",
+		"as_bytecode_codegen.cpp",
+		"as_sema.cpp",
+		"as_sema_decl.cpp",
+		"as_sema_expr.cpp",
+		"as_sema_stmt.cpp",
+		"as_sema_lifetime.cpp",
 		"as_configgroup.cpp",
 		"as_context.cpp",
 		"as_datatype.cpp",
@@ -251,8 +309,6 @@ int main()
 		"as_scriptcode.cpp",
 		"as_scriptengine.cpp",
 		"as_scriptfunction.cpp",
-		"as_typed_semantic_ir.cpp",
-		"as_typed_semantic_ir.h",
 		"as_scriptnode.cpp",
 		"as_scriptobject.cpp",
 		"as_string.cpp",
@@ -265,19 +321,128 @@ int main()
 
 	bPassed &= Require(fs::exists(PublicHeader), "maintained public header is missing");
 	bPassed &= Require(
-		!HasForkPortabilityContamination(RemoveCommentOnlyLines(ReadText(PublicHeader))),
+		!HasForkPortabilityContamination(RemoveCommentOnlyLines(PublicHeaderText)),
 		"maintained public header contains standalone portability contamination");
 	bPassed &= Require(
-		ReadText(PublicHeader).find("#include \"CoreMinimal.h\"") != std::string::npos,
+		PublicHeaderText.find("#include \"CoreMinimal.h\"") != std::string::npos,
 		"maintained public header no longer preserves its UE Core include");
 	bPassed &= Require(
-		ReadText(PublicHeader).find("#include \"FunctionCallers.h\"") != std::string::npos,
+		PublicHeaderText.find("#include \"FunctionCallers.h\"") != std::string::npos,
 		"maintained public header no longer preserves FunctionCallers inclusion");
 	bPassed &= Require(
-		ReadText(PublicHeader).find("TypedSemantic") == std::string::npos
-			&& ReadText(PublicHeader).find("typedSemantic") == std::string::npos,
+		PublicHeaderText.find("TypedSemantic") == std::string::npos
+			&& PublicHeaderText.find("typedSemantic") == std::string::npos,
 		"fork-private typed semantic HIR leaked into the public angelscript.h ABI");
-
+	const std::size_t ModuleForwardDecl = PublicHeaderText.find("class asIScriptModule");
+	const std::size_t ModuleBegin = PublicHeaderText.find("class asIScriptModule", ModuleForwardDecl + 1);
+	const std::size_t ModuleEnd = PublicHeaderText.find("class asIScriptContext", ModuleBegin);
+	const std::size_t CompileFunction = PublicHeaderText.find("virtual int         CompileFunction", ModuleBegin);
+	const std::size_t SetAccessMask = PublicHeaderText.find("virtual asDWORD     SetAccessMask", ModuleBegin);
+	const std::size_t ClearImports = PublicHeaderText.find("virtual void ClearImports()", ModuleBegin);
+	const std::size_t SetASTRetentionPolicy = PublicHeaderText.find("virtual int         SetASTRetentionPolicy", ModuleBegin);
+	const std::size_t GetASTRetentionPolicy = PublicHeaderText.find("virtual asEASTRetentionPolicy GetASTRetentionPolicy", ModuleBegin);
+	const std::size_t AcquireASTSnapshot = PublicHeaderText.find("virtual asIASTSnapshot* AcquireASTSnapshot", ModuleBegin);
+	bPassed &= Require(
+		ModuleBegin != std::string::npos
+			&& ModuleEnd != std::string::npos
+			&& CompileFunction != std::string::npos
+			&& SetAccessMask != std::string::npos
+			&& ClearImports != std::string::npos
+			&& SetASTRetentionPolicy != std::string::npos
+			&& GetASTRetentionPolicy != std::string::npos
+			&& AcquireASTSnapshot != std::string::npos,
+		"asIScriptModule AST ABI layout markers are missing from the maintained public header");
+	bPassed &= Require(
+		CompileFunction < SetAccessMask
+			&& SetAccessMask < ClearImports
+			&& ClearImports < SetASTRetentionPolicy
+			&& SetASTRetentionPolicy < GetASTRetentionPolicy
+			&& GetASTRetentionPolicy < AcquireASTSnapshot
+			&& AcquireASTSnapshot < ModuleEnd,
+		"asIScriptModule AST methods must be trailing append-only slots after ClearImports");
+	const std::string ModuleHeaderText = ReadText(ModuleHeader);
+	const std::string ModuleSourceText = ReadText(ModuleSource);
+	const std::string ASTPublicViewHeaderText = ReadText(ASTPublicViewHeader);
+	const std::string ASTPublicViewSourceText = ReadText(ASTPublicViewSource);
+	const std::string StaticJITGenerationSnapshotHeaderText =
+		ReadText(StaticJITGenerationSnapshotHeader);
+	const std::string StaticJITGenerationSnapshotSourceText =
+		NormalizeLineEndings(ReadText(StaticJITGenerationSnapshotSource));
+	const std::string CacheCleanCaptureSourceText =
+		NormalizeLineEndings(ReadText(CacheCleanCaptureSource));
+	auto FunctionUsesSnapshotGate = [&ModuleSourceText](const std::string_view Signature)
+	{
+		const std::size_t Start = ModuleSourceText.find(Signature);
+		const std::size_t End = Start == std::string::npos
+			? std::string::npos
+			: ModuleSourceText.find("\n}\n", Start);
+		return Start != std::string::npos
+			&& End != std::string::npos
+			&& ModuleSourceText.substr(Start, End - Start).find("FScopeLock SnapshotLock(&astSnapshotLock)")
+				!= std::string::npos;
+	};
+	bPassed &= Require(
+		ModuleHeaderText.find("mutable FCriticalSection astSnapshotLock;") != std::string::npos
+			&& FunctionUsesSnapshotGate("asIASTSnapshot* asCModule::AcquireASTSnapshot")
+			&& FunctionUsesSnapshotGate("void asCModule::ReleaseCanonicalASTSnapshot")
+			&& FunctionUsesSnapshotGate("void asCModule::PublishCanonicalASTSnapshot"),
+		"public AST snapshot acquire, retirement, and publication must share one module lifetime gate");
+	bPassed &= Require(
+		ASTPublicViewHeaderText.find("mutable volatile int32 currentGeneration;") != std::string::npos
+			&& ASTPublicViewHeaderText.find("bool currentGeneration;") == std::string::npos
+			&& ASTPublicViewSourceText.find("FPlatformAtomics::InterlockedCompareExchange") != std::string::npos
+			&& ASTPublicViewSourceText.find("FPlatformAtomics::InterlockedExchange") != std::string::npos,
+		"public AST snapshot generation state must use atomic reads and writes");
+	const std::size_t GenerationSnapshotBuilderStart =
+		StaticJITGenerationSnapshotSourceText.find(
+			"bool BuildAngelscriptStaticJITGenerationSnapshot(");
+	const std::size_t GenerationSnapshotBuilderEnd =
+		GenerationSnapshotBuilderStart == std::string::npos
+		? std::string::npos
+		: StaticJITGenerationSnapshotSourceText.find(
+			"\n}\n", GenerationSnapshotBuilderStart);
+	const std::string_view GenerationSnapshotBuilderBody =
+		GenerationSnapshotBuilderStart == std::string::npos
+		|| GenerationSnapshotBuilderEnd == std::string::npos
+		? std::string_view()
+		: std::string_view(StaticJITGenerationSnapshotSourceText).substr(
+			GenerationSnapshotBuilderStart,
+			GenerationSnapshotBuilderEnd - GenerationSnapshotBuilderStart);
+	bPassed &= Require(
+		!GenerationSnapshotBuilderBody.empty()
+			&& StaticJITGenerationSnapshotHeaderText.find("CanonicalASTLeases")
+				!= std::string::npos
+			&& GenerationSnapshotBuilderBody.find("GetCanonicalASTContext")
+				== std::string::npos
+			&& GenerationSnapshotBuilderBody.find(
+				"AcquireASTSnapshot(asAST_API_VERSION_1)") != std::string::npos
+			&& GenerationSnapshotBuilderBody.find(
+				"FAngelscriptStaticJITGenerationASTLease") != std::string::npos
+			&& StaticJITGenerationSnapshotSourceText.find("asCASTSnapshot")
+				!= std::string::npos
+			&& GenerationSnapshotBuilderBody.find("GetContext()")
+				!= std::string::npos,
+		"typed StaticJIT generation must own V1 AST leases instead of borrowing a raw module context");
+	const std::size_t CacheSidecarCaptureStart = CacheCleanCaptureSourceText.find(
+		"static bool TryCaptureCanonicalASTBodySidecar(");
+	const std::size_t CacheSidecarCaptureEnd = CacheSidecarCaptureStart == std::string::npos
+		? std::string::npos
+		: CacheCleanCaptureSourceText.find("\n\ttemplate <", CacheSidecarCaptureStart);
+	const std::string_view CacheSidecarCaptureBody = CacheSidecarCaptureStart == std::string::npos
+		|| CacheSidecarCaptureEnd == std::string::npos
+		? std::string_view()
+		: std::string_view(CacheCleanCaptureSourceText).substr(
+			CacheSidecarCaptureStart,
+			CacheSidecarCaptureEnd - CacheSidecarCaptureStart);
+	bPassed &= Require(
+		!CacheSidecarCaptureBody.empty()
+			&& CacheSidecarCaptureBody.find("GetCanonicalASTContext")
+				== std::string::npos
+			&& CacheSidecarCaptureBody.find(
+				"AcquireASTSnapshot(asAST_API_VERSION_1)") != std::string::npos
+			&& CacheSidecarCaptureBody.find("asCASTSnapshot") != std::string::npos
+			&& CacheSidecarCaptureBody.find("GetContext()") != std::string::npos,
+		"Cache V2 AST sidecar capture must encode through a held V1 AST snapshot lease");
 	const std::string ParserHeaderText =
 		RemoveCommentOnlyLines(ReadText(ParserHeader));
 	const std::string ParserSourceText =
@@ -288,6 +453,75 @@ int main()
 				"MemStack.Alloc(sizeof(asCScriptNode), alignof(asCScriptNode))")
 				!= std::string::npos,
 		"asCParser no longer owns raw syntax nodes through its local FMemStackBase");
+
+	const std::string BuilderSourceText =
+		RemoveCommentOnlyLines(ReadText(BuilderSource));
+	const std::size_t ReleaseParsersBegin = BuilderSourceText.find(
+		"void asCBuilder::ReleaseParsers()");
+	const std::size_t ReleaseParsersEnd = ReleaseParsersBegin
+		== std::string::npos
+		? std::string::npos
+		: BuilderSourceText.find("asCBuilder::~asCBuilder()", ReleaseParsersBegin);
+	const std::size_t BuilderDestructorBegin = BuilderSourceText.find(
+		"asCBuilder::~asCBuilder()");
+	const std::size_t BuilderDestructorEnd = BuilderDestructorBegin
+		== std::string::npos
+		? std::string::npos
+		: BuilderSourceText.find("void asCBuilder::Reset()", BuilderDestructorBegin);
+	const std::size_t BuildCompileCodeBegin = BuilderSourceText.find(
+		"int asCBuilder::BuildCompileCode()");
+	const std::size_t BuildCompileCodeEnd = BuildCompileCodeBegin
+		== std::string::npos
+		? std::string::npos
+		: BuilderSourceText.find(
+			"int asCBuilder::ValidateDefaultArgs", BuildCompileCodeBegin);
+	bPassed &= Require(
+		ReleaseParsersBegin != std::string::npos
+			&& ReleaseParsersEnd != std::string::npos,
+		"Builder is missing its shared Parser/FMemStack release routine");
+	bPassed &= Require(
+		BuilderDestructorBegin != std::string::npos
+			&& BuilderDestructorEnd != std::string::npos,
+		"Builder destructor source boundary is missing");
+	bPassed &= Require(
+		BuildCompileCodeBegin != std::string::npos
+			&& BuildCompileCodeEnd != std::string::npos,
+		"Builder legacy compile source boundary is missing");
+	if (ReleaseParsersBegin != std::string::npos
+		&& ReleaseParsersEnd != std::string::npos)
+	{
+		const std::string_view ReleaseParsers(
+			BuilderSourceText.data() + ReleaseParsersBegin,
+			ReleaseParsersEnd - ReleaseParsersBegin);
+		bPassed &= Require(
+			ReleaseParsers.find("asDELETE(parsers[n],asCParser)")
+				!= std::string_view::npos
+				&& ReleaseParsers.find("parsers.SetLength(0)")
+					!= std::string_view::npos,
+			"Builder shared Parser release must destroy every Parser and clear the owner array");
+	}
+	if (BuilderDestructorBegin != std::string::npos
+		&& BuilderDestructorEnd != std::string::npos)
+	{
+		const std::string_view BuilderDestructor(
+			BuilderSourceText.data() + BuilderDestructorBegin,
+			BuilderDestructorEnd - BuilderDestructorBegin);
+		bPassed &= Require(
+			BuilderDestructor.find("ReleaseParsers();")
+				!= std::string_view::npos,
+			"CANONICAL Builder destruction must release Parser-owned syntax trees");
+	}
+	if (BuildCompileCodeBegin != std::string::npos
+		&& BuildCompileCodeEnd != std::string::npos)
+	{
+		const std::string_view BuildCompileCode(
+			BuilderSourceText.data() + BuildCompileCodeBegin,
+			BuildCompileCodeEnd - BuildCompileCodeBegin);
+		bPassed &= Require(
+			BuildCompileCode.find("ReleaseParsers();")
+				!= std::string_view::npos,
+			"LEGACY compile must use the same idempotent Parser release routine");
+	}
 
 	const std::string ScriptFunctionHeaderText =
 		RemoveCommentOnlyLines(ReadText(ScriptFunctionHeader));
@@ -312,11 +546,6 @@ int main()
 			ScriptDataView.find("asCScriptNode") == std::string_view::npos,
 			"ScriptFunctionData retained a raw parser syntax node pointer");
 	}
-	bPassed &= Require(
-		RemoveCommentOnlyLines(ReadText(TypedSemanticHeader)).find("asCScriptNode")
-			== std::string::npos,
-		"function-owned typed HIR retained a raw parser syntax node pointer");
-
 	const std::string ScriptFunctionSourceText =
 		RemoveCommentOnlyLines(ReadText(ScriptFunctionSource));
 	const std::size_t DestroyInternalBegin = ScriptFunctionSourceText.find(
@@ -336,19 +565,15 @@ int main()
 		const std::string_view DestroyInternal(
 			ScriptFunctionSourceText.data() + DestroyInternalBegin,
 			DestroyInternalEnd - DestroyInternalBegin);
-		const std::size_t DiscardHIR = DestroyInternal.find(
-			"DiscardTypedSemanticFunction();");
 		const std::size_t ReleaseReferences = DestroyInternal.find(
 			"ReleaseReferences();");
 		const std::size_t ReleaseObjectType = DestroyInternal.find(
 			"objectType->ReleaseInternal();");
 		bPassed &= Require(
-			DiscardHIR != std::string_view::npos
-				&& ReleaseReferences != std::string_view::npos
+			ReleaseReferences != std::string_view::npos
 				&& ReleaseObjectType != std::string_view::npos
-				&& DiscardHIR < ReleaseReferences
-				&& DiscardHIR < ReleaseObjectType,
-			"function-owned typed HIR must be destroyed before function/type references are released");
+				&& DestroyInternal.find("TypedSemantic") == std::string_view::npos,
+			"script-function destruction must not retain TypedSemantic HIR ownership");
 	}
 
 	const std::string RestoreSourceText =
@@ -366,23 +591,16 @@ int main()
 		const std::string_view Commit(
 			RestoreSourceText.data() + CommitBegin,
 			CommitEnd - CommitBegin);
-		const std::size_t DiscardDonorHIR = Commit.find(
-			"artifact->DiscardTypedSemanticFunction();");
-		const std::size_t DiscardTargetHIR = Commit.find(
-			"target->DiscardTypedSemanticFunction();");
 		const std::size_t SwapScriptData = Commit.find(
 			"target->scriptData = artifact->scriptData;");
 		const std::size_t DestroyDonor = Commit.find(
 			"artifact->DestroyHalfCreated();");
 		bPassed &= Require(
-			DiscardDonorHIR != std::string_view::npos
-				&& DiscardTargetHIR != std::string_view::npos
-				&& SwapScriptData != std::string_view::npos
+			SwapScriptData != std::string_view::npos
 				&& DestroyDonor != std::string_view::npos
-				&& DiscardDonorHIR < SwapScriptData
-				&& DiscardTargetHIR < SwapScriptData
-				&& SwapScriptData < DestroyDonor,
-			"Cache donor commit must explicitly discard both HIR owners before swapping private script data");
+				&& SwapScriptData < DestroyDonor
+				&& Commit.find("TypedSemantic") == std::string_view::npos,
+			"Cache donor commit must swap private script data without TypedSemantic HIR ownership");
 	}
 
 	for (const std::string& SourceName : MaintainedSources)
@@ -391,22 +609,26 @@ int main()
 		bPassed &= Require(fs::exists(SourcePath), "maintained source is missing: " + SourcePath.string());
 		if (fs::exists(SourcePath))
 		{
+			const std::string SourceText = RemoveCommentOnlyLines(ReadText(SourcePath));
 			bPassed &= Require(
-				!HasForkPortabilityContamination(RemoveCommentOnlyLines(ReadText(SourcePath))),
+				!HasForkPortabilityContamination(SourceText),
 				"maintained source contains standalone portability contamination: " + SourcePath.string());
+			bPassed &= Require(
+				SourceText.find("llvm::") == std::string::npos
+					&& SourceText.find("clangAST") == std::string::npos,
+				"maintained source must not include LLVM or Clang AST types: " + SourcePath.string());
 		}
 	}
 
-	for (const fs::path& SnapshotSource : {
+	for (const fs::path& RetiredHIRFile : {
 		ForkRoot / "as_typed_semantic_ir.h",
 		ForkRoot / "as_typed_semantic_ir.cpp",
 	})
 	{
 		bPassed &= Require(
-			!HasTypedSnapshotBackendContamination(
-				RemoveCommentOnlyLines(ReadText(SnapshotSource))),
-			"fork-private HIR snapshot helper gained backend, UE, file, or runtime execution behavior: "
-				+ SnapshotSource.string());
+			!fs::exists(RetiredHIRFile),
+			"retired TypedSemantic HIR file remains in the maintained fork: "
+				+ RetiredHIRFile.string());
 	}
 
 	for (const fs::path& ObsoleteForkFile : {
@@ -466,6 +688,18 @@ int main()
 			&& CMakeText.find("${ANGELSCRIPT_STANDALONE_COMPAT}")
 				!= std::string::npos,
 		"maintained-fork CMake target does not select Standalone/Compat");
+	bPassed &= Require(
+		CMakeText.find("llvm-project") == std::string::npos
+			&& CMakeText.find("find_package(LLVM") == std::string::npos
+			&& CMakeText.find("find_package(Clang") == std::string::npos
+			&& CMakeText.find("clangAST") == std::string::npos
+			&& CMakeText.find("LLVM::") == std::string::npos,
+		"standalone CMake must not link LLVM or Clang AST");
+	bPassed &= Require(
+		CMakeText.find("as_bytecode_codegen.cpp") != std::string::npos
+			&& CMakeText.find("as_sema.cpp") != std::string::npos
+			&& CMakeText.find("AngelscriptStandaloneCanonicalASTTests") != std::string::npos,
+		"standalone CMake must compile canonical Parser/Sema/AST/Bytecode and its CTest");
 	static constexpr std::string_view ForbiddenCMakePatterns[] = {
 		"as_callfunc_x86.cpp",
 		"as_callfunc_x64_",

@@ -21,7 +21,7 @@ struct FAngelscriptStaticJITCompiledSourceGraphSummary
 	int32 DependencyCount = 0;
 	int32 ExternalNativeCallCount = 0;
 	int32 EmitModuleCount = 0;
-	bool bHasVerifiedTypedHIR = false;
+	bool bHasVerifiedCanonicalAST = false;
 };
 
 struct FAngelscriptStaticJITGeneratorDiagnostics
@@ -90,14 +90,9 @@ public:
 		GraphSummary.ExternalNativeCallCount =
 			Request.CompiledSourceGraph.ExternalNativeCalls.Num();
 		GraphSummary.EmitModuleCount = Request.EmitModuleSet.Num();
-		GraphSummary.bHasVerifiedTypedHIR =
+		GraphSummary.bHasVerifiedCanonicalAST =
 			Request.CompiledSourceGraph.CaptureProfile
-				== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR
-			&& Request.CompiledSourceGraph.Functions.ContainsByPredicate(
-				[](const FAngelscriptStaticJITCompiledFunctionView& Function)
-				{
-					return Function.VerifiedTypedHIR != nullptr;
-				});
+				== EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
 		OutOutput.Diagnostics.FallbackChain.Add(Request.RequestedBackendId);
 		if (Request.RequestedBackendId
 			== FAngelscriptStaticJITBackendId::TypedAST())
@@ -128,13 +123,13 @@ public:
 			!= RequiredProfile.CaptureProfile)
 		{
 			const TCHAR* const RequiredCaptureProfile =
-				RequiredProfile.RequiresTypedSemanticIRCapture()
-					? TEXT("verified-typed-hir")
+				RequiredProfile.RequiresCanonicalASTSnapshot()
+					? TEXT("verified-canonical-ast")
 					: TEXT("bytecode");
 			const TCHAR* const ActualCaptureProfile =
 				Request.CompiledSourceGraph.CaptureProfile
-					== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR
-					? TEXT("verified-typed-hir")
+					== EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST
+					? TEXT("verified-canonical-ast")
 					: TEXT("bytecode");
 			return Fail(FString::Printf(TEXT(
 				"StaticJIT generation failed: CaptureProfileMismatch; backend '%s' requires '%s' but the compiled graph uses '%s'."),
@@ -520,7 +515,7 @@ GetAngelscriptStaticJITBackendRegistry();
 ANGELSCRIPTRUNTIME_API bool RegisterAngelscriptBytecodeJITBackend(
 	FString* OutError = nullptr);
 
-/** Idempotently register the task-local typed semantic fallback backend. */
+/** Idempotently register the task-local Canonical TypedAST backend. */
 ANGELSCRIPTRUNTIME_API bool RegisterAngelscriptTypedASTJITBackend(
 	FString* OutError = nullptr);
 

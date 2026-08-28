@@ -8,6 +8,16 @@ The UE plugin keeps its original `FAngelscriptPreprocessor` and descriptor
 graph. The two hosts share the maintained fork and the complete offline JSON
 bundle, not an in-memory frontend or public Language layer.
 
+The maintained fork compiled here is the same Parser / Sema / sealed AST
+scaffold used by the UE plugin. New standalone engines default to
+`asCOMPILER_PIPELINE_LEGACY`. `asCOMPILER_PIPELINE_CANONICAL` is a selectable
+capture/shadow attach; `IsCanonicalBytecodeCodeGenReady()` stays false until
+`Build()` publishes from `asCBytecodeCodeGen::Generate()`. Production Bytecode
+is still `asCCompiler`. CMake must not find_package LLVM or Clang AST; LLVM is
+a non-goal. The `AngelscriptStandalone.CanonicalAST` CTest covers
+discard/retain policy, public AST V1 traversal, deterministic dump, and
+default execution.
+
 It exposes two deliberately different profiles:
 
 - `compile --dialect native` compiles portable AngelScript and may emit

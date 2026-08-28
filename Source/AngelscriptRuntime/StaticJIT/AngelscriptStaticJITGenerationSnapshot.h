@@ -15,8 +15,9 @@
 
 class asIScriptFunction;
 class asIScriptModule;
+class asIASTSnapshot;
 class asITypeInfo;
-class asCTypedSemanticFunction;
+class asCASTContext;
 struct FAngelscriptCacheCleanModuleArtifacts;
 struct FAngelscriptEngine;
 struct FAngelscriptModuleDesc;
@@ -40,6 +41,33 @@ struct FAngelscriptStaticJITGenerationModule
 	FString VirtualSourcePath;
 };
 
+/**
+ * Owns one public V1 AST lease captured for an immutable StaticJIT generation
+ * snapshot. The caller transfers the single reference returned by
+ * AcquireASTSnapshot(); this holder releases it when the final snapshot owner
+ * goes away. Function rows borrow only GetContext() from this owner.
+ */
+class ANGELSCRIPTRUNTIME_API FAngelscriptStaticJITGenerationASTLease final
+{
+public:
+	explicit FAngelscriptStaticJITGenerationASTLease(asIASTSnapshot* InSnapshot);
+	~FAngelscriptStaticJITGenerationASTLease();
+
+	FAngelscriptStaticJITGenerationASTLease(
+		const FAngelscriptStaticJITGenerationASTLease&) = delete;
+	FAngelscriptStaticJITGenerationASTLease& operator=(
+		const FAngelscriptStaticJITGenerationASTLease&) = delete;
+
+	const asCASTContext* GetContext() const
+	{
+		return SealedContext;
+	}
+
+private:
+	asIASTSnapshot* Snapshot = nullptr;
+	const asCASTContext* SealedContext = nullptr;
+};
+
 struct FAngelscriptStaticJITGenerationFunction
 {
 	asIScriptFunction* EngineLocalFunction = nullptr;
@@ -50,7 +78,10 @@ struct FAngelscriptStaticJITGenerationFunction
 	FAngelscriptHash256 EntryAbiHash;
 	FString CanonicalDeclaration;
 	TArray<uint8> Bytecode;
-	const asCTypedSemanticFunction* VerifiedTypedHIR = nullptr;
+	const class asCASTContext* SealedAST = nullptr;
+	asUINT CanonicalFunctionDeclValue = 0;
+	/** This source function was mapped to an exact canonical body at freeze time. */
+	bool bRequiresCanonicalAST = false;
 	TArray<FAngelscriptArtifactReference> RequiredReferences;
 	bool bHasVerifiedArtifactIdentity = false;
 	bool bHasVerifiedArtifactReferences = false;
@@ -228,11 +259,17 @@ ValidateAngelscriptStaticJITInstalledNativeCallDispatch(
 /**
  * Engine-local, immutable Static generation result. Raw AngelScript and
  * descriptor pointers are valid only while the owning generation Engine lives.
+ * CanonicalASTLeases additionally own any retained public AST V1 snapshots,
+ * so SealedAST function borrows remain valid while this result lives. Typed
+ * capture requires every compiled module to have such a lease; Bytecode
+ * capture may also retain one for AST identity metadata.
  */
 struct FAngelscriptStaticJITGenerationSnapshot
 {
 	FAngelscriptArtifactProfileKey ArtifactProfile;
 	TArray<FAngelscriptStaticJITGenerationModule> Modules;
+	TArray<TSharedPtr<FAngelscriptStaticJITGenerationASTLease,
+		ESPMode::ThreadSafe>> CanonicalASTLeases;
 	TArray<FAngelscriptStaticJITGenerationFunction> Functions;
 	TArray<FAngelscriptStaticJITGenerationType> Types;
 	TArray<FAngelscriptStaticJITGenerationGlobal> Globals;
@@ -252,7 +289,7 @@ struct FAngelscriptStaticJITGenerationSnapshot
 	bool bDescriptorAnalysisComplete = false;
 	EAngelscriptStaticJITCaptureProfile CaptureProfile =
 		EAngelscriptStaticJITCaptureProfile::Bytecode;
-	bool bHasVerifiedTypedHIR = false;
+	bool bHasVerifiedCanonicalAST = false;
 
 	bool IsComplete() const
 	{
@@ -337,6 +374,22 @@ struct FAngelscriptStaticJITGenerationSnapshot
 						|| Entry.ProviderSourceFile.IsEmpty()
 						|| Entry.ProviderSourceLine <= 0;
 				}) == false;
+		const bool bCanonicalASTLeasesComplete =
+			CaptureProfile != EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST
+			|| (CanonicalASTLeases.Num() == Modules.Num()
+				&& CanonicalASTLeases.ContainsByPredicate(
+					[](const TSharedPtr<FAngelscriptStaticJITGenerationASTLease,
+						ESPMode::ThreadSafe>& Lease)
+					{
+						return !Lease.IsValid() || Lease->GetContext() == nullptr;
+					}) == false);
+		const bool bTypedFunctionContextsComplete =
+			CaptureProfile != EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST
+			|| Functions.ContainsByPredicate(
+				[](const FAngelscriptStaticJITGenerationFunction& Function)
+				{
+					return Function.SealedAST == nullptr;
+				}) == false;
 		return bDescriptorAnalysisComplete
 			&& SourceCompilePassCount == 1
 			&& !ArtifactProfile.Hash.IsZero()
@@ -346,7 +399,9 @@ struct FAngelscriptStaticJITGenerationSnapshot
 			&& bFunctionsComplete
 			&& bDescriptorsComplete
 			&& bNativeCallTargetsComplete
-			&& bNativeCallInventoryComplete;
+			&& bNativeCallInventoryComplete
+			&& bCanonicalASTLeasesComplete
+			&& bTypedFunctionContextsComplete;
 	}
 };
 

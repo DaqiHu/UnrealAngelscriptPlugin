@@ -53,11 +53,11 @@ BEGIN_AS_NAMESPACE
 
 class asCScriptEngine;
 class asCModule;
+class asCRuntimeTypeGeneration;
 class asCConfigGroup;
 class asCGlobalProperty;
 class asCScriptNode;
 class asCFuncdefType;
-class asCTypedSemanticFunction;
 struct asSNameSpace;
 
 struct asSScriptVariable
@@ -268,6 +268,12 @@ public:
 	// application or script objects and references coming from the script code
 	int AddRefInternal();
 	int ReleaseInternal();
+	// Canonical functions borrow their owning generation while module-owned.
+	// A 0->1 external reference transition acquires a generation execution
+	// lease; the matching 1->0 transition releases it. This keeps the complete
+	// retired type/global/TypeId environment alive for prepared contexts without
+	// creating a function-generation ownership cycle.
+	void SetRuntimeTypeGeneration(asCRuntimeTypeGeneration* generation);
 
 	void     DestroyHalfCreated();
 
@@ -318,11 +324,6 @@ public:
 
 	void      AllocateScriptFunctionData();
 	void      DeallocateScriptFunctionData();
-	void      SetTypedSemanticFunction(asCTypedSemanticFunction* Function);
-	void      DiscardTypedSemanticFunction();
-	asCTypedSemanticFunction* GetTypedSemanticFunction();
-	const asCTypedSemanticFunction* GetTypedSemanticFunction() const;
-	const asCString& GetTypedSemanticCaptureDiagnostic() const;
 
 	asCGlobalProperty *GetPropertyByGlobalVarPtr(void *gvarPtr);
 
@@ -343,6 +344,7 @@ public:
 	        asCAtomic            internalRefCount; // Used for internal references
 	asCScriptEngine             *engine;
 	asCModule                   *module;
+	asCRuntimeTypeGeneration    *runtimeTypeGeneration;
 
 	// Function signature
 	asCString                      name;
@@ -394,8 +396,21 @@ public:
 	// Used by asFUNC_SCRIPT
 	struct ScriptFunctionData
 	{
+		// A bytecode global-pointer instruction normally resolves its property
+		// through the engine's address map. A different module can be discarded
+		// and swept before this function is retired, however, so keep the exact
+		// property references acquired while AddReferences() still has that map.
+		// The bytecode offset distinguishes a property pointer from a string
+		// constant at ReleaseReferences() time after the provider has gone away.
+		struct ScriptGlobalPropertyReference
+		{
+			asUINT byteCodeOffset = 0;
+			asCGlobalProperty* property = 0;
+		};
+
 		// Bytecode for the script function
 		asCArray<asDWORD>               byteCode;
+		asCArray<ScriptGlobalPropertyReference> globalPropertyReferences;
 
 		// The stack space needed for the local variables
 		asDWORD                         variableSpace;
@@ -425,6 +440,13 @@ public:
 		};
 		asCArray<ScriptTempVariable>    temporaryVariables;
 
+		// Ownership-neutral pointer slots used by compiler-generated VM helpers.
+		// These offsets are intentionally separate from objVariablePos: entries in
+		// that table participate in exception cleanup, while these slots may only
+		// borrow storage that CALLSYS or another callee owns. JIT backends still
+		// need their pointer representation to interpret ClrVPtr/PshVPtr/PSF.
+		asCArray<int>                   pointerVariablePos;
+
 		// Holds debug information on explicitly declared variables
 		asCArray<asSScriptVariable*>    variables;
 		// Store position, line number pairs for debug information
@@ -445,12 +467,6 @@ public:
 		// empty. The Runtime bridge maps these pointers to stable semantic keys before
 		// anything is persisted.
 		asCArray<asSBuildArtifactDependency> artifactDependencies;
-
-		// Optional function-owned compiler semantic sidecar. It is private to the
-		// maintained fork, never serialized, and is destroyed before existing
-		// function/type references are released.
-		asCTypedSemanticFunction* typedSemanticFunction = 0;
-		asCString typedSemanticCaptureDiagnostic;
 	};
 	ScriptFunctionData          *scriptData;
 
@@ -474,6 +490,12 @@ public:
 	asEBuildArtifactInvocationKind artifactInvocationKind =
 		asBUILD_ARTIFACT_INVOCATION_INVALID;
 	asCTypeInfo* artifactOwnerType = nullptr;
+	// Exact address-free identity of the sealed canonical declaration that
+	// produced this function. Source CodeGen assigns it directly; Cache V2 may
+	// assign it only after validating the restored AST against the live VM
+	// skeleton. It is deliberately not serialized and never stores a DeclId or
+	// AST pointer whose meaning is local to one context.
+	asCString canonicalASTStableDeclKey;
 	//[UE--]
 	asECompileOutType            compileOutType = asECompileOutType::CompileCalls;
 

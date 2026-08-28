@@ -112,6 +112,7 @@ namespace
 	{
 		uint32 BodyInputOrdinal = 0;
 		TOptional<uint32> DebugInputOrdinal;
+		TOptional<uint32> ASTBodySidecarInputOrdinal;
 		TOptional<uint32> DebugSequenceOrdinal;
 		bool bDuplicateDebugOwner = false;
 	};
@@ -1390,6 +1391,9 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 	}
 
 	int32 DebugSidecarCount = 0;
+	TOptional<uint32> CanonicalASTInputOrdinal;
+	bool bSawCanonicalAST = false;
+	bool bMissingCanonicalAST = false;
 	for (int32 BodyLinkOrdinal = 0;
 		BodyLinkOrdinal < Snapshot->FunctionBodies.Num(); ++BodyLinkOrdinal)
 	{
@@ -1441,6 +1445,46 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 			Linked.DebugInputOrdinal = DebugLookup->InputOrdinal;
 			++DebugSidecarCount;
 		}
+		if (Body->ASTBodySidecar.IsSet())
+		{
+			bSawCanonicalAST = true;
+			const FRecordLookup* ASTLookup =
+				FindRecordLookup(Lookup, Body->ASTBodySidecar.GetValue());
+			if (ASTLookup == nullptr)
+			{
+				return GraphFailure(
+					EAngelscriptCacheValidationError::MissingRecord,
+					FunctionBodyOffset(*BodyRecord,
+						EAngelscriptFunctionBodyCapturedField::ASTBodySidecar));
+			}
+			const FAngelscriptDecodedCacheRecordHandle& ASTRecord =
+				LocallyValidatedRecords[ASTLookup->InputOrdinal];
+			if (ASTRecord->TryGetASTBodySidecar() == nullptr)
+			{
+				return GraphFailure(
+					EAngelscriptCacheValidationError::WrongRecordKind,
+					FunctionBodyOffset(*BodyRecord,
+						EAngelscriptFunctionBodyCapturedField::ASTBodySidecar));
+			}
+			if (CanonicalASTInputOrdinal.IsSet()
+				&& CanonicalASTInputOrdinal.GetValue() != ASTLookup->InputOrdinal)
+			{
+				return GraphFailure(
+					EAngelscriptCacheValidationError::ConflictingKey,
+					FunctionBodyOffset(*BodyRecord,
+						EAngelscriptFunctionBodyCapturedField::ASTBodySidecar));
+			}
+			CanonicalASTInputOrdinal = ASTLookup->InputOrdinal;
+			Linked.ASTBodySidecarInputOrdinal = ASTLookup->InputOrdinal;
+		}
+		else
+		{
+			bMissingCanonicalAST = true;
+		}
+	}
+	if (bSawCanonicalAST && bMissingCanonicalAST)
+	{
+		return GraphFailure(EAngelscriptCacheValidationError::MissingCoverage);
 	}
 
 	int32 DebugOwnerLookupCapacity = 0;
@@ -1515,6 +1559,9 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 		|| UniqueDebugSidecarCount
 			> MAX_int32 - 3 - Snapshot->TypeSchemas.Num()
 				- Snapshot->FunctionBodies.Num()
+		|| (CanonicalASTInputOrdinal.IsSet() ? 1 : 0)
+			> MAX_int32 - 3 - Snapshot->TypeSchemas.Num()
+				- Snapshot->FunctionBodies.Num() - UniqueDebugSidecarCount
 		|| State->Initializers.Num()
 			> MAX_int32 - Snapshot->FunctionBodies.Num()
 		|| UniqueDebugSidecarCount
@@ -1524,7 +1571,8 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 		return GraphFailure(EAngelscriptCacheValidationError::Overflow);
 	}
 	const int32 ReachableCount = 3 + Snapshot->TypeSchemas.Num()
-		+ Snapshot->FunctionBodies.Num() + UniqueDebugSidecarCount;
+		+ Snapshot->FunctionBodies.Num() + UniqueDebugSidecarCount
+		+ (CanonicalASTInputOrdinal.IsSet() ? 1 : 0);
 	const int32 OpaqueSummaryCount =
 		State->Initializers.Num() + Snapshot->FunctionBodies.Num()
 			+ UniqueDebugSidecarCount;
@@ -1714,6 +1762,11 @@ FAngelscriptCacheValidationResult ValidateModuleSnapshotGraph(
 			Candidate.ReachableRecords.Add(
 				LocallyValidatedRecords[Linked.DebugInputOrdinal.GetValue()]);
 		}
+	}
+	if (CanonicalASTInputOrdinal.IsSet())
+	{
+		Candidate.ReachableRecords.Add(
+			LocallyValidatedRecords[CanonicalASTInputOrdinal.GetValue()]);
 	}
 	for (uint32 RecordOrdinal = 0;
 		RecordOrdinal < static_cast<uint32>(Candidate.ReachableRecords.Num());

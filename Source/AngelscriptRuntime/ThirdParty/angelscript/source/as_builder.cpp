@@ -40,6 +40,9 @@
 #include "as_config.h"
 #include "as_parser.h"
 #include "as_compiler.h"
+#include "as_ast_context.h"
+#include "as_sema.h"
+#include "as_runtime_type_bridge.h"
 #include "as_tokendef.h"
 #include "as_string_util.h"
 #include "as_outputbuffer.h"
@@ -47,6 +50,7 @@
 #include "as_scriptobject.h"
 #include "as_debug.h"
 #include <functional>
+#include <stdio.h>
 //[UE++]: Rename engine header include to match the engine type rename.
 #include "AngelscriptEngine.h"
 //[UE--]
@@ -104,6 +108,284 @@ static void SetBuildArtifactFunctionIdentity(
 	function->artifactOwnerType = ownerType ? ownerType : function->objectType;
 }
 
+static asEBuildArtifactInvocationKind CanonicalInvocationKindForDecl(
+	const asCDecl *declaration)
+{
+	if( declaration == 0 )
+		return asBUILD_ARTIFACT_INVOCATION_INVALID;
+	if( (declaration->traits & asAST_TRAIT_LAMBDA) != 0 )
+		return asBUILD_ARTIFACT_INVOCATION_LAMBDA;
+	switch( declaration->kind )
+	{
+	case asAST_DECL_METHOD:
+		if( declaration->name.Equals("__InitDefaults")
+			|| declaration->origin.Equals("canonical-init-defaults") )
+		{
+			return asBUILD_ARTIFACT_INVOCATION_INIT_DEFAULTS;
+		}
+		return asBUILD_ARTIFACT_INVOCATION_METHOD;
+	case asAST_DECL_CONSTRUCTOR:
+		return (declaration->traits & asAST_TRAIT_GENERATED) != 0
+			? asBUILD_ARTIFACT_INVOCATION_GENERATED_DEFAULT_CONSTRUCTOR
+			: asBUILD_ARTIFACT_INVOCATION_CONSTRUCTOR;
+	case asAST_DECL_DESTRUCTOR:
+		return (declaration->traits & asAST_TRAIT_GENERATED) != 0
+			? asBUILD_ARTIFACT_INVOCATION_GENERATED_DEFAULT_DESTRUCTOR
+			: asBUILD_ARTIFACT_INVOCATION_DESTRUCTOR;
+	case asAST_DECL_FUNCTION:
+	case asAST_DECL_MIXIN:
+		return asBUILD_ARTIFACT_INVOCATION_GLOBAL_FUNCTION;
+	default:
+		return asBUILD_ARTIFACT_INVOCATION_INVALID;
+	}
+}
+
+static bool IsCanonicalGeneratedRuntimeInvocation(
+	asEBuildArtifactInvocationKind kind)
+{
+	return kind == asBUILD_ARTIFACT_INVOCATION_GENERATED_DEFAULT_CONSTRUCTOR
+		|| kind == asBUILD_ARTIFACT_INVOCATION_GENERATED_DEFAULT_DESTRUCTOR
+		|| kind == asBUILD_ARTIFACT_INVOCATION_INIT_DEFAULTS;
+}
+
+static bool CanonicalDeclMatchesGeneratedRuntimeInvocation(
+	const asCDecl *declaration,
+	asEBuildArtifactInvocationKind kind)
+{
+	if( declaration == 0 || (declaration->traits & asAST_TRAIT_GENERATED) == 0 )
+	{
+		return false;
+	}
+	if( kind == asBUILD_ARTIFACT_INVOCATION_GENERATED_DEFAULT_CONSTRUCTOR )
+	{
+		return declaration->kind == asAST_DECL_CONSTRUCTOR;
+	}
+	if( kind == asBUILD_ARTIFACT_INVOCATION_GENERATED_DEFAULT_DESTRUCTOR )
+	{
+		return declaration->kind == asAST_DECL_DESTRUCTOR;
+	}
+	if( kind == asBUILD_ARTIFACT_INVOCATION_INIT_DEFAULTS )
+	{
+		return declaration->kind == asAST_DECL_METHOD
+			&& declaration->name.Equals("__InitDefaults")
+			&& declaration->origin.Equals("canonical-init-defaults");
+	}
+	return false;
+}
+
+// Generated lifecycle Runtime shells have no parser node, so the normal
+// Parser/Sema node map cannot publish their canonical identity when Builder
+// creates them. Resolve them exactly once after the AST is sealed by combining
+// the producer's invocation kind with RuntimeTypeBridge's complete structural
+// owner/namespace/type/signature check. CodeGen is then a pure consumer of the
+// stable key; it never guesses a generated body by name.
+static int BindCanonicalGeneratedRuntimeIdentities(
+	asCBuilder &builder,
+	asCString &detail)
+{
+	detail = "";
+	if( builder.canonicalAST == 0 || !builder.canonicalAST->IsPublishable()
+		|| builder.engine == 0 || builder.module == 0 )
+	{
+		detail = "generated Runtime identity binding requires a sealed AST and live Builder module";
+		return asINVALID_CONFIGURATION;
+	}
+
+	asCRuntimeTypeBridge bridge(builder.engine);
+	for( asUINT functionIndex = 0;
+		functionIndex < builder.functions.GetLength(); ++functionIndex )
+	{
+		sFunctionDescription *description = builder.functions[functionIndex];
+		if( description == 0 || description->isExistingShared
+			|| !IsCanonicalGeneratedRuntimeInvocation(
+				description->artifactInvocationKind) )
+		{
+			continue;
+		}
+
+		asCScriptFunction *function = description->funcId >= 0
+			&& asUINT(description->funcId) < builder.engine->scriptFunctions.GetLength()
+			? builder.engine->scriptFunctions[description->funcId] : 0;
+		if( function == 0 || function->module != builder.module
+			|| function->scriptData == 0 )
+		{
+			detail.Format(
+				"generated Runtime function shell is missing (ordinal=%u id=%d kind=%d)",
+				functionIndex, description->funcId,
+				(int)description->artifactInvocationKind);
+			return asINVALID_DECLARATION;
+		}
+
+		if( function->canonicalASTStableDeclKey.GetLength() != 0 )
+		{
+			asASTDeclId boundDeclaration;
+			asCString bindDetail;
+			const int bindResult = bridge.BindFunctionDeclaration(
+				*builder.canonicalAST, *function, boundDeclaration, &bindDetail);
+			const asCDecl *bound = builder.canonicalAST->GetDecl(boundDeclaration);
+			if( bindResult != asRUNTIME_DECL_BIND_OK
+				|| !CanonicalDeclMatchesGeneratedRuntimeInvocation(
+					bound, description->artifactInvocationKind) )
+			{
+				detail.Format(
+					"producer-carried generated Runtime identity is invalid "
+					"(ordinal=%u id=%d key=%s result=%d detail=%s)",
+					functionIndex,
+					description->funcId,
+					function->canonicalASTStableDeclKey.AddressOf(),
+					bindResult,
+					bindDetail.AddressOf() ? bindDetail.AddressOf() : "");
+				return asINVALID_DECLARATION;
+			}
+			continue;
+		}
+
+		const asCDecl *match = 0;
+		asUINT matches = 0;
+		for( asUINT declarationIndex = 1;
+			declarationIndex <= builder.canonicalAST->GetDeclCount();
+			++declarationIndex )
+		{
+			const asCDecl *candidate = builder.canonicalAST->GetDecl(
+				asASTDeclId(declarationIndex));
+			if( !CanonicalDeclMatchesGeneratedRuntimeInvocation(
+				candidate, description->artifactInvocationKind)
+				|| candidate->stableKey.GetLength() == 0 )
+			{
+				continue;
+			}
+
+			function->canonicalASTStableDeclKey = candidate->stableKey;
+			asASTDeclId boundDeclaration;
+			const int bindResult = bridge.BindFunctionDeclaration(
+				*builder.canonicalAST, *function, boundDeclaration, 0);
+			if( bindResult == asRUNTIME_DECL_BIND_OK
+				&& boundDeclaration == candidate->id )
+			{
+				match = candidate;
+				++matches;
+			}
+		}
+		function->canonicalASTStableDeclKey = "";
+
+		if( matches != 1 || match == 0 )
+		{
+			detail.Format(
+				"generated Runtime function must bind exactly one sealed declaration "
+				"(ordinal=%u id=%d kind=%d owner=%s matches=%u)",
+				functionIndex,
+				description->funcId,
+				(int)description->artifactInvocationKind,
+				description->objType && description->objType->name.AddressOf()
+					? description->objType->name.AddressOf() : "<global>",
+				matches);
+			return asINVALID_DECLARATION;
+		}
+		function->canonicalASTStableDeclKey = match->stableKey;
+	}
+
+	// A factory is a synthetic Runtime function derived from one constructor,
+	// not a second source declaration. Publish the constructor key on the factory
+	// shell during the same producer phase so failure/rollback never invents or
+	// mutates its semantic identity inside CodeGen.
+	for( asUINT factoryIndex = 0;
+		factoryIndex < builder.factories.GetLength(); ++factoryIndex )
+	{
+		const sFactoryDescription &factoryDescription =
+			builder.factories[factoryIndex];
+		asCScriptFunction *factory = factoryDescription.funcId >= 0
+			&& asUINT(factoryDescription.funcId)
+				< builder.engine->scriptFunctions.GetLength()
+			? builder.engine->scriptFunctions[factoryDescription.funcId] : 0;
+		if( factory == 0 || factory->module != builder.module
+			|| factoryDescription.objType == 0 )
+		{
+			detail.Format(
+				"generated constructor factory shell is missing "
+				"(ordinal=%u id=%d)",
+				factoryIndex, factoryDescription.funcId);
+			return asINVALID_DECLARATION;
+		}
+
+		asCScriptFunction *constructor = 0;
+		asUINT constructorMatches = 0;
+		for( asUINT functionIndex = 0;
+			functionIndex < builder.functions.GetLength(); ++functionIndex )
+		{
+			const sFunctionDescription *description =
+				builder.functions[functionIndex];
+			if( description == 0 || description->objType != factoryDescription.objType
+				|| (description->artifactInvocationKind
+					!= asBUILD_ARTIFACT_INVOCATION_CONSTRUCTOR
+					&& description->artifactInvocationKind
+						!= asBUILD_ARTIFACT_INVOCATION_GENERATED_DEFAULT_CONSTRUCTOR) )
+			{
+				continue;
+			}
+			asCScriptFunction *candidate = description->funcId >= 0
+				&& asUINT(description->funcId)
+					< builder.engine->scriptFunctions.GetLength()
+				? builder.engine->scriptFunctions[description->funcId] : 0;
+			if( candidate == 0
+				|| candidate->canonicalASTStableDeclKey.GetLength() == 0
+				|| candidate->parameterTypes != factory->parameterTypes
+				|| candidate->inOutFlags != factory->inOutFlags )
+			{
+				continue;
+			}
+			constructor = candidate;
+			++constructorMatches;
+		}
+		if( constructorMatches != 1 || constructor == 0 )
+		{
+			detail.Format(
+				"generated constructor factory must derive from exactly one "
+				"producer-bound constructor (ordinal=%u id=%d owner=%s matches=%u)",
+				factoryIndex,
+				factoryDescription.funcId,
+				factoryDescription.objType->name.AddressOf()
+					? factoryDescription.objType->name.AddressOf() : "<missing>",
+				constructorMatches);
+			return asINVALID_DECLARATION;
+		}
+		if( factory->canonicalASTStableDeclKey.GetLength() != 0
+			&& factory->canonicalASTStableDeclKey
+				!= constructor->canonicalASTStableDeclKey )
+		{
+			detail.Format(
+				"generated constructor factory carries a different declaration key "
+				"(ordinal=%u id=%d key=%s constructorKey=%s)",
+				factoryIndex,
+				factoryDescription.funcId,
+				factory->canonicalASTStableDeclKey.AddressOf(),
+				constructor->canonicalASTStableDeclKey.AddressOf());
+			return asINVALID_DECLARATION;
+		}
+		factory->canonicalASTStableDeclKey =
+			constructor->canonicalASTStableDeclKey;
+	}
+
+	return asSUCCESS;
+}
+
+void asCBuilder::BindCanonicalFunctionIdentity(
+	asCScriptFunction *function,
+	const asCScriptNode *node,
+	const asCScriptCode *script)
+{
+	if( function == 0 || node == 0 || canonicalSema == 0 || canonicalAST == 0
+		|| function->module != module )
+	{
+		return;
+	}
+	const asASTDeclId declaration = canonicalSema->FindParsedDeclaration(node, script);
+	const asCDecl* const decl = canonicalAST->GetDecl(declaration);
+	if( decl != 0 && decl->stableKey.GetLength() != 0 )
+	{
+		function->canonicalASTStableDeclKey = decl->stableKey;
+	}
+}
+
 // Freeze the exact invocation metadata that the later compiler callback will
 // observe without starting compilation or dependency capture. Generated
 // constructors/destructors/factories derive their canonical slice from the
@@ -141,6 +423,8 @@ asCBuilder::asCBuilder(asCScriptEngine *_engine, asCModule *_module)
 	buildArtifactCompileResultUserData = _module
 		? _module->buildArtifactCompileResultUserData : 0;
 	silent = false;
+	canonicalAST = 0;
+	canonicalSema = 0;
 }
 
 void asCBuilder::SetBuildArtifactCompileResultCallback(
@@ -340,6 +624,117 @@ asSBuildArtifactInvocation asCBuilder::BeginBuildArtifactCompile(
 	return invocation;
 }
 
+asSBuildArtifactInvocation asCBuilder::BeginCanonicalBuildArtifactCompile(
+	const asCASTContext &context,
+	const asCDecl *declaration,
+	asCScriptFunction *function)
+{
+	asSBuildArtifactInvocation invocation;
+	if( declaration == 0 )
+	{
+		buildArtifactDependencyCaptureStack.PushLast(function);
+		return invocation;
+	}
+
+	invocation.kind = function
+		? function->artifactInvocationKind
+		: CanonicalInvocationKindForDecl(declaration);
+	invocation.moduleName = module ? module->name : asCString();
+	invocation.nameSpace = function && function->GetNamespace()
+		? function->GetNamespace() : "";
+	invocation.functionName = function && function->GetName()
+		? function->GetName() : declaration->name;
+	invocation.declaration = function
+		? function->GetDeclarationStr(true, true, false, false)
+		: declaration->stableKey;
+	if( invocation.declaration.GetLength() == 0 )
+		invocation.declaration = declaration->name;
+	invocation.traits = function ? function->traits.traits : 0;
+	invocation.isGenerated =
+		(declaration->traits & asAST_TRAIT_GENERATED) != 0
+		|| (function && (function->artifactInvocationKind ==
+			asBUILD_ARTIFACT_INVOCATION_FACTORY
+			|| function->artifactInvocationKind ==
+				asBUILD_ARTIFACT_INVOCATION_INIT_DEFAULTS));
+
+	if( function && function->objectType )
+	{
+		asCObjectType *ownerType = CastToObjectType(function->objectType);
+		if( ownerType && ownerType->nameSpace &&
+			ownerType->nameSpace->name.GetLength() )
+		{
+			invocation.ownerName = ownerType->nameSpace->name;
+			invocation.ownerName += "::";
+		}
+		if( ownerType )
+			invocation.ownerName += ownerType->name;
+	}
+	else
+	{
+		const asCDecl* const parent = context.GetDecl(declaration->parent);
+		invocation.ownerName = parent && parent->kind == asAST_DECL_CLASS
+			? parent->name : invocation.moduleName;
+	}
+
+	const asCSourceManager &sources = context.GetSourceManager();
+	if( declaration->range.begin.IsValid() &&
+		declaration->range.end.IsValid() &&
+		declaration->range.begin.fileID == declaration->range.end.fileID )
+	{
+		const char *section =
+			sources.GetLogicalKey(declaration->range.begin.fileID);
+		invocation.sourceSection = section ? section : "";
+		invocation.sourceTokenPos = declaration->range.begin.offset;
+		invocation.sourceTokenLength = declaration->range.end.offset >=
+			declaration->range.begin.offset
+			? declaration->range.end.offset - declaration->range.begin.offset
+			: 0;
+		invocation.canonicalSource =
+			GetCanonicalTokenString(context, declaration->range);
+	}
+	// There is deliberately no asCScriptNode on the Canonical path. The stable
+	// source coordinate above comes from the sealed SourceManager range.
+	invocation.hasNode = false;
+	FinalizeBuildArtifactInvocation(invocation);
+
+	if( function && function->scriptData )
+	{
+		function->scriptData->artifactCanonicalSource =
+			invocation.IsCacheable() ? invocation.canonicalSource : asCString();
+		function->scriptData->artifactDependencies.SetLength(0);
+	}
+	if( buildArtifactInvocationCallback )
+	{
+		buildArtifactInvocationCallback(
+			&invocation, buildArtifactInvocationUserData);
+	}
+	buildArtifactDependencyCaptureStack.PushLast(function);
+	return invocation;
+}
+
+void asCBuilder::NotifyCanonicalBuildArtifactFailure(
+	const asCASTContext &context,
+	int compileResult)
+{
+	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
+	{
+		const asCDecl* const declaration = context.GetDecl(asASTDeclId(i));
+		if( CanonicalInvocationKindForDecl(declaration) ==
+			asBUILD_ARTIFACT_INVOCATION_INVALID )
+		{
+			continue;
+		}
+		const asSBuildArtifactInvocation invocation =
+			BeginCanonicalBuildArtifactCompile(context, declaration, 0);
+		CompleteBuildArtifactCompile(
+			invocation,
+			0,
+			compileResult,
+			asBUILD_ARTIFACT_RESTORE_NOT_CACHEABLE,
+			true);
+	}
+}
+
 asEBuildArtifactRestoreResult asCBuilder::TryRestoreBuildArtifact(
 	const asSBuildArtifactInvocation &invocation,
 	asCScriptFunction *function)
@@ -449,9 +844,51 @@ void asCBuilder::CaptureBuildArtifactPropertyDependency(
 	CaptureBuildArtifactDependency(dependency);
 }
 
+asCASTContext* asCBuilder::TakeCanonicalAST()
+{
+#ifndef AS_NO_COMPILER
+	if( canonicalSema )
+	{
+		asDELETE(canonicalSema, asCSema);
+		canonicalSema = 0;
+	}
+	asCASTContext* const Taken = canonicalAST;
+	canonicalAST = 0;
+	return Taken;
+#else
+	return 0;
+#endif
+}
+
+#ifndef AS_NO_COMPILER
+void asCBuilder::ReleaseParsers()
+{
+	for( asUINT n = 0; n < parsers.GetLength(); ++n )
+	{
+		asDELETE(parsers[n],asCParser);
+	}
+	parsers.SetLength(0);
+}
+#endif
+
 asCBuilder::~asCBuilder()
 {
 #ifndef AS_NO_COMPILER
+	// Parser owns the FMemStack pages that contain the native syntax tree.
+	// LEGACY releases them after bytecode emission, while CANONICAL bypasses
+	// BuildCompileCode entirely. Keep the final owner cleanup on Builder so
+	// every success, failure, and early-destruction route is leak-free.
+	ReleaseParsers();
+	if( canonicalSema )
+	{
+		asDELETE(canonicalSema, asCSema);
+		canonicalSema = 0;
+	}
+	if( canonicalAST )
+	{
+		asDELETE(canonicalAST, asCASTContext);
+		canonicalAST = 0;
+	}
 	asUINT n;
 
 	// Free all functions
@@ -619,9 +1056,150 @@ void asCBuilder::EvaluateTemplateInstances(bool keepSilent)
 	}
 }
 
+int asCBuilder::AttachCanonicalSemaIfNeeded()
+{
+	const bool bAttachCanonicalSema =
+		(module && module->GetASTRetentionPolicy() == asAST_RETAIN_SNAPSHOT)
+		|| (engine && engine->GetCompilerPipeline() == asCOMPILER_PIPELINE_CANONICAL);
+	if( !bAttachCanonicalSema )
+	{
+		return 0;
+	}
+	if( canonicalAST != 0 )
+	{
+		return 0;
+	}
+	canonicalAST = asNEW(asCASTContext);
+	if( canonicalAST == 0 )
+	{
+		numErrors++;
+		return asOUT_OF_MEMORY;
+	}
+	canonicalSema = asNEW(asCSema)(engine, *canonicalAST, module);
+	if( canonicalSema == 0 )
+	{
+		asDELETE(canonicalAST, asCASTContext);
+		canonicalAST = 0;
+		numErrors++;
+		return asOUT_OF_MEMORY;
+	}
+	canonicalSema->ActOnTranslationUnit(
+		module && module->GetName() ? module->GetName() : "<module>");
+	return 0;
+}
+
+int asCBuilder::PrepareCanonicalCompileFunctionScope()
+{
+	const int attach = AttachCanonicalSemaIfNeeded();
+	if( attach < 0 )
+	{
+		return attach;
+	}
+	if( canonicalSema == 0 || module == 0 )
+	{
+		return asINVALID_CONFIGURATION;
+	}
+	canonicalSema->InternCompileFunctionModuleScope(module);
+	return asSUCCESS;
+}
+
+int asCBuilder::SealCanonicalAST()
+{
+	if( canonicalAST == 0 )
+	{
+		return asINVALID_CONFIGURATION;
+	}
+	// Final layout and lifecycle reconciliation are Sema operations. Run them
+	// before inspecting diagnostics so failures discovered while sealing base
+	// layout or constructor plans cannot be published as a verified snapshot.
+	if( canonicalSema && !canonicalAST->IsPublishable() )
+	{
+		// ParseScript normally reconciles calls after each complete section, but
+		// staged Builder and CompileFunction clients can add declarations after
+		// that callback. Honour the documented final-builder contract before any
+		// unresolved-callee diagnostic is treated as authoritative.
+		canonicalSema->ResolveDeferredNames();
+		canonicalSema->ResolveLexicalScopes();
+		canonicalSema->LayoutScriptClassFields(module);
+	}
+	if( canonicalSema )
+	{
+		// Parser completion normally performs this whole-graph check. Repeat it
+		// at the publication boundary for staged Builder/CompileFunction callers;
+		// range-keyed diagnostics are idempotent.
+		canonicalSema->ValidateCapturedLambdaUses();
+	}
+	if( canonicalSema && canonicalSema->GetDiagnostics().GetLength() > 0 )
+	{
+		const asCArray<asCString>& diagnostics = canonicalSema->GetDiagnostics();
+		const asCArray<asCSourceRange>& diagnosticRanges =
+			canonicalSema->GetDiagnosticRanges();
+		for( asUINT i = 0; i < diagnostics.GetLength(); ++i )
+		{
+			const char* text = diagnostics[i].AddressOf();
+			if( engine )
+			{
+				const char* section = "";
+				int row = 0;
+				int column = 0;
+				if( i < diagnosticRanges.GetLength()
+					&& diagnosticRanges[i].begin.IsValid() )
+				{
+					asSSourceLineColumn location = {};
+					if( canonicalAST->GetSourceManager().GetLineColumn(
+						diagnosticRanges[i].begin, location) )
+					{
+						const char* const key = canonicalAST->GetSourceManager().GetLogicalKey(
+							diagnosticRanges[i].begin.fileID);
+						section = key ? key : "";
+						row = location.row;
+						column = location.column;
+					}
+				}
+				engine->WriteMessage(section, row, column, asMSGTYPE_ERROR,
+					text ? text : "canonical-sema-diagnostic");
+			}
+			printf("Canonical Sema diagnostic: %s\n", text ? text : "");
+		}
+		NotifyCanonicalBuildArtifactFailure(*canonicalAST, asINVALID_DECLARATION);
+		return asINVALID_DECLARATION;
+	}
+	if( !canonicalAST->IsPublishable() )
+	{
+		const int seal = canonicalAST->Seal();
+		if( seal != asAST_VERIFY_OK )
+		{
+			NotifyCanonicalBuildArtifactFailure(*canonicalAST, seal);
+			return seal;
+		}
+	}
+	asCString identityDetail;
+	const int identityResult = BindCanonicalGeneratedRuntimeIdentities(
+		*this, identityDetail);
+	if( identityResult < 0 )
+	{
+		const char* const text = identityDetail.GetLength()
+			? identityDetail.AddressOf()
+			: "canonical generated Runtime identity binding failed";
+		if( engine )
+		{
+			engine->WriteMessage("", 0, 0, asMSGTYPE_ERROR, text);
+		}
+		printf("Canonical generated Runtime identity diagnostic: %s\n", text);
+		NotifyCanonicalBuildArtifactFailure(*canonicalAST, identityResult);
+		return identityResult;
+	}
+	return 0;
+}
+
 int asCBuilder::BuildParallelParseScripts()
 {
 	Reset();
+	const int attach = AttachCanonicalSemaIfNeeded();
+	if( attach < 0 )
+	{
+		return attach;
+	}
 
 	// Parse all the files as if they were one
 	asUINT n = 0;
@@ -631,9 +1209,25 @@ int asCBuilder::BuildParallelParseScripts()
 		if( parser != 0 )
 		{
 			parsers.PushLast(parser);
+			if( canonicalSema )
+			{
+				parser->SetSema(canonicalSema);
+			}
 
 			// Parse the script file
 			parser->ParseScript(scripts[n]);
+		}
+	}
+
+	if( canonicalSema )
+	{
+		printf("Canonical diagnostics after parse: %u\n",
+			canonicalSema->GetDiagnostics().GetLength());
+		for( asUINT i = 0; i < canonicalSema->GetDiagnostics().GetLength(); ++i )
+		{
+			const char* text = canonicalSema->GetDiagnostics()[i].AddressOf();
+			printf("Canonical diagnostic after parse[%u]: %s\n",
+				i, text ? text : "");
 		}
 	}
 
@@ -692,6 +1286,16 @@ int asCBuilder::BuildLayoutClasses()
 
 int asCBuilder::BuildLayoutFunctions()
 {
+	return BuildLayoutFunctionsInternal(true);
+}
+
+int asCBuilder::BuildLayoutFunctionsWithoutGlobalInitializers()
+{
+	return BuildLayoutFunctionsInternal(false);
+}
+
+int asCBuilder::BuildLayoutFunctionsInternal(bool compileGlobalInitializers)
+{
 	for( asUINT n = 0; n < functions.GetLength(); n++ )
 	{
 		sFunctionDescription *current = functions[n];
@@ -707,9 +1311,11 @@ int asCBuilder::BuildLayoutFunctions()
 			func->CalculateParameterOffsets();
 	}
 
-	// Then the global variables. Here the variables declared with auto
-	// will be resolved, so they can be accessed properly in the functions
-	CompileGlobalVariables();
+	// LEGACY compilation resolves auto globals and emits their initializer
+	// functions here. A CANONICAL staged host has already sealed those semantic
+	// facts and must leave the prepared properties untouched for Stage 3.
+	if( compileGlobalInitializers )
+		CompileGlobalVariables();
 
 	if( numErrors == 0 )
 		PrepareBuildArtifactFunctionAuthorities();
@@ -845,12 +1451,10 @@ int asCBuilder::BuildCompileCode()
 		}
 	}
 
-	// Clean up parsers
-	for(asUINT n = 0; n < parsers.GetLength(); n++ )
-	{
-		asDELETE(parsers[n],asCParser);
-	}
-	parsers.SetLength(0);
+	// Release the transient native syntax trees as soon as this LEGACY build
+	// no longer needs them. Builder destruction owns the idempotent backstop,
+	// which is also the normal CANONICAL route.
+	ReleaseParsers();
 
 	// TODO: Attempt to reorder the initialization of global variables so that
 	//       they do not access other uninitialized global variables out-of-order
@@ -957,6 +1561,11 @@ int asCBuilder::CompileFunction(const char *sectionName, const char *code, int l
 	asASSERT(outFunc != 0);
 
 	Reset();
+	const int attach = AttachCanonicalSemaIfNeeded();
+	if( attach < 0 )
+	{
+		return attach;
+	}
 
 	// Add the string to the script code
 	asCScriptCode *script = asNEW(asCScriptCode);
@@ -970,6 +1579,10 @@ int asCBuilder::CompileFunction(const char *sectionName, const char *code, int l
 
 	// Parse the string
 	asCParser parser(this);
+	if( canonicalSema )
+	{
+		parser.SetSema(canonicalSema);
+	}
 	if( parser.ParseScript(scripts[0]) < 0 )
 		return asERROR;
 
@@ -1356,7 +1969,7 @@ void asCBuilder::RegisterNonTypesFromScript(asCScriptNode *node, asCScriptCode *
 			{
 				// Unused script node
 				int r, c;
-				script->ConvertPosToRowCol(node->tokenPos, &r, &c);
+				GetDiagnosticRowColumn(script, node->tokenPos, &r, &c);
 
 				WriteWarning(script->name, TXT_UNUSED_SCRIPT_NODE, r, c);
 			}
@@ -1501,7 +2114,7 @@ void asCBuilder::CompileFunctions()
 			if( current->node )
 			{
 			int r, c;
-			current->script->ConvertPosToRowCol(current->node->tokenPos, &r, &c);
+			GetDiagnosticRowColumn(current->script, current->node->tokenPos, &r, &c);
 
 			asCString str = func->GetDeclarationStr(true, false, false, true);
 			str.Format(TXT_COMPILING_s, str.AddressOf());
@@ -1519,7 +2132,7 @@ void asCBuilder::CompileFunctions()
 
 			int r = 0, c = 0;
 			if( node )
-				current->script->ConvertPosToRowCol(node->tokenPos, &r, &c);
+				GetDiagnosticRowColumn(current->script, node->tokenPos, &r, &c);
 
 			asCString str = func->GetDeclarationStr(true, false, false, true);
 			str.Format(TXT_COMPILING_s, str.AddressOf());
@@ -1538,7 +2151,7 @@ void asCBuilder::CompileFunctions()
 
 			int r = 0, c = 0;
 			if( node )
-				current->script->ConvertPosToRowCol(node->tokenPos, &r, &c);
+				GetDiagnosticRowColumn(current->script, node->tokenPos, &r, &c);
 
 			asCString str = func->GetDeclarationStr(true, false, false, true);
 			str.Format(TXT_COMPILING_s, str.AddressOf());
@@ -1557,7 +2170,7 @@ void asCBuilder::CompileFunctions()
 
 			int r = 0, c = 0;
 			if( node )
-				current->script->ConvertPosToRowCol(node->tokenPos, &r, &c);
+				GetDiagnosticRowColumn(current->script, node->tokenPos, &r, &c);
 
 			asCString str = func->GetDeclarationStr(true, false, false, true);
 			str.Format(TXT_COMPILING_s, str.AddressOf());
@@ -2983,26 +3596,120 @@ void asCBuilder::RegisterGlobalVariables()
 	for (int i = 0, Count = globVariableList.GetLength(); i < Count; ++i)
 	{
 		auto* gvar = globVariableList[i];
+		const asCDecl* canonicalDeclaration = 0;
+		if( gvar && canonicalSema && canonicalAST && gvar->declaredAtNode )
+		{
+			asASTDeclId declarationId =
+				canonicalSema->FindParsedDeclaration(
+					gvar->declaredAtNode, gvar->script);
+			canonicalDeclaration = canonicalAST->GetDecl(declarationId);
+			if( canonicalDeclaration == 0 && gvar->script )
+			{
+				// Sema remembers the complete snDeclaration node, while the
+				// legacy Builder retains the identifier child for each declared
+				// global. Recover the producer identity only from exact logical
+				// section + identifier offset + name, and reject ambiguity.
+				asASTDeclId exactMatch;
+				asUINT exactMatches = 0;
+				for( asUINT declarationIndex = 1;
+					declarationIndex <= canonicalAST->GetDeclCount();
+					++declarationIndex )
+				{
+					const asCDecl* const candidate =
+						canonicalAST->GetDecl(asASTDeclId(declarationIndex));
+					if( candidate == 0 || candidate->kind != asAST_DECL_VAR
+						|| candidate->name != gvar->name
+						|| !candidate->range.begin.IsValid()
+						|| candidate->range.begin.offset
+							!= (asUINT)gvar->declaredAtNode->tokenPos )
+					{
+						continue;
+					}
+					const char* const logicalKey =
+						canonicalAST->GetSourceManager().GetLogicalKey(
+							candidate->range.begin.fileID);
+					if( logicalKey && gvar->script->name.Equals(logicalKey) )
+					{
+						exactMatch = candidate->id;
+						++exactMatches;
+					}
+				}
+				if( exactMatches == 1 )
+				{
+					declarationId = exactMatch;
+					canonicalDeclaration =
+						canonicalAST->GetDecl(declarationId);
+				}
+			}
+			if( canonicalDeclaration
+				&& canonicalDeclaration->kind == asAST_DECL_VAR
+				&& canonicalDeclaration->stableKey.GetLength() != 0 )
+			{
+				gvar->canonicalASTStableDeclKey =
+					canonicalDeclaration->stableKey;
+			}
+		}
 		if (gvar->isEnumValue)
 		{
 			int r;
 			if( gvar->initializationNode )
 			{
-				asCCompiler comp(this);
-				asCScriptFunction func(engine, module, asFUNC_SCRIPT);
+				if( engine->GetCompilerPipeline()
+					== asCOMPILER_PIPELINE_CANONICAL )
+				{
+					const asCDecl* const owner =
+						canonicalDeclaration && canonicalAST
+							? canonicalAST->GetDecl(
+								canonicalDeclaration->parent)
+							: 0;
+					if( canonicalDeclaration
+						&& canonicalDeclaration->kind == asAST_DECL_VAR
+						&& owner && owner->kind == asAST_DECL_ENUM
+						&& canonicalDeclaration->hasConstantValue
+						&& gvar->property )
+					{
+						// Parser/Sema has already evaluated the authored enum
+						// initializer and frozen its signed payload on the exact
+						// EnumConstant VarDecl. Stage 2 only materializes that
+						// semantic fact into the prepared Runtime shell; invoking
+						// asCCompiler here would create a second authority before
+						// GeneratePreparedModule consumes the sealed graph.
+						gvar->constantValue =
+							canonicalDeclaration->constantValue;
+						gvar->property->isPureConstant = true;
+						gvar->property->storage =
+							canonicalDeclaration->constantValue;
+						r = asSUCCESS;
+					}
+					else
+					{
+						asCString detail;
+						detail.Format(
+							"Canonical enum initializer has no exact constant declaration: %s",
+							gvar->name.AddressOf());
+						WriteError(
+							detail, gvar->script, gvar->declaredAtNode);
+						r = asINVALID_DECLARATION;
+					}
+				}
+				else
+				{
+					asCCompiler comp(this);
+					asCScriptFunction func(engine, module, asFUNC_SCRIPT);
 
-				// Set the namespace that should be used during the compilation
-				func.nameSpace = gvar->datatype.GetTypeInfo()->nameSpace;
+					// Set the namespace that should be used during the compilation
+					func.nameSpace = gvar->datatype.GetTypeInfo()->nameSpace;
 
-				// Temporarily switch the type of the variable to int so it can be compiled properly
-				asCDataType saveType;
-				saveType = gvar->datatype;
-				gvar->datatype = asCDataType::CreatePrimitive(ttInt, true);
-				r = comp.CompileGlobalVariable(this, gvar->script, gvar->initializationNode, gvar, &func);
-				gvar->datatype = saveType;
+					// Temporarily switch the type of the variable to int so it can be compiled properly
+					asCDataType saveType;
+					saveType = gvar->datatype;
+					gvar->datatype = asCDataType::CreatePrimitive(ttInt, true);
+					r = comp.CompileGlobalVariable(this, gvar->script, gvar->initializationNode, gvar, &func);
+					gvar->datatype = saveType;
 
-				// Make the function a dummy so it doesn't try to release objects while destroying the function
-				func.funcType = asFUNC_DUMMY;
+					// Make the function a dummy so it doesn't try to release objects while destroying the function
+					func.funcType = asFUNC_DUMMY;
+				}
 			}
 			else
 			{
@@ -3020,7 +3727,7 @@ void asCBuilder::RegisterGlobalVariables()
 						if( !gvar2->isCompiled )
 						{
 							int row, col;
-							gvar->script->ConvertPosToRowCol(gvar->declaredAtNode->tokenPos, &row, &col);
+							GetDiagnosticRowColumn(gvar->script, gvar->declaredAtNode->tokenPos, &row, &col);
 
 							asCString str = gvar->datatype.Format(gvar->nameSpace);
 							str += " " + gvar->name;
@@ -3065,7 +3772,7 @@ void asCBuilder::RegisterGlobalVariables()
 				if (e->value > MAX_int8 || e->value < MIN_int8)
 				{
 					int row, col;
-					gvar->script->ConvertPosToRowCol(gvar->declaredAtNode->tokenPos, &row, &col);
+					GetDiagnosticRowColumn(gvar->script, gvar->declaredAtNode->tokenPos, &row, &col);
 					WriteError(gvar->script->name, "Enum value too large to fit inside signed byte", row, col);
 					r = -1;
 				}
@@ -5351,6 +6058,53 @@ asCString asCBuilder::GetCanonicalTokenString(asCScriptNode *node, asCScriptCode
 	return cleanStr;
 }
 
+asCString asCBuilder::GetCanonicalTokenString(
+	const asCASTContext &context,
+	const asCSourceRange &range)
+{
+	if( engine == 0 || !range.begin.IsValid() || !range.end.IsValid() ||
+		range.begin.fileID != range.end.fileID ||
+		range.end.offset < range.begin.offset )
+	{
+		return asCString();
+	}
+
+	const asCSourceManager &sources = context.GetSourceManager();
+	const char *buffer = sources.GetBuffer(range.begin.fileID);
+	const asUINT bufferLength = sources.GetBufferLength(range.begin.fileID);
+	if( buffer == 0 || range.begin.offset > bufferLength ||
+		range.end.offset > bufferLength )
+	{
+		return asCString();
+	}
+
+	asCString source;
+	source.Assign(
+		buffer + range.begin.offset,
+		range.end.offset - range.begin.offset);
+	asCString canonical;
+	for( asUINT offset = 0; offset < source.GetLength(); )
+	{
+		asUINT tokenLength = 0;
+		const asETokenClass tokenClass = engine->ParseToken(
+			source.AddressOf() + offset,
+			source.GetLength() - offset,
+			&tokenLength);
+		if( tokenLength == 0 )
+		{
+			return asCString();
+		}
+		if( tokenClass != asTC_COMMENT && tokenClass != asTC_WHITESPACE )
+		{
+			if( canonical.GetLength() )
+				canonical += " ";
+			canonical.Concatenate(source.AddressOf() + offset, tokenLength);
+		}
+		offset += tokenLength;
+	}
+	return canonical;
+}
+
 asCString asCBuilder::GetCleanExpressionString(asCScriptNode *node, asCScriptCode *file)
 {
 	asASSERT(node && node->nodeType == snExpression);
@@ -5387,23 +6141,72 @@ int asCBuilder::RegisterScriptFunctionFromNode(asCScriptNode *node, asCScriptCod
 
 asCScriptFunction *asCBuilder::RegisterLambda(asCScriptNode *node, asCScriptCode *file, asCScriptFunction *funcDef, const asCString &name, asSNameSpace *ns)
 {
-	// Get the parameter names from the node
+	// Get the parameter names from the node.
+	// Current ParseLambda() stores names under snParameterList; the
+	// snIdentifier("function") label is not a parameter.
 	asCArray<asCString> parameterNames;
 	asCArray<asCString*> defaultArgs;
-	asCScriptNode *args = node->firstChild;
-	while( args && args->nodeType != snStatementBlock )
+	asCScriptNode *args = 0;
+	asCScriptNode *params = 0;
+	asCScriptNode *child = node->firstChild;
+	while( child )
 	{
-		if (args->nodeType == snIdentifier)
+		if( child->nodeType == snParameterList )
+			params = child;
+		if( child->nodeType == snStatementBlock )
+			args = child;
+		child = child->next;
+	}
+	if( params )
+	{
+		asCScriptNode *param = params->firstChild;
+		while( param )
 		{
-			asCString argName;
-			argName.Assign(&file->code[args->tokenPos], args->tokenLength);
-			parameterNames.PushLast(argName);
+			if( param->nodeType == snIdentifier )
+			{
+				asCString argName;
+				argName.Assign(&file->code[param->tokenPos], param->tokenLength);
+				parameterNames.PushLast(argName);
+				defaultArgs.PushLast(0);
+			}
+			param = param->next;
+		}
+	}
+	else
+	{
+		asCScriptNode *sibling = node->firstChild;
+		while( sibling && sibling->nodeType != snStatementBlock )
+		{
+			if( sibling->nodeType == snIdentifier )
+			{
+				asCString argName;
+				argName.Assign(&file->code[sibling->tokenPos], sibling->tokenLength);
+				if( !argName.Equals("function") )
+				{
+					parameterNames.PushLast(argName);
+					defaultArgs.PushLast(0);
+				}
+			}
+			sibling = sibling->next;
+		}
+	}
+
+	// Parser Sema actions may already have consumed identifier nodes.
+	// Entry-plan / FunctionKey capture requires names.Length == types.Length.
+	if( funcDef )
+	{
+		for( asUINT n = parameterNames.GetLength(); n < funcDef->parameterTypes.GetLength(); ++n )
+		{
+			asCString dummy;
+			dummy.Format("_p%u", n);
+			parameterNames.PushLast(dummy);
 			defaultArgs.PushLast(0);
 		}
-		args = args->next;
 	}
 
 	// The statement block for the function must be disconnected, as the builder is going to be the owner of it
+	if( args == 0 )
+		return 0;
 	args->DisconnectParent();
 
 	// Get the return and parameter types from the funcDef
@@ -5411,17 +6214,27 @@ asCScriptFunction *asCBuilder::RegisterLambda(asCScriptNode *node, asCScriptCode
 	int r = RegisterScriptFunction(args, file, 0, 0, true, ns, false, false, funcName, funcDef->returnType, parameterNames, funcDef->parameterTypes, funcDef->inOutFlags, defaultArgs, asSFunctionTraits());
 	if( r < 0 )
 		return 0;
+	asCScriptFunction *func = 0;
 	if( functions.GetLength() != 0 && functions[functions.GetLength()-1] )
 	{
 		functions[functions.GetLength()-1]->artifactInvocationKind =
 			asBUILD_ARTIFACT_INVOCATION_LAMBDA;
+		func = engine->scriptFunctions[functions[functions.GetLength()-1]->funcId];
 		SetBuildArtifactFunctionIdentity(
-			engine->scriptFunctions[functions[functions.GetLength()-1]->funcId],
+			func,
 			asBUILD_ARTIFACT_INVOCATION_LAMBDA, 0);
+		// RegisterScriptFunction receives the detached statement block because it
+		// becomes the VM function body. The canonical producer identity belongs to
+		// the enclosing lambda expression node, whose source offset distinguishes
+		// same-signature lambdas without relying on Runtime creation order.
+		BindCanonicalFunctionIdentity(func, node, file);
+		// Lambdas are registered during CompileFunctions(), after BuildLayoutFunctions().
+		if( func )
+			func->CalculateParameterOffsets();
 	}
 
 	// Return the function that was just created (but that will be compiled later)
-	return engine->scriptFunctions[functions[functions.GetLength()-1]->funcId];
+	return func;
 }
 
 int asCBuilder::RegisterScriptFunction(asCScriptNode *node, asCScriptCode *file, asCObjectType *objType, bool isInterface, bool isGlobalFunction, asSNameSpace *ns, bool isExistingShared, bool isMixin, asCString &name, asCDataType &returnType, asCArray<asCString> &parameterNames, asCArray<asCDataType> &parameterTypes, asCArray<asETypeModifiers> &inOutFlags, asCArray<asCString *> &defaultArgs, asSFunctionTraits funcTraits, asCString* accessSpecifier)
@@ -5742,6 +6555,7 @@ int asCBuilder::RegisterScriptFunction(asCScriptNode *node, asCScriptCode *file,
 		asCScriptFunction *registeredFunction = engine->scriptFunctions[funcId];
 		SetBuildArtifactFunctionIdentity(registeredFunction,
 			registeredArtifactInvocationKind, objType);
+		BindCanonicalFunctionIdentity(registeredFunction, node, file);
 		if (node && registeredFunction && registeredFunction->scriptData)
 			registeredFunction->scriptData->artifactCanonicalSource = GetCanonicalTokenString(node, file);
 	}
@@ -6184,10 +6998,21 @@ int asCBuilder::RegisterImportedFunction(int importID, asCScriptNode *node, asCS
 	asCString moduleName;
 	moduleName.Assign(&file->code[nd->tokenPos+1], nd->tokenLength-2);
 
-	// Register the function
-	module->AddImportedFunction(importID, name, returnType, parameterTypes, inOutFlags, defaultArgs, funcTraits, ns, moduleName);
+	// Register the function. The staged Canonical backend consumes this exact
+	// Runtime shell rather than allocating a second import slot, so publish the
+	// producer's declaration identity while the parser-node mapping is still
+	// available. A later CodeGen name/signature search must never choose an
+	// overload or a same-named import from a different source module.
+	const int registerResult = module->AddImportedFunction(
+		importID, name, returnType, parameterTypes, inOutFlags, defaultArgs,
+		funcTraits, ns, moduleName);
+	if( registerResult >= 0 )
+	{
+		BindCanonicalFunctionIdentity(
+			GetFunctionDescription(importID), node, file);
+	}
 
-	return 0;
+	return registerResult;
 }
 
 asCScriptFunction *asCBuilder::GetFunctionDescription(int id)
@@ -6361,11 +7186,47 @@ void asCBuilder::WriteInfo(const asCString &scriptname, const asCString &message
 	}
 }
 
+bool asCBuilder::GetDiagnosticRowColumn(asCScriptCode *file, size_t offset, int *row, int *column)
+{
+	if( row ) *row = 0;
+	if( column ) *column = 0;
+	if( file && file->code && offset <= file->codeLength && offset <= (size_t)asUINT(-1) )
+	{
+		const char* logicalKey = file->name.AddressOf() ? file->name.AddressOf() : "<memory>";
+		const asASTFileID fileID = diagnosticSourceManager.RemapLogical(
+			logicalKey,
+			asAST_SOURCE_AUTHORED,
+			file->code,
+			file->codeLength,
+			file->lineOffset,
+			file->sourceProvenanceRanges.GetLength()
+				? file->sourceProvenanceRanges.AddressOf() : 0,
+			file->sourceProvenanceRanges.GetLength());
+		asSSourceLineColumn lineColumn = {};
+		if( fileID != 0
+			&& diagnosticSourceManager.GetLineColumn(
+				diagnosticSourceManager.MakeLocation(fileID, (asUINT)offset), lineColumn) )
+		{
+			if( row ) *row = lineColumn.row;
+			if( column ) *column = lineColumn.column;
+			return true;
+		}
+	}
+
+	// Preserve legacy message coordinates if this diagnostic has no source text,
+	// or if a same-name source conflict is intentionally rejected by the session.
+	if( file )
+	{
+		file->ConvertPosToRowCol(offset, row, column);
+	}
+	return false;
+}
+
 void asCBuilder::WriteInfo(const asCString &message, asCScriptCode *file, asCScriptNode *node)
 {
 	int r = 0, c = 0;
-	if( node )
-		file->ConvertPosToRowCol(node->tokenPos, &r, &c);
+	if( node && file )
+		GetDiagnosticRowColumn(file, node->tokenPos, &r, &c);
 
 	WriteInfo(file->name, message, r, c, false);
 }
@@ -6374,7 +7235,7 @@ void asCBuilder::WriteError(const asCString &message, asCScriptCode *file, asCSc
 {
 	int r = 0, c = 0;
 	if( node && file )
-		file->ConvertPosToRowCol(node->tokenPos, &r, &c);
+		GetDiagnosticRowColumn(file, node->tokenPos, &r, &c);
 
 	WriteError(file ? file->name : asCString(""), message, r, c);
 }
@@ -6402,7 +7263,7 @@ void asCBuilder::WriteWarning(const asCString &message, asCScriptCode *file, asC
 {
 	int r = 0, c = 0;
 	if( node && file )
-		file->ConvertPosToRowCol(node->tokenPos, &r, &c);
+		GetDiagnosticRowColumn(file, node->tokenPos, &r, &c);
 
 	WriteWarning(file ? file->name : asCString(""), message, r, c);
 }

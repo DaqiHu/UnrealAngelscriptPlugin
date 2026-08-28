@@ -212,6 +212,10 @@ enum class EAngelscriptFunctionBodyCapturedField : uint16
 	DebugSidecar = 25,
 	DebugSidecarKind = 26,
 	DebugSidecarContentHash = 27,
+	ASTBodySidecarPresence = 28,
+	ASTBodySidecar = 29,
+	ASTBodySidecarKind = 30,
+	ASTBodySidecarContentHash = 31,
 };
 
 enum class EAngelscriptDebugSidecarCapturedField : uint16
@@ -383,6 +387,9 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedFunctionBody
 	TArray<uint8> CanonicalExecutionPayload;
 	TArray<FAngelscriptCacheSemanticDependency> ActualDependencies;
 	TOptional<FAngelscriptCacheRecordId> DebugSidecar;
+	// The complete, pointer-free Canonical AST DTO for this module. Each
+	// FunctionBody in a module links the same content-addressed sidecar.
+	TOptional<FAngelscriptCacheRecordId> ASTBodySidecar;
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCachedLogicalSectionKey
@@ -440,7 +447,7 @@ class ANGELSCRIPTRUNTIME_API FAngelscriptCacheRemainingRecordArchive
 {
 public:
 	static constexpr uint32 ModuleStatePayloadSchemaVersion = 1;
-	static constexpr uint32 FunctionBodyPayloadSchemaVersion = 1;
+	static constexpr uint32 FunctionBodyPayloadSchemaVersion = 2;
 	static constexpr uint32 DebugSidecarPayloadSchemaVersion = 1;
 	static constexpr uint32 ModuleSnapshotPayloadSchemaVersion = 1;
 

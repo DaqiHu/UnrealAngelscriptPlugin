@@ -802,6 +802,19 @@ namespace AngelscriptCacheRemainingRecords_Private
 					EField::IdentityContentDebug);
 			}
 		}
+		if (Value.ASTBodySidecar.IsSet()
+			&& Value.ASTBodySidecar->Kind
+				!= EAngelscriptCacheRecordKind::ASTBodySidecar)
+		{
+			return Fail(EAngelscriptCacheValidationError::WrongRecordKind,
+				EField::ASTBodySidecarKind);
+		}
+		if (Value.ASTBodySidecar.IsSet()
+			&& Value.ASTBodySidecar->ContentHash.IsZero())
+		{
+			return Fail(EAngelscriptCacheValidationError::InvalidPresence,
+				EField::ASTBodySidecarContentHash);
+		}
 		return {};
 	}
 
@@ -832,6 +845,11 @@ namespace AngelscriptCacheRemainingRecords_Private
 		if (Value.DebugSidecar.IsSet())
 		{
 			WriteRecordId(Writer, Value.DebugSidecar.GetValue());
+		}
+		Writer.WriteUInt8(Value.ASTBodySidecar.IsSet() ? 1 : 0);
+		if (Value.ASTBodySidecar.IsSet())
+		{
+			WriteRecordId(Writer, Value.ASTBodySidecar.GetValue());
 		}
 		OutPayload = MoveTemp(Writer.Bytes);
 	}
@@ -3382,6 +3400,48 @@ namespace AngelscriptCacheRemainingRecords_Private
 						DebugSidecarOffset + 1};
 		}
 
+		const uint64 ASTBodySidecarPresenceOffset = Reader.GetOffset();
+		uint8 ASTBodySidecarTag = 0;
+		if (!Reader.ReadUInt8(ASTBodySidecarTag))
+		{
+			return Reader.GetResult();
+		}
+		if (ASTBodySidecarTag > 1)
+		{
+			Reader.Fail(EAngelscriptCacheValidationError::InvalidOptionalTag,
+				ASTBodySidecarPresenceOffset);
+			return Reader.GetResult();
+		}
+		SetHeader(16, EField::ASTBodySidecarPresence,
+			ASTBodySidecarPresenceOffset);
+		if (ASTBodySidecarTag == 1)
+		{
+			const uint64 ASTBodySidecarOffset = Reader.GetOffset();
+			FAngelscriptCacheRecordId RecordId;
+			if (!ReadRecordId(Reader, RecordId))
+			{
+				return Reader.GetResult();
+			}
+			OutValue.ASTBodySidecar = RecordId;
+			OutOffsets.ASTBodySidecarOffset =
+				FAngelscriptDecodedCacheRecord::
+					FFunctionBodyCapturedOffsetStorage::FEntry{
+						{EField::ASTBodySidecar, MAX_uint32, MAX_uint32, MAX_uint32},
+						ASTBodySidecarOffset};
+			OutOffsets.ASTBodySidecarKindOffset =
+				FAngelscriptDecodedCacheRecord::
+					FFunctionBodyCapturedOffsetStorage::FEntry{
+						{EField::ASTBodySidecarKind,
+							MAX_uint32, MAX_uint32, MAX_uint32},
+						ASTBodySidecarOffset};
+			OutOffsets.ASTBodySidecarContentHashOffset =
+				FAngelscriptDecodedCacheRecord::
+					FFunctionBodyCapturedOffsetStorage::FEntry{
+						{EField::ASTBodySidecarContentHash,
+							MAX_uint32, MAX_uint32, MAX_uint32},
+						ASTBodySidecarOffset + 1};
+		}
+
 		if (!Reader.IsAtEnd())
 		{
 			return RecordFailure(
@@ -3419,6 +3479,9 @@ namespace AngelscriptCacheRemainingRecords_Private
 				OutOffsets.DebugSidecarOffset,
 				OutOffsets.DebugSidecarKindOffset,
 				OutOffsets.DebugSidecarContentHashOffset,
+				OutOffsets.ASTBodySidecarOffset,
+				OutOffsets.ASTBodySidecarKindOffset,
+				OutOffsets.ASTBodySidecarContentHashOffset,
 			};
 			for (const auto& Entry : OptionalEntries)
 			{

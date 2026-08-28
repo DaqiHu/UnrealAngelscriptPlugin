@@ -41,9 +41,17 @@ namespace AngelscriptEditor::StaticJIT
 		if (Request.CaptureProfile
 			!= EAngelscriptStaticJITCaptureProfile::Bytecode
 			&& Request.CaptureProfile
-				!= EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR)
+				!= EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST)
 		{
 			return Fail(TEXT("Project source-graph capture profile is invalid."));
+		}
+		if (Request.CaptureProfile
+			== EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST
+			&& Request.ASTRetentionPolicy
+				!= static_cast<int32>(asAST_RETAIN_SNAPSHOT))
+		{
+			return Fail(
+				TEXT("VerifiedCanonicalAST project source-graph compilation requires AST snapshot retention."));
 		}
 		Descriptor = FPaths::ConvertRelativePathToFull(Descriptor);
 		FPaths::NormalizeFilename(Descriptor);
@@ -61,13 +69,10 @@ namespace AngelscriptEditor::StaticJIT
 				TEXT("Project Script root does not exist: %s."), *ScriptRoot));
 		}
 
-		const TCHAR* ScratchOwner = Request.RequestKind
-			== EAngelscriptProjectSourceGraphRequestKind::DeveloperHIRDump
-			? TEXT("HIRDump") : TEXT("JITGeneration");
 		const FString TemporaryCacheRoot = FPaths::Combine(
 			ProjectDirectory,
 			TEXT("Saved/Angelscript"),
-			ScratchOwner,
+			TEXT("JITGeneration"),
 			TEXT("Scratch"),
 			FAngelscriptJITTargetProfiles::ToString(Request.TargetProfile),
 			FGuid::NewGuid().ToString(EGuidFormats::Digits));
@@ -81,32 +86,27 @@ namespace AngelscriptEditor::StaticJIT
 
 		FAngelscriptEngineConfig Config;
 		Config.Purpose = EAngelscriptEnginePurpose::StaticJITGeneration;
-		Config.bCaptureTypedSemanticIR = Request.CaptureProfile
-			== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR;
-		// Artifact generation needs native forms and reviewed call descriptors.
-		// HIR dump stays dump-only and must not collect that metadata.
-		if (Request.RequestKind
-			== EAngelscriptProjectSourceGraphRequestKind::StaticJITArtifact)
+		Config.bRequireCanonicalASTForStaticJITGeneration =
+			Request.CaptureProfile
+				== EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
+		FAngelscriptStaticJITGenerationProfile GenerationProfile;
+		FString ProfileError;
+		const FAngelscriptStaticJITBackendId BackendId =
+			Request.CaptureProfile
+				== EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST
+			? FAngelscriptStaticJITBackendId::TypedAST()
+			: FAngelscriptStaticJITBackendId::Bytecode();
+		if (!FAngelscriptStaticJITGenerationProfile::TryCreate(
+				BackendId,
+				Request.TargetProfile,
+				GenerationProfile,
+				&ProfileError))
 		{
-			FAngelscriptStaticJITGenerationProfile GenerationProfile;
-			FString ProfileError;
-			const FAngelscriptStaticJITBackendId BackendId =
-				Request.CaptureProfile
-					== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR
-				? FAngelscriptStaticJITBackendId::TypedAST()
-				: FAngelscriptStaticJITBackendId::Bytecode();
-			if (!FAngelscriptStaticJITGenerationProfile::TryCreate(
-					BackendId,
-					Request.TargetProfile,
-					GenerationProfile,
-					&ProfileError))
-			{
-				return Fail(ProfileError.IsEmpty()
-					? TEXT("StaticJITArtifact compile could not freeze a generation profile.")
-					: ProfileError);
-			}
-			GenerationProfile.ApplyToEngineConfig(Config);
+			return Fail(ProfileError.IsEmpty()
+				? TEXT("StaticJITArtifact compile could not freeze a generation profile.")
+				: ProfileError);
 		}
+		GenerationProfile.ApplyToEngineConfig(Config);
 		Config.bSkipThreadedInitialize = true;
 		Config.bIsEditor = Traits->bEditor;
 		Config.bRunningCommandlet = true;
@@ -121,6 +121,7 @@ namespace AngelscriptEditor::StaticJIT
 		Config.bTargetTest = Traits->bTest;
 		Config.bDisableCacheV2Persistence = true;
 		Config.CacheV2RootOverride = TemporaryCacheRoot;
+		Config.InitialASTRetentionPolicy = Request.ASTRetentionPolicy;
 
 		FAngelscriptEngineDependencies Dependencies =
 			FAngelscriptEngineDependencies::CreateDefault();

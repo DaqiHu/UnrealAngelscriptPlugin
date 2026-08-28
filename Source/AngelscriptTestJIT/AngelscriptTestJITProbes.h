@@ -29,9 +29,9 @@ namespace AngelscriptTestJITProbes
 	};
 
 	/**
-	 * Test-carrier view of the compiler-owned cleanup proof. Bytecode and the
-	 * interpreter do not capture Typed HIR, while the first TypedASTJIT scalar
-	 * slice accepts only a verified universal plan with no actions.
+	 * Test-carrier view of the compiler-owned cleanup proof. The isolated
+	 * Bytecode/interpreter route has no TypedAST cleanup plan, while the first
+	 * TypedASTJIT scalar slice accepts only a verified plan with no actions.
 	 */
 	enum class EIsolatedDifferentialCleanupPlanState : uint8
 	{

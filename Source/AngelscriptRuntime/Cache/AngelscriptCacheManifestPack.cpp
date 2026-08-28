@@ -29,7 +29,7 @@ namespace AngelscriptCacheManifestPack_Private
 		const uint8 Raw = static_cast<uint8>(Kind);
 		return Raw >= static_cast<uint8>(EAngelscriptCacheRecordKind::SourceIndex)
 			&& Raw <= static_cast<uint8>(
-				EAngelscriptCacheRecordKind::ModuleSnapshot);
+				EAngelscriptCacheRecordKind::ASTBodySidecar);
 	}
 
 	static bool IsCodecValid(const EAngelscriptCacheCodec Codec)
@@ -942,6 +942,16 @@ namespace AngelscriptCacheManifestPack_Private
 						return Result;
 					}
 				}
+				if (Body->ASTBodySidecar.IsSet())
+				{
+					Result = RequireTarget(Body->ASTBodySidecar.GetValue(),
+						EAngelscriptCacheRecordKind::ASTBodySidecar,
+						RecordOffset(Ordinal));
+					if (!Result.IsSuccess())
+					{
+						return Result;
+					}
+				}
 				break;
 			}
 			case EAngelscriptCacheRecordKind::SourceIndex:
@@ -949,6 +959,7 @@ namespace AngelscriptCacheManifestPack_Private
 			case EAngelscriptCacheRecordKind::TypeSchema:
 			case EAngelscriptCacheRecordKind::ModuleState:
 			case EAngelscriptCacheRecordKind::DebugSidecar:
+			case EAngelscriptCacheRecordKind::ASTBodySidecar:
 				break;
 			default:
 				return Failure(EAngelscriptCacheValidationError::UnknownRecordKind,

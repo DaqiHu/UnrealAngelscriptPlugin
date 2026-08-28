@@ -634,7 +634,7 @@ bool asCDataType::IsUnsignedType() const
 
 bool asCDataType::IsFloat32Type() const
 {
-	if( tokenType == ttFloat32 )
+	if( tokenType == ttFloat32 || tokenType == ttFloat )
 		return true;
 
 	return false;
@@ -642,7 +642,7 @@ bool asCDataType::IsFloat32Type() const
 
 bool asCDataType::IsFloat64Type() const
 {
-	if( tokenType == ttFloat64 )
+	if( tokenType == ttFloat64 || tokenType == ttDouble )
 		return true;
 
 	return false;
@@ -694,6 +694,7 @@ int asCDataType::GetSizeInMemoryBytes() const
 		return 2;
 
 	if( tokenType == ttFloat64 ||
+		tokenType == ttDouble ||
 		tokenType == ttInt64 ||
 		tokenType == ttUInt64 )
 		return 8;
@@ -757,7 +758,7 @@ int  asCDataType::GetAlignment() const
 				return 1;
 			if (tokenType == ttInt16 || tokenType == ttUInt16)
 				return 2;
-			if (tokenType == ttFloat64)
+			if (tokenType == ttFloat64 || tokenType == ttDouble)
 				return alignof(double);
 			if (tokenType == ttInt64 || tokenType == ttUInt64)
 				return alignof(asINT64);

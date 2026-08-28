@@ -5,7 +5,78 @@
 #include "CQTest.h"
 #include "Misc/ScopeExit.h"
 
+#include "StartAngelscriptHeaders.h"
+#include "source/as_module.h"
+#include "source/as_scriptengine.h"
+#include "EndAngelscriptHeaders.h"
+
 #if WITH_ANGELSCRIPT_UNITTESTS
+
+static asIScriptFunction* LegacyFuncdefFromGeneric(asIScriptGeneric* Generic, asUINT Index)
+{
+	if (Generic == nullptr)
+	{
+		return nullptr;
+	}
+	if (void* const Object = Generic->GetArgAddress(Index))
+	{
+		return static_cast<asIScriptFunction*>(Object);
+	}
+	if (void* const Slot = Generic->GetAddressOfArg(Index))
+	{
+		return *static_cast<asIScriptFunction**>(Slot);
+	}
+	return nullptr;
+}
+
+static int32 LegacyExecuteFuncdef(asIScriptGeneric* Generic, asIScriptFunction* Function, int32 Arg)
+{
+	if (Generic == nullptr || Function == nullptr)
+	{
+		return 0;
+	}
+	asIScriptEngine* const Engine = Generic->GetEngine();
+	asIScriptContext* const Context = Engine != nullptr ? Engine->RequestContext() : nullptr;
+	if (Context == nullptr)
+	{
+		return 0;
+	}
+	int32 Result = 0;
+	if (Context->Prepare(Function) >= 0)
+	{
+		if (Function->GetParamCount() > 0)
+		{
+			if (void* const Param = Context->GetAddressOfArg(0))
+			{
+				*static_cast<asDWORD*>(Param) = static_cast<asDWORD>(Arg);
+			}
+		}
+		if (Context->Execute() == asEXECUTION_FINISHED)
+		{
+			Result = static_cast<int32>(Context->GetReturnDWord());
+		}
+	}
+	Engine->ReturnContext(Context);
+	return Result;
+}
+
+static void LegacyInvokeZeroArg(asIScriptGeneric* Generic)
+{
+	asIScriptFunction* const Function = LegacyFuncdefFromGeneric(Generic, 0);
+	Generic->SetReturnDWord(static_cast<asDWORD>(LegacyExecuteFuncdef(Generic, Function, 0)));
+}
+
+static void LegacyInvokeUnary(asIScriptGeneric* Generic)
+{
+	asIScriptFunction* Function = LegacyFuncdefFromGeneric(Generic, 0);
+	int32 Arg = Generic != nullptr ? static_cast<int32>(Generic->GetArgDWord(1)) : 0;
+	if (Function == nullptr && Generic != nullptr)
+	{
+		Function = LegacyFuncdefFromGeneric(Generic, 1);
+		Arg = static_cast<int32>(Generic->GetArgDWord(0));
+	}
+	Generic->SetReturnDWord(static_cast<asDWORD>(LegacyExecuteFuncdef(Generic, Function, Arg)));
+}
 
 TEST_CLASS_WITH_FLAGS(FCompilerCoreTests,
 	"Angelscript.TestModule.AngelScriptSDK.Compiler.Core",
@@ -265,6 +336,139 @@ TEST_CLASS_WITH_FLAGS(FCompilerCoreTests,
 		{
 			ASSERT_THAT(AreEqual(7, Invoker.CallAndReturn<int32>(INDEX_NONE), TEXT("Compiler recompile test should execute corrected module")));
 		}
+	}
+
+	TEST_METHOD(LegacyZeroArgLambdaToHostFuncdefExecutes42)
+	{
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_LEGACY),
+			TEXT("legacy lambda regression fixture explicitly selects the rollback compiler")));
+		ASSERT_THAT(AreEqual(asCOMPILER_PIPELINE_LEGACY, ScriptEngine->GetCompilerPipeline(),
+			TEXT("legacy lambda regression fixture must run on the explicit LEGACY pipeline")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef("int ZeroArg()") >= 0,
+			TEXT("host RegisterFuncdef ZeroArg is allowed")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterGlobalFunction(
+				"int Invoke(ZeroArg&in)",
+				asFUNCTION(LegacyInvokeZeroArg),
+				asCALL_GENERIC) >= 0,
+			TEXT("host Invoke(ZeroArg&in) is allowed; script cannot declare funcdef params by value without @")));
+
+		asIScriptModule* Module = nullptr;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int F()
+			{
+				return Invoke(function()
+				{
+					return 42;
+				});
+			}
+			)AS");
+		const int ZeroArgBuild = CompileNativeModule(
+			Engine.Get(),
+			"LegacyZeroArgLambda",
+			ScriptSource.c_str(),
+			Module);
+		ASSERT_THAT(AreEqual(0, ZeroArgBuild,
+			*FString::Printf(
+				TEXT("LEGACY 0-arg lambda-to-host-funcdef must compile (snIdentifier function must not count as a parameter); r=%d messages=%s"),
+				ZeroArgBuild,
+				*Engine.GetMessagesText())));
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptSDKTestSupport::ExecuteScriptFunction(*TestRunner, Engine.Get(), Module, "int F()", Value)
+				&& Value == 42,
+			TEXT("LEGACY 0-arg lambda F() must execute 42")));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_COMPILER,
+			static_cast<asCModule*>(Module)->GetLastBytecodePublisher(),
+			TEXT("default pipeline must still publish asCCompiler")));
+	}
+
+	TEST_METHOD(LegacyOneArgLambdaToHostFuncdefExecutes42)
+	{
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_LEGACY),
+			TEXT("legacy lambda regression fixture explicitly selects the rollback compiler")));
+		ASSERT_THAT(AreEqual(asCOMPILER_PIPELINE_LEGACY, ScriptEngine->GetCompilerPipeline(),
+			TEXT("legacy lambda regression fixture must run on the explicit LEGACY pipeline")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef("int Unary(int)") >= 0,
+			TEXT("host RegisterFuncdef Unary is allowed")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterGlobalFunction(
+				"int Invoke(Unary&in, int)",
+				asFUNCTION(LegacyInvokeUnary),
+				asCALL_GENERIC) >= 0,
+			TEXT("host Invoke(Unary&in, int) is allowed; script cannot declare funcdef params by value without @")));
+
+		asIScriptModule* Module = nullptr;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int F()
+			{
+				return Invoke(function(int X)
+				{
+					return X + 1;
+				}, 41);
+			}
+			)AS");
+		const int OneArgBuild = CompileNativeModule(
+			Engine.Get(),
+			"LegacyOneArgLambda",
+			ScriptSource.c_str(),
+			Module);
+		ASSERT_THAT(AreEqual(0, OneArgBuild,
+			*FString::Printf(
+				TEXT("LEGACY 1-arg lambda-to-host-funcdef must compile and bind X, not the function label; r=%d messages=%s"),
+				OneArgBuild,
+				*Engine.GetMessagesText())));
+		asCScriptFunction* Lambda = nullptr;
+		asCModule* const ScriptModule = static_cast<asCModule*>(Module);
+		if (ScriptModule != nullptr)
+		{
+			for (asUINT Index = 0; Index < ScriptModule->scriptFunctions.GetLength(); ++Index)
+			{
+				asCScriptFunction* const Candidate = ScriptModule->scriptFunctions[Index];
+				if (Candidate != nullptr
+					&& Candidate->name.StartsWith("$")
+					&& Candidate->parameterTypes.GetLength() == 1)
+				{
+					Lambda = Candidate;
+					break;
+				}
+			}
+		}
+		ASSERT_THAT(IsNotNull(Lambda, TEXT("1-arg lambda must be registered by RegisterLambda")));
+		ASSERT_THAT(IsTrue(
+			Lambda->parameterNames.GetLength() == 1 && Lambda->parameterNames[0].Equals("X"),
+			TEXT("RegisterLambda must name the parameter X, not the function label")));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(Lambda->parameterTypes.GetLength()),
+			static_cast<int32>(Lambda->parameterOffsets.GetLength()),
+			*FString::Printf(
+				TEXT("late RegisterLambda must CalculateParameterOffsets before any SetArg (types=%u offsets=%u); empty offsets crash SetArgDWord at address 0"),
+				Lambda->parameterTypes.GetLength(),
+				Lambda->parameterOffsets.GetLength())));
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptSDKTestSupport::ExecuteScriptFunction(*TestRunner, Engine.Get(), Module, "int F()", Value)
+				&& Value == 42,
+			TEXT("LEGACY 1-arg lambda F() must execute 42")));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_COMPILER,
+			static_cast<asCModule*>(Module)->GetLastBytecodePublisher(),
+			TEXT("default pipeline must still publish asCCompiler")));
 	}
 };
 

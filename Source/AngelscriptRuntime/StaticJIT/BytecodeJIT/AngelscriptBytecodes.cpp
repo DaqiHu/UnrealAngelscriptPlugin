@@ -3624,8 +3624,20 @@ IMPL_BYTECODE_BEGIN(asBC_CMPi)
 {
 	bool Implement(FStaticJITContext& Context) const override
 	{
-		check(Context.VArg_IsNumeric(0));
-		check(Context.VArg_IsNumeric(1));
+		const FStaticJITContext::EVariableType LeftType = Context.VArg_Type(0);
+		const FStaticJITContext::EVariableType RightType = Context.VArg_Type(1);
+		checkf(Context.VArg_IsNumeric(0) && Context.VArg_IsNumeric(1),
+			TEXT("StaticJIT CMPi requires numeric operands: function=%s bytecodeOffset=%d leftOffset=%d leftType=%d rightOffset=%d rightType=%d"),
+			Context.ScriptFunction != nullptr
+				? UTF8_TO_TCHAR(Context.ScriptFunction->GetDeclaration())
+				: TEXT("<null>"),
+			Context.BC != nullptr && Context.BC_FunctionStart != nullptr
+				? static_cast<int32>(Context.BC - Context.BC_FunctionStart)
+				: -1,
+			Context.VArg_Offset(0),
+			static_cast<int32>(LeftType),
+			Context.VArg_Offset(1),
+			static_cast<int32>(RightType));
 
 		Context.Line("  if ({0} == {1})     l_byteRegister = 0;", Context.VArg_SignedVar(0), Context.VArg_SignedVar(1));
 		Context.Line("  else if ({0} < {1}) l_byteRegister = -1;", Context.VArg_SignedVar(0), Context.VArg_SignedVar(1));
@@ -4502,7 +4514,38 @@ IMPL_BYTECODE_END(asBC_ADDSi)
 
 void ByteCode_CopyVArg(FStaticJITContext& Context)
 {
-	check(Context.VArg_Type(1) == Context.VArg_Type(0));
+	const FStaticJITContext::EVariableType DestinationType = Context.VArg_Type(0);
+	const FStaticJITContext::EVariableType SourceType = Context.VArg_Type(1);
+	auto IsNarrowableIntegralSlot = [](FStaticJITContext::EVariableType Type)
+	{
+		return Type == FStaticJITContext::EVariableType::Byte
+			|| Type == FStaticJITContext::EVariableType::Word
+			|| Type == FStaticJITContext::EVariableType::DWord;
+	};
+	// CpyVtoV4 copies one VM dword, but a source-level int8/int16/compact-enum
+	// variable still has its own byte/word C++ local in StaticJIT.  The compiler
+	// legitimately uses this opcode when assigning a normalized dword expression
+	// into such a slot (and when promoting it back); ordinary C++ assignment has
+	// exactly the required low-byte/low-word truncation or integral extension.
+	// Keep floating-point and pointer/object mismatches fail-closed: those require
+	// a bit-preserving opcode-specific conversion rather than numeric assignment.
+	const bool bCompatibleIntegralCopy = Context.GetInstr() == asBC_CpyVtoV4
+		&& IsNarrowableIntegralSlot(DestinationType)
+		&& IsNarrowableIntegralSlot(SourceType);
+	checkf(
+		SourceType == DestinationType || bCompatibleIntegralCopy,
+		TEXT("StaticJIT copy operand type mismatch: function=%s bytecodeOffset=%d opcode=%d destinationOffset=%d destinationType=%d sourceOffset=%d sourceType=%d"),
+		Context.ScriptFunction != nullptr
+			? UTF8_TO_TCHAR(Context.ScriptFunction->GetDeclaration())
+			: TEXT("<null>"),
+		Context.BC != nullptr && Context.BC_FunctionStart != nullptr
+			? static_cast<int32>(Context.BC - Context.BC_FunctionStart)
+			: -1,
+		Context.BC != nullptr ? static_cast<int32>(Context.GetInstr()) : -1,
+		Context.VArg_Offset(0),
+		static_cast<int32>(DestinationType),
+		Context.VArg_Offset(1),
+		static_cast<int32>(SourceType));
 	Context.Line("{0} = {1};", Context.VArg_Var(0), Context.VArg_Var(1));
 }
 
@@ -5238,8 +5281,22 @@ IMPL_BYTECODE_BEGIN(asBC_dTOf)
 {
 	bool Implement(FStaticJITContext& Context) const override
 	{
-		check(Context.VArg_Type(0) == FStaticJITContext::EVariableType::Float);
-		check(Context.VArg_Type(1) == FStaticJITContext::EVariableType::Double);
+		const FStaticJITContext::EVariableType DestinationType = Context.VArg_Type(0);
+		const FStaticJITContext::EVariableType SourceType = Context.VArg_Type(1);
+		checkf(
+			DestinationType == FStaticJITContext::EVariableType::Float
+				&& SourceType == FStaticJITContext::EVariableType::Double,
+			TEXT("StaticJIT dTOf operand type mismatch: function=%s bytecodeOffset=%d destinationOffset=%d destinationType=%d sourceOffset=%d sourceType=%d"),
+			Context.ScriptFunction != nullptr
+				? UTF8_TO_TCHAR(Context.ScriptFunction->GetDeclaration())
+				: TEXT("<null>"),
+			Context.BC != nullptr && Context.BC_FunctionStart != nullptr
+				? static_cast<int32>(Context.BC - Context.BC_FunctionStart)
+				: -1,
+			Context.VArg_Offset(0),
+			static_cast<int32>(DestinationType),
+			Context.VArg_Offset(1),
+			static_cast<int32>(SourceType));
 		Context.Line("{0} = float({1});", Context.VArg_Var(0), Context.VArg_Var(1));
 		return true;
 	}

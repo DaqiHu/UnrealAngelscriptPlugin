@@ -221,6 +221,14 @@ namespace AngelscriptCacheExactStartup_Private
 				{
 					return false;
 				}
+				if (Body->ASTBodySidecar.IsSet()
+					&& !AddPreparedRecord(
+						Generation,
+						Body->ASTBodySidecar.GetValue(),
+						Artifacts))
+				{
+					return false;
+				}
 			}
 			if (!AddPreparedRecord(Generation, Link.RecordId, Artifacts))
 			{

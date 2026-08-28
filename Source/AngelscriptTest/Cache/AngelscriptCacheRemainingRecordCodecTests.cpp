@@ -387,8 +387,8 @@ public:
 		TArray<uint8> Payload;
 		ASSERT_THAT(IsTrue(FAngelscriptCacheRemainingRecordArchive::SerializeFunctionBody(
 			SourceValue, Payload).IsSuccess()));
-		ASSERT_THAT(AreEqual(int32(314), Payload.Num(),
-			TEXT("zero-dependency/present-debug FunctionBody has the exact V1 byte length")));
+		ASSERT_THAT(AreEqual(int32(315), Payload.Num(),
+			TEXT("zero-dependency/present-debug/absent-AST FunctionBody has the exact V2 byte length")));
 
 		FAngelscriptCacheRecordId RecordId;
 		ASSERT_THAT(IsTrue(FAngelscriptCacheRecordArchive::TryBuildRecordId(
@@ -475,6 +475,11 @@ public:
 			EAngelscriptFunctionBodyCapturedField::DebugSidecarKind, 281)));
 		ASSERT_THAT(IsTrue(ExactOffset(
 			EAngelscriptFunctionBodyCapturedField::DebugSidecarContentHash, 282)));
+		ASSERT_THAT(IsTrue(ExactOffset(
+			EAngelscriptFunctionBodyCapturedField::ASTBodySidecarPresence, 314)));
+		ASSERT_THAT(IsFalse(Decoded.GetValue()->FindCapturedOffset({
+			EAngelscriptFunctionBodyCapturedField::ASTBodySidecar,
+			MAX_uint32, MAX_uint32, MAX_uint32}).IsSet()));
 		ASSERT_THAT(IsFalse(Decoded.GetValue()->FindCapturedOffset({
 			EAngelscriptFunctionBodyCapturedField::ActualDependency,
 			0,
@@ -515,8 +520,8 @@ public:
 		TArray<uint8> Payload;
 		ASSERT_THAT(IsTrue(FAngelscriptCacheRemainingRecordArchive::SerializeFunctionBody(
 			SourceValue, Payload).IsSuccess()));
-		ASSERT_THAT(AreEqual(int32(447), Payload.Num(),
-			TEXT("two-dependency/absent-debug FunctionBody has exact V1 length")));
+		ASSERT_THAT(AreEqual(int32(448), Payload.Num(),
+			TEXT("two-dependency/absent-debug/absent-AST FunctionBody has exact V2 length")));
 		FAngelscriptCacheRecordId RecordId;
 		ASSERT_THAT(IsTrue(FAngelscriptCacheRecordArchive::TryBuildRecordId(
 			EAngelscriptCacheRecordKind::FunctionBody, Payload, RecordId).IsSuccess()));
@@ -576,6 +581,12 @@ public:
 			MAX_uint32, 446)));
 		ASSERT_THAT(IsFalse(Decoded.GetValue()->FindCapturedOffset({
 			EAngelscriptFunctionBodyCapturedField::DebugSidecar,
+			MAX_uint32, MAX_uint32, MAX_uint32}).IsSet()));
+		ASSERT_THAT(IsTrue(ExactOffset(
+			EAngelscriptFunctionBodyCapturedField::ASTBodySidecarPresence,
+			MAX_uint32, 447)));
+		ASSERT_THAT(IsFalse(Decoded.GetValue()->FindCapturedOffset({
+			EAngelscriptFunctionBodyCapturedField::ASTBodySidecar,
 			MAX_uint32, MAX_uint32, MAX_uint32}).IsSet()));
 		ASSERT_THAT(AreEqual(UINT64_C(2), Budget.GetReferencesAndRelocations()));
 		ASSERT_THAT(AreEqual(UINT64_C(0), Budget.GetTemporaryResidentDecodedBytes()));

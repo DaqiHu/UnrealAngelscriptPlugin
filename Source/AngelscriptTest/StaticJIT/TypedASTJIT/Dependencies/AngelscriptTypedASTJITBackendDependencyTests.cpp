@@ -17,6 +17,28 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptTypedASTJITBackendDependencyTests,
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 private:
+	static FString DescribeBackendAttempts(
+		const FAngelscriptStaticJITFunctionResult& Result)
+	{
+		TArray<FString> Parts;
+		for (const FAngelscriptStaticJITBackendAttemptDiagnostic& Attempt
+			: Result.BackendAttempts)
+		{
+			FString Typed;
+			if (Attempt.TypedDiagnostic.IsSet())
+			{
+				Typed = FString::Printf(TEXT(" reason=%s typed=%s"),
+					LexToString(Attempt.TypedDiagnostic->FallbackReason),
+					*Attempt.TypedDiagnostic->Detail);
+			}
+			Parts.Add(FString::Printf(TEXT("%s disposition=%d detail=%s%s"),
+				*Attempt.BackendId.ToString(),
+				static_cast<int32>(Attempt.Disposition),
+				*Attempt.Detail, *Typed));
+		}
+		return FString::Join(Parts, TEXT(" | "));
+	}
+
 	static FAngelscriptJITProviderGenerationSettings MakeSettings(
 		const FAngelscriptStaticJITGenerationSnapshot& Snapshot)
 	{
@@ -201,7 +223,9 @@ public:
 		ASSERT_THAT(AreEqual(
 			EAngelscriptTypedASTJITFallbackReason::SemanticDependencyMismatch,
 			TypedAttempt->TypedDiagnostic->FallbackReason,
-			TEXT("The missing compiler dependency must not be reported as an emitter failure")));
+			*FString::Printf(TEXT(
+				"The missing compiler dependency must not be reported as an emitter failure: %s"),
+				*DescribeBackendAttempts(*Result))));
 		ASSERT_THAT(IsTrue(TypedAttempt->TypedDiagnostic->Detail.Contains(
 			TEXT("ScriptCallSignature"), ESearchCase::CaseSensitive),
 			TypedAttempt->TypedDiagnostic->Detail));
@@ -254,6 +278,10 @@ public:
 			TEXT("The generation Engine must publish a same-compilation snapshot")));
 		ASSERT_THAT(IsTrue(SourceSnapshot->IsComplete(),
 			TEXT("The source snapshot must be complete before generation")));
+		ASSERT_THAT(IsTrue(SourceSnapshot->bHasVerifiedCanonicalAST,
+			TEXT("typed-ast source snapshots retain the sealed Canonical AST")));
+		ASSERT_THAT(IsTrue(!SourceSnapshot->NativeCallTargets.IsEmpty(),
+			TEXT("sealed canonical calls must still capture exact native targets without HIR")));
 
 		const TSharedPtr<FAngelscriptModuleDesc> RecursionModule =
 			Session->Engine->GetModuleByModuleName(
@@ -338,10 +366,33 @@ public:
 			ASSERT_THAT(AreEqual(FAngelscriptStaticJITBackendId::TypedAST(),
 				Result->ActualBackendId,
 				*FString::Printf(TEXT(
-					"TypedASTJIT self-recursion AOT fixture did not use production TypedAST backend: Function=%s Backend=%s Detail=%s"),
+					"TypedASTJIT self-recursion AOT fixture did not use production TypedAST backend: Function=%s Backend=%s Detail=%s Attempts=%s"),
 					*Declaration,
 					*Result->ActualBackendId.ToString(),
-					*Result->Detail)));
+					*Result->Detail,
+					*DescribeBackendAttempts(*Result))));
+			ASSERT_THAT(IsTrue(Result->TypedDiagnostic.IsSet()
+				&& Result->TypedDiagnostic->SemanticFunction.IsSet(),
+				*FString::Printf(TEXT(
+					"TypedASTJIT must retain Canonical semantic facts for %s"),
+					*Declaration)));
+			if (!Result->TypedDiagnostic.IsSet()
+				|| !Result->TypedDiagnostic->SemanticFunction.IsSet())
+			{
+				continue;
+			}
+			const FAngelscriptStaticJITCanonicalFunctionDiagnostic&
+				Semantic = Result->TypedDiagnostic->SemanticFunction.GetValue();
+			ASSERT_THAT(AreEqual(
+				EAngelscriptTypedASTJITCleanupPlanState::VerifiedEmpty,
+				Semantic.CleanupPlanState,
+				*FString::Printf(TEXT(
+					"the production AOT diagnostic for %s must derive an empty cleanup plan from the same sealed Canonical AST"),
+					*Declaration)));
+			ASSERT_THAT(IsTrue(Semantic.bCleanupPlanCoversAllTransfers,
+				*FString::Printf(TEXT(
+					"a sealed function with no cleanup actions must prove complete transfer coverage: %s"),
+					*Declaration)));
 		}
 
 		AssertNoTypedBytecodeTraversal(

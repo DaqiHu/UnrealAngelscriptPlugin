@@ -126,7 +126,7 @@ public:
 
 			int Entry()
 			{
-				UnsafeConstructorCarrier@ Carrier = UnsafeConstructorCarrier();
+				UnsafeConstructorCarrier Carrier = UnsafeConstructorCarrier();
 				return Carrier.Value;
 			}
 			)AS");

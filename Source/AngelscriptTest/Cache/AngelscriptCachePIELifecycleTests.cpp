@@ -124,6 +124,8 @@ namespace AngelscriptCachePIELifecycleTests_Private
 		Config.bIsEditor = true;
 		Config.bDevelopmentMode = true;
 		Config.bSkipThreadedInitialize = true;
+		Config.bOverrideCacheV2Enablement = true;
+		Config.bEnableCacheV2 = true;
 
 		FAngelscriptEngineDependencies Dependencies =
 			FAngelscriptEngineDependencies::CreateDefault();

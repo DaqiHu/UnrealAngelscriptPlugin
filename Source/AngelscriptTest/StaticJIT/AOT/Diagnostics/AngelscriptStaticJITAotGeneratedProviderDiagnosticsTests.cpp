@@ -52,13 +52,13 @@ namespace AngelscriptStaticJITAotGeneratedProviderDiagnosticsTests_Private
 		FAngelscriptJITGenerationDiagnostics& Diagnostics =
 			Request.Diagnostics.Emplace();
 		Diagnostics.RequestedBackendId = TEXT("typed-ast");
-		Diagnostics.CaptureState = TEXT("VerifiedTypedHIR");
+		Diagnostics.CaptureState = TEXT("VerifiedCanonicalAST");
 		Diagnostics.FallbackChain = {TEXT("typed-ast"), TEXT("bytecode")};
 		Diagnostics.SourceCompilePassCount = 1;
 		Diagnostics.CompiledModuleCount = 1;
 		Diagnostics.CompiledFunctionCount = 1;
 		Diagnostics.EmitModuleCount = 1;
-		Diagnostics.bHasVerifiedTypedHIR = true;
+		Diagnostics.bHasVerifiedCanonicalAST = true;
 
 		FAngelscriptJITGenerationFunctionDiagnostic& FunctionDiagnostic =
 			Diagnostics.Functions.AddDefaulted_GetRef();
@@ -82,13 +82,13 @@ namespace AngelscriptStaticJITAotGeneratedProviderDiagnosticsTests_Private
 		Attempt.ExceptionControlState = TEXT("DirectExecutionState");
 		Attempt.ExceptionPayloadState = TEXT("DirectFailureRecord");
 
-		FAngelscriptJITGenerationTypedSemanticFunctionDiagnostic& Semantic =
+		FAngelscriptJITGenerationCanonicalFunctionDiagnostic& Semantic =
 			Attempt.SemanticFunctions.AddDefaulted_GetRef();
 		Semantic.FunctionKey = Function.FunctionKey;
 		Semantic.Role = TEXT("UFunctionRoot");
 		Semantic.InvocationKind = TEXT("Global");
 		Semantic.ReceiverKind = TEXT("None");
-		Semantic.HIRState = TEXT("Verified");
+		Semantic.CanonicalASTState = TEXT("Verified");
 		Semantic.CleanupPlanState = TEXT("VerifiedEmpty");
 		Semantic.EligibilityReason = TEXT("None");
 		Semantic.EligibilityDetail = TEXT("eligible");

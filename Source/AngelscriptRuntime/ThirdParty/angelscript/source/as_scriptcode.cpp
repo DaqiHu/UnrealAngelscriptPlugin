@@ -99,7 +99,7 @@ int asCScriptCode::SetCode(const char *in_name, const char *in_code, size_t in_l
 }
 
 bool asCScriptCode::SetSourceProvenanceRanges(
-	const asSTypedSemanticSourceProvenanceRange* ranges,
+	const asSSourceProvenanceRange* ranges,
 	asUINT rangeCount)
 {
 	if( rangeCount != 0 && ranges == 0 )
@@ -108,7 +108,7 @@ bool asCScriptCode::SetSourceProvenanceRanges(
 	asUINT previousEnd = 0;
 	for( asUINT index = 0; index < rangeCount; ++index )
 	{
-		const asSTypedSemanticSourceProvenanceRange &range = ranges[index];
+		const asSSourceProvenanceRange &range = ranges[index];
 		if( range.processedLength == 0
 			|| range.processedOffset > codeLength
 			|| range.processedLength > codeLength - range.processedOffset
@@ -126,7 +126,7 @@ bool asCScriptCode::SetSourceProvenanceRanges(
 }
 
 void asCScriptCode::ApplySourceProvenance(
-	asSTypedSemanticSourceSpan& span) const
+	asSSourceSpan& span) const
 {
 	const asUINT spanEnd = span.sourceOffset + span.sourceLength;
 	if( spanEnd < span.sourceOffset )
@@ -134,7 +134,7 @@ void asCScriptCode::ApplySourceProvenance(
 
 	for( asUINT index = 0; index < sourceProvenanceRanges.GetLength(); ++index )
 	{
-		const asSTypedSemanticSourceProvenanceRange &range =
+		const asSSourceProvenanceRange &range =
 			sourceProvenanceRanges[index];
 		const asUINT rangeEnd = range.processedOffset + range.processedLength;
 		if( span.sourceOffset < range.processedOffset )

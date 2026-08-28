@@ -7,7 +7,6 @@
 #include "StartAngelscriptHeaders.h"
 #include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
-#include "source/as_typed_semantic_ir.h"
 #include "EndAngelscriptHeaders.h"
 
 using AngelscriptNativeTestSupport::AppendGeneratedAsLine;
@@ -258,33 +257,19 @@ public:
 			| ENativeEvidence::Bytecode
 			| ENativeEvidence::Cleanup);
 
-		AngelscriptNativeTestSupport::FNativeTestEngine CaptureOffEngine;
-		AngelscriptNativeTestSupport::FNativeTestEngine CaptureOnEngine;
-		CaptureOffEngine.Create(*TestRunner);
-		CaptureOnEngine.Create(*TestRunner);
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
 		ON_SCOPE_EXIT
 		{
-			CaptureOnEngine.Destroy();
-			CaptureOffEngine.Destroy();
+			Engine.Destroy();
 		};
 
-		asIScriptEngine* const CaptureOffScriptEngine = CaptureOffEngine.Get();
-		asIScriptEngine* const CaptureOnScriptEngine = CaptureOnEngine.Get();
-		ASSERT_THAT(IsNotNull(CaptureOffScriptEngine,
-			TEXT("Nested-target product should create its capture-off raw SDK engine")));
-		ASSERT_THAT(IsNotNull(CaptureOnScriptEngine,
-			TEXT("Nested-target product should create its capture-on raw SDK engine")));
-		if (CaptureOffScriptEngine == nullptr || CaptureOnScriptEngine == nullptr)
+		asIScriptEngine* const ScriptEngine = Engine.Get();
+		ASSERT_THAT(IsNotNull(ScriptEngine, TEXT("Nested-target product should create a raw SDK engine")));
+		if (ScriptEngine == nullptr)
 		{
 			return;
 		}
-		asCScriptEngine* const CaptureOffInternal =
-			static_cast<asCScriptEngine*>(CaptureOffScriptEngine);
-		asCScriptEngine* const CaptureOnInternal =
-			static_cast<asCScriptEngine*>(CaptureOnScriptEngine);
-		ASSERT_THAT(IsFalse(CaptureOffInternal->IsTypedSemanticIRCaptureEnabled()));
-		ASSERT_THAT(IsFalse(CaptureOnInternal->IsTypedSemanticIRCaptureEnabled()));
-		CaptureOnInternal->SetTypedSemanticIRCapture(true);
 
 		int32 ObservedCaseCount = 0;
 		for (const FNamedCase& NestingCase : NestingCases)
@@ -311,167 +296,49 @@ public:
 					const FTCHARToUTF8 ModuleNameUtf8(*ModuleName);
 					const FTCHARToUTF8 SourceUtf8(*Source);
 
-					CaptureOffEngine.Reset(*TestRunner);
-					CaptureOnEngine.Reset(*TestRunner);
+					Engine.Reset(*TestRunner);
 					PrintGeneratedAsSource(*TestRunner, Case.GetId(), ModuleName, Source);
-					asIScriptModule* CaptureOffModule = nullptr;
-					asIScriptModule* CaptureOnModule = nullptr;
-					const int CaptureOffBuildResult = CompileNativeModule(
-						CaptureOffScriptEngine,
+					asIScriptModule* Module = nullptr;
+					const int BuildResult = CompileNativeModule(
+						ScriptEngine,
 						ModuleNameUtf8.Get(),
 						SourceUtf8.Get(),
-						CaptureOffModule);
-					const FString CaptureOffDiagnostics =
-						CaptureOffEngine.GetMessagesText();
-					const int CaptureOnBuildResult = CompileNativeModule(
-						CaptureOnScriptEngine,
-						ModuleNameUtf8.Get(),
-						SourceUtf8.Get(),
-						CaptureOnModule);
-					const FString CaptureOnDiagnostics =
-						CaptureOnEngine.GetMessagesText();
-					ASSERT_THAT(AreEqual(
-						CaptureOffBuildResult,
-						CaptureOnBuildResult,
-						*Case.Describe(TEXT("HIR capture must preserve the nested-target build outcome"))));
-					ASSERT_THAT(AreEqual(
-						CaptureOffDiagnostics,
-						CaptureOnDiagnostics,
-						*Case.Describe(TEXT("HIR capture must preserve every nested-target diagnostic"))));
-					ASSERT_THAT(AreEqual(asSUCCESS, CaptureOffBuildResult,
+						Module);
+					ASSERT_THAT(AreEqual(asSUCCESS, BuildResult,
 						*Case.Describe(TEXT("nested transfer source should compile for the selected shape, transfer, and target"))));
-					ASSERT_THAT(IsNotNull(CaptureOffModule,
-						*Case.Describe(TEXT("capture-off nested transfer source should publish a module"))));
-					ASSERT_THAT(IsNotNull(CaptureOnModule,
-						*Case.Describe(TEXT("capture-on nested transfer source should publish a module"))));
+					ASSERT_THAT(IsNotNull(Module,
+						*Case.Describe(TEXT("nested transfer source should publish a module"))));
 
-					if (CaptureOffBuildResult >= 0
-						&& CaptureOnBuildResult >= 0
-						&& CaptureOffModule != nullptr
-						&& CaptureOnModule != nullptr)
+					if (BuildResult >= 0 && Module != nullptr)
 					{
-						asIScriptFunction* const CaptureOffEntry =
-							GetNativeFunctionByExactDecl(CaptureOffModule, "int Entry()");
-						asIScriptFunction* const CaptureOnEntry =
-							GetNativeFunctionByExactDecl(CaptureOnModule, "int Entry()");
-						ASSERT_THAT(IsNotNull(CaptureOffEntry,
-							*Case.Describe(TEXT("capture-off nested transfer source should publish the exact Entry declaration"))));
-						ASSERT_THAT(IsNotNull(CaptureOnEntry,
-							*Case.Describe(TEXT("capture-on nested transfer source should publish the exact Entry declaration"))));
-						if (CaptureOffEntry != nullptr && CaptureOnEntry != nullptr)
+						asIScriptFunction* const Entry = GetNativeFunctionByExactDecl(Module, "int Entry()");
+						ASSERT_THAT(IsNotNull(Entry,
+							*Case.Describe(TEXT("nested transfer source should publish the exact Entry declaration"))));
+						if (Entry != nullptr)
 						{
-							const TArray<asDWORD> CaptureOffBytecode =
-								CopyNativeBytecode(CaptureOffEntry);
-							const TArray<asDWORD> CaptureOnBytecode =
-								CopyNativeBytecode(CaptureOnEntry);
-							ASSERT_THAT(IsTrue(CaptureOffBytecode.Num() > 0,
+							asUINT BytecodeLength = 0;
+							Entry->GetByteCode(&BytecodeLength);
+							ASSERT_THAT(IsTrue(BytecodeLength > 0,
 								*Case.Describe(TEXT("nested transfer entry should retain executable bytecode"))));
-							ASSERT_THAT(AreEqual(
-								CaptureOffBytecode,
-								CaptureOnBytecode,
-								*Case.Describe(TEXT("HIR capture must not change any nested-target bytecode word"))));
 
-							asCScriptFunction* const CaptureOffInternalFunction =
-								static_cast<asCScriptFunction*>(CaptureOffEntry);
-							asCScriptFunction* const CaptureOnInternalFunction =
-								static_cast<asCScriptFunction*>(CaptureOnEntry);
-							ASSERT_THAT(IsNull(
-								CaptureOffInternalFunction->GetTypedSemanticFunction(),
-								*Case.Describe(TEXT("capture-off nested-target entry must not publish HIR"))));
-							const asCTypedSemanticFunction* const HIR =
-								CaptureOnInternalFunction->GetTypedSemanticFunction();
-							ASSERT_THAT(IsNotNull(
-								HIR,
-								*FString::Printf(
-									TEXT("%s capture-on nested-target entry must publish HIR: %s"),
-									*Case.GetId(),
-									UTF8_TO_TCHAR(CaptureOnInternalFunction
-										->GetTypedSemanticCaptureDiagnostic().AddressOf()))));
-							if (HIR != nullptr)
+							asIScriptContext* const Context = ScriptEngine->CreateContext();
+							ASSERT_THAT(IsNotNull(Context,
+								*Case.Describe(TEXT("nested transfer source should create an execution context"))));
+							if (Context != nullptr)
 							{
-								ASSERT_THAT(IsTrue(VerifyTypedSemanticFunction(*HIR).IsValid()));
-								asTypedSemanticStatementId OutermostFor;
-								asTypedSemanticStatementId SelectedTransfer;
-								asUINT MaximumReturnExitedScopes = 0;
-								for (asUINT StatementIndex = 0;
-									StatementIndex < HIR->statements.GetLength();
-									++StatementIndex)
-								{
-									const asSTypedSemanticStatement& Statement =
-										HIR->statements[StatementIndex];
-									if (Statement.kind == asETypedSemanticStatementKind::For)
-									{
-										OutermostFor = Statement.id;
-									}
-									if ((IsCase(TransferCase, "break")
-											&& Statement.kind == asETypedSemanticStatementKind::Break)
-										|| (IsCase(TransferCase, "continue")
-											&& Statement.kind == asETypedSemanticStatementKind::Continue))
-									{
-										SelectedTransfer = Statement.id;
-									}
-									if (Statement.kind == asETypedSemanticStatementKind::Return)
-									{
-										MaximumReturnExitedScopes = FMath::Max(
-											MaximumReturnExitedScopes,
-											Statement.exitedScopeCount);
-									}
-								}
-								if (IsCase(TransferCase, "return"))
-								{
-									ASSERT_THAT(IsTrue(MaximumReturnExitedScopes > 1));
-								}
-								else
-								{
-									ASSERT_THAT(IsTrue(SelectedTransfer.IsValid()));
-									if (SelectedTransfer.IsValid())
-									{
-										const asSTypedSemanticStatement& Transfer =
-											HIR->statements[SelectedTransfer.value];
-										ASSERT_THAT(IsTrue(Transfer.targetStatement.IsValid()));
-										ASSERT_THAT(AreEqual(
-											IsCase(TargetCase, "outer"),
-											Transfer.targetStatement == OutermostFor));
-									}
-								}
-							}
-
-							asIScriptEngine* const Engines[] = {
-								CaptureOffScriptEngine,
-								CaptureOnScriptEngine,
-							};
-							asIScriptFunction* const Entries[] = {
-								CaptureOffEntry,
-								CaptureOnEntry,
-							};
-							int32 Results[2] = {0, 0};
-							for (int32 RunIndex = 0; RunIndex < 2; ++RunIndex)
-							{
-								asIScriptContext* const Context = Engines[RunIndex]->CreateContext();
-								ASSERT_THAT(IsNotNull(Context,
-									*Case.Describe(TEXT("nested transfer source should create both execution contexts"))));
-								if (Context != nullptr)
-							{
-									const int ExecuteResult = PrepareAndExecute(Context, Entries[RunIndex]);
+								const int ExecuteResult = PrepareAndExecute(Context, Entry);
 								ASSERT_THAT(AreEqual(static_cast<int32>(asEXECUTION_FINISHED), ExecuteResult,
 									*Case.Describe(TEXT("nested transfer execution should finish without an exception"))));
-									Results[RunIndex] = static_cast<int32>(Context->GetReturnDWord());
+								ASSERT_THAT(AreEqual(ExpectedTrace, static_cast<int32>(Context->GetReturnDWord()),
+									*Case.Describe(TEXT("nested transfer should preserve the exact inner or outer target trace"))));
 								Context->Release();
 							}
-							}
-							ASSERT_THAT(AreEqual(ExpectedTrace, Results[0],
-								*Case.Describe(TEXT("nested transfer should preserve the exact inner or outer target trace"))));
-							ASSERT_THAT(AreEqual(Results[0], Results[1],
-								*Case.Describe(TEXT("HIR capture must preserve the exact nested-target VM result"))));
 						}
 					}
 
-					CaptureOffScriptEngine->DiscardModule(ModuleNameUtf8.Get());
-					CaptureOnScriptEngine->DiscardModule(ModuleNameUtf8.Get());
-					ASSERT_THAT(IsNull(CaptureOffScriptEngine->GetModule(ModuleNameUtf8.Get(), asGM_ONLY_IF_EXISTS),
-						*Case.Describe(TEXT("capture-off nested transfer module should be discarded after the selected cell"))));
-					ASSERT_THAT(IsNull(CaptureOnScriptEngine->GetModule(ModuleNameUtf8.Get(), asGM_ONLY_IF_EXISTS),
-						*Case.Describe(TEXT("capture-on nested transfer module should be discarded after the selected cell"))));
+					ScriptEngine->DiscardModule(ModuleNameUtf8.Get());
+					ASSERT_THAT(IsNull(ScriptEngine->GetModule(ModuleNameUtf8.Get(), asGM_ONLY_IF_EXISTS),
+						*Case.Describe(TEXT("nested transfer module should be discarded after the selected cell"))));
 				}
 			}
 		}

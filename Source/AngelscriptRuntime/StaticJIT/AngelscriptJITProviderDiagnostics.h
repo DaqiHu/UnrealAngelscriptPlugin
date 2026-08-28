@@ -43,10 +43,10 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITProviderDiagnosticSource
 
 /** Flat semantic-function row referenced by one backend attempt. */
 struct ANGELSCRIPTRUNTIME_API
-FAngelscriptJITProviderTypedSemanticFunctionDiagnostic
+FAngelscriptJITProviderCanonicalFunctionDiagnostic
 {
 	uint32 StructSize =
-		sizeof(FAngelscriptJITProviderTypedSemanticFunctionDiagnostic);
+		sizeof(FAngelscriptJITProviderCanonicalFunctionDiagnostic);
 	FAngelscriptStableFunctionKey FunctionKey;
 	const TCHAR* Role = TEXT("NonRoot");
 	uint32 RawTraitBits = 0;
@@ -54,7 +54,7 @@ FAngelscriptJITProviderTypedSemanticFunctionDiagnostic
 	const TCHAR* InvocationKind = TEXT("Global");
 	const TCHAR* ReceiverKind = TEXT("None");
 	int32 ReceiverParameterIndex = INDEX_NONE;
-	const TCHAR* HIRState = TEXT("Missing");
+	const TCHAR* CanonicalASTState = TEXT("Missing");
 	const TCHAR* CleanupPlanState = TEXT("Unverified");
 	uint32 bHasSuspendState = 0;
 	uint32 bHasExceptionCleanup = 0;
@@ -167,14 +167,14 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITProviderDiagnostics
 	uint32 CompiledDependencyCount = 0;
 	uint32 CompiledExternalNativeCallCount = 0;
 	uint32 EmitModuleCount = 0;
-	uint32 bHasVerifiedTypedHIR = 0;
+	uint32 bHasVerifiedCanonicalAST = 0;
 	const TCHAR* TaskError = TEXT("");
 	const FAngelscriptJITProviderFunctionDiagnostic* Functions = nullptr;
 	uint32 FunctionCount = 0;
 	const FAngelscriptJITProviderBackendAttemptDiagnostic* BackendAttempts =
 		nullptr;
 	uint32 BackendAttemptCount = 0;
-	const FAngelscriptJITProviderTypedSemanticFunctionDiagnostic*
+	const FAngelscriptJITProviderCanonicalFunctionDiagnostic*
 		SemanticFunctions = nullptr;
 	uint32 SemanticFunctionCount = 0;
 	const FAngelscriptJITProviderTypedCallDiagnostic* Calls = nullptr;
@@ -183,7 +183,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITProviderDiagnostics
 
 static_assert(std::is_standard_layout_v<FAngelscriptJITProviderDiagnosticSource>);
 static_assert(std::is_standard_layout_v<
-	FAngelscriptJITProviderTypedSemanticFunctionDiagnostic>);
+	FAngelscriptJITProviderCanonicalFunctionDiagnostic>);
 static_assert(std::is_standard_layout_v<
 	FAngelscriptJITProviderTypedCallDiagnostic>);
 static_assert(std::is_standard_layout_v<

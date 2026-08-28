@@ -40,6 +40,7 @@
 #define AS_MODULE_H
 
 #include "as_config.h"
+#include "as_ast_fwd.h"
 #include "as_symboltable.h"
 #include "as_atomic.h"
 #include "as_string.h"
@@ -48,6 +49,9 @@
 #include "as_scriptfunction.h"
 #include "as_property.h"
 #include "as_buildartifact.h"
+#include "as_runtime_type_binding.h"
+#include "as_source_provenance.h"
+#include "HAL/CriticalSection.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -61,8 +65,38 @@ class asCContext;
 class asCConfigGroup;
 class asCTypedefType;
 class asCFuncdefType;
+class asCModule;
 struct asSNameSpace;
-struct asSTypedSemanticSourceProvenanceRange;
+
+// One immutable Canonical generation lease.  The active asCModule owns one
+// reference, and a retained AST snapshot owns another.  On replacement the
+// module's executable/type/global containers move into the preallocated
+// carrier; this keeps every generation-local pointer and public TypeId map
+// dependency alive without retargeting any binding slot.
+class asCRuntimeTypeGeneration
+{
+public:
+	static asCRuntimeTypeGeneration* Create(
+		asCScriptEngine* engine,
+		const char* moduleName);
+	int AddRef();
+	int Release();
+
+	asCRuntimeTypeBindingTable& GetBindings() { return bindings; }
+	const asCRuntimeTypeBindingTable& GetBindings() const { return bindings; }
+	void Retire(asCModule& source);
+	bool IsRetired() const;
+	asIScriptFunction* GetRetiredFunctionByDecl(const char* declaration) const;
+
+private:
+	asCRuntimeTypeGeneration();
+	~asCRuntimeTypeGeneration();
+
+	mutable asCAtomic refCount;
+	asCRuntimeTypeBindingTable bindings;
+	asCModule* retiredOwner;
+	mutable volatile int32 retired;
+};
 
 struct sBindInfo
 {
@@ -129,10 +163,30 @@ public:
 		const char *code,
 		size_t codeLength,
 		int lineOffset,
-		const asSTypedSemanticSourceProvenanceRange *ranges,
+		const asSSourceProvenanceRange *ranges,
 		asUINT rangeCount);
 	virtual int         Build();
 	virtual int         CompileFunction(const char *sectionName, const char *code, int lineOffset, asDWORD reserved, asIScriptFunction **outFunc);
+	asEBytecodePublisher GetLastBytecodePublisher() const;
+	void SetLastBytecodePublisher(asEBytecodePublisher publisher);
+	// Build-provenance diagnostic. This is intentionally fork-internal rather
+	// than public ABI: it lets the canonical cutover tests prove that the
+	// selected canonical Build path did not enter asCCompiler at all.
+	asUINT GetLastLegacyCompilerInvocationCount() const;
+	void ResetLegacyCompilerInvocationCount();
+	void RecordLegacyCompilerInvocation();
+	// A deterministic, pointer-free digest of the sealed Canonical AST that
+	// successfully reached CodeGen Commit(). It is diagnostic state only; cache
+	// identity remains owned by Cache V2 rather than this transient build record.
+	bool GetLastCanonicalCodeGenAstDigest(asQWORD& outDigest) const;
+	void SetLastCanonicalCodeGenAstDigest(asQWORD digest);
+	void ResetLastCanonicalCodeGenAstDigest();
+	void AdoptPendingCanonicalAST(class asCASTContext* context);
+	const class asCASTContext* GetCanonicalASTContext() const;
+	// Cache V2 exact-start restores have already decoded and sealed a complete
+	// context off the active module maps. Publish only that pending context; do
+	// not synthesize an empty AST as the regular build fallback does.
+	int PublishRestoredCanonicalASTSnapshot();
 	void                SetBuildArtifactInvocationCallback(
 		asBUILDARTIFACTINVOCATIONCALLBACK_t callback,
 		void *callbackUserData);
@@ -201,6 +255,9 @@ public:
 
 	virtual void ImportModule(asIScriptModule* module);
 	virtual void ClearImports();
+	virtual int         SetASTRetentionPolicy(asEASTRetentionPolicy policy);
+	virtual asEASTRetentionPolicy GetASTRetentionPolicy() const;
+	virtual asIASTSnapshot* AcquireASTSnapshot(asDWORD apiVersion) const;
 
 	void RemoveTypesAndGlobalsFromEngineAvailability();
 
@@ -221,6 +278,39 @@ public:
 	friend class asCRestore;
 
 	void InternalReset();
+	void ResetExecutableGenerationForReplacement();
+	void RestoreTypesAndGlobalsToEngineAvailability();
+	void PrepareCanonicalBuildCandidate(asCModule& candidate) const;
+	void PromoteCanonicalBuildCandidate(asCModule& candidate);
+	int EnsureCanonicalRuntimeTypeGeneration();
+	void AdoptCanonicalRuntimeTypeBindings(
+		asCRuntimeTypeBindingTable& bindings);
+	void RetireCanonicalRuntimeTypeGeneration();
+	void TransferExecutableGenerationTo(asCModule& target);
+	int PrepareCanonicalASTSnapshot(
+		class asCASTContext*& context,
+		asCRuntimeTypeGeneration* runtimeGeneration,
+		class asCASTSnapshot*& outSnapshot,
+		const char* provenance = "source-build");
+	void PublishPreparedCanonicalASTSnapshot(
+		class asCASTSnapshot* candidate);
+	void PublishCanonicalASTSnapshot(const char* provenance = "source-build");
+	void ReleaseCanonicalASTSnapshot();
+	asEASTRetentionPolicy astRetentionPolicy;
+	bool astRetentionFrozen;
+	int astGeneration;
+	mutable FCriticalSection astSnapshotLock;
+	class asCASTSnapshot* astSnapshot;
+	class asCASTContext* pendingCanonicalAST;
+	asCRuntimeTypeGeneration* runtimeTypeGeneration;
+	asEBytecodePublisher lastBytecodePublisher;
+	asUINT lastLegacyCompilerInvocationCount;
+	asQWORD lastCanonicalCodeGenAstDigest;
+	bool hasLastCanonicalCodeGenAstDigest;
+#if WITH_ANGELSCRIPT_UNITTESTS
+	void SetCanonicalSnapshotPreparationFailureForTesting(int failureCode);
+	int testCanonicalSnapshotPreparationFailure;
+#endif
 	bool IsEmpty() const;
 	bool HasExternalReferences(bool shuttingDown);
 

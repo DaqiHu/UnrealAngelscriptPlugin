@@ -85,6 +85,7 @@
 #include "source/as_objecttype.h"
 #include "source/as_module.h"
 #include "source/as_builder.h"
+#include "source/as_bytecode_codegen.h"
 #include "EndAngelscriptHeaders.h"
 
 #include "Testing/AngelscriptBindExecutionObservation.h"
@@ -737,6 +738,8 @@ FAngelscriptEngineConfig FAngelscriptEngineConfig::FromCurrentProcess()
 	Config.bTestErrors = FParse::Param(FCommandLine::Get(), TEXT("as-test-errors"));
 	Config.bForcePreprocessEditorCode = FParse::Param(FCommandLine::Get(), TEXT("as-force-preprocess-editor-code"));
 	Config.bDevelopmentMode = FParse::Param(FCommandLine::Get(), TEXT("as-development-mode"));
+	Config.bUseCanonicalStagedCompiler = FParse::Param(
+		FCommandLine::Get(), TEXT("as-canonical-staged-compiler"));
 	Config.bSkipWriteBindDB = FParse::Param(FCommandLine::Get(), TEXT("as-skip-write-bind-db"));
 	Config.bWriteBindDB = FParse::Param(FCommandLine::Get(), TEXT("as-write-bind-db"));
 	Config.bExitOnError = FParse::Param(FCommandLine::Get(), TEXT("as-exit-on-error"));
@@ -874,6 +877,9 @@ FAngelscriptEngine::FAngelscriptEngine(const FAngelscriptEngineConfig& InConfig,
 	CacheService = MakeUnique<FAngelscriptCacheService>();
 	const UAngelscriptCacheSettings* CacheSettings =
 		GetDefault<UAngelscriptCacheSettings>();
+	bCacheV2Enabled = RuntimeConfig.bOverrideCacheV2Enablement
+		? RuntimeConfig.bEnableCacheV2
+		: CacheSettings != nullptr && CacheSettings->bEnableCacheV2;
 	bool bEnableDecisionTrace =
 		RuntimeConfig.bForceEnableCacheV2DecisionTrace;
 	uint32 DecisionTraceCapacity =
@@ -933,9 +939,24 @@ FAngelscriptEngine::FAngelscriptEngine(const FAngelscriptEngineConfig& InConfig,
 	}
 }
 
+#if WITH_ANGELSCRIPT_UNITTESTS
+namespace
+{
+	TAtomic<int32> GStaticJITGenerationEngineCreateCount{0};
+	TAtomic<int32> GStaticJITGenerationEngineLiveCount{0};
+	TAtomic<int32> GStaticJITGenerationEnginePeakLiveCount{0};
+}
+#endif
+
 FAngelscriptEngine::~FAngelscriptEngine()
 {
 	UE_LOG(Angelscript, Verbose, TEXT("[EngineLifecycle] Destroying engine=%p"), this);
+#if WITH_ANGELSCRIPT_UNITTESTS
+	if (RuntimeConfig.Purpose == EAngelscriptEnginePurpose::StaticJITGeneration)
+	{
+		--GStaticJITGenerationEngineLiveCount;
+	}
+#endif
 	Shutdown();
 }
 
@@ -957,8 +978,44 @@ TUniquePtr<FAngelscriptEngine> FAngelscriptEngine::Create(const FAngelscriptEngi
 	{
 		EngineInstance.Reset();
 	}
+#if WITH_ANGELSCRIPT_UNITTESTS
+	else if (InConfig.Purpose == EAngelscriptEnginePurpose::StaticJITGeneration)
+	{
+		++GStaticJITGenerationEngineCreateCount;
+		++GStaticJITGenerationEngineLiveCount;
+		const int32 LiveNow = GStaticJITGenerationEngineLiveCount;
+		if (LiveNow > GStaticJITGenerationEnginePeakLiveCount)
+		{
+			GStaticJITGenerationEnginePeakLiveCount = LiveNow;
+		}
+	}
+#endif
 	return EngineInstance;
 }
+
+#if WITH_ANGELSCRIPT_UNITTESTS
+int32 FAngelscriptEngine::GetStaticJITGenerationEngineCreateCountForTests()
+{
+	return GStaticJITGenerationEngineCreateCount;
+}
+
+int32 FAngelscriptEngine::GetStaticJITGenerationEngineLiveCountForTests()
+{
+	return GStaticJITGenerationEngineLiveCount;
+}
+
+int32 FAngelscriptEngine::GetStaticJITGenerationEnginePeakLiveCountForTests()
+{
+	return GStaticJITGenerationEnginePeakLiveCount;
+}
+
+void FAngelscriptEngine::ResetStaticJITGenerationEngineCreateCountForTests()
+{
+	GStaticJITGenerationEngineCreateCount = 0;
+	GStaticJITGenerationEnginePeakLiveCount =
+		static_cast<int32>(GStaticJITGenerationEngineLiveCount);
+}
+#endif
 
 #if WITH_EDITOR && ENGINE_MAJOR_VERSION >= 5
 	void AngelscriptResolveObjectPtr(void** PointerToObjectPtr)
@@ -1221,6 +1278,7 @@ ANGELSCRIPTRUNTIME_API bool GAngelscriptRunThreadedInitializationResultTransport
 
 bool FAngelscriptEngine::Initialize()
 {
+	NextCompileASTRetentionPolicy = RuntimeConfig.InitialASTRetentionPolicy;
 	if (bReadyForPublication)
 	{
 		return true;
@@ -1290,6 +1348,7 @@ bool FAngelscriptEngine::InitializeWithoutInitialCompile()
 	{
 		return bReadyForPublication;
 	}
+	NextCompileASTRetentionPolicy = RuntimeConfig.InitialASTRetentionPolicy;
 	bReadyForPublication = false;
 	FAngelscriptEngineScope ScopedInitializingEngine(*this);
 
@@ -1904,8 +1963,8 @@ void FAngelscriptEngine::Shutdown()
 			const UAngelscriptCacheSettings* CacheSettings =
 				GetDefault<UAngelscriptCacheSettings>();
 			if (bHadInitializedEngine
+				&& IsCacheV2Enabled()
 				&& CacheSettings != nullptr
-				&& CacheSettings->bEnableCacheV2
 				&& !RuntimeConfig.bDisableCacheV2Persistence)
 			{
 				FString RequestedBaseRoot;
@@ -2281,12 +2340,15 @@ void FAngelscriptEngine::PreInitialize_GameThread()
 	 * and compile script modules.
 	 */
 	Engine = (asCScriptEngine*)asCreateScriptEngine(ANGELSCRIPT_VERSION);
+	const bool bSelectedCompilerPipeline = Engine->SetCompilerPipeline(
+		RuntimeConfig.bUseCanonicalStagedCompiler
+			? asCOMPILER_PIPELINE_CANONICAL
+			: asCOMPILER_PIPELINE_LEGACY);
+	checkf(bSelectedCompilerPipeline,
+		TEXT("AngelScript rejected the configured whole-Engine source compiler pipeline."));
 	Engine->SetUserData(
 		this,
 		GetAngelscriptRuntimeEngineOwnerUserDataType());
-	Engine->SetTypedSemanticIRCapture(
-		RuntimeConfig.bCaptureTypedSemanticIR);
-
 #if AS_CAN_GENERATE_JIT
 	// Provider bindings are published after authoritative source/Cache V2
 	// compilation, but the VM entry instructions must be retained while that
@@ -3206,7 +3268,7 @@ namespace AngelscriptEngineExactStartup_Private
 		OutReuseContext.Reset();
 		const UAngelscriptCacheSettings* Settings =
 			GetDefault<UAngelscriptCacheSettings>();
-		if (Settings == nullptr || !Settings->bEnableCacheV2
+		if (!Engine.IsCacheV2Enabled() || Settings == nullptr
 			|| Engine.GetRuntimeConfig().bDisableCacheV2Persistence)
 		{
 			return EAttemptResult::Miss;
@@ -3521,7 +3583,12 @@ void FAngelscriptEngine::InitialCompile()
 
 			bSuccess = Preprocessor.Preprocess();
 			ModulesToCompile = Preprocessor.GetModulesToCompile();
-			if (bSuccess && !ModulesToCompile.IsEmpty())
+			// StaticJIT generation owns an authoritative source compile even when
+			// Cache V2 is disabled. It currently reuses the clean compile-fact
+			// capture context as an internal transport, but generation snapshot
+			// freezing must not be gated by cache restore or persistence policy.
+			if (bSuccess && !ModulesToCompile.IsEmpty()
+				&& (bStaticJITGeneration || IsCacheV2Enabled()))
 			{
 				FAngelscriptCacheCompileCaptureContext PreparedContext;
 				const FAngelscriptCacheCompileCapturePreparationResult Preparation =
@@ -3539,13 +3606,26 @@ void FAngelscriptEngine::InitialCompile()
 				}
 				else
 				{
-					UE_LOG(Angelscript, Warning,
-						TEXT("[CacheV2] Initial compile capture preparation skipped: Error=%u Environment=%u Discovery=%u Validation=%u Detail=%s"),
-						static_cast<uint32>(Preparation.Error),
-						static_cast<uint32>(Preparation.EnvironmentError),
-						static_cast<uint32>(Preparation.SourceDiscoveryError),
-						static_cast<uint32>(Preparation.Validation.Error),
-						*Preparation.Detail);
+					if (bStaticJITGeneration)
+					{
+						UE_LOG(Angelscript, Warning,
+							TEXT("[StaticJITGeneration] Initial compile fact preparation failed: Error=%u Environment=%u Discovery=%u Validation=%u Detail=%s"),
+							static_cast<uint32>(Preparation.Error),
+							static_cast<uint32>(Preparation.EnvironmentError),
+							static_cast<uint32>(Preparation.SourceDiscoveryError),
+							static_cast<uint32>(Preparation.Validation.Error),
+							*Preparation.Detail);
+					}
+					else
+					{
+						UE_LOG(Angelscript, Warning,
+							TEXT("[CacheV2] Initial compile capture preparation skipped: Error=%u Environment=%u Discovery=%u Validation=%u Detail=%s"),
+							static_cast<uint32>(Preparation.Error),
+							static_cast<uint32>(Preparation.EnvironmentError),
+							static_cast<uint32>(Preparation.SourceDiscoveryError),
+							static_cast<uint32>(Preparation.Validation.Error),
+							*Preparation.Detail);
+					}
 				}
 			}
 		}
@@ -4137,7 +4217,7 @@ bool FAngelscriptEngine::PerformHotReload(
 		EAngelscriptCompileCachePolicy::ForceClean;
 	CompileOptions.bRejectStructuralChanges = bRejectStructuralChanges;
 	TOptional<FAngelscriptCacheCompileCaptureContext> CacheCaptureContext;
-	if (!ModulesToCompile.IsEmpty())
+	if (!ModulesToCompile.IsEmpty() && IsCacheV2Enabled())
 	{
 		FAngelscriptCacheCompileCaptureContext PreparedContext;
 		const bool bSkipDevelopmentScripts = !ShouldUseEditorScripts();
@@ -4532,12 +4612,43 @@ bool FAngelscriptEngine::ForceCleanCacheModules(
 #endif
 }
 
+void FAngelscriptEngine::PushHotReloadApplicationFreeze()
+{
+	++HotReloadApplicationFreezeCount;
+}
+
+void FAngelscriptEngine::PopHotReloadApplicationFreeze()
+{
+	if (HotReloadApplicationFreezeCount > 0)
+	{
+		--HotReloadApplicationFreezeCount;
+	}
+}
+
+bool FAngelscriptEngine::IsHotReloadApplicationFrozen() const
+{
+	return HotReloadApplicationFreezeCount > 0;
+}
+
+bool FAngelscriptEngine::TryProcessQueuedHotReload()
+{
+	return ProcessQueuedHotReload(
+		ECompileType::SoftReloadOnly,
+		nullptr,
+		nullptr);
+}
+
 bool FAngelscriptEngine::ProcessQueuedHotReload(
 	ECompileType CompileType,
 	ECompileResult* OutCompileResult,
 	TArray<FFilenamePair>* OutConsumedFiles,
 	const bool bRejectStructuralChanges)
 {
+	if (IsHotReloadApplicationFrozen())
+	{
+		return false;
+	}
+
 	// A test callback can itself modify a script file (for example through a
 	// helper command). Never consume the queued changes while script code is
 	// still on the stack; the next engine tick will process the same queue.
@@ -6059,20 +6170,23 @@ ECompileResult FAngelscriptEngine::CompileModules(
 			for (asCObjectType* tmpl : ScriptEngine->unvalidatedTemplateInstances)
 				tmpl->CalculateTemplateSize();
 
+			// Every freshly registered script global needs its final storage and
+			// varAddressMap entry before either compiler publishes bytecode that
+			// references it. Reference replacement is a hot-reload-only concern,
+			// but allocation is also required by an initial source compile.
+			for (auto Module : CompiledModules)
+			{
+				asCModule* ScriptModule = Module->ScriptModule;
+				if (ScriptModule == nullptr)
+					continue;
+				if (Module->bLoadedPrecompiledCode)
+					continue;
+
+				ScriptModule->builder->BuildAllocateGlobalVariables();
+			}
+
 			if (ModulesToUpdateReferences.Num() != 0)
 			{
-				// Create allocations for global variables after all classes are layouted
-				for (auto Module : CompiledModules)
-				{
-					asCModule* ScriptModule = Module->ScriptModule;
-					if (ScriptModule == nullptr)
-						continue;
-					if (Module->bLoadedPrecompiledCode)
-						continue;
-
-					ScriptModule->builder->BuildAllocateGlobalVariables();
-				}
-
 				// Add the actual memory for the global variables to the replacement list
 				for (const auto& GlobalPropertyElement : ScriptUpdateMap.GlobalProperties)
 				{
@@ -6109,7 +6223,12 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				if (Module->bCompileError)
 					continue;
 
-				auto Result = ScriptModule->builder->BuildLayoutFunctions();
+				const bool bCompileGlobalsWithLegacyCompiler =
+					ScriptModule->engine->GetCompilerPipeline()
+						!= asCOMPILER_PIPELINE_CANONICAL;
+				auto Result = bCompileGlobalsWithLegacyCompiler
+					? ScriptModule->builder->BuildLayoutFunctions()
+					: ScriptModule->builder->BuildLayoutFunctionsWithoutGlobalInitializers();
 				if (Result != asSUCCESS)
 					Module->bCompileError = true;
 			}
@@ -7171,8 +7290,17 @@ void FAngelscriptEngine::CompileModule_Types_Stage1(
 	}
 
 	// Generate the angelscript module
+	asCModule* const PreviousScriptModule = Module->ScriptModule;
 	auto* ScriptModule = (asCModule*)Engine->GetModule(TCHAR_TO_ANSI(*TempName), asGM_ALWAYS_CREATE);
 	ScriptModule->baseModuleName = TCHAR_TO_ANSI(*Module->ModuleName);
+	const bool bRetainSnapshot =
+		NextCompileASTRetentionPolicy == static_cast<int32>(asAST_RETAIN_SNAPSHOT)
+		|| (PreviousScriptModule != nullptr
+			&& PreviousScriptModule->GetASTRetentionPolicy() == asAST_RETAIN_SNAPSHOT);
+	if (bRetainSnapshot)
+	{
+		ScriptModule->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT);
+	}
 
 	Module->CombinedDependencyHash = Module->CodeHash;
 
@@ -7233,12 +7361,12 @@ void FAngelscriptEngine::CompileModule_Types_Stage1(
 	for (auto& Section : Module->Code)
 	{
 		const FString SectionName = Section.AbsoluteFilename.IsEmpty() ? Section.VirtualPath : Section.AbsoluteFilename;
-		TArray<asSTypedSemanticSourceProvenanceRange> Provenance;
+		TArray<asSSourceProvenanceRange> Provenance;
 		Provenance.Reserve(Section.SourceProvenance.Num());
 		const auto ConvertAnchor = [](
 			const FAngelscriptSourceProvenanceAnchor& Source)
 		{
-			asSTypedSemanticSourceAnchor Target;
+			asSSourceAnchor Target;
 			Target.section = TCHAR_TO_UTF8(*Source.Section);
 			Target.sourceOffset = Source.SourceOffset;
 			Target.sourceLength = Source.SourceLength;
@@ -7252,20 +7380,20 @@ void FAngelscriptEngine::CompileModule_Types_Stage1(
 			switch (Kind)
 			{
 			case EAngelscriptGeneratedSourceKind::LiteralAsset:
-				return asETypedSemanticGeneratedSourceKind::LiteralAsset;
+				return asEGeneratedSourceKind::LiteralAsset;
 			case EAngelscriptGeneratedSourceKind::SubsystemAccessor:
-				return asETypedSemanticGeneratedSourceKind::SubsystemAccessor;
+				return asEGeneratedSourceKind::SubsystemAccessor;
 			case EAngelscriptGeneratedSourceKind::ClassHelper:
-				return asETypedSemanticGeneratedSourceKind::ClassHelper;
+				return asEGeneratedSourceKind::ClassHelper;
 			case EAngelscriptGeneratedSourceKind::StaticClassHelper:
-				return asETypedSemanticGeneratedSourceKind::StaticClassHelper;
+				return asEGeneratedSourceKind::StaticClassHelper;
 			case EAngelscriptGeneratedSourceKind::DelegateHelper:
-				return asETypedSemanticGeneratedSourceKind::DelegateHelper;
+				return asEGeneratedSourceKind::DelegateHelper;
 			case EAngelscriptGeneratedSourceKind::RangeBasedFor:
-				return asETypedSemanticGeneratedSourceKind::RangeBasedFor;
+				return asEGeneratedSourceKind::RangeBasedFor;
 			case EAngelscriptGeneratedSourceKind::None:
 			default:
-				return asETypedSemanticGeneratedSourceKind::None;
+				return asEGeneratedSourceKind::None;
 			}
 		};
 
@@ -7287,7 +7415,7 @@ void FAngelscriptEngine::CompileModule_Types_Stage1(
 			const FTCHARToUTF8 PrefixUtf8(*Prefix);
 			const FTCHARToUTF8 SliceUtf8(*Slice);
 
-			asSTypedSemanticSourceProvenanceRange& Target =
+			asSSourceProvenanceRange& Target =
 				Provenance.Emplace_GetRef();
 			Target.processedOffset = asUINT(PrefixUtf8.Length());
 			Target.processedLength = asUINT(SliceUtf8.Length());
@@ -7361,14 +7489,85 @@ void FAngelscriptEngine::CompileModule_Code_Stage3(ECompileType CompileType, TSh
 	if (ScriptModule == nullptr)
 		return;
 
-	auto Result = ScriptModule->builder->BuildCompileCode();
+	int Result = asERROR;
+	asCASTContext* CanonicalAST = nullptr;
+	if (ScriptModule->engine->GetCompilerPipeline()
+		== asCOMPILER_PIPELINE_CANONICAL)
+	{
+		Result = ScriptModule->builder->SealCanonicalAST();
+		if (Result == asSUCCESS)
+		{
+			CanonicalAST = ScriptModule->builder->TakeCanonicalAST();
+			if (CanonicalAST == nullptr)
+			{
+				Result = asINVALID_CONFIGURATION;
+			}
+		}
+		if (Result == asSUCCESS)
+		{
+			asCBytecodeCodeGen CodeGen;
+			Result = CodeGen.GeneratePreparedModule(
+				*CanonicalAST, *ScriptModule->builder);
+			if (Result != asAST_VERIFY_OK)
+			{
+				asCString Message;
+				const asCString& Detail = CodeGen.GetFailureDetail();
+				if (Detail.GetLength())
+				{
+					Message.Format(
+						"Canonical staged CodeGen failed code=%d line=%d: %s",
+						Result,
+						CodeGen.GetLastFailLine(),
+						Detail.AddressOf());
+				}
+				else
+				{
+					Message.Format(
+						"Canonical staged CodeGen failed code=%d line=%d",
+						Result,
+						CodeGen.GetLastFailLine());
+				}
+				ScriptModule->engine->WriteMessage(
+					CodeGen.GetFailureSection().AddressOf()
+						? CodeGen.GetFailureSection().AddressOf() : "",
+					CodeGen.GetFailureRow(),
+					CodeGen.GetFailureColumn(),
+					asMSGTYPE_ERROR,
+					Message.AddressOf());
+				if (Result > 0)
+				{
+					Result = asERROR;
+				}
+			}
+		}
+	}
+	else
+	{
+		Result = ScriptModule->builder->BuildCompileCode();
+		CanonicalAST = ScriptModule->builder->TakeCanonicalAST();
+	}
 	if (Result != asSUCCESS)
 		Module->bCompileError = true;
 
+	if (!Module->bCompileError)
+	{
+		ScriptModule->AdoptPendingCanonicalAST(CanonicalAST);
+		CanonicalAST = nullptr;
+	}
+	if (CanonicalAST != nullptr)
+	{
+		asDELETE(CanonicalAST, asCASTContext);
+		CanonicalAST = nullptr;
+	}
 	asDELETE(ScriptModule->builder, asCBuilder);
 	ScriptModule->builder = nullptr;
 
 	ScriptModule->JITCompile();
+	if (!Module->bCompileError)
+	{
+		ScriptModule->astRetentionFrozen = true;
+		ScriptModule->PublishCanonicalASTSnapshot();
+	}
 }
 
 void FAngelscriptEngine::CompileModule_Globals_Stage4(ECompileType CompileType, TSharedRef<struct FAngelscriptModuleDesc> Module)

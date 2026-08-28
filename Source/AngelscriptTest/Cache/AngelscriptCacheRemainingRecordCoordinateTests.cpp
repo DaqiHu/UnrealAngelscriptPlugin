@@ -91,6 +91,7 @@ private:
 		ModuleDependencyExpectedValue,
 		FunctionDependencyExpectedValue,
 		DebugSidecarRecordId,
+		ASTBodySidecarRecordId,
 	};
 
 	struct FOptionalOccurrenceIdentity
@@ -237,6 +238,10 @@ private:
 		EAngelscriptFunctionBodyCapturedField::DebugSidecar,
 		EAngelscriptFunctionBodyCapturedField::DebugSidecarKind,
 		EAngelscriptFunctionBodyCapturedField::DebugSidecarContentHash,
+		EAngelscriptFunctionBodyCapturedField::ASTBodySidecarPresence,
+		EAngelscriptFunctionBodyCapturedField::ASTBodySidecar,
+		EAngelscriptFunctionBodyCapturedField::ASTBodySidecarKind,
+		EAngelscriptFunctionBodyCapturedField::ASTBodySidecarContentHash,
 	};
 
 	inline static constexpr EAngelscriptDebugSidecarCapturedField DebugSidecarFields[] = {
@@ -306,6 +311,7 @@ private:
 		{1, 15, false, false, false},
 		{16, 23, true, false, false},
 		{24, 27, false, false, false},
+		{28, 31, false, false, false},
 	};
 
 	inline static constexpr FIndexRule DebugSidecarRules[] = {
@@ -444,6 +450,11 @@ private:
 		case EAngelscriptFunctionBodyCapturedField::DebugSidecarContentHash:
 			return IsOptionalOccurrencePresent(Rules,
 				EOptionalOccurrenceFamily::DebugSidecarRecordId, U, U);
+		case EAngelscriptFunctionBodyCapturedField::ASTBodySidecar:
+		case EAngelscriptFunctionBodyCapturedField::ASTBodySidecarKind:
+		case EAngelscriptFunctionBodyCapturedField::ASTBodySidecarContentHash:
+			return IsOptionalOccurrencePresent(Rules,
+				EOptionalOccurrenceFamily::ASTBodySidecarRecordId, U, U);
 		default:
 			return true;
 		}
@@ -1076,7 +1087,7 @@ public:
 		static_assert(std::is_same_v<
 			std::underlying_type_t<EAngelscriptModuleSnapshotCapturedField>, uint16>);
 		static_assert(UE_ARRAY_COUNT(ModuleStateFields) == 89);
-		static_assert(UE_ARRAY_COUNT(FunctionBodyFields) == 28);
+		static_assert(UE_ARRAY_COUNT(FunctionBodyFields) == 32);
 		static_assert(UE_ARRAY_COUNT(DebugSidecarFields) == 12);
 		static_assert(UE_ARRAY_COUNT(ModuleSnapshotFields) == 25);
 		static_assert(EnumValuesAreContinuous(ModuleStateFields));
@@ -1319,25 +1330,26 @@ public:
 			auto& [PayloadSchemaVersion, ModuleKey, Identity, ExpectedDeclarationAbi,
 				FunctionSourceDigest, FunctionInputDigest, InvocationKind,
 				VmExecutionCodecVersion, CanonicalExecutionPayload, ActualDependencies,
-				DebugSidecar] = Value;
+				DebugSidecar, ASTBodySidecar] = Value;
 			static_assert(std::is_same_v<TMemberTypeTuple<decltype(PayloadSchemaVersion),
 				decltype(ModuleKey), decltype(Identity), decltype(ExpectedDeclarationAbi),
 				decltype(FunctionSourceDigest), decltype(FunctionInputDigest),
 				decltype(InvocationKind), decltype(VmExecutionCodecVersion),
 				decltype(CanonicalExecutionPayload), decltype(ActualDependencies),
-				decltype(DebugSidecar)>,
+				decltype(DebugSidecar), decltype(ASTBodySidecar)>,
 				std::tuple<uint32, FAngelscriptStableModuleKey,
 					FAngelscriptFunctionArtifactIdentity, FAngelscriptHash256,
 					FAngelscriptFunctionSourceDigest, FAngelscriptFunctionInputDigest,
 					EAngelscriptCachedFunctionInvocationKind, uint32, TArray<uint8>,
 					TArray<FAngelscriptCacheSemanticDependency>,
+					TOptional<FAngelscriptCacheRecordId>,
 					TOptional<FAngelscriptCacheRecordId>>>);
 			static_assert(AreRecursivelyOwnedMembers<decltype(PayloadSchemaVersion),
 				decltype(ModuleKey), decltype(Identity), decltype(ExpectedDeclarationAbi),
 				decltype(FunctionSourceDigest), decltype(FunctionInputDigest),
 				decltype(InvocationKind), decltype(VmExecutionCodecVersion),
 				decltype(CanonicalExecutionPayload), decltype(ActualDependencies),
-				decltype(DebugSidecar)>);
+				decltype(DebugSidecar), decltype(ASTBodySidecar)>);
 		}
 		{
 			FAngelscriptCachedLogicalSectionKey Value;
@@ -1661,7 +1673,7 @@ public:
 	TEST_METHOD(PstRulesCoverEveryPublishedField)
 	{
 		static_assert(RulesCoverEveryFieldExactlyOnce(ModuleStateRules, 88));
-		static_assert(RulesCoverEveryFieldExactlyOnce(FunctionBodyRules, 27));
+		static_assert(RulesCoverEveryFieldExactlyOnce(FunctionBodyRules, 31));
 		static_assert(RulesCoverEveryFieldExactlyOnce(DebugSidecarRules, 11));
 		static_assert(RulesCoverEveryFieldExactlyOnce(ModuleSnapshotRules, 24));
 
@@ -1721,7 +1733,7 @@ public:
 			EAngelscriptFunctionBodyCapturedField::PayloadSchemaVersion,
 			EAngelscriptFunctionBodyCapturedField::ActualDependency,
 			EAngelscriptFunctionBodyCapturedField::ActualDependency,
-			false, 27, 0, Authority)));
+			false, 31, 0, Authority)));
 		ASSERT_THAT(IsTrue(DeclarationFirstMatrixIsExact<
 			FAngelscriptDebugSidecarFieldCoordinate>(
 			EAngelscriptCacheRecordKind::DebugSidecar,
@@ -1760,10 +1772,11 @@ public:
 			{EOptionalOccurrenceFamily::ModuleDependencyExpectedValue, 0, U},
 			{EOptionalOccurrenceFamily::FunctionDependencyExpectedValue, 0, U},
 			{EOptionalOccurrenceFamily::DebugSidecarRecordId, U, U},
+			{EOptionalOccurrenceFamily::ASTBodySidecarRecordId, U, U},
 		};
 		FLookupAuthority AllPresent = Absent;
 		AllPresent.OptionalRules.PresentOccurrences = PresentOccurrences;
-		AllPresent.OptionalRules.PresentOccurrenceCount = 8;
+		AllPresent.OptionalRules.PresentOccurrenceCount = 9;
 		const FLookupAuthority GlobalReferencePresent =
 			WithOnlyPresentOccurrence(Absent, PresentOccurrences[0]);
 		const FLookupAuthority HardValueReferencePresent =
@@ -1780,6 +1793,8 @@ public:
 			WithOnlyPresentOccurrence(Absent, PresentOccurrences[6]);
 		const FLookupAuthority DebugSidecarPresent =
 			WithOnlyPresentOccurrence(Absent, PresentOccurrences[7]);
+		const FLookupAuthority ASTBodySidecarPresent =
+			WithOnlyPresentOccurrence(Absent, PresentOccurrences[8]);
 
 		const EAngelscriptModuleStateCapturedField ModulePresenceFields[] = {
 			EAngelscriptModuleStateCapturedField::GlobalTypeReferencePresence,
@@ -1884,6 +1899,22 @@ public:
 			ASSERT_THAT(IsFalse(IsCoordinateAccepted({Field}, Absent)));
 			ASSERT_THAT(IsTrue(IsCoordinateAccepted({Field}, DebugSidecarPresent)));
 		}
+
+		ASSERT_THAT(IsTrue(IsCoordinateAccepted({
+			EAngelscriptFunctionBodyCapturedField::ASTBodySidecarPresence}, Absent)));
+		ASSERT_THAT(IsTrue(IsCoordinateAccepted({
+			EAngelscriptFunctionBodyCapturedField::ASTBodySidecarPresence},
+			ASTBodySidecarPresent)));
+		const EAngelscriptFunctionBodyCapturedField ASTBodySidecarRecordIdFields[] = {
+			EAngelscriptFunctionBodyCapturedField::ASTBodySidecar,
+			EAngelscriptFunctionBodyCapturedField::ASTBodySidecarKind,
+			EAngelscriptFunctionBodyCapturedField::ASTBodySidecarContentHash,
+		};
+		for (const EAngelscriptFunctionBodyCapturedField Field : ASTBodySidecarRecordIdFields)
+		{
+			ASSERT_THAT(IsFalse(IsCoordinateAccepted({Field}, Absent)));
+			ASSERT_THAT(IsTrue(IsCoordinateAccepted({Field}, ASTBodySidecarPresent)));
+		}
 	}
 
 	TEST_METHOD(ExactOptionalOccurrenceIdentityAndOneHotRulesAreExact)
@@ -1936,6 +1967,8 @@ public:
 			EOptionalOccurrenceFamily::FunctionDependencyExpectedValue, 1, U};
 		const FOptionalOccurrenceIdentity DebugSidecar = {
 			EOptionalOccurrenceFamily::DebugSidecarRecordId, U, U};
+		const FOptionalOccurrenceIdentity ASTBodySidecar = {
+			EOptionalOccurrenceFamily::ASTBodySidecarRecordId, U, U};
 
 		const FOptionalOccurrenceIdentity Representatives[] = {
 			GlobalA,
@@ -1956,6 +1989,7 @@ public:
 			FunctionDependencyA,
 			FunctionDependencyB,
 			DebugSidecar,
+			ASTBodySidecar,
 		};
 
 		const FAngelscriptModuleStateFieldCoordinate GlobalFieldsA[] = {
@@ -2112,6 +2146,17 @@ public:
 			FAngelscriptFunctionBodyFieldCoordinate{
 				EAngelscriptFunctionBodyCapturedField::DebugSidecarPresence},
 			FunctionDebugSidecarFields, Representatives)));
+
+		const FAngelscriptFunctionBodyFieldCoordinate FunctionASTBodySidecarFields[] = {
+			{EAngelscriptFunctionBodyCapturedField::ASTBodySidecar},
+			{EAngelscriptFunctionBodyCapturedField::ASTBodySidecarKind},
+			{EAngelscriptFunctionBodyCapturedField::ASTBodySidecarContentHash},
+		};
+		ASSERT_THAT(IsTrue(SingletonOptionalOccurrenceMatrixIsExact(
+			Base, ASTBodySidecar,
+			FAngelscriptFunctionBodyFieldCoordinate{
+				EAngelscriptFunctionBodyCapturedField::ASTBodySidecarPresence},
+			FunctionASTBodySidecarFields, Representatives)));
 	}
 
 	TEST_METHOD(DataTypePreorderRestartsAndIsIsolatedPerRoot)
@@ -2446,6 +2491,7 @@ public:
 		ASSERT_THAT(AreEqual(int32(0), FunctionBody.CanonicalExecutionPayload.Num()));
 		ASSERT_THAT(AreEqual(int32(0), FunctionBody.ActualDependencies.Num()));
 		ASSERT_THAT(IsFalse(FunctionBody.DebugSidecar.IsSet()));
+		ASSERT_THAT(IsFalse(FunctionBody.ASTBodySidecar.IsSet()));
 
 		const FAngelscriptCachedLogicalSectionKey LogicalSectionKey;
 		ASSERT_THAT(IsTrue(LogicalSectionKey.Hash.IsZero()));

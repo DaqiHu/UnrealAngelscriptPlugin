@@ -139,8 +139,20 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngineConfig
 	UPROPERTY()
 	EAngelscriptEnginePurpose Purpose = EAngelscriptEnginePurpose::Runtime;
 
-	/** Frozen before Engine creation; used only by source-owning JIT generation. */
-	bool bCaptureTypedSemanticIR = false;
+	/** Frozen before Engine creation; typed generation requires a retained sealed Canonical AST. */
+	bool bRequireCanonicalASTForStaticJITGeneration = false;
+
+	/** 0 = discard AST after CodeGen, 1 = retain sealed snapshot. Applied to the initial compile. */
+	int32 InitialASTRetentionPolicy = 0;
+
+	/**
+	 * Select the canonical Parser/Sema/Bytecode pipeline for every source module
+	 * owned by this Engine. The UE host remains on the LEGACY pipeline until the
+	 * staged production cutover matrix is complete; focused migration fixtures
+	 * opt in here. This is deliberately an Engine-wide selection and never a
+	 * per-declaration fallback switch.
+	 */
+	bool bUseCanonicalStagedCompiler = false;
 
 	EAngelscriptJITExecutionMode JITExecutionMode =
 		EAngelscriptJITExecutionMode::Auto;
@@ -226,10 +238,10 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngineConfig
 	// Test-only fault injection used to prove binding failures cannot publish a
 	// partially initialized engine. Production configuration has no equivalent.
 	bool bInjectDirectBindFailureForTesting = false;
-	// Corrupts one generation-owned, otherwise verified HIR root immediately
-	// before snapshot verification. This proves the real verifier failure path
-	// without allowing invalid source HIR to become a supported compiler state.
-	bool bInjectInvalidTypedSemanticIRForTesting = false;
+	// Removes one generation-owned, otherwise verified Canonical AST snapshot
+	// immediately before generation snapshot validation. This proves the real
+	// missing-input failure path without making an invalid AST a supported state.
+	bool bInjectMissingCanonicalASTSnapshotForTesting = false;
 #endif
 	// Captured once from FApp::IsUnattended() for startup-failure policy. Tests
 	// set this explicitly so the policy can be verified without process globals.
@@ -277,6 +289,15 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngineConfig
 
 	UPROPERTY()
 	bool bForceSerialCacheV2Preparation = false;
+
+	// Explicit host/test override for the project Cache V2 enablement setting.
+	// Production leaves this false and resolves UAngelscriptCacheSettings once
+	// when the Engine is constructed.
+	UPROPERTY()
+	bool bOverrideCacheV2Enablement = false;
+
+	UPROPERTY()
+	bool bEnableCacheV2 = false;
 
 	// Test/commandlet isolation switch. Product enablement remains owned by
 	// UAngelscriptCacheSettings rather than this per-Engine construction input.
@@ -522,6 +543,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngine
 	bool bSimulateCooked = false;
 	bool bTestErrors = false;
 	bool bIsHotReloading = false;
+	int32 HotReloadApplicationFreezeCount = 0;
 	bool bForcePreprocessEditorCode = false;
 	bool bUseEditorScripts = false;
 	bool bUseAutomaticImportMethod = false;
@@ -717,6 +739,10 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngine
 		return (asIScriptEngine*)Engine;
 	}
 
+	// 0 = asAST_DISCARD_AFTER_CODEGEN, 1 = asAST_RETAIN_SNAPSHOT.
+	// Applied to the next compiled asCModule (including Hot Reload replacements).
+	int32 NextCompileASTRetentionPolicy = 0;
+
 #if AS_CAN_GENERATE_JIT
 	FAngelscriptJITCoordinator* GetJITCoordinator() const
 	{
@@ -787,6 +813,12 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngine
 	FAngelscriptCacheService* GetCacheService() const
 	{
 		return CacheService.Get();
+	}
+
+	/** Frozen per-Engine Cache V2 enablement resolved at construction. */
+	bool IsCacheV2Enabled() const
+	{
+		return bCacheV2Enabled;
 	}
 
 	// Captured diagnostic messages during compilation
@@ -947,6 +979,7 @@ private:
 #endif
 	TUniquePtr<FAngelscriptFunctionRouteState> FunctionRouteState;
 	TUniquePtr<FAngelscriptCacheService> CacheService;
+	bool bCacheV2Enabled = false;
 	TArray<FName> StaticNames;
 	TMap<FName, int32> StaticNamesByIndex;
 
@@ -989,6 +1022,11 @@ private:
 #endif
 
 public:
+	void PushHotReloadApplicationFreeze();
+	void PopHotReloadApplicationFreeze();
+	bool IsHotReloadApplicationFrozen() const;
+	bool TryProcessQueuedHotReload();
+
 	TArray<FFilenamePair> FileChangesDetectedForReload;
 	TArray<FFilenamePair> FileDeletionsDetectedForReload;
 	double LastFileChangeDetectedTime = -1.0;
@@ -1183,6 +1221,11 @@ public:
 	{
 		return Dependencies.CacheRestoreFaultInjector;
 	}
+
+	static int32 GetStaticJITGenerationEngineCreateCountForTests();
+	static int32 GetStaticJITGenerationEngineLiveCountForTests();
+	static int32 GetStaticJITGenerationEnginePeakLiveCountForTests();
+	static void ResetStaticJITGenerationEngineCreateCountForTests();
 #endif
 
 private:

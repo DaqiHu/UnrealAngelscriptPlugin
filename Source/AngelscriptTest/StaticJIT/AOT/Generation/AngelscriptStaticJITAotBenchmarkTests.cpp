@@ -54,13 +54,13 @@ private:
 		const FString Directory = FPaths::ConvertRelativePathToFull(
 			FPaths::Combine(
 				FPaths::ProjectSavedDir(),
-				TEXT("TypedSemanticAOT/Benchmarks")));
+				TEXT("CanonicalTypedASTAOT/Benchmarks")));
 		IFileManager::Get().MakeDirectory(*Directory, true);
 		OutPath = FPaths::Combine(Directory, TEXT("first-version.csv"));
 		const FString Csv = FString::Printf(
 			TEXT("metric,value,unit,source\n")
-			TEXT("hir_capture_ms,%.3f,ms,CreateFixtureEngine typed-ast Core generation Engine\n")
-			TEXT("hir_working_set_delta_bytes,%lld,bytes,FPlatformMemory UsedPhysical after HIR Engine\n")
+			TEXT("canonical_ast_build_ms,%.3f,ms,CreateFixtureEngine canonical typed-ast Core generation Engine\n")
+			TEXT("canonical_ast_working_set_delta_bytes,%lld,bytes,FPlatformMemory UsedPhysical after canonical generation Engine\n")
 			TEXT("isolated_bytecode_generation_ms,%.3f,ms,AppendIsolatedDifferentialArtifact BytecodeJIT DifferentialScalarValue\n")
 			TEXT("isolated_typed_generation_ms,%.3f,ms,AppendIsolatedDifferentialArtifact TypedASTJIT DifferentialScalarValue\n")
 			TEXT("isolated_bytecode_generated_cpp_bytes,%d,bytes,BenchmarkBytecode.generated.cpp\n")
@@ -71,8 +71,8 @@ private:
 			TEXT("scalar_raw_result,%d,int,ExecuteTypedASTScalarProviderRaw(3,4)\n")
 			TEXT("direct_capability_raw_result,%d,int,ExecuteTypedASTCapabilityProviderRaw(3,4,true,true)\n")
 			TEXT("bridged_native_result,%d,int,ExecuteTypedASTNativeBridge(19,23)\n"),
-			Generation.HirCaptureMilliseconds,
-			static_cast<long long>(Generation.HirWorkingSetDeltaBytes),
+			Generation.CanonicalASTBuildMilliseconds,
+			static_cast<long long>(Generation.CanonicalASTWorkingSetDeltaBytes),
 			Generation.IsolatedBytecodeGenerationMilliseconds,
 			Generation.IsolatedTypedGenerationMilliseconds,
 			Generation.IsolatedBytecodeGeneratedCppBytes,
@@ -87,14 +87,14 @@ private:
 	}
 
 public:
-	TEST_METHOD(RecordsFirstVersionHirGenerationAndExecutionTimings)
+	TEST_METHOD(RecordsFirstVersionCanonicalASTGenerationAndExecutionTimings)
 	{
 		using namespace AngelscriptStaticJITAotGeneration;
 		const FStaticJITAotFirstVersionBenchmark Generation =
 			RunFirstVersionBenchmark();
 		ASSERT_THAT(IsTrue(Generation.bSuccess, Generation.Error));
-		ASSERT_THAT(IsTrue(Generation.HirCaptureMilliseconds > 0.0,
-			TEXT("HIR capture must record a positive duration")));
+		ASSERT_THAT(IsTrue(Generation.CanonicalASTBuildMilliseconds > 0.0,
+			TEXT("Canonical AST build must record a positive duration")));
 		ASSERT_THAT(IsTrue(
 			Generation.IsolatedBytecodeGenerationMilliseconds > 0.0));
 		ASSERT_THAT(IsTrue(

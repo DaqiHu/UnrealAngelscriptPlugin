@@ -4,7 +4,7 @@
  * Backend            : TypedASTJIT
  * Declaration        : int TypedASTRuntimeThunkShowcase(const FString&in)
  * StableFunctionKey  : 59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e
- * OriginalSymbolSet  : ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6
+ * OriginalSymbolSet  : ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_2dfa9a149d2acbc3159fd3d81b5393c0ea15eecf2601a1bb3731390683b5b178
  * TestSymbolSet      : AS_Test_Differential_TypedAST_TypedASTRuntimeThunkShowcase
  * CleanupPlan       : VerifiedEmpty (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -24,10 +24,10 @@
 /*
  * AngelScript Static JIT Function
  * Declaration       : int TypedASTRuntimeThunkShowcase(const FString&in)
- * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:1
+ * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:5
  * StableFunctionKey  : 59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e
- * ExecutionHash      : 903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6
- * DebugHash          : 84c4c455833d298a19e72e37e3dd5fd456053781b60624be02a142f198bb4733
+ * ExecutionHash      : 2dfa9a149d2acbc3159fd3d81b5393c0ea15eecf2601a1bb3731390683b5b178
+ * DebugHash          : 208fd33544e1bcd9485d66e3d8ed3e186125ecb5b9a4e24781bbc9555fd75638
  * EntryAbiHash       : eafaed37b176f7dc1025f3c86200feb10fb066ef6f083b8ce31d94120dc42f21
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
@@ -35,7 +35,7 @@
  */
 static int32 AS_Test_Differential_TypedAST_TypedASTRuntimeThunkShowcase_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const FString& as_sem_s0);
+	const FString& as_ast_d12);
 
 /*
  * AngelScript Native Call Site 0
@@ -49,19 +49,23 @@ static int32 AS_Test_Differential_TypedAST_TypedASTRuntimeThunkShowcase_TypedBod
  */
 static int32 AS_Test_Differential_TypedAST_TypedASTRuntimeThunkShowcase_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const FString& as_sem_s0)
+	const FString& as_ast_d12)
 {
-	TypedFrame.SetSourcePosition(10, 2);
-	return ([&]() -> int32
 	{
-		TypedFrame.SetSourcePosition(10, 9);
-		const FString& as_sem_e2_arg0 = as_sem_s0;
-		return AngelscriptStaticJITNativeCallables::RuntimeThunkProbe(as_sem_e2_arg0);
+		TypedFrame.SetSourcePosition(10, 2);
+		return ([&]() -> int32
+	{
+		const FString& as_ast_e5_arg0 = as_ast_d12;
+		const int32 as_ast_e5_result = AngelscriptStaticJITNativeCallables::RuntimeThunkProbe(as_ast_e5_arg0);
+		return as_ast_e5_result;
 	}());
+	}
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return int32{};
 }
 
 // AS Function : int TypedASTRuntimeThunkShowcase(const FString&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:5
 // JIT Entry   : Raw
 int32 AS_Test_Differential_TypedAST_TypedASTRuntimeThunkShowcase_Raw(FScriptExecution& Execution, FString* p_0)
 {
@@ -82,7 +86,7 @@ int32 AS_Test_Differential_TypedAST_TypedASTRuntimeThunkShowcase_Raw(FScriptExec
 }
 
 // AS Function : int TypedASTRuntimeThunkShowcase(const FString&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:5
 // JIT Entry   : VM
 void AS_Test_Differential_TypedAST_TypedASTRuntimeThunkShowcase_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
@@ -91,7 +95,7 @@ void AS_Test_Differential_TypedAST_TypedASTRuntimeThunkShowcase_VM(FScriptExecut
 }
 
 // AS Function : int TypedASTRuntimeThunkShowcase(const FString&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:5
 // JIT Entry   : Parms
 void AS_Test_Differential_TypedAST_TypedASTRuntimeThunkShowcase_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
@@ -131,7 +135,7 @@ namespace
 				TEXT("int TypedASTRuntimeThunkShowcase(const FString&in)"),
 				TEXT("/Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as"),
 				8u,
-				1u,
+				5u,
 				AngelscriptTestJITProbes::EIsolatedDifferentialCleanupPlanState::VerifiedEmpty,
 				0u,
 				FTypedASTJITDifferentialEntryRegistrationReferenceSlots,

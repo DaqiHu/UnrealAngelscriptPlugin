@@ -418,21 +418,37 @@ public:
 			TEXT("ASJIT_Helper_TypedASTFrameHelper_")),
 			TEXT("Ordinary non-UFUNCTION helper must be a direct internal symbol")));
 		const int32 CallPosition = Text.Find(
-			TEXT("ASJIT_Helper_TypedASTFrameHelper_"));
+			TEXT(" = ASJIT_Helper_TypedASTFrameHelper_"));
 		const int32 ExecutionArgPosition = Text.Find(
-			TEXT("(Execution, as_sem_e3_arg0);"),
+			TEXT("(Execution, "),
 			ESearchCase::CaseSensitive,
 			ESearchDir::FromStart,
 			CallPosition == INDEX_NONE ? 0 : CallPosition);
+		const int32 CallEndPosition = Text.Find(
+			TEXT(");"),
+			ESearchCase::CaseSensitive,
+			ESearchDir::FromStart,
+			ExecutionArgPosition == INDEX_NONE ? 0 : ExecutionArgPosition);
 		const int32 ExceptionCheckPosition = Text.Find(
 			TEXT("if (UNLIKELY(Execution.bExceptionThrown))"),
 			ESearchCase::CaseSensitive,
 			ESearchDir::FromStart,
-			ExecutionArgPosition == INDEX_NONE ? 0 : ExecutionArgPosition);
+			CallEndPosition == INDEX_NONE ? 0 : CallEndPosition);
+		FString InterveningText;
+		if (CallEndPosition != INDEX_NONE
+			&& ExceptionCheckPosition > CallEndPosition)
+		{
+			InterveningText = Text.Mid(
+				CallEndPosition + 2,
+				ExceptionCheckPosition - CallEndPosition - 2);
+			InterveningText.TrimStartAndEndInline();
+		}
 		ASSERT_THAT(IsTrue(
 			CallPosition != INDEX_NONE
 			&& ExecutionArgPosition > CallPosition
-			&& ExceptionCheckPosition > ExecutionArgPosition,
+			&& CallEndPosition > ExecutionArgPosition
+			&& ExceptionCheckPosition > CallEndPosition
+			&& InterveningText.IsEmpty(),
 			TEXT("The helper raw call must pass Execution, then check failure immediately")));
 		ASSERT_THAT(IsFalse(Text.Contains(
 			TEXT("FAngelscriptJITExecutionContext")),
@@ -459,8 +475,7 @@ public:
 		ASSERT_THAT(IsTrue(Text.Contains(
 			TEXT(" * Route               : Bridge"))));
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT(
-			"AngelscriptTypedASTJIT::InvokeBound<float, float>(\n")
-			TEXT("\t\t\tExecution, ASJIT_Call_Sqrt_")),
+			"AngelscriptTypedASTJIT::InvokeBound<float, float>(Execution, ASJIT_Call_Sqrt_")),
 			TEXT("The expression must pass Execution and the named row, not a bare declaration string")));
 		ASSERT_THAT(IsFalse(Text.Contains(
 			TEXT("FAngelscriptJITExecutionContext"))));
@@ -478,8 +493,11 @@ public:
 		ASSERT_THAT(IsTrue(Text.Contains(
 			TEXT(" * Emitted C++ Callee  : IsRunningCommandlet"))));
 		ASSERT_THAT(IsTrue(Text.Contains(
-			TEXT("return IsRunningCommandlet();")),
+			TEXT("IsRunningCommandlet()")),
 			TEXT("HeaderInline must invoke the exact imported/inline symbol")));
+		ASSERT_THAT(IsTrue(Text.Contains(
+			TEXT(" * Route               : DirectInline")),
+			TEXT("HeaderInline metadata must retain its direct-inline route")));
 		ASSERT_THAT(IsFalse(Text.Contains(
 			TEXT("FAngelscriptJITExecutionContext"))));
 	}

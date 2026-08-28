@@ -1033,7 +1033,8 @@ namespace AngelscriptFunctionArtifactCodec_Private
 		}
 		if (ApplyToFunction != nullptr)
 		{
-			ApplyToFunction->scriptData->temporaryVariables.SetLength(Count);
+			ApplyToFunction->scriptData->temporaryVariables.SetLength(0);
+			ApplyToFunction->scriptData->pointerVariablePos.SetLength(0);
 		}
 		for (uint32 Index = 0; Index < Count; ++Index)
 		{
@@ -1052,10 +1053,18 @@ namespace AngelscriptFunctionArtifactCodec_Private
 			}
 			if (ApplyToFunction != nullptr)
 			{
-				ApplyToFunction->scriptData->temporaryVariables[Index].Offset =
-					static_cast<int>(StackOffset);
-				ApplyToFunction->scriptData->temporaryVariables[Index].Token =
-					static_cast<eTokenType>(Token);
+				if (Token == static_cast<uint32>(ttUnrecognizedToken))
+				{
+					ApplyToFunction->scriptData->pointerVariablePos.PushLast(
+						static_cast<int>(StackOffset));
+				}
+				else
+				{
+					asCScriptFunction::ScriptFunctionData::ScriptTempVariable Variable;
+					Variable.Offset = static_cast<int>(StackOffset);
+					Variable.Token = static_cast<eTokenType>(Token);
+					ApplyToFunction->scriptData->temporaryVariables.PushLast(Variable);
+				}
 			}
 		}
 		if (!Reader.ReadCount(Count))

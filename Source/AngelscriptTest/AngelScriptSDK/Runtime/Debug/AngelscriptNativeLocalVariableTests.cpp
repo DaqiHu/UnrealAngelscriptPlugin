@@ -32,6 +32,7 @@ private:
 		int32 TypeId = asINVALID_TYPE;
 		void* Address = nullptr;
 		void* ReferencedObject = nullptr;
+		int32 Line = 0;
 		bool bInScope = false;
 	};
 
@@ -141,6 +142,7 @@ private:
 			return;
 		}
 		TArray<FLocalEntry> Snapshot;
+		const int32 CurrentLine = Context->GetLineNumber(0, nullptr, nullptr);
 		for (int32 VariableIndex = 0; VariableIndex < VariableCount; ++VariableIndex)
 		{
 			FLocalEntry Entry;
@@ -150,6 +152,7 @@ private:
 			Entry.NamespaceDeclaration = UTF8_TO_TCHAR(Context->GetVarDeclaration(VariableIndex, 0, true));
 			Entry.TypeId = Context->GetVarTypeId(VariableIndex, 0);
 			Entry.Address = Context->GetAddressOfVar(VariableIndex, 0);
+			Entry.Line = CurrentLine;
 			if (Entry.Address != nullptr && (Entry.TypeId & asTYPEID_OBJHANDLE) != 0)
 			{
 				Entry.ReferencedObject = *reinterpret_cast<void**>(Entry.Address);
@@ -234,6 +237,43 @@ private:
 		return Result;
 	}
 
+	static FString DescribeBytecode(asIScriptFunction* Function)
+	{
+		if (Function == nullptr)
+		{
+			return TEXT("<null-function>");
+		}
+		asUINT BytecodeLength = 0;
+		const asDWORD* const Bytecode = Function->GetByteCode(&BytecodeLength);
+		if (Bytecode == nullptr || BytecodeLength == 0)
+		{
+			return TEXT("<empty-bytecode>");
+		}
+		FString Result;
+		for (asUINT DwordIndex = 0; DwordIndex < BytecodeLength;)
+		{
+			const asBYTE Opcode = *reinterpret_cast<const asBYTE*>(Bytecode + DwordIndex);
+			if (Opcode >= asBC_MAXBYTECODE)
+			{
+				Result += FString::Printf(TEXT("invalid(%u)@%u"), Opcode, DwordIndex);
+				break;
+			}
+			if (!Result.IsEmpty())
+			{
+				Result += TEXT(" -> ");
+			}
+			Result += ANSI_TO_TCHAR(asBCInfo[Opcode].name);
+			const int32 InstructionSize = asBCTypeSize[asBCInfo[Opcode].type];
+			if (InstructionSize <= 0)
+			{
+				Result += TEXT("(invalid-size)");
+				break;
+			}
+			DwordIndex += static_cast<asUINT>(InstructionSize);
+		}
+		return Result;
+	}
+
 	static void ReportGeneratedModule(FAutomationTestBase& Test, const FString& ModuleName, const FString& Source)
 	{
 		using namespace AngelscriptNativeTestSupport;
@@ -302,9 +342,14 @@ public:
 		const FString ModuleName = TEXT("NativeDebugLocals");
 		const FString OptimizedModuleName = TEXT("NativeDebugLocalsOptimized");
 		const FString Source = BuildSource();
+		const FString OptimizedSource = Source
+			.Replace(TEXT("ENativeDebugLocalEnum"), TEXT("ENativeDebugLocalEnumOptimized"), ESearchCase::CaseSensitive)
+			.Replace(TEXT("NativeDebugLocalValue"), TEXT("NativeDebugLocalValueOptimized"), ESearchCase::CaseSensitive)
+			.Replace(TEXT("NativeDebugLocalReference"), TEXT("NativeDebugLocalReferenceOptimized"), ESearchCase::CaseSensitive);
 		const FTCHARToUTF8 ModuleNameUtf8(*ModuleName);
 		const FTCHARToUTF8 OptimizedModuleNameUtf8(*OptimizedModuleName);
 		const FTCHARToUTF8 SourceUtf8(*Source);
+		const FTCHARToUTF8 OptimizedSourceUtf8(*OptimizedSource);
 		asIScriptModule* Module = nullptr;
 		ReportGeneratedModule(*TestRunner, ModuleName, Source);
 		const int BuildResult = CompileNativeModule(ScriptEngine, ModuleNameUtf8.Get(), SourceUtf8.Get(), Module);
@@ -355,7 +400,10 @@ public:
 		Context->SetUserData(&Observation, LocalRecorderUserDataSlot);
 		ASSERT_THAT(AreEqual(asSUCCESS, RawContext->SetLineCallback(CaptureLocals), TEXT("Local variable product should install its raw line observer")));
 		ASSERT_THAT(AreEqual(static_cast<int32>(asEXECUTION_FINISHED), PrepareAndExecute(Context, Entry), TEXT("Local variable product should execute the nested and loop scopes")));
-		ASSERT_THAT(AreEqual(21, static_cast<int32>(Context->GetReturnDWord()), TEXT("Local variable product should preserve the outer local across nested and loop scopes")));
+		const int32 LocalsResult = static_cast<int32>(Context->GetReturnDWord());
+		ASSERT_THAT(AreEqual(21, LocalsResult,
+			*FString::Printf(TEXT("Local variable product should preserve the outer local across nested and loop scopes. Actual=%d"),
+				LocalsResult)));
 		ASSERT_THAT(IsTrue(Observation.Snapshots.Num() > 0, TEXT("Local variable product should capture active scope snapshots")));
 		ASSERT_THAT(IsTrue(Observation.bInvalidVariableIndexWasSafe, TEXT("Local variable product should characterize invalid variable indexes without dereferencing them")));
 
@@ -417,9 +465,17 @@ public:
 			{
 				// The fork's display spelling for ttFloat32 is "float", while the
 				// public type-id query remains "float32".
-				const TCHAR* const TypeIdDeclaration = FCString::Strcmp(Expected.Name, TEXT("Float32Value")) == 0
+				// Display spelling and type identity intentionally differ for two
+				// maintained-fork types: ttFloat32 displays as `float`, while a raw
+				// typedef displays its underlying declaration but retains the alias
+				// type id. Keep this generic exact-type assertion consistent with the
+				// dedicated typedef assertion below.
+				const TCHAR* const TypeIdDeclaration = FCString::Strcmp(
+					Expected.Name, TEXT("Float32Value")) == 0
 					? TEXT("float32")
-					: Expected.TypeDeclaration;
+					: (FCString::Strcmp(Expected.Name, TEXT("AliasValue")) == 0
+						? TEXT("NativeDebugLocalAlias")
+						: Expected.TypeDeclaration);
 				const FTCHARToUTF8 TypeUtf8(TypeIdDeclaration);
 				int32 ExpectedTypeId = asINVALID_TYPE;
 				FString ModuleTypeName = TypeIdDeclaration;
@@ -457,7 +513,24 @@ public:
 		const FLocalEntry* const NullValue = FindLiveEntry(Observation, TEXT("NullValue"));
 		if (ReferenceValue != nullptr && NullValue != nullptr)
 		{
-			ASSERT_THAT(IsNotNull(ReferenceValue->ReferencedObject, TEXT("Local variable product should expose the non-null reference payload")));
+			FString ReferenceInventory;
+			for (const TArray<FLocalEntry>& Snapshot : Observation.Snapshots)
+			{
+				for (const FLocalEntry& SnapshotEntry : Snapshot)
+				{
+					if (SnapshotEntry.Name == TEXT("ReferenceValue"))
+					{
+						ReferenceInventory += FString::Printf(
+							TEXT("line=%d scope=%d address=%p object=%p; "),
+							SnapshotEntry.Line, SnapshotEntry.bInScope ? 1 : 0,
+							SnapshotEntry.Address, SnapshotEntry.ReferencedObject);
+					}
+				}
+			}
+			ASSERT_THAT(IsNotNull(ReferenceValue->ReferencedObject,
+				*FString::Printf(
+					TEXT("Local variable product should expose the non-null reference payload. Snapshots={%s}"),
+					*ReferenceInventory)));
 			ASSERT_THAT(IsNull(NullValue->ReferencedObject, TEXT("Local variable product should expose the null reference payload")));
 		}
 		ASSERT_THAT(AreEqual(asSUCCESS, Context->Unprepare(), TEXT("Local variable product should unprepare after typed local observation")));
@@ -472,10 +545,17 @@ public:
 		ASSERT_THAT(AreEqual(42, static_cast<int32>(Context->GetReturnDWord()), TEXT("Local variable product should retain the unoptimized optimization-shape runtime result")));
 		ASSERT_THAT(AreEqual(asSUCCESS, Context->Unprepare(), TEXT("Local variable product should unprepare after its unoptimized optimization-shape entry")));
 
+		// The optimized half compares copied bytecode and observable metadata; it
+		// is not a same-name script-type coexistence test. Release the first module
+		// before rebuilding the identical class declarations so this debug contract
+		// does not depend on a separate cross-module redeclaration/merge policy.
+		ScriptEngine->DiscardModule(ModuleNameUtf8.Get());
+		Module = nullptr;
+
 		ASSERT_THAT(AreEqual(asSUCCESS, ScriptEngine->SetEngineProperty(asEP_OPTIMIZE_BYTECODE, 1), TEXT("Local variable product should rebuild under bytecode optimization")));
 		asIScriptModule* OptimizedModule = nullptr;
-		ReportGeneratedModule(*TestRunner, OptimizedModuleName, Source);
-		ASSERT_THAT(IsTrue(CompileNativeModule(ScriptEngine, OptimizedModuleNameUtf8.Get(), SourceUtf8.Get(), OptimizedModule) >= 0, TEXT("Local variable optimized source should compile")));
+		ReportGeneratedModule(*TestRunner, OptimizedModuleName, OptimizedSource);
+		ASSERT_THAT(IsTrue(CompileNativeModule(ScriptEngine, OptimizedModuleNameUtf8.Get(), OptimizedSourceUtf8.Get(), OptimizedModule) >= 0, TEXT("Local variable optimized source should compile")));
 		ASSERT_THAT(IsNotNull(OptimizedModule, TEXT("Local variable optimized source should publish a module")));
 		if (OptimizedModule != nullptr)
 		{
@@ -490,7 +570,11 @@ public:
 					&& (OptimizedShapeBytecode.Num() == 0
 						|| FMemory::Memcmp(OptimizedShapeBytecode.GetData(), UnoptimizedShapeBytecode.GetData(), OptimizedShapeBytecode.Num() * sizeof(asDWORD)) == 0);
 				ASSERT_THAT(IsTrue(OptimizedShapeBytecode.Num() > 0, TEXT("Local variable optimized source should expose optimization-shape bytecode")));
-				ASSERT_THAT(IsTrue(BytecodeContainsOpcode(OptimizedOptimizationShape, asBC_IncVi), TEXT("Local variable optimized source should combine the selected load-and-increment sequence")));
+				ASSERT_THAT(IsTrue(BytecodeContainsOpcode(OptimizedOptimizationShape, asBC_IncVi),
+					*FString::Printf(
+						TEXT("Local variable optimized source should combine the selected load-and-increment sequence. Optimize=%lld Bytecode={%s}"),
+						static_cast<int64>(ScriptEngine->GetEngineProperty(asEP_OPTIMIZE_BYTECODE)),
+						*DescribeBytecode(OptimizedOptimizationShape))));
 				ASSERT_THAT(IsFalse(BytecodeContainsOpcode(OptimizedOptimizationShape, asBC_INCi), TEXT("Local variable optimized source should not retain the split increment instruction")));
 				ASSERT_THAT(IsFalse(bBytecodeBuffersMatch, TEXT("Local variable product should expose distinct bytecode for enabled and disabled optimization")));
 				ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(OptimizedOptimizationShape), TEXT("Local variable optimized source should prepare its optimization-shape entry")));

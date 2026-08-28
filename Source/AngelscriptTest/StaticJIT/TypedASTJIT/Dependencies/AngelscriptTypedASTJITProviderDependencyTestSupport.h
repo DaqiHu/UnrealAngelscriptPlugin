@@ -110,6 +110,9 @@ namespace AngelscriptTypedASTJITProviderDependencyTestSupport
 		Config.bIsEditor = true;
 		Config.bDevelopmentMode = true;
 		Config.bSkipThreadedInitialize = true;
+		Config.bUseCanonicalStagedCompiler = true;
+		Config.bOverrideCacheV2Enablement = true;
+		Config.bEnableCacheV2 = true;
 		Config.CacheV2RootOverride = Project.CacheRoot;
 
 		FAngelscriptEngineDependencies Dependencies =
@@ -323,18 +326,25 @@ namespace AngelscriptTypedASTJITProviderDependencyTestSupport
 				});
 		}
 
-		void SetEntryDependencies(
+		bool SetEntryDependencies(
 			const FAngelscriptStableFunctionKey& FunctionKey,
 			TArray<FAngelscriptArtifactSemanticDependency> Rows)
 		{
 			const int32 EntryIndex = FindEntryIndex(FunctionKey);
-			check(EntryIndex != INDEX_NONE);
+			if (EntryIndex == INDEX_NONE)
+			{
+				return false;
+			}
 			const FAngelscriptJITSemanticDependencyCanonicalResult Canonical =
 				FAngelscriptJITProviderManifest::
 					CanonicalizeSemanticDependencies(Rows);
-			check(Canonical.IsValid());
+			if (!Canonical.IsValid())
+			{
+				return false;
+			}
 			EntryDependencies[EntryIndex] = Canonical.Rows;
 			Rebuild();
+			return true;
 		}
 
 		void Rebuild()

@@ -2,3 +2,6 @@
 # deliberately reject CRLF, so Windows core.autocrlf must not rewrite them.
 Standalone/Tests/Fixtures/OfflineContract/**/*.json text eol=lf
 Standalone/Tests/Fixtures/OfflineContract/**/*.jsonl text eol=lf
+
+# StaticJIT goldens are byte-compared by Verify. core.autocrlf must not rewrite them.
+Source/AngelscriptTestJIT/Generated/** text eol=lf

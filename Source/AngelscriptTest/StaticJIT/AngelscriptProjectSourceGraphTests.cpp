@@ -11,6 +11,11 @@
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
 
+#include "StartAngelscriptHeaders.h"
+#include "source/as_module.h"
+#include "source/as_scriptengine.h"
+#include "EndAngelscriptHeaders.h"
+
 #if WITH_ANGELSCRIPT_UNITTESTS && AS_CAN_GENERATE_JIT
 
 namespace AngelscriptProjectSourceGraphTests
@@ -62,17 +67,23 @@ public:
 		};
 
 		FAngelscriptProjectSourceGraphCompileRequest Request;
-		Request.RequestKind =
-			EAngelscriptProjectSourceGraphRequestKind::StaticJITArtifact;
 		Request.ProjectFile = ProjectFile;
 		Request.TargetProfile =
 			EAngelscriptJITTargetProfile::EditorDevelopment;
 		Request.CaptureProfile =
-			EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR;
+			EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
+		Request.ASTRetentionPolicy =
+			static_cast<int32>(asAST_RETAIN_SNAPSHOT);
 
 		bool bSawCollectFlag = false;
+		bool bSawCanonicalASTRequirement = false;
 		bool bSawIsRunningCommandlet = false;
 		bool bSawNativeForm = false;
+		bool bSawCanonicalCompilerPipeline = false;
+		bool bAllModulesPublishedCanonicalBytecode = true;
+		bool bAllModulesSkippedLegacyCompiler = true;
+		bool bAllModulesPublishedCanonicalDigest = true;
+		int32 AuditedModuleCount = 0;
 		FString Error;
 		ASSERT_THAT(IsTrue(FAngelscriptProjectSourceGraph::Compile(
 			Request,
@@ -81,6 +92,36 @@ public:
 			{
 				bSawCollectFlag =
 					View.Engine.bCollectStaticJITCompatibilityBinds;
+				bSawCanonicalASTRequirement =
+					View.Engine.GetRuntimeConfig()
+						.bRequireCanonicalASTForStaticJITGeneration;
+				const asCScriptEngine* const ScriptEngine =
+					static_cast<const asCScriptEngine*>(
+						View.Engine.GetScriptEngine());
+				bSawCanonicalCompilerPipeline = ScriptEngine != nullptr
+					&& ScriptEngine->GetCompilerPipeline()
+						== asCOMPILER_PIPELINE_CANONICAL;
+				for (asIScriptModule* PublicModule : View.Modules)
+				{
+					const asCModule* const Module =
+						static_cast<const asCModule*>(PublicModule);
+					if (Module == nullptr)
+					{
+						bAllModulesPublishedCanonicalBytecode = false;
+						bAllModulesSkippedLegacyCompiler = false;
+						bAllModulesPublishedCanonicalDigest = false;
+						continue;
+					}
+					++AuditedModuleCount;
+					bAllModulesPublishedCanonicalBytecode &=
+						Module->GetLastBytecodePublisher()
+							== asBYTECODE_PUBLISHER_CANONICAL_CODEGEN;
+					bAllModulesSkippedLegacyCompiler &=
+						Module->GetLastLegacyCompilerInvocationCount() == 0;
+					asQWORD Digest = 0;
+					bAllModulesPublishedCanonicalDigest &=
+						Module->GetLastCanonicalCodeGenAstDigest(Digest);
+				}
 				for (const FAngelscriptStaticJITNativeCallInventoryEntry&
 					Entry : View.Snapshot->NativeCallInventory)
 				{
@@ -100,10 +141,58 @@ public:
 			&Error), Error));
 		ASSERT_THAT(IsTrue(bSawCollectFlag,
 			TEXT("Official StaticJITArtifact compile must collect compatibility binds")));
+		ASSERT_THAT(IsTrue(bSawCanonicalASTRequirement,
+			TEXT("Official TypedAST generation must require the retained canonical AST snapshot")));
+		ASSERT_THAT(IsTrue(bSawCanonicalCompilerPipeline,
+			TEXT("Official contained TypedAST generation must select CANONICAL before source compilation")));
+		ASSERT_THAT(IsTrue(AuditedModuleCount > 0,
+			TEXT("Official contained generation must expose at least one compiled source module")));
+		ASSERT_THAT(IsTrue(bAllModulesPublishedCanonicalBytecode,
+			TEXT("Every contained generation module must publish Bytecode from Canonical CodeGen")));
+		ASSERT_THAT(IsTrue(bAllModulesSkippedLegacyCompiler,
+			TEXT("Contained generation must not construct asCCompiler as a hidden fallback")));
+		ASSERT_THAT(IsTrue(bAllModulesPublishedCanonicalDigest,
+			TEXT("Every contained generation module must publish its exact sealed-AST digest")));
 		ASSERT_THAT(IsTrue(bSawIsRunningCommandlet,
 			TEXT("Official compile snapshot must keep the reviewed IsRunningCommandlet HeaderInline descriptor")));
 		ASSERT_THAT(IsTrue(bSawNativeForm,
 			TEXT("Official compile snapshot must keep at least one native form")));
+	}
+
+	TEST_METHOD(VerifiedCanonicalASTRequiresPublicASTRetention)
+	{
+		using namespace AngelscriptEditor::StaticJIT;
+		using namespace AngelscriptProjectSourceGraphTests;
+
+		FString Root;
+		const FString ProjectFile = MakeProject(Root);
+		ON_SCOPE_EXIT
+		{
+			IFileManager::Get().DeleteDirectory(*Root, false, true);
+		};
+
+		FAngelscriptProjectSourceGraphCompileRequest Request;
+		Request.ProjectFile = ProjectFile;
+		Request.TargetProfile =
+			EAngelscriptJITTargetProfile::EditorDevelopment;
+		Request.CaptureProfile =
+			EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
+
+		bool bConsumerCalled = false;
+		FString Error;
+		ASSERT_THAT(IsFalse(FAngelscriptProjectSourceGraph::Compile(
+			Request,
+			[&bConsumerCalled](
+				const FAngelscriptProjectSourceGraphCompileView&,
+				FString*)
+			{
+				bConsumerCalled = true;
+				return true;
+			},
+			&Error)));
+		ASSERT_THAT(IsFalse(bConsumerCalled));
+		ASSERT_THAT(IsTrue(Error.Contains(
+			TEXT("requires AST snapshot retention"))));
 	}
 };
 

@@ -53,7 +53,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITProviderCatalogDiagnosticSource
 };
 
 struct ANGELSCRIPTRUNTIME_API
-FAngelscriptJITProviderCatalogTypedSemanticFunctionDiagnostic
+FAngelscriptJITProviderCatalogCanonicalFunctionDiagnostic
 {
 	FAngelscriptStableFunctionKey FunctionKey;
 	FString Role;
@@ -62,7 +62,7 @@ FAngelscriptJITProviderCatalogTypedSemanticFunctionDiagnostic
 	FString InvocationKind;
 	FString ReceiverKind;
 	int32 ReceiverParameterIndex = INDEX_NONE;
-	FString HIRState;
+	FString CanonicalASTState;
 	FString CleanupPlanState;
 	bool bHasSuspendState = false;
 	bool bHasExceptionCleanup = false;
@@ -161,12 +161,12 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITProviderCatalogDiagnostics
 	uint32 CompiledDependencyCount = 0;
 	uint32 CompiledExternalNativeCallCount = 0;
 	uint32 EmitModuleCount = 0;
-	bool bHasVerifiedTypedHIR = false;
+	bool bHasVerifiedCanonicalAST = false;
 	FString TaskError;
 	TArray<FAngelscriptJITProviderCatalogFunctionDiagnostic> Functions;
 	TArray<FAngelscriptJITProviderCatalogBackendAttemptDiagnostic>
 		BackendAttempts;
-	TArray<FAngelscriptJITProviderCatalogTypedSemanticFunctionDiagnostic>
+	TArray<FAngelscriptJITProviderCatalogCanonicalFunctionDiagnostic>
 		SemanticFunctions;
 	TArray<FAngelscriptJITProviderCatalogTypedCallDiagnostic> Calls;
 };

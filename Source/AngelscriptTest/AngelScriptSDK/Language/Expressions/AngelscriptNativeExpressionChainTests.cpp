@@ -746,6 +746,18 @@ private:
 			}
 			return;
 		}
+		bool bContextUnprepared = false;
+		ON_SCOPE_EXIT
+		{
+			// CQTest assertions are fatal to this helper. Keep VM-owned temporary
+			// receivers from escaping when an exception-metadata assertion returns
+			// before the explicit cleanup checks below.
+			if (!bContextUnprepared)
+			{
+				Context->Unprepare();
+			}
+			Context->Release();
+		};
 
 		const int32 ExecuteResult = PrepareAndExecute(Context, Entry);
 		const bool bExpectedException =
@@ -794,8 +806,10 @@ private:
 		ASSERT_THAT(AreEqual(1,
 			State.FactoryCalls,
 			*Case.Describe(TEXT("runtime chain should evaluate its root factory once"))));
+		const int32 UnprepareResult = Context->Unprepare();
+		bContextUnprepared = UnprepareResult == asSUCCESS;
 		ASSERT_THAT(AreEqual(asSUCCESS,
-			Context->Unprepare(),
+			UnprepareResult,
 			*Case.Describe(TEXT("chain context should unprepare after finish or exception"))));
 		const int32 ExpectedObjects = bNullReceiver ? 0 : 1;
 		ASSERT_THAT(AreEqual(ExpectedObjects,
@@ -808,7 +822,6 @@ private:
 			State.LiveObjects,
 			*Case.Describe(TEXT("chain cleanup should leave no native receiver live"))));
 		ExecuteRecovery(Case, Engine, Module, Context);
-		Context->Release();
 	}
 
 	void RunCell(FNativeTestEngine& Engine,
@@ -843,7 +856,10 @@ private:
 			ASSERT_THAT(IsTrue(BuildResult < 0,
 				*Case.Describe(TEXT("invalid or missing chain stage should fail compilation"))));
 			ASSERT_THAT(IsTrue(HasLocatedError(Engine.GetMessages(), ModuleName),
-				*Case.Describe(TEXT("rejected chain should own a located diagnostic"))));
+				*Case.DescribeResult(
+					"<compile diagnostics>",
+					TEXT("rejected chain should own a located diagnostic"),
+					Engine.GetMessagesText())));
 			ASSERT_THAT(AreEqual(0,
 				State.FactoryCalls,
 				*Case.Describe(TEXT("rejected chain should execute no factory"))));

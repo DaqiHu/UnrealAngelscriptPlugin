@@ -140,7 +140,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationDiagnosticSource
 };
 
 struct ANGELSCRIPTRUNTIME_API
-FAngelscriptJITGenerationTypedSemanticFunctionDiagnostic
+FAngelscriptJITGenerationCanonicalFunctionDiagnostic
 {
 	FAngelscriptStableFunctionKey FunctionKey;
 	FString Role;
@@ -149,7 +149,7 @@ FAngelscriptJITGenerationTypedSemanticFunctionDiagnostic
 	FString InvocationKind;
 	FString ReceiverKind;
 	int32 ReceiverParameterIndex = INDEX_NONE;
-	FString HIRState;
+	FString CanonicalASTState;
 	FString CleanupPlanState;
 	bool bHasSuspendState = false;
 	bool bHasExceptionCleanup = false;
@@ -211,7 +211,7 @@ FAngelscriptJITGenerationBackendAttemptDiagnostic
 	FString ExceptionControlState;
 	FString ExceptionPayloadState;
 	bool bRecursionGuardAvailable = false;
-	TArray<FAngelscriptJITGenerationTypedSemanticFunctionDiagnostic>
+	TArray<FAngelscriptJITGenerationCanonicalFunctionDiagnostic>
 		SemanticFunctions;
 	TArray<FAngelscriptJITGenerationTypedCallDiagnostic> Calls;
 };
@@ -241,7 +241,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptJITGenerationDiagnostics
 	uint32 CompiledDependencyCount = 0;
 	uint32 CompiledExternalNativeCallCount = 0;
 	uint32 EmitModuleCount = 0;
-	bool bHasVerifiedTypedHIR = false;
+	bool bHasVerifiedCanonicalAST = false;
 	FString TaskError;
 	TArray<FAngelscriptJITGenerationFunctionDiagnostic> Functions;
 };

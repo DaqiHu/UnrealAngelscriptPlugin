@@ -36,7 +36,7 @@ ANGELSCRIPTRUNTIME_API FString LexToString(
 /**
  * Immutable description of the hooks actually emitted by one TypedASTJIT
  * generation profile. IdentityHash changes whenever generated semantics may
- * differ even when the source HIR is identical.
+ * differ even when the sealed Canonical body is identical.
  */
 struct ANGELSCRIPTRUNTIME_API
 	FAngelscriptTypedASTJITGenerationCapabilityProfile

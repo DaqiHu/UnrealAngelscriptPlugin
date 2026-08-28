@@ -15,7 +15,6 @@
 class asIScriptFunction;
 class asIScriptModule;
 class asITypeInfo;
-class asCTypedSemanticFunction;
 struct FAngelscriptModuleDesc;
 
 /**
@@ -109,7 +108,9 @@ struct FAngelscriptStaticJITCompiledFunctionView
 	FAngelscriptHash256 EntryAbiHash;
 	FStringView CanonicalDeclaration;
 	TConstArrayView<uint8> Bytecode;
-	const asCTypedSemanticFunction* VerifiedTypedHIR = nullptr;
+	const class asCASTContext* SealedAST = nullptr;
+	asUINT CanonicalFunctionDeclValue = 0;
+	bool bRequiresCanonicalAST = false;
 	bool bHasVerifiedArtifactIdentity = false;
 	bool bHasVerifiedArtifactReferences = false;
 	bool bHasVMEntry = false;
@@ -245,7 +246,7 @@ struct FAngelscriptStaticJITProcessedSource
 	uint32 Column = 0;
 };
 
-enum class EAngelscriptStaticJITTypedHIRState : uint8
+enum class EAngelscriptStaticJITCanonicalASTState : uint8
 {
 	Missing = 0,
 	Verified,
@@ -305,8 +306,8 @@ struct FAngelscriptStaticJITTypedCallDiagnostic
 	FAngelscriptStaticJITProcessedSource ProcessedSource;
 	TOptional<FAngelscriptStaticJITProcessedSource> AuthoredSource;
 	TOptional<FAngelscriptStaticJITProcessedSource> GeneratedSource;
-	asETypedSemanticCallTargetKind TargetKind =
-		asETypedSemanticCallTargetKind::Unspecified;
+	EAngelscriptTypedASTJITCallTargetKind TargetKind =
+		EAngelscriptTypedASTJITCallTargetKind::Unspecified;
 	EAngelscriptStaticJITTypedCallDisposition Disposition =
 		EAngelscriptStaticJITTypedCallDisposition::Unsupported;
 	EAngelscriptTypedASTJITFallbackReason CalleeEligibilityReason =
@@ -330,23 +331,23 @@ struct FAngelscriptStaticJITTypedCallDiagnostic
 	int32 ReferenceSlotIndex = INDEX_NONE;
 };
 
-/** Owned semantic facts copied while the generation HIR is still alive. */
-struct FAngelscriptStaticJITTypedSemanticFunctionDiagnostic
+/** Owned semantic facts copied while the generation Canonical AST is alive. */
+struct FAngelscriptStaticJITCanonicalFunctionDiagnostic
 {
 	FAngelscriptStableFunctionKey FunctionKey;
 	EAngelscriptStaticJITTypedClosureFunctionRole Role =
 		EAngelscriptStaticJITTypedClosureFunctionRole::NonRoot;
 	uint32 RawTraitBits = 0;
 	uint32 UnknownTraitBits = 0;
-	asETypedSemanticInvocationKind InvocationKind =
-		asETypedSemanticInvocationKind::Global;
-	asETypedSemanticReceiverKind ReceiverKind =
-		asETypedSemanticReceiverKind::None;
+	EAngelscriptTypedASTJITInvocationKind InvocationKind =
+		EAngelscriptTypedASTJITInvocationKind::Global;
+	EAngelscriptTypedASTJITReceiverKind ReceiverKind =
+		EAngelscriptTypedASTJITReceiverKind::None;
 	int32 ReceiverParameterIndex = INDEX_NONE;
-	EAngelscriptStaticJITTypedHIRState HIRState =
-		EAngelscriptStaticJITTypedHIRState::Missing;
-	asETypedSemanticCleanupPlanState CleanupPlanState =
-		asETypedSemanticCleanupPlanState::Unverified;
+	EAngelscriptStaticJITCanonicalASTState CanonicalASTState =
+		EAngelscriptStaticJITCanonicalASTState::Missing;
+	EAngelscriptTypedASTJITCleanupPlanState CleanupPlanState =
+		EAngelscriptTypedASTJITCleanupPlanState::Unverified;
 	bool bHasSuspendState = false;
 	bool bHasExceptionCleanup = false;
 	bool bCleanupPlanCoversAllTransfers = false;
@@ -375,7 +376,7 @@ struct FAngelscriptStaticJITTypedCallClosureDiagnostic
 	EAngelscriptStaticJITExceptionPayloadState ExceptionPayloadState =
 		EAngelscriptStaticJITExceptionPayloadState::Unavailable;
 	bool bRecursionGuardAvailable = false;
-	TArray<FAngelscriptStaticJITTypedSemanticFunctionDiagnostic> Functions;
+	TArray<FAngelscriptStaticJITCanonicalFunctionDiagnostic> Functions;
 	TArray<FAngelscriptStaticJITTypedCallDiagnostic> Calls;
 };
 
@@ -386,7 +387,7 @@ struct FAngelscriptStaticJITTypedFunctionDiagnostic
 		EAngelscriptTypedASTJITFallbackReason::None;
 	FString Detail;
 	FAngelscriptStaticJITProcessedSource ProcessedSource;
-	TOptional<FAngelscriptStaticJITTypedSemanticFunctionDiagnostic>
+	TOptional<FAngelscriptStaticJITCanonicalFunctionDiagnostic>
 		SemanticFunction;
 	TOptional<FAngelscriptStaticJITTypedCallClosureDiagnostic> CallClosure;
 };

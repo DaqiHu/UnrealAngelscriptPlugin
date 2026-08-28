@@ -57,7 +57,7 @@ struct ANGELSCRIPTRUNTIME_API FStaticJITDiagnostics
 	enum class EArtifactCaptureState : uint8
 	{
 		Bytecode = 0,
-		VerifiedTypedHIR,
+		VerifiedCanonicalAST,
 	};
 
 	enum class EArtifactFunctionDisposition : uint8
@@ -74,7 +74,7 @@ struct ANGELSCRIPTRUNTIME_API FStaticJITDiagnostics
 		uint32 Column = 0;
 	};
 
-	struct FTypedSemanticFunctionDiagnosticRecord
+	struct FCanonicalFunctionDiagnosticRecord
 	{
 		FAngelscriptStableFunctionKey FunctionKey;
 		FString Role;
@@ -83,7 +83,7 @@ struct ANGELSCRIPTRUNTIME_API FStaticJITDiagnostics
 		FString InvocationKind;
 		FString ReceiverKind;
 		int32 ReceiverParameterIndex = INDEX_NONE;
-		FString HIRState;
+		FString CanonicalASTState;
 		FString CleanupPlanState;
 		bool bHasSuspendState = false;
 		bool bHasExceptionCleanup = false;
@@ -133,7 +133,7 @@ struct ANGELSCRIPTRUNTIME_API FStaticJITDiagnostics
 		FString ExceptionControlState;
 		FString ExceptionPayloadState;
 		bool bRecursionGuardAvailable = false;
-		TArray<FTypedSemanticFunctionDiagnosticRecord> Functions;
+		TArray<FCanonicalFunctionDiagnosticRecord> Functions;
 		TArray<FTypedCallDiagnosticRecord> Calls;
 	};
 
@@ -142,7 +142,7 @@ struct ANGELSCRIPTRUNTIME_API FStaticJITDiagnostics
 		FString FallbackReason;
 		FString Detail;
 		FProcessedSourceRecord ProcessedSource;
-		TOptional<FTypedSemanticFunctionDiagnosticRecord> SemanticFunction;
+		TOptional<FCanonicalFunctionDiagnosticRecord> SemanticFunction;
 		TOptional<FTypedCallClosureDiagnosticRecord> CallClosure;
 	};
 
@@ -180,7 +180,7 @@ struct ANGELSCRIPTRUNTIME_API FStaticJITDiagnostics
 		int32 DependencyCount = 0;
 		int32 ExternalNativeCallCount = 0;
 		int32 EmitModuleCount = 0;
-		bool bHasVerifiedTypedHIR = false;
+		bool bHasVerifiedCanonicalAST = false;
 	};
 
 	/** Pointer-free audit of one StaticJIT artifact generation request. */
@@ -191,7 +191,7 @@ struct ANGELSCRIPTRUNTIME_API FStaticJITDiagnostics
 		FString RequestedBackendId;
 		EArtifactCaptureState CaptureState =
 			EArtifactCaptureState::Bytecode;
-		bool bHIRCaptureEnabled = false;
+		bool bCanonicalASTCaptureEnabled = false;
 		TArray<FString> FallbackChain;
 		FArtifactCompiledSourceGraphRecord CompiledSourceGraph;
 		FString TaskError;

@@ -4,7 +4,7 @@
  * Backend            : BytecodeJIT
  * Declaration        : int SemanticExhaustiveEnum(const int)
  * StableFunctionKey  : 0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4
- * OriginalSymbolSet  : ASJIT_0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4_52de55a9a6328e299cf7f8704913c970b8ca29f9de21e7623850392073ca7ecd
+ * OriginalSymbolSet  : ASJIT_0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4_30d28816e1d190422c317e7590e3b1595313b06a2fc09fde5244d8276bf5d873
  * TestSymbolSet      : AS_Test_Differential_Bytecode_SemanticExhaustiveEnum
  * CleanupPlan       : NotCaptured (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -26,8 +26,8 @@
  * Declaration       : int SemanticExhaustiveEnum(const int)
  * Source             : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:1
  * StableFunctionKey  : 0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4
- * ExecutionHash      : 52de55a9a6328e299cf7f8704913c970b8ca29f9de21e7623850392073ca7ecd
- * DebugHash          : 68708e5118144807270fa93f1ddeb85a92b89ed2a131c0fed467dc787a1fbf1b
+ * ExecutionHash      : 30d28816e1d190422c317e7590e3b1595313b06a2fc09fde5244d8276bf5d873
+ * DebugHash          : efea96a8f7ec1863dc51c8ea8bafe3d4c509cabd638fab348147d14e69d754ee
  * EntryAbiHash       : 3b5a06c877b274f22ba1b63a3dd81f44e2041a70d3e47fd81bb7378a11c8129b
  * ExecutionCaps      : 0
  * RuntimeTriggers    : 0
@@ -107,8 +107,8 @@ LABEL_SemanticExhaustiveEnum_34:
 v_TEMP_dword_4 = 0xau;
 // CpyVtoR4 v4
 l_dwordRegister = v_TEMP_dword_4;
-// JMP 27
-goto LABEL_SemanticExhaustiveEnum_70;
+// JMP 23
+goto LABEL_SemanticExhaustiveEnum_66;
 LABEL_SemanticExhaustiveEnum_43:
 // SUSPEND
 // JitEntry *
@@ -116,8 +116,8 @@ LABEL_SemanticExhaustiveEnum_43:
 v_TEMP_dword_3 = 0x14u;
 // CpyVtoR4 v3
 l_dwordRegister = v_TEMP_dword_3;
-// JMP 18
-goto LABEL_SemanticExhaustiveEnum_70;
+// JMP 14
+goto LABEL_SemanticExhaustiveEnum_66;
 LABEL_SemanticExhaustiveEnum_52:
 // SUSPEND
 // JitEntry *
@@ -125,18 +125,16 @@ LABEL_SemanticExhaustiveEnum_52:
 v_TEMP_dword_4 = 0x1eu;
 // CpyVtoR4 v4
 l_dwordRegister = v_TEMP_dword_4;
-// JMP 9
-goto LABEL_SemanticExhaustiveEnum_70;
+// JMP 5
+goto LABEL_SemanticExhaustiveEnum_66;
 LABEL_SemanticExhaustiveEnum_61:
-// SUSPEND
-// JitEntry *
 // ThrowException 0
-SCRIPT_DEBUG_CALLSTACK_POSITION(104, 2);
+SCRIPT_DEBUG_CALLSTACK_POSITION(111, 3);
 SCRIPT_SWITCH_VALUE_INVALID_EXCEPTION();
 return {};
 // SUSPEND
 // JitEntry *
-LABEL_SemanticExhaustiveEnum_70:
+LABEL_SemanticExhaustiveEnum_66:
 // RET 1
   return (int32)l_dwordRegister;
 }

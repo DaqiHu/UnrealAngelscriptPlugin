@@ -54,12 +54,1327 @@
 #include "as_tokendef.h"
 #include "as_texts.h"
 #include "as_debug.h"
+#include "as_sema.h"
 
 #ifdef _MSC_VER
 #pragma warning(disable:4702) // unreachable code
 #endif
 
 BEGIN_AS_NAMESPACE
+
+struct asSDeclContextScope
+{
+	asCSema* sema;
+	bool pushed;
+	asSDeclContextScope(asCSema* inSema) : sema(inSema), pushed(false) {}
+	~asSDeclContextScope()
+	{
+		if( pushed && sema )
+		{
+			sema->PopDeclContext();
+		}
+	}
+	void PushLastActed()
+	{
+		if( sema == 0 )
+		{
+			return;
+		}
+		const asASTDeclId id = sema->LastActedDecl();
+		if( !id.IsValid() )
+		{
+			return;
+		}
+		sema->PushDeclContext(id);
+		pushed = true;
+	}
+	void Push(asASTDeclId id)
+	{
+		if( sema == 0 || !id.IsValid() )
+		{
+			return;
+		}
+		sema->PushDeclContext(id);
+		pushed = true;
+	}
+};
+
+static void AppendRecordBaseActionToken(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asSRecordBaseSpecifierAction& action,
+	bool& hasToken)
+{
+	if( node == 0 || script == 0 || script->code == 0 )
+	{
+		return;
+	}
+	if( node->firstChild != 0 )
+	{
+		for( const asCScriptNode* child = node->firstChild;
+			child != 0; child = child->next )
+		{
+			AppendRecordBaseActionToken(child, script, action, hasToken);
+		}
+		return;
+	}
+	if( node->tokenLength == 0
+		|| node->tokenPos + node->tokenLength > script->codeLength )
+	{
+		return;
+	}
+	asCString token;
+	token.Assign(script->code + node->tokenPos, node->tokenLength);
+	action.qualifiedName += token;
+	if( !hasToken )
+	{
+		action.beginOffset = (asUINT)node->tokenPos;
+		hasToken = true;
+	}
+	action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+}
+
+static bool BuildRecordBaseSpecifierAction(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asSRecordBaseSpecifierAction& action)
+{
+	bool hasToken = false;
+	AppendRecordBaseActionToken(node, script, action, hasToken);
+	return hasToken && action.qualifiedName.GetLength() != 0;
+}
+
+static asCString QualTypeActionNodeText(
+	const asCScriptNode* node,
+	const asCScriptCode* script)
+{
+	asCString text;
+	if( node != 0 && script != 0 && script->code != 0
+		&& node->tokenLength > 0
+		&& node->tokenPos + node->tokenLength <= script->codeLength )
+	{
+		text.Assign(script->code + node->tokenPos, node->tokenLength);
+	}
+	return text;
+}
+
+static void CollectQualTypeActionQualifiers(
+	const asCScriptNode* node,
+	asDWORD& qualifiers)
+{
+	if( node == 0 )
+	{
+		return;
+	}
+	switch( node->tokenType )
+	{
+	case ttConst: qualifiers |= asAST_QUAL_CONST; break;
+	case ttHandleSuffix: qualifiers |= asAST_QUAL_HANDLE; break;
+	case ttAmp: qualifiers |= asAST_QUAL_REFERENCE; break;
+	case ttIn: qualifiers |= asAST_QUAL_IN; break;
+	case ttOut: qualifiers |= asAST_QUAL_OUT; break;
+	case ttInOut: qualifiers |= asAST_QUAL_INOUT; break;
+	case ttPlus: qualifiers |= asAST_QUAL_AUTO_HANDLE; break;
+	default: break;
+	}
+	for( const asCScriptNode* child = node->firstChild;
+		child != 0; child = child->next )
+	{
+		CollectQualTypeActionQualifiers(child, qualifiers);
+	}
+}
+
+static void AppendQualTypeActionLeafText(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asCString& text)
+{
+	if( node == 0 )
+	{
+		return;
+	}
+	if( node->firstChild != 0 )
+	{
+		for( const asCScriptNode* child = node->firstChild;
+			child != 0; child = child->next )
+		{
+			AppendQualTypeActionLeafText(child, script, text);
+		}
+		return;
+	}
+	const asCString token = QualTypeActionNodeText(node, script);
+	if( token.GetLength() )
+	{
+		text += token;
+	}
+}
+
+static asCString FormatQualTypeActionSpelling(
+	const asCScriptNode* typeNode,
+	const asCScriptCode* script)
+{
+	if( typeNode == 0 )
+	{
+		return asCString();
+	}
+	if( typeNode->firstChild == 0 )
+	{
+		return QualTypeActionNodeText(typeNode, script);
+	}
+
+	asCString scope;
+	asCString primary;
+	asCString args;
+	asUINT dataTypes = 0;
+	for( const asCScriptNode* child = typeNode->firstChild;
+		child != 0; child = child->next )
+	{
+		if( child->nodeType == snScope )
+		{
+			AppendQualTypeActionLeafText(child, script, scope);
+		}
+		else if( child->nodeType == snDataType )
+		{
+			const asCString part = FormatQualTypeActionSpelling(child, script);
+			if( dataTypes == 0 )
+			{
+				primary = part;
+			}
+			else if( part.GetLength() )
+			{
+				if( args.GetLength() )
+				{
+					args += ",";
+				}
+				args += part;
+			}
+			++dataTypes;
+		}
+		else if( child->nodeType == snIdentifier && primary.GetLength() == 0 )
+		{
+			primary = QualTypeActionNodeText(child, script);
+		}
+	}
+	if( primary.GetLength() == 0 )
+	{
+		primary = QualTypeActionNodeText(typeNode, script);
+	}
+	if( scope.GetLength() )
+	{
+		scope += primary;
+		primary = scope;
+	}
+	if( args.GetLength() )
+	{
+		primary += "<";
+		primary += args;
+		primary += ">";
+	}
+	return primary;
+}
+
+static void ExtendQualTypeActionRange(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asUINT& beginOffset,
+	asUINT& endOffset,
+	bool& hasRange)
+{
+	if( node == 0 || script == 0 || script->code == 0 )
+	{
+		return;
+	}
+	if( node->tokenLength > 0
+		&& node->tokenPos + node->tokenLength <= script->codeLength )
+	{
+		const asUINT begin = (asUINT)node->tokenPos;
+		const asUINT end = (asUINT)(node->tokenPos + node->tokenLength);
+		if( !hasRange || begin < beginOffset )
+		{
+			beginOffset = begin;
+		}
+		if( !hasRange || end > endOffset )
+		{
+			endOffset = end;
+		}
+		hasRange = true;
+	}
+	for( const asCScriptNode* child = node->firstChild;
+		child != 0; child = child->next )
+	{
+		ExtendQualTypeActionRange(
+			child, script, beginOffset, endOffset, hasRange);
+	}
+}
+
+asSQualTypeSyntaxAction asCParser::BuildQualTypeSyntaxAction(
+	const asCScriptNode* typeNode,
+	const asCScriptNode* typeMod)
+{
+	asSQualTypeSyntaxAction action;
+	action.spelling = FormatQualTypeActionSpelling(typeNode, script);
+	action.primitiveToken = typeNode != 0
+		? typeNode->tokenType : ttUnrecognizedToken;
+	CollectQualTypeActionQualifiers(typeNode, action.qualifiers);
+	CollectQualTypeActionQualifiers(typeMod, action.qualifiers);
+	bool hasRange = false;
+	ExtendQualTypeActionRange(
+		typeNode, script, action.beginOffset, action.endOffset, hasRange);
+	ExtendQualTypeActionRange(
+		typeMod, script, action.beginOffset, action.endOffset, hasRange);
+	return action;
+}
+
+static bool BuildDeclRefExprAction(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asASTDeclId owner,
+	asSDeclRefExprAction& action)
+{
+	if( node == 0 || script == 0 || script->code == 0
+		|| node->tokenLength == 0
+		|| node->tokenPos + node->tokenLength > script->codeLength )
+	{
+		return false;
+	}
+
+	action.owner = owner;
+	action.beginOffset = (asUINT)node->tokenPos;
+	action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+	const asCScriptNode* scope = 0;
+	const asCScriptNode* identifier = 0;
+	for( const asCScriptNode* child = node->firstChild;
+		child != 0; child = child->next )
+	{
+		if( child->nodeType == snScope )
+		{
+			scope = child;
+		}
+		else if( child->nodeType == snIdentifier )
+		{
+			identifier = child;
+		}
+	}
+	action.name = QualTypeActionNodeText(identifier, script);
+	if( action.name.GetLength() == 0 )
+	{
+		return false;
+	}
+
+	bool sawIdentifier = false;
+	for( const asCScriptNode* child = scope ? scope->firstChild : 0;
+		child != 0; child = child->next )
+	{
+		if( child->nodeType == snIdentifier )
+		{
+			const asCString segment = QualTypeActionNodeText(child, script);
+			if( segment.GetLength() )
+			{
+				action.scopeSegments.PushLast(segment);
+				sawIdentifier = true;
+			}
+		}
+		else if( child->tokenType == ttScope && !sawIdentifier )
+		{
+			action.absoluteScope = true;
+		}
+	}
+	return true;
+}
+
+// Resolve one already-bound expression beneath a transparent Parser wrapper.
+// This never asks Sema to interpret syntax: only pointer-exact action bindings
+// are considered, and more than one distinct descendant fails closed. As each
+// composite grammar family gains its own action, its node is bound directly
+// and this recursion stops at that exact identity.
+static asASTExprId FindSingleExactParsedExpressionIdentity(
+	asCSema* sema,
+	const asCScriptNode* node)
+{
+	if( sema == 0 || node == 0 )
+	{
+		return asASTExprId();
+	}
+	const asASTExprId exact = sema->FindExactParsedExpressionIdentity(node);
+	if( exact.IsValid() )
+	{
+		return exact;
+	}
+	asASTExprId single;
+	for( const asCScriptNode* child = node->firstChild;
+		child != 0; child = child->next )
+	{
+		const asASTExprId candidate =
+			FindSingleExactParsedExpressionIdentity(sema, child);
+		if( !candidate.IsValid() )
+		{
+			continue;
+		}
+		if( single.IsValid() && single.value != candidate.value )
+		{
+			return asASTExprId();
+		}
+		single = candidate;
+	}
+	return single;
+}
+
+// Parser still owns the native syntax node for LEGACY compilation and error
+// recovery, but only copied coordinates and exact Canonical identities cross
+// into Sema. The returned StmtId is intentionally available for the upcoming
+// typed Block/control assembly slices.
+static asASTStmtId ActOnLeafStatementAction(
+	asCSema* sema,
+	asCScriptCode* script,
+	const asCScriptNode* node,
+	asELeafStatementActionKind kind,
+	asASTExprId expression,
+	bool recovered)
+{
+	if( sema == 0 || node == 0 )
+	{
+		return asASTStmtId();
+	}
+	asSLeafStatementAction action;
+	action.kind = kind;
+	action.owner = sema->CurrentDeclContext();
+	action.expression = expression;
+	action.beginOffset = (asUINT)node->tokenPos;
+	action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+	action.recovered = recovered;
+	return sema->ActOnLeafStatementAction(action, script);
+}
+
+static bool BuildConditionalExprAction(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asCSema* sema,
+	asSConditionalExprAction& action)
+{
+	if( node == 0 || script == 0 || script->code == 0
+		|| node->firstChild == 0
+		|| node->firstChild->next == 0
+		|| node->firstChild->next->next == 0
+		|| node->firstChild->next->next->next != 0
+		|| node->tokenLength == 0
+		|| node->tokenPos + node->tokenLength > script->codeLength )
+	{
+		return false;
+	}
+	action.condition = FindSingleExactParsedExpressionIdentity(
+		sema, node->firstChild);
+	action.thenExpression = FindSingleExactParsedExpressionIdentity(
+		sema, node->firstChild->next);
+	action.elseExpression = FindSingleExactParsedExpressionIdentity(
+		sema, node->firstChild->next->next);
+	if( !action.condition.IsValid()
+		|| !action.thenExpression.IsValid()
+		|| !action.elseExpression.IsValid() )
+	{
+		return false;
+	}
+	action.beginOffset = (asUINT)node->tokenPos;
+	action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+	return true;
+}
+
+static void BindConditionalExprAction(
+	asCScriptNode* node,
+	asCScriptCode* script,
+	asCSema* sema)
+{
+	if( sema == 0 )
+	{
+		return;
+	}
+	asSConditionalExprAction action;
+	if( !BuildConditionalExprAction(node, script, sema, action) )
+	{
+		return;
+	}
+	const asASTExprId expression =
+		sema->ActOnConditionalExprAction(action, script);
+	if( expression.IsValid() )
+	{
+		sema->BindParsedExpressionIdentity(node, expression, script);
+	}
+}
+
+static bool BuildAssignExprAction(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asCSema* sema,
+	asSAssignExprAction& action)
+{
+	if( node == 0 || script == 0 || script->code == 0
+		|| node->firstChild == 0
+		|| node->firstChild->next == 0
+		|| node->firstChild->next->next == 0
+		|| node->firstChild->next->next->next != 0
+		|| node->firstChild->next->nodeType != snExprOperator
+		|| node->tokenLength == 0
+		|| node->tokenPos + node->tokenLength > script->codeLength )
+	{
+		return false;
+	}
+	action.lhs = FindSingleExactParsedExpressionIdentity(
+		sema, node->firstChild);
+	action.rhs = FindSingleExactParsedExpressionIdentity(
+		sema, node->firstChild->next->next);
+	if( !action.lhs.IsValid() || !action.rhs.IsValid() )
+	{
+		return false;
+	}
+	action.op = QualTypeActionNodeText(node->firstChild->next, script);
+	if( action.op.GetLength() == 0 )
+	{
+		return false;
+	}
+	action.beginOffset = (asUINT)node->tokenPos;
+	action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+	return true;
+}
+
+static void BindAssignExprAction(
+	asCScriptNode* node,
+	asCScriptCode* script,
+	asCSema* sema)
+{
+	if( sema == 0 )
+	{
+		return;
+	}
+	asSAssignExprAction action;
+	if( !BuildAssignExprAction(node, script, sema, action) )
+	{
+		return;
+	}
+	const asASTExprId expression = sema->ActOnAssignExprAction(action, script);
+	if( expression.IsValid() )
+	{
+		sema->BindParsedExpressionIdentity(node, expression, script);
+	}
+}
+
+static bool BuildBinaryExprAction(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asCSema* sema,
+	asSBinaryExprAction& action)
+{
+	if( node == 0 || script == 0 || script->code == 0
+		|| node->firstChild == 0
+		|| node->tokenLength == 0
+		|| node->tokenPos + node->tokenLength > script->codeLength )
+	{
+		return false;
+	}
+	bool expectOperand = true;
+	for( const asCScriptNode* child = node->firstChild;
+		child != 0; child = child->next )
+	{
+		if( expectOperand )
+		{
+			if( child->nodeType == snExprOperator )
+			{
+				return false;
+			}
+			const asASTExprId operand =
+				FindSingleExactParsedExpressionIdentity(sema, child);
+			if( !operand.IsValid() )
+			{
+				return false;
+			}
+			action.operands.PushLast(operand);
+		}
+		else
+		{
+			if( child->nodeType != snExprOperator )
+			{
+				return false;
+			}
+			asSBinaryExprOperatorAction op;
+			op.tokenType = child->tokenType;
+			op.spelling = QualTypeActionNodeText(child, script);
+			if( op.spelling.GetLength() == 0 )
+			{
+				return false;
+			}
+			action.operators.PushLast(op);
+		}
+		expectOperand = !expectOperand;
+	}
+	if( expectOperand || action.operands.GetLength() < 2
+		|| action.operators.GetLength() + 1 != action.operands.GetLength() )
+	{
+		return false;
+	}
+	action.beginOffset = (asUINT)node->tokenPos;
+	action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+	return true;
+}
+
+static void BindBinaryExprAction(
+	asCScriptNode* node,
+	asCScriptCode* script,
+	asCSema* sema)
+{
+	if( sema == 0 )
+	{
+		return;
+	}
+	asSBinaryExprAction action;
+	if( !BuildBinaryExprAction(node, script, sema, action) )
+	{
+		return;
+	}
+	const asASTExprId expression = sema->ActOnBinaryExprAction(action, script);
+	if( expression.IsValid() )
+	{
+		sema->BindParsedExpressionIdentity(node, expression, script);
+	}
+}
+
+enum asEExprTermSemanticRoute
+{
+	asEXPR_TERM_SEMANTIC_NONE = 0,
+	asEXPR_TERM_SEMANTIC_PURE_UNARY,
+	asEXPR_TERM_SEMANTIC_STRUCTURAL_POSTFIX
+};
+
+// Classify only the semantic route; the native term remains intact for
+// syntax/recovery and explicit LEGACY compilation. Prefix operators and
+// postfix ++/-- form one pointer-free unary action. Dot/member, index, and
+// postfix-call stages still need their own ordered action and therefore stay
+// on the structural adapter until that later slice is migrated.
+static asEExprTermSemanticRoute ClassifyExprTermSemanticRoute(
+	const asCScriptNode* node)
+{
+	bool hasUnary = false;
+	bool hasStructuralPostfix = false;
+	for( const asCScriptNode* child = node ? node->firstChild : 0;
+		child != 0; child = child->next )
+	{
+		if( child->nodeType == snExprPreOp )
+		{
+			hasUnary = true;
+		}
+		else if( child->nodeType == snExprPostOp )
+		{
+			if( child->tokenType == ttInc || child->tokenType == ttDec )
+			{
+				hasUnary = true;
+			}
+			else
+			{
+				hasStructuralPostfix = true;
+			}
+		}
+	}
+	if( hasStructuralPostfix )
+	{
+		return asEXPR_TERM_SEMANTIC_STRUCTURAL_POSTFIX;
+	}
+	return hasUnary
+		? asEXPR_TERM_SEMANTIC_PURE_UNARY
+		: asEXPR_TERM_SEMANTIC_NONE;
+}
+
+static bool BuildUnaryExprAction(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asCSema* sema,
+	asSUnaryExprAction& action)
+{
+	if( node == 0 || script == 0 || script->code == 0 || sema == 0
+		|| ClassifyExprTermSemanticRoute(node)
+			!= asEXPR_TERM_SEMANTIC_PURE_UNARY
+		|| node->tokenLength == 0
+		|| node->tokenPos + node->tokenLength > script->codeLength )
+	{
+		return false;
+	}
+
+	bool hasOperand = false;
+	bool sawPostfix = false;
+	for( const asCScriptNode* child = node->firstChild;
+		child != 0; child = child->next )
+	{
+		if( child->nodeType == snExprPreOp )
+		{
+			if( hasOperand || sawPostfix )
+			{
+				return false;
+			}
+			asSUnaryExprOperatorAction op;
+			op.tokenType = child->tokenType;
+			op.spelling = QualTypeActionNodeText(child, script);
+			if( op.spelling.GetLength() == 0 )
+			{
+				return false;
+			}
+			action.prefixOperators.PushLast(op);
+		}
+		else if( child->nodeType == snExprPostOp )
+		{
+			if( !hasOperand
+				|| (child->tokenType != ttInc && child->tokenType != ttDec) )
+			{
+				return false;
+			}
+			sawPostfix = true;
+			asSUnaryExprOperatorAction op;
+			op.tokenType = child->tokenType;
+			op.spelling = QualTypeActionNodeText(child, script);
+			if( op.spelling.GetLength() == 0 )
+			{
+				return false;
+			}
+			action.postfixOperators.PushLast(op);
+		}
+		else
+		{
+			if( hasOperand || sawPostfix )
+			{
+				return false;
+			}
+			action.operand =
+				FindSingleExactParsedExpressionIdentity(sema, child);
+			if( !action.operand.IsValid() )
+			{
+				return false;
+			}
+			hasOperand = true;
+		}
+	}
+
+	if( !hasOperand
+		|| (action.prefixOperators.GetLength() == 0
+			&& action.postfixOperators.GetLength() == 0) )
+	{
+		return false;
+	}
+	action.beginOffset = (asUINT)node->tokenPos;
+	action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+	return true;
+}
+
+static bool BindUnaryExprAction(
+	asCScriptNode* node,
+	asCScriptCode* script,
+	asCSema* sema)
+{
+	asSUnaryExprAction action;
+	if( !BuildUnaryExprAction(node, script, sema, action) )
+	{
+		return false;
+	}
+	const asASTExprId expression = sema->ActOnUnaryExprAction(action, script);
+	return expression.IsValid()
+		&& sema->BindParsedExpressionIdentity(node, expression, script);
+}
+
+static bool BuildCastExprAction(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asCSema* sema,
+	asSCastExprAction& action)
+{
+	if( node == 0 || node->nodeType != snCast || script == 0
+		|| script->code == 0 || sema == 0 || node->tokenLength == 0
+		|| node->tokenPos + node->tokenLength > script->codeLength )
+	{
+		return false;
+	}
+
+	const asCScriptNode* operandNode = 0;
+	for( const asCScriptNode* child = node->firstChild;
+		child != 0; child = child->next )
+	{
+		if( child->nodeType == snDataType )
+		{
+			continue;
+		}
+		if( operandNode != 0 )
+		{
+			return false;
+		}
+		operandNode = child;
+	}
+	if( operandNode == 0
+		|| !sema->FindParsedExpressionType(node, script, action.targetType) )
+	{
+		return false;
+	}
+	action.operand = FindSingleExactParsedExpressionIdentity(
+		sema, operandNode);
+	if( !action.operand.IsValid() )
+	{
+		return false;
+	}
+	action.beginOffset = (asUINT)node->tokenPos;
+	action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+	return true;
+}
+
+static bool BindCastExprAction(
+	asCScriptNode* node,
+	asCScriptCode* script,
+	asCSema* sema)
+{
+	asSCastExprAction action;
+	if( !BuildCastExprAction(node, script, sema, action) )
+	{
+		return false;
+	}
+	const asASTExprId expression = sema->ActOnCastExprAction(action, script);
+	return expression.IsValid()
+		&& sema->BindParsedExpressionIdentity(node, expression, script);
+}
+
+static bool BuildConstructExprAction(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asCSema* sema,
+	asSConstructExprAction& action)
+{
+	if( node == 0 || node->nodeType != snConstructCall || script == 0
+		|| script->code == 0 || sema == 0 || node->tokenLength == 0
+		|| node->tokenPos + node->tokenLength > script->codeLength )
+	{
+		return false;
+	}
+
+	const asCScriptNode* const typeNode = node->firstChild;
+	const asCScriptNode* const argsNode = typeNode ? typeNode->next : 0;
+	if( typeNode == 0 || typeNode->nodeType != snDataType
+		|| argsNode == 0 || argsNode->nodeType != snArgList
+		|| argsNode->next != 0
+		|| !sema->FindParsedExpressionType(node, script, action.targetType) )
+	{
+		return false;
+	}
+
+	for( const asCScriptNode* arg = argsNode->firstChild;
+		arg != 0; arg = arg->next )
+	{
+		// Named constructor arguments need the complete call-plan action that
+		// also owns parameter provenance/order. Do not silently discard the name
+		// in this bounded TYPE ARGLIST migration.
+		if( arg->nodeType == snNamedArgument )
+		{
+			return false;
+		}
+		const asASTExprId expression =
+			FindSingleExactParsedExpressionIdentity(sema, arg);
+		if( !expression.IsValid() )
+		{
+			return false;
+		}
+		action.arguments.PushLast(expression);
+	}
+	action.beginOffset = (asUINT)node->tokenPos;
+	action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+	return true;
+}
+
+static bool BindConstructExprAction(
+	asCScriptNode* node,
+	asCScriptCode* script,
+	asCSema* sema)
+{
+	asSConstructExprAction action;
+	if( !BuildConstructExprAction(node, script, sema, action) )
+	{
+		return false;
+	}
+	const asASTExprId expression =
+		sema->ActOnConstructExprAction(action, script);
+	return expression.IsValid()
+		&& sema->BindParsedExpressionIdentity(node, expression, script);
+}
+
+static bool ActionNodeHasAuthoredToken(
+	const asCScriptNode* node,
+	const asCScriptCode* script)
+{
+	if( node == 0 || script == 0 || script->code == 0 )
+	{
+		return false;
+	}
+	asCArray<const asCScriptNode*> pending;
+	pending.PushLast(node);
+	while( pending.GetLength() != 0 )
+	{
+		const asCScriptNode* const current = pending.PopLast();
+		if( current->firstChild == 0 )
+		{
+			if( current->tokenLength > 0
+				&& current->tokenPos + current->tokenLength
+					<= script->codeLength )
+			{
+				return true;
+			}
+			continue;
+		}
+		for( const asCScriptNode* child = current->firstChild;
+			child != 0; child = child->next )
+		{
+			pending.PushLast(child);
+		}
+	}
+	return false;
+}
+
+static bool BuildCallArgumentActions(
+	const asCScriptNode* argsNode,
+	const asCScriptCode* script,
+	asCSema* sema,
+	asCArray<asSCallArgumentAction>& arguments,
+	bool allowTrailingRecoveryHole)
+{
+	if( argsNode == 0 || argsNode->nodeType != snArgList
+		|| script == 0 || script->code == 0 || sema == 0 )
+	{
+		return false;
+	}
+	for( const asCScriptNode* arg = argsNode->firstChild;
+		arg != 0; arg = arg->next )
+	{
+		const asCScriptNode* expressionNode = arg;
+		asSCallArgumentAction argument;
+		if( arg->nodeType == snNamedArgument )
+		{
+			if( arg->firstChild == 0 || arg->lastChild == 0
+				|| arg->firstChild == arg->lastChild
+				|| arg->firstChild->nodeType != snIdentifier )
+			{
+				return false;
+			}
+			argument.name = QualTypeActionNodeText(
+				arg->firstChild, script);
+			if( argument.name.GetLength() == 0 )
+			{
+				return false;
+			}
+			expressionNode = arg->lastChild;
+		}
+		argument.expression = FindSingleExactParsedExpressionIdentity(
+			sema, expressionNode);
+		if( !argument.expression.IsValid() )
+		{
+			// ParseArgList publishes one empty trailing condition shell when the
+			// source ends immediately after an opening delimiter. Preserve a
+			// completed zero-argument call prefix only for that final no-token
+			// recovery shell. Any authored malformed argument fails closed.
+			if( allowTrailingRecoveryHole && arg->next == 0
+				&& !ActionNodeHasAuthoredToken(expressionNode, script) )
+			{
+				break;
+			}
+			return false;
+		}
+		arguments.PushLast(argument);
+	}
+	return true;
+}
+
+static bool BuildCallExprAction(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asCSema* sema,
+	asSCallExprAction& action,
+	asASTExprId implicitReceiver = asASTExprId(),
+	bool allowTrailingRecoveryHole = false)
+{
+	if( node == 0 || node->nodeType != snFunctionCall
+		|| script == 0 || script->code == 0 || sema == 0 )
+	{
+		return false;
+	}
+
+	asSDeclRefExprAction calleeAction;
+	if( !BuildDeclRefExprAction(
+		node, script, sema->CurrentDeclContext(), calleeAction) )
+	{
+		return false;
+	}
+	action.owner = calleeAction.owner;
+	action.name = calleeAction.name;
+	action.scopeSegments = calleeAction.scopeSegments;
+	action.absoluteScope = calleeAction.absoluteScope;
+	action.implicitReceiver = implicitReceiver;
+	action.beginOffset = calleeAction.beginOffset;
+	action.endOffset = calleeAction.endOffset;
+
+	const asCScriptNode* argsNode = 0;
+	for( const asCScriptNode* child = node->firstChild;
+		child != 0; child = child->next )
+	{
+		if( child->nodeType != snArgList )
+		{
+			continue;
+		}
+		if( argsNode != 0 )
+		{
+			return false;
+		}
+		argsNode = child;
+	}
+	if( argsNode == 0 )
+	{
+		return false;
+	}
+
+	return BuildCallArgumentActions(
+		argsNode, script, sema, action.arguments,
+		allowTrailingRecoveryHole);
+}
+
+static bool BindCallExprAction(
+	asCScriptNode* node,
+	asCScriptCode* script,
+	asCSema* sema,
+	asASTExprId implicitReceiver = asASTExprId(),
+	bool allowTrailingRecoveryHole = false)
+{
+	if( sema == 0 )
+	{
+		return false;
+	}
+	asSCallExprAction action;
+	if( !BuildCallExprAction(
+		node, script, sema, action, implicitReceiver,
+		allowTrailingRecoveryHole) )
+	{
+		return false;
+	}
+	const asASTExprId expression =
+		sema->ActOnCallExprAction(action, script);
+	return expression.IsValid()
+		&& sema->BindParsedExpressionIdentity(node, expression, script);
+}
+
+static bool BuildStructuralPostfixExprAction(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asCSema* sema,
+	asSStructuralPostfixExprAction& action,
+	bool allowTrailingRecoveryHole)
+{
+	if( node == 0 || script == 0 || script->code == 0 || sema == 0
+		|| ClassifyExprTermSemanticRoute(node)
+			!= asEXPR_TERM_SEMANTIC_STRUCTURAL_POSTFIX
+		|| node->tokenLength == 0
+		|| node->tokenPos + node->tokenLength > script->codeLength )
+	{
+		return false;
+	}
+	action.owner = sema->CurrentDeclContext();
+	action.beginOffset = (asUINT)node->tokenPos;
+	action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+	bool hasBase = false;
+	bool sawPostfix = false;
+	for( const asCScriptNode* child = node->firstChild;
+		child != 0; child = child->next )
+	{
+		if( child->nodeType == snExprPreOp )
+		{
+			if( hasBase || sawPostfix )
+			{
+				return false;
+			}
+			asSUnaryExprOperatorAction op;
+			op.tokenType = child->tokenType;
+			op.spelling = QualTypeActionNodeText(child, script);
+			if( op.spelling.GetLength() == 0 )
+			{
+				return false;
+			}
+			action.prefixOperators.PushLast(op);
+			continue;
+		}
+		if( child->nodeType != snExprPostOp )
+		{
+			if( hasBase || sawPostfix )
+			{
+				return false;
+			}
+			action.base = FindSingleExactParsedExpressionIdentity(
+				sema, child);
+			if( !action.base.IsValid() )
+			{
+				return false;
+			}
+			hasBase = true;
+			continue;
+		}
+
+		if( !hasBase )
+		{
+			return false;
+		}
+		sawPostfix = true;
+		asSStructuralPostfixExprActionStep step;
+		bool hasStepRange = false;
+		ExtendQualTypeActionRange(
+			child, script, step.beginOffset, step.endOffset,
+			hasStepRange);
+		if( !hasStepRange )
+		{
+			return false;
+		}
+		if( step.endOffset > action.endOffset )
+		{
+			action.endOffset = step.endOffset;
+		}
+
+		if( child->tokenType == ttDot && child->firstChild != 0 )
+		{
+			if( child->firstChild->nodeType == snFunctionCall )
+			{
+				asSCallExprAction call;
+				if( !BuildCallExprAction(
+					child->firstChild, script, sema, call,
+					asASTExprId(), allowTrailingRecoveryHole) )
+				{
+					return false;
+				}
+				step.kind = asSTRUCTURAL_POSTFIX_MEMBER_CALL;
+				step.name = call.name;
+				step.scopeSegments = call.scopeSegments;
+				step.absoluteScope = call.absoluteScope;
+				step.arguments = call.arguments;
+			}
+			else if( child->firstChild->nodeType == snIdentifier )
+			{
+				step.kind = asSTRUCTURAL_POSTFIX_MEMBER;
+				step.name = QualTypeActionNodeText(
+					child->firstChild, script);
+				if( step.name.GetLength() == 0 )
+				{
+					return false;
+				}
+			}
+			else
+			{
+				return false;
+			}
+		}
+		else if( child->tokenType == ttOpenBracket
+			&& child->firstChild != 0 )
+		{
+			step.kind = asSTRUCTURAL_POSTFIX_INDEX;
+			if( !BuildCallArgumentActions(
+				child->firstChild, script, sema, step.arguments,
+				allowTrailingRecoveryHole)
+				|| step.arguments.GetLength() == 0 )
+			{
+				return false;
+			}
+		}
+		else if( child->tokenType == ttOpenParanthesis
+			&& child->firstChild != 0 )
+		{
+			step.kind = asSTRUCTURAL_POSTFIX_CALL;
+			if( !BuildCallArgumentActions(
+				child->firstChild, script, sema, step.arguments,
+				allowTrailingRecoveryHole) )
+			{
+				return false;
+			}
+		}
+		else if( child->tokenType == ttInc
+			|| child->tokenType == ttDec )
+		{
+			step.kind = asSTRUCTURAL_POSTFIX_UNARY;
+			step.op.tokenType = child->tokenType;
+			step.op.spelling = QualTypeActionNodeText(child, script);
+			if( step.op.spelling.GetLength() == 0 )
+			{
+				return false;
+			}
+		}
+		else
+		{
+			return false;
+		}
+		action.steps.PushLast(step);
+	}
+	return hasBase && action.steps.GetLength() != 0;
+}
+
+static bool BindStructuralPostfixExprAction(
+	asCScriptNode* node,
+	asCScriptCode* script,
+	asCSema* sema,
+	bool allowTrailingRecoveryHole = false)
+{
+	if( sema == 0 )
+	{
+		return false;
+	}
+	asSStructuralPostfixExprAction action;
+	if( !BuildStructuralPostfixExprAction(
+		node, script, sema, action,
+		allowTrailingRecoveryHole) )
+	{
+		return false;
+	}
+	const asASTExprId expression =
+		sema->ActOnStructuralPostfixExprAction(action, script);
+	return expression.IsValid()
+		&& sema->BindParsedExpressionIdentity(
+			node, expression, script);
+}
+
+static bool BuildCopiedActionRange(
+	const asCScriptNode* node,
+	const asCScriptCode* script,
+	asUINT& beginOffset,
+	asUINT& endOffset)
+{
+	bool hasRange = false;
+	ExtendQualTypeActionRange(
+		node, script, beginOffset, endOffset, hasRange);
+	return hasRange && endOffset > beginOffset;
+}
+
+static bool IsTrailingInitListSentinel(
+	const asCScriptNode* child,
+	const asCScriptCode* script)
+{
+	return child != 0
+		&& child->nodeType == snUndefined
+		&& child->next == 0
+		&& script != 0
+		&& script->code != 0
+		&& child->tokenPos < script->codeLength
+		&& script->code[child->tokenPos] == '}';
+}
+
+static asASTExprId BindInitListNodeAction(
+	asCScriptNode* listNode,
+	const asCScriptNode* rangeNode,
+	asCScriptCode* script,
+	asCSema* sema,
+	const asCQualType& targetType,
+	bool hasExplicitTarget,
+	bool recovered)
+{
+	if( listNode == 0 || listNode->nodeType != snInitList
+		|| rangeNode == 0 || script == 0 || sema == 0 )
+	{
+		return asASTExprId();
+	}
+
+	asSInitListExprAction action;
+	action.owner = sema->CurrentDeclContext();
+	action.targetType = targetType;
+	action.hasExplicitTarget = hasExplicitTarget;
+	action.recovered = recovered;
+	if( !BuildCopiedActionRange(
+		rangeNode, script, action.beginOffset, action.endOffset) )
+	{
+		return asASTExprId();
+	}
+
+	for( asCScriptNode* child = listNode->firstChild;
+		child != 0; child = child->next )
+	{
+		if( IsTrailingInitListSentinel(child, script) )
+		{
+			action.hasTrailingSeparator = true;
+			continue;
+		}
+
+		asSInitListElementAction element;
+		if( !BuildCopiedActionRange(
+			child, script, element.beginOffset, element.endOffset) )
+		{
+			return asASTExprId();
+		}
+		if( child->nodeType == snUndefined )
+		{
+			element.kind = asINIT_LIST_ELEMENT_OMITTED;
+		}
+		else
+		{
+			element.kind = asINIT_LIST_ELEMENT_EXPRESSION;
+			if( child->nodeType == snInitList )
+			{
+				element.expression = BindInitListNodeAction(
+					child, child, script, sema, asCQualType(), false,
+					recovered);
+			}
+			else
+			{
+				element.expression =
+					FindSingleExactParsedExpressionIdentity(sema, child);
+			}
+		}
+		action.elements.PushLast(element);
+	}
+
+	const asASTExprId expression =
+		sema->ActOnInitListExprAction(action, script);
+	if( expression.IsValid() )
+	{
+		sema->BindParsedExpressionIdentity(listNode, expression, script);
+	}
+	return expression;
+}
+
+static bool BindInitListExprAction(
+	asCScriptNode* node,
+	asCScriptCode* script,
+	asCSema* sema,
+	asCScriptNode* listNode,
+	const asCQualType& targetType,
+	bool hasExplicitTarget,
+	bool recovered)
+{
+	const asASTExprId expression = BindInitListNodeAction(
+		listNode, node, script, sema, targetType, hasExplicitTarget,
+		recovered);
+	return expression.IsValid()
+		&& sema->BindParsedExpressionIdentity(node, expression, script);
+}
+
+void asCParser::BuildLambdaParameterAction(
+	asCScriptNode* typeNode,
+	asCScriptNode* typeMod,
+	asCScriptNode* nameNode,
+	asCArray<asSParameterDeclAction>& actions,
+	asCQualType& recoveryReturnType)
+{
+	if( sema == 0 || typeNode == 0 || nameNode == 0 )
+	{
+		return;
+	}
+
+	const asSQualTypeSyntaxAction typeAction =
+		BuildQualTypeSyntaxAction(typeNode, typeMod);
+	asSParameterDeclAction action;
+	action.type = sema->ActOnQualTypeAction(typeAction);
+	if( script != 0 && script->code != 0
+		&& nameNode->tokenLength > 0
+		&& nameNode->tokenPos + nameNode->tokenLength <= script->codeLength )
+	{
+		action.name.Assign(
+			script->code + nameNode->tokenPos,
+			(asUINT)nameNode->tokenLength);
+	}
+	action.beginOffset = typeAction.beginOffset;
+	action.endOffset = (asUINT)(nameNode->tokenPos + nameNode->tokenLength);
+	actions.PushLast(action);
+	if( !recoveryReturnType.IsValid() )
+	{
+		// Lambda syntax has no authored return type. Preserve the old Canonical
+		// migration recovery only until contextual funcdef binding owns it.
+		recoveryReturnType = action.type;
+	}
+}
 
 asCParser::asCParser(asCBuilder *builder)
 {
@@ -68,8 +1383,14 @@ asCParser::asCParser(asCBuilder *builder)
 
 	script                = 0;
 	scriptNode            = 0;
+	sema                  = 0;
 	checkValidTypes       = false;
 	isParsingAppInterface = false;
+
+	// FParserAccessor and internal parser clients may begin with a protected
+	// ParseScript(false) entry point. Keep that first parse deterministic instead
+	// of relying on the public ParseScript wrapper to initialize parser state.
+	Reset();
 }
 
 asCParser::~asCParser()
@@ -88,8 +1409,51 @@ void asCParser::Reset()
 	scriptNode = 0;
 
 	script = 0;
+	parsedStatementBindings.SetLength(0);
 
 	lastToken.pos = size_t(-1);
+}
+
+void asCParser::BindParsedStatementIdentity(
+	const asCScriptNode* node,
+	asASTStmtId statement)
+{
+	if( node == 0 || !statement.IsValid() )
+	{
+		return;
+	}
+	for( asUINT i = parsedStatementBindings.GetLength(); i > 0; --i )
+	{
+		asSParsedStatementBinding& binding = parsedStatementBindings[i - 1];
+		if( binding.node == node )
+		{
+			binding.statement = statement;
+			return;
+		}
+	}
+	asSParsedStatementBinding binding;
+	binding.node = node;
+	binding.statement = statement;
+	parsedStatementBindings.PushLast(binding);
+}
+
+asASTStmtId asCParser::FindExactParsedStatementIdentity(
+	const asCScriptNode* node) const
+{
+	if( node == 0 )
+	{
+		return asASTStmtId();
+	}
+	for( asUINT i = parsedStatementBindings.GetLength(); i > 0; --i )
+	{
+		const asSParsedStatementBinding& binding =
+			parsedStatementBindings[i - 1];
+		if( binding.node == node )
+		{
+			return binding.statement;
+		}
+	}
+	return asASTStmtId();
 }
 
 asCScriptNode *asCParser::GetScriptNode()
@@ -346,23 +1710,55 @@ void asCParser::ParseOptionalScope(asCScriptNode *node)
 		node->AddChildLast(scope);
 }
 
-asCScriptNode *asCParser::ParseFunctionDefinition()
+asCScriptNode *asCParser::ParseFunctionDefinition(asASTDeclId* outImportDecl)
 {
 	asCScriptNode *node = CreateNode(snFunction);
 	if( node == 0 ) return 0;
+	if( outImportDecl )
+	{
+		*outImportDecl = asASTDeclId();
+	}
 
-	node->AddChildLast(ParseType(true));
+	asCScriptNode* const typeNode = ParseType(true);
+	node->AddChildLast(typeNode);
 	if( isSyntaxError ) return node;
 
-	node->AddChildLast(ParseTypeMod(false));
+	asCScriptNode* const typeMod = ParseTypeMod(false);
+	node->AddChildLast(typeMod);
 	if( isSyntaxError ) return node;
 
 	ParseOptionalScope(node);
 
-	node->AddChildLast(ParseIdentifier());
+	asCScriptNode* const identNode = ParseIdentifier();
+	node->AddChildLast(identNode);
 	if( isSyntaxError ) return node;
 
-	node->AddChildLast(ParseParameterList());
+	// ParseImport opts into an exact declaration start before parameters are
+	// recognized. ParseFunctionDefinition remains a syntax-only public helper
+	// for application registration when outImportDecl is null.
+	asSDeclContextScope importScope(sema);
+	if( outImportDecl && sema )
+	{
+		asSImportSignatureAction action;
+		if( identNode && script && script->code
+			&& identNode->tokenLength > 0
+			&& identNode->tokenPos + identNode->tokenLength <= script->codeLength )
+		{
+			action.name.Assign(
+				script->code + identNode->tokenPos,
+				(asUINT)identNode->tokenLength);
+			action.beginOffset = (asUINT)identNode->tokenPos;
+			action.endOffset =
+				(asUINT)(identNode->tokenPos + identNode->tokenLength);
+		}
+		action.returnType = sema->ActOnQualTypeAction(
+			BuildQualTypeSyntaxAction(typeNode, typeMod));
+		*outImportDecl = sema->ActOnImportSignatureAction(action, script);
+		importScope.PushLastActed();
+	}
+
+	node->AddChildLast(ParseParameterList(
+		outImportDecl ? *outImportDecl : asASTDeclId()));
 	if( isSyntaxError ) return node;
 
 	// Parse an optional const after the function definition (used for object methods)
@@ -751,7 +2147,7 @@ asCScriptNode *asCParser::ParseIdentifier()
 }
 
 // BNF:3: PARAMLIST     ::= '(' ['void' | (TYPE TYPEMOD [IDENTIFIER] ['=' EXPR] {',' TYPE TYPEMOD [IDENTIFIER] ['=' EXPR]})] ')'
-asCScriptNode *asCParser::ParseParameterList()
+asCScriptNode *asCParser::ParseParameterList(asASTDeclId callableDecl)
 {
 	asCScriptNode *node = CreateNode(snParameterList);
 	if( node == 0 ) return 0;
@@ -794,35 +2190,95 @@ asCScriptNode *asCParser::ParseParameterList()
 		for(;;)
 		{
 			// Parse data type
-			node->AddChildLast(ParseType(true, isParsingAppInterface));
+			asCScriptNode* typeNode = ParseType(true, isParsingAppInterface);
+			node->AddChildLast(typeNode);
 			if( isSyntaxError ) return node;
 
-			node->AddChildLast(ParseTypeMod(true));
+			asCScriptNode* typeMod = ParseTypeMod(true);
+			node->AddChildLast(typeMod);
 			if( isSyntaxError ) return node;
 
 			GetToken(&t1);
 
+			asCScriptNode* nameNode = 0;
 			// Application registration declarations may omit parameter names.
 			// The grammar has long documented IDENTIFIER as optional, and the
 			// maintained public API accepts upstream add-ons that rely on it.
 			if( t1.type == ttIdentifier )
 			{
 				RewindTo(&t1);
-				node->AddChildLast(ParseIdentifier());
+				nameNode = ParseIdentifier();
+				node->AddChildLast(nameNode);
 				if( isSyntaxError ) return node;
 
 				GetToken(&t1);
 			}
 
+			// Publish the complete parameter header before parsing its optional
+			// default. A malformed default cannot erase name/type/direction facts.
+			asASTDeclId canonicalParameter;
+			if( sema && callableDecl.IsValid() )
+			{
+				asSParameterDeclAction action;
+				action.callable = callableDecl;
+				action.type = sema->ActOnQualTypeAction(
+					BuildQualTypeSyntaxAction(typeNode, typeMod));
+				if( nameNode && script && script->code
+					&& nameNode->tokenLength > 0
+					&& nameNode->tokenPos + nameNode->tokenLength
+						<= script->codeLength )
+				{
+					action.name.Assign(
+						script->code + nameNode->tokenPos,
+						(asUINT)nameNode->tokenLength);
+				}
+				const asCScriptNode* const endNode = nameNode
+					? nameNode
+					: (typeMod && typeMod->tokenLength > 0 ? typeMod : typeNode);
+				if( typeNode && endNode && typeNode->tokenPos >= 0
+					&& endNode->tokenPos >= 0 && endNode->tokenLength > 0 )
+				{
+					action.beginOffset = (asUINT)typeNode->tokenPos;
+					action.endOffset = (asUINT)(
+						endNode->tokenPos + endNode->tokenLength);
+				}
+				canonicalParameter = sema->ActOnParameterDeclAction(
+					action, script);
+			}
+
+			asCScriptNode* defaultNode = 0;
 			// Parse optional expression for the default arg
 			if( t1.type == ttAssignment )
 			{
-				// Do a superficial parsing of the default argument
-				// The actual parsing will be done when the argument is compiled for a function call
-				node->AddChildLast(SuperficiallyParseExpression());
+				if( sema )
+				{
+					// Canonical Sema owns the default as a typed expression
+					// (Clang CXXDefaultArgExpr). Superficial token-skip leaves
+					// no operator tree for `40 + 1`.
+					defaultNode = ParseAssignment();
+				}
+				else
+				{
+					// Legacy still re-parses the default when compiling a call.
+					defaultNode = SuperficiallyParseExpression();
+				}
+				node->AddChildLast(defaultNode);
 				if( isSyntaxError ) return node;
 
 				GetToken(&t1);
+			}
+
+			if( sema && canonicalParameter.IsValid() && defaultNode != 0 )
+			{
+				asSParameterDefaultAction action;
+				action.parameter = canonicalParameter;
+				action.expression =
+					FindSingleExactParsedExpressionIdentity(sema, defaultNode);
+				action.authoredText = QualTypeActionNodeText(defaultNode, script);
+				action.recovered = isSyntaxError;
+				BuildCopiedActionRange(
+					defaultNode, script, action.beginOffset, action.endOffset);
+				sema->ActOnParameterDefaultAction(action, script);
 			}
 
 			// Check if list continues
@@ -1024,20 +2480,22 @@ void asCParser::Error(const asCString &text, sToken *token)
 	isSyntaxError     = true;
 	errorWhileParsing = true;
 
-	int row, col;
-	script->ConvertPosToRowCol(token->pos, &row, &col);
-
 	if( builder )
+	{
+		int row = 0, col = 0;
+		builder->GetDiagnosticRowColumn(script, token->pos, &row, &col);
 		builder->WriteError(script->name, text, row, col);
+	}
 }
 
 void asCParser::Warning(const asCString &text, sToken *token)
 {
-	int row, col;
-	script->ConvertPosToRowCol(token->pos, &row, &col);
-
 	if( builder )
+	{
+		int row = 0, col = 0;
+		builder->GetDiagnosticRowColumn(script, token->pos, &row, &col);
 		builder->WriteWarning(script->name, text, row, col);
+	}
 }
 
 void asCParser::Info(const asCString &text, sToken *token)
@@ -1047,11 +2505,12 @@ void asCParser::Info(const asCString &text, sToken *token)
 	isSyntaxError     = true;
 	errorWhileParsing = true;
 
-	int row, col;
-	script->ConvertPosToRowCol(token->pos, &row, &col);
-
 	if( builder )
+	{
+		int row = 0, col = 0;
+		builder->GetDiagnosticRowColumn(script, token->pos, &row, &col);
 		builder->WriteInfo(script->name, text, row, col, false);
+	}
 }
 
 // nextToken is only modified if the current position can be interpreted as
@@ -1470,8 +2929,16 @@ asCScriptNode *asCParser::ParseCast()
 		return node;
 	}
 
-	// Parse the data type
-	node->AddChildLast(ParseType(true));
+	// Parse and resolve the target while Parser still owns the complete type
+	// syntax. Expression lowering consumes only this local QualType binding.
+	asCScriptNode* const typeNode = ParseType(true);
+	node->AddChildLast(typeNode);
+	if( sema && typeNode )
+	{
+		const asCQualType targetType = sema->ActOnQualTypeAction(
+			BuildQualTypeSyntaxAction(typeNode, 0));
+		sema->BindParsedExpressionType(node, targetType, script);
+	}
 	if( isSyntaxError ) return node;
 
 	GetToken(&t1);
@@ -1491,17 +2958,26 @@ asCScriptNode *asCParser::ParseCast()
 	}
 
 	node->AddChildLast(ParseCondition());
-	if( isSyntaxError ) return node;
+	if( isSyntaxError )
+	{
+		// A nested expression can publish its exact identity before reporting a
+		// later delimiter error. Bind the cast only when both that operand and
+		// the Parser-resolved target type are already complete.
+		BindCastExprAction(node, script, sema);
+		return node;
+	}
 
 	GetToken(&t1);
 	if( t1.type != ttCloseParanthesis )
 	{
 		Error(ExpectedToken(")"), &t1);
 		Error(InsteadFound(t1), &t1);
+		BindCastExprAction(node, script, sema);
 		return node;
 	}
 
 	node->UpdateSourcePos(t1.pos, t1.length);
+	BindCastExprAction(node, script, sema);
 
 	return node;
 }
@@ -1632,6 +3108,22 @@ asCScriptNode *asCParser::ParseConstant()
 		node->AddChildLast(ParseStringConstant());
 	}
 
+	if( sema && script && script->code && t.pos >= 0 && t.length > 0
+		&& t.pos + t.length <= script->codeLength )
+	{
+		asSLiteralExprAction action;
+		action.token = t.type;
+		action.spelling.Assign(script->code + t.pos, (asUINT)t.length);
+		action.beginOffset = (asUINT)t.pos;
+		action.endOffset = (asUINT)(t.pos + t.length);
+		const asASTExprId expression =
+			sema->ActOnLiteralExprAction(action, script);
+		if( expression.IsValid() )
+		{
+			sema->BindParsedExpressionIdentity(node, expression, script);
+		}
+	}
+
 	return node;
 }
 
@@ -1666,6 +3158,8 @@ asCScriptNode *asCParser::ParseLambda()
 {
 	asCScriptNode *node = CreateNode(snFunction);
 	if( node == 0 ) return 0;
+	asCArray<asSParameterDeclAction> canonicalParameters;
+	asCQualType recoveryReturnType;
 
 	sToken t;
 	GetToken(&t);
@@ -1676,19 +3170,34 @@ asCScriptNode *asCParser::ParseLambda()
 		return node;
 	}
 
+	asCScriptNode *functionIdent = CreateNode(snIdentifier);
+	if( functionIdent == 0 ) return node;
+	functionIdent->SetToken(&t);
+	functionIdent->UpdateSourcePos(t.pos, t.length);
+	node->AddChildLast(functionIdent);
+
+	asCScriptNode *params = CreateNode(snParameterList);
+	if( params == 0 ) return node;
+	node->AddChildLast(params);
+
 	GetToken(&t);
 	if( t.type != ttOpenParanthesis )
 	{
 		Error(ExpectedToken("("), &t);
 		return node;
 	}
+	params->UpdateSourcePos(t.pos, t.length);
 
+	asCScriptNode* parameterType = 0;
+	asCScriptNode* parameterTypeMod = 0;
 	// Parse optional type before parameter name
 	if( IsType(t) && (t.type == ttAmp || t.type == ttIdentifier) )
 	{
-		node->AddChildLast(ParseType(true));
+		parameterType = ParseType(true);
+		params->AddChildLast(parameterType);
 		if (isSyntaxError) return node;
-		node->AddChildLast(ParseTypeMod(true));
+		parameterTypeMod = ParseTypeMod(true);
+		params->AddChildLast(parameterTypeMod);
 		if (isSyntaxError) return node;
 	}
 
@@ -1696,23 +3205,35 @@ asCScriptNode *asCParser::ParseLambda()
 	if( t.type == ttIdentifier )
 	{
 		RewindTo(&t);
-		node->AddChildLast(ParseIdentifier());
+		asCScriptNode* parameterName = ParseIdentifier();
+		params->AddChildLast(parameterName);
 		if (isSyntaxError) return node;
+		BuildLambdaParameterAction(
+			parameterType, parameterTypeMod, parameterName,
+			canonicalParameters, recoveryReturnType);
 
 		GetToken(&t);
 		while( t.type == ttListSeparator )
 		{
+			parameterType = 0;
+			parameterTypeMod = 0;
 			// Parse optional type before parameter name
 			if (IsType(t) && (t.type == ttAmp || t.type == ttIdentifier)) 
 			{
-				node->AddChildLast(ParseType(true));
+				parameterType = ParseType(true);
+				params->AddChildLast(parameterType);
 				if (isSyntaxError) return node;
-				node->AddChildLast(ParseTypeMod(true));
+				parameterTypeMod = ParseTypeMod(true);
+				params->AddChildLast(parameterTypeMod);
 				if (isSyntaxError) return node;
 			}
 
-			node->AddChildLast(ParseIdentifier());
+			parameterName = ParseIdentifier();
+			params->AddChildLast(parameterName);
 			if( isSyntaxError ) return node;
+			BuildLambdaParameterAction(
+				parameterType, parameterTypeMod, parameterName,
+				canonicalParameters, recoveryReturnType);
 
 			GetToken(&t);
 		}
@@ -1723,10 +3244,54 @@ asCScriptNode *asCParser::ParseLambda()
 		Error(ExpectedToken(")"), &t);
 		return node;
 	}
+	params->UpdateSourcePos(t.pos, t.length);
 
-	// We should just find the end of the statement block here. The statements
-	// will be parsed on request by the compiler once it starts the compilation.
-	node->AddChildLast(SuperficiallyParseStatementBlock());
+	asASTDeclId canonicalLambda;
+	asSDeclContextScope lambdaScope(sema);
+	if( sema )
+	{
+		if( !recoveryReturnType.IsValid() )
+		{
+			recoveryReturnType = sema->GetContext().InternPrimitive(ttInt, 0);
+		}
+		asSLambdaHeaderAction action;
+		action.owner = sema->CurrentDeclContext();
+		action.recoveryReturnType = recoveryReturnType;
+		action.beginOffset = (asUINT)functionIdent->tokenPos;
+		action.endOffset = (asUINT)(t.pos + t.length);
+		canonicalLambda = sema->ActOnLambdaHeaderAction(action, script);
+		for( asUINT i = 0; i < canonicalParameters.GetLength(); ++i )
+		{
+			canonicalParameters[i].callable = canonicalLambda;
+			sema->ActOnParameterDeclAction(canonicalParameters[i], script);
+		}
+		sema->FinishDecl(canonicalLambda);
+		sema->BindParsedDeclarationIdentity(node, canonicalLambda);
+		lambdaScope.Push(canonicalLambda);
+	}
+
+	// Canonical Sema needs a real statement tree; the compiler still re-parses
+	// from the block span when the legacy pipeline is selected.
+	asCScriptNode* const body = ParseFunctionStatementBlock();
+	node->AddChildLast(body);
+	if( sema && canonicalLambda.IsValid() && body != 0 && !isSyntaxError )
+	{
+		asSFunctionBodyAction bodyAction;
+		bodyAction.function = canonicalLambda;
+		bodyAction.beginOffset = (asUINT)body->tokenPos;
+		bodyAction.endOffset =
+			(asUINT)(body->tokenPos + body->tokenLength);
+		bodyAction.recovered = isSyntaxError;
+		bodyAction.body = FindExactParsedStatementIdentity(body);
+		sema->ActOnFunctionBodyAction(bodyAction, script);
+		asSLambdaExpressionAction expressionAction;
+		expressionAction.lambdaDecl = canonicalLambda;
+		expressionAction.beginOffset = (asUINT)node->tokenPos;
+		expressionAction.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+		const asASTExprId expression = sema->ActOnLambdaExpressionAction(
+			expressionAction, script);
+		sema->BindParsedExpressionIdentity(node, expression, script);
+	}
 
 	return node;
 }
@@ -1752,7 +3317,7 @@ asCScriptNode *asCParser::ParseStringConstant()
 }
 
 // BNF:12: FUNCCALL      ::= SCOPE IDENTIFIER ARGLIST
-asCScriptNode *asCParser::ParseFunctionCall()
+asCScriptNode *asCParser::ParseFunctionCall(bool notifySema)
 {
 	asCScriptNode *node = CreateNode(snFunctionCall);
 	if( node == 0 ) return 0;
@@ -1761,10 +3326,22 @@ asCScriptNode *asCParser::ParseFunctionCall()
 	ParseOptionalScope(node);
 
 	// Parse the function name followed by the argument list
-	node->AddChildLast(ParseIdentifier());
+	asCScriptNode* ident = ParseIdentifier();
+	node->AddChildLast(ident);
+	if( ident )
+	{
+		node->UpdateSourcePos(ident->tokenPos, ident->tokenLength);
+	}
 	if( isSyntaxError ) return node;
 
 	node->AddChildLast(ParseArgList());
+	// Member postfix '.' supplies the receiver through the ordered structural
+	// postfix typed action after the complete receiver chain is available.
+	// ActOn here would intern a receiver-less CALL beside the real member CALL.
+	if( sema && notifySema )
+	{
+		BindCallExprAction(node, script, sema, asASTExprId(), isSyntaxError);
+	}
 
 	return node;
 }
@@ -1779,7 +3356,22 @@ asCScriptNode *asCParser::ParseVariableAccess()
 	ParseOptionalScope(node);
 
 	// Parse the variable name
-	node->AddChildLast(ParseIdentifier());
+	asCScriptNode* const identifier = ParseIdentifier();
+	node->AddChildLast(identifier);
+	if( sema )
+	{
+		asSDeclRefExprAction action;
+		if( BuildDeclRefExprAction(
+			node, script, sema->CurrentDeclContext(), action) )
+		{
+			const asASTExprId expression =
+				sema->ActOnDeclRefExprAction(action, script);
+			if( expression.IsValid() )
+			{
+				sema->BindParsedExpressionIdentity(node, expression, script);
+			}
+		}
+	}
 
 	return node;
 }
@@ -1790,10 +3382,18 @@ asCScriptNode *asCParser::ParseConstructCall()
 	asCScriptNode *node = CreateNode(snConstructCall);
 	if( node == 0 ) return 0;
 
-	node->AddChildLast(ParseType(false));
+	asCScriptNode* const typeNode = ParseType(false);
+	node->AddChildLast(typeNode);
+	if( sema && typeNode )
+	{
+		const asCQualType targetType = sema->ActOnQualTypeAction(
+			BuildQualTypeSyntaxAction(typeNode, 0));
+		sema->BindParsedExpressionType(node, targetType, script);
+	}
 	if( isSyntaxError ) return node;
 
 	node->AddChildLast(ParseArgList());
+	BindConstructExprAction(node, script, sema);
 
 	return node;
 }
@@ -1967,7 +3567,15 @@ asCScriptNode *asCParser::ParseAssignment()
 		if( isSyntaxError ) return node;
 
 		node->AddChildLast(ParseAssignment());
-		if( isSyntaxError ) return node;
+		if( isSyntaxError )
+		{
+			// A later delimiter error may occur after the recursively parsed RHS
+			// has already published its exact identity. Publish this assignment
+			// whenever both exact operands and the operator are complete.
+			BindAssignExprAction(node, script, sema);
+			return node;
+		}
+		BindAssignExprAction(node, script, sema);
 	}
 
 	return node;
@@ -1981,13 +3589,20 @@ asCScriptNode *asCParser::ParseCondition()
 
 	node->AddChildLast(ParseExpression());
 	if( isSyntaxError ) return node;
+	if( node->firstChild )
+	{
+		node->UpdateSourcePos(node->firstChild->tokenPos, node->firstChild->tokenLength);
+	}
 
 	sToken t;
 	GetToken(&t);
 	if( t.type == ttQuestion )
 	{
 		node->AddChildLast(ParseCondition());
-		if( isSyntaxError ) return node;
+		if( isSyntaxError )
+		{
+			return node;
+		}
 
 		GetToken(&t);
 		if( t.type != ttColon )
@@ -1998,7 +3613,19 @@ asCScriptNode *asCParser::ParseCondition()
 		}
 
 		node->AddChildLast(ParseCondition());
-		if( isSyntaxError ) return node;
+		if( isSyntaxError )
+		{
+			// A nested operand may report a later delimiter error after already
+			// publishing its exact expression identity (for example `G(2` with a
+			// missing call parenthesis). If all three semantic operands exist, the
+			// ternary grammar itself is complete enough to publish for recovery.
+			BindConditionalExprAction(node, script, sema);
+			return node;
+		}
+		if( sema )
+		{
+			BindConditionalExprAction(node, script, sema);
+		}
 	}
 	else
 		RewindTo(&t);
@@ -2023,6 +3650,10 @@ asCScriptNode *asCParser::ParseExpression()
 
 	node->AddChildLast(ParseExprTerm());
 	if( isSyntaxError ) return node;
+	if( node->firstChild )
+	{
+		node->UpdateSourcePos(node->firstChild->tokenPos, node->firstChild->tokenLength);
+	}
 
 	for(;;)
 	{
@@ -2031,13 +3662,24 @@ asCScriptNode *asCParser::ParseExpression()
 		RewindTo(&t);
 
 		if( !IsOperator(t.type) )
+		{
+			BindBinaryExprAction(node, script, sema);
 			return node;
+		}
 
 		node->AddChildLast(ParseExprOperator());
 		if( isSyntaxError ) return node;
 
 		node->AddChildLast(ParseExprTerm());
-		if( isSyntaxError ) return node;
+		if( isSyntaxError )
+		{
+			// A later grammar error may be reported after the last complete term
+			// already published its exact identity. Publish only an alternating,
+			// complete operand/operator sequence; the builder fails closed for a
+			// missing term or trailing operator.
+			BindBinaryExprAction(node, script, sema);
+			return node;
+		}
 	}
 	UNREACHABLE_RETURN;
 }
@@ -2061,9 +3703,20 @@ asCScriptNode *asCParser::ParseExprTerm()
 		{
 			// It is an initialization, now parse it for real
 			RewindTo(&t);
-			node->AddChildLast(ParseType(false));
+			asCScriptNode* const typeNode = ParseType(false);
+			node->AddChildLast(typeNode);
+			asCQualType targetType;
+			if( sema && typeNode )
+			{
+				targetType = sema->ActOnQualTypeAction(
+					BuildQualTypeSyntaxAction(typeNode, 0));
+			}
 			GetToken(&t2);
-			node->AddChildLast(ParseInitList());
+			asCScriptNode* const initList = ParseInitList();
+			node->AddChildLast(initList);
+			BindInitListExprAction(
+				node, script, sema, initList, targetType, true,
+				isSyntaxError);
 			return node;
 		}
 	}
@@ -2071,7 +3724,11 @@ asCScriptNode *asCParser::ParseExprTerm()
 	else if( t.type == ttStartStatementBlock )
 	{
 		RewindTo(&t);
-		node->AddChildLast(ParseInitList());
+		asCScriptNode* const initList = ParseInitList();
+		node->AddChildLast(initList);
+		BindInitListExprAction(
+			node, script, sema, initList, asCQualType(), false,
+			isSyntaxError);
 		return node;
 	}
 
@@ -2090,18 +3747,60 @@ asCScriptNode *asCParser::ParseExprTerm()
 	}
 
 	node->AddChildLast(ParseExprValue());
-	if( isSyntaxError ) return node;
-
+	if( isSyntaxError )
+	{
+		if( ClassifyExprTermSemanticRoute(node)
+			== asEXPR_TERM_SEMANTIC_PURE_UNARY )
+		{
+			// Publish only if the malformed primary still supplied one exact
+			// identity. BuildUnaryExprAction fails closed otherwise; native syntax
+			// recovery remains independently available to LEGACY.
+			BindUnaryExprAction(node, script, sema);
+		}
+		return node;
+	}
+	if( node->lastChild )
+	{
+		node->UpdateSourcePos(node->lastChild->tokenPos, node->lastChild->tokenLength);
+	}
 
 	for(;;)
 	{
 		GetToken(&t);
 		RewindTo(&t);
 		if( !IsPostOperator(t.type) )
+		{
+			const asEExprTermSemanticRoute route =
+				ClassifyExprTermSemanticRoute(node);
+			if( route == asEXPR_TERM_SEMANTIC_PURE_UNARY )
+			{
+				BindUnaryExprAction(node, script, sema);
+			}
+			else if( route == asEXPR_TERM_SEMANTIC_STRUCTURAL_POSTFIX
+				&& sema )
+			{
+				BindStructuralPostfixExprAction(node, script, sema);
+			}
 			return node;
+		}
 
 		node->AddChildLast(ParseExprPostOp());
-		if( isSyntaxError ) return node;
+		if( isSyntaxError )
+		{
+			const asEExprTermSemanticRoute route =
+				ClassifyExprTermSemanticRoute(node);
+			if( route == asEXPR_TERM_SEMANTIC_PURE_UNARY )
+			{
+				BindUnaryExprAction(node, script, sema);
+			}
+			else if( route == asEXPR_TERM_SEMANTIC_STRUCTURAL_POSTFIX
+				&& sema )
+			{
+				BindStructuralPostfixExprAction(
+					node, script, sema, true);
+			}
+			return node;
+		}
 	}
 	UNREACHABLE_RETURN;
 }
@@ -2152,7 +3851,7 @@ asCScriptNode *asCParser::ParseExprPostOp()
 		GetToken(&t2);
 		RewindTo(&t1);
 		if( t2.type == ttOpenParanthesis )
-			node->AddChildLast(ParseFunctionCall());
+			node->AddChildLast(ParseFunctionCall(false));
 		else
 			node->AddChildLast(ParseIdentifier());
 	}
@@ -2327,6 +4026,12 @@ int asCParser::ParseScript(asCScriptCode *in_script)
 	if( errorWhileParsing )
 		return -1;
 
+	if( sema && scriptNode && script )
+	{
+		sema->ResolveDeferredNames();
+		sema->ValidateCapturedLambdaUses();
+	}
+
 	// TODO: Should allow application to request this warning to be generated.
 	//       It should be off by default, since pre-processor may remove all
 	//       code from a section while still being meant as valid code
@@ -2374,8 +4079,16 @@ asCScriptNode *asCParser::ParseImport()
 	node->SetToken(&t);
 	node->UpdateSourcePos(t.pos, t.length);
 
-	node->AddChildLast(ParseFunctionDefinition());
+	asASTDeclId importDecl;
+	node->AddChildLast(ParseFunctionDefinition(&importDecl));
 	if( isSyntaxError ) return node;
+	if( sema && importDecl.IsValid() )
+	{
+		// Non-semantic Stage 2 producer bridge: Builder later receives this
+		// exact snImport pointer and carries the already-built stable key onto
+		// its prepared Runtime import shell. No import syntax is decoded here.
+		sema->BindParsedDeclarationIdentity(node, importDecl);
+	}
 
 	GetToken(&t);
 	if( t.type != ttIdentifier )
@@ -2410,6 +4123,22 @@ asCScriptNode *asCParser::ParseImport()
 
 	mod->SetToken(&t);
 	mod->UpdateSourcePos(t.pos, t.length);
+
+	if( sema && importDecl.IsValid() )
+	{
+		asSImportOriginAction action;
+		if( script && script->code && t.length >= 2
+			&& t.pos + t.length <= script->codeLength )
+		{
+			// Preserve the maintained grammar's existing quote stripping.
+			action.origin.Assign(
+				script->code + t.pos + 1,
+				(asUINT)t.length - 2);
+			action.beginOffset = (asUINT)(t.pos + 1);
+			action.endOffset = (asUINT)(t.pos + t.length - 1);
+		}
+		sema->ActOnImportOriginAction(importDecl, action, script);
+	}
 
 	GetToken(&t);
 	if( t.type != ttEndStatement )
@@ -2448,30 +4177,31 @@ asCScriptNode *asCParser::ParseScript(bool inBlock)
 				GetToken(&t1);*/
 			RewindTo(&tStart);
 
+			asCScriptNode* decl = 0;
 			if( t1.type == ttImport )
-				node->AddChildLast(ParseImport());
+				decl = ParseImport();
 			else if( t1.type == ttEnum )
-				node->AddChildLast(ParseEnumeration());	// Handle enumerations
+				decl = ParseEnumeration();	// Handle enumerations
 			else if( t1.type == ttTypedef )
-				node->AddChildLast(ParseTypedef());		// Handle primitive typedefs
+				decl = ParseTypedef();		// Handle primitive typedefs
 			else if( t1.type == ttClass || t1.type == ttStruct )
-				node->AddChildLast(ParseClass());
+				decl = ParseClass();
 			else if( t1.type == ttInterface )
-				node->AddChildLast(ParseInterface());
+				decl = ParseInterface();
 			else if( t1.type == ttMixin )
-				node->AddChildLast(ParseMixin());
+				decl = ParseMixin();
 			else if( t1.type == ttFuncDef )
-				node->AddChildLast(ParseFuncDef());
+				decl = ParseFuncDef();
 			else if( t1.type == ttLocal )
-				node->AddChildLast(ParseLocal());
+				decl = ParseLocal();
 			else if( t1.type == ttConst || t1.type == ttScope || t1.type == ttAuto || IsDataType(t1) )
 			{
 				if( IsVirtualPropertyDecl() )
-					node->AddChildLast(ParseVirtualPropertyDecl(false, false));
+					decl = ParseVirtualPropertyDecl(false, false);
 				else if( IsVarDecl() )
-					node->AddChildLast(ParseDeclaration(false, true));
+					decl = ParseDeclaration(false, true);
 				else
-					node->AddChildLast(ParseFunction());
+					decl = ParseFunction();
 			}
 			else if( t1.type == ttEndStatement )
 			{
@@ -2479,7 +4209,27 @@ asCScriptNode *asCParser::ParseScript(bool inBlock)
 				GetToken(&t1);
 			}
 			else if( t1.type == ttNamespace )
-				node->AddChildLast(ParseNamespace());
+				decl = ParseNamespace();
+			if( decl )
+			{
+				node->AddChildLast(decl);
+			}
+			else if( t1.type == ttImport
+				|| t1.type == ttEnum
+				|| t1.type == ttTypedef
+				|| t1.type == ttClass || t1.type == ttStruct
+				|| t1.type == ttInterface
+				|| t1.type == ttMixin
+				|| t1.type == ttFuncDef
+				|| t1.type == ttLocal
+				|| t1.type == ttConst || t1.type == ttScope || t1.type == ttAuto || IsDataType(t1)
+				|| t1.type == ttNamespace )
+			{
+				// Parse* returned null; keep going through error recovery.
+			}
+			else if( t1.type == ttEndStatement )
+			{
+			}
 			else if( t1.type == ttEnd )
 				return node;
 			else if( inBlock && t1.type == ttEndStatementBlock )
@@ -2542,14 +4292,45 @@ asCScriptNode *asCParser::ParseNamespace()
 	}
 
 	// Allow declaration of multiple nested namespace with namespace A::B::C { }
-	node->AddChildLast(ParseIdentifier());
+	// Keep the generic nodes for the LEGACY oracle, but copy only recognized
+	// syntax facts into the Canonical Sema action payload.
+	asCArray<asSNamespaceDeclActionSegment> namespacePath;
+	asCScriptNode* identifier = ParseIdentifier();
+	node->AddChildLast(identifier);
 	if( isSyntaxError ) return node;
+	if( identifier && script && script->code
+		&& identifier->tokenLength > 0
+		&& identifier->tokenPos + identifier->tokenLength <= script->codeLength )
+	{
+		asSNamespaceDeclActionSegment segment;
+		segment.name.Assign(
+			script->code + identifier->tokenPos,
+			(asUINT)identifier->tokenLength);
+		segment.beginOffset = (asUINT)identifier->tokenPos;
+		segment.endOffset = (asUINT)(identifier->tokenPos + identifier->tokenLength);
+		namespacePath.PushLast(segment);
+	}
+
+	asSDeclContextScope nsScope(sema);
 
 	GetToken(&t1);
 	while (t1.type == ttScope)
 	{
-		node->AddChildLast(ParseIdentifier());
+		identifier = ParseIdentifier();
+		node->AddChildLast(identifier);
 		if( isSyntaxError ) return node;
+		if( identifier && script && script->code
+			&& identifier->tokenLength > 0
+			&& identifier->tokenPos + identifier->tokenLength <= script->codeLength )
+		{
+			asSNamespaceDeclActionSegment segment;
+			segment.name.Assign(
+				script->code + identifier->tokenPos,
+				(asUINT)identifier->tokenLength);
+			segment.beginOffset = (asUINT)identifier->tokenPos;
+			segment.endOffset = (asUINT)(identifier->tokenPos + identifier->tokenLength);
+			namespacePath.PushLast(segment);
+		}
 
 		GetToken(&t1);
 	}
@@ -2564,6 +4345,14 @@ asCScriptNode *asCParser::ParseNamespace()
 	}
 
 	sToken start = t1;
+	// The semantic namespace context must represent the complete qualified
+	// path. Publish the typed action before the body so nested declarations see
+	// the final scope even when a later body token fails to parse.
+	if( sema )
+	{
+		sema->ActOnNamespacePath(namespacePath, script);
+		nsScope.PushLastActed();
+	}
 
 	node->AddChildLast(ParseScript(true));
 
@@ -2684,6 +4473,20 @@ asCScriptNode *asCParser::ParseEnumeration()
 	ident->UpdateSourcePos(token.pos, token.length);
 	dataType->AddChildLast(ident);
 
+	asSDeclContextScope enumScope(sema);
+	asASTDeclId canonicalEnum;
+	if( sema )
+	{
+		asSEnumDeclActionName enumName;
+		enumName.name.Assign(
+			script->code + ident->tokenPos,
+			(asUINT)ident->tokenLength);
+		enumName.beginOffset = (asUINT)ident->tokenPos;
+		enumName.endOffset = (asUINT)(ident->tokenPos + ident->tokenLength);
+		canonicalEnum = sema->ActOnEnumName(enumName, script);
+		enumScope.PushLastActed();
+	}
+
 	// External shared declarations are ended with ';'
 	GetToken(&token);
 	if (token.type == ttEndStatement)
@@ -2727,6 +4530,19 @@ asCScriptNode *asCParser::ParseEnumeration()
 		ident->SetToken(&token);
 		ident->UpdateSourcePos(token.pos, token.length);
 		node->AddChildLast(ident);
+		asASTDeclId canonicalEnumerator;
+		if( sema )
+		{
+			asSEnumDeclActionName enumeratorName;
+			enumeratorName.name.Assign(
+				script->code + ident->tokenPos,
+				(asUINT)ident->tokenLength);
+			enumeratorName.beginOffset = (asUINT)ident->tokenPos;
+			enumeratorName.endOffset =
+				(asUINT)(ident->tokenPos + ident->tokenLength);
+			canonicalEnumerator = sema->ActOnEnumeratorName(
+				canonicalEnum, enumeratorName, script);
+		}
 
 		GetToken(&token);
 
@@ -2736,10 +4552,52 @@ asCScriptNode *asCParser::ParseEnumeration()
 
 			RewindTo(&token);
 
-			tmp = SuperficiallyParseVarInit();
+			// The legacy builder deliberately keeps enum initializers
+			// superficial and reparses them while compiling constants.  Canonical
+			// Sema has no later syntax reparse: it must receive the complete RHS
+			// now, otherwise a spelling such as `-2` is reduced to a fake
+			// snConstant containing only the '-' token and the provisional
+			// implicit enum value leaks into the sealed AST.
+			if( sema )
+			{
+				const sToken assignmentToken = token;
+				GetToken(&token); // '='
+				GetToken(&token); // first RHS token
+				RewindTo(&token);
+				if( token.type == ttStartStatementBlock )
+				{
+					tmp = ParseInitList();
+				}
+				else
+				{
+					tmp = ParseConditionAsAssignment();
+				}
+				if( tmp )
+				{
+					// Preserve the historical initializer range anchored at '=';
+					// legacy consumers and source diagnostics use that boundary.
+					tmp->UpdateSourcePos(
+						assignmentToken.pos, assignmentToken.length);
+				}
+			}
+			else
+			{
+				tmp = SuperficiallyParseVarInit();
+			}
 
 			node->AddChildLast(tmp);
 			if( isSyntaxError ) return node;
+			if( sema )
+			{
+				asSEnumeratorInitializerAction action;
+				action.enumerator = canonicalEnumerator;
+				action.expression =
+					FindSingleExactParsedExpressionIdentity(sema, tmp);
+				action.recovered = isSyntaxError;
+				BuildCopiedActionRange(
+					tmp, script, action.beginOffset, action.endOffset);
+				sema->ActOnEnumeratorInitializerAction(action, script);
+			}
 			GetToken(&token);
 		}
 
@@ -2807,9 +4665,20 @@ asCScriptNode* asCParser::ParseAccessDecl()
 		RewindTo(&t1);
 		return 0;
 	}
+	asSAccessSpecifierAction canonicalAction;
+	canonicalAction.beginOffset = (asUINT)t1.pos;
 
 	auto* identifierNode = ParseIdentifier();
 	if (isSyntaxError) return node;
+	if( identifierNode && script && script->code
+		&& identifierNode->tokenLength > 0
+		&& identifierNode->tokenPos + identifierNode->tokenLength
+			<= script->codeLength )
+	{
+		canonicalAction.name.Assign(
+			script->code + identifierNode->tokenPos,
+			identifierNode->tokenLength);
+	}
 
 	ParseToken(ttAssignment);
 	if (isSyntaxError) return node;
@@ -2822,11 +4691,13 @@ asCScriptNode* asCParser::ParseAccessDecl()
 	{
 		RewindTo(&t1);
 		node->AddChildLast(ParseToken(ttPrivate));
+		canonicalAction.traits = asAST_TRAIT_PRIVATE;
 	}
 	else if (t1.type == ttProtected)
 	{
 		RewindTo(&t1);
 		node->AddChildLast(ParseToken(ttProtected));
+		canonicalAction.traits = asAST_TRAIT_PROTECTED;
 	}
 	else
 	{
@@ -2843,6 +4714,8 @@ asCScriptNode* asCParser::ParseAccessDecl()
 		{
 			// Add another term in the acess declaration list
 			GetToken(&t1);
+			asSAccessPermissionAction permission;
+			permission.beginOffset = (asUINT)t1.pos;
 
 			asCScriptNode* accessNode = nullptr;
 			if (t1.type == ttStar)
@@ -2851,12 +4724,26 @@ asCScriptNode* asCParser::ParseAccessDecl()
 
 				accessNode = ParseToken(ttStar);
 				node->AddChildLast(accessNode);
+				permission.name = "*";
+				permission.traits |= asAST_TRAIT_ACCESS_WILDCARD;
+				permission.endOffset = (asUINT)(t1.pos + t1.length);
 			}
 			else
 			{
 				RewindTo(&t1);
 				auto* idNode = ParseIdentifier();
 				if (isSyntaxError) return node;
+				if( idNode && script && script->code
+					&& idNode->tokenLength > 0
+					&& idNode->tokenPos + idNode->tokenLength
+						<= script->codeLength )
+				{
+					permission.name.Assign(
+						script->code + idNode->tokenPos,
+						idNode->tokenLength);
+					permission.endOffset = (asUINT)(
+						idNode->tokenPos + idNode->tokenLength);
+				}
 
 				accessNode = CreateNode(snUndefined);
 				accessNode->AddChildLast(idNode);
@@ -2876,18 +4763,36 @@ asCScriptNode* asCParser::ParseAccessDecl()
 					}
 					else if (IdentifierIs(t1, READONLY_TOKEN))
 					{
+						permission.traits |= asAST_TRAIT_ACCESS_READONLY;
 						RewindTo(&t1);
-						accessNode->AddChildLast(ParseIdentifier());
+						asCScriptNode* modifier = ParseIdentifier();
+						accessNode->AddChildLast(modifier);
+						permission.endOffset = (asUINT)(
+							modifier->tokenPos + modifier->tokenLength);
 					}
 					else if (IdentifierIs(t1, EDITDEFAULTS_TOKEN))
 					{
+						permission.traits |= asAST_TRAIT_ACCESS_EDITDEFAULTS;
 						RewindTo(&t1);
-						accessNode->AddChildLast(ParseIdentifier());
+						asCScriptNode* modifier = ParseIdentifier();
+						accessNode->AddChildLast(modifier);
+						permission.endOffset = (asUINT)(
+							modifier->tokenPos + modifier->tokenLength);
 					}
 					else if (IdentifierIs(t1, INHERITED_TOKEN))
 					{
+						// The Runtime Builder historically ignores inherited on '*'.
+						// Preserve that exact language behavior in the typed facts.
+						if( (permission.traits
+							& asAST_TRAIT_ACCESS_WILDCARD) == 0 )
+						{
+							permission.traits |= asAST_TRAIT_ACCESS_INHERITED;
+						}
 						RewindTo(&t1);
-						accessNode->AddChildLast(ParseIdentifier());
+						asCScriptNode* modifier = ParseIdentifier();
+						accessNode->AddChildLast(modifier);
+						permission.endOffset = (asUINT)(
+							modifier->tokenPos + modifier->tokenLength);
 					}
 					else
 					{
@@ -2900,6 +4805,7 @@ asCScriptNode* asCParser::ParseAccessDecl()
 					GetToken(&t1);
 					if (t1.type == ttCloseParanthesis)
 					{
+						permission.endOffset = (asUINT)(t1.pos + t1.length);
 						break;
 					}
 					else if (t1.type == ttListSeparator)
@@ -2918,12 +4824,18 @@ asCScriptNode* asCParser::ParseAccessDecl()
 			else
 			{
 				RewindTo(&t1);
-				continue;
 			}
+			canonicalAction.permissions.PushLast(permission);
+			continue;
 		}
 		else if (t1.type == ttEndStatement)
 		{
 			// Access declaration ended
+			canonicalAction.endOffset = (asUINT)(t1.pos + t1.length);
+			if( sema )
+			{
+				sema->ActOnAccessSpecifierAction(canonicalAction, script);
+			}
 			break;
 		}
 		else
@@ -2967,7 +4879,30 @@ asCScriptNode* asCParser::ParseClassDefaultStatement()
 		return 0;
 	}
 
-	node->AddChildLast(SuperficiallyParseStatement());
+	node->SetToken(&t1);
+	asASTDeclId initDefaults;
+	asSDeclContextScope initDefaultsScope(sema);
+	if( sema )
+	{
+		initDefaults = sema->ActOnClassDefaultStartAction(
+			sema->CurrentDeclContext(), script,
+			(asUINT)t1.pos, (asUINT)(t1.pos + t1.length));
+		initDefaultsScope.Push(initDefaults);
+	}
+
+	// LEGACY still reparses this syntax in asCCompiler. Canonical Sema instead
+	// authors the statement once, directly under the generated method selected
+	// above, then routes only its exact typed identity into the method body.
+	asCScriptNode* const statement = sema
+		? ParseStatement() : SuperficiallyParseStatement();
+	node->AddChildLast(statement);
+	if( sema && initDefaults.IsValid() && statement != 0 && !isSyntaxError )
+	{
+		sema->ActOnClassDefaultStatementAction(
+			initDefaults, script,
+			(asUINT)statement->tokenPos,
+			(asUINT)(statement->tokenPos + statement->tokenLength));
+	}
 	return node;
 }
 
@@ -3218,32 +5153,35 @@ bool asCParser::IsFuncDecl(bool isMethod)
 				GetToken(&t1);
 				if( t1.type != ttConst )
 					RewindTo(&t1);
+			}
 
-				// A class method may also have any number of additional inheritance behavior specifiers
-				for( ; ; )
+			// Global functions may carry the same post-parameter specifiers as
+			// methods. `external_implicit_this` is how generated `__Init_*`
+			// literal-asset functions are spelled; skipping them only for
+			// methods made those globals look like non-functions.
+			for( ; ; )
+			{
+				GetToken(&t1);
+				if( IdentifierIs(t1, PROPERTY_TOKEN) )
 				{
-					GetToken(&t1);
-					if( IdentifierIs(t1, PROPERTY_TOKEN) )
-					{
-						Error(TXT_PROPERTY_DECORATOR_REMOVED, &t1);
-						return false;
-					}
-					if( !IdentifierIs(t1, FINAL_TOKEN)
-						&& !IdentifierIs(t1, OVERRIDE_TOKEN)
-						&& !IdentifierIs(t1, MIXIN_TOKEN)
-						&& !IdentifierIs(t1, ACCEPT_TEMPORARY_TOKEN)
-						&& !IdentifierIs(t1, EXTERNAL_IMPLICIT_THIS_TOKEN)
-						&& !IdentifierIs(t1, NO_DISCARD_TOKEN)
-						&& !IdentifierIs(t1, ALLOW_DISCARD_TOKEN)
-						&& !IdentifierIs(t1, GENERATED_FUNCTION_TOKEN)
-						&& !IdentifierIs(t1, DEPRECATED_TOKEN)
-						&& !IdentifierIs(t1, DEFAULTS_TOKEN)
-						&& !IdentifierIs(t1, UNSAFE_DURING_CONSTRUCTION_TOKEN)
-					)
-					{
-						RewindTo(&t1);
-						break;
-					}
+					Error(TXT_PROPERTY_DECORATOR_REMOVED, &t1);
+					return false;
+				}
+				if( !IdentifierIs(t1, FINAL_TOKEN)
+					&& !IdentifierIs(t1, OVERRIDE_TOKEN)
+					&& !IdentifierIs(t1, MIXIN_TOKEN)
+					&& !IdentifierIs(t1, ACCEPT_TEMPORARY_TOKEN)
+					&& !IdentifierIs(t1, EXTERNAL_IMPLICIT_THIS_TOKEN)
+					&& !IdentifierIs(t1, NO_DISCARD_TOKEN)
+					&& !IdentifierIs(t1, ALLOW_DISCARD_TOKEN)
+					&& !IdentifierIs(t1, GENERATED_FUNCTION_TOKEN)
+					&& !IdentifierIs(t1, DEPRECATED_TOKEN)
+					&& !IdentifierIs(t1, DEFAULTS_TOKEN)
+					&& !IdentifierIs(t1, UNSAFE_DURING_CONSTRUCTION_TOKEN)
+				)
+				{
+					RewindTo(&t1);
+					break;
 				}
 			}
 
@@ -3294,10 +5232,41 @@ asCScriptNode *asCParser::ParseFuncDef()
 	node->AddChildLast(ParseTypeMod(false));
 	if( isSyntaxError ) return node;
 
-	node->AddChildLast(ParseIdentifier());
+	asCScriptNode* const nameNode = ParseIdentifier();
+	node->AddChildLast(nameNode);
 	if( isSyntaxError ) return node;
 
-	node->AddChildLast(ParseParameterList());
+	// Funcdef remains fork-rejected at the tokenizer boundary, but this retained
+	// internal Parser family must still obey the Canonical action contract. If
+	// invoked by an internal/application path, publish the callable type identity
+	// before parameters and enter the exact FuncDef DeclContext. The growing
+	// snFuncDef is LEGACY/recovery storage only.
+	asSDeclContextScope funcDefScope(sema);
+	asASTDeclId canonicalFuncDef;
+	if( sema )
+	{
+		asSFuncDefSignatureAction action;
+		if( nameNode && script && script->code
+			&& nameNode->tokenLength > 0
+			&& nameNode->tokenPos + nameNode->tokenLength <= script->codeLength )
+		{
+			action.name.Assign(
+				script->code + nameNode->tokenPos,
+				(asUINT)nameNode->tokenLength);
+			action.beginOffset = (asUINT)nameNode->tokenPos;
+			action.endOffset =
+				(asUINT)(nameNode->tokenPos + nameNode->tokenLength);
+		}
+		action.returnType = sema->ActOnQualTypeAction(
+			BuildQualTypeSyntaxAction(
+				node->firstChild,
+				node->firstChild ? node->firstChild->next : 0));
+		canonicalFuncDef = sema->ActOnFuncDefSignatureAction(action, script);
+		sema->BindParsedDeclarationIdentity(node, canonicalFuncDef);
+		funcDefScope.Push(canonicalFuncDef);
+	}
+
+	node->AddChildLast(ParseParameterList(canonicalFuncDef));
 	if( isSyntaxError ) return node;
 
 	GetToken(&t1);
@@ -3314,10 +5283,17 @@ asCScriptNode *asCParser::ParseFuncDef()
 }
 
 // BNF:1: FUNC          ::= {'shared' | 'external' } ['private' | 'protected'] [((TYPE ['&']) | '~')] IDENTIFIER PARAMLIST ['const'] {'override' | 'final'} (';' | STATBLOCK)
-asCScriptNode *asCParser::ParseFunction(bool isMethod)
+asCScriptNode *asCParser::ParseFunction(bool isMethod, bool notifySemaAfterParams, asCScriptNode* prefixChild)
 {
 	asCScriptNode *node = CreateNode(snFunction);
 	if( node == 0 ) return 0;
+	const bool isMixin = prefixChild && prefixChild->tokenType == ttMixin;
+	asDWORD canonicalTraits = isMixin ? asAST_TRAIT_MIXIN : 0;
+	asCString accessSpecifierName;
+	if( prefixChild )
+	{
+		node->AddChildLast(prefixChild);
+	}
 
 	sToken t1;
 	GetToken(&t1);
@@ -3347,12 +5323,14 @@ asCScriptNode *asCParser::ParseFunction(bool isMethod)
 		{
 			RewindTo(&t1);
 			node->AddChildLast(ParseToken(ttPrivate));
+			canonicalTraits |= asAST_TRAIT_PRIVATE;
 			GetToken(&t1);
 		}
 		else if (t1.type == ttProtected)
 		{
 			RewindTo(&t1);
 			node->AddChildLast(ParseToken(ttProtected));
+			canonicalTraits |= asAST_TRAIT_PROTECTED;
 			GetToken(&t1);
 		}
 		else if (t1.type == ttAccess)
@@ -3371,6 +5349,15 @@ asCScriptNode *asCParser::ParseFunction(bool isMethod)
 
 			auto* identifier = ParseIdentifier();
 			if (isSyntaxError) return node;
+			if( identifier && script && script->code
+				&& identifier->tokenLength > 0
+				&& identifier->tokenPos + identifier->tokenLength
+					<= script->codeLength )
+			{
+				accessSpecifierName.Assign(
+					script->code + identifier->tokenPos,
+					identifier->tokenLength);
+			}
 
 			accessNode->AddChildLast(identifier);
 			node->AddChildLast(accessNode);
@@ -3385,26 +5372,67 @@ asCScriptNode *asCParser::ParseFunction(bool isMethod)
 	sToken t2;
 	GetToken(&t2);
 	RewindTo(&t1);
+	asCScriptNode* typeNode = 0;
+	asCScriptNode* typeMod = 0;
 	if( !isMethod || (t1.type != ttBitNot && t2.type != ttOpenParanthesis) )
 	{
-		node->AddChildLast(ParseType(true));
+		typeNode = ParseType(true);
+		node->AddChildLast(typeNode);
 		if( isSyntaxError ) return node;
 
-		node->AddChildLast(ParseTypeMod(false));
+		typeMod = ParseTypeMod(false);
+		node->AddChildLast(typeMod);
 		if( isSyntaxError ) return node;
 	}
 
 	// If this is a class destructor then it starts with ~, and no return type is declared
-	if( isMethod && t1.type == ttBitNot )
+	const bool isDestructor = isMethod && t1.type == ttBitNot;
+	if( isDestructor )
 	{
 		node->AddChildLast(ParseToken(ttBitNot));
 		if( isSyntaxError ) return node;
 	}
 
-	node->AddChildLast(ParseIdentifier());
+	asCScriptNode* const nameNode = ParseIdentifier();
+	node->AddChildLast(nameNode);
 	if( isSyntaxError ) return node;
 
-	node->AddChildLast(ParseParameterList());
+	// Clang-shaped: publish recognized function identity and canonical return
+	// type immediately after the name. Parameters then enter this exact function
+	// DeclContext; the growing snFunction remains LEGACY/recovery storage only.
+	asSDeclContextScope fnScope(sema);
+	asASTDeclId canonicalFunction;
+	if( sema && notifySemaAfterParams )
+	{
+		asSFunctionSignatureAction action;
+		if( nameNode && script && script->code
+			&& nameNode->tokenLength > 0
+			&& nameNode->tokenPos + nameNode->tokenLength <= script->codeLength )
+		{
+			action.name.Assign(
+				script->code + nameNode->tokenPos,
+				(asUINT)nameNode->tokenLength);
+			action.beginOffset = (asUINT)nameNode->tokenPos;
+			action.endOffset =
+				(asUINT)(nameNode->tokenPos + nameNode->tokenLength);
+		}
+		if( typeNode )
+		{
+			action.returnType = sema->ActOnQualTypeAction(
+				BuildQualTypeSyntaxAction(typeNode, typeMod));
+		}
+		action.kind = isDestructor
+			? asFUNCTION_ACTION_DESTRUCTOR
+			: (isMixin
+				? asFUNCTION_ACTION_MIXIN
+				: (isMethod ? asFUNCTION_ACTION_METHOD : asFUNCTION_ACTION_FUNCTION));
+		action.accessSpecifierName = accessSpecifierName;
+		canonicalFunction = sema->ActOnFunctionSignatureAction(action, script);
+		sema->BindParsedDeclarationIdentity(node, canonicalFunction);
+		fnScope.Push(canonicalFunction);
+	}
+
+	node->AddChildLast(ParseParameterList(canonicalFunction));
 	if( isSyntaxError ) return node;
 
 	if( isMethod )
@@ -3414,13 +5442,20 @@ asCScriptNode *asCParser::ParseFunction(bool isMethod)
 
 		// Is the method a const?
 		if( t1.type == ttConst )
+		{
 			node->AddChildLast(ParseToken(ttConst));
+			canonicalTraits |= asAST_TRAIT_CONST_METHOD;
+		}
 	}
 
 	// TODO: Should support abstract methods, in which case no statement block should be provided
-	ParseMethodAttributes(node); // Parses "property" keyword for global functions as well
+	ParseMethodAttributes(node, &canonicalTraits); // Parses "property" keyword for global functions as well
 	if (isSyntaxError)
 		return node;
+	if( sema && canonicalFunction.IsValid() )
+	{
+		sema->ActOnFunctionTraitsAction(canonicalFunction, canonicalTraits);
+	}
 
 	// External shared functions must be ended with ';'
 	GetToken(&t1);
@@ -3431,9 +5466,21 @@ asCScriptNode *asCParser::ParseFunction(bool isMethod)
 		return node;
 	}
 
-	// We should just find the end of the statement block here. The statements
-	// will be parsed on request by the compiler once it starts the compilation.
-	node->AddChildLast(SuperficiallyParseStatementBlock());
+	// Canonical Sema needs a real statement tree; the compiler still re-parses
+	// from the block span when the legacy pipeline is selected.
+	asCScriptNode* const body = ParseFunctionStatementBlock();
+	node->AddChildLast(body);
+	if( sema && canonicalFunction.IsValid() && body && !isSyntaxError )
+	{
+		asSFunctionBodyAction bodyAction;
+		bodyAction.function = canonicalFunction;
+		bodyAction.beginOffset = (asUINT)body->tokenPos;
+		bodyAction.endOffset =
+			(asUINT)(body->tokenPos + body->tokenLength);
+		bodyAction.recovered = isSyntaxError;
+		bodyAction.body = FindExactParsedStatementIdentity(body);
+		sema->ActOnFunctionBodyAction(bodyAction, script);
+	}
 
 	return node;
 }
@@ -3444,24 +5491,64 @@ asCScriptNode *asCParser::ParseInterfaceMethod()
 	asCScriptNode *node = CreateNode(snFunction);
 	if( node == 0 ) return 0;
 
-	node->AddChildLast(ParseType(true));
+	asCScriptNode* const typeNode = ParseType(true);
+	node->AddChildLast(typeNode);
 	if( isSyntaxError ) return node;
 
-	node->AddChildLast(ParseTypeMod(false));
+	asCScriptNode* const typeMod = ParseTypeMod(false);
+	node->AddChildLast(typeMod);
 	if( isSyntaxError ) return node;
 
-	node->AddChildLast(ParseIdentifier());
+	asCScriptNode* const nameNode = ParseIdentifier();
+	node->AddChildLast(nameNode);
 	if( isSyntaxError ) return node;
 
-	node->AddChildLast(ParseParameterList());
-	if( isSyntaxError ) return node;
+	asSDeclContextScope methodScope(sema);
+	asASTDeclId canonicalMethod;
+	if( sema )
+	{
+		asSFunctionSignatureAction action;
+		if( nameNode && script && script->code
+			&& nameNode->tokenLength > 0
+			&& nameNode->tokenPos + nameNode->tokenLength <= script->codeLength )
+		{
+			action.name.Assign(
+				script->code + nameNode->tokenPos,
+				(asUINT)nameNode->tokenLength);
+			action.beginOffset = (asUINT)nameNode->tokenPos;
+			action.endOffset =
+				(asUINT)(nameNode->tokenPos + nameNode->tokenLength);
+		}
+		action.returnType = sema->ActOnQualTypeAction(
+			BuildQualTypeSyntaxAction(typeNode, typeMod));
+		action.kind = asFUNCTION_ACTION_METHOD;
+		canonicalMethod = sema->ActOnFunctionSignatureAction(action, script);
+		sema->BindParsedDeclarationIdentity(node, canonicalMethod);
+		methodScope.Push(canonicalMethod);
+	}
+
+	node->AddChildLast(ParseParameterList(canonicalMethod));
+	const bool parameterError = isSyntaxError;
 
 	// Parse an optional const after the method definition
 	sToken t1;
-	GetToken(&t1);
-	RewindTo(&t1);
-	if( t1.type == ttConst )
-		node->AddChildLast(ParseToken(ttConst));
+	asDWORD canonicalTraits = 0;
+	if( !parameterError )
+	{
+		GetToken(&t1);
+		RewindTo(&t1);
+		if( t1.type == ttConst )
+		{
+			node->AddChildLast(ParseToken(ttConst));
+			canonicalTraits |= asAST_TRAIT_CONST_METHOD;
+		}
+	}
+
+	if( sema && canonicalMethod.IsValid() && !parameterError )
+	{
+		sema->ActOnFunctionTraitsAction(canonicalMethod, canonicalTraits);
+	}
+	if( parameterError ) return node;
 
 	GetToken(&t1);
 	if( t1.type != ttEndStatement )
@@ -3516,7 +5603,36 @@ asCScriptNode *asCParser::ParseInterface()
 	}
 
 	node->SetToken(&t);
-	node->AddChildLast(ParseIdentifier());
+	asCScriptNode* const nameNode = ParseIdentifier();
+	node->AddChildLast(nameNode);
+	if( isSyntaxError ) return node;
+
+	asASTDeclId recordDecl;
+	asSDeclContextScope ifaceScope(sema);
+	if( sema )
+	{
+		asSRecordHeaderAction action;
+		action.kind = asRECORD_ACTION_INTERFACE;
+		if( nameNode != 0 && script != 0 && script->code != 0
+			&& nameNode->tokenLength > 0
+			&& nameNode->tokenPos + nameNode->tokenLength <= script->codeLength )
+		{
+			action.name.Assign(
+				script->code + nameNode->tokenPos,
+				(asUINT)nameNode->tokenLength);
+			action.beginOffset = (asUINT)nameNode->tokenPos;
+			action.endOffset =
+				(asUINT)(nameNode->tokenPos + nameNode->tokenLength);
+		}
+		recordDecl = sema->ActOnRecordHeaderAction(action, script);
+		if( recordDecl.IsValid() )
+		{
+			// Identity-only bridge for the transitional Builder producer. Record
+			// syntax is already authoritative in the typed action above.
+			sema->BindParsedDeclarationIdentity(node, recordDecl);
+			ifaceScope.Push(recordDecl);
+		}
+	}
 
 	// External shared declarations are ended with ';'
 	GetToken(&t);
@@ -3527,6 +5643,8 @@ asCScriptNode *asCParser::ParseInterface()
 		return node;
 	}
 
+	asCArray<asSRecordBaseSpecifierAction> canonicalBases;
+
 	// Can optionally have a list of interfaces that are inherited
 	if( t.type == ttColon )
 	{
@@ -3535,6 +5653,14 @@ asCScriptNode *asCParser::ParseInterface()
 
 		ParseOptionalScope(inherit);
 		inherit->AddChildLast(ParseIdentifier());
+		if( sema )
+		{
+			asSRecordBaseSpecifierAction action;
+			if( BuildRecordBaseSpecifierAction(inherit, script, action) )
+			{
+				canonicalBases.PushLast(action);
+			}
+		}
 		GetToken(&t);
 		while( t.type == ttListSeparator )
 		{
@@ -3543,8 +5669,24 @@ asCScriptNode *asCParser::ParseInterface()
 
 			ParseOptionalScope(inherit);
 			inherit->AddChildLast(ParseIdentifier());
+			if( sema )
+			{
+				asSRecordBaseSpecifierAction action;
+				if( BuildRecordBaseSpecifierAction(inherit, script, action) )
+				{
+					canonicalBases.PushLast(action);
+				}
+			}
 			GetToken(&t);
 		}
+	}
+
+	// Publish the complete typed base list before method signatures. No
+	// snInterface node crosses the Canonical Sema boundary.
+	if( sema && recordDecl.IsValid() )
+	{
+		sema->ActOnRecordBaseSpecifiersAction(
+			recordDecl, canonicalBases, script);
 	}
 
 	if( t.type != ttStartStatementBlock )
@@ -3583,6 +5725,10 @@ asCScriptNode *asCParser::ParseInterface()
 	}
 
 	node->UpdateSourcePos(t.pos, t.length);
+	if( sema && recordDecl.IsValid() )
+	{
+		sema->ActOnRecordFinishAction(recordDecl);
+	}
 
 	return node;
 }
@@ -3594,14 +5740,7 @@ asCScriptNode *asCParser::ParseMixin()
 	if (tokenNode == nullptr)
 		return nullptr;
 
-	// A mixin token must be followed by a function declaration
-	auto* funcNode = ParseFunction();
-	if (funcNode == nullptr)
-		return tokenNode;
-
-	tokenNode->next = funcNode->firstChild;
-	funcNode->firstChild = tokenNode;
-	return funcNode;
+	return ParseFunction(false, true, tokenNode);
 }
 
 // BNF:1: LOCAL         ::= 'local' FUNCTION
@@ -3611,14 +5750,9 @@ asCScriptNode* asCParser::ParseLocal()
 	if (tokenNode == nullptr)
 		return nullptr;
 
-	// A local token must be followed by a function declaration
-	auto* funcNode = ParseFunction();
-	if (funcNode == nullptr)
-		return tokenNode;
-
-	tokenNode->next = funcNode->firstChild;
-	funcNode->firstChild = tokenNode;
-	return funcNode;
+	// Keep the local token as recovery syntax while using the ordinary typed
+	// function action path and exact function DeclContext.
+	return ParseFunction(false, true, tokenNode);
 }
 
 // BNF:1: CLASS         ::= {'shared' | 'abstract' | 'final' | 'external'} 'class' IDENTIFIER (';' | ([':' IDENTIFIER {',' IDENTIFIER}] '{' {VIRTPROP | FUNC | VAR | FUNCDEF} '}'))
@@ -3662,7 +5796,39 @@ asCScriptNode *asCParser::ParseClass()
 			RewindTo(&t);
 	}
 
-	node->AddChildLast(ParseIdentifier());
+	asCScriptNode* const nameNode = ParseIdentifier();
+	node->AddChildLast(nameNode);
+	if( isSyntaxError ) return node;
+
+	// Publish class/struct identity and nominal type immediately after the
+	// identifier, before bases or members.
+	asASTDeclId recordDecl;
+	asSDeclContextScope classScope(sema);
+	if( sema )
+	{
+		asSRecordHeaderAction action;
+		action.kind = isStruct
+			? asRECORD_ACTION_STRUCT : asRECORD_ACTION_CLASS;
+		if( nameNode != 0 && script != 0 && script->code != 0
+			&& nameNode->tokenLength > 0
+			&& nameNode->tokenPos + nameNode->tokenLength <= script->codeLength )
+		{
+			action.name.Assign(
+				script->code + nameNode->tokenPos,
+				(asUINT)nameNode->tokenLength);
+			action.beginOffset = (asUINT)nameNode->tokenPos;
+			action.endOffset =
+				(asUINT)(nameNode->tokenPos + nameNode->tokenLength);
+		}
+		recordDecl = sema->ActOnRecordHeaderAction(action, script);
+		if( recordDecl.IsValid() )
+		{
+			// Identity-only bridge for the transitional Builder producer. Record
+			// syntax is already authoritative in the typed action above.
+			sema->BindParsedDeclarationIdentity(node, recordDecl);
+			classScope.Push(recordDecl);
+		}
+	}
 
 	// External shared declarations are ended with ';'
 	GetToken(&t);
@@ -3673,6 +5839,8 @@ asCScriptNode *asCParser::ParseClass()
 		return node;
 	}
 
+	asCArray<asSRecordBaseSpecifierAction> canonicalBases;
+
 	// Optional list of interfaces that are being implemented and classes that are being inherited
 	if( t.type == ttColon )
 	{
@@ -3681,6 +5849,14 @@ asCScriptNode *asCParser::ParseClass()
 
 		ParseOptionalScope(inherit);
 		inherit->AddChildLast(ParseIdentifier());
+		if( sema )
+		{
+			asSRecordBaseSpecifierAction action;
+			if( BuildRecordBaseSpecifierAction(inherit, script, action) )
+			{
+				canonicalBases.PushLast(action);
+			}
+		}
 		GetToken(&t);
 		while( t.type == ttListSeparator )
 		{
@@ -3689,8 +5865,25 @@ asCScriptNode *asCParser::ParseClass()
 
 			ParseOptionalScope(inherit);
 			inherit->AddChildLast(ParseIdentifier());
+			if( sema )
+			{
+				asSRecordBaseSpecifierAction action;
+				if( BuildRecordBaseSpecifierAction(inherit, script, action) )
+				{
+					canonicalBases.PushLast(action);
+				}
+			}
 			GetToken(&t);
 		}
+	}
+
+	// Base specifiers are typed semantic facts of the record header. Publish
+	// them before any field initializer or method body so `this` and
+	// derived-to-base conversions see the authoritative inheritance graph.
+	if( sema && recordDecl.IsValid() )
+	{
+		sema->ActOnRecordBaseSpecifiersAction(
+			recordDecl, canonicalBases, script);
 	}
 
 	if( t.type != ttStartStatementBlock )
@@ -3707,7 +5900,9 @@ asCScriptNode *asCParser::ParseClass()
 	{
 		// Is it a property or a method?
 		if (t.type == ttFuncDef)
+		{
 			node->AddChildLast(ParseFuncDef());
+		}
 		else if( IsFuncDecl(true) )
 			node->AddChildLast(ParseFunction(true));
 		else if( IsVirtualPropertyDecl() )
@@ -3717,7 +5912,9 @@ asCScriptNode *asCParser::ParseClass()
 		else if( IsAccessDecl() )
 			node->AddChildLast(ParseAccessDecl());
 		else if( !isStruct && IsClassDefaultStatement() )
+		{
 			node->AddChildLast(ParseClassDefaultStatement());
+		}
 		else if( t.type == ttEndStatement )
 			// Skip empty declarations
 			GetToken(&t);
@@ -3743,6 +5940,10 @@ asCScriptNode *asCParser::ParseClass()
 		return node;
 	}
 	node->UpdateSourcePos(t.pos, t.length);
+	if( sema && recordDecl.IsValid() )
+	{
+		sema->ActOnRecordFinishAction(recordDecl);
+	}
 
 	return node;
 }
@@ -3837,6 +6038,17 @@ asCScriptNode *asCParser::SuperficiallyParseVarInit()
 			GetToken(&t);
 		}
 
+		if( start.length > 0 )
+		{
+			asCScriptNode* value = CreateNode(snConstant);
+			if( value )
+			{
+				value->SetToken(&start);
+				value->UpdateSourcePos(start.pos, start.length);
+				node->AddChildLast(value);
+			}
+		}
+
 		// Rewind so that the next token read is the list separator, end statement, or end statement block
 		RewindTo(&t);
 	}
@@ -3874,6 +6086,15 @@ asCScriptNode *asCParser::SuperficiallyParseVarInit()
 	}
 
 	return node;
+}
+
+asCScriptNode *asCParser::ParseFunctionStatementBlock()
+{
+	if( sema )
+	{
+		return ParseStatementBlock();
+	}
+	return SuperficiallyParseStatementBlock();
 }
 
 asCScriptNode *asCParser::SuperficiallyParseStatementBlock()
@@ -3952,6 +6173,8 @@ asCScriptNode *asCParser::ParseStatementBlock()
 {
 	asCScriptNode *node = CreateNode(snStatementBlock);
 	if( node == 0 ) return 0;
+	asCArray<asASTStmtId> canonicalChildren;
+	asCArray<asASTStmtId> canonicalDeclarationSequences;
 
 	sToken t1;
 
@@ -3975,18 +6198,44 @@ asCScriptNode *asCParser::ParseStatementBlock()
 			if( t1.type == ttEndStatementBlock )
 			{
 				node->UpdateSourcePos(t1.pos, t1.length);
-
-				// Statement block is finished
+				if( sema )
+				{
+					asSBlockStatementAction action;
+					action.owner = sema->CurrentDeclContext();
+					action.children = canonicalChildren;
+					action.declarationSequences =
+						canonicalDeclarationSequences;
+					action.beginOffset = (asUINT)node->tokenPos;
+					action.endOffset =
+						(asUINT)(node->tokenPos + node->tokenLength);
+					action.recovered = false;
+					BindParsedStatementIdentity(
+						node,
+						sema->ActOnBlockStatementAction(action, script));
+				}
 				return node;
 			}
 			else
 			{
 				RewindTo(&t1);
 
-				if( IsVarDecl() )
-					node->AddChildLast(ParseDeclaration());
-				else
-					node->AddChildLast(ParseStatement());
+				const bool isDeclaration = IsVarDecl();
+				asCScriptNode* const child = isDeclaration
+					? ParseDeclaration() : ParseStatement();
+				node->AddChildLast(child);
+				if( sema && child )
+				{
+					const asASTStmtId statement =
+						FindExactParsedStatementIdentity(child);
+					if( statement.IsValid() )
+					{
+						canonicalChildren.PushLast(statement);
+						if( isDeclaration )
+						{
+							canonicalDeclarationSequences.PushLast(statement);
+						}
+					}
+				}
 			}
 		}
 
@@ -4021,6 +6270,21 @@ asCScriptNode *asCParser::ParseStatementBlock()
 			{
 				Error(TXT_UNEXPECTED_END_OF_FILE, &t1);
 				Info(TXT_WHILE_PARSING_STATEMENT_BLOCK, &start);
+				if( sema && node->tokenLength != 0 )
+				{
+					asSBlockStatementAction action;
+					action.owner = sema->CurrentDeclContext();
+					action.children = canonicalChildren;
+					action.declarationSequences =
+						canonicalDeclarationSequences;
+					action.beginOffset = (asUINT)node->tokenPos;
+					action.endOffset =
+						(asUINT)(node->tokenPos + node->tokenLength);
+					action.recovered = true;
+					BindParsedStatementIdentity(
+						node,
+						sema->ActOnBlockStatementAction(action, script));
+				}
 				return node;
 			}
 
@@ -4148,6 +6412,8 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 	if( node == 0 ) return 0;
 
 	sToken t;
+	asDWORD canonicalVariableTraits = 0;
+	asCString accessSpecifierName;
 	GetToken(&t);
 	RewindTo(&t);
 
@@ -4157,10 +6423,12 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 		if( t.type == ttPrivate )
 		{
 			node->AddChildLast(ParseToken(ttPrivate));
+			canonicalVariableTraits |= asAST_TRAIT_PRIVATE;
 		}
 		else if( t.type == ttProtected )
 		{
 			node->AddChildLast(ParseToken(ttProtected));
+			canonicalVariableTraits |= asAST_TRAIT_PROTECTED;
 		}
 		else if (t.type == ttAccess)
 		{
@@ -4177,6 +6445,15 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 
 			auto* identifier = ParseIdentifier();
 			if (isSyntaxError) return node;
+			if( identifier && script && script->code
+				&& identifier->tokenLength > 0
+				&& identifier->tokenPos + identifier->tokenLength
+					<= script->codeLength )
+			{
+				accessSpecifierName.Assign(
+					script->code + identifier->tokenPos,
+					identifier->tokenLength);
+			}
 
 			accessNode->AddChildLast(identifier);
 			node->AddChildLast(accessNode);
@@ -4184,8 +6461,10 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 	}
 
 	// Parse data type
-	node->AddChildLast(ParseType(true, false, !isClassProp));
+	asCScriptNode* typeNode = ParseType(true, false, !isClassProp);
+	node->AddChildLast(typeNode);
 	if( isSyntaxError ) return node;
+	asCScriptNode* typeModifierNode = 0;
 
 	// Allow local reference variables
 	if (!isClassProp && !isGlobalVar)
@@ -4195,29 +6474,166 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 		RewindTo(&suffix);
 
 		if (suffix.type == ttAmp)
-			node->AddChildLast(ParseToken(ttAmp));
+		{
+			typeModifierNode = ParseToken(ttAmp);
+			node->AddChildLast(typeModifierNode);
+		}
 
 		GetToken(&suffix);
 		RewindTo(&suffix);
 		if (suffix.type == ttIdentifier && IdentifierIs(suffix, AUTO_CONSTREF_TOKEN))
 			node->AddChildLast(ParseIdentifier());
 	}
+	asCQualType canonicalVariableType;
+	if( sema )
+	{
+		canonicalVariableType = sema->ActOnQualTypeAction(
+			BuildQualTypeSyntaxAction(
+				typeNode,
+				typeModifierNode != 0
+					&& typeModifierNode->nodeType == snDataType
+					? typeModifierNode : 0));
+	}
+	asCArray<asASTStmtId> canonicalLocalStatements;
 
 	for(;;)
 	{
 		// Parse identifier
-		node->AddChildLast(ParseIdentifier());
+		asCScriptNode* nameNode = ParseIdentifier();
+		node->AddChildLast(nameNode);
 		if( isSyntaxError ) return node;
 
+		asASTDeclId canonicalVariable;
+		if( sema )
+		{
+			asSVariableHeaderAction action;
+			action.type = canonicalVariableType;
+			action.traits = canonicalVariableTraits;
+			action.accessSpecifierName = accessSpecifierName;
+			if( nameNode && script && script->code
+				&& nameNode->tokenLength > 0
+				&& nameNode->tokenPos + nameNode->tokenLength <= script->codeLength )
+			{
+				action.name.Assign(
+					script->code + nameNode->tokenPos,
+					nameNode->tokenLength);
+				action.beginOffset = (asUINT)nameNode->tokenPos;
+				action.endOffset =
+					(asUINT)(nameNode->tokenPos + nameNode->tokenLength);
+			}
+			canonicalVariable = sema->ActOnVariableHeaderAction(action, script);
+			if( canonicalVariable.IsValid() )
+			{
+				// Identity-only bridge for the transitional Builder producer. The
+				// declaration's identity, type, and access are already authoritative.
+				sema->BindParsedDeclarationIdentity(nameNode, canonicalVariable);
+			}
+		}
+
+		asCScriptNode* initializerNode = 0;
 		if( isClassProp || isGlobalVar )
 		{
-			// Only superficially parse the initialization info for the class property
 			GetToken(&t);
 			RewindTo(&t);
 			if( t.type == ttAssignment || t.type == ttOpenParanthesis )
 			{
-				node->AddChildLast(SuperficiallyParseVarInit());
+				// LEGACY keeps Superficial (builder recompiles inits later). CANONICAL Sema
+				// must intern the real expression: Superficial stores only the first token
+				// as snConstant, so `40 + 1` would evaluate as 40. Globals already parse the
+				// full assignment; class properties must too or ctor InitPlan writes 40.
+				if( sema && t.type == ttAssignment )
+				{
+					const sToken assignmentToken = t;
+					GetToken(&t);
+					GetToken(&t);
+					RewindTo(&t);
+					asCScriptNode* initializer = 0;
+					if( t.type == ttStartStatementBlock )
+					{
+						initializer = ParseInitList();
+					}
+					else
+					{
+						initializer = ParseConditionAsAssignment();
+					}
+					// Canonical Sema needs the fully parsed RHS now, while the
+					// transitional legacy compiler still reparses this node later
+					// through ParseVarInit(), which expects its source position to
+					// begin at '='. Keep the node's full range anchored there rather
+					// than at the first RHS token.
+					if( initializer )
+					{
+						initializer->UpdateSourcePos(
+							assignmentToken.pos, assignmentToken.length);
+						node->AddChildLast(initializer);
+						initializerNode = initializer;
+						if( initializer->nodeType == snInitList )
+						{
+							BindInitListNodeAction(
+								initializer, initializer, script, sema,
+								canonicalVariableType,
+								canonicalVariableType.IsValid(),
+								isSyntaxError);
+						}
+					}
+				}
+				else if( sema && t.type == ttOpenParanthesis )
+				{
+					initializerNode = ParseArgList();
+					node->AddChildLast(initializerNode);
+				}
+				else
+				{
+					initializerNode = SuperficiallyParseVarInit();
+					node->AddChildLast(initializerNode);
+				}
 				if( isSyntaxError ) return node;
+			}
+
+			if( sema && canonicalVariable.IsValid() )
+			{
+				asSVariableInitializerAction action;
+				action.variable = canonicalVariable;
+				action.beginOffset = (asUINT)nameNode->tokenPos;
+				action.endOffset = (asUINT)(
+					initializerNode != 0
+						? initializerNode->tokenPos + initializerNode->tokenLength
+						: nameNode->tokenPos + nameNode->tokenLength);
+				action.recovered = isSyntaxError;
+				if( initializerNode == 0 )
+				{
+					action.kind = asVARIABLE_INITIALIZER_NONE;
+				}
+				else if( initializerNode->nodeType == snArgList )
+				{
+					action.kind = asVARIABLE_INITIALIZER_DIRECT_CONSTRUCT;
+					asCArray<asSCallArgumentAction> arguments;
+					if( BuildCallArgumentActions(
+						initializerNode, script, sema, arguments, isSyntaxError) )
+					{
+						for( asUINT i = 0; i < arguments.GetLength(); ++i )
+						{
+							if( arguments[i].name.GetLength() != 0 )
+							{
+								action.kind = asVARIABLE_INITIALIZER_INVALID;
+								break;
+							}
+							action.arguments.PushLast(arguments[i].expression);
+						}
+					}
+					else
+					{
+						action.kind = asVARIABLE_INITIALIZER_INVALID;
+					}
+				}
+				else
+				{
+					action.kind = asVARIABLE_INITIALIZER_EXPRESSION;
+					action.expression =
+						FindSingleExactParsedExpressionIdentity(
+							sema, initializerNode);
+				}
+				sema->ActOnVariableInitializerAction(action, script);
 			}
 		}
 		else
@@ -4227,8 +6643,8 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 			if( t.type == ttOpenParanthesis )
 			{
 				RewindTo(&t);
-				node->AddChildLast(ParseArgList());
-				if( isSyntaxError ) return node;
+				initializerNode = ParseArgList();
+				node->AddChildLast(initializerNode);
 			}
 			else if( t.type == ttAssignment )
 			{
@@ -4236,17 +6652,73 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 				RewindTo(&t);
 				if( t.type == ttStartStatementBlock )
 				{
-					node->AddChildLast(ParseInitList());
-					if( isSyntaxError ) return node;
+					initializerNode = ParseInitList();
+					node->AddChildLast(initializerNode);
+					BindInitListNodeAction(
+						initializerNode, initializerNode, script, sema,
+						canonicalVariableType,
+						canonicalVariableType.IsValid(),
+						isSyntaxError);
 				}
 				else
 				{
-					node->AddChildLast(ParseConditionAsAssignment());
-					if( isSyntaxError ) return node;
+					initializerNode = ParseConditionAsAssignment();
+					node->AddChildLast(initializerNode);
 				}
 			}
 			else
 				RewindTo(&t);
+
+			if( sema && canonicalVariable.IsValid() )
+			{
+				asSLocalVariableDeclaratorAction action;
+				action.variable = canonicalVariable;
+				action.beginOffset = (asUINT)nameNode->tokenPos;
+				action.endOffset = (asUINT)(
+					initializerNode != 0
+						? initializerNode->tokenPos + initializerNode->tokenLength
+						: nameNode->tokenPos + nameNode->tokenLength);
+				action.recovered = isSyntaxError;
+				if( initializerNode == 0 )
+				{
+					action.kind = asVARIABLE_INITIALIZER_NONE;
+				}
+				else if( initializerNode->nodeType == snArgList )
+				{
+					action.kind = asVARIABLE_INITIALIZER_DIRECT_CONSTRUCT;
+					asCArray<asSCallArgumentAction> arguments;
+					if( BuildCallArgumentActions(
+						initializerNode, script, sema, arguments, isSyntaxError) )
+					{
+						for( asUINT i = 0; i < arguments.GetLength(); ++i )
+						{
+							if( arguments[i].name.GetLength() != 0 )
+							{
+								action.kind = asVARIABLE_INITIALIZER_INVALID;
+								break;
+							}
+							action.arguments.PushLast(arguments[i].expression);
+						}
+					}
+					else
+					{
+						action.kind = asVARIABLE_INITIALIZER_INVALID;
+					}
+				}
+				else
+				{
+					action.kind = asVARIABLE_INITIALIZER_EXPRESSION;
+					action.expression =
+						FindSingleExactParsedExpressionIdentity(
+							sema, initializerNode);
+				}
+				sema->ActOnLocalVariableDeclaratorAction(
+					action, script, canonicalLocalStatements);
+			}
+			// A bounded initializer action is meaningful even when its closing
+			// delimiter is missing: preserve the completed prefix for diagnostics
+			// and recovery without replaying the declaration shell.
+			if( isSyntaxError ) return node;
 		}
 
 		// continue if list separator, else terminate with end statement
@@ -4256,6 +6728,15 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 		else if( t.type == ttEndStatement )
 		{
 			node->UpdateSourcePos(t.pos, t.length);
+			if( sema && !isClassProp && !isGlobalVar )
+			{
+				BindParsedStatementIdentity(
+					node,
+					sema->ActOnLocalVariableDeclarationAction(
+						canonicalLocalStatements, script,
+						(asUINT)node->tokenPos,
+						(asUINT)(node->tokenPos + node->tokenLength)));
+			}
 
 			return node;
 		}
@@ -4277,26 +6758,29 @@ asCScriptNode *asCParser::ParseStatement()
 	GetToken(&t1);
 	RewindTo(&t1);
 
+	asCScriptNode* parsed = 0;
 	if( t1.type == ttIf )
-		return ParseIf();
+		parsed = ParseIf();
 	else if( t1.type == ttFor )
-		return ParseFor();
+		parsed = ParseFor();
 	else if( t1.type == ttForeach )
-		return ParseForeach();
+		parsed = ParseForeach();
 	else if( t1.type == ttWhile )
-		return ParseWhile();
+		parsed = ParseWhile();
 	else if( t1.type == ttReturn )
-		return ParseReturn();
+		parsed = ParseReturn();
 	else if( t1.type == ttStartStatementBlock )
-		return ParseStatementBlock();
+		parsed = ParseStatementBlock();
 	else if( t1.type == ttBreak )
-		return ParseBreak();
+		parsed = ParseBreak();
 	else if( t1.type == ttContinue )
-		return ParseContinue();
+		parsed = ParseContinue();
+	else if( t1.type == ttFallthrough )
+		parsed = ParseFallthrough();
 	else if( t1.type == ttDo )
-		return ParseDoWhile();
+		parsed = ParseDoWhile();
 	else if( t1.type == ttSwitch )
-		return ParseSwitch();
+		parsed = ParseSwitch();
 	else
 	{
 		if( IsVarDecl() )
@@ -4304,8 +6788,10 @@ asCScriptNode *asCParser::ParseStatement()
 			Error(TXT_UNEXPECTED_VAR_DECL, &t1);
 			return 0;
 		}
-		return ParseExpressionStatement();
+		parsed = ParseExpressionStatement();
 	}
+
+	return parsed;
 }
 
 // BNF:8: EXPRSTAT      ::= [ASSIGN] ';'
@@ -4319,7 +6805,11 @@ asCScriptNode *asCParser::ParseExpressionStatement()
 	if( t.type == ttEndStatement )
 	{
 		node->UpdateSourcePos(t.pos, t.length);
-
+		BindParsedStatementIdentity(
+			node,
+			ActOnLeafStatementAction(
+				sema, script, node, asLEAF_STATEMENT_EXPRESSION,
+				asASTExprId(), false));
 		return node;
 	}
 
@@ -4333,10 +6823,22 @@ asCScriptNode *asCParser::ParseExpressionStatement()
 	{
 		Error(ExpectedToken(";"), &t);
 		Error(InsteadFound(t), &t);
+		BindParsedStatementIdentity(
+			node,
+			ActOnLeafStatementAction(
+				sema, script, node, asLEAF_STATEMENT_EXPRESSION,
+				FindSingleExactParsedExpressionIdentity(sema, node->firstChild),
+				true));
 		return node;
 	}
 
 	node->UpdateSourcePos(t.pos, t.length);
+	BindParsedStatementIdentity(
+		node,
+		ActOnLeafStatementAction(
+			sema, script, node, asLEAF_STATEMENT_EXPRESSION,
+			FindSingleExactParsedExpressionIdentity(sema, node->firstChild),
+			false));
 
 	return node;
 }
@@ -4379,6 +6881,27 @@ asCScriptNode *asCParser::ParseSwitch()
 {
 	asCScriptNode *node = CreateNode(snSwitch);
 	if( node == 0 ) return 0;
+	asCScriptNode* selectorNode = 0;
+	asCArray<asASTStmtId> canonicalCases;
+	asASTStmtId canonicalControl;
+	auto publishTypedSwitch = [&](bool recovered)
+	{
+		if( sema == 0 )
+		{
+			return;
+		}
+		asSSwitchStatementAction action;
+		action.control = canonicalControl;
+		action.owner = sema->CurrentDeclContext();
+		action.selector = FindSingleExactParsedExpressionIdentity(
+			sema, selectorNode);
+		action.cases = canonicalCases;
+		action.beginOffset = (asUINT)node->tokenPos;
+		action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+		action.recovered = recovered;
+		BindParsedStatementIdentity(
+			node, sema->ActOnSwitchStatementAction(action, script));
+	};
 
 	sToken t;
 	GetToken(&t);
@@ -4399,7 +6922,8 @@ asCScriptNode *asCParser::ParseSwitch()
 		return node;
 	}
 
-	node->AddChildLast(ParseCondition());
+	selectorNode = ParseCondition();
+	node->AddChildLast(selectorNode);
 	if( isSyntaxError ) return node;
 
 	GetToken(&t);
@@ -4407,7 +6931,19 @@ asCScriptNode *asCParser::ParseSwitch()
 	{
 		Error(ExpectedToken(")"), &t);
 		Error(InsteadFound(t), &t);
+		publishTypedSwitch(true);
 		return node;
+	}
+
+	if( sema )
+	{
+		asSControlStatementHeaderAction header;
+		header.kind = asCONTROL_STATEMENT_SWITCH;
+		header.owner = sema->CurrentDeclContext();
+		header.beginOffset = (asUINT)node->tokenPos;
+		header.endOffset = (asUINT)(t.pos + t.length);
+		canonicalControl = sema->ActOnControlStatementHeaderAction(
+			header, script);
 	}
 
 	GetToken(&t);
@@ -4415,6 +6951,7 @@ asCScriptNode *asCParser::ParseSwitch()
 	{
 		Error(ExpectedToken("{"), &t);
 		Error(InsteadFound(t), &t);
+		publishTypedSwitch(true);
 		return node;
 	}
 
@@ -4432,20 +6969,35 @@ asCScriptNode *asCParser::ParseSwitch()
 			const char *tokens[] = {"case", "default"};
 			Error(ExpectedOneOf(tokens, 2), &t);
 			Error(InsteadFound(t), &t);
+			publishTypedSwitch(true);
 			return node;
 		}
 
-		node->AddChildLast(ParseCase());
-		if( isSyntaxError ) return node;
+		asCScriptNode* const caseNode = ParseCase();
+		node->AddChildLast(caseNode);
+		const asASTStmtId caseStatement =
+			FindExactParsedStatementIdentity(caseNode);
+		if( caseStatement.IsValid() )
+		{
+			canonicalCases.PushLast(caseStatement);
+		}
+		if( isSyntaxError )
+		{
+			publishTypedSwitch(true);
+			return node;
+		}
 	}
 
 	if( t.type != ttEndStatementBlock )
 	{
 		Error(ExpectedToken("}"), &t);
 		Error(InsteadFound(t), &t);
+		publishTypedSwitch(true);
 		return node;
 	}
 
+	node->UpdateSourcePos(t.pos, t.length);
+	publishTypedSwitch(false);
 	return node;
 }
 
@@ -4470,9 +7022,20 @@ asCScriptNode *asCParser::ParseFallthrough()
 	{
 		Error(ExpectedToken(";"), &t);
 		Error(InsteadFound(t), &t);
+		BindParsedStatementIdentity(
+			node,
+			ActOnLeafStatementAction(
+				sema, script, node, asLEAF_STATEMENT_FALLTHROUGH,
+				asASTExprId(), true));
+		return node;
 	}
 
 	node->UpdateSourcePos(t.pos, t.length);
+	BindParsedStatementIdentity(
+		node,
+		ActOnLeafStatementAction(
+			sema, script, node, asLEAF_STATEMENT_FALLTHROUGH,
+			asASTExprId(), false));
 
 	return node;
 }
@@ -4482,6 +7045,27 @@ asCScriptNode *asCParser::ParseCase()
 {
 	asCScriptNode *node = CreateNode(snCase);
 	if( node == 0 ) return 0;
+	asCScriptNode* valueNode = 0;
+	asCArray<asASTStmtId> canonicalChildren;
+	asECaseStatementActionKind canonicalKind = asCASE_STATEMENT_INVALID;
+	auto publishTypedCase = [&](bool recovered)
+	{
+		if( sema == 0 )
+		{
+			return;
+		}
+		asSCaseStatementAction action;
+		action.kind = canonicalKind;
+		action.switchStatement = sema->CurrentSwitchControl();
+		action.owner = sema->CurrentDeclContext();
+		action.value = FindSingleExactParsedExpressionIdentity(sema, valueNode);
+		action.children = canonicalChildren;
+		action.beginOffset = (asUINT)node->tokenPos;
+		action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+		action.recovered = recovered;
+		BindParsedStatementIdentity(
+			node, sema->ActOnCaseStatementAction(action, script));
+	};
 
 	sToken t;
 	GetToken(&t);
@@ -4496,7 +7080,13 @@ asCScriptNode *asCParser::ParseCase()
 
 	if(t.type == ttCase)
 	{
-		node->AddChildLast(ParseExpression());
+		canonicalKind = asCASE_STATEMENT_CASE;
+		valueNode = ParseExpression();
+		node->AddChildLast(valueNode);
+	}
+	else
+	{
+		canonicalKind = asCASE_STATEMENT_DEFAULT;
 	}
 
 	GetToken(&t);
@@ -4504,8 +7094,10 @@ asCScriptNode *asCParser::ParseCase()
 	{
 		Error(ExpectedToken(":"), &t);
 		Error(InsteadFound(t), &t);
+		publishTypedCase(true);
 		return node;
 	}
+	node->UpdateSourcePos(t.pos, t.length);
 
 	// Parse statements until we find either of }, case, default, break, and fallthrough
 	GetToken(&t);
@@ -4516,22 +7108,51 @@ asCScriptNode *asCParser::ParseCase()
 		   t.type != ttBreak &&
 		   t.type != ttFallthrough )
 	{
+		asCScriptNode* child = 0;
 		if( IsVarDecl() )
 			// Variable declarations are not allowed, but we parse it anyway to give a good error message
-			node->AddChildLast(ParseDeclaration());
+			child = ParseDeclaration();
 		else
-			node->AddChildLast(ParseStatement());
-		if( isSyntaxError ) return node;
+			child = ParseStatement();
+		node->AddChildLast(child);
+		const asASTStmtId childStatement =
+			FindExactParsedStatementIdentity(child);
+		if( childStatement.IsValid() )
+		{
+			canonicalChildren.PushLast(childStatement);
+		}
+		if( isSyntaxError )
+		{
+			publishTypedCase(true);
+			return node;
+		}
 
 		GetToken(&t);
 		RewindTo(&t);
 	}
 
 	// If the case was ended with a break statement, add it to the node
+	asCScriptNode* terminal = 0;
 	if( t.type == ttBreak )
-		node->AddChildLast(ParseBreak());
+		terminal = ParseBreak();
 	else if( t.type == ttFallthrough )
-		node->AddChildLast(ParseFallthrough());
+		terminal = ParseFallthrough();
+	if( terminal != 0 )
+	{
+		node->AddChildLast(terminal);
+		const asASTStmtId terminalStatement =
+			FindExactParsedStatementIdentity(terminal);
+		if( terminalStatement.IsValid() )
+		{
+			canonicalChildren.PushLast(terminalStatement);
+		}
+		if( isSyntaxError )
+		{
+			publishTypedCase(true);
+			return node;
+		}
+	}
+	publishTypedCase(false);
 
 	return node;
 }
@@ -4541,6 +7162,28 @@ asCScriptNode *asCParser::ParseIf()
 {
 	asCScriptNode *node = CreateNode(snIf);
 	if( node == 0 ) return 0;
+	auto publishTypedIf = [&](bool recovered)
+	{
+		if( sema == 0 )
+		{
+			return;
+		}
+		asSIfStatementAction action;
+		action.owner = sema->CurrentDeclContext();
+		action.condition = FindSingleExactParsedExpressionIdentity(
+			sema, node->firstChild);
+		const asCScriptNode* const thenNode =
+			node->firstChild ? node->firstChild->next : 0;
+		const asCScriptNode* const elseNode = thenNode ? thenNode->next : 0;
+		action.thenStatement = FindExactParsedStatementIdentity(thenNode);
+		action.elseStatement = FindExactParsedStatementIdentity(elseNode);
+		action.beginOffset = (asUINT)node->tokenPos;
+		action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+		action.recovered = recovered;
+		BindParsedStatementIdentity(
+			node,
+			sema->ActOnIfStatementAction(action, script));
+	};
 
 	sToken t;
 	GetToken(&t);
@@ -4569,22 +7212,33 @@ asCScriptNode *asCParser::ParseIf()
 	{
 		Error(ExpectedToken(")"), &t);
 		Error(InsteadFound(t), &t);
+		publishTypedIf(true);
 		return node;
 	}
 
 	node->AddChildLast(ParseStatement());
-	if( isSyntaxError ) return node;
+	if( isSyntaxError )
+	{
+		publishTypedIf(true);
+		return node;
+	}
 
 	GetToken(&t);
 	if( t.type != ttElse )
 	{
 		// No else statement return already
 		RewindTo(&t);
+		publishTypedIf(false);
 		return node;
 	}
 
 	node->AddChildLast(ParseStatement());
-
+	if( isSyntaxError )
+	{
+		publishTypedIf(true);
+		return node;
+	}
+	publishTypedIf(false);
 	return node;
 }
 
@@ -4593,6 +7247,31 @@ asCScriptNode *asCParser::ParseFor()
 {
 	asCScriptNode *node = CreateNode(snFor);
 	if( node == 0 ) return 0;
+	asCScriptNode* initNode = 0;
+	asCScriptNode* conditionNode = 0;
+	asCScriptNode* bodyNode = 0;
+	asCArray<asASTExprId> canonicalIncrements;
+	asASTStmtId canonicalControl;
+	auto publishTypedFor = [&](bool recovered)
+	{
+		if( sema == 0 )
+		{
+			return;
+		}
+		asSForStatementAction action;
+		action.control = canonicalControl;
+		action.owner = sema->CurrentDeclContext();
+		action.initStatement = FindExactParsedStatementIdentity(initNode);
+		action.condition = FindSingleExactParsedExpressionIdentity(
+			sema, conditionNode);
+		action.increments = canonicalIncrements;
+		action.body = FindExactParsedStatementIdentity(bodyNode);
+		action.beginOffset = (asUINT)node->tokenPos;
+		action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+		action.recovered = recovered;
+		BindParsedStatementIdentity(
+			node, sema->ActOnForStatementAction(action, script));
+	};
 
 	sToken t;
 	GetToken(&t);
@@ -4614,13 +7293,25 @@ asCScriptNode *asCParser::ParseFor()
 	}
 
 	if( IsVarDecl() )
-		node->AddChildLast(ParseDeclaration());
+	{
+		initNode = ParseDeclaration();
+	}
 	else
-		node->AddChildLast(ParseExpressionStatement());
-	if( isSyntaxError ) return node;
+		initNode = ParseExpressionStatement();
+	node->AddChildLast(initNode);
+	if( isSyntaxError )
+	{
+		publishTypedFor(true);
+		return node;
+	}
 
-	node->AddChildLast(ParseExpressionStatementCondition());
-	if( isSyntaxError ) return node;
+	conditionNode = ParseExpressionStatementCondition();
+	node->AddChildLast(conditionNode);
+	if( isSyntaxError )
+	{
+		publishTypedFor(true);
+		return node;
+	}
 
 	GetToken(&t);
 	if( t.type != ttCloseParanthesis )
@@ -4633,8 +7324,19 @@ asCScriptNode *asCParser::ParseFor()
 			asCScriptNode *n = CreateNode(snExpressionStatement);
 			if( n == 0 ) return 0;
 			node->AddChildLast(n);
-			n->AddChildLast(ParseAssignment());
-			if( isSyntaxError ) return node;
+			asCScriptNode* const incrementNode = ParseAssignment();
+			n->AddChildLast(incrementNode);
+			const asASTExprId increment =
+				FindSingleExactParsedExpressionIdentity(sema, incrementNode);
+			if( increment.IsValid() )
+			{
+				canonicalIncrements.PushLast(increment);
+			}
+			if( isSyntaxError )
+			{
+				publishTypedFor(true);
+				return node;
+			}
 
 			GetToken(&t);
 			if( t.type == ttListSeparator )
@@ -4646,13 +7348,31 @@ asCScriptNode *asCParser::ParseFor()
 				const char *tokens[] = {",", ")"};
 				Error(ExpectedOneOf(tokens, 2), &t);
 				Error(InsteadFound(t), &t);
+				publishTypedFor(true);
 				return node;
 			}
 		}
 	}
 
-	node->AddChildLast(ParseStatement());
+	if( sema )
+	{
+		asSControlStatementHeaderAction header;
+		header.kind = asCONTROL_STATEMENT_FOR;
+		header.owner = sema->CurrentDeclContext();
+		header.beginOffset = (asUINT)node->tokenPos;
+		header.endOffset = (asUINT)(t.pos + t.length);
+		canonicalControl = sema->ActOnControlStatementHeaderAction(
+			header, script);
+	}
 
+	bodyNode = ParseStatement();
+	node->AddChildLast(bodyNode);
+	if( isSyntaxError )
+	{
+		publishTypedFor(true);
+		return node;
+	}
+	publishTypedFor(false);
 	return node;
 }
 
@@ -4666,14 +7386,19 @@ asCScriptNode *asCParser::ParseForeachVariable()
 	GetToken(&start);
 	RewindTo(&start);
 
-	node->AddChildLast(ParseType(true, false, true));
+	asCScriptNode* const typeNode = ParseType(true, false, true);
+	node->AddChildLast(typeNode);
 	if( isSyntaxError ) return node;
 
 	sToken suffix;
+	asCScriptNode* typeModifierNode = 0;
 	GetToken(&suffix);
 	RewindTo(&suffix);
 	if( suffix.type == ttAmp )
-		node->AddChildLast(ParseToken(ttAmp));
+	{
+		typeModifierNode = ParseToken(ttAmp);
+		node->AddChildLast(typeModifierNode);
+	}
 
 	GetToken(&suffix);
 	RewindTo(&suffix);
@@ -4689,10 +7414,44 @@ asCScriptNode *asCParser::ParseForeachVariable()
 		return node;
 	}
 
-	node->AddChildLast(ParseIdentifier());
+	asCScriptNode* const nameNode = ParseIdentifier();
+	node->AddChildLast(nameNode);
 	if( isSyntaxError ) return node;
 
 	node->UpdateSourcePos(start.pos, (node->lastChild->tokenPos + node->lastChild->tokenLength) - start.pos);
+	if( sema )
+	{
+		asSVariableHeaderAction action;
+		action.type = sema->ActOnQualTypeAction(
+			BuildQualTypeSyntaxAction(
+				typeNode,
+				typeModifierNode != 0
+					&& typeModifierNode->nodeType == snDataType
+					? typeModifierNode : 0));
+		if( nameNode != 0 && script != 0 && script->code != 0
+			&& nameNode->tokenLength > 0
+			&& nameNode->tokenPos + nameNode->tokenLength <= script->codeLength )
+		{
+			action.name.Assign(
+				script->code + nameNode->tokenPos,
+				nameNode->tokenLength);
+			action.beginOffset = (asUINT)nameNode->tokenPos;
+			action.endOffset = (asUINT)(
+				nameNode->tokenPos + nameNode->tokenLength);
+		}
+		const asASTDeclId variable =
+			sema->ActOnVariableHeaderAction(action, script);
+		if( variable.IsValid() )
+		{
+			sema->BindParsedDeclarationIdentity(nameNode, variable);
+			BindParsedStatementIdentity(
+				node,
+				sema->ActOnForeachVariableAction(
+					variable, script,
+					(asUINT)node->tokenPos,
+					(asUINT)(node->tokenPos + node->tokenLength)));
+		}
+	}
 	return node;
 }
 
@@ -4700,6 +7459,31 @@ asCScriptNode *asCParser::ParseForeach()
 {
 	asCScriptNode *node = CreateNode(snForEach);
 	if( node == 0 ) return 0;
+	asCScriptNode* valueNode = 0;
+	asCScriptNode* keyNode = 0;
+	asCScriptNode* rangeNode = 0;
+	asCScriptNode* bodyNode = 0;
+	asASTStmtId canonicalControl;
+	auto publishTypedForeach = [&](bool recovered)
+	{
+		if( sema == 0 )
+		{
+			return;
+		}
+		asSForeachStatementAction action;
+		action.control = canonicalControl;
+		action.owner = sema->CurrentDeclContext();
+		action.valueStatement = FindExactParsedStatementIdentity(valueNode);
+		action.keyStatement = FindExactParsedStatementIdentity(keyNode);
+		action.rangeExpression = FindSingleExactParsedExpressionIdentity(
+			sema, rangeNode);
+		action.body = FindExactParsedStatementIdentity(bodyNode);
+		action.beginOffset = (asUINT)node->tokenPos;
+		action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+		action.recovered = recovered;
+		BindParsedStatementIdentity(
+			node, sema->ActOnForeachStatementAction(action, script));
+	};
 
 	sToken t;
 	GetToken(&t);
@@ -4721,20 +7505,24 @@ asCScriptNode *asCParser::ParseForeach()
 		return node;
 	}
 
-	node->AddChildLast(ParseForeachVariable());
+	valueNode = ParseForeachVariable();
+	node->AddChildLast(valueNode);
 	if( isSyntaxError )
 	{
 		Info(TXT_WHILE_PARSING_FOREACH, &start);
+		publishTypedForeach(true);
 		return node;
 	}
 
 	GetToken(&t);
 	if( t.type == ttListSeparator )
 	{
-		node->AddChildLast(ParseForeachVariable());
+		keyNode = ParseForeachVariable();
+		node->AddChildLast(keyNode);
 		if( isSyntaxError )
 		{
 			Info(TXT_WHILE_PARSING_FOREACH, &start);
+			publishTypedForeach(true);
 			return node;
 		}
 
@@ -4746,13 +7534,16 @@ asCScriptNode *asCParser::ParseForeach()
 		Error(ExpectedToken(":"), &t);
 		Error(InsteadFound(t), &t);
 		Info(TXT_WHILE_PARSING_FOREACH, &start);
+		publishTypedForeach(true);
 		return node;
 	}
 
-	node->AddChildLast(ParseCondition());
+	rangeNode = ParseCondition();
+	node->AddChildLast(rangeNode);
 	if( isSyntaxError )
 	{
 		Info(TXT_WHILE_PARSING_FOREACH, &start);
+		publishTypedForeach(true);
 		return node;
 	}
 
@@ -4762,17 +7553,32 @@ asCScriptNode *asCParser::ParseForeach()
 		Error(ExpectedToken(")"), &t);
 		Error(InsteadFound(t), &t);
 		Info(TXT_WHILE_PARSING_FOREACH, &start);
+		publishTypedForeach(true);
 		return node;
 	}
 
-	node->AddChildLast(ParseStatement());
+	if( sema )
+	{
+		asSControlStatementHeaderAction header;
+		header.kind = asCONTROL_STATEMENT_FOREACH;
+		header.owner = sema->CurrentDeclContext();
+		header.beginOffset = (asUINT)node->tokenPos;
+		header.endOffset = (asUINT)(t.pos + t.length);
+		canonicalControl = sema->ActOnControlStatementHeaderAction(
+			header, script);
+	}
+
+	bodyNode = ParseStatement();
+	node->AddChildLast(bodyNode);
 	if( isSyntaxError )
 	{
 		Info(TXT_WHILE_PARSING_FOREACH, &start);
+		publishTypedForeach(true);
 		return node;
 	}
 
 	node->UpdateSourcePos(start.pos, (node->lastChild->tokenPos + node->lastChild->tokenLength) - start.pos);
+	publishTypedForeach(false);
 	return node;
 }
 //[UE--]
@@ -4782,6 +7588,27 @@ asCScriptNode *asCParser::ParseWhile()
 {
 	asCScriptNode *node = CreateNode(snWhile);
 	if( node == 0 ) return 0;
+	asASTStmtId canonicalControl;
+	auto publishTypedWhile = [&](bool recovered)
+	{
+		if( sema == 0 )
+		{
+			return;
+		}
+		asSWhileStatementAction action;
+		action.kind = asWHILE_STATEMENT_WHILE;
+		action.control = canonicalControl;
+		action.owner = sema->CurrentDeclContext();
+		action.condition = FindSingleExactParsedExpressionIdentity(
+			sema, node->firstChild);
+		action.body = FindExactParsedStatementIdentity(
+			node->firstChild ? node->firstChild->next : 0);
+		action.beginOffset = (asUINT)node->tokenPos;
+		action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+		action.recovered = recovered;
+		BindParsedStatementIdentity(
+			node, sema->ActOnWhileStatementAction(action, script));
+	};
 
 	sToken t;
 	GetToken(&t);
@@ -4810,11 +7637,28 @@ asCScriptNode *asCParser::ParseWhile()
 	{
 		Error(ExpectedToken(")"), &t);
 		Error(InsteadFound(t), &t);
+		publishTypedWhile(true);
 		return node;
 	}
 
-	node->AddChildLast(ParseStatement());
+	if( sema )
+	{
+		asSControlStatementHeaderAction action;
+		action.kind = asCONTROL_STATEMENT_WHILE;
+		action.owner = sema->CurrentDeclContext();
+		action.beginOffset = (asUINT)node->tokenPos;
+		action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+		canonicalControl =
+			sema->ActOnControlStatementHeaderAction(action, script);
+	}
 
+	node->AddChildLast(ParseStatement());
+	if( isSyntaxError )
+	{
+		publishTypedWhile(true);
+		return node;
+	}
+	publishTypedWhile(false);
 	return node;
 }
 
@@ -4823,6 +7667,26 @@ asCScriptNode *asCParser::ParseDoWhile()
 {
 	asCScriptNode *node = CreateNode(snDoWhile);
 	if( node == 0 ) return 0;
+	asASTStmtId canonicalControl;
+	auto publishTypedDoWhile = [&](bool recovered)
+	{
+		if( sema == 0 )
+		{
+			return;
+		}
+		asSWhileStatementAction action;
+		action.kind = asWHILE_STATEMENT_DO_WHILE;
+		action.control = canonicalControl;
+		action.owner = sema->CurrentDeclContext();
+		action.body = FindExactParsedStatementIdentity(node->firstChild);
+		action.condition = FindSingleExactParsedExpressionIdentity(
+			sema, node->firstChild ? node->firstChild->next : 0);
+		action.beginOffset = (asUINT)node->tokenPos;
+		action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+		action.recovered = recovered;
+		BindParsedStatementIdentity(
+			node, sema->ActOnWhileStatementAction(action, script));
+	};
 
 	sToken t;
 	GetToken(&t);
@@ -4835,14 +7699,30 @@ asCScriptNode *asCParser::ParseDoWhile()
 
 	node->UpdateSourcePos(t.pos, t.length);
 
+	if( sema )
+	{
+		asSControlStatementHeaderAction action;
+		action.kind = asCONTROL_STATEMENT_DO_WHILE;
+		action.owner = sema->CurrentDeclContext();
+		action.beginOffset = (asUINT)node->tokenPos;
+		action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
+		canonicalControl =
+			sema->ActOnControlStatementHeaderAction(action, script);
+	}
+
 	node->AddChildLast(ParseStatement());
-	if( isSyntaxError ) return node;
+	if( isSyntaxError )
+	{
+		publishTypedDoWhile(true);
+		return node;
+	}
 
 	GetToken(&t);
 	if( t.type != ttWhile )
 	{
 		Error(ExpectedToken("while"), &t);
 		Error(InsteadFound(t), &t);
+		publishTypedDoWhile(true);
 		return node;
 	}
 
@@ -4851,17 +7731,23 @@ asCScriptNode *asCParser::ParseDoWhile()
 	{
 		Error(ExpectedToken("("), &t);
 		Error(InsteadFound(t), &t);
+		publishTypedDoWhile(true);
 		return node;
 	}
 
 	node->AddChildLast(ParseCondition());
-	if( isSyntaxError ) return node;
+	if( isSyntaxError )
+	{
+		publishTypedDoWhile(true);
+		return node;
+	}
 
 	GetToken(&t);
 	if( t.type != ttCloseParanthesis )
 	{
 		Error(ExpectedToken(")"), &t);
 		Error(InsteadFound(t), &t);
+		publishTypedDoWhile(true);
 		return node;
 	}
 
@@ -4870,10 +7756,11 @@ asCScriptNode *asCParser::ParseDoWhile()
 	{
 		Error(ExpectedToken(";"), &t);
 		Error(InsteadFound(t), &t);
+		publishTypedDoWhile(true);
 		return node;
 	}
 	node->UpdateSourcePos(t.pos, t.length);
-
+	publishTypedDoWhile(false);
 	return node;
 }
 
@@ -4898,6 +7785,11 @@ asCScriptNode *asCParser::ParseReturn()
 	if( t.type == ttEndStatement )
 	{
 		node->UpdateSourcePos(t.pos, t.length);
+		BindParsedStatementIdentity(
+			node,
+			ActOnLeafStatementAction(
+				sema, script, node, asLEAF_STATEMENT_RETURN,
+				asASTExprId(), false));
 		return node;
 	}
 
@@ -4911,10 +7803,22 @@ asCScriptNode *asCParser::ParseReturn()
 	{
 		Error(ExpectedToken(";"), &t);
 		Error(InsteadFound(t), &t);
+		BindParsedStatementIdentity(
+			node,
+			ActOnLeafStatementAction(
+				sema, script, node, asLEAF_STATEMENT_RETURN,
+				FindSingleExactParsedExpressionIdentity(sema, node->firstChild),
+				true));
 		return node;
 	}
 
 	node->UpdateSourcePos(t.pos, t.length);
+	BindParsedStatementIdentity(
+		node,
+		ActOnLeafStatementAction(
+			sema, script, node, asLEAF_STATEMENT_RETURN,
+			FindSingleExactParsedExpressionIdentity(sema, node->firstChild),
+			false));
 
 	return node;
 }
@@ -4941,9 +7845,20 @@ asCScriptNode *asCParser::ParseBreak()
 	{
 		Error(ExpectedToken(";"), &t);
 		Error(InsteadFound(t), &t);
+		BindParsedStatementIdentity(
+			node,
+			ActOnLeafStatementAction(
+				sema, script, node, asLEAF_STATEMENT_BREAK,
+				asASTExprId(), true));
+		return node;
 	}
 
 	node->UpdateSourcePos(t.pos, t.length);
+	BindParsedStatementIdentity(
+		node,
+		ActOnLeafStatementAction(
+			sema, script, node, asLEAF_STATEMENT_BREAK,
+			asASTExprId(), false));
 
 	return node;
 }
@@ -4970,9 +7885,20 @@ asCScriptNode *asCParser::ParseContinue()
 	{
 		Error(ExpectedToken(";"), &t);
 		Error(InsteadFound(t), &t);
+		BindParsedStatementIdentity(
+			node,
+			ActOnLeafStatementAction(
+				sema, script, node, asLEAF_STATEMENT_CONTINUE,
+				asASTExprId(), true));
+		return node;
 	}
 
 	node->UpdateSourcePos(t.pos, t.length);
+	BindParsedStatementIdentity(
+		node,
+		ActOnLeafStatementAction(
+			sema, script, node, asLEAF_STATEMENT_CONTINUE,
+			asASTExprId(), false));
 
 	return node;
 }
@@ -5011,8 +7937,33 @@ asCScriptNode *asCParser::ParseTypedef()
 		return node;
 	}
 
-	node->AddChildLast(ParseRealType());
-	node->AddChildLast(ParseIdentifier());
+	asCScriptNode* const typeNode = ParseRealType();
+	node->AddChildLast(typeNode);
+	asCScriptNode* const identNode = ParseIdentifier();
+	node->AddChildLast(identNode);
+	if( isSyntaxError ) return node;
+
+	// Clang-shaped: publish only the recognized alias identity, the Parser-
+	// resolved primitive token and exact name range after the identifier but
+	// before ';'. Keep snTypedef solely for the explicit LEGACY oracle.
+	if( sema )
+	{
+		asSTypedefDeclAction action;
+		if( identNode && script && script->code
+			&& identNode->tokenLength > 0
+			&& identNode->tokenPos + identNode->tokenLength <= script->codeLength )
+		{
+			action.name.Assign(
+				script->code + identNode->tokenPos,
+				(asUINT)identNode->tokenLength);
+			action.beginOffset = (asUINT)identNode->tokenPos;
+			action.endOffset =
+				(asUINT)(identNode->tokenPos + identNode->tokenLength);
+		}
+		action.primitiveToken = typeNode
+			? typeNode->tokenType : ttUnrecognizedToken;
+		sema->ActOnTypedefAction(action, script);
+	}
 
 	// Check for the end of the typedef
 	GetToken(&token);
@@ -5026,7 +7977,7 @@ asCScriptNode *asCParser::ParseTypedef()
 	return node;
 }
 
-void asCParser::ParseMethodAttributes(asCScriptNode* funcNode)
+void asCParser::ParseMethodAttributes(asCScriptNode* funcNode, asDWORD* canonicalTraits)
 {
 	sToken t1;
 
@@ -5054,6 +8005,17 @@ void asCParser::ParseMethodAttributes(asCScriptNode* funcNode)
 			|| IdentifierIs(t1, UNSAFE_DURING_CONSTRUCTION_TOKEN)
 		)
 		{
+			if( canonicalTraits )
+			{
+				if( IdentifierIs(t1, FINAL_TOKEN) )
+					*canonicalTraits |= asAST_TRAIT_FINAL;
+				else if( IdentifierIs(t1, OVERRIDE_TOKEN) )
+					*canonicalTraits |= asAST_TRAIT_OVERRIDE;
+				else if( IdentifierIs(t1, MIXIN_TOKEN) )
+					*canonicalTraits |= asAST_TRAIT_MIXIN;
+				else if( IdentifierIs(t1, EXTERNAL_IMPLICIT_THIS_TOKEN) )
+					*canonicalTraits |= asAST_TRAIT_EXTERNAL_IMPLICIT_THIS;
+			}
 			funcNode->AddChildLast(ParseIdentifier());
 		}
 		else

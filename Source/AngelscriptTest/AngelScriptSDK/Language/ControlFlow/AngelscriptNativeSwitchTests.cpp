@@ -7,7 +7,6 @@
 #include "StartAngelscriptHeaders.h"
 #include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
-#include "source/as_typed_semantic_ir.h"
 #include "EndAngelscriptHeaders.h"
 
 using AngelscriptNativeTestSupport::AppendGeneratedAsLine;
@@ -414,166 +413,30 @@ public:
 			| ENativeEvidence::Lifecycle
 			| ENativeEvidence::Bytecode);
 
-		AngelscriptNativeTestSupport::FNativeTestEngine CaptureOffEngine;
-		AngelscriptNativeTestSupport::FNativeTestEngine CaptureOnEngine;
-		CaptureOffEngine.Create(*TestRunner);
-		CaptureOnEngine.Create(*TestRunner);
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
 		ON_SCOPE_EXIT
 		{
-			CaptureOnEngine.Destroy();
-			CaptureOffEngine.Destroy();
+			Engine.Destroy();
 		};
 
-		asIScriptEngine* const CaptureOffScriptEngine = CaptureOffEngine.Get();
-		asIScriptEngine* const CaptureOnScriptEngine = CaptureOnEngine.Get();
-		ASSERT_THAT(IsNotNull(CaptureOffScriptEngine,
-			TEXT("Switch product should create its capture-off raw SDK engine")));
-		ASSERT_THAT(IsNotNull(CaptureOnScriptEngine,
-			TEXT("Switch product should create its capture-on raw SDK engine")));
-		if (CaptureOffScriptEngine == nullptr || CaptureOnScriptEngine == nullptr)
+		asIScriptEngine* const ScriptEngine = Engine.Get();
+		ASSERT_THAT(IsNotNull(ScriptEngine, TEXT("Switch product should create a raw SDK engine")));
+		if (ScriptEngine == nullptr)
 		{
 			return;
 		}
-		asCScriptEngine* const CaptureOffInternal =
-			static_cast<asCScriptEngine*>(CaptureOffScriptEngine);
-		asCScriptEngine* const CaptureOnInternal =
-			static_cast<asCScriptEngine*>(CaptureOnScriptEngine);
-		ASSERT_THAT(IsFalse(CaptureOffInternal->IsTypedSemanticIRCaptureEnabled()));
-		ASSERT_THAT(IsFalse(CaptureOnInternal->IsTypedSemanticIRCaptureEnabled()));
-		CaptureOnInternal->SetTypedSemanticIRCapture(true);
-		const int CaptureOffAliasResult =
-			CaptureOffScriptEngine->RegisterTypedef("SelectorAlias", "int");
-		const int CaptureOnAliasResult =
-			CaptureOnScriptEngine->RegisterTypedef("SelectorAlias", "int");
-		ASSERT_THAT(AreEqual(CaptureOffAliasResult, CaptureOnAliasResult));
-		ASSERT_THAT(IsTrue(CaptureOffAliasResult >= 0,
-			*FString::Printf(TEXT("Switch product should register its raw selector alias. Result=%d OffMessages={%s} OnMessages={%s}"),
-				CaptureOffAliasResult,
-				*CaptureOffEngine.GetMessagesText(),
-				*CaptureOnEngine.GetMessagesText())));
+		const int AliasResult = ScriptEngine->RegisterTypedef("SelectorAlias", "int");
+		ASSERT_THAT(IsTrue(AliasResult >= 0,
+			*FString::Printf(TEXT("Switch product should register its raw selector alias. Result=%d Messages={%s}"),
+				AliasResult, *Engine.GetMessagesText())));
 
-		{
-			const FString ModuleName = TEXT("SwitchExhaustiveEnumOracle");
-			const FString Source = BuildExhaustiveEnumSource();
-			const FTCHARToUTF8 ModuleNameUtf8(*ModuleName);
-			const FTCHARToUTF8 SourceUtf8(*Source);
-			CaptureOffEngine.Reset(*TestRunner);
-			CaptureOnEngine.Reset(*TestRunner);
-			asIScriptModule* CaptureOffModule = nullptr;
-			asIScriptModule* CaptureOnModule = nullptr;
-			const int CaptureOffBuildResult = CompileNativeModule(
-				CaptureOffScriptEngine,
-				ModuleNameUtf8.Get(),
-				SourceUtf8.Get(),
-				CaptureOffModule);
-			const FString CaptureOffDiagnostics =
-				CaptureOffEngine.GetMessagesText();
-			const int CaptureOnBuildResult = CompileNativeModule(
-				CaptureOnScriptEngine,
-				ModuleNameUtf8.Get(),
-				SourceUtf8.Get(),
-				CaptureOnModule);
-			const FString CaptureOnDiagnostics =
-				CaptureOnEngine.GetMessagesText();
-			ASSERT_THAT(AreEqual(CaptureOffBuildResult, CaptureOnBuildResult));
-			ASSERT_THAT(AreEqual(CaptureOffDiagnostics, CaptureOnDiagnostics));
-			ASSERT_THAT(AreEqual(asSUCCESS, CaptureOffBuildResult));
-			ASSERT_THAT(IsNotNull(CaptureOffModule));
-			ASSERT_THAT(IsNotNull(CaptureOnModule));
-			if (CaptureOffModule != nullptr && CaptureOnModule != nullptr)
-			{
-				asIScriptFunction* const CaptureOffEntry =
-					GetNativeFunctionByExactDecl(
-						CaptureOffModule,
-						"int ExhaustiveEnumEntry(EExhaustiveSelector Value)");
-				asIScriptFunction* const CaptureOnEntry =
-					GetNativeFunctionByExactDecl(
-						CaptureOnModule,
-						"int ExhaustiveEnumEntry(EExhaustiveSelector Value)");
-				ASSERT_THAT(IsNotNull(CaptureOffEntry));
-				ASSERT_THAT(IsNotNull(CaptureOnEntry));
-				if (CaptureOffEntry != nullptr && CaptureOnEntry != nullptr)
-				{
-					ASSERT_THAT(AreEqual(
-						CopyNativeBytecode(CaptureOffEntry),
-						CopyNativeBytecode(CaptureOnEntry),
-						TEXT("Exhaustive-enum HIR capture must not change bytecode")));
-					asCScriptFunction* const CaptureOffInternalFunction =
-						static_cast<asCScriptFunction*>(CaptureOffEntry);
-					asCScriptFunction* const CaptureOnInternalFunction =
-						static_cast<asCScriptFunction*>(CaptureOnEntry);
-					ASSERT_THAT(IsNull(
-						CaptureOffInternalFunction->GetTypedSemanticFunction()));
-					const asCTypedSemanticFunction* const HIR =
-						CaptureOnInternalFunction->GetTypedSemanticFunction();
-					ASSERT_THAT(IsNotNull(
-						HIR,
-						*FString::Printf(
-							TEXT("Exhaustive enum must publish HIR: %s"),
-							UTF8_TO_TCHAR(CaptureOnInternalFunction
-								->GetTypedSemanticCaptureDiagnostic().AddressOf()))));
-					bool bFoundInvalidEnumEdge = false;
-					if (HIR != nullptr)
-					{
-						ASSERT_THAT(IsTrue(VerifyTypedSemanticFunction(*HIR).IsValid()));
-						for (asUINT StatementIndex = 0;
-							StatementIndex < HIR->statements.GetLength();
-							++StatementIndex)
-						{
-							const asSTypedSemanticStatement& Statement =
-								HIR->statements[StatementIndex];
-							if (Statement.kind == asETypedSemanticStatementKind::Switch
-								&& Statement.switchIsExhaustive
-								&& Statement.switchHasInvalidEnumValueEdge
-								&& Statement.safePointRole
-									== asETypedSemanticSafePointRole::SwitchInvalidValue)
-							{
-								bFoundInvalidEnumEdge = true;
-							}
-						}
-					}
-					ASSERT_THAT(IsTrue(bFoundInvalidEnumEdge));
-
-					asIScriptEngine* const Engines[] = {
-						CaptureOffScriptEngine,
-						CaptureOnScriptEngine,
-					};
-					asIScriptFunction* const Entries[] = {
-						CaptureOffEntry,
-						CaptureOnEntry,
-					};
-					FString Exceptions[2];
-					for (int32 RunIndex = 0; RunIndex < 2; ++RunIndex)
-					{
-						asIScriptContext* const Context = Engines[RunIndex]->CreateContext();
-						ASSERT_THAT(IsNotNull(Context));
-						if (Context != nullptr)
-						{
-							ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(Entries[RunIndex])));
-							ASSERT_THAT(AreEqual(asSUCCESS, Context->SetArgDWord(0, 99)));
-							ASSERT_THAT(AreEqual(asEXECUTION_EXCEPTION, Context->Execute()));
-							Exceptions[RunIndex] = UTF8_TO_TCHAR(Context->GetExceptionString());
-							Context->Release();
-						}
-					}
-					ASSERT_THAT(AreEqual(
-						FString(TEXT("Invalid enum value passed to switch")),
-						Exceptions[0]));
-					ASSERT_THAT(AreEqual(Exceptions[0], Exceptions[1]));
-				}
-			}
-			CaptureOffScriptEngine->DiscardModule(ModuleNameUtf8.Get());
-			CaptureOnScriptEngine->DiscardModule(ModuleNameUtf8.Get());
-		}
-
-		int32 ObservedCaseCount = 0;
 		for (const FNamedCase& SelectorCase : SelectorCases)
 		{
 			for (const FNamedCase& CaseCase : CaseCases)
 			{
 				for (const FNamedCase& ExitCase : ExitCases)
 				{
-					++ObservedCaseCount;
 					const FNativeCaseContext Case(MakeNativeCaseId("LANG-CF-SWITCH",
 						{ ANSI_TO_TCHAR(SelectorCase.CatalogName), ANSI_TO_TCHAR(CaseCase.CatalogName), ANSI_TO_TCHAR(ExitCase.CatalogName) }));
 					const FString ModuleName = TEXT("Switch_") + Case.GetId().RightChop(15).Replace(TEXT("-"), TEXT("_"));
@@ -581,32 +444,9 @@ public:
 					PrintGeneratedAsSource(*TestRunner, Case.GetId(), ModuleName, Source);
 					const FTCHARToUTF8 ModuleNameUtf8(*ModuleName);
 					const FTCHARToUTF8 SourceUtf8(*Source);
-					CaptureOffEngine.ResetMessages();
-					CaptureOnEngine.ResetMessages();
-					asIScriptModule* CaptureOffModule = nullptr;
-					asIScriptModule* CaptureOnModule = nullptr;
-					const int CaptureOffBuildResult = CompileNativeModule(
-						CaptureOffScriptEngine,
-						ModuleNameUtf8.Get(),
-						SourceUtf8.Get(),
-						CaptureOffModule);
-					const FString CaptureOffDiagnostics =
-						CaptureOffEngine.GetMessagesText();
-					const int CaptureOnBuildResult = CompileNativeModule(
-						CaptureOnScriptEngine,
-						ModuleNameUtf8.Get(),
-						SourceUtf8.Get(),
-						CaptureOnModule);
-					const FString CaptureOnDiagnostics =
-						CaptureOnEngine.GetMessagesText();
-					ASSERT_THAT(AreEqual(
-						CaptureOffBuildResult,
-						CaptureOnBuildResult,
-						*Case.Describe(TEXT("HIR capture must preserve the switch build outcome"))));
-					ASSERT_THAT(AreEqual(
-						CaptureOffDiagnostics,
-						CaptureOnDiagnostics,
-						*Case.Describe(TEXT("HIR capture must preserve every switch diagnostic"))));
+					Engine.ResetMessages();
+					asIScriptModule* Module = nullptr;
+					const int BuildResult = CompileNativeModule(ScriptEngine, ModuleNameUtf8.Get(), SourceUtf8.Get(), Module);
 					// The current fork requires default to be the final case label. A
 					// default/no-match fallthrough combination therefore remains an
 					// intentional negative product instead of being silently omitted.
@@ -616,149 +456,49 @@ public:
 							&& IsCase(ExitCase, "fallthrough"));
 					if (bInvalid)
 					{
-						ASSERT_THAT(IsTrue(CaptureOffBuildResult < 0, *Case.Describe(TEXT("invalid switch cell should be rejected"))));
-						ASSERT_THAT(IsTrue(CaptureOffEngine.GetMessages().Entries.Num() > 0, *Case.Describe(TEXT("invalid switch cell should report a diagnostic"))));
+						ASSERT_THAT(IsTrue(BuildResult < 0, *Case.Describe(TEXT("invalid switch cell should be rejected"))));
+						ASSERT_THAT(IsTrue(Engine.GetMessages().Entries.Num() > 0, *Case.Describe(TEXT("invalid switch cell should report a diagnostic"))));
 					}
 					else
 					{
 						const FSwitchExpectation Expected = ExpectedResult(SelectorCase, CaseCase, ExitCase);
-						ASSERT_THAT(AreEqual(asSUCCESS, CaptureOffBuildResult,
+						ASSERT_THAT(AreEqual(asSUCCESS, BuildResult,
 							*FString::Printf(TEXT("%s switch cell should compile. BuildResult=%d Messages={%s}"),
-								*Case.GetId(), CaptureOffBuildResult, *CaptureOffDiagnostics)));
-						ASSERT_THAT(IsNotNull(CaptureOffModule));
-						ASSERT_THAT(IsNotNull(CaptureOnModule));
-						asIScriptFunction* const CaptureOffEntry =
-							GetNativeFunctionByExactDecl(CaptureOffModule, "int Entry()");
-						asIScriptFunction* const CaptureOnEntry =
-							GetNativeFunctionByExactDecl(CaptureOnModule, "int Entry()");
-						ASSERT_THAT(IsNotNull(CaptureOffEntry, *Case.Describe(TEXT("capture-off switch cell should publish exact Entry declaration"))));
-						ASSERT_THAT(IsNotNull(CaptureOnEntry, *Case.Describe(TEXT("capture-on switch cell should publish exact Entry declaration"))));
-						if (CaptureOffEntry != nullptr && CaptureOnEntry != nullptr)
+								*Case.GetId(), BuildResult, *Engine.GetMessagesText())));
+						asIScriptFunction* const Entry = GetNativeFunctionByExactDecl(Module, "int Entry()");
+						ASSERT_THAT(IsNotNull(Entry, *Case.Describe(TEXT("switch cell should publish exact Entry declaration"))));
+						if (Entry != nullptr)
 						{
-							const TArray<asDWORD> CaptureOffBytecode =
-								CopyNativeBytecode(CaptureOffEntry);
-							const TArray<asDWORD> CaptureOnBytecode =
-								CopyNativeBytecode(CaptureOnEntry);
-							ASSERT_THAT(IsTrue(CaptureOffBytecode.Num() > 0,
-								*Case.Describe(TEXT("switch entry should expose bytecode"))));
-							ASSERT_THAT(AreEqual(
-								CaptureOffBytecode,
-								CaptureOnBytecode,
-								*Case.Describe(TEXT("HIR capture must not change any switch bytecode word"))));
-
-							asCScriptFunction* const CaptureOffInternalFunction =
-								static_cast<asCScriptFunction*>(CaptureOffEntry);
-							asCScriptFunction* const CaptureOnInternalFunction =
-								static_cast<asCScriptFunction*>(CaptureOnEntry);
-							ASSERT_THAT(IsNull(
-								CaptureOffInternalFunction->GetTypedSemanticFunction(),
-								*Case.Describe(TEXT("capture-off switch entry must not publish HIR"))));
-							const asCTypedSemanticFunction* const HIR =
-								CaptureOnInternalFunction->GetTypedSemanticFunction();
-							ASSERT_THAT(IsNotNull(
-								HIR,
-								*FString::Printf(
-									TEXT("%s capture-on switch entry must publish HIR: %s"),
-									*Case.GetId(),
-									UTF8_TO_TCHAR(CaptureOnInternalFunction
-										->GetTypedSemanticCaptureDiagnostic().AddressOf()))));
-							if (HIR != nullptr)
+							asIScriptContext* const Context = ScriptEngine->CreateContext();
+							ASSERT_THAT(IsNotNull(Context, *Case.Describe(TEXT("switch cell should create a context"))));
+							if (Context != nullptr)
 							{
-								ASSERT_THAT(IsTrue(VerifyTypedSemanticFunction(*HIR).IsValid()));
-								int32 SwitchCount = 0;
-								int32 FallthroughCount = 0;
-								for (asUINT StatementIndex = 0;
-									StatementIndex < HIR->statements.GetLength();
-									++StatementIndex)
+								ASSERT_THAT(AreEqual(Expected.bThrows ? asEXECUTION_EXCEPTION : asEXECUTION_FINISHED, PrepareAndExecute(Context, Entry),
+									*Case.Describe(TEXT("switch execution should match selected exit"))));
+								if (Expected.bThrows)
 								{
-									const asSTypedSemanticStatement& Statement =
-										HIR->statements[StatementIndex];
-									if (Statement.kind == asETypedSemanticStatementKind::Switch)
-									{
-										++SwitchCount;
-										ASSERT_THAT(IsTrue(Statement.children.GetLength() > 0));
-										ASSERT_THAT(IsTrue(
-											Statement.switchNormalization
-												!= asETypedSemanticSwitchNormalization::None));
-									}
-									else if (Statement.kind == asETypedSemanticStatementKind::Case
-										&& Statement.fallsThrough)
-									{
-										++FallthroughCount;
-									}
+									ASSERT_THAT(AreEqual(FString(TEXT("Divide by zero")), FString(UTF8_TO_TCHAR(Context->GetExceptionString())),
+										*Case.Describe(TEXT("switch exception path should preserve the fork's exact divide-by-zero text"))));
 								}
-								ASSERT_THAT(AreEqual(1, SwitchCount));
-								const bool bExpectedFallthrough =
-									IsCase(CaseCase, "fallthrough")
-									|| IsCase(CaseCase, "grouped")
-									|| IsCase(ExitCase, "fallthrough");
-								ASSERT_THAT(AreEqual(
-									bExpectedFallthrough,
-									FallthroughCount > 0));
-							}
-
-							asIScriptEngine* const Engines[] = {
-								CaptureOffScriptEngine,
-								CaptureOnScriptEngine,
-							};
-							asIScriptFunction* const Entries[] = {
-								CaptureOffEntry,
-								CaptureOnEntry,
-							};
-							int32 Results[2] = {0, 0};
-							FString Exceptions[2];
-							for (int32 RunIndex = 0; RunIndex < 2; ++RunIndex)
-							{
-								asIScriptContext* const Context = Engines[RunIndex]->CreateContext();
-								ASSERT_THAT(IsNotNull(Context, *Case.Describe(TEXT("switch cell should create both contexts"))));
-								if (Context != nullptr)
+								else
 								{
-									ASSERT_THAT(AreEqual(
-										Expected.bThrows ? asEXECUTION_EXCEPTION : asEXECUTION_FINISHED,
-										PrepareAndExecute(Context, Entries[RunIndex]),
-										*Case.Describe(TEXT("switch execution should match selected exit"))));
-									if (Expected.bThrows)
-									{
-										Exceptions[RunIndex] = UTF8_TO_TCHAR(Context->GetExceptionString());
-									}
-									else
-									{
-										Results[RunIndex] = static_cast<int32>(Context->GetReturnDWord());
-									}
-									Context->Release();
+									const int32 ActualReturnValue = static_cast<int32>(Context->GetReturnDWord());
+									ASSERT_THAT(AreEqual(Expected.ReturnValue, ActualReturnValue,
+										*FString::Printf(TEXT("%s switch should return the exact selected trace. Expected=%d Actual=%d"),
+											*Case.GetId(), Expected.ReturnValue, ActualReturnValue)));
 								}
-							}
-							if (Expected.bThrows)
-							{
-								ASSERT_THAT(AreEqual(
-									FString(TEXT("Divide by zero")),
-									Exceptions[0],
-									*Case.Describe(TEXT("switch exception path should preserve the fork's exact divide-by-zero text"))));
-								ASSERT_THAT(AreEqual(Exceptions[0], Exceptions[1],
-									*Case.Describe(TEXT("HIR capture must preserve the exact switch exception"))));
-							}
-							else
-							{
-								ASSERT_THAT(AreEqual(Expected.ReturnValue, Results[0],
-									*FString::Printf(TEXT("%s switch should return the exact selected trace. Expected=%d Actual=%d"),
-										*Case.GetId(), Expected.ReturnValue, Results[0])));
-								ASSERT_THAT(AreEqual(Results[0], Results[1],
-									*Case.Describe(TEXT("HIR capture must preserve the exact switch VM result"))));
+								asUINT BytecodeLength = 0;
+								Entry->GetByteCode(&BytecodeLength);
+								ASSERT_THAT(IsTrue(BytecodeLength > 0, *Case.Describe(TEXT("switch entry should expose bytecode"))));
+								Context->Release();
 							}
 						}
 					}
-					CaptureOffScriptEngine->DiscardModule(ModuleNameUtf8.Get());
-					CaptureOnScriptEngine->DiscardModule(ModuleNameUtf8.Get());
-					ASSERT_THAT(IsNull(CaptureOffScriptEngine->GetModule(ModuleNameUtf8.Get(), asGM_ONLY_IF_EXISTS), *Case.Describe(TEXT("capture-off switch cell should discard its module"))));
-					ASSERT_THAT(IsNull(CaptureOnScriptEngine->GetModule(ModuleNameUtf8.Get(), asGM_ONLY_IF_EXISTS), *Case.Describe(TEXT("capture-on switch cell should discard its module"))));
+					ScriptEngine->DiscardModule(ModuleNameUtf8.Get());
+					ASSERT_THAT(IsNull(ScriptEngine->GetModule(ModuleNameUtf8.Get(), asGM_ONLY_IF_EXISTS), *Case.Describe(TEXT("switch cell should discard its module"))));
 				}
 			}
 		}
-		ASSERT_THAT(AreEqual(
-			UE_ARRAY_COUNT(SelectorCases) * UE_ARRAY_COUNT(CaseCases)
-				* UE_ARRAY_COUNT(ExitCases),
-			ObservedCaseCount,
-			TEXT("LANG-CF-SWITCH must execute every selector, case-shape, and exit cell")));
 	}
 };
 

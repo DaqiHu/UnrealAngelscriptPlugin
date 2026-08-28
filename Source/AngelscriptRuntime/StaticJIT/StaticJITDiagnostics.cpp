@@ -172,8 +172,8 @@ namespace
 		{
 		case FStaticJITDiagnostics::EArtifactCaptureState::Bytecode:
 			return TEXT("Bytecode");
-		case FStaticJITDiagnostics::EArtifactCaptureState::VerifiedTypedHIR:
-			return TEXT("VerifiedTypedHIR");
+		case FStaticJITDiagnostics::EArtifactCaptureState::VerifiedCanonicalAST:
+			return TEXT("VerifiedCanonicalAST");
 		default:
 			return TEXT("Unknown");
 		}
@@ -240,17 +240,17 @@ namespace
 
 #if AS_CAN_GENERATE_JIT
 	const TCHAR* TypedCallTargetKindName(
-		const asETypedSemanticCallTargetKind Kind)
+		const EAngelscriptTypedASTJITCallTargetKind Kind)
 	{
 		switch (Kind)
 		{
-		case asETypedSemanticCallTargetKind::ScriptFunction:
+		case EAngelscriptTypedASTJITCallTargetKind::ScriptFunction:
 			return TEXT("ScriptFunction");
-		case asETypedSemanticCallTargetKind::SystemFunction:
+		case EAngelscriptTypedASTJITCallTargetKind::SystemFunction:
 			return TEXT("SystemFunction");
-		case asETypedSemanticCallTargetKind::ImportedFunction:
+		case EAngelscriptTypedASTJITCallTargetKind::ImportedFunction:
 			return TEXT("ImportedFunction");
-		case asETypedSemanticCallTargetKind::Unspecified:
+		case EAngelscriptTypedASTJITCallTargetKind::Unspecified:
 		default:
 			return TEXT("Unspecified");
 		}
@@ -859,9 +859,9 @@ namespace
 		Writer->WriteObjectEnd();
 	}
 
-	void WriteTypedSemanticFunctionDiagnostic(
+	void WriteCanonicalFunctionDiagnostic(
 		const TSharedRef<FDiagnosticJsonWriter>& Writer,
-		const FStaticJITDiagnostics::FTypedSemanticFunctionDiagnosticRecord&
+		const FStaticJITDiagnostics::FCanonicalFunctionDiagnosticRecord&
 			Diagnostic,
 		const TCHAR* FieldName = nullptr)
 	{
@@ -885,7 +885,8 @@ namespace
 		Writer->WriteValue(TEXT("receiverKind"), Diagnostic.ReceiverKind);
 		Writer->WriteValue(TEXT("receiverParameterIndex"),
 			Diagnostic.ReceiverParameterIndex);
-		Writer->WriteValue(TEXT("hirState"), Diagnostic.HIRState);
+		Writer->WriteValue(TEXT("canonicalASTState"),
+			Diagnostic.CanonicalASTState);
 		Writer->WriteValue(TEXT("cleanupPlanState"),
 			Diagnostic.CleanupPlanState);
 		Writer->WriteValue(TEXT("hasSuspendState"),
@@ -978,7 +979,7 @@ namespace
 			Diagnostic.ProcessedSource);
 		if (Diagnostic.SemanticFunction.IsSet())
 		{
-			WriteTypedSemanticFunctionDiagnostic(Writer,
+			WriteCanonicalFunctionDiagnostic(Writer,
 				Diagnostic.SemanticFunction.GetValue(),
 				TEXT("semanticFunction"));
 		}
@@ -1005,10 +1006,10 @@ namespace
 				Closure.bRecursionGuardAvailable);
 			Writer->WriteArrayStart(TEXT("functions"));
 			for (const FStaticJITDiagnostics::
-				FTypedSemanticFunctionDiagnosticRecord& Function
+				FCanonicalFunctionDiagnosticRecord& Function
 				: Closure.Functions)
 			{
-				WriteTypedSemanticFunctionDiagnostic(Writer, Function);
+				WriteCanonicalFunctionDiagnostic(Writer, Function);
 			}
 			Writer->WriteArrayEnd();
 			Writer->WriteArrayStart(TEXT("calls"));
@@ -1037,7 +1038,7 @@ namespace
 
 	void WriteProviderSemanticDiagnostic(
 		const TSharedRef<FDiagnosticJsonWriter>& Writer,
-		const FAngelscriptJITProviderCatalogTypedSemanticFunctionDiagnostic&
+		const FAngelscriptJITProviderCatalogCanonicalFunctionDiagnostic&
 			Diagnostic,
 		const TCHAR* FieldName = nullptr)
 	{
@@ -1058,7 +1059,8 @@ namespace
 		Writer->WriteValue(TEXT("receiverKind"), Diagnostic.ReceiverKind);
 		Writer->WriteValue(TEXT("receiverParameterIndex"),
 			Diagnostic.ReceiverParameterIndex);
-		Writer->WriteValue(TEXT("hirState"), Diagnostic.HIRState);
+		Writer->WriteValue(TEXT("canonicalASTState"),
+			Diagnostic.CanonicalASTState);
 		Writer->WriteValue(TEXT("cleanupPlanState"),
 			Diagnostic.CleanupPlanState);
 		Writer->WriteValue(TEXT("hasSuspendState"),
@@ -1203,8 +1205,8 @@ namespace
 			Diagnostics.CompiledExternalNativeCallCount);
 		Writer->WriteValue(TEXT("emitModuleCount"),
 			Diagnostics.EmitModuleCount);
-		Writer->WriteValue(TEXT("hasVerifiedTypedHIR"),
-			Diagnostics.bHasVerifiedTypedHIR);
+		Writer->WriteValue(TEXT("hasVerifiedCanonicalAST"),
+			Diagnostics.bHasVerifiedCanonicalAST);
 		Writer->WriteObjectEnd();
 		Writer->WriteValue(TEXT("taskError"), Diagnostics.TaskError);
 		Writer->WriteArrayStart(TEXT("functions"));
@@ -1381,8 +1383,8 @@ namespace
 				Request.RequestedBackendId);
 			Writer->WriteValue(TEXT("captureState"),
 				ArtifactCaptureStateName(Request.CaptureState));
-			Writer->WriteValue(TEXT("hirCaptureEnabled"),
-				Request.bHIRCaptureEnabled);
+			Writer->WriteValue(TEXT("canonicalASTCaptureEnabled"),
+				Request.bCanonicalASTCaptureEnabled);
 			Writer->WriteArrayStart(TEXT("fallbackChain"));
 			for (const FString& BackendId : Request.FallbackChain)
 			{
@@ -1408,8 +1410,8 @@ namespace
 				Request.CompiledSourceGraph.ExternalNativeCallCount);
 			Writer->WriteValue(TEXT("emitModuleCount"),
 				Request.CompiledSourceGraph.EmitModuleCount);
-			Writer->WriteValue(TEXT("hasVerifiedTypedHIR"),
-				Request.CompiledSourceGraph.bHasVerifiedTypedHIR);
+			Writer->WriteValue(TEXT("hasVerifiedCanonicalAST"),
+				Request.CompiledSourceGraph.bHasVerifiedCanonicalAST);
 			Writer->WriteObjectEnd();
 			Writer->WriteValue(TEXT("taskError"), Request.TaskError);
 			Writer->WriteArrayStart(TEXT("functions"));
@@ -1662,16 +1664,16 @@ FStaticJITDiagnostics::BuildArtifactRequestRecord(
 			return EArtifactFunctionDisposition::Unsupported;
 		}
 	};
-	const auto TypedHIRStateName = [](
-		const EAngelscriptStaticJITTypedHIRState State)
+	const auto CanonicalASTStateName = [](
+		const EAngelscriptStaticJITCanonicalASTState State)
 	{
 		switch (State)
 		{
-		case EAngelscriptStaticJITTypedHIRState::Verified:
+		case EAngelscriptStaticJITCanonicalASTState::Verified:
 			return TEXT("Verified");
-		case EAngelscriptStaticJITTypedHIRState::Invalid:
+		case EAngelscriptStaticJITCanonicalASTState::Invalid:
 			return TEXT("Invalid");
-		case EAngelscriptStaticJITTypedHIRState::Missing:
+		case EAngelscriptStaticJITCanonicalASTState::Missing:
 		default:
 			return TEXT("Missing");
 		}
@@ -1698,65 +1700,65 @@ FStaticJITDiagnostics::BuildArtifactRequestRecord(
 		}
 	};
 	const auto InvocationKindName = [](
-		const asETypedSemanticInvocationKind Kind)
+		const EAngelscriptTypedASTJITInvocationKind Kind)
 	{
 		switch (Kind)
 		{
-		case asETypedSemanticInvocationKind::GlobalInitializer:
+		case EAngelscriptTypedASTJITInvocationKind::GlobalInitializer:
 			return TEXT("GlobalInitializer");
-		case asETypedSemanticInvocationKind::InstanceMethod:
+		case EAngelscriptTypedASTJITInvocationKind::InstanceMethod:
 			return TEXT("InstanceMethod");
-		case asETypedSemanticInvocationKind::Constructor:
+		case EAngelscriptTypedASTJITInvocationKind::Constructor:
 			return TEXT("Constructor");
-		case asETypedSemanticInvocationKind::Destructor:
+		case EAngelscriptTypedASTJITInvocationKind::Destructor:
 			return TEXT("Destructor");
-		case asETypedSemanticInvocationKind::Factory:
+		case EAngelscriptTypedASTJITInvocationKind::Factory:
 			return TEXT("Factory");
-		case asETypedSemanticInvocationKind::Imported:
+		case EAngelscriptTypedASTJITInvocationKind::Imported:
 			return TEXT("Imported");
-		case asETypedSemanticInvocationKind::System:
+		case EAngelscriptTypedASTJITInvocationKind::System:
 			return TEXT("System");
-		case asETypedSemanticInvocationKind::Funcdef:
+		case EAngelscriptTypedASTJITInvocationKind::Funcdef:
 			return TEXT("Funcdef");
-		case asETypedSemanticInvocationKind::Synthesized:
+		case EAngelscriptTypedASTJITInvocationKind::Synthesized:
 			return TEXT("Synthesized");
-		case asETypedSemanticInvocationKind::Global:
+		case EAngelscriptTypedASTJITInvocationKind::Global:
 		default:
 			return TEXT("Global");
 		}
 	};
 	const auto ReceiverKindName = [](
-		const asETypedSemanticReceiverKind Kind)
+		const EAngelscriptTypedASTJITReceiverKind Kind)
 	{
 		switch (Kind)
 		{
-		case asETypedSemanticReceiverKind::NativeObjectThis:
+		case EAngelscriptTypedASTJITReceiverKind::NativeObjectThis:
 			return TEXT("NativeObjectThis");
-		case asETypedSemanticReceiverKind::ExternalImplicitThis:
+		case EAngelscriptTypedASTJITReceiverKind::ExternalImplicitThis:
 			return TEXT("ExternalImplicitThis");
-		case asETypedSemanticReceiverKind::MixinFirstParameter:
+		case EAngelscriptTypedASTJITReceiverKind::MixinFirstParameter:
 			return TEXT("MixinFirstParameter");
-		case asETypedSemanticReceiverKind::None:
+		case EAngelscriptTypedASTJITReceiverKind::None:
 		default:
 			return TEXT("None");
 		}
 	};
 	const auto CleanupPlanStateName = [](
-		const asETypedSemanticCleanupPlanState State)
+		const EAngelscriptTypedASTJITCleanupPlanState State)
 	{
 		switch (State)
 		{
-		case asETypedSemanticCleanupPlanState::VerifiedEmpty:
+		case EAngelscriptTypedASTJITCleanupPlanState::VerifiedEmpty:
 			return TEXT("VerifiedEmpty");
-		case asETypedSemanticCleanupPlanState::NonEmpty:
+		case EAngelscriptTypedASTJITCleanupPlanState::NonEmpty:
 			return TEXT("NonEmpty");
-		case asETypedSemanticCleanupPlanState::PartialConstruction:
+		case EAngelscriptTypedASTJITCleanupPlanState::PartialConstruction:
 			return TEXT("PartialConstruction");
-		case asETypedSemanticCleanupPlanState::ScriptDestructor:
+		case EAngelscriptTypedASTJITCleanupPlanState::ScriptDestructor:
 			return TEXT("ScriptDestructor");
-		case asETypedSemanticCleanupPlanState::CompilerExceptionRegion:
+		case EAngelscriptTypedASTJITCleanupPlanState::CompilerExceptionRegion:
 			return TEXT("CompilerExceptionRegion");
-		case asETypedSemanticCleanupPlanState::Unverified:
+		case EAngelscriptTypedASTJITCleanupPlanState::Unverified:
 		default:
 			return TEXT("Unverified");
 		}
@@ -1816,9 +1818,9 @@ FStaticJITDiagnostics::BuildArtifactRequestRecord(
 		return Record;
 	};
 	const auto ConvertSemanticFunction = [&]
-		(const FAngelscriptStaticJITTypedSemanticFunctionDiagnostic& Source)
+		(const FAngelscriptStaticJITCanonicalFunctionDiagnostic& Source)
 	{
-		FTypedSemanticFunctionDiagnosticRecord Record;
+		FCanonicalFunctionDiagnosticRecord Record;
 		Record.FunctionKey = Source.FunctionKey;
 		Record.Role = TypedFunctionRoleName(Source.Role);
 		Record.RawTraitBits = Source.RawTraitBits;
@@ -1826,7 +1828,8 @@ FStaticJITDiagnostics::BuildArtifactRequestRecord(
 		Record.InvocationKind = InvocationKindName(Source.InvocationKind);
 		Record.ReceiverKind = ReceiverKindName(Source.ReceiverKind);
 		Record.ReceiverParameterIndex = Source.ReceiverParameterIndex;
-		Record.HIRState = TypedHIRStateName(Source.HIRState);
+		Record.CanonicalASTState =
+			CanonicalASTStateName(Source.CanonicalASTState);
 		Record.CleanupPlanState = CleanupPlanStateName(
 			Source.CleanupPlanState);
 		Record.bHasSuspendState = Source.bHasSuspendState;
@@ -1904,7 +1907,7 @@ FStaticJITDiagnostics::BuildArtifactRequestRecord(
 		Record.bRecursionGuardAvailable =
 			Source.bRecursionGuardAvailable;
 		Record.Functions.Reserve(Source.Functions.Num());
-		for (const FAngelscriptStaticJITTypedSemanticFunctionDiagnostic&
+		for (const FAngelscriptStaticJITCanonicalFunctionDiagnostic&
 			Function : Source.Functions)
 		{
 			Record.Functions.Add(ConvertSemanticFunction(Function));
@@ -1961,11 +1964,11 @@ FStaticJITDiagnostics::BuildArtifactRequestRecord(
 	Record.RequestedBackendId =
 		GeneratorOutput.Diagnostics.RequestedBackendId.ToString();
 	Record.CaptureState = GeneratorOutput.Diagnostics.CaptureProfile
-		== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR
-		? EArtifactCaptureState::VerifiedTypedHIR
+		== EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST
+		? EArtifactCaptureState::VerifiedCanonicalAST
 		: EArtifactCaptureState::Bytecode;
-	Record.bHIRCaptureEnabled = Record.CaptureState
-		== EArtifactCaptureState::VerifiedTypedHIR;
+	Record.bCanonicalASTCaptureEnabled = Record.CaptureState
+		== EArtifactCaptureState::VerifiedCanonicalAST;
 	Record.FallbackChain.Reserve(
 		GeneratorOutput.Diagnostics.FallbackChain.Num());
 	for (const FAngelscriptStaticJITBackendId& BackendId
@@ -1991,8 +1994,8 @@ FStaticJITDiagnostics::BuildArtifactRequestRecord(
 		GeneratorOutput.Diagnostics.CompiledSourceGraph.ExternalNativeCallCount;
 	Record.CompiledSourceGraph.EmitModuleCount =
 		GeneratorOutput.Diagnostics.CompiledSourceGraph.EmitModuleCount;
-	Record.CompiledSourceGraph.bHasVerifiedTypedHIR =
-		GeneratorOutput.Diagnostics.CompiledSourceGraph.bHasVerifiedTypedHIR;
+	Record.CompiledSourceGraph.bHasVerifiedCanonicalAST =
+		GeneratorOutput.Diagnostics.CompiledSourceGraph.bHasVerifiedCanonicalAST;
 	Record.TaskError = GeneratorOutput.Diagnostics.TaskError;
 	Record.Functions.Reserve(GeneratorOutput.Functions.Num());
 	for (const FAngelscriptStaticJITFunctionResult& Function
@@ -2050,8 +2053,8 @@ BuildAngelscriptStaticJITGenerationDiagnostics(
 	Result.RequestKind = TEXT("StaticJITArtifact");
 	Result.RequestedBackendId = Record.RequestedBackendId;
 	Result.CaptureState = Record.CaptureState
-		== FStaticJITDiagnostics::EArtifactCaptureState::VerifiedTypedHIR
-		? TEXT("VerifiedTypedHIR") : TEXT("Bytecode");
+		== FStaticJITDiagnostics::EArtifactCaptureState::VerifiedCanonicalAST
+		? TEXT("VerifiedCanonicalAST") : TEXT("Bytecode");
 	Result.FallbackChain = Record.FallbackChain;
 	Result.SourceCompilePassCount =
 		Record.CompiledSourceGraph.SourceCompilePassCount;
@@ -2064,8 +2067,8 @@ BuildAngelscriptStaticJITGenerationDiagnostics(
 	Result.CompiledExternalNativeCallCount =
 		Record.CompiledSourceGraph.ExternalNativeCallCount;
 	Result.EmitModuleCount = Record.CompiledSourceGraph.EmitModuleCount;
-	Result.bHasVerifiedTypedHIR =
-		Record.CompiledSourceGraph.bHasVerifiedTypedHIR;
+	Result.bHasVerifiedCanonicalAST =
+		Record.CompiledSourceGraph.bHasVerifiedCanonicalAST;
 	Result.TaskError = Record.TaskError;
 
 	const auto CopySource = [](
@@ -2079,7 +2082,7 @@ BuildAngelscriptStaticJITGenerationDiagnostics(
 	};
 	const auto CopySemantic = [&](const auto& Source)
 	{
-		FAngelscriptJITGenerationTypedSemanticFunctionDiagnostic Copy;
+		FAngelscriptJITGenerationCanonicalFunctionDiagnostic Copy;
 		Copy.FunctionKey = Source.FunctionKey;
 		Copy.Role = Source.Role;
 		Copy.RawTraitBits = Source.RawTraitBits;
@@ -2087,7 +2090,7 @@ BuildAngelscriptStaticJITGenerationDiagnostics(
 		Copy.InvocationKind = Source.InvocationKind;
 		Copy.ReceiverKind = Source.ReceiverKind;
 		Copy.ReceiverParameterIndex = Source.ReceiverParameterIndex;
-		Copy.HIRState = Source.HIRState;
+		Copy.CanonicalASTState = Source.CanonicalASTState;
 		Copy.CleanupPlanState = Source.CleanupPlanState;
 		Copy.bHasSuspendState = Source.bHasSuspendState;
 		Copy.bHasExceptionCleanup = Source.bHasExceptionCleanup;

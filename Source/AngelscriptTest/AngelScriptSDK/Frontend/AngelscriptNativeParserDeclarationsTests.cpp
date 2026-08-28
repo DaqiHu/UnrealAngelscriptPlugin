@@ -201,9 +201,13 @@ public:
 			return;
 		}
 
-		const int ParseResult = ParseDeclScriptWithResult(BareEngine, "ParserDeclInterfaceImpl", "interface IThing { void Run(); } class FThing : IThing { void Run() { } }");
-		ASSERT_THAT(IsTrue(ParseResult < 0,
-			TEXT("Script-level interface declarations are currently rejected by the fork tokenizer/parser boundary")));
+		ParseDeclScript(*TestRunner, this->Assert, BareEngine, "ParserDeclInterfaceImpl", "interface IThing { void Run(); } class FThing : IThing { void Run() { } }", [&](const asCScriptNode& Root)
+		{
+			ASSERT_THAT(AreEqual(1, AngelscriptNativeTestSupport::CountNodesOfType(&Root, snInterface),
+				TEXT("Interface declaration should produce one interface node")));
+			ASSERT_THAT(AreEqual(1, AngelscriptNativeTestSupport::CountNodesOfType(&Root, snClass),
+				TEXT("Class implementing the interface should produce one class node")));
+		});
 	}
 
 	TEST_METHOD(ClassFinalAbstract)
@@ -391,9 +395,11 @@ public:
 			return;
 		}
 
-		const int ParseResult = ParseDeclScriptWithResult(BareEngine, "ParserDeclTypedef", "typedef int32 FScore;");
-		ASSERT_THAT(IsTrue(ParseResult < 0,
-			TEXT("Script-level typedef declarations are currently rejected by the fork tokenizer/parser boundary")));
+		ParseDeclScript(*TestRunner, this->Assert, BareEngine, "ParserDeclTypedef", "typedef int32 FScore;", [&](const asCScriptNode& Root)
+		{
+			ASSERT_THAT(AreEqual(1, AngelscriptNativeTestSupport::CountNodesOfType(&Root, snTypedef),
+				TEXT("Typedef declaration should produce one typedef node")));
+		});
 	}
 
 	TEST_METHOD(FuncdefDeclaration)

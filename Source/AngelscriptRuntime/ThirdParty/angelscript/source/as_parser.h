@@ -47,6 +47,9 @@
 
 BEGIN_AS_NAMESPACE
 
+struct asSQualTypeSyntaxAction;
+struct asSParameterDeclAction;
+
 //[UE++]: Export parser internals for the AngelscriptTest module.
 class ANGELSCRIPTRUNTIME_API asCParser
 //[UE--]
@@ -56,6 +59,8 @@ public:
 
 	asCParser(asCBuilder *builder);
 	~asCParser();
+
+	void SetSema(class asCSema* inSema) { sema = inSema; }
 
 	int ParseFunctionDefinition(asCScriptCode *script, bool expectListPattern);
 	int ParsePropertyDeclaration(asCScriptCode *script, bool isAppInterface);
@@ -85,9 +90,23 @@ protected:
 	void Info(const asCString &text, sToken *token);
 
 	asCScriptNode *CreateNode(eScriptNode type);
+	void BindParsedStatementIdentity(
+		const asCScriptNode* node,
+		asASTStmtId statement);
+	asASTStmtId FindExactParsedStatementIdentity(
+		const asCScriptNode* node) const;
 
-	asCScriptNode *ParseFunctionDefinition();
-	asCScriptNode *ParseParameterList();
+	asCScriptNode *ParseFunctionDefinition(asASTDeclId* outImportDecl = 0);
+	asCScriptNode *ParseParameterList(asASTDeclId callableDecl = asASTDeclId());
+	asSQualTypeSyntaxAction BuildQualTypeSyntaxAction(
+		const asCScriptNode* typeNode,
+		const asCScriptNode* typeMod);
+	void BuildLambdaParameterAction(
+		asCScriptNode* typeNode,
+		asCScriptNode* typeMod,
+		asCScriptNode* nameNode,
+		asCArray<asSParameterDeclAction>& actions,
+		asCQualType& recoveryReturnType);
 	asCScriptNode *SuperficiallyParseExpression();
 	asCScriptNode *ParseType(bool allowConst, bool allowVariableType = false, bool allowAuto = false);
 	asCScriptNode *ParseTypeMod(bool isParam);
@@ -109,6 +128,7 @@ protected:
 #ifndef AS_NO_COMPILER
 	// Statements
 	asCScriptNode *SuperficiallyParseStatementBlock();
+	asCScriptNode *ParseFunctionStatementBlock();
 	asCScriptNode *SuperficiallyParseStatement();
 	asCScriptNode *SuperficiallyParseVarInit();
 	asCScriptNode *ParseStatementBlock();
@@ -133,7 +153,7 @@ protected:
 	asCScriptNode *ParseImport();
 	asCScriptNode *ParseScript(bool inBlock);
 	asCScriptNode *ParseNamespace();
-	asCScriptNode *ParseFunction(bool isMethod = false);
+	asCScriptNode *ParseFunction(bool isMethod = false, bool notifySemaAfterParams = true, asCScriptNode* prefixChild = 0);
 	asCScriptNode *ParseFuncDef();
 	asCScriptNode *ParseClass();
 	asCScriptNode *ParseMixin();
@@ -144,7 +164,7 @@ protected:
 	asCScriptNode *ParseVirtualPropertyDecl(bool isMethod, bool isInterface);
 	asCScriptNode *ParseEnumeration();
 	asCScriptNode *ParseTypedef();
-	void ParseMethodAttributes(asCScriptNode* funcNode);
+	void ParseMethodAttributes(asCScriptNode* funcNode, asDWORD* canonicalTraits = 0);
 	bool IsVarDecl();
 	bool IsVirtualPropertyDecl();
 	bool IsFuncDecl(bool isMethod);
@@ -169,7 +189,7 @@ protected:
 	asCScriptNode *ParseExprPostOp();
 	asCScriptNode *ParseExprValue();
 	asCScriptNode *ParseArgList(bool withParenthesis = true);
-	asCScriptNode *ParseFunctionCall();
+	asCScriptNode *ParseFunctionCall(bool notifySema = true);
 	asCScriptNode *ParseVariableAccess();
 	asCScriptNode *ParseConstructCall();
 	asCScriptNode *ParseCast();
@@ -204,11 +224,18 @@ protected:
 	asCBuilder      *builder;
 	asCScriptCode   *script;
 	asCScriptNode   *scriptNode;
+	class asCSema   *sema;
 
 	asCString tempString; // Used for reduzing amount of dynamic allocations
 
 	sToken       lastToken;
 	size_t       sourcePos;
+	struct asSParsedStatementBinding
+	{
+		const asCScriptNode* node;
+		asASTStmtId statement;
+	};
+	asCArray<asSParsedStatementBinding> parsedStatementBindings;
 };
 
 END_AS_NAMESPACE

@@ -640,15 +640,6 @@ int asCReader::CommitFunctionArtifactToExisting(
 		target->scriptData->artifactCanonicalSource;
 	artifact->scriptData->artifactDependencies.SetLength(0);
 
-	// HIR is valid only for the exact source compilation that created its
-	// function owner. A Cache donor is reconstructed from persisted VM state and
-	// must never donate an injected/stale sidecar; the target's provisional
-	// sidecar likewise cannot survive replacement by restored bytecode. Clear
-	// both owners explicitly before swapping ScriptFunctionData so this remains
-	// fail-closed even if a future donor construction path starts with HIR.
-	artifact->DiscardTypedSemanticFunction();
-	target->DiscardTypedSemanticFunction();
-
 	// From this point no validation can fail. Swap complete private state and
 	// debug parameter names, add the normal compiled-function references, then
 	// destroy the donor together with the target's previous empty state.
@@ -831,7 +822,7 @@ int asCReader::Read(bool *wasDebugInfoStripped)
 
 	// Before starting the load, make sure that
 	// any existing resources have been freed
-	module->InternalReset();
+	module->ResetExecutableGenerationForReplacement();
 
 	// Reject the old unframed payload before interpreting any of its bytecode.
 	// Its first byte was the encoded debug-info flag (0 or 1), so it cannot

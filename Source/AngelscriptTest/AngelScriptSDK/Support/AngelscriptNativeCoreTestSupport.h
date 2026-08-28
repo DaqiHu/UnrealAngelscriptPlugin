@@ -5,6 +5,8 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 
+#include "AngelscriptNativeCaseTestSupport.h"
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -20,6 +22,60 @@
 
 namespace AngelscriptNativeTestSupport
 {
+	// Generated-source logging is general test infrastructure: compiler,
+	// tokenizer, module, and language products all need the same bounded
+	// Automation-result reporting policy.  Keep it in the common support layer
+	// rather than requiring every caller to depend on language case helpers.
+	inline void PrintGeneratedAsSource(
+		FAutomationTestBase& Test,
+		const FString& SourceId,
+		const FString& ModuleName,
+		const FString& Source)
+	{
+		auto ReportLine = [&Test](
+			const FString& Message,
+			const bool bRetainInAutomationResult)
+		{
+			if (bRetainInAutomationResult)
+			{
+				Test.AddInfo(Message);
+			}
+			UE_LOG(LogTemp, Display, TEXT("%s"), *Message);
+		};
+
+		TArray<FString> Lines;
+		Source.ParseIntoArrayLines(Lines, false);
+		ReportLine(FString::Printf(
+			TEXT("[AS-SOURCE-BEGIN] Id=%s Module=%s Lines=%d"),
+			*SourceId,
+			*ModuleName,
+			Lines.Num()),
+			true);
+		FString NumberedSource;
+		for (int32 LineIndex = 0; LineIndex < Lines.Num(); ++LineIndex)
+		{
+			NumberedSource += FString::Printf(
+				TEXT("%04d | %s\n"),
+				LineIndex + 1,
+				*Lines[LineIndex]);
+		}
+		// Keep every generated line in the persistent Automation log, but emit
+		// one log event per source and do not retain the corpus in CQTest's
+		// result payload. Large data-driven products otherwise exceed the UE 5.8
+		// structured-log event path while the source text remains unchanged.
+		ReportLine(FString::Printf(
+			TEXT("[AS-SOURCE-CONTENT] Id=%s Module=%s\n%s"),
+			*SourceId,
+			*ModuleName,
+			*NumberedSource),
+			false);
+		ReportLine(FString::Printf(
+			TEXT("[AS-SOURCE-END] Id=%s Module=%s"),
+			*SourceId,
+			*ModuleName),
+			true);
+	}
+
 	inline constexpr asPWORD NativeTestEngineUserDataSlot = static_cast<asPWORD>(0x4E41544956454153ull);
 
 	struct FNativeMessageEntry
@@ -634,7 +690,8 @@ namespace AngelscriptNativeTestSupport
 			FAutomationTestBase& InTest,
 			FNativeTestEngine& InEngine,
 			const char* InModuleName,
-			const char* Source)
+			const char* Source,
+			asEASTRetentionPolicy RetentionPolicy = asAST_DISCARD_AFTER_CODEGEN)
 			: Test(InTest)
 			, Engine(InEngine)
 			, ModuleName(InModuleName != nullptr ? InModuleName : "")
@@ -646,7 +703,24 @@ namespace AngelscriptNativeTestSupport
 				return;
 			}
 
-			Module = BuildNativeModule(ScriptEngine, ModuleName.c_str(), Source);
+			Module = ScriptEngine->GetModule(ModuleName.c_str(), asGM_ALWAYS_CREATE);
+			if (Module != nullptr)
+			{
+				int Result = Module->SetASTRetentionPolicy(RetentionPolicy);
+				if (Result >= 0)
+				{
+					Result = Module->AddScriptSection(
+						ModuleName.c_str(), Source, static_cast<unsigned int>(std::strlen(Source)));
+				}
+				if (Result >= 0)
+				{
+					Result = Module->Build();
+				}
+				if (Result < 0)
+				{
+					Module = nullptr;
+				}
+			}
 			if (!Assert.IsNotNull(Module, TEXT("Native module scope should compile the module")))
 			{
 				const FString Messages = Engine.GetMessagesText();
@@ -661,8 +735,9 @@ namespace AngelscriptNativeTestSupport
 			FAutomationTestBase& InTest,
 			FNativeTestEngine& InEngine,
 			const char* InModuleName,
-			const std::string& Source)
-			: FScopedNativeModule(InTest, InEngine, InModuleName, Source.c_str())
+			const std::string& Source,
+			asEASTRetentionPolicy RetentionPolicy = asAST_DISCARD_AFTER_CODEGEN)
+			: FScopedNativeModule(InTest, InEngine, InModuleName, Source.c_str(), RetentionPolicy)
 		{
 		}
 
@@ -1103,6 +1178,16 @@ namespace AngelscriptNativeTestSupport
 			Reset();
 			script = InScript;
 			return ParseStatement();
+		}
+
+		asCScriptNode* ParseClassSnippet(
+			asCScriptCode* InScript,
+			class asCSema* InSema = nullptr)
+		{
+			Reset();
+			script = InScript;
+			SetSema(InSema);
+			return ParseClass();
 		}
 
 		int ParseScriptSnippetWithoutImplicitReset(asCScriptCode* InScript)

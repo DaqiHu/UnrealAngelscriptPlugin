@@ -574,7 +574,7 @@ namespace AngelscriptJITGeneration_Private
 		TArray<const TCHAR*> FallbackChain;
 		TArray<FAngelscriptJITProviderFunctionDiagnostic> Functions;
 		TArray<FAngelscriptJITProviderBackendAttemptDiagnostic> BackendAttempts;
-		TArray<FAngelscriptJITProviderTypedSemanticFunctionDiagnostic>
+		TArray<FAngelscriptJITProviderCanonicalFunctionDiagnostic>
 			SemanticFunctions;
 		TArray<FAngelscriptJITProviderTypedCallDiagnostic> Calls;
 		FAngelscriptJITProviderDiagnostics View;
@@ -749,7 +749,7 @@ namespace AngelscriptJITGeneration_Private
 
 				for (const auto& Semantic : Attempt.SemanticFunctions)
 				{
-					FAngelscriptJITProviderTypedSemanticFunctionDiagnostic&
+					FAngelscriptJITProviderCanonicalFunctionDiagnostic&
 						FlatSemantic =
 							OutFlat.SemanticFunctions.AddDefaulted_GetRef();
 					FlatSemantic.FunctionKey = Semantic.FunctionKey;
@@ -760,7 +760,8 @@ namespace AngelscriptJITGeneration_Private
 					FlatSemantic.ReceiverKind = *Semantic.ReceiverKind;
 					FlatSemantic.ReceiverParameterIndex =
 						Semantic.ReceiverParameterIndex;
-					FlatSemantic.HIRState = *Semantic.HIRState;
+					FlatSemantic.CanonicalASTState =
+						*Semantic.CanonicalASTState;
 					FlatSemantic.CleanupPlanState = *Semantic.CleanupPlanState;
 					FlatSemantic.bHasSuspendState =
 						Semantic.bHasSuspendState ? 1u : 0u;
@@ -852,8 +853,8 @@ namespace AngelscriptJITGeneration_Private
 		OutFlat.View.CompiledExternalNativeCallCount =
 			Diagnostics.CompiledExternalNativeCallCount;
 		OutFlat.View.EmitModuleCount = Diagnostics.EmitModuleCount;
-		OutFlat.View.bHasVerifiedTypedHIR =
-			Diagnostics.bHasVerifiedTypedHIR ? 1u : 0u;
+		OutFlat.View.bHasVerifiedCanonicalAST =
+			Diagnostics.bHasVerifiedCanonicalAST ? 1u : 0u;
 		OutFlat.View.TaskError = *Diagnostics.TaskError;
 		OutFlat.View.Functions = OutFlat.Functions.GetData();
 		OutFlat.View.FunctionCount =
@@ -918,7 +919,7 @@ namespace AngelscriptJITGeneration_Private
 		if (!Flat.SemanticFunctions.IsEmpty())
 		{
 			Source += FString::Printf(TEXT(
-				"\tstatic thread_local FAngelscriptJITProviderTypedSemanticFunctionDiagnostic GDiagnosticSemanticFunctions[%d];\n"),
+				"\tstatic thread_local FAngelscriptJITProviderCanonicalFunctionDiagnostic GDiagnosticSemanticFunctions[%d];\n"),
 				Flat.SemanticFunctions.Num());
 			for (int32 Index = 0; Index < Flat.SemanticFunctions.Num(); ++Index)
 			{
@@ -940,8 +941,9 @@ namespace AngelscriptJITGeneration_Private
 					*Prefix, *EscapeJson(Semantic.ReceiverKind));
 				Source += FString::Printf(TEXT("\t%s.ReceiverParameterIndex = %d;\n"),
 					*Prefix, Semantic.ReceiverParameterIndex);
-				Source += FString::Printf(TEXT("\t%s.HIRState = TEXT(\"%s\");\n"),
-					*Prefix, *EscapeJson(Semantic.HIRState));
+				Source += FString::Printf(TEXT(
+					"\t%s.CanonicalASTState = TEXT(\"%s\");\n"),
+					*Prefix, *EscapeJson(Semantic.CanonicalASTState));
 				Source += FString::Printf(TEXT("\t%s.CleanupPlanState = TEXT(\"%s\");\n"),
 					*Prefix, *EscapeJson(Semantic.CleanupPlanState));
 				Source += FString::Printf(TEXT("\t%s.bHasSuspendState = %u;\n"),
@@ -1179,8 +1181,8 @@ namespace AngelscriptJITGeneration_Private
 			"\tGProviderDiagnostics.EmitModuleCount = %u;\n"),
 			Diagnostics.EmitModuleCount);
 		Source += FString::Printf(TEXT(
-			"\tGProviderDiagnostics.bHasVerifiedTypedHIR = %u;\n"),
-			Diagnostics.bHasVerifiedTypedHIR);
+			"\tGProviderDiagnostics.bHasVerifiedCanonicalAST = %u;\n"),
+			Diagnostics.bHasVerifiedCanonicalAST);
 		Source += FString::Printf(TEXT(
 			"\tGProviderDiagnostics.TaskError = TEXT(\"%s\");\n"),
 			*EscapeJson(Diagnostics.TaskError));

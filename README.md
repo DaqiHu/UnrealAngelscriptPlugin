@@ -65,9 +65,15 @@ and module-state records. Packages do not require a pre-generated script cache.
 
 Cache V2 never persists process-local FunctionIds. Logical functions use stable
 BLAKE3-256 keys, and each Engine rebuilds the stable-key-to-current-FunctionId
-route. StaticJIT providers consume the same stable identity plus content,
-profile, and ABI coordinates; a missing or stale Native entry falls back to VM
-without changing cache validity.
+route. Optional retain-policy AST bodies are stored as pointer-free
+`ASTBodySidecar` records (kind 8) and are never mixed into `SaveByteCode` or
+VM `FunctionBody` bytes. StaticJIT providers consume the same stable identity
+plus content, profile, and ABI coordinates; a missing or stale Native entry
+falls back to VM without changing cache validity. New engines default to
+`asCOMPILER_PIPELINE_LEGACY`. `asCOMPILER_PIPELINE_CANONICAL` is a selectable
+capture/shadow attach; `IsCanonicalBytecodeCodeGenReady()` stays false until
+`Build()` publishes from `asCBytecodeCodeGen::Generate()`. Production Bytecode
+is still `asCCompiler`. LLVM/Clang are not linked.
 
 Project Settings exposes **AngelScript Incremental Cache**, including the
 shutdown flush timeout, Pack target, bounded immutable-preparation workers,
@@ -88,10 +94,13 @@ the Store.
 
 StaticJIT is a static AOT path: compiled AngelScript bytecode is translated to
 C++, built by Unreal Build Tool, and exposed at runtime by an
-`IAngelscriptJITArtifactProvider`. It does not generate machine code in the
-running process and no longer uses the legacy `FJITDatabase`, numeric
-FunctionId registration, whole-cache `DataGuid`, `.jit.hpp`, or paired
-`PrecompiledScript.Cache` protocol.
+`IAngelscriptJITArtifactProvider`. TypedASTJIT requires and directly consumes
+the verified sealed Canonical AST snapshot retained by that same source
+compilation; it never reconstructs source semantics from Bytecode or a dump
+file. It does not generate machine code in the running process and no
+longer uses the legacy `FJITDatabase`, numeric FunctionId registration,
+whole-cache `DataGuid`, `.jit.hpp`, or paired `PrecompiledScript.Cache`
+protocol.
 
 A host project that opts into generated StaticJIT owns a small Runtime carrier
 module, conventionally named `AngelscriptJIT`. Generation writes exactly one
@@ -179,9 +188,9 @@ separate emit set, then returns generated C++ and stable references. Its stable
 BackendIds are `bytecode` and `typed-ast`; a typed request uses the per-function
 fallback chain `typed-ast -> bytecode -> VM`. There is no production `dual`
 backend. TypedASTJIT complements BytecodeJIT/VM rather than removing them, and
-it is not a Runtime JIT: it consumes verified typed HIR captured in memory
-before that same generation Engine compiles source, and it never reads
-`.hir.txt` / `.hir.json` back. Ordinary call arguments materialize in reverse
+it is not a Runtime JIT: it lowers the verified sealed Canonical AST retained
+by the same authoritative generation source compile. Diagnostic AST text/JSON
+is never an artifact-generation input. Ordinary call arguments materialize in reverse
 formal order rather than left-to-right; mutation targets are single-evaluation;
 loop/switch transfers keep explicit phases and targets. Debug-frame position is
 not debugger, coverage, or loop-timeout parity. Direct recursion needs a native

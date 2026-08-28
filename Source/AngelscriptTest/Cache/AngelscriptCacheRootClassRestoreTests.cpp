@@ -7,6 +7,10 @@
 #include "Shared/AngelscriptTestFixture.h"
 #include "UObject/UObjectGlobals.h"
 
+#include "StartAngelscriptHeaders.h"
+#include "source/as_module.h"
+#include "EndAngelscriptHeaders.h"
+
 #if WITH_ANGELSCRIPT_UNITTESTS
 
 TEST_CLASS_WITH_FLAGS(FAngelscriptCacheRootClassRestoreTests,
@@ -82,6 +86,8 @@ public:
 				*TestRunner, ETestEngineMode::IsolatedFull);
 			ASSERT_THAT(IsTrue(Producer.IsValid(),
 				TEXT("Producer Engine should initialize")));
+			Producer.GetEngine().NextCompileASTRetentionPolicy = static_cast<int32>(
+				asAST_RETAIN_SNAPSHOT);
 
 			const FString ScriptSource = ASTEST_AS(R"AS(
 				UCLASS()
@@ -125,6 +131,15 @@ public:
 				*Capture.Detail));
 			ASSERT_THAT(IsTrue(Capture.IsSuccess(),
 				TEXT("A complete reflected root class should be cacheable")));
+			int32 ASTBodySidecarCount = 0;
+			for (const FAngelscriptPreparedRecord& Record : Artifacts.Records)
+			{
+				ASTBodySidecarCount +=
+					Record.RecordId.Kind == EAngelscriptCacheRecordKind::ASTBodySidecar
+						? 1 : 0;
+			}
+			ASSERT_THAT(AreEqual(1, ASTBodySidecarCount,
+				TEXT("a retained root-class module must emit one shared Canonical AST sidecar")));
 		}
 
 		FAngelscriptCachePackPolicy PackPolicy;
@@ -160,6 +175,8 @@ public:
 			*TestRunner, ETestEngineMode::IsolatedFull);
 		ASSERT_THAT(IsTrue(Consumer.IsValid(),
 			TEXT("Consumer Engine should initialize")));
+		Consumer.GetEngine().NextCompileASTRetentionPolicy = static_cast<int32>(
+			asAST_RETAIN_SNAPSHOT);
 		const FAngelscriptCacheRestoreResult Restore =
 			RestoreAngelscriptCacheModule(
 				Consumer.GetEngine(),
@@ -186,6 +203,14 @@ public:
 				TEXT("ASCacheV2RootClassRestore"));
 		ASSERT_THAT(IsTrue(RestoredModule.IsValid()));
 		ASSERT_THAT(IsNotNull(RestoredModule->ScriptModule));
+		asIASTSnapshot* const Snapshot =
+			RestoredModule->ScriptModule->AcquireASTSnapshot(asAST_API_VERSION_1);
+		ASSERT_THAT(IsNotNull(Snapshot,
+			TEXT("retained root-class restore must publish its verified Canonical AST")));
+		if (Snapshot != nullptr)
+		{
+			Snapshot->Release();
+		}
 		ASSERT_THAT(AreEqual(1, RestoredModule->Classes.Num()));
 		const TSharedRef<FAngelscriptClassDesc>& RestoredClass =
 			RestoredModule->Classes[0];
@@ -211,7 +236,7 @@ public:
 			TEXT("The restored UFUNCTION should be invokable")));
 		ASSERT_THAT(AreEqual(42,
 			Invoker.CallAndReturn<int32>(INDEX_NONE),
-			TEXT("Restored property defaults and method dependencies should execute")));
+			TEXT("Restored reflected method dependencies should execute")));
 	}
 };
 

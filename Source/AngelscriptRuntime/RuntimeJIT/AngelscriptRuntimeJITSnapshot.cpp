@@ -764,6 +764,34 @@ FAngelscriptRuntimeJITSnapshotCaptureResult
 				EAngelscriptRuntimeJITDiagnosticReason::MalformedSnapshot);
 		}
 	}
+	const int32 PointerVariableCount = static_cast<int32>(
+		Function->scriptData->pointerVariablePos.GetLength());
+	for (int32 Index = 0; Index < PointerVariableCount; ++Index)
+	{
+		const int32 StackOffset = Function->scriptData->pointerVariablePos[Index];
+		if (StackOffset <= 0 || StackOffset
+			> static_cast<int32>(Function->scriptData->variableSpace))
+		{
+			return Failure(
+				EAngelscriptRuntimeJITSnapshotCaptureCode::InvalidFrameLayout,
+				EAngelscriptRuntimeJITDiagnosticReason::MalformedSnapshot);
+		}
+		const uint32 ByteOffset =
+			(static_cast<uint32>(Function->scriptData->variableSpace)
+				- static_cast<uint32>(StackOffset))
+			* static_cast<uint32>(sizeof(asDWORD));
+		if (!AddCanonicalLocalFrameValue(Values,
+			asCDataType::CreateNullHandle(), ByteOffset,
+			static_cast<uint32>(
+				Function->scriptData->variables.GetLength()
+				+ TemporaryVariableCount + Index),
+			bHasManagedValues))
+		{
+			return Failure(
+				EAngelscriptRuntimeJITSnapshotCaptureCode::InvalidFrameLayout,
+				EAngelscriptRuntimeJITDiagnosticReason::MalformedSnapshot);
+		}
+	}
 
 	TArray<asDWORD> Bytecode;
 	Bytecode.Append(Function->scriptData->byteCode.AddressOf(),

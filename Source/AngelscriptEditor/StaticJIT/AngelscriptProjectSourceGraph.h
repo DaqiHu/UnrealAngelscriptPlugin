@@ -12,21 +12,19 @@ struct IAngelscriptSourceProvider;
 
 namespace AngelscriptEditor::StaticJIT
 {
-	enum class EAngelscriptProjectSourceGraphRequestKind : uint8
-	{
-		StaticJITArtifact = 0,
-		DeveloperHIRDump,
-	};
-
 	struct FAngelscriptProjectSourceGraphCompileRequest
 	{
-		EAngelscriptProjectSourceGraphRequestKind RequestKind =
-			EAngelscriptProjectSourceGraphRequestKind::StaticJITArtifact;
 		FString ProjectFile;
 		EAngelscriptJITTargetProfile TargetProfile =
 			EAngelscriptJITTargetProfile::Invalid;
 		EAngelscriptStaticJITCaptureProfile CaptureProfile =
 			EAngelscriptStaticJITCaptureProfile::Bytecode;
+		/**
+		 * 0 = discard AST after CodeGen, 1 = retain sealed snapshot. A
+		 * VerifiedCanonicalAST request must select retention so its immutable
+		 * generation snapshot can own V1 AST leases.
+		 */
+		int32 ASTRetentionPolicy = 0;
 		/** Optional immutable authority captured from the primary Editor Engine. */
 		TSharedPtr<IAngelscriptSourceProvider> SourceProviderOverride;
 	};
@@ -51,9 +49,8 @@ namespace AngelscriptEditor::StaticJIT
 
 	/**
 	 * Shared Editor orchestration for complete project source compilation.
-	 * Request kind changes diagnostics/cache scratch ownership only; it never
-	 * selects a Static backend. The consumer must freeze pointer-free output
-	 * synchronously before this call destroys the generation Engine.
+	 * The consumer must freeze pointer-free output synchronously before this
+	 * call destroys the generation Engine.
 	 */
 	class ANGELSCRIPTEDITOR_API FAngelscriptProjectSourceGraph final
 	{

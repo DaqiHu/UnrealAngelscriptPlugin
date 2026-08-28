@@ -40,7 +40,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotCommandDiagnosticTests,
 		ASSERT_THAT(IsTrue(First.Json.Contains(
 			TEXT("\"requestedBackend\":\"typed-ast\""))));
 		ASSERT_THAT(IsTrue(First.Json.Contains(
-			TEXT("\"captureState\":\"VerifiedTypedHIR\""))));
+			TEXT("\"captureState\":\"VerifiedCanonicalAST\""))));
 		ASSERT_THAT(IsTrue(First.Json.Contains(TEXT("\"backendAttempts\""))));
 		ASSERT_THAT(IsTrue(First.Json.Contains(TEXT("\"callClosure\""))));
 		ASSERT_THAT(IsTrue(First.Json.Contains(TEXT("\"mapping\""))));

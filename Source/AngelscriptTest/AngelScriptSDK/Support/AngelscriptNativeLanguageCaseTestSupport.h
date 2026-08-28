@@ -41,56 +41,6 @@ namespace AngelscriptNativeTestSupport
 		Source.AppendChar(TEXT('\n'));
 	}
 
-	inline void PrintGeneratedAsSource(
-		FAutomationTestBase& Test,
-		const FString& SourceId,
-		const FString& ModuleName,
-		const FString& Source)
-	{
-		auto ReportLine = [&Test](
-			const FString& Message,
-			const bool bRetainInAutomationResult)
-		{
-			if (bRetainInAutomationResult)
-			{
-				Test.AddInfo(Message);
-			}
-			UE_LOG(LogTemp, Display, TEXT("%s"), *Message);
-		};
-
-		TArray<FString> Lines;
-		Source.ParseIntoArrayLines(Lines, false);
-		ReportLine(FString::Printf(
-			TEXT("[AS-SOURCE-BEGIN] Id=%s Module=%s Lines=%d"),
-			*SourceId,
-			*ModuleName,
-			Lines.Num()),
-			true);
-		FString NumberedSource;
-		for (int32 LineIndex = 0; LineIndex < Lines.Num(); ++LineIndex)
-		{
-			NumberedSource += FString::Printf(
-				TEXT("%04d | %s\n"),
-				LineIndex + 1,
-				*Lines[LineIndex]);
-		}
-		// Keep every generated line in the persistent Automation log, but emit
-		// one log event per source and do not retain the corpus in CQTest's
-		// result payload. Large data-driven products otherwise exceed the UE 5.8
-		// structured-log event path while the source text remains unchanged.
-		ReportLine(FString::Printf(
-			TEXT("[AS-SOURCE-CONTENT] Id=%s Module=%s\n%s"),
-			*SourceId,
-			*ModuleName,
-			*NumberedSource),
-			false);
-		ReportLine(FString::Printf(
-			TEXT("[AS-SOURCE-END] Id=%s Module=%s"),
-			*SourceId,
-			*ModuleName),
-			true);
-	}
-
 	inline FString MakeTypeReadExpression(
 		const FNativeTypeCase& TypeCase,
 		const TCHAR* VariableName,

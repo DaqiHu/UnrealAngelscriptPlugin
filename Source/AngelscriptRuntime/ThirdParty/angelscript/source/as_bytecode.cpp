@@ -950,6 +950,7 @@ void asCByteCode::OptimizeLocally(const asCArray<int> &tempVariableOffsets)
 				instr->stackInc = asBCInfo[asBC_LoadRObjR].stackInc;
 				instr->wArg[1] = instr->next->wArg[0];
 				*(asDWORD*)&instr->arg = *(asDWORD*)&instr->next->arg;
+				instr->relocationIndex = instr->next->relocationIndex;
 				DeleteInstruction(instr->next);
 				DeleteInstruction(curr);
 				instr = GoForward(instr);
@@ -964,6 +965,7 @@ void asCByteCode::OptimizeLocally(const asCArray<int> &tempVariableOffsets)
 				instr->stackInc = asBCInfo[asBC_LoadVObjR].stackInc;
 				instr->wArg[1] = instr->next->wArg[0];
 				*(asDWORD*)&instr->arg = *(asDWORD*)&instr->next->arg;
+				instr->relocationIndex = instr->next->relocationIndex;
 				DeleteInstruction(instr->next);
 				DeleteInstruction(curr);
 				instr = GoForward(instr);
@@ -2982,6 +2984,12 @@ asDWORD asCByteCode::GetLastInstrValueDW()
 	return *ARG_DW(last->arg);
 }
 
+void asCByteCode::SetLastInstructionRelocationIndex(int relocationIndex)
+{
+	if( last )
+		last->relocationIndex = relocationIndex;
+}
+
 //===================================================================
 
 asCByteInstruction::asCByteInstruction()
@@ -2997,6 +3005,7 @@ asCByteInstruction::asCByteInstruction()
 	wArg[2]       = 0;
 	size          = 0;
 	stackInc      = 0;
+	relocationIndex = -1;
 	marked        = false;
 	stackSize     = 0;
 }

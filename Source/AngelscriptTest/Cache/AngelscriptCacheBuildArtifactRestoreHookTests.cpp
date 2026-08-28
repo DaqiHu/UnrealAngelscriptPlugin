@@ -7,7 +7,6 @@
 #include "as_buildartifact.h"
 #include "as_module.h"
 #include "as_scriptfunction.h"
-#include "as_typed_semantic_ir.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS
 
@@ -52,9 +51,6 @@ int Answer()
 		int32 CallbackCount = 0;
 		int32 ByteCodeWordsBefore = -1;
 		int32 ByteCodeWordsAfter = -1;
-		bool bInstallTargetTypedHIRBeforeRestore = false;
-		bool bTargetTypedHIRPresentBeforeRestore = false;
-		bool bTargetTypedHIRPresentAfterRestore = false;
 		asEBuildArtifactRestoreResult LastResult =
 			asBUILD_ARTIFACT_RESTORE_MISS;
 	};
@@ -223,13 +219,6 @@ int Answer()
 		Context.ByteCodeWordsBefore = Function->scriptData != nullptr
 			? static_cast<int32>(Function->scriptData->byteCode.GetLength())
 			: -1;
-		if (Context.bInstallTargetTypedHIRBeforeRestore)
-		{
-			Function->SetTypedSemanticFunction(
-				asNEW(asCTypedSemanticFunction)());
-			Context.bTargetTypedHIRPresentBeforeRestore =
-				Function->GetTypedSemanticFunction() != nullptr;
-		}
 		if (Context.Mode == ECandidateMode::Miss)
 		{
 			Context.LastResult = asBUILD_ARTIFACT_RESTORE_MISS;
@@ -340,8 +329,6 @@ int Answer()
 		Context.ByteCodeWordsAfter = Function->scriptData != nullptr
 			? static_cast<int32>(Function->scriptData->byteCode.GetLength())
 			: -1;
-		Context.bTargetTypedHIRPresentAfterRestore =
-			Function->GetTypedSemanticFunction() != nullptr;
 		return Context.LastResult;
 	}
 
@@ -380,8 +367,6 @@ int Answer()
 		OutRestore.CallbackCount = 0;
 		OutRestore.ByteCodeWordsBefore = -1;
 		OutRestore.ByteCodeWordsAfter = -1;
-		OutRestore.bTargetTypedHIRPresentBeforeRestore = false;
-		OutRestore.bTargetTypedHIRPresentAfterRestore = false;
 		OutCompile = {};
 		OutFunctionId = -1;
 		OutValue = 0;
@@ -449,7 +434,6 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheBuildArtifactRestoreHookTests,
 			*TestRunner, Body, Debug, ProducerFunctionId)));
 
 		FRestoreContext Restore;
-		Restore.bInstallTargetTypedHIRBeforeRestore = true;
 		FCompileObservation Compile;
 		int32 ConsumerFunctionId = -1;
 		int32 Value = 0;
@@ -482,10 +466,6 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheBuildArtifactRestoreHookTests,
 		ASSERT_THAT(IsTrue(Compile.bSucceeded));
 		ASSERT_THAT(AreEqual(0, Restore.ByteCodeWordsBefore));
 		ASSERT_THAT(IsTrue(Restore.ByteCodeWordsAfter > 0));
-		ASSERT_THAT(IsTrue(Restore.bTargetTypedHIRPresentBeforeRestore,
-			TEXT("The restore hook must install its provisional target HIR sentinel before the donor commit")));
-		ASSERT_THAT(IsFalse(Restore.bTargetTypedHIRPresentAfterRestore,
-			TEXT("A successful cache donor commit must discard target HIR from the superseded source compilation")));
 		ASSERT_THAT(IsTrue(ProducerFunctionId != ConsumerFunctionId));
 		ASSERT_THAT(AreEqual(42, Value));
 	}

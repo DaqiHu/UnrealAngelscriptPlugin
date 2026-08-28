@@ -380,8 +380,8 @@ namespace
 			Diagnostics.CompiledExternalNativeCallCount =
 				Source.CompiledExternalNativeCallCount;
 			Diagnostics.EmitModuleCount = Source.EmitModuleCount;
-			Diagnostics.bHasVerifiedTypedHIR =
-				Source.bHasVerifiedTypedHIR != 0;
+			Diagnostics.bHasVerifiedCanonicalAST =
+				Source.bHasVerifiedCanonicalAST != 0;
 			Diagnostics.TaskError = Source.TaskError;
 
 			Diagnostics.Functions.Reserve(Source.FunctionCount);
@@ -442,9 +442,9 @@ namespace
 			Diagnostics.SemanticFunctions.Reserve(Source.SemanticFunctionCount);
 			for (uint32 Index = 0; Index < Source.SemanticFunctionCount; ++Index)
 			{
-				const FAngelscriptJITProviderTypedSemanticFunctionDiagnostic&
+				const FAngelscriptJITProviderCanonicalFunctionDiagnostic&
 					SourceFunction = Source.SemanticFunctions[Index];
-				FAngelscriptJITProviderCatalogTypedSemanticFunctionDiagnostic&
+				FAngelscriptJITProviderCatalogCanonicalFunctionDiagnostic&
 					Function = Diagnostics.SemanticFunctions.AddDefaulted_GetRef();
 				Function.FunctionKey = SourceFunction.FunctionKey;
 				Function.Role = SourceFunction.Role;
@@ -454,7 +454,8 @@ namespace
 				Function.ReceiverKind = SourceFunction.ReceiverKind;
 				Function.ReceiverParameterIndex =
 					SourceFunction.ReceiverParameterIndex;
-				Function.HIRState = SourceFunction.HIRState;
+				Function.CanonicalASTState =
+					SourceFunction.CanonicalASTState;
 				Function.CleanupPlanState = SourceFunction.CleanupPlanState;
 				Function.bHasSuspendState = SourceFunction.bHasSuspendState != 0;
 				Function.bHasExceptionCleanup =

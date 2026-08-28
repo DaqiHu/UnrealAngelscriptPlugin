@@ -169,6 +169,11 @@ private:
 	static int64 NormalizeSigned(const int64 Value, const uint8 WidthInBytes)
 	{
 		const uint64 UnsignedValue = NormalizeUnsigned(Value, WidthInBytes);
+		if (WidthInBytes == sizeof(uint64))
+		{
+			return static_cast<int64>(UnsignedValue);
+		}
+
 		const uint64 SignBit = uint64(1) << (WidthInBytes * 8 - 1);
 		if ((UnsignedValue & SignBit) == 0)
 		{
@@ -196,10 +201,9 @@ private:
 
 		if (EqualAnsi(TargetCase.CatalogName, "float64"))
 		{
-			const bool bUnsigned64Negative = EqualAnsi(SourceCase.CatalogName, "alias_uint64")
-				&& EqualAnsi(ValueCase.CatalogName, "negative");
-			const double FloatingValue = bUnsigned64Negative
-				? 18446744073709551615.0
+			const bool bUnsigned64Source = EqualAnsi(SourceCase.CatalogName, "alias_uint64");
+			const double FloatingValue = bUnsigned64Source
+				? static_cast<double>(static_cast<uint64>(SourceValue))
 				: static_cast<double>(SourceValue);
 			return FString::Printf(TEXT("%.17g"), FloatingValue);
 		}
@@ -368,7 +372,10 @@ public:
 								*Case.Describe(TEXT("accepted enum or alias conversion should resolve exactly"))));
 							if (Entry != nullptr)
 							{
-								ASSERT_THAT(AreEqual(ScriptEngine->GetTypeIdByDecl(TCHAR_TO_ANSI(*TargetType)),
+								const int ExpectedTargetTypeId = Module->GetTypeIdByDecl(TCHAR_TO_ANSI(*TargetType));
+								ASSERT_THAT(IsTrue(ExpectedTargetTypeId >= 0,
+									*Case.Describe(TEXT("accepted enum or alias conversion should resolve its target in the owning module"))));
+								ASSERT_THAT(AreEqual(ExpectedTargetTypeId,
 									Entry->GetReturnTypeId(),
 									*Case.Describe(TEXT("accepted enum or alias conversion should retain target metadata"))));
 								ASSERT_THAT(AreEqual(static_cast<int32>(asEXECUTION_FINISHED),
@@ -387,6 +394,22 @@ public:
 									ASSERT_THAT(AreEqual(static_cast<int32>(asEXECUTION_FINISHED),
 										ExecuteNoArgumentIntEntry(*ScriptEngine, *ValueVerifier, VerificationMarker),
 										*Case.Describe(TEXT("enum or alias value verifier should execute after the selected form"))));
+									if (VerificationMarker != 1)
+									{
+										asIScriptContext* const DebugContext = ScriptEngine->CreateContext();
+										if (DebugContext != nullptr)
+										{
+											const int DebugResult = PrepareAndExecute(DebugContext, Entry);
+											const uint64 RawValue = DebugResult == asEXECUTION_FINISHED
+												? DebugContext->GetReturnQWord()
+												: MAX_uint64;
+											UE_LOG(LogTemp, Error,
+												TEXT("[%s] conversion verifier=%d entryResult=%d rawReturn=0x%016llx"),
+												*Case.GetId(), VerificationMarker, DebugResult,
+												static_cast<unsigned long long>(RawValue));
+											DebugContext->Release();
+										}
+									}
 									ASSERT_THAT(AreEqual(1,
 										VerificationMarker,
 										*Case.Describe(TEXT("enum or alias conversion should preserve its converted value across the selected form"))));

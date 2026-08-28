@@ -2,6 +2,7 @@
 #include "StaticJIT/BytecodeJIT/AngelscriptBytecodes.h"
 #if AS_CAN_GENERATE_JIT
 #include "ClassGenerator/ASStruct.h"
+#include "StaticJIT/AngelscriptNativeFormCatalog.h"
 #include "Core/AngelscriptBindDatabase.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
 #include "AngelscriptEngine.h"
@@ -61,6 +62,8 @@ namespace
 			State->Forms.Add(ScriptFunction, NativeForm);
 			GNativeFormCount.fetch_add(1, std::memory_order_relaxed);
 		}
+		FAngelscriptNativeFormCatalog::Get().PublishFromRegistration(
+			Engine, ScriptFunction);
 	}
 
 }
@@ -113,6 +116,8 @@ bool FAngelscriptStaticJITNativeCallRegistry::Attach(
 		GExternalNativeCallDescriptorCount.fetch_add(
 			1, std::memory_order_relaxed);
 	}
+	FAngelscriptNativeFormCatalog::Get().PublishFromRegistration(
+		Engine, ScriptFunction);
 	return true;
 }
 

@@ -10,6 +10,10 @@
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 
+#include "StartAngelscriptHeaders.h"
+#include "source/as_module.h"
+#include "EndAngelscriptHeaders.h"
+
 #if WITH_ANGELSCRIPT_UNITTESTS
 
 namespace AngelscriptCacheClassGraphInheritanceRestoreTests_Private
@@ -111,6 +115,8 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheClassGraphInheritanceRestoreTests,
 			FAngelscriptTestFixture Producer(
 				*TestRunner, ETestEngineMode::IsolatedFull);
 			ASSERT_THAT(IsTrue(Producer.IsValid()));
+			Producer.GetEngine().NextCompileASTRetentionPolicy = static_cast<int32>(
+				asAST_RETAIN_SNAPSHOT);
 			const FString Source = ASTEST_AS(R"AS(
 				UCLASS()
 				class UCacheV2VftBase : UObject
@@ -215,6 +221,15 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheClassGraphInheritanceRestoreTests,
 				static_cast<uint32>(Capture.Error), Artifacts.Records.Num(),
 				Capture.ValidatedGraphRecordCount, *Capture.Detail));
 			ASSERT_THAT(IsTrue(Capture.IsSuccess()));
+			int32 ASTBodySidecarCount = 0;
+			for (const FAngelscriptPreparedRecord& Record : Artifacts.Records)
+			{
+				ASTBodySidecarCount +=
+					Record.RecordId.Kind == EAngelscriptCacheRecordKind::ASTBodySidecar
+						? 1 : 0;
+			}
+			ASSERT_THAT(AreEqual(1, ASTBodySidecarCount,
+				TEXT("a retained class graph must emit exactly one shared Canonical AST sidecar")));
 		}
 
 		FAngelscriptCachePackPolicy PackPolicy;
@@ -238,6 +253,8 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheClassGraphInheritanceRestoreTests,
 		FAngelscriptTestFixture Consumer(
 			*TestRunner, ETestEngineMode::IsolatedFull);
 		ASSERT_THAT(IsTrue(Consumer.IsValid()));
+		Consumer.GetEngine().NextCompileASTRetentionPolicy = static_cast<int32>(
+			asAST_RETAIN_SNAPSHOT);
 		const FAngelscriptCacheRestoreResult Restore = RestoreAngelscriptCacheModule(
 			Consumer.GetEngine(), Validated.GetValue(), Artifacts.ModuleKey, Limits);
 		TestRunner->AddInfo(FString::Printf(
@@ -251,6 +268,15 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheClassGraphInheritanceRestoreTests,
 			Consumer.GetEngine().GetModuleByModuleName(
 				TEXT("ASCacheV2ClassGraphInheritanceRestore"));
 		ASSERT_THAT(IsTrue(Restored.IsValid()));
+		ASSERT_THAT(IsNotNull(Restored->ScriptModule));
+		asIASTSnapshot* const Snapshot =
+			Restored->ScriptModule->AcquireASTSnapshot(asAST_API_VERSION_1);
+		ASSERT_THAT(IsNotNull(Snapshot,
+			TEXT("retained class-graph restore must publish its verified Canonical AST")));
+		if (Snapshot != nullptr)
+		{
+			Snapshot->Release();
+		}
 		ASSERT_THAT(AreEqual(3, Restored->Classes.Num()));
 		const TSharedRef<FAngelscriptClassDesc>* Base = FindClass(
 			*Restored, TEXT("UCacheV2VftBase"));

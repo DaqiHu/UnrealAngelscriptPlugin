@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Cache/AngelscriptCacheRemainingRecordTypes.h"
+#include "Cache/AngelscriptCacheASTBodySidecar.h"
 #include "Cache/AngelscriptCacheTypeSchema.h"
 #include "Misc/TVariant.h"
 
@@ -273,8 +274,8 @@ private:
 	{
 		using FEntry = TCapturedOffset<FAngelscriptFunctionBodyFieldCoordinate>;
 
-		// These are exactly the always-present fields: 1..15 plus field 24.
-		TStaticArray<FEntry, 16> HeaderOffsets;
+		// These are exactly the always-present fields: 1..15 plus fields 24 and 28.
+		TStaticArray<FEntry, 17> HeaderOffsets;
 		// Seven entries are always present for each dependency. The optional
 		// value occurrence has one exact slot per dependency instead of an
 		// over-reserved worst-case offsets array.
@@ -283,6 +284,13 @@ private:
 		TOptional<FEntry> DebugSidecarOffset;
 		TOptional<FEntry> DebugSidecarKindOffset;
 		TOptional<FEntry> DebugSidecarContentHashOffset;
+		TOptional<FEntry> ASTBodySidecarOffset;
+		TOptional<FEntry> ASTBodySidecarKindOffset;
+		TOptional<FEntry> ASTBodySidecarContentHashOffset;
+	};
+
+	struct FASTBodySidecarCapturedOffsetStorage final
+	{
 	};
 
 	struct FModuleStateCapturedOffsetStorage final
@@ -530,6 +538,9 @@ private:
 	using FDebugSidecarRecord = TDecodedRecordAlternative<
 		FAngelscriptCachedDebugSidecar,
 		TSingleCapturedOffsetStorage<FAngelscriptDebugSidecarFieldCoordinate>>;
+	using FASTBodySidecarRecord = TDecodedRecordAlternative<
+		FAngelscriptCacheASTBodySidecar,
+		FASTBodySidecarCapturedOffsetStorage>;
 	using FModuleSnapshotRecord = TDecodedRecordAlternative<
 		FAngelscriptCachedModuleSnapshot,
 		FModuleSnapshotCapturedOffsetStorage>;
@@ -541,6 +552,7 @@ private:
 		FModuleStateRecord,
 		FFunctionBodyRecord,
 		FDebugSidecarRecord,
+		FASTBodySidecarRecord,
 		FModuleSnapshotRecord>;
 
 	struct FPrivateConstructionToken final
@@ -577,6 +589,7 @@ public:
 	const FAngelscriptCachedModuleState* TryGetModuleState() const;
 	const FAngelscriptCachedFunctionBody* TryGetFunctionBody() const;
 	const FAngelscriptCachedDebugSidecar* TryGetDebugSidecar() const;
+	const FAngelscriptCacheASTBodySidecar* TryGetASTBodySidecar() const;
 	const FAngelscriptCachedModuleSnapshot* TryGetModuleSnapshot() const;
 
 	TOptional<uint64> FindCapturedOffset(

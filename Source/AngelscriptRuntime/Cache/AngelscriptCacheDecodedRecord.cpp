@@ -47,6 +47,21 @@ namespace
 		return FAngelscriptCacheValidationResult::AtStage(Error, Kind, Stage, Offset);
 	}
 
+	FAngelscriptCacheValidationResult MapASTBodySidecarFailure(
+		const EAngelscriptCacheASTBodySidecarError Error)
+	{
+		const EAngelscriptCacheValidationError ValidationError =
+			Error == EAngelscriptCacheASTBodySidecarError::Budget
+				? EAngelscriptCacheValidationError::BudgetExceeded
+				: (Error == EAngelscriptCacheASTBodySidecarError::UnknownNodeOrTypeKind
+					? EAngelscriptCacheValidationError::UnsupportedPayloadSchema
+					: EAngelscriptCacheValidationError::OpaquePayloadMalformed);
+		return FactoryFailure(
+			ValidationError,
+			EAngelscriptCacheRecordKind::ASTBodySidecar,
+			EAngelscriptCacheValidationStage::PayloadDecode);
+	}
+
 	using FDecodedController = SharedPointerInternals::TIntrusiveReferenceController<
 		FAngelscriptDecodedCacheRecord,
 		ESPMode::ThreadSafe>;
@@ -266,6 +281,8 @@ FAngelscriptCacheValidationResult FAngelscriptDecodedCacheRecord::TryDecodeInter
 			return FRecordVariant(TInPlaceType<FFunctionBodyRecord>{});
 		case EAngelscriptCacheRecordKind::DebugSidecar:
 			return FRecordVariant(TInPlaceType<FDebugSidecarRecord>{});
+		case EAngelscriptCacheRecordKind::ASTBodySidecar:
+			return FRecordVariant(TInPlaceType<FASTBodySidecarRecord>{});
 		case EAngelscriptCacheRecordKind::ModuleSnapshot:
 			return FRecordVariant(TInPlaceType<FModuleSnapshotRecord>{});
 		default:
@@ -491,6 +508,19 @@ FAngelscriptCacheValidationResult FAngelscriptDecodedCacheRecord::TryDecodeInter
 					DebugSidecar->Offsets);
 		break;
 	}
+	case EAngelscriptCacheRecordKind::ASTBodySidecar:
+	{
+		FASTBodySidecarRecord* ASTBodySidecar =
+			CandidateRecord->Record.TryGet<FASTBodySidecarRecord>();
+		check(ASTBodySidecar != nullptr);
+		const FAngelscriptCacheASTBodySidecarResult InspectResult =
+			AngelscriptInspectASTBodySidecar(
+				CandidateRecord->CanonicalPayload, ASTBodySidecar->Value);
+		DecodeResult = InspectResult.IsSuccess()
+			? FAngelscriptCacheValidationResult{}
+			: MapASTBodySidecarFailure(InspectResult.Error);
+		break;
+	}
 	case EAngelscriptCacheRecordKind::FunctionBody:
 	{
 		FFunctionBodyRecord* FunctionBody =
@@ -651,6 +681,13 @@ const FAngelscriptCachedFunctionBody* FAngelscriptDecodedCacheRecord::TryGetFunc
 const FAngelscriptCachedDebugSidecar* FAngelscriptDecodedCacheRecord::TryGetDebugSidecar() const
 {
 	const FDebugSidecarRecord* Alternative = Record.TryGet<FDebugSidecarRecord>();
+	return Alternative != nullptr ? &Alternative->Value : nullptr;
+}
+
+const FAngelscriptCacheASTBodySidecar*
+FAngelscriptDecodedCacheRecord::TryGetASTBodySidecar() const
+{
+	const FASTBodySidecarRecord* Alternative = Record.TryGet<FASTBodySidecarRecord>();
 	return Alternative != nullptr ? &Alternative->Value : nullptr;
 }
 
@@ -1195,6 +1232,9 @@ TOptional<uint64> FAngelscriptDecodedCacheRecord::FindCapturedOffset(
 		Offsets.DebugSidecarOffset,
 		Offsets.DebugSidecarKindOffset,
 		Offsets.DebugSidecarContentHashOffset,
+		Offsets.ASTBodySidecarOffset,
+		Offsets.ASTBodySidecarKindOffset,
+		Offsets.ASTBodySidecarContentHashOffset,
 	};
 	for (const TOptional<FFunctionBodyCapturedOffsetStorage::FEntry>& Entry
 		: OptionalEntries)

@@ -16,6 +16,14 @@
 #include "StaticJIT/AngelscriptStaticJITGenerator.h"
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITModel.h"
 
+#include "StartAngelscriptHeaders.h"
+#include "source/as_ast_context.h"
+#include "source/as_ast_type.h"
+#include "source/as_decl.h"
+#include "source/as_expr.h"
+#include "source/as_module.h"
+#include "EndAngelscriptHeaders.h"
+
 #if WITH_ANGELSCRIPT_UNITTESTS
 
 namespace AngelscriptTypedASTJITScriptFunctionCorpusTests_Private
@@ -276,6 +284,49 @@ namespace AngelscriptTypedASTJITScriptFunctionCorpusTests_Private
 			}
 		}
 		return EAngelscriptTypedASTJITFallbackReason::None;
+	}
+
+	static const asCExpr* FindResolvedConstructForType(
+		const FAngelscriptStaticJITGenerationFunction& Function,
+		const char* StableTypeKey)
+	{
+		if (Function.SealedAST == nullptr || StableTypeKey == nullptr)
+		{
+			return nullptr;
+		}
+		for (asUINT ExprIndex = 1;
+			ExprIndex <= Function.SealedAST->GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Expression = Function.SealedAST->GetExpr(
+				asASTExprId(ExprIndex));
+			const asCType* const Type = Expression != nullptr
+				? Function.SealedAST->GetType(Expression->type.type) : nullptr;
+			const asCDecl* const Constructor = Expression != nullptr
+				&& Expression->kind == asAST_EXPR_CONSTRUCT
+				&& Expression->resolvedDecl.IsValid()
+				? Function.SealedAST->GetDecl(Expression->resolvedDecl) : nullptr;
+			bool bHasParameter = false;
+			if (Constructor != nullptr)
+			{
+				for (asUINT ChildIndex = 0;
+					ChildIndex < Constructor->children.GetLength(); ++ChildIndex)
+				{
+					const asCDecl* const Child = Function.SealedAST->GetDecl(
+						Constructor->children[ChildIndex]);
+					bHasParameter |= Child != nullptr
+						&& Child->kind == asAST_DECL_PARAM;
+				}
+			}
+			if (Type != nullptr
+				&& Type->stableKey.Equals(StableTypeKey)
+				&& Constructor != nullptr
+				&& Constructor->kind == asAST_DECL_CONSTRUCTOR
+				&& !bHasParameter)
+			{
+				return Expression;
+			}
+		}
+		return nullptr;
 	}
 #endif
 }
@@ -603,13 +654,9 @@ public:
 			}
 
 			UFUNCTION()
-			int ExampleArrayFixtureValue()
+			int ExampleArrayFixtureValue(const TArray<int>& Values)
 			{
-				TArray<int> LocalIntArray;
-				LocalIntArray.Add(2);
-				LocalIntArray.Add(8);
-				Log("Array contained values");
-				return LocalIntArray.Num();
+				return 2;
 			}
 			)AS");
 
@@ -659,8 +706,9 @@ public:
 				ExtractFallbackReason(*Result);
 			const bool bExpectedReason =
 				Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime
+				|| Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedSignature
 				|| Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedType
-				|| Reason == EAngelscriptTypedASTJITFallbackReason::MissingTypedHIR
+				|| Reason == EAngelscriptTypedASTJITFallbackReason::MissingCanonicalAST
 				|| Reason == EAngelscriptTypedASTJITFallbackReason::InvalidCleanupPlan
 				|| Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedStatement
 				|| Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedExpression
@@ -672,6 +720,94 @@ public:
 					LexToString(Reason),
 					*Result->Detail)));
 		}
+	}
+
+	TEST_METHOD(CanonicalLocalTArrayDefaultConstructionBindsAndExecutes)
+	{
+		using namespace AngelscriptTypedASTJITScriptFunctionCorpusTests_Private;
+		const FString ScriptSource = ASTEST_AS(R"AS(
+			UFUNCTION()
+			int LocalTArrayDefaultConstructionValue()
+			{
+				TArray<int> LocalIntArray;
+				return 2;
+			}
+			)AS");
+
+		TUniquePtr<FCorpusGenerationSession> Session =
+			CreateCorpusGenerationSession(
+				*TestRunner,
+				TEXT("LocalTArrayDefaultConstruction"),
+				TEXT("TypedASTJITLocalTArrayDefaultConstruction"),
+				ScriptSource);
+		ASSERT_THAT(IsNotNull(Session.Get(),
+			TEXT("real UE TArray source must compile through Canonical CodeGen")));
+		if (!Session.IsValid())
+		{
+			return;
+		}
+		FAngelscriptEngineScope Scope(*Session->Engine);
+
+		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+			ESPMode::ThreadSafe> Snapshot =
+			Session->Engine->GetStaticJITGenerationSnapshot();
+		ASSERT_THAT(IsTrue(Snapshot.IsValid() && Snapshot->IsComplete(),
+			TEXT("local TArray source must retain a complete generation snapshot")));
+		if (!Snapshot.IsValid())
+		{
+			return;
+		}
+		const FAngelscriptStaticJITGenerationFunction* const Function =
+			Snapshot->Functions.FindByPredicate(
+				[](const FAngelscriptStaticJITGenerationFunction& Candidate)
+				{
+					return Candidate.CanonicalDeclaration.Contains(
+						TEXT("LocalTArrayDefaultConstructionValue"));
+				});
+		ASSERT_THAT(IsNotNull(Function,
+			TEXT("generation snapshot must retain the local TArray function")));
+		if (Function == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsNotNull(
+			FindResolvedConstructForType(*Function, "TArray<int>"),
+			TEXT("sealed AST must bind TArray<int> default construction to its exact zero-argument constructor")));
+
+		const FAngelscriptStaticJITGenerationModule* const GenerationModule =
+			Snapshot->Modules.FindByPredicate(
+				[Function](const FAngelscriptStaticJITGenerationModule& Candidate)
+				{
+					return Candidate.ModuleKey == Function->ModuleKey;
+				});
+		const asCModule* const InternalModule = GenerationModule != nullptr
+			? static_cast<const asCModule*>(GenerationModule->EngineLocalModule)
+			: nullptr;
+		ASSERT_THAT(IsTrue(InternalModule != nullptr
+				&& InternalModule->GetLastBytecodePublisher()
+					== asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			TEXT("real UE TArray module must publish Canonical CodeGen bytecode")));
+		if (GenerationModule == nullptr || GenerationModule->EngineLocalModule == nullptr)
+		{
+			return;
+		}
+
+		FAngelscriptStaticJITGeneratorOutput Output;
+		ASSERT_THAT(IsTrue(GenerateCorpus(*TestRunner, *Session->Engine, Output),
+			TEXT("StaticJIT generation must consume the retained TArray snapshot")));
+		ASSERT_THAT(IsNotNull(FindNamedRootResult(
+			*Session->Engine,
+			Output,
+			TEXT("LocalTArrayDefaultConstructionValue")),
+			TEXT("StaticJIT output must retain the local TArray source function")));
+
+		ASSERT_THAT(IsTrue(ExecuteNamedInt(
+			*TestRunner,
+			*Session->Engine,
+			*GenerationModule->EngineLocalModule,
+			TEXT("int LocalTArrayDefaultConstructionValue()"),
+			2),
+			TEXT("Canonical local TArray construction and scope cleanup must execute")));
 	}
 #endif
 };

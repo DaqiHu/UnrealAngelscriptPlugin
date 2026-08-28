@@ -4,7 +4,7 @@
  * Backend            : TypedASTJIT
  * Declaration        : int SemanticExhaustiveEnum(const int)
  * StableFunctionKey  : 0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4
- * OriginalSymbolSet  : ASJIT_0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4_52de55a9a6328e299cf7f8704913c970b8ca29f9de21e7623850392073ca7ecd
+ * OriginalSymbolSet  : ASJIT_0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4_9f66be3bac5f691ee91f3728c339fdd3b53089aa0b40a8ff647198f26b3c29df
  * TestSymbolSet      : AS_Test_Differential_TypedAST_SemanticExhaustiveEnum
  * CleanupPlan       : VerifiedEmpty (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -24,10 +24,10 @@
 /*
  * AngelScript Static JIT Function
  * Declaration       : int SemanticExhaustiveEnum(const int)
- * Source             : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:1
+ * Source             : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:5
  * StableFunctionKey  : 0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4
- * ExecutionHash      : 52de55a9a6328e299cf7f8704913c970b8ca29f9de21e7623850392073ca7ecd
- * DebugHash          : 68708e5118144807270fa93f1ddeb85a92b89ed2a131c0fed467dc787a1fbf1b
+ * ExecutionHash      : 9f66be3bac5f691ee91f3728c339fdd3b53089aa0b40a8ff647198f26b3c29df
+ * DebugHash          : eb35fee034448a8ea8818e4e236e9542c76c9ddb2744a6c4f421f31127dbd279
  * EntryAbiHash       : ac5e9740aa5289dba47d6e5ba3f40c6f1f11e575d2ab2615b198bbbc11568b3d
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
@@ -36,56 +36,64 @@
 static int32 AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_sem_s0);
+	const int32 as_ast_d16);
 
 static int32 AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_sem_s0)
+	const int32 as_ast_d16)
 {
-	TypedFrame.SetSourcePosition(103, 23);
-	const int8 as_sem_s1 = AngelscriptTypedASTJIT::WrapNarrow<int8>(as_sem_s0);
-	if (UNLIKELY(Execution.bExceptionThrown))
+	int8 as_ast_d17;
 	{
-		return int32{};
+		TypedFrame.SetSourcePosition(103, 23);
+		([&]() -> int8
+		{
+			const int8 as_ast_e151_value = AngelscriptTypedASTJIT::WrapNarrow<int8>(as_ast_d16);
+			int8& as_ast_e151_target = as_ast_d17;
+			as_ast_e151_target = as_ast_e151_value;
+			return as_ast_e151_target;
+		}());
 	}
-	const int32 as_sem_switch_selector_10 = static_cast<int32>(as_sem_s1);
-	if (UNLIKELY(Execution.bExceptionThrown))
 	{
-		return int32{};
+		TypedFrame.SetSourcePosition(104, 2);
+		const auto as_ast_stmt_84_condition = as_ast_d17;
+		if (UNLIKELY(Execution.bExceptionThrown))
+		{
+			return {};
+		}
+		switch (as_ast_stmt_84_condition)
+		{
+			case int8(0):
+				{
+					TypedFrame.SetSourcePosition(107, 3);
+					return int32(10);
+				}
+			case int8(1):
+				{
+					TypedFrame.SetSourcePosition(109, 3);
+					return int32(20);
+				}
+			case int8(2):
+				{
+					TypedFrame.SetSourcePosition(111, 3);
+					return int32(30);
+				}
+			default:
+				TypedFrame.SetSourcePosition(104, 2);
+				FStaticJITFunction::SetSwitchValueInvalidException(Execution);
+				return {};
+		}
+		if (UNLIKELY(Execution.bExceptionThrown))
+		{
+			return {};
+		}
 	}
-	switch (as_sem_switch_selector_10)
-	{
-		case int32(0):
-			TypedFrame.SetSourcePosition(106, 2);
-			{
-				TypedFrame.SetSourcePosition(107, 3);
-				return int32(10);
-			}
-			break;
-		case int32(1):
-			TypedFrame.SetSourcePosition(108, 2);
-			{
-				TypedFrame.SetSourcePosition(109, 3);
-				return int32(20);
-			}
-			break;
-		case int32(2):
-			TypedFrame.SetSourcePosition(110, 2);
-			{
-				TypedFrame.SetSourcePosition(111, 3);
-				return int32(30);
-			}
-			break;
-		default:
-			TypedFrame.SetSourcePosition(104, 2);
-			FStaticJITFunction::SetSwitchValueInvalidException(Execution);
-			return int32{};
-	}
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return int32{};
 }
 
 // AS Function : int SemanticExhaustiveEnum(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:5
 // JIT Entry   : Raw
 int32 AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_Raw(FScriptExecution& Execution, asDWORD p_0)
 {
@@ -106,7 +114,7 @@ int32 AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_Raw(FScriptExecution&
 }
 
 // AS Function : int SemanticExhaustiveEnum(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:5
 // JIT Entry   : VM
 void AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
@@ -115,7 +123,7 @@ void AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_VM(FScriptExecution& E
 }
 
 // AS Function : int SemanticExhaustiveEnum(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:5
 // JIT Entry   : Parms
 void AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
@@ -154,7 +162,7 @@ namespace
 				TEXT("int SemanticExhaustiveEnum(const int)"),
 				TEXT("/Angelscript/Game/ASStaticJITTypedControlFlowFixture.as"),
 				101u,
-				1u,
+				5u,
 				AngelscriptTestJITProbes::EIsolatedDifferentialCleanupPlanState::VerifiedEmpty,
 				0u,
 				FTypedASTJITDifferentialEntryRegistrationReferenceSlots,

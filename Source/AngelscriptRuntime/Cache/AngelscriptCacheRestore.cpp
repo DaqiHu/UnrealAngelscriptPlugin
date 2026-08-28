@@ -9,10 +9,14 @@
 #include "Core/AngelscriptType.h"
 #include "Hash/Blake3.h"
 #include "Misc/FileHelper.h"
+#include "Misc/ScopeExit.h"
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_module.h"
+#include "source/as_ast_context.h"
+#include "source/as_ast_sidecar.h"
 #include "source/as_objecttype.h"
+#include "source/as_runtime_type_bridge.h"
 #include "source/as_property.h"
 #include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
@@ -1715,6 +1719,7 @@ namespace AngelscriptCacheRestore_Private
 		FAngelscriptStableModuleKey ModuleKey;
 		TSharedPtr<FAngelscriptModuleDesc> ModuleDesc;
 		asCModule* StagingModule = nullptr;
+		bool bPublishRestoredCanonicalAST = false;
 		TArray<FAngelscriptFunctionRoute> CandidateRoutes;
 		TArray<FPreparedExternalFunction> ExternalFunctions;
 		uint32 RestoredTypeCount = 0;
@@ -2355,6 +2360,90 @@ public:
 				FunctionBody, DebugSidecar, nullptr});
 		}
 
+		const bool bRetainCanonicalAST =
+			TargetEngine.NextCompileASTRetentionPolicy
+				== static_cast<int32>(asAST_RETAIN_SNAPSHOT);
+		asCASTContext* RestoredCanonicalAST = nullptr;
+		ON_SCOPE_EXIT
+		{
+			if (RestoredCanonicalAST != nullptr)
+			{
+				asDELETE(RestoredCanonicalAST, asCASTContext);
+			}
+		};
+		if (bRetainCanonicalAST)
+		{
+			const FAngelscriptCacheRecordId* ASTBodySidecarRecordId = nullptr;
+			for (const FFunctionRestoreInput& Input : FunctionInputs)
+			{
+				if (Input.Body == nullptr || !Input.Body->ASTBodySidecar.IsSet())
+				{
+					return Failure(
+						EAngelscriptCacheRestoreError::CanonicalAstRestoreFailed,
+						EAngelscriptCacheRestoreStage::RestoreCanonicalAST,
+						TEXT("A retained exact-start function has no Canonical AST sidecar"));
+				}
+				const FAngelscriptCacheRecordId& CandidateRecordId =
+					Input.Body->ASTBodySidecar.GetValue();
+				if (ASTBodySidecarRecordId != nullptr
+					&& *ASTBodySidecarRecordId != CandidateRecordId)
+				{
+					return Failure(
+						EAngelscriptCacheRestoreError::CanonicalAstRestoreFailed,
+						EAngelscriptCacheRestoreStage::RestoreCanonicalAST,
+						TEXT("A module links more than one Canonical AST sidecar"));
+				}
+				ASTBodySidecarRecordId = &CandidateRecordId;
+			}
+			const FAngelscriptDecodedCacheRecord* ASTRecord =
+				ASTBodySidecarRecordId != nullptr
+					? FindRecord(Generation, *ASTBodySidecarRecordId) : nullptr;
+			const FAngelscriptCacheASTBodySidecar* ASTSidecar =
+				ASTRecord != nullptr ? ASTRecord->TryGetASTBodySidecar() : nullptr;
+			const FString ExpectedOwner = FString::Printf(TEXT("module:%s"),
+				*ModuleKey.Hash.ToHexString());
+			const FString ExpectedProfile = FString::Printf(TEXT("profile:%s"),
+				*Generation.Manifest.Profile.Hash.ToHexString());
+			if (ASTSidecar == nullptr
+				|| !ASTSidecar->FunctionKey.Equals(
+					ExpectedOwner, ESearchCase::CaseSensitive)
+				|| !ASTSidecar->Profile.Equals(
+					ExpectedProfile, ESearchCase::CaseSensitive))
+			{
+				return Failure(
+					EAngelscriptCacheRestoreError::CanonicalAstRestoreFailed,
+					EAngelscriptCacheRestoreStage::RestoreCanonicalAST,
+					TEXT("The Canonical AST sidecar owner or profile does not match the selected module"));
+			}
+			RestoredCanonicalAST = asNEW(asCASTContext);
+			if (RestoredCanonicalAST == nullptr)
+			{
+				return Failure(
+					EAngelscriptCacheRestoreError::CanonicalAstRestoreFailed,
+					EAngelscriptCacheRestoreStage::RestoreCanonicalAST,
+					TEXT("The target VM could not allocate a Canonical AST restore context"));
+			}
+			asSASTSidecarHeader ExpectedHeader;
+			const auto OwnerUtf8 = StringCast<UTF8CHAR>(*ExpectedOwner);
+			const auto ProfileUtf8 = StringCast<UTF8CHAR>(*ExpectedProfile);
+			ExpectedHeader.functionKey = reinterpret_cast<const char*>(OwnerUtf8.Get());
+			ExpectedHeader.profile = reinterpret_cast<const char*>(ProfileUtf8.Get());
+			ExpectedHeader.version = FAngelscriptCacheASTBodySidecar::SchemaVersion;
+			if (asCASTDecodeSidecar(
+				*RestoredCanonicalAST,
+				ExpectedHeader,
+				ASTRecord->GetCanonicalPayload().GetData(),
+				static_cast<asUINT>(ASTRecord->GetCanonicalPayload().Num()))
+				!= asAST_SIDECAR_OK
+				|| !RestoredCanonicalAST->IsPublishable())
+			{
+				return Failure(
+					EAngelscriptCacheRestoreError::CanonicalAstRestoreFailed,
+					EAngelscriptCacheRestoreStage::RestoreCanonicalAST,
+					TEXT("The Canonical AST sidecar could not be strictly decoded for exact startup"));
+			}
+		}
+
 		if (TargetEngine.GetModuleByModuleName(
 			ModuleInterface->CanonicalModuleName).IsValid())
 		{
@@ -2421,6 +2510,20 @@ public:
 				TEXT("The target VM could not create a staging module"));
 		}
 		StagingModule->baseModuleName = TCHAR_TO_UTF8(*ModuleDesc->ModuleName);
+		if (bRetainCanonicalAST)
+		{
+			if (StagingModule->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)
+				!= asSUCCESS)
+			{
+				DiscardStagingModule(ScriptEngine, StagingModule);
+				return Failure(
+					EAngelscriptCacheRestoreError::CanonicalAstRestoreFailed,
+					EAngelscriptCacheRestoreStage::RestoreCanonicalAST,
+					TEXT("The staging module rejected the requested Canonical AST retention policy"));
+			}
+			StagingModule->AdoptPendingCanonicalAST(RestoredCanonicalAST);
+			RestoredCanonicalAST = nullptr;
+		}
 		FString MaterializationFailure;
 
 		if (EnumTypeSchema != nullptr)
@@ -2622,6 +2725,40 @@ public:
 				EAngelscriptCacheRestoreStage::MaterializeTypes,
 				MoveTemp(MaterializationFailure));
 		}
+		if (bRetainCanonicalAST)
+		{
+			const asCASTContext* const CanonicalAST =
+				StagingModule->GetCanonicalASTContext();
+			asCString UnresolvedStableKey;
+			asCRuntimeTypeBridge RuntimeTypeBridge(&ScriptEngine);
+			if (CanonicalAST == nullptr
+				|| !RuntimeTypeBridge.ValidateContextTypes(
+					*CanonicalAST, &UnresolvedStableKey))
+			{
+				DiscardStagingModule(ScriptEngine, StagingModule);
+				return Failure(
+					EAngelscriptCacheRestoreError::CanonicalAstRestoreFailed,
+					EAngelscriptCacheRestoreStage::RestoreCanonicalAST,
+					FString::Printf(
+						TEXT("The target Engine could not resolve Canonical AST type '%s'"),
+						UnresolvedStableKey.GetLength() > 0
+							? UTF8_TO_TCHAR(UnresolvedStableKey.AddressOf())
+							: TEXT("<missing>")));
+			}
+			if (!RuntimeTypeBridge.ValidateAndBindContextDeclarations(
+				*CanonicalAST, *StagingModule, &UnresolvedStableKey))
+			{
+				DiscardStagingModule(ScriptEngine, StagingModule);
+				return Failure(
+					EAngelscriptCacheRestoreError::CanonicalAstRestoreFailed,
+					EAngelscriptCacheRestoreStage::RestoreCanonicalAST,
+					FString::Printf(
+						TEXT("The target Engine could not resolve Canonical AST declaration '%s'"),
+						UnresolvedStableKey.GetLength() > 0
+							? UTF8_TO_TCHAR(UnresolvedStableKey.AddressOf())
+							: TEXT("<missing>")));
+			}
+		}
 		ModuleDesc->ScriptModule = StagingModule;
 
 		FAngelscriptFunctionArtifactCodec RestoreCodec(
@@ -2781,6 +2918,7 @@ public:
 		OutPrepared.ModuleKey = ModuleKey;
 		OutPrepared.ModuleDesc = ModuleDesc;
 		OutPrepared.StagingModule = StagingModule;
+		OutPrepared.bPublishRestoredCanonicalAST = bRetainCanonicalAST;
 		OutPrepared.CandidateRoutes = MoveTemp(CandidateRoutes);
 		OutPrepared.ExternalFunctions =
 			MoveTemp(CandidateExternalFunctions);
@@ -2960,6 +3098,27 @@ public:
 						EAngelscriptCacheRestoreStage::ActivateModule,
 						TEXT("The target Engine changed before atomic restore commit"));
 				}
+			}
+		}
+		// All validation, materialization and target-conflict checks have now
+		// passed.  Publish the already sealed sidecar contexts while the modules
+		// are still private staging objects; any failure discards the entire
+		// batch before SwapInModules exposes a partial Cache V2 generation.
+		for (FPreparedModule& Prepared : PreparedModules)
+		{
+			if (!Prepared.bPublishRestoredCanonicalAST)
+			{
+				continue;
+			}
+			if (Prepared.StagingModule == nullptr
+				|| Prepared.StagingModule->PublishRestoredCanonicalASTSnapshot()
+					!= asSUCCESS)
+			{
+				DiscardPreparedModules(ScriptEngine, PreparedModules);
+				return Failure(
+					EAngelscriptCacheRestoreError::CanonicalAstRestoreFailed,
+					EAngelscriptCacheRestoreStage::RestoreCanonicalAST,
+					TEXT("A verified Canonical AST could not be published on a staging module"));
 			}
 		}
 

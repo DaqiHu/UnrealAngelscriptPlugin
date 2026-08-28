@@ -106,9 +106,13 @@ public:
 		ASSERT_THAT(IsTrue(Root->bHasVerifiedArtifactIdentity));
 		FDependencyProvider Provider(*Routes, TEXT("match-exact"));
 		ASSERT_THAT(IsFalse(Provider.Entries.IsEmpty()));
-		Provider.SetEntryDependencies(
-			Root->Identity.FunctionKey,
-			{MakeFunctionContent(*Helper)});
+		const bool bAttachedDependencies = Provider.SetEntryDependencies(
+			Root->Identity.FunctionKey, {MakeFunctionContent(*Helper)});
+		ASSERT_THAT(IsTrue(bAttachedDependencies));
+		if (!bAttachedDependencies)
+		{
+			return;
+		}
 		FAngelscriptJITProviderRegistry& Registry =
 			FAngelscriptJITProviderRegistry::Get();
 		ASSERT_THAT(IsTrue(
@@ -182,7 +186,13 @@ public:
 		FAngelscriptArtifactSemanticDependency Stale = MakeFunctionContent(*Helper);
 		Stale.ExpectedContentOrValue = MakeHash(TEXT("stale-helper-execution"));
 		FDependencyProvider Provider(*Routes, TEXT("match-changed"));
-		Provider.SetEntryDependencies(Root->Identity.FunctionKey, {Stale});
+		const bool bAttachedDependencies = Provider.SetEntryDependencies(
+			Root->Identity.FunctionKey, {Stale});
+		ASSERT_THAT(IsTrue(bAttachedDependencies));
+		if (!bAttachedDependencies)
+		{
+			return;
+		}
 		FAngelscriptJITProviderRegistry& Registry =
 			FAngelscriptJITProviderRegistry::Get();
 		ASSERT_THAT(IsTrue(

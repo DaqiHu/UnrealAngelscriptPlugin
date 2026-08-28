@@ -1,6 +1,8 @@
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITCallClosure.h"
+#include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITCanonical.h"
 
 #include "StartAngelscriptHeaders.h"
+#include "source/as_ast_context.h"
 #include "source/as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
@@ -48,15 +50,15 @@ namespace AngelscriptTypedASTJITCallClosure_Private
 	}
 
 	static const TCHAR* LexToString(
-		const asETypedSemanticCallTargetKind TargetKind)
+		const EAngelscriptTypedASTJITCallTargetKind TargetKind)
 	{
 		switch (TargetKind)
 		{
-		case asETypedSemanticCallTargetKind::ScriptFunction:
+		case EAngelscriptTypedASTJITCallTargetKind::ScriptFunction:
 			return TEXT("ScriptFunction");
-		case asETypedSemanticCallTargetKind::SystemFunction:
+		case EAngelscriptTypedASTJITCallTargetKind::SystemFunction:
 			return TEXT("SystemFunction");
-		case asETypedSemanticCallTargetKind::ImportedFunction:
+		case EAngelscriptTypedASTJITCallTargetKind::ImportedFunction:
 			return TEXT("ImportedFunction");
 		default:
 			return TEXT("Unspecified");
@@ -83,30 +85,114 @@ namespace AngelscriptTypedASTJITCallClosure_Private
 		}
 	}
 
-	static asSTypedSemanticSourceSpan FunctionSpan(
-		const asCTypedSemanticFunction* Function)
+	static asSSourceSpan CanonicalSpan(
+		const asCASTContext& Context,
+		const asCSourceRange& Range)
 	{
-		if (Function != nullptr
-			&& Function->rootStatement.IsValid()
-			&& Function->rootStatement.value < Function->statements.GetLength())
+		asSSourceSpan Span;
+		if (!Range.begin.IsValid())
 		{
-			return Function->statements[Function->rootStatement.value].span;
+			return Span;
 		}
-		if (Function != nullptr && Function->statements.GetLength() != 0)
+		asSSourceLineColumn LineColumn;
+		if (Context.GetSourceManager().GetLineColumn(
+				Range.begin, LineColumn))
 		{
-			return Function->statements[0].span;
+			Span.row = static_cast<asUINT>(LineColumn.row);
+			Span.column = static_cast<asUINT>(LineColumn.column);
 		}
-		if (Function != nullptr && Function->expressions.GetLength() != 0)
+		if (const char* const LogicalSection =
+			Context.GetSourceManager().GetLogicalKey(Range.begin.fileID))
 		{
-			return Function->expressions[0].span;
+			Span.section = LogicalSection;
+		}
+		return Span;
+	}
+
+	static const asCDecl* GetCanonicalFunctionDecl(
+		const FAngelscriptTypedASTJITCallClosureFunctionInput& Function)
+	{
+		if (Function.Eligibility.SealedAST == nullptr
+			|| !Function.Eligibility.SealedAST->IsPublishable()
+			|| !Function.Eligibility.CanonicalFunctionDecl.IsValid())
+		{
+			return nullptr;
+		}
+		return Function.Eligibility.SealedAST->GetDecl(
+			Function.Eligibility.CanonicalFunctionDecl);
+	}
+
+	static asSSourceSpan FunctionInputSpan(
+		const FAngelscriptTypedASTJITCallClosureFunctionInput& Function)
+	{
+		if (const asCDecl* const Decl = GetCanonicalFunctionDecl(Function))
+		{
+			return CanonicalSpan(*Function.Eligibility.SealedAST, Decl->range);
 		}
 		return {};
+	}
+
+	static int32 FindExactCanonicalFunctionIndex(
+		const TConstArrayView<
+			FAngelscriptTypedASTJITCallClosureFunctionInput> Functions,
+		const asCASTContext& Context,
+		const asASTDeclId TargetDecl,
+		bool& bOutAmbiguous)
+	{
+		bOutAmbiguous = false;
+		int32 Match = INDEX_NONE;
+		for (int32 Index = 0; Index < Functions.Num(); ++Index)
+		{
+			const FAngelscriptTypedASTJITCallClosureFunctionInput& Candidate =
+				Functions[Index];
+			if (Candidate.Eligibility.SealedAST != &Context
+				|| Candidate.Eligibility.CanonicalFunctionDecl != TargetDecl
+				|| GetCanonicalFunctionDecl(Candidate) == nullptr)
+			{
+				continue;
+			}
+			if (Match != INDEX_NONE)
+			{
+				bOutAmbiguous = true;
+				return INDEX_NONE;
+			}
+			Match = Index;
+		}
+		return Match;
+	}
+
+	static FString DescribeCanonicalExpression(
+		const asCASTContext& Context,
+		const asCExpr& Expression)
+	{
+		TArray<FString> Children;
+		Children.Reserve(static_cast<int32>(
+			Expression.children.GetLength()));
+		for (asUINT Index = 0;
+			Index < Expression.children.GetLength(); ++Index)
+		{
+			const asASTExprId ChildId = Expression.children[Index];
+			const asCExpr* const Child = Context.GetExpr(ChildId);
+			Children.Add(Child != nullptr
+				? FString::Printf(TEXT("%u:kind=%u:decl=%u:literal=%s"),
+					ChildId.value, static_cast<uint32>(Child->kind),
+					Child->resolvedDecl.value,
+					UTF8_TO_TCHAR(Child->literal.AddressOf()))
+				: FString::Printf(TEXT("%u:dangling"), ChildId.value));
+		}
+		return FString::Printf(TEXT(
+			"Kind=%u DeclId=%u Receiver=%u Literal=%s Children=[%s]"),
+			static_cast<uint32>(Expression.kind),
+			Expression.resolvedDecl.value,
+			Expression.receiver.value,
+			UTF8_TO_TCHAR(Expression.literal.AddressOf()),
+			*FString::Join(Children, TEXT(",")));
 	}
 
 	static void SetFailure(
 		FAngelscriptTypedASTJITCallClosurePlan& Plan,
 		const EAngelscriptTypedASTJITFallbackReason Reason,
-		const asSTypedSemanticSourceSpan& Span,
+		const asSSourceSpan& Span,
 		const FString& Detail)
 	{
 		Plan.bEligible = false;
@@ -114,215 +200,6 @@ namespace AngelscriptTypedASTJITCallClosure_Private
 		Plan.RootEligibility.Reason = Reason;
 		Plan.RootEligibility.SourceSpan = Span;
 		Plan.RootEligibility.Detail = Detail;
-	}
-
-	static bool IsCallEvaluationSequenceValid(
-		const asSTypedSemanticExpression& Call)
-	{
-		const asUINT OperandCount = Call.operands.GetLength();
-		if (Call.formalParameterIndices.GetLength() != OperandCount
-			|| Call.sourceArgumentOrdinals.GetLength() != OperandCount
-			|| Call.argumentOrigins.GetLength() != OperandCount
-			|| Call.argumentProvenance.GetLength() != OperandCount
-			|| Call.evaluationSequence.GetLength() != OperandCount)
-		{
-			return false;
-		}
-
-		TSet<int32> SeenFormals;
-		TSet<asUINT> SeenEvaluationIndices;
-		TSet<int32> SeenSourceOrdinals;
-		asUINT ReceiverOperandCount = 0;
-		for (asUINT Index = 0; Index < OperandCount; ++Index)
-		{
-			const int32 Formal = Call.formalParameterIndices[Index];
-			const asUINT EvaluationIndex = Call.evaluationSequence[Index];
-			const int32 SourceOrdinal = Call.sourceArgumentOrdinals[Index];
-			const asSTypedSemanticArgumentProvenance& Provenance =
-				Call.argumentProvenance[Index];
-			if (Formal < 0 || SeenFormals.Contains(Formal)
-				|| EvaluationIndex >= OperandCount
-				|| SeenEvaluationIndices.Contains(EvaluationIndex)
-				|| SourceOrdinal < -1
-				|| Provenance.origin != Call.argumentOrigins[Index]
-				|| Provenance.sourceArgumentOrdinal != SourceOrdinal
-				|| (SourceOrdinal >= 0
-					&& SeenSourceOrdinals.Contains(SourceOrdinal)))
-			{
-				return false;
-			}
-			SeenFormals.Add(Formal);
-			SeenEvaluationIndices.Add(EvaluationIndex);
-			if (SourceOrdinal >= 0)
-			{
-				SeenSourceOrdinals.Add(SourceOrdinal);
-			}
-			ReceiverOperandCount += Call.receiverExpression.IsValid()
-				&& Call.operands[Index] == Call.receiverExpression;
-		}
-
-		const asUINT ExpectedStepCount = OperandCount
-			+ (Call.receiverExpression.IsValid()
-				&& ReceiverOperandCount == 0 ? 1u : 0u);
-		if (Call.evaluationSteps.GetLength() != ExpectedStepCount)
-		{
-			return false;
-		}
-		for (asUINT EvaluationOrdinal = 0;
-			EvaluationOrdinal < OperandCount;
-			++EvaluationOrdinal)
-		{
-			asUINT BindingIndex = OperandCount;
-			for (asUINT CandidateIndex = 0;
-				CandidateIndex < OperandCount;
-				++CandidateIndex)
-			{
-				if (Call.evaluationSequence[CandidateIndex]
-					== EvaluationOrdinal)
-				{
-					BindingIndex = CandidateIndex;
-					break;
-				}
-			}
-			if (BindingIndex >= OperandCount)
-			{
-				return false;
-			}
-			const asSTypedSemanticEvaluationStep& Step =
-				Call.evaluationSteps[EvaluationOrdinal];
-			if (Step.expression != Call.operands[BindingIndex]
-				|| Step.formalParameterIndex
-					!= Call.formalParameterIndices[BindingIndex]
-				|| Step.sourceArgumentOrdinal
-					!= Call.sourceArgumentOrdinals[BindingIndex])
-			{
-				return false;
-			}
-		}
-		return true;
-	}
-
-	static bool CollectReachableExpressionIds(
-		const asCTypedSemanticFunction& Function,
-		TArray<asTypedSemanticExpressionId>& OutExpressions)
-	{
-		TSet<asUINT> SeenExpressions;
-		TSet<asUINT> SeenStatements;
-
-		TFunction<bool(asTypedSemanticExpressionId)> VisitExpression;
-		VisitExpression = [&](const asTypedSemanticExpressionId ExpressionId)
-		{
-			if (!ExpressionId.IsValid())
-			{
-				return true;
-			}
-			if (ExpressionId.value >= Function.expressions.GetLength())
-			{
-				return false;
-			}
-			if (SeenExpressions.Contains(ExpressionId.value))
-			{
-				return true;
-			}
-			SeenExpressions.Add(ExpressionId.value);
-			const asSTypedSemanticExpression& Expression =
-				Function.expressions[ExpressionId.value];
-
-			if (Expression.kind == asETypedSemanticExpressionKind::ResolvedCall
-				&& !IsCallEvaluationSequenceValid(Expression))
-			{
-				OutExpressions.Add(ExpressionId);
-				return true;
-			}
-
-			if (Expression.evaluationSteps.GetLength() != 0)
-			{
-				for (asUINT StepIndex = 0;
-					StepIndex < Expression.evaluationSteps.GetLength();
-					++StepIndex)
-				{
-					if (!VisitExpression(
-						Expression.evaluationSteps[StepIndex].expression))
-					{
-						return false;
-					}
-				}
-			}
-			else
-			{
-				for (asUINT OperandIndex = 0;
-					OperandIndex < Expression.operands.GetLength();
-					++OperandIndex)
-				{
-					if (!VisitExpression(
-						Expression.operands[OperandIndex]))
-					{
-						return false;
-					}
-				}
-			}
-			if (Expression.evaluationSteps.GetLength() == 0
-				&& (!VisitExpression(Expression.mutationTarget)
-					|| !VisitExpression(Expression.mutationValue)))
-			{
-				return false;
-			}
-			OutExpressions.Add(ExpressionId);
-			return true;
-		};
-
-		TFunction<bool(asTypedSemanticStatementId)> VisitStatement;
-		VisitStatement = [&](const asTypedSemanticStatementId StatementId)
-		{
-			if (!StatementId.IsValid())
-			{
-				return true;
-			}
-			if (StatementId.value >= Function.statements.GetLength())
-			{
-				return false;
-			}
-			if (SeenStatements.Contains(StatementId.value))
-			{
-				return true;
-			}
-			SeenStatements.Add(StatementId.value);
-			const asSTypedSemanticStatement& Statement =
-				Function.statements[StatementId.value];
-
-			if (!VisitExpression(Statement.initializerExpression)
-				|| !VisitExpression(Statement.conditionExpression)
-				|| !VisitExpression(Statement.valueExpression)
-				|| !VisitStatement(Statement.initializerStatement)
-				|| !VisitStatement(Statement.incrementStatement)
-				|| !VisitStatement(Statement.thenStatement)
-				|| !VisitStatement(Statement.elseStatement)
-				|| !VisitStatement(Statement.bodyStatement))
-			{
-				return false;
-			}
-			for (asUINT IncrementIndex = 0;
-				IncrementIndex < Statement.incrementExpressions.GetLength();
-				++IncrementIndex)
-			{
-				if (!VisitExpression(
-					Statement.incrementExpressions[IncrementIndex]))
-				{
-					return false;
-				}
-			}
-			for (asUINT ChildIndex = 0;
-				ChildIndex < Statement.children.GetLength(); ++ChildIndex)
-			{
-				if (!VisitStatement(Statement.children[ChildIndex]))
-				{
-					return false;
-				}
-			}
-			return true;
-		};
-
-		return VisitStatement(Function.rootStatement);
 	}
 
 	static FAngelscriptTypedASTJITEligibility EvaluateFunction(
@@ -434,9 +311,10 @@ FString FAngelscriptTypedASTJITCallClosurePlan::DumpNormalized() const
 	for (const FAngelscriptTypedASTJITCallClosureCall& Call : Calls)
 	{
 		Output += FString::Printf(
-			TEXT("call=%s->%s expression=%u target=%s targetId=%d disposition=%s span=%s:%u:%u eligibility=%s external=%s validation=%d\n"),
+			TEXT("call=%s->%s expression=%u canonicalExpression=%u target=%s targetId=%d disposition=%s span=%s:%u:%u eligibility=%s external=%s validation=%d\n"),
 			*KeyString(Call.CallerFunctionKey),
 			*KeyString(Call.CalleeFunctionKey), Call.Expression.value,
+			Call.Expression.value,
 			LexToString(Call.TargetKind),
 			Call.EngineLocalTargetFunctionId,
 			LexToString(Call.Disposition),
@@ -722,311 +600,310 @@ bool BuildAngelscriptTypedASTJITCallClosure(
 	}
 
 	bool bSemanticFailure = false;
+	auto PlanNativeCall = [&OutPlan, &Options, &bSemanticFailure](
+		FAngelscriptTypedASTJITCallClosureCall& Call,
+		const FAngelscriptStaticJITNativeCallTarget& Target,
+		const asSSourceSpan& SourceSpan)
+	{
+		Call.TargetKind = EAngelscriptTypedASTJITCallTargetKind::SystemFunction;
+		Call.EngineLocalTargetFunctionId = Target.EngineLocalFunctionId;
+		Call.ExternalCallDescriptor = Target.Descriptor;
+		if (Target.Descriptor.IsAbsent())
+		{
+			Call.ExternalCallValidation.bMetadataValid =
+				Target.bScalarBridgeCallable
+				&& Target.ExpectedVMBridgeABI.IsValid();
+			Call.ExternalCallValidation.bScalarBridgeCallable =
+				Call.ExternalCallValidation.bMetadataValid;
+			Call.ExternalCallValidation.Code =
+				Call.ExternalCallValidation.bMetadataValid
+					? EAngelscriptStaticJITNativeCallValidationCode::Valid
+					: EAngelscriptStaticJITNativeCallValidationCode::Absent;
+			Call.ExternalCallValidation.Detail =
+				Call.ExternalCallValidation.bMetadataValid
+					? FString::Printf(TEXT("AutomaticVMScalarBridge: %s"),
+						*Target.ExpectedVMBridgeABI.Canonical)
+					: TEXT("AutomaticVMScalarBridgeUnavailable");
+			if (Call.ExternalCallValidation.bScalarBridgeCallable
+				&& Options.bNativeScalarBridgeAvailable)
+			{
+				Call.Disposition =
+					EAngelscriptTypedASTJITCallDisposition::Bridge;
+				return true;
+			}
+			SetFailure(OutPlan,
+				EAngelscriptTypedASTJITFallbackReason::UnsupportedCall,
+				SourceSpan,
+				FString::Printf(TEXT(
+					"ExternalCallRouteUnavailable: SystemFunctionId=%d Declaration=%s Detail=%s"),
+					Target.EngineLocalFunctionId,
+					*Target.CanonicalDeclaration,
+					*Call.ExternalCallValidation.Detail));
+			bSemanticFailure = true;
+			return false;
+		}
+
+		FAngelscriptStaticJITNativeCallValidationContext ValidationContext;
+		ValidationContext.ExpectedNativeABI = Target.ExpectedNativeABI;
+		ValidationContext.ExpectedScalarABI = Target.ExpectedScalarABI;
+		ValidationContext.KnownModules = Options.KnownNativeCallModules;
+		ValidationContext.PublicDependencyModules =
+			Options.PublicNativeCallDependencyModules;
+		Call.ExternalCallValidation =
+			ValidateAngelscriptStaticJITNativeCallDescriptor(
+				Target.Descriptor, ValidationContext);
+		if (!Call.ExternalCallValidation.bMetadataValid)
+		{
+			SetFailure(OutPlan,
+				EAngelscriptTypedASTJITFallbackReason::UnsupportedCall,
+				SourceSpan,
+				FString::Printf(TEXT(
+					"ExternalCallDescriptorRejected: SystemFunctionId=%d Declaration=%s Detail=%s"),
+					Target.EngineLocalFunctionId,
+					*Target.CanonicalDeclaration,
+					*Call.ExternalCallValidation.Detail));
+			bSemanticFailure = true;
+			return false;
+		}
+		if (Call.ExternalCallValidation.bDirectCallable)
+		{
+			switch (Target.Descriptor.Linkage)
+			{
+			case EAngelscriptStaticJITNativeCallLinkage::ExportedSymbol:
+				Call.Disposition =
+					EAngelscriptTypedASTJITCallDisposition::DirectExported;
+				break;
+			case EAngelscriptStaticJITNativeCallLinkage::HeaderInline:
+				Call.Disposition =
+					EAngelscriptTypedASTJITCallDisposition::DirectInline;
+				break;
+			case EAngelscriptStaticJITNativeCallLinkage::ExportedRuntimeThunk:
+				Call.Disposition =
+					EAngelscriptTypedASTJITCallDisposition::RuntimeThunk;
+				break;
+			case EAngelscriptStaticJITNativeCallLinkage::ExportedRuntimeCallable:
+				Call.Disposition =
+					EAngelscriptTypedASTJITCallDisposition::DirectExported;
+				break;
+			default:
+				break;
+			}
+			if (Call.Disposition
+				!= EAngelscriptTypedASTJITCallDisposition::Unsupported)
+			{
+				return true;
+			}
+		}
+		else if (Call.ExternalCallValidation.bCurrentNativeCallable
+			&& Target.bCurrentNativeCallable)
+		{
+			Call.Disposition =
+				EAngelscriptTypedASTJITCallDisposition::CurrentNativeBinding;
+			return true;
+		}
+		else if (Call.ExternalCallValidation.bScalarBridgeCallable
+			&& Options.bNativeScalarBridgeAvailable)
+		{
+			Call.Disposition =
+				EAngelscriptTypedASTJITCallDisposition::Bridge;
+			return true;
+		}
+
+		SetFailure(OutPlan,
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedCall,
+			SourceSpan,
+			FString::Printf(TEXT(
+				"ExternalCallRouteUnavailable: SystemFunctionId=%d Declaration=%s Detail=%s"),
+				Target.EngineLocalFunctionId,
+				*Target.CanonicalDeclaration,
+				*Call.ExternalCallValidation.Detail));
+		bSemanticFailure = true;
+		return false;
+	};
 	TFunction<void(int32)> VisitFunction;
 	VisitFunction = [&](const int32 CallerIndex)
 	{
 		if (bSemanticFailure || VisitState[CallerIndex] == 2)
 		{
-			return;
+            return;
 		}
 		if (VisitState[CallerIndex] == 1)
 		{
-			return;
+            return;
 		}
 		VisitState[CallerIndex] = 1;
 		DirectFunctionIndices.Add(CallerIndex);
-		const FAngelscriptTypedASTJITCallClosureFunctionInput& Caller =
-			Functions[CallerIndex];
-		const asCTypedSemanticFunction* const HIR =
-			Caller.Eligibility.TypedHIR;
-		if (HIR == nullptr)
+		const FAngelscriptTypedASTJITCallClosureFunctionInput& Caller = Functions[CallerIndex];
+		if (Caller.Eligibility.SealedAST != nullptr && Caller.Eligibility.SealedAST->IsPublishable())
 		{
-			SetFailure(OutPlan,
-				EAngelscriptTypedASTJITFallbackReason::MissingTypedHIR,
-				{}, TEXT("Direct TypedASTJIT closure member has no verified HIR."));
-			bSemanticFailure = true;
-			return;
-		}
-
-		TArray<asTypedSemanticExpressionId> ReachableExpressions;
-		if (!CollectReachableExpressionIds(*HIR, ReachableExpressions))
-		{
-			SetFailure(OutPlan,
-				EAngelscriptTypedASTJITFallbackReason::InvalidTypedHIR,
-				FunctionSpan(HIR),
-				TEXT("Reachable expression ownership contains a dangling coordinate."));
-			bSemanticFailure = true;
-			return;
-		}
-
-		for (const asTypedSemanticExpressionId ExpressionId
-			: ReachableExpressions)
-		{
-			if (bSemanticFailure)
+            const asCASTContext &Context = *Caller.Eligibility.SealedAST;
+            TArray<asASTExprId> CanonicalCalls;
+            CollectAngelscriptTypedASTJITCanonicalCallExprs(
+                Context, Caller.Eligibility.CanonicalFunctionDecl,
+                CanonicalCalls);
+            for (const asASTExprId CallId : CanonicalCalls)
 			{
-				break;
-			}
-			const asSTypedSemanticExpression& Expression =
-				HIR->expressions[ExpressionId.value];
-			if (Expression.kind != asETypedSemanticExpressionKind::ResolvedCall)
-			{
-				continue;
-			}
-			if (!IsCallEvaluationSequenceValid(Expression))
-			{
-				SetFailure(OutPlan,
-					EAngelscriptTypedASTJITFallbackReason::InvalidCallEvaluationSequence,
-					Expression.span,
-					TEXT("Resolved call operands, formal bindings, and evaluation sequence must be complete unique permutations."));
-				bSemanticFailure = true;
-				break;
-			}
-
-			if (Expression.callTargetKind
-				== asETypedSemanticCallTargetKind::ImportedFunction)
-			{
-				FAngelscriptTypedASTJITCallClosureCall& Call =
-					OutPlan.Calls.Emplace_GetRef();
-				Call.CallerFunctionKey = Caller.FunctionKey;
-				Call.Expression = ExpressionId;
-				Call.SourceSpan = Expression.span;
-				Call.TargetKind = Expression.callTargetKind;
-				Call.EngineLocalTargetFunctionId =
-					Expression.resolvedFunctionId;
-				Call.Disposition =
-					EAngelscriptTypedASTJITCallDisposition::Unsupported;
-				SetFailure(OutPlan,
-					EAngelscriptTypedASTJITFallbackReason::UnsupportedImportedRoute,
-					Expression.span,
-					FString::Printf(TEXT(
-						"ImportedBindingRouteUnavailable: SlotFunctionId=%d remains mutable and cannot be lowered as a concrete callee."),
-						Expression.resolvedFunctionId));
-				bSemanticFailure = true;
-				break;
-			}
-
-			if (Expression.callTargetKind
-				== asETypedSemanticCallTargetKind::SystemFunction)
-			{
-				FAngelscriptTypedASTJITCallClosureCall& Call =
-					OutPlan.Calls.Emplace_GetRef();
-				Call.CallerFunctionKey = Caller.FunctionKey;
-				Call.Expression = ExpressionId;
-				Call.SourceSpan = Expression.span;
-				Call.TargetKind = Expression.callTargetKind;
-				Call.EngineLocalTargetFunctionId =
-					Expression.resolvedFunctionId;
-				Call.Disposition =
-					EAngelscriptTypedASTJITCallDisposition::Unsupported;
-				const FAngelscriptStaticJITNativeCallTarget* const* TargetPtr =
-					NativeCallTargetByFunctionId.Find(
-						Expression.resolvedFunctionId);
-				if (TargetPtr == nullptr)
+				const asCExpr* const Expression = Context.GetExpr(CallId);
+				const asCDecl* const Target =
+					Expression != nullptr ? Context.GetDecl(Expression->resolvedDecl) : nullptr;
+				const asSSourceSpan SourceSpan =
+					Expression != nullptr ? CanonicalSpan(Context, Expression->range)
+										  : asSSourceSpan{};
+				if (Expression == nullptr || Target == nullptr)
 				{
-					SetFailure(OutPlan,
+					SetFailure(
+						OutPlan,
 						EAngelscriptTypedASTJITFallbackReason::UnsupportedCall,
-						Expression.span,
-						FString::Printf(TEXT(
-							"ExternalCallDescriptorMissing: SystemFunctionId=%d requires an explicit external-call descriptor or a proven scalar bridge."),
-							Expression.resolvedFunctionId));
+						SourceSpan,
+						FString::Printf(TEXT("CanonicalResolvedTargetMissing: Caller=%s "
+											 "CallExpr=%u %s."),
+										*KeyString(Caller.FunctionKey),
+										CallId.value,
+										Expression != nullptr
+											? *DescribeCanonicalExpression(Context, *Expression)
+											: TEXT("Expression=dangling")));
 					bSemanticFailure = true;
 					break;
 				}
 
-				const FAngelscriptStaticJITNativeCallTarget& Target =
-					**TargetPtr;
-				Call.ExternalCallDescriptor = Target.Descriptor;
-				if (Target.Descriptor.IsAbsent())
+				FAngelscriptTypedASTJITCallClosureCall& Call = OutPlan.Calls.Emplace_GetRef();
+				Call.CallerFunctionKey = Caller.FunctionKey;
+				Call.Expression = CallId;
+				Call.SourceSpan = SourceSpan;
+				Call.Disposition = EAngelscriptTypedASTJITCallDisposition::Unsupported;
+				if (Target->kind == asAST_DECL_IMPORT)
 				{
-					Call.ExternalCallValidation.bMetadataValid =
-						Target.bScalarBridgeCallable
-						&& Target.ExpectedVMBridgeABI.IsValid();
-					Call.ExternalCallValidation.bScalarBridgeCallable =
-						Call.ExternalCallValidation.bMetadataValid;
-					Call.ExternalCallValidation.Code =
-						Call.ExternalCallValidation.bMetadataValid
-							? EAngelscriptStaticJITNativeCallValidationCode::Valid
-							: EAngelscriptStaticJITNativeCallValidationCode::Absent;
-					Call.ExternalCallValidation.Detail =
-						Call.ExternalCallValidation.bMetadataValid
-							? FString::Printf(TEXT(
-								"AutomaticVMScalarBridge: %s"),
-								*Target.ExpectedVMBridgeABI.Canonical)
-							: TEXT("AutomaticVMScalarBridgeUnavailable");
-					if (Call.ExternalCallValidation.bScalarBridgeCallable
-						&& Options.bNativeScalarBridgeAvailable)
+					Call.TargetKind = EAngelscriptTypedASTJITCallTargetKind::ImportedFunction;
+					SetFailure(OutPlan,
+							   EAngelscriptTypedASTJITFallbackReason::UnsupportedImportedRoute,
+							   SourceSpan,
+							   FString::Printf(TEXT("ImportedBindingRouteUnavailable: Caller=%s "
+													"CallExpr=%u TargetDecl=%s stays mutable."),
+											   *KeyString(Caller.FunctionKey),
+											   CallId.value,
+											   UTF8_TO_TCHAR(Target->stableKey.AddressOf())));
+					bSemanticFailure = true;
+					break;
+				}
+
+				bool bAmbiguous = false;
+				const int32 CalleeIndex =
+					FindExactCanonicalFunctionIndex(Functions, Context, Target->id, bAmbiguous);
+				if (CalleeIndex == INDEX_NONE)
+				{
+					const FString TargetOrigin = UTF8_TO_TCHAR(Target->origin.AddressOf());
+					const FAngelscriptStaticJITNativeCallTarget* NativeTarget = nullptr;
+					bool bNativeAmbiguous = false;
+					if (!bAmbiguous && !TargetOrigin.IsEmpty())
 					{
-						Call.Disposition =
-							EAngelscriptTypedASTJITCallDisposition::Bridge;
+						for (const FAngelscriptStaticJITNativeCallTarget& Candidate :
+							 Options.NativeCallTargets)
+						{
+							if (Candidate.CanonicalDeclaration != TargetOrigin)
+							{
+								continue;
+							}
+							if (NativeTarget != nullptr)
+							{
+								bNativeAmbiguous = true;
+								NativeTarget = nullptr;
+								break;
+							}
+							NativeTarget = &Candidate;
+						}
+					}
+					if (NativeTarget != nullptr)
+					{
+						PlanNativeCall(Call, *NativeTarget, SourceSpan);
+						if (bSemanticFailure)
+						{
+							break;
+						}
 						continue;
 					}
-					SetFailure(OutPlan,
+
+					Call.TargetKind = TargetOrigin.IsEmpty()
+										  ? EAngelscriptTypedASTJITCallTargetKind::Unspecified
+										  : EAngelscriptTypedASTJITCallTargetKind::SystemFunction;
+					SetFailure(
+						OutPlan,
 						EAngelscriptTypedASTJITFallbackReason::UnsupportedCall,
-						Expression.span,
-						FString::Printf(TEXT(
-							"ExternalCallRouteUnavailable: SystemFunctionId=%d Declaration=%s Detail=%s"),
-							Expression.resolvedFunctionId,
-							*Target.CanonicalDeclaration,
-							*Call.ExternalCallValidation.Detail));
+						SourceSpan,
+						FString::Printf(TEXT("CanonicalTargetRouteUnavailable: Caller=%s "
+											 "CallExpr=%u TargetDeclId=%u StableDeclKey=%s "
+											 "Origin=%s ExactScriptMatches=%s "
+											 "ExactNativeMatches=%s. The closure planner never "
+											 "guesses by function name."),
+										*KeyString(Caller.FunctionKey),
+										CallId.value,
+										Target->id.value,
+										UTF8_TO_TCHAR(Target->stableKey.AddressOf()),
+										*TargetOrigin,
+										bAmbiguous ? TEXT("ambiguous") : TEXT("none"),
+										bNativeAmbiguous ? TEXT("ambiguous") : TEXT("none")));
 					bSemanticFailure = true;
 					break;
 				}
-				FAngelscriptStaticJITNativeCallValidationContext
-					ValidationContext;
-				ValidationContext.ExpectedNativeABI =
-					Target.ExpectedNativeABI;
-				ValidationContext.ExpectedScalarABI =
-					Target.ExpectedScalarABI;
-				ValidationContext.KnownModules =
-					Options.KnownNativeCallModules;
-				ValidationContext.PublicDependencyModules =
-					Options.PublicNativeCallDependencyModules;
-				Call.ExternalCallValidation =
-					ValidateAngelscriptStaticJITNativeCallDescriptor(
-						Target.Descriptor, ValidationContext);
-				if (!Call.ExternalCallValidation.bMetadataValid)
+
+				const FAngelscriptTypedASTJITCallClosureFunctionInput& Callee =
+					Functions[CalleeIndex];
+				FAngelscriptTypedASTJITCallClosureFunction& PlannedCallee =
+					EnsureFunctionPlan(CalleeIndex, false);
+				Call.CalleeFunctionKey = Callee.FunctionKey;
+				Call.TargetKind = EAngelscriptTypedASTJITCallTargetKind::ScriptFunction;
+				Call.EngineLocalTargetFunctionId = Callee.EngineLocalFunctionId;
+				Call.CalleeEligibility = PlannedCallee.Eligibility;
+				Call.Disposition = CallDispositionFor(PlannedCallee.Disposition);
+
+				if (PlannedCallee.Disposition ==
+					EAngelscriptTypedASTJITClosureFunctionDisposition::Unsupported)
 				{
-					SetFailure(OutPlan,
+					SetFailure(
+						OutPlan,
 						EAngelscriptTypedASTJITFallbackReason::UnsupportedCall,
-						Expression.span,
-						FString::Printf(TEXT(
-							"ExternalCallDescriptorRejected: SystemFunctionId=%d Declaration=%s Detail=%s"),
-							Expression.resolvedFunctionId,
-							*Target.CanonicalDeclaration,
-							*Call.ExternalCallValidation.Detail));
+						SourceSpan,
+						FString::Printf(TEXT("CanonicalCalleeDisposition=Unsupported Caller=%s "
+											 "CallExpr=%u TargetDecl=%s Callee=%s Reason=%s "
+											 "Detail=%s"),
+										*KeyString(Caller.FunctionKey),
+										CallId.value,
+										UTF8_TO_TCHAR(Target->stableKey.AddressOf()),
+										*KeyString(Callee.FunctionKey),
+										LexToString(PlannedCallee.Eligibility.Reason),
+										*PlannedCallee.Eligibility.Detail));
 					bSemanticFailure = true;
 					break;
 				}
-				if (Call.ExternalCallValidation.bDirectCallable)
+				if (PlannedCallee.Disposition ==
+					EAngelscriptTypedASTJITClosureFunctionDisposition::Bridge)
 				{
-					switch (Target.Descriptor.Linkage)
-					{
-					case EAngelscriptStaticJITNativeCallLinkage::ExportedSymbol:
-						Call.Disposition =
-							EAngelscriptTypedASTJITCallDisposition::DirectExported;
-						break;
-					case EAngelscriptStaticJITNativeCallLinkage::HeaderInline:
-						Call.Disposition =
-							EAngelscriptTypedASTJITCallDisposition::DirectInline;
-						break;
-					case EAngelscriptStaticJITNativeCallLinkage::ExportedRuntimeThunk:
-						Call.Disposition =
-							EAngelscriptTypedASTJITCallDisposition::RuntimeThunk;
-						break;
-					case EAngelscriptStaticJITNativeCallLinkage::ExportedRuntimeCallable:
-						Call.Disposition =
-							EAngelscriptTypedASTJITCallDisposition::DirectExported;
-						break;
-					default:
-						break;
-					}
-					if (Call.Disposition
-						!= EAngelscriptTypedASTJITCallDisposition::Unsupported)
-					{
-						continue;
-					}
-				}
-				else if (Call.ExternalCallValidation.bCurrentNativeCallable
-					&& Target.bCurrentNativeCallable)
-				{
-					Call.Disposition =
-						EAngelscriptTypedASTJITCallDisposition::
-							CurrentNativeBinding;
-					continue;
-				}
-				else if (Call.ExternalCallValidation.bScalarBridgeCallable
-					&& Options.bNativeScalarBridgeAvailable)
-				{
-					Call.Disposition =
-						EAngelscriptTypedASTJITCallDisposition::Bridge;
 					continue;
 				}
 
-				SetFailure(OutPlan,
-					EAngelscriptTypedASTJITFallbackReason::UnsupportedCall,
-					Expression.span,
-					FString::Printf(TEXT(
-						"ExternalCallRouteUnavailable: SystemFunctionId=%d Declaration=%s Detail=%s"),
-						Expression.resolvedFunctionId,
-						*Target.CanonicalDeclaration,
-						*Call.ExternalCallValidation.Detail));
-				bSemanticFailure = true;
-				break;
+				DirectEdges[CallerIndex].AddUnique(CalleeIndex);
+				VisitFunction(CalleeIndex);
+				if (bSemanticFailure)
+				{
+					break;
+				}
 			}
-
-			const int32* const CalleeIndexPtr =
-				IndexByFunctionId.Find(Expression.resolvedFunctionId);
-			if (CalleeIndexPtr == nullptr)
-			{
-				FAngelscriptTypedASTJITCallClosureCall& Call =
-					OutPlan.Calls.Emplace_GetRef();
-				Call.CallerFunctionKey = Caller.FunctionKey;
-				Call.Expression = ExpressionId;
-				Call.SourceSpan = Expression.span;
-				Call.TargetKind = Expression.callTargetKind;
-				Call.EngineLocalTargetFunctionId =
-					Expression.resolvedFunctionId;
-				Call.Disposition =
-					EAngelscriptTypedASTJITCallDisposition::Unsupported;
-				SetFailure(OutPlan,
-					EAngelscriptTypedASTJITFallbackReason::UnsupportedCall,
-					Expression.span,
-					TEXT("ResolvedTargetMissing: no same-task compiled function matches the HIR target coordinate."));
-				bSemanticFailure = true;
-				break;
-			}
-
-			const int32 CalleeIndex = *CalleeIndexPtr;
-			const FAngelscriptTypedASTJITCallClosureFunctionInput& Callee =
-				Functions[CalleeIndex];
-			FAngelscriptTypedASTJITCallClosureFunction& PlannedCallee =
-				EnsureFunctionPlan(CalleeIndex, false);
-			FAngelscriptTypedASTJITCallClosureCall& Call =
-				OutPlan.Calls.Emplace_GetRef();
-			Call.CallerFunctionKey = Caller.FunctionKey;
-			Call.CalleeFunctionKey = Callee.FunctionKey;
-			Call.Expression = ExpressionId;
-			Call.SourceSpan = Expression.span;
-			Call.TargetKind = Expression.callTargetKind;
-			Call.EngineLocalTargetFunctionId =
-				Expression.resolvedFunctionId;
-			Call.CalleeEligibility = PlannedCallee.Eligibility;
-			Call.Disposition = CallDispositionFor(PlannedCallee.Disposition);
-
-			if (PlannedCallee.Disposition
-				== EAngelscriptTypedASTJITClosureFunctionDisposition::Unsupported)
-			{
-				SetFailure(OutPlan,
-					EAngelscriptTypedASTJITFallbackReason::UnsupportedCall,
-					Expression.span,
-					FString::Printf(TEXT(
-						"CalleeDisposition=Unsupported Callee=%s Reason=%s Detail=%s"),
-						*KeyString(Callee.FunctionKey),
-						LexToString(PlannedCallee.Eligibility.Reason),
-						*PlannedCallee.Eligibility.Detail));
-				bSemanticFailure = true;
-				break;
-			}
-			if (PlannedCallee.Disposition
-				== EAngelscriptTypedASTJITClosureFunctionDisposition::Bridge)
-			{
-				continue;
-			}
-
-			DirectEdges[CallerIndex].AddUnique(CalleeIndex);
-			VisitFunction(CalleeIndex);
+			VisitState[CallerIndex] = 2;
+			return;
 		}
-		VisitState[CallerIndex] = 2;
+
+		SetFailure(OutPlan,
+				   EAngelscriptTypedASTJITFallbackReason::MissingCanonicalAST,
+				   {},
+				   TEXT("Direct TypedASTJIT closure member has no sealed "
+						"canonical AST."));
+		bSemanticFailure = true;
 	};
 
 	VisitFunction(RootIndex);
 	if (bSemanticFailure)
 	{
-		OutPlan.Functions.Sort(
-			[](const auto& Left, const auto& Right)
-			{
-				return KeyLess(Left.FunctionKey, Right.FunctionKey);
-			});
+		OutPlan.Functions.Sort([](const auto& Left, const auto& Right)
+							   { return KeyLess(Left.FunctionKey, Right.FunctionKey); });
 		return true;
 	}
 
@@ -1197,8 +1074,8 @@ bool BuildAngelscriptTypedASTJITCallClosure(
 			}
 		}
 
-		asSTypedSemanticSourceSpan FailureSpan = FunctionSpan(
-			Functions[MissingFunctionIndex].Eligibility.TypedHIR);
+		asSSourceSpan FailureSpan = FunctionInputSpan(
+			Functions[MissingFunctionIndex]);
 		for (FAngelscriptTypedASTJITCallClosureCall& Call : OutPlan.Calls)
 		{
 			if (Call.CalleeFunctionKey

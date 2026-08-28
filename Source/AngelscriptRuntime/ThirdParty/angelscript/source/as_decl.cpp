@@ -1,0 +1,4 @@
+#include "as_decl.h"
+
+BEGIN_AS_NAMESPACE
+END_AS_NAMESPACE

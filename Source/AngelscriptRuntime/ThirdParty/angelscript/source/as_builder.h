@@ -49,8 +49,12 @@
 #include "as_datatype.h"
 #include "as_property.h"
 #include "as_buildartifact.h"
+#include "as_source_manager.h"
 
 BEGIN_AS_NAMESPACE
+
+class asCASTContext;
+class asCDecl;
 
 #ifdef AS_NO_COMPILER
 // Forward declare the structure, as it is part of some function signatures used even without the compiler
@@ -94,6 +98,9 @@ struct sGlobalVariableDescription
 	bool               isPureConstant;
 	bool               isEnumValue;
 	asQWORD            constantValue;
+	// Exact sealed declaration identity captured while Parser/Sema nodes are
+	// still alive. Prepared staged CodeGen must not bind globals by name alone.
+	asCString          canonicalASTStableDeclKey;
 };
 
 struct sPropertyInitializer
@@ -158,6 +165,11 @@ public:
 	asCBuilder(asCScriptEngine *engine, asCModule *module);
 	~asCBuilder();
 
+	// Read-only diagnostic source session. This is not a public script API; it
+	// provides compiler/debug tooling with the same logical source/line mapping
+	// used when Parser and Compiler emit messages during one build.
+	const asCSourceManager& GetDiagnosticSourceManager() const { return diagnosticSourceManager; }
+
 	// These methods are used by the application interface
 	int VerifyProperty(asCDataType *dt, const char *decl, asCString &outName, asCDataType &outType, asSNameSpace *ns);
 	int ParseDataType(const char *datatype, asCDataType *result, asSNameSpace *implicitNamespace, bool isReturnType = false, bool IsAppInterface = false);
@@ -190,12 +202,17 @@ public:
 	int BuildLayoutClasses();
 	void BuildAllocateGlobalVariables();
 	int BuildLayoutFunctions();
+	int BuildLayoutFunctionsWithoutGlobalInitializers();
 
 	// Second stage of building, generate methods and function declarations using the type information we already have
 	int BuildGenerateFunctions();
 
 	// Third stage of building, compile the actual bytecode in all functions
 	int BuildCompileCode();
+	class asCASTContext* TakeCanonicalAST();
+	int AttachCanonicalSemaIfNeeded();
+	int PrepareCanonicalCompileFunctionScope();
+	int SealCanonicalAST();
 #endif
 
 //protected:
@@ -212,11 +229,15 @@ public:
 	void               WriteError(const asCString &msg, asCScriptCode *file, asCScriptNode *node);
 	void               WriteWarning(const asCString &scriptname, const asCString &msg, int r, int c);
 	void               WriteWarning(const asCString &msg, asCScriptCode *file, asCScriptNode *node);
+	bool               GetDiagnosticRowColumn(asCScriptCode *file, size_t offset, int *row, int *column);
 
 	bool               DoesGlobalPropertyExist(const char *prop, asSNameSpace *ns, asCGlobalProperty **outProp = 0, sGlobalVariableDescription **outDesc = 0, bool *isAppProp = 0, bool bAllowAnyModule = false);
 	asCGlobalProperty *GetGlobalProperty(const char *prop, asSNameSpace *ns, bool *isCompiled, bool *isPureConstant, asQWORD *constantValue, bool *isAppProp, bool bAllowAnyModule = false);
 	int                ValidateDefaultArgs(asCScriptCode *script, asCScriptNode *node, asCScriptFunction *func);
 	asCString          GetCanonicalTokenString(asCScriptNode *n, asCScriptCode *file);
+	asCString          GetCanonicalTokenString(
+		const asCASTContext &context,
+		const asCSourceRange &range);
 	asCString          GetCleanExpressionString(asCScriptNode *n, asCScriptCode *file);
 	asSBuildArtifactInvocation BuildArtifactInvocation(
 		asEBuildArtifactInvocationKind kind,
@@ -239,6 +260,13 @@ public:
 		asCScriptFunction *function,
 		asCObjectType *ownerType,
 		bool isGenerated);
+	asSBuildArtifactInvocation BeginCanonicalBuildArtifactCompile(
+		const asCASTContext &context,
+		const asCDecl *declaration,
+		asCScriptFunction *function);
+	void NotifyCanonicalBuildArtifactFailure(
+		const asCASTContext &context,
+		int compileResult);
 	void PrepareBuildArtifactFunctionAuthorities();
 	asEBuildArtifactRestoreResult TryRestoreBuildArtifact(
 		const asSBuildArtifactInvocation &invocation,
@@ -254,6 +282,10 @@ public:
 	void CaptureBuildArtifactPropertyDependency(
 		asCTypeInfo *ownerType,
 		asCObjectProperty *property);
+	void BindCanonicalFunctionIdentity(
+		asCScriptFunction *function,
+		const asCScriptNode *node,
+		const asCScriptCode *script);
 
 	asSNameSpace      *GetNameSpaceFromNode(asCScriptNode *node, asCScriptCode *script, asSNameSpace *implicitNs, asCScriptNode **next, asCObjectType **objType = 0);
 	asSNameSpace      *GetNameSpaceByString(const asCString &nsName, asSNameSpace *implicitNs, asCScriptNode *errNode, asCScriptCode *script, asCTypeInfo **scopeType = 0, bool isRequired = true);
@@ -319,12 +351,14 @@ public:
 	asCObjectProperty *AddPropertyToClass(sClassDeclaration *c, const asCString &name, const asCDataType &type, bool isPrivate, bool isProtected, asCScriptCode *file = 0, asCScriptNode *node = 0);
 	int                CreateVirtualFunction(asCScriptFunction *func, int idx);
 	void               ParseScripts();
+	void               ReleaseParsers();
 	void               RegisterTypesFromScript(asCScriptNode *node, asCScriptCode *script, asSNameSpace *ns);
 	void               RegisterNonTypesFromScript(asCScriptNode *node, asCScriptCode *script, asSNameSpace *ns);
 	void               CreateDefaultDestructors();
 	void               CompileFunctions();
 	void               RegisterGlobalVariables();
 	void               CompileGlobalVariables();
+	int                BuildLayoutFunctionsInternal(bool compileGlobalInitializers);
 	int                GetEnumValueFromType(asCEnumType *type, const char *name, asCDataType &outDt, asDWORD &outValue);
 	int                GetEnumValue(const char *name, asCDataType &outDt, asDWORD &outValue, asSNameSpace *ns);
 	bool               DoesTypeExist(const char* type);
@@ -365,6 +399,9 @@ public:
 	asCArray<sFuncDef *>                       funcDefs;
 	asCArray<sMixinClass *>                    mixinClasses;
 	asCArray<class asCParser*>                 parsers;
+	class asCASTContext* canonicalAST;
+	class asCSema* canonicalSema;
+	asCSourceManager diagnosticSourceManager;
 
 #if WITH_EDITOR
 	// Each editor-only code block has its start and end line recorded here for error checking

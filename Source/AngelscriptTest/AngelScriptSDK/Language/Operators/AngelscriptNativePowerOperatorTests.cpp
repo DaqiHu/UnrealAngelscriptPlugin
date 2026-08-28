@@ -6,7 +6,6 @@
 #include "StartAngelscriptHeaders.h"
 #include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
-#include "source/as_typed_semantic_ir.h"
 #include "EndAngelscriptHeaders.h"
 
 #include <cstring>
@@ -652,94 +651,6 @@ private:
 			: asBC_POWd;
 	}
 
-	static bool VerifyTypedSemanticPowerShape(
-		FAutomationTestBase& Test,
-		asIScriptFunction& Function,
-		const FNativeCaseContext& Case,
-		const FPowerCase& PowerCase)
-	{
-		using namespace AngelscriptNativeTestSupport;
-		FNoDiscardAsserter Assert(Test);
-		const asCScriptFunction& InternalFunction =
-			static_cast<const asCScriptFunction&>(Function);
-		const asCTypedSemanticFunction* const HIR =
-			InternalFunction.GetTypedSemanticFunction();
-		if (!Assert.IsNotNull(HIR,
-				*Case.Describe(TEXT(
-					"floating power should publish typed semantic HIR"))))
-		{
-			return false;
-		}
-		const asSTypedSemanticVerificationResult Verification =
-			VerifyTypedSemanticFunction(*HIR);
-		if (!Assert.IsTrue(Verification.IsValid(),
-				*Case.Describe(*FString::Printf(TEXT(
-					"floating power HIR should verify: %hs"),
-					Verification.detail.AddressOf()))))
-		{
-			return false;
-		}
-
-		const asSTypedSemanticExpression* Power = nullptr;
-		for (asUINT ExpressionIndex = 0;
-			ExpressionIndex < HIR->expressions.GetLength();
-			++ExpressionIndex)
-		{
-			const asSTypedSemanticExpression& Expression =
-				HIR->expressions[ExpressionIndex];
-			if (Expression.kind == asETypedSemanticExpressionKind::Binary
-				&& Expression.operatorToken == "**")
-			{
-				Power = &Expression;
-				break;
-			}
-		}
-		if (!Assert.IsNotNull(Power,
-				*Case.Describe(TEXT(
-					"floating power should retain one exact power expression"))))
-		{
-			return false;
-		}
-		if (!Assert.AreEqual(2,
-				static_cast<int32>(Power->operands.GetLength()),
-				*Case.Describe(TEXT(
-					"floating power should retain exactly two converted operands"))))
-		{
-			return false;
-		}
-		const asCDataType& LeftType =
-			HIR->expressions[Power->operands[0].value].type;
-		const asCDataType& RightType =
-			HIR->expressions[Power->operands[1].value].type;
-
-		const asEBCInstr Opcode = ExpectedFloatingOpcode(PowerCase);
-		if (Opcode == asBC_POWf)
-		{
-			return Assert.IsTrue(
-				Power->type.IsFloat32Type()
-					&& LeftType.IsFloat32Type()
-					&& RightType.IsFloat32Type(),
-				*Case.Describe(TEXT(
-					"POWf HIR should retain float32 operands and result")));
-		}
-		if (Opcode == asBC_POWdi)
-		{
-			return Assert.IsTrue(
-				Power->type.IsFloat64Type()
-					&& LeftType.IsFloat64Type()
-					&& RightType.IsIntegerType()
-					&& RightType.GetSizeInMemoryDWords() == 1,
-				*Case.Describe(TEXT(
-					"POWdi HIR should retain a double base/result and compiler-normalized signed int32 exponent")));
-		}
-		return Assert.IsTrue(
-			Power->type.IsFloat64Type()
-				&& LeftType.IsFloat64Type()
-				&& RightType.IsFloat64Type(),
-			*Case.Describe(TEXT(
-				"POWd HIR should retain float64 operands and result")));
-	}
-
 	static int CompileReportedSource(FAutomationTestBase& Test,
 		FNativeTestEngine& Engine,
 		const FString& SourceId,
@@ -893,12 +804,6 @@ private:
 		{
 			return false;
 		}
-		if (!IsIntegerResult(Kind))
-		{
-			bPassed &= VerifyTypedSemanticPowerShape(
-				Test, *Evaluate, Case, PowerCase);
-		}
-
 		const ANSICHAR* const PublicTypeName = PublicResultTypeName(Kind);
 		const int ExpectedReturnTypeId = PublicTypeName != nullptr
 			? Engine.Get()->GetTypeIdByDecl(PublicTypeName)
@@ -1117,10 +1022,6 @@ public:
 			TestRunner->AddError(TEXT("Power product should create a case-owned raw SDK engine and context"));
 			return;
 		}
-		ASSERT_THAT(IsTrue(
-			static_cast<asCScriptEngine*>(ScriptEngine)
-				->SetTypedSemanticIRCapture(true),
-			TEXT("power product should enable typed semantic capture before its first build")));
 		ON_SCOPE_EXIT
 		{
 			Context->Release();
@@ -1163,10 +1064,6 @@ public:
 			TestRunner->AddError(TEXT("Power product should create a case-owned raw SDK engine and context"));
 			return;
 		}
-		ASSERT_THAT(IsTrue(
-			static_cast<asCScriptEngine*>(ScriptEngine)
-				->SetTypedSemanticIRCapture(true),
-			TEXT("negative-exponent power product should enable typed semantic capture before its first build")));
 		ON_SCOPE_EXIT
 		{
 			Context->Release();
@@ -1208,10 +1105,6 @@ public:
 			TestRunner->AddError(TEXT("Power product should create a case-owned raw SDK engine and context"));
 			return;
 		}
-		ASSERT_THAT(IsTrue(
-			static_cast<asCScriptEngine*>(ScriptEngine)
-				->SetTypedSemanticIRCapture(true),
-			TEXT("fractional-exponent power product should enable typed semantic capture before its first build")));
 		ON_SCOPE_EXIT
 		{
 			Context->Release();

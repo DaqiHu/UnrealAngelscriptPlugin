@@ -292,7 +292,7 @@ FAngelscriptHash256 FAngelscriptJITProviderManifest::BuildDiagnosticsDigest(
 	Writer.WriteUInt32(Diagnostics.CompiledDependencyCount);
 	Writer.WriteUInt32(Diagnostics.CompiledExternalNativeCallCount);
 	Writer.WriteUInt32(Diagnostics.EmitModuleCount);
-	Writer.WriteUInt32(Diagnostics.bHasVerifiedTypedHIR);
+	Writer.WriteUInt32(Diagnostics.bHasVerifiedCanonicalAST);
 	Writer.WriteString(Diagnostics.TaskError != nullptr
 		? Diagnostics.TaskError : TEXT(""));
 
@@ -359,7 +359,7 @@ FAngelscriptHash256 FAngelscriptJITProviderManifest::BuildDiagnosticsDigest(
 			&& Index < Diagnostics.SemanticFunctionCount;
 		++Index)
 	{
-		const FAngelscriptJITProviderTypedSemanticFunctionDiagnostic& Function =
+		const FAngelscriptJITProviderCanonicalFunctionDiagnostic& Function =
 			Diagnostics.SemanticFunctions[Index];
 		Writer.WriteHash(Function.FunctionKey.Hash);
 		Writer.WriteString(Function.Role != nullptr ? Function.Role : TEXT(""));
@@ -370,8 +370,8 @@ FAngelscriptHash256 FAngelscriptJITProviderManifest::BuildDiagnosticsDigest(
 		Writer.WriteString(Function.ReceiverKind != nullptr
 			? Function.ReceiverKind : TEXT(""));
 		Writer.WriteUInt32(static_cast<uint32>(Function.ReceiverParameterIndex));
-		Writer.WriteString(Function.HIRState != nullptr
-			? Function.HIRState : TEXT(""));
+		Writer.WriteString(Function.CanonicalASTState != nullptr
+			? Function.CanonicalASTState : TEXT(""));
 		Writer.WriteString(Function.CleanupPlanState != nullptr
 			? Function.CleanupPlanState : TEXT(""));
 		Writer.WriteUInt32(Function.bHasSuspendState);
@@ -474,7 +474,7 @@ namespace
 			|| !IsNonEmpty(Diagnostics->RequestedBackendId)
 			|| !IsNonEmpty(Diagnostics->CaptureState)
 			|| !IsPresent(Diagnostics->TaskError)
-			|| !IsBoolean(Diagnostics->bHasVerifiedTypedHIR))
+			|| !IsBoolean(Diagnostics->bHasVerifiedCanonicalAST))
 		{
 			return DiagnosticFailure(
 				EAngelscriptJITProviderValidationCode::InvalidDiagnosticString);
@@ -690,7 +690,7 @@ namespace
 		for (uint32 SemanticIndex = 0;
 			SemanticIndex < Diagnostics->SemanticFunctionCount; ++SemanticIndex)
 		{
-			const FAngelscriptJITProviderTypedSemanticFunctionDiagnostic& Function =
+			const FAngelscriptJITProviderCanonicalFunctionDiagnostic& Function =
 				Diagnostics->SemanticFunctions[SemanticIndex];
 			const int32 SignedSemanticIndex = static_cast<int32>(SemanticIndex);
 			if (Function.StructSize != sizeof(Function))
@@ -704,7 +704,7 @@ namespace
 				|| !IsNonEmpty(Function.Role)
 				|| !IsNonEmpty(Function.InvocationKind)
 				|| !IsNonEmpty(Function.ReceiverKind)
-				|| !IsNonEmpty(Function.HIRState)
+				|| !IsNonEmpty(Function.CanonicalASTState)
 				|| !IsNonEmpty(Function.CleanupPlanState)
 				|| !IsBoolean(Function.bHasSuspendState)
 				|| !IsBoolean(Function.bHasExceptionCleanup)

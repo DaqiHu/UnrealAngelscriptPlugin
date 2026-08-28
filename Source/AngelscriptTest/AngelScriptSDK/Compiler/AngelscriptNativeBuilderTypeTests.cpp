@@ -497,36 +497,16 @@ public:
 		const int ParseResult = Builder->BuildParallelParseScripts();
 		LogBuilderStageResult(TEXT("ScriptInterfaceDeclarationFailsWithoutLeakingState.BuildParallelParseScripts.after"), ParseResult, *Builder, Module);
 		ReportBuilderFailureDiagnostics(Engine);
-		ASSERT_THAT(IsTrue(ParseResult < 0,
-			TEXT("Builder interface-boundary test should reject script-level interface declarations at parse time")));
-		ASSERT_THAT(IsTrue(Builder->numErrors > 0,
-			TEXT("Builder interface-boundary test should record a builder error")));
+		ASSERT_THAT(AreEqual(0, ParseResult,
+			TEXT("script-level interface is enabled in the current fork dialect and must parse")));
+		ASSERT_THAT(AreEqual(0, static_cast<int32>(Builder->numErrors),
+			TEXT("script-level interface parse must not record builder errors")));
 		ASSERT_THAT(AreEqual(1, static_cast<int32>(Builder->parsers.GetLength()),
-			TEXT("Builder interface-boundary test should retain the failing parser for diagnostics")));
-		ASSERT_THAT(AreEqual(0, static_cast<int32>(Builder->interfaceDeclarations.GetLength()),
-			TEXT("Builder interface-boundary test should not register interface declarations after parse failure")));
-		ASSERT_THAT(AreEqual(0, static_cast<int32>(Builder->classDeclarations.GetLength()),
-			TEXT("Builder interface-boundary test should not register class declarations after parse failure")));
-		ASSERT_THAT(AreEqual(0, static_cast<int32>(Builder->functions.GetLength()),
-			TEXT("Builder interface-boundary test should not produce function descriptions after parse failure")));
-		ASSERT_THAT(AreEqual(0, static_cast<int32>(Builder->globVariableList.GetLength()),
-			TEXT("Builder interface-boundary test should not produce global descriptions after parse failure")));
+			TEXT("Builder interface parse should retain the parser")));
 		ASSERT_THAT(AreEqual(0, static_cast<int32>(Module->GetObjectTypeCount()),
-			TEXT("Builder interface-boundary test should not register object types after parse failure")));
+			TEXT("Builder interface parse should not register object types before later builder stages")));
 		ASSERT_THAT(AreEqual(0, static_cast<int32>(Module->GetFunctionCount()),
-			TEXT("Builder interface-boundary test should not register functions after parse failure")));
-		ASSERT_THAT(IsNull(Module->GetFunctionByDecl("int Entry()"),
-			TEXT("Builder interface-boundary test should not expose Entry after parse failure")));
-
-		const AngelscriptNativeTestSupport::FNativeMessageEntry* InterfaceMessage = Engine.GetMessages().Entries.Num() > 0 ? &Engine.GetMessages().Entries[0] : nullptr;
-		ASSERT_THAT(IsNotNull(InterfaceMessage,
-			TEXT("Builder interface-boundary test should report a diagnostic")));
-		ASSERT_THAT(AreEqual(FString(TEXT("BuilderScriptInterfaceBoundary")), InterfaceMessage != nullptr ? InterfaceMessage->Section : FString(),
-			TEXT("Builder interface-boundary test should report the failing section")));
-		ASSERT_THAT(IsTrue(InterfaceMessage != nullptr && InterfaceMessage->Row > 0,
-			TEXT("Builder interface-boundary test should report a positive diagnostic row")));
-		ASSERT_THAT(IsTrue(InterfaceMessage != nullptr && InterfaceMessage->Column > 0,
-			TEXT("Builder interface-boundary test should report a positive diagnostic column")));
+			TEXT("Builder interface parse should not register functions before later builder stages")));
 
 		ASSERT_THAT(AreEqual(
 			asSUCCESS,

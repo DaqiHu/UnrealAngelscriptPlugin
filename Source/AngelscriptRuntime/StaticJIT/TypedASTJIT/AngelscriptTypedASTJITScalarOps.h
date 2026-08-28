@@ -137,6 +137,44 @@ namespace AngelscriptTypedASTJIT
 	}
 
 	template <typename ScalarType>
+	FORCEINLINE ScalarType WrapPreIncrement(ScalarType& Value)
+	{
+		static_assert(TIsIntegral<ScalarType>::Value,
+			"TypedASTJIT wrapping increment supports integral scalars only");
+		Value = WrapAdd<ScalarType>(Value, ScalarType{1});
+		return Value;
+	}
+
+	template <typename ScalarType>
+	FORCEINLINE ScalarType WrapPostIncrement(ScalarType& Value)
+	{
+		static_assert(TIsIntegral<ScalarType>::Value,
+			"TypedASTJIT wrapping increment supports integral scalars only");
+		const ScalarType Previous = Value;
+		Value = WrapAdd<ScalarType>(Value, ScalarType{1});
+		return Previous;
+	}
+
+	template <typename ScalarType>
+	FORCEINLINE ScalarType WrapPreDecrement(ScalarType& Value)
+	{
+		static_assert(TIsIntegral<ScalarType>::Value,
+			"TypedASTJIT wrapping decrement supports integral scalars only");
+		Value = WrapSubtract<ScalarType>(Value, ScalarType{1});
+		return Value;
+	}
+
+	template <typename ScalarType>
+	FORCEINLINE ScalarType WrapPostDecrement(ScalarType& Value)
+	{
+		static_assert(TIsIntegral<ScalarType>::Value,
+			"TypedASTJIT wrapping decrement supports integral scalars only");
+		const ScalarType Previous = Value;
+		Value = WrapSubtract<ScalarType>(Value, ScalarType{1});
+		return Previous;
+	}
+
+	template <typename ScalarType>
 	FORCEINLINE bool IsDivisionOverflow(
 		const ScalarType Left,
 		const ScalarType Right)

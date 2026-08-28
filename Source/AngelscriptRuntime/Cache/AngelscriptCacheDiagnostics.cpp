@@ -85,6 +85,8 @@ namespace AngelscriptCacheDiagnostics_Private
 			return TEXT("DebugSidecar");
 		case EAngelscriptCacheRecordKind::ModuleSnapshot:
 			return TEXT("ModuleSnapshot");
+		case EAngelscriptCacheRecordKind::ASTBodySidecar:
+			return TEXT("ASTBodySidecar");
 		default:
 			return TEXT("Unknown");
 		}
@@ -1968,11 +1970,13 @@ namespace AngelscriptCacheDiagnostics_Private
 			OutDetail = TEXT("AngelScript Engine is not available.");
 			return EAngelscriptCacheDiagnosticApiError::EngineUnavailable;
 		}
-		const UAngelscriptCacheSettings* Settings =
-			GetDefault<UAngelscriptCacheSettings>();
-		if (Settings == nullptr || !Settings->bEnableCacheV2)
+		// Maintenance operates on one already-constructed Engine. Its immutable
+		// enablement decision may come from the project default, the command line,
+		// or an explicit host/test override, so re-reading the mutable class default
+		// here would disagree with the Engine that owns the Cache V2 Service.
+		if (!Engine->IsCacheV2Enabled())
 		{
-			OutDetail = TEXT("Cache V2 is disabled by project settings.");
+			OutDetail = TEXT("Cache V2 is disabled for this AngelScript Engine.");
 			return EAngelscriptCacheDiagnosticApiError::CacheDisabled;
 		}
 		if (Engine->GetRuntimeConfig().bDisableCacheV2Persistence)

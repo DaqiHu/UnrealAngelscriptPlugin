@@ -74,7 +74,6 @@ namespace AngelscriptStaticJITAotGeneration
 		FString ArtifactSetDigest;
 		TArray<FString> GeneratedModules;
 		TArray<FString> GeneratedFunctionKeys;
-		FString TypedASTNormalizedHIR;
 		FString TypedASTGeneratedCpp;
 		FString IsolatedBytecodeDifferentialSymbolPrefix;
 		FString IsolatedTypedASTDifferentialSymbolPrefix;
@@ -86,8 +85,6 @@ namespace AngelscriptStaticJITAotGeneration
 		FString IsolatedTypedASTNonCloneableFallbackDetail;
 		FStaticJITAotEmitterFailureFallbackObservation
 			EmitterFailureFallback;
-		double HirCaptureMilliseconds = 0.0;
-		int64 HirWorkingSetDeltaBytes = 0;
 		double IsolatedBytecodeGenerationMilliseconds = 0.0;
 		double IsolatedTypedGenerationMilliseconds = 0.0;
 		int32 IsolatedBytecodeGeneratedCppBytes = 0;
@@ -98,8 +95,8 @@ namespace AngelscriptStaticJITAotGeneration
 	struct FStaticJITAotFirstVersionBenchmark
 	{
 		bool bSuccess = false;
-		double HirCaptureMilliseconds = 0.0;
-		int64 HirWorkingSetDeltaBytes = 0;
+		double CanonicalASTBuildMilliseconds = 0.0;
+		int64 CanonicalASTWorkingSetDeltaBytes = 0;
 		double IsolatedBytecodeGenerationMilliseconds = 0.0;
 		double IsolatedTypedGenerationMilliseconds = 0.0;
 		int32 IsolatedBytecodeGeneratedCppBytes = 0;

@@ -39,9 +39,9 @@ namespace AngelscriptStaticJITAotGenerationVerificationTests_Private
 			Observation.RejectedTaskCount, 0);
 		Test.TestTrue(
 			*FString::Printf(TEXT(
-				"%s should consume same-compilation typed HIR"), Label),
-			Observation.LastVerifiedTypedHIRCount > 0
-				&& Observation.bLastTaskUsedOnlySameCompilationHIR);
+				"%s should consume the same-compilation Canonical AST"), Label),
+			Observation.LastVerifiedCanonicalASTCount > 0
+				&& Observation.bLastTaskUsedOnlySameCompilationAST);
 		Test.TestTrue(
 			*FString::Printf(TEXT(
 				"%s should index resolved UFUNCTION roots"), Label),
@@ -51,7 +51,8 @@ namespace AngelscriptStaticJITAotGenerationVerificationTests_Private
 				"%s should retain structured semantic diagnostics"), Label),
 			Observation.StructuredFunctionDiagnosticCount > 0
 				&& Observation.StructuredRootClosureDiagnosticCount > 0
-				&& Observation.StructuredVerifiedHIRDiagnosticCount > 0);
+				&& Observation.
+					StructuredVerifiedCanonicalASTDiagnosticCount > 0);
 		Test.TestTrue(
 			*FString::Printf(TEXT(
 				"%s should retain helper and exception payload diagnostics"),
@@ -106,7 +107,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationVerificationTests,
 			Second.IsolatedTypedASTImportedFallbackDetail));
 		ASSERT_THAT(IsTrue(
 			First.IsolatedTypedASTNonCloneableFallbackDetail.StartsWith(
-				TEXT("NonCloneableEffectRejected: MissingTypedHIR:"),
+				TEXT("NonCloneableEffectRejected: UnsupportedFunctionTrait:"),
 				ESearchCase::CaseSensitive)));
 		ASSERT_THAT(AreEqual(
 			First.IsolatedTypedASTNonCloneableFallbackDetail,
@@ -130,12 +131,21 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationVerificationTests,
 		ASSERT_THAT(AreEqual(
 			First.IsolatedBytecodeDifferentialIdentity.FunctionKey,
 			First.IsolatedTypedASTDifferentialIdentity.FunctionKey));
-		ASSERT_THAT(AreEqual(
-			First.IsolatedBytecodeDifferentialIdentity.ExecutionHash,
-			First.IsolatedTypedASTDifferentialIdentity.ExecutionHash));
-		ASSERT_THAT(AreEqual(
-			First.IsolatedBytecodeDifferentialIdentity.DebugHash,
-			First.IsolatedTypedASTDifferentialIdentity.DebugHash));
+		// Execution/debug hashes identify the compiled content that a Provider
+		// entry must match exactly. The isolated Bytecode request still compiles
+		// through the explicit LEGACY authority, while TypedAST compiles through
+		// CANONICAL, so equivalent functions may legitimately have different
+		// content hashes. Per-backend equality across First/Second below proves
+		// determinism; the installed differential test proves Raw/VM/Parms
+		// behavior parity between the two independently generated artifacts.
+		ASSERT_THAT(IsFalse(
+			First.IsolatedBytecodeDifferentialIdentity.ExecutionHash.IsEmpty()));
+		ASSERT_THAT(IsFalse(
+			First.IsolatedBytecodeDifferentialIdentity.DebugHash.IsEmpty()));
+		ASSERT_THAT(IsFalse(
+			First.IsolatedTypedASTDifferentialIdentity.ExecutionHash.IsEmpty()));
+		ASSERT_THAT(IsFalse(
+			First.IsolatedTypedASTDifferentialIdentity.DebugHash.IsEmpty()));
 		ASSERT_THAT(AreEqual(
 			First.IsolatedBytecodeDifferentialIdentity.ArtifactProfile,
 			First.IsolatedTypedASTDifferentialIdentity.ArtifactProfile));
@@ -148,8 +158,6 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationVerificationTests,
 		ASSERT_THAT(IsTrue(
 			First.IsolatedTypedASTDifferentialIdentity
 				== Second.IsolatedTypedASTDifferentialIdentity));
-		ASSERT_THAT(AreEqual(
-			First.TypedASTNormalizedHIR, Second.TypedASTNormalizedHIR));
 		ASSERT_THAT(AreEqual(
 			First.TypedASTGeneratedCpp, Second.TypedASTGeneratedCpp));
 	}

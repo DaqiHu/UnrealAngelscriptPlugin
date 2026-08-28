@@ -33,7 +33,6 @@ public:
 			TEXT("Engine/World"),
 			TEXT("GarbageCollection"),
 			TEXT("Editor/"),
-			TEXT("TypedHIR"),
 			TEXT("TypedAST"),
 			TEXT("StaticJIT/"),
 		};
@@ -44,7 +43,6 @@ public:
 			TEXT("FAngelscriptCacheService"),
 			TEXT("CacheV2"),
 			TEXT("PrecompiledData"),
-			TEXT("TypedHIR"),
 			TEXT("TypedAST"),
 		};
 
@@ -116,7 +114,6 @@ public:
 			TEXT("FAngelscriptCacheService"),
 			TEXT("CacheV2"),
 			TEXT("PrecompiledData"),
-			TEXT("TypedHIR"),
 			TEXT("TypedAST"),
 		};
 

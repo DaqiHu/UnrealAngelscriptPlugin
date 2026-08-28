@@ -19,6 +19,7 @@ enum class EAngelscriptCacheRecordKind : uint8
 	FunctionBody = 5,
 	DebugSidecar = 6,
 	ModuleSnapshot = 7,
+	ASTBodySidecar = 8,
 };
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheRecordId

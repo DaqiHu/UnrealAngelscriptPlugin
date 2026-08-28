@@ -41,8 +41,8 @@
 #define AS_SCRIPTCODE_H
 
 #include "as_array.h"
+#include "as_source_provenance.h"
 #include "as_string.h"
-#include "as_typed_semantic_ir.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -59,9 +59,9 @@ public:
 
 	void ConvertPosToRowCol(size_t pos, int *row, int *col);
 	bool SetSourceProvenanceRanges(
-		const asSTypedSemanticSourceProvenanceRange* ranges,
+		const asSSourceProvenanceRange* ranges,
 		asUINT rangeCount);
-	void ApplySourceProvenance(asSTypedSemanticSourceSpan& span) const;
+	void ApplySourceProvenance(asSSourceSpan& span) const;
 
 	bool TokenEquals(size_t pos, size_t len, const char *str);
 
@@ -72,7 +72,7 @@ public:
 	int              idx;
 	int              lineOffset;
 	asCArray<size_t> linePositions;
-	asCArray<asSTypedSemanticSourceProvenanceRange> sourceProvenanceRanges;
+	asCArray<asSSourceProvenanceRange> sourceProvenanceRanges;
 };
 
 END_AS_NAMESPACE

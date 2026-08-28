@@ -52,6 +52,7 @@
 #include "as_memory.h"
 #include "as_gc.h"
 #include "as_tokenizer.h"
+#include "as_ast_fwd.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -213,19 +214,31 @@ public:
 	asCScriptEngine();
 	virtual ~asCScriptEngine();
 
-	// Maintained-fork compiler sidecar. This is deliberately not part of the
-	// public asIScriptEngine ABI and must be selected before source compilation.
-	bool SetTypedSemanticIRCapture(bool enabled)
+	// LEGACY remains the source-module Build default until the final cutover gate.
+	// Explicit CANONICAL selection publishes Bytecode from sealed-AST CodeGen.
+	// Dual is not registered.
+	bool SetCompilerPipeline(asECompilerPipeline pipeline)
 	{
-		if( typedSemanticIRCaptureFrozen )
+		if( pipeline != asCOMPILER_PIPELINE_LEGACY && pipeline != asCOMPILER_PIPELINE_CANONICAL )
+		{
 			return false;
-		ep.captureTypedSemanticIR = enabled;
+		}
+		ep.canonicalCompilerPipeline = (pipeline == asCOMPILER_PIPELINE_CANONICAL);
 		return true;
 	}
 
-	bool IsTypedSemanticIRCaptureEnabled() const
+	asECompilerPipeline GetCompilerPipeline() const
 	{
-		return ep.captureTypedSemanticIR;
+		return ep.canonicalCompilerPipeline ? asCOMPILER_PIPELINE_CANONICAL : asCOMPILER_PIPELINE_LEGACY;
+	}
+
+	bool IsCanonicalBytecodeCodeGenReady() const
+	{
+		// This is a selection/readiness query, not a claim that every source form
+		// or every entry point has completed cutover. A selected CANONICAL module
+		// Build still verifies the sealed graph and can reject an unsupported form
+		// before publishing any bytecode; CompileFunction is audited separately.
+		return ep.canonicalCompilerPipeline;
 	}
 
 //protected:
@@ -293,6 +306,8 @@ public:
 	asCTypeInfo *GetRegisteredType(const asCString &name, asSNameSpace *ns) const;
 
 	asCObjectType *GetListPatternType(int listPatternFuncId);
+	asCObjectType *GetListPatternTypeForObjectType(
+		asCObjectType *objectType, bool *outCreated = 0);
 	void DestroyList(asBYTE *buffer, const asCObjectType *listPatternType);
 	void DestroySubList(asBYTE *&buffer, asSListPatternNode *&patternNode);
 
@@ -420,9 +435,6 @@ public:
 	// This flag is true if a script is currently being compiled. It is used to prevent multiple
 	// threads from requesting builds at the same time (without blocking)
 	bool                   isBuilding;
-	// The capture profile is Engine-wide and becomes immutable when the first
-	// source/archive build acquires the Engine build slot.
-	bool                   typedSemanticIRCaptureFrozen;
 	// Synchronized with engineRWLock
 	// This array holds modules that have been discard (thus are no longer visible to the application)
 	// but cannot yet be deleted due to having external references to some of the entities in them
@@ -566,7 +578,7 @@ public:
 		bool   floatIsFloat64;
 		bool   warnOnFloatConstantsForDoubles;
 		bool   warnIntegerDivision;
-		bool   captureTypedSemanticIR;
+		bool   canonicalCompilerPipeline;
 	} ep;
 
 	// Callbacks

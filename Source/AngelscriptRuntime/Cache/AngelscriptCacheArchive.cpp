@@ -30,6 +30,7 @@ namespace AngelscriptCacheArchive_Private
 		case EAngelscriptCacheRecordKind::FunctionBody:
 		case EAngelscriptCacheRecordKind::DebugSidecar:
 		case EAngelscriptCacheRecordKind::ModuleSnapshot:
+		case EAngelscriptCacheRecordKind::ASTBodySidecar:
 			return true;
 		default:
 			return false;

@@ -263,7 +263,7 @@ const TCHAR* LexToString(
 	{
 	case EAngelscriptTypedASTJITFallbackReason::None: return TEXT("None");
 	case EAngelscriptTypedASTJITFallbackReason::NotUFunctionRoot: return TEXT("NotUFunctionRoot");
-	case EAngelscriptTypedASTJITFallbackReason::MissingTypedHIR: return TEXT("MissingTypedHIR");
+	case EAngelscriptTypedASTJITFallbackReason::MissingCanonicalAST: return TEXT("MissingCanonicalAST");
 	case EAngelscriptTypedASTJITFallbackReason::UnsupportedFunctionKind: return TEXT("UnsupportedFunctionKind");
 	case EAngelscriptTypedASTJITFallbackReason::UnsupportedFunctionTrait: return TEXT("UnsupportedFunctionTrait");
 	case EAngelscriptTypedASTJITFallbackReason::UnsupportedReceiver: return TEXT("UnsupportedReceiver");
@@ -289,9 +289,9 @@ const TCHAR* LexToString(
 	case EAngelscriptTypedASTJITFallbackReason::InvalidCallEvaluationSequence: return TEXT("InvalidCallEvaluationSequence");
 	case EAngelscriptTypedASTJITFallbackReason::InvalidControlTarget: return TEXT("InvalidControlTarget");
 	case EAngelscriptTypedASTJITFallbackReason::InvalidCleanupPlan: return TEXT("InvalidCleanupPlan");
-	case EAngelscriptTypedASTJITFallbackReason::InvalidTypedHIR: return TEXT("InvalidTypedHIR");
+	case EAngelscriptTypedASTJITFallbackReason::InvalidCanonicalAST: return TEXT("InvalidCanonicalAST");
 	case EAngelscriptTypedASTJITFallbackReason::EmitterFailure: return TEXT("EmitterFailure");
 	case EAngelscriptTypedASTJITFallbackReason::BackendUnavailable: return TEXT("BackendUnavailable");
-	default: return TEXT("InvalidTypedHIR");
+	default: return TEXT("InvalidCanonicalAST");
 	}
 }

@@ -38,15 +38,132 @@
 
 #include "as_module.h"
 #include "as_config.h"
+#include <stdio.h>
 #include "as_builder.h"
+#include "as_bytecode_codegen.h"
+#include "as_scriptengine.h"
+#include "as_ast_public_view.h"
+#include "as_ast_verifier.h"
 #include "as_context.h"
 #include "as_restore.h"
 #include "as_texts.h"
 #include "as_debug.h"
+#include "Misc/ScopeLock.h"
+#include "HAL/PlatformAtomics.h"
 //WILL-EDIT
 #include "as_scriptobject.h"
 
 BEGIN_AS_NAMESPACE
+
+static bool SealCanonicalASTForPublication(asCASTContext& context, asCScriptEngine* engine, const asCString& moduleName)
+{
+	if( context.IsPublishable() )
+	{
+		return true;
+	}
+
+	const int sealStatus = context.Seal();
+	if( sealStatus == asAST_VERIFY_OK )
+	{
+		return true;
+	}
+
+	// Seal intentionally exposes only the verifier category. Re-run the same
+	// read-only verification on failure so the compiler diagnostic preserves the
+	// exact violated invariant and compact source range before the rejected AST
+	// is destroyed.
+	asSAstVerifyResult verifyResult;
+	const int verifyStatus = asCASTVerify(context, verifyResult);
+	asCString message;
+	message.Format(
+		"Canonical AST publication rejected module='%s' seal-status=%d verify-status=%d category=%d detail='%s' file=%u begin=%u end=%u",
+		moduleName.AddressOf() ? moduleName.AddressOf() : "",
+		sealStatus,
+		verifyStatus,
+		(int)verifyResult.category,
+		verifyResult.detail.AddressOf() ? verifyResult.detail.AddressOf() : "",
+		(unsigned int)verifyResult.range.begin.fileID,
+		(unsigned int)verifyResult.range.begin.offset,
+		(unsigned int)verifyResult.range.end.offset);
+	if( engine )
+	{
+		engine->WriteMessage(moduleName.AddressOf(), 0, 0, asMSGTYPE_ERROR, message.AddressOf());
+	}
+	printf("%s\n", message.AddressOf());
+	return false;
+}
+
+asCRuntimeTypeGeneration::asCRuntimeTypeGeneration()
+	: retiredOwner(0)
+	, retired(0)
+{
+	refCount.set(1);
+}
+
+asCRuntimeTypeGeneration::~asCRuntimeTypeGeneration()
+{
+	if( retiredOwner )
+	{
+		asDELETE(retiredOwner, asCModule);
+		retiredOwner = 0;
+	}
+}
+
+asCRuntimeTypeGeneration* asCRuntimeTypeGeneration::Create(
+	asCScriptEngine* engine,
+	const char* moduleName)
+{
+	if( engine == 0 )
+		return 0;
+	asCRuntimeTypeGeneration* const generation =
+		asNEW(asCRuntimeTypeGeneration);
+	if( generation == 0 )
+		return 0;
+	generation->retiredOwner = asNEW(asCModule)(moduleName, engine);
+	if( generation->retiredOwner == 0 )
+	{
+		asDELETE(generation, asCRuntimeTypeGeneration);
+		return 0;
+	}
+	return generation;
+}
+
+int asCRuntimeTypeGeneration::AddRef()
+{
+	return refCount.atomicInc();
+}
+
+int asCRuntimeTypeGeneration::Release()
+{
+	const int result = refCount.atomicDec();
+	if( result == 0 )
+		asDELETE(this, asCRuntimeTypeGeneration);
+	return result;
+}
+
+void asCRuntimeTypeGeneration::Retire(asCModule& source)
+{
+	asASSERT(retiredOwner != 0);
+	asASSERT(!IsRetired());
+	if( retiredOwner == 0 || IsRetired() )
+		return;
+	source.TransferExecutableGenerationTo(*retiredOwner);
+	FPlatformAtomics::InterlockedExchange(&retired, 1);
+}
+
+bool asCRuntimeTypeGeneration::IsRetired() const
+{
+	return FPlatformAtomics::InterlockedCompareExchange(
+		&retired, 0, 0) != 0;
+}
+
+asIScriptFunction*
+asCRuntimeTypeGeneration::GetRetiredFunctionByDecl(
+	const char* declaration) const
+{
+	return IsRetired() && retiredOwner && declaration
+		? retiredOwner->GetFunctionByDecl(declaration) : 0;
+}
 
 
 // internal
@@ -64,6 +181,19 @@ asCModule::asCModule(const char *name, asCScriptEngine *engine)
 	buildArtifactCompileResultCallback = 0;
 	buildArtifactCompileResultUserData = 0;
 	isGlobalVarInitialized = false;
+	astRetentionPolicy = asAST_DISCARD_AFTER_CODEGEN;
+	astRetentionFrozen = false;
+	astGeneration = 0;
+	astSnapshot = 0;
+	pendingCanonicalAST = 0;
+	runtimeTypeGeneration = 0;
+	lastBytecodePublisher = asBYTECODE_PUBLISHER_NONE;
+	lastLegacyCompilerInvocationCount = 0;
+	lastCanonicalCodeGenAstDigest = 0;
+	hasLastCanonicalCodeGenAstDigest = false;
+#if WITH_ANGELSCRIPT_UNITTESTS
+	testCanonicalSnapshotPreparationFailure = 0;
+#endif
 
 	accessMask = 1;
 
@@ -103,7 +233,11 @@ void asCModule::SetBuildArtifactRestoreCallback(
 // internal
 asCModule::~asCModule()
 {
-	InternalReset();
+	if( runtimeTypeGeneration )
+		RetireCanonicalRuntimeTypeGeneration();
+	else
+		InternalReset();
+	ReleaseCanonicalASTSnapshot();
 	ClearImports();
 
 	// The builder is not removed by InternalReset because it holds the script
@@ -290,7 +424,7 @@ int asCModule::AddScriptSectionWithSourceProvenance(
 	const char *in_code,
 	size_t in_codeLength,
 	int in_lineOffset,
-	const asSTypedSemanticSourceProvenanceRange *ranges,
+	const asSSourceProvenanceRange *ranges,
 	asUINT rangeCount)
 {
 #ifdef AS_NO_COMPILER
@@ -372,15 +506,157 @@ int asCModule::Build()
 		return asINVALID_CONFIGURATION;
 	}
 
-	InternalReset();
+	astRetentionFrozen = true;
+	ResetLegacyCompilerInvocationCount();
+	const bool isCanonicalBuild = engine->GetCompilerPipeline() == asCOMPILER_PIPELINE_CANONICAL;
+
+	// The legacy pipeline keeps its original destructive build contract. The
+	// canonical path instead stages the new semantic/code generation owner so a
+	// rejected replacement cannot erase the last working module generation.
+	if( !isCanonicalBuild )
+		ResetExecutableGenerationForReplacement();
 
 	if( !builder )
 	{
+		if( isCanonicalBuild )
+			ResetExecutableGenerationForReplacement();
 		engine->BuildCompleted();
 		return asSUCCESS;
 	}
 
+	asCModule* canonicalCandidate = 0;
+	asCASTSnapshot* preparedCanonicalSnapshot = 0;
+	if( isCanonicalBuild )
+	{
+		canonicalCandidate = asNEW(asCModule)(name.AddressOf(), engine);
+		if( canonicalCandidate == 0 )
+		{
+			engine->BuildCompleted();
+			return asOUT_OF_MEMORY;
+		}
+		PrepareCanonicalBuildCandidate(*canonicalCandidate);
+		r = canonicalCandidate->EnsureCanonicalRuntimeTypeGeneration();
+		if( r < 0 )
+		{
+			asDELETE(canonicalCandidate, asCModule);
+			engine->BuildCompleted();
+			return r;
+		}
+		RemoveTypesAndGlobalsFromEngineAvailability();
+		builder->module = canonicalCandidate;
+	}
+
 	r = builder->BuildParallelParseScripts();
+	if( isCanonicalBuild )
+	{
+		if( r >= 0 )
+		{
+			r = builder->SealCanonicalAST();
+			if( r < 0 )
+			{
+				printf("Canonical Seal failed r=%d\n", r);
+			}
+		}
+		asCASTContext* pending = builder->TakeCanonicalAST();
+		if( r >= 0 && pending == 0 )
+		{
+			r = asINVALID_CONFIGURATION;
+		}
+		if( r >= 0 && astRetentionPolicy == asAST_RETAIN_SNAPSHOT )
+		{
+			r = PrepareCanonicalASTSnapshot(
+				pending,
+				canonicalCandidate->runtimeTypeGeneration,
+				preparedCanonicalSnapshot);
+		}
+		if( r >= 0 )
+		{
+			asCBytecodeCodeGen codegen;
+			const asCASTContext* const codegenContext = pending
+				? pending
+				: (preparedCanonicalSnapshot
+					? preparedCanonicalSnapshot->GetContext() : 0);
+			if( codegenContext == 0 )
+				r = asINVALID_CONFIGURATION;
+			else
+				r = codegen.Generate(*codegenContext, canonicalCandidate);
+			if( r != 0 )
+			{
+				asCString msg;
+				const asCString& detail = codegen.GetFailureDetail();
+				if( detail.GetLength() )
+					msg.Format("Canonical CodeGen failed code=%d line=%d: %s", r, codegen.GetLastFailLine(), detail.AddressOf());
+				else
+					msg.Format("Canonical CodeGen failed code=%d line=%d", r, codegen.GetLastFailLine());
+				engine->WriteMessage(
+					codegen.GetFailureSection().AddressOf()
+						? codegen.GetFailureSection().AddressOf()
+						: "",
+					codegen.GetFailureRow(),
+					codegen.GetFailureColumn(),
+					asMSGTYPE_ERROR,
+					msg.AddressOf());
+				printf("%s\n", msg.AddressOf());
+				if( r > 0 )
+				{
+					r = asERROR;
+				}
+			}
+		}
+		asDELETE(builder, asCBuilder);
+		builder = 0;
+		if( r < 0 )
+		{
+			if( pending )
+				asDELETE(pending, asCASTContext);
+			asDELETE(canonicalCandidate, asCModule);
+			if( preparedCanonicalSnapshot )
+				preparedCanonicalSnapshot->Release();
+			RestoreTypesAndGlobalsToEngineAvailability();
+			engine->BuildCompleted();
+			return r;
+		}
+		// Publish the executable owner and the public snapshot-current marker
+		// under the same lock used by AcquireASTSnapshot(). Without this critical
+		// section a reader could acquire generation A while it was still marked
+		// current after A's executable/type owner had already retired and B had
+		// become the module lookup target.
+		asCASTSnapshot* previousCanonicalSnapshot = 0;
+		const bool hasPreparedCanonicalSnapshot =
+			preparedCanonicalSnapshot != 0;
+		{
+			FScopeLock SnapshotLock(&astSnapshotLock);
+			if( runtimeTypeGeneration )
+				RetireCanonicalRuntimeTypeGeneration();
+			else
+				InternalReset();
+			PromoteCanonicalBuildCandidate(*canonicalCandidate);
+
+			previousCanonicalSnapshot = astSnapshot;
+			astSnapshot = preparedCanonicalSnapshot;
+			preparedCanonicalSnapshot = 0;
+			if( astSnapshot )
+			{
+				++astGeneration;
+				astSnapshot->SetCurrentGeneration(true);
+			}
+			if( previousCanonicalSnapshot )
+				previousCanonicalSnapshot->SetCurrentGeneration(false);
+		}
+		if( previousCanonicalSnapshot )
+			previousCanonicalSnapshot->Release();
+		asDELETE(canonicalCandidate, asCModule);
+		if( pending )
+			AdoptPendingCanonicalAST(pending);
+		JITCompile();
+		engine->PrepareEngine();
+		engine->BuildCompleted();
+		if( r >= 0 && !hasPreparedCanonicalSnapshot )
+			PublishCanonicalASTSnapshot();
+		if( r >= 0 && engine->ep.initGlobalVarsAfterBuild )
+			r = ResetGlobalVars(0);
+		return r;
+	}
 	if( r >= 0 )
 		r = builder->BuildGenerateTypes();
 	if( r >= 0 )
@@ -393,6 +669,16 @@ int asCModule::Build()
 		r = builder->BuildLayoutFunctions();
 	if( r >= 0 )
 		r = builder->BuildCompileCode();
+	if( r >= 0 && builder->canonicalAST != 0 )
+	{
+		// A retained LEGACY comparison snapshot is still a Canonical AST product.
+		// Finalize class layout/lifecycle facts and seal it through the same Sema
+		// boundary used by the canonical compiler before handing it to publication.
+		// This does not route LEGACY bytecode generation through Canonical CodeGen;
+		// it prevents AST tests and debug tools from observing a sealed half-product.
+		r = builder->SealCanonicalAST();
+	}
+	AdoptPendingCanonicalAST(builder->TakeCanonicalAST());
 	asDELETE(builder,asCBuilder);
 	builder = 0;
 
@@ -420,6 +706,9 @@ int asCModule::Build()
 #endif
 
 	engine->BuildCompleted();
+
+	if( r >= 0 )
+		PublishCanonicalASTSnapshot();
 
 	// Initialize global variables
 	if( r >= 0 && engine->ep.initGlobalVarsAfterBuild )
@@ -720,6 +1009,8 @@ bool asCModule::HasExternalReferences(bool shuttingDown)
 // internal
 void asCModule::InternalReset()
 {
+	lastBytecodePublisher = asBYTECODE_PUBLISHER_NONE;
+	ResetLastCanonicalCodeGenAstDigest();
 	CallExit();
 	RemoveTypesAndGlobalsFromEngineAvailability();
 
@@ -1910,22 +2201,116 @@ int asCModule::CompileFunction(const char *sectionName, const char *code, int li
 		return asINVALID_CONFIGURATION;
 	}
 
-	// Compile the single function
-	asCBuilder funcBuilder(engine, this);
-	funcBuilder.SetBuildArtifactInvocationCallback(
-		buildArtifactInvocationCallback,
-		buildArtifactInvocationUserData);
-	funcBuilder.SetBuildArtifactRestoreCallback(
-		buildArtifactRestoreCallback,
-		buildArtifactRestoreUserData);
-	funcBuilder.SetBuildArtifactCompileResultCallback(
-		buildArtifactCompileResultCallback,
-		buildArtifactCompileResultUserData);
-	asCString str = code;
+	// CompileFunction is its own source-compile entry point. Keep the
+	// provenance counter scoped to this request instead of leaving stale data
+	// from a preceding module Build visible to diagnostics.
+	ResetLegacyCompilerInvocationCount();
+	ResetLastCanonicalCodeGenAstDigest();
+	SetLastBytecodePublisher(asBYTECODE_PUBLISHER_NONE);
+
 	asCScriptFunction *func = 0;
-	r = funcBuilder.CompileFunction(sectionName, str.AddressOf(), lineOffset, compileFlags, &func);
+	if( engine->GetCompilerPipeline() == asCOMPILER_PIPELINE_CANONICAL )
+	{
+		// CompileFunction owns an ephemeral canonical graph. It is complete for
+		// this one source function (including nested lambdas), but it is not a
+		// complete replacement for the module generation and is never retained as
+		// the module snapshot.
+		asCBuilder funcBuilder(engine, this);
+		funcBuilder.SetBuildArtifactInvocationCallback(
+			buildArtifactInvocationCallback,
+			buildArtifactInvocationUserData);
+		funcBuilder.SetBuildArtifactRestoreCallback(
+			buildArtifactRestoreCallback,
+			buildArtifactRestoreUserData);
+		funcBuilder.SetBuildArtifactCompileResultCallback(
+			buildArtifactCompileResultCallback,
+			buildArtifactCompileResultUserData);
+		asCString str = code;
+		r = funcBuilder.AddCode(
+			sectionName,
+			str.AddressOf(),
+			(int)str.GetLength(),
+			lineOffset,
+			(int)engine->GetScriptSectionNameIndex(sectionName ? sectionName : ""),
+			true);
+		if( r >= 0 )
+			r = funcBuilder.PrepareCanonicalCompileFunctionScope();
+		if( r >= 0 )
+			r = funcBuilder.BuildParallelParseScripts();
+		if( r >= 0 )
+			r = funcBuilder.SealCanonicalAST();
+
+		asCASTContext* const ephemeralAST = funcBuilder.TakeCanonicalAST();
+		if( r >= 0 && ephemeralAST == 0 )
+			r = asINVALID_CONFIGURATION;
+		if( r >= 0 )
+		{
+			asCBytecodeCodeGen codegen;
+			r = codegen.GenerateFunction(
+				*ephemeralAST,
+				this,
+				compileFlags == asCOMP_ADD_TO_MODULE,
+				&func);
+			if( r != asAST_VERIFY_OK )
+			{
+				asCString msg;
+				const asCString& detail = codegen.GetFailureDetail();
+				if( detail.GetLength() )
+				{
+					msg.Format(
+						"Canonical CompileFunction CodeGen failed code=%d line=%d: %s",
+						r,
+						codegen.GetLastFailLine(),
+						detail.AddressOf());
+				}
+				else
+				{
+					msg.Format(
+						"Canonical CompileFunction CodeGen failed code=%d line=%d",
+						r,
+						codegen.GetLastFailLine());
+				}
+				engine->WriteMessage(
+					codegen.GetFailureSection().AddressOf()
+						? codegen.GetFailureSection().AddressOf() : "",
+					codegen.GetFailureRow(),
+					codegen.GetFailureColumn(),
+					asMSGTYPE_ERROR,
+					msg.AddressOf());
+				if( r > 0 )
+					r = asERROR;
+			}
+		}
+		if( ephemeralAST )
+			asDELETE(ephemeralAST, asCASTContext);
+	}
+	else
+	{
+		// Keep the maintained compiler intact as an explicit comparison/fallback
+		// pipeline while the canonical path becomes the production default.
+		asCBuilder funcBuilder(engine, this);
+		funcBuilder.SetBuildArtifactInvocationCallback(
+			buildArtifactInvocationCallback,
+			buildArtifactInvocationUserData);
+		funcBuilder.SetBuildArtifactRestoreCallback(
+			buildArtifactRestoreCallback,
+			buildArtifactRestoreUserData);
+		funcBuilder.SetBuildArtifactCompileResultCallback(
+			buildArtifactCompileResultCallback,
+			buildArtifactCompileResultUserData);
+		asCString str = code;
+		r = funcBuilder.CompileFunction(
+			sectionName, str.AddressOf(), lineOffset, compileFlags, &func);
+	}
 	if( r >= 0 && func )
 		func->JITCompile();
+	// A successful ADD_TO_MODULE changes the executable declaration set without
+	// rebuilding the complete canonical AST. Never keep publishing the previous
+	// retained generation as current: it would omit the just-added function.
+	// A later full Build() is the only operation that can publish a complete
+	// replacement snapshot.
+	if( r >= 0 && compileFlags == asCOMP_ADD_TO_MODULE )
+		ReleaseCanonicalASTSnapshot();
 
 	engine->BuildCompleted();
 
@@ -1959,6 +2344,274 @@ int asCModule::RemoveFunction(asIScriptFunction *func)
 	}
 
 	return asNO_FUNCTION;
+}
+
+int asCModule::SetASTRetentionPolicy(asEASTRetentionPolicy policy)
+{
+	if( astRetentionFrozen )
+	{
+		return asNOT_SUPPORTED;
+	}
+	if( policy != asAST_DISCARD_AFTER_CODEGEN && policy != asAST_RETAIN_SNAPSHOT )
+	{
+		return asINVALID_ARG;
+	}
+	astRetentionPolicy = policy;
+	return asSUCCESS;
+}
+
+asEASTRetentionPolicy asCModule::GetASTRetentionPolicy() const
+{
+	return astRetentionPolicy;
+}
+
+asIASTSnapshot* asCModule::AcquireASTSnapshot(asDWORD apiVersion) const
+{
+	if( apiVersion != asAST_API_VERSION_1 )
+	{
+		return 0;
+	}
+
+	FScopeLock SnapshotLock(&astSnapshotLock);
+	if( astSnapshot == 0 )
+	{
+		return 0;
+	}
+	astSnapshot->AddRef();
+	return astSnapshot;
+}
+
+asEBytecodePublisher asCModule::GetLastBytecodePublisher() const
+{
+	return lastBytecodePublisher;
+}
+
+void asCModule::SetLastBytecodePublisher(asEBytecodePublisher publisher)
+{
+	lastBytecodePublisher = publisher;
+	if( publisher != asBYTECODE_PUBLISHER_CANONICAL_CODEGEN )
+	{
+		ResetLastCanonicalCodeGenAstDigest();
+	}
+}
+
+asUINT asCModule::GetLastLegacyCompilerInvocationCount() const
+{
+	return lastLegacyCompilerInvocationCount;
+}
+
+void asCModule::ResetLegacyCompilerInvocationCount()
+{
+	lastLegacyCompilerInvocationCount = 0;
+}
+
+void asCModule::RecordLegacyCompilerInvocation()
+{
+	++lastLegacyCompilerInvocationCount;
+}
+
+bool asCModule::GetLastCanonicalCodeGenAstDigest(asQWORD& outDigest) const
+{
+	if( !hasLastCanonicalCodeGenAstDigest )
+	{
+		return false;
+	}
+	outDigest = lastCanonicalCodeGenAstDigest;
+	return true;
+}
+
+void asCModule::SetLastCanonicalCodeGenAstDigest(asQWORD digest)
+{
+	lastCanonicalCodeGenAstDigest = digest;
+	hasLastCanonicalCodeGenAstDigest = true;
+}
+
+void asCModule::ResetLastCanonicalCodeGenAstDigest()
+{
+	lastCanonicalCodeGenAstDigest = 0;
+	hasLastCanonicalCodeGenAstDigest = false;
+}
+
+#if WITH_ANGELSCRIPT_UNITTESTS
+void asCModule::SetCanonicalSnapshotPreparationFailureForTesting(
+	int failureCode)
+{
+	testCanonicalSnapshotPreparationFailure = failureCode < 0
+		? failureCode : asERROR;
+}
+#endif
+
+void asCModule::ReleaseCanonicalASTSnapshot()
+{
+	asCASTSnapshot* snapshot = 0;
+	{
+		FScopeLock SnapshotLock(&astSnapshotLock);
+		snapshot = astSnapshot;
+		astSnapshot = 0;
+		if( snapshot )
+		{
+			snapshot->SetCurrentGeneration(false);
+		}
+	}
+	if( snapshot )
+	{
+		snapshot->Release();
+	}
+	if( pendingCanonicalAST )
+	{
+		asDELETE(pendingCanonicalAST, asCASTContext);
+		pendingCanonicalAST = 0;
+	}
+}
+
+void asCModule::AdoptPendingCanonicalAST(asCASTContext* context)
+{
+	if( pendingCanonicalAST && pendingCanonicalAST != context )
+	{
+		asDELETE(pendingCanonicalAST, asCASTContext);
+	}
+	pendingCanonicalAST = context;
+}
+
+const asCASTContext* asCModule::GetCanonicalASTContext() const
+{
+	if( astSnapshot )
+	{
+		return astSnapshot->GetContext();
+	}
+	return pendingCanonicalAST;
+}
+
+int asCModule::PublishRestoredCanonicalASTSnapshot()
+{
+	if( astRetentionPolicy != asAST_RETAIN_SNAPSHOT
+		|| pendingCanonicalAST == 0
+		|| !pendingCanonicalAST->IsPublishable() )
+	{
+		return asNOT_SUPPORTED;
+	}
+	PublishCanonicalASTSnapshot("cache-v2-restore");
+	return astSnapshot != 0 ? asSUCCESS : asOUT_OF_MEMORY;
+}
+
+int asCModule::PrepareCanonicalASTSnapshot(
+	asCASTContext*& context,
+	asCRuntimeTypeGeneration* generation,
+	asCASTSnapshot*& outSnapshot,
+	const char* provenance)
+{
+	outSnapshot = 0;
+#if WITH_ANGELSCRIPT_UNITTESTS
+	if( testCanonicalSnapshotPreparationFailure != 0 )
+	{
+		const int injected = testCanonicalSnapshotPreparationFailure;
+		testCanonicalSnapshotPreparationFailure = 0;
+		return injected;
+	}
+#endif
+	if( astRetentionPolicy != asAST_RETAIN_SNAPSHOT
+		|| context == 0 || !context->IsPublishable() || generation == 0 )
+	{
+		return asINVALID_CONFIGURATION;
+	}
+
+	const int nextGeneration = astGeneration + 1;
+	asCString generationKey;
+	generationKey.Format(
+		"%s:%d", name.AddressOf() ? name.AddressOf() : "",
+		nextGeneration);
+	asCASTSnapshot* const candidate = asNEW(asCASTSnapshot)(
+		context,
+		name.AddressOf(),
+		generationKey.AddressOf(),
+		provenance,
+		generation);
+	if( candidate == 0 )
+		return asOUT_OF_MEMORY;
+
+	context = 0;
+	outSnapshot = candidate;
+	return asSUCCESS;
+}
+
+void asCModule::PublishPreparedCanonicalASTSnapshot(
+	asCASTSnapshot* candidate)
+{
+	asASSERT(candidate != 0);
+	if( candidate == 0 )
+		return;
+
+	asCASTSnapshot* previous = 0;
+	{
+		FScopeLock SnapshotLock(&astSnapshotLock);
+		previous = astSnapshot;
+		astSnapshot = candidate;
+		++astGeneration;
+		if( previous )
+			previous->SetCurrentGeneration(false);
+	}
+	if( previous )
+		previous->Release();
+}
+
+void asCModule::PublishCanonicalASTSnapshot(const char* provenance)
+{
+	asCASTContext* context = pendingCanonicalAST;
+	pendingCanonicalAST = 0;
+	if( astRetentionPolicy != asAST_RETAIN_SNAPSHOT )
+	{
+		if( context )
+		{
+			asDELETE(context, asCASTContext);
+		}
+		return;
+	}
+
+	if( context == 0 )
+	{
+		context = asNEW(asCASTContext);
+		if( context == 0 )
+		{
+			return;
+		}
+		context->CreateTranslationUnit(name.AddressOf());
+	}
+	if( !SealCanonicalASTForPublication(*context, engine, name) )
+	{
+		asDELETE(context, asCASTContext);
+		return;
+	}
+
+	const int nextGeneration = astGeneration + 1;
+	asCString generationKey;
+	generationKey.Format("%s:%d", name.AddressOf() ? name.AddressOf() : "", nextGeneration);
+	asCASTSnapshot* const candidate = asNEW(asCASTSnapshot)(
+		context,
+		name.AddressOf(),
+		generationKey.AddressOf(),
+		provenance,
+		runtimeTypeGeneration);
+	if( candidate == 0 )
+	{
+		asDELETE(context, asCASTContext);
+		return;
+	}
+
+	asCASTSnapshot* previous = 0;
+	{
+		FScopeLock SnapshotLock(&astSnapshotLock);
+		previous = astSnapshot;
+		astSnapshot = candidate;
+		astGeneration = nextGeneration;
+		if( previous )
+		{
+			previous->SetCurrentGeneration(false);
+		}
+	}
+	if( previous )
+	{
+		previous->Release();
+	}
 }
 
 void asCModule::AddPreClassData(const char* preClassName, asPreClassData Data)
@@ -2081,6 +2734,204 @@ void asCModule::RemoveTypesAndGlobalsFromEngineAvailability()
 				engine->allScriptGlobalFunctions.Remove(desc);
 		}
 	}
+}
+
+// Restores exactly the engine lookup entries suppressed while a Canonical
+// replacement is being built in a private candidate owner. Ownership remains
+// in this module throughout staging, so this is deliberately lookup-only: it
+// must not allocate script functions, global storage, or new type objects.
+void asCModule::RestoreTypesAndGlobalsToEngineAvailability()
+{
+	if( engine == 0 )
+		return;
+
+	for( asUINT n = 0, count = classTypes.GetLength(); n < count; ++n )
+	{
+		if( classTypes[n] )
+			engine->allScriptDeclaredTypes.Add(classTypes[n]);
+	}
+
+	for( asUINT n = 0, count = enumTypes.GetLength(); n < count; ++n )
+	{
+		if( enumTypes[n] )
+			engine->allScriptDeclaredTypes.Add(enumTypes[n]);
+	}
+
+	for( asUINT n = 0, count = scriptGlobalsList.GetLength(); n < count; ++n )
+	{
+		asCGlobalProperty* const prop = scriptGlobalsList[n];
+		if( prop && (prop->nameSpace != defaultNamespace || prop->name.StartsWith("__StaticType_")) )
+			engine->allScriptGlobalVariables.Add(prop);
+	}
+
+	for( asUINT n = 0, count = globalFunctionList.GetLength(); n < count; ++n )
+	{
+		if( globalFunctionList[n] )
+			engine->allScriptGlobalFunctions.Add(globalFunctionList[n]);
+	}
+}
+
+void asCModule::PrepareCanonicalBuildCandidate(asCModule& candidate) const
+{
+	// The candidate is not registered in the engine module maps. It receives
+	// only build-relevant configuration and importer visibility; the active
+	// module continues to own public identity, user data, snapshots, and all
+	// previous executable declarations until promotion succeeds.
+	candidate.baseModuleName = baseModuleName;
+	candidate.accessMask = accessMask;
+	candidate.defaultNamespace = defaultNamespace;
+	candidate.importedModules = importedModules;
+	candidate.moduleDependencies = moduleDependencies;
+	candidate.PreClassData = PreClassData;
+	candidate.buildArtifactInvocationCallback = buildArtifactInvocationCallback;
+	candidate.buildArtifactInvocationUserData = buildArtifactInvocationUserData;
+	candidate.buildArtifactRestoreCallback = buildArtifactRestoreCallback;
+	candidate.buildArtifactRestoreUserData = buildArtifactRestoreUserData;
+	candidate.buildArtifactCompileResultCallback = buildArtifactCompileResultCallback;
+	candidate.buildArtifactCompileResultUserData = buildArtifactCompileResultUserData;
+}
+
+int asCModule::EnsureCanonicalRuntimeTypeGeneration()
+{
+	if( runtimeTypeGeneration )
+		return asSUCCESS;
+	runtimeTypeGeneration = asCRuntimeTypeGeneration::Create(
+		engine, name.AddressOf());
+	return runtimeTypeGeneration ? asSUCCESS : asOUT_OF_MEMORY;
+}
+
+void asCModule::AdoptCanonicalRuntimeTypeBindings(
+	asCRuntimeTypeBindingTable& bindings)
+{
+	asASSERT(runtimeTypeGeneration != 0);
+	asASSERT(runtimeTypeGeneration == 0
+		|| runtimeTypeGeneration->GetBindings().GetBindingCount() == 0);
+	if( runtimeTypeGeneration )
+	{
+		runtimeTypeGeneration->GetBindings().SwapWith(bindings);
+		for( asUINT n = 0; n < scriptFunctions.GetLength(); ++n )
+		{
+			if( scriptFunctions[n] )
+				scriptFunctions[n]->SetRuntimeTypeGeneration(
+					runtimeTypeGeneration);
+		}
+	}
+}
+
+void asCModule::TransferExecutableGenerationTo(asCModule& target)
+{
+	asASSERT(target.IsEmpty());
+	asASSERT(target.runtimeTypeGeneration == 0);
+
+	target.baseModuleName = MoveTemp(baseModuleName);
+	target.defaultNamespace = defaultNamespace;
+	target.importedModules.SwapWith(importedModules);
+	target.moduleDependencies = MoveTemp(moduleDependencies);
+	target.PreClassData = MoveTemp(PreClassData);
+	target.scriptFunctions.SwapWith(scriptFunctions);
+	target.globalFunctions.SwapWith(globalFunctions);
+	target.globalFunctionList.SwapWith(globalFunctionList);
+	target.bindInformations.SwapWith(bindInformations);
+	target.templateInstances = MoveTemp(templateInstances);
+	target.scriptGlobals.SwapWith(scriptGlobals);
+	target.scriptGlobalsList.SwapWith(scriptGlobalsList);
+	target.allLocalTypes.SwapWith(allLocalTypes);
+	target.classTypes.SwapWith(classTypes);
+	target.enumTypes.SwapWith(enumTypes);
+	target.typeDefs.SwapWith(typeDefs);
+	target.funcDefs.SwapWith(funcDefs);
+	target.externalTypes.SwapWith(externalTypes);
+	target.externalFunctions.SwapWith(externalFunctions);
+
+	for( asUINT n = 0; n < target.classTypes.GetLength(); ++n )
+	{
+		if( target.classTypes[n] )
+			target.classTypes[n]->module = &target;
+	}
+	for( asUINT n = 0; n < target.enumTypes.GetLength(); ++n )
+	{
+		if( target.enumTypes[n] )
+			target.enumTypes[n]->module = &target;
+	}
+	for( asUINT n = 0; n < target.typeDefs.GetLength(); ++n )
+	{
+		if( target.typeDefs[n] )
+			target.typeDefs[n]->module = &target;
+	}
+	for( asUINT n = 0; n < target.funcDefs.GetLength(); ++n )
+	{
+		if( target.funcDefs[n] )
+		{
+			target.funcDefs[n]->module = &target;
+			if( target.funcDefs[n]->funcdef )
+				target.funcDefs[n]->funcdef->module = &target;
+		}
+	}
+	for( asUINT n = 0; n < target.scriptGlobalsList.GetLength(); ++n )
+	{
+		if( target.scriptGlobalsList[n] )
+			target.scriptGlobalsList[n]->module = &target;
+	}
+	for( asUINT n = 0; n < target.bindInformations.GetLength(); ++n )
+	{
+		if( target.bindInformations[n]
+			&& target.bindInformations[n]->importedFunctionSignature )
+		{
+			target.bindInformations[n]->importedFunctionSignature->module = &target;
+		}
+	}
+	for( asUINT n = 0; n < target.scriptFunctions.GetLength(); ++n )
+	{
+		if( target.scriptFunctions[n] )
+			target.scriptFunctions[n]->module = &target;
+	}
+
+	target.isGlobalVarInitialized = isGlobalVarInitialized;
+	target.hasBreakPoints = hasBreakPoints;
+	target.lastBytecodePublisher = lastBytecodePublisher;
+	target.lastLegacyCompilerInvocationCount = lastLegacyCompilerInvocationCount;
+	target.lastCanonicalCodeGenAstDigest = lastCanonicalCodeGenAstDigest;
+	target.hasLastCanonicalCodeGenAstDigest = hasLastCanonicalCodeGenAstDigest;
+
+	isGlobalVarInitialized = false;
+	hasBreakPoints = false;
+	lastBytecodePublisher = asBYTECODE_PUBLISHER_NONE;
+	lastLegacyCompilerInvocationCount = 0;
+	ResetLastCanonicalCodeGenAstDigest();
+}
+
+void asCModule::RetireCanonicalRuntimeTypeGeneration()
+{
+	asCRuntimeTypeGeneration* const generation = runtimeTypeGeneration;
+	if( generation == 0 )
+		return;
+	// A retired generation remains executable only through an explicit lease.
+	// It must stop participating in name-based declaration lookup before its
+	// containers move to the preallocated carrier. The public TypeId map is
+	// deliberately not removed here: bytecode in that leased generation may
+	// still project the generation-local numeric id until the carrier dies.
+	RemoveTypesAndGlobalsFromEngineAvailability();
+	runtimeTypeGeneration = 0;
+	generation->Retire(*this);
+	generation->Release();
+}
+
+void asCModule::ResetExecutableGenerationForReplacement()
+{
+	if( runtimeTypeGeneration )
+		RetireCanonicalRuntimeTypeGeneration();
+	else
+		InternalReset();
+	ReleaseCanonicalASTSnapshot();
+}
+
+void asCModule::PromoteCanonicalBuildCandidate(asCModule& candidate)
+{
+	asASSERT(IsEmpty());
+	asASSERT(runtimeTypeGeneration == 0);
+	candidate.TransferExecutableGenerationTo(*this);
+	runtimeTypeGeneration = candidate.runtimeTypeGeneration;
+	candidate.runtimeTypeGeneration = 0;
 }
 
 void asCModule::CollectUpdatedTypeReferences(asCModule* OldModule, asModuleReferenceUpdateMap& OutUpdateMap)

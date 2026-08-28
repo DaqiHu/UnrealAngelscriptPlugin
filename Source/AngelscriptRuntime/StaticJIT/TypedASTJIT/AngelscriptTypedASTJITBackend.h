@@ -3,10 +3,9 @@
 #include "CoreMinimal.h"
 
 #include "StaticJIT/Backends/AngelscriptStaticJITBackend.h"
+#include "source/as_source_provenance.h"
 
 #if AS_CAN_GENERATE_JIT
-
-struct asSTypedSemanticSourceSpan;
 
 #if WITH_ANGELSCRIPT_UNITTESTS
 /** Pointer-free lifecycle audit for the most recent TypedAST generation task. */
@@ -19,7 +18,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJITTaskObservation
 	int32 RejectedTaskCount = 0;
 	int32 LastModuleCount = 0;
 	int32 LastFunctionCount = 0;
-	int32 LastVerifiedTypedHIRCount = 0;
+	int32 LastVerifiedCanonicalASTCount = 0;
 	int32 LastUFunctionRootCount = 0;
 	int32 LastCallClosurePlanCount = 0;
 	int32 LastEligibleCallClosurePlanCount = 0;
@@ -31,12 +30,12 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJITTaskObservation
 	int32 StructuredFunctionDiagnosticCount = 0;
 	int32 StructuredRootClosureDiagnosticCount = 0;
 	int32 StructuredHelperDiagnosticCount = 0;
-	int32 StructuredVerifiedHIRDiagnosticCount = 0;
+	int32 StructuredVerifiedCanonicalASTDiagnosticCount = 0;
 	int32 StructuredExceptionPayloadDiagnosticCount = 0;
 	int32 StructuredCallDiagnosticCount = 0;
 	int32 StructuredEmittedCallDiagnosticCount = 0;
 	int32 StructuredBridgeCallDiagnosticCount = 0;
-	bool bLastTaskUsedOnlySameCompilationHIR = false;
+	bool bLastTaskUsedOnlySameCompilationAST = false;
 	FString LastFailure;
 };
 #endif
@@ -45,8 +44,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJITTaskObservation
  * One synchronous Typed Semantic StaticJIT generation task.
  *
  * The instance is deliberately one-shot. It accepts only Engine-local
- * functions and the exact verified HIR object still owned by each function
- * from the same compilation. It never serializes or retains Engine/HIR
+ * functions and the exact sealed Canonical AST still owned by each function
+ * from the same compilation. It never serializes or retains Engine/AST
  * pointers after Generate() returns.
  */
 class ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJIT final
@@ -67,7 +66,7 @@ public:
 		GetTaskObservationForTesting();
 	static FAngelscriptStaticJITTypedCallDiagnostic
 		BuildSourceProvenanceDiagnosticForTesting(
-			const asSTypedSemanticSourceSpan& SourceSpan);
+			const asSSourceSpan& SourceSpan);
 #endif
 
 private:

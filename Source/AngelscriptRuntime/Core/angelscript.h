@@ -970,6 +970,342 @@ struct asPreClassData
 	void* InitialUserData = nullptr;
 };
 
+enum asEASTRetentionPolicy
+{
+	asAST_DISCARD_AFTER_CODEGEN = 0,
+	asAST_RETAIN_SNAPSHOT = 1,
+};
+
+// AST IDs are opaque to callers. value is the snapshot-local node index and
+// snapshotOwner is assigned only by a public snapshot; callers must return an
+// ID to that same snapshot. Internal AST construction continues to use the
+// one-argument constructor, which intentionally leaves snapshotOwner at zero.
+struct asASTDeclId { asUINT value; asDWORD snapshotOwner; asASTDeclId() : value(0), snapshotOwner(0) {} explicit asASTDeclId(asUINT v) : value(v), snapshotOwner(0) {} asASTDeclId(asUINT v, asDWORD owner) : value(v), snapshotOwner(owner) {} bool IsValid() const { return value != 0; } bool operator==(const asASTDeclId& o) const { return value == o.value && snapshotOwner == o.snapshotOwner; } bool operator!=(const asASTDeclId& o) const { return !(*this == o); } };
+struct asASTStmtId { asUINT value; asDWORD snapshotOwner; asASTStmtId() : value(0), snapshotOwner(0) {} explicit asASTStmtId(asUINT v) : value(v), snapshotOwner(0) {} asASTStmtId(asUINT v, asDWORD owner) : value(v), snapshotOwner(owner) {} bool IsValid() const { return value != 0; } bool operator==(const asASTStmtId& o) const { return value == o.value && snapshotOwner == o.snapshotOwner; } bool operator!=(const asASTStmtId& o) const { return !(*this == o); } };
+struct asASTExprId { asUINT value; asDWORD snapshotOwner; asASTExprId() : value(0), snapshotOwner(0) {} explicit asASTExprId(asUINT v) : value(v), snapshotOwner(0) {} asASTExprId(asUINT v, asDWORD owner) : value(v), snapshotOwner(owner) {} bool IsValid() const { return value != 0; } bool operator==(const asASTExprId& o) const { return value == o.value && snapshotOwner == o.snapshotOwner; } bool operator!=(const asASTExprId& o) const { return !(*this == o); } };
+struct asASTTypeRef { asUINT value; asDWORD snapshotOwner; asASTTypeRef() : value(0), snapshotOwner(0) {} explicit asASTTypeRef(asUINT v) : value(v), snapshotOwner(0) {} asASTTypeRef(asUINT v, asDWORD owner) : value(v), snapshotOwner(owner) {} bool IsValid() const { return value != 0; } bool operator==(const asASTTypeRef& o) const { return value == o.value && snapshotOwner == o.snapshotOwner; } bool operator!=(const asASTTypeRef& o) const { return !(*this == o); } };
+// A source-file ID is opaque for the same reason as node IDs: a numeric source
+// table index has meaning only inside the snapshot that published it.
+struct asASTSourceFileId { asUINT value; asDWORD snapshotOwner; asASTSourceFileId() : value(0), snapshotOwner(0) {} explicit asASTSourceFileId(asUINT v) : value(v), snapshotOwner(0) {} asASTSourceFileId(asUINT v, asDWORD owner) : value(v), snapshotOwner(owner) {} bool IsValid() const { return value != 0; } bool operator==(const asASTSourceFileId& o) const { return value == o.value && snapshotOwner == o.snapshotOwner; } bool operator!=(const asASTSourceFileId& o) const { return !(*this == o); } };
+
+static const asDWORD asAST_API_VERSION_1 = 1;
+
+// These names describe stable values carried by the V1 views. They are not
+// concrete-node classes and do not grant callers any AST mutation capability.
+enum asEASTSourceOrigin : asBYTE
+{
+	asAST_SOURCE_INVALID = 0,
+	asAST_SOURCE_AUTHORED = 1,
+	asAST_SOURCE_PROCESSED = 2,
+	asAST_SOURCE_GENERATED = 3,
+};
+
+enum asEASTDeclKind : asBYTE
+{
+	asAST_DECL_INVALID = 0,
+	asAST_DECL_TRANSLATION_UNIT,
+	asAST_DECL_NAMESPACE,
+	asAST_DECL_TYPE,
+	asAST_DECL_CLASS,
+	asAST_DECL_INTERFACE,
+	asAST_DECL_ENUM,
+	asAST_DECL_FUNCDEF,
+	asAST_DECL_FUNCTION,
+	asAST_DECL_METHOD,
+	asAST_DECL_CONSTRUCTOR,
+	asAST_DECL_DESTRUCTOR,
+	asAST_DECL_VAR,
+	asAST_DECL_PARAM,
+	asAST_DECL_PROPERTY,
+	asAST_DECL_IMPORT,
+	asAST_DECL_TYPEDEF,
+	asAST_DECL_MIXIN,
+	asAST_DECL_ERROR,
+	// Append-only V1 metadata declarations. Access policy is part of the sealed
+	// semantic graph even though neither declaration emits executable bytecode.
+	asAST_DECL_ACCESS_SPECIFIER,
+	asAST_DECL_ACCESS_PERMISSION,
+};
+
+enum asEASTStmtKind : asBYTE
+{
+	asAST_STMT_INVALID = 0,
+	asAST_STMT_BLOCK,
+	asAST_STMT_DECL,
+	asAST_STMT_EXPR,
+	asAST_STMT_IF,
+	asAST_STMT_FOR,
+	asAST_STMT_WHILE,
+	asAST_STMT_DO_WHILE,
+	asAST_STMT_SWITCH,
+	asAST_STMT_CASE,
+	asAST_STMT_BREAK,
+	asAST_STMT_CONTINUE,
+	asAST_STMT_RETURN,
+	asAST_STMT_FALLTHROUGH,
+	asAST_STMT_FOREACH,
+	asAST_STMT_ERROR,
+};
+
+enum asEASTExprKind : asBYTE
+{
+	asAST_EXPR_INVALID = 0,
+	asAST_EXPR_INTEGER_LITERAL,
+	asAST_EXPR_FLOAT_LITERAL,
+	asAST_EXPR_BOOL_LITERAL,
+	asAST_EXPR_NULL_LITERAL,
+	asAST_EXPR_STRING_LITERAL,
+	asAST_EXPR_DECL_REF,
+	asAST_EXPR_MEMBER_REF,
+	asAST_EXPR_UNARY,
+	asAST_EXPR_BINARY,
+	asAST_EXPR_LOGICAL,
+	asAST_EXPR_CONDITIONAL,
+	asAST_EXPR_ASSIGN,
+	asAST_EXPR_CALL,
+	asAST_EXPR_CONSTRUCT,
+	asAST_EXPR_CONVERSION,
+	asAST_EXPR_INDEX,
+	asAST_EXPR_SEQUENCE,
+	asAST_EXPR_MATERIALIZE_TEMPORARY,
+	asAST_EXPR_CLEANUP,
+	asAST_EXPR_OPAQUE_VALUE,
+	asAST_EXPR_ERROR,
+	// Append-only public AST kind.  An implicit object expression is distinct
+	// from a DeclRef: it denotes the active method frame's object slot and has
+	// no user-authored declaration of its own.
+	asAST_EXPR_THIS,
+	// Append-only call-edge plan for an exact out-only property argument. Sema
+	// seals the setter declaration and a single-evaluation opaque receiver; a
+	// backend may allocate the out temporary and perform only that write-back.
+	asAST_EXPR_DEFERRED_OUT,
+};
+
+enum asEASTTypeKind : asBYTE
+{
+	asAST_TYPE_INVALID = 0,
+	asAST_TYPE_VOID,
+	asAST_TYPE_PRIMITIVE,
+	asAST_TYPE_ENUM,
+	asAST_TYPE_FUNCDEF,
+	asAST_TYPE_VALUE_OBJECT,
+	asAST_TYPE_REFERENCE_OBJECT,
+	asAST_TYPE_TEMPLATE,
+	asAST_TYPE_ERROR,
+	// AngelScript's registered `?` parameter is a generic call-site wildcard,
+	// not an unresolved/error type and not a concrete runtime object type.
+	asAST_TYPE_WILDCARD,
+};
+
+enum asEASTValueCategory : asBYTE
+{
+	asAST_VALUE_PRVALUE = 0,
+	asAST_VALUE_LVALUE,
+	asAST_VALUE_XVALUE,
+};
+
+enum asEASTSafePointRole : asBYTE
+{
+	asAST_SAFEPOINT_NONE = 0,
+	asAST_SAFEPOINT_POSITION,
+	asAST_SAFEPOINT_FUNCTION_ENTRY,
+	asAST_SAFEPOINT_STATEMENT,
+	asAST_SAFEPOINT_CALL,
+	asAST_SAFEPOINT_LOOP_ENTRY,
+	asAST_SAFEPOINT_LOOP_BACKEDGE,
+	asAST_SAFEPOINT_TRANSFER,
+	asAST_SAFEPOINT_SWITCH_INVALID_VALUE,
+	asAST_SAFEPOINT_RETURN,
+};
+
+// Source-level dispatch selected by Sema for a sealed CallExpr. This is
+// intentionally distinct from the eventual VM opcode: CodeGen still maps
+// imported/system/interface functions through their Runtime ABI route, but it
+// must not re-derive whether an authored method call is virtual or a qualified
+// base-class direct call.
+enum asEASTCallDispatch : asBYTE
+{
+	asAST_CALL_DISPATCH_NONE = 0,
+	asAST_CALL_DISPATCH_DIRECT,
+	asAST_CALL_DISPATCH_VIRTUAL,
+	asAST_CALL_DISPATCH_INDIRECT,
+};
+
+enum asEASTAccessorKind : asBYTE
+{
+	asAST_ACCESSOR_NONE = 0,
+	asAST_ACCESSOR_GET,
+	asAST_ACCESSOR_SET,
+};
+
+enum asEASTQualBit : asDWORD
+{
+	asAST_QUAL_CONST = 1u << 0,
+	asAST_QUAL_HANDLE = 1u << 1,
+	asAST_QUAL_AUTO_HANDLE = 1u << 2,
+	asAST_QUAL_REFERENCE = 1u << 3,
+	asAST_QUAL_IN = 1u << 4,
+	asAST_QUAL_OUT = 1u << 5,
+	asAST_QUAL_INOUT = (1u << 4) | (1u << 5),
+	asAST_QUAL_PARAM_DIR_MASK = (1u << 4) | (1u << 5),
+};
+
+enum asEASTDeclTrait : asDWORD
+{
+	asAST_TRAIT_NONE = 0,
+	asAST_TRAIT_PRIVATE = 1u << 0,
+	asAST_TRAIT_PROTECTED = 1u << 1,
+	asAST_TRAIT_CONST_METHOD = 1u << 2,
+	asAST_TRAIT_OVERRIDE = 1u << 3,
+	asAST_TRAIT_FINAL = 1u << 4,
+	asAST_TRAIT_SHARED = 1u << 5,
+	asAST_TRAIT_EXTERNAL = 1u << 6,
+	asAST_TRAIT_MIXIN = 1u << 7,
+	asAST_TRAIT_GENERATED = 1u << 8,
+	asAST_TRAIT_LAMBDA = 1u << 9,
+	asAST_TRAIT_VALUE = 1u << 10,
+	asAST_TRAIT_LIST_FACTORY = 1u << 11,
+	asAST_TRAIT_EXTERNAL_IMPLICIT_THIS = 1u << 12,
+	// Sema selected the language-level default-construction lifecycle for a
+	// declaration that has no authored initializer. Backends consume this
+	// producer-carried decision instead of re-deriving it from a Runtime type.
+	asAST_TRAIT_DEFAULT_INITIALIZED = 1u << 13,
+	// Sema proved that copying the complete object storage has no retain/release,
+	// user opAssign, or nested non-trivial-copy semantics. This does not suppress
+	// construction or destruction; it only authorizes an exact byte-copy route.
+	asAST_TRAIT_TRIVIAL_STORAGE_COPY = 1u << 14,
+	// Access policy facts are declaration traits instead of Runtime pointers so
+	// snapshots and sidecars remain generation-independent and pointer-free.
+	asAST_TRAIT_ACCESS_WILDCARD = 1u << 15,
+	asAST_TRAIT_ACCESS_READONLY = 1u << 16,
+	asAST_TRAIT_ACCESS_EDITDEFAULTS = 1u << 17,
+	asAST_TRAIT_ACCESS_INHERITED = 1u << 18,
+};
+
+struct asSASTSourceLocation
+{
+	asASTSourceFileId file;
+	asUINT offset;
+
+	bool IsValid() const { return file.IsValid(); }
+};
+
+struct asSASTSourceRange
+{
+	asSASTSourceLocation begin;
+	asSASTSourceLocation end;
+
+	bool IsValid() const
+	{
+		return begin.IsValid() && end.IsValid() && begin.file == end.file && begin.offset <= end.offset;
+	}
+};
+
+struct asSASTSourceFileView
+{
+	asUINT structSize;
+	asDWORD apiVersion;
+	asASTSourceFileId id;
+	asEASTSourceOrigin origin;
+	int lineOffset;
+	asUINT byteLength;
+	const char* logicalKey;
+};
+
+// Every asIASTSnapshot::Get*View call treats structSize as an input capacity.
+// Set it to sizeof(the view) before the call. apiVersion may be zero for the
+// V1 convenience form, or explicitly asAST_API_VERSION_1; any other non-zero
+// request is rejected without writing output. On success apiVersion is V1.
+struct asSASTDeclView
+{
+	asUINT structSize;
+	asDWORD apiVersion;
+	asBYTE kind;
+	asASTDeclId id;
+	asASTDeclId parent;
+	asASTTypeRef type;
+	const char* name;
+	const char* stableKey;
+	asSASTSourceRange sourceRange;
+	asDWORD typeQuals;
+	asASTStmtId body;
+	asDWORD traits;
+	asEASTAccessorKind accessorKind;
+	asASTDeclId accessorField;
+	asUINT childCount;
+	// Append-only V1 extension. Older callers may pass the capacity ending at
+	// this field and still receive every preceding member.
+	asASTDeclId accessSpecifier;
+};
+
+struct asSASTStmtView
+{
+	asUINT structSize;
+	asDWORD apiVersion;
+	asBYTE kind;
+	asASTStmtId id;
+	asASTExprId expr;
+	asSASTSourceRange sourceRange;
+	asASTDeclId owner;
+	asASTStmtId target;
+	asASTDeclId decl;
+	asEASTSafePointRole safePointRole;
+	asUINT childCount;
+};
+
+struct asSASTExprView
+{
+	asUINT structSize;
+	asDWORD apiVersion;
+	asBYTE kind;
+	asASTExprId id;
+	asASTTypeRef type;
+	asDWORD quals;
+	const char* literal;
+	asSASTSourceRange sourceRange;
+	asEASTValueCategory valueCategory;
+	asASTDeclId resolvedDecl;
+	asASTExprId receiver;
+	asQWORD literalBits;
+	asEASTSafePointRole safePointRole;
+	asUINT childCount;
+};
+
+struct asSASTTypeView
+{
+	asUINT structSize;
+	asDWORD apiVersion;
+	asBYTE kind;
+	asASTTypeRef id;
+	const char* stableKey;
+};
+
+class asIASTSnapshot
+{
+public:
+	virtual int AddRef() const = 0;
+	virtual int Release() const = 0;
+	virtual asDWORD GetAPIVersion() const = 0;
+	virtual const char* GetModuleName() const = 0;
+	virtual const char* GetGenerationKey() const = 0;
+	virtual bool IsCurrentGeneration() const = 0;
+	virtual asASTDeclId GetTranslationUnitDecl() const = 0;
+	// Each outView must declare its writable capacity in outView->structSize.
+	virtual int GetDecl(asASTDeclId id, asSASTDeclView* outView) const = 0;
+	virtual int GetStmt(asASTStmtId id, asSASTStmtView* outView) const = 0;
+	virtual int GetExpr(asASTExprId id, asSASTExprView* outView) const = 0;
+	virtual int GetType(asASTTypeRef id, asSASTTypeView* outView) const = 0;
+	// Child edges and source locations are snapshot-owned opaque values. They
+	// remain valid for the lifetime of this snapshot lease only.
+	virtual int GetDeclChild(asASTDeclId parent, asUINT childIndex, asASTDeclId* outChild) const = 0;
+	virtual int GetStmtChild(asASTStmtId parent, asUINT childIndex, asASTStmtId* outChild) const = 0;
+	virtual int GetExprChild(asASTExprId parent, asUINT childIndex, asASTExprId* outChild) const = 0;
+	virtual int GetSourceFile(asASTSourceFileId id, asSASTSourceFileView* outView) const = 0;
+	virtual int GetSourceLineColumn(asSASTSourceLocation location, asUINT* outLine, asUINT* outColumn) const = 0;
+protected:
+	virtual ~asIASTSnapshot() {}
+};
+
 class asIScriptModule
 {
 public:
@@ -1038,6 +1374,12 @@ public:
 	// Cross-module imports
 	virtual void ImportModule(asIScriptModule* module) = 0;
 	virtual void ClearImports() = 0;
+
+	// Canonical AST V1. These are trailing slots so all pre-existing module
+	// virtual-method positions remain compatible with the product 1.0.0 ABI.
+	virtual int         SetASTRetentionPolicy(asEASTRetentionPolicy policy) = 0;
+	virtual asEASTRetentionPolicy GetASTRetentionPolicy() const = 0;
+	virtual asIASTSnapshot* AcquireASTSnapshot(asDWORD apiVersion) const = 0;
 
 protected:
 	virtual ~asIScriptModule() {}

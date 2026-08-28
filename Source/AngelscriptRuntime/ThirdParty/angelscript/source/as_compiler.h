@@ -50,11 +50,8 @@
 #include "as_bytecode.h"
 #include "as_array.h"
 #include "as_datatype.h"
-#include "as_typed_semantic_ir.h"
 
 BEGIN_AS_NAMESPACE
-
-class asCTypedSemanticIRBuilder;
 
 // This class represents the value of an expression as evaluated by the compiler.
 // It holds information such as the type of the value, stack offset for a local 
@@ -192,13 +189,6 @@ struct ANGELSCRIPTRUNTIME_API asCExprContext
 	bool isAnonymousInitList; // Set to true if the expression is an init list for which the type has not yet been determined
 	bool noDiscardExpression;
 	asCString noDiscardFunction;
-	asTypedSemanticExpressionId typedSemanticExpression;
-	// Zero-based position in the caller's written argument list. This remains
-	// sidecar-only compiler state and is -1 for values outside an argument list.
-	int typedSemanticSourceArgumentOrdinal;
-	// Source/default/hidden origin follows the expression context through final
-	// overload binding without influencing bytecode generation.
-	asSTypedSemanticArgumentProvenance typedSemanticArgumentProvenance;
 };
 
 struct asSOverloadCandidate
@@ -264,12 +254,7 @@ public:
 protected:
 	friend class asCBuilder;
 
-	void Reset(
-		asCBuilder *builder,
-		asCScriptCode *script,
-		asCScriptFunction *outFunc,
-		asCScriptNode *typedSemanticRoot = 0,
-		bool beginTypedSemanticTransaction = false);
+	void Reset(asCBuilder *builder, asCScriptCode *script, asCScriptFunction *outFunc);
 
 	struct FStopCondition
 	{
@@ -381,7 +366,7 @@ protected:
 	int  PrepareArgument(asCDataType *paramType, asCExprContext *ctx, asCScriptNode *node, bool isFunction = false, int refType = 0, bool isMakingCopy = false, bool allowNarrowing = false);
 	void PrepareArgument2(asCExprContext *ctx, asCExprContext *arg, asCDataType *paramType, bool isFunction = false, int refType = 0, bool isMakingCopy = false, bool allowNarrowing = false);
 	bool IsLValue(asCExprValue &type);
-	int  DoAssignment(asCExprContext *out, asCExprContext *lctx, asCExprContext *rctx, asCScriptNode *lexpr, asCScriptNode *rexpr, eTokenType op, asCScriptNode *opNode, asTypedSemanticExpressionId *outFinalRValue = 0);
+	int  DoAssignment(asCExprContext *out, asCExprContext *lctx, asCExprContext *rctx, asCScriptNode *lexpr, asCScriptNode *rexpr, eTokenType op, asCScriptNode *opNode);
 	void MergeExprBytecode(asCExprContext *before, asCExprContext *after);
 	void MergeExprBytecodeAndType(asCExprContext *before, asCExprContext *after);
 	void FilterConst(asCArray<int> &funcs, bool removeConst = true);
@@ -531,12 +516,6 @@ protected:
 
 	asCObjectType* ExternalThisType = nullptr;
 	int32 ExternalThisOffset = 0;
-
-	// Compile-local provisional semantic capture. The builder may transiently
-	// observe compiler objects, but only its verified pointer-free function
-	// model is ever transferred to asCScriptFunction.
-	asCTypedSemanticIRBuilder* typedSemanticBuilder;
-	asTypedSemanticExpressionId lastTypedSemanticInitializer;
 };
 
 END_AS_NAMESPACE

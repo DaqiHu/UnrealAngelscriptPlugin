@@ -13,8 +13,8 @@ struct FAngelscriptEngineConfig;
  * Frozen build-time selection for one StaticJIT generation task.
  *
  * The profile is resolved before a generation Engine is created so an invalid
- * backend cannot trigger source compilation and typed HIR capture cannot be
- * enabled late by a backend.
+ * backend cannot trigger source compilation and Canonical AST capture cannot
+ * be enabled late by a backend.
  */
 struct FAngelscriptStaticJITGenerationProfile
 {
@@ -60,7 +60,7 @@ struct FAngelscriptStaticJITGenerationProfile
 		const bool bTypedAST = InBackendId
 			== FAngelscriptStaticJITBackendId::TypedAST();
 		OutProfile.CaptureProfile = bTypedAST
-			? EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR
+			? EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST
 			: EAngelscriptStaticJITCaptureProfile::Bytecode;
 		EAngelscriptTypedASTJITDirectCapability AvailableCapabilities =
 			EAngelscriptTypedASTJITDirectCapability::None;
@@ -97,10 +97,10 @@ struct FAngelscriptStaticJITGenerationProfile
 		return true;
 	}
 
-	bool RequiresTypedSemanticIRCapture() const
+	bool RequiresCanonicalASTSnapshot() const
 	{
 		return CaptureProfile
-			== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR;
+			== EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
 	}
 
 	/** Apply the frozen selection before FAngelscriptEngine::Create(). */

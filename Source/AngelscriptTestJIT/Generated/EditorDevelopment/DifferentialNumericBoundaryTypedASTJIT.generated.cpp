@@ -4,7 +4,7 @@
  * Backend            : TypedASTJIT
  * Declaration        : int SemanticNumericBoundary(const int, const int, const int, const int)
  * StableFunctionKey  : de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc256e
- * OriginalSymbolSet  : ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc256e_58539743e28e50faa5d5ee3e50261836e051b1dd0a7d68b805bab6072fd2d80a
+ * OriginalSymbolSet  : ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc256e_e0fe8c2cfcfada2c40ea089f18c78e9feb710c6195f0711860b0af886352893c
  * TestSymbolSet      : AS_Test_Differential_TypedAST_SemanticNumericBoundary
  * CleanupPlan       : VerifiedEmpty (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -24,10 +24,10 @@
 /*
  * AngelScript Static JIT Function
  * Declaration       : int SemanticNumericBoundary(const int, const int, const int, const int)
- * Source             : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:2
+ * Source             : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:6
  * StableFunctionKey  : de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc256e
- * ExecutionHash      : 58539743e28e50faa5d5ee3e50261836e051b1dd0a7d68b805bab6072fd2d80a
- * DebugHash          : 33ab9e7722bfe134d36a9e683a832e75cb1a6a5322a13ab18e7bd23d86aea50f
+ * ExecutionHash      : e0fe8c2cfcfada2c40ea089f18c78e9feb710c6195f0711860b0af886352893c
+ * DebugHash          : 298092bc25472d52eb973f769b952fdeb6d5acb420383e9766f3aad735d13526
  * EntryAbiHash       : ce69b03c30f4aba54525c218c4551a91f6dfe1f289fefa74e6e6ea01b1bab739
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
@@ -36,199 +36,267 @@
 static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_sem_s1,
-	const int32 as_sem_s2,
-	const int32 as_sem_s3,
-	const int32 as_sem_s4);
+	const int32 as_ast_d17,
+	const int32 as_ast_d18,
+	const int32 as_ast_d19,
+	const int32 as_ast_d20);
 
 static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_sem_s1,
-	const int32 as_sem_s2,
-	const int32 as_sem_s3,
-	const int32 as_sem_s4)
+	const int32 as_ast_d17,
+	const int32 as_ast_d18,
+	const int32 as_ast_d19,
+	const int32 as_ast_d20)
 {
-	TypedFrame.SetSourcePosition(32, 3);
-	const int32 as_sem_switch_selector_43 = static_cast<int32>(as_sem_s4);
-	if (UNLIKELY(Execution.bExceptionThrown))
 	{
-		return int32{};
+		TypedFrame.SetSourcePosition(32, 3);
+		switch (as_ast_d20)
+		{
+			case int32(0):
+				{
+					TypedFrame.SetSourcePosition(35, 4);
+					return ([&]() -> int32
+				{
+					const int32 as_ast_e17_left = as_ast_d17;
+					const int32 as_ast_e17_right = as_ast_d18;
+					return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e17_left, as_ast_e17_right);
+				}());
+				}
+			case int32(1):
+				{
+					TypedFrame.SetSourcePosition(37, 4);
+					return ([&]() -> int32
+				{
+					const int32 as_ast_e21_left = as_ast_d17;
+					const int32 as_ast_e21_right = as_ast_d18;
+					return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e21_left, as_ast_e21_right);
+				}());
+				}
+			case int32(2):
+				{
+					TypedFrame.SetSourcePosition(39, 4);
+					return ([&]() -> int32
+				{
+					const int32 as_ast_e25_left = as_ast_d17;
+					const int32 as_ast_e25_right = as_ast_d18;
+					return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e25_left, as_ast_e25_right);
+				}());
+				}
+			case int32(3):
+				{
+					TypedFrame.SetSourcePosition(41, 4);
+					return ([&]() -> int32
+				{
+					TypedFrame.SetSourcePosition(41, 4);
+					const int32 as_ast_e29_left = as_ast_d17;
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return int32{};
+					}
+					const int32 as_ast_e29_right = as_ast_d18;
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return int32{};
+					}
+					return AngelscriptTypedASTJIT::CheckedDivide<int32>(Execution, as_ast_e29_left, as_ast_e29_right);
+				}());
+				}
+			case int32(4):
+				{
+					TypedFrame.SetSourcePosition(43, 4);
+					return ([&]() -> int32
+				{
+					TypedFrame.SetSourcePosition(43, 4);
+					const int32 as_ast_e33_left = as_ast_d17;
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return int32{};
+					}
+					const int32 as_ast_e33_right = as_ast_d18;
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return int32{};
+					}
+					return AngelscriptTypedASTJIT::CheckedRemainder<int32>(Execution, as_ast_e33_left, as_ast_e33_right);
+				}());
+				}
+			case int32(5):
+				{
+					TypedFrame.SetSourcePosition(45, 4);
+					return ([&]() -> int32
+				{
+					const int32 as_ast_e37_left = as_ast_d17;
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return int32{};
+					}
+					const int32 as_ast_e37_right = as_ast_d19;
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return int32{};
+					}
+					return AngelscriptTypedASTJIT::ShiftLeft<int32>(as_ast_e37_left, as_ast_e37_right);
+				}());
+				}
+			case int32(6):
+				{
+					TypedFrame.SetSourcePosition(47, 4);
+					return ([&]() -> int32
+				{
+					const int32 as_ast_e41_left = as_ast_d17;
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return int32{};
+					}
+					const int32 as_ast_e41_right = as_ast_d19;
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return int32{};
+					}
+					return AngelscriptTypedASTJIT::LogicalShiftRight<int32>(as_ast_e41_left, as_ast_e41_right);
+				}());
+				}
+			case int32(7):
+				{
+					TypedFrame.SetSourcePosition(49, 4);
+					return ([&]() -> int32
+				{
+					const int32 as_ast_e45_left = as_ast_d17;
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return int32{};
+					}
+					const int32 as_ast_e45_right = as_ast_d19;
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return int32{};
+					}
+					return AngelscriptTypedASTJIT::ArithmeticShiftRight<int32>(as_ast_e45_left, as_ast_e45_right);
+				}());
+				}
+			case int32(8):
+				{
+					int64 as_ast_d23;
+					{
+						TypedFrame.SetSourcePosition(52, 10);
+						([&]() -> int64
+						{
+							const int64 as_ast_e50_value = static_cast<int64>(as_ast_d17);
+							if (UNLIKELY(Execution.bExceptionThrown))
+							{
+								return int64{};
+							}
+							int64& as_ast_e50_target = as_ast_d23;
+							as_ast_e50_target = as_ast_e50_value;
+							return as_ast_e50_target;
+						}());
+						if (UNLIKELY(Execution.bExceptionThrown))
+						{
+							return {};
+						}
+					}
+					{
+						TypedFrame.SetSourcePosition(53, 4);
+						const bool as_ast_stmt_29_condition = ([&]() -> bool
+						{
+							const int64 as_ast_e54_left = as_ast_d23;
+							if (UNLIKELY(Execution.bExceptionThrown))
+							{
+								return bool{};
+							}
+							const int64 as_ast_e54_right = static_cast<int64>(as_ast_d17);
+							if (UNLIKELY(Execution.bExceptionThrown))
+							{
+								return bool{};
+							}
+							return (as_ast_e54_left == as_ast_e54_right);
+						}());
+						if (UNLIKELY(Execution.bExceptionThrown))
+						{
+							return {};
+						}
+						if (as_ast_stmt_29_condition)
+						{
+							{
+								TypedFrame.SetSourcePosition(55, 5);
+								return as_ast_d17;
+							}
+						}
+					}
+					{
+						TypedFrame.SetSourcePosition(57, 4);
+						return int32(0);
+					}
+				}
+			case int32(9):
+				{
+					TypedFrame.SetSourcePosition(60, 4);
+					const bool as_ast_stmt_35_condition = ([&]() -> bool
+					{
+						const int32 as_ast_e60_left = as_ast_d17;
+						if (UNLIKELY(Execution.bExceptionThrown))
+						{
+							return bool{};
+						}
+						const int32 as_ast_e60_right = int32(0);
+						if (UNLIKELY(Execution.bExceptionThrown))
+						{
+							return bool{};
+						}
+						return (as_ast_e60_left != as_ast_e60_right);
+					}());
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return {};
+					}
+					if (as_ast_stmt_35_condition)
+					{
+						{
+							TypedFrame.SetSourcePosition(62, 5);
+							return int32(1);
+						}
+					}
+				}
+				{
+					TypedFrame.SetSourcePosition(64, 4);
+					return int32(0);
+				}
+			case int32(10):
+				{
+					TypedFrame.SetSourcePosition(66, 4);
+					return ([&]() -> int32
+				{
+					const int32 as_ast_e68_left = AngelscriptTypedASTJIT::FromCanonicalBits<int32>(UINT64_C(7001));
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return int32{};
+					}
+					const int32 as_ast_e68_right = as_ast_d17;
+					if (UNLIKELY(Execution.bExceptionThrown))
+					{
+						return int32{};
+					}
+					return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e68_left, as_ast_e68_right);
+				}());
+				}
+			default:
+				{
+					TypedFrame.SetSourcePosition(68, 4);
+					return AngelscriptTypedASTJIT::WrapNegate<int32>(int32(1));
+				}
+		}
+		if (UNLIKELY(Execution.bExceptionThrown))
+		{
+			return {};
+		}
 	}
-	switch (as_sem_switch_selector_43)
-	{
-		case int32(0):
-			TypedFrame.SetSourcePosition(34, 3);
-			{
-				TypedFrame.SetSourcePosition(35, 4);
-				return ([&]() -> int32
-				{
-					const int32 as_sem_e14_left = as_sem_s1;
-					const int32 as_sem_e14_right = as_sem_s2;
-					return AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e14_left, as_sem_e14_right);
-				}());
-			}
-			break;
-		case int32(1):
-			TypedFrame.SetSourcePosition(36, 3);
-			{
-				TypedFrame.SetSourcePosition(37, 4);
-				return ([&]() -> int32
-				{
-					const int32 as_sem_e17_left = as_sem_s1;
-					const int32 as_sem_e17_right = as_sem_s2;
-					return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_sem_e17_left, as_sem_e17_right);
-				}());
-			}
-			break;
-		case int32(2):
-			TypedFrame.SetSourcePosition(38, 3);
-			{
-				TypedFrame.SetSourcePosition(39, 4);
-				return ([&]() -> int32
-				{
-					const int32 as_sem_e20_left = as_sem_s1;
-					const int32 as_sem_e20_right = as_sem_s2;
-					return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_sem_e20_left, as_sem_e20_right);
-				}());
-			}
-			break;
-		case int32(3):
-			TypedFrame.SetSourcePosition(40, 3);
-			{
-				TypedFrame.SetSourcePosition(41, 4);
-				return ([&]() -> int32
-				{
-					const int32 as_sem_e23_left = as_sem_s1;
-					const int32 as_sem_e23_right = as_sem_s2;
-					return AngelscriptTypedASTJIT::CheckedDivide<int32>(Execution, as_sem_e23_left, as_sem_e23_right);
-				}());
-			}
-			break;
-		case int32(4):
-			TypedFrame.SetSourcePosition(42, 3);
-			{
-				TypedFrame.SetSourcePosition(43, 4);
-				return ([&]() -> int32
-				{
-					const int32 as_sem_e26_left = as_sem_s1;
-					const int32 as_sem_e26_right = as_sem_s2;
-					return AngelscriptTypedASTJIT::CheckedRemainder<int32>(Execution, as_sem_e26_left, as_sem_e26_right);
-				}());
-			}
-			break;
-		case int32(5):
-			TypedFrame.SetSourcePosition(44, 3);
-			{
-				TypedFrame.SetSourcePosition(45, 4);
-				return ([&]() -> int32
-				{
-					const int32 as_sem_e30_left = as_sem_s1;
-					const uint32 as_sem_e30_right = AngelscriptTypedASTJIT::ConvertInteger<uint32>(as_sem_s3);
-					return AngelscriptTypedASTJIT::ShiftLeft<int32>(as_sem_e30_left, as_sem_e30_right);
-				}());
-			}
-			break;
-		case int32(6):
-			TypedFrame.SetSourcePosition(46, 3);
-			{
-				TypedFrame.SetSourcePosition(47, 4);
-				return ([&]() -> int32
-				{
-					const int32 as_sem_e34_left = as_sem_s1;
-					const uint32 as_sem_e34_right = AngelscriptTypedASTJIT::ConvertInteger<uint32>(as_sem_s3);
-					return AngelscriptTypedASTJIT::LogicalShiftRight<int32>(as_sem_e34_left, as_sem_e34_right);
-				}());
-			}
-			break;
-		case int32(7):
-			TypedFrame.SetSourcePosition(48, 3);
-			{
-				TypedFrame.SetSourcePosition(49, 4);
-				return ([&]() -> int32
-				{
-					const int32 as_sem_e38_left = as_sem_s1;
-					const uint32 as_sem_e38_right = AngelscriptTypedASTJIT::ConvertInteger<uint32>(as_sem_s3);
-					return AngelscriptTypedASTJIT::ArithmeticShiftRight<int32>(as_sem_e38_left, as_sem_e38_right);
-				}());
-			}
-			break;
-		case int32(8):
-			TypedFrame.SetSourcePosition(50, 3);
-			{
-				TypedFrame.SetSourcePosition(52, 10);
-				const int64 as_sem_s5 = static_cast<int64>(as_sem_s1);
-				if (UNLIKELY(Execution.bExceptionThrown))
-				{
-					return int32{};
-				}
-				TypedFrame.SetSourcePosition(53, 4);
-				const bool as_sem_if_condition_27 = ([&]() -> bool
-				{
-					const int64 as_sem_e44_left = as_sem_s5;
-					const int64 as_sem_e44_right = static_cast<int64>(as_sem_s1);
-					return (as_sem_e44_left == as_sem_e44_right);
-				}());
-				if (UNLIKELY(Execution.bExceptionThrown))
-				{
-					return int32{};
-				}
-				if (as_sem_if_condition_27)
-				{
-					TypedFrame.SetSourcePosition(55, 5);
-					return as_sem_s1;
-				}
-				TypedFrame.SetSourcePosition(57, 4);
-				return int32(0);
-			}
-			break;
-		case int32(9):
-			TypedFrame.SetSourcePosition(59, 3);
-			{
-				TypedFrame.SetSourcePosition(60, 4);
-				const bool as_sem_if_condition_33 = ([&]() -> bool
-				{
-					const int32 as_sem_e49_left = as_sem_s1;
-					const int32 as_sem_e49_right = int32(0);
-					return (as_sem_e49_left != as_sem_e49_right);
-				}());
-				if (UNLIKELY(Execution.bExceptionThrown))
-				{
-					return int32{};
-				}
-				if (as_sem_if_condition_33)
-				{
-					TypedFrame.SetSourcePosition(62, 5);
-					return int32(1);
-				}
-				TypedFrame.SetSourcePosition(64, 4);
-				return int32(0);
-			}
-			break;
-		case int32(10):
-			TypedFrame.SetSourcePosition(65, 3);
-			{
-				TypedFrame.SetSourcePosition(66, 4);
-				return ([&]() -> int32
-				{
-					const int32 as_sem_e54_left = AngelscriptTypedASTJIT::FromCanonicalBits<int32>(UINT64_C(7001));
-					const int32 as_sem_e54_right = as_sem_s1;
-					return AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e54_left, as_sem_e54_right);
-				}());
-			}
-			break;
-		default:
-			TypedFrame.SetSourcePosition(67, 3);
-			{
-				TypedFrame.SetSourcePosition(68, 4);
-				return AngelscriptTypedASTJIT::WrapNegate<int32>(int32(1));
-			}
-			break;
-	}
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return int32{};
 }
 
 // AS Function : int SemanticNumericBoundary(const int, const int, const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:2
+// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:6
 // JIT Entry   : Raw
 int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_Raw(FScriptExecution& Execution, void* Object, asDWORD p_0, asDWORD p_1, asDWORD p_2, asDWORD p_3)
 {
@@ -249,7 +317,7 @@ int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_Raw(FScriptExecution
 }
 
 // AS Function : int SemanticNumericBoundary(const int, const int, const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:2
+// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:6
 // JIT Entry   : VM
 void AS_Test_Differential_TypedAST_SemanticNumericBoundary_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
@@ -262,7 +330,7 @@ void AS_Test_Differential_TypedAST_SemanticNumericBoundary_VM(FScriptExecution& 
 }
 
 // AS Function : int SemanticNumericBoundary(const int, const int, const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:2
+// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:6
 // JIT Entry   : Parms
 void AS_Test_Differential_TypedAST_SemanticNumericBoundary_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
@@ -310,7 +378,7 @@ namespace
 				TEXT("int SemanticNumericBoundary(const int, const int, const int, const int)"),
 				TEXT("/Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as"),
 				26u,
-				2u,
+				6u,
 				AngelscriptTestJITProbes::EIsolatedDifferentialCleanupPlanState::VerifiedEmpty,
 				0u,
 				FTypedASTJITDifferentialEntryRegistrationReferenceSlots,

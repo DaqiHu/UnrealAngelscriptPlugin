@@ -25,7 +25,7 @@ namespace AngelscriptStaticJITAotInstalledDiagnosticsTests_Private
 		FAngelscriptJITNativeCallSite NativeCallSite;
 		FAngelscriptJITArtifactEntry Entry;
 		const TCHAR* FallbackChain[2] = {TEXT("typed-ast"), TEXT("bytecode")};
-		FAngelscriptJITProviderTypedSemanticFunctionDiagnostic Semantic;
+		FAngelscriptJITProviderCanonicalFunctionDiagnostic Semantic;
 		FAngelscriptJITProviderTypedCallDiagnostic Call;
 		FAngelscriptJITProviderBackendAttemptDiagnostic Attempts[2];
 		FAngelscriptJITProviderFunctionDiagnostic Function;
@@ -66,7 +66,7 @@ namespace AngelscriptStaticJITAotInstalledDiagnosticsTests_Private
 			Semantic.Role = TEXT("UFunctionRoot");
 			Semantic.InvocationKind = TEXT("Global");
 			Semantic.ReceiverKind = TEXT("None");
-			Semantic.HIRState = TEXT("Verified");
+			Semantic.CanonicalASTState = TEXT("Verified");
 			Semantic.CleanupPlanState = TEXT("VerifiedEmpty");
 			Semantic.EligibilityReason = TEXT("None");
 			Semantic.EligibilityDetail = TEXT("eligible");
@@ -157,14 +157,14 @@ namespace AngelscriptStaticJITAotInstalledDiagnosticsTests_Private
 
 			Diagnostics.RequestKind = TEXT("StaticJITArtifact");
 			Diagnostics.RequestedBackendId = TEXT("typed-ast");
-			Diagnostics.CaptureState = TEXT("VerifiedTypedHIR");
+			Diagnostics.CaptureState = TEXT("VerifiedCanonicalAST");
 			Diagnostics.FallbackChain = FallbackChain;
 			Diagnostics.FallbackChainCount = UE_ARRAY_COUNT(FallbackChain);
 			Diagnostics.SourceCompilePassCount = 1;
 			Diagnostics.CompiledModuleCount = 1;
 			Diagnostics.CompiledFunctionCount = 1;
 			Diagnostics.EmitModuleCount = 1;
-			Diagnostics.bHasVerifiedTypedHIR = 1;
+			Diagnostics.bHasVerifiedCanonicalAST = 1;
 			Diagnostics.TaskError = TEXT("");
 			Diagnostics.Functions = &Function;
 			Diagnostics.FunctionCount = 1;

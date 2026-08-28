@@ -15,39 +15,56 @@ namespace
 {
 static int32 AS_Test_TypedASTProvider_SemanticScalarBranch_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_sem_s0,
-	const int32 as_sem_s1)
+	const int32 as_ast_d7,
+	const int32 as_ast_d8)
 {
-	TypedFrame.SetSourcePosition(10, 6);
-	const int32 as_sem_s2 = ([&]() -> int32
+	int32 as_ast_d9;
 	{
-		const int32 as_sem_e2_left = as_sem_s0;
-		const int32 as_sem_e2_right = as_sem_s1;
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_sem_e2_left, as_sem_e2_right);
-	}());
-	TypedFrame.SetSourcePosition(11, 2);
-	if (([&]() -> bool
-	{
-		const int32 as_sem_e5_left = as_sem_s2;
-		const int32 as_sem_e5_right = int32(10);
-		return (as_sem_e5_left > as_sem_e5_right);
-	}()))
-	{
-		TypedFrame.SetSourcePosition(13, 3);
-		return ([&]() -> int32
+		TypedFrame.SetSourcePosition(10, 6);
+		([&]() -> int32
 		{
-			const int32 as_sem_e8_left = as_sem_s2;
-			const int32 as_sem_e8_right = int32(2);
-			return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_sem_e8_left, as_sem_e8_right);
+			const int32 as_ast_e9_value = ([&]() -> int32
+		{
+			const int32 as_ast_e7_left = as_ast_d7;
+			const int32 as_ast_e7_right = as_ast_d8;
+			return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e7_left, as_ast_e7_right);
+		}());
+			int32& as_ast_e9_target = as_ast_d9;
+			as_ast_e9_target = as_ast_e9_value;
+			return as_ast_e9_target;
 		}());
 	}
-	TypedFrame.SetSourcePosition(15, 2);
-	return ([&]() -> int32
 	{
-		const int32 as_sem_e11_left = as_sem_s2;
-		const int32 as_sem_e11_right = int32(1);
-		return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_sem_e11_left, as_sem_e11_right);
+		TypedFrame.SetSourcePosition(11, 2);
+		if (([&]() -> bool
+		{
+			const int32 as_ast_e12_left = as_ast_d9;
+			const int32 as_ast_e12_right = int32(10);
+			return (as_ast_e12_left > as_ast_e12_right);
+		}()))
+		{
+			{
+				TypedFrame.SetSourcePosition(13, 3);
+				return ([&]() -> int32
+			{
+				const int32 as_ast_e15_left = as_ast_d9;
+				const int32 as_ast_e15_right = int32(2);
+				return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e15_left, as_ast_e15_right);
+			}());
+			}
+		}
+	}
+	{
+		TypedFrame.SetSourcePosition(15, 2);
+		return ([&]() -> int32
+	{
+		const int32 as_ast_e21_left = as_ast_d9;
+		const int32 as_ast_e21_right = int32(1);
+		return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e21_left, as_ast_e21_right);
 	}());
+	}
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return int32{};
 }
 
 // AS Function : int SemanticScalarBranch(const int, const int)
@@ -118,9 +135,9 @@ void AS_Test_TypedASTProvider_SemanticScalarBranch_Parms(FScriptExecution& Execu
  * Body owner  : ASStaticJITAotFixture.c8f22911.EditorDevelopment.jit.cpp
  * Native call : IsRunningCommandlet (production call closure)
  */
-extern int32 ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_f7ee08ffb0af7fd6427bebd4c9dfc21fb9ec36a2a04aabc61d7c2a60a1097872_Raw(FScriptExecution& Execution, asDWORD p_0, asDWORD p_1, asBYTE p_2, asBYTE p_3);
-extern void ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_f7ee08ffb0af7fd6427bebd4c9dfc21fb9ec36a2a04aabc61d7c2a60a1097872_VM(FScriptExecution&, asDWORD*, asQWORD*);
-extern void ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_f7ee08ffb0af7fd6427bebd4c9dfc21fb9ec36a2a04aabc61d7c2a60a1097872_Parms(FScriptExecution&, void*, void*);
+extern int32 ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_18d15b8d5bd3f4789e921a45ff54539d9afce9dffd62cb44825a273ffda2328f_Raw(FScriptExecution& Execution, asDWORD p_0, asDWORD p_1, asBYTE p_2, asBYTE p_3);
+extern void ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_18d15b8d5bd3f4789e921a45ff54539d9afce9dffd62cb44825a273ffda2328f_VM(FScriptExecution&, asDWORD*, asQWORD*);
+extern void ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_18d15b8d5bd3f4789e921a45ff54539d9afce9dffd62cb44825a273ffda2328f_Parms(FScriptExecution&, void*, void*);
 
 namespace
 {
@@ -129,9 +146,9 @@ namespace
 		FTypedASTCapabilityProviderEntryRegistration()
 		{
 			AngelscriptTestJITProbes::RegisterTypedASTCapabilityProviderEntries(
-				&ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_f7ee08ffb0af7fd6427bebd4c9dfc21fb9ec36a2a04aabc61d7c2a60a1097872_VM,
-				reinterpret_cast<asJITFunction_Raw>(&ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_f7ee08ffb0af7fd6427bebd4c9dfc21fb9ec36a2a04aabc61d7c2a60a1097872_Raw),
-				&ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_f7ee08ffb0af7fd6427bebd4c9dfc21fb9ec36a2a04aabc61d7c2a60a1097872_Parms);
+				&ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_18d15b8d5bd3f4789e921a45ff54539d9afce9dffd62cb44825a273ffda2328f_VM,
+				reinterpret_cast<asJITFunction_Raw>(&ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_18d15b8d5bd3f4789e921a45ff54539d9afce9dffd62cb44825a273ffda2328f_Raw),
+				&ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_18d15b8d5bd3f4789e921a45ff54539d9afce9dffd62cb44825a273ffda2328f_Parms);
 		}
 	};
 

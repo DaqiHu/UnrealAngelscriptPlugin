@@ -38,7 +38,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotCallDiagnosticTests,
 		GeneratorOutput.Diagnostics.RequestedBackendId =
 			FAngelscriptStaticJITBackendId::TypedAST();
 		GeneratorOutput.Diagnostics.CaptureProfile =
-			EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR;
+			EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
 
 		FAngelscriptStaticJITFunctionResult& Function =
 			GeneratorOutput.Functions.AddDefaulted_GetRef();
@@ -73,7 +73,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotCallDiagnosticTests,
 		BridgeCall.GeneratedSource->Row = 31;
 		BridgeCall.GeneratedSource->Column = 11;
 		BridgeCall.TargetKind =
-			asETypedSemanticCallTargetKind::SystemFunction;
+			EAngelscriptTypedASTJITCallTargetKind::SystemFunction;
 		BridgeCall.Disposition =
 			EAngelscriptStaticJITTypedCallDisposition::Bridge;
 		BridgeCall.CanonicalDeclaration =
@@ -102,7 +102,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotCallDiagnosticTests,
 		DirectCall.CalleeFunctionKey = BuildFunctionKey(TEXT("Abs"));
 		DirectCall.ExpressionIndex = 3;
 		DirectCall.TargetKind =
-			asETypedSemanticCallTargetKind::SystemFunction;
+			EAngelscriptTypedASTJITCallTargetKind::SystemFunction;
 		DirectCall.Disposition =
 			EAngelscriptStaticJITTypedCallDisposition::DirectInline;
 		DirectCall.CanonicalDeclaration = TEXT("int Math::Abs(int Value)");

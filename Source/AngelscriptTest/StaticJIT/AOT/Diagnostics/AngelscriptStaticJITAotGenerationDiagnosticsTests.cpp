@@ -21,7 +21,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 		GeneratorOutput.Diagnostics.RequestedBackendId =
 			FAngelscriptStaticJITBackendId::TypedAST();
 		GeneratorOutput.Diagnostics.CaptureProfile =
-			EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR;
+			EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
 		GeneratorOutput.Diagnostics.FallbackChain = {
 			FAngelscriptStaticJITBackendId::TypedAST(),
 			FAngelscriptStaticJITBackendId::Bytecode(),
@@ -29,7 +29,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 		GeneratorOutput.Diagnostics.CompiledSourceGraph.SourceCompilePassCount = 1;
 		GeneratorOutput.Diagnostics.CompiledSourceGraph.ModuleCount = 1;
 		GeneratorOutput.Diagnostics.CompiledSourceGraph.FunctionCount = 1;
-		GeneratorOutput.Diagnostics.CompiledSourceGraph.bHasVerifiedTypedHIR = true;
+		GeneratorOutput.Diagnostics.CompiledSourceGraph.bHasVerifiedCanonicalAST = true;
 
 		FAngelscriptStaticJITFunctionResult& Function =
 			GeneratorOutput.Functions.AddDefaulted_GetRef();
@@ -45,7 +45,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 		TypedAttempt.BackendId = FAngelscriptStaticJITBackendId::TypedAST();
 		TypedAttempt.Disposition =
 			EAngelscriptStaticJITFunctionDisposition::Unsupported;
-		TypedAttempt.Detail = TEXT("MissingTypedHIR: no verified HIR.");
+		TypedAttempt.Detail = TEXT("MissingCanonicalAST: no sealed Canonical AST.");
 
 		FAngelscriptStaticJITBackendAttemptDiagnostic& BytecodeAttempt =
 			Function.BackendAttempts.AddDefaulted_GetRef();
@@ -76,7 +76,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 		ASSERT_THAT(IsTrue(Result.Json.Contains(
 			TEXT("\"requestedBackend\":\"typed-ast\""))));
 		ASSERT_THAT(IsTrue(Result.Json.Contains(
-			TEXT("\"captureState\":\"VerifiedTypedHIR\""))));
+			TEXT("\"captureState\":\"VerifiedCanonicalAST\""))));
 		ASSERT_THAT(IsTrue(Result.Json.Contains(
 			TEXT("\"actualBackend\":\"bytecode\""))));
 		ASSERT_THAT(IsTrue(Result.Json.Contains(
@@ -104,7 +104,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 		GeneratorOutput.Diagnostics.RequestedBackendId =
 			FAngelscriptStaticJITBackendId::TypedAST();
 		GeneratorOutput.Diagnostics.CaptureProfile =
-			EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR;
+			EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
 
 		const uint8 LastReason = static_cast<uint8>(
 			EAngelscriptTypedASTJITFallbackReason::BackendUnavailable);
@@ -179,7 +179,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 		GeneratorOutput.Diagnostics.RequestedBackendId =
 			FAngelscriptStaticJITBackendId::TypedAST();
 		GeneratorOutput.Diagnostics.CaptureProfile =
-			EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR;
+			EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
 
 		FAngelscriptStaticJITFunctionResult& Function =
 			GeneratorOutput.Functions.AddDefaulted_GetRef();
@@ -192,7 +192,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 		Function.TypedDiagnostic->FallbackReason =
 			EAngelscriptTypedASTJITFallbackReason::None;
 		Function.TypedDiagnostic->SemanticFunction.Emplace();
-		FAngelscriptStaticJITTypedSemanticFunctionDiagnostic& RootFacts =
+		FAngelscriptStaticJITCanonicalFunctionDiagnostic& RootFacts =
 			Function.TypedDiagnostic->SemanticFunction.GetValue();
 		RootFacts.FunctionKey = Function.FunctionKey;
 		RootFacts.Role =
@@ -200,13 +200,14 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 		RootFacts.RawTraitBits = 0x01020304u;
 		RootFacts.UnknownTraitBits = 0x80000000u;
 		RootFacts.InvocationKind =
-			asETypedSemanticInvocationKind::InstanceMethod;
+			EAngelscriptTypedASTJITInvocationKind::InstanceMethod;
 		RootFacts.ReceiverKind =
-			asETypedSemanticReceiverKind::NativeObjectThis;
+			EAngelscriptTypedASTJITReceiverKind::NativeObjectThis;
 		RootFacts.ReceiverParameterIndex = INDEX_NONE;
-		RootFacts.HIRState = EAngelscriptStaticJITTypedHIRState::Verified;
+		RootFacts.CanonicalASTState =
+			EAngelscriptStaticJITCanonicalASTState::Verified;
 		RootFacts.CleanupPlanState =
-			asETypedSemanticCleanupPlanState::VerifiedEmpty;
+			EAngelscriptTypedASTJITCleanupPlanState::VerifiedEmpty;
 		RootFacts.bCleanupPlanCoversAllTransfers = true;
 
 		Function.TypedDiagnostic->CallClosure.Emplace();
@@ -226,18 +227,18 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 		Closure.bRecursionGuardAvailable = true;
 		Closure.Functions.Add(RootFacts);
 
-		FAngelscriptStaticJITTypedSemanticFunctionDiagnostic& HelperFacts =
+		FAngelscriptStaticJITCanonicalFunctionDiagnostic& HelperFacts =
 			Closure.Functions.AddDefaulted_GetRef();
 		HelperFacts.FunctionKey.Hash = HelperKeyWriter.FinalizeHash();
 		HelperFacts.Role = EAngelscriptStaticJITTypedClosureFunctionRole::
 			InternalSemanticHelper;
 		HelperFacts.InvocationKind =
-			asETypedSemanticInvocationKind::Global;
-		HelperFacts.ReceiverKind = asETypedSemanticReceiverKind::None;
-		HelperFacts.HIRState =
-			EAngelscriptStaticJITTypedHIRState::Verified;
+			EAngelscriptTypedASTJITInvocationKind::Global;
+		HelperFacts.ReceiverKind = EAngelscriptTypedASTJITReceiverKind::None;
+		HelperFacts.CanonicalASTState =
+			EAngelscriptStaticJITCanonicalASTState::Verified;
 		HelperFacts.CleanupPlanState =
-			asETypedSemanticCleanupPlanState::VerifiedEmpty;
+			EAngelscriptTypedASTJITCleanupPlanState::VerifiedEmpty;
 		HelperFacts.bRecursiveComponent = true;
 
 		FStaticJITDiagnostics::FSnapshot Snapshot;
@@ -258,7 +259,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 		ASSERT_THAT(IsTrue(Result.Json.Contains(
 			TEXT("\"receiverKind\":\"NativeObjectThis\""))));
 		ASSERT_THAT(IsTrue(Result.Json.Contains(
-			TEXT("\"hirState\":\"Verified\""))));
+			TEXT("\"canonicalASTState\":\"Verified\""))));
 		ASSERT_THAT(IsTrue(Result.Json.Contains(
 			TEXT("\"cleanupPlanState\":\"VerifiedEmpty\""))));
 		ASSERT_THAT(IsTrue(Result.Json.Contains(

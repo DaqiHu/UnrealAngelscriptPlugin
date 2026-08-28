@@ -1,9 +1,6 @@
 #include "Compiler/AngelscriptStandaloneSemanticObserver.h"
 
 #include "angelscript.h"
-#include "as_scriptengine.h"
-#include "as_scriptfunction.h"
-#include "as_typed_semantic_ir.h"
 #include "scriptstdstring/scriptstdstring.h"
 
 #include <algorithm>
@@ -188,12 +185,10 @@ int main()
 	asIScriptEngine* ObservedEngine = asCreateScriptEngine();
 	asIScriptEngine* BaselineEngine = asCreateScriptEngine();
 	asIScriptEngine* StableEngine = asCreateScriptEngine();
-	asIScriptEngine* CaptureEngine = asCreateScriptEngine();
 	bPassed &= Require(
 		ObservedEngine != nullptr
 			&& BaselineEngine != nullptr
-			&& StableEngine != nullptr
-			&& CaptureEngine != nullptr,
+			&& StableEngine != nullptr,
 		"failed to create semantic-observer test engines");
 	if (!bPassed)
 	{
@@ -209,9 +204,6 @@ int main()
 	int StableInt = -1;
 	int StableUInt = -1;
 	int StableConstructor = -1;
-	int CaptureInt = -1;
-	int CaptureUInt = -1;
-	int CaptureConstructor = -1;
 	bPassed &= Require(
 		ConfigureEngine(
 			*ObservedEngine,
@@ -227,21 +219,8 @@ int main()
 				*StableEngine,
 				StableInt,
 				StableUInt,
-				StableConstructor)
-			&& ConfigureEngine(
-				*CaptureEngine,
-				CaptureInt,
-				CaptureUInt,
-				CaptureConstructor),
+				StableConstructor),
 		"failed to configure semantic-observer test engines");
-	bPassed &= Require(
-		!static_cast<asCScriptEngine*>(ObservedEngine)
-			->IsTypedSemanticIRCaptureEnabled(),
-		"semantic observer should work while typed HIR capture remains off");
-	bPassed &= Require(
-		static_cast<asCScriptEngine*>(CaptureEngine)
-			->SetTypedSemanticIRCapture(true),
-		"capture-on observer Engine should select HIR before its first build");
 
 	FObserver Observer;
 	ObservedEngine->SetUserData(
@@ -258,102 +237,6 @@ int main()
 	bPassed &= Require(
 		ObservedByteCode.Buffer == BaselineByteCode.Buffer,
 		"installing an observer changed compiler bytecode");
-
-	FObserver CaptureObserver;
-	CaptureEngine->SetUserData(
-		&CaptureObserver,
-		asSEMANTIC_OBSERVER_USER_DATA_ID);
-	FMemoryByteCodeStream CaptureByteCode;
-	bPassed &= Require(
-		Compile(*CaptureEngine, "semantic", CaptureByteCode),
-		"capture-on semantic observation compilation failed");
-	bPassed &= Require(
-		CaptureByteCode.Buffer == BaselineByteCode.Buffer,
-		"enabling observer and typed HIR capture changed compiler bytecode");
-
-	asIScriptModule* const CaptureModule =
-		CaptureEngine->GetModule("semantic", asGM_ONLY_IF_EXISTS);
-	asCScriptFunction* const CaptureFunction = CaptureModule != nullptr
-		? static_cast<asCScriptFunction*>(
-			CaptureModule->GetFunctionByName("ObserveTyped"))
-		: nullptr;
-	const asCTypedSemanticFunction* const CapturedHIR =
-		CaptureFunction != nullptr
-			? CaptureFunction->GetTypedSemanticFunction()
-			: nullptr;
-	const asSTypedSemanticVerificationResult CapturedVerification =
-		CapturedHIR != nullptr
-			? VerifyTypedSemanticFunction(*CapturedHIR)
-			: asSTypedSemanticVerificationResult{};
-	if (CapturedHIR == nullptr)
-	{
-		std::cerr << "capture-on observer fixture published no HIR\n";
-	}
-	else if (!CapturedVerification.IsValid())
-	{
-		std::cerr
-			<< "capture-on observer HIR verification failed: error="
-			<< static_cast<int>(CapturedVerification.error)
-			<< " detail=" << CapturedVerification.detail.AddressOf()
-			<< '\n'
-			<< DumpTypedSemanticFunction(*CapturedHIR).AddressOf();
-	}
-	bPassed &= Require(
-		CapturedHIR != nullptr
-			&& CapturedVerification.IsValid(),
-		"capture-on observer fixture should publish independent verified HIR");
-	const asSTypedSemanticExpression* CapturedCall = nullptr;
-	if (CapturedHIR != nullptr)
-	{
-		for (asUINT Index = 0;
-			Index < CapturedHIR->expressions.GetLength();
-			++Index)
-		{
-			const asSTypedSemanticExpression& Expression =
-				CapturedHIR->expressions[Index];
-			if (Expression.kind
-					== asETypedSemanticExpressionKind::ResolvedCall
-				&& Expression.resolvedFunctionId == CaptureInt)
-			{
-				CapturedCall = &Expression;
-				break;
-			}
-		}
-	}
-	bPassed &= Require(
-		CapturedCall != nullptr
-			&& CapturedCall->callTargetKind
-				== asETypedSemanticCallTargetKind::SystemFunction
-			&& CapturedCall->operands.GetLength() == 1
-			&& CapturedCall->type.GetTokenType() == ttInt
-			&& CapturedHIR->expressions[
-				CapturedCall->operands[0].value].type.GetTokenType() == ttInt,
-		"captured HIR should own the selected call and exact scalar types");
-
-	const auto CapturedObservation = CapturedCall != nullptr
-		? std::find_if(
-			CaptureObserver.Events.begin(),
-			CaptureObserver.Events.end(),
-			[CaptureInt, CapturedCall](const FObservedEvent& Event)
-			{
-				return Event.Kind
-						== asSEMANTIC_OBSERVATION_RESOLVED_CALL
-					&& Event.FunctionId == CaptureInt
-					&& Event.Section == CapturedCall->span.section.AddressOf()
-					&& Event.SourceOffset
-						== CapturedCall->span.sourceOffset
-					&& Event.SourceLength
-						== CapturedCall->span.sourceLength;
-			})
-		: CaptureObserver.Events.end();
-	bPassed &= Require(
-		CapturedObservation != CaptureObserver.Events.end()
-			&& CapturedObservation->Arguments.size() == 1
-			&& CapturedObservation->Arguments[0].ActualTypeId
-				== CaptureEngine->GetTypeIdByDecl("int")
-			&& CapturedObservation->Arguments[0].ParameterTypeId
-				== CaptureEngine->GetTypeIdByDecl("int"),
-		"observer and independently owned HIR should agree on call target, span, and types");
 
 	const auto HasEvent = [&](const asESemanticObservationKind Kind)
 	{
@@ -531,13 +414,9 @@ int main()
 	StableEngine->SetUserData(
 		nullptr,
 		asSEMANTIC_OBSERVER_USER_DATA_ID);
-	CaptureEngine->SetUserData(
-		nullptr,
-		asSEMANTIC_OBSERVER_USER_DATA_ID);
 	ObservedEngine->ShutDownAndRelease();
 	BaselineEngine->ShutDownAndRelease();
 	StableEngine->ShutDownAndRelease();
-	CaptureEngine->ShutDownAndRelease();
 	asThreadCleanup();
 	return bPassed ? 0 : 1;
 }

@@ -5,15 +5,19 @@
 #include "StaticJIT/AngelscriptJITProvider.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_typed_semantic_ir.h"
+#include "source/as_ast_fwd.h"
+#include "source/as_datatype.h"
+#include "source/as_source_provenance.h"
 #include "EndAngelscriptHeaders.h"
 
 struct FAngelscriptTypedASTJITGenerationCapabilityProfile;
 
-/** Exact task-local reconciliation of one HIR global coordinate to stable authority. */
+/** Exact task-local reconciliation of one Canonical global coordinate to stable authority. */
 struct FAngelscriptTypedASTJITGlobalDependency
 {
 	int32 EngineLocalGlobalPropertyId = INDEX_NONE;
+	/** Exact namespace-qualified Decl key used by the sealed canonical AST. */
+	FString CanonicalASTDeclKey;
 	EAngelscriptArtifactSemanticDependencyKind Kind =
 		EAngelscriptArtifactSemanticDependencyKind::Invalid;
 	FAngelscriptArtifactReference Reference;
@@ -30,7 +34,7 @@ enum class EAngelscriptTypedASTJITFallbackReason : uint8
 {
 	None,
 	NotUFunctionRoot,
-	MissingTypedHIR,
+	MissingCanonicalAST,
 	UnsupportedFunctionKind,
 	UnsupportedFunctionTrait,
 	UnsupportedReceiver,
@@ -56,9 +60,69 @@ enum class EAngelscriptTypedASTJITFallbackReason : uint8
 	InvalidCallEvaluationSequence,
 	InvalidControlTarget,
 	InvalidCleanupPlan,
-	InvalidTypedHIR,
+	InvalidCanonicalAST,
 	EmitterFailure,
 	BackendUnavailable,
+};
+
+/** Canonical invocation category consumed by TypedASTJIT planning. */
+enum class EAngelscriptTypedASTJITInvocationKind : uint8
+{
+	Global,
+	GlobalInitializer,
+	InstanceMethod,
+	Constructor,
+	Destructor,
+	Factory,
+	Imported,
+	System,
+	Funcdef,
+	Synthesized,
+};
+
+/** Effective receiver selected by Canonical Sema. */
+enum class EAngelscriptTypedASTJITReceiverKind : uint8
+{
+	None,
+	NativeObjectThis,
+	ExternalImplicitThis,
+	MixinFirstParameter,
+};
+
+/** Exact resolved call route represented by a sealed Canonical call node. */
+enum class EAngelscriptTypedASTJITCallTargetKind : uint8
+{
+	Unspecified,
+	ScriptFunction,
+	SystemFunction,
+	ImportedFunction,
+};
+
+/** Canonical lifetime proof summarized for generation diagnostics. */
+enum class EAngelscriptTypedASTJITCleanupPlanState : uint8
+{
+	Unverified,
+	VerifiedEmpty,
+	NonEmpty,
+	PartialConstruction,
+	ScriptDestructor,
+	CompilerExceptionRegion,
+};
+
+/**
+ * Pointer-free lifetime facts proven from one exact sealed Canonical function.
+ *
+ * A verified-empty result means that the structural function body contains no
+ * cleanup action. It does not infer exception, suspension, or partial-
+ * construction behavior from bytecode or from a later runtime artifact.
+ */
+struct FAngelscriptTypedASTJITCanonicalLifetimeFacts
+{
+	EAngelscriptTypedASTJITCleanupPlanState CleanupPlanState =
+		EAngelscriptTypedASTJITCleanupPlanState::Unverified;
+	bool bHasSuspendState = false;
+	bool bHasExceptionCleanup = false;
+	bool bCleanupPlanCoversAllTransfers = false;
 };
 
 /** Frozen, pointer-free diagnostic token consumed by dump tooling. */
@@ -76,10 +140,10 @@ struct FAngelscriptTypedASTJITFunctionShape
 	FString SymbolName;
 	TArray<asCDataType> ParameterTypes;
 	asCDataType ReturnType;
-	asETypedSemanticInvocationKind InvocationKind =
-		asETypedSemanticInvocationKind::Global;
-	asETypedSemanticReceiverKind ReceiverKind =
-		asETypedSemanticReceiverKind::None;
+	EAngelscriptTypedASTJITInvocationKind InvocationKind =
+		EAngelscriptTypedASTJITInvocationKind::Global;
+	EAngelscriptTypedASTJITReceiverKind ReceiverKind =
+		EAngelscriptTypedASTJITReceiverKind::None;
 	int32 ReceiverParameterIndex = INDEX_NONE;
 	bool bHasNativeObjectSlot = false;
 	bool bReturnsOnStack = false;
@@ -95,7 +159,7 @@ enum class EAngelscriptTypedASTJITCallEmissionRoute : uint8
 /** Exact, already-validated native-call decision consumed by pure C++ emit. */
 struct FAngelscriptTypedASTJITNativeCallEmissionPlan
 {
-	asTypedSemanticExpressionId Expression;
+	asASTExprId Expression;
 	int32 EngineLocalTargetFunctionId = INDEX_NONE;
 	EAngelscriptTypedASTJITCallEmissionRoute Route =
 		EAngelscriptTypedASTJITCallEmissionRoute::Direct;
@@ -126,7 +190,7 @@ struct FAngelscriptTypedASTJITNativeCallEmissionPlan
 /** Exact direct script-helper edge consumed by the pure C++ emitter. */
 struct FAngelscriptTypedASTJITScriptCallEmissionPlan
 {
-	asTypedSemanticExpressionId Expression;
+	asASTExprId Expression;
 	int32 EngineLocalTargetFunctionId = INDEX_NONE;
 	FString Symbol;
 	/** Exact declaration reference reconciled against compiler dependencies. */
@@ -135,10 +199,10 @@ struct FAngelscriptTypedASTJITScriptCallEmissionPlan
 	bool bRequiresFunctionContent = false;
 };
 
-/** Exact owned call-site facts observed while emitting one HIR expression. */
+/** Exact owned call-site facts observed while emitting one Canonical expression. */
 struct FAngelscriptTypedASTJITNativeCallSiteMetadata
 {
-	asTypedSemanticExpressionId Expression;
+	asASTExprId Expression;
 	EAngelscriptJITNativeCallSiteRoute Route =
 		EAngelscriptJITNativeCallSiteRoute::Invalid;
 	FString CanonicalDeclaration;
@@ -193,10 +257,8 @@ struct FAngelscriptTypedASTJITAnalysis
 	bool bEligible = false;
 	EAngelscriptTypedASTJITFallbackReason FailureReason =
 		EAngelscriptTypedASTJITFallbackReason::None;
-	asSTypedSemanticSourceSpan FailureSpan;
+	asSSourceSpan FailureSpan;
 	FString FailureDetail;
-	TArray<asTypedSemanticSymbolId> OrderedSymbols;
-	TArray<asTypedSemanticStatementId> OrderedStatements;
 };
 
 struct FAngelscriptTypedASTJITEmission
@@ -211,6 +273,6 @@ struct FAngelscriptTypedASTJITEmission
 	TArray<FAngelscriptTypedASTJITNativeCallSiteMetadata> NativeCallSites;
 	EAngelscriptTypedASTJITFallbackReason FailureReason =
 		EAngelscriptTypedASTJITFallbackReason::None;
-	asSTypedSemanticSourceSpan FailureSpan;
+	asSSourceSpan FailureSpan;
 	FString FailureDetail;
 };

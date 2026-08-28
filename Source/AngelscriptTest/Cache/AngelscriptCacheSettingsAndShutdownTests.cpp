@@ -81,7 +81,36 @@ namespace AngelscriptCacheSettingsAndShutdownTests_Private
 		Config.bSkipThreadedInitialize = true;
 		Config.CacheV2RootOverride = CacheRoot;
 		Config.CacheV2ReportPathOverride = ReportPath;
+		Config.bOverrideCacheV2Enablement = true;
+		Config.bEnableCacheV2 = true;
 		Config.bDisableCacheV2Persistence = bDisableCacheV2Persistence;
+
+		FAngelscriptEngineDependencies Dependencies =
+			FAngelscriptEngineDependencies::CreateDefault();
+		Dependencies.GetProjectDir = [ProjectRoot]()
+		{
+			return ProjectRoot;
+		};
+		Dependencies.GetEnabledPluginScriptRoots = []()
+		{
+			return TArray<FString>();
+		};
+		Dependencies.GetEnabledPluginScriptRootDescriptors = []()
+		{
+			return TArray<FAngelscriptPluginScriptRoot>();
+		};
+		return CreateScriptScanFreeFullEngineForTesting(Config, Dependencies);
+	}
+
+	static TUniquePtr<FAngelscriptEngine> CreateEngineUsingProductDefaults(
+		const FString& ProjectRoot,
+		const FString& CacheRoot)
+	{
+		FAngelscriptEngineConfig Config;
+		Config.bIsEditor = true;
+		Config.bDevelopmentMode = true;
+		Config.bSkipThreadedInitialize = true;
+		Config.CacheV2RootOverride = CacheRoot;
 
 		FAngelscriptEngineDependencies Dependencies =
 			FAngelscriptEngineDependencies::CreateDefault();
@@ -105,12 +134,12 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheSettingsAndShutdownTests,
 	"Angelscript.TestModule.Cache.SettingsAndShutdown",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
-	TEST_METHOD(DefaultSettingsEnableCacheButDisablePackagedAutomaticReload)
+	TEST_METHOD(DefaultSettingsDisableCacheAndPackagedAutomaticReload)
 	{
 		const UAngelscriptCacheSettings* Settings =
 			GetDefault<UAngelscriptCacheSettings>();
 		ASSERT_THAT(IsNotNull(Settings));
-		ASSERT_THAT(IsTrue(Settings->bEnableCacheV2));
+		ASSERT_THAT(IsFalse(Settings->bEnableCacheV2));
 		ASSERT_THAT(AreEqual(
 			EAngelscriptPackagedRuntimeReloadMode::Disabled,
 			Settings->PackagedRuntimeReloadMode));
@@ -141,6 +170,50 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheSettingsAndShutdownTests,
 			Engine.GetCacheService()->CaptureDecisionTrace();
 		ASSERT_THAT(IsTrue(Trace.bEnabled));
 		ASSERT_THAT(AreEqual(static_cast<uint32>(37), Trace.Capacity));
+	}
+
+	TEST_METHOD(DefaultDisabledCacheColdCompilesWithoutCaptureOrPersistence)
+	{
+		using namespace AngelscriptCacheSettingsAndShutdownTests_Private;
+		FScopedProjectRoot Project;
+		const FString Unique = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+		const FString FunctionName = FString::Printf(
+			TEXT("ReadDefaultDisabled%sValue"), *Unique);
+		ASSERT_THAT(IsTrue(Project.WriteSource(FString::Printf(TEXT(R"AS(
+int %s()
+{
+	return 307;
+}
+)AS"), *FunctionName))));
+
+		TUniquePtr<FAngelscriptEngine> Engine =
+			CreateEngineUsingProductDefaults(Project.Root, Project.CacheRoot);
+		ASSERT_THAT(IsNotNull(Engine.Get()));
+		FAngelscriptEngineScope EngineScope(*Engine);
+		Engine->InitialCompile();
+		ASSERT_THAT(IsTrue(Engine->DidInitialCompileSucceed()));
+
+		const TSharedPtr<FAngelscriptModuleDesc> Module =
+			Engine->GetModuleByModuleName(TEXT("Shutdown"));
+		ASSERT_THAT(IsTrue(Module.IsValid()));
+		ASSERT_THAT(IsNotNull(Module->ScriptModule));
+		const FString Declaration = FString::Printf(
+			TEXT("int %s()"), *FunctionName);
+		ASSERT_THAT(IsNotNull(Module->ScriptModule->GetFunctionByDecl(
+			TCHAR_TO_ANSI(*Declaration))));
+
+		const FAngelscriptCacheLifecyclePublications Publications =
+			Engine->GetCacheService()->GetLifecyclePublications();
+		ASSERT_THAT(IsFalse(Publications.Current.IsValid()));
+		ASSERT_THAT(IsFalse(Publications.PendingColdStart.IsValid()));
+		ASSERT_THAT(IsFalse(
+			Engine->GetCacheService()->CaptureFunctionReuseSummary().bPresent));
+
+		Engine->Shutdown();
+		TArray<FString> PersistedFiles;
+		IFileManager::Get().FindFilesRecursive(
+			PersistedFiles, *Project.CacheRoot, TEXT("*"), true, false);
+		ASSERT_THAT(AreEqual(0, PersistedFiles.Num()));
 	}
 
 	TEST_METHOD(EngineShutdownPublishesFrozenCurrentToConfiguredIsolatedStore)

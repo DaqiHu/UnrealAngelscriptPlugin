@@ -3,7 +3,7 @@
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITBackend.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_typed_semantic_ir.h"
+#include "source/as_source_provenance.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS && AS_WITH_STATIC_JIT_DIAGNOSTICS \
@@ -14,9 +14,9 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotSourceProvenanceDiagnosticTests,
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 public:
-	TEST_METHOD(RealHIRSourceKindsRemainExplicitWithoutProcessedRelabelling)
+	TEST_METHOD(CanonicalSourceKindsRemainExplicitWithoutProcessedRelabelling)
 	{
-		asSTypedSemanticSourceSpan SourceSpan;
+		asSSourceSpan SourceSpan;
 		SourceSpan.section = "Generated.processed.as";
 		SourceSpan.sourceOffset = 91;
 		SourceSpan.sourceLength = 17;
@@ -30,7 +30,7 @@ public:
 		SourceSpan.authoredOrigin.column = 3;
 		SourceSpan.hasGeneratedOrigin = true;
 		SourceSpan.generatedOrigin.kind =
-			asETypedSemanticGeneratedSourceKind::LiteralAsset;
+			asEGeneratedSourceKind::LiteralAsset;
 		SourceSpan.generatedOrigin.generatorName =
 			"LiteralAsset:InventoryIcon";
 		SourceSpan.generatedOrigin.hasAuthoredAnchor = true;
@@ -57,7 +57,7 @@ public:
 			Diagnostic.GeneratedSource->Section));
 		ASSERT_THAT(AreEqual(8u, Diagnostic.GeneratedSource->Row));
 
-		asSTypedSemanticSourceSpan ProcessedOnly;
+		asSSourceSpan ProcessedOnly;
 		ProcessedOnly.section = "OnlyProcessed.as";
 		ProcessedOnly.sourceOffset = 24;
 		ProcessedOnly.sourceLength = 6;
@@ -71,10 +71,10 @@ public:
 		ASSERT_THAT(IsFalse(ProcessedDiagnostic.AuthoredSource.IsSet()));
 		ASSERT_THAT(IsFalse(ProcessedDiagnostic.GeneratedSource.IsSet()));
 
-		asSTypedSemanticSourceSpan GeneratedWithoutAnchor = ProcessedOnly;
+		asSSourceSpan GeneratedWithoutAnchor = ProcessedOnly;
 		GeneratedWithoutAnchor.hasGeneratedOrigin = true;
 		GeneratedWithoutAnchor.generatedOrigin.kind =
-			asETypedSemanticGeneratedSourceKind::SubsystemAccessor;
+			asEGeneratedSourceKind::SubsystemAccessor;
 		GeneratedWithoutAnchor.generatedOrigin.generatorName =
 			"SubsystemAccessor:UInventorySubsystem";
 		const FAngelscriptStaticJITTypedCallDiagnostic FallbackDiagnostic =

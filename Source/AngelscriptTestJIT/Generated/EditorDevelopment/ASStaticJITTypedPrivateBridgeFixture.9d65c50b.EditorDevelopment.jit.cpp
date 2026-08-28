@@ -6,7 +6,7 @@
  * TargetProfile       : EditorDevelopment
  * StableModuleKey     : 9d65c50b9c49e0b94a37b8336c334b41aafa52f6ae48344103e7a94fbd32231a
  * ProviderId          : 7dc70fd55a76cc55d726e32d5c2434713bd93755a32e4dd524a4b7c39c8b5d44
- * ArtifactProfile     : b58efc4c9f40879f0b98bcb54704d1b342ae56948a00e9ddbaa709787226e0c8
+ * ArtifactProfile     : 018cc71ab6612eca7608aa13abe1f7a1a7d81964bb8cc5821f1b1e047fcf7a11
  * NativeEnvironment   : 76d620ec7d0db38aa2028996e595f75523f201e7e560c05d8c9000d60d04cd73
  * FunctionCount       : 5
  */
@@ -27,18 +27,18 @@ constexpr SIZE_T TSIZE_UStaticJITAotFunctionCarrier = Align(POFFSET_UStaticJITAo
 /*
  * AngelScript Static JIT Function
  * Declaration       : int TypedASTRuntimeThunkShowcase(const FString&in)
- * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:1
+ * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:5
  * StableFunctionKey  : 59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e
- * ExecutionHash      : 903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6
- * DebugHash          : 84c4c455833d298a19e72e37e3dd5fd456053781b60624be02a142f198bb4733
+ * ExecutionHash      : 2dfa9a149d2acbc3159fd3d81b5393c0ea15eecf2601a1bb3731390683b5b178
+ * DebugHash          : 208fd33544e1bcd9485d66e3d8ed3e186125ecb5b9a4e24781bbc9555fd75638
  * EntryAbiHash       : eafaed37b176f7dc1025f3c86200feb10fb066ef6f083b8ce31d94120dc42f21
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
  * CapabilityHash     : 5fff2a330081dc25acb31e4837294258d821f8533d45073e34a20c6aea6c3eb1
  */
-static int32 ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6_TypedBody(
+static int32 ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_2dfa9a149d2acbc3159fd3d81b5393c0ea15eecf2601a1bb3731390683b5b178_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const FString& as_sem_s0);
+	const FString& as_ast_d12);
 
 /*
  * AngelScript Native Call Site 0
@@ -50,23 +50,27 @@ static int32 ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf
  * Metadata Row        : <none>
  * Reference Slot      : -1
  */
-static int32 ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6_TypedBody(
+static int32 ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_2dfa9a149d2acbc3159fd3d81b5393c0ea15eecf2601a1bb3731390683b5b178_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const FString& as_sem_s0)
+	const FString& as_ast_d12)
 {
-	TypedFrame.SetSourcePosition(10, 2);
-	return ([&]() -> int32
 	{
-		TypedFrame.SetSourcePosition(10, 9);
-		const FString& as_sem_e2_arg0 = as_sem_s0;
-		return AngelscriptStaticJITNativeCallables::RuntimeThunkProbe(as_sem_e2_arg0);
+		TypedFrame.SetSourcePosition(10, 2);
+		return ([&]() -> int32
+	{
+		const FString& as_ast_e5_arg0 = as_ast_d12;
+		const int32 as_ast_e5_result = AngelscriptStaticJITNativeCallables::RuntimeThunkProbe(as_ast_e5_arg0);
+		return as_ast_e5_result;
 	}());
+	}
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return int32{};
 }
 
 // AS Function : int TypedASTRuntimeThunkShowcase(const FString&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:5
 // JIT Entry   : Raw
-int32 ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6_Raw(FScriptExecution& Execution, FString* p_0)
+int32 ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_2dfa9a149d2acbc3159fd3d81b5393c0ea15eecf2601a1bb3731390683b5b178_Raw(FScriptExecution& Execution, FString* p_0)
 {
 	SCRIPT_ASSUME_NO_EXCEPTION()
 	FScopeTypedASTJITExecutionFrame TypedFrame(
@@ -81,22 +85,22 @@ int32 ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_903
 	{
 		return {};
 	}
-	return ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6_TypedBody(TypedFrame, *p_0);
+	return ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_2dfa9a149d2acbc3159fd3d81b5393c0ea15eecf2601a1bb3731390683b5b178_TypedBody(TypedFrame, *p_0);
 }
 
 // AS Function : int TypedASTRuntimeThunkShowcase(const FString&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:5
 // JIT Entry   : VM
-void ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
+void ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_2dfa9a149d2acbc3159fd3d81b5393c0ea15eecf2601a1bb3731390683b5b178_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
-	*(int32*)l_outValue = ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6_Raw(Execution,
+	*(int32*)l_outValue = ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_2dfa9a149d2acbc3159fd3d81b5393c0ea15eecf2601a1bb3731390683b5b178_Raw(Execution,
 		*(FString**)(l_fp + 0));
 }
 
 // AS Function : int TypedASTRuntimeThunkShowcase(const FString&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:8:5
 // JIT Entry   : Parms
-void ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6_Parms(FScriptExecution& Execution, void* Object, void* Parms)
+void ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_2dfa9a149d2acbc3159fd3d81b5393c0ea15eecf2601a1bb3731390683b5b178_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
 	static_cast<void>(Object);
 	SIZE_T ParmsOffset = 0;
@@ -108,26 +112,26 @@ void ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_903f
 	static_cast<void>(GeneratedWorldContextParmOffset);
 	ParmsOffset = Align(ParmsOffset, alignof(int32));
 	const SIZE_T ReturnParmOffset = ParmsOffset;
-	*(int32*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_903fda0724edd107a42dab536e0562a329f5aa488514a2cf71fc6942fb4a9cb6_Raw(Execution,
+	*(int32*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_59acf1e8407b0391645aa3d2d8820c635615ea548e9b9326e488a5d12bebf48e_2dfa9a149d2acbc3159fd3d81b5393c0ea15eecf2601a1bb3731390683b5b178_Raw(Execution,
 		(FString*)(((SIZE_T)Parms) + ParmOffset_0));
 }
 /*
  * AngelScript Static JIT Function
  * Declaration       : int TypedASTPrivateBridgeShowcase(const int, const int)
- * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:1
+ * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:5
  * StableFunctionKey  : 6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e
- * ExecutionHash      : 41fe6656ff1dcc4b64399ccd16d4fb070a4c5f98f8028039779d2f452a183753
- * DebugHash          : 85a5bdbe8d14c58398fc7a11eb45675f1e7584d0d5677b4c8c09f8ed282af10d
+ * ExecutionHash      : 1ff0682c38f7a2216be76ae289956859b5e29ca7121a84dcfcd2a29f9e10fc5d
+ * DebugHash          : a299b2efa48d37e5e4fa1b8480f8666cd52e85b0c6aca9497886ea102d10cbaa
  * EntryAbiHash       : 32c0c27f47fe1029322c0ce7e17536b36a031cc3ce9c01a4ee37be56f1b14a15
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
  * CapabilityHash     : 5fff2a330081dc25acb31e4837294258d821f8533d45073e34a20c6aea6c3eb1
  */
-static int32 ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_41fe6656ff1dcc4b64399ccd16d4fb070a4c5f98f8028039779d2f452a183753_TypedBody(
+static int32 ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_1ff0682c38f7a2216be76ae289956859b5e29ca7121a84dcfcd2a29f9e10fc5d_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_sem_s0,
-	const int32 as_sem_s1);
+	const int32 as_ast_d3,
+	const int32 as_ast_d4);
 
 static const FAngelscriptTypedASTJITBoundCallSite ASJIT_Call_TypedASTProviderPrivateAdd_6b00a476_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e = {
 	TEXT("int TypedASTProviderPrivateAdd(int, int)"),
@@ -147,32 +151,34 @@ static const FAngelscriptTypedASTJITBoundCallSite ASJIT_Call_TypedASTProviderPri
  * Metadata Row        : ASJIT_Call_TypedASTProviderPrivateAdd_6b00a476_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e
  * Reference Slot      : 0
  */
-static int32 ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_41fe6656ff1dcc4b64399ccd16d4fb070a4c5f98f8028039779d2f452a183753_TypedBody(
+static int32 ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_1ff0682c38f7a2216be76ae289956859b5e29ca7121a84dcfcd2a29f9e10fc5d_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_sem_s0,
-	const int32 as_sem_s1)
+	const int32 as_ast_d3,
+	const int32 as_ast_d4)
 {
-	TypedFrame.SetSourcePosition(4, 2);
-	return ([&]() -> int32
 	{
-		TypedFrame.SetSourcePosition(4, 9);
-		const int32 as_sem_e2_arg1 = as_sem_s1;
-		const int32 as_sem_e2_arg0 = as_sem_s0;
-		const int32 as_sem_e2_result = AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32, int32>(
-			Execution, ASJIT_Call_TypedASTProviderPrivateAdd_6b00a476_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e, as_sem_e2_arg0, as_sem_e2_arg1);
+		TypedFrame.SetSourcePosition(4, 2);
+		return ([&]() -> int32
+	{
+		const int32 as_ast_e3_arg1 = as_ast_d4;
+		const int32 as_ast_e3_arg0 = as_ast_d3;
+		const int32 as_ast_e3_result = AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32, int32>(Execution, ASJIT_Call_TypedASTProviderPrivateAdd_6b00a476_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e, as_ast_e3_arg0, as_ast_e3_arg1);
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		return as_sem_e2_result;
+		return as_ast_e3_result;
 	}());
+	}
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return int32{};
 }
 
 // AS Function : int TypedASTPrivateBridgeShowcase(const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:5
 // JIT Entry   : Raw
-int32 ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_41fe6656ff1dcc4b64399ccd16d4fb070a4c5f98f8028039779d2f452a183753_Raw(FScriptExecution& Execution, asDWORD p_0, asDWORD p_1)
+int32 ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_1ff0682c38f7a2216be76ae289956859b5e29ca7121a84dcfcd2a29f9e10fc5d_Raw(FScriptExecution& Execution, asDWORD p_0, asDWORD p_1)
 {
 	SCRIPT_ASSUME_NO_EXCEPTION()
 	FScopeTypedASTJITExecutionFrame TypedFrame(
@@ -187,23 +193,23 @@ int32 ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_41f
 	{
 		return {};
 	}
-	return ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_41fe6656ff1dcc4b64399ccd16d4fb070a4c5f98f8028039779d2f452a183753_TypedBody(Execution, TypedFrame, static_cast<int32>(p_0), static_cast<int32>(p_1));
+	return ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_1ff0682c38f7a2216be76ae289956859b5e29ca7121a84dcfcd2a29f9e10fc5d_TypedBody(Execution, TypedFrame, static_cast<int32>(p_0), static_cast<int32>(p_1));
 }
 
 // AS Function : int TypedASTPrivateBridgeShowcase(const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:5
 // JIT Entry   : VM
-void ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_41fe6656ff1dcc4b64399ccd16d4fb070a4c5f98f8028039779d2f452a183753_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
+void ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_1ff0682c38f7a2216be76ae289956859b5e29ca7121a84dcfcd2a29f9e10fc5d_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
-	*(int32*)l_outValue = ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_41fe6656ff1dcc4b64399ccd16d4fb070a4c5f98f8028039779d2f452a183753_Raw(Execution,
+	*(int32*)l_outValue = ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_1ff0682c38f7a2216be76ae289956859b5e29ca7121a84dcfcd2a29f9e10fc5d_Raw(Execution,
 		*(asDWORD*)(l_fp + 0),
 		*(asDWORD*)(l_fp + 1));
 }
 
 // AS Function : int TypedASTPrivateBridgeShowcase(const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:5
 // JIT Entry   : Parms
-void ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_41fe6656ff1dcc4b64399ccd16d4fb070a4c5f98f8028039779d2f452a183753_Parms(FScriptExecution& Execution, void* Object, void* Parms)
+void ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_1ff0682c38f7a2216be76ae289956859b5e29ca7121a84dcfcd2a29f9e10fc5d_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
 	static_cast<void>(Object);
 	SIZE_T ParmsOffset = 0;
@@ -218,26 +224,26 @@ void ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_41fe
 	static_cast<void>(GeneratedWorldContextParmOffset);
 	ParmsOffset = Align(ParmsOffset, alignof(int32));
 	const SIZE_T ReturnParmOffset = ParmsOffset;
-	*(int32*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_41fe6656ff1dcc4b64399ccd16d4fb070a4c5f98f8028039779d2f452a183753_Raw(Execution,
+	*(int32*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_1ff0682c38f7a2216be76ae289956859b5e29ca7121a84dcfcd2a29f9e10fc5d_Raw(Execution,
 		static_cast<asDWORD>(*(int32*)(((SIZE_T)Parms) + ParmOffset_0)),
 		static_cast<asDWORD>(*(int32*)(((SIZE_T)Parms) + ParmOffset_1)));
 }
 /*
  * AngelScript Static JIT Function
  * Declaration       : float32 TypedASTOrdinaryBridgeSqrt(const float32)
- * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:28:1
+ * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:28:9
  * StableFunctionKey  : 6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e
- * ExecutionHash      : 2324792fb0f2db6ab8bc9f893e7b3cbe5cae4fa30287c5dd799abdd5a15968c4
- * DebugHash          : ba85cc8259d645508ea9683c087ee1a3dd471f271c0d87a1171e64c4cacc8f4e
+ * ExecutionHash      : 34918287d77f96192b499d68f13a1527152b9d83d35ad901e5e5ac7e6aaf8196
+ * DebugHash          : 5c6147a076625e89f13cb78ebffd5ff3cde969ee10b17e87c81f29ac4c255d60
  * EntryAbiHash       : 952945aab19a52aa87e0363f0c98f326892eee81f714fdb4ffad4f6e2f460a75
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
  * CapabilityHash     : 5fff2a330081dc25acb31e4837294258d821f8533d45073e34a20c6aea6c3eb1
  */
-static float ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_2324792fb0f2db6ab8bc9f893e7b3cbe5cae4fa30287c5dd799abdd5a15968c4_TypedBody(
+static float ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_34918287d77f96192b499d68f13a1527152b9d83d35ad901e5e5ac7e6aaf8196_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const float as_sem_s0);
+	const float as_ast_d26);
 
 static const FAngelscriptTypedASTJITBoundCallSite ASJIT_Call_Sqrt_000f5a28_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e = {
 	TEXT("float32 Sqrt(float32)"),
@@ -257,30 +263,32 @@ static const FAngelscriptTypedASTJITBoundCallSite ASJIT_Call_Sqrt_000f5a28_6bd24
  * Metadata Row        : ASJIT_Call_Sqrt_000f5a28_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e
  * Reference Slot      : 0
  */
-static float ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_2324792fb0f2db6ab8bc9f893e7b3cbe5cae4fa30287c5dd799abdd5a15968c4_TypedBody(
+static float ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_34918287d77f96192b499d68f13a1527152b9d83d35ad901e5e5ac7e6aaf8196_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const float as_sem_s0)
+	const float as_ast_d26)
 {
-	TypedFrame.SetSourcePosition(30, 2);
-	return ([&]() -> float
 	{
-		TypedFrame.SetSourcePosition(30, 9);
-		const float as_sem_e1_arg0 = as_sem_s0;
-		const float as_sem_e1_result = AngelscriptTypedASTJIT::InvokeBound<float, float>(
-			Execution, ASJIT_Call_Sqrt_000f5a28_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e, as_sem_e1_arg0);
+		TypedFrame.SetSourcePosition(30, 2);
+		return ([&]() -> float
+	{
+		const float as_ast_e20_arg0 = as_ast_d26;
+		const float as_ast_e20_result = AngelscriptTypedASTJIT::InvokeBound<float, float>(Execution, ASJIT_Call_Sqrt_000f5a28_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e, as_ast_e20_arg0);
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return float{};
 		}
-		return as_sem_e1_result;
+		return as_ast_e20_result;
 	}());
+	}
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return float{};
 }
 
 // AS Function : float32 TypedASTOrdinaryBridgeSqrt(const float32)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:28:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:28:9
 // JIT Entry   : Raw
-float ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_2324792fb0f2db6ab8bc9f893e7b3cbe5cae4fa30287c5dd799abdd5a15968c4_Raw(FScriptExecution& Execution, float p_0)
+float ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_34918287d77f96192b499d68f13a1527152b9d83d35ad901e5e5ac7e6aaf8196_Raw(FScriptExecution& Execution, float p_0)
 {
 	SCRIPT_ASSUME_NO_EXCEPTION()
 	FScopeTypedASTJITExecutionFrame TypedFrame(
@@ -295,22 +303,22 @@ float ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_232
 	{
 		return {};
 	}
-	return ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_2324792fb0f2db6ab8bc9f893e7b3cbe5cae4fa30287c5dd799abdd5a15968c4_TypedBody(Execution, TypedFrame, static_cast<float>(p_0));
+	return ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_34918287d77f96192b499d68f13a1527152b9d83d35ad901e5e5ac7e6aaf8196_TypedBody(Execution, TypedFrame, static_cast<float>(p_0));
 }
 
 // AS Function : float32 TypedASTOrdinaryBridgeSqrt(const float32)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:28:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:28:9
 // JIT Entry   : VM
-void ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_2324792fb0f2db6ab8bc9f893e7b3cbe5cae4fa30287c5dd799abdd5a15968c4_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
+void ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_34918287d77f96192b499d68f13a1527152b9d83d35ad901e5e5ac7e6aaf8196_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
-	*(float*)l_outValue = ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_2324792fb0f2db6ab8bc9f893e7b3cbe5cae4fa30287c5dd799abdd5a15968c4_Raw(Execution,
+	*(float*)l_outValue = ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_34918287d77f96192b499d68f13a1527152b9d83d35ad901e5e5ac7e6aaf8196_Raw(Execution,
 		*(float*)(l_fp + 0));
 }
 
 // AS Function : float32 TypedASTOrdinaryBridgeSqrt(const float32)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:28:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:28:9
 // JIT Entry   : Parms
-void ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_2324792fb0f2db6ab8bc9f893e7b3cbe5cae4fa30287c5dd799abdd5a15968c4_Parms(FScriptExecution& Execution, void* Object, void* Parms)
+void ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_34918287d77f96192b499d68f13a1527152b9d83d35ad901e5e5ac7e6aaf8196_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
 	static_cast<void>(Object);
 	SIZE_T ParmsOffset = 0;
@@ -322,25 +330,25 @@ void ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_2324
 	static_cast<void>(GeneratedWorldContextParmOffset);
 	ParmsOffset = Align(ParmsOffset, alignof(float));
 	const SIZE_T ReturnParmOffset = ParmsOffset;
-	*(float*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_2324792fb0f2db6ab8bc9f893e7b3cbe5cae4fa30287c5dd799abdd5a15968c4_Raw(Execution,
+	*(float*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_6bd24036f49f790093d22b8049bf8809569e0807a54b7e105d64d1385454542e_34918287d77f96192b499d68f13a1527152b9d83d35ad901e5e5ac7e6aaf8196_Raw(Execution,
 		static_cast<float>(*(float*)(((SIZE_T)Parms) + ParmOffset_0)));
 }
 /*
  * AngelScript Static JIT Function
  * Declaration       : int TypedASTPrivateBridgeException(const int)
- * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:14:1
+ * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:14:5
  * StableFunctionKey  : b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151
- * ExecutionHash      : 8f65bcc7986569e5633cc61f4f45fdcaddd25f3663a8e59a6019f7c76abe92ea
- * DebugHash          : 9165c8c4d9384458363bc3ebef2e2c24eb5634e60ad65856a6a7081c2ae7e87e
+ * ExecutionHash      : 06d5b7ea6802290814b4b5b19277964a66ad613ba38f81ce58afb3cc248b20e1
+ * DebugHash          : ff0a984e761ad805ca8e9d8f42989c4a85bd5c325e365af5921e5174c65121d0
  * EntryAbiHash       : 76649d45394c9fe464a49e2719a1afabbb0fdc9e8b0de6622e622d4ebfa0d800
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
  * CapabilityHash     : 5fff2a330081dc25acb31e4837294258d821f8533d45073e34a20c6aea6c3eb1
  */
-static int32 ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_8f65bcc7986569e5633cc61f4f45fdcaddd25f3663a8e59a6019f7c76abe92ea_TypedBody(
+static int32 ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_06d5b7ea6802290814b4b5b19277964a66ad613ba38f81ce58afb3cc248b20e1_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_sem_s0);
+	const int32 as_ast_d17);
 
 static const FAngelscriptTypedASTJITBoundCallSite ASJIT_Call_TypedASTProviderPrivateFail_fc7ed8ea_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151 = {
 	TEXT("int TypedASTProviderPrivateFail(int)"),
@@ -378,54 +386,69 @@ static const FAngelscriptTypedASTJITBoundCallSite ASJIT_Call_TypedASTProviderPri
  * Metadata Row        : ASJIT_Call_TypedASTProviderPrivateAdd_6b00a476_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151
  * Reference Slot      : 0
  */
-static int32 ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_8f65bcc7986569e5633cc61f4f45fdcaddd25f3663a8e59a6019f7c76abe92ea_TypedBody(
+static int32 ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_06d5b7ea6802290814b4b5b19277964a66ad613ba38f81ce58afb3cc248b20e1_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_sem_s0)
+	const int32 as_ast_d17)
 {
-	TypedFrame.SetSourcePosition(16, 6);
-	const int32 as_sem_s1 = ([&]() -> int32
+	int32 as_ast_d18;
 	{
-		TypedFrame.SetSourcePosition(16, 15);
-		const int32 as_sem_e1_arg0 = as_sem_s0;
-		const int32 as_sem_e1_result = AngelscriptTypedASTJIT::InvokeBound<int32, int32>(
-			Execution, ASJIT_Call_TypedASTProviderPrivateFail_fc7ed8ea_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151, as_sem_e1_arg0);
+		TypedFrame.SetSourcePosition(16, 6);
+		([&]() -> int32
+		{
+			const int32 as_ast_e9_value = ([&]() -> int32
+		{
+			const int32 as_ast_e7_arg0 = as_ast_d17;
+			const int32 as_ast_e7_result = AngelscriptTypedASTJIT::InvokeBound<int32, int32>(Execution, ASJIT_Call_TypedASTProviderPrivateFail_fc7ed8ea_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151, as_ast_e7_arg0);
+			if (UNLIKELY(Execution.bExceptionThrown))
+			{
+				return int32{};
+			}
+			return as_ast_e7_result;
+		}());
+			if (UNLIKELY(Execution.bExceptionThrown))
+			{
+				return int32{};
+			}
+			int32& as_ast_e9_target = as_ast_d18;
+			as_ast_e9_target = as_ast_e9_value;
+			return as_ast_e9_target;
+		}());
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
-			return int32{};
+			return {};
 		}
-		return as_sem_e1_result;
-	}());
-	if (UNLIKELY(Execution.bExceptionThrown))
-	{
-		return int32{};
 	}
-	TypedFrame.SetSourcePosition(17, 2);
-	([&]() -> int32
 	{
 		TypedFrame.SetSourcePosition(17, 2);
-		const int32 as_sem_e4_arg1 = int32(2);
-		const int32 as_sem_e4_arg0 = int32(1);
-		const int32 as_sem_e4_result = AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32, int32>(
-			Execution, ASJIT_Call_TypedASTProviderPrivateAdd_6b00a476_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151, as_sem_e4_arg0, as_sem_e4_arg1);
+		([&]() -> int32
+		{
+			const int32 as_ast_e12_arg1 = int32(2);
+			const int32 as_ast_e12_arg0 = int32(1);
+			const int32 as_ast_e12_result = AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32, int32>(Execution, ASJIT_Call_TypedASTProviderPrivateAdd_6b00a476_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151, as_ast_e12_arg0, as_ast_e12_arg1);
+			if (UNLIKELY(Execution.bExceptionThrown))
+			{
+				return int32{};
+			}
+			return as_ast_e12_result;
+		}());
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
-			return int32{};
+			return {};
 		}
-		return as_sem_e4_result;
-	}());
-	if (UNLIKELY(Execution.bExceptionThrown))
-	{
-		return int32{};
 	}
-	TypedFrame.SetSourcePosition(18, 2);
-	return as_sem_s1;
+	{
+		TypedFrame.SetSourcePosition(18, 2);
+		return as_ast_d18;
+	}
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return int32{};
 }
 
 // AS Function : int TypedASTPrivateBridgeException(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:14:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:14:5
 // JIT Entry   : Raw
-int32 ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_8f65bcc7986569e5633cc61f4f45fdcaddd25f3663a8e59a6019f7c76abe92ea_Raw(FScriptExecution& Execution, asDWORD p_0)
+int32 ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_06d5b7ea6802290814b4b5b19277964a66ad613ba38f81ce58afb3cc248b20e1_Raw(FScriptExecution& Execution, asDWORD p_0)
 {
 	SCRIPT_ASSUME_NO_EXCEPTION()
 	FScopeTypedASTJITExecutionFrame TypedFrame(
@@ -440,22 +463,22 @@ int32 ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_8f6
 	{
 		return {};
 	}
-	return ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_8f65bcc7986569e5633cc61f4f45fdcaddd25f3663a8e59a6019f7c76abe92ea_TypedBody(Execution, TypedFrame, static_cast<int32>(p_0));
+	return ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_06d5b7ea6802290814b4b5b19277964a66ad613ba38f81ce58afb3cc248b20e1_TypedBody(Execution, TypedFrame, static_cast<int32>(p_0));
 }
 
 // AS Function : int TypedASTPrivateBridgeException(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:14:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:14:5
 // JIT Entry   : VM
-void ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_8f65bcc7986569e5633cc61f4f45fdcaddd25f3663a8e59a6019f7c76abe92ea_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
+void ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_06d5b7ea6802290814b4b5b19277964a66ad613ba38f81ce58afb3cc248b20e1_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
-	*(int32*)l_outValue = ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_8f65bcc7986569e5633cc61f4f45fdcaddd25f3663a8e59a6019f7c76abe92ea_Raw(Execution,
+	*(int32*)l_outValue = ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_06d5b7ea6802290814b4b5b19277964a66ad613ba38f81ce58afb3cc248b20e1_Raw(Execution,
 		*(asDWORD*)(l_fp + 0));
 }
 
 // AS Function : int TypedASTPrivateBridgeException(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:14:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:14:5
 // JIT Entry   : Parms
-void ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_8f65bcc7986569e5633cc61f4f45fdcaddd25f3663a8e59a6019f7c76abe92ea_Parms(FScriptExecution& Execution, void* Object, void* Parms)
+void ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_06d5b7ea6802290814b4b5b19277964a66ad613ba38f81ce58afb3cc248b20e1_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
 	static_cast<void>(Object);
 	SIZE_T ParmsOffset = 0;
@@ -467,16 +490,16 @@ void ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_8f65
 	static_cast<void>(GeneratedWorldContextParmOffset);
 	ParmsOffset = Align(ParmsOffset, alignof(int32));
 	const SIZE_T ReturnParmOffset = ParmsOffset;
-	*(int32*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_8f65bcc7986569e5633cc61f4f45fdcaddd25f3663a8e59a6019f7c76abe92ea_Raw(Execution,
+	*(int32*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_06d5b7ea6802290814b4b5b19277964a66ad613ba38f81ce58afb3cc248b20e1_Raw(Execution,
 		static_cast<asDWORD>(*(int32*)(((SIZE_T)Parms) + ParmOffset_0)));
 }
 /*
  * AngelScript Static JIT Function
  * Declaration       : void TypedASTPublicUASFunctionExceptionEntry(const int)
- * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:21:1
+ * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:21:6
  * StableFunctionKey  : d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af
- * ExecutionHash      : 837ba82648f990929e747be3d031a425fbe2d3f28120e8113cef2b6922245046
- * DebugHash          : 5ea377172c317af7d0b619bf3785990a6f6164fea778126773508e021c9fa31d
+ * ExecutionHash      : b39b03e611f2b9e96c25d3914d349c816fc544f4ef182a434afcfac2f9a01b9e
+ * DebugHash          : 86d95525f82e6bc06a4083bf2f0c9c9e3b5f9cffc6695d08ee597d05a1e361f9
  * EntryAbiHash       : 8e7cfb4c503bbc4c146b962a4462542c886d3df8bba3eb584a9ef3ccce444fc7
  * ExecutionCaps      : 0
  * RuntimeTriggers    : 0
@@ -484,17 +507,17 @@ void ASJIT_b704113d245323c0121962633d2387619eca73a2b1a5ca06d5f221de36c0b151_8f65
  */
 #if AS_JIT_DEBUG_CALLSTACKS
 #undef SCRIPT_DEBUG_FILENAME
-static const char* MODULENAME_ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_837ba82648f990929e747be3d031a425fbe2d3f28120e8113cef2b6922245046 = "ASStaticJITTypedPrivateBridgeFixture";
-#define SCRIPT_DEBUG_FILENAME MODULENAME_ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_837ba82648f990929e747be3d031a425fbe2d3f28120e8113cef2b6922245046
+static const char* MODULENAME_ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_b39b03e611f2b9e96c25d3914d349c816fc544f4ef182a434afcfac2f9a01b9e = "ASStaticJITTypedPrivateBridgeFixture";
+#define SCRIPT_DEBUG_FILENAME MODULENAME_ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_b39b03e611f2b9e96c25d3914d349c816fc544f4ef182a434afcfac2f9a01b9e
 #endif
 
 // AS Function : void TypedASTPublicUASFunctionExceptionEntry(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:21:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:21:6
 // JIT Entry   : Raw
-void ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_837ba82648f990929e747be3d031a425fbe2d3f28120e8113cef2b6922245046(FScriptExecution& Execution, asDWORD p_Value)
+void ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_b39b03e611f2b9e96c25d3914d349c816fc544f4ef182a434afcfac2f9a01b9e(FScriptExecution& Execution, asDWORD p_Value)
 {
 // == Jit at BC 0 ==
-SCRIPT_DEBUG_CALLSTACK_FRAME("void TypedASTPublicUASFunctionExceptionEntry(int)", 23);
+SCRIPT_DEBUG_CALLSTACK_FRAME("void TypedASTPublicUASFunctionExceptionEntry(int)", 22);
 SCRIPT_ASSUME_NO_EXCEPTION()
 alignas(8) asBYTE l_stack[8];
 asQWORD l_valueRegister = 0;
@@ -506,6 +529,8 @@ void* l_objectRegister = nullptr;
 asDWORD v_TEMP_dword_1 = {};
 asDWORD v_TEMP_dword_2 = {};
 asDWORD v_TEMP_dword_3 = {};
+// JitEntry *
+// SUSPEND
 // JitEntry *
 // SUSPEND
 // JitEntry *
@@ -542,28 +567,26 @@ return;
 }
 }
 // JitEntry *
-// SUSPEND
-// JitEntry *
 // RET 1
   return;
 }
 // AS Function : void TypedASTPublicUASFunctionExceptionEntry(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:21:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:21:6
 // JIT Entry   : VM
-void ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_837ba82648f990929e747be3d031a425fbe2d3f28120e8113cef2b6922245046_VMEntry(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
+void ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_b39b03e611f2b9e96c25d3914d349c816fc544f4ef182a434afcfac2f9a01b9e_VMEntry(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
-	ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_837ba82648f990929e747be3d031a425fbe2d3f28120e8113cef2b6922245046(Execution,
+	ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_b39b03e611f2b9e96c25d3914d349c816fc544f4ef182a434afcfac2f9a01b9e(Execution,
 		*(asDWORD*)(l_fp + 0));
 }
 // AS Function : void TypedASTPublicUASFunctionExceptionEntry(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:21:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:21:6
 // JIT Entry   : Parms
-void ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_837ba82648f990929e747be3d031a425fbe2d3f28120e8113cef2b6922245046_ParmsEntry(FScriptExecution& Execution, void* Object, void* Parms)
+void ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_b39b03e611f2b9e96c25d3914d349c816fc544f4ef182a434afcfac2f9a01b9e_ParmsEntry(FScriptExecution& Execution, void* Object, void* Parms)
 {
 	SIZE_T ParmsOffset = 0;
 	const SIZE_T ParmOffset_0_Value = ParmsOffset;
 	ParmsOffset += sizeof(int32);
-	ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_837ba82648f990929e747be3d031a425fbe2d3f28120e8113cef2b6922245046(Execution,
+	ASJIT_d5b7a0ab04246da202d293f48aaa204d9b9e136c80fa24feb1a1b838502618af_b39b03e611f2b9e96c25d3914d349c816fc544f4ef182a434afcfac2f9a01b9e(Execution,
 		(asDWORD)*(int32*)(((SIZE_T)Parms) + ParmOffset_0_Value));
 }
 #endif

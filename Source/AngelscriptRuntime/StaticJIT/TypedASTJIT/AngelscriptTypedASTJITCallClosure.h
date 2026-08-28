@@ -64,10 +64,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJITCallClosureCall
 {
 	FAngelscriptStableFunctionKey CallerFunctionKey;
 	FAngelscriptStableFunctionKey CalleeFunctionKey;
-	asTypedSemanticExpressionId Expression;
-	asSTypedSemanticSourceSpan SourceSpan;
-	asETypedSemanticCallTargetKind TargetKind =
-		asETypedSemanticCallTargetKind::Unspecified;
+	/** Exact call coordinate in the sealed canonical AST. */
+	asASTExprId Expression;
+	asSSourceSpan SourceSpan;
+	EAngelscriptTypedASTJITCallTargetKind TargetKind =
+		EAngelscriptTypedASTJITCallTargetKind::Unspecified;
 	int32 EngineLocalTargetFunctionId = INDEX_NONE;
 	EAngelscriptTypedASTJITCallDisposition Disposition =
 		EAngelscriptTypedASTJITCallDisposition::Unsupported;

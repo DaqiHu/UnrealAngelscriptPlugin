@@ -10,7 +10,7 @@
 enum class EAngelscriptStaticJITCaptureProfile : uint8
 {
 	Bytecode = 0,
-	VerifiedTypedHIR,
+	VerifiedCanonicalAST,
 };
 
 #endif

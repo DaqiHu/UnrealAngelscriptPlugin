@@ -9,14 +9,49 @@
 #include "StaticJIT/AngelscriptJITGeneration.h"
 
 #include "StartAngelscriptHeaders.h"
+#include "source/as_ast_context.h"
+#include "source/as_ast_kind.h"
+#include "source/as_ast_public_view.h"
+#include "source/as_ast_traversal.h"
+#include "source/as_decl.h"
 #include "source/as_module.h"
 #include "source/as_callfunc.h"
 #include "source/as_objecttype.h"
 #include "source/as_property.h"
+#include "source/as_runtime_type_bridge.h"
 #include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
-#include "source/as_typed_semantic_ir.h"
 #include "EndAngelscriptHeaders.h"
+
+FAngelscriptStaticJITGenerationASTLease::
+	FAngelscriptStaticJITGenerationASTLease(asIASTSnapshot* InSnapshot)
+	: Snapshot(InSnapshot)
+{
+	if (Snapshot == nullptr
+		|| Snapshot->GetAPIVersion() != asAST_API_VERSION_1)
+	{
+		return;
+	}
+
+	const asCASTSnapshot* const CanonicalSnapshot =
+		static_cast<const asCASTSnapshot*>(Snapshot);
+	const asCASTContext* const Context = CanonicalSnapshot->GetContext();
+	if (Context != nullptr && Context->IsPublishable())
+	{
+		SealedContext = Context;
+	}
+}
+
+FAngelscriptStaticJITGenerationASTLease::
+	~FAngelscriptStaticJITGenerationASTLease()
+{
+	if (Snapshot != nullptr)
+	{
+		Snapshot->Release();
+		Snapshot = nullptr;
+	}
+	SealedContext = nullptr;
+}
 
 namespace AngelscriptStaticJITGenerationSnapshot_Private
 {
@@ -38,6 +73,270 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 			{
 				return Candidate.ModuleKey == ModuleKey;
 			});
+	}
+
+	static const char* PrimitiveAstTypeKey(const eTokenType Token)
+	{
+		if (Token == ttInt)
+		{
+			return "int";
+		}
+		if (Token == ttFloat || Token == ttFloat32)
+		{
+			return "float";
+		}
+		if (Token == ttDouble || Token == ttFloat64)
+		{
+			return "double";
+		}
+		if (Token == ttBool)
+		{
+			return "bool";
+		}
+		if (Token == ttVoid)
+		{
+			return "void";
+		}
+		return "";
+	}
+
+	static asCString BuildRuntimeAstIdentityKey(const asCScriptFunction& Function)
+	{
+		asCString Key;
+		if (Function.objectType != nullptr)
+		{
+			Key = Function.objectType->GetName();
+			Key += "::";
+		}
+		else if (Function.nameSpace != nullptr
+			&& Function.nameSpace->name.GetLength() > 0)
+		{
+			Key = Function.nameSpace->name;
+			Key += "::";
+		}
+		Key += Function.name;
+		Key += "(";
+		bool bFirst = true;
+		for (asUINT ParamIndex = 0; ParamIndex < Function.GetParamCount(); ++ParamIndex)
+		{
+			int TypeId = 0;
+			Function.GetParam(ParamIndex, &TypeId);
+			if (!bFirst)
+			{
+				Key += ",";
+			}
+			bFirst = false;
+			const asCDataType DataType = Function.engine
+				? Function.engine->GetDataTypeFromTypeId(TypeId)
+				: asCDataType();
+			const char* RuntimeName = "";
+			if (DataType.IsPrimitive())
+			{
+				RuntimeName = PrimitiveAstTypeKey(DataType.GetTokenType());
+			}
+			else if (DataType.GetTypeInfo() != nullptr)
+			{
+				RuntimeName = DataType.GetTypeInfo()->GetName();
+			}
+			if (RuntimeName != nullptr)
+			{
+				Key += RuntimeName;
+			}
+		}
+		Key += ")";
+		return Key;
+	}
+
+	static bool IsRuntimeLambda(const asCScriptFunction& Function)
+	{
+		return Function.artifactInvocationKind
+			== asBUILD_ARTIFACT_INVOCATION_LAMBDA
+			|| (Function.name.GetLength() > 0 && Function.name[0] == '$');
+	}
+
+	static asCString IdentityParamKey(const asCString& FullKey)
+	{
+		int32 Open = INDEX_NONE;
+		int32 Close = INDEX_NONE;
+		for (asUINT Index = 0; Index < FullKey.GetLength(); ++Index)
+		{
+			if (FullKey[Index] == '(')
+			{
+				Open = static_cast<int32>(Index);
+			}
+			else if (FullKey[Index] == ')')
+			{
+				Close = static_cast<int32>(Index);
+				break;
+			}
+		}
+		if (Open == INDEX_NONE || Close <= Open)
+		{
+			return asCString();
+		}
+		asCString Params;
+		Params.Assign(FullKey.AddressOf() + Open, Close - Open + 1);
+		return Params;
+	}
+
+	static int32 LambdaNameIndex(const asCString& Name)
+	{
+		int32 LastDollar = INDEX_NONE;
+		for (asUINT Index = 0; Index < Name.GetLength(); ++Index)
+		{
+			if (Name[Index] == '$')
+			{
+				LastDollar = static_cast<int32>(Index);
+			}
+		}
+		if (LastDollar == INDEX_NONE
+			|| LastDollar + 1 >= static_cast<int32>(Name.GetLength()))
+		{
+			return 0;
+		}
+		return FCStringAnsi::Atoi(Name.AddressOf() + LastDollar + 1);
+	}
+
+	static asUINT BindLambdaCanonicalFunctionDeclValue(
+		const asCASTContext& CanonicalAST,
+		const asCScriptFunction& Function)
+	{
+		const asCString RuntimeParams =
+			IdentityParamKey(BuildRuntimeAstIdentityKey(Function));
+		if (RuntimeParams.GetLength() == 0)
+		{
+			return 0;
+		}
+
+		TArray<const asCDecl*> AstLambdas;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= CanonicalAST.GetDeclCount();
+			++DeclIndex)
+		{
+			const asCDecl* const Decl =
+				CanonicalAST.GetDecl(asASTDeclId(DeclIndex));
+			if (Decl == nullptr
+				|| (Decl->traits & asAST_TRAIT_LAMBDA) == 0
+				|| Decl->stableKey.GetLength() == 0)
+			{
+				continue;
+			}
+			if (IdentityParamKey(Decl->stableKey).Equals(RuntimeParams))
+			{
+				AstLambdas.Add(Decl);
+			}
+		}
+		AstLambdas.Sort([](const asCDecl& A, const asCDecl& B)
+		{
+			return A.range.begin.offset < B.range.begin.offset;
+		});
+
+		TArray<const asCScriptFunction*> RuntimeLambdas;
+		if (Function.module != nullptr)
+		{
+			for (asUINT Index = 0;
+				Index < Function.module->scriptFunctions.GetLength();
+				++Index)
+			{
+				asCScriptFunction* const Candidate =
+					Function.module->scriptFunctions[Index];
+				if (Candidate == nullptr
+					|| Candidate->module != Function.module
+					|| !IsRuntimeLambda(*Candidate)
+					|| !IdentityParamKey(BuildRuntimeAstIdentityKey(*Candidate))
+						.Equals(RuntimeParams))
+				{
+					continue;
+				}
+				RuntimeLambdas.Add(Candidate);
+			}
+		}
+		RuntimeLambdas.Sort([](const asCScriptFunction& A, const asCScriptFunction& B)
+		{
+			return LambdaNameIndex(A.name) < LambdaNameIndex(B.name);
+		});
+
+		if (AstLambdas.Num() == 0
+			|| AstLambdas.Num() != RuntimeLambdas.Num())
+		{
+			return 0;
+		}
+		const int32 Rank = RuntimeLambdas.IndexOfByKey(&Function);
+		if (Rank == INDEX_NONE || !AstLambdas.IsValidIndex(Rank))
+		{
+			return 0;
+		}
+		return AstLambdas[Rank]->id.value;
+	}
+
+	static asUINT BindCanonicalFunctionDeclValue(
+		const asCASTContext& CanonicalAST,
+		const asCScriptFunction& Function,
+		FString* OutBindDetail = nullptr)
+	{
+		if (OutBindDetail != nullptr)
+		{
+			OutBindDetail->Reset();
+		}
+		if (Function.canonicalASTStableDeclKey.GetLength() > 0)
+		{
+			asCRuntimeTypeBridge Bridge(Function.engine);
+			asASTDeclId Bound;
+			asCString Detail;
+			const int BindResult = Bridge.BindFunctionDeclaration(
+				CanonicalAST, Function, Bound, &Detail);
+			if (BindResult == asRUNTIME_DECL_BIND_OK)
+			{
+				return Bound.value;
+			}
+			if (OutBindDetail != nullptr)
+			{
+				*OutBindDetail = FString::Printf(
+					TEXT("result=%d invocationKind=%d objectOwner='%s' artifactOwner='%s' detail='%s'"),
+					BindResult,
+					static_cast<int32>(Function.artifactInvocationKind),
+					UTF8_TO_TCHAR(Function.objectType
+						? Function.objectType->name.AddressOf() : "<global>"),
+					UTF8_TO_TCHAR(Function.artifactOwnerType
+						? Function.artifactOwnerType->name.AddressOf() : "<missing>"),
+					UTF8_TO_TCHAR(Detail.AddressOf()));
+			}
+			return 0;
+		}
+
+		// LEGACY compatibility only. Canonical CodeGen and verified Cache V2
+		// functions carry the exact stable declaration key and never use the
+		// historical name/rank reconstruction below.
+		if (IsRuntimeLambda(Function))
+		{
+			return BindLambdaCanonicalFunctionDeclValue(CanonicalAST, Function);
+		}
+
+		const asCString Expected = BuildRuntimeAstIdentityKey(Function);
+		asUINT MatchCount = 0;
+		asUINT MatchValue = 0;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= CanonicalAST.GetDeclCount();
+			++DeclIndex)
+		{
+			const asCDecl* const Decl =
+				CanonicalAST.GetDecl(asASTDeclId(DeclIndex));
+			if (Decl == nullptr
+				|| (Decl->kind != asAST_DECL_FUNCTION
+					&& Decl->kind != asAST_DECL_METHOD
+					&& Decl->kind != asAST_DECL_CONSTRUCTOR
+					&& Decl->kind != asAST_DECL_DESTRUCTOR
+					&& Decl->kind != asAST_DECL_MIXIN
+					&& Decl->kind != asAST_DECL_IMPORT)
+				|| Decl->stableKey.GetLength() == 0
+				|| !Decl->stableKey.Equals(Expected))
+			{
+				continue;
+			}
+			++MatchCount;
+			MatchValue = Decl->id.value;
+		}
+		return MatchCount == 1 ? MatchValue : 0;
 	}
 
 	static FAngelscriptFunctionContentHash BuildGenerationOnlyContentHash(
@@ -577,36 +876,27 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 		return true;
 	}
 
-	static void CaptureNativeCallTargets(
+	static void CaptureNativeCallTarget(
 		FAngelscriptStaticJITGenerationSnapshot& Snapshot,
 		asCScriptEngine& ScriptEngine,
-		const asCTypedSemanticFunction& HIR)
+		const int32 FunctionId)
 	{
-		for (asUINT ExpressionIndex = 0;
-			ExpressionIndex < HIR.expressions.GetLength(); ++ExpressionIndex)
+		if (FunctionId < 0
+			|| Snapshot.NativeCallTargets.ContainsByPredicate(
+				[FunctionId](
+					const FAngelscriptStaticJITNativeCallTarget& Candidate)
+				{
+					return Candidate.EngineLocalFunctionId == FunctionId;
+				}))
 		{
-			const asSTypedSemanticExpression& Expression =
-				HIR.expressions[ExpressionIndex];
-			if (Expression.kind
-					!= asETypedSemanticExpressionKind::ResolvedCall
-				|| Expression.callTargetKind
-					!= asETypedSemanticCallTargetKind::SystemFunction
-				|| Expression.resolvedFunctionId < 0
-				|| Snapshot.NativeCallTargets.ContainsByPredicate(
-					[FunctionId = Expression.resolvedFunctionId](
-						const FAngelscriptStaticJITNativeCallTarget& Candidate)
-					{
-						return Candidate.EngineLocalFunctionId == FunctionId;
-					}))
-			{
-				continue;
-			}
+			return;
+		}
 
 			asIScriptFunction* const TargetFunction =
-				ScriptEngine.GetFunctionById(Expression.resolvedFunctionId);
+				ScriptEngine.GetFunctionById(FunctionId);
 			const FAngelscriptStaticJITNativeCallInventoryEntry* const
 				InventoryEntry = Snapshot.NativeCallInventory.FindByPredicate(
-					[FunctionId = Expression.resolvedFunctionId](
+					[FunctionId](
 						const auto& Candidate)
 					{
 						return Candidate.EngineLocalFunctionId == FunctionId;
@@ -617,7 +907,7 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 				|| TargetFunction->GetEngine() != &ScriptEngine
 				|| TargetFunction->GetFuncType() != asFUNC_SYSTEM)
 			{
-				continue;
+				return;
 			}
 
 			FAngelscriptTypedASTJITVMBridgeABIIdentity ExpectedVMBridgeABI;
@@ -633,12 +923,12 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 						*InventoryEntry, ScriptFunction,
 						ExpectedVMBridgeABI))
 				{
-					continue;
+					return;
 				}
 
 				FAngelscriptStaticJITNativeCallTarget& Added =
 					Snapshot.NativeCallTargets.Emplace_GetRef();
-				Added.EngineLocalFunctionId = Expression.resolvedFunctionId;
+				Added.EngineLocalFunctionId = FunctionId;
 				Added.CanonicalDeclaration =
 					InventoryEntry->CanonicalDeclaration;
 				Added.Reference = InventoryEntry->StableReference;
@@ -649,7 +939,7 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 						? InventoryEntry->CanonicalDeclaration
 						: InventoryEntry->NativeCallableDisplay;
 				Added.bScalarBridgeCallable = true;
-				continue;
+				return;
 			}
 
 			FAngelscriptStaticJITNativeABIIdentity ExpectedNativeABI;
@@ -685,12 +975,12 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 				// An explicit descriptor never broadens the reviewed ABI domain.
 				// Unsupported shapes remain absent so CallClosure fails the exact
 				// call closed instead of persisting an Engine-local approximation.
-				continue;
+				return;
 			}
 
 			FAngelscriptStaticJITNativeCallTarget& Added =
 				Snapshot.NativeCallTargets.Emplace_GetRef();
-			Added.EngineLocalFunctionId = Expression.resolvedFunctionId;
+			Added.EngineLocalFunctionId = FunctionId;
 			Added.CanonicalDeclaration = UTF8_TO_TCHAR(
 				TargetFunction->GetDeclaration(false, false, false));
 			Added.Reference = StableReference;
@@ -704,6 +994,175 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 			Added.bCurrentNativeCallable = bDescriptorCurrentNative;
 			Added.bScalarBridgeCallable = bDescriptorBridge;
 			Added.Descriptor = *Descriptor;
+	}
+
+	class FCanonicalCallCollector final : public asIASTConstVisitor
+	{
+	public:
+		TArray<asASTExprId> Calls;
+
+		virtual bool EnterNode(
+			const asCASTContext& Context,
+			const asSASTNodeRef& Node,
+			const asSASTTraversalEdge*,
+			asUINT) override
+		{
+			if (Node.nodeClass == asAST_NODE_EXPR)
+			{
+				const asASTExprId ExpressionId(Node.value, Node.snapshotOwner);
+				const asCExpr* const Expression = Context.GetExpr(ExpressionId);
+				if (Expression != nullptr && Expression->kind == asAST_EXPR_CALL)
+				{
+					Calls.Add(ExpressionId);
+				}
+			}
+			return true;
+		}
+
+		virtual bool VisitEdge(
+			const asCASTContext&,
+			const asSASTTraversalEdge&,
+			asUINT) override
+		{
+			return true;
+		}
+
+		virtual bool LeaveNode(
+			const asCASTContext&,
+			const asSASTNodeRef&,
+			const asSASTTraversalEdge*,
+			asUINT) override
+		{
+			return true;
+		}
+	};
+
+	static bool NativeFunctionOwnerMatchesCanonicalDecl(
+		const asCASTContext& Context,
+		const asCDecl& Target,
+		const asCScriptFunction& Candidate)
+	{
+		const asCDecl* const Owner = Context.GetDecl(Target.parent);
+		if (Target.kind == asAST_DECL_METHOD)
+		{
+			if (Candidate.objectType == nullptr)
+			{
+				return false;
+			}
+			const FString Receiver = Owner != nullptr
+				? UTF8_TO_TCHAR(Owner->stableKey.GetLength()
+					? Owner->stableKey.AddressOf() : Owner->name.AddressOf())
+				: FString();
+			const FString ReceiverNamespace = UTF8_TO_TCHAR(
+				Candidate.objectType->GetNamespace());
+			const FString ReceiverName = UTF8_TO_TCHAR(
+				Candidate.objectType->GetName());
+			const FString CandidateReceiver = ReceiverNamespace.IsEmpty()
+				? ReceiverName
+				: ReceiverNamespace + TEXT("::") + ReceiverName;
+			return !Receiver.IsEmpty()
+				&& CandidateReceiver == Receiver;
+		}
+
+		if (Candidate.objectType != nullptr)
+		{
+			return false;
+		}
+		const FString Namespace = Owner != nullptr
+			&& Owner->kind == asAST_DECL_NAMESPACE
+			? UTF8_TO_TCHAR(Owner->stableKey.GetLength()
+				? Owner->stableKey.AddressOf() : Owner->name.AddressOf())
+			: FString();
+		return FString(UTF8_TO_TCHAR(Candidate.GetNamespace())) == Namespace;
+	}
+
+	static void CaptureNativeCallTargets(
+		FAngelscriptStaticJITGenerationSnapshot& Snapshot,
+		asCScriptEngine& ScriptEngine,
+		const asCASTContext& Context,
+		const asASTDeclId FunctionDecl)
+	{
+		const asCDecl* const Function = Context.GetDecl(FunctionDecl);
+		if (Function == nullptr || !Function->body.IsValid())
+		{
+			return;
+		}
+
+		FCanonicalCallCollector Collector;
+		asSASTTraversalOptions TraversalOptions;
+		TraversalOptions.followReferences = false;
+		TraversalOptions.validateEdgeTargets = true;
+		TraversalOptions.maxNodes =
+			Context.GetStmtCount() + Context.GetExprCount() + 1;
+		TraversalOptions.maxDepth = TraversalOptions.maxNodes;
+		asSASTTraversalResult TraversalResult;
+		if (asCASTTraverse(Context,
+				asSASTNodeRef::FromStmt(Function->body),
+				Collector, TraversalOptions, TraversalResult)
+			!= asAST_TRAVERSAL_OK)
+		{
+			return;
+		}
+
+		for (const asASTExprId CallId : Collector.Calls)
+		{
+			const asCExpr* const Expression = Context.GetExpr(CallId);
+			const asCDecl* const Target = Expression != nullptr
+				? Context.GetDecl(Expression->resolvedDecl) : nullptr;
+			if (Target == nullptr || Target->origin.GetLength() == 0)
+			{
+				continue;
+			}
+
+			const FString CanonicalDeclaration =
+				UTF8_TO_TCHAR(Target->origin.AddressOf());
+			TArray<const asCScriptFunction*> ExactDeclarationMatches;
+			for (asUINT FunctionIndex = 0;
+				FunctionIndex < ScriptEngine.scriptFunctions.GetLength();
+				++FunctionIndex)
+			{
+				const asCScriptFunction* const Candidate =
+					ScriptEngine.scriptFunctions[FunctionIndex];
+				if (Candidate == nullptr
+					|| Candidate->engine != &ScriptEngine
+					|| Candidate->funcType != asFUNC_SYSTEM
+					|| CanonicalDeclaration != UTF8_TO_TCHAR(
+						Candidate->GetDeclaration(false, false, false)))
+				{
+					continue;
+				}
+				ExactDeclarationMatches.Add(Candidate);
+			}
+
+			const asCScriptFunction* Match = nullptr;
+			if (ExactDeclarationMatches.Num() == 1)
+			{
+				Match = ExactDeclarationMatches[0];
+			}
+			else if (ExactDeclarationMatches.Num() > 1)
+			{
+				for (const asCScriptFunction* Candidate
+					: ExactDeclarationMatches)
+				{
+					if (Candidate == nullptr
+						|| !NativeFunctionOwnerMatchesCanonicalDecl(
+							Context, *Target, *Candidate))
+					{
+						continue;
+					}
+					if (Match != nullptr)
+					{
+						Match = nullptr;
+						break;
+					}
+					Match = Candidate;
+				}
+			}
+			if (Match != nullptr)
+			{
+				CaptureNativeCallTarget(
+					Snapshot, ScriptEngine, Match->id);
+			}
 		}
 	}
 
@@ -997,15 +1456,16 @@ bool BuildAngelscriptStaticJITGenerationSnapshot(
 	{
 		return false;
 	}
-	const bool bCaptureTypedHIR = ScriptEngine != nullptr
-		&& ScriptEngine->IsTypedSemanticIRCaptureEnabled();
-	Snapshot->CaptureProfile = bCaptureTypedHIR
-		? EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR
+	const bool bRequireCanonicalAST =
+		Engine.GetRuntimeConfig().bRequireCanonicalASTForStaticJITGeneration;
+	Snapshot->CaptureProfile = bRequireCanonicalAST
+		? EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST
 		: EAngelscriptStaticJITCaptureProfile::Bytecode;
-	Snapshot->bHasVerifiedTypedHIR = bCaptureTypedHIR;
-#if WITH_DEV_AUTOMATION_TESTS
-	bool bInjectedInvalidTypedHIR = false;
-#endif
+	// The capture profile is frozen before compilation. IsComplete() verifies
+	// that every typed-ast module/function has a matching retained AST lease.
+	Snapshot->bHasVerifiedCanonicalAST =
+		Snapshot->CaptureProfile
+			== EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
 	for (const FAngelscriptCacheCleanModuleArtifacts& ModuleArtifacts
 		: Artifacts)
 	{
@@ -1041,6 +1501,48 @@ bool BuildAngelscriptStaticJITGenerationSnapshot(
 		if (ModuleDesc->Code.Num() == 1)
 		{
 			Module.VirtualSourcePath = ModuleDesc->Code[0].VirtualPath;
+		}
+		const asCASTContext* CanonicalAST = nullptr;
+		asIASTSnapshot* PublicSnapshot =
+			ScriptModule->AcquireASTSnapshot(asAST_API_VERSION_1);
+#if WITH_DEV_AUTOMATION_TESTS
+		if (PublicSnapshot != nullptr
+			&& Engine.GetRuntimeConfig().
+				bInjectMissingCanonicalASTSnapshotForTesting)
+		{
+			PublicSnapshot->Release();
+			PublicSnapshot = nullptr;
+		}
+#endif
+		if (PublicSnapshot != nullptr)
+		{
+			const TSharedPtr<FAngelscriptStaticJITGenerationASTLease,
+				ESPMode::ThreadSafe> ASTLease =
+				MakeShared<FAngelscriptStaticJITGenerationASTLease,
+					ESPMode::ThreadSafe>(PublicSnapshot);
+			CanonicalAST = ASTLease->GetContext();
+			if (CanonicalAST == nullptr)
+			{
+				return Fail(OutError, FString::Printf(
+					TEXT("StaticJIT generation module '%s' retained no sealed public AST V1 snapshot."),
+					*ModuleDesc->ModuleName));
+			}
+			Snapshot->CanonicalASTLeases.Add(ASTLease);
+		}
+		else if (bRequireCanonicalAST)
+		{
+			return Fail(OutError, FString::Printf(
+				TEXT("StaticJIT typed capture module '%s' did not retain a public AST V1 snapshot; "
+					"EngineInitialPolicy=%d EngineNextPolicy=%d ModulePolicy=%d "
+					"ModulePolicyFrozen=%d BytecodePublisher=%d "
+					"Purpose=%d."),
+				*ModuleDesc->ModuleName,
+				Engine.GetRuntimeConfig().InitialASTRetentionPolicy,
+				Engine.NextCompileASTRetentionPolicy,
+				static_cast<int32>(ScriptModule->GetASTRetentionPolicy()),
+				ScriptModule->astRetentionFrozen ? 1 : 0,
+				static_cast<int32>(ScriptModule->GetLastBytecodePublisher()),
+				static_cast<int32>(Engine.GetPurpose())));
 		}
 
 		for (asUINT TypeIndex = 0;
@@ -1134,36 +1636,34 @@ bool BuildAngelscriptStaticJITGenerationSnapshot(
 			Added.FunctionKey = FunctionKey;
 			Added.CanonicalDeclaration = UTF8_TO_TCHAR(
 				Function->GetDeclaration(false, false, false));
-			if (bCaptureTypedHIR)
+			if (CanonicalAST != nullptr)
 			{
-				Added.VerifiedTypedHIR =
-					Function->GetTypedSemanticFunction();
-#if WITH_DEV_AUTOMATION_TESTS
-				if (Added.VerifiedTypedHIR != nullptr
-					&& !bInjectedInvalidTypedHIR
-					&& Engine.GetRuntimeConfig().
-						bInjectInvalidTypedSemanticIRForTesting)
-				{
-					asCTypedSemanticFunction* const MutableHIR =
-						const_cast<asCTypedSemanticFunction*>(
-							Added.VerifiedTypedHIR);
-					MutableHIR->rootStatement =
-						asTypedSemanticStatementId();
-					bInjectedInvalidTypedHIR = true;
-				}
-#endif
-				if (Added.VerifiedTypedHIR != nullptr
-					&& !VerifyTypedSemanticFunction(
-						*Added.VerifiedTypedHIR).IsValid())
+				Added.SealedAST = CanonicalAST;
+				FString CanonicalBindDetail;
+				Added.CanonicalFunctionDeclValue =
+					BindCanonicalFunctionDeclValue(
+						*CanonicalAST, *Function, &CanonicalBindDetail);
+				Added.bRequiresCanonicalAST =
+					Added.CanonicalFunctionDeclValue != 0;
+				if (ScriptModule->GetLastBytecodePublisher()
+						== asBYTECODE_PUBLISHER_CANONICAL_CODEGEN
+					&& Added.CanonicalFunctionDeclValue == 0)
 				{
 					return Fail(OutError, FString::Printf(
-						TEXT("StaticJIT generation function '%s' published invalid typed HIR."),
-						*Added.CanonicalDeclaration));
+						TEXT("StaticJIT canonical function '%s' did not bind its producer-carried declaration identity '%s': %s."),
+						*Added.CanonicalDeclaration,
+						UTF8_TO_TCHAR(Function->canonicalASTStableDeclKey.AddressOf()),
+						*CanonicalBindDetail));
 				}
-				if (Added.VerifiedTypedHIR != nullptr)
+			}
+			if (bRequireCanonicalAST)
+			{
+				if (Added.SealedAST != nullptr
+					&& Added.CanonicalFunctionDeclValue != 0)
 				{
 					CaptureNativeCallTargets(
-						*Snapshot, *ScriptEngine, *Added.VerifiedTypedHIR);
+						*Snapshot, *ScriptEngine, *Added.SealedAST,
+						asASTDeclId(Added.CanonicalFunctionDeclValue));
 				}
 			}
 			Added.bHasVMEntry = true;
@@ -1444,15 +1944,6 @@ bool BuildAngelscriptStaticJITGenerationSnapshot(
 				FString(), false, false, nullptr);
 		}
 	}
-
-#if WITH_DEV_AUTOMATION_TESTS
-	if (Engine.GetRuntimeConfig().bInjectInvalidTypedSemanticIRForTesting
-		&& !bInjectedInvalidTypedHIR)
-	{
-		return Fail(OutError, TEXT(
-			"StaticJIT generation typed-HIR fault injection found no captured HIR to verify."));
-	}
-#endif
 
 	Snapshot->Modules.Sort([](const auto& Left, const auto& Right)
 	{

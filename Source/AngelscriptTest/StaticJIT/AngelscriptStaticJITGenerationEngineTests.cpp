@@ -17,7 +17,7 @@
 #endif
 #include "StaticJIT/BytecodeJIT/AngelscriptBytecodeJIT.h"
 #include "StaticJIT/AOT/AngelscriptStaticJITAotFixture.h"
-#include "StaticJIT/AngelscriptHIRDumpCommand.h"
+#include "StaticJIT/AngelscriptProjectSourceGraph.h"
 #include "StaticJIT/AngelscriptJITProviderRegistry.h"
 #include "StaticJIT/AngelscriptStaticJITGenerationSnapshot.h"
 #include "StaticJIT/AngelscriptStaticJITGenerationProfile.h"
@@ -25,6 +25,7 @@
 #include "StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallTarget.h"
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITBackend.h"
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITCallClosure.h"
+#include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITCanonical.h"
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITEmitter.h"
 #include "Testing/AngelscriptBindExecutionObservation.h"
 #include "Testing/AngelscriptScriptTestRegistry.h"
@@ -45,11 +46,14 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "angelscript.h"
+#include "source/as_ast_context.h"
+#include "source/as_ast_traversal.h"
+#include "source/as_decl.h"
+#include "source/as_expr.h"
 #include "source/as_objecttype.h"
 #include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
 #include "source/as_thread.h"
-#include "source/as_typed_semantic_ir.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS && AS_CAN_GENERATE_JIT
@@ -812,6 +816,134 @@ int EvaluateGenerationEmit_65C28A(int Value)
 		return EAngelscriptStaticJITDescriptorKind::Class;
 	}
 
+	static const asCDecl* GetCanonicalFunctionDecl(
+		const FAngelscriptStaticJITGenerationFunction& Function)
+	{
+		if (Function.SealedAST == nullptr
+			|| !Function.SealedAST->IsPublishable()
+			|| Function.CanonicalFunctionDeclValue == 0)
+		{
+			return nullptr;
+		}
+		return Function.SealedAST->GetDecl(
+			asASTDeclId(Function.CanonicalFunctionDeclValue));
+	}
+
+	class FCanonicalExpressionCollector final : public asIASTConstVisitor
+	{
+	public:
+		TArray<asASTExprId> Expressions;
+
+		virtual bool EnterNode(
+			const asCASTContext& Context,
+			const asSASTNodeRef& Node,
+			const asSASTTraversalEdge*,
+			asUINT) override
+		{
+			if (Node.nodeClass == asAST_NODE_EXPR)
+			{
+				const asASTExprId ExpressionId(Node.value, Node.snapshotOwner);
+				if (Context.GetExpr(ExpressionId) != nullptr)
+				{
+					Expressions.Add(ExpressionId);
+				}
+			}
+			return true;
+		}
+
+		virtual bool VisitEdge(
+			const asCASTContext&,
+			const asSASTTraversalEdge&,
+			asUINT) override
+		{
+			return true;
+		}
+
+		virtual bool LeaveNode(
+			const asCASTContext&,
+			const asSASTNodeRef&,
+			const asSASTTraversalEdge*,
+			asUINT) override
+		{
+			return true;
+		}
+	};
+
+	static bool CollectCanonicalExpressions(
+		const FAngelscriptStaticJITGenerationFunction& Function,
+		TArray<asASTExprId>& OutExpressions)
+	{
+		OutExpressions.Reset();
+		const asCDecl* const Decl = GetCanonicalFunctionDecl(Function);
+		if (Decl == nullptr || !Decl->body.IsValid())
+		{
+			return false;
+		}
+		FCanonicalExpressionCollector Collector;
+		asSASTTraversalOptions Options;
+		Options.followReferences = false;
+		Options.validateEdgeTargets = true;
+		Options.maxNodes = Function.SealedAST->GetStmtCount()
+			+ Function.SealedAST->GetExprCount() + 1;
+		Options.maxDepth = Options.maxNodes;
+		asSASTTraversalResult TraversalResult;
+		if (asCASTTraverse(
+				*Function.SealedAST,
+				asSASTNodeRef::FromStmt(Decl->body),
+				Collector,
+				Options,
+				TraversalResult) != asAST_TRAVERSAL_OK)
+		{
+			return false;
+		}
+		OutExpressions = MoveTemp(Collector.Expressions);
+		return true;
+	}
+
+	static const asCDecl* FindCanonicalExpressionTarget(
+		const FAngelscriptStaticJITGenerationFunction& Function,
+		const asEASTExprKind ExpressionKind,
+		const FStringView TargetName,
+		asASTExprId* OutExpression = nullptr)
+	{
+		if (OutExpression != nullptr)
+		{
+			*OutExpression = {};
+		}
+		TArray<asASTExprId> Expressions;
+		if (!CollectCanonicalExpressions(Function, Expressions))
+		{
+			return nullptr;
+		}
+		for (const asASTExprId ExpressionId : Expressions)
+		{
+			const asCExpr* const Expression =
+				Function.SealedAST->GetExpr(ExpressionId);
+			const asCDecl* const Target = Expression != nullptr
+				&& Expression->kind == ExpressionKind
+				? Function.SealedAST->GetDecl(Expression->resolvedDecl)
+				: nullptr;
+			if (Target == nullptr)
+			{
+				continue;
+			}
+			const FString StableKey = UTF8_TO_TCHAR(
+				Target->stableKey.AddressOf());
+			const FString Origin = UTF8_TO_TCHAR(Target->origin.AddressOf());
+			if (!StableKey.Contains(TargetName, ESearchCase::CaseSensitive)
+				&& !Origin.Contains(TargetName, ESearchCase::CaseSensitive))
+			{
+				continue;
+			}
+			if (OutExpression != nullptr)
+			{
+				*OutExpression = ExpressionId;
+			}
+			return Target;
+		}
+		return nullptr;
+	}
+
 	struct FCompiledGraphStorage
 	{
 		TArray<asIScriptModule*> Modules;
@@ -855,7 +987,9 @@ int EvaluateGenerationEmit_65C28A(int Value)
 				Function.EntryAbiHash,
 				Function.CanonicalDeclaration,
 				Function.Bytecode,
-				Function.VerifiedTypedHIR,
+				Function.SealedAST,
+				Function.CanonicalFunctionDeclValue,
+				Function.bRequiresCanonicalAST,
 				Function.bHasVerifiedArtifactIdentity,
 				Function.bHasVerifiedArtifactReferences,
 				Function.bHasVMEntry,
@@ -1029,7 +1163,7 @@ int EvaluateGenerationEmit_65C28A(int Value)
 		mutable int32 DestroyCount = 0;
 		mutable int32 SeenModuleCount = 0;
 		mutable int32 SeenFunctionCount = 0;
-		mutable int32 SeenVerifiedHIRCount = 0;
+		mutable int32 SeenCanonicalASTCount = 0;
 	};
 
 	FContainmentBackend::~FContainmentBackend()
@@ -1045,11 +1179,12 @@ int EvaluateGenerationEmit_65C28A(int Value)
 		++Factory.GenerateCount;
 		Factory.SeenModuleCount = Request.CompiledSourceGraph.Modules.Num();
 		Factory.SeenFunctionCount = Request.CompiledSourceGraph.Functions.Num();
-		Factory.SeenVerifiedHIRCount =
+		Factory.SeenCanonicalASTCount =
 			Request.CompiledSourceGraph.Functions.FilterByPredicate(
 				[](const FAngelscriptStaticJITCompiledFunctionView& Function)
 				{
-					return Function.VerifiedTypedHIR != nullptr;
+					return Function.SealedAST != nullptr
+						&& Function.CanonicalFunctionDeclValue != 0;
 				}).Num();
 		if (Factory.Mode == EContainmentBackendMode::FailEmission)
 		{
@@ -1134,20 +1269,17 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITGenerationEngineTests,
 		asCScriptEngine* const BytecodeScriptEngine =
 			static_cast<asCScriptEngine*>(
 				BytecodeFixture->Engine->GetScriptEngine());
-		ASSERT_THAT(IsFalse(
-			BytecodeScriptEngine->IsTypedSemanticIRCaptureEnabled()));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asCOMPILER_PIPELINE_LEGACY),
+			static_cast<int32>(BytecodeScriptEngine->GetCompilerPipeline()),
+			TEXT("BytecodeJIT capture does not require a retained canonical source authority")));
 		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
 			ESPMode::ThreadSafe> BytecodeSnapshot =
 			BytecodeFixture->Engine->GetStaticJITGenerationSnapshot();
 		ASSERT_THAT(IsTrue(BytecodeSnapshot.IsValid()));
 		ASSERT_THAT(IsTrue(BytecodeSnapshot->CaptureProfile
 			== EAngelscriptStaticJITCaptureProfile::Bytecode));
-		ASSERT_THAT(IsFalse(BytecodeSnapshot->bHasVerifiedTypedHIR));
-		for (const FAngelscriptStaticJITGenerationFunction& Function
-			: BytecodeSnapshot->Functions)
-		{
-			ASSERT_THAT(IsNull(Function.VerifiedTypedHIR));
-		}
+		ASSERT_THAT(IsFalse(BytecodeSnapshot->bHasVerifiedCanonicalAST));
 
 		TUniquePtr<FFixture> TypedASTFixture = CreateFixture(
 			*TestRunner, TEXT("TypedASTCaptureProfile"),
@@ -1156,15 +1288,18 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITGenerationEngineTests,
 		asCScriptEngine* const TypedASTScriptEngine =
 			static_cast<asCScriptEngine*>(
 				TypedASTFixture->Engine->GetScriptEngine());
-		ASSERT_THAT(IsTrue(
-			TypedASTScriptEngine->IsTypedSemanticIRCaptureEnabled()));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asCOMPILER_PIPELINE_CANONICAL),
+			static_cast<int32>(TypedASTScriptEngine->GetCompilerPipeline()),
+			TEXT("TypedAST generation must freeze CANONICAL before target source compilation")));
 		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
 			ESPMode::ThreadSafe> TypedASTSnapshot =
 			TypedASTFixture->Engine->GetStaticJITGenerationSnapshot();
 		ASSERT_THAT(IsTrue(TypedASTSnapshot.IsValid()));
 		ASSERT_THAT(IsTrue(TypedASTSnapshot->CaptureProfile
-			== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR));
-		ASSERT_THAT(IsTrue(TypedASTSnapshot->bHasVerifiedTypedHIR));
+			== EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST));
+		ASSERT_THAT(IsTrue(TypedASTSnapshot->bHasVerifiedCanonicalAST,
+			TEXT("typed-ast snapshots retain their sealed Canonical AST")));
 		const FAngelscriptStaticJITGenerationFunction* const CapturedFunction =
 			TypedASTSnapshot->Functions.FindByPredicate([](const auto& Function)
 			{
@@ -1175,13 +1310,9 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITGenerationEngineTests,
 					TEXT("IncrementGenerationEmit_65C28A"));
 			});
 		ASSERT_THAT(IsNotNull(CapturedFunction));
-		ASSERT_THAT(IsNotNull(CapturedFunction->VerifiedTypedHIR));
-		const asCScriptFunction* const EngineOwnedFunction =
-			static_cast<const asCScriptFunction*>(
-				CapturedFunction->EngineLocalFunction);
-		ASSERT_THAT(IsTrue(CapturedFunction->VerifiedTypedHIR
-			== EngineOwnedFunction->GetTypedSemanticFunction(),
-			TEXT("The backend view must use HIR owned by the same source compile")));
+		ASSERT_THAT(IsNotNull(CapturedFunction->SealedAST));
+		ASSERT_THAT(IsTrue(CapturedFunction->CanonicalFunctionDeclValue != 0,
+			TEXT("Typed profile captures a sealed AST plus exact function Decl")));
 		TArray<FString> PersistedHIRFiles;
 		IFileManager::Get().FindFilesRecursive(
 			PersistedHIRFiles, *TypedASTFixture->Root,
@@ -1235,32 +1366,21 @@ class UTypedASTFoldedGlobalOwner_65C28A : UObject
 			{
 				return Candidate.CanonicalDeclaration.Contains(
 					TEXT("TypedASTFoldedGlobal_65C28A"));
-			});
+		});
 		ASSERT_THAT(IsNotNull(Reader));
-		ASSERT_THAT(IsNotNull(Reader->VerifiedTypedHIR));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Reader)));
 		ASSERT_THAT(IsTrue(Reader->bHasVerifiedArtifactReferences));
 		ASSERT_THAT(IsNotNull(Global));
 		ASSERT_THAT(IsTrue(Global->EngineLocalGlobalPropertyId >= 0));
 		ASSERT_THAT(IsFalse(Global->GlobalKey.Hash.IsZero()));
 
-		const asSTypedSemanticExpression* FoldedUse = nullptr;
-		for (asUINT Index = 0;
-			Index < Reader->VerifiedTypedHIR->expressions.GetLength(); ++Index)
-		{
-			const asSTypedSemanticExpression& Expression =
-				Reader->VerifiedTypedHIR->expressions[Index];
-			if (Expression.kind
-				== asETypedSemanticExpressionKind::FoldedGlobalConstant)
-			{
-				FoldedUse = &Expression;
-				break;
-			}
-		}
-		ASSERT_THAT(IsNotNull(FoldedUse,
-			TEXT("The production compiler must retain the folded global origin in HIR")));
-		ASSERT_THAT(IsTrue(FoldedUse->resolvedGlobalPropertyId
-			== Global->EngineLocalGlobalPropertyId));
-		ASSERT_THAT(AreEqual(asQWORD{7}, FoldedUse->literalBits));
+		const asCDecl* const FoldedGlobalDecl = FindCanonicalExpressionTarget(
+			*Reader, asAST_EXPR_DECL_REF,
+			TEXTVIEW("TypedASTFoldedGlobal_65C28A"));
+		ASSERT_THAT(IsNotNull(FoldedGlobalDecl,
+			TEXT("The sealed AST must retain the folded global declaration identity")));
+		ASSERT_THAT(IsTrue(FoldedGlobalDecl->hasConstantValue));
+		ASSERT_THAT(AreEqual(asQWORD{7}, FoldedGlobalDecl->constantValue));
 
 		const FAngelscriptStaticJITGenerationDependency* const FlatGlobal =
 			Snapshot->Dependencies.FindByPredicate(
@@ -1446,11 +1566,24 @@ asset SecondaryTypedAsset of UObject
 				Initializer->EngineLocalFunction);
 		ASSERT_THAT(IsTrue(InitializerFunction->traits.GetTrait(
 			asTRAIT_EXTERNAL_IMPLICIT_THIS)));
-		ASSERT_THAT(IsNotNull(Initializer->VerifiedTypedHIR));
-		ASSERT_THAT(IsTrue(Initializer->VerifiedTypedHIR->header.receiver.kind
-			== asETypedSemanticReceiverKind::ExternalImplicitThis));
-		ASSERT_THAT(AreEqual(0,
-			Initializer->VerifiedTypedHIR->header.receiver.parameterIndex));
+		const asCDecl* const InitializerDecl =
+			GetCanonicalFunctionDecl(*Initializer);
+		ASSERT_THAT(IsNotNull(InitializerDecl));
+		ASSERT_THAT(IsTrue((InitializerDecl->traits
+			& asAST_TRAIT_EXTERNAL_IMPLICIT_THIS) != 0));
+		bool bHasCanonicalParameter = false;
+		for (asUINT ChildIndex = 0;
+			ChildIndex < InitializerDecl->children.GetLength(); ++ChildIndex)
+		{
+			const asCDecl* const Child = Initializer->SealedAST->GetDecl(
+				InitializerDecl->children[ChildIndex]);
+			if (Child != nullptr && Child->kind == asAST_DECL_PARAM)
+			{
+				bHasCanonicalParameter = true;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(bHasCanonicalParameter));
 
 		FCompiledGraphStorage GraphStorage = BuildCompiledGraphStorage(
 			*Snapshot, TEXTVIEW("LiteralAssetRoleProvider"));
@@ -1499,31 +1632,22 @@ bool InvokeReviewedUEHeaderInline_65C28A(int Ignored)
 					TEXT("InvokeReviewedUEHeaderInline_65C28A"));
 			});
 		ASSERT_THAT(IsNotNull(Caller));
-		ASSERT_THAT(IsNotNull(Caller->VerifiedTypedHIR));
-		int32 NativeFunctionId = INDEX_NONE;
-		asTypedSemanticExpressionId NativeCallExpression;
-		for (asUINT Index = 0;
-			Index < Caller->VerifiedTypedHIR->expressions.GetLength(); ++Index)
-		{
-			const asSTypedSemanticExpression& Expression =
-				Caller->VerifiedTypedHIR->expressions[Index];
-			if (Expression.kind
-					== asETypedSemanticExpressionKind::ResolvedCall
-				&& Expression.callTargetKind
-					== asETypedSemanticCallTargetKind::SystemFunction)
-			{
-				NativeFunctionId = Expression.resolvedFunctionId;
-				NativeCallExpression = Expression.id;
-				break;
-			}
-		}
-		ASSERT_THAT(IsTrue(NativeFunctionId >= 0));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Caller)));
+		asASTExprId NativeCallExpression;
+		const asCDecl* const NativeCallDecl = FindCanonicalExpressionTarget(
+			*Caller, asAST_EXPR_CALL,
+			TEXTVIEW("IsRunningCommandlet"), &NativeCallExpression);
+		ASSERT_THAT(IsNotNull(NativeCallDecl));
+		ASSERT_THAT(IsTrue(NativeCallExpression.IsValid()));
+		const FString NativeCanonicalDeclaration =
+			UTF8_TO_TCHAR(NativeCallDecl->origin.AddressOf());
+		ASSERT_THAT(IsFalse(NativeCanonicalDeclaration.IsEmpty()));
 		const FAngelscriptStaticJITNativeCallTarget* const NativeTarget =
 			Snapshot->NativeCallTargets.FindByPredicate(
-				[NativeFunctionId](const auto& Candidate)
+				[&NativeCanonicalDeclaration](const auto& Candidate)
 				{
-					return Candidate.EngineLocalFunctionId
-						== NativeFunctionId;
+					return Candidate.CanonicalDeclaration
+						== NativeCanonicalDeclaration;
 				});
 		ASSERT_THAT(IsNotNull(NativeTarget));
 		ASSERT_THAT(AreEqual(
@@ -1571,7 +1695,8 @@ bool InvokeReviewedUEHeaderInline_65C28A(int Ignored)
 			ClosurePlan.Calls.FindByPredicate(
 				[NativeCallExpression](const auto& Candidate)
 				{
-					return Candidate.Expression == NativeCallExpression;
+					return Candidate.Expression
+						== NativeCallExpression;
 				});
 		ASSERT_THAT(IsNotNull(PlannedCall));
 		ASSERT_THAT(IsTrue(PlannedCall->Disposition
@@ -1593,9 +1718,9 @@ bool InvokeReviewedUEHeaderInline_65C28A(int Ignored)
 		const asCScriptFunction* const CallerFunction =
 			static_cast<const asCScriptFunction*>(Caller->EngineLocalFunction);
 		Shape.ReturnType = CallerFunction->returnType;
-		Shape.InvocationKind = Caller->VerifiedTypedHIR->header.invocationKind;
-		Shape.ReceiverKind = Caller->VerifiedTypedHIR->header.receiver.kind;
-		Shape.bReturnsOnStack = Caller->VerifiedTypedHIR->header.returnsOnStack;
+		Shape.InvocationKind = EAngelscriptTypedASTJITInvocationKind::Global;
+		Shape.ReceiverKind = EAngelscriptTypedASTJITReceiverKind::None;
+		Shape.bReturnsOnStack = CallerFunction->DoesReturnOnStack();
 		for (asUINT Index = 0;
 			Index < CallerFunction->parameterTypes.GetLength(); ++Index)
 		{
@@ -1603,7 +1728,10 @@ bool InvokeReviewedUEHeaderInline_65C28A(int Ignored)
 		}
 		const FAngelscriptTypedASTJITEmission Emission =
 			EmitTypedASTJITFunction(
-				*Caller->VerifiedTypedHIR, Shape, EmitOptions);
+				*Caller->SealedAST,
+				asASTDeclId(Caller->CanonicalFunctionDeclValue),
+				Shape,
+				EmitOptions);
 		ASSERT_THAT(IsTrue(Emission.bSuccess, Emission.FailureDetail));
 		ASSERT_THAT(IsTrue(Emission.RequiredIncludes.Contains(
 			TEXT("CoreGlobals.h"))));
@@ -1704,6 +1832,268 @@ bool InvokeReviewedUEHeaderInline_65C28A(int Ignored)
 			TEXT("FAngelscriptJITExecutionContext"))));
 	}
 
+	TEST_METHOD(ReviewedUEExportedSymbolCallUsesResolvedNamespaceTarget)
+	{
+		using namespace AngelscriptStaticJITGenerationEngineTests;
+		TUniquePtr<FFixture> Fixture = CreateFixture(
+			*TestRunner, TEXT("ReviewedUEExportedSymbolCall"),
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			TEXTVIEW(R"AS(
+UFUNCTION()
+int InvokeReviewedUEExportedSymbol_65C28A(int Year, int Month)
+{
+	return FDateTime::DaysInMonth(Year, Month);
+}
+)AS"));
+		ASSERT_THAT(IsNotNull(Fixture.Get()));
+		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+			ESPMode::ThreadSafe> Snapshot =
+			Fixture->Engine->GetStaticJITGenerationSnapshot();
+		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
+
+		const FAngelscriptStaticJITGenerationFunction* const Caller =
+			Snapshot->Functions.FindByPredicate([](const auto& Function)
+			{
+				return Function.CanonicalDeclaration.Contains(
+					TEXT("InvokeReviewedUEExportedSymbol_65C28A"));
+			});
+		ASSERT_THAT(IsNotNull(Caller));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Caller)));
+
+		asASTExprId NativeCallExpression;
+		const asCDecl* const NativeCallDecl = FindCanonicalExpressionTarget(
+			*Caller, asAST_EXPR_CALL,
+			TEXTVIEW("DaysInMonth"), &NativeCallExpression);
+		ASSERT_THAT(IsNotNull(NativeCallDecl));
+		ASSERT_THAT(IsTrue(NativeCallExpression.IsValid()));
+		const asCDecl* const NativeCallOwner =
+			Caller->SealedAST->GetDecl(NativeCallDecl->parent);
+		ASSERT_THAT(IsNotNull(NativeCallOwner));
+		ASSERT_THAT(IsTrue(NativeCallOwner->kind == asAST_DECL_NAMESPACE));
+		const FString NativeCallOwnerKey = UTF8_TO_TCHAR(
+			NativeCallOwner->stableKey.GetLength() != 0
+				? NativeCallOwner->stableKey.AddressOf()
+				: NativeCallOwner->name.AddressOf());
+		ASSERT_THAT(AreEqual(FString(TEXT("FDateTime")), NativeCallOwnerKey));
+
+		const FAngelscriptStaticJITNativeCallInventoryEntry* const
+			InventoryEntry = Snapshot->NativeCallInventory.FindByPredicate(
+				[](const auto& Candidate)
+				{
+					return Candidate.NamespaceCanonicalName == TEXT("FDateTime")
+						&& Candidate.CanonicalDeclaration
+							== TEXT("int DaysInMonth(int, int)");
+				});
+		ASSERT_THAT(IsNotNull(InventoryEntry));
+		ASSERT_THAT(IsTrue(InventoryEntry->bHasExternalDescriptor));
+		ASSERT_THAT(IsTrue(InventoryEntry->bHasStableReference));
+		ASSERT_THAT(IsTrue(InventoryEntry->bHasExpectedNativeABI));
+		ASSERT_THAT(IsTrue(InventoryEntry->bHasExpectedScalarABI));
+
+		const FAngelscriptStaticJITNativeCallTarget* const NativeTarget =
+			Snapshot->NativeCallTargets.FindByPredicate(
+				[](const auto& Candidate)
+				{
+					return Candidate.Descriptor.Symbol
+						== TEXT("FDateTime::DaysInMonth");
+				});
+		ASSERT_THAT(IsNotNull(NativeTarget));
+		ASSERT_THAT(AreEqual(
+			FString(TEXT("Misc/DateTime.h")),
+			NativeTarget->Descriptor.Include));
+		ASSERT_THAT(IsTrue(
+			NativeTarget->Descriptor.OwningModule == FName(TEXT("Core"))));
+		ASSERT_THAT(AreEqual(
+			FString(TEXT("cdecl:i32(i32,i32)")),
+			NativeTarget->ExpectedScalarABI.Canonical));
+	}
+
+	TEST_METHOD(ReviewedRuntimePrintCallUsesResolvedCanonicalTarget)
+	{
+		using namespace AngelscriptStaticJITGenerationEngineTests;
+		TUniquePtr<FFixture> Fixture = CreateFixture(
+			*TestRunner, TEXT("ReviewedRuntimePrintCall"),
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			TEXTVIEW(R"AS(
+UFUNCTION()
+int InvokeReviewedRuntimePrint_65C28A(
+	const FString&in Text,
+	float Duration,
+	const FLinearColor&in Color)
+{
+	Print(Text, Duration, Color);
+	return 314;
+}
+)AS"));
+		ASSERT_THAT(IsNotNull(Fixture.Get()));
+		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+			ESPMode::ThreadSafe> Snapshot =
+			Fixture->Engine->GetStaticJITGenerationSnapshot();
+		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
+
+		const FAngelscriptStaticJITGenerationFunction* const Caller =
+			Snapshot->Functions.FindByPredicate([](const auto& Function)
+			{
+				return Function.CanonicalDeclaration.Contains(
+					TEXT("InvokeReviewedRuntimePrint_65C28A"));
+			});
+		ASSERT_THAT(IsNotNull(Caller));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Caller)));
+
+		FString PrintCandidates;
+		for (uint32 DeclIndex = 1;
+			Caller->SealedAST != nullptr
+				&& DeclIndex <= Caller->SealedAST->GetDeclCount();
+			++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Caller->SealedAST->GetDecl(asASTDeclId(DeclIndex));
+			if (Candidate == nullptr || !Candidate->name.Equals("Print"))
+			{
+				continue;
+			}
+			const asCDecl* const Owner =
+				Caller->SealedAST->GetDecl(Candidate->parent);
+			PrintCandidates += FString::Printf(
+				TEXT("Decl=%u Kind=%u Parent=%u Owner=%s Type=%u/%u Origin=%s Params=["),
+				Candidate->id.value,
+				static_cast<uint32>(Candidate->kind),
+				Candidate->parent.value,
+				Owner != nullptr ? UTF8_TO_TCHAR(Owner->name.AddressOf()) : TEXT("<null>"),
+				Candidate->type.type.value,
+				Candidate->type.quals,
+				UTF8_TO_TCHAR(Candidate->origin.AddressOf()));
+			for (uint32 ChildIndex = 0;
+				ChildIndex < Candidate->children.GetLength();
+				++ChildIndex)
+			{
+				const asCDecl* const Parameter =
+					Caller->SealedAST->GetDecl(
+						Candidate->children[ChildIndex]);
+				if (Parameter == nullptr || Parameter->kind != asAST_DECL_PARAM)
+				{
+					continue;
+				}
+				PrintCandidates += FString::Printf(
+					TEXT("%s:%u/%u:default=%s;"),
+					UTF8_TO_TCHAR(Parameter->name.AddressOf()),
+					Parameter->type.type.value,
+					Parameter->type.quals,
+					UTF8_TO_TCHAR(Parameter->defaultArg.AddressOf()));
+			}
+			PrintCandidates += TEXT("] ");
+		}
+		TArray<asASTExprId> CanonicalExpressions;
+		CollectCanonicalExpressions(*Caller, CanonicalExpressions);
+		for (const asASTExprId ExpressionId : CanonicalExpressions)
+		{
+			const asCExpr* const Expression =
+				Caller->SealedAST->GetExpr(ExpressionId);
+			if (Expression == nullptr
+				|| Expression->kind != asAST_EXPR_CALL
+				|| !Expression->literal.Equals("Print"))
+			{
+				continue;
+			}
+			PrintCandidates += FString::Printf(
+				TEXT("Call=%u Resolved=%u ArgsReverse=["),
+				ExpressionId.value,
+				Expression->resolvedDecl.value);
+			for (uint32 ChildIndex = 0;
+				ChildIndex < Expression->children.GetLength();
+				++ChildIndex)
+			{
+				const asCExpr* const Argument = Caller->SealedAST->GetExpr(
+					Expression->children[ChildIndex]);
+				if (Argument == nullptr)
+				{
+					continue;
+				}
+				PrintCandidates += FString::Printf(
+					TEXT("%s:%u/%u:decl=%u;"),
+					UTF8_TO_TCHAR(Argument->literal.AddressOf()),
+					Argument->type.type.value,
+					Argument->type.quals,
+					Argument->resolvedDecl.value);
+			}
+			PrintCandidates += TEXT("] ");
+		}
+
+		const asCDecl* const PrintCallDecl = FindCanonicalExpressionTarget(
+			*Caller, asAST_EXPR_CALL, TEXTVIEW("Print"));
+		ASSERT_THAT(IsTrue(PrintCallDecl != nullptr, PrintCandidates));
+		ASSERT_THAT(AreEqual(
+			FString(TEXT(
+				"void Print(const FString&inout, float32 = 5.f, "
+				"FLinearColor = FLinearColor :: LucBlue)")),
+			FString(UTF8_TO_TCHAR(PrintCallDecl->origin.AddressOf()))));
+
+		const FAngelscriptStaticJITNativeCallInventoryEntry* const
+			InventoryEntry = Snapshot->NativeCallInventory.FindByPredicate(
+				[](const auto& Candidate)
+				{
+					return Candidate.CanonicalDeclaration.StartsWith(
+						TEXT("void Print("));
+				});
+		ASSERT_THAT(IsNotNull(InventoryEntry));
+		ASSERT_THAT(IsTrue(InventoryEntry->bHasExternalDescriptor));
+		ASSERT_THAT(IsTrue(InventoryEntry->bHasStableReference));
+		ASSERT_THAT(IsTrue(InventoryEntry->bHasExpectedNativeABI));
+
+		const FAngelscriptStaticJITNativeCallTarget* const NativeTarget =
+			Snapshot->NativeCallTargets.FindByPredicate(
+				[](const auto& Candidate)
+				{
+					return Candidate.Descriptor.Symbol
+						== TEXT("AngelscriptStaticJITNativeCallables::Print");
+				});
+		ASSERT_THAT(IsNotNull(NativeTarget));
+		ASSERT_THAT(AreEqual(
+			FString(TEXT("StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallables.h")),
+			NativeTarget->Descriptor.Include));
+		ASSERT_THAT(IsTrue(
+			NativeTarget->Descriptor.OwningModule
+				== FName(TEXT("AngelscriptRuntime"))));
+		ASSERT_THAT(AreEqual(
+			FString(TEXT("void(const FString&, float, FLinearColor)")),
+			NativeTarget->Descriptor.CppCallableSignature));
+
+		FCompiledGraphStorage GraphStorage = BuildCompiledGraphStorage(
+			*Snapshot, TEXTVIEW("Reviewed Runtime Print"));
+		GraphStorage.Graph.Settings.KnownNativeCallModules.Add(
+			TEXT("AngelscriptRuntime"));
+		GraphStorage.Graph.Settings.PublicNativeCallDependencyModules.Add(
+			TEXT("AngelscriptRuntime"));
+		const FAngelscriptStableModuleKey EmitModuleSet[] = {
+			Caller->ModuleKey};
+		const FAngelscriptStaticJITBackendRequest BackendRequest{
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			GraphStorage.Graph,
+			EmitModuleSet,
+		};
+		FAngelscriptTypedASTJIT Backend;
+		FAngelscriptStaticJITBackendOutput BackendOutput;
+		FString Error;
+		ASSERT_THAT(IsTrue(Backend.Generate(
+			BackendRequest, BackendOutput, &Error), Error));
+		const FAngelscriptStaticJITFunctionResult* const BackendResult =
+			BackendOutput.Functions.FindByPredicate(
+				[Caller](const auto& Candidate)
+				{
+					return Candidate.FunctionKey == Caller->FunctionKey;
+				});
+		ASSERT_THAT(IsNotNull(BackendResult));
+		ASSERT_THAT(IsTrue(BackendResult->Disposition
+			== EAngelscriptStaticJITFunctionDisposition::Emitted,
+			BackendResult->Detail));
+		ASSERT_THAT(IsTrue(BackendResult->EmittedFunction.IsSet()));
+		ASSERT_THAT(IsTrue(
+			BackendResult->EmittedFunction->ImplementationTemplate.Contains(
+				TEXT("AngelscriptStaticJITNativeCallables::Print("))));
+		ASSERT_THAT(IsTrue(BackendOutput.ModuleSourcePreamble.Contains(
+			TEXT("StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallables.h"))));
+	}
+
 	TEST_METHOD(HiddenFirstParameterMetadataRemainsOnAuthoritativeVMFallback)
 	{
 		using namespace AngelscriptStaticJITGenerationEngineTests;
@@ -1731,30 +2121,19 @@ int TypedASTHiddenFirstParameterMetadata_65C28A(int Value)
 					TEXT("TypedASTHiddenFirstParameterMetadata_65C28A"));
 			});
 		ASSERT_THAT(IsNotNull(Root));
-		ASSERT_THAT(IsNotNull(Root->VerifiedTypedHIR));
-
-		int32 MetadataFunctionId = INDEX_NONE;
-		for (asUINT ExpressionIndex = 0;
-			ExpressionIndex < Root->VerifiedTypedHIR->expressions.GetLength();
-			++ExpressionIndex)
-		{
-			const asSTypedSemanticExpression& Expression =
-				Root->VerifiedTypedHIR->expressions[ExpressionIndex];
-			if (Expression.kind
-					== asETypedSemanticExpressionKind::ResolvedCall
-				&& Expression.callTargetKind
-					== asETypedSemanticCallTargetKind::SystemFunction)
-			{
-				MetadataFunctionId = Expression.resolvedFunctionId;
-				break;
-			}
-		}
-		ASSERT_THAT(AreNotEqual(INDEX_NONE, MetadataFunctionId));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Root)));
+		const asCDecl* const MetadataCallDecl = FindCanonicalExpressionTarget(
+			*Root, asAST_EXPR_CALL, TEXTVIEW("StaticClass"));
+		ASSERT_THAT(IsNotNull(MetadataCallDecl));
+		const FString MetadataCanonicalDeclaration =
+			UTF8_TO_TCHAR(MetadataCallDecl->origin.AddressOf());
+		ASSERT_THAT(IsFalse(MetadataCanonicalDeclaration.IsEmpty()));
 		const FAngelscriptStaticJITNativeCallInventoryEntry* const MetadataEntry =
 			Snapshot->NativeCallInventory.FindByPredicate(
-				[MetadataFunctionId](const auto& Entry)
+				[&MetadataCanonicalDeclaration](const auto& Entry)
 				{
-					return Entry.EngineLocalFunctionId == MetadataFunctionId;
+					return Entry.CanonicalDeclaration
+						== MetadataCanonicalDeclaration;
 				});
 		ASSERT_THAT(IsNotNull(MetadataEntry));
 		ASSERT_THAT(IsTrue(MetadataEntry->CanonicalDeclaration.Contains(
@@ -1846,11 +2225,11 @@ int TypedASTDirectHelperEntry_65C28A(int A, int B)
 					TEXT("TypedASTDirectHelper_65C28A"))
 					&& !Function.CanonicalDeclaration.Contains(
 						TEXT("TypedASTDirectHelperEntry_65C28A"));
-			});
+		});
 		ASSERT_THAT(IsNotNull(Root));
 		ASSERT_THAT(IsNotNull(Helper));
-		ASSERT_THAT(IsNotNull(Root->VerifiedTypedHIR));
-		ASSERT_THAT(IsNotNull(Helper->VerifiedTypedHIR));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Root)));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Helper)));
 		const FAngelscriptStaticJITGenerationDependency* const HelperReference =
 			Snapshot->Dependencies.FindByPredicate(
 				[Root, Helper](const auto& Dependency)
@@ -2030,11 +2409,11 @@ int TypedASTSharedBridgeEntry_65C28A(int A, int B)
 			{
 				return Function.CanonicalDeclaration.Contains(
 					TEXT("TypedASTSharedBridgeHelper_65C28A"));
-			});
+		});
 		ASSERT_THAT(IsNotNull(Root));
 		ASSERT_THAT(IsNotNull(Helper));
-		ASSERT_THAT(IsNotNull(Root->VerifiedTypedHIR));
-		ASSERT_THAT(IsNotNull(Helper->VerifiedTypedHIR));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Root)));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Helper)));
 
 		FCompiledGraphStorage GraphStorage = BuildCompiledGraphStorage(
 			*Snapshot, TEXTVIEW("TypedAST Helper Shared Bridge"));
@@ -2162,41 +2541,23 @@ int TypedASTSharedBridgeEntry_65C28A(int A, int B)
 			{
 				return Function.CanonicalDeclaration.Contains(
 					TEXT("TypedASTGenericBridgeException_65C28A"));
-			});
+		});
 		ASSERT_THAT(IsNotNull(Root));
-		ASSERT_THAT(IsNotNull(Root->VerifiedTypedHIR));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Root)));
 
-		int32 GenericTargetFunctionId = INDEX_NONE;
-		for (asUINT ExpressionIndex = 0;
-			ExpressionIndex < Root->VerifiedTypedHIR->expressions.GetLength();
-			++ExpressionIndex)
-		{
-			const asSTypedSemanticExpression& Expression =
-				Root->VerifiedTypedHIR->expressions[ExpressionIndex];
-			if (Expression.kind
-					!= asETypedSemanticExpressionKind::ResolvedCall
-				|| Expression.callTargetKind
-					!= asETypedSemanticCallTargetKind::SystemFunction)
-			{
-				continue;
-			}
-			asIScriptFunction* const Target = Fixture->Engine->GetScriptEngine()
-				->GetFunctionById(Expression.resolvedFunctionId);
-			if (Target != nullptr
-				&& FString(UTF8_TO_TCHAR(Target->GetName()))
-					== TEXT("TypedASTProviderPrivateFail"))
-			{
-				GenericTargetFunctionId = Expression.resolvedFunctionId;
-				break;
-			}
-		}
-		ASSERT_THAT(AreNotEqual(INDEX_NONE, GenericTargetFunctionId));
+		const asCDecl* const GenericCallDecl = FindCanonicalExpressionTarget(
+			*Root, asAST_EXPR_CALL,
+			TEXTVIEW("TypedASTProviderPrivateFail"));
+		ASSERT_THAT(IsNotNull(GenericCallDecl));
+		const FString GenericCanonicalDeclaration =
+			UTF8_TO_TCHAR(GenericCallDecl->origin.AddressOf());
+		ASSERT_THAT(IsFalse(GenericCanonicalDeclaration.IsEmpty()));
 		const FAngelscriptStaticJITNativeCallTarget* const GenericTarget =
 			Snapshot->NativeCallTargets.FindByPredicate(
-				[GenericTargetFunctionId](const auto& Candidate)
+				[&GenericCanonicalDeclaration](const auto& Candidate)
 				{
-					return Candidate.EngineLocalFunctionId
-						== GenericTargetFunctionId;
+					return Candidate.CanonicalDeclaration
+						== GenericCanonicalDeclaration;
 				});
 		ASSERT_THAT(IsNotNull(GenericTarget));
 		ASSERT_THAT(IsTrue(GenericTarget->Descriptor.ABIDomain
@@ -2281,7 +2642,7 @@ int TypedASTSharedBridgeEntry_65C28A(int A, int B)
 					TEXT("TypedASTSelfRecursive_65C28A"));
 			});
 		ASSERT_THAT(IsNotNull(Root));
-		ASSERT_THAT(IsNotNull(Root->VerifiedTypedHIR));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Root)));
 		const FAngelscriptStaticJITGenerationDependency* const SelfReference =
 			Snapshot->Dependencies.FindByPredicate(
 				[Root](const auto& Dependency)
@@ -2396,11 +2757,11 @@ int TypedASTSharedBridgeEntry_65C28A(int A, int B)
 			{
 				return Function.CanonicalDeclaration.Contains(
 					TEXT("TypedASTMutualOdd_65C28A"));
-			});
+		});
 		ASSERT_THAT(IsNotNull(Root));
 		ASSERT_THAT(IsNotNull(Helper));
-		ASSERT_THAT(IsNotNull(Root->VerifiedTypedHIR));
-		ASSERT_THAT(IsNotNull(Helper->VerifiedTypedHIR));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Root)));
+		ASSERT_THAT(IsNotNull(GetCanonicalFunctionDecl(*Helper)));
 		const FAngelscriptStaticJITGenerationDependency* const RootToHelper =
 			Snapshot->Dependencies.FindByPredicate(
 				[Root, Helper](const auto& Dependency)
@@ -3693,13 +4054,13 @@ struct %s
 			TEXTVIEW("source compile failure"))));
 	}
 
-	TEST_METHOD(TypedHIRVerificationFailureRestoresCompletePrimaryContainmentSnapshot)
+	TEST_METHOD(MissingCanonicalASTRestoresCompletePrimaryContainmentSnapshot)
 	{
 		using namespace AngelscriptStaticJITGenerationEngineTests;
 		const FPrimaryContainmentSnapshot PrimaryBefore =
 			CapturePrimaryContainmentSnapshot();
 		TestRunner->AddExpectedErrorPlain(
-			TEXT("published invalid typed HIR"),
+			TEXT("did not retain a public AST V1 snapshot"),
 			EAutomationExpectedErrorFlags::Contains,
 			1);
 		TestRunner->AddExpectedErrorPlain(
@@ -3708,13 +4069,13 @@ struct %s
 			1);
 		TUniquePtr<FFixture> Fixture = CreateFixture(
 			*TestRunner,
-			TEXT("TypedHIRVerificationFailureContainment"),
+			TEXT("MissingCanonicalASTContainment"),
 			FAngelscriptStaticJITBackendId::TypedAST(),
 			FStringView(),
 			false,
 			[](FAngelscriptEngineConfig& Config)
 			{
-				Config.bInjectInvalidTypedSemanticIRForTesting = true;
+				Config.bInjectMissingCanonicalASTSnapshotForTesting = true;
 			});
 		ASSERT_THAT(IsNotNull(Fixture.Get()));
 		ASSERT_THAT(IsFalse(Fixture->Engine->DidInitialCompileSucceed()));
@@ -3724,14 +4085,14 @@ struct %s
 			*TestRunner, *Fixture)));
 		ASSERT_THAT(IsTrue(AssertNoGenerationPersistence(
 			*TestRunner, Fixture->Root,
-			TEXTVIEW("typed HIR verification failure"))));
+			TEXTVIEW("missing canonical AST"))));
 		Fixture.Reset();
 
 		const FPrimaryContainmentSnapshot PrimaryAfter =
 			CapturePrimaryContainmentSnapshot();
 		ASSERT_THAT(IsTrue(AssertPrimaryContainmentUnchanged(
 			*TestRunner, PrimaryBefore, PrimaryAfter,
-			TEXTVIEW("typed HIR verification failure"))));
+			TEXTVIEW("missing canonical AST"))));
 	}
 
 	TEST_METHOD(BackendEmissionFailureReleasesGenerationRequestState)
@@ -3750,7 +4111,7 @@ struct %s
 			ESPMode::ThreadSafe> Snapshot =
 			Fixture->Engine->GetStaticJITGenerationSnapshot();
 		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
-		ASSERT_THAT(IsTrue(Snapshot->bHasVerifiedTypedHIR));
+		ASSERT_THAT(IsTrue(Snapshot->bHasVerifiedCanonicalAST));
 
 		{
 			FCompiledGraphStorage Storage = BuildCompiledGraphStorage(
@@ -3791,7 +4152,7 @@ struct %s
 				Snapshot->Modules.Num(), TypedAST.SeenModuleCount));
 			ASSERT_THAT(AreEqual(
 				Snapshot->Functions.Num(), TypedAST.SeenFunctionCount));
-			ASSERT_THAT(IsTrue(TypedAST.SeenVerifiedHIRCount > 0));
+			ASSERT_THAT(IsTrue(TypedAST.SeenCanonicalASTCount > 0));
 		}
 
 		ASSERT_THAT(IsTrue(AssertNoGenerationPersistence(
@@ -3822,7 +4183,7 @@ struct %s
 			ESPMode::ThreadSafe> Snapshot =
 			Fixture->Engine->GetStaticJITGenerationSnapshot();
 		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
-		ASSERT_THAT(IsTrue(Snapshot->bHasVerifiedTypedHIR));
+		ASSERT_THAT(IsTrue(Snapshot->bHasVerifiedCanonicalAST));
 
 		{
 			FCompiledGraphStorage Storage = BuildCompiledGraphStorage(
@@ -3862,7 +4223,7 @@ struct %s
 				Snapshot->Modules.Num(), TypedAST.SeenModuleCount));
 			ASSERT_THAT(AreEqual(
 				Snapshot->Functions.Num(), TypedAST.SeenFunctionCount));
-			ASSERT_THAT(IsTrue(TypedAST.SeenVerifiedHIRCount > 0));
+			ASSERT_THAT(IsTrue(TypedAST.SeenCanonicalASTCount > 0));
 		}
 
 		ASSERT_THAT(IsTrue(AssertNoGenerationPersistence(
@@ -3903,7 +4264,7 @@ struct %s
 		ASSERT_THAT(IsTrue(Snapshot->Functions.ContainsByPredicate(
 			[](const FAngelscriptStaticJITGenerationFunction& Function)
 			{
-				return Function.VerifiedTypedHIR != nullptr;
+				return GetCanonicalFunctionDecl(Function) != nullptr;
 			})));
 
 		TArray<asIScriptModule*> CompleteGraph;
@@ -3983,7 +4344,7 @@ struct %s
 			Snapshot->ExternalNativeCalls.Num(),
 			GraphSummary.ExternalNativeCallCount));
 		ASSERT_THAT(AreEqual(1, GraphSummary.EmitModuleCount));
-		ASSERT_THAT(IsTrue(GraphSummary.bHasVerifiedTypedHIR));
+		ASSERT_THAT(IsTrue(GraphSummary.bHasVerifiedCanonicalAST));
 
 		TArray<asIScriptModule*> NonExactGraph = CompleteGraph;
 		NonExactGraph.Add(CompleteGraph[0]);
@@ -3995,7 +4356,7 @@ struct %s
 		ASSERT_THAT(IsTrue(Error.Contains(TEXT("exactly match")), Error));
 	}
 
-	TEST_METHOD(TypedASTBackendRejectsReuseForeignEngineAndDetachedHIR)
+	TEST_METHOD(TypedASTBackendRejectsReuseForeignEngineAndDetachedAST)
 	{
 		using namespace AngelscriptStaticJITGenerationEngineTests;
 		TUniquePtr<FFixture> FirstFixture = CreateFixture(
@@ -4019,18 +4380,20 @@ struct %s
 			*FirstSnapshot, TEXTVIEW("TypedAST Task Ownership First"));
 		FCompiledGraphStorage SecondStorage = BuildCompiledGraphStorage(
 			*SecondSnapshot, TEXTVIEW("TypedAST Task Ownership Second"));
-		const int32 FirstHIRIndex = FirstStorage.Functions.IndexOfByPredicate(
+		const int32 FirstASTIndex = FirstStorage.Functions.IndexOfByPredicate(
 			[](const FAngelscriptStaticJITCompiledFunctionView& Function)
 			{
-				return Function.VerifiedTypedHIR != nullptr;
+				return Function.SealedAST != nullptr
+					&& Function.CanonicalFunctionDeclValue != 0;
 			});
-		const int32 SecondHIRIndex = SecondStorage.Functions.IndexOfByPredicate(
+		const int32 SecondASTIndex = SecondStorage.Functions.IndexOfByPredicate(
 			[](const FAngelscriptStaticJITCompiledFunctionView& Function)
 			{
-				return Function.VerifiedTypedHIR != nullptr;
+				return Function.SealedAST != nullptr
+					&& Function.CanonicalFunctionDeclValue != 0;
 			});
-		ASSERT_THAT(IsTrue(FirstHIRIndex != INDEX_NONE));
-		ASSERT_THAT(IsTrue(SecondHIRIndex != INDEX_NONE));
+		ASSERT_THAT(IsTrue(FirstASTIndex != INDEX_NONE));
+		ASSERT_THAT(IsTrue(SecondASTIndex != INDEX_NONE));
 
 		const FAngelscriptStaticJITBackendRequest FirstRequest{
 			FAngelscriptStaticJITBackendId::TypedAST(),
@@ -4055,10 +4418,8 @@ struct %s
 		FCompiledGraphStorage ForeignEngineStorage =
 			BuildCompiledGraphStorage(
 				*FirstSnapshot, TEXTVIEW("TypedAST Foreign Engine"));
-		ForeignEngineStorage.Functions[FirstHIRIndex].EngineLocalFunction =
-			SecondStorage.Functions[SecondHIRIndex].EngineLocalFunction;
-		ForeignEngineStorage.Functions[FirstHIRIndex].VerifiedTypedHIR =
-			SecondStorage.Functions[SecondHIRIndex].VerifiedTypedHIR;
+		ForeignEngineStorage.Functions[FirstASTIndex].EngineLocalFunction =
+			SecondStorage.Functions[SecondASTIndex].EngineLocalFunction;
 		ForeignEngineStorage.Graph.Functions = ForeignEngineStorage.Functions;
 		const FAngelscriptStaticJITBackendRequest ForeignEngineRequest{
 			FAngelscriptStaticJITBackendId::TypedAST(),
@@ -4072,26 +4433,25 @@ struct %s
 		ASSERT_THAT(IsTrue(Error.Contains(
 			TEXT("TypedASTJITEngineMismatch")), Error));
 
-		FCompiledGraphStorage DetachedHIRStorage = BuildCompiledGraphStorage(
-			*FirstSnapshot, TEXTVIEW("TypedAST Detached HIR"));
-		asCTypedSemanticFunction DetachedHIR;
-		DetachedHIRStorage.Functions[FirstHIRIndex].VerifiedTypedHIR =
-			&DetachedHIR;
-		DetachedHIRStorage.Graph.Functions = DetachedHIRStorage.Functions;
-		const FAngelscriptStaticJITBackendRequest DetachedHIRRequest{
+		FCompiledGraphStorage DetachedASTStorage = BuildCompiledGraphStorage(
+			*FirstSnapshot, TEXTVIEW("TypedAST Detached AST"));
+		DetachedASTStorage.Functions[FirstASTIndex].SealedAST = nullptr;
+		DetachedASTStorage.Functions[FirstASTIndex].CanonicalFunctionDeclValue = 0;
+		DetachedASTStorage.Graph.Functions = DetachedASTStorage.Functions;
+		const FAngelscriptStaticJITBackendRequest DetachedASTRequest{
 			FAngelscriptStaticJITBackendId::TypedAST(),
-			DetachedHIRStorage.Graph,
+			DetachedASTStorage.Graph,
 			{}};
-		FAngelscriptTypedASTJIT DetachedHIRBackend;
+		FAngelscriptTypedASTJIT DetachedASTBackend;
 		Output = {};
 		Error.Reset();
-		ASSERT_THAT(IsFalse(DetachedHIRBackend.Generate(
-			DetachedHIRRequest, Output, &Error)));
+		ASSERT_THAT(IsFalse(DetachedASTBackend.Generate(
+			DetachedASTRequest, Output, &Error)));
 		ASSERT_THAT(IsTrue(Error.Contains(
-			TEXT("TypedASTJITSameCompilationHIRRequired")), Error));
+			TEXT("TypedASTJITSameCompilationASTRequired")), Error));
 	}
 
-	TEST_METHOD(HIRDumpSuccessAndCompileFailurePreserveCompletePrimaryContainmentSnapshot)
+	TEST_METHOD(ProjectSourceGraphSuccessAndCompileFailurePreserveCompletePrimaryContainmentSnapshot)
 	{
 		using namespace AngelscriptEditor::StaticJIT;
 		using namespace AngelscriptStaticJITGenerationEngineTests;
@@ -4130,33 +4490,38 @@ struct %s
 			*SourceFile,
 			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM)));
 
-		const FString OutputRoot = FPaths::Combine(Root, TEXT("Output"));
-		FAngelscriptHIRDumpRequest Request;
-		FString ParseError;
-		ASSERT_THAT(IsTrue(FAngelscriptHIRDumpCommand::Parse(
-			FString::Printf(
-				TEXT("Profile=EditorDevelopment Format=Both Output=\"%s\""),
-				*OutputRoot),
-			ProjectFile, Request, ParseError), ParseError));
+		FAngelscriptProjectSourceGraphCompileRequest Request;
+		Request.ProjectFile = ProjectFile;
+		Request.TargetProfile =
+			EAngelscriptJITTargetProfile::EditorDevelopment;
+		Request.CaptureProfile =
+			EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
+		Request.ASTRetentionPolicy = static_cast<int32>(
+			asAST_RETAIN_SNAPSHOT);
 
 		const FPrimaryContainmentSnapshot PrimaryBeforeSuccess =
 			CapturePrimaryContainmentSnapshot();
-		const FAngelscriptHIRDumpResult Success =
-			FAngelscriptHIRDumpCommand::Execute(Request);
-		ASSERT_THAT(IsTrue(Success.IsSuccess(), Success.Error));
-		ASSERT_THAT(AreEqual(1u, Success.SourceCompilePassCount));
-		ASSERT_THAT(IsTrue(Success.CapturedFunctionCount >= 2));
-		FString SuccessfulText;
-		FString SuccessfulJson;
-		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(
-			SuccessfulText, *Success.TextOutputPath)));
-		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(
-			SuccessfulJson, *Success.JsonOutputPath)));
+		bool bObservedCompleteSnapshot = false;
+		FString SuccessError;
+		const bool bSuccess = FAngelscriptProjectSourceGraph::Compile(
+			Request,
+			[&bObservedCompleteSnapshot](
+				const FAngelscriptProjectSourceGraphCompileView& View,
+				FString*)
+			{
+				bObservedCompleteSnapshot = View.Snapshot->IsComplete()
+					&& !View.Modules.IsEmpty();
+				return bObservedCompleteSnapshot;
+			},
+			&SuccessError);
+		ASSERT_THAT(IsTrue(bSuccess, SuccessError));
+		ASSERT_THAT(IsTrue(bObservedCompleteSnapshot,
+			TEXT("source-graph consumer must observe one complete retained Canonical snapshot")));
 		const FPrimaryContainmentSnapshot PrimaryAfterSuccess =
 			CapturePrimaryContainmentSnapshot();
 		ASSERT_THAT(IsTrue(AssertPrimaryContainmentUnchanged(
 			*TestRunner, PrimaryBeforeSuccess, PrimaryAfterSuccess,
-			TEXTVIEW("HIR dump success"))));
+			TEXTVIEW("project source-graph success"))));
 
 		TestRunner->AddExpectedErrorPlain(
 			TEXT("Expected expression value"),
@@ -4188,36 +4553,35 @@ struct %s
 
 		const FPrimaryContainmentSnapshot PrimaryBeforeFailure =
 			CapturePrimaryContainmentSnapshot();
-		const FAngelscriptHIRDumpResult Failure =
-			FAngelscriptHIRDumpCommand::Execute(Request);
-		ASSERT_THAT(IsFalse(Failure.IsSuccess()));
-		ASSERT_THAT(AreEqual(
-			EAngelscriptHIRDumpExitCode::ExecutionFailure,
-			Failure.ExitCode));
-		ASSERT_THAT(IsTrue(Failure.Error.Contains(
-			TEXT("Project scripts failed to compile")), Failure.Error));
-		FString TextAfterFailure;
-		FString JsonAfterFailure;
-		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(
-			TextAfterFailure, *Success.TextOutputPath)));
-		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(
-			JsonAfterFailure, *Success.JsonOutputPath)));
-		ASSERT_THAT(AreEqual(SuccessfulText, TextAfterFailure,
-			TEXT("failed dump must not replace the last successful text snapshot")));
-		ASSERT_THAT(AreEqual(SuccessfulJson, JsonAfterFailure,
-			TEXT("failed dump must not replace the last successful JSON snapshot")));
+		bool bFailureConsumerRan = false;
+		FString FailureError;
+		const bool bFailure = FAngelscriptProjectSourceGraph::Compile(
+			Request,
+			[&bFailureConsumerRan](
+				const FAngelscriptProjectSourceGraphCompileView&,
+				FString*)
+			{
+				bFailureConsumerRan = true;
+				return true;
+			},
+			&FailureError);
+		ASSERT_THAT(IsFalse(bFailure));
+		ASSERT_THAT(IsFalse(bFailureConsumerRan,
+			TEXT("failed contained compile must not publish a source graph")));
+		ASSERT_THAT(IsTrue(FailureError.Contains(
+			TEXT("Project scripts failed to compile")), FailureError));
 		TArray<FString> ScratchFiles;
 		IFileManager::Get().FindFilesRecursive(
 			ScratchFiles,
-			*FPaths::Combine(Root, TEXT("Saved/Angelscript/HIRDump/Scratch")),
+			*FPaths::Combine(Root, TEXT("Saved/Angelscript/JITGeneration/Scratch")),
 			TEXT("*"), true, false, false);
 		ASSERT_THAT(AreEqual(0, ScratchFiles.Num(),
-			TEXT("HIR dump success/failure must release transient compile state")));
+			TEXT("source-graph success/failure must release transient compile state")));
 		const FPrimaryContainmentSnapshot PrimaryAfterFailure =
 			CapturePrimaryContainmentSnapshot();
 		ASSERT_THAT(IsTrue(AssertPrimaryContainmentUnchanged(
 			*TestRunner, PrimaryBeforeFailure, PrimaryAfterFailure,
-			TEXTVIEW("HIR dump compile failure"))));
+			TEXTVIEW("project source-graph compile failure"))));
 	}
 };
 

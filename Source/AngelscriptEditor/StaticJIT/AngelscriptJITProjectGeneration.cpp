@@ -1,13 +1,22 @@
 #include "StaticJIT/AngelscriptJITProjectGeneration.h"
 
 #include "AngelscriptEngine.h"
+#include "Artifacts/AngelscriptArtifactIdentity.h"
 #include "Artifacts/AngelscriptFunctionRoute.h"
+#include "StaticJIT/AngelscriptJITGeneratedFileStore.h"
 #include "StaticJIT/AngelscriptJITProjectScaffold.h"
+#include "StaticJIT/AngelscriptJITSourceAuthority.h"
+#include "StaticJIT/AngelscriptNativeFormCatalog.h"
 #include "StaticJIT/AngelscriptProjectSourceGraph.h"
 #include "StaticJIT/AngelscriptStaticJIT.h"
 #include "StaticJIT/AngelscriptStaticJITGenerationProfile.h"
 #include "StaticJIT/AngelscriptStaticJITGenerationSnapshot.h"
 #include "StaticJIT/AngelscriptStaticJITGenerator.h"
+
+#include "StartAngelscriptHeaders.h"
+#include "angelscript.h"
+#include "source/as_module.h"
+#include "EndAngelscriptHeaders.h"
 
 #include "HAL/FileManager.h"
 #include "GenericPlatform/GenericPlatformProperties.h"
@@ -302,6 +311,407 @@ namespace AngelscriptEditor::StaticJIT
 			OutProjectOutput, OutError);
 	}
 
+	namespace CanonicalASTGenerate_Private
+	{
+		void CountCatalogRecipes(
+			FAngelscriptEngine& Engine,
+			const EAngelscriptJITTargetProfile TargetProfile,
+			FAngelscriptCanonicalASTGenerateResult& Result)
+		{
+#if AS_CAN_GENERATE_JIT
+			asIScriptEngine* const ScriptEngine = Engine.GetScriptEngine();
+			if (ScriptEngine == nullptr)
+			{
+				return;
+			}
+			FAngelscriptNativeFormCatalog& Catalog =
+				FAngelscriptNativeFormCatalog::Get();
+			auto Visit = [&](asIScriptFunction* Function)
+			{
+				if (Function == nullptr)
+				{
+					return;
+				}
+				const FAngelscriptNativeFormCatalogKey Key =
+					FAngelscriptNativeFormCatalog::MakeKey(
+						*Function, TargetProfile);
+				if (Catalog.Find(Key) != nullptr)
+				{
+					++Result.CatalogRecipeHits;
+				}
+				else
+				{
+					++Result.CatalogRecipeMisses;
+				}
+			};
+			for (asUINT Index = 0;
+				Index < ScriptEngine->GetGlobalFunctionCount();
+				++Index)
+			{
+				Visit(ScriptEngine->GetGlobalFunctionByIndex(Index));
+			}
+			for (asUINT TypeIndex = 0;
+				TypeIndex < ScriptEngine->GetObjectTypeCount();
+				++TypeIndex)
+			{
+				asITypeInfo* const Type =
+					ScriptEngine->GetObjectTypeByIndex(TypeIndex);
+				if (Type == nullptr)
+				{
+					continue;
+				}
+				for (asUINT MethodIndex = 0;
+					MethodIndex < Type->GetMethodCount();
+					++MethodIndex)
+				{
+					Visit(Type->GetMethodByIndex(MethodIndex));
+				}
+			}
+#else
+			(void)Engine;
+			(void)TargetProfile;
+			(void)Result;
+#endif
+		}
+
+		bool WriteOwnedLease(
+			const FStringView OutputDirectory,
+			const FStringView ProjectFile,
+			const EAngelscriptJITTargetProfile TargetProfile,
+			const FAngelscriptCanonicalASTGenerateResult& Result,
+			TArray<FString>& OutWritten,
+			FString* OutError)
+		{
+			FString Directory(OutputDirectory);
+			Directory.TrimStartAndEndInline();
+			if (Directory.IsEmpty())
+			{
+				return true;
+			}
+			FAngelscriptJITGenerationOutput Output;
+			Output.TargetProfile = TargetProfile;
+			Output.ProviderId =
+				FAngelscriptJITProjectScaffold::BuildProviderId(ProjectFile);
+			FAngelscriptArtifactCanonicalWriter GenerationWriter(
+				TEXT("canonical-ast-lease-generation"));
+			GenerationWriter.WriteString(FString(ProjectFile));
+			GenerationWriter.WriteString(
+				FAngelscriptJITTargetProfiles::ToString(TargetProfile));
+			GenerationWriter.WriteUInt32(
+				static_cast<uint32>(FMath::Max(0, Result.LeasedASTSnapshotCount)));
+			GenerationWriter.WriteUInt32(
+				static_cast<uint32>(FMath::Max(0, Result.CatalogRecipeHits)));
+			Output.ProviderGeneration.Hash = GenerationWriter.FinalizeHash();
+			FString Lease = TEXT(
+				"// @angelscript-jit-owned revision=2 kind=ProviderManifest\n");
+			Lease += FString::Printf(
+				TEXT("{\"leasedSnapshots\":%d,\"catalogHits\":%d,\"catalogMisses\":%d}\n"),
+				Result.LeasedASTSnapshotCount,
+				Result.CatalogRecipeHits,
+				Result.CatalogRecipeMisses);
+			FAngelscriptJITGeneratedFile& LeaseFile =
+				Output.Files.AddDefaulted_GetRef();
+			LeaseFile.RelativePath = TEXT("CanonicalASTLease.generated.json");
+			LeaseFile.Content = MoveTemp(Lease);
+			LeaseFile.Kind =
+				EAngelscriptJITGeneratedFileKind::ProviderManifest;
+			FAngelscriptJITGeneratedFile& Inventory =
+				Output.Files.AddDefaulted_GetRef();
+			Inventory.RelativePath = TEXT("OwnedFiles.generated.json");
+			Inventory.Kind =
+				EAngelscriptJITGeneratedFileKind::OwnedFileInventory;
+			FString RefreshError;
+			if (!FAngelscriptJITGeneration::RefreshOwnedFileInventory(
+					Output, &RefreshError))
+			{
+				if (OutError != nullptr)
+				{
+					*OutError = RefreshError;
+				}
+				return false;
+			}
+			const FAngelscriptJITGeneratedFilePublication Publication =
+				FAngelscriptJITGeneratedFileStore::Publish(
+					Directory, Output);
+			if (!Publication.bSuccess)
+			{
+				if (OutError != nullptr)
+				{
+					*OutError = Publication.Error;
+				}
+				return false;
+			}
+			OutWritten = Publication.WrittenFiles;
+			OutWritten.Append(Publication.UnchangedFiles);
+			return true;
+		}
+
+		FAngelscriptCanonicalASTGenerateResult FinishGenerate(
+			FAngelscriptCanonicalASTGenerateResult Result,
+			const int32 GenerationEnginesBefore,
+			const int32 LiveBefore)
+		{
+#if WITH_ANGELSCRIPT_UNITTESTS
+			Result.CreatedGenerationEngineCount =
+				FAngelscriptEngine::GetStaticJITGenerationEngineCreateCountForTests()
+				- GenerationEnginesBefore;
+			Result.LiveGenerationEngineCount =
+				FAngelscriptEngine::GetStaticJITGenerationEngineLiveCountForTests();
+			Result.MaxLiveGenerationEngines = FMath::Max(
+				Result.MaxLiveGenerationEngines,
+				FMath::Max(0,
+					FAngelscriptEngine::GetStaticJITGenerationEnginePeakLiveCountForTests()
+					- LiveBefore));
+#else
+			(void)GenerationEnginesBefore;
+			(void)LiveBefore;
+#endif
+			return Result;
+		}
+	}
+
+	FAngelscriptCanonicalASTGenerateResult
+	FAngelscriptJITProjectGeneration::GenerateMatchingProfile(
+		FAngelscriptEngine& PrimaryEngine,
+		const FStringView ProjectFile,
+		const EAngelscriptJITTargetProfile TargetProfile)
+	{
+		FAngelscriptCanonicalASTGenerateRequest Request;
+		Request.PrimaryEngine = &PrimaryEngine;
+		Request.ProjectFile = FString(ProjectFile);
+		Request.TargetProfile = TargetProfile;
+		return GenerateMatchingProfile(Request);
+	}
+
+	FAngelscriptCanonicalASTGenerateResult
+	FAngelscriptJITProjectGeneration::GenerateMatchingProfile(
+		const FAngelscriptCanonicalASTGenerateRequest& Request)
+	{
+		using namespace CanonicalASTGenerate_Private;
+		FAngelscriptCanonicalASTGenerateResult Result;
+#if WITH_ANGELSCRIPT_UNITTESTS
+		const int32 GenerationEnginesBefore =
+			FAngelscriptEngine::GetStaticJITGenerationEngineCreateCountForTests();
+		const int32 LiveBefore =
+			FAngelscriptEngine::GetStaticJITGenerationEngineLiveCountForTests();
+#else
+		const int32 GenerationEnginesBefore = 0;
+		const int32 LiveBefore = 0;
+#endif
+		if (Request.PrimaryEngine == nullptr)
+		{
+			Result.Code =
+				EAngelscriptCanonicalASTGenerateCode::AuthoritativeEngineStale;
+			Result.Detail = TEXT("AuthoritativeEngineStale");
+			return FinishGenerate(Result, GenerationEnginesBefore, LiveBefore);
+		}
+		FAngelscriptEngine& PrimaryEngine = *Request.PrimaryEngine;
+		PrimaryEngine.PushHotReloadApplicationFreeze();
+		ON_SCOPE_EXIT
+		{
+			PrimaryEngine.PopHotReloadApplicationFreeze();
+		};
+
+		const FAngelscriptJITSourceAuthoritySnapshot Authority =
+			FAngelscriptJITSourceAuthority::Capture(
+				PrimaryEngine, Request.ProjectFile, Request.TargetProfile);
+		if (!Authority.IsCurrent())
+		{
+			Result.Code =
+				EAngelscriptCanonicalASTGenerateCode::AuthoritativeEngineStale;
+			Result.Detail = Authority.Detail.IsEmpty()
+				? TEXT("AuthoritativeEngineStale")
+				: Authority.Detail;
+			if (Request.OnHoldingLeases)
+			{
+				Result.bHotReloadFrozenWhileHeld =
+					PrimaryEngine.IsHotReloadApplicationFrozen();
+				Request.OnHoldingLeases();
+			}
+			return FinishGenerate(Result, GenerationEnginesBefore, LiveBefore);
+		}
+
+		const TArray<TSharedRef<FAngelscriptModuleDesc>> ActiveModules =
+			PrimaryEngine.GetActiveModules();
+		TArray<asIASTSnapshot*> Leases;
+		ON_SCOPE_EXIT
+		{
+			for (asIASTSnapshot* Snapshot : Leases)
+			{
+				if (Snapshot != nullptr)
+				{
+					Snapshot->Release();
+				}
+			}
+		};
+		for (const TSharedRef<FAngelscriptModuleDesc>& Module : ActiveModules)
+		{
+			if (Module->bCompileError || Module->ScriptModule == nullptr)
+			{
+				continue;
+			}
+			asIScriptModule* const ScriptModule =
+				reinterpret_cast<asIScriptModule*>(Module->ScriptModule);
+			asIASTSnapshot* const Snapshot =
+				ScriptModule->AcquireASTSnapshot(asAST_API_VERSION_1);
+			if (Snapshot == nullptr)
+			{
+				Result.Code =
+					EAngelscriptCanonicalASTGenerateCode::ASTSnapshotRequired;
+				Result.Detail = TEXT("ASTSnapshotRequired");
+				if (Request.OnHoldingLeases)
+				{
+					Result.bHotReloadFrozenWhileHeld =
+						PrimaryEngine.IsHotReloadApplicationFrozen();
+					Request.OnHoldingLeases();
+				}
+				return FinishGenerate(
+					Result, GenerationEnginesBefore, LiveBefore);
+			}
+			Leases.Add(Snapshot);
+		}
+		if (Leases.IsEmpty())
+		{
+			Result.Code =
+				EAngelscriptCanonicalASTGenerateCode::ASTSnapshotRequired;
+			Result.Detail = TEXT("ASTSnapshotRequired");
+			if (Request.OnHoldingLeases)
+			{
+				Result.bHotReloadFrozenWhileHeld =
+					PrimaryEngine.IsHotReloadApplicationFrozen();
+				Request.OnHoldingLeases();
+			}
+			return FinishGenerate(Result, GenerationEnginesBefore, LiveBefore);
+		}
+
+		CountCatalogRecipes(
+			PrimaryEngine, Request.TargetProfile, Result);
+		Result.LeasedASTSnapshotCount = Leases.Num();
+		Result.bHotReloadFrozenWhileHeld =
+			PrimaryEngine.IsHotReloadApplicationFrozen();
+		if (Request.OnHoldingLeases)
+		{
+			Request.OnHoldingLeases();
+		}
+
+		Result.bSuccess = true;
+		Result.Code = EAngelscriptCanonicalASTGenerateCode::Succeeded;
+		Result.bCompiledSource = false;
+		FString WriteError;
+		if (!WriteOwnedLease(
+				Request.OutputDirectory,
+				Request.ProjectFile,
+				Request.TargetProfile,
+				Result,
+				Result.WrittenOwnedFiles,
+				&WriteError))
+		{
+			Result.bSuccess = false;
+			Result.Detail = WriteError;
+			return FinishGenerate(Result, GenerationEnginesBefore, LiveBefore);
+		}
+		return FinishGenerate(Result, GenerationEnginesBefore, LiveBefore);
+	}
+
+	FAngelscriptCanonicalASTGenerateResult
+	FAngelscriptJITProjectGeneration::GenerateContainedProfile(
+		FAngelscriptEngine& PrimaryEngine,
+		const FStringView ProjectFile,
+		const EAngelscriptJITTargetProfile TargetProfile,
+		const FStringView OutputDirectory)
+	{
+		using namespace CanonicalASTGenerate_Private;
+		FAngelscriptCanonicalASTGenerateResult Result;
+#if WITH_ANGELSCRIPT_UNITTESTS
+		const int32 GenerationEnginesBefore =
+			FAngelscriptEngine::GetStaticJITGenerationEngineCreateCountForTests();
+		const int32 LiveBefore =
+			FAngelscriptEngine::GetStaticJITGenerationEngineLiveCountForTests();
+#else
+		const int32 GenerationEnginesBefore = 0;
+		const int32 LiveBefore = 0;
+#endif
+		PrimaryEngine.PushHotReloadApplicationFreeze();
+		ON_SCOPE_EXIT
+		{
+			PrimaryEngine.PopHotReloadApplicationFreeze();
+		};
+		Result.bHotReloadFrozenWhileHeld =
+			PrimaryEngine.IsHotReloadApplicationFrozen();
+
+		FAngelscriptJITGenerationOutput GeneratedOutput;
+		FString Error;
+		if (!BuildProjectArtifacts(
+				ProjectFile, TargetProfile, GeneratedOutput, &Error))
+		{
+			Result.Code =
+				EAngelscriptCanonicalASTGenerateCode::AuthoritativeEngineStale;
+			Result.Detail = Error;
+			Result.bCompiledSource = true;
+			return FinishGenerate(Result, GenerationEnginesBefore, LiveBefore);
+		}
+		Result.bCompiledSource = true;
+		Result.bSuccess = true;
+		Result.Code = EAngelscriptCanonicalASTGenerateCode::Succeeded;
+		if (!OutputDirectory.IsEmpty())
+		{
+			FAngelscriptJITGenerationOutput ProjectOutput;
+			if (!PrepareProjectProfileOutput(
+					GeneratedOutput, ProjectOutput, &Error))
+			{
+				Result.bSuccess = false;
+				Result.Detail = Error;
+				return FinishGenerate(
+					Result, GenerationEnginesBefore, LiveBefore);
+			}
+			const FAngelscriptJITProjectGenerationResult Publication =
+				Generate(OutputDirectory, ProjectOutput);
+			if (!Publication.bSuccess)
+			{
+				Result.bSuccess = false;
+				Result.Detail = Publication.Error;
+				return FinishGenerate(
+					Result, GenerationEnginesBefore, LiveBefore);
+			}
+			Result.WrittenOwnedFiles = Publication.Publication.WrittenFiles;
+		}
+		return FinishGenerate(Result, GenerationEnginesBefore, LiveBefore);
+	}
+
+	TArray<FAngelscriptCanonicalASTGenerateResult>
+	FAngelscriptJITProjectGeneration::GenerateProfilesSequential(
+		FAngelscriptEngine& PrimaryEngine,
+		const FStringView ProjectFile,
+		const TConstArrayView<EAngelscriptJITTargetProfile> Profiles,
+		const FStringView OutputRoot)
+	{
+		TArray<FAngelscriptCanonicalASTGenerateResult> Results;
+		const EAngelscriptJITTargetProfile PrimaryProfile =
+			FAngelscriptNativeFormCatalog::InferTargetProfile(PrimaryEngine);
+		int32 MaxLive = 0;
+		for (const EAngelscriptJITTargetProfile Profile : Profiles)
+		{
+			FString ProfileOutput;
+			if (!OutputRoot.IsEmpty())
+			{
+				ProfileOutput = FPaths::Combine(
+					FString(OutputRoot),
+					FAngelscriptJITTargetProfiles::ToString(Profile));
+			}
+			FAngelscriptCanonicalASTGenerateResult ProfileResult =
+				Profile == PrimaryProfile
+				? GenerateMatchingProfile(
+					PrimaryEngine, ProjectFile, Profile)
+				: GenerateContainedProfile(
+					PrimaryEngine, ProjectFile, Profile, ProfileOutput);
+			MaxLive = FMath::Max(
+				MaxLive, ProfileResult.MaxLiveGenerationEngines);
+			ProfileResult.MaxLiveGenerationEngines = MaxLive;
+			Results.Add(MoveTemp(ProfileResult));
+		}
+		return Results;
+	}
+
 	bool FAngelscriptJITProjectGeneration::BuildProjectArtifacts(
 		const FStringView ProjectFile,
 		const EAngelscriptJITTargetProfile TargetProfile,
@@ -343,11 +753,14 @@ namespace AngelscriptEditor::StaticJIT
 			return Fail(ProfileError);
 		}
 		FAngelscriptProjectSourceGraphCompileRequest CompileRequest;
-		CompileRequest.RequestKind =
-			EAngelscriptProjectSourceGraphRequestKind::StaticJITArtifact;
 		CompileRequest.ProjectFile = FString(ProjectFile);
 		CompileRequest.TargetProfile = TargetProfile;
 		CompileRequest.CaptureProfile = GenerationProfile.CaptureProfile;
+		CompileRequest.ASTRetentionPolicy =
+			GenerationProfile.CaptureProfile
+				== EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST
+			? 1
+			: 0;
 		CompileRequest.SourceProviderOverride = MoveTemp(SourceProviderOverride);
 		return FAngelscriptProjectSourceGraph::Compile(
 			CompileRequest,

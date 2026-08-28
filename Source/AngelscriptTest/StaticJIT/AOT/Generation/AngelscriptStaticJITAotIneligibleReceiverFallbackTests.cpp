@@ -284,7 +284,7 @@ private:
 			|| Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedSignature
 			|| Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime
 			|| Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedFunctionTrait
-			|| Reason == EAngelscriptTypedASTJITFallbackReason::MissingTypedHIR;
+			|| Reason == EAngelscriptTypedASTJITFallbackReason::MissingCanonicalAST;
 	}
 
 	static bool IsExpectedExternalReason(
@@ -295,14 +295,14 @@ private:
 			|| Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedType
 			|| Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedSignature
 			|| Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedFunctionTrait
-			|| Reason == EAngelscriptTypedASTJITFallbackReason::MissingTypedHIR;
+			|| Reason == EAngelscriptTypedASTJITFallbackReason::MissingCanonicalAST;
 	}
 
 	static bool IsExpectedLifecycleReason(
 		const EAngelscriptTypedASTJITFallbackReason Reason)
 	{
 		return Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime
-			|| Reason == EAngelscriptTypedASTJITFallbackReason::MissingTypedHIR
+			|| Reason == EAngelscriptTypedASTJITFallbackReason::MissingCanonicalAST
 			|| Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedFunctionKind
 			|| Reason == EAngelscriptTypedASTJITFallbackReason::UnsupportedCall
 			|| Reason == EAngelscriptTypedASTJITFallbackReason::InvalidCleanupPlan

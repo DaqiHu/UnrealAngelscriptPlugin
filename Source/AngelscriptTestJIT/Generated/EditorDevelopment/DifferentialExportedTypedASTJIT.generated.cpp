@@ -4,7 +4,7 @@
  * Backend            : TypedASTJIT
  * Declaration        : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
  * StableFunctionKey  : 9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4
- * OriginalSymbolSet  : ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_3d287fec96570ae323b5be5f87799c96aff6472b47dfb88cd4de99ab40b03762
+ * OriginalSymbolSet  : ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae
  * TestSymbolSet      : AS_Test_Differential_TypedAST_TypedASTPrintShowcase
  * CleanupPlan       : VerifiedEmpty (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -24,10 +24,10 @@
 /*
  * AngelScript Static JIT Function
  * Declaration       : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
- * Source             : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:1
+ * Source             : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:5
  * StableFunctionKey  : 9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4
- * ExecutionHash      : 3d287fec96570ae323b5be5f87799c96aff6472b47dfb88cd4de99ab40b03762
- * DebugHash          : 636443155f3600493c3c1febfd095150c987de2da9db64ac7a9fb82658c7520b
+ * ExecutionHash      : 22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae
+ * DebugHash          : 36f43385af144221f040238a169f370914ca7474de6082afa6911c20a2943f43
  * EntryAbiHash       : 97fbcd10bc26610e92f0705696227e7d6c0a85c0ece2feeca0b53d76f314e25a
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
@@ -35,9 +35,9 @@
  */
 static int32 AS_Test_Differential_TypedAST_TypedASTPrintShowcase_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const FString& as_sem_s0,
-	const double as_sem_s1,
-	const FLinearColor& as_sem_s2);
+	const FString& as_ast_d3,
+	const double as_ast_d4,
+	const FLinearColor& as_ast_d5);
 
 /*
  * AngelScript Native Call Site 0
@@ -51,25 +51,31 @@ static int32 AS_Test_Differential_TypedAST_TypedASTPrintShowcase_TypedBody(
  */
 static int32 AS_Test_Differential_TypedAST_TypedASTPrintShowcase_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const FString& as_sem_s0,
-	const double as_sem_s1,
-	const FLinearColor& as_sem_s2)
+	const FString& as_ast_d3,
+	const double as_ast_d4,
+	const FLinearColor& as_ast_d5)
 {
-	TypedFrame.SetSourcePosition(7, 2);
-	([&]() -> void
 	{
 		TypedFrame.SetSourcePosition(7, 2);
-		const FLinearColor& as_sem_e6_arg2 = as_sem_s2;
-		const float as_sem_e6_arg1 = static_cast<float>(as_sem_s1);
-		const FString& as_sem_e6_arg0 = as_sem_s0;
-		return AngelscriptStaticJITNativeCallables::Print(as_sem_e6_arg0, as_sem_e6_arg1, as_sem_e6_arg2);
-	}());
-	TypedFrame.SetSourcePosition(8, 2);
-	return int32(314);
+		([&]() -> void
+		{
+			const FLinearColor& as_ast_e5_arg2 = as_ast_d5;
+			const float as_ast_e5_arg1 = static_cast<float>(as_ast_d4);
+			const FString& as_ast_e5_arg0 = as_ast_d3;
+			AngelscriptStaticJITNativeCallables::Print(as_ast_e5_arg0, as_ast_e5_arg1, as_ast_e5_arg2);
+			return;
+		}());
+	}
+	{
+		TypedFrame.SetSourcePosition(8, 2);
+		return int32(314);
+	}
+	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
+	return int32{};
 }
 
 // AS Function : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:5
 // JIT Entry   : Raw
 int32 AS_Test_Differential_TypedAST_TypedASTPrintShowcase_Raw(FScriptExecution& Execution, FString* p_0, double p_1, FLinearColor* p_2)
 {
@@ -90,7 +96,7 @@ int32 AS_Test_Differential_TypedAST_TypedASTPrintShowcase_Raw(FScriptExecution& 
 }
 
 // AS Function : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:5
 // JIT Entry   : VM
 void AS_Test_Differential_TypedAST_TypedASTPrintShowcase_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
@@ -101,7 +107,7 @@ void AS_Test_Differential_TypedAST_TypedASTPrintShowcase_VM(FScriptExecution& Ex
 }
 
 // AS Function : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:1
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:5
 // JIT Entry   : Parms
 void AS_Test_Differential_TypedAST_TypedASTPrintShowcase_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
@@ -129,12 +135,11 @@ void AS_Test_Differential_TypedAST_TypedASTPrintShowcase_Parms(FScriptExecution&
 
 namespace
 {
-	static const FAngelscriptJITReferenceSlot FTypedASTJITDifferentialEntryRegistrationReferenceSlots[4] =
+	static const FAngelscriptJITReferenceSlot FTypedASTJITDifferentialEntryRegistrationReferenceSlots[3] =
 	{
-		{sizeof(FAngelscriptJITReferenceSlot), 0u, static_cast<EAngelscriptJITReferenceSlotFlags>(0), 0u, {static_cast<EAngelscriptArtifactReferenceKind>(7), FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("415ec867beab32a47d558983ab77291ac493547168161b93836dc77a357f059a")))}, FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("4966ab4336cca1891b1b828360f0d1a587dad0189ac8dc042b1dde592cb032d5")))}}},
-		{sizeof(FAngelscriptJITReferenceSlot), 1u, static_cast<EAngelscriptJITReferenceSlotFlags>(0), 0u, {static_cast<EAngelscriptArtifactReferenceKind>(7), FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("cc621ee62270e50578779a415d2789dc2b5e1a70d1ea5a785cbd60e43233c192")))}, FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("dfcf882626eca6dff9e5a227f732555955dceaef4baf13aa55a7b1e7839c39ef")))}}},
-		{sizeof(FAngelscriptJITReferenceSlot), 2u, static_cast<EAngelscriptJITReferenceSlotFlags>(0), 0u, {static_cast<EAngelscriptArtifactReferenceKind>(7), FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("cffdb228484b4358e4f3d607d572055b99963e418b0765f6dd934433adcbfca3")))}, FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("86168bbdfe709e4f79413ae5fcdfb97fb18587ec710ec2cd4727e5bb6913597d")))}}},
-		{sizeof(FAngelscriptJITReferenceSlot), 3u, static_cast<EAngelscriptJITReferenceSlotFlags>(0), 0u, {static_cast<EAngelscriptArtifactReferenceKind>(7), FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080")))}, FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56")))}}},
+		{sizeof(FAngelscriptJITReferenceSlot), 0u, static_cast<EAngelscriptJITReferenceSlotFlags>(0), 0u, {static_cast<EAngelscriptArtifactReferenceKind>(7), FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("cc621ee62270e50578779a415d2789dc2b5e1a70d1ea5a785cbd60e43233c192")))}, FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("dfcf882626eca6dff9e5a227f732555955dceaef4baf13aa55a7b1e7839c39ef")))}}},
+		{sizeof(FAngelscriptJITReferenceSlot), 1u, static_cast<EAngelscriptJITReferenceSlotFlags>(0), 0u, {static_cast<EAngelscriptArtifactReferenceKind>(7), FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("cffdb228484b4358e4f3d607d572055b99963e418b0765f6dd934433adcbfca3")))}, FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("86168bbdfe709e4f79413ae5fcdfb97fb18587ec710ec2cd4727e5bb6913597d")))}}},
+		{sizeof(FAngelscriptJITReferenceSlot), 2u, static_cast<EAngelscriptJITReferenceSlotFlags>(0), 0u, {static_cast<EAngelscriptArtifactReferenceKind>(7), FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("fce382e1f207809532a575043a4e727bc6fb503d99b6b8700fd77d71906a1080")))}, FAngelscriptHash256{FBlake3Hash(FWideStringView(TEXT("207b6b88fbdf7c084cb14ddada1e386a939d1754325d527f699e94d41cd5de56")))}}},
 	};
 
 	struct FTypedASTJITDifferentialEntryRegistration
@@ -151,11 +156,11 @@ namespace
 				TEXT("int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)"),
 				TEXT("/Angelscript/Game/ASStaticJITTypedPrintFixture.as"),
 				2u,
-				1u,
+				5u,
 				AngelscriptTestJITProbes::EIsolatedDifferentialCleanupPlanState::VerifiedEmpty,
 				0u,
 				FTypedASTJITDifferentialEntryRegistrationReferenceSlots,
-				4u);
+				3u);
 		}
 	};
 

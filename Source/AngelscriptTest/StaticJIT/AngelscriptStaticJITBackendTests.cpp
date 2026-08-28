@@ -253,7 +253,7 @@ public:
 		ASSERT_THAT(IsTrue(BytecodeProfile.CaptureProfile
 			== EAngelscriptStaticJITCaptureProfile::Bytecode));
 		ASSERT_THAT(IsFalse(
-			BytecodeProfile.RequiresTypedSemanticIRCapture()));
+			BytecodeProfile.RequiresCanonicalASTSnapshot()));
 		FAngelscriptEngineConfig BytecodeConfig;
 		BytecodeProfile.ApplyToEngineConfig(BytecodeConfig);
 		ASSERT_THAT(IsTrue(
@@ -269,9 +269,10 @@ public:
 		ASSERT_THAT(IsTrue(TypedASTProfile.BackendId
 			== FAngelscriptStaticJITBackendId::TypedAST()));
 		ASSERT_THAT(IsTrue(TypedASTProfile.CaptureProfile
-			== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR));
+			== EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST));
 		ASSERT_THAT(IsTrue(
-			TypedASTProfile.RequiresTypedSemanticIRCapture()));
+			TypedASTProfile.RequiresCanonicalASTSnapshot(),
+			TEXT("TypedASTJIT must freeze one retained canonical AST profile")));
 		const EAngelscriptTypedASTJITDirectCapability
 			ExpectedTypedASTCapabilities =
 				EAngelscriptTypedASTJITDirectCapability::FramePosition
@@ -284,8 +285,15 @@ public:
 		FAngelscriptEngineConfig TypedASTConfig;
 		TypedASTProfile.ApplyToEngineConfig(TypedASTConfig);
 		ASSERT_THAT(IsTrue(
+			TypedASTConfig.bRequireCanonicalASTForStaticJITGeneration,
+			TEXT("The generation Engine must carry an explicit canonical AST requirement")));
+		ASSERT_THAT(IsTrue(
 			TypedASTConfig.bCollectStaticJITCompatibilityBinds,
-			TEXT("Typed HIR capture must freeze the matching registered native-call descriptors")));
+			TEXT("Typed AST capture must freeze the matching registered native-call descriptors")));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_RETAIN_SNAPSHOT),
+			TypedASTConfig.InitialASTRetentionPolicy,
+			TEXT("VerifiedCanonicalAST generation must retain a public sealed AST snapshot for its immutable generation lease")));
 
 		FAngelscriptStaticJITGenerationProfile GameDevelopmentProfile;
 		ASSERT_THAT(IsTrue(
@@ -440,7 +448,7 @@ public:
 		FAngelscriptStaticJITCompiledSourceGraph Graph =
 			MakeGraph(FunctionViews);
 		Graph.CaptureProfile =
-			EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR;
+			EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
 		const FAngelscriptStableModuleKey EmitModules[] = {Module.ModuleKey};
 		const FAngelscriptStaticJITBackendRequest Request{
 			FAngelscriptStaticJITBackendId::TypedAST(), Graph, EmitModules};
@@ -496,7 +504,7 @@ public:
 		ASSERT_THAT(IsTrue(Output.Diagnostics.RequestedBackendId
 			== FAngelscriptStaticJITBackendId::TypedAST()));
 		ASSERT_THAT(IsTrue(Output.Diagnostics.CaptureProfile
-			== EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR));
+			== EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST));
 		ASSERT_THAT(AreEqual(2, Output.Diagnostics.FallbackChain.Num()));
 		ASSERT_THAT(IsTrue(Output.Diagnostics.FallbackChain[0]
 			== FAngelscriptStaticJITBackendId::TypedAST()));
@@ -588,7 +596,7 @@ public:
 		FAngelscriptStaticJITCompiledSourceGraph Graph =
 			MakeGraph(Functions);
 		Graph.CaptureProfile =
-			EAngelscriptStaticJITCaptureProfile::VerifiedTypedHIR;
+			EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST;
 		const FAngelscriptStaticJITBackendRequest Request{
 			FAngelscriptStaticJITBackendId::TypedAST(), Graph, {}};
 

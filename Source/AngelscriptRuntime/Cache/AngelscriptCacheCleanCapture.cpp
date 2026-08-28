@@ -1,6 +1,7 @@
 #include "Cache/AngelscriptCacheCleanCapture.h"
 
 #include "Cache/AngelscriptCacheArchive.h"
+#include "Cache/AngelscriptCacheASTBodySidecar.h"
 #include "Cache/AngelscriptCacheCompilerBridge.h"
 #include "Cache/AngelscriptCacheCurrentModuleAuthority.h"
 #include "Cache/AngelscriptCacheEnvironment.h"
@@ -13,6 +14,7 @@
 #include "Core/AngelscriptSource.h"
 #include "StaticJIT/AngelscriptJITReferenceResolver.h"
 #include "Misc/FileHelper.h"
+#include "Misc/ScopeExit.h"
 
 #include "as_module.h"
 #include "as_datatype.h"
@@ -21,6 +23,9 @@
 #include "as_restore.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
+#include "source/as_ast_context.h"
+#include "source/as_ast_sidecar.h"
+#include "source/as_ast_public_view.h"
 
 namespace AngelscriptCacheCleanCapture_Private
 {
@@ -187,6 +192,75 @@ namespace AngelscriptCacheCleanCapture_Private
 		}
 		OutRecord = MoveTemp(Candidate);
 		return true;
+	}
+
+	static bool TryCaptureCanonicalASTBodySidecar(
+		asCModule& ScriptModule,
+		const FAngelscriptStableModuleKey& ModuleKey,
+		const FAngelscriptArtifactProfileKey& Profile,
+		TOptional<FAngelscriptPreparedRecord>& OutRecord,
+		FAngelscriptCacheCleanCaptureResult& OutError)
+	{
+		OutRecord.Reset();
+		asIASTSnapshot* const Snapshot =
+			ScriptModule.AcquireASTSnapshot(asAST_API_VERSION_1);
+		if (Snapshot == nullptr)
+		{
+			return true;
+		}
+		ON_SCOPE_EXIT
+		{
+			Snapshot->Release();
+		};
+		const asCASTSnapshot* const CanonicalSnapshot =
+			static_cast<const asCASTSnapshot*>(Snapshot);
+		const asCASTContext* const CanonicalAST =
+			CanonicalSnapshot->GetContext();
+		if (CanonicalAST == nullptr)
+		{
+			return true;
+		}
+		if (!CanonicalAST->IsPublishable())
+		{
+			OutError = Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+				TEXT("The retained Canonical AST is not sealed"));
+			return false;
+		}
+
+		FAngelscriptCacheASTBodySidecar Sidecar;
+		Sidecar.FunctionKey = FString::Printf(TEXT("module:%s"),
+			*ModuleKey.Hash.ToHexString());
+		Sidecar.Profile = FString::Printf(TEXT("profile:%s"),
+			*Profile.Hash.ToHexString());
+		asSASTSidecarHeader Header;
+		const auto OwnerUtf8 = StringCast<UTF8CHAR>(*Sidecar.FunctionKey);
+		const auto ProfileUtf8 = StringCast<UTF8CHAR>(*Sidecar.Profile);
+		Header.functionKey = reinterpret_cast<const char*>(OwnerUtf8.Get());
+		Header.profile = reinterpret_cast<const char*>(ProfileUtf8.Get());
+		Header.version = FAngelscriptCacheASTBodySidecar::SchemaVersion;
+		asCArray<asBYTE> ForkBytes;
+		if (asCASTEncodeSidecar(*CanonicalAST, Header, ForkBytes)
+			!= asAST_SIDECAR_OK)
+		{
+			OutError = Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+				TEXT("The retained Canonical AST could not be serialized as V2"));
+			return false;
+		}
+		Sidecar.CanonicalAstBytes.Append(
+			ForkBytes.AddressOf(), static_cast<int32>(ForkBytes.GetLength()));
+		TArray<uint8> VerifiedBytes;
+		const FAngelscriptCacheASTBodySidecarResult EncodeResult =
+			AngelscriptEncodeASTBodySidecar(Sidecar, VerifiedBytes);
+		if (!EncodeResult.IsSuccess())
+		{
+			OutError = Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+				FString::Printf(
+					TEXT("The retained Canonical AST failed Cache V2 admission (%u)"),
+					static_cast<uint32>(EncodeResult.Error)));
+			return false;
+		}
+		return TryMakeRecord(EAngelscriptCacheRecordKind::ASTBodySidecar,
+			MoveTemp(VerifiedBytes), OutRecord.Emplace(), OutError);
 	}
 
 	template <typename SerializeFunctionType, typename ValueType>
@@ -796,6 +870,80 @@ namespace AngelscriptCacheCleanCapture_Private
 		return false;
 	}
 
+	static FString DescribeCanonicalSourceAuthority(
+		const asCScriptFunction& Function)
+	{
+		const asCModule* const RuntimeModule = Function.module;
+		const asCASTContext* const Context = RuntimeModule != nullptr
+			? RuntimeModule->GetCanonicalASTContext() : nullptr;
+		if (Context == nullptr)
+		{
+			return TEXT("ast=<not-retained>");
+		}
+		if (Function.canonicalASTStableDeclKey.GetLength() == 0)
+		{
+			return TEXT("ast=<function-key-missing>");
+		}
+
+		FString Matches;
+		uint32 MatchCount = 0;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl = Context->GetDecl(
+				asASTDeclId(DeclIndex));
+			if (Decl == nullptr
+				|| Decl->stableKey != Function.canonicalASTStableDeclKey)
+			{
+				continue;
+			}
+
+			++MatchCount;
+			const asCDecl* const Parent = Context->GetDecl(Decl->parent);
+			const char* const LogicalSection = Decl->range.begin.IsValid()
+				? Context->GetSourceManager().GetLogicalKey(
+					Decl->range.begin.fileID)
+				: nullptr;
+			if (!Matches.IsEmpty())
+			{
+				Matches += TEXT(";");
+			}
+			Matches += FString::Printf(
+				TEXT("[id=%u kind=%d generated=%d origin=%s "
+					"range=%u:%u-%u section=%s parent=%u/%s "
+					"parentRange=%u:%u-%u]"),
+				Decl->id.value,
+				static_cast<int32>(Decl->kind),
+				(Decl->traits & asAST_TRAIT_GENERATED) != 0 ? 1 : 0,
+				ANSI_TO_TCHAR(Decl->origin.AddressOf()
+					? Decl->origin.AddressOf() : "<none>"),
+				Decl->range.begin.fileID,
+				Decl->range.begin.offset,
+				Decl->range.end.offset,
+				LogicalSection != nullptr
+					? ANSI_TO_TCHAR(LogicalSection) : TEXT("<null>"),
+				Parent != nullptr ? Parent->id.value : 0u,
+				Parent != nullptr && Parent->name.AddressOf()
+					? ANSI_TO_TCHAR(Parent->name.AddressOf()) : TEXT("<null>"),
+				Parent != nullptr ? Parent->range.begin.fileID : 0u,
+				Parent != nullptr ? Parent->range.begin.offset : 0u,
+				Parent != nullptr ? Parent->range.end.offset : 0u);
+		}
+
+		return FString::Printf(
+			TEXT("astMatches=%u authority=%s runtime=[sectionIdx=%d declaredAt=%d bytecode=%u canonicalSourceBytes=%u]"),
+			MatchCount,
+			Matches.IsEmpty() ? TEXT("<none>") : *Matches,
+			Function.scriptData != nullptr
+				? Function.scriptData->scriptSectionIdx : -1,
+			Function.scriptData != nullptr
+				? Function.scriptData->declaredAt : 0,
+			Function.scriptData != nullptr
+				? Function.scriptData->byteCode.GetLength() : 0u,
+			Function.scriptData != nullptr
+				? Function.scriptData->artifactCanonicalSource.GetLength() : 0u);
+	}
+
 	static bool TryBuildDebugPayload(
 		const FAngelscriptModuleDesc& Module,
 		const asCScriptFunction& Function,
@@ -818,7 +966,31 @@ namespace AngelscriptCacheCleanCapture_Private
 			|| !TryMapSectionName(Module, ANSI_TO_TCHAR(PrimarySection),
 				CanonicalPrimarySection))
 		{
-			OutFailure = TEXT("The primary debug section cannot be mapped to a stable virtual path");
+			FString KnownSections;
+			for (const FAngelscriptModuleDesc::FCodeSection& Section : Module.Code)
+			{
+				if (!KnownSections.IsEmpty())
+				{
+					KnownSections += TEXT(";");
+				}
+				KnownSections += FString::Printf(
+					TEXT("[absolute=%s virtual=%s relative=%s]"),
+					*Section.AbsoluteFilename,
+					*Section.VirtualPath,
+					*Section.RelativeFilename);
+			}
+			const FString SourceAuthority =
+				DescribeCanonicalSourceAuthority(Function);
+			OutFailure = FString::Printf(
+				TEXT("The primary debug section cannot be mapped to a stable virtual path: function=%s stable=%s invocation=%d actual=%s known=%s %s"),
+				ANSI_TO_TCHAR(Function.GetDeclaration(true, true, false)),
+				ANSI_TO_TCHAR(Function.canonicalASTStableDeclKey.AddressOf()
+					? Function.canonicalASTStableDeclKey.AddressOf() : "<none>"),
+				static_cast<int32>(Function.artifactInvocationKind),
+				PrimarySection != nullptr
+					? ANSI_TO_TCHAR(PrimarySection) : TEXT("<null>"),
+				KnownSections.IsEmpty() ? TEXT("<none>") : *KnownSections,
+				*SourceAuthority);
 			return false;
 		}
 
@@ -895,6 +1067,17 @@ namespace AngelscriptCacheCleanCapture_Private
 					Function.scriptData->temporaryVariables[Index].Offset),
 				static_cast<uint32>(
 					Function.scriptData->temporaryVariables[Index].Token)});
+		}
+		for (asUINT Index = 0;
+			Index < Function.scriptData->pointerVariablePos.GetLength(); ++Index)
+		{
+			// Debug codec v2 already stores an offset plus eTokenType. Reserve the
+			// otherwise-invalid source token as the ownership-neutral pointer-slot
+			// discriminator so Cache V2 fails neither open nor ambiguously.
+			Artifact.TemporaryVariables.Add({
+				static_cast<uint32>(
+					Function.scriptData->pointerVariablePos[Index]),
+				static_cast<uint32>(ttUnrecognizedToken)});
 		}
 
 		for (asUINT Index = 0;
@@ -3667,6 +3850,7 @@ namespace AngelscriptCacheCleanCapture_Private
 
 		FAngelscriptPreparedRecord SourceRecord;
 		FAngelscriptPreparedRecord InterfaceRecord;
+		TOptional<FAngelscriptPreparedRecord> ASTBodySidecarRecord;
 		FAngelscriptPreparedRecord StateRecord;
 		FAngelscriptPreparedRecord SnapshotRecord;
 		FAngelscriptCacheCleanCaptureResult EncodingError;
@@ -3682,6 +3866,13 @@ namespace AngelscriptCacheCleanCapture_Private
 				ModuleState,
 				FAngelscriptCacheRemainingRecordArchive::SerializeModuleState,
 				StateRecord, EncodingError)))
+		{
+			return EncodingError;
+		}
+		if (!bFunctionFactsOnly
+			&& !TryCaptureCanonicalASTBodySidecar(
+				*ScriptModule, ModuleKey, Options.Profile,
+				ASTBodySidecarRecord, EncodingError))
 		{
 			return EncodingError;
 		}
@@ -3835,6 +4026,10 @@ namespace AngelscriptCacheCleanCapture_Private
 			if (!bFunctionFactsOnly)
 			{
 				Capture.Body.DebugSidecar = Capture.DebugRecord.RecordId;
+				if (ASTBodySidecarRecord.IsSet())
+				{
+					Capture.Body.ASTBodySidecar = ASTBodySidecarRecord->RecordId;
+				}
 			}
 			Capture.Body.Identity.Content =
 				FAngelscriptArtifactIdentityBuilder::BuildFunctionContentHash(
@@ -4027,6 +4222,7 @@ namespace AngelscriptCacheCleanCapture_Private
 		CandidateArtifacts.ModuleSnapshot = {ModuleKey, SnapshotRecord.RecordId};
 		CandidateArtifacts.Records.Reserve(
 			4 + Classes.Num() + (StaticsClass.ClassDesc != nullptr ? 1 : 0)
+				+ (ASTBodySidecarRecord.IsSet() ? 1 : 0)
 				+ FunctionCaptures.Num() * 2);
 		CandidateArtifacts.Records.Add(MoveTemp(SourceRecord));
 		CandidateArtifacts.Records.Add(MoveTemp(InterfaceRecord));
@@ -4040,6 +4236,11 @@ namespace AngelscriptCacheCleanCapture_Private
 				MoveTemp(StaticsClass.TypeRecord));
 		}
 		CandidateArtifacts.Records.Add(MoveTemp(StateRecord));
+		if (ASTBodySidecarRecord.IsSet())
+		{
+			CandidateArtifacts.Records.Add(
+				MoveTemp(ASTBodySidecarRecord.GetValue()));
+		}
 		for (FClassFunctionCapture& Capture : FunctionCaptures)
 		{
 			CandidateArtifacts.Records.Add(MoveTemp(Capture.BodyRecord));
@@ -5088,6 +5289,7 @@ namespace AngelscriptCacheCleanCapture_Private
 		FAngelscriptPreparedRecord SourceRecord;
 		FAngelscriptPreparedRecord InterfaceRecord;
 		FAngelscriptPreparedRecord TypeRecord;
+		TOptional<FAngelscriptPreparedRecord> ASTBodySidecarRecord;
 		FAngelscriptPreparedRecord StateRecord;
 		FAngelscriptPreparedRecord SnapshotRecord;
 		FAngelscriptCacheCleanCaptureResult EncodingError;
@@ -5105,6 +5307,13 @@ namespace AngelscriptCacheCleanCapture_Private
 				ModuleState,
 				FAngelscriptCacheRemainingRecordArchive::SerializeModuleState,
 				StateRecord, EncodingError)))
+		{
+			return EncodingError;
+		}
+		if (!bFunctionFactsOnly
+			&& !TryCaptureCanonicalASTBodySidecar(
+				*ScriptModule, ModuleKey, Options.Profile,
+				ASTBodySidecarRecord, EncodingError))
 		{
 			return EncodingError;
 		}
@@ -5248,6 +5457,10 @@ namespace AngelscriptCacheCleanCapture_Private
 			if (!bFunctionFactsOnly)
 			{
 				Capture.Body.DebugSidecar = Capture.DebugRecord.RecordId;
+				if (ASTBodySidecarRecord.IsSet())
+				{
+					Capture.Body.ASTBodySidecar = ASTBodySidecarRecord->RecordId;
+				}
 			}
 			Capture.Body.Identity.Content =
 				FAngelscriptArtifactIdentityBuilder::BuildFunctionContentHash(
@@ -5416,11 +5629,18 @@ namespace AngelscriptCacheCleanCapture_Private
 		CandidateArtifacts.SourceSnapshot = SourceIndex.SourceSnapshot;
 		CandidateArtifacts.SourceIndexRecordId = SourceRecord.RecordId;
 		CandidateArtifacts.ModuleSnapshot = {ModuleKey, SnapshotRecord.RecordId};
-		CandidateArtifacts.Records.Reserve(5 + FunctionCaptures.Num() * 2);
+		CandidateArtifacts.Records.Reserve(
+			5 + (ASTBodySidecarRecord.IsSet() ? 1 : 0)
+			+ FunctionCaptures.Num() * 2);
 		CandidateArtifacts.Records.Add(MoveTemp(SourceRecord));
 		CandidateArtifacts.Records.Add(MoveTemp(InterfaceRecord));
 		CandidateArtifacts.Records.Add(MoveTemp(TypeRecord));
 		CandidateArtifacts.Records.Add(MoveTemp(StateRecord));
+		if (ASTBodySidecarRecord.IsSet())
+		{
+			CandidateArtifacts.Records.Add(
+				MoveTemp(ASTBodySidecarRecord.GetValue()));
+		}
 		for (FRootFunctionCapture& Capture : FunctionCaptures)
 		{
 			CandidateArtifacts.Records.Add(MoveTemp(Capture.BodyRecord));
@@ -6276,6 +6496,7 @@ CaptureAngelscriptCleanCompiledModuleImpl(
 	FAngelscriptPreparedRecord SourceRecord;
 	FAngelscriptPreparedRecord InterfaceRecord;
 	TOptional<FAngelscriptPreparedRecord> TypeRecord;
+	TOptional<FAngelscriptPreparedRecord> ASTBodySidecarRecord;
 	FAngelscriptPreparedRecord StateRecord;
 	FAngelscriptPreparedRecord SnapshotRecord;
 	FAngelscriptCacheCleanCaptureResult EncodingError;
@@ -6302,6 +6523,13 @@ CaptureAngelscriptCleanCompiledModuleImpl(
 		{
 			return EncodingError;
 		}
+	}
+	if (!bFunctionFactsOnly
+		&& !TryCaptureCanonicalASTBodySidecar(
+			*ScriptModule, ModuleKey.GetValue(), Options.Profile,
+			ASTBodySidecarRecord, EncodingError))
+	{
+		return EncodingError;
 	}
 
 	uint32 GraphCarriedDependencyFunctionCount = 0;
@@ -6467,6 +6695,10 @@ CaptureAngelscriptCleanCompiledModuleImpl(
 		if (!bFunctionFactsOnly)
 		{
 			Capture.Body.DebugSidecar = Capture.DebugRecord.RecordId;
+			if (ASTBodySidecarRecord.IsSet())
+			{
+				Capture.Body.ASTBodySidecar = ASTBodySidecarRecord->RecordId;
+			}
 		}
 		Capture.Body.Identity.Content.Execution = EncodedExecutionHash;
 		Capture.Body.Identity.Content.Debug = Capture.Debug.DebugHash;
@@ -6526,7 +6758,8 @@ CaptureAngelscriptCleanCompiledModuleImpl(
 	CandidateArtifacts.ModuleSnapshot = {
 		ModuleKey.GetValue(), SnapshotRecord.RecordId};
 	CandidateArtifacts.Records.Reserve(
-		4 + (TypeRecord.IsSet() ? 1 : 0) + FunctionCaptures.Num() * 2);
+		4 + (TypeRecord.IsSet() ? 1 : 0)
+		+ (ASTBodySidecarRecord.IsSet() ? 1 : 0) + FunctionCaptures.Num() * 2);
 	CandidateArtifacts.Records.Add(MoveTemp(SourceRecord));
 	CandidateArtifacts.Records.Add(MoveTemp(InterfaceRecord));
 	if (TypeRecord.IsSet())
@@ -6534,6 +6767,10 @@ CaptureAngelscriptCleanCompiledModuleImpl(
 		CandidateArtifacts.Records.Add(MoveTemp(TypeRecord.GetValue()));
 	}
 	CandidateArtifacts.Records.Add(MoveTemp(StateRecord));
+	if (ASTBodySidecarRecord.IsSet())
+	{
+		CandidateArtifacts.Records.Add(MoveTemp(ASTBodySidecarRecord.GetValue()));
+	}
 	for (FFunctionCapture& Capture : FunctionCaptures)
 	{
 		CandidateArtifacts.Records.Add(MoveTemp(Capture.BodyRecord));

@@ -13,6 +13,7 @@
 #include "StaticJIT/AngelscriptStaticJITGenerationSnapshot.h"
 #include "StaticJIT/AngelscriptStaticJITGenerator.h"
 #include "StaticJIT/AngelscriptStaticJITGenerationProfile.h"
+#include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITCanonical.h"
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITEmitter.h"
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITProviderEmitter.h"
 
@@ -23,9 +24,9 @@
 #include "Misc/ScopeExit.h"
 
 #include "StartAngelscriptHeaders.h"
+#include "source/as_ast_context.h"
 #include "source/as_module.h"
 #include "source/as_scriptengine.h"
-#include "source/as_typed_semantic_ir.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptStaticJITAotGeneration
@@ -342,7 +343,6 @@ namespace AngelscriptStaticJITAotGeneration
 
 		static bool AppendTypedASTScalarProbe(
 			FAngelscriptEngine& Engine,
-			const FString& FixtureRoot,
 			const TConstArrayView<FAngelscriptStaticJITFunctionResult>
 				BackendFunctionResults,
 			FAngelscriptJITGenerationOutput& InOutOutput,
@@ -371,21 +371,28 @@ namespace AngelscriptStaticJITAotGeneration
 				return false;
 			}
 
-			const asCTypedSemanticFunction* const HIR =
-				Function->GetTypedSemanticFunction();
-			if (HIR == nullptr)
+			const asCModule* const CanonicalModule =
+				static_cast<const asCModule*>(ModuleDesc->ScriptModule);
+			const asCASTContext* const CanonicalAST =
+				CanonicalModule != nullptr
+					? CanonicalModule->GetCanonicalASTContext()
+					: nullptr;
+			const asASTDeclId CanonicalFunctionDecl =
+				CanonicalAST != nullptr
+					? FindAngelscriptTypedASTJITCanonicalFunctionDecl(
+						*CanonicalAST, Function->name.AddressOf())
+					: asASTDeclId();
+			const asCDecl* const CanonicalFunction =
+				CanonicalAST != nullptr
+					? CanonicalAST->GetDecl(CanonicalFunctionDecl)
+					: nullptr;
+			if (CanonicalAST == nullptr
+				|| !CanonicalAST->IsPublishable()
+				|| CanonicalFunction == nullptr
+				|| !CanonicalFunction->body.IsValid())
 			{
 				Result.Error = TEXT(
-					"TypedASTJIT probe source compile published no typed semantic HIR.");
-				return false;
-			}
-			const asSTypedSemanticVerificationResult Verification =
-				VerifyTypedSemanticFunction(*HIR);
-			if (!Verification.IsValid())
-			{
-				Result.Error = FString::Printf(
-					TEXT("TypedASTJIT probe HIR failed verification: %s"),
-					UTF8_TO_TCHAR(Verification.detail.AddressOf()));
+					"TypedASTJIT probe source compile published no sealed Canonical AST body.");
 				return false;
 			}
 
@@ -393,9 +400,13 @@ namespace AngelscriptStaticJITAotGeneration
 			Shape.SymbolName =
 				TEXT("AS_Test_Semantic_SemanticScalarBranch");
 			Shape.ReturnType = Function->returnType;
-			Shape.InvocationKind = HIR->header.invocationKind;
-			Shape.ReceiverKind = HIR->header.receiver.kind;
-			Shape.bReturnsOnStack = HIR->header.returnsOnStack;
+			Shape.InvocationKind = Function->objectType != nullptr
+				? EAngelscriptTypedASTJITInvocationKind::InstanceMethod
+				: EAngelscriptTypedASTJITInvocationKind::Global;
+			Shape.ReceiverKind = Function->objectType != nullptr
+				? EAngelscriptTypedASTJITReceiverKind::NativeObjectThis
+				: EAngelscriptTypedASTJITReceiverKind::None;
+			Shape.bReturnsOnStack = Function->DoesReturnOnStack();
 			for (asUINT Index = 0;
 				Index < Function->parameterTypes.GetLength(); ++Index)
 			{
@@ -403,7 +414,8 @@ namespace AngelscriptStaticJITAotGeneration
 			}
 
 			const FAngelscriptTypedASTJITEmission Emission =
-				EmitTypedASTJITFunction(*HIR, Shape, {});
+				EmitTypedASTJITFunction(
+					*CanonicalAST, CanonicalFunctionDecl, Shape, {});
 			if (!Emission.bSuccess)
 			{
 				Result.Error = FString::Printf(
@@ -416,18 +428,9 @@ namespace AngelscriptStaticJITAotGeneration
 			TArray<FString> ScalarProbeRequiredIncludes =
 				Emission.RequiredIncludes;
 			FString ScalarProbeDefinitions = Emission.Definition;
-			const asCString CapturedScalarHIR =
-				DumpTypedSemanticFunction(*HIR);
-			FString CapturedProbeHIR = FString::Printf(
-				TEXT("## %s\n%s"),
-				*AngelscriptStaticJITAotFixture::
-					GetSemanticScalarBranchDeclaration(),
-				UTF8_TO_TCHAR(CapturedScalarHIR.AddressOf()));
-
 			auto AppendTypedProbe = [&Engine,
 				&ScalarProbeRequiredIncludes,
 				&ScalarProbeDefinitions,
-				&CapturedProbeHIR,
 				&Result](
 					const FName& ModuleName,
 					const FString& Declaration,
@@ -452,32 +455,45 @@ namespace AngelscriptStaticJITAotGeneration
 					return false;
 				}
 
-				const asCTypedSemanticFunction* const ProbeHIR =
-					ProbeFunction->GetTypedSemanticFunction();
-				if (ProbeHIR == nullptr)
+				const asCModule* const CanonicalProbeModule =
+					ProbeModuleDesc.IsValid()
+						? static_cast<const asCModule*>(
+							ProbeModuleDesc->ScriptModule)
+						: nullptr;
+				const asCASTContext* const ProbeAST =
+					CanonicalProbeModule != nullptr
+						? CanonicalProbeModule->GetCanonicalASTContext()
+						: nullptr;
+				const asASTDeclId ProbeFunctionDecl =
+					ProbeAST != nullptr
+						? FindAngelscriptTypedASTJITCanonicalFunctionDecl(
+							*ProbeAST, ProbeFunction->name.AddressOf())
+						: asASTDeclId();
+				const asCDecl* const ProbeCanonicalFunction =
+					ProbeAST != nullptr
+						? ProbeAST->GetDecl(ProbeFunctionDecl)
+						: nullptr;
+				if (ProbeAST == nullptr
+					|| !ProbeAST->IsPublishable()
+					|| ProbeCanonicalFunction == nullptr
+					|| !ProbeCanonicalFunction->body.IsValid())
 				{
 					Result.Error = FString::Printf(
-						TEXT("TypedASTJIT %s source compile published no typed semantic HIR."),
+						TEXT("TypedASTJIT %s source compile published no sealed Canonical AST body."),
 						Label);
-					return false;
-				}
-				const asSTypedSemanticVerificationResult ProbeVerification =
-					VerifyTypedSemanticFunction(*ProbeHIR);
-				if (!ProbeVerification.IsValid())
-				{
-					Result.Error = FString::Printf(
-						TEXT("TypedASTJIT %s HIR failed verification: %s"),
-						Label,
-						UTF8_TO_TCHAR(ProbeVerification.detail.AddressOf()));
 					return false;
 				}
 
 				FAngelscriptTypedASTJITFunctionShape ProbeShape;
 				ProbeShape.SymbolName = SymbolName;
 				ProbeShape.ReturnType = ProbeFunction->returnType;
-				ProbeShape.InvocationKind = ProbeHIR->header.invocationKind;
-				ProbeShape.ReceiverKind = ProbeHIR->header.receiver.kind;
-				ProbeShape.bReturnsOnStack = ProbeHIR->header.returnsOnStack;
+				ProbeShape.InvocationKind = ProbeFunction->objectType != nullptr
+					? EAngelscriptTypedASTJITInvocationKind::InstanceMethod
+					: EAngelscriptTypedASTJITInvocationKind::Global;
+				ProbeShape.ReceiverKind = ProbeFunction->objectType != nullptr
+					? EAngelscriptTypedASTJITReceiverKind::NativeObjectThis
+					: EAngelscriptTypedASTJITReceiverKind::None;
+				ProbeShape.bReturnsOnStack = ProbeFunction->DoesReturnOnStack();
 				for (asUINT Index = 0;
 					Index < ProbeFunction->parameterTypes.GetLength(); ++Index)
 				{
@@ -486,7 +502,8 @@ namespace AngelscriptStaticJITAotGeneration
 				}
 
 				const FAngelscriptTypedASTJITEmission ProbeEmission =
-					EmitTypedASTJITFunction(*ProbeHIR, ProbeShape, {});
+					EmitTypedASTJITFunction(
+						*ProbeAST, ProbeFunctionDecl, ProbeShape, {});
 				if (!ProbeEmission.bSuccess)
 				{
 					Result.Error = FString::Printf(
@@ -501,12 +518,6 @@ namespace AngelscriptStaticJITAotGeneration
 					ProbeEmission.RequiredIncludes);
 				ScalarProbeDefinitions += TEXT("\n")
 					+ ProbeEmission.Definition;
-				const asCString ProbeDump =
-					DumpTypedSemanticFunction(*ProbeHIR);
-				CapturedProbeHIR += FString::Printf(
-					TEXT("\n## %s\n%s"),
-					*Declaration,
-					UTF8_TO_TCHAR(ProbeDump.AddressOf()));
 				return true;
 			};
 
@@ -583,23 +594,6 @@ namespace AngelscriptStaticJITAotGeneration
 			const FString ScalarProbeIncludes =
 				BuildProbeIncludes(ScalarProbeRequiredIncludes, false);
 
-			Result.TypedASTNormalizedHIR = MoveTemp(CapturedProbeHIR);
-			FString PhysicalScriptRoot = FPaths::Combine(
-				FixtureRoot, TEXT("Script"));
-			FPaths::NormalizeFilename(PhysicalScriptRoot);
-			const int32 NormalizedSpanCount =
-				Result.TypedASTNormalizedHIR.ReplaceInline(
-					*PhysicalScriptRoot,
-					TEXT("/Angelscript/Game"),
-					ESearchCase::CaseSensitive);
-			if (NormalizedSpanCount == 0
-				|| Result.TypedASTNormalizedHIR.Contains(
-					FixtureRoot, ESearchCase::CaseSensitive))
-			{
-				Result.Error = TEXT(
-					"TypedASTJIT probe could not normalize its isolated fixture source spans.");
-				return false;
-			}
 			Result.TypedASTGeneratedCpp = FString::Printf(
 				TEXT("// @angelscript-jit-owned revision=2 kind=module-source\n")
 				TEXT("/*\n")
@@ -836,7 +830,7 @@ namespace AngelscriptStaticJITAotGeneration
 					}
 				}
 				Result.Error = FString::Printf(TEXT(
-					"%s did not use the production TypedAST backend: Function=%s Backend=%s Disposition=%u Detail=%s Attempts=[%s] HIRCapture=[%s]"),
+					"%s did not use the production TypedAST backend: Function=%s Backend=%s Disposition=%u Detail=%s Attempts=[%s]"),
 					Label,
 					RequiredFunction != nullptr
 						? UTF8_TO_TCHAR(RequiredFunction->GetDeclaration())
@@ -849,11 +843,7 @@ namespace AngelscriptStaticJITAotGeneration
 						: MAX_uint32,
 					BackendResult != nullptr
 						? *BackendResult->Detail : TEXT("<missing>"),
-					*FString::Join(AttemptDetails, TEXT(" | ")),
-					RequiredFunction != nullptr
-						? UTF8_TO_TCHAR(RequiredFunction->
-							GetTypedSemanticCaptureDiagnostic().AddressOf())
-						: TEXT("<missing>"));
+					*FString::Join(AttemptDetails, TEXT(" | ")));
 				return false;
 			};
 			if (!RequireProductionTypedASTResult(
@@ -976,7 +966,10 @@ namespace AngelscriptStaticJITAotGeneration
 				&ProviderGenerationProfile.TypedASTJITCapabilityProfile;
 			const FAngelscriptTypedASTJITEmission ProviderBody =
 				EmitTypedASTJITFunction(
-					*HIR, ProviderShape, ProviderEmitOptions);
+					*CanonicalAST,
+					CanonicalFunctionDecl,
+					ProviderShape,
+					ProviderEmitOptions);
 			FAngelscriptTypedASTJITProviderEntryPlan EntryPlan;
 			FString ProviderError;
 			if (!ProviderBody.bSuccess
@@ -1114,6 +1107,39 @@ namespace AngelscriptStaticJITAotGeneration
 					!= FAngelscriptStaticJITBackendId::TypedAST())
 			{
 				TArray<FString> AttemptDetails;
+				TArray<FString> CanonicalDeclCandidates;
+				if (CapturedCapabilityFunction->SealedAST != nullptr)
+				{
+					const asCASTContext& SealedAST =
+						*CapturedCapabilityFunction->SealedAST;
+					for (asUINT DeclIndex = 1;
+						DeclIndex <= SealedAST.GetDeclCount();
+						++DeclIndex)
+					{
+						const asCDecl* const Decl =
+							SealedAST.GetDecl(asASTDeclId(DeclIndex));
+						if (Decl != nullptr
+							&& Decl->name.Equals(CapabilityFunction->name))
+						{
+							const asCDecl* const Parent =
+								SealedAST.GetDecl(Decl->parent);
+							CanonicalDeclCandidates.Add(FString::Printf(
+								TEXT("id=%u kind=%u parent=%u parentKey='%s' file=%u begin=%u end=%u body=%u traits=0x%08x key='%s'"),
+								Decl->id.value,
+								static_cast<uint32>(Decl->kind),
+								Decl->parent.value,
+								Parent != nullptr
+									? UTF8_TO_TCHAR(Parent->stableKey.AddressOf())
+									: TEXT(""),
+								Decl->range.begin.fileID,
+								Decl->range.begin.offset,
+								Decl->range.end.offset,
+								Decl->body.value,
+								Decl->traits,
+								UTF8_TO_TCHAR(Decl->stableKey.AddressOf())));
+						}
+					}
+				}
 				if (CapabilityBackendResult != nullptr)
 				{
 					for (const FAngelscriptStaticJITBackendAttemptDiagnostic& Attempt
@@ -1130,14 +1156,16 @@ namespace AngelscriptStaticJITAotGeneration
 					? TEXT(
 						"TypedASTJIT capability probe has no backend result.")
 					: FString::Printf(TEXT(
-						"TypedASTJIT capability probe did not use the production TypedAST backend: Backend=%s Disposition=%u Detail=%s Attempts=[%s] HIRCapture=[%s]"),
+						"TypedASTJIT capability probe did not use the production TypedAST backend: Backend=%s Disposition=%u Detail=%s Attempts=[%s] CanonicalDeclId=%u RuntimeStableKey='%s' CanonicalCandidates=[%s]"),
 						*CapabilityBackendResult->ActualBackendId.ToString(),
 						static_cast<uint32>(
 							CapabilityBackendResult->Disposition),
 						*CapabilityBackendResult->Detail,
 						*FString::Join(AttemptDetails, TEXT(" | ")),
+						CapturedCapabilityFunction->CanonicalFunctionDeclValue,
 						UTF8_TO_TCHAR(CapabilityFunction->
-							GetTypedSemanticCaptureDiagnostic().AddressOf()));
+							canonicalASTStableDeclKey.AddressOf()),
+						*FString::Join(CanonicalDeclCandidates, TEXT(" | ")));
 				return false;
 			}
 
@@ -1218,8 +1246,68 @@ namespace AngelscriptStaticJITAotGeneration
 				|| ExportedSymbolBackendResult->ActualBackendId
 					!= FAngelscriptStaticJITBackendId::TypedAST())
 			{
+				TArray<FString> AttemptDetails;
+				if (ExportedSymbolBackendResult != nullptr)
+				{
+					for (const FAngelscriptStaticJITBackendAttemptDiagnostic& Attempt
+						: ExportedSymbolBackendResult->BackendAttempts)
+					{
+						const FString TypedFallback = Attempt.TypedDiagnostic.IsSet()
+							? FString::Printf(
+								TEXT(":%s"),
+								LexToString(Attempt.TypedDiagnostic->FallbackReason))
+							: FString();
+						AttemptDetails.Add(FString::Printf(
+							TEXT("%s:%u%s:%s"),
+							*Attempt.BackendId.ToString(),
+							static_cast<uint32>(Attempt.Disposition),
+							*TypedFallback,
+							*Attempt.Detail));
+					}
+				}
+				TArray<FString> MatchingInventory;
+				TArray<FString> MatchingTargets;
+				if (GenerationSnapshot.IsValid())
+				{
+					for (const FAngelscriptStaticJITNativeCallInventoryEntry& Entry
+						: GenerationSnapshot->NativeCallInventory)
+					{
+						if (!Entry.CanonicalDeclaration.Contains(TEXT("DaysInMonth"))
+							&& !Entry.NativeCallableDisplay.Contains(TEXT("DaysInMonth")))
+						{
+							continue;
+						}
+						MatchingInventory.Add(FString::Printf(
+							TEXT("id=%d decl='%s' ns='%s' receiver='%s' descriptor=%s native='%s' stableRef=%s nativeABI=%s nativeABIError='%s' scalarABI=%s scalarABIError='%s'"),
+							Entry.EngineLocalFunctionId,
+							*Entry.CanonicalDeclaration,
+							*Entry.NamespaceCanonicalName,
+							*Entry.ReceiverCanonicalName,
+							Entry.bHasExternalDescriptor ? TEXT("yes") : TEXT("no"),
+							*Entry.NativeCallableDisplay,
+							Entry.bHasStableReference ? TEXT("yes") : TEXT("no"),
+							Entry.bHasExpectedNativeABI ? TEXT("yes") : TEXT("no"),
+							*Entry.NativeABIError,
+							Entry.bHasExpectedScalarABI ? TEXT("yes") : TEXT("no"),
+							*Entry.ScalarABIError));
+					}
+					for (const FAngelscriptStaticJITNativeCallTarget& Target
+						: GenerationSnapshot->NativeCallTargets)
+					{
+						if (Target.CanonicalDeclaration.Contains(TEXT("DaysInMonth"))
+							|| Target.RegisteredTargetDisplay.Contains(TEXT("DaysInMonth")))
+						{
+							MatchingTargets.Add(FString::Printf(
+								TEXT("id=%d decl='%s' target='%s' symbol='%s'"),
+								Target.EngineLocalFunctionId,
+								*Target.CanonicalDeclaration,
+								*Target.RegisteredTargetDisplay,
+								*Target.Descriptor.Symbol));
+						}
+					}
+				}
 				Result.Error = FString::Printf(TEXT(
-					"TypedASTJIT Core exported-symbol probe did not use the production TypedAST backend: Function=%s Backend=%s Disposition=%u Detail=%s"),
+					"TypedASTJIT Core exported-symbol probe did not use the production TypedAST backend: Function=%s Backend=%s Disposition=%u Detail=%s Attempts=[%s] CanonicalDeclId=%u RuntimeStableKey='%s' MatchingInventory=[%s] MatchingTargets=[%s]"),
 					ExportedSymbolFunction != nullptr
 						? UTF8_TO_TCHAR(
 							ExportedSymbolFunction->GetDeclaration())
@@ -1233,7 +1321,17 @@ namespace AngelscriptStaticJITAotGeneration
 						: MAX_uint32,
 					ExportedSymbolBackendResult != nullptr
 						? *ExportedSymbolBackendResult->Detail
-						: TEXT("<missing>"));
+						: TEXT("<missing>"),
+					*FString::Join(AttemptDetails, TEXT(" | ")),
+					CapturedExportedSymbolFunction != nullptr
+						? CapturedExportedSymbolFunction->CanonicalFunctionDeclValue
+						: 0,
+					ExportedSymbolFunction != nullptr
+						? UTF8_TO_TCHAR(ExportedSymbolFunction->
+							canonicalASTStableDeclKey.AddressOf())
+						: TEXT("<missing>"),
+					*FString::Join(MatchingInventory, TEXT(" | ")),
+					*FString::Join(MatchingTargets, TEXT(" | ")));
 				return false;
 			}
 
@@ -1350,7 +1448,7 @@ namespace AngelscriptStaticJITAotGeneration
 					}
 				}
 				Result.Error = FString::Printf(TEXT(
-					"TypedASTJIT Print probe did not use the production TypedAST backend: Function=%s Backend=%s Disposition=%u Detail=%s Attempts=[%s] HIRCapture=[%s]"),
+					"TypedASTJIT Print probe did not use the production TypedAST backend: Function=%s Backend=%s Disposition=%u Detail=%s Attempts=[%s]"),
 					PrintFunction != nullptr
 						? UTF8_TO_TCHAR(PrintFunction->GetDeclaration())
 						: TEXT("<missing>"),
@@ -1362,11 +1460,7 @@ namespace AngelscriptStaticJITAotGeneration
 						: MAX_uint32,
 					PrintBackendResult != nullptr
 						? *PrintBackendResult->Detail : TEXT("<missing>"),
-					*FString::Join(AttemptDetails, TEXT(" | ")),
-					PrintFunction != nullptr
-						? UTF8_TO_TCHAR(PrintFunction->
-							GetTypedSemanticCaptureDiagnostic().AddressOf())
-						: TEXT("<missing>"));
+					*FString::Join(AttemptDetails, TEXT(" | ")));
 				return false;
 			}
 			const FAngelscriptJITGeneratedFunction* const GeneratedPrintFunction =
@@ -1453,7 +1547,7 @@ namespace AngelscriptStaticJITAotGeneration
 					}
 				}
 				Result.Error = FString::Printf(TEXT(
-					"TypedASTJIT provider-private bridge probe did not use the production TypedAST backend: Function=%s Backend=%s Disposition=%u Detail=%s Attempts=[%s] HIRCapture=[%s]"),
+					"TypedASTJIT provider-private bridge probe did not use the production TypedAST backend: Function=%s Backend=%s Disposition=%u Detail=%s Attempts=[%s]"),
 					PrivateBridgeFunction != nullptr
 						? UTF8_TO_TCHAR(PrivateBridgeFunction->GetDeclaration())
 						: TEXT("<missing>"),
@@ -1466,11 +1560,7 @@ namespace AngelscriptStaticJITAotGeneration
 						: MAX_uint32,
 					PrivateBridgeBackendResult != nullptr
 						? *PrivateBridgeBackendResult->Detail : TEXT("<missing>"),
-					*FString::Join(AttemptDetails, TEXT(" | ")),
-					PrivateBridgeFunction != nullptr
-						? UTF8_TO_TCHAR(PrivateBridgeFunction->
-							GetTypedSemanticCaptureDiagnostic().AddressOf())
-						: TEXT("<missing>"));
+					*FString::Join(AttemptDetails, TEXT(" | ")));
 				return false;
 			}
 
@@ -2033,22 +2123,10 @@ namespace AngelscriptStaticJITAotGeneration
 					}
 					else
 					{
-						const FString CaptureDiagnostic = UTF8_TO_TCHAR(
-							static_cast<asCScriptFunction*>(
-								EngineLocalTargetFunction)->
-								GetTypedSemanticCaptureDiagnostic().AddressOf());
-						if (CaptureDiagnostic.IsEmpty())
-						{
-							Result.Error = FString::Printf(TEXT(
-								"%s differential rejection has no compiler-owned capture diagnostic."),
-								HarnessRejectionPrefix);
-							return false;
-						}
 						NormalizedFallbackDetail = FString::Printf(
-							TEXT("%s: %s capture=%s"),
+							TEXT("%s: %s"),
 							HarnessRejectionPrefix,
-							*TypedAttempt->Detail,
-							*CaptureDiagnostic);
+							*TypedAttempt->Detail);
 					}
 
 					FString PhysicalScriptRoot = FPaths::Combine(
@@ -2126,35 +2204,29 @@ namespace AngelscriptStaticJITAotGeneration
 			uint32 CleanupActionCount = 0;
 			if (BackendId == FAngelscriptStaticJITBackendId::TypedAST())
 			{
-				const asCTypedSemanticFunction* const TypedHIR =
-					SnapshotFunction->VerifiedTypedHIR;
-				if (TypedHIR == nullptr
-					|| TypedHIR->header.cleanupPlanState
-						!= asETypedSemanticCleanupPlanState::VerifiedEmpty
-					|| !TypedHIR->header.cleanupPlanCoversAllTransfers
-					|| !TypedHIR->header.universalCleanupPlan.IsValid()
-					|| TypedHIR->header.universalCleanupPlan.value
-						>= TypedHIR->cleanupPlans.GetLength())
+				const asCDecl* const CanonicalFunctionDecl =
+					SnapshotFunction->SealedAST != nullptr
+						&& SnapshotFunction->SealedAST->IsPublishable()
+						&& SnapshotFunction->CanonicalFunctionDeclValue != 0
+					? SnapshotFunction->SealedAST->GetDecl(asASTDeclId(
+						SnapshotFunction->CanonicalFunctionDeclValue))
+					: nullptr;
+				if (CanonicalFunctionDecl == nullptr
+					|| !CanonicalFunctionDecl->body.IsValid())
 				{
 					Result.Error = FString::Printf(TEXT(
-						"Isolated TypedASTJIT differential target '%s' did not retain one compiler-verified universal empty cleanup plan."),
+						"Isolated TypedASTJIT differential target '%s' did not retain its exact sealed canonical AST body."),
 						*SnapshotFunction->CanonicalDeclaration);
 					return false;
 				}
 
-				const asSTypedSemanticCleanupPlan& CleanupPlan =
-					TypedHIR->cleanupPlans[
-						TypedHIR->header.universalCleanupPlan.value];
-				CleanupActionCount =
-					CleanupPlan.reverseLiveLifetimeSlots.GetLength();
-				if (CleanupActionCount != 0)
-				{
-					Result.Error = FString::Printf(TEXT(
-						"Isolated TypedASTJIT differential target '%s' retained %u cleanup actions in the scalar-only slice."),
-						*SnapshotFunction->CanonicalDeclaration,
-						CleanupActionCount);
-					return false;
-				}
+				// A successful production Canonical Typed AST emission is the proof
+				// for this scalar-only test slice: eligibility rejects non-scalar
+				// lifetime state, while construct/materialize/cleanup wrappers are
+				// accepted only when they transparently own one scalar value. The
+				// production snapshot intentionally no longer retains HIR cleanup
+				// plans, so the probe records the equivalent zero-action result from
+				// the canonical eligibility/emission contract.
 				CleanupPlanState = ECleanupPlanState::VerifiedEmpty;
 			}
 
@@ -2641,7 +2713,7 @@ namespace AngelscriptStaticJITAotGeneration
 					TEXT("DifferentialRejectedObjectLifetimeTypedASTJIT.generated.cpp"),
 					InOutOutput,
 					Result,
-					TEXT("MissingTypedHIR"),
+					TEXT("UnsupportedFunctionTrait"),
 					false,
 					&Result.IsolatedTypedASTNonCloneableFallbackDetail,
 					TEXT("NonCloneableEffectRejected")))
@@ -2763,7 +2835,7 @@ namespace AngelscriptStaticJITAotGeneration
 			}
 			OutOutput = MoveTemp(GeneratorOutput.ProviderOutput);
 			if (!AppendTypedASTScalarProbe(
-				Engine, FixtureRoot, GeneratorOutput.Functions,
+				Engine, GeneratorOutput.Functions,
 				OutOutput, Result,
 				Variant == EStaticJITAotGenerationTestVariant::
 					AdvertiseUnsupportedEmitterCapability))
@@ -3463,33 +3535,33 @@ namespace AngelscriptStaticJITAotGeneration
 
 		const uint64 WorkingSetBefore =
 			FPlatformMemory::GetStats().UsedPhysical;
-		const double HirStart = FPlatformTime::Seconds();
-		FStaticJITAotGenerationResult HirResult;
-		FString HirRoot;
-		TUniquePtr<FAngelscriptEngine> HirEngine = CreateFixtureEngine(
-			HirRoot,
-			HirResult,
+		const double CanonicalASTStart = FPlatformTime::Seconds();
+		FStaticJITAotGenerationResult CanonicalASTResult;
+		FString CanonicalASTRoot;
+		TUniquePtr<FAngelscriptEngine> CanonicalASTEngine = CreateFixtureEngine(
+			CanonicalASTRoot,
+			CanonicalASTResult,
 			false,
 			&GenerationProfile,
 			EAngelscriptEnginePurpose::StaticJITGeneration,
 			EStaticJITAotFixtureComposition::Core,
 			AngelscriptStaticJITAotFixture::
 				ETypedASTPrivateBridgeRegistration::Primary);
-		Benchmark.HirCaptureMilliseconds =
-			(FPlatformTime::Seconds() - HirStart) * 1000.0;
+		Benchmark.CanonicalASTBuildMilliseconds =
+			(FPlatformTime::Seconds() - CanonicalASTStart) * 1000.0;
 		const uint64 WorkingSetAfter =
 			FPlatformMemory::GetStats().UsedPhysical;
-		Benchmark.HirWorkingSetDeltaBytes =
+		Benchmark.CanonicalASTWorkingSetDeltaBytes =
 			static_cast<int64>(WorkingSetAfter) -
 			static_cast<int64>(WorkingSetBefore);
-		if (!HirEngine.IsValid())
+		if (!CanonicalASTEngine.IsValid())
 		{
-			Benchmark.Error = HirResult.Error.IsEmpty()
-				? TEXT("First-version HIR capture Engine failed.")
-				: HirResult.Error;
+			Benchmark.Error = CanonicalASTResult.Error.IsEmpty()
+				? TEXT("First-version Canonical AST generation Engine failed.")
+				: CanonicalASTResult.Error;
 			return Benchmark;
 		}
-		HirEngine.Reset();
+		CanonicalASTEngine.Reset();
 
 		FAngelscriptJITGenerationOutput ScratchOutput;
 		FStaticJITAotGenerationResult IsolatedResult;

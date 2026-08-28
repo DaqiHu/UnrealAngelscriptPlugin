@@ -13,7 +13,4 @@ ANGELSCRIPTRUNTIME_API bool EmitAngelscriptTypedASTJITBridgeCallSiteRows(
 	FString& OutDefinitions,
 	FString* OutError = nullptr);
 
-ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJITEmission EmitTypedASTJITFunction(
-	const asCTypedSemanticFunction& Function,
-	const FAngelscriptTypedASTJITFunctionShape& Shape,
-	const FAngelscriptTypedASTJITEmitOptions& Options);
+class asCASTContext;

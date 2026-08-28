@@ -38,10 +38,10 @@
 
 
 #include "as_scriptfunction.h"
-#include "as_typed_semantic_ir.h"
 #include "as_config.h"
 #include "as_tokendef.h"
 #include "as_scriptengine.h"
+#include "as_module.h"
 #include "as_callfunc.h"
 #include "as_bytecode.h"
 #include "as_texts.h"
@@ -358,6 +358,7 @@ asCScriptFunction::asCScriptFunction(asCScriptEngine *engine, asCModule *mod, as
 	this->engine           = engine;
 	this->scriptData       = 0;
 	module                 = mod;
+	runtimeTypeGeneration  = 0;
 	objectType             = 0;
 	name                   = "";
 	sysFuncIntf            = 0;
@@ -399,51 +400,12 @@ void asCScriptFunction::DeallocateScriptFunctionData()
 {
 	if( !scriptData ) return;
 
-	// DestroyInternal normally clears this before type/function references are
-	// released. Keep this defensive path for half-created or donor state.
-	DiscardTypedSemanticFunction();
-
 	for( asUINT n = 0; n < scriptData->variables.GetLength(); n++ )
 		asDELETE(scriptData->variables[n],asSScriptVariable);
 	scriptData->variables.SetLength(0);
 
 	asDELETE(scriptData, ScriptFunctionData);
 	scriptData = 0;
-}
-
-void asCScriptFunction::SetTypedSemanticFunction(asCTypedSemanticFunction* Function)
-{
-	if( scriptData == 0 || scriptData->typedSemanticFunction == Function )
-		return;
-
-	DiscardTypedSemanticFunction();
-	scriptData->typedSemanticFunction = Function;
-}
-
-void asCScriptFunction::DiscardTypedSemanticFunction()
-{
-	if( scriptData == 0 || scriptData->typedSemanticFunction == 0 )
-		return;
-
-	asDELETE(scriptData->typedSemanticFunction, asCTypedSemanticFunction);
-	scriptData->typedSemanticFunction = 0;
-}
-
-asCTypedSemanticFunction* asCScriptFunction::GetTypedSemanticFunction()
-{
-	return scriptData != 0 ? scriptData->typedSemanticFunction : 0;
-}
-
-const asCTypedSemanticFunction* asCScriptFunction::GetTypedSemanticFunction() const
-{
-	return scriptData != 0 ? scriptData->typedSemanticFunction : 0;
-}
-
-const asCString& asCScriptFunction::GetTypedSemanticCaptureDiagnostic() const
-{
-	static const asCString Empty;
-	return scriptData != 0
-		? scriptData->typedSemanticCaptureDiagnostic : Empty;
 }
 
 // internal
@@ -485,11 +447,6 @@ void asCScriptFunction::DestroyHalfCreated()
 // internal
 void asCScriptFunction::DestroyInternal()
 {
-	// The HIR contains non-owning semantic type descriptors and engine-local
-	// function IDs, so it must be gone before ReleaseReferences tears down the
-	// authoritative function/type graph.
-	DiscardTypedSemanticFunction();
-
 	asSJITFunctionBinding emptyBinding;
 	SetJITBinding(emptyBinding);
 
@@ -538,7 +495,10 @@ int asCScriptFunction::GetId() const
 int asCScriptFunction::AddRef() const
 {
 	gcFlag = false;
-	return externalRefCount.atomicInc();
+	const int result = externalRefCount.atomicInc();
+	if( result == 1 && runtimeTypeGeneration )
+		runtimeTypeGeneration->AddRef();
+	return result;
 }
 
 // interface
@@ -546,6 +506,14 @@ int asCScriptFunction::Release() const
 {
 	gcFlag = false;
 	int r = externalRefCount.atomicDec();
+	if( r == 0 && runtimeTypeGeneration )
+	{
+		// This may destroy the retired carrier and, through its final internal
+		// function release, this function itself. Do not access `this` after it.
+		asCRuntimeTypeGeneration* const generation = runtimeTypeGeneration;
+		generation->Release();
+		return r;
+	}
 	if( r == 0 &&
 		funcType != asFUNC_DUMMY )    // Dummy functions are allocated on the stack and cannot be deleted
 	{
@@ -562,6 +530,15 @@ int asCScriptFunction::Release() const
 	}
 
 	return r;
+}
+
+void asCScriptFunction::SetRuntimeTypeGeneration(
+	asCRuntimeTypeGeneration* generation)
+{
+	asASSERT(runtimeTypeGeneration == 0 || runtimeTypeGeneration == generation);
+	asASSERT(externalRefCount.get() == 0);
+	if( runtimeTypeGeneration == 0 )
+		runtimeTypeGeneration = generation;
 }
 
 // internal
@@ -1218,6 +1195,7 @@ void asCScriptFunction::AddReferences()
 
 		// Go through the byte code and add references to all resources used by the function
 		asCArray<asDWORD> &bc = scriptData->byteCode;
+		asASSERT( scriptData->globalPropertyReferences.GetLength() == 0 );
 		for( asUINT n = 0; n < bc.GetLength(); n += asBCTypeSize[asBCInfo[*(asBYTE*)&bc[n]].type] )
 		{
 			switch( *(asBYTE*)&bc[n] )
@@ -1264,7 +1242,21 @@ void asCScriptFunction::AddReferences()
 					if( !gvarPtr ) break;
 					asCGlobalProperty *prop = GetPropertyByGlobalVarPtr(gvarPtr);
 
-					if (!prop)
+					if( prop )
+					{
+						// A consumer can outlive the provider module that owns this
+						// storage. Keep the property alive (and consequently its engine
+						// address-map entry) until this exact bytecode instruction is
+						// released. Do not rely on a later address-map lookup for the
+						// matching release: a GC sweep may already have retired the
+						// provider module by then.
+						prop->AddRef();
+						ScriptFunctionData::ScriptGlobalPropertyReference reference;
+						reference.byteCodeOffset = n;
+						reference.property = prop;
+						scriptData->globalPropertyReferences.PushLast(reference);
+					}
+					else
 					{
 						// The pointer is a string constant. In order to make sure the correct resource
 						// management is maintained we request a new string constant here, so the compiler
@@ -1368,6 +1360,7 @@ void asCScriptFunction::ReleaseReferences()
 
 		// Go through the byte code and release references to all resources used by the function
 		asCArray<asDWORD> &bc = scriptData->byteCode;
+		asUINT globalPropertyReferenceIndex = 0;
 		for( asUINT n = 0; n < bc.GetLength(); n += asBCTypeSize[asBCInfo[*(asBYTE*)&bc[n]].type] )
 		{
 			switch( *(asBYTE*)&bc[n] )
@@ -1418,6 +1411,18 @@ void asCScriptFunction::ReleaseReferences()
 			case asBC_SetG4:
 				// Need to increase the reference for each global variable
 				{
+					ScriptFunctionData::ScriptGlobalPropertyReference* retainedPropertyReference = 0;
+					if( globalPropertyReferenceIndex < scriptData->globalPropertyReferences.GetLength()
+						&& scriptData->globalPropertyReferences[globalPropertyReferenceIndex].byteCodeOffset == n )
+					{
+						retainedPropertyReference = &scriptData->globalPropertyReferences[globalPropertyReferenceIndex++];
+					}
+					if( retainedPropertyReference && retainedPropertyReference->property )
+					{
+						retainedPropertyReference->property->Release();
+						break;
+					}
+
 					void *gvarPtr = (void*)asBC_PTRARG(&bc[n]);
 					if( !gvarPtr ) break;
 					asCGlobalProperty *prop = GetPropertyByGlobalVarPtr(gvarPtr);
@@ -1483,6 +1488,8 @@ void asCScriptFunction::ReleaseReferences()
 				break;
 			}
 		}
+		asASSERT( globalPropertyReferenceIndex == scriptData->globalPropertyReferences.GetLength() );
+		scriptData->globalPropertyReferences.SetLength(0);
 	}
 
 	// Delegate

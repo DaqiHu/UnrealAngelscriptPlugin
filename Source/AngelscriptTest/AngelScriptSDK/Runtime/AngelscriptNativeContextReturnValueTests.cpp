@@ -1,6 +1,7 @@
 #include "../Support/AngelscriptNativeCoreTestSupport.h"
 #include "../Support/AngelscriptNativeCaseTestSupport.h"
 #include "../Support/AngelscriptNativeLanguageCaseTestSupport.h"
+#include "AngelscriptTestMacros.h"
 
 // Raw SDK context argument and return-value coverage.
 
