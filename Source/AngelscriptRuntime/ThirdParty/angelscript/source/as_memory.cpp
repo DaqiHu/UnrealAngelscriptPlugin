@@ -126,6 +126,7 @@ bool isAligned(const void* const pointer, asUINT alignment)
 #pragma init_seg(lib)
 asALLOCSCRIPTOBJECTFUNC_t userAllocScriptObject = nullptr;
 asFINISHCONSTRUCTOBJECTFUNC_t userFinishConstructObject = nullptr;
+asABORTCONSTRUCTOBJECTFUNC_t userAbortConstructObject = nullptr;
 asRESOLVEOBJECTPTRFUNC_t userResolveObjectPtr = nullptr;
 #ifdef WIP_16BYTE_ALIGN
 #ifdef AS_DEBUG
@@ -139,6 +140,7 @@ asFREEALIGNEDFUNC_t  userFreeAligned  = alignedFree;
 // Other compilers will just have to rely on luck.
 asALLOCSCRIPTOBJECTFUNC_t userAllocScriptObject = nullptr;
 asFINISHCONSTRUCTOBJECTFUNC_t userFinishConstructObject = nullptr;
+asABORTCONSTRUCTOBJECTFUNC_t userAbortConstructObject = nullptr;
 asRESOLVEOBJECTPTRFUNC_t userResolveObjectPtr = nullptr;
 #ifdef WIP_16BYTE_ALIGN
 asALLOCALIGNEDFUNC_t userAllocAligned = alignedMalloc;
@@ -154,6 +156,13 @@ int asSetAllocScriptObjectFunction(asALLOCSCRIPTOBJECTFUNC_t allocFunc, asFINISH
 {
 	userAllocScriptObject = allocFunc;
 	userFinishConstructObject = finishFunc;
+
+	return 0;
+}
+
+int asSetAbortConstructObjectFunction(asABORTCONSTRUCTOBJECTFUNC_t abortFunc)
+{
+	userAbortConstructObject = abortFunc;
 
 	return 0;
 }

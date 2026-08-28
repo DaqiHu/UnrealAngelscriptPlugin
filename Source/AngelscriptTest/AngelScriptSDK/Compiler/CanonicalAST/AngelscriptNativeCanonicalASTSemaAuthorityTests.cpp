@@ -684,6 +684,266 @@ public:
 			*FString::Printf(TEXT("second derived initializer must write the exact ExtraValue field. AST:\n%s"), *Dump)));
 	}
 
+	TEST_METHOD(ConstructorPartialConstructionFactsSealCommittedPrefix)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaConstructorPartialConstruction", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(
+			asAST_RETAIN_SNAPSHOT)));
+
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct FCommittedPart
+			{
+				int Value = 1;
+			}
+
+			class FCommittedBase
+			{
+				FCommittedPart BasePart;
+			}
+
+			class FCommittedDerived : FCommittedBase
+			{
+				FCommittedPart First;
+				FCommittedPart Second;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaConstructorPartialConstruction.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("constructor partial-construction authority source must compile and seal")));
+
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("constructor partial-construction fixture must retain its Canonical snapshot")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString DumpMsg = FString::Printf(
+			TEXT("the derived constructor must seal exact committed-prefix lifetime facts. AST:\n%s"),
+			*Dump);
+
+		auto FindDecl = [&](asEASTDeclKind Kind, const char* Name,
+			asASTDeclId Parent = asASTDeclId()) -> const asCDecl*
+		{
+			for (asUINT Index = 1; Index <= Context->GetDeclCount(); ++Index)
+			{
+				const asCDecl* const Decl = Context->GetDecl(asASTDeclId(Index));
+				if (Decl != nullptr && Decl->kind == Kind
+					&& Decl->name.Equals(Name)
+					&& (!Parent.IsValid() || Decl->parent == Parent))
+				{
+					return Decl;
+				}
+			}
+			return nullptr;
+		};
+		auto FindGeneratedChild = [&](const asCDecl* Parent,
+			asEASTDeclKind Kind) -> const asCDecl*
+		{
+			for (asUINT Index = 1;
+				Parent != nullptr && Index <= Context->GetDeclCount(); ++Index)
+			{
+				const asCDecl* const Decl = Context->GetDecl(asASTDeclId(Index));
+				if (Decl != nullptr && Decl->kind == Kind
+					&& Decl->parent == Parent->id
+					&& (Decl->traits & asAST_TRAIT_GENERATED) != 0)
+				{
+					return Decl;
+				}
+			}
+			return nullptr;
+		};
+
+		const asCDecl* const Part = FindDecl(
+			asAST_DECL_CLASS, "FCommittedPart");
+		const asCDecl* const Base = FindDecl(
+			asAST_DECL_CLASS, "FCommittedBase");
+		const asCDecl* const Derived = FindDecl(
+			asAST_DECL_CLASS, "FCommittedDerived");
+		const asCDecl* const First = Derived != nullptr
+			? FindDecl(asAST_DECL_VAR, "First", Derived->id) : nullptr;
+		const asCDecl* const Second = Derived != nullptr
+			? FindDecl(asAST_DECL_VAR, "Second", Derived->id) : nullptr;
+		const asCDecl* const BaseConstructor = FindGeneratedChild(
+			Base, asAST_DECL_CONSTRUCTOR);
+		const asCDecl* const DerivedConstructor = FindGeneratedChild(
+			Derived, asAST_DECL_CONSTRUCTOR);
+		const asCDecl* const PartDestructor = FindGeneratedChild(
+			Part, asAST_DECL_DESTRUCTOR);
+		const asCDecl* const BaseDestructor = FindGeneratedChild(
+			Base, asAST_DECL_DESTRUCTOR);
+		const asCDecl* const DerivedDestructor = FindGeneratedChild(
+			Derived, asAST_DECL_DESTRUCTOR);
+		ASSERT_THAT(IsTrue(
+			Part != nullptr && Base != nullptr && Derived != nullptr
+				&& First != nullptr && Second != nullptr
+				&& BaseConstructor != nullptr && DerivedConstructor != nullptr
+				&& PartDestructor != nullptr && BaseDestructor != nullptr
+				&& DerivedDestructor != nullptr,
+			*DumpMsg));
+		if (DerivedConstructor == nullptr || Base == nullptr || Derived == nullptr
+			|| First == nullptr || Second == nullptr || PartDestructor == nullptr
+			|| BaseDestructor == nullptr || DerivedDestructor == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(DerivedConstructor->inits.GetLength() == 3,
+			*DumpMsg));
+		const asCExpr* const BaseInit = DerivedConstructor->inits.GetLength() > 0
+			? Context->GetExpr(DerivedConstructor->inits[0]) : nullptr;
+		const asCExpr* const FirstInit = DerivedConstructor->inits.GetLength() > 1
+			? Context->GetExpr(DerivedConstructor->inits[1]) : nullptr;
+		const asCExpr* const SecondInit = DerivedConstructor->inits.GetLength() > 2
+			? Context->GetExpr(DerivedConstructor->inits[2]) : nullptr;
+		auto InitTargetsField = [&](const asCExpr* Init,
+			const asCDecl* Field) -> bool
+		{
+			const asCExpr* const Target = Init != nullptr
+				&& Init->kind == asAST_EXPR_ASSIGN
+				&& Init->children.GetLength() == 2
+				? Context->GetExpr(Init->children[0]) : nullptr;
+			return Target != nullptr && Field != nullptr
+				&& Target->resolvedDecl == Field->id;
+		};
+		ASSERT_THAT(IsTrue(
+			BaseInit != nullptr && BaseInit->kind == asAST_EXPR_CALL
+				&& BaseInit->resolvedDecl == BaseConstructor->id
+				&& InitTargetsField(FirstInit, First)
+				&& InitTargetsField(SecondInit, Second),
+			*DumpMsg));
+
+		struct FExpectedConstructionRecord
+		{
+			const asCDecl* Subject;
+			const asCDecl* Action;
+			const asCExpr* Activation;
+			asEASTLifetimePhase Phase;
+			asUINT Step;
+			bool bComplete;
+		};
+		const FExpectedConstructionRecord Expected[] = {
+			{Base, BaseDestructor, BaseInit,
+				asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE, 0, false},
+			{First, PartDestructor, FirstInit,
+				asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER, 1, false},
+			{Second, PartDestructor, SecondInit,
+				asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER, 2, false},
+			{Derived, DerivedDestructor, nullptr,
+				asAST_LIFETIME_PHASE_COMPLETE_OBJECT, 3, true},
+		};
+
+		asCArray<asUINT> RecordIndices;
+		for (asUINT RecordIndex = 0;
+			RecordIndex < Context->GetLifetimeRecordCount(); ++RecordIndex)
+		{
+			const asSASTLifetimeRecord* const Record =
+				Context->GetLifetimeRecord(RecordIndex);
+			if (Record != nullptr
+				&& Record->subjectKind
+					== asAST_LIFETIME_SUBJECT_CONSTRUCTION_SUBOBJECT
+				&& Record->semanticRegion
+					== asSASTLifetimeNodeId::FromDecl(DerivedConstructor->id))
+			{
+				RecordIndices.PushLast(RecordIndex);
+			}
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(UE_ARRAY_COUNT(Expected)),
+			RecordIndices.GetLength(), *DumpMsg));
+		if (RecordIndices.GetLength() != UE_ARRAY_COUNT(Expected))
+		{
+			return;
+		}
+
+		asCASTLifetimeView LifetimeView;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			static_cast<int32>(asCASTBuildLifetimeView(
+				*Context, LifetimeView)),
+			*DumpMsg));
+		asCArray<const asSASTLifetimeCommitPoint*> Commits;
+		for (asUINT Index = 0; Index < LifetimeView.GetCommitPointCount(); ++Index)
+		{
+			const asSASTLifetimeCommitPoint* const Commit =
+				LifetimeView.GetCommitPoint(Index);
+			if (Commit != nullptr
+				&& Commit->semanticRegion
+					== asSASTLifetimeNodeId::FromDecl(DerivedConstructor->id))
+			{
+				Commits.PushLast(Commit);
+			}
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(UE_ARRAY_COUNT(Expected)),
+			Commits.GetLength(), *DumpMsg));
+		if (Commits.GetLength() != UE_ARRAY_COUNT(Expected))
+		{
+			return;
+		}
+
+		const asCStmt* const ConstructorBody =
+			Context->GetStmt(DerivedConstructor->body);
+		for (asUINT Step = 0; Step < UE_ARRAY_COUNT(Expected); ++Step)
+		{
+			const asSASTLifetimeRecord* const Record =
+				Context->GetLifetimeRecord(RecordIndices[Step]);
+			const asSASTLifetimeCommitPoint* const Commit = Commits[Step];
+			const FExpectedConstructionRecord& Want = Expected[Step];
+			const asSASTLifetimeNodeId ExpectedActivation = Want.bComplete
+				? asSASTLifetimeNodeId::FromStmt(
+					ConstructorBody != nullptr ? ConstructorBody->id : asASTStmtId())
+				: asSASTLifetimeNodeId::FromExpr(Want.Activation->id);
+			ASSERT_THAT(IsTrue(
+				Record != nullptr
+					&& Record->subject
+						== asSASTLifetimeNodeId::FromDecl(Want.Subject->id)
+					&& Record->actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE
+					&& Record->actionTarget
+						== asSASTLifetimeNodeId::FromDecl(Want.Action->id)
+					&& Record->activationPoint == ExpectedActivation
+					&& Record->phase == Want.Phase
+					&& Record->constructionStep == Want.Step
+					&& Record->completeObjectCommit == Want.bComplete
+					&& Record->supportedExitMask == (Want.bComplete
+						? asAST_LIFETIME_EXIT_NORMAL
+						: asAST_LIFETIME_EXIT_EXCEPTION),
+				*DumpMsg));
+			ASSERT_THAT(IsTrue(
+				Commit != nullptr && Commit->recordIndex == RecordIndices[Step]
+					&& Commit->liveBefore.GetLength() == Step
+					&& Commit->liveAfter.GetLength() == Step + 1
+					&& Commit->abortCleanup.GetLength() == Step
+					&& Commit->reverseLiveCleanup.GetLength() == Step + 1,
+				*DumpMsg));
+			for (asUINT Prefix = 0; Prefix < Step; ++Prefix)
+			{
+				ASSERT_THAT(IsTrue(
+					Commit->liveBefore[Prefix] == RecordIndices[Prefix]
+						&& Commit->abortCleanup[Prefix]
+							== RecordIndices[Step - Prefix - 1],
+					*DumpMsg));
+			}
+		}
+	}
+
 	TEST_METHOD(AlwaysImplementDefaultConstructSealsAndBindsGeneratedZeroArgConstructor)
 	{
 		using namespace AngelscriptBuilderTestSupport;

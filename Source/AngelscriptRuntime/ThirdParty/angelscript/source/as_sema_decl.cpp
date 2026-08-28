@@ -3,6 +3,7 @@
 #include "as_datatype.h"
 #include "as_module.h"
 #include "as_runtime_type_bridge.h"
+#include "as_sema_lifetime.h"
 #include "as_scriptcode.h"
 #include "as_scriptengine.h"
 #include "as_tokendef.h"
@@ -3015,6 +3016,288 @@ static void AttachBaseConstructorPlans(asCSema* sema)
 	}
 }
 
+static const asCDecl* FindClassDestructor(
+	const asCASTContext& context,
+	const asCDecl* classDecl)
+{
+	for( asUINT childIndex = 0;
+		classDecl != 0 && childIndex < classDecl->children.GetLength();
+		++childIndex )
+	{
+		const asCDecl* const child =
+			context.GetDecl(classDecl->children[childIndex]);
+		if( child != 0 && child->kind == asAST_DECL_DESTRUCTOR )
+		{
+			return child;
+		}
+	}
+	return 0;
+}
+
+static const asCDecl* FindValueTypeDestructor(
+	const asCASTContext& context,
+	const asCDecl* field)
+{
+	const asCType* const type = field != 0 && field->type.IsValid()
+		? context.GetType(field->type.type) : 0;
+	if( field == 0 || field->kind != asAST_DECL_VAR
+		|| type == 0 || type->kind != asAST_TYPE_VALUE_OBJECT
+		|| field->type.IsReference() || field->type.IsHandle() )
+	{
+		return 0;
+	}
+	for( asUINT declIndex = 1;
+		declIndex <= context.GetDeclCount(); ++declIndex )
+	{
+		const asCDecl* const destructor =
+			context.GetDecl(asASTDeclId(declIndex));
+		const asCDecl* const owner = destructor != 0
+			&& destructor->kind == asAST_DECL_DESTRUCTOR
+			? context.GetDecl(destructor->parent) : 0;
+		if( owner != 0 && owner->kind == asAST_DECL_CLASS
+			&& (owner->stableKey.Equals(type->stableKey)
+				|| owner->name.Equals(type->stableKey)) )
+		{
+			return destructor;
+		}
+	}
+	return 0;
+}
+
+static bool HasConstructorLifetimePlan(
+	const asCASTContext& context,
+	asASTDeclId constructor)
+{
+	for( asUINT index = 0;
+		index < context.GetLifetimeRecordCount(); ++index )
+	{
+		const asSASTLifetimeRecord* const record =
+			context.GetLifetimeRecord(index);
+		if( record != 0
+			&& record->subjectKind
+				== asAST_LIFETIME_SUBJECT_CONSTRUCTION_SUBOBJECT
+			&& record->semanticRegion
+				== asSASTLifetimeNodeId::FromDecl(constructor) )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool AuthorConstructorLifetimeRecord(
+	asCSema* sema,
+	asASTDeclId constructor,
+	asSASTLifetimeRecord& record,
+	asUINT step)
+{
+	asCASTContext& context = sema->GetContext();
+	record.subjectKind =
+		asAST_LIFETIME_SUBJECT_CONSTRUCTION_SUBOBJECT;
+	record.semanticRegion = asSASTLifetimeNodeId::FromDecl(constructor);
+	record.constructionStep = step;
+	record.order = context.GetLifetimeRecordCount();
+	if( asSemaAuthorLifetimeRecord(context, record) != asAST_VERIFY_OK )
+	{
+		sema->AddDiagnostic("constructor-lifetime-record-invalid");
+		return false;
+	}
+	return true;
+}
+
+static bool AuthorOneConstructorLifetimePlan(
+	asCSema* sema,
+	const asCDecl* classDecl,
+	const asCDecl* constructor)
+{
+	if( sema == 0 || classDecl == 0 || constructor == 0
+		|| constructor->kind != asAST_DECL_CONSTRUCTOR )
+	{
+		return false;
+	}
+	asCASTContext& context = sema->GetContext();
+	if( HasConstructorLifetimePlan(context, constructor->id) ) return true;
+	if( (constructor->traits
+		& (asAST_TRAIT_EXTERNAL | asAST_TRAIT_LIST_FACTORY)) != 0 )
+	{
+		return true;
+	}
+
+	const asCDecl* const completeDestructor =
+		FindClassDestructor(context, classDecl);
+	if( completeDestructor == 0 )
+	{
+		sema->AddDiagnostic(
+			"constructor-complete-destructor-unavailable",
+			constructor->range);
+		return false;
+	}
+
+	asUINT step = 0;
+	for( asUINT initIndex = 0;
+		initIndex < constructor->inits.GetLength(); ++initIndex )
+	{
+		const asCExpr* const init =
+			context.GetExpr(constructor->inits[initIndex]);
+		if( init == 0 ) continue;
+
+		if( init->kind == asAST_EXPR_CALL )
+		{
+			const asCDecl* const targetConstructor =
+				context.GetDecl(init->resolvedDecl);
+			const asCDecl* const targetOwner = targetConstructor != 0
+				&& targetConstructor->kind == asAST_DECL_CONSTRUCTOR
+				? context.GetDecl(targetConstructor->parent) : 0;
+			if( targetOwner == 0 || targetOwner->kind != asAST_DECL_CLASS )
+			{
+				continue;
+			}
+
+			if( targetOwner->id == classDecl->id )
+			{
+				asSASTLifetimeRecord record;
+				record.subject = asSASTLifetimeNodeId::FromDecl(
+					classDecl->id);
+				record.actionKind =
+					asAST_LIFETIME_ACTION_DESTROY_VALUE;
+				record.actionTarget = asSASTLifetimeNodeId::FromDecl(
+					completeDestructor->id);
+				record.activationPoint = asSASTLifetimeNodeId::FromExpr(
+					init->id);
+				record.phase =
+					asAST_LIFETIME_PHASE_CONSTRUCTOR_DELEGATING;
+				record.supportedExitMask =
+					asAST_LIFETIME_EXIT_EXCEPTION;
+				record.completeObjectCommit = true;
+				return step == 0
+					&& constructor->inits.GetLength() == 1
+					&& AuthorConstructorLifetimeRecord(
+						sema, constructor->id, record, step);
+			}
+
+			bool directBase = false;
+			for( asUINT baseIndex = 0;
+				baseIndex < classDecl->bases.GetLength(); ++baseIndex )
+			{
+				if( classDecl->bases[baseIndex] == targetOwner->id )
+				{
+					directBase = true;
+					break;
+				}
+			}
+			const asCDecl* const destructor = directBase
+				? FindClassDestructor(context, targetOwner) : 0;
+			if( destructor == 0 ) continue;
+
+			asSASTLifetimeRecord record;
+			record.subject = asSASTLifetimeNodeId::FromDecl(targetOwner->id);
+			record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+			record.actionTarget = asSASTLifetimeNodeId::FromDecl(
+				destructor->id);
+			record.activationPoint = asSASTLifetimeNodeId::FromExpr(init->id);
+			record.phase = asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE;
+			record.supportedExitMask = asAST_LIFETIME_EXIT_EXCEPTION;
+			if( !AuthorConstructorLifetimeRecord(
+				sema, constructor->id, record, step++) )
+			{
+				return false;
+			}
+			continue;
+		}
+
+		const asCExpr* const target = init->kind == asAST_EXPR_ASSIGN
+			&& init->children.GetLength() == 2
+			? context.GetExpr(init->children[0]) : 0;
+		const asCDecl* const field = target != 0
+			&& target->kind == asAST_EXPR_DECL_REF
+			? context.GetDecl(target->resolvedDecl) : 0;
+		if( field == 0 || field->kind != asAST_DECL_VAR
+			|| field->parent != classDecl->id )
+		{
+			continue;
+		}
+		const asCType* const fieldType = field->type.IsValid()
+			? context.GetType(field->type.type) : 0;
+		const asCDecl* const destructor =
+			FindValueTypeDestructor(context, field);
+		const bool ownedReference = fieldType != 0
+			&& !field->type.IsReference()
+			&& (fieldType->kind == asAST_TYPE_REFERENCE_OBJECT
+				|| fieldType->kind == asAST_TYPE_FUNCDEF);
+		if( destructor == 0 && !ownedReference ) continue;
+
+		asSASTLifetimeRecord record;
+		record.subject = asSASTLifetimeNodeId::FromDecl(field->id);
+		record.actionKind = destructor != 0
+			? asAST_LIFETIME_ACTION_DESTROY_VALUE
+			: asAST_LIFETIME_ACTION_RELEASE_REFERENCE;
+		record.actionTarget = asSASTLifetimeNodeId::FromDecl(
+			destructor != 0 ? destructor->id : field->id);
+		record.activationPoint = asSASTLifetimeNodeId::FromExpr(init->id);
+		record.phase = asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER;
+		record.supportedExitMask = asAST_LIFETIME_EXIT_EXCEPTION;
+		if( !AuthorConstructorLifetimeRecord(
+			sema, constructor->id, record, step++) )
+		{
+			return false;
+		}
+	}
+
+	asASTStmtId body = constructor->body;
+	if( !body.IsValid() )
+	{
+		body = context.CreateStmt(
+			asAST_STMT_BLOCK, constructor->id, constructor->range);
+		if( !body.IsValid()
+			|| context.SetBody(constructor->id, body) != asAST_VERIFY_OK )
+		{
+			sema->AddDiagnostic(
+				"constructor-complete-boundary-invalid",
+				constructor->range);
+			return false;
+		}
+	}
+	asSASTLifetimeRecord complete;
+	complete.subject = asSASTLifetimeNodeId::FromDecl(classDecl->id);
+	complete.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+	complete.actionTarget = asSASTLifetimeNodeId::FromDecl(
+		completeDestructor->id);
+	complete.activationPoint = asSASTLifetimeNodeId::FromStmt(body);
+	complete.phase = asAST_LIFETIME_PHASE_COMPLETE_OBJECT;
+	complete.supportedExitMask = asAST_LIFETIME_EXIT_NORMAL;
+	complete.completeObjectCommit = true;
+	return AuthorConstructorLifetimeRecord(
+		sema, constructor->id, complete, step);
+}
+
+static void AuthorConstructorLifetimePlans(asCSema* sema)
+{
+	asCASTContext& context = sema->GetContext();
+	for( asUINT declIndex = 1;
+		declIndex <= context.GetDeclCount(); ++declIndex )
+	{
+		const asCDecl* const classDecl =
+			context.GetDecl(asASTDeclId(declIndex));
+		if( classDecl == 0 || classDecl->kind != asAST_DECL_CLASS
+			|| IsCanonicalNativeTypeView(classDecl) )
+		{
+			continue;
+		}
+		for( asUINT childIndex = 0;
+			childIndex < classDecl->children.GetLength(); ++childIndex )
+		{
+			const asCDecl* const constructor =
+				context.GetDecl(classDecl->children[childIndex]);
+			if( constructor != 0
+				&& constructor->kind == asAST_DECL_CONSTRUCTOR )
+			{
+				AuthorOneConstructorLifetimePlan(
+					sema, classDecl, constructor);
+			}
+		}
+	}
+}
+
 void asCSema::LayoutScriptClassFields(asCModule* module)
 {
 	if( engine == 0 )
@@ -3034,6 +3317,7 @@ void asCSema::LayoutScriptClassFields(asCModule* module)
 		LayoutOneScriptClass(this, bridge, module, cls->id, states);
 	}
 	AttachBaseConstructorPlans(this);
+	AuthorConstructorLifetimePlans(this);
 }
 
 END_AS_NAMESPACE

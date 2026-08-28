@@ -2767,7 +2767,29 @@ void asCContext::ExecuteNext()
 				// UASClass-backed objects retain their existing UObject ownership path.
 				if( m_status != asEXECUTION_ACTIVE )
 				{
-					if( objType->GetUserData() == 0 )
+					const bool canonicalConstructorUnwound =
+						f->scriptData != 0
+						&& f->scriptData->constructorCommittedCountOffset > 0
+						&& f->scriptData->constructorCleanupInfo.GetLength() > 0;
+					if( canonicalConstructorUnwound )
+					{
+						m_regs.programPointer    = l_bc;
+						m_regs.stackPointer      = l_sp;
+						m_regs.stackFramePointer = l_fp;
+
+						if( objType->GetUserData() == 0 )
+						{
+							m_engine->CallFree(mem);
+						}
+						else
+						{
+							const bool aborted = m_engine->AbortConstructObject(
+								(asIScriptObject*)mem, objType);
+							asASSERT( aborted );
+						}
+						if( a ) *a = 0;
+					}
+					else if( objType->GetUserData() == 0 )
 					{
 						m_regs.programPointer    = l_bc;
 						m_regs.stackPointer      = l_sp;
@@ -5306,6 +5328,191 @@ bool asCContext::CleanStackFrame(bool catchException)
 							m_engine->CallObjectMethod((void*)(asPWORD*)&m_regs.stackFramePointer[-pos], beh->destruct);
 					}
 				}
+			}
+		}
+
+		// A Canonical constructor owns `this` only as a sequence of individually
+		// committed subobjects until its distinct complete-object boundary. Sema
+		// selected every exact cleanup action; CodeGen resolved that protocol into
+		// this generation-local directory and wrote the committed count only after
+		// each successful step. Never infer liveness from a DeclStmt, a type family,
+		// a destructor spelling or the exception program position here.
+		if( !exceptionCaught
+			&& m_currentFunction->scriptData->constructorCommittedCountOffset > 0
+			&& m_currentFunction->scriptData->constructorCleanupInfo.GetLength() > 0 )
+		{
+			const int committedOffset =
+				m_currentFunction->scriptData->constructorCommittedCountOffset;
+			asDWORD& committedStorage =
+				m_regs.stackFramePointer[-committedOffset];
+			asUINT committedCount = committedStorage;
+			const asUINT cleanupCount =
+				m_currentFunction->scriptData->constructorCleanupInfo.GetLength();
+			asASSERT( committedCount <= cleanupCount );
+			if( committedCount > cleanupCount )
+				committedCount = cleanupCount;
+
+			// Clear before invoking user/script cleanup so nested failures or context
+			// reuse cannot execute the same physical actions twice.
+			committedStorage = 0;
+			void* const object =
+				(void*)*(asPWORD*)&m_regs.stackFramePointer[0];
+			if( object != 0 && committedCount > 0 )
+			{
+				const asSConstructorCleanupInfo& last =
+					m_currentFunction->scriptData->constructorCleanupInfo[
+						committedCount - 1];
+				const int firstCleanup = last.completeObject
+					? int(committedCount - 1) : int(committedCount - 1);
+				const int finalCleanup = last.completeObject
+					? int(committedCount - 1) : 0;
+				for( int cleanupIndex = firstCleanup;
+					cleanupIndex >= finalCleanup; --cleanupIndex )
+				{
+					const asSConstructorCleanupInfo& cleanup =
+						m_currentFunction->scriptData->constructorCleanupInfo[
+							cleanupIndex];
+					void* const target = (void*)((asBYTE*)object + cleanup.objectOffset);
+					if( cleanup.action == asCONSTRUCTOR_CLEANUP_RELEASE_REFERENCE )
+					{
+						void*& reference = *(void**)target;
+						void* const retained = reference;
+						reference = 0;
+						if( retained == 0 )
+							continue;
+						if( cleanup.objectType == &m_engine->functionBehaviours
+							|| (cleanup.objectType->flags & asOBJ_FUNCDEF) != 0 )
+						{
+							((asCScriptFunction*)retained)->Release();
+						}
+						else if( (cleanup.objectType->flags & asOBJ_NOCOUNT) == 0
+							&& cleanup.actionFunctionId > 0 )
+						{
+							m_engine->CallObjectMethod(
+								retained, cleanup.actionFunctionId);
+						}
+						continue;
+					}
+
+					if( cleanup.action != asCONSTRUCTOR_CLEANUP_DESTROY_VALUE
+						|| cleanup.objectType == 0
+						|| cleanup.actionFunctionId <= 0 )
+					{
+						continue;
+					}
+					asCObjectType* const objectType =
+						CastToObjectType(cleanup.objectType);
+					if( objectType
+						&& (objectType->flags & asOBJ_SCRIPT_OBJECT) != 0 )
+					{
+						asASSERT( objectType->beh.destruct
+							== cleanup.actionFunctionId );
+						((asCScriptObject*)target)->CallDestructor(objectType);
+					}
+					else
+					{
+						m_engine->CallObjectMethod(
+							target, cleanup.actionFunctionId);
+					}
+				}
+			}
+
+			// ALLOC publishes its destination before the interpreter switches to the
+			// constructor frame. Until the constructor's distinct complete-object
+			// boundary succeeds that destination is only a pending allocation, not a
+			// live object variable. Authenticate the immediately calling bytecode frame
+			// as the exact ALLOC of this constructor, clear its destination before any
+			// external retirement hook can re-enter the VM, and retire storage without
+			// running the complete destructor a second time. Base and delegating
+			// constructor CALL frames cannot satisfy this protocol and remain owned by
+			// their outer constructor.
+			if( object != 0
+				&& m_callStack.GetLength() >= CALLSTACK_FRAME_SIZE )
+			{
+				asPWORD* const callerFrame = m_callStack.AddressOf()
+					+ m_callStack.GetLength() - CALLSTACK_FRAME_SIZE;
+				asCScriptFunction* const callerFunction =
+					(asCScriptFunction*)callerFrame[1];
+				asDWORD* const returnProgramPointer =
+					(asDWORD*)callerFrame[2];
+				asDWORD* const callerStackPointer =
+					(asDWORD*)callerFrame[3];
+				const int allocInstructionSize = 2 + AS_PTR_SIZE;
+				asDWORD* const callerBytecode = callerFunction
+					&& callerFunction->scriptData
+					? callerFunction->scriptData->byteCode.AddressOf() : 0;
+				const asUINT callerBytecodeLength = callerFunction
+					&& callerFunction->scriptData
+					? callerFunction->scriptData->byteCode.GetLength() : 0;
+				if( callerBytecode != 0 && returnProgramPointer != 0
+					&& callerStackPointer != 0
+					&& returnProgramPointer >= callerBytecode + allocInstructionSize
+					&& returnProgramPointer <= callerBytecode + callerBytecodeLength )
+				{
+					asDWORD* const allocInstruction =
+						returnProgramPointer - allocInstructionSize;
+					const bool exactCanonicalAllocation =
+						*(asBYTE*)allocInstruction == asBC_ALLOC
+						&& (asCObjectType*)asBC_PTRARG(allocInstruction)
+							== m_currentFunction->objectType
+						&& asBC_INTARG(allocInstruction + AS_PTR_SIZE)
+							== m_currentFunction->id;
+					if( exactCanonicalAllocation )
+					{
+						void** const destination = (void**)*(asPWORD*)(
+							callerStackPointer + AS_PTR_SIZE
+							+ m_currentFunction->spaceNeededForArguments);
+						if( destination != 0 && *destination == object )
+						{
+							*destination = 0;
+							asCObjectType* const allocationType =
+								m_currentFunction->objectType;
+							if( allocationType->GetUserData() == 0 )
+							{
+								m_engine->CallFree(object);
+							}
+							else
+							{
+								const bool aborted = m_engine->AbortConstructObject(
+									(asIScriptObject*)object,
+									allocationType);
+								asASSERT( aborted );
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Canonical factory allocations are intentionally absent from
+		// objVariableTypes: complete-object release would rerun every member/base
+		// destructor after the constructor frame already unwound its committed
+		// prefix. Raw SDK allocations can now be retired as storage only. UObject
+		// construction remains owned by the UASClass allocation route.
+		if( !exceptionCaught
+			&& m_currentFunction->scriptData->partialConstructionObjectOffset > 0
+			&& m_currentFunction->scriptData->partialConstructionObjectType != 0 )
+		{
+			const int objectOffset =
+				m_currentFunction->scriptData->partialConstructionObjectOffset;
+			void*& partialObject =
+				*(void**)&m_regs.stackFramePointer[-objectOffset];
+			if( partialObject != 0 )
+			{
+				asCObjectType* const partialType = CastToObjectType(
+					m_currentFunction->scriptData->partialConstructionObjectType);
+				if( partialType->GetUserData() == 0 )
+				{
+					m_engine->CallFree(partialObject);
+				}
+				else
+				{
+					const bool aborted = m_engine->AbortConstructObject(
+						(asIScriptObject*)partialObject,
+						partialType);
+					asASSERT( aborted );
+				}
+				partialObject = 0;
 			}
 		}
 	}

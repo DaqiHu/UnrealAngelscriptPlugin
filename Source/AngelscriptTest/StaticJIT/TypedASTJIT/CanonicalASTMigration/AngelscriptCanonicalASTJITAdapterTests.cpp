@@ -614,6 +614,269 @@ public:
 			TEXT("AOT must not publish a partial native cleanup plan")));
 	}
 
+	TEST_METHOD(SourceConstructorPartialConstructionPublishesAuthenticatedTypedFallback)
+	{
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("constructor lifetime fallback fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"JitConstructorPartialConstruction", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			struct FJitCommittedPart
+			{
+				int Value = 1;
+			}
+
+			class FJitCommittedBase
+			{
+				FJitCommittedPart BasePart;
+			}
+
+			class FJitCommittedDerived : FJitCommittedBase
+			{
+				FJitCommittedPart First;
+				FJitCommittedPart Second;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"JitConstructorPartialConstruction.as", Source.c_str(),
+			static_cast<unsigned int>(Source.size()))));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			*FString::Printf(TEXT(
+				"constructor lifetime fallback fixture must compile and seal: %s"),
+				*CollectMessages(Engine.GetMessages()))));
+
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("constructor lifetime fallback fixture must retain its sealed snapshot")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* DerivedClass = nullptr;
+		const asCDecl* DerivedConstructor = nullptr;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl = Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_CLASS
+				&& Decl->name.Equals("FJitCommittedDerived"))
+			{
+				DerivedClass = Decl;
+			}
+		}
+		for (asUINT DeclIndex = 1;
+			DerivedClass != nullptr && DeclIndex <= Context->GetDeclCount();
+			++DeclIndex)
+		{
+			const asCDecl* const Decl = Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_CONSTRUCTOR
+				&& Decl->parent == DerivedClass->id
+				&& (Decl->traits & asAST_TRAIT_GENERATED) != 0)
+			{
+				DerivedConstructor = Decl;
+				break;
+			}
+		}
+		ASSERT_THAT(IsNotNull(DerivedConstructor,
+			TEXT("fixture must expose the exact generated derived constructor")));
+		if (DerivedConstructor == nullptr)
+		{
+			return;
+		}
+
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts Facts =
+			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+				*Context, DerivedConstructor->id);
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITCleanupPlanState::PartialConstruction,
+			Facts.CleanupPlanState,
+			TEXT("base/member/complete commits must retain the partial-construction classification")));
+		ASSERT_THAT(IsTrue(Facts.LifetimeSummary.IsAuthenticated()));
+		ASSERT_THAT(IsFalse(Facts.LifetimeSummary.StableKey.IsZero()));
+		ASSERT_THAT(IsFalse(Facts.LifetimeSummary.ABIKey.IsZero()));
+		ASSERT_THAT(AreEqual(4u, Facts.LifetimeSummary.RecordCount));
+		ASSERT_THAT(AreEqual(0u, Facts.LifetimeSummary.ExitPlanCount,
+			TEXT("constructor commits are not lexical transfer cleanup plans")));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint32>(
+				EAngelscriptTypedASTJITLifetimeActionFlags::DestroyValue),
+			static_cast<uint32>(Facts.LifetimeSummary.ActionFlags)));
+		ASSERT_THAT(IsTrue(Facts.bHasExceptionCleanup));
+		ASSERT_THAT(IsTrue(Facts.bCleanupPlanCoversAllTransfers,
+			TEXT("the shared verifier-authenticated construction view is complete even though native emission lacks its ABI")));
+		ASSERT_THAT(IsFalse(
+			Facts.LifetimeSummary.bNativeObjectFrameABIAvailable,
+			TEXT("the current TypedASTJIT profile must not claim a native committed-prefix frame ABI")));
+
+		FAngelscriptTypedASTJITEligibilityInput EligibilityInput;
+		EligibilityInput.bIsUFunctionRoot = true;
+		EligibilityInput.Purpose =
+			EAngelscriptTypedASTJITEligibilityPurpose::RootCallClosure;
+		EligibilityInput.SealedAST = Context;
+		EligibilityInput.CanonicalFunctionDecl = DerivedConstructor->id;
+		EligibilityInput.Shape.SymbolName =
+			TEXT("ASJIT_FJitCommittedDerived_Constructor");
+		EligibilityInput.Shape.ReturnType =
+			asCDataType::CreatePrimitive(ttVoid, false);
+		const FAngelscriptTypedASTJITEligibility Eligibility =
+			EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
+				EligibilityInput);
+		ASSERT_THAT(IsFalse(Eligibility.bEligible));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
+			Eligibility.Reason,
+			TEXT("an authenticated constructor plan must fall back for its missing native object-frame ABI")));
+		ASSERT_THAT(IsTrue(Eligibility.Detail.Contains(
+			TEXT("AuthenticatedConstructorPartialConstructionRequiresNativeObjectFrameABI")),
+			TEXT("the fallback must distinguish an unsupported authenticated construction plan from an invalid plan")));
+
+		FAngelscriptTypedASTJITEmitOptions EmitOptions;
+		const FAngelscriptTypedASTJITEmission Emission =
+			EmitTypedASTJITFunction(
+				*Context, DerivedConstructor->id,
+				EligibilityInput.Shape, EmitOptions);
+		ASSERT_THAT(IsFalse(Emission.bSuccess));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
+			Emission.FailureReason,
+			TEXT("AOT must reject only this constructor instead of publishing a partial native cleanup plan")));
+	}
+
+	TEST_METHOD(DelegatingConstructorPublishesCompleteCommitAndTypedFallback)
+	{
+		asCASTContext Context;
+		const asASTDeclId TranslationUnit =
+			Context.CreateTranslationUnit("JitDelegatingConstructorLifetime");
+		const asCQualType VoidType = Context.InternPrimitive(ttVoid);
+		const asCQualType DerivedType = Context.InternNamedType(
+			asAST_TYPE_REFERENCE_OBJECT, "FJitDelegatingDerived",
+			asAST_QUAL_HANDLE | asAST_QUAL_AUTO_HANDLE);
+		const asASTDeclId DerivedClass = Context.CreateDecl(
+			asAST_DECL_CLASS, TranslationUnit,
+			asCSourceRange(), "FJitDelegatingDerived");
+		Context.SetStableKey(DerivedClass, "FJitDelegatingDerived");
+		Context.SetDeclType(DerivedClass, DerivedType);
+		const asASTDeclId TargetConstructor = Context.CreateDecl(
+			asAST_DECL_CONSTRUCTOR, DerivedClass,
+			asCSourceRange(), "FJitDelegatingDerived");
+		Context.SetDeclType(TargetConstructor, VoidType);
+		Context.SetBody(TargetConstructor, Context.CreateStmt(
+			asAST_STMT_BLOCK, TargetConstructor, asCSourceRange()));
+		const asASTDeclId DerivedDestructor = Context.CreateDecl(
+			asAST_DECL_DESTRUCTOR, DerivedClass,
+			asCSourceRange(), "FJitDelegatingDerived");
+		Context.SetDeclType(DerivedDestructor, VoidType);
+		Context.SetBody(DerivedDestructor, Context.CreateStmt(
+			asAST_STMT_BLOCK, DerivedDestructor, asCSourceRange()));
+
+		const asASTDeclId DelegatingConstructor = Context.CreateDecl(
+			asAST_DECL_CONSTRUCTOR, DerivedClass,
+			asCSourceRange(), "FJitDelegatingDerived");
+		Context.SetDeclType(DelegatingConstructor, VoidType);
+		Context.SetBody(DelegatingConstructor, Context.CreateStmt(
+			asAST_STMT_BLOCK, DelegatingConstructor, asCSourceRange()));
+		const asASTExprId ThisExpr = Context.CreateExpr(
+			asAST_EXPR_THIS, DerivedType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		Context.SetLiteral(ThisExpr, "this");
+		const asASTExprId DelegatingCall = Context.CreateExpr(
+			asAST_EXPR_CALL, VoidType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		Context.SetResolvedDecl(DelegatingCall, TargetConstructor);
+		Context.SetExprReceiver(DelegatingCall, ThisExpr);
+		Context.AddExprChild(DelegatingCall, ThisExpr);
+		Context.AddDeclInit(DelegatingConstructor, DelegatingCall);
+
+		asSASTLifetimeRecord Record;
+		Record.subjectKind =
+			asAST_LIFETIME_SUBJECT_CONSTRUCTION_SUBOBJECT;
+		Record.subject = asSASTLifetimeNodeId::FromDecl(DerivedClass);
+		Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+		Record.actionTarget =
+			asSASTLifetimeNodeId::FromDecl(DerivedDestructor);
+		Record.activationPoint =
+			asSASTLifetimeNodeId::FromExpr(DelegatingCall);
+		Record.semanticRegion =
+			asSASTLifetimeNodeId::FromDecl(DelegatingConstructor);
+		Record.phase = asAST_LIFETIME_PHASE_CONSTRUCTOR_DELEGATING;
+		Record.supportedExitMask = asAST_LIFETIME_EXIT_EXCEPTION;
+		Record.constructionStep = 0;
+		Record.order = 0;
+		Record.completeObjectCommit = true;
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Record)));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("delegating target success must authenticate as the sole complete-object commit")));
+
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts FirstFacts =
+			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+				Context, DelegatingConstructor);
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts SecondFacts =
+			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+				Context, DelegatingConstructor);
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITCleanupPlanState::PartialConstruction,
+			FirstFacts.CleanupPlanState));
+		ASSERT_THAT(IsTrue(FirstFacts.LifetimeSummary.IsAuthenticated()));
+		ASSERT_THAT(AreEqual(1u, FirstFacts.LifetimeSummary.RecordCount));
+		ASSERT_THAT(AreEqual(0u, FirstFacts.LifetimeSummary.ExitPlanCount));
+		ASSERT_THAT(IsTrue(FirstFacts.bHasExceptionCleanup));
+		ASSERT_THAT(IsTrue(FirstFacts.bCleanupPlanCoversAllTransfers));
+		ASSERT_THAT(IsFalse(
+			FirstFacts.LifetimeSummary.bNativeObjectFrameABIAvailable));
+		ASSERT_THAT(IsTrue(
+			FirstFacts.LifetimeSummary.StableKey
+				== SecondFacts.LifetimeSummary.StableKey
+			&& FirstFacts.LifetimeSummary.ABIKey
+				== SecondFacts.LifetimeSummary.ABIKey,
+			TEXT("delegating construction summaries must be deterministic and pointer-free")));
+
+		FAngelscriptTypedASTJITEligibilityInput EligibilityInput;
+		EligibilityInput.bIsUFunctionRoot = true;
+		EligibilityInput.Purpose =
+			EAngelscriptTypedASTJITEligibilityPurpose::RootCallClosure;
+		EligibilityInput.SealedAST = &Context;
+		EligibilityInput.CanonicalFunctionDecl = DelegatingConstructor;
+		EligibilityInput.Shape.SymbolName =
+			TEXT("ASJIT_FJitDelegatingDerived_Constructor");
+		EligibilityInput.Shape.ReturnType =
+			asCDataType::CreatePrimitive(ttVoid, false);
+		const FAngelscriptTypedASTJITEligibility Eligibility =
+			EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
+				EligibilityInput);
+		ASSERT_THAT(IsFalse(Eligibility.bEligible));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
+			Eligibility.Reason));
+		ASSERT_THAT(IsTrue(Eligibility.Detail.Contains(
+			TEXT("AuthenticatedConstructorPartialConstructionRequiresNativeObjectFrameABI"))));
+
+		FAngelscriptTypedASTJITEmitOptions EmitOptions;
+		const FAngelscriptTypedASTJITEmission Emission =
+			EmitTypedASTJITFunction(
+				Context, DelegatingConstructor,
+				EligibilityInput.Shape, EmitOptions);
+		ASSERT_THAT(IsFalse(Emission.bSuccess));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
+			Emission.FailureReason,
+			TEXT("the missing native delegating-constructor frame ABI must fall back only this function")));
+	}
+
 	TEST_METHOD(SourceObjectIteratorForeachPhaseProvesReturnBreakAndContinueCoverage)
 	{
 		using namespace AngelscriptNativeTestSupport;

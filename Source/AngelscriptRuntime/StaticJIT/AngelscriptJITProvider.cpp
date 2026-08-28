@@ -713,6 +713,16 @@ namespace
 			static constexpr uint32 ValidLifetimeExitPlanFlags = 0x07u;
 			static constexpr uint32 ValidLifetimeExitMask = 0x3fu;
 			const bool bEmptyLifetime = Function.LifetimeRecordCount == 0;
+			const bool bPartialConstructionCleanupPlan =
+				Function.CleanupPlanState != nullptr
+				&& FCString::Strcmp(Function.CleanupPlanState,
+					TEXT("PartialConstruction")) == 0;
+			const bool bHasLexicalExitPlans =
+				Function.LifetimeExitPlanFlags != 0
+				&& Function.LifetimeExitPlanCount != 0;
+			const bool bHasNoLexicalExitPlans =
+				Function.LifetimeExitPlanFlags == 0
+				&& Function.LifetimeExitPlanCount == 0;
 			const bool bAuthenticatedLifetimeSummary =
 				Function.LifetimeProtocolRevision != 0
 				&& !Function.LifetimeStableKey.IsZero()
@@ -731,9 +741,10 @@ namespace
 						&& Function.LifetimeExitPlanCount == 0
 						&& Function.bNativeObjectFrameABIAvailable == 1
 					: Function.LifetimeActionFlags != 0
-						&& Function.LifetimeExitPlanFlags != 0
 						&& Function.LifetimeSupportedExitMask != 0
-						&& Function.LifetimeExitPlanCount != 0);
+						&& (bHasLexicalExitPlans
+							|| (bPartialConstructionCleanupPlan
+								&& bHasNoLexicalExitPlans)));
 			const bool bAbsentLifetimeSummary =
 				Function.LifetimeProtocolRevision == 0
 				&& Function.LifetimeStableKey.IsZero()

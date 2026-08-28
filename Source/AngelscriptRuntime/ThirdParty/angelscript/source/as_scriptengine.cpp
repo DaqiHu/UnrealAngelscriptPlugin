@@ -4853,6 +4853,12 @@ void asCScriptEngine::FinishConstructObject(asIScriptObject* obj, asITypeInfo* t
 		userFinishConstructObject(obj, type);
 }
 
+bool asCScriptEngine::AbortConstructObject(asIScriptObject* obj, asITypeInfo* type) const
+{
+	return userAbortConstructObject != nullptr
+		&& userAbortConstructObject(obj, type);
+}
+
 void asCScriptEngine::CallFree(void *obj) const
 {
 	UASClass::UnregisterRawScriptObject(obj);

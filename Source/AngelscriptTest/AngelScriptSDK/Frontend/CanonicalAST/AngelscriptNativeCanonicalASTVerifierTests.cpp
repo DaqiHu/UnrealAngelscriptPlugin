@@ -27,6 +27,190 @@ struct FLocalLifetimeViewFixture
 	asASTExprId SecondInitializerValue;
 };
 
+struct FConstructorLifetimeViewFixture
+{
+	asASTDeclId PartClass;
+	asASTDeclId PartConstructor;
+	asASTDeclId PartDestructor;
+	asASTDeclId BaseClass;
+	asASTDeclId BaseConstructor;
+	asASTDeclId BaseDestructor;
+	asASTDeclId DerivedClass;
+	asASTDeclId DerivedConstructor;
+	asASTDeclId DerivedDestructor;
+	asASTDeclId FirstField;
+	asASTDeclId SecondField;
+	asASTStmtId ConstructorBody;
+	asASTExprId BaseCall;
+	asASTExprId FirstAssignment;
+	asASTExprId SecondAssignment;
+};
+
+static FConstructorLifetimeViewFixture BuildConstructorLifetimeViewFixture(
+	asCASTContext& Context)
+{
+	FConstructorLifetimeViewFixture Fixture;
+	const asASTDeclId Tu = Context.CreateTranslationUnit("ConstructorLifetimeView");
+	const asCQualType VoidType = Context.InternPrimitive(ttVoid);
+	const asCQualType PartType = Context.InternNamedType(
+		asAST_TYPE_VALUE_OBJECT, "FPart", 0);
+	const asCQualType BaseType = Context.InternNamedType(
+		asAST_TYPE_REFERENCE_OBJECT, "FBase",
+		asAST_QUAL_HANDLE | asAST_QUAL_AUTO_HANDLE);
+	const asCQualType DerivedType = Context.InternNamedType(
+		asAST_TYPE_REFERENCE_OBJECT, "FDerived",
+		asAST_QUAL_HANDLE | asAST_QUAL_AUTO_HANDLE);
+
+	Fixture.PartClass = Context.CreateDecl(
+		asAST_DECL_CLASS, Tu, asCSourceRange(), "FPart");
+	Context.SetStableKey(Fixture.PartClass, "FPart");
+	Context.SetDeclType(Fixture.PartClass, PartType);
+	Fixture.PartConstructor = Context.CreateDecl(
+		asAST_DECL_CONSTRUCTOR, Fixture.PartClass,
+		asCSourceRange(), "FPart");
+	Context.SetDeclType(Fixture.PartConstructor, VoidType);
+	Fixture.PartDestructor = Context.CreateDecl(
+		asAST_DECL_DESTRUCTOR, Fixture.PartClass,
+		asCSourceRange(), "FPart");
+	Context.SetDeclType(Fixture.PartDestructor, VoidType);
+
+	Fixture.BaseClass = Context.CreateDecl(
+		asAST_DECL_CLASS, Tu, asCSourceRange(), "FBase");
+	Context.SetStableKey(Fixture.BaseClass, "FBase");
+	Context.SetDeclType(Fixture.BaseClass, BaseType);
+	Fixture.BaseConstructor = Context.CreateDecl(
+		asAST_DECL_CONSTRUCTOR, Fixture.BaseClass,
+		asCSourceRange(), "FBase");
+	Context.SetDeclType(Fixture.BaseConstructor, VoidType);
+	Fixture.BaseDestructor = Context.CreateDecl(
+		asAST_DECL_DESTRUCTOR, Fixture.BaseClass,
+		asCSourceRange(), "FBase");
+	Context.SetDeclType(Fixture.BaseDestructor, VoidType);
+
+	Fixture.DerivedClass = Context.CreateDecl(
+		asAST_DECL_CLASS, Tu, asCSourceRange(), "FDerived");
+	Context.SetStableKey(Fixture.DerivedClass, "FDerived");
+	Context.SetDeclType(Fixture.DerivedClass, DerivedType);
+	Context.AddBase(Fixture.DerivedClass, Fixture.BaseClass);
+	Fixture.FirstField = Context.CreateDecl(
+		asAST_DECL_VAR, Fixture.DerivedClass,
+		asCSourceRange(), "First");
+	Context.SetDeclType(Fixture.FirstField, PartType);
+	Fixture.SecondField = Context.CreateDecl(
+		asAST_DECL_VAR, Fixture.DerivedClass,
+		asCSourceRange(), "Second");
+	Context.SetDeclType(Fixture.SecondField, PartType);
+	Fixture.DerivedConstructor = Context.CreateDecl(
+		asAST_DECL_CONSTRUCTOR, Fixture.DerivedClass,
+		asCSourceRange(), "FDerived");
+	Context.SetDeclType(Fixture.DerivedConstructor, VoidType);
+	Fixture.DerivedDestructor = Context.CreateDecl(
+		asAST_DECL_DESTRUCTOR, Fixture.DerivedClass,
+		asCSourceRange(), "FDerived");
+	Context.SetDeclType(Fixture.DerivedDestructor, VoidType);
+
+	const asASTExprId ThisExpr = Context.CreateExpr(
+		asAST_EXPR_THIS, DerivedType,
+		asAST_VALUE_PRVALUE, asCSourceRange());
+	Context.SetLiteral(ThisExpr, "this");
+	Fixture.BaseCall = Context.CreateExpr(
+		asAST_EXPR_CALL, VoidType,
+		asAST_VALUE_PRVALUE, asCSourceRange());
+	Context.SetLiteral(Fixture.BaseCall, "FBase:reverse-formal");
+	Context.SetResolvedDecl(Fixture.BaseCall, Fixture.BaseConstructor);
+	Context.SetExprReceiver(Fixture.BaseCall, ThisExpr);
+	Context.AddExprChild(Fixture.BaseCall, ThisExpr);
+	Context.AddDeclInit(Fixture.DerivedConstructor, Fixture.BaseCall);
+
+	auto AddMemberInit = [&](asASTDeclId Field) -> asASTExprId
+	{
+		const asASTExprId Target = Context.CreateExpr(
+			asAST_EXPR_DECL_REF, PartType,
+			asAST_VALUE_LVALUE, asCSourceRange());
+		Context.SetResolvedDecl(Target, Field);
+		const asASTExprId Construct = Context.CreateExpr(
+			asAST_EXPR_CONSTRUCT, PartType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		Context.SetLiteral(Construct, "FPart::FPart()");
+		Context.SetResolvedDecl(Construct, Fixture.PartConstructor);
+		const asASTExprId Assignment = Context.CreateExpr(
+			asAST_EXPR_ASSIGN, PartType,
+			asAST_VALUE_LVALUE, asCSourceRange());
+		Context.SetLiteral(Assignment, "=");
+		Context.AddExprChild(Assignment, Target);
+		Context.AddExprChild(Assignment, Construct);
+		Context.AddDeclInit(Fixture.DerivedConstructor, Assignment);
+		return Assignment;
+	};
+	Fixture.FirstAssignment = AddMemberInit(Fixture.FirstField);
+	Fixture.SecondAssignment = AddMemberInit(Fixture.SecondField);
+	Fixture.ConstructorBody = Context.CreateStmt(
+		asAST_STMT_BLOCK, Fixture.DerivedConstructor, asCSourceRange());
+	Context.SetBody(Fixture.DerivedConstructor, Fixture.ConstructorBody);
+	return Fixture;
+}
+
+static asSASTLifetimeRecord MakeConstructorLifetimeRecord(
+	const FConstructorLifetimeViewFixture& Fixture,
+	asEASTLifetimePhase Phase,
+	asUINT Step,
+	asUINT Order)
+{
+	asSASTLifetimeRecord Record;
+	Record.subjectKind = asAST_LIFETIME_SUBJECT_CONSTRUCTION_SUBOBJECT;
+	Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+	Record.semanticRegion = asSASTLifetimeNodeId::FromDecl(
+		Fixture.DerivedConstructor);
+	Record.phase = Phase;
+	Record.constructionStep = Step;
+	Record.order = Order;
+	if( Phase == asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE )
+	{
+		Record.subject = asSASTLifetimeNodeId::FromDecl(Fixture.BaseClass);
+		Record.actionTarget = asSASTLifetimeNodeId::FromDecl(
+			Fixture.BaseDestructor);
+		Record.activationPoint = asSASTLifetimeNodeId::FromExpr(
+			Fixture.BaseCall);
+		Record.supportedExitMask = asAST_LIFETIME_EXIT_EXCEPTION;
+	}
+	else if( Phase == asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER )
+	{
+		const bool First = Step == 1;
+		Record.subject = asSASTLifetimeNodeId::FromDecl(
+			First ? Fixture.FirstField : Fixture.SecondField);
+		Record.actionTarget = asSASTLifetimeNodeId::FromDecl(
+			Fixture.PartDestructor);
+		Record.activationPoint = asSASTLifetimeNodeId::FromExpr(
+			First ? Fixture.FirstAssignment : Fixture.SecondAssignment);
+		Record.supportedExitMask = asAST_LIFETIME_EXIT_EXCEPTION;
+	}
+	else
+	{
+		Record.subject = asSASTLifetimeNodeId::FromDecl(Fixture.DerivedClass);
+		Record.actionTarget = asSASTLifetimeNodeId::FromDecl(
+			Fixture.DerivedDestructor);
+		Record.activationPoint = asSASTLifetimeNodeId::FromStmt(
+			Fixture.ConstructorBody);
+		Record.supportedExitMask = asAST_LIFETIME_EXIT_NORMAL;
+		Record.completeObjectCommit = true;
+	}
+	return Record;
+}
+
+static void AddCompleteNonDelegatingConstructorLifetimePlan(
+	asCASTContext& Context,
+	const FConstructorLifetimeViewFixture& Fixture)
+{
+	Context.AddLifetimeRecord(MakeConstructorLifetimeRecord(
+		Fixture, asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE, 0, 0));
+	Context.AddLifetimeRecord(MakeConstructorLifetimeRecord(
+		Fixture, asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER, 1, 1));
+	Context.AddLifetimeRecord(MakeConstructorLifetimeRecord(
+		Fixture, asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER, 2, 2));
+	Context.AddLifetimeRecord(MakeConstructorLifetimeRecord(
+		Fixture, asAST_LIFETIME_PHASE_COMPLETE_OBJECT, 3, 3));
+}
+
 static FLocalLifetimeViewFixture BuildLocalLifetimeViewFixture(
 	asCASTContext& Context)
 {
@@ -319,6 +503,212 @@ public:
 			TEXT("initializer failure must exclude the failed current object")));
 		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
 			SecondCommit->abortCleanup[0]));
+	}
+
+	TEST_METHOD(BuildsDeterministicConstructorCommittedPrefixPlan)
+	{
+		asCASTContext Context;
+		const FConstructorLifetimeViewFixture Fixture =
+			BuildConstructorLifetimeViewFixture(Context);
+		AddCompleteNonDelegatingConstructorLifetimePlan(Context, Fixture);
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("a complete base/member constructor plan must authenticate")));
+
+		asCASTLifetimeView FirstView;
+		asCASTLifetimeView SecondView;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, FirstView)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, SecondView)));
+		ASSERT_THAT(AreEqual(
+			FirstView.GetStructuralDigest(),
+			SecondView.GetStructuralDigest(),
+			TEXT("constructor plans must reconstruct deterministically")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(1),
+			FirstView.GetConstructionPlanCount()));
+
+		const asSASTLifetimeConstructionPlan* const Plan =
+			FirstView.FindConstructionPlan(Fixture.DerivedConstructor);
+		ASSERT_THAT(IsNotNull(Plan));
+		if( Plan == nullptr )
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(Plan->constructor == Fixture.DerivedConstructor));
+		ASSERT_THAT(IsTrue(Plan->ownerClass == Fixture.DerivedClass));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(4), Plan->recordIndices.GetLength()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(3),
+			Plan->completeRecordIndex));
+
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(4), FirstView.GetCommitPointCount()));
+		for( asUINT Step = 0; Step < 4; ++Step )
+		{
+			const asSASTLifetimeCommitPoint* const Commit =
+				FirstView.GetCommitPoint(Step);
+			ASSERT_THAT(IsNotNull(Commit));
+			if( Commit == nullptr )
+			{
+				return;
+			}
+			ASSERT_THAT(AreEqual(Step, Commit->recordIndex));
+			ASSERT_THAT(AreEqual(Step, Commit->liveBefore.GetLength()));
+			ASSERT_THAT(AreEqual(Step + 1, Commit->liveAfter.GetLength()));
+			ASSERT_THAT(AreEqual(Step, Commit->abortCleanup.GetLength()));
+			ASSERT_THAT(AreEqual(
+				Step + 1, Commit->reverseLiveCleanup.GetLength()));
+			for( asUINT Prefix = 0; Prefix < Step; ++Prefix )
+			{
+				ASSERT_THAT(AreEqual(
+					Prefix, Commit->liveBefore[Prefix]));
+				ASSERT_THAT(AreEqual(
+					Step - Prefix - 1, Commit->abortCleanup[Prefix]));
+			}
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			FirstView.GetCleanupBindingCount(),
+			TEXT("constructor protocol must not manufacture lexical compatibility cleanup")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			FirstView.GetExitPlanCount(),
+			TEXT("constructor protocol must not become a normal/transfer exit plan")));
+	}
+
+	TEST_METHOD(AcceptsDelegatingTargetSuccessAsCompleteObjectCommit)
+	{
+		asCASTContext Context;
+		const FConstructorLifetimeViewFixture Fixture =
+			BuildConstructorLifetimeViewFixture(Context);
+		const asCQualType VoidType = Context.InternPrimitive(ttVoid);
+		const asCQualType DerivedType = Context.GetDecl(
+			Fixture.DerivedClass)->type;
+		const asASTDeclId DelegatingConstructor = Context.CreateDecl(
+			asAST_DECL_CONSTRUCTOR, Fixture.DerivedClass,
+			asCSourceRange(), "FDerived");
+		Context.SetDeclType(DelegatingConstructor, VoidType);
+		const asASTStmtId DelegatingBody = Context.CreateStmt(
+			asAST_STMT_BLOCK, DelegatingConstructor, asCSourceRange());
+		Context.SetBody(DelegatingConstructor, DelegatingBody);
+		const asASTExprId ThisExpr = Context.CreateExpr(
+			asAST_EXPR_THIS, DerivedType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		Context.SetLiteral(ThisExpr, "this");
+		const asASTExprId DelegatingCall = Context.CreateExpr(
+			asAST_EXPR_CALL, VoidType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		Context.SetResolvedDecl(
+			DelegatingCall, Fixture.DerivedConstructor);
+		Context.SetExprReceiver(DelegatingCall, ThisExpr);
+		Context.AddExprChild(DelegatingCall, ThisExpr);
+		Context.AddDeclInit(DelegatingConstructor, DelegatingCall);
+
+		asSASTLifetimeRecord Record;
+		Record.subjectKind =
+			asAST_LIFETIME_SUBJECT_CONSTRUCTION_SUBOBJECT;
+		Record.subject = asSASTLifetimeNodeId::FromDecl(
+			Fixture.DerivedClass);
+		Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+		Record.actionTarget = asSASTLifetimeNodeId::FromDecl(
+			Fixture.DerivedDestructor);
+		Record.activationPoint = asSASTLifetimeNodeId::FromExpr(
+			DelegatingCall);
+		Record.semanticRegion = asSASTLifetimeNodeId::FromDecl(
+			DelegatingConstructor);
+		Record.phase = asAST_LIFETIME_PHASE_CONSTRUCTOR_DELEGATING;
+		Record.supportedExitMask = asAST_LIFETIME_EXIT_EXCEPTION;
+		Record.constructionStep = 0;
+		Record.order = 0;
+		Record.completeObjectCommit = true;
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Record)));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("delegating target success is the complete-object commit")));
+
+		asCASTLifetimeView View;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, View)));
+		const asSASTLifetimeConstructionPlan* const Plan =
+			View.FindConstructionPlan(DelegatingConstructor);
+		ASSERT_THAT(IsNotNull(Plan));
+		if( Plan == nullptr )
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(1), Plan->recordIndices.GetLength()));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0), Plan->completeRecordIndex));
+		const asSASTLifetimeCommitPoint* const Commit =
+			View.GetCommitPoint(0);
+		ASSERT_THAT(IsNotNull(Commit));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Commit->abortCleanup.GetLength(),
+			TEXT("delegating target failure cannot destroy an incomplete object")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
+			Commit->reverseLiveCleanup.GetLength(),
+			TEXT("delegating body failure must reach the complete destructor")));
+	}
+
+	TEST_METHOD(RejectsForgedConstructorOwnerStepActivationAndCompletion)
+	{
+		{
+			asCASTContext Context;
+			const FConstructorLifetimeViewFixture Fixture =
+				BuildConstructorLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeConstructorLifetimeRecord(
+				Fixture, asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE, 0, 0);
+			Record.semanticRegion = asSASTLifetimeNodeId::FromDecl(
+				Fixture.BaseConstructor);
+			Context.AddLifetimeRecord(Record);
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("a base step cannot be attached to a foreign constructor owner")));
+		}
+		{
+			asCASTContext Context;
+			const FConstructorLifetimeViewFixture Fixture =
+				BuildConstructorLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeConstructorLifetimeRecord(
+				Fixture, asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER, 1, 0);
+			Record.constructionStep = 0;
+			Record.activationPoint = asSASTLifetimeNodeId::FromExpr(
+				Fixture.SecondAssignment);
+			Context.AddLifetimeRecord(Record);
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("a member step must commit at that exact field initializer")));
+		}
+		{
+			asCASTContext Context;
+			const FConstructorLifetimeViewFixture Fixture =
+				BuildConstructorLifetimeViewFixture(Context);
+			Context.AddLifetimeRecord(MakeConstructorLifetimeRecord(
+				Fixture, asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE, 0, 0));
+			Context.AddLifetimeRecord(MakeConstructorLifetimeRecord(
+				Fixture, asAST_LIFETIME_PHASE_COMPLETE_OBJECT, 2, 1));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("construction steps must be gapless and complete must be final")));
+		}
+		{
+			asCASTContext Context;
+			const FConstructorLifetimeViewFixture Fixture =
+				BuildConstructorLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Complete = MakeConstructorLifetimeRecord(
+				Fixture, asAST_LIFETIME_PHASE_COMPLETE_OBJECT, 0, 0);
+			Complete.completeObjectCommit = false;
+			Context.AddLifetimeRecord(Complete);
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("a complete-object phase must carry the distinct complete commit")));
+		}
 	}
 
 	TEST_METHOD(DerivesProtocolOnlyNormalExitPlanInReverseCommitOrder)

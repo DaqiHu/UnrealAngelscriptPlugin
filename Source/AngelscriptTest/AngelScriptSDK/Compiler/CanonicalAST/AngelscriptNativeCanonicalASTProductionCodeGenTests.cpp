@@ -79,6 +79,64 @@ static int32 GProdNativeLifecycleMemberReferenceObserved = 0;
 static int32 GProdSuccessSensitiveInitializerAttempts = 0;
 static TArray<int32> GProdSuccessSensitiveDestructionOrder;
 
+struct FProdConstructorCommittedPart
+{
+	int32 Id = 0;
+	int32 Padding[3] = {};
+};
+
+static int32 GProdConstructorCommittedAttempts = 0;
+static int32 GProdConstructorCommittedFailAt = 0;
+static bool GProdConstructorBodyShouldFail = false;
+static int32 GProdCompleteObjectDestructorCalls = 0;
+static TArray<int32> GProdConstructorCommittedDestructionOrder;
+
+static void ProdConstructorCommittedPartConstruct(asIScriptGeneric* Generic)
+{
+	if (Generic == nullptr || Generic->GetObject() == nullptr)
+	{
+		return;
+	}
+	FProdConstructorCommittedPart* const Value =
+		new (Generic->GetObject()) FProdConstructorCommittedPart();
+	Value->Id = ++GProdConstructorCommittedAttempts;
+	if (GProdConstructorCommittedFailAt == Value->Id)
+	{
+		if (asIScriptContext* const Context = asGetActiveContext())
+		{
+			Context->SetException("constructor committed-prefix member failure");
+		}
+	}
+}
+
+static void ProdConstructorCommittedPartDestruct(asIScriptGeneric* Generic)
+{
+	if (Generic == nullptr || Generic->GetObject() == nullptr)
+	{
+		return;
+	}
+	FProdConstructorCommittedPart* const Value =
+		static_cast<FProdConstructorCommittedPart*>(Generic->GetObject());
+	GProdConstructorCommittedDestructionOrder.Add(Value->Id);
+	Value->~FProdConstructorCommittedPart();
+}
+
+static void ProdMaybeFailConstructorBody(asIScriptGeneric*)
+{
+	if (GProdConstructorBodyShouldFail)
+	{
+		if (asIScriptContext* const Context = asGetActiveContext())
+		{
+			Context->SetException("constructor committed-prefix body failure");
+		}
+	}
+}
+
+static void ProdRecordCompleteObjectDestructor(asIScriptGeneric*)
+{
+	++GProdCompleteObjectDestructorCalls;
+}
+
 static void ProdSuccessSensitiveLifetimeInitializer(asIScriptGeneric* Generic)
 {
 	if (Generic == nullptr)
@@ -1079,6 +1137,42 @@ static FString ProdBytecodeImmediates(asIScriptFunction* Function)
 		DwordIndex += static_cast<asUINT>(InstructionSize);
 	}
 	return Out.IsEmpty() ? FString(TEXT("<no immediates>")) : Out;
+}
+
+static bool ProdContainsSetV4(
+	asIScriptFunction* Function,
+	int32 VariableOffset,
+	int32 Immediate)
+{
+	if (Function == nullptr)
+	{
+		return false;
+	}
+	asUINT BytecodeLength = 0;
+	const asDWORD* const Bytecode = Function->GetByteCode(&BytecodeLength);
+	for (asUINT DwordIndex = 0; Bytecode != nullptr && DwordIndex < BytecodeLength;)
+	{
+		const asDWORD* const Instr = Bytecode + DwordIndex;
+		const asEBCInstr Opcode = static_cast<asEBCInstr>(
+			*reinterpret_cast<const asBYTE*>(Instr));
+		if (Opcode == asBC_SetV4
+			&& static_cast<int32>(asBC_SWORDARG0(Instr)) == VariableOffset
+			&& static_cast<int32>(asBC_DWORDARG(Instr)) == Immediate)
+		{
+			return true;
+		}
+		if (static_cast<int32>(Opcode) > static_cast<int32>(asBC_MAXBYTECODE))
+		{
+			break;
+		}
+		const int32 InstructionSize = asBCTypeSize[asBCInfo[Opcode].type];
+		if (InstructionSize <= 0)
+		{
+			break;
+		}
+		DwordIndex += static_cast<asUINT>(InstructionSize);
+	}
+	return false;
 }
 
 static bool ProdDumpHasConstructCallee(const FString& Dump)
@@ -5801,6 +5895,588 @@ public:
 			0,
 			Internal->GetLastLegacyCompilerInvocationCount(),
 			TEXT("success-sensitive lifetime execution must not invoke asCCompiler")));
+	}
+
+	TEST_METHOD(CanonicalConstructorFailureDestroysOnlyCommittedPrefix)
+	{
+		GProdConstructorCommittedAttempts = 0;
+		GProdConstructorCommittedFailAt = 0;
+		GProdConstructorBodyShouldFail = false;
+		GProdCompleteObjectDestructorCalls = 0;
+		GProdConstructorCommittedDestructionOrder.Reset();
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"FProdConstructorCommittedPart",
+				sizeof(FProdConstructorCommittedPart),
+				asOBJ_VALUE | asOBJ_APP_CLASS_CD
+					| asOBJ_APP_CLASS_ALLINTS) >= 0
+			&& ScriptEngine->RegisterObjectBehaviour(
+				"FProdConstructorCommittedPart",
+				asBEHAVE_CONSTRUCT,
+				"void f()",
+				asFUNCTION(ProdConstructorCommittedPartConstruct),
+				asCALL_GENERIC) >= 0
+			&& ScriptEngine->RegisterObjectBehaviour(
+				"FProdConstructorCommittedPart",
+				asBEHAVE_DESTRUCT,
+				"void f()",
+				asFUNCTION(ProdConstructorCommittedPartDestruct),
+				asCALL_GENERIC) >= 0
+			&& ScriptEngine->RegisterGlobalFunction(
+				"void MaybeFailConstructorBody()",
+				asFUNCTION(ProdMaybeFailConstructorBody),
+				asCALL_GENERIC) >= 0
+			&& ScriptEngine->RegisterGlobalFunction(
+				"void RecordCompleteObjectDestructor()",
+				asFUNCTION(ProdRecordCompleteObjectDestructor),
+				asCALL_GENERIC) >= 0,
+			TEXT("constructor committed-prefix fixture registers its exact native lifecycle surface")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("constructor committed-prefix fixture selects CANONICAL")));
+
+		asIScriptModule* Module = nullptr;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class FCommittedRuntimeBase
+			{
+				FProdConstructorCommittedPart BasePart;
+				void GetBasePart() {}
+				void SetBasePart() {}
+			}
+
+			class FCommittedRuntimeDerived : FCommittedRuntimeBase
+			{
+				FProdConstructorCommittedPart First;
+				FProdConstructorCommittedPart Second;
+				void GetFirst() {}
+				void SetFirst() {}
+				void GetSecond() {}
+				void SetSecond() {}
+
+				FCommittedRuntimeDerived()
+				{
+					MaybeFailConstructorBody();
+				}
+
+				~FCommittedRuntimeDerived()
+				{
+					RecordCompleteObjectDestructor();
+				}
+			}
+
+			int RunCommittedRuntimeConstructor()
+			{
+				FCommittedRuntimeDerived Value;
+				return 42;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0,
+			AngelscriptNativeTestSupport::CompileNativeModule(
+				Engine.Get(),
+				"ProdConstructorCommittedPrefix",
+				ScriptSource.c_str(),
+				Module),
+			TEXT("CANONICAL constructor committed-prefix source must compile")));
+
+		asITypeInfo* const DerivedType = Module != nullptr
+			? Module->GetTypeInfoByDecl("FCommittedRuntimeDerived") : nullptr;
+		asCObjectType* const InternalDerivedType =
+			static_cast<asCObjectType*>(DerivedType);
+		asCScriptFunction* const Constructor =
+			InternalDerivedType != nullptr
+			&& InternalDerivedType->beh.construct > 0
+			&& static_cast<asUINT>(InternalDerivedType->beh.construct)
+				< ScriptEngine->scriptFunctions.GetLength()
+			? ScriptEngine->scriptFunctions[InternalDerivedType->beh.construct]
+			: nullptr;
+		asCScriptFunction* Factory = nullptr;
+		if (InternalDerivedType != nullptr)
+		{
+			for (asUINT Index = 0;
+				Index < InternalDerivedType->beh.factories.GetLength(); ++Index)
+			{
+				const int FactoryId = InternalDerivedType->beh.factories[Index];
+				asCScriptFunction* const Candidate = FactoryId > 0
+					&& static_cast<asUINT>(FactoryId)
+						< ScriptEngine->scriptFunctions.GetLength()
+					? ScriptEngine->scriptFunctions[FactoryId]
+					: nullptr;
+				if (Candidate != nullptr
+					&& Candidate->artifactInvocationKind
+						== asBUILD_ARTIFACT_INVOCATION_FACTORY
+					&& Candidate->artifactOwnerType == InternalDerivedType)
+				{
+					Factory = Candidate;
+					break;
+				}
+			}
+		}
+		asIScriptFunction* const Entry = Module != nullptr
+			? Module->GetFunctionByDecl(
+				"int RunCommittedRuntimeConstructor()") : nullptr;
+		ASSERT_THAT(IsNotNull(Constructor,
+			TEXT("the derived Runtime type must publish its exact Canonical constructor")));
+		ASSERT_THAT(IsNotNull(Factory,
+			TEXT("the derived Runtime type must publish its exact Canonical factory")));
+		ASSERT_THAT(IsNotNull(Entry));
+		if (Factory != nullptr && Factory->scriptData != nullptr)
+		{
+			const int32 PartialObjectOffset =
+				Factory->scriptData->partialConstructionObjectOffset;
+			ASSERT_THAT(IsTrue(
+				PartialObjectOffset > 0
+					&& Factory->scriptData->partialConstructionObjectType
+						== InternalDerivedType,
+				TEXT("the Canonical factory must publish its raw partial-construction allocation")));
+			ASSERT_THAT(IsTrue(
+				Factory->scriptData->pointerVariablePos.Exists(PartialObjectOffset),
+				TEXT("the raw partial-construction slot must remain non-owning but VM/JIT-addressable")));
+
+			const int32 SavedPartialObjectOffset =
+				Factory->scriptData->partialConstructionObjectOffset;
+			auto RequireForgedFactoryOffsetRejected =
+				[&](int32 ForgedOffset, const TCHAR* FailureMessage)
+			{
+				// A detached artifact may reconstruct its non-owning pointer
+				// directory only from the exact authenticated factory slot. Keep
+				// executable bytecode/variableSpace unchanged while forging the
+				// semantic tail, then require reader-side fail-closed validation.
+				Factory->scriptData->partialConstructionObjectOffset = ForgedOffset;
+				AngelscriptNativeTestSupport::FMemoryBinaryStream ForgedArtifact;
+				asCWriter ForgedWriter(
+					static_cast<asCModule*>(Module),
+					&ForgedArtifact,
+					ScriptEngine,
+					true);
+				const int ForgedWriteResult =
+					ForgedWriter.WriteFunctionArtifact(Factory);
+				Factory->scriptData->partialConstructionObjectOffset =
+					SavedPartialObjectOffset;
+				ASSERT_THAT(AreEqual(asSUCCESS, ForgedWriteResult,
+					TEXT("the forged artifact fixture must reach reader-side frame validation")));
+				ASSERT_THAT(IsTrue(ForgedArtifact.Num() > 0));
+
+				ForgedArtifact.ResetReadPosition();
+				asCReader ForgedReader(
+					static_cast<asCModule*>(Module),
+					&ForgedArtifact,
+					ScriptEngine);
+				asCScriptFunction* ForgedRestoredFactory = nullptr;
+				asSFunctionArtifactValidationDiagnostics ForgedDiagnostics{};
+				const int ForgedRestoreResult =
+					ForgedReader.RestoreFunctionArtifactDetached(
+						static_cast<asUINT>(ForgedArtifact.Num()),
+						&ForgedRestoredFactory,
+						&ForgedDiagnostics);
+				const bool bRejected = ForgedRestoreResult < 0
+					&& ForgedRestoredFactory == nullptr;
+				if (ForgedRestoredFactory != nullptr)
+				{
+					ForgedRestoredFactory->DestroyHalfCreated();
+				}
+				ASSERT_THAT(IsTrue(bRejected, FailureMessage));
+			};
+			RequireForgedFactoryOffsetRejected(
+				SavedPartialObjectOffset > 1
+					? SavedPartialObjectOffset - 1
+					: SavedPartialObjectOffset + 1,
+				TEXT("detached restore must reject an in-frame partial-construction coordinate that does not match the exact factory bytecode slot"));
+			RequireForgedFactoryOffsetRejected(
+				static_cast<int32>(Factory->scriptData->variableSpace)
+					+ AS_PTR_SIZE + 1,
+				TEXT("detached restore must reject a partial-construction coordinate beyond variableSpace"));
+		}
+		ASSERT_THAT(IsTrue(
+			AngelscriptCompilerBytecodeTestSupport::ContainsOpcode(
+				Constructor, asBC_FinConstruct),
+			TEXT("the complete-object protocol must lower to FinConstruct only after the constructor body succeeds")));
+		ASSERT_THAT(IsNotNull(Constructor->scriptData));
+		if (Constructor->scriptData != nullptr)
+		{
+			const auto& Cleanup = Constructor->scriptData->constructorCleanupInfo;
+			const int32 CommittedOffset =
+				Constructor->scriptData->constructorCommittedCountOffset;
+			ASSERT_THAT(IsTrue(CommittedOffset > 0,
+				TEXT("Canonical constructors require a private committed-count frame slot")));
+			bool bPublishedCommittedCountTemporary = false;
+			for (asUINT Index = 0;
+				Index < Constructor->scriptData->temporaryVariables.GetLength(); ++Index)
+			{
+				const auto& Temporary =
+					Constructor->scriptData->temporaryVariables[Index];
+				if (Temporary.Offset == CommittedOffset
+					&& Temporary.Token == ttUInt)
+				{
+					bPublishedCommittedCountTemporary = true;
+					break;
+				}
+			}
+			ASSERT_THAT(IsTrue(
+				bPublishedCommittedCountTemporary,
+				TEXT("the committed-count slot must be published as ttUInt in the Runtime/JIT temporary-variable directory")));
+			ASSERT_THAT(AreEqual(4, static_cast<int32>(Cleanup.GetLength()),
+				TEXT("the physical plan must contain base, First, Second and complete-object records")));
+			if (Cleanup.GetLength() == 4)
+			{
+				ASSERT_THAT(AreEqual(
+					static_cast<int32>(asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE),
+					static_cast<int32>(Cleanup[0].phase)));
+				ASSERT_THAT(AreEqual(
+					static_cast<int32>(asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER),
+					static_cast<int32>(Cleanup[1].phase)));
+				ASSERT_THAT(AreEqual(
+					static_cast<int32>(asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER),
+					static_cast<int32>(Cleanup[2].phase)));
+				ASSERT_THAT(AreEqual(
+					static_cast<int32>(asAST_LIFETIME_PHASE_COMPLETE_OBJECT),
+					static_cast<int32>(Cleanup[3].phase)));
+				ASSERT_THAT(IsFalse(Cleanup[0].completeObject));
+				ASSERT_THAT(IsFalse(Cleanup[1].completeObject));
+				ASSERT_THAT(IsFalse(Cleanup[2].completeObject));
+				ASSERT_THAT(IsTrue(Cleanup[3].completeObject));
+				ASSERT_THAT(IsTrue(Cleanup[0].objectType
+					== InternalDerivedType->derivedFrom));
+				ASSERT_THAT(IsTrue(Cleanup[1].objectOffset > 0));
+				ASSERT_THAT(IsTrue(Cleanup[2].objectOffset
+					> Cleanup[1].objectOffset));
+				ASSERT_THAT(IsTrue(Cleanup[1].actionFunctionId > 0));
+				ASSERT_THAT(AreEqual(
+					Cleanup[1].actionFunctionId,
+					Cleanup[2].actionFunctionId,
+					TEXT("same native member type must resolve the same exact Runtime destructor")));
+			}
+			for (int32 Commit = 0; Commit <= 4; ++Commit)
+			{
+				ASSERT_THAT(IsTrue(ProdContainsSetV4(
+					Constructor, CommittedOffset, Commit),
+					*FString::Printf(
+						TEXT("constructor bytecode must retain committed-count write %d; %s"),
+						Commit, *ProdBytecodeImmediates(Constructor))));
+			}
+
+			AngelscriptNativeTestSupport::FMemoryBinaryStream ArtifactStream;
+			asCWriter Writer(
+				static_cast<asCModule*>(Module),
+				&ArtifactStream,
+				ScriptEngine,
+				true);
+			ASSERT_THAT(AreEqual(asSUCCESS,
+				Writer.WriteFunctionArtifact(Constructor),
+				TEXT("constructor cleanup protocol must be representable in the detached VM artifact")));
+			ASSERT_THAT(IsTrue(ArtifactStream.Num() > 0));
+			ArtifactStream.ResetReadPosition();
+			asCReader Reader(
+				static_cast<asCModule*>(Module),
+				&ArtifactStream,
+				ScriptEngine);
+			asCScriptFunction* RestoredConstructor = nullptr;
+			asSFunctionArtifactValidationDiagnostics RestoreDiagnostics{};
+			const int RestoreResult = Reader.RestoreFunctionArtifactDetached(
+				static_cast<asUINT>(ArtifactStream.Num()),
+				&RestoredConstructor,
+				&RestoreDiagnostics);
+			ASSERT_THAT(AreEqual(asSUCCESS,
+				RestoreResult,
+				*FString::Printf(
+					TEXT("constructor cleanup protocol must restore through semantic type/function tables; result=%d stage=%u bytes=%u/%d error=%d new=%d"),
+					RestoreResult,
+					RestoreDiagnostics.stage,
+					RestoreDiagnostics.bytesRead,
+					ArtifactStream.Num(),
+					RestoreDiagnostics.hadError ? 1 : 0,
+					RestoreDiagnostics.wasNewFunction ? 1 : 0)));
+			ON_SCOPE_EXIT
+			{
+				if (RestoredConstructor != nullptr)
+				{
+					RestoredConstructor->DestroyHalfCreated();
+				}
+			};
+			ASSERT_THAT(IsNotNull(RestoredConstructor));
+			if (RestoredConstructor != nullptr
+				&& RestoredConstructor->scriptData != nullptr)
+			{
+				const auto& RestoredCleanup =
+					RestoredConstructor->scriptData->constructorCleanupInfo;
+				bool bRestoredCommittedCountTemporary = false;
+				for (asUINT Index = 0;
+					Index < RestoredConstructor->scriptData->temporaryVariables.GetLength();
+					++Index)
+				{
+					const auto& Temporary =
+						RestoredConstructor->scriptData->temporaryVariables[Index];
+					if (Temporary.Offset == CommittedOffset
+						&& Temporary.Token == ttUInt)
+					{
+						bRestoredCommittedCountTemporary = true;
+						break;
+					}
+				}
+				ASSERT_THAT(IsTrue(
+					bRestoredCommittedCountTemporary,
+					TEXT("detached function restore must retain the committed-count Runtime/JIT temporary entry")));
+				ASSERT_THAT(AreEqual(CommittedOffset,
+					RestoredConstructor->scriptData->constructorCommittedCountOffset,
+					TEXT("artifact restore must preserve the private committed-count frame slot")));
+				ASSERT_THAT(AreEqual(
+					static_cast<int32>(Cleanup.GetLength()),
+					static_cast<int32>(RestoredCleanup.GetLength()),
+					TEXT("artifact restore must preserve the complete constructor cleanup directory")));
+				for (asUINT Index = 0;
+					Index < Cleanup.GetLength()
+						&& Index < RestoredCleanup.GetLength(); ++Index)
+				{
+					ASSERT_THAT(IsTrue(
+						RestoredCleanup[Index].phase == Cleanup[Index].phase
+							&& RestoredCleanup[Index].action == Cleanup[Index].action
+							&& RestoredCleanup[Index].completeObject
+								== Cleanup[Index].completeObject
+							&& RestoredCleanup[Index].objectType
+								== Cleanup[Index].objectType
+							&& RestoredCleanup[Index].objectOffset
+								== Cleanup[Index].objectOffset
+							&& RestoredCleanup[Index].actionFunctionId
+								== Cleanup[Index].actionFunctionId,
+						TEXT("artifact restore must resolve every cleanup step to the exact current-generation authority")));
+				}
+			}
+		}
+
+		asIScriptContext* const Context = ScriptEngine->CreateContext();
+		ASSERT_THAT(IsNotNull(Context));
+		ON_SCOPE_EXIT
+		{
+			if (Context != nullptr)
+			{
+				Context->Release();
+			}
+		};
+		if (Entry == nullptr || Context == nullptr)
+		{
+			return;
+		}
+
+		auto ExecuteAndRequirePrefix = [&](int32 FailAt, bool bFailBody,
+			int ExpectedStatus, int32 ExpectedAttempts,
+			int32 ExpectedCompleteDestructorCalls,
+			const TArray<int32>& ExpectedDestructionOrder)
+		{
+			GProdConstructorCommittedAttempts = 0;
+			GProdConstructorCommittedFailAt = FailAt;
+			GProdConstructorBodyShouldFail = bFailBody;
+			GProdCompleteObjectDestructorCalls = 0;
+			GProdConstructorCommittedDestructionOrder.Reset();
+			ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(Entry)));
+			const int ExecuteStatus = Context->Execute();
+			ASSERT_THAT(AreEqual(ExpectedStatus, ExecuteStatus));
+			if (ExpectedStatus == asEXECUTION_FINISHED)
+			{
+				ASSERT_THAT(AreEqual(static_cast<asDWORD>(42),
+					Context->GetReturnDWord()));
+			}
+			else
+			{
+				const FString Exception = FString(UTF8_TO_TCHAR(
+					Context->GetExceptionString()));
+				ASSERT_THAT(IsTrue(Exception.Contains(
+					bFailBody ? TEXT("body failure") : TEXT("member failure")),
+					TEXT("the original constructor exception must remain observable")));
+			}
+			ASSERT_THAT(AreEqual(asSUCCESS, Context->Unprepare(),
+				TEXT("constructor failure must finish VM unwind before trace inspection")));
+			ASSERT_THAT(AreEqual(ExpectedAttempts,
+				GProdConstructorCommittedAttempts));
+			ASSERT_THAT(AreEqual(ExpectedCompleteDestructorCalls,
+				GProdCompleteObjectDestructorCalls,
+				TEXT("the complete-object destructor is unreachable before its distinct commit")));
+			FString ActualDestructionOrder;
+			for (const int32 Value : GProdConstructorCommittedDestructionOrder)
+			{
+				if (!ActualDestructionOrder.IsEmpty())
+				{
+					ActualDestructionOrder += TEXT(",");
+				}
+				ActualDestructionOrder += FString::FromInt(Value);
+			}
+			const FString DestructionCountContext = FString::Printf(
+				TEXT("FailAt=%d FailBody=%d actual destruction order=[%s] bytecode=%s"),
+				FailAt, bFailBody ? 1 : 0, *ActualDestructionOrder,
+				*ProdBytecodeImmediates(Constructor));
+			ASSERT_THAT(AreEqual(ExpectedDestructionOrder.Num(),
+				GProdConstructorCommittedDestructionOrder.Num(),
+				*DestructionCountContext));
+			for (int32 Index = 0;
+				Index < ExpectedDestructionOrder.Num()
+					&& Index < GProdConstructorCommittedDestructionOrder.Num();
+				++Index)
+			{
+				ASSERT_THAT(AreEqual(
+					ExpectedDestructionOrder[Index],
+					GProdConstructorCommittedDestructionOrder[Index],
+					TEXT("constructor abort cleanup must be the exact reverse committed prefix")));
+			}
+		};
+
+		ExecuteAndRequirePrefix(
+			0, false, asEXECUTION_FINISHED, 3, 1,
+			TArray<int32>{3, 2, 1});
+		ExecuteAndRequirePrefix(
+			1, false, asEXECUTION_EXCEPTION, 1, 0,
+			TArray<int32>{});
+		ExecuteAndRequirePrefix(
+			2, false, asEXECUTION_EXCEPTION, 2, 0,
+			TArray<int32>{1});
+		ExecuteAndRequirePrefix(
+			3, false, asEXECUTION_EXCEPTION, 3, 0,
+			TArray<int32>{2, 1});
+		ExecuteAndRequirePrefix(
+			0, true, asEXECUTION_EXCEPTION, 3, 0,
+			TArray<int32>{3, 2, 1});
+
+		const asCModule* const Internal = static_cast<asCModule*>(Module);
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal->GetLastBytecodePublisher()));
+		ASSERT_THAT(AreEqual(
+			0,
+			Internal->GetLastLegacyCompilerInvocationCount(),
+			TEXT("constructor committed-prefix execution must never invoke asCCompiler")));
+
+		AngelscriptNativeTestSupport::FMemoryBinaryStream ModuleBytecode;
+		ASSERT_THAT(AreEqual(
+			asSUCCESS,
+			Module->SaveByteCode(&ModuleBytecode, false),
+			TEXT("the complete module stream must persist constructor cleanup authority")));
+		ASSERT_THAT(IsTrue(ModuleBytecode.Num() > 0));
+		ModuleBytecode.ResetReadPosition();
+		asIScriptModule* const RestoredModule = ScriptEngine->GetModule(
+			"ProdConstructorCommittedPrefixRestored",
+			asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(RestoredModule));
+		bool bDebugWasStripped = true;
+		const int LoadResult = RestoredModule != nullptr
+			? RestoredModule->LoadByteCode(&ModuleBytecode, &bDebugWasStripped)
+			: asNO_MODULE;
+		ASSERT_THAT(AreEqual(
+			asSUCCESS,
+			LoadResult,
+			TEXT("the complete module stream must restore constructor cleanup through stable type/function/property identities")));
+		ASSERT_THAT(IsFalse(bDebugWasStripped));
+		ASSERT_THAT(IsFalse(ModuleBytecode.HasReadError()));
+		if (LoadResult != asSUCCESS || RestoredModule == nullptr)
+		{
+			return;
+		}
+
+		asCObjectType* const RestoredDerivedType = static_cast<asCObjectType*>(
+			RestoredModule->GetTypeInfoByDecl("FCommittedRuntimeDerived"));
+		asCScriptFunction* const RestoredModuleConstructor =
+			RestoredDerivedType != nullptr
+			&& RestoredDerivedType->beh.construct > 0
+			&& static_cast<asUINT>(RestoredDerivedType->beh.construct)
+				< ScriptEngine->scriptFunctions.GetLength()
+			? ScriptEngine->scriptFunctions[RestoredDerivedType->beh.construct]
+			: nullptr;
+		asIScriptFunction* const RestoredEntry = RestoredModule->GetFunctionByDecl(
+			"int RunCommittedRuntimeConstructor()");
+		ASSERT_THAT(IsNotNull(RestoredModuleConstructor));
+		ASSERT_THAT(IsNotNull(RestoredEntry));
+		ASSERT_THAT(IsNotNull(
+			RestoredModuleConstructor != nullptr
+				? RestoredModuleConstructor->scriptData
+				: nullptr));
+		if (RestoredModuleConstructor != nullptr
+			&& RestoredModuleConstructor->scriptData != nullptr)
+		{
+			const auto& RestoredCleanup =
+				RestoredModuleConstructor->scriptData->constructorCleanupInfo;
+			bool bRestoredModuleCommittedCountTemporary = false;
+			for (asUINT Index = 0;
+				Index < RestoredModuleConstructor->scriptData->temporaryVariables.GetLength();
+				++Index)
+			{
+				const auto& Temporary =
+					RestoredModuleConstructor->scriptData->temporaryVariables[Index];
+				if (Temporary.Offset
+						== RestoredModuleConstructor->scriptData->constructorCommittedCountOffset
+					&& Temporary.Token == ttUInt)
+				{
+					bRestoredModuleCommittedCountTemporary = true;
+					break;
+				}
+			}
+			ASSERT_THAT(IsTrue(
+				bRestoredModuleCommittedCountTemporary,
+				TEXT("complete module restore must retain the committed-count Runtime/JIT temporary entry")));
+			ASSERT_THAT(IsTrue(
+				RestoredModuleConstructor->scriptData->constructorCommittedCountOffset > 0,
+				TEXT("module restore must retain a valid backend-local committed-count slot")));
+			ASSERT_THAT(AreEqual(
+				4,
+				static_cast<int32>(RestoredCleanup.GetLength()),
+				TEXT("module restore must retain base, two members and complete-object cleanup records")));
+			if (RestoredCleanup.GetLength() == 4)
+			{
+				ASSERT_THAT(IsTrue(
+					RestoredCleanup[0].phase
+						== asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE
+					&& RestoredCleanup[0].objectType
+						== RestoredDerivedType->derivedFrom));
+				ASSERT_THAT(IsTrue(
+					RestoredCleanup[1].phase
+						== asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER
+					&& RestoredCleanup[1].objectOffset > 0));
+				ASSERT_THAT(IsTrue(
+					RestoredCleanup[2].phase
+						== asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER
+					&& RestoredCleanup[2].objectOffset
+						> RestoredCleanup[1].objectOffset));
+				ASSERT_THAT(IsTrue(
+					RestoredCleanup[3].phase
+						== asAST_LIFETIME_PHASE_COMPLETE_OBJECT
+					&& RestoredCleanup[3].completeObject));
+				ASSERT_THAT(IsTrue(
+					RestoredCleanup[1].actionFunctionId > 0
+					&& RestoredCleanup[1].actionFunctionId
+						== RestoredCleanup[2].actionFunctionId,
+					TEXT("module restore must relocate both native member cleanups to the exact current action")));
+			}
+		}
+
+		asIScriptContext* const RestoredContext = ScriptEngine->CreateContext();
+		ASSERT_THAT(IsNotNull(RestoredContext));
+		ON_SCOPE_EXIT
+		{
+			if (RestoredContext != nullptr)
+			{
+				RestoredContext->Release();
+			}
+		};
+		if (RestoredEntry == nullptr || RestoredContext == nullptr)
+		{
+			return;
+		}
+		GProdConstructorCommittedAttempts = 0;
+		GProdConstructorCommittedFailAt = 3;
+		GProdConstructorBodyShouldFail = false;
+		GProdCompleteObjectDestructorCalls = 0;
+		GProdConstructorCommittedDestructionOrder.Reset();
+		ASSERT_THAT(AreEqual(asSUCCESS, RestoredContext->Prepare(RestoredEntry)));
+		ASSERT_THAT(AreEqual(asEXECUTION_EXCEPTION, RestoredContext->Execute()));
+		ASSERT_THAT(AreEqual(asSUCCESS, RestoredContext->Unprepare()));
+		ASSERT_THAT(AreEqual(3, GProdConstructorCommittedAttempts));
+		ASSERT_THAT(AreEqual(0, GProdCompleteObjectDestructorCalls));
+		ASSERT_THAT(IsTrue(
+			GProdConstructorCommittedDestructionOrder.Num() == 2
+			&& GProdConstructorCommittedDestructionOrder[0] == 2
+			&& GProdConstructorCommittedDestructionOrder[1] == 1,
+			TEXT("restored module execution must destroy only the reverse committed prefix [2,1]")));
 	}
 
 	TEST_METHOD(CanonicalReturnInsideObjectForeachInterleavesLifetimeCleanupOrder)

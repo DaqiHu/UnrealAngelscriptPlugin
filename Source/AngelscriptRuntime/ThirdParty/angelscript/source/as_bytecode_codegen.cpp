@@ -1397,6 +1397,51 @@ namespace
 		return (matches == 1) ? unique : 0;
 	}
 
+	asCScriptFunction* FindExactRegisteredDestructor(
+		asCScriptEngine* engine,
+		const asCASTContext& context,
+		const asCDecl* decl)
+	{
+		if( engine == 0 || decl == 0
+			|| decl->kind != asAST_DECL_DESTRUCTOR
+			|| decl->body.IsValid()
+			|| (decl->traits & asAST_TRAIT_GENERATED) != 0 )
+		{
+			return 0;
+		}
+		const asCDecl* const cls = context.GetDecl(decl->parent);
+		if( cls == 0 )
+		{
+			return 0;
+		}
+		const char* const typeKey = cls->stableKey.GetLength()
+			? cls->stableKey.AddressOf() : cls->name.AddressOf();
+		asCObjectType* objectType = CastToObjectType(
+			static_cast<asCTypeInfo*>(engine->GetTypeInfoByDecl(typeKey)));
+		if( objectType == 0 && cls->name.GetLength() != 0 )
+		{
+			objectType = CastToObjectType(static_cast<asCTypeInfo*>(
+				engine->GetTypeInfoByName(cls->name.AddressOf())));
+		}
+		if( objectType == 0 || objectType->beh.destruct <= 0
+			|| static_cast<asUINT>(objectType->beh.destruct)
+				>= engine->scriptFunctions.GetLength() )
+		{
+			return 0;
+		}
+
+		asCScriptFunction* destructor =
+			engine->scriptFunctions[objectType->beh.destruct];
+		if( destructor != 0 && objectType->templateBaseType != 0
+			&& destructor->objectType == objectType->templateBaseType )
+		{
+			destructor = engine->GenerateTemplateFunction(
+				objectType, destructor);
+		}
+		return destructor != 0 && destructor->objectType == objectType
+			? destructor : 0;
+	}
+
 	asCScriptFunction* FindExactRegisteredListFactory(
 		asCScriptEngine* engine,
 		asCRuntimeTypeBridge& bridge,
@@ -1853,6 +1898,7 @@ namespace
 			, bc(inBuilder)
 			, func(0)
 			, activeDecl(0)
+			, activeConstructionPlan(0)
 			, nextLocal(1)
 			, nextLabel(1)
 			, thisOffset(0x7fffffff)
@@ -1872,6 +1918,7 @@ namespace
 			func = outFunc;
 			functionArtifactIndex = artifact.GetOrAddRelocationFunction(outFunc);
 			activeDecl = decl;
+			activeConstructionPlan = 0;
 			nextLocal = 1;
 			nextLabel = 1;
 			// Method `this` uses frame offset 0 (asCCompiler
@@ -1920,9 +1967,31 @@ namespace
 
 			if( decl->kind == asAST_DECL_CONSTRUCTOR )
 			{
+				activeConstructionPlan =
+					lifetimeView.FindConstructionPlan(decl->id);
+				if( !PrepareConstructorCleanupPlan(decl) )
+				{
+					return false;
+				}
+				// The committed prefix is private backend state, but it still occupies a
+				// normal VM dword. Publish it through the same typed temporary directory
+				// as every other scalar frame slot so BytecodeJIT/RuntimeJIT can resolve
+				// PSF/VAddress operands without reconstructing Canonical lifetime facts.
+				func->scriptData->constructorCommittedCountOffset = AllocRuntimeScalarLocal(
+					asCDataType::CreatePrimitive(ttUInt, false), 1);
+				bc.InstrSHORT_DW(
+					asBC_SetV4,
+					(short)func->scriptData->constructorCommittedCountOffset,
+					0);
 				for( asUINT initIndex = 0; initIndex < decl->inits.GetLength(); ++initIndex )
 				{
 					EmitConstructorInit(decl->inits[initIndex]);
+					if( !ok )
+					{
+						return false;
+					}
+					CommitConstructorActivation(
+						asSASTLifetimeNodeId::FromExpr(decl->inits[initIndex]));
 					if( !ok )
 					{
 						return false;
@@ -1948,6 +2017,22 @@ namespace
 
 			bc.Label(0);
 			DestroyLiveObjects();
+			if( decl->kind == asAST_DECL_CONSTRUCTOR
+				&& !ConstructorCompleteWasCommittedByDelegation() )
+			{
+				// Match the maintained VM protocol: REF objects become externally
+				// publishable only after every init, the body and normal local
+				// cleanup have succeeded. The private committed count is updated
+				// after FinConstruct, so a failure in the finish hook still unwinds
+				// only the already committed base/member prefix.
+				if( func->objectType
+					&& (func->objectType->flags & asOBJ_REF) != 0 )
+				{
+					PushThisObject();
+					bc.InstrPTR(asBC_FinConstruct, func->objectType);
+				}
+				CommitConstructorComplete();
+			}
 			DestroyOwnedParameters();
 			if( returnSlot != 0x7fffffff )
 			{
@@ -2486,20 +2571,19 @@ namespace
 			return offset;
 		}
 
-		int AllocTemporary(const asCDataType& inputType, int dwords = 0)
+		bool PublishRuntimeScalarVariable(
+			int offset, const asCDataType& inputType)
 		{
 			asCDataType valueType = inputType;
 			if( valueType.IsReference() && !valueType.IsObjectHandle() )
 			{
 				valueType.MakeReference(false);
 			}
-			const int offset = AllocDwords(
-				dwords > 0 ? dwords : LocalDwords(valueType));
 			if( !valueType.IsValid() || valueType.GetTokenType() == ttVoid
 				|| valueType.IsObject() || valueType.IsObjectHandle()
 				|| valueType.IsFuncdef() )
 			{
-				return offset;
+				return false;
 			}
 
 			asCScriptFunction::ScriptFunctionData::ScriptTempVariable temporary;
@@ -2512,7 +2596,7 @@ namespace
 				case 2: temporary.Token = ttUInt16; break;
 				case 4: temporary.Token = ttUInt; break;
 				case 8: temporary.Token = ttUInt64; break;
-				default: return offset;
+				default: return false;
 				}
 			}
 			else
@@ -2520,7 +2604,43 @@ namespace
 				temporary.Token = valueType.GetTokenType();
 			}
 			func->scriptData->temporaryVariables.PushLast(temporary);
-			temporaryOffsets.PushLast(offset);
+			return true;
+		}
+
+		int AllocTemporary(const asCDataType& inputType, int dwords = 0)
+		{
+			asCDataType valueType = inputType;
+			if( valueType.IsReference() && !valueType.IsObjectHandle() )
+			{
+				valueType.MakeReference(false);
+			}
+			const int offset = AllocDwords(
+				dwords > 0 ? dwords : LocalDwords(valueType));
+			if( PublishRuntimeScalarVariable(offset, valueType) )
+			{
+				temporaryOffsets.PushLast(offset);
+			}
+			return offset;
+		}
+
+		int AllocRuntimeScalarLocal(
+			const asCDataType& inputType, int dwords = 0)
+		{
+			asCDataType valueType = inputType;
+			if( valueType.IsReference() && !valueType.IsObjectHandle() )
+			{
+				valueType.MakeReference(false);
+			}
+			const int offset = AllocDwords(
+				dwords > 0 ? dwords : LocalDwords(valueType));
+			// Runtime helpers may read this frame slot outside the bytecode stream.
+			// Publish its type for VM/JIT address resolution, but do not add it to
+			// temporaryOffsets: that optimizer set is allowed to remove stores which
+			// appear dead from bytecode alone.
+			if( !PublishRuntimeScalarVariable(offset, valueType) )
+			{
+				FailAt(__LINE__, asINVALID_CONFIGURATION);
+			}
 			return offset;
 		}
 
@@ -4999,6 +5119,235 @@ namespace
 				AS_PTR_SIZE * 2,
 				true);
 			return true;
+		}
+
+		bool PrepareConstructorCleanupPlan(const asCDecl* constructor)
+		{
+			if( constructor == 0 || func == 0 || func->scriptData == 0
+				|| constructor->kind != asAST_DECL_CONSTRUCTOR
+				|| activeConstructionPlan == 0
+				|| activeConstructionPlan->constructor != constructor->id
+				|| activeConstructionPlan->recordIndices.GetLength() == 0 )
+			{
+				FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+				return false;
+			}
+
+			func->scriptData->constructorCleanupInfo.SetLength(0);
+			for( asUINT step = 0;
+				step < activeConstructionPlan->recordIndices.GetLength(); ++step )
+			{
+				const asSASTLifetimeViewRecord* const derived =
+					lifetimeView.GetRecord(
+						activeConstructionPlan->recordIndices[step]);
+				if( derived == 0
+					|| derived->record.constructionStep != step
+					|| derived->record.semanticRegion
+						!= asSASTLifetimeNodeId::FromDecl(constructor->id) )
+				{
+					FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+					return false;
+				}
+
+				const asSASTLifetimeRecord& record = derived->record;
+				asSConstructorCleanupInfo physical;
+				physical.phase = static_cast<asBYTE>(record.phase);
+				physical.completeObject = record.completeObjectCommit;
+				physical.action = record.actionKind
+					== asAST_LIFETIME_ACTION_RELEASE_REFERENCE
+					? asCONSTRUCTOR_CLEANUP_RELEASE_REFERENCE
+					: asCONSTRUCTOR_CLEANUP_DESTROY_VALUE;
+
+				const asCDecl* const subject = record.subject.nodeClass
+					== asAST_LIFETIME_NODE_DECL
+					? context.GetDecl(asASTDeclId(record.subject.value)) : 0;
+				const asCDecl* const actionDecl = record.actionTarget.nodeClass
+					== asAST_LIFETIME_NODE_DECL
+					? context.GetDecl(asASTDeclId(record.actionTarget.value)) : 0;
+
+				if( record.completeObjectCommit
+					|| record.phase == asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE )
+				{
+					asCScriptFunction* const action = actionDecl
+						? FindFunc(actionDecl->id) : 0;
+					if( subject == 0 || subject->kind != asAST_DECL_CLASS
+						|| actionDecl == 0
+						|| actionDecl->kind != asAST_DECL_DESTRUCTOR
+						|| actionDecl->parent != subject->id
+						|| action == 0 || action->objectType == 0
+						|| (record.completeObjectCommit
+							&& action->objectType != func->objectType) )
+					{
+						failureDetail.Format(
+							"constructor cleanup action does not match its authenticated "
+							"prepared Runtime destructor (subject=%s action=%d "
+							"runtimeType=%s constructorType=%s)",
+							subject && subject->stableKey.AddressOf()
+								? subject->stableKey.AddressOf() : "<missing>",
+							action ? action->id : 0,
+							action && action->objectType
+								&& action->objectType->name.AddressOf()
+								? action->objectType->name.AddressOf() : "<missing>",
+							func->objectType && func->objectType->name.AddressOf()
+								? func->objectType->name.AddressOf() : "<missing>");
+						FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+						return false;
+					}
+					// Prepared Canonical function shells are bound to their exact sealed
+					// declaration before body emission, while the object's public
+					// behaviour table is attached only after the complete candidate graph
+					// commits. Reading beh.destruct here would therefore reject every
+					// otherwise valid generated destructor during the transaction.
+					physical.objectType = action->objectType;
+					physical.actionFunctionId = action->id;
+					physical.objectOffset = 0;
+				}
+				else if( record.phase == asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER )
+				{
+					asCObjectProperty* const property = subject
+						? PropertyFromFieldDecl(subject, func->objectType) : 0;
+					const asCDataType fieldType = subject
+						? TypeOf(subject->type) : asCDataType();
+					if( subject == 0 || subject->kind != asAST_DECL_VAR
+						|| property == 0 || !fieldType.IsValid()
+						|| fieldType.GetTypeInfo() == 0 )
+					{
+						FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+						return false;
+					}
+					physical.objectType = fieldType.IsFuncdef()
+						? &bc.GetEngine()->functionBehaviours
+						: fieldType.GetTypeInfo();
+					physical.objectOffset = property->byteOffset;
+					if( builder )
+						builder->CaptureBuildArtifactPropertyDependency(
+							func->objectType, property);
+
+					if( physical.action == asCONSTRUCTOR_CLEANUP_DESTROY_VALUE )
+					{
+						asCScriptFunction* const action = actionDecl
+							? FindFunc(actionDecl->id) : 0;
+						if( actionDecl == 0
+							|| actionDecl->kind != asAST_DECL_DESTRUCTOR
+							|| action == 0 || action->objectType == 0
+							|| action->objectType != fieldType.GetTypeInfo() )
+						{
+							FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+							return false;
+						}
+						// Generated script-value destructors are exact prepared shells before
+						// their public behaviour table is committed.  The authenticated
+						// destructor Decl and exact Runtime owner type are the stable
+						// authority here; re-reading beh.destruct would introduce a
+						// publication-order dependency into Canonical CodeGen.
+						physical.actionFunctionId = action->id;
+					}
+					else
+					{
+						asSTypeBehaviour* const behaviour = fieldType.GetBehaviour();
+						physical.actionFunctionId = fieldType.IsFuncdef()
+							? bc.GetEngine()->functionBehaviours.beh.release
+							: behaviour ? behaviour->release : 0;
+						if( !fieldType.IsFuncdef()
+							&& (physical.objectType->GetFlags() & asOBJ_NOCOUNT) == 0
+							&& physical.actionFunctionId <= 0 )
+						{
+							FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+							return false;
+						}
+					}
+				}
+				else
+				{
+					FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+					return false;
+				}
+
+				// The physical table is outside the executable bytecode stream, so
+				// publish the exact semantic dependencies explicitly. Artifact
+				// serialization later replaces these generation-local pointers/ids
+				// with stable type and function identities.
+				if( builder )
+				{
+					builder->MarkDependency(physical.objectType, 0, 0);
+					if( physical.actionFunctionId > 0
+						&& asUINT(physical.actionFunctionId)
+							< bc.GetEngine()->scriptFunctions.GetLength() )
+					{
+						builder->MarkDependency(
+							bc.GetEngine()->scriptFunctions[
+								physical.actionFunctionId], 0, 0);
+					}
+				}
+
+				func->scriptData->constructorCleanupInfo.PushLast(physical);
+			}
+
+			return func->scriptData->constructorCleanupInfo.GetLength()
+				== activeConstructionPlan->recordIndices.GetLength();
+		}
+
+		void CommitConstructorActivation(
+			const asSASTLifetimeNodeId& activationPoint)
+		{
+			if( activeConstructionPlan == 0 || func == 0
+				|| func->scriptData == 0
+				|| func->scriptData->constructorCommittedCountOffset <= 0 )
+			{
+				FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+				return;
+			}
+			for( asUINT step = 0;
+				step < activeConstructionPlan->recordIndices.GetLength(); ++step )
+			{
+				const asSASTLifetimeViewRecord* const derived =
+					lifetimeView.GetRecord(
+						activeConstructionPlan->recordIndices[step]);
+				if( derived && derived->record.activationPoint == activationPoint )
+				{
+					bc.InstrSHORT_DW(
+						asBC_SetV4,
+						(short)func->scriptData->constructorCommittedCountOffset,
+						step + 1);
+					return;
+				}
+			}
+			// Not every primitive initializer owns a cleanup action. It therefore
+			// has no construction protocol record and deliberately leaves the
+			// committed prefix unchanged.
+		}
+
+		bool ConstructorCompleteWasCommittedByDelegation() const
+		{
+			if( activeConstructionPlan == 0
+				|| activeConstructionPlan->recordIndices.GetLength() != 1 )
+			{
+				return false;
+			}
+			const asSASTLifetimeViewRecord* const record = lifetimeView.GetRecord(
+				activeConstructionPlan->recordIndices[0]);
+			return record != 0
+				&& record->record.phase
+					== asAST_LIFETIME_PHASE_CONSTRUCTOR_DELEGATING
+				&& record->record.completeObjectCommit;
+		}
+
+		void CommitConstructorComplete()
+		{
+			if( activeConstructionPlan == 0 || func == 0
+				|| func->scriptData == 0
+				|| func->scriptData->constructorCommittedCountOffset <= 0
+				|| activeConstructionPlan->completeRecordIndex
+					!= activeConstructionPlan->recordIndices[
+						activeConstructionPlan->recordIndices.GetLength() - 1] )
+			{
+				FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+				return;
+			}
+			bc.InstrSHORT_DW(
+				asBC_SetV4,
+				(short)func->scriptData->constructorCommittedCountOffset,
+				activeConstructionPlan->recordIndices.GetLength());
 		}
 
 		void EmitConstructorInit(asASTExprId initId)
@@ -7918,6 +8267,7 @@ namespace
 		asCByteCode bc;
 		asCScriptFunction* func;
 		const asCDecl* activeDecl;
+		const asSASTLifetimeConstructionPlan* activeConstructionPlan;
 		asCArray<asSCodeGenSlot> slots;
 		asCArray<asASTDeclId> debugVariableDecls;
 		asCArray<asSCodeGenOwnedParameter> ownedParameters;
@@ -8953,9 +9303,14 @@ namespace
 		factory->scriptData->stackNeeded =
 			byteCode.largestStackUsed + factory->scriptData->variableSpace;
 		factory->scriptData->lineNumbers = byteCode.lineNumbers;
-		factory->scriptData->objVariableTypes.PushLast(objectType);
-		factory->scriptData->objVariablePos.PushLast(objectSlot);
-		factory->scriptData->objVariablesOnHeap = 1;
+		// LOADOBJ clears this slot on success. On failure the constructor frame
+		// has already destroyed only its committed subobjects, so the factory must
+		// retire raw storage without routing it through complete-object cleanup.
+		factory->scriptData->partialConstructionObjectType = objectType;
+		factory->scriptData->partialConstructionObjectOffset = objectSlot;
+		factory->scriptData->partialConstructionConstructorId = constructor->id;
+		factory->scriptData->pointerVariablePos.PushLast(objectSlot);
+		factory->scriptData->objVariablesOnHeap = 0;
 		factory->dontCleanUpOnException = true;
 		return true;
 	}
@@ -10614,6 +10969,9 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 			external = FindExactRegisteredMethod(
 				engine, bridge, context, declaration);
 		if( external == 0 )
+			external = FindExactRegisteredDestructor(
+				engine, context, declaration);
+		if( external == 0 )
 			external = FindExactRegisteredListFactory(
 				engine, bridge, context, declaration);
 		if( external == 0 )
@@ -12114,6 +12472,17 @@ int asCBytecodeCodeGen::GenerateInternal(
 			asSCodeGenFuncBind bind;
 			bind.decl = decl->id;
 			bind.func = hostMethod;
+			bind.captureBegin = 0;
+			bind.captureCount = 0;
+			binds.PushLast(bind);
+			continue;
+		}
+		if( asCScriptFunction* hostDestructor = FindExactRegisteredDestructor(
+			engine, context, decl) )
+		{
+			asSCodeGenFuncBind bind;
+			bind.decl = decl->id;
+			bind.func = hostDestructor;
 			bind.captureBegin = 0;
 			bind.captureCount = 0;
 			binds.PushLast(bind);

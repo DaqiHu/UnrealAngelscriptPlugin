@@ -260,6 +260,37 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotInstalledDiagnosticTests,
 		ASSERT_THAT(AreEqual(0, PartialSummary.DiagnosticSemanticIndex));
 	}
 
+	TEST_METHOD(AuthenticatedPartialConstructionDoesNotRequireLexicalExitPlans)
+	{
+		using namespace
+			AngelscriptStaticJITAotInstalledDiagnosticsTests_Private;
+		FProvider Provider;
+		Provider.Semantic.CleanupPlanState = TEXT("PartialConstruction");
+		Provider.Semantic.LifetimeActionFlags = 1u;
+		Provider.Semantic.LifetimeSupportedExitMask = 1u << 5;
+		Provider.Semantic.LifetimeRecordCount = 2u;
+		Provider.Semantic.LifetimeExitPlanFlags = 0u;
+		Provider.Semantic.LifetimeExitPlanCount = 0u;
+		Provider.Semantic.bNativeObjectFrameABIAvailable = 0u;
+		Provider.Semantic.bHasExceptionCleanup = 1u;
+		Provider.RebuildIdentity();
+
+		const FAngelscriptJITProviderValidationResult PartialConstruction =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(PartialConstruction.IsValid(),
+			TEXT("authenticated constructor commits are not lexical transfer cleanup plans")));
+
+		Provider.Semantic.CleanupPlanState = TEXT("NonEmpty");
+		Provider.RebuildIdentity();
+		const FAngelscriptJITProviderValidationResult OrdinaryLifetimeWithoutPlan =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(OrdinaryLifetimeWithoutPlan.Code
+			== EAngelscriptJITProviderValidationCode::InvalidDiagnosticString,
+			TEXT("ordinary non-empty lifetime summaries must retain an authenticated exit plan")));
+		ASSERT_THAT(AreEqual(
+			0, OrdinaryLifetimeWithoutPlan.DiagnosticSemanticIndex));
+	}
+
 	TEST_METHOD(SystemCallUsesStableTargetIdentityWithoutScriptFunctionKey)
 	{
 		using namespace

@@ -1061,7 +1061,12 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			OutFacts.LifetimeSummary.RecordCount != 0
 			&& (OutFacts.LifetimeSummary.SupportedExitMask
 				& asAST_LIFETIME_EXIT_EXCEPTION) != 0;
-		OutFacts.bCleanupPlanCoversAllTransfers = !bHasPartialConstruction;
+		// A verifier-authenticated construction plan is semantically complete even
+		// when the current native backend cannot represent its committed-prefix
+		// cursor or exception exit.  Backend capability is reported separately by
+		// bNativeObjectFrameABIAvailable; treating this protocol as incomplete would
+		// misclassify a precise per-function fallback as InvalidCleanupPlan.
+		OutFacts.bCleanupPlanCoversAllTransfers = true;
 		return true;
 	}
 
@@ -2520,6 +2525,44 @@ EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
 	{
 		return Reject(EFallback::InvalidCanonicalAST, {},
 			TEXT("CanonicalFunctionDecl / DeclId 0 must not bind the first function or walk the whole module."));
+	}
+	if (FunctionDecl->kind == asAST_DECL_CONSTRUCTOR
+		|| FunctionDecl->kind == asAST_DECL_DESTRUCTOR)
+	{
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts LifetimeFacts =
+			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+				*Input.SealedAST, Input.CanonicalFunctionDecl);
+		if (!LifetimeFacts.LifetimeSummary.IsAuthenticated()
+			|| LifetimeFacts.CleanupPlanState
+				== EAngelscriptTypedASTJITCleanupPlanState::Unverified
+			|| !LifetimeFacts.bCleanupPlanCoversAllTransfers)
+		{
+			return Reject(
+				EFallback::InvalidCleanupPlan,
+				MakeSpan(*Input.SealedAST, FunctionDecl->range),
+				TEXT("CanonicalLifetimeProtocolAuthenticationFailed: the exact constructor/destructor has no complete authenticated lifetime summary."));
+		}
+		if (!LifetimeFacts.LifetimeSummary.bNativeObjectFrameABIAvailable)
+		{
+			const TCHAR* const Prefix = LifetimeFacts.CleanupPlanState
+				== EAngelscriptTypedASTJITCleanupPlanState::PartialConstruction
+				? TEXT("AuthenticatedConstructorPartialConstructionRequiresNativeObjectFrameABI")
+				: TEXT("AuthenticatedConstructorDestructorLifetimeRequiresNativeObjectFrameABI");
+			return Reject(
+				EFallback::UnsupportedLifetime,
+				MakeSpan(*Input.SealedAST, FunctionDecl->range),
+				FString::Printf(TEXT(
+					"%s: StableKey=%s ABIKey=%s Records=%u ExitPlans=%u ActionFlags=0x%08x ExitPlanFlags=0x%08x"),
+					Prefix,
+					*LifetimeFacts.LifetimeSummary.StableKey.ToHexString(),
+					*LifetimeFacts.LifetimeSummary.ABIKey.ToHexString(),
+					LifetimeFacts.LifetimeSummary.RecordCount,
+					LifetimeFacts.LifetimeSummary.ExitPlanCount,
+					static_cast<uint32>(
+						LifetimeFacts.LifetimeSummary.ActionFlags),
+					static_cast<uint32>(
+						LifetimeFacts.LifetimeSummary.ExitPlanFlags)));
+		}
 	}
 	if (FunctionDecl != nullptr
 		&& (FunctionDecl->kind == asAST_DECL_CONSTRUCTOR

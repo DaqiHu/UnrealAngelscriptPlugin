@@ -47,6 +47,7 @@ BEGIN_AS_NAMESPACE
 
 extern asALLOCSCRIPTOBJECTFUNC_t  userAllocScriptObject;
 extern asFINISHCONSTRUCTOBJECTFUNC_t  userFinishConstructObject;
+extern asABORTCONSTRUCTOBJECTFUNC_t  userAbortConstructObject;
 extern asRESOLVEOBJECTPTRFUNC_t  userResolveObjectPtr;
 
 #ifdef WIP_16BYTE_ALIGN

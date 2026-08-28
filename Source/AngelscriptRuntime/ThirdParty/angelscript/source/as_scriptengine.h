@@ -267,6 +267,7 @@ public:
 
 	void *AllocScriptObject(const asCObjectType *objType) const;
 	void FinishConstructObject(asIScriptObject* obj, asITypeInfo* type) const;
+	bool AbortConstructObject(asIScriptObject* obj, asITypeInfo* type) const;
 
 	void *CallGlobalFunctionRetPtr(int func) const;
 	void *CallGlobalFunctionRetPtr(int func, void *param1) const;

@@ -475,6 +475,7 @@ typedef void (*asGENFUNC_t)(asIScriptGeneric *);
 typedef void *(*asALLOCFUNC_t)(size_t, size_t);
 typedef void *(*asALLOCSCRIPTOBJECTFUNC_t)(asITypeInfo*, size_t);
 typedef void (*asFINISHCONSTRUCTOBJECTFUNC_t)(asIScriptObject*, asITypeInfo*);
+typedef bool (*asABORTCONSTRUCTOBJECTFUNC_t)(asIScriptObject*, asITypeInfo*);
 typedef void (*asFREEFUNC_t)(void *);
 typedef void (*asCLEANENGINEFUNC_t)(asIScriptEngine *);
 typedef void (*asCLEANMODULEFUNC_t)(asIScriptModule *);
@@ -703,6 +704,7 @@ extern "C"
 	// Memory management
 	AS_API int   asSetGlobalMemoryFunctions(asALLOCFUNC_t allocFunc, asFREEFUNC_t freeFunc);
 	AS_API int   asSetAllocScriptObjectFunction(asALLOCSCRIPTOBJECTFUNC_t allocFunc, asFINISHCONSTRUCTOBJECTFUNC_t finishFunc);
+	AS_API int   asSetAbortConstructObjectFunction(asABORTCONSTRUCTOBJECTFUNC_t abortFunc);
 	AS_API int   asSetResolveObjectPtrFunction(asRESOLVEOBJECTPTRFUNC_t resolveFunc);
 	AS_API int   asResetGlobalMemoryFunctions();
 	AS_API void *asAllocMem(size_t size);

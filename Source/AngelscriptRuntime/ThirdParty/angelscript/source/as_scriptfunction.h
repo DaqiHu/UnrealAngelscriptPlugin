@@ -114,6 +114,27 @@ enum asEObjVarInfoOption
 	asOBJ_VARDECL
 };
 
+// Generation-local physical cleanup derived from the verifier-authenticated
+// Canonical constructor lifetime protocol. The semantic protocol remains
+// snapshot-owned and pointer-free; these values exist only in an installed VM
+// generation and are rebuilt/resolved when bytecode is restored.
+enum asEConstructorCleanupAction
+{
+	asCONSTRUCTOR_CLEANUP_INVALID = 0,
+	asCONSTRUCTOR_CLEANUP_DESTROY_VALUE,
+	asCONSTRUCTOR_CLEANUP_RELEASE_REFERENCE,
+};
+
+struct asSConstructorCleanupInfo
+{
+	asCTypeInfo* objectType = 0;
+	int actionFunctionId = 0;
+	int objectOffset = 0;
+	asEConstructorCleanupAction action = asCONSTRUCTOR_CLEANUP_INVALID;
+	asBYTE phase = 0;
+	bool completeObject = false;
+};
+
 enum asEFuncTrait
 {
 	asTRAIT_CONSTRUCTOR = 0x1,
@@ -428,6 +449,23 @@ public:
 
 		// Holds information on scope for object variables on the stack
 		asCArray<asSObjectVariableInfo> objVariableInfo;
+
+		// Canonical constructors publish one linear physical cleanup directory in
+		// semantic construction order. constructorCommittedCountOffset names a
+		// private VM-frame dword that is written only after an individual step
+		// succeeds. Exception cleanup consumes exactly that committed prefix in
+		// reverse. A zero offset means this is not a Canonical constructor frame.
+		asCArray<asSConstructorCleanupInfo> constructorCleanupInfo;
+		int constructorCommittedCountOffset = 0;
+
+		// Canonical constructor factories keep their raw allocation out of the
+		// ordinary object-variable directory: a partially constructed object must
+		// never be retired through its complete-object destructor. The constructor
+		// frame has already executed the committed-prefix cleanup before this
+		// factory frame is unwound.
+		asCTypeInfo* partialConstructionObjectType = 0;
+		int partialConstructionObjectOffset = 0;
+		int partialConstructionConstructorId = 0;
 
 		asCArray<asSTryCatchInfo>       tryCatchInfo;
 

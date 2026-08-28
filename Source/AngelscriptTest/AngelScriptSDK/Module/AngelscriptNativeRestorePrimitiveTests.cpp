@@ -210,7 +210,8 @@ public:
 
 	TEST_METHOD(LegacyVersionIsRejected)
 	{
-		AS_NATIVE_PRODUCT_PART("MOD-BYTECODE-STREAM-RESTORE", "legacy_version_one_rejected");
+		AS_NATIVE_PRODUCT_PART("MOD-BYTECODE-STREAM-RESTORE",
+			"legacy_version_without_constructor_protocol_rejected");
 
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
 		Engine.Create(*TestRunner);
@@ -242,16 +243,16 @@ public:
 		{
 			return;
 		}
-		ASSERT_THAT(AreEqual(2, static_cast<int32>(CurrentBytes[1]),
-			TEXT("Current bytecode writer should publish stream version two")));
+		ASSERT_THAT(AreEqual(3, static_cast<int32>(CurrentBytes[1]),
+			TEXT("Current bytecode writer should publish stream version three with constructor cleanup identities")));
 
 		TArray<asBYTE> LegacyBytes = CurrentBytes;
-		LegacyBytes[1] = 1;
+		LegacyBytes[1] = 2;
 		AngelscriptNativeTestSupport::FMemoryBinaryStream LegacyStream;
 		ASSERT_THAT(AreEqual(
 			static_cast<int32>(asSUCCESS),
 			LegacyStream.Write(LegacyBytes.GetData(), static_cast<asUINT>(LegacyBytes.Num())),
-			TEXT("Legacy bytecode test should construct a version-one payload")));
+			TEXT("Legacy bytecode test should construct a version-two payload")));
 		LegacyStream.ResetReadPosition();
 
 		ASSERT_THAT(AreEqual(static_cast<int32>(asSUCCESS), ScriptEngine->DiscardModule("RestoreLegacyVersion"),
@@ -267,7 +268,7 @@ public:
 		ASSERT_THAT(AreNotEqual(
 			static_cast<int32>(asSUCCESS),
 			DestinationModule->LoadByteCode(&LegacyStream, &bWasDebugInfoStripped),
-			TEXT("Reader must reject version-one bytecode that may encode live type addresses")));
+			TEXT("Reader must reject version-two bytecode that cannot carry the Canonical constructor cleanup contract")));
 		ASSERT_THAT(AreEqual(0, static_cast<int32>(DestinationModule->GetFunctionCount()),
 			TEXT("Rejected legacy stream should leave no functions")));
 		ASSERT_THAT(AreEqual(0, static_cast<int32>(DestinationModule->GetGlobalVarCount()),

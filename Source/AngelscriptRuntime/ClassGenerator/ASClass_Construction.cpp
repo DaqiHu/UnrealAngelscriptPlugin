@@ -409,6 +409,49 @@ void UASClass::FinishConstructObject(class asIScriptObject* ScriptObject, class 
 	}
 }
 
+bool UASClass::AbortConstructObject(
+	class asIScriptObject* ScriptObject,
+	class asITypeInfo* ScriptType)
+{
+	if (ScriptObject == nullptr || ScriptType == nullptr
+		|| ScriptType->GetUserData() == nullptr)
+	{
+		return false;
+	}
+
+	UObject* const Object = FAngelscriptEngine::AngelscriptToUObject(ScriptObject);
+	if (Object == nullptr)
+	{
+		return false;
+	}
+
+	int32 InitializerIndex = INDEX_NONE;
+	for (int32 Index = CurrentObjectInitializers.Num() - 1; Index >= 0; --Index)
+	{
+		if (CurrentObjectInitializers[Index].GetObj() == Object)
+		{
+			InitializerIndex = Index;
+			break;
+		}
+	}
+
+	ensureMsgf(InitializerIndex != INDEX_NONE,
+		TEXT("Aborting AngelScript construction requires a matching FObjectInitializer"));
+	if (InitializerIndex != INDEX_NONE)
+	{
+		CurrentObjectInitializers.RemoveAt(
+			InitializerIndex, 1, EAllowShrinking::No);
+	}
+
+	// The Canonical VM has already unwound exactly the committed constructor
+	// prefix and clears the allocation destination. Retire the incomplete
+	// UObject without publishing script defaults or routing through the
+	// complete-object script destructor; normal UObject GC owns final storage
+	// reclamation and needs no deferred abort marker.
+	Object->MarkAsGarbage();
+	return true;
+}
+
 static FORCEINLINE_DEBUGGABLE void ApplyOverrideComponents(const FObjectInitializer& Initializer, AActor* Actor, UASClass* ScriptClass)
 {
 	// Child classes should apply override components first, this is the expected order that C++ does it in

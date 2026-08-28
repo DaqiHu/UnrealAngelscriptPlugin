@@ -108,6 +108,7 @@ public:
 	static UObject* GetDefaultConstructorOuter();
 	static void* AllocScriptObject(class asITypeInfo* ScriptType, size_t Size);
 	static void FinishConstructObject(class asIScriptObject* ScriptObject, class asITypeInfo* ScriptType);
+	static bool AbortConstructObject(class asIScriptObject* ScriptObject, class asITypeInfo* ScriptType);
 	static void RegisterRawScriptObject(void* ScriptObject, class asITypeInfo* ScriptType);
 	static bool AddRawScriptObjectReference(
 		const void* ScriptObject,

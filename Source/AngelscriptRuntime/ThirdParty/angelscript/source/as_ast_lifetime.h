@@ -292,6 +292,43 @@ struct asSASTLifetimeCommitPoint
 	}
 };
 
+// One deterministic constructor-local committed-prefix plan. recordIndices are
+// protocol record indices in execution order and include the unique complete
+// commit. For a non-delegating constructor that commit is the final
+// COMPLETE_OBJECT record; for a delegating constructor it is the sole
+// CONSTRUCTOR_DELEGATING record. No Runtime type, pointer, slot, label or EH
+// state is retained here.
+struct asSASTLifetimeConstructionPlan
+{
+	asASTDeclId constructor;
+	asASTDeclId ownerClass;
+	asCArray<asUINT> recordIndices;
+	asUINT completeRecordIndex;
+
+	asSASTLifetimeConstructionPlan()
+		: completeRecordIndex(static_cast<asUINT>(-1))
+	{
+	}
+
+	bool operator==(const asSASTLifetimeConstructionPlan& other) const
+	{
+		if( constructor != other.constructor
+			|| ownerClass != other.ownerClass
+			|| completeRecordIndex != other.completeRecordIndex
+			|| recordIndices.GetLength() != other.recordIndices.GetLength() )
+		{
+			return false;
+		}
+		for( asUINT index = 0; index < recordIndices.GetLength(); ++index )
+			if( recordIndices[index] != other.recordIndices[index] ) return false;
+		return true;
+	}
+	bool operator!=(const asSASTLifetimeConstructionPlan& other) const
+	{
+		return !(*this == other);
+	}
+};
+
 // Compatibility syntax is retained while LEGACY and diagnostic/reference
 // consumers still need the native AST shape.  Only this named, authenticated
 // projection may be consumed by Canonical backends.
@@ -404,12 +441,20 @@ public:
 	asUINT GetScopeEdgeCount() const { return scopeEdges.GetLength(); }
 	asUINT GetRecordCount() const { return records.GetLength(); }
 	asUINT GetCommitPointCount() const { return commitPoints.GetLength(); }
+	asUINT GetConstructionPlanCount() const
+	{
+		return constructionPlans.GetLength();
+	}
 	asUINT GetCleanupBindingCount() const { return cleanupBindings.GetLength(); }
 	asUINT GetExitPlanCount() const { return exitPlans.GetLength(); }
 	asUINT GetForEachPhaseCount() const { return forEachPhases.GetLength(); }
 	const asSASTLifetimeScopeEdge* GetScopeEdge(asUINT index) const;
 	const asSASTLifetimeViewRecord* GetRecord(asUINT index) const;
 	const asSASTLifetimeCommitPoint* GetCommitPoint(asUINT index) const;
+	const asSASTLifetimeConstructionPlan* GetConstructionPlan(
+		asUINT index) const;
+	const asSASTLifetimeConstructionPlan* FindConstructionPlan(
+		asASTDeclId constructor) const;
 	const asSASTLifetimeCleanupBinding* GetCleanupBinding(asUINT index) const;
 	const asSASTLifetimeCleanupBinding* FindCleanupBinding(
 		asASTStmtId statement) const;
@@ -433,6 +478,7 @@ private:
 	asCArray<asSASTLifetimeScopeEdge> scopeEdges;
 	asCArray<asSASTLifetimeViewRecord> records;
 	asCArray<asSASTLifetimeCommitPoint> commitPoints;
+	asCArray<asSASTLifetimeConstructionPlan> constructionPlans;
 	asCArray<asSASTLifetimeCleanupBinding> cleanupBindings;
 	asCArray<asSASTLifetimeExitPlan> exitPlans;
 	asCArray<asSASTForEachPhases> forEachPhases;

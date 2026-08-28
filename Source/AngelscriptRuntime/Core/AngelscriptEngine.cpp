@@ -2337,6 +2337,7 @@ void FAngelscriptEngine::PreInitialize_GameThread()
 	 * Tell angelscript to use the appropriate allocators.
 	 */
 	asSetAllocScriptObjectFunction(&UASClass::AllocScriptObject, &UASClass::FinishConstructObject);
+	asSetAbortConstructObjectFunction(&UASClass::AbortConstructObject);
 
 	// A new full engine starts a fresh script-engine epoch. Dropping thread-local free
 	// contexts here prevents later engine allocations from aliasing stale pooled entries.

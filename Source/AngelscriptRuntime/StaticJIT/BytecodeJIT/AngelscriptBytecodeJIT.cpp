@@ -2485,7 +2485,26 @@ FString FStaticJITContext::VAddress(short VariableOffset)
 		return TEXT("(&l_ReturnValue)");
 	}
 
-	check(false);
+	checkf(false,
+		TEXT("StaticJIT could not resolve VM variable address: function=%s bytecodeOffset=%d opcode=%d variableOffset=%d explicitVariables=%d objectVariables=%d temporaryVariables=%d localInventory=%d"),
+		ScriptFunction != nullptr
+			? UTF8_TO_TCHAR(ScriptFunction->GetDeclaration())
+			: TEXT("<null>"),
+		BC != nullptr && BC_FunctionStart != nullptr
+			? static_cast<int32>(BC - BC_FunctionStart)
+			: -1,
+		BC != nullptr ? static_cast<int32>(GetInstr()) : -1,
+		static_cast<int32>(VariableOffset),
+		ScriptFunction != nullptr && ScriptFunction->scriptData != nullptr
+			? static_cast<int32>(ScriptFunction->scriptData->variables.GetLength())
+			: -1,
+		ScriptFunction != nullptr && ScriptFunction->scriptData != nullptr
+			? static_cast<int32>(ScriptFunction->scriptData->objVariableTypes.GetLength())
+			: -1,
+		ScriptFunction != nullptr && ScriptFunction->scriptData != nullptr
+			? static_cast<int32>(ScriptFunction->scriptData->temporaryVariables.GetLength())
+			: -1,
+		LocalVariables.Num());
 	return TEXT("void");
 }
 

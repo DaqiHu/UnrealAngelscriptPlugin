@@ -41,6 +41,7 @@
 #include "as_scriptobject.h"
 #include "as_texts.h"
 #include "as_debug.h"
+#include "as_ast_lifetime.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -320,8 +321,12 @@ static bool IsExplicitTrait(const asCScriptFunction *func)
 // including REFCPY, RefCpyV, OBJTYPE, FinConstruct, DestructScript, and
 // CopyScript. Version one may carry process-local object addresses for the
 // latter three opcodes, so it must not be interpreted as a version-two stream.
+// Version three adds the Canonical constructor committed-prefix directory. Its
+// types, actions and member targets are persisted as semantic table identities;
+// no generation-local type id, function id, pointer or property offset enters
+// the stream.
 static const asBYTE AS_BYTECODE_STREAM_MAGIC = 0xE3;
-static const asBYTE AS_BYTECODE_STREAM_VERSION = 2;
+static const asBYTE AS_BYTECODE_STREAM_VERSION = 3;
 
 //[UE++]: The detached function-artifact envelope is intentionally independent
 // from the full module bytecode version. Version four added the complete root
@@ -329,10 +334,21 @@ static const asBYTE AS_BYTECODE_STREAM_VERSION = 2;
 // function from a function owned by the artifact's module and persists only the
 // target module's semantic base name plus its signature; the reader resolves
 // that pair against the current Engine before the host validates its stable key.
-static const asBYTE AS_FUNCTION_ARTIFACT_STREAM_VERSION = 5;
+// Version six carries the same constructor committed-prefix identities as the
+// full module stream and therefore fails old artifacts closed instead of
+// restoring executable code without its exception-cleanup contract.
+static const asBYTE AS_FUNCTION_ARTIFACT_STREAM_VERSION = 6;
 static const asUINT AS_FUNCTION_ARTIFACT_MINIMUM_SIZE = 13;
 static const asDWORD AS_FUNCTION_ARTIFACT_KNOWN_TRAITS = 0x07FFFFFFu;
 //[UE--]
+
+static bool IsConstructorCleanupPhase(asBYTE phase)
+{
+	return phase == asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE
+		|| phase == asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER
+		|| phase == asAST_LIFETIME_PHASE_CONSTRUCTOR_DELEGATING
+		|| phase == asAST_LIFETIME_PHASE_COMPLETE_OBJECT;
+}
 
 asCReader::asCReader(asCModule* _module, asIBinaryStream* _stream,
 	asCScriptEngine* _engine,
@@ -2304,8 +2320,122 @@ asCScriptFunction *asCReader::ReadFunction(bool &isNew, bool addToModule, bool a
 					func->scriptData->tryCatchInfo[i].catchPos = SanityCheck(ReadEncodedUInt(), 1000000);
 
 					// The stack position must be adjusted to be according to the size of the variables
-					func->scriptData->tryCatchInfo[i].stackOffset = SanityCheck(ReadEncodedUInt(), 100000);
+						func->scriptData->tryCatchInfo[i].stackOffset = SanityCheck(ReadEncodedUInt(), 100000);
 					}
+				}
+
+				if (bits & 64)
+				{
+					// The writer stores stack coordinates in its normalized dword
+					// representation, member targets as used-property indices, and
+					// callable targets as used-function indices plus one. Translation
+					// resolves every coordinate only after all semantic tables exist.
+					func->scriptData->constructorCommittedCountOffset =
+						SanityCheck(ReadEncodedInt(), 1000000);
+					const asUINT cleanupCount =
+						SanityCheck(ReadEncodedUInt(), 1000000);
+					func->scriptData->constructorCleanupInfo.SetLength(cleanupCount);
+					bool sawCompleteObject = false;
+					for (asUINT cleanupIndex = 0;
+						cleanupIndex < cleanupCount && !error; ++cleanupIndex)
+					{
+						asSConstructorCleanupInfo& cleanup =
+							func->scriptData->constructorCleanupInfo[cleanupIndex];
+						cleanup.objectType = ReadTypeInfo();
+						cleanup.actionFunctionId =
+							SanityCheck(ReadEncodedInt(), 1000001);
+						cleanup.objectOffset =
+							SanityCheck(ReadEncodedInt(), 1000001);
+						asBYTE action = 0;
+						ReadData(&action, 1);
+						cleanup.action =
+							static_cast<asEConstructorCleanupAction>(action);
+						ReadData(&cleanup.phase, 1);
+						asBYTE completeObject = 0;
+						ReadData(&completeObject, 1);
+						cleanup.completeObject = completeObject != 0;
+
+						const bool isMember = cleanup.phase
+							== asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER;
+						const bool isDelegating = cleanup.phase
+							== asAST_LIFETIME_PHASE_CONSTRUCTOR_DELEGATING;
+						const bool isComplete = cleanup.phase
+							== asAST_LIFETIME_PHASE_COMPLETE_OBJECT;
+						if (cleanup.objectType == 0
+							|| !IsConstructorCleanupPhase(cleanup.phase)
+							|| (cleanup.action
+								!= asCONSTRUCTOR_CLEANUP_DESTROY_VALUE
+								&& cleanup.action
+									!= asCONSTRUCTOR_CLEANUP_RELEASE_REFERENCE)
+							|| completeObject > 1
+							|| cleanup.completeObject != (isDelegating || isComplete)
+							|| (isMember && cleanup.objectOffset <= 0)
+							|| (!isMember && cleanup.objectOffset != 0)
+							|| ((!isMember
+								|| cleanup.action == asCONSTRUCTOR_CLEANUP_DESTROY_VALUE)
+								&& cleanup.actionFunctionId <= 0)
+							|| ((isDelegating || isComplete
+								|| cleanup.phase
+									== asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE)
+								&& cleanup.action
+									!= asCONSTRUCTOR_CLEANUP_DESTROY_VALUE)
+							|| sawCompleteObject
+							|| ((isDelegating || isComplete)
+								&& cleanupIndex + 1 != cleanupCount))
+						{
+							Error(TXT_INVALID_BYTECODE_d);
+							break;
+						}
+						if (isDelegating || isComplete)
+							sawCompleteObject = true;
+					}
+
+					asBYTE hasPartialConstruction = 0;
+					if (!error)
+						ReadData(&hasPartialConstruction, 1);
+					if (!error && hasPartialConstruction > 1)
+						Error(TXT_INVALID_BYTECODE_d);
+					if (!error && hasPartialConstruction)
+					{
+						func->scriptData->partialConstructionObjectType =
+							ReadTypeInfo();
+						func->scriptData->partialConstructionObjectOffset =
+							SanityCheck(ReadEncodedInt(), 1000000);
+						func->scriptData->partialConstructionConstructorId =
+							SanityCheck(ReadEncodedInt(), 1000001);
+					}
+
+					const bool hasCleanup = cleanupCount > 0;
+					if (!error
+						&& ((hasCleanup
+							&& (func->objectType == 0
+								|| func->scriptData->constructorCommittedCountOffset <= 0
+								|| !sawCompleteObject
+								|| hasPartialConstruction))
+							|| (!hasCleanup
+								&& (func->scriptData->constructorCommittedCountOffset != 0
+									|| !hasPartialConstruction
+									|| func->scriptData->partialConstructionObjectType == 0
+									|| func->scriptData->partialConstructionObjectOffset <= 0
+									|| func->scriptData->partialConstructionConstructorId <= 0))))
+					{
+						Error(TXT_INVALID_BYTECODE_d);
+					}
+					if (!error && hasCleanup)
+					{
+						// The stock module function signature does not serialize the
+						// internal constructor trait. An authenticated constructor cleanup
+						// directory is itself a stronger persisted proof of that role; the
+						// detached artifact root trait word is applied immediately after
+						// ReadFunction and must agree with this reconstructed shape.
+						func->traits.SetTrait(asTRAIT_CONSTRUCTOR, true);
+					}
+				}
+
+				if (error)
+				{
+					func->DestroyHalfCreated();
+					return 0;
 				}
 
 				if (!noDebugInfo)
@@ -4381,8 +4511,136 @@ void asCReader::TranslateFunction(asCScriptFunction *func)
 		n += asBCTypeSize[asBCInfo[c].type];
 	}
 
+	// Constructor cleanup operands live in a semantic tail after the bytecode
+	// instruction coordinates. They are not executable instructions, but stable
+	// coordinates let Cache V2 authenticate their exact type/function/property
+	// dependencies through the same ordered-relocation contract.
+	const asUINT constructorSemanticOrdinal = bcNum;
+	for( n = 0;
+		n < func->scriptData->constructorCleanupInfo.GetLength() && !error; ++n )
+	{
+		asSConstructorCleanupInfo& cleanup =
+			func->scriptData->constructorCleanupInfo[n];
+		const asUINT semanticOrdinal = constructorSemanticOrdinal + n;
+		RecordFunctionArtifactTypeUse(semanticOrdinal, 0, cleanup.objectType);
+
+		asCScriptFunction* actionFunction = 0;
+		if( cleanup.actionFunctionId > 0 )
+		{
+			actionFunction = FindFunction(cleanup.actionFunctionId - 1);
+			if( actionFunction == 0 )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
+			RecordFunctionArtifactRelocation(
+				semanticOrdinal, 1, actionFunction);
+			cleanup.actionFunctionId = actionFunction->id;
+		}
+
+		asCObjectType* const cleanupObjectType =
+			CastToObjectType(cleanup.objectType);
+		if( cleanup.objectType == 0 || cleanupObjectType == 0 )
+		{
+			Error(TXT_INVALID_BYTECODE_d);
+			return;
+		}
+		if( cleanup.action == asCONSTRUCTOR_CLEANUP_DESTROY_VALUE )
+		{
+			if( actionFunction == 0
+				|| actionFunction->objectType != cleanup.objectType
+				|| cleanupObjectType->beh.destruct != actionFunction->id )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
+		}
+		else if( cleanup.action == asCONSTRUCTOR_CLEANUP_RELEASE_REFERENCE )
+		{
+			const bool noCount = (cleanup.objectType->flags & asOBJ_NOCOUNT) != 0;
+			if( (!noCount && (actionFunction == 0
+					|| cleanupObjectType->beh.release != actionFunction->id))
+				|| (noCount && actionFunction != 0) )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
+		}
+		else
+		{
+			Error(TXT_INVALID_BYTECODE_d);
+			return;
+		}
+
+		if( cleanup.phase == asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER )
+		{
+			const asUINT propertyCoordinate = asUINT(cleanup.objectOffset - 1);
+			if( propertyCoordinate >= usedObjectProperties.GetLength()
+				|| usedObjectProperties[propertyCoordinate].objType != func->objectType
+				|| usedObjectProperties[propertyCoordinate].prop == 0 )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
+			asCObjectProperty* const property =
+				usedObjectProperties[propertyCoordinate].prop;
+			asCTypeInfo* const propertyType = property->type.GetTypeInfo();
+			if( propertyType != cleanup.objectType
+				&& !(property->type.IsFuncdef()
+					&& cleanup.objectType == &engine->functionBehaviours) )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
+			RecordFunctionArtifactPropertyUse(
+				semanticOrdinal, 2, func->objectType, property);
+			cleanup.objectOffset = property->byteOffset;
+		}
+		else
+		{
+			if( cleanup.objectOffset != 0
+				|| ((cleanup.completeObject
+						|| cleanup.phase
+							== asAST_LIFETIME_PHASE_CONSTRUCTOR_DELEGATING)
+					&& cleanup.objectType != func->objectType)
+				|| (cleanup.phase == asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE
+					&& (func->objectType == 0
+						|| func->objectType->derivedFrom != cleanup.objectType)) )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
+		}
+	}
+
+	if( func->scriptData->partialConstructionObjectType != 0 && !error )
+	{
+		const asUINT semanticOrdinal = constructorSemanticOrdinal
+			+ func->scriptData->constructorCleanupInfo.GetLength();
+		RecordFunctionArtifactTypeUse(semanticOrdinal, 0,
+			func->scriptData->partialConstructionObjectType);
+		asCScriptFunction* const constructor = FindFunction(
+			func->scriptData->partialConstructionConstructorId - 1);
+		if( constructor == 0
+			|| constructor->objectType
+				!= func->scriptData->partialConstructionObjectType
+			|| !constructor->traits.GetTrait(asTRAIT_CONSTRUCTOR) )
+		{
+			Error(TXT_INVALID_BYTECODE_d);
+			return;
+		}
+		RecordFunctionArtifactRelocation(semanticOrdinal, 1, constructor);
+		func->scriptData->partialConstructionConstructorId = constructor->id;
+	}
+
 	// Calculate the stack adjustments
 	CalculateAdjustmentByPos(func);
+	if( func->scriptData->constructorCommittedCountOffset > 0 )
+		func->scriptData->constructorCommittedCountOffset = AdjustStackPosition(
+			func->scriptData->constructorCommittedCountOffset);
+	if( func->scriptData->partialConstructionObjectOffset > 0 )
+		func->scriptData->partialConstructionObjectOffset = AdjustStackPosition(
+			func->scriptData->partialConstructionObjectOffset);
 
 	// Adjust all variable positions in the bytecode
 	bc = func->scriptData->byteCode.AddressOf();
@@ -4438,6 +4696,121 @@ void asCReader::TranslateFunction(asCScriptFunction *func)
 
 	// Adjust the space needed for local variables
 	func->scriptData->variableSpace = AdjustStackPosition(func->scriptData->variableSpace);
+	if( (func->scriptData->constructorCommittedCountOffset < 0)
+		|| (func->scriptData->constructorCommittedCountOffset > 0
+			&& func->scriptData->constructorCommittedCountOffset
+				> int(func->scriptData->variableSpace))
+		|| func->scriptData->partialConstructionObjectOffset < 0
+		|| (func->scriptData->partialConstructionObjectOffset > 0
+			&& func->scriptData->partialConstructionObjectOffset
+				> int(func->scriptData->variableSpace)) )
+	{
+		Error(TXT_INVALID_BYTECODE_d);
+		return;
+	}
+	if( func->scriptData->partialConstructionObjectOffset > 0 )
+	{
+		// This semantic tail grants exception cleanup permission to free a raw
+		// allocation, so an in-range coordinate is not sufficient authentication.
+		// Require the exact generated-factory bytecode role: one PSF of that slot,
+		// one ALLOC of the authenticated type/constructor, and one LOADOBJ which
+		// clears the same slot on success, in that order. A forged tail therefore
+		// cannot redirect cleanup to an unrelated pointer local.
+		const int partialOffset =
+			func->scriptData->partialConstructionObjectOffset;
+		asUINT psfPosition = asUINT(-1);
+		asUINT allocPosition = asUINT(-1);
+		asUINT loadPosition = asUINT(-1);
+		asUINT psfCount = 0;
+		asUINT allocCount = 0;
+		asUINT loadCount = 0;
+		for( n = 0; n < bcLength; )
+		{
+			const asBYTE opcode = *(asBYTE*)&bc[n];
+			if( opcode == asBC_PSF )
+			{
+				++psfCount;
+				if( asBC_SWORDARG0(&bc[n]) == partialOffset )
+					psfPosition = n;
+			}
+			else if( opcode == asBC_ALLOC )
+			{
+				++allocCount;
+				if( (asCTypeInfo*)asBC_PTRARG(&bc[n])
+						== func->scriptData->partialConstructionObjectType
+					&& asBC_INTARG(&bc[n] + AS_PTR_SIZE)
+						== func->scriptData->partialConstructionConstructorId )
+				{
+					allocPosition = n;
+				}
+			}
+			else if( opcode == asBC_LOADOBJ )
+			{
+				++loadCount;
+				if( asBC_SWORDARG0(&bc[n]) == partialOffset )
+					loadPosition = n;
+			}
+			n += asBCTypeSize[asBCInfo[opcode].type];
+		}
+		if( func->objectType != 0
+			|| !func->returnType.IsObjectHandle()
+			|| func->returnType.GetTypeInfo()
+				!= func->scriptData->partialConstructionObjectType
+			|| psfCount != 1 || allocCount != 1 || loadCount != 1
+			|| psfPosition == asUINT(-1)
+			|| allocPosition == asUINT(-1)
+			|| loadPosition == asUINT(-1)
+			|| psfPosition >= allocPosition
+			|| allocPosition >= loadPosition )
+		{
+			Error(TXT_INVALID_BYTECODE_d);
+			return;
+		}
+	}
+	if( func->scriptData->constructorCommittedCountOffset > 0 )
+	{
+		// Debug tables may be stripped from detached function artifacts, but the
+		// authenticated constructor protocol still names a VM/JIT-visible scalar
+		// frame local. Rebuild that exact derived directory entry from the persisted
+		// committed-count coordinate; never infer it by scanning bytecode operands.
+		bool foundCommittedCount = false;
+		for( n = 0; n < func->scriptData->temporaryVariables.GetLength(); ++n )
+		{
+			const asCScriptFunction::ScriptFunctionData::ScriptTempVariable& temporary =
+				func->scriptData->temporaryVariables[n];
+			if( temporary.Offset !=
+				func->scriptData->constructorCommittedCountOffset )
+				continue;
+			if( temporary.Token != ttUInt )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
+			foundCommittedCount = true;
+			break;
+		}
+		if( !foundCommittedCount )
+		{
+			asCScriptFunction::ScriptFunctionData::ScriptTempVariable temporary;
+			temporary.Offset =
+				func->scriptData->constructorCommittedCountOffset;
+			temporary.Token = ttUInt;
+			func->scriptData->temporaryVariables.PushLast(temporary);
+		}
+	}
+	if( func->scriptData->partialConstructionObjectOffset > 0 )
+	{
+		// The factory's raw allocation is deliberately absent from the owning
+		// object-variable cleanup directory, but PSF/LOADOBJ still address it as a
+		// pointer-sized VM local. Rebuild that non-owning JIT directory entry from
+		// the authenticated partial-construction coordinate after stack translation.
+		if( !func->scriptData->pointerVariablePos.Exists(
+			func->scriptData->partialConstructionObjectOffset) )
+		{
+			func->scriptData->pointerVariablePos.PushLast(
+				func->scriptData->partialConstructionObjectOffset);
+		}
+	}
 
 	// Adjust the variable information. This will be used during the adjustment below
 	for( n = 0; n < func->scriptData->variables.GetLength(); n++ )
@@ -5803,6 +6176,15 @@ void asCWriter::WriteFunction(asCScriptFunction* func)
 		if (func->scriptData->tryCatchInfo.GetLength())
 			bits += 16;
 		bits += IsExplicitTrait(func) ? 32 : 0;
+		const bool hasConstructorCleanup =
+			func->scriptData->constructorCleanupInfo.GetLength() != 0
+			|| func->scriptData->constructorCommittedCountOffset != 0;
+		const bool hasPartialConstruction =
+			func->scriptData->partialConstructionObjectType != 0
+			|| func->scriptData->partialConstructionObjectOffset != 0
+			|| func->scriptData->partialConstructionConstructorId != 0;
+		if( hasConstructorCleanup || hasPartialConstruction )
+			bits += 64;
 		WriteData(&bits, 1);
 
 		// For external shared functions the rest is not needed
@@ -5840,6 +6222,168 @@ void asCWriter::WriteFunction(asCScriptFunction* func)
 				WriteEncodedInt64(bytecodeNbrByPos[func->scriptData->tryCatchInfo[i].catchPos]);
 				// The stack size must be adjusted to be according to variable sizes
 				WriteEncodedInt64(AdjustStackPosition(func->scriptData->tryCatchInfo[i].stackOffset));
+			}
+		}
+
+		if (bits & 64)
+		{
+			const asUINT cleanupCount =
+				func->scriptData->constructorCleanupInfo.GetLength();
+			const bool validCleanupShape = hasConstructorCleanup
+				&& cleanupCount > 0
+				&& func->scriptData->constructorCommittedCountOffset > 0
+				&& func->objectType != 0
+				&& func->traits.GetTrait(asTRAIT_CONSTRUCTOR)
+				&& !hasPartialConstruction;
+			const bool validPartialShape = !hasConstructorCleanup
+				&& cleanupCount == 0
+				&& func->scriptData->constructorCommittedCountOffset == 0
+				&& func->scriptData->partialConstructionObjectType != 0
+				&& func->scriptData->partialConstructionObjectOffset > 0
+				&& func->scriptData->partialConstructionConstructorId > 0;
+			if( !validCleanupShape && !validPartialShape )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
+
+			WriteEncodedInt64(AdjustStackPosition(
+				func->scriptData->constructorCommittedCountOffset));
+			WriteEncodedInt64(cleanupCount);
+			bool sawCompleteObject = false;
+			for( i = 0; i < cleanupCount; ++i )
+			{
+				const asSConstructorCleanupInfo& cleanup =
+					func->scriptData->constructorCleanupInfo[i];
+				const bool isMember = cleanup.phase
+					== asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER;
+				const bool isDelegating = cleanup.phase
+					== asAST_LIFETIME_PHASE_CONSTRUCTOR_DELEGATING;
+				const bool isComplete = cleanup.phase
+					== asAST_LIFETIME_PHASE_COMPLETE_OBJECT;
+				asCScriptFunction* actionFunction = 0;
+				if( cleanup.actionFunctionId > 0
+					&& asUINT(cleanup.actionFunctionId)
+						< engine->scriptFunctions.GetLength() )
+					actionFunction =
+						engine->scriptFunctions[cleanup.actionFunctionId];
+
+				if( cleanup.objectType == 0
+					|| !IsConstructorCleanupPhase(cleanup.phase)
+					|| (cleanup.action != asCONSTRUCTOR_CLEANUP_DESTROY_VALUE
+						&& cleanup.action
+							!= asCONSTRUCTOR_CLEANUP_RELEASE_REFERENCE)
+					|| cleanup.completeObject != (isDelegating || isComplete)
+					|| ((!isMember
+						|| cleanup.action == asCONSTRUCTOR_CLEANUP_DESTROY_VALUE)
+						&& actionFunction == 0)
+					|| ((isDelegating || isComplete
+						|| cleanup.phase
+							== asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE)
+						&& cleanup.action
+							!= asCONSTRUCTOR_CLEANUP_DESTROY_VALUE)
+					|| sawCompleteObject
+					|| ((isDelegating || isComplete) && i + 1 != cleanupCount) )
+				{
+					Error(TXT_INVALID_BYTECODE_d);
+					return;
+				}
+
+				int propertyIndexPlusOne = 0;
+				if( isMember )
+				{
+					asCObjectProperty* property = 0;
+					for( asUINT propertyIndex = 0;
+						propertyIndex < func->objectType->properties.GetLength();
+						++propertyIndex )
+					{
+						asCObjectProperty* const candidate =
+							func->objectType->properties[propertyIndex];
+						if( candidate && candidate->byteOffset == cleanup.objectOffset
+							&& candidate->compositeOffset == 0
+							&& !candidate->isCompositeIndirect )
+						{
+							if( property != 0 && property != candidate )
+							{
+								Error(TXT_INVALID_BYTECODE_d);
+								return;
+							}
+							property = candidate;
+						}
+					}
+					if( property == 0 )
+					{
+						Error(TXT_INVALID_BYTECODE_d);
+						return;
+					}
+					int propertyTableIndex = -1;
+					for( asUINT propertyIndex = 0;
+						propertyIndex < usedObjectProperties.GetLength();
+						++propertyIndex )
+					{
+						if( usedObjectProperties[propertyIndex].objType
+								== func->objectType
+							&& usedObjectProperties[propertyIndex].prop == property )
+						{
+							propertyTableIndex = int(propertyIndex);
+							break;
+						}
+					}
+					if( propertyTableIndex < 0 )
+					{
+						SObjProp propertyEntry = {func->objectType, property};
+						usedObjectProperties.PushLast(propertyEntry);
+						propertyTableIndex =
+							int(usedObjectProperties.GetLength() - 1);
+					}
+					propertyIndexPlusOne = propertyTableIndex + 1;
+				}
+				else if( cleanup.objectOffset != 0 )
+				{
+					Error(TXT_INVALID_BYTECODE_d);
+					return;
+				}
+
+				WriteTypeInfo(cleanup.objectType);
+				WriteEncodedInt64(actionFunction
+					? FindFunctionIndex(actionFunction) + 1 : 0);
+				WriteEncodedInt64(propertyIndexPlusOne);
+				const asBYTE action = static_cast<asBYTE>(cleanup.action);
+				WriteData(&action, 1);
+				WriteData(&cleanup.phase, 1);
+				const asBYTE completeObject = cleanup.completeObject ? 1 : 0;
+				WriteData(&completeObject, 1);
+				if( isDelegating || isComplete )
+					sawCompleteObject = true;
+			}
+			if( validCleanupShape && !sawCompleteObject )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
+
+			const asBYTE writePartialConstruction =
+				validPartialShape ? 1 : 0;
+			WriteData(&writePartialConstruction, 1);
+			if( writePartialConstruction )
+			{
+				asCScriptFunction* const constructor =
+					asUINT(func->scriptData->partialConstructionConstructorId)
+						< engine->scriptFunctions.GetLength()
+					? engine->scriptFunctions[
+						func->scriptData->partialConstructionConstructorId] : 0;
+				if( constructor == 0
+					|| constructor->objectType
+						!= func->scriptData->partialConstructionObjectType
+					|| !constructor->traits.GetTrait(asTRAIT_CONSTRUCTOR) )
+				{
+					Error(TXT_INVALID_BYTECODE_d);
+					return;
+				}
+				WriteTypeInfo(func->scriptData->partialConstructionObjectType);
+				WriteEncodedInt64(AdjustStackPosition(
+					func->scriptData->partialConstructionObjectOffset));
+				WriteEncodedInt64(FindFunctionIndex(constructor) + 1);
 			}
 		}
 

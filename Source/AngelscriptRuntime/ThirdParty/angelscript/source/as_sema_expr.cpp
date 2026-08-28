@@ -1640,6 +1640,60 @@ static asASTDeclId InternNativeBehaviourList(
 	return selected;
 }
 
+static asASTDeclId InternNativeDestructor(
+	asCSema& sema,
+	asCScriptEngine* engine,
+	asCASTContext& context,
+	asCObjectType* objectType,
+	asASTDeclId classDecl)
+{
+	if( engine == 0 || objectType == 0 || !classDecl.IsValid()
+		|| objectType->beh.destruct <= 0
+		|| static_cast<asUINT>(objectType->beh.destruct)
+			>= engine->scriptFunctions.GetLength() )
+	{
+		return asASTDeclId();
+	}
+
+	const asCDecl* const cls = context.GetDecl(classDecl);
+	for( asUINT childIndex = 0;
+		cls != 0 && childIndex < cls->children.GetLength(); ++childIndex )
+	{
+		const asCDecl* const child = context.GetDecl(cls->children[childIndex]);
+		if( child != 0 && child->kind == asAST_DECL_DESTRUCTOR )
+		{
+			return child->id;
+		}
+	}
+
+	asCScriptFunction* destructor =
+		engine->scriptFunctions[objectType->beh.destruct];
+	if( destructor == 0 )
+	{
+		return asASTDeclId();
+	}
+	if( objectType->templateBaseType != 0
+		&& destructor->objectType == objectType->templateBaseType )
+	{
+		destructor = engine->GenerateTemplateFunction(objectType, destructor);
+	}
+	if( destructor == 0 || destructor->objectType != objectType )
+	{
+		return asASTDeclId();
+	}
+
+	const asASTDeclId declaration = sema.ActOnDestructorDecl(
+		classDecl,
+		objectType->name.AddressOf(),
+		asCSourceRange());
+	if( declaration.IsValid() )
+	{
+		context.AddDeclTrait(declaration, asAST_TRAIT_EXTERNAL);
+		context.SetOrigin(declaration, "canonical-native-destructor");
+	}
+	return declaration;
+}
+
 void asCSema::InternNativeCallablesForType(const asCQualType& type)
 {
 	if( engine == 0 )
@@ -1670,6 +1724,7 @@ void asCSema::InternNativeCallablesForType(const asCQualType& type)
 	SyncImportedNativeClassKind(context, classDecl, dataType);
 	InternNativeBehaviourList(*this, engine, context, type, objectType, classDecl, objectType->beh.constructors, false, false);
 	InternNativeBehaviourList(*this, engine, context, type, objectType, classDecl, objectType->beh.factories, true, false);
+	InternNativeDestructor(*this, engine, context, objectType, classDecl);
 }
 
 void asCSema::InternNativeZeroArgCallablesForType(const asCQualType& type)
@@ -1701,6 +1756,7 @@ void asCSema::InternNativeZeroArgCallablesForType(const asCQualType& type)
 	}
 	SyncImportedNativeClassKind(context, classDecl, dataType);
 	InternNativeBehaviourList(*this, engine, context, type, objectType, classDecl, objectType->beh.constructors, false, true);
+	InternNativeDestructor(*this, engine, context, objectType, classDecl);
 	if( objectType->beh.factory > 0 )
 	{
 		asCArray<int> defaultFactory;

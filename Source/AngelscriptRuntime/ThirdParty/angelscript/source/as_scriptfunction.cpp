@@ -1226,6 +1226,57 @@ void asCScriptFunction::AddReferences(
 				if( group != 0 ) group->AddRef();
 			}
 
+		// Constructor unwind metadata is executed outside the ordinary bytecode
+		// stream, so its generation-local Runtime types and action functions need
+		// explicit ownership. Numeric ids are only lookup keys inside this live
+		// generation; no persisted TypeId participates in the identity contract.
+		for( asUINT cleanupIndex = 0;
+			cleanupIndex < scriptData->constructorCleanupInfo.GetLength();
+			++cleanupIndex )
+		{
+			const asSConstructorCleanupInfo& cleanup =
+				scriptData->constructorCleanupInfo[cleanupIndex];
+			if( cleanup.objectType )
+			{
+				cleanup.objectType->AddRefInternal();
+				asCConfigGroup* const group =
+					engine->FindConfigGroupForTypeInfo(cleanup.objectType);
+				if( group != 0 ) group->AddRef();
+			}
+			if( cleanup.actionFunctionId > 0 )
+			{
+				asCScriptFunction* const action =
+					ResolveBuildArtifactFunctionReference(
+						engine, cleanup.actionFunctionId, restoreContext);
+				asASSERT( action );
+				if( action ) action->AddRefInternal();
+				asCConfigGroup* const group =
+					engine->FindConfigGroupForFunction(
+						cleanup.actionFunctionId);
+				if( group != 0 ) group->AddRef();
+			}
+		}
+		if( scriptData->partialConstructionObjectType )
+		{
+			scriptData->partialConstructionObjectType->AddRefInternal();
+			asCConfigGroup* const group = engine->FindConfigGroupForTypeInfo(
+				scriptData->partialConstructionObjectType);
+			if( group != 0 ) group->AddRef();
+		}
+		if( scriptData->partialConstructionConstructorId > 0 )
+		{
+			asCScriptFunction* const constructor =
+				ResolveBuildArtifactFunctionReference(
+					engine,
+					scriptData->partialConstructionConstructorId,
+					restoreContext);
+			asASSERT( constructor );
+			if( constructor ) constructor->AddRefInternal();
+			asCConfigGroup* const group = engine->FindConfigGroupForFunction(
+				scriptData->partialConstructionConstructorId);
+			if( group != 0 ) group->AddRef();
+		}
+
 		// Go through the byte code and add references to all resources used by the function
 		asCArray<asDWORD> &bc = scriptData->byteCode;
 		asASSERT( scriptData->globalPropertyReferences.GetLength() == 0 );
@@ -1405,6 +1456,51 @@ void asCScriptFunction::ReleaseReferences(
 				asCConfigGroup *group = engine->FindConfigGroupForTypeInfo(scriptData->objVariableTypes[v]);
 				if( group != 0 ) group->Release();
 			}
+
+		for( asUINT cleanupIndex = 0;
+			cleanupIndex < scriptData->constructorCleanupInfo.GetLength();
+			++cleanupIndex )
+		{
+			const asSConstructorCleanupInfo& cleanup =
+				scriptData->constructorCleanupInfo[cleanupIndex];
+			if( cleanup.objectType )
+			{
+				asCConfigGroup* const group =
+					engine->FindConfigGroupForTypeInfo(cleanup.objectType);
+				cleanup.objectType->ReleaseInternal();
+				if( group != 0 ) group->Release();
+			}
+			if( cleanup.actionFunctionId > 0 )
+			{
+				asCScriptFunction* const action =
+					ResolveBuildArtifactFunctionReference(
+						engine, cleanup.actionFunctionId, restoreContext);
+				asCConfigGroup* const group =
+					engine->FindConfigGroupForFunction(
+						cleanup.actionFunctionId);
+				if( action ) action->ReleaseInternal();
+				if( group != 0 ) group->Release();
+			}
+		}
+		if( scriptData->partialConstructionObjectType )
+		{
+			asCConfigGroup* const group = engine->FindConfigGroupForTypeInfo(
+				scriptData->partialConstructionObjectType);
+			scriptData->partialConstructionObjectType->ReleaseInternal();
+			if( group != 0 ) group->Release();
+		}
+		if( scriptData->partialConstructionConstructorId > 0 )
+		{
+			asCScriptFunction* const constructor =
+				ResolveBuildArtifactFunctionReference(
+					engine,
+					scriptData->partialConstructionConstructorId,
+					restoreContext);
+			asCConfigGroup* const group = engine->FindConfigGroupForFunction(
+				scriptData->partialConstructionConstructorId);
+			if( constructor ) constructor->ReleaseInternal();
+			if( group != 0 ) group->Release();
+		}
 
 		// Go through the byte code and release references to all resources used by the function
 		asCArray<asDWORD> &bc = scriptData->byteCode;
