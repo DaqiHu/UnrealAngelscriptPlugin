@@ -324,6 +324,49 @@ struct asSASTLifetimeCleanupBinding
 	}
 };
 
+// Backend-facing semantic exit order derived from authenticated lifetime
+// records. Compatibility cleanup statement/expression identities are
+// deliberately absent: they remain parity evidence and cannot route CodeGen.
+enum asEASTLifetimeExitPlanKind : asBYTE
+{
+	asAST_LIFETIME_EXIT_PLAN_INVALID = 0,
+	asAST_LIFETIME_EXIT_PLAN_NORMAL,
+	asAST_LIFETIME_EXIT_PLAN_TRANSFER,
+	asAST_LIFETIME_EXIT_PLAN_FOREACH,
+};
+
+struct asSASTLifetimeExitPlan
+{
+	asASTStmtId structuralOwner;
+	asEASTLifetimeExitPlanKind kind;
+	asDWORD exitMask;
+	asCArray<asUINT> recordIndices;
+
+	asSASTLifetimeExitPlan()
+		: kind(asAST_LIFETIME_EXIT_PLAN_INVALID)
+		, exitMask(asAST_LIFETIME_EXIT_NONE)
+	{
+	}
+
+	bool operator==(const asSASTLifetimeExitPlan& other) const
+	{
+		if( structuralOwner != other.structuralOwner
+			|| kind != other.kind
+			|| exitMask != other.exitMask
+			|| recordIndices.GetLength() != other.recordIndices.GetLength() )
+		{
+			return false;
+		}
+		for( asUINT index = 0; index < recordIndices.GetLength(); ++index )
+			if( recordIndices[index] != other.recordIndices[index] ) return false;
+		return true;
+	}
+	bool operator!=(const asSASTLifetimeExitPlan& other) const
+	{
+		return !(*this == other);
+	}
+};
+
 // Named foreach phases hide the retained children[0..3] compatibility shape.
 // condition is the dedicated expression edge; cleanup is optional for
 // primitive/enum iterators.
@@ -362,6 +405,7 @@ public:
 	asUINT GetRecordCount() const { return records.GetLength(); }
 	asUINT GetCommitPointCount() const { return commitPoints.GetLength(); }
 	asUINT GetCleanupBindingCount() const { return cleanupBindings.GetLength(); }
+	asUINT GetExitPlanCount() const { return exitPlans.GetLength(); }
 	asUINT GetForEachPhaseCount() const { return forEachPhases.GetLength(); }
 	const asSASTLifetimeScopeEdge* GetScopeEdge(asUINT index) const;
 	const asSASTLifetimeViewRecord* GetRecord(asUINT index) const;
@@ -369,6 +413,10 @@ public:
 	const asSASTLifetimeCleanupBinding* GetCleanupBinding(asUINT index) const;
 	const asSASTLifetimeCleanupBinding* FindCleanupBinding(
 		asASTStmtId statement) const;
+	const asSASTLifetimeExitPlan* GetExitPlan(asUINT index) const;
+	const asSASTLifetimeExitPlan* FindExitPlan(
+		asASTStmtId structuralOwner,
+		asEASTLifetimeExitPlanKind kind) const;
 	const asSASTForEachPhases* GetForEachPhases(asUINT index) const;
 	const asSASTForEachPhases* FindForEachPhases(
 		asASTStmtId statement) const;
@@ -386,6 +434,7 @@ private:
 	asCArray<asSASTLifetimeViewRecord> records;
 	asCArray<asSASTLifetimeCommitPoint> commitPoints;
 	asCArray<asSASTLifetimeCleanupBinding> cleanupBindings;
+	asCArray<asSASTLifetimeExitPlan> exitPlans;
 	asCArray<asSASTForEachPhases> forEachPhases;
 };
 

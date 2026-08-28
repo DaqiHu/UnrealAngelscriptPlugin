@@ -115,7 +115,7 @@ static asSASTLifetimeRecord MakeLocalLifetimeRecord(
 	return Record;
 }
 
-static asASTStmtId AppendNormalScopeExit(
+static asASTStmtId CreateScopeExitCompatibilityStatement(
 	asCASTContext& Context,
 	const asSASTLifetimeRecord& Record)
 {
@@ -134,6 +134,15 @@ static asASTStmtId AppendNormalScopeExit(
 	const asASTStmtId CleanupStmt = Context.CreateStmt(
 		asAST_STMT_EXPR, LocalDecl->parent, asCSourceRange());
 	Context.SetStmtExpr(CleanupStmt, Cleanup);
+	return CleanupStmt;
+}
+
+static asASTStmtId AppendNormalScopeExit(
+	asCASTContext& Context,
+	const asSASTLifetimeRecord& Record)
+{
+	const asASTStmtId CleanupStmt =
+		CreateScopeExitCompatibilityStatement(Context, Record);
 	Context.AddStmtChild(
 		asASTStmtId(Record.semanticRegion.value), CleanupStmt);
 	return CleanupStmt;
@@ -310,6 +319,213 @@ public:
 			TEXT("initializer failure must exclude the failed current object")));
 		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
 			SecondCommit->abortCleanup[0]));
+	}
+
+	TEST_METHOD(DerivesProtocolOnlyNormalExitPlanInReverseCommitOrder)
+	{
+		asCASTContext Context;
+		const FLocalLifetimeViewFixture Fixture =
+			BuildLocalLifetimeViewFixture(Context);
+		const asSASTLifetimeRecord First =
+			MakeLocalLifetimeRecord(Fixture, true, 0);
+		const asSASTLifetimeRecord Second =
+			MakeLocalLifetimeRecord(Fixture, false, 1);
+		AppendNormalScopeExit(Context, Second);
+		AppendNormalScopeExit(Context, First);
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(First)));
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Second)));
+		ASSERT_THAT(AreEqual(0, Context.Seal()));
+
+		asCASTLifetimeView FirstView;
+		asCASTLifetimeView SecondView;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, FirstView)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, SecondView)));
+
+		const asSASTLifetimeExitPlan* const FirstPlan =
+			FirstView.FindExitPlan(
+				Fixture.Region, asAST_LIFETIME_EXIT_PLAN_NORMAL);
+		const asSASTLifetimeExitPlan* const SecondPlan =
+			SecondView.FindExitPlan(
+				Fixture.Region, asAST_LIFETIME_EXIT_PLAN_NORMAL);
+		ASSERT_THAT(IsNotNull(FirstPlan,
+			TEXT("the shared view must derive normal cleanup from protocol records")));
+		ASSERT_THAT(IsNotNull(SecondPlan));
+		ASSERT_THAT(IsTrue(*FirstPlan == *SecondPlan,
+			TEXT("one Frozen protocol must reconstruct the same exit plan")));
+		ASSERT_THAT(IsTrue(FirstPlan->structuralOwner == Fixture.Region));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_LIFETIME_EXIT_PLAN_NORMAL),
+			static_cast<int32>(FirstPlan->kind)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asDWORD>(asAST_LIFETIME_EXIT_NORMAL),
+			FirstPlan->exitMask));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(2), FirstPlan->recordIndices.GetLength()));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(1), FirstPlan->recordIndices[0],
+			TEXT("normal cleanup starts with the latest committed record")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0), FirstPlan->recordIndices[1]));
+	}
+
+	TEST_METHOD(DerivesProtocolOnlyTransferExitPlanForCommittedLocals)
+	{
+		asCASTContext Context;
+		const FLocalLifetimeViewFixture Fixture =
+			BuildLocalLifetimeViewFixture(Context);
+		const asSASTLifetimeRecord First =
+			MakeLocalLifetimeRecord(Fixture, true, 0);
+		const asSASTLifetimeRecord Second =
+			MakeLocalLifetimeRecord(Fixture, false, 1);
+		const asASTStmtId Return = Context.CreateStmt(
+			asAST_STMT_RETURN,
+			Context.GetDecl(Fixture.FirstLocal)->parent,
+			asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Fixture.Region, Return)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Return,
+			CreateScopeExitCompatibilityStatement(Context, Second))));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Return,
+			CreateScopeExitCompatibilityStatement(Context, First))));
+		AppendNormalScopeExit(Context, Second);
+		AppendNormalScopeExit(Context, First);
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(First)));
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Second)));
+		ASSERT_THAT(AreEqual(0, Context.Seal()));
+
+		asCASTLifetimeView View;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, View)));
+		const asSASTLifetimeExitPlan* const Plan =
+			View.FindExitPlan(Return, asAST_LIFETIME_EXIT_PLAN_TRANSFER);
+		ASSERT_THAT(IsNotNull(Plan,
+			TEXT("return cleanup must be derived from live protocol records")));
+		ASSERT_THAT(IsTrue(Plan->structuralOwner == Return));
+		ASSERT_THAT(AreEqual(
+			static_cast<asDWORD>(asAST_LIFETIME_EXIT_RETURN),
+			Plan->exitMask));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(2), Plan->recordIndices.GetLength()));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(1), Plan->recordIndices[0]));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0), Plan->recordIndices[1]));
+	}
+
+	TEST_METHOD(DerivesProtocolOnlyForeachIteratorExitPlan)
+	{
+		asCASTContext Context;
+		const asASTDeclId Tu = Context.CreateTranslationUnit("ForeachExitPlan");
+		const asCQualType IteratorType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FIterator", 0);
+		const asASTDeclId IteratorClass = Context.CreateDecl(
+			asAST_DECL_CLASS, Tu, asCSourceRange(), "FIterator");
+		ASSERT_THAT(AreEqual(0,
+			Context.SetStableKey(IteratorClass, "FIterator")));
+		const asASTDeclId Destructor = Context.CreateDecl(
+			asAST_DECL_DESTRUCTOR, IteratorClass,
+			asCSourceRange(), "FIterator");
+		const asASTDeclId Function = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, asCSourceRange(), "F");
+		const asASTStmtId FunctionBody = Context.CreateStmt(
+			asAST_STMT_BLOCK, Function, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetBody(Function, FunctionBody)));
+
+		const asASTDeclId Iterator = Context.CreateDecl(
+			asAST_DECL_VAR, Function, asCSourceRange(), "Iterator");
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Iterator, IteratorType)));
+		ASSERT_THAT(AreEqual(0,
+			Context.AddDeclTrait(Iterator, asAST_TRAIT_GENERATED)));
+		const asASTStmtId Initializer = Context.CreateStmt(
+			asAST_STMT_BLOCK, Function, asCSourceRange());
+		const asASTStmtId IteratorDecl = Context.CreateStmt(
+			asAST_STMT_DECL, Function, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetStmtDecl(IteratorDecl, Iterator)));
+		ASSERT_THAT(AreEqual(0,
+			Context.AddStmtChild(Initializer, IteratorDecl)));
+
+		const asASTExprId Target = Context.CreateExpr(
+			asAST_EXPR_DECL_REF, IteratorType,
+			asAST_VALUE_LVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(Target, Iterator)));
+		const asASTExprId InitializerValue = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IteratorType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetLiteral(InitializerValue, "0")));
+		const asASTExprId Assignment = Context.CreateExpr(
+			asAST_EXPR_ASSIGN, IteratorType,
+			asAST_VALUE_LVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetLiteral(Assignment, "=")));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Assignment, Target)));
+		ASSERT_THAT(AreEqual(0,
+			Context.AddExprChild(Assignment, InitializerValue)));
+		ASSERT_THAT(AreEqual(0, Context.AddDeclInit(Iterator, Assignment)));
+		const asASTStmtId Activation = Context.CreateStmt(
+			asAST_STMT_EXPR, Function, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Activation, Assignment)));
+		ASSERT_THAT(AreEqual(0,
+			Context.AddStmtChild(Initializer, Activation)));
+
+		const asASTStmtId Body = Context.CreateStmt(
+			asAST_STMT_BLOCK, Function, asCSourceRange());
+		const asASTExprId IncrementValue = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, Context.InternPrimitive(ttInt),
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetLiteral(IncrementValue, "0")));
+		const asASTStmtId Increment = Context.CreateStmt(
+			asAST_STMT_EXPR, Function, asCSourceRange());
+		ASSERT_THAT(AreEqual(0,
+			Context.SetStmtExpr(Increment, IncrementValue)));
+
+		asSASTLifetimeRecord Record;
+		Record.subjectKind = asAST_LIFETIME_SUBJECT_FOREACH_ITERATOR;
+		Record.subject = asSASTLifetimeNodeId::FromDecl(Iterator);
+		Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+		Record.actionTarget = asSASTLifetimeNodeId::FromDecl(Destructor);
+		Record.activationPoint = asSASTLifetimeNodeId::FromExpr(Assignment);
+		Record.phase = asAST_LIFETIME_PHASE_LOOP_ITERATION;
+		Record.supportedExitMask = asAST_LIFETIME_EXIT_NORMAL
+			| asAST_LIFETIME_EXIT_RETURN
+			| asAST_LIFETIME_EXIT_BREAK
+			| asAST_LIFETIME_EXIT_EXCEPTION;
+		Record.order = 0;
+
+		const asASTStmtId Cleanup =
+			CreateScopeExitCompatibilityStatement(Context, Record);
+		const asASTStmtId Foreach = Context.CreateStmt(
+			asAST_STMT_FOREACH, Function, asCSourceRange());
+		const asASTExprId Condition = Context.CreateExpr(
+			asAST_EXPR_BOOL_LITERAL, Context.InternPrimitive(ttBool),
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetLiteral(Condition, "true")));
+		ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Foreach, Condition)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Foreach, Initializer)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Foreach, Body)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Foreach, Increment)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Foreach, Cleanup)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(FunctionBody, Foreach)));
+		Record.semanticRegion = asSASTLifetimeNodeId::FromStmt(Foreach);
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Record)));
+		ASSERT_THAT(AreEqual(0, Context.Seal()));
+
+		asCASTLifetimeView View;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, View)));
+		const asSASTLifetimeExitPlan* const Plan =
+			View.FindExitPlan(Foreach, asAST_LIFETIME_EXIT_PLAN_FOREACH);
+		ASSERT_THAT(IsNotNull(Plan,
+			TEXT("foreach cleanup must route through its exact protocol record")));
+		ASSERT_THAT(IsTrue(Plan->structuralOwner == Foreach));
+		ASSERT_THAT(AreEqual(Record.supportedExitMask, Plan->exitMask));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(1), Plan->recordIndices.GetLength()));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0), Plan->recordIndices[0]));
 	}
 
 	TEST_METHOD(DerivesNestedScopeEdgesAndOuterLiveSet)

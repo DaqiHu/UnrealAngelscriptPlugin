@@ -16,6 +16,9 @@
 #include "source/as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+
 #include <cstring>
 #include <string>
 
@@ -98,6 +101,11 @@ static void ProdRecordSuccessSensitiveDestructor(asIScriptGeneric* Generic)
 		GProdSuccessSensitiveDestructionOrder.Add(
 			static_cast<int32>(Generic->GetArgDWord(0)));
 	}
+}
+
+static void ProdResetSuccessSensitiveDestructorTrace(asIScriptGeneric*)
+{
+	GProdSuccessSensitiveDestructionOrder.Reset();
 }
 
 static void ProdNativeLifecycleMemberConstruct(asIScriptGeneric* Generic)
@@ -902,6 +910,51 @@ static int32 ProdBytecodeFirstCallOffset(asIScriptFunction* Function, int Functi
 		DwordIndex += static_cast<asUINT>(InstructionSize);
 	}
 	return INDEX_NONE;
+}
+
+static TArray<int32> ProdBytecodeCallOffsets(asIScriptFunction* Function, int FunctionId)
+{
+	TArray<int32> Offsets;
+	if (Function == nullptr || FunctionId <= 0)
+	{
+		return Offsets;
+	}
+
+	asUINT BytecodeLength = 0;
+	const asDWORD* const Bytecode = Function->GetByteCode(&BytecodeLength);
+	if (Bytecode == nullptr)
+	{
+		return Offsets;
+	}
+
+	for (asUINT DwordIndex = 0; DwordIndex < BytecodeLength;)
+	{
+		const asDWORD* const Instr = Bytecode + DwordIndex;
+		const asEBCInstr Opcode =
+			static_cast<asEBCInstr>(*reinterpret_cast<const asBYTE*>(Instr));
+		if ((Opcode == asBC_CALL || Opcode == asBC_CALLINTF)
+			&& static_cast<int>(asBC_DWORDARG(Instr)) == FunctionId)
+		{
+			Offsets.Add(static_cast<int32>(DwordIndex));
+		}
+		else if (Opcode == asBC_CALLSYS)
+		{
+			asCScriptFunction* const Callee =
+				reinterpret_cast<asCScriptFunction*>(asBC_PTRARG(Instr));
+			if (Callee != nullptr && Callee->GetId() == FunctionId)
+			{
+				Offsets.Add(static_cast<int32>(DwordIndex));
+			}
+		}
+
+		const int InstructionSize = asBCTypeSize[asBCInfo[Opcode].type];
+		if (InstructionSize <= 0)
+		{
+			break;
+		}
+		DwordIndex += static_cast<asUINT>(InstructionSize);
+	}
+	return Offsets;
 }
 
 static FString ProdBytecodeCallTargets(asIScriptFunction* Function)
@@ -5361,6 +5414,44 @@ public:
 			TEXT("CANONICAL value-object Build must not record asCCompiler")));
 	}
 
+	TEST_METHOD(CanonicalBytecodeLifetimeEmitterConsumesOnlyProtocolExitPlans)
+	{
+		const FString SourcePath = FPaths::Combine(
+			FPaths::ProjectDir(),
+			TEXT("Plugins/Angelscript/Source/AngelscriptRuntime/ThirdParty/angelscript/source/as_bytecode_codegen.cpp"));
+		FString Source;
+		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(Source, *SourcePath),
+			TEXT("read the maintained Canonical Bytecode emitter source")));
+		const int32 EmitterBegin = Source.Find(
+			TEXT("class asCCanonicalFunctionEmitter"));
+		const int32 EmitterEnd = Source.Find(
+			TEXT("// Global initialization"),
+			ESearchCase::CaseSensitive,
+			ESearchDir::FromStart,
+			EmitterBegin);
+		ASSERT_THAT(IsTrue(EmitterBegin != INDEX_NONE && EmitterEnd > EmitterBegin,
+			TEXT("locate the complete Canonical function-emitter source slice")));
+		const FString Emitter = Source.Mid(
+			EmitterBegin, EmitterEnd - EmitterBegin);
+
+		ASSERT_THAT(IsTrue(Emitter.Contains(TEXT("lifetimeView.FindExitPlan(")),
+			TEXT("Bytecode cleanup routing must start from authenticated exit plans")));
+		ASSERT_THAT(IsTrue(Emitter.Contains(TEXT("lifetimeView.GetRecord(")),
+			TEXT("Bytecode actions must consume exact authenticated lifetime records")));
+		ASSERT_THAT(IsFalse(Emitter.Contains(TEXT("FindCleanupBinding(")),
+			TEXT("compatibility cleanup statement identity must not route Bytecode")));
+		ASSERT_THAT(IsFalse(Emitter.Contains(TEXT("GetCleanupBinding(")),
+			TEXT("compatibility cleanup tables are verifier-only evidence")));
+		ASSERT_THAT(IsFalse(Emitter.Contains(TEXT("EmitSealedTransferCleanups")),
+			TEXT("transfer cleanup must not traverse compatibility statement children")));
+		ASSERT_THAT(IsFalse(Emitter.Contains(TEXT("asCASTDump(")),
+			TEXT("diagnostic dump text must never select a Bytecode action")));
+		ASSERT_THAT(IsFalse(Emitter.Contains(TEXT("\"scope-exit\""))));
+		ASSERT_THAT(IsFalse(Emitter.Contains(TEXT("\"scope-release\""))));
+		ASSERT_THAT(IsFalse(Emitter.Contains(TEXT("destructor->name")),
+			TEXT("destructor spelling must never select a Bytecode action")));
+	}
+
 	TEST_METHOD(CanonicalLexicalValueObjectsExecuteSealedCleanupPlansExactlyOnce)
 	{
 		GProdNativeLifecycleMemberConstructed = 0;
@@ -5586,6 +5677,160 @@ public:
 			0,
 			Internal->GetLastLegacyCompilerInvocationCount(),
 			TEXT("success-sensitive lifetime execution must not invoke asCCompiler")));
+	}
+
+	TEST_METHOD(CanonicalReturnInsideObjectForeachInterleavesLifetimeCleanupOrder)
+	{
+		GProdSuccessSensitiveDestructionOrder.Reset();
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterGlobalFunction(
+				"void RecordLifetimeDestructor(int)",
+				asFUNCTION(ProdRecordSuccessSensitiveDestructor),
+				asCALL_GENERIC) >= 0
+			&& ScriptEngine->RegisterGlobalFunction(
+				"void ResetLifetimeDestructorTrace()",
+				asFUNCTION(ProdResetSuccessSensitiveDestructorTrace),
+				asCALL_GENERIC) >= 0,
+			TEXT("nested foreach-return fixture registers its lifetime trace surface")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("nested foreach-return fixture selects CANONICAL")));
+
+		asIScriptModule* Module = nullptr;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct FReturnOrderValue
+			{
+				int Id;
+				FReturnOrderValue(int InId) { Id = InId; }
+				~FReturnOrderValue() { RecordLifetimeDestructor(Id); }
+			}
+
+			struct FReturnOrderIterator
+			{
+				int Index;
+			}
+
+			struct FReturnOrderRange
+			{
+				FReturnOrderIterator opForBegin()
+				{
+					FReturnOrderIterator Iterator;
+					Iterator.Index = 0;
+					return Iterator;
+				}
+
+				bool opForEnd(const FReturnOrderIterator& Iterator)
+				{
+					return Iterator.Index >= 1;
+				}
+
+				void opForNext(FReturnOrderIterator& inout Iterator)
+				{
+					Iterator.Index += 1;
+				}
+
+				int opForValue(const FReturnOrderIterator& Iterator)
+				{
+					return 42;
+				}
+			}
+
+			int RunNestedReturnOrder()
+			{
+				FReturnOrderValue Outer(1);
+				FReturnOrderRange Range;
+				foreach (int Value : Range)
+				{
+					ResetLifetimeDestructorTrace();
+					FReturnOrderValue Inner(3);
+					return Value;
+				}
+				return 0;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, AngelscriptNativeTestSupport::CompileNativeModule(
+			Engine.Get(),
+			"ProdNestedForeachReturnCleanupOrder",
+			ScriptSource.c_str(),
+			Module),
+			TEXT("CANONICAL nested foreach-return lifetime Build must succeed")));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		asIScriptFunction* const Published = Module->GetFunctionByDecl(
+			"int RunNestedReturnOrder()");
+		asITypeInfo* const ValueType = Module->GetTypeInfoByName("FReturnOrderValue");
+		asITypeInfo* const IteratorType = Module->GetTypeInfoByName("FReturnOrderIterator");
+		auto FindDestructor = [](asITypeInfo* Type) -> asIScriptFunction*
+		{
+			if (Type == nullptr)
+			{
+				return nullptr;
+			}
+			for (asUINT BehaviourIndex = 0;
+				BehaviourIndex < Type->GetBehaviourCount(); ++BehaviourIndex)
+			{
+				asEBehaviours Behaviour = asBEHAVE_CONSTRUCT;
+				asIScriptFunction* const Candidate = Type->GetBehaviourByIndex(
+					BehaviourIndex, &Behaviour);
+				if (Candidate != nullptr && Behaviour == asBEHAVE_DESTRUCT)
+				{
+					return Candidate;
+				}
+			}
+			return nullptr;
+		};
+		asIScriptFunction* const ValueDestructor = FindDestructor(ValueType);
+		asIScriptFunction* const IteratorDestructor = FindDestructor(IteratorType);
+		ASSERT_THAT(IsNotNull(Published));
+		ASSERT_THAT(IsNotNull(ValueDestructor));
+		ASSERT_THAT(IsNotNull(IteratorDestructor));
+		const TArray<int32> ValueDestructorOffsets = ProdBytecodeCallOffsets(
+			Published, ValueDestructor != nullptr ? ValueDestructor->GetId() : 0);
+		const int32 IteratorDestructorOffset = ProdBytecodeFirstCallOffset(
+			Published, IteratorDestructor != nullptr ? IteratorDestructor->GetId() : 0);
+		ASSERT_THAT(IsTrue(
+			ValueDestructorOffsets.Num() >= 2
+				&& IteratorDestructorOffset != INDEX_NONE
+				&& ValueDestructorOffsets[0] < IteratorDestructorOffset
+				&& IteratorDestructorOffset < ValueDestructorOffsets[1],
+			*FString::Printf(
+				TEXT("return bytecode must interleave the foreach iterator cleanup between Inner and Outer value cleanup; values=%s iterator=%d calls={%s}"),
+				*FString::JoinBy(ValueDestructorOffsets, TEXT(","),
+					[](const int32 Offset) { return FString::FromInt(Offset); }),
+				IteratorDestructorOffset,
+				*ProdBytecodeCallTargets(Published))));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner,
+				Engine.Get(),
+				Module,
+				"int RunNestedReturnOrder()",
+				Value)
+				&& Value == 42,
+			TEXT("return inside object foreach must execute through CANONICAL bytecode")));
+		ASSERT_THAT(IsTrue(
+			GProdSuccessSensitiveDestructionOrder.Num() == 2
+				&& GProdSuccessSensitiveDestructionOrder[0] == 3
+				&& GProdSuccessSensitiveDestructionOrder[1] == 1,
+			TEXT("return execution must destroy the traced Inner and Outer values once in reverse order")));
+
+		const asCModule* const Internal = static_cast<asCModule*>(Module);
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal->GetLastBytecodePublisher(),
+			TEXT("nested foreach-return cleanup must be published by Canonical CodeGen")));
+		ASSERT_THAT(AreEqual(
+			0,
+			Internal->GetLastLegacyCompilerInvocationCount(),
+			TEXT("nested foreach-return cleanup must not invoke asCCompiler")));
 	}
 
 	TEST_METHOD(CanonicalLexicalOwningHandleExecutesSealedReleasePlansExactlyOnce)

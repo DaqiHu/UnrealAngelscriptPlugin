@@ -594,6 +594,43 @@ bool TransferExitsRecordRegion(
 			transfer.target);
 }
 
+bool ExitPlanRecordComesBefore(
+	const asCASTLifetimeView& view,
+	asUINT leftIndex,
+	asUINT rightIndex)
+{
+	const asSASTLifetimeViewRecord* const left = view.GetRecord(leftIndex);
+	const asSASTLifetimeViewRecord* const right = view.GetRecord(rightIndex);
+	if( left == 0 || right == 0 ) return left != 0;
+	const asSASTLifetimeScopeEdge* const leftScope =
+		view.GetScopeEdge(left->scopeEdgeIndex);
+	const asSASTLifetimeScopeEdge* const rightScope =
+		view.GetScopeEdge(right->scopeEdgeIndex);
+	if( leftScope == 0 || rightScope == 0 ) return leftScope != 0;
+	if( leftScope->depth != rightScope->depth )
+		return leftScope->depth > rightScope->depth;
+	if( left->activationOrdinal != right->activationOrdinal )
+		return left->activationOrdinal > right->activationOrdinal;
+	return left->recordIndex > right->recordIndex;
+}
+
+void AppendExitPlanRecord(
+	const asCASTLifetimeView& view,
+	asUINT recordIndex,
+	asCArray<asUINT>& records)
+{
+	records.PushLast(recordIndex);
+	for( asUINT index = records.GetLength() - 1;
+		index > 0
+			&& ExitPlanRecordComesBefore(
+				view, records[index], records[index - 1]); --index )
+	{
+		const asUINT previous = records[index - 1];
+		records[index - 1] = records[index];
+		records[index] = previous;
+	}
+}
+
 bool AppendLiveRecordsInRegion(
 	const asCASTLifetimeView& view,
 	const asSASTLifetimeNodeId& region,
@@ -678,6 +715,15 @@ asQWORD HashLifetimeView(const asCASTLifetimeView& view)
 		hash = HashField(hash, binding.exitMask);
 		hash = HashField(hash, binding.recordIndex);
 	}
+	hash = HashField(hash, view.GetExitPlanCount());
+	for( asUINT i = 0; i < view.GetExitPlanCount(); ++i )
+	{
+		const asSASTLifetimeExitPlan& plan = *view.GetExitPlan(i);
+		hash = HashField(hash, plan.structuralOwner.value);
+		hash = HashField(hash, plan.kind);
+		hash = HashField(hash, plan.exitMask);
+		hash = HashIndexArray(hash, plan.recordIndices);
+	}
 	hash = HashField(hash, view.GetForEachPhaseCount());
 	for( asUINT i = 0; i < view.GetForEachPhaseCount(); ++i )
 	{
@@ -708,6 +754,7 @@ void asCASTLifetimeView::Reset()
 	records.SetLength(0);
 	commitPoints.SetLength(0);
 	cleanupBindings.SetLength(0);
+	exitPlans.SetLength(0);
 	forEachPhases.SetLength(0);
 }
 
@@ -741,6 +788,25 @@ const asSASTLifetimeCleanupBinding* asCASTLifetimeView::FindCleanupBinding(
 	for( asUINT index = 0; index < cleanupBindings.GetLength(); ++index )
 		if( cleanupBindings[index].statement == statement )
 			return &cleanupBindings[index];
+	return 0;
+}
+
+const asSASTLifetimeExitPlan* asCASTLifetimeView::GetExitPlan(
+	asUINT index) const
+{
+	return index < exitPlans.GetLength() ? &exitPlans[index] : 0;
+}
+
+const asSASTLifetimeExitPlan* asCASTLifetimeView::FindExitPlan(
+	asASTStmtId structuralOwner,
+	asEASTLifetimeExitPlanKind kind) const
+{
+	for( asUINT index = 0; index < exitPlans.GetLength(); ++index )
+		if( exitPlans[index].structuralOwner == structuralOwner
+			&& exitPlans[index].kind == kind )
+		{
+			return &exitPlans[index];
+		}
 	return 0;
 }
 
@@ -1148,6 +1214,98 @@ int asCASTBuildLifetimeView(
 				return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
 			}
 		}
+	}
+
+	for( asUINT scopeIndex = 0;
+		scopeIndex < outView.scopeEdges.GetLength(); ++scopeIndex )
+	{
+		const asSASTLifetimeScopeEdge& scope =
+			outView.scopeEdges[scopeIndex];
+		const asCStmt* const region = scope.region.nodeClass
+			== asAST_LIFETIME_NODE_STMT
+			? context.GetStmt(asASTStmtId(scope.region.value)) : 0;
+		if( region == 0 || region->kind != asAST_STMT_BLOCK ) continue;
+
+		asSASTLifetimeExitPlan plan;
+		plan.structuralOwner = region->id;
+		plan.kind = asAST_LIFETIME_EXIT_PLAN_NORMAL;
+		plan.exitMask = asAST_LIFETIME_EXIT_NORMAL;
+		for( asUINT reverseIndex = outView.records.GetLength();
+			reverseIndex > 0; --reverseIndex )
+		{
+			const asSASTLifetimeViewRecord& record =
+				outView.records[reverseIndex - 1];
+			if( record.record.subjectKind == asAST_LIFETIME_SUBJECT_LOCAL
+				&& record.record.semanticRegion == scope.region )
+			{
+				plan.recordIndices.PushLast(record.recordIndex);
+			}
+		}
+		if( plan.recordIndices.GetLength() != 0 )
+			outView.exitPlans.PushLast(plan);
+	}
+
+	for( asUINT recordIndex = 0;
+		recordIndex < outView.records.GetLength(); ++recordIndex )
+	{
+		const asSASTLifetimeViewRecord& record =
+			outView.records[recordIndex];
+		if( record.record.subjectKind
+			!= asAST_LIFETIME_SUBJECT_FOREACH_ITERATOR )
+		{
+			continue;
+		}
+		asSASTLifetimeExitPlan plan;
+		plan.structuralOwner =
+			asASTStmtId(record.record.semanticRegion.value);
+		plan.kind = asAST_LIFETIME_EXIT_PLAN_FOREACH;
+		plan.exitMask = asAST_LIFETIME_EXIT_NORMAL
+			| asAST_LIFETIME_EXIT_RETURN
+			| asAST_LIFETIME_EXIT_BREAK
+			| asAST_LIFETIME_EXIT_EXCEPTION;
+		plan.recordIndices.PushLast(record.recordIndex);
+		outView.exitPlans.PushLast(plan);
+	}
+
+	for( asUINT transferIndex = 1;
+		transferIndex <= context.GetStmtCount(); ++transferIndex )
+	{
+		const asCStmt* const transfer =
+			context.GetStmt(asASTStmtId(transferIndex));
+		const asDWORD exitMask = TransferExitMask(transfer);
+		if( transfer == 0 || exitMask == asAST_LIFETIME_EXIT_NONE )
+			continue;
+
+		asSASTLifetimeExitPlan plan;
+		plan.structuralOwner = transfer->id;
+		plan.kind = asAST_LIFETIME_EXIT_PLAN_TRANSFER;
+		plan.exitMask = exitMask;
+		for( asUINT recordIndex = 0;
+			recordIndex < outView.records.GetLength(); ++recordIndex )
+		{
+			const asSASTLifetimeViewRecord& record =
+				outView.records[recordIndex];
+			if( (record.record.subjectKind != asAST_LIFETIME_SUBJECT_LOCAL
+					&& record.record.subjectKind
+						!= asAST_LIFETIME_SUBJECT_FOREACH_ITERATOR)
+				|| (record.record.supportedExitMask & exitMask) != exitMask )
+			{
+				continue;
+			}
+			const asUINT directOrdinal = FindDirectDescendantOrdinal(
+				context, stmtParents, record.record.semanticRegion,
+				asSASTLifetimeNodeId::FromStmt(transfer->id));
+			if( directOrdinal == static_cast<asUINT>(-1)
+				|| directOrdinal <= record.activationOrdinal
+				|| !TransferExitsRecordRegion(context, record, *transfer) )
+			{
+				continue;
+			}
+			AppendExitPlanRecord(
+				outView, record.recordIndex, plan.recordIndices);
+		}
+		if( plan.recordIndices.GetLength() != 0 )
+			outView.exitPlans.PushLast(plan);
 	}
 
 	for( asUINT index = 0; index < outView.records.GetLength(); ++index )

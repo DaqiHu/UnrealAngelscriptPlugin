@@ -1817,7 +1817,7 @@ namespace
 		asASTStmtId stmt;
 		int breakLabel;
 		int continueLabel;
-		asASTStmtId cleanup;
+		asUINT cleanupRecordIndex;
 	};
 
 	class asCCanonicalFunctionEmitter
@@ -7140,11 +7140,27 @@ namespace
 			switch( stmt->kind )
 			{
 			case asAST_STMT_BLOCK:
+			{
+				const asSASTLifetimeExitPlan* const exitPlan =
+					lifetimeView.FindExitPlan(
+						stmt->id, asAST_LIFETIME_EXIT_PLAN_NORMAL);
+				const asUINT cleanupCount = exitPlan != 0
+					? exitPlan->recordIndices.GetLength() : 0;
+				if( cleanupCount > stmt->children.GetLength() )
+				{
+					FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+					return;
+				}
 				bc.Block(true);
-				for( asUINT i = 0; i < stmt->children.GetLength(); ++i )
+				const asUINT authoredChildCount =
+					stmt->children.GetLength() - cleanupCount;
+				for( asUINT i = 0; i < authoredChildCount; ++i )
 					EmitStmt(stmt->children[i]);
+				if( !EmitExitPlan(exitPlan, true) )
+					return;
 				bc.Block(false);
 				break;
+			}
 			case asAST_STMT_DECL:
 				if( stmt->decl.IsValid() )
 				{
@@ -7177,23 +7193,10 @@ namespace
 				break;
 			case asAST_STMT_EXPR:
 				if( stmt->expr.IsValid() )
-				{
-					const asCExpr* const expression = context.GetExpr(stmt->expr);
-					if( expression != 0
-						&& lifetimeView.FindCleanupBinding(stmt->id) != 0 )
-					{
-						if( EmitLexicalCleanup(stmt->id) )
-						{
-							RetireLexicalCleanupObject(stmt->id);
-						}
-					}
-					else
-					{
-						EmitExpr(stmt->expr);
-					}
-				}
+					EmitExpr(stmt->expr);
 				break;
 			case asAST_STMT_RETURN:
+			{
 				if( stmt->expr.IsValid() && returnSlot != 0x7fffffff )
 				{
 					const asCExpr* retExpr = context.GetExpr(stmt->expr);
@@ -7212,14 +7215,18 @@ namespace
 					CopyValue(returnSlot, value, func->returnType);
 					DetachReturnedHandle(value);
 				}
-				EmitSealedTransferCleanups(stmt);
+				const asSASTLifetimeExitPlan* const exitPlan =
+					lifetimeView.FindExitPlan(
+						stmt->id, asAST_LIFETIME_EXIT_PLAN_TRANSFER);
+				EmitExitPlan(exitPlan, false);
 				if( !ok )
 					return;
-				EmitTransferCleanups(asASTStmtId());
+				ValidateTransferCleanupCoverage(asASTStmtId(), exitPlan);
 				if( !ok )
 					return;
 				bc.InstrINT(asBC_JMP, 0);
 				break;
+			}
 			case asAST_STMT_IF:
 				EmitIf(stmt);
 				break;
@@ -7247,7 +7254,10 @@ namespace
 				// Switch case bodies are emitted contiguously. The sealed AST verifier
 				// has already proved that an explicit target, if present, is the next
 				// case. Lexical cleanup children still execute before that transfer.
-				EmitSealedTransferCleanups(stmt);
+				EmitExitPlan(
+					lifetimeView.FindExitPlan(
+						stmt->id, asAST_LIFETIME_EXIT_PLAN_TRANSFER),
+					false);
 				break;
 			case asAST_STMT_BREAK:
 			{
@@ -7257,10 +7267,13 @@ namespace
 					FailAt(__LINE__, asNOT_SUPPORTED);
 					return;
 				}
-				EmitSealedTransferCleanups(stmt);
+				const asSASTLifetimeExitPlan* const exitPlan =
+					lifetimeView.FindExitPlan(
+						stmt->id, asAST_LIFETIME_EXIT_PLAN_TRANSFER);
+				EmitExitPlan(exitPlan, false);
 				if( !ok )
 					return;
-				EmitTransferCleanups(stmt->target);
+				ValidateTransferCleanupCoverage(stmt->target, exitPlan);
 				if( !ok )
 					return;
 				bc.InstrINT(asBC_JMP, label);
@@ -7274,10 +7287,13 @@ namespace
 					FailAt(__LINE__, asNOT_SUPPORTED);
 					return;
 				}
-				EmitSealedTransferCleanups(stmt);
+				const asSASTLifetimeExitPlan* const exitPlan =
+					lifetimeView.FindExitPlan(
+						stmt->id, asAST_LIFETIME_EXIT_PLAN_TRANSFER);
+				EmitExitPlan(exitPlan, false);
 				if( !ok )
 					return;
-				EmitTransferCleanups(stmt->target);
+				ValidateTransferCleanupCoverage(stmt->target, exitPlan);
 				if( !ok )
 					return;
 				bc.InstrINT(asBC_JMP, label);
@@ -7293,33 +7309,46 @@ namespace
 			asASTStmtId stmt,
 			int breakLabel,
 			int continueLabel,
-			asASTStmtId cleanup = asASTStmtId())
+			asUINT cleanupRecordIndex = static_cast<asUINT>(-1))
 		{
 			asSCodeGenLoop frame;
 			frame.stmt = stmt;
 			frame.breakLabel = breakLabel;
 			frame.continueLabel = continueLabel;
-			frame.cleanup = cleanup;
+			frame.cleanupRecordIndex = cleanupRecordIndex;
 			loops.PushLast(frame);
 		}
 
-		bool EmitScopeExitCleanup(asASTStmtId cleanupStmt)
+		const asSASTLifetimeViewRecord* GetLifetimeRecord(asUINT recordIndex)
 		{
-			const asSASTLifetimeCleanupBinding* const binding =
-				lifetimeView.FindCleanupBinding(cleanupStmt);
-			const asCDecl* const targetDecl = binding != 0
-				&& binding->subject.nodeClass == asAST_LIFETIME_NODE_DECL
-				? context.GetDecl(asASTDeclId(binding->subject.value)) : 0;
-			const asCDecl* const destructor = binding != 0
-				&& binding->actionTarget.nodeClass == asAST_LIFETIME_NODE_DECL
-				? context.GetDecl(asASTDeclId(binding->actionTarget.value)) : 0;
-			if( binding == 0
-				|| binding->actionKind != asAST_LIFETIME_ACTION_DESTROY_VALUE
+			const asSASTLifetimeViewRecord* const record =
+				lifetimeView.GetRecord(recordIndex);
+			if( record == 0 || record->recordIndex != recordIndex )
+			{
+				FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+				return 0;
+			}
+			return record;
+		}
+
+		bool EmitScopeExitCleanup(asUINT recordIndex)
+		{
+			const asSASTLifetimeViewRecord* const viewRecord =
+				GetLifetimeRecord(recordIndex);
+			if( viewRecord == 0 ) return false;
+			const asSASTLifetimeRecord& action = viewRecord->record;
+			const asCDecl* const targetDecl = action.subject.nodeClass
+				== asAST_LIFETIME_NODE_DECL
+				? context.GetDecl(asASTDeclId(action.subject.value)) : 0;
+			const asCDecl* const destructor = action.actionTarget.nodeClass
+				== asAST_LIFETIME_NODE_DECL
+				? context.GetDecl(asASTDeclId(action.actionTarget.value)) : 0;
+			if( action.actionKind != asAST_LIFETIME_ACTION_DESTROY_VALUE
 				|| targetDecl == 0 || targetDecl->kind != asAST_DECL_VAR
 				|| destructor == 0
 				|| destructor->kind != asAST_DECL_DESTRUCTOR )
 			{
-				FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
+				FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
 				return false;
 			}
 
@@ -7348,17 +7377,19 @@ namespace
 			return true;
 		}
 
-		bool EmitScopeReleaseCleanup(asASTStmtId cleanupStmt)
+		bool EmitScopeReleaseCleanup(asUINT recordIndex)
 		{
-			const asSASTLifetimeCleanupBinding* const binding =
-				lifetimeView.FindCleanupBinding(cleanupStmt);
-			const asCDecl* const targetDecl = binding != 0
-				&& binding->subject.nodeClass == asAST_LIFETIME_NODE_DECL
-				? context.GetDecl(asASTDeclId(binding->subject.value)) : 0;
+			const asSASTLifetimeViewRecord* const viewRecord =
+				GetLifetimeRecord(recordIndex);
+			if( viewRecord == 0 ) return false;
+			const asSASTLifetimeRecord& action = viewRecord->record;
+			const asCDecl* const targetDecl = action.subject.nodeClass
+				== asAST_LIFETIME_NODE_DECL
+				? context.GetDecl(asASTDeclId(action.subject.value)) : 0;
 			const asCType* const canonicalType = targetDecl
 				? context.GetType(targetDecl->type.type) : 0;
-			if( binding == 0
-				|| binding->actionKind != asAST_LIFETIME_ACTION_RELEASE_REFERENCE
+			if( action.actionKind != asAST_LIFETIME_ACTION_RELEASE_REFERENCE
+				|| action.actionTarget != action.subject
 				|| targetDecl == 0
 				|| targetDecl->kind != asAST_DECL_VAR
 				|| targetDecl->type.IsReference() || canonicalType == 0
@@ -7390,39 +7421,61 @@ namespace
 			return EmitOwnedReferenceRelease(*object);
 		}
 
-		bool EmitLexicalCleanup(asASTStmtId cleanupStmt)
+		bool EmitLifetimeCleanup(asUINT recordIndex)
 		{
-			const asSASTLifetimeCleanupBinding* const binding =
-				lifetimeView.FindCleanupBinding(cleanupStmt);
-			if( binding != 0 )
+			const asSASTLifetimeViewRecord* const viewRecord =
+				GetLifetimeRecord(recordIndex);
+			if( viewRecord == 0 ) return false;
+			if( viewRecord->record.actionKind
+				== asAST_LIFETIME_ACTION_DESTROY_VALUE )
 			{
-				if( binding->actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE )
-				{
-					return EmitScopeExitCleanup(cleanupStmt);
-				}
-				if( binding->actionKind == asAST_LIFETIME_ACTION_RELEASE_REFERENCE )
-				{
-					return EmitScopeReleaseCleanup(cleanupStmt);
-				}
+				return EmitScopeExitCleanup(recordIndex);
 			}
-			FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
+			if( viewRecord->record.actionKind
+				== asAST_LIFETIME_ACTION_RELEASE_REFERENCE )
+			{
+				return EmitScopeReleaseCleanup(recordIndex);
+			}
+			FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
 			return false;
 		}
 
-		void EmitSealedTransferCleanups(const asCStmt* transfer)
+		bool EmitExitPlan(
+			const asSASTLifetimeExitPlan* plan,
+			bool retireObjects)
 		{
-			for( asUINT childIndex = 0;
-				transfer != 0 && childIndex < transfer->children.GetLength();
-				++childIndex )
+			if( plan == 0 ) return true;
+			for( asUINT actionIndex = 0;
+				actionIndex < plan->recordIndices.GetLength(); ++actionIndex )
 			{
-				if( !EmitLexicalCleanup(transfer->children[childIndex]) )
+				const asUINT recordIndex = plan->recordIndices[actionIndex];
+				if( !EmitLifetimeCleanup(recordIndex) )
 				{
-					return;
+					return false;
 				}
+				if( retireObjects )
+					RetireLifetimeCleanupObject(recordIndex);
 			}
+			return true;
 		}
 
-		void EmitTransferCleanups(asASTStmtId target)
+		bool ExitPlanContainsRecord(
+			const asSASTLifetimeExitPlan* plan,
+			asUINT recordIndex) const
+		{
+			if( plan == 0 ) return false;
+			for( asUINT index = 0;
+				index < plan->recordIndices.GetLength(); ++index )
+			{
+				if( plan->recordIndices[index] == recordIndex )
+					return true;
+			}
+			return false;
+		}
+
+		void ValidateTransferCleanupCoverage(
+			asASTStmtId target,
+			const asSASTLifetimeExitPlan* plan)
 		{
 			for( asUINT loopIndex = loops.GetLength(); loopIndex > 0; --loopIndex )
 			{
@@ -7430,24 +7483,36 @@ namespace
 				if( target.IsValid() && frame.stmt == target )
 				{
 					// The target loop's break label enters its own cleanup phase;
-					// continue remains inside that lifetime. Only exited inner loops
-					// need cleanup emitted at the transfer site.
+					// continue remains inside that lifetime. Its iterator must not be
+					// duplicated in the transfer plan.
+					if( frame.cleanupRecordIndex != static_cast<asUINT>(-1)
+						&& ExitPlanContainsRecord(plan, frame.cleanupRecordIndex) )
+					{
+						FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+					}
 					break;
 				}
-				if( frame.cleanup.IsValid() && !EmitScopeExitCleanup(frame.cleanup) )
+				if( frame.cleanupRecordIndex != static_cast<asUINT>(-1)
+					&& !ExitPlanContainsRecord(plan, frame.cleanupRecordIndex) )
 				{
+					// Loop state owns labels and the common fallthrough cleanup block,
+					// while the authenticated transfer plan owns the only cross-region
+					// cleanup order. Missing coverage is a protocol publication bug.
+					FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
 					return;
 				}
 			}
 		}
 
-		void RetireLexicalCleanupObject(asASTStmtId cleanupStmt)
+		void RetireLifetimeCleanupObject(asUINT recordIndex)
 		{
-			const asSASTLifetimeCleanupBinding* const binding =
-				lifetimeView.FindCleanupBinding(cleanupStmt);
-			const int slot = binding != 0
-				&& binding->subject.nodeClass == asAST_LIFETIME_NODE_DECL
-				? FindSlot(asASTDeclId(binding->subject.value)) : 0x7fffffff;
+			const asSASTLifetimeViewRecord* const viewRecord =
+				GetLifetimeRecord(recordIndex);
+			const int slot = viewRecord != 0
+				&& viewRecord->record.subject.nodeClass
+					== asAST_LIFETIME_NODE_DECL
+				? FindSlot(asASTDeclId(viewRecord->record.subject.value))
+				: 0x7fffffff;
 			for( asUINT objectIndex = 0; objectIndex < objects.GetLength(); ++objectIndex )
 			{
 				if( objects[objectIndex].offset == slot )
@@ -7644,7 +7709,7 @@ namespace
 			asASTExprId conditionId;
 			asASTStmtId bodyId;
 			asASTStmtId incrementId;
-			asASTStmtId cleanup;
+			asUINT cleanupRecordIndex = static_cast<asUINT>(-1);
 			if( stmt->kind == asAST_STMT_FOREACH )
 			{
 				const asSASTForEachPhases* const phases =
@@ -7658,7 +7723,18 @@ namespace
 				conditionId = phases->condition;
 				bodyId = phases->body;
 				incrementId = phases->increment;
-				cleanup = phases->cleanup;
+				const asSASTLifetimeExitPlan* const exitPlan =
+					lifetimeView.FindExitPlan(
+						stmt->id, asAST_LIFETIME_EXIT_PLAN_FOREACH);
+				if( exitPlan != 0 )
+				{
+					if( exitPlan->recordIndices.GetLength() != 1 )
+					{
+						FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+						return;
+					}
+					cleanupRecordIndex = exitPlan->recordIndices[0];
+				}
 			}
 			else
 			{
@@ -7710,7 +7786,7 @@ namespace
 			const int start = nextLabel++;
 			const int incr = nextLabel++;
 			const int end = nextLabel++;
-			PushLoop(stmt->id, end, incr, cleanup);
+			PushLoop(stmt->id, end, incr, cleanupRecordIndex);
 			bc.Label((short)start);
 			if( conditionId.IsValid() )
 			{
@@ -7723,9 +7799,9 @@ namespace
 				EmitStmt(incrementId);
 			bc.InstrINT(asBC_JMP, start);
 			bc.Label((short)end);
-			if( cleanup.IsValid() )
+			if( cleanupRecordIndex != static_cast<asUINT>(-1) )
 			{
-				if( !EmitScopeExitCleanup(cleanup) )
+				if( !EmitLifetimeCleanup(cleanupRecordIndex) )
 				{
 					PopLoop();
 					return;
@@ -7733,7 +7809,7 @@ namespace
 				// Every fallthrough/break route enters the cleanup label. Return and
 				// outer transfers emitted their own copy above, so the common function
 				// epilogue must not destroy this exact iterator a second time.
-				RetireLexicalCleanupObject(cleanup);
+				RetireLifetimeCleanupObject(cleanupRecordIndex);
 			}
 			bc.Block(false);
 			PopLoop();
