@@ -1,4 +1,5 @@
 #include "as_sema_stmt.h"
+#include "as_sema_lifetime.h"
 #include "as_scriptcode.h"
 #include "as_tokendef.h"
 
@@ -1754,6 +1755,51 @@ enum asELexicalCleanupRoute
 	asLEXICAL_CLEANUP_OWNED_REFERENCE_RELEASE,
 };
 
+struct asSLexicalOwnedLocal
+{
+	asASTDeclId declaration;
+	asASTExprId activationPoint;
+	asELexicalCleanupRoute cleanupRoute;
+	asASTDeclId actionTarget;
+
+	asSLexicalOwnedLocal()
+		: cleanupRoute(asLEXICAL_CLEANUP_NONE)
+	{
+	}
+};
+
+static asASTDeclId FindLexicalValueDestructor(
+	asCASTContext& context,
+	asASTDeclId declaration)
+{
+	const asCDecl* const variable = context.GetDecl(declaration);
+	const asCType* const type = variable != 0 && variable->type.IsValid()
+		? ResolveStmtTypedefValueType(
+			context, context.GetType(variable->type.type)) : 0;
+	if( variable == 0 || variable->kind != asAST_DECL_VAR
+		|| type == 0 || type->kind != asAST_TYPE_VALUE_OBJECT
+		|| variable->type.IsReference() || variable->type.IsHandle() )
+	{
+		return asASTDeclId();
+	}
+	for( asUINT declIndex = 1; declIndex <= context.GetDeclCount(); ++declIndex )
+	{
+		const asCDecl* const destructor = context.GetDecl(asASTDeclId(declIndex));
+		if( destructor == 0 || destructor->kind != asAST_DECL_DESTRUCTOR )
+		{
+			continue;
+		}
+		const asCDecl* const parent = context.GetDecl(destructor->parent);
+		if( parent != 0
+			&& (parent->stableKey.Equals(type->stableKey)
+				|| parent->name.Equals(type->stableKey)) )
+		{
+			return destructor->id;
+		}
+	}
+	return asASTDeclId();
+}
+
 static asELexicalCleanupRoute GetLexicalCleanupRoute(
 	asCASTContext& context,
 	asASTDeclId declaration)
@@ -1784,22 +1830,41 @@ static asELexicalCleanupRoute GetLexicalCleanupRoute(
 	{
 		return asLEXICAL_CLEANUP_NONE;
 	}
-	for( asUINT declIndex = 1; declIndex <= context.GetDeclCount(); ++declIndex )
+	return FindLexicalValueDestructor(context, declaration).IsValid()
+		? asLEXICAL_CLEANUP_VALUE_DESTRUCTOR : asLEXICAL_CLEANUP_NONE;
+}
+
+static asASTExprId FindLexicalActivationPoint(
+	asCASTContext& context,
+	const asCArray<asASTStmtId>& blockChildren,
+	asUINT declarationIndex,
+	asASTDeclId declaration)
+{
+	for( asUINT childIndex = declarationIndex + 1;
+		childIndex < blockChildren.GetLength(); ++childIndex )
 	{
-		const asCDecl* const destructor = context.GetDecl(asASTDeclId(declIndex));
-		if( destructor == 0 || destructor->kind != asAST_DECL_DESTRUCTOR )
+		const asCStmt* const statement = context.GetStmt(blockChildren[childIndex]);
+		if( statement == 0 )
 		{
 			continue;
 		}
-		const asCDecl* const parent = context.GetDecl(destructor->parent);
-		if( parent != 0
-			&& (parent->stableKey.Equals(type->stableKey)
-				|| parent->name.Equals(type->stableKey)) )
+		if( statement->kind == asAST_STMT_DECL )
 		{
-			return asLEXICAL_CLEANUP_VALUE_DESTRUCTOR;
+			break;
+		}
+		const asCExpr* const assignment = statement->kind == asAST_STMT_EXPR
+			? context.GetExpr(statement->expr) : 0;
+		const asCExpr* const target = assignment != 0
+			&& assignment->kind == asAST_EXPR_ASSIGN
+			&& assignment->children.GetLength() == 2
+			? context.GetExpr(assignment->children[0]) : 0;
+		if( target != 0 && target->kind == asAST_EXPR_DECL_REF
+			&& target->resolvedDecl == declaration )
+		{
+			return assignment->id;
 		}
 	}
-	return asLEXICAL_CLEANUP_NONE;
+	return asASTExprId();
 }
 
 static asASTStmtId CreateLexicalCleanup(
@@ -1843,10 +1908,10 @@ static asASTStmtId CreateLexicalCleanup(
 static void AppendLexicalCleanupPlansToTransfers(
 	asCSema& sema,
 	asASTStmtId block,
-	const asCArray<asASTDeclId>& declarations,
+	const asCArray<asSLexicalOwnedLocal>& locals,
 	const asCSourceRange& range)
 {
-	if( declarations.GetLength() == 0 )
+	if( locals.GetLength() == 0 )
 	{
 		return;
 	}
@@ -1863,12 +1928,11 @@ static void AppendLexicalCleanupPlansToTransfers(
 		visited[i] = 0;
 	}
 
-	// A transfer only owns cleanup for declarations whose DeclStmt has already
-	// been crossed on the exact path through this block. Walking all descendants
-	// with the block's final declaration set would attach cleanup to an early
-	// return before a later object has been constructed. Keep the active set in
-	// direct-child order; nested blocks have already attached their own cleanup
-	// and this pass appends the active outer actions after those inner actions.
+	// A DeclStmt introduces the name but does not make its storage live. A local
+	// becomes cleanup-eligible only after its exact initializer assignment has
+	// completed successfully. Keep the active set in direct-child order; nested
+	// blocks have already attached their own cleanup and this pass appends the
+	// active outer actions after those inner actions.
 	asCArray<asASTStmtId> blockChildren;
 	for( asUINT childIndex = 0;
 		childIndex < blockStmt->children.GetLength(); ++childIndex )
@@ -1880,20 +1944,6 @@ static void AppendLexicalCleanupPlansToTransfers(
 		blockChildIndex < blockChildren.GetLength(); ++blockChildIndex )
 	{
 		const asASTStmtId blockChildId = blockChildren[blockChildIndex];
-		const asCStmt* const blockChild = context.GetStmt(blockChildId);
-		if( blockChild != 0 && blockChild->kind == asAST_STMT_DECL )
-		{
-			for( asUINT declarationIndex = 0;
-				declarationIndex < declarations.GetLength(); ++declarationIndex )
-			{
-				if( declarations[declarationIndex] == blockChild->decl )
-				{
-					activeDeclarations.PushLast(blockChild->decl);
-					break;
-				}
-			}
-		}
-
 		asCArray<asASTStmtId> stack;
 		stack.PushLast(blockChildId);
 		while( stack.GetLength() != 0 )
@@ -1945,7 +1995,54 @@ static void AppendLexicalCleanupPlansToTransfers(
 				stack.PushLast(existingChildren[childIndex]);
 			}
 		}
+
+		const asCStmt* const completedChild = context.GetStmt(blockChildId);
+		for( asUINT localIndex = 0; completedChild != 0
+			&& completedChild->kind == asAST_STMT_EXPR
+			&& localIndex < locals.GetLength(); ++localIndex )
+		{
+			if( locals[localIndex].activationPoint == completedChild->expr )
+			{
+				activeDeclarations.PushLast(locals[localIndex].declaration);
+				break;
+			}
+		}
 	}
+}
+
+static bool AuthorLexicalValueLifetimeRecords(
+	asCSema& sema,
+	asASTStmtId block,
+	const asCArray<asSLexicalOwnedLocal>& locals)
+{
+	asCASTContext& context = sema.GetContext();
+	for( asUINT localIndex = 0; localIndex < locals.GetLength(); ++localIndex )
+	{
+		const asSLexicalOwnedLocal& local = locals[localIndex];
+		if( local.cleanupRoute != asLEXICAL_CLEANUP_VALUE_DESTRUCTOR )
+		{
+			continue;
+		}
+		asSASTLifetimeRecord record;
+		record.subjectKind = asAST_LIFETIME_SUBJECT_LOCAL;
+		record.subject = asSASTLifetimeNodeId::FromDecl(local.declaration);
+		record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+		record.actionTarget = asSASTLifetimeNodeId::FromDecl(local.actionTarget);
+		record.activationPoint = asSASTLifetimeNodeId::FromExpr(
+			local.activationPoint);
+		record.semanticRegion = asSASTLifetimeNodeId::FromStmt(block);
+		record.phase = asAST_LIFETIME_PHASE_LEXICAL_SCOPE;
+		record.supportedExitMask = asAST_LIFETIME_EXIT_ALL;
+		record.constructionStep = 0;
+		record.order = context.GetLifetimeRecordCount();
+		record.completeObjectCommit = false;
+		if( asSemaAuthorLifetimeRecord(context, record) != asAST_VERIFY_OK )
+		{
+			sema.AddDiagnostic("local-lifetime-record-invalid");
+			return false;
+		}
+	}
+	return true;
 }
 
 asASTStmtId asCSema::ActOnBlockStatementAction(
@@ -2025,29 +2122,53 @@ asASTStmtId asCSema::ActOnBlockStatementAction(
 		}
 		flattenedChildren.PushLast(childId);
 	}
-	asCArray<asASTDeclId> lexicalOwnedLocals;
+	asCArray<asSLexicalOwnedLocal> lexicalOwnedLocals;
 	for( asUINT childIndex = 0;
 		childIndex < flattenedChildren.GetLength(); ++childIndex )
 	{
 		const asCStmt* const child = context.GetStmt(flattenedChildren[childIndex]);
-		if( child != 0 && child->kind == asAST_STMT_DECL
-			&& GetLexicalCleanupRoute(context, child->decl)
-				!= asLEXICAL_CLEANUP_NONE )
+		if( child == 0 || child->kind != asAST_STMT_DECL )
 		{
-			lexicalOwnedLocals.PushLast(child->decl);
+			continue;
+		}
+		asSLexicalOwnedLocal local;
+		local.declaration = child->decl;
+		local.cleanupRoute = GetLexicalCleanupRoute(context, child->decl);
+		if( local.cleanupRoute != asLEXICAL_CLEANUP_NONE )
+		{
+			local.activationPoint = FindLexicalActivationPoint(
+				context, flattenedChildren, childIndex, child->decl);
+			local.actionTarget = local.cleanupRoute
+				== asLEXICAL_CLEANUP_VALUE_DESTRUCTOR
+				? FindLexicalValueDestructor(context, child->decl)
+				: asASTDeclId();
+			if( !local.activationPoint.IsValid()
+				|| (local.cleanupRoute == asLEXICAL_CLEANUP_VALUE_DESTRUCTOR
+					&& !local.actionTarget.IsValid()) )
+			{
+				AddDiagnostic("local-lifetime-activation-invalid", range);
+				return asASTStmtId();
+			}
+			lexicalOwnedLocals.PushLast(local);
 		}
 	}
 	const asASTStmtId block = ActOnCompoundStmt(
 		action.owner, flattenedChildren, range);
 	if( block.IsValid() )
 	{
+		if( !AuthorLexicalValueLifetimeRecords(
+			*this, block, lexicalOwnedLocals) )
+		{
+			return asASTStmtId();
+		}
 		AppendLexicalCleanupPlansToTransfers(
 			*this, block, lexicalOwnedLocals, range);
 		for( asUINT declIndex = lexicalOwnedLocals.GetLength();
 			declIndex > 0; --declIndex )
 		{
 			const asASTStmtId cleanup = CreateLexicalCleanup(
-				*this, action.owner, lexicalOwnedLocals[declIndex - 1], range);
+				*this, action.owner,
+				lexicalOwnedLocals[declIndex - 1].declaration, range);
 			if( cleanup.IsValid() )
 			{
 				context.AddStmtChild(block, cleanup);

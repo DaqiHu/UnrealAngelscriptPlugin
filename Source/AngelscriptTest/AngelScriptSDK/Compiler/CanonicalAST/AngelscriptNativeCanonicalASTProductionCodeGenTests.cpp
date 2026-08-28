@@ -72,6 +72,33 @@ static int32 GProdNativeLifecycleMemberAssigned = 0;
 static int32 GProdNativeLifecycleMemberAssignedValue = 0;
 static int32 GProdNativeLifecycleMemberRead = 0;
 static int32 GProdNativeLifecycleMemberReferenceObserved = 0;
+static int32 GProdSuccessSensitiveInitializerAttempts = 0;
+static TArray<int32> GProdSuccessSensitiveDestructionOrder;
+
+static void ProdSuccessSensitiveLifetimeInitializer(asIScriptGeneric* Generic)
+{
+	if (Generic == nullptr)
+	{
+		return;
+	}
+	++GProdSuccessSensitiveInitializerAttempts;
+	if (Generic->GetArgByte(0) != 0)
+	{
+		if (asIScriptContext* const Context = asGetActiveContext())
+		{
+			Context->SetException("success-sensitive lifetime initializer");
+		}
+	}
+}
+
+static void ProdRecordSuccessSensitiveDestructor(asIScriptGeneric* Generic)
+{
+	if (Generic != nullptr)
+	{
+		GProdSuccessSensitiveDestructionOrder.Add(
+			static_cast<int32>(Generic->GetArgDWord(0)));
+	}
+}
 
 static void ProdNativeLifecycleMemberConstruct(asIScriptGeneric* Generic)
 {
@@ -5434,6 +5461,131 @@ public:
 			0,
 			Internal->GetLastLegacyCompilerInvocationCount(),
 			TEXT("lexical cleanup execution must not invoke asCCompiler")));
+	}
+
+	TEST_METHOD(CanonicalLocalValueLifetimeIsSuccessSensitiveOnException)
+	{
+		GProdSuccessSensitiveInitializerAttempts = 0;
+		GProdSuccessSensitiveDestructionOrder.Reset();
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterGlobalFunction(
+				"void LifetimeInitializer(bool)",
+				asFUNCTION(ProdSuccessSensitiveLifetimeInitializer),
+				asCALL_GENERIC) >= 0
+			&& ScriptEngine->RegisterGlobalFunction(
+				"void RecordLifetimeDestructor(int)",
+				asFUNCTION(ProdRecordSuccessSensitiveDestructor),
+				asCALL_GENERIC) >= 0,
+			TEXT("success-sensitive production fixture registers its native surface")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("success-sensitive production fixture selects CANONICAL")));
+
+		asIScriptModule* Module = nullptr;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct FSuccessSensitiveValue
+			{
+				int Id;
+				FSuccessSensitiveValue(int InId, bool Fail)
+				{
+					Id = InId;
+					LifetimeInitializer(Fail);
+				}
+				~FSuccessSensitiveValue()
+				{
+					RecordLifetimeDestructor(Id);
+				}
+			}
+
+			int Run(const bool FailSecond)
+			{
+				FSuccessSensitiveValue First(1, false);
+				FSuccessSensitiveValue Second(2, FailSecond);
+				return 42;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, AngelscriptNativeTestSupport::CompileNativeModule(
+			Engine.Get(),
+			"ProdSuccessSensitiveLocalLifetime",
+			ScriptSource.c_str(),
+			Module),
+			TEXT("CANONICAL success-sensitive local lifetime Build must succeed")));
+		asIScriptFunction* const Entry = Module != nullptr
+			? Module->GetFunctionByDecl("int Run(const bool)") : nullptr;
+		ASSERT_THAT(IsNotNull(Entry));
+		asIScriptContext* const Context = ScriptEngine->CreateContext();
+		ASSERT_THAT(IsNotNull(Context));
+		ON_SCOPE_EXIT
+		{
+			if (Context != nullptr)
+			{
+				Context->Release();
+			}
+		};
+		if (Entry == nullptr || Context == nullptr)
+		{
+			return;
+		}
+
+		auto Execute = [&](const bool bFailSecond)
+		{
+			GProdSuccessSensitiveInitializerAttempts = 0;
+			GProdSuccessSensitiveDestructionOrder.Reset();
+			ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(Entry)));
+			ASSERT_THAT(AreEqual(asSUCCESS,
+				Context->SetArgByte(0, bFailSecond ? 1 : 0)));
+			const int ExecuteStatus = Context->Execute();
+			if (bFailSecond)
+			{
+				ASSERT_THAT(AreEqual(asEXECUTION_EXCEPTION, ExecuteStatus,
+					TEXT("the second initializer must terminate Run with a VM exception")));
+				ASSERT_THAT(IsTrue(FString(UTF8_TO_TCHAR(
+					Context->GetExceptionString())).Contains(
+					TEXT("success-sensitive lifetime initializer")),
+					TEXT("the native initializer exception must stay observable")));
+			}
+			else
+			{
+				ASSERT_THAT(IsTrue(ExecuteStatus == asEXECUTION_FINISHED
+					&& Context->GetReturnDWord() == 42,
+					TEXT("the normal edge must finish through Canonical bytecode")));
+			}
+			ASSERT_THAT(AreEqual(asSUCCESS, Context->Unprepare(),
+				TEXT("the context must finish all normal/exception cleanup before inspection")));
+			ASSERT_THAT(AreEqual(2, GProdSuccessSensitiveInitializerAttempts,
+				TEXT("both initializer bodies must be attempted")));
+			if (bFailSecond)
+			{
+				ASSERT_THAT(IsTrue(
+					GProdSuccessSensitiveDestructionOrder.Num() == 1
+						&& GProdSuccessSensitiveDestructionOrder[0] == 1,
+					TEXT("the abort edge destroys First only; failed Second is never live")));
+			}
+			else
+			{
+				ASSERT_THAT(IsTrue(
+					GProdSuccessSensitiveDestructionOrder.Num() == 2
+						&& GProdSuccessSensitiveDestructionOrder[0] == 2
+						&& GProdSuccessSensitiveDestructionOrder[1] == 1,
+					TEXT("the normal edge destroys committed locals in strict reverse order")));
+			}
+		};
+		Execute(false);
+		Execute(true);
+
+		const asCModule* const Internal = static_cast<asCModule*>(Module);
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal->GetLastBytecodePublisher(),
+			TEXT("success-sensitive lifetime execution must be published by Canonical CodeGen")));
+		ASSERT_THAT(AreEqual(
+			0,
+			Internal->GetLastLegacyCompilerInvocationCount(),
+			TEXT("success-sensitive lifetime execution must not invoke asCCompiler")));
 	}
 
 	TEST_METHOD(CanonicalLexicalOwningHandleExecutesSealedReleasePlansExactlyOnce)

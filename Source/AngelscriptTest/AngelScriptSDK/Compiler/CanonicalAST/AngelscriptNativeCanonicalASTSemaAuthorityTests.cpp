@@ -15,6 +15,7 @@
 #include "source/as_ast_dump.h"
 #include "source/as_ast_fwd.h"
 #include "source/as_ast_kind.h"
+#include "source/as_ast_lifetime.h"
 #include "source/as_ast_type.h"
 #include "source/as_builder.h"
 #include "source/as_generic.h"
@@ -107,6 +108,17 @@ namespace CanonicalASTSemaAuthorityTest
 		if (Object != nullptr && --Object->ReferenceCount == 0)
 		{
 			delete Object;
+		}
+	}
+
+	static void SuccessSensitiveLifetimeInitializer(asIScriptGeneric* Generic)
+	{
+		if (Generic != nullptr && Generic->GetArgByte(0) != 0)
+		{
+			if (asIScriptContext* const Context = asGetActiveContext())
+			{
+				Context->SetException("success-sensitive lifetime initializer");
+			}
 		}
 	}
 
@@ -5143,6 +5155,201 @@ public:
 		ASSERT_THAT(IsTrue(bOuterNormalExit, *DumpMsg));
 		ASSERT_THAT(IsTrue(bEarlyReturn, *DumpMsg));
 		ASSERT_THAT(IsTrue(bFinalReturn, *DumpMsg));
+	}
+
+	TEST_METHOD(LocalValueLifetimeActivationWaitsForSuccessfulInitializerCommit)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterGlobalFunction(
+			"void LifetimeInitializer(bool)",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::SuccessSensitiveLifetimeInitializer),
+			asCALL_GENERIC) >= 0,
+			TEXT("success-sensitive lifetime fixture registers its throwing initializer")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("success-sensitive local lifetime fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaSuccessSensitiveLocalLifetime", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct FSuccessSensitiveValue
+			{
+				int Id;
+				FSuccessSensitiveValue(int InId, bool Fail)
+				{
+					Id = InId;
+					LifetimeInitializer(Fail);
+				}
+				~FSuccessSensitiveValue()
+				{
+				}
+			}
+
+			int Entry()
+			{
+				FSuccessSensitiveValue First(1, false);
+				FSuccessSensitiveValue Second(2, true);
+				return 0;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaSuccessSensitiveLocalLifetime.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("success-sensitive local lifetime source must compile and seal")));
+
+		asCString RawDump;
+		ASSERT_THAT(IsTrue(CanonicalASTSemaAuthorityTest::DumpSealedCanonicalAst(Module, RawDump)));
+		const FString Dump = AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString DumpMsg = FString::Printf(
+			TEXT("local lifetime activation must be the successful initializer commit, not DeclStmt. AST:\n%s"),
+			*Dump);
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context, *DumpMsg));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Function = CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+			*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const FunctionBody = Function != nullptr
+			? Context->GetStmt(Function->body) : nullptr;
+		ASSERT_THAT(IsTrue(Function != nullptr
+			&& FunctionBody != nullptr
+			&& FunctionBody->kind == asAST_STMT_BLOCK,
+			*DumpMsg));
+		if (Function == nullptr || FunctionBody == nullptr)
+		{
+			return;
+		}
+
+		auto FindLocal = [&](const char* Name) -> const asCDecl*
+		{
+			for (asUINT DeclIndex = 1; DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+			{
+				const asCDecl* const Decl = Context->GetDecl(asASTDeclId(DeclIndex));
+				if (Decl != nullptr && Decl->kind == asAST_DECL_VAR
+					&& Decl->parent == Function->id && Decl->name.Equals(Name))
+				{
+					return Decl;
+				}
+			}
+			return nullptr;
+		};
+		const asCDecl* const First = FindLocal("First");
+		const asCDecl* const Second = FindLocal("Second");
+		ASSERT_THAT(IsNotNull(First, *DumpMsg));
+		ASSERT_THAT(IsNotNull(Second, *DumpMsg));
+		if (First == nullptr || Second == nullptr)
+		{
+			return;
+		}
+
+		auto FindInitializerCommit = [&](asASTDeclId Local) -> const asCExpr*
+		{
+			for (asUINT ExprIndex = 1; ExprIndex <= Context->GetExprCount(); ++ExprIndex)
+			{
+				const asCExpr* const Assignment = Context->GetExpr(asASTExprId(ExprIndex));
+				const asCExpr* const Target = Assignment != nullptr
+					&& Assignment->kind == asAST_EXPR_ASSIGN
+					&& Assignment->children.GetLength() == 2
+					? Context->GetExpr(Assignment->children[0]) : nullptr;
+				if (Target != nullptr && Target->kind == asAST_EXPR_DECL_REF
+					&& Target->resolvedDecl == Local)
+				{
+					return Assignment;
+				}
+			}
+			return nullptr;
+		};
+		const asCExpr* const FirstCommit = FindInitializerCommit(First->id);
+		const asCExpr* const SecondCommit = FindInitializerCommit(Second->id);
+		ASSERT_THAT(IsNotNull(FirstCommit, *DumpMsg));
+		ASSERT_THAT(IsNotNull(SecondCommit, *DumpMsg));
+		if (FirstCommit == nullptr || SecondCommit == nullptr)
+		{
+			return;
+		}
+
+		const asSASTLifetimeRecord* FirstRecord = nullptr;
+		const asSASTLifetimeRecord* SecondRecord = nullptr;
+		asUINT SubjectRecordCount = 0;
+		for (asUINT RecordIndex = 0;
+			RecordIndex < Context->GetLifetimeRecordCount(); ++RecordIndex)
+		{
+			const asSASTLifetimeRecord* const Record =
+				Context->GetLifetimeRecord(RecordIndex);
+			if (Record == nullptr
+				|| Record->subjectKind != asAST_LIFETIME_SUBJECT_LOCAL
+				|| Record->subject.nodeClass != asAST_LIFETIME_NODE_DECL)
+			{
+				continue;
+			}
+			if (Record->subject.value == First->id.value)
+			{
+				FirstRecord = Record;
+				++SubjectRecordCount;
+			}
+			else if (Record->subject.value == Second->id.value)
+			{
+				SecondRecord = Record;
+				++SubjectRecordCount;
+			}
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2), SubjectRecordCount, *DumpMsg));
+		ASSERT_THAT(IsNotNull(FirstRecord, *DumpMsg));
+		ASSERT_THAT(IsNotNull(SecondRecord, *DumpMsg));
+		if (FirstRecord == nullptr || SecondRecord == nullptr)
+		{
+			return;
+		}
+
+		auto RequireExactLocalLifetime = [&](const asSASTLifetimeRecord& Record,
+			const asCDecl& Local, const asCExpr& Commit)
+		{
+			const asCDecl* const Action = Record.actionTarget.nodeClass
+				== asAST_LIFETIME_NODE_DECL
+				? Context->GetDecl(asASTDeclId(Record.actionTarget.value)) : nullptr;
+			ASSERT_THAT(IsTrue(
+				Record.subject == asSASTLifetimeNodeId::FromDecl(Local.id)
+					&& Record.actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE
+					&& Action != nullptr && Action->kind == asAST_DECL_DESTRUCTOR
+					&& Record.activationPoint == asSASTLifetimeNodeId::FromExpr(Commit.id)
+					&& Record.activationPoint.nodeClass != asAST_LIFETIME_NODE_STMT
+					&& Record.semanticRegion == asSASTLifetimeNodeId::FromStmt(FunctionBody->id)
+					&& Record.phase == asAST_LIFETIME_PHASE_LEXICAL_SCOPE
+					&& Record.supportedExitMask == asAST_LIFETIME_EXIT_ALL
+					&& Record.constructionStep == 0
+					&& !Record.completeObjectCommit,
+				*DumpMsg));
+		};
+		RequireExactLocalLifetime(*FirstRecord, *First, *FirstCommit);
+		RequireExactLocalLifetime(*SecondRecord, *Second, *SecondCommit);
+
+		// Immediately before Second's commit, the abort edge owns only First.
+		// Once both commits succeed, reverse-order cleanup is Second then First.
+		ASSERT_THAT(IsTrue(FirstRecord->order < SecondRecord->order, *DumpMsg));
+		asCArray<asASTDeclId> AbortCommitted;
+		for (const asSASTLifetimeRecord* const Record : {FirstRecord, SecondRecord})
+		{
+			if (Record->order < SecondRecord->order)
+			{
+				AbortCommitted.PushLast(asASTDeclId(Record->subject.value));
+			}
+		}
+		ASSERT_THAT(IsTrue(AbortCommitted.GetLength() == 1
+			&& AbortCommitted[0] == First->id,
+			*DumpMsg));
+		ASSERT_THAT(IsTrue(SecondRecord->order > FirstRecord->order,
+			TEXT("normal cleanup reverses commit order to Second then First")));
 	}
 
 	TEST_METHOD(TransferBeforeLaterLexicalValueDoesNotCleanupUnconstructedLocal)
