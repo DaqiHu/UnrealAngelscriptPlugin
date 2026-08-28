@@ -114,6 +114,30 @@ static asSASTLifetimeRecord MakeLocalLifetimeRecord(
 	Record.completeObjectCommit = false;
 	return Record;
 }
+
+static asASTStmtId AppendNormalScopeExit(
+	asCASTContext& Context,
+	const asSASTLifetimeRecord& Record)
+{
+	const asASTDeclId Local(Record.subject.value);
+	const asCDecl* const LocalDecl = Context.GetDecl(Local);
+	const asASTExprId Target = Context.CreateExpr(
+		asAST_EXPR_DECL_REF, LocalDecl->type,
+		asAST_VALUE_LVALUE, asCSourceRange());
+	Context.SetResolvedDecl(Target, Local);
+	const asASTExprId Cleanup = Context.CreateExpr(
+		asAST_EXPR_CLEANUP, LocalDecl->type,
+		asAST_VALUE_PRVALUE, asCSourceRange());
+	Context.SetLiteral(Cleanup, "scope-exit");
+	Context.SetResolvedDecl(Cleanup, asASTDeclId(Record.actionTarget.value));
+	Context.AddExprChild(Cleanup, Target);
+	const asASTStmtId CleanupStmt = Context.CreateStmt(
+		asAST_STMT_EXPR, LocalDecl->parent, asCSourceRange());
+	Context.SetStmtExpr(CleanupStmt, Cleanup);
+	Context.AddStmtChild(
+		asASTStmtId(Record.semanticRegion.value), CleanupStmt);
+	return CleanupStmt;
+}
 }
 
 TEST_CLASS_WITH_FLAGS(FCanonicalASTVerifierTests,
@@ -121,6 +145,97 @@ TEST_CLASS_WITH_FLAGS(FCanonicalASTVerifierTests,
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 public:
+	TEST_METHOD(ExposesNamedAuthenticatedCompatibilityCleanupActions)
+	{
+		asCASTContext Context;
+		const FLocalLifetimeViewFixture Fixture =
+			BuildLocalLifetimeViewFixture(Context);
+		const asASTExprId Target = Context.CreateExpr(
+			asAST_EXPR_DECL_REF,
+			Context.GetDecl(Fixture.FirstLocal)->type,
+			asAST_VALUE_LVALUE,
+			asCSourceRange());
+		ASSERT_THAT(AreEqual(0,
+			Context.SetResolvedDecl(Target, Fixture.FirstLocal)));
+		const asASTExprId Cleanup = Context.CreateExpr(
+			asAST_EXPR_CLEANUP,
+			Context.GetDecl(Fixture.FirstLocal)->type,
+			asAST_VALUE_PRVALUE,
+			asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetLiteral(Cleanup, "scope-exit")));
+		ASSERT_THAT(AreEqual(0,
+			Context.SetResolvedDecl(Cleanup, Fixture.Destructor)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Cleanup, Target)));
+		const asASTStmtId CleanupStmt = Context.CreateStmt(
+			asAST_STMT_EXPR,
+			Context.GetDecl(Fixture.FirstLocal)->parent,
+			asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(CleanupStmt, Cleanup)));
+		ASSERT_THAT(AreEqual(0,
+			Context.AddStmtChild(Fixture.Region, CleanupStmt)));
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+			MakeLocalLifetimeRecord(Fixture, true, 0))));
+		ASSERT_THAT(AreEqual(0, Context.Seal()));
+
+		asCASTLifetimeView View;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, View)));
+		const asSASTLifetimeCleanupBinding* const Binding =
+			View.FindCleanupBinding(CleanupStmt);
+		ASSERT_THAT(IsNotNull(Binding,
+			TEXT("a compatibility statement must resolve through a named authenticated binding")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0), Binding->recordIndex));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_LIFETIME_ACTION_DESTROY_VALUE),
+			static_cast<int32>(Binding->actionKind)));
+		ASSERT_THAT(IsTrue(Binding->subject ==
+			asSASTLifetimeNodeId::FromDecl(Fixture.FirstLocal)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_LIFETIME_COMPAT_NORMAL_EXIT),
+			static_cast<int32>(Binding->role)));
+	}
+
+	TEST_METHOD(RejectsLifetimeProtocolCompatibilityEncodingDisagreement)
+	{
+		{
+			asCASTContext Context;
+			const FLocalLifetimeViewFixture Fixture =
+				BuildLocalLifetimeViewFixture(Context);
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+				MakeLocalLifetimeRecord(Fixture, true, 0))));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("a protocol action without its compatibility statement must fail closed")));
+		}
+		{
+			asCASTContext Context;
+			const FLocalLifetimeViewFixture Fixture =
+				BuildLocalLifetimeViewFixture(Context);
+			AppendNormalScopeExit(Context,
+				MakeLocalLifetimeRecord(Fixture, true, 0));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("a compatibility statement without its protocol action must fail closed")));
+		}
+		{
+			asCASTContext Context;
+			const FLocalLifetimeViewFixture Fixture =
+				BuildLocalLifetimeViewFixture(Context);
+			const asSASTLifetimeRecord Record =
+				MakeLocalLifetimeRecord(Fixture, true, 0);
+			AppendNormalScopeExit(Context, Record);
+			AppendNormalScopeExit(Context, Record);
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Record)));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("duplicate compatibility statements for one protocol action must fail closed")));
+		}
+	}
+
 	TEST_METHOD(BuildsDeterministicLifetimeViewWithCommittedLiveSets)
 	{
 		asCASTContext Context;
@@ -130,6 +245,8 @@ public:
 			MakeLocalLifetimeRecord(Fixture, true, 0);
 		const asSASTLifetimeRecord Second =
 			MakeLocalLifetimeRecord(Fixture, false, 1);
+		AppendNormalScopeExit(Context, Second);
+		AppendNormalScopeExit(Context, First);
 		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(First)));
 		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Second)));
 		ASSERT_THAT(AreEqual(0, Context.Seal(),
@@ -263,6 +380,8 @@ public:
 		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(OuterRegion, InnerRegion)));
 		const asSASTLifetimeRecord InnerRecord =
 			AddLocal(InnerRegion, "Inner", "2", 1);
+		AppendNormalScopeExit(Context, InnerRecord);
+		AppendNormalScopeExit(Context, OuterRecord);
 		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(OuterRecord)));
 		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(InnerRecord)));
 		ASSERT_THAT(AreEqual(0, Context.Seal()));

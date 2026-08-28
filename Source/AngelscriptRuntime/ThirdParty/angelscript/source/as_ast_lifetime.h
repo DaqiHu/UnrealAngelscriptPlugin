@@ -292,6 +292,57 @@ struct asSASTLifetimeCommitPoint
 	}
 };
 
+// Compatibility syntax is retained while LEGACY and diagnostic/reference
+// consumers still need the native AST shape.  Only this named, authenticated
+// projection may be consumed by Canonical backends.
+enum asEASTLifetimeCompatibilityRole : asBYTE
+{
+	asAST_LIFETIME_COMPAT_INVALID = 0,
+	asAST_LIFETIME_COMPAT_NORMAL_EXIT,
+	asAST_LIFETIME_COMPAT_TRANSFER_EXIT,
+	asAST_LIFETIME_COMPAT_FOREACH_EXIT,
+};
+
+struct asSASTLifetimeCleanupBinding
+{
+	asASTStmtId statement;
+	asASTExprId expression;
+	asSASTLifetimeNodeId subject;
+	asEASTLifetimeActionKind actionKind;
+	asSASTLifetimeNodeId actionTarget;
+	asEASTLifetimeCompatibilityRole role;
+	asASTStmtId structuralOwner;
+	asDWORD exitMask;
+	asUINT recordIndex;
+
+	asSASTLifetimeCleanupBinding()
+		: actionKind(asAST_LIFETIME_ACTION_INVALID)
+		, role(asAST_LIFETIME_COMPAT_INVALID)
+		, exitMask(asAST_LIFETIME_EXIT_NONE)
+		, recordIndex(0)
+	{
+	}
+};
+
+// Named foreach phases hide the retained children[0..3] compatibility shape.
+// condition is the dedicated expression edge; cleanup is optional for
+// primitive/enum iterators.
+struct asSASTForEachPhases
+{
+	asASTStmtId statement;
+	asASTStmtId initializer;
+	asASTExprId condition;
+	asASTStmtId body;
+	asASTStmtId increment;
+	asASTStmtId cleanup;
+	asUINT lifetimeRecordIndex;
+
+	asSASTForEachPhases()
+		: lifetimeRecordIndex(static_cast<asUINT>(-1))
+	{
+	}
+};
+
 class asCASTLifetimeView;
 ANGELSCRIPTRUNTIME_API int asCASTBuildLifetimeView(
 	const asCASTContext& context,
@@ -310,9 +361,17 @@ public:
 	asUINT GetScopeEdgeCount() const { return scopeEdges.GetLength(); }
 	asUINT GetRecordCount() const { return records.GetLength(); }
 	asUINT GetCommitPointCount() const { return commitPoints.GetLength(); }
+	asUINT GetCleanupBindingCount() const { return cleanupBindings.GetLength(); }
+	asUINT GetForEachPhaseCount() const { return forEachPhases.GetLength(); }
 	const asSASTLifetimeScopeEdge* GetScopeEdge(asUINT index) const;
 	const asSASTLifetimeViewRecord* GetRecord(asUINT index) const;
 	const asSASTLifetimeCommitPoint* GetCommitPoint(asUINT index) const;
+	const asSASTLifetimeCleanupBinding* GetCleanupBinding(asUINT index) const;
+	const asSASTLifetimeCleanupBinding* FindCleanupBinding(
+		asASTStmtId statement) const;
+	const asSASTForEachPhases* GetForEachPhases(asUINT index) const;
+	const asSASTForEachPhases* FindForEachPhases(
+		asASTStmtId statement) const;
 
 private:
 	friend ANGELSCRIPTRUNTIME_API int asCASTBuildLifetimeView(
@@ -326,6 +385,8 @@ private:
 	asCArray<asSASTLifetimeScopeEdge> scopeEdges;
 	asCArray<asSASTLifetimeViewRecord> records;
 	asCArray<asSASTLifetimeCommitPoint> commitPoints;
+	asCArray<asSASTLifetimeCleanupBinding> cleanupBindings;
+	asCArray<asSASTForEachPhases> forEachPhases;
 };
 
 ANGELSCRIPTRUNTIME_API asQWORD asASTHashLifetimeNodeId(

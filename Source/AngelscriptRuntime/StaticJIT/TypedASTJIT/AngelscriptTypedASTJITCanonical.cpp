@@ -2,6 +2,7 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_context.h"
+#include "source/as_ast_lifetime.h"
 #include "source/as_ast_traversal.h"
 #include "source/as_runtime_type_bridge.h"
 #include "source/as_scriptfunction.h"
@@ -707,76 +708,6 @@ namespace AngelscriptTypedASTJITCanonical_Private
 		FAngelscriptTypedASTJITEligibility& OutFailure;
 	};
 
-	class FCanonicalLifetimeFactsVisitor final : public asIASTConstVisitor
-	{
-	public:
-		bool EnterNode(
-			const asCASTContext& Context,
-			const asSASTNodeRef& Node,
-			const asSASTTraversalEdge*,
-			asUINT) override
-		{
-			if (Node.nodeClass != asAST_NODE_EXPR)
-			{
-				return true;
-			}
-			const asCExpr* const Expr = Context.GetExpr(
-				asASTExprId(Node.value, Node.snapshotOwner));
-			if (Expr == nullptr)
-			{
-				return false;
-			}
-			if (Expr->kind != asAST_EXPR_CLEANUP)
-			{
-				return true;
-			}
-			if (Expr->literal.Equals("scope-release"))
-			{
-				bSawReleaseAction = true;
-				return true;
-			}
-			if (Expr->literal.Equals("scope-exit")
-				|| Expr->resolvedDecl.IsValid())
-			{
-				bSawDestructorAction = true;
-				return true;
-			}
-
-			// Scalar CLEANUP wrappers are sequencing/value-category facts and do
-			// not own a Runtime lifetime action. Any other unbound cleanup form
-			// stays unverified until its exact action protocol is reviewed.
-			FString ScalarType;
-			if (!Expr->literal.Equals("cleanup")
-				|| !TrySpellCanonicalScalarCppType(
-					Context, Expr->type, ScalarType))
-			{
-				bSawUnclassifiedCleanup = true;
-			}
-			return true;
-		}
-
-		bool VisitEdge(
-			const asCASTContext&,
-			const asSASTTraversalEdge&,
-			asUINT) override
-		{
-			return true;
-		}
-
-		bool LeaveNode(
-			const asCASTContext&,
-			const asSASTNodeRef&,
-			const asSASTTraversalEdge*,
-			asUINT) override
-		{
-			return true;
-		}
-
-		bool bSawReleaseAction = false;
-		bool bSawDestructorAction = false;
-		bool bSawUnclassifiedCleanup = false;
-	};
-
 	enum class ECanonicalLexicalCleanupKind : uint8
 	{
 		None,
@@ -909,32 +840,28 @@ namespace AngelscriptTypedASTJITCanonical_Private
 
 	bool TryReadCanonicalLexicalCleanupAction(
 		const asCASTContext& Context,
+		const asCASTLifetimeView& LifetimeView,
 		const asASTStmtId StatementId,
 		FCanonicalLexicalCleanupAction& OutAction)
 	{
-		const asCStmt* const Statement = Context.GetStmt(StatementId);
-		const asCExpr* const Cleanup = Statement != nullptr
-			&& Statement->kind == asAST_STMT_EXPR
-			? Context.GetExpr(Statement->expr) : nullptr;
-		const asCExpr* const Target = Cleanup != nullptr
-			&& Cleanup->kind == asAST_EXPR_CLEANUP
-			&& Cleanup->children.GetLength() == 1
-			? Context.GetExpr(Cleanup->children[0]) : nullptr;
-		if (Target == nullptr || Target->kind != asAST_EXPR_DECL_REF
-			|| !Target->resolvedDecl.IsValid())
+		const asSASTLifetimeCleanupBinding* const Binding =
+			LifetimeView.FindCleanupBinding(StatementId);
+		if (Binding == nullptr
+			|| Binding->subject.nodeClass != asAST_LIFETIME_NODE_DECL)
 		{
 			return false;
 		}
 
-		OutAction.Target = Target->resolvedDecl;
-		if (Cleanup->literal.Equals("scope-release")
-			&& !Cleanup->resolvedDecl.IsValid())
+		OutAction.Target = asASTDeclId(Binding->subject.value);
+		if (Binding->actionKind == asAST_LIFETIME_ACTION_RELEASE_REFERENCE)
 		{
 			OutAction.Kind = ECanonicalLexicalCleanupKind::Release;
 			return true;
 		}
-		const asCDecl* const Destructor = Context.GetDecl(Cleanup->resolvedDecl);
-		if (Cleanup->literal.Equals("scope-exit")
+		const asCDecl* const Destructor =
+			Binding->actionTarget.nodeClass == asAST_LIFETIME_NODE_DECL
+			? Context.GetDecl(asASTDeclId(Binding->actionTarget.value)) : nullptr;
+		if (Binding->actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE
 			&& Destructor != nullptr
 			&& Destructor->kind == asAST_DECL_DESTRUCTOR)
 		{
@@ -994,6 +921,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 
 	bool ProveCanonicalLifetimeStmt(
 		const asCASTContext& Context,
+		const asCASTLifetimeView& LifetimeView,
 		const asASTStmtId StatementId,
 		TArray<FCanonicalLexicalCleanupAction>& Active,
 		TArray<FCanonicalLoopCleanupPhase>& ActiveLoopPhases,
@@ -1014,16 +942,21 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			return false;
 		}
 
-		if (Statement->kind == asAST_STMT_FOREACH
-			&& Statement->children.GetLength() == 4)
+		if (Statement->kind == asAST_STMT_FOREACH)
 		{
+			const asSASTForEachPhases* const Phases =
+				LifetimeView.FindForEachPhases(StatementId);
+			if (Phases == nullptr)
+			{
+				return false;
+			}
 			// A value-object foreach iterator owns a loop-lifetime phase rather
 			// than an ordinary trailing Block action. The synthetic init Block's
 			// scope spans condition/body/increment; break enters the common phase,
 			// continue stays inside it, and return/outer transfers use the active
 			// CodeGen loop-frame route. Prove that exact protocol here instead of
 			// treating the init Block or fourth child as ordinary lexical cleanup.
-			const asCStmt* const Init = Context.GetStmt(Statement->children[0]);
+			const asCStmt* const Init = Context.GetStmt(Phases->initializer);
 			if (Init == nullptr || Init->kind != asAST_STMT_BLOCK
 				|| --RemainingStatements < 0)
 			{
@@ -1031,9 +964,11 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			}
 
 			FCanonicalLexicalCleanupAction PhaseAction;
-			if (!TryReadCanonicalLexicalCleanupAction(
-					Context, Statement->children[3], PhaseAction)
-				|| --RemainingStatements < 0)
+			const bool bHasLifetimePhase = Phases->cleanup.IsValid();
+			if (bHasLifetimePhase
+				&& (!TryReadCanonicalLexicalCleanupAction(
+					Context, LifetimeView, Phases->cleanup, PhaseAction)
+					|| --RemainingStatements < 0))
 			{
 				return false;
 			}
@@ -1060,9 +995,10 @@ namespace AngelscriptTypedASTJITCanonical_Private
 					++RequiredIteratorCount;
 				}
 			}
-			if (RequiredIteratorCount != 1
-				|| !CanonicalCleanupActionsEqual(
-					IteratorRequirement, PhaseAction))
+			if ((bHasLifetimePhase && (RequiredIteratorCount != 1
+					|| !CanonicalCleanupActionsEqual(
+						IteratorRequirement, PhaseAction)))
+				|| (!bHasLifetimePhase && RequiredIteratorCount != 0))
 			{
 				return false;
 			}
@@ -1075,9 +1011,9 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			{
 				FCanonicalLexicalCleanupAction UnexpectedCleanup;
 				if (TryReadCanonicalLexicalCleanupAction(
-						Context, Init->children[ChildIndex], UnexpectedCleanup)
+						Context, LifetimeView, Init->children[ChildIndex], UnexpectedCleanup)
 					|| !ProveCanonicalLifetimeStmt(
-						Context, Init->children[ChildIndex], Active,
+						Context, LifetimeView, Init->children[ChildIndex], Active,
 						ActiveLoopPhases, bSawRequiredLifetime,
 						RemainingStatements))
 				{
@@ -1085,23 +1021,30 @@ namespace AngelscriptTypedASTJITCanonical_Private
 				}
 			}
 
-			bSawRequiredLifetime = true;
-			FCanonicalLoopCleanupPhase Phase;
-			Phase.Action = IteratorRequirement;
-			Phase.Loop = StatementId;
-			ActiveLoopPhases.Add(Phase);
-			for (asUINT ChildIndex = 1; ChildIndex < 3; ++ChildIndex)
+			if (bHasLifetimePhase)
+			{
+				bSawRequiredLifetime = true;
+				FCanonicalLoopCleanupPhase Phase;
+				Phase.Action = IteratorRequirement;
+				Phase.Loop = StatementId;
+				ActiveLoopPhases.Add(Phase);
+			}
+			const asASTStmtId ExecutedPhases[2] =
+				{ Phases->body, Phases->increment };
+			for (asUINT PhaseIndex = 0; PhaseIndex < 2; ++PhaseIndex)
 			{
 				if (!ProveCanonicalLifetimeStmt(
-						Context, Statement->children[ChildIndex], Active,
+						Context, LifetimeView, ExecutedPhases[PhaseIndex], Active,
 						ActiveLoopPhases, bSawRequiredLifetime,
 						RemainingStatements))
 				{
-					ActiveLoopPhases.Pop(EAllowShrinking::No);
+					if (bHasLifetimePhase)
+						ActiveLoopPhases.Pop(EAllowShrinking::No);
 					return false;
 				}
 			}
-			ActiveLoopPhases.Pop(EAllowShrinking::No);
+			if (bHasLifetimePhase)
+				ActiveLoopPhases.Pop(EAllowShrinking::No);
 			return true;
 		}
 
@@ -1113,7 +1056,8 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			{
 				FCanonicalLexicalCleanupAction Action;
 				if (!TryReadCanonicalLexicalCleanupAction(
-					Context, Statement->children[AuthoredCount - 1], Action))
+					Context, LifetimeView,
+					Statement->children[AuthoredCount - 1], Action))
 				{
 					break;
 				}
@@ -1146,7 +1090,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			{
 				FCanonicalLexicalCleanupAction Actual;
 				if (!TryReadCanonicalLexicalCleanupAction(
-						Context,
+						Context, LifetimeView,
 						Statement->children[AuthoredCount + CleanupIndex],
 						Actual)
 					|| !CanonicalCleanupActionsEqual(
@@ -1170,7 +1114,8 @@ namespace AngelscriptTypedASTJITCanonical_Private
 					Active.Add(Expected);
 				}
 				if (!ProveCanonicalLifetimeStmt(
-					Context, Statement->children[ChildIndex], Active,
+					Context, LifetimeView,
+					Statement->children[ChildIndex], Active,
 					ActiveLoopPhases, bSawRequiredLifetime,
 					RemainingStatements))
 				{
@@ -1243,7 +1188,8 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			{
 				FCanonicalLexicalCleanupAction Actual;
 				if (!TryReadCanonicalLexicalCleanupAction(
-						Context, Statement->children[CleanupIndex], Actual)
+						Context, LifetimeView,
+						Statement->children[CleanupIndex], Actual)
 					|| !CanonicalCleanupActionsEqual(
 						ExpectedActions[CleanupIndex], Actual))
 				{
@@ -1255,7 +1201,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 
 		FCanonicalLexicalCleanupAction StandaloneCleanup;
 		if (TryReadCanonicalLexicalCleanupAction(
-			Context, StatementId, StandaloneCleanup))
+			Context, LifetimeView, StatementId, StandaloneCleanup))
 		{
 			// A lexical action is only complete as a trailing Block action or a
 			// direct transfer child. Loop/foreach cleanup phases require their own
@@ -1267,7 +1213,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			ChildIndex < Statement->children.GetLength(); ++ChildIndex)
 		{
 			if (!ProveCanonicalLifetimeStmt(
-				Context, Statement->children[ChildIndex], Active,
+				Context, LifetimeView, Statement->children[ChildIndex], Active,
 				ActiveLoopPhases, bSawRequiredLifetime,
 				RemainingStatements))
 			{
@@ -1279,6 +1225,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 
 	bool ProveCanonicalLifetimeCoverage(
 		const asCASTContext& Context,
+		const asCASTLifetimeView& LifetimeView,
 		const asASTStmtId Body,
 		bool& bSawRequiredLifetime)
 	{
@@ -1287,7 +1234,8 @@ namespace AngelscriptTypedASTJITCanonical_Private
 		int32 RemainingStatements = static_cast<int32>(
 			Context.GetStmtCount() + 1);
 		return ProveCanonicalLifetimeStmt(
-			Context, Body, Active, ActiveLoopPhases, bSawRequiredLifetime,
+			Context, LifetimeView, Body, Active, ActiveLoopPhases,
+			bSawRequiredLifetime,
 			RemainingStatements);
 	}
 
@@ -2924,37 +2872,42 @@ AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
 		return Facts;
 	}
 
-	FCanonicalLifetimeFactsVisitor Visitor;
-	asSASTTraversalOptions Options;
-	Options.validateEdgeTargets = false;
-	Options.maxNodes = Context.GetStmtCount() + Context.GetExprCount() + 1;
-	Options.maxDepth = Options.maxNodes;
-	asSASTTraversalResult Result;
-	if (asCASTTraverse(
-			Context,
-			asSASTNodeRef::FromStmt(Decl->body),
-			Visitor,
-			Options,
-			Result) != asAST_TRAVERSAL_OK)
+	asCASTLifetimeView LifetimeView;
+	if (asCASTBuildLifetimeView(Context, LifetimeView) != asAST_VERIFY_OK)
 	{
 		return Facts;
 	}
 
-	if (Visitor.bSawUnclassifiedCleanup)
+	bool bSawReleaseAction = false;
+	bool bSawDestructorAction = false;
+	for (asUINT BindingIndex = 0;
+		BindingIndex < LifetimeView.GetCleanupBindingCount(); ++BindingIndex)
 	{
-		return Facts;
+		const asSASTLifetimeCleanupBinding* const Binding =
+			LifetimeView.GetCleanupBinding(BindingIndex);
+		const asCDecl* const Subject = Binding != nullptr
+			&& Binding->subject.nodeClass == asAST_LIFETIME_NODE_DECL
+			? Context.GetDecl(asASTDeclId(Binding->subject.value)) : nullptr;
+		if (Subject == nullptr || Subject->parent != FunctionDecl)
+		{
+			continue;
+		}
+		bSawReleaseAction |= Binding->actionKind
+			== asAST_LIFETIME_ACTION_RELEASE_REFERENCE;
+		bSawDestructorAction |= Binding->actionKind
+			== asAST_LIFETIME_ACTION_DESTROY_VALUE;
 	}
 
 	bool bSawRequiredLifetime = false;
 	const bool bProvenCoverage = ProveCanonicalLifetimeCoverage(
-		Context, Decl->body, bSawRequiredLifetime);
+		Context, LifetimeView, Decl->body, bSawRequiredLifetime);
 
-	if (Visitor.bSawDestructorAction)
+	if (bSawDestructorAction)
 	{
 		Facts.CleanupPlanState =
 			EAngelscriptTypedASTJITCleanupPlanState::ScriptDestructor;
 	}
-	else if (Visitor.bSawReleaseAction)
+	else if (bSawReleaseAction)
 	{
 		Facts.CleanupPlanState =
 			EAngelscriptTypedASTJITCleanupPlanState::NonEmpty;

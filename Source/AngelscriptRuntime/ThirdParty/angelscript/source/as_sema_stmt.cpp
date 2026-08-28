@@ -906,6 +906,56 @@ asASTStmtId asCSema::ActOnForeachStmt(
 				if( cleanup.IsValid() )
 				{
 					context.AddStmtChild(loop, cleanup);
+					asASTExprId iteratorActivation;
+					for( asUINT initIndex = 0;
+						initIndex < initChildren.GetLength(); ++initIndex )
+					{
+						const asCStmt* const initStatement =
+							context.GetStmt(initChildren[initIndex]);
+						const asCExpr* const assignment = initStatement != 0
+							&& initStatement->kind == asAST_STMT_EXPR
+							? context.GetExpr(initStatement->expr) : 0;
+						const asCExpr* const target = assignment != 0
+							&& assignment->kind == asAST_EXPR_ASSIGN
+							&& assignment->children.GetLength() == 2
+							? context.GetExpr(assignment->children[0]) : 0;
+						if( target != 0 && target->kind == asAST_EXPR_DECL_REF
+							&& target->resolvedDecl == iteratorDeclId )
+						{
+							iteratorActivation = assignment->id;
+							break;
+						}
+					}
+					const asCStmt* const cleanupStatement =
+						context.GetStmt(cleanup);
+					const asCExpr* const cleanupAction = cleanupStatement != 0
+						? context.GetExpr(cleanupStatement->expr) : 0;
+					if( !iteratorActivation.IsValid() || cleanupAction == 0
+						|| !cleanupAction->resolvedDecl.IsValid() )
+					{
+						AddDiagnostic("foreach-lifetime-record-invalid", range);
+						return asASTStmtId();
+					}
+					asSASTLifetimeRecord record;
+					record.subjectKind =
+						asAST_LIFETIME_SUBJECT_FOREACH_ITERATOR;
+					record.subject = asSASTLifetimeNodeId::FromDecl(
+						iteratorDeclId);
+					record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+					record.actionTarget = asSASTLifetimeNodeId::FromDecl(
+						cleanupAction->resolvedDecl);
+					record.activationPoint = asSASTLifetimeNodeId::FromExpr(
+						iteratorActivation);
+					record.semanticRegion = asSASTLifetimeNodeId::FromStmt(loop);
+					record.phase = asAST_LIFETIME_PHASE_LOOP_ITERATION;
+					record.supportedExitMask = asAST_LIFETIME_EXIT_ALL;
+					record.order = context.GetLifetimeRecordCount();
+					if( asSemaAuthorLifetimeRecord(context, record)
+						!= asAST_VERIFY_OK )
+					{
+						AddDiagnostic("foreach-lifetime-record-invalid", range);
+						return asASTStmtId();
+					}
 				}
 				context.SetStmtSafePointRole(loop, asAST_SAFEPOINT_LOOP_BACKEDGE);
 				context.SetStmtSafePointRole(canonicalBody, asAST_SAFEPOINT_LOOP_ENTRY);
@@ -1892,16 +1942,21 @@ static asASTStmtId CreateLexicalCleanup(
 		return sema.ActOnExprStmt(owner, cleanup, range);
 	}
 
-	const asASTExprId cleanup = sema.ActOnCleanup(target, range);
-	const asCExpr* const cleanupExpr = context.GetExpr(cleanup);
-	const asCDecl* const destructor = cleanupExpr != 0
-		? context.GetDecl(cleanupExpr->resolvedDecl) : 0;
-	if( cleanupExpr == 0 || destructor == 0
-		|| destructor->kind != asAST_DECL_DESTRUCTOR )
+	const asASTDeclId destructorId = FindLexicalValueDestructor(
+		context, declaration);
+	const asCDecl* const destructor = context.GetDecl(destructorId);
+	if( destructor == 0 || destructor->kind != asAST_DECL_DESTRUCTOR )
 	{
 		return asASTStmtId();
 	}
+	// The lifetime protocol already owns the exact destructor decision. Keep the
+	// temporary scope-exit statement only as an authenticated compatibility
+	// encoding of that fact; do not repeat unqualified type lookup here.
+	const asASTExprId cleanup = context.CreateExpr(
+		asAST_EXPR_CLEANUP, variable->type, asAST_VALUE_PRVALUE, range);
 	context.SetLiteral(cleanup, "scope-exit");
+	context.SetResolvedDecl(cleanup, destructorId);
+	context.AddExprChild(cleanup, target);
 	return sema.ActOnExprStmt(owner, cleanup, range);
 }
 
@@ -2010,7 +2065,7 @@ static void AppendLexicalCleanupPlansToTransfers(
 	}
 }
 
-static bool AuthorLexicalValueLifetimeRecords(
+static bool AuthorLexicalLifetimeRecords(
 	asCSema& sema,
 	asASTStmtId block,
 	const asCArray<asSLexicalOwnedLocal>& locals)
@@ -2019,15 +2074,20 @@ static bool AuthorLexicalValueLifetimeRecords(
 	for( asUINT localIndex = 0; localIndex < locals.GetLength(); ++localIndex )
 	{
 		const asSLexicalOwnedLocal& local = locals[localIndex];
-		if( local.cleanupRoute != asLEXICAL_CLEANUP_VALUE_DESTRUCTOR )
+		if( local.cleanupRoute == asLEXICAL_CLEANUP_NONE )
 		{
 			continue;
 		}
 		asSASTLifetimeRecord record;
 		record.subjectKind = asAST_LIFETIME_SUBJECT_LOCAL;
 		record.subject = asSASTLifetimeNodeId::FromDecl(local.declaration);
-		record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
-		record.actionTarget = asSASTLifetimeNodeId::FromDecl(local.actionTarget);
+		record.actionKind = local.cleanupRoute
+			== asLEXICAL_CLEANUP_VALUE_DESTRUCTOR
+			? asAST_LIFETIME_ACTION_DESTROY_VALUE
+			: asAST_LIFETIME_ACTION_RELEASE_REFERENCE;
+		record.actionTarget = asSASTLifetimeNodeId::FromDecl(
+			local.cleanupRoute == asLEXICAL_CLEANUP_VALUE_DESTRUCTOR
+				? local.actionTarget : local.declaration);
 		record.activationPoint = asSASTLifetimeNodeId::FromExpr(
 			local.activationPoint);
 		record.semanticRegion = asSASTLifetimeNodeId::FromStmt(block);
@@ -2156,7 +2216,7 @@ asASTStmtId asCSema::ActOnBlockStatementAction(
 		action.owner, flattenedChildren, range);
 	if( block.IsValid() )
 	{
-		if( !AuthorLexicalValueLifetimeRecords(
+		if( !AuthorLexicalLifetimeRecords(
 			*this, block, lexicalOwnedLocals) )
 		{
 			return asASTStmtId();

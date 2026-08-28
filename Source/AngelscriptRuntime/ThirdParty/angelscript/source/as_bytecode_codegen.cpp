@@ -12,6 +12,7 @@
 #include "as_runtime_type_bridge.h"
 #include "as_scriptengine.h"
 #include "as_ast_dump.h"
+#include "as_ast_lifetime.h"
 #include "as_scriptfunction.h"
 #include "as_ast_type.h"
 #include "as_ast_verifier.h"
@@ -1835,6 +1836,9 @@ namespace
 			int& inFailLine,
 			asCString& inFailureDetail)
 			: context(inContext)
+			, lifetimeViewValid(
+				asCASTBuildLifetimeView(inContext, lifetimeView)
+					== asAST_VERIFY_OK)
 			, builder(inBuilder)
 			, bridge(inBridge)
 			, artifact(inArtifact)
@@ -1860,6 +1864,11 @@ namespace
 
 		bool Emit(asCScriptFunction* outFunc, const asCDecl* decl)
 		{
+			if( !lifetimeViewValid )
+			{
+				FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+				return false;
+			}
 			func = outFunc;
 			functionArtifactIndex = artifact.GetOrAddRelocationFunction(outFunc);
 			activeDecl = decl;
@@ -7171,9 +7180,7 @@ namespace
 				{
 					const asCExpr* const expression = context.GetExpr(stmt->expr);
 					if( expression != 0
-						&& expression->kind == asAST_EXPR_CLEANUP
-						&& (expression->literal.Equals("scope-exit")
-							|| expression->literal.Equals("scope-release")) )
+						&& lifetimeView.FindCleanupBinding(stmt->id) != 0 )
 					{
 						if( EmitLexicalCleanup(stmt->id) )
 						{
@@ -7298,18 +7305,17 @@ namespace
 
 		bool EmitScopeExitCleanup(asASTStmtId cleanupStmt)
 		{
-			const asCStmt* const stmt = context.GetStmt(cleanupStmt);
-			const asCExpr* const cleanup = stmt && stmt->kind == asAST_STMT_EXPR
-				? context.GetExpr(stmt->expr) : 0;
-			const asCExpr* const target = cleanup
-				&& cleanup->kind == asAST_EXPR_CLEANUP
-				&& cleanup->literal.Equals("scope-exit")
-				&& cleanup->children.GetLength() == 1
-				? context.GetExpr(cleanup->children[0]) : 0;
-			const asCDecl* const destructor = cleanup
-				? context.GetDecl(cleanup->resolvedDecl) : 0;
-			if( cleanup == 0 || target == 0
-				|| target->kind != asAST_EXPR_DECL_REF
+			const asSASTLifetimeCleanupBinding* const binding =
+				lifetimeView.FindCleanupBinding(cleanupStmt);
+			const asCDecl* const targetDecl = binding != 0
+				&& binding->subject.nodeClass == asAST_LIFETIME_NODE_DECL
+				? context.GetDecl(asASTDeclId(binding->subject.value)) : 0;
+			const asCDecl* const destructor = binding != 0
+				&& binding->actionTarget.nodeClass == asAST_LIFETIME_NODE_DECL
+				? context.GetDecl(asASTDeclId(binding->actionTarget.value)) : 0;
+			if( binding == 0
+				|| binding->actionKind != asAST_LIFETIME_ACTION_DESTROY_VALUE
+				|| targetDecl == 0 || targetDecl->kind != asAST_DECL_VAR
 				|| destructor == 0
 				|| destructor->kind != asAST_DECL_DESTRUCTOR )
 			{
@@ -7317,10 +7323,10 @@ namespace
 				return false;
 			}
 
-			const int slot = FindSlot(target->resolvedDecl);
+			const int slot = FindSlot(targetDecl->id);
 			asSCodeGenObject* const object = FindTrackedObject(slot);
 			asCScriptFunction* const destructorFunction =
-				FindFunc(cleanup->resolvedDecl);
+				FindFunc(destructor->id);
 			asCObjectType* const objectType = object
 				? CastToObjectType(object->type.GetTypeInfo()) : 0;
 			if( slot == 0x7fffffff || object == 0 || objectType == 0
@@ -7344,21 +7350,16 @@ namespace
 
 		bool EmitScopeReleaseCleanup(asASTStmtId cleanupStmt)
 		{
-			const asCStmt* const stmt = context.GetStmt(cleanupStmt);
-			const asCExpr* const cleanup = stmt && stmt->kind == asAST_STMT_EXPR
-				? context.GetExpr(stmt->expr) : 0;
-			const asCExpr* const target = cleanup
-				&& cleanup->kind == asAST_EXPR_CLEANUP
-				&& cleanup->literal.Equals("scope-release")
-				&& !cleanup->resolvedDecl.IsValid()
-				&& cleanup->children.GetLength() == 1
-				? context.GetExpr(cleanup->children[0]) : 0;
-			const asCDecl* const targetDecl = target
-				&& target->kind == asAST_EXPR_DECL_REF
-				? context.GetDecl(target->resolvedDecl) : 0;
+			const asSASTLifetimeCleanupBinding* const binding =
+				lifetimeView.FindCleanupBinding(cleanupStmt);
+			const asCDecl* const targetDecl = binding != 0
+				&& binding->subject.nodeClass == asAST_LIFETIME_NODE_DECL
+				? context.GetDecl(asASTDeclId(binding->subject.value)) : 0;
 			const asCType* const canonicalType = targetDecl
 				? context.GetType(targetDecl->type.type) : 0;
-			if( cleanup == 0 || target == 0 || targetDecl == 0
+			if( binding == 0
+				|| binding->actionKind != asAST_LIFETIME_ACTION_RELEASE_REFERENCE
+				|| targetDecl == 0
 				|| targetDecl->kind != asAST_DECL_VAR
 				|| targetDecl->type.IsReference() || canonicalType == 0
 				|| (canonicalType->kind != asAST_TYPE_REFERENCE_OBJECT
@@ -7391,16 +7392,15 @@ namespace
 
 		bool EmitLexicalCleanup(asASTStmtId cleanupStmt)
 		{
-			const asCStmt* const stmt = context.GetStmt(cleanupStmt);
-			const asCExpr* const cleanup = stmt && stmt->kind == asAST_STMT_EXPR
-				? context.GetExpr(stmt->expr) : 0;
-			if( cleanup != 0 && cleanup->kind == asAST_EXPR_CLEANUP )
+			const asSASTLifetimeCleanupBinding* const binding =
+				lifetimeView.FindCleanupBinding(cleanupStmt);
+			if( binding != 0 )
 			{
-				if( cleanup->literal.Equals("scope-exit") )
+				if( binding->actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE )
 				{
 					return EmitScopeExitCleanup(cleanupStmt);
 				}
-				if( cleanup->literal.Equals("scope-release") )
+				if( binding->actionKind == asAST_LIFETIME_ACTION_RELEASE_REFERENCE )
 				{
 					return EmitScopeReleaseCleanup(cleanupStmt);
 				}
@@ -7443,11 +7443,11 @@ namespace
 
 		void RetireLexicalCleanupObject(asASTStmtId cleanupStmt)
 		{
-			const asCStmt* const stmt = context.GetStmt(cleanupStmt);
-			const asCExpr* const cleanup = stmt ? context.GetExpr(stmt->expr) : 0;
-			const asCExpr* const target = cleanup && cleanup->children.GetLength() == 1
-				? context.GetExpr(cleanup->children[0]) : 0;
-			const int slot = target ? FindSlot(target->resolvedDecl) : 0x7fffffff;
+			const asSASTLifetimeCleanupBinding* const binding =
+				lifetimeView.FindCleanupBinding(cleanupStmt);
+			const int slot = binding != 0
+				&& binding->subject.nodeClass == asAST_LIFETIME_NODE_DECL
+				? FindSlot(asASTDeclId(binding->subject.value)) : 0x7fffffff;
 			for( asUINT objectIndex = 0; objectIndex < objects.GetLength(); ++objectIndex )
 			{
 				if( objects[objectIndex].offset == slot )
@@ -7640,7 +7640,40 @@ namespace
 
 		void EmitFor(const asCStmt* stmt)
 		{
-			if( stmt->children.GetLength() < 2 )
+			asASTStmtId initializerId;
+			asASTExprId conditionId;
+			asASTStmtId bodyId;
+			asASTStmtId incrementId;
+			asASTStmtId cleanup;
+			if( stmt->kind == asAST_STMT_FOREACH )
+			{
+				const asSASTForEachPhases* const phases =
+					lifetimeView.FindForEachPhases(stmt->id);
+				if( phases == 0 )
+				{
+					FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+					return;
+				}
+				initializerId = phases->initializer;
+				conditionId = phases->condition;
+				bodyId = phases->body;
+				incrementId = phases->increment;
+				cleanup = phases->cleanup;
+			}
+			else
+			{
+				if( stmt->children.GetLength() < 2 )
+				{
+					FailAt(__LINE__, asNOT_SUPPORTED);
+					return;
+				}
+				initializerId = stmt->children[0];
+				conditionId = stmt->expr;
+				bodyId = stmt->children[1];
+				incrementId = stmt->children.GetLength() > 2
+					? stmt->children[2] : asASTStmtId();
+			}
+			if( !bodyId.IsValid() )
 			{
 				FailAt(__LINE__, asNOT_SUPPORTED);
 				return;
@@ -7653,9 +7686,9 @@ namespace
 			// condition, body, and increment. Model the actual for-init lexical scope
 			// across the complete loop and flatten only this position's synthetic block.
 			bc.Block(true);
-			if( stmt->children[0].IsValid() )
+			if( initializerId.IsValid() )
 			{
-				const asCStmt* initializer = context.GetStmt(stmt->children[0]);
+				const asCStmt* initializer = context.GetStmt(initializerId);
 				if( initializer == 0 )
 				{
 					FailAt(__LINE__, asAST_VERIFY_DANGLING_ID);
@@ -7671,25 +7704,23 @@ namespace
 				}
 				else
 				{
-					EmitStmt(stmt->children[0]);
+					EmitStmt(initializerId);
 				}
 			}
 			const int start = nextLabel++;
 			const int incr = nextLabel++;
 			const int end = nextLabel++;
-			const asASTStmtId cleanup = stmt->children.GetLength() > 3
-				? stmt->children[3] : asASTStmtId();
 			PushLoop(stmt->id, end, incr, cleanup);
 			bc.Label((short)start);
-			if( stmt->expr.IsValid() )
+			if( conditionId.IsValid() )
 			{
-				const int cond = EmitExpr(stmt->expr);
+				const int cond = EmitExpr(conditionId);
 				EmitBoolJump(cond, asBC_JLowZ, end);
 			}
-			EmitStmt(stmt->children[1]);
+			EmitStmt(bodyId);
 			bc.Label((short)incr);
-			if( stmt->children.GetLength() > 2 )
-				EmitStmt(stmt->children[2]);
+			if( incrementId.IsValid() )
+				EmitStmt(incrementId);
 			bc.InstrINT(asBC_JMP, start);
 			bc.Label((short)end);
 			if( cleanup.IsValid() )
@@ -7795,6 +7826,8 @@ namespace
 		}
 
 		const asCASTContext& context;
+		asCASTLifetimeView lifetimeView;
+		bool lifetimeViewValid;
 		asCBuilder* builder;
 		asCRuntimeTypeBridge* bridge;
 		asSBytecodeCodeGenArtifact& artifact;

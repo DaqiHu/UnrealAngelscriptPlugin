@@ -7038,6 +7038,99 @@ public:
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("kind=Construct")), *DumpMsg));
 	}
 
+	TEST_METHOD(NamespacedValueLocalLifetimeMatchesExactQualifiedDestructorOwner)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaNamespacedValueLifetime");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaNamespacedValueLifetime module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		asCScriptCode Code;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			namespace Tools::Utilities
+			{
+				struct FValue
+				{
+					int Value;
+				}
+
+				int Entry()
+				{
+					FValue Object;
+					return Object.Value;
+				}
+			}
+			)AS");
+		Code.SetCode("SemaNamespacedValueLifetime.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("namespaced value-local lifetime source must parse")));
+
+		const asCDecl* Object = nullptr;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_VAR
+				&& Decl->name.Equals("Object"))
+			{
+				Object = Decl;
+				break;
+			}
+		}
+		const asSASTLifetimeRecord* Lifetime = nullptr;
+		for (asUINT Index = 0; Object != nullptr
+			&& Index < Context.GetLifetimeRecordCount(); ++Index)
+		{
+			const asSASTLifetimeRecord* const Candidate = Context.GetLifetimeRecord(Index);
+			if (Candidate != nullptr
+				&& Candidate->subject == asSASTLifetimeNodeId::FromDecl(Object->id))
+			{
+				Lifetime = Candidate;
+				break;
+			}
+		}
+		const asCType* const ObjectType = Object != nullptr
+			? Context.GetType(Object->type.type) : nullptr;
+		const asCDecl* const Destructor = Lifetime != nullptr
+			&& Lifetime->actionTarget.nodeClass == asAST_LIFETIME_NODE_DECL
+			? Context.GetDecl(asASTDeclId(Lifetime->actionTarget.value)) : nullptr;
+		const asCDecl* const DestructorOwner = Destructor != nullptr
+			? Context.GetDecl(Destructor->parent) : nullptr;
+		asCString RawDump;
+		asCASTDump(Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString IdentityMessage = FString::Printf(
+			TEXT("namespaced local and its exact destructor owner must share the complete type key before lifetime verification. AST:\n%s"),
+			*Dump);
+		ASSERT_THAT(IsTrue(
+			Object != nullptr && ObjectType != nullptr
+				&& ObjectType->kind == asAST_TYPE_VALUE_OBJECT
+				&& ObjectType->stableKey.Equals("Tools::Utilities::FValue")
+				&& Lifetime != nullptr
+				&& Lifetime->subjectKind == asAST_LIFETIME_SUBJECT_LOCAL
+				&& Lifetime->actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE
+				&& Destructor != nullptr && Destructor->kind == asAST_DECL_DESTRUCTOR
+				&& DestructorOwner != nullptr
+				&& DestructorOwner->stableKey.Equals("Tools::Utilities::FValue"),
+			*IdentityMessage));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			static_cast<int32>(Context.Seal()),
+			*FString::Printf(
+				TEXT("the exact namespaced value-local lifetime protocol must seal. AST:\n%s"),
+				*Dump)));
+	}
+
 	TEST_METHOD(DoWhileStmtRecordsNamedBodyTrailingCondOnCompileSealPath)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

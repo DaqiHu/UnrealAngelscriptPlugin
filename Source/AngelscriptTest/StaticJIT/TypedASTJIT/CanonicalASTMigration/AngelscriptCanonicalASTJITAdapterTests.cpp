@@ -11,6 +11,7 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_dump.h"
+#include "source/as_ast_lifetime.h"
 #include "source/as_datatype.h"
 #include "source/as_module.h"
 #include "source/as_scriptengine.h"
@@ -152,7 +153,21 @@ public:
 			Tu, "ReleaseLocal", VoidType, Range);
 		const asASTDeclId ReferenceLocal = Sema.ActOnVarDecl(
 			ReleaseFunction, "Object", ReferenceType, Range);
-		Context.AddDeclInit(ReferenceLocal, Sema.ActOnNullLiteral(Range));
+		const asASTStmtId ReferenceDeclStmt = Context.CreateStmt(
+			asAST_STMT_DECL, ReleaseFunction, Range);
+		Context.SetStmtDecl(ReferenceDeclStmt, ReferenceLocal);
+		const asASTExprId ReferenceInitTarget = Sema.ActOnDeclRef(
+			ReferenceLocal, ReferenceType, Range);
+		const asASTExprId ReferenceInitValue = Context.CreateExpr(
+			asAST_EXPR_NULL_LITERAL, ReferenceType,
+			asAST_VALUE_PRVALUE, Range);
+		const asASTExprId ReferenceAssignment = Context.CreateExpr(
+			asAST_EXPR_ASSIGN, ReferenceType,
+			asAST_VALUE_LVALUE, Range);
+		Context.SetLiteral(ReferenceAssignment, "=");
+		Context.AddExprChild(ReferenceAssignment, ReferenceInitTarget);
+		Context.AddExprChild(ReferenceAssignment, ReferenceInitValue);
+		Context.AddDeclInit(ReferenceLocal, ReferenceAssignment);
 		const asASTExprId ReleaseTarget = Sema.ActOnDeclRef(
 			ReferenceLocal, ReferenceType, Range);
 		const asASTExprId Release = Context.CreateExpr(
@@ -160,10 +175,27 @@ public:
 		Context.SetLiteral(Release, "scope-release");
 		Context.AddExprChild(Release, ReleaseTarget);
 		asCArray<asASTStmtId> ReleaseBody;
+		ReleaseBody.PushLast(ReferenceDeclStmt);
+		ReleaseBody.PushLast(Sema.ActOnExprStmt(
+			ReleaseFunction, ReferenceAssignment, Range));
 		ReleaseBody.PushLast(Sema.ActOnExprStmt(
 			ReleaseFunction, Release, Range));
-		Context.SetBody(ReleaseFunction, Sema.ActOnCompoundStmt(
-			ReleaseFunction, ReleaseBody, Range));
+		const asASTStmtId ReleaseRegion = Sema.ActOnCompoundStmt(
+			ReleaseFunction, ReleaseBody, Range);
+		Context.SetBody(ReleaseFunction, ReleaseRegion);
+		asSASTLifetimeRecord ReleaseRecord;
+		ReleaseRecord.subjectKind = asAST_LIFETIME_SUBJECT_LOCAL;
+		ReleaseRecord.subject = asSASTLifetimeNodeId::FromDecl(ReferenceLocal);
+		ReleaseRecord.actionKind = asAST_LIFETIME_ACTION_RELEASE_REFERENCE;
+		ReleaseRecord.actionTarget = asSASTLifetimeNodeId::FromDecl(ReferenceLocal);
+		ReleaseRecord.activationPoint =
+			asSASTLifetimeNodeId::FromExpr(ReferenceAssignment);
+		ReleaseRecord.semanticRegion =
+			asSASTLifetimeNodeId::FromStmt(ReleaseRegion);
+		ReleaseRecord.phase = asAST_LIFETIME_PHASE_LEXICAL_SCOPE;
+		ReleaseRecord.supportedExitMask = asAST_LIFETIME_EXIT_ALL;
+		ReleaseRecord.order = 0;
+		Context.AddLifetimeRecord(ReleaseRecord);
 		Sema.FinishDecl(ReleaseFunction);
 
 		const asCQualType ValueType = Context.InternNamedType(
@@ -177,6 +209,22 @@ public:
 			Tu, "DestroyLocal", VoidType, Range);
 		const asASTDeclId ValueLocal = Sema.ActOnVarDecl(
 			DestructorFunction, "Value", ValueType, Range);
+		const asASTStmtId ValueDeclStmt = Context.CreateStmt(
+			asAST_STMT_DECL, DestructorFunction, Range);
+		Context.SetStmtDecl(ValueDeclStmt, ValueLocal);
+		const asASTExprId ValueInitTarget = Sema.ActOnDeclRef(
+			ValueLocal, ValueType, Range);
+		const asASTExprId ValueInitValue = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, ValueType,
+			asAST_VALUE_PRVALUE, Range);
+		Context.SetLiteral(ValueInitValue, "0");
+		const asASTExprId ValueAssignment = Context.CreateExpr(
+			asAST_EXPR_ASSIGN, ValueType,
+			asAST_VALUE_LVALUE, Range);
+		Context.SetLiteral(ValueAssignment, "=");
+		Context.AddExprChild(ValueAssignment, ValueInitTarget);
+		Context.AddExprChild(ValueAssignment, ValueInitValue);
+		Context.AddDeclInit(ValueLocal, ValueAssignment);
 		const asASTExprId DestructorTarget = Sema.ActOnDeclRef(
 			ValueLocal, ValueType, Range);
 		const asASTExprId ScopeExit = Sema.ActOnCleanup(
@@ -184,10 +232,27 @@ public:
 		Context.SetLiteral(ScopeExit, "scope-exit");
 		Context.SetResolvedDecl(ScopeExit, Destructor);
 		asCArray<asASTStmtId> DestructorBody;
+		DestructorBody.PushLast(ValueDeclStmt);
+		DestructorBody.PushLast(Sema.ActOnExprStmt(
+			DestructorFunction, ValueAssignment, Range));
 		DestructorBody.PushLast(Sema.ActOnExprStmt(
 			DestructorFunction, ScopeExit, Range));
-		Context.SetBody(DestructorFunction, Sema.ActOnCompoundStmt(
-			DestructorFunction, DestructorBody, Range));
+		const asASTStmtId DestructorRegion = Sema.ActOnCompoundStmt(
+			DestructorFunction, DestructorBody, Range);
+		Context.SetBody(DestructorFunction, DestructorRegion);
+		asSASTLifetimeRecord DestructorRecord;
+		DestructorRecord.subjectKind = asAST_LIFETIME_SUBJECT_LOCAL;
+		DestructorRecord.subject = asSASTLifetimeNodeId::FromDecl(ValueLocal);
+		DestructorRecord.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+		DestructorRecord.actionTarget = asSASTLifetimeNodeId::FromDecl(Destructor);
+		DestructorRecord.activationPoint =
+			asSASTLifetimeNodeId::FromExpr(ValueAssignment);
+		DestructorRecord.semanticRegion =
+			asSASTLifetimeNodeId::FromStmt(DestructorRegion);
+		DestructorRecord.phase = asAST_LIFETIME_PHASE_LEXICAL_SCOPE;
+		DestructorRecord.supportedExitMask = asAST_LIFETIME_EXIT_ALL;
+		DestructorRecord.order = 1;
+		Context.AddLifetimeRecord(DestructorRecord);
 		Sema.FinishDecl(DestructorFunction);
 
 		ASSERT_THAT(AreEqual(0, Context.Seal(),
@@ -200,8 +265,8 @@ public:
 			EAngelscriptTypedASTJITCleanupPlanState::NonEmpty,
 			ReleaseFacts.CleanupPlanState,
 			TEXT("an exact scope-release action must publish a non-empty cleanup plan")));
-		ASSERT_THAT(IsFalse(ReleaseFacts.bCleanupPlanCoversAllTransfers,
-			TEXT("classification alone must not claim transfer-edge liveness proof")));
+		ASSERT_THAT(IsTrue(ReleaseFacts.bCleanupPlanCoversAllTransfers,
+			TEXT("the authenticated release protocol proves every exit of this no-transfer body")));
 
 		const FAngelscriptTypedASTJITCanonicalLifetimeFacts DestructorFacts =
 			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
@@ -210,8 +275,8 @@ public:
 			EAngelscriptTypedASTJITCleanupPlanState::ScriptDestructor,
 			DestructorFacts.CleanupPlanState,
 			TEXT("an exact scope-exit destructor action must retain its stronger classification")));
-		ASSERT_THAT(IsFalse(DestructorFacts.bCleanupPlanCoversAllTransfers,
-			TEXT("destructor classification alone must not claim transfer-edge liveness proof")));
+		ASSERT_THAT(IsTrue(DestructorFacts.bCleanupPlanCoversAllTransfers,
+			TEXT("the authenticated destructor protocol proves every exit of this no-transfer body")));
 	}
 
 	TEST_METHOD(CanonicalLifetimeFactsProveReverseLiveOnlyTransferCoverage)
@@ -249,7 +314,19 @@ public:
 			Tu, "ProvenLifetime", IntType, Range);
 		const asASTDeclId ProvenLocal = Sema.ActOnVarDecl(
 			ProvenFunction, "Later", ValueType, Range);
-		Context.AddDeclInit(ProvenLocal, Sema.ActOnNullLiteral(Range));
+		const asASTExprId ProvenInitTarget = Sema.ActOnDeclRef(
+			ProvenLocal, ValueType, Range);
+		const asASTExprId ProvenInitValue = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, ValueType,
+			asAST_VALUE_PRVALUE, Range);
+		Context.SetLiteral(ProvenInitValue, "0");
+		const asASTExprId ProvenAssignment = Context.CreateExpr(
+			asAST_EXPR_ASSIGN, ValueType,
+			asAST_VALUE_LVALUE, Range);
+		Context.SetLiteral(ProvenAssignment, "=");
+		Context.AddExprChild(ProvenAssignment, ProvenInitTarget);
+		Context.AddExprChild(ProvenAssignment, ProvenInitValue);
+		Context.AddDeclInit(ProvenLocal, ProvenAssignment);
 		const asASTStmtId EarlyReturn = Sema.ActOnReturnStmt(
 			ProvenFunction, Sema.ActOnIntegerLiteral(1, Range), Range);
 		const asASTStmtId EarlyIf = Sema.ActOnIfStmt(
@@ -262,10 +339,26 @@ public:
 		asCArray<asASTStmtId> ProvenBody;
 		ProvenBody.PushLast(EarlyIf);
 		ProvenBody.PushLast(MakeDeclStmt(ProvenFunction, ProvenLocal));
+		ProvenBody.PushLast(Sema.ActOnExprStmt(
+			ProvenFunction, ProvenAssignment, Range));
 		ProvenBody.PushLast(LateReturn);
 		ProvenBody.PushLast(MakeScopeExit(ProvenFunction, ProvenLocal));
-		Context.SetBody(ProvenFunction, Sema.ActOnCompoundStmt(
-			ProvenFunction, ProvenBody, Range));
+		const asASTStmtId ProvenRegion = Sema.ActOnCompoundStmt(
+			ProvenFunction, ProvenBody, Range);
+		Context.SetBody(ProvenFunction, ProvenRegion);
+		asSASTLifetimeRecord ProvenRecord;
+		ProvenRecord.subjectKind = asAST_LIFETIME_SUBJECT_LOCAL;
+		ProvenRecord.subject = asSASTLifetimeNodeId::FromDecl(ProvenLocal);
+		ProvenRecord.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+		ProvenRecord.actionTarget = asSASTLifetimeNodeId::FromDecl(Destructor);
+		ProvenRecord.activationPoint =
+			asSASTLifetimeNodeId::FromExpr(ProvenAssignment);
+		ProvenRecord.semanticRegion =
+			asSASTLifetimeNodeId::FromStmt(ProvenRegion);
+		ProvenRecord.phase = asAST_LIFETIME_PHASE_LEXICAL_SCOPE;
+		ProvenRecord.supportedExitMask = asAST_LIFETIME_EXIT_ALL;
+		ProvenRecord.order = 0;
+		Context.AddLifetimeRecord(ProvenRecord);
 		Sema.FinishDecl(ProvenFunction);
 
 		const asASTDeclId MissingFunction = Sema.ActOnFunctionDecl(
@@ -461,6 +554,61 @@ public:
 				*Context, "ProveObjectForeachLifetime");
 		ASSERT_THAT(IsTrue(FunctionDecl.IsValid(),
 			TEXT("object-iterator lifetime fixture needs one exact function")));
+
+		asCASTLifetimeView LifetimeView;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(*Context, LifetimeView),
+			TEXT("the AOT fixture must consume the same authenticated lifetime view as Bytecode")));
+		const asSASTForEachPhases* ForEachPhases = nullptr;
+		for( asUINT StatementIndex = 1;
+			StatementIndex <= Context->GetStmtCount(); ++StatementIndex )
+		{
+			const asASTStmtId StatementId(StatementIndex);
+			const asCStmt* const Statement = Context->GetStmt(StatementId);
+			if( Statement != nullptr && Statement->kind == asAST_STMT_FOREACH )
+			{
+				ASSERT_THAT(IsNull(ForEachPhases,
+					TEXT("the fixture has one unambiguous foreach statement")));
+				ForEachPhases = LifetimeView.FindForEachPhases(StatementId);
+			}
+			if( Statement != nullptr && Statement->kind == asAST_STMT_CONTINUE )
+			{
+				for( asUINT ChildIndex = 0;
+					ChildIndex < Statement->children.GetLength(); ++ChildIndex )
+				{
+					ASSERT_THAT(IsNull(LifetimeView.FindCleanupBinding(
+						Statement->children[ChildIndex]),
+						TEXT("continue remains inside the foreach iterator lifetime")));
+				}
+			}
+		}
+		ASSERT_THAT(IsNotNull(ForEachPhases,
+			TEXT("foreach positional children must resolve through one named phase view")));
+		if (ForEachPhases != nullptr)
+		{
+			ASSERT_THAT(IsTrue(ForEachPhases->initializer.IsValid()));
+			ASSERT_THAT(IsTrue(ForEachPhases->condition.IsValid()));
+			ASSERT_THAT(IsTrue(ForEachPhases->body.IsValid()));
+			ASSERT_THAT(IsTrue(ForEachPhases->increment.IsValid()));
+			ASSERT_THAT(IsTrue(ForEachPhases->cleanup.IsValid()));
+			ASSERT_THAT(AreNotEqual(
+				static_cast<asUINT>(-1),
+				ForEachPhases->lifetimeRecordIndex));
+			const asSASTLifetimeCleanupBinding* const CleanupBinding =
+				LifetimeView.FindCleanupBinding(ForEachPhases->cleanup);
+			ASSERT_THAT(IsNotNull(CleanupBinding,
+				TEXT("the named foreach cleanup phase must bind one authenticated record")));
+			if (CleanupBinding != nullptr)
+			{
+				ASSERT_THAT(AreEqual(
+					static_cast<int32>(asAST_LIFETIME_COMPAT_FOREACH_EXIT),
+					static_cast<int32>(CleanupBinding->role)));
+				ASSERT_THAT(AreEqual(
+					ForEachPhases->lifetimeRecordIndex,
+					CleanupBinding->recordIndex));
+			}
+		}
 
 		const FAngelscriptTypedASTJITCanonicalLifetimeFacts Facts =
 			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(

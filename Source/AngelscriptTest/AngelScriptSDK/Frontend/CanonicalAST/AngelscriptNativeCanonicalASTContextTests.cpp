@@ -115,6 +115,22 @@ public:
 		Record.order = 0;
 		Record.completeObjectCommit = false;
 
+		const asASTExprId CleanupTarget = Context.CreateExpr(
+			asAST_EXPR_DECL_REF, ValueType,
+			asAST_VALUE_LVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0,
+			Context.SetResolvedDecl(CleanupTarget, Local)));
+		const asASTExprId Cleanup = Context.CreateExpr(
+			asAST_EXPR_CLEANUP, ValueType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetLiteral(Cleanup, "scope-exit")));
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(Cleanup, Destructor)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Cleanup, CleanupTarget)));
+		const asASTStmtId CleanupStmt = Context.CreateStmt(
+			asAST_STMT_EXPR, Function, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(CleanupStmt, Cleanup)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Region, CleanupStmt)));
+
 		ASSERT_THAT(AreEqual(
 			static_cast<int32>(asAST_VERIFY_OK),
 			Context.AddLifetimeRecord(Record),
