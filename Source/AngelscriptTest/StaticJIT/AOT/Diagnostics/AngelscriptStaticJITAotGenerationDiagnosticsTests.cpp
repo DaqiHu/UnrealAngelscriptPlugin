@@ -208,6 +208,10 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 			EAngelscriptStaticJITCanonicalASTState::Verified;
 		RootFacts.CleanupPlanState =
 			EAngelscriptTypedASTJITCleanupPlanState::VerifiedEmpty;
+		RootFacts.LifetimeSummary.ProtocolRevision = 1;
+		RootFacts.LifetimeSummary.StableKey = RootFacts.FunctionKey.Hash;
+		RootFacts.LifetimeSummary.ABIKey = RootFacts.FunctionKey.Hash;
+		RootFacts.LifetimeSummary.bNativeObjectFrameABIAvailable = true;
 		RootFacts.bCleanupPlanCoversAllTransfers = true;
 
 		Function.TypedDiagnostic->CallClosure.Emplace();
@@ -239,6 +243,11 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 			EAngelscriptStaticJITCanonicalASTState::Verified;
 		HelperFacts.CleanupPlanState =
 			EAngelscriptTypedASTJITCleanupPlanState::VerifiedEmpty;
+		HelperFacts.LifetimeSummary.ProtocolRevision = 1;
+		HelperFacts.LifetimeSummary.StableKey = HelperFacts.FunctionKey.Hash;
+		HelperFacts.LifetimeSummary.ABIKey = HelperFacts.FunctionKey.Hash;
+		HelperFacts.LifetimeSummary.bNativeObjectFrameABIAvailable = true;
+		HelperFacts.bCleanupPlanCoversAllTransfers = true;
 		HelperFacts.bRecursiveComponent = true;
 
 		FStaticJITDiagnostics::FSnapshot Snapshot;
@@ -262,6 +271,10 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 			TEXT("\"canonicalASTState\":\"Verified\""))));
 		ASSERT_THAT(IsTrue(Result.Json.Contains(
 			TEXT("\"cleanupPlanState\":\"VerifiedEmpty\""))));
+		ASSERT_THAT(IsTrue(Result.Json.Contains(
+			TEXT("\"lifetimeProtocolRevision\":1"))));
+		ASSERT_THAT(IsTrue(Result.Json.Contains(
+			TEXT("\"nativeObjectFrameABIAvailable\":true"))));
 		ASSERT_THAT(IsTrue(Result.Json.Contains(
 			TEXT("\"requiredCapabilities\":\"FramePosition|RecursionBudget\""))));
 		ASSERT_THAT(IsTrue(Result.Json.Contains(

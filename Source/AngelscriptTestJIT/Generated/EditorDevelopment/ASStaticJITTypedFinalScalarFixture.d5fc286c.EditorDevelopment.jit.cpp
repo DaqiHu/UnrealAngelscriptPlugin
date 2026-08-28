@@ -53,17 +53,17 @@ static double ASJIT_23f1e6dec794e6d7cc42917a3dd1fc6f8bae9cee3cb91a0bb0338624ad3b
 		return ([&]() -> double
 	{
 		TypedFrame.SetSourcePosition(77, 3);
-		const double as_ast_e74_left = as_ast_d25;
+		const double as_ast_e70_left = as_ast_d25;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return double{};
 		}
-		const double as_ast_e74_right = as_ast_d26;
+		const double as_ast_e70_right = as_ast_d26;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return double{};
 		}
-		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_ast_e74_left, as_ast_e74_right);
+		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_ast_e70_left, as_ast_e70_right);
 	}());
 	}
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
@@ -241,14 +241,14 @@ static int32 ASJIT_bcc16a42d6581e28f5fd897a3719e70c37469f91213349e84390b2ae478ef
 	{
 		const int32 as_ast_e9_left = ([&]() -> int32
 	{
-		const int32 as_ast_e7_left = ([&]() -> int32
+		const int32 as_ast_e8_left = ([&]() -> int32
 	{
-		const int32 as_ast_e6_left = as_ast_d9;
-		const int32 as_ast_e6_right = int32(3);
-		return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e6_left, as_ast_e6_right);
+		const int32 as_ast_e7_left = as_ast_d9;
+		const int32 as_ast_e7_right = int32(3);
+		return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e7_left, as_ast_e7_right);
 	}());
-		const int32 as_ast_e7_right = as_ast_d10;
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e7_left, as_ast_e7_right);
+		const int32 as_ast_e8_right = as_ast_d10;
+		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e8_left, as_ast_e8_right);
 	}());
 		const int32 as_ast_e9_right = int32(7);
 		return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e9_left, as_ast_e9_right);
@@ -568,9 +568,9 @@ static int32 ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc2
 					TypedFrame.SetSourcePosition(35, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e17_left = as_ast_d17;
-					const int32 as_ast_e17_right = as_ast_d18;
-					return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e17_left, as_ast_e17_right);
+					const int32 as_ast_e16_left = as_ast_d17;
+					const int32 as_ast_e16_right = as_ast_d18;
+					return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e16_left, as_ast_e16_right);
 				}());
 				}
 			case int32(1):
@@ -578,9 +578,9 @@ static int32 ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc2
 					TypedFrame.SetSourcePosition(37, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e21_left = as_ast_d17;
-					const int32 as_ast_e21_right = as_ast_d18;
-					return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e21_left, as_ast_e21_right);
+					const int32 as_ast_e20_left = as_ast_d17;
+					const int32 as_ast_e20_right = as_ast_d18;
+					return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e20_left, as_ast_e20_right);
 				}());
 				}
 			case int32(2):
@@ -588,9 +588,9 @@ static int32 ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc2
 					TypedFrame.SetSourcePosition(39, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e25_left = as_ast_d17;
-					const int32 as_ast_e25_right = as_ast_d18;
-					return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e25_left, as_ast_e25_right);
+					const int32 as_ast_e24_left = as_ast_d17;
+					const int32 as_ast_e24_right = as_ast_d18;
+					return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e24_left, as_ast_e24_right);
 				}());
 				}
 			case int32(3):
@@ -599,17 +599,17 @@ static int32 ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc2
 					return ([&]() -> int32
 				{
 					TypedFrame.SetSourcePosition(41, 4);
-					const int32 as_ast_e29_left = as_ast_d17;
+					const int32 as_ast_e28_left = as_ast_d17;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e29_right = as_ast_d18;
+					const int32 as_ast_e28_right = as_ast_d18;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					return AngelscriptTypedASTJIT::CheckedDivide<int32>(Execution, as_ast_e29_left, as_ast_e29_right);
+					return AngelscriptTypedASTJIT::CheckedDivide<int32>(Execution, as_ast_e28_left, as_ast_e28_right);
 				}());
 				}
 			case int32(4):
@@ -618,17 +618,17 @@ static int32 ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc2
 					return ([&]() -> int32
 				{
 					TypedFrame.SetSourcePosition(43, 4);
-					const int32 as_ast_e33_left = as_ast_d17;
+					const int32 as_ast_e32_left = as_ast_d17;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e33_right = as_ast_d18;
+					const int32 as_ast_e32_right = as_ast_d18;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					return AngelscriptTypedASTJIT::CheckedRemainder<int32>(Execution, as_ast_e33_left, as_ast_e33_right);
+					return AngelscriptTypedASTJIT::CheckedRemainder<int32>(Execution, as_ast_e32_left, as_ast_e32_right);
 				}());
 				}
 			case int32(5):
@@ -636,17 +636,17 @@ static int32 ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc2
 					TypedFrame.SetSourcePosition(45, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e37_left = as_ast_d17;
+					const int32 as_ast_e36_left = as_ast_d17;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e37_right = as_ast_d19;
+					const int32 as_ast_e36_right = as_ast_d19;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					return AngelscriptTypedASTJIT::ShiftLeft<int32>(as_ast_e37_left, as_ast_e37_right);
+					return AngelscriptTypedASTJIT::ShiftLeft<int32>(as_ast_e36_left, as_ast_e36_right);
 				}());
 				}
 			case int32(6):
@@ -654,17 +654,17 @@ static int32 ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc2
 					TypedFrame.SetSourcePosition(47, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e41_left = as_ast_d17;
+					const int32 as_ast_e40_left = as_ast_d17;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e41_right = as_ast_d19;
+					const int32 as_ast_e40_right = as_ast_d19;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					return AngelscriptTypedASTJIT::LogicalShiftRight<int32>(as_ast_e41_left, as_ast_e41_right);
+					return AngelscriptTypedASTJIT::LogicalShiftRight<int32>(as_ast_e40_left, as_ast_e40_right);
 				}());
 				}
 			case int32(7):
@@ -672,17 +672,17 @@ static int32 ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc2
 					TypedFrame.SetSourcePosition(49, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e45_left = as_ast_d17;
+					const int32 as_ast_e44_left = as_ast_d17;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e45_right = as_ast_d19;
+					const int32 as_ast_e44_right = as_ast_d19;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					return AngelscriptTypedASTJIT::ArithmeticShiftRight<int32>(as_ast_e45_left, as_ast_e45_right);
+					return AngelscriptTypedASTJIT::ArithmeticShiftRight<int32>(as_ast_e44_left, as_ast_e44_right);
 				}());
 				}
 			case int32(8):
@@ -692,14 +692,14 @@ static int32 ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc2
 						TypedFrame.SetSourcePosition(52, 10);
 						([&]() -> int64
 						{
-							const int64 as_ast_e50_value = static_cast<int64>(as_ast_d17);
+							const int64 as_ast_e49_value = static_cast<int64>(as_ast_d17);
 							if (UNLIKELY(Execution.bExceptionThrown))
 							{
 								return int64{};
 							}
-							int64& as_ast_e50_target = as_ast_d23;
-							as_ast_e50_target = as_ast_e50_value;
-							return as_ast_e50_target;
+							int64& as_ast_e49_target = as_ast_d23;
+							as_ast_e49_target = as_ast_e49_value;
+							return as_ast_e49_target;
 						}());
 						if (UNLIKELY(Execution.bExceptionThrown))
 						{
@@ -710,17 +710,17 @@ static int32 ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc2
 						TypedFrame.SetSourcePosition(53, 4);
 						const bool as_ast_stmt_29_condition = ([&]() -> bool
 						{
-							const int64 as_ast_e54_left = as_ast_d23;
+							const int64 as_ast_e53_left = as_ast_d23;
 							if (UNLIKELY(Execution.bExceptionThrown))
 							{
 								return bool{};
 							}
-							const int64 as_ast_e54_right = static_cast<int64>(as_ast_d17);
+							const int64 as_ast_e53_right = static_cast<int64>(as_ast_d17);
 							if (UNLIKELY(Execution.bExceptionThrown))
 							{
 								return bool{};
 							}
-							return (as_ast_e54_left == as_ast_e54_right);
+							return (as_ast_e53_left == as_ast_e53_right);
 						}());
 						if (UNLIKELY(Execution.bExceptionThrown))
 						{
@@ -744,17 +744,17 @@ static int32 ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc2
 					TypedFrame.SetSourcePosition(60, 4);
 					const bool as_ast_stmt_35_condition = ([&]() -> bool
 					{
-						const int32 as_ast_e60_left = as_ast_d17;
+						const int32 as_ast_e59_left = as_ast_d17;
 						if (UNLIKELY(Execution.bExceptionThrown))
 						{
 							return bool{};
 						}
-						const int32 as_ast_e60_right = int32(0);
+						const int32 as_ast_e59_right = int32(0);
 						if (UNLIKELY(Execution.bExceptionThrown))
 						{
 							return bool{};
 						}
-						return (as_ast_e60_left != as_ast_e60_right);
+						return (as_ast_e59_left != as_ast_e59_right);
 					}());
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
@@ -777,17 +777,17 @@ static int32 ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc2
 					TypedFrame.SetSourcePosition(66, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e68_left = AngelscriptTypedASTJIT::FromCanonicalBits<int32>(UINT64_C(7001));
+					const int32 as_ast_e65_left = AngelscriptTypedASTJIT::FromCanonicalBits<int32>(UINT64_C(7001));
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e68_right = as_ast_d17;
+					const int32 as_ast_e65_right = as_ast_d17;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e68_left, as_ast_e68_right);
+					return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e65_left, as_ast_e65_right);
 				}());
 				}
 			default:

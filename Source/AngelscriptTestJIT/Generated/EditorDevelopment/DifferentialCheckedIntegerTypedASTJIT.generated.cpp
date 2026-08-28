@@ -50,17 +50,17 @@ static int32 AS_Test_Differential_TypedAST_SemanticCheckedDivide_TypedBody(
 		return ([&]() -> int32
 	{
 		TypedFrame.SetSourcePosition(118, 2);
-		const int32 as_ast_e161_left = as_ast_d19;
+		const int32 as_ast_e109_left = as_ast_d19;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		const int32 as_ast_e161_right = as_ast_d20;
+		const int32 as_ast_e109_right = as_ast_d20;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		return AngelscriptTypedASTJIT::CheckedDivide<int32>(Execution, as_ast_e161_left, as_ast_e161_right);
+		return AngelscriptTypedASTJIT::CheckedDivide<int32>(Execution, as_ast_e109_left, as_ast_e109_right);
 	}());
 	}
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.

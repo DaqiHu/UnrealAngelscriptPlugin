@@ -908,6 +908,7 @@ int RunExplicitParityBehavior()
 	static asEBuildArtifactRestoreResult RestoreArtifact(
 		const asSBuildArtifactInvocation* Invocation,
 		asCScriptFunction* Function,
+		const asSBuildArtifactRestoreContext* RestoreContext,
 		void* UserData)
 	{
 		if (Invocation == nullptr || Function == nullptr || UserData == nullptr)
@@ -990,7 +991,8 @@ int RunExplicitParityBehavior()
 				Artifact->Debug,
 				Context.Limits,
 				Context.Budget,
-				Observation.Detail);
+				Observation.Detail,
+				RestoreContext);
 		Observation.ByteCodeWordsAfter = Function->scriptData != nullptr
 			? static_cast<int32>(Function->scriptData->byteCode.GetLength()) : -1;
 		return Observation.Result;

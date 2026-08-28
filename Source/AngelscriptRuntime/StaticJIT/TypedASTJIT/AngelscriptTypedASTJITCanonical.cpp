@@ -708,535 +708,361 @@ namespace AngelscriptTypedASTJITCanonical_Private
 		FAngelscriptTypedASTJITEligibility& OutFailure;
 	};
 
-	enum class ECanonicalLexicalCleanupKind : uint8
-	{
-		None,
-		Release,
-		Destructor,
-	};
-
-	struct FCanonicalLexicalCleanupAction
-	{
-		ECanonicalLexicalCleanupKind Kind =
-			ECanonicalLexicalCleanupKind::None;
-		asASTDeclId Target;
-		asASTDeclId Destructor;
-		asASTStmtId Scope;
-	};
-
-	struct FCanonicalLoopCleanupPhase
-	{
-		FCanonicalLexicalCleanupAction Action;
-		asASTStmtId Loop;
-	};
-
-	const asCType* ResolveCanonicalLifetimeTypedef(
+	bool LifetimeNodeBelongsToFunction(
 		const asCASTContext& Context,
-		const asCType* NominalType)
+		const asSASTLifetimeNodeId& Node,
+		const asASTDeclId FunctionDecl)
 	{
-		const asCType* Current = NominalType;
-		for (asUINT Depth = 0; Current != nullptr && Depth < 8; ++Depth)
+		if (!Node.IsValid())
 		{
-			if (Current->kind == asAST_TYPE_PRIMITIVE
-				|| Current->kind == asAST_TYPE_ENUM)
+			return false;
+		}
+		if (Node.nodeClass == asAST_LIFETIME_NODE_STMT)
+		{
+			const asCStmt* const Statement = Context.GetStmt(
+				asASTStmtId(Node.value));
+			return Statement != nullptr && Statement->owner == FunctionDecl;
+		}
+		if (Node.nodeClass == asAST_LIFETIME_NODE_DECL)
+		{
+			asASTDeclId Current(Node.value);
+			for (asUINT Guard = 0;
+				Current.IsValid() && Guard <= Context.GetDeclCount(); ++Guard)
 			{
-				return Current;
-			}
-			const asCDecl* Alias = nullptr;
-			for (asUINT DeclIndex = 1;
-				DeclIndex <= Context.GetDeclCount(); ++DeclIndex)
-			{
-				const asCDecl* const Candidate = Context.GetDecl(
-					asASTDeclId(DeclIndex));
-				if (Candidate != nullptr
-					&& Candidate->kind == asAST_DECL_TYPEDEF
-					&& (Candidate->name.Equals(Current->stableKey)
-						|| Candidate->stableKey.Equals(Current->stableKey)))
+				if (Current == FunctionDecl)
 				{
-					Alias = Candidate;
+					return true;
+				}
+				const asCDecl* const Declaration = Context.GetDecl(Current);
+				if (Declaration == nullptr || Declaration->parent == Current)
+				{
 					break;
 				}
-			}
-			if (Alias == nullptr || !Alias->type.IsValid())
-			{
-				return Current;
-			}
-			const asCType* const Underlying = Context.GetType(Alias->type.type);
-			if (Underlying == nullptr || Underlying == Current)
-			{
-				return Current;
-			}
-			Current = Underlying;
-		}
-		return Current;
-	}
-
-	asASTDeclId FindCanonicalLifetimeDestructor(
-		const asCASTContext& Context,
-		const asCType& Type)
-	{
-		for (asUINT DeclIndex = 1;
-			DeclIndex <= Context.GetDeclCount(); ++DeclIndex)
-		{
-			const asCDecl* const Destructor = Context.GetDecl(
-				asASTDeclId(DeclIndex));
-			if (Destructor == nullptr
-				|| Destructor->kind != asAST_DECL_DESTRUCTOR)
-			{
-				continue;
-			}
-			const asCDecl* const Parent = Context.GetDecl(Destructor->parent);
-			if (Parent != nullptr
-				&& (Parent->stableKey.Equals(Type.stableKey)
-					|| Parent->name.Equals(Type.stableKey)))
-			{
-				return Destructor->id;
-			}
-		}
-		return {};
-	}
-
-	bool TryGetCanonicalLexicalCleanupRequirement(
-		const asCASTContext& Context,
-		const asASTDeclId Declaration,
-		const asASTStmtId Scope,
-		FCanonicalLexicalCleanupAction& OutAction)
-	{
-		const asCDecl* const Variable = Context.GetDecl(Declaration);
-		if (Variable == nullptr || Variable->kind != asAST_DECL_VAR
-			|| !Variable->type.IsValid() || Variable->type.IsReference()
-			|| Variable->inits.GetLength() == 0)
-		{
-			return false;
-		}
-		const asCType* const Type = ResolveCanonicalLifetimeTypedef(
-			Context, Context.GetType(Variable->type.type));
-		if (Type == nullptr)
-		{
-			return false;
-		}
-
-		OutAction.Target = Declaration;
-		OutAction.Scope = Scope;
-		if (Type->kind == asAST_TYPE_REFERENCE_OBJECT
-			|| Type->kind == asAST_TYPE_FUNCDEF)
-		{
-			OutAction.Kind = ECanonicalLexicalCleanupKind::Release;
-			return true;
-		}
-		if (Type->kind != asAST_TYPE_VALUE_OBJECT
-			|| Variable->type.IsHandle())
-		{
-			return false;
-		}
-		OutAction.Destructor = FindCanonicalLifetimeDestructor(Context, *Type);
-		if (!OutAction.Destructor.IsValid())
-		{
-			return false;
-		}
-		OutAction.Kind = ECanonicalLexicalCleanupKind::Destructor;
-		return true;
-	}
-
-	bool TryReadCanonicalLexicalCleanupAction(
-		const asCASTContext& Context,
-		const asCASTLifetimeView& LifetimeView,
-		const asASTStmtId StatementId,
-		FCanonicalLexicalCleanupAction& OutAction)
-	{
-		const asSASTLifetimeCleanupBinding* const Binding =
-			LifetimeView.FindCleanupBinding(StatementId);
-		if (Binding == nullptr
-			|| Binding->subject.nodeClass != asAST_LIFETIME_NODE_DECL)
-		{
-			return false;
-		}
-
-		OutAction.Target = asASTDeclId(Binding->subject.value);
-		if (Binding->actionKind == asAST_LIFETIME_ACTION_RELEASE_REFERENCE)
-		{
-			OutAction.Kind = ECanonicalLexicalCleanupKind::Release;
-			return true;
-		}
-		const asCDecl* const Destructor =
-			Binding->actionTarget.nodeClass == asAST_LIFETIME_NODE_DECL
-			? Context.GetDecl(asASTDeclId(Binding->actionTarget.value)) : nullptr;
-		if (Binding->actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE
-			&& Destructor != nullptr
-			&& Destructor->kind == asAST_DECL_DESTRUCTOR)
-		{
-			OutAction.Kind = ECanonicalLexicalCleanupKind::Destructor;
-			OutAction.Destructor = Destructor->id;
-			return true;
-		}
-		return false;
-	}
-
-	bool CanonicalCleanupActionsEqual(
-		const FCanonicalLexicalCleanupAction& Expected,
-		const FCanonicalLexicalCleanupAction& Actual)
-	{
-		return Expected.Kind == Actual.Kind
-			&& Expected.Target == Actual.Target
-			&& Expected.Destructor == Actual.Destructor;
-	}
-
-	bool CanonicalStatementSubtreeContains(
-		const asCASTContext& Context,
-		const asASTStmtId Root,
-		const asASTStmtId Needle)
-	{
-		if (!Root.IsValid() || !Needle.IsValid())
-		{
-			return false;
-		}
-		TArray<asASTStmtId> Stack;
-		Stack.Add(Root);
-		TArray<bool> Visited;
-		Visited.Init(false, static_cast<int32>(Context.GetStmtCount() + 1));
-		while (!Stack.IsEmpty())
-		{
-			const asASTStmtId CurrentId = Stack.Pop(EAllowShrinking::No);
-			if (CurrentId == Needle)
-			{
-				return true;
-			}
-			if (!CurrentId.IsValid()
-				|| CurrentId.value >= static_cast<asUINT>(Visited.Num())
-				|| Visited[CurrentId.value])
-			{
-				continue;
-			}
-			Visited[CurrentId.value] = true;
-			const asCStmt* const Current = Context.GetStmt(CurrentId);
-			for (asUINT ChildIndex = 0;
-				Current != nullptr
-					&& ChildIndex < Current->children.GetLength(); ++ChildIndex)
-			{
-				Stack.Add(Current->children[ChildIndex]);
+				Current = Declaration->parent;
 			}
 		}
 		return false;
 	}
 
-	bool ProveCanonicalLifetimeStmt(
+	bool WriteCanonicalLifetimeTypeIdentity(
+		FAngelscriptArtifactCanonicalWriter& Writer,
 		const asCASTContext& Context,
-		const asCASTLifetimeView& LifetimeView,
-		const asASTStmtId StatementId,
-		TArray<FCanonicalLexicalCleanupAction>& Active,
-		TArray<FCanonicalLoopCleanupPhase>& ActiveLoopPhases,
-		bool& bSawRequiredLifetime,
-		int32& RemainingStatements)
+		const asCQualType& Type,
+		const asCDecl* const Storage)
 	{
-		if (!StatementId.IsValid())
+		if (!Type.IsValid())
 		{
-			return true;
+			Writer.WriteString(TEXT("<none>"));
+			Writer.WriteUInt32(0);
+			return Storage == nullptr;
 		}
-		if (--RemainingStatements < 0)
+		const asCType* const CanonicalType = Context.GetType(Type.type);
+		if (CanonicalType == nullptr || CanonicalType->stableKey.GetLength() == 0)
 		{
 			return false;
 		}
-		const asCStmt* const Statement = Context.GetStmt(StatementId);
-		if (Statement == nullptr)
+		Writer.WriteString(UTF8_TO_TCHAR(CanonicalType->stableKey.AddressOf()));
+		Writer.WriteUInt32(Type.quals);
+		if (Storage != nullptr)
 		{
-			return false;
-		}
-
-		if (Statement->kind == asAST_STMT_FOREACH)
-		{
-			const asSASTForEachPhases* const Phases =
-				LifetimeView.FindForEachPhases(StatementId);
-			if (Phases == nullptr)
-			{
-				return false;
-			}
-			// A value-object foreach iterator owns a loop-lifetime phase rather
-			// than an ordinary trailing Block action. The synthetic init Block's
-			// scope spans condition/body/increment; break enters the common phase,
-			// continue stays inside it, and return/outer transfers use the active
-			// CodeGen loop-frame route. Prove that exact protocol here instead of
-			// treating the init Block or fourth child as ordinary lexical cleanup.
-			const asCStmt* const Init = Context.GetStmt(Phases->initializer);
-			if (Init == nullptr || Init->kind != asAST_STMT_BLOCK
-				|| --RemainingStatements < 0)
-			{
-				return false;
-			}
-
-			FCanonicalLexicalCleanupAction PhaseAction;
-			const bool bHasLifetimePhase = Phases->cleanup.IsValid();
-			if (bHasLifetimePhase
-				&& (!TryReadCanonicalLexicalCleanupAction(
-					Context, LifetimeView, Phases->cleanup, PhaseAction)
-					|| --RemainingStatements < 0))
-			{
-				return false;
-			}
-
-			FCanonicalLexicalCleanupAction IteratorRequirement;
-			int32 RequiredIteratorCount = 0;
-			for (asUINT ChildIndex = 0;
-				ChildIndex < Init->children.GetLength(); ++ChildIndex)
-			{
-				const asCStmt* const Child = Context.GetStmt(
-					Init->children[ChildIndex]);
-				FCanonicalLexicalCleanupAction Expected;
-				if (Child != nullptr && Child->kind == asAST_STMT_DECL
-					&& TryGetCanonicalLexicalCleanupRequirement(
-						Context, Child->decl, StatementId, Expected))
-				{
-					const asCDecl* const Iterator = Context.GetDecl(Child->decl);
-					if (Iterator == nullptr
-						|| (Iterator->traits & asAST_TRAIT_GENERATED) == 0)
-					{
-						return false;
-					}
-					IteratorRequirement = Expected;
-					++RequiredIteratorCount;
-				}
-			}
-			if ((bHasLifetimePhase && (RequiredIteratorCount != 1
-					|| !CanonicalCleanupActionsEqual(
-						IteratorRequirement, PhaseAction)))
-				|| (!bHasLifetimePhase && RequiredIteratorCount != 0))
-			{
-				return false;
-			}
-
-			// The init Block is synthetic: traverse its authored declarations and
-			// initialization statements without demanding a Block-tail action.
-			// The exact phase above is the sole owner of the generated iterator.
-			for (asUINT ChildIndex = 0;
-				ChildIndex < Init->children.GetLength(); ++ChildIndex)
-			{
-				FCanonicalLexicalCleanupAction UnexpectedCleanup;
-				if (TryReadCanonicalLexicalCleanupAction(
-						Context, LifetimeView, Init->children[ChildIndex], UnexpectedCleanup)
-					|| !ProveCanonicalLifetimeStmt(
-						Context, LifetimeView, Init->children[ChildIndex], Active,
-						ActiveLoopPhases, bSawRequiredLifetime,
-						RemainingStatements))
-				{
-					return false;
-				}
-			}
-
-			if (bHasLifetimePhase)
-			{
-				bSawRequiredLifetime = true;
-				FCanonicalLoopCleanupPhase Phase;
-				Phase.Action = IteratorRequirement;
-				Phase.Loop = StatementId;
-				ActiveLoopPhases.Add(Phase);
-			}
-			const asASTStmtId ExecutedPhases[2] =
-				{ Phases->body, Phases->increment };
-			for (asUINT PhaseIndex = 0; PhaseIndex < 2; ++PhaseIndex)
-			{
-				if (!ProveCanonicalLifetimeStmt(
-						Context, LifetimeView, ExecutedPhases[PhaseIndex], Active,
-						ActiveLoopPhases, bSawRequiredLifetime,
-						RemainingStatements))
-				{
-					if (bHasLifetimePhase)
-						ActiveLoopPhases.Pop(EAllowShrinking::No);
-					return false;
-				}
-			}
-			if (bHasLifetimePhase)
-				ActiveLoopPhases.Pop(EAllowShrinking::No);
-			return true;
-		}
-
-		if (Statement->kind == asAST_STMT_BLOCK)
-		{
-			int32 AuthoredCount = static_cast<int32>(
-				Statement->children.GetLength());
-			while (AuthoredCount > 0)
-			{
-				FCanonicalLexicalCleanupAction Action;
-				if (!TryReadCanonicalLexicalCleanupAction(
-					Context, LifetimeView,
-					Statement->children[AuthoredCount - 1], Action))
-				{
-					break;
-				}
-				--AuthoredCount;
-			}
-
-			TArray<FCanonicalLexicalCleanupAction> BlockLifetimes;
-			for (int32 ChildIndex = 0; ChildIndex < AuthoredCount; ++ChildIndex)
-			{
-				const asCStmt* const Child = Context.GetStmt(
-					Statement->children[ChildIndex]);
-				FCanonicalLexicalCleanupAction Expected;
-				if (Child != nullptr && Child->kind == asAST_STMT_DECL
-					&& TryGetCanonicalLexicalCleanupRequirement(
-						Context, Child->decl, StatementId, Expected))
-				{
-					BlockLifetimes.Add(Expected);
-					bSawRequiredLifetime = true;
-				}
-			}
-
-			const int32 CleanupCount = static_cast<int32>(
-				Statement->children.GetLength()) - AuthoredCount;
-			if (CleanupCount != BlockLifetimes.Num())
-			{
-				return false;
-			}
-			for (int32 CleanupIndex = 0;
-				CleanupIndex < CleanupCount; ++CleanupIndex)
-			{
-				FCanonicalLexicalCleanupAction Actual;
-				if (!TryReadCanonicalLexicalCleanupAction(
-						Context, LifetimeView,
-						Statement->children[AuthoredCount + CleanupIndex],
-						Actual)
-					|| !CanonicalCleanupActionsEqual(
-						BlockLifetimes[BlockLifetimes.Num() - CleanupIndex - 1],
-						Actual))
-				{
-					return false;
-				}
-			}
-
-			const int32 RestoreActiveCount = Active.Num();
-			for (int32 ChildIndex = 0; ChildIndex < AuthoredCount; ++ChildIndex)
-			{
-				const asCStmt* const Child = Context.GetStmt(
-					Statement->children[ChildIndex]);
-				FCanonicalLexicalCleanupAction Expected;
-				if (Child != nullptr && Child->kind == asAST_STMT_DECL
-					&& TryGetCanonicalLexicalCleanupRequirement(
-						Context, Child->decl, StatementId, Expected))
-				{
-					Active.Add(Expected);
-				}
-				if (!ProveCanonicalLifetimeStmt(
-					Context, LifetimeView,
-					Statement->children[ChildIndex], Active,
-					ActiveLoopPhases, bSawRequiredLifetime,
-					RemainingStatements))
-				{
-					Active.SetNum(RestoreActiveCount, EAllowShrinking::No);
-					return false;
-				}
-			}
-			Active.SetNum(RestoreActiveCount, EAllowShrinking::No);
-			return true;
-		}
-
-		const bool bReturn = Statement->kind == asAST_STMT_RETURN;
-		const bool bTargetedTransfer =
-			Statement->kind == asAST_STMT_BREAK
-			|| Statement->kind == asAST_STMT_CONTINUE
-			|| Statement->kind == asAST_STMT_FALLTHROUGH;
-		if (bReturn || bTargetedTransfer)
-		{
-			for (int32 PhaseIndex = ActiveLoopPhases.Num() - 1;
-				PhaseIndex >= 0; --PhaseIndex)
-			{
-				const FCanonicalLoopCleanupPhase& Phase =
-					ActiveLoopPhases[PhaseIndex];
-				if (bReturn)
-				{
-					// Return exits every active loop frame. The exact phase has
-					// already been proven and CodeGen routes all active frames.
-					continue;
-				}
-				if (!Statement->target.IsValid())
-				{
-					return false;
-				}
-				const bool bTargetStaysInsidePhase =
-					CanonicalStatementSubtreeContains(
-						Context, Phase.Loop, Statement->target);
-				if (Statement->kind == asAST_STMT_FALLTHROUGH
-					&& !bTargetStaysInsidePhase)
-				{
-					// Fallthrough has no loop-frame cleanup route and therefore
-					// cannot escape an active foreach iterator lifetime.
-					return false;
-				}
-				// A contained target remains inside the iterator lifetime.
-				// Targeting the foreach itself means break enters its common
-				// cleanup label while continue stays live. An outer target makes
-				// EmitTransferCleanups walk and execute this exact active phase.
-			}
-
-			TArray<FCanonicalLexicalCleanupAction> ExpectedActions;
-			for (int32 ActiveIndex = Active.Num() - 1;
-				ActiveIndex >= 0; --ActiveIndex)
-			{
-				const FCanonicalLexicalCleanupAction& Candidate =
-					Active[ActiveIndex];
-				if (bReturn || !Statement->target.IsValid()
-					|| !CanonicalStatementSubtreeContains(
-						Context, Candidate.Scope, Statement->target))
-				{
-					ExpectedActions.Add(Candidate);
-				}
-			}
-			if (ExpectedActions.Num()
-				!= static_cast<int32>(Statement->children.GetLength()))
-			{
-				return false;
-			}
-			for (int32 CleanupIndex = 0;
-				CleanupIndex < ExpectedActions.Num(); ++CleanupIndex)
-			{
-				FCanonicalLexicalCleanupAction Actual;
-				if (!TryReadCanonicalLexicalCleanupAction(
-						Context, LifetimeView,
-						Statement->children[CleanupIndex], Actual)
-					|| !CanonicalCleanupActionsEqual(
-						ExpectedActions[CleanupIndex], Actual))
-				{
-					return false;
-				}
-			}
-			return true;
-		}
-
-		FCanonicalLexicalCleanupAction StandaloneCleanup;
-		if (TryReadCanonicalLexicalCleanupAction(
-			Context, LifetimeView, StatementId, StandaloneCleanup))
-		{
-			// A lexical action is only complete as a trailing Block action or a
-			// direct transfer child. Loop/foreach cleanup phases require their own
-			// reviewed lifetime protocol before they can publish a proof.
-			return false;
-		}
-
-		for (asUINT ChildIndex = 0;
-			ChildIndex < Statement->children.GetLength(); ++ChildIndex)
-		{
-			if (!ProveCanonicalLifetimeStmt(
-				Context, LifetimeView, Statement->children[ChildIndex], Active,
-				ActiveLoopPhases, bSawRequiredLifetime,
-				RemainingStatements))
-			{
-				return false;
-			}
+			Writer.WriteUInt32(static_cast<uint32>(
+				FMath::Max(Storage->byteSize, 0)));
+			Writer.WriteUInt32(Storage->byteAlignment);
 		}
 		return true;
 	}
 
-	bool ProveCanonicalLifetimeCoverage(
+	bool WriteCanonicalLifetimeNodeStableIdentity(
+		FAngelscriptArtifactCanonicalWriter& Writer,
 		const asCASTContext& Context,
-		const asCASTLifetimeView& LifetimeView,
-		const asASTStmtId Body,
-		bool& bSawRequiredLifetime)
+		const asSASTLifetimeNodeId& Node)
 	{
-		TArray<FCanonicalLexicalCleanupAction> Active;
-		TArray<FCanonicalLoopCleanupPhase> ActiveLoopPhases;
-		int32 RemainingStatements = static_cast<int32>(
-			Context.GetStmtCount() + 1);
-		return ProveCanonicalLifetimeStmt(
-			Context, LifetimeView, Body, Active, ActiveLoopPhases,
-			bSawRequiredLifetime,
-			RemainingStatements);
+		Writer.WriteUInt8(static_cast<uint8>(Node.nodeClass));
+		switch (Node.nodeClass)
+		{
+		case asAST_LIFETIME_NODE_DECL:
+		{
+			const asCDecl* const Declaration = Context.GetDecl(
+				asASTDeclId(Node.value));
+			if (Declaration == nullptr || Declaration->stableKey.GetLength() == 0)
+			{
+				return false;
+			}
+			Writer.WriteUInt8(static_cast<uint8>(Declaration->kind));
+			Writer.WriteString(UTF8_TO_TCHAR(
+				Declaration->stableKey.AddressOf()));
+			return WriteCanonicalLifetimeTypeIdentity(
+				Writer, Context, Declaration->type, nullptr);
+		}
+		case asAST_LIFETIME_NODE_STMT:
+		{
+			const asCStmt* const Statement = Context.GetStmt(
+				asASTStmtId(Node.value));
+			const asCDecl* const Owner = Statement != nullptr
+				? Context.GetDecl(Statement->owner) : nullptr;
+			if (Statement == nullptr || Owner == nullptr
+				|| Owner->stableKey.GetLength() == 0)
+			{
+				return false;
+			}
+			Writer.WriteUInt8(static_cast<uint8>(Statement->kind));
+			Writer.WriteString(UTF8_TO_TCHAR(Owner->stableKey.AddressOf()));
+			return true;
+		}
+		case asAST_LIFETIME_NODE_EXPR:
+		{
+			const asCExpr* const Expression = Context.GetExpr(
+				asASTExprId(Node.value));
+			if (Expression == nullptr)
+			{
+				return false;
+			}
+			Writer.WriteUInt8(static_cast<uint8>(Expression->kind));
+			Writer.WriteUInt8(static_cast<uint8>(Expression->valueCategory));
+			return WriteCanonicalLifetimeTypeIdentity(
+				Writer, Context, Expression->type, nullptr);
+		}
+		default:
+			return false;
+		}
+	}
+
+	bool AddCanonicalLifetimeActionFlag(
+		const asEASTLifetimeActionKind ActionKind,
+		EAngelscriptTypedASTJITLifetimeActionFlags& Flags)
+	{
+		using EFlags = EAngelscriptTypedASTJITLifetimeActionFlags;
+		switch (ActionKind)
+		{
+		case asAST_LIFETIME_ACTION_DESTROY_VALUE:
+			Flags |= EFlags::DestroyValue;
+			return true;
+		case asAST_LIFETIME_ACTION_RELEASE_REFERENCE:
+			Flags |= EFlags::ReleaseReference;
+			return true;
+		case asAST_LIFETIME_ACTION_COMMIT_DEFERRED_OUT:
+			Flags |= EFlags::CommitDeferredOut;
+			return true;
+		case asAST_LIFETIME_ACTION_DESTROY_ELEMENT:
+			Flags |= EFlags::DestroyElement;
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool AddCanonicalLifetimeExitPlanFlag(
+		const asEASTLifetimeExitPlanKind PlanKind,
+		EAngelscriptTypedASTJITLifetimeExitPlanFlags& Flags)
+	{
+		using EFlags = EAngelscriptTypedASTJITLifetimeExitPlanFlags;
+		switch (PlanKind)
+		{
+		case asAST_LIFETIME_EXIT_PLAN_NORMAL:
+			Flags |= EFlags::Normal;
+			return true;
+		case asAST_LIFETIME_EXIT_PLAN_TRANSFER:
+			Flags |= EFlags::Transfer;
+			return true;
+		case asAST_LIFETIME_EXIT_PLAN_FOREACH:
+			Flags |= EFlags::ForEach;
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool BuildCanonicalLifetimeSummary(
+		const asCASTContext& Context,
+		const asASTDeclId FunctionDecl,
+		const asCASTLifetimeView& LifetimeView,
+		FAngelscriptTypedASTJITCanonicalLifetimeFacts& OutFacts)
+	{
+		const asCDecl* const Function = Context.GetDecl(FunctionDecl);
+		if (Function == nullptr || Function->stableKey.GetLength() == 0)
+		{
+			return false;
+		}
+
+		TArray<FAngelscriptHash256> RecordStableKeys;
+		RecordStableKeys.SetNum(LifetimeView.GetRecordCount());
+		TArray<asUINT> FunctionRecordIndices;
+		FAngelscriptArtifactCanonicalWriter ABIWriter(
+			TEXT("Angelscript.TypedASTJIT.CanonicalLifetimeABI.v1"));
+		ABIWriter.WriteUInt32(LifetimeView.GetProtocolRevision());
+
+		bool bHasPartialConstruction = false;
+		bool bSawDestroyValue = false;
+		for (asUINT RecordIndex = 0;
+			RecordIndex < LifetimeView.GetRecordCount(); ++RecordIndex)
+		{
+			const asSASTLifetimeViewRecord* const ViewRecord =
+				LifetimeView.GetRecord(RecordIndex);
+			if (ViewRecord == nullptr
+				|| !LifetimeNodeBelongsToFunction(
+					Context, ViewRecord->record.semanticRegion, FunctionDecl))
+			{
+				continue;
+			}
+
+			const asSASTLifetimeRecord& Record = ViewRecord->record;
+			FAngelscriptArtifactCanonicalWriter RecordWriter(
+				TEXT("Angelscript.TypedASTJIT.CanonicalLifetimeRecord.v1"));
+			RecordWriter.WriteString(UTF8_TO_TCHAR(
+				Function->stableKey.AddressOf()));
+			RecordWriter.WriteUInt8(static_cast<uint8>(Record.subjectKind));
+			RecordWriter.WriteUInt8(static_cast<uint8>(Record.actionKind));
+			RecordWriter.WriteUInt8(static_cast<uint8>(Record.phase));
+			RecordWriter.WriteUInt32(Record.supportedExitMask);
+			RecordWriter.WriteUInt32(Record.constructionStep);
+			RecordWriter.WriteUInt32(Record.order);
+			RecordWriter.WriteBool(Record.completeObjectCommit);
+			RecordWriter.WriteUInt32(ViewRecord->activationOrdinal);
+			RecordWriter.WriteUInt32(ViewRecord->cleanupOrdinal);
+			if (!WriteCanonicalLifetimeNodeStableIdentity(
+					RecordWriter, Context, Record.subject)
+				|| !WriteCanonicalLifetimeNodeStableIdentity(
+					RecordWriter, Context, Record.actionTarget)
+				|| !WriteCanonicalLifetimeNodeStableIdentity(
+					RecordWriter, Context, Record.activationPoint)
+				|| !WriteCanonicalLifetimeNodeStableIdentity(
+					RecordWriter, Context, Record.semanticRegion)
+				|| !AddCanonicalLifetimeActionFlag(
+					Record.actionKind, OutFacts.LifetimeSummary.ActionFlags))
+			{
+				return false;
+			}
+			RecordStableKeys[RecordIndex] = RecordWriter.FinalizeHash();
+			FunctionRecordIndices.Add(RecordIndex);
+			OutFacts.LifetimeSummary.SupportedExitMask |=
+				Record.supportedExitMask;
+
+			ABIWriter.WriteUInt8(static_cast<uint8>(Record.actionKind));
+			const asCDecl* const Subject = Record.subject.nodeClass
+				== asAST_LIFETIME_NODE_DECL
+				? Context.GetDecl(asASTDeclId(Record.subject.value)) : nullptr;
+			if (Subject == nullptr
+				|| !WriteCanonicalLifetimeTypeIdentity(
+					ABIWriter, Context, Subject->type, Subject)
+				|| !WriteCanonicalLifetimeNodeStableIdentity(
+					ABIWriter, Context, Record.actionTarget))
+			{
+				return false;
+			}
+
+			bSawDestroyValue |= Record.actionKind
+				== asAST_LIFETIME_ACTION_DESTROY_VALUE;
+			bHasPartialConstruction |=
+				Record.subjectKind == asAST_LIFETIME_SUBJECT_CONSTRUCTION_SUBOBJECT
+				|| Record.subjectKind == asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT
+				|| Record.actionKind == asAST_LIFETIME_ACTION_COMMIT_DEFERRED_OUT
+				|| Record.actionKind == asAST_LIFETIME_ACTION_DESTROY_ELEMENT
+				|| Record.phase == asAST_LIFETIME_PHASE_CONSTRUCTOR_BASE
+				|| Record.phase == asAST_LIFETIME_PHASE_CONSTRUCTOR_MEMBER
+				|| Record.phase == asAST_LIFETIME_PHASE_CONSTRUCTOR_DELEGATING
+				|| Record.phase == asAST_LIFETIME_PHASE_COMPLETE_OBJECT
+				|| Record.phase == asAST_LIFETIME_PHASE_AGGREGATE_ELEMENT;
+		}
+
+		FAngelscriptArtifactCanonicalWriter StableWriter(
+			TEXT("Angelscript.TypedASTJIT.CanonicalLifetimeSummary.v1"));
+		StableWriter.WriteUInt32(LifetimeView.GetProtocolRevision());
+		StableWriter.WriteString(UTF8_TO_TCHAR(
+			Function->stableKey.AddressOf()));
+		StableWriter.WriteUInt32(static_cast<uint32>(
+			FunctionRecordIndices.Num()));
+		for (const asUINT RecordIndex : FunctionRecordIndices)
+		{
+			StableWriter.WriteHash(RecordStableKeys[RecordIndex]);
+		}
+
+		for (asUINT PlanIndex = 0;
+			PlanIndex < LifetimeView.GetExitPlanCount(); ++PlanIndex)
+		{
+			const asSASTLifetimeExitPlan* const Plan =
+				LifetimeView.GetExitPlan(PlanIndex);
+			const asCStmt* const StructuralOwner = Plan != nullptr
+				? Context.GetStmt(Plan->structuralOwner) : nullptr;
+			if (StructuralOwner == nullptr
+				|| StructuralOwner->owner != FunctionDecl)
+			{
+				continue;
+			}
+			if (!AddCanonicalLifetimeExitPlanFlag(
+				Plan->kind, OutFacts.LifetimeSummary.ExitPlanFlags))
+			{
+				return false;
+			}
+			StableWriter.WriteUInt8(static_cast<uint8>(Plan->kind));
+			StableWriter.WriteUInt32(Plan->exitMask);
+			StableWriter.WriteUInt32(Plan->recordIndices.GetLength());
+			for (asUINT OrderedIndex = 0;
+				OrderedIndex < Plan->recordIndices.GetLength(); ++OrderedIndex)
+			{
+				const asUINT RecordIndex = Plan->recordIndices[OrderedIndex];
+				if (RecordIndex >= static_cast<asUINT>(RecordStableKeys.Num())
+					|| RecordStableKeys[RecordIndex].IsZero())
+				{
+					return false;
+				}
+				StableWriter.WriteHash(RecordStableKeys[RecordIndex]);
+			}
+			++OutFacts.LifetimeSummary.ExitPlanCount;
+		}
+
+		OutFacts.LifetimeSummary.ProtocolRevision =
+			LifetimeView.GetProtocolRevision();
+		OutFacts.LifetimeSummary.RecordCount = static_cast<uint32>(
+			FunctionRecordIndices.Num());
+		StableWriter.WriteUInt32(static_cast<uint32>(
+			OutFacts.LifetimeSummary.ActionFlags));
+		StableWriter.WriteUInt32(static_cast<uint32>(
+			OutFacts.LifetimeSummary.ExitPlanFlags));
+		StableWriter.WriteUInt32(
+			OutFacts.LifetimeSummary.SupportedExitMask);
+		StableWriter.WriteUInt32(
+			OutFacts.LifetimeSummary.ExitPlanCount);
+		OutFacts.LifetimeSummary.StableKey = StableWriter.FinalizeHash();
+		ABIWriter.WriteUInt32(static_cast<uint32>(
+			OutFacts.LifetimeSummary.ActionFlags));
+		ABIWriter.WriteUInt32(
+			OutFacts.LifetimeSummary.SupportedExitMask);
+		ABIWriter.WriteUInt32(
+			OutFacts.LifetimeSummary.RecordCount);
+		OutFacts.LifetimeSummary.ABIKey = ABIWriter.FinalizeHash();
+		OutFacts.LifetimeSummary.bNativeObjectFrameABIAvailable =
+			OutFacts.LifetimeSummary.RecordCount == 0;
+
+		if (!OutFacts.LifetimeSummary.IsAuthenticated())
+		{
+			return false;
+		}
+		if (bHasPartialConstruction)
+		{
+			OutFacts.CleanupPlanState =
+				EAngelscriptTypedASTJITCleanupPlanState::PartialConstruction;
+		}
+		else if (bSawDestroyValue)
+		{
+			OutFacts.CleanupPlanState =
+				EAngelscriptTypedASTJITCleanupPlanState::ScriptDestructor;
+		}
+		else if (OutFacts.LifetimeSummary.RecordCount != 0)
+		{
+			OutFacts.CleanupPlanState =
+				EAngelscriptTypedASTJITCleanupPlanState::NonEmpty;
+		}
+		else
+		{
+			OutFacts.CleanupPlanState =
+				EAngelscriptTypedASTJITCleanupPlanState::VerifiedEmpty;
+		}
+		OutFacts.bHasExceptionCleanup =
+			OutFacts.LifetimeSummary.RecordCount != 0
+			&& (OutFacts.LifetimeSummary.SupportedExitMask
+				& asAST_LIFETIME_EXIT_EXCEPTION) != 0;
+		OutFacts.bCleanupPlanCoversAllTransfers = !bHasPartialConstruction;
+		return true;
 	}
 
 	bool WalkStmt(
@@ -2512,8 +2338,40 @@ namespace AngelscriptTypedASTJITCanonical_Private
 				{
 					const FString CasePrefix = MakeIndent(Depth + 2);
 					const FString FailurePrefix = MakeIndent(Depth + 3);
+					// The VM compiler appends the synthesized invalid-enum throw
+					// after compiling all case bodies. Its current source position is
+					// therefore the last top-level case statement that emitted a
+					// LineInstr, not the switch token itself. Derive that exact
+					// diagnostic position from the sealed Canonical children so the
+					// generated native route publishes the same failure payload
+					// without consulting legacy parser/compiler nodes.
+					const asCSourceRange* InvalidValueRange = &Stmt->range;
+					for (asUINT CaseIndex = Stmt->children.GetLength();
+						CaseIndex > 0; --CaseIndex)
+					{
+						const asCStmt* const CaseStmt = Context.GetStmt(
+							Stmt->children[CaseIndex - 1]);
+						if (CaseStmt == nullptr
+							|| CaseStmt->kind != asAST_STMT_CASE
+							|| CaseStmt->children.GetLength() == 0)
+						{
+							continue;
+						}
+						const asCStmt* const TailStatement = Context.GetStmt(
+							CaseStmt->children[
+								CaseStmt->children.GetLength() - 1]);
+						if (TailStatement != nullptr)
+						{
+							InvalidValueRange = &TailStatement->range;
+							break;
+						}
+					}
 					Out += CasePrefix + TEXT("default:\n");
-					AppendSourcePosition(Stmt->range, Depth + 3, Out);
+					{
+						TGuardValue<const asCSourceRange*> FailureRangeGuard(
+							CurrentStatementRange, InvalidValueRange);
+						AppendSourcePosition(*InvalidValueRange, Depth + 3, Out);
+					}
 					Out += FailurePrefix
 						+ TEXT("FStaticJITFunction::SetSwitchValueInvalidException(Execution);\n")
 						+ FailurePrefix
@@ -2798,6 +2656,36 @@ EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
 		}
 	}
 
+	const FAngelscriptTypedASTJITCanonicalLifetimeFacts LifetimeFacts =
+		AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+			*Input.SealedAST, Input.CanonicalFunctionDecl);
+	if (!LifetimeFacts.LifetimeSummary.IsAuthenticated()
+		|| LifetimeFacts.CleanupPlanState
+			== EAngelscriptTypedASTJITCleanupPlanState::Unverified
+		|| !LifetimeFacts.bCleanupPlanCoversAllTransfers)
+	{
+		return Reject(
+			EFallback::InvalidCleanupPlan,
+			MakeSpan(*Input.SealedAST, FunctionDecl->range),
+			TEXT("CanonicalLifetimeProtocolAuthenticationFailed: the exact function has no complete authenticated lifetime summary."));
+	}
+	if (!LifetimeFacts.LifetimeSummary.bNativeObjectFrameABIAvailable)
+	{
+		return Reject(
+			EFallback::UnsupportedLifetime,
+			MakeSpan(*Input.SealedAST, FunctionDecl->range),
+			FString::Printf(TEXT(
+				"AuthenticatedLifetimeRequiresNativeObjectFrameABI: StableKey=%s ABIKey=%s Records=%u ExitPlans=%u ActionFlags=0x%08x ExitPlanFlags=0x%08x"),
+				*LifetimeFacts.LifetimeSummary.StableKey.ToHexString(),
+				*LifetimeFacts.LifetimeSummary.ABIKey.ToHexString(),
+				LifetimeFacts.LifetimeSummary.RecordCount,
+				LifetimeFacts.LifetimeSummary.ExitPlanCount,
+				static_cast<uint32>(
+					LifetimeFacts.LifetimeSummary.ActionFlags),
+				static_cast<uint32>(
+					LifetimeFacts.LifetimeSummary.ExitPlanFlags)));
+	}
+
 	FAngelscriptTypedASTJITEligibility WalkFailure;
 	if (!WalkStmt(*Input.SealedAST, FunctionDecl->body, Input.Purpose, WalkFailure))
 	{
@@ -2877,56 +2765,9 @@ AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
 	{
 		return Facts;
 	}
-
-	bool bSawReleaseAction = false;
-	bool bSawDestructorAction = false;
-	for (asUINT BindingIndex = 0;
-		BindingIndex < LifetimeView.GetCleanupBindingCount(); ++BindingIndex)
-	{
-		const asSASTLifetimeCleanupBinding* const Binding =
-			LifetimeView.GetCleanupBinding(BindingIndex);
-		const asCDecl* const Subject = Binding != nullptr
-			&& Binding->subject.nodeClass == asAST_LIFETIME_NODE_DECL
-			? Context.GetDecl(asASTDeclId(Binding->subject.value)) : nullptr;
-		if (Subject == nullptr || Subject->parent != FunctionDecl)
-		{
-			continue;
-		}
-		bSawReleaseAction |= Binding->actionKind
-			== asAST_LIFETIME_ACTION_RELEASE_REFERENCE;
-		bSawDestructorAction |= Binding->actionKind
-			== asAST_LIFETIME_ACTION_DESTROY_VALUE;
-	}
-
-	bool bSawRequiredLifetime = false;
-	const bool bProvenCoverage = ProveCanonicalLifetimeCoverage(
-		Context, LifetimeView, Decl->body, bSawRequiredLifetime);
-
-	if (bSawDestructorAction)
-	{
-		Facts.CleanupPlanState =
-			EAngelscriptTypedASTJITCleanupPlanState::ScriptDestructor;
-	}
-	else if (bSawReleaseAction)
-	{
-		Facts.CleanupPlanState =
-			EAngelscriptTypedASTJITCleanupPlanState::NonEmpty;
-	}
-	else
-	{
-		if (bSawRequiredLifetime && !bProvenCoverage)
-		{
-			// The declaration/type facts require an action, but the sealed tree
-			// did not provide the exact normal/transfer plan. Never publish this
-			// as VerifiedEmpty; generation must keep the function on fallback.
-			return Facts;
-		}
-		Facts.CleanupPlanState =
-			EAngelscriptTypedASTJITCleanupPlanState::VerifiedEmpty;
-	}
-
-	Facts.bCleanupPlanCoversAllTransfers = bProvenCoverage;
-	return Facts;
+	return BuildCanonicalLifetimeSummary(
+		Context, FunctionDecl, LifetimeView, Facts)
+		? Facts : FAngelscriptTypedASTJITCanonicalLifetimeFacts{};
 }
 
 FAngelscriptTypedASTJITEmission EmitTypedASTJITFunction(

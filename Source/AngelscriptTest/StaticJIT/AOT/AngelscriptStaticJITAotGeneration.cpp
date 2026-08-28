@@ -26,6 +26,7 @@
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_context.h"
 #include "source/as_module.h"
+#include "source/as_scriptfunction.h"
 #include "source/as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
@@ -80,13 +81,23 @@ namespace AngelscriptStaticJITAotGeneration
 			const EStaticJITAotFixtureComposition Composition,
 			const AngelscriptStaticJITAotFixture::
 				ETypedASTPrivateBridgeRegistration PrivateBridgeRegistration,
-			const bool bForceManualImports)
+			const bool bForceManualImports,
+			const bool bRequireCanonicalCompilerIdentity)
 		{
 			FAngelscriptEngineConfig Config;
 			Config.Purpose = Purpose;
 			if (GenerationProfile != nullptr)
 			{
 				GenerationProfile->ApplyToEngineConfig(Config);
+			}
+			// Provider execution identity includes the emitted VM artifact. A
+			// runtime fixture adopting a committed TypedASTJIT Provider must
+			// therefore compile with the same CANONICAL pipeline as generation,
+			// without pretending that the runtime Engine is itself a generation
+			// host or changing the product-default LEGACY selection.
+			if (bRequireCanonicalCompilerIdentity)
+			{
+				Config.bUseCanonicalStagedCompiler = true;
 			}
 			Config.bIsEditor = true;
 			Config.bDevelopmentMode = true;
@@ -95,6 +106,12 @@ namespace AngelscriptStaticJITAotGeneration
 			Config.bIsUnattended = true;
 			Config.CacheV2RootOverride = FPaths::Combine(
 				FixtureRoot, TEXT("CacheV2"));
+			// This fixture parameter is an explicit test-host selection, not only
+			// a disk-persistence allowance. Keep the Cache V2 producer/restore
+			// proof runnable while the product setting remains default-off, and
+			// keep ordinary Provider adoption genuinely Cache-free.
+			Config.bOverrideCacheV2Enablement = true;
+			Config.bEnableCacheV2 = bEnableCacheV2Persistence;
 			Config.bDisableCacheV2Persistence =
 				!bEnableCacheV2Persistence;
 			// Automation invokes this synchronously on the game thread. Serial
@@ -193,7 +210,8 @@ namespace AngelscriptStaticJITAotGeneration
 			const AngelscriptStaticJITAotFixture::
 				ETypedASTPrivateBridgeRegistration PrivateBridgeRegistration,
 			const FString* const TypedFinalScalarSourceOverride = nullptr,
-			const bool bForceManualImports = false)
+			const bool bForceManualImports = false,
+			const bool bRequireCanonicalCompilerIdentity = false)
 		{
 			OutFixtureRoot = FPaths::ConvertRelativePathToFull(FPaths::Combine(
 				FPaths::ProjectSavedDir(),
@@ -277,7 +295,8 @@ namespace AngelscriptStaticJITAotGeneration
 					OutFixtureRoot, Result.Error,
 					bEnableCacheV2Persistence,
 					GenerationProfile, Purpose, Composition,
-					PrivateBridgeRegistration, bForceManualImports);
+					PrivateBridgeRegistration, bForceManualImports,
+					bRequireCanonicalCompilerIdentity);
 			if (!Engine.IsValid())
 			{
 				return nullptr;
@@ -2942,6 +2961,8 @@ namespace AngelscriptStaticJITAotGeneration
 
 		TArray<FAngelscriptStableModuleKey> ExpectedModuleKeys;
 		TArray<FAngelscriptStableFunctionKey> ExpectedFunctionKeys;
+		TArray<FAngelscriptStableFunctionKey> ExpectedProviderFunctionKeys;
+		int32 ExpectedProviderExcludedDestructorCount = 0;
 		for (const FAngelscriptCacheCleanModuleArtifacts& Module
 			: ProducerPublications.Current->Modules)
 		{
@@ -2962,6 +2983,45 @@ namespace AngelscriptStaticJITAotGeneration
 						"StaticJIT Cache V2 producer publication contained an invalid or duplicate function key."));
 				}
 				ExpectedFunctionKeys.Add(Identity.FunctionKey);
+			}
+
+			const TSharedPtr<FAngelscriptModuleDesc> SourceModule =
+				Engine->GetModuleByModuleName(Module.CanonicalModuleName);
+			asCModule* const ScriptModule = SourceModule.IsValid()
+				? SourceModule->ScriptModule : nullptr;
+			if (ScriptModule == nullptr)
+			{
+				return Fail(FString::Printf(TEXT(
+					"StaticJIT Cache V2 proof could not resolve producer module '%s' while classifying Provider-compatible functions."),
+					*Module.CanonicalModuleName));
+			}
+			for (asUINT FunctionIndex = 0;
+				FunctionIndex < ScriptModule->scriptFunctions.GetLength();
+				++FunctionIndex)
+			{
+				asCScriptFunction* const Function =
+					ScriptModule->scriptFunctions[FunctionIndex];
+				if (Function == nullptr || Function->module != ScriptModule)
+				{
+					continue;
+				}
+				FAngelscriptStableFunctionKey FunctionKey;
+				if (!FAngelscriptCacheStableSymbolIdentity::TryBuildFunctionKey(
+					Module.ModuleKey, *Function, FunctionKey)
+					|| !Module.ValidatedFunctionArtifactIdentities.ContainsByPredicate(
+						[&FunctionKey](const auto& Candidate)
+						{
+							return Candidate.FunctionKey == FunctionKey;
+						}))
+				{
+					continue;
+				}
+				if (Function->traits.GetTrait(asTRAIT_DESTRUCTOR))
+				{
+					++ExpectedProviderExcludedDestructorCount;
+					continue;
+				}
+				ExpectedProviderFunctionKeys.Add(FunctionKey);
 			}
 		}
 		Result.ExpectedCandidateModuleCount = ExpectedModuleKeys.Num();
@@ -3017,7 +3077,8 @@ namespace AngelscriptStaticJITAotGeneration
 					for (const FAngelscriptJITProviderCatalogEntry& Entry
 						: Provider->Entries)
 					{
-						if (ExpectedFunctionKeys.Contains(Entry.FunctionKey))
+						if (ExpectedProviderFunctionKeys.Contains(
+							Entry.FunctionKey))
 						{
 							++CommittedProviderFunctionCount;
 						}
@@ -3027,12 +3088,13 @@ namespace AngelscriptStaticJITAotGeneration
 			}
 		}
 		if (CommittedProviderFunctionCount
-			!= Result.ExpectedRestoredFunctionCount)
+			!= ExpectedProviderFunctionKeys.Num())
 		{
 			return Fail(FString::Printf(TEXT(
-				"StaticJIT Cache V2 proof matched only %d/%d committed function artifacts in the TestJIT Provider."),
+				"StaticJIT Cache V2 proof matched only %d/%d Provider-compatible committed function artifacts; %d cached destructor artifacts remain explicit VM fallback during LEGACY adoption."),
 				CommittedProviderFunctionCount,
-				Result.ExpectedRestoredFunctionCount));
+				ExpectedProviderFunctionKeys.Num(),
+				ExpectedProviderExcludedDestructorCount));
 		}
 
 		// The producer and all of its Engine-local function/reference objects are
@@ -3045,7 +3107,7 @@ namespace AngelscriptStaticJITAotGeneration
 			CreateUncompiledFixtureEngine(
 				FixtureRoot, CreateError, true, nullptr,
 				EAngelscriptEnginePurpose::Runtime, Composition,
-				PrivateBridgeRegistration, false);
+				PrivateBridgeRegistration, false, true);
 		if (!RestoredEngine.IsValid())
 		{
 			Error = CreateError;
@@ -3210,7 +3272,10 @@ namespace AngelscriptStaticJITAotGeneration
 			Session->FixtureRoot, CreationResult,
 			bEnableCacheV2Persistence, nullptr,
 			EAngelscriptEnginePurpose::Runtime, Composition,
-			PrivateBridgeRegistration);
+			PrivateBridgeRegistration,
+			nullptr,
+			false,
+			true);
 		Session->Error = MoveTemp(CreationResult.Error);
 		return Session;
 	}
@@ -3294,7 +3359,9 @@ namespace AngelscriptStaticJITAotGeneration
 			EStaticJITAotFixtureComposition::Core,
 			AngelscriptStaticJITAotFixture::
 				ETypedASTPrivateBridgeRegistration::Primary,
-			&ChangedSource);
+			&ChangedSource,
+			false,
+			true);
 		Session->Error = MoveTemp(CreationResult.Error);
 		return Session;
 	}

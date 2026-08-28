@@ -319,8 +319,10 @@ public:
 	asSJITFunctionBinding AcquireJITBindingForExecution() const;
 	void ReleaseJITBindingAfterExecution() const;
 
-	void      AddReferences();
-	void      ReleaseReferences();
+	void      AddReferences(
+		const asSBuildArtifactRestoreContext *restoreContext = 0);
+	void      ReleaseReferences(
+		const asSBuildArtifactRestoreContext *restoreContext = 0);
 
 	void      AllocateScriptFunctionData();
 	void      DeallocateScriptFunctionData();

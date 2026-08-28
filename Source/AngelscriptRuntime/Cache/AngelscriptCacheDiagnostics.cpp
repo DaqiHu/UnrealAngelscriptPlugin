@@ -1831,12 +1831,14 @@ FAngelscriptCacheFlushApiResult FlushAngelscriptCacheToStore(
 		return Result;
 	}
 
-	const UAngelscriptCacheSettings* Settings =
-		GetDefault<UAngelscriptCacheSettings>();
-	if (Settings == nullptr || !Settings->bEnableCacheV2)
+	// Flush operates on one already-constructed Engine. Its immutable
+	// enablement decision may come from the project default or an explicit
+	// host/test override, so do not re-read the mutable class default here and
+	// disagree with the Engine that owns the Cache V2 Service.
+	if (!Engine->IsCacheV2Enabled())
 	{
 		Result.Error = EAngelscriptCacheDiagnosticApiError::CacheDisabled;
-		Result.Detail = TEXT("Cache V2 is disabled by project settings.");
+		Result.Detail = TEXT("Cache V2 is disabled for this AngelScript Engine.");
 		return Result;
 	}
 	if (Engine->GetRuntimeConfig().bDisableCacheV2Persistence)
@@ -1850,7 +1852,10 @@ FAngelscriptCacheFlushApiResult FlushAngelscriptCacheToStore(
 	double EffectiveTimeoutSeconds = TimeoutSeconds;
 	if (EffectiveTimeoutSeconds == 0.0)
 	{
-		EffectiveTimeoutSeconds = Settings->ShutdownFlushTimeoutSeconds;
+		const UAngelscriptCacheSettings* const Settings =
+			GetDefault<UAngelscriptCacheSettings>();
+		EffectiveTimeoutSeconds = Settings != nullptr
+			? Settings->ShutdownFlushTimeoutSeconds : 5.0;
 	}
 	if (!FMath::IsFinite(EffectiveTimeoutSeconds)
 		|| EffectiveTimeoutSeconds <= 0.0)

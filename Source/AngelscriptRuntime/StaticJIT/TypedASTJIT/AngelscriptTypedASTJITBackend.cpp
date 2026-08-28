@@ -518,6 +518,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 						*Input.Eligibility.SealedAST,
 						Input.Eligibility.CanonicalFunctionDecl);
 				Diagnostic.CleanupPlanState = Facts.CleanupPlanState;
+				Diagnostic.LifetimeSummary = Facts.LifetimeSummary;
 				Diagnostic.bHasSuspendState = Facts.bHasSuspendState;
 				Diagnostic.bHasExceptionCleanup = Facts.bHasExceptionCleanup;
 				Diagnostic.bCleanupPlanCoversAllTransfers =

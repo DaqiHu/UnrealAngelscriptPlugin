@@ -737,16 +737,20 @@ void asCBuilder::NotifyCanonicalBuildArtifactFailure(
 
 asEBuildArtifactRestoreResult asCBuilder::TryRestoreBuildArtifact(
 	const asSBuildArtifactInvocation &invocation,
-	asCScriptFunction *function)
+	asCScriptFunction *function,
+	const asSBuildArtifactRestoreContext *restoreContext)
 {
 	if( !invocation.IsCacheable() )
 		return asBUILD_ARTIFACT_RESTORE_NOT_CACHEABLE;
 	if( buildArtifactRestoreCallback == 0 )
 		return asBUILD_ARTIFACT_RESTORE_MISS;
+	if( restoreContext != 0 && !restoreContext->IsValid() )
+		return asBUILD_ARTIFACT_RESTORE_REJECTED_CORRUPT;
 
 	const asEBuildArtifactRestoreResult result =
 		buildArtifactRestoreCallback(
-			&invocation, function, buildArtifactRestoreUserData);
+			&invocation, function, restoreContext,
+			buildArtifactRestoreUserData);
 	if( result != asBUILD_ARTIFACT_RESTORE_RESTORED )
 	{
 		if( result == asBUILD_ARTIFACT_RESTORE_MISS ||
@@ -1216,18 +1220,6 @@ int asCBuilder::BuildParallelParseScripts()
 
 			// Parse the script file
 			parser->ParseScript(scripts[n]);
-		}
-	}
-
-	if( canonicalSema )
-	{
-		printf("Canonical diagnostics after parse: %u\n",
-			canonicalSema->GetDiagnostics().GetLength());
-		for( asUINT i = 0; i < canonicalSema->GetDiagnostics().GetLength(); ++i )
-		{
-			const char* text = canonicalSema->GetDiagnostics()[i].AddressOf();
-			printf("Canonical diagnostic after parse[%u]: %s\n",
-				i, text ? text : "");
 		}
 	}
 

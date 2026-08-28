@@ -108,6 +108,29 @@ static FName NAME_ReplicatedUsing("ReplicatedUsing");
 static FName NAME_BlueprintSetter("BlueprintSetter");
 static FName NAME_BlueprintGetter("BlueprintGetter");
 
+namespace AngelscriptEngineStaticJITIdentity_Private
+{
+	static bool HasInstalledProviderEntries()
+	{
+		const TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
+			ESPMode::ThreadSafe> Providers =
+			FAngelscriptJITProviderRegistry::Get().GetSnapshot();
+		if (!Providers.IsValid())
+		{
+			return false;
+		}
+		for (const TSharedPtr<const FAngelscriptJITProviderCatalog,
+			ESPMode::ThreadSafe>& Provider : Providers->Providers)
+		{
+			if (Provider.IsValid() && !Provider->Entries.IsEmpty())
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+}
+
 static TArray<FAngelscriptEngine*> GAngelscriptEngineContextStack;
 #if WITH_DEV_AUTOMATION_TESTS
 static thread_local int32 GAngelscriptEngineResolutionSuppressionDepthForTesting = 0;
@@ -3583,12 +3606,20 @@ void FAngelscriptEngine::InitialCompile()
 
 			bSuccess = Preprocessor.Preprocess();
 			ModulesToCompile = Preprocessor.GetModulesToCompile();
+			const bool bNeedsProviderIdentityCapture =
+				!bStaticJITGeneration
+				&& !IsCacheV2Enabled()
+				&& AngelscriptEngineStaticJITIdentity_Private::
+					HasInstalledProviderEntries();
 			// StaticJIT generation owns an authoritative source compile even when
-			// Cache V2 is disabled. It currently reuses the clean compile-fact
-			// capture context as an internal transport, but generation snapshot
-			// freezing must not be gated by cache restore or persistence policy.
+			// Cache V2 is disabled. Runtime Provider adoption likewise needs the
+			// current source identities for Provider-backed modules without entering
+			// the Cache mutation/publication/persistence lifecycle. Both consumers
+			// reuse the pointer-free clean compile-fact preparation transport, but
+			// neither is gated by the Cache product switch.
 			if (bSuccess && !ModulesToCompile.IsEmpty()
-				&& (bStaticJITGeneration || IsCacheV2Enabled()))
+				&& (bStaticJITGeneration || IsCacheV2Enabled()
+					|| bNeedsProviderIdentityCapture))
 			{
 				FAngelscriptCacheCompileCaptureContext PreparedContext;
 				const FAngelscriptCacheCompileCapturePreparationResult Preparation =
@@ -3616,10 +3647,20 @@ void FAngelscriptEngine::InitialCompile()
 							static_cast<uint32>(Preparation.Validation.Error),
 							*Preparation.Detail);
 					}
-					else
+					else if (IsCacheV2Enabled())
 					{
 						UE_LOG(Angelscript, Warning,
 							TEXT("[CacheV2] Initial compile capture preparation skipped: Error=%u Environment=%u Discovery=%u Validation=%u Detail=%s"),
+							static_cast<uint32>(Preparation.Error),
+							static_cast<uint32>(Preparation.EnvironmentError),
+							static_cast<uint32>(Preparation.SourceDiscoveryError),
+							static_cast<uint32>(Preparation.Validation.Error),
+							*Preparation.Detail);
+					}
+					else
+					{
+						UE_LOG(Angelscript, Warning,
+							TEXT("[StaticJIT] Initial source identity preparation skipped: Error=%u Environment=%u Discovery=%u Validation=%u Detail=%s"),
 							static_cast<uint32>(Preparation.Error),
 							static_cast<uint32>(Preparation.EnvironmentError),
 							static_cast<uint32>(Preparation.SourceDiscoveryError),
@@ -4217,7 +4258,12 @@ bool FAngelscriptEngine::PerformHotReload(
 		EAngelscriptCompileCachePolicy::ForceClean;
 	CompileOptions.bRejectStructuralChanges = bRejectStructuralChanges;
 	TOptional<FAngelscriptCacheCompileCaptureContext> CacheCaptureContext;
-	if (!ModulesToCompile.IsEmpty() && IsCacheV2Enabled())
+	const bool bNeedsProviderIdentityCapture =
+		!IsCacheV2Enabled()
+		&& AngelscriptEngineStaticJITIdentity_Private::
+			HasInstalledProviderEntries();
+	if (!ModulesToCompile.IsEmpty()
+		&& (IsCacheV2Enabled() || bNeedsProviderIdentityCapture))
 	{
 		FAngelscriptCacheCompileCaptureContext PreparedContext;
 		const bool bSkipDevelopmentScripts = !ShouldUseEditorScripts();
@@ -4234,10 +4280,20 @@ bool FAngelscriptEngine::PerformHotReload(
 		{
 			CacheCaptureContext.Emplace(MoveTemp(PreparedContext));
 		}
-		else
+		else if (IsCacheV2Enabled())
 		{
 			UE_LOG(Angelscript, Warning,
 				TEXT("[CacheV2] Hot reload capture preparation skipped: Error=%u Environment=%u Discovery=%u Validation=%u Detail=%s"),
+				static_cast<uint32>(Preparation.Error),
+				static_cast<uint32>(Preparation.EnvironmentError),
+				static_cast<uint32>(Preparation.SourceDiscoveryError),
+				static_cast<uint32>(Preparation.Validation.Error),
+				*Preparation.Detail);
+		}
+		else
+		{
+			UE_LOG(Angelscript, Warning,
+				TEXT("[StaticJIT] Hot reload source identity preparation skipped: Error=%u Environment=%u Discovery=%u Validation=%u Detail=%s"),
 				static_cast<uint32>(Preparation.Error),
 				static_cast<uint32>(Preparation.EnvironmentError),
 				static_cast<uint32>(Preparation.SourceDiscoveryError),
@@ -5416,6 +5472,12 @@ ECompileResult FAngelscriptEngine::CompileModules(
 	LLM_SCOPE_BYTAG(Angelscript);
 	const bool bStaticJITGeneration = RuntimeConfig.Purpose
 		== EAngelscriptEnginePurpose::StaticJITGeneration;
+	const bool bProviderIdentityOnlyCapture =
+		!bStaticJITGeneration
+		&& CacheCaptureContext != nullptr
+		&& !IsCacheV2Enabled()
+		&& AngelscriptEngineStaticJITIdentity_Private::
+			HasInstalledProviderEntries();
 #if AS_CAN_GENERATE_JIT
 	if (bStaticJITGeneration)
 	{
@@ -5424,7 +5486,9 @@ ECompileResult FAngelscriptEngine::CompileModules(
 #endif
 	FAngelscriptCacheMutationGuard CacheMutationGuard;
 	if (!bStaticJITGeneration
-		&& CacheCaptureContext != nullptr && CacheService.IsValid())
+		&& CacheCaptureContext != nullptr
+		&& IsCacheV2Enabled()
+		&& CacheService.IsValid())
 	{
 		CacheMutationGuard = CacheService->EnterMutation(
 			CompileType == ECompileType::Initial
@@ -6641,7 +6705,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 	// fail-soft observer: no capture failure changes the established compile,
 	// activation or last-good behavior.
 	if (CacheCaptureContext != nullptr
-		&& (bStaticJITGeneration || CacheMutationGuard.IsEntered())
+		&& (bStaticJITGeneration || bProviderIdentityOnlyCapture
+			|| CacheMutationGuard.IsEntered())
 		&& !bHadCompileErrors)
 	{
 		const bool bPendingColdStart =
@@ -6695,6 +6760,7 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				Environment.CaptureOptions.Profile;
 
 			int32 SkippedCaptureCount = 0;
+			int32 ProviderIdentityCapturedModuleCount = 0;
 			uint32 GraphCarriedDependencyFunctionCount = 0;
 			const double CaptureBatchStartedSeconds =
 				FPlatformTime::Seconds();
@@ -6717,8 +6783,13 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				// capture is an observer and therefore fails soft; affected
 				// modules will reject their own capture below instead of
 				// publishing a generation with unresolved foreign pointers.
+				const TCHAR* const CaptureOwner = bStaticJITGeneration
+					? TEXT("StaticJITGeneration")
+					: bProviderIdentityOnlyCapture
+						? TEXT("StaticJIT") : TEXT("CacheV2");
 				UE_LOG(Angelscript, Warning,
-					TEXT("[CacheV2] Cross-module function authority preparation failed: Error=%u Detail=%s"),
+					TEXT("[%s] Cross-module function authority preparation failed: Error=%u Detail=%s"),
+					CaptureOwner,
 					static_cast<uint32>(CrossModuleAuthorityResult.Error),
 					*CrossModuleAuthorityResult.Detail);
 			}
@@ -6762,6 +6833,60 @@ ECompileResult FAngelscriptEngine::CompileModules(
 			{
 				const double ModuleCaptureStartedSeconds =
 					FPlatformTime::Seconds();
+				if (bProviderIdentityOnlyCapture)
+				{
+					const TOptional<FAngelscriptStableModuleKey> ModuleKey =
+						AngelscriptEngineCacheCapture_Private::FindModuleKey(
+							*Candidate,
+							CacheCaptureContext->AuthoritativeSourceIndex);
+					if (!ModuleKey.IsSet()
+						|| !ProviderBackedModuleKeys.Contains(ModuleKey->Hash))
+					{
+						continue;
+					}
+
+					FAngelscriptCacheCleanModuleArtifacts IdentityOnlyArtifacts;
+					const FAngelscriptCacheCleanCaptureResult IdentityOnlyResult =
+						CaptureAngelscriptCurrentModuleFunctionFacts(
+							Candidate,
+							CacheCaptureContext->Environment.CaptureOptions,
+							CacheCaptureContext->AuthoritativeSourceIndex,
+							CrossModuleFunctions,
+							IdentityOnlyArtifacts,
+							&CaptureEnvironmentSymbols);
+					ModuleCaptureTimings.Add(FString::Printf(
+						TEXT("%s=%.3f"),
+						*Candidate->ModuleName,
+						(FPlatformTime::Seconds()
+							- ModuleCaptureStartedSeconds) * 1000.0));
+					if (!IdentityOnlyResult.IsSuccess())
+					{
+						++SkippedCaptureCount;
+						UE_LOG(Angelscript, Warning,
+							TEXT("[StaticJIT] Provider source identity capture skipped module: Module=%s ModuleKey=%s Error=%u Detail=%s"),
+							*Candidate->ModuleName,
+							*ModuleKey->Hash.ToHexString(),
+							static_cast<uint32>(IdentityOnlyResult.Error),
+							*IdentityOnlyResult.Detail);
+						continue;
+					}
+
+					++ProviderIdentityCapturedModuleCount;
+					GraphCarriedDependencyFunctionCount +=
+						IdentityOnlyResult.GraphCarriedDependencyFunctionCount;
+					ValidatedCompileFunctionIdentities.Append(
+						IdentityOnlyArtifacts.ValidatedFunctionArtifactIdentities);
+					ValidatedCompileFunctionReferenceSets.Append(
+						IdentityOnlyArtifacts.ValidatedFunctionArtifactReferenceSets);
+					UE_LOG(Angelscript, Verbose,
+						TEXT("[StaticJIT] Captured Cache-independent Provider source identities: Module=%s ModuleKey=%s Functions=%d"),
+						*Candidate->ModuleName,
+						*ModuleKey->Hash.ToHexString(),
+						IdentityOnlyArtifacts.
+							ValidatedFunctionArtifactIdentities.Num());
+					continue;
+				}
+
 				FAngelscriptCacheCleanModuleArtifacts Artifacts;
 				const FAngelscriptCacheCleanCaptureResult CaptureResult =
 					bStaticJITGeneration
@@ -6917,6 +7042,29 @@ ECompileResult FAngelscriptEngine::CompileModules(
 						GetIndexedSymbolCountForDiagnostics(),
 					*FString::Join(
 						ModuleCaptureTimings, TEXT(",")));
+			}
+			else if (bProviderIdentityOnlyCapture)
+			{
+				UE_LOG(Angelscript, Display,
+					TEXT("[StaticJIT] Provider source identity batch: SourceModules=%d ProviderModuleKeys=%d Captured=%d Skipped=%d Functions=%d ReferenceSets=%d GraphCarriedDependencyFunctions=%u timings_ms=[authority=%.3f,function_facts=%.3f,total=%.3f] environment_index=[builds=%u,symbols=%d] modules=[%s]"),
+					CaptureModules.Num(),
+					ProviderBackedModuleKeys.Num(),
+					ProviderIdentityCapturedModuleCount,
+					SkippedCaptureCount,
+					ValidatedCompileFunctionIdentities.Num(),
+					ValidatedCompileFunctionReferenceSets.Num(),
+					GraphCarriedDependencyFunctionCount,
+					(CrossModuleAuthorityFinishedSeconds
+						- CaptureBatchStartedSeconds) * 1000.0,
+					(FPlatformTime::Seconds()
+						- CrossModuleAuthorityFinishedSeconds) * 1000.0,
+					(FPlatformTime::Seconds()
+						- CaptureBatchStartedSeconds) * 1000.0,
+					CaptureEnvironmentSymbols.
+						GetSymbolIndexBuildCountForDiagnostics(),
+					CaptureEnvironmentSymbols.
+						GetIndexedSymbolCountForDiagnostics(),
+					*FString::Join(ModuleCaptureTimings, TEXT(",")));
 			}
 			else
 			{

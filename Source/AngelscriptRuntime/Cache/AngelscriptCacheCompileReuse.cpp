@@ -523,6 +523,7 @@ struct FAngelscriptCacheCompileReuseContext::FImpl
 	static asEBuildArtifactRestoreResult RestoreFunction(
 		const asSBuildArtifactInvocation* Invocation,
 		asCScriptFunction* Function,
+		const asSBuildArtifactRestoreContext* RestoreContext,
 		void* UserData)
 	{
 		if (Invocation == nullptr || Function == nullptr || UserData == nullptr)
@@ -585,7 +586,8 @@ struct FAngelscriptCacheCompileReuseContext::FImpl
 				State.Owner->Options.CanonicalCompileOptions,
 				Authorities,
 				State.Owner->Limits,
-				State.Owner->Budget);
+				State.Owner->Budget,
+				RestoreContext);
 		if (Lookup.Status
 			== EAngelscriptCacheFunctionCandidateLookupStatus::Restored)
 		{

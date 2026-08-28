@@ -49,14 +49,14 @@ static int32 AS_Test_Differential_TypedAST_DifferentialScalarValue_TypedBody(
 	{
 		const int32 as_ast_e9_left = ([&]() -> int32
 	{
-		const int32 as_ast_e7_left = ([&]() -> int32
+		const int32 as_ast_e8_left = ([&]() -> int32
 	{
-		const int32 as_ast_e6_left = as_ast_d9;
-		const int32 as_ast_e6_right = int32(3);
-		return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e6_left, as_ast_e6_right);
+		const int32 as_ast_e7_left = as_ast_d9;
+		const int32 as_ast_e7_right = int32(3);
+		return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e7_left, as_ast_e7_right);
 	}());
-		const int32 as_ast_e7_right = as_ast_d10;
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e7_left, as_ast_e7_right);
+		const int32 as_ast_e8_right = as_ast_d10;
+		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e8_left, as_ast_e8_right);
 	}());
 		const int32 as_ast_e9_right = int32(7);
 		return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e9_left, as_ast_e9_right);

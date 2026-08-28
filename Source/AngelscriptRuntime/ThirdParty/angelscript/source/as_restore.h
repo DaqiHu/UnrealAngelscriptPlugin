@@ -42,6 +42,7 @@
 #include "as_scriptengine.h"
 #include "as_context.h"
 #include "as_map.h"
+#include "as_buildartifact.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -148,7 +149,8 @@ class ANGELSCRIPTRUNTIME_API asCReader
 //[UE--]
 {
 public:
-	asCReader(asCModule *module, asIBinaryStream *stream, asCScriptEngine *engine);
+	asCReader(asCModule *module, asIBinaryStream *stream, asCScriptEngine *engine,
+		const asSBuildArtifactRestoreContext *restoreContext = 0);
 	~asCReader();
 
 	int Read(bool *wasDebugInfoStripped);
@@ -192,6 +194,7 @@ protected:
 	asCModule       *module;
 	asIBinaryStream *stream;
 	asCScriptEngine *engine;
+	const asSBuildArtifactRestoreContext *buildArtifactRestoreContext;
 	bool             noDebugInfo;
 	bool             error;
 	asUINT           bytesRead;

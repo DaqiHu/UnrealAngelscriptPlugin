@@ -5,6 +5,7 @@
 class asCModule;
 class asCScriptEngine;
 class asCScriptFunction;
+struct asSBuildArtifactRestoreContext;
 
 // Resolves a script function owned by another AS module to the stable
 // declaration reference used by Cache V2. The VM artifact reader may observe a
@@ -109,7 +110,8 @@ public:
 		const FAngelscriptHash256& ExpectedExecutionContentHash,
 		const FAngelscriptCacheReadLimits& Limits,
 		FAngelscriptCacheReadBudget& Budget,
-		asCScriptFunction& TargetFunction) const;
+		asCScriptFunction& TargetFunction,
+		const asSBuildArtifactRestoreContext* RestoreContext = nullptr) const;
 
 	virtual FAngelscriptCacheValidationResult Validate(
 		const FAngelscriptCacheOpaquePayloadValidationRequest& Request,
@@ -126,7 +128,8 @@ private:
 		const FAngelscriptCacheReadLimits& Limits,
 		FAngelscriptCacheReadBudget& Budget,
 		IAngelscriptCacheCandidateChargeSink& GraphCandidate,
-		FAngelscriptCacheOpaquePayloadSummary& OutSummary) const;
+		FAngelscriptCacheOpaquePayloadSummary& OutSummary,
+		const asSBuildArtifactRestoreContext* RestoreContext = nullptr) const;
 
 	asCModule* Module = nullptr;
 	asCScriptEngine* Engine = nullptr;

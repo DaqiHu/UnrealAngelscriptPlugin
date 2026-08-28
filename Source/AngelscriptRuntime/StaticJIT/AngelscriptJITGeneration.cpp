@@ -763,6 +763,23 @@ namespace AngelscriptJITGeneration_Private
 					FlatSemantic.CanonicalASTState =
 						*Semantic.CanonicalASTState;
 					FlatSemantic.CleanupPlanState = *Semantic.CleanupPlanState;
+					FlatSemantic.LifetimeProtocolRevision =
+						Semantic.LifetimeProtocolRevision;
+					FlatSemantic.LifetimeStableKey =
+						Semantic.LifetimeStableKey;
+					FlatSemantic.LifetimeABIKey = Semantic.LifetimeABIKey;
+					FlatSemantic.LifetimeActionFlags =
+						Semantic.LifetimeActionFlags;
+					FlatSemantic.LifetimeExitPlanFlags =
+						Semantic.LifetimeExitPlanFlags;
+					FlatSemantic.LifetimeSupportedExitMask =
+						Semantic.LifetimeSupportedExitMask;
+					FlatSemantic.LifetimeRecordCount =
+						Semantic.LifetimeRecordCount;
+					FlatSemantic.LifetimeExitPlanCount =
+						Semantic.LifetimeExitPlanCount;
+					FlatSemantic.bNativeObjectFrameABIAvailable =
+						Semantic.bNativeObjectFrameABIAvailable ? 1u : 0u;
 					FlatSemantic.bHasSuspendState =
 						Semantic.bHasSuspendState ? 1u : 0u;
 					FlatSemantic.bHasExceptionCleanup =
@@ -946,6 +963,33 @@ namespace AngelscriptJITGeneration_Private
 					*Prefix, *EscapeJson(Semantic.CanonicalASTState));
 				Source += FString::Printf(TEXT("\t%s.CleanupPlanState = TEXT(\"%s\");\n"),
 					*Prefix, *EscapeJson(Semantic.CleanupPlanState));
+				Source += FString::Printf(TEXT(
+					"\t%s.LifetimeProtocolRevision = %u;\n"),
+					*Prefix, Semantic.LifetimeProtocolRevision);
+				Source += FString::Printf(TEXT(
+					"\t%s.LifetimeStableKey = %s;\n"),
+					*Prefix, *HashExpression(Semantic.LifetimeStableKey));
+				Source += FString::Printf(TEXT(
+					"\t%s.LifetimeABIKey = %s;\n"),
+					*Prefix, *HashExpression(Semantic.LifetimeABIKey));
+				Source += FString::Printf(TEXT(
+					"\t%s.LifetimeActionFlags = %u;\n"),
+					*Prefix, Semantic.LifetimeActionFlags);
+				Source += FString::Printf(TEXT(
+					"\t%s.LifetimeExitPlanFlags = %u;\n"),
+					*Prefix, Semantic.LifetimeExitPlanFlags);
+				Source += FString::Printf(TEXT(
+					"\t%s.LifetimeSupportedExitMask = %u;\n"),
+					*Prefix, Semantic.LifetimeSupportedExitMask);
+				Source += FString::Printf(TEXT(
+					"\t%s.LifetimeRecordCount = %u;\n"),
+					*Prefix, Semantic.LifetimeRecordCount);
+				Source += FString::Printf(TEXT(
+					"\t%s.LifetimeExitPlanCount = %u;\n"),
+					*Prefix, Semantic.LifetimeExitPlanCount);
+				Source += FString::Printf(TEXT(
+					"\t%s.bNativeObjectFrameABIAvailable = %u;\n"),
+					*Prefix, Semantic.bNativeObjectFrameABIAvailable);
 				Source += FString::Printf(TEXT("\t%s.bHasSuspendState = %u;\n"),
 					*Prefix, Semantic.bHasSuspendState);
 				Source += FString::Printf(TEXT("\t%s.bHasExceptionCleanup = %u;\n"),

@@ -889,6 +889,24 @@ namespace
 			Diagnostic.CanonicalASTState);
 		Writer->WriteValue(TEXT("cleanupPlanState"),
 			Diagnostic.CleanupPlanState);
+		Writer->WriteValue(TEXT("lifetimeProtocolRevision"),
+			Diagnostic.LifetimeProtocolRevision);
+		Writer->WriteValue(TEXT("lifetimeStableKey"),
+			Diagnostic.LifetimeStableKey.ToHexString());
+		Writer->WriteValue(TEXT("lifetimeABIKey"),
+			Diagnostic.LifetimeABIKey.ToHexString());
+		Writer->WriteValue(TEXT("lifetimeActionFlags"), FString::Printf(
+			TEXT("0x%08x"), Diagnostic.LifetimeActionFlags));
+		Writer->WriteValue(TEXT("lifetimeExitPlanFlags"), FString::Printf(
+			TEXT("0x%08x"), Diagnostic.LifetimeExitPlanFlags));
+		Writer->WriteValue(TEXT("lifetimeSupportedExitMask"), FString::Printf(
+			TEXT("0x%08x"), Diagnostic.LifetimeSupportedExitMask));
+		Writer->WriteValue(TEXT("lifetimeRecordCount"),
+			Diagnostic.LifetimeRecordCount);
+		Writer->WriteValue(TEXT("lifetimeExitPlanCount"),
+			Diagnostic.LifetimeExitPlanCount);
+		Writer->WriteValue(TEXT("nativeObjectFrameABIAvailable"),
+			Diagnostic.bNativeObjectFrameABIAvailable);
 		Writer->WriteValue(TEXT("hasSuspendState"),
 			Diagnostic.bHasSuspendState);
 		Writer->WriteValue(TEXT("hasExceptionCleanup"),
@@ -1063,6 +1081,24 @@ namespace
 			Diagnostic.CanonicalASTState);
 		Writer->WriteValue(TEXT("cleanupPlanState"),
 			Diagnostic.CleanupPlanState);
+		Writer->WriteValue(TEXT("lifetimeProtocolRevision"),
+			Diagnostic.LifetimeProtocolRevision);
+		Writer->WriteValue(TEXT("lifetimeStableKey"),
+			Diagnostic.LifetimeStableKey.ToHexString());
+		Writer->WriteValue(TEXT("lifetimeABIKey"),
+			Diagnostic.LifetimeABIKey.ToHexString());
+		Writer->WriteValue(TEXT("lifetimeActionFlags"),
+			Diagnostic.LifetimeActionFlags);
+		Writer->WriteValue(TEXT("lifetimeExitPlanFlags"),
+			Diagnostic.LifetimeExitPlanFlags);
+		Writer->WriteValue(TEXT("lifetimeSupportedExitMask"),
+			Diagnostic.LifetimeSupportedExitMask);
+		Writer->WriteValue(TEXT("lifetimeRecordCount"),
+			Diagnostic.LifetimeRecordCount);
+		Writer->WriteValue(TEXT("lifetimeExitPlanCount"),
+			Diagnostic.LifetimeExitPlanCount);
+		Writer->WriteValue(TEXT("nativeObjectFrameABIAvailable"),
+			Diagnostic.bNativeObjectFrameABIAvailable);
 		Writer->WriteValue(TEXT("hasSuspendState"),
 			Diagnostic.bHasSuspendState);
 		Writer->WriteValue(TEXT("hasExceptionCleanup"),
@@ -1832,6 +1868,21 @@ FStaticJITDiagnostics::BuildArtifactRequestRecord(
 			CanonicalASTStateName(Source.CanonicalASTState);
 		Record.CleanupPlanState = CleanupPlanStateName(
 			Source.CleanupPlanState);
+		Record.LifetimeProtocolRevision =
+			Source.LifetimeSummary.ProtocolRevision;
+		Record.LifetimeStableKey = Source.LifetimeSummary.StableKey;
+		Record.LifetimeABIKey = Source.LifetimeSummary.ABIKey;
+		Record.LifetimeActionFlags = static_cast<uint32>(
+			Source.LifetimeSummary.ActionFlags);
+		Record.LifetimeExitPlanFlags = static_cast<uint32>(
+			Source.LifetimeSummary.ExitPlanFlags);
+		Record.LifetimeSupportedExitMask =
+			Source.LifetimeSummary.SupportedExitMask;
+		Record.LifetimeRecordCount = Source.LifetimeSummary.RecordCount;
+		Record.LifetimeExitPlanCount =
+			Source.LifetimeSummary.ExitPlanCount;
+		Record.bNativeObjectFrameABIAvailable =
+			Source.LifetimeSummary.bNativeObjectFrameABIAvailable;
 		Record.bHasSuspendState = Source.bHasSuspendState;
 		Record.bHasExceptionCleanup = Source.bHasExceptionCleanup;
 		Record.bCleanupPlanCoversAllTransfers =
@@ -2092,6 +2143,16 @@ BuildAngelscriptStaticJITGenerationDiagnostics(
 		Copy.ReceiverParameterIndex = Source.ReceiverParameterIndex;
 		Copy.CanonicalASTState = Source.CanonicalASTState;
 		Copy.CleanupPlanState = Source.CleanupPlanState;
+		Copy.LifetimeProtocolRevision = Source.LifetimeProtocolRevision;
+		Copy.LifetimeStableKey = Source.LifetimeStableKey;
+		Copy.LifetimeABIKey = Source.LifetimeABIKey;
+		Copy.LifetimeActionFlags = Source.LifetimeActionFlags;
+		Copy.LifetimeExitPlanFlags = Source.LifetimeExitPlanFlags;
+		Copy.LifetimeSupportedExitMask = Source.LifetimeSupportedExitMask;
+		Copy.LifetimeRecordCount = Source.LifetimeRecordCount;
+		Copy.LifetimeExitPlanCount = Source.LifetimeExitPlanCount;
+		Copy.bNativeObjectFrameABIAvailable =
+			Source.bNativeObjectFrameABIAvailable;
 		Copy.bHasSuspendState = Source.bHasSuspendState;
 		Copy.bHasExceptionCleanup = Source.bHasExceptionCleanup;
 		Copy.bCleanupPlanCoversAllTransfers =

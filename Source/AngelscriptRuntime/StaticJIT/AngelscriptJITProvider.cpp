@@ -266,7 +266,7 @@ FAngelscriptHash256 FAngelscriptJITProviderManifest::BuildDiagnosticsDigest(
 	const FAngelscriptJITProviderDiagnostics& Diagnostics)
 {
 	FAngelscriptArtifactCanonicalWriter Writer(
-		TEXT("jit-provider-diagnostics-v1"));
+		TEXT("jit-provider-diagnostics-v2"));
 	Writer.WriteUInt32(Diagnostics.SchemaRevision);
 	Writer.WriteString(Diagnostics.RequestKind != nullptr
 		? Diagnostics.RequestKind : TEXT(""));
@@ -374,6 +374,15 @@ FAngelscriptHash256 FAngelscriptJITProviderManifest::BuildDiagnosticsDigest(
 			? Function.CanonicalASTState : TEXT(""));
 		Writer.WriteString(Function.CleanupPlanState != nullptr
 			? Function.CleanupPlanState : TEXT(""));
+		Writer.WriteUInt32(Function.LifetimeProtocolRevision);
+		Writer.WriteHash(Function.LifetimeStableKey);
+		Writer.WriteHash(Function.LifetimeABIKey);
+		Writer.WriteUInt32(Function.LifetimeActionFlags);
+		Writer.WriteUInt32(Function.LifetimeExitPlanFlags);
+		Writer.WriteUInt32(Function.LifetimeSupportedExitMask);
+		Writer.WriteUInt32(Function.LifetimeRecordCount);
+		Writer.WriteUInt32(Function.LifetimeExitPlanCount);
+		Writer.WriteUInt32(Function.bNativeObjectFrameABIAvailable);
 		Writer.WriteUInt32(Function.bHasSuspendState);
 		Writer.WriteUInt32(Function.bHasExceptionCleanup);
 		Writer.WriteUInt32(Function.bCleanupPlanCoversAllTransfers);
@@ -700,12 +709,61 @@ namespace
 						InvalidDiagnosticSemanticSize,
 					INDEX_NONE, INDEX_NONE, SignedSemanticIndex);
 			}
+			static constexpr uint32 ValidLifetimeActionFlags = 0x0fu;
+			static constexpr uint32 ValidLifetimeExitPlanFlags = 0x07u;
+			static constexpr uint32 ValidLifetimeExitMask = 0x3fu;
+			const bool bEmptyLifetime = Function.LifetimeRecordCount == 0;
+			const bool bAuthenticatedLifetimeSummary =
+				Function.LifetimeProtocolRevision != 0
+				&& !Function.LifetimeStableKey.IsZero()
+				&& !Function.LifetimeABIKey.IsZero()
+				&& (Function.LifetimeActionFlags
+					& ~ValidLifetimeActionFlags) == 0
+				&& (Function.LifetimeExitPlanFlags
+					& ~ValidLifetimeExitPlanFlags) == 0
+				&& (Function.LifetimeSupportedExitMask
+					& ~ValidLifetimeExitMask) == 0
+				&& IsBoolean(Function.bNativeObjectFrameABIAvailable)
+				&& (bEmptyLifetime
+					? Function.LifetimeActionFlags == 0
+						&& Function.LifetimeExitPlanFlags == 0
+						&& Function.LifetimeSupportedExitMask == 0
+						&& Function.LifetimeExitPlanCount == 0
+						&& Function.bNativeObjectFrameABIAvailable == 1
+					: Function.LifetimeActionFlags != 0
+						&& Function.LifetimeExitPlanFlags != 0
+						&& Function.LifetimeSupportedExitMask != 0
+						&& Function.LifetimeExitPlanCount != 0);
+			const bool bAbsentLifetimeSummary =
+				Function.LifetimeProtocolRevision == 0
+				&& Function.LifetimeStableKey.IsZero()
+				&& Function.LifetimeABIKey.IsZero()
+				&& Function.LifetimeActionFlags == 0
+				&& Function.LifetimeExitPlanFlags == 0
+				&& Function.LifetimeSupportedExitMask == 0
+				&& Function.LifetimeRecordCount == 0
+				&& Function.LifetimeExitPlanCount == 0
+				&& Function.bNativeObjectFrameABIAvailable == 0;
+			const bool bVerifiedCanonicalAST =
+				Function.CanonicalASTState != nullptr
+					&& FCString::Strcmp(
+						Function.CanonicalASTState, TEXT("Verified")) == 0;
+			const bool bUnverifiedCleanupPlan =
+				Function.CleanupPlanState != nullptr
+					&& FCString::Strcmp(
+						Function.CleanupPlanState, TEXT("Unverified")) == 0;
+			const bool bLifetimeSummaryValid =
+				(bAuthenticatedLifetimeSummary
+					&& bVerifiedCanonicalAST
+					&& !bUnverifiedCleanupPlan)
+				|| (bAbsentLifetimeSummary && bUnverifiedCleanupPlan);
 			if (Function.FunctionKey.Hash.IsZero()
 				|| !IsNonEmpty(Function.Role)
 				|| !IsNonEmpty(Function.InvocationKind)
 				|| !IsNonEmpty(Function.ReceiverKind)
 				|| !IsNonEmpty(Function.CanonicalASTState)
 				|| !IsNonEmpty(Function.CleanupPlanState)
+				|| !bLifetimeSummaryValid
 				|| !IsBoolean(Function.bHasSuspendState)
 				|| !IsBoolean(Function.bHasExceptionCleanup)
 				|| !IsBoolean(Function.bCleanupPlanCoversAllTransfers)

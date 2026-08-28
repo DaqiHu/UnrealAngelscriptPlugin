@@ -35,8 +35,10 @@ AnalyzeTypedASTJITFunction(
 		GlobalDependencies = {});
 
 /**
- * Copies lifetime facts from one exact same-generation sealed Canonical body.
- * Unsupported non-empty cleanup families remain fail-closed as Unverified.
+ * Authenticates one exact same-generation sealed Canonical lifetime protocol
+ * and copies only its pointer-free stable-key/ABI-key summary. Unsupported
+ * non-empty cleanup families remain authenticated but fail closed at native
+ * eligibility until their object-frame ABI and exit emission are implemented.
  */
 ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJITCanonicalLifetimeFacts
 AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(

@@ -393,6 +393,22 @@ public:
 				*FString::Printf(TEXT(
 					"a sealed function with no cleanup actions must prove complete transfer coverage: %s"),
 					*Declaration)));
+			ASSERT_THAT(AreEqual(1u,
+				Semantic.LifetimeSummary.ProtocolRevision,
+				TEXT("the backend record must retain the authenticated protocol revision")));
+			ASSERT_THAT(IsFalse(
+				Semantic.LifetimeSummary.StableKey.IsZero(),
+				TEXT("the backend record must own a pointer-free stable lifetime key")));
+			ASSERT_THAT(IsFalse(
+				Semantic.LifetimeSummary.ABIKey.IsZero(),
+				TEXT("the backend record must own a pointer-free lifetime ABI key")));
+			ASSERT_THAT(AreEqual(0u,
+				Semantic.LifetimeSummary.RecordCount));
+			ASSERT_THAT(AreEqual(0u,
+				Semantic.LifetimeSummary.ExitPlanCount));
+			ASSERT_THAT(IsTrue(
+				Semantic.LifetimeSummary.bNativeObjectFrameABIAvailable,
+				TEXT("only the authenticated empty lifetime ABI is native today")));
 		}
 
 		AssertNoTypedBytecodeTraversal(

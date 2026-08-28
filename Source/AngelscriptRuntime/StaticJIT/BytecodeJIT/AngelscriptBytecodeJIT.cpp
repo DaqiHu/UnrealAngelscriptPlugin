@@ -4489,6 +4489,20 @@ namespace AngelscriptBytecodeStaticBackend_Private
 		}
 	}
 
+	static bool IsLegacyProviderAdoptionCompatible(
+		const asCScriptFunction* ScriptFunction)
+	{
+		// The product default still publishes its current route domain from the
+		// LEGACY compiler. Canonical lifetime planning can now make a script
+		// destructor available to the Bytecode fallback backend, but the LEGACY
+		// route domain does not publish that function. Keep it as an exact
+		// per-function VM fallback until the default route domain and native
+		// object-frame lifetime ABI cut over together. The authoritative trait,
+		// rather than declaration spelling, defines this temporary boundary.
+		return ScriptFunction != nullptr
+			&& !ScriptFunction->traits.GetTrait(asTRAIT_DESTRUCTOR);
+	}
+
 	static bool BuildGenerationSnapshotAdapters(
 		const FAngelscriptStaticJITBackendRequest& Request,
 		FAngelscriptFunctionRouteSnapshot& OutRoutes,
@@ -4523,6 +4537,13 @@ namespace AngelscriptBytecodeStaticBackend_Private
 						"StaticJIT generation snapshot contains an invalid verified function view.");
 				}
 				return false;
+			}
+			const asCScriptFunction* const ScriptFunction =
+				static_cast<const asCScriptFunction*>(
+					Function.EngineLocalFunction);
+			if (!IsLegacyProviderAdoptionCompatible(ScriptFunction))
+			{
+				continue;
 			}
 
 			FAngelscriptFunctionRoute& Route =

@@ -123,7 +123,8 @@ public:
 		const TArray<FString>& CanonicalCompileOptions,
 		const FAngelscriptCacheFunctionInputAuthorities& CurrentAuthorities,
 		const FAngelscriptCacheReadLimits& Limits,
-		FAngelscriptCacheReadBudget& Budget);
+		FAngelscriptCacheReadBudget& Budget,
+		const asSBuildArtifactRestoreContext* RestoreContext = nullptr);
 
 	// Candidate selection and current-input matching happen before this call.
 	// This boundary rechecks immutable execution/debug coordinates and delegates
@@ -136,6 +137,7 @@ public:
 		const FAngelscriptCacheReadLimits& Limits,
 		FAngelscriptCacheReadBudget& Budget,
 		FString& OutDetail,
+		const asSBuildArtifactRestoreContext* RestoreContext = nullptr,
 		const IAngelscriptFunctionArtifactExternalFunctionResolver*
 			ExternalFunctions = nullptr);
 };

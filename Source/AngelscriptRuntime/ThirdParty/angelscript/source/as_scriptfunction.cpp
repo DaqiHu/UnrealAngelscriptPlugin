@@ -1157,8 +1157,41 @@ bool asCScriptFunction::IsSignatureExceptNameAndReturnTypeEqual(const asCArray<a
 	return true;
 }
 
+static asCScriptFunction* ResolveBuildArtifactFunctionReference(
+	asCScriptEngine* engine,
+	int functionId,
+	const asSBuildArtifactRestoreContext* restoreContext)
+{
+	if( engine == 0 || functionId <= 0 )
+		return 0;
+	if( asUINT(functionId) < engine->scriptFunctions.GetLength()
+		&& engine->scriptFunctions[functionId] != 0 )
+	{
+		return engine->scriptFunctions[functionId];
+	}
+	if( restoreContext == 0 || !restoreContext->IsValid() )
+		return 0;
+
+	asCScriptFunction* match = 0;
+	for( asUINT i = 0; i < restoreContext->transientFunctionCount; ++i )
+	{
+		asCScriptFunction* const candidate =
+			restoreContext->transientFunctions[i];
+		if( candidate == 0 || candidate->engine != engine
+			|| candidate->id != functionId )
+		{
+			continue;
+		}
+		if( match != 0 && match != candidate )
+			return 0;
+		match = candidate;
+	}
+	return match;
+}
+
 // internal
-void asCScriptFunction::AddReferences()
+void asCScriptFunction::AddReferences(
+	const asSBuildArtifactRestoreContext* restoreContext)
 {
 	// Only count references if there is any bytecode
 	if( scriptData && scriptData->byteCode.GetLength() )
@@ -1223,7 +1256,14 @@ void asCScriptFunction::AddReferences()
 
 					int funcId = asBC_INTARG(&bc[n]+AS_PTR_SIZE);
 					if( funcId )
-						engine->scriptFunctions[funcId]->AddRefInternal();
+					{
+						asCScriptFunction* const function =
+							ResolveBuildArtifactFunctionReference(
+								engine, funcId, restoreContext);
+						asASSERT( function );
+						if( function )
+							function->AddRefInternal();
+					}
 				}
 				break;
 
@@ -1304,7 +1344,14 @@ void asCScriptFunction::AddReferences()
 					int funcId = asBC_INTARG(&bc[n]);
 					asASSERT( funcId > 0 );
 					if( funcId > 0 )
-						engine->scriptFunctions[funcId]->AddRefInternal();
+					{
+						asCScriptFunction* const function =
+							ResolveBuildArtifactFunctionReference(
+								engine, funcId, restoreContext);
+						asASSERT( function );
+						if( function )
+							function->AddRefInternal();
+					}
 				}
 				break;
 
@@ -1323,7 +1370,8 @@ void asCScriptFunction::AddReferences()
 }
 
 // internal
-void asCScriptFunction::ReleaseReferences()
+void asCScriptFunction::ReleaseReferences(
+	const asSBuildArtifactRestoreContext* restoreContext)
 {
 	// Only count references if there is any bytecode
 	if( scriptData && scriptData->byteCode.GetLength() )
@@ -1387,7 +1435,9 @@ void asCScriptFunction::ReleaseReferences()
 					int funcId = asBC_INTARG(&bc[n]+AS_PTR_SIZE);
 					if( funcId > 0 )
 					{
-						asCScriptFunction *fptr = engine->scriptFunctions[funcId];
+						asCScriptFunction *fptr =
+							ResolveBuildArtifactFunctionReference(
+								engine, funcId, restoreContext);
 						if( fptr )
 							fptr->ReleaseInternal();
 
@@ -1465,7 +1515,9 @@ void asCScriptFunction::ReleaseReferences()
 					int funcId = asBC_INTARG(&bc[n]);
 					if( funcId )
 					{
-						asCScriptFunction *fptr = engine->scriptFunctions[funcId];
+						asCScriptFunction *fptr =
+							ResolveBuildArtifactFunctionReference(
+								engine, funcId, restoreContext);
 						if( fptr )
 							fptr->ReleaseInternal();
 

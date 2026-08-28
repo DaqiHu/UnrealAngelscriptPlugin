@@ -48,10 +48,10 @@ static int32 AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_TypedBody(
 		TypedFrame.SetSourcePosition(103, 23);
 		([&]() -> int8
 		{
-			const int8 as_ast_e151_value = AngelscriptTypedASTJIT::WrapNarrow<int8>(as_ast_d16);
-			int8& as_ast_e151_target = as_ast_d17;
-			as_ast_e151_target = as_ast_e151_value;
-			return as_ast_e151_target;
+			const int8 as_ast_e99_value = AngelscriptTypedASTJIT::WrapNarrow<int8>(as_ast_d16);
+			int8& as_ast_e99_target = as_ast_d17;
+			as_ast_e99_target = as_ast_e99_value;
+			return as_ast_e99_target;
 		}());
 	}
 	{
@@ -79,7 +79,7 @@ static int32 AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_TypedBody(
 					return int32(30);
 				}
 			default:
-				TypedFrame.SetSourcePosition(104, 2);
+				TypedFrame.SetSourcePosition(111, 3);
 				FStaticJITFunction::SetSwitchValueInvalidException(Execution);
 				return {};
 		}

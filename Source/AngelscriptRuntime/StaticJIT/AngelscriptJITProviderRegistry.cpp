@@ -457,6 +457,22 @@ namespace
 				Function.CanonicalASTState =
 					SourceFunction.CanonicalASTState;
 				Function.CleanupPlanState = SourceFunction.CleanupPlanState;
+				Function.LifetimeProtocolRevision =
+					SourceFunction.LifetimeProtocolRevision;
+				Function.LifetimeStableKey = SourceFunction.LifetimeStableKey;
+				Function.LifetimeABIKey = SourceFunction.LifetimeABIKey;
+				Function.LifetimeActionFlags =
+					SourceFunction.LifetimeActionFlags;
+				Function.LifetimeExitPlanFlags =
+					SourceFunction.LifetimeExitPlanFlags;
+				Function.LifetimeSupportedExitMask =
+					SourceFunction.LifetimeSupportedExitMask;
+				Function.LifetimeRecordCount =
+					SourceFunction.LifetimeRecordCount;
+				Function.LifetimeExitPlanCount =
+					SourceFunction.LifetimeExitPlanCount;
+				Function.bNativeObjectFrameABIAvailable =
+					SourceFunction.bNativeObjectFrameABIAvailable != 0;
 				Function.bHasSuspendState = SourceFunction.bHasSuspendState != 0;
 				Function.bHasExceptionCleanup =
 					SourceFunction.bHasExceptionCleanup != 0;

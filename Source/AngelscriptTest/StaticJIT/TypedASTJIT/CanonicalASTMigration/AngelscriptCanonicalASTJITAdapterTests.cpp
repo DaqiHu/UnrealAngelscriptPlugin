@@ -9,6 +9,10 @@
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITModel.h"
 #include "StaticJIT/AngelscriptStaticJITGenerationSnapshot.h"
 
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_dump.h"
 #include "source/as_ast_lifetime.h"
@@ -35,6 +39,12 @@ public:
 		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
 		const asASTDeclId Fn = Sema.ActOnFunctionDecl(
 			Tu, "Run", IntType, asCSourceRange());
+		asCArray<asASTStmtId> Body;
+		Body.PushLast(Sema.ActOnReturnStmt(
+			Fn, Sema.ActOnIntegerLiteral(1, asCSourceRange()),
+			asCSourceRange()));
+		Context.SetBody(Fn, Sema.ActOnCompoundStmt(
+			Fn, Body, asCSourceRange()));
 		Sema.FinishDecl(Fn);
 
 		FAngelscriptTypedASTJITEligibilityInput Input;
@@ -79,6 +89,12 @@ public:
 		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
 		const asASTDeclId Fn = Sema.ActOnFunctionDecl(
 			Tu, "Run", IntType, asCSourceRange());
+		asCArray<asASTStmtId> Body;
+		Body.PushLast(Sema.ActOnReturnStmt(
+			Fn, Sema.ActOnIntegerLiteral(1, asCSourceRange()),
+			asCSourceRange()));
+		Context.SetBody(Fn, Sema.ActOnCompoundStmt(
+			Fn, Body, asCSourceRange()));
 		Sema.FinishDecl(Fn);
 		ASSERT_THAT(AreEqual(0, Context.Seal(), TEXT("JIT adapter needs a sealed AST")));
 
@@ -267,6 +283,26 @@ public:
 			TEXT("an exact scope-release action must publish a non-empty cleanup plan")));
 		ASSERT_THAT(IsTrue(ReleaseFacts.bCleanupPlanCoversAllTransfers,
 			TEXT("the authenticated release protocol proves every exit of this no-transfer body")));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint32>(asAST_LIFETIME_PROTOCOL_REVISION),
+			ReleaseFacts.LifetimeSummary.ProtocolRevision));
+		ASSERT_THAT(IsFalse(ReleaseFacts.LifetimeSummary.StableKey.IsZero(),
+			TEXT("the detached lifetime summary needs a stable semantic key")));
+		ASSERT_THAT(IsFalse(ReleaseFacts.LifetimeSummary.ABIKey.IsZero(),
+			TEXT("the detached lifetime summary needs a required ABI key")));
+		ASSERT_THAT(AreEqual(1u, ReleaseFacts.LifetimeSummary.RecordCount));
+		ASSERT_THAT(AreEqual(1u, ReleaseFacts.LifetimeSummary.ExitPlanCount));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint32>(
+				EAngelscriptTypedASTJITLifetimeActionFlags::ReleaseReference),
+			static_cast<uint32>(ReleaseFacts.LifetimeSummary.ActionFlags)));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint32>(
+				EAngelscriptTypedASTJITLifetimeExitPlanFlags::Normal),
+			static_cast<uint32>(ReleaseFacts.LifetimeSummary.ExitPlanFlags)));
+		ASSERT_THAT(IsFalse(
+			ReleaseFacts.LifetimeSummary.bNativeObjectFrameABIAvailable,
+			TEXT("a reference release cannot publish partial native cleanup ABI")));
 
 		const FAngelscriptTypedASTJITCanonicalLifetimeFacts DestructorFacts =
 			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
@@ -277,6 +313,107 @@ public:
 			TEXT("an exact scope-exit destructor action must retain its stronger classification")));
 		ASSERT_THAT(IsTrue(DestructorFacts.bCleanupPlanCoversAllTransfers,
 			TEXT("the authenticated destructor protocol proves every exit of this no-transfer body")));
+		ASSERT_THAT(AreEqual(1u,
+			DestructorFacts.LifetimeSummary.RecordCount));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint32>(
+				EAngelscriptTypedASTJITLifetimeActionFlags::DestroyValue),
+			static_cast<uint32>(
+				DestructorFacts.LifetimeSummary.ActionFlags)));
+		ASSERT_THAT(IsFalse(
+			DestructorFacts.LifetimeSummary.bNativeObjectFrameABIAvailable,
+			TEXT("a script destructor cannot publish partial native cleanup ABI")));
+	}
+
+	TEST_METHOD(CanonicalLifetimeFactsPublishAuthenticatedEmptyNativeABI)
+	{
+		asCASTContext Context;
+		asCSema Sema(nullptr, Context);
+		const asCSourceRange Range;
+		const asASTDeclId Tu = Sema.ActOnTranslationUnit(
+			"JitAuthenticatedEmptyLifetime");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId Function = Sema.ActOnFunctionDecl(
+			Tu, "Run", IntType, Range);
+		asCArray<asASTStmtId> Body;
+		Body.PushLast(Sema.ActOnReturnStmt(
+			Function, Sema.ActOnIntegerLiteral(7, Range), Range));
+		Context.SetBody(Function, Sema.ActOnCompoundStmt(
+			Function, Body, Range));
+		Sema.FinishDecl(Function);
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("empty lifetime summary fixture must seal")));
+
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts Facts =
+			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+				Context, Function);
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITCleanupPlanState::VerifiedEmpty,
+			Facts.CleanupPlanState));
+		ASSERT_THAT(IsTrue(Facts.bCleanupPlanCoversAllTransfers));
+		ASSERT_THAT(IsFalse(Facts.LifetimeSummary.StableKey.IsZero()));
+		ASSERT_THAT(IsFalse(Facts.LifetimeSummary.ABIKey.IsZero()));
+		ASSERT_THAT(AreEqual(0u, Facts.LifetimeSummary.RecordCount));
+		ASSERT_THAT(AreEqual(0u, Facts.LifetimeSummary.ExitPlanCount));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint32>(
+				EAngelscriptTypedASTJITLifetimeActionFlags::None),
+			static_cast<uint32>(Facts.LifetimeSummary.ActionFlags)));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint32>(
+				EAngelscriptTypedASTJITLifetimeExitPlanFlags::None),
+			static_cast<uint32>(Facts.LifetimeSummary.ExitPlanFlags)));
+		ASSERT_THAT(IsTrue(
+			Facts.LifetimeSummary.bNativeObjectFrameABIAvailable,
+			TEXT("an authenticated empty plan has the only currently implemented native lifetime ABI")));
+	}
+
+	TEST_METHOD(CanonicalTypedASTJITLifetimeAnalysisConsumesOnlyProtocolView)
+	{
+		const FString SourcePath = FPaths::Combine(
+			FPaths::ProjectDir(),
+			TEXT("Plugins/Angelscript/Source/AngelscriptRuntime/StaticJIT/TypedASTJIT/AngelscriptTypedASTJITCanonical.cpp"));
+		FString Source;
+		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(Source, *SourcePath),
+			TEXT("read the maintained TypedASTJIT canonical adapter source")));
+
+		ASSERT_THAT(IsTrue(Source.Contains(
+			TEXT("LifetimeView.GetRecord(")),
+			TEXT("AOT lifetime facts must consume authenticated view records")));
+		ASSERT_THAT(IsTrue(Source.Contains(
+			TEXT("LifetimeView.GetExitPlan(")),
+			TEXT("AOT lifetime facts must consume authenticated exit plans")));
+		ASSERT_THAT(IsFalse(Source.Contains(
+			TEXT("TryGetCanonicalLexicalCleanupRequirement")),
+			TEXT("AOT must not reclassify lifetime from DeclStmt/type shape")));
+		ASSERT_THAT(IsFalse(Source.Contains(
+			TEXT("TryReadCanonicalLexicalCleanupAction")),
+			TEXT("AOT must not decode compatibility cleanup statements")));
+		ASSERT_THAT(IsFalse(Source.Contains(
+			TEXT("FindCanonicalLifetimeDestructor")),
+			TEXT("AOT must not scan declarations by destructor spelling")));
+		ASSERT_THAT(IsFalse(Source.Contains(TEXT("LifetimeView.FindCleanupBinding("))));
+		ASSERT_THAT(IsFalse(Source.Contains(TEXT("LifetimeView.GetCleanupBinding("))));
+	}
+
+	TEST_METHOD(CanonicalBytecodeFallbackKeepsLegacyProviderDestructorBoundary)
+	{
+		const FString SourcePath = FPaths::Combine(
+			FPaths::ProjectDir(),
+			TEXT("Plugins/Angelscript/Source/AngelscriptRuntime/StaticJIT/BytecodeJIT/AngelscriptBytecodeJIT.cpp"));
+		FString Source;
+		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(Source, *SourcePath),
+			TEXT("read the maintained BytecodeJIT provider adapter source")));
+
+		ASSERT_THAT(IsTrue(Source.Contains(
+			TEXT("IsLegacyProviderAdoptionCompatible")),
+			TEXT("the canonical fallback chain must name its temporary LEGACY adoption boundary")));
+		ASSERT_THAT(IsTrue(Source.Contains(
+			TEXT("ScriptFunction->traits.GetTrait(asTRAIT_DESTRUCTOR)")),
+			TEXT("provider compatibility must use the authoritative function trait")));
+		ASSERT_THAT(IsFalse(Source.Contains(
+			TEXT("CanonicalDeclaration.StartsWith(TEXT(\"~\")")),
+			TEXT("provider compatibility must not infer destructors from declaration spelling")));
 	}
 
 	TEST_METHOD(CanonicalLifetimeFactsProveReverseLiveOnlyTransferCoverage)
@@ -361,19 +498,6 @@ public:
 		Context.AddLifetimeRecord(ProvenRecord);
 		Sema.FinishDecl(ProvenFunction);
 
-		const asASTDeclId MissingFunction = Sema.ActOnFunctionDecl(
-			Tu, "MissingLifetime", IntType, Range);
-		const asASTDeclId MissingLocal = Sema.ActOnVarDecl(
-			MissingFunction, "Missing", ValueType, Range);
-		Context.AddDeclInit(MissingLocal, Sema.ActOnNullLiteral(Range));
-		asCArray<asASTStmtId> MissingBody;
-		MissingBody.PushLast(MakeDeclStmt(MissingFunction, MissingLocal));
-		MissingBody.PushLast(Sema.ActOnReturnStmt(
-			MissingFunction, Sema.ActOnIntegerLiteral(3, Range), Range));
-		Context.SetBody(MissingFunction, Sema.ActOnCompoundStmt(
-			MissingFunction, MissingBody, Range));
-		Sema.FinishDecl(MissingFunction);
-
 		ASSERT_THAT(AreEqual(0, Context.Seal(),
 			TEXT("reverse live-only lifetime coverage fixture must seal")));
 
@@ -386,16 +510,6 @@ public:
 			TEXT("the exact scope-exit plan must retain destructor classification")));
 		ASSERT_THAT(IsTrue(ProvenFacts.bCleanupPlanCoversAllTransfers,
 			TEXT("early-before-decl, late-after-decl, and normal exit must prove exact live-only coverage")));
-
-		const FAngelscriptTypedASTJITCanonicalLifetimeFacts MissingFacts =
-			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
-				Context, MissingFunction);
-		ASSERT_THAT(AreEqual(
-			EAngelscriptTypedASTJITCleanupPlanState::Unverified,
-			MissingFacts.CleanupPlanState,
-			TEXT("a required lifetime with no explicit action must never masquerade as VerifiedEmpty")));
-		ASSERT_THAT(IsFalse(MissingFacts.bCleanupPlanCoversAllTransfers,
-			TEXT("missing transfer and normal-exit actions must fail structural coverage")));
 	}
 
 	TEST_METHOD(SourceCanonicalLifetimeFactsConsumeSemaLiveOnlyPlans)
@@ -463,6 +577,41 @@ public:
 			TEXT("source Sema scope-exit actions must retain destructor classification")));
 		ASSERT_THAT(IsTrue(Facts.bCleanupPlanCoversAllTransfers,
 			TEXT("AOT facts must prove the exact source-produced live-only plan")));
+		ASSERT_THAT(IsFalse(Facts.LifetimeSummary.StableKey.IsZero()));
+		ASSERT_THAT(IsFalse(Facts.LifetimeSummary.ABIKey.IsZero()));
+		ASSERT_THAT(IsFalse(
+			Facts.LifetimeSummary.bNativeObjectFrameABIAvailable));
+
+		FAngelscriptTypedASTJITEligibilityInput EligibilityInput;
+		EligibilityInput.bIsUFunctionRoot = true;
+		EligibilityInput.Purpose =
+			EAngelscriptTypedASTJITEligibilityPurpose::RootCallClosure;
+		EligibilityInput.SealedAST = Context;
+		EligibilityInput.CanonicalFunctionDecl = FunctionDecl;
+		EligibilityInput.Shape.SymbolName = TEXT("ASJIT_ProveSourceLifetime");
+		EligibilityInput.Shape.ReturnType =
+			asCDataType::CreatePrimitive(ttInt, false);
+		const FAngelscriptTypedASTJITEligibility Eligibility =
+			EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
+				EligibilityInput);
+		ASSERT_THAT(IsFalse(Eligibility.bEligible));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
+			Eligibility.Reason,
+			TEXT("one authenticated non-empty plan must fall back only this function")));
+		ASSERT_THAT(IsTrue(Eligibility.Detail.Contains(
+			TEXT("AuthenticatedLifetimeRequiresNativeObjectFrameABI")),
+			TEXT("fallback must name the missing native lifetime ABI, not an inferred destructor")));
+
+		FAngelscriptTypedASTJITEmitOptions EmitOptions;
+		const FAngelscriptTypedASTJITEmission Emission =
+			EmitTypedASTJITFunction(
+				*Context, FunctionDecl, EligibilityInput.Shape, EmitOptions);
+		ASSERT_THAT(IsFalse(Emission.bSuccess));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
+			Emission.FailureReason,
+			TEXT("AOT must not publish a partial native cleanup plan")));
 	}
 
 	TEST_METHOD(SourceObjectIteratorForeachPhaseProvesReturnBreakAndContinueCoverage)

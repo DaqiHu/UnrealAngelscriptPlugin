@@ -70,17 +70,17 @@ static int32 ASJIT_HelperBody_TypedASTExceptionHelper_b235edf227be8a1f_69188dd50
 		return ([&]() -> int32
 	{
 		TypedFrame.SetSourcePosition(46, 2);
-		const int32 as_ast_e65_left = as_ast_d18;
+		const int32 as_ast_e54_left = as_ast_d18;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		const int32 as_ast_e65_right = as_ast_d19;
+		const int32 as_ast_e54_right = as_ast_d19;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		return AngelscriptTypedASTJIT::CheckedDivide<int32>(Execution, as_ast_e65_left, as_ast_e65_right);
+		return AngelscriptTypedASTJIT::CheckedDivide<int32>(Execution, as_ast_e54_left, as_ast_e54_right);
 	}());
 	}
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
@@ -132,24 +132,24 @@ static int32 ASJIT_69188dd501ca6ad04292b14ffce76fe7ee5a023a8dea4e9b1078a27e0ba5e
 		TypedFrame.SetSourcePosition(52, 6);
 		([&]() -> int32
 		{
-			const int32 as_ast_e70_value = ([&]() -> int32
+			const int32 as_ast_e59_value = ([&]() -> int32
 		{
-			const int32 as_ast_e68_arg1 = as_ast_d22;
-			const int32 as_ast_e68_arg0 = as_ast_d21;
-			const int32 as_ast_e68_result = ASJIT_Helper_TypedASTExceptionHelper_b235edf227be8a1f_69188dd501ca6ad0(Execution, as_ast_e68_arg0, as_ast_e68_arg1);
+			const int32 as_ast_e57_arg1 = as_ast_d22;
+			const int32 as_ast_e57_arg0 = as_ast_d21;
+			const int32 as_ast_e57_result = ASJIT_Helper_TypedASTExceptionHelper_b235edf227be8a1f_69188dd501ca6ad0(Execution, as_ast_e57_arg0, as_ast_e57_arg1);
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return int32{};
 			}
-			return as_ast_e68_result;
+			return as_ast_e57_result;
 		}());
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return int32{};
 			}
-			int32& as_ast_e70_target = as_ast_d23;
-			as_ast_e70_target = as_ast_e70_value;
-			return as_ast_e70_target;
+			int32& as_ast_e59_target = as_ast_d23;
+			as_ast_e59_target = as_ast_e59_value;
+			return as_ast_e59_target;
 		}());
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
@@ -160,14 +160,14 @@ static int32 ASJIT_69188dd501ca6ad04292b14ffce76fe7ee5a023a8dea4e9b1078a27e0ba5e
 		TypedFrame.SetSourcePosition(53, 2);
 		([&]() -> int32
 		{
-			const int32 as_ast_e73_arg1 = int32(2);
-			const int32 as_ast_e73_arg0 = int32(1);
-			const int32 as_ast_e73_result = AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32, int32>(Execution, ASJIT_Call_TypedASTProviderPrivateAdd_6b00a476_69188dd501ca6ad04292b14ffce76fe7ee5a023a8dea4e9b1078a27e0ba5effb, as_ast_e73_arg0, as_ast_e73_arg1);
+			const int32 as_ast_e62_arg1 = int32(2);
+			const int32 as_ast_e62_arg0 = int32(1);
+			const int32 as_ast_e62_result = AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32, int32>(Execution, ASJIT_Call_TypedASTProviderPrivateAdd_6b00a476_69188dd501ca6ad04292b14ffce76fe7ee5a023a8dea4e9b1078a27e0ba5effb, as_ast_e62_arg0, as_ast_e62_arg1);
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return int32{};
 			}
-			return as_ast_e73_result;
+			return as_ast_e62_result;
 		}());
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
@@ -178,17 +178,17 @@ static int32 ASJIT_69188dd501ca6ad04292b14ffce76fe7ee5a023a8dea4e9b1078a27e0ba5e
 		TypedFrame.SetSourcePosition(54, 2);
 		return ([&]() -> int32
 	{
-		const int32 as_ast_e76_left = as_ast_d23;
+		const int32 as_ast_e65_left = as_ast_d23;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		const int32 as_ast_e76_right = int32(99);
+		const int32 as_ast_e65_right = int32(99);
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e76_left, as_ast_e76_right);
+		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e65_left, as_ast_e65_right);
 	}());
 	}
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
@@ -299,26 +299,26 @@ static int32 ASJIT_HelperBody_TypedASTFrameHelper_abfbff5b1d349921_837d3cf600bbf
 		TypedFrame.SetSourcePosition(32, 2);
 		return ([&]() -> int32
 	{
-		const int32 as_ast_e45_left = ([&]() -> int32
+		const int32 as_ast_e34_left = ([&]() -> int32
 	{
-		const int32 as_ast_e43_arg0 = int32(2);
-		const int32 as_ast_e43_result = AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32>(Execution, ASJIT_Call_TypedASTObserveFrame_b9dfce83_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72d62, as_ast_e43_arg0);
+		const int32 as_ast_e32_arg0 = int32(2);
+		const int32 as_ast_e32_result = AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32>(Execution, ASJIT_Call_TypedASTObserveFrame_b9dfce83_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72d62, as_ast_e32_arg0);
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		return as_ast_e43_result;
+		return as_ast_e32_result;
 	}());
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		const int32 as_ast_e45_right = as_ast_d9;
+		const int32 as_ast_e34_right = as_ast_d9;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e45_left, as_ast_e45_right);
+		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e34_left, as_ast_e34_right);
 	}());
 	}
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
@@ -378,23 +378,23 @@ static int32 ASJIT_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72
 		TypedFrame.SetSourcePosition(38, 6);
 		([&]() -> int32
 		{
-			const int32 as_ast_e49_value = ([&]() -> int32
+			const int32 as_ast_e38_value = ([&]() -> int32
 		{
-			const int32 as_ast_e47_arg0 = int32(1);
-			const int32 as_ast_e47_result = AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32>(Execution, ASJIT_Call_TypedASTObserveFrame_b9dfce83_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72d62, as_ast_e47_arg0);
+			const int32 as_ast_e36_arg0 = int32(1);
+			const int32 as_ast_e36_result = AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32>(Execution, ASJIT_Call_TypedASTObserveFrame_b9dfce83_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72d62, as_ast_e36_arg0);
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return int32{};
 			}
-			return as_ast_e47_result;
+			return as_ast_e36_result;
 		}());
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return int32{};
 			}
-			int32& as_ast_e49_target = as_ast_d14;
-			as_ast_e49_target = as_ast_e49_value;
-			return as_ast_e49_target;
+			int32& as_ast_e38_target = as_ast_d14;
+			as_ast_e38_target = as_ast_e38_value;
+			return as_ast_e38_target;
 		}());
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
@@ -406,23 +406,23 @@ static int32 ASJIT_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72
 		TypedFrame.SetSourcePosition(39, 6);
 		([&]() -> int32
 		{
-			const int32 as_ast_e53_value = ([&]() -> int32
+			const int32 as_ast_e42_value = ([&]() -> int32
 		{
-			const int32 as_ast_e51_arg0 = as_ast_d13;
-			const int32 as_ast_e51_result = ASJIT_Helper_TypedASTFrameHelper_abfbff5b1d349921_837d3cf600bbfd73(Execution, as_ast_e51_arg0);
+			const int32 as_ast_e40_arg0 = as_ast_d13;
+			const int32 as_ast_e40_result = ASJIT_Helper_TypedASTFrameHelper_abfbff5b1d349921_837d3cf600bbfd73(Execution, as_ast_e40_arg0);
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return int32{};
 			}
-			return as_ast_e51_result;
+			return as_ast_e40_result;
 		}());
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return int32{};
 			}
-			int32& as_ast_e53_target = as_ast_d15;
-			as_ast_e53_target = as_ast_e53_value;
-			return as_ast_e53_target;
+			int32& as_ast_e42_target = as_ast_d15;
+			as_ast_e42_target = as_ast_e42_value;
+			return as_ast_e42_target;
 		}());
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
@@ -434,23 +434,23 @@ static int32 ASJIT_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72
 		TypedFrame.SetSourcePosition(40, 6);
 		([&]() -> int32
 		{
-			const int32 as_ast_e57_value = ([&]() -> int32
+			const int32 as_ast_e46_value = ([&]() -> int32
 		{
-			const int32 as_ast_e55_arg0 = int32(3);
-			const int32 as_ast_e55_result = AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32>(Execution, ASJIT_Call_TypedASTObserveFrame_b9dfce83_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72d62, as_ast_e55_arg0);
+			const int32 as_ast_e44_arg0 = int32(3);
+			const int32 as_ast_e44_result = AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32>(Execution, ASJIT_Call_TypedASTObserveFrame_b9dfce83_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72d62, as_ast_e44_arg0);
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return int32{};
 			}
-			return as_ast_e55_result;
+			return as_ast_e44_result;
 		}());
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return int32{};
 			}
-			int32& as_ast_e57_target = as_ast_d16;
-			as_ast_e57_target = as_ast_e57_value;
-			return as_ast_e57_target;
+			int32& as_ast_e46_target = as_ast_d16;
+			as_ast_e46_target = as_ast_e46_value;
+			return as_ast_e46_target;
 		}());
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
@@ -461,30 +461,30 @@ static int32 ASJIT_837d3cf600bbfd7302d972297b4f147f140db3587b726f99e61f72ce21c72
 		TypedFrame.SetSourcePosition(41, 2);
 		return ([&]() -> int32
 	{
-		const int32 as_ast_e62_left = ([&]() -> int32
+		const int32 as_ast_e51_left = ([&]() -> int32
 	{
-		const int32 as_ast_e61_left = as_ast_d14;
+		const int32 as_ast_e50_left = as_ast_d14;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		const int32 as_ast_e61_right = as_ast_d15;
+		const int32 as_ast_e50_right = as_ast_d15;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e61_left, as_ast_e61_right);
+		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e50_left, as_ast_e50_right);
 	}());
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		const int32 as_ast_e62_right = as_ast_d16;
+		const int32 as_ast_e51_right = as_ast_d16;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e62_left, as_ast_e62_right);
+		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e51_left, as_ast_e51_right);
 	}());
 	}
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
@@ -924,14 +924,14 @@ static int32 ASJIT_efe75e2004503ee73f7d821394e777a4f886f4fed6fbc653757ce63fbaf27
 				TypedFrame.SetSourcePosition(6, 3);
 				return ([&]() -> int32
 			{
-				const int32 as_ast_e10_left = as_ast_d3;
+				const int32 as_ast_e9_left = as_ast_d3;
 				if (UNLIKELY(Execution.bExceptionThrown))
 				{
 					return int32{};
 				}
-				const int32 as_ast_e10_right = ([&]() -> int32
+				const int32 as_ast_e9_right = ([&]() -> int32
 			{
-				const int32 as_ast_e9_arg0 = ([&]() -> int32
+				const int32 as_ast_e8_arg0 = ([&]() -> int32
 				{
 					const int32 as_ast_e7_left = as_ast_d3;
 					if (UNLIKELY(Execution.bExceptionThrown))
@@ -945,18 +945,18 @@ static int32 ASJIT_efe75e2004503ee73f7d821394e777a4f886f4fed6fbc653757ce63fbaf27
 					}
 					return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e7_left, as_ast_e7_right);
 				}());
-				const int32 as_ast_e9_result = ASJIT_Helper_TypedASTSelfRecursion_efe75e2004503ee7_efe75e2004503ee7(Execution, as_ast_e9_arg0);
+				const int32 as_ast_e8_result = ASJIT_Helper_TypedASTSelfRecursion_efe75e2004503ee7_efe75e2004503ee7(Execution, as_ast_e8_arg0);
 				if (UNLIKELY(Execution.bExceptionThrown))
 				{
 					return int32{};
 				}
-				return as_ast_e9_result;
+				return as_ast_e8_result;
 			}());
 				if (UNLIKELY(Execution.bExceptionThrown))
 				{
 					return int32{};
 				}
-				return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e10_left, as_ast_e10_right);
+				return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e9_left, as_ast_e9_right);
 			}());
 			}
 		}
@@ -1053,17 +1053,17 @@ static int32 ASJIT_HelperBody_TypedASTMutualOdd_9b21b2a1cce2fd68_f3cd404bfc2f5d0
 		TypedFrame.SetSourcePosition(13, 2);
 		const bool as_ast_stmt_8_condition = ([&]() -> bool
 		{
-			const int32 as_ast_e16_left = as_ast_d5;
+			const int32 as_ast_e13_left = as_ast_d5;
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return bool{};
 			}
-			const int32 as_ast_e16_right = int32(0);
+			const int32 as_ast_e13_right = int32(0);
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return bool{};
 			}
-			return (as_ast_e16_left > as_ast_e16_right);
+			return (as_ast_e13_left > as_ast_e13_right);
 		}());
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
@@ -1075,39 +1075,39 @@ static int32 ASJIT_HelperBody_TypedASTMutualOdd_9b21b2a1cce2fd68_f3cd404bfc2f5d0
 				TypedFrame.SetSourcePosition(15, 3);
 				return ([&]() -> int32
 			{
-				const int32 as_ast_e23_left = ([&]() -> int32
+				const int32 as_ast_e19_left = ([&]() -> int32
 			{
-				const int32 as_ast_e21_arg0 = ([&]() -> int32
+				const int32 as_ast_e17_arg0 = ([&]() -> int32
 				{
-					const int32 as_ast_e19_left = as_ast_d5;
+					const int32 as_ast_e16_left = as_ast_d5;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e19_right = int32(1);
+					const int32 as_ast_e16_right = int32(1);
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e19_left, as_ast_e19_right);
+					return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e16_left, as_ast_e16_right);
 				}());
-				const int32 as_ast_e21_result = ASJIT_Helper_TypedASTMutualEven_f3cd404bfc2f5d0c_f3cd404bfc2f5d0c(Execution, as_ast_e21_arg0);
+				const int32 as_ast_e17_result = ASJIT_Helper_TypedASTMutualEven_f3cd404bfc2f5d0c_f3cd404bfc2f5d0c(Execution, as_ast_e17_arg0);
 				if (UNLIKELY(Execution.bExceptionThrown))
 				{
 					return int32{};
 				}
-				return as_ast_e21_result;
+				return as_ast_e17_result;
 			}());
 				if (UNLIKELY(Execution.bExceptionThrown))
 				{
 					return int32{};
 				}
-				const int32 as_ast_e23_right = int32(1);
+				const int32 as_ast_e19_right = int32(1);
 				if (UNLIKELY(Execution.bExceptionThrown))
 				{
 					return int32{};
 				}
-				return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e23_left, as_ast_e23_right);
+				return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e19_left, as_ast_e19_right);
 			}());
 			}
 		}
@@ -1175,17 +1175,17 @@ static int32 ASJIT_f3cd404bfc2f5d0cb21bd27c84491cb3feaeaa4979c279113354ebbfe88ee
 		TypedFrame.SetSourcePosition(23, 2);
 		const bool as_ast_stmt_13_condition = ([&]() -> bool
 		{
-			const int32 as_ast_e30_left = as_ast_d7;
+			const int32 as_ast_e23_left = as_ast_d7;
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return bool{};
 			}
-			const int32 as_ast_e30_right = int32(0);
+			const int32 as_ast_e23_right = int32(0);
 			if (UNLIKELY(Execution.bExceptionThrown))
 			{
 				return bool{};
 			}
-			return (as_ast_e30_left > as_ast_e30_right);
+			return (as_ast_e23_left > as_ast_e23_right);
 		}());
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
@@ -1197,39 +1197,39 @@ static int32 ASJIT_f3cd404bfc2f5d0cb21bd27c84491cb3feaeaa4979c279113354ebbfe88ee
 				TypedFrame.SetSourcePosition(25, 3);
 				return ([&]() -> int32
 			{
-				const int32 as_ast_e37_left = ([&]() -> int32
+				const int32 as_ast_e29_left = ([&]() -> int32
 			{
-				const int32 as_ast_e35_arg0 = ([&]() -> int32
+				const int32 as_ast_e27_arg0 = ([&]() -> int32
 				{
-					const int32 as_ast_e33_left = as_ast_d7;
+					const int32 as_ast_e26_left = as_ast_d7;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e33_right = int32(1);
+					const int32 as_ast_e26_right = int32(1);
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e33_left, as_ast_e33_right);
+					return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e26_left, as_ast_e26_right);
 				}());
-				const int32 as_ast_e35_result = ASJIT_Helper_TypedASTMutualOdd_9b21b2a1cce2fd68_f3cd404bfc2f5d0c(Execution, as_ast_e35_arg0);
+				const int32 as_ast_e27_result = ASJIT_Helper_TypedASTMutualOdd_9b21b2a1cce2fd68_f3cd404bfc2f5d0c(Execution, as_ast_e27_arg0);
 				if (UNLIKELY(Execution.bExceptionThrown))
 				{
 					return int32{};
 				}
-				return as_ast_e35_result;
+				return as_ast_e27_result;
 			}());
 				if (UNLIKELY(Execution.bExceptionThrown))
 				{
 					return int32{};
 				}
-				const int32 as_ast_e37_right = int32(1);
+				const int32 as_ast_e29_right = int32(1);
 				if (UNLIKELY(Execution.bExceptionThrown))
 				{
 					return int32{};
 				}
-				return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e37_left, as_ast_e37_right);
+				return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e29_left, as_ast_e29_right);
 			}());
 			}
 		}

@@ -7,6 +7,7 @@
 #include "AngelscriptTestModuleScope.h"
 #include "ClassGenerator/ASClass.h"
 #include "ClassGenerator/ASFunction.h"
+#include "Cache/AngelscriptCacheService.h"
 #include "Core/AngelscriptUhtCoverageTestTypes.h"
 #include "StaticJIT/AOT/AngelscriptStaticJITAotFixture.h"
 #include "StaticJIT/AOT/AngelscriptStaticJITAotGeneration.h"
@@ -4399,6 +4400,24 @@ public:
 
 		FAngelscriptEngine& SourceEngine = *SourceEnginePtr;
 		FAngelscriptEngineScope SourceScope(SourceEngine);
+		ASSERT_THAT(IsTrue(
+			SourceEngine.GetRuntimeConfig().bUseCanonicalStagedCompiler,
+			TEXT("A committed TypedASTJIT Provider must be adopted by source compiled through the same CANONICAL compiler pipeline that produced its execution identity; this fixture-local requirement does not change the product-default LEGACY route")));
+		ASSERT_THAT(IsFalse(
+			SourceEngine.IsCacheV2Enabled(),
+			TEXT("Current-source Provider adoption must remain independent of the product-default-disabled Cache V2 lifecycle")));
+		FAngelscriptCacheService* const CacheService =
+			SourceEngine.GetCacheService();
+		ASSERT_THAT(IsNotNull(CacheService));
+		if (CacheService == nullptr)
+		{
+			return;
+		}
+		const FAngelscriptCacheLifecyclePublications CachePublications =
+			CacheService->GetLifecyclePublications();
+		ASSERT_THAT(IsFalse(CachePublications.Current.IsValid()));
+		ASSERT_THAT(IsFalse(CachePublications.PendingColdStart.IsValid()));
+		ASSERT_THAT(IsFalse(CachePublications.LatestSuccessful.IsValid()));
 
 		const TSharedPtr<FAngelscriptModuleDesc> Module =
 			SourceEngine.GetModuleByModuleName(
@@ -4420,9 +4439,15 @@ public:
 			return;
 		}
 
+		const FAngelscriptJITProviderRouteRefreshResult DiagnosticRefresh =
+			FAngelscriptJITProviderRouter::Refresh(SourceEngine);
+		TestRunner->AddInfo(DiagnosticRefresh.Detail);
+		ASSERT_THAT(IsTrue(
+			DiagnosticRefresh.IsApplied(), DiagnosticRefresh.Detail));
+
 		const asSJITFunctionBinding Binding = Function->GetJITBinding();
-		ASSERT_THAT(IsNotNull(Binding.VMEntry));
-		ASSERT_THAT(IsNotNull(Binding.RawEntry));
+		ASSERT_THAT(IsNotNull(Binding.VMEntry, DiagnosticRefresh.Detail));
+		ASSERT_THAT(IsNotNull(Binding.RawEntry, DiagnosticRefresh.Detail));
 		ASSERT_THAT(IsNotNull(
 			FAngelscriptJITBindingContext::FromBindingUserData(
 				Binding.UserData)));

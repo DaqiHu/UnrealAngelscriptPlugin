@@ -498,7 +498,8 @@ FAngelscriptCacheCompilerBridge::TryRestoreFunctionFromValidatedGraph(
 	const TArray<FString>& CanonicalCompileOptions,
 	const FAngelscriptCacheFunctionInputAuthorities& CurrentAuthorities,
 	const FAngelscriptCacheReadLimits& Limits,
-	FAngelscriptCacheReadBudget& Budget)
+	FAngelscriptCacheReadBudget& Budget,
+	const asSBuildArtifactRestoreContext* RestoreContext)
 {
 	FAngelscriptCacheFunctionCandidateLookupResult Result;
 	if (!Invocation.IsCacheable() || CurrentFunctionKey.Hash.IsZero())
@@ -642,6 +643,7 @@ FAngelscriptCacheCompilerBridge::TryRestoreFunctionFromValidatedGraph(
 		Limits,
 		Budget,
 		Result.Detail,
+		RestoreContext,
 		CurrentAuthorities.ExternalFunctions);
 	if (Result.RestoreResult == asBUILD_ARTIFACT_RESTORE_RESTORED)
 	{
@@ -678,6 +680,7 @@ FAngelscriptCacheCompilerBridge::TryRestoreFunctionArtifact(
 	const FAngelscriptCacheReadLimits& Limits,
 	FAngelscriptCacheReadBudget& Budget,
 	FString& OutDetail,
+	const asSBuildArtifactRestoreContext* RestoreContext,
 	const IAngelscriptFunctionArtifactExternalFunctionResolver*
 		ExternalFunctions)
 {
@@ -734,7 +737,8 @@ FAngelscriptCacheCompilerBridge::TryRestoreFunctionArtifact(
 			CachedBody.Identity.Content.Execution,
 			Limits,
 			Budget,
-			TargetFunction);
+			TargetFunction,
+			RestoreContext);
 	if (!Restore.IsSuccess())
 	{
 		OutDetail = Codec.GetLastExecutionFailureDetail();

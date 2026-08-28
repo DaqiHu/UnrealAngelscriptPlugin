@@ -50,17 +50,17 @@ static double AS_Test_Differential_TypedAST_SemanticPowerBoundary_TypedBody(
 		return ([&]() -> double
 	{
 		TypedFrame.SetSourcePosition(77, 3);
-		const double as_ast_e74_left = as_ast_d25;
+		const double as_ast_e70_left = as_ast_d25;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return double{};
 		}
-		const double as_ast_e74_right = as_ast_d26;
+		const double as_ast_e70_right = as_ast_d26;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return double{};
 		}
-		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_ast_e74_left, as_ast_e74_right);
+		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_ast_e70_left, as_ast_e70_right);
 	}());
 	}
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.

@@ -209,6 +209,7 @@ int UnchangedBody()
 	static asEBuildArtifactRestoreResult RestoreFromValidatedGraph(
 		const asSBuildArtifactInvocation* Invocation,
 		asCScriptFunction* Function,
+		const asSBuildArtifactRestoreContext* RestoreContext,
 		void* UserData)
 	{
 		if (Invocation == nullptr || Function == nullptr || UserData == nullptr)
@@ -248,7 +249,8 @@ int UnchangedBody()
 				Context.Options.CanonicalCompileOptions,
 				CurrentAuthorities,
 				Context.Limits,
-				*Context.Budget);
+				*Context.Budget,
+				RestoreContext);
 		return Observation.Lookup.RestoreResult;
 	}
 

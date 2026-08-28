@@ -104,9 +104,34 @@ enum asEBuildArtifactRestoreResult
 	asBUILD_ARTIFACT_RESTORE_NOT_CACHEABLE = 4
 };
 
+// Synchronous, non-owning restore coordinates for one detached build
+// transaction. Prepared Canonical CodeGen may create generated function shells
+// before publishing them to the module/Engine tables; a cached function body is
+// allowed to resolve same-module references against this complete pending set.
+// These pointers are never part of invocation identity, persisted artifacts, or
+// callback-owned state and are valid only for the duration of the callback.
+struct asSBuildArtifactRestoreContext
+{
+	asSBuildArtifactRestoreContext()
+		: descriptorVersion(1), transientFunctions(0), transientFunctionCount(0)
+	{
+	}
+
+	bool IsValid() const
+	{
+		return descriptorVersion == 1
+			&& (transientFunctionCount == 0 || transientFunctions != 0);
+	}
+
+	asUINT descriptorVersion;
+	asCScriptFunction *const *transientFunctions;
+	asUINT transientFunctionCount;
+};
+
 typedef asEBuildArtifactRestoreResult (*asBUILDARTIFACTRESTORECALLBACK_t)(
 	const asSBuildArtifactInvocation *invocation,
 	asCScriptFunction *function,
+	const asSBuildArtifactRestoreContext *restoreContext,
 	void *userData);
 
 // These are compiler-input dependencies, not module rebuild edges. They remain

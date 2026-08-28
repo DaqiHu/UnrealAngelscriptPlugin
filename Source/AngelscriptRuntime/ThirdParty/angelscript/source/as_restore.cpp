@@ -334,8 +334,11 @@ static const asUINT AS_FUNCTION_ARTIFACT_MINIMUM_SIZE = 13;
 static const asDWORD AS_FUNCTION_ARTIFACT_KNOWN_TRAITS = 0x07FFFFFFu;
 //[UE--]
 
-asCReader::asCReader(asCModule* _module, asIBinaryStream* _stream, asCScriptEngine* _engine)
-	: module(_module), stream(_stream), engine(_engine), error(false), bytesRead(0),
+asCReader::asCReader(asCModule* _module, asIBinaryStream* _stream,
+	asCScriptEngine* _engine,
+	const asSBuildArtifactRestoreContext* _restoreContext)
+	: module(_module), stream(_stream), engine(_engine),
+	  buildArtifactRestoreContext(_restoreContext), error(false), bytesRead(0),
 	  validatingFunctionArtifact(false), functionArtifactValidationStage(asFUNCTION_ARTIFACT_STAGE_NONE),
 	  functionArtifactStackNeeded(0), functionArtifactObjVariablesOnHeap(0),
 	  functionArtifactRuntimeStateOffset(asUINT(-1)),
@@ -648,7 +651,7 @@ int asCReader::CommitFunctionArtifactToExisting(
 	artifact->scriptData = emptyData;
 	target->parameterNames.SwapWith(artifact->parameterNames);
 	target->dontCleanUpOnException = artifact->dontCleanUpOnException;
-	target->AddReferences();
+	target->AddReferences(buildArtifactRestoreContext);
 	artifact->DestroyHalfCreated();
 	return asSUCCESS;
 }
@@ -1683,6 +1686,45 @@ void asCReader::ReadUsedFunctions()
 
 						usedFunctions[n] = f;
 						break;
+					}
+
+					// Prepared Canonical CodeGen keeps generated functions detached
+					// until every body has restored or emitted successfully. Resolve a
+					// same-module dependency from that complete pending graph only when
+					// the published module table had no match. Duplicate pending matches
+					// are rejected rather than selected by transaction order.
+					if( c == 'm' && usedFunctions[n] == 0
+						&& validatingFunctionArtifact
+						&& buildArtifactRestoreContext != 0 )
+					{
+						if( !buildArtifactRestoreContext->IsValid() )
+						{
+							Error(TXT_INVALID_BYTECODE_d);
+							return;
+						}
+						asCScriptFunction* match = 0;
+						for( asUINT i = 0;
+							i < buildArtifactRestoreContext->transientFunctionCount;
+							++i )
+						{
+							asCScriptFunction* const f =
+								buildArtifactRestoreContext->transientFunctions[i];
+							if( f == 0 || f->module != functionModule
+								|| f->engine != engine
+								|| func.objectType != f->objectType
+								|| func.funcType != f->funcType
+								|| func.nameSpace != f->nameSpace
+								|| !func.IsSignatureEqual(f) )
+								continue;
+
+							if( match != 0 && match != f )
+							{
+								Error(TXT_INVALID_BYTECODE_d);
+								return;
+							}
+							match = f;
+						}
+						usedFunctions[n] = match;
 					}
 				}
 			}
@@ -5483,7 +5525,6 @@ int asCWriter::WriteFunctionArtifact(asCScriptFunction *func,
 		if( func->scriptData->objVariableTypes[n] != 0 )
 			FindTypeInfoIdx(func->scriptData->objVariableTypes[n]);
 	}
-
 	// Function signatures may expose types not seen in the root bytecode. Emit
 	// usedTypes only after the signature table has reached its fixed point.
 	const asUINT functionCount = usedFunctions.GetLength();

@@ -11307,8 +11307,10 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		asCScriptFunction* function;
 		asCScriptFunction::ScriptFunctionData* originalData;
 		bool originalDontCleanUpOnException;
+		bool referencesAdded;
 	};
 	asCArray<asSPreparedBodyState> states;
+	asSBuildArtifactRestoreContext restoreContext;
 
 	auto RollbackBodies = [&]()
 	{
@@ -11317,6 +11319,8 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 			asSPreparedBodyState& state = states[i];
 			if( state.function == 0 )
 				continue;
+			if( state.referencesAdded )
+				state.function->ReleaseReferences(&restoreContext);
 			state.function->DeallocateScriptFunctionData();
 			state.function->scriptData = state.originalData;
 			state.function->dontCleanUpOnException =
@@ -11329,6 +11333,10 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 	// declaration/function pairs that keep emitDecls and emitFunctions aligned.
 	for( asUINT i = 0; i < preparedFactories.GetLength(); ++i )
 		emitFunctions.PushLast(preparedFactories[i].factory);
+
+	restoreContext.transientFunctions = emitFunctions.GetLength() != 0
+		? emitFunctions.AddressOf() : 0;
+	restoreContext.transientFunctionCount = emitFunctions.GetLength();
 
 	// Give every target a fresh unpublished body state first. The previous body
 	// remains detached and untouched until the entire module has emitted.
@@ -11351,6 +11359,7 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		state.originalData = function->scriptData;
 		state.originalDontCleanUpOnException =
 			function->dontCleanUpOnException;
+		state.referencesAdded = false;
 		function->scriptData = 0;
 		function->AllocateScriptFunctionData();
 		if( function->scriptData == 0 )
@@ -11394,8 +11403,14 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		const asSBuildArtifactInvocation invocation =
 			preparedBuilder.BeginCanonicalBuildArtifactCompile(
 				context, declaration, function);
+		const asEBuildArtifactRestoreResult restoreResult =
+			preparedBuilder.TryRestoreBuildArtifact(
+				invocation, function, &restoreContext);
+		const bool emitterInvoked =
+			restoreResult != asBUILD_ARTIFACT_RESTORE_RESTORED;
+		states[i].referencesAdded = !emitterInvoked;
 #if WITH_ANGELSCRIPT_UNITTESTS
-		if( i == testFailureBeforeFunctionEmission )
+		if( emitterInvoked && i == testFailureBeforeFunctionEmission )
 		{
 			failed = true;
 			error = testFailureCode;
@@ -11408,70 +11423,73 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 				error);
 			preparedBuilder.CompleteBuildArtifactCompile(
 				invocation, function, error,
-				asBUILD_ARTIFACT_RESTORE_MISS, true);
+				restoreResult, true);
 			RollbackBodies();
 			RollbackPreparedGlobals();
 			return error;
 		}
 #endif
-		asCCanonicalFunctionEmitter emitter(
-			context,
-			&preparedBuilder,
-			&bridge,
-			globalArtifact,
-			binds,
-			globals,
-			captureDecls,
-			stringConstants,
-			error,
-			lastFailLine,
-			failureDetail);
-		const bool oldHardDependencyPolicy =
-			preparedBuilder.bValueDependenciesAreHard;
-		preparedBuilder.bValueDependenciesAreHard =
-			declaration->kind == asAST_DECL_CONSTRUCTOR;
-		const bool emitted = emitter.Emit(function, declaration);
-		preparedBuilder.bValueDependenciesAreHard = oldHardDependencyPolicy;
-		if( !emitted )
+		if( emitterInvoked )
 		{
-			failed = true;
-			if( error == asAST_VERIFY_OK )
-				error = asNOT_SUPPORTED;
-			if( lastFailLine == 0 )
-				lastFailLine = __LINE__;
-			if( failureDetail.GetLength() == 0 )
+			asCCanonicalFunctionEmitter emitter(
+				context,
+				&preparedBuilder,
+				&bridge,
+				globalArtifact,
+				binds,
+				globals,
+				captureDecls,
+				stringConstants,
+				error,
+				lastFailLine,
+				failureDetail);
+			const bool oldHardDependencyPolicy =
+				preparedBuilder.bValueDependenciesAreHard;
+			preparedBuilder.bValueDependenciesAreHard =
+				declaration->kind == asAST_DECL_CONSTRUCTOR;
+			const bool emitted = emitter.Emit(function, declaration);
+			preparedBuilder.bValueDependenciesAreHard = oldHardDependencyPolicy;
+			if( !emitted )
 			{
-				failureDetail.Format(
-					"prepared emitter returned false without diagnostic ordinal=%u key=%s error=%d",
-					i,
-					declaration && declaration->stableKey.AddressOf()
-						? declaration->stableKey.AddressOf() : "<unknown>",
-					error);
-			}
-			if( declaration->range.begin.IsValid() )
-			{
-				asSSourceLineColumn location = {};
-				if( context.GetSourceManager().GetLineColumn(
-					declaration->range.begin, location) )
+				failed = true;
+				if( error == asAST_VERIFY_OK )
+					error = asNOT_SUPPORTED;
+				if( lastFailLine == 0 )
+					lastFailLine = __LINE__;
+				if( failureDetail.GetLength() == 0 )
 				{
-					const char* const key =
-						context.GetSourceManager().GetLogicalKey(
-							declaration->range.begin.fileID);
-					failureSection = key ? key : "";
-					failureRow = location.row;
-					failureColumn = location.column;
+					failureDetail.Format(
+						"prepared emitter returned false without diagnostic ordinal=%u key=%s error=%d",
+						i,
+						declaration && declaration->stableKey.AddressOf()
+							? declaration->stableKey.AddressOf() : "<unknown>",
+						error);
 				}
+				if( declaration->range.begin.IsValid() )
+				{
+					asSSourceLineColumn location = {};
+					if( context.GetSourceManager().GetLineColumn(
+						declaration->range.begin, location) )
+					{
+						const char* const key =
+							context.GetSourceManager().GetLogicalKey(
+								declaration->range.begin.fileID);
+						failureSection = key ? key : "";
+						failureRow = location.row;
+						failureColumn = location.column;
+					}
+				}
+				preparedBuilder.CompleteBuildArtifactCompile(
+					invocation, function, error,
+					restoreResult, true);
+				RollbackBodies();
+				RollbackPreparedGlobals();
+				return error;
 			}
-			preparedBuilder.CompleteBuildArtifactCompile(
-				invocation, function, error,
-				asBUILD_ARTIFACT_RESTORE_MISS, true);
-			RollbackBodies();
-			RollbackPreparedGlobals();
-			return error;
 		}
 		preparedBuilder.CompleteBuildArtifactCompile(
 			invocation, function, asSUCCESS,
-			asBUILD_ARTIFACT_RESTORE_MISS, true);
+			restoreResult, emitterInvoked);
 	}
 
 	for( asUINT i = 0; i < preparedFactories.GetLength(); ++i )
@@ -11504,8 +11522,14 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		const asSBuildArtifactInvocation invocation =
 			preparedBuilder.BeginCanonicalBuildArtifactCompile(
 				context, constructorDecl, pair.factory);
+		const asEBuildArtifactRestoreResult restoreResult =
+			preparedBuilder.TryRestoreBuildArtifact(
+				invocation, pair.factory, &restoreContext);
+		const bool emitterInvoked =
+			restoreResult != asBUILD_ARTIFACT_RESTORE_RESTORED;
+		states[emitDecls.GetLength() + i].referencesAdded = !emitterInvoked;
 #if WITH_ANGELSCRIPT_UNITTESTS
-		if( i == testFailureBeforePreparedFactoryEmission )
+		if( emitterInvoked && i == testFailureBeforePreparedFactoryEmission )
 		{
 			failed = true;
 			error = testPreparedFactoryFailureCode;
@@ -11518,12 +11542,13 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 				error);
 			preparedBuilder.CompleteBuildArtifactCompile(
 				invocation, pair.factory, error,
-				asBUILD_ARTIFACT_RESTORE_MISS, true);
+				restoreResult, true);
 			RollbackBodies();
 			RollbackPreparedGlobals();
 			return error;
 		}
-		if( emitDecls.GetLength() + i == testFailureBeforeFunctionEmission )
+		if( emitterInvoked
+			&& emitDecls.GetLength() + i == testFailureBeforeFunctionEmission )
 		{
 			failed = true;
 			error = testFailureCode;
@@ -11536,13 +11561,14 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 				error);
 			preparedBuilder.CompleteBuildArtifactCompile(
 				invocation, pair.factory, error,
-				asBUILD_ARTIFACT_RESTORE_MISS, true);
+				restoreResult, true);
 			RollbackBodies();
 			RollbackPreparedGlobals();
 			return error;
 		}
 #endif
-		if( !EmitCanonicalConstructorFactory(preparedBuilder, pair) )
+		if( emitterInvoked
+			&& !EmitCanonicalConstructorFactory(preparedBuilder, pair) )
 		{
 			failed = true;
 			error = asNOT_SUPPORTED;
@@ -11553,14 +11579,14 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 					? constructorDecl->stableKey.AddressOf() : "<unknown>");
 			preparedBuilder.CompleteBuildArtifactCompile(
 				invocation, pair.factory, error,
-				asBUILD_ARTIFACT_RESTORE_MISS, true);
+				restoreResult, true);
 			RollbackBodies();
 			RollbackPreparedGlobals();
 			return error;
 		}
 		preparedBuilder.CompleteBuildArtifactCompile(
 			invocation, pair.factory, asSUCCESS,
-			asBUILD_ARTIFACT_RESTORE_MISS, true);
+			restoreResult, emitterInvoked);
 	}
 
 	const asSRuntimeTypeBindingEnvironment bindingEnvironment =
@@ -11639,7 +11665,8 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 	for( asUINT i = 0; i < states.GetLength(); ++i )
 	{
 		asSPreparedBodyState& state = states[i];
-		state.function->AddReferences();
+		if( !state.referencesAdded )
+			state.function->AddReferences();
 		asCScriptFunction::ScriptFunctionData* const generatedData =
 			state.function->scriptData;
 		state.function->scriptData = state.originalData;

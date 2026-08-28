@@ -8,7 +8,7 @@
 
 namespace FAngelscriptJITProviderDiagnosticsAbi
 {
-	inline constexpr uint32 SchemaRevision = 1;
+	inline constexpr uint32 SchemaRevision = 2;
 	inline constexpr uint32 MaximumFallbackChainCount = 8;
 	inline constexpr uint32 MaximumBackendAttemptCount = 1u << 20;
 	inline constexpr uint32 MaximumSemanticFunctionCount = 1u << 20;
@@ -56,6 +56,15 @@ FAngelscriptJITProviderCanonicalFunctionDiagnostic
 	int32 ReceiverParameterIndex = INDEX_NONE;
 	const TCHAR* CanonicalASTState = TEXT("Missing");
 	const TCHAR* CleanupPlanState = TEXT("Unverified");
+	uint32 LifetimeProtocolRevision = 0;
+	FAngelscriptHash256 LifetimeStableKey;
+	FAngelscriptHash256 LifetimeABIKey;
+	uint32 LifetimeActionFlags = 0;
+	uint32 LifetimeExitPlanFlags = 0;
+	uint32 LifetimeSupportedExitMask = 0;
+	uint32 LifetimeRecordCount = 0;
+	uint32 LifetimeExitPlanCount = 0;
+	uint32 bNativeObjectFrameABIAvailable = 0;
 	uint32 bHasSuspendState = 0;
 	uint32 bHasExceptionCleanup = 0;
 	uint32 bCleanupPlanCoversAllTransfers = 0;

@@ -1353,7 +1353,8 @@ FAngelscriptFunctionArtifactCodec::ValidateRawExecutionArtifact(
 	const FAngelscriptCacheReadLimits& Limits,
 	FAngelscriptCacheReadBudget& Budget,
 	IAngelscriptCacheCandidateChargeSink& GraphCandidate,
-	FAngelscriptCacheOpaquePayloadSummary& OutSummary) const
+	FAngelscriptCacheOpaquePayloadSummary& OutSummary,
+	const asSBuildArtifactRestoreContext* RestoreContext) const
 {
 	using namespace AngelscriptFunctionArtifactCodec_Private;
 
@@ -1383,7 +1384,7 @@ FAngelscriptFunctionArtifactCodec::ValidateRawExecutionArtifact(
 			EAngelscriptCacheRecordKind::FunctionBody);
 	}
 	FFunctionArtifactReadStream Stream(Request.CanonicalPayload);
-	asCReader Reader(Module, &Stream, Engine);
+	asCReader Reader(Module, &Stream, Engine, RestoreContext);
 	asSFunctionArtifactValidationDiagnostics Diagnostics{};
 	const int ValidationResult = Reader.ValidateFunctionArtifact(
 		static_cast<asUINT>(Request.CanonicalPayload.Num()), &Diagnostics);
@@ -1905,7 +1906,8 @@ FAngelscriptFunctionArtifactCodec::RestoreFunctionIntoExisting(
 	const FAngelscriptHash256& ExpectedExecutionContentHash,
 	const FAngelscriptCacheReadLimits& Limits,
 	FAngelscriptCacheReadBudget& Budget,
-	asCScriptFunction& TargetFunction) const
+	asCScriptFunction& TargetFunction,
+	const asSBuildArtifactRestoreContext* RestoreContext) const
 {
 	using namespace AngelscriptFunctionArtifactCodec_Private;
 
@@ -1953,7 +1955,8 @@ FAngelscriptFunctionArtifactCodec::RestoreFunctionIntoExisting(
 	FAngelscriptCacheOpaquePayloadSummary RawSummary;
 	const FAngelscriptCacheValidationResult RawValidation =
 		ValidateRawExecutionArtifact(
-			RawRequest, Limits, Budget, ApplyCharge, RawSummary);
+			RawRequest, Limits, Budget, ApplyCharge, RawSummary,
+			RestoreContext);
 	if (!RawValidation.IsSuccess())
 	{
 		return RawValidation;
@@ -1984,7 +1987,7 @@ FAngelscriptFunctionArtifactCodec::RestoreFunctionIntoExisting(
 	}
 
 	FFunctionArtifactReadStream Stream(RawVmPayload);
-	asCReader Reader(Module, &Stream, Engine);
+	asCReader Reader(Module, &Stream, Engine, RestoreContext);
 	asSFunctionArtifactValidationDiagnostics Diagnostics{};
 	asCScriptFunction* Donor = nullptr;
 	const int RestoreResult = Reader.RestoreFunctionArtifactDetached(

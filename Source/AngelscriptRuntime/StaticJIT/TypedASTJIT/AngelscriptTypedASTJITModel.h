@@ -109,6 +109,56 @@ enum class EAngelscriptTypedASTJITCleanupPlanState : uint8
 	CompilerExceptionRegion,
 };
 
+/** Typed action families copied from the authenticated Canonical lifetime view. */
+enum class EAngelscriptTypedASTJITLifetimeActionFlags : uint32
+{
+	None = 0,
+	DestroyValue = 1u << 0,
+	ReleaseReference = 1u << 1,
+	CommitDeferredOut = 1u << 2,
+	DestroyElement = 1u << 3,
+};
+ENUM_CLASS_FLAGS(EAngelscriptTypedASTJITLifetimeActionFlags)
+
+/** Typed exit-plan families copied from the authenticated Canonical lifetime view. */
+enum class EAngelscriptTypedASTJITLifetimeExitPlanFlags : uint32
+{
+	None = 0,
+	Normal = 1u << 0,
+	Transfer = 1u << 1,
+	ForEach = 1u << 2,
+};
+ENUM_CLASS_FLAGS(EAngelscriptTypedASTJITLifetimeExitPlanFlags)
+
+/**
+ * Detached, pointer-free authentication summary for one Canonical function.
+ *
+ * StableKey hashes only stable declaration/type identities and typed protocol
+ * ordinals. ABIKey hashes the cleanup ABI requirements. Neither key contains
+ * AST pointers, snapshot-local IDs, Engine-local TypeIds, or rendered dumps.
+ */
+struct FAngelscriptTypedASTJITCanonicalLifetimeSummary
+{
+	uint32 ProtocolRevision = 0;
+	FAngelscriptHash256 StableKey;
+	FAngelscriptHash256 ABIKey;
+	EAngelscriptTypedASTJITLifetimeActionFlags ActionFlags =
+		EAngelscriptTypedASTJITLifetimeActionFlags::None;
+	EAngelscriptTypedASTJITLifetimeExitPlanFlags ExitPlanFlags =
+		EAngelscriptTypedASTJITLifetimeExitPlanFlags::None;
+	uint32 SupportedExitMask = 0;
+	uint32 RecordCount = 0;
+	uint32 ExitPlanCount = 0;
+	bool bNativeObjectFrameABIAvailable = false;
+
+	bool IsAuthenticated() const
+	{
+		return ProtocolRevision != 0
+			&& !StableKey.IsZero()
+			&& !ABIKey.IsZero();
+	}
+};
+
 /**
  * Pointer-free lifetime facts proven from one exact sealed Canonical function.
  *
@@ -120,6 +170,7 @@ struct FAngelscriptTypedASTJITCanonicalLifetimeFacts
 {
 	EAngelscriptTypedASTJITCleanupPlanState CleanupPlanState =
 		EAngelscriptTypedASTJITCleanupPlanState::Unverified;
+	FAngelscriptTypedASTJITCanonicalLifetimeSummary LifetimeSummary;
 	bool bHasSuspendState = false;
 	bool bHasExceptionCleanup = false;
 	bool bCleanupPlanCoversAllTransfers = false;

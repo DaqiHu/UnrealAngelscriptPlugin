@@ -477,6 +477,7 @@ int Answer()
 	static asEBuildArtifactRestoreResult RestoreCorruptionMatrix(
 		const asSBuildArtifactInvocation* Invocation,
 		asCScriptFunction* Function,
+		const asSBuildArtifactRestoreContext* RestoreContext,
 		void* UserData)
 	{
 		if (Invocation == nullptr || Function == nullptr || UserData == nullptr)
@@ -491,7 +492,8 @@ int Answer()
 
 		++Context.AnswerCallbackCount;
 		FArtifactReadStream Stream(Context.RawVmPayload);
-		asCReader Reader(Function->module, &Stream, Function->engine);
+		asCReader Reader(
+			Function->module, &Stream, Function->engine, RestoreContext);
 		Context.bBaselineValidated = Reader.ValidateFunctionArtifact(
 			static_cast<asUINT>(Context.RawVmPayload.Num()),
 			&Context.BaselineDiagnostics) >= 0;
@@ -540,7 +542,8 @@ int Answer()
 					Context.Debug,
 					Limits,
 					Budget,
-					Attempt.Detail);
+					Attempt.Detail,
+					RestoreContext);
 			Attempt.AfterWords = Function->scriptData != nullptr
 				? static_cast<int32>(Function->scriptData->byteCode.GetLength())
 				: -1;

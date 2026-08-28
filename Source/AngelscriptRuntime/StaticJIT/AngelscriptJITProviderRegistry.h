@@ -64,6 +64,15 @@ FAngelscriptJITProviderCatalogCanonicalFunctionDiagnostic
 	int32 ReceiverParameterIndex = INDEX_NONE;
 	FString CanonicalASTState;
 	FString CleanupPlanState;
+	uint32 LifetimeProtocolRevision = 0;
+	FAngelscriptHash256 LifetimeStableKey;
+	FAngelscriptHash256 LifetimeABIKey;
+	uint32 LifetimeActionFlags = 0;
+	uint32 LifetimeExitPlanFlags = 0;
+	uint32 LifetimeSupportedExitMask = 0;
+	uint32 LifetimeRecordCount = 0;
+	uint32 LifetimeExitPlanCount = 0;
+	bool bNativeObjectFrameABIAvailable = false;
 	bool bHasSuspendState = false;
 	bool bHasExceptionCleanup = false;
 	bool bCleanupPlanCoversAllTransfers = false;

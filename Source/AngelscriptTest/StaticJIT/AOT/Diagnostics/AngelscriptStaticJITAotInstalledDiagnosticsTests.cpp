@@ -68,6 +68,11 @@ namespace AngelscriptStaticJITAotInstalledDiagnosticsTests_Private
 			Semantic.ReceiverKind = TEXT("None");
 			Semantic.CanonicalASTState = TEXT("Verified");
 			Semantic.CleanupPlanState = TEXT("VerifiedEmpty");
+			Semantic.LifetimeProtocolRevision = 1;
+			Semantic.LifetimeStableKey = MakeHash(TEXT("LifetimeStable"));
+			Semantic.LifetimeABIKey = MakeHash(TEXT("LifetimeABI"));
+			Semantic.bNativeObjectFrameABIAvailable = 1;
+			Semantic.bCleanupPlanCoversAllTransfers = 1;
 			Semantic.EligibilityReason = TEXT("None");
 			Semantic.EligibilityDetail = TEXT("eligible");
 			Semantic.EligibilitySource.Section =
@@ -213,6 +218,48 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotInstalledDiagnosticTests,
 	"Angelscript.TestModule.StaticJIT.AOT.Diagnostics.Installed",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
+	TEST_METHOD(UnavailableCanonicalFactsRequireAnAbsentLifetimeSummary)
+	{
+		using namespace
+			AngelscriptStaticJITAotInstalledDiagnosticsTests_Private;
+		FProvider Provider;
+		Provider.Semantic.CanonicalASTState = TEXT("Missing");
+		Provider.Semantic.CleanupPlanState = TEXT("Unverified");
+		Provider.Semantic.LifetimeProtocolRevision = 0;
+		Provider.Semantic.LifetimeStableKey = {};
+		Provider.Semantic.LifetimeABIKey = {};
+		Provider.Semantic.bNativeObjectFrameABIAvailable = 0;
+		Provider.Semantic.bCleanupPlanCoversAllTransfers = 0;
+		Provider.RebuildIdentity();
+		ASSERT_THAT(IsTrue(
+			FAngelscriptJITProviderManifest::Validate(Provider.View).IsValid(),
+			TEXT("a non-verified Canonical diagnostic must not invent a lifetime summary")));
+
+		Provider.Semantic.CanonicalASTState = TEXT("Verified");
+		Provider.RebuildIdentity();
+		ASSERT_THAT(IsTrue(
+			FAngelscriptJITProviderManifest::Validate(Provider.View).IsValid(),
+			TEXT("Canonical AST verification is independent from lifetime protocol authentication")));
+
+		Provider.Semantic.CleanupPlanState = TEXT("VerifiedEmpty");
+		Provider.RebuildIdentity();
+		const FAngelscriptJITProviderValidationResult MissingAuthenticatedSummary =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(MissingAuthenticatedSummary.Code
+			== EAngelscriptJITProviderValidationCode::InvalidDiagnosticString));
+		ASSERT_THAT(AreEqual(0, MissingAuthenticatedSummary.DiagnosticSemanticIndex));
+
+		Provider.Semantic.CleanupPlanState = TEXT("Unverified");
+
+		Provider.Semantic.LifetimeProtocolRevision = 1;
+		Provider.RebuildIdentity();
+		const FAngelscriptJITProviderValidationResult PartialSummary =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(PartialSummary.Code
+			== EAngelscriptJITProviderValidationCode::InvalidDiagnosticString));
+		ASSERT_THAT(AreEqual(0, PartialSummary.DiagnosticSemanticIndex));
+	}
+
 	TEST_METHOD(SystemCallUsesStableTargetIdentityWithoutScriptFunctionKey)
 	{
 		using namespace
@@ -259,6 +306,14 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotInstalledDiagnosticTests,
 			Snapshot->Providers[0]->Diagnostics->RequestedBackendId));
 		ASSERT_THAT(AreEqual(FString(TEXT("Bridge")),
 			Snapshot->Providers[0]->Diagnostics->Calls[0].Disposition));
+		ASSERT_THAT(AreEqual(1u, Snapshot->Providers[0]->Diagnostics
+			->SemanticFunctions[0].LifetimeProtocolRevision));
+		ASSERT_THAT(IsTrue(Snapshot->Providers[0]->Diagnostics
+			->SemanticFunctions[0].LifetimeStableKey
+				== Provider.Semantic.LifetimeStableKey));
+		ASSERT_THAT(IsTrue(Snapshot->Providers[0]->Diagnostics
+			->SemanticFunctions[0].LifetimeABIKey
+				== Provider.Semantic.LifetimeABIKey));
 
 		Provider.Diagnostics.RequestedBackendId = TEXT("bytecode");
 		Provider.Diagnostics.DiagnosticDigest =

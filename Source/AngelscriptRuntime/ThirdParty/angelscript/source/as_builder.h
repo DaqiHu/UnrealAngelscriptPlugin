@@ -270,7 +270,8 @@ public:
 	void PrepareBuildArtifactFunctionAuthorities();
 	asEBuildArtifactRestoreResult TryRestoreBuildArtifact(
 		const asSBuildArtifactInvocation &invocation,
-		asCScriptFunction *function);
+		asCScriptFunction *function,
+		const asSBuildArtifactRestoreContext *restoreContext = 0);
 	void CompleteBuildArtifactCompile(
 		const asSBuildArtifactInvocation &invocation,
 		asCScriptFunction *function,

@@ -208,6 +208,7 @@ int Answer()
 	static asEBuildArtifactRestoreResult RestoreCandidate(
 		const asSBuildArtifactInvocation* Invocation,
 		asCScriptFunction* Function,
+		const asSBuildArtifactRestoreContext* RestoreContext,
 		void* UserData)
 	{
 		if (Invocation == nullptr || Function == nullptr || UserData == nullptr)
@@ -325,7 +326,8 @@ int Answer()
 				CandidateDebug,
 				Context.Limits,
 				Context.Budget,
-				Context.Detail);
+				Context.Detail,
+				RestoreContext);
 		Context.ByteCodeWordsAfter = Function->scriptData != nullptr
 			? static_cast<int32>(Function->scriptData->byteCode.GetLength())
 			: -1;

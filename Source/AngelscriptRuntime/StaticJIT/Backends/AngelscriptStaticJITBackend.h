@@ -348,6 +348,7 @@ struct FAngelscriptStaticJITCanonicalFunctionDiagnostic
 		EAngelscriptStaticJITCanonicalASTState::Missing;
 	EAngelscriptTypedASTJITCleanupPlanState CleanupPlanState =
 		EAngelscriptTypedASTJITCleanupPlanState::Unverified;
+	FAngelscriptTypedASTJITCanonicalLifetimeSummary LifetimeSummary;
 	bool bHasSuspendState = false;
 	bool bHasExceptionCleanup = false;
 	bool bCleanupPlanCoversAllTransfers = false;

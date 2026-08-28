@@ -90,6 +90,11 @@ namespace AngelscriptStaticJITAotGeneratedProviderDiagnosticsTests_Private
 		Semantic.ReceiverKind = TEXT("None");
 		Semantic.CanonicalASTState = TEXT("Verified");
 		Semantic.CleanupPlanState = TEXT("VerifiedEmpty");
+		Semantic.LifetimeProtocolRevision = 1;
+		Semantic.LifetimeStableKey = MakeHash(0x91);
+		Semantic.LifetimeABIKey = MakeHash(0x92);
+		Semantic.bNativeObjectFrameABIAvailable = true;
+		Semantic.bCleanupPlanCoversAllTransfers = true;
 		Semantic.EligibilityReason = TEXT("None");
 		Semantic.EligibilityDetail = TEXT("eligible");
 		Semantic.EligibilitySource = Attempt.ProcessedSource;
@@ -141,6 +146,12 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGeneratedProviderDiagnosticTests,
 			TEXT("AngelscriptJITProviderDiagnostics.h"))));
 		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
 			TEXT("GProviderDiagnostics"))));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			TEXT("LifetimeProtocolRevision = 1"))));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			TEXT("LifetimeStableKey"))));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			TEXT("LifetimeABIKey"))));
 		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
 			DiagnosticOutput.DiagnosticDigest.ToHexString())));
 	}

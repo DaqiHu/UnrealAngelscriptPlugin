@@ -11,6 +11,7 @@
 #include "source/as_bytecode_codegen.h"
 #include "source/as_decl.h"
 #include "source/as_module.h"
+#include "source/as_restore.h"
 #include "source/as_runtime_type_bridge.h"
 #include "source/as_scriptfunction.h"
 #include "source/as_scriptengine.h"
@@ -1194,6 +1195,74 @@ TEST_CLASS_WITH_FLAGS(FCanonicalASTProductionCodeGenTests,
 	"Angelscript.TestModule.AngelScriptSDK.Compiler.CanonicalAST.ProductionCodeGen",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
+private:
+	struct FPreparedRestoreRollbackContext
+	{
+		AngelscriptNativeTestSupport::FMemoryBinaryStream* FirstArtifact = nullptr;
+		int32 FirstRestoreCount = 0;
+		asUINT PendingFunctionCount = 0;
+		bool bSawPendingSecond = false;
+	};
+
+	static asEBuildArtifactRestoreResult RestorePreparedFirstForRollback(
+		const asSBuildArtifactInvocation* Invocation,
+		asCScriptFunction* Function,
+		const asSBuildArtifactRestoreContext* RestoreContext,
+		void* UserData)
+	{
+		if (Invocation == nullptr || Function == nullptr || UserData == nullptr)
+		{
+			return asBUILD_ARTIFACT_RESTORE_REJECTED_CORRUPT;
+		}
+		if (Function->name != "First")
+		{
+			return asBUILD_ARTIFACT_RESTORE_MISS;
+		}
+
+		FPreparedRestoreRollbackContext& Context =
+			*static_cast<FPreparedRestoreRollbackContext*>(UserData);
+		if (Context.FirstArtifact == nullptr || RestoreContext == nullptr
+			|| !RestoreContext->IsValid())
+		{
+			return asBUILD_ARTIFACT_RESTORE_REJECTED_CORRUPT;
+		}
+
+		++Context.FirstRestoreCount;
+		Context.PendingFunctionCount = RestoreContext->transientFunctionCount;
+		for (asUINT Index = 0;
+			Index < RestoreContext->transientFunctionCount; ++Index)
+		{
+			const asCScriptFunction* const Pending =
+				RestoreContext->transientFunctions[Index];
+			if (Pending != nullptr && Pending->name == "Second")
+			{
+				Context.bSawPendingSecond = true;
+				break;
+			}
+		}
+
+		Context.FirstArtifact->ResetReadPosition();
+		asCReader Reader(
+			Function->module,
+			Context.FirstArtifact,
+			Function->engine,
+			RestoreContext);
+		asCScriptFunction* Artifact = nullptr;
+		if (Reader.RestoreFunctionArtifactDetached(
+				static_cast<asUINT>(Context.FirstArtifact->Num()),
+				&Artifact) < 0
+			|| Artifact == nullptr)
+		{
+			return asBUILD_ARTIFACT_RESTORE_REJECTED_CORRUPT;
+		}
+		if (Reader.CommitFunctionArtifactToExisting(Artifact, Function) < 0)
+		{
+			Artifact->DestroyHalfCreated();
+			return asBUILD_ARTIFACT_RESTORE_REJECTED_CORRUPT;
+		}
+		return asBUILD_ARTIFACT_RESTORE_RESTORED;
+	}
+
 public:
 	TEST_METHOD(PreparedBuilderShellKeepsIdentityAndPublishesCanonicalBody)
 	{
@@ -4505,6 +4574,49 @@ public:
 	TEST_METHOD(PreparedBuilderFailureRestoresEveryOriginalShell)
 	{
 		using namespace AngelscriptBuilderTestSupport;
+		const char* const Source =
+			"int _RollbackGlobal = 9; "
+			"int First() { return Second(); } "
+			"int Second() { return _RollbackGlobal + 1; }";
+
+		AngelscriptNativeTestSupport::FMemoryBinaryStream FirstArtifact;
+		{
+			AngelscriptNativeTestSupport::FNativeTestEngine Producer;
+			Producer.Create(*TestRunner);
+			ON_SCOPE_EXIT { Producer.Destroy(); };
+			asCScriptEngine* const ProducerEngine =
+				static_cast<asCScriptEngine*>(Producer.Get());
+			ASSERT_THAT(IsTrue(ProducerEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_LEGACY)));
+			asIScriptModule* const ProducerModule = ProducerEngine->GetModule(
+				"PreparedCanonicalRollback", asGM_ALWAYS_CREATE);
+			ASSERT_THAT(IsNotNull(ProducerModule));
+			if (ProducerModule == nullptr)
+			{
+				return;
+			}
+			ASSERT_THAT(AreEqual(asSUCCESS, ProducerModule->AddScriptSection(
+				"PreparedCanonicalRollback.as",
+				Source,
+				static_cast<asUINT>(std::strlen(Source)))));
+			ASSERT_THAT(AreEqual(asSUCCESS, ProducerModule->Build()));
+			asCScriptFunction* const ProducerFirst =
+				static_cast<asCScriptFunction*>(
+					ProducerModule->GetFunctionByDecl("int First()"));
+			ASSERT_THAT(IsNotNull(ProducerFirst));
+			if (ProducerFirst == nullptr)
+			{
+				return;
+			}
+			asCWriter Writer(
+				static_cast<asCModule*>(ProducerModule),
+				&FirstArtifact,
+				ProducerEngine,
+				true);
+			ASSERT_THAT(AreEqual(asSUCCESS,
+				Writer.WriteFunctionArtifact(ProducerFirst)));
+			ASSERT_THAT(IsTrue(FirstArtifact.Num() > 0));
+		}
 
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
 		Engine.Create(*TestRunner);
@@ -4523,9 +4635,7 @@ public:
 		ASSERT_THAT(IsTrue(AddBuilderSection(
 			*Module,
 			"PreparedCanonicalRollback.as",
-			"int _RollbackGlobal = 9; "
-			"int First() { return _RollbackGlobal; } "
-			"int Second() { return First() + 1; }")));
+			Source)));
 		ASSERT_THAT(IsNotNull(Module->builder));
 		if (Module->builder == nullptr)
 		{
@@ -4570,6 +4680,8 @@ public:
 			ScriptEngine->scriptFunctions.GetLength();
 		const asUINT OriginalFreeFunctionSlots =
 			ScriptEngine->freeScriptFunctionIds.GetLength();
+		const int OriginalSecondInternalReferences =
+			Second->internalRefCount.get();
 
 		asCASTContext* const Context = Builder.TakeCanonicalAST();
 		ASSERT_THAT(IsNotNull(Context));
@@ -4578,6 +4690,10 @@ public:
 			return;
 		}
 		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+		FPreparedRestoreRollbackContext Restore;
+		Restore.FirstArtifact = &FirstArtifact;
+		Module->SetBuildArtifactRestoreCallback(
+			&RestorePreparedFirstForRollback, &Restore);
 		asCBytecodeCodeGen CodeGen;
 		CodeGen.SetTestFailureBeforeFunctionEmission(1, asERROR);
 		ASSERT_THAT(IsTrue(
@@ -4586,6 +4702,14 @@ public:
 		ASSERT_THAT(IsTrue(First->scriptData == FirstOriginal
 			&& Second->scriptData == SecondOriginal,
 			TEXT("failure must restore both exact pre-CodeGen ScriptFunctionData owners")));
+		ASSERT_THAT(AreEqual(1, Restore.FirstRestoreCount,
+			TEXT("the first prepared body must restore exactly once before the injected failure")));
+		ASSERT_THAT(IsTrue(Restore.PendingFunctionCount >= 2
+			&& Restore.bSawPendingSecond,
+			TEXT("the restore callback must receive the complete pending function graph")));
+		ASSERT_THAT(AreEqual(OriginalSecondInternalReferences,
+			Second->internalRefCount.get(),
+			TEXT("rollback must release the restored First-to-pending-Second call reference")));
 		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
 			First->scriptData->byteCode.GetLength()));
 		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
