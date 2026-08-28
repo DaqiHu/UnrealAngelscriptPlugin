@@ -6,6 +6,7 @@
 #ifndef AS_AST_LIFETIME_H
 #define AS_AST_LIFETIME_H
 
+#include "as_array.h"
 #include "as_ast_fwd.h"
 
 BEGIN_AS_NAMESPACE
@@ -177,6 +178,154 @@ struct asSASTLifetimeRecord
 	{
 		return !(*this == other);
 	}
+};
+
+// One deterministic lexical-scope relation mechanically derived from exact
+// semanticRegion identities. parentRegion is invalid for a root lifetime
+// region. The view never stores AST or Runtime pointers.
+struct asSASTLifetimeScopeEdge
+{
+	asSASTLifetimeNodeId region;
+	asSASTLifetimeNodeId parentRegion;
+	asUINT depth;
+	asUINT structuralOrdinal;
+
+	asSASTLifetimeScopeEdge()
+		: depth(0)
+		, structuralOrdinal(0)
+	{
+	}
+
+	bool operator==(const asSASTLifetimeScopeEdge& other) const
+	{
+		return region == other.region
+			&& parentRegion == other.parentRegion
+			&& depth == other.depth
+			&& structuralOrdinal == other.structuralOrdinal;
+	}
+	bool operator!=(const asSASTLifetimeScopeEdge& other) const
+	{
+		return !(*this == other);
+	}
+};
+
+// A typed copy of one authenticated source fact plus only mechanical lexical
+// ordinals. recordIndex remains the Context protocol index; activationOrdinal
+// is the direct-child commit position inside semanticRegion; cleanupOrdinal is
+// its reverse position among records in that same region.
+struct asSASTLifetimeViewRecord
+{
+	asSASTLifetimeRecord record;
+	asUINT recordIndex;
+	asUINT scopeEdgeIndex;
+	asUINT activationOrdinal;
+	asUINT cleanupOrdinal;
+
+	asSASTLifetimeViewRecord()
+		: recordIndex(0)
+		, scopeEdgeIndex(0)
+		, activationOrdinal(0)
+		, cleanupOrdinal(0)
+	{
+	}
+
+	bool operator==(const asSASTLifetimeViewRecord& other) const
+	{
+		return record == other.record
+			&& recordIndex == other.recordIndex
+			&& scopeEdgeIndex == other.scopeEdgeIndex
+			&& activationOrdinal == other.activationOrdinal
+			&& cleanupOrdinal == other.cleanupOrdinal;
+	}
+	bool operator!=(const asSASTLifetimeViewRecord& other) const
+	{
+		return !(*this == other);
+	}
+};
+
+// A commit point exposes the live record-index set immediately before and
+// after its success boundary. abortCleanup is reverse(liveBefore), so the
+// current object can never be cleaned if its initializer fails;
+// reverseLiveCleanup is reverse(liveAfter).
+struct asSASTLifetimeCommitPoint
+{
+	asSASTLifetimeNodeId activationPoint;
+	asSASTLifetimeNodeId semanticRegion;
+	asUINT recordIndex;
+	asCArray<asUINT> liveBefore;
+	asCArray<asUINT> liveAfter;
+	asCArray<asUINT> abortCleanup;
+	asCArray<asUINT> reverseLiveCleanup;
+
+	asSASTLifetimeCommitPoint()
+		: recordIndex(0)
+	{
+	}
+
+	bool operator==(const asSASTLifetimeCommitPoint& other) const
+	{
+		if( activationPoint != other.activationPoint
+			|| semanticRegion != other.semanticRegion
+			|| recordIndex != other.recordIndex
+			|| liveBefore.GetLength() != other.liveBefore.GetLength()
+			|| liveAfter.GetLength() != other.liveAfter.GetLength()
+			|| abortCleanup.GetLength() != other.abortCleanup.GetLength()
+			|| reverseLiveCleanup.GetLength()
+				!= other.reverseLiveCleanup.GetLength() )
+		{
+			return false;
+		}
+		for( asUINT i = 0; i < liveBefore.GetLength(); ++i )
+			if( liveBefore[i] != other.liveBefore[i] ) return false;
+		for( asUINT i = 0; i < liveAfter.GetLength(); ++i )
+			if( liveAfter[i] != other.liveAfter[i] ) return false;
+		for( asUINT i = 0; i < abortCleanup.GetLength(); ++i )
+			if( abortCleanup[i] != other.abortCleanup[i] ) return false;
+		for( asUINT i = 0; i < reverseLiveCleanup.GetLength(); ++i )
+			if( reverseLiveCleanup[i]
+				!= other.reverseLiveCleanup[i] ) return false;
+		return true;
+	}
+	bool operator!=(const asSASTLifetimeCommitPoint& other) const
+	{
+		return !(*this == other);
+	}
+};
+
+class asCASTLifetimeView;
+ANGELSCRIPTRUNTIME_API int asCASTBuildLifetimeView(
+	const asCASTContext& context,
+	asCASTLifetimeView& outView);
+
+// Transient, deterministic and pointer-free. It is intentionally not owned by
+// asCASTContext and has no DTO/publication API. Consumers rebuild it while
+// holding an immutable snapshot lease and copy only their own detached facts.
+class ANGELSCRIPTRUNTIME_API asCASTLifetimeView
+{
+public:
+	asCASTLifetimeView();
+
+	asDWORD GetProtocolRevision() const { return protocolRevision; }
+	asQWORD GetStructuralDigest() const { return structuralDigest; }
+	asUINT GetScopeEdgeCount() const { return scopeEdges.GetLength(); }
+	asUINT GetRecordCount() const { return records.GetLength(); }
+	asUINT GetCommitPointCount() const { return commitPoints.GetLength(); }
+	const asSASTLifetimeScopeEdge* GetScopeEdge(asUINT index) const;
+	const asSASTLifetimeViewRecord* GetRecord(asUINT index) const;
+	const asSASTLifetimeCommitPoint* GetCommitPoint(asUINT index) const;
+
+private:
+	friend ANGELSCRIPTRUNTIME_API int asCASTBuildLifetimeView(
+		const asCASTContext& context,
+		asCASTLifetimeView& outView);
+
+	void Reset();
+
+	asDWORD protocolRevision;
+	asQWORD structuralDigest;
+	asCArray<asSASTLifetimeScopeEdge> scopeEdges;
+	asCArray<asSASTLifetimeViewRecord> records;
+	asCArray<asSASTLifetimeCommitPoint> commitPoints;
 };
 
 ANGELSCRIPTRUNTIME_API asQWORD asASTHashLifetimeNodeId(

@@ -67,25 +67,45 @@ public:
 			asAST_TYPE_VALUE_OBJECT, "FValue", 0);
 		const asASTDeclId ValueClass = Context.CreateDecl(
 			asAST_DECL_CLASS, Tu, asCSourceRange(), "FValue");
+		ASSERT_THAT(AreEqual(0, Context.SetStableKey(ValueClass, "FValue")));
 		const asASTDeclId Destructor = Context.CreateDecl(
 			asAST_DECL_DESTRUCTOR, ValueClass, asCSourceRange(), "FValue");
 		const asASTDeclId Function = Context.CreateDecl(
 			asAST_DECL_FUNCTION, Tu, asCSourceRange(), "F");
+		const asASTStmtId Region = Context.CreateStmt(
+			asAST_STMT_BLOCK, Function, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetBody(Function, Region)));
 		const asASTDeclId Local = Context.CreateDecl(
 			asAST_DECL_VAR, Function, asCSourceRange(), "Local");
 		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Local, ValueType)));
-		const asASTExprId Init = Context.CreateExpr(
-			asAST_EXPR_CONSTRUCT, ValueType, asAST_VALUE_PRVALUE, asCSourceRange());
-		ASSERT_THAT(AreEqual(0, Context.AddDeclInit(Local, Init)));
-		const asASTStmtId Region = Context.CreateStmt(
-			asAST_STMT_BLOCK, Function, asCSourceRange());
+		const asASTStmtId DeclStmt = Context.CreateStmt(
+			asAST_STMT_DECL, Function, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetStmtDecl(DeclStmt, Local)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Region, DeclStmt)));
+
+		const asASTExprId Target = Context.CreateExpr(
+			asAST_EXPR_DECL_REF, ValueType, asAST_VALUE_LVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(Target, Local)));
+		const asASTExprId Initializer = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, ValueType, asAST_VALUE_PRVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetLiteral(Initializer, "1")));
+		const asASTExprId Assignment = Context.CreateExpr(
+			asAST_EXPR_ASSIGN, ValueType, asAST_VALUE_LVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetLiteral(Assignment, "=")));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Assignment, Target)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Assignment, Initializer)));
+		ASSERT_THAT(AreEqual(0, Context.AddDeclInit(Local, Assignment)));
+		const asASTStmtId ExprStmt = Context.CreateStmt(
+			asAST_STMT_EXPR, Function, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(ExprStmt, Assignment)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Region, ExprStmt)));
 
 		asSASTLifetimeRecord Record;
 		Record.subjectKind = asAST_LIFETIME_SUBJECT_LOCAL;
 		Record.subject = asSASTLifetimeNodeId::FromDecl(Local);
 		Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
 		Record.actionTarget = asSASTLifetimeNodeId::FromDecl(Destructor);
-		Record.activationPoint = asSASTLifetimeNodeId::FromExpr(Init);
+		Record.activationPoint = asSASTLifetimeNodeId::FromExpr(Assignment);
 		Record.semanticRegion = asSASTLifetimeNodeId::FromStmt(Region);
 		Record.phase = asAST_LIFETIME_PHASE_LEXICAL_SCOPE;
 		Record.supportedExitMask = asAST_LIFETIME_EXIT_NORMAL

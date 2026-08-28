@@ -5,6 +5,7 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_context.h"
+#include "source/as_ast_dump.h"
 #include "source/as_ast_lifetime.h"
 #include "source/as_ast_verifier.h"
 #include "source/as_tokendef.h"
@@ -12,11 +13,391 @@
 
 #if WITH_ANGELSCRIPT_UNITTESTS
 
+namespace
+{
+struct FLocalLifetimeViewFixture
+{
+	asASTDeclId Destructor;
+	asASTDeclId FirstLocal;
+	asASTDeclId SecondLocal;
+	asASTStmtId Region;
+	asASTExprId FirstAssignment;
+	asASTExprId SecondAssignment;
+	asASTExprId FirstInitializerValue;
+	asASTExprId SecondInitializerValue;
+};
+
+static FLocalLifetimeViewFixture BuildLocalLifetimeViewFixture(
+	asCASTContext& Context)
+{
+	FLocalLifetimeViewFixture Fixture;
+	const asASTDeclId Tu = Context.CreateTranslationUnit("LifetimeView");
+	const asCQualType ValueType = Context.InternNamedType(
+		asAST_TYPE_VALUE_OBJECT, "FValue", 0);
+	const asASTDeclId ValueClass = Context.CreateDecl(
+		asAST_DECL_CLASS, Tu, asCSourceRange(), "FValue");
+	Context.SetStableKey(ValueClass, "FValue");
+	Fixture.Destructor = Context.CreateDecl(
+		asAST_DECL_DESTRUCTOR, ValueClass, asCSourceRange(), "FValue");
+	const asASTDeclId Function = Context.CreateDecl(
+		asAST_DECL_FUNCTION, Tu, asCSourceRange(), "F");
+	Fixture.Region = Context.CreateStmt(
+		asAST_STMT_BLOCK, Function, asCSourceRange());
+	Context.SetBody(Function, Fixture.Region);
+
+	for( asUINT LocalIndex = 0; LocalIndex < 2; ++LocalIndex )
+	{
+		const bool IsFirst = LocalIndex == 0;
+		const asASTDeclId Local = Context.CreateDecl(
+			asAST_DECL_VAR, Function, asCSourceRange(),
+			IsFirst ? "First" : "Second");
+		Context.SetDeclType(Local, ValueType);
+		const asASTStmtId DeclStmt = Context.CreateStmt(
+			asAST_STMT_DECL, Function, asCSourceRange());
+		Context.SetStmtDecl(DeclStmt, Local);
+		Context.AddStmtChild(Fixture.Region, DeclStmt);
+
+		const asASTExprId Target = Context.CreateExpr(
+			asAST_EXPR_DECL_REF, ValueType,
+			asAST_VALUE_LVALUE, asCSourceRange());
+		Context.SetResolvedDecl(Target, Local);
+		const asASTExprId InitializerValue = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, ValueType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		Context.SetLiteral(InitializerValue, IsFirst ? "1" : "2");
+		const asASTExprId Assignment = Context.CreateExpr(
+			asAST_EXPR_ASSIGN, ValueType,
+			asAST_VALUE_LVALUE, asCSourceRange());
+		Context.SetLiteral(Assignment, "=");
+		Context.AddExprChild(Assignment, Target);
+		Context.AddExprChild(Assignment, InitializerValue);
+		Context.AddDeclInit(Local, Assignment);
+		const asASTStmtId ExprStmt = Context.CreateStmt(
+			asAST_STMT_EXPR, Function, asCSourceRange());
+		Context.SetStmtExpr(ExprStmt, Assignment);
+		Context.AddStmtChild(Fixture.Region, ExprStmt);
+
+		if( IsFirst )
+		{
+			Fixture.FirstLocal = Local;
+			Fixture.FirstAssignment = Assignment;
+			Fixture.FirstInitializerValue = InitializerValue;
+		}
+		else
+		{
+			Fixture.SecondLocal = Local;
+			Fixture.SecondAssignment = Assignment;
+			Fixture.SecondInitializerValue = InitializerValue;
+		}
+	}
+	return Fixture;
+}
+
+static asSASTLifetimeRecord MakeLocalLifetimeRecord(
+	const FLocalLifetimeViewFixture& Fixture,
+	bool First,
+	asUINT Order)
+{
+	asSASTLifetimeRecord Record;
+	Record.subjectKind = asAST_LIFETIME_SUBJECT_LOCAL;
+	Record.subject = asSASTLifetimeNodeId::FromDecl(
+		First ? Fixture.FirstLocal : Fixture.SecondLocal);
+	Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+	Record.actionTarget = asSASTLifetimeNodeId::FromDecl(Fixture.Destructor);
+	Record.activationPoint = asSASTLifetimeNodeId::FromExpr(
+		First ? Fixture.FirstAssignment : Fixture.SecondAssignment);
+	Record.semanticRegion = asSASTLifetimeNodeId::FromStmt(Fixture.Region);
+	Record.phase = asAST_LIFETIME_PHASE_LEXICAL_SCOPE;
+	Record.supportedExitMask = asAST_LIFETIME_EXIT_ALL;
+	Record.constructionStep = 0;
+	Record.order = Order;
+	Record.completeObjectCommit = false;
+	return Record;
+}
+}
+
 TEST_CLASS_WITH_FLAGS(FCanonicalASTVerifierTests,
 	"Angelscript.TestModule.AngelScriptSDK.Frontend.CanonicalAST.Verifier",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 public:
+	TEST_METHOD(BuildsDeterministicLifetimeViewWithCommittedLiveSets)
+	{
+		asCASTContext Context;
+		const FLocalLifetimeViewFixture Fixture =
+			BuildLocalLifetimeViewFixture(Context);
+		const asSASTLifetimeRecord First =
+			MakeLocalLifetimeRecord(Fixture, true, 0);
+		const asSASTLifetimeRecord Second =
+			MakeLocalLifetimeRecord(Fixture, false, 1);
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(First)));
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Second)));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("the exact local lifetime fixture must reach Frozen publication")));
+
+		asCASTLifetimeView FirstView;
+		asCASTLifetimeView SecondView;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, FirstView)));
+		asCString DiagnosticDump;
+		asCASTDump(Context, DiagnosticDump);
+		ASSERT_THAT(IsTrue(DiagnosticDump.GetLength() != 0,
+			TEXT("the compatibility dump is only a diagnostic side effect")));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, SecondView)));
+
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2), FirstView.GetRecordCount()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1), FirstView.GetScopeEdgeCount()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2), FirstView.GetCommitPointCount()));
+		ASSERT_THAT(AreEqual(
+			FirstView.GetStructuralDigest(),
+			SecondView.GetStructuralDigest(),
+			TEXT("rebuilding from one Frozen snapshot must be deterministic")));
+		ASSERT_THAT(IsTrue(
+			FirstView.GetStructuralDigest() != Context.GetLifetimeProtocolHash(),
+			TEXT("the derived-view digest must have its own typed domain")));
+		for( asUINT Index = 0; Index < FirstView.GetRecordCount(); ++Index )
+		{
+			ASSERT_THAT(IsTrue(
+				*FirstView.GetRecord(Index) == *SecondView.GetRecord(Index),
+				TEXT("typed derived records must reconstruct identically")));
+		}
+
+		const asSASTLifetimeCommitPoint* FirstCommit =
+			FirstView.GetCommitPoint(0);
+		const asSASTLifetimeCommitPoint* SecondCommit =
+			FirstView.GetCommitPoint(1);
+		ASSERT_THAT(IsNotNull(FirstCommit));
+		ASSERT_THAT(IsNotNull(SecondCommit));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			FirstCommit->liveBefore.GetLength(),
+			TEXT("the first local is not live while its initializer is running")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
+			FirstCommit->liveAfter.GetLength()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
+			SecondCommit->liveBefore.GetLength(),
+			TEXT("only the first committed local is live before Second commits")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			SecondCommit->liveBefore[0]));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+			SecondCommit->liveAfter.GetLength()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
+			SecondCommit->reverseLiveCleanup[0],
+			TEXT("normal cleanup starts at the newest committed local")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			SecondCommit->reverseLiveCleanup[1]));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
+			SecondCommit->abortCleanup.GetLength(),
+			TEXT("initializer failure must exclude the failed current object")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			SecondCommit->abortCleanup[0]));
+	}
+
+	TEST_METHOD(DerivesNestedScopeEdgesAndOuterLiveSet)
+	{
+		asCASTContext Context;
+		const asASTDeclId Tu = Context.CreateTranslationUnit("NestedLifetimeView");
+		const asCQualType ValueType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FValue", 0);
+		const asASTDeclId ValueClass = Context.CreateDecl(
+			asAST_DECL_CLASS, Tu, asCSourceRange(), "FValue");
+		ASSERT_THAT(AreEqual(0, Context.SetStableKey(ValueClass, "FValue")));
+		const asASTDeclId Destructor = Context.CreateDecl(
+			asAST_DECL_DESTRUCTOR, ValueClass, asCSourceRange(), "FValue");
+		const asASTDeclId Function = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, asCSourceRange(), "F");
+		const asASTStmtId OuterRegion = Context.CreateStmt(
+			asAST_STMT_BLOCK, Function, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetBody(Function, OuterRegion)));
+
+		auto AddLocal = [&](const asASTStmtId Region, const char* Name,
+			const char* Literal, asUINT Order) -> asSASTLifetimeRecord
+		{
+			const asASTDeclId Local = Context.CreateDecl(
+				asAST_DECL_VAR, Function, asCSourceRange(), Name);
+			Context.SetDeclType(Local, ValueType);
+			const asASTStmtId DeclStmt = Context.CreateStmt(
+				asAST_STMT_DECL, Function, asCSourceRange());
+			Context.SetStmtDecl(DeclStmt, Local);
+			Context.AddStmtChild(Region, DeclStmt);
+
+			const asASTExprId Target = Context.CreateExpr(
+				asAST_EXPR_DECL_REF, ValueType,
+				asAST_VALUE_LVALUE, asCSourceRange());
+			Context.SetResolvedDecl(Target, Local);
+			const asASTExprId Initializer = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, ValueType,
+				asAST_VALUE_PRVALUE, asCSourceRange());
+			Context.SetLiteral(Initializer, Literal);
+			const asASTExprId Assignment = Context.CreateExpr(
+				asAST_EXPR_ASSIGN, ValueType,
+				asAST_VALUE_LVALUE, asCSourceRange());
+			Context.SetLiteral(Assignment, "=");
+			Context.AddExprChild(Assignment, Target);
+			Context.AddExprChild(Assignment, Initializer);
+			Context.AddDeclInit(Local, Assignment);
+			const asASTStmtId ExprStmt = Context.CreateStmt(
+				asAST_STMT_EXPR, Function, asCSourceRange());
+			Context.SetStmtExpr(ExprStmt, Assignment);
+			Context.AddStmtChild(Region, ExprStmt);
+
+			asSASTLifetimeRecord Record;
+			Record.subjectKind = asAST_LIFETIME_SUBJECT_LOCAL;
+			Record.subject = asSASTLifetimeNodeId::FromDecl(Local);
+			Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+			Record.actionTarget = asSASTLifetimeNodeId::FromDecl(Destructor);
+			Record.activationPoint = asSASTLifetimeNodeId::FromExpr(Assignment);
+			Record.semanticRegion = asSASTLifetimeNodeId::FromStmt(Region);
+			Record.phase = asAST_LIFETIME_PHASE_LEXICAL_SCOPE;
+			Record.supportedExitMask = asAST_LIFETIME_EXIT_ALL;
+			Record.order = Order;
+			return Record;
+		};
+
+		const asSASTLifetimeRecord OuterRecord =
+			AddLocal(OuterRegion, "Outer", "1", 0);
+		const asASTStmtId InnerRegion = Context.CreateStmt(
+			asAST_STMT_BLOCK, Function, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(OuterRegion, InnerRegion)));
+		const asSASTLifetimeRecord InnerRecord =
+			AddLocal(InnerRegion, "Inner", "2", 1);
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(OuterRecord)));
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(InnerRecord)));
+		ASSERT_THAT(AreEqual(0, Context.Seal()));
+
+		asCASTLifetimeView View;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, View)));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2), View.GetScopeEdgeCount()));
+		const asSASTLifetimeScopeEdge* OuterEdge = nullptr;
+		const asSASTLifetimeScopeEdge* InnerEdge = nullptr;
+		for( asUINT Index = 0; Index < View.GetScopeEdgeCount(); ++Index )
+		{
+			const asSASTLifetimeScopeEdge* Edge = View.GetScopeEdge(Index);
+			if( Edge->region == asSASTLifetimeNodeId::FromStmt(OuterRegion) )
+				OuterEdge = Edge;
+			if( Edge->region == asSASTLifetimeNodeId::FromStmt(InnerRegion) )
+				InnerEdge = Edge;
+		}
+		ASSERT_THAT(IsNotNull(OuterEdge));
+		ASSERT_THAT(IsNotNull(InnerEdge));
+		ASSERT_THAT(IsFalse(OuterEdge->parentRegion.IsValid()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0), OuterEdge->depth));
+		ASSERT_THAT(IsTrue(
+			InnerEdge->parentRegion == asSASTLifetimeNodeId::FromStmt(OuterRegion)));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1), InnerEdge->depth));
+
+		const asSASTLifetimeCommitPoint* InnerCommit = View.GetCommitPoint(1);
+		ASSERT_THAT(IsNotNull(InnerCommit));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
+			InnerCommit->liveBefore.GetLength()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0), InnerCommit->liveBefore[0],
+			TEXT("the committed outer local must be live before Inner initializes")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+			InnerCommit->liveAfter.GetLength()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
+			InnerCommit->reverseLiveCleanup[0]));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			InnerCommit->reverseLiveCleanup[1]));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
+			InnerCommit->abortCleanup.GetLength()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			InnerCommit->abortCleanup[0],
+			TEXT("failed Inner initialization cleans only the committed outer local")));
+	}
+
+	TEST_METHOD(RejectsForgedLifetimeSubjectActionActivationOrderAndPhase)
+	{
+		{
+			asCASTContext Context;
+			const FLocalLifetimeViewFixture Fixture = BuildLocalLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeLocalLifetimeRecord(Fixture, true, 0);
+			Record.subject = asSASTLifetimeNodeId::FromDecl(Fixture.Destructor);
+			Context.AddLifetimeRecord(Record);
+			ASSERT_THAT(AreEqual(static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL), Context.Seal(),
+				TEXT("a destructor declaration cannot masquerade as a local subject")));
+		}
+		{
+			asCASTContext Context;
+			const FLocalLifetimeViewFixture Fixture = BuildLocalLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeLocalLifetimeRecord(Fixture, true, 0);
+			Record.actionKind = asAST_LIFETIME_ACTION_RELEASE_REFERENCE;
+			Context.AddLifetimeRecord(Record);
+			ASSERT_THAT(AreEqual(static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL), Context.Seal(),
+				TEXT("a value local cannot replace its exact destructor with release")));
+		}
+		{
+			asCASTContext Context;
+			const FLocalLifetimeViewFixture Fixture = BuildLocalLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeLocalLifetimeRecord(Fixture, true, 0);
+			Record.activationPoint = asSASTLifetimeNodeId::FromExpr(Fixture.FirstInitializerValue);
+			Context.AddLifetimeRecord(Record);
+			ASSERT_THAT(AreEqual(static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL), Context.Seal(),
+				TEXT("cleanup may not activate while the current initializer can still fail")));
+		}
+		{
+			asCASTContext Context;
+			const FLocalLifetimeViewFixture Fixture = BuildLocalLifetimeViewFixture(Context);
+			Context.AddLifetimeRecord(MakeLocalLifetimeRecord(Fixture, false, 0));
+			Context.AddLifetimeRecord(MakeLocalLifetimeRecord(Fixture, true, 1));
+			ASSERT_THAT(AreEqual(static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL), Context.Seal(),
+				TEXT("storage indices cannot forge source commit order inside one region")));
+		}
+		{
+			asCASTContext Context;
+			const FLocalLifetimeViewFixture Fixture = BuildLocalLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeLocalLifetimeRecord(Fixture, true, 0);
+			Record.phase = asAST_LIFETIME_PHASE_FULL_EXPRESSION;
+			Context.AddLifetimeRecord(Record);
+			ASSERT_THAT(AreEqual(static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL), Context.Seal(),
+				TEXT("a lexical local may not be reclassified as a temporary phase")));
+		}
+	}
+
+	TEST_METHOD(RejectsMissingDuplicateForeignAndEarlyLifetimeActions)
+	{
+		{
+			asCASTContext Context;
+			const FLocalLifetimeViewFixture Fixture = BuildLocalLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeLocalLifetimeRecord(Fixture, true, 0);
+			Record.actionTarget = asSASTLifetimeNodeId();
+			Context.AddLifetimeRecord(Record);
+			ASSERT_THAT(AreEqual(static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL), Context.Seal(),
+				TEXT("a committed subject requires one exact cleanup action")));
+		}
+		{
+			asCASTContext Context;
+			const FLocalLifetimeViewFixture Fixture = BuildLocalLifetimeViewFixture(Context);
+			Context.AddLifetimeRecord(MakeLocalLifetimeRecord(Fixture, true, 0));
+			asSASTLifetimeRecord Duplicate = MakeLocalLifetimeRecord(Fixture, true, 1);
+			Context.AddLifetimeRecord(Duplicate);
+			ASSERT_THAT(AreEqual(static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL), Context.Seal(),
+				TEXT("one commit cannot publish the same cleanup action twice")));
+		}
+		{
+			asCASTContext Context;
+			const FLocalLifetimeViewFixture Fixture = BuildLocalLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeLocalLifetimeRecord(Fixture, true, 0);
+			Record.subject.snapshotOwner = 0xA57u;
+			Context.AddLifetimeRecord(Record);
+			ASSERT_THAT(AreEqual(static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL), Context.Seal(),
+				TEXT("snapshot-local lifetime facts reject public or foreign owner tokens")));
+		}
+		{
+			asCASTContext Context;
+			const FLocalLifetimeViewFixture Fixture = BuildLocalLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeLocalLifetimeRecord(Fixture, true, 0);
+			Record.phase = asAST_LIFETIME_PHASE_COMPLETE_OBJECT;
+			Record.completeObjectCommit = true;
+			Context.AddLifetimeRecord(Record);
+			ASSERT_THAT(AreEqual(static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL), Context.Seal(),
+				TEXT("complete-object destruction is unreachable before a distinct complete commit")));
+		}
+	}
+
 	TEST_METHOD(RejectsWrongLifetimeProtocolRevisionBeforePlanning)
 	{
 		asCASTContext Context;

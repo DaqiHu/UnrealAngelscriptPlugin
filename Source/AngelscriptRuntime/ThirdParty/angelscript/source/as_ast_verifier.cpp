@@ -1726,6 +1726,27 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 	if( exprCycleStatus != asAST_VERIFY_OK )
 		return exprCycleStatus;
 
+	if( context.GetLifecycleState() >= asAST_CONTEXT_LIFETIME_PLANNED )
+	{
+		const int lifetimeStatus = asCASTVerifyLifetimeView(context, result);
+		if( lifetimeStatus != asAST_VERIFY_OK ) return lifetimeStatus;
+	}
+
+	return asAST_VERIFY_OK;
+}
+
+int asCASTVerifyLifetimeView(
+	const asCASTContext& context,
+	asSAstVerifyResult& result)
+{
+	result = asSAstVerifyResult();
+	asCASTLifetimeView view;
+	const int status = asCASTBuildLifetimeView(context, view);
+	if( status != asAST_VERIFY_OK )
+	{
+		return Fail(result, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL,
+			asCSourceRange(), "lifetime-derived-view");
+	}
 	return asAST_VERIFY_OK;
 }
 

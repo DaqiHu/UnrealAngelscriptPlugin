@@ -33,6 +33,9 @@ struct asSAstVerifyResult
 };
 
 ANGELSCRIPTRUNTIME_API int asCASTVerify(const asCASTContext& context, asSAstVerifyResult& result);
+ANGELSCRIPTRUNTIME_API int asCASTVerifyLifetimeView(
+	const asCASTContext& context,
+	asSAstVerifyResult& result);
 ANGELSCRIPTRUNTIME_API int asCASTVerifyPublication(const asCASTContext& context, asSAstVerifyResult& result);
 
 END_AS_NAMESPACE

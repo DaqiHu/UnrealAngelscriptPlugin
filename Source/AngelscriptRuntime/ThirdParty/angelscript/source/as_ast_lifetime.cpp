@@ -9,6 +9,8 @@ static const asQWORD asAST_LIFETIME_HASH_OFFSET =
 	static_cast<asQWORD>(1469598103934665603ull);
 static const asQWORD asAST_LIFETIME_HASH_PRIME =
 	static_cast<asQWORD>(1099511628211ull);
+static const asQWORD asAST_LIFETIME_VIEW_DOMAIN =
+	static_cast<asQWORD>(0x4c545631ull); // "LTV1"
 
 asQWORD HashField(asQWORD hash, asQWORD value)
 {
@@ -22,9 +24,7 @@ bool LifetimeNodeExists(
 	const asSASTLifetimeNodeId& node)
 {
 	if( !node.IsValid() || node.snapshotOwner != 0 )
-	{
 		return false;
-	}
 	switch( node.nodeClass )
 	{
 	case asAST_LIFETIME_NODE_DECL:
@@ -37,6 +37,442 @@ bool LifetimeNodeExists(
 		return false;
 	}
 }
+
+bool NodeIdLess(
+	const asSASTLifetimeNodeId& left,
+	const asSASTLifetimeNodeId& right)
+{
+	if( left.nodeClass != right.nodeClass )
+		return left.nodeClass < right.nodeClass;
+	if( left.value != right.value ) return left.value < right.value;
+	return left.snapshotOwner < right.snapshotOwner;
+}
+
+int VerifyBasicLifetimeRecord(
+	const asCASTContext& context,
+	const asSASTLifetimeRecord& record,
+	asUINT index)
+{
+	if( record.subjectKind <= asAST_LIFETIME_SUBJECT_INVALID
+		|| record.subjectKind > asAST_LIFETIME_SUBJECT_DEFERRED_OUT
+		|| record.actionKind <= asAST_LIFETIME_ACTION_INVALID
+		|| record.actionKind > asAST_LIFETIME_ACTION_DESTROY_ELEMENT
+		|| record.phase <= asAST_LIFETIME_PHASE_INVALID
+		|| record.phase > asAST_LIFETIME_PHASE_AGGREGATE_ELEMENT
+		|| record.supportedExitMask == asAST_LIFETIME_EXIT_NONE
+		|| (record.supportedExitMask & ~asAST_LIFETIME_EXIT_ALL) != 0
+		|| record.order != index
+		|| !LifetimeNodeExists(context, record.subject)
+		|| !LifetimeNodeExists(context, record.actionTarget)
+		|| !LifetimeNodeExists(context, record.activationPoint)
+		|| !LifetimeNodeExists(context, record.semanticRegion) )
+	{
+		return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+	}
+
+	if( record.subjectKind == asAST_LIFETIME_SUBJECT_LOCAL )
+	{
+		const asCDecl* const subject = record.subject.nodeClass
+			== asAST_LIFETIME_NODE_DECL
+			? context.GetDecl(asASTDeclId(record.subject.value)) : 0;
+		if( subject == 0 || subject->kind != asAST_DECL_VAR )
+			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+	}
+	if( record.subjectKind == asAST_LIFETIME_SUBJECT_TEMPORARY
+		&& record.subject.nodeClass != asAST_LIFETIME_NODE_EXPR )
+	{
+		return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+	}
+	if( record.actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE )
+	{
+		const asCDecl* const action = record.actionTarget.nodeClass
+			== asAST_LIFETIME_NODE_DECL
+			? context.GetDecl(asASTDeclId(record.actionTarget.value)) : 0;
+		if( action == 0 || action->kind != asAST_DECL_DESTRUCTOR )
+			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+	}
+	if( record.activationPoint.nodeClass != asAST_LIFETIME_NODE_EXPR
+		&& record.activationPoint.nodeClass != asAST_LIFETIME_NODE_STMT )
+	{
+		return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+	}
+	if( record.semanticRegion.nodeClass != asAST_LIFETIME_NODE_DECL
+		&& record.semanticRegion.nodeClass != asAST_LIFETIME_NODE_STMT )
+	{
+		return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+	}
+	if( record.completeObjectCommit
+		&& record.phase != asAST_LIFETIME_PHASE_COMPLETE_OBJECT )
+	{
+		return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+	}
+	return asAST_VERIFY_OK;
+}
+
+bool ContainsRegion(
+	const asCArray<asSASTLifetimeNodeId>& regions,
+	const asSASTLifetimeNodeId& region)
+{
+	for( asUINT i = 0; i < regions.GetLength(); ++i )
+		if( regions[i] == region ) return true;
+	return false;
+}
+
+void SortRegions(asCArray<asSASTLifetimeNodeId>& regions)
+{
+	for( asUINT i = 1; i < regions.GetLength(); ++i )
+	{
+		asSASTLifetimeNodeId value = regions[i];
+		asUINT insertion = i;
+		while( insertion > 0 && NodeIdLess(value, regions[insertion - 1]) )
+		{
+			regions[insertion] = regions[insertion - 1];
+			--insertion;
+		}
+		regions[insertion] = value;
+	}
+}
+
+int BuildStmtParents(
+	const asCASTContext& context,
+	asCArray<asASTStmtId>& parents)
+{
+	parents.SetLength(context.GetStmtCount() + 1);
+	for( asUINT statementIndex = 1;
+		statementIndex <= context.GetStmtCount(); ++statementIndex )
+	{
+		const asCStmt* const statement =
+			context.GetStmt(asASTStmtId(statementIndex));
+		if( statement == 0 ) return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+		for( asUINT childIndex = 0;
+			childIndex < statement->children.GetLength(); ++childIndex )
+		{
+			const asASTStmtId child = statement->children[childIndex];
+			if( !child.IsValid() || child.snapshotOwner != 0
+				|| child.value >= parents.GetLength() )
+			{
+				return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+			}
+			if( parents[child.value].IsValid()
+				&& parents[child.value] != statement->id )
+			{
+				return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+			}
+			parents[child.value] = statement->id;
+		}
+	}
+	return asAST_VERIFY_OK;
+}
+
+asUINT FindRegionIndex(
+	const asCASTLifetimeView& view,
+	const asSASTLifetimeNodeId& region)
+{
+	for( asUINT i = 0; i < view.GetScopeEdgeCount(); ++i )
+	{
+		const asSASTLifetimeScopeEdge* const edge = view.GetScopeEdge(i);
+		if( edge != 0 && edge->region == region ) return i;
+	}
+	return static_cast<asUINT>(-1);
+}
+
+asSASTLifetimeNodeId FindNearestLifetimeRegionParent(
+	const asCArray<asSASTLifetimeNodeId>& regions,
+	const asCArray<asASTStmtId>& stmtParents,
+	const asSASTLifetimeNodeId& region)
+{
+	if( region.nodeClass != asAST_LIFETIME_NODE_STMT
+		|| region.value >= stmtParents.GetLength() )
+	{
+		return asSASTLifetimeNodeId();
+	}
+	asASTStmtId parent = stmtParents[region.value];
+	for( asUINT depth = 0;
+		parent.IsValid() && depth < stmtParents.GetLength(); ++depth )
+	{
+		const asSASTLifetimeNodeId candidate =
+			asSASTLifetimeNodeId::FromStmt(parent);
+		if( ContainsRegion(regions, candidate) ) return candidate;
+		if( parent.value >= stmtParents.GetLength() ) break;
+		parent = stmtParents[parent.value];
+	}
+	return asSASTLifetimeNodeId();
+}
+
+asUINT CountLifetimeRegionDepth(
+	const asCArray<asSASTLifetimeNodeId>& regions,
+	const asCArray<asASTStmtId>& stmtParents,
+	const asSASTLifetimeNodeId& region)
+{
+	asUINT result = 0;
+	asSASTLifetimeNodeId current = region;
+	for( asUINT guard = 0; guard < regions.GetLength(); ++guard )
+	{
+		current = FindNearestLifetimeRegionParent(regions, stmtParents, current);
+		if( !current.IsValid() ) break;
+		++result;
+	}
+	return result;
+}
+
+bool FindBlockCommitOrdinals(
+	const asCASTContext& context,
+	const asSASTLifetimeRecord& record,
+	asUINT& outDeclarationOrdinal,
+	asUINT& outActivationOrdinal)
+{
+	outDeclarationOrdinal = static_cast<asUINT>(-1);
+	outActivationOrdinal = static_cast<asUINT>(-1);
+	const asCStmt* const region = record.semanticRegion.nodeClass
+		== asAST_LIFETIME_NODE_STMT
+		? context.GetStmt(asASTStmtId(record.semanticRegion.value)) : 0;
+	if( region == 0 || region->kind != asAST_STMT_BLOCK ) return false;
+
+	for( asUINT childIndex = 0;
+		childIndex < region->children.GetLength(); ++childIndex )
+	{
+		const asCStmt* const child = context.GetStmt(region->children[childIndex]);
+		if( child == 0 ) return false;
+		if( child->kind == asAST_STMT_DECL
+			&& child->decl.value == record.subject.value
+			&& child->decl.snapshotOwner == 0 )
+		{
+			outDeclarationOrdinal = childIndex;
+		}
+		if( child->kind == asAST_STMT_EXPR
+			&& record.activationPoint.nodeClass == asAST_LIFETIME_NODE_EXPR
+			&& child->expr.value == record.activationPoint.value
+			&& child->expr.snapshotOwner == 0 )
+		{
+			outActivationOrdinal = childIndex;
+		}
+	}
+	if( outDeclarationOrdinal == static_cast<asUINT>(-1)
+		|| outActivationOrdinal == static_cast<asUINT>(-1)
+		|| outDeclarationOrdinal >= outActivationOrdinal )
+	{
+		return false;
+	}
+	for( asUINT childIndex = outDeclarationOrdinal + 1;
+		childIndex < outActivationOrdinal; ++childIndex )
+	{
+		const asCStmt* const child = context.GetStmt(region->children[childIndex]);
+		if( child != 0 && child->kind == asAST_STMT_DECL ) return false;
+	}
+	return true;
+}
+
+bool DestructorMatchesLocalValue(
+	const asCASTContext& context,
+	const asCDecl& local,
+	const asCDecl& destructor)
+{
+	const asCType* const localType = local.type.IsValid()
+		? context.GetType(local.type.type) : 0;
+	const asCDecl* const destructorOwner = context.GetDecl(destructor.parent);
+	return localType != 0
+		&& localType->kind == asAST_TYPE_VALUE_OBJECT
+		&& !local.type.IsReference()
+		&& !local.type.IsHandle()
+		&& destructorOwner != 0
+		&& destructorOwner->kind == asAST_DECL_CLASS
+		&& (localType->stableKey.Equals(destructorOwner->stableKey)
+			|| localType->stableKey.Equals(destructorOwner->name));
+}
+
+bool ValidateLexicalLocalRecord(
+	const asCASTContext& context,
+	const asSASTLifetimeRecord& record,
+	asUINT& outActivationOrdinal)
+{
+	if( record.subjectKind != asAST_LIFETIME_SUBJECT_LOCAL
+		|| record.actionKind != asAST_LIFETIME_ACTION_DESTROY_VALUE
+		|| record.phase != asAST_LIFETIME_PHASE_LEXICAL_SCOPE
+		|| record.constructionStep != 0
+		|| record.completeObjectCommit
+		|| record.subject.nodeClass != asAST_LIFETIME_NODE_DECL
+		|| record.actionTarget.nodeClass != asAST_LIFETIME_NODE_DECL
+		|| record.activationPoint.nodeClass != asAST_LIFETIME_NODE_EXPR
+		|| record.semanticRegion.nodeClass != asAST_LIFETIME_NODE_STMT )
+	{
+		return false;
+	}
+	const asCDecl* const local =
+		context.GetDecl(asASTDeclId(record.subject.value));
+	const asCDecl* const destructor =
+		context.GetDecl(asASTDeclId(record.actionTarget.value));
+	const asCExpr* const assignment =
+		context.GetExpr(asASTExprId(record.activationPoint.value));
+	const asCExpr* const target = assignment != 0
+		&& assignment->kind == asAST_EXPR_ASSIGN
+		&& assignment->children.GetLength() == 2
+		? context.GetExpr(assignment->children[0]) : 0;
+	if( local == 0 || local->kind != asAST_DECL_VAR
+		|| destructor == 0 || destructor->kind != asAST_DECL_DESTRUCTOR
+		|| target == 0 || target->kind != asAST_EXPR_DECL_REF
+		|| target->resolvedDecl != local->id
+		|| !DestructorMatchesLocalValue(context, *local, *destructor) )
+	{
+		return false;
+	}
+	asUINT declarationOrdinal = 0;
+	return FindBlockCommitOrdinals(
+		context, record, declarationOrdinal, outActivationOrdinal);
+}
+
+bool RecordsDuplicateAction(
+	const asSASTLifetimeRecord& left,
+	const asSASTLifetimeRecord& right)
+{
+	return left.subjectKind == right.subjectKind
+		&& left.subject == right.subject
+		&& left.actionKind == right.actionKind
+		&& left.actionTarget == right.actionTarget
+		&& left.activationPoint == right.activationPoint
+		&& left.semanticRegion == right.semanticRegion
+		&& left.phase == right.phase
+		&& left.constructionStep == right.constructionStep;
+}
+
+asUINT FindDirectDescendantOrdinal(
+	const asCASTContext& context,
+	const asCArray<asASTStmtId>& stmtParents,
+	const asSASTLifetimeNodeId& ancestorRegion,
+	const asSASTLifetimeNodeId& descendantRegion)
+{
+	if( ancestorRegion.nodeClass != asAST_LIFETIME_NODE_STMT
+		|| descendantRegion.nodeClass != asAST_LIFETIME_NODE_STMT )
+	{
+		return static_cast<asUINT>(-1);
+	}
+	asASTStmtId child(descendantRegion.value);
+	asASTStmtId parent = child.value < stmtParents.GetLength()
+		? stmtParents[child.value] : asASTStmtId();
+	for( asUINT guard = 0;
+		parent.IsValid() && guard < stmtParents.GetLength(); ++guard )
+	{
+		if( parent.value == ancestorRegion.value )
+		{
+			const asCStmt* const ancestor =
+				context.GetStmt(asASTStmtId(ancestorRegion.value));
+			for( asUINT index = 0;
+				ancestor != 0 && index < ancestor->children.GetLength(); ++index )
+			{
+				if( ancestor->children[index] == child ) return index;
+			}
+			return static_cast<asUINT>(-1);
+		}
+		child = parent;
+		parent = child.value < stmtParents.GetLength()
+			? stmtParents[child.value] : asASTStmtId();
+	}
+	return static_cast<asUINT>(-1);
+}
+
+bool AppendLiveRecordsInRegion(
+	const asCASTLifetimeView& view,
+	const asSASTLifetimeNodeId& region,
+	asUINT beforeOrdinal,
+	asCArray<asUINT>& outRecords)
+{
+	asUINT previousOrdinal = 0;
+	bool havePrevious = false;
+	for( asUINT index = 0; index < view.GetRecordCount(); ++index )
+	{
+		const asSASTLifetimeViewRecord* const record = view.GetRecord(index);
+		if( record == 0 || record->record.semanticRegion != region
+			|| record->activationOrdinal >= beforeOrdinal )
+		{
+			continue;
+		}
+		if( havePrevious && record->activationOrdinal <= previousOrdinal )
+			return false;
+		outRecords.PushLast(record->recordIndex);
+		previousOrdinal = record->activationOrdinal;
+		havePrevious = true;
+	}
+	return true;
+}
+
+asQWORD HashIndexArray(asQWORD hash, const asCArray<asUINT>& values)
+{
+	hash = HashField(hash, values.GetLength());
+	for( asUINT i = 0; i < values.GetLength(); ++i )
+		hash = HashField(hash, values[i]);
+	return hash;
+}
+
+asQWORD HashLifetimeView(const asCASTLifetimeView& view)
+{
+	asQWORD hash = asAST_LIFETIME_HASH_OFFSET;
+	hash = HashField(hash, asAST_LIFETIME_VIEW_DOMAIN);
+	hash = HashField(hash, view.GetProtocolRevision());
+	hash = HashField(hash, view.GetScopeEdgeCount());
+	for( asUINT i = 0; i < view.GetScopeEdgeCount(); ++i )
+	{
+		const asSASTLifetimeScopeEdge& edge = *view.GetScopeEdge(i);
+		hash = HashField(hash, asASTHashLifetimeNodeId(edge.region));
+		hash = HashField(hash, asASTHashLifetimeNodeId(edge.parentRegion));
+		hash = HashField(hash, edge.depth);
+		hash = HashField(hash, edge.structuralOrdinal);
+	}
+	hash = HashField(hash, view.GetRecordCount());
+	for( asUINT i = 0; i < view.GetRecordCount(); ++i )
+	{
+		const asSASTLifetimeViewRecord& record = *view.GetRecord(i);
+		hash = HashField(hash, asASTHashLifetimeRecord(record.record));
+		hash = HashField(hash, record.recordIndex);
+		hash = HashField(hash, record.scopeEdgeIndex);
+		hash = HashField(hash, record.activationOrdinal);
+		hash = HashField(hash, record.cleanupOrdinal);
+	}
+	hash = HashField(hash, view.GetCommitPointCount());
+	for( asUINT i = 0; i < view.GetCommitPointCount(); ++i )
+	{
+		const asSASTLifetimeCommitPoint& commit = *view.GetCommitPoint(i);
+		hash = HashField(hash, asASTHashLifetimeNodeId(commit.activationPoint));
+		hash = HashField(hash, asASTHashLifetimeNodeId(commit.semanticRegion));
+		hash = HashField(hash, commit.recordIndex);
+		hash = HashIndexArray(hash, commit.liveBefore);
+		hash = HashIndexArray(hash, commit.liveAfter);
+		hash = HashIndexArray(hash, commit.abortCleanup);
+		hash = HashIndexArray(hash, commit.reverseLiveCleanup);
+	}
+	return hash;
+}
+}
+
+asCASTLifetimeView::asCASTLifetimeView()
+	: protocolRevision(0)
+	, structuralDigest(0)
+{
+}
+
+void asCASTLifetimeView::Reset()
+{
+	protocolRevision = 0;
+	structuralDigest = 0;
+	scopeEdges.SetLength(0);
+	records.SetLength(0);
+	commitPoints.SetLength(0);
+}
+
+const asSASTLifetimeScopeEdge* asCASTLifetimeView::GetScopeEdge(
+	asUINT index) const
+{
+	return index < scopeEdges.GetLength() ? &scopeEdges[index] : 0;
+}
+
+const asSASTLifetimeViewRecord* asCASTLifetimeView::GetRecord(
+	asUINT index) const
+{
+	return index < records.GetLength() ? &records[index] : 0;
+}
+
+const asSASTLifetimeCommitPoint* asCASTLifetimeView::GetCommitPoint(
+	asUINT index) const
+{
+	return index < commitPoints.GetLength() ? &commitPoints[index] : 0;
 }
 
 asQWORD asASTHashLifetimeNodeId(const asSASTLifetimeNodeId& id)
@@ -72,89 +508,203 @@ asQWORD asASTHashLifetimeProtocol(
 	hash = HashField(hash, static_cast<asQWORD>(revision));
 	hash = HashField(hash, static_cast<asQWORD>(recordCount));
 	for( asUINT i = 0; i < recordCount; ++i )
-	{
 		hash = HashField(hash, asASTHashLifetimeRecord(records[i]));
-	}
 	return hash;
 }
 
-int asCASTVerifyLifetimeProtocol(const asCASTContext& context)
+int asCASTBuildLifetimeView(
+	const asCASTContext& context,
+	asCASTLifetimeView& outView)
 {
-	if( context.GetLifetimeProtocolRevision()
-		!= asAST_LIFETIME_PROTOCOL_REVISION )
+	outView.Reset();
+	if( context.GetLifecycleState() == asAST_CONTEXT_BUILDING
+		|| context.GetLifetimeProtocolRevision()
+			!= asAST_LIFETIME_PROTOCOL_REVISION )
 	{
 		return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
 	}
+	outView.protocolRevision = context.GetLifetimeProtocolRevision();
 
+	asCArray<asSASTLifetimeNodeId> regions;
 	for( asUINT index = 0;
 		index < context.GetLifetimeRecordCount(); ++index )
 	{
 		const asSASTLifetimeRecord* const record =
 			context.GetLifetimeRecord(index);
 		if( record == 0
-			|| record->subjectKind <= asAST_LIFETIME_SUBJECT_INVALID
-			|| record->subjectKind > asAST_LIFETIME_SUBJECT_DEFERRED_OUT
-			|| record->actionKind <= asAST_LIFETIME_ACTION_INVALID
-			|| record->actionKind > asAST_LIFETIME_ACTION_DESTROY_ELEMENT
-			|| record->phase <= asAST_LIFETIME_PHASE_INVALID
-			|| record->phase > asAST_LIFETIME_PHASE_AGGREGATE_ELEMENT
-			|| record->supportedExitMask == asAST_LIFETIME_EXIT_NONE
-			|| (record->supportedExitMask & ~asAST_LIFETIME_EXIT_ALL) != 0
-			|| record->order != index
-			|| !LifetimeNodeExists(context, record->subject)
-			|| !LifetimeNodeExists(context, record->actionTarget)
-			|| !LifetimeNodeExists(context, record->activationPoint)
-			|| !LifetimeNodeExists(context, record->semanticRegion) )
+			|| VerifyBasicLifetimeRecord(context, *record, index)
+				!= asAST_VERIFY_OK )
 		{
+			outView.Reset();
+			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+		}
+		if( !ContainsRegion(regions, record->semanticRegion) )
+			regions.PushLast(record->semanticRegion);
+	}
+	SortRegions(regions);
+
+	asCArray<asASTStmtId> stmtParents;
+	if( BuildStmtParents(context, stmtParents) != asAST_VERIFY_OK )
+	{
+		outView.Reset();
+		return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+	}
+	for( asUINT regionIndex = 0;
+		regionIndex < regions.GetLength(); ++regionIndex )
+	{
+		const asSASTLifetimeNodeId& region = regions[regionIndex];
+		const asCStmt* const regionStmt = region.nodeClass
+			== asAST_LIFETIME_NODE_STMT
+			? context.GetStmt(asASTStmtId(region.value)) : 0;
+		if( regionStmt == 0 || regionStmt->kind != asAST_STMT_BLOCK )
+		{
+			outView.Reset();
+			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+		}
+		asSASTLifetimeScopeEdge edge;
+		edge.region = region;
+		edge.parentRegion = FindNearestLifetimeRegionParent(
+			regions, stmtParents, region);
+		edge.depth = CountLifetimeRegionDepth(regions, stmtParents, region);
+		edge.structuralOrdinal = region.value;
+		outView.scopeEdges.PushLast(edge);
+	}
+
+	for( asUINT index = 0;
+		index < context.GetLifetimeRecordCount(); ++index )
+	{
+		const asSASTLifetimeRecord& source =
+			*context.GetLifetimeRecord(index);
+		asSASTLifetimeViewRecord derived;
+		derived.record = source;
+		derived.recordIndex = index;
+		derived.scopeEdgeIndex = FindRegionIndex(
+			outView, source.semanticRegion);
+		if( derived.scopeEdgeIndex == static_cast<asUINT>(-1)
+			|| !ValidateLexicalLocalRecord(
+				context, source, derived.activationOrdinal) )
+		{
+			outView.Reset();
+			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+		}
+		for( asUINT previousIndex = 0;
+			previousIndex < outView.records.GetLength(); ++previousIndex )
+		{
+			const asSASTLifetimeViewRecord& previous =
+				outView.records[previousIndex];
+			if( RecordsDuplicateAction(previous.record, source)
+				|| (previous.record.semanticRegion == source.semanticRegion
+					&& previous.activationOrdinal
+						>= derived.activationOrdinal) )
+			{
+				outView.Reset();
+				return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+			}
+		}
+		outView.records.PushLast(derived);
+	}
+
+	for( asUINT index = 0; index < outView.records.GetLength(); ++index )
+	{
+		asSASTLifetimeViewRecord& record = outView.records[index];
+		asUINT laterInRegion = 0;
+		for( asUINT otherIndex = 0;
+			otherIndex < outView.records.GetLength(); ++otherIndex )
+		{
+			const asSASTLifetimeViewRecord& other =
+				outView.records[otherIndex];
+			if( other.record.semanticRegion == record.record.semanticRegion
+				&& other.activationOrdinal > record.activationOrdinal )
+			{
+				++laterInRegion;
+			}
+		}
+		record.cleanupOrdinal = laterInRegion;
+	}
+
+	for( asUINT index = 0; index < outView.records.GetLength(); ++index )
+	{
+		const asSASTLifetimeViewRecord& current = outView.records[index];
+		asCArray<asUINT> reverseScopeChain;
+		asUINT scopeIndex = current.scopeEdgeIndex;
+		for( asUINT guard = 0;
+			scopeIndex < outView.scopeEdges.GetLength()
+				&& guard < outView.scopeEdges.GetLength(); ++guard )
+		{
+			reverseScopeChain.PushLast(scopeIndex);
+			const asSASTLifetimeNodeId parent =
+				outView.scopeEdges[scopeIndex].parentRegion;
+			if( !parent.IsValid() ) break;
+			scopeIndex = FindRegionIndex(outView, parent);
+		}
+		if( reverseScopeChain.GetLength() == 0 )
+		{
+			outView.Reset();
 			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
 		}
 
-		if( record->subjectKind == asAST_LIFETIME_SUBJECT_LOCAL )
+		asSASTLifetimeCommitPoint commit;
+		commit.activationPoint = current.record.activationPoint;
+		commit.semanticRegion = current.record.semanticRegion;
+		commit.recordIndex = current.recordIndex;
+		for( asUINT reverseIndex = reverseScopeChain.GetLength();
+			reverseIndex > 0; --reverseIndex )
 		{
-			const asCDecl* const subject = record->subject.nodeClass
-				== asAST_LIFETIME_NODE_DECL
-				? context.GetDecl(asASTDeclId(record->subject.value)) : 0;
-			if( subject == 0 || subject->kind != asAST_DECL_VAR )
+			const asUINT chainIndex = reverseIndex - 1;
+			const asSASTLifetimeScopeEdge& scope =
+				outView.scopeEdges[reverseScopeChain[chainIndex]];
+			asUINT boundaryOrdinal = current.activationOrdinal;
+			if( scope.region != current.record.semanticRegion )
 			{
+				const asSASTLifetimeNodeId descendant = chainIndex > 0
+					? outView.scopeEdges[
+						reverseScopeChain[chainIndex - 1]].region
+					: current.record.semanticRegion;
+				boundaryOrdinal = FindDirectDescendantOrdinal(
+					context, stmtParents, scope.region, descendant);
+			}
+			if( boundaryOrdinal == static_cast<asUINT>(-1)
+				|| !AppendLiveRecordsInRegion(
+					outView, scope.region, boundaryOrdinal,
+					commit.liveBefore) )
+			{
+				outView.Reset();
 				return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
 			}
 		}
-		if( record->subjectKind == asAST_LIFETIME_SUBJECT_TEMPORARY
-			&& record->subject.nodeClass != asAST_LIFETIME_NODE_EXPR )
+		for( asUINT liveIndex = 0;
+			liveIndex < commit.liveBefore.GetLength(); ++liveIndex )
 		{
-			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
-		}
-		if( record->actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE )
-		{
-			const asCDecl* const action = record->actionTarget.nodeClass
-				== asAST_LIFETIME_NODE_DECL
-				? context.GetDecl(asASTDeclId(record->actionTarget.value)) : 0;
-			if( action == 0 || action->kind != asAST_DECL_DESTRUCTOR )
+			if( commit.liveBefore[liveIndex] == current.recordIndex )
 			{
+				outView.Reset();
 				return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
 			}
 		}
-		if( record->activationPoint.nodeClass
-			!= asAST_LIFETIME_NODE_EXPR
-			&& record->activationPoint.nodeClass
-				!= asAST_LIFETIME_NODE_STMT )
+		commit.liveAfter = commit.liveBefore;
+		commit.liveAfter.PushLast(current.recordIndex);
+		for( asUINT liveIndex = commit.liveBefore.GetLength();
+			liveIndex > 0; --liveIndex )
 		{
-			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+			commit.abortCleanup.PushLast(commit.liveBefore[liveIndex - 1]);
 		}
-		if( record->semanticRegion.nodeClass
-			!= asAST_LIFETIME_NODE_DECL
-			&& record->semanticRegion.nodeClass
-				!= asAST_LIFETIME_NODE_STMT )
+		for( asUINT liveIndex = commit.liveAfter.GetLength();
+			liveIndex > 0; --liveIndex )
 		{
-			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+			commit.reverseLiveCleanup.PushLast(
+				commit.liveAfter[liveIndex - 1]);
 		}
-		if( record->completeObjectCommit
-			&& record->phase != asAST_LIFETIME_PHASE_COMPLETE_OBJECT )
-		{
-			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
-		}
+		outView.commitPoints.PushLast(commit);
 	}
+
+	outView.structuralDigest = HashLifetimeView(outView);
 	return asAST_VERIFY_OK;
+}
+
+int asCASTVerifyLifetimeProtocol(const asCASTContext& context)
+{
+	asCASTLifetimeView view;
+	return asCASTBuildLifetimeView(context, view);
 }
 
 END_AS_NAMESPACE
