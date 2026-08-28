@@ -200,6 +200,7 @@ protected:
 	asUINT           bytesRead;
 	bool             validatingFunctionArtifact;
 	asUINT           functionArtifactValidationStage;
+	const char      *aggregateRestoreStage;
 
 	int                Error(const char *msg);
 
@@ -298,7 +299,9 @@ protected:
 	// Helper class for adjusting offsets within initialization list buffers
 	struct SListAdjuster
 	{
-		SListAdjuster(asCReader *rd, asDWORD *bc, asCObjectType *ot);
+		SListAdjuster(asCReader *rd, asDWORD *bc, asCObjectType *ot,
+			asUINT aggregateRepeatCount = 0,
+			bool hasAggregateCommittedCursor = false);
 		void AdjustAllocMem();
 		int  AdjustOffset(int offset);
 		void SetRepeatCount(asUINT rc);
@@ -321,6 +324,12 @@ protected:
 		asUINT              lastAdjustedOffset;
 		asSListPatternNode *patternNode;
 		int                 nextTypeId;
+		asCArray<int>       encodedOffsets;
+		asCArray<int>       runtimeOffsets;
+		asUINT              aggregateRepeatCount;
+		bool                hasAggregateCommittedCursor;
+		bool                aggregateRepeatInitialized;
+		bool                lastAdjustmentWasReplay;
 	};
 	asCArray<SListAdjuster*> listAdjusters;
 
@@ -411,7 +420,9 @@ protected:
 	// Helper class for adjusting offsets within initialization list buffers
 	struct SListAdjuster
 	{
-		SListAdjuster(asCObjectType *ot);
+		SListAdjuster(asCObjectType *ot,
+			asUINT aggregateRepeatCount = 0,
+			bool hasAggregateCommittedCursor = false);
 		int  AdjustOffset(int offset, asCObjectType *listPatternType);
 		void SetRepeatCount(asUINT rc);
 		void SetNextType(int typeId);
@@ -430,6 +441,12 @@ protected:
 		int                 lastOffset;
 		int                 nextOffset;
 		int                 nextTypeId;
+		asCArray<int>       runtimeOffsets;
+		asCArray<int>       encodedOffsets;
+		asUINT              aggregateRepeatCount;
+		bool                hasAggregateCommittedCursor;
+		bool                aggregateRepeatInitialized;
+		bool                lastAdjustmentWasReplay;
 	};
 	asCArray<SListAdjuster*> listAdjusters;
 

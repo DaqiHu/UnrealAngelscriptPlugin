@@ -271,12 +271,27 @@ static void RebuildLegacyObjectVariableMetadata(asCScriptFunction *func)
 		}
 		else if( instruction == asBC_FREE )
 		{
+			const int variableOffset = asBC_SWORDARG0(&byteCode[position]);
 			asCTypeInfo *type = (asCTypeInfo*)asBC_PTRARG(&byteCode[position]);
-			if( objectTypeOperands.IndexOf(type) >= 0 )
+			bool isCanonicalAggregateBuffer = false;
+			for( asUINT aggregateIndex = 0;
+				aggregateIndex < func->scriptData->aggregateCleanupInfo.GetLength();
+				++aggregateIndex )
+			{
+				if( func->scriptData->aggregateCleanupInfo[aggregateIndex]
+						.bufferOffset == variableOffset )
+				{
+					isCanonicalAggregateBuffer = type != 0
+						&& (type->flags & asOBJ_LIST_PATTERN) != 0;
+					break;
+				}
+			}
+			if( objectTypeOperands.IndexOf(type) >= 0
+				|| isCanonicalAggregateBuffer )
 			{
 				AddLegacyHeapObjectVariable(
 					func,
-					asBC_SWORDARG0(&byteCode[position]),
+					variableOffset,
 					type);
 			}
 		}
@@ -324,7 +339,10 @@ static bool IsExplicitTrait(const asCScriptFunction *func)
 // Version three adds the Canonical constructor committed-prefix directory. Its
 // types, actions and member targets are persisted as semantic table identities;
 // no generation-local type id, function id, pointer or property offset enters
-// the stream.
+// the stream. Canonical aggregate cleanup reuses version three's previously
+// unused function-state bit: only semantic element type/action/count facts are
+// encoded, while the physical cursor/element layout is authenticated and
+// reconstructed from decoded bytecode.
 static const asBYTE AS_BYTECODE_STREAM_MAGIC = 0xE3;
 static const asBYTE AS_BYTECODE_STREAM_VERSION = 3;
 
@@ -336,7 +354,11 @@ static const asBYTE AS_BYTECODE_STREAM_VERSION = 3;
 // that pair against the current Engine before the host validates its stable key.
 // Version six carries the same constructor committed-prefix identities as the
 // full module stream and therefore fails old artifacts closed instead of
-// restoring executable code without its exception-cleanup contract.
+// restoring executable code without its exception-cleanup contract. Aggregate
+// cleanup also stays on V6 through its previously unused function-state bit:
+// pre-aggregate V6 could not contain a valid Canonical aggregate backend form,
+// and every new physical layout fact is reconstructed from authenticated VM
+// bytecode rather than widening the sidecar schema.
 static const asBYTE AS_FUNCTION_ARTIFACT_STREAM_VERSION = 6;
 static const asUINT AS_FUNCTION_ARTIFACT_MINIMUM_SIZE = 13;
 static const asDWORD AS_FUNCTION_ARTIFACT_KNOWN_TRAITS = 0x07FFFFFFu;
@@ -356,6 +378,7 @@ asCReader::asCReader(asCModule* _module, asIBinaryStream* _stream,
 	: module(_module), stream(_stream), engine(_engine),
 	  buildArtifactRestoreContext(_restoreContext), error(false), bytesRead(0),
 	  validatingFunctionArtifact(false), functionArtifactValidationStage(asFUNCTION_ARTIFACT_STAGE_NONE),
+	  aggregateRestoreStage(0),
 	  functionArtifactStackNeeded(0), functionArtifactObjVariablesOnHeap(0),
 	  functionArtifactRuntimeStateOffset(asUINT(-1)),
 	  functionArtifactStackNeededOffset(asUINT(-1)),
@@ -910,7 +933,12 @@ int asCReader::Error(const char *msg)
 		if( !validatingFunctionArtifact )
 		{
 			asCString str;
-			str.Format(msg, bytesRead);
+			if( aggregateRestoreStage != 0
+				&& strcmp(msg, TXT_INVALID_BYTECODE_d) == 0 )
+				str.Format("LoadByteCode failed while restoring aggregate %s at byte %d",
+					aggregateRestoreStage, bytesRead);
+			else
+				str.Format(msg, bytesRead);
 			engine->WriteMessage("", 0, 0, asMSGTYPE_ERROR, str.AddressOf());
 		}
 		//[UE--]
@@ -1339,6 +1367,8 @@ int asCReader::ReadInner()
 	if( error ) return asERROR;
 
 	// usedTypes[]
+	if( aggregateRestoreStage != 0 )
+		aggregateRestoreStage = "used type table";
 	count = SanityCheck(ReadEncodedUInt(), 1000000);
 	usedTypes.Allocate(count, false);
 	for( i = 0; i < count && !error; ++i )
@@ -1349,27 +1379,49 @@ int asCReader::ReadInner()
 
 	// usedTypeIds[]
 	if( !error )
+	{
+		if( aggregateRestoreStage != 0 )
+			aggregateRestoreStage = "used type-id table";
 		ReadUsedTypeIds();
+	}
 
 	// usedFunctions[]
 	if( !error )
+	{
+		if( aggregateRestoreStage != 0 )
+			aggregateRestoreStage = "used function table";
 		ReadUsedFunctions();
+	}
 
 	// usedGlobalProperties[]
 	if( !error )
+	{
+		if( aggregateRestoreStage != 0 )
+			aggregateRestoreStage = "used global-property table";
 		ReadUsedGlobalProps();
+	}
 
 	// usedStringConstants[]
 	if( !error )
+	{
+		if( aggregateRestoreStage != 0 )
+			aggregateRestoreStage = "used string table";
 		ReadUsedStringConstants();
+	}
 
 	// usedObjectProperties
 	if( !error )
+	{
+		if( aggregateRestoreStage != 0 )
+			aggregateRestoreStage = "used object-property table";
 		ReadUsedObjectProps();
+	}
 
 	// Validate the template types
 	if( !error )
 	{
+		if( aggregateRestoreStage != 0 )
+			aggregateRestoreStage = "template validation";
 		for( i = 0; i < usedTypes.GetLength() && !error; i++ )
 		{
 			asCObjectType *ot = CastToObjectType(usedTypes[i]);
@@ -1407,6 +1459,8 @@ int asCReader::ReadInner()
 
 	// Update the loaded bytecode to point to the correct types, property offsets,
 	// function ids, etc. This is basically a linking stage.
+	if( aggregateRestoreStage != 0 )
+		aggregateRestoreStage = "function translation";
 	for( i = 0; i < module->m_scriptFunctions.GetLength() && !error; i++ )
 		if( module->m_scriptFunctions[i]->funcType == asFUNC_SCRIPT )
 		{
@@ -1439,6 +1493,7 @@ int asCReader::ReadInner()
 		if( initFunc )
 			initFunc->AddReferences();
 	}
+	aggregateRestoreStage = 0;
 	return error ? asERROR : asSUCCESS;
 }
 
@@ -1592,6 +1647,8 @@ void asCReader::ReadUsedFunctions()
 		char c;
 
 		// Read the data to be able to uniquely identify the function
+		if( aggregateRestoreStage != 0 )
+			aggregateRestoreStage = "used function entry marker";
 
 		// Is the function from the module or the application?
 		ReadData(&c, 1);
@@ -1641,6 +1698,8 @@ void asCReader::ReadUsedFunctions()
 			}
 			asCScriptFunction func(engine, functionModule, asFUNC_DUMMY);
 			asCObjectType *parentClass = 0;
+			if( aggregateRestoreStage != 0 )
+				aggregateRestoreStage = "used function signature";
 			ReadFunctionSignature(&func, &parentClass);
 			if( error )
 			{
@@ -1649,6 +1708,8 @@ void asCReader::ReadUsedFunctions()
 			}
 
 			// Find the correct function
+			if( aggregateRestoreStage != 0 )
+				aggregateRestoreStage = "used function resolution";
 			if( c == 'm' || c == 'x' )
 			{
 				asASSERT(func.templateSubTypes.GetLength() == 0);
@@ -1892,39 +1953,58 @@ void asCReader::ReadUsedFunctions()
 							}
 						}
 					}
-					else if( func.name == "$list" )
-					{
-						// listFactory is used for both factory is global and returns a handle and constructor that is a method
-						asCObjectType *objType = func.objectType ? func.objectType : CastToObjectType(func.returnType.GetTypeInfo());
-						if( objType )
-						{
-							asCScriptFunction *f = engine->scriptFunctions[objType->beh.listFactory];
-							if( f && func.IsSignatureExceptNameAndObjectTypeEqual(f) )
-								usedFunctions[n] = f;
-						}
-					}
-					else if( func.name == "$beh2" )
-					{
-						// This is a destructor, so check the object type's destructor
-						asCObjectType *objType = func.objectType;
-						if( objType )
-						{
-							asCScriptFunction *f = engine->scriptFunctions[objType->beh.destruct];
-							if( f && func.IsSignatureExceptNameAndObjectTypeEqual(f) )
-								usedFunctions[n] = f;
-						}
-					}
-					else if( func.name == "$dlgte" )
-					{
-						// This is the delegate factory
-						asCScriptFunction *f = FindRegisteredGlobalFunction(engine, engine->nameSpaces[0], DELEGATE_FACTORY);
-						asASSERT( f && func.IsSignatureEqual(f) );
-						usedFunctions[n] = f;
-					}
 					else
 					{
-						// Must match one of the above cases
-						asASSERT(false);
+						asCString registeredListFactoryName;
+						registeredListFactoryName.Format(
+							"$beh%d", asBEHAVE_LIST_FACTORY);
+						asCString registeredListConstructName;
+						registeredListConstructName.Format(
+							"$beh%d", asBEHAVE_LIST_CONSTRUCT);
+						if( func.name == "$list"
+							|| func.name == registeredListFactoryName
+							|| func.name == registeredListConstructName )
+						{
+							// listFactory is shared by the global handle-returning list
+							// factory and the object-method list constructor. Canonical
+							// CodeGen seals the registered $behN target directly, while
+							// the legacy compiler may serialize the synthetic $list name.
+							asCObjectType *objType = func.objectType
+								? func.objectType
+								: CastToObjectType(func.returnType.GetTypeInfo());
+							if( objType && objType->beh.listFactory > 0
+								&& asUINT(objType->beh.listFactory)
+									< engine->scriptFunctions.GetLength() )
+							{
+								asCScriptFunction *f =
+									engine->scriptFunctions[objType->beh.listFactory];
+								if( f && func.IsSignatureExceptNameAndObjectTypeEqual(f) )
+									usedFunctions[n] = f;
+							}
+						}
+						else if( func.name == "$beh2" )
+						{
+							// This is a destructor, so check the object type's destructor
+							asCObjectType *objType = func.objectType;
+							if( objType )
+							{
+								asCScriptFunction *f = engine->scriptFunctions[objType->beh.destruct];
+								if( f && func.IsSignatureExceptNameAndObjectTypeEqual(f) )
+									usedFunctions[n] = f;
+							}
+						}
+						else if( func.name == "$dlgte" )
+						{
+							// This is the delegate factory
+							asCScriptFunction *f = FindRegisteredGlobalFunction(engine, engine->nameSpaces[0], DELEGATE_FACTORY);
+							asASSERT( f && func.IsSignatureEqual(f) );
+							usedFunctions[n] = f;
+						}
+						else
+						{
+							// Must match one of the above cases
+							asASSERT(false);
+						}
 					}
 				}
 				else if( func.objectType == 0 )
@@ -2000,6 +2080,16 @@ void asCReader::ReadUsedFunctions()
 
 			if( usedFunctions[n] == 0 )
 			{
+				if( aggregateRestoreStage != 0 )
+				{
+					asCString detail;
+					detail.Format(
+						"LoadByteCode failed to resolve aggregate used function %u (%c): %s",
+						n, c,
+						func.GetDeclaration(true, true, false, true));
+					engine->WriteMessage("", 0, 0, asMSGTYPE_ERROR,
+						detail.AddressOf());
+				}
 				Error(TXT_INVALID_BYTECODE_d);
 				return;
 			}
@@ -2277,12 +2367,61 @@ asCScriptFunction *asCReader::ReadFunction(bool &isNew, bool addToModule, bool a
 				if (addToGC && !addToModule)
 					engine->gc.AddScriptObjectToGC(func, &engine->functionBehaviours);
 
+				if (static_cast<asBYTE>(bits) & 128u)
+				{
+					aggregateRestoreStage = "prelude";
+					// Aggregate cleanup is a generation-local backend directory. Persist
+					// only normalized stack coordinates plus semantic type/function table
+					// references. The physical element offsets are reconstructed and
+					// authenticated from the translated list bytecode below.
+					const asUINT aggregateCount =
+						SanityCheck(ReadEncodedUInt(), 1000000);
+					func->scriptData->aggregateCleanupInfo.SetLength(aggregateCount);
+					for (asUINT aggregateIndex = 0;
+						aggregateIndex < aggregateCount && !error;
+						++aggregateIndex)
+					{
+						asSAggregateCleanupInfo& cleanup =
+							func->scriptData->aggregateCleanupInfo[aggregateIndex];
+						cleanup.bufferOffset =
+							SanityCheck(ReadEncodedInt(), 1000000);
+						cleanup.elementType = ReadTypeInfo();
+						cleanup.actionFunctionId =
+							SanityCheck(ReadEncodedInt(), 1000001);
+						cleanup.maxElementCount =
+							SanityCheck(ReadEncodedUInt(), 1000000);
+						if (cleanup.bufferOffset <= 0
+							|| cleanup.elementType == 0
+							|| cleanup.actionFunctionId <= 0
+							|| cleanup.maxElementCount == 0)
+						{
+							Error("LoadByteCode failed. Invalid aggregate cleanup prelude at byte %d");
+							break;
+						}
+						for (asUINT previousIndex = 0;
+							previousIndex < aggregateIndex;
+							++previousIndex)
+						{
+							if (func->scriptData->aggregateCleanupInfo[previousIndex]
+									.bufferOffset == cleanup.bufferOffset)
+							{
+								Error("LoadByteCode failed. Duplicate aggregate cleanup buffer at byte %d");
+								break;
+							}
+						}
+					}
+				}
+
 				if( validatingFunctionArtifact )
 					functionArtifactValidationStage = asFUNCTION_ARTIFACT_STAGE_FUNCTION_BYTECODE;
+				if( aggregateRestoreStage != 0 )
+					aggregateRestoreStage = "bytecode";
 				ReadByteCode(func);
 
 				if( validatingFunctionArtifact )
 					functionArtifactValidationStage = asFUNCTION_ARTIFACT_STAGE_FUNCTION_STATE;
+				if( aggregateRestoreStage != 0 )
+					aggregateRestoreStage = "function state";
 				func->scriptData->variableSpace = SanityCheck(ReadEncodedUInt(), 1000000);
 
 				if (bits & 8)
@@ -2440,6 +2579,8 @@ asCScriptFunction *asCReader::ReadFunction(bool &isNew, bool addToModule, bool a
 
 				if (!noDebugInfo)
 				{
+					if( aggregateRestoreStage != 0 )
+						aggregateRestoreStage = "debug metadata";
 					int length = SanityCheck(ReadEncodedUInt(), 1000000);
 					func->scriptData->lineNumbers.SetLength(length);
 					if (int(func->scriptData->lineNumbers.GetLength()) != length)
@@ -2478,6 +2619,8 @@ asCScriptFunction *asCReader::ReadFunction(bool &isNew, bool addToModule, bool a
 				// Read the variable information
 				if( validatingFunctionArtifact )
 					functionArtifactValidationStage = asFUNCTION_ARTIFACT_STAGE_FUNCTION_LOCALS;
+				if( aggregateRestoreStage != 0 )
+					aggregateRestoreStage = "local metadata";
 				int length = SanityCheck(ReadEncodedUInt(), 1000000);
 				func->scriptData->variables.Allocate(length, false);
 				for (i = 0; i < length; i++)
@@ -2516,6 +2659,8 @@ asCScriptFunction *asCReader::ReadFunction(bool &isNew, bool addToModule, bool a
 				// Read script section name
 				if (!noDebugInfo)
 				{
+					if( aggregateRestoreStage != 0 )
+						aggregateRestoreStage = "script section";
 					asCString name;
 					ReadString(&name);
 					func->scriptData->scriptSectionIdx = engine->GetScriptSectionNameIndex(name.AddressOf());
@@ -2525,6 +2670,8 @@ asCScriptFunction *asCReader::ReadFunction(bool &isNew, bool addToModule, bool a
 				// Read parameter names
 				if (!noDebugInfo)
 				{
+					if( aggregateRestoreStage != 0 )
+						aggregateRestoreStage = "parameter names";
 					asUINT countParam = asUINT(ReadEncodedUInt64());
 					if (countParam > func->parameterTypes.GetLength())
 					{
@@ -2672,6 +2819,8 @@ asCScriptFunction *asCReader::ReadFunction(bool &isNew, bool addToModule, bool a
 		func->ComputeSignatureId();
 	if( validatingFunctionArtifact )
 		functionArtifactValidationStage = asFUNCTION_ARTIFACT_STAGE_FUNCTION_COMPLETE;
+	if( aggregateRestoreStage != 0 )
+		aggregateRestoreStage = "module function tables";
 
 	return func;
 }
@@ -4166,6 +4315,8 @@ void asCReader::TranslateFunction(asCScriptFunction *func)
 	asUINT bcLength = (asUINT)func->scriptData->byteCode.GetLength();
 	asCArray<asUINT> bcSizes(bcLength);
 	asCArray<asUINT> instructionNbrToPos(bcLength);
+	if( aggregateRestoreStage != 0 )
+		aggregateRestoreStage = "bytecode shape";
 	for( n = 0; n < bcLength; )
 	{
 		int c = *(asBYTE*)&bc[n];
@@ -4184,6 +4335,8 @@ void asCReader::TranslateFunction(asCScriptFunction *func)
 	for( n = 0; n < bcLength; bcNum++ )
 	{
 		int c = *(asBYTE*)&bc[n];
+		if( aggregateRestoreStage != 0 )
+			aggregateRestoreStage = asBCInfo[c].name;
 		if( c == asBC_REFCPY ||
 			c == asBC_RefCpyV ||
 			c == asBC_OBJTYPE ||
@@ -4447,14 +4600,56 @@ void asCReader::TranslateFunction(asCScriptFunction *func)
 			// This helper class will collect this information and adjust the size when the
 			// corresponding asBC_FREE is encountered
 
-			// The adjuster also needs to know the list type so it can know the type of the elements
-			asCObjectType *ot = CastToObjectType(func->GetTypeInfoOfLocalVar(asBC_SWORDARG0(&bc[n])));
-			if( !ot )
+			const int bufferOffset = asBC_SWORDARG0(&bc[n]);
+			const asSAggregateCleanupInfo* aggregateCleanup = 0;
+			for( asUINT aggregateIndex = 0;
+				aggregateIndex < func->scriptData->aggregateCleanupInfo.GetLength();
+				++aggregateIndex )
+			{
+				const asSAggregateCleanupInfo& candidate =
+					func->scriptData->aggregateCleanupInfo[aggregateIndex];
+				if( candidate.bufferOffset == bufferOffset )
+				{
+					aggregateCleanup = &candidate;
+					break;
+				}
+			}
+
+			// The legacy object-variable directory is rebuilt only after bytecode
+			// relocation and therefore cannot identify a Canonical synthetic list
+			// buffer here. Its matching FREE already carries the portable usedTypes
+			// operand, so recover the list-pattern type from that same-buffer proof.
+			asCObjectType *ot = CastToObjectType(
+				func->GetTypeInfoOfLocalVar(bufferOffset));
+			if( ot == 0 && aggregateCleanup != 0 )
+			{
+				for( asUINT lookAhead = n
+						+ asBCTypeSize[asBCInfo[c].type];
+					lookAhead < bcLength; )
+				{
+					const asBYTE lookAheadOpcode = *(asBYTE*)&bc[lookAhead];
+					if( lookAheadOpcode == asBC_FREE
+						&& asBC_SWORDARG0(&bc[lookAhead]) == bufferOffset )
+					{
+						const asPWORD serializedTypeIndex =
+							*(asPWORD*)&bc[lookAhead + 1];
+						ot = CastToObjectType(
+							FindType(int(serializedTypeIndex)));
+						break;
+					}
+					lookAhead += asBCTypeSize[
+						asBCInfo[lookAheadOpcode].type];
+				}
+			}
+			if( ot == 0 || !(ot->flags & asOBJ_LIST_PATTERN) )
 			{
 				Error(TXT_INVALID_BYTECODE_d);
 				return;
 			}
-			listAdjusters.PushLast(asNEW(SListAdjuster)(this, &bc[n], ot));
+			listAdjusters.PushLast(asNEW(SListAdjuster)(
+				this, &bc[n], ot,
+				aggregateCleanup ? aggregateCleanup->maxElementCount : 0,
+				aggregateCleanup != 0));
 		}
 		else if( c == asBC_FREE )
 		{
@@ -4481,6 +4676,11 @@ void asCReader::TranslateFunction(asCScriptFunction *func)
 		}
 		else if( c == asBC_SetListSize )
 		{
+			if( listAdjusters.GetLength() == 0 )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
 			// Adjust the offset in the list where the size is informed
 			SListAdjuster *listAdj = listAdjusters[listAdjusters.GetLength()-1];
 			bc[n+1] = listAdj->AdjustOffset(bc[n+1]);
@@ -4490,12 +4690,22 @@ void asCReader::TranslateFunction(asCScriptFunction *func)
 		}
 		else if( c == asBC_PshListElmnt )
 		{
+			if( listAdjusters.GetLength() == 0 )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
 			// Adjust the offset in the list where the size is informed
 			SListAdjuster *listAdj = listAdjusters[listAdjusters.GetLength()-1];
 			bc[n+1] = listAdj->AdjustOffset(bc[n+1]);
 		}
 		else if( c == asBC_SetListType )
 		{
+			if( listAdjusters.GetLength() == 0 )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
 			// Adjust the offset in the list where the typeid is informed
 			SListAdjuster *listAdj = listAdjusters[listAdjusters.GetLength()-1];
 			bc[n+1] = listAdj->AdjustOffset(bc[n+1]);
@@ -4516,6 +4726,8 @@ void asCReader::TranslateFunction(asCScriptFunction *func)
 	// coordinates let Cache V2 authenticate their exact type/function/property
 	// dependencies through the same ordered-relocation contract.
 	const asUINT constructorSemanticOrdinal = bcNum;
+	if( aggregateRestoreStage != 0 )
+		aggregateRestoreStage = "constructor cleanup relocation";
 	for( n = 0;
 		n < func->scriptData->constructorCleanupInfo.GetLength() && !error; ++n )
 	{
@@ -4633,7 +4845,39 @@ void asCReader::TranslateFunction(asCScriptFunction *func)
 		func->scriptData->partialConstructionConstructorId = constructor->id;
 	}
 
+	const asUINT aggregateSemanticOrdinal = constructorSemanticOrdinal
+		+ func->scriptData->constructorCleanupInfo.GetLength()
+		+ (func->scriptData->partialConstructionObjectType != 0 ? 1 : 0);
+	if( aggregateRestoreStage != 0 )
+		aggregateRestoreStage = "aggregate cleanup relocation";
+	for( n = 0;
+		n < func->scriptData->aggregateCleanupInfo.GetLength() && !error;
+		++n )
+	{
+		asSAggregateCleanupInfo& cleanup =
+			func->scriptData->aggregateCleanupInfo[n];
+		const asUINT semanticOrdinal = aggregateSemanticOrdinal + n;
+		RecordFunctionArtifactTypeUse(semanticOrdinal, 0, cleanup.elementType);
+		asCScriptFunction* const actionFunction =
+			FindFunction(cleanup.actionFunctionId - 1);
+		asCObjectType* const elementObjectType =
+			CastToObjectType(cleanup.elementType);
+		if( actionFunction == 0
+			|| elementObjectType == 0
+			|| actionFunction->objectType != cleanup.elementType
+			|| elementObjectType->beh.destruct != actionFunction->id )
+		{
+			Error("LoadByteCode failed. Invalid aggregate cleanup action at byte %d");
+			return;
+		}
+		RecordFunctionArtifactRelocation(
+			semanticOrdinal, 1, actionFunction);
+		cleanup.actionFunctionId = actionFunction->id;
+	}
+
 	// Calculate the stack adjustments
+	if( aggregateRestoreStage != 0 )
+		aggregateRestoreStage = "stack adjustment";
 	CalculateAdjustmentByPos(func);
 	if( func->scriptData->constructorCommittedCountOffset > 0 )
 		func->scriptData->constructorCommittedCountOffset = AdjustStackPosition(
@@ -4641,6 +4885,13 @@ void asCReader::TranslateFunction(asCScriptFunction *func)
 	if( func->scriptData->partialConstructionObjectOffset > 0 )
 		func->scriptData->partialConstructionObjectOffset = AdjustStackPosition(
 			func->scriptData->partialConstructionObjectOffset);
+	for( n = 0;
+		n < func->scriptData->aggregateCleanupInfo.GetLength(); ++n )
+	{
+		asSAggregateCleanupInfo& cleanup =
+			func->scriptData->aggregateCleanupInfo[n];
+		cleanup.bufferOffset = AdjustStackPosition(cleanup.bufferOffset);
+	}
 
 	// Adjust all variable positions in the bytecode
 	bc = func->scriptData->byteCode.AddressOf();
@@ -4707,6 +4958,115 @@ void asCReader::TranslateFunction(asCScriptFunction *func)
 	{
 		Error(TXT_INVALID_BYTECODE_d);
 		return;
+	}
+	for( n = 0;
+		n < func->scriptData->aggregateCleanupInfo.GetLength() && !error;
+		++n )
+	{
+		if( aggregateRestoreStage != 0 )
+			aggregateRestoreStage = "aggregate cleanup authentication";
+		asSAggregateCleanupInfo& cleanup =
+			func->scriptData->aggregateCleanupInfo[n];
+		if( cleanup.bufferOffset <= 0
+			|| cleanup.bufferOffset > int(func->scriptData->variableSpace)
+			|| cleanup.maxElementCount == 0 )
+		{
+			Error("LoadByteCode failed. Invalid aggregate cleanup frame coordinate at byte %d");
+			return;
+		}
+
+		asCArray<asUINT> committedCounts;
+		asCArray<asUINT> elementOffsets;
+		asUINT allocCount = 0;
+		asUINT freeCount = 0;
+		int committedCountOffset = -1;
+		for( asUINT instruction = 0; instruction < bcLength; )
+		{
+			const asBYTE opcode = *(asBYTE*)&bc[instruction];
+			const bool sameBuffer =
+				(opcode == asBC_AllocMem
+					|| opcode == asBC_SetListSize
+					|| opcode == asBC_PshListElmnt
+					|| opcode == asBC_FREE)
+				&& asBC_SWORDARG0(&bc[instruction]) == cleanup.bufferOffset;
+			if( sameBuffer && opcode == asBC_AllocMem )
+				++allocCount;
+			else if( sameBuffer && opcode == asBC_FREE )
+				++freeCount;
+			else if( sameBuffer && opcode == asBC_SetListSize )
+			{
+				const int candidateOffset = int(bc[instruction + 1]);
+				if( committedCountOffset < 0 )
+					committedCountOffset = candidateOffset;
+				else if( committedCountOffset != candidateOffset )
+				{
+					Error("LoadByteCode failed. Inconsistent aggregate committed-count offset at byte %d");
+					return;
+				}
+				committedCounts.PushLast(bc[instruction + 2]);
+			}
+			else if( sameBuffer && opcode == asBC_PshListElmnt )
+				elementOffsets.PushLast(bc[instruction + 1]);
+			instruction += asBCTypeSize[asBCInfo[opcode].type];
+		}
+
+		const asUINT maxCount = cleanup.maxElementCount;
+		if( allocCount != 1 || freeCount != 1
+			|| committedCountOffset < 0
+			|| committedCounts.GetLength() != maxCount * 2 + 1
+			|| elementOffsets.GetLength() != maxCount * 2 )
+		{
+			Error("LoadByteCode failed. Invalid aggregate cleanup instruction shape at byte %d");
+			return;
+		}
+		for( asUINT elementIndex = 0; elementIndex <= maxCount; ++elementIndex )
+		{
+			if( committedCounts[elementIndex] != elementIndex )
+			{
+				Error("LoadByteCode failed. Invalid aggregate commit sequence at byte %d");
+				return;
+			}
+		}
+		for( asUINT cleanupIndex = 0; cleanupIndex < maxCount; ++cleanupIndex )
+		{
+			if( committedCounts[maxCount + 1 + cleanupIndex]
+					!= maxCount - cleanupIndex - 1
+				|| elementOffsets[maxCount + cleanupIndex]
+					!= elementOffsets[maxCount - cleanupIndex - 1] )
+			{
+				Error("LoadByteCode failed. Invalid aggregate retire sequence at byte %d");
+				return;
+			}
+		}
+
+		asCObjectType* const elementObjectType =
+			CastToObjectType(cleanup.elementType);
+		asUINT expectedStride = elementObjectType
+			? elementObjectType->size : 0;
+		if( expectedStride >= 4 && (expectedStride & 0x3) )
+			expectedStride += 4 - (expectedStride & 0x3);
+		const asUINT observedStride = maxCount > 1
+			? elementOffsets[1] - elementOffsets[0] : expectedStride;
+		if( elementOffsets[0] == 0
+			|| observedStride == 0
+			|| observedStride != expectedStride )
+		{
+			Error("LoadByteCode failed. Invalid aggregate element stride at byte %d");
+			return;
+		}
+		for( asUINT elementIndex = 0; elementIndex < maxCount; ++elementIndex )
+		{
+			if( elementOffsets[elementIndex]
+					!= elementOffsets[0] + elementIndex * observedStride )
+			{
+				Error("LoadByteCode failed. Invalid aggregate element order at byte %d");
+				return;
+			}
+		}
+
+		cleanup.committedCountOffset = asUINT(committedCountOffset);
+		cleanup.firstElementOffset = elementOffsets[0];
+		cleanup.elementStride = observedStride;
 	}
 	if( func->scriptData->partialConstructionObjectOffset > 0 )
 	{
@@ -4956,8 +5316,14 @@ void asCReader::RecordFunctionArtifactPropertyUse(asUINT instructionOrdinal,
 	functionArtifactSymbolUses.PushLast(use);
 }
 
-asCReader::SListAdjuster::SListAdjuster(asCReader* rd, asDWORD* bc, asCObjectType* listType) :
-	reader(rd), allocMemBC(bc), maxOffset(0), patternType(listType), repeatCount(0), lastOffset(-1), nextOffset(0), patternNode(0), nextTypeId(-1)
+asCReader::SListAdjuster::SListAdjuster(asCReader* rd, asDWORD* bc,
+	asCObjectType* listType, asUINT canonicalAggregateRepeatCount,
+	bool canonicalAggregateCommittedCursor) :
+	reader(rd), allocMemBC(bc), maxOffset(0), patternType(listType),
+	repeatCount(0), lastOffset(-1), nextOffset(0), patternNode(0),
+	nextTypeId(-1), aggregateRepeatCount(canonicalAggregateRepeatCount),
+	hasAggregateCommittedCursor(canonicalAggregateCommittedCursor),
+	aggregateRepeatInitialized(false), lastAdjustmentWasReplay(false)
 {
 	asASSERT( patternType && (patternType->flags & asOBJ_LIST_PATTERN) );
 
@@ -4974,15 +5340,26 @@ asCReader::SListAdjuster::SListAdjuster(asCReader* rd, asDWORD* bc, asCObjectTyp
 
 int asCReader::SListAdjuster::AdjustOffset(int offset)
 {
+	const int replayIndex = encodedOffsets.IndexOf(offset);
+	if( replayIndex >= 0 )
+	{
+		lastAdjustmentWasReplay = true;
+		return runtimeOffsets[replayIndex];
+	}
+	lastAdjustmentWasReplay = false;
+
 	if( offset < lastOffset )
 	{
-		reader->Error(TXT_INVALID_BYTECODE_d);
+		reader->Error("LoadByteCode failed. Invalid list-layout offset replay at byte %d");
 		return 0;
 	}
 
-	// If it is the same offset being accessed again, just return the same adjusted value
-	if( lastOffset == offset )
-		return lastAdjustedOffset;
+	auto RememberOffset = [&](int runtimeOffset) -> int
+	{
+		encodedOffsets.PushLast(offset);
+		runtimeOffsets.PushLast(runtimeOffset);
+		return runtimeOffset;
+	};
 
 	lastOffset = offset;
 	lastAdjustedOffset = maxOffset;
@@ -5000,7 +5377,7 @@ int asCReader::SListAdjuster::AdjustOffset(int offset)
 		// Don't move the patternNode yet because the caller must make a call to SetRepeatCount too
 		maxOffset += 4;
 		nextOffset = offset+1;
-		return lastAdjustedOffset;
+		return RememberOffset(lastAdjustedOffset);
 	}
 	else if( patternNode->type == asLPT_TYPE )
 	{
@@ -5034,7 +5411,7 @@ int asCReader::SListAdjuster::AdjustOffset(int offset)
 
 				maxOffset += size;
 				nextOffset = offset+1;
-				return lastAdjustedOffset;
+				return RememberOffset(lastAdjustedOffset);
 			}
 			else
 			{
@@ -5048,7 +5425,7 @@ int asCReader::SListAdjuster::AdjustOffset(int offset)
 				// The first adjustment is for the typeId
 				maxOffset += 4;
 				nextOffset = offset+1;
-				return lastAdjustedOffset;
+				return RememberOffset(lastAdjustedOffset);
 			}
 		}
 		else
@@ -5080,7 +5457,7 @@ int asCReader::SListAdjuster::AdjustOffset(int offset)
 				patternNode = patternNode->next;
 
 			nextOffset = offset+1;
-			return lastAdjustedOffset;
+			return RememberOffset(lastAdjustedOffset);
 		}
 	}
 	else if( patternNode->type == asLPT_START )
@@ -5100,7 +5477,7 @@ int asCReader::SListAdjuster::AdjustOffset(int offset)
 	{
 		if( stack.GetLength() == 0 )
 		{
-			reader->Error(TXT_INVALID_BYTECODE_d);
+			reader->Error("LoadByteCode failed. Invalid list-layout nesting at byte %d");
 			return 0;
 		}
 
@@ -5117,7 +5494,7 @@ int asCReader::SListAdjuster::AdjustOffset(int offset)
 	else
 	{
 		// Something is wrong with the pattern list declaration
-		reader->Error(TXT_INVALID_BYTECODE_d);
+		reader->Error("LoadByteCode failed. Invalid list-layout pattern at byte %d");
 		return 0;
 	}
 
@@ -5126,8 +5503,25 @@ int asCReader::SListAdjuster::AdjustOffset(int offset)
 
 void asCReader::SListAdjuster::SetRepeatCount(asUINT rc)
 {
+	// Canonical aggregate bytecode revisits the list-size cell after every
+	// successful element and while retiring the committed prefix. These are
+	// runtime cursor writes, not additional list-pattern declarations.
+	if( lastAdjustmentWasReplay )
+		return;
+	if( hasAggregateCommittedCursor && !aggregateRepeatInitialized )
+	{
+		rc = aggregateRepeatCount;
+		aggregateRepeatInitialized = true;
+	}
+
 	// Make sure the list is expecting a repeat at this location
-	asASSERT( patternNode->type == asLPT_REPEAT || patternNode->type == asLPT_REPEAT_SAME );
+	if( patternNode == 0 ||
+		(patternNode->type != asLPT_REPEAT &&
+		 patternNode->type != asLPT_REPEAT_SAME) )
+	{
+		reader->Error("LoadByteCode failed. Invalid list-layout repeat declaration at byte %d");
+		return;
+	}
 
 	// Now move to the next patternNode
 	patternNode = patternNode->next;
@@ -6183,8 +6577,12 @@ void asCWriter::WriteFunction(asCScriptFunction* func)
 			func->scriptData->partialConstructionObjectType != 0
 			|| func->scriptData->partialConstructionObjectOffset != 0
 			|| func->scriptData->partialConstructionConstructorId != 0;
+		const bool hasAggregateCleanup =
+			func->scriptData->aggregateCleanupInfo.GetLength() != 0;
 		if( hasConstructorCleanup || hasPartialConstruction )
 			bits += 64;
+		if( hasAggregateCleanup )
+			bits = static_cast<char>(static_cast<asBYTE>(bits) | 128u);
 		WriteData(&bits, 1);
 
 		// For external shared functions the rest is not needed
@@ -6193,6 +6591,150 @@ void asCWriter::WriteFunction(asCScriptFunction* func)
 
 		// Calculate the adjustment by position lookup table
 		CalculateAdjustmentByPos(func);
+
+		if( hasAggregateCleanup )
+		{
+			const asUINT aggregateCount =
+				func->scriptData->aggregateCleanupInfo.GetLength();
+			WriteEncodedInt64(aggregateCount);
+			for( i = 0; i < aggregateCount; ++i )
+			{
+				const asSAggregateCleanupInfo& cleanup =
+					func->scriptData->aggregateCleanupInfo[i];
+				asCObjectType* const elementObjectType =
+					CastToObjectType(cleanup.elementType);
+				asCScriptFunction* const actionFunction =
+					cleanup.actionFunctionId > 0
+						&& asUINT(cleanup.actionFunctionId)
+							< engine->scriptFunctions.GetLength()
+					? engine->scriptFunctions[cleanup.actionFunctionId] : 0;
+				bool duplicateBuffer = false;
+				for( asUINT previousIndex = 0;
+					previousIndex < i; ++previousIndex )
+				{
+					if( func->scriptData->aggregateCleanupInfo[previousIndex]
+							.bufferOffset == cleanup.bufferOffset )
+					{
+						duplicateBuffer = true;
+						break;
+					}
+				}
+				if( cleanup.bufferOffset <= 0
+					|| cleanup.elementType == 0
+					|| elementObjectType == 0
+					|| actionFunction == 0
+					|| actionFunction->objectType != cleanup.elementType
+					|| elementObjectType->beh.destruct != actionFunction->id
+					|| cleanup.committedCountOffset != 0
+					|| cleanup.firstElementOffset == 0
+					|| cleanup.elementStride == 0
+					|| cleanup.maxElementCount == 0
+					|| duplicateBuffer )
+				{
+					Error(TXT_INVALID_BYTECODE_d);
+					return;
+				}
+
+				// Authenticate the generation-local aggregate directory against the
+				// complete executable shape before the list-layout encoder consumes
+				// maxElementCount. A forged count must fail the writer transaction,
+				// never drive SListAdjuster past the end of its pattern stack.
+				asCArray<asUINT> committedCounts;
+				asCArray<asUINT> elementOffsets;
+				asUINT allocCount = 0;
+				asUINT freeCount = 0;
+				int committedCountOffset = -1;
+				asDWORD* const functionByteCode =
+					func->scriptData->byteCode.AddressOf();
+				const asUINT functionByteCodeLength =
+					func->scriptData->byteCode.GetLength();
+				for( asUINT instruction = 0;
+					instruction < functionByteCodeLength; )
+				{
+					const asBYTE opcode = *(asBYTE*)&functionByteCode[instruction];
+					const asUINT instructionSize =
+						asBCTypeSize[asBCInfo[opcode].type];
+					if( instructionSize == 0
+						|| instruction + instructionSize > functionByteCodeLength )
+					{
+						Error(TXT_INVALID_BYTECODE_d);
+						return;
+					}
+					const bool sameBuffer =
+						(opcode == asBC_AllocMem
+							|| opcode == asBC_SetListSize
+							|| opcode == asBC_PshListElmnt
+							|| opcode == asBC_FREE)
+						&& asBC_SWORDARG0(&functionByteCode[instruction])
+							== cleanup.bufferOffset;
+					if( sameBuffer && opcode == asBC_AllocMem )
+						++allocCount;
+					else if( sameBuffer && opcode == asBC_FREE )
+						++freeCount;
+					else if( sameBuffer && opcode == asBC_SetListSize )
+					{
+						const int candidateOffset =
+							int(functionByteCode[instruction + 1]);
+						if( committedCountOffset < 0 )
+							committedCountOffset = candidateOffset;
+						else if( committedCountOffset != candidateOffset )
+						{
+							Error(TXT_INVALID_BYTECODE_d);
+							return;
+						}
+						committedCounts.PushLast(
+							functionByteCode[instruction + 2]);
+					}
+					else if( sameBuffer && opcode == asBC_PshListElmnt )
+					{
+						elementOffsets.PushLast(
+							functionByteCode[instruction + 1]);
+					}
+					instruction += instructionSize;
+				}
+
+				const asUINT maxCount = cleanup.maxElementCount;
+				if( allocCount != 1 || freeCount != 1
+					|| committedCountOffset
+						!= int(cleanup.committedCountOffset)
+					|| committedCounts.GetLength() != maxCount * 2 + 1
+					|| elementOffsets.GetLength() != maxCount * 2 )
+				{
+					Error(TXT_INVALID_BYTECODE_d);
+					return;
+				}
+				for( asUINT elementIndex = 0;
+					elementIndex <= maxCount; ++elementIndex )
+				{
+					if( committedCounts[elementIndex] != elementIndex )
+					{
+						Error(TXT_INVALID_BYTECODE_d);
+						return;
+					}
+				}
+				for( asUINT elementIndex = 0;
+					elementIndex < maxCount; ++elementIndex )
+				{
+					const asUINT expectedElementOffset =
+						cleanup.firstElementOffset
+						+ elementIndex * cleanup.elementStride;
+					if( elementOffsets[elementIndex] != expectedElementOffset
+						|| committedCounts[maxCount + 1 + elementIndex]
+							!= maxCount - elementIndex - 1
+						|| elementOffsets[maxCount + elementIndex]
+							!= elementOffsets[maxCount - elementIndex - 1] )
+					{
+						Error(TXT_INVALID_BYTECODE_d);
+						return;
+					}
+				}
+
+				WriteEncodedInt64(AdjustStackPosition(cleanup.bufferOffset));
+				WriteTypeInfo(cleanup.elementType);
+				WriteEncodedInt64(FindFunctionIndex(actionFunction) + 1);
+				WriteEncodedInt64(cleanup.maxElementCount);
+			}
+		}
 
 		WriteByteCode(func);
 
@@ -7344,8 +7886,25 @@ void asCWriter::WriteByteCode(asCScriptFunction *func)
 			short var = asBC_WORDARG0(tmpBC);
 			asCObjectType *ot = CastToObjectType(func->GetTypeInfoOfLocalVar(var));
 
+			const asSAggregateCleanupInfo* aggregateCleanup = 0;
+			for( asUINT aggregateIndex = 0;
+				aggregateIndex < func->scriptData->aggregateCleanupInfo.GetLength();
+				++aggregateIndex )
+			{
+				const asSAggregateCleanupInfo& candidate =
+					func->scriptData->aggregateCleanupInfo[aggregateIndex];
+				if( candidate.bufferOffset == var )
+				{
+					aggregateCleanup = &candidate;
+					break;
+				}
+			}
+
 			// Create this helper object to adjust the offset of the elements accessed in the buffer
-			listAdjusters.PushLast(asNEW(SListAdjuster)(ot));
+			listAdjusters.PushLast(asNEW(SListAdjuster)(
+				ot,
+				aggregateCleanup ? aggregateCleanup->maxElementCount : 0,
+				aggregateCleanup != 0));
 		}
 		else if( c == asBC_FREE ) // wW_PTR_ARG
 		{
@@ -7362,6 +7921,11 @@ void asCWriter::WriteByteCode(asCScriptFunction *func)
 		}
 		else if( c == asBC_SetListSize )
 		{
+			if( listAdjusters.GetLength() == 0 )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
 			// Adjust the offset in the initialization list
 			SListAdjuster *listAdj = listAdjusters[listAdjusters.GetLength()-1];
 			tmpBC[1] = listAdj->AdjustOffset(tmpBC[1], listAdj->patternType);
@@ -7371,12 +7935,22 @@ void asCWriter::WriteByteCode(asCScriptFunction *func)
 		}
 		else if( c == asBC_PshListElmnt )   // W_DW_ARG
 		{
+			if( listAdjusters.GetLength() == 0 )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
 			// Adjust the offset in the initialization list
 			SListAdjuster *listAdj = listAdjusters[listAdjusters.GetLength()-1];
 			tmpBC[1] = listAdj->AdjustOffset(tmpBC[1], listAdj->patternType);
 		}
 		else if( c == asBC_SetListType )
 		{
+			if( listAdjusters.GetLength() == 0 )
+			{
+				Error(TXT_INVALID_BYTECODE_d);
+				return;
+			}
 			// Adjust the offset in the initialization list
 			SListAdjuster *listAdj = listAdjusters[listAdjusters.GetLength()-1];
 			tmpBC[1] = listAdj->AdjustOffset(tmpBC[1], listAdj->patternType);
@@ -7630,7 +8204,13 @@ void asCWriter::WriteByteCode(asCScriptFunction *func)
 	}
 }
 
-asCWriter::SListAdjuster::SListAdjuster(asCObjectType *ot) : patternType(ot), repeatCount(0), entries(0), lastOffset(-1), nextOffset(0), nextTypeId(-1)
+asCWriter::SListAdjuster::SListAdjuster(asCObjectType *ot,
+	asUINT canonicalAggregateRepeatCount,
+	bool canonicalAggregateCommittedCursor) : patternType(ot), repeatCount(0),
+	entries(0), lastOffset(-1), nextOffset(0), nextTypeId(-1),
+	aggregateRepeatCount(canonicalAggregateRepeatCount),
+	hasAggregateCommittedCursor(canonicalAggregateCommittedCursor),
+	aggregateRepeatInitialized(false), lastAdjustmentWasReplay(false)
 {
 	asASSERT( ot && (ot->flags & asOBJ_LIST_PATTERN) );
 
@@ -7646,11 +8226,22 @@ int asCWriter::SListAdjuster::AdjustOffset(int offset, asCObjectType *listPatter
 	asASSERT( patternType == listPatternType );
 	UNUSED_VAR(listPatternType);
 
+	const int replayIndex = runtimeOffsets.IndexOf(offset);
+	if( replayIndex >= 0 )
+	{
+		lastAdjustmentWasReplay = true;
+		return encodedOffsets[replayIndex];
+	}
+	lastAdjustmentWasReplay = false;
+
 	asASSERT( offset >= lastOffset );
 
-	// If it is the same offset being accessed again, just return the same adjusted value
-	if( offset == lastOffset )
-		return entries-1;
+	auto RememberOffset = [&](int encodedOffset) -> int
+	{
+		runtimeOffsets.PushLast(offset);
+		encodedOffsets.PushLast(encodedOffset);
+		return encodedOffset;
+	};
 
 	asASSERT( offset >= nextOffset );
 
@@ -7662,7 +8253,7 @@ int asCWriter::SListAdjuster::AdjustOffset(int offset, asCObjectType *listPatter
 	{
 		// Don't move the patternNode yet because the caller must make a call to SetRepeatCount too
 		nextOffset = offset + 4;
-		return entries++;
+		return RememberOffset(entries++);
 	}
 	else if( patternNode->type == asLPT_TYPE )
 	{
@@ -7724,7 +8315,7 @@ int asCWriter::SListAdjuster::AdjustOffset(int offset, asCObjectType *listPatter
 				patternNode = patternNode->next;
 		}
 
-		return entries++;
+		return RememberOffset(entries++);
 	}
 	else if( patternNode->type == asLPT_START )
 	{
@@ -7762,6 +8353,17 @@ int asCWriter::SListAdjuster::AdjustOffset(int offset, asCObjectType *listPatter
 
 void asCWriter::SListAdjuster::SetRepeatCount(asUINT rc)
 {
+	// Canonical aggregate committed-prefix updates reuse the size cell. Only the
+	// first encounter describes the structural repeat count to the portable
+	// list-layout encoder; later encounters preserve the runtime cursor value.
+	if( lastAdjustmentWasReplay )
+		return;
+	if( hasAggregateCommittedCursor && !aggregateRepeatInitialized )
+	{
+		rc = aggregateRepeatCount;
+		aggregateRepeatInitialized = true;
+	}
+
 	// Make sure the list is expecting a repeat at this location
 	asASSERT( patternNode->type == asLPT_REPEAT || patternNode->type == asLPT_REPEAT_SAME );
 

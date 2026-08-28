@@ -757,6 +757,446 @@ public:
 			TEXT("AOT must reject only this constructor instead of publishing a partial native cleanup plan")));
 	}
 
+	TEST_METHOD(AggregatePartialConstructionPublishesStableTypedFallback)
+	{
+		asCASTContext Context;
+		const asASTDeclId TranslationUnit =
+			Context.CreateTranslationUnit("JitAggregatePartialConstruction");
+		const asCQualType VoidType = Context.InternPrimitive(ttVoid);
+		const asCQualType ElementType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FJitAggregateElement", 0);
+		const asCQualType AggregateType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FJitAggregateBox", 0);
+
+		const asASTDeclId ElementClass = Context.CreateDecl(
+			asAST_DECL_CLASS, TranslationUnit,
+			asCSourceRange(), "FJitAggregateElement");
+		Context.SetStableKey(ElementClass, "FJitAggregateElement");
+		Context.SetDeclType(ElementClass, ElementType);
+		Context.SetDeclLayout(ElementClass, 4, 4);
+		const asASTDeclId ElementDestructor = Context.CreateDecl(
+			asAST_DECL_DESTRUCTOR, ElementClass,
+			asCSourceRange(), "FJitAggregateElement");
+		Context.SetStableKey(
+			ElementDestructor, "FJitAggregateElement::~FJitAggregateElement()");
+		Context.SetDeclType(ElementDestructor, VoidType);
+
+		const asASTDeclId AggregateClass = Context.CreateDecl(
+			asAST_DECL_CLASS, TranslationUnit,
+			asCSourceRange(), "FJitAggregateBox");
+		Context.SetStableKey(AggregateClass, "FJitAggregateBox");
+		Context.SetDeclType(AggregateClass, AggregateType);
+		Context.SetDeclLayout(AggregateClass, 8, 8);
+		const asASTDeclId ListFactory = Context.CreateDecl(
+			asAST_DECL_CONSTRUCTOR, AggregateClass,
+			asCSourceRange(), "FJitAggregateBox");
+		Context.SetStableKey(ListFactory, "FJitAggregateBox::list_factory");
+		Context.SetDeclType(ListFactory, VoidType);
+		Context.AddDeclTrait(ListFactory, asAST_TRAIT_LIST_FACTORY);
+
+		const asASTDeclId Function = Context.CreateDecl(
+			asAST_DECL_FUNCTION, TranslationUnit,
+			asCSourceRange(), "BuildAggregate");
+		Context.SetStableKey(Function, "BuildAggregate()");
+		Context.SetDeclType(Function, VoidType);
+		const asASTStmtId FunctionBody = Context.CreateStmt(
+			asAST_STMT_BLOCK, Function, asCSourceRange());
+		Context.SetBody(Function, FunctionBody);
+
+		const asASTExprId Aggregate = Context.CreateExpr(
+			asAST_EXPR_CONSTRUCT, AggregateType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		Context.SetLiteral(Aggregate, "list-pattern");
+		Context.SetResolvedDecl(Aggregate, ListFactory);
+		for (asUINT ElementIndex = 0; ElementIndex < 3; ++ElementIndex)
+		{
+			const asASTExprId Element = Context.CreateExpr(
+				asAST_EXPR_CONSTRUCT, ElementType,
+				asAST_VALUE_PRVALUE, asCSourceRange());
+			Context.SetLiteral(Element, "FJitAggregateElement()");
+			Context.AddExprChild(Aggregate, Element);
+		}
+		const asASTStmtId AggregateStatement = Context.CreateStmt(
+			asAST_STMT_EXPR, Function, asCSourceRange());
+		Context.SetStmtExpr(AggregateStatement, Aggregate);
+		Context.AddStmtChild(FunctionBody, AggregateStatement);
+
+		asSASTLifetimeRecord Record;
+		Record.subjectKind = asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT;
+		Record.subject = asSASTLifetimeNodeId::FromExpr(Aggregate);
+		Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_ELEMENT;
+		Record.actionTarget =
+			asSASTLifetimeNodeId::FromDecl(ElementDestructor);
+		Record.activationPoint = asSASTLifetimeNodeId::FromExpr(Aggregate);
+		Record.semanticRegion = asSASTLifetimeNodeId::FromDecl(Function);
+		Record.phase = asAST_LIFETIME_PHASE_AGGREGATE_ELEMENT;
+		Record.supportedExitMask = asAST_LIFETIME_EXIT_EXCEPTION;
+		Record.constructionStep = 0;
+		Record.order = 0;
+		Record.completeObjectCommit = false;
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Record)));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("aggregate committed-prefix protocol must seal before AOT analysis")));
+
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts FirstFacts =
+			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+				Context, Function);
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts SecondFacts =
+			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+				Context, Function);
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITCleanupPlanState::PartialConstruction,
+			FirstFacts.CleanupPlanState,
+			TEXT("aggregate progress must retain the authenticated partial-construction classification")));
+		ASSERT_THAT(IsTrue(FirstFacts.LifetimeSummary.IsAuthenticated()));
+		ASSERT_THAT(AreEqual(1u, FirstFacts.LifetimeSummary.RecordCount));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint32>(
+				EAngelscriptTypedASTJITLifetimeActionFlags::DestroyElement),
+			static_cast<uint32>(FirstFacts.LifetimeSummary.ActionFlags)));
+		ASSERT_THAT(IsTrue(FirstFacts.bHasExceptionCleanup));
+		ASSERT_THAT(IsTrue(FirstFacts.bCleanupPlanCoversAllTransfers));
+		ASSERT_THAT(IsFalse(
+			FirstFacts.LifetimeSummary.bNativeObjectFrameABIAvailable,
+			TEXT("TypedASTJIT has no reviewed native aggregate element-frame ABI")));
+		ASSERT_THAT(IsTrue(
+			FirstFacts.LifetimeSummary.StableKey
+				== SecondFacts.LifetimeSummary.StableKey
+			&& FirstFacts.LifetimeSummary.ABIKey
+				== SecondFacts.LifetimeSummary.ABIKey,
+			TEXT("aggregate lifetime summaries must be deterministic and pointer-free")));
+
+		FAngelscriptTypedASTJITEligibilityInput EligibilityInput;
+		EligibilityInput.bIsUFunctionRoot = true;
+		EligibilityInput.Purpose =
+			EAngelscriptTypedASTJITEligibilityPurpose::RootCallClosure;
+		EligibilityInput.SealedAST = &Context;
+		EligibilityInput.CanonicalFunctionDecl = Function;
+		EligibilityInput.Shape.SymbolName = TEXT("ASJIT_BuildAggregate");
+		EligibilityInput.Shape.ReturnType =
+			asCDataType::CreatePrimitive(ttVoid, false);
+		const FAngelscriptTypedASTJITEligibility Eligibility =
+			EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
+				EligibilityInput);
+		ASSERT_THAT(IsFalse(Eligibility.bEligible));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
+			Eligibility.Reason,
+			TEXT("unsupported native aggregate frames must fall back only this function")));
+		ASSERT_THAT(IsTrue(Eligibility.Detail.Contains(
+			TEXT("AuthenticatedAggregatePartialConstructionRequiresNativeElementFrameABI")),
+			TEXT("fallback must distinguish an authenticated aggregate cursor from an invalid plan")));
+
+		FAngelscriptTypedASTJITEmitOptions EmitOptions;
+		const FAngelscriptTypedASTJITEmission Emission =
+			EmitTypedASTJITFunction(
+				Context, Function, EligibilityInput.Shape, EmitOptions);
+		ASSERT_THAT(IsFalse(Emission.bSuccess));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
+			Emission.FailureReason,
+			TEXT("AOT must not publish a partial native aggregate cleanup plan")));
+	}
+
+	TEST_METHOD(AggregateCommittedCursorShapeParticipatesInTypedIdentity)
+	{
+		bool bFixturesSealed = true;
+		auto AnalyzeAggregate = [&](const asUINT ElementCount)
+			-> FAngelscriptTypedASTJITCanonicalLifetimeFacts
+		{
+			asCASTContext Context;
+			const asASTDeclId TranslationUnit =
+				Context.CreateTranslationUnit("JitAggregateCursorIdentity");
+			const asCQualType VoidType = Context.InternPrimitive(ttVoid);
+			const asCQualType ElementType = Context.InternNamedType(
+				asAST_TYPE_VALUE_OBJECT, "FJitCursorElement", 0);
+			const asCQualType AggregateType = Context.InternNamedType(
+				asAST_TYPE_VALUE_OBJECT, "FJitCursorBox", 0);
+
+			const asASTDeclId ElementClass = Context.CreateDecl(
+				asAST_DECL_CLASS, TranslationUnit,
+				asCSourceRange(), "FJitCursorElement");
+			Context.SetStableKey(ElementClass, "FJitCursorElement");
+			Context.SetDeclType(ElementClass, ElementType);
+			Context.SetDeclLayout(ElementClass, 4, 4);
+			const asASTDeclId ElementDestructor = Context.CreateDecl(
+				asAST_DECL_DESTRUCTOR, ElementClass,
+				asCSourceRange(), "FJitCursorElement");
+			Context.SetStableKey(
+				ElementDestructor, "FJitCursorElement::~FJitCursorElement()");
+			Context.SetDeclType(ElementDestructor, VoidType);
+
+			const asASTDeclId AggregateClass = Context.CreateDecl(
+				asAST_DECL_CLASS, TranslationUnit,
+				asCSourceRange(), "FJitCursorBox");
+			Context.SetStableKey(AggregateClass, "FJitCursorBox");
+			Context.SetDeclType(AggregateClass, AggregateType);
+			Context.SetDeclLayout(AggregateClass, 8, 8);
+			const asASTDeclId ListFactory = Context.CreateDecl(
+				asAST_DECL_CONSTRUCTOR, AggregateClass,
+				asCSourceRange(), "FJitCursorBox");
+			Context.SetStableKey(ListFactory, "FJitCursorBox::list_factory");
+			Context.SetDeclType(ListFactory, VoidType);
+			Context.AddDeclTrait(ListFactory, asAST_TRAIT_LIST_FACTORY);
+
+			const asASTDeclId Function = Context.CreateDecl(
+				asAST_DECL_FUNCTION, TranslationUnit,
+				asCSourceRange(), "BuildCursorAggregate");
+			Context.SetStableKey(Function, "BuildCursorAggregate()");
+			Context.SetDeclType(Function, VoidType);
+			const asASTStmtId FunctionBody = Context.CreateStmt(
+				asAST_STMT_BLOCK, Function, asCSourceRange());
+			Context.SetBody(Function, FunctionBody);
+
+			const asASTExprId Aggregate = Context.CreateExpr(
+				asAST_EXPR_CONSTRUCT, AggregateType,
+				asAST_VALUE_PRVALUE, asCSourceRange());
+			Context.SetLiteral(Aggregate, "list-pattern");
+			Context.SetResolvedDecl(Aggregate, ListFactory);
+			for (asUINT ElementIndex = 0;
+				ElementIndex < ElementCount; ++ElementIndex)
+			{
+				const asASTExprId Element = Context.CreateExpr(
+					asAST_EXPR_CONSTRUCT, ElementType,
+					asAST_VALUE_PRVALUE, asCSourceRange());
+				Context.SetLiteral(Element, "FJitCursorElement()");
+				Context.AddExprChild(Aggregate, Element);
+			}
+			const asASTStmtId AggregateStatement = Context.CreateStmt(
+				asAST_STMT_EXPR, Function, asCSourceRange());
+			Context.SetStmtExpr(AggregateStatement, Aggregate);
+			Context.AddStmtChild(FunctionBody, AggregateStatement);
+
+			asSASTLifetimeRecord Record;
+			Record.subjectKind = asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT;
+			Record.subject = asSASTLifetimeNodeId::FromExpr(Aggregate);
+			Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_ELEMENT;
+			Record.actionTarget =
+				asSASTLifetimeNodeId::FromDecl(ElementDestructor);
+			Record.activationPoint = asSASTLifetimeNodeId::FromExpr(Aggregate);
+			Record.semanticRegion = asSASTLifetimeNodeId::FromDecl(Function);
+			Record.phase = asAST_LIFETIME_PHASE_AGGREGATE_ELEMENT;
+			Record.supportedExitMask = asAST_LIFETIME_EXIT_EXCEPTION;
+			Record.order = 0;
+			bFixturesSealed &= Context.AddLifetimeRecord(Record) == 0;
+			bFixturesSealed &= Context.Seal() == 0;
+			if (!bFixturesSealed)
+			{
+				return FAngelscriptTypedASTJITCanonicalLifetimeFacts{};
+			}
+			return AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+				Context, Function);
+		};
+
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts TwoElements =
+			AnalyzeAggregate(2);
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts ThreeElements =
+			AnalyzeAggregate(3);
+		ASSERT_THAT(IsTrue(bFixturesSealed,
+			TEXT("both aggregate cursor identity fixtures must seal")));
+		ASSERT_THAT(IsTrue(TwoElements.LifetimeSummary.IsAuthenticated()));
+		ASSERT_THAT(IsTrue(ThreeElements.LifetimeSummary.IsAuthenticated()));
+		ASSERT_THAT(IsTrue(
+			TwoElements.LifetimeSummary.StableKey
+				!= ThreeElements.LifetimeSummary.StableKey,
+			TEXT("stable lifetime identity must include the aggregate commit-point count")));
+		ASSERT_THAT(IsTrue(
+			TwoElements.LifetimeSummary.ABIKey
+				!= ThreeElements.LifetimeSummary.ABIKey,
+			TEXT("native aggregate frame ABI identity must include the committed-cursor upper bound")));
+	}
+
+	TEST_METHOD(NestedAggregateParentOrdinalParticipatesInTypedIdentityAndFallback)
+	{
+		bool bFixturesSealed = true;
+		auto BuildNestedAggregate = [&](asCASTContext& Context,
+			const bool bNestedFirst) -> asASTDeclId
+		{
+			const asASTDeclId TranslationUnit =
+				Context.CreateTranslationUnit("JitNestedAggregateIdentity");
+			const asCQualType VoidType = Context.InternPrimitive(ttVoid);
+			const asCQualType ElementType = Context.InternNamedType(
+				asAST_TYPE_VALUE_OBJECT, "FJitNestedElement", 0);
+			const asCQualType AggregateType = Context.InternNamedType(
+				asAST_TYPE_VALUE_OBJECT, "FJitNestedBox", 0);
+
+			const asASTDeclId ElementClass = Context.CreateDecl(
+				asAST_DECL_CLASS, TranslationUnit,
+				asCSourceRange(), "FJitNestedElement");
+			Context.SetStableKey(ElementClass, "FJitNestedElement");
+			Context.SetDeclType(ElementClass, ElementType);
+			Context.SetDeclLayout(ElementClass, 4, 4);
+			const asASTDeclId ElementConstructor = Context.CreateDecl(
+				asAST_DECL_CONSTRUCTOR, ElementClass,
+				asCSourceRange(), "FJitNestedElement");
+			Context.SetStableKey(
+				ElementConstructor, "FJitNestedElement::FJitNestedElement()");
+			Context.SetDeclType(ElementConstructor, VoidType);
+			const asASTDeclId ElementListFactory = Context.CreateDecl(
+				asAST_DECL_CONSTRUCTOR, ElementClass,
+				asCSourceRange(), "FJitNestedElement");
+			Context.SetStableKey(
+				ElementListFactory, "FJitNestedElement::list_factory");
+			Context.SetDeclType(ElementListFactory, VoidType);
+			Context.AddDeclTrait(
+				ElementListFactory, asAST_TRAIT_LIST_FACTORY);
+			const asASTDeclId ElementDestructor = Context.CreateDecl(
+				asAST_DECL_DESTRUCTOR, ElementClass,
+				asCSourceRange(), "FJitNestedElement");
+			Context.SetStableKey(
+				ElementDestructor,
+				"FJitNestedElement::~FJitNestedElement()");
+			Context.SetDeclType(ElementDestructor, VoidType);
+
+			const asASTDeclId AggregateClass = Context.CreateDecl(
+				asAST_DECL_CLASS, TranslationUnit,
+				asCSourceRange(), "FJitNestedBox");
+			Context.SetStableKey(AggregateClass, "FJitNestedBox");
+			Context.SetDeclType(AggregateClass, AggregateType);
+			Context.SetDeclLayout(AggregateClass, 8, 8);
+			const asASTDeclId AggregateListFactory = Context.CreateDecl(
+				asAST_DECL_CONSTRUCTOR, AggregateClass,
+				asCSourceRange(), "FJitNestedBox");
+			Context.SetStableKey(
+				AggregateListFactory, "FJitNestedBox::list_factory");
+			Context.SetDeclType(AggregateListFactory, VoidType);
+			Context.AddDeclTrait(
+				AggregateListFactory, asAST_TRAIT_LIST_FACTORY);
+
+			const asASTDeclId Function = Context.CreateDecl(
+				asAST_DECL_FUNCTION, TranslationUnit,
+				asCSourceRange(), "BuildNestedAggregate");
+			Context.SetStableKey(Function, "BuildNestedAggregate()");
+			Context.SetDeclType(Function, VoidType);
+			const asASTStmtId FunctionBody = Context.CreateStmt(
+				asAST_STMT_BLOCK, Function, asCSourceRange());
+			Context.SetBody(Function, FunctionBody);
+
+			const asASTExprId InnerAggregate = Context.CreateExpr(
+				asAST_EXPR_CONSTRUCT, ElementType,
+				asAST_VALUE_PRVALUE, asCSourceRange());
+			Context.SetLiteral(InnerAggregate, "inner-list-pattern");
+			Context.SetResolvedDecl(InnerAggregate, ElementListFactory);
+			for (asUINT ElementIndex = 0; ElementIndex < 2; ++ElementIndex)
+			{
+				const asASTExprId InnerElement = Context.CreateExpr(
+					asAST_EXPR_CONSTRUCT, ElementType,
+					asAST_VALUE_PRVALUE, asCSourceRange());
+				Context.SetLiteral(InnerElement, "FJitNestedElement()");
+				Context.SetResolvedDecl(InnerElement, ElementConstructor);
+				Context.AddExprChild(InnerAggregate, InnerElement);
+			}
+
+			const asASTExprId SiblingElement = Context.CreateExpr(
+				asAST_EXPR_CONSTRUCT, ElementType,
+				asAST_VALUE_PRVALUE, asCSourceRange());
+			Context.SetLiteral(SiblingElement, "FJitNestedElement()");
+			Context.SetResolvedDecl(SiblingElement, ElementConstructor);
+
+			const asASTExprId OuterAggregate = Context.CreateExpr(
+				asAST_EXPR_CONSTRUCT, AggregateType,
+				asAST_VALUE_PRVALUE, asCSourceRange());
+			Context.SetLiteral(OuterAggregate, "outer-list-pattern");
+			Context.SetResolvedDecl(OuterAggregate, AggregateListFactory);
+			Context.AddExprChild(OuterAggregate,
+				bNestedFirst ? InnerAggregate : SiblingElement);
+			Context.AddExprChild(OuterAggregate,
+				bNestedFirst ? SiblingElement : InnerAggregate);
+
+			const asASTStmtId AggregateStatement = Context.CreateStmt(
+				asAST_STMT_EXPR, Function, asCSourceRange());
+			Context.SetStmtExpr(AggregateStatement, OuterAggregate);
+			Context.AddStmtChild(FunctionBody, AggregateStatement);
+
+			auto AddAggregateRecord = [&](const asASTExprId Aggregate,
+				const asUINT Order)
+			{
+				asSASTLifetimeRecord Record;
+				Record.subjectKind =
+					asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT;
+				Record.subject = asSASTLifetimeNodeId::FromExpr(Aggregate);
+				Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_ELEMENT;
+				Record.actionTarget =
+					asSASTLifetimeNodeId::FromDecl(ElementDestructor);
+				Record.activationPoint =
+					asSASTLifetimeNodeId::FromExpr(Aggregate);
+				Record.semanticRegion =
+					asSASTLifetimeNodeId::FromDecl(Function);
+				Record.phase = asAST_LIFETIME_PHASE_AGGREGATE_ELEMENT;
+				Record.supportedExitMask = asAST_LIFETIME_EXIT_EXCEPTION;
+				Record.constructionStep = 0;
+				Record.order = Order;
+				bFixturesSealed &=
+					Context.AddLifetimeRecord(Record) == 0;
+			};
+			AddAggregateRecord(OuterAggregate, 0);
+			AddAggregateRecord(InnerAggregate, 1);
+			bFixturesSealed &= Context.Seal() == 0;
+			return Function;
+		};
+
+		asCASTContext NestedFirstContext;
+		const asASTDeclId NestedFirstFunction = BuildNestedAggregate(
+			NestedFirstContext, true);
+		asCASTContext NestedSecondContext;
+		const asASTDeclId NestedSecondFunction = BuildNestedAggregate(
+			NestedSecondContext, false);
+		ASSERT_THAT(IsTrue(bFixturesSealed,
+			TEXT("both nested aggregate fixtures must seal")));
+
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts NestedFirst =
+			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+				NestedFirstContext, NestedFirstFunction);
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts NestedSecond =
+			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+				NestedSecondContext, NestedSecondFunction);
+		ASSERT_THAT(IsTrue(NestedFirst.LifetimeSummary.IsAuthenticated()));
+		ASSERT_THAT(IsTrue(NestedSecond.LifetimeSummary.IsAuthenticated()));
+		ASSERT_THAT(AreEqual(2u, NestedFirst.LifetimeSummary.RecordCount));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITCleanupPlanState::PartialConstruction,
+			NestedFirst.CleanupPlanState));
+		ASSERT_THAT(IsTrue(
+			NestedFirst.LifetimeSummary.StableKey
+				!= NestedSecond.LifetimeSummary.StableKey,
+			TEXT("nested aggregate parent/child ordinal must participate in stable identity")));
+		ASSERT_THAT(IsTrue(
+			NestedFirst.LifetimeSummary.ABIKey
+				!= NestedSecond.LifetimeSummary.ABIKey,
+			TEXT("nested aggregate parent/child ordinal must participate in native frame ABI identity")));
+
+		FAngelscriptTypedASTJITEligibilityInput EligibilityInput;
+		EligibilityInput.bIsUFunctionRoot = true;
+		EligibilityInput.Purpose =
+			EAngelscriptTypedASTJITEligibilityPurpose::RootCallClosure;
+		EligibilityInput.SealedAST = &NestedFirstContext;
+		EligibilityInput.CanonicalFunctionDecl = NestedFirstFunction;
+		EligibilityInput.Shape.SymbolName = TEXT("ASJIT_BuildNestedAggregate");
+		EligibilityInput.Shape.ReturnType =
+			asCDataType::CreatePrimitive(ttVoid, false);
+		const FAngelscriptTypedASTJITEligibility Eligibility =
+			EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
+				EligibilityInput);
+		ASSERT_THAT(IsFalse(Eligibility.bEligible));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
+			Eligibility.Reason));
+		ASSERT_THAT(IsTrue(Eligibility.Detail.Contains(
+			TEXT("AuthenticatedAggregatePartialConstructionRequiresNativeElementFrameABI")),
+			TEXT("nested aggregate must use the same precise per-function VM fallback")));
+
+		FAngelscriptTypedASTJITEmitOptions EmitOptions;
+		const FAngelscriptTypedASTJITEmission Emission =
+			EmitTypedASTJITFunction(
+				NestedFirstContext, NestedFirstFunction,
+				EligibilityInput.Shape, EmitOptions);
+		ASSERT_THAT(IsFalse(Emission.bSuccess));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
+			Emission.FailureReason,
+			TEXT("nested aggregate must not publish a partial native cleanup plan")));
+	}
+
 	TEST_METHOD(DelegatingConstructorPublishesCompleteCommitAndTypedFallback)
 	{
 		asCASTContext Context;

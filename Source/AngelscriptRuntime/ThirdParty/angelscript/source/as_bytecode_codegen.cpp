@@ -1670,9 +1670,13 @@ namespace
 
 	struct asSCodeGenObject
 	{
-		int offset;
+		int offset = 0;
 		asCDataType type;
-		bool live;
+		bool live = false;
+		// List buffers have pointer representation and exception ownership, but
+		// no source-level asCDataType. The list-pattern relocation resolves their
+		// anonymous Runtime cleanup helper after the complete artifact validates.
+		bool listBuffer = false;
 	};
 
 	asCTypeInfo* FindArtifactType(
@@ -1938,6 +1942,7 @@ namespace
 			bc.ClearAll();
 
 			objects.SetLength(0);
+			func->scriptData->aggregateCleanupInfo.SetLength(0);
 			returnSlot = 0x7fffffff;
 			returnDwords = 0;
 			// Keep the JIT entry as the function's first instruction. Parameter
@@ -2123,6 +2128,14 @@ namespace
 			// single allocation-order list while emitting the normal epilogue.
 			for( asUINT i = 0; i < objects.GetLength(); ++i )
 			{
+				if( objects[i].listBuffer )
+				{
+					// ResolveAndPatchTypeRelocations replaces this null type with the
+					// exact anonymous list-pattern helper before Commit/AddReferences.
+					func->scriptData->objVariableTypes.PushLast(0);
+					func->scriptData->objVariablePos.PushLast(objects[i].offset);
+					continue;
+				}
 				asCTypeInfo* info = objects[i].type.GetTypeInfo();
 				if( info == 0 || info == &bc.GetEngine()->functionBehaviours )
 				{
@@ -2142,6 +2155,10 @@ namespace
 				func->scriptData->objVariablePos.GetLength();
 			for( asUINT i = 0; i < objects.GetLength(); ++i )
 			{
+				if( objects[i].listBuffer )
+				{
+					continue;
+				}
 				asCTypeInfo* info = objects[i].type.GetTypeInfo();
 				if( info == 0 || info == &bc.GetEngine()->functionBehaviours )
 				{
@@ -5817,15 +5834,6 @@ namespace
 				return 0;
 			}
 			const int listId = objType->beh.listFactory;
-			asCArray<int> args;
-			for( asUINT i = 0; i < expr->children.GetLength(); ++i )
-			{
-				args.PushLast(EmitExpr(expr->children[i]));
-			}
-			if( !ok )
-			{
-				return 0;
-			}
 			asCDataType elemType;
 			if( !ListPatternElementType(factory, elemType) )
 			{
@@ -5833,8 +5841,7 @@ namespace
 				return 0;
 			}
 			const int elemBytes = ListElementBytes(elemType);
-			const int elemDwords = ValueDwords(elemType);
-			const asUINT count = args.GetLength();
+			const asUINT count = expr->children.GetLength();
 			asDWORD bufferSize = 4;
 			for( asUINT i = 0; i < count; ++i )
 			{
@@ -5844,21 +5851,146 @@ namespace
 				}
 				bufferSize += (asDWORD)elemBytes;
 			}
+
+			const asSASTLifetimeAggregatePlan* const aggregatePlan =
+				lifetimeView.FindAggregatePlan(expr->id);
+			asCScriptFunction* aggregateDestructor = 0;
+			asCObjectType* const elementObjectType =
+				CastToObjectType(elemType.GetTypeInfo());
+			const bool elementNeedsDestructor = elementObjectType != 0
+				&& elementObjectType->beh.destruct > 0;
+			if( aggregatePlan != 0 )
+			{
+				const asCDecl* const destructorDecl =
+					aggregatePlan->actionTarget.nodeClass == asAST_LIFETIME_NODE_DECL
+					? context.GetDecl(asASTDeclId(
+						aggregatePlan->actionTarget.value)) : 0;
+				aggregateDestructor = destructorDecl
+					? FindFunc(destructorDecl->id) : 0;
+				if( activeDecl == 0
+					|| aggregatePlan->aggregate != expr->id
+					|| aggregatePlan->semanticOwner != activeDecl->id
+					|| aggregatePlan->actionKind
+						!= asAST_LIFETIME_ACTION_DESTROY_ELEMENT
+					|| destructorDecl == 0
+					|| destructorDecl->kind != asAST_DECL_DESTRUCTOR
+					|| aggregateDestructor == 0
+					|| elementObjectType == 0
+					|| aggregateDestructor->objectType != elementObjectType
+					|| aggregateDestructor->id != elementObjectType->beh.destruct
+					|| aggregatePlan->elementCommits.GetLength() != count
+					|| !CanEmitSealedStorageCopy(elemType) )
+				{
+					FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+					return 0;
+				}
+				for( asUINT elementIndex = 0; elementIndex < count; ++elementIndex )
+				{
+					if( aggregatePlan->elementCommits[elementIndex]
+						!= expr->children[elementIndex] )
+					{
+						FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+						return 0;
+					}
+				}
+				asCArray<asSASTLifetimeAggregateCleanupAction> derivedCleanup;
+				if( lifetimeView.DeriveAggregateAbortCleanup(
+						expr->id, count, derivedCleanup)
+						!= asAST_VERIFY_OK
+					|| derivedCleanup.GetLength() != count )
+				{
+					FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+					return 0;
+				}
+				for( asUINT cleanupIndex = 0; cleanupIndex < count; ++cleanupIndex )
+				{
+					const asUINT expectedOrdinal = count - cleanupIndex - 1;
+					if( derivedCleanup[cleanupIndex].elementOrdinal
+							!= expectedOrdinal
+						|| derivedCleanup[cleanupIndex].element
+							!= expr->children[expectedOrdinal]
+						|| derivedCleanup[cleanupIndex].actionTarget
+							!= aggregatePlan->actionTarget )
+					{
+						FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+						return 0;
+					}
+				}
+			}
+			else if( elementNeedsDestructor )
+			{
+				// A non-trivial element without the Sema-authored aggregate plan
+				// must never fall back to the legacy byte-content liveness guess.
+				FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+				return 0;
+			}
+
 			const int bufferVar = AllocPointerVariable();
+			asSCodeGenObject bufferObject;
+			bufferObject.offset = bufferVar;
+			bufferObject.listBuffer = true;
+			objects.PushLast(bufferObject);
 			bc.InstrSHORT_DW(asBC_AllocMem, (short)bufferVar, bufferSize);
-			bc.InstrSHORT_DW_DW(asBC_SetListSize, (short)bufferVar, 0, count);
+			bc.InstrSHORT_DW_DW(asBC_SetListSize, (short)bufferVar, 0, 0);
 			asDWORD offset = 4;
+			asCArray<asDWORD> elementOffsets;
 			for( asUINT i = 0; i < count; ++i )
 			{
 				if( elemBytes >= 4 && (offset & 0x3) )
 				{
 					offset += 4 - (offset & 0x3);
 				}
+				elementOffsets.PushLast(offset);
+				const int argument = EmitExpr(expr->children[i]);
+				if( !ok )
+				{
+					return 0;
+				}
 				bc.InstrSHORT_DW(asBC_PshListElmnt, (short)bufferVar, offset);
 				bc.Instr(asBC_PopRPtr);
-				EmitWriteValue(args[i], elemType);
+				EmitWriteValue(argument, elemType);
+				if( !ok )
+				{
+					return 0;
+				}
+				// The current element becomes exception-visible only after its
+				// complete value has been written successfully.
+				bc.InstrSHORT_DW_DW(
+					asBC_SetListSize, (short)bufferVar, 0, i + 1);
 				offset += (asDWORD)elemBytes;
 			}
+
+			if( aggregatePlan != 0 )
+			{
+				const asUINT firstElementOffset = count > 0
+					? elementOffsets[0] : 4;
+				const asUINT elementStride = elemBytes >= 4
+					? static_cast<asUINT>((elemBytes + 3) & ~3)
+					: static_cast<asUINT>(elemBytes);
+				for( asUINT elementIndex = 0; elementIndex < count; ++elementIndex )
+				{
+					if( elementOffsets[elementIndex]
+						!= firstElementOffset + elementIndex * elementStride )
+					{
+						FailAt(__LINE__, asNOT_SUPPORTED);
+						return 0;
+					}
+				}
+				asSAggregateCleanupInfo cleanup;
+				cleanup.bufferOffset = bufferVar;
+				cleanup.elementType = elementObjectType;
+				cleanup.actionFunctionId = aggregateDestructor->id;
+				cleanup.committedCountOffset = 0;
+				cleanup.firstElementOffset = firstElementOffset;
+				cleanup.elementStride = elementStride;
+				cleanup.maxElementCount = count;
+				func->scriptData->aggregateCleanupInfo.PushLast(cleanup);
+				if( builder )
+				{
+					builder->MarkDependency(aggregateDestructor, 0, 0);
+				}
+			}
+
 			bc.InstrSHORT(asBC_PshVPtr, (short)bufferVar);
 			if( factory->funcType == asFUNC_SYSTEM )
 				bc.Call(asBC_CALLSYS, listId, AS_PTR_SIZE);
@@ -5866,6 +5998,26 @@ namespace
 				bc.Call(asBC_CALL, listId, AS_PTR_SIZE);
 			bc.InstrSHORT(asBC_STOREOBJ, (short)dest);
 			bc.ObjInfo(dest, asOBJ_INIT);
+			if( aggregatePlan != 0 )
+			{
+				// Retire the committed prefix in strict reverse order on the normal
+				// path too. Decrement the cursor before entering user/script cleanup
+				// so a nested failure cannot destroy the same element twice.
+				for( asUINT cursor = count; cursor > 0; --cursor )
+				{
+					bc.InstrSHORT_DW_DW(
+						asBC_SetListSize, (short)bufferVar, 0, cursor - 1);
+					bc.InstrSHORT_DW(
+						asBC_PshListElmnt,
+						(short)bufferVar,
+						elementOffsets[cursor - 1]);
+					bc.Call(
+						aggregateDestructor->funcType == asFUNC_SYSTEM
+							? asBC_CALLSYS : asBC_CALL,
+						aggregateDestructor->id,
+						AS_PTR_SIZE);
+				}
+			}
 			// The cleanup helper is an anonymous Engine cache entry. Emit a null
 			// candidate operand and carry the exact list-factory identity plus owner
 			// ABI in a pointer-free relocation; the aggregate install transaction
@@ -9892,9 +10044,10 @@ int asSBytecodeCodeGenArtifact::ResolveAndPatchTypeRelocations(
 			if( detail ) detail->Format("relocation[%u] has no frozen binding", i);
 			return asRUNTIME_TYPE_BIND_INVALID;
 		}
+		asCScriptFunction* const function =
+			relocationFunctions[relocation.functionArtifactIndex];
 		asDWORD* const instruction =
-			relocationFunctions[relocation.functionArtifactIndex]
-				->scriptData->byteCode.AddressOf()
+			function->scriptData->byteCode.AddressOf()
 			+ relocation.bytecodeDwordOffset;
 		const asEBCInstr opcode = static_cast<asEBCInstr>(
 			*reinterpret_cast<const asBYTE*>(instruction));
@@ -9991,6 +10144,39 @@ int asSBytecodeCodeGenArtifact::ResolveAndPatchTypeRelocations(
 			}
 			asBC_PTRARG(instruction) =
 				reinterpret_cast<asPWORD>(listPatternType);
+
+			// The same relocation authenticates the buffer's exception-cleanup
+			// directory entry. Exactly one unresolved heap slot must correspond to
+			// the FREE operand; partial or ambiguous patching is rejected before
+			// any candidate function is committed.
+			const int bufferOffset =
+				static_cast<int>(asBC_SWORDARG0(instruction));
+			int cleanupDirectoryIndex = -1;
+			for( asUINT objectIndex = 0;
+				objectIndex < function->scriptData->objVariablesOnHeap;
+				++objectIndex )
+			{
+				if( function->scriptData->objVariablePos[objectIndex]
+						!= bufferOffset
+					|| function->scriptData->objVariableTypes[objectIndex] != 0 )
+				{
+					continue;
+				}
+				if( cleanupDirectoryIndex >= 0 )
+				{
+					return asRUNTIME_TYPE_BIND_INVALID;
+				}
+				cleanupDirectoryIndex = static_cast<int>(objectIndex);
+			}
+			if( cleanupDirectoryIndex < 0 )
+			{
+				if( detail ) detail->Format(
+					"relocation[%u] list buffer has no unique exception-cleanup entry: offset=%d",
+					i, bufferOffset);
+				return asRUNTIME_TYPE_BIND_INVALID;
+			}
+			function->scriptData->objVariableTypes[
+				static_cast<asUINT>(cleanupDirectoryIndex)] = listPatternType;
 		}
 		else if( relocation.use == asTYPE_RELOC_RUNTIME_TYPE_TARGET
 			&& (opcode == asBC_ALLOC || opcode == asBC_FREE

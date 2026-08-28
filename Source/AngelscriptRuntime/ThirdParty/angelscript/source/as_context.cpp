@@ -5272,23 +5272,89 @@ bool asCContext::CleanStackFrame(bool catchException)
 				// Check if the pointer is initialized
 				if( *(asPWORD*)&m_regs.stackFramePointer[-pos] )
 				{
+					const asSAggregateCleanupInfo* aggregateCleanup = 0;
+					for( asUINT aggregateIndex = 0;
+						aggregateIndex < m_currentFunction->scriptData->aggregateCleanupInfo.GetLength();
+						++aggregateIndex )
+					{
+						const asSAggregateCleanupInfo& candidate =
+							m_currentFunction->scriptData->aggregateCleanupInfo[aggregateIndex];
+						if( candidate.bufferOffset == pos )
+						{
+							asASSERT( aggregateCleanup == 0 );
+							aggregateCleanup = &candidate;
+						}
+					}
+					if( aggregateCleanup != 0 )
+					{
+						asBYTE* const buffer = (asBYTE*)*(asPWORD*)
+							&m_regs.stackFramePointer[-pos];
+						asUINT& committedStorage = *(asUINT*)(
+							buffer + aggregateCleanup->committedCountOffset);
+						asUINT committedCount = committedStorage;
+						asASSERT( committedCount <= aggregateCleanup->maxElementCount );
+						if( committedCount > aggregateCleanup->maxElementCount )
+							committedCount = aggregateCleanup->maxElementCount;
+						while( committedCount > 0 )
+						{
+							--committedCount;
+							// Retire before invoking cleanup so re-entrancy or a nested
+							// exception cannot execute this exact element twice.
+							committedStorage = committedCount;
+							void* const target = buffer
+								+ aggregateCleanup->firstElementOffset
+								+ committedCount * aggregateCleanup->elementStride;
+							asCObjectType* const elementType = CastToObjectType(
+								aggregateCleanup->elementType);
+							if( elementType != 0
+								&& aggregateCleanup->actionFunctionId > 0 )
+							{
+								if( (elementType->flags & asOBJ_SCRIPT_OBJECT) != 0 )
+								{
+									asASSERT( elementType->beh.destruct
+										== aggregateCleanup->actionFunctionId );
+									((asCScriptObject*)target)->CallDestructor(elementType);
+								}
+								else
+								{
+									m_engine->CallObjectMethod(
+										target,
+										aggregateCleanup->actionFunctionId);
+								}
+							}
+						}
+						m_engine->CallFree(buffer);
+						*(asPWORD*)&m_regs.stackFramePointer[-pos] = 0;
+						continue;
+					}
+
 					// Call the object's destructor
-					if (m_currentFunction->scriptData->objVariableTypes[n]->flags & asOBJ_FUNCDEF)
+					asCTypeInfo* const variableType =
+						m_currentFunction->scriptData->objVariableTypes[n];
+					asASSERT( variableType != 0 );
+					if( variableType == 0 )
+					{
+						m_engine->CallFree((void*)*(asPWORD*)
+							&m_regs.stackFramePointer[-pos]);
+						*(asPWORD*)&m_regs.stackFramePointer[-pos] = 0;
+						continue;
+					}
+					if (variableType->flags & asOBJ_FUNCDEF)
 					{
 						(*(asCScriptFunction**)&m_regs.stackFramePointer[-pos])->Release();
 					}
-					else if( (m_currentFunction->scriptData->objVariableTypes[n]->flags & asOBJ_SCRIPT_OBJECT) &&
-						m_currentFunction->scriptData->objVariableTypes[n]->GetUserData() == 0 )
+					else if( (variableType->flags & asOBJ_SCRIPT_OBJECT) &&
+						variableType->GetUserData() == 0 )
 					{
-						auto* objType = m_currentFunction->scriptData->objVariableTypes[n];
+						auto* objType = variableType;
 						auto* scriptObj = *(asCScriptObject**)&m_regs.stackFramePointer[-pos];
 						m_engine->ReleaseRawScriptObject(
 							scriptObj,
 							(asCObjectType*)objType);
 					}
-					else if( m_currentFunction->scriptData->objVariableTypes[n]->flags & asOBJ_REF )
+					else if( variableType->flags & asOBJ_REF )
 					{
-						asCObjectType *objType = CastToObjectType(m_currentFunction->scriptData->objVariableTypes[n]);
+						asCObjectType *objType = CastToObjectType(variableType);
 						asSTypeBehaviour *beh = &objType->beh;
 						asASSERT( (objType->flags & asOBJ_NOCOUNT) || beh->release );
 						if( beh->release )
@@ -5296,11 +5362,11 @@ bool asCContext::CleanStackFrame(bool catchException)
 					}
 					else
 					{
-						asSTypeBehaviour *beh = &CastToObjectType(m_currentFunction->scriptData->objVariableTypes[n])->beh;
+						asSTypeBehaviour *beh = &CastToObjectType(variableType)->beh;
 						if( beh->destruct )
 							m_engine->CallObjectMethod((void*)*(asPWORD*)&m_regs.stackFramePointer[-pos], beh->destruct);
-						else if( m_currentFunction->scriptData->objVariableTypes[n]->flags & asOBJ_LIST_PATTERN )
-							m_engine->DestroyList((asBYTE*)*(asPWORD*)&m_regs.stackFramePointer[-pos], CastToObjectType(m_currentFunction->scriptData->objVariableTypes[n]));
+						else if( variableType->flags & asOBJ_LIST_PATTERN )
+							m_engine->DestroyList((asBYTE*)*(asPWORD*)&m_regs.stackFramePointer[-pos], CastToObjectType(variableType));
 
 						// Free the memory
 						m_engine->CallFree((void*)*(asPWORD*)&m_regs.stackFramePointer[-pos]);

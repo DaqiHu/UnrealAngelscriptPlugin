@@ -185,6 +185,47 @@ namespace CanonicalASTSemaAuthorityTest
 		}
 	}
 
+	struct FAggregateElement
+	{
+		int32 Value = 0;
+
+		~FAggregateElement()
+		{
+		}
+	};
+
+	static void ConstructAggregateElement(asIScriptGeneric* Generic)
+	{
+		if (Generic != nullptr && Generic->GetObject() != nullptr)
+		{
+			new (Generic->GetObject()) FAggregateElement();
+		}
+	}
+
+	static void DestructAggregateElement(asIScriptGeneric* Generic)
+	{
+		if (Generic != nullptr && Generic->GetObject() != nullptr)
+		{
+			static_cast<FAggregateElement*>(Generic->GetObject())
+				->~FAggregateElement();
+		}
+	}
+
+	struct FAggregateListBox
+	{
+		int32 Marker = 0;
+	};
+
+	static FAggregateListBox GAggregateListBox;
+
+	static void CreateAggregateListBox(asIScriptGeneric* Generic)
+	{
+		if (Generic != nullptr)
+		{
+			Generic->SetReturnAddress(&GAggregateListBox);
+		}
+	}
+
 	struct FSemaIntArray
 	{
 		int32 Unused = 0;
@@ -3485,6 +3526,204 @@ public:
 		ASSERT_THAT(IsTrue(
 			bListPatternHasSelectedFactory,
 			TEXT("Sema must attach the selected list factory to the structured list-pattern Construct; ") + DumpMsg));
+	}
+
+	TEST_METHOD(ListPatternSealsExactAggregateElementLifetimeBeforeCodeGen)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"FAggregateElement",
+			sizeof(CanonicalASTSemaAuthorityTest::FAggregateElement),
+			asOBJ_VALUE | asOBJ_APP_CLASS_CD
+				| asOBJ_APP_CLASS_ALLINTS) >= 0));
+		const int NativeConstructor = ScriptEngine->RegisterObjectBehaviour(
+			"FAggregateElement",
+			asBEHAVE_CONSTRUCT,
+			"void f()",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::ConstructAggregateElement),
+			asCALL_GENERIC);
+		const int NativeDestructor = ScriptEngine->RegisterObjectBehaviour(
+			"FAggregateElement",
+			asBEHAVE_DESTRUCT,
+			"void f()",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::DestructAggregateElement),
+			asCALL_GENERIC);
+		ASSERT_THAT(IsTrue(NativeConstructor > 0 && NativeDestructor > 0,
+			TEXT("aggregate element fixture must register an exact non-trivial lifecycle")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"FAggregateListBox",
+			0,
+			asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0));
+		const int NativeListFactory = ScriptEngine->RegisterObjectBehaviour(
+			"FAggregateListBox",
+			asBEHAVE_LIST_FACTORY,
+			"FAggregateListBox f(int &in) {repeat FAggregateElement}",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::CreateAggregateListBox),
+			asCALL_GENERIC);
+		ASSERT_THAT(IsTrue(NativeListFactory > 0,
+			TEXT("aggregate fixture must register its exact list factory")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "SemaAggregateElementLifetime");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"SemaAggregateElementLifetime.as",
+			R"AS(
+				int Entry()
+				{
+					FAggregateElement First;
+					FAggregateElement Second;
+					FAggregateElement Third;
+					FAggregateListBox Box = {
+						First,
+						Second,
+						Third
+					};
+					return 1;
+				}
+			)AS")));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		// Stop before Bytecode emission. Aggregate partial-construction is a
+		// Canonical Sema fact; no backend may infer it from the list-factory ABI.
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateFunctions()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildLayoutClasses()));
+		Builder.BuildAllocateGlobalVariables();
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			Builder.BuildLayoutFunctionsWithoutGlobalInitializers()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST()));
+
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		const asCDecl* Entry = nullptr;
+		const asCDecl* ElementDestructor = nullptr;
+		const asCExpr* Aggregate = nullptr;
+		for (asUINT Index = 1; Index <= Context->GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context->GetDecl(asASTDeclId(Index));
+			const asCDecl* const Parent = Decl != nullptr
+				? Context->GetDecl(Decl->parent) : nullptr;
+			if (Decl != nullptr && Decl->kind == asAST_DECL_FUNCTION
+				&& Decl->name.Equals("Entry"))
+			{
+				Entry = Decl;
+			}
+			else if (Decl != nullptr && Decl->kind == asAST_DECL_DESTRUCTOR
+				&& Parent != nullptr
+				&& Parent->name.Equals("FAggregateElement"))
+			{
+				ElementDestructor = Decl;
+			}
+		}
+		for (asUINT Index = 1; Index <= Context->GetExprCount(); ++Index)
+		{
+			const asCExpr* const Expr = Context->GetExpr(asASTExprId(Index));
+			if (Expr != nullptr && Expr->kind == asAST_EXPR_CONSTRUCT
+				&& Expr->literal.Equals("list-pattern")
+				&& Expr->children.GetLength() == 3)
+			{
+				Aggregate = Expr;
+				break;
+			}
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Details = FString::Printf(
+			TEXT("aggregate lifetime must be sealed before Bytecode. AST:\n%s"),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump));
+		ASSERT_THAT(IsTrue(Entry != nullptr && ElementDestructor != nullptr
+			&& Aggregate != nullptr,
+			*Details));
+		if (Entry == nullptr || ElementDestructor == nullptr || Aggregate == nullptr)
+		{
+			return;
+		}
+
+		const asSASTLifetimeRecord* AggregateRecord = nullptr;
+		asUINT AggregateRecordIndex = 0;
+		for (asUINT Index = 0; Index < Context->GetLifetimeRecordCount(); ++Index)
+		{
+			const asSASTLifetimeRecord* const Record =
+				Context->GetLifetimeRecord(Index);
+			if (Record != nullptr
+				&& Record->subjectKind
+					== asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT
+				&& Record->subject
+					== asSASTLifetimeNodeId::FromExpr(Aggregate->id))
+			{
+				ASSERT_THAT(IsNull(AggregateRecord,
+					TEXT("one homogeneous aggregate must own exactly one progress record")));
+				AggregateRecord = Record;
+				AggregateRecordIndex = Index;
+			}
+		}
+		ASSERT_THAT(IsNotNull(AggregateRecord,
+			TEXT("Canonical Sema must author aggregate committed-prefix lifetime before CodeGen; ")
+				+ Details));
+		if (AggregateRecord == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(
+			AggregateRecord->actionKind == asAST_LIFETIME_ACTION_DESTROY_ELEMENT
+				&& AggregateRecord->actionTarget
+					== asSASTLifetimeNodeId::FromDecl(ElementDestructor->id)
+				&& AggregateRecord->activationPoint
+					== asSASTLifetimeNodeId::FromExpr(Aggregate->id)
+				&& AggregateRecord->semanticRegion
+					== asSASTLifetimeNodeId::FromDecl(Entry->id)
+				&& AggregateRecord->phase
+					== asAST_LIFETIME_PHASE_AGGREGATE_ELEMENT
+				&& AggregateRecord->supportedExitMask
+					== asAST_LIFETIME_EXIT_EXCEPTION
+				&& AggregateRecord->constructionStep == 0
+				&& !AggregateRecord->completeObjectCommit,
+			*Details));
+
+		asCASTLifetimeView LifetimeView;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			static_cast<int32>(asCASTBuildLifetimeView(
+				*Context, LifetimeView)),
+			*Details));
+		const asSASTLifetimeAggregatePlan* const Plan =
+			LifetimeView.FindAggregatePlan(Aggregate->id);
+		ASSERT_THAT(IsTrue(Plan != nullptr
+			&& Plan->recordIndex == AggregateRecordIndex
+			&& Plan->semanticOwner == Entry->id
+			&& Plan->actionTarget
+				== asSASTLifetimeNodeId::FromDecl(ElementDestructor->id)
+			&& Plan->elementCommits.GetLength() == 3,
+			*Details));
 	}
 
 	TEST_METHOD(GeneratedAccessorsHaveGeneratedTraitAndCallPlan)

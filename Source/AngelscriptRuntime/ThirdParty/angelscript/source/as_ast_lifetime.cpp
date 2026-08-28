@@ -62,6 +62,12 @@ bool IsConstructionRecord(const asSASTLifetimeRecord& record)
 		== asAST_LIFETIME_SUBJECT_CONSTRUCTION_SUBOBJECT;
 }
 
+bool IsAggregateRecord(const asSASTLifetimeRecord& record)
+{
+	return record.subjectKind
+		== asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT;
+}
+
 int VerifyBasicLifetimeRecord(
 	const asCASTContext& context,
 	const asSASTLifetimeRecord& record,
@@ -97,7 +103,8 @@ int VerifyBasicLifetimeRecord(
 	{
 		return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
 	}
-	if( record.actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE )
+	if( record.actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE
+		|| record.actionKind == asAST_LIFETIME_ACTION_DESTROY_ELEMENT )
 	{
 		const asCDecl* const action = record.actionTarget.nodeClass
 			== asAST_LIFETIME_NODE_DECL
@@ -446,6 +453,218 @@ bool ValidateConstructionLifetimeRecord(
 		&& ConstructorOwnsInit(*constructor, call->id);
 }
 
+bool ExprSubtreeContains(
+	const asCASTContext& context,
+	asASTExprId root,
+	asASTExprId needle)
+{
+	if( !root.IsValid() || !needle.IsValid() ) return false;
+	asCArray<asASTExprId> stack;
+	asCArray<asBYTE> visited;
+	visited.SetLength(context.GetExprCount() + 1);
+	stack.PushLast(root);
+	while( stack.GetLength() != 0 )
+	{
+		const asASTExprId currentId = stack.PopLast();
+		if( currentId == needle ) return true;
+		if( !currentId.IsValid() || currentId.snapshotOwner != 0
+			|| currentId.value >= visited.GetLength()
+			|| visited[currentId.value] )
+		{
+			continue;
+		}
+		visited[currentId.value] = 1;
+		const asCExpr* const current = context.GetExpr(currentId);
+		if( current == 0 ) return false;
+		if( current->receiver.IsValid() ) stack.PushLast(current->receiver);
+		for( asUINT childIndex = 0;
+			childIndex < current->children.GetLength(); ++childIndex )
+		{
+			stack.PushLast(current->children[childIndex]);
+		}
+	}
+	return false;
+}
+
+bool StmtSubtreeContainsExpr(
+	const asCASTContext& context,
+	asASTStmtId root,
+	asASTExprId needle)
+{
+	if( !root.IsValid() || !needle.IsValid() ) return false;
+	asCArray<asASTStmtId> stack;
+	asCArray<asBYTE> visited;
+	visited.SetLength(context.GetStmtCount() + 1);
+	stack.PushLast(root);
+	while( stack.GetLength() != 0 )
+	{
+		const asASTStmtId currentId = stack.PopLast();
+		if( !currentId.IsValid() || currentId.snapshotOwner != 0
+			|| currentId.value >= visited.GetLength()
+			|| visited[currentId.value] )
+		{
+			continue;
+		}
+		visited[currentId.value] = 1;
+		const asCStmt* const current = context.GetStmt(currentId);
+		if( current == 0 ) return false;
+		if( current->expr.IsValid()
+			&& ExprSubtreeContains(context, current->expr, needle) )
+		{
+			return true;
+		}
+		if( current->decl.IsValid() )
+		{
+			const asCDecl* const declaration = context.GetDecl(current->decl);
+			for( asUINT initIndex = 0;
+				declaration != 0
+					&& initIndex < declaration->inits.GetLength(); ++initIndex )
+			{
+				if( ExprSubtreeContains(
+					context, declaration->inits[initIndex], needle) )
+				{
+					return true;
+				}
+			}
+		}
+		for( asUINT childIndex = 0;
+			childIndex < current->children.GetLength(); ++childIndex )
+		{
+			stack.PushLast(current->children[childIndex]);
+		}
+	}
+	return false;
+}
+
+bool DeclOwnsExpr(
+	const asCASTContext& context,
+	const asCDecl& owner,
+	asASTExprId expression)
+{
+	for( asUINT initIndex = 0; initIndex < owner.inits.GetLength(); ++initIndex )
+		if( ExprSubtreeContains(context, owner.inits[initIndex], expression) )
+			return true;
+	return owner.body.IsValid()
+		&& StmtSubtreeContainsExpr(context, owner.body, expression);
+}
+
+bool ValueTypeMatchesClass(
+	const asCASTContext& context,
+	const asCQualType& type,
+	const asCDecl& classDecl)
+{
+	const asCType* const canonicalType = type.IsValid()
+		? context.GetType(type.type) : 0;
+	return canonicalType != 0
+		&& canonicalType->kind == asAST_TYPE_VALUE_OBJECT
+		&& !type.IsReference()
+		&& !type.IsHandle()
+		&& classDecl.kind == asAST_DECL_CLASS
+		&& (canonicalType->stableKey.Equals(classDecl.stableKey)
+			|| canonicalType->stableKey.Equals(classDecl.name));
+}
+
+bool AggregateTypeMatchesFactoryOwner(
+	const asCASTContext& context,
+	const asCQualType& type,
+	const asCDecl& classDecl)
+{
+	const asCType* const canonicalType = type.IsValid()
+		? context.GetType(type.type) : 0;
+	return canonicalType != 0
+		&& (canonicalType->kind == asAST_TYPE_VALUE_OBJECT
+			|| canonicalType->kind == asAST_TYPE_REFERENCE_OBJECT)
+		&& classDecl.kind == asAST_DECL_CLASS
+		&& (canonicalType->stableKey.Equals(classDecl.stableKey)
+			|| canonicalType->stableKey.Equals(classDecl.name));
+}
+
+bool DestructorMatchesExprValue(
+	const asCASTContext& context,
+	const asCExpr& expression,
+	const asCDecl& destructor)
+{
+	const asCDecl* const owner = context.GetDecl(destructor.parent);
+	return destructor.kind == asAST_DECL_DESTRUCTOR
+		&& owner != 0
+		&& ValueTypeMatchesClass(context, expression.type, *owner);
+}
+
+bool IsAggregateSemanticOwner(const asCDecl& declaration)
+{
+	return declaration.kind == asAST_DECL_FUNCTION
+		|| declaration.kind == asAST_DECL_METHOD
+		|| declaration.kind == asAST_DECL_CONSTRUCTOR
+		|| declaration.kind == asAST_DECL_DESTRUCTOR;
+}
+
+bool ValidateAggregateLifetimeRecord(
+	const asCASTContext& context,
+	const asSASTLifetimeRecord& record,
+	asUINT& outActivationOrdinal)
+{
+	if( !IsAggregateRecord(record)
+		|| record.subject.nodeClass != asAST_LIFETIME_NODE_EXPR
+		|| record.subject != record.activationPoint
+		|| record.actionKind != asAST_LIFETIME_ACTION_DESTROY_ELEMENT
+		|| record.actionTarget.nodeClass != asAST_LIFETIME_NODE_DECL
+		|| record.semanticRegion.nodeClass != asAST_LIFETIME_NODE_DECL
+		|| record.phase != asAST_LIFETIME_PHASE_AGGREGATE_ELEMENT
+		|| record.supportedExitMask != asAST_LIFETIME_EXIT_EXCEPTION
+		|| record.constructionStep != 0
+		|| record.completeObjectCommit )
+	{
+		return false;
+	}
+
+	const asCExpr* const aggregate = context.GetExpr(
+		asASTExprId(record.subject.value));
+	const asCDecl* const listFactory = aggregate != 0
+		? context.GetDecl(aggregate->resolvedDecl) : 0;
+	const asCDecl* const aggregateClass = listFactory != 0
+		? context.GetDecl(listFactory->parent) : 0;
+	const asCDecl* const destructor = context.GetDecl(
+		asASTDeclId(record.actionTarget.value));
+	const asCDecl* const semanticOwner = context.GetDecl(
+		asASTDeclId(record.semanticRegion.value));
+	if( aggregate == 0 || aggregate->kind != asAST_EXPR_CONSTRUCT
+		|| aggregate->children.GetLength() == 0
+		|| listFactory == 0
+		|| listFactory->kind != asAST_DECL_CONSTRUCTOR
+		|| (listFactory->traits & asAST_TRAIT_LIST_FACTORY) == 0
+		|| aggregateClass == 0
+		|| !AggregateTypeMatchesFactoryOwner(
+			context, aggregate->type, *aggregateClass)
+		|| destructor == 0
+		|| semanticOwner == 0
+		|| !IsAggregateSemanticOwner(*semanticOwner)
+		|| !DeclOwnsExpr(context, *semanticOwner, aggregate->id) )
+	{
+		return false;
+	}
+
+	const asCExpr* const firstElement = context.GetExpr(
+		aggregate->children[0]);
+	if( firstElement == 0
+		|| !DestructorMatchesExprValue(context, *firstElement, *destructor) )
+	{
+		return false;
+	}
+	for( asUINT elementIndex = 1;
+		elementIndex < aggregate->children.GetLength(); ++elementIndex )
+	{
+		const asCExpr* const element = context.GetExpr(
+			aggregate->children[elementIndex]);
+		if( element == 0 || element->type != firstElement->type
+			|| !DestructorMatchesExprValue(context, *element, *destructor) )
+		{
+			return false;
+		}
+	}
+	outActivationOrdinal = aggregate->id.value;
+	return true;
+}
+
 bool FindForEachCommit(
 	const asCASTContext& context,
 	const asSASTLifetimeRecord& record,
@@ -493,6 +712,11 @@ bool ValidateLifetimeRecord(
 	if( IsConstructionRecord(record) )
 	{
 		return ValidateConstructionLifetimeRecord(
+			context, record, outActivationOrdinal);
+	}
+	if( IsAggregateRecord(record) )
+	{
+		return ValidateAggregateLifetimeRecord(
 			context, record, outActivationOrdinal);
 	}
 	if( record.constructionStep != 0
@@ -947,6 +1171,28 @@ asQWORD HashLifetimeView(const asCASTLifetimeView& view)
 		hash = HashIndexArray(hash, plan.recordIndices);
 		hash = HashField(hash, plan.completeRecordIndex);
 	}
+	hash = HashField(hash, view.GetAggregatePlanCount());
+	for( asUINT i = 0; i < view.GetAggregatePlanCount(); ++i )
+	{
+		const asSASTLifetimeAggregatePlan& plan = *view.GetAggregatePlan(i);
+		hash = HashField(hash, asASTHashLifetimeNodeId(
+			asSASTLifetimeNodeId::FromExpr(plan.aggregate)));
+		hash = HashField(hash, asASTHashLifetimeNodeId(
+			asSASTLifetimeNodeId::FromExpr(plan.parentAggregate)));
+		hash = HashField(hash, plan.semanticOwner.value);
+		hash = HashField(hash, plan.semanticOwner.snapshotOwner);
+		hash = HashField(hash, plan.recordIndex);
+		hash = HashField(hash, plan.actionKind);
+		hash = HashField(hash, asASTHashLifetimeNodeId(plan.actionTarget));
+		hash = HashField(hash, plan.elementCommits.GetLength());
+		for( asUINT elementIndex = 0;
+			elementIndex < plan.elementCommits.GetLength(); ++elementIndex )
+		{
+			hash = HashField(hash, asASTHashLifetimeNodeId(
+				asSASTLifetimeNodeId::FromExpr(
+					plan.elementCommits[elementIndex])));
+		}
+	}
 	hash = HashField(hash, view.GetCleanupBindingCount());
 	for( asUINT i = 0; i < view.GetCleanupBindingCount(); ++i )
 	{
@@ -1001,6 +1247,7 @@ void asCASTLifetimeView::Reset()
 	records.SetLength(0);
 	commitPoints.SetLength(0);
 	constructionPlans.SetLength(0);
+	aggregatePlans.SetLength(0);
 	cleanupBindings.SetLength(0);
 	exitPlans.SetLength(0);
 	forEachPhases.SetLength(0);
@@ -1038,6 +1285,49 @@ asCASTLifetimeView::FindConstructionPlan(asASTDeclId constructor) const
 		if( constructionPlans[index].constructor == constructor )
 			return &constructionPlans[index];
 	return 0;
+}
+
+const asSASTLifetimeAggregatePlan* asCASTLifetimeView::GetAggregatePlan(
+	asUINT index) const
+{
+	return index < aggregatePlans.GetLength() ? &aggregatePlans[index] : 0;
+}
+
+const asSASTLifetimeAggregatePlan* asCASTLifetimeView::FindAggregatePlan(
+	asASTExprId aggregate) const
+{
+	for( asUINT index = 0; index < aggregatePlans.GetLength(); ++index )
+		if( aggregatePlans[index].aggregate == aggregate )
+			return &aggregatePlans[index];
+	return 0;
+}
+
+int asCASTLifetimeView::DeriveAggregateAbortCleanup(
+	asASTExprId aggregate,
+	asUINT committedCount,
+	asCArray<asSASTLifetimeAggregateCleanupAction>& outActions) const
+{
+	outActions.SetLength(0);
+	const asSASTLifetimeAggregatePlan* const plan =
+		FindAggregatePlan(aggregate);
+	if( plan == 0
+		|| plan->actionKind != asAST_LIFETIME_ACTION_DESTROY_ELEMENT
+		|| !plan->actionTarget.IsValid()
+		|| committedCount > plan->elementCommits.GetLength() )
+	{
+		return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+	}
+	for( asUINT cursor = committedCount; cursor > 0; --cursor )
+	{
+		asSASTLifetimeAggregateCleanupAction action;
+		action.recordIndex = plan->recordIndex;
+		action.elementOrdinal = cursor - 1;
+		action.element = plan->elementCommits[cursor - 1];
+		action.actionKind = plan->actionKind;
+		action.actionTarget = plan->actionTarget;
+		outActions.PushLast(action);
+	}
+	return asAST_VERIFY_OK;
 }
 
 const asSASTLifetimeCleanupBinding* asCASTLifetimeView::GetCleanupBinding(
@@ -1153,6 +1443,7 @@ int asCASTBuildLifetimeView(
 			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
 		}
 		if( !IsConstructionRecord(*record)
+			&& !IsAggregateRecord(*record)
 			&& !ContainsRegion(regions, record->semanticRegion) )
 			regions.PushLast(record->semanticRegion);
 	}
@@ -1220,10 +1511,11 @@ int asCASTBuildLifetimeView(
 		asSASTLifetimeViewRecord derived;
 		derived.record = source;
 		derived.recordIndex = index;
-		derived.scopeEdgeIndex = IsConstructionRecord(source)
+		derived.scopeEdgeIndex = (IsConstructionRecord(source)
+			|| IsAggregateRecord(source))
 			? static_cast<asUINT>(-1)
 			: FindRegionIndex(outView, source.semanticRegion);
-		if( (!IsConstructionRecord(source)
+		if( ((!IsConstructionRecord(source) && !IsAggregateRecord(source))
 				&& derived.scopeEdgeIndex == static_cast<asUINT>(-1))
 			|| !ValidateLifetimeRecord(
 				context, source, derived.activationOrdinal) )
@@ -1237,7 +1529,9 @@ int asCASTBuildLifetimeView(
 			const asSASTLifetimeViewRecord& previous =
 				outView.records[previousIndex];
 			if( RecordsDuplicateAction(previous.record, source)
-				|| (previous.record.semanticRegion == source.semanticRegion
+				|| (!IsConstructionRecord(source)
+					&& !IsAggregateRecord(source)
+					&& previous.record.semanticRegion == source.semanticRegion
 					&& previous.activationOrdinal
 						>= derived.activationOrdinal) )
 			{
@@ -1328,6 +1622,103 @@ int asCASTBuildLifetimeView(
 	{
 		if( !ValidateConstructionPlan(
 			context, outView, outView.constructionPlans[planIndex]) )
+		{
+			outView.Reset();
+			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+		}
+	}
+
+	for( asUINT recordIndex = 0;
+		recordIndex < outView.records.GetLength(); ++recordIndex )
+	{
+		const asSASTLifetimeViewRecord& derived = outView.records[recordIndex];
+		if( !IsAggregateRecord(derived.record) ) continue;
+		const asASTExprId aggregateId(derived.record.subject.value);
+		if( outView.FindAggregatePlan(aggregateId) != 0 )
+		{
+			outView.Reset();
+			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+		}
+		const asCExpr* const aggregate = context.GetExpr(aggregateId);
+		if( aggregate == 0 )
+		{
+			outView.Reset();
+			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+		}
+		asSASTLifetimeAggregatePlan plan;
+		plan.aggregate = aggregateId;
+		plan.semanticOwner = asASTDeclId(
+			derived.record.semanticRegion.value);
+		plan.recordIndex = derived.recordIndex;
+		plan.actionKind = derived.record.actionKind;
+		plan.actionTarget = derived.record.actionTarget;
+		plan.elementCommits = aggregate->children;
+		outView.aggregatePlans.PushLast(plan);
+	}
+	for( asUINT parentIndex = 0;
+		parentIndex < outView.aggregatePlans.GetLength(); ++parentIndex )
+	{
+		const asSASTLifetimeAggregatePlan& parent =
+			outView.aggregatePlans[parentIndex];
+		for( asUINT elementIndex = 0;
+			elementIndex < parent.elementCommits.GetLength(); ++elementIndex )
+		{
+			const asASTExprId elementId = parent.elementCommits[elementIndex];
+			const asCExpr* const element = context.GetExpr(elementId);
+			const asCDecl* const resolved = element != 0
+				? context.GetDecl(element->resolvedDecl) : 0;
+			const bool isNestedAggregate = element != 0
+				&& element->kind == asAST_EXPR_CONSTRUCT
+				&& resolved != 0
+				&& (resolved->traits & asAST_TRAIT_LIST_FACTORY) != 0;
+			asSASTLifetimeAggregatePlan* child = 0;
+			for( asUINT childIndex = 0;
+				childIndex < outView.aggregatePlans.GetLength(); ++childIndex )
+			{
+				if( outView.aggregatePlans[childIndex].aggregate == elementId )
+				{
+					child = &outView.aggregatePlans[childIndex];
+					break;
+				}
+			}
+			if( isNestedAggregate && child == 0 )
+			{
+				outView.Reset();
+				return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+			}
+			if( child == 0 ) continue;
+			if( child->aggregate == parent.aggregate
+				|| child->parentAggregate.IsValid()
+				|| parent.semanticOwner != child->semanticOwner )
+			{
+				outView.Reset();
+				return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+			}
+			child->parentAggregate = parent.aggregate;
+		}
+	}
+	for( asUINT planIndex = 0;
+		planIndex < outView.aggregatePlans.GetLength(); ++planIndex )
+	{
+		asASTExprId parent = outView.aggregatePlans[planIndex].parentAggregate;
+		for( asUINT guard = 0;
+			parent.IsValid() && guard <= outView.aggregatePlans.GetLength(); ++guard )
+		{
+			if( parent == outView.aggregatePlans[planIndex].aggregate )
+			{
+				outView.Reset();
+				return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+			}
+			const asSASTLifetimeAggregatePlan* const parentPlan =
+				outView.FindAggregatePlan(parent);
+			if( parentPlan == 0 )
+			{
+				outView.Reset();
+				return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+			}
+			parent = parentPlan->parentAggregate;
+		}
+		if( parent.IsValid() )
 		{
 			outView.Reset();
 			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
@@ -1438,7 +1829,8 @@ int asCASTBuildLifetimeView(
 		recordIndex < outView.records.GetLength(); ++recordIndex )
 	{
 		const asSASTLifetimeViewRecord& record = outView.records[recordIndex];
-		if( IsConstructionRecord(record.record) )
+		if( IsConstructionRecord(record.record)
+			|| IsAggregateRecord(record.record) )
 		{
 			continue;
 		}
@@ -1650,6 +2042,13 @@ int asCASTBuildLifetimeView(
 	for( asUINT index = 0; index < outView.records.GetLength(); ++index )
 	{
 		const asSASTLifetimeViewRecord& current = outView.records[index];
+		if( IsAggregateRecord(current.record) )
+		{
+			// Aggregate liveness is dynamic and is derived on demand from the
+			// backend-owned committed count. It must not be flattened into one
+			// static commit point for the complete aggregate.
+			continue;
+		}
 		if( IsConstructionRecord(current.record) )
 		{
 			const asSASTLifetimeConstructionPlan* const plan =

@@ -96,6 +96,102 @@ static bool ReadU64(const asBYTE* bytes, asUINT length, asUINT& offset, asQWORD&
 	return true;
 }
 
+static bool AppendLifetimeNodeId(
+	asCArray<asBYTE>& out,
+	const asSASTLifetimeNodeId& id)
+{
+	// Public snapshot tokens and pointers are never durable protocol identity.
+	// The value is only an ordinal into the DTO graph serialized below.
+	if( id.snapshotOwner != 0 )
+	{
+		return false;
+	}
+	AppendU32(out, static_cast<asUINT>(id.nodeClass));
+	AppendU32(out, id.value);
+	return true;
+}
+
+static bool ReadLifetimeNodeId(
+	const asBYTE* bytes,
+	asUINT length,
+	asUINT& offset,
+	asSASTLifetimeNodeId& id)
+{
+	asUINT nodeClass = 0;
+	asUINT value = 0;
+	if( !ReadU32(bytes, length, offset, nodeClass)
+		|| !ReadU32(bytes, length, offset, value)
+		|| nodeClass > static_cast<asUINT>(asAST_LIFETIME_NODE_EXPR) )
+	{
+		return false;
+	}
+	id = asSASTLifetimeNodeId(
+		static_cast<asEASTLifetimeNodeClass>(nodeClass), value, 0);
+	return true;
+}
+
+static bool AppendLifetimeRecord(
+	asCArray<asBYTE>& out,
+	const asSASTLifetimeRecord& record)
+{
+	AppendU32(out, static_cast<asUINT>(record.subjectKind));
+	if( !AppendLifetimeNodeId(out, record.subject) )
+		return false;
+	AppendU32(out, static_cast<asUINT>(record.actionKind));
+	if( !AppendLifetimeNodeId(out, record.actionTarget)
+		|| !AppendLifetimeNodeId(out, record.activationPoint)
+		|| !AppendLifetimeNodeId(out, record.semanticRegion) )
+	{
+		return false;
+	}
+	AppendU32(out, static_cast<asUINT>(record.phase));
+	AppendU32(out, record.supportedExitMask);
+	AppendU32(out, record.constructionStep);
+	AppendU32(out, record.order);
+	AppendU32(out, record.completeObjectCommit ? 1u : 0u);
+	return true;
+}
+
+static bool ReadLifetimeRecord(
+	const asBYTE* bytes,
+	asUINT length,
+	asUINT& offset,
+	asSASTLifetimeRecord& record)
+{
+	asUINT subjectKind = 0;
+	asUINT actionKind = 0;
+	asUINT phase = 0;
+	asUINT supportedExitMask = 0;
+	asUINT completeObjectCommit = 0;
+	if( !ReadU32(bytes, length, offset, subjectKind)
+		|| subjectKind <= static_cast<asUINT>(asAST_LIFETIME_SUBJECT_INVALID)
+		|| subjectKind > static_cast<asUINT>(asAST_LIFETIME_SUBJECT_DEFERRED_OUT)
+		|| !ReadLifetimeNodeId(bytes, length, offset, record.subject)
+		|| !ReadU32(bytes, length, offset, actionKind)
+		|| actionKind <= static_cast<asUINT>(asAST_LIFETIME_ACTION_INVALID)
+		|| actionKind > static_cast<asUINT>(asAST_LIFETIME_ACTION_DESTROY_ELEMENT)
+		|| !ReadLifetimeNodeId(bytes, length, offset, record.actionTarget)
+		|| !ReadLifetimeNodeId(bytes, length, offset, record.activationPoint)
+		|| !ReadLifetimeNodeId(bytes, length, offset, record.semanticRegion)
+		|| !ReadU32(bytes, length, offset, phase)
+		|| phase <= static_cast<asUINT>(asAST_LIFETIME_PHASE_INVALID)
+		|| phase > static_cast<asUINT>(asAST_LIFETIME_PHASE_AGGREGATE_ELEMENT)
+		|| !ReadU32(bytes, length, offset, supportedExitMask)
+		|| !ReadU32(bytes, length, offset, record.constructionStep)
+		|| !ReadU32(bytes, length, offset, record.order)
+		|| !ReadU32(bytes, length, offset, completeObjectCommit)
+		|| completeObjectCommit > 1 )
+	{
+		return false;
+	}
+	record.subjectKind = static_cast<asEASTLifetimeSubjectKind>(subjectKind);
+	record.actionKind = static_cast<asEASTLifetimeActionKind>(actionKind);
+	record.phase = static_cast<asEASTLifetimePhase>(phase);
+	record.supportedExitMask = static_cast<asDWORD>(supportedExitMask);
+	record.completeObjectCommit = completeObjectCommit != 0;
+	return true;
+}
+
 static void AppendRange(asCArray<asBYTE>& out, const asCSourceRange& range)
 {
 	AppendU32(out, range.begin.fileID);
@@ -512,6 +608,24 @@ int asCASTEncodeSidecar(const asCASTContext& context, const asSASTSidecarHeader&
 		AppendU32(out, (asUINT)expr->safePointRole);
 		AppendU32(out, (asUINT)expr->callDispatch);
 		AppendExprIdArray(out, expr->children);
+	}
+
+	if( context.GetLifetimeRecordCount() > kMaxNodes )
+	{
+		out.SetLength(0);
+		return asAST_SIDECAR_BUDGET;
+	}
+	AppendU32(out, context.GetLifetimeProtocolRevision());
+	AppendU32(out, context.GetLifetimeRecordCount());
+	for( asUINT i = 0; i < context.GetLifetimeRecordCount(); ++i )
+	{
+		const asSASTLifetimeRecord* const record =
+			context.GetLifetimeRecord(i);
+		if( record == 0 || !AppendLifetimeRecord(out, *record) )
+		{
+			out.SetLength(0);
+			return asAST_SIDECAR_POINTER;
+		}
 	}
 
 	if( out.GetLength() > kMaxBytes )
@@ -1031,6 +1145,26 @@ int asCASTDecodeSidecar(asCASTContext& context, const asSASTSidecarHeader& expec
 			{
 				return DecodeFail(context, asAST_SIDECAR_MALFORMED);
 			}
+		}
+	}
+
+	asUINT lifetimeProtocolRevision = 0;
+	asUINT lifetimeRecordCount = 0;
+	if( !ReadU32(bytes, length, offset, lifetimeProtocolRevision)
+		|| !ReadU32(bytes, length, offset, lifetimeRecordCount)
+		|| lifetimeRecordCount > kMaxNodes
+		|| context.SetLifetimeProtocolRevision(lifetimeProtocolRevision)
+			!= asAST_VERIFY_OK )
+	{
+		return DecodeFail(context, asAST_SIDECAR_MALFORMED);
+	}
+	for( asUINT i = 0; i < lifetimeRecordCount; ++i )
+	{
+		asSASTLifetimeRecord record;
+		if( !ReadLifetimeRecord(bytes, length, offset, record)
+			|| context.AddLifetimeRecord(record) != asAST_VERIFY_OK )
+		{
+			return DecodeFail(context, asAST_SIDECAR_MALFORMED);
 		}
 	}
 

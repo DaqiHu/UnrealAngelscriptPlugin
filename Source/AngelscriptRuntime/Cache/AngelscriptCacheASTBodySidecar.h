@@ -4,14 +4,15 @@
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheASTBodySidecar
 {
-	// Must match asAST_SIDECAR_SCHEMA_VERSION in the maintained fork. V6 adds
+	// Must match asAST_SIDECAR_SCHEMA_VERSION in the maintained fork. V7 adds
+	// the pointer-free Sema-authored Canonical lifetime protocol. V6 added
 	// snapshot-owned neutral source-provenance ranges. V5 added the sealed
 	// member-to-access-specifier declaration edge. V4 added the
 	// sealed direct/virtual/indirect CallExpr dispatch fact. V3 added
 	// the sealed class-layout and constant-value facts consumed by Cache V2;
 	// accepting the old V2 number here makes the Runtime wrapper reject every
 	// valid current DTO after the fork encoder has already verified it.
-	static constexpr uint16 SchemaVersion = 6;
+	static constexpr uint16 SchemaVersion = 7;
 
 	FString FunctionKey;
 	FString Profile;

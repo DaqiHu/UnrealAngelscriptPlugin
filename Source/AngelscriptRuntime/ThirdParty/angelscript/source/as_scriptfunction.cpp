@@ -1256,6 +1256,32 @@ void asCScriptFunction::AddReferences(
 				if( group != 0 ) group->AddRef();
 			}
 		}
+		for( asUINT cleanupIndex = 0;
+			cleanupIndex < scriptData->aggregateCleanupInfo.GetLength();
+			++cleanupIndex )
+		{
+			const asSAggregateCleanupInfo& cleanup =
+				scriptData->aggregateCleanupInfo[cleanupIndex];
+			if( cleanup.elementType )
+			{
+				cleanup.elementType->AddRefInternal();
+				asCConfigGroup* const group =
+					engine->FindConfigGroupForTypeInfo(cleanup.elementType);
+				if( group != 0 ) group->AddRef();
+			}
+			if( cleanup.actionFunctionId > 0 )
+			{
+				asCScriptFunction* const action =
+					ResolveBuildArtifactFunctionReference(
+						engine, cleanup.actionFunctionId, restoreContext);
+				asASSERT( action );
+				if( action ) action->AddRefInternal();
+				asCConfigGroup* const group =
+					engine->FindConfigGroupForFunction(
+						cleanup.actionFunctionId);
+				if( group != 0 ) group->AddRef();
+			}
+		}
 		if( scriptData->partialConstructionObjectType )
 		{
 			scriptData->partialConstructionObjectType->AddRefInternal();
@@ -1468,6 +1494,31 @@ void asCScriptFunction::ReleaseReferences(
 				asCConfigGroup* const group =
 					engine->FindConfigGroupForTypeInfo(cleanup.objectType);
 				cleanup.objectType->ReleaseInternal();
+				if( group != 0 ) group->Release();
+			}
+			if( cleanup.actionFunctionId > 0 )
+			{
+				asCScriptFunction* const action =
+					ResolveBuildArtifactFunctionReference(
+						engine, cleanup.actionFunctionId, restoreContext);
+				asCConfigGroup* const group =
+					engine->FindConfigGroupForFunction(
+						cleanup.actionFunctionId);
+				if( action ) action->ReleaseInternal();
+				if( group != 0 ) group->Release();
+			}
+		}
+		for( asUINT cleanupIndex = 0;
+			cleanupIndex < scriptData->aggregateCleanupInfo.GetLength();
+			++cleanupIndex )
+		{
+			const asSAggregateCleanupInfo& cleanup =
+				scriptData->aggregateCleanupInfo[cleanupIndex];
+			if( cleanup.elementType )
+			{
+				asCConfigGroup* const group =
+					engine->FindConfigGroupForTypeInfo(cleanup.elementType);
+				cleanup.elementType->ReleaseInternal();
 				if( group != 0 ) group->Release();
 			}
 			if( cleanup.actionFunctionId > 0 )

@@ -329,6 +329,85 @@ struct asSASTLifetimeConstructionPlan
 	}
 };
 
+// One pointer-free cleanup action mechanically derived for an authenticated
+// aggregate committed prefix. elementOrdinal is the source/execution-order
+// child index; callers receive actions in strict reverse order. The action
+// target is copied from the Sema-authored lifetime record and is never selected
+// by this transient view.
+struct asSASTLifetimeAggregateCleanupAction
+{
+	asUINT recordIndex;
+	asUINT elementOrdinal;
+	asASTExprId element;
+	asEASTLifetimeActionKind actionKind;
+	asSASTLifetimeNodeId actionTarget;
+
+	asSASTLifetimeAggregateCleanupAction()
+		: recordIndex(0)
+		, elementOrdinal(0)
+		, actionKind(asAST_LIFETIME_ACTION_INVALID)
+	{
+	}
+
+	bool operator==(const asSASTLifetimeAggregateCleanupAction& other) const
+	{
+		return recordIndex == other.recordIndex
+			&& elementOrdinal == other.elementOrdinal
+			&& element == other.element
+			&& actionKind == other.actionKind
+			&& actionTarget == other.actionTarget;
+	}
+	bool operator!=(const asSASTLifetimeAggregateCleanupAction& other) const
+	{
+		return !(*this == other);
+	}
+};
+
+// One deterministic homogeneous array/list-pattern aggregate plan. The
+// aggregate Expr is the pointer-free progress identity; a backend maps it to
+// its own committed-count slot/frame. elementCommits are the already-typed
+// aggregate children in execution order. parentAggregate is valid only when
+// this complete aggregate is itself an element of another authenticated plan.
+struct asSASTLifetimeAggregatePlan
+{
+	asASTExprId aggregate;
+	asASTExprId parentAggregate;
+	asASTDeclId semanticOwner;
+	asUINT recordIndex;
+	asEASTLifetimeActionKind actionKind;
+	asSASTLifetimeNodeId actionTarget;
+	asCArray<asASTExprId> elementCommits;
+
+	asSASTLifetimeAggregatePlan()
+		: recordIndex(0)
+		, actionKind(asAST_LIFETIME_ACTION_INVALID)
+	{
+	}
+
+	bool operator==(const asSASTLifetimeAggregatePlan& other) const
+	{
+		if( aggregate != other.aggregate
+			|| parentAggregate != other.parentAggregate
+			|| semanticOwner != other.semanticOwner
+			|| recordIndex != other.recordIndex
+			|| actionKind != other.actionKind
+			|| actionTarget != other.actionTarget
+			|| elementCommits.GetLength()
+				!= other.elementCommits.GetLength() )
+		{
+			return false;
+		}
+		for( asUINT index = 0; index < elementCommits.GetLength(); ++index )
+			if( elementCommits[index] != other.elementCommits[index] )
+				return false;
+		return true;
+	}
+	bool operator!=(const asSASTLifetimeAggregatePlan& other) const
+	{
+		return !(*this == other);
+	}
+};
+
 // Compatibility syntax is retained while LEGACY and diagnostic/reference
 // consumers still need the native AST shape.  Only this named, authenticated
 // projection may be consumed by Canonical backends.
@@ -445,6 +524,10 @@ public:
 	{
 		return constructionPlans.GetLength();
 	}
+	asUINT GetAggregatePlanCount() const
+	{
+		return aggregatePlans.GetLength();
+	}
 	asUINT GetCleanupBindingCount() const { return cleanupBindings.GetLength(); }
 	asUINT GetExitPlanCount() const { return exitPlans.GetLength(); }
 	asUINT GetForEachPhaseCount() const { return forEachPhases.GetLength(); }
@@ -455,6 +538,13 @@ public:
 		asUINT index) const;
 	const asSASTLifetimeConstructionPlan* FindConstructionPlan(
 		asASTDeclId constructor) const;
+	const asSASTLifetimeAggregatePlan* GetAggregatePlan(asUINT index) const;
+	const asSASTLifetimeAggregatePlan* FindAggregatePlan(
+		asASTExprId aggregate) const;
+	int DeriveAggregateAbortCleanup(
+		asASTExprId aggregate,
+		asUINT committedCount,
+		asCArray<asSASTLifetimeAggregateCleanupAction>& outActions) const;
 	const asSASTLifetimeCleanupBinding* GetCleanupBinding(asUINT index) const;
 	const asSASTLifetimeCleanupBinding* FindCleanupBinding(
 		asASTStmtId statement) const;
@@ -479,6 +569,7 @@ private:
 	asCArray<asSASTLifetimeViewRecord> records;
 	asCArray<asSASTLifetimeCommitPoint> commitPoints;
 	asCArray<asSASTLifetimeConstructionPlan> constructionPlans;
+	asCArray<asSASTLifetimeAggregatePlan> aggregatePlans;
 	asCArray<asSASTLifetimeCleanupBinding> cleanupBindings;
 	asCArray<asSASTLifetimeExitPlan> exitPlans;
 	asCArray<asSASTForEachPhases> forEachPhases;

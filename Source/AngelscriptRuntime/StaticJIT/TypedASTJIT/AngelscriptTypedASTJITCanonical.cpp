@@ -827,6 +827,101 @@ namespace AngelscriptTypedASTJITCanonical_Private
 		}
 	}
 
+	bool WriteCanonicalAggregatePlanShape(
+		FAngelscriptArtifactCanonicalWriter& Writer,
+		const asCASTContext& Context,
+		const asCASTLifetimeView& LifetimeView,
+		const asSASTLifetimeAggregatePlan& Plan,
+		const asASTDeclId FunctionDecl,
+		const asUINT Depth)
+	{
+		if (Depth > LifetimeView.GetAggregatePlanCount()
+			|| Plan.semanticOwner != FunctionDecl
+			|| Plan.actionKind != asAST_LIFETIME_ACTION_DESTROY_ELEMENT
+			|| Plan.elementCommits.GetLength() == 0)
+		{
+			return false;
+		}
+
+		const asCExpr* const Aggregate = Context.GetExpr(Plan.aggregate);
+		if (Aggregate == nullptr
+			|| !WriteCanonicalLifetimeNodeStableIdentity(
+				Writer, Context,
+				asSASTLifetimeNodeId::FromExpr(Plan.aggregate)))
+		{
+			return false;
+		}
+
+		Writer.WriteUInt32(Plan.elementCommits.GetLength());
+		for (asUINT ElementOrdinal = 0;
+			ElementOrdinal < Plan.elementCommits.GetLength(); ++ElementOrdinal)
+		{
+			const asASTExprId ElementId = Plan.elementCommits[ElementOrdinal];
+			if (!WriteCanonicalLifetimeNodeStableIdentity(
+				Writer, Context,
+				asSASTLifetimeNodeId::FromExpr(ElementId)))
+			{
+				return false;
+			}
+
+			const asSASTLifetimeAggregatePlan* const ChildPlan =
+				LifetimeView.FindAggregatePlan(ElementId);
+			Writer.WriteBool(ChildPlan != nullptr);
+			if (ChildPlan == nullptr)
+			{
+				continue;
+			}
+			if (ChildPlan->parentAggregate != Plan.aggregate
+				|| ChildPlan->semanticOwner != FunctionDecl)
+			{
+				return false;
+			}
+			Writer.WriteUInt32(ElementOrdinal);
+			if (!WriteCanonicalAggregatePlanShape(
+				Writer, Context, LifetimeView, *ChildPlan,
+				FunctionDecl, Depth + 1))
+			{
+				return false;
+			}
+		}
+
+		Writer.WriteBool(Plan.parentAggregate.IsValid());
+		if (!Plan.parentAggregate.IsValid())
+		{
+			return true;
+		}
+
+		const asSASTLifetimeAggregatePlan* const ParentPlan =
+			LifetimeView.FindAggregatePlan(Plan.parentAggregate);
+		if (ParentPlan == nullptr || ParentPlan->semanticOwner != FunctionDecl
+			|| !WriteCanonicalLifetimeNodeStableIdentity(
+				Writer, Context,
+				asSASTLifetimeNodeId::FromExpr(ParentPlan->aggregate)))
+		{
+			return false;
+		}
+
+		asUINT ChildOrdinal = 0;
+		asUINT MatchCount = 0;
+		for (asUINT ElementOrdinal = 0;
+			ElementOrdinal < ParentPlan->elementCommits.GetLength();
+			++ElementOrdinal)
+		{
+			if (ParentPlan->elementCommits[ElementOrdinal] == Plan.aggregate)
+			{
+				ChildOrdinal = ElementOrdinal;
+				++MatchCount;
+			}
+		}
+		if (MatchCount != 1)
+		{
+			return false;
+		}
+		Writer.WriteUInt32(ParentPlan->elementCommits.GetLength());
+		Writer.WriteUInt32(ChildOrdinal);
+		return true;
+	}
+
 	bool AddCanonicalLifetimeActionFlag(
 		const asEASTLifetimeActionKind ActionKind,
 		EAngelscriptTypedASTJITLifetimeActionFlags& Flags)
@@ -888,7 +983,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 		RecordStableKeys.SetNum(LifetimeView.GetRecordCount());
 		TArray<asUINT> FunctionRecordIndices;
 		FAngelscriptArtifactCanonicalWriter ABIWriter(
-			TEXT("Angelscript.TypedASTJIT.CanonicalLifetimeABI.v1"));
+			TEXT("Angelscript.TypedASTJIT.CanonicalLifetimeABI.v2"));
 		ABIWriter.WriteUInt32(LifetimeView.GetProtocolRevision());
 
 		bool bHasPartialConstruction = false;
@@ -907,7 +1002,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 
 			const asSASTLifetimeRecord& Record = ViewRecord->record;
 			FAngelscriptArtifactCanonicalWriter RecordWriter(
-				TEXT("Angelscript.TypedASTJIT.CanonicalLifetimeRecord.v1"));
+				TEXT("Angelscript.TypedASTJIT.CanonicalLifetimeRecord.v2"));
 			RecordWriter.WriteString(UTF8_TO_TCHAR(
 				Function->stableKey.AddressOf()));
 			RecordWriter.WriteUInt8(static_cast<uint8>(Record.subjectKind));
@@ -932,23 +1027,50 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			{
 				return false;
 			}
-			RecordStableKeys[RecordIndex] = RecordWriter.FinalizeHash();
 			FunctionRecordIndices.Add(RecordIndex);
 			OutFacts.LifetimeSummary.SupportedExitMask |=
 				Record.supportedExitMask;
 
 			ABIWriter.WriteUInt8(static_cast<uint8>(Record.actionKind));
-			const asCDecl* const Subject = Record.subject.nodeClass
+			const asCDecl* Storage = Record.subject.nodeClass
 				== asAST_LIFETIME_NODE_DECL
 				? Context.GetDecl(asASTDeclId(Record.subject.value)) : nullptr;
-			if (Subject == nullptr
+			if (Record.subjectKind
+				== asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT)
+			{
+				const asSASTLifetimeAggregatePlan* const AggregatePlan =
+					LifetimeView.FindAggregatePlan(
+						asASTExprId(Record.subject.value));
+				const asCDecl* const ElementDestructor =
+					Record.actionTarget.nodeClass == asAST_LIFETIME_NODE_DECL
+					? Context.GetDecl(
+						asASTDeclId(Record.actionTarget.value)) : nullptr;
+				Storage = ElementDestructor != nullptr
+					? Context.GetDecl(ElementDestructor->parent) : nullptr;
+				if (AggregatePlan == nullptr
+					|| AggregatePlan->semanticOwner != FunctionDecl
+					|| AggregatePlan->actionKind != Record.actionKind
+					|| AggregatePlan->actionTarget != Record.actionTarget
+					|| AggregatePlan->elementCommits.GetLength() == 0
+					|| !WriteCanonicalAggregatePlanShape(
+						RecordWriter, Context, LifetimeView,
+						*AggregatePlan, FunctionDecl, 0)
+					|| !WriteCanonicalAggregatePlanShape(
+						ABIWriter, Context, LifetimeView,
+						*AggregatePlan, FunctionDecl, 0))
+				{
+					return false;
+				}
+			}
+			if (Storage == nullptr
 				|| !WriteCanonicalLifetimeTypeIdentity(
-					ABIWriter, Context, Subject->type, Subject)
+					ABIWriter, Context, Storage->type, Storage)
 				|| !WriteCanonicalLifetimeNodeStableIdentity(
 					ABIWriter, Context, Record.actionTarget))
 			{
 				return false;
 			}
+			RecordStableKeys[RecordIndex] = RecordWriter.FinalizeHash();
 
 			bSawDestroyValue |= Record.actionKind
 				== asAST_LIFETIME_ACTION_DESTROY_VALUE;
@@ -965,7 +1087,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 		}
 
 		FAngelscriptArtifactCanonicalWriter StableWriter(
-			TEXT("Angelscript.TypedASTJIT.CanonicalLifetimeSummary.v1"));
+			TEXT("Angelscript.TypedASTJIT.CanonicalLifetimeSummary.v2"));
 		StableWriter.WriteUInt32(LifetimeView.GetProtocolRevision());
 		StableWriter.WriteString(UTF8_TO_TCHAR(
 			Function->stableKey.AddressOf()));
@@ -2714,11 +2836,19 @@ EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
 	}
 	if (!LifetimeFacts.LifetimeSummary.bNativeObjectFrameABIAvailable)
 	{
+		const bool bRequiresAggregateElementFrame =
+			EnumHasAnyFlags(
+				LifetimeFacts.LifetimeSummary.ActionFlags,
+				EAngelscriptTypedASTJITLifetimeActionFlags::DestroyElement);
+		const TCHAR* const Prefix = bRequiresAggregateElementFrame
+			? TEXT("AuthenticatedAggregatePartialConstructionRequiresNativeElementFrameABI")
+			: TEXT("AuthenticatedLifetimeRequiresNativeObjectFrameABI");
 		return Reject(
 			EFallback::UnsupportedLifetime,
 			MakeSpan(*Input.SealedAST, FunctionDecl->range),
 			FString::Printf(TEXT(
-				"AuthenticatedLifetimeRequiresNativeObjectFrameABI: StableKey=%s ABIKey=%s Records=%u ExitPlans=%u ActionFlags=0x%08x ExitPlanFlags=0x%08x"),
+				"%s: StableKey=%s ABIKey=%s Records=%u ExitPlans=%u ActionFlags=0x%08x ExitPlanFlags=0x%08x"),
+				Prefix,
 				*LifetimeFacts.LifetimeSummary.StableKey.ToHexString(),
 				*LifetimeFacts.LifetimeSummary.ABIKey.ToHexString(),
 				LifetimeFacts.LifetimeSummary.RecordCount,

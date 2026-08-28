@@ -440,6 +440,95 @@ int Answer()
 		return true;
 	}
 
+	static bool ReadAstSidecarUInt32(
+		const TArray<uint8>& Payload,
+		int32& Offset,
+		uint32& OutValue)
+	{
+		if (Offset < 0 || Offset > Payload.Num() - 4)
+		{
+			return false;
+		}
+		OutValue = static_cast<uint32>(Payload[Offset])
+			| (static_cast<uint32>(Payload[Offset + 1]) << 8u)
+			| (static_cast<uint32>(Payload[Offset + 2]) << 16u)
+			| (static_cast<uint32>(Payload[Offset + 3]) << 24u);
+		Offset += 4;
+		return true;
+	}
+
+	static bool SkipAstSidecarBytes(
+		const TArray<uint8>& Payload,
+		int32& Offset)
+	{
+		uint32 Length = 0;
+		if (!ReadAstSidecarUInt32(Payload, Offset, Length)
+			|| static_cast<uint64>(Offset) + Length
+				> static_cast<uint64>(Payload.Num()))
+		{
+			return false;
+		}
+		Offset += static_cast<int32>(Length);
+		return true;
+	}
+
+	static bool SkipAstSidecarSourceAnchor(
+		const TArray<uint8>& Payload,
+		int32& Offset)
+	{
+		uint32 Ignored = 0;
+		return SkipAstSidecarBytes(Payload, Offset)
+			&& ReadAstSidecarUInt32(Payload, Offset, Ignored)
+			&& ReadAstSidecarUInt32(Payload, Offset, Ignored)
+			&& ReadAstSidecarUInt32(Payload, Offset, Ignored)
+			&& ReadAstSidecarUInt32(Payload, Offset, Ignored);
+	}
+
+	static bool SkipAstSidecarSourceProvenanceRanges(
+		const TArray<uint8>& Payload,
+		int32& Offset)
+	{
+		uint32 RangeCount = 0;
+		if (!ReadAstSidecarUInt32(Payload, Offset, RangeCount))
+		{
+			return false;
+		}
+		for (uint32 RangeIndex = 0; RangeIndex < RangeCount; ++RangeIndex)
+		{
+			uint32 Ignored = 0;
+			uint32 HasAuthoredOrigin = 0;
+			uint32 HasGeneratedOrigin = 0;
+			if (!ReadAstSidecarUInt32(Payload, Offset, Ignored)
+				|| !ReadAstSidecarUInt32(Payload, Offset, Ignored)
+				|| !ReadAstSidecarUInt32(
+					Payload, Offset, HasAuthoredOrigin)
+				|| HasAuthoredOrigin > 1
+				|| (HasAuthoredOrigin != 0
+					&& !SkipAstSidecarSourceAnchor(Payload, Offset))
+				|| !ReadAstSidecarUInt32(
+					Payload, Offset, HasGeneratedOrigin)
+				|| HasGeneratedOrigin > 1)
+			{
+				return false;
+			}
+			if (HasGeneratedOrigin != 0)
+			{
+				uint32 HasAuthoredAnchor = 0;
+				if (!ReadAstSidecarUInt32(Payload, Offset, Ignored)
+					|| !SkipAstSidecarBytes(Payload, Offset)
+					|| !ReadAstSidecarUInt32(
+						Payload, Offset, HasAuthoredAnchor)
+					|| HasAuthoredAnchor > 1
+					|| (HasAuthoredAnchor != 0
+						&& !SkipAstSidecarSourceAnchor(Payload, Offset)))
+				{
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
 	static bool MutateAstSidecarUnremappableType(TArray<uint8>& Payload)
 	{
 		// Walk only the encoded type table. The source text, declarations, and
@@ -495,7 +584,8 @@ int Answer()
 		{
 			uint32 Ignored = 0;
 			if (!SkipBytes() || !ReadUInt32(Ignored) || !ReadUInt32(Ignored)
-				|| !SkipBytes()) // logical key, origin, line offset, source bytes
+				|| !SkipBytes() // logical key, origin, line offset, source bytes
+				|| !SkipAstSidecarSourceProvenanceRanges(Payload, Offset))
 			{
 				return false;
 			}
@@ -626,7 +716,8 @@ int Answer()
 		{
 			uint32 Ignored = 0;
 			if (!SkipBytes() || !ReadUInt32(Ignored) || !ReadUInt32(Ignored)
-				|| !SkipBytes())
+				|| !SkipBytes()
+				|| !SkipAstSidecarSourceProvenanceRanges(Payload, Offset))
 			{
 				return false;
 			}
@@ -706,6 +797,7 @@ int Answer()
 			if (!SkipUInt32Array(ArrayCount) || !SkipUInt32Array(ArrayCount)
 				|| !ReadUInt32(Ignored) || !ReadUInt32(Ignored)
 				|| !ReadUInt32(Ignored) || !ReadUInt32(Ignored)
+				|| !ReadUInt32(Ignored) // access specifier declaration
 				|| !SkipBytes() || !SkipBytes()
 				|| !SkipStringArray(ArrayCount) || !SkipUInt32Array(ArrayCount)
 				|| !SkipUInt32Array(ArrayCount)
@@ -822,7 +914,8 @@ int Answer()
 		{
 			uint32 Ignored = 0;
 			if (!SkipBytes() || !ReadUInt32(Ignored) || !ReadUInt32(Ignored)
-				|| !SkipBytes())
+				|| !SkipBytes()
+				|| !SkipAstSidecarSourceProvenanceRanges(Payload, Offset))
 			{
 				return false;
 			}
@@ -864,9 +957,10 @@ int Answer()
 			}
 			if (!SkipBytes() || !SkipBytes()
 				|| !SkipUInt32Array(ArrayCount) || !SkipUInt32Array(ArrayCount)
-				// body, traits, accessor kind, accessor field
+				// body, traits, accessor kind, accessor field, access specifier
 				|| !ReadUInt32(Body) || !ReadUInt32(Ignored)
 				|| !ReadUInt32(Ignored) || !ReadUInt32(Ignored)
+				|| !ReadUInt32(Ignored)
 				|| !SkipBytes() || !SkipBytes()
 				|| !SkipStringArray(ArrayCount) || !SkipUInt32Array(ArrayCount)
 				|| !SkipUInt32Array(ArrayCount)
@@ -1398,8 +1492,12 @@ public:
 
 				const asCASTContext* const RestoredContext =
 					ConcreteSnapshot->GetContext();
+				// AST V1 exposes an owner-qualified public ID. The internal Context
+				// graph is already selected by ConcreteSnapshot and accepts only the
+				// graph-local ordinal; passing the public owner token back into it is
+				// correctly rejected as a foreign ID.
 				const asCDecl* const InternalAnswer = RestoredContext != nullptr
-					? RestoredContext->GetDecl(ChildId) : nullptr;
+					? RestoredContext->GetDecl(asASTDeclId(ChildId.value)) : nullptr;
 				asCScriptFunction* const RuntimeAnswer =
 					static_cast<asCScriptFunction*>(
 						Restored->ScriptModule->GetFunctionByDecl("int Answer()"));

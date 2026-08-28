@@ -7,6 +7,7 @@
 #include "as_scriptcode.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
+#include "as_sema_lifetime.h"
 #include "as_string_util.h"
 #include "as_tokendef.h"
 #include "as_tokenizer.h"
@@ -4024,6 +4025,159 @@ static asASTExprId FindExistingExactInitList(
 	return asASTExprId();
 }
 
+static bool IsAggregateLifetimeSemanticOwner(const asCDecl* owner)
+{
+	return owner != 0
+		&& (owner->kind == asAST_DECL_FUNCTION
+			|| owner->kind == asAST_DECL_METHOD
+			|| owner->kind == asAST_DECL_CONSTRUCTOR);
+}
+
+static asASTDeclId FindAggregateElementDestructor(
+	asCASTContext& context,
+	const asCQualType& elementType)
+{
+	const asCType* const type = elementType.IsValid()
+		? context.GetType(elementType.type) : 0;
+	if( type == 0 || type->kind != asAST_TYPE_VALUE_OBJECT
+		|| elementType.IsReference() || elementType.IsHandle()
+		|| type->stableKey.GetLength() == 0 )
+	{
+		return asASTDeclId();
+	}
+
+	for( asUINT index = 1; index <= context.GetDeclCount(); ++index )
+	{
+		const asCDecl* const destructor =
+			context.GetDecl(asASTDeclId(index));
+		const asCDecl* const owner = destructor != 0
+			&& destructor->kind == asAST_DECL_DESTRUCTOR
+			? context.GetDecl(destructor->parent) : 0;
+		if( owner != 0 && owner->kind == asAST_DECL_CLASS
+			&& (owner->stableKey.Equals(type->stableKey)
+				|| owner->name.Equals(type->stableKey)) )
+		{
+			return destructor->id;
+		}
+	}
+	return asASTDeclId();
+}
+
+static bool HasAggregateElementLifetimeRecord(
+	const asCASTContext& context,
+	asASTExprId aggregate)
+{
+	for( asUINT index = 0;
+		index < context.GetLifetimeRecordCount(); ++index )
+	{
+		const asSASTLifetimeRecord* const record =
+			context.GetLifetimeRecord(index);
+		if( record != 0
+			&& record->subjectKind
+				== asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT
+			&& record->subject
+				== asSASTLifetimeNodeId::FromExpr(aggregate) )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// Return false only when the expression is a non-trivial aggregate that must
+// own a progress record but cannot author an exact, verifier-ready record.
+// Trivial/empty/non-list aggregates require no dynamic committed cursor.
+static bool AuthorAggregateElementLifetime(
+	asCSema& sema,
+	asASTExprId aggregate)
+{
+	asCASTContext& context = sema.GetContext();
+	const asCExpr* const expression = context.GetExpr(aggregate);
+	const asCDecl* const listFactory = expression != 0
+		? context.GetDecl(expression->resolvedDecl) : 0;
+	if( expression == 0 || expression->kind != asAST_EXPR_CONSTRUCT
+		|| !expression->literal.Equals("list-pattern")
+		|| listFactory == 0
+		|| (listFactory->traits & asAST_TRAIT_LIST_FACTORY) == 0
+		|| expression->children.GetLength() == 0 )
+	{
+		return true;
+	}
+	if( HasAggregateElementLifetimeRecord(context, aggregate) )
+	{
+		return true;
+	}
+
+	const asCExpr* const first =
+		context.GetExpr(expression->children[0]);
+	const asCType* const firstType = first != 0 && first->type.IsValid()
+		? context.GetType(first->type.type) : 0;
+	if( first == 0 || firstType == 0
+		|| firstType->kind != asAST_TYPE_VALUE_OBJECT
+		|| first->type.IsReference() || first->type.IsHandle() )
+	{
+		return true;
+	}
+	for( asUINT childIndex = 1;
+		childIndex < expression->children.GetLength(); ++childIndex )
+	{
+		const asCExpr* const child =
+			context.GetExpr(expression->children[childIndex]);
+		if( child == 0 || !child->type.IsValid()
+			|| child->type.type != first->type.type
+			|| child->type.IsReference() || child->type.IsHandle() )
+		{
+			sema.AddDiagnostic(
+				"aggregate-lifetime-element-type-mismatch",
+				expression->range);
+			return false;
+		}
+	}
+
+	// Native type views are lazy. Import lifecycle callables before selecting
+	// the exact destructor; the record stores the Decl identity and no backend
+	// is permitted to repeat name/type lookup.
+	sema.InternNativeCallablesForType(first->type);
+	const asASTDeclId destructor = FindAggregateElementDestructor(
+		context, first->type);
+	if( !destructor.IsValid() )
+	{
+		// A value type with no destructor has no partial-construction cleanup.
+		return true;
+	}
+
+	const asASTDeclId semanticOwner = sema.CurrentDeclContext();
+	const asCDecl* const owner = context.GetDecl(semanticOwner);
+	if( !IsAggregateLifetimeSemanticOwner(owner) )
+	{
+		sema.AddDiagnostic(
+			"aggregate-lifetime-semantic-owner-unsupported",
+			expression->range);
+		return false;
+	}
+
+	asSASTLifetimeRecord record;
+	record.subjectKind = asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT;
+	record.subject = asSASTLifetimeNodeId::FromExpr(aggregate);
+	record.actionKind = asAST_LIFETIME_ACTION_DESTROY_ELEMENT;
+	record.actionTarget = asSASTLifetimeNodeId::FromDecl(destructor);
+	record.activationPoint = asSASTLifetimeNodeId::FromExpr(aggregate);
+	record.semanticRegion = asSASTLifetimeNodeId::FromDecl(semanticOwner);
+	record.phase = asAST_LIFETIME_PHASE_AGGREGATE_ELEMENT;
+	record.supportedExitMask = asAST_LIFETIME_EXIT_EXCEPTION;
+	record.constructionStep = 0;
+	record.order = context.GetLifetimeRecordCount();
+	record.completeObjectCommit = false;
+	if( asSemaAuthorLifetimeRecord(context, record) != asAST_VERIFY_OK )
+	{
+		sema.AddDiagnostic(
+			"aggregate-lifetime-record-invalid",
+			expression->range);
+		return false;
+	}
+	return true;
+}
+
 asASTExprId asCSema::ActOnInitList(
 	const asCArray<asASTExprId>& args,
 	const asCSourceRange& range,
@@ -4033,7 +4187,8 @@ asASTExprId asCSema::ActOnInitList(
 		context, args, range, explicitTarget);
 	if( existingList.IsValid() )
 	{
-		return existingList;
+		return AuthorAggregateElementLifetime(*this, existingList)
+			? existingList : asASTExprId();
 	}
 	const asCQualType type = explicitTarget.IsValid()
 		? explicitTarget : context.InternPrimitive(ttInt, 0);
@@ -4053,7 +4208,8 @@ asASTExprId asCSema::ActOnInitList(
 			context.SetResolvedDecl(id, listFactory);
 		}
 	}
-	return id;
+	return AuthorAggregateElementLifetime(*this, id)
+		? id : asASTExprId();
 }
 
 static const char* OperatorMethodNameFromText(const char* op)

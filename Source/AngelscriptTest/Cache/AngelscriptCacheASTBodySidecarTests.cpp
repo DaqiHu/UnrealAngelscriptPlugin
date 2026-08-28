@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "StartAngelscriptHeaders.h"
+#include "source/as_ast_lifetime.h"
 #include "source/as_ast_sidecar.h"
 #include "source/as_sema.h"
 #include "EndAngelscriptHeaders.h"
@@ -116,6 +117,135 @@ public:
 		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_UNKNOWN_KIND,
 			asCASTDecodeSidecar(UnknownKind, Header, Unknown, 8),
 			TEXT("unknown node/type/schema kind fails closed")));
+	}
+
+	TEST_METHOD(SidecarRoundTripPreservesCanonicalLifetimeProtocol)
+	{
+		asCASTContext Context;
+		const asASTDeclId TranslationUnit =
+			Context.CreateTranslationUnit("LifetimeSidecar");
+		const asCQualType VoidType = Context.InternPrimitive(ttVoid);
+		const asCQualType ElementType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FElement", 0);
+		const asCQualType ArrayType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FElementArray", 0);
+
+		const asASTDeclId ElementClass = Context.CreateDecl(
+			asAST_DECL_CLASS, TranslationUnit, asCSourceRange(), "FElement");
+		ASSERT_THAT(AreEqual(0,
+			Context.SetStableKey(ElementClass, "FElement")));
+		ASSERT_THAT(AreEqual(0,
+			Context.SetDeclType(ElementClass, ElementType)));
+		const asASTDeclId ElementDestructor = Context.CreateDecl(
+			asAST_DECL_DESTRUCTOR, ElementClass,
+			asCSourceRange(), "FElement");
+		ASSERT_THAT(AreEqual(0,
+			Context.SetDeclType(ElementDestructor, VoidType)));
+
+		const asASTDeclId ArrayClass = Context.CreateDecl(
+			asAST_DECL_CLASS, TranslationUnit,
+			asCSourceRange(), "FElementArray");
+		ASSERT_THAT(AreEqual(0,
+			Context.SetStableKey(ArrayClass, "FElementArray")));
+		ASSERT_THAT(AreEqual(0,
+			Context.SetDeclType(ArrayClass, ArrayType)));
+		const asASTDeclId ListFactory = Context.CreateDecl(
+			asAST_DECL_CONSTRUCTOR, ArrayClass,
+			asCSourceRange(), "FElementArray");
+		ASSERT_THAT(AreEqual(0,
+			Context.SetDeclType(ListFactory, VoidType)));
+		ASSERT_THAT(AreEqual(0,
+			Context.AddDeclTrait(ListFactory, asAST_TRAIT_LIST_FACTORY)));
+
+		const asASTDeclId Function = Context.CreateDecl(
+			asAST_DECL_FUNCTION, TranslationUnit,
+			asCSourceRange(), "BuildArray");
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Function, VoidType)));
+		const asASTStmtId Body = Context.CreateStmt(
+			asAST_STMT_BLOCK, Function, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetBody(Function, Body)));
+
+		const asASTExprId Aggregate = Context.CreateExpr(
+			asAST_EXPR_CONSTRUCT, ArrayType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0,
+			Context.SetLiteral(Aggregate, "list-pattern")));
+		ASSERT_THAT(AreEqual(0,
+			Context.SetResolvedDecl(Aggregate, ListFactory)));
+		const asASTExprId Element = Context.CreateExpr(
+			asAST_EXPR_CONSTRUCT, ElementType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0,
+			Context.SetLiteral(Element, "FElement::FElement()")));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Aggregate, Element)));
+		const asASTStmtId AggregateStatement = Context.CreateStmt(
+			asAST_STMT_EXPR, Function, asCSourceRange());
+		ASSERT_THAT(AreEqual(0,
+			Context.SetStmtExpr(AggregateStatement, Aggregate)));
+		ASSERT_THAT(AreEqual(0,
+			Context.AddStmtChild(Body, AggregateStatement)));
+
+		asSASTLifetimeRecord Record;
+		Record.subjectKind = asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT;
+		Record.subject = asSASTLifetimeNodeId::FromExpr(Aggregate);
+		Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_ELEMENT;
+		Record.actionTarget =
+			asSASTLifetimeNodeId::FromDecl(ElementDestructor);
+		Record.activationPoint = asSASTLifetimeNodeId::FromExpr(Aggregate);
+		Record.semanticRegion = asSASTLifetimeNodeId::FromDecl(Function);
+		Record.phase = asAST_LIFETIME_PHASE_AGGREGATE_ELEMENT;
+		Record.supportedExitMask = asAST_LIFETIME_EXIT_EXCEPTION;
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Record)));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("the Sema-authored lifetime fixture must publish")));
+
+		asSASTSidecarHeader Header;
+		Header.functionKey = "LifetimeSidecar.BuildArray";
+		Header.profile = "Win64";
+		Header.version = asAST_SIDECAR_SCHEMA_VERSION;
+		asCArray<asBYTE> Bytes;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTEncodeSidecar(Context, Header, Bytes)));
+
+		asCASTContext Restored;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTDecodeSidecar(
+				Restored, Header, Bytes.AddressOf(), Bytes.GetLength())));
+		ASSERT_THAT(AreEqual(
+			Context.GetLifetimeProtocolRevision(),
+			Restored.GetLifetimeProtocolRevision(),
+			TEXT("the durable lifetime protocol revision must round-trip")));
+		ASSERT_THAT(AreEqual(
+			Context.GetLifetimeRecordCount(),
+			Restored.GetLifetimeRecordCount(),
+			TEXT("Sidecar restore must not erase Sema-authored lifetime facts")));
+		ASSERT_THAT(AreEqual(
+			Context.GetLifetimeProtocolHash(),
+			Restored.GetLifetimeProtocolHash(),
+			TEXT("the typed lifetime protocol identity must round-trip exactly")));
+		ASSERT_THAT(IsNotNull(Restored.GetLifetimeRecord(0)));
+		if (Restored.GetLifetimeRecord(0) != nullptr)
+		{
+			ASSERT_THAT(IsTrue(
+				*Restored.GetLifetimeRecord(0) == Record,
+				TEXT("every pointer-free lifetime field must round-trip")));
+		}
+
+		asCArray<asBYTE> CorruptBytes = Bytes;
+		CorruptBytes[CorruptBytes.GetLength() - 1] = 0xff;
+		asCASTContext CorruptRestore;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_MALFORMED,
+			asCASTDecodeSidecar(
+				CorruptRestore,
+				Header,
+				CorruptBytes.AddressOf(),
+				CorruptBytes.GetLength()),
+			TEXT("a forged lifetime commit flag must fail closed")));
+		ASSERT_THAT(IsFalse(CorruptRestore.IsPublishable(),
+			TEXT("malformed lifetime bytes must not publish a partial snapshot")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			CorruptRestore.GetLifetimeRecordCount(),
+			TEXT("failed decode must abandon all candidate lifetime records")));
 	}
 
 	TEST_METHOD(SidecarRoundTripRestoresSourceFunctionBodyAndExpression)

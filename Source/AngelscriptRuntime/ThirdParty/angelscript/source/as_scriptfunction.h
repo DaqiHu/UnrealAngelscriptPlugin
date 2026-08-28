@@ -135,6 +135,22 @@ struct asSConstructorCleanupInfo
 	bool completeObject = false;
 };
 
+// Generation-local physical cleanup for one homogeneous Canonical
+// initializer-list/array aggregate. The sealed AST owns the exact semantic
+// action and ordered element commits; the VM owns only this resolved buffer
+// layout and reads the committed count stored in the list buffer itself.
+// None of these Runtime pointers/offsets are persisted as Canonical identity.
+struct asSAggregateCleanupInfo
+{
+	int bufferOffset = 0;
+	asCTypeInfo* elementType = 0;
+	int actionFunctionId = 0;
+	asUINT committedCountOffset = 0;
+	asUINT firstElementOffset = 0;
+	asUINT elementStride = 0;
+	asUINT maxElementCount = 0;
+};
+
 enum asEFuncTrait
 {
 	asTRAIT_CONSTRUCTOR = 0x1,
@@ -457,6 +473,12 @@ public:
 		// reverse. A zero offset means this is not a Canonical constructor frame.
 		asCArray<asSConstructorCleanupInfo> constructorCleanupInfo;
 		int constructorCommittedCountOffset = 0;
+
+		// Canonical aggregate buffers participate in the ordinary heap-object
+		// directory so their cleanup remains globally reverse-ordered with every
+		// other local. Entries here replace the list-pattern byte heuristic with
+		// one exact destructor and a buffer-owned committed-prefix cursor.
+		asCArray<asSAggregateCleanupInfo> aggregateCleanupInfo;
 
 		// Canonical constructor factories keep their raw allocation out of the
 		// ordinary object-variable directory: a partially constructed object must

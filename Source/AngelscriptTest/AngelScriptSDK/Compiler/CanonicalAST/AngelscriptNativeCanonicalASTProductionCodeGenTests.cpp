@@ -1269,6 +1269,111 @@ static void ProdCanonicalDoubleListFactory(asIScriptGeneric* Generic)
 	}
 }
 
+struct FProdAggregateElement
+{
+	int32 Id = 0;
+};
+
+struct FProdAggregateListBox
+{
+	int32 Marker = 0;
+};
+
+static FProdAggregateListBox GProdAggregateListBox;
+static bool GProdAggregateFactoryShouldFail = false;
+static int32 GProdAggregateFactoryCalls = 0;
+static TArray<const void*> GProdAggregateReturnStorage;
+static TArray<int32> GProdAggregateBufferDestructionOrder;
+static TArray<int32> GProdAggregateTemporaryDestructionOrder;
+
+static void ProdAggregateElementConstruct(asIScriptGeneric* Generic)
+{
+	if (Generic != nullptr && Generic->GetObject() != nullptr)
+	{
+		new (Generic->GetObject()) FProdAggregateElement();
+	}
+}
+
+static void ProdAggregateElementDestruct(asIScriptGeneric* Generic)
+{
+	if (Generic == nullptr || Generic->GetObject() == nullptr)
+	{
+		return;
+	}
+	FProdAggregateElement* const Element =
+		static_cast<FProdAggregateElement*>(Generic->GetObject());
+	if (GProdAggregateReturnStorage.Contains(Element))
+	{
+		GProdAggregateTemporaryDestructionOrder.Add(Element->Id);
+	}
+	else
+	{
+		GProdAggregateBufferDestructionOrder.Add(Element->Id);
+	}
+	Element->~FProdAggregateElement();
+}
+
+static void ProdMakeAggregateElement(asIScriptGeneric* Generic)
+{
+	if (Generic == nullptr)
+	{
+		return;
+	}
+	const int32 Id = static_cast<int32>(Generic->GetArgDWord(0));
+	if (Generic->GetArgByte(1) != 0)
+	{
+		if (asIScriptContext* const Context = asGetActiveContext())
+		{
+			Context->SetException("aggregate middle-element failure");
+		}
+		return;
+	}
+
+	FProdAggregateElement Value;
+	Value.Id = Id;
+	GProdAggregateReturnStorage.Add(Generic->GetAddressOfReturnLocation());
+	Generic->SetReturnObject(&Value);
+}
+
+static void ProdSetAggregateFactoryFailure(asIScriptGeneric* Generic)
+{
+	GProdAggregateFactoryShouldFail = Generic != nullptr
+		&& Generic->GetArgByte(0) != 0;
+}
+
+static void ProdAggregateListFactory(asIScriptGeneric* Generic)
+{
+	++GProdAggregateFactoryCalls;
+	if (Generic == nullptr)
+	{
+		return;
+	}
+	if (GProdAggregateFactoryShouldFail)
+	{
+		if (asIScriptContext* const Context = asGetActiveContext())
+		{
+			Context->SetException("aggregate list-factory failure");
+		}
+		return;
+	}
+
+	const asBYTE* const Buffer =
+		static_cast<const asBYTE*>(Generic->GetArgAddress(0));
+	const asUINT Count = Buffer != nullptr
+		? *reinterpret_cast<const asUINT*>(Buffer) : 0;
+	GProdAggregateListBox.Marker = 0;
+	for (asUINT Index = 0; Index < Count; ++Index)
+	{
+		const FProdAggregateElement* const Element =
+			reinterpret_cast<const FProdAggregateElement*>(
+				Buffer + sizeof(asUINT)
+					+ Index * sizeof(FProdAggregateElement));
+		GProdAggregateListBox.Marker =
+			GProdAggregateListBox.Marker * 10 + Element->Id;
+	}
+	Generic->SetReturnAddress(&GProdAggregateListBox);
+}
+
 static bool ProdFunctionIsOnGlobalList(asCModule* Module, asIScriptFunction* Function)
 {
 	if (Module == nullptr || Function == nullptr)
@@ -11156,6 +11261,378 @@ public:
 				TEXT("double list factory must store 41.25 as 8 bytes so Marker==41; executed=%s value=%d"),
 				bExecuted ? TEXT("true") : TEXT("false"),
 				Value)));
+	}
+
+	TEST_METHOD(CanonicalAggregateListCommitsEachElementAndUnwindsOnlyCommittedPrefix)
+	{
+		using namespace AngelscriptNativeTestSupport;
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"FProdAggregateElement",
+			sizeof(FProdAggregateElement),
+			asOBJ_VALUE | asOBJ_POD | asOBJ_APP_CLASS_CD
+				| asOBJ_APP_CLASS_ALLINTS) >= 0,
+			TEXT("aggregate element must declare trivial storage-copy ABI plus exact cleanup")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectBehaviour(
+			"FProdAggregateElement",
+			asBEHAVE_CONSTRUCT,
+			"void f()",
+			asFUNCTION(ProdAggregateElementConstruct),
+			asCALL_GENERIC) >= 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectBehaviour(
+			"FProdAggregateElement",
+			asBEHAVE_DESTRUCT,
+			"void f()",
+			asFUNCTION(ProdAggregateElementDestruct),
+			asCALL_GENERIC) >= 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectProperty(
+			"FProdAggregateElement",
+			"int Id",
+			asOFFSET(FProdAggregateElement, Id)) >= 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterGlobalFunction(
+			"FProdAggregateElement MakeAggregateElement(int, bool)",
+			asFUNCTION(ProdMakeAggregateElement),
+			asCALL_GENERIC) >= 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterGlobalFunction(
+			"void SetAggregateFactoryFailure(bool)",
+			asFUNCTION(ProdSetAggregateFactoryFailure),
+			asCALL_GENERIC) >= 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"FProdAggregateListBox",
+			0,
+			asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectProperty(
+			"FProdAggregateListBox",
+			"int Marker",
+			asOFFSET(FProdAggregateListBox, Marker)) >= 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectBehaviour(
+			"FProdAggregateListBox",
+			asBEHAVE_LIST_FACTORY,
+			"FProdAggregateListBox f(int &in) {repeat FProdAggregateElement}",
+			asFUNCTION(ProdAggregateListFactory),
+			asCALL_GENERIC) >= 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* Module = nullptr;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Run(const bool FailFirst, const bool FailSecond,
+				const bool FailFactory)
+			{
+				SetAggregateFactoryFailure(FailFactory);
+				FProdAggregateListBox Box = {
+					MakeAggregateElement(1, FailFirst),
+					MakeAggregateElement(2, FailSecond),
+					MakeAggregateElement(3, false)
+				};
+				return Box.Marker;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(asSUCCESS, CompileNativeModule(
+			Engine.Get(),
+			"ProdAggregateCommittedPrefix",
+			ScriptSource.c_str(),
+			Module),
+			TEXT("aggregate committed-prefix fixture must compile through Canonical CodeGen")));
+		asCScriptFunction* const Entry = static_cast<asCScriptFunction*>(
+			Module != nullptr
+				? Module->GetFunctionByDecl(
+					"int Run(const bool, const bool, const bool)")
+				: nullptr);
+		ASSERT_THAT(IsNotNull(Entry));
+		if (Entry == nullptr || Entry->scriptData == nullptr)
+		{
+			return;
+		}
+
+		TArray<asUINT> CommittedSizes;
+		for (asUINT Offset = 0;
+			Offset < Entry->scriptData->byteCode.GetLength(); )
+		{
+			asDWORD* const Instruction =
+				Entry->scriptData->byteCode.AddressOf() + Offset;
+			const asEBCInstr Opcode = static_cast<asEBCInstr>(
+				*reinterpret_cast<const asBYTE*>(Instruction));
+			if (Opcode == asBC_SetListSize)
+			{
+				CommittedSizes.Add(asBC_DWORDARG(Instruction + 1));
+			}
+			Offset += static_cast<asUINT>(
+				asBCTypeSize[asBCInfo[Opcode].type]);
+		}
+		const bool bHasCommittedCursor = CommittedSizes.Num() == 7
+			&& CommittedSizes[0] == 0
+			&& CommittedSizes[1] == 1
+			&& CommittedSizes[2] == 2
+			&& CommittedSizes[3] == 3
+			&& CommittedSizes[4] == 2
+			&& CommittedSizes[5] == 1
+			&& CommittedSizes[6] == 0;
+		ASSERT_THAT(IsTrue(
+			bHasCommittedCursor,
+			*FString::Printf(
+				TEXT("list buffer must publish commits 0,1,2,3 then retire 2,1,0; bytecode {%s}"),
+				*ProdBytecodeImmediates(Entry))));
+		if (!bHasCommittedCursor)
+		{
+			// Keep the RED run memory-safe. The old emitter publishes the full count
+			// before element evaluation and has no tracked exception cleanup for the
+			// list buffer, so executing its failure cases would deliberately leak.
+			return;
+		}
+
+		asIScriptContext* const Context = ScriptEngine->CreateContext();
+		ASSERT_THAT(IsNotNull(Context));
+		ON_SCOPE_EXIT
+		{
+			if (Context != nullptr)
+			{
+				Context->Release();
+			}
+		};
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		auto Execute = [&](asIScriptFunction* const Function,
+			const bool bFailFirst, const bool bFailSecond,
+			const bool bFailFactory)
+		{
+			GProdAggregateFactoryShouldFail = false;
+			GProdAggregateFactoryCalls = 0;
+			GProdAggregateReturnStorage.Reset();
+			GProdAggregateBufferDestructionOrder.Reset();
+			GProdAggregateTemporaryDestructionOrder.Reset();
+			ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(Function)));
+			ASSERT_THAT(AreEqual(asSUCCESS,
+				Context->SetArgByte(0, bFailFirst ? 1 : 0)));
+			ASSERT_THAT(AreEqual(asSUCCESS,
+				Context->SetArgByte(1, bFailSecond ? 1 : 0)));
+			ASSERT_THAT(AreEqual(asSUCCESS,
+				Context->SetArgByte(2, bFailFactory ? 1 : 0)));
+			const int Status = Context->Execute();
+			if (bFailFirst || bFailSecond || bFailFactory)
+			{
+				ASSERT_THAT(AreEqual(asEXECUTION_EXCEPTION, Status));
+			}
+			else
+			{
+				ASSERT_THAT(IsTrue(Status == asEXECUTION_FINISHED
+					&& Context->GetReturnDWord() == 123,
+					TEXT("the list factory must observe the complete committed aggregate")));
+			}
+			ASSERT_THAT(AreEqual(asSUCCESS, Context->Unprepare()));
+		};
+
+		Execute(Entry, false, false, false);
+		ASSERT_THAT(IsTrue(
+			GProdAggregateFactoryCalls == 1
+				&& GProdAggregateBufferDestructionOrder == TArray<int32>({3, 2, 1}),
+			TEXT("normal list-buffer cleanup must destroy all committed elements in reverse order")));
+
+		Execute(Entry, true, false, false);
+		ASSERT_THAT(IsTrue(
+			GProdAggregateFactoryCalls == 0
+				&& GProdAggregateBufferDestructionOrder.IsEmpty(),
+			TEXT("first-element failure must retain a zero committed cursor and destroy no buffer element")));
+
+		Execute(Entry, false, true, false);
+		ASSERT_THAT(IsTrue(
+			GProdAggregateFactoryCalls == 0
+				&& GProdAggregateBufferDestructionOrder == TArray<int32>({1}),
+			TEXT("middle-element failure must destroy only the first committed buffer element")));
+
+		Execute(Entry, false, false, true);
+		ASSERT_THAT(IsTrue(
+			GProdAggregateFactoryCalls == 1
+				&& GProdAggregateBufferDestructionOrder == TArray<int32>({3, 2, 1}),
+			TEXT("list-factory failure must unwind the complete buffer prefix in reverse order")));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			static_cast<asCModule*>(Module)->GetLastBytecodePublisher()));
+		ASSERT_THAT(AreEqual(
+			0,
+			static_cast<asCModule*>(Module)->GetLastLegacyCompilerInvocationCount()));
+
+		FMemoryBinaryStream ModuleBytecode;
+		ASSERT_THAT(AreEqual(
+			asSUCCESS,
+			Module->SaveByteCode(&ModuleBytecode, false),
+			TEXT("complete module persistence must encode aggregate cleanup through stable type/function identities")));
+		ASSERT_THAT(IsTrue(ModuleBytecode.Num() > 0));
+		ModuleBytecode.ResetReadPosition();
+		asIScriptModule* const RestoredModule = ScriptEngine->GetModule(
+			"ProdAggregateCommittedPrefixRestored",
+			asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(RestoredModule));
+		bool bDebugWasStripped = true;
+		const int LoadResult = RestoredModule != nullptr
+			? RestoredModule->LoadByteCode(&ModuleBytecode, &bDebugWasStripped)
+			: asNO_MODULE;
+		ASSERT_THAT(AreEqual(
+			asSUCCESS,
+			LoadResult,
+			*FString::Printf(
+				TEXT("complete module persistence must restore aggregate cleanup through stable type/function identities; result=%d messages:\n%s"),
+				LoadResult,
+				*Engine.GetMessagesText())));
+		ASSERT_THAT(IsFalse(bDebugWasStripped));
+		ASSERT_THAT(IsFalse(ModuleBytecode.HasReadError()));
+		asCScriptFunction* const RestoredEntry = static_cast<asCScriptFunction*>(
+			RestoredModule != nullptr
+				? RestoredModule->GetFunctionByDecl(
+					"int Run(const bool, const bool, const bool)")
+				: nullptr);
+		ASSERT_THAT(IsNotNull(RestoredEntry));
+		const bool bRestoredAggregateAuthority = RestoredEntry != nullptr
+			&& RestoredEntry->scriptData != nullptr
+			&& RestoredEntry->scriptData->aggregateCleanupInfo.GetLength() == 1;
+		ASSERT_THAT(IsTrue(
+			bRestoredAggregateAuthority,
+			TEXT("LoadByteCode must restore the exact aggregate cleanup directory before exceptional execution")));
+		if (!bRestoredAggregateAuthority)
+		{
+			// Keep the RED memory-safe. Executing the failure path without the
+			// authenticated aggregate directory would deliberately leak or apply the
+			// legacy list-pattern heuristic to a partially initialized buffer.
+			return;
+		}
+
+		const asSAggregateCleanupInfo& RestoredCleanup =
+			RestoredEntry->scriptData->aggregateCleanupInfo[0];
+		ASSERT_THAT(IsTrue(
+			RestoredCleanup.bufferOffset > 0
+				&& RestoredCleanup.elementType
+					== ScriptEngine->GetTypeInfoByDecl("FProdAggregateElement")
+				&& RestoredCleanup.actionFunctionId > 0
+				&& RestoredCleanup.committedCountOffset == 0
+				&& RestoredCleanup.firstElementOffset > 0
+				&& RestoredCleanup.elementStride == sizeof(FProdAggregateElement)
+				&& RestoredCleanup.maxElementCount == 3,
+			TEXT("restored aggregate cleanup must retain its exact current-generation frame layout and action")));
+
+		auto HasUniqueAggregateHeapEntry = [](const asCScriptFunction* const Function,
+			const int BufferOffset)
+		{
+			if (Function == nullptr || Function->scriptData == nullptr
+				|| Function->scriptData->objVariablePos.GetLength()
+					!= Function->scriptData->objVariableTypes.GetLength()
+				|| Function->scriptData->objVariablesOnHeap
+					> Function->scriptData->objVariablePos.GetLength())
+			{
+				return false;
+			}
+
+			asUINT MatchingEntries = 0;
+			for (asUINT Index = 0;
+				Index < Function->scriptData->objVariablesOnHeap;
+				++Index)
+			{
+				asCTypeInfo* const Type =
+					Function->scriptData->objVariableTypes[Index];
+				if (Function->scriptData->objVariablePos[Index] == BufferOffset
+					&& Type != nullptr
+					&& (Type->GetFlags() & asOBJ_LIST_PATTERN) != 0)
+				{
+					++MatchingEntries;
+				}
+			}
+			return MatchingEntries == 1;
+		};
+		const bool bRestoredHeapDirectory = HasUniqueAggregateHeapEntry(
+			RestoredEntry,
+			RestoredCleanup.bufferOffset);
+		ASSERT_THAT(IsTrue(
+			bRestoredHeapDirectory,
+			TEXT("LoadByteCode must rebuild one typed heap-cleanup entry for the aggregate buffer before VM liveness analysis")));
+		if (!bRestoredHeapDirectory)
+		{
+			// Keep the structural RED memory-safe: objVariableInfo contains the
+			// aggregate INIT edge, so DetermineLiveObjects cannot process it until
+			// the restored heap directory names the same buffer exactly once.
+			return;
+		}
+
+		Execute(RestoredEntry, false, true, false);
+		ASSERT_THAT(IsTrue(
+			GProdAggregateFactoryCalls == 0
+				&& GProdAggregateBufferDestructionOrder == TArray<int32>({1}),
+			TEXT("restored middle-element failure must destroy only the first committed buffer element")));
+		Execute(RestoredEntry, false, false, true);
+		ASSERT_THAT(IsTrue(
+			GProdAggregateFactoryCalls == 1
+				&& GProdAggregateBufferDestructionOrder == TArray<int32>({3, 2, 1}),
+			TEXT("restored factory failure must unwind the complete aggregate prefix in reverse order")));
+
+		FMemoryBinaryStream FunctionArtifact;
+		asCWriter ArtifactWriter(
+			static_cast<asCModule*>(Module),
+			&FunctionArtifact,
+			ScriptEngine,
+			true);
+		ASSERT_THAT(AreEqual(
+			asSUCCESS,
+			ArtifactWriter.WriteFunctionArtifact(Entry),
+			TEXT("detached artifact V6 must encode aggregate cleanup through semantic tables")));
+		ASSERT_THAT(IsTrue(FunctionArtifact.Num() > 0));
+		FunctionArtifact.ResetReadPosition();
+		asCModule* const ArtifactModule = static_cast<asCModule*>(
+			ScriptEngine->GetModule(
+				"ProdAggregateCommittedPrefixArtifact",
+				asGM_ALWAYS_CREATE));
+		ASSERT_THAT(IsNotNull(ArtifactModule));
+		asCScriptFunction* ArtifactEntry = nullptr;
+		asCReader ArtifactReader(
+			ArtifactModule,
+			&FunctionArtifact,
+			ScriptEngine);
+		const int ArtifactRestoreResult = ArtifactReader.RestoreGlobalFunctionArtifact(
+			static_cast<asUINT>(FunctionArtifact.Num()),
+			&ArtifactEntry);
+		ASSERT_THAT(AreEqual(
+			asSUCCESS,
+			ArtifactRestoreResult,
+			TEXT("detached artifact V6 must reconstruct aggregate cleanup before publication")));
+		const bool bArtifactAggregateAuthority = ArtifactEntry != nullptr
+			&& ArtifactEntry->scriptData != nullptr
+			&& ArtifactEntry->scriptData->aggregateCleanupInfo.GetLength() == 1
+			&& HasUniqueAggregateHeapEntry(
+				ArtifactEntry,
+				ArtifactEntry->scriptData->aggregateCleanupInfo[0].bufferOffset);
+		ASSERT_THAT(IsTrue(
+			bArtifactAggregateAuthority,
+			TEXT("published detached artifact must own one authenticated aggregate cleanup and heap-directory entry")));
+		if (bArtifactAggregateAuthority)
+		{
+			Execute(ArtifactEntry, false, true, false);
+			ASSERT_THAT(IsTrue(
+				GProdAggregateFactoryCalls == 0
+					&& GProdAggregateBufferDestructionOrder == TArray<int32>({1}),
+				TEXT("detached artifact middle-element failure must preserve committed-prefix cleanup")));
+		}
+
+		const asUINT SavedMaxElementCount =
+			Entry->scriptData->aggregateCleanupInfo[0].maxElementCount;
+		Entry->scriptData->aggregateCleanupInfo[0].maxElementCount = 2;
+		FMemoryBinaryStream ForgedArtifact;
+		asCWriter ForgedWriter(
+			static_cast<asCModule*>(Module),
+			&ForgedArtifact,
+			ScriptEngine,
+			true);
+		const int ForgedWriteResult =
+			ForgedWriter.WriteFunctionArtifact(Entry);
+		Entry->scriptData->aggregateCleanupInfo[0].maxElementCount =
+			SavedMaxElementCount;
+		ASSERT_THAT(IsTrue(
+			ForgedWriteResult < 0,
+			TEXT("aggregate candidate with a forged structural count must fail closed before artifact publication")));
 	}
 
 	TEST_METHOD(CanonicalConstGlobalOnlyBuildInstallsOrFailsClosed)

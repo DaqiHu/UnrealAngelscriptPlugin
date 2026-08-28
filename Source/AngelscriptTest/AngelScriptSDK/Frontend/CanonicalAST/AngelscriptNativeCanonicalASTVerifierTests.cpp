@@ -46,6 +46,149 @@ struct FConstructorLifetimeViewFixture
 	asASTExprId SecondAssignment;
 };
 
+struct FAggregateLifetimeViewFixture
+{
+	asASTDeclId ElementClass;
+	asASTDeclId ElementDestructor;
+	asASTDeclId InnerArrayClass;
+	asASTDeclId InnerArrayDestructor;
+	asASTDeclId InnerListFactory;
+	asASTDeclId OuterArrayClass;
+	asASTDeclId OuterListFactory;
+	asASTDeclId Function;
+	asASTStmtId FunctionBody;
+	asASTExprId FirstInnerAggregate;
+	asASTExprId SecondInnerAggregate;
+	asASTExprId OuterAggregate;
+	asCArray<asASTExprId> FirstInnerElements;
+	asCArray<asASTExprId> SecondInnerElements;
+};
+
+static asASTDeclId CreateListFactory(
+	asCASTContext& Context,
+	asASTDeclId Owner,
+	const char* Name,
+	const asCQualType& VoidType)
+{
+	const asASTDeclId Factory = Context.CreateDecl(
+		asAST_DECL_CONSTRUCTOR, Owner, asCSourceRange(), Name);
+	Context.SetDeclType(Factory, VoidType);
+	Context.AddDeclTrait(Factory, asAST_TRAIT_LIST_FACTORY);
+	return Factory;
+}
+
+static FAggregateLifetimeViewFixture BuildAggregateLifetimeViewFixture(
+	asCASTContext& Context)
+{
+	FAggregateLifetimeViewFixture Fixture;
+	const asASTDeclId Tu = Context.CreateTranslationUnit(
+		"AggregateLifetimeView");
+	const asCQualType VoidType = Context.InternPrimitive(ttVoid);
+	const asCQualType ElementType = Context.InternNamedType(
+		asAST_TYPE_VALUE_OBJECT, "FElement", 0);
+	const asCQualType InnerArrayType = Context.InternNamedType(
+		asAST_TYPE_VALUE_OBJECT, "FElementArray", 0);
+	const asCQualType OuterArrayType = Context.InternNamedType(
+		asAST_TYPE_VALUE_OBJECT, "FElementArrayArray", 0);
+
+	Fixture.ElementClass = Context.CreateDecl(
+		asAST_DECL_CLASS, Tu, asCSourceRange(), "FElement");
+	Context.SetStableKey(Fixture.ElementClass, "FElement");
+	Context.SetDeclType(Fixture.ElementClass, ElementType);
+	Fixture.ElementDestructor = Context.CreateDecl(
+		asAST_DECL_DESTRUCTOR, Fixture.ElementClass,
+		asCSourceRange(), "FElement");
+	Context.SetDeclType(Fixture.ElementDestructor, VoidType);
+
+	Fixture.InnerArrayClass = Context.CreateDecl(
+		asAST_DECL_CLASS, Tu, asCSourceRange(), "FElementArray");
+	Context.SetStableKey(Fixture.InnerArrayClass, "FElementArray");
+	Context.SetDeclType(Fixture.InnerArrayClass, InnerArrayType);
+	Fixture.InnerArrayDestructor = Context.CreateDecl(
+		asAST_DECL_DESTRUCTOR, Fixture.InnerArrayClass,
+		asCSourceRange(), "FElementArray");
+	Context.SetDeclType(Fixture.InnerArrayDestructor, VoidType);
+	Fixture.InnerListFactory = CreateListFactory(
+		Context, Fixture.InnerArrayClass, "FElementArray", VoidType);
+
+	Fixture.OuterArrayClass = Context.CreateDecl(
+		asAST_DECL_CLASS, Tu, asCSourceRange(), "FElementArrayArray");
+	Context.SetStableKey(Fixture.OuterArrayClass, "FElementArrayArray");
+	Context.SetDeclType(Fixture.OuterArrayClass, OuterArrayType);
+	Fixture.OuterListFactory = CreateListFactory(
+		Context, Fixture.OuterArrayClass, "FElementArrayArray", VoidType);
+
+	Fixture.Function = Context.CreateDecl(
+		asAST_DECL_FUNCTION, Tu, asCSourceRange(), "BuildArrays");
+	Context.SetDeclType(Fixture.Function, VoidType);
+	Fixture.FunctionBody = Context.CreateStmt(
+		asAST_STMT_BLOCK, Fixture.Function, asCSourceRange());
+	Context.SetBody(Fixture.Function, Fixture.FunctionBody);
+
+	auto CreateInnerAggregate = [&](asUINT ElementCount,
+		asCArray<asASTExprId>& OutElements) -> asASTExprId
+	{
+		const asASTExprId Aggregate = Context.CreateExpr(
+			asAST_EXPR_CONSTRUCT, InnerArrayType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		Context.SetLiteral(Aggregate, "list-pattern");
+		Context.SetResolvedDecl(Aggregate, Fixture.InnerListFactory);
+		for( asUINT ElementIndex = 0;
+			ElementIndex < ElementCount; ++ElementIndex )
+		{
+			const asASTExprId Element = Context.CreateExpr(
+				asAST_EXPR_CONSTRUCT, ElementType,
+				asAST_VALUE_PRVALUE, asCSourceRange());
+			Context.SetLiteral(Element, "FElement::FElement()");
+			Context.AddExprChild(Aggregate, Element);
+			OutElements.PushLast(Element);
+		}
+		return Aggregate;
+	};
+
+	Fixture.FirstInnerAggregate = CreateInnerAggregate(
+		3, Fixture.FirstInnerElements);
+	Fixture.SecondInnerAggregate = CreateInnerAggregate(
+		2, Fixture.SecondInnerElements);
+	Fixture.OuterAggregate = Context.CreateExpr(
+		asAST_EXPR_CONSTRUCT, OuterArrayType,
+		asAST_VALUE_PRVALUE, asCSourceRange());
+	Context.SetLiteral(Fixture.OuterAggregate, "list-pattern");
+	Context.SetResolvedDecl(
+		Fixture.OuterAggregate, Fixture.OuterListFactory);
+	Context.AddExprChild(
+		Fixture.OuterAggregate, Fixture.FirstInnerAggregate);
+	Context.AddExprChild(
+		Fixture.OuterAggregate, Fixture.SecondInnerAggregate);
+
+	const asASTStmtId AggregateStatement = Context.CreateStmt(
+		asAST_STMT_EXPR, Fixture.Function, asCSourceRange());
+	Context.SetStmtExpr(AggregateStatement, Fixture.OuterAggregate);
+	Context.AddStmtChild(Fixture.FunctionBody, AggregateStatement);
+	return Fixture;
+}
+
+static asSASTLifetimeRecord MakeAggregateLifetimeRecord(
+	asASTExprId Aggregate,
+	asASTDeclId ElementDestructor,
+	asASTDeclId SemanticOwner,
+	asUINT Order)
+{
+	asSASTLifetimeRecord Record;
+	Record.subjectKind = asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT;
+	Record.subject = asSASTLifetimeNodeId::FromExpr(Aggregate);
+	Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_ELEMENT;
+	Record.actionTarget = asSASTLifetimeNodeId::FromDecl(ElementDestructor);
+	Record.activationPoint = asSASTLifetimeNodeId::FromExpr(Aggregate);
+	Record.semanticRegion = asSASTLifetimeNodeId::FromDecl(SemanticOwner);
+	Record.phase = asAST_LIFETIME_PHASE_AGGREGATE_ELEMENT;
+	Record.supportedExitMask = asAST_LIFETIME_EXIT_EXCEPTION;
+	Record.constructionStep = 0;
+	Record.order = Order;
+	Record.completeObjectCommit = false;
+	return Record;
+}
+
 static FConstructorLifetimeViewFixture BuildConstructorLifetimeViewFixture(
 	asCASTContext& Context)
 {
@@ -708,6 +851,289 @@ public:
 				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
 				Context.Seal(),
 				TEXT("a complete-object phase must carry the distinct complete commit")));
+		}
+	}
+
+	TEST_METHOD(BuildsDeterministicAggregateCommittedPrefixPlan)
+	{
+		asCASTContext Context;
+		const FAggregateLifetimeViewFixture Fixture =
+			BuildAggregateLifetimeViewFixture(Context);
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+			MakeAggregateLifetimeRecord(
+				Fixture.FirstInnerAggregate,
+				Fixture.ElementDestructor,
+				Fixture.Function,
+				0))));
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+			MakeAggregateLifetimeRecord(
+				Fixture.SecondInnerAggregate,
+				Fixture.ElementDestructor,
+				Fixture.Function,
+				1))));
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+			MakeAggregateLifetimeRecord(
+				Fixture.OuterAggregate,
+				Fixture.InnerArrayDestructor,
+				Fixture.Function,
+				2))));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("nested aggregate progress must authenticate")));
+
+		asCASTLifetimeView FirstView;
+		asCASTLifetimeView SecondView;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, FirstView)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, SecondView)));
+		ASSERT_THAT(AreEqual(
+			FirstView.GetStructuralDigest(),
+			SecondView.GetStructuralDigest(),
+			TEXT("aggregate plans must reconstruct deterministically")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(3),
+			FirstView.GetAggregatePlanCount()));
+
+		const asSASTLifetimeAggregatePlan* const InnerPlan =
+			FirstView.FindAggregatePlan(Fixture.FirstInnerAggregate);
+		const asSASTLifetimeAggregatePlan* const OuterPlan =
+			FirstView.FindAggregatePlan(Fixture.OuterAggregate);
+		ASSERT_THAT(IsNotNull(InnerPlan));
+		ASSERT_THAT(IsNotNull(OuterPlan));
+		if( InnerPlan == nullptr || OuterPlan == nullptr )
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(
+			InnerPlan->aggregate == Fixture.FirstInnerAggregate));
+		ASSERT_THAT(IsTrue(
+			InnerPlan->parentAggregate == Fixture.OuterAggregate));
+		ASSERT_THAT(IsTrue(
+			OuterPlan->parentAggregate == asASTExprId()));
+		ASSERT_THAT(IsTrue(InnerPlan->semanticOwner == Fixture.Function));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_LIFETIME_ACTION_DESTROY_ELEMENT),
+			static_cast<int32>(InnerPlan->actionKind)));
+		ASSERT_THAT(IsTrue(InnerPlan->actionTarget
+			== asSASTLifetimeNodeId::FromDecl(Fixture.ElementDestructor)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(3),
+			InnerPlan->elementCommits.GetLength()));
+
+		asCArray<asSASTLifetimeAggregateCleanupAction> Cleanup;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			FirstView.DeriveAggregateAbortCleanup(
+				Fixture.FirstInnerAggregate, 0, Cleanup)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0), Cleanup.GetLength(),
+			TEXT("zero committed elements require no cleanup")));
+
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			FirstView.DeriveAggregateAbortCleanup(
+				Fixture.FirstInnerAggregate, 1, Cleanup)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(1), Cleanup.GetLength()));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0), Cleanup[0].elementOrdinal));
+		ASSERT_THAT(IsTrue(Cleanup[0].element
+			== Fixture.FirstInnerElements[0]));
+		ASSERT_THAT(IsTrue(Cleanup[0].actionTarget
+			== asSASTLifetimeNodeId::FromDecl(Fixture.ElementDestructor)));
+
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			FirstView.DeriveAggregateAbortCleanup(
+				Fixture.FirstInnerAggregate, 2, Cleanup),
+			TEXT("failure in element two cleans only committed elements zero and one")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(2), Cleanup.GetLength()));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(1), Cleanup[0].elementOrdinal));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0), Cleanup[1].elementOrdinal));
+
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			FirstView.DeriveAggregateAbortCleanup(
+				Fixture.FirstInnerAggregate, 3, Cleanup)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(3), Cleanup.GetLength()));
+		for( asUINT CleanupIndex = 0; CleanupIndex < 3; ++CleanupIndex )
+		{
+			ASSERT_THAT(AreEqual(
+				2 - CleanupIndex, Cleanup[CleanupIndex].elementOrdinal));
+		}
+
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+			FirstView.DeriveAggregateAbortCleanup(
+				Fixture.FirstInnerAggregate, 4, Cleanup),
+			TEXT("a cursor beyond the authenticated element count must fail closed")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0), Cleanup.GetLength(),
+			TEXT("a rejected cursor must not leak stale cleanup actions")));
+
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			FirstView.DeriveAggregateAbortCleanup(
+				Fixture.OuterAggregate, 1, Cleanup)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(1), Cleanup.GetLength()));
+		ASSERT_THAT(IsTrue(Cleanup[0].element
+			== Fixture.FirstInnerAggregate));
+		ASSERT_THAT(IsTrue(Cleanup[0].actionTarget
+			== asSASTLifetimeNodeId::FromDecl(
+				Fixture.InnerArrayDestructor),
+			TEXT("the parent cursor advances only after the complete inner aggregate commits")));
+	}
+
+	TEST_METHOD(RejectsForgedAggregateSubjectActionOwnerAndProgress)
+	{
+		{
+			asCASTContext Context;
+			const FAggregateLifetimeViewFixture Fixture =
+				BuildAggregateLifetimeViewFixture(Context);
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+				MakeAggregateLifetimeRecord(
+					Fixture.FirstInnerAggregate,
+					Fixture.ElementDestructor,
+					Fixture.Function,
+					0))));
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+				MakeAggregateLifetimeRecord(
+					Fixture.OuterAggregate,
+					Fixture.InnerArrayDestructor,
+					Fixture.Function,
+					1))));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("every nested list-pattern aggregate needs an independent committed-prefix plan")));
+		}
+		{
+			asCASTContext Context;
+			const FAggregateLifetimeViewFixture Fixture =
+				BuildAggregateLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeAggregateLifetimeRecord(
+				Fixture.FirstInnerAggregate,
+				Fixture.ElementDestructor,
+				Fixture.Function,
+				0);
+			Record.activationPoint = asSASTLifetimeNodeId::FromExpr(
+				Fixture.SecondInnerAggregate);
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Record)));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("aggregate progress identity must be the subject expression")));
+		}
+		{
+			asCASTContext Context;
+			const FAggregateLifetimeViewFixture Fixture =
+				BuildAggregateLifetimeViewFixture(Context);
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+				MakeAggregateLifetimeRecord(
+					Fixture.FirstInnerAggregate,
+					Fixture.InnerArrayDestructor,
+					Fixture.Function,
+					0))));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("aggregate cleanup must name the exact element destructor")));
+		}
+		{
+			asCASTContext Context;
+			const FAggregateLifetimeViewFixture Fixture =
+				BuildAggregateLifetimeViewFixture(Context);
+			const asCDecl* const Function = Context.GetDecl(Fixture.Function);
+			ASSERT_THAT(IsNotNull(Function));
+			if( Function == nullptr ) return;
+			const asASTDeclId ForeignFunction = Context.CreateDecl(
+				asAST_DECL_FUNCTION, Function->parent,
+				asCSourceRange(), "ForeignBuildArrays");
+			ASSERT_THAT(AreEqual(
+				0, Context.SetDeclType(ForeignFunction, Function->type)));
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+				MakeAggregateLifetimeRecord(
+					Fixture.FirstInnerAggregate,
+					Fixture.ElementDestructor,
+					ForeignFunction,
+					0))));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("the semantic owner must own the aggregate expression")));
+		}
+		{
+			asCASTContext Context;
+			const FAggregateLifetimeViewFixture Fixture =
+				BuildAggregateLifetimeViewFixture(Context);
+			ASSERT_THAT(AreEqual(
+				0, Context.SetDeclTraits(
+					Fixture.InnerListFactory, asAST_TRAIT_NONE)));
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+				MakeAggregateLifetimeRecord(
+					Fixture.FirstInnerAggregate,
+					Fixture.ElementDestructor,
+					Fixture.Function,
+					0))));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("aggregate progress requires an authenticated list factory")));
+		}
+		{
+			asCASTContext Context;
+			const FAggregateLifetimeViewFixture Fixture =
+				BuildAggregateLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeAggregateLifetimeRecord(
+				Fixture.FirstInnerAggregate,
+				Fixture.ElementDestructor,
+				Fixture.Function,
+				0);
+			Record.supportedExitMask = asAST_LIFETIME_EXIT_NORMAL;
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Record)));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("aggregate committed-prefix cleanup is an exceptional-abort fact")));
+		}
+		{
+			asCASTContext Context;
+			const FAggregateLifetimeViewFixture Fixture =
+				BuildAggregateLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeAggregateLifetimeRecord(
+				Fixture.FirstInnerAggregate,
+				Fixture.ElementDestructor,
+				Fixture.Function,
+				0);
+			Record.constructionStep = 1;
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Record)));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("the dynamic committed cursor must not be persisted as a construction step")));
+		}
+		{
+			asCASTContext Context;
+			const FAggregateLifetimeViewFixture Fixture =
+				BuildAggregateLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeAggregateLifetimeRecord(
+				Fixture.FirstInnerAggregate,
+				Fixture.ElementDestructor,
+				Fixture.Function,
+				0);
+			Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Record)));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("an aggregate record must use the exact element cleanup action")));
 		}
 	}
 
