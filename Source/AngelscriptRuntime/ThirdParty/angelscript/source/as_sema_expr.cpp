@@ -5565,52 +5565,70 @@ static const char* OperatorMethodName(eTokenType token)
 	return 0;
 }
 
-// Native enum values are not declarations in the canonical script AST. Keep
-// them as a typed literal instead of manufacturing a short-lived fake decl:
-// that preserves overload resolution and gives CodeGen a normal scalar value.
-static asASTExprId InternNativeEnumLiteral(
-	asCSema& sema,
-	asCASTContext& context,
-	const asCString& qualifiedScope,
+// Registered enum values are not declarations in the current script AST. Keep
+// them as typed literals instead of manufacturing short-lived fake decls, but
+// consume only the translation-unit-local pointer-free declaration snapshot.
+// A current lexical scope always wins before this registered fallback.
+asASTExprId asCSema::InternCanonicalRegisteredEnumLiteral(
+	asASTDeclId lookupScope,
+	const asCArray<asCString>& scopeSegments,
+	bool absoluteScope,
 	const char* valueName,
-	const asCSourceRange& range)
+	const asCSourceRange& range,
+	bool& authoritativeFailure)
 {
+	authoritativeFailure = false;
+	const asCString qualifiedScope = JoinScopeSegments(scopeSegments);
 	if( valueName == 0 || valueName[0] == 0
 		|| qualifiedScope.GetLength() == 0 )
 	{
 		return asASTExprId();
 	}
-	asCScriptEngine* const engine = sema.GetEngine();
-	if( engine == 0 )
+	if( ResolveScopeSegments(
+			this, lookupScope, scopeSegments, absoluteScope, 0).IsValid() )
+	{
+		// The scope belongs to this Canonical translation unit. Its declaration
+		// and enumerator are resolved by the ordinary lexical path below.
+		return asASTExprId();
+	}
+
+	asCString stableKey;
+	bool ambiguous = false;
+	const asSCanonicalRegisteredTypeDeclarationFact* const fact =
+		ResolveCanonicalRegisteredTypeDeclaration(
+			qualifiedScope,
+			absoluteScope,
+			lookupScope,
+			stableKey,
+			ambiguous);
+	if( ambiguous )
+	{
+		AddDiagnostic("decl-ref-registered-enum-ambiguous", range);
+		authoritativeFailure = true;
+		return asASTExprId();
+	}
+	if( fact == 0 || fact->kind != asAST_TYPE_ENUM )
 	{
 		return asASTExprId();
 	}
-	asITypeInfo* info = engine->GetTypeInfoByDecl(qualifiedScope.AddressOf());
-	if( info == 0 )
+	for( asUINT i = 0; i < fact->enumerators.GetLength(); ++i )
 	{
-		info = engine->GetTypeInfoByName(qualifiedScope.AddressOf());
-	}
-	asCEnumType* const enumType = info ? CastToEnumType(static_cast<asCTypeInfo*>(info)) : 0;
-	if( enumType == 0 )
-	{
-		return asASTExprId();
-	}
-	for( asUINT i = 0; i < enumType->enumValues.GetLength(); ++i )
-	{
-		const asSEnumValue* const value = enumType->enumValues[i];
-		if( value == 0 || !value->name.Equals(valueName) )
+		const asSCanonicalRegisteredEnumeratorFact& value =
+			fact->enumerators[i];
+		if( !value.name.Equals(valueName) )
 		{
 			continue;
 		}
-		asCRuntimeTypeBridge bridge(engine);
-		const asCQualType type = bridge.FromDataType(context, asCDataType::CreateType(enumType, false));
+		const asCQualType type = context.InternNamedType(
+			asAST_TYPE_ENUM, stableKey.AddressOf(), 0);
 		if( !type.IsValid() )
 		{
 			return asASTExprId();
 		}
 		const asASTExprId literal = context.CreateExpr(asAST_EXPR_INTEGER_LITERAL, type, asAST_VALUE_PRVALUE, range);
-		context.SetLiteralBits(literal, static_cast<asQWORD>(static_cast<asINT64>(value->value)));
-		asCString spelling = qualifiedScope;
+		context.SetLiteralBits(literal,
+			static_cast<asQWORD>(static_cast<asINT64>(value.value)));
+		asCString spelling = stableKey;
 		spelling += "::";
 		spelling += valueName;
 		context.SetLiteral(literal, spelling.AddressOf());
@@ -5674,11 +5692,21 @@ asASTExprId asCSema::ActOnDeclRefExprAction(
 				QualTypeFromClassDecl(context, enclosingClass), range);
 		}
 	}
-	const asASTExprId nativeEnum = InternNativeEnumLiteral(
-		*this, context, qualifiedScope, action.name.AddressOf(), range);
-	if( nativeEnum.IsValid() )
+	bool registeredEnumFailure = false;
+	const asASTExprId registeredEnum = InternCanonicalRegisteredEnumLiteral(
+		owner,
+		action.scopeSegments,
+		action.absoluteScope,
+		action.name.AddressOf(),
+		range,
+		registeredEnumFailure);
+	if( registeredEnum.IsValid() )
 	{
-		return nativeEnum;
+		return registeredEnum;
+	}
+	if( registeredEnumFailure )
+	{
+		return asASTExprId();
 	}
 	InternAutomaticImportScriptGlobal(
 		*this, qualifiedScope, action.name.AddressOf());

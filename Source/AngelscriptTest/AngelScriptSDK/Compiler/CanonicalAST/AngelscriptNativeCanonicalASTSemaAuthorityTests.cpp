@@ -26722,6 +26722,130 @@ public:
 			TEXT("a new Sema generation must project and attach the registered host base from copied facts")));
 	}
 
+	TEST_METHOD(SemaRegisteredEnumLiteralSnapshotIsTranslationUnitLocal)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterEnum(
+			"EEarlyRegisteredEnumSnapshot") >= 0,
+			TEXT("registered enum snapshot fixture must register its early enum")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterEnumValue(
+			"EEarlyRegisteredEnumSnapshot", "Before", -17) >= 0,
+			TEXT("registered enum snapshot fixture must register its early value")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterEnum(
+			"EShadowedRegisteredEnumSnapshot") >= 0,
+			TEXT("registered enum snapshot fixture must register its shadowed enum")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterEnumValue(
+			"EShadowedRegisteredEnumSnapshot", "FromRegistry", 7) >= 0,
+			TEXT("registered enum snapshot fixture must register its shadowed value")));
+
+		asCASTContext OldContext;
+		asCSema OldSema(ScriptEngine, OldContext);
+		const asASTDeclId OldTu = OldSema.ActOnTranslationUnit(
+			"RegisteredEnumLiteralSnapshotOld");
+		const asCSourceRange EmptyRange;
+		const asASTDeclId LexicalEnum = OldSema.ActOnStartEnumDecl(
+			OldTu, "EShadowedRegisteredEnumSnapshot", EmptyRange);
+		const asASTDeclId LexicalEnumerator = OldSema.ActOnStartEnumeratorDecl(
+			LexicalEnum, "FromCanonical", EmptyRange);
+		ASSERT_THAT(IsTrue(LexicalEnum.IsValid()
+			&& LexicalEnumerator.IsValid(),
+			TEXT("current translation unit must own the lexical shadow enum/value")));
+
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterEnum(
+			"ELateRegisteredEnumSnapshot") >= 0,
+			TEXT("registered enum snapshot fixture must register its late enum")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterEnumValue(
+			"ELateRegisteredEnumSnapshot", "After", 42) >= 0,
+			TEXT("registered enum snapshot fixture must register its late value")));
+
+		const std::string Source =
+			"EEarlyRegisteredEnumSnapshot::Before "
+			"ELateRegisteredEnumSnapshot::After "
+			"EShadowedRegisteredEnumSnapshot::FromCanonical";
+		asCScriptCode OldCode;
+		OldCode.SetCode(
+			"RegisteredEnumLiteralSnapshotOld.as", Source.c_str(), true);
+		auto MakeAction = [&Source](
+			asASTDeclId Owner,
+			const char* EnumName,
+			const char* ValueName)
+		{
+			asSDeclRefExprAction Action;
+			Action.owner = Owner;
+			Action.name = ValueName;
+			Action.scopeSegments.PushLast(EnumName);
+			const std::string Spelling =
+				std::string(EnumName) + "::" + ValueName;
+			const size_t Begin = Source.find(Spelling);
+			Action.beginOffset = static_cast<asUINT>(Begin);
+			Action.endOffset = static_cast<asUINT>(Begin + Spelling.size());
+			return Action;
+		};
+
+		const asASTExprId OldEarly = OldSema.ActOnDeclRefExprAction(
+			MakeAction(OldTu, "EEarlyRegisteredEnumSnapshot", "Before"),
+			&OldCode);
+		const asASTExprId OldLate = OldSema.ActOnDeclRefExprAction(
+			MakeAction(OldTu, "ELateRegisteredEnumSnapshot", "After"),
+			&OldCode);
+		const asASTExprId OldLexical = OldSema.ActOnDeclRefExprAction(
+			MakeAction(OldTu, "EShadowedRegisteredEnumSnapshot", "FromCanonical"),
+			&OldCode);
+
+		asCASTContext NewContext;
+		asCSema NewSema(ScriptEngine, NewContext);
+		const asASTDeclId NewTu = NewSema.ActOnTranslationUnit(
+			"RegisteredEnumLiteralSnapshotNew");
+		asCScriptCode NewCode;
+		NewCode.SetCode(
+			"RegisteredEnumLiteralSnapshotNew.as", Source.c_str(), true);
+		const asASTExprId NewLate = NewSema.ActOnDeclRefExprAction(
+			MakeAction(NewTu, "ELateRegisteredEnumSnapshot", "After"),
+			&NewCode);
+
+		const asCExpr* const OldEarlyExpr = OldContext.GetExpr(OldEarly);
+		const asCExpr* const OldLateExpr = OldContext.GetExpr(OldLate);
+		const asCExpr* const OldLexicalExpr = OldContext.GetExpr(OldLexical);
+		const asCExpr* const NewLateExpr = NewContext.GetExpr(NewLate);
+		const asCType* const OldEarlyType = OldEarlyExpr != nullptr
+			? OldContext.GetType(OldEarlyExpr->type.type) : nullptr;
+		const asCType* const NewLateType = NewLateExpr != nullptr
+			? NewContext.GetType(NewLateExpr->type.type) : nullptr;
+
+		ASSERT_THAT(IsTrue(OldEarlyExpr != nullptr
+			&& OldEarlyExpr->kind == asAST_EXPR_INTEGER_LITERAL
+			&& OldEarlyExpr->literalBits
+				== static_cast<asQWORD>(static_cast<asINT64>(-17))
+			&& OldEarlyExpr->literal.Equals(
+				"EEarlyRegisteredEnumSnapshot::Before")
+			&& OldEarlyType != nullptr
+			&& OldEarlyType->kind == asAST_TYPE_ENUM
+			&& OldEarlyType->stableKey.Equals(
+				"EEarlyRegisteredEnumSnapshot"),
+			TEXT("an already-started Sema must resolve an early enum literal from its copied facts")));
+		ASSERT_THAT(IsTrue(OldLateExpr == nullptr
+			|| OldLateExpr->kind != asAST_EXPR_INTEGER_LITERAL,
+			TEXT("an already-started Sema must not observe a late Runtime enum/value registration")));
+		ASSERT_THAT(IsTrue(OldLexicalExpr != nullptr
+			&& OldLexicalExpr->kind == asAST_EXPR_DECL_REF
+			&& OldLexicalExpr->resolvedDecl == LexicalEnumerator,
+			TEXT("a current translation-unit enum must win before the same-key registered enum snapshot")));
+		ASSERT_THAT(IsTrue(NewLateExpr != nullptr
+			&& NewLateExpr->kind == asAST_EXPR_INTEGER_LITERAL
+			&& NewLateExpr->literalBits == static_cast<asQWORD>(42)
+			&& NewLateExpr->literal.Equals(
+				"ELateRegisteredEnumSnapshot::After")
+			&& NewLateType != nullptr
+			&& NewLateType->kind == asAST_TYPE_ENUM
+			&& NewLateType->stableKey.Equals(
+				"ELateRegisteredEnumSnapshot"),
+			TEXT("a new Sema generation must resolve the newly registered enum literal from copied facts")));
+	}
+
 	TEST_METHOD(ParserDeclarationTypeSitesUseTypedActionWithoutNodeAdapter)
 	{
 		const FString SourceRoot = FPaths::Combine(

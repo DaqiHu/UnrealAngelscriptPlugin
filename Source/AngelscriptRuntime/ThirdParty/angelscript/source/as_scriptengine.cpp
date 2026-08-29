@@ -6270,6 +6270,23 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 		if( type->flags & asOBJ_ENUM )
 		{
 			fact.kind = asAST_TYPE_ENUM;
+			const asCEnumType* const enumType = CastToEnumType(type);
+			for( asUINT valueIndex = 0;
+				enumType != 0
+					&& valueIndex < enumType->enumValues.GetLength();
+				++valueIndex )
+			{
+				const asSEnumValue* const value =
+					enumType->enumValues[valueIndex];
+				if( value == 0 || value->name.GetLength() == 0 )
+				{
+					continue;
+				}
+				asSCanonicalRegisteredEnumeratorFact enumerator;
+				enumerator.name = value->name;
+				enumerator.value = value->value;
+				fact.enumerators.PushLast(enumerator);
+			}
 		}
 		else if( type->flags & asOBJ_FUNCDEF )
 		{
@@ -6299,10 +6316,24 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 		{
 			asSCanonicalRegisteredTypeDeclarationFact& existing =
 				declarationsByStableKey.GetValue(cursor);
+			bool sameEnumerators =
+				existing.enumerators.GetLength()
+					== fact.enumerators.GetLength();
+			for( asUINT enumeratorIndex = 0;
+				sameEnumerators
+					&& enumeratorIndex < existing.enumerators.GetLength();
+				++enumeratorIndex )
+			{
+				sameEnumerators = existing.enumerators[enumeratorIndex].name.Equals(
+						fact.enumerators[enumeratorIndex].name)
+					&& existing.enumerators[enumeratorIndex].value
+						== fact.enumerators[enumeratorIndex].value;
+			}
 			if( existing.kind != fact.kind
 				|| existing.isInterface != fact.isInterface
 				|| (existing.flags & semanticFlags)
-					!= (fact.flags & semanticFlags) )
+					!= (fact.flags & semanticFlags)
+				|| !sameEnumerators )
 			{
 				existing.ambiguous = true;
 			}

@@ -34,12 +34,24 @@ struct asSCanonicalTemplateDeclarationFact
 	}
 };
 
+struct asSCanonicalRegisteredEnumeratorFact
+{
+	asCString name;
+	int value;
+
+	asSCanonicalRegisteredEnumeratorFact()
+		: value(0)
+	{
+	}
+};
+
 // Translation-unit-local, pointer-free projection of one ordinary registered
 // nominal declaration. The live Runtime type may belong to the application or
 // to another published script module; Canonical Sema copies only the stable
 // language facts needed for lookup, QualType formation and read-only base
-// projection. Template declarations/instances use the separate template fact
-// contract above.
+// projection. Enum facts additionally own exact enumerator names/values so
+// expression Sema never walks a live asCEnumType. Template declarations/
+// instances use the separate template fact contract above.
 struct asSCanonicalRegisteredTypeDeclarationFact
 {
 	asCString stableKey;
@@ -47,6 +59,7 @@ struct asSCanonicalRegisteredTypeDeclarationFact
 	asQWORD flags;
 	bool isInterface;
 	bool ambiguous;
+	asCArray<asSCanonicalRegisteredEnumeratorFact> enumerators;
 
 	asSCanonicalRegisteredTypeDeclarationFact()
 		: kind(asAST_TYPE_INVALID)
@@ -1480,6 +1493,13 @@ private:
 		bool absoluteScope,
 		asDWORD authoredQualifiers,
 		bool& ambiguous);
+	asASTExprId InternCanonicalRegisteredEnumLiteral(
+		asASTDeclId lookupScope,
+		const asCArray<asCString>& scopeSegments,
+		bool absoluteScope,
+		const char* valueName,
+		const asCSourceRange& range,
+		bool& authoritativeFailure);
 	const asSCanonicalTemplateDeclarationFact*
 		FindExactCanonicalTemplateDeclaration(const asCString& stableKey) const;
 	const asSCanonicalTemplateDeclarationFact*
