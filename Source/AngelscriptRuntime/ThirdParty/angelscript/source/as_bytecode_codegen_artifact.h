@@ -29,6 +29,38 @@ struct asSCanonicalConstructorFactoryPair
 	asCObjectType* objectType = 0;
 };
 
+// Snapshot-local declaration identity bound to one detached Runtime object
+// shell. The numeric declaration id is meaningful only while Generate retains
+// the owning sealed Context; neither it nor the Runtime pointer is serialized.
+struct asSCanonicalObjectTypeBinding
+{
+	asUINT declarationId = 0;
+	asCObjectType* objectType = 0;
+};
+
+struct asSCanonicalFunctionVTableIndex
+{
+	asCScriptFunction* function = 0;
+	int index = -1;
+};
+
+// Fully prepared generation-local projection of one Canonical record. Every
+// array is non-owning until Commit swaps it into the object shell and acquires
+// the normal method/vtable references. Preparation therefore cannot leak a
+// partial Runtime graph, while Abandon remains symmetric after installation.
+struct asSCanonicalObjectDispatchPlan
+{
+	asCObjectType* objectType = 0;
+	bool isInterface = false;
+	asCArray<int> methodIds;
+	asCArray<asCScriptFunction*> methodFunctions;
+	asCArray<asCObjectType*> interfaces;
+	asCArray<asUINT> interfaceVFTOffsets;
+	asCArray<asCScriptFunction*> virtualFunctionTable;
+	asUINT ordinaryVTableSize = 0;
+	asCArray<asSCanonicalFunctionVTableIndex> functionVTableIndices;
+};
+
 // Detached CodeGen install record. Included only by as_bytecode_codegen.cpp.
 // Tests observe Generate through module/engine tables, not this type.
 struct asSBytecodeCodeGenArtifact
@@ -44,6 +76,12 @@ struct asSBytecodeCodeGenArtifact
 	asCArray<sBindInfo*> imports;
 	asCArray<asCFuncdefType*> funcdefs;
 	asCArray<asCTypeInfo*> types;
+	// Exact detached record bindings and their complete pre-publication dispatch
+	// plans. Both collections are generation-local and deliberately pointerful;
+	// stable Canonical identity remains in the sealed snapshot.
+	asCArray<asSCanonicalObjectTypeBinding> objectTypeBindings;
+	asCArray<asSCanonicalObjectDispatchPlan> objectDispatchPlans;
+	bool objectDispatchPlansInstalled = false;
 	// Pointer-free relocation inventory produced before installation. The
 	// generation-local table is frozen only after every record resolves. The
 	// function body array is deliberately non-owning: prepared-module bodies are

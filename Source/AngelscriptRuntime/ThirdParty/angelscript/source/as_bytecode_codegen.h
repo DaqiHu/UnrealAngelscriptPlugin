@@ -74,6 +74,14 @@ public:
 	// Commit stage has made its entries visible, so Abandon() must prove its
 	// cleanup is symmetric with production publication.
 	void SetTestFailureAfterCommitStage(asUINT stage, int failureCode);
+	// Test-only detached-publication boundary. It fires after the complete
+	// generation-local object dispatch projection has been prepared and
+	// validated, but before relocations or Commit can publish candidate state.
+	void SetTestFailureAfterInterfaceDispatchPreparation(int failureCode);
+	bool WasTestInterfaceDispatchPreparationFailureInjected() const
+	{
+		return testInterfaceDispatchPreparationFailureInjected;
+	}
 	// Test-only deterministic relocation boundary. Resolution of the complete
 	// frozen table succeeds first; the named use then fails before any candidate
 	// bytecode patch or Commit publication.
@@ -106,6 +114,9 @@ private:
 	int testPreparedFactoryFailureCode;
 	asUINT testFailureAfterCommitStage;
 	int testCommitFailureCode;
+	bool testFailureAfterInterfaceDispatchPreparation;
+	int testInterfaceDispatchPreparationFailureCode;
+	bool testInterfaceDispatchPreparationFailureInjected;
 	asUINT testFailureAtTypeRelocationUse;
 	int testTypeRelocationFailureCode;
 	bool testTypeRelocationFailureInjected;

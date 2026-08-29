@@ -35,6 +35,9 @@ asCBytecodeCodeGen::asCBytecodeCodeGen()
 	, testPreparedFactoryFailureCode(asERROR)
 	, testFailureAfterCommitStage(asUINT(-1))
 	, testCommitFailureCode(asERROR)
+	, testFailureAfterInterfaceDispatchPreparation(false)
+	, testInterfaceDispatchPreparationFailureCode(asERROR)
+	, testInterfaceDispatchPreparationFailureInjected(false)
 	, testFailureAtTypeRelocationUse(asTYPE_RELOC_USE_COUNT)
 	, testTypeRelocationFailureCode(asERROR)
 	, testTypeRelocationFailureInjected(false)
@@ -60,6 +63,15 @@ void asCBytecodeCodeGen::SetTestFailureAfterCommitStage(asUINT stage, int inFail
 {
 	testFailureAfterCommitStage = stage;
 	testCommitFailureCode = inFailureCode < 0 ? inFailureCode : asERROR;
+}
+
+void asCBytecodeCodeGen::SetTestFailureAfterInterfaceDispatchPreparation(
+	int inFailureCode)
+{
+	testFailureAfterInterfaceDispatchPreparation = true;
+	testInterfaceDispatchPreparationFailureCode =
+		inFailureCode < 0 ? inFailureCode : asERROR;
+	testInterfaceDispatchPreparationFailureInjected = false;
 }
 
 void asCBytecodeCodeGen::SetTestFailureAtTypeRelocationUse(
@@ -220,6 +232,7 @@ namespace
 		{
 		case asAST_DECL_TRANSLATION_UNIT:
 		case asAST_DECL_CLASS:
+		case asAST_DECL_INTERFACE:
 		case asAST_DECL_FUNCTION:
 		case asAST_DECL_METHOD:
 		case asAST_DECL_CONSTRUCTOR:
@@ -1701,6 +1714,44 @@ namespace
 		asSNameSpace* nameSpace)
 	{
 		return CastToObjectType(FindArtifactType(artifact, name, nameSpace));
+	}
+
+	asCObjectType* FindArtifactObjectTypeByDecl(
+		const asSBytecodeCodeGenArtifact* artifact,
+		asASTDeclId declaration)
+	{
+		if( artifact == 0 || !declaration.IsValid() )
+			return 0;
+		for( asUINT i = 0; i < artifact->objectTypeBindings.GetLength(); ++i )
+		{
+			const asSCanonicalObjectTypeBinding& binding =
+				artifact->objectTypeBindings[i];
+			if( binding.declarationId == declaration.value )
+				return binding.objectType;
+		}
+		return 0;
+	}
+
+	asCObjectType* ResolveCanonicalRecordObjectType(
+		const asCASTContext& context,
+		asCRuntimeTypeBridge& bridge,
+		const asSBytecodeCodeGenArtifact& artifact,
+		const asCDecl* record)
+	{
+		if( record == 0
+			|| (record->kind != asAST_DECL_CLASS
+				&& record->kind != asAST_DECL_INTERFACE) )
+		{
+			return 0;
+		}
+		if( asCObjectType* const detached =
+			FindArtifactObjectTypeByDecl(&artifact, record->id) )
+		{
+			return detached;
+		}
+		const asCDataType runtimeType = bridge.Resolve(context, record->type);
+		return runtimeType.IsValid()
+			? CastToObjectType(runtimeType.GetTypeInfo()) : 0;
 	}
 
 	asCObjectType* FindCanonicalObjectType(
@@ -8708,7 +8759,9 @@ namespace
 		for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
 		{
 			const asCDecl* child = context.GetDecl(asASTDeclId(i));
-			if( child == 0 || child->kind != asAST_DECL_CLASS )
+			if( child == 0
+				|| (child->kind != asAST_DECL_CLASS
+					&& child->kind != asAST_DECL_INTERFACE) )
 			{
 				continue;
 			}
@@ -8760,8 +8813,15 @@ namespace
 			{
 				return asOUT_OF_MEMORY;
 			}
-			const bool isValue = (child->traits & asAST_TRAIT_VALUE) != 0;
-			if( isValue )
+			const bool isInterface = child->kind == asAST_DECL_INTERFACE;
+			const bool isValue = !isInterface
+				&& (child->traits & asAST_TRAIT_VALUE) != 0;
+			if( isInterface )
+			{
+				st->flags = asOBJ_REF | asOBJ_SCRIPT_OBJECT;
+				st->isInterfaceDeclaration = true;
+			}
+			else if( isValue )
 			{
 				st->flags = asOBJ_VALUE | asOBJ_SCRIPT_OBJECT | asOBJ_NOINHERIT;
 			}
@@ -8771,20 +8831,22 @@ namespace
 			}
 			if( child->traits & asAST_TRAIT_SHARED )
 				st->flags |= asOBJ_SHARED;
-			// Class layout is a sealed Sema fact. CodeGen must consume it exactly,
-			// never recalculate it from the subset of fields it happens to lower.
-			if( child->byteSize < 0 || child->byteAlignment == 0 )
+			// Class layout is a sealed Sema fact. Interfaces deliberately have no
+			// instantiable layout and keep only their exact declaration identity.
+			if( !isInterface
+				&& (child->byteSize < 0 || child->byteAlignment == 0) )
 			{
 				st->module = 0;
 				st->ReleaseInternal();
 				return asINVALID_DECLARATION;
 			}
-			st->size = child->byteSize > 0 ? child->byteSize : 1;
+			st->size = isInterface ? 0 : (child->byteSize > 0 ? child->byteSize : 1);
 			st->name = child->name;
 			st->nameSpace = nameSpace;
 			st->module = module;
-			st->alignment = child->byteAlignment;
-			asPreClassData* const classData = module->PreClassData.Find(child->name);
+			st->alignment = isInterface ? 1 : child->byteAlignment;
+			asPreClassData* const classData = isInterface
+				? 0 : module->PreClassData.Find(child->name);
 			if( classData )
 			{
 				// Sema froze this layout-affecting input on the class declaration.
@@ -8803,32 +8865,63 @@ namespace
 				st->shadowType = classData->ShadowType;
 				st->plainUserData = reinterpret_cast<asPWORD>(classData->InitialUserData);
 			}
-			st->beh = engine->scriptTypeBehaviours.beh;
+			if( isInterface )
+			{
+				// Interface requirements are declaration-only and cannot be
+				// constructed or copied. Keep the behaviour table empty rather than
+				// acquiring class behaviour references that Abandon would later have
+				// to release.
+				st->beh.construct = 0;
+				st->beh.copy = 0;
+			}
+			else
+			{
+				st->beh = engine->scriptTypeBehaviours.beh;
+			}
 			if( isValue )
 			{
 				st->beh.factory = 0;
 				st->beh.factories.SetLength(0);
 			}
-			else if( st->beh.factory
+			else if( !isInterface && st->beh.factory
 				&& (asUINT)st->beh.factory < engine->scriptFunctions.GetLength()
 				&& engine->scriptFunctions[st->beh.factory] )
 			{
 				engine->scriptFunctions[st->beh.factory]->AddRefInternal();
 			}
-			if( st->beh.copy
+			if( !isInterface && st->beh.copy
 				&& (asUINT)st->beh.copy < engine->scriptFunctions.GetLength()
 				&& engine->scriptFunctions[st->beh.copy] )
 			{
 				engine->scriptFunctions[st->beh.copy]->AddRefInternal();
 			}
-			if( st->beh.construct
+			if( !isInterface && st->beh.construct
 				&& (asUINT)st->beh.construct < engine->scriptFunctions.GetLength()
 				&& engine->scriptFunctions[st->beh.construct] )
 			{
 				engine->scriptFunctions[st->beh.construct]->AddRefInternal();
 			}
 			st->beh.destruct = 0;
+			const asUINT typeCount = artifact.types.GetLength();
 			artifact.types.PushLast(st);
+			if( artifact.types.GetLength() != typeCount + 1 )
+			{
+				st->module = 0;
+				st->ReleaseInternal();
+				return asOUT_OF_MEMORY;
+			}
+			asSCanonicalObjectTypeBinding objectBinding;
+			objectBinding.declarationId = child->id.value;
+			objectBinding.objectType = st;
+			const asUINT bindingCount = artifact.objectTypeBindings.GetLength();
+			artifact.objectTypeBindings.PushLast(objectBinding);
+			if( artifact.objectTypeBindings.GetLength() != bindingCount + 1 )
+			{
+				artifact.types.PopLast();
+				st->module = 0;
+				st->ReleaseInternal();
+				return asOUT_OF_MEMORY;
+			}
 		}
 
 		// Enum declarations are first-class runtime types. Their enumerators are
@@ -8942,10 +9035,8 @@ namespace
 			const asCDecl* child = context.GetDecl(asASTDeclId(i));
 			if( child == 0 || child->kind != asAST_DECL_CLASS )
 				continue;
-			asSNameSpace* const nameSpace = ResolveCanonicalDeclNamespace(context, engine, module, child);
-			asCObjectType* const st = nameSpace
-				? FindArtifactObjectType(&artifact, child->name, nameSpace)
-				: 0;
+			asCObjectType* const st =
+				FindArtifactObjectTypeByDecl(&artifact, child->id);
 			if( st == 0 )
 				continue;
 
@@ -8963,11 +9054,8 @@ namespace
 				continue;
 			if( (child->traits & asAST_TRAIT_VALUE) != 0 )
 				return asINVALID_DECLARATION;
-			asSNameSpace* const baseNameSpace = ResolveCanonicalDeclNamespace(
-				context, engine, module, classBase);
-			asCObjectType* const baseType = baseNameSpace
-				? FindCanonicalObjectType(engine, module, classBase->name, baseNameSpace, &artifact)
-				: 0;
+			asCObjectType* const baseType = ResolveCanonicalRecordObjectType(
+				context, bridge, artifact, classBase);
 			if( baseType == 0 || (baseType->flags & asOBJ_VALUE) != 0
 				|| baseType == st || baseType->size > st->size
 				|| baseType->alignment > st->alignment )
@@ -8993,7 +9081,7 @@ namespace
 			{
 				return asOUT_OF_MEMORY;
 			}
-			asCObjectType* st = FindArtifactObjectType(&artifact, child->name, nameSpace);
+			asCObjectType* st = FindArtifactObjectTypeByDecl(&artifact, child->id);
 			if( st == 0 )
 			{
 				// This class-shaped declaration names a pre-existing native type.
@@ -9195,7 +9283,8 @@ namespace
 			func->name = decl->name;
 		}
 		func->canonicalASTStableDeclKey = decl->stableKey;
-		if( !FillFunctionSourceMetadata(
+		if( func->funcType != asFUNC_INTERFACE
+			&& !FillFunctionSourceMetadata(
 			context, engine, func, decl, error) )
 		{
 			return false;
@@ -9268,20 +9357,22 @@ namespace
 				|| decl->kind == asAST_DECL_DESTRUCTOR) )
 		{
 			const asCDecl* parent = context.GetDecl(decl->parent);
-			if( parent && parent->kind == asAST_DECL_CLASS && parent->name.GetLength() )
+			if( parent
+				&& (parent->kind == asAST_DECL_CLASS
+					|| parent->kind == asAST_DECL_INTERFACE)
+				&& parent->name.GetLength() )
 			{
-				asSNameSpace* const nameSpace = ResolveCanonicalDeclNamespace(context, engine, module, parent);
-				if( nameSpace == 0 )
-				{
-					error = asOUT_OF_MEMORY;
-					return false;
-				}
-				asCObjectType* objType = FindCanonicalObjectType(
-					engine, module, parent->name, nameSpace, &artifact);
+				asCObjectType* objType = ResolveCanonicalRecordObjectType(
+					context, bridge, artifact, parent);
 				if( objType )
 				{
 					func->objectType = objType;
 					objType->AddRefInternal();
+				}
+				else
+				{
+					error = asINVALID_DECLARATION;
+					return false;
 				}
 			}
 		}
@@ -9479,7 +9570,10 @@ namespace
 			old->ReleaseInternal();
 	}
 
-	void AttachCanonicalObjectFunction(asCScriptFunction* func, int declKind)
+	void AttachCanonicalObjectFunction(
+		asCScriptFunction* func,
+		int declKind,
+		bool attachPreparedMethod)
 	{
 		if( func == 0 || func->objectType == 0 )
 			return;
@@ -9511,9 +9605,16 @@ namespace
 			func->AddRefInternal();
 			break;
 		case asAST_DECL_METHOD:
-			objType->methods.PushLast(func->id);
-			objType->methodTable.Add(func);
-			func->AddRefInternal();
+			if( attachPreparedMethod )
+			{
+				// Prepared Stage 2 already owns the authored method graph. Canonical
+				// Sema-generated closure methods have no prepared shell, so publish only
+				// those new functions into that existing graph. Detached generation
+				// passes false and installs its complete exact plan atomically instead.
+				objType->methods.PushLast(func->id);
+				objType->methodTable.Add(func);
+				func->AddRefInternal();
+			}
 			break;
 		default:
 			break;
@@ -9548,145 +9649,838 @@ namespace
 		factory->AddRefInternal();
 	}
 
-	int FinalizeOneCanonicalObjectInheritance(
-		asSBytecodeCodeGenArtifact& artifact,
-		asCScriptEngine* engine,
-		asUINT index,
-		asCArray<asBYTE>& states)
+	template<class T>
+	bool TryPushCanonicalPlanValue(asCArray<T>& values, const T& value)
 	{
-		if( index >= artifact.types.GetLength() || index >= states.GetLength() )
-			return asINVALID_DECLARATION;
-		if( states[index] == 2 )
-			return asSUCCESS;
-		if( states[index] == 1 )
-			return asINVALID_DECLARATION;
-		states[index] = 1;
-		asCObjectType* const type = CastToObjectType(artifact.types[index]);
-		if( type == 0 )
-		{
-			states[index] = 2;
-			return asSUCCESS;
-		}
+		const asUINT before = values.GetLength();
+		values.PushLast(value);
+		return values.GetLength() == before + 1;
+	}
 
-		asUINT baseArtifactIndex = asUINT(-1);
-		for( asUINT candidate = 0; candidate < artifact.types.GetLength(); ++candidate )
+	int FindCanonicalObjectBindingIndex(
+		const asSBytecodeCodeGenArtifact& artifact,
+		asCObjectType* objectType)
+	{
+		for( asUINT i = 0; i < artifact.objectTypeBindings.GetLength(); ++i )
 		{
-			if( artifact.types[candidate] == type->derivedFrom )
+			if( artifact.objectTypeBindings[i].objectType == objectType )
+				return static_cast<int>(i);
+		}
+		return -1;
+	}
+
+	asSCanonicalObjectDispatchPlan* FindCanonicalObjectDispatchPlan(
+		asSBytecodeCodeGenArtifact& artifact,
+		asCObjectType* objectType)
+	{
+		for( asUINT i = 0; i < artifact.objectDispatchPlans.GetLength(); ++i )
+		{
+			if( artifact.objectDispatchPlans[i].objectType == objectType )
+				return &artifact.objectDispatchPlans[i];
+		}
+		return 0;
+	}
+
+	const asSCanonicalObjectDispatchPlan* FindCanonicalObjectDispatchPlan(
+		const asSBytecodeCodeGenArtifact& artifact,
+		const asCObjectType* objectType)
+	{
+		for( asUINT i = 0; i < artifact.objectDispatchPlans.GetLength(); ++i )
+		{
+			if( artifact.objectDispatchPlans[i].objectType == objectType )
+				return &artifact.objectDispatchPlans[i];
+		}
+		return 0;
+	}
+
+	asCScriptFunction* FindExactCanonicalFunctionBinding(
+		const asCArray<asSCodeGenFuncBind>& bindings,
+		asASTDeclId declaration)
+	{
+		asCScriptFunction* match = 0;
+		for( asUINT i = 0; i < bindings.GetLength(); ++i )
+		{
+			if( bindings[i].decl != declaration )
+				continue;
+			if( match != 0 && match != bindings[i].func )
+				return 0;
+			match = bindings[i].func;
+		}
+		return match;
+	}
+
+	bool AppendCanonicalPlanMethod(
+		asSCanonicalObjectDispatchPlan& plan,
+		asCScriptFunction* function)
+	{
+		if( function == 0 || function->id < 0 )
+			return false;
+		if( plan.methodFunctions.Exists(function) )
+			return true;
+		if( !TryPushCanonicalPlanValue(plan.methodIds, function->id) )
+			return false;
+		if( !TryPushCanonicalPlanValue(plan.methodFunctions, function) )
+		{
+			plan.methodIds.PopLast();
+			return false;
+		}
+		return true;
+	}
+
+	bool AppendCanonicalInheritedInterfaceMethod(
+		asSCanonicalObjectDispatchPlan& plan,
+		asCScriptFunction* function)
+	{
+		if( function == 0 || function->id < 0 )
+			return false;
+		// Legacy CompileInterfaces merges inherited requirements by complete
+		// signature, not by the defining interface's function identity. Preserve
+		// that observable interface method inventory while each defining
+		// interface still receives its own exact dispatch chunk below.
+		for( asUINT i = 0; i < plan.methodFunctions.GetLength(); ++i )
+		{
+			asCScriptFunction* const existing = plan.methodFunctions[i];
+			if( existing != 0 && existing->IsSignatureEqual(function) )
+				return true;
+		}
+		return AppendCanonicalPlanMethod(plan, function);
+	}
+
+	bool AppendCanonicalPlanInterface(
+		asSCanonicalObjectDispatchPlan& plan,
+		asCObjectType* interfaceType)
+	{
+		if( interfaceType == 0 || !interfaceType->IsInterface() )
+			return false;
+		if( plan.interfaces.Exists(interfaceType) )
+			return true;
+		return TryPushCanonicalPlanValue(plan.interfaces, interfaceType);
+	}
+
+	bool AppendCanonicalPlanVTableEntry(
+		asSCanonicalObjectDispatchPlan& plan,
+		asCScriptFunction* function)
+	{
+		return function != 0
+			&& TryPushCanonicalPlanValue(plan.virtualFunctionTable, function);
+	}
+
+	bool FindCanonicalPlannedVTableIndex(
+		const asSBytecodeCodeGenArtifact& artifact,
+		const asCScriptFunction* function,
+		int& outIndex)
+	{
+		bool found = false;
+		outIndex = -1;
+		for( asUINT planIndex = 0;
+			planIndex < artifact.objectDispatchPlans.GetLength(); ++planIndex )
+		{
+			const asSCanonicalObjectDispatchPlan& plan =
+				artifact.objectDispatchPlans[planIndex];
+			for( asUINT index = 0;
+				index < plan.functionVTableIndices.GetLength(); ++index )
 			{
-				baseArtifactIndex = candidate;
-				break;
+				const asSCanonicalFunctionVTableIndex& candidate =
+					plan.functionVTableIndices[index];
+				if( candidate.function != function )
+					continue;
+				if( found && candidate.index != outIndex )
+					return false;
+				found = true;
+				outIndex = candidate.index;
 			}
 		}
-		if( baseArtifactIndex != asUINT(-1) )
+		if( !found && function != 0 && function->vfTableIdx >= 0 )
 		{
-			const int baseResult = FinalizeOneCanonicalObjectInheritance(
-				artifact, engine, baseArtifactIndex, states);
-			if( baseResult < 0 )
-				return baseResult;
+			found = true;
+			outIndex = function->vfTableIdx;
+		}
+		return found;
+	}
+
+	bool AddCanonicalPlannedVTableIndex(
+		asSBytecodeCodeGenArtifact& artifact,
+		asSCanonicalObjectDispatchPlan& plan,
+		asCScriptFunction* function,
+		int index)
+	{
+		if( function == 0 || index < 0 )
+			return false;
+		for( asUINT i = 0; i < plan.functionVTableIndices.GetLength(); ++i )
+		{
+			const asSCanonicalFunctionVTableIndex& local =
+				plan.functionVTableIndices[i];
+			if( local.function == function )
+				return local.index == index;
+		}
+		int existing = -1;
+		if( FindCanonicalPlannedVTableIndex(artifact, function, existing) )
+			return existing == index;
+		asSCanonicalFunctionVTableIndex entry;
+		entry.function = function;
+		entry.index = index;
+		return TryPushCanonicalPlanValue(plan.functionVTableIndices, entry);
+	}
+
+	bool FindCanonicalCurrentVTableIndex(
+		const asSBytecodeCodeGenArtifact& artifact,
+		const asSCanonicalObjectDispatchPlan& plan,
+		const asCScriptFunction* function,
+		int& outIndex)
+	{
+		for( asUINT i = 0; i < plan.functionVTableIndices.GetLength(); ++i )
+		{
+			if( plan.functionVTableIndices[i].function == function )
+			{
+				outIndex = plan.functionVTableIndices[i].index;
+				return true;
+			}
+		}
+		return FindCanonicalPlannedVTableIndex(artifact, function, outIndex);
+	}
+
+	bool AppendDeclaredInterfaceDepthFirst(
+		const asCASTContext& context,
+		asCRuntimeTypeBridge& bridge,
+		const asSBytecodeCodeGenArtifact& artifact,
+		const asCDecl* interfaceDecl,
+		asSCanonicalObjectDispatchPlan& plan)
+	{
+		asCObjectType* const interfaceType = ResolveCanonicalRecordObjectType(
+			context, bridge, artifact, interfaceDecl);
+		if( interfaceDecl == 0 || interfaceDecl->kind != asAST_DECL_INTERFACE
+			|| interfaceType == 0 )
+		{
+			return false;
+		}
+		if( plan.interfaces.Exists(interfaceType) )
+			return true;
+		if( !AppendCanonicalPlanInterface(plan, interfaceType) )
+			return false;
+		for( asUINT baseIndex = 0;
+			baseIndex < interfaceDecl->bases.GetLength(); ++baseIndex )
+		{
+			const asCDecl* const base =
+				context.GetDecl(interfaceDecl->bases[baseIndex]);
+			if( !AppendDeclaredInterfaceDepthFirst(
+				context, bridge, artifact, base, plan) )
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool CollectDeclaredInterfaceClosure(
+		const asCASTContext& context,
+		asCRuntimeTypeBridge& bridge,
+		const asSBytecodeCodeGenArtifact& artifact,
+		const asCDecl* record,
+		asSCanonicalObjectDispatchPlan& plan)
+	{
+		for( asUINT baseIndex = 0;
+			record != 0 && baseIndex < record->bases.GetLength(); ++baseIndex )
+		{
+			const asCDecl* const base = context.GetDecl(record->bases[baseIndex]);
+			if( base == 0 )
+				return false;
+			if( base->kind == asAST_DECL_INTERFACE
+				&& !AppendDeclaredInterfaceDepthFirst(
+					context, bridge, artifact, base, plan) )
+			{
+				return false;
+			}
+		}
+		return record != 0;
+	}
+
+	bool CollectRuntimeObjectMethods(
+		asCScriptEngine* engine,
+		const asSBytecodeCodeGenArtifact& artifact,
+		asCObjectType* objectType,
+		asCArray<asCScriptFunction*>& methods)
+	{
+		if( objectType == 0 )
+			return false;
+		if( const asSCanonicalObjectDispatchPlan* const plan =
+			FindCanonicalObjectDispatchPlan(artifact, objectType) )
+		{
+			for( asUINT i = 0; i < plan->methodFunctions.GetLength(); ++i )
+			{
+				if( !TryPushCanonicalPlanValue(methods, plan->methodFunctions[i]) )
+					return false;
+			}
+			return true;
+		}
+		if( engine == 0 )
+			return false;
+		for( asUINT i = 0; i < objectType->methods.GetLength(); ++i )
+		{
+			const int id = objectType->methods[i];
+			asCScriptFunction* const function = id >= 0
+				&& static_cast<asUINT>(id) < engine->scriptFunctions.GetLength()
+				? engine->scriptFunctions[id] : 0;
+			if( function == 0
+				|| !TryPushCanonicalPlanValue(methods, function) )
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool CollectRuntimeObjectVTable(
+		const asSBytecodeCodeGenArtifact& artifact,
+		asCObjectType* objectType,
+		asCArray<asCScriptFunction*>& entries)
+	{
+		if( objectType == 0 )
+			return false;
+		const asCArray<asCScriptFunction*>* source =
+			&objectType->virtualFunctionTable;
+		if( const asSCanonicalObjectDispatchPlan* const plan =
+			FindCanonicalObjectDispatchPlan(artifact, objectType) )
+		{
+			source = &plan->virtualFunctionTable;
+		}
+		for( asUINT i = 0; i < source->GetLength(); ++i )
+		{
+			if( (*source)[i] == 0
+				|| !TryPushCanonicalPlanValue(entries, (*source)[i]) )
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool AppendInheritedRuntimeInterfaces(
+		const asSBytecodeCodeGenArtifact& artifact,
+		asCObjectType* baseType,
+		asSCanonicalObjectDispatchPlan& plan)
+	{
+		if( baseType == 0 )
+			return true;
+		const asCArray<asCObjectType*>* interfaces = &baseType->interfaces;
+		if( const asSCanonicalObjectDispatchPlan* const basePlan =
+			FindCanonicalObjectDispatchPlan(artifact, baseType) )
+		{
+			interfaces = &basePlan->interfaces;
+		}
+		for( asUINT i = 0; i < interfaces->GetLength(); ++i )
+		{
+			if( !AppendCanonicalPlanInterface(plan, (*interfaces)[i]) )
+				return false;
+		}
+		return true;
+	}
+
+	bool CollectOwnInterfaceMethods(
+		const asCASTContext& context,
+		asCScriptEngine* engine,
+		const asCArray<asSCodeGenFuncBind>& bindings,
+		const asSBytecodeCodeGenArtifact& artifact,
+		asCObjectType* interfaceType,
+		asCArray<asCScriptFunction*>& methods)
+	{
+		const int bindingIndex = FindCanonicalObjectBindingIndex(
+			artifact, interfaceType);
+		if( bindingIndex >= 0 )
+		{
+			const asCDecl* const interfaceDecl = context.GetDecl(asASTDeclId(
+				artifact.objectTypeBindings[static_cast<asUINT>(bindingIndex)].declarationId));
+			if( interfaceDecl == 0 || interfaceDecl->kind != asAST_DECL_INTERFACE )
+				return false;
+			for( asUINT childIndex = 0;
+				childIndex < interfaceDecl->children.GetLength(); ++childIndex )
+			{
+				const asCDecl* const child =
+					context.GetDecl(interfaceDecl->children[childIndex]);
+				if( child == 0 )
+					return false;
+				if( child->kind != asAST_DECL_METHOD )
+					continue;
+				asCScriptFunction* const function =
+					FindExactCanonicalFunctionBinding(bindings, child->id);
+				if( function == 0 || function->objectType != interfaceType
+					|| !TryPushCanonicalPlanValue(methods, function) )
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+		if( engine == 0 )
+			return false;
+		for( asUINT i = 0; i < interfaceType->methods.GetLength(); ++i )
+		{
+			const int id = interfaceType->methods[i];
+			asCScriptFunction* const function = id >= 0
+				&& static_cast<asUINT>(id) < engine->scriptFunctions.GetLength()
+				? engine->scriptFunctions[id] : 0;
+			if( function == 0 || function->objectType != interfaceType )
+				continue;
+			if( !TryPushCanonicalPlanValue(methods, function) )
+				return false;
+		}
+		return true;
+	}
+
+	bool IsExactBaseOverrideRequirement(
+		const asCArray<asSCodeGenFuncBind>& bindings,
+		const asCDecl& record,
+		asCScriptFunction* function)
+	{
+		for( asUINT i = 0; i < record.methodRelations.GetLength(); ++i )
+		{
+			const asSASTMethodRelation& relation = record.methodRelations[i];
+			if( relation.kind == asAST_METHOD_RELATION_BASE_OVERRIDE
+				&& FindExactCanonicalFunctionBinding(
+					bindings, relation.requirement) == function )
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	asCScriptFunction* FindExactInterfaceImplementation(
+		const asCArray<asSCodeGenFuncBind>& bindings,
+		const asCDecl& record,
+		asCScriptFunction* requirement)
+	{
+		asCScriptFunction* match = 0;
+		for( asUINT i = 0; i < record.methodRelations.GetLength(); ++i )
+		{
+			const asSASTMethodRelation& relation = record.methodRelations[i];
+			if( relation.kind != asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION
+				|| FindExactCanonicalFunctionBinding(
+					bindings, relation.requirement) != requirement )
+			{
+				continue;
+			}
+			asCScriptFunction* const implementation =
+				FindExactCanonicalFunctionBinding(bindings, relation.implementation);
+			if( implementation == 0 || (match != 0 && match != implementation) )
+				return 0;
+			match = implementation;
+		}
+		return match;
+	}
+
+	int PrepareOneCanonicalObjectDispatchPlan(
+		const asCASTContext& context,
+		asCScriptEngine* engine,
+		asCRuntimeTypeBridge& bridge,
+		const asCArray<asSCodeGenFuncBind>& bindings,
+		asSBytecodeCodeGenArtifact& artifact,
+		asUINT bindingIndex,
+		asCArray<asBYTE>& states)
+	{
+		if( bindingIndex >= artifact.objectTypeBindings.GetLength()
+			|| bindingIndex >= states.GetLength() )
+			return asINVALID_DECLARATION;
+		if( states[bindingIndex] == 2 )
+			return asSUCCESS;
+		if( states[bindingIndex] == 1 )
+			return asINVALID_DECLARATION;
+		states[bindingIndex] = 1;
+
+		const asSCanonicalObjectTypeBinding& objectBinding =
+			artifact.objectTypeBindings[bindingIndex];
+		const asCDecl* const record = context.GetDecl(
+			asASTDeclId(objectBinding.declarationId));
+		asCObjectType* const objectType = objectBinding.objectType;
+		if( record == 0 || objectType == 0
+			|| (record->kind != asAST_DECL_CLASS
+				&& record->kind != asAST_DECL_INTERFACE) )
+		{
+			return asINVALID_DECLARATION;
 		}
 
-		if( type->derivedFrom )
+		// Every candidate record dependency is prepared first so this plan can copy
+		// exact pointer arrays without observing a partially constructed base graph.
+		for( asUINT baseIndex = 0; baseIndex < record->bases.GetLength(); ++baseIndex )
 		{
-			type->virtualFunctionTable = type->derivedFrom->virtualFunctionTable;
-			for( asUINT baseMethodIndex = 0;
-				baseMethodIndex < type->derivedFrom->methods.GetLength();
-				++baseMethodIndex )
+			const asCDecl* const baseDecl = context.GetDecl(record->bases[baseIndex]);
+			asCObjectType* const baseType = ResolveCanonicalRecordObjectType(
+				context, bridge, artifact, baseDecl);
+			const int candidateIndex = FindCanonicalObjectBindingIndex(
+				artifact, baseType);
+			if( candidateIndex >= 0 )
 			{
-				const int baseMethodId = type->derivedFrom->methods[baseMethodIndex];
-				asCScriptFunction* const baseMethod = engine && baseMethodId >= 0
-					&& (asUINT)baseMethodId < engine->scriptFunctions.GetLength()
-					? engine->scriptFunctions[baseMethodId]
-					: 0;
-				if( baseMethod == 0 || baseMethod->funcType == asFUNC_SYSTEM )
-					continue;
+				const int dependencyResult = PrepareOneCanonicalObjectDispatchPlan(
+					context, engine, bridge, bindings, artifact,
+					static_cast<asUINT>(candidateIndex), states);
+				if( dependencyResult < 0 )
+					return dependencyResult;
+			}
+		}
 
-				asCScriptFunction* overrideMethod = 0;
-				for( asUINT methodIndex = 0; methodIndex < type->methods.GetLength(); ++methodIndex )
+		asSCanonicalObjectDispatchPlan plan;
+		plan.objectType = objectType;
+		plan.isInterface = record->kind == asAST_DECL_INTERFACE;
+		if( !CollectDeclaredInterfaceClosure(
+			context, bridge, artifact, record, plan) )
+		{
+			return asINVALID_DECLARATION;
+		}
+
+		asCArray<asCScriptFunction*> ownMethods;
+		for( asUINT childIndex = 0; childIndex < record->children.GetLength(); ++childIndex )
+		{
+			const asCDecl* const child = context.GetDecl(record->children[childIndex]);
+			if( child == 0 )
+				return asINVALID_DECLARATION;
+			if( child->kind != asAST_DECL_METHOD )
+				continue;
+			asCScriptFunction* const function =
+				FindExactCanonicalFunctionBinding(bindings, child->id);
+			if( function == 0 || function->objectType != objectType
+				|| !TryPushCanonicalPlanValue(ownMethods, function)
+				|| !AppendCanonicalPlanMethod(plan, function) )
+			{
+				return asINVALID_DECLARATION;
+			}
+		}
+
+		if( plan.isInterface )
+		{
+			for( asUINT i = 0; i < ownMethods.GetLength(); ++i )
+			{
+				if( ownMethods[i]->funcType != asFUNC_INTERFACE
+					|| ownMethods[i]->scriptData != 0
+					|| !AddCanonicalPlannedVTableIndex(
+						artifact, plan, ownMethods[i], static_cast<int>(i)) )
 				{
-					const int methodId = type->methods[methodIndex];
-					asCScriptFunction* const candidate = engine && methodId >= 0
-						&& (asUINT)methodId < engine->scriptFunctions.GetLength()
-						? engine->scriptFunctions[methodId]
-						: 0;
-					if( candidate == 0 || candidate->objectType != type
-						|| candidate->name != baseMethod->name
-						|| !candidate->IsSignatureExceptNameAndReturnTypeEqual(baseMethod) )
+					return asINVALID_DECLARATION;
+				}
+			}
+			for( asUINT interfaceIndex = 0;
+				interfaceIndex < plan.interfaces.GetLength(); ++interfaceIndex )
+			{
+				asCArray<asCScriptFunction*> inheritedMethods;
+				if( !CollectRuntimeObjectMethods(
+					engine, artifact, plan.interfaces[interfaceIndex], inheritedMethods) )
+				{
+					return asINVALID_DECLARATION;
+				}
+				for( asUINT methodIndex = 0;
+					methodIndex < inheritedMethods.GetLength(); ++methodIndex )
+				{
+					if( !AppendCanonicalInheritedInterfaceMethod(
+						plan, inheritedMethods[methodIndex]) )
+						return asOUT_OF_MEMORY;
+				}
+			}
+		}
+		else
+		{
+			if( !AppendInheritedRuntimeInterfaces(
+				artifact, objectType->derivedFrom, plan) )
+			{
+				return asINVALID_DECLARATION;
+			}
+			if( objectType->derivedFrom
+				&& !CollectRuntimeObjectVTable(
+					artifact, objectType->derivedFrom, plan.virtualFunctionTable) )
+			{
+				return asINVALID_DECLARATION;
+			}
+
+			for( asUINT relationIndex = 0;
+				relationIndex < record->methodRelations.GetLength(); ++relationIndex )
+			{
+				const asSASTMethodRelation& relation =
+					record->methodRelations[relationIndex];
+				if( relation.kind != asAST_METHOD_RELATION_BASE_OVERRIDE )
+					continue;
+				asCScriptFunction* const implementation =
+					FindExactCanonicalFunctionBinding(bindings, relation.implementation);
+				asCScriptFunction* const requirement =
+					FindExactCanonicalFunctionBinding(bindings, relation.requirement);
+				int slot = -1;
+				if( implementation == 0 || requirement == 0
+					|| !FindCanonicalPlannedVTableIndex(artifact, requirement, slot)
+					|| slot < 0
+					|| static_cast<asUINT>(slot) >= plan.virtualFunctionTable.GetLength()
+					|| !AddCanonicalPlannedVTableIndex(
+						artifact, plan, implementation, slot) )
+				{
+					return asINVALID_DECLARATION;
+				}
+				plan.virtualFunctionTable[static_cast<asUINT>(slot)] = implementation;
+			}
+
+			if( objectType->derivedFrom )
+			{
+				asCArray<asCScriptFunction*> baseMethods;
+				if( !CollectRuntimeObjectMethods(
+					engine, artifact, objectType->derivedFrom, baseMethods) )
+				{
+					return asINVALID_DECLARATION;
+				}
+				for( asUINT methodIndex = 0;
+					methodIndex < baseMethods.GetLength(); ++methodIndex )
+				{
+					asCScriptFunction* const baseMethod = baseMethods[methodIndex];
+					if( baseMethod->funcType == asFUNC_SYSTEM
+						|| IsExactBaseOverrideRequirement(
+							bindings, *record, baseMethod) )
 					{
 						continue;
 					}
-					if( candidate->returnType != baseMethod->returnType )
-					{
-						if( baseMethod->name == "opConv" || baseMethod->name == "opImplConv"
-							|| baseMethod->name == "opCast" || baseMethod->name == "opImplCast" )
-						{
-							continue;
-						}
-						return asINVALID_DECLARATION;
-					}
-					overrideMethod = candidate;
-					break;
-				}
-
-				if( overrideMethod )
-				{
-					if( baseMethod->vfTableIdx < 0
-						|| (asUINT)baseMethod->vfTableIdx >= type->virtualFunctionTable.GetLength() )
-					{
-						return asINVALID_DECLARATION;
-					}
-					overrideMethod->vfTableIdx = baseMethod->vfTableIdx;
-					type->virtualFunctionTable[baseMethod->vfTableIdx] = overrideMethod;
-				}
-				else
-				{
-					type->methods.PushLast(baseMethod->id);
-					type->methodTable.Add(baseMethod);
-					baseMethod->AddRefInternal();
+					if( !AppendCanonicalPlanMethod(plan, baseMethod) )
+						return asOUT_OF_MEMORY;
 				}
 			}
-		}
 
-		if( (type->flags & asOBJ_VALUE) == 0 )
-		{
-			for( asUINT methodIndex = 0; methodIndex < type->methods.GetLength(); ++methodIndex )
+			if( (objectType->flags & asOBJ_VALUE) == 0 )
 			{
-				const int methodId = type->methods[methodIndex];
-				asCScriptFunction* const method = engine && methodId >= 0
-					&& (asUINT)methodId < engine->scriptFunctions.GetLength()
-					? engine->scriptFunctions[methodId]
-					: 0;
-				if( method == 0 || method->funcType == asFUNC_SYSTEM
-					|| method->objectType != type || method->vfTableIdx != -1 )
+				for( asUINT methodIndex = 0;
+					methodIndex < ownMethods.GetLength(); ++methodIndex )
 				{
-					continue;
+					asCScriptFunction* const method = ownMethods[methodIndex];
+					int existingIndex = -1;
+					if( FindCanonicalCurrentVTableIndex(
+						artifact, plan, method, existingIndex) )
+					{
+						continue;
+					}
+					const int slot = static_cast<int>(
+						plan.virtualFunctionTable.GetLength());
+					if( !AppendCanonicalPlanVTableEntry(plan, method)
+						|| !AddCanonicalPlannedVTableIndex(
+							artifact, plan, method, slot) )
+					{
+						return asOUT_OF_MEMORY;
+					}
 				}
-				method->vfTableIdx = type->virtualFunctionTable.GetLength();
-				type->virtualFunctionTable.PushLast(method);
+			}
+			plan.ordinaryVTableSize = plan.virtualFunctionTable.GetLength();
+
+			for( asUINT interfaceIndex = 0;
+				interfaceIndex < plan.interfaces.GetLength(); ++interfaceIndex )
+			{
+				if( !TryPushCanonicalPlanValue(
+					plan.interfaceVFTOffsets,
+					plan.virtualFunctionTable.GetLength()) )
+				{
+					return asOUT_OF_MEMORY;
+				}
+				asCArray<asCScriptFunction*> requirements;
+				if( !CollectOwnInterfaceMethods(
+					context, engine, bindings, artifact,
+					plan.interfaces[interfaceIndex], requirements) )
+				{
+					return asINVALID_DECLARATION;
+				}
+				for( asUINT requirementIndex = 0;
+					requirementIndex < requirements.GetLength(); ++requirementIndex )
+				{
+					asCScriptFunction* const requirement =
+						requirements[requirementIndex];
+					int requirementSlot = -1;
+					asCScriptFunction* const implementation =
+						FindExactInterfaceImplementation(
+							bindings, *record, requirement);
+					int implementationSlot = -1;
+					if( implementation == 0
+						|| !FindCanonicalPlannedVTableIndex(
+							artifact, requirement, requirementSlot)
+						|| requirementSlot != static_cast<int>(requirementIndex)
+						|| !FindCanonicalCurrentVTableIndex(
+							artifact, plan, implementation, implementationSlot)
+						|| implementationSlot < 0
+						|| static_cast<asUINT>(implementationSlot)
+							>= plan.ordinaryVTableSize
+						|| !AppendCanonicalPlanVTableEntry(
+							plan,
+							plan.virtualFunctionTable[
+								static_cast<asUINT>(implementationSlot)]) )
+					{
+						return asINVALID_DECLARATION;
+					}
+				}
 			}
 		}
-		for( asUINT slot = 0; slot < type->virtualFunctionTable.GetLength(); ++slot )
+
+		if( plan.interfaces.GetLength()
+			!= plan.interfaceVFTOffsets.GetLength()
+			&& !plan.isInterface )
 		{
-			if( type->virtualFunctionTable[slot] )
-				type->virtualFunctionTable[slot]->AddRefInternal();
+			return asINVALID_DECLARATION;
 		}
-		states[index] = 2;
+		const asUINT planCount = artifact.objectDispatchPlans.GetLength();
+		artifact.objectDispatchPlans.PushLast(plan);
+		if( artifact.objectDispatchPlans.GetLength() != planCount + 1 )
+			return asOUT_OF_MEMORY;
+		states[bindingIndex] = 2;
 		return asSUCCESS;
 	}
 
-	int FinalizeCanonicalObjectInheritance(
-		asSBytecodeCodeGenArtifact& artifact,
-		asCScriptEngine* engine)
+	int PrepareCanonicalObjectDispatchPlans(
+		const asCASTContext& context,
+		asCScriptEngine* engine,
+		asCRuntimeTypeBridge& bridge,
+		const asCArray<asSCodeGenFuncBind>& bindings,
+		asSBytecodeCodeGenArtifact& artifact)
 	{
-		asCArray<asBYTE> states;
-		states.SetLength(artifact.types.GetLength());
-		for( asUINT index = 0; index < artifact.types.GetLength(); ++index )
+		if( artifact.objectDispatchPlans.GetLength() != 0
+			|| artifact.objectDispatchPlansInstalled )
 		{
-			const int result = FinalizeOneCanonicalObjectInheritance(
-				artifact, engine, index, states);
+			return asINVALID_CONFIGURATION;
+		}
+		asCArray<asBYTE> states;
+		states.SetLength(artifact.objectTypeBindings.GetLength());
+		if( states.GetLength() != artifact.objectTypeBindings.GetLength() )
+			return asOUT_OF_MEMORY;
+		for( asUINT i = 0; i < artifact.objectTypeBindings.GetLength(); ++i )
+		{
+			const int result = PrepareOneCanonicalObjectDispatchPlan(
+				context, engine, bridge, bindings, artifact, i, states);
 			if( result < 0 )
 				return result;
 		}
+		return artifact.objectDispatchPlans.GetLength()
+			== artifact.objectTypeBindings.GetLength()
+			? asSUCCESS : asINVALID_DECLARATION;
+	}
+
+	int ValidateCanonicalObjectDispatchPlans(
+		const asSBytecodeCodeGenArtifact& artifact)
+	{
+		if( artifact.objectDispatchPlansInstalled
+			|| artifact.objectDispatchPlans.GetLength()
+				!= artifact.objectTypeBindings.GetLength() )
+		{
+			return asINVALID_CONFIGURATION;
+		}
+		for( asUINT planIndex = 0;
+			planIndex < artifact.objectDispatchPlans.GetLength(); ++planIndex )
+		{
+			const asSCanonicalObjectDispatchPlan& plan =
+				artifact.objectDispatchPlans[planIndex];
+			asCObjectType* const type = plan.objectType;
+			if( type == 0
+				|| FindCanonicalObjectBindingIndex(artifact, type) < 0
+				|| type->methods.GetLength() != 0
+				|| type->interfaces.GetLength() != 0
+				|| type->interfaceVFTOffsets.GetLength() != 0
+				|| type->virtualFunctionTable.GetLength() != 0
+				|| plan.methodIds.GetLength() != plan.methodFunctions.GetLength()
+				|| plan.isInterface != type->IsInterface() )
+			{
+				return asINVALID_DECLARATION;
+			}
+			if( plan.isInterface )
+			{
+				if( plan.interfaceVFTOffsets.GetLength() != 0
+					|| plan.virtualFunctionTable.GetLength() != 0
+					|| plan.ordinaryVTableSize != 0 )
+				{
+					return asINVALID_DECLARATION;
+				}
+			}
+			else if( plan.interfaces.GetLength()
+				!= plan.interfaceVFTOffsets.GetLength()
+				|| plan.ordinaryVTableSize > plan.virtualFunctionTable.GetLength() )
+			{
+				return asINVALID_DECLARATION;
+			}
+			for( asUINT methodIndex = 0;
+				methodIndex < plan.methodFunctions.GetLength(); ++methodIndex )
+			{
+				if( plan.methodFunctions[methodIndex] == 0
+					|| plan.methodIds[methodIndex]
+						!= plan.methodFunctions[methodIndex]->id )
+				{
+					return asINVALID_DECLARATION;
+				}
+			}
+			for( asUINT interfaceIndex = 0;
+				interfaceIndex < plan.interfaces.GetLength(); ++interfaceIndex )
+			{
+				if( plan.interfaces[interfaceIndex] == 0
+					|| !plan.interfaces[interfaceIndex]->IsInterface()
+					|| (interfaceIndex > 0
+						&& plan.interfaces[interfaceIndex]
+							== plan.interfaces[interfaceIndex - 1]) )
+				{
+					return asINVALID_DECLARATION;
+				}
+				if( !plan.isInterface )
+				{
+					const asUINT offset = plan.interfaceVFTOffsets[interfaceIndex];
+					const asUINT end = interfaceIndex + 1
+						< plan.interfaceVFTOffsets.GetLength()
+						? plan.interfaceVFTOffsets[interfaceIndex + 1]
+						: plan.virtualFunctionTable.GetLength();
+					if( offset < plan.ordinaryVTableSize || end < offset
+						|| end > plan.virtualFunctionTable.GetLength() )
+					{
+						return asINVALID_DECLARATION;
+					}
+				}
+			}
+			for( asUINT slot = 0;
+				slot < plan.virtualFunctionTable.GetLength(); ++slot )
+			{
+				if( plan.virtualFunctionTable[slot] == 0 )
+					return asINVALID_DECLARATION;
+			}
+			for( asUINT index = 0;
+				index < plan.functionVTableIndices.GetLength(); ++index )
+			{
+				const asSCanonicalFunctionVTableIndex& entry =
+					plan.functionVTableIndices[index];
+				if( entry.function == 0 || entry.index < 0
+					|| (plan.isInterface
+						? static_cast<asUINT>(entry.index)
+							>= plan.methodFunctions.GetLength()
+						: static_cast<asUINT>(entry.index)
+							>= plan.ordinaryVTableSize) )
+				{
+					return asINVALID_DECLARATION;
+				}
+			}
+		}
 		return asSUCCESS;
+	}
+
+	void InstallCanonicalObjectDispatchPlans(
+		asSBytecodeCodeGenArtifact& artifact)
+	{
+		for( asUINT planIndex = 0;
+			planIndex < artifact.objectDispatchPlans.GetLength(); ++planIndex )
+		{
+			asSCanonicalObjectDispatchPlan& plan =
+				artifact.objectDispatchPlans[planIndex];
+			asCObjectType* const type = plan.objectType;
+			for( asUINT index = 0;
+				index < plan.functionVTableIndices.GetLength(); ++index )
+			{
+				plan.functionVTableIndices[index].function->vfTableIdx =
+					plan.functionVTableIndices[index].index;
+			}
+			plan.methodIds.SwapWith(type->methods);
+			plan.interfaces.SwapWith(type->interfaces);
+			plan.interfaceVFTOffsets.SwapWith(type->interfaceVFTOffsets);
+			plan.virtualFunctionTable.SwapWith(type->virtualFunctionTable);
+			for( asUINT methodIndex = 0;
+				methodIndex < plan.methodFunctions.GetLength(); ++methodIndex )
+			{
+				asCScriptFunction* const method = plan.methodFunctions[methodIndex];
+				type->methodTable.Add(method);
+				method->AddRefInternal();
+			}
+			for( asUINT slot = 0;
+				slot < type->virtualFunctionTable.GetLength(); ++slot )
+			{
+				type->virtualFunctionTable[slot]->AddRefInternal();
+			}
+		}
+		artifact.objectDispatchPlansInstalled = true;
 	}
 }
 
@@ -10202,6 +10996,13 @@ int asSBytecodeCodeGenArtifact::ResolveAndPatchTypeRelocations(
 
 void asSBytecodeCodeGenArtifact::Abandon(asCScriptEngine* engine)
 {
+	// Dispatch plans are non-owning until the no-fail Commit installation. If
+	// installed, ReleaseAllFunctions below releases the method and vtable owners;
+	// otherwise clearing these arrays cannot affect Runtime state.
+	objectDispatchPlans.SetLength(0);
+	objectTypeBindings.SetLength(0);
+	objectDispatchPlansInstalled = false;
+
 	// List-pattern cleanup helpers are anonymous Engine cache entries created
 	// while patching a validated candidate. Remove only helpers this artifact
 	// materialized; shared pre-existing entries are not candidate state.
@@ -10537,6 +11338,10 @@ int asSBytecodeCodeGenArtifact::Commit(
 		if( generationResult < 0 )
 			return generationResult;
 	}
+	const int dispatchPlanResult =
+		ValidateCanonicalObjectDispatchPlans(*this);
+	if( dispatchPlanResult < 0 )
+		return dispatchPlanResult;
 
 #if WITH_ANGELSCRIPT_UNITTESTS
 	if( outTestFailureInjected )
@@ -10749,7 +11554,7 @@ int asSBytecodeCodeGenArtifact::Commit(
 		{
 			continue;
 		}
-		AttachCanonicalObjectFunction(func, declKind);
+		AttachCanonicalObjectFunction(func, declKind, false);
 		if( func->objectType == 0
 			&& func->artifactInvocationKind != asBUILD_ARTIFACT_INVOCATION_LAMBDA )
 		{
@@ -10764,9 +11569,11 @@ int asSBytecodeCodeGenArtifact::Commit(
 	functionReferencesAdded = true;
 	for( asUINT i = 0; i < constructorFactories.GetLength(); ++i )
 		AttachCanonicalConstructorFactory(constructorFactories[i]);
-	const int inheritanceResult = FinalizeCanonicalObjectInheritance(*this, engine);
-	if( inheritanceResult < 0 )
-		return inheritanceResult;
+	// Every pointer, ordinal, interface closure, chunk and slot was validated
+	// before the first Engine/module mutation. Installation has no semantic
+	// selection and cannot fail: it only transfers arrays and acquires the
+	// ordinary Runtime owners one-for-one.
+	InstallCanonicalObjectDispatchPlans(*this);
 #if WITH_ANGELSCRIPT_UNITTESTS
 	if( const int injected = InjectAfterCommitStage(asBYTECODE_CODEGEN_TEST_COMMIT_AFTER_FUNCTIONS); injected < 0 )
 		return injected;
@@ -10791,6 +11598,9 @@ int asSBytecodeCodeGenArtifact::Commit(
 	imports.SetLength(0);
 	funcdefs.SetLength(0);
 	types.SetLength(0);
+	objectDispatchPlans.SetLength(0);
+	objectTypeBindings.SetLength(0);
+	objectDispatchPlansInstalled = false;
 	return asAST_VERIFY_OK;
 }
 
@@ -10827,6 +11637,7 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 	failureColumn = 0;
 #if WITH_ANGELSCRIPT_UNITTESTS
 	testTypeRelocationFailureInjected = false;
+	testInterfaceDispatchPreparationFailureInjected = false;
 #endif
 
 	asSAstVerifyResult publication;
@@ -11753,7 +12564,7 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 				continue;
 			}
 			module->scriptFunctions.PushLast(function);
-			AttachCanonicalObjectFunction(function, declarationKind);
+			AttachCanonicalObjectFunction(function, declarationKind, true);
 		}
 		for( asUINT i = 0; i < globalStates.GetLength(); ++i )
 		{
@@ -12694,13 +13505,19 @@ int asCBytecodeCodeGen::GenerateInternal(
 			binds.PushLast(bind);
 			continue;
 		}
-		if( ((decl->kind == asAST_DECL_METHOD) || (decl->kind == asAST_DECL_CONSTRUCTOR))
+		const asCDecl* const functionOwner = context.GetDecl(decl->parent);
+		const bool isInterfaceMethod = decl->kind == asAST_DECL_METHOD
+			&& functionOwner != 0
+			&& functionOwner->kind == asAST_DECL_INTERFACE;
+		if( !isInterfaceMethod
+			&& ((decl->kind == asAST_DECL_METHOD) || (decl->kind == asAST_DECL_CONSTRUCTOR))
 			&& !decl->body.IsValid()
 			&& (decl->traits & asAST_TRAIT_GENERATED) == 0 )
 		{
 			continue;
 		}
-		asCScriptFunction* func = asNEW(asCScriptFunction)(engine, module, asFUNC_SCRIPT);
+		asCScriptFunction* func = asNEW(asCScriptFunction)(
+			engine, module, isInterfaceMethod ? asFUNC_INTERFACE : asFUNC_SCRIPT);
 		if( func == 0 )
 		{
 			failed = true;
@@ -12804,8 +13621,11 @@ int asCBytecodeCodeGen::GenerateInternal(
 			func->CalculateParameterOffsets();
 		}
 		binds.PushLast(bind);
-		emitDecls.PushLast(decl);
-		emitFunctions.PushLast(func);
+		if( !isInterfaceMethod )
+		{
+			emitDecls.PushLast(decl);
+			emitFunctions.PushLast(func);
+		}
 	}
 
 	asCScriptFunction* singleFunctionResult = 0;
@@ -12982,6 +13802,34 @@ int asCBytecodeCodeGen::GenerateInternal(
 		builder.CompleteBuildArtifactCompile(
 			invocation, pair.factory, asSUCCESS, restoreResult, emitterInvoked);
 	}
+	const int dispatchPlanResult = PrepareCanonicalObjectDispatchPlans(
+		context, engine, bridge, binds, artifact);
+	if( dispatchPlanResult < 0 )
+	{
+		failed = true;
+		error = dispatchPlanResult;
+		lastFailLine = __LINE__;
+		failureDetail.Format(
+			"failed to prepare exact Canonical object dispatch projection: error=%d",
+			dispatchPlanResult);
+		artifact.Abandon(engine);
+		DiscardAllocatedGlobals(module, globals);
+		return error;
+	}
+#if WITH_ANGELSCRIPT_UNITTESTS
+	if( testFailureAfterInterfaceDispatchPreparation )
+	{
+		testInterfaceDispatchPreparationFailureInjected = true;
+		failed = true;
+		error = testInterfaceDispatchPreparationFailureCode;
+		lastFailLine = __LINE__;
+		failureDetail.Format(
+			"injected-interface-dispatch-precommit error=%d", error);
+		artifact.Abandon(engine);
+		DiscardAllocatedGlobals(module, globals);
+		return error;
+	}
+#endif
 
 	if( functionDecls.GetLength() == 0
 		&& globals.GetLength() == 0
