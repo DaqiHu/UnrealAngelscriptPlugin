@@ -5814,6 +5814,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 						asCModule* ScriptModule = Module->ScriptModule;
 						if (ScriptModule == nullptr)
 							continue;
+						if (Module->bCompileError)
+							continue;
 
 						// Link up the old and new script modules
 						auto OldModule = ActiveModules.Find(MakeModuleName(Module->ModuleName));
@@ -5838,6 +5840,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 						
 						asCModule* ScriptModule = Module->ScriptModule;
 						if (ScriptModule == nullptr)
+							continue;
+						if (Module->bCompileError)
 							continue;
 
 						bool bHasStructuralChanges = false;
@@ -6224,10 +6228,15 @@ ECompileResult FAngelscriptEngine::CompileModules(
 					continue;
 				if (Module->bLoadedPrecompiledCode)
 					continue;
+				if (Module->bCompileError)
+					continue;
 
 				auto Result = ScriptModule->builder->BuildLayoutClasses();
 				if (Result != asSUCCESS)
+				{
 					Module->bCompileError = true;
+					bHadCompileErrors = true;
+				}
 			}
 
 			// Now that class layouting is done, make sure all template types are layouted as well
@@ -6246,8 +6255,15 @@ ECompileResult FAngelscriptEngine::CompileModules(
 					continue;
 				if (Module->bLoadedPrecompiledCode)
 					continue;
+				if (Module->bCompileError)
+					continue;
 
 				ScriptModule->builder->BuildAllocateGlobalVariables();
+				if (ScriptModule->builder->numErrors > 0)
+				{
+					Module->bCompileError = true;
+					bHadCompileErrors = true;
+				}
 			}
 
 			if (ModulesToUpdateReferences.Num() != 0)
@@ -6295,7 +6311,10 @@ ECompileResult FAngelscriptEngine::CompileModules(
 					? ScriptModule->builder->BuildLayoutFunctions()
 					: ScriptModule->builder->BuildLayoutFunctionsWithoutGlobalInitializers();
 				if (Result != asSUCCESS)
+				{
 					Module->bCompileError = true;
+					bHadCompileErrors = true;
+				}
 			}
 
 			if (CacheReuseContext != nullptr
@@ -7637,6 +7656,20 @@ void FAngelscriptEngine::CompileModule_Code_Stage3(ECompileType CompileType, TSh
 	auto* ScriptModule = (asCModule*)Module->ScriptModule;
 	if (ScriptModule == nullptr)
 		return;
+	if (Module->bCompileError)
+	{
+		// Stage 2 owns declaration-shell construction. A rejected candidate must
+		// retain those shells only until the batch transaction rolls them back;
+		// it must not layout, seal, emit bytecode, or reach JIT. Release the
+		// Builder here so the failed CompileCode milestone observes deterministic
+		// Parser/Sema/AST ownership cleanup instead of deferring it to module GC.
+		if (ScriptModule->builder != nullptr)
+		{
+			asDELETE(ScriptModule->builder, asCBuilder);
+			ScriptModule->builder = nullptr;
+		}
+		return;
+	}
 
 	int Result = asERROR;
 	asCASTContext* CanonicalAST = nullptr;
@@ -7711,9 +7744,9 @@ void FAngelscriptEngine::CompileModule_Code_Stage3(ECompileType CompileType, TSh
 	asDELETE(ScriptModule->builder, asCBuilder);
 	ScriptModule->builder = nullptr;
 
-	ScriptModule->JITCompile();
 	if (!Module->bCompileError)
 	{
+		ScriptModule->JITCompile();
 		ScriptModule->astRetentionFrozen = true;
 		ScriptModule->PublishCanonicalASTSnapshot();
 	}
