@@ -309,6 +309,14 @@ static int BindCanonicalGeneratedRuntimeIdentities(
 
 		asCScriptFunction *constructor = 0;
 		asUINT constructorMatches = 0;
+		asUINT ownerKindCandidates = 0;
+		asUINT liveCandidates = 0;
+		asUINT keyedCandidates = 0;
+		asUINT signatureCandidates = 0;
+		int firstKeyedId = -1;
+		int firstKeyedKind = -1;
+		asUINT firstKeyedParameterCount = 0;
+		asUINT firstKeyedInOutCount = 0;
 		for( asUINT functionIndex = 0;
 			functionIndex < builder.functions.GetLength(); ++functionIndex )
 		{
@@ -322,17 +330,34 @@ static int BindCanonicalGeneratedRuntimeIdentities(
 			{
 				continue;
 			}
+			++ownerKindCandidates;
 			asCScriptFunction *candidate = description->funcId >= 0
 				&& asUINT(description->funcId)
 					< builder.engine->scriptFunctions.GetLength()
 				? builder.engine->scriptFunctions[description->funcId] : 0;
-			if( candidate == 0
-				|| candidate->canonicalASTStableDeclKey.GetLength() == 0
-				|| candidate->parameterTypes != factory->parameterTypes
+			if( candidate == 0 )
+			{
+				continue;
+			}
+			++liveCandidates;
+			if( candidate->canonicalASTStableDeclKey.GetLength() == 0 )
+			{
+				continue;
+			}
+			++keyedCandidates;
+			if( firstKeyedId < 0 )
+			{
+				firstKeyedId = description->funcId;
+				firstKeyedKind = (int)description->artifactInvocationKind;
+				firstKeyedParameterCount = candidate->parameterTypes.GetLength();
+				firstKeyedInOutCount = candidate->inOutFlags.GetLength();
+			}
+			if( candidate->parameterTypes != factory->parameterTypes
 				|| candidate->inOutFlags != factory->inOutFlags )
 			{
 				continue;
 			}
+			++signatureCandidates;
 			constructor = candidate;
 			++constructorMatches;
 		}
@@ -340,12 +365,25 @@ static int BindCanonicalGeneratedRuntimeIdentities(
 		{
 			detail.Format(
 				"generated constructor factory must derive from exactly one "
-				"producer-bound constructor (ordinal=%u id=%d owner=%s matches=%u)",
+				"producer-bound constructor (ordinal=%u id=%d owner=%s matches=%u "
+				"ownerKind=%u live=%u keyed=%u signature=%u factoryParams=%u "
+				"factoryInOut=%u firstKeyedId=%d firstKeyedKind=%d "
+				"firstKeyedParams=%u firstKeyedInOut=%u)",
 				factoryIndex,
 				factoryDescription.funcId,
 				factoryDescription.objType->name.AddressOf()
 					? factoryDescription.objType->name.AddressOf() : "<missing>",
-				constructorMatches);
+				constructorMatches,
+				ownerKindCandidates,
+				liveCandidates,
+				keyedCandidates,
+				signatureCandidates,
+				factory->parameterTypes.GetLength(),
+				factory->inOutFlags.GetLength(),
+				firstKeyedId,
+				firstKeyedKind,
+				firstKeyedParameterCount,
+				firstKeyedInOutCount);
 			return asINVALID_DECLARATION;
 		}
 		if( factory->canonicalASTStableDeclKey.GetLength() != 0
@@ -368,6 +406,23 @@ static int BindCanonicalGeneratedRuntimeIdentities(
 	return asSUCCESS;
 }
 
+static asSParseActionIdentity MakeCanonicalParseActionIdentity(
+	const asCScriptNode* node,
+	const asCScriptCode* script)
+{
+	asSParseActionIdentity identity;
+	if( node == 0 )
+	{
+		return identity;
+	}
+	identity.section = script != 0 && script->name.GetLength() != 0
+		? script->name : asCString("<memory>");
+	identity.nodeKind = static_cast<asUINT>(node->nodeType);
+	identity.offset = static_cast<asUINT>(node->tokenPos);
+	identity.length = static_cast<asUINT>(node->tokenLength);
+	return identity;
+}
+
 void asCBuilder::BindCanonicalFunctionIdentity(
 	asCScriptFunction *function,
 	const asCScriptNode *node,
@@ -378,7 +433,8 @@ void asCBuilder::BindCanonicalFunctionIdentity(
 	{
 		return;
 	}
-	const asASTDeclId declaration = canonicalSema->FindParsedDeclaration(node, script);
+	const asASTDeclId declaration = canonicalSema->FindParsedDeclaration(
+		MakeCanonicalParseActionIdentity(node, script));
 	const asCDecl* const decl = canonicalAST->GetDecl(declaration);
 	if( decl != 0 && decl->stableKey.GetLength() != 0 )
 	{
@@ -3593,7 +3649,8 @@ void asCBuilder::RegisterGlobalVariables()
 		{
 			asASTDeclId declarationId =
 				canonicalSema->FindParsedDeclaration(
-					gvar->declaredAtNode, gvar->script);
+					MakeCanonicalParseActionIdentity(
+						gvar->declaredAtNode, gvar->script));
 			canonicalDeclaration = canonicalAST->GetDecl(declarationId);
 			if( canonicalDeclaration == 0 && gvar->script )
 			{

@@ -72,6 +72,18 @@ namespace CanonicalASTSemaAuthorityTest
 	{
 	};
 
+	static asSParseActionIdentity MakeParseActionIdentity(
+		asCSema& Sema,
+		const asCScriptNode* Node)
+	{
+		return Node != nullptr
+			? Sema.MakeParseActionIdentity(
+				static_cast<asUINT>(Node->nodeType),
+				static_cast<asUINT>(Node->tokenPos),
+				static_cast<asUINT>(Node->tokenLength))
+			: asSParseActionIdentity();
+	}
+
 	struct FSemaPod
 	{
 		int32 Poison = 0;
@@ -12762,7 +12774,9 @@ public:
 			return;
 		}
 		const asASTExprId RootId =
-			Sema.FindExactParsedExpressionIdentity(TermNode);
+			Sema.FindExactParsedExpressionIdentity(
+				CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+					Sema, TermNode));
 		ASSERT_THAT(IsTrue(RootId.IsValid(),
 			TEXT("Parser must bind one exact structural typed-action root")));
 		const asCExpr* const Root = Context.GetExpr(RootId);
@@ -12937,7 +12951,9 @@ public:
 		ASSERT_THAT(AreEqual(static_cast<asUINT>(4), ChildCount,
 			TEXT("retained native unary term must preserve prefix/prefix/primary/postfix")));
 
-		const asASTExprId RootId = Sema.FindExactParsedExpressionIdentity(TermNode);
+		const asASTExprId RootId = Sema.FindExactParsedExpressionIdentity(
+			CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+				Sema, TermNode));
 		ASSERT_THAT(IsTrue(RootId.IsValid(),
 			TEXT("Parser must bind the exact typed unary root before statement adaptation")));
 		const asCExpr* const Root = Context.GetExpr(RootId);
@@ -13091,7 +13107,9 @@ public:
 		{
 			return;
 		}
-		const asASTExprId RootId = Sema.FindExactParsedExpressionIdentity(CastNode);
+		const asASTExprId RootId = Sema.FindExactParsedExpressionIdentity(
+			CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+				Sema, CastNode));
 		const asCExpr* const Root = Context.GetExpr(RootId);
 		const asCType* const RootType = Root != nullptr
 			? Context.GetType(Root->type.type) : nullptr;
@@ -13300,7 +13318,9 @@ public:
 		bool bArrayConstruct = false;
 		for (asCScriptNode* const Node : ConstructNodes)
 		{
-			const asASTExprId RootId = Sema.FindExactParsedExpressionIdentity(Node);
+			const asASTExprId RootId = Sema.FindExactParsedExpressionIdentity(
+				CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+					Sema, Node));
 			const asCExpr* Root = Context.GetExpr(RootId);
 			const asCExpr* Semantic = Root;
 			while (Semantic != nullptr
@@ -13490,7 +13510,9 @@ public:
 		{
 			return;
 		}
-		const asASTExprId CallId = Sema.FindExactParsedExpressionIdentity(CallNode);
+		const asASTExprId CallId = Sema.FindExactParsedExpressionIdentity(
+			CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+				Sema, CallNode));
 		const asCExpr* const Call = Context.GetExpr(CallId);
 		const asCDecl* const Callee = Call != nullptr
 			? Context.GetDecl(Call->resolvedDecl) : nullptr;
@@ -13995,7 +14017,9 @@ public:
 			if (Node != nullptr && Node->nodeType == snInitList)
 			{
 				const asCExpr* const Candidate = Context.GetExpr(
-					Sema.FindExactParsedExpressionIdentity(Node));
+					Sema.FindExactParsedExpressionIdentity(
+						CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+							Sema, Node)));
 				const asCExpr* const FirstElement = Candidate != nullptr
 					&& Candidate->children.GetLength() == 2
 					? Context.GetExpr(Candidate->children[0]) : nullptr;
@@ -14025,9 +14049,13 @@ public:
 		}
 
 		const asASTExprId TypedId =
-			Sema.FindExactParsedExpressionIdentity(TypedTerm);
+			Sema.FindExactParsedExpressionIdentity(
+				CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+					Sema, TypedTerm));
 		const asASTExprId AnonymousId =
-			Sema.FindExactParsedExpressionIdentity(AnonymousList);
+			Sema.FindExactParsedExpressionIdentity(
+				CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+					Sema, AnonymousList));
 		const asCExpr* const Typed = Context.GetExpr(TypedId);
 		const asCExpr* const Anonymous = Context.GetExpr(AnonymousId);
 		const asCType* const TypedType = Typed != nullptr
@@ -14131,7 +14159,9 @@ public:
 				Parser.GetScriptNode(), snExprTerm);
 		ASSERT_THAT(IsNotNull(Term));
 		ASSERT_THAT(IsTrue(Term == nullptr
-			|| !Sema.FindExactParsedExpressionIdentity(Term).IsValid(),
+			|| !Sema.FindExactParsedExpressionIdentity(
+				CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+					Sema, Term)).IsValid(),
 			TEXT("unsupported omitted element must not publish a malformed list Construct")));
 		const FString Diagnostics =
 			CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema);
@@ -14188,7 +14218,9 @@ public:
 			if (Node != nullptr && Node->nodeType == snInitList)
 			{
 				const asCExpr* const List = Context.GetExpr(
-					Sema.FindExactParsedExpressionIdentity(Node));
+					Sema.FindExactParsedExpressionIdentity(
+						CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+							Sema, Node)));
 				if (List != nullptr && List->kind == asAST_EXPR_CONSTRUCT
 					&& List->literal.Equals("list-pattern"))
 				{
@@ -14596,7 +14628,9 @@ public:
 			return;
 		}
 
-		const asASTExprId LiteralId = Sema.FindExactParsedExpressionIdentity(LiteralNode);
+		const asASTExprId LiteralId = Sema.FindExactParsedExpressionIdentity(
+			CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+				Sema, LiteralNode));
 		ASSERT_THAT(IsTrue(LiteralId.IsValid(),
 			TEXT("Parser must bind the exact literal ExprId before any parent expression or statement replay")));
 		const asCExpr* const LiteralExpr = Context.GetExpr(LiteralId);
@@ -14717,7 +14751,9 @@ public:
 			return;
 		}
 
-		const asASTExprId VariableId = Sema.FindExactParsedExpressionIdentity(VariableNode);
+		const asASTExprId VariableId = Sema.FindExactParsedExpressionIdentity(
+			CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+				Sema, VariableNode));
 		ASSERT_THAT(IsTrue(VariableId.IsValid(),
 			TEXT("Parser must bind the exact decl-ref ExprId before any parent expression or statement replay")));
 		const asCExpr* const VariableExpr = Context.GetExpr(VariableId);
@@ -14822,7 +14858,9 @@ public:
 			TEXT("retained native ternary node must preserve condition/then/else syntax children")));
 
 		const asASTExprId ConditionalId =
-			Sema.FindExactParsedExpressionIdentity(ConditionNode);
+			Sema.FindExactParsedExpressionIdentity(
+				CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+					Sema, ConditionNode));
 		ASSERT_THAT(IsTrue(ConditionalId.IsValid(),
 			TEXT("Parser must bind the exact conditional ExprId before statement/body replay")));
 		const asCExpr* const Conditional = Context.GetExpr(ConditionalId);
@@ -14930,7 +14968,9 @@ public:
 			TEXT("retained native assignment must preserve lhs/operator/rhs children")));
 
 		const asASTExprId AssignId =
-			Sema.FindExactParsedExpressionIdentity(AssignmentNode);
+			Sema.FindExactParsedExpressionIdentity(
+				CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+					Sema, AssignmentNode));
 		ASSERT_THAT(IsTrue(AssignId.IsValid(),
 			TEXT("Parser must bind the exact assignment ExprId before statement replay")));
 		const asCExpr* const Assign = Context.GetExpr(AssignId);
@@ -15137,7 +15177,9 @@ public:
 			TEXT("retained native binary expression must preserve term/op/term/op/term")));
 
 		const asASTExprId RootId =
-			Sema.FindExactParsedExpressionIdentity(ExpressionNode);
+			Sema.FindExactParsedExpressionIdentity(
+				CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+					Sema, ExpressionNode));
 		ASSERT_THAT(IsTrue(RootId.IsValid(),
 			TEXT("Parser must bind the exact precedence-folded binary root before statement replay")));
 		const asCExpr* const Root = Context.GetExpr(RootId);
@@ -25081,6 +25123,115 @@ public:
 			}
 		}
 		ASSERT_THAT(IsTrue(bValueOffset, *DumpMsg));
+	}
+
+	TEST_METHOD(ParseActionIdentityIsPointerFreeExactAndConflictRejecting)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asASTDeclId Tu =
+			Sema.ActOnTranslationUnit("ParseActionIdentity");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId FirstFunction = Sema.ActOnFunctionDecl(
+			Tu, "First", IntType, asCSourceRange());
+		const asASTDeclId SecondFunction = Sema.ActOnFunctionDecl(
+			Tu, "Second", IntType, asCSourceRange());
+		const asCQualType FloatType = Context.InternPrimitive(ttFloat, 0);
+		const asASTExprId FirstExpression =
+			Sema.ActOnIntegerLiteral(1, asCSourceRange());
+		const asASTExprId SecondExpression =
+			Sema.ActOnIntegerLiteral(2, asCSourceRange());
+
+		asSParseActionIdentity DeclarationIdentity;
+		DeclarationIdentity.section = "ParseActionIdentity.as";
+		DeclarationIdentity.nodeKind = 101;
+		DeclarationIdentity.offset = 4;
+		DeclarationIdentity.length = 7;
+		ASSERT_THAT(IsTrue(Sema.BindParsedDeclarationIdentity(
+			DeclarationIdentity, FirstFunction)));
+		ASSERT_THAT(IsTrue(Sema.BindParsedDeclarationIdentity(
+			DeclarationIdentity, FirstFunction),
+			TEXT("rebinding the same pointer-free identity must be idempotent")));
+		ASSERT_THAT(IsFalse(Sema.BindParsedDeclarationIdentity(
+			DeclarationIdentity, SecondFunction),
+			TEXT("one syntax coordinate must never be overwritten by another declaration")));
+		ASSERT_THAT(IsTrue(
+			Sema.FindParsedDeclaration(DeclarationIdentity) == FirstFunction,
+			TEXT("conflicting declaration bind must preserve the first exact identity")));
+
+		asSParseActionIdentity ExpressionIdentity;
+		ExpressionIdentity.section = "ParseActionIdentity.as";
+		ExpressionIdentity.nodeKind = 202;
+		ExpressionIdentity.offset = 19;
+		ExpressionIdentity.length = 3;
+		ASSERT_THAT(IsTrue(Sema.BindParsedExpressionIdentity(
+			ExpressionIdentity, FirstExpression)));
+		ASSERT_THAT(IsTrue(Sema.BindParsedExpressionIdentity(
+			ExpressionIdentity, FirstExpression),
+			TEXT("rebinding the same expression identity must be idempotent")));
+		ASSERT_THAT(IsFalse(Sema.BindParsedExpressionIdentity(
+			ExpressionIdentity, SecondExpression),
+			TEXT("one syntax coordinate must never be overwritten by another expression")));
+		ASSERT_THAT(IsTrue(
+			Sema.FindParsedExpressionIdentity(ExpressionIdentity)
+				== FirstExpression,
+			TEXT("conflicting expression bind must preserve the first exact identity")));
+		ASSERT_THAT(IsTrue(Sema.BindParsedExpressionType(
+			ExpressionIdentity, IntType)));
+		ASSERT_THAT(IsTrue(Sema.BindParsedExpressionType(
+			ExpressionIdentity, IntType),
+			TEXT("rebinding the same target type identity must be idempotent")));
+		ASSERT_THAT(IsFalse(Sema.BindParsedExpressionType(
+			ExpressionIdentity, FloatType),
+			TEXT("one syntax coordinate must never be overwritten by another target type")));
+		asCQualType RestoredType;
+		ASSERT_THAT(IsTrue(Sema.FindParsedExpressionType(
+			ExpressionIdentity, RestoredType)));
+		ASSERT_THAT(IsTrue(RestoredType == IntType,
+			TEXT("conflicting target type bind must preserve the first exact identity")));
+		const FString IdentityDiagnostics =
+			CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema);
+		ASSERT_THAT(IsTrue(
+			IdentityDiagnostics.Contains(TEXT("declaration-identity-bind-conflict"))
+			&& IdentityDiagnostics.Contains(TEXT("expression-identity-bind-conflict"))
+			&& IdentityDiagnostics.Contains(TEXT("expression-target-type-bind-conflict")),
+			TEXT("all pointer-free identity conflicts must be explicit and deterministic")));
+
+		asSParseActionIdentity DistinctIdentity = ExpressionIdentity;
+		DistinctIdentity.length += 1;
+		ASSERT_THAT(IsTrue(Sema.BindParsedExpressionIdentity(
+			DistinctIdentity, SecondExpression)));
+		ASSERT_THAT(IsTrue(
+			Sema.FindParsedExpressionIdentity(DistinctIdentity)
+				== SecondExpression,
+			TEXT("syntax length participates in pointer-free identity")));
+	}
+
+	TEST_METHOD(CanonicalSemaStoresNoNativeParserNodeIdentity)
+	{
+		const FString SourceRoot = FPaths::Combine(
+			FPaths::ProjectDir(),
+			TEXT("Plugins/Angelscript/Source/AngelscriptRuntime/ThirdParty/angelscript/source"));
+		FString SemaHeaderSource;
+		FString SemaSource;
+		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(
+			SemaHeaderSource, *FPaths::Combine(SourceRoot, TEXT("as_sema.h")))));
+		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(
+			SemaSource, *FPaths::Combine(SourceRoot, TEXT("as_sema.cpp")))));
+
+		ASSERT_THAT(IsTrue(SemaHeaderSource.Contains(
+			TEXT("struct asSParseActionIdentity")),
+			TEXT("Canonical Sema must expose one copied parse-action identity value")));
+		ASSERT_THAT(IsFalse(SemaHeaderSource.Contains(TEXT("asCScriptNode")),
+			TEXT("Canonical Sema declarations and storage must not retain native Parser node types")));
+		ASSERT_THAT(IsFalse(SemaSource.Contains(TEXT("asCScriptNode")),
+			TEXT("Canonical Sema identity implementation must consume copied coordinates only")));
 	}
 };
 

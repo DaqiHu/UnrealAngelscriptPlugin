@@ -8,6 +8,25 @@ BEGIN_AS_NAMESPACE
 class asCScriptEngine;
 class asCModule;
 
+// Build-local identity for one Parser action result. Parser copies only the
+// logical source section and exact syntax coordinate; Canonical Sema never
+// retains a native Parser-node pointer or decodes the native tree through this
+// bridge. The native node remains independently owned by Parser/LEGACY.
+struct asSParseActionIdentity
+{
+	asCString section;
+	asUINT nodeKind;
+	asUINT offset;
+	asUINT length;
+
+	asSParseActionIdentity()
+		: nodeKind(0)
+		, offset(0)
+		, length(0)
+	{
+	}
+};
+
 // Short-lived Parser -> Sema action payload for one authored namespace path.
 // This is not a syntax tree and is never retained by ASTContext: Parser keeps
 // building snNamespace only for the explicit LEGACY migration oracle, while
@@ -1307,48 +1326,30 @@ public:
 	asASTDeclId CurrentDeclContext() const;
 	asASTStmtId CurrentSwitchControl() const;
 	asASTDeclId LastActedDecl() const;
-	// Transitional parse/build bridge. Prefer the live parse-node pointer, then
-	// fall back to the exact logical section + token offset when the legacy
-	// compiler reparses a body (notably lambdas). Ambiguous coordinates fail
-	// closed. Consumers receive only the canonical declaration identity; neither
-	// node pointers nor snapshot-local Decl IDs escape this Sema instance.
+	// Pointer-free parse/build identity bridge. Parser and the prepared Builder
+	// shell independently copy the same section/kind/range coordinate. A
+	// conflicting coordinate fails closed instead of overwriting an earlier
+	// Canonical identity.
 	asASTDeclId FindParsedDeclaration(
-		const class asCScriptNode* node,
-		const class asCScriptCode* script = 0) const;
-	// Transitional producer identity bridge only. The Parser node is never
-	// decoded for meaning here; Builder uses this exact pointer/coordinate map
-	// to carry the already-created stable Decl key onto a prepared Runtime shell.
-	void BindParsedDeclarationIdentity(
-		const class asCScriptNode* node,
+		const asSParseActionIdentity& identity) const;
+	bool BindParsedDeclarationIdentity(
+		const asSParseActionIdentity& identity,
 		asASTDeclId declaration);
-	// Transitional syntax-identity bridge for cast/construct target types.
-	// Parser resolves one pointer-free type action while it owns syntax; Sema
-	// consumers retrieve only the ASTContext-local QualType. Exact logical
-	// coordinates support the legacy body reparse and ambiguity fails closed.
 	bool BindParsedExpressionType(
-		const class asCScriptNode* node,
-		const asCQualType& type,
-		class asCScriptCode* script);
+		const asSParseActionIdentity& identity,
+		const asCQualType& type);
 	bool FindParsedExpressionType(
-		const class asCScriptNode* node,
-		const class asCScriptCode* script,
+		const asSParseActionIdentity& identity,
 		asCQualType& outType) const;
-	// Transitional build-only syntax identity. Parser creates the canonical
-	// lambda expression once and binds its exact ExprId to the retained native
-	// syntax node. A legacy body reparse may recover only one unambiguous logical
-	// section+offset match; no node pointer escapes this Sema instance.
 	bool BindParsedExpressionIdentity(
-		const class asCScriptNode* node,
-		asASTExprId expression,
-		class asCScriptCode* script);
-	// Parser action composition must use pointer-exact bindings. The broader
-	// lookup below additionally permits one unambiguous section+offset recovery
-	// for the separately retained LEGACY body-reparse path.
+		const asSParseActionIdentity& identity,
+		asASTExprId expression);
 	asASTExprId FindExactParsedExpressionIdentity(
-		const class asCScriptNode* node) const;
+		const asSParseActionIdentity& identity) const;
 	asASTExprId FindParsedExpressionIdentity(
-		const class asCScriptNode* node,
-		const class asCScriptCode* script) const;
+		const asSParseActionIdentity& identity) const;
+	asSParseActionIdentity MakeParseActionIdentity(
+		asUINT nodeKind, asUINT offset, asUINT length) const;
 	void NoteActedDecl(asASTDeclId id);
 	void InsertSymbol(asASTDeclId id);
 	bool PrepareParsedSource(class asCScriptCode* script);
@@ -1375,30 +1376,19 @@ private:
 	asASTDeclId lastActedDecl;
 	struct asSParsedDeclBinding
 	{
-		const class asCScriptNode* node;
-		asCString section;
-		asUINT offset;
+		asSParseActionIdentity identity;
 		asASTDeclId declaration;
 	};
 	asCArray<asSParsedDeclBinding> parsedDeclBindings;
-	void RememberParsedDeclaration(
-		const class asCScriptNode* node,
-		asASTDeclId declaration);
 	struct asSParsedExprTypeBinding
 	{
-		const class asCScriptNode* node;
-		asCString section;
-		asUINT offset;
+		asSParseActionIdentity identity;
 		asCQualType type;
 	};
 	asCArray<asSParsedExprTypeBinding> parsedExprTypeBindings;
 	struct asSParsedExprBinding
 	{
-		const class asCScriptNode* node;
-		asCString section;
-		asUINT nodeType;
-		asUINT offset;
-		asUINT length;
+		asSParseActionIdentity identity;
 		asASTExprId expression;
 	};
 	asCArray<asSParsedExprBinding> parsedExprBindings;

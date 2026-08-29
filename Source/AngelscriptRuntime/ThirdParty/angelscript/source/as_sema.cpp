@@ -1,7 +1,6 @@
 #include "as_sema.h"
 #include "as_scriptcode.h"
 #include "as_scriptengine.h"
-#include "as_scriptnode.h"
 #include "as_property.h"
 #include "as_runtime_type_bridge.h"
 #include "as_tokendef.h"
@@ -152,238 +151,188 @@ asASTDeclId asCSema::LastActedDecl() const
 	return lastActedDecl;
 }
 
-asASTDeclId asCSema::FindParsedDeclaration(
-	const asCScriptNode* node,
-	const asCScriptCode* script) const
+static bool ParseActionIdentityEquals(
+	const asSParseActionIdentity& lhs,
+	const asSParseActionIdentity& rhs)
 {
-	if( node == 0 )
+	return lhs.nodeKind == rhs.nodeKind
+		&& lhs.offset == rhs.offset
+		&& lhs.length == rhs.length
+		&& lhs.section.Equals(rhs.section);
+}
+
+static bool ParseActionIdentityIsValid(
+	const asSParseActionIdentity& identity)
+{
+	return identity.section.GetLength() != 0;
+}
+
+asSParseActionIdentity asCSema::MakeParseActionIdentity(
+	asUINT nodeKind,
+	asUINT offset,
+	asUINT length) const
+{
+	asSParseActionIdentity identity;
+	identity.section = parsedSection.GetLength()
+		? parsedSection : asCString("<memory>");
+	identity.nodeKind = nodeKind;
+	identity.offset = offset;
+	identity.length = length;
+	return identity;
+}
+
+asASTDeclId asCSema::FindParsedDeclaration(
+	const asSParseActionIdentity& identity) const
+{
+	if( !ParseActionIdentityIsValid(identity) )
 	{
 		return asASTDeclId();
 	}
 	for( asUINT i = 0; i < parsedDeclBindings.GetLength(); ++i )
 	{
-		if( parsedDeclBindings[i].node == node )
+		if( ParseActionIdentityEquals(
+			parsedDeclBindings[i].identity, identity) )
 		{
-			return parsedDeclBindings[i].declaration;
-		}
-	}
-
-	// The legacy compiler reparses function bodies, so a lambda node can have a
-	// different address than the producer Parser node. Logical source identity
-	// is exact and deterministic across that reparse. Reject ambiguity instead
-	// of choosing the first declaration at an offset.
-	if( script != 0 )
-	{
-		const char* const section = script->name.GetLength()
-			? script->name.AddressOf() : "<memory>";
-		asASTDeclId match;
-		asUINT matches = 0;
-		for( asUINT i = 0; i < parsedDeclBindings.GetLength(); ++i )
-		{
-			if( parsedDeclBindings[i].offset == (asUINT)node->tokenPos
-				&& parsedDeclBindings[i].section.Equals(section) )
-			{
-				match = parsedDeclBindings[i].declaration;
-				++matches;
-			}
-		}
-		if( matches == 1 )
-		{
-			return match;
+			return context.GetDecl(parsedDeclBindings[i].declaration) != 0
+				? parsedDeclBindings[i].declaration : asASTDeclId();
 		}
 	}
 	return asASTDeclId();
 }
 
-void asCSema::RememberParsedDeclaration(
-	const asCScriptNode* node,
+bool asCSema::BindParsedDeclarationIdentity(
+	const asSParseActionIdentity& identity,
 	asASTDeclId declaration)
 {
-	if( node == 0 || !declaration.IsValid() )
+	if( !ParseActionIdentityIsValid(identity)
+		|| context.GetDecl(declaration) == 0 )
 	{
-		return;
+		AddDiagnostic("declaration-identity-bind-invalid");
+		return false;
 	}
 	for( asUINT i = 0; i < parsedDeclBindings.GetLength(); ++i )
 	{
-		if( parsedDeclBindings[i].node == node )
+		if( ParseActionIdentityEquals(
+			parsedDeclBindings[i].identity, identity) )
 		{
-			parsedDeclBindings[i].declaration = declaration;
-			return;
+			if( parsedDeclBindings[i].declaration == declaration )
+			{
+				return true;
+			}
+			AddDiagnostic("declaration-identity-bind-conflict");
+			return false;
 		}
 	}
 	asSParsedDeclBinding binding;
-	binding.node = node;
-	binding.section = parsedSection;
-	binding.offset = (asUINT)node->tokenPos;
+	binding.identity = identity;
 	binding.declaration = declaration;
 	parsedDeclBindings.PushLast(binding);
-}
-
-void asCSema::BindParsedDeclarationIdentity(
-	const asCScriptNode* node,
-	asASTDeclId declaration)
-{
-	RememberParsedDeclaration(node, declaration);
+	return true;
 }
 
 bool asCSema::BindParsedExpressionType(
-	const asCScriptNode* node,
-	const asCQualType& type,
-	asCScriptCode* script)
+	const asSParseActionIdentity& identity,
+	const asCQualType& type)
 {
-	if( node == 0 || !type.IsValid() || !PrepareParsedSource(script) )
+	if( !ParseActionIdentityIsValid(identity) || !type.IsValid() )
 	{
 		AddDiagnostic("expression-target-type-bind-invalid");
 		return false;
 	}
 	for( asUINT i = 0; i < parsedExprTypeBindings.GetLength(); ++i )
 	{
-		if( parsedExprTypeBindings[i].node == node )
+		if( ParseActionIdentityEquals(
+			parsedExprTypeBindings[i].identity, identity) )
 		{
-			parsedExprTypeBindings[i].section = parsedSection;
-			parsedExprTypeBindings[i].offset = (asUINT)node->tokenPos;
-			parsedExprTypeBindings[i].type = type;
-			return true;
+			if( parsedExprTypeBindings[i].type == type )
+			{
+				return true;
+			}
+			AddDiagnostic("expression-target-type-bind-conflict");
+			return false;
 		}
 	}
-
 	asSParsedExprTypeBinding binding;
-	binding.node = node;
-	binding.section = parsedSection;
-	binding.offset = (asUINT)node->tokenPos;
+	binding.identity = identity;
 	binding.type = type;
 	parsedExprTypeBindings.PushLast(binding);
 	return true;
 }
 
 bool asCSema::FindParsedExpressionType(
-	const asCScriptNode* node,
-	const asCScriptCode* script,
+	const asSParseActionIdentity& identity,
 	asCQualType& outType) const
 {
 	outType = asCQualType();
-	if( node == 0 )
+	if( !ParseActionIdentityIsValid(identity) )
 	{
 		return false;
 	}
 	for( asUINT i = 0; i < parsedExprTypeBindings.GetLength(); ++i )
 	{
-		if( parsedExprTypeBindings[i].node == node )
+		if( ParseActionIdentityEquals(
+			parsedExprTypeBindings[i].identity, identity) )
 		{
 			outType = parsedExprTypeBindings[i].type;
 			return outType.IsValid();
 		}
 	}
-
-	if( script == 0 )
-	{
-		return false;
-	}
-	const char* const section = script->name.GetLength()
-		? script->name.AddressOf() : "<memory>";
-	asCQualType match;
-	asUINT matches = 0;
-	for( asUINT i = 0; i < parsedExprTypeBindings.GetLength(); ++i )
-	{
-		if( parsedExprTypeBindings[i].offset == (asUINT)node->tokenPos
-			&& parsedExprTypeBindings[i].section.Equals(section) )
-		{
-			match = parsedExprTypeBindings[i].type;
-			++matches;
-		}
-	}
-	if( matches != 1 || !match.IsValid() )
-	{
-		return false;
-	}
-	outType = match;
-	return true;
+	return false;
 }
 
 bool asCSema::BindParsedExpressionIdentity(
-	const asCScriptNode* node,
-	asASTExprId expression,
-	asCScriptCode* script)
+	const asSParseActionIdentity& identity,
+	asASTExprId expression)
 {
-	if( node == 0 || !expression.IsValid() || context.GetExpr(expression) == 0
-		|| !PrepareParsedSource(script) )
+	if( !ParseActionIdentityIsValid(identity)
+		|| context.GetExpr(expression) == 0 )
 	{
 		AddDiagnostic("expression-identity-bind-invalid");
 		return false;
 	}
 	for( asUINT i = 0; i < parsedExprBindings.GetLength(); ++i )
 	{
-		if( parsedExprBindings[i].node == node )
+		if( ParseActionIdentityEquals(
+			parsedExprBindings[i].identity, identity) )
 		{
-			parsedExprBindings[i].section = parsedSection;
-			parsedExprBindings[i].nodeType = (asUINT)node->nodeType;
-			parsedExprBindings[i].offset = (asUINT)node->tokenPos;
-			parsedExprBindings[i].length = (asUINT)node->tokenLength;
-			parsedExprBindings[i].expression = expression;
-			return true;
+			if( parsedExprBindings[i].expression == expression )
+			{
+				return true;
+			}
+			AddDiagnostic("expression-identity-bind-conflict");
+			return false;
 		}
 	}
-
 	asSParsedExprBinding binding;
-	binding.node = node;
-	binding.section = parsedSection;
-	binding.nodeType = (asUINT)node->nodeType;
-	binding.offset = (asUINT)node->tokenPos;
-	binding.length = (asUINT)node->tokenLength;
+	binding.identity = identity;
 	binding.expression = expression;
 	parsedExprBindings.PushLast(binding);
 	return true;
 }
 
 asASTExprId asCSema::FindExactParsedExpressionIdentity(
-	const asCScriptNode* node) const
+	const asSParseActionIdentity& identity) const
 {
-	if( node == 0 )
-	{
-		return asASTExprId();
-	}
-	for( asUINT i = 0; i < parsedExprBindings.GetLength(); ++i )
-	{
-		if( parsedExprBindings[i].node == node
-			&& context.GetExpr(parsedExprBindings[i].expression) != 0 )
-		{
-			return parsedExprBindings[i].expression;
-		}
-	}
-	return asASTExprId();
+	return FindParsedExpressionIdentity(identity);
 }
 
 asASTExprId asCSema::FindParsedExpressionIdentity(
-	const asCScriptNode* node,
-	const asCScriptCode* script) const
+	const asSParseActionIdentity& identity) const
 {
-	const asASTExprId exact = FindExactParsedExpressionIdentity(node);
-	if( exact.IsValid() )
-	{
-		return exact;
-	}
-
-	if( node == 0 || script == 0 )
+	if( !ParseActionIdentityIsValid(identity) )
 	{
 		return asASTExprId();
 	}
-	const char* const section = script->name.GetLength()
-		? script->name.AddressOf() : "<memory>";
-	asASTExprId match;
-	asUINT matches = 0;
 	for( asUINT i = 0; i < parsedExprBindings.GetLength(); ++i )
 	{
-		if( parsedExprBindings[i].nodeType == (asUINT)node->nodeType
-			&& parsedExprBindings[i].offset == (asUINT)node->tokenPos
-			&& parsedExprBindings[i].length == (asUINT)node->tokenLength
-			&& parsedExprBindings[i].section.Equals(section) )
+		if( ParseActionIdentityEquals(
+			parsedExprBindings[i].identity, identity) )
 		{
-			match = parsedExprBindings[i].expression;
-			++matches;
+			return context.GetExpr(parsedExprBindings[i].expression) != 0
+				? parsedExprBindings[i].expression : asASTExprId();
 		}
 	}
-	return matches == 1 && context.GetExpr(match) != 0
-		? match : asASTExprId();
+	return asASTExprId();
 }
 
 void asCSema::NoteActedDecl(asASTDeclId id)

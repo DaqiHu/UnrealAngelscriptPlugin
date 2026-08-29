@@ -382,11 +382,34 @@ static bool BuildDeclRefExprAction(
 	return true;
 }
 
+static asSParseActionIdentity MakeParseActionIdentity(
+	asCSema* sema,
+	const asCScriptNode* node)
+{
+	return sema != 0 && node != 0
+		? sema->MakeParseActionIdentity(
+			static_cast<asUINT>(node->nodeType),
+			static_cast<asUINT>(node->tokenPos),
+			static_cast<asUINT>(node->tokenLength))
+		: asSParseActionIdentity();
+}
+
+static void BindCompletedParsedDeclarationIdentity(
+	asCSema* sema,
+	const asCScriptNode* node,
+	asASTDeclId declaration)
+{
+	if( sema != 0 && node != 0 && declaration.IsValid() )
+	{
+		sema->BindParsedDeclarationIdentity(
+			MakeParseActionIdentity(sema, node), declaration);
+	}
+}
+
 // Resolve one already-bound expression beneath a transparent Parser wrapper.
-// This never asks Sema to interpret syntax: only pointer-exact action bindings
-// are considered, and more than one distinct descendant fails closed. As each
-// composite grammar family gains its own action, its node is bound directly
-// and this recursion stops at that exact identity.
+// This never asks Sema to interpret syntax: only copied section/kind/range
+// action identities are considered, and more than one distinct descendant
+// fails closed. The native nodes remain Parser-local traversal state.
 static asASTExprId FindSingleExactParsedExpressionIdentity(
 	asCSema* sema,
 	const asCScriptNode* node)
@@ -395,7 +418,8 @@ static asASTExprId FindSingleExactParsedExpressionIdentity(
 	{
 		return asASTExprId();
 	}
-	const asASTExprId exact = sema->FindExactParsedExpressionIdentity(node);
+	const asASTExprId exact = sema->FindExactParsedExpressionIdentity(
+		MakeParseActionIdentity(sema, node));
 	if( exact.IsValid() )
 	{
 		return exact;
@@ -496,7 +520,8 @@ static void BindConditionalExprAction(
 		sema->ActOnConditionalExprAction(action, script);
 	if( expression.IsValid() )
 	{
-		sema->BindParsedExpressionIdentity(node, expression, script);
+		sema->BindParsedExpressionIdentity(
+			MakeParseActionIdentity(sema, node), expression);
 	}
 }
 
@@ -552,7 +577,8 @@ static void BindAssignExprAction(
 	const asASTExprId expression = sema->ActOnAssignExprAction(action, script);
 	if( expression.IsValid() )
 	{
-		sema->BindParsedExpressionIdentity(node, expression, script);
+		sema->BindParsedExpressionIdentity(
+			MakeParseActionIdentity(sema, node), expression);
 	}
 }
 
@@ -631,7 +657,8 @@ static void BindBinaryExprAction(
 	const asASTExprId expression = sema->ActOnBinaryExprAction(action, script);
 	if( expression.IsValid() )
 	{
-		sema->BindParsedExpressionIdentity(node, expression, script);
+		sema->BindParsedExpressionIdentity(
+			MakeParseActionIdentity(sema, node), expression);
 	}
 }
 
@@ -771,7 +798,8 @@ static bool BindUnaryExprAction(
 	}
 	const asASTExprId expression = sema->ActOnUnaryExprAction(action, script);
 	return expression.IsValid()
-		&& sema->BindParsedExpressionIdentity(node, expression, script);
+		&& sema->BindParsedExpressionIdentity(
+			MakeParseActionIdentity(sema, node), expression);
 }
 
 static bool BuildCastExprAction(
@@ -802,7 +830,8 @@ static bool BuildCastExprAction(
 		operandNode = child;
 	}
 	if( operandNode == 0
-		|| !sema->FindParsedExpressionType(node, script, action.targetType) )
+		|| !sema->FindParsedExpressionType(
+			MakeParseActionIdentity(sema, node), action.targetType) )
 	{
 		return false;
 	}
@@ -820,8 +849,15 @@ static bool BuildCastExprAction(
 static bool BindCastExprAction(
 	asCScriptNode* node,
 	asCScriptCode* script,
-	asCSema* sema)
+	asCSema* sema,
+	const asCQualType& targetType)
 {
+	if( sema == 0 || !targetType.IsValid()
+		|| !sema->BindParsedExpressionType(
+			MakeParseActionIdentity(sema, node), targetType) )
+	{
+		return false;
+	}
 	asSCastExprAction action;
 	if( !BuildCastExprAction(node, script, sema, action) )
 	{
@@ -829,7 +865,8 @@ static bool BindCastExprAction(
 	}
 	const asASTExprId expression = sema->ActOnCastExprAction(action, script);
 	return expression.IsValid()
-		&& sema->BindParsedExpressionIdentity(node, expression, script);
+		&& sema->BindParsedExpressionIdentity(
+			MakeParseActionIdentity(sema, node), expression);
 }
 
 static bool BuildConstructExprAction(
@@ -850,7 +887,8 @@ static bool BuildConstructExprAction(
 	if( typeNode == 0 || typeNode->nodeType != snDataType
 		|| argsNode == 0 || argsNode->nodeType != snArgList
 		|| argsNode->next != 0
-		|| !sema->FindParsedExpressionType(node, script, action.targetType) )
+		|| !sema->FindParsedExpressionType(
+			MakeParseActionIdentity(sema, node), action.targetType) )
 	{
 		return false;
 	}
@@ -881,8 +919,15 @@ static bool BuildConstructExprAction(
 static bool BindConstructExprAction(
 	asCScriptNode* node,
 	asCScriptCode* script,
-	asCSema* sema)
+	asCSema* sema,
+	const asCQualType& targetType)
 {
+	if( sema == 0 || !targetType.IsValid()
+		|| !sema->BindParsedExpressionType(
+			MakeParseActionIdentity(sema, node), targetType) )
+	{
+		return false;
+	}
 	asSConstructExprAction action;
 	if( !BuildConstructExprAction(node, script, sema, action) )
 	{
@@ -891,7 +936,8 @@ static bool BindConstructExprAction(
 	const asASTExprId expression =
 		sema->ActOnConstructExprAction(action, script);
 	return expression.IsValid()
-		&& sema->BindParsedExpressionIdentity(node, expression, script);
+		&& sema->BindParsedExpressionIdentity(
+			MakeParseActionIdentity(sema, node), expression);
 }
 
 static bool ActionNodeHasAuthoredToken(
@@ -1052,7 +1098,8 @@ static bool BindCallExprAction(
 	const asASTExprId expression =
 		sema->ActOnCallExprAction(action, script);
 	return expression.IsValid()
-		&& sema->BindParsedExpressionIdentity(node, expression, script);
+		&& sema->BindParsedExpressionIdentity(
+			MakeParseActionIdentity(sema, node), expression);
 }
 
 static bool BuildStructuralPostfixExprAction(
@@ -1225,7 +1272,7 @@ static bool BindStructuralPostfixExprAction(
 		sema->ActOnStructuralPostfixExprAction(action, script);
 	return expression.IsValid()
 		&& sema->BindParsedExpressionIdentity(
-			node, expression, script);
+			MakeParseActionIdentity(sema, node), expression);
 }
 
 static bool BuildCopiedActionRange(
@@ -1320,7 +1367,8 @@ static asASTExprId BindInitListNodeAction(
 		sema->ActOnInitListExprAction(action, script);
 	if( expression.IsValid() )
 	{
-		sema->BindParsedExpressionIdentity(listNode, expression, script);
+		sema->BindParsedExpressionIdentity(
+			MakeParseActionIdentity(sema, listNode), expression);
 	}
 	return expression;
 }
@@ -1338,7 +1386,8 @@ static bool BindInitListExprAction(
 		listNode, node, script, sema, targetType, hasExplicitTarget,
 		recovered);
 	return expression.IsValid()
-		&& sema->BindParsedExpressionIdentity(node, expression, script);
+		&& sema->BindParsedExpressionIdentity(
+			MakeParseActionIdentity(sema, node), expression);
 }
 
 void asCParser::BuildLambdaParameterAction(
@@ -2930,14 +2979,15 @@ asCScriptNode *asCParser::ParseCast()
 	}
 
 	// Parse and resolve the target while Parser still owns the complete type
-	// syntax. Expression lowering consumes only this local QualType binding.
+	// syntax. Bind it only after the recoverable expression range is final so
+	// the pointer-free action identity cannot change beneath the binding.
 	asCScriptNode* const typeNode = ParseType(true);
 	node->AddChildLast(typeNode);
+	asCQualType targetType;
 	if( sema && typeNode )
 	{
-		const asCQualType targetType = sema->ActOnQualTypeAction(
+		targetType = sema->ActOnQualTypeAction(
 			BuildQualTypeSyntaxAction(typeNode, 0));
-		sema->BindParsedExpressionType(node, targetType, script);
 	}
 	if( isSyntaxError ) return node;
 
@@ -2963,7 +3013,7 @@ asCScriptNode *asCParser::ParseCast()
 		// A nested expression can publish its exact identity before reporting a
 		// later delimiter error. Bind the cast only when both that operand and
 		// the Parser-resolved target type are already complete.
-		BindCastExprAction(node, script, sema);
+		BindCastExprAction(node, script, sema, targetType);
 		return node;
 	}
 
@@ -2972,12 +3022,12 @@ asCScriptNode *asCParser::ParseCast()
 	{
 		Error(ExpectedToken(")"), &t1);
 		Error(InsteadFound(t1), &t1);
-		BindCastExprAction(node, script, sema);
+		BindCastExprAction(node, script, sema, targetType);
 		return node;
 	}
 
 	node->UpdateSourcePos(t1.pos, t1.length);
-	BindCastExprAction(node, script, sema);
+	BindCastExprAction(node, script, sema, targetType);
 
 	return node;
 }
@@ -3120,7 +3170,8 @@ asCScriptNode *asCParser::ParseConstant()
 			sema->ActOnLiteralExprAction(action, script);
 		if( expression.IsValid() )
 		{
-			sema->BindParsedExpressionIdentity(node, expression, script);
+			sema->BindParsedExpressionIdentity(
+				MakeParseActionIdentity(sema, node), expression);
 		}
 	}
 
@@ -3266,7 +3317,8 @@ asCScriptNode *asCParser::ParseLambda()
 			sema->ActOnParameterDeclAction(canonicalParameters[i], script);
 		}
 		sema->FinishDecl(canonicalLambda);
-		sema->BindParsedDeclarationIdentity(node, canonicalLambda);
+		sema->BindParsedDeclarationIdentity(
+			MakeParseActionIdentity(sema, node), canonicalLambda);
 		lambdaScope.Push(canonicalLambda);
 	}
 
@@ -3290,8 +3342,10 @@ asCScriptNode *asCParser::ParseLambda()
 		expressionAction.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
 		const asASTExprId expression = sema->ActOnLambdaExpressionAction(
 			expressionAction, script);
-		sema->BindParsedExpressionIdentity(node, expression, script);
+		sema->BindParsedExpressionIdentity(
+			MakeParseActionIdentity(sema, node), expression);
 	}
+	BindCompletedParsedDeclarationIdentity(sema, node, canonicalLambda);
 
 	return node;
 }
@@ -3368,7 +3422,8 @@ asCScriptNode *asCParser::ParseVariableAccess()
 				sema->ActOnDeclRefExprAction(action, script);
 			if( expression.IsValid() )
 			{
-				sema->BindParsedExpressionIdentity(node, expression, script);
+				sema->BindParsedExpressionIdentity(
+					MakeParseActionIdentity(sema, node), expression);
 			}
 		}
 	}
@@ -3384,16 +3439,16 @@ asCScriptNode *asCParser::ParseConstructCall()
 
 	asCScriptNode* const typeNode = ParseType(false);
 	node->AddChildLast(typeNode);
+	asCQualType targetType;
 	if( sema && typeNode )
 	{
-		const asCQualType targetType = sema->ActOnQualTypeAction(
+		targetType = sema->ActOnQualTypeAction(
 			BuildQualTypeSyntaxAction(typeNode, 0));
-		sema->BindParsedExpressionType(node, targetType, script);
 	}
 	if( isSyntaxError ) return node;
 
 	node->AddChildLast(ParseArgList());
-	BindConstructExprAction(node, script, sema);
+	BindConstructExprAction(node, script, sema, targetType);
 
 	return node;
 }
@@ -4087,7 +4142,8 @@ asCScriptNode *asCParser::ParseImport()
 		// Non-semantic Stage 2 producer bridge: Builder later receives this
 		// exact snImport pointer and carries the already-built stable key onto
 		// its prepared Runtime import shell. No import syntax is decoded here.
-		sema->BindParsedDeclarationIdentity(node, importDecl);
+		sema->BindParsedDeclarationIdentity(
+			MakeParseActionIdentity(sema, node), importDecl);
 	}
 
 	GetToken(&t);
@@ -4149,6 +4205,7 @@ asCScriptNode *asCParser::ParseImport()
 	}
 
 	node->UpdateSourcePos(t.pos, t.length);
+	BindCompletedParsedDeclarationIdentity(sema, node, importDecl);
 
 	return node;
 }
@@ -5262,7 +5319,8 @@ asCScriptNode *asCParser::ParseFuncDef()
 				node->firstChild,
 				node->firstChild ? node->firstChild->next : 0));
 		canonicalFuncDef = sema->ActOnFuncDefSignatureAction(action, script);
-		sema->BindParsedDeclarationIdentity(node, canonicalFuncDef);
+		sema->BindParsedDeclarationIdentity(
+			MakeParseActionIdentity(sema, node), canonicalFuncDef);
 		funcDefScope.Push(canonicalFuncDef);
 	}
 
@@ -5278,6 +5336,7 @@ asCScriptNode *asCParser::ParseFuncDef()
 	}
 
 	node->UpdateSourcePos(t1.pos, t1.length);
+	BindCompletedParsedDeclarationIdentity(sema, node, canonicalFuncDef);
 
 	return node;
 }
@@ -5428,7 +5487,8 @@ asCScriptNode *asCParser::ParseFunction(bool isMethod, bool notifySemaAfterParam
 				: (isMethod ? asFUNCTION_ACTION_METHOD : asFUNCTION_ACTION_FUNCTION));
 		action.accessSpecifierName = accessSpecifierName;
 		canonicalFunction = sema->ActOnFunctionSignatureAction(action, script);
-		sema->BindParsedDeclarationIdentity(node, canonicalFunction);
+		sema->BindParsedDeclarationIdentity(
+			MakeParseActionIdentity(sema, node), canonicalFunction);
 		fnScope.Push(canonicalFunction);
 	}
 
@@ -5463,6 +5523,7 @@ asCScriptNode *asCParser::ParseFunction(bool isMethod, bool notifySemaAfterParam
 	if (t1.type == ttEndStatement)
 	{
 		node->AddChildLast(ParseToken(ttEndStatement));
+		BindCompletedParsedDeclarationIdentity(sema, node, canonicalFunction);
 		return node;
 	}
 
@@ -5481,6 +5542,7 @@ asCScriptNode *asCParser::ParseFunction(bool isMethod, bool notifySemaAfterParam
 		bodyAction.body = FindExactParsedStatementIdentity(body);
 		sema->ActOnFunctionBodyAction(bodyAction, script);
 	}
+	BindCompletedParsedDeclarationIdentity(sema, node, canonicalFunction);
 
 	return node;
 }
@@ -5523,7 +5585,8 @@ asCScriptNode *asCParser::ParseInterfaceMethod()
 			BuildQualTypeSyntaxAction(typeNode, typeMod));
 		action.kind = asFUNCTION_ACTION_METHOD;
 		canonicalMethod = sema->ActOnFunctionSignatureAction(action, script);
-		sema->BindParsedDeclarationIdentity(node, canonicalMethod);
+		sema->BindParsedDeclarationIdentity(
+			MakeParseActionIdentity(sema, node), canonicalMethod);
 		methodScope.Push(canonicalMethod);
 	}
 
@@ -5559,6 +5622,7 @@ asCScriptNode *asCParser::ParseInterfaceMethod()
 	}
 
 	node->UpdateSourcePos(t1.pos, t1.length);
+	BindCompletedParsedDeclarationIdentity(sema, node, canonicalMethod);
 
 	return node;
 }
@@ -5629,7 +5693,8 @@ asCScriptNode *asCParser::ParseInterface()
 		{
 			// Identity-only bridge for the transitional Builder producer. Record
 			// syntax is already authoritative in the typed action above.
-			sema->BindParsedDeclarationIdentity(node, recordDecl);
+			sema->BindParsedDeclarationIdentity(
+				MakeParseActionIdentity(sema, node), recordDecl);
 			ifaceScope.Push(recordDecl);
 		}
 	}
@@ -5640,6 +5705,7 @@ asCScriptNode *asCParser::ParseInterface()
 	{
 		RewindTo(&t);
 		node->AddChildLast(ParseToken(ttEndStatement));
+		BindCompletedParsedDeclarationIdentity(sema, node, recordDecl);
 		return node;
 	}
 
@@ -5729,6 +5795,7 @@ asCScriptNode *asCParser::ParseInterface()
 	{
 		sema->ActOnRecordFinishAction(recordDecl);
 	}
+	BindCompletedParsedDeclarationIdentity(sema, node, recordDecl);
 
 	return node;
 }
@@ -5825,7 +5892,8 @@ asCScriptNode *asCParser::ParseClass()
 		{
 			// Identity-only bridge for the transitional Builder producer. Record
 			// syntax is already authoritative in the typed action above.
-			sema->BindParsedDeclarationIdentity(node, recordDecl);
+			sema->BindParsedDeclarationIdentity(
+				MakeParseActionIdentity(sema, node), recordDecl);
 			classScope.Push(recordDecl);
 		}
 	}
@@ -5836,6 +5904,7 @@ asCScriptNode *asCParser::ParseClass()
 	{
 		RewindTo(&t);
 		node->AddChildLast(ParseToken(ttEndStatement));
+		BindCompletedParsedDeclarationIdentity(sema, node, recordDecl);
 		return node;
 	}
 
@@ -5944,6 +6013,7 @@ asCScriptNode *asCParser::ParseClass()
 	{
 		sema->ActOnRecordFinishAction(recordDecl);
 	}
+	BindCompletedParsedDeclarationIdentity(sema, node, recordDecl);
 
 	return node;
 }
@@ -6526,7 +6596,8 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 			{
 				// Identity-only bridge for the transitional Builder producer. The
 				// declaration's identity, type, and access are already authoritative.
-				sema->BindParsedDeclarationIdentity(nameNode, canonicalVariable);
+				sema->BindParsedDeclarationIdentity(
+					MakeParseActionIdentity(sema, nameNode), canonicalVariable);
 			}
 		}
 
@@ -7443,7 +7514,8 @@ asCScriptNode *asCParser::ParseForeachVariable()
 			sema->ActOnVariableHeaderAction(action, script);
 		if( variable.IsValid() )
 		{
-			sema->BindParsedDeclarationIdentity(nameNode, variable);
+			sema->BindParsedDeclarationIdentity(
+				MakeParseActionIdentity(sema, nameNode), variable);
 			BindParsedStatementIdentity(
 				node,
 				sema->ActOnForeachVariableAction(
