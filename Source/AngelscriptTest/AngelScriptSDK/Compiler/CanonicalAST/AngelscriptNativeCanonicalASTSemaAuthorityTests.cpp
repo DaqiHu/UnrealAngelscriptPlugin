@@ -21531,6 +21531,399 @@ public:
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("callee=G(int)")), *DumpMsg));
 	}
 
+	TEST_METHOD(ParserLocalInitializerContextuallyBindsLambdaToExactFuncdefSignature)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef("bool BoolCallback(int)") >= 0,
+			TEXT("contextual local-lambda fixture needs host BoolCallback")));
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaContextualLocalLambda");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaContextualLocalLambda module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Entry()
+			{
+				BoolCallback Stored = function(int Value)
+				{
+					return Value > 0;
+				};
+				return Stored(1) ? 1 : 0;
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaContextualLocalLambda.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("typed lambda local initializer must parse")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("typed lambda local initializer graph must seal")));
+
+		const asCDecl* Lambda = nullptr;
+		const asCDecl* Stored = nullptr;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			if (Decl != nullptr && (Decl->traits & asAST_TRAIT_LAMBDA) != 0)
+			{
+				Lambda = Decl;
+			}
+			else if (Decl != nullptr && Decl->kind == asAST_DECL_VAR
+				&& Decl->name.Equals("Stored"))
+			{
+				Stored = Decl;
+			}
+		}
+
+		const asCDecl* LambdaParam = nullptr;
+		if (Lambda != nullptr)
+		{
+			for (asUINT ChildIndex = 0; ChildIndex < Lambda->children.GetLength(); ++ChildIndex)
+			{
+				const asCDecl* const Child = Context.GetDecl(Lambda->children[ChildIndex]);
+				if (Child != nullptr && Child->kind == asAST_DECL_PARAM)
+				{
+					LambdaParam = Child;
+					break;
+				}
+			}
+		}
+		const asCExpr* Conversion = Stored != nullptr && Stored->inits.GetLength() == 1
+			? Context.GetExpr(Stored->inits[0]) : nullptr;
+		const asCExpr* LambdaRef = Conversion != nullptr
+			&& Conversion->children.GetLength() == 1
+			? Context.GetExpr(Conversion->children[0]) : nullptr;
+		const asCType* LambdaReturn = Lambda != nullptr
+			? Context.GetType(Lambda->type.type) : nullptr;
+		const asCType* LambdaParamType = LambdaParam != nullptr
+			? Context.GetType(LambdaParam->type.type) : nullptr;
+		const asCType* ConversionType = Conversion != nullptr
+			? Context.GetType(Conversion->type.type) : nullptr;
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("local lambda must take its return type from exact BoolCallback context. diagnostics:\n%s\nAST:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(LambdaReturn != nullptr
+			&& LambdaReturn->kind == asAST_TYPE_PRIMITIVE
+			&& LambdaReturn->stableKey.Equals("bool"), *Evidence));
+		ASSERT_THAT(IsTrue(LambdaParamType != nullptr
+			&& LambdaParamType->kind == asAST_TYPE_PRIMITIVE
+			&& LambdaParamType->stableKey.Equals("int")
+			&& LambdaParam->type.quals == 0, *Evidence));
+		ASSERT_THAT(IsTrue(Lambda != nullptr
+			&& std::strstr(
+				Lambda->stableKey.AddressOf(), "<lambda>(int)@") != nullptr,
+			*Evidence));
+		ASSERT_THAT(IsTrue(Conversion != nullptr
+			&& Conversion->kind == asAST_EXPR_CONVERSION
+			&& ConversionType != nullptr
+			&& ConversionType->kind == asAST_TYPE_FUNCDEF
+			&& ConversionType->stableKey.Equals("BoolCallback")
+			&& LambdaRef != nullptr
+			&& LambdaRef->kind == asAST_EXPR_DECL_REF
+			&& LambdaRef->resolvedDecl == Lambda->id, *Evidence));
+	}
+
+	TEST_METHOD(ParserCallArgumentContextuallyBindsLambdaToExactFuncdefSignature)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef("bool BoolCallback(int)") >= 0,
+			TEXT("contextual call-lambda fixture needs host BoolCallback")));
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaContextualCallLambda");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaContextualCallLambda module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			bool Invoke(BoolCallback Callback, int Value)
+			{
+				return Callback(Value);
+			}
+
+			int Entry()
+			{
+				return Invoke(function(int Value)
+				{
+					return Value > 0;
+				}, 1) ? 1 : 0;
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaContextualCallLambda.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("typed lambda call argument must parse")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("typed lambda call argument graph must seal")));
+
+		const asCDecl* Lambda = nullptr;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			if (Decl != nullptr && (Decl->traits & asAST_TRAIT_LAMBDA) != 0)
+			{
+				Lambda = Decl;
+				break;
+			}
+		}
+		const asCType* LambdaReturn = Lambda != nullptr
+			? Context.GetType(Lambda->type.type) : nullptr;
+		const asCExpr* ContextualConversion = nullptr;
+		for (asUINT Index = 1; Index <= Context.GetExprCount(); ++Index)
+		{
+			const asCExpr* const Expr = Context.GetExpr(asASTExprId(Index));
+			const asCType* const Type = Expr != nullptr
+				? Context.GetType(Expr->type.type) : nullptr;
+			if (Expr != nullptr && Expr->kind == asAST_EXPR_CONVERSION
+				&& Type != nullptr && Type->kind == asAST_TYPE_FUNCDEF
+				&& Type->stableKey.Equals("BoolCallback")
+				&& Expr->children.GetLength() == 1)
+			{
+				const asCExpr* const Child = Context.GetExpr(Expr->children[0]);
+				if (Child != nullptr && Lambda != nullptr
+					&& Child->resolvedDecl == Lambda->id)
+				{
+					ContextualConversion = Expr;
+					break;
+				}
+			}
+		}
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("call argument lambda must take its return type from exact BoolCallback formal. diagnostics:\n%s\nAST:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(LambdaReturn != nullptr
+			&& LambdaReturn->kind == asAST_TYPE_PRIMITIVE
+			&& LambdaReturn->stableKey.Equals("bool"), *Evidence));
+		ASSERT_THAT(IsNotNull(ContextualConversion, *Evidence));
+	}
+
+	TEST_METHOD(SemaCanonicalFuncdefContextuallyBindsLambdaWithoutRuntimeTypeLookup)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		const std::string ScriptSource = "function(int Value)";
+		asCScriptCode Code;
+		Code.SetCode("SemaCanonicalFuncdefLambda.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asASTDeclId TranslationUnit = Sema.ActOnTranslationUnit(
+			"SemaCanonicalFuncdefLambda");
+		const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId FuncdefId = Sema.ActOnFuncDefDecl(
+			TranslationUnit, "ScriptCallback", asCSourceRange());
+		Context.SetDeclType(FuncdefId, BoolType);
+		Sema.ActOnParamDecl(FuncdefId, "Value", IntType, asCSourceRange());
+		Sema.FinishDecl(FuncdefId);
+
+		const asASTDeclId Entry = Sema.ActOnFunctionDecl(
+			TranslationUnit, "Entry", IntType, asCSourceRange());
+		asSLambdaHeaderAction Header;
+		Header.owner = Entry;
+		Header.recoveryReturnType = IntType;
+		Header.parameterCount = 1;
+		Header.explicitlyTypedParameterCount = 1;
+		Header.beginOffset = 0;
+		Header.endOffset = static_cast<asUINT>(ScriptSource.size());
+		const asASTDeclId LambdaId = Sema.ActOnLambdaHeaderAction(Header, &Code);
+		Sema.ActOnParamDecl(LambdaId, "Value", IntType, asCSourceRange());
+		Sema.FinishDecl(LambdaId);
+		asSLambdaExpressionAction Expression;
+		Expression.lambdaDecl = LambdaId;
+		Expression.beginOffset = 0;
+		Expression.endOffset = static_cast<asUINT>(ScriptSource.size());
+		const asASTExprId LambdaRef = Sema.ActOnLambdaExpressionAction(
+			Expression, &Code);
+		const asCDecl* const MutableFuncdef = Context.GetDecl(FuncdefId);
+		const asCQualType FuncdefType = MutableFuncdef != nullptr
+			? Context.InternNamedType(
+				asAST_TYPE_FUNCDEF, MutableFuncdef->stableKey.AddressOf(), 0)
+			: asCQualType();
+		const asASTExprId Conversion = Sema.ActOnConversion(
+			LambdaRef, FuncdefType, asCSourceRange());
+		ASSERT_THAT(IsTrue(Conversion.IsValid(),
+			TEXT("Canonical funcdef conversion must be constructed")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("Canonical funcdef lambda graph must seal")));
+
+		const asCDecl* const Lambda = Context.GetDecl(LambdaId);
+		const asCDecl* const Funcdef = Context.GetDecl(FuncdefId);
+
+		const asCType* const LambdaReturn = Lambda != nullptr
+			? Context.GetType(Lambda->type.type) : nullptr;
+		bool bHasExactFuncdefDependency = false;
+		if (Lambda != nullptr && Funcdef != nullptr)
+		{
+			for (asUINT Index = 0; Index < Lambda->dependencies.GetLength(); ++Index)
+			{
+				if (Lambda->dependencies[Index].Equals(Funcdef->stableKey))
+				{
+					bHasExactFuncdefDependency = true;
+					break;
+				}
+			}
+		}
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("lambda must prefer the exact Canonical FuncDefDecl signature and dependency. diagnostics:\n%s\nAST:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(Funcdef != nullptr
+			&& Funcdef->stableKey.Equals("ScriptCallback"), *Evidence));
+		ASSERT_THAT(IsTrue(LambdaReturn != nullptr
+			&& LambdaReturn->kind == asAST_TYPE_PRIMITIVE
+			&& LambdaReturn->stableKey.Equals("bool"), *Evidence));
+		ASSERT_THAT(IsTrue(bHasExactFuncdefDependency, *Evidence));
+	}
+
+	TEST_METHOD(SemaHostFuncdefRejectsExplicitLambdaParameterDirectionMismatch)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"bool HostInCallback(int &in)") >= 0,
+			TEXT("direction mismatch fixture needs host HostInCallback")));
+		const std::string ScriptSource = "function(int &out Value)";
+		asCScriptCode Code;
+		Code.SetCode("SemaHostFuncdefDirectionMismatch.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asASTDeclId TranslationUnit = Sema.ActOnTranslationUnit(
+			"SemaHostFuncdefDirectionMismatch");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asCQualType IntOutRefType = Context.InternPrimitive(
+			ttInt, asAST_QUAL_REFERENCE | asAST_QUAL_OUT);
+
+		const asASTDeclId Entry = Sema.ActOnFunctionDecl(
+			TranslationUnit, "Entry", IntType, asCSourceRange());
+		asSLambdaHeaderAction Header;
+		Header.owner = Entry;
+		Header.recoveryReturnType = IntType;
+		Header.parameterCount = 1;
+		Header.explicitlyTypedParameterCount = 1;
+		Header.beginOffset = 0;
+		Header.endOffset = static_cast<asUINT>(ScriptSource.size());
+		const asASTDeclId LambdaId = Sema.ActOnLambdaHeaderAction(Header, &Code);
+		Sema.ActOnParamDecl(LambdaId, "Value", IntOutRefType, asCSourceRange());
+		Sema.FinishDecl(LambdaId);
+		asSLambdaExpressionAction Expression;
+		Expression.lambdaDecl = LambdaId;
+		Expression.beginOffset = 0;
+		Expression.endOffset = static_cast<asUINT>(ScriptSource.size());
+		const asASTExprId LambdaRef = Sema.ActOnLambdaExpressionAction(
+			Expression, &Code);
+		const asCQualType FuncdefType = Context.InternNamedType(
+			asAST_TYPE_FUNCDEF, "HostInCallback", 0);
+		Sema.ActOnConversion(LambdaRef, FuncdefType, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("direction mismatch is a Sema diagnostic, not a structural verifier failure")));
+
+		const asCDecl* const Lambda = Context.GetDecl(LambdaId);
+		const asCType* const LambdaReturn = Lambda != nullptr
+			? Context.GetType(Lambda->type.type) : nullptr;
+		bool bHasRejectedFuncdefDependency = false;
+		if (Lambda != nullptr)
+		{
+			for (asUINT Index = 0; Index < Lambda->dependencies.GetLength(); ++Index)
+			{
+				if (Lambda->dependencies[Index].Equals("HostInCallback"))
+				{
+					bHasRejectedFuncdefDependency = true;
+					break;
+				}
+			}
+		}
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("Canonical Sema must ABI-lower and reject an explicit &out lambda parameter for a host &in funcdef without publishing the target return or dependency. diagnostics:\n%s\nAST:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(CanonicalASTSemaAuthorityTest::DiagnosticEquals(
+			Sema, "lambda-funcdef-parameter-type-mismatch"), *Evidence));
+		ASSERT_THAT(IsTrue(LambdaReturn != nullptr
+			&& LambdaReturn->kind == asAST_TYPE_PRIMITIVE
+			&& LambdaReturn->stableKey.Equals("int"), *Evidence));
+		ASSERT_THAT(IsFalse(bHasRejectedFuncdefDependency, *Evidence));
+	}
+
+	TEST_METHOD(ParserExplicitLambdaParameterCountMismatchFailsClosedInCanonicalSema)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"bool PairCallback(int, int)") >= 0,
+			TEXT("parameter-count mismatch fixture needs host PairCallback")));
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaLambdaFuncdefCountMismatch");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaLambdaFuncdefCountMismatch module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Entry()
+			{
+				PairCallback Stored = function(int Value)
+				{
+					return Value > 0;
+				};
+				return 0;
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaLambdaFuncdefCountMismatch.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("parameter-count mismatch remains syntactically valid")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("signature mismatch is a Sema diagnostic, not a structural verifier failure")));
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("Canonical Sema must reject an explicitly typed lambda whose authored parameter count differs from PairCallback. diagnostics:\n%s\nAST:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(CanonicalASTSemaAuthorityTest::DiagnosticEquals(
+			Sema, "lambda-funcdef-parameter-count-mismatch"), *Evidence));
+	}
+
 	TEST_METHOD(ParserActOnLambdaCallThroughRecordsCallee)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

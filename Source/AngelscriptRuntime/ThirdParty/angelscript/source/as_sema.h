@@ -648,21 +648,26 @@ struct asSParameterDefaultAction
 	}
 };
 
-// Lambda syntax has no authored return type. During the current migration the
-// Parser publishes the exact owner/header range and the same recovery type the
-// old node adapter used; Sema alone creates the authoritative declaration.
-// Contextual funcdef binding/return inference replaces recoveryReturnType in a
-// later lambda-semantic slice. This payload is short-lived AST construction
-// state and never crosses a snapshot, Provider, relocation, or Cache boundary.
+// Lambda syntax has no authored return type. Parser publishes the exact
+// owner/header range, authored parameter count, explicitly-typed parameter
+// count, and a recovery type used only until a typed conversion supplies the
+// target funcdef. Sema owns contextual signature binding; omitted-formal
+// inference remains deferred until it can re-type the complete body. This
+// payload is short-lived AST construction state and never crosses a snapshot,
+// Provider, relocation, or Cache boundary.
 struct asSLambdaHeaderAction
 {
 	asASTDeclId owner;
 	asCQualType recoveryReturnType;
+	asUINT parameterCount;
+	asUINT explicitlyTypedParameterCount;
 	asUINT beginOffset;
 	asUINT endOffset;
 
 	asSLambdaHeaderAction()
-		: beginOffset(0)
+		: parameterCount(0)
+		, explicitlyTypedParameterCount(0)
+		, beginOffset(0)
 		, endOffset(0)
 	{
 	}
@@ -1391,6 +1396,10 @@ public:
 	void AddDiagnostic(const char* text);
 	void AddDiagnostic(const char* text, const asCSourceRange& range);
 private:
+	void ContextualizeLambdaToFuncdef(
+		asASTExprId inner,
+		const asCQualType& destination,
+		const asCSourceRange& range);
 	asCQualType ActOnQualTypeSyntaxNode(
 		const asSQualTypeSyntaxAction& action,
 		asUINT nodeIndex,
@@ -1425,6 +1434,14 @@ private:
 		asASTExprId expression;
 	};
 	asCArray<asSParsedExprBinding> parsedExprBindings;
+	struct asSLambdaSyntaxFact
+	{
+		asASTDeclId lambda;
+		asUINT parameterCount;
+		asUINT explicitlyTypedParameterCount;
+		asCString boundFuncdefKey;
+	};
+	asCArray<asSLambdaSyntaxFact> lambdaSyntaxFacts;
 	struct asSSemaSymbol
 	{
 		asASTDeclId scope;

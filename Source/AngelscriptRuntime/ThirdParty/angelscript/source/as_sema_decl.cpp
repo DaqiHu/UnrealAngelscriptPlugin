@@ -782,6 +782,7 @@ asASTDeclId asCSema::ActOnLambdaHeaderAction(
 	lastActedDecl = asASTDeclId();
 	if( !action.owner.IsValid()
 		|| !action.recoveryReturnType.IsValid()
+		|| action.explicitlyTypedParameterCount > action.parameterCount
 		|| action.endOffset <= action.beginOffset
 		|| context.GetDecl(action.owner) == 0
 		|| context.GetType(action.recoveryReturnType.type) == 0
@@ -808,6 +809,31 @@ asASTDeclId asCSema::ActOnLambdaHeaderAction(
 	}
 	context.AddDeclTrait(lambda, asAST_TRAIT_LAMBDA);
 	context.SetDeclName(lambda, "<lambda>");
+	bool hasSyntaxFact = false;
+	for( asUINT i = 0; i < lambdaSyntaxFacts.GetLength(); ++i )
+	{
+		if( lambdaSyntaxFacts[i].lambda != lambda )
+		{
+			continue;
+		}
+		hasSyntaxFact = true;
+		if( lambdaSyntaxFacts[i].parameterCount != action.parameterCount
+			|| lambdaSyntaxFacts[i].explicitlyTypedParameterCount
+				!= action.explicitlyTypedParameterCount )
+		{
+			AddDiagnostic("lambda-header-action-conflict", range);
+		}
+		break;
+	}
+	if( !hasSyntaxFact )
+	{
+		asSLambdaSyntaxFact fact;
+		fact.lambda = lambda;
+		fact.parameterCount = action.parameterCount;
+		fact.explicitlyTypedParameterCount =
+			action.explicitlyTypedParameterCount;
+		lambdaSyntaxFacts.PushLast(fact);
+	}
 	FinishDecl(lambda);
 	NoteActedDecl(lambda);
 	return lambda;

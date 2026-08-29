@@ -3311,6 +3311,8 @@ asCScriptNode *asCParser::ParseLambda()
 	if( node == 0 ) return 0;
 	asCArray<asSParameterDeclAction> canonicalParameters;
 	asCQualType recoveryReturnType;
+	asUINT canonicalParameterCount = 0;
+	asUINT explicitlyTypedParameterCount = 0;
 
 	sToken t;
 	GetToken(&t);
@@ -3359,6 +3361,11 @@ asCScriptNode *asCParser::ParseLambda()
 		asCScriptNode* parameterName = ParseIdentifier();
 		params->AddChildLast(parameterName);
 		if (isSyntaxError) return node;
+		++canonicalParameterCount;
+		if( parameterType != 0 )
+		{
+			++explicitlyTypedParameterCount;
+		}
 		BuildLambdaParameterAction(
 			parameterType, parameterTypeMod, parameterName,
 			canonicalParameters, recoveryReturnType);
@@ -3382,6 +3389,11 @@ asCScriptNode *asCParser::ParseLambda()
 			parameterName = ParseIdentifier();
 			params->AddChildLast(parameterName);
 			if( isSyntaxError ) return node;
+			++canonicalParameterCount;
+			if( parameterType != 0 )
+			{
+				++explicitlyTypedParameterCount;
+			}
 			BuildLambdaParameterAction(
 				parameterType, parameterTypeMod, parameterName,
 				canonicalParameters, recoveryReturnType);
@@ -3408,6 +3420,9 @@ asCScriptNode *asCParser::ParseLambda()
 		asSLambdaHeaderAction action;
 		action.owner = sema->CurrentDeclContext();
 		action.recoveryReturnType = recoveryReturnType;
+		action.parameterCount = canonicalParameterCount;
+		action.explicitlyTypedParameterCount =
+			explicitlyTypedParameterCount;
 		action.beginOffset = (asUINT)functionIdent->tokenPos;
 		action.endOffset = (asUINT)(t.pos + t.length);
 		canonicalLambda = sema->ActOnLambdaHeaderAction(action, script);

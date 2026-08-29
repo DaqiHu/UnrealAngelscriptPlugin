@@ -1,9 +1,12 @@
 #include "as_sema.h"
+#include "as_datatype.h"
 #include "as_scriptcode.h"
 #include "as_scriptengine.h"
+#include "as_scriptfunction.h"
 #include "as_property.h"
 #include "as_runtime_type_bridge.h"
 #include "as_tokendef.h"
+#include "as_typeinfo.h"
 #include <cstring>
 #include <cstdlib>
 
@@ -1702,8 +1705,222 @@ asASTExprId asCSema::ActOnCall(asASTDeclId callee, const asCArray<asASTExprId>& 
 	return id;
 }
 
+static asETypeModifiers CanonicalLambdaParameterPassing(asDWORD qualifiers)
+{
+	if( (qualifiers & asAST_QUAL_PARAM_DIR_MASK) == asAST_QUAL_INOUT )
+	{
+		return asTM_INOUTREF;
+	}
+	if( qualifiers & asAST_QUAL_OUT )
+	{
+		return asTM_OUTREF;
+	}
+	if( qualifiers & asAST_QUAL_IN )
+	{
+		return asTM_INREF;
+	}
+	if( qualifiers & asAST_QUAL_REFERENCE )
+	{
+		return asTM_INOUTREF;
+	}
+	return asTM_NONE;
+}
+
+void asCSema::ContextualizeLambdaToFuncdef(
+	asASTExprId inner,
+	const asCQualType& destination,
+	const asCSourceRange& range)
+{
+	const asCType* const targetType = context.GetType(destination.type);
+	const asCExpr* const innerExpression = context.GetExpr(inner);
+	if( targetType == 0 || targetType->kind != asAST_TYPE_FUNCDEF
+		|| targetType->stableKey.GetLength() == 0
+		|| innerExpression == 0
+		|| innerExpression->kind != asAST_EXPR_DECL_REF
+		|| !innerExpression->resolvedDecl.IsValid() )
+	{
+		return;
+	}
+
+	const asASTDeclId lambdaId = innerExpression->resolvedDecl;
+	const asCDecl* const lambda = context.GetDecl(lambdaId);
+	if( lambda == 0 || lambda->kind != asAST_DECL_FUNCTION
+		|| (lambda->traits & asAST_TRAIT_LAMBDA) == 0 )
+	{
+		return;
+	}
+
+	asCArray<asCQualType> authoredParameters;
+	for( asUINT i = 0; i < lambda->children.GetLength(); ++i )
+	{
+		const asCDecl* const child = context.GetDecl(lambda->children[i]);
+		if( child != 0 && child->kind == asAST_DECL_PARAM )
+		{
+			authoredParameters.PushLast(child->type);
+		}
+	}
+
+	asSLambdaSyntaxFact* syntax = 0;
+	for( asUINT i = 0; i < lambdaSyntaxFacts.GetLength(); ++i )
+	{
+		if( lambdaSyntaxFacts[i].lambda == lambdaId )
+		{
+			syntax = &lambdaSyntaxFacts[i];
+			break;
+		}
+	}
+	if( syntax == 0 )
+	{
+		// Direct Sema construction has no Parser action. Every authored ParamDecl
+		// is therefore explicit by construction; retain the same conflict guard
+		// and idempotence as the Parser path without publishing transient state.
+		asSLambdaSyntaxFact fact;
+		fact.lambda = lambdaId;
+		fact.parameterCount = authoredParameters.GetLength();
+		fact.explicitlyTypedParameterCount = authoredParameters.GetLength();
+		lambdaSyntaxFacts.PushLast(fact);
+		syntax = &lambdaSyntaxFacts[lambdaSyntaxFacts.GetLength() - 1];
+	}
+
+	if( syntax->explicitlyTypedParameterCount < syntax->parameterCount )
+	{
+		// Untyped formals require deferred body re-typing. Do not misdiagnose
+		// their absent ParamDecls as an explicit signature mismatch in this gate.
+		return;
+	}
+	if( syntax->boundFuncdefKey.GetLength() != 0
+		&& !syntax->boundFuncdefKey.Equals(targetType->stableKey) )
+	{
+		AddDiagnostic("lambda-funcdef-context-conflict", range);
+		return;
+	}
+
+	asCQualType expectedReturn;
+	asCArray<asCQualType> expectedParameters;
+	const asCScriptFunction* runtimeFuncdef = 0;
+	asASTDeclId canonicalFuncdef;
+	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
+	{
+		const asCDecl* const declaration = context.GetDecl(asASTDeclId(i));
+		if( declaration == 0 || declaration->kind != asAST_DECL_FUNCDEF
+			|| !declaration->stableKey.Equals(targetType->stableKey) )
+		{
+			continue;
+		}
+		if( canonicalFuncdef.IsValid() )
+		{
+			AddDiagnostic("lambda-funcdef-target-ambiguous", range);
+			return;
+		}
+		canonicalFuncdef = declaration->id;
+		expectedReturn = declaration->type;
+		for( asUINT childIndex = 0;
+			childIndex < declaration->children.GetLength();
+			++childIndex )
+		{
+			const asCDecl* const child = context.GetDecl(
+				declaration->children[childIndex]);
+			if( child != 0 && child->kind == asAST_DECL_PARAM )
+			{
+				expectedParameters.PushLast(child->type);
+			}
+		}
+	}
+
+	if( !canonicalFuncdef.IsValid() )
+	{
+		if( engine == 0 )
+		{
+			AddDiagnostic("lambda-funcdef-target-unresolved", range);
+			return;
+		}
+		asCRuntimeTypeBridge bridge(engine);
+		const asCDataType runtimeType = bridge.Resolve(context, destination);
+		asCFuncdefType* const funcdefType = runtimeType.IsFuncdef()
+			? CastToFuncdefType(runtimeType.GetTypeInfo()) : 0;
+		const asCScriptFunction* const function =
+			funcdefType != 0 ? funcdefType->funcdef : 0;
+		if( function == 0 )
+		{
+			AddDiagnostic("lambda-funcdef-target-unresolved", range);
+			return;
+		}
+		runtimeFuncdef = function;
+		expectedReturn = bridge.FromDataType(context, function->returnType);
+	}
+
+	if( !expectedReturn.IsValid() )
+	{
+		AddDiagnostic("lambda-funcdef-return-type-invalid", range);
+		return;
+	}
+	const asUINT expectedParameterCount = runtimeFuncdef != 0
+		? runtimeFuncdef->parameterTypes.GetLength()
+		: expectedParameters.GetLength();
+	if( syntax->parameterCount != expectedParameterCount
+		|| authoredParameters.GetLength() != expectedParameterCount )
+	{
+		AddDiagnostic("lambda-funcdef-parameter-count-mismatch", range);
+		return;
+	}
+	if( runtimeFuncdef == 0 )
+	{
+		for( asUINT parameterIndex = 0;
+			parameterIndex < expectedParameters.GetLength();
+			++parameterIndex )
+		{
+			if( !expectedParameters[parameterIndex].IsValid()
+				|| authoredParameters[parameterIndex]
+					!= expectedParameters[parameterIndex] )
+			{
+				AddDiagnostic("lambda-funcdef-parameter-type-mismatch", range);
+				return;
+			}
+		}
+	}
+	else
+	{
+		// A host funcdef stores its live Runtime ABI, not necessarily its authored
+		// surface. Compare after the same deterministic lowering used by Runtime
+		// declaration binding, but retain the source-level lambda ParamDecl types.
+		asCRuntimeTypeBridge bridge(engine);
+		for( asUINT parameterIndex = 0;
+			parameterIndex < runtimeFuncdef->parameterTypes.GetLength();
+			++parameterIndex )
+		{
+			asCDataType lowered = bridge.Resolve(
+				context, authoredParameters[parameterIndex]);
+			asETypeModifiers passing = CanonicalLambdaParameterPassing(
+				authoredParameters[parameterIndex].quals);
+			if( lowered.IsValid() )
+			{
+				asCRuntimeTypeBridge::NormalizeScriptParameterABI(
+					lowered, passing);
+			}
+			const asETypeModifiers expectedPassing =
+				parameterIndex < runtimeFuncdef->inOutFlags.GetLength()
+					? runtimeFuncdef->inOutFlags[parameterIndex]
+					: asTM_NONE;
+			if( !lowered.IsValid()
+				|| lowered != runtimeFuncdef->parameterTypes[parameterIndex]
+				|| passing != expectedPassing )
+			{
+				AddDiagnostic("lambda-funcdef-parameter-type-mismatch", range);
+				return;
+			}
+		}
+	}
+
+	context.SetDeclType(lambdaId, expectedReturn);
+	context.SetExprType(inner, expectedReturn);
+	FinishDecl(lambdaId);
+	RecordDependency(lambdaId, targetType->stableKey.AddressOf());
+	syntax->boundFuncdefKey = targetType->stableKey;
+}
+
 asASTExprId asCSema::ActOnConversion(asASTExprId inner, const asCQualType& dest, const asCSourceRange& range)
 {
+	ContextualizeLambdaToFuncdef(inner, dest, range);
 	const asASTExprId id = MakeExpr(context, asAST_EXPR_CONVERSION, dest, asAST_VALUE_PRVALUE, range, "conv");
 	context.AddExprChild(id, inner);
 	return id;
