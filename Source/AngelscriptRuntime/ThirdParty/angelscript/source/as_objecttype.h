@@ -167,6 +167,9 @@ public:
 	asCArray<asUINT>             interfaceVFTOffsets;
 	asCObjectType *              derivedFrom;
 	asCArray<asCScriptFunction*> virtualFunctionTable;
+	// Interface identity is a declaration/registration fact. It must never be
+	// reconstructed from object size because valid empty classes can be size 0.
+	bool isInterfaceDeclaration = false;
 	asITypeInfo* shadowType = nullptr;
 	asCObjectType* templateBaseType = nullptr;
 	struct sClassDeclaration* compilingDeclaration = nullptr;

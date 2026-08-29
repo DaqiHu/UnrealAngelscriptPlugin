@@ -3,6 +3,10 @@
 #include "CQTest.h"
 #include "Misc/ScopeExit.h"
 
+#include "StartAngelscriptHeaders.h"
+#include "source/as_objecttype.h"
+#include "EndAngelscriptHeaders.h"
+
 #if WITH_ANGELSCRIPT_UNITTESTS
 
 
@@ -151,6 +155,124 @@ private:
 	}
 
 public:
+	TEST_METHOD(RoundTripPreservesExplicitInterfaceAndEmptyClassIdentity)
+	{
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeMessageCollector Messages;
+		asIScriptEngine* const ScriptEngine = CreateNativeEngine(&Messages);
+		ASSERT_THAT(IsNotNull(ScriptEngine,
+			TEXT("interface identity round trip must create a native engine")));
+		ON_SCOPE_EXIT { DestroyNativeEngine(ScriptEngine); };
+		if (ScriptEngine == nullptr)
+		{
+			return;
+		}
+
+		asIScriptModule* const SourceModule = BuildNativeModule(
+			ScriptEngine,
+			"ExplicitInterfaceIdentitySource",
+			ASTEST_AS_ANSI(R"AS(
+				interface IExplicitInterfaceIdentity
+				{
+					void Run();
+				}
+
+				class CExplicitInterfaceImplementation : IExplicitInterfaceIdentity
+				{
+					void Run() {}
+				}
+
+				class CEmptyClassIdentity
+				{
+				}
+			)AS"));
+		const FString SourceBuildEvidence = FString::Printf(
+			TEXT("interface identity source must compile: %s"),
+			*CollectMessages(Messages));
+		ASSERT_THAT(IsNotNull(SourceModule, *SourceBuildEvidence));
+		if (SourceModule == nullptr)
+		{
+			TestRunner->AddInfo(CollectMessages(Messages));
+			return;
+		}
+
+		auto AssertIdentity = [this](
+			asIScriptModule* Module,
+			const TCHAR* Phase)
+		{
+			asITypeInfo* const InterfaceType =
+				Module != nullptr
+					? Module->GetTypeInfoByName("IExplicitInterfaceIdentity")
+					: nullptr;
+			asITypeInfo* const ImplementationType =
+				Module != nullptr
+					? Module->GetTypeInfoByName("CExplicitInterfaceImplementation")
+					: nullptr;
+			asITypeInfo* const EmptyClassType =
+				Module != nullptr
+					? Module->GetTypeInfoByName("CEmptyClassIdentity")
+					: nullptr;
+			const asCObjectType* const InterfaceObject =
+				InterfaceType != nullptr
+					? static_cast<const asCObjectType*>(InterfaceType) : nullptr;
+			const asCObjectType* const ImplementationObject =
+				ImplementationType != nullptr
+					? static_cast<const asCObjectType*>(ImplementationType) : nullptr;
+			const asCObjectType* const EmptyClassObject =
+				EmptyClassType != nullptr
+					? static_cast<const asCObjectType*>(EmptyClassType) : nullptr;
+			const FString Evidence = FString::Printf(
+				TEXT("%s module must preserve explicit interface identity independently of empty-class size"),
+				Phase);
+			ASSERT_THAT(IsTrue(InterfaceObject != nullptr
+				&& InterfaceObject->IsInterface(), *Evidence));
+			ASSERT_THAT(IsTrue(ImplementationObject != nullptr
+				&& !ImplementationObject->IsInterface()
+				&& ImplementationObject->GetInterfaceCount() == 1
+				&& ImplementationObject->GetInterface(0) == InterfaceType,
+				*Evidence));
+			ASSERT_THAT(IsTrue(EmptyClassObject != nullptr
+				&& !EmptyClassObject->IsInterface()
+				&& EmptyClassObject->GetSize() == 0, *Evidence));
+			ASSERT_THAT(IsNotNull(
+				InterfaceType != nullptr
+					? InterfaceType->GetMethodByDecl("void Run()") : nullptr,
+				*Evidence));
+		};
+		AssertIdentity(SourceModule, TEXT("source"));
+
+		FMemoryBinaryStream Stream;
+		ASSERT_THAT(AreEqual(static_cast<int32>(asSUCCESS),
+			SourceModule->SaveByteCode(&Stream, false),
+			TEXT("interface identity source must save bytecode")));
+		ASSERT_THAT(IsTrue(Stream.GetBytes().Num() >= 2
+			&& Stream.GetBytes()[1] == 4,
+			TEXT("interface identity stream must advertise explicit-declaration-kind V4")));
+		ASSERT_THAT(AreEqual(static_cast<int32>(asSUCCESS),
+			ScriptEngine->DiscardModule("ExplicitInterfaceIdentitySource"),
+			TEXT("interface identity source must be discarded before restore")));
+
+		bool bWasDebugInfoStripped = true;
+		int LoadResult = asERROR;
+		asIScriptModule* const RestoredModule = LoadModuleFromStream(
+			ScriptEngine,
+			"ExplicitInterfaceIdentityRestored",
+			Stream,
+			bWasDebugInfoStripped,
+			LoadResult);
+		ASSERT_THAT(IsNotNull(RestoredModule,
+			TEXT("interface identity restore must create its module")));
+		ASSERT_THAT(AreEqual(static_cast<int32>(asSUCCESS), LoadResult,
+			TEXT("interface identity restore must accept the current stream")));
+		ASSERT_THAT(IsFalse(bWasDebugInfoStripped,
+			TEXT("interface identity restore must preserve debug metadata")));
+		if (RestoredModule != nullptr && LoadResult == asSUCCESS)
+		{
+			AssertIdentity(RestoredModule, TEXT("restored"));
+		}
+	}
+
 	TEST_METHOD(RoundTripPreservesFunctionDeclarations)
 	{
 		using namespace AngelscriptNativeTestSupport;

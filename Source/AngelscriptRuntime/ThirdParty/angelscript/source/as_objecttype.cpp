@@ -151,6 +151,7 @@ void asCObjectType::CopySystemType(asITypeInfo* SystemType)
 {
 	asCObjectType* Other = (asCObjectType*)SystemType;
 	shadowType = Other;
+	isInterfaceDeclaration = Other->isInterfaceDeclaration;
 
 	/*for (int i = 0, Count = Other->properties.GetLength(); i < Count; ++i)
 	{
@@ -283,10 +284,7 @@ asITypeInfo *asCObjectType::GetInterface(asUINT index) const
 // internal
 bool asCObjectType::IsInterface() const
 {
-	/*if( (flags & asOBJ_SCRIPT_OBJECT) && size == 0 )
-		return true;*/
-
-	return false;
+	return isInterfaceDeclaration;
 }
 
 // interface

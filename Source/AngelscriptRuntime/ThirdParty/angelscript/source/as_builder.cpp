@@ -3610,6 +3610,7 @@ int asCBuilder::RegisterInterface(asCScriptNode *node, asCScriptCode *file, asSN
 		return asOUT_OF_MEMORY;
 
 	st->flags = asOBJ_REF | asOBJ_SCRIPT_OBJECT;
+	st->isInterfaceDeclaration = true;
 
 	if( isShared )
 		st->flags |= asOBJ_SHARED;
@@ -4456,6 +4457,12 @@ void asCBuilder::DetermineTypeRelations()
 				str.Format(TXT_CANNOT_INHERIT_FROM_s_FINAL, objType->name.AddressOf());
 				WriteError(str, file, node);
 			}
+			else if (objType->IsInterface())
+			{
+				// Interface identity is explicit in this fork. Object size cannot
+				// distinguish an interface from a valid empty script class.
+				AddInterfaceToClass(decl, node, objType);
+			}
 			else
 			{
 				// The class inherits from another script class
@@ -4708,7 +4715,9 @@ void asCBuilder::CompileClass(sClassDeclaration* decl)
 	// Add properties from included mixin classes that don't conflict with existing properties
 	IncludePropertiesFromMixins(decl);
 
-	asASSERT( ot->interfaces.GetLength() == ot->interfaceVFTOffsets.GetLength() );
+	// Interface virtual-table chunks depend on the final class method slots and
+	// are therefore created later by LayoutClass(). Existing shared classes have
+	// already restored their offsets and are checked at the start of this pass.
 
 	decl->isResolving = false;
 	decl->hasResolved = true;
@@ -4759,6 +4768,19 @@ void asCBuilder::LayoutClass(sClassDeclaration* decl)
 	bool hasBaseClass = ot->derivedFrom != 0;
 	if (hasBaseClass)
 		EnsureClassLayouted(ot->derivedFrom);
+
+	// A derived class implements every interface implemented by its base class.
+	// Keep this relationship explicit so Runtime interface dispatch and module
+	// persistence do not need to walk or infer it from the class layout.
+	if (!decl->isExistingShared && ot->derivedFrom != nullptr)
+	{
+		for (asUINT n = 0; n < ot->derivedFrom->interfaces.GetLength(); ++n)
+		{
+			asCObjectType* intf = ot->derivedFrom->interfaces[n];
+			if (!ot->Implements(intf))
+				ot->interfaces.PushLast(intf);
+		}
+	}
 
 	// Layout all the properties now that we know the size of the derived class
 	if (ot->derivedFrom != nullptr)
@@ -4991,6 +5013,61 @@ void asCBuilder::LayoutClass(sClassDeclaration* decl)
 
 		CheckForConflictsDueToDefaultArgs(decl->script, decl->node, func, ot);
 	}
+
+	// Create one virtual-table chunk for each explicitly implemented interface.
+	// CompileClass() cannot do this because method vfTableIdx values are only
+	// final after the ordinary class/base slots above have been allocated.
+	if (!decl->isExistingShared)
+	{
+		asASSERT(ot->interfaceVFTOffsets.GetLength() == 0);
+
+		for (asUINT m = 0; m < ot->interfaces.GetLength(); ++m)
+		{
+			asCObjectType* intf = ot->interfaces[m];
+			ot->interfaceVFTOffsets.PushLast(
+				asUINT(ot->virtualFunctionTable.GetLength()));
+
+			for (asUINT j = 0; j < intf->methods.GetLength(); ++j)
+			{
+				asCScriptFunction* intfFunc = GetFunctionDescription(intf->methods[j]);
+
+				// Inherited methods are represented by the inherited interface's
+				// own chunk, which is also present in ot->interfaces.
+				if (intfFunc->objectType != intf)
+					continue;
+
+				asCScriptFunction* realFunc = nullptr;
+				asUINT methodIndex = 0;
+				if (DoesMethodExist(ot, intfFunc->id, &methodIndex))
+				{
+					asCScriptFunction* implementation =
+						GetFunctionDescription(ot->methods[methodIndex]);
+					if (implementation->vfTableIdx >= 0 &&
+						asUINT(implementation->vfTableIdx) <
+							ot->virtualFunctionTable.GetLength())
+					{
+						realFunc =
+							ot->virtualFunctionTable[implementation->vfTableIdx];
+					}
+				}
+
+				if (realFunc == nullptr)
+				{
+					asCString str;
+					str.Format(TXT_MISSING_IMPLEMENTATION_OF_s,
+						intfFunc->GetDeclaration(true, false, false, true));
+					WriteError(str, decl->script, decl->node);
+				}
+
+				// The common refcount pass below owns every table entry, including
+				// duplicate references introduced by interface chunks.
+				ot->virtualFunctionTable.PushLast(realFunc);
+			}
+		}
+	}
+
+	asASSERT(ot->interfaces.GetLength() ==
+		ot->interfaceVFTOffsets.GetLength());
 
 	// Refcount all the functions in our virtual function table
 	for( asUINT m = 0; m < ot->virtualFunctionTable.GetLength(); m++ )

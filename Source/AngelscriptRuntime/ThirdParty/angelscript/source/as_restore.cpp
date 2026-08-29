@@ -343,8 +343,11 @@ static bool IsExplicitTrait(const asCScriptFunction *func)
 // unused function-state bit: only semantic element type/action/count facts are
 // encoded, while the physical cursor/element layout is authenticated and
 // reconstructed from decoded bytecode.
+// Version four adds an explicit object declaration-kind byte. Interface
+// identity is independent of size because a valid empty script class can also
+// have size zero; version three therefore cannot be upgraded by inference.
 static const asBYTE AS_BYTECODE_STREAM_MAGIC = 0xE3;
-static const asBYTE AS_BYTECODE_STREAM_VERSION = 3;
+static const asBYTE AS_BYTECODE_STREAM_VERSION = 4;
 
 //[UE++]: The detached function-artifact envelope is intentionally independent
 // from the full module bytecode version. Version four added the complete root
@@ -2836,6 +2839,16 @@ void asCReader::ReadTypeDeclaration(asCTypeInfo *type, int phase, bool *isExtern
 		// Read the initial attributes
 		ReadString(&type->name);
 		ReadData(&type->flags, 8);
+		asBYTE declarationKind = 0;
+		ReadData(&declarationKind, 1);
+		asCObjectType *ot = CastToObjectType(type);
+		if (declarationKind > 1 || (declarationKind == 1 && ot == 0))
+		{
+			error = true;
+			return;
+		}
+		if (ot)
+			ot->isInterfaceDeclaration = declarationKind == 1;
 		type->size = SanityCheck(ReadEncodedUInt(), 1000000);
 		asCString ns;
 		ReadString(&ns);
@@ -2854,7 +2867,6 @@ void asCReader::ReadTypeDeclaration(asCTypeInfo *type, int phase, bool *isExtern
 		if( (type->flags & asOBJ_SCRIPT_OBJECT) && type->size != 0 )
 			type->size = sizeof(asCScriptObject);
 
-		asCObjectType *ot = CastToObjectType(type);
 		if (ot)
 		{
 			// Use the default script class behaviours
@@ -3224,7 +3236,11 @@ void asCReader::ReadTypeDeclaration(asCTypeInfo *type, int phase, bool *isExtern
 							func->AddRefInternal();
 						}
 
+						// The maintained object type has both the ordered method-id
+						// array and a name-indexed lookup table. Restore both views so
+						// interface/class declarations remain queryable after load.
 						ot->methods.PushLast(func->id);
+						ot->methodTable.Add(func);
 						func->AddRefInternal();
 					}
 				}
@@ -7031,6 +7047,12 @@ void asCWriter::WriteTypeDeclaration(asCTypeInfo *type, int phase)
 		WriteString(&type->name);
 		// flags
 		WriteData(&type->flags, 8);
+		// Explicit declaration identity is independent from layout. In
+		// particular, both interfaces and valid empty classes may have size 0.
+		const asCObjectType* const objectType = CastToObjectType(type);
+		const asBYTE declarationKind = objectType != 0 && objectType->IsInterface()
+			? 1 : 0;
+		WriteData(&declarationKind, 1);
 
 		// size
 		// TODO: Do we really need to store this? The reader should be able to
@@ -7038,12 +7060,12 @@ void asCWriter::WriteTypeDeclaration(asCTypeInfo *type, int phase)
 		if( (type->flags & asOBJ_SCRIPT_OBJECT) && type->size > 0 )
 		{
 			// The size for script objects may vary from platform to platform so
-			// only store 1 to diferentiate from interfaces that have size 0.
+			// only store 1 to distinguish non-zero layouts from size-zero layouts.
 			WriteEncodedInt64(1);
 		}
 		else
 		{
-			// Enums, typedefs, and interfaces have fixed sizes independently
+			// Enums, typedefs, interfaces, and empty classes have fixed sizes independently
 			// of platform so it is safe to serialize the size directly.
 			WriteEncodedInt64(type->size);
 		}

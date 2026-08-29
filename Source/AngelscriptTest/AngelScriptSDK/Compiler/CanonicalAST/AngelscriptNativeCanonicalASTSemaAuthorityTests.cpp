@@ -26843,6 +26843,100 @@ public:
 			TEXT("a new Sema generation must project and attach the registered host base from copied facts")));
 	}
 
+	TEST_METHOD(RegisteredInterfaceIdentityIsExplicitNotZeroSizeHeuristic)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterInterface(
+			"IRegisteredInterfaceIdentity") >= 0,
+			TEXT("registered-interface identity fixture must register its exact interface")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"CZeroSizeRegisteredClassIdentity", 0,
+			asOBJ_REF | asOBJ_NOCOUNT) >= 0,
+			TEXT("registered-interface identity fixture must register its zero-size class control")));
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asASTDeclId Tu = Sema.ActOnTranslationUnit(
+			"RegisteredInterfaceIdentity");
+
+		auto AttachRegisteredBase = [&Sema, Tu](
+			const char* DerivedName,
+			const char* BaseName,
+			const char* SectionName)
+		{
+			asCScriptCode Code;
+			const std::string Source = BaseName;
+			Code.SetCode(SectionName, Source.c_str(), true);
+			const asASTDeclId Derived = Sema.ActOnClassDecl(
+				Tu, DerivedName, asCSourceRange());
+			asCArray<asSRecordBaseSpecifierAction> Actions;
+			asSRecordBaseSpecifierAction Action;
+			Action.qualifiedName = BaseName;
+			Action.beginOffset = 0;
+			Action.endOffset = static_cast<asUINT>(Source.size());
+			Actions.PushLast(Action);
+			Sema.ActOnRecordBaseSpecifiersAction(Derived, Actions, &Code);
+			return Derived;
+		};
+
+		const asASTDeclId InterfaceDerived = AttachRegisteredBase(
+			"CUsesRegisteredInterfaceIdentity",
+			"IRegisteredInterfaceIdentity",
+			"RegisteredInterfaceIdentity.as");
+		const asASTDeclId ZeroSizeClassDerived = AttachRegisteredBase(
+			"CUsesZeroSizeRegisteredClassIdentity",
+			"CZeroSizeRegisteredClassIdentity",
+			"ZeroSizeRegisteredClassIdentity.as");
+
+		const asCDecl* const InterfaceDerivedDecl =
+			Context.GetDecl(InterfaceDerived);
+		const asCDecl* const ZeroSizeClassDerivedDecl =
+			Context.GetDecl(ZeroSizeClassDerived);
+		const asCDecl* const InterfaceDecl = InterfaceDerivedDecl != nullptr
+			&& InterfaceDerivedDecl->bases.GetLength() == 1
+			? Context.GetDecl(InterfaceDerivedDecl->bases[0]) : nullptr;
+		const asCDecl* const ZeroSizeClassDecl = ZeroSizeClassDerivedDecl != nullptr
+			&& ZeroSizeClassDerivedDecl->bases.GetLength() == 1
+			? Context.GetDecl(ZeroSizeClassDerivedDecl->bases[0]) : nullptr;
+		auto HasDependency = [](const asCDecl* Decl, const char* StableKey)
+		{
+			for (asUINT Index = 0;
+				Decl != nullptr && Index < Decl->dependencies.GetLength(); ++Index)
+			{
+				if (Decl->dependencies[Index].Equals(StableKey))
+				{
+					return true;
+				}
+			}
+			return false;
+		};
+		const FString Evidence = FString::Printf(
+			TEXT("registered interface identity must be explicit and independent of zero-size layout (interface kind=%d, zero-size kind=%d). diagnostics:\n%s"),
+			InterfaceDecl != nullptr ? static_cast<int32>(InterfaceDecl->kind) : -1,
+			ZeroSizeClassDecl != nullptr ? static_cast<int32>(ZeroSizeClassDecl->kind) : -1,
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema));
+		ASSERT_THAT(IsTrue(InterfaceDerivedDecl != nullptr
+			&& InterfaceDecl != nullptr
+			&& InterfaceDecl->kind == asAST_DECL_INTERFACE
+			&& InterfaceDecl->stableKey.Equals("IRegisteredInterfaceIdentity")
+			&& InterfaceDecl->origin.Equals("canonical-native-type-view")
+			&& HasDependency(InterfaceDerivedDecl,
+				"IRegisteredInterfaceIdentity"), *Evidence));
+		ASSERT_THAT(IsTrue(ZeroSizeClassDerivedDecl != nullptr
+			&& ZeroSizeClassDecl != nullptr
+			&& ZeroSizeClassDecl->kind == asAST_DECL_CLASS
+			&& ZeroSizeClassDecl->stableKey.Equals(
+				"CZeroSizeRegisteredClassIdentity")
+			&& ZeroSizeClassDecl->origin.Equals("canonical-native-type-view")
+			&& HasDependency(ZeroSizeClassDerivedDecl,
+				"CZeroSizeRegisteredClassIdentity"), *Evidence));
+		ASSERT_THAT(AreEqual(0, Context.Seal(), *Evidence));
+	}
+
 	TEST_METHOD(SemaRegisteredEnumLiteralSnapshotIsTranslationUnitLocal)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

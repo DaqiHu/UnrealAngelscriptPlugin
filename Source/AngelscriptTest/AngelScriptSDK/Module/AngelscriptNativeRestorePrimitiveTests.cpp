@@ -243,8 +243,8 @@ public:
 		{
 			return;
 		}
-		ASSERT_THAT(AreEqual(3, static_cast<int32>(CurrentBytes[1]),
-			TEXT("Current bytecode writer should publish stream version three with constructor cleanup identities")));
+		ASSERT_THAT(AreEqual(4, static_cast<int32>(CurrentBytes[1]),
+			TEXT("Current bytecode writer should publish stream version four with constructor cleanup and explicit object declaration identities")));
 
 		TArray<asBYTE> LegacyBytes = CurrentBytes;
 		LegacyBytes[1] = 2;

@@ -1779,6 +1779,7 @@ int asCScriptEngine::RegisterInterface(const char *name)
 		return ConfigError(asOUT_OF_MEMORY, "RegisterInterface", name, 0);
 
 	st->flags = asOBJ_REF | asOBJ_SCRIPT_OBJECT | asOBJ_SHARED;
+	st->isInterfaceDeclaration = true;
 	st->size = 0; // Cannot be instantiated
 	st->name = name;
 	st->nameSpace = defaultNamespace;
