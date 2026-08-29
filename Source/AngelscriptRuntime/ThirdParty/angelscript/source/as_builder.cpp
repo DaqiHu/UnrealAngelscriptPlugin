@@ -423,6 +423,512 @@ static asSParseActionIdentity MakeCanonicalParseActionIdentity(
 	return identity;
 }
 
+static bool UsesCanonicalAccessSpecifierProjection(const asCBuilder& builder)
+{
+	return builder.engine != 0
+		&& builder.engine->GetCompilerPipeline()
+			== asCOMPILER_PIPELINE_CANONICAL;
+}
+
+static int FailCanonicalAccessSpecifierProjection(
+	asCBuilder& builder,
+	const char* detail,
+	asCScriptCode* script,
+	asCScriptNode* node,
+	int result = asINVALID_DECLARATION)
+{
+	asCString message("Canonical access-specifier projection failed");
+	if( detail != 0 && detail[0] != 0 )
+	{
+		message += ": ";
+		message += detail;
+	}
+	builder.WriteError(message, script, node);
+	return result;
+}
+
+static asASTDeclId FindCanonicalObjectDeclaration(
+	const asCBuilder& builder,
+	const asCObjectType* objectType)
+{
+	if( objectType == 0 || builder.canonicalSema == 0
+		|| builder.canonicalAST == 0 )
+	{
+		return asASTDeclId();
+	}
+	asASTDeclId found;
+	for( asUINT list = 0; list < 2; ++list )
+	{
+		const asCArray<sClassDeclaration*>& declarations = list == 0
+			? builder.classDeclarations : builder.interfaceDeclarations;
+		for( asUINT i = 0; i < declarations.GetLength(); ++i )
+		{
+			const sClassDeclaration* const declaration = declarations[i];
+			if( declaration == 0 || declaration->typeInfo != objectType
+				|| declaration->node == 0 )
+			{
+				continue;
+			}
+			const asASTDeclId candidate =
+				builder.canonicalSema->FindParsedDeclaration(
+					MakeCanonicalParseActionIdentity(
+						declaration->node, declaration->script));
+			const asCDecl* const record =
+				builder.canonicalAST->GetDecl(candidate);
+			if( !candidate.IsValid() || record == 0 || record->id != candidate
+				|| (record->kind != asAST_DECL_CLASS
+				&& record->kind != asAST_DECL_INTERFACE) )
+			{
+				return asASTDeclId();
+			}
+			if( found.IsValid() && found != candidate )
+			{
+				return asASTDeclId();
+			}
+			found = candidate;
+		}
+	}
+	return found;
+}
+
+static bool RuntimeAccessSpecifierEquals(
+	const asSAccessSpecifier* left,
+	const asSAccessSpecifier* right)
+{
+	if( left == 0 || right == 0 || left->name != right->name
+		|| left->bIsPrivate != right->bIsPrivate
+		|| left->bIsProtected != right->bIsProtected
+		|| left->bAnyReadOnly != right->bAnyReadOnly
+		|| left->bAnyEditDefaults != right->bAnyEditDefaults
+		|| left->permissions.GetLength() != right->permissions.GetLength() )
+	{
+		return false;
+	}
+	for( asUINT i = 0; i < left->permissions.GetLength(); ++i )
+	{
+		const asSAccessPermission& l = left->permissions[i];
+		const asSAccessPermission& r = right->permissions[i];
+		if( l.accessName != r.accessName
+			|| l.bInherited != r.bInherited
+			|| l.bReadOnly != r.bReadOnly
+			|| l.bEditDefaults != r.bEditDefaults )
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+static int ProjectCanonicalAccessSpecifiersForClass(
+	asCBuilder& builder,
+	sClassDeclaration* declaration)
+{
+	if( declaration == 0 || declaration->node == 0
+		|| declaration->script == 0 || declaration->typeInfo == 0
+		|| builder.canonicalSema == 0 || builder.canonicalAST == 0 )
+	{
+		return FailCanonicalAccessSpecifierProjection(
+			builder, "missing class projection authority",
+			declaration ? declaration->script : 0,
+			declaration ? declaration->node : 0);
+	}
+	asCObjectType* const objectType = CastToObjectType(declaration->typeInfo);
+	const asASTDeclId ownerId =
+		FindCanonicalObjectDeclaration(builder, objectType);
+	const asCDecl* const owner = builder.canonicalAST->GetDecl(ownerId);
+	if( objectType == 0 || owner == 0 || owner->kind != asAST_DECL_CLASS )
+	{
+		return FailCanonicalAccessSpecifierProjection(
+			builder, "class identity is missing or has the wrong kind",
+			declaration->script, declaration->node);
+	}
+
+	asUINT canonicalSpecifierCount = 0;
+	for( asUINT i = 0; i < owner->children.GetLength(); ++i )
+	{
+		const asASTDeclId childId = owner->children[i];
+		const asCDecl* const child =
+			builder.canonicalAST->GetDecl(childId);
+		if( child == 0 )
+		{
+			return FailCanonicalAccessSpecifierProjection(
+				builder, "Canonical owner contains a dangling declaration child",
+				declaration->script, declaration->node);
+		}
+		if( child->kind == asAST_DECL_ACCESS_SPECIFIER )
+			++canonicalSpecifierCount;
+	}
+	if( canonicalSpecifierCount == 0 )
+	{
+		if( objectType->accessSpecifiers.GetLength() != 0 )
+		{
+			return FailCanonicalAccessSpecifierProjection(
+				builder,
+				"Runtime owner contains access metadata absent from the Canonical record",
+				declaration->script, declaration->node);
+		}
+		return asSUCCESS;
+	}
+
+	asCArray<asASTDeclId> canonicalSpecifiers;
+	if( !canonicalSpecifiers.SetLength(canonicalSpecifierCount) )
+	{
+		return FailCanonicalAccessSpecifierProjection(
+			builder, "out of memory reserving declaration identities",
+			declaration->script, declaration->node, asOUT_OF_MEMORY);
+	}
+	asUINT identityIndex = 0;
+	for( asUINT childIndex = 0;
+		childIndex < owner->children.GetLength(); ++childIndex )
+	{
+		const asASTDeclId specifierId = owner->children[childIndex];
+		const asCDecl* const specifier =
+			builder.canonicalAST->GetDecl(specifierId);
+		if( specifier == 0 )
+		{
+			return FailCanonicalAccessSpecifierProjection(
+				builder, "Canonical owner contains a dangling declaration child",
+				declaration->script, declaration->node);
+		}
+		if( specifier->kind != asAST_DECL_ACCESS_SPECIFIER )
+			continue;
+		if( !specifierId.IsValid() || specifier->id != specifierId
+			|| specifier->parent != ownerId )
+		{
+			return FailCanonicalAccessSpecifierProjection(
+				builder,
+				"Canonical access declaration is foreign or has an invalid identity",
+				declaration->script, declaration->node);
+		}
+		for( asUINT earlier = 0; earlier < identityIndex; ++earlier )
+		{
+			if( canonicalSpecifiers[earlier] == specifierId )
+			{
+				return FailCanonicalAccessSpecifierProjection(
+					builder, "duplicate access declaration identity",
+					declaration->script, declaration->node);
+			}
+			const asCDecl* const earlierSpecifier =
+				builder.canonicalAST->GetDecl(canonicalSpecifiers[earlier]);
+			if( earlierSpecifier != 0
+				&& earlierSpecifier->name == specifier->name )
+			{
+				return FailCanonicalAccessSpecifierProjection(
+					builder, "duplicate access declaration name",
+					declaration->script, declaration->node);
+			}
+		}
+		canonicalSpecifiers[identityIndex++] = specifierId;
+	}
+	if( identityIndex != canonicalSpecifierCount )
+	{
+		return FailCanonicalAccessSpecifierProjection(
+			builder, "Canonical access declaration inventory changed during projection",
+			declaration->script, declaration->node);
+	}
+
+	asCArray<asSAccessSpecifier*> staged;
+	if( !staged.SetLength(canonicalSpecifierCount) )
+	{
+		return FailCanonicalAccessSpecifierProjection(
+			builder, "out of memory staging Runtime access metadata",
+			declaration->script, declaration->node, asOUT_OF_MEMORY);
+	}
+	for( asUINT i = 0; i < staged.GetLength(); ++i )
+		staged[i] = 0;
+	auto deleteStaged = [&staged]()
+	{
+		for( asUINT i = 0; i < staged.GetLength(); ++i )
+		{
+			if( staged[i] != 0 )
+			{
+				asDELETE(staged[i], asSAccessSpecifier);
+				staged[i] = 0;
+			}
+		}
+	};
+
+	const asDWORD baseMask = asAST_TRAIT_PRIVATE | asAST_TRAIT_PROTECTED;
+	const asDWORD permissionMask = asAST_TRAIT_ACCESS_WILDCARD
+		| asAST_TRAIT_ACCESS_READONLY
+		| asAST_TRAIT_ACCESS_EDITDEFAULTS
+		| asAST_TRAIT_ACCESS_INHERITED;
+	for( asUINT i = 0; i < canonicalSpecifiers.GetLength(); ++i )
+	{
+		const asCDecl* const specifier =
+			builder.canonicalAST->GetDecl(canonicalSpecifiers[i]);
+		const asDWORD baseTraits = specifier ? specifier->traits & baseMask : 0;
+		if( specifier == 0 || specifier->name.GetLength() == 0
+			|| (specifier->traits & ~baseMask) != 0
+			|| (baseTraits != asAST_TRAIT_PRIVATE
+				&& baseTraits != asAST_TRAIT_PROTECTED) )
+		{
+			deleteStaged();
+			return FailCanonicalAccessSpecifierProjection(
+				builder, "invalid Canonical access-specifier shape",
+				declaration->script, declaration->node);
+		}
+		asSAccessSpecifier* const runtime = asNEW(asSAccessSpecifier);
+		if( runtime == 0 )
+		{
+			deleteStaged();
+			return FailCanonicalAccessSpecifierProjection(
+				builder, "out of memory allocating Runtime access metadata",
+				declaration->script, declaration->node, asOUT_OF_MEMORY);
+		}
+		staged[i] = runtime;
+		runtime->name = specifier->name;
+		if( runtime->name != specifier->name )
+		{
+			deleteStaged();
+			return FailCanonicalAccessSpecifierProjection(
+				builder, "out of memory copying the access-specifier name",
+				declaration->script, declaration->node, asOUT_OF_MEMORY);
+		}
+		runtime->bIsPrivate = baseTraits == asAST_TRAIT_PRIVATE;
+		runtime->bIsProtected = baseTraits == asAST_TRAIT_PROTECTED;
+
+		asUINT namedPermissionCount = 0;
+		for( asUINT childIndex = 0;
+			childIndex < specifier->children.GetLength(); ++childIndex )
+		{
+			const asASTDeclId permissionId = specifier->children[childIndex];
+			const asCDecl* const permission = builder.canonicalAST->GetDecl(
+				permissionId);
+			const bool wildcard = permission != 0
+				&& permission->name.Equals("*");
+			if( !permissionId.IsValid() || permission == 0
+				|| permission->id != permissionId
+				|| permission->kind != asAST_DECL_ACCESS_PERMISSION
+				|| permission->parent != specifier->id
+				|| permission->name.GetLength() == 0
+				|| (permission->traits & ~permissionMask) != 0
+				|| (((permission->traits & asAST_TRAIT_ACCESS_WILDCARD) != 0)
+					!= wildcard)
+				|| (wildcard && (permission->traits
+					& asAST_TRAIT_ACCESS_INHERITED) != 0) )
+			{
+				deleteStaged();
+				return FailCanonicalAccessSpecifierProjection(
+					builder, "invalid Canonical access-permission child",
+					declaration->script, declaration->node);
+			}
+			for( asUINT earlier = 0; earlier < childIndex; ++earlier )
+			{
+				if( specifier->children[earlier] == permissionId )
+				{
+					deleteStaged();
+					return FailCanonicalAccessSpecifierProjection(
+						builder, "duplicate access-permission identity",
+						declaration->script, declaration->node);
+				}
+			}
+			if( wildcard )
+			{
+				runtime->bAnyReadOnly |= (permission->traits
+					& asAST_TRAIT_ACCESS_READONLY) != 0;
+				runtime->bAnyEditDefaults |= (permission->traits
+					& asAST_TRAIT_ACCESS_EDITDEFAULTS) != 0;
+			}
+			else
+			{
+				++namedPermissionCount;
+			}
+		}
+		if( !runtime->permissions.SetLength(namedPermissionCount) )
+		{
+			deleteStaged();
+			return FailCanonicalAccessSpecifierProjection(
+				builder, "out of memory staging access permissions",
+				declaration->script, declaration->node, asOUT_OF_MEMORY);
+		}
+		asUINT namedIndex = 0;
+		for( asUINT childIndex = 0;
+			childIndex < specifier->children.GetLength(); ++childIndex )
+		{
+			const asCDecl* const permission = builder.canonicalAST->GetDecl(
+				specifier->children[childIndex]);
+			if( permission->name.Equals("*") )
+				continue;
+			asSAccessPermission& runtimePermission =
+				runtime->permissions[namedIndex++];
+			runtimePermission.accessName = permission->name;
+			if( runtimePermission.accessName != permission->name )
+			{
+				deleteStaged();
+				return FailCanonicalAccessSpecifierProjection(
+					builder, "out of memory copying an access-permission name",
+					declaration->script, declaration->node, asOUT_OF_MEMORY);
+			}
+			runtimePermission.bInherited = (permission->traits
+				& asAST_TRAIT_ACCESS_INHERITED) != 0;
+			runtimePermission.bReadOnly = (permission->traits
+				& asAST_TRAIT_ACCESS_READONLY) != 0;
+			runtimePermission.bEditDefaults = (permission->traits
+				& asAST_TRAIT_ACCESS_EDITDEFAULTS) != 0;
+		}
+	}
+
+	const asUINT previousBindingCount =
+		builder.canonicalAccessSpecifierBindings.GetLength();
+	for( asUINT i = 0; i < previousBindingCount; ++i )
+	{
+		if( builder.canonicalAccessSpecifierBindings[i].objectType == objectType )
+		{
+			deleteStaged();
+			return FailCanonicalAccessSpecifierProjection(
+				builder, "the Runtime owner was already projected in this build",
+				declaration->script, declaration->node);
+		}
+	}
+	if( !builder.canonicalAccessSpecifierBindings.SetLength(
+		previousBindingCount + canonicalSpecifierCount) )
+	{
+		deleteStaged();
+		return FailCanonicalAccessSpecifierProjection(
+			builder, "out of memory reserving generation-local bindings",
+			declaration->script, declaration->node, asOUT_OF_MEMORY);
+	}
+
+	if( declaration->isExistingShared )
+	{
+		if( objectType->accessSpecifiers.GetLength() != staged.GetLength() )
+		{
+			builder.canonicalAccessSpecifierBindings.SetLength(
+				previousBindingCount);
+			deleteStaged();
+			return FailCanonicalAccessSpecifierProjection(
+				builder, "shared Runtime access metadata count mismatch",
+				declaration->script, declaration->node);
+		}
+		for( asUINT i = 0; i < staged.GetLength(); ++i )
+		{
+			if( !RuntimeAccessSpecifierEquals(
+				objectType->accessSpecifiers[i], staged[i]) )
+			{
+				builder.canonicalAccessSpecifierBindings.SetLength(
+					previousBindingCount);
+				deleteStaged();
+				return FailCanonicalAccessSpecifierProjection(
+					builder, "shared Runtime access metadata mismatch",
+					declaration->script, declaration->node);
+			}
+			sCanonicalAccessSpecifierBinding& binding =
+				builder.canonicalAccessSpecifierBindings[
+					previousBindingCount + i];
+			binding.specifierDeclaration = canonicalSpecifiers[i].value;
+			binding.ownerDeclaration = ownerId.value;
+			binding.objectType = objectType;
+			binding.runtimeSpecifier = objectType->accessSpecifiers[i];
+		}
+		deleteStaged();
+		return asSUCCESS;
+	}
+
+	if( objectType->accessSpecifiers.GetLength() != 0 )
+	{
+		builder.canonicalAccessSpecifierBindings.SetLength(previousBindingCount);
+		deleteStaged();
+		return FailCanonicalAccessSpecifierProjection(
+			builder, "new Runtime owner already contains access metadata",
+			declaration->script, declaration->node);
+	}
+	objectType->accessSpecifiers.SwapWith(staged);
+	for( asUINT i = 0; i < canonicalSpecifierCount; ++i )
+	{
+		sCanonicalAccessSpecifierBinding& binding =
+			builder.canonicalAccessSpecifierBindings[previousBindingCount + i];
+		binding.specifierDeclaration = canonicalSpecifiers[i].value;
+		binding.ownerDeclaration = ownerId.value;
+		binding.objectType = objectType;
+		binding.runtimeSpecifier = objectType->accessSpecifiers[i];
+	}
+	return asSUCCESS;
+}
+
+static int ResolveCanonicalMemberAccessSpecifier(
+	asCBuilder& builder,
+	const asCScriptNode* identityNode,
+	asCScriptCode* script,
+	asCObjectType* objectType,
+	asDWORD expectedKind,
+	asSAccessSpecifier*& outSpecifier)
+{
+	outSpecifier = 0;
+	if( identityNode == 0 || script == 0 || objectType == 0
+		|| builder.canonicalSema == 0 || builder.canonicalAST == 0 )
+	{
+		return FailCanonicalAccessSpecifierProjection(
+			builder, "missing member projection authority",
+			script, const_cast<asCScriptNode*>(identityNode));
+	}
+	const asASTDeclId ownerId =
+		FindCanonicalObjectDeclaration(builder, objectType);
+	const asASTDeclId memberId = builder.canonicalSema->FindParsedDeclaration(
+		MakeCanonicalParseActionIdentity(identityNode, script));
+	const asCDecl* const member = builder.canonicalAST->GetDecl(memberId);
+	if( !ownerId.IsValid() || !memberId.IsValid() || member == 0
+		|| member->id != memberId || member->kind != expectedKind
+		|| member->parent != ownerId )
+	{
+		return FailCanonicalAccessSpecifierProjection(
+			builder, "member identity is missing, foreign, or wrong-kind",
+			script, const_cast<asCScriptNode*>(identityNode));
+	}
+	if( !member->accessSpecifier.IsValid() )
+		return asSUCCESS;
+	const asCDecl* const specifier =
+		builder.canonicalAST->GetDecl(member->accessSpecifier);
+	if( specifier == 0 || specifier->kind != asAST_DECL_ACCESS_SPECIFIER
+		|| specifier->parent != ownerId )
+	{
+		return FailCanonicalAccessSpecifierProjection(
+			builder, "member access edge is dangling, foreign, or wrong-kind",
+			script, const_cast<asCScriptNode*>(identityNode));
+	}
+	asUINT matches = 0;
+	for( asUINT i = 0;
+		i < builder.canonicalAccessSpecifierBindings.GetLength(); ++i )
+	{
+		const sCanonicalAccessSpecifierBinding& binding =
+			builder.canonicalAccessSpecifierBindings[i];
+		if( binding.specifierDeclaration == member->accessSpecifier.value
+			&& binding.ownerDeclaration == ownerId.value
+			&& binding.objectType == objectType
+			&& binding.runtimeSpecifier != 0 )
+		{
+			outSpecifier = binding.runtimeSpecifier;
+			++matches;
+		}
+	}
+	if( matches != 1 )
+	{
+		outSpecifier = 0;
+		return FailCanonicalAccessSpecifierProjection(
+			builder, matches == 0
+				? "member access edge has no current-generation Runtime binding"
+				: "member access edge has ambiguous Runtime bindings",
+			script, const_cast<asCScriptNode*>(identityNode));
+	}
+	bool belongsToOwner = false;
+	for( asUINT i = 0; i < objectType->accessSpecifiers.GetLength(); ++i )
+	{
+		if( objectType->accessSpecifiers[i] == outSpecifier )
+		{
+			belongsToOwner = true;
+			break;
+		}
+	}
+	if( !belongsToOwner )
+	{
+		outSpecifier = 0;
+		return FailCanonicalAccessSpecifierProjection(
+			builder, "member access binding belongs to another Runtime generation",
+			script, const_cast<asCScriptNode*>(identityNode));
+	}
+	return asSUCCESS;
+}
+
 void asCBuilder::BindCanonicalFunctionIdentity(
 	asCScriptFunction *function,
 	const asCScriptNode *node,
@@ -501,7 +1007,35 @@ asCBuilder::asCBuilder(asCScriptEngine *_engine, asCModule *_module)
 	silent = false;
 	canonicalAST = 0;
 	canonicalSema = 0;
+#if !defined(AS_NO_COMPILER) && WITH_ANGELSCRIPT_UNITTESTS
+	testFailureBeforeCanonicalAccessPermissionAppend = asUINT(-1);
+	testCanonicalAccessPermissionAppendOrdinal = 0;
+	testCanonicalAccessPermissionAppendFailureInjected = false;
+#endif
 }
+
+#if !defined(AS_NO_COMPILER) && WITH_ANGELSCRIPT_UNITTESTS
+void asCBuilder::SetTestFailureBeforeCanonicalAccessPermissionAppend(
+	asUINT permissionOrdinal)
+{
+	testFailureBeforeCanonicalAccessPermissionAppend = permissionOrdinal;
+	testCanonicalAccessPermissionAppendOrdinal = 0;
+	testCanonicalAccessPermissionAppendFailureInjected = false;
+}
+
+bool asCBuilder::ShouldInjectTestCanonicalAccessPermissionAppendFailure()
+{
+	if( testFailureBeforeCanonicalAccessPermissionAppend == asUINT(-1) )
+		return false;
+	const asUINT permissionOrdinal =
+		testCanonicalAccessPermissionAppendOrdinal++;
+	if( permissionOrdinal != testFailureBeforeCanonicalAccessPermissionAppend )
+		return false;
+	testFailureBeforeCanonicalAccessPermissionAppend = asUINT(-1);
+	testCanonicalAccessPermissionAppendFailureInjected = true;
+	return true;
+}
+#endif
 
 void asCBuilder::SetBuildArtifactCompileResultCallback(
 	asBUILDARTIFACTCOMPILERESULTCALLBACK_t callback,
@@ -1053,6 +1587,9 @@ void asCBuilder::Reset()
 	scriptsParsed = false;
 	numErrors = 0;
 	numWarnings = 0;
+#ifndef AS_NO_COMPILER
+	canonicalAccessSpecifierBindings.SetLength(0);
+#endif
 	engine->preMessage.isSet = false;
 }
 
@@ -1326,6 +1863,13 @@ int asCBuilder::BuildGenerateTypes()
 int asCBuilder::BuildGenerateFunctions()
 {
 	ParseScripts();
+	if( numErrors > 0 && UsesCanonicalAccessSpecifierProjection(*this) )
+	{
+		// CANONICAL Stage 2 publishes from authenticated semantic relations.
+		// Once declaration registration fails, compiling class layouts would
+		// expose member shells whose prerequisite projection was rejected.
+		return asERROR;
+	}
 
 	// Compile the types first
 	CompileInterfaces();
@@ -1846,6 +2390,15 @@ void asCBuilder::ParseScripts()
 		for( n = 0; n < classDeclarations.GetLength(); n++ )
 		{
 			sClassDeclaration *decl = classDeclarations[n];
+			const bool canonicalAccessProjection =
+				UsesCanonicalAccessSpecifierProjection(*this);
+			if( canonicalAccessProjection
+				&& ProjectCanonicalAccessSpecifiersForClass(*this, decl) < 0 )
+			{
+				// The class-level projection is transactional. Do not publish
+				// member borrowers or generated behaviours after it failed.
+				continue;
+			}
 
 			asCScriptNode *node = decl->node->firstChild->next;
 
@@ -1869,7 +2422,13 @@ void asCBuilder::ParseScripts()
 				else if( node->nodeType == snAccessDeclaration )
 				{
 					node->DisconnectParent();
-					RegisterAccessSpecifier(node, decl->script, CastToObjectType(decl->typeInfo));
+					if( !canonicalAccessProjection )
+					{
+						// Explicit LEGACY/reference route. CANONICAL installed the
+						// same Runtime DTO contract from exact declarations above.
+						RegisterAccessSpecifier(node, decl->script,
+							CastToObjectType(decl->typeInfo));
+					}
 				}
 				else if( node->nodeType == snClassDefaultStatement )
 				{
@@ -4646,6 +5205,8 @@ void asCBuilder::CompileClass(sClassDeclaration* decl)
 	while( node && node->nodeType == snDeclaration )
 	{
 		asCScriptNode *nd = node->firstChild;
+		const bool canonicalAccessProjection =
+			UsesCanonicalAccessSpecifierProjection(*this);
 
 		// Is the property declared as private or protected?
 		asSAccessSpecifier* accessSpecifier = nullptr;
@@ -4662,18 +5223,27 @@ void asCBuilder::CompileClass(sClassDeclaration* decl)
 		}
 		else if( nd && nd->tokenType == ttAccess )
 		{
-			asCString accessName;
-			if (auto* specNameNode = nd->firstChild)
+			if( !canonicalAccessProjection )
 			{
-				accessName.Assign(&decl->script->code[specNameNode->tokenPos], specNameNode->tokenLength);
-				accessSpecifier = ot->GetAccessSpecifier(accessName.AddressOf());
-			}
+				// Explicit LEGACY/reference route: preserve the original name
+				// decoder and diagnostics without exposing it to CANONICAL.
+				asCString accessName;
+				if (auto* specNameNode = nd->firstChild)
+				{
+					accessName.Assign(
+						&decl->script->code[specNameNode->tokenPos],
+						specNameNode->tokenLength);
+					accessSpecifier =
+						ot->GetAccessSpecifier(accessName.AddressOf());
+				}
 
-			if (accessSpecifier == nullptr)
-			{
-				asCString msg;
-				msg.Format("Unknown access specifier '%s'", accessName.AddressOf());
-				WriteError(msg, decl->script, nd);
+				if (accessSpecifier == nullptr)
+				{
+					asCString msg;
+					msg.Format("Unknown access specifier '%s'",
+						accessName.AddressOf());
+					WriteError(msg, decl->script, nd);
+				}
 			}
 
 			nd = nd->next;
@@ -4705,10 +5275,31 @@ void asCBuilder::CompileClass(sClassDeclaration* decl)
 				}
 			}
 
+			asSAccessSpecifier* exactAccessSpecifier = 0;
+			if( canonicalAccessProjection
+				&& ResolveCanonicalMemberAccessSpecifier(
+					*this, nd, file, ot, asAST_DECL_VAR,
+					exactAccessSpecifier) < 0 )
+			{
+				// A Canonical field relation is part of the publication
+				// authority. Resolve it before AddPropertyToClass() so a
+				// rejected relation cannot leave a Runtime property shell.
+				break;
+			}
+
 			//CheckNameConflictMember(ot, name.AddressOf(), nd, file, true);
 			auto* Property = AddPropertyToClass(decl, name, dt, isPrivate, isProtected, file, nd);
 			if (Property != nullptr)
-				Property->accessSpecifier = accessSpecifier;
+			{
+				if( canonicalAccessProjection )
+				{
+					Property->accessSpecifier = exactAccessSpecifier;
+				}
+				else
+				{
+					Property->accessSpecifier = accessSpecifier;
+				}
+			}
 
 #if WITH_EDITOR
 			if (IsNodeInEditorOnlyCode(file, nd))
@@ -6282,9 +6873,34 @@ int asCBuilder::RegisterScriptFunctionFromNode(asCScriptNode *node, asCScriptCod
 	}
 
 	asCString accessSpecifier;
-	GetParsedFunctionDetails(node, file, objType, name, returnType, parameterNames, parameterTypes, inOutFlags, defaultArgs, funcTraits, ns, &accessSpecifier);
+	const bool canonicalAccessProjection = objType != 0 && !isMixin
+		&& UsesCanonicalAccessSpecifierProjection(*this);
+	GetParsedFunctionDetails(node, file, objType, name, returnType,
+		parameterNames, parameterTypes, inOutFlags, defaultArgs, funcTraits, ns,
+		canonicalAccessProjection ? 0 : &accessSpecifier);
 
-	return RegisterScriptFunction(node, file, objType, isInterface, isGlobalFunction, ns, isExistingShared, isMixin, name, returnType, parameterNames, parameterTypes, inOutFlags, defaultArgs, funcTraits, &accessSpecifier);
+	asSAccessSpecifier* exactAccessSpecifier = 0;
+	const bool ordinaryCanonicalMethod = canonicalAccessProjection
+		&& !funcTraits.GetTrait(asTRAIT_CONSTRUCTOR)
+		&& !funcTraits.GetTrait(asTRAIT_DESTRUCTOR);
+	if( ordinaryCanonicalMethod
+		&& ResolveCanonicalMemberAccessSpecifier(
+			*this, node, file, objType, asAST_DECL_METHOD,
+			exactAccessSpecifier) < 0 )
+	{
+		for( asUINT i = 0; i < defaultArgs.GetLength(); ++i )
+		{
+			if( defaultArgs[i] != 0 )
+				asDELETE(defaultArgs[i], asCString);
+		}
+		return asINVALID_DECLARATION;
+	}
+
+	return RegisterScriptFunction(node, file, objType, isInterface,
+		isGlobalFunction, ns, isExistingShared, isMixin, name, returnType,
+		parameterNames, parameterTypes, inOutFlags, defaultArgs, funcTraits,
+		canonicalAccessProjection ? 0 : &accessSpecifier,
+		exactAccessSpecifier, ordinaryCanonicalMethod);
 }
 
 asCScriptFunction *asCBuilder::RegisterLambda(asCScriptNode *node, asCScriptCode *file, asCScriptFunction *funcDef, const asCString &name, asSNameSpace *ns)
@@ -6385,7 +7001,7 @@ asCScriptFunction *asCBuilder::RegisterLambda(asCScriptNode *node, asCScriptCode
 	return func;
 }
 
-int asCBuilder::RegisterScriptFunction(asCScriptNode *node, asCScriptCode *file, asCObjectType *objType, bool isInterface, bool isGlobalFunction, asSNameSpace *ns, bool isExistingShared, bool isMixin, asCString &name, asCDataType &returnType, asCArray<asCString> &parameterNames, asCArray<asCDataType> &parameterTypes, asCArray<asETypeModifiers> &inOutFlags, asCArray<asCString *> &defaultArgs, asSFunctionTraits funcTraits, asCString* accessSpecifier)
+int asCBuilder::RegisterScriptFunction(asCScriptNode *node, asCScriptCode *file, asCObjectType *objType, bool isInterface, bool isGlobalFunction, asSNameSpace *ns, bool isExistingShared, bool isMixin, asCString &name, asCDataType &returnType, asCArray<asCString> &parameterNames, asCArray<asCDataType> &parameterTypes, asCArray<asETypeModifiers> &inOutFlags, asCArray<asCString *> &defaultArgs, asSFunctionTraits funcTraits, asCString* accessSpecifier, asSAccessSpecifier* canonicalAccessSpecifier, bool canonicalAccessResolved)
 {
 	// Determine default namespace if not specified
 	if( ns == 0 )
@@ -6809,8 +7425,15 @@ int asCBuilder::RegisterScriptFunction(asCScriptNode *node, asCScriptCode *file,
 				f->AddRefInternal();
 			}
 
-			// Lookup the access specifier
-			if (accessSpecifier != nullptr && accessSpecifier->GetLength() != 0)
+			if( canonicalAccessResolved )
+			{
+				// Exact current-generation binding resolved from MethodDecl::
+				// accessSpecifier. A null pointer is the authoritative no-edge
+				// result; no name fallback is permitted in CANONICAL.
+				f->accessSpecifier = canonicalAccessSpecifier;
+			}
+			// Explicit LEGACY/reference lookup by retained source spelling.
+			else if (accessSpecifier != nullptr && accessSpecifier->GetLength() != 0)
 			{
 				f->accessSpecifier = objType->GetAccessSpecifier(accessSpecifier->AddressOf());
 				if (f->accessSpecifier == nullptr)

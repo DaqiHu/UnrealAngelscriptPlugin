@@ -12,6 +12,7 @@
 #include "source/as_decl.h"
 #include "source/as_module.h"
 #include "source/as_objecttype.h"
+#include "source/as_property.h"
 #include "source/as_restore.h"
 #include "source/as_runtime_type_binding.h"
 #include "source/as_runtime_type_bridge.h"
@@ -1552,6 +1553,1266 @@ public:
 				"int PreparedEntry()", Value)
 			&& Value == 42,
 			TEXT("the prepared Runtime shell must execute its canonical body")));
+	}
+
+	TEST_METHOD(PreparedAccessSpecifierDefinitionsAndMemberEdgesUseExactCanonicalDeclIds)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalAccessSpecifier");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FAccessProjectionProbe
+			{
+				access Internal = private, Friend(inherited);
+				access External = protected, *(readonly, editdefaults);
+				access:Internal int Value;
+				access:External int Read() const { return Value; }
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalAccessSpecifier.as", Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		const size_t InternalDefinition = Source.find("Internal");
+		const size_t InternalUse = Source.find("Internal", InternalDefinition + 1);
+		const size_t ExternalDefinition = Source.find("External");
+		const size_t ExternalUse = Source.find("External", ExternalDefinition + 1);
+		ASSERT_THAT(IsTrue(
+			InternalDefinition != std::string::npos
+				&& InternalUse != std::string::npos
+				&& ExternalDefinition != std::string::npos
+				&& ExternalUse != std::string::npos,
+			TEXT("fixture must expose two same-width definitions and member references")));
+		if (InternalDefinition == std::string::npos
+			|| InternalUse == std::string::npos
+			|| ExternalDefinition == std::string::npos
+			|| ExternalUse == std::string::npos)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts(),
+			TEXT("typed actions and exact identities must be complete before Stage 2")));
+		ASSERT_THAT(IsTrue(Builder.scripts.GetLength() == 1
+			&& Builder.scripts[0] != nullptr
+			&& Builder.scripts[0]->code != nullptr,
+			TEXT("fixture must own one mutable retained source buffer")));
+		if (Builder.scripts.GetLength() != 1
+			|| Builder.scripts[0] == nullptr
+			|| Builder.scripts[0]->code == nullptr)
+		{
+			return;
+		}
+
+		// Preserve every parse-identity coordinate while making the retained
+		// LEGACY/reference spelling disagree with the already-published typed
+		// facts. A Canonical Runtime projection must be insensitive to this
+		// test-only poison; the LEGACY Builder decoder intentionally is not.
+		char* const RetainedSource = Builder.scripts[0]->code;
+		std::memcpy(RetainedSource + InternalDefinition, "Poisoned", 8);
+		std::memcpy(RetainedSource + InternalUse, "External", 8);
+		std::memcpy(RetainedSource + ExternalUse, "Internal", 8);
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		ASSERT_THAT(IsTrue(Builder.classDeclarations.GetLength() == 1
+			&& Builder.classDeclarations[0] != nullptr
+			&& Builder.classDeclarations[0]->node != nullptr));
+		if (Builder.classDeclarations.GetLength() != 1
+			|| Builder.classDeclarations[0] == nullptr
+			|| Builder.classDeclarations[0]->node == nullptr)
+		{
+			return;
+		}
+		asCScriptNode* NativeAccessNodes[2] = { nullptr, nullptr };
+		asUINT NativeAccessNodeCount = 0;
+		for (asCScriptNode* Node =
+			Builder.classDeclarations[0]->node->firstChild;
+			Node != nullptr; Node = Node->next)
+		{
+			if (Node->nodeType == snAccessDeclaration
+				&& NativeAccessNodeCount < 2)
+			{
+				NativeAccessNodes[NativeAccessNodeCount++] = Node;
+			}
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+			NativeAccessNodeCount,
+			TEXT("fixture must retain two native syntax nodes after Canonical actions are complete")));
+		if (NativeAccessNodeCount != 2)
+		{
+			return;
+		}
+		const size_t FirstTokenPos = NativeAccessNodes[0]->tokenPos;
+		const size_t FirstTokenLength = NativeAccessNodes[0]->tokenLength;
+		NativeAccessNodes[0]->tokenPos = NativeAccessNodes[1]->tokenPos;
+		NativeAccessNodes[0]->tokenLength = NativeAccessNodes[1]->tokenLength;
+		NativeAccessNodes[1]->tokenPos = FirstTokenPos;
+		NativeAccessNodes[1]->tokenLength = FirstTokenLength;
+
+		const int GenerateFunctions = Builder.BuildGenerateFunctions();
+		ASSERT_THAT(AreEqual(asSUCCESS, GenerateFunctions,
+			TEXT("Canonical Stage 2 must project access metadata from exact declarations, not poisoned source spelling or native declaration inventory")));
+		if (GenerateFunctions < 0)
+		{
+			ReportBuilderFailureDiagnostics(*TestRunner, Engine);
+			return;
+		}
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildLayoutClasses()));
+		Builder.BuildAllocateGlobalVariables();
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			Builder.BuildLayoutFunctionsWithoutGlobalInitializers()));
+
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FAccessProjectionProbe"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+		asSAccessSpecifier* const Internal =
+			ObjectType->GetAccessSpecifier("Internal");
+		asSAccessSpecifier* const External =
+			ObjectType->GetAccessSpecifier("External");
+		ASSERT_THAT(IsTrue(Internal != nullptr
+			&& Internal->bIsPrivate
+			&& !Internal->bIsProtected
+			&& Internal->permissions.GetLength() == 1
+			&& Internal->permissions[0].accessName == "Friend"
+			&& Internal->permissions[0].bInherited,
+			TEXT("Internal Runtime DTO must preserve the exact Canonical definition")));
+		ASSERT_THAT(IsTrue(External != nullptr
+			&& !External->bIsPrivate
+			&& External->bIsProtected
+			&& External->bAnyReadOnly
+			&& External->bAnyEditDefaults
+			&& External->permissions.GetLength() == 0,
+			TEXT("External Runtime DTO must preserve the exact Canonical wildcard traits")));
+		ASSERT_THAT(IsNull(ObjectType->GetAccessSpecifier("Poisoned"),
+			TEXT("poisoned retained spelling must never become Runtime metadata")));
+		if (Internal == nullptr || External == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(ObjectType->accessSpecifiers.GetLength() == 2
+			&& ObjectType->accessSpecifiers[0] == Internal
+			&& ObjectType->accessSpecifiers[1] == External,
+			TEXT("Runtime definition order must follow Canonical owner children, not mutated native declaration coordinates")));
+
+		asCObjectProperty* ValueProperty = nullptr;
+		for (asUINT Index = 0; Index < ObjectType->properties.GetLength(); ++Index)
+		{
+			asCObjectProperty* const Property = ObjectType->properties[Index];
+			if (Property != nullptr && Property->name == "Value")
+			{
+				ValueProperty = Property;
+				break;
+			}
+		}
+		asCScriptFunction* const ReadMethod = static_cast<asCScriptFunction*>(
+			ObjectType->GetMethodByDecl("int Read() const"));
+		ASSERT_THAT(IsTrue(ValueProperty != nullptr
+			&& ValueProperty->accessSpecifier == Internal,
+			TEXT("field Runtime metadata must follow its exact VarDecl access edge")));
+		ASSERT_THAT(IsTrue(ReadMethod != nullptr
+			&& ReadMethod->accessSpecifier == External,
+			TEXT("method Runtime metadata must follow its exact MethodDecl access edge")));
+	}
+
+	TEST_METHOD(PreparedAccessWildcardTraitsAccumulateLikeLegacyRuntimeMetadata)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalAccessWildcardAccumulation");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FAccessWildcardAccumulationProbe
+			{
+				access Combined = private, *(readonly), *(editdefaults);
+				access:Combined int Value;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalAccessWildcardAccumulation.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		const int GenerateFunctions = Builder.BuildGenerateFunctions();
+		ASSERT_THAT(AreEqual(asSUCCESS, GenerateFunctions,
+			TEXT("multiple wildcard permission entries are a legal maintained-fork access declaration")));
+		if (GenerateFunctions < 0)
+		{
+			ReportBuilderFailureDiagnostics(*TestRunner, Engine);
+			return;
+		}
+
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FAccessWildcardAccumulationProbe"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+		asSAccessSpecifier* const Combined =
+			ObjectType->GetAccessSpecifier("Combined");
+		ASSERT_THAT(IsTrue(Combined != nullptr
+			&& Combined->bAnyReadOnly
+			&& Combined->bAnyEditDefaults,
+			TEXT("Canonical wildcard traits must use the LEGACY-compatible union of every wildcard permission")));
+	}
+
+	TEST_METHOD(PreparedAccessSpecifierProjectionRejectsRuntimeMetadataAbsentFromCanonicalRecord)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalAccessSpecifierContamination");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FAccessProjectionContaminationProbe
+			{
+				int Value;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalAccessSpecifierContamination.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FAccessProjectionContaminationProbe"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+
+		asSAccessSpecifier* const ForeignRuntimeMetadata =
+			asNEW(asSAccessSpecifier);
+		ASSERT_THAT(IsNotNull(ForeignRuntimeMetadata));
+		if (ForeignRuntimeMetadata == nullptr)
+		{
+			return;
+		}
+		ForeignRuntimeMetadata->name = "Foreign";
+		const asUINT PreviousCount = ObjectType->accessSpecifiers.GetLength();
+		ObjectType->accessSpecifiers.PushLast(ForeignRuntimeMetadata);
+		ASSERT_THAT(AreEqual(PreviousCount + 1,
+			ObjectType->accessSpecifiers.GetLength(),
+			TEXT("the fixture must install one Runtime-only access DTO")));
+		if (ObjectType->accessSpecifiers.GetLength() != PreviousCount + 1)
+		{
+			asDELETE(ForeignRuntimeMetadata, asSAccessSpecifier);
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(Builder.BuildGenerateFunctions() < 0,
+			TEXT("Canonical Stage 2 must reject Runtime access metadata that has no exact declaration in the Canonical record")));
+		ASSERT_THAT(IsTrue(ObjectType->accessSpecifiers.GetLength() == 1
+			&& ObjectType->accessSpecifiers[0] == ForeignRuntimeMetadata,
+			TEXT("rejection must leave the pre-existing Runtime owner unchanged")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->properties.GetLength(),
+			TEXT("a failed Canonical class projection must stop before publishing member shells")));
+	}
+
+	TEST_METHOD(PreparedForeignFieldAccessEdgePublishesNoPropertyShell)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalForeignFieldAccessEdge");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FAccessOwnerA
+			{
+				access Internal = private;
+				access:Internal int Value;
+			}
+
+			class FAccessOwnerB
+			{
+				access External = protected;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalForeignFieldAccessEdge.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asASTDeclId FieldId;
+		asASTDeclId ForeignSpecifierId;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			const asCDecl* const Owner = Candidate != nullptr
+				? Context->GetDecl(Candidate->parent) : nullptr;
+			if (Candidate != nullptr && Owner != nullptr
+				&& Candidate->kind == asAST_DECL_VAR
+				&& Candidate->name == "Value"
+				&& Owner->name == "FAccessOwnerA")
+			{
+				FieldId = Candidate->id;
+			}
+			if (Candidate != nullptr && Owner != nullptr
+				&& Candidate->kind == asAST_DECL_ACCESS_SPECIFIER
+				&& Candidate->name == "External"
+				&& Owner->name == "FAccessOwnerB")
+			{
+				ForeignSpecifierId = Candidate->id;
+			}
+		}
+		ASSERT_THAT(IsTrue(FieldId.IsValid()
+			&& ForeignSpecifierId.IsValid(),
+			TEXT("fixture must expose an exact field and a foreign access declaration")));
+		if (!FieldId.IsValid() || !ForeignSpecifierId.IsValid())
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK,
+			Context->SetDeclAccessSpecifier(FieldId, ForeignSpecifierId),
+			TEXT("the unsealed fixture must admit an invalid edge so Stage 2 can prove fail-closed publication")));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FAccessOwnerA"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->properties.GetLength()));
+
+		ASSERT_THAT(IsTrue(Builder.BuildGenerateFunctions() < 0,
+			TEXT("a foreign exact field edge must be rejected during Canonical Stage 2")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->properties.GetLength(),
+			TEXT("field access resolution must complete before the Runtime property shell is published")));
+	}
+
+	TEST_METHOD(PreparedDanglingAccessOwnerChildFailsBeforeZeroDefinitionSuccess)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalDanglingAccessOwnerChild");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FAccessDanglingOwnerChildProbe
+			{
+				int Value;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalDanglingAccessOwnerChild.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asASTDeclId OwnerId;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_DECL_CLASS
+				&& Candidate->name == "FAccessDanglingOwnerChildProbe")
+			{
+				OwnerId = Candidate->id;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(OwnerId.IsValid(),
+			TEXT("fixture must expose the exact Canonical class owner")));
+		if (!OwnerId.IsValid())
+		{
+			return;
+		}
+		const asASTDeclId DanglingChild(Context->GetDeclCount() + 100);
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK,
+			Context->AddDeclChild(OwnerId, DanglingChild),
+			TEXT("the unsealed fixture must admit a dangling child for Stage 2 validation")));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FAccessDanglingOwnerChildProbe"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(Builder.BuildGenerateFunctions() < 0,
+			TEXT("a dangling Canonical owner child must not be mistaken for an empty access-definition inventory")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->accessSpecifiers.GetLength(),
+			TEXT("dangling-child rejection must publish no Runtime access aggregate")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->properties.GetLength(),
+			TEXT("dangling-child rejection must stop before member shell publication")));
+	}
+
+	TEST_METHOD(PreparedDuplicateAccessDefinitionNamesPublishNoRuntimeAggregate)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalDuplicateAccessDefinitionNames");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FAccessDuplicateDefinitionProbe
+			{
+				access Internal = private;
+				access External = protected;
+				int Value;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalDuplicateAccessDefinitionNames.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asASTDeclId ExternalSpecifierId;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			const asCDecl* const Owner = Candidate != nullptr
+				? Context->GetDecl(Candidate->parent) : nullptr;
+			if (Candidate != nullptr && Owner != nullptr
+				&& Candidate->kind == asAST_DECL_ACCESS_SPECIFIER
+				&& Candidate->name == "External"
+				&& Owner->name == "FAccessDuplicateDefinitionProbe")
+			{
+				ExternalSpecifierId = Candidate->id;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(ExternalSpecifierId.IsValid(),
+			TEXT("fixture must expose the second exact access definition")));
+		if (!ExternalSpecifierId.IsValid())
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK,
+			Context->SetDeclName(ExternalSpecifierId, "Internal"),
+			TEXT("the unsealed fixture must admit duplicate names for Stage 2 validation")));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FAccessDuplicateDefinitionProbe"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(Builder.BuildGenerateFunctions() < 0,
+			TEXT("different Canonical access declarations with the same name must fail closed like Parser/Sema and LEGACY registration")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->accessSpecifiers.GetLength(),
+			TEXT("duplicate-name rejection must publish no Runtime access aggregate")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->properties.GetLength(),
+			TEXT("duplicate-name rejection must stop before member shell publication")));
+	}
+
+	TEST_METHOD(PreparedDuplicateAccessPermissionDeclIdPublishesNoRuntimeAggregate)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalDuplicateAccessPermission");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FAccessDuplicatePermissionProbe
+			{
+				access Internal = private, Friend(readonly);
+				int Value;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalDuplicateAccessPermission.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asASTDeclId SpecifierId;
+		asASTDeclId PermissionId;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			const asCDecl* const Owner = Candidate != nullptr
+				? Context->GetDecl(Candidate->parent) : nullptr;
+			if (Candidate != nullptr && Owner != nullptr
+				&& Candidate->kind == asAST_DECL_ACCESS_SPECIFIER
+				&& Candidate->name == "Internal"
+				&& Owner->name == "FAccessDuplicatePermissionProbe")
+			{
+				SpecifierId = Candidate->id;
+			}
+			if (Candidate != nullptr && Owner != nullptr
+				&& Candidate->kind == asAST_DECL_ACCESS_PERMISSION
+				&& Candidate->name == "Friend")
+			{
+				PermissionId = Candidate->id;
+			}
+		}
+		ASSERT_THAT(IsTrue(SpecifierId.IsValid() && PermissionId.IsValid(),
+			TEXT("fixture must expose one exact access definition and permission")));
+		if (!SpecifierId.IsValid() || !PermissionId.IsValid())
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK,
+			Context->AddDeclChild(SpecifierId, PermissionId),
+			TEXT("the unsealed fixture must admit a duplicate child identity for Stage 2 validation")));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FAccessDuplicatePermissionProbe"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(Builder.BuildGenerateFunctions() < 0,
+			TEXT("one Canonical permission declaration listed twice must fail closed instead of publishing two Runtime entries")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->accessSpecifiers.GetLength(),
+			TEXT("duplicate-permission rejection must publish no Runtime access aggregate")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->properties.GetLength(),
+			TEXT("duplicate-permission rejection must stop before member shell publication")));
+	}
+
+	TEST_METHOD(PreparedAccessSpecifierSelfIdMismatchPublishesNoRuntimeAggregate)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalAccessSpecifierSelfIdMismatch");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FAccessSpecifierSelfIdProbe
+			{
+				access Internal = private;
+				int Value;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalAccessSpecifierSelfIdMismatch.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asASTDeclId SpecifierId;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			const asCDecl* const Owner = Candidate != nullptr
+				? Context->GetDecl(Candidate->parent) : nullptr;
+			if (Candidate != nullptr && Owner != nullptr
+				&& Candidate->kind == asAST_DECL_ACCESS_SPECIFIER
+				&& Candidate->name == "Internal"
+				&& Owner->name == "FAccessSpecifierSelfIdProbe")
+			{
+				SpecifierId = asASTDeclId(DeclIndex);
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(SpecifierId.IsValid(),
+			TEXT("fixture must expose the indexed Canonical access definition")));
+		asCDecl* const MutableSpecifier = SpecifierId.IsValid()
+			? const_cast<asCDecl*>(Context->GetDecl(SpecifierId)) : nullptr;
+		ASSERT_THAT(IsNotNull(MutableSpecifier));
+		if (MutableSpecifier == nullptr)
+		{
+			return;
+		}
+		MutableSpecifier->id = asASTDeclId(Context->GetDeclCount() + 100);
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FAccessSpecifierSelfIdProbe"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(Builder.BuildGenerateFunctions() < 0,
+			TEXT("an access declaration whose embedded identity disagrees with its arena index must fail closed")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->accessSpecifiers.GetLength(),
+			TEXT("access self-id rejection must publish no Runtime access aggregate")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->properties.GetLength(),
+			TEXT("access self-id rejection must stop before member shell publication")));
+	}
+
+	TEST_METHOD(PreparedAccessPermissionSelfIdMismatchPublishesNoRuntimeAggregate)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalAccessPermissionSelfIdMismatch");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FAccessPermissionSelfIdProbe
+			{
+				access Internal = private, Friend(readonly);
+				int Value;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalAccessPermissionSelfIdMismatch.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asASTDeclId PermissionId;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			const asCDecl* const Owner = Candidate != nullptr
+				? Context->GetDecl(Candidate->parent) : nullptr;
+			const asCDecl* const ClassOwner = Owner != nullptr
+				? Context->GetDecl(Owner->parent) : nullptr;
+			if (Candidate != nullptr && Owner != nullptr
+				&& ClassOwner != nullptr
+				&& Candidate->kind == asAST_DECL_ACCESS_PERMISSION
+				&& Candidate->name == "Friend"
+				&& Owner->kind == asAST_DECL_ACCESS_SPECIFIER
+				&& Owner->name == "Internal"
+				&& ClassOwner->name == "FAccessPermissionSelfIdProbe")
+			{
+				PermissionId = asASTDeclId(DeclIndex);
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(PermissionId.IsValid(),
+			TEXT("fixture must expose the indexed Canonical access permission")));
+		asCDecl* const MutablePermission = PermissionId.IsValid()
+			? const_cast<asCDecl*>(Context->GetDecl(PermissionId)) : nullptr;
+		ASSERT_THAT(IsNotNull(MutablePermission));
+		if (MutablePermission == nullptr)
+		{
+			return;
+		}
+		MutablePermission->id = asASTDeclId(Context->GetDeclCount() + 100);
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FAccessPermissionSelfIdProbe"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(Builder.BuildGenerateFunctions() < 0,
+			TEXT("a permission whose embedded identity disagrees with its arena index must fail closed")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->accessSpecifiers.GetLength(),
+			TEXT("permission self-id rejection must publish no Runtime access aggregate")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->properties.GetLength(),
+			TEXT("permission self-id rejection must stop before member shell publication")));
+	}
+
+	TEST_METHOD(PreparedAccessOwnerSelfIdMismatchPublishesNoRuntimeAggregate)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalAccessOwnerSelfIdMismatch");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FAccessOwnerSelfIdProbe
+			{
+				access Internal = private;
+				access:Internal int Value;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalAccessOwnerSelfIdMismatch.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asASTDeclId OwnerId;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_DECL_CLASS
+				&& Candidate->name == "FAccessOwnerSelfIdProbe")
+			{
+				OwnerId = asASTDeclId(DeclIndex);
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(OwnerId.IsValid(),
+			TEXT("fixture must expose the indexed Canonical class owner")));
+		asCDecl* const MutableOwner = OwnerId.IsValid()
+			? const_cast<asCDecl*>(Context->GetDecl(OwnerId)) : nullptr;
+		ASSERT_THAT(IsNotNull(MutableOwner));
+		if (MutableOwner == nullptr)
+		{
+			return;
+		}
+		MutableOwner->id = asASTDeclId(Context->GetDeclCount() + 100);
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FAccessOwnerSelfIdProbe"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(Builder.BuildGenerateFunctions() < 0,
+			TEXT("a class owner whose embedded identity disagrees with its arena index must fail closed")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->accessSpecifiers.GetLength(),
+			TEXT("owner self-id rejection must publish no Runtime access aggregate")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->properties.GetLength(),
+			TEXT("owner self-id rejection must stop before member shell publication")));
+	}
+
+	TEST_METHOD(PreparedAccessFieldSelfIdMismatchPublishesNoPropertyShell)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalAccessFieldSelfIdMismatch");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FAccessFieldSelfIdProbe
+			{
+				access Internal = private;
+				access:Internal int Value;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalAccessFieldSelfIdMismatch.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asASTDeclId FieldId;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			const asCDecl* const Owner = Candidate != nullptr
+				? Context->GetDecl(Candidate->parent) : nullptr;
+			if (Candidate != nullptr && Owner != nullptr
+				&& Candidate->kind == asAST_DECL_VAR
+				&& Candidate->name == "Value"
+				&& Owner->name == "FAccessFieldSelfIdProbe")
+			{
+				FieldId = asASTDeclId(DeclIndex);
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(FieldId.IsValid(),
+			TEXT("fixture must expose the indexed Canonical field")));
+		asCDecl* const MutableField = FieldId.IsValid()
+			? const_cast<asCDecl*>(Context->GetDecl(FieldId)) : nullptr;
+		ASSERT_THAT(IsNotNull(MutableField));
+		if (MutableField == nullptr)
+		{
+			return;
+		}
+		MutableField->id = asASTDeclId(Context->GetDeclCount() + 100);
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FAccessFieldSelfIdProbe"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->properties.GetLength()));
+
+		ASSERT_THAT(IsTrue(Builder.BuildGenerateFunctions() < 0,
+			TEXT("a field whose embedded identity disagrees with its arena index must fail closed")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ObjectType->properties.GetLength(),
+			TEXT("field self-id authentication must complete before Runtime property publication")));
+	}
+
+	TEST_METHOD(PreparedAccessMethodSelfIdMismatchPublishesNoMethodShell)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalAccessMethodSelfIdMismatch");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FAccessMethodSelfIdProbe
+			{
+				access Internal = private;
+				access:Internal int Read() { return 42; }
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalAccessMethodSelfIdMismatch.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asASTDeclId MethodId;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			const asCDecl* const Owner = Candidate != nullptr
+				? Context->GetDecl(Candidate->parent) : nullptr;
+			if (Candidate != nullptr && Owner != nullptr
+				&& Candidate->kind == asAST_DECL_METHOD
+				&& Candidate->name == "Read"
+				&& Owner->name == "FAccessMethodSelfIdProbe")
+			{
+				MethodId = asASTDeclId(DeclIndex);
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(MethodId.IsValid(),
+			TEXT("fixture must expose the indexed Canonical method")));
+		asCDecl* const MutableMethod = MethodId.IsValid()
+			? const_cast<asCDecl*>(Context->GetDecl(MethodId)) : nullptr;
+		ASSERT_THAT(IsNotNull(MutableMethod));
+		if (MutableMethod == nullptr)
+		{
+			return;
+		}
+		MutableMethod->id = asASTDeclId(Context->GetDeclCount() + 100);
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FAccessMethodSelfIdProbe"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsNull(ObjectType->GetMethodByDecl("int Read()")));
+
+		ASSERT_THAT(IsTrue(Builder.BuildGenerateFunctions() < 0,
+			TEXT("a method whose embedded identity disagrees with its arena index must fail closed")));
+		ASSERT_THAT(IsNull(ObjectType->GetMethodByDecl("int Read()"),
+			TEXT("method self-id authentication must complete before Runtime method publication")));
+	}
+
+	TEST_METHOD(PreparedForeignMethodAccessEdgePublishesNoMethodShell)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalForeignMethodAccessEdge");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FMethodAccessOwnerA
+			{
+				access Internal = private;
+				access:Internal int Read() { return 42; }
+			}
+
+			class FMethodAccessOwnerB
+			{
+				access External = protected;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "PreparedCanonicalForeignMethodAccessEdge.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asASTDeclId MethodId;
+		asASTDeclId ForeignSpecifierId;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			const asCDecl* const Owner = Candidate != nullptr
+				? Context->GetDecl(Candidate->parent) : nullptr;
+			if (Candidate != nullptr && Owner != nullptr
+				&& Candidate->kind == asAST_DECL_METHOD
+				&& Candidate->name == "Read"
+				&& Owner->name == "FMethodAccessOwnerA")
+			{
+				MethodId = Candidate->id;
+			}
+			if (Candidate != nullptr && Owner != nullptr
+				&& Candidate->kind == asAST_DECL_ACCESS_SPECIFIER
+				&& Candidate->name == "External"
+				&& Owner->name == "FMethodAccessOwnerB")
+			{
+				ForeignSpecifierId = Candidate->id;
+			}
+		}
+		ASSERT_THAT(IsTrue(MethodId.IsValid()
+			&& ForeignSpecifierId.IsValid(),
+			TEXT("fixture must expose an exact method and a foreign access declaration")));
+		if (!MethodId.IsValid() || !ForeignSpecifierId.IsValid())
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK,
+			Context->SetDeclAccessSpecifier(MethodId, ForeignSpecifierId),
+			TEXT("the unsealed fixture must admit an invalid edge so Stage 2 can prove fail-closed publication")));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FMethodAccessOwnerA"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsNull(ObjectType->GetMethodByDecl("int Read()")));
+
+		ASSERT_THAT(IsTrue(Builder.BuildGenerateFunctions() < 0,
+			TEXT("a foreign exact method edge must be rejected during Canonical Stage 2")));
+		ASSERT_THAT(IsNull(ObjectType->GetMethodByDecl("int Read()"),
+			TEXT("method access resolution must complete before the Runtime method shell is published")));
 	}
 
 	TEST_METHOD(PreparedInterfaceShellsAreAuthenticatedBySealedRelations)

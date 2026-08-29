@@ -4842,6 +4842,7 @@ asCScriptNode* asCParser::ParseAccessDecl()
 		return 0;
 	}
 	asSAccessSpecifierAction canonicalAction;
+	asASTDeclId canonicalDeclaration;
 	canonicalAction.beginOffset = (asUINT)t1.pos;
 
 	auto* identifierNode = ParseIdentifier();
@@ -5001,7 +5002,20 @@ asCScriptNode* asCParser::ParseAccessDecl()
 			{
 				RewindTo(&t1);
 			}
-			canonicalAction.permissions.PushLast(permission);
+			const asUINT permissionIndex =
+				canonicalAction.permissions.GetLength();
+			bool injectAppendFailure = false;
+#if WITH_ANGELSCRIPT_UNITTESTS
+			injectAppendFailure = builder != 0
+				&& builder->ShouldInjectTestCanonicalAccessPermissionAppendFailure();
+#endif
+			if( injectAppendFailure
+				|| !canonicalAction.permissions.SetLength(permissionIndex + 1) )
+			{
+				Error("Out of memory while recording Canonical access permission", &t1);
+				return node;
+			}
+			canonicalAction.permissions[permissionIndex] = permission;
 			continue;
 		}
 		else if (t1.type == ttEndStatement)
@@ -5010,7 +5024,8 @@ asCScriptNode* asCParser::ParseAccessDecl()
 			canonicalAction.endOffset = (asUINT)(t1.pos + t1.length);
 			if( sema )
 			{
-				sema->ActOnAccessSpecifierAction(canonicalAction, script);
+				canonicalDeclaration =
+					sema->ActOnAccessSpecifierAction(canonicalAction, script);
 			}
 			break;
 		}
@@ -5022,6 +5037,8 @@ asCScriptNode* asCParser::ParseAccessDecl()
 			return node;
 		}
 	}
+	BindCompletedParsedDeclarationIdentity(
+		sema, node, canonicalDeclaration);
 
 	return node;
 }

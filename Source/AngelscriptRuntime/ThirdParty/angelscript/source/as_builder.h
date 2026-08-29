@@ -84,6 +84,19 @@ struct sFactoryDescription
 	bool isGenerated;
 };
 
+// Build-generation-local bridge from snapshot-owned Canonical declaration
+// coordinates to Runtime-owned custom access metadata. The Runtime pointer is
+// non-owning here; its exact asCObjectType owns the DTO for the whole Runtime
+// generation. These numeric coordinates never cross Builder, cache, provider,
+// sidecar, or public AST boundaries.
+struct sCanonicalAccessSpecifierBinding
+{
+	asUINT specifierDeclaration = 0;
+	asUINT ownerDeclaration = 0;
+	asCObjectType* objectType = 0;
+	asSAccessSpecifier* runtimeSpecifier = 0;
+};
+
 struct sGlobalVariableDescription
 {
 	asCScriptCode     *script;
@@ -217,6 +230,17 @@ public:
 	int AttachCanonicalSemaIfNeeded();
 	int PrepareCanonicalCompileFunctionScope();
 	int SealCanonicalAST();
+#if WITH_ANGELSCRIPT_UNITTESTS
+	// Test-only deterministic boundary for the Parser-owned access-permission
+	// action array. Production still fails through the checked SetLength result;
+	// this seam proves that a partially accumulated aggregate is never published.
+	void SetTestFailureBeforeCanonicalAccessPermissionAppend(asUINT permissionOrdinal);
+	bool ShouldInjectTestCanonicalAccessPermissionAppendFailure();
+	bool WasTestCanonicalAccessPermissionAppendFailureInjected() const
+	{
+		return testCanonicalAccessPermissionAppendFailureInjected;
+	}
+#endif
 #endif
 
 //protected:
@@ -335,7 +359,7 @@ public:
 	void               AddInterfaceFromMixinToClass(sClassDeclaration *decl, asCScriptNode *errNode, sMixinClass *mixin);
 
 	int                RegisterScriptFunctionFromNode(asCScriptNode *node, asCScriptCode *file, asCObjectType *object = 0, bool isInterface = false, bool isGlobalFunction = false, asSNameSpace *ns = 0, bool isExistingShared = false, bool isMixin = false);
-	int                RegisterScriptFunction(asCScriptNode *node, asCScriptCode *file, asCObjectType *objType, bool isInterface, bool isGlobalFunction, asSNameSpace *ns, bool isExistingShared, bool isMixin, asCString &name, asCDataType &returnType, asCArray<asCString> &parameterNames, asCArray<asCDataType> &parameterTypes, asCArray<asETypeModifiers> &inOutFlags, asCArray<asCString *> &defaultArgs, asSFunctionTraits funcTraits, asCString* accessSpecifier = nullptr);
+	int                RegisterScriptFunction(asCScriptNode *node, asCScriptCode *file, asCObjectType *objType, bool isInterface, bool isGlobalFunction, asSNameSpace *ns, bool isExistingShared, bool isMixin, asCString &name, asCDataType &returnType, asCArray<asCString> &parameterNames, asCArray<asCDataType> &parameterTypes, asCArray<asETypeModifiers> &inOutFlags, asCArray<asCString *> &defaultArgs, asSFunctionTraits funcTraits, asCString* accessSpecifier = nullptr, asSAccessSpecifier* canonicalAccessSpecifier = nullptr, bool canonicalAccessResolved = false);
 	int                RegisterVirtualProperty(asCScriptNode *node, asCScriptCode *file, asCObjectType *object = 0, bool isInterface = false, bool isGlobalFunction = false, asSNameSpace *ns = 0, bool isExistingShared = false);
 	int                RegisterImportedFunction(int funcID, asCScriptNode *node, asCScriptCode *file, asSNameSpace *ns);
 	int                RegisterGlobalVar(asCScriptNode *node, asCScriptCode *file, asSNameSpace *ns);
@@ -407,7 +431,13 @@ public:
 	asCArray<class asCParser*>                 parsers;
 	class asCASTContext* canonicalAST;
 	class asCSema* canonicalSema;
+	asCArray<sCanonicalAccessSpecifierBinding> canonicalAccessSpecifierBindings;
 	asCSourceManager diagnosticSourceManager;
+#if WITH_ANGELSCRIPT_UNITTESTS
+	asUINT testFailureBeforeCanonicalAccessPermissionAppend;
+	asUINT testCanonicalAccessPermissionAppendOrdinal;
+	bool testCanonicalAccessPermissionAppendFailureInjected;
+#endif
 
 #if WITH_EDITOR
 	// Each editor-only code block has its start and end line recorded here for error checking

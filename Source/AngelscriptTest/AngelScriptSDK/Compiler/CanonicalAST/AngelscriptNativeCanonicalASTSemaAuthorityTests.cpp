@@ -10580,6 +10580,103 @@ public:
 			TEXT("Parser typed actions must preserve access definition and member edges before later recovery")));
 	}
 
+	TEST_METHOD(ParserAccessPermissionAppendOomFailsWithoutPublishingTruncatedAggregate)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaAccessPermissionAppendOom");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaAccessPermissionAppendOom module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		Builder.SetTestFailureBeforeCanonicalAccessPermissionAppend(1u);
+
+		asCScriptCode Code;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class Vault
+			{
+				access Internal = private, Friend(inherited), Admin(readonly);
+				int Value;
+			}
+			)AS");
+		Code.SetCode("SemaAccessPermissionAppendOom.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(IsTrue(Parser.ParseScript(&Code) < 0,
+			TEXT("the second permission append OOM must fail the producer instead of truncating the action")));
+		ASSERT_THAT(IsTrue(
+			Builder.WasTestCanonicalAccessPermissionAppendFailureInjected(),
+			TEXT("the deterministic test seam must authenticate the intended append boundary")));
+
+		bool bPublishedAccessSpecifier = false;
+		bool bPublishedPermission = false;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			bPublishedAccessSpecifier |= Decl != nullptr
+				&& Decl->kind == asAST_DECL_ACCESS_SPECIFIER;
+			bPublishedPermission |= Decl != nullptr
+				&& Decl->kind == asAST_DECL_ACCESS_PERMISSION;
+		}
+		ASSERT_THAT(IsFalse(bPublishedAccessSpecifier || bPublishedPermission,
+			TEXT("a partially accumulated access action must publish neither its aggregate nor a permission prefix")));
+	}
+
+	TEST_METHOD(ParserAccessSpecifierBindsExactCompletedDeclarationIdentity)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaAccessSpecifierIdentity");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaAccessSpecifierIdentity module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		asCScriptCode Code;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class Vault
+			{
+				access Internal = private, Friend(inherited), *(readonly, editdefaults);
+				access:Internal int Value;
+			}
+			)AS");
+		Code.SetCode("SemaAccessSpecifierIdentity.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("access identity fixture must parse")));
+
+		asCScriptNode* const AccessNode =
+			CanonicalASTSemaAuthorityTest::FindFirstNodeOfType(
+				Parser.GetScriptNode(), snAccessDeclaration);
+		ASSERT_THAT(IsNotNull(AccessNode,
+			TEXT("LEGACY/reference tree must retain the authored access declaration")));
+		if (AccessNode == nullptr)
+		{
+			return;
+		}
+
+		const asASTDeclId AccessId = Sema.FindParsedDeclaration(
+			CanonicalASTSemaAuthorityTest::MakeParseActionIdentity(
+				Sema, AccessNode));
+		const asCDecl* const AccessDecl = Context.GetDecl(AccessId);
+		ASSERT_THAT(IsTrue(AccessDecl != nullptr
+			&& AccessDecl->kind == asAST_DECL_ACCESS_SPECIFIER
+			&& AccessDecl->name.Equals("Internal"),
+			TEXT("Parser must bind the complete snAccessDeclaration coordinate to its exact Canonical declaration")));
+	}
+
 	TEST_METHOD(ParserAccessSpecifierUsesTypedActionsWithoutNodeReplay)
 	{
 		const FString SourceRoot = FPaths::Combine(
