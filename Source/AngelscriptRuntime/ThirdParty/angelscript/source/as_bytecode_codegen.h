@@ -91,6 +91,23 @@ public:
 	{
 		return testTypeRelocationFailureInjected;
 	}
+	// Test-only prepared-authority allocation boundary. It simulates the same
+	// no-growth result as asCArray::PushLast on OOM, before candidate state can
+	// be consumed by the Runtime type bridge.
+	void SetTestFailureBeforePreparedRuntimeTypeAppend(
+		asUINT typeOrdinal, int failureCode);
+	bool WasTestPreparedRuntimeTypeAppendFailureInjected() const
+	{
+		return testPreparedRuntimeTypeAppendFailureInjected;
+	}
+	// Test-only prepared-global transaction boundary. It fires before the
+	// rollback record is appended, so no semantic flag may be made visible yet.
+	void SetTestFailureBeforePreparedGlobalStateRegistration(
+		asUINT globalOrdinal, int failureCode);
+	bool WasTestPreparedGlobalStateRegistrationFailureInjected() const
+	{
+		return testPreparedGlobalStateRegistrationFailureInjected;
+	}
 #endif
 
 private:
@@ -120,6 +137,12 @@ private:
 	asUINT testFailureAtTypeRelocationUse;
 	int testTypeRelocationFailureCode;
 	bool testTypeRelocationFailureInjected;
+	asUINT testFailureBeforePreparedRuntimeTypeAppend;
+	int testPreparedRuntimeTypeAppendFailureCode;
+	bool testPreparedRuntimeTypeAppendFailureInjected;
+	asUINT testFailureBeforePreparedGlobalStateRegistration;
+	int testPreparedGlobalStateRegistrationFailureCode;
+	bool testPreparedGlobalStateRegistrationFailureInjected;
 #endif
 };
 

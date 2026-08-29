@@ -13,6 +13,7 @@
 #include "source/as_module.h"
 #include "source/as_objecttype.h"
 #include "source/as_restore.h"
+#include "source/as_runtime_type_binding.h"
 #include "source/as_runtime_type_bridge.h"
 #include "source/as_scriptfunction.h"
 #include "source/as_scriptengine.h"
@@ -1849,6 +1850,458 @@ public:
 			Value) && Value == 42,
 			*FString::Printf(
 				TEXT("authenticated prepared dispatch must execute 42; got=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(PreparedNamespaceSameNameTypeShellSwapFailsExactAuthentication)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalNamespaceTypeSwap");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			namespace PreparedLeft
+			{
+				class Same
+				{
+				}
+			}
+
+			namespace PreparedRight
+			{
+				class Same
+				{
+				}
+			}
+
+			int PreparedNamespaceTypeSwapEntry()
+			{
+				return 42;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"PreparedCanonicalNamespaceTypeSwap.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("Stage 2 must create both namespace-distinct Runtime shells")));
+
+		asCObjectType* const LeftType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByDecl("PreparedLeft::Same"));
+		asCObjectType* const RightType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByDecl("PreparedRight::Same"));
+		asCScriptFunction* const Entry = static_cast<asCScriptFunction*>(
+			Module->GetFunctionByDecl("int PreparedNamespaceTypeSwapEntry()"));
+		ASSERT_THAT(IsNotNull(LeftType));
+		ASSERT_THAT(IsNotNull(RightType));
+		ASSERT_THAT(IsNotNull(Entry));
+		ASSERT_THAT(IsTrue(LeftType != RightType,
+			TEXT("namespace-distinct same-name declarations must own different Runtime shells")));
+		if (LeftType == nullptr || RightType == nullptr || Entry == nullptr)
+		{
+			return;
+		}
+
+		sClassDeclaration* LeftProducer = nullptr;
+		sClassDeclaration* RightProducer = nullptr;
+		for (asUINT Index = 0; Index < Builder.classDeclarations.GetLength(); ++Index)
+		{
+			sClassDeclaration* const Candidate = Builder.classDeclarations[Index];
+			if (Candidate != nullptr && Candidate->typeInfo == LeftType)
+			{
+				LeftProducer = Candidate;
+			}
+			if (Candidate != nullptr && Candidate->typeInfo == RightType)
+			{
+				RightProducer = Candidate;
+			}
+		}
+		ASSERT_THAT(IsNotNull(LeftProducer));
+		ASSERT_THAT(IsNotNull(RightProducer));
+		if (LeftProducer == nullptr || RightProducer == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(
+			LeftProducer->canonicalASTStableDeclKey.GetLength() > 0
+				&& RightProducer->canonicalASTStableDeclKey.GetLength() > 0
+				&& LeftProducer->canonicalASTStableDeclKey
+					!= RightProducer->canonicalASTStableDeclKey,
+			TEXT("each namespace-distinct producer must carry its exact sealed identity")));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST()));
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		Entry->scriptData->scriptSectionIdx = -1;
+		Entry->scriptData->declaredAt = 0;
+
+		// Keep each exact producer key in place while swapping only its Stage 2
+		// Runtime shell. Short-name/kind validation cannot distinguish this graph;
+		// the sealed type identity must authenticate the exact Runtime pointer.
+		LeftProducer->typeInfo = RightType;
+		RightProducer->typeInfo = LeftType;
+		asCBytecodeCodeGen RejectedCodeGen;
+		const int RejectedResult =
+			RejectedCodeGen.GeneratePreparedModule(*Context, Builder);
+		LeftProducer->typeInfo = LeftType;
+		RightProducer->typeInfo = RightType;
+
+		ASSERT_THAT(AreEqual(asINVALID_DECLARATION, RejectedResult,
+			TEXT("a namespace-swapped Stage 2 type shell must fail exact sealed authentication")));
+		if (RejectedResult != asINVALID_DECLARATION)
+		{
+			return;
+		}
+		const FString RejectedDetail = UTF8_TO_TCHAR(
+			RejectedCodeGen.GetFailureDetail().AddressOf()
+				? RejectedCodeGen.GetFailureDetail().AddressOf() : "");
+		ASSERT_THAT(IsTrue(
+			RejectedDetail.Contains(TEXT("sealed type"))
+				&& RejectedDetail.Contains(TEXT("runtimeTypeMatch=0")),
+			*FString::Printf(
+				TEXT("the rejection must identify the exact sealed type mismatch; detail=%s"),
+				*RejectedDetail)));
+		ASSERT_THAT(IsTrue(
+			Entry->scriptData != nullptr
+				&& Entry->scriptData->byteCode.GetLength() == 0
+				&& Entry->scriptData->scriptSectionIdx == -1
+				&& Entry->scriptData->declaredAt == 0
+				&& Module->GetLastBytecodePublisher()
+					== asBYTECODE_PUBLISHER_NONE,
+			TEXT("exact type authentication failure must publish no body, source metadata, or provenance")));
+
+		asCBytecodeCodeGen CodeGen;
+		const int CodeGenResult = CodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, CodeGenResult,
+			*FString::Printf(
+				TEXT("restoring exact Stage 2 type shells must allow retry: result=%d detail=%s"),
+				CodeGenResult,
+				UTF8_TO_TCHAR(CodeGen.GetFailureDetail().AddressOf()
+					? CodeGen.GetFailureDetail().AddressOf() : ""))));
+		if (CodeGenResult != asAST_VERIFY_OK)
+		{
+			return;
+		}
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+			*TestRunner,
+			Engine.Get(),
+			Module,
+			"int PreparedNamespaceTypeSwapEntry()",
+			Value) && Value == 42,
+			*FString::Printf(
+				TEXT("restored exact prepared shells must execute 42; got=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(PreparedImportedDependencyGenerationShadowsCoexistingPublishedType)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		FScopedNativeModule CurrentProvider(
+			*TestRunner,
+			Engine,
+			"PreparedCanonicalDependencyProviderCurrent",
+			ASTEST_AS_ANSI(R"AS(
+				namespace PreparedDependency
+				{
+					class Payload
+					{
+						int Padding;
+						int Value;
+					}
+				}
+				)AS"));
+		ASSERT_THAT(IsTrue(CurrentProvider.IsValid(),
+			TEXT("the current dependency generation must publish before an old shell coexists")));
+		asCModule* const CurrentProviderModule =
+			static_cast<asCModule*>(CurrentProvider.Get());
+		if (!CurrentProvider.IsValid() || CurrentProviderModule == nullptr)
+		{
+			return;
+		}
+
+		asCModule* const OldProviderModule = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalDependencyProviderOld");
+		ASSERT_THAT(IsNotNull(OldProviderModule));
+		if (OldProviderModule == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT
+		{
+			ScriptEngine->DiscardModule("PreparedCanonicalDependencyProviderOld");
+		};
+		const std::string OldProviderSource = ASTEST_AS_ANSI(R"AS(
+			namespace PreparedDependency
+			{
+				class Payload
+				{
+					int Padding;
+				}
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*OldProviderModule,
+			"PreparedCanonicalDependencyProviderOld.as",
+			OldProviderSource.c_str())));
+		ASSERT_THAT(IsNotNull(OldProviderModule->builder));
+		if (OldProviderModule->builder == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner,
+			*OldProviderModule->builder,
+			OldProviderModule),
+			TEXT("the old staged shell must coexist without republishing over the current provider")));
+		asCTypeInfo* const OldPayload = static_cast<asCTypeInfo*>(
+			OldProviderModule->GetTypeInfoByDecl("PreparedDependency::Payload"));
+		asCTypeInfo* const CurrentPayload = static_cast<asCTypeInfo*>(
+			CurrentProviderModule->GetTypeInfoByDecl("PreparedDependency::Payload"));
+		ASSERT_THAT(IsNotNull(OldPayload));
+		ASSERT_THAT(IsNotNull(CurrentPayload));
+		ASSERT_THAT(IsTrue(
+			OldPayload != nullptr && CurrentPayload != nullptr
+				&& OldPayload != CurrentPayload,
+			TEXT("old/current providers must expose distinct same-nominal Runtime revisions")));
+		if (OldPayload == nullptr || CurrentPayload == nullptr)
+		{
+			return;
+		}
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalDependencyConsumer");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		Module->ImportModule(CurrentProviderModule);
+		ASSERT_THAT(IsTrue(
+			Module->importedModules.GetLength() == 1
+				&& Module->importedModules[0] == CurrentProviderModule
+				&& !Module->importedModules.Exists(OldProviderModule),
+			TEXT("the prepared consumer must name only the current dependency generation")));
+
+		const std::string ConsumerSource = ASTEST_AS_ANSI(R"AS(
+			int PreparedImportedDependencyProbe(
+				PreparedDependency::Payload Value)
+			{
+				return 42;
+			}
+
+			int PreparedImportedDependencyEntry()
+			{
+				return 42;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"PreparedCanonicalDependencyConsumer.as",
+			ConsumerSource.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("Stage 2 must resolve the consumer through its exact imported provider")));
+		asCScriptFunction* const Probe = static_cast<asCScriptFunction*>(
+			Module->GetFunctionByName("PreparedImportedDependencyProbe"));
+		asCScriptFunction* const Entry = static_cast<asCScriptFunction*>(
+			Module->GetFunctionByDecl("int PreparedImportedDependencyEntry()"));
+		ASSERT_THAT(IsNotNull(Probe));
+		ASSERT_THAT(IsNotNull(Entry));
+		if (Probe == nullptr || Entry == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(
+			Probe->parameterTypes.GetLength() == 1
+				&& Probe->parameterTypes[0].GetTypeInfo() == CurrentPayload
+				&& Probe->parameterTypes[0].GetTypeInfo() != OldPayload,
+			TEXT("Stage 2 must bind the imported handle ABI to the current dependency generation")));
+		ASSERT_THAT(IsTrue(
+			Entry->scriptData != nullptr
+				&& Entry->scriptData->byteCode.GetLength() == 0,
+			TEXT("Stage 2 must leave the consumer body unpublished")));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST()));
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		const asCDecl* ProbeDecl = nullptr;
+		const asCDecl* ProbeParam = nullptr;
+		for (asUINT DeclIndex = 1; DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate = Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_DECL_FUNCTION
+				&& Candidate->name.Equals("PreparedImportedDependencyProbe"))
+			{
+				ProbeDecl = Candidate;
+				for (asUINT ChildIndex = 0;
+					ChildIndex < Candidate->children.GetLength(); ++ChildIndex)
+				{
+					const asCDecl* const Child =
+						Context->GetDecl(Candidate->children[ChildIndex]);
+					if (Child != nullptr && Child->kind == asAST_DECL_PARAM)
+					{
+						ProbeParam = Child;
+						break;
+					}
+				}
+				break;
+			}
+		}
+		ASSERT_THAT(IsNotNull(ProbeDecl));
+		ASSERT_THAT(IsNotNull(ProbeParam));
+		ASSERT_THAT(IsTrue(
+			Module->importedModules.GetLength() == 1
+				&& Module->importedModules[0] == CurrentProviderModule,
+			TEXT("the flattened current dependency authority must survive Stage 2 and sealing")));
+		if (ProbeParam == nullptr)
+		{
+			return;
+		}
+		asCArray<asCTypeInfo*> CurrentDependencyTypes;
+		CurrentDependencyTypes.PushLast(CurrentPayload);
+		asCDataType ResolvedProbeParam;
+		asCTypeInfo* ResolvedProbeType = nullptr;
+		asCString ResolveDetail;
+		const int ResolveResult = asCRuntimeTypeBindingTable::ResolveCanonicalType(
+			ScriptEngine,
+			*Context,
+			ProbeParam->type,
+			ResolvedProbeParam,
+			ResolvedProbeType,
+			&CurrentDependencyTypes,
+			&ResolveDetail);
+		const asCType* const CanonicalProbeParamType =
+			Context->GetType(ProbeParam->type.type);
+		ASSERT_THAT(IsTrue(
+			CanonicalProbeParamType != nullptr
+				&& CanonicalProbeParamType->kind == asAST_TYPE_REFERENCE_OBJECT,
+			*FString::Printf(
+				TEXT("Sema must copy the imported script class as a reference-object fact; kind=%d stable-key=%s"),
+				CanonicalProbeParamType != nullptr
+					? static_cast<int>(CanonicalProbeParamType->kind) : -1,
+				CanonicalProbeParamType != nullptr
+					? UTF8_TO_TCHAR(CanonicalProbeParamType->stableKey.AddressOf())
+					: TEXT("<missing>"))));
+		if (CanonicalProbeParamType == nullptr
+			|| CanonicalProbeParamType->kind != asAST_TYPE_REFERENCE_OBJECT)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(
+			ResolveResult == asRUNTIME_TYPE_BIND_OK
+				&& ResolvedProbeParam.IsValid()
+				&& ResolvedProbeType == CurrentPayload,
+			*FString::Printf(
+				TEXT("the sealed parameter key must resolve to the exact current provider shell; result=%d detail=%s stable-key=%s runtime-flags=0x%llX"),
+				ResolveResult,
+				UTF8_TO_TCHAR(ResolveDetail.AddressOf()
+					? ResolveDetail.AddressOf() : ""),
+				CanonicalProbeParamType != nullptr
+						? UTF8_TO_TCHAR(CanonicalProbeParamType->stableKey.AddressOf())
+						: TEXT("<missing>"),
+					static_cast<unsigned long long>(CurrentPayload->GetFlags()))));
+
+		asCBytecodeCodeGen RejectedTypeAuthorityCodeGen;
+		RejectedTypeAuthorityCodeGen.SetTestFailureBeforePreparedRuntimeTypeAppend(
+			0, asOUT_OF_MEMORY);
+		const int RejectedTypeAuthorityResult =
+			RejectedTypeAuthorityCodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(AreEqual(asOUT_OF_MEMORY, RejectedTypeAuthorityResult,
+			TEXT("a failed transient Runtime type append must surface as OOM")));
+		ASSERT_THAT(IsTrue(
+			RejectedTypeAuthorityCodeGen
+				.WasTestPreparedRuntimeTypeAppendFailureInjected(),
+			TEXT("the focused transaction seam must reach the first imported type append")));
+		ASSERT_THAT(IsTrue(
+			Entry->scriptData != nullptr
+				&& Entry->scriptData->byteCode.GetLength() == 0
+				&& Module->GetLastBytecodePublisher()
+					== asBYTECODE_PUBLISHER_NONE
+				&& Module->importedModules.GetLength() == 1
+				&& Module->importedModules[0] == CurrentProviderModule
+				&& Probe->parameterTypes.GetLength() == 1
+				&& Probe->parameterTypes[0].GetTypeInfo() == CurrentPayload,
+			TEXT("transient authority OOM must not mutate the prepared module or its dependency generation")));
+
+		asCBytecodeCodeGen CodeGen;
+		const int CodeGenResult = CodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, CodeGenResult,
+			*FString::Printf(
+				TEXT("the imported current generation must shadow the coexisting old type: result=%d detail=%s"),
+				CodeGenResult,
+				UTF8_TO_TCHAR(CodeGen.GetFailureDetail().AddressOf()
+					? CodeGen.GetFailureDetail().AddressOf() : ""))));
+		if (CodeGenResult != asAST_VERIFY_OK)
+		{
+			return;
+		}
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+			*TestRunner,
+			Engine.Get(),
+			Module,
+			"int PreparedImportedDependencyEntry()",
+			Value) && Value == 42,
+			*FString::Printf(
+				TEXT("the consumer must publish alongside the current dependency ABI; got=%d"),
 				Value)));
 	}
 
@@ -5470,6 +5923,30 @@ public:
 			return;
 		}
 		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		asCBytecodeCodeGen RejectedGlobalStateCodeGen;
+		RejectedGlobalStateCodeGen
+			.SetTestFailureBeforePreparedGlobalStateRegistration(
+				0, asOUT_OF_MEMORY);
+		const int RejectedGlobalStateResult =
+			RejectedGlobalStateCodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(AreEqual(asOUT_OF_MEMORY, RejectedGlobalStateResult,
+			TEXT("a failed prepared global-state registration must surface as OOM")));
+		ASSERT_THAT(IsTrue(
+			RejectedGlobalStateCodeGen
+				.WasTestPreparedGlobalStateRegistrationFailureInjected(),
+			TEXT("the focused transaction seam must reach the pure-constant state registration")));
+		ASSERT_THAT(IsTrue(
+			!PreparedGlobal->isPureConstant
+				&& !Property->isPureConstant
+				&& !PreparedGlobal->isCompiled
+				&& Property->GetInitFunc() == nullptr
+				&& *static_cast<asDWORD*>(Property->GetAddressOfValue())
+					== OriginalStorage
+				&& Entry->scriptData->byteCode.GetLength() == 0
+				&& Module->GetLastBytecodePublisher()
+					== asBYTECODE_PUBLISHER_NONE,
+			TEXT("global-state OOM must occur before pure-constant flags or candidate state become visible")));
 
 		asCBytecodeCodeGen RejectedCodeGen;
 		RejectedCodeGen.SetTestFailureBeforeFunctionEmission(0, asERROR);

@@ -45,7 +45,8 @@ void asCSema::RefreshCanonicalRegisteredTypeDeclarations()
 	if( engine != 0 )
 	{
 		engine->CopyCanonicalRegisteredTypeDeclarations(
-			canonicalRegisteredTypeDeclarations);
+			canonicalRegisteredTypeDeclarations,
+			buildModule);
 	}
 }
 

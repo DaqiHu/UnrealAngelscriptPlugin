@@ -343,7 +343,8 @@ public:
 	void               CopyCanonicalTemplateDeclarations(
 		asCArray<asSCanonicalTemplateDeclarationFact>& outDeclarations) const;
 	void               CopyCanonicalRegisteredTypeDeclarations(
-		asCArray<asSCanonicalRegisteredTypeDeclarationFact>& outDeclarations) const;
+		asCArray<asSCanonicalRegisteredTypeDeclarationFact>& outDeclarations,
+		const asCModule* importedTypeAuthority = 0) const;
 	int                SetTemplateRestrictions(asCObjectType *templateType, asCScriptFunction *func, const char *caller, const char *decl);
 	asCObjectType     *GetTemplateInstanceType(asCObjectType *templateType, asCArray<asCDataType> &subTypes, asCModule *requestingModule, asCString* outErrorMessage = nullptr);
 	asCScriptFunction *GenerateTemplateFactoryStub(asCObjectType *templateType, asCObjectType *templateInstanceType, int origFactoryId);

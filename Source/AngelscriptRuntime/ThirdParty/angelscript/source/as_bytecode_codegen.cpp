@@ -41,6 +41,12 @@ asCBytecodeCodeGen::asCBytecodeCodeGen()
 	, testFailureAtTypeRelocationUse(asTYPE_RELOC_USE_COUNT)
 	, testTypeRelocationFailureCode(asERROR)
 	, testTypeRelocationFailureInjected(false)
+	, testFailureBeforePreparedRuntimeTypeAppend(asUINT(-1))
+	, testPreparedRuntimeTypeAppendFailureCode(asOUT_OF_MEMORY)
+	, testPreparedRuntimeTypeAppendFailureInjected(false)
+	, testFailureBeforePreparedGlobalStateRegistration(asUINT(-1))
+	, testPreparedGlobalStateRegistrationFailureCode(asOUT_OF_MEMORY)
+	, testPreparedGlobalStateRegistrationFailureInjected(false)
 #endif
 {
 }
@@ -80,6 +86,24 @@ void asCBytecodeCodeGen::SetTestFailureAtTypeRelocationUse(
 	testFailureAtTypeRelocationUse = static_cast<asUINT>(use);
 	testTypeRelocationFailureCode = inFailureCode < 0 ? inFailureCode : asERROR;
 	testTypeRelocationFailureInjected = false;
+}
+
+void asCBytecodeCodeGen::SetTestFailureBeforePreparedRuntimeTypeAppend(
+	asUINT typeOrdinal, int inFailureCode)
+{
+	testFailureBeforePreparedRuntimeTypeAppend = typeOrdinal;
+	testPreparedRuntimeTypeAppendFailureCode =
+		inFailureCode < 0 ? inFailureCode : asOUT_OF_MEMORY;
+	testPreparedRuntimeTypeAppendFailureInjected = false;
+}
+
+void asCBytecodeCodeGen::SetTestFailureBeforePreparedGlobalStateRegistration(
+	asUINT globalOrdinal, int inFailureCode)
+{
+	testFailureBeforePreparedGlobalStateRegistration = globalOrdinal;
+	testPreparedGlobalStateRegistrationFailureCode =
+		inFailureCode < 0 ? inFailureCode : asOUT_OF_MEMORY;
+	testPreparedGlobalStateRegistrationFailureInjected = false;
 }
 #endif
 
@@ -10633,6 +10657,39 @@ namespace
 				}
 				return asINVALID_DECLARATION;
 			}
+			const asCDataType sealedRuntimeType = bridge.Resolve(
+				context, record->type);
+			asCObjectType* const sealedObjectType =
+				sealedRuntimeType.IsValid()
+					? CastToObjectType(sealedRuntimeType.GetTypeInfo()) : 0;
+			asSNameSpace* const sealedNameSpace = ResolveCanonicalDeclNamespace(
+				context, engine, module, record);
+			if( sealedNameSpace == 0 )
+			{
+				if( detail )
+					detail->Format(
+						"record '%s' cannot resolve its sealed type namespace",
+						record->stableKey.AddressOf()
+							? record->stableKey.AddressOf() : "<missing>");
+				return asOUT_OF_MEMORY;
+			}
+			if( sealedObjectType == 0 || sealedObjectType != objectType
+				|| objectType->nameSpace != sealedNameSpace )
+			{
+				if( detail )
+				{
+					detail->Format(
+						"record '%s' Stage2 shell differs from its sealed type "
+						"(runtimeTypeValid=%u runtimeTypeMatch=%u namespaceMatch=%u)",
+						record->stableKey.AddressOf()
+							? record->stableKey.AddressOf() : "<missing>",
+						sealedObjectType != 0,
+						sealedObjectType == objectType,
+						objectType->nameSpace == sealedNameSpace);
+				}
+				return sealedObjectType == 0
+					? asINVALID_TYPE : asINVALID_DECLARATION;
+			}
 			if( objectType->module != module )
 			{
 				// A previously published shared record is a stable external dependency,
@@ -12214,20 +12271,81 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 
 	asCRuntimeTypeBridge bridge(engine);
 	// A prepared build has already materialized the complete current generation
-	// in its private module. Prefer those exact shells for every subsequent type
-	// resolution in this transaction. This is the prepared equivalent of the
-	// detached generator's artifact.types view: an older Hot Reload generation
-	// may remain live behind a snapshot lease, but it must not make the current
-	// Builder's class/enum/typedef/funcdef signatures ambiguous.
+	// in its private module and flattened dependency modules. Prefer those exact
+	// shells for every subsequent type resolution in this transaction. This is
+	// the prepared equivalent of the detached generator's artifact.types view:
+	// an older Hot Reload generation may remain live behind a snapshot lease, but
+	// it must not make the current Builder's own or imported signatures ambiguous.
 	asCArray<asCTypeInfo*> preparedRuntimeTypes;
-	for( asUINT i = 0; i < module->classTypes.GetLength(); ++i )
-		preparedRuntimeTypes.PushLast(module->classTypes[i]);
-	for( asUINT i = 0; i < module->enumTypes.GetLength(); ++i )
-		preparedRuntimeTypes.PushLast(module->enumTypes[i]);
-	for( asUINT i = 0; i < module->typeDefs.GetLength(); ++i )
-		preparedRuntimeTypes.PushLast(module->typeDefs[i]);
-	for( asUINT i = 0; i < module->funcDefs.GetLength(); ++i )
-		preparedRuntimeTypes.PushLast(module->funcDefs[i]);
+	asUINT preparedRuntimeTypeAppendOrdinal = 0;
+	auto appendPreparedRuntimeType = [&](asCTypeInfo* runtimeType) -> bool
+	{
+		if( preparedRuntimeTypes.Exists(runtimeType) )
+			return true;
+#if WITH_ANGELSCRIPT_UNITTESTS
+		if( preparedRuntimeTypeAppendOrdinal
+			== testFailureBeforePreparedRuntimeTypeAppend )
+		{
+			testPreparedRuntimeTypeAppendFailureInjected = true;
+			++preparedRuntimeTypeAppendOrdinal;
+			return false;
+		}
+#endif
+		const asUINT countBefore = preparedRuntimeTypes.GetLength();
+		preparedRuntimeTypes.PushLast(runtimeType);
+		++preparedRuntimeTypeAppendOrdinal;
+		return preparedRuntimeTypes.GetLength() == countBefore + 1;
+	};
+	auto appendPreparedRuntimeTypes = [&](asCModule* sourceModule) -> bool
+	{
+		if( sourceModule == 0 )
+			return true;
+		for( asUINT i = 0; i < sourceModule->classTypes.GetLength(); ++i )
+			if( !appendPreparedRuntimeType(sourceModule->classTypes[i]) )
+				return false;
+		for( asUINT i = 0; i < sourceModule->enumTypes.GetLength(); ++i )
+			if( !appendPreparedRuntimeType(sourceModule->enumTypes[i]) )
+				return false;
+		for( asUINT i = 0; i < sourceModule->typeDefs.GetLength(); ++i )
+			if( !appendPreparedRuntimeType(sourceModule->typeDefs[i]) )
+				return false;
+		for( asUINT i = 0; i < sourceModule->funcDefs.GetLength(); ++i )
+			if( !appendPreparedRuntimeType(sourceModule->funcDefs[i]) )
+				return false;
+		return true;
+	};
+	if( !appendPreparedRuntimeTypes(module) )
+	{
+		failed = true;
+#if WITH_ANGELSCRIPT_UNITTESTS
+		error = testPreparedRuntimeTypeAppendFailureInjected
+			? testPreparedRuntimeTypeAppendFailureCode : asOUT_OF_MEMORY;
+#else
+		error = asOUT_OF_MEMORY;
+#endif
+		failureDetail =
+			"prepared Runtime type authority allocation failed before publication";
+		return error;
+	}
+	for( asUINT importedModuleIndex = 0;
+		importedModuleIndex < module->importedModules.GetLength();
+		++importedModuleIndex )
+	{
+		if( !appendPreparedRuntimeTypes(
+			module->importedModules[importedModuleIndex]) )
+		{
+			failed = true;
+#if WITH_ANGELSCRIPT_UNITTESTS
+			error = testPreparedRuntimeTypeAppendFailureInjected
+				? testPreparedRuntimeTypeAppendFailureCode : asOUT_OF_MEMORY;
+#else
+			error = asOUT_OF_MEMORY;
+#endif
+			failureDetail =
+				"prepared imported Runtime type authority allocation failed before publication";
+			return error;
+		}
+	}
 	bridge.SetTransientTypes(&preparedRuntimeTypes);
 	asCCanonicalStringConstantLease stringConstants(engine);
 	asCArray<asSCodeGenFuncBind> binds;
@@ -12632,6 +12750,7 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		bool publishDefaultInit;
 	};
 	asCArray<asSPreparedGlobalState> globalStates;
+	asUINT preparedGlobalStateRegistrationOrdinal = 0;
 	asSBytecodeCodeGenArtifact globalArtifact;
 
 	auto RollbackPreparedGlobals = [&]()
@@ -12879,9 +12998,8 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 				state.publishPureConstant = true;
 				// Function bodies emit before CommitPreparedGlobals. Artifact
 				// capture uses property->isPureConstant at MarkDependency time,
-				// so the Sema-proven const must be visible during that emit.
-				description->property->isPureConstant = true;
-				description->isPureConstant = true;
+				// so the Sema-proven const must be visible during that emit. Do
+				// not expose it until its rollback state is registered below.
 			}
 			else
 			{
@@ -12941,7 +13059,40 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 			RollbackPreparedGlobals();
 			return error;
 		}
+#if WITH_ANGELSCRIPT_UNITTESTS
+		if( preparedGlobalStateRegistrationOrdinal
+			== testFailureBeforePreparedGlobalStateRegistration )
+		{
+			testPreparedGlobalStateRegistrationFailureInjected = true;
+			failed = true;
+			error = testPreparedGlobalStateRegistrationFailureCode;
+			failureDetail.Format(
+				"prepared global state registration failed before publication (ordinal=%u name=%s)",
+				preparedGlobalStateRegistrationOrdinal,
+				description->name.AddressOf());
+			RollbackPreparedGlobals();
+			return error;
+		}
+#endif
+		const asUINT globalStateCountBefore = globalStates.GetLength();
 		globalStates.PushLast(state);
+		if( globalStates.GetLength() != globalStateCountBefore + 1 )
+		{
+			failed = true;
+			error = asOUT_OF_MEMORY;
+			failureDetail.Format(
+				"prepared global state allocation failed before publication (ordinal=%u name=%s)",
+				preparedGlobalStateRegistrationOrdinal,
+				description->name.AddressOf());
+			RollbackPreparedGlobals();
+			return error;
+		}
+		++preparedGlobalStateRegistrationOrdinal;
+		if( state.publishPureConstant )
+		{
+			description->property->isPureConstant = true;
+			description->isPureConstant = true;
+		}
 	}
 
 	// Host globals interned by Sema (for example `__StaticType_<Name>`) are not

@@ -6214,13 +6214,13 @@ void asCScriptEngine::CopyCanonicalTemplateDeclarations(
 
 // internal
 void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
-	asCArray<asSCanonicalRegisteredTypeDeclarationFact>& outDeclarations) const
+	asCArray<asSCanonicalRegisteredTypeDeclarationFact>& outDeclarations,
+	const asCModule* importedTypeAuthority) const
 {
 	outDeclarations.SetLength(0);
 	asCMap<asCString, asSCanonicalRegisteredTypeDeclarationFact>
 		declarationsByStableKey;
-	allRegisteredTypes.IterateAll(
-		[this, &declarationsByStableKey](asCTypeInfo* type)
+	auto appendTypeFact = [this, &declarationsByStableKey](asCTypeInfo* type)
 	{
 		if( type == 0
 			|| (type->flags & (asOBJ_TEMPLATE
@@ -6341,7 +6341,38 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 			return;
 		}
 		declarationsByStableKey.Insert(fact.stableKey, fact);
-	});
+	};
+	allRegisteredTypes.IterateAll(appendTypeFact);
+
+	// Parser type lookup checks the build module's flattened imports before any
+	// Engine-wide declaration. Copy that exact current dependency authority into
+	// Sema's pointer-free fact set as well. Historical script modules may remain
+	// alive for Hot Reload leases, but they are not semantic candidates unless
+	// the current build imports them explicitly.
+	if( importedTypeAuthority != 0 )
+	{
+		for( asUINT moduleIndex = 0;
+			moduleIndex < importedTypeAuthority->importedModules.GetLength();
+			++moduleIndex )
+		{
+			const asCModule* const importedModule =
+				importedTypeAuthority->importedModules[moduleIndex];
+			if( importedModule == 0 )
+				continue;
+			for( asUINT typeIndex = 0;
+				typeIndex < importedModule->classTypes.GetLength(); ++typeIndex )
+				appendTypeFact(importedModule->classTypes[typeIndex]);
+			for( asUINT typeIndex = 0;
+				typeIndex < importedModule->enumTypes.GetLength(); ++typeIndex )
+				appendTypeFact(importedModule->enumTypes[typeIndex]);
+			for( asUINT typeIndex = 0;
+				typeIndex < importedModule->typeDefs.GetLength(); ++typeIndex )
+				appendTypeFact(importedModule->typeDefs[typeIndex]);
+			for( asUINT typeIndex = 0;
+				typeIndex < importedModule->funcDefs.GetLength(); ++typeIndex )
+				appendTypeFact(importedModule->funcDefs[typeIndex]);
+		}
+	}
 
 	// asCMap iteration is key ordered. Preserve that order in the copied array
 	// so every Sema generation gets deterministic facts and can use binary
