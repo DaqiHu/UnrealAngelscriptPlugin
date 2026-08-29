@@ -1342,6 +1342,127 @@ public:
 			*FString::Printf(TEXT("an unmatched PreClassData entry must not alter another class. AST:\n%s"), *Dump)));
 	}
 
+	TEST_METHOD(PreClassFactsAreCapturedBeforeMutableRuntimeShellChanges)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("pre-class fact snapshot fixture selects CANONICAL")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"CapturedHostBase", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0,
+			TEXT("pre-class fact snapshot fixture registers the captured host type")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"LateRuntimeHostBase", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0,
+			TEXT("pre-class fact snapshot fixture registers the later Runtime shell type")));
+
+		asITypeInfo* const CapturedHostBase =
+			ScriptEngine->GetTypeInfoByName("CapturedHostBase");
+		asITypeInfo* const LateRuntimeHostBase =
+			ScriptEngine->GetTypeInfoByName("LateRuntimeHostBase");
+		ASSERT_THAT(IsTrue(
+			CapturedHostBase != nullptr && LateRuntimeHostBase != nullptr,
+			TEXT("both native host types must resolve before metadata capture")));
+		if (CapturedHostBase == nullptr || LateRuntimeHostBase == nullptr)
+		{
+			return;
+		}
+		CapturedHostBase->alignment = 8;
+		LateRuntimeHostBase->alignment = 32;
+
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaPreClassFactSnapshot");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		asPreClassData ClassData;
+		ClassData.ShadowType = CapturedHostBase;
+		Module->AddPreClassData("DerivedSnapshotClass", ClassData);
+		asPreClassData* const MutableRuntimeShell =
+			Module->PreClassData.Find(asCString("DerivedSnapshotClass"));
+		ASSERT_THAT(IsNotNull(MutableRuntimeShell,
+			TEXT("the retained Runtime registration shell must remain available")));
+		if (MutableRuntimeShell == nullptr)
+		{
+			return;
+		}
+
+		// This is an internal fault injection, not a supported embedding update.
+		// Canonical Sema must consume the facts captured at AddPreClassData rather
+		// than follow this retained Runtime-only pointer during the translation unit.
+		MutableRuntimeShell->ShadowType = LateRuntimeHostBase;
+
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		asCScriptCode Code;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class DerivedSnapshotClass
+			{
+				int Value;
+			}
+			)AS");
+		Code.SetCode(
+			"SemaPreClassFactSnapshot.as", ScriptSource.c_str(), true);
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context, Module);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("the direct Parser/Sema fixture must build its mutable Canonical AST")));
+		Sema.LayoutScriptClassFields(Module);
+
+		const asCDecl* Derived = nullptr;
+		const asCDecl* CapturedBaseDecl = nullptr;
+		const asCDecl* LateBaseDecl = nullptr;
+		for (asUINT DeclIndex = 1; DeclIndex <= Context.GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(DeclIndex));
+			if (Decl == nullptr || Decl->kind != asAST_DECL_CLASS)
+			{
+				continue;
+			}
+			if (Decl->name.Equals("DerivedSnapshotClass"))
+			{
+				Derived = Decl;
+			}
+			else if (Decl->origin.Equals("canonical-native-type-view")
+				&& Decl->name.Equals("CapturedHostBase"))
+			{
+				CapturedBaseDecl = Decl;
+			}
+			else if (Decl->origin.Equals("canonical-native-type-view")
+				&& Decl->name.Equals("LateRuntimeHostBase"))
+			{
+				LateBaseDecl = Decl;
+			}
+		}
+
+		asCString RawDump;
+		asCASTDump(Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(IsTrue(
+			Derived != nullptr
+				&& CapturedBaseDecl != nullptr
+				&& LateBaseDecl == nullptr
+				&& Derived->bases.GetLength() == 1
+				&& Derived->bases[0] == CapturedBaseDecl->id
+				&& Derived->byteAlignment == 8,
+			*FString::Printf(
+				TEXT("Canonical Sema must use the captured stable base/alignment rather than the mutable Runtime shell. AST:\n%s"),
+				*Dump)));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Sema.GetDiagnostics().GetLength(),
+			*FString::Printf(TEXT("captured PreClass facts must resolve without a Sema diagnostic. AST:\n%s"), *Dump)));
+	}
+
 	TEST_METHOD(ScriptReferenceFieldLayoutIsSealedWithoutRuntimeRegistration)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

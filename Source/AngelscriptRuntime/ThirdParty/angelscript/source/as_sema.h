@@ -1530,8 +1530,9 @@ private:
 	asCSourceRange QualTypeSyntaxNodeRange(
 		const asSQualTypeSyntaxNode& node) const;
 	asCScriptEngine* engine;
-	// Build-only metadata source. Sema consumes PreClassData while declarations
-	// are mutable, but never publishes this Engine-local pointer into the AST.
+	// Build-only metadata source. Sema consumes only the module's pointer-free
+	// Canonical PreClass fact copy while declarations are mutable; the retained
+	// Runtime PreClassData shell is never a Canonical semantic input.
 	asCModule* buildModule;
 	asCASTContext& context;
 	asCArray<asCString> diagnostics;

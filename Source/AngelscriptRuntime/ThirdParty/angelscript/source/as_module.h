@@ -55,6 +55,24 @@
 
 BEGIN_AS_NAMESPACE
 
+// Build-generation input copied from the embedding-owned PreClass metadata at
+// AddPreClassData. Canonical Sema consumes this immutable, pointer-free view;
+// the original asPreClassData remains the Runtime registration/install shell.
+struct asSCanonicalPreClassFact
+{
+	size_t propertyOffset;
+	asCString shadowTypeStableKey;
+	int shadowTypeAlignment;
+	bool hasShadowType;
+
+	asSCanonicalPreClassFact()
+		: propertyOffset(0)
+		, shadowTypeAlignment(0)
+		, hasShadowType(false)
+	{
+	}
+};
+
 // TODO: import: Remove this when the imported functions are removed
 const int FUNC_IMPORTED = 0x40000000;
 
@@ -269,6 +287,9 @@ public:
 
 	virtual void AddPreClassData(const char* name, asPreClassData Data) override;
 	TMap<asCString, asPreClassData> PreClassData;
+	const asSCanonicalPreClassFact* FindCanonicalPreClassFact(
+		const asCString& className) const;
+	TMap<asCString, asSCanonicalPreClassFact> canonicalPreClassFacts;
 
 //protected:
 	friend class asCScriptEngine;

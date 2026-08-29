@@ -2616,7 +2616,34 @@ void asCModule::PublishCanonicalASTSnapshot(const char* provenance)
 
 void asCModule::AddPreClassData(const char* preClassName, asPreClassData Data)
 {
-	PreClassData.Add(asCString(preClassName), Data);
+	const asCString className(preClassName);
+	PreClassData.Add(className, Data);
+
+	asSCanonicalPreClassFact fact;
+	fact.propertyOffset = Data.PropertyOffset;
+	if( Data.ShadowType != 0 )
+	{
+		fact.hasShadowType = true;
+		const char* const nameSpace = Data.ShadowType->GetNamespace();
+		if( nameSpace != 0 && *nameSpace != 0 )
+		{
+			fact.shadowTypeStableKey = nameSpace;
+			fact.shadowTypeStableKey += "::";
+		}
+		const char* const typeName = Data.ShadowType->GetName();
+		if( typeName != 0 )
+		{
+			fact.shadowTypeStableKey += typeName;
+		}
+		fact.shadowTypeAlignment = Data.ShadowType->alignment;
+	}
+	canonicalPreClassFacts.Add(className, fact);
+}
+
+const asSCanonicalPreClassFact* asCModule::FindCanonicalPreClassFact(
+	const asCString& className) const
+{
+	return canonicalPreClassFacts.Find(className);
 }
 
 #ifndef AS_NO_COMPILER
@@ -2783,6 +2810,7 @@ void asCModule::PrepareCanonicalBuildCandidate(asCModule& candidate) const
 	candidate.importedModules = importedModules;
 	candidate.moduleDependencies = moduleDependencies;
 	candidate.PreClassData = PreClassData;
+	candidate.canonicalPreClassFacts = canonicalPreClassFacts;
 	candidate.buildArtifactInvocationCallback = buildArtifactInvocationCallback;
 	candidate.buildArtifactInvocationUserData = buildArtifactInvocationUserData;
 	candidate.buildArtifactRestoreCallback = buildArtifactRestoreCallback;

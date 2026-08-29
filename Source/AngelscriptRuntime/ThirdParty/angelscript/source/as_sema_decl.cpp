@@ -1717,66 +1717,6 @@ static void EnsureGeneratedAccessors(asCSema* sema, asASTDeclId cls)
 	}
 }
 
-static asASTDeclId ProjectRuntimeBaseTypeInfo(
-	asCSema* sema,
-	asITypeInfo* info,
-	const asCString& sourceName)
-{
-	if( sema == 0 || sema->GetEngine() == 0
-		|| info == 0 )
-	{
-		return asASTDeclId();
-	}
-
-	asCASTContext& context = sema->GetContext();
-	asCDataType runtimeType = asCDataType::CreateType(
-		static_cast<asCTypeInfo*>(info), false);
-	asCRuntimeTypeBridge bridge(sema->GetEngine());
-	const asCQualType canonicalType = bridge.FromDataType(
-		context, runtimeType);
-	const asCType* const type = context.GetType(canonicalType.type);
-	const char* const stableName = type != 0
-		&& type->stableKey.GetLength() != 0
-		? type->stableKey.AddressOf()
-		: (sourceName.GetLength() != 0
-			? sourceName.AddressOf() : info->GetName());
-	for( asUINT declarationIndex = 1;
-		declarationIndex <= context.GetDeclCount(); ++declarationIndex )
-	{
-		const asCDecl* const existing =
-			context.GetDecl(asASTDeclId(declarationIndex));
-		if( existing != 0
-			&& (existing->kind == asAST_DECL_CLASS
-				|| existing->kind == asAST_DECL_INTERFACE)
-			&& existing->origin.Equals("canonical-native-type-view")
-			&& existing->type == canonicalType )
-		{
-			return existing->id;
-		}
-	}
-	const asASTDeclId projected = runtimeType.IsInterface()
-		? sema->ActOnInterfaceDecl(
-			context.GetTranslationUnit(), stableName, asCSourceRange())
-		: sema->ActOnClassDecl(
-			context.GetTranslationUnit(), stableName, asCSourceRange());
-	if( !projected.IsValid() )
-	{
-		return projected;
-	}
-
-	// This declaration is a read-only semantic projection of the host type. It
-	// participates in inheritance and overload resolution, but never becomes an
-	// authored script class or a source-owned layout. The same origin marker is
-	// consumed by native member projection and class-layout sealing.
-	context.SetOrigin(projected, "canonical-native-type-view");
-	context.SetDeclType(projected, canonicalType);
-	if( (info->GetFlags() & asOBJ_VALUE) != 0 )
-	{
-		context.AddDeclTrait(projected, asAST_TRAIT_VALUE);
-	}
-	return projected;
-}
-
 asASTDeclId asCSema::ProjectCanonicalRegisteredBaseType(
 	const asCString& authoredName,
 	bool absoluteScope,
@@ -2042,28 +1982,40 @@ void asCSema::ActOnRecordBaseSpecifiersAction(
 	}
 
 	// The UE preprocessor deliberately erases a native code superclass from the
-	// Parser text while retaining it in PreClassData::ShadowType. Consume that
-	// build-only input after the complete authored base list, and publish only
-	// the projected stable declaration/type identity into the AST.
+	// Parser text while retaining it in the module's PreClass metadata. Consume
+	// the pointer-free fact captured at that registration boundary after the
+	// complete authored base list, and publish only stable AST identity.
 	const asCDecl* declaration = context.GetDecl(derived);
 	if( declaration != 0 && declaration->bases.GetLength() == 0
 		&& buildModule != 0 )
 	{
-		asPreClassData* const classData =
-			buildModule->PreClassData.Find(declaration->name);
-		if( classData != 0 && classData->ShadowType != 0 )
+		const asSCanonicalPreClassFact* const classFact =
+			buildModule->FindCanonicalPreClassFact(declaration->name);
+		if( classFact != 0 && classFact->hasShadowType )
 		{
-			const asCString nativeName(classData->ShadowType->GetName());
-			const asASTDeclId nativeBase = ProjectRuntimeBaseTypeInfo(
-				this, classData->ShadowType, nativeName);
+			bool ambiguous = false;
+			const asASTDeclId nativeBase =
+				ProjectCanonicalRegisteredBaseType(
+					classFact->shadowTypeStableKey,
+					true,
+					declaration->parent,
+					ambiguous);
 			if( nativeBase.IsValid() )
 			{
 				const asCDecl* const projected = context.GetDecl(nativeBase);
 				RecordDependency(derived,
 					projected != 0 && projected->stableKey.GetLength() != 0
 						? projected->stableKey.AddressOf()
-						: nativeName.AddressOf());
+						: classFact->shadowTypeStableKey.AddressOf());
 				context.AddBase(derived, nativeBase);
+			}
+			else
+			{
+				AddDiagnostic(
+					ambiguous
+						? "preclass-native-base-ambiguous"
+						: "preclass-native-base-unresolved",
+					declaration->range);
 			}
 		}
 	}
@@ -3777,26 +3729,26 @@ static bool LayoutOneScriptClass(
 	// so it is a Sema layout input rather than CodeGen-only metadata. Freeze the
 	// exact offset on the class declaration (class byteOffset denotes this
 	// pre-class prefix) and let the ordinary field algorithm start after it.
-	asPreClassData* const classData = module
-		? module->PreClassData.Find(classDecl->name) : 0;
-	if( classData )
+	const asSCanonicalPreClassFact* const classFact = module
+		? module->FindCanonicalPreClassFact(classDecl->name) : 0;
+	if( classFact )
 	{
 		trivialStorageCopy = false;
-		if( classData->PropertyOffset > static_cast<size_t>(INT_MAX) )
+		if( classFact->propertyOffset > static_cast<size_t>(INT_MAX) )
 		{
 			sema->AddDiagnostic("class-layout-preclass-offset-overflow", classDecl->range);
 			return false;
 		}
-		const int propertyOffset = static_cast<int>(classData->PropertyOffset);
+		const int propertyOffset = static_cast<int>(classFact->propertyOffset);
 		context.SetDeclByteOffset(classDecl->id, propertyOffset);
 		if( baseClass == 0 )
 		{
 			size = propertyOffset;
 		}
-		if( classData->ShadowType
-			&& classData->ShadowType->alignment > static_cast<int>(alignment) )
+		if( classFact->hasShadowType
+			&& classFact->shadowTypeAlignment > static_cast<int>(alignment) )
 		{
-			alignment = static_cast<asUINT>(classData->ShadowType->alignment);
+			alignment = static_cast<asUINT>(classFact->shadowTypeAlignment);
 		}
 	}
 
