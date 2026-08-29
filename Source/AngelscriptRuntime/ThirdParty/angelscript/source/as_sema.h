@@ -99,15 +99,20 @@ struct asSTypedefDeclAction
 };
 
 // One node in a short-lived, pointer-free Parser -> Sema type-syntax payload.
-// Nodes are stored in pre-order. Direct template arguments begin at
-// firstTemplateArgument, and each child's subtreeSize advances to its next
-// sibling. Qualifiers belong only to this node; they are never folded from a
-// nested template argument into its parent.
+// Nodes are stored in pre-order. Scope segments begin at firstScopeSegment;
+// direct template arguments owned by any root or scope node begin at
+// firstTemplateArgument. Each child's subtreeSize advances to its next sibling.
+// absoluteScope records an authored leading `::`. Qualifiers belong only to the
+// root/type node; they are never folded from a nested template argument into
+// its parent.
 struct asSQualTypeSyntaxNode
 {
 	asCString spelling;
 	eTokenType primitiveToken;
 	asDWORD qualifiers;
+	bool absoluteScope;
+	asUINT firstScopeSegment;
+	asUINT scopeSegmentCount;
 	asUINT firstTemplateArgument;
 	asUINT templateArgumentCount;
 	asUINT subtreeSize;
@@ -117,6 +122,9 @@ struct asSQualTypeSyntaxNode
 	asSQualTypeSyntaxNode()
 		: primitiveToken(ttUnrecognizedToken)
 		, qualifiers(0)
+		, absoluteScope(false)
+		, firstScopeSegment(0)
+		, scopeSegmentCount(0)
 		, firstTemplateArgument(0)
 		, templateArgumentCount(0)
 		, subtreeSize(1)
@@ -126,10 +134,11 @@ struct asSQualTypeSyntaxNode
 	}
 };
 
-// Short-lived recognized type syntax. Parser copies the root and every nested
-// template argument into owned indexed values. Sema resolves this payload into
-// an ASTContext-local QualType; no Parser node, Builder/Runtime pointer,
-// numeric runtime type identity or snapshot-local type ref crosses the boundary.
+// Short-lived recognized type syntax. Parser copies the root, scope segments
+// and every nested template argument into owned indexed values. Sema resolves
+// this payload into an ASTContext-local QualType; no Parser node,
+// Builder/Runtime pointer, numeric runtime type identity or snapshot-local type
+// ref crosses the boundary.
 struct asSQualTypeSyntaxAction
 {
 	asCArray<asSQualTypeSyntaxNode> nodes;

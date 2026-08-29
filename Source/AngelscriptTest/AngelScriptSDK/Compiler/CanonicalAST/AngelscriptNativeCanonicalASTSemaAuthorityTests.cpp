@@ -31,6 +31,17 @@
 
 namespace CanonicalASTSemaAuthorityTest
 {
+	class FQualTypeParserAccessor : public asCParser
+	{
+	public:
+		explicit FQualTypeParserAccessor(asCBuilder* Builder)
+			: asCParser(Builder)
+		{
+		}
+
+		using asCParser::BuildQualTypeSyntaxAction;
+	};
+
 	template <typename T, typename = void>
 	struct THasWholeTreeParsedDeclarationAction : std::false_type
 	{
@@ -3725,6 +3736,194 @@ public:
 			ValueObject, asAST_TYPE_VALUE_OBJECT,
 			"FLexicalValueControl", false), *Evidence));
 		ASSERT_THAT(AreEqual(0, Context.Seal(), *Evidence));
+	}
+
+	TEST_METHOD(ParserTemplateQualifiedParentTypeResolvesExactChildFuncdefWithoutDynamicTypeIdIdentity)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"TScopedParent<class T>", 0,
+			asOBJ_REF | asOBJ_TEMPLATE | asOBJ_NOCOUNT) >= 0,
+			TEXT("template-qualified parent fixture must register its application template")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"void TScopedParent<T>::FChild()") >= 0,
+			TEXT("template-qualified parent fixture must register its child funcdef")));
+
+		asITypeInfo* const RuntimeParent =
+			ScriptEngine->GetTypeInfoByDecl("TScopedParent<int>");
+		asITypeInfo* const RuntimeChild =
+			ScriptEngine->GetTypeInfoByDecl("TScopedParent<int>::FChild");
+		ASSERT_THAT(IsTrue(RuntimeParent != nullptr
+			&& RuntimeChild != nullptr
+			&& (RuntimeChild->GetFlags() & asOBJ_FUNCDEF) != 0
+			&& RuntimeChild->GetParentType() == RuntimeParent,
+			TEXT("LEGACY registry contract must expose the exact child of TScopedParent<int>")));
+
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaTemplateQualifiedParentType");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaTemplateQualifiedParentType module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+
+		asCScriptCode TypeCode;
+		TypeCode.SetCode(
+			"SemaTemplateQualifiedParentTypeSyntax.as",
+			"TScopedParent<int>::FChild", true);
+		CanonicalASTSemaAuthorityTest::FQualTypeParserAccessor TypeParser(&Builder);
+		ASSERT_THAT(AreEqual(0, TypeParser.ParseDataType(&TypeCode, false, false),
+			TEXT("template-qualified parent type syntax must parse independently")));
+		asCScriptNode* const TypeRoot = TypeParser.GetScriptNode();
+		asCScriptNode* const TypeNode = TypeRoot != nullptr
+			? TypeRoot->firstChild : nullptr;
+		const asSQualTypeSyntaxAction TypeAction =
+			TypeParser.BuildQualTypeSyntaxAction(TypeNode, nullptr);
+		const asSQualTypeSyntaxNode* const RootSyntax =
+			TypeAction.nodes.GetLength() == 3 ? &TypeAction.nodes[0] : nullptr;
+		const asSQualTypeSyntaxNode* const ParentSyntax =
+			TypeAction.nodes.GetLength() == 3 ? &TypeAction.nodes[1] : nullptr;
+		const asSQualTypeSyntaxNode* const ArgumentSyntax =
+			TypeAction.nodes.GetLength() == 3 ? &TypeAction.nodes[2] : nullptr;
+		ASSERT_THAT(IsTrue(RootSyntax != nullptr
+			&& RootSyntax->spelling.Equals("FChild")
+			&& !RootSyntax->absoluteScope
+			&& RootSyntax->firstScopeSegment == 1
+			&& RootSyntax->scopeSegmentCount == 1
+			&& RootSyntax->firstTemplateArgument == 0
+			&& RootSyntax->templateArgumentCount == 0
+			&& RootSyntax->subtreeSize == 3,
+			TEXT("root syntax must own one indexed parent scope instead of flattened text")));
+		ASSERT_THAT(IsTrue(ParentSyntax != nullptr
+			&& ParentSyntax->spelling.Equals("TScopedParent")
+			&& ParentSyntax->firstScopeSegment == 0
+			&& ParentSyntax->scopeSegmentCount == 0
+			&& ParentSyntax->firstTemplateArgument == 2
+			&& ParentSyntax->templateArgumentCount == 1
+			&& ParentSyntax->subtreeSize == 2,
+			TEXT("template parent scope must own its exact indexed argument subtree")));
+		ASSERT_THAT(IsTrue(ArgumentSyntax != nullptr
+			&& ArgumentSyntax->spelling.Equals("int")
+			&& ArgumentSyntax->firstScopeSegment == 0
+			&& ArgumentSyntax->scopeSegmentCount == 0
+			&& ArgumentSyntax->firstTemplateArgument == 0
+			&& ArgumentSyntax->templateArgumentCount == 0
+			&& ArgumentSyntax->subtreeSize == 1,
+			TEXT("template parent scope must retain int as a separate leaf argument")));
+
+		const std::string Source =
+			"TScopedParent<int>::FChild Callback;\n";
+		asCScriptCode Code;
+		Code.SetCode("SemaTemplateQualifiedParentType.as", Source.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("template-qualified child funcdef declaration must parse")));
+
+		const asCDecl* Callback = nullptr;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_VAR
+				&& Decl->name.Equals("Callback"))
+			{
+				Callback = Decl;
+				break;
+			}
+		}
+		const asCType* const CallbackType = Callback != nullptr
+			? Context.GetType(Callback->type.type) : nullptr;
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("template-qualified parent type must produce the exact stable child funcdef without Runtime TypeId identity. runtime_type_id=%d diagnostics:\n%s\nAST:\n%s"),
+			RuntimeChild != nullptr ? RuntimeChild->GetTypeId() : asINVALID_TYPE,
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(Callback != nullptr
+			&& CallbackType != nullptr
+			&& CallbackType->kind == asAST_TYPE_FUNCDEF
+			&& CallbackType->stableKey.Equals(
+				"TScopedParent<int>::FChild"), *Evidence));
+		ASSERT_THAT(AreEqual(0, Context.Seal(), *Evidence));
+	}
+
+	TEST_METHOD(SemaTemplateQualifiedParentTypeRejectsMalformedScopeTopology)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+
+		auto MakeAction = []()
+		{
+			asSQualTypeSyntaxAction Action;
+			asSQualTypeSyntaxNode Root;
+			Root.spelling = "FChild";
+			Root.firstScopeSegment = 1;
+			Root.scopeSegmentCount = 1;
+			Root.subtreeSize = 3;
+			Root.beginOffset = 0;
+			Root.endOffset = 27;
+			Action.nodes.PushLast(Root);
+
+			asSQualTypeSyntaxNode Parent;
+			Parent.spelling = "TScopedParent";
+			Parent.firstTemplateArgument = 2;
+			Parent.templateArgumentCount = 1;
+			Parent.subtreeSize = 2;
+			Parent.beginOffset = 0;
+			Parent.endOffset = 18;
+			Action.nodes.PushLast(Parent);
+
+			asSQualTypeSyntaxNode Argument;
+			Argument.spelling = "int";
+			Argument.primitiveToken = ttInt;
+			Argument.subtreeSize = 1;
+			Argument.beginOffset = 14;
+			Argument.endOffset = 17;
+			Action.nodes.PushLast(Argument);
+			return Action;
+		};
+
+		auto ExpectStructureRejection = [&](const asSQualTypeSyntaxAction& Action,
+			const TCHAR* Label)
+		{
+			// Keep each malformed action in its own diagnostic context. Identical
+			// structure diagnostics without parsed source ranges are intentionally
+			// de-duplicated by Sema, so reusing one context would make the second
+			// independent rejection look as if it emitted no diagnostic.
+			asCASTContext Context;
+			asCSema Sema(ScriptEngine, Context);
+			Sema.ActOnTranslationUnit("SemaTemplateQualifiedParentTopology");
+			const asCQualType Result = Sema.ActOnQualTypeAction(Action);
+			const asUINT DiagnosticCount = Sema.GetDiagnostics().GetLength();
+			ASSERT_THAT(IsTrue(!Result.IsValid()
+				&& DiagnosticCount == 1
+				&& Sema.GetDiagnostics()[0].Equals(
+					"qualtype-action-structure-invalid"), Label));
+		};
+
+		asSQualTypeSyntaxAction WrongScopeStart = MakeAction();
+		WrongScopeStart.nodes[0].firstScopeSegment = 2;
+		ExpectStructureRejection(WrongScopeStart,
+			TEXT("scope segments must begin immediately after their owner"));
+
+		asSQualTypeSyntaxAction OverlappingTemplateChild = MakeAction();
+		OverlappingTemplateChild.nodes[1].firstTemplateArgument = 1;
+		ExpectStructureRejection(OverlappingTemplateChild,
+			TEXT("scope template arguments must not overlap their owner node"));
+
+		asSQualTypeSyntaxAction OutOfSubtreeChild = MakeAction();
+		OutOfSubtreeChild.nodes[0].subtreeSize = 2;
+		ExpectStructureRejection(OutOfSubtreeChild,
+			TEXT("scope children must remain inside the root action subtree"));
 	}
 
 	TEST_METHOD(ImportCallKeepsImportRouteDistinctFromGlobal)

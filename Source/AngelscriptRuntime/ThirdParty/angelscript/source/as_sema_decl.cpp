@@ -72,6 +72,57 @@ static asDWORD DeclaredEffectiveQualifiers(
 	return authoredQualifiers;
 }
 
+static asCString CanonicalStructuredTypeKey(const asCString& spelling)
+{
+	if( spelling.GetLength() >= 2
+		&& spelling[0] == ':' && spelling[1] == ':' )
+	{
+		return asCString(spelling.AddressOf() + 2);
+	}
+	return spelling;
+}
+
+static asCQualType InternResolvedRuntimeType(
+	asCASTContext& context,
+	asCScriptEngine* engine,
+	asITypeInfo* typeInfo,
+	const asCString& stableSpelling,
+	asDWORD authoredQualifiers)
+{
+	if( engine == 0 || typeInfo == 0 || stableSpelling.GetLength() == 0 )
+	{
+		return asCQualType();
+	}
+	const asDWORD effectiveQualifiers =
+		RuntimeEffectiveQualifiers(typeInfo, authoredQualifiers);
+	asCDataType dataType = asCDataType::CreateType(
+		static_cast<asCTypeInfo*>(typeInfo),
+		(effectiveQualifiers & asAST_QUAL_CONST) != 0);
+	if( effectiveQualifiers & asAST_QUAL_HANDLE )
+	{
+		dataType.MakeHandle(true);
+	}
+	if( effectiveQualifiers & asAST_QUAL_REFERENCE )
+	{
+		dataType.MakeReference(true);
+	}
+	asCRuntimeTypeBridge bridge(engine);
+	const asCQualType bridged = bridge.FromDataType(context, dataType);
+	if( !bridged.IsValid() )
+	{
+		return asCQualType();
+	}
+	const asCType* const canonical = context.GetType(bridged.type);
+	if( canonical == 0 )
+	{
+		return asCQualType();
+	}
+	return context.InternNamedType(
+		canonical->kind,
+		stableSpelling.AddressOf(),
+		effectiveQualifiers);
+}
+
 asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 {
 	asCString text;
@@ -263,117 +314,263 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 	}
 
 	const eTokenType primitive = CanonicalPrimitiveToken(node.primitiveToken);
-	if( node.templateArgumentCount == 0 )
+	const asUINT subtreeEnd = nodeIndex + node.subtreeSize;
+	asUINT childIndex = nodeIndex + 1;
+
+	// Append the direct template arguments owned by one syntax node. Scope
+	// subtrees are consumed by the caller before this lambda is entered. Each
+	// subtype is resolved through its own structured action, so configured
+	// primitive widths and nested qualified/template identities remain exact.
+	auto appendTemplateArguments = [this, &action, depth](
+		const asSQualTypeSyntaxNode& owner,
+		asUINT ownerEnd,
+		asUINT& nextChild,
+		asCString& spelling,
+		const asCSourceRange& ownerRange) -> bool
 	{
-		if( node.subtreeSize != 1 )
+		if( owner.templateArgumentCount == 0 )
+		{
+			if( owner.firstTemplateArgument != 0 )
+			{
+				AddDiagnostic("qualtype-action-structure-invalid", ownerRange);
+				return false;
+			}
+			return true;
+		}
+		if( owner.firstTemplateArgument != nextChild )
+		{
+			AddDiagnostic("qualtype-action-structure-invalid", ownerRange);
+			return false;
+		}
+
+		spelling += "<";
+		for( asUINT argumentIndex = 0;
+			argumentIndex < owner.templateArgumentCount; ++argumentIndex )
+		{
+			if( nextChild >= ownerEnd
+				|| nextChild >= action.nodes.GetLength() )
+			{
+				AddDiagnostic("qualtype-action-structure-invalid", ownerRange);
+				return false;
+			}
+			const asSQualTypeSyntaxNode& childNode = action.nodes[nextChild];
+			const asCSourceRange childRange = QualTypeSyntaxNodeRange(childNode);
+			if( childNode.qualifiers & asAST_QUAL_CONST )
+			{
+				AddDiagnostic("qualtype-template-subtype-readonly", childRange);
+				return false;
+			}
+			const asDWORD allowedTemplateQualifiers = asAST_QUAL_HANDLE;
+			if( childNode.qualifiers & ~allowedTemplateQualifiers )
+			{
+				AddDiagnostic(
+					"qualtype-template-subtype-modifier-invalid", childRange);
+				return false;
+			}
+
+			const asCQualType childType = ActOnQualTypeSyntaxNode(
+				action, nextChild, depth + 1);
+			const asCType* const childCanonical =
+				context.GetType(childType.type);
+			if( !childType.IsValid() || childCanonical == 0
+				|| childCanonical->stableKey.GetLength() == 0 )
+			{
+				return false;
+			}
+			if( argumentIndex != 0 )
+			{
+				spelling += ",";
+			}
+			spelling += childCanonical->stableKey;
+			if( childType.quals & asAST_QUAL_HANDLE )
+			{
+				spelling += "@";
+			}
+			if( childNode.subtreeSize == 0
+				|| nextChild + childNode.subtreeSize > ownerEnd )
+			{
+				AddDiagnostic("qualtype-action-structure-invalid", childRange);
+				return false;
+			}
+			nextChild += childNode.subtreeSize;
+		}
+		spelling += ">";
+		return true;
+	};
+
+	if( node.scopeSegmentCount == 0 )
+	{
+		if( node.firstScopeSegment != 0 )
 		{
 			AddDiagnostic("qualtype-action-structure-invalid", range);
 			return asCQualType();
 		}
-		if( primitive != ttUnrecognizedToken )
-		{
-			return context.InternPrimitive(primitive, node.qualifiers);
-		}
-		if( engine != 0 && engine->IsTemplateType(node.spelling.AddressOf()) )
-		{
-			AddDiagnostic("qualtype-template-arity-invalid", range);
-			return asCQualType();
-		}
-		return ActOnQualType(node.spelling.AddressOf(), node.qualifiers);
 	}
-
-	if( primitive != ttUnrecognizedToken
-		|| node.firstTemplateArgument != nodeIndex + 1 )
+	else if( node.firstScopeSegment != childIndex
+		|| primitive != ttUnrecognizedToken )
 	{
 		AddDiagnostic("qualtype-action-structure-invalid", range);
 		return asCQualType();
 	}
 
-	bool isTemplateBase = engine != 0
-		&& engine->IsTemplateType(node.spelling.AddressOf());
-	if( !isTemplateBase && engine != 0 )
+	asCString qualifiedPrefix;
+	if( node.absoluteScope )
 	{
-		asITypeInfo* const baseInfo =
-			engine->GetTypeInfoByDecl(node.spelling.AddressOf());
-		isTemplateBase = baseInfo != 0
-			&& (baseInfo->GetFlags() & asOBJ_TEMPLATE) != 0;
+		qualifiedPrefix = "::";
 	}
-	if( !isTemplateBase )
-	{
-		AddDiagnostic("qualtype-not-template", range);
-		return asCQualType();
-	}
-
-	asCString completeSpelling = node.spelling;
-	completeSpelling += "<";
-	asUINT childIndex = node.firstTemplateArgument;
-	const asUINT subtreeEnd = nodeIndex + node.subtreeSize;
-	for( asUINT argumentIndex = 0;
-		argumentIndex < node.templateArgumentCount; ++argumentIndex )
+	asITypeInfo* templateParent = 0;
+	for( asUINT scopeIndex = 0;
+		scopeIndex < node.scopeSegmentCount; ++scopeIndex )
 	{
 		if( childIndex >= subtreeEnd || childIndex >= action.nodes.GetLength() )
 		{
 			AddDiagnostic("qualtype-action-structure-invalid", range);
 			return asCQualType();
 		}
-		const asSQualTypeSyntaxNode& childNode = action.nodes[childIndex];
-		const asCSourceRange childRange = QualTypeSyntaxNodeRange(childNode);
-		if( childNode.qualifiers & asAST_QUAL_CONST )
+		const asUINT segmentIndex = childIndex;
+		const asSQualTypeSyntaxNode& segment = action.nodes[segmentIndex];
+		const asCSourceRange segmentRange = QualTypeSyntaxNodeRange(segment);
+		if( segment.spelling.GetLength() == 0
+			|| segment.endOffset < segment.beginOffset
+			|| segment.subtreeSize == 0
+			|| segmentIndex + segment.subtreeSize > subtreeEnd
+			|| segment.absoluteScope
+			|| segment.firstScopeSegment != 0
+			|| segment.scopeSegmentCount != 0
+			|| segment.qualifiers != 0
+			|| CanonicalPrimitiveToken(segment.primitiveToken)
+				!= ttUnrecognizedToken )
 		{
-			AddDiagnostic("qualtype-template-subtype-readonly", childRange);
+			AddDiagnostic("qualtype-action-structure-invalid", segmentRange);
 			return asCQualType();
 		}
-		const asDWORD allowedTemplateQualifiers = asAST_QUAL_HANDLE;
-		if( childNode.qualifiers & ~allowedTemplateQualifiers )
+		if( segment.templateArgumentCount != 0
+			&& scopeIndex + 1 != node.scopeSegmentCount )
 		{
-			AddDiagnostic("qualtype-template-subtype-modifier-invalid", childRange);
+			AddDiagnostic("qualtype-action-structure-invalid", segmentRange);
 			return asCQualType();
 		}
 
-		const asCQualType childType =
-			ActOnQualTypeSyntaxNode(action, childIndex, depth + 1);
-		const asCType* const childCanonical =
-			context.GetType(childType.type);
-		if( !childType.IsValid() || childCanonical == 0
-			|| childCanonical->stableKey.GetLength() == 0 )
+		asCString segmentSpelling = segment.spelling;
+		asUINT segmentChild = segmentIndex + 1;
+		const asUINT segmentEnd = segmentIndex + segment.subtreeSize;
+		if( !appendTemplateArguments(
+			segment, segmentEnd, segmentChild, segmentSpelling, segmentRange) )
 		{
 			return asCQualType();
 		}
-		if( argumentIndex != 0 )
+		if( segmentChild != segmentEnd )
 		{
-			completeSpelling += ",";
-		}
-		completeSpelling += childCanonical->stableKey;
-		if( childType.quals & asAST_QUAL_HANDLE )
-		{
-			completeSpelling += "@";
-		}
-		if( childNode.subtreeSize == 0
-			|| childIndex + childNode.subtreeSize > subtreeEnd )
-		{
-			AddDiagnostic("qualtype-action-structure-invalid", childRange);
+			AddDiagnostic("qualtype-action-structure-invalid", segmentRange);
 			return asCQualType();
 		}
-		childIndex += childNode.subtreeSize;
+
+		if( segment.templateArgumentCount != 0 )
+		{
+			const asCString exactParentSpelling =
+				qualifiedPrefix + segmentSpelling;
+			templateParent = engine != 0
+				? engine->GetTypeInfoByDecl(exactParentSpelling.AddressOf()) : 0;
+			if( templateParent == 0
+				|| (templateParent->GetFlags() & asOBJ_TEMPLATE) == 0 )
+			{
+				AddDiagnostic("qualtype-template-instance-invalid", segmentRange);
+				return asCQualType();
+			}
+		}
+
+		qualifiedPrefix += segmentSpelling;
+		qualifiedPrefix += "::";
+		childIndex = segmentEnd;
+	}
+
+	if( primitive != ttUnrecognizedToken )
+	{
+		if( node.absoluteScope || node.scopeSegmentCount != 0
+			|| node.templateArgumentCount != 0
+			|| node.firstTemplateArgument != 0
+			|| childIndex != subtreeEnd )
+		{
+			AddDiagnostic("qualtype-action-structure-invalid", range);
+			return asCQualType();
+		}
+		return context.InternPrimitive(primitive, node.qualifiers);
+	}
+
+	asCString completeSpelling = qualifiedPrefix + node.spelling;
+	if( !appendTemplateArguments(
+		node, subtreeEnd, childIndex, completeSpelling, range) )
+	{
+		return asCQualType();
 	}
 	if( childIndex != subtreeEnd )
 	{
 		AddDiagnostic("qualtype-action-structure-invalid", range);
 		return asCQualType();
 	}
-	completeSpelling += ">";
 
-	asITypeInfo* const exactInstance = engine != 0
-		? engine->GetTypeInfoByDecl(completeSpelling.AddressOf()) : 0;
-	if( exactInstance == 0 )
+	if( node.templateArgumentCount == 0
+		&& engine != 0 && engine->IsTemplateType(node.spelling.AddressOf()) )
 	{
-		AddDiagnostic("qualtype-template-instance-invalid", range);
+		AddDiagnostic("qualtype-template-arity-invalid", range);
 		return asCQualType();
 	}
-	return context.InternNamedType(
-		asAST_TYPE_TEMPLATE,
-		completeSpelling.AddressOf(),
-		RuntimeEffectiveQualifiers(exactInstance, node.qualifiers));
+
+	const asCString canonicalSpelling =
+		CanonicalStructuredTypeKey(completeSpelling);
+	if( node.templateArgumentCount != 0 )
+	{
+		asITypeInfo* const exactInstance = engine != 0
+			? engine->GetTypeInfoByDecl(completeSpelling.AddressOf()) : 0;
+		if( exactInstance == 0
+			|| (exactInstance->GetFlags() & asOBJ_TEMPLATE) == 0 )
+		{
+			AddDiagnostic("qualtype-template-instance-invalid", range);
+			return asCQualType();
+		}
+		return context.InternNamedType(
+			asAST_TYPE_TEMPLATE,
+			canonicalSpelling.AddressOf(),
+			RuntimeEffectiveQualifiers(exactInstance, node.qualifiers));
+	}
+
+	// A template-bearing innermost scope denotes an exact Runtime parent type.
+	// Resolve the final child under that instance, then publish only its kind,
+	// effective qualifiers and authored stable parent/child key. The Engine
+	// pointer and dynamically allocated TypeId remain local resolution inputs.
+	if( templateParent != 0 )
+	{
+		asITypeInfo* const exactChild = engine != 0
+			? engine->GetTypeInfoByDecl(completeSpelling.AddressOf()) : 0;
+		if( exactChild == 0 || exactChild->GetParentType() != templateParent )
+		{
+			AddDiagnostic("qualtype-parent-child-invalid", range);
+			return asCQualType();
+		}
+		const asCQualType resolved = InternResolvedRuntimeType(
+			context, engine, exactChild, canonicalSpelling, node.qualifiers);
+		if( !resolved.IsValid() )
+		{
+			AddDiagnostic("qualtype-parent-child-invalid", range);
+		}
+		return resolved;
+	}
+
+	// Preserve the same exact stable owner spelling for non-template child
+	// funcdefs as well; asCDataType::Format otherwise prints only the bare
+	// parentClass->name and can lose its namespace.
+	if( engine != 0 && node.scopeSegmentCount != 0 )
+	{
+		asITypeInfo* const exactScoped =
+			engine->GetTypeInfoByDecl(completeSpelling.AddressOf());
+		if( exactScoped != 0 && exactScoped->GetParentType() != 0 )
+		{
+			return InternResolvedRuntimeType(
+				context, engine, exactScoped,
+				canonicalSpelling, node.qualifiers);
+		}
+	}
+	return ActOnQualType(completeSpelling.AddressOf(), node.qualifiers);
 }
 
 asCQualType asCSema::ActOnQualTypeAction(

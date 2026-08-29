@@ -198,31 +198,6 @@ static void CollectLocalQualTypeActionQualifiers(
 	}
 }
 
-static void AppendQualTypeActionLeafText(
-	const asCScriptNode* node,
-	const asCScriptCode* script,
-	asCString& text)
-{
-	if( node == 0 )
-	{
-		return;
-	}
-	if( node->firstChild != 0 )
-	{
-		for( const asCScriptNode* child = node->firstChild;
-			child != 0; child = child->next )
-		{
-			AppendQualTypeActionLeafText(child, script, text);
-		}
-		return;
-	}
-	const asCString token = QualTypeActionNodeText(node, script);
-	if( token.GetLength() )
-	{
-		text += token;
-	}
-}
-
 static asCString FormatQualTypeActionBaseSpelling(
 	const asCScriptNode* typeNode,
 	const asCScriptCode* script)
@@ -236,16 +211,11 @@ static asCString FormatQualTypeActionBaseSpelling(
 		return QualTypeActionNodeText(typeNode, script);
 	}
 
-	asCString scope;
 	asCString primary;
 	for( const asCScriptNode* child = typeNode->firstChild;
 		child != 0; child = child->next )
 	{
-		if( child->nodeType == snScope )
-		{
-			AppendQualTypeActionLeafText(child, script, scope);
-		}
-		else if( child->nodeType == snDataType )
+		if( child->nodeType == snDataType )
 		{
 			if( primary.GetLength() == 0 )
 			{
@@ -260,11 +230,6 @@ static asCString FormatQualTypeActionBaseSpelling(
 	if( primary.GetLength() == 0 )
 	{
 		primary = QualTypeActionNodeText(typeNode, script);
-	}
-	if( scope.GetLength() )
-	{
-		scope += primary;
-		primary = scope;
 	}
 	return primary;
 }
@@ -306,6 +271,88 @@ static void ExtendQualTypeActionRange(
 static asUINT AppendQualTypeSyntaxNode(
 	const asCScriptNode* typeNode,
 	const asCScriptCode* script,
+	asCArray<asSQualTypeSyntaxNode>& nodes);
+
+static void AppendQualTypeScopeSegments(
+	const asCScriptNode* scopeNode,
+	const asCScriptCode* script,
+	asCArray<asSQualTypeSyntaxNode>& nodes,
+	asUINT ownerIndex)
+{
+	const asCScriptNode* child = scopeNode != 0
+		? scopeNode->firstChild : 0;
+	if( child != 0 && child->tokenType == ttScope )
+	{
+		nodes[ownerIndex].absoluteScope = true;
+		child = child->next;
+	}
+
+	while( child != 0 )
+	{
+		if( child->nodeType != snIdentifier )
+		{
+			// ParseOptionalScope owns grammar validation. Keep an unexpected
+			// recognized shape in the action as an invalid empty segment so Sema
+			// fails closed instead of reconstructing source text heuristically.
+			asSQualTypeSyntaxNode invalid;
+			if( nodes[ownerIndex].scopeSegmentCount == 0 )
+			{
+				nodes[ownerIndex].firstScopeSegment = nodes.GetLength();
+			}
+			nodes.PushLast(invalid);
+			++nodes[ownerIndex].scopeSegmentCount;
+			break;
+		}
+
+		const asUINT segmentIndex = nodes.GetLength();
+		asSQualTypeSyntaxNode segment;
+		segment.spelling = QualTypeActionNodeText(child, script);
+		bool hasRange = false;
+		ExtendQualTypeActionRange(
+			child, script, segment.beginOffset, segment.endOffset, hasRange);
+		if( nodes[ownerIndex].scopeSegmentCount == 0 )
+		{
+			nodes[ownerIndex].firstScopeSegment = segmentIndex;
+		}
+		nodes.PushLast(segment);
+		++nodes[ownerIndex].scopeSegmentCount;
+		child = child->next;
+
+		if( child != 0 && child->tokenType == ttScope )
+		{
+			child = child->next;
+			nodes[segmentIndex].subtreeSize = 1;
+			continue;
+		}
+
+		// ParseOptionalScope permits a template list only on the innermost
+		// segment. Its snDataType children follow the identifier directly; the
+		// closing `::` is consumed by grammar and deliberately is not recovered
+		// from source text here.
+		while( child != 0 && child->nodeType == snDataType )
+		{
+			if( nodes[segmentIndex].templateArgumentCount == 0 )
+			{
+				nodes[segmentIndex].firstTemplateArgument = nodes.GetLength();
+			}
+			bool segmentHasRange =
+				nodes[segmentIndex].endOffset > nodes[segmentIndex].beginOffset;
+			ExtendQualTypeActionRange(
+				child, script,
+				nodes[segmentIndex].beginOffset,
+				nodes[segmentIndex].endOffset,
+				segmentHasRange);
+			AppendQualTypeSyntaxNode(child, script, nodes);
+			++nodes[segmentIndex].templateArgumentCount;
+			child = child->next;
+		}
+		nodes[segmentIndex].subtreeSize = nodes.GetLength() - segmentIndex;
+	}
+}
+
+static asUINT AppendQualTypeSyntaxNode(
+	const asCScriptNode* typeNode,
+	const asCScriptCode* script,
 	asCArray<asSQualTypeSyntaxNode>& nodes)
 {
 	const asUINT nodeIndex = nodes.GetLength();
@@ -321,6 +368,17 @@ static asUINT AppendQualTypeSyntaxNode(
 	ExtendQualTypeActionRange(
 		typeNode, script, payload.beginOffset, payload.endOffset, hasRange);
 	nodes.PushLast(payload);
+
+	for( const asCScriptNode* child = typeNode != 0
+		? typeNode->firstChild : 0;
+		child != 0; child = child->next )
+	{
+		if( child->nodeType == snScope )
+		{
+			AppendQualTypeScopeSegments(child, script, nodes, nodeIndex);
+			break;
+		}
+	}
 
 	asUINT dataTypeIndex = 0;
 	for( const asCScriptNode* child = typeNode != 0
