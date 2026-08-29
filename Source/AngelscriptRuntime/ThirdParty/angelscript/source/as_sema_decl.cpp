@@ -123,6 +123,116 @@ static asCQualType InternResolvedRuntimeType(
 		effectiveQualifiers);
 }
 
+static asCQualType InternResolvedLexicalType(
+	asCASTContext& context,
+	const asCDecl* declaration,
+	asDWORD authoredQualifiers)
+{
+	if( declaration == 0 || declaration->stableKey.GetLength() == 0 )
+	{
+		return asCQualType();
+	}
+	switch( declaration->kind )
+	{
+	case asAST_DECL_ENUM:
+		return context.InternNamedType(
+			asAST_TYPE_ENUM,
+			declaration->stableKey.AddressOf(),
+			authoredQualifiers);
+	case asAST_DECL_CLASS:
+	case asAST_DECL_INTERFACE:
+		return context.InternNamedType(
+			declaration->kind == asAST_DECL_INTERFACE
+				|| (declaration->traits & asAST_TRAIT_VALUE) == 0
+				? asAST_TYPE_REFERENCE_OBJECT
+				: asAST_TYPE_VALUE_OBJECT,
+			declaration->stableKey.AddressOf(),
+			DeclaredEffectiveQualifiers(
+				declaration, authoredQualifiers));
+	case asAST_DECL_FUNCDEF:
+		return context.InternNamedType(
+			asAST_TYPE_FUNCDEF,
+			declaration->stableKey.AddressOf(),
+			authoredQualifiers);
+	default:
+		return asCQualType();
+	}
+}
+
+static asCQualType ResolveQualifiedNominalType(
+	asCSema& sema,
+	asCASTContext& context,
+	asCScriptEngine* engine,
+	const asCString& canonicalSpelling,
+	bool absoluteScope,
+	asDWORD authoredQualifiers)
+{
+	if( canonicalSpelling.GetLength() == 0 )
+	{
+		return asCQualType();
+	}
+
+	auto resolveExact = [&context, engine, authoredQualifiers](
+		const asCString& stableKey) -> asCQualType
+	{
+		for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
+		{
+			const asCDecl* const declaration =
+				context.GetDecl(asASTDeclId(i));
+			if( declaration != 0
+				&& declaration->stableKey.Equals(stableKey) )
+			{
+				const asCQualType lexical = InternResolvedLexicalType(
+					context, declaration, authoredQualifiers);
+				if( lexical.IsValid() )
+				{
+					return lexical;
+				}
+			}
+		}
+
+		asITypeInfo* const runtimeType = engine != 0
+			? engine->GetTypeInfoByDecl(stableKey.AddressOf()) : 0;
+		return InternResolvedRuntimeType(
+			context, engine, runtimeType, stableKey, authoredQualifiers);
+	};
+
+	// AngelScript resolves a relative qualified scope from the current
+	// namespace and then each enclosing namespace. Function/record contexts do
+	// not contribute spelling of their own here; climb until a namespace is
+	// reached, then try its stable owner key. A leading `::` skips this search.
+	if( !absoluteScope )
+	{
+		asASTDeclId current = sema.CurrentDeclContext();
+		while( current.IsValid() )
+		{
+			const asCDecl* const declaration = context.GetDecl(current);
+			if( declaration == 0 )
+			{
+				break;
+			}
+			if( declaration->kind == asAST_DECL_NAMESPACE
+				&& declaration->stableKey.GetLength() != 0 )
+			{
+				asCString candidate = declaration->stableKey;
+				candidate += "::";
+				candidate += canonicalSpelling;
+				const asCQualType resolved = resolveExact(candidate);
+				if( resolved.IsValid() )
+				{
+					return resolved;
+				}
+			}
+			current = declaration->parent;
+		}
+	}
+
+	// The translation-unit root has no language namespace component. It is the
+	// only candidate for an absolute name and the final candidate for a relative
+	// name after enclosing-namespace search is exhausted.
+	return resolveExact(canonicalSpelling);
+}
+
 asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 {
 	asCString text;
@@ -556,21 +666,27 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 		return resolved;
 	}
 
-	// Preserve the same exact stable owner spelling for non-template child
-	// funcdefs as well; asCDataType::Format otherwise prints only the bare
-	// parentClass->name and can lose its namespace.
-	if( engine != 0 && node.scopeSegmentCount != 0 )
+	// Qualified nominal types must resolve in the Canonical declaration
+	// environment before script declarations are published to the Runtime
+	// registry. The same search also accepts an exact Runtime type as a local
+	// Sema input, but publishes only the matched stable key/kind/qualifiers.
+	// This covers namespace-qualified records/enums and non-template child
+	// funcdefs without depending on Builder's GetNameSpaceFromNode walk.
+	if( node.scopeSegmentCount != 0 )
 	{
-		asITypeInfo* const exactScoped =
-			engine->GetTypeInfoByDecl(completeSpelling.AddressOf());
-		if( exactScoped != 0 && exactScoped->GetParentType() != 0 )
+		const asCQualType qualified = ResolveQualifiedNominalType(
+			*this,
+			context,
+			engine,
+			canonicalSpelling,
+			node.absoluteScope,
+			node.qualifiers);
+		if( qualified.IsValid() )
 		{
-			return InternResolvedRuntimeType(
-				context, engine, exactScoped,
-				canonicalSpelling, node.qualifiers);
+			return qualified;
 		}
 	}
-	return ActOnQualType(completeSpelling.AddressOf(), node.qualifiers);
+	return ActOnQualType(canonicalSpelling.AddressOf(), node.qualifiers);
 }
 
 asCQualType asCSema::ActOnQualTypeAction(

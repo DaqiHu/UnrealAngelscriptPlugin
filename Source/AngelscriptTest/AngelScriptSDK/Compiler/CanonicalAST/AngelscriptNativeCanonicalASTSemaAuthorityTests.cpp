@@ -3738,6 +3738,109 @@ public:
 		ASSERT_THAT(AreEqual(0, Context.Seal(), *Evidence));
 	}
 
+	TEST_METHOD(ParserQualifiedTypeScopesResolveLexicalNamespaceDeclsBeforeRuntimePublication)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsNull(ScriptEngine->GetTypeInfoByDecl("Outer::Types::CRef"),
+			TEXT("qualified lexical class fixture must begin outside the Runtime registry")));
+		ASSERT_THAT(IsNull(ScriptEngine->GetTypeInfoByDecl("Outer::Types::FValue"),
+			TEXT("qualified lexical value fixture must begin outside the Runtime registry")));
+		ASSERT_THAT(IsNull(ScriptEngine->GetTypeInfoByDecl("Outer::Types::EKind"),
+			TEXT("qualified lexical enum fixture must begin outside the Runtime registry")));
+
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaQualifiedLexicalTypeScope");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaQualifiedLexicalTypeScope module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string Source =
+			"namespace Outer {\n"
+			"  namespace Types {\n"
+			"    class CRef {}\n"
+			"    struct FValue { int Value; }\n"
+			"    enum EKind { First }\n"
+			"  }\n"
+			"  namespace Use {\n"
+			"    Types::CRef RelativeClass;\n"
+			"    Outer::Types::FValue ParentQualifiedValue;\n"
+			"    ::Outer::Types::EKind AbsoluteEnum;\n"
+			"  }\n"
+			"}\n";
+		asCScriptCode Code;
+		Code.SetCode("SemaQualifiedLexicalTypeScope.as", Source.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("relative, parent-qualified and absolute lexical type scopes must parse")));
+		ASSERT_THAT(IsNull(ScriptEngine->GetTypeInfoByDecl("Outer::Types::CRef"),
+			TEXT("Parser-to-Sema gate must resolve qualified class semantics before Runtime publication")));
+		ASSERT_THAT(IsNull(ScriptEngine->GetTypeInfoByDecl("Outer::Types::FValue"),
+			TEXT("Parser-to-Sema gate must resolve qualified value semantics before Runtime publication")));
+		ASSERT_THAT(IsNull(ScriptEngine->GetTypeInfoByDecl("Outer::Types::EKind"),
+			TEXT("Parser-to-Sema gate must resolve qualified enum semantics before Runtime publication")));
+
+		const asCDecl* RelativeClass = nullptr;
+		const asCDecl* ParentQualifiedValue = nullptr;
+		const asCDecl* AbsoluteEnum = nullptr;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			if (Decl == nullptr || Decl->kind != asAST_DECL_VAR)
+			{
+				continue;
+			}
+			if (Decl->name.Equals("RelativeClass"))
+			{
+				RelativeClass = Decl;
+			}
+			else if (Decl->name.Equals("ParentQualifiedValue"))
+			{
+				ParentQualifiedValue = Decl;
+			}
+			else if (Decl->name.Equals("AbsoluteEnum"))
+			{
+				AbsoluteEnum = Decl;
+			}
+		}
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("qualified lexical type lookup must publish one canonical namespace identity before Runtime registration. diagnostics:\n%s\nAST:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		auto HasExactType = [&Context](
+			const asCDecl* Decl,
+			asEASTTypeKind Kind,
+			const char* StableKey,
+			bool IsHandle)
+		{
+			const asCType* const Type = Decl != nullptr
+				? Context.GetType(Decl->type.type) : nullptr;
+			return Type != nullptr
+				&& Type->kind == Kind
+				&& Type->stableKey.Equals(StableKey)
+				&& Decl->type.IsHandle() == IsHandle;
+		};
+		ASSERT_THAT(IsTrue(HasExactType(
+			RelativeClass, asAST_TYPE_REFERENCE_OBJECT,
+			"Outer::Types::CRef", true), *Evidence));
+		ASSERT_THAT(IsTrue(HasExactType(
+			ParentQualifiedValue, asAST_TYPE_VALUE_OBJECT,
+			"Outer::Types::FValue", false), *Evidence));
+		ASSERT_THAT(IsTrue(HasExactType(
+			AbsoluteEnum, asAST_TYPE_ENUM,
+			"Outer::Types::EKind", false), *Evidence));
+		ASSERT_THAT(AreEqual(0, Context.Seal(), *Evidence));
+	}
+
 	TEST_METHOD(ParserTemplateQualifiedParentTypeResolvesExactChildFuncdefWithoutDynamicTypeIdIdentity)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
