@@ -3417,6 +3417,118 @@ public:
 		ASSERT_THAT(IsTrue(!Text.Contains(TEXT("type=array ")), *DumpMsg));
 	}
 
+	TEST_METHOD(ParserStructuredQualTypeRejectsReadonlyTemplateSubtypeWithoutPromotingConstToOuterType)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"array<class T>", 0, asOBJ_REF | asOBJ_TEMPLATE | asOBJ_NOCOUNT) >= 0,
+			TEXT("structured QualType fixture must register array<T>")));
+
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaStructuredQualType");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaStructuredQualType module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		asCScriptCode Code;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Anchor;
+			array<const int> Values;
+			)AS");
+		Code.SetCode("SemaStructuredQualType.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("read-only template subtype fixture is valid Parser syntax")));
+		asSAstVerifyResult PreSealVerify;
+		const int PreSealStatus = asCASTVerify(Context, PreSealVerify);
+		asCString PreSealDump;
+		asCASTDump(Context, PreSealDump);
+		const FString PreSealEvidence = FString::Printf(
+			TEXT("rejected type action must leave a sealable Canonical graph; "
+				"verify=%d detail=%s diagnostics:\n%s\nAST:\n%s"),
+			PreSealStatus,
+			UTF8_TO_TCHAR(PreSealVerify.detail.AddressOf()
+				? PreSealVerify.detail.AddressOf() : ""),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			UTF8_TO_TCHAR(PreSealDump.AddressOf()
+				? PreSealDump.AddressOf() : ""));
+		ASSERT_THAT(AreEqual(static_cast<int32>(asAST_VERIFY_OK), PreSealStatus,
+			*PreSealEvidence));
+		ASSERT_THAT(AreEqual(0, Context.Seal(), *PreSealEvidence));
+
+		int32 ReadonlyDiagnosticIndex = INDEX_NONE;
+		for (asUINT Index = 0; Index < Sema.GetDiagnostics().GetLength(); ++Index)
+		{
+			if (Sema.GetDiagnostics()[Index].Equals(
+				"qualtype-template-subtype-readonly"))
+			{
+				ReadonlyDiagnosticIndex = static_cast<int32>(Index);
+				break;
+			}
+		}
+		const FString Diagnostics = CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema);
+		ASSERT_THAT(IsTrue(ReadonlyDiagnosticIndex != INDEX_NONE,
+			*FString::Printf(
+				TEXT("Canonical type Sema must reject the nested read-only subtype. diagnostics:\n%s"),
+				*Diagnostics)));
+		if (ReadonlyDiagnosticIndex != INDEX_NONE)
+		{
+			ASSERT_THAT(IsTrue(
+				static_cast<asUINT>(ReadonlyDiagnosticIndex)
+					< Sema.GetDiagnosticRanges().GetLength(),
+				TEXT("read-only subtype diagnostic must carry its child source range")));
+			if (static_cast<asUINT>(ReadonlyDiagnosticIndex)
+				< Sema.GetDiagnosticRanges().GetLength())
+			{
+				const size_t ExpectedBegin = ScriptSource.find("const int");
+				const asCSourceRange& Range =
+					Sema.GetDiagnosticRanges()[ReadonlyDiagnosticIndex];
+				ASSERT_THAT(IsTrue(ExpectedBegin != std::string::npos
+					&& Range.IsValid()
+					&& Range.begin.offset == static_cast<asUINT>(ExpectedBegin)
+					&& Range.end.offset == static_cast<asUINT>(
+						ExpectedBegin + std::strlen("const int")),
+					TEXT("read-only subtype diagnostic must point at exactly 'const int'")));
+			}
+		}
+
+		bool bPublishedValues = false;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_VAR
+				&& Decl->name.Equals("Values"))
+			{
+				bPublishedValues = true;
+				break;
+			}
+		}
+		ASSERT_THAT(IsFalse(bPublishedValues,
+			TEXT("invalid array<const int> must not publish Values as const array<int>")));
+
+		bool bInternedForgedArrayInt = false;
+		for (asUINT Index = 1; Index <= Context.GetTypeCount(); ++Index)
+		{
+			const asCType* const Type = Context.GetType(asASTTypeRef(Index));
+			if (Type != nullptr && Type->kind == asAST_TYPE_TEMPLATE
+				&& Type->stableKey.Equals("array<int>"))
+			{
+				bInternedForgedArrayInt = true;
+				break;
+			}
+		}
+		ASSERT_THAT(IsFalse(bInternedForgedArrayInt,
+			TEXT("parent template must not intern before child qualifier validation")));
+	}
+
 	TEST_METHOD(ImportCallKeepsImportRouteDistinctFromGlobal)
 	{
 		using namespace AngelscriptNativeTestSupport;
@@ -24684,16 +24796,33 @@ public:
 		ON_SCOPE_EXIT { Engine.Destroy(); };
 
 		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"array<class T>", 0, asOBJ_REF | asOBJ_TEMPLATE | asOBJ_NOCOUNT) >= 0,
+			TEXT("direct structured QualType action must register array<T>")));
 		asCASTContext Context;
 		asCSema Sema(ScriptEngine, Context);
 		Sema.ActOnTranslationUnit("SemaQualTypeSyntaxAction");
 
 		asSQualTypeSyntaxAction Action;
-		Action.spelling = "array<int>";
-		Action.primitiveToken = ttUnrecognizedToken;
-		Action.qualifiers = asAST_QUAL_CONST | asAST_QUAL_REFERENCE | asAST_QUAL_IN;
-		Action.beginOffset = 3;
-		Action.endOffset = 21;
+		asSQualTypeSyntaxNode Root;
+		Root.spelling = "array";
+		Root.primitiveToken = ttUnrecognizedToken;
+		Root.qualifiers = asAST_QUAL_CONST | asAST_QUAL_REFERENCE | asAST_QUAL_IN;
+		Root.firstTemplateArgument = 1;
+		Root.templateArgumentCount = 1;
+		Root.subtreeSize = 2;
+		Root.beginOffset = 3;
+		Root.endOffset = 21;
+		Action.nodes.PushLast(Root);
+
+		asSQualTypeSyntaxNode IntArgument;
+		IntArgument.spelling = "int";
+		IntArgument.primitiveToken = ttInt;
+		IntArgument.subtreeSize = 1;
+		IntArgument.beginOffset = 9;
+		IntArgument.endOffset = 12;
+		Action.nodes.PushLast(IntArgument);
 
 		const asCQualType QualType = Sema.ActOnQualTypeAction(Action);
 		const asCType* const Type = Context.GetType(QualType.type);
@@ -24732,7 +24861,7 @@ public:
 			TEXT("Parser must not pass declaration type/modifier nodes into Sema")));
 
 		const int32 ActionBegin = SemaHeaderSource.Find(
-			TEXT("struct asSQualTypeSyntaxAction"));
+			TEXT("struct asSQualTypeSyntaxNode"));
 		const int32 ActionEnd = SemaHeaderSource.Find(
 			TEXT("struct asSImportSignatureAction"),
 			ESearchCase::CaseSensitive, ESearchDir::FromStart, ActionBegin);
@@ -24747,6 +24876,9 @@ public:
 		ASSERT_THAT(IsFalse(ActionSlice.Contains(TEXT("typeId"),
 			ESearchCase::IgnoreCase),
 			TEXT("type action must not persist dynamic numeric Runtime TypeIds")));
+		ASSERT_THAT(IsTrue(ActionSlice.Contains(
+			TEXT("asCArray<asSQualTypeSyntaxNode> nodes")),
+			TEXT("type action must retain root and nested template syntax as indexed owned values")));
 	}
 
 	TEST_METHOD(ParserBoundExpressionTargetTypesPreserveCastAndConstructKinds)

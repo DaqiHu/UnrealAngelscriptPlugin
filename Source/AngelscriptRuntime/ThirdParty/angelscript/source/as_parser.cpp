@@ -158,15 +158,11 @@ static asCString QualTypeActionNodeText(
 	return text;
 }
 
-static void CollectQualTypeActionQualifiers(
-	const asCScriptNode* node,
+static void AddQualTypeActionQualifier(
+	eTokenType token,
 	asDWORD& qualifiers)
 {
-	if( node == 0 )
-	{
-		return;
-	}
-	switch( node->tokenType )
+	switch( token )
 	{
 	case ttConst: qualifiers |= asAST_QUAL_CONST; break;
 	case ttHandleSuffix: qualifiers |= asAST_QUAL_HANDLE; break;
@@ -177,10 +173,28 @@ static void CollectQualTypeActionQualifiers(
 	case ttPlus: qualifiers |= asAST_QUAL_AUTO_HANDLE; break;
 	default: break;
 	}
+
+}
+
+static void CollectLocalQualTypeActionQualifiers(
+	const asCScriptNode* node,
+	asDWORD& qualifiers)
+{
+	if( node == 0 )
+	{
+		return;
+	}
+	AddQualTypeActionQualifier(node->tokenType, qualifiers);
 	for( const asCScriptNode* child = node->firstChild;
 		child != 0; child = child->next )
 	{
-		CollectQualTypeActionQualifiers(child, qualifiers);
+		// Nested data types and template-qualified scope components own their
+		// qualifiers. Root collection must not promote those bits to the outer
+		// QualType.
+		if( child->nodeType != snDataType && child->nodeType != snScope )
+		{
+			AddQualTypeActionQualifier(child->tokenType, qualifiers);
+		}
 	}
 }
 
@@ -209,7 +223,7 @@ static void AppendQualTypeActionLeafText(
 	}
 }
 
-static asCString FormatQualTypeActionSpelling(
+static asCString FormatQualTypeActionBaseSpelling(
 	const asCScriptNode* typeNode,
 	const asCScriptCode* script)
 {
@@ -224,8 +238,6 @@ static asCString FormatQualTypeActionSpelling(
 
 	asCString scope;
 	asCString primary;
-	asCString args;
-	asUINT dataTypes = 0;
 	for( const asCScriptNode* child = typeNode->firstChild;
 		child != 0; child = child->next )
 	{
@@ -235,20 +247,10 @@ static asCString FormatQualTypeActionSpelling(
 		}
 		else if( child->nodeType == snDataType )
 		{
-			const asCString part = FormatQualTypeActionSpelling(child, script);
-			if( dataTypes == 0 )
+			if( primary.GetLength() == 0 )
 			{
-				primary = part;
+				primary = FormatQualTypeActionBaseSpelling(child, script);
 			}
-			else if( part.GetLength() )
-			{
-				if( args.GetLength() )
-				{
-					args += ",";
-				}
-				args += part;
-			}
-			++dataTypes;
 		}
 		else if( child->nodeType == snIdentifier && primary.GetLength() == 0 )
 		{
@@ -263,12 +265,6 @@ static asCString FormatQualTypeActionSpelling(
 	{
 		scope += primary;
 		primary = scope;
-	}
-	if( args.GetLength() )
-	{
-		primary += "<";
-		primary += args;
-		primary += ">";
 	}
 	return primary;
 }
@@ -307,21 +303,66 @@ static void ExtendQualTypeActionRange(
 	}
 }
 
+static asUINT AppendQualTypeSyntaxNode(
+	const asCScriptNode* typeNode,
+	const asCScriptCode* script,
+	asCArray<asSQualTypeSyntaxNode>& nodes)
+{
+	const asUINT nodeIndex = nodes.GetLength();
+	asSQualTypeSyntaxNode payload;
+	payload.spelling = FormatQualTypeActionBaseSpelling(typeNode, script);
+	// ParseType publishes its configured primitive width on the snDataType
+	// root. Do not replace that semantic token with the lexical child token;
+	// e.g. authored `float` may intentionally mean ttDouble.
+	payload.primitiveToken = typeNode != 0
+		? typeNode->tokenType : ttUnrecognizedToken;
+	CollectLocalQualTypeActionQualifiers(typeNode, payload.qualifiers);
+	bool hasRange = false;
+	ExtendQualTypeActionRange(
+		typeNode, script, payload.beginOffset, payload.endOffset, hasRange);
+	nodes.PushLast(payload);
+
+	asUINT dataTypeIndex = 0;
+	for( const asCScriptNode* child = typeNode != 0
+		? typeNode->firstChild : 0;
+		child != 0; child = child->next )
+	{
+		if( child->nodeType != snDataType )
+		{
+			continue;
+		}
+		if( dataTypeIndex++ == 0 )
+		{
+			// The first direct snDataType is this node's nominal/primitive
+			// spelling. Remaining direct data types are template arguments.
+			continue;
+		}
+		if( nodes[nodeIndex].templateArgumentCount == 0 )
+		{
+			nodes[nodeIndex].firstTemplateArgument = nodes.GetLength();
+		}
+		AppendQualTypeSyntaxNode(child, script, nodes);
+		++nodes[nodeIndex].templateArgumentCount;
+	}
+	nodes[nodeIndex].subtreeSize = nodes.GetLength() - nodeIndex;
+	return nodeIndex;
+}
+
 asSQualTypeSyntaxAction asCParser::BuildQualTypeSyntaxAction(
 	const asCScriptNode* typeNode,
 	const asCScriptNode* typeMod)
 {
 	asSQualTypeSyntaxAction action;
-	action.spelling = FormatQualTypeActionSpelling(typeNode, script);
-	action.primitiveToken = typeNode != 0
-		? typeNode->tokenType : ttUnrecognizedToken;
-	CollectQualTypeActionQualifiers(typeNode, action.qualifiers);
-	CollectQualTypeActionQualifiers(typeMod, action.qualifiers);
-	bool hasRange = false;
-	ExtendQualTypeActionRange(
-		typeNode, script, action.beginOffset, action.endOffset, hasRange);
-	ExtendQualTypeActionRange(
-		typeMod, script, action.beginOffset, action.endOffset, hasRange);
+	AppendQualTypeSyntaxNode(typeNode, script, action.nodes);
+	if( action.nodes.GetLength() != 0 )
+	{
+		CollectLocalQualTypeActionQualifiers(
+			typeMod, action.nodes[0].qualifiers);
+		bool hasRange = action.nodes[0].endOffset > action.nodes[0].beginOffset;
+		ExtendQualTypeActionRange(
+			typeMod, script, action.nodes[0].beginOffset,
+			action.nodes[0].endOffset, hasRange);
+	}
 	return action;
 }
 
@@ -1405,7 +1446,7 @@ void asCParser::BuildLambdaParameterAction(
 	const asSQualTypeSyntaxAction typeAction =
 		BuildQualTypeSyntaxAction(typeNode, typeMod);
 	asSParameterDeclAction action;
-	action.type = sema->ActOnQualTypeAction(typeAction);
+	action.type = sema->ActOnQualTypeAction(typeAction, script);
 	if( script != 0 && script->code != 0
 		&& nameNode->tokenLength > 0
 		&& nameNode->tokenPos + nameNode->tokenLength <= script->codeLength )
@@ -1414,7 +1455,8 @@ void asCParser::BuildLambdaParameterAction(
 			script->code + nameNode->tokenPos,
 			(asUINT)nameNode->tokenLength);
 	}
-	action.beginOffset = typeAction.beginOffset;
+	action.beginOffset = typeAction.nodes.GetLength() != 0
+		? typeAction.nodes[0].beginOffset : 0;
 	action.endOffset = (asUINT)(nameNode->tokenPos + nameNode->tokenLength);
 	actions.PushLast(action);
 	if( !recoveryReturnType.IsValid() )
@@ -1801,7 +1843,7 @@ asCScriptNode *asCParser::ParseFunctionDefinition(asASTDeclId* outImportDecl)
 				(asUINT)(identNode->tokenPos + identNode->tokenLength);
 		}
 		action.returnType = sema->ActOnQualTypeAction(
-			BuildQualTypeSyntaxAction(typeNode, typeMod));
+			BuildQualTypeSyntaxAction(typeNode, typeMod), script);
 		*outImportDecl = sema->ActOnImportSignatureAction(action, script);
 		importScope.PushLastActed();
 	}
@@ -2271,7 +2313,7 @@ asCScriptNode *asCParser::ParseParameterList(asASTDeclId callableDecl)
 				asSParameterDeclAction action;
 				action.callable = callableDecl;
 				action.type = sema->ActOnQualTypeAction(
-					BuildQualTypeSyntaxAction(typeNode, typeMod));
+					BuildQualTypeSyntaxAction(typeNode, typeMod), script);
 				if( nameNode && script && script->code
 					&& nameNode->tokenLength > 0
 					&& nameNode->tokenPos + nameNode->tokenLength
@@ -2987,7 +3029,7 @@ asCScriptNode *asCParser::ParseCast()
 	if( sema && typeNode )
 	{
 		targetType = sema->ActOnQualTypeAction(
-			BuildQualTypeSyntaxAction(typeNode, 0));
+			BuildQualTypeSyntaxAction(typeNode, 0), script);
 	}
 	if( isSyntaxError ) return node;
 
@@ -3443,7 +3485,7 @@ asCScriptNode *asCParser::ParseConstructCall()
 	if( sema && typeNode )
 	{
 		targetType = sema->ActOnQualTypeAction(
-			BuildQualTypeSyntaxAction(typeNode, 0));
+			BuildQualTypeSyntaxAction(typeNode, 0), script);
 	}
 	if( isSyntaxError ) return node;
 
@@ -3764,7 +3806,7 @@ asCScriptNode *asCParser::ParseExprTerm()
 			if( sema && typeNode )
 			{
 				targetType = sema->ActOnQualTypeAction(
-					BuildQualTypeSyntaxAction(typeNode, 0));
+					BuildQualTypeSyntaxAction(typeNode, 0), script);
 			}
 			GetToken(&t2);
 			asCScriptNode* const initList = ParseInitList();
@@ -5317,7 +5359,7 @@ asCScriptNode *asCParser::ParseFuncDef()
 		action.returnType = sema->ActOnQualTypeAction(
 			BuildQualTypeSyntaxAction(
 				node->firstChild,
-				node->firstChild ? node->firstChild->next : 0));
+				node->firstChild ? node->firstChild->next : 0), script);
 		canonicalFuncDef = sema->ActOnFuncDefSignatureAction(action, script);
 		sema->BindParsedDeclarationIdentity(
 			MakeParseActionIdentity(sema, node), canonicalFuncDef);
@@ -5478,7 +5520,7 @@ asCScriptNode *asCParser::ParseFunction(bool isMethod, bool notifySemaAfterParam
 		if( typeNode )
 		{
 			action.returnType = sema->ActOnQualTypeAction(
-				BuildQualTypeSyntaxAction(typeNode, typeMod));
+				BuildQualTypeSyntaxAction(typeNode, typeMod), script);
 		}
 		action.kind = isDestructor
 			? asFUNCTION_ACTION_DESTRUCTOR
@@ -5582,7 +5624,7 @@ asCScriptNode *asCParser::ParseInterfaceMethod()
 				(asUINT)(nameNode->tokenPos + nameNode->tokenLength);
 		}
 		action.returnType = sema->ActOnQualTypeAction(
-			BuildQualTypeSyntaxAction(typeNode, typeMod));
+			BuildQualTypeSyntaxAction(typeNode, typeMod), script);
 		action.kind = asFUNCTION_ACTION_METHOD;
 		canonicalMethod = sema->ActOnFunctionSignatureAction(action, script);
 		sema->BindParsedDeclarationIdentity(
@@ -6562,7 +6604,7 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 				typeNode,
 				typeModifierNode != 0
 					&& typeModifierNode->nodeType == snDataType
-					? typeModifierNode : 0));
+					? typeModifierNode : 0), script);
 	}
 	asCArray<asASTStmtId> canonicalLocalStatements;
 
@@ -7498,7 +7540,7 @@ asCScriptNode *asCParser::ParseForeachVariable()
 				typeNode,
 				typeModifierNode != 0
 					&& typeModifierNode->nodeType == snDataType
-					? typeModifierNode : 0));
+					? typeModifierNode : 0), script);
 		if( nameNode != 0 && script != 0 && script->code != 0
 			&& nameNode->tokenLength > 0
 			&& nameNode->tokenPos + nameNode->tokenLength <= script->codeLength )

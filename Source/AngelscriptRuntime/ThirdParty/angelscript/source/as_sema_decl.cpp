@@ -179,24 +179,172 @@ asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 	return context.InternNamedType(kind, text.AddressOf(), quals);
 }
 
-asCQualType asCSema::ActOnQualTypeAction(
-	const asSQualTypeSyntaxAction& action)
+asCSourceRange asCSema::QualTypeSyntaxNodeRange(
+	const asSQualTypeSyntaxNode& node) const
 {
-	if( action.endOffset < action.beginOffset
-		|| !asASTQualifiersAreValid(action.qualifiers) )
+	if( parsedFile == 0 || node.endOffset < node.beginOffset )
 	{
+		return asCSourceRange();
+	}
+	return context.GetSourceManager().MakeRange(
+		parsedFile, node.beginOffset, node.endOffset);
+}
+
+asCQualType asCSema::ActOnQualTypeSyntaxNode(
+	const asSQualTypeSyntaxAction& action,
+	asUINT nodeIndex,
+	asUINT depth)
+{
+	if( nodeIndex >= action.nodes.GetLength() || depth > 64 )
+	{
+		AddDiagnostic("qualtype-action-structure-invalid");
 		return asCQualType();
 	}
-	// Parser resolves configurable primitive tokens before the action. Most
-	// declaration ParseType roots carry a complete spelling instead; keeping
-	// both forms preserves configured float width and the primitive-only public
-	// parser entry points without carrying syntax nodes into Sema.
-	const eTokenType primitive = CanonicalPrimitiveToken(action.primitiveToken);
-	if( primitive != ttUnrecognizedToken )
+	const asSQualTypeSyntaxNode& node = action.nodes[nodeIndex];
+	const asCSourceRange range = QualTypeSyntaxNodeRange(node);
+	if( node.spelling.GetLength() == 0
+		|| node.endOffset < node.beginOffset
+		|| node.subtreeSize == 0
+		|| nodeIndex + node.subtreeSize > action.nodes.GetLength()
+		|| !asASTQualifiersAreValid(node.qualifiers) )
 	{
-		return context.InternPrimitive(primitive, action.qualifiers);
+		AddDiagnostic("qualtype-action-invalid", range);
+		return asCQualType();
 	}
-	return ActOnQualType(action.spelling.AddressOf(), action.qualifiers);
+
+	const eTokenType primitive = CanonicalPrimitiveToken(node.primitiveToken);
+	if( node.templateArgumentCount == 0 )
+	{
+		if( node.subtreeSize != 1 )
+		{
+			AddDiagnostic("qualtype-action-structure-invalid", range);
+			return asCQualType();
+		}
+		if( primitive != ttUnrecognizedToken )
+		{
+			return context.InternPrimitive(primitive, node.qualifiers);
+		}
+		if( engine != 0 && engine->IsTemplateType(node.spelling.AddressOf()) )
+		{
+			AddDiagnostic("qualtype-template-arity-invalid", range);
+			return asCQualType();
+		}
+		return ActOnQualType(node.spelling.AddressOf(), node.qualifiers);
+	}
+
+	if( primitive != ttUnrecognizedToken
+		|| node.firstTemplateArgument != nodeIndex + 1 )
+	{
+		AddDiagnostic("qualtype-action-structure-invalid", range);
+		return asCQualType();
+	}
+
+	bool isTemplateBase = engine != 0
+		&& engine->IsTemplateType(node.spelling.AddressOf());
+	if( !isTemplateBase && engine != 0 )
+	{
+		asITypeInfo* const baseInfo =
+			engine->GetTypeInfoByDecl(node.spelling.AddressOf());
+		isTemplateBase = baseInfo != 0
+			&& (baseInfo->GetFlags() & asOBJ_TEMPLATE) != 0;
+	}
+	if( !isTemplateBase )
+	{
+		AddDiagnostic("qualtype-not-template", range);
+		return asCQualType();
+	}
+
+	asCString completeSpelling = node.spelling;
+	completeSpelling += "<";
+	asUINT childIndex = node.firstTemplateArgument;
+	const asUINT subtreeEnd = nodeIndex + node.subtreeSize;
+	for( asUINT argumentIndex = 0;
+		argumentIndex < node.templateArgumentCount; ++argumentIndex )
+	{
+		if( childIndex >= subtreeEnd || childIndex >= action.nodes.GetLength() )
+		{
+			AddDiagnostic("qualtype-action-structure-invalid", range);
+			return asCQualType();
+		}
+		const asSQualTypeSyntaxNode& childNode = action.nodes[childIndex];
+		const asCSourceRange childRange = QualTypeSyntaxNodeRange(childNode);
+		if( childNode.qualifiers & asAST_QUAL_CONST )
+		{
+			AddDiagnostic("qualtype-template-subtype-readonly", childRange);
+			return asCQualType();
+		}
+		const asDWORD allowedTemplateQualifiers = asAST_QUAL_HANDLE;
+		if( childNode.qualifiers & ~allowedTemplateQualifiers )
+		{
+			AddDiagnostic("qualtype-template-subtype-modifier-invalid", childRange);
+			return asCQualType();
+		}
+
+		const asCQualType childType =
+			ActOnQualTypeSyntaxNode(action, childIndex, depth + 1);
+		const asCType* const childCanonical =
+			context.GetType(childType.type);
+		if( !childType.IsValid() || childCanonical == 0
+			|| childCanonical->stableKey.GetLength() == 0 )
+		{
+			return asCQualType();
+		}
+		if( argumentIndex != 0 )
+		{
+			completeSpelling += ",";
+		}
+		completeSpelling += childCanonical->stableKey;
+		if( childType.quals & asAST_QUAL_HANDLE )
+		{
+			completeSpelling += "@";
+		}
+		if( childNode.subtreeSize == 0
+			|| childIndex + childNode.subtreeSize > subtreeEnd )
+		{
+			AddDiagnostic("qualtype-action-structure-invalid", childRange);
+			return asCQualType();
+		}
+		childIndex += childNode.subtreeSize;
+	}
+	if( childIndex != subtreeEnd )
+	{
+		AddDiagnostic("qualtype-action-structure-invalid", range);
+		return asCQualType();
+	}
+	completeSpelling += ">";
+
+	if( engine == 0
+		|| engine->GetTypeInfoByDecl(completeSpelling.AddressOf()) == 0 )
+	{
+		AddDiagnostic("qualtype-template-instance-invalid", range);
+		return asCQualType();
+	}
+	return context.InternNamedType(
+		asAST_TYPE_TEMPLATE, completeSpelling.AddressOf(), node.qualifiers);
+}
+
+asCQualType asCSema::ActOnQualTypeAction(
+	const asSQualTypeSyntaxAction& action,
+	asCScriptCode* script)
+{
+	if( action.nodes.GetLength() == 0 )
+	{
+		AddDiagnostic("qualtype-action-invalid");
+		return asCQualType();
+	}
+	if( script != 0 && !PrepareParsedSource(script) )
+	{
+		AddDiagnostic("qualtype-action-source-invalid");
+		return asCQualType();
+	}
+	if( action.nodes[0].subtreeSize != action.nodes.GetLength() )
+	{
+		AddDiagnostic(
+			"qualtype-action-structure-invalid",
+			QualTypeSyntaxNodeRange(action.nodes[0]));
+		return asCQualType();
+	}
+	return ActOnQualTypeSyntaxNode(action, 0, 0);
 }
 
 asASTDeclId asCSema::ActOnParameterDeclAction(

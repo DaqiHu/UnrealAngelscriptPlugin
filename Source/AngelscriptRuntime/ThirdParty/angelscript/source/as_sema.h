@@ -98,25 +98,41 @@ struct asSTypedefDeclAction
 	}
 };
 
-// Short-lived recognized type syntax. Parser copies one complete spelling,
-// its already-resolved primitive root token, syntax qualifiers and exact
-// extent. Sema resolves that payload into an ASTContext-local QualType; no
-// Parser node, Runtime pointer/TypeId or snapshot-local type ref crosses it.
-struct asSQualTypeSyntaxAction
+// One node in a short-lived, pointer-free Parser -> Sema type-syntax payload.
+// Nodes are stored in pre-order. Direct template arguments begin at
+// firstTemplateArgument, and each child's subtreeSize advances to its next
+// sibling. Qualifiers belong only to this node; they are never folded from a
+// nested template argument into its parent.
+struct asSQualTypeSyntaxNode
 {
 	asCString spelling;
 	eTokenType primitiveToken;
 	asDWORD qualifiers;
+	asUINT firstTemplateArgument;
+	asUINT templateArgumentCount;
+	asUINT subtreeSize;
 	asUINT beginOffset;
 	asUINT endOffset;
 
-	asSQualTypeSyntaxAction()
+	asSQualTypeSyntaxNode()
 		: primitiveToken(ttUnrecognizedToken)
 		, qualifiers(0)
+		, firstTemplateArgument(0)
+		, templateArgumentCount(0)
+		, subtreeSize(1)
 		, beginOffset(0)
 		, endOffset(0)
 	{
 	}
+};
+
+// Short-lived recognized type syntax. Parser copies the root and every nested
+// template argument into owned indexed values. Sema resolves this payload into
+// an ASTContext-local QualType; no Parser node, Builder/Runtime pointer,
+// numeric runtime type identity or snapshot-local type ref crosses the boundary.
+struct asSQualTypeSyntaxAction
+{
+	asCArray<asSQualTypeSyntaxNode> nodes;
 };
 
 // Short-lived literal token recognized by Parser. The action owns the exact
@@ -1300,7 +1316,9 @@ public:
 	asASTStmtId ActOnFallthrough(asASTDeclId owner, const asCSourceRange& range);
 	asASTStmtId ActOnFallthroughStmt(asASTDeclId owner, const asCSourceRange& range);
 	asCQualType ActOnQualType(const char* key, asDWORD quals = 0);
-	asCQualType ActOnQualTypeAction(const asSQualTypeSyntaxAction& action);
+	asCQualType ActOnQualTypeAction(
+		const asSQualTypeSyntaxAction& action,
+		class asCScriptCode* script = 0);
 	asASTStmtId FindExistingStmt(asEASTStmtKind kind, const asCSourceRange& range) const;
 	void RecordDependency(asASTDeclId owner, const char* key);
 	void FinishDecl(asASTDeclId id);
@@ -1364,6 +1382,12 @@ public:
 	void AddDiagnostic(const char* text);
 	void AddDiagnostic(const char* text, const asCSourceRange& range);
 private:
+	asCQualType ActOnQualTypeSyntaxNode(
+		const asSQualTypeSyntaxAction& action,
+		asUINT nodeIndex,
+		asUINT depth);
+	asCSourceRange QualTypeSyntaxNodeRange(
+		const asSQualTypeSyntaxNode& node) const;
 	asCScriptEngine* engine;
 	// Build-only metadata source. Sema consumes PreClassData while declarations
 	// are mutable, but never publishes this Engine-local pointer into the AST.
