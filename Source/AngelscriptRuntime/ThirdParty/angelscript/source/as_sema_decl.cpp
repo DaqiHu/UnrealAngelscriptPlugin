@@ -40,6 +40,21 @@ static eTokenType CanonicalPrimitiveToken(eTokenType token)
 	}
 }
 
+static asDWORD RuntimeEffectiveQualifiers(
+	asITypeInfo* typeInfo,
+	asDWORD authoredQualifiers)
+{
+	// Implicit handle is a semantic property of the resolved language type,
+	// not authored punctuation. Keep the Runtime object local to Sema and
+	// publish only the stable qualifier bit into the Canonical QualType.
+	if( typeInfo != 0
+		&& (typeInfo->GetFlags() & asOBJ_IMPLICIT_HANDLE) != 0 )
+	{
+		authoredQualifiers |= asAST_QUAL_HANDLE;
+	}
+	return authoredQualifiers;
+}
+
 asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 {
 	asCString text;
@@ -69,7 +84,12 @@ asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 	}
 	if( isTemplate )
 	{
-		return context.InternNamedType(asAST_TYPE_TEMPLATE, text.AddressOf(), quals);
+		asITypeInfo* const exactTemplate = engine != 0
+			? engine->GetTypeInfoByDecl(text.AddressOf()) : 0;
+		return context.InternNamedType(
+			asAST_TYPE_TEMPLATE,
+			text.AddressOf(),
+			RuntimeEffectiveQualifiers(exactTemplate, quals));
 	}
 
 	if( text.Equals("void") ) return context.InternPrimitive(ttVoid, quals);
@@ -149,12 +169,16 @@ asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 		}
 		if( info )
 		{
-			asCDataType dataType = asCDataType::CreateType(static_cast<asCTypeInfo*>(info), (quals & asAST_QUAL_CONST) != 0);
-			if( quals & asAST_QUAL_HANDLE )
+			const asDWORD effectiveQualifiers =
+				RuntimeEffectiveQualifiers(info, quals);
+			asCDataType dataType = asCDataType::CreateType(
+				static_cast<asCTypeInfo*>(info),
+				(effectiveQualifiers & asAST_QUAL_CONST) != 0);
+			if( effectiveQualifiers & asAST_QUAL_HANDLE )
 			{
 				dataType.MakeHandle(true);
 			}
-			if( quals & asAST_QUAL_REFERENCE )
+			if( effectiveQualifiers & asAST_QUAL_REFERENCE )
 			{
 				dataType.MakeReference(true);
 			}
@@ -164,7 +188,10 @@ asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 			{
 				if( const asCType* type = context.GetType(bridged.type) )
 				{
-					return context.InternNamedType(type->kind, type->stableKey.AddressOf(), quals);
+					return context.InternNamedType(
+						type->kind,
+						type->stableKey.AddressOf(),
+						effectiveQualifiers);
 				}
 				return bridged;
 			}
@@ -313,14 +340,17 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 	}
 	completeSpelling += ">";
 
-	if( engine == 0
-		|| engine->GetTypeInfoByDecl(completeSpelling.AddressOf()) == 0 )
+	asITypeInfo* const exactInstance = engine != 0
+		? engine->GetTypeInfoByDecl(completeSpelling.AddressOf()) : 0;
+	if( exactInstance == 0 )
 	{
 		AddDiagnostic("qualtype-template-instance-invalid", range);
 		return asCQualType();
 	}
 	return context.InternNamedType(
-		asAST_TYPE_TEMPLATE, completeSpelling.AddressOf(), node.qualifiers);
+		asAST_TYPE_TEMPLATE,
+		completeSpelling.AddressOf(),
+		RuntimeEffectiveQualifiers(exactInstance, node.qualifiers));
 }
 
 asCQualType asCSema::ActOnQualTypeAction(

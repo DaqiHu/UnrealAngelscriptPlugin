@@ -3529,6 +3529,79 @@ public:
 			TEXT("parent template must not intern before child qualifier validation")));
 	}
 
+	TEST_METHOD(ParserRuntimeImplicitHandleTypesBecomeCanonicalHandleQualTypesWithoutAuthoredSuffix)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"CImplicitQualHandle", 0,
+				asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("named implicit-handle fixture type must register")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"array<class T>", 0,
+				asOBJ_REF | asOBJ_TEMPLATE | asOBJ_NOCOUNT
+					| asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("implicit-handle array<T> fixture must register")));
+
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaImplicitHandleQualType");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaImplicitHandleQualType module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string Source =
+			"CImplicitQualHandle Object;\n"
+			"array<int> Values;\n";
+		ASSERT_THAT(IsTrue(Source.find('@') == std::string::npos,
+			TEXT("fixture must prove Runtime-derived handles without authored @")));
+		asCScriptCode Code;
+		Code.SetCode("SemaImplicitHandleQualType.as", Source.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("bare implicit-handle declarations must parse")));
+
+		const asCDecl* Object = nullptr;
+		const asCDecl* Values = nullptr;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_VAR
+				&& Decl->name.Equals("Object"))
+			{
+				Object = Decl;
+			}
+			else if (Decl != nullptr && Decl->kind == asAST_DECL_VAR
+				&& Decl->name.Equals("Values"))
+			{
+				Values = Decl;
+			}
+		}
+		const asCType* const ObjectType = Object != nullptr
+			? Context.GetType(Object->type.type) : nullptr;
+		const asCType* const ValuesType = Values != nullptr
+			? Context.GetType(Values->type.type) : nullptr;
+		const FString Evidence = FString::Printf(
+			TEXT("Runtime implicit-handle flags must become Canonical qualifier bits. diagnostics:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema));
+		ASSERT_THAT(IsTrue(Object != nullptr && ObjectType != nullptr
+			&& ObjectType->kind == asAST_TYPE_REFERENCE_OBJECT
+			&& ObjectType->stableKey.Equals("CImplicitQualHandle")
+			&& Object->type.IsHandle(), *Evidence));
+		ASSERT_THAT(IsTrue(Values != nullptr && ValuesType != nullptr
+			&& ValuesType->kind == asAST_TYPE_TEMPLATE
+			&& ValuesType->stableKey.Equals("array<int>")
+			&& Values->type.IsHandle(), *Evidence));
+		ASSERT_THAT(AreEqual(0, Context.Seal(), *Evidence));
+	}
+
 	TEST_METHOD(ImportCallKeepsImportRouteDistinctFromGlobal)
 	{
 		using namespace AngelscriptNativeTestSupport;
