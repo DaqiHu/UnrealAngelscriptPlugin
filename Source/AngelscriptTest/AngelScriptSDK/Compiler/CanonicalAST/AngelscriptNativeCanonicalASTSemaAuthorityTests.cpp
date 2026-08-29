@@ -1901,7 +1901,7 @@ public:
 			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
 		ASSERT_THAT(IsTrue(
 			Dump.Contains(TEXT("kind=Call"))
-				&& Dump.Contains(TEXT("callee=ReadBase(BaseValue)"))
+				&& Dump.Contains(TEXT("callee=ReadBase(BaseValue@)"))
 				&& Dump.Contains(TEXT("dispatch=direct")),
 			*FString::Printf(
 				TEXT("derived argument must resolve the exact base-formal call before CodeGen. AST:\n%s"),
@@ -1989,7 +1989,7 @@ public:
 				TEXT("DerivedValue must retain its base edge before class-body Sema. AST:\n%s"),
 				*Dump)));
 		ASSERT_THAT(IsTrue(
-			Dump.Contains(TEXT("callee=ReadBase(BaseValue)"))
+			Dump.Contains(TEXT("callee=ReadBase(BaseValue@)"))
 				&& Dump.Contains(TEXT("kind=Conversion")),
 			*FString::Printf(
 				TEXT("the class-body call must seal the derived-to-base conversion during Sema. AST:\n%s"),
@@ -3105,8 +3105,8 @@ public:
 		const FString DumpMsg = FString::Printf(
 			TEXT("v.MixHelper(3) must bind the mixin with receiver. dump:\n%s"), *Text);
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("kind=Mixin")), *DumpMsg));
-		ASSERT_THAT(IsTrue(Text.Contains(TEXT("key=MixHelper(T,int)")), *DumpMsg));
-		ASSERT_THAT(IsTrue(Text.Contains(TEXT("callee=MixHelper(T,int)")), *DumpMsg));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT("key=MixHelper(T@,int)")), *DumpMsg));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT("callee=MixHelper(T@,int)")), *DumpMsg));
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("nargs=2")), *DumpMsg));
 
 		const asCASTContext* const Context = static_cast<asCModule*>(Module)->GetCanonicalASTContext();
@@ -3599,6 +3599,131 @@ public:
 			&& ValuesType->kind == asAST_TYPE_TEMPLATE
 			&& ValuesType->stableKey.Equals("array<int>")
 			&& Values->type.IsHandle(), *Evidence));
+		ASSERT_THAT(AreEqual(0, Context.Seal(), *Evidence));
+	}
+
+	TEST_METHOD(ParserScriptClassAndInterfaceTypesBecomeCanonicalImplicitHandlesFromLexicalDecls)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsNull(ScriptEngine->GetTypeInfoByName("CLexicalImplicitHandle"),
+			TEXT("lexical class fixture must begin outside the Runtime registry")));
+		ASSERT_THAT(IsNull(ScriptEngine->GetTypeInfoByName("ILexicalImplicitHandle"),
+			TEXT("lexical interface fixture must begin outside the Runtime registry")));
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaLexicalRecordImplicitHandle");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaLexicalRecordImplicitHandle module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string Source =
+			"class CLexicalImplicitHandle {}\n"
+			"interface ILexicalImplicitHandle { void Probe(); }\n"
+			"struct FLexicalValueControl { int Value; }\n"
+			"CLexicalImplicitHandle ClassObject;\n"
+			"ILexicalImplicitHandle InterfaceObject;\n"
+			"FLexicalValueControl ValueObject;\n";
+		ASSERT_THAT(IsTrue(Source.find('@') == std::string::npos,
+			TEXT("lexical record fixture must not author an explicit handle suffix")));
+		asCScriptCode Code;
+		Code.SetCode("SemaLexicalRecordImplicitHandle.as", Source.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("complete lexical class/interface/struct declarations must parse")));
+		ASSERT_THAT(IsNull(ScriptEngine->GetTypeInfoByName("CLexicalImplicitHandle"),
+			TEXT("Parser-to-Sema gate must derive class type semantics before Runtime publication")));
+		ASSERT_THAT(IsNull(ScriptEngine->GetTypeInfoByName("ILexicalImplicitHandle"),
+			TEXT("Parser-to-Sema gate must derive interface semantics before Runtime publication")));
+
+		const asCDecl* ClassRecord = nullptr;
+		const asCDecl* InterfaceRecord = nullptr;
+		const asCDecl* ValueRecord = nullptr;
+		const asCDecl* ClassObject = nullptr;
+		const asCDecl* InterfaceObject = nullptr;
+		const asCDecl* ValueObject = nullptr;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			if (Decl == nullptr)
+			{
+				continue;
+			}
+			if (Decl->kind == asAST_DECL_CLASS
+				&& Decl->name.Equals("CLexicalImplicitHandle"))
+			{
+				ClassRecord = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_INTERFACE
+				&& Decl->name.Equals("ILexicalImplicitHandle"))
+			{
+				InterfaceRecord = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_CLASS
+				&& Decl->name.Equals("FLexicalValueControl"))
+			{
+				ValueRecord = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_VAR
+				&& Decl->name.Equals("ClassObject"))
+			{
+				ClassObject = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_VAR
+				&& Decl->name.Equals("InterfaceObject"))
+			{
+				InterfaceObject = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_VAR
+				&& Decl->name.Equals("ValueObject"))
+			{
+				ValueObject = Decl;
+			}
+		}
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("Canonical lexical record types must own implicit-handle semantics before Runtime publication. diagnostics:\n%s\nAST:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		auto IsExactType = [&Context](
+			const asCDecl* Decl,
+			asEASTTypeKind Kind,
+			const char* StableKey,
+			bool IsHandle)
+		{
+			const asCType* const Type = Decl != nullptr
+				? Context.GetType(Decl->type.type) : nullptr;
+			return Type != nullptr
+				&& Type->kind == Kind
+				&& Type->stableKey.Equals(StableKey)
+				&& Decl->type.IsHandle() == IsHandle
+				&& !Decl->type.IsAutoHandle();
+		};
+		ASSERT_THAT(IsTrue(IsExactType(
+			ClassRecord, asAST_TYPE_REFERENCE_OBJECT,
+			"CLexicalImplicitHandle", true), *Evidence));
+		ASSERT_THAT(IsTrue(IsExactType(
+			InterfaceRecord, asAST_TYPE_REFERENCE_OBJECT,
+			"ILexicalImplicitHandle", true), *Evidence));
+		ASSERT_THAT(IsTrue(IsExactType(
+			ValueRecord, asAST_TYPE_VALUE_OBJECT,
+			"FLexicalValueControl", false), *Evidence));
+		ASSERT_THAT(IsTrue(IsExactType(
+			ClassObject, asAST_TYPE_REFERENCE_OBJECT,
+			"CLexicalImplicitHandle", true), *Evidence));
+		ASSERT_THAT(IsTrue(IsExactType(
+			InterfaceObject, asAST_TYPE_REFERENCE_OBJECT,
+			"ILexicalImplicitHandle", true), *Evidence));
+		ASSERT_THAT(IsTrue(IsExactType(
+			ValueObject, asAST_TYPE_VALUE_OBJECT,
+			"FLexicalValueControl", false), *Evidence));
 		ASSERT_THAT(AreEqual(0, Context.Seal(), *Evidence));
 	}
 
@@ -6850,7 +6975,7 @@ public:
 			TEXT("interface bases, mixin signature/default, overload, and lambda keys must be Sema-owned. AST:\n%s"),
 			*Dump);
 
-		ASSERT_THAT(IsTrue(Dump.Contains(TEXT("kind=Mixin")) && Dump.Contains(TEXT("key=MixHelper(T,int)")), *DumpMsg));
+		ASSERT_THAT(IsTrue(Dump.Contains(TEXT("kind=Mixin")) && Dump.Contains(TEXT("key=MixHelper(T@,int)")), *DumpMsg));
 		ASSERT_THAT(IsTrue(Dump.Contains(TEXT("callee=F(int)")), *DumpMsg));
 		ASSERT_THAT(IsFalse(Dump.Contains(TEXT("callee=F(float)")), *DumpMsg));
 

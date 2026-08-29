@@ -55,6 +55,23 @@ static asDWORD RuntimeEffectiveQualifiers(
 	return authoredQualifiers;
 }
 
+static asDWORD DeclaredEffectiveQualifiers(
+	const asCDecl* declaration,
+	asDWORD authoredQualifiers)
+{
+	// A Canonical declaration may own an intrinsic language qualifier that is
+	// absent from source punctuation. Script class/interface record headers use
+	// this for implicit-handle semantics. Merge only that intrinsic handle bit;
+	// reference direction and auto-handle remain properties of the use site.
+	if( declaration != 0
+		&& declaration->type.IsValid()
+		&& declaration->type.IsHandle() )
+	{
+		authoredQualifiers |= asAST_QUAL_HANDLE;
+	}
+	return authoredQualifiers;
+}
+
 asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 {
 	asCString text;
@@ -136,7 +153,10 @@ asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 				|| (decl->traits & asAST_TRAIT_VALUE) == 0
 				? asAST_TYPE_REFERENCE_OBJECT
 				: asAST_TYPE_VALUE_OBJECT;
-			return context.InternNamedType(kind, stableKey, quals);
+			return context.InternNamedType(
+				kind,
+				stableKey,
+				DeclaredEffectiveQualifiers(decl, quals));
 		}
 	}
 	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
@@ -156,7 +176,10 @@ asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 				|| (decl->traits & asAST_TRAIT_VALUE) == 0
 				? asAST_TYPE_REFERENCE_OBJECT
 				: asAST_TYPE_VALUE_OBJECT;
-			return context.InternNamedType(kind, decl->stableKey.AddressOf(), quals);
+			return context.InternNamedType(
+				kind,
+				decl->stableKey.AddressOf(),
+				DeclaredEffectiveQualifiers(decl, quals));
 		}
 	}
 
@@ -1775,7 +1798,8 @@ asASTDeclId asCSema::ActOnRecordHeaderAction(
 		: action.name.AddressOf();
 	context.SetDeclType(record, context.InternNamedType(
 		isValue ? asAST_TYPE_VALUE_OBJECT : asAST_TYPE_REFERENCE_OBJECT,
-		stableKey, 0));
+		stableKey,
+		isValue ? 0 : asAST_QUAL_HANDLE));
 	NoteActedDecl(record);
 	return record;
 }
