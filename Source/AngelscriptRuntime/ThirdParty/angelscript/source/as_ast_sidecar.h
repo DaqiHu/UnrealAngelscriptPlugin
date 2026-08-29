@@ -20,11 +20,12 @@ enum asEASTSidecarError : int
 };
 
 // V2 is the first pointer-free DTO layout. V1 persisted a dump plus a
-// declaration skeleton and is intentionally a safe restore miss. V7 appends
-// the pointer-free Sema-authored Canonical lifetime protocol. V6 appended
+// declaration skeleton and is intentionally a safe restore miss. V8 appends
+// pointer-free record-owned method-relation triples. V7 appended the
+// pointer-free Sema-authored Canonical lifetime protocol. V6 appended
 // snapshot-owned neutral source-provenance ranges; V5 appended the
 // member-to-access-specifier declaration reference.
-static const asUINT asAST_SIDECAR_SCHEMA_VERSION = 7;
+static const asUINT asAST_SIDECAR_SCHEMA_VERSION = 8;
 
 struct asSASTSidecarHeader
 {

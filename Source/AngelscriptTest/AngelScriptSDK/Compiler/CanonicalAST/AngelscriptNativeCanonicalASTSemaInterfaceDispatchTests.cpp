@@ -5,6 +5,8 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
+#include "source/as_ast_dump.h"
+#include "source/as_ast_sidecar.h"
 #include "source/as_builder.h"
 #include "source/as_decl.h"
 #include "source/as_module.h"
@@ -99,6 +101,170 @@ private:
 	}
 
 public:
+	TEST_METHOD(SidecarRoundTripPreservesExactMethodRelations)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		AngelscriptNativeTestSupport::FScopedNativeModuleName ModuleScope(
+			Engine, "CanonicalInterfaceRelationSidecar");
+		asCModule* const Module =
+			AngelscriptBuilderTestSupport::CreateBuilderModule(
+				ScriptEngine, ModuleScope.Get());
+		ASSERT_THAT(IsNotNull(Module, TEXT("relation sidecar module")));
+
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		asCScriptCode Code;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			interface IResolve
+			{
+				int Resolve(int Value);
+			}
+
+			class BaseResolver
+			{
+				int Resolve(int Value)
+				{
+					return Value;
+				}
+			}
+
+			class Resolver : BaseResolver, IResolve
+			{
+				int Resolve(int Value) override
+				{
+					return Value + 1;
+				}
+			}
+			)AS");
+		Code.SetCode(
+			"CanonicalInterfaceRelationSidecar.as",
+			ScriptSource.c_str(),
+			true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code)));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Sema.GetDiagnostics().GetLength()));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal()));
+
+		const asCDecl* const OriginalOwner =
+			FindDecl(Context, asAST_DECL_CLASS, "Resolver");
+		const asCDecl* const OriginalImplementation =
+			FindDecl(Context, asAST_DECL_METHOD, "Resolver::Resolve(int)");
+		const asCDecl* const OriginalBaseRequirement =
+			FindDecl(Context, asAST_DECL_METHOD, "BaseResolver::Resolve(int)");
+		const asCDecl* const OriginalRequirement =
+			FindDecl(Context, asAST_DECL_METHOD, "IResolve::Resolve(int)");
+		ASSERT_THAT(IsNotNull(OriginalOwner));
+		ASSERT_THAT(IsNotNull(OriginalImplementation));
+		ASSERT_THAT(IsNotNull(OriginalBaseRequirement));
+		ASSERT_THAT(IsNotNull(OriginalRequirement));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+			OriginalOwner != nullptr
+				? OriginalOwner->methodRelations.GetLength() : 0));
+
+		asSASTSidecarHeader Header;
+		Header.functionKey = "CanonicalInterfaceRelationSidecar";
+		Header.profile = "Win64";
+		Header.version = asAST_SIDECAR_SCHEMA_VERSION;
+		asCArray<asBYTE> Bytes;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTEncodeSidecar(Context, Header, Bytes),
+			TEXT("encode sealed method relations")));
+		asCArray<asBYTE> RepeatedBytes;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTEncodeSidecar(Context, Header, RepeatedBytes),
+			TEXT("repeat encoding the same sealed snapshot")));
+		ASSERT_THAT(AreEqual(Bytes.GetLength(), RepeatedBytes.GetLength()));
+		for( asUINT Index = 0; Index < Bytes.GetLength(); ++Index )
+		{
+			ASSERT_THAT(AreEqual(
+				(int)Bytes[Index],
+				(int)RepeatedBytes[Index],
+				TEXT("V8 relation encoding must be byte deterministic")));
+		}
+
+		asCASTContext Restored;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTDecodeSidecar(
+				Restored, Header, Bytes.AddressOf(), Bytes.GetLength()),
+			TEXT("decode method relations without re-running Sema")));
+		const asCDecl* const RestoredOwner =
+			FindDecl(Restored, asAST_DECL_CLASS, "Resolver");
+		const asCDecl* const RestoredImplementation =
+			FindDecl(Restored, asAST_DECL_METHOD, "Resolver::Resolve(int)");
+		const asCDecl* const RestoredBaseRequirement =
+			FindDecl(Restored, asAST_DECL_METHOD, "BaseResolver::Resolve(int)");
+		const asCDecl* const RestoredRequirement =
+			FindDecl(Restored, asAST_DECL_METHOD, "IResolve::Resolve(int)");
+		ASSERT_THAT(IsNotNull(RestoredOwner));
+		ASSERT_THAT(IsNotNull(RestoredImplementation));
+		ASSERT_THAT(IsNotNull(RestoredBaseRequirement));
+		ASSERT_THAT(IsNotNull(RestoredRequirement));
+		ASSERT_THAT(AreEqual(
+			OriginalOwner != nullptr
+				? OriginalOwner->methodRelations.GetLength() : 0,
+			RestoredOwner != nullptr
+				? RestoredOwner->methodRelations.GetLength() : 0,
+			TEXT("Sidecar must not erase an irreducible Sema relationship")));
+		if( RestoredOwner != nullptr
+			&& RestoredImplementation != nullptr
+			&& RestoredBaseRequirement != nullptr
+			&& RestoredRequirement != nullptr
+			&& RestoredOwner->methodRelations.GetLength() == 2 )
+		{
+			const asSASTMethodRelation& OverrideRelation =
+				RestoredOwner->methodRelations[0];
+			ASSERT_THAT(AreEqual(
+				(int)asAST_METHOD_RELATION_BASE_OVERRIDE,
+				(int)OverrideRelation.kind));
+			ASSERT_THAT(IsTrue(
+				OverrideRelation.implementation == RestoredImplementation->id));
+			ASSERT_THAT(IsTrue(
+				OverrideRelation.requirement == RestoredBaseRequirement->id));
+
+			const asSASTMethodRelation& InterfaceRelation =
+				RestoredOwner->methodRelations[1];
+			ASSERT_THAT(AreEqual(
+				(int)asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+				(int)InterfaceRelation.kind));
+			ASSERT_THAT(IsTrue(
+				InterfaceRelation.implementation == RestoredImplementation->id,
+				TEXT("restored source must be the exact remapped DeclId")));
+			ASSERT_THAT(IsTrue(
+				InterfaceRelation.requirement == RestoredRequirement->id,
+				TEXT("restored target must be the exact remapped DeclId")));
+		}
+
+		asCArray<asBYTE> RestoredBytes;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTEncodeSidecar(Restored, Header, RestoredBytes),
+			TEXT("re-encode restored relations")));
+		ASSERT_THAT(AreEqual(Bytes.GetLength(), RestoredBytes.GetLength()));
+		for( asUINT Index = 0; Index < Bytes.GetLength(); ++Index )
+		{
+			ASSERT_THAT(AreEqual(
+				(int)Bytes[Index],
+				(int)RestoredBytes[Index],
+				TEXT("V8 decode/re-encode must preserve exact bytes")));
+		}
+
+		asCString OriginalDump;
+		asCString RestoredDump;
+		asCASTDump(Context, OriginalDump);
+		asCASTDump(Restored, RestoredDump);
+		ASSERT_THAT(IsTrue(OriginalDump == RestoredDump,
+			TEXT("deterministic structural dump must survive V8 round-trip")));
+	}
+
 	TEST_METHOD(ParserSealsExactOverrideAndInterfaceImplementationEdges)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

@@ -269,6 +269,18 @@ const char* StructuredEdgeRoleName(asEASTEdgeRole role)
 	case asAST_EDGE_EXPR_TYPE: return "expr-type";
 	case asAST_EDGE_EXPR_RESOLVED_DECL: return "expr-resolved-decl";
 	case asAST_EDGE_DECL_ACCESS_SPECIFIER: return "decl-access-specifier";
+	case asAST_EDGE_DECL_METHOD_RELATION_IMPLEMENTATION: return "decl-method-relation-implementation";
+	case asAST_EDGE_DECL_METHOD_RELATION_REQUIREMENT: return "decl-method-relation-requirement";
+	default: return "invalid";
+	}
+}
+
+const char* MethodRelationKindName(asEASTMethodRelationKind kind)
+{
+	switch( kind )
+	{
+	case asAST_METHOD_RELATION_BASE_OVERRIDE: return "base-override";
+	case asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION: return "interface-implementation";
 	default: return "invalid";
 	}
 }
@@ -409,6 +421,49 @@ void AppendStructuredEscaped(asCString& out, const char* value)
 		}
 	}
 	out += '"';
+}
+
+void AppendStructuredMethodRelations(
+	asCString& out,
+	const asCDecl& decl,
+	bool json)
+{
+	if( json )
+	{
+		out += ",\"methodRelations\":[";
+		for( asUINT index = 0;
+			index < decl.methodRelations.GetLength(); ++index )
+		{
+			if( index != 0 ) out += ",";
+			const asSASTMethodRelation& relation =
+				decl.methodRelations[index];
+			out += "{\"kind\":";
+			AppendStructuredEscaped(out, MethodRelationKindName(relation.kind));
+			asCString fields;
+			fields.Format(
+				",\"implementation\":\"D%u\",\"requirement\":\"D%u\"}",
+				relation.implementation.value,
+				relation.requirement.value);
+			out += fields;
+		}
+		out += "]";
+		return;
+	}
+
+	out += " methodRelations=[";
+	for( asUINT index = 0;
+		index < decl.methodRelations.GetLength(); ++index )
+	{
+		if( index != 0 ) out += ",";
+		const asSASTMethodRelation& relation = decl.methodRelations[index];
+		out += MethodRelationKindName(relation.kind);
+		asCString fields;
+		fields.Format(":D%u>D%u",
+			relation.implementation.value,
+			relation.requirement.value);
+		out += fields;
+	}
+	out += "]";
 }
 
 struct asSStructuredSourceFacts
@@ -671,6 +726,7 @@ void AppendStructuredNodeCore(
 				number.Format(",\"layout\":{\"byteOffset\":%d,\"byteSize\":%d,\"byteAlignment\":%u}",
 					decl->byteOffset, decl->byteSize, decl->byteAlignment);
 				out += number;
+				AppendStructuredMethodRelations(out, *decl, true);
 			}
 		}
 		out += ",\"source\":{\"logical\":"; AppendStructuredEscaped(out, source.logical);
@@ -702,6 +758,7 @@ void AppendStructuredNodeCore(
 				number.Format(" byteOffset=%d byteSize=%d byteAlignment=%u",
 					decl->byteOffset, decl->byteSize, decl->byteAlignment);
 				out += number;
+				AppendStructuredMethodRelations(out, *decl, false);
 			}
 		}
 		out += " source="; AppendStructuredEscaped(out, source.logical);
@@ -1052,6 +1109,21 @@ void asCASTDump(const asCASTContext& context, asCString& out)
 			idText.Format("#%u", decl->accessSpecifier.value);
 			accessSpecifierDump += idText;
 		}
+		asCString methodRelationsDump;
+		for( asUINT relationIndex = 0;
+			relationIndex < decl->methodRelations.GetLength();
+			++relationIndex )
+		{
+			if( relationIndex != 0 ) methodRelationsDump += ",";
+			const asSASTMethodRelation& relation =
+				decl->methodRelations[relationIndex];
+			methodRelationsDump += MethodRelationKindName(relation.kind);
+			asCString relationText;
+			relationText.Format(":D%u>D%u",
+				relation.implementation.value,
+				relation.requirement.value);
+			methodRelationsDump += relationText;
+		}
 		asCString line;
 		if( capturesDump.GetLength() && initsDump.GetLength() )
 		{
@@ -1147,6 +1219,13 @@ void asCASTDump(const asCASTContext& context, asCString& out)
 				bases.AddressOf() ? bases.AddressOf() : "",
 				decl->range.begin.offset,
 				decl->range.end.offset);
+		}
+		if( methodRelationsDump.GetLength() )
+		{
+			line.SetLength(line.GetLength() - 1);
+			line += " method-relations=";
+			line += methodRelationsDump;
+			line += "\n";
 		}
 		if( accessorDump.GetLength() )
 		{
@@ -1795,6 +1874,17 @@ void asCASTShadowDiff(const asCASTContext& left, const asCASTContext& right, asC
 		{
 			asCString field; field.Format("bases[%u]", n);
 			if( ShadowIdMismatch(out, path, field.AddressOf(), leftDecl->bases[n].value, rightDecl->bases[n].value) ) return;
+		}
+		if( ShadowUnsignedMismatch(out, path, "methodRelations.count", leftDecl->methodRelations.GetLength(), rightDecl->methodRelations.GetLength()) ) return;
+		for( asUINT n = 0; n < leftDecl->methodRelations.GetLength(); ++n )
+		{
+			asCString field;
+			field.Format("methodRelations[%u].kind", n);
+			if( ShadowUnsignedMismatch(out, path, field.AddressOf(), leftDecl->methodRelations[n].kind, rightDecl->methodRelations[n].kind) ) return;
+			field.Format("methodRelations[%u].implementation", n);
+			if( ShadowIdMismatch(out, path, field.AddressOf(), leftDecl->methodRelations[n].implementation.value, rightDecl->methodRelations[n].implementation.value) ) return;
+			field.Format("methodRelations[%u].requirement", n);
+			if( ShadowIdMismatch(out, path, field.AddressOf(), leftDecl->methodRelations[n].requirement.value, rightDecl->methodRelations[n].requirement.value) ) return;
 		}
 		if( ShadowUnsignedMismatch(out, path, "inits.count", leftDecl->inits.GetLength(), rightDecl->inits.GetLength()) ) return;
 		for( asUINT n = 0; n < leftDecl->inits.GetLength(); ++n )

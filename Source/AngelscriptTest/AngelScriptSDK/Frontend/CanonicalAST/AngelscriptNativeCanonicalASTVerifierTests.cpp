@@ -474,6 +474,72 @@ static asASTStmtId AppendNormalScopeExit(
 		asASTStmtId(Record.semanticRegion.value), CleanupStmt);
 	return CleanupStmt;
 }
+
+struct FMethodRelationVerifierFixture
+{
+	asASTDeclId Tu;
+	asASTDeclId Interface;
+	asASTDeclId Requirement;
+	asASTDeclId BaseClass;
+	asASTDeclId BaseImplementation;
+	asASTDeclId Owner;
+	asCQualType IntType;
+	asCQualType BoolType;
+};
+
+static asASTDeclId AddRelationMethod(
+	asCASTContext& Context,
+	asASTDeclId Owner,
+	const char* StableKey,
+	const asCQualType& ReturnType,
+	const asCQualType& ParameterType)
+{
+	const asASTDeclId Method = Context.CreateDecl(
+		asAST_DECL_METHOD, Owner, asCSourceRange(), "Probe");
+	Context.SetStableKey(Method, StableKey);
+	Context.SetDeclType(Method, ReturnType);
+	const asASTDeclId Parameter = Context.CreateDecl(
+		asAST_DECL_PARAM, Method, asCSourceRange(), "Value");
+	Context.SetDeclType(Parameter, ParameterType);
+	return Method;
+}
+
+static FMethodRelationVerifierFixture BuildMethodRelationVerifierFixture(
+	asCASTContext& Context,
+	bool AttachInterface = true)
+{
+	FMethodRelationVerifierFixture Fixture;
+	Fixture.Tu = Context.CreateTranslationUnit("MethodRelationVerifier");
+	Fixture.IntType = Context.InternPrimitive(ttInt, 0);
+	Fixture.BoolType = Context.InternPrimitive(ttBool, 0);
+	Fixture.Interface = Context.CreateDecl(
+		asAST_DECL_INTERFACE, Fixture.Tu, asCSourceRange(), "IProbe");
+	Context.SetStableKey(Fixture.Interface, "IProbe");
+	Fixture.Requirement = AddRelationMethod(
+		Context,
+		Fixture.Interface,
+		"IProbe::Probe(int)",
+		Fixture.IntType,
+		Fixture.IntType);
+	Fixture.BaseClass = Context.CreateDecl(
+		asAST_DECL_CLASS, Fixture.Tu, asCSourceRange(), "BaseProbe");
+	Context.SetStableKey(Fixture.BaseClass, "BaseProbe");
+	Fixture.BaseImplementation = AddRelationMethod(
+		Context,
+		Fixture.BaseClass,
+		"BaseProbe::Probe(int)",
+		Fixture.IntType,
+		Fixture.IntType);
+	Fixture.Owner = Context.CreateDecl(
+		asAST_DECL_CLASS, Fixture.Tu, asCSourceRange(), "DerivedProbe");
+	Context.SetStableKey(Fixture.Owner, "DerivedProbe");
+	Context.AddBase(Fixture.Owner, Fixture.BaseClass);
+	if( AttachInterface )
+	{
+		Context.AddBase(Fixture.Owner, Fixture.Interface);
+	}
+	return Fixture;
+}
 }
 
 TEST_CLASS_WITH_FLAGS(FCanonicalASTVerifierTests,
@@ -481,6 +547,449 @@ TEST_CLASS_WITH_FLAGS(FCanonicalASTVerifierTests,
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 public:
+	TEST_METHOD(VerifierRejectsForeignWrongOwnerWrongSignatureAndDuplicateMethodRelations)
+	{
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			ASSERT_THAT(AreEqual(
+				(int)asAST_VERIFY_DANGLING_ID,
+				Context.AddMethodRelation(
+					Fixture.Owner,
+					asSASTMethodRelation(
+						asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+						asASTDeclId(Fixture.BaseImplementation.value, 0x51u),
+						Fixture.Requirement)),
+				TEXT("construction must reject a foreign snapshot identity")));
+		}
+
+		auto RequireRelationFailure = [this](
+			asCASTContext& Context,
+			asEASTVerifyCategory ExpectedCategory,
+			const char* ExpectedDetail,
+			const TCHAR* Message)
+		{
+			asSAstVerifyResult Result;
+			const int Status = asCASTVerify(Context, Result);
+			ASSERT_THAT(AreEqual((int)ExpectedCategory, Status, Message));
+			ASSERT_THAT(IsTrue(
+				Result.detail.Equals(ExpectedDetail),
+				*FString::Printf(
+					TEXT("expected stable detail '%hs', got '%hs'"),
+					ExpectedDetail,
+					Result.detail.AddressOf())));
+			ASSERT_THAT(AreEqual(
+				(int)ExpectedCategory,
+				Context.Seal(),
+				TEXT("the publication Seal gate must reject the same forged relation")));
+		};
+
+		{
+			// Construction rejects foreign IDs early; this white-box corruption
+			// proves the final Seal verifier still classifies them independently.
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			asCDecl* const Owner =
+				const_cast<asCDecl*>(Context.GetDecl(Fixture.Owner));
+			ASSERT_THAT(IsNotNull(Owner));
+			Owner->methodRelations.PushLast(asSASTMethodRelation(
+				asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+				asASTDeclId(Fixture.BaseImplementation.value, 0x51u),
+				Fixture.Requirement));
+			RequireRelationFailure(
+				Context, asAST_VERIFY_FOREIGN_ID,
+				"method-relation-implementation-foreign",
+				TEXT("the final verifier must reject a foreign implementation ID"));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			const asASTDeclId WrongOwner = Context.CreateDecl(
+				asAST_DECL_VAR, Fixture.Tu, asCSourceRange(), "WrongOwner");
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				WrongOwner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					Fixture.BaseImplementation,
+					Fixture.Requirement))));
+			RequireRelationFailure(
+				Context, asAST_VERIFY_WRONG_KIND,
+				"method-relation-owner-kind",
+				TEXT("a VarDecl cannot own method relations"));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context, false);
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Fixture.Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					Fixture.BaseImplementation,
+					Fixture.Requirement))));
+			RequireRelationFailure(
+				Context, asAST_VERIFY_INVALID_CHILD,
+				"method-relation-interface-closure",
+				TEXT("an unrelated interface requirement is not in the owner closure"));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			const asASTDeclId WrongSignature = AddRelationMethod(
+				Context,
+				Fixture.Owner,
+				"DerivedProbe::Probe(bool)",
+				Fixture.IntType,
+				Fixture.BoolType);
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Fixture.Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					WrongSignature,
+					Fixture.Requirement))));
+			RequireRelationFailure(
+				Context, asAST_VERIFY_INVALID_TYPE,
+				"method-relation-signature",
+				TEXT("relation endpoints must have an exact Canonical signature"));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			const asASTDeclId CompetingImplementation = AddRelationMethod(
+				Context,
+				Fixture.Owner,
+				"DerivedProbe::Probe(int)",
+				Fixture.IntType,
+				Fixture.IntType);
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Fixture.Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					Fixture.BaseImplementation,
+					Fixture.Requirement))));
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Fixture.Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					CompetingImplementation,
+					Fixture.Requirement))));
+			RequireRelationFailure(
+				Context, asAST_VERIFY_INVALID_CHILD,
+				"method-relation-requirement-duplicate",
+				TEXT("one requirement cannot have two implementations"));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			RequireRelationFailure(
+				Context, asAST_VERIFY_INVALID_CHILD,
+				"method-relation-interface-incomplete",
+				TEXT("every concrete interface requirement needs one exact relation"));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			Context.SetDeclType(
+				Fixture.BaseImplementation,
+				asCQualType(asASTTypeRef(999), 0));
+			Context.SetDeclType(
+				Fixture.Requirement,
+				asCQualType(asASTTypeRef(999), 0));
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Fixture.Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					Fixture.BaseImplementation,
+					Fixture.Requirement))));
+			RequireRelationFailure(
+				Context, asAST_VERIFY_INVALID_TYPE,
+				"method-relation-signature-type",
+				TEXT("relation signatures cannot contain a dangling Canonical type"));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Fixture.Requirement, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetBody(Fixture.Requirement, Body)));
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Fixture.Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					Fixture.BaseImplementation,
+					Fixture.Requirement))));
+			RequireRelationFailure(
+				Context, asAST_VERIFY_INVALID_CHILD,
+				"method-relation-interface-method-body",
+				TEXT("interface methods are declaration-only Canonical requirements"));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			const asASTDeclId OtherInterface = Context.CreateDecl(
+				asAST_DECL_INTERFACE, Fixture.Tu, asCSourceRange(), "IOther");
+			Context.SetStableKey(OtherInterface, "IOther");
+			ASSERT_THAT(AreEqual(0,
+				Context.AddBase(Fixture.Interface, OtherInterface)));
+			ASSERT_THAT(AreEqual(0,
+				Context.AddBase(OtherInterface, Fixture.Interface)));
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Fixture.Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					Fixture.BaseImplementation,
+					Fixture.Requirement))));
+			RequireRelationFailure(
+				Context, asAST_VERIFY_INVALID_CHILD,
+				"method-relation-interface-ancestry-cycle",
+				TEXT("an interface ancestry cycle cannot be silently deduplicated"));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			ASSERT_THAT(AreEqual(0,
+				Context.AddBase(Fixture.BaseClass, Fixture.Owner)));
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Fixture.Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					Fixture.BaseImplementation,
+					Fixture.Requirement))));
+			RequireRelationFailure(
+				Context, asAST_VERIFY_INVALID_CHILD,
+				"method-relation-class-ancestry-cycle",
+				TEXT("a class ancestry cycle cannot be silently deduplicated"));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			const asASTDeclId SecondBase = Context.CreateDecl(
+				asAST_DECL_CLASS, Fixture.Tu, asCSourceRange(), "SecondBase");
+			ASSERT_THAT(AreEqual(0, Context.AddBase(Fixture.Owner, SecondBase)));
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Fixture.Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					Fixture.BaseImplementation,
+					Fixture.Requirement))));
+			RequireRelationFailure(
+				Context, asAST_VERIFY_INVALID_CHILD,
+				"method-relation-class-ancestry-multiple-bases",
+				TEXT("Canonical class ancestry must preserve AS single inheritance"));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			ASSERT_THAT(AreEqual(0,
+				Context.AddBase(Fixture.Interface, Fixture.BaseClass)));
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Fixture.Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					Fixture.BaseImplementation,
+					Fixture.Requirement))));
+			RequireRelationFailure(
+				Context, asAST_VERIFY_WRONG_KIND,
+				"method-relation-interface-base-kind",
+				TEXT("an interface cannot inherit a concrete class"));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			ASSERT_THAT(AreEqual(0,
+				Context.AddBase(Fixture.Owner, Fixture.Interface)));
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Fixture.Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					Fixture.BaseImplementation,
+					Fixture.Requirement))));
+			RequireRelationFailure(
+				Context, asAST_VERIFY_INVALID_CHILD,
+				"method-relation-interface-ancestry-duplicate",
+				TEXT("a direct duplicate interface base cannot claim one closure twice"));
+		}
+
+		{
+			// A shared transitive interface is a legal diamond, not a duplicate
+			// authored base. Keep this positive case beside the duplicate gate.
+			asCASTContext Context;
+			const asASTDeclId Tu =
+				Context.CreateTranslationUnit("MethodRelationDiamond");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTDeclId Root = Context.CreateDecl(
+				asAST_DECL_INTERFACE, Tu, asCSourceRange(), "IRoot");
+			Context.SetStableKey(Root, "IRoot");
+			const asASTDeclId Requirement = AddRelationMethod(
+				Context, Root, "IRoot::Probe(int)", IntType, IntType);
+			const asASTDeclId Left = Context.CreateDecl(
+				asAST_DECL_INTERFACE, Tu, asCSourceRange(), "ILeft");
+			const asASTDeclId Right = Context.CreateDecl(
+				asAST_DECL_INTERFACE, Tu, asCSourceRange(), "IRight");
+			Context.AddBase(Left, Root);
+			Context.AddBase(Right, Root);
+			const asASTDeclId Owner = Context.CreateDecl(
+				asAST_DECL_CLASS, Tu, asCSourceRange(), "DiamondProbe");
+			Context.SetStableKey(Owner, "DiamondProbe");
+			Context.AddBase(Owner, Left);
+			Context.AddBase(Owner, Right);
+			const asASTDeclId Implementation = AddRelationMethod(
+				Context, Owner, "DiamondProbe::Probe(int)", IntType, IntType);
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					Implementation,
+					Requirement))));
+			ASSERT_THAT(AreEqual(
+				(int)asAST_VERIFY_OK,
+				Context.Seal(),
+				TEXT("a legal interface diamond must retain one exact requirement")));
+		}
+
+		{
+			asCASTContext Context;
+			const FMethodRelationVerifierFixture Fixture =
+				BuildMethodRelationVerifierFixture(Context);
+			ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+				Fixture.Owner,
+				asSASTMethodRelation(
+					asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+					Fixture.BaseImplementation,
+					Fixture.Requirement))));
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual(
+				(int)asAST_VERIFY_OK,
+				Context.Seal(),
+				TEXT("one exact complete relation must remain admissible")));
+		}
+	}
+
+	TEST_METHOD(TraversalNamesMethodRelationImplementationAndRequirementEdges)
+	{
+		asCASTContext Context;
+		const FMethodRelationVerifierFixture Fixture =
+			BuildMethodRelationVerifierFixture(Context);
+		ASSERT_THAT(AreEqual(0, Context.AddMethodRelation(
+			Fixture.Owner,
+			asSASTMethodRelation(
+				asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+				Fixture.BaseImplementation,
+				Fixture.Requirement))));
+		ASSERT_THAT(AreEqual(0, Context.Seal()));
+
+		const asSASTNodeRef OwnerNode = asSASTNodeRef::FromDecl(Fixture.Owner);
+		const asEASTEdgeRole ExpectedImplementationRole =
+			asAST_EDGE_DECL_METHOD_RELATION_IMPLEMENTATION;
+		const asEASTEdgeRole ExpectedRequirementRole =
+			asAST_EDGE_DECL_METHOD_RELATION_REQUIREMENT;
+		bool FoundImplementation = false;
+		bool FoundRequirement = false;
+		for( asUINT EdgeIndex = 0;
+			EdgeIndex < asCASTGetEdgeCount(Context, OwnerNode); ++EdgeIndex )
+		{
+			asSASTTraversalEdge Edge;
+			ASSERT_THAT(IsTrue(asCASTGetEdge(
+				Context, OwnerNode, EdgeIndex, Edge)));
+			if( Edge.role == ExpectedImplementationRole
+				&& Edge.index == 0
+				&& Edge.target == asSASTNodeRef::FromDecl(
+					Fixture.BaseImplementation) )
+			{
+				ASSERT_THAT(AreEqual(
+					(int)asAST_EDGE_REFERENCE,
+					(int)Edge.edgeClass,
+					TEXT("method implementation is a non-owning reference edge")));
+				FoundImplementation = true;
+			}
+			if( Edge.role == ExpectedRequirementRole
+				&& Edge.index == 0
+				&& Edge.target == asSASTNodeRef::FromDecl(
+					Fixture.Requirement) )
+			{
+				ASSERT_THAT(AreEqual(
+					(int)asAST_EDGE_REFERENCE,
+					(int)Edge.edgeClass,
+					TEXT("method requirement is a non-owning reference edge")));
+				FoundRequirement = true;
+			}
+		}
+		ASSERT_THAT(IsTrue(FoundImplementation,
+			TEXT("traversal must name implementation[index] as a reference edge")));
+		ASSERT_THAT(IsTrue(FoundRequirement,
+			TEXT("traversal must name requirement[index] as a reference edge")));
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString DumpText =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
+		const FString RelationText = FString::Printf(
+			TEXT("interface-implementation:D%u>D%u"),
+			Fixture.BaseImplementation.value,
+			Fixture.Requirement.value);
+		ASSERT_THAT(IsTrue(DumpText.Contains(
+			TEXT("method-relations=") + RelationText),
+			TEXT("deterministic dump must include exact relation kind and endpoints")));
+
+		asSASTStructuredDumpOptions TreeOptions;
+		TreeOptions.format = asAST_STRUCTURED_DUMP_TREE;
+		asCString TreeDump;
+		ASSERT_THAT(AreEqual(
+			(int)asAST_VERIFY_OK,
+			asCASTStructuredDump(Context, TreeOptions, TreeDump)));
+		const FString TreeText =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(TreeDump);
+		ASSERT_THAT(IsTrue(TreeText.Contains(
+			TEXT("methodRelations=[") + RelationText + TEXT("]"))));
+		ASSERT_THAT(IsTrue(TreeText.Contains(
+			TEXT("edge role=decl-method-relation-implementation class=reference index=0"))));
+		ASSERT_THAT(IsTrue(TreeText.Contains(
+			TEXT("edge role=decl-method-relation-requirement class=reference index=0"))));
+
+		asSASTStructuredDumpOptions JsonOptions;
+		JsonOptions.format = asAST_STRUCTURED_DUMP_JSON;
+		asCString JsonDump;
+		ASSERT_THAT(AreEqual(
+			(int)asAST_VERIFY_OK,
+			asCASTStructuredDump(Context, JsonOptions, JsonDump)));
+		const FString JsonText =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(JsonDump);
+		const FString JsonRelation = FString::Printf(
+			TEXT("\"methodRelations\":[{\"kind\":\"interface-implementation\",\"implementation\":\"D%u\",\"requirement\":\"D%u\"}]"),
+			Fixture.BaseImplementation.value,
+			Fixture.Requirement.value);
+		ASSERT_THAT(IsTrue(JsonText.Contains(JsonRelation)));
+		ASSERT_THAT(IsTrue(JsonText.Contains(
+			TEXT("\"role\":\"decl-method-relation-implementation\",\"edgeClass\":\"reference\",\"index\":0"))));
+		ASSERT_THAT(IsTrue(JsonText.Contains(
+			TEXT("\"role\":\"decl-method-relation-requirement\",\"edgeClass\":\"reference\",\"index\":0"))));
+	}
+
 	TEST_METHOD(ExposesNamedAuthenticatedCompatibilityCleanupActions)
 	{
 		asCASTContext Context;

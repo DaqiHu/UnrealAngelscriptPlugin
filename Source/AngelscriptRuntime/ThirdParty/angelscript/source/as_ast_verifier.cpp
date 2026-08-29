@@ -143,6 +143,9 @@ const char* DiagnosticEdgeRoleName(asEASTEdgeRole role)
 	case asAST_EDGE_STMT_DECL: return "stmt-decl";
 	case asAST_EDGE_EXPR_TYPE: return "expr-type";
 	case asAST_EDGE_EXPR_RESOLVED_DECL: return "expr-resolved-decl";
+	case asAST_EDGE_DECL_ACCESS_SPECIFIER: return "decl-access-specifier";
+	case asAST_EDGE_DECL_METHOD_RELATION_IMPLEMENTATION: return "decl-method-relation-implementation";
+	case asAST_EDGE_DECL_METHOD_RELATION_REQUIREMENT: return "decl-method-relation-requirement";
 	default: return "none";
 	}
 }
@@ -787,6 +790,616 @@ static int VerifySealedRequiredTargets(const asCASTContext& context, asSAstVerif
 	return asAST_VERIFY_OK;
 }
 
+static bool MethodRelationContainsDecl(
+	const asCArray<asASTDeclId>& declarations,
+	asASTDeclId declaration)
+{
+	for( asUINT index = 0; index < declarations.GetLength(); ++index )
+	{
+		if( declarations[index] == declaration )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool MethodRelationQualTypeIsValid(
+	const asCASTContext& context,
+	const asCQualType& type)
+{
+	return type.IsValid()
+		&& type.type.snapshotOwner == 0
+		&& context.GetType(type.type) != 0
+		&& asASTQualifiersAreValid(type.quals);
+}
+
+static bool MethodRelationSignatureTypesAreValid(
+	const asCASTContext& context,
+	const asCDecl* method)
+{
+	if( method == 0 || method->kind != asAST_DECL_METHOD
+		|| !MethodRelationQualTypeIsValid(context, method->type) )
+	{
+		return false;
+	}
+	for( asUINT childIndex = 0;
+		childIndex < method->children.GetLength(); ++childIndex )
+	{
+		const asCDecl* const child =
+			context.GetDecl(method->children[childIndex]);
+		if( child != 0 && child->kind == asAST_DECL_PARAM
+			&& !MethodRelationQualTypeIsValid(context, child->type) )
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool MethodRelationSignaturesEqual(
+	const asCASTContext& context,
+	const asCDecl* lhs,
+	const asCDecl* rhs)
+{
+	if( lhs == 0 || rhs == 0
+		|| lhs->kind != asAST_DECL_METHOD
+		|| rhs->kind != asAST_DECL_METHOD
+		|| !lhs->name.Equals(rhs->name)
+		|| lhs->type != rhs->type
+		|| ((lhs->traits & asAST_TRAIT_CONST_METHOD) != 0)
+			!= ((rhs->traits & asAST_TRAIT_CONST_METHOD) != 0) )
+	{
+		return false;
+	}
+
+	asUINT lhsIndex = 0;
+	asUINT rhsIndex = 0;
+	for( ;; )
+	{
+		const asCDecl* lhsParameter = 0;
+		while( lhsIndex < lhs->children.GetLength() )
+		{
+			lhsParameter = context.GetDecl(lhs->children[lhsIndex++]);
+			if( lhsParameter != 0 && lhsParameter->kind == asAST_DECL_PARAM )
+			{
+				break;
+			}
+			lhsParameter = 0;
+		}
+		const asCDecl* rhsParameter = 0;
+		while( rhsIndex < rhs->children.GetLength() )
+		{
+			rhsParameter = context.GetDecl(rhs->children[rhsIndex++]);
+			if( rhsParameter != 0 && rhsParameter->kind == asAST_DECL_PARAM )
+			{
+				break;
+			}
+			rhsParameter = 0;
+		}
+		if( lhsParameter == 0 || rhsParameter == 0 )
+		{
+			return lhsParameter == rhsParameter;
+		}
+		if( lhsParameter->type != rhsParameter->type )
+		{
+			return false;
+		}
+	}
+}
+
+static bool MethodRelationInterfaceReaches(
+	const asCASTContext& context,
+	asASTDeclId start,
+	asASTDeclId target)
+{
+	asCArray<asASTDeclId> pending;
+	asCArray<asASTDeclId> visited;
+	pending.PushLast(start);
+	for( asUINT pendingIndex = 0;
+		pendingIndex < pending.GetLength(); ++pendingIndex )
+	{
+		const asCDecl* const candidate =
+			context.GetDecl(pending[pendingIndex]);
+		if( candidate == 0 || candidate->kind != asAST_DECL_INTERFACE )
+		{
+			continue;
+		}
+		if( candidate->id == target )
+		{
+			return true;
+		}
+		if( MethodRelationContainsDecl(visited, candidate->id) )
+		{
+			continue;
+		}
+		visited.PushLast(candidate->id);
+		for( asUINT baseIndex = 0;
+			baseIndex < candidate->bases.GetLength(); ++baseIndex )
+		{
+			pending.PushLast(candidate->bases[baseIndex]);
+		}
+	}
+	return false;
+}
+
+static bool MethodRelationClassReaches(
+	const asCASTContext& context,
+	asASTDeclId start,
+	asASTDeclId target)
+{
+	asCArray<asASTDeclId> pending;
+	asCArray<asASTDeclId> visited;
+	pending.PushLast(start);
+	for( asUINT pendingIndex = 0;
+		pendingIndex < pending.GetLength(); ++pendingIndex )
+	{
+		const asCDecl* const candidate =
+			context.GetDecl(pending[pendingIndex]);
+		if( candidate == 0 || candidate->kind != asAST_DECL_CLASS )
+		{
+			continue;
+		}
+		if( candidate->id == target )
+		{
+			return true;
+		}
+		if( MethodRelationContainsDecl(visited, candidate->id) )
+		{
+			continue;
+		}
+		visited.PushLast(candidate->id);
+		for( asUINT baseIndex = 0;
+			baseIndex < candidate->bases.GetLength(); ++baseIndex )
+		{
+			const asCDecl* const base =
+				context.GetDecl(candidate->bases[baseIndex]);
+			if( base != 0 && base->kind == asAST_DECL_CLASS )
+			{
+				pending.PushLast(base->id);
+			}
+		}
+	}
+	return false;
+}
+
+static int VerifyMethodRelationClassAncestry(
+	const asCASTContext& context,
+	const asCDecl& owner,
+	asSAstVerifyResult& result)
+{
+	if( owner.kind != asAST_DECL_CLASS
+		&& owner.kind != asAST_DECL_INTERFACE )
+	{
+		return asAST_VERIFY_OK;
+	}
+
+	asASTDeclId directClass;
+	for( asUINT baseIndex = 0;
+		baseIndex < owner.bases.GetLength(); ++baseIndex )
+	{
+		const asCDecl* const base = context.GetDecl(owner.bases[baseIndex]);
+		if( base == 0 || base->kind != asAST_DECL_CLASS )
+		{
+			continue;
+		}
+		if( owner.kind == asAST_DECL_INTERFACE )
+		{
+			return Fail(result, asAST_VERIFY_WRONG_KIND, owner.range,
+				"method-relation-interface-base-kind",
+				asSASTNodeRef::FromDecl(owner.id),
+				asAST_EDGE_DECL_BASE,
+				asSASTNodeRef::FromDecl(base->id));
+		}
+		if( directClass.IsValid() )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, owner.range,
+				"method-relation-class-ancestry-multiple-bases",
+				asSASTNodeRef::FromDecl(owner.id),
+				asAST_EDGE_DECL_BASE,
+				asSASTNodeRef::FromDecl(base->id));
+		}
+		directClass = base->id;
+	}
+
+	if( owner.kind == asAST_DECL_CLASS
+		&& directClass.IsValid()
+		&& MethodRelationClassReaches(context, directClass, owner.id) )
+	{
+		return Fail(result, asAST_VERIFY_INVALID_CHILD, owner.range,
+			"method-relation-class-ancestry-cycle",
+			asSASTNodeRef::FromDecl(owner.id),
+			asAST_EDGE_DECL_BASE,
+			asSASTNodeRef::FromDecl(directClass));
+	}
+	return asAST_VERIFY_OK;
+}
+
+static int VerifyMethodRelationInterfaceAncestry(
+	const asCASTContext& context,
+	const asCDecl& owner,
+	asSAstVerifyResult& result)
+{
+	if( owner.kind != asAST_DECL_CLASS
+		&& owner.kind != asAST_DECL_INTERFACE )
+	{
+		return asAST_VERIFY_OK;
+	}
+	asCArray<asASTDeclId> directInterfaces;
+	for( asUINT baseIndex = 0;
+		baseIndex < owner.bases.GetLength(); ++baseIndex )
+	{
+		const asCDecl* const base = context.GetDecl(owner.bases[baseIndex]);
+		if( base == 0 || base->kind != asAST_DECL_INTERFACE )
+		{
+			continue;
+		}
+		if( MethodRelationContainsDecl(directInterfaces, base->id) )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, owner.range,
+				"method-relation-interface-ancestry-duplicate",
+				asSASTNodeRef::FromDecl(owner.id),
+				asAST_EDGE_DECL_BASE,
+				asSASTNodeRef::FromDecl(base->id));
+		}
+		directInterfaces.PushLast(base->id);
+		if( owner.kind == asAST_DECL_INTERFACE
+			&& MethodRelationInterfaceReaches(
+				context, base->id, owner.id) )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, owner.range,
+				"method-relation-interface-ancestry-cycle",
+				asSASTNodeRef::FromDecl(owner.id),
+				asAST_EDGE_DECL_BASE,
+				asSASTNodeRef::FromDecl(base->id));
+		}
+	}
+	return asAST_VERIFY_OK;
+}
+
+static int VerifyInterfaceMethodsAreDeclarationOnly(
+	const asCASTContext& context,
+	const asCDecl& owner,
+	asSAstVerifyResult& result)
+{
+	if( owner.kind != asAST_DECL_INTERFACE )
+	{
+		return asAST_VERIFY_OK;
+	}
+	for( asUINT childIndex = 0;
+		childIndex < owner.children.GetLength(); ++childIndex )
+	{
+		const asCDecl* const method =
+			context.GetDecl(owner.children[childIndex]);
+		if( method == 0 || method->kind != asAST_DECL_METHOD )
+		{
+			continue;
+		}
+		if( method->body.IsValid() )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, method->range,
+				"method-relation-interface-method-body",
+				asSASTNodeRef::FromDecl(method->id),
+				asAST_EDGE_DECL_BODY,
+				asSASTNodeRef::FromStmt(method->body));
+		}
+		// Declaration initializers are executable plans. Runtime-only function
+		// data has no Canonical AST field and therefore cannot be persisted here.
+		if( method->inits.GetLength() != 0 )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, method->range,
+				"method-relation-interface-method-backend-state",
+				asSASTNodeRef::FromDecl(method->id));
+		}
+	}
+	return asAST_VERIFY_OK;
+}
+
+static void CollectMethodRelationClassAncestors(
+	const asCASTContext& context,
+	const asCDecl& owner,
+	asCArray<asASTDeclId>& classes)
+{
+	asCArray<asASTDeclId> pending;
+	asCArray<asASTDeclId> visited;
+	visited.PushLast(owner.id);
+	for( asUINT baseIndex = 0; baseIndex < owner.bases.GetLength(); ++baseIndex )
+	{
+		pending.PushLast(owner.bases[baseIndex]);
+	}
+	for( asUINT pendingIndex = 0;
+		pendingIndex < pending.GetLength(); ++pendingIndex )
+	{
+		const asCDecl* const candidate =
+			context.GetDecl(pending[pendingIndex]);
+		if( candidate == 0 || candidate->kind != asAST_DECL_CLASS
+			|| MethodRelationContainsDecl(visited, candidate->id) )
+		{
+			continue;
+		}
+		visited.PushLast(candidate->id);
+		classes.PushLast(candidate->id);
+		for( asUINT baseIndex = 0;
+			baseIndex < candidate->bases.GetLength(); ++baseIndex )
+		{
+			pending.PushLast(candidate->bases[baseIndex]);
+		}
+	}
+}
+
+static void CollectMethodRelationInterfaceClosure(
+	const asCASTContext& context,
+	const asCDecl& owner,
+	const asCArray<asASTDeclId>& classes,
+	asCArray<asASTDeclId>& interfaces)
+{
+	asCArray<asASTDeclId> pending;
+	asCArray<asASTDeclId> visited;
+	if( owner.kind == asAST_DECL_INTERFACE )
+	{
+		visited.PushLast(owner.id);
+	}
+	for( asUINT baseIndex = 0; baseIndex < owner.bases.GetLength(); ++baseIndex )
+	{
+		pending.PushLast(owner.bases[baseIndex]);
+	}
+	for( asUINT classIndex = 0; classIndex < classes.GetLength(); ++classIndex )
+	{
+		const asCDecl* const cls = context.GetDecl(classes[classIndex]);
+		for( asUINT baseIndex = 0;
+			cls != 0 && baseIndex < cls->bases.GetLength(); ++baseIndex )
+		{
+			pending.PushLast(cls->bases[baseIndex]);
+		}
+	}
+	for( asUINT pendingIndex = 0;
+		pendingIndex < pending.GetLength(); ++pendingIndex )
+	{
+		const asCDecl* const candidate =
+			context.GetDecl(pending[pendingIndex]);
+		if( candidate == 0 || candidate->kind != asAST_DECL_INTERFACE
+			|| MethodRelationContainsDecl(visited, candidate->id) )
+		{
+			continue;
+		}
+		visited.PushLast(candidate->id);
+		interfaces.PushLast(candidate->id);
+		for( asUINT baseIndex = 0;
+			baseIndex < candidate->bases.GetLength(); ++baseIndex )
+		{
+			pending.PushLast(candidate->bases[baseIndex]);
+		}
+	}
+}
+
+static int VerifyExistingMethodRelations(
+	const asCASTContext& context,
+	const asCDecl& owner,
+	asSAstVerifyResult& result)
+{
+	if( owner.methodRelations.GetLength() == 0 )
+	{
+		return asAST_VERIFY_OK;
+	}
+	if( owner.kind != asAST_DECL_CLASS
+		&& owner.kind != asAST_DECL_INTERFACE )
+	{
+		return Fail(result, asAST_VERIFY_WRONG_KIND, owner.range,
+			"method-relation-owner-kind",
+			asSASTNodeRef::FromDecl(owner.id));
+	}
+
+	asCArray<asASTDeclId> classes;
+	CollectMethodRelationClassAncestors(context, owner, classes);
+	asCArray<asASTDeclId> interfaces;
+	CollectMethodRelationInterfaceClosure(
+		context, owner, classes, interfaces);
+
+	for( asUINT relationIndex = 0;
+		relationIndex < owner.methodRelations.GetLength(); ++relationIndex )
+	{
+		const asSASTMethodRelation& relation =
+			owner.methodRelations[relationIndex];
+		if( relation.kind != asAST_METHOD_RELATION_BASE_OVERRIDE
+			&& relation.kind != asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION )
+		{
+			return Fail(result, asAST_VERIFY_WRONG_KIND, owner.range,
+				"method-relation-kind",
+				asSASTNodeRef::FromDecl(owner.id));
+		}
+		if( relation.implementation.snapshotOwner != 0 )
+		{
+			return Fail(result, asAST_VERIFY_FOREIGN_ID, owner.range,
+				"method-relation-implementation-foreign",
+				asSASTNodeRef::FromDecl(owner.id),
+				asAST_EDGE_DECL_METHOD_RELATION_IMPLEMENTATION,
+				asSASTNodeRef::FromDecl(relation.implementation));
+		}
+		if( relation.requirement.snapshotOwner != 0 )
+		{
+			return Fail(result, asAST_VERIFY_FOREIGN_ID, owner.range,
+				"method-relation-requirement-foreign",
+				asSASTNodeRef::FromDecl(owner.id),
+				asAST_EDGE_DECL_METHOD_RELATION_REQUIREMENT,
+				asSASTNodeRef::FromDecl(relation.requirement));
+		}
+		const asCDecl* const implementation =
+			context.GetDecl(relation.implementation);
+		if( implementation == 0 )
+		{
+			return Fail(result, asAST_VERIFY_DANGLING_ID, owner.range,
+				"method-relation-implementation-dangling",
+				asSASTNodeRef::FromDecl(owner.id),
+				asAST_EDGE_DECL_METHOD_RELATION_IMPLEMENTATION,
+				asSASTNodeRef::FromDecl(relation.implementation));
+		}
+		const asCDecl* const requirement =
+			context.GetDecl(relation.requirement);
+		if( requirement == 0 )
+		{
+			return Fail(result, asAST_VERIFY_DANGLING_ID, owner.range,
+				"method-relation-requirement-dangling",
+				asSASTNodeRef::FromDecl(owner.id),
+				asAST_EDGE_DECL_METHOD_RELATION_REQUIREMENT,
+				asSASTNodeRef::FromDecl(relation.requirement));
+		}
+		if( implementation->kind != asAST_DECL_METHOD
+			|| requirement->kind != asAST_DECL_METHOD )
+		{
+			return Fail(result, asAST_VERIFY_WRONG_KIND, owner.range,
+				"method-relation-endpoint-kind",
+				asSASTNodeRef::FromDecl(owner.id));
+		}
+		if( implementation->id == requirement->id )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, owner.range,
+				"method-relation-self",
+				asSASTNodeRef::FromDecl(owner.id));
+		}
+		if( !MethodRelationSignatureTypesAreValid(context, implementation)
+			|| !MethodRelationSignatureTypesAreValid(context, requirement) )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_TYPE, owner.range,
+				"method-relation-signature-type",
+				asSASTNodeRef::FromDecl(owner.id));
+		}
+		if( !MethodRelationSignaturesEqual(
+			context, implementation, requirement) )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_TYPE, owner.range,
+				"method-relation-signature",
+				asSASTNodeRef::FromDecl(owner.id),
+				asAST_EDGE_DECL_METHOD_RELATION_REQUIREMENT,
+				asSASTNodeRef::FromDecl(requirement->id));
+		}
+
+		const asCDecl* const implementationOwner =
+			context.GetDecl(implementation->parent);
+		const bool implementationInOwnerChain = implementationOwner != 0
+			&& (implementationOwner->id == owner.id
+				|| MethodRelationContainsDecl(
+					classes, implementationOwner->id));
+		if( !implementationInOwnerChain )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, owner.range,
+				"method-relation-implementation-owner",
+				asSASTNodeRef::FromDecl(owner.id),
+				asAST_EDGE_DECL_METHOD_RELATION_IMPLEMENTATION,
+				asSASTNodeRef::FromDecl(implementation->id));
+		}
+
+		const asCDecl* const requirementOwner =
+			context.GetDecl(requirement->parent);
+		if( relation.kind == asAST_METHOD_RELATION_BASE_OVERRIDE )
+		{
+			if( implementationOwner->id != owner.id
+				|| requirementOwner == 0
+				|| requirementOwner->kind != asAST_DECL_CLASS
+				|| !MethodRelationContainsDecl(
+					classes, requirementOwner->id) )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD, owner.range,
+					"method-relation-base-ancestry",
+					asSASTNodeRef::FromDecl(owner.id),
+					asAST_EDGE_DECL_METHOD_RELATION_REQUIREMENT,
+					asSASTNodeRef::FromDecl(requirement->id));
+			}
+		}
+		else if( requirementOwner == 0
+			|| requirementOwner->kind != asAST_DECL_INTERFACE
+			|| !MethodRelationContainsDecl(
+				interfaces, requirementOwner->id) )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, owner.range,
+				"method-relation-interface-closure",
+				asSASTNodeRef::FromDecl(owner.id),
+				asAST_EDGE_DECL_METHOD_RELATION_REQUIREMENT,
+				asSASTNodeRef::FromDecl(requirement->id));
+		}
+
+		for( asUINT previousIndex = 0;
+			previousIndex < relationIndex; ++previousIndex )
+		{
+			const asSASTMethodRelation& previous =
+				owner.methodRelations[previousIndex];
+			if( previous.kind == relation.kind
+				&& previous.implementation == relation.implementation
+				&& previous.requirement == relation.requirement )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD, owner.range,
+					"method-relation-duplicate",
+					asSASTNodeRef::FromDecl(owner.id));
+			}
+			if( previous.requirement == relation.requirement )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD, owner.range,
+					"method-relation-requirement-duplicate",
+					asSASTNodeRef::FromDecl(owner.id),
+					asAST_EDGE_DECL_METHOD_RELATION_REQUIREMENT,
+					asSASTNodeRef::FromDecl(requirement->id));
+			}
+		}
+	}
+	return asAST_VERIFY_OK;
+}
+
+static int VerifyMethodRelationCompleteness(
+	const asCASTContext& context,
+	const asCDecl& owner,
+	asSAstVerifyResult& result)
+{
+	if( owner.kind != asAST_DECL_CLASS )
+	{
+		return asAST_VERIFY_OK;
+	}
+	asCArray<asASTDeclId> classes;
+	CollectMethodRelationClassAncestors(context, owner, classes);
+	asCArray<asASTDeclId> interfaces;
+	CollectMethodRelationInterfaceClosure(
+		context, owner, classes, interfaces);
+	for( asUINT interfaceIndex = 0;
+		interfaceIndex < interfaces.GetLength(); ++interfaceIndex )
+	{
+		const asCDecl* const interfaceDecl =
+			context.GetDecl(interfaces[interfaceIndex]);
+		for( asUINT childIndex = 0;
+			interfaceDecl != 0
+				&& childIndex < interfaceDecl->children.GetLength();
+			++childIndex )
+		{
+			const asCDecl* const requirement =
+				context.GetDecl(interfaceDecl->children[childIndex]);
+			if( requirement == 0 || requirement->kind != asAST_DECL_METHOD )
+			{
+				continue;
+			}
+			asUINT relationCount = 0;
+			for( asUINT relationIndex = 0;
+				relationIndex < owner.methodRelations.GetLength();
+				++relationIndex )
+			{
+				const asSASTMethodRelation& relation =
+					owner.methodRelations[relationIndex];
+				if( relation.kind
+						== asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION
+					&& relation.requirement == requirement->id )
+				{
+					++relationCount;
+				}
+			}
+			if( relationCount != 1 )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD, owner.range,
+					"method-relation-interface-incomplete",
+					asSASTNodeRef::FromDecl(owner.id),
+					asAST_EDGE_DECL_METHOD_RELATION_REQUIREMENT,
+					asSASTNodeRef::FromDecl(requirement->id));
+			}
+		}
+	}
+	return asAST_VERIFY_OK;
+}
+
 static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 {
 	result = asSAstVerifyResult();
@@ -1146,6 +1759,58 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 						plan ? asSASTNodeRef::FromExpr(plan->id) : asSASTNodeRef());
 				}
 			}
+		}
+	}
+
+	// The first declaration pass above authenticates the entire generic graph.
+	// Only then authenticate interface shape and every authored relation so a
+	// malformed later endpoint cannot be masked by an earlier relation result.
+	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
+	{
+		const asCDecl* const decl = context.GetDecl(asASTDeclId(i));
+		if( decl == 0 )
+		{
+			continue;
+		}
+		int methodRelationStatus =
+			VerifyMethodRelationClassAncestry(context, *decl, result);
+		if( methodRelationStatus == asAST_VERIFY_OK )
+		{
+			methodRelationStatus =
+				VerifyMethodRelationInterfaceAncestry(
+					context, *decl, result);
+		}
+		if( methodRelationStatus == asAST_VERIFY_OK )
+		{
+			methodRelationStatus =
+				VerifyInterfaceMethodsAreDeclarationOnly(
+					context, *decl, result);
+		}
+		if( methodRelationStatus == asAST_VERIFY_OK )
+		{
+			methodRelationStatus =
+				VerifyExistingMethodRelations(context, *decl, result);
+		}
+		if( methodRelationStatus != asAST_VERIFY_OK )
+		{
+			return methodRelationStatus;
+		}
+	}
+
+	// Coverage is the final relation phase. This keeps a valid missing-method
+	// diagnostic from hiding any forged owner, ancestry, endpoint or signature.
+	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
+	{
+		const asCDecl* const decl = context.GetDecl(asASTDeclId(i));
+		if( decl == 0 )
+		{
+			continue;
+		}
+		const int completenessStatus =
+			VerifyMethodRelationCompleteness(context, *decl, result);
+		if( completenessStatus != asAST_VERIFY_OK )
+		{
+			return completenessStatus;
 		}
 	}
 

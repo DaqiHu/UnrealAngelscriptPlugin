@@ -94,6 +94,10 @@ enum asEASTEdgeRole : asBYTE
 
 	// Append-only semantic declaration reference.
 	asAST_EDGE_DECL_ACCESS_SPECIFIER,
+
+	// Append-only sealed method-relation references.
+	asAST_EDGE_DECL_METHOD_RELATION_IMPLEMENTATION,
+	asAST_EDGE_DECL_METHOD_RELATION_REQUIREMENT,
 };
 
 struct asSASTTraversalEdge

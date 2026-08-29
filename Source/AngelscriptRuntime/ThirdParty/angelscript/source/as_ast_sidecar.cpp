@@ -359,6 +359,26 @@ static void AppendStringArray(asCArray<asBYTE>& out, const asCArray<asCString>& 
 	}
 }
 
+static void AppendMethodRelationArray(
+	asCArray<asBYTE>& out,
+	const asCArray<asSASTMethodRelation>& relations)
+{
+	AppendU32(out, relations.GetLength());
+	for( asUINT index = 0; index < relations.GetLength(); ++index )
+	{
+		AppendU32(out, static_cast<asUINT>(relations[index].kind));
+		AppendU32(out, relations[index].implementation.value);
+		AppendU32(out, relations[index].requirement.value);
+	}
+}
+
+struct asSSidecarMethodRelationDTO
+{
+	asUINT kind;
+	asUINT implementation;
+	asUINT requirement;
+};
+
 struct asSSidecarDeclDTO
 {
 	asEASTDeclKind kind;
@@ -379,6 +399,7 @@ struct asSSidecarDeclDTO
 	asCString defaultArg;
 	asCArray<asCString> dependencies;
 	asCArray<asUINT> bases;
+	asCArray<asSSidecarMethodRelationDTO> methodRelations;
 	asCArray<asUINT> inits;
 	int byteOffset;
 	int byteSize;
@@ -433,6 +454,38 @@ static bool ReadIdArray(const asBYTE* bytes, asUINT length, asUINT& offset, asCA
 		values.PushLast(value);
 	}
 	return true;
+}
+
+static int ReadMethodRelationArray(
+	const asBYTE* bytes,
+	asUINT length,
+	asUINT& offset,
+	asCArray<asSSidecarMethodRelationDTO>& relations)
+{
+	asUINT count = 0;
+	if( !ReadU32(bytes, length, offset, count) )
+	{
+		return asAST_SIDECAR_MALFORMED;
+	}
+	if( count > kMaxNodes )
+	{
+		return asAST_SIDECAR_BUDGET;
+	}
+	relations.SetLength(0);
+	for( asUINT index = 0; index < count; ++index )
+	{
+		asSSidecarMethodRelationDTO relation;
+		if( !ReadU32(bytes, length, offset, relation.kind)
+			|| !ReadU32(bytes, length, offset, relation.implementation)
+			|| !ReadU32(bytes, length, offset, relation.requirement)
+			|| (relation.kind != asAST_METHOD_RELATION_BASE_OVERRIDE
+				&& relation.kind != asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION) )
+		{
+			return asAST_SIDECAR_MALFORMED;
+		}
+		relations.PushLast(relation);
+	}
+	return asAST_SIDECAR_OK;
 }
 
 static bool ReadStringArray(const asBYTE* bytes, asUINT length, asUINT& offset, asCArray<asCString>& values)
@@ -533,6 +586,7 @@ int asCASTEncodeSidecar(const asCASTContext& context, const asSASTSidecarHeader&
 	}
 
 	AppendU32(out, context.GetDeclCount());
+	asUINT totalMethodRelationCount = 0;
 	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
 	{
 		const asCDecl* decl = context.GetDecl(asASTDeclId(i));
@@ -540,6 +594,36 @@ int asCASTEncodeSidecar(const asCASTContext& context, const asSASTSidecarHeader&
 		{
 			out.SetLength(0);
 			return asAST_SIDECAR_MALFORMED;
+		}
+		if( decl->methodRelations.GetLength() > kMaxNodes
+			|| totalMethodRelationCount
+				> kMaxNodes - decl->methodRelations.GetLength() )
+		{
+			out.SetLength(0);
+			return asAST_SIDECAR_BUDGET;
+		}
+		totalMethodRelationCount += decl->methodRelations.GetLength();
+		for( asUINT relationIndex = 0;
+			relationIndex < decl->methodRelations.GetLength();
+			++relationIndex )
+		{
+			const asSASTMethodRelation& relation =
+				decl->methodRelations[relationIndex];
+			if( relation.implementation.snapshotOwner != 0
+				|| relation.requirement.snapshotOwner != 0 )
+			{
+				out.SetLength(0);
+				return asAST_SIDECAR_POINTER;
+			}
+			if( (relation.kind != asAST_METHOD_RELATION_BASE_OVERRIDE
+					&& relation.kind != asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION)
+				|| relation.implementation == relation.requirement
+				|| context.GetDecl(relation.implementation) == 0
+				|| context.GetDecl(relation.requirement) == 0 )
+			{
+				out.SetLength(0);
+				return asAST_SIDECAR_MALFORMED;
+			}
 		}
 		AppendU32(out, (asUINT)decl->kind);
 		AppendU32(out, decl->parent.value);
@@ -565,6 +649,7 @@ int asCASTEncodeSidecar(const asCASTContext& context, const asSASTSidecarHeader&
 		AppendU32(out, decl->byteAlignment);
 		AppendU32(out, decl->hasConstantValue ? 1 : 0);
 		AppendU64(out, decl->constantValue);
+		AppendMethodRelationArray(out, decl->methodRelations);
 	}
 
 	AppendU32(out, context.GetStmtCount());
@@ -642,8 +727,14 @@ static int DecodeFail(asCASTContext& context, int status)
 	return status;
 }
 
-static bool ReadDeclDTO(const asBYTE* bytes, asUINT length, asUINT& offset, asSSidecarDeclDTO& out)
+static bool ReadDeclDTO(
+	const asBYTE* bytes,
+	asUINT length,
+	asUINT& offset,
+	asSSidecarDeclDTO& out,
+	int& outStatus)
 {
+	outStatus = asAST_SIDECAR_MALFORMED;
 	asUINT kind = 0;
 	asUINT quals = 0;
 	asUINT traits = 0;
@@ -679,6 +770,12 @@ static bool ReadDeclDTO(const asBYTE* bytes, asUINT length, asUINT& offset, asSS
 	{
 		return false;
 	}
+	outStatus = ReadMethodRelationArray(
+		bytes, length, offset, out.methodRelations);
+	if( outStatus != asAST_SIDECAR_OK )
+	{
+		return false;
+	}
 	out.kind = (asEASTDeclKind)kind;
 	out.quals = quals;
 	out.traits = traits;
@@ -687,7 +784,13 @@ static bool ReadDeclDTO(const asBYTE* bytes, asUINT length, asUINT& offset, asSS
 	out.byteSize = (int)byteSize;
 	out.byteAlignment = byteAlignment;
 	out.hasConstantValue = hasConstantValue == 1;
-	return hasConstantValue <= 1;
+	if( hasConstantValue > 1 )
+	{
+		outStatus = asAST_SIDECAR_MALFORMED;
+		return false;
+	}
+	outStatus = asAST_SIDECAR_OK;
+	return true;
 }
 
 static bool ReadStmtDTO(const asBYTE* bytes, asUINT length, asUINT& offset, asSSidecarStmtDTO& out)
@@ -933,10 +1036,13 @@ int asCASTDecodeSidecar(asCASTContext& context, const asSASTSidecarHeader& expec
 	for( asUINT i = 0; i < declCount; ++i )
 	{
 		asSSidecarDeclDTO dto;
-		if( !ReadDeclDTO(bytes, length, offset, dto)
+		int declReadStatus = asAST_SIDECAR_MALFORMED;
+		if( !ReadDeclDTO(bytes, length, offset, dto, declReadStatus)
 			|| (dto.type != 0 && dto.type > typeCount) )
 		{
-			return DecodeFail(context, asAST_SIDECAR_MALFORMED);
+			return DecodeFail(context,
+				declReadStatus == asAST_SIDECAR_OK
+					? asAST_SIDECAR_MALFORMED : declReadStatus);
 		}
 		const asCQualType type(asASTTypeRef(dto.type), dto.quals);
 		asASTDeclId id;
@@ -1034,6 +1140,34 @@ int asCASTDecodeSidecar(asCASTContext& context, const asSASTSidecarHeader& expec
 				id, asASTDeclId(dto.accessSpecifier)) != asAST_VERIFY_OK )
 		{
 			return DecodeFail(context, asAST_SIDECAR_MALFORMED);
+		}
+	}
+
+	// Restore method relations only after every declaration and declaration
+	// link exists. Final Seal independently authenticates their semantics.
+	for( asUINT i = 0; i < declCount; ++i )
+	{
+		const asSSidecarDeclDTO& dto = decls[i];
+		const asASTDeclId id(i + 1);
+		for( asUINT relationIndex = 0;
+			relationIndex < dto.methodRelations.GetLength();
+			++relationIndex )
+		{
+			const asSSidecarMethodRelationDTO& relation =
+				dto.methodRelations[relationIndex];
+			if( !IsValidDeclRef(relation.implementation, declCount)
+				|| relation.implementation == 0
+				|| !IsValidDeclRef(relation.requirement, declCount)
+				|| relation.requirement == 0
+				|| context.AddMethodRelation(
+					id,
+					asSASTMethodRelation(
+						static_cast<asEASTMethodRelationKind>(relation.kind),
+						asASTDeclId(relation.implementation),
+						asASTDeclId(relation.requirement))) != asAST_VERIFY_OK )
+			{
+				return DecodeFail(context, asAST_SIDECAR_MALFORMED);
+			}
 		}
 	}
 
@@ -1331,6 +1465,15 @@ static void AppendDeclIdentity(const asCASTContext& context, const asCDecl& decl
 	for( asUINT i = 0; i < decl.bases.GetLength(); ++i )
 	{
 		AppendDeclReferenceIdentity(context, decl.bases[i], material);
+	}
+	AppendU32(material, decl.methodRelations.GetLength());
+	for( asUINT i = 0; i < decl.methodRelations.GetLength(); ++i )
+	{
+		AppendU32(material, static_cast<asUINT>(decl.methodRelations[i].kind));
+		AppendDeclReferenceIdentity(
+			context, decl.methodRelations[i].implementation, material);
+		AppendDeclReferenceIdentity(
+			context, decl.methodRelations[i].requirement, material);
 	}
 	AppendU32(material, decl.captures.GetLength());
 	for( asUINT i = 0; i < decl.captures.GetLength(); ++i )

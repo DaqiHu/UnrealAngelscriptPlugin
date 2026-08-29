@@ -259,7 +259,8 @@ asUINT asCASTGetEdgeCount(const asCASTContext& context, const asSASTNodeRef& nod
 			+ decl->captures.GetLength()
 			+ (decl->accessorField.IsValid() ? 1u : 0u)
 			+ decl->bases.GetLength()
-			+ (decl->accessSpecifier.IsValid() ? 1u : 0u);
+			+ (decl->accessSpecifier.IsValid() ? 1u : 0u)
+			+ decl->methodRelations.GetLength() * 2u;
 	}
 	if( node.nodeClass == asAST_NODE_STMT )
 	{
@@ -325,6 +326,34 @@ bool asCASTGetEdge(const asCASTContext& context, const asSASTNodeRef& node, asUI
 		if( decl->accessSpecifier.IsValid() )
 		{
 			if( edgeIndex == base ) { outEdge = MakeEdge(node, asSASTNodeRef::FromDecl(decl->accessSpecifier), asAST_EDGE_REFERENCE, asAST_EDGE_DECL_ACCESS_SPECIFIER, 0); return true; }
+			++base;
+		}
+		count = decl->methodRelations.GetLength() * 2u;
+		if( edgeIndex < base + count )
+		{
+			const asUINT relationOffset = edgeIndex - base;
+			const asUINT relationIndex = relationOffset / 2u;
+			const asSASTMethodRelation& relation =
+				decl->methodRelations[relationIndex];
+			if( (relationOffset & 1u) == 0 )
+			{
+				outEdge = MakeEdge(
+					node,
+					asSASTNodeRef::FromDecl(relation.implementation),
+					asAST_EDGE_REFERENCE,
+					asAST_EDGE_DECL_METHOD_RELATION_IMPLEMENTATION,
+					relationIndex);
+			}
+			else
+			{
+				outEdge = MakeEdge(
+					node,
+					asSASTNodeRef::FromDecl(relation.requirement),
+					asAST_EDGE_REFERENCE,
+					asAST_EDGE_DECL_METHOD_RELATION_REQUIREMENT,
+					relationIndex);
+			}
+			return true;
 		}
 		return false;
 	}
