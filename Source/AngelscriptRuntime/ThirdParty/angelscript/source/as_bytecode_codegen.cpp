@@ -1220,6 +1220,59 @@ namespace
 		return (matches == 1) ? unique : 0;
 	}
 
+	asCScriptFunction* FindExactPreparedInterfaceMethod(
+		asCScriptEngine* engine,
+		asCRuntimeTypeBridge& bridge,
+		const asCASTContext& context,
+		const asCDecl* declaration)
+	{
+		if( engine == 0 || declaration == 0
+			|| declaration->kind != asAST_DECL_METHOD
+			|| declaration->body.IsValid()
+			|| (declaration->traits & asAST_TRAIT_GENERATED) != 0 )
+		{
+			return 0;
+		}
+		const asCDecl* const ownerDecl = context.GetDecl(declaration->parent);
+		if( ownerDecl == 0 || ownerDecl->kind != asAST_DECL_INTERFACE )
+			return 0;
+		const asCDataType ownerDataType = bridge.Resolve(context, ownerDecl->type);
+		asCObjectType* const owner = ownerDataType.IsValid()
+			? CastToObjectType(ownerDataType.GetTypeInfo()) : 0;
+		if( owner == 0 || !owner->IsInterface() )
+			return 0;
+
+		asCScriptFunction* unique = 0;
+		asUINT matches = 0;
+		for( asUINT methodIndex = 0;
+			methodIndex < owner->methods.GetLength(); ++methodIndex )
+		{
+			const int functionId = owner->methods[methodIndex];
+			asCScriptFunction* const function = functionId >= 0
+				&& static_cast<asUINT>(functionId)
+					< engine->scriptFunctions.GetLength()
+				? engine->scriptFunctions[static_cast<asUINT>(functionId)] : 0;
+			if( function == 0 || function->id != functionId
+				|| function->objectType != owner
+				|| function->funcType != asFUNC_INTERFACE
+				|| function->scriptData != 0 )
+			{
+				continue;
+			}
+			asASTDeclId boundDeclaration;
+			if( bridge.BindFunctionDeclaration(
+				context, *function, boundDeclaration, 0)
+					!= asRUNTIME_DECL_BIND_OK
+				|| boundDeclaration != declaration->id )
+			{
+				continue;
+			}
+			unique = function;
+			++matches;
+		}
+		return matches == 1 ? unique : 0;
+	}
+
 	asCScriptFunction* FindExactRegisteredConstructor(
 		asCScriptEngine* engine,
 		asCRuntimeTypeBridge& bridge,
@@ -9790,7 +9843,15 @@ namespace
 				outIndex = candidate.index;
 			}
 		}
-		if( !found && function != 0 && function->vfTableIdx >= 0 )
+		// A function owned by this exact declaration batch must obtain its slot
+		// solely from a completed sealed-relation plan. Reading its live Stage2
+		// vfTableIdx here would make the expected graph depend on the graph being
+		// authenticated and can incorrectly suppress the current record's own
+		// ordinary vtable entries. Only an external Runtime dependency that has no
+		// local object binding may contribute its already-published slot.
+		if( !found && function != 0 && function->vfTableIdx >= 0
+			&& FindCanonicalObjectBindingIndex(
+				artifact, function->objectType) < 0 )
 		{
 			found = true;
 			outIndex = function->vfTableIdx;
@@ -10075,7 +10136,9 @@ namespace
 		const asCArray<asSCodeGenFuncBind>& bindings,
 		asSBytecodeCodeGenArtifact& artifact,
 		asUINT bindingIndex,
-		asCArray<asBYTE>& states)
+		asCArray<asBYTE>& states,
+		bool includeGeneratedObjectMethods,
+		asCString* detail)
 	{
 		if( bindingIndex >= artifact.objectTypeBindings.GetLength()
 			|| bindingIndex >= states.GetLength() )
@@ -10111,7 +10174,8 @@ namespace
 			{
 				const int dependencyResult = PrepareOneCanonicalObjectDispatchPlan(
 					context, engine, bridge, bindings, artifact,
-					static_cast<asUINT>(candidateIndex), states);
+					static_cast<asUINT>(candidateIndex), states,
+					includeGeneratedObjectMethods, detail);
 				if( dependencyResult < 0 )
 					return dependencyResult;
 			}
@@ -10120,10 +10184,27 @@ namespace
 		asSCanonicalObjectDispatchPlan plan;
 		plan.objectType = objectType;
 		plan.isInterface = record->kind == asAST_DECL_INTERFACE;
+		auto FailPlan = [&](int code, const char* stage) -> int
+		{
+			if( detail )
+			{
+				detail->Format(
+					"dispatch plan '%s' failed at %s (kind=%d methods=%u "
+					"interfaces=%u vtable=%u)",
+					record->stableKey.AddressOf()
+						? record->stableKey.AddressOf() : "<missing>",
+					stage ? stage : "<unknown>",
+					static_cast<int>(record->kind),
+					plan.methodIds.GetLength(),
+					plan.interfaces.GetLength(),
+					plan.virtualFunctionTable.GetLength());
+			}
+			return code;
+		};
 		if( !CollectDeclaredInterfaceClosure(
 			context, bridge, artifact, record, plan) )
 		{
-			return asINVALID_DECLARATION;
+			return FailPlan(asINVALID_DECLARATION, "declared-interface-closure");
 		}
 
 		asCArray<asCScriptFunction*> ownMethods;
@@ -10134,13 +10215,18 @@ namespace
 				return asINVALID_DECLARATION;
 			if( child->kind != asAST_DECL_METHOD )
 				continue;
+			if( !includeGeneratedObjectMethods
+				&& (child->traits & asAST_TRAIT_GENERATED) != 0 )
+			{
+				continue;
+			}
 			asCScriptFunction* const function =
 				FindExactCanonicalFunctionBinding(bindings, child->id);
 			if( function == 0 || function->objectType != objectType
 				|| !TryPushCanonicalPlanValue(ownMethods, function)
 				|| !AppendCanonicalPlanMethod(plan, function) )
 			{
-				return asINVALID_DECLARATION;
+				return FailPlan(asINVALID_DECLARATION, "own-method-binding");
 			}
 		}
 
@@ -10179,13 +10265,13 @@ namespace
 			if( !AppendInheritedRuntimeInterfaces(
 				artifact, objectType->derivedFrom, plan) )
 			{
-				return asINVALID_DECLARATION;
+				return FailPlan(asINVALID_DECLARATION, "inherited-interface-closure");
 			}
 			if( objectType->derivedFrom
 				&& !CollectRuntimeObjectVTable(
 					artifact, objectType->derivedFrom, plan.virtualFunctionTable) )
 			{
-				return asINVALID_DECLARATION;
+				return FailPlan(asINVALID_DECLARATION, "base-vtable");
 			}
 
 			for( asUINT relationIndex = 0;
@@ -10207,7 +10293,7 @@ namespace
 					|| !AddCanonicalPlannedVTableIndex(
 						artifact, plan, implementation, slot) )
 				{
-					return asINVALID_DECLARATION;
+					return FailPlan(asINVALID_DECLARATION, "base-override-relation");
 				}
 				plan.virtualFunctionTable[static_cast<asUINT>(slot)] = implementation;
 			}
@@ -10218,7 +10304,7 @@ namespace
 				if( !CollectRuntimeObjectMethods(
 					engine, artifact, objectType->derivedFrom, baseMethods) )
 				{
-					return asINVALID_DECLARATION;
+					return FailPlan(asINVALID_DECLARATION, "base-method-inventory");
 				}
 				for( asUINT methodIndex = 0;
 					methodIndex < baseMethods.GetLength(); ++methodIndex )
@@ -10273,7 +10359,7 @@ namespace
 					context, engine, bindings, artifact,
 					plan.interfaces[interfaceIndex], requirements) )
 				{
-					return asINVALID_DECLARATION;
+					return FailPlan(asINVALID_DECLARATION, "interface-requirement-inventory");
 				}
 				for( asUINT requirementIndex = 0;
 					requirementIndex < requirements.GetLength(); ++requirementIndex )
@@ -10296,10 +10382,10 @@ namespace
 							>= plan.ordinaryVTableSize
 						|| !AppendCanonicalPlanVTableEntry(
 							plan,
-							plan.virtualFunctionTable[
-								static_cast<asUINT>(implementationSlot)]) )
+						plan.virtualFunctionTable[
+							static_cast<asUINT>(implementationSlot)]) )
 					{
-						return asINVALID_DECLARATION;
+						return FailPlan(asINVALID_DECLARATION, "interface-implementation-relation");
 					}
 				}
 			}
@@ -10309,7 +10395,7 @@ namespace
 			!= plan.interfaceVFTOffsets.GetLength()
 			&& !plan.isInterface )
 		{
-			return asINVALID_DECLARATION;
+			return FailPlan(asINVALID_DECLARATION, "interface-offset-inventory");
 		}
 		const asUINT planCount = artifact.objectDispatchPlans.GetLength();
 		artifact.objectDispatchPlans.PushLast(plan);
@@ -10324,27 +10410,62 @@ namespace
 		asCScriptEngine* engine,
 		asCRuntimeTypeBridge& bridge,
 		const asCArray<asSCodeGenFuncBind>& bindings,
-		asSBytecodeCodeGenArtifact& artifact)
+		asSBytecodeCodeGenArtifact& artifact,
+		bool includeGeneratedObjectMethods = true,
+		asCString* detail = 0)
 	{
 		if( artifact.objectDispatchPlans.GetLength() != 0
 			|| artifact.objectDispatchPlansInstalled )
 		{
+			if( detail )
+				*detail = "dispatch plan output is not empty";
 			return asINVALID_CONFIGURATION;
 		}
 		asCArray<asBYTE> states;
 		states.SetLength(artifact.objectTypeBindings.GetLength());
 		if( states.GetLength() != artifact.objectTypeBindings.GetLength() )
+		{
+			if( detail )
+				*detail = "dispatch plan state allocation failed";
 			return asOUT_OF_MEMORY;
+		}
 		for( asUINT i = 0; i < artifact.objectTypeBindings.GetLength(); ++i )
 		{
 			const int result = PrepareOneCanonicalObjectDispatchPlan(
-				context, engine, bridge, bindings, artifact, i, states);
+				context, engine, bridge, bindings, artifact, i, states,
+				includeGeneratedObjectMethods, detail);
 			if( result < 0 )
+			{
+				if( detail && detail->GetLength() == 0 )
+				{
+					const asCDecl* const record = context.GetDecl(asASTDeclId(
+						artifact.objectTypeBindings[i].declarationId));
+					detail->Format(
+						"dispatch plan preparation failed for record '%s' "
+						"(binding=%u state=%u prepared=%u result=%d)",
+						record && record->stableKey.AddressOf()
+							? record->stableKey.AddressOf() : "<missing>",
+						i,
+						static_cast<unsigned int>(states[i]),
+						artifact.objectDispatchPlans.GetLength(),
+						result);
+				}
 				return result;
+			}
 		}
-		return artifact.objectDispatchPlans.GetLength()
-			== artifact.objectTypeBindings.GetLength()
-			? asSUCCESS : asINVALID_DECLARATION;
+		if( artifact.objectDispatchPlans.GetLength()
+			!= artifact.objectTypeBindings.GetLength() )
+		{
+			if( detail )
+			{
+				detail->Format(
+					"dispatch plan inventory mismatch (expected=%u actual=%u)",
+					artifact.objectTypeBindings.GetLength(),
+					artifact.objectDispatchPlans.GetLength());
+			}
+			return asINVALID_DECLARATION;
+		}
+		return asSUCCESS;
 	}
 
 	int ValidateCanonicalObjectDispatchPlans(
@@ -10441,6 +10562,421 @@ namespace
 						: static_cast<asUINT>(entry.index)
 							>= plan.ordinaryVTableSize) )
 				{
+					return asINVALID_DECLARATION;
+				}
+			}
+		}
+		return asSUCCESS;
+	}
+
+	int PreparePreparedCanonicalObjectBindings(
+		const asCASTContext& context,
+		asCScriptEngine* engine,
+		asCModule* module,
+		const asCBuilder& preparedBuilder,
+		asCRuntimeTypeBridge& bridge,
+		const asCArray<asSCodeGenFuncBind>& bindings,
+		asSBytecodeCodeGenArtifact& artifact,
+		asCString* detail)
+	{
+		if( engine == 0 || module == 0
+			|| artifact.objectTypeBindings.GetLength() != 0
+			|| artifact.objectDispatchPlans.GetLength() != 0 )
+		{
+			if( detail )
+				*detail = "prepared object binding input is invalid";
+			return asINVALID_CONFIGURATION;
+		}
+
+		for( asUINT declarationIndex = 1;
+			declarationIndex <= context.GetDeclCount(); ++declarationIndex )
+		{
+			const asCDecl* const record = context.GetDecl(
+				asASTDeclId(declarationIndex));
+			if( record == 0
+				|| (record->kind != asAST_DECL_CLASS
+					&& record->kind != asAST_DECL_INTERFACE)
+				|| record->origin.Equals("canonical-native-type-view") )
+			{
+				continue;
+			}
+
+			const asCArray<sClassDeclaration*>& preparedDeclarations =
+				record->kind == asAST_DECL_INTERFACE
+					? preparedBuilder.interfaceDeclarations
+					: preparedBuilder.classDeclarations;
+			asCObjectType* objectType = 0;
+			asUINT preparedMatches = 0;
+			for( asUINT preparedIndex = 0;
+				preparedIndex < preparedDeclarations.GetLength(); ++preparedIndex )
+			{
+				const sClassDeclaration* const prepared =
+					preparedDeclarations[preparedIndex];
+				if( prepared == 0
+					|| prepared->canonicalASTStableDeclKey != record->stableKey )
+				{
+					continue;
+				}
+				objectType = CastToObjectType(prepared->typeInfo);
+				++preparedMatches;
+			}
+			if( preparedMatches != 1 || objectType == 0 )
+			{
+				if( detail )
+				{
+					detail->Format(
+						"record '%s' has no exact producer-carried Stage2 Runtime type "
+						"(matches=%u)",
+						record->stableKey.AddressOf()
+							? record->stableKey.AddressOf() : "<missing>",
+						preparedMatches);
+				}
+				return asINVALID_DECLARATION;
+			}
+			if( objectType->module != module )
+			{
+				// A previously published shared record is a stable external dependency,
+				// not a graph owned by this Builder transaction. Local source records
+				// must never silently alias a different module's non-shared shell.
+				if( (record->traits & asAST_TRAIT_SHARED) != 0 )
+					continue;
+				if( detail )
+				{
+					detail->Format(
+						"record '%s' resolved outside the prepared module",
+						record->stableKey.AddressOf()
+							? record->stableKey.AddressOf() : "<missing>");
+				}
+				return asINVALID_DECLARATION;
+			}
+
+			asUINT moduleMatches = 0;
+			for( asUINT typeIndex = 0;
+				typeIndex < module->classTypes.GetLength(); ++typeIndex )
+			{
+				if( module->classTypes[typeIndex] == objectType )
+					++moduleMatches;
+			}
+			if( moduleMatches != 1 || objectType->name != record->name
+				|| objectType->IsInterface()
+					!= (record->kind == asAST_DECL_INTERFACE)
+				|| objectType->isInterfaceDeclaration
+					!= (record->kind == asAST_DECL_INTERFACE) )
+			{
+				if( detail )
+				{
+					detail->Format(
+						"record '%s' differs from its unique Stage2 type "
+						"(moduleMatches=%u nameMatch=%u interfaceMatch=%u explicitInterfaceMatch=%u)",
+						record->stableKey.AddressOf()
+							? record->stableKey.AddressOf() : "<missing>",
+						moduleMatches,
+						objectType->name == record->name,
+						objectType->IsInterface()
+							== (record->kind == asAST_DECL_INTERFACE),
+						objectType->isInterfaceDeclaration
+							== (record->kind == asAST_DECL_INTERFACE));
+				}
+				return asINVALID_DECLARATION;
+			}
+			for( asUINT bindingIndex = 0;
+				bindingIndex < artifact.objectTypeBindings.GetLength(); ++bindingIndex )
+			{
+				const asSCanonicalObjectTypeBinding& existing =
+					artifact.objectTypeBindings[bindingIndex];
+				if( existing.declarationId == record->id.value
+					|| existing.objectType == objectType )
+				{
+					if( detail )
+						detail->Format("prepared record binding is not one-to-one: %s",
+							record->stableKey.AddressOf());
+					return asINVALID_DECLARATION;
+				}
+			}
+			asSCanonicalObjectTypeBinding objectBinding;
+			objectBinding.declarationId = record->id.value;
+			objectBinding.objectType = objectType;
+			const asUINT before = artifact.objectTypeBindings.GetLength();
+			artifact.objectTypeBindings.PushLast(objectBinding);
+			if( artifact.objectTypeBindings.GetLength() != before + 1 )
+				return asOUT_OF_MEMORY;
+		}
+
+		for( asUINT bindingIndex = 0;
+			bindingIndex < artifact.objectTypeBindings.GetLength(); ++bindingIndex )
+		{
+			const asSCanonicalObjectTypeBinding& objectBinding =
+				artifact.objectTypeBindings[bindingIndex];
+			const asCDecl* const record = context.GetDecl(
+				asASTDeclId(objectBinding.declarationId));
+			asCObjectType* const objectType = objectBinding.objectType;
+			if( record == 0 || objectType == 0 )
+				return asINVALID_DECLARATION;
+
+			asCObjectType* expectedBase = 0;
+			asCObjectType* expectedShadowType = 0;
+			for( asUINT baseIndex = 0;
+				baseIndex < record->bases.GetLength(); ++baseIndex )
+			{
+				const asCDecl* const baseDecl =
+					context.GetDecl(record->bases[baseIndex]);
+				if( baseDecl == 0 )
+					return asINVALID_DECLARATION;
+				if( baseDecl->kind != asAST_DECL_CLASS )
+					continue;
+				asCObjectType* const baseType = ResolveCanonicalRecordObjectType(
+					context, bridge, artifact, baseDecl);
+				const bool isNativeTypeView =
+					baseDecl->origin.Equals("canonical-native-type-view");
+				if( baseType == 0
+					|| (isNativeTypeView
+						? expectedShadowType != 0 : expectedBase != 0) )
+				{
+					if( detail )
+						detail->Format("prepared record has an invalid exact base: %s",
+							record->stableKey.AddressOf());
+					return asINVALID_DECLARATION;
+				}
+				if( isNativeTypeView )
+					expectedShadowType = baseType;
+				else
+					expectedBase = baseType;
+			}
+			if( objectType->derivedFrom != expectedBase )
+			{
+				if( detail )
+				{
+					detail->Format(
+						"prepared record base differs from the sealed edge: %s",
+						record->stableKey.AddressOf());
+				}
+				return asINVALID_DECLARATION;
+			}
+			if( objectType->shadowType != expectedShadowType )
+			{
+				if( detail )
+				{
+					detail->Format(
+						"prepared record shadow root differs from the sealed PreClass edge: %s",
+						record->stableKey.AddressOf());
+				}
+				return asINVALID_DECLARATION;
+			}
+
+			for( asUINT childIndex = 0;
+				childIndex < record->children.GetLength(); ++childIndex )
+			{
+				const asCDecl* const child =
+					context.GetDecl(record->children[childIndex]);
+				if( child == 0 )
+					return asINVALID_DECLARATION;
+				if( child->kind != asAST_DECL_METHOD
+					|| (child->traits & asAST_TRAIT_GENERATED) != 0 )
+				{
+					continue;
+				}
+
+				asCScriptFunction* function = 0;
+				asUINT methodMatches = 0;
+				for( asUINT functionBindingIndex = 0;
+					functionBindingIndex < bindings.GetLength();
+					++functionBindingIndex )
+				{
+					if( bindings[functionBindingIndex].decl != child->id )
+						continue;
+					function = bindings[functionBindingIndex].func;
+					++methodMatches;
+				}
+				const asEFuncType expectedFunctionType =
+					record->kind == asAST_DECL_INTERFACE
+						? asFUNC_INTERFACE : asFUNC_SCRIPT;
+				if( methodMatches != 1 || function == 0
+					|| function->objectType != objectType
+					|| function->funcType != expectedFunctionType
+					|| (expectedFunctionType == asFUNC_INTERFACE
+						&& function->scriptData != 0)
+					|| function->canonicalASTStableDeclKey != child->stableKey
+					|| function->id < 0
+					|| static_cast<asUINT>(function->id)
+						>= engine->scriptFunctions.GetLength()
+					|| engine->scriptFunctions[
+						static_cast<asUINT>(function->id)] != function )
+				{
+					if( detail )
+					{
+						detail->Format(
+							"method '%s' lacks one exact Stage2 shell "
+							"(matches=%u owner=%u kind=%d key=%u slot=%u)",
+							child->stableKey.AddressOf()
+								? child->stableKey.AddressOf() : "<missing>",
+							methodMatches,
+							function && function->objectType == objectType,
+							function ? (int)function->funcType : -1,
+							function
+								&& function->canonicalASTStableDeclKey == child->stableKey,
+							function && function->id >= 0
+								&& static_cast<asUINT>(function->id)
+									< engine->scriptFunctions.GetLength()
+								&& engine->scriptFunctions[
+									static_cast<asUINT>(function->id)] == function);
+					}
+					return asINVALID_DECLARATION;
+				}
+				for( asUINT otherBindingIndex = 0;
+					otherBindingIndex < bindings.GetLength(); ++otherBindingIndex )
+				{
+					if( bindings[otherBindingIndex].func == function
+						&& bindings[otherBindingIndex].decl != child->id )
+					{
+						if( detail )
+							detail->Format(
+								"prepared method shell binds more than one declaration: %s",
+								child->stableKey.AddressOf());
+						return asINVALID_DECLARATION;
+					}
+				}
+			}
+		}
+		return asSUCCESS;
+	}
+
+	int ValidatePreparedCanonicalObjectDispatchPlans(
+		asCScriptEngine* engine,
+		const asSBytecodeCodeGenArtifact& artifact,
+		asCString* detail)
+	{
+		if( engine == 0 || artifact.objectDispatchPlansInstalled
+			|| artifact.objectDispatchPlans.GetLength()
+				!= artifact.objectTypeBindings.GetLength() )
+		{
+			if( detail )
+				*detail = "prepared dispatch plan inventory is incomplete";
+			return asINVALID_CONFIGURATION;
+		}
+		for( asUINT planIndex = 0;
+			planIndex < artifact.objectDispatchPlans.GetLength(); ++planIndex )
+		{
+			const asSCanonicalObjectDispatchPlan& plan =
+				artifact.objectDispatchPlans[planIndex];
+			asCObjectType* const type = plan.objectType;
+			const char* const typeName = type && type->name.AddressOf()
+				? type->name.AddressOf() : "<missing>";
+			if( type == 0 || FindCanonicalObjectBindingIndex(artifact, type) < 0
+				|| plan.isInterface != type->IsInterface()
+				|| plan.methodIds.GetLength() != plan.methodFunctions.GetLength() )
+			{
+				if( detail )
+					detail->Format("prepared dispatch plan header mismatch: %s", typeName);
+				return asINVALID_DECLARATION;
+			}
+			if( plan.methodIds != type->methods )
+			{
+				if( detail )
+					detail->Format(
+						"prepared interface dispatch graph methods mismatch: %s expected=%u actual=%u",
+						typeName, plan.methodIds.GetLength(), type->methods.GetLength());
+				return asINVALID_DECLARATION;
+			}
+			if( plan.interfaces != type->interfaces )
+			{
+				if( detail )
+					detail->Format(
+						"prepared interface dispatch graph interface-order mismatch: %s expected=%u actual=%u",
+						typeName, plan.interfaces.GetLength(), type->interfaces.GetLength());
+				return asINVALID_DECLARATION;
+			}
+			if( plan.interfaceVFTOffsets != type->interfaceVFTOffsets )
+			{
+				if( detail )
+					detail->Format(
+						"prepared interface dispatch graph offset mismatch: %s expected=%u actual=%u",
+						typeName, plan.interfaceVFTOffsets.GetLength(),
+						type->interfaceVFTOffsets.GetLength());
+				return asINVALID_DECLARATION;
+			}
+			if( plan.virtualFunctionTable != type->virtualFunctionTable )
+			{
+				if( detail )
+					detail->Format(
+						"prepared interface dispatch graph vtable mismatch: %s expected=%u actual=%u",
+						typeName, plan.virtualFunctionTable.GetLength(),
+						type->virtualFunctionTable.GetLength());
+				return asINVALID_DECLARATION;
+			}
+			if( plan.isInterface )
+			{
+				if( plan.interfaceVFTOffsets.GetLength() != 0
+					|| plan.virtualFunctionTable.GetLength() != 0
+					|| plan.ordinaryVTableSize != 0 )
+				{
+					if( detail )
+						detail->Format(
+							"prepared interface dispatch graph gives an interface a class vtable: %s",
+							typeName);
+					return asINVALID_DECLARATION;
+				}
+			}
+			else if( plan.interfaces.GetLength()
+				!= plan.interfaceVFTOffsets.GetLength()
+				|| plan.ordinaryVTableSize > plan.virtualFunctionTable.GetLength() )
+			{
+				if( detail )
+					detail->Format(
+						"prepared interface dispatch graph has invalid class chunk bounds: %s",
+						typeName);
+				return asINVALID_DECLARATION;
+			}
+
+			for( asUINT methodIndex = 0;
+				methodIndex < plan.methodFunctions.GetLength(); ++methodIndex )
+			{
+				asCScriptFunction* const function =
+					plan.methodFunctions[methodIndex];
+				const int functionId = plan.methodIds[methodIndex];
+				if( function == 0 || function->id != functionId
+					|| functionId < 0
+					|| static_cast<asUINT>(functionId)
+						>= engine->scriptFunctions.GetLength()
+					|| engine->scriptFunctions[
+						static_cast<asUINT>(functionId)] != function )
+				{
+					if( detail )
+						detail->Format(
+							"prepared interface dispatch graph has a stale method slot: %s[%u]",
+							typeName, methodIndex);
+					return asINVALID_DECLARATION;
+				}
+			}
+			for( asUINT slot = 0;
+				slot < plan.virtualFunctionTable.GetLength(); ++slot )
+			{
+				asCScriptFunction* const function =
+					plan.virtualFunctionTable[slot];
+				if( function == 0 || function->id < 0
+					|| static_cast<asUINT>(function->id)
+						>= engine->scriptFunctions.GetLength()
+					|| engine->scriptFunctions[
+						static_cast<asUINT>(function->id)] != function )
+				{
+					if( detail )
+						detail->Format(
+							"prepared interface dispatch graph has a stale vtable slot: %s[%u]",
+							typeName, slot);
+					return asINVALID_DECLARATION;
+				}
+			}
+			for( asUINT index = 0;
+				index < plan.functionVTableIndices.GetLength(); ++index )
+			{
+				const asSCanonicalFunctionVTableIndex& entry =
+					plan.functionVTableIndices[index];
+				if( entry.function == 0 || entry.index < 0
+					|| entry.function->vfTableIdx != entry.index )
+				{
+					if( detail )
+						detail->Format(
+							"prepared interface dispatch graph has a wrong method vtable index: %s[%u]",
+							typeName, index);
 					return asINVALID_DECLARATION;
 				}
 			}
@@ -11677,6 +12213,22 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 	}
 
 	asCRuntimeTypeBridge bridge(engine);
+	// A prepared build has already materialized the complete current generation
+	// in its private module. Prefer those exact shells for every subsequent type
+	// resolution in this transaction. This is the prepared equivalent of the
+	// detached generator's artifact.types view: an older Hot Reload generation
+	// may remain live behind a snapshot lease, but it must not make the current
+	// Builder's class/enum/typedef/funcdef signatures ambiguous.
+	asCArray<asCTypeInfo*> preparedRuntimeTypes;
+	for( asUINT i = 0; i < module->classTypes.GetLength(); ++i )
+		preparedRuntimeTypes.PushLast(module->classTypes[i]);
+	for( asUINT i = 0; i < module->enumTypes.GetLength(); ++i )
+		preparedRuntimeTypes.PushLast(module->enumTypes[i]);
+	for( asUINT i = 0; i < module->typeDefs.GetLength(); ++i )
+		preparedRuntimeTypes.PushLast(module->typeDefs[i]);
+	for( asUINT i = 0; i < module->funcDefs.GetLength(); ++i )
+		preparedRuntimeTypes.PushLast(module->funcDefs[i]);
+	bridge.SetTransientTypes(&preparedRuntimeTypes);
 	asCCanonicalStringConstantLease stringConstants(engine);
 	asCArray<asSCodeGenFuncBind> binds;
 	asCArray<asSCodeGenGlobal> globals;
@@ -11796,20 +12348,6 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 				bindDetail.AddressOf() ? bindDetail.AddressOf() : "");
 			return error;
 		}
-		if( !FillFunctionSourceMetadata(
-			context, engine, function, declaration, error) )
-		{
-			failed = true;
-			failureDetail.Format(
-				"prepared function '%s' has no exact sealed source metadata: "
-				"key=%s error=%d",
-				function->GetDeclaration(true, true, false),
-				declaration->stableKey.AddressOf()
-					? declaration->stableKey.AddressOf() : "<missing>",
-				error);
-			return error;
-		}
-
 		asSCodeGenFuncBind bind;
 		bind.decl = declarationId;
 		bind.func = function;
@@ -11963,6 +12501,14 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 			external = FindRegisteredGlobalFunction(
 				engine, module, bridge, context, declaration);
 		if( external == 0 )
+			external = FindExactPreparedInterfaceMethod(
+				engine, bridge, context, declaration);
+		const asCDecl* const methodOwner =
+			declaration->kind == asAST_DECL_METHOD
+				? context.GetDecl(declaration->parent) : 0;
+		const bool isSealedInterfaceRequirement = methodOwner != 0
+			&& methodOwner->kind == asAST_DECL_INTERFACE;
+		if( external == 0 && !isSealedInterfaceRequirement )
 			external = FindExactRegisteredMethod(
 				engine, bridge, context, declaration);
 		if( external == 0 )
@@ -12023,6 +12569,55 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		}
 	}
 
+	// Stage 2 owns the live object/method/VFT graph. Authenticate that graph as
+	// soon as every authored and declaration-only shell has an exact bind, before
+	// globals, lambdas, generated accessors, TypeId projections, or detached
+	// candidate functions can introduce rollback work. The temporary artifact is
+	// a non-owning expected plan only; it must never install or repair the
+	// Builder-owned arrays. Generated Canonical methods are deliberately excluded
+	// because they are not part of the Stage2 graph and publish later with their
+	// owning candidate artifact.
+	asSBytecodeCodeGenArtifact preparedDispatchArtifact;
+	asCString preparedDispatchDetail;
+	int preparedDispatchResult = PreparePreparedCanonicalObjectBindings(
+		context,
+		engine,
+		module,
+		preparedBuilder,
+		bridge,
+		binds,
+		preparedDispatchArtifact,
+		&preparedDispatchDetail);
+	if( preparedDispatchResult >= 0 )
+	{
+		preparedDispatchResult = PrepareCanonicalObjectDispatchPlans(
+			context,
+			engine,
+			bridge,
+			binds,
+			preparedDispatchArtifact,
+			false,
+			&preparedDispatchDetail);
+	}
+	if( preparedDispatchResult >= 0 )
+	{
+		preparedDispatchResult = ValidatePreparedCanonicalObjectDispatchPlans(
+			engine,
+			preparedDispatchArtifact,
+			&preparedDispatchDetail);
+	}
+	if( preparedDispatchResult < 0 )
+	{
+		failed = true;
+		error = preparedDispatchResult;
+		failureDetail.Format(
+			"prepared interface dispatch graph authentication failed: %s",
+			preparedDispatchDetail.AddressOf()
+				? preparedDispatchDetail.AddressOf()
+				: "sealed relation plan could not be prepared");
+		return error;
+	}
+
 	struct asSPreparedGlobalState
 	{
 		sGlobalVariableDescription* description;
@@ -12031,6 +12626,8 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		asCScriptFunction* initializer;
 		asQWORD constantValue;
 		int byteWidth;
+		bool originalPropertyPureConstant;
+		bool originalDescriptionPureConstant;
 		bool publishPureConstant;
 		bool publishDefaultInit;
 	};
@@ -12039,6 +12636,16 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 
 	auto RollbackPreparedGlobals = [&]()
 	{
+		for( asUINT i = 0; i < globalStates.GetLength(); ++i )
+		{
+			asSPreparedGlobalState& state = globalStates[i];
+			if( state.property )
+				state.property->isPureConstant =
+					state.originalPropertyPureConstant;
+			if( state.description )
+				state.description->isPureConstant =
+					state.originalDescriptionPureConstant;
+		}
 		globalArtifact.Abandon(engine);
 		globalStates.SetLength(0);
 	};
@@ -12233,6 +12840,10 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		state.initializer = 0;
 		state.constantValue = declaration->constantValue;
 		state.byteWidth = dataType.GetSizeInMemoryBytes();
+		state.originalPropertyPureConstant =
+			description->property->isPureConstant;
+		state.originalDescriptionPureConstant =
+			description->isPureConstant;
 		state.publishPureConstant = false;
 		state.publishDefaultInit = false;
 
@@ -12581,6 +13192,7 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 				else
 					*static_cast<asQWORD*>(memory) = state.constantValue;
 				state.property->isPureConstant = true;
+				state.description->isPureConstant = true;
 			}
 			else if( state.publishDefaultInit )
 			{
@@ -12735,10 +13347,10 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		const asCDecl* const declaration = emitDecls[i];
 		asCScriptFunction* const function = emitFunctions[i];
 		// The body transaction above deliberately replaced the Stage 2
-		// ScriptFunctionData with a detached, default-constructed instance. Source
-		// coordinates previously validated on the shell therefore do not survive
-		// by pointer swap. Publish them again from the sealed AST onto the actual
-		// generated body before line tables and function facts are committed.
+		// ScriptFunctionData with a detached, default-constructed instance. Keep
+		// source coordinates unpublished on the Builder-owned shell and populate
+		// them only on this candidate body, so any later failure discards the
+		// metadata together with the body instead of polluting a retry.
 		if( !FillFunctionSourceMetadata(
 			context, engine, function, declaration, error) )
 		{

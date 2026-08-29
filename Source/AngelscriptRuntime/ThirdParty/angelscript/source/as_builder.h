@@ -132,6 +132,10 @@ struct sClassDeclaration
 	bool           isLayouting = false;
 	bool           hasLayouted = false;
 	bool           evaluatedDestructor = false;
+	// Exact sealed declaration identity captured from the Parser/Sema producer.
+	// Prepared CodeGen uses this to select the current Builder generation's type
+	// shell even when Hot Reload keeps an older same-name Runtime type alive.
+	asCString      canonicalASTStableDeclKey;
 
 	asCArray<sPropertyInitializer> propInits;
 	asCArray<asCScriptNode*> defaultStatements;
@@ -287,6 +291,7 @@ public:
 		asCScriptFunction *function,
 		const asCScriptNode *node,
 		const asCScriptCode *script);
+	void BindCanonicalTypeIdentity(sClassDeclaration *declaration);
 
 	asSNameSpace      *GetNameSpaceFromNode(asCScriptNode *node, asCScriptCode *script, asSNameSpace *implicitNs, asCScriptNode **next, asCObjectType **objType = 0);
 	asSNameSpace      *GetNameSpaceByString(const asCString &nsName, asSNameSpace *implicitNs, asCScriptNode *errNode, asCScriptCode *script, asCTypeInfo **scopeType = 0, bool isRequired = true);

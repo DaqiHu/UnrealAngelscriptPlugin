@@ -11,6 +11,7 @@
 #include "source/as_bytecode_codegen.h"
 #include "source/as_decl.h"
 #include "source/as_module.h"
+#include "source/as_objecttype.h"
 #include "source/as_restore.h"
 #include "source/as_runtime_type_bridge.h"
 #include "source/as_scriptfunction.h"
@@ -1550,6 +1551,467 @@ public:
 				"int PreparedEntry()", Value)
 			&& Value == 42,
 			TEXT("the prepared Runtime shell must execute its canonical body")));
+	}
+
+	TEST_METHOD(PreparedInterfaceShellsAreAuthenticatedBySealedRelations)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalInterfaceRelations");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			interface IPreparedBaseProbe
+			{
+				int ProbeBase(int Value);
+			}
+
+			interface IPreparedDerivedProbe : IPreparedBaseProbe
+			{
+				int ProbeDerived(bool Value);
+			}
+
+			class PreparedInterfaceProbe : IPreparedDerivedProbe
+			{
+				int ProbeBase(int Value)
+				{
+					return Value + 1;
+				}
+
+				int ProbeDerived(bool Value)
+				{
+					return Value ? 40 : 0;
+				}
+			}
+
+			int RunPreparedInterfaceDispatch()
+			{
+				PreparedInterfaceProbe Object;
+				IPreparedDerivedProbe View = Object;
+				return View.ProbeBase(1) + View.ProbeDerived(true);
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"PreparedCanonicalInterfaceRelations.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("Stage 2 must create the complete prepared interface graph")));
+
+		asCObjectType* const BaseInterface = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("IPreparedBaseProbe"));
+		asCObjectType* const DerivedInterface = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("IPreparedDerivedProbe"));
+		asCObjectType* const PreparedType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("PreparedInterfaceProbe"));
+		asCScriptFunction* const Entry = static_cast<asCScriptFunction*>(
+			Module->GetFunctionByDecl("int RunPreparedInterfaceDispatch()"));
+		ASSERT_THAT(IsNotNull(BaseInterface));
+		ASSERT_THAT(IsNotNull(DerivedInterface));
+		ASSERT_THAT(IsNotNull(PreparedType));
+		ASSERT_THAT(IsNotNull(Entry));
+		if (BaseInterface == nullptr || DerivedInterface == nullptr
+			|| PreparedType == nullptr || Entry == nullptr)
+		{
+			return;
+		}
+
+		asCScriptFunction* const BaseRequirement =
+			static_cast<asCScriptFunction*>(BaseInterface->GetMethodByDecl(
+				"int ProbeBase(int)"));
+		asCScriptFunction* const DerivedRequirement =
+			static_cast<asCScriptFunction*>(DerivedInterface->GetMethodByDecl(
+				"int ProbeDerived(bool)"));
+		asCScriptFunction* const BaseImplementation =
+			static_cast<asCScriptFunction*>(PreparedType->GetMethodByDecl(
+				"int ProbeBase(int)"));
+		asCScriptFunction* const DerivedImplementation =
+			static_cast<asCScriptFunction*>(PreparedType->GetMethodByDecl(
+				"int ProbeDerived(bool)"));
+		ASSERT_THAT(IsNotNull(BaseRequirement));
+		ASSERT_THAT(IsNotNull(DerivedRequirement));
+		ASSERT_THAT(IsNotNull(BaseImplementation));
+		ASSERT_THAT(IsNotNull(DerivedImplementation));
+		if (BaseRequirement == nullptr || DerivedRequirement == nullptr
+			|| BaseImplementation == nullptr || DerivedImplementation == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(
+			BaseRequirement->funcType == asFUNC_INTERFACE
+				&& DerivedRequirement->funcType == asFUNC_INTERFACE
+				&& BaseRequirement->scriptData == nullptr
+				&& DerivedRequirement->scriptData == nullptr,
+			TEXT("Stage 2 interface requirements must remain declaration-only shells")));
+		ASSERT_THAT(IsTrue(
+			BaseRequirement->objectType == BaseInterface
+				&& DerivedRequirement->objectType == DerivedInterface,
+			TEXT("each declaration-only shell must belong to its exact interface")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+			PreparedType->interfaces.GetLength(),
+			TEXT("the prepared class must publish direct plus transitive interfaces")));
+		ASSERT_THAT(AreEqual(PreparedType->interfaces.GetLength(),
+			PreparedType->interfaceVFTOffsets.GetLength()));
+		ASSERT_THAT(IsTrue(
+			PreparedType->interfaces.GetLength() == 2
+				&& PreparedType->interfaces[0] == DerivedInterface
+				&& PreparedType->interfaces[1] == BaseInterface,
+			TEXT("Stage 2 must use the legacy-compatible exact DFS closure")));
+		ASSERT_THAT(IsTrue(
+			Entry->scriptData != nullptr
+				&& Entry->scriptData->byteCode.GetLength() == 0,
+			TEXT("the prepared entry body must still be unpublished")));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST()));
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		const asCDecl* BaseRequirementDecl = nullptr;
+		const asCDecl* DerivedRequirementDecl = nullptr;
+		for (asUINT DeclIndex = 1; DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Candidate == nullptr || Candidate->kind != asAST_DECL_METHOD)
+			{
+				continue;
+			}
+			const asCDecl* const Owner = Context->GetDecl(Candidate->parent);
+			if (Owner != nullptr && Owner->kind == asAST_DECL_INTERFACE
+				&& Owner->name.Equals("IPreparedBaseProbe")
+				&& Candidate->name.Equals("ProbeBase"))
+			{
+				BaseRequirementDecl = Candidate;
+			}
+			if (Owner != nullptr && Owner->kind == asAST_DECL_INTERFACE
+				&& Owner->name.Equals("IPreparedDerivedProbe")
+				&& Candidate->name.Equals("ProbeDerived"))
+			{
+				DerivedRequirementDecl = Candidate;
+			}
+		}
+		ASSERT_THAT(IsNotNull(BaseRequirementDecl));
+		ASSERT_THAT(IsNotNull(DerivedRequirementDecl));
+		if (BaseRequirementDecl == nullptr || DerivedRequirementDecl == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(
+			BaseRequirement->canonicalASTStableDeclKey
+				== BaseRequirementDecl->stableKey
+				&& DerivedRequirement->canonicalASTStableDeclKey
+					== DerivedRequirementDecl->stableKey,
+			TEXT("bodyless interface shells must carry their exact sealed identity")));
+
+		// Source coordinates belong to the detached body publication transaction,
+		// not to read-only authentication of the Builder-owned Stage 2 shell. Use
+		// an explicit unpublished sentinel so the negative graph gate proves that
+		// it cannot leak otherwise-valid metadata before rejecting the graph.
+		Entry->scriptData->scriptSectionIdx = -1;
+		Entry->scriptData->declaredAt = 0;
+
+		// Poison only the non-owning interface ordering. A prepared graph gate must
+		// reject this before detaching a body or publishing module provenance, and
+		// it must not attempt to repair or reinstall the Builder-owned graph.
+		asCObjectType* const OriginalFirstInterface = PreparedType->interfaces[0];
+		asCObjectType* const OriginalSecondInterface = PreparedType->interfaces[1];
+		PreparedType->interfaces[0] = OriginalSecondInterface;
+		PreparedType->interfaces[1] = OriginalFirstInterface;
+		asCBytecodeCodeGen RejectedCodeGen;
+		const int RejectedResult =
+			RejectedCodeGen.GeneratePreparedModule(*Context, Builder);
+		PreparedType->interfaces[0] = OriginalFirstInterface;
+		PreparedType->interfaces[1] = OriginalSecondInterface;
+		ASSERT_THAT(AreEqual(asINVALID_DECLARATION, RejectedResult,
+			TEXT("a Stage 2 graph that disagrees with sealed relations must fail closed")));
+		if (RejectedResult != asINVALID_DECLARATION)
+		{
+			return;
+		}
+		const FString RejectedDetail = UTF8_TO_TCHAR(
+			RejectedCodeGen.GetFailureDetail().AddressOf()
+				? RejectedCodeGen.GetFailureDetail().AddressOf() : "");
+		ASSERT_THAT(IsTrue(
+			RejectedDetail.Contains(TEXT("prepared interface dispatch graph"))
+				&& RejectedDetail.Contains(TEXT("interface-order mismatch")),
+			*FString::Printf(
+				TEXT("the rejection must diagnose the exact interface-order mismatch; detail=%s"),
+				*RejectedDetail)));
+		ASSERT_THAT(IsTrue(
+			Entry->scriptData != nullptr
+				&& Entry->scriptData->byteCode.GetLength() == 0
+				&& Entry->scriptData->scriptSectionIdx == -1
+				&& Entry->scriptData->declaredAt == 0
+				&& Module->GetLastBytecodePublisher()
+					== asBYTECODE_PUBLISHER_NONE,
+			TEXT("graph authentication failure must leave body, source metadata, and provenance unpublished")));
+
+		asCBytecodeCodeGen CodeGen;
+		const int CodeGenResult = CodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, CodeGenResult,
+			*FString::Printf(
+				TEXT("the exact prepared graph must authenticate: result=%d detail=%s"),
+				CodeGenResult,
+				UTF8_TO_TCHAR(CodeGen.GetFailureDetail().AddressOf()
+					? CodeGen.GetFailureDetail().AddressOf() : ""))));
+		if (CodeGenResult != asAST_VERIFY_OK)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(
+			BaseRequirement->funcType == asFUNC_INTERFACE
+				&& DerivedRequirement->funcType == asFUNC_INTERFACE
+				&& BaseRequirement->scriptData == nullptr
+				&& DerivedRequirement->scriptData == nullptr,
+			TEXT("authentication must not turn interface requirements into bodies")));
+		ASSERT_THAT(IsTrue(
+			PreparedType->interfaces.GetLength() == 2
+				&& PreparedType->interfaces[0] == DerivedInterface
+				&& PreparedType->interfaces[1] == BaseInterface,
+			TEXT("successful authentication must preserve the exact Stage 2 graph")));
+		ASSERT_THAT(IsTrue(
+			DerivedRequirement->vfTableIdx >= 0
+				&& BaseRequirement->vfTableIdx >= 0
+				&& PreparedType->interfaceVFTOffsets[0]
+					+ static_cast<asUINT>(DerivedRequirement->vfTableIdx)
+						< PreparedType->virtualFunctionTable.GetLength()
+				&& PreparedType->interfaceVFTOffsets[1]
+					+ static_cast<asUINT>(BaseRequirement->vfTableIdx)
+						< PreparedType->virtualFunctionTable.GetLength(),
+			TEXT("each exact requirement must address its prepared dispatch chunk")));
+		if (DerivedRequirement->vfTableIdx < 0 || BaseRequirement->vfTableIdx < 0)
+		{
+			return;
+		}
+		const asUINT DerivedDispatchIndex = PreparedType->interfaceVFTOffsets[0]
+			+ static_cast<asUINT>(DerivedRequirement->vfTableIdx);
+		const asUINT BaseDispatchIndex = PreparedType->interfaceVFTOffsets[1]
+			+ static_cast<asUINT>(BaseRequirement->vfTableIdx);
+		ASSERT_THAT(IsTrue(
+			DerivedDispatchIndex < PreparedType->virtualFunctionTable.GetLength()
+				&& PreparedType->virtualFunctionTable[DerivedDispatchIndex]
+					== DerivedImplementation
+				&& BaseDispatchIndex < PreparedType->virtualFunctionTable.GetLength()
+				&& PreparedType->virtualFunctionTable[BaseDispatchIndex]
+					== BaseImplementation,
+			TEXT("the prepared chunks must retain their exact sealed implementations")));
+		ASSERT_THAT(IsTrue(
+			AngelscriptCompilerBytecodeTestSupport::ContainsOpcode(
+				Entry, asBC_CALLINTF),
+			TEXT("the prepared interface-typed call must lower to CALLINTF")));
+		ASSERT_THAT(IsTrue(
+			Entry->scriptData != nullptr
+				&& Entry->scriptData->scriptSectionIdx >= 0
+				&& Entry->scriptData->declaredAt != 0,
+			TEXT("successful detached publication must restore exact sealed source metadata")));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Module->GetLastBytecodePublisher()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Module->GetLastLegacyCompilerInvocationCount()));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+			*TestRunner,
+			Engine.Get(),
+			Module,
+			"int RunPreparedInterfaceDispatch()",
+			Value) && Value == 42,
+			*FString::Printf(
+				TEXT("authenticated prepared dispatch must execute 42; got=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(PreparedNativeShadowBaseIsAuthenticatedAsPreClassRelation)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"CPreparedNativeShadowBase",
+			0,
+			asOBJ_REF | asOBJ_NOCOUNT) >= 0,
+			TEXT("the PreClass fixture must register its exact native shadow root")));
+		asCObjectType* const NativeShadowBase = static_cast<asCObjectType*>(
+			ScriptEngine->GetTypeInfoByDecl("CPreparedNativeShadowBase"));
+		ASSERT_THAT(IsNotNull(NativeShadowBase));
+		if (NativeShadowBase == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalNativeShadowBase");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		asPreClassData PreClassData;
+		PreClassData.PropertyOffset = 16;
+		PreClassData.ShadowType = NativeShadowBase;
+		Module->AddPreClassData("FPreparedNativeShadowRef", PreClassData);
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class FPreparedNativeShadowRef
+			{
+				int Value;
+
+				FPreparedNativeShadowRef(int InValue)
+				{
+					Value = InValue;
+				}
+
+				int Read() const
+				{
+					return Value;
+				}
+			}
+
+			int RunPreparedNativeShadowRef()
+			{
+				FPreparedNativeShadowRef Value(42);
+				return Value.Read();
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"PreparedCanonicalNativeShadowBase.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("Stage 2 must retain the PreClass shadow root separately from script inheritance")));
+		asCObjectType* const PreparedType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("FPreparedNativeShadowRef"));
+		asCScriptFunction* const Entry = static_cast<asCScriptFunction*>(
+			Module->GetFunctionByDecl("int RunPreparedNativeShadowRef()"));
+		ASSERT_THAT(IsNotNull(PreparedType));
+		ASSERT_THAT(IsNotNull(Entry));
+		if (PreparedType == nullptr || Entry == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(
+			PreparedType->shadowType == NativeShadowBase
+				&& PreparedType->derivedFrom == nullptr,
+			TEXT("Stage 2 must represent a native PreClass root as shadowType, not derivedFrom")));
+		ASSERT_THAT(IsTrue(Entry->scriptData != nullptr
+			&& Entry->scriptData->byteCode.GetLength() == 0,
+			TEXT("the prepared body must remain unpublished before Canonical CodeGen")));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST()));
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		const asCDecl* ScriptRecord = nullptr;
+		const asCDecl* ProjectedNativeBase = nullptr;
+		for (asUINT DeclIndex = 1; DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_DECL_CLASS
+				&& Candidate->name.Equals("FPreparedNativeShadowRef"))
+			{
+				ScriptRecord = Candidate;
+			}
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_DECL_CLASS
+				&& Candidate->stableKey.Equals("CPreparedNativeShadowBase")
+				&& Candidate->origin.Equals("canonical-native-type-view"))
+			{
+				ProjectedNativeBase = Candidate;
+			}
+		}
+		ASSERT_THAT(IsTrue(
+			ScriptRecord != nullptr
+				&& ProjectedNativeBase != nullptr
+				&& ScriptRecord->bases.GetLength() == 1
+				&& ScriptRecord->bases[0] == ProjectedNativeBase->id,
+			TEXT("sealed Sema must own the exact pointer-free PreClass base relation")));
+
+		asCBytecodeCodeGen CodeGen;
+		const int Result = CodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Result,
+			*FString::Printf(
+				TEXT("the exact PreClass shadow relation must authenticate: result=%d detail=%s"),
+				Result,
+				UTF8_TO_TCHAR(CodeGen.GetFailureDetail().AddressOf()
+					? CodeGen.GetFailureDetail().AddressOf() : ""))));
+		if (Result != asAST_VERIFY_OK)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(
+			PreparedType->shadowType == NativeShadowBase
+				&& PreparedType->derivedFrom == nullptr,
+			TEXT("authentication must preserve the Stage 2 PreClass representation")));
+		ASSERT_THAT(AreEqual(asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Module->GetLastBytecodePublisher()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Module->GetLastLegacyCompilerInvocationCount()));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+			*TestRunner,
+			Engine.Get(),
+			Module,
+			"int RunPreparedNativeShadowRef()",
+			Value) && Value == 42,
+			*FString::Printf(
+				TEXT("the authenticated PreClass fixture must execute 42; got=%d"),
+				Value)));
 	}
 
 	TEST_METHOD(PreparedImportBindsExactShellAndExecutes)
@@ -4929,6 +5391,132 @@ public:
 		asQWORD Digest = 0;
 		ASSERT_THAT(IsFalse(Module->GetLastCanonicalCodeGenAstDigest(Digest),
 			TEXT("failed prepared CodeGen must not publish an AST digest")));
+	}
+
+	TEST_METHOD(PreparedPureConstantGlobalPublicationFlagsRollBackBeforeRetry)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalPureConstantRollback");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"PreparedCanonicalPureConstantRollback.as",
+			"const int _PreparedPureConstantRollback = 41; "
+			"int PreparedPureConstantRollbackEntry() { "
+			"  return _PreparedPureConstantRollback + 1; "
+			"}")));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateFunctions()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildLayoutClasses()));
+		Builder.BuildAllocateGlobalVariables();
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			Builder.BuildLayoutFunctionsWithoutGlobalInitializers()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
+			Builder.globVariableList.GetLength()));
+		sGlobalVariableDescription* const PreparedGlobal =
+			Builder.globVariableList.GetLength() == 1
+				? Builder.globVariableList[0] : nullptr;
+		ASSERT_THAT(IsNotNull(PreparedGlobal));
+		if (PreparedGlobal == nullptr || PreparedGlobal->property == nullptr)
+		{
+			return;
+		}
+		asCGlobalProperty* const Property = PreparedGlobal->property;
+		asCScriptFunction* const Entry = static_cast<asCScriptFunction*>(
+			Module->GetFunctionByDecl(
+				"int PreparedPureConstantRollbackEntry()"));
+		ASSERT_THAT(IsNotNull(Entry));
+		if (Entry == nullptr || Entry->scriptData == nullptr)
+		{
+			return;
+		}
+
+		// Stage 2 owns an unpublished property shell. Make its transaction
+		// boundary explicit even if a future Builder optimization begins carrying
+		// the semantic const fact earlier than it does today.
+		PreparedGlobal->isPureConstant = false;
+		Property->isPureConstant = false;
+		const asDWORD OriginalStorage =
+			*static_cast<asDWORD*>(Property->GetAddressOfValue());
+		ASSERT_THAT(IsFalse(PreparedGlobal->isCompiled));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST()));
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		asCBytecodeCodeGen RejectedCodeGen;
+		RejectedCodeGen.SetTestFailureBeforeFunctionEmission(0, asERROR);
+		const int RejectedResult =
+			RejectedCodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(IsTrue(RejectedResult < 0,
+			TEXT("the deterministic body-emission boundary must reject publication")));
+		ASSERT_THAT(IsTrue(
+			!PreparedGlobal->isPureConstant
+				&& !Property->isPureConstant
+				&& !PreparedGlobal->isCompiled
+				&& Property->GetInitFunc() == nullptr
+				&& *static_cast<asDWORD*>(Property->GetAddressOfValue())
+					== OriginalStorage
+				&& Entry->scriptData->byteCode.GetLength() == 0
+				&& Module->GetLastBytecodePublisher()
+					== asBYTECODE_PUBLISHER_NONE,
+			TEXT("failure must restore pure-constant flags, storage, body, and provenance")));
+
+		asCBytecodeCodeGen RetryCodeGen;
+		const int RetryResult =
+			RetryCodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, RetryResult,
+			*FString::Printf(
+				TEXT("the same prepared Builder must retry: result=%d detail=%s"),
+				RetryResult,
+				UTF8_TO_TCHAR(RetryCodeGen.GetFailureDetail().AddressOf()
+					? RetryCodeGen.GetFailureDetail().AddressOf() : ""))));
+		if (RetryResult != asAST_VERIFY_OK)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(
+			PreparedGlobal->isPureConstant
+				&& Property->isPureConstant
+				&& PreparedGlobal->isCompiled
+				&& *static_cast<asDWORD*>(Property->GetAddressOfValue()) == 41,
+			TEXT("successful commit must publish the sealed pure constant exactly once")));
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+			*TestRunner,
+			Engine.Get(),
+			Module,
+			"int PreparedPureConstantRollbackEntry()",
+			Value) && Value == 42,
+			*FString::Printf(
+				TEXT("the retried canonical body must execute 42; got=%d"), Value)));
 	}
 
 	TEST_METHOD(PreparedScalarGlobalKeepsPropertyIdentityAndCanonicalInitializer)

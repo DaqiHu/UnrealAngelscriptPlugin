@@ -442,6 +442,26 @@ void asCBuilder::BindCanonicalFunctionIdentity(
 	}
 }
 
+void asCBuilder::BindCanonicalTypeIdentity(sClassDeclaration *declaration)
+{
+	if( declaration == 0 || declaration->node == 0
+		|| canonicalSema == 0 || canonicalAST == 0 )
+	{
+		return;
+	}
+	const asASTDeclId declarationId = canonicalSema->FindParsedDeclaration(
+		MakeCanonicalParseActionIdentity(
+			declaration->node, declaration->script));
+	const asCDecl* const decl = canonicalAST->GetDecl(declarationId);
+	if( decl != 0
+		&& (decl->kind == asAST_DECL_CLASS
+			|| decl->kind == asAST_DECL_INTERFACE)
+		&& decl->stableKey.GetLength() != 0 )
+	{
+		declaration->canonicalASTStableDeclKey = decl->stableKey;
+	}
+}
+
 // Freeze the exact invocation metadata that the later compiler callback will
 // observe without starting compilation or dependency capture. Generated
 // constructors/destructors/factories derive their canonical slice from the
@@ -3332,6 +3352,7 @@ int asCBuilder::RegisterClass(asCScriptNode *node, asCScriptCode *file, asSNameS
 	decl->script           = file;
 	decl->node             = node;
 	decl->isTidy           = isTidy;
+	BindCanonicalTypeIdentity(decl);
 
 	// External shared interfaces must not try to redefine the interface
 	if (isExternal && (n->next == 0 || n->next->tokenType != ttEndStatement))
@@ -3551,6 +3572,7 @@ int asCBuilder::RegisterInterface(asCScriptNode *node, asCScriptCode *file, asSN
 	decl->name             = name;
 	decl->script           = file;
 	decl->node             = node;
+	BindCanonicalTypeIdentity(decl);
 
 	// External shared interfaces must not try to redefine the interface
 	if (isExternal && (n->next == 0 || n->next->tokenType != ttEndStatement) )

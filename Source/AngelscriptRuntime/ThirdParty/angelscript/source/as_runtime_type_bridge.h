@@ -54,7 +54,9 @@ public:
 		const asCASTContext& context,
 		asCModule& module,
 		asCString* unresolvedStableKey = 0) const;
-	// Resolve only the producer-carried stable declaration identity. A unique
+	// Resolve only the producer-carried stable declaration identity. Script
+	// bodies and declaration-only interface methods are admitted; every other
+	// Runtime function kind is rejected. A unique
 	// key is necessary but not sufficient: the selected declaration must also
 	// agree structurally with the live function's owner, namespace, return type,
 	// parameter types/directions, constness, and lambda captures.

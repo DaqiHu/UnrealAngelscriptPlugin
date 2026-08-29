@@ -312,6 +312,12 @@ static bool FunctionBindsCanonicalDecl(
 	const bool isLambda = (decl.traits & asAST_TRAIT_LAMBDA) != 0;
 	const bool isFactory = function.artifactInvocationKind
 		== asBUILD_ARTIFACT_INVOCATION_FACTORY;
+	const asCDecl* parent = context.GetDecl(decl.parent);
+	const bool isInterfaceRequirement = decl.kind == asAST_DECL_METHOD
+		&& parent != 0 && parent->kind == asAST_DECL_INTERFACE
+		&& !decl.body.IsValid();
+	const asEFuncType expectedFunctionType = isInterfaceRequirement
+		? asFUNC_INTERFACE : asFUNC_SCRIPT;
 	const bool usesCanonicalDirectFunctionABI = isLambda
 		|| (decl.kind == asAST_DECL_METHOD
 			&& (decl.traits & asAST_TRAIT_GENERATED) != 0
@@ -339,19 +345,18 @@ static bool FunctionBindsCanonicalDecl(
 		: (decl.kind == asAST_DECL_DESTRUCTOR
 			? (function.name.Equals(decl.name) || function.name.Equals(destructorName))
 			: function.name.Equals(decl.name));
-	if( function.module != &module || function.funcType != asFUNC_SCRIPT
+	if( function.module != &module || function.funcType != expectedFunctionType
 		|| !nameMatches )
 	{
 		if( detail )
 		{
 			detail->Format(
-				"function identity mismatch: expected name='%s' module=%p kind=script; actual name='%s' module=%p kind=%d",
-				decl.name.AddressOf(), &module, function.name.AddressOf(),
-				function.module, (int)function.funcType);
+				"function identity mismatch: expected name='%s' module=%p kind=%d; actual name='%s' module=%p kind=%d",
+				decl.name.AddressOf(), &module, (int)expectedFunctionType,
+				function.name.AddressOf(), function.module, (int)function.funcType);
 		}
 		return false;
 	}
-	const asCDecl* parent = context.GetDecl(decl.parent);
 	const bool expectsObjectOwner = IsCanonicalClassOwner(parent);
 	const asCTypeInfo* const runtimeOwner = isFactory
 		? function.artifactOwnerType : function.objectType;
@@ -589,11 +594,13 @@ int asCRuntimeTypeBridge::BindFunctionDeclaration(
 	{
 		*detail = "";
 	}
-	if( !context.IsPublishable() || function.module == 0 || function.funcType != asFUNC_SCRIPT )
+	if( !context.IsPublishable() || function.module == 0
+		|| (function.funcType != asFUNC_SCRIPT
+			&& function.funcType != asFUNC_INTERFACE) )
 	{
 		if( detail )
 		{
-			*detail = "canonical declaration bind requires a sealed AST and a live script function";
+			*detail = "canonical declaration bind requires a sealed AST and a live script/interface function";
 		}
 		return asRUNTIME_DECL_BIND_INVALID;
 	}
