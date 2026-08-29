@@ -40,21 +40,6 @@ static eTokenType CanonicalPrimitiveToken(eTokenType token)
 	}
 }
 
-static asDWORD RuntimeEffectiveQualifiers(
-	asITypeInfo* typeInfo,
-	asDWORD authoredQualifiers)
-{
-	// Implicit handle is a semantic property of the resolved language type,
-	// not authored punctuation. Keep the Runtime object local to Sema and
-	// publish only the stable qualifier bit into the Canonical QualType.
-	if( typeInfo != 0
-		&& (typeInfo->GetFlags() & asOBJ_IMPLICIT_HANDLE) != 0 )
-	{
-		authoredQualifiers |= asAST_QUAL_HANDLE;
-	}
-	return authoredQualifiers;
-}
-
 static asDWORD DeclaredEffectiveQualifiers(
 	const asCDecl* declaration,
 	asDWORD authoredQualifiers)
@@ -80,47 +65,6 @@ static asCString CanonicalStructuredTypeKey(const asCString& spelling)
 		return asCString(spelling.AddressOf() + 2);
 	}
 	return spelling;
-}
-
-static asCQualType InternResolvedRuntimeType(
-	asCASTContext& context,
-	asCScriptEngine* engine,
-	asITypeInfo* typeInfo,
-	const asCString& stableSpelling,
-	asDWORD authoredQualifiers)
-{
-	if( engine == 0 || typeInfo == 0 || stableSpelling.GetLength() == 0 )
-	{
-		return asCQualType();
-	}
-	const asDWORD effectiveQualifiers =
-		RuntimeEffectiveQualifiers(typeInfo, authoredQualifiers);
-	asCDataType dataType = asCDataType::CreateType(
-		static_cast<asCTypeInfo*>(typeInfo),
-		(effectiveQualifiers & asAST_QUAL_CONST) != 0);
-	if( effectiveQualifiers & asAST_QUAL_HANDLE )
-	{
-		dataType.MakeHandle(true);
-	}
-	if( effectiveQualifiers & asAST_QUAL_REFERENCE )
-	{
-		dataType.MakeReference(true);
-	}
-	asCRuntimeTypeBridge bridge(engine);
-	const asCQualType bridged = bridge.FromDataType(context, dataType);
-	if( !bridged.IsValid() )
-	{
-		return asCQualType();
-	}
-	const asCType* const canonical = context.GetType(bridged.type);
-	if( canonical == 0 )
-	{
-		return asCQualType();
-	}
-	return context.InternNamedType(
-		canonical->kind,
-		stableSpelling.AddressOf(),
-		effectiveQualifiers);
 }
 
 static asCQualType InternResolvedLexicalType(
@@ -159,20 +103,121 @@ static asCQualType InternResolvedLexicalType(
 	}
 }
 
-static asCQualType ResolveQualifiedNominalType(
-	asCSema& sema,
-	asCASTContext& context,
-	asCScriptEngine* engine,
+const asSCanonicalRegisteredTypeDeclarationFact*
+asCSema::FindExactCanonicalRegisteredTypeDeclaration(
+	const asCString& stableKey) const
+{
+	// The Engine copy contract orders facts by stable key. Binary lookup keeps
+	// type resolution independent of the size of the UE/application registry.
+	asUINT first = 0;
+	asUINT count = canonicalRegisteredTypeDeclarations.GetLength();
+	while( count != 0 )
+	{
+		const asUINT step = count / 2;
+		const asUINT index = first + step;
+		const asSCanonicalRegisteredTypeDeclarationFact& declaration =
+			canonicalRegisteredTypeDeclarations[index];
+		const int comparison = declaration.stableKey.Compare(stableKey);
+		if( comparison == 0 )
+		{
+			return &declaration;
+		}
+		if( comparison < 0 )
+		{
+			first = index + 1;
+			count -= step + 1;
+		}
+		else
+		{
+			count = step;
+		}
+	}
+	return 0;
+}
+
+const asSCanonicalRegisteredTypeDeclarationFact*
+asCSema::ResolveCanonicalRegisteredTypeDeclaration(
+	const asCString& authoredName,
+	bool absoluteScope,
+	asASTDeclId lookupScope,
+	asCString& resolvedStableKey,
+	bool& ambiguous) const
+{
+	resolvedStableKey = "";
+	ambiguous = false;
+	asCString canonicalName = authoredName;
+	if( canonicalName.GetLength() >= 2
+		&& canonicalName[0] == ':' && canonicalName[1] == ':' )
+	{
+		canonicalName = canonicalName.SubString(2);
+		absoluteScope = true;
+	}
+	if( canonicalName.GetLength() == 0 )
+	{
+		return 0;
+	}
+
+	auto findExact = [this, &resolvedStableKey, &ambiguous](
+		const asCString& stableKey)
+		-> const asSCanonicalRegisteredTypeDeclarationFact*
+	{
+		const asSCanonicalRegisteredTypeDeclarationFact* const fact =
+			FindExactCanonicalRegisteredTypeDeclaration(stableKey);
+		if( fact == 0 )
+		{
+			return 0;
+		}
+		if( fact->ambiguous )
+		{
+			ambiguous = true;
+			return 0;
+		}
+		resolvedStableKey = fact->stableKey;
+		return fact;
+	};
+
+	if( !absoluteScope )
+	{
+		asASTDeclId current = lookupScope;
+		while( current.IsValid() )
+		{
+			const asCDecl* const declaration = context.GetDecl(current);
+			if( declaration == 0 )
+			{
+				break;
+			}
+			if( declaration->kind == asAST_DECL_NAMESPACE
+				&& declaration->stableKey.GetLength() != 0 )
+			{
+				asCString candidate = declaration->stableKey;
+				candidate += "::";
+				candidate += canonicalName;
+				const asSCanonicalRegisteredTypeDeclarationFact* const fact =
+					findExact(candidate);
+				if( fact != 0 || ambiguous )
+				{
+					return fact;
+				}
+			}
+			current = declaration->parent;
+		}
+	}
+	return findExact(canonicalName);
+}
+
+asCQualType asCSema::ResolveQualifiedNominalType(
 	const asCString& canonicalSpelling,
 	bool absoluteScope,
-	asDWORD authoredQualifiers)
+	asDWORD authoredQualifiers,
+	bool& ambiguous)
 {
+	ambiguous = false;
 	if( canonicalSpelling.GetLength() == 0 )
 	{
 		return asCQualType();
 	}
 
-	auto resolveExact = [&context, engine, authoredQualifiers](
+	auto resolveExact = [this, authoredQualifiers, &ambiguous](
 		const asCString& stableKey) -> asCQualType
 	{
 		for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
@@ -191,10 +236,26 @@ static asCQualType ResolveQualifiedNominalType(
 			}
 		}
 
-		asITypeInfo* const runtimeType = engine != 0
-			? engine->GetTypeInfoByDecl(stableKey.AddressOf()) : 0;
-		return InternResolvedRuntimeType(
-			context, engine, runtimeType, stableKey, authoredQualifiers);
+		const asSCanonicalRegisteredTypeDeclarationFact* const fact =
+			FindExactCanonicalRegisteredTypeDeclaration(stableKey);
+		if( fact == 0 )
+		{
+			return asCQualType();
+		}
+		if( fact->ambiguous )
+		{
+			ambiguous = true;
+			return asCQualType();
+		}
+		asDWORD effectiveQualifiers = authoredQualifiers;
+		if( (fact->flags & asOBJ_IMPLICIT_HANDLE) != 0 )
+		{
+			effectiveQualifiers |= asAST_QUAL_HANDLE;
+		}
+		return context.InternNamedType(
+			fact->kind,
+			fact->stableKey.AddressOf(),
+			effectiveQualifiers);
 	};
 
 	// AngelScript resolves a relative qualified scope from the current
@@ -203,7 +264,7 @@ static asCQualType ResolveQualifiedNominalType(
 	// reached, then try its stable owner key. A leading `::` skips this search.
 	if( !absoluteScope )
 	{
-		asASTDeclId current = sema.CurrentDeclContext();
+		asASTDeclId current = CurrentDeclContext();
 		while( current.IsValid() )
 		{
 			const asCDecl* const declaration = context.GetDecl(current);
@@ -218,7 +279,7 @@ static asCQualType ResolveQualifiedNominalType(
 				candidate += "::";
 				candidate += canonicalSpelling;
 				const asCQualType resolved = resolveExact(candidate);
-				if( resolved.IsValid() )
+				if( resolved.IsValid() || ambiguous )
 				{
 					return resolved;
 				}
@@ -536,42 +597,21 @@ asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 		}
 	}
 
-	if( engine )
+	const bool absoluteScope = text.GetLength() >= 2
+		&& text[0] == ':' && text[1] == ':';
+	const asCString canonicalText =
+		CanonicalStructuredTypeKey(text);
+	bool ambiguous = false;
+	const asCQualType registered = ResolveQualifiedNominalType(
+		canonicalText, absoluteScope, quals, ambiguous);
+	if( ambiguous )
 	{
-		asITypeInfo* info = engine->GetTypeInfoByDecl(text.AddressOf());
-		if( info == 0 )
-		{
-			info = engine->GetTypeInfoByName(text.AddressOf());
-		}
-		if( info )
-		{
-			const asDWORD effectiveQualifiers =
-				RuntimeEffectiveQualifiers(info, quals);
-			asCDataType dataType = asCDataType::CreateType(
-				static_cast<asCTypeInfo*>(info),
-				(effectiveQualifiers & asAST_QUAL_CONST) != 0);
-			if( effectiveQualifiers & asAST_QUAL_HANDLE )
-			{
-				dataType.MakeHandle(true);
-			}
-			if( effectiveQualifiers & asAST_QUAL_REFERENCE )
-			{
-				dataType.MakeReference(true);
-			}
-			asCRuntimeTypeBridge bridge(engine);
-			const asCQualType bridged = bridge.FromDataType(context, dataType);
-			if( bridged.IsValid() )
-			{
-				if( const asCType* type = context.GetType(bridged.type) )
-				{
-					return context.InternNamedType(
-						type->kind,
-						type->stableKey.AddressOf(),
-						effectiveQualifiers);
-				}
-				return bridged;
-			}
-		}
+		AddDiagnostic("qualtype-registered-nominal-ambiguous");
+		return asCQualType();
+	}
+	if( registered.IsValid() )
+	{
+		return registered;
 	}
 
 	asEASTTypeKind kind = asAST_TYPE_VALUE_OBJECT;
@@ -579,7 +619,7 @@ asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 	{
 		kind = asAST_TYPE_REFERENCE_OBJECT;
 	}
-	return context.InternNamedType(kind, text.AddressOf(), quals);
+	return context.InternNamedType(kind, canonicalText.AddressOf(), quals);
 }
 
 asCSourceRange asCSema::QualTypeSyntaxNodeRange(
@@ -938,19 +978,24 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 
 	// Qualified nominal types must resolve in the Canonical declaration
 	// environment before script declarations are published to the Runtime
-	// registry. The same search also accepts an exact Runtime type as a local
-	// Sema input, but publishes only the matched stable key/kind/qualifiers.
+	// registry. The same search accepts an exact translation-unit snapshot fact,
+	// but never observes or publishes a live Runtime type pointer.
 	// This covers namespace-qualified records/enums and non-template child
 	// funcdefs without depending on Builder's GetNameSpaceFromNode walk.
 	if( node.scopeSegmentCount != 0 )
 	{
+		bool ambiguous = false;
 		const asCQualType qualified = ResolveQualifiedNominalType(
-			*this,
-			context,
-			engine,
 			canonicalSpelling,
 			node.absoluteScope,
-			node.qualifiers);
+			node.qualifiers,
+			ambiguous);
+		if( ambiguous )
+		{
+			AddDiagnostic(
+				"qualtype-registered-nominal-ambiguous", range);
+			return asCQualType();
+		}
 		if( qualified.IsValid() )
 		{
 			return qualified;
@@ -1732,24 +1777,66 @@ static asASTDeclId ProjectRuntimeBaseTypeInfo(
 	return projected;
 }
 
-static asASTDeclId ProjectRuntimeBaseType(
-	asCSema* sema,
-	const asCString& sourceName)
+asASTDeclId asCSema::ProjectCanonicalRegisteredBaseType(
+	const asCString& authoredName,
+	bool absoluteScope,
+	asASTDeclId lookupScope,
+	bool& ambiguous)
 {
-	if( sema == 0 || sema->GetEngine() == 0
-		|| sourceName.GetLength() == 0 )
+	ambiguous = false;
+	if( authoredName.GetLength() == 0 )
 	{
 		return asASTDeclId();
 	}
 
-	asITypeInfo* info = sema->GetEngine()->GetTypeInfoByDecl(
-		sourceName.AddressOf());
-	if( info == 0 )
+	asCString stableKey;
+	const asSCanonicalRegisteredTypeDeclarationFact* const fact =
+		ResolveCanonicalRegisteredTypeDeclaration(
+			authoredName,
+			absoluteScope,
+			lookupScope,
+			stableKey,
+			ambiguous);
+	if( fact == 0 || ambiguous
+		|| (fact->kind != asAST_TYPE_REFERENCE_OBJECT
+			&& fact->kind != asAST_TYPE_VALUE_OBJECT) )
 	{
-		info = sema->GetEngine()->GetTypeInfoByName(
-			sourceName.AddressOf());
+		return asASTDeclId();
 	}
-	return ProjectRuntimeBaseTypeInfo(sema, info, sourceName);
+
+	const asCQualType canonicalType = context.InternNamedType(
+		fact->kind, stableKey.AddressOf(), 0);
+	for( asUINT declarationIndex = 1;
+		declarationIndex <= context.GetDeclCount(); ++declarationIndex )
+	{
+		const asCDecl* const existing =
+			context.GetDecl(asASTDeclId(declarationIndex));
+		if( existing != 0
+			&& (existing->kind == asAST_DECL_CLASS
+				|| existing->kind == asAST_DECL_INTERFACE)
+			&& existing->origin.Equals("canonical-native-type-view")
+			&& existing->type == canonicalType )
+		{
+			return existing->id;
+		}
+	}
+
+	const asASTDeclId projected = fact->isInterface
+		? ActOnInterfaceDecl(
+			context.GetTranslationUnit(), stableKey.AddressOf(), asCSourceRange())
+		: ActOnClassDecl(
+			context.GetTranslationUnit(), stableKey.AddressOf(), asCSourceRange());
+	if( !projected.IsValid() )
+	{
+		return projected;
+	}
+	context.SetOrigin(projected, "canonical-native-type-view");
+	context.SetDeclType(projected, canonicalType);
+	if( (fact->flags & asOBJ_VALUE) != 0 )
+	{
+		context.AddDeclTrait(projected, asAST_TRAIT_VALUE);
+	}
+	return projected;
 }
 
 static bool IsRecordDeclaration(const asCDecl* declaration)
@@ -1873,7 +1960,8 @@ static asASTDeclId ResolveRecordBaseAction(
 			return match;
 		}
 	}
-	return ProjectRuntimeBaseType(sema, name);
+	return sema->ProjectCanonicalRegisteredBaseType(
+		name, absolute, derivedDecl->parent, ambiguous);
 }
 
 void asCSema::ActOnRecordBaseSpecifiersAction(

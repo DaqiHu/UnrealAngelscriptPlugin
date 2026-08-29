@@ -26544,6 +26544,184 @@ public:
 			ScriptEngine->templateInstanceBuckets.Num(), *Evidence));
 	}
 
+	TEST_METHOD(SemaRegisteredNominalSnapshotIsTranslationUnitLocal)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"CEarlyRegisteredNominalSnapshot", 0,
+			asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("registered nominal snapshot fixture must register its early host type")));
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			ScriptEngine->SetDefaultNamespace("RegisteredNominalSnapshot"),
+			TEXT("registered nominal snapshot fixture must select its namespace")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"CQualifiedEarly", 0,
+			asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("registered nominal snapshot fixture must register its qualified early type")));
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			ScriptEngine->SetDefaultNamespace(""),
+			TEXT("registered nominal snapshot fixture must restore the root namespace")));
+
+		asCASTContext OldContext;
+		asCSema OldSema(ScriptEngine, OldContext);
+		OldSema.ActOnTranslationUnit("RegisteredNominalSnapshotOld");
+
+		const asCQualType EarlyType = OldSema.ActOnQualType(
+			"CEarlyRegisteredNominalSnapshot", 0);
+		const asCType* const EarlyCanonical = OldContext.GetType(EarlyType.type);
+
+		asSQualTypeSyntaxAction QualifiedAction;
+		asSQualTypeSyntaxNode QualifiedRoot;
+		QualifiedRoot.spelling = "CQualifiedEarly";
+		QualifiedRoot.firstScopeSegment = 1;
+		QualifiedRoot.scopeSegmentCount = 1;
+		QualifiedRoot.subtreeSize = 2;
+		QualifiedRoot.beginOffset = 0;
+		QualifiedRoot.endOffset = 42;
+		QualifiedAction.nodes.PushLast(QualifiedRoot);
+		asSQualTypeSyntaxNode QualifiedScope;
+		QualifiedScope.spelling = "RegisteredNominalSnapshot";
+		QualifiedScope.subtreeSize = 1;
+		QualifiedScope.beginOffset = 0;
+		QualifiedScope.endOffset = 25;
+		QualifiedAction.nodes.PushLast(QualifiedScope);
+		const asCQualType QualifiedType =
+			OldSema.ActOnQualTypeAction(QualifiedAction);
+		const asCType* const QualifiedCanonical =
+			OldContext.GetType(QualifiedType.type);
+
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"CLateRegisteredNominalSnapshot", 0,
+			asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("registered nominal snapshot fixture must register its late host type")));
+		const asCQualType OldLateType = OldSema.ActOnQualType(
+			"CLateRegisteredNominalSnapshot", 0);
+		const asCType* const OldLateCanonical =
+			OldContext.GetType(OldLateType.type);
+
+		asCASTContext NewContext;
+		asCSema NewSema(ScriptEngine, NewContext);
+		NewSema.ActOnTranslationUnit("RegisteredNominalSnapshotNew");
+		const asCQualType NewLateType = NewSema.ActOnQualType(
+			"CLateRegisteredNominalSnapshot", 0);
+		const asCType* const NewLateCanonical =
+			NewContext.GetType(NewLateType.type);
+
+		const FString Evidence = FString::Printf(
+			TEXT("registered nominal facts must be immutable for one translation unit. old diagnostics:\n%s\nnew diagnostics:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(OldSema),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(NewSema));
+		ASSERT_THAT(IsTrue(EarlyCanonical != nullptr
+			&& EarlyCanonical->kind == asAST_TYPE_REFERENCE_OBJECT
+			&& EarlyCanonical->stableKey.Equals(
+				"CEarlyRegisteredNominalSnapshot")
+			&& EarlyType.IsHandle(), *Evidence));
+		ASSERT_THAT(IsTrue(QualifiedCanonical != nullptr
+			&& QualifiedCanonical->kind == asAST_TYPE_REFERENCE_OBJECT
+			&& QualifiedCanonical->stableKey.Equals(
+				"RegisteredNominalSnapshot::CQualifiedEarly")
+			&& QualifiedType.IsHandle(), *Evidence));
+		ASSERT_THAT(IsTrue(OldLateCanonical != nullptr
+			&& OldLateCanonical->kind == asAST_TYPE_VALUE_OBJECT
+			&& OldLateCanonical->stableKey.Equals(
+				"CLateRegisteredNominalSnapshot")
+			&& !OldLateType.IsHandle(),
+			TEXT("an already-started Sema must not observe a late Runtime registration")));
+		ASSERT_THAT(IsTrue(NewLateCanonical != nullptr
+			&& NewLateCanonical->kind == asAST_TYPE_REFERENCE_OBJECT
+			&& NewLateCanonical->stableKey.Equals(
+				"CLateRegisteredNominalSnapshot")
+			&& NewLateType.IsHandle(),
+			TEXT("a new Sema generation must snapshot the newly registered host type")));
+	}
+
+	TEST_METHOD(SemaRegisteredBaseSnapshotIsTranslationUnitLocal)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCASTContext OldContext;
+		asCSema OldSema(ScriptEngine, OldContext);
+		const asASTDeclId OldTu = OldSema.ActOnTranslationUnit(
+			"RegisteredBaseSnapshotOld");
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"CLateRegisteredBaseSnapshot", 0,
+			asOBJ_REF | asOBJ_NOCOUNT) >= 0,
+			TEXT("registered base snapshot fixture must register its late host base")));
+
+		asCScriptCode OldCode;
+		const std::string BaseSource = "CLateRegisteredBaseSnapshot";
+		OldCode.SetCode(
+			"RegisteredBaseSnapshotOld.as", BaseSource.c_str(), true);
+		const asASTDeclId OldDerived = OldSema.ActOnClassDecl(
+			OldTu, "COldRegisteredBaseDerived", asCSourceRange());
+		asCArray<asSRecordBaseSpecifierAction> OldActions;
+		asSRecordBaseSpecifierAction OldAction;
+		OldAction.qualifiedName = BaseSource.c_str();
+		OldAction.beginOffset = 0;
+		OldAction.endOffset = static_cast<asUINT>(BaseSource.size());
+		OldActions.PushLast(OldAction);
+		OldSema.ActOnRecordBaseSpecifiersAction(
+			OldDerived, OldActions, &OldCode);
+
+		asCASTContext NewContext;
+		asCSema NewSema(ScriptEngine, NewContext);
+		const asASTDeclId NewTu = NewSema.ActOnTranslationUnit(
+			"RegisteredBaseSnapshotNew");
+		asCScriptCode NewCode;
+		NewCode.SetCode(
+			"RegisteredBaseSnapshotNew.as", BaseSource.c_str(), true);
+		const asASTDeclId NewDerived = NewSema.ActOnClassDecl(
+			NewTu, "CNewRegisteredBaseDerived", asCSourceRange());
+		asCArray<asSRecordBaseSpecifierAction> NewActions;
+		asSRecordBaseSpecifierAction NewAction;
+		NewAction.qualifiedName = BaseSource.c_str();
+		NewAction.beginOffset = 0;
+		NewAction.endOffset = static_cast<asUINT>(BaseSource.size());
+		NewActions.PushLast(NewAction);
+		NewSema.ActOnRecordBaseSpecifiersAction(
+			NewDerived, NewActions, &NewCode);
+
+		const asCDecl* const OldDerivedDecl = OldContext.GetDecl(OldDerived);
+		const asCDecl* const NewDerivedDecl = NewContext.GetDecl(NewDerived);
+		const asCDecl* const NewBaseDecl = NewDerivedDecl != nullptr
+			&& NewDerivedDecl->bases.GetLength() == 1
+			? NewContext.GetDecl(NewDerivedDecl->bases[0]) : nullptr;
+		auto HasDependency = [](const asCDecl* Decl, const char* StableKey)
+		{
+			for (asUINT Index = 0;
+				Decl != nullptr && Index < Decl->dependencies.GetLength(); ++Index)
+			{
+				if (Decl->dependencies[Index].Equals(StableKey))
+				{
+					return true;
+				}
+			}
+			return false;
+		};
+		ASSERT_THAT(IsTrue(OldDerivedDecl != nullptr
+			&& OldDerivedDecl->bases.GetLength() == 0
+			&& HasDependency(OldDerivedDecl,
+				"CLateRegisteredBaseSnapshot"),
+			TEXT("an already-started Sema must record the authored stable dependency without attaching a late Runtime base")));
+		ASSERT_THAT(IsTrue(NewDerivedDecl != nullptr
+			&& NewDerivedDecl->bases.GetLength() == 1
+			&& HasDependency(NewDerivedDecl,
+				"CLateRegisteredBaseSnapshot")
+			&& NewBaseDecl != nullptr
+			&& NewBaseDecl->stableKey.Equals(
+				"CLateRegisteredBaseSnapshot")
+			&& NewBaseDecl->origin.Equals(
+				"canonical-native-type-view"),
+			TEXT("a new Sema generation must project and attach the registered host base from copied facts")));
+	}
+
 	TEST_METHOD(ParserDeclarationTypeSitesUseTypedActionWithoutNodeAdapter)
 	{
 		const FString SourceRoot = FPaths::Combine(

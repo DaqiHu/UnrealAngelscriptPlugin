@@ -26,6 +26,7 @@ asCSema::asCSema(
 	, parsedLineOffset(0)
 {
 	RefreshCanonicalTemplateDeclarations();
+	RefreshCanonicalRegisteredTypeDeclarations();
 }
 
 void asCSema::RefreshCanonicalTemplateDeclarations()
@@ -35,6 +36,16 @@ void asCSema::RefreshCanonicalTemplateDeclarations()
 	{
 		engine->CopyCanonicalTemplateDeclarations(
 			canonicalTemplateDeclarations);
+	}
+}
+
+void asCSema::RefreshCanonicalRegisteredTypeDeclarations()
+{
+	canonicalRegisteredTypeDeclarations.SetLength(0);
+	if( engine != 0 )
+	{
+		engine->CopyCanonicalRegisteredTypeDeclarations(
+			canonicalRegisteredTypeDeclarations);
 	}
 }
 
@@ -616,6 +627,7 @@ void asCSema::RecordDependency(asASTDeclId owner, const char* key)
 asASTDeclId asCSema::ActOnTranslationUnit(const char* moduleName)
 {
 	RefreshCanonicalTemplateDeclarations();
+	RefreshCanonicalRegisteredTypeDeclarations();
 	return context.CreateTranslationUnit(moduleName);
 }
 

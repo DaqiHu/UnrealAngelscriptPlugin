@@ -45,6 +45,7 @@
 #include "as_tokenizer.h"
 #include "as_texts.h"
 #include "as_module.h"
+#include "as_map.h"
 #include "as_callfunc.h"
 #include "as_generic.h"
 #include "as_scriptobject.h"
@@ -6207,6 +6208,121 @@ void asCScriptEngine::CopyCanonicalTemplateDeclarations(
 			}
 		}
 		outDeclarations.PushLast(fact);
+	}
+}
+
+// internal
+void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
+	asCArray<asSCanonicalRegisteredTypeDeclarationFact>& outDeclarations) const
+{
+	outDeclarations.SetLength(0);
+	asCMap<asCString, asSCanonicalRegisteredTypeDeclarationFact>
+		declarationsByStableKey;
+	allRegisteredTypes.IterateAll(
+		[this, &declarationsByStableKey](asCTypeInfo* type)
+	{
+		if( type == 0
+			|| (type->flags & (asOBJ_TEMPLATE
+				| asOBJ_TEMPLATE_SUBTYPE | asOBJ_LIST_PATTERN)) != 0 )
+		{
+			return;
+		}
+
+		// A child funcdef of a template declaration/instance is derived from the
+		// CTA-S64 template fact. Copying a live generated child here would make an
+		// old Runtime instance an alternative source of Canonical identity.
+		const asCFuncdefType* const funcdef = CastToFuncdefType(type);
+		if( funcdef != 0 && funcdef->parentClass != 0
+			&& (funcdef->parentClass->flags & asOBJ_TEMPLATE) != 0 )
+		{
+			return;
+		}
+
+		asSCanonicalRegisteredTypeDeclarationFact fact;
+		if( funcdef != 0 && funcdef->parentClass != 0 )
+		{
+			// asCDataType::Format intentionally uses only parentClass->name for a
+			// member funcdef whose own namespace pointer is null. Canonical identity
+			// must retain the parent's complete namespace-qualified stable key.
+			if( funcdef->parentClass->nameSpace != 0
+				&& funcdef->parentClass->nameSpace->name.GetLength() != 0 )
+			{
+				fact.stableKey = funcdef->parentClass->nameSpace->name;
+				fact.stableKey += "::";
+			}
+			fact.stableKey += funcdef->parentClass->name;
+			fact.stableKey += "::";
+			fact.stableKey += type->name;
+		}
+		else
+		{
+			const asCDataType dataType =
+				asCDataType::CreateType(type, false);
+			fact.stableKey = dataType.Format(
+				nameSpaces.GetLength() != 0 ? nameSpaces[0] : 0, true);
+		}
+		if( fact.stableKey.GetLength() == 0 )
+		{
+			return;
+		}
+
+		fact.flags = type->flags;
+		if( type->flags & asOBJ_ENUM )
+		{
+			fact.kind = asAST_TYPE_ENUM;
+		}
+		else if( type->flags & asOBJ_FUNCDEF )
+		{
+			fact.kind = asAST_TYPE_FUNCDEF;
+		}
+		else if( type->flags & asOBJ_REF )
+		{
+			fact.kind = asAST_TYPE_REFERENCE_OBJECT;
+		}
+		else
+		{
+			fact.kind = asAST_TYPE_VALUE_OBJECT;
+		}
+		const asCObjectType* const objectType = CastToObjectType(type);
+		fact.isInterface = objectType != 0 && objectType->IsInterface();
+
+		// Symbol-map iteration order is not an authority decision. Collapse equal
+		// declarations and make conflicting facts deterministically ambiguous so
+		// Sema never chooses whichever old/current module entry happened to visit
+		// first.
+		const asQWORD semanticFlags =
+			asOBJ_VALUE | asOBJ_REF | asOBJ_ENUM | asOBJ_FUNCDEF
+			| asOBJ_TYPEDEF | asOBJ_IMPLICIT_HANDLE | asOBJ_NOHANDLE
+			| asOBJ_SCOPED | asOBJ_ASHANDLE;
+		asSMapNode<asCString, asSCanonicalRegisteredTypeDeclarationFact>* cursor = 0;
+		if( declarationsByStableKey.MoveTo(&cursor, fact.stableKey) )
+		{
+			asSCanonicalRegisteredTypeDeclarationFact& existing =
+				declarationsByStableKey.GetValue(cursor);
+			if( existing.kind != fact.kind
+				|| existing.isInterface != fact.isInterface
+				|| (existing.flags & semanticFlags)
+					!= (fact.flags & semanticFlags) )
+			{
+				existing.ambiguous = true;
+			}
+			return;
+		}
+		declarationsByStableKey.Insert(fact.stableKey, fact);
+	});
+
+	// asCMap iteration is key ordered. Preserve that order in the copied array
+	// so every Sema generation gets deterministic facts and can use binary
+	// lookup instead of scanning thousands of application/UE declarations.
+	asSMapNode<asCString, asSCanonicalRegisteredTypeDeclarationFact>* cursor = 0;
+	if( declarationsByStableKey.MoveFirst(&cursor) )
+	{
+		do
+		{
+			outDeclarations.PushLast(
+				declarationsByStableKey.GetValue(cursor));
+		}
+		while( declarationsByStableKey.MoveNext(&cursor, cursor) );
 	}
 }
 

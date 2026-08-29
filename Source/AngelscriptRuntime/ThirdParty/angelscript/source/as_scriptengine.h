@@ -59,6 +59,7 @@ BEGIN_AS_NAMESPACE
 class asCBuilder;
 class asCContext;
 struct asSCanonicalTemplateDeclarationFact;
+struct asSCanonicalRegisteredTypeDeclarationFact;
 
 // TODO: import: Remove this when import is removed
 struct sBindInfo;
@@ -341,6 +342,8 @@ public:
 	bool               IsTemplateType(const char *name) const;
 	void               CopyCanonicalTemplateDeclarations(
 		asCArray<asSCanonicalTemplateDeclarationFact>& outDeclarations) const;
+	void               CopyCanonicalRegisteredTypeDeclarations(
+		asCArray<asSCanonicalRegisteredTypeDeclarationFact>& outDeclarations) const;
 	int                SetTemplateRestrictions(asCObjectType *templateType, asCScriptFunction *func, const char *caller, const char *decl);
 	asCObjectType     *GetTemplateInstanceType(asCObjectType *templateType, asCArray<asCDataType> &subTypes, asCModule *requestingModule, asCString* outErrorMessage = nullptr);
 	asCScriptFunction *GenerateTemplateFactoryStub(asCObjectType *templateType, asCObjectType *templateInstanceType, int origFactoryId);

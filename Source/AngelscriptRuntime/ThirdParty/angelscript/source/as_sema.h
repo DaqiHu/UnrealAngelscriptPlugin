@@ -34,6 +34,29 @@ struct asSCanonicalTemplateDeclarationFact
 	}
 };
 
+// Translation-unit-local, pointer-free projection of one ordinary registered
+// nominal declaration. The live Runtime type may belong to the application or
+// to another published script module; Canonical Sema copies only the stable
+// language facts needed for lookup, QualType formation and read-only base
+// projection. Template declarations/instances use the separate template fact
+// contract above.
+struct asSCanonicalRegisteredTypeDeclarationFact
+{
+	asCString stableKey;
+	asEASTTypeKind kind;
+	asQWORD flags;
+	bool isInterface;
+	bool ambiguous;
+
+	asSCanonicalRegisteredTypeDeclarationFact()
+		: kind(asAST_TYPE_INVALID)
+		, flags(0)
+		, isInterface(false)
+		, ambiguous(false)
+	{
+	}
+};
+
 // Build-local identity for one Parser action result. Parser copies only the
 // logical source section and exact syntax coordinate; Canonical Sema never
 // retains a native Parser-node pointer or decodes the native tree through this
@@ -1427,6 +1450,11 @@ public:
 	asUINT LookupCandidates(const char* name, asCArray<asASTDeclId>& out) const;
 	asUINT LookupCandidatesFrom(asASTDeclId start, const char* name, asCArray<asASTDeclId>& out) const;
 	asUINT LookupInScope(asASTDeclId scope, const char* name, asCArray<asASTDeclId>& out) const;
+	asASTDeclId ProjectCanonicalRegisteredBaseType(
+		const asCString& authoredName,
+		bool absoluteScope,
+		asASTDeclId lookupScope,
+		bool& ambiguous);
 
 	asCASTContext& GetContext() { return context; }
 	asCScriptEngine* GetEngine() const { return engine; }
@@ -1436,6 +1464,22 @@ public:
 	void AddDiagnostic(const char* text, const asCSourceRange& range);
 private:
 	void RefreshCanonicalTemplateDeclarations();
+	void RefreshCanonicalRegisteredTypeDeclarations();
+	const asSCanonicalRegisteredTypeDeclarationFact*
+		FindExactCanonicalRegisteredTypeDeclaration(
+			const asCString& stableKey) const;
+	const asSCanonicalRegisteredTypeDeclarationFact*
+		ResolveCanonicalRegisteredTypeDeclaration(
+			const asCString& authoredName,
+			bool absoluteScope,
+			asASTDeclId lookupScope,
+			asCString& resolvedStableKey,
+			bool& ambiguous) const;
+	asCQualType ResolveQualifiedNominalType(
+		const asCString& canonicalSpelling,
+		bool absoluteScope,
+		asDWORD authoredQualifiers,
+		bool& ambiguous);
 	const asSCanonicalTemplateDeclarationFact*
 		FindExactCanonicalTemplateDeclaration(const asCString& stableKey) const;
 	const asSCanonicalTemplateDeclarationFact*
@@ -1475,6 +1519,8 @@ private:
 	// Immutable for one Sema/build generation. These copied facts contain no
 	// Engine-local pointer, Parser node or numeric Runtime identity.
 	asCArray<asSCanonicalTemplateDeclarationFact> canonicalTemplateDeclarations;
+	asCArray<asSCanonicalRegisteredTypeDeclarationFact>
+		canonicalRegisteredTypeDeclarations;
 	asCArray<asASTStmtId> controlStack;
 	asCArray<asASTDeclId> declContextStack;
 	asASTDeclId lastActedDecl;
