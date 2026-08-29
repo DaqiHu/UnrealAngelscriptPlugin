@@ -5550,12 +5550,27 @@ ECompileResult FAngelscriptEngine::CompileModules(
 	TArray<TSharedRef<FAngelscriptModuleDesc>> CompiledModules;
 	TSet<TSharedRef<FAngelscriptModuleDesc>> ModulesToUpdateReferences;
 	asModuleReferenceUpdateMap ScriptUpdateMap;
+	TSet<asCModule*> SuppressedActiveModules;
+	auto CollectFailedScriptModules = [&CompiledModules]()
+	{
+		TSet<asCModule*> FailedModules;
+		for (const TSharedRef<FAngelscriptModuleDesc>& Module : CompiledModules)
+		{
+			if (Module->bCompileError && Module->ScriptModule != nullptr)
+			{
+				FailedModules.Add(
+					static_cast<asCModule*>(Module->ScriptModule));
+			}
+		}
+		return FailedModules;
+	};
 
 	const bool bUseRecompileAvoidance = (GAngelscriptRecompileAvoidance != 0)
 		&& bIsInitialCompileFinished && ShouldUseAutomaticImportMethod();
 
 	auto* ScriptEngine = (asCScriptEngine*)Engine;
 
+	ScriptEngine->BeginTemplateInstanceBuildTracking();
 	ScriptEngine->deferValidationOfTemplateTypes = true;
 	ScriptEngine->deferCalculatingTemplateSize = true;
 	ScriptEngine->RequestBuild();
@@ -5612,7 +5627,10 @@ ECompileResult FAngelscriptEngine::CompileModules(
 						{
 							auto* OldScriptModule = (asCModule*)(*OldModule)->ScriptModule;
 							if (OldScriptModule != nullptr)
+							{
 								OldScriptModule->RemoveTypesAndGlobalsFromEngineAvailability();
+								SuppressedActiveModules.Add(OldScriptModule);
+							}
 						}
 					}
 
@@ -6072,12 +6090,19 @@ ECompileResult FAngelscriptEngine::CompileModules(
 			// and then add all the functions and properties to the replacement list
 			struct FTemplateReplacementHelper
 			{
-				static asCTypeInfo* CreateReplacementTemplateType(asCScriptEngine* Engine, asModuleReferenceUpdateMap& ScriptUpdateMap, asCObjectType* OldInstance)
+				static asCTypeInfo* CreateReplacementTemplateType(
+					asCScriptEngine* Engine,
+					asModuleReferenceUpdateMap& ScriptUpdateMap,
+					asCObjectType* OldInstance,
+					asCModule* RequestingModule)
 				{
 					asCTypeInfo* ReplacedInstance = ScriptUpdateMap.Types.FindRef(OldInstance);
 					if (ReplacedInstance != nullptr)
 					{
 						check(ReplacedInstance->module != nullptr && ReplacedInstance->module->ReloadNewModule == nullptr);
+						Engine->TrackTemplateInstanceBuildRequest(
+							static_cast<asCObjectType*>(ReplacedInstance),
+							RequestingModule);
 						return ReplacedInstance;
 					}
 
@@ -6100,7 +6125,10 @@ ECompileResult FAngelscriptEngine::CompileModules(
 								// Need to recursively create subtypes that are also templates, because we
 								// might not actually have gotten to this type yet.
 								asCTypeInfo* NewSubTemplateInstance = CreateReplacementTemplateType(
-									Engine, ScriptUpdateMap, (asCObjectType*)TypeInfo
+									Engine,
+									ScriptUpdateMap,
+									(asCObjectType*)TypeInfo,
+									RequestingModule
 								);
 
 								if (NewSubTemplateInstance != nullptr)
@@ -6126,7 +6154,10 @@ ECompileResult FAngelscriptEngine::CompileModules(
 					if (!bRequiresReplacement)
 						return nullptr;
 
-					asCObjectType* NewInstance = Engine->GetTemplateInstanceType(OldInstance->templateBaseType, subTypes, nullptr);
+					asCObjectType* NewInstance = Engine->GetTemplateInstanceType(
+						OldInstance->templateBaseType,
+						subTypes,
+						RequestingModule);
 
 					// Add the template type and all its functions and properties to the replacement map
 					ScriptUpdateMap.Types.Add(OldInstance, NewInstance);
@@ -6178,6 +6209,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 			// Generate new template instances
 			for (auto Module : CompiledModules)
 			{
+				if (Module->bCompileError)
+					continue;
 				asCModule* ScriptModule = Module->ScriptModule;
 				if (ScriptModule == nullptr)
 					continue;
@@ -6187,7 +6220,11 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				for (int n = 0, Count = ScriptModule->ReloadOldModule->templateInstances.Num(); n < Count; ++n)
 				{
 					asCObjectType* OldInstance = ScriptModule->ReloadOldModule->templateInstances[n];
-					FTemplateReplacementHelper::CreateReplacementTemplateType(Engine, ScriptUpdateMap, OldInstance);
+					FTemplateReplacementHelper::CreateReplacementTemplateType(
+						Engine,
+						ScriptUpdateMap,
+						OldInstance,
+						ScriptModule);
 				}
 			}
 
@@ -6207,6 +6244,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				// Replace all the old pointers with the new pointers
 				for (auto Module : CompiledModules)
 				{
+					if (Module->bCompileError)
+						continue;
 					asCModule* ScriptModule = Module->ScriptModule;
 					if (ScriptModule == nullptr)
 						continue;
@@ -6240,6 +6279,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 			}
 
 			// Now that class layouting is done, make sure all template types are layouted as well
+			ScriptEngine->PartitionDeferredTemplateInstances(
+				CollectFailedScriptModules());
 			ScriptEngine->deferCalculatingTemplateSize = false;
 			for (asCObjectType* tmpl : ScriptEngine->unvalidatedTemplateInstances)
 				tmpl->CalculateTemplateSize();
@@ -6471,6 +6512,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 			FAngelscriptScopeTimer StageTimer(TEXT("script compilation stage4"));
 
 			// Validate all template instances we've created
+			ScriptEngine->PartitionDeferredTemplateInstances(
+				CollectFailedScriptModules());
 			asCBuilder builder(ScriptEngine, nullptr);
 			builder.Reset();
 			builder.EvaluateTemplateInstances(false);
@@ -7305,7 +7348,20 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				Module->ScriptModule = nullptr;
 			}
 		}
+
+		// Candidate reset must finish before the previous generation is made
+		// visible again, otherwise old and new declarations can coexist in the
+		// Engine lookup tables during rollback.
+		for (asCModule* OldScriptModule : SuppressedActiveModules)
+		{
+			if (OldScriptModule != nullptr)
+				OldScriptModule->RestoreTypesAndGlobalsToEngineAvailability();
+		}
 	}
+
+	// Retire failed-only deferred template instances after candidate rollback.
+	// Successful/shared instances have already been drained by Stage 4.
+	ScriptEngine->EndTemplateInstanceBuildTracking();
 
 	// If we have any new diagnostics, emit them again
 	if (bDiagnosticsDirty)

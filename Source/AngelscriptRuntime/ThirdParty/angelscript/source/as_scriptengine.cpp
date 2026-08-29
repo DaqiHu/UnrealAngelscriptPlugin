@@ -3382,8 +3382,181 @@ void asCScriptEngine::DiscardTemplateInstance(asCObjectType* TemplateType)
 		BucketArray->Remove(TemplateType);
 }
 
+void asCScriptEngine::BeginTemplateInstanceBuildTracking()
+{
+	asASSERT(!trackTemplateInstanceBuildRequests);
+	asASSERT(templateInstanceBuildProvenance.IsEmpty());
+
+	trackTemplateInstanceBuildRequests = true;
+
+	// A well-formed build starts with an empty deferred queue. Preserve any
+	// pre-existing entry conservatively if an earlier host path left one behind:
+	// this transaction did not create it and cannot know all of its requestors.
+	for (asCObjectType* TemplateInstance : unvalidatedTemplateInstances)
+	{
+		if (TemplateInstance == nullptr)
+			continue;
+
+		asSTemplateInstanceBuildProvenance Provenance;
+		Provenance.hasUnknownRequestor = true;
+		templateInstanceBuildProvenance.Add(TemplateInstance, Provenance);
+	}
+}
+
+void asCScriptEngine::TrackTemplateInstanceBuildRequest(
+	asCObjectType* TemplateInstance,
+	asCModule* RequestingModule,
+	bool CreatedDuringBuild)
+{
+	if (!trackTemplateInstanceBuildRequests || TemplateInstance == nullptr)
+		return;
+
+	asSTemplateInstanceBuildProvenance* Provenance =
+		templateInstanceBuildProvenance.Find(TemplateInstance);
+	if (Provenance == nullptr)
+	{
+		asSTemplateInstanceBuildProvenance NewProvenance;
+		templateInstanceBuildProvenance.Add(TemplateInstance, NewProvenance);
+		Provenance = templateInstanceBuildProvenance.Find(TemplateInstance);
+	}
+	asASSERT(Provenance != nullptr);
+
+	Provenance->createdDuringBuild =
+		Provenance->createdDuringBuild || CreatedDuringBuild;
+	if (RequestingModule != nullptr)
+		Provenance->requestingModules.Add(RequestingModule);
+	else
+		Provenance->hasUnknownRequestor = true;
+
+	// A request after the layout partition can make a previously failed-only
+	// instance shared with a healthy or unknown requestor. Put it back into the
+	// deferred queue; the Stage 4 partition will make the final decision.
+	if (Provenance->rejectedFromDeferredQueue)
+	{
+		if (!unvalidatedTemplateInstances.Contains(TemplateInstance))
+			unvalidatedTemplateInstances.Add(TemplateInstance);
+		Provenance->rejectedFromDeferredQueue = false;
+		TemplateInstance->ReleaseInternal();
+	}
+}
+
+void asCScriptEngine::PartitionDeferredTemplateInstances(
+	const TSet<asCModule*>& FailedModules)
+{
+	if (!trackTemplateInstanceBuildRequests)
+		return;
+
+	for (int Index = unvalidatedTemplateInstances.Num() - 1; Index >= 0; --Index)
+	{
+		asCObjectType* const TemplateInstance =
+			unvalidatedTemplateInstances[Index];
+		asSTemplateInstanceBuildProvenance* const Provenance =
+			templateInstanceBuildProvenance.Find(TemplateInstance);
+
+		// Missing/incomplete provenance is intentionally processed. Only a type
+		// created by this transaction with a complete non-empty requestor set can
+		// be proven to be failed-only.
+		if (TemplateInstance == nullptr
+			|| Provenance == nullptr
+			|| !Provenance->createdDuringBuild
+			|| Provenance->hasUnknownRequestor
+			|| Provenance->requestingModules.Num() == 0)
+		{
+			continue;
+		}
+
+		bool AllRequestorsFailed = true;
+		for (asCModule* RequestingModule : Provenance->requestingModules)
+		{
+			if (!FailedModules.Contains(RequestingModule))
+			{
+				AllRequestorsFailed = false;
+				break;
+			}
+		}
+		if (!AllRequestorsFailed)
+			continue;
+
+		// The deferred queue is non-owning. Hold one internal reference until
+		// candidate rollback has removed module/bucket ownership, then retire the
+		// failed-only instance in EndTemplateInstanceBuildTracking().
+		TemplateInstance->AddRefInternal();
+		Provenance->rejectedFromDeferredQueue = true;
+		unvalidatedTemplateInstances.RemoveAtSwap(Index);
+	}
+}
+
+void asCScriptEngine::EndTemplateInstanceBuildTracking()
+{
+	if (!trackTemplateInstanceBuildRequests)
+		return;
+
+	// Stop recording before releasing rejected instances: their final Release
+	// may destroy functions and types, none of which belongs to this transaction
+	// any longer.
+	trackTemplateInstanceBuildRequests = false;
+
+	for (auto& ProvenanceEntry : templateInstanceBuildProvenance)
+	{
+		asCObjectType* const TemplateInstance = ProvenanceEntry.Key;
+		asSTemplateInstanceBuildProvenance& Provenance = ProvenanceEntry.Value;
+		if (TemplateInstance == nullptr
+			|| !Provenance.rejectedFromDeferredQueue)
+		{
+			continue;
+		}
+
+		unvalidatedTemplateInstances.Remove(TemplateInstance);
+
+		const asQWORD Bucket = GetTemplateInstanceBucket(
+			TemplateInstance->templateBaseType,
+			TemplateInstance->templateSubTypes);
+		auto* const BucketArray = templateInstanceBuckets.Find(Bucket);
+		const bool IsStillRegistered =
+			BucketArray != nullptr && BucketArray->Contains(TemplateInstance);
+		if (IsStillRegistered)
+		{
+			bool HasScriptModuleOwnership = false;
+			for (asUINT SubTypeIndex = 0;
+				SubTypeIndex < TemplateInstance->templateSubTypes.GetLength();
+				++SubTypeIndex)
+			{
+				asCTypeInfo* const SubTypeInfo =
+					TemplateInstance->templateSubTypes[SubTypeIndex].GetTypeInfo();
+				asCModule* const SubTypeModule =
+					SubTypeInfo != nullptr ? SubTypeInfo->module : nullptr;
+				if (SubTypeModule != nullptr
+					&& SubTypeModule->templateInstances.Contains(TemplateInstance))
+				{
+					HasScriptModuleOwnership = true;
+					break;
+				}
+			}
+
+			if (HasScriptModuleOwnership)
+			{
+				DiscardTemplateInstance(TemplateInstance);
+			}
+			else
+			{
+				// No script module owns this generated instance. Remove the
+				// bucket registry entry and release its original internal owner;
+				// external references may keep the retired type alive safely.
+				BucketArray->Remove(TemplateInstance);
+				TemplateInstance->ReleaseInternal();
+			}
+		}
+
+		// Drop the temporary rollback hold acquired by the partition.
+		Provenance.rejectedFromDeferredQueue = false;
+		TemplateInstance->ReleaseInternal();
+	}
+
+	templateInstanceBuildProvenance.Reset();
+}
+
 // internal
-asCObjectType *asCScriptEngine::GetTemplateInstanceType(asCObjectType *templateType, asCArray<asCDataType> &subTypes, asCModule*, asCString* outErrorMessage)
+asCObjectType *asCScriptEngine::GetTemplateInstanceType(asCObjectType *templateType, asCArray<asCDataType> &subTypes, asCModule* requestingModule, asCString* outErrorMessage)
 {
 	asUINT n;
 
@@ -3412,6 +3585,7 @@ asCObjectType *asCScriptEngine::GetTemplateInstanceType(asCObjectType *templateT
 		// Could be a previously invalid instance
 		if (existingInstance->isInvalidGeneratedType)
 			return nullptr;
+		TrackTemplateInstanceBuildRequest(existingInstance, requestingModule);
 		return existingInstance;
 	}
 
@@ -3643,6 +3817,8 @@ asCObjectType *asCScriptEngine::GetTemplateInstanceType(asCObjectType *templateT
 		if( prop->type.GetTypeInfo() )
 			prop->type.GetTypeInfo()->AddRefInternal();
 	}
+
+	TrackTemplateInstanceBuildRequest(ot, requestingModule, true);
 
 	return ot;
 }

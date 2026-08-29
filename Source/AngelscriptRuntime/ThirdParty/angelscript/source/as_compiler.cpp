@@ -963,7 +963,11 @@ asCDataType asCCompiler::ApplyDeterminesOutputType(const asCDataType& original, 
 				NewSubTypes[i].SetTypeInfo(DetermineObjectType);
 
 				asCString ErrorMessage;
-				asCObjectType* NewTemplateInstance = engine->GetTemplateInstanceType(OriginalObjectType->templateBaseType, NewSubTypes, nullptr, &ErrorMessage);
+				asCObjectType* NewTemplateInstance = engine->GetTemplateInstanceType(
+					OriginalObjectType->templateBaseType,
+					NewSubTypes,
+					builder != nullptr ? builder->module : nullptr,
+					&ErrorMessage);
 
 				asCDataType NewType = original;
 				NewType.SetTypeInfo(NewTemplateInstance);

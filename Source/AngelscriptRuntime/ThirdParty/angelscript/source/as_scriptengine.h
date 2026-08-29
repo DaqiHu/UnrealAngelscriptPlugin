@@ -347,6 +347,10 @@ public:
 		const asCModule* importedTypeAuthority = 0) const;
 	int                SetTemplateRestrictions(asCObjectType *templateType, asCScriptFunction *func, const char *caller, const char *decl);
 	asCObjectType     *GetTemplateInstanceType(asCObjectType *templateType, asCArray<asCDataType> &subTypes, asCModule *requestingModule, asCString* outErrorMessage = nullptr);
+	void               BeginTemplateInstanceBuildTracking();
+	void               TrackTemplateInstanceBuildRequest(asCObjectType *templateInstance, asCModule *requestingModule, bool createdDuringBuild = false);
+	void               PartitionDeferredTemplateInstances(const TSet<asCModule *> &failedModules);
+	void               EndTemplateInstanceBuildTracking();
 	asCScriptFunction *GenerateTemplateFactoryStub(asCObjectType *templateType, asCObjectType *templateInstanceType, int origFactoryId);
 	asCFuncdefType    *GenerateNewTemplateFuncdef(asCObjectType *templateType, asCObjectType *templateInstanceType, asCFuncdefType *templateFuncdef);
 	asCDataType        DetermineTypeForTemplate(const asCDataType &orig, asCObjectType *tmpl, asCObjectType *ot);
@@ -408,6 +412,15 @@ public:
 	// types and those automacially instantiated from scripts
 	TArray<asCObjectType *>      unvalidatedTemplateInstances;
 	TMap<uint64, TArray<asCObjectType*, TInlineAllocator<2>>> templateInstanceBuckets;
+	struct asSTemplateInstanceBuildProvenance
+	{
+		TSet<asCModule *> requestingModules;
+		bool createdDuringBuild = false;
+		bool hasUnknownRequestor = false;
+		bool rejectedFromDeferredQueue = false;
+	};
+	bool trackTemplateInstanceBuildRequests = false;
+	TMap<asCObjectType *, asSTemplateInstanceBuildProvenance> templateInstanceBuildProvenance;
 
 	// Store information about list patterns
 	asCArray<asCObjectType *>      listPatternTypes; // increases ref count
