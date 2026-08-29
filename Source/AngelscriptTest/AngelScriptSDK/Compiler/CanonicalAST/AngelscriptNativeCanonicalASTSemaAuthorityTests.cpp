@@ -3956,15 +3956,8 @@ public:
 			"void TScopedParent<T>::FChild()") >= 0,
 			TEXT("template-qualified parent fixture must register its child funcdef")));
 
-		asITypeInfo* const RuntimeParent =
-			ScriptEngine->GetTypeInfoByDecl("TScopedParent<int>");
-		asITypeInfo* const RuntimeChild =
-			ScriptEngine->GetTypeInfoByDecl("TScopedParent<int>::FChild");
-		ASSERT_THAT(IsTrue(RuntimeParent != nullptr
-			&& RuntimeChild != nullptr
-			&& (RuntimeChild->GetFlags() & asOBJ_FUNCDEF) != 0
-			&& RuntimeChild->GetParentType() == RuntimeParent,
-			TEXT("LEGACY registry contract must expose the exact child of TScopedParent<int>")));
+		const int32 RuntimeBucketCountBefore =
+			ScriptEngine->templateInstanceBuckets.Num();
 
 		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
 			ScriptEngine, "SemaTemplateQualifiedParentType");
@@ -3990,6 +3983,9 @@ public:
 			TypeAction.nodes.GetLength() == 3 ? &TypeAction.nodes[1] : nullptr;
 		const asSQualTypeSyntaxNode* const ArgumentSyntax =
 			TypeAction.nodes.GetLength() == 3 ? &TypeAction.nodes[2] : nullptr;
+		ASSERT_THAT(AreEqual(RuntimeBucketCountBefore,
+			ScriptEngine->templateInstanceBuckets.Num(),
+			TEXT("syntax-only template-parent parsing must not instantiate its Runtime parent")));
 		ASSERT_THAT(IsTrue(RootSyntax != nullptr
 			&& RootSyntax->spelling.Equals("FChild")
 			&& !RootSyntax->absoluteScope
@@ -4016,6 +4012,28 @@ public:
 			&& ArgumentSyntax->subtreeSize == 1,
 			TEXT("template parent scope must retain int as a separate leaf argument")));
 
+		// Prove the structured type action itself is side-effect free before the
+		// complete declaration Parser lifecycle runs. Keeping this probe in a
+		// separate context prevents declaration state from masking a later bridge.
+		{
+			asCASTContext ProbeContext;
+			asCSema ProbeSema(ScriptEngine, ProbeContext);
+			ProbeSema.ActOnTranslationUnit("SemaTemplateQualifiedParentTypeProbe");
+			const asCQualType ProbeType =
+				ProbeSema.ActOnQualTypeAction(TypeAction);
+			const asCType* const ProbeCanonical =
+				ProbeContext.GetType(ProbeType.type);
+			ASSERT_THAT(IsTrue(ProbeType.IsValid()
+				&& ProbeCanonical != nullptr
+				&& ProbeCanonical->kind == asAST_TYPE_FUNCDEF
+				&& ProbeCanonical->stableKey.Equals(
+					"TScopedParent<int>::FChild"),
+				TEXT("direct structured Sema action must resolve the exact child funcdef")));
+			ASSERT_THAT(AreEqual(RuntimeBucketCountBefore,
+				ScriptEngine->templateInstanceBuckets.Num(),
+				TEXT("direct structured Sema action must not instantiate its Runtime parent")));
+		}
+
 		const std::string Source =
 			"TScopedParent<int>::FChild Callback;\n";
 		asCScriptCode Code;
@@ -4025,6 +4043,9 @@ public:
 		asCSema Sema(ScriptEngine, Context);
 		asCParser Parser(&Builder);
 		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(RuntimeBucketCountBefore,
+			ScriptEngine->templateInstanceBuckets.Num(),
+			TEXT("Sema snapshot and Parser construction must not instantiate the Runtime parent")));
 		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
 			TEXT("template-qualified child funcdef declaration must parse")));
 
@@ -4044,16 +4065,31 @@ public:
 		asCString Dump;
 		asCASTDump(Context, Dump);
 		const FString Evidence = FString::Printf(
-			TEXT("template-qualified parent type must produce the exact stable child funcdef without Runtime TypeId identity. runtime_type_id=%d diagnostics:\n%s\nAST:\n%s"),
-			RuntimeChild != nullptr ? RuntimeChild->GetTypeId() : asINVALID_TYPE,
+			TEXT("template-qualified parent type must produce the exact stable child funcdef without instantiating its Runtime parent. before=%d after=%d diagnostics:\n%s\nAST:\n%s"),
+			RuntimeBucketCountBefore,
+			ScriptEngine->templateInstanceBuckets.Num(),
 			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
 			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
 		ASSERT_THAT(IsTrue(Callback != nullptr
 			&& CallbackType != nullptr
 			&& CallbackType->kind == asAST_TYPE_FUNCDEF
 			&& CallbackType->stableKey.Equals(
-				"TScopedParent<int>::FChild"), *Evidence));
+				"TScopedParent<int>::FChild")
+			&& (Callback->traits & asAST_TRAIT_DEFAULT_INITIALIZED) == 0,
+			*Evidence));
+		ASSERT_THAT(AreEqual(RuntimeBucketCountBefore,
+			ScriptEngine->templateInstanceBuckets.Num(), *Evidence));
 		ASSERT_THAT(AreEqual(0, Context.Seal(), *Evidence));
+
+		asITypeInfo* const RuntimeParent =
+			ScriptEngine->GetTypeInfoByDecl("TScopedParent<int>");
+		asITypeInfo* const RuntimeChild =
+			ScriptEngine->GetTypeInfoByDecl("TScopedParent<int>::FChild");
+		ASSERT_THAT(IsTrue(RuntimeParent != nullptr
+			&& RuntimeChild != nullptr
+			&& (RuntimeChild->GetFlags() & asOBJ_FUNCDEF) != 0
+			&& RuntimeChild->GetParentType() == RuntimeParent,
+			TEXT("post-Sema LEGACY registry projection must expose the exact runtime child")));
 	}
 
 	TEST_METHOD(SemaTemplateQualifiedParentTypeRejectsMalformedScopeTopology)
@@ -26453,6 +26489,59 @@ public:
 			(int)(asAST_QUAL_CONST | asAST_QUAL_REFERENCE | asAST_QUAL_IN),
 			(int)QualType.quals,
 			TEXT("Sema must preserve const/reference/in syntax qualifiers from the action")));
+	}
+
+	TEST_METHOD(SemaTemplateDeclarationSnapshotDoesNotInstantiateRuntimeType)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"TSemaSnapshot<class T>", 0,
+			asOBJ_REF | asOBJ_TEMPLATE | asOBJ_NOCOUNT
+				| asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("template declaration snapshot fixture must register a unique host template")));
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		Sema.ActOnTranslationUnit("SemaTemplateDeclarationSnapshot");
+		const int32 RuntimeBucketCountBefore =
+			ScriptEngine->templateInstanceBuckets.Num();
+
+		asSQualTypeSyntaxAction Action;
+		asSQualTypeSyntaxNode Root;
+		Root.spelling = "TSemaSnapshot";
+		Root.firstTemplateArgument = 1;
+		Root.templateArgumentCount = 1;
+		Root.subtreeSize = 2;
+		Root.beginOffset = 0;
+		Root.endOffset = 18;
+		Action.nodes.PushLast(Root);
+
+		asSQualTypeSyntaxNode IntArgument;
+		IntArgument.spelling = "int";
+		IntArgument.primitiveToken = ttInt;
+		IntArgument.subtreeSize = 1;
+		IntArgument.beginOffset = 14;
+		IntArgument.endOffset = 17;
+		Action.nodes.PushLast(IntArgument);
+
+		const asCQualType QualType = Sema.ActOnQualTypeAction(Action);
+		const asCType* const Type = Context.GetType(QualType.type);
+		const FString Evidence = FString::Printf(
+			TEXT("template Sema must consume copied declaration facts without creating a Runtime instance. before=%d after=%d diagnostics:\n%s"),
+			RuntimeBucketCountBefore,
+			ScriptEngine->templateInstanceBuckets.Num(),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema));
+		ASSERT_THAT(IsTrue(QualType.IsValid()
+			&& Type != nullptr
+			&& Type->kind == asAST_TYPE_TEMPLATE
+			&& Type->stableKey.Equals("TSemaSnapshot<int>")
+			&& QualType.IsHandle(), *Evidence));
+		ASSERT_THAT(AreEqual(RuntimeBucketCountBefore,
+			ScriptEngine->templateInstanceBuckets.Num(), *Evidence));
 	}
 
 	TEST_METHOD(ParserDeclarationTypeSitesUseTypedActionWithoutNodeAdapter)

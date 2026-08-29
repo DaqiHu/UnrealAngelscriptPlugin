@@ -51,6 +51,7 @@
 #include "as_compiler.h"
 #include "as_bytecode.h"
 #include "as_debug.h"
+#include "as_sema.h"
 
 #include "AngelscriptEngine.h"
 #include "ClassGenerator/ASClass.h"
@@ -6169,6 +6170,44 @@ bool asCScriptEngine::IsTemplateType(const char *name) const
 	}
 
 	return false;
+}
+
+// internal
+void asCScriptEngine::CopyCanonicalTemplateDeclarations(
+	asCArray<asSCanonicalTemplateDeclarationFact>& outDeclarations) const
+{
+	outDeclarations.SetLength(0);
+	for( asUINT index = 0; index < registeredTemplateTypes.GetLength(); ++index )
+	{
+		const asCObjectType* const type = registeredTemplateTypes[index];
+		if( type == 0 || (type->flags & asOBJ_TEMPLATE) == 0 )
+		{
+			continue;
+		}
+
+		asSCanonicalTemplateDeclarationFact fact;
+		if( type->nameSpace != 0 && type->nameSpace->name.GetLength() != 0 )
+		{
+			fact.stableKey = type->nameSpace->name;
+			fact.stableKey += "::";
+		}
+		fact.stableKey += type->name;
+		fact.flags = type->flags;
+		fact.subtypeCount = type->templateSubTypes.GetLength();
+		fact.acceptValueSubtype = type->acceptValueSubType;
+		fact.acceptReferenceSubtype = type->acceptRefSubType;
+		fact.requiresRuntimeValidation = type->beh.templateCallback != 0;
+		for( asUINT childIndex = 0;
+			childIndex < type->childFuncDefs.GetLength(); ++childIndex )
+		{
+			const asCFuncdefType* const child = type->childFuncDefs[childIndex];
+			if( child != 0 && child->name.GetLength() != 0 )
+			{
+				fact.childFuncdefs.PushLast(child->name);
+			}
+		}
+		outDeclarations.PushLast(fact);
+	}
 }
 
 // internal

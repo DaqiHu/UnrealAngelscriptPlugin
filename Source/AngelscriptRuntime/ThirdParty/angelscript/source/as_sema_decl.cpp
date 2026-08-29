@@ -233,6 +233,176 @@ static asCQualType ResolveQualifiedNominalType(
 	return resolveExact(canonicalSpelling);
 }
 
+const asSCanonicalTemplateDeclarationFact*
+asCSema::FindExactCanonicalTemplateDeclaration(
+	const asCString& stableKey) const
+{
+	for( asUINT index = 0;
+		index < canonicalTemplateDeclarations.GetLength(); ++index )
+	{
+		const asSCanonicalTemplateDeclarationFact& declaration =
+			canonicalTemplateDeclarations[index];
+		if( declaration.stableKey.Equals(stableKey) )
+		{
+			return &declaration;
+		}
+	}
+	return 0;
+}
+
+const asSCanonicalTemplateDeclarationFact*
+asCSema::ResolveCanonicalTemplateDeclaration(
+	const asCString& authoredBase,
+	bool absoluteScope,
+	asCString& resolvedStableKey) const
+{
+	resolvedStableKey.SetLength(0);
+	if( authoredBase.GetLength() == 0 )
+	{
+		return 0;
+	}
+
+	asCString canonicalBase = authoredBase;
+	if( canonicalBase.GetLength() >= 2
+		&& canonicalBase[0] == ':' && canonicalBase[1] == ':' )
+	{
+		canonicalBase = asCString(canonicalBase.AddressOf() + 2);
+		absoluteScope = true;
+	}
+
+	if( !absoluteScope )
+	{
+		asASTDeclId current = CurrentDeclContext();
+		while( current.IsValid() )
+		{
+			const asCDecl* const declaration = context.GetDecl(current);
+			if( declaration == 0 )
+			{
+				break;
+			}
+			if( declaration->kind == asAST_DECL_NAMESPACE
+				&& declaration->stableKey.GetLength() != 0 )
+			{
+				asCString candidate = declaration->stableKey;
+				candidate += "::";
+				candidate += canonicalBase;
+				const asSCanonicalTemplateDeclarationFact* const exact =
+					FindExactCanonicalTemplateDeclaration(candidate);
+				if( exact != 0 )
+				{
+					resolvedStableKey = exact->stableKey;
+					return exact;
+				}
+			}
+			current = declaration->parent;
+		}
+	}
+
+	const asSCanonicalTemplateDeclarationFact* const exact =
+		FindExactCanonicalTemplateDeclaration(canonicalBase);
+	if( exact != 0 )
+	{
+		resolvedStableKey = exact->stableKey;
+	}
+	return exact;
+}
+
+bool asCSema::IsCanonicalTemplateSubtypeAllowed(
+	const asSCanonicalTemplateDeclarationFact& declaration,
+	const asCQualType& subtype) const
+{
+	const asCType* const canonical = context.GetType(subtype.type);
+	if( canonical == 0 )
+	{
+		return false;
+	}
+
+	bool isValueSubtype = canonical->kind == asAST_TYPE_VOID
+		|| canonical->kind == asAST_TYPE_PRIMITIVE
+		|| canonical->kind == asAST_TYPE_VALUE_OBJECT;
+	bool isReferenceSubtype = canonical->kind == asAST_TYPE_REFERENCE_OBJECT;
+	if( canonical->kind == asAST_TYPE_TEMPLATE )
+	{
+		asCString base;
+		for( asUINT index = 0; index < canonical->stableKey.GetLength(); ++index )
+		{
+			if( canonical->stableKey[index] == '<' )
+			{
+				base.Assign(canonical->stableKey.AddressOf(), index);
+				break;
+			}
+		}
+		const asSCanonicalTemplateDeclarationFact* const nested =
+			FindExactCanonicalTemplateDeclaration(base);
+		if( nested != 0 )
+		{
+			isValueSubtype = (nested->flags & asOBJ_VALUE) != 0;
+			isReferenceSubtype = (nested->flags & asOBJ_REF) != 0;
+		}
+	}
+
+	if( !declaration.acceptValueSubtype && isValueSubtype )
+	{
+		return false;
+	}
+	if( !declaration.acceptReferenceSubtype && isReferenceSubtype )
+	{
+		return false;
+	}
+	return true;
+}
+
+bool asCSema::CanonicalTemplateHasChildFuncdef(
+	const asSCanonicalTemplateDeclarationFact& declaration,
+	const asCString& name) const
+{
+	for( asUINT index = 0;
+		index < declaration.childFuncdefs.GetLength(); ++index )
+	{
+		if( declaration.childFuncdefs[index].Equals(name) )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool asCSema::IsCanonicalNonPrimitiveValueType(
+	const asCQualType& type) const
+{
+	const asCType* const canonical = context.GetType(type.type);
+	if( canonical == 0 )
+	{
+		return false;
+	}
+	if( canonical->kind == asAST_TYPE_VALUE_OBJECT )
+	{
+		return true;
+	}
+	if( canonical->kind != asAST_TYPE_TEMPLATE )
+	{
+		return false;
+	}
+
+	// Template instances intentionally retain one Canonical kind regardless of
+	// the host template's storage category. Recover only that declaration-level
+	// VALUE fact from the pointer-free Sema snapshot; never instantiate the
+	// Runtime application type merely to choose a declaration lifecycle trait.
+	asCString templateBase;
+	for( asUINT index = 0; index < canonical->stableKey.GetLength(); ++index )
+	{
+		if( canonical->stableKey[index] == '<' )
+		{
+			templateBase.Assign(canonical->stableKey.AddressOf(), index);
+			break;
+		}
+	}
+	const asSCanonicalTemplateDeclarationFact* const declaration =
+		templateBase.GetLength() != 0
+			? FindExactCanonicalTemplateDeclaration(templateBase) : 0;
+	return declaration != 0 && (declaration->flags & asOBJ_VALUE) != 0;
+}
+
 asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 {
 	asCString text;
@@ -262,12 +432,34 @@ asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 	}
 	if( isTemplate )
 	{
-		asITypeInfo* const exactTemplate = engine != 0
-			? engine->GetTypeInfoByDecl(text.AddressOf()) : 0;
+		asCString authoredBase;
+		asCString templateSuffix;
+		for( asUINT index = 0; index < text.GetLength(); ++index )
+		{
+			if( text[index] == '<' )
+			{
+				authoredBase.Assign(text.AddressOf(), index);
+				templateSuffix = text.AddressOf() + index;
+				break;
+			}
+		}
+		asCString resolvedBase;
+		const asSCanonicalTemplateDeclarationFact* const declaration =
+			ResolveCanonicalTemplateDeclaration(
+				authoredBase, false, resolvedBase);
+		asCString stableKey = declaration != 0 ? resolvedBase : text;
+		if( declaration != 0 )
+		{
+			stableKey += templateSuffix;
+			if( (declaration->flags & asOBJ_IMPLICIT_HANDLE) != 0 )
+			{
+				quals |= asAST_QUAL_HANDLE;
+			}
+		}
 		return context.InternNamedType(
 			asAST_TYPE_TEMPLATE,
-			text.AddressOf(),
-			RuntimeEffectiveQualifiers(exactTemplate, quals));
+			stableKey.AddressOf(),
+			quals);
 	}
 
 	if( text.Equals("void") ) return context.InternPrimitive(ttVoid, quals);
@@ -436,7 +628,8 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 		asUINT ownerEnd,
 		asUINT& nextChild,
 		asCString& spelling,
-		const asCSourceRange& ownerRange) -> bool
+		const asCSourceRange& ownerRange,
+		asCArray<asCQualType>* argumentTypes) -> bool
 	{
 		if( owner.templateArgumentCount == 0 )
 		{
@@ -487,6 +680,10 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 			{
 				return false;
 			}
+			if( argumentTypes != 0 )
+			{
+				argumentTypes->PushLast(childType);
+			}
 			if( argumentIndex != 0 )
 			{
 				spelling += ",";
@@ -528,7 +725,8 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 	{
 		qualifiedPrefix = "::";
 	}
-	asITypeInfo* templateParent = 0;
+	const asSCanonicalTemplateDeclarationFact* templateParent = 0;
+	asCString templateParentInstanceKey;
 	for( asUINT scopeIndex = 0;
 		scopeIndex < node.scopeSegmentCount; ++scopeIndex )
 	{
@@ -560,12 +758,43 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 			AddDiagnostic("qualtype-action-structure-invalid", segmentRange);
 			return asCQualType();
 		}
+		if( (segment.templateArgumentCount == 0
+				&& segment.firstTemplateArgument != 0)
+			|| (segment.templateArgumentCount != 0
+				&& segment.firstTemplateArgument != segmentIndex + 1) )
+		{
+			AddDiagnostic("qualtype-action-structure-invalid", segmentRange);
+			return asCQualType();
+		}
 
 		asCString segmentSpelling = segment.spelling;
+		const asSCanonicalTemplateDeclarationFact* segmentTemplate = 0;
+		if( segment.templateArgumentCount != 0 )
+		{
+			asCString resolvedBase;
+			const asCString authoredBase =
+				qualifiedPrefix + segment.spelling;
+			segmentTemplate = ResolveCanonicalTemplateDeclaration(
+				authoredBase, node.absoluteScope, resolvedBase);
+			if( segmentTemplate == 0
+				|| segmentTemplate->subtypeCount
+					!= segment.templateArgumentCount )
+			{
+				AddDiagnostic("qualtype-template-instance-invalid", segmentRange);
+				return asCQualType();
+			}
+			segmentSpelling = resolvedBase;
+		}
 		asUINT segmentChild = segmentIndex + 1;
 		const asUINT segmentEnd = segmentIndex + segment.subtreeSize;
+		asCArray<asCQualType> segmentArgumentTypes;
 		if( !appendTemplateArguments(
-			segment, segmentEnd, segmentChild, segmentSpelling, segmentRange) )
+			segment,
+			segmentEnd,
+			segmentChild,
+			segmentSpelling,
+			segmentRange,
+			&segmentArgumentTypes) )
 		{
 			return asCQualType();
 		}
@@ -575,21 +804,29 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 			return asCQualType();
 		}
 
-		if( segment.templateArgumentCount != 0 )
+		if( segmentTemplate != 0 )
 		{
-			const asCString exactParentSpelling =
-				qualifiedPrefix + segmentSpelling;
-			templateParent = engine != 0
-				? engine->GetTypeInfoByDecl(exactParentSpelling.AddressOf()) : 0;
-			if( templateParent == 0
-				|| (templateParent->GetFlags() & asOBJ_TEMPLATE) == 0 )
+			for( asUINT argumentIndex = 0;
+				argumentIndex < segmentArgumentTypes.GetLength(); ++argumentIndex )
 			{
-				AddDiagnostic("qualtype-template-instance-invalid", segmentRange);
-				return asCQualType();
+				if( !IsCanonicalTemplateSubtypeAllowed(
+					*segmentTemplate, segmentArgumentTypes[argumentIndex]) )
+				{
+					AddDiagnostic(
+						"qualtype-template-instance-invalid", segmentRange);
+					return asCQualType();
+				}
 			}
+			templateParent = segmentTemplate;
+			templateParentInstanceKey =
+				CanonicalStructuredTypeKey(segmentSpelling);
+			qualifiedPrefix = templateParentInstanceKey;
+		}
+		else
+		{
+			qualifiedPrefix += segmentSpelling;
 		}
 
-		qualifiedPrefix += segmentSpelling;
 		qualifiedPrefix += "::";
 		childIndex = segmentEnd;
 	}
@@ -607,9 +844,37 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 		return context.InternPrimitive(primitive, node.qualifiers);
 	}
 
+	const asSCanonicalTemplateDeclarationFact* finalTemplate = 0;
 	asCString completeSpelling = qualifiedPrefix + node.spelling;
+	if( (node.templateArgumentCount == 0
+			&& node.firstTemplateArgument != 0)
+		|| (node.templateArgumentCount != 0
+			&& node.firstTemplateArgument != childIndex) )
+	{
+		AddDiagnostic("qualtype-action-structure-invalid", range);
+		return asCQualType();
+	}
+	if( node.templateArgumentCount != 0 )
+	{
+		asCString resolvedBase;
+		finalTemplate = ResolveCanonicalTemplateDeclaration(
+			completeSpelling, node.absoluteScope, resolvedBase);
+		if( finalTemplate == 0
+			|| finalTemplate->subtypeCount != node.templateArgumentCount )
+		{
+			AddDiagnostic("qualtype-template-instance-invalid", range);
+			return asCQualType();
+		}
+		completeSpelling = resolvedBase;
+	}
+	asCArray<asCQualType> finalArgumentTypes;
 	if( !appendTemplateArguments(
-		node, subtreeEnd, childIndex, completeSpelling, range) )
+		node,
+		subtreeEnd,
+		childIndex,
+		completeSpelling,
+		range,
+		&finalArgumentTypes) )
 	{
 		return asCQualType();
 	}
@@ -619,51 +884,56 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 		return asCQualType();
 	}
 
-	if( node.templateArgumentCount == 0
-		&& engine != 0 && engine->IsTemplateType(node.spelling.AddressOf()) )
+	if( node.templateArgumentCount == 0 && templateParent == 0 )
 	{
-		AddDiagnostic("qualtype-template-arity-invalid", range);
-		return asCQualType();
+		asCString resolvedBase;
+		if( ResolveCanonicalTemplateDeclaration(
+			completeSpelling, node.absoluteScope, resolvedBase) != 0 )
+		{
+			AddDiagnostic("qualtype-template-arity-invalid", range);
+			return asCQualType();
+		}
 	}
 
 	const asCString canonicalSpelling =
 		CanonicalStructuredTypeKey(completeSpelling);
-	if( node.templateArgumentCount != 0 )
+	if( finalTemplate != 0 )
 	{
-		asITypeInfo* const exactInstance = engine != 0
-			? engine->GetTypeInfoByDecl(completeSpelling.AddressOf()) : 0;
-		if( exactInstance == 0
-			|| (exactInstance->GetFlags() & asOBJ_TEMPLATE) == 0 )
+		for( asUINT argumentIndex = 0;
+			argumentIndex < finalArgumentTypes.GetLength(); ++argumentIndex )
 		{
-			AddDiagnostic("qualtype-template-instance-invalid", range);
-			return asCQualType();
+			if( !IsCanonicalTemplateSubtypeAllowed(
+				*finalTemplate, finalArgumentTypes[argumentIndex]) )
+			{
+				AddDiagnostic("qualtype-template-instance-invalid", range);
+				return asCQualType();
+			}
+		}
+		asDWORD effectiveQualifiers = node.qualifiers;
+		if( (finalTemplate->flags & asOBJ_IMPLICIT_HANDLE) != 0 )
+		{
+			effectiveQualifiers |= asAST_QUAL_HANDLE;
 		}
 		return context.InternNamedType(
 			asAST_TYPE_TEMPLATE,
 			canonicalSpelling.AddressOf(),
-			RuntimeEffectiveQualifiers(exactInstance, node.qualifiers));
+			effectiveQualifiers);
 	}
 
-	// A template-bearing innermost scope denotes an exact Runtime parent type.
-	// Resolve the final child under that instance, then publish only its kind,
-	// effective qualifiers and authored stable parent/child key. The Engine
-	// pointer and dynamically allocated TypeId remain local resolution inputs.
+	// A template-bearing innermost scope denotes a child of the exact stable
+	// parent instance. The copied host declaration fact proves membership; a
+	// live Runtime parent/child object is created only at generation install.
 	if( templateParent != 0 )
 	{
-		asITypeInfo* const exactChild = engine != 0
-			? engine->GetTypeInfoByDecl(completeSpelling.AddressOf()) : 0;
-		if( exactChild == 0 || exactChild->GetParentType() != templateParent )
+		if( !CanonicalTemplateHasChildFuncdef(*templateParent, node.spelling) )
 		{
 			AddDiagnostic("qualtype-parent-child-invalid", range);
 			return asCQualType();
 		}
-		const asCQualType resolved = InternResolvedRuntimeType(
-			context, engine, exactChild, canonicalSpelling, node.qualifiers);
-		if( !resolved.IsValid() )
-		{
-			AddDiagnostic("qualtype-parent-child-invalid", range);
-		}
-		return resolved;
+		return context.InternNamedType(
+			asAST_TYPE_FUNCDEF,
+			canonicalSpelling.AddressOf(),
+			node.qualifiers);
 	}
 
 	// Qualified nominal types must resolve in the Canonical declaration
@@ -3058,11 +3328,7 @@ bool asCSema::ActOnVariableInitializerAction(
 		if( parent->kind == asAST_DECL_TRANSLATION_UNIT
 			|| parent->kind == asAST_DECL_NAMESPACE )
 		{
-			asCRuntimeTypeBridge bridge(engine);
-			const asCDataType runtimeType = bridge.Resolve(
-				context, variable->type);
-			if( runtimeType.IsValid()
-				&& runtimeType.IsNonPrimitiveValueType() )
+			if( IsCanonicalNonPrimitiveValueType(variable->type) )
 			{
 				context.AddDeclTrait(
 					action.variable, asAST_TRAIT_DEFAULT_INITIALIZED);

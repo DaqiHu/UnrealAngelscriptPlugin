@@ -25,7 +25,17 @@ asCSema::asCSema(
 	, parsedFile(0)
 	, parsedLineOffset(0)
 {
-	(void)engine;
+	RefreshCanonicalTemplateDeclarations();
+}
+
+void asCSema::RefreshCanonicalTemplateDeclarations()
+{
+	canonicalTemplateDeclarations.SetLength(0);
+	if( engine != 0 )
+	{
+		engine->CopyCanonicalTemplateDeclarations(
+			canonicalTemplateDeclarations);
+	}
 }
 
 bool asCSema::PrepareParsedSource(asCScriptCode* script)
@@ -605,6 +615,7 @@ void asCSema::RecordDependency(asASTDeclId owner, const char* key)
 
 asASTDeclId asCSema::ActOnTranslationUnit(const char* moduleName)
 {
+	RefreshCanonicalTemplateDeclarations();
 	return context.CreateTranslationUnit(moduleName);
 }
 

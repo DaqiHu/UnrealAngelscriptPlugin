@@ -8,6 +8,32 @@ BEGIN_AS_NAMESPACE
 class asCScriptEngine;
 class asCModule;
 
+// Construction-time, pointer-free projection of one application-registered
+// template declaration. The Engine owns the live declaration and any eventual
+// instances; Canonical Sema copies only stable language facts needed for type
+// lookup and structural viability. Runtime callback execution remains an
+// install-time validation because it requires a live instance and may execute
+// application code.
+struct asSCanonicalTemplateDeclarationFact
+{
+	asCString stableKey;
+	asQWORD flags;
+	asUINT subtypeCount;
+	bool acceptValueSubtype;
+	bool acceptReferenceSubtype;
+	bool requiresRuntimeValidation;
+	asCArray<asCString> childFuncdefs;
+
+	asSCanonicalTemplateDeclarationFact()
+		: flags(0)
+		, subtypeCount(0)
+		, acceptValueSubtype(true)
+		, acceptReferenceSubtype(true)
+		, requiresRuntimeValidation(false)
+	{
+	}
+};
+
 // Build-local identity for one Parser action result. Parser copies only the
 // logical source section and exact syntax coordinate; Canonical Sema never
 // retains a native Parser-node pointer or decodes the native tree through this
@@ -1409,6 +1435,22 @@ public:
 	void AddDiagnostic(const char* text);
 	void AddDiagnostic(const char* text, const asCSourceRange& range);
 private:
+	void RefreshCanonicalTemplateDeclarations();
+	const asSCanonicalTemplateDeclarationFact*
+		FindExactCanonicalTemplateDeclaration(const asCString& stableKey) const;
+	const asSCanonicalTemplateDeclarationFact*
+		ResolveCanonicalTemplateDeclaration(
+			const asCString& authoredBase,
+			bool absoluteScope,
+			asCString& resolvedStableKey) const;
+	bool IsCanonicalTemplateSubtypeAllowed(
+		const asSCanonicalTemplateDeclarationFact& declaration,
+		const asCQualType& subtype) const;
+	bool CanonicalTemplateHasChildFuncdef(
+		const asSCanonicalTemplateDeclarationFact& declaration,
+		const asCString& name) const;
+	bool IsCanonicalNonPrimitiveValueType(
+		const asCQualType& type) const;
 	void ContextualizeLambdaToFuncdef(
 		asASTExprId inner,
 		const asCQualType& destination,
@@ -1430,6 +1472,9 @@ private:
 	asCASTContext& context;
 	asCArray<asCString> diagnostics;
 	asCArray<asCSourceRange> diagnosticRanges;
+	// Immutable for one Sema/build generation. These copied facts contain no
+	// Engine-local pointer, Parser node or numeric Runtime identity.
+	asCArray<asSCanonicalTemplateDeclarationFact> canonicalTemplateDeclarations;
 	asCArray<asASTStmtId> controlStack;
 	asCArray<asASTDeclId> declContextStack;
 	asASTDeclId lastActedDecl;
