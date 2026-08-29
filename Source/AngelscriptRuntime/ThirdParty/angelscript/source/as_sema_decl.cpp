@@ -1786,6 +1786,362 @@ static bool IsRecordDeclaration(const asCDecl* declaration)
 			|| declaration->kind == asAST_DECL_INTERFACE);
 }
 
+static bool IsCanonicalMethodDeclaration(const asCDecl* declaration)
+{
+	return declaration != 0 && declaration->kind == asAST_DECL_METHOD;
+}
+
+static bool CanonicalMethodSignaturesEqual(
+	const asCASTContext& context,
+	const asCDecl* lhs,
+	const asCDecl* rhs)
+{
+	if( !IsCanonicalMethodDeclaration(lhs)
+		|| !IsCanonicalMethodDeclaration(rhs)
+		|| !lhs->name.Equals(rhs->name)
+		|| lhs->type != rhs->type
+		|| ((lhs->traits & asAST_TRAIT_CONST_METHOD) != 0)
+			!= ((rhs->traits & asAST_TRAIT_CONST_METHOD) != 0) )
+	{
+		return false;
+	}
+
+	asUINT lhsParameterIndex = 0;
+	asUINT rhsParameterIndex = 0;
+	for( ;; )
+	{
+		const asCDecl* lhsParameter = 0;
+		while( lhsParameterIndex < lhs->children.GetLength() )
+		{
+			lhsParameter = context.GetDecl(lhs->children[lhsParameterIndex++]);
+			if( lhsParameter != 0 && lhsParameter->kind == asAST_DECL_PARAM )
+			{
+				break;
+			}
+			lhsParameter = 0;
+		}
+		const asCDecl* rhsParameter = 0;
+		while( rhsParameterIndex < rhs->children.GetLength() )
+		{
+			rhsParameter = context.GetDecl(rhs->children[rhsParameterIndex++]);
+			if( rhsParameter != 0 && rhsParameter->kind == asAST_DECL_PARAM )
+			{
+				break;
+			}
+			rhsParameter = 0;
+		}
+		if( lhsParameter == 0 || rhsParameter == 0 )
+		{
+			return lhsParameter == rhsParameter;
+		}
+		if( lhsParameter->type != rhsParameter->type )
+		{
+			return false;
+		}
+	}
+}
+
+static bool ContainsDeclId(
+	const asCArray<asASTDeclId>& declarations,
+	asASTDeclId declaration)
+{
+	for( asUINT index = 0; index < declarations.GetLength(); ++index )
+	{
+		if( declarations[index] == declaration )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+static void CollectClassChain(
+	const asCASTContext& context,
+	const asCDecl* record,
+	asCArray<asASTDeclId>& classes)
+{
+	const asCDecl* current = record;
+	while( current != 0 )
+	{
+		asASTDeclId nextClass;
+		for( asUINT baseIndex = 0;
+			baseIndex < current->bases.GetLength(); ++baseIndex )
+		{
+			const asCDecl* const base = context.GetDecl(current->bases[baseIndex]);
+			if( base != 0 && base->kind == asAST_DECL_CLASS )
+			{
+				nextClass = base->id;
+				break;
+			}
+		}
+		if( !nextClass.IsValid() || ContainsDeclId(classes, nextClass) )
+		{
+			return;
+		}
+		classes.PushLast(nextClass);
+		current = context.GetDecl(nextClass);
+	}
+}
+
+static void CollectInterfaceClosure(
+	const asCASTContext& context,
+	const asCDecl* record,
+	const asCArray<asASTDeclId>& classChain,
+	asCArray<asASTDeclId>& interfaces)
+{
+	asCArray<asASTDeclId> pending;
+	if( record != 0 )
+	{
+		for( asUINT baseIndex = 0;
+			baseIndex < record->bases.GetLength(); ++baseIndex )
+		{
+			pending.PushLast(record->bases[baseIndex]);
+		}
+	}
+	for( asUINT classIndex = 0;
+		classIndex < classChain.GetLength(); ++classIndex )
+	{
+		const asCDecl* const cls = context.GetDecl(classChain[classIndex]);
+		for( asUINT baseIndex = 0;
+			cls != 0 && baseIndex < cls->bases.GetLength(); ++baseIndex )
+		{
+			pending.PushLast(cls->bases[baseIndex]);
+		}
+	}
+
+	for( asUINT pendingIndex = 0;
+		pendingIndex < pending.GetLength(); ++pendingIndex )
+	{
+		const asCDecl* const base = context.GetDecl(pending[pendingIndex]);
+		if( base == 0 || base->kind != asAST_DECL_INTERFACE
+			|| ContainsDeclId(interfaces, base->id) )
+		{
+			continue;
+		}
+		interfaces.PushLast(base->id);
+		for( asUINT baseIndex = 0;
+			baseIndex < base->bases.GetLength(); ++baseIndex )
+		{
+			pending.PushLast(base->bases[baseIndex]);
+		}
+	}
+}
+
+static asUINT FindExactMethodsInRecord(
+	const asCASTContext& context,
+	const asCDecl* owner,
+	const asCDecl* signature,
+	asASTDeclId& match)
+{
+	match = asASTDeclId();
+	asUINT count = 0;
+	for( asUINT childIndex = 0;
+		owner != 0 && childIndex < owner->children.GetLength(); ++childIndex )
+	{
+		const asCDecl* const child = context.GetDecl(owner->children[childIndex]);
+		if( CanonicalMethodSignaturesEqual(context, child, signature) )
+		{
+			match = child->id;
+			++count;
+		}
+	}
+	return count;
+}
+
+static void AddMethodRelationDiagnostic(
+	asCSema* sema,
+	const char* prefix,
+	const asCDecl* declaration,
+	const asCSourceRange& range)
+{
+	asCString diagnostic = prefix;
+	if( declaration != 0 && declaration->stableKey.GetLength() != 0 )
+	{
+		diagnostic += ":";
+		diagnostic += declaration->stableKey;
+	}
+	sema->AddDiagnostic(diagnostic.AddressOf(), range);
+}
+
+static bool AddCanonicalMethodRelation(
+	asCSema* sema,
+	asASTDeclId owner,
+	asEASTMethodRelationKind kind,
+	asASTDeclId implementation,
+	asASTDeclId requirement)
+{
+	const int status = sema->GetContext().AddMethodRelation(
+		owner,
+		asSASTMethodRelation(kind, implementation, requirement));
+	if( status == asAST_VERIFY_OK )
+	{
+		return true;
+	}
+	sema->AddDiagnostic("method-relation-publication-invalid");
+	return false;
+}
+
+static void FinalizeRecordMethodRelations(
+	asCSema* sema,
+	asASTDeclId recordId)
+{
+	asCASTContext& context = sema->GetContext();
+	const asCDecl* const record = context.GetDecl(recordId);
+	if( record == 0 || record->kind != asAST_DECL_CLASS )
+	{
+		return;
+	}
+
+	asCArray<asASTDeclId> classChain;
+	CollectClassChain(context, record, classChain);
+	asCArray<asASTDeclId> interfaces;
+	CollectInterfaceClosure(context, record, classChain, interfaces);
+
+	asCArray<asASTDeclId> ownMethods;
+	for( asUINT childIndex = 0;
+		childIndex < record->children.GetLength(); ++childIndex )
+	{
+		const asCDecl* const child = context.GetDecl(record->children[childIndex]);
+		if( IsCanonicalMethodDeclaration(child) )
+		{
+			ownMethods.PushLast(child->id);
+		}
+	}
+
+	asCArray<asASTDeclId> relatedOwnMethods;
+	for( asUINT methodIndex = 0;
+		methodIndex < ownMethods.GetLength(); ++methodIndex )
+	{
+		const asCDecl* const method = context.GetDecl(ownMethods[methodIndex]);
+		for( asUINT classIndex = 0;
+			classIndex < classChain.GetLength(); ++classIndex )
+		{
+			asASTDeclId target;
+			const asUINT count = FindExactMethodsInRecord(
+				context, context.GetDecl(classChain[classIndex]), method, target);
+			if( count > 1 )
+			{
+				AddMethodRelationDiagnostic(
+					sema, "method-override-target-ambiguous", method, method->range);
+				break;
+			}
+			if( count == 1 )
+			{
+				if( AddCanonicalMethodRelation(
+					sema,
+					recordId,
+					asAST_METHOD_RELATION_BASE_OVERRIDE,
+					method->id,
+					target) )
+				{
+					relatedOwnMethods.PushLast(method->id);
+				}
+				break;
+			}
+		}
+	}
+
+	for( asUINT interfaceIndex = 0;
+		interfaceIndex < interfaces.GetLength(); ++interfaceIndex )
+	{
+		const asCDecl* const interfaceDecl =
+			context.GetDecl(interfaces[interfaceIndex]);
+		for( asUINT childIndex = 0;
+			interfaceDecl != 0
+				&& childIndex < interfaceDecl->children.GetLength(); ++childIndex )
+		{
+			const asCDecl* const requirement =
+				context.GetDecl(interfaceDecl->children[childIndex]);
+			if( !IsCanonicalMethodDeclaration(requirement) )
+			{
+				continue;
+			}
+
+			asASTDeclId implementation;
+			bool ambiguous = false;
+			asASTDeclId candidate;
+			asUINT count = FindExactMethodsInRecord(
+				context, record, requirement, candidate);
+			if( count > 1 )
+			{
+				ambiguous = true;
+			}
+			else if( count == 1 )
+			{
+				implementation = candidate;
+			}
+			else
+			{
+				for( asUINT classIndex = 0;
+					classIndex < classChain.GetLength(); ++classIndex )
+				{
+					count = FindExactMethodsInRecord(
+						context,
+						context.GetDecl(classChain[classIndex]),
+						requirement,
+						candidate);
+					if( count > 1 )
+					{
+						ambiguous = true;
+						break;
+					}
+					if( count == 1 )
+					{
+						implementation = candidate;
+						break;
+					}
+				}
+			}
+
+			if( ambiguous )
+			{
+				AddMethodRelationDiagnostic(
+					sema,
+					"interface-method-implementation-ambiguous",
+					requirement,
+					requirement->range);
+				continue;
+			}
+			if( !implementation.IsValid() )
+			{
+				AddMethodRelationDiagnostic(
+					sema,
+					"interface-method-implementation-missing",
+					requirement,
+					record->range);
+				continue;
+			}
+			if( AddCanonicalMethodRelation(
+				sema,
+				recordId,
+				asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+				implementation,
+				requirement->id)
+				&& ContainsDeclId(ownMethods, implementation)
+				&& !ContainsDeclId(relatedOwnMethods, implementation) )
+			{
+				relatedOwnMethods.PushLast(implementation);
+			}
+		}
+	}
+
+	for( asUINT methodIndex = 0;
+		methodIndex < ownMethods.GetLength(); ++methodIndex )
+	{
+		const asCDecl* const method = context.GetDecl(ownMethods[methodIndex]);
+		if( method != 0
+			&& (method->traits & asAST_TRAIT_OVERRIDE) != 0
+			&& !ContainsDeclId(relatedOwnMethods, method->id) )
+		{
+			AddMethodRelationDiagnostic(
+				sema,
+				"method-override-target-missing",
+				method,
+				method->range);
+		}
+	}
+}
+
 static bool IsGlobalOrFieldVariableParent(const asCDecl* declaration)
 {
 	return declaration != 0
@@ -2505,6 +2861,7 @@ void asCSema::ActOnRecordFinishAction(asASTDeclId recordDecl)
 		AddDiagnostic("record-finish-owner-invalid");
 		return;
 	}
+	FinalizeRecordMethodRelations(this, recordDecl);
 	if( declaration->kind == asAST_DECL_CLASS )
 	{
 		EnsureGeneratedLifecycle(this, recordDecl);

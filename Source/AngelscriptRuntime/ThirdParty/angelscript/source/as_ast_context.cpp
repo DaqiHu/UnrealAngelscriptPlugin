@@ -726,6 +726,46 @@ int asCASTContext::AddBase(asASTDeclId id, asASTDeclId base)
 	return asAST_VERIFY_OK;
 }
 
+int asCASTContext::AddMethodRelation(
+	asASTDeclId owner,
+	const asSASTMethodRelation& relation)
+{
+	if( RejectPostSealMutation() != asAST_VERIFY_OK )
+	{
+		return asAST_VERIFY_POST_SEAL_MUTATION;
+	}
+	asCDecl* const declaration = MutableDecl(owner);
+	if( declaration == 0
+		|| GetDecl(relation.implementation) == 0
+		|| GetDecl(relation.requirement) == 0 )
+	{
+		return asAST_VERIFY_DANGLING_ID;
+	}
+	if( relation.kind != asAST_METHOD_RELATION_BASE_OVERRIDE
+		&& relation.kind != asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION )
+	{
+		return asAST_VERIFY_WRONG_KIND;
+	}
+	if( relation.implementation == relation.requirement )
+	{
+		return asAST_VERIFY_INVALID_CHILD;
+	}
+	for( asUINT index = 0;
+		index < declaration->methodRelations.GetLength(); ++index )
+	{
+		const asSASTMethodRelation& existing =
+			declaration->methodRelations[index];
+		if( existing.kind == relation.kind
+			&& existing.implementation == relation.implementation
+			&& existing.requirement == relation.requirement )
+		{
+			return asAST_VERIFY_INVALID_CHILD;
+		}
+	}
+	declaration->methodRelations.PushLast(relation);
+	return asAST_VERIFY_OK;
+}
+
 int asCASTContext::SetDefaultArg(asASTDeclId id, const char* text)
 {
 	if( RejectPostSealMutation() != asAST_VERIFY_OK )

@@ -62,6 +62,9 @@ public:
 	int ClearDeclDependencies(asASTDeclId id);
 	int SetOrigin(asASTDeclId id, const char* origin);
 	int AddBase(asASTDeclId id, asASTDeclId base);
+	int AddMethodRelation(
+		asASTDeclId owner,
+		const asSASTMethodRelation& relation);
 	int SetDefaultArg(asASTDeclId id, const char* text);
 	int SetDeclConstantValue(asASTDeclId id, asQWORD value);
 	int SetDeclByteOffset(asASTDeclId id, int byteOffset);

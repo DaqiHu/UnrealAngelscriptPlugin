@@ -9,6 +9,37 @@
 
 BEGIN_AS_NAMESPACE
 
+// Snapshot-local semantic relationships between authored method declarations.
+// These identities are the durable Canonical fact; Runtime function ids,
+// vfTableIdx values and interface offsets are derived for one generation only.
+enum asEASTMethodRelationKind : asBYTE
+{
+	asAST_METHOD_RELATION_BASE_OVERRIDE = 0,
+	asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION,
+};
+
+struct asSASTMethodRelation
+{
+	asEASTMethodRelationKind kind;
+	asASTDeclId implementation;
+	asASTDeclId requirement;
+
+	asSASTMethodRelation()
+		: kind(asAST_METHOD_RELATION_BASE_OVERRIDE)
+	{
+	}
+
+	asSASTMethodRelation(
+		asEASTMethodRelationKind inKind,
+		asASTDeclId inImplementation,
+		asASTDeclId inRequirement)
+		: kind(inKind)
+		, implementation(inImplementation)
+		, requirement(inRequirement)
+	{
+	}
+};
+
 // Writers use asCASTContext construction APIs. Fields stay public POD for placement-new.
 class ANGELSCRIPTRUNTIME_API asCDecl
 {
@@ -31,6 +62,7 @@ public:
 	asCString defaultArg;
 	asCArray<asCString> dependencies;
 	asCArray<asASTDeclId> bases;
+	asCArray<asSASTMethodRelation> methodRelations;
 	asCArray<asASTExprId> inits;
 	int byteOffset;
 	int byteSize;
