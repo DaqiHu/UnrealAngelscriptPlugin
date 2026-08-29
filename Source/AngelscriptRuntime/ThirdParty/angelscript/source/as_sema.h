@@ -619,10 +619,17 @@ struct asSParameterDeclAction
 	asCQualType type;
 	asUINT beginOffset;
 	asUINT endOffset;
+	// Lambda grammar permits an omitted formal type. Keep that syntax fact
+	// explicit instead of manufacturing a durable ERROR type or treating a
+	// missing ParamDecl as semantic absence. Sema accepts an invalid QualType
+	// only for this construction-only Lambda action and must replace it before
+	// the graph can become publishable.
+	bool typeOmitted;
 
 	asSParameterDeclAction()
 		: beginOffset(0)
 		, endOffset(0)
+		, typeOmitted(false)
 	{
 	}
 };
@@ -1400,6 +1407,10 @@ private:
 		asASTExprId inner,
 		const asCQualType& destination,
 		const asCSourceRange& range);
+	bool ReconcileContextualLambdaBody(
+		asASTDeclId lambda,
+		const asCQualType& expectedReturn,
+		const asCSourceRange& range);
 	asCQualType ActOnQualTypeSyntaxNode(
 		const asSQualTypeSyntaxAction& action,
 		asUINT nodeIndex,
@@ -1439,6 +1450,10 @@ private:
 		asASTDeclId lambda;
 		asUINT parameterCount;
 		asUINT explicitlyTypedParameterCount;
+		// Construction-only identities of formals whose source type was omitted.
+		// The ParamDecls themselves become fully typed before publication; this
+		// list is never copied to snapshots, providers, relocations, or Cache.
+		asCArray<asASTDeclId> omittedParameters;
 		asCString boundFuncdefKey;
 	};
 	asCArray<asSLambdaSyntaxFact> lambdaSyntaxFacts;

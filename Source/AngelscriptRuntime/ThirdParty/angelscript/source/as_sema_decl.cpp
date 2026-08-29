@@ -719,7 +719,8 @@ asASTDeclId asCSema::ActOnParameterDeclAction(
 {
 	lastActedDecl = asASTDeclId();
 	if( !action.callable.IsValid()
-		|| !action.type.IsValid()
+		|| (!action.typeOmitted && !action.type.IsValid())
+		|| (action.typeOmitted && action.type.IsValid())
 		|| action.endOffset <= action.beginOffset
 		|| !PrepareParsedSource(script) )
 	{
@@ -740,7 +741,15 @@ asASTDeclId asCSema::ActOnParameterDeclAction(
 		AddDiagnostic("parameter-decl-owner-invalid");
 		return asASTDeclId();
 	}
-	if( context.GetType(action.type.type) == 0 )
+	const bool lambdaOwner = owner != 0
+		&& owner->kind == asAST_DECL_FUNCTION
+		&& (owner->traits & asAST_TRAIT_LAMBDA) != 0;
+	if( action.typeOmitted && !lambdaOwner )
+	{
+		AddDiagnostic("parameter-decl-omitted-type-owner-invalid");
+		return asASTDeclId();
+	}
+	if( !action.typeOmitted && context.GetType(action.type.type) == 0 )
 	{
 		AddDiagnostic("parameter-decl-type-invalid");
 		return asASTDeclId();
@@ -763,7 +772,42 @@ asASTDeclId asCSema::ActOnParameterDeclAction(
 		AddDiagnostic("parameter-decl-action-invalid", range);
 		return asASTDeclId();
 	}
-	if( const asCType* const named = context.GetType(action.type.type) )
+	if( action.typeOmitted )
+	{
+		bool recorded = false;
+		for( asUINT factIndex = 0;
+			factIndex < lambdaSyntaxFacts.GetLength(); ++factIndex )
+		{
+			asSLambdaSyntaxFact& fact = lambdaSyntaxFacts[factIndex];
+			if( fact.lambda != action.callable )
+			{
+				continue;
+			}
+			recorded = true;
+			bool present = false;
+			for( asUINT omittedIndex = 0;
+				omittedIndex < fact.omittedParameters.GetLength();
+				++omittedIndex )
+			{
+				if( fact.omittedParameters[omittedIndex] == parameter )
+				{
+					present = true;
+					break;
+				}
+			}
+			if( !present )
+			{
+				fact.omittedParameters.PushLast(parameter);
+			}
+			break;
+		}
+		if( !recorded )
+		{
+			AddDiagnostic("lambda-omitted-formal-state-invalid", range);
+			return asASTDeclId();
+		}
+	}
+	else if( const asCType* const named = context.GetType(action.type.type) )
 	{
 		if( named->kind != asAST_TYPE_PRIMITIVE
 			&& named->kind != asAST_TYPE_VOID

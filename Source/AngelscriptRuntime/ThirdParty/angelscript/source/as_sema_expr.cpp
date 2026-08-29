@@ -2333,7 +2333,8 @@ static bool QualTypeIsPrimitiveNumeric(
 
 static void ReconcileDeferredPrimitiveBinaryParents(
 	asCSema& sema,
-	asCASTContext& context)
+	asCASTContext& context,
+	const asCArray<asBYTE>* allowedExpressions)
 {
 	// A deferred name first enters the graph as an ERROR-typed recovery child.
 	// Binary parents are nevertheless created immediately so source topology is
@@ -2349,6 +2350,12 @@ static void ReconcileDeferredPrimitiveBinaryParents(
 		for( asUINT expressionIndex = 1;
 			expressionIndex <= expressionCount; ++expressionIndex )
 		{
+			if( allowedExpressions != 0
+				&& (expressionIndex >= allowedExpressions->GetLength()
+					|| (*allowedExpressions)[expressionIndex] == 0) )
+			{
+				continue;
+			}
 			const asCExpr* const binary = context.GetExpr(
 				asASTExprId(expressionIndex));
 			if( binary == 0 || binary->kind != asAST_EXPR_BINARY
@@ -2430,6 +2437,12 @@ static void ReconcileDeferredPrimitiveBinaryParents(
 	for( asUINT expressionIndex = 1;
 		expressionIndex <= expressionCount; ++expressionIndex )
 	{
+		if( allowedExpressions != 0
+			&& (expressionIndex >= allowedExpressions->GetLength()
+				|| (*allowedExpressions)[expressionIndex] == 0) )
+		{
+			continue;
+		}
 		const asCExpr* const conversion = context.GetExpr(
 			asASTExprId(expressionIndex));
 		if( conversion == 0 || conversion->kind != asAST_EXPR_CONVERSION
@@ -2444,6 +2457,189 @@ static void ReconcileDeferredPrimitiveBinaryParents(
 			context.ReplaceExprUses(conversion->id, child->id);
 		}
 	}
+}
+
+bool asCSema::ReconcileContextualLambdaBody(
+	asASTDeclId lambdaId,
+	const asCQualType& expectedReturn,
+	const asCSourceRange& range)
+{
+	const asCDecl* const lambda = context.GetDecl(lambdaId);
+	if( lambda == 0 || (lambda->traits & asAST_TRAIT_LAMBDA) == 0
+		|| !lambda->body.IsValid() || !expectedReturn.IsValid() )
+	{
+		AddDiagnostic("lambda-contextual-body-invalid", range);
+		return false;
+	}
+
+	// Build a bounded reachability mask from this Lambda's exact body. Nested
+	// Lambda bodies are separate declarations and are intentionally not entered.
+	// Contextual inference therefore cannot re-type an unrelated function or a
+	// later parser section as a side effect.
+	asCArray<asBYTE> reachableStatements;
+	reachableStatements.SetLength(context.GetStmtCount() + 1);
+	for( asUINT i = 0; i < reachableStatements.GetLength(); ++i )
+	{
+		reachableStatements[i] = 0;
+	}
+	asCArray<asBYTE> reachableExpressions;
+	reachableExpressions.SetLength(context.GetExprCount() + 1);
+	for( asUINT i = 0; i < reachableExpressions.GetLength(); ++i )
+	{
+		reachableExpressions[i] = 0;
+	}
+	asCArray<asASTStmtId> statementStack;
+	asCArray<asASTExprId> expressionStack;
+	statementStack.PushLast(lambda->body);
+	while( statementStack.GetLength() != 0 )
+	{
+		const asASTStmtId statementId = statementStack.PopLast();
+		if( !statementId.IsValid()
+			|| statementId.value >= reachableStatements.GetLength()
+			|| reachableStatements[statementId.value] != 0 )
+		{
+			continue;
+		}
+		const asCStmt* const statement = context.GetStmt(statementId);
+		if( statement == 0 || statement->owner != lambdaId )
+		{
+			AddDiagnostic("lambda-contextual-body-owner-invalid", range);
+			return false;
+		}
+		reachableStatements[statementId.value] = 1;
+		if( statement->expr.IsValid() )
+		{
+			expressionStack.PushLast(statement->expr);
+		}
+		if( const asCDecl* const declaration = context.GetDecl(statement->decl) )
+		{
+			for( asUINT initIndex = 0;
+				initIndex < declaration->inits.GetLength(); ++initIndex )
+			{
+				expressionStack.PushLast(declaration->inits[initIndex]);
+			}
+		}
+		for( asUINT childIndex = 0;
+			childIndex < statement->children.GetLength(); ++childIndex )
+		{
+			statementStack.PushLast(statement->children[childIndex]);
+		}
+	}
+	while( expressionStack.GetLength() != 0 )
+	{
+		const asASTExprId expressionId = expressionStack.PopLast();
+		if( !expressionId.IsValid()
+			|| expressionId.value >= reachableExpressions.GetLength()
+			|| reachableExpressions[expressionId.value] != 0 )
+		{
+			continue;
+		}
+		const asCExpr* const expression = context.GetExpr(expressionId);
+		if( expression == 0 )
+		{
+			AddDiagnostic("lambda-contextual-expression-invalid", range);
+			return false;
+		}
+		reachableExpressions[expressionId.value] = 1;
+		if( expression->receiver.IsValid() )
+		{
+			expressionStack.PushLast(expression->receiver);
+		}
+		for( asUINT childIndex = 0;
+			childIndex < expression->children.GetLength(); ++childIndex )
+		{
+			expressionStack.PushLast(expression->children[childIndex]);
+		}
+	}
+
+	// Parameter identity already existed while parsing the body. Replace only
+	// references to this Lambda's own ParamDecls, preserving lexical shadowing
+	// and every unrelated declaration binding.
+	for( asUINT expressionIndex = 1;
+		expressionIndex < reachableExpressions.GetLength(); ++expressionIndex )
+	{
+		if( reachableExpressions[expressionIndex] == 0 )
+		{
+			continue;
+		}
+		const asCExpr* const expression = context.GetExpr(
+			asASTExprId(expressionIndex));
+		if( expression == 0 || expression->kind != asAST_EXPR_DECL_REF )
+		{
+			continue;
+		}
+		const asCDecl* const declaration = context.GetDecl(
+			expression->resolvedDecl);
+		if( declaration == 0 || declaration->kind != asAST_DECL_PARAM
+			|| declaration->parent != lambdaId || !declaration->type.IsValid() )
+		{
+			continue;
+		}
+		context.SetExprType(expression->id, declaration->type);
+		for( asUINT diagnosticIndex = diagnostics.GetLength();
+			diagnosticIndex > 0; --diagnosticIndex )
+		{
+			const asUINT index = diagnosticIndex - 1;
+			if( index < diagnosticRanges.GetLength()
+				&& diagnosticRanges[index] == expression->range
+				&& diagnostics[index].StartsWith("unresolved-identifier:") )
+			{
+				diagnostics.RemoveIndex(index);
+				diagnosticRanges.RemoveIndex(index);
+			}
+		}
+	}
+
+	ReconcileDeferredPrimitiveBinaryParents(
+		*this, context, &reachableExpressions);
+
+	// Return conversions were provisionally selected before the contextual
+	// signature existed. Reconcile numeric returns from the exact body result;
+	// all other mismatches fail Sema rather than becoming backend inference.
+	const asCType* const expectedReturnType = context.GetType(expectedReturn.type);
+	for( asUINT statementIndex = 1;
+		statementIndex < reachableStatements.GetLength(); ++statementIndex )
+	{
+		if( reachableStatements[statementIndex] == 0 )
+		{
+			continue;
+		}
+		const asCStmt* const statement = context.GetStmt(
+			asASTStmtId(statementIndex));
+		if( statement == 0 || statement->kind != asAST_STMT_RETURN )
+		{
+			continue;
+		}
+		const asCExpr* const returned = context.GetExpr(statement->expr);
+		if( returned == 0 )
+		{
+			if( expectedReturnType == 0
+				|| expectedReturnType->kind != asAST_TYPE_VOID )
+			{
+				AddDiagnostic("lambda-funcdef-return-type-mismatch", statement->range);
+				return false;
+			}
+			continue;
+		}
+		if( returned->type == expectedReturn )
+		{
+			continue;
+		}
+		const asCType* returnedType = 0;
+		const asCType* resolvedExpected = 0;
+		if( QualTypeIsPrimitiveNumeric(context, returned->type, returnedType)
+			&& QualTypeIsPrimitiveNumeric(
+				context, expectedReturn, resolvedExpected) )
+		{
+			const asASTExprId conversion = ActOnConversion(
+				returned->id, expectedReturn, statement->range);
+			context.SetStmtExpr(statement->id, conversion);
+			continue;
+		}
+		AddDiagnostic("lambda-funcdef-return-type-mismatch", statement->range);
+		return false;
+	}
+	return true;
 }
 
 void asCSema::ResolveDeferredNames()
@@ -2743,7 +2939,7 @@ void asCSema::ResolveDeferredNames()
 		}
 	}
 	deferredDeclRefs = unresolvedRefs;
-	ReconcileDeferredPrimitiveBinaryParents(*this, context);
+	ReconcileDeferredPrimitiveBinaryParents(*this, context, 0);
 }
 
 asASTExprId asCSema::ActOnPostfixCallExpr(asASTDeclId owner, asASTExprId calleeExpr, const asCArray<asASTExprId>& args, const asCSourceRange& range, const asCArray<asCString>* argumentNames)

@@ -589,6 +589,66 @@ namespace CanonicalASTSemaAuthorityTest
 		return false;
 	}
 
+	static const asCDecl* FindOnlyLambdaDecl(asCASTContext& Context)
+	{
+		const asCDecl* Lambda = nullptr;
+		for (asUINT i = 1; i <= Context.GetDeclCount(); ++i)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(i));
+			if (Decl == nullptr || (Decl->traits & asAST_TRAIT_LAMBDA) == 0)
+			{
+				continue;
+			}
+			if (Lambda != nullptr)
+			{
+				return nullptr;
+			}
+			Lambda = Decl;
+		}
+		return Lambda;
+	}
+
+	static const asCDecl* FindOnlyParameterDecl(
+		asCASTContext& Context,
+		const asCDecl* Callable)
+	{
+		if (Callable == nullptr)
+		{
+			return nullptr;
+		}
+		const asCDecl* Parameter = nullptr;
+		for (asUINT i = 0; i < Callable->children.GetLength(); ++i)
+		{
+			const asCDecl* const Child = Context.GetDecl(Callable->children[i]);
+			if (Child == nullptr || Child->kind != asAST_DECL_PARAM)
+			{
+				continue;
+			}
+			if (Parameter != nullptr)
+			{
+				return nullptr;
+			}
+			Parameter = Child;
+		}
+		return Parameter;
+	}
+
+	static const asCStmt* FindOwnedStmtOfKind(
+		asCASTContext& Context,
+		asASTDeclId Owner,
+		asEASTStmtKind Kind)
+	{
+		for (asUINT i = 1; i <= Context.GetStmtCount(); ++i)
+		{
+			const asCStmt* const Stmt = Context.GetStmt(asASTStmtId(i));
+			if (Stmt != nullptr && Stmt->owner == Owner && Stmt->kind == Kind)
+			{
+				return Stmt;
+			}
+		}
+		return nullptr;
+	}
+
 }
 
 TEST_CLASS_WITH_FLAGS(FCanonicalASTSemaAuthorityTests,
@@ -21634,6 +21694,118 @@ public:
 			&& LambdaRef->resolvedDecl == Lambda->id, *Evidence));
 	}
 
+	TEST_METHOD(ParserOmittedLambdaParameterInfersFuncdefAndRetypesBody)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef("bool BoolCallback(int)") >= 0,
+			TEXT("omitted-formal local fixture needs host BoolCallback")));
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaOmittedLambdaLocal");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaOmittedLambdaLocal module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Entry()
+			{
+				BoolCallback Stored = function(Value)
+				{
+					return Value > 0;
+				};
+				return Stored(1) ? 1 : 0;
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaOmittedLambdaLocal.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("omitted-formal Lambda remains valid source syntax")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("contextual Lambda inference must publish a verifier-complete graph")));
+
+		const asCDecl* const Lambda =
+			CanonicalASTSemaAuthorityTest::FindOnlyLambdaDecl(Context);
+		const asCDecl* const Parameter =
+			CanonicalASTSemaAuthorityTest::FindOnlyParameterDecl(Context, Lambda);
+		const asCStmt* const ReturnStmt = Lambda != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				Context, Lambda->id, asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* const Comparison = ReturnStmt != nullptr
+			? Context.GetExpr(ReturnStmt->expr) : nullptr;
+		const asCExpr* const ParameterRef = Comparison != nullptr
+			&& Comparison->children.GetLength() == 2
+			? Context.GetExpr(Comparison->children[0]) : nullptr;
+		const asCType* const LambdaReturnType = Lambda != nullptr
+			? Context.GetType(Lambda->type.type) : nullptr;
+		const asCType* const ParameterType = Parameter != nullptr
+			? Context.GetType(Parameter->type.type) : nullptr;
+		const asCType* const ParameterRefType = ParameterRef != nullptr
+			? Context.GetType(ParameterRef->type.type) : nullptr;
+		const asCType* const ComparisonType = Comparison != nullptr
+			? Context.GetType(Comparison->type.type) : nullptr;
+		bool bHasTargetDependency = false;
+		if (Lambda != nullptr)
+		{
+			for (asUINT i = 0; i < Lambda->dependencies.GetLength(); ++i)
+			{
+				if (Lambda->dependencies[i].Equals("BoolCallback"))
+				{
+					bHasTargetDependency = true;
+					break;
+				}
+			}
+		}
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Diagnostics =
+			CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema);
+		const FString Evidence = FString::Printf(
+			TEXT("omitted Lambda formal must be inferred and its complete body retyped before seal. diagnostics:\n%s\nAST:\n%s"),
+			*Diagnostics,
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(Diagnostics.IsEmpty(), *Evidence));
+		ASSERT_THAT(IsTrue(Lambda != nullptr
+			&& LambdaReturnType != nullptr
+			&& LambdaReturnType->kind == asAST_TYPE_PRIMITIVE
+			&& LambdaReturnType->stableKey.Equals("bool")
+			&& std::strstr(Lambda->stableKey.AddressOf(), "<lambda>(int)@") != nullptr,
+			*Evidence));
+		ASSERT_THAT(IsTrue(Parameter != nullptr
+			&& Parameter->name.Equals("Value")
+			&& ParameterType != nullptr
+			&& ParameterType->kind == asAST_TYPE_PRIMITIVE
+			&& ParameterType->stableKey.Equals("int")
+			&& Parameter->type.quals == 0,
+			*Evidence));
+		ASSERT_THAT(IsTrue(ReturnStmt != nullptr
+			&& Comparison != nullptr
+			&& Comparison->kind == asAST_EXPR_BINARY
+			&& Comparison->literal.Equals(">")
+			&& ComparisonType != nullptr
+			&& ComparisonType->kind == asAST_TYPE_PRIMITIVE
+			&& ComparisonType->stableKey.Equals("bool"),
+			*Evidence));
+		ASSERT_THAT(IsTrue(Parameter != nullptr
+			&& ParameterRef != nullptr
+			&& ParameterRef->kind == asAST_EXPR_DECL_REF
+			&& ParameterRef->resolvedDecl == Parameter->id
+			&& ParameterRefType != nullptr
+			&& ParameterRefType->kind == asAST_TYPE_PRIMITIVE
+			&& ParameterRefType->stableKey.Equals("int")
+			&& ParameterRef->type == Parameter->type,
+			*Evidence));
+		ASSERT_THAT(IsTrue(bHasTargetDependency, *Evidence));
+	}
+
 	TEST_METHOD(ParserCallArgumentContextuallyBindsLambdaToExactFuncdefSignature)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
@@ -21715,6 +21887,124 @@ public:
 		ASSERT_THAT(IsTrue(LambdaReturn != nullptr
 			&& LambdaReturn->kind == asAST_TYPE_PRIMITIVE
 			&& LambdaReturn->stableKey.Equals("bool"), *Evidence));
+		ASSERT_THAT(IsNotNull(ContextualConversion, *Evidence));
+	}
+
+	TEST_METHOD(ParserCallArgumentOmittedLambdaParameterInfersFuncdefAndRetypesBody)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef("bool BoolCallback(int)") >= 0,
+			TEXT("omitted-formal call fixture needs host BoolCallback")));
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaOmittedLambdaCall");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaOmittedLambdaCall module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			bool Invoke(BoolCallback Callback, int Value)
+			{
+				return Callback(Value);
+			}
+
+			int Entry()
+			{
+				return Invoke(function(Value)
+				{
+					return Value > 0;
+				}, 1) ? 1 : 0;
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaOmittedLambdaCall.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("omitted-formal call Lambda remains valid source syntax")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("call-context Lambda inference must publish a verifier-complete graph")));
+
+		const asCDecl* const Lambda =
+			CanonicalASTSemaAuthorityTest::FindOnlyLambdaDecl(Context);
+		const asCDecl* const Parameter =
+			CanonicalASTSemaAuthorityTest::FindOnlyParameterDecl(Context, Lambda);
+		const asCStmt* const ReturnStmt = Lambda != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				Context, Lambda->id, asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* const Comparison = ReturnStmt != nullptr
+			? Context.GetExpr(ReturnStmt->expr) : nullptr;
+		const asCExpr* const ParameterRef = Comparison != nullptr
+			&& Comparison->children.GetLength() == 2
+			? Context.GetExpr(Comparison->children[0]) : nullptr;
+		const asCType* const LambdaReturnType = Lambda != nullptr
+			? Context.GetType(Lambda->type.type) : nullptr;
+		const asCType* const ParameterType = Parameter != nullptr
+			? Context.GetType(Parameter->type.type) : nullptr;
+		const asCType* const ComparisonType = Comparison != nullptr
+			? Context.GetType(Comparison->type.type) : nullptr;
+		const asCExpr* ContextualConversion = nullptr;
+		for (asUINT i = 1; i <= Context.GetExprCount(); ++i)
+		{
+			const asCExpr* const Expr = Context.GetExpr(asASTExprId(i));
+			const asCType* const Type = Expr != nullptr
+				? Context.GetType(Expr->type.type) : nullptr;
+			if (Expr != nullptr && Expr->kind == asAST_EXPR_CONVERSION
+				&& Type != nullptr && Type->kind == asAST_TYPE_FUNCDEF
+				&& Type->stableKey.Equals("BoolCallback")
+				&& Expr->children.GetLength() == 1)
+			{
+				const asCExpr* const Child = Context.GetExpr(Expr->children[0]);
+				if (Child != nullptr && Lambda != nullptr
+					&& Child->resolvedDecl == Lambda->id)
+				{
+					ContextualConversion = Expr;
+					break;
+				}
+			}
+		}
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Diagnostics =
+			CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema);
+		const FString Evidence = FString::Printf(
+			TEXT("ordinary call formal must contextually infer the omitted Lambda formal and retype its body before seal. diagnostics:\n%s\nAST:\n%s"),
+			*Diagnostics,
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(Diagnostics.IsEmpty(), *Evidence));
+		ASSERT_THAT(IsTrue(Lambda != nullptr
+			&& LambdaReturnType != nullptr
+			&& LambdaReturnType->kind == asAST_TYPE_PRIMITIVE
+			&& LambdaReturnType->stableKey.Equals("bool"),
+			*Evidence));
+		ASSERT_THAT(IsTrue(Parameter != nullptr
+			&& Parameter->name.Equals("Value")
+			&& ParameterType != nullptr
+			&& ParameterType->kind == asAST_TYPE_PRIMITIVE
+			&& ParameterType->stableKey.Equals("int")
+			&& Parameter->type.quals == 0,
+			*Evidence));
+		ASSERT_THAT(IsTrue(ReturnStmt != nullptr
+			&& Comparison != nullptr
+			&& Comparison->kind == asAST_EXPR_BINARY
+			&& Comparison->literal.Equals(">")
+			&& ComparisonType != nullptr
+			&& ComparisonType->kind == asAST_TYPE_PRIMITIVE
+			&& ComparisonType->stableKey.Equals("bool"),
+			*Evidence));
+		ASSERT_THAT(IsTrue(Parameter != nullptr
+			&& ParameterRef != nullptr
+			&& ParameterRef->kind == asAST_EXPR_DECL_REF
+			&& ParameterRef->resolvedDecl == Parameter->id
+			&& ParameterRef->type == Parameter->type,
+			*Evidence));
 		ASSERT_THAT(IsNotNull(ContextualConversion, *Evidence));
 	}
 

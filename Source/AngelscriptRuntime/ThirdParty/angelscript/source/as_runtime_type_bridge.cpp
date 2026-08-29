@@ -133,6 +133,65 @@ void asCRuntimeTypeBridge::NormalizeScriptParameterABI(
 	}
 }
 
+asCQualType asCRuntimeTypeBridge::FromScriptParameterABI(
+	asCASTContext& context,
+	const asCDataType& dataType,
+	asETypeModifiers passing) const
+{
+	asCDataType sourceType = dataType;
+	const asCTypeInfo* const typeInfo = sourceType.GetTypeInfo();
+	const bool normalizedValueObject = typeInfo != 0
+		&& (typeInfo->GetFlags() & asOBJ_VALUE) != 0
+		&& sourceType.IsReference()
+		&& sourceType.IsReadOnly()
+		&& passing == asTM_INOUTREF;
+	if( normalizedValueObject )
+	{
+		// This is the exact inverse of NormalizeScriptParameterABI and matches
+		// asCScriptFunction::GetDeclarationStr(forDisplay=true). Runtime shells
+		// do not preserve a distinction from an explicitly authored const
+		// value-object &inout; a Canonical FuncDefDecl remains authoritative when
+		// that source distinction is available.
+		sourceType.MakeReference(false);
+		sourceType.MakeReadOnly(false);
+		passing = asTM_NONE;
+	}
+	else if( sourceType.IsPrimitive() && !sourceType.IsReference()
+		&& sourceType.IsReadOnly() && passing == asTM_NONE )
+	{
+		// Primitive by-value constness belongs only to the live script shell ABI.
+		sourceType.MakeReadOnly(false);
+	}
+
+	asCQualType result = FromDataType(context, sourceType);
+	if( !result.IsValid() )
+	{
+		return result;
+	}
+	if( passing != asTM_NONE )
+	{
+		result.quals |= asAST_QUAL_REFERENCE;
+		if( passing == asTM_INREF )
+		{
+			result.quals |= asAST_QUAL_IN;
+		}
+		else if( passing == asTM_OUTREF )
+		{
+			result.quals |= asAST_QUAL_OUT;
+		}
+		else if( passing == asTM_INOUTREF )
+		{
+			result.quals |= asAST_QUAL_INOUT;
+		}
+		else
+		{
+			return asCQualType();
+		}
+	}
+	return asASTQualifiersAreValid(result.quals)
+		? result : asCQualType();
+}
+
 static asCString CanonicalNamespaceKey(
 	const asCASTContext& context,
 	const asCDecl& decl)

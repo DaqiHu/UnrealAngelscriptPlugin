@@ -1496,15 +1496,19 @@ void asCParser::BuildLambdaParameterAction(
 	asCArray<asSParameterDeclAction>& actions,
 	asCQualType& recoveryReturnType)
 {
-	if( sema == 0 || typeNode == 0 || nameNode == 0 )
+	if( sema == 0 || nameNode == 0 )
 	{
 		return;
 	}
 
-	const asSQualTypeSyntaxAction typeAction =
-		BuildQualTypeSyntaxAction(typeNode, typeMod);
 	asSParameterDeclAction action;
-	action.type = sema->ActOnQualTypeAction(typeAction, script);
+	action.typeOmitted = typeNode == 0;
+	asSQualTypeSyntaxAction typeAction;
+	if( typeNode != 0 )
+	{
+		typeAction = BuildQualTypeSyntaxAction(typeNode, typeMod);
+		action.type = sema->ActOnQualTypeAction(typeAction, script);
+	}
 	if( script != 0 && script->code != 0
 		&& nameNode->tokenLength > 0
 		&& nameNode->tokenPos + nameNode->tokenLength <= script->codeLength )
@@ -1514,10 +1518,10 @@ void asCParser::BuildLambdaParameterAction(
 			(asUINT)nameNode->tokenLength);
 	}
 	action.beginOffset = typeAction.nodes.GetLength() != 0
-		? typeAction.nodes[0].beginOffset : 0;
+		? typeAction.nodes[0].beginOffset : (asUINT)nameNode->tokenPos;
 	action.endOffset = (asUINT)(nameNode->tokenPos + nameNode->tokenLength);
 	actions.PushLast(action);
-	if( !recoveryReturnType.IsValid() )
+	if( typeNode != 0 && !recoveryReturnType.IsValid() )
 	{
 		// Lambda syntax has no authored return type. Preserve the old Canonical
 		// migration recovery only until contextual funcdef binding owns it.

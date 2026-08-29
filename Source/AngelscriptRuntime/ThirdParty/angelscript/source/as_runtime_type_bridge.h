@@ -71,6 +71,14 @@ public:
 	static void NormalizeScriptParameterABI(
 		asCDataType& type,
 		asETypeModifiers& passing);
+	// Recover the source-facing QualType of a Runtime function parameter. Live
+	// script shells normalize primitive values to const and value objects to
+	// const T&inout; those ABI-only facts must not leak into Canonical identity.
+	// Explicit reference directions remain exact qualifier bits.
+	asCQualType FromScriptParameterABI(
+		asCASTContext& context,
+		const asCDataType& dataType,
+		asETypeModifiers passing) const;
 	asCQualType FromDataType(asCASTContext& context, const asCDataType& dataType) const;
 
 private:

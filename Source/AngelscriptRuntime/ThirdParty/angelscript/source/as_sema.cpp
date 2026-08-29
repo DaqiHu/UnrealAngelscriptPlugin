@@ -1750,12 +1750,14 @@ void asCSema::ContextualizeLambdaToFuncdef(
 		return;
 	}
 
+	asCArray<asASTDeclId> parameterDecls;
 	asCArray<asCQualType> authoredParameters;
 	for( asUINT i = 0; i < lambda->children.GetLength(); ++i )
 	{
 		const asCDecl* const child = context.GetDecl(lambda->children[i]);
 		if( child != 0 && child->kind == asAST_DECL_PARAM )
 		{
+			parameterDecls.PushLast(child->id);
 			authoredParameters.PushLast(child->type);
 		}
 	}
@@ -1782,12 +1784,6 @@ void asCSema::ContextualizeLambdaToFuncdef(
 		syntax = &lambdaSyntaxFacts[lambdaSyntaxFacts.GetLength() - 1];
 	}
 
-	if( syntax->explicitlyTypedParameterCount < syntax->parameterCount )
-	{
-		// Untyped formals require deferred body re-typing. Do not misdiagnose
-		// their absent ParamDecls as an explicit signature mismatch in this gate.
-		return;
-	}
 	if( syntax->boundFuncdefKey.GetLength() != 0
 		&& !syntax->boundFuncdefKey.Equals(targetType->stableKey) )
 	{
@@ -1863,15 +1859,66 @@ void asCSema::ContextualizeLambdaToFuncdef(
 		AddDiagnostic("lambda-funcdef-parameter-count-mismatch", range);
 		return;
 	}
+	const asUINT expectedOmittedCount = syntax->parameterCount
+		- syntax->explicitlyTypedParameterCount;
+	if( syntax->omittedParameters.GetLength() != expectedOmittedCount )
+	{
+		AddDiagnostic("lambda-omitted-formal-state-invalid", range);
+		return;
+	}
+	for( asUINT omittedIndex = 0;
+		omittedIndex < syntax->omittedParameters.GetLength(); ++omittedIndex )
+	{
+		bool found = false;
+		for( asUINT parameterIndex = 0;
+			parameterIndex < parameterDecls.GetLength(); ++parameterIndex )
+		{
+			if( syntax->omittedParameters[omittedIndex]
+				== parameterDecls[parameterIndex] )
+			{
+				found = true;
+				break;
+			}
+		}
+		if( !found )
+		{
+			AddDiagnostic("lambda-omitted-formal-state-invalid", range);
+			return;
+		}
+	}
+	auto IsOmittedParameter = [&](asASTDeclId parameter) -> bool
+	{
+		for( asUINT omittedIndex = 0;
+			omittedIndex < syntax->omittedParameters.GetLength(); ++omittedIndex )
+		{
+			if( syntax->omittedParameters[omittedIndex] == parameter )
+			{
+				return true;
+			}
+		}
+		return false;
+	};
 	if( runtimeFuncdef == 0 )
 	{
 		for( asUINT parameterIndex = 0;
 			parameterIndex < expectedParameters.GetLength();
 			++parameterIndex )
 		{
-			if( !expectedParameters[parameterIndex].IsValid()
-				|| authoredParameters[parameterIndex]
-					!= expectedParameters[parameterIndex] )
+			if( !expectedParameters[parameterIndex].IsValid() )
+			{
+				AddDiagnostic("lambda-funcdef-parameter-type-invalid", range);
+				return;
+			}
+			if( IsOmittedParameter(parameterDecls[parameterIndex]) )
+			{
+				context.SetDeclType(
+					parameterDecls[parameterIndex],
+					expectedParameters[parameterIndex]);
+				authoredParameters[parameterIndex] =
+					expectedParameters[parameterIndex];
+			}
+			else if( authoredParameters[parameterIndex]
+				!= expectedParameters[parameterIndex] )
 			{
 				AddDiagnostic("lambda-funcdef-parameter-type-mismatch", range);
 				return;
@@ -1888,6 +1935,25 @@ void asCSema::ContextualizeLambdaToFuncdef(
 			parameterIndex < runtimeFuncdef->parameterTypes.GetLength();
 			++parameterIndex )
 		{
+			const asETypeModifiers expectedPassing =
+				parameterIndex < runtimeFuncdef->inOutFlags.GetLength()
+					? runtimeFuncdef->inOutFlags[parameterIndex]
+					: asTM_NONE;
+			if( IsOmittedParameter(parameterDecls[parameterIndex]) )
+			{
+				const asCQualType inferred = bridge.FromScriptParameterABI(
+					context,
+					runtimeFuncdef->parameterTypes[parameterIndex],
+					expectedPassing);
+				if( !inferred.IsValid() )
+				{
+					AddDiagnostic("lambda-funcdef-parameter-type-invalid", range);
+					return;
+				}
+				context.SetDeclType(parameterDecls[parameterIndex], inferred);
+				authoredParameters[parameterIndex] = inferred;
+				continue;
+			}
 			asCDataType lowered = bridge.Resolve(
 				context, authoredParameters[parameterIndex]);
 			asETypeModifiers passing = CanonicalLambdaParameterPassing(
@@ -1897,10 +1963,6 @@ void asCSema::ContextualizeLambdaToFuncdef(
 				asCRuntimeTypeBridge::NormalizeScriptParameterABI(
 					lowered, passing);
 			}
-			const asETypeModifiers expectedPassing =
-				parameterIndex < runtimeFuncdef->inOutFlags.GetLength()
-					? runtimeFuncdef->inOutFlags[parameterIndex]
-					: asTM_NONE;
 			if( !lowered.IsValid()
 				|| lowered != runtimeFuncdef->parameterTypes[parameterIndex]
 				|| passing != expectedPassing )
@@ -1911,8 +1973,37 @@ void asCSema::ContextualizeLambdaToFuncdef(
 		}
 	}
 
+	for( asUINT parameterIndex = 0;
+		parameterIndex < parameterDecls.GetLength(); ++parameterIndex )
+	{
+		const asCType* const inferredType = context.GetType(
+			authoredParameters[parameterIndex].type);
+		if( inferredType != 0
+			&& inferredType->kind != asAST_TYPE_PRIMITIVE
+			&& inferredType->kind != asAST_TYPE_VOID
+			&& inferredType->stableKey.GetLength() != 0 )
+		{
+			RecordDependency(lambdaId, inferredType->stableKey.AddressOf());
+		}
+	}
 	context.SetDeclType(lambdaId, expectedReturn);
 	context.SetExprType(inner, expectedReturn);
+	const asCDecl* const contextualLambda = context.GetDecl(lambdaId);
+	if( contextualLambda != 0 && contextualLambda->body.IsValid() )
+	{
+		if( !ReconcileContextualLambdaBody(lambdaId, expectedReturn, range) )
+		{
+			return;
+		}
+	}
+	else if( expectedOmittedCount != 0 )
+	{
+		// An omitted formal has no semantic type until the contextual signature
+		// and its complete body can be reconciled together. Hand-built signature
+		// tests with fully explicit formals may intentionally omit a body.
+		AddDiagnostic("lambda-contextual-body-invalid", range);
+		return;
+	}
 	FinishDecl(lambdaId);
 	RecordDependency(lambdaId, targetType->stableKey.AddressOf());
 	syntax->boundFuncdefKey = targetType->stableKey;
