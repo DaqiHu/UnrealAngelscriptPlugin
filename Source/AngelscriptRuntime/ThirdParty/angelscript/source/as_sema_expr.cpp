@@ -1046,7 +1046,7 @@ static asUINT CountParams(asCASTContext& context, const asCDecl* decl)
 }
 
 static asASTDeclId FindBestCallee(asCASTContext& context, asASTDeclId owner, const char* name, const asCArray<asASTExprId>& args, asCSema* sema = 0, const asCQualType* receiverType = 0, bool exactScope = false);
-static int RankArgument(asCASTContext& context, const asCQualType& paramType, const asCExpr* arg);
+static int RankArgument(asCASTContext& context, const asCQualType& paramType, const asCExpr* arg, asCSema* sema);
 static bool IsFuncdefType(asCASTContext& context, const asCQualType& type);
 void InternNativeMethods(asCSema& sema, asCScriptEngine* engine, asCASTContext& context, const asCQualType& recvType, const char* name);
 static asASTDeclId FindFuncdefHandle(asCSema& sema, asCASTContext& context, asASTDeclId searchOwner, const char* name, bool exactScope = false);
@@ -2210,7 +2210,7 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 			}
 			if( rankParam )
 			{
-				extra.Format(" rank%u=%d", argIndex, RankArgument(context, rankParam->type, arg));
+				extra.Format(" rank%u=%d", argIndex, RankArgument(context, rankParam->type, arg, this));
 				msg += extra;
 			}
 		}
@@ -5064,7 +5064,7 @@ static bool HasZeroArgImplConvTo(
 	return FindZeroArgImplConv(context, fromType, toType).IsValid();
 }
 
-static int RankArgument(asCASTContext& context, const asCQualType& paramType, const asCExpr* arg)
+static int RankArgument(asCASTContext& context, const asCQualType& paramType, const asCExpr* arg, asCSema* sema)
 {
 	if( arg == 0 )
 	{
@@ -5084,6 +5084,13 @@ static int RankArgument(asCASTContext& context, const asCQualType& paramType, co
 	if( IsFuncdefType(context, paramType) )
 	{
 		const asCDecl* value = arg->resolvedDecl.IsValid() ? context.GetDecl(arg->resolvedDecl) : 0;
+		if( value != 0 && value->kind == asAST_DECL_FUNCTION
+			&& (value->traits & asAST_TRAIT_LAMBDA) != 0 )
+		{
+			return sema != 0
+				&& sema->IsLambdaViableForFuncdef(arg->id, paramType)
+				? 1 : -1;
+		}
 		if( IsFunctionValuedDecl(value) )
 		{
 			return 1;
@@ -5217,7 +5224,7 @@ static asASTDeclId FindBestCallee(asCASTContext& context, asASTDeclId owner, con
 					ok = false;
 					break;
 				}
-				const int rank = RankArgument(context, param->type, arg);
+				const int rank = RankArgument(context, param->type, arg, sema);
 				if( rank < 0 )
 				{
 					ok = false;

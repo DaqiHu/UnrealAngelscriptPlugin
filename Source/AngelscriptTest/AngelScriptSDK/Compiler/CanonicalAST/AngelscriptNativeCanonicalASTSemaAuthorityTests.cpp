@@ -649,6 +649,46 @@ namespace CanonicalASTSemaAuthorityTest
 		return nullptr;
 	}
 
+	static const asCExpr* FindOnlyResolvedCallNamed(
+		asCASTContext& Context,
+		const char* Name)
+	{
+		const asCExpr* Call = nullptr;
+		for (asUINT i = 1; i <= Context.GetExprCount(); ++i)
+		{
+			const asCExpr* const Expr = Context.GetExpr(asASTExprId(i));
+			const asCDecl* const Callee = Expr != nullptr
+				? Context.GetDecl(Expr->resolvedDecl) : nullptr;
+			if (Expr == nullptr || Expr->kind != asAST_EXPR_CALL
+				|| Callee == nullptr || !Callee->name.Equals(Name))
+			{
+				continue;
+			}
+			if (Call != nullptr)
+			{
+				return nullptr;
+			}
+			Call = Expr;
+		}
+		return Call;
+	}
+
+	static bool DeclHasDependency(const asCDecl* Decl, const char* StableKey)
+	{
+		if (Decl == nullptr || StableKey == nullptr)
+		{
+			return false;
+		}
+		for (asUINT i = 0; i < Decl->dependencies.GetLength(); ++i)
+		{
+			if (Decl->dependencies[i].Equals(StableKey))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 }
 
 TEST_CLASS_WITH_FLAGS(FCanonicalASTSemaAuthorityTests,
@@ -22008,6 +22048,394 @@ public:
 		ASSERT_THAT(IsNotNull(ContextualConversion, *Evidence));
 	}
 
+	TEST_METHOD(ParserOmittedLambdaAritySelectsOnlyViableFuncdefOverload)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"bool UnaryCallback(int)") >= 0,
+			TEXT("arity viability fixture needs host UnaryCallback")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"bool PairCallback(int, int)") >= 0,
+			TEXT("arity viability fixture needs host PairCallback")));
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaLambdaFuncdefArityOverload");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaLambdaFuncdefArityOverload module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			bool Choose(UnaryCallback Callback)
+			{
+				return Callback(1);
+			}
+
+			bool Choose(PairCallback Callback)
+			{
+				return Callback(1, 2);
+			}
+
+			int Entry()
+			{
+				return Choose(function(Value)
+					{
+						return Value > 0;
+					}) ? 1 : 0;
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaLambdaFuncdefArityOverload.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("funcdef overload fixture remains valid source syntax")));
+		const int SealResult = Context.Seal();
+
+		const asCDecl* const Lambda =
+			CanonicalASTSemaAuthorityTest::FindOnlyLambdaDecl(Context);
+		const asCDecl* const LambdaParameter =
+			CanonicalASTSemaAuthorityTest::FindOnlyParameterDecl(Context, Lambda);
+		const asCExpr* const Call =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(Context, "Choose");
+		const asCDecl* const Callee = Call != nullptr
+			? Context.GetDecl(Call->resolvedDecl) : nullptr;
+		const asCDecl* const CalleeParameter =
+			CanonicalASTSemaAuthorityTest::FindOnlyParameterDecl(Context, Callee);
+		const asCType* const CalleeParameterType = CalleeParameter != nullptr
+			? Context.GetType(CalleeParameter->type.type) : nullptr;
+		const asCExpr* const Conversion = Call != nullptr
+			&& Call->children.GetLength() == 1
+			? Context.GetExpr(Call->children[0]) : nullptr;
+		const asCExpr* const LambdaRef = Conversion != nullptr
+			&& Conversion->children.GetLength() == 1
+			? Context.GetExpr(Conversion->children[0]) : nullptr;
+		const asCType* const ConversionType = Conversion != nullptr
+			? Context.GetType(Conversion->type.type) : nullptr;
+		const asCType* const LambdaParameterType = LambdaParameter != nullptr
+			? Context.GetType(LambdaParameter->type.type) : nullptr;
+		const asCType* const LambdaReturnType = Lambda != nullptr
+			? Context.GetType(Lambda->type.type) : nullptr;
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Diagnostics =
+			CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema);
+		const FString Evidence = FString::Printf(
+			TEXT("one-formal omitted Lambda must remove PairCallback before overload selection. seal=%d diagnostics:\n%s\nAST:\n%s"),
+			SealResult,
+			*Diagnostics,
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(AreEqual(0, SealResult, *Evidence));
+		ASSERT_THAT(IsTrue(Diagnostics.IsEmpty(), *Evidence));
+		ASSERT_THAT(IsTrue(Callee != nullptr
+			&& Callee->stableKey.Equals("Choose(UnaryCallback)"), *Evidence));
+		ASSERT_THAT(IsTrue(CalleeParameterType != nullptr
+			&& CalleeParameterType->kind == asAST_TYPE_FUNCDEF
+			&& CalleeParameterType->stableKey.Equals("UnaryCallback"), *Evidence));
+		ASSERT_THAT(IsTrue(Conversion != nullptr
+			&& Conversion->kind == asAST_EXPR_CONVERSION
+			&& ConversionType != nullptr
+			&& ConversionType->kind == asAST_TYPE_FUNCDEF
+			&& ConversionType->stableKey.Equals("UnaryCallback")
+			&& LambdaRef != nullptr && Lambda != nullptr
+			&& LambdaRef->resolvedDecl == Lambda->id, *Evidence));
+		ASSERT_THAT(IsTrue(LambdaParameterType != nullptr
+			&& LambdaParameterType->stableKey.Equals("int"), *Evidence));
+		ASSERT_THAT(IsTrue(LambdaReturnType != nullptr
+			&& LambdaReturnType->kind == asAST_TYPE_PRIMITIVE
+			&& LambdaReturnType->stableKey.Equals("bool"), *Evidence));
+		ASSERT_THAT(IsTrue(
+			CanonicalASTSemaAuthorityTest::DeclHasDependency(Lambda, "UnaryCallback")
+			&& !CanonicalASTSemaAuthorityTest::DeclHasDependency(Lambda, "PairCallback"),
+			*Evidence));
+	}
+
+	TEST_METHOD(ParserExplicitLambdaTypeSelectsOnlyViableFuncdefOverload)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"bool IntCallback(int)") >= 0,
+			TEXT("type viability fixture needs host IntCallback")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"bool BoolArgCallback(bool)") >= 0,
+			TEXT("type viability fixture needs host BoolArgCallback")));
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaLambdaFuncdefTypeOverload");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaLambdaFuncdefTypeOverload module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			bool Choose(IntCallback Callback)
+			{
+				return Callback(1);
+			}
+
+			bool Choose(BoolArgCallback Callback)
+			{
+				return Callback(true);
+			}
+
+			int Entry()
+			{
+				return Choose(function(int Value)
+					{
+						return Value > 0;
+					}) ? 1 : 0;
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaLambdaFuncdefTypeOverload.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("explicit Lambda funcdef overload fixture remains valid syntax")));
+		const int SealResult = Context.Seal();
+
+		const asCDecl* const Lambda =
+			CanonicalASTSemaAuthorityTest::FindOnlyLambdaDecl(Context);
+		const asCDecl* const LambdaParameter =
+			CanonicalASTSemaAuthorityTest::FindOnlyParameterDecl(Context, Lambda);
+		const asCExpr* const Call =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(Context, "Choose");
+		const asCDecl* const Callee = Call != nullptr
+			? Context.GetDecl(Call->resolvedDecl) : nullptr;
+		const asCDecl* const CalleeParameter =
+			CanonicalASTSemaAuthorityTest::FindOnlyParameterDecl(Context, Callee);
+		const asCType* const CalleeParameterType = CalleeParameter != nullptr
+			? Context.GetType(CalleeParameter->type.type) : nullptr;
+		const asCExpr* const Conversion = Call != nullptr
+			&& Call->children.GetLength() == 1
+			? Context.GetExpr(Call->children[0]) : nullptr;
+		const asCType* const ConversionType = Conversion != nullptr
+			? Context.GetType(Conversion->type.type) : nullptr;
+		const asCType* const LambdaParameterType = LambdaParameter != nullptr
+			? Context.GetType(LambdaParameter->type.type) : nullptr;
+		const asCType* const LambdaReturnType = Lambda != nullptr
+			? Context.GetType(Lambda->type.type) : nullptr;
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Diagnostics =
+			CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema);
+		const FString Evidence = FString::Printf(
+			TEXT("explicit int Lambda must remove BoolArgCallback before overload selection. seal=%d diagnostics:\n%s\nAST:\n%s"),
+			SealResult,
+			*Diagnostics,
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(AreEqual(0, SealResult, *Evidence));
+		ASSERT_THAT(IsTrue(Diagnostics.IsEmpty(), *Evidence));
+		ASSERT_THAT(IsTrue(Callee != nullptr
+			&& Callee->stableKey.Equals("Choose(IntCallback)"), *Evidence));
+		ASSERT_THAT(IsTrue(CalleeParameterType != nullptr
+			&& CalleeParameterType->kind == asAST_TYPE_FUNCDEF
+			&& CalleeParameterType->stableKey.Equals("IntCallback"), *Evidence));
+		ASSERT_THAT(IsTrue(Conversion != nullptr
+			&& Conversion->kind == asAST_EXPR_CONVERSION
+			&& ConversionType != nullptr
+			&& ConversionType->stableKey.Equals("IntCallback"), *Evidence));
+		ASSERT_THAT(IsTrue(LambdaParameterType != nullptr
+			&& LambdaParameterType->stableKey.Equals("int"), *Evidence));
+		ASSERT_THAT(IsTrue(LambdaReturnType != nullptr
+			&& LambdaReturnType->kind == asAST_TYPE_PRIMITIVE
+			&& LambdaReturnType->stableKey.Equals("bool"), *Evidence));
+		ASSERT_THAT(IsTrue(
+			CanonicalASTSemaAuthorityTest::DeclHasDependency(Lambda, "IntCallback")
+			&& !CanonicalASTSemaAuthorityTest::DeclHasDependency(Lambda, "BoolArgCallback"),
+			*Evidence));
+	}
+
+	TEST_METHOD(ParserAllOmittedLambdaFuncdefCandidatesRemainAmbiguousWithoutMutation)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"bool IntCallback(int)") >= 0,
+			TEXT("all-omitted ambiguity fixture needs host IntCallback")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"bool BoolCallback(bool)") >= 0,
+			TEXT("all-omitted ambiguity fixture needs host BoolCallback")));
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaLambdaFuncdefAllOmittedAmbiguity");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaLambdaFuncdefAllOmittedAmbiguity module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			bool Choose(IntCallback Callback)
+			{
+				return Callback(1);
+			}
+
+			bool Choose(BoolCallback Callback)
+			{
+				return Callback(true);
+			}
+
+			int Entry()
+			{
+				return Choose(function(Value)
+					{
+						return true;
+					}) ? 1 : 0;
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaLambdaFuncdefAllOmittedAmbiguity.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("all-omitted funcdef overload fixture remains syntactically valid")));
+		const int SealResult = Context.Seal();
+		const asCDecl* const Lambda =
+			CanonicalASTSemaAuthorityTest::FindOnlyLambdaDecl(Context);
+		const asCDecl* const Parameter =
+			CanonicalASTSemaAuthorityTest::FindOnlyParameterDecl(Context, Lambda);
+		bool bResolvedChoose = false;
+		bool bUnresolvedChoose = false;
+		for (asUINT i = 1; i <= Context.GetExprCount(); ++i)
+		{
+			const asCExpr* const Expr = Context.GetExpr(asASTExprId(i));
+			if (Expr == nullptr || Expr->kind != asAST_EXPR_CALL)
+			{
+				continue;
+			}
+			const asCDecl* const Callee = Context.GetDecl(Expr->resolvedDecl);
+			bResolvedChoose = bResolvedChoose
+				|| (Callee != nullptr && Callee->name.Equals("Choose"));
+			bUnresolvedChoose = bUnresolvedChoose
+				|| (Callee == nullptr && Expr->literal.Equals("Choose"));
+		}
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Diagnostics =
+			CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema);
+		const FString Evidence = FString::Printf(
+			TEXT("equal-arity all-omitted Lambda candidates must stay ambiguous without committing the first candidate. seal=%d diagnostics:\n%s\nAST:\n%s"),
+			SealResult,
+			*Diagnostics,
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(AreEqual(0, SealResult, *Evidence));
+		ASSERT_THAT(IsFalse(bResolvedChoose, *Evidence));
+		ASSERT_THAT(IsTrue(bUnresolvedChoose, *Evidence));
+		ASSERT_THAT(IsTrue(CanonicalASTSemaAuthorityTest::DiagnosticEquals(
+			Sema, "ambiguous-overload"), *Evidence));
+		ASSERT_THAT(IsTrue(Parameter != nullptr
+			&& !Parameter->type.IsValid()
+			&& Context.GetType(Parameter->type.type) == nullptr, *Evidence));
+		ASSERT_THAT(IsTrue(
+			!CanonicalASTSemaAuthorityTest::DeclHasDependency(Lambda, "IntCallback")
+			&& !CanonicalASTSemaAuthorityTest::DeclHasDependency(Lambda, "BoolCallback"),
+			*Evidence));
+	}
+
+	TEST_METHOD(ParserLambdaRejectsAllIncompatibleFuncdefOverloadsWithoutAmbiguity)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"bool ZeroCallback()") >= 0,
+			TEXT("no-viable fixture needs host ZeroCallback")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"bool PairCallback(int, int)") >= 0,
+			TEXT("no-viable fixture needs host PairCallback")));
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaLambdaFuncdefNoViableOverload");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaLambdaFuncdefNoViableOverload module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			bool Choose(ZeroCallback Callback)
+			{
+				return Callback();
+			}
+
+			bool Choose(PairCallback Callback)
+			{
+				return Callback(1, 2);
+			}
+
+			int Entry()
+			{
+				return Choose(function(Value)
+					{
+						return Value > 0;
+					}) ? 1 : 0;
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaLambdaFuncdefNoViableOverload.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("no-viable funcdef overload fixture remains syntactically valid")));
+		const int SealResult = Context.Seal();
+		const asCDecl* const Lambda =
+			CanonicalASTSemaAuthorityTest::FindOnlyLambdaDecl(Context);
+		bool bResolvedChoose = false;
+		bool bUnresolvedChoose = false;
+		for (asUINT i = 1; i <= Context.GetExprCount(); ++i)
+		{
+			const asCExpr* const Expr = Context.GetExpr(asASTExprId(i));
+			if (Expr == nullptr || Expr->kind != asAST_EXPR_CALL)
+			{
+				continue;
+			}
+			const asCDecl* const Callee = Context.GetDecl(Expr->resolvedDecl);
+			bResolvedChoose = bResolvedChoose
+				|| (Callee != nullptr && Callee->name.Equals("Choose"));
+			bUnresolvedChoose = bUnresolvedChoose
+				|| (Callee == nullptr && Expr->literal.Equals("Choose"));
+		}
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Diagnostics =
+			CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema);
+		const FString Evidence = FString::Printf(
+			TEXT("one-formal Lambda must reject zero/two-formal funcdefs as zero viable candidates. seal=%d diagnostics:\n%s\nAST:\n%s"),
+			SealResult,
+			*Diagnostics,
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		// Seal verifies pointer-free AST structure, not Sema acceptance. Keep the
+		// rejected call as a structurally valid unresolved/error expression; the
+		// diagnostic is the fail-closed semantic result.
+		ASSERT_THAT(AreEqual(0, SealResult, *Evidence));
+		ASSERT_THAT(IsFalse(bResolvedChoose, *Evidence));
+		ASSERT_THAT(IsTrue(bUnresolvedChoose, *Evidence));
+		ASSERT_THAT(IsTrue(CanonicalASTSemaAuthorityTest::SemaHasDiagnosticPrefix(
+			Sema, "unresolved-callee:Choose"), *Evidence));
+		ASSERT_THAT(IsFalse(CanonicalASTSemaAuthorityTest::DiagnosticEquals(
+			Sema, "ambiguous-overload"), *Evidence));
+		ASSERT_THAT(IsTrue(
+			!CanonicalASTSemaAuthorityTest::DeclHasDependency(Lambda, "ZeroCallback")
+			&& !CanonicalASTSemaAuthorityTest::DeclHasDependency(Lambda, "PairCallback"),
+			*Evidence));
+	}
+
 	TEST_METHOD(SemaCanonicalFuncdefContextuallyBindsLambdaWithoutRuntimeTypeLookup)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
@@ -22054,6 +22482,9 @@ public:
 			? Context.InternNamedType(
 				asAST_TYPE_FUNCDEF, MutableFuncdef->stableKey.AddressOf(), 0)
 			: asCQualType();
+		ASSERT_THAT(IsTrue(Sema.IsLambdaViableForFuncdef(
+			LambdaRef, FuncdefType),
+			TEXT("read-only viability must resolve an exact Canonical FuncDefDecl")));
 		const asASTExprId Conversion = Sema.ActOnConversion(
 			LambdaRef, FuncdefType, asCSourceRange());
 		ASSERT_THAT(IsTrue(Conversion.IsValid(),
@@ -22134,6 +22565,9 @@ public:
 			Expression, &Code);
 		const asCQualType FuncdefType = Context.InternNamedType(
 			asAST_TYPE_FUNCDEF, "HostInCallback", 0);
+		ASSERT_THAT(IsFalse(Sema.IsLambdaViableForFuncdef(
+			LambdaRef, FuncdefType),
+			TEXT("read-only viability must reject a host funcdef direction mismatch")));
 		Sema.ActOnConversion(LambdaRef, FuncdefType, asCSourceRange());
 		ASSERT_THAT(AreEqual(0, Context.Seal(),
 			TEXT("direction mismatch is a Sema diagnostic, not a structural verifier failure")));

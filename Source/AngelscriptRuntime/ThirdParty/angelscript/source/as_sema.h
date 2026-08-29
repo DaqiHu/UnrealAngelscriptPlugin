@@ -1276,6 +1276,12 @@ public:
 	asASTExprId ActOnPostfixCallExpr(asASTDeclId owner, asASTExprId calleeExpr, const asCArray<asASTExprId>& args, const asCSourceRange& range, const asCArray<asCString>* argumentNames = 0);
 	asASTExprId ActOnCastExpr(asASTExprId inner, const asCQualType& dest, const asCSourceRange& range);
 	asASTExprId ActOnConversion(asASTExprId inner, const asCQualType& dest, const asCSourceRange& range);
+	// Candidate exploration must not commit contextual Lambda inference. This
+	// query checks only the authored Lambda shape against one funcdef formal;
+	// ActOnConversion performs the write pass after overload selection.
+	bool IsLambdaViableForFuncdef(
+		asASTExprId lambdaReference,
+		const asCQualType& destination) const;
 	asASTExprId ActOnSequence(const asCArray<asASTExprId>& parts, const asCQualType& type, const asCSourceRange& range);
 	asASTExprId ActOnSequenceExpr(const asCArray<asASTExprId>& parts, const asCSourceRange& range);
 	asASTExprId ActOnIndex(asASTExprId base, asASTExprId index, const asCQualType& type, const asCSourceRange& range);

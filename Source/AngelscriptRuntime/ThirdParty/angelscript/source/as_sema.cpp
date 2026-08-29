@@ -1726,6 +1726,203 @@ static asETypeModifiers CanonicalLambdaParameterPassing(asDWORD qualifiers)
 	return asTM_NONE;
 }
 
+bool asCSema::IsLambdaViableForFuncdef(
+	asASTExprId lambdaReference,
+	const asCQualType& destination) const
+{
+	const asCType* const targetType = context.GetType(destination.type);
+	const asCExpr* const reference = context.GetExpr(lambdaReference);
+	if( targetType == 0 || targetType->kind != asAST_TYPE_FUNCDEF
+		|| targetType->stableKey.GetLength() == 0
+		|| reference == 0 || reference->kind != asAST_EXPR_DECL_REF
+		|| !reference->resolvedDecl.IsValid() )
+	{
+		return false;
+	}
+
+	const asASTDeclId lambdaId = reference->resolvedDecl;
+	const asCDecl* const lambda = context.GetDecl(lambdaId);
+	if( lambda == 0 || lambda->kind != asAST_DECL_FUNCTION
+		|| (lambda->traits & asAST_TRAIT_LAMBDA) == 0 )
+	{
+		return false;
+	}
+
+	asCArray<asASTDeclId> parameterDecls;
+	asCArray<asCQualType> authoredParameters;
+	for( asUINT i = 0; i < lambda->children.GetLength(); ++i )
+	{
+		const asCDecl* const child = context.GetDecl(lambda->children[i]);
+		if( child != 0 && child->kind == asAST_DECL_PARAM )
+		{
+			parameterDecls.PushLast(child->id);
+			authoredParameters.PushLast(child->type);
+		}
+	}
+
+	const asSLambdaSyntaxFact* syntax = 0;
+	for( asUINT i = 0; i < lambdaSyntaxFacts.GetLength(); ++i )
+	{
+		if( lambdaSyntaxFacts[i].lambda == lambdaId )
+		{
+			syntax = &lambdaSyntaxFacts[i];
+			break;
+		}
+	}
+	if( syntax != 0 )
+	{
+		if( syntax->parameterCount != parameterDecls.GetLength()
+			|| syntax->explicitlyTypedParameterCount > syntax->parameterCount
+			|| syntax->omittedParameters.GetLength()
+				!= syntax->parameterCount - syntax->explicitlyTypedParameterCount
+			|| (syntax->boundFuncdefKey.GetLength() != 0
+				&& !syntax->boundFuncdefKey.Equals(targetType->stableKey)) )
+		{
+			return false;
+		}
+		for( asUINT omittedIndex = 0;
+			omittedIndex < syntax->omittedParameters.GetLength();
+			++omittedIndex )
+		{
+			for( asUINT prior = 0; prior < omittedIndex; ++prior )
+			{
+				if( syntax->omittedParameters[prior]
+					== syntax->omittedParameters[omittedIndex] )
+				{
+					return false;
+				}
+			}
+			bool found = false;
+			for( asUINT parameterIndex = 0;
+				parameterIndex < parameterDecls.GetLength();
+				++parameterIndex )
+			{
+				if( syntax->omittedParameters[omittedIndex]
+					== parameterDecls[parameterIndex] )
+				{
+					found = true;
+					break;
+				}
+			}
+			if( !found )
+			{
+				return false;
+			}
+		}
+	}
+
+	auto IsOmittedParameter = [&](asASTDeclId parameter) -> bool
+	{
+		if( syntax == 0 )
+		{
+			return false;
+		}
+		for( asUINT omittedIndex = 0;
+			omittedIndex < syntax->omittedParameters.GetLength();
+			++omittedIndex )
+		{
+			if( syntax->omittedParameters[omittedIndex] == parameter )
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+
+	asASTDeclId canonicalFuncdef;
+	asCArray<asCQualType> expectedParameters;
+	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
+	{
+		const asCDecl* const declaration = context.GetDecl(asASTDeclId(i));
+		if( declaration == 0 || declaration->kind != asAST_DECL_FUNCDEF
+			|| !declaration->stableKey.Equals(targetType->stableKey) )
+		{
+			continue;
+		}
+		if( canonicalFuncdef.IsValid() )
+		{
+			return false;
+		}
+		canonicalFuncdef = declaration->id;
+		for( asUINT childIndex = 0;
+			childIndex < declaration->children.GetLength();
+			++childIndex )
+		{
+			const asCDecl* const child = context.GetDecl(
+				declaration->children[childIndex]);
+			if( child != 0 && child->kind == asAST_DECL_PARAM )
+			{
+				expectedParameters.PushLast(child->type);
+			}
+		}
+	}
+
+	if( canonicalFuncdef.IsValid() )
+	{
+		if( expectedParameters.GetLength() != parameterDecls.GetLength() )
+		{
+			return false;
+		}
+		for( asUINT parameterIndex = 0;
+			parameterIndex < expectedParameters.GetLength();
+			++parameterIndex )
+		{
+			if( !expectedParameters[parameterIndex].IsValid()
+				|| (!IsOmittedParameter(parameterDecls[parameterIndex])
+					&& authoredParameters[parameterIndex]
+						!= expectedParameters[parameterIndex]) )
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	if( engine == 0 )
+	{
+		return false;
+	}
+	asCRuntimeTypeBridge bridge(engine);
+	const asCDataType runtimeType = bridge.Resolve(context, destination);
+	asCFuncdefType* const funcdefType = runtimeType.IsFuncdef()
+		? CastToFuncdefType(runtimeType.GetTypeInfo()) : 0;
+	const asCScriptFunction* const runtimeFuncdef =
+		funcdefType != 0 ? funcdefType->funcdef : 0;
+	if( runtimeFuncdef == 0
+		|| runtimeFuncdef->parameterTypes.GetLength() != parameterDecls.GetLength() )
+	{
+		return false;
+	}
+	for( asUINT parameterIndex = 0;
+		parameterIndex < runtimeFuncdef->parameterTypes.GetLength();
+		++parameterIndex )
+	{
+		if( IsOmittedParameter(parameterDecls[parameterIndex]) )
+		{
+			continue;
+		}
+		asCDataType lowered = bridge.Resolve(
+			context, authoredParameters[parameterIndex]);
+		asETypeModifiers passing = CanonicalLambdaParameterPassing(
+			authoredParameters[parameterIndex].quals);
+		if( lowered.IsValid() )
+		{
+			asCRuntimeTypeBridge::NormalizeScriptParameterABI(lowered, passing);
+		}
+		const asETypeModifiers expectedPassing =
+			parameterIndex < runtimeFuncdef->inOutFlags.GetLength()
+				? runtimeFuncdef->inOutFlags[parameterIndex]
+				: asTM_NONE;
+		if( !lowered.IsValid()
+			|| lowered != runtimeFuncdef->parameterTypes[parameterIndex]
+			|| passing != expectedPassing )
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 void asCSema::ContextualizeLambdaToFuncdef(
 	asASTExprId inner,
 	const asCQualType& destination,
