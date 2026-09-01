@@ -14427,6 +14427,12 @@ public:
 				return Cb(X);
 			}
 
+			int InvokeLocal()
+			{
+				Callback Cb = Double;
+				return Cb(21);
+			}
+
 			int F()
 			{
 				return Invoke(Double, 21);
@@ -14456,11 +14462,19 @@ public:
 		ASSERT_THAT(IsNotNull(Invoke, TEXT("host funcdef Invoke must be published")));
 		asIScriptFunction* const Double = AngelscriptNativeTestSupport::GetNativeFunctionByDecl(Module, "int Double(const int)");
 		ASSERT_THAT(IsNotNull(Double, TEXT("host funcdef Double must be published")));
+		asIScriptFunction* const InvokeLocal =
+			AngelscriptNativeTestSupport::GetNativeFunctionByDecl(Module, "int InvokeLocal()");
+		ASSERT_THAT(IsNotNull(
+			InvokeLocal,
+			TEXT("host funcdef local-variable caller must be published")));
 		asCString FDump;
 		asCString InvokeDump;
+		asCString InvokeLocalDump;
 		asCString DoubleDump;
 		asCBytecodeCodeGenDumpFunction(static_cast<asCScriptFunction*>(Published), FDump);
 		asCBytecodeCodeGenDumpFunction(static_cast<asCScriptFunction*>(Invoke), InvokeDump);
+		asCBytecodeCodeGenDumpFunction(
+			static_cast<asCScriptFunction*>(InvokeLocal), InvokeLocalDump);
 		asCBytecodeCodeGenDumpFunction(static_cast<asCScriptFunction*>(Double), DoubleDump);
 		int32 Value = 0;
 		const bool Executed = AngelscriptNativeTestSupport::CanonicalExecuteInt(
@@ -14480,6 +14494,21 @@ public:
 		ASSERT_THAT(IsTrue(
 			AngelscriptCompilerBytecodeTestSupport::ContainsOpcode(Invoke, asBC_CallPtr),
 			TEXT("Invoke(Callback) must emit CallPtr, not a missing callee")));
+		int32 LocalValue = 0;
+		const bool LocalExecuted = AngelscriptNativeTestSupport::CanonicalExecuteInt(
+			*TestRunner, Engine.Get(), Module, "int InvokeLocal()", LocalValue);
+		ASSERT_THAT(IsTrue(
+			LocalExecuted && LocalValue == 42,
+			*FString::Printf(
+				TEXT("CANONICAL local funcdef variable must execute its sealed indirect Call; executed=%d value=%d\nInvokeLocal:\n%s"),
+				LocalExecuted ? 1 : 0,
+				LocalValue,
+				UTF8_TO_TCHAR(InvokeLocalDump.AddressOf()
+					? InvokeLocalDump.AddressOf() : ""))));
+		ASSERT_THAT(IsTrue(
+			AngelscriptCompilerBytecodeTestSupport::ContainsOpcode(
+				InvokeLocal, asBC_CallPtr),
+			TEXT("local Callback Cb = Double; Cb(21) must emit CallPtr")));
 	}
 
 	TEST_METHOD(CanonicalStoredNonCapturingLambdaBuildPublishesCodeGenAndExecutes)

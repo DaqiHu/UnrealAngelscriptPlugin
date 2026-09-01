@@ -4996,14 +4996,17 @@ public:
 		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
 			struct TConv
 			{
+				int Stored = 0;
+
 				TConv(int A)
 				{
+					Stored = A;
 				}
 			}
 
 			int Consume(TConv Value)
 			{
-				return 1;
+				return Value.Stored + 39;
 			}
 
 			int Entry()
@@ -5105,6 +5108,28 @@ public:
 				TEXT("Construct dump must print the sealed call-argument plan, not omit callArgs=. line=%s dump:\n%s"),
 				*ConstructLine,
 				*Dump)));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 42,
+			*FString::Printf(
+				TEXT("Consume(3) must execute the sealed TConv::TConv(int) plan and return 42; Entry()=%d dump:\n%s"),
+				Value,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("implicit-constructor Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("implicit-constructor execute must not construct asCCompiler")));
 	}
 
 	TEST_METHOD(CanonicalWorldContextHiddenCallSealsInjectedCall)

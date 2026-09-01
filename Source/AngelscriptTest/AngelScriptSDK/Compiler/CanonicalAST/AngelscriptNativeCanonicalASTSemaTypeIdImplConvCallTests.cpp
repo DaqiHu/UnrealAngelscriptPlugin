@@ -222,23 +222,54 @@ public:
 			return;
 		}
 		ASSERT_THAT(IsTrue(Call->children.GetLength() >= 2, *DumpMsg));
-		const asCExpr* const Argument =
-			CanonicalASTSemaTypeIdImplConvCallTest::FindCallConversionArg(Context, Call);
+		const asSASTCallArgument* ClassArgument = nullptr;
+		for (asUINT ArgumentIndex = 0;
+			ArgumentIndex < Call->callArguments.GetLength(); ++ArgumentIndex)
+		{
+			if (Call->callArguments[ArgumentIndex].formalIndex == 0)
+			{
+				ClassArgument = &Call->callArguments[ArgumentIndex];
+				break;
+			}
+		}
+		const asCExpr* const Argument = ClassArgument != nullptr
+			? Context.GetExpr(ClassArgument->expression) : nullptr;
+		const asCDecl* const Formal = ClassArgument != nullptr
+			? Context.GetDecl(ClassArgument->formal) : nullptr;
 		ASSERT_THAT(IsTrue(
-			Argument != nullptr && Argument->kind == asAST_EXPR_CONVERSION, *DumpMsg));
-		const asCType* const ArgumentType = Argument != nullptr
-			? Context.GetType(Argument->type.type) : nullptr;
-		ASSERT_THAT(IsTrue(
-			ArgumentType != nullptr && ArgumentType->stableKey.Equals("CClass"),
+			Argument != nullptr
+				&& Argument->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+				&& Argument->children.GetLength() == 1
+				&& Formal != nullptr
+				&& Formal->name.Equals("Cls")
+				&& ClassArgument->origin == asAST_CALL_ARGUMENT_POSITIONAL
+				&& ClassArgument->formalType == Formal->type,
 			*DumpMsg));
-		const asCExpr* const Inner = Argument != nullptr && Argument->children.GetLength() >= 1
+		const asCExpr* const ConversionCall = Argument != nullptr
+			&& Argument->children.GetLength() == 1
 			? Context.GetExpr(Argument->children[0]) : nullptr;
-		const asCDecl* const InnerDecl = Inner != nullptr
-			? Context.GetDecl(Inner->resolvedDecl) : nullptr;
+		const asCDecl* const ConversionMethod = ConversionCall != nullptr
+			? Context.GetDecl(ConversionCall->resolvedDecl) : nullptr;
+		const asCExpr* const Receiver = ConversionCall != nullptr
+			? Context.GetExpr(ConversionCall->receiver) : nullptr;
+		const asCType* const ArgumentType = ConversionCall != nullptr
+			? Context.GetType(ConversionCall->type.type) : nullptr;
 		ASSERT_THAT(IsTrue(
-			InnerDecl != nullptr
-				&& InnerDecl->kind == asAST_DECL_VAR
-				&& InnerDecl->name.Equals("__StaticType_CObj"),
+			ConversionCall != nullptr
+				&& ConversionCall->kind == asAST_EXPR_CALL
+				&& ConversionMethod != nullptr
+				&& ConversionMethod->kind == asAST_DECL_METHOD
+				&& ConversionMethod->name.Equals("opImplConv")
+				&& ConversionCall->receiver.IsValid()
+				&& ArgumentType != nullptr
+				&& ArgumentType->stableKey.Equals("CClass"),
+			*DumpMsg));
+		const asCDecl* const ReceiverDecl = Receiver != nullptr
+			? Context.GetDecl(Receiver->resolvedDecl) : nullptr;
+		ASSERT_THAT(IsTrue(
+			ReceiverDecl != nullptr
+				&& ReceiverDecl->kind == asAST_DECL_VAR
+				&& ReceiverDecl->name.Equals("__StaticType_CObj"),
 			*DumpMsg));
 	}
 
