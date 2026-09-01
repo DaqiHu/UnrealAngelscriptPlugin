@@ -6218,8 +6218,15 @@ asASTExprId asCSema::ActOnUnaryExpr(const char* op, asASTExprId inner, const asC
 
 	// Builtin increment/decrement have the type of their operand. Preserve
 	// that here rather than silently defaulting unsigned expressions to int.
+	// Logical not is always bool: already-bool `!Flag` must not leftover
+	// Unary ! typed as int after the VALUE opImplConv rewrite returns the
+	// same inner expression.
 	asCQualType resultType = intType;
-	if( (canonicalOp[0] == 'p' && canonicalOp[1] != 0) )
+	if( op && op[0] == '!' && op[1] == 0 )
+	{
+		resultType = context.InternPrimitive(ttBool, 0);
+	}
+	else if( (canonicalOp[0] == 'p' && canonicalOp[1] != 0) )
 	{
 		if( const asCExpr* innerExpr = context.GetExpr(inner) )
 		{
