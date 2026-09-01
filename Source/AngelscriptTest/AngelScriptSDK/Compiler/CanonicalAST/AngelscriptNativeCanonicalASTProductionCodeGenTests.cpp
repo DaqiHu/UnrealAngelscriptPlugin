@@ -9468,6 +9468,84 @@ public:
 				Value)));
 	}
 
+	TEST_METHOD(CanonicalRvalueCompoundAssignExecutesWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 rvalue opAddAssign CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdRvalueOpAddAssign", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				T& opAddAssign(int Value)
+				{
+					Stored = Stored + Value;
+					return this;
+				}
+			}
+
+			T Make()
+			{
+				T Object;
+				return Object;
+			}
+
+			int Entry()
+			{
+				Make() += 7;
+				return 42;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdRvalueOpAddAssign.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Make() += 7 must publish Canonical CodeGen, not leftover Assign += or asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("rvalue compound assignment Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("rvalue compound assignment must not construct asCCompiler")));
+
+		int32 Value = 0;
+		FString Exception;
+		const int ExecuteStatus = AngelscriptNativeTestSupport::CanonicalExecuteIntStatus(
+			Engine.Get(), Module, "int Entry()", Value, Exception);
+		ASSERT_THAT(IsTrue(
+			ExecuteStatus == asEXECUTION_FINISHED && Value == 42,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute Make() += 7 as opAddAssign on the temporary and return 42; status=%d Entry()=%d exception=%s"),
+				ExecuteStatus,
+				Value,
+				*Exception)));
+	}
+
 	TEST_METHOD(CanonicalBytecodeLifetimeEmitterConsumesOnlyProtocolExitPlans)
 	{
 		const FString SourcePath = FPaths::Combine(

@@ -4808,19 +4808,31 @@ static asASTExprId TryRewriteOverloadedAssignmentToCall(
 	// rhs before ActOnAssign converts it to the lhs type; otherwise
 	// `Object += 7` becomes int→T conversion and CodeGen reinterprets leftover
 	// Assign the same way `Object = 7` did.
+	asASTExprId receiver = lhs;
+	if( leftExpr->valueCategory != asAST_VALUE_LVALUE )
+	{
+		// Make() += 7 mutates a VALUE temporary. Materialize it so CodeGen
+		// owns storage for `this` instead of calling through a discarded
+		// prvalue.
+		receiver = sema.ActOnMaterializeTemporary(lhs, range);
+		if( !receiver.IsValid() )
+		{
+			return asASTExprId();
+		}
+	}
 	asCArray<asCString> names;
 	asCArray<asSASTCallArgument> callArguments;
 	ArrangeCallArguments(
-		sema, context, selected, args, names, range, lhs, callArguments);
+		sema, context, selected, args, names, range, receiver, callArguments);
 	ConvertCallArgumentsToFormalTypes(
-		sema, context, *method, args, range, lhs, callArguments);
+		sema, context, *method, args, range, receiver, callArguments);
 	asCQualType resultType = method->type.IsValid()
 		? method->type : leftExpr->type;
 	const asASTExprId call = sema.ActOnCall(
 		selected, args, resultType, range, &callArguments);
-	if( call.IsValid() && lhs.IsValid() )
+	if( call.IsValid() && receiver.IsValid() )
 	{
-		context.SetExprReceiver(call, lhs);
+		context.SetExprReceiver(call, receiver);
 	}
 	return call;
 }
@@ -5418,10 +5430,12 @@ asASTExprId asCSema::ActOnAssignExpr(asASTExprId lhs, asASTExprId rhs, const asC
 			break;
 		}
 		const asCExpr* const left = context.GetExpr(target);
-		if( left != 0
-			&& left->valueCategory == asAST_VALUE_LVALUE
-			&& !left->type.IsConst() )
+		if( left != 0 && !left->type.IsConst() )
 		{
+			// Overloaded += is a method Call, not a store. VALUE temporaries
+			// such as Make() += 7 are valid receivers, matching LEGACY
+			// CompileOverloadedDualOperator. The leftover Assign path below
+			// still rejects non-lvalue primitive stores.
 			const asASTExprId rewrittenCall = TryRewriteOverloadedAssignmentToCall(
 				*this, engine, context, target, rhs, range, assignMethod);
 			if( rewrittenCall.IsValid() )
