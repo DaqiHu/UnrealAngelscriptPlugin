@@ -2820,6 +2820,35 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 				return Fail(result, asAST_VERIFY_WRONG_KIND, expr->range, "cleanup-dtor", asSASTNodeRef::FromExpr(id), asAST_EDGE_EXPR_RESOLVED_DECL, asSASTNodeRef::FromDecl(expr->resolvedDecl));
 			}
 		}
+		if( expr->kind == asAST_EXPR_SEQUENCE )
+		{
+			for( asUINT childIndex = 0;
+				childIndex < expr->children.GetLength(); ++childIndex )
+			{
+				const asCExpr* const child =
+					context.GetExpr(expr->children[childIndex]);
+				const asCDecl* const target = child != 0
+					&& child->kind == asAST_EXPR_DECL_REF
+					? context.GetDecl(child->resolvedDecl) : 0;
+				if( target != 0
+					&& (target->kind == asAST_DECL_FUNCTION
+						|| target->kind == asAST_DECL_METHOD
+						|| target->kind == asAST_DECL_CONSTRUCTOR
+						|| target->kind == asAST_DECL_DESTRUCTOR
+						|| target->kind == asAST_DECL_MIXIN
+						|| target->kind == asAST_DECL_CLASS) )
+				{
+					return Fail(
+						result,
+						asAST_VERIFY_INVALID_CHILD,
+						expr->range,
+						"sequence-non-executable-designator",
+						asSASTNodeRef::FromExpr(id),
+						asAST_EDGE_EXPR_CHILD,
+						asSASTNodeRef::FromExpr(child->id));
+				}
+			}
+		}
 		if( expr->kind == asAST_EXPR_CLEANUP
 			&& expr->literal.Equals("scope-exit") )
 		{

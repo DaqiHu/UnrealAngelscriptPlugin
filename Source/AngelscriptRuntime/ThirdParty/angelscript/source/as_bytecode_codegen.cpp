@@ -5172,21 +5172,6 @@ namespace
 				int last = 0;
 				for( asUINT i = 0; i < expr->children.GetLength(); ++i )
 				{
-					const asCExpr* child = context.GetExpr(expr->children[i]);
-					if( child && child->kind == asAST_EXPR_CALL && !child->resolvedDecl.IsValid() )
-					{
-						// Parser FromNode can intern a receiver-less CALL beside the member CALL.
-						continue;
-					}
-					if( child && child->kind == asAST_EXPR_DECL_REF )
-					{
-						const asCDecl* target = context.GetDecl(child->resolvedDecl);
-						if( target && (CanonicalDeclIsFunctionLike(target->kind) || target->kind == asAST_DECL_CLASS) )
-						{
-							// IIFE / T() intern keeps a DECL_REF beside CALL/CONSTRUCT.
-							continue;
-						}
-					}
 					last = EmitExpr(expr->children[i]);
 				}
 				return last;

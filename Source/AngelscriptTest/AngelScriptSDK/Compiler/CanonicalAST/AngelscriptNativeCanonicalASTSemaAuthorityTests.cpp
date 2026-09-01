@@ -28327,6 +28327,169 @@ public:
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("kind=Sequence")), *DumpMsg));
 	}
 
+	TEST_METHOD(CompileSealCallAndConstructDesignatorsNeverBecomeSequenceSteps)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const PublicModule = ScriptEngine->GetModule(
+			"SemaSequenceDesignatorSource", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(PublicModule));
+		ASSERT_THAT(AreEqual(0,
+			PublicModule->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class C
+			{
+				int Get()
+				{
+					return 40;
+				}
+			}
+
+			C Make()
+			{
+				return C();
+			}
+
+			int Entry()
+			{
+				return Make().Get() + 1;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, PublicModule->AddScriptSection(
+			"SemaSequenceDesignatorSource.as", ScriptSource.c_str())));
+		asCString NativeDump;
+		ASSERT_THAT(IsTrue(
+			CanonicalASTSemaAuthorityTest::DumpSealedCanonicalAst(
+				PublicModule, NativeDump),
+			TEXT("call/construct designator fixture must publish a sealed AST")));
+
+		asCModule* const Module = static_cast<asCModule*>(PublicModule);
+		const asCASTContext* const Context = Module->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asSAstVerifyResult Publication;
+		ASSERT_THAT(AreEqual(
+			(int)asAST_VERIFY_OK,
+			asCASTVerifyPublication(*Context, Publication),
+			TEXT("the retained call/construct graph must be publishable")));
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(NativeDump);
+		const FString Evidence = FString::Printf(
+			TEXT("Sema must publish executable Sequence children, never parser designators. AST:\n%s"),
+			*Dump);
+
+		for (asUINT ExprIndex = 1;
+			ExprIndex <= Context->GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Sequence =
+				Context->GetExpr(asASTExprId(ExprIndex));
+			if (Sequence == nullptr || Sequence->kind != asAST_EXPR_SEQUENCE)
+			{
+				continue;
+			}
+			for (asUINT ChildIndex = 0;
+				ChildIndex < Sequence->children.GetLength(); ++ChildIndex)
+			{
+				const asCExpr* const Child =
+					Context->GetExpr(Sequence->children[ChildIndex]);
+				const asCDecl* const Target = Child != nullptr
+					? Context->GetDecl(Child->resolvedDecl) : nullptr;
+				const bool bUnresolvedCall = Child != nullptr
+					&& Child->kind == asAST_EXPR_CALL
+					&& (!Child->resolvedDecl.IsValid()
+						|| Child->callDispatch == asAST_CALL_DISPATCH_NONE);
+				const bool bNonExecutableDesignator = Child != nullptr
+					&& Child->kind == asAST_EXPR_DECL_REF
+					&& Target != nullptr
+					&& (Target->kind == asAST_DECL_FUNCTION
+						|| Target->kind == asAST_DECL_METHOD
+						|| Target->kind == asAST_DECL_CONSTRUCTOR
+						|| Target->kind == asAST_DECL_DESTRUCTOR
+						|| Target->kind == asAST_DECL_MIXIN
+						|| Target->kind == asAST_DECL_CLASS);
+				ASSERT_THAT(IsFalse(
+					bUnresolvedCall || bNonExecutableDesignator,
+					*Evidence));
+			}
+		}
+	}
+
+	TEST_METHOD(VerifierRejectsNonExecutableFunctionDeclRefInSequence)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asCSourceRange Range;
+		const asASTDeclId Tu =
+			Sema.ActOnTranslationUnit("ForgedSequenceFunctionDesignator");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId Target =
+			Sema.ActOnFunctionDecl(Tu, "Target", IntType, Range);
+		asCArray<asASTExprId> Parts;
+		Parts.PushLast(Sema.ActOnDeclRef(Target, IntType, Range));
+		Parts.PushLast(Sema.ActOnIntegerLiteral(41, Range));
+		ASSERT_THAT(IsTrue(Sema.ActOnSequenceExpr(Parts, Range).IsValid()));
+
+		asSAstVerifyResult Verify;
+		ASSERT_THAT(AreEqual(
+			(int)asAST_VERIFY_INVALID_CHILD,
+			asCASTVerify(Context, Verify),
+			TEXT("an executable Sequence must reject a function designator before CodeGen")));
+		ASSERT_THAT(IsTrue(
+			Verify.detail.Equals("sequence-non-executable-designator"),
+			TEXT("the verifier must identify the forbidden Sequence designator")));
+	}
+
+	TEST_METHOD(VerifierRejectsNonExecutableClassDeclRefInSequence)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asCSourceRange Range;
+		const asASTDeclId Tu =
+			Sema.ActOnTranslationUnit("ForgedSequenceClassDesignator");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asCQualType ClassType = Context.InternNamedType(
+			asAST_TYPE_REFERENCE_OBJECT,
+			"C",
+			asAST_QUAL_HANDLE | asAST_QUAL_AUTO_HANDLE);
+		const asASTDeclId Class = Sema.ActOnClassDecl(Tu, "C", Range);
+		asCArray<asASTExprId> Parts;
+		Parts.PushLast(Sema.ActOnDeclRef(Class, ClassType, Range));
+		Parts.PushLast(Sema.ActOnIntegerLiteral(41, Range));
+		ASSERT_THAT(IsTrue(Sema.ActOnSequenceExpr(Parts, Range).IsValid()));
+
+		asSAstVerifyResult Verify;
+		ASSERT_THAT(AreEqual(
+			(int)asAST_VERIFY_INVALID_CHILD,
+			asCASTVerify(Context, Verify),
+			TEXT("an executable Sequence must reject a class designator before CodeGen")));
+		ASSERT_THAT(IsTrue(
+			Verify.detail.Equals("sequence-non-executable-designator"),
+			TEXT("the verifier must identify the forbidden Sequence designator")));
+	}
+
 	TEST_METHOD(SequenceSameBeginDifferentEndInternsDistinctNodes)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
