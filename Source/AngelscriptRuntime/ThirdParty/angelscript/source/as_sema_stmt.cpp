@@ -668,9 +668,18 @@ asASTStmtId asCSema::ActOnWhileStmt(asASTDeclId owner, asASTExprId cond, asASTSt
 
 asASTStmtId asCSema::ActOnForStmt(asASTDeclId owner, asASTStmtId initStmt, asASTExprId cond, asASTExprId incr, asASTStmtId body, const asCSourceRange& range, const asCSourceRange& incrStmtRange)
 {
+	// LEGACY CompileCondition converts VALUE objects with `bool opImplConv()`
+	// before the loop test. `for (; Object; )` must be a stmt cond Call of that
+	// method, not leftover DeclRef of T.
+	cond = RewriteValueToBoolViaOpImplConv(
+		*this, context, engine, cond, range);
 	asASTStmtId loop = FindExistingStmt(asAST_STMT_FOR, range);
 	if( loop.IsValid() && !ControlNeedsFill(context.GetStmt(loop)) )
 	{
+		if( cond.IsValid() )
+		{
+			context.SetStmtExpr(loop, cond);
+		}
 		return loop;
 	}
 	if( !loop.IsValid() )
@@ -2682,8 +2691,16 @@ asASTStmtId asCSema::ActOnForStatementAction(
 			: ActOnSequenceExpr(action.increments, incrementRange);
 	}
 
+	asASTExprId cond = action.condition;
+	if( cond.IsValid() )
+	{
+		// Typed for finish writes the condition directly. LEGACY
+		// CompileCondition converts VALUE objects with `bool opImplConv()`.
+		cond = RewriteValueToBoolViaOpImplConv(
+			*this, context, engine, cond, range);
+	}
 	context.SetStmtRange(control, range);
-	context.SetStmtExpr(control, action.condition);
+	context.SetStmtExpr(control, cond);
 	context.ClearStmtChildren(control);
 	if( action.initStatement.IsValid() )
 	{

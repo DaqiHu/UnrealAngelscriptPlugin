@@ -13386,6 +13386,122 @@ public:
 				*Dump)));
 	}
 
+	TEST_METHOD(CanonicalForCondRewritesValueOpImplConvWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 for-cond opImplConv fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaForCondOpImplConv", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				bool opImplConv() const
+				{
+					return Stored != 0;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				int Value = 0;
+				for (; Object; )
+				{
+					Value = 1;
+					break;
+				}
+				return Value;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaForCondOpImplConv.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("for (; Object; ) must compile from sealed T::opImplConv / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("for-cond opImplConv Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("for-cond opImplConv must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const ForStmt = Entry != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				*const_cast<asCASTContext*>(Context),
+				Entry->id,
+				asAST_STMT_FOR)
+			: nullptr;
+		const asCExpr* Cond = ForStmt != nullptr
+			? Context->GetExpr(ForStmt->expr) : nullptr;
+		while (Cond != nullptr
+			&& (Cond->kind == asAST_EXPR_CONVERSION
+				|| Cond->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& Cond->children.GetLength() == 1)
+		{
+			Cond = Context->GetExpr(Cond->children[0]);
+		}
+		const asCDecl* const ConvCallee = Cond != nullptr
+			? Context->GetDecl(Cond->resolvedDecl) : nullptr;
+		const asCType* const CondType = Cond != nullptr
+			? Context->GetType(Cond->type.type) : nullptr;
+		ASSERT_THAT(IsTrue(
+			Cond != nullptr
+				&& Cond->kind == asAST_EXPR_CALL
+				&& ConvCallee != nullptr
+				&& ConvCallee->name.Equals("opImplConv")
+				&& CondType != nullptr
+				&& CondType->kind == asAST_TYPE_PRIMITIVE
+				&& CondType->primitiveToken == ttBool,
+			*FString::Printf(
+				TEXT("for (; Object; ) must be stmt cond Call of T::opImplConv() bool, not leftover DeclRef of T. dump:\n%s"),
+				*Dump)));
+	}
+
 	TEST_METHOD(SequenceSingleEvalShortCircuitConditionalAndGeneratedDefaultAreSealedTogether)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
