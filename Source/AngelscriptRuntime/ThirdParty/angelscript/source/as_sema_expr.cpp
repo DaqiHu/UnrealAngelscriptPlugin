@@ -3016,6 +3016,70 @@ static void ConvertCallArgumentsToFormalTypes(asCSema& sema, asCASTContext& cont
 	const asCSourceRange& range, asASTExprId implicitReceiver,
 	asCArray<asSASTCallArgument>& callArguments);
 
+static asASTExprId TryRewriteObjectOpCall(
+	asCSema& sema,
+	asCASTContext& context,
+	asCScriptEngine* engine,
+	asASTExprId calleeExpr,
+	const asCArray<asASTExprId>& args,
+	const asCArray<asCString>* argumentNames,
+	const asCSourceRange& range)
+{
+	const asCExpr* const callee = context.GetExpr(calleeExpr);
+	if( callee == 0 || !callee->type.IsValid() )
+	{
+		return asASTExprId();
+	}
+	const asCType* const named = context.GetType(callee->type.type);
+	if( named == 0
+		|| (named->kind != asAST_TYPE_VALUE_OBJECT
+			&& named->kind != asAST_TYPE_REFERENCE_OBJECT) )
+	{
+		return asASTExprId();
+	}
+	if( engine != 0 )
+	{
+		InternNativeMethods(sema, engine, context, callee->type, "opCall");
+	}
+	const asASTDeclId typeDecl = FindNamedTypeDecl(context, callee->type);
+	const asASTDeclId opCall = FindBestCallee(
+		context, typeDecl, "opCall", args, &sema, &callee->type, false,
+		argumentNames);
+	const asCDecl* const method = context.GetDecl(opCall);
+	if( method == 0
+		|| method->kind != asAST_DECL_METHOD
+		|| !method->name.Equals("opCall") )
+	{
+		return asASTExprId();
+	}
+	asCArray<asASTExprId> callArgs = args;
+	asCArray<asCString> names;
+	asCArray<asSASTCallArgument> callArguments;
+	if( argumentNames != 0 )
+	{
+		names = *argumentNames;
+	}
+	ArrangeCallArguments(
+		sema, context, opCall, callArgs, names, range,
+		calleeExpr, callArguments);
+	ConvertCallArgumentsToFormalTypes(
+		sema, context, *method, callArgs, range, calleeExpr,
+		callArguments);
+	asCQualType type = context.InternPrimitive(ttInt, 0);
+	if( method->type.IsValid() )
+	{
+		type = method->type;
+	}
+	asASTExprId call = sema.ActOnCall(
+		opCall, callArgs, type, range, &callArguments);
+	if( call.IsValid() && calleeExpr.IsValid() )
+	{
+		context.SetExprReceiver(call, calleeExpr);
+	}
+	return ShouldMaterializeCallResult(context, type)
+		? sema.ActOnMaterializeTemporary(call, range) : call;
+}
+
 asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const asCArray<asASTExprId>& inArgs, const asCSourceRange& range, asASTExprId implicitReceiver, const asCArray<asCString>* argumentNames, bool exactScope, const asCQualType* typeNameTarget)
 {
 	const asASTExprId originalReceiver = implicitReceiver;
@@ -3149,6 +3213,53 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 	}
 	if( !callee.IsValid() )
 	{
+		if( !implicitReceiver.IsValid() && name && name[0] )
+		{
+			asCArray<asASTDeclId> objectHits;
+			LookupCandidatesFrom(owner, name, objectHits);
+			asASTDeclId objectDeclId;
+			for( asUINT hitIndex = 0; hitIndex < objectHits.GetLength(); ++hitIndex )
+			{
+				const asCDecl* const hit = context.GetDecl(objectHits[hitIndex]);
+				if( hit != 0
+					&& (hit->kind == asAST_DECL_VAR
+						|| hit->kind == asAST_DECL_PARAM
+						|| hit->kind == asAST_DECL_PROPERTY) )
+				{
+					objectDeclId = hit->id;
+					break;
+				}
+			}
+			if( objectDeclId.IsValid() )
+			{
+				asCQualType objectType = context.InternPrimitive(ttInt, 0);
+				if( const asCDecl* const objectDecl = context.GetDecl(objectDeclId) )
+				{
+					if( objectDecl->type.IsValid() )
+					{
+						objectType = objectDecl->type;
+					}
+				}
+				const asASTExprId objectRef =
+					ActOnDeclRef(objectDeclId, objectType, range);
+				if( name && name[0] )
+				{
+					context.SetLiteral(objectRef, name);
+				}
+				asCArray<asASTExprId> objectArgs;
+				for( asUINT argIndex = 0; argIndex < inArgs.GetLength(); ++argIndex )
+				{
+					objectArgs.PushLast(inArgs[argIndex]);
+				}
+				const asASTExprId rewritten = TryRewriteObjectOpCall(
+					*this, context, engine, objectRef, objectArgs,
+					argumentNames, range);
+				if( rewritten.IsValid() )
+				{
+					return rewritten;
+				}
+			}
+		}
 		asCString msg = "unresolved-callee:";
 		if( name && name[0] )
 		{
@@ -4289,6 +4400,12 @@ asASTExprId asCSema::ActOnPostfixCallExpr(asASTDeclId owner, asASTExprId calleeE
 						callee->id, callArgs, type, range, &callArguments);
 				}
 			}
+		}
+		const asASTExprId rewritten = TryRewriteObjectOpCall(
+			*this, context, engine, calleeExpr, args, argumentNames, range);
+		if( rewritten.IsValid() )
+		{
+			return rewritten;
 		}
 		if( lhs->literal.GetLength() )
 		{
