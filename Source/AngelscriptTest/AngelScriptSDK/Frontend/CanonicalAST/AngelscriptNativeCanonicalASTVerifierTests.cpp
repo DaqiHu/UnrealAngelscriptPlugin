@@ -64,6 +64,100 @@ struct FAggregateLifetimeViewFixture
 	asCArray<asASTExprId> SecondInnerElements;
 };
 
+struct FTemporaryLifetimeViewFixture
+{
+	asASTDeclId Destructor;
+	asASTDeclId ForeignConstructor;
+	asASTDeclId ForeignDestructor;
+	asASTStmtId Statement;
+	asASTExprId Construct;
+	asASTExprId Materialize;
+	asASTExprId Cleanup;
+};
+
+static FTemporaryLifetimeViewFixture BuildTemporaryLifetimeViewFixture(
+	asCASTContext& Context)
+{
+	FTemporaryLifetimeViewFixture Fixture;
+	const asASTDeclId Tu = Context.CreateTranslationUnit(
+		"TemporaryLifetimeView");
+	const asCQualType VoidType = Context.InternPrimitive(ttVoid);
+	const asCQualType ValueType = Context.InternNamedType(
+		asAST_TYPE_VALUE_OBJECT, "FTracked", 0);
+	const asCQualType ForeignType = Context.InternNamedType(
+		asAST_TYPE_VALUE_OBJECT, "FForeign", 0);
+
+	const asASTDeclId ValueClass = Context.CreateDecl(
+		asAST_DECL_CLASS, Tu, asCSourceRange(), "FTracked");
+	Context.SetStableKey(ValueClass, "FTracked");
+	Context.SetDeclType(ValueClass, ValueType);
+	const asASTDeclId Constructor = Context.CreateDecl(
+		asAST_DECL_CONSTRUCTOR, ValueClass, asCSourceRange(), "FTracked");
+	Context.SetDeclType(Constructor, VoidType);
+	Fixture.Destructor = Context.CreateDecl(
+		asAST_DECL_DESTRUCTOR, ValueClass, asCSourceRange(), "FTracked");
+	Context.SetDeclType(Fixture.Destructor, VoidType);
+
+	const asASTDeclId ForeignClass = Context.CreateDecl(
+		asAST_DECL_CLASS, Tu, asCSourceRange(), "FForeign");
+	Context.SetStableKey(ForeignClass, "FForeign");
+	Context.SetDeclType(ForeignClass, ForeignType);
+	Fixture.ForeignConstructor = Context.CreateDecl(
+		asAST_DECL_CONSTRUCTOR, ForeignClass, asCSourceRange(), "FForeign");
+	Context.SetDeclType(Fixture.ForeignConstructor, VoidType);
+	Fixture.ForeignDestructor = Context.CreateDecl(
+		asAST_DECL_DESTRUCTOR, ForeignClass, asCSourceRange(), "FForeign");
+	Context.SetDeclType(Fixture.ForeignDestructor, VoidType);
+
+	const asASTDeclId Function = Context.CreateDecl(
+		asAST_DECL_FUNCTION, Tu, asCSourceRange(), "Entry");
+	Context.SetDeclType(Function, VoidType);
+	const asASTStmtId Body = Context.CreateStmt(
+		asAST_STMT_BLOCK, Function, asCSourceRange());
+	Context.SetBody(Function, Body);
+
+	Fixture.Construct = Context.CreateExpr(
+		asAST_EXPR_CONSTRUCT, ValueType, asAST_VALUE_PRVALUE, asCSourceRange());
+	Context.SetLiteral(Fixture.Construct, "FTracked::FTracked()");
+	Context.SetResolvedDecl(Fixture.Construct, Constructor);
+	Fixture.Materialize = Context.CreateExpr(
+		asAST_EXPR_MATERIALIZE_TEMPORARY,
+		ValueType,
+		asAST_VALUE_XVALUE,
+		asCSourceRange());
+	Context.SetLiteral(Fixture.Materialize, "materialize");
+	Context.AddExprChild(Fixture.Materialize, Fixture.Construct);
+	Fixture.Cleanup = Context.CreateExpr(
+		asAST_EXPR_CLEANUP, ValueType, asAST_VALUE_PRVALUE, asCSourceRange());
+	Context.SetLiteral(Fixture.Cleanup, "cleanup");
+	Context.SetResolvedDecl(Fixture.Cleanup, Fixture.Destructor);
+	Context.AddExprChild(Fixture.Cleanup, Fixture.Materialize);
+	Fixture.Statement = Context.CreateStmt(
+		asAST_STMT_EXPR, Function, asCSourceRange());
+	Context.SetStmtExpr(Fixture.Statement, Fixture.Cleanup);
+	Context.AddStmtChild(Body, Fixture.Statement);
+	return Fixture;
+}
+
+static asSASTLifetimeRecord MakeTemporaryLifetimeRecord(
+	const FTemporaryLifetimeViewFixture& Fixture)
+{
+	asSASTLifetimeRecord Record;
+	Record.subjectKind = asAST_LIFETIME_SUBJECT_TEMPORARY;
+	Record.subject = asSASTLifetimeNodeId::FromExpr(Fixture.Materialize);
+	Record.actionKind = asAST_LIFETIME_ACTION_DESTROY_VALUE;
+	Record.actionTarget = asSASTLifetimeNodeId::FromDecl(Fixture.Destructor);
+	Record.activationPoint = Record.subject;
+	Record.semanticRegion = asSASTLifetimeNodeId::FromStmt(Fixture.Statement);
+	Record.phase = asAST_LIFETIME_PHASE_FULL_EXPRESSION;
+	Record.supportedExitMask = asAST_LIFETIME_EXIT_NORMAL
+		| asAST_LIFETIME_EXIT_EXCEPTION;
+	Record.constructionStep = 0;
+	Record.order = 0;
+	Record.completeObjectCommit = false;
+	return Record;
+}
+
 static asASTDeclId CreateListFactory(
 	asCASTContext& Context,
 	asASTDeclId Owner,
@@ -1408,6 +1502,138 @@ public:
 			TEXT("initializer failure must exclude the failed current object")));
 		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
 			SecondCommit->abortCleanup[0]));
+	}
+
+	TEST_METHOD(BuildsTemporaryFullExpressionCleanupPlanWithoutLexicalScope)
+	{
+		asCASTContext Context;
+		const FTemporaryLifetimeViewFixture Fixture =
+			BuildTemporaryLifetimeViewFixture(Context);
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+			MakeTemporaryLifetimeRecord(Fixture))));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("an exact constructor temporary lifetime must authenticate")));
+
+		asCASTLifetimeView View;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			asCASTBuildLifetimeView(Context, View)));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0), View.GetScopeEdgeCount()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1), View.GetExitPlanCount(),
+			TEXT("a full expression must expose one protocol-derived cleanup plan")));
+		const asSASTLifetimeExitPlan* const Plan = View.GetExitPlan(0);
+		ASSERT_THAT(IsTrue(Plan != nullptr
+			&& Plan->kind == asAST_LIFETIME_EXIT_PLAN_FULL_EXPRESSION
+			&& Plan->structuralOwner == Fixture.Statement
+			&& Plan->exitMask
+				== (asAST_LIFETIME_EXIT_NORMAL | asAST_LIFETIME_EXIT_EXCEPTION)
+			&& Plan->recordIndices.GetLength() == 1
+			&& Plan->recordIndices[0] == 0,
+			TEXT("the full-expression plan must destroy the committed temporary exactly once")));
+	}
+
+	TEST_METHOD(RejectsMissingAndForgedTemporaryFullExpressionRecords)
+	{
+		{
+			asCASTContext Context;
+			BuildTemporaryLifetimeViewFixture(Context);
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("a supported constructor temporary may not rely on its cleanup wrapper as hidden lifetime authority")));
+		}
+		{
+			asCASTContext Context;
+			const FTemporaryLifetimeViewFixture Fixture =
+				BuildTemporaryLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeTemporaryLifetimeRecord(Fixture);
+			Record.actionTarget = asSASTLifetimeNodeId::FromDecl(
+				Fixture.ForeignDestructor);
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Record)));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("a temporary may not substitute an unrelated exact destructor")));
+		}
+		{
+			asCASTContext Context;
+			const FTemporaryLifetimeViewFixture Fixture =
+				BuildTemporaryLifetimeViewFixture(Context);
+			asSASTLifetimeRecord Record = MakeTemporaryLifetimeRecord(Fixture);
+			Record.activationPoint = asSASTLifetimeNodeId::FromExpr(
+				Fixture.Construct);
+			ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(Record)));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+				Context.Seal(),
+				TEXT("a temporary cannot become live before successful materialization")));
+		}
+	}
+
+	TEST_METHOD(RejectsMalformedTemporaryFullExpressionThatOmitsLifetimeAuthority)
+	{
+		asCASTContext Context;
+		const FTemporaryLifetimeViewFixture Fixture =
+			BuildTemporaryLifetimeViewFixture(Context);
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(
+			Fixture.Cleanup, asASTDeclId())));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+			Context.Seal(),
+			TEXT("a direct constructor-temporary cleanup with no destructor target must fail closed rather than evade lifetime authority")));
+	}
+
+	TEST_METHOD(RejectsTemporaryWhoseConstructedObjectDoesNotMatchItsLifetimeSubject)
+	{
+		asCASTContext Context;
+		const FTemporaryLifetimeViewFixture Fixture =
+			BuildTemporaryLifetimeViewFixture(Context);
+		const asCQualType ForeignType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FForeign", 0);
+		ASSERT_THAT(AreEqual(0, Context.SetExprType(
+			Fixture.Construct, ForeignType)));
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(
+			Fixture.Construct, Fixture.ForeignConstructor)));
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+			MakeTemporaryLifetimeRecord(Fixture))));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+			Context.Seal(),
+			TEXT("temporary lifetime authority must reject a foreign constructed object hidden beneath a matching materialize/destructor wrapper")));
+	}
+
+	TEST_METHOD(RejectsTemporaryWhoseCleanupWrapperChangesTheMaterializedType)
+	{
+		asCASTContext Context;
+		const FTemporaryLifetimeViewFixture Fixture =
+			BuildTemporaryLifetimeViewFixture(Context);
+		const asCQualType ForeignType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FForeign", 0);
+		ASSERT_THAT(AreEqual(0, Context.SetExprType(
+			Fixture.Cleanup, ForeignType)));
+		ASSERT_THAT(AreEqual(0, Context.AddLifetimeRecord(
+			MakeTemporaryLifetimeRecord(Fixture))));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+			Context.Seal(),
+			TEXT("temporary lifetime authority must reject a cleanup wrapper whose type differs from the materialized value")));
+	}
+
+	TEST_METHOD(RejectsValueTemporaryPartiallyDisguisedAsReferenceObject)
+	{
+		asCASTContext Context;
+		const FTemporaryLifetimeViewFixture Fixture =
+			BuildTemporaryLifetimeViewFixture(Context);
+		const asCQualType ForgedReferenceType = Context.InternNamedType(
+			asAST_TYPE_REFERENCE_OBJECT,
+			"FTracked",
+			asAST_QUAL_HANDLE | asAST_QUAL_AUTO_HANDLE);
+		ASSERT_THAT(AreEqual(0, Context.SetExprType(
+			Fixture.Materialize, ForgedReferenceType)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_INVALID_LIFETIME_PROTOCOL),
+			Context.Seal(),
+			TEXT("a value temporary cannot evade lifetime authority by changing only its materialized type to a reference-object handle")));
 	}
 
 	TEST_METHOD(BuildsDeterministicConstructorCommittedPrefixPlan)

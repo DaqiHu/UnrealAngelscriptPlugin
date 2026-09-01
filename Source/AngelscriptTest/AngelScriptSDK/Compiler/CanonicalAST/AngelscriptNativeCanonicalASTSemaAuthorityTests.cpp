@@ -8894,6 +8894,216 @@ public:
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("callee=FValue::FValue()")), *MissingCtor));
 	}
 
+	TEST_METHOD(SourceTemporaryFullExpressionSealsExactLifetimeRecord)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaTemporaryFullExpressionLifetime");
+		ASSERT_THAT(IsNotNull(Module));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		asCScriptCode Code;
+
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct FTracked
+			{
+				int Value = 41;
+			}
+
+			void Entry()
+			{
+				FTracked();
+			}
+			)AS");
+		Code.SetCode("SemaTemporaryFullExpressionLifetime.as",
+			ScriptSource.c_str(), true);
+		asCASTContext SemaContext;
+		asCSema Sema(ScriptEngine, SemaContext);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("temporary full-expression source must reach Canonical Sema")));
+		ASSERT_THAT(AreEqual(0, SemaContext.Seal(),
+			TEXT("temporary full-expression Sema graph must verify before CodeGen")));
+		const asCASTContext* const Context = &SemaContext;
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString Details = FString::Printf(
+			TEXT("a value temporary must seal its exact full-expression lifetime before CodeGen. AST:\n%s"),
+			*Dump);
+
+		const asCDecl* Entry = nullptr;
+		const asCDecl* TrackedClass = nullptr;
+		const asCDecl* TrackedDestructor = nullptr;
+		for (asUINT Index = 1; Index <= Context->GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context->GetDecl(asASTDeclId(Index));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_FUNCTION
+				&& Decl->name.Equals("Entry"))
+			{
+				Entry = Decl;
+			}
+			else if (Decl != nullptr && Decl->kind == asAST_DECL_CLASS
+				&& Decl->name.Equals("FTracked"))
+			{
+				TrackedClass = Decl;
+			}
+		}
+		for (asUINT Index = 1;
+			TrackedClass != nullptr && Index <= Context->GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context->GetDecl(asASTDeclId(Index));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_DESTRUCTOR
+				&& Decl->parent == TrackedClass->id)
+			{
+				TrackedDestructor = Decl;
+				break;
+			}
+		}
+
+		const asCStmt* ExpressionStatement = nullptr;
+		for (asUINT Index = 1; Index <= Context->GetStmtCount(); ++Index)
+		{
+			const asCStmt* const Statement = Context->GetStmt(asASTStmtId(Index));
+			if (Statement != nullptr && Statement->kind == asAST_STMT_EXPR
+				&& Entry != nullptr && Statement->owner == Entry->id)
+			{
+				ExpressionStatement = Statement;
+				break;
+			}
+		}
+
+		const asCExpr* Materialize = nullptr;
+		const asCExpr* Cleanup = nullptr;
+		for (asUINT Index = 1; Index <= Context->GetExprCount(); ++Index)
+		{
+			const asCExpr* const Candidate = Context->GetExpr(asASTExprId(Index));
+			const asCExpr* const Inner = Candidate != nullptr
+				&& Candidate->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+				&& Candidate->children.GetLength() == 1
+				? Context->GetExpr(Candidate->children[0]) : nullptr;
+			const asCType* const Type = Inner != nullptr
+				? Context->GetType(Inner->type.type) : nullptr;
+			if (Inner != nullptr && Inner->kind == asAST_EXPR_CONSTRUCT
+				&& Type != nullptr && Type->stableKey.Equals("FTracked"))
+			{
+				Materialize = Candidate;
+				break;
+			}
+		}
+		for (asUINT Index = 1;
+			Materialize != nullptr && Index <= Context->GetExprCount(); ++Index)
+		{
+			const asCExpr* const Candidate = Context->GetExpr(asASTExprId(Index));
+			if (Candidate != nullptr && Candidate->kind == asAST_EXPR_CLEANUP
+				&& Candidate->children.GetLength() == 1
+				&& Candidate->children[0] == Materialize->id)
+			{
+				Cleanup = Candidate;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(Entry != nullptr && TrackedClass != nullptr
+			&& TrackedDestructor != nullptr && ExpressionStatement != nullptr
+			&& Materialize != nullptr && Cleanup != nullptr
+			&& Cleanup->resolvedDecl == TrackedDestructor->id,
+			*Details));
+		if (TrackedDestructor == nullptr || ExpressionStatement == nullptr
+			|| Materialize == nullptr || Cleanup == nullptr)
+		{
+			return;
+		}
+
+		const asSASTLifetimeRecord* TemporaryRecord = nullptr;
+		asUINT TemporaryRecordIndex = 0;
+		asUINT TemporaryRecordCount = 0;
+		for (asUINT Index = 0; Index < Context->GetLifetimeRecordCount(); ++Index)
+		{
+			const asSASTLifetimeRecord* const Record = Context->GetLifetimeRecord(Index);
+			if (Record != nullptr
+				&& Record->subjectKind == asAST_LIFETIME_SUBJECT_TEMPORARY
+				&& Record->subject == asSASTLifetimeNodeId::FromExpr(Materialize->id))
+			{
+				TemporaryRecord = Record;
+				TemporaryRecordIndex = Index;
+				++TemporaryRecordCount;
+			}
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1), TemporaryRecordCount,
+			TEXT("one materialized FTracked temporary must own exactly one lifetime record; ")
+				+ Details));
+		ASSERT_THAT(IsNotNull(TemporaryRecord,
+			TEXT("Canonical Sema must author the temporary lifetime before publication; ")
+				+ Details));
+		if (TemporaryRecord == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(
+			TemporaryRecord->actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE
+				&& TemporaryRecord->actionTarget
+					== asSASTLifetimeNodeId::FromDecl(TrackedDestructor->id)
+				&& TemporaryRecord->activationPoint
+					== asSASTLifetimeNodeId::FromExpr(Materialize->id)
+				&& TemporaryRecord->semanticRegion
+					== asSASTLifetimeNodeId::FromStmt(ExpressionStatement->id)
+				&& TemporaryRecord->phase == asAST_LIFETIME_PHASE_FULL_EXPRESSION
+				&& TemporaryRecord->supportedExitMask
+					== (asAST_LIFETIME_EXIT_NORMAL | asAST_LIFETIME_EXIT_EXCEPTION)
+				&& TemporaryRecord->constructionStep == 0
+				&& TemporaryRecord->order == TemporaryRecordIndex
+				&& !TemporaryRecord->completeObjectCommit,
+			*Details));
+
+		asCASTLifetimeView LifetimeView;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			static_cast<int32>(asCASTBuildLifetimeView(*Context, LifetimeView)),
+			*Details));
+		const asSASTLifetimeCommitPoint* TemporaryCommit = nullptr;
+		for (asUINT Index = 0; Index < LifetimeView.GetCommitPointCount(); ++Index)
+		{
+			const asSASTLifetimeCommitPoint* const Commit =
+				LifetimeView.GetCommitPoint(Index);
+			if (Commit != nullptr && Commit->recordIndex == TemporaryRecordIndex)
+			{
+				TemporaryCommit = Commit;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(TemporaryCommit != nullptr
+			&& TemporaryCommit->liveBefore.GetLength() == 0
+			&& TemporaryCommit->liveAfter.GetLength() == 1
+			&& TemporaryCommit->liveAfter[0] == TemporaryRecordIndex
+			&& TemporaryCommit->abortCleanup.GetLength() == 0
+			&& TemporaryCommit->reverseLiveCleanup.GetLength() == 1
+			&& TemporaryCommit->reverseLiveCleanup[0] == TemporaryRecordIndex,
+			TEXT("failed current construction must not clean the temporary, while a committed full-expression must; ")
+				+ Details));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0), LifetimeView.GetScopeEdgeCount(),
+			TEXT("a temporary full expression must not fabricate a lexical scope edge; ")
+				+ Details));
+		const asSASTLifetimeExitPlan* const FullExpressionPlan =
+			LifetimeView.FindExitPlan(
+				ExpressionStatement->id,
+				asAST_LIFETIME_EXIT_PLAN_FULL_EXPRESSION);
+		ASSERT_THAT(IsTrue(FullExpressionPlan != nullptr
+			&& FullExpressionPlan->exitMask
+				== (asAST_LIFETIME_EXIT_NORMAL | asAST_LIFETIME_EXIT_EXCEPTION)
+			&& FullExpressionPlan->recordIndices.GetLength() == 1
+			&& FullExpressionPlan->recordIndices[0] == TemporaryRecordIndex,
+			TEXT("a temporary full expression must derive one reverse cleanup plan; ")
+				+ Details));
+	}
+
 	TEST_METHOD(NamespaceOverloadSelectsScopedFunctionNotGlobal)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
@@ -38688,6 +38898,23 @@ public:
 		Parser.SetSema(&Sema);
 		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code), TEXT("class C() fixture must parse")));
 		ASSERT_THAT(AreEqual(0, Context.Seal(), TEXT("class C() graph must still seal; this is not a verifier firewall")));
+		asUINT ValueTemporaryRecordCount = 0;
+		for (asUINT RecordIndex = 0;
+			RecordIndex < Context.GetLifetimeRecordCount(); ++RecordIndex)
+		{
+			const asSASTLifetimeRecord* Record =
+				Context.GetLifetimeRecord(RecordIndex);
+			if (Record != nullptr
+				&& Record->subjectKind == asAST_LIFETIME_SUBJECT_TEMPORARY
+				&& Record->actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE
+				&& Record->phase == asAST_LIFETIME_PHASE_FULL_EXPRESSION)
+			{
+				++ValueTemporaryRecordCount;
+			}
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ValueTemporaryRecordCount,
+			TEXT("a class/reference-object temporary must not publish value-object destruction authority")));
 
 		asCString Dump;
 		asCASTDump(Context, Dump);

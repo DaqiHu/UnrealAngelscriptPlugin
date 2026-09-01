@@ -2989,6 +2989,12 @@ asASTStmtId asCSema::ActOnLeafStatementAction(
 		{
 			const asASTStmtId statement =
 				ActOnExprStmt(action.owner, action.expression, range);
+			if( action.expression.IsValid() && !action.recovered
+				&& ActOnFinishFullExpression(action.expression, statement)
+					!= asAST_VERIFY_OK )
+			{
+				return asASTStmtId();
+			}
 			context.SetStmtSafePointRole(
 				statement, asAST_SAFEPOINT_STATEMENT);
 			return statement;

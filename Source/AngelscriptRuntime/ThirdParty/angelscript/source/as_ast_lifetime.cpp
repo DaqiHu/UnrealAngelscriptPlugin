@@ -68,6 +68,12 @@ bool IsAggregateRecord(const asSASTLifetimeRecord& record)
 		== asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT;
 }
 
+bool IsFullExpressionRecord(const asSASTLifetimeRecord& record)
+{
+	return record.subjectKind == asAST_LIFETIME_SUBJECT_TEMPORARY
+		&& record.phase == asAST_LIFETIME_PHASE_FULL_EXPRESSION;
+}
+
 int VerifyBasicLifetimeRecord(
 	const asCASTContext& context,
 	const asSASTLifetimeRecord& record,
@@ -587,6 +593,106 @@ bool DestructorMatchesExprValue(
 		&& ValueTypeMatchesClass(context, expression.type, *owner);
 }
 
+bool ConstructorMatchesMaterializedValue(
+	const asCASTContext& context,
+	const asCExpr& construct,
+	const asCExpr& materialize)
+{
+	const asCDecl* const constructor = context.GetDecl(construct.resolvedDecl);
+	const asCDecl* const owner = constructor != 0
+		? context.GetDecl(constructor->parent) : 0;
+	return construct.kind == asAST_EXPR_CONSTRUCT
+		&& construct.type == materialize.type
+		&& materialize.valueCategory == asAST_VALUE_XVALUE
+		&& constructor != 0
+		&& constructor->kind == asAST_DECL_CONSTRUCTOR
+		&& owner != 0 && owner->kind == asAST_DECL_CLASS
+		&& ValueTypeMatchesClass(context, construct.type, *owner);
+}
+
+bool IsExactReferenceObjectConstructorTemporary(
+	const asCASTContext& context,
+	const asCExpr& cleanup,
+	const asCExpr& construct,
+	const asCExpr& materialize)
+{
+	const asCType* const canonicalType = materialize.type.IsValid()
+		? context.GetType(materialize.type.type) : 0;
+	const asCDecl* const constructor = context.GetDecl(construct.resolvedDecl);
+	const asCDecl* const owner = constructor != 0
+		? context.GetDecl(constructor->parent) : 0;
+	return canonicalType != 0
+		&& canonicalType->kind == asAST_TYPE_REFERENCE_OBJECT
+		&& materialize.type.IsHandle() && materialize.type.IsAutoHandle()
+		&& !materialize.type.IsReference()
+		&& cleanup.type == materialize.type
+		&& construct.type == materialize.type
+		&& materialize.valueCategory == asAST_VALUE_XVALUE
+		&& constructor != 0
+		&& constructor->kind == asAST_DECL_CONSTRUCTOR
+		&& owner != 0 && owner->kind == asAST_DECL_CLASS
+		&& canonicalType->stableKey.Equals(owner->stableKey);
+}
+
+enum asETemporaryShapeClassification
+{
+	asTEMPORARY_SHAPE_NOT_CANDIDATE = 0,
+	asTEMPORARY_SHAPE_MALFORMED,
+	asTEMPORARY_SHAPE_VALID
+};
+
+asETemporaryShapeClassification ClassifySupportedConstructorTemporary(
+	const asCASTContext& context,
+	const asCStmt& statement,
+	asASTExprId& outMaterialize,
+	asASTDeclId& outDestructor)
+{
+	outMaterialize = asASTExprId();
+	outDestructor = asASTDeclId();
+	if( statement.kind != asAST_STMT_EXPR )
+		return asTEMPORARY_SHAPE_NOT_CANDIDATE;
+	const asCExpr* const cleanup = context.GetExpr(statement.expr);
+	if( cleanup == 0 || cleanup->kind != asAST_EXPR_CLEANUP
+		|| !cleanup->literal.Equals("cleanup")
+		|| cleanup->children.GetLength() != 1 )
+	{
+		return asTEMPORARY_SHAPE_NOT_CANDIDATE;
+	}
+	const asCExpr* const materialize = context.GetExpr(cleanup->children[0]);
+	const asCExpr* const construct = materialize != 0
+		&& materialize->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+		&& materialize->children.GetLength() == 1
+		? context.GetExpr(materialize->children[0]) : 0;
+	if( construct == 0 || construct->kind != asAST_EXPR_CONSTRUCT )
+	{
+		return asTEMPORARY_SHAPE_NOT_CANDIDATE;
+	}
+	// Reference-object construction produces a handle whose ownership protocol
+	// is not DESTROY_VALUE.  CTA-S182 deliberately closes only direct value-
+	// object constructor temporaries, so an authenticated class temporary is a
+	// different family rather than a malformed instance of this one.
+	if( IsExactReferenceObjectConstructorTemporary(
+		context, *cleanup, *construct, *materialize) )
+	{
+		return asTEMPORARY_SHAPE_NOT_CANDIDATE;
+	}
+	if( cleanup->type != materialize->type
+		|| !ConstructorMatchesMaterializedValue(
+		context, *construct, *materialize) )
+	{
+		return asTEMPORARY_SHAPE_MALFORMED;
+	}
+	const asCDecl* const destructor = context.GetDecl(cleanup->resolvedDecl);
+	if( destructor == 0
+		|| !DestructorMatchesExprValue(context, *materialize, *destructor) )
+	{
+		return asTEMPORARY_SHAPE_MALFORMED;
+	}
+	outMaterialize = materialize->id;
+	outDestructor = destructor->id;
+	return asTEMPORARY_SHAPE_VALID;
+}
+
 bool IsAggregateSemanticOwner(const asCDecl& declaration)
 {
 	return declaration.kind == asAST_DECL_FUNCTION
@@ -715,6 +821,48 @@ bool ValidateLifetimeRecord(
 	{
 		return ValidateAggregateLifetimeRecord(
 			context, record, outActivationOrdinal);
+	}
+	if( IsFullExpressionRecord(record) )
+	{
+		if( record.subject.nodeClass != asAST_LIFETIME_NODE_EXPR
+			|| record.subject != record.activationPoint
+			|| record.actionKind != asAST_LIFETIME_ACTION_DESTROY_VALUE
+			|| record.actionTarget.nodeClass != asAST_LIFETIME_NODE_DECL
+			|| record.semanticRegion.nodeClass != asAST_LIFETIME_NODE_STMT
+			|| record.supportedExitMask
+				!= (asAST_LIFETIME_EXIT_NORMAL | asAST_LIFETIME_EXIT_EXCEPTION)
+			|| record.constructionStep != 0 || record.completeObjectCommit )
+		{
+			return false;
+		}
+		const asCExpr* const materialize = context.GetExpr(
+			asASTExprId(record.subject.value));
+		const asCExpr* const construct = materialize != 0
+			&& materialize->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+			&& materialize->children.GetLength() == 1
+			? context.GetExpr(materialize->children[0]) : 0;
+		const asCStmt* const statement = context.GetStmt(
+			asASTStmtId(record.semanticRegion.value));
+		const asCExpr* const cleanup = statement != 0
+			&& statement->kind == asAST_STMT_EXPR
+			? context.GetExpr(statement->expr) : 0;
+		const asCDecl* const destructor = context.GetDecl(
+			asASTDeclId(record.actionTarget.value));
+		if( construct == 0
+			|| !ConstructorMatchesMaterializedValue(
+				context, *construct, *materialize)
+			|| cleanup == 0 || cleanup->kind != asAST_EXPR_CLEANUP
+			|| cleanup->type != materialize->type
+			|| !cleanup->literal.Equals("cleanup")
+			|| cleanup->children.GetLength() != 1
+			|| cleanup->children[0] != materialize->id
+			|| cleanup->resolvedDecl != destructor->id
+			|| !DestructorMatchesExprValue(context, *materialize, *destructor) )
+		{
+			return false;
+		}
+		outActivationOrdinal = 0;
+		return true;
 	}
 	if( record.constructionStep != 0
 		|| record.completeObjectCommit
@@ -1441,6 +1589,7 @@ int asCASTBuildLifetimeView(
 		}
 		if( !IsConstructionRecord(*record)
 			&& !IsAggregateRecord(*record)
+			&& !IsFullExpressionRecord(*record)
 			&& !ContainsRegion(regions, record->semanticRegion) )
 			regions.PushLast(record->semanticRegion);
 	}
@@ -1509,10 +1658,11 @@ int asCASTBuildLifetimeView(
 		derived.record = source;
 		derived.recordIndex = index;
 		derived.scopeEdgeIndex = (IsConstructionRecord(source)
-			|| IsAggregateRecord(source))
+			|| IsAggregateRecord(source) || IsFullExpressionRecord(source))
 			? static_cast<asUINT>(-1)
 			: FindRegionIndex(outView, source.semanticRegion);
-		if( ((!IsConstructionRecord(source) && !IsAggregateRecord(source))
+		if( ((!IsConstructionRecord(source) && !IsAggregateRecord(source)
+				&& !IsFullExpressionRecord(source))
 				&& derived.scopeEdgeIndex == static_cast<asUINT>(-1))
 			|| !ValidateLifetimeRecord(
 				context, source, derived.activationOrdinal) )
@@ -1537,6 +1687,53 @@ int asCASTBuildLifetimeView(
 			}
 		}
 		outView.records.PushLast(derived);
+	}
+
+	// The first supported full-expression family is bidirectional: an exact
+	// Cleanup(MaterializeTemporary(Construct)) source shape must have one Sema
+	// record.  The compatibility wrapper alone is never lifetime authority.
+	for( asUINT statementIndex = 1;
+		statementIndex <= context.GetStmtCount(); ++statementIndex )
+	{
+		const asCStmt* const statement = context.GetStmt(
+			asASTStmtId(statementIndex));
+		asASTExprId materialize;
+		asASTDeclId destructor;
+		if( statement == 0 ) continue;
+		const asETemporaryShapeClassification classification =
+			ClassifySupportedConstructorTemporary(
+				context, *statement, materialize, destructor);
+		if( classification == asTEMPORARY_SHAPE_NOT_CANDIDATE )
+		{
+			continue;
+		}
+		if( classification == asTEMPORARY_SHAPE_MALFORMED )
+		{
+			outView.Reset();
+			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+		}
+		asUINT matchingRecords = 0;
+		for( asUINT recordIndex = 0;
+			recordIndex < outView.records.GetLength(); ++recordIndex )
+		{
+			const asSASTLifetimeRecord& record =
+				outView.records[recordIndex].record;
+			if( IsFullExpressionRecord(record)
+				&& record.subject
+					== asSASTLifetimeNodeId::FromExpr(materialize)
+				&& record.actionTarget
+					== asSASTLifetimeNodeId::FromDecl(destructor)
+				&& record.semanticRegion
+					== asSASTLifetimeNodeId::FromStmt(statement->id) )
+			{
+				++matchingRecords;
+			}
+		}
+		if( matchingRecords != 1 )
+		{
+			outView.Reset();
+			return asAST_VERIFY_INVALID_LIFETIME_PROTOCOL;
+		}
 	}
 
 	for( asUINT index = 0; index < outView.records.GetLength(); ++index )
@@ -1827,7 +2024,8 @@ int asCASTBuildLifetimeView(
 	{
 		const asSASTLifetimeViewRecord& record = outView.records[recordIndex];
 		if( IsConstructionRecord(record.record)
-			|| IsAggregateRecord(record.record) )
+			|| IsAggregateRecord(record.record)
+			|| IsFullExpressionRecord(record.record) )
 		{
 			continue;
 		}
@@ -1995,6 +2193,48 @@ int asCASTBuildLifetimeView(
 		outView.exitPlans.PushLast(plan);
 	}
 
+	for( asUINT recordIndex = 0;
+		recordIndex < outView.records.GetLength(); ++recordIndex )
+	{
+		const asSASTLifetimeViewRecord& record =
+			outView.records[recordIndex];
+		if( !IsFullExpressionRecord(record.record) ) continue;
+		bool alreadyPlanned = false;
+		for( asUINT planIndex = 0;
+			planIndex < outView.exitPlans.GetLength(); ++planIndex )
+		{
+			if( outView.exitPlans[planIndex].kind
+					== asAST_LIFETIME_EXIT_PLAN_FULL_EXPRESSION
+				&& outView.exitPlans[planIndex].structuralOwner.value
+					== record.record.semanticRegion.value )
+			{
+				alreadyPlanned = true;
+				break;
+			}
+		}
+		if( alreadyPlanned ) continue;
+
+		asSASTLifetimeExitPlan plan;
+		plan.structuralOwner = asASTStmtId(
+			record.record.semanticRegion.value);
+		plan.kind = asAST_LIFETIME_EXIT_PLAN_FULL_EXPRESSION;
+		plan.exitMask = asAST_LIFETIME_EXIT_NORMAL
+			| asAST_LIFETIME_EXIT_EXCEPTION;
+		for( asUINT reverseIndex = outView.records.GetLength();
+			reverseIndex > 0; --reverseIndex )
+		{
+			const asSASTLifetimeViewRecord& candidate =
+				outView.records[reverseIndex - 1];
+			if( IsFullExpressionRecord(candidate.record)
+				&& candidate.record.semanticRegion
+					== record.record.semanticRegion )
+			{
+				plan.recordIndices.PushLast(candidate.recordIndex);
+			}
+		}
+		outView.exitPlans.PushLast(plan);
+	}
+
 	for( asUINT transferIndex = 1;
 		transferIndex <= context.GetStmtCount(); ++transferIndex )
 	{
@@ -2087,6 +2327,31 @@ int asCASTBuildLifetimeView(
 				commit.reverseLiveCleanup.PushLast(
 					commit.liveAfter[prefix - 1]);
 			}
+			outView.commitPoints.PushLast(commit);
+			continue;
+		}
+		if( IsFullExpressionRecord(current.record) )
+		{
+			asSASTLifetimeCommitPoint commit;
+			commit.activationPoint = current.record.activationPoint;
+			commit.semanticRegion = current.record.semanticRegion;
+			commit.recordIndex = current.recordIndex;
+			for( asUINT previous = 0; previous < index; ++previous )
+			{
+				if( IsFullExpressionRecord(outView.records[previous].record)
+					&& outView.records[previous].record.semanticRegion
+						== current.record.semanticRegion )
+				{
+					commit.liveBefore.PushLast(
+						outView.records[previous].recordIndex);
+				}
+			}
+			commit.liveAfter = commit.liveBefore;
+			commit.liveAfter.PushLast(current.recordIndex);
+			for( asUINT live = commit.liveBefore.GetLength(); live > 0; --live )
+				commit.abortCleanup.PushLast(commit.liveBefore[live - 1]);
+			for( asUINT live = commit.liveAfter.GetLength(); live > 0; --live )
+				commit.reverseLiveCleanup.PushLast(commit.liveAfter[live - 1]);
 			outView.commitPoints.PushLast(commit);
 			continue;
 		}

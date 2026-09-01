@@ -1469,6 +1469,7 @@ public:
 		const asCQualType& explicitTarget = asCQualType());
 	asASTExprId ActOnMaterializeTemporary(asASTExprId inner, const asCSourceRange& range);
 	asASTExprId ActOnCleanup(asASTExprId inner, const asCSourceRange& range);
+	int ActOnFinishFullExpression(asASTExprId expression, asASTStmtId semanticRegion);
 	asASTStmtId ActOnBlock(asASTDeclId owner, const asCArray<asASTStmtId>& children, const asCSourceRange& range);
 	asASTStmtId ActOnCompoundStmt(asASTDeclId owner, const asCArray<asASTStmtId>& children, const asCSourceRange& range);
 	asASTStmtId ActOnExprStmt(asASTDeclId owner, asASTExprId expr, const asCSourceRange& range);

@@ -12955,6 +12955,10 @@ public:
 			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
 			static_cast<asCModule*>(Module)->GetLastBytecodePublisher(),
 			TEXT("CANONICAL temporary Build must not record asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			static_cast<asCModule*>(Module)->GetLastLegacyCompilerInvocationCount(),
+			TEXT("CANONICAL temporary Build must not invoke asCCompiler")));
 	}
 
 	TEST_METHOD(CanonicalTryCatchRejectedDoesNotPublishCompiler)
