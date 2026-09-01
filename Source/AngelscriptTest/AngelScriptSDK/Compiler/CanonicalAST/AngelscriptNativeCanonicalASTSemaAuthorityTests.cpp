@@ -12723,6 +12723,404 @@ public:
 				*Dump)));
 	}
 
+	TEST_METHOD(CanonicalMixinOmittedDefaultSealsFilledBinaryWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 mixin omitted-default fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaMixinOmittedDefault", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+			}
+
+			mixin int MixHelper(T self, int a = 40 + 1)
+			{
+				return a;
+			}
+
+			int Entry()
+			{
+				T Object;
+				return Object.MixHelper();
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaMixinOmittedDefault.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Object.MixHelper() must compile from sealed mixin Call / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("mixin omitted-default Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("mixin omitted-default must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* Mixin = nullptr;
+		for (asUINT DeclIndex = 1; DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl = Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_MIXIN
+				&& Decl->name.Equals("MixHelper"))
+			{
+				Mixin = Decl;
+				break;
+			}
+		}
+		const asCExpr* MixinCall = nullptr;
+		for (asUINT ExprIndex = 1; ExprIndex <= Context->GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Expr = Context->GetExpr(asASTExprId(ExprIndex));
+			if (Expr != nullptr && Expr->kind == asAST_EXPR_CALL && Mixin != nullptr
+				&& Expr->resolvedDecl == Mixin->id)
+			{
+				MixinCall = Expr;
+				break;
+			}
+		}
+		const asSASTCallArgument* DefaultArg = nullptr;
+		if (MixinCall != nullptr)
+		{
+			for (asUINT Index = 0; Index < MixinCall->callArguments.GetLength(); ++Index)
+			{
+				if (MixinCall->callArguments[Index].origin == asAST_CALL_ARGUMENT_DEFAULT)
+				{
+					DefaultArg = &MixinCall->callArguments[Index];
+					break;
+				}
+			}
+		}
+		const asCExpr* DefaultValue = DefaultArg != nullptr
+			? Context->GetExpr(DefaultArg->expression) : nullptr;
+		while (DefaultValue != nullptr
+			&& DefaultValue->kind == asAST_EXPR_CONVERSION
+			&& DefaultValue->children.GetLength() == 1)
+		{
+			DefaultValue = Context->GetExpr(DefaultValue->children[0]);
+		}
+		ASSERT_THAT(IsTrue(
+			MixinCall != nullptr
+				&& MixinCall->receiver.IsValid()
+				&& DefaultArg != nullptr
+				&& DefaultValue != nullptr
+				&& DefaultValue->kind == asAST_EXPR_BINARY
+				&& DefaultValue->literal.Equals("+"),
+			*FString::Printf(
+				TEXT("Object.MixHelper() must seal mixin receiver plus filled default Binary 40+1, not omit the default at CodeGen. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalMemberNamedDefaultSealsFilledFormalPlanWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 member named+default fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaMemberNamedDefault", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int Pack(int A = 1, int B = 2)
+				{
+					return A * 10 + B;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				return Object.Pack(B: 7);
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaMemberNamedDefault.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Object.Pack(B: 7) must compile from sealed member Call / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("member named+default Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("member named+default must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCExpr* PackCall =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				*const_cast<asCASTContext*>(Context), "Pack");
+		ASSERT_THAT(IsTrue(
+			PackCall != nullptr && PackCall->callArguments.GetLength() == 2,
+			*FString::Printf(
+				TEXT("Object.Pack(B: 7) must seal two call-argument records. dump:\n%s"),
+				*Dump)));
+		if (PackCall == nullptr || PackCall->callArguments.GetLength() != 2)
+		{
+			return;
+		}
+
+		const asSASTCallArgument* NamedB = nullptr;
+		const asSASTCallArgument* DefaultA = nullptr;
+		for (asUINT Index = 0; Index < PackCall->callArguments.GetLength(); ++Index)
+		{
+			const asSASTCallArgument& Argument = PackCall->callArguments[Index];
+			if (Argument.origin == asAST_CALL_ARGUMENT_NAMED
+				&& Argument.authoredName.Equals("B"))
+			{
+				NamedB = &Argument;
+			}
+			else if (Argument.origin == asAST_CALL_ARGUMENT_DEFAULT)
+			{
+				DefaultA = &Argument;
+			}
+		}
+		const asCDecl* const FormalB = NamedB != nullptr
+			? Context->GetDecl(NamedB->formal) : nullptr;
+		const asCDecl* const FormalA = DefaultA != nullptr
+			? Context->GetDecl(DefaultA->formal) : nullptr;
+		const asCExpr* NamedExpr = NamedB != nullptr
+			? Context->GetExpr(NamedB->expression) : nullptr;
+		while (NamedExpr != nullptr && NamedExpr->kind == asAST_EXPR_CONVERSION
+			&& NamedExpr->children.GetLength() == 1)
+		{
+			NamedExpr = Context->GetExpr(NamedExpr->children[0]);
+		}
+		ASSERT_THAT(IsTrue(
+			PackCall->receiver.IsValid()
+				&& NamedB != nullptr
+				&& NamedB->formalIndex == 1
+				&& FormalB != nullptr && FormalB->name.Equals("B")
+				&& NamedExpr != nullptr
+				&& NamedExpr->kind == asAST_EXPR_INTEGER_LITERAL
+				&& NamedExpr->literal.Equals("7")
+				&& DefaultA != nullptr
+				&& DefaultA->formalIndex == 0
+				&& FormalA != nullptr && FormalA->name.Equals("A"),
+			*FString::Printf(
+				TEXT("Object.Pack(B: 7) must seal named B=7 plus filled default A, with receiver. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalUnaryNotRewritesValueOpImplConvWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 unary-not opImplConv fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaUnaryNotOpImplConv", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				bool opImplConv() const
+				{
+					return Stored != 0;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				return !Object ? 42 : 0;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaUnaryNotOpImplConv.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("!Object must compile from sealed ! of T::opImplConv / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("unary-not Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("unary-not must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const ReturnStmt = Entry != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				*const_cast<asCASTContext*>(Context),
+				Entry->id,
+				asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* Returned = ReturnStmt != nullptr
+			? Context->GetExpr(ReturnStmt->expr) : nullptr;
+		while (Returned != nullptr
+			&& (Returned->kind == asAST_EXPR_CLEANUP
+				|| Returned->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& Returned->children.GetLength() != 0)
+		{
+			Returned = Context->GetExpr(
+				Returned->children[Returned->children.GetLength() - 1]);
+		}
+		const asCExpr* Cond = Returned != nullptr
+			&& Returned->kind == asAST_EXPR_CONDITIONAL
+			&& Returned->children.GetLength() != 0
+			? Context->GetExpr(Returned->children[0]) : nullptr;
+		while (Cond != nullptr && Cond->kind == asAST_EXPR_CONVERSION
+			&& Cond->children.GetLength() == 1)
+		{
+			Cond = Context->GetExpr(Cond->children[0]);
+		}
+		const asCExpr* NotInner = Cond != nullptr
+			&& Cond->kind == asAST_EXPR_UNARY
+			&& Cond->literal.Equals("!")
+			&& Cond->children.GetLength() == 1
+			? Context->GetExpr(Cond->children[0]) : nullptr;
+		while (NotInner != nullptr
+			&& (NotInner->kind == asAST_EXPR_CONVERSION
+				|| NotInner->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& NotInner->children.GetLength() == 1)
+		{
+			NotInner = Context->GetExpr(NotInner->children[0]);
+		}
+		const asCDecl* const ConvCallee = NotInner != nullptr
+			? Context->GetDecl(NotInner->resolvedDecl) : nullptr;
+		bool bLeftoverNotOfT = false;
+		TArray<FString> Lines;
+		Dump.ParseIntoArrayLines(Lines);
+		for (const FString& Line : Lines)
+		{
+			if (Line.Contains(TEXT("kind=Unary")) && Line.Contains(TEXT("literal=!"))
+				&& Line.Contains(TEXT("type=T")))
+			{
+				bLeftoverNotOfT = true;
+			}
+		}
+		ASSERT_THAT(IsTrue(
+			!bLeftoverNotOfT
+				&& Cond != nullptr
+				&& Cond->kind == asAST_EXPR_UNARY
+				&& Cond->literal.Equals("!")
+				&& NotInner != nullptr
+				&& NotInner->kind == asAST_EXPR_CALL
+				&& ConvCallee != nullptr
+				&& ConvCallee->name.Equals("opImplConv"),
+			*FString::Printf(
+				TEXT("!Object must be Unary ! of T::opImplConv() bool, not leftover Unary ! of T typed as int. dump:\n%s"),
+				*Dump)));
+	}
+
 	TEST_METHOD(SequenceSingleEvalShortCircuitConditionalAndGeneratedDefaultAreSealedTogether)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

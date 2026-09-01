@@ -6123,6 +6123,71 @@ asASTExprId asCSema::ActOnUnaryExpr(const char* op, asASTExprId inner, const asC
 			}
 		}
 	}
+	if( op && op[0] == '!' && op[1] == 0 )
+	{
+		// LEGACY CompileUnaryOperator converts VALUE objects with
+		// `bool opImplConv()` then emits NOT. `!Object` must be Unary ! of
+		// that Call, not leftover Unary ! of T typed as int.
+		if( const asCExpr* innerExpr = context.GetExpr(inner) )
+		{
+			const asCType* const innerType = context.GetType(innerExpr->type.type);
+			const bool alreadyBool = innerType != 0
+				&& innerType->kind == asAST_TYPE_PRIMITIVE
+				&& innerType->primitiveToken == ttBool;
+			if( !alreadyBool )
+			{
+				if( engine != 0 )
+				{
+					InternNativeMethods(*this, engine, context,
+						innerExpr->type, "opImplConv");
+				}
+				const asCQualType boolType = context.InternPrimitive(ttBool, 0);
+				const asASTDeclId typeDecl = FindNamedTypeDecl(
+					context, innerExpr->type);
+				asCArray<asASTExprId> opArgs;
+				const asASTDeclId callee = FindBestCallee(
+					context, typeDecl, "opImplConv", opArgs, this);
+				if( const asCDecl* method = context.GetDecl(callee) )
+				{
+					if( method->kind == asAST_DECL_METHOD
+						&& method->name.Equals("opImplConv") )
+					{
+						asCQualType convType = method->type.IsValid()
+							? method->type : boolType;
+						asCArray<asASTExprId> callArgs;
+						asCArray<asCString> names;
+						asCArray<asSASTCallArgument> callArguments;
+						ArrangeCallArguments(
+							*this, context, callee, callArgs, names, range,
+							inner, callArguments);
+						ConvertCallArgumentsToFormalTypes(
+							*this, context, *method, callArgs, range, inner,
+							callArguments);
+						asASTExprId conv = ActOnCall(
+							callee, callArgs, convType, range, &callArguments);
+						if( conv.IsValid() && inner.IsValid() )
+						{
+							context.SetExprReceiver(conv, inner);
+						}
+						if( ShouldMaterializeCallResult(context, convType) )
+						{
+							conv = ActOnMaterializeTemporary(conv, range);
+						}
+						if( conv.IsValid() )
+						{
+							const asASTExprId existingNot =
+								FindExistingExactUnary(context, range, "!", conv);
+							if( existingNot.IsValid() )
+							{
+								return existingNot;
+							}
+							return ActOnUnary("!", conv, boolType, range);
+						}
+					}
+				}
+			}
+		}
+	}
 	// A raw source spelling is not enough for primitive ++/--. Unlike a class
 	// operator call (which already resolves to opPreInc/opPostInc), the result
 	// value of the builtin operation depends on whether it was prefix or
