@@ -17367,29 +17367,147 @@ public:
 		{
 			return;
 		}
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_SAFEPOINT_LOOP_BACKEDGE),
+			static_cast<int32>(Loop->safePointRole),
+			*DumpMsg));
+		const asCExpr* const Condition = Context->GetExpr(Loop->expr);
+		const asCType* const ConditionType = Condition != nullptr
+			? Context->GetType(Condition->type.type) : nullptr;
+		ASSERT_THAT(IsTrue(Condition != nullptr
+			&& ConditionType != nullptr
+			&& ConditionType->primitiveToken == ttBool,
+			*DumpMsg));
 		ASSERT_THAT(AreEqual(3, static_cast<int32>(Loop->children.GetLength()), *DumpMsg));
 		if (Loop->children.GetLength() < 3)
 		{
 			return;
 		}
 
+		const asCStmt* const InitPhase = Context->GetStmt(Loop->children[0]);
 		const asCStmt* const Body = Context->GetStmt(Loop->children[1]);
 		const asCStmt* const IncrementPhase = Context->GetStmt(Loop->children[2]);
-		ASSERT_THAT(IsNotNull(Body, *DumpMsg));
+		ASSERT_THAT(IsTrue(InitPhase != nullptr
+			&& InitPhase->kind == asAST_STMT_BLOCK
+			&& InitPhase->children.GetLength() == 2
+			&& InitPhase->safePointRole == asAST_SAFEPOINT_NONE,
+			*DumpMsg));
+		const asCStmt* const InitDeclaration = InitPhase != nullptr
+			&& InitPhase->children.GetLength() == 2
+			? Context->GetStmt(InitPhase->children[0]) : nullptr;
+		const asCStmt* const InitAssignment = InitPhase != nullptr
+			&& InitPhase->children.GetLength() == 2
+			? Context->GetStmt(InitPhase->children[1]) : nullptr;
+		const asCDecl* const InitVariable = InitDeclaration != nullptr
+			&& InitDeclaration->kind == asAST_STMT_DECL
+			? Context->GetDecl(InitDeclaration->decl) : nullptr;
+		const asCExpr* const InitAssignmentExpr = InitAssignment != nullptr
+			&& InitAssignment->kind == asAST_STMT_EXPR
+			? Context->GetExpr(InitAssignment->expr) : nullptr;
+		const asCExpr* const InitTarget = InitAssignmentExpr != nullptr
+			&& InitAssignmentExpr->kind == asAST_EXPR_ASSIGN
+			&& InitAssignmentExpr->children.GetLength() == 2
+			? Context->GetExpr(InitAssignmentExpr->children[0]) : nullptr;
+		ASSERT_THAT(IsTrue(InitVariable != nullptr
+			&& InitVariable->name.Equals("Index")
+			&& InitDeclaration->safePointRole == asAST_SAFEPOINT_STATEMENT
+			&& InitAssignment != nullptr
+			&& InitAssignment->safePointRole == asAST_SAFEPOINT_NONE
+			&& InitTarget != nullptr
+			&& InitTarget->kind == asAST_EXPR_DECL_REF
+			&& InitTarget->resolvedDecl == InitVariable->id,
+			*DumpMsg));
+		ASSERT_THAT(IsTrue(Body != nullptr
+			&& Body->safePointRole == asAST_SAFEPOINT_LOOP_ENTRY,
+			*DumpMsg));
 		ASSERT_THAT(IsNotNull(IncrementPhase, *DumpMsg));
 		ASSERT_THAT(IsTrue(CanonicalASTSemaAuthorityTest::StmtChildrenContainKind(
 			*const_cast<asCASTContext*>(Context), Body, asAST_STMT_CONTINUE), *DumpMsg));
-		ASSERT_THAT(IsTrue(IncrementPhase != nullptr && IncrementPhase->kind == asAST_STMT_EXPR, *DumpMsg));
+		ASSERT_THAT(IsTrue(IncrementPhase != nullptr
+			&& IncrementPhase->kind == asAST_STMT_EXPR
+			&& IncrementPhase->safePointRole == asAST_SAFEPOINT_NONE,
+			*DumpMsg));
 		const asCExpr* const IncrementSequence = IncrementPhase != nullptr
 			? Context->GetExpr(IncrementPhase->expr)
 			: nullptr;
 		ASSERT_THAT(IsTrue(IncrementSequence != nullptr && IncrementSequence->kind == asAST_EXPR_SEQUENCE, *DumpMsg));
 		ASSERT_THAT(IsTrue(IncrementSequence != nullptr && IncrementSequence->children.GetLength() == 2, *DumpMsg));
 
+		const std::string IncrementSource =
+			"Index = Index + 1, Trace = Trace + 10";
+		const std::string InitPhaseSource = "int Index = 0;";
+		const std::string InitDeclaratorSource = "Index = 0";
+		const size_t InitPhaseBegin = ScriptSource.find(InitPhaseSource);
+		const size_t InitDeclaratorBegin = ScriptSource.find(InitDeclaratorSource);
+		const size_t IncrementBegin = ScriptSource.find(IncrementSource);
+		ASSERT_THAT(IsTrue(InitPhaseBegin != std::string::npos
+			&& InitDeclaratorBegin != std::string::npos,
+			*DumpMsg));
+		if (InitPhaseBegin != std::string::npos
+			&& InitDeclaratorBegin != std::string::npos
+			&& InitPhase != nullptr && InitDeclaration != nullptr)
+		{
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(InitPhaseBegin),
+				InitPhase->range.begin.offset, *DumpMsg));
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(
+				InitPhaseBegin + InitPhaseSource.size()),
+				InitPhase->range.end.offset, *DumpMsg));
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(InitDeclaratorBegin),
+				InitDeclaration->range.begin.offset, *DumpMsg));
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(
+				InitDeclaratorBegin + InitDeclaratorSource.size()),
+				InitDeclaration->range.end.offset, *DumpMsg));
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(InitDeclaratorBegin),
+				InitAssignment->range.begin.offset, *DumpMsg));
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(
+				InitDeclaratorBegin + InitDeclaratorSource.size()),
+				InitAssignment->range.end.offset, *DumpMsg));
+		}
+		ASSERT_THAT(IsTrue(IncrementBegin != std::string::npos, *DumpMsg));
+		if (IncrementBegin != std::string::npos
+			&& IncrementPhase != nullptr && IncrementSequence != nullptr)
+		{
+			const asUINT ExpectedBegin = static_cast<asUINT>(IncrementBegin);
+			const asUINT ExpectedEnd = ExpectedBegin
+				+ static_cast<asUINT>(IncrementSource.size());
+			ASSERT_THAT(AreEqual(ExpectedBegin,
+				IncrementPhase->range.begin.offset, *DumpMsg));
+			ASSERT_THAT(AreEqual(ExpectedEnd,
+				IncrementPhase->range.end.offset, *DumpMsg));
+			ASSERT_THAT(AreEqual(ExpectedBegin,
+				IncrementSequence->range.begin.offset, *DumpMsg));
+			ASSERT_THAT(AreEqual(ExpectedEnd,
+				IncrementSequence->range.end.offset, *DumpMsg));
+		}
+
+		auto IncrementTargetName = [&](asUINT ChildIndex) -> asCString
+		{
+			if (IncrementSequence == nullptr
+				|| ChildIndex >= IncrementSequence->children.GetLength())
+			{
+				return asCString();
+			}
+			const asCExpr* const Assignment =
+				Context->GetExpr(IncrementSequence->children[ChildIndex]);
+			const asCExpr* const Target = Assignment != nullptr
+				&& Assignment->kind == asAST_EXPR_ASSIGN
+				&& Assignment->children.GetLength() == 2
+				? Context->GetExpr(Assignment->children[0]) : nullptr;
+			const asCDecl* const TargetDecl = Target != nullptr
+				&& Target->kind == asAST_EXPR_DECL_REF
+				? Context->GetDecl(Target->resolvedDecl) : nullptr;
+			return TargetDecl != nullptr ? TargetDecl->name : asCString();
+		};
+		ASSERT_THAT(IsTrue(IncrementTargetName(0).Equals("Index"), *DumpMsg));
+		ASSERT_THAT(IsTrue(IncrementTargetName(1).Equals("Trace"), *DumpMsg));
+
 		const asCStmt* const Continue = CanonicalASTSemaAuthorityTest::FindFirstStmtOfKind(
 			*const_cast<asCASTContext*>(Context), asAST_STMT_CONTINUE);
 		ASSERT_THAT(IsNotNull(Continue, *DumpMsg));
-		ASSERT_THAT(IsTrue(Continue != nullptr && Continue->target == Loop->id, *DumpMsg));
+		ASSERT_THAT(IsTrue(Continue != nullptr
+			&& Continue->target == Loop->id
+			&& Continue->safePointRole == asAST_SAFEPOINT_TRANSFER,
+			*DumpMsg));
 	}
 
 	TEST_METHOD(IfStmtRecordsNamedThenElseOnCompileSealPath)
@@ -17444,6 +17562,142 @@ public:
 			bNamedArms = ThenId > 0 && ElseId > 0 && ThenId != ElseId;
 		}
 		ASSERT_THAT(IsTrue(bNamedArms, *DumpMsg));
+	}
+
+	TEST_METHOD(IfWithoutElseAndBareReturnsSealExactSourceShape)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaIfWithoutElseBareReturns", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void Observe()
+			{
+			}
+
+			void Entry(bool Stop)
+			{
+				if (Stop)
+					return;
+				Observe();
+				return;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaIfWithoutElseBareReturns.as", ScriptSource.c_str())));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("if-without-else and two bare returns must build canonically")));
+
+		asCASTContext* const Context = const_cast<asCASTContext*>(
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext());
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(*Context, "Entry");
+		const asCStmt* const Root = Entry != nullptr
+			? Context->GetStmt(Entry->body) : nullptr;
+		const asCStmt* IfStatement = nullptr;
+		int32 BareReturnCount = 0;
+		bool bAllBareReturnsHaveExactRole = true;
+		for (asUINT StatementIndex = 1;
+			Entry != nullptr && StatementIndex <= Context->GetStmtCount();
+			++StatementIndex)
+		{
+			const asCStmt* const Statement =
+				Context->GetStmt(asASTStmtId(StatementIndex));
+			if (Statement == nullptr || Statement->owner != Entry->id)
+			{
+				continue;
+			}
+			if (Statement->kind == asAST_STMT_IF)
+			{
+				IfStatement = Statement;
+			}
+			else if (Statement->kind == asAST_STMT_RETURN)
+			{
+				++BareReturnCount;
+				bAllBareReturnsHaveExactRole = bAllBareReturnsHaveExactRole
+					&& !Statement->expr.IsValid()
+					&& Statement->safePointRole == asAST_SAFEPOINT_RETURN;
+			}
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString FactMessage = FString::Printf(TEXT(
+			"If without else must own the first bare Return as its only then edge; root order must be If, Observe, final bare Return; both Returns have expr=0 plus Return role. AST:\n%s"),
+			*Dump);
+		ASSERT_THAT(IsTrue(Root != nullptr
+			&& Root->kind == asAST_STMT_BLOCK
+			&& Root->safePointRole == asAST_SAFEPOINT_FUNCTION_ENTRY
+			&& Root->children.GetLength() == 3,
+			*FactMessage));
+		const asCStmt* const ThenReturn = IfStatement != nullptr
+			&& IfStatement->children.GetLength() == 1
+			? Context->GetStmt(IfStatement->children[0]) : nullptr;
+		const asCStmt* const RootIf = Root != nullptr
+			&& Root->children.GetLength() == 3
+			? Context->GetStmt(Root->children[0]) : nullptr;
+		const asCStmt* const RootObserve = Root != nullptr
+			&& Root->children.GetLength() == 3
+			? Context->GetStmt(Root->children[1]) : nullptr;
+		const asCStmt* const FinalReturn = Root != nullptr
+			&& Root->children.GetLength() == 3
+			? Context->GetStmt(Root->children[2]) : nullptr;
+		ASSERT_THAT(IsTrue(IfStatement != nullptr
+			&& IfStatement->expr.IsValid()
+			&& IfStatement->children.GetLength() == 1
+			&& IfStatement->safePointRole == asAST_SAFEPOINT_STATEMENT
+			&& RootIf == IfStatement
+			&& ThenReturn != nullptr
+			&& ThenReturn->kind == asAST_STMT_RETURN
+			&& !ThenReturn->expr.IsValid()
+			&& ThenReturn->safePointRole == asAST_SAFEPOINT_RETURN
+			&& RootObserve != nullptr
+			&& RootObserve->kind == asAST_STMT_EXPR
+			&& RootObserve->safePointRole == asAST_SAFEPOINT_STATEMENT
+			&& FinalReturn != nullptr
+			&& FinalReturn->kind == asAST_STMT_RETURN
+			&& !FinalReturn->expr.IsValid()
+			&& FinalReturn->safePointRole == asAST_SAFEPOINT_RETURN,
+			*FactMessage));
+		const size_t FirstReturnBegin = ScriptSource.find("return;");
+		const size_t FinalReturnBegin = FirstReturnBegin != std::string::npos
+			? ScriptSource.find("return;", FirstReturnBegin + 1)
+			: std::string::npos;
+		ASSERT_THAT(IsTrue(FirstReturnBegin != std::string::npos
+			&& FinalReturnBegin != std::string::npos,
+			*FactMessage));
+		if (FirstReturnBegin != std::string::npos
+			&& FinalReturnBegin != std::string::npos
+			&& ThenReturn != nullptr && FinalReturn != nullptr)
+		{
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(FirstReturnBegin),
+				ThenReturn->range.begin.offset, *FactMessage));
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(FirstReturnBegin + 7),
+				ThenReturn->range.end.offset, *FactMessage));
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(FinalReturnBegin),
+				FinalReturn->range.begin.offset, *FactMessage));
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(FinalReturnBegin + 7),
+				FinalReturn->range.end.offset, *FactMessage));
+		}
+		ASSERT_THAT(AreEqual(2, BareReturnCount, *FactMessage));
+		ASSERT_THAT(IsTrue(bAllBareReturnsHaveExactRole, *FactMessage));
 	}
 
 	TEST_METHOD(LoopReturnCallAndTransferRecordSafePointRolesOnCompileSealPath)
@@ -18244,6 +18498,267 @@ public:
 		ASSERT_THAT(IsFalse(Text.Contains(TEXT("kind=Default")), *DumpMsg));
 	}
 
+	TEST_METHOD(UnsignedGroupedSwitchSealsOrderedTypedCases)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaUnsignedGroupedSwitch", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Entry(uint Selector)
+			{
+				int Result = 0;
+				switch (Selector)
+				{
+				case 0:
+				case 1:
+					Result = 10;
+					break;
+				case 2:
+					Result = 20;
+					break;
+				default:
+					Result = 30;
+					break;
+				}
+				return Result;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaUnsignedGroupedSwitch.as", ScriptSource.c_str())));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("unsigned grouped switch must build canonically")));
+
+		asCASTContext* const Context = const_cast<asCASTContext*>(
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext());
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(*Context, "Entry");
+		const asCStmt* SwitchStatement = nullptr;
+		for (asUINT StatementIndex = 1;
+			Entry != nullptr && StatementIndex <= Context->GetStmtCount();
+			++StatementIndex)
+		{
+			const asCStmt* const Statement =
+				Context->GetStmt(asASTStmtId(StatementIndex));
+			if (Statement != nullptr && Statement->owner == Entry->id
+				&& Statement->kind == asAST_STMT_SWITCH)
+			{
+				SwitchStatement = Statement;
+				break;
+			}
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString FactMessage = FString::Printf(TEXT(
+			"unsigned grouped switch must retain uint selector type, ordered 0/1/2/default Cases, and an empty first grouped label. AST:\n%s"),
+			*Dump);
+		ASSERT_THAT(IsTrue(SwitchStatement != nullptr
+			&& SwitchStatement->safePointRole == asAST_SAFEPOINT_STATEMENT
+			&& SwitchStatement->expr.IsValid()
+			&& SwitchStatement->children.GetLength() == 4,
+			*FactMessage));
+		if (SwitchStatement == nullptr
+			|| SwitchStatement->children.GetLength() != 4)
+		{
+			return;
+		}
+		const asCExpr* const Selector = Context->GetExpr(SwitchStatement->expr);
+		const asCType* const SelectorType = Selector != nullptr
+			? Context->GetType(Selector->type.type) : nullptr;
+		ASSERT_THAT(IsTrue(SelectorType != nullptr
+			&& SelectorType->primitiveToken == ttUInt,
+			*FactMessage));
+
+		asUINT PreviousCaseBegin = 0;
+		for (asUINT CaseIndex = 0; CaseIndex < 4; ++CaseIndex)
+		{
+			const asCStmt* const CaseStatement =
+				Context->GetStmt(SwitchStatement->children[CaseIndex]);
+			ASSERT_THAT(IsTrue(CaseStatement != nullptr
+				&& CaseStatement->kind == asAST_STMT_CASE
+				&& CaseStatement->target == SwitchStatement->id
+				&& CaseStatement->safePointRole == asAST_SAFEPOINT_STATEMENT,
+				*FactMessage));
+			if (CaseStatement == nullptr)
+			{
+				continue;
+			}
+			ASSERT_THAT(IsTrue(CaseIndex == 0
+				|| PreviousCaseBegin < CaseStatement->range.begin.offset,
+				*FactMessage));
+			PreviousCaseBegin = CaseStatement->range.begin.offset;
+			if (CaseIndex < 3)
+			{
+				const asCExpr* const Value = Context->GetExpr(CaseStatement->expr);
+				ASSERT_THAT(IsTrue(Value != nullptr
+					&& Value->kind == asAST_EXPR_INTEGER_LITERAL
+					&& Value->literalBits == CaseIndex
+					&& Value->range.begin.offset
+						< CaseStatement->range.end.offset,
+					*FactMessage));
+			}
+			else
+			{
+				ASSERT_THAT(IsFalse(CaseStatement->expr.IsValid(), *FactMessage));
+			}
+		}
+		const asCStmt* const FirstCase =
+			Context->GetStmt(SwitchStatement->children[0]);
+		const asCStmt* const SecondCase =
+			Context->GetStmt(SwitchStatement->children[1]);
+		ASSERT_THAT(IsTrue(FirstCase != nullptr
+			&& FirstCase->children.GetLength() == 0,
+			*FactMessage));
+		ASSERT_THAT(IsTrue(SecondCase != nullptr
+			&& SecondCase->children.GetLength() > 0,
+			*FactMessage));
+	}
+
+	TEST_METHOD(LoopInsideSwitchTransfersTargetNearestControl)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaLoopInsideSwitchTargets", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Entry(int Selector)
+			{
+				switch (Selector)
+				{
+				case 0:
+					while (Selector < 3)
+					{
+						if (Selector == 1)
+						{
+							Selector = Selector + 1;
+							continue;
+						}
+						break;
+					}
+					break;
+				default:
+					break;
+				}
+				return Selector;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaLoopInsideSwitchTargets.as", ScriptSource.c_str())));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("loop-inside-switch target fixture must build canonically")));
+
+		asCASTContext* const Context = const_cast<asCASTContext*>(
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext());
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(*Context, "Entry");
+		const asCStmt* SwitchStatement = nullptr;
+		const asCStmt* Loop = nullptr;
+		int32 LoopBreakCount = 0;
+		int32 SwitchBreakCount = 0;
+		int32 LoopContinueCount = 0;
+		bool bAllTransfersHaveExactRole = true;
+		for (asUINT StatementIndex = 1;
+			Entry != nullptr && StatementIndex <= Context->GetStmtCount();
+			++StatementIndex)
+		{
+			const asCStmt* const Statement =
+				Context->GetStmt(asASTStmtId(StatementIndex));
+			if (Statement == nullptr || Statement->owner != Entry->id)
+			{
+				continue;
+			}
+			if (Statement->kind == asAST_STMT_SWITCH)
+			{
+				SwitchStatement = Statement;
+			}
+			else if (Statement->kind == asAST_STMT_WHILE)
+			{
+				Loop = Statement;
+			}
+		}
+		for (asUINT StatementIndex = 1;
+			Entry != nullptr && StatementIndex <= Context->GetStmtCount();
+			++StatementIndex)
+		{
+			const asCStmt* const Statement =
+				Context->GetStmt(asASTStmtId(StatementIndex));
+			if (Statement == nullptr || Statement->owner != Entry->id)
+			{
+				continue;
+			}
+			if (Statement->kind == asAST_STMT_BREAK)
+			{
+				bAllTransfersHaveExactRole = bAllTransfersHaveExactRole
+					&& Statement->safePointRole == asAST_SAFEPOINT_TRANSFER;
+				if (Loop != nullptr && Statement->target == Loop->id)
+				{
+					++LoopBreakCount;
+				}
+				else if (SwitchStatement != nullptr
+					&& Statement->target == SwitchStatement->id)
+				{
+					++SwitchBreakCount;
+				}
+			}
+			else if (Statement->kind == asAST_STMT_CONTINUE)
+			{
+				bAllTransfersHaveExactRole = bAllTransfersHaveExactRole
+					&& Statement->safePointRole == asAST_SAFEPOINT_TRANSFER;
+				if (Loop != nullptr && Statement->target == Loop->id)
+				{
+					++LoopContinueCount;
+				}
+			}
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString FactMessage = FString::Printf(TEXT(
+			"loop-inside-switch transfers must select the nearest legal control owner: inner break/continue -> while, outer breaks -> switch. AST:\n%s"),
+			*Dump);
+		ASSERT_THAT(IsNotNull(SwitchStatement, *FactMessage));
+		ASSERT_THAT(IsNotNull(Loop, *FactMessage));
+		ASSERT_THAT(AreEqual(1, LoopBreakCount, *FactMessage));
+		ASSERT_THAT(AreEqual(1, LoopContinueCount, *FactMessage));
+		ASSERT_THAT(AreEqual(2, SwitchBreakCount, *FactMessage));
+		ASSERT_THAT(IsTrue(bAllTransfersHaveExactRole, *FactMessage));
+	}
+
 	TEST_METHOD(ExhaustiveEnumSwitchPublishesInvalidValueSafePoint)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
@@ -18317,6 +18832,188 @@ public:
 			*FString::Printf(TEXT(
 				"Sema must publish the exhaustive-enum invalid-value edge as a canonical switch fact. dump:\n%s"),
 				*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump))));
+	}
+
+	TEST_METHOD(SourceStatementsPublishDistinctSafePointRoles)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaSourceStatementSafePoints", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module,
+			TEXT("SemaSourceStatementSafePoints module")));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int SafePointTarget(int Value)
+			{
+				return Value + 1;
+			}
+
+			void Observe(int Value)
+			{
+			}
+
+			int Entry(int Value)
+			{
+				int Result = SafePointTarget(Value);
+				Observe(Result);
+				switch (Result)
+				{
+				case 1:
+					break;
+				default:
+					break;
+				}
+				if (Result > 0)
+				{
+					return Result;
+				}
+				else
+				{
+					return 0;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaSourceStatementSafePoints.as", ScriptSource.c_str())));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("source-statement safe-point fixture must build canonically")));
+
+		asCASTContext* const Context = const_cast<asCASTContext*>(
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext());
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("source-statement safe-point fixture must retain its AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(*Context, "Entry");
+		const asCStmt* const Root = Entry != nullptr
+			? Context->GetStmt(Entry->body) : nullptr;
+		const asCExpr* const TargetCall =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				*Context, "SafePointTarget");
+		const asCExpr* const ObserveCall =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				*Context, "Observe");
+
+		const asCStmt* ResultDeclaration = nullptr;
+		const asCStmt* ResultInitializer = nullptr;
+		const asCStmt* ObserveStatement = nullptr;
+		const asCStmt* Branch = nullptr;
+		const asCStmt* SwitchStatement = nullptr;
+		int32 UnexpectedExprStatementCount = 0;
+		int32 CaseCount = 0;
+		bool bAllCasesHaveRole = true;
+		int32 ReturnCount = 0;
+		bool bAllReturnsHaveRole = true;
+		for (asUINT StatementIndex = 1;
+			Entry != nullptr && StatementIndex <= Context->GetStmtCount();
+			++StatementIndex)
+		{
+			const asCStmt* const Statement =
+				Context->GetStmt(asASTStmtId(StatementIndex));
+			if (Statement == nullptr || Statement->owner != Entry->id)
+			{
+				continue;
+			}
+			if (Statement->kind == asAST_STMT_DECL)
+			{
+				const asCDecl* const Declaration =
+					Context->GetDecl(Statement->decl);
+				if (Declaration != nullptr && Declaration->name.Equals("Result"))
+				{
+					ResultDeclaration = Statement;
+				}
+			}
+			else if (Statement->kind == asAST_STMT_EXPR)
+			{
+				const asCExpr* const Expression =
+					Context->GetExpr(Statement->expr);
+				if (ObserveCall != nullptr
+					&& Statement->expr == ObserveCall->id)
+				{
+					ObserveStatement = Statement;
+				}
+				else if (TargetCall != nullptr
+					&& Expression != nullptr
+					&& Expression->kind == asAST_EXPR_ASSIGN
+					&& Expression->children.GetLength() == 2
+					&& Expression->children[1] == TargetCall->id)
+				{
+					ResultInitializer = Statement;
+				}
+				else
+				{
+					++UnexpectedExprStatementCount;
+				}
+			}
+			else if (Statement->kind == asAST_STMT_IF)
+			{
+				Branch = Statement;
+			}
+			else if (Statement->kind == asAST_STMT_SWITCH)
+			{
+				SwitchStatement = Statement;
+			}
+			else if (Statement->kind == asAST_STMT_CASE)
+			{
+				++CaseCount;
+				bAllCasesHaveRole = bAllCasesHaveRole
+					&& Statement->safePointRole == asAST_SAFEPOINT_STATEMENT;
+			}
+			else if (Statement->kind == asAST_STMT_RETURN)
+			{
+				++ReturnCount;
+				bAllReturnsHaveRole = bAllReturnsHaveRole
+					&& Statement->safePointRole == asAST_SAFEPOINT_RETURN;
+			}
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString FactMessage = FString::Printf(TEXT(
+			"authored declaration/expression/if/switch/case statements must retain Statement roles while synthetic initialization and calls/returns/root retain distinct roles. AST:\n%s"),
+			*Dump);
+		ASSERT_THAT(IsTrue(Entry != nullptr && Root != nullptr
+			&& Root->kind == asAST_STMT_BLOCK
+			&& Root->safePointRole == asAST_SAFEPOINT_FUNCTION_ENTRY,
+			*FactMessage));
+		ASSERT_THAT(IsTrue(ResultDeclaration != nullptr
+			&& ResultDeclaration->safePointRole == asAST_SAFEPOINT_STATEMENT,
+			*FactMessage));
+		ASSERT_THAT(IsTrue(ResultInitializer != nullptr
+			&& ResultInitializer->safePointRole == asAST_SAFEPOINT_NONE
+			&& UnexpectedExprStatementCount == 0,
+			*FactMessage));
+		ASSERT_THAT(IsTrue(ObserveStatement != nullptr
+			&& ObserveStatement->safePointRole == asAST_SAFEPOINT_STATEMENT,
+			*FactMessage));
+		ASSERT_THAT(IsTrue(Branch != nullptr
+			&& Branch->safePointRole == asAST_SAFEPOINT_STATEMENT,
+			*FactMessage));
+		ASSERT_THAT(IsTrue(SwitchStatement != nullptr
+			&& SwitchStatement->safePointRole == asAST_SAFEPOINT_STATEMENT,
+			*FactMessage));
+		ASSERT_THAT(AreEqual(2, CaseCount, *FactMessage));
+		ASSERT_THAT(IsTrue(bAllCasesHaveRole, *FactMessage));
+		ASSERT_THAT(IsTrue(TargetCall != nullptr && ObserveCall != nullptr
+			&& TargetCall->safePointRole == asAST_SAFEPOINT_CALL
+			&& ObserveCall->safePointRole == asAST_SAFEPOINT_CALL,
+			*FactMessage));
+		ASSERT_THAT(AreEqual(2, ReturnCount, *FactMessage));
+		ASSERT_THAT(IsTrue(bAllReturnsHaveRole, *FactMessage));
 	}
 
 	TEST_METHOD(ThisOrReceiverMetadataOnMethodCall)

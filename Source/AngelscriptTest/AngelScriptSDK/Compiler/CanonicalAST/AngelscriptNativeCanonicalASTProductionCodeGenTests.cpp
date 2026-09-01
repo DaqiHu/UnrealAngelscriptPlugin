@@ -13578,6 +13578,10 @@ public:
 		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
 		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
 			TEXT("while-suspend fixture selects CANONICAL")));
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			ScriptEngine->SetEngineProperty(
+				asEP_BUILD_WITHOUT_LINE_CUES, 1),
+			TEXT("disable line-cue SUSPEND instructions so this fixture observes only the explicit while safe point")));
 		asIScriptModule* Module = nullptr;
 		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
 			int F()
@@ -13609,6 +13613,90 @@ public:
 		ASSERT_THAT(IsTrue(
 			AngelscriptCompilerBytecodeTestSupport::ContainsOpcode(Function, asBC_SUSPEND),
 			TEXT("CANONICAL while must emit asBC_SUSPEND on the production publisher")));
+	}
+
+	TEST_METHOD(CanonicalForAndDoWhileSuspendBuildPublishesCodeGenAndExecutes)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("for/do-while suspend fixture selects CANONICAL")));
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			ScriptEngine->SetEngineProperty(
+				asEP_BUILD_WITHOUT_LINE_CUES, 1),
+			TEXT("disable line-cue SUSPEND instructions so this fixture observes only explicit loop safe points")));
+		asIScriptModule* Module = nullptr;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int CountFor()
+			{
+				int Value = 0;
+				for (; Value < 3; ++Value)
+				{
+				}
+				return Value;
+			}
+
+			int CountDo()
+			{
+				int Value = 0;
+				do
+				{
+					++Value;
+				}
+				while (Value < 3);
+				return Value;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0,
+			AngelscriptNativeTestSupport::CompileNativeModule(
+				Engine.Get(),
+				"ProdForDoWhileSuspend",
+				ScriptSource.c_str(),
+				Module),
+			TEXT("CANONICAL for/do-while Build must succeed from CodeGen")));
+
+		int32 ForValue = 0;
+		int32 DoValue = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module,
+				"int CountFor()", ForValue)
+				&& ForValue == 3,
+			TEXT("CANONICAL CountFor() must return 3")));
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module,
+				"int CountDo()", DoValue)
+				&& DoValue == 3,
+			TEXT("CANONICAL CountDo() must return 3")));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			static_cast<asCModule*>(Module)->GetLastBytecodePublisher(),
+			TEXT("CANONICAL for/do-while Build must not record asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			static_cast<asCModule*>(Module)->GetLastLegacyCompilerInvocationCount(),
+			TEXT("CANONICAL for/do-while Build must not invoke the LEGACY compiler")));
+
+		asIScriptFunction* const ForFunction =
+			AngelscriptNativeTestSupport::GetNativeFunctionByDecl(
+				Module, "int CountFor()");
+		asIScriptFunction* const DoFunction =
+			AngelscriptNativeTestSupport::GetNativeFunctionByDecl(
+				Module, "int CountDo()");
+		ASSERT_THAT(IsTrue(
+			AngelscriptCompilerBytecodeTestSupport::ContainsOpcode(
+				ForFunction, asBC_SUSPEND),
+			TEXT("CANONICAL for must consume its sealed LoopBackedge role as asBC_SUSPEND")));
+		ASSERT_THAT(IsTrue(
+			AngelscriptCompilerBytecodeTestSupport::ContainsOpcode(
+				DoFunction, asBC_SUSPEND),
+			TEXT("CANONICAL do-while must consume its sealed LoopBackedge role as asBC_SUSPEND")));
 	}
 
 	TEST_METHOD(CanonicalSelfHandleReturnPublishesPointerTemporaryMetadata)

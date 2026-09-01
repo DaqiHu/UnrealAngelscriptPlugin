@@ -2953,6 +2953,7 @@ asASTStmtId asCSema::ActOnIf(asASTDeclId owner, asASTExprId cond, asASTStmtId th
 {
 	const asASTStmtId id = context.CreateStmt(asAST_STMT_IF, owner, range);
 	context.SetStmtExpr(id, cond);
+	context.SetStmtSafePointRole(id, asAST_SAFEPOINT_STATEMENT);
 	context.AddStmtChild(id, thenStmt);
 	if( elseStmt.IsValid() )
 	{
@@ -3049,6 +3050,7 @@ asASTStmtId asCSema::ActOnCase(asASTDeclId owner, asASTStmtId switchStmt, asASTE
 {
 	const asASTStmtId id = context.CreateStmt(asAST_STMT_CASE, owner, range);
 	context.SetStmtExpr(id, value);
+	context.SetStmtSafePointRole(id, asAST_SAFEPOINT_STATEMENT);
 	context.SetTarget(id, switchStmt);
 	context.AddStmtChild(switchStmt, id);
 	return id;

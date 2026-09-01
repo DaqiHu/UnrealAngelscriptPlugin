@@ -9541,6 +9541,23 @@ namespace
 			}
 		}
 
+		bool EmitLoopSafePoint(const asCStmt* stmt)
+		{
+			// Sema owns the semantic decision that a structured control node has
+			// a loop backedge safe point. The backend chooses the physical phase
+			// for each loop shape, but must not infer the role from stmt kind or
+			// silently publish a loop whose sealed role is missing/corrupt.
+			if( stmt == 0
+				|| stmt->safePointRole != asAST_SAFEPOINT_LOOP_BACKEDGE )
+			{
+				FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
+				return false;
+			}
+			bc.Instr(asBC_SUSPEND);
+			bc.InstrPTR(asBC_JitEntry, 0);
+			return true;
+		}
+
 		void EmitWhile(const asCStmt* stmt)
 		{
 			if( !stmt->expr.IsValid() || stmt->children.GetLength() == 0 )
@@ -9554,8 +9571,8 @@ namespace
 			bc.Label((short)start);
 			const int cond = EmitExpr(stmt->expr);
 			EmitBoolJump(cond, asBC_JLowZ, end);
-			bc.Instr(asBC_SUSPEND);
-			bc.InstrPTR(asBC_JitEntry, 0);
+			if( !EmitLoopSafePoint(stmt) )
+				return;
 			EmitStmt(stmt->children[0]);
 			bc.InstrINT(asBC_JMP, start);
 			bc.Label((short)end);
@@ -9576,6 +9593,8 @@ namespace
 			bc.Label((short)start);
 			EmitStmt(stmt->children[0]);
 			bc.Label((short)condLabel);
+			if( !EmitLoopSafePoint(stmt) )
+				return;
 			const int cond = EmitExpr(stmt->expr);
 			EmitBoolJump(cond, asBC_JLowNZ, start);
 			bc.Label((short)end);
@@ -9672,6 +9691,8 @@ namespace
 				const int cond = EmitExpr(conditionId);
 				EmitBoolJump(cond, asBC_JLowZ, end);
 			}
+			if( !EmitLoopSafePoint(stmt) )
+				return;
 			EmitStmt(bodyId);
 			bc.Label((short)incr);
 			if( incrementId.IsValid() )

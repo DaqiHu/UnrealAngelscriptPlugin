@@ -1624,6 +1624,7 @@ public:
 						default:
 							return Total;
 						}
+						Total += 100;
 					}
 					while (Total < 4)
 					{
@@ -1657,13 +1658,40 @@ public:
 		asIScriptContext* const Context = Engine.Get()->CreateContext();
 		ASSERT_THAT(IsNotNull(Context, TEXT("loop/switch needs a VM context")));
 		ON_SCOPE_EXIT { if (Context != nullptr) { Context->Release(); } };
-		ASSERT_THAT(AreEqual(0, Context->Prepare(Function), TEXT("Prepare loop/switch")));
-		ASSERT_THAT(AreEqual(0, Context->SetArgDWord(0, 1), TEXT("Selector=1")));
-		ASSERT_THAT(AreEqual(static_cast<int32>(asEXECUTION_FINISHED), Context->Execute(),
-			TEXT("loop/switch must finish")));
-		const int32 Result = static_cast<int32>(Context->GetReturnDWord());
-		ASSERT_THAT(AreEqual(6, Result,
-			TEXT("for 0+1+2, while to 4, do-while Guard=2 => 6")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		const auto ExecuteSelector = [this, Context, Function](
+			const asDWORD Selector,
+			const int32 Expected,
+			const TCHAR* const Meaning)
+		{
+			const FString Label = FString::Printf(
+				TEXT("Selector=%u (%s)"), Selector, Meaning);
+			ASSERT_THAT(AreEqual(0, Context->Prepare(Function),
+				*FString::Printf(TEXT("Prepare %s"), *Label)));
+			ASSERT_THAT(AreEqual(0, Context->SetArgDWord(0, Selector),
+				*FString::Printf(TEXT("Set %s"), *Label)));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asEXECUTION_FINISHED),
+				Context->Execute(),
+				*FString::Printf(TEXT("Execute %s"), *Label)));
+			const int32 Actual =
+				static_cast<int32>(Context->GetReturnDWord());
+			ASSERT_THAT(AreEqual(
+				Expected,
+				Actual,
+				*FString::Printf(
+					TEXT("Result %s expected=%d actual=%d"),
+					*Label, Expected, Actual)));
+		};
+		ExecuteSelector(1, 305,
+			TEXT("break exits switch and executes the observable loop tail"));
+		ExecuteSelector(2, 32,
+			TEXT("continue targets for and skips the observable loop tail"));
+		ExecuteSelector(0, 0,
+			TEXT("default return exits before later loops"));
 
 		const asCASTContext* const AST =
 			static_cast<asCModule*>(static_cast<asIScriptModule*>(Module))->GetCanonicalASTContext();
@@ -1673,10 +1701,22 @@ public:
 			return;
 		}
 
-		bool bHasFor = false;
-		bool bHasSwitch = false;
-		bool bHasWhileOrDo = false;
-		bool bHasSafePoint = false;
+		const asCStmt* ForStatement = nullptr;
+		const asCStmt* SwitchStatement = nullptr;
+		int32 ForCount = 0;
+		int32 SwitchCount = 0;
+		int32 WhileCount = 0;
+		int32 DoWhileCount = 0;
+		int32 CaseCount = 0;
+		int32 FunctionEntryCount = 0;
+		int32 LoopEntryCount = 0;
+		int32 LoopBackedgeCount = 0;
+		int32 ReturnCount = 0;
+		bool bAllCasesTargetSwitch = true;
+		bool bBreakTargetsSwitch = false;
+		bool bContinueTargetsFor = false;
+		bool bAllTransfersHaveExactRole = true;
+		bool bAllReturnsHaveExactRole = true;
 		for (asUINT Index = 1; Index <= AST->GetStmtCount(); ++Index)
 		{
 			const asCStmt* const Statement = AST->GetStmt(asASTStmtId(Index));
@@ -1684,21 +1724,104 @@ public:
 			{
 				continue;
 			}
-			bHasFor = bHasFor || Statement->kind == asAST_STMT_FOR;
-			bHasSwitch = bHasSwitch || Statement->kind == asAST_STMT_SWITCH;
-			bHasWhileOrDo = bHasWhileOrDo
-				|| Statement->kind == asAST_STMT_WHILE
-				|| Statement->kind == asAST_STMT_DO_WHILE;
-			if (Statement->safePointRole != asAST_SAFEPOINT_NONE)
+			if (Statement->kind == asAST_STMT_FOR)
 			{
-				bHasSafePoint = true;
+				++ForCount;
+				ForStatement = Statement;
+			}
+			else if (Statement->kind == asAST_STMT_SWITCH)
+			{
+				++SwitchCount;
+				SwitchStatement = Statement;
+			}
+			else if (Statement->kind == asAST_STMT_WHILE)
+			{
+				++WhileCount;
+			}
+			else if (Statement->kind == asAST_STMT_DO_WHILE)
+			{
+				++DoWhileCount;
+			}
+			else if (Statement->kind == asAST_STMT_CASE)
+			{
+				++CaseCount;
+			}
+			else if (Statement->kind == asAST_STMT_RETURN)
+			{
+				++ReturnCount;
+				bAllReturnsHaveExactRole = bAllReturnsHaveExactRole
+					&& Statement->safePointRole == asAST_SAFEPOINT_RETURN;
+			}
+
+			if (Statement->safePointRole == asAST_SAFEPOINT_FUNCTION_ENTRY)
+			{
+				++FunctionEntryCount;
+			}
+			else if (Statement->safePointRole == asAST_SAFEPOINT_LOOP_ENTRY)
+			{
+				++LoopEntryCount;
+			}
+			else if (Statement->safePointRole == asAST_SAFEPOINT_LOOP_BACKEDGE)
+			{
+				++LoopBackedgeCount;
 			}
 		}
-		ASSERT_THAT(IsTrue(bHasFor, TEXT("canonical AST must record for")));
-		ASSERT_THAT(IsTrue(bHasSwitch, TEXT("canonical AST must record switch")));
-		ASSERT_THAT(IsTrue(bHasWhileOrDo, TEXT("canonical AST must record while/do")));
-		ASSERT_THAT(IsTrue(bHasSafePoint,
-			TEXT("canonical AST control-flow compilation must publish safe-point roles")));
+		ASSERT_THAT(AreEqual(1, ForCount, TEXT("exactly one canonical for")));
+		ASSERT_THAT(AreEqual(1, SwitchCount, TEXT("exactly one canonical switch")));
+		ASSERT_THAT(AreEqual(1, WhileCount, TEXT("exactly one canonical while")));
+		ASSERT_THAT(AreEqual(1, DoWhileCount, TEXT("exactly one canonical do-while")));
+		ASSERT_THAT(AreEqual(3, CaseCount, TEXT("two cases plus default")));
+		ASSERT_THAT(AreEqual(1, FunctionEntryCount,
+			TEXT("function body owns the exact entry role")));
+		ASSERT_THAT(AreEqual(3, LoopEntryCount,
+			TEXT("for/while/do bodies own exact loop-entry roles")));
+		ASSERT_THAT(AreEqual(3, LoopBackedgeCount,
+			TEXT("for/while/do loops own exact backedge roles")));
+		ASSERT_THAT(AreEqual(2, ReturnCount,
+			TEXT("default and final return are both sealed")));
+		ASSERT_THAT(IsTrue(bAllReturnsHaveExactRole,
+			TEXT("all returns own Return roles")));
+		ASSERT_THAT(IsTrue(SwitchStatement != nullptr
+			&& SwitchStatement->safePointRole == asAST_SAFEPOINT_STATEMENT,
+			TEXT("authored switch owns the Statement role")));
+
+		for (asUINT Index = 1; Index <= AST->GetStmtCount(); ++Index)
+		{
+			const asCStmt* const Statement = AST->GetStmt(asASTStmtId(Index));
+			if (Statement == nullptr)
+			{
+				continue;
+			}
+			if (Statement->kind == asAST_STMT_CASE)
+			{
+				bAllCasesTargetSwitch = bAllCasesTargetSwitch
+					&& SwitchStatement != nullptr
+					&& Statement->target == SwitchStatement->id
+					&& Statement->safePointRole == asAST_SAFEPOINT_STATEMENT;
+			}
+			else if (Statement->kind == asAST_STMT_BREAK)
+			{
+				bAllTransfersHaveExactRole = bAllTransfersHaveExactRole
+					&& Statement->safePointRole == asAST_SAFEPOINT_TRANSFER;
+				bBreakTargetsSwitch = SwitchStatement != nullptr
+					&& Statement->target == SwitchStatement->id;
+			}
+			else if (Statement->kind == asAST_STMT_CONTINUE)
+			{
+				bAllTransfersHaveExactRole = bAllTransfersHaveExactRole
+					&& Statement->safePointRole == asAST_SAFEPOINT_TRANSFER;
+				bContinueTargetsFor = ForStatement != nullptr
+					&& Statement->target == ForStatement->id;
+			}
+		}
+		ASSERT_THAT(IsTrue(bAllCasesTargetSwitch,
+			TEXT("all cases own Statement roles and target the exact switch")));
+		ASSERT_THAT(IsTrue(bAllTransfersHaveExactRole,
+			TEXT("break/continue own exact Transfer roles")));
+		ASSERT_THAT(IsTrue(bBreakTargetsSwitch,
+			TEXT("break targets the nearest switch")));
+		ASSERT_THAT(IsTrue(bContinueTargetsFor,
+			TEXT("continue targets the nearest loop, not the switch")));
 	}
 
 	TEST_METHOD(CleanupDestructionExceptionsImportsAndGlobals)

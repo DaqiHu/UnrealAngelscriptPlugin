@@ -427,10 +427,29 @@ static void EmitLocalDeclStmts(
 		sema, owner, var, type, init, range, true, out);
 }
 
+static void MarkAuthoredLocalDeclarationStatements(
+	asCASTContext& context,
+	const asCArray<asASTStmtId>& statements)
+{
+	for( asUINT i = 0; i < statements.GetLength(); ++i )
+	{
+		const asCStmt* const statement = context.GetStmt(statements[i]);
+		if( statement != 0 && statement->kind == asAST_STMT_DECL )
+		{
+			// Only the authored declaration is a source statement. Its sibling
+			// initializer ExprStmt is a synthesized semantic phase and must not
+			// become a second stepping/safe-point event.
+			context.SetStmtSafePointRole(
+				statement->id, asAST_SAFEPOINT_STATEMENT);
+		}
+	}
+}
+
 asASTStmtId asCSema::ActOnLocalDeclStmt(asASTDeclId owner, const char* name, const asCQualType& type, asASTExprId init, const asCSourceRange& range)
 {
 	asCArray<asASTStmtId> children;
 	EmitLocalDeclStmts(*this, owner, name, type, init, range, children);
+	MarkAuthoredLocalDeclarationStatements(context, children);
 	if( children.GetLength() == 1 )
 	{
 		return children[0];
@@ -597,6 +616,7 @@ asASTStmtId asCSema::ActOnLocalVariableDeclarationAction(
 		AddDiagnostic("local-variable-declaration-range-invalid");
 		return asASTStmtId();
 	}
+	MarkAuthoredLocalDeclarationStatements(context, statements);
 	return ActOnBlock(owner, statements, range);
 }
 
@@ -1744,9 +1764,14 @@ asASTStmtId asCSema::ActOnExpressionStmt(asASTDeclId owner, asASTExprId expr, co
 	const asASTStmtId existing = FindExistingStmt(asAST_STMT_EXPR, range);
 	if( existing.IsValid() )
 	{
+		context.SetStmtSafePointRole(
+			existing, asAST_SAFEPOINT_STATEMENT);
 		return existing;
 	}
-	return ActOnExprStmt(owner, expr, range);
+	const asASTStmtId statement = ActOnExprStmt(owner, expr, range);
+	context.SetStmtSafePointRole(
+		statement, asAST_SAFEPOINT_STATEMENT);
+	return statement;
 }
 
 static asASTStmtId NearestControl(asCASTContext& context, const asCArray<asASTStmtId>& stack, bool loopsOnly)
@@ -1878,7 +1903,13 @@ asASTStmtId asCSema::ActOnLeafStatementAction(
 	switch( action.kind )
 	{
 	case asLEAF_STATEMENT_EXPRESSION:
-		return ActOnExprStmt(action.owner, action.expression, range);
+		{
+			const asASTStmtId statement =
+				ActOnExprStmt(action.owner, action.expression, range);
+			context.SetStmtSafePointRole(
+				statement, asAST_SAFEPOINT_STATEMENT);
+			return statement;
+		}
 	case asLEAF_STATEMENT_RETURN:
 		{
 			asASTExprId value = action.expression;
