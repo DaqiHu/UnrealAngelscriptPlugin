@@ -10376,6 +10376,149 @@ public:
 				*Exception)));
 	}
 
+	TEST_METHOD(CanonicalPostfixMakeOpCallExecutesWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 postfix Make()(41) CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdPostfixMakeOpCall", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int opCall(int n)
+				{
+					return n + 1;
+				}
+			}
+
+			T Make()
+			{
+				T Object;
+				return Object;
+			}
+
+			int Entry()
+			{
+				return Make()(41);
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdPostfixMakeOpCall.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Make()(41) must publish Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("postfix Make() opCall Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("postfix Make() opCall must not construct asCCompiler")));
+
+		int32 Value = 0;
+		FString Exception;
+		const int ExecuteStatus = AngelscriptNativeTestSupport::CanonicalExecuteIntStatus(
+			Engine.Get(), Module, "int Entry()", Value, Exception);
+		ASSERT_THAT(IsTrue(
+			ExecuteStatus == asEXECUTION_FINISHED && Value == 42,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute Make()(41) as T::opCall; status=%d Entry()=%d exception=%s"),
+				ExecuteStatus,
+				Value,
+				*Exception)));
+	}
+
+	TEST_METHOD(CanonicalCastIntOpConvExecutesWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 explicit opConv CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdObjectOpConv", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int opConv() const
+				{
+					return 40 + 2;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				return Cast<int>(Object);
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdObjectOpConv.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Cast<int>(Object) must publish Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("explicit opConv Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("explicit opConv must not construct asCCompiler")));
+
+		int32 Value = 0;
+		FString Exception;
+		const int ExecuteStatus = AngelscriptNativeTestSupport::CanonicalExecuteIntStatus(
+			Engine.Get(), Module, "int Entry()", Value, Exception);
+		ASSERT_THAT(IsTrue(
+			ExecuteStatus == asEXECUTION_FINISHED && Value == 42,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute Cast<int>(Object) as T::opConv; status=%d Entry()=%d exception=%s"),
+				ExecuteStatus,
+				Value,
+				*Exception)));
+	}
+
 	TEST_METHOD(CanonicalBytecodeLifetimeEmitterConsumesOnlyProtocolExitPlans)
 	{
 		const FString SourcePath = FPaths::Combine(

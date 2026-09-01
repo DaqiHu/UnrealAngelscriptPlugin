@@ -13987,6 +13987,271 @@ public:
 				*Dump)));
 	}
 
+	TEST_METHOD(CanonicalPostfixMakeOpCallRewritesWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 postfix Make()(41) fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaPostfixMakeOpCall", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int opCall(int n)
+				{
+					return n + 1;
+				}
+			}
+
+			T Make()
+			{
+				T Object;
+				return Object;
+			}
+
+			int Entry()
+			{
+				return Make()(41);
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaPostfixMakeOpCall.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Make()(41) must compile from sealed T::opCall / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("postfix Make() opCall Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("postfix Make() opCall must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const ReturnStmt = Entry != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				*const_cast<asCASTContext*>(Context),
+				Entry->id,
+				asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* Returned = ReturnStmt != nullptr
+			? Context->GetExpr(ReturnStmt->expr) : nullptr;
+		while (Returned != nullptr
+			&& (Returned->kind == asAST_EXPR_CLEANUP
+				|| Returned->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+				|| Returned->kind == asAST_EXPR_SEQUENCE)
+			&& Returned->children.GetLength() != 0)
+		{
+			Returned = Context->GetExpr(
+				Returned->children[Returned->children.GetLength() - 1]);
+		}
+		const asCDecl* const Callee = Returned != nullptr
+			? Context->GetDecl(Returned->resolvedDecl) : nullptr;
+		const asCExpr* Receiver = Returned != nullptr
+			? Context->GetExpr(Returned->receiver) : nullptr;
+		while (Receiver != nullptr
+			&& (Receiver->kind == asAST_EXPR_CLEANUP
+				|| Receiver->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& Receiver->children.GetLength() == 1)
+		{
+			Receiver = Context->GetExpr(Receiver->children[0]);
+		}
+		const asCDecl* const ReceiverCallee = Receiver != nullptr
+			? Context->GetDecl(Receiver->resolvedDecl) : nullptr;
+		int32 MakeCalleeCount = 0;
+		bool bLeftoverMakeIntCall = false;
+		TArray<FString> Lines;
+		Dump.ParseIntoArrayLines(Lines);
+		for (const FString& Line : Lines)
+		{
+			if (Line.Contains(TEXT("kind=Call")) && Line.Contains(TEXT("callee=Make()"))
+				&& !Line.Contains(TEXT("callee=Make()::")))
+			{
+				++MakeCalleeCount;
+			}
+			if (Line.Contains(TEXT("kind=Call"))
+				&& Line.Contains(TEXT("callee=Make(int)")))
+			{
+				bLeftoverMakeIntCall = true;
+			}
+		}
+
+		ASSERT_THAT(IsTrue(
+			!bLeftoverMakeIntCall
+				&& Returned != nullptr
+				&& Returned->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD
+				&& Callee->stableKey.Equals("T::opCall(int)")
+				&& Receiver != nullptr
+				&& Receiver->kind == asAST_EXPR_CALL
+				&& ReceiverCallee != nullptr
+				&& ReceiverCallee->name.Equals("Make")
+				&& MakeCalleeCount == 1,
+			*FString::Printf(
+				TEXT("Make()(41) must rewrite to one T::opCall(int) Call whose receiver is the single Make() temporary, not leftover Make(int) or a second Make(). dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalCastIntRewritesObjectThroughOpConvWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 explicit opConv fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaObjectOpConv", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int opConv() const
+				{
+					return 40 + 2;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				return Cast<int>(Object);
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaObjectOpConv.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Cast<int>(Object) must compile from sealed T::opConv / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("explicit opConv Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("explicit opConv must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const ReturnStmt = Entry != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				*const_cast<asCASTContext*>(Context),
+				Entry->id,
+				asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* Returned = ReturnStmt != nullptr
+			? Context->GetExpr(ReturnStmt->expr) : nullptr;
+		while (Returned != nullptr
+			&& (Returned->kind == asAST_EXPR_CLEANUP
+				|| Returned->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+				|| Returned->kind == asAST_EXPR_CONVERSION)
+			&& Returned->children.GetLength() != 0)
+		{
+			Returned = Context->GetExpr(
+				Returned->children[Returned->children.GetLength() - 1]);
+		}
+		const asCDecl* const Callee = Returned != nullptr
+			? Context->GetDecl(Returned->resolvedDecl) : nullptr;
+		bool bLeftoverConversionOfT = false;
+		TArray<FString> Lines;
+		Dump.ParseIntoArrayLines(Lines);
+		for (const FString& Line : Lines)
+		{
+			if (Line.Contains(TEXT("kind=Conversion"))
+				&& Line.Contains(TEXT("type=int"))
+				&& (Line.Contains(TEXT("src=T")) || Line.Contains(TEXT("from=T"))))
+			{
+				bLeftoverConversionOfT = true;
+			}
+		}
+
+		ASSERT_THAT(IsTrue(
+			!bLeftoverConversionOfT
+				&& Returned != nullptr
+				&& Returned->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD
+				&& Callee->name.Equals("opConv")
+				&& Returned->receiver.IsValid(),
+			*FString::Printf(
+				TEXT("Cast<int>(Object) must rewrite to a Call of T::opConv() const, not leftover Conversion of T to int. dump:\n%s"),
+				*Dump)));
+	}
+
 	TEST_METHOD(SequenceSingleEvalShortCircuitConditionalAndGeneratedDefaultAreSealedTogether)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

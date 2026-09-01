@@ -3080,6 +3080,88 @@ static asASTExprId TryRewriteObjectOpCall(
 		? sema.ActOnMaterializeTemporary(call, range) : call;
 }
 
+static bool QualTypeMatchesCastTarget(
+	asCASTContext& context,
+	const asCQualType& methodType,
+	const asCQualType& dest)
+{
+	if( methodType == dest )
+	{
+		return true;
+	}
+	const asCType* const methodNamed = context.GetType(methodType.type);
+	const asCType* const destNamed = context.GetType(dest.type);
+	return methodNamed != 0
+		&& destNamed != 0
+		&& methodNamed->kind == asAST_TYPE_PRIMITIVE
+		&& destNamed->kind == asAST_TYPE_PRIMITIVE
+		&& methodNamed->primitiveToken == destNamed->primitiveToken;
+}
+
+// LEGACY CompileConversion for explicit Cast looks up 0-arg opConv, then
+// opImplConv, matching the target primitive. Canonical must seal that Call
+// rather than leftover Conversion dest=int src=T.
+static asASTExprId TryRewriteObjectConvOperator(
+	asCSema& sema,
+	asCASTContext& context,
+	asCScriptEngine* engine,
+	asASTExprId inner,
+	const asCQualType& dest,
+	const asCSourceRange& range)
+{
+	const asCExpr* const innerExpr = context.GetExpr(inner);
+	if( innerExpr == 0 || !innerExpr->type.IsValid() )
+	{
+		return asASTExprId();
+	}
+	const asCType* const named = context.GetType(innerExpr->type.type);
+	if( named == 0
+		|| (named->kind != asAST_TYPE_VALUE_OBJECT
+			&& named->kind != asAST_TYPE_REFERENCE_OBJECT) )
+	{
+		return asASTExprId();
+	}
+
+	const char* const methodNames[2] = { "opConv", "opImplConv" };
+	for( int methodIndex = 0; methodIndex < 2; ++methodIndex )
+	{
+		const char* const methodName = methodNames[methodIndex];
+		if( engine != 0 )
+		{
+			InternNativeMethods(sema, engine, context, innerExpr->type, methodName);
+		}
+		asCArray<asASTExprId> opArgs;
+		const asASTDeclId callee = FindBestCallee(
+			context, FindNamedTypeDecl(context, innerExpr->type),
+			methodName, opArgs, &sema);
+		const asCDecl* const method = context.GetDecl(callee);
+		if( method == 0
+			|| method->kind != asAST_DECL_METHOD
+			|| !method->name.Equals(methodName)
+			|| !method->type.IsValid()
+			|| !QualTypeMatchesCastTarget(context, method->type, dest) )
+		{
+			continue;
+		}
+		asCArray<asASTExprId> callArgs;
+		asCArray<asCString> names;
+		asCArray<asSASTCallArgument> callArguments;
+		ArrangeCallArguments(
+			sema, context, callee, callArgs, names, range, inner, callArguments);
+		ConvertCallArgumentsToFormalTypes(
+			sema, context, *method, callArgs, range, inner, callArguments);
+		asASTExprId call = sema.ActOnCall(
+			callee, callArgs, method->type, range, &callArguments);
+		if( call.IsValid() && inner.IsValid() )
+		{
+			context.SetExprReceiver(call, inner);
+		}
+		return ShouldMaterializeCallResult(context, method->type)
+			? sema.ActOnMaterializeTemporary(call, range) : call;
+	}
+	return asASTExprId();
+}
+
 asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const asCArray<asASTExprId>& inArgs, const asCSourceRange& range, asASTExprId implicitReceiver, const asCArray<asCString>* argumentNames, bool exactScope, const asCQualType* typeNameTarget)
 {
 	const asASTExprId originalReceiver = implicitReceiver;
@@ -4503,6 +4585,12 @@ asASTExprId asCSema::ActOnCastExpr(asASTExprId inner, const asCQualType& dest, c
 	if( existing.IsValid() )
 	{
 		return existing;
+	}
+	const asASTExprId rewritten = TryRewriteObjectConvOperator(
+		*this, context, engine, inner, dest, range);
+	if( rewritten.IsValid() )
+	{
+		return rewritten;
 	}
 	return ActOnConversion(inner, dest, range);
 }
