@@ -851,6 +851,184 @@ public:
 		}
 	}
 
+	TEST_METHOD(CanonicalCompileFunctionProjectsCurrentModuleDefaultsForNamedCall)
+	{
+		// Production mutation caught: dropping Runtime defaults while projecting
+		// current-module functions makes Pack(B: 7) reject omitted formal A.
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("CompileFunction default-projection fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"CompileFnDefaultProjection", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string BaselineSource = ASTEST_AS_ANSI(R"AS(
+			int Pack(int A = 1, int B = 2)
+			{
+				return A * 10 + B;
+			}
+		)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"CompileFnDefaultProjection_Baseline.as",
+			BaselineSource.c_str())));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("CompileFunction default-projection baseline must build")));
+
+		const std::string DetachedSource = ASTEST_AS_ANSI(R"AS(
+			int ReadProjectedDefault()
+			{
+				return Pack(B: 7);
+			}
+		)AS");
+		asIScriptFunction* Detached = nullptr;
+		const int CompileResult = Module->CompileFunction(
+			"CompileFnDefaultProjection_Detached.as",
+			DetachedSource.c_str(),
+			0,
+			0,
+			&Detached);
+		ASSERT_THAT(AreEqual(0, CompileResult,
+			TEXT("CompileFunction must project current-module typed defaults")));
+		ASSERT_THAT(IsNotNull(Detached));
+		if (CompileResult < 0 || Detached == nullptr)
+		{
+			return;
+		}
+
+		asIScriptContext* const Context = Engine.Get()->CreateContext();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context != nullptr)
+		{
+			ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(Detached)));
+			ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
+			ASSERT_THAT(AreEqual(17,
+				static_cast<int32>(Context->GetReturnDWord()),
+				TEXT("projected Pack(B: 7) must execute A=1 B=7")));
+			Context->Release();
+		}
+		Detached->Release();
+	}
+
+	TEST_METHOD(CanonicalCompileFunctionRuntimeShellOwnsAuthoredDefault)
+	{
+		// Production mutation caught: CompileFunction uses detached CodeGen, so
+		// an unconditional null defaultArgs entry loses its public metadata.
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("CompileFunction default-metadata fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"CompileFnDefaultMetadata", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string FunctionSource = ASTEST_AS_ANSI(R"AS(
+			int OwnDefault(int Value = 7)
+			{
+				return Value;
+			}
+		)AS");
+		asIScriptFunction* Function = nullptr;
+		ASSERT_THAT(AreEqual(0, Module->CompileFunction(
+			"CompileFnDefaultMetadata_Attached.as",
+			FunctionSource.c_str(),
+			0,
+			asCOMP_ADD_TO_MODULE,
+			&Function),
+			TEXT("attached CompileFunction default fixture must compile")));
+		ASSERT_THAT(IsNotNull(Function));
+		if (Function == nullptr)
+		{
+			return;
+		}
+
+		const char* DefaultValue = nullptr;
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			Function->GetParam(0, nullptr, nullptr, nullptr, &DefaultValue),
+			TEXT("CompileFunction default metadata must be queryable")));
+		ASSERT_THAT(AreEqual(FString(TEXT("7")),
+			FString(UTF8_TO_TCHAR(
+				DefaultValue != nullptr ? DefaultValue : "")),
+			TEXT("CompileFunction Runtime shell must own authored default =7")));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			static_cast<asCModule*>(Module)->GetLastBytecodePublisher(),
+			TEXT("CompileFunction default metadata must come from Canonical CodeGen")));
+	}
+
+	TEST_METHOD(CanonicalCompileFunctionBindsCurrentModuleValueParameterABI)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("value-parameter CompileFunction fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"CompileFnValueParameterABI", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		const std::string BaselineSource = ASTEST_AS_ANSI(R"AS(
+			int ReadCompileValue(int Value)
+			{
+				return Value;
+			}
+		)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"CompileFnValueParameterABI_Baseline.as",
+			BaselineSource.c_str())));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("value-parameter CompileFunction baseline must build")));
+
+		const std::string DetachedSource = ASTEST_AS_ANSI(R"AS(
+			int ReadCurrentModuleValueParameterABI()
+			{
+				return ReadCompileValue(42);
+			}
+		)AS");
+		asIScriptFunction* Detached = nullptr;
+		ASSERT_THAT(AreEqual(0, Module->CompileFunction(
+			"CompileFnValueParameterABI_Detached.as",
+			DetachedSource.c_str(), 0, 0, &Detached),
+			TEXT("CompileFunction must bind a source by-value formal to its normalized Runtime shell")));
+		ASSERT_THAT(IsNotNull(Detached));
+		if (Detached != nullptr)
+		{
+			asIScriptContext* const Context = Engine.Get()->CreateContext();
+			ASSERT_THAT(IsNotNull(Context));
+			if (Context != nullptr)
+			{
+				ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(Detached)));
+				ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
+				ASSERT_THAT(AreEqual(
+					42, static_cast<int32>(Context->GetReturnDWord()),
+					TEXT("CompileFunction must execute through the exact current-module Runtime ABI")));
+				Context->Release();
+			}
+			Detached->Release();
+		}
+	}
+
 	TEST_METHOD(CanonicalSelectionPublishesValueObjectsFromCodeGen)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

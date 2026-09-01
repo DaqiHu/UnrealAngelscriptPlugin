@@ -1176,6 +1176,48 @@ FAngelscriptBinds FAngelscriptBinds::ReferenceClassForTarget(FBindString Name, U
 	}
 
 	constexpr asQWORD ReferenceFlags = asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE;
+	auto RegisterCanonicalAncestry = [this, Name, UnrealClass]()
+	{
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(GetTargetEngine().GetScriptEngine());
+		if (ScriptEngine == nullptr)
+		{
+			return;
+		}
+
+		// Registered AngelScript reference types intentionally do not use
+		// asCObjectType::derivedFrom for Unreal inheritance. Publish the nearest
+		// visible native superclass by stable spelling for Canonical Sema without
+		// changing the maintained LEGACY Runtime model or retaining a TypeId/UClass.
+		for (UClass* SuperClass = UnrealClass->GetSuperClass();
+			SuperClass != nullptr;
+			SuperClass = SuperClass->GetSuperClass())
+		{
+			const FString SuperName =
+				FAngelscriptType::GetBoundClassName(SuperClass);
+			if (ScriptEngine->GetTypeInfoByName(TCHAR_TO_ANSI(*SuperName)) != nullptr)
+			{
+				ScriptEngine->RegisterCanonicalTypeBaseRelation(
+					Name.ToCString(), TCHAR_TO_ANSI(*SuperName));
+				break;
+			}
+		}
+
+		for (const FImplementedInterface& ImplementedInterface : UnrealClass->Interfaces)
+		{
+			if (ImplementedInterface.Class == nullptr)
+			{
+				continue;
+			}
+			const FString InterfaceName =
+				FAngelscriptType::GetBoundClassName(ImplementedInterface.Class);
+			if (ScriptEngine->GetTypeInfoByName(TCHAR_TO_ANSI(*InterfaceName)) != nullptr)
+			{
+				ScriptEngine->RegisterCanonicalTypeBaseRelation(
+					Name.ToCString(), TCHAR_TO_ANSI(*InterfaceName));
+			}
+		}
+	};
 	asITypeInfo* ExistingType = GetTargetScriptEngine().GetTypeInfoByName(Name.ToCString());
 	if (ExistingType != nullptr)
 	{
@@ -1217,6 +1259,7 @@ FAngelscriptBinds FAngelscriptBinds::ReferenceClassForTarget(FBindString Name, U
 		}
 
 		ExistingType->SetUserData(UnrealClass);
+		RegisterCanonicalAncestry();
 		return Binds;
 	}
 
@@ -1232,6 +1275,7 @@ FAngelscriptBinds FAngelscriptBinds::ReferenceClassForTarget(FBindString Name, U
 
 	Binds.ScriptType->alignment = UnrealClass->GetMinAlignment();
 	Binds.ScriptType->SetUserData(UnrealClass);
+	RegisterCanonicalAncestry();
 	return Binds;
 }
 

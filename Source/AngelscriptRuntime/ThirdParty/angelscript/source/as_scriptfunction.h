@@ -552,12 +552,24 @@ public:
 	asEBuildArtifactInvocationKind artifactInvocationKind =
 		asBUILD_ARTIFACT_INVOCATION_INVALID;
 	asCTypeInfo* artifactOwnerType = nullptr;
-	// Exact address-free identity of the sealed canonical declaration that
-	// produced this function. Source CodeGen assigns it directly; Cache V2 may
-	// assign it only after validating the restored AST against the live VM
-	// skeleton. It is deliberately not serialized and never stores a DeclId or
-	// AST pointer whose meaning is local to one context.
+	// Exact address-free identity of the sealed canonical declaration related to
+	// this function. Source CodeGen assigns script shells directly; Canonical
+	// Sema assigns registered system functions when it projects their exact
+	// external declaration; Cache V2 may assign script shells only after
+	// validating the restored AST against the live VM skeleton. It is
+	// deliberately not serialized and never stores a DeclId or AST pointer whose
+	// meaning is local to one context.
 	asCString canonicalASTStableDeclKey;
+	// Exact source-facing qualifier bits for each authored formal, indexed by
+	// source formal ordinal. Script Runtime ABI normalization is intentionally
+	// non-invertible (`T` and explicit `const T&inout` may share one shell
+	// datatype), so Canonical producers must carry this structured distinction
+	// instead of asking a later consumer to infer it from the live ABI. Hidden
+	// lambda/call-adapter parameters are not source formals and are excluded.
+	// The array is generation-local, contains no AST ids or Engine numeric type
+	// ids, and is rebuilt from a sealed AST after Cache restore rather than
+	// serialized as an independent authority.
+	asCArray<asDWORD> canonicalASTSourceParameterQualifiers;
 	//[UE--]
 	asECompileOutType            compileOutType = asECompileOutType::CompileCalls;
 

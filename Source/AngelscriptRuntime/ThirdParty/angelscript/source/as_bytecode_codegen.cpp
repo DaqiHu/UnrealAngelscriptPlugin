@@ -13,6 +13,8 @@
 #include "as_scriptengine.h"
 #include "as_ast_dump.h"
 #include "as_ast_lifetime.h"
+#include "as_decl.h"
+#include "as_expr.h"
 #include "as_scriptfunction.h"
 #include "as_ast_type.h"
 #include "as_ast_verifier.h"
@@ -114,6 +116,57 @@ namespace
 	static const char* const CANONICAL_CURRENT_MODULE_SCRIPT_FUNCTION_ORIGIN = "canonical-current-module-script-function";
 	static const char* const CANONICAL_CURRENT_MODULE_SCRIPT_GLOBAL_ORIGIN = "canonical-current-module-script-global";
 	static const char* const CANONICAL_NATIVE_GLOBAL_PROPERTY_ORIGIN = "canonical-native-global-property";
+
+	asCString* CloneCanonicalDefaultArgument(
+		const asCDecl* formal,
+		bool& allocationFailed)
+	{
+		allocationFailed = false;
+		if( formal == 0 || formal->defaultArg.GetLength() == 0 )
+		{
+			return 0;
+		}
+		asCString* const copy = asNEW(asCString)(formal->defaultArg);
+		allocationFailed = copy == 0;
+		return copy;
+	}
+
+	// A pending imported-function shell takes ownership of every non-null
+	// default string, including on CreateCanonicalPendingImport failure. Until
+	// that one transfer point, keep partial-loop exits leak-free locally.
+	class asCCanonicalDefaultArgumentOwner
+	{
+	public:
+		explicit asCCanonicalDefaultArgumentOwner(
+			asCArray<asCString*>& inArguments)
+			: arguments(inArguments), released(false)
+		{
+		}
+
+		~asCCanonicalDefaultArgumentOwner()
+		{
+			if( released )
+			{
+				return;
+			}
+			for( asUINT i = 0; i < arguments.GetLength(); ++i )
+			{
+				if( arguments[i] != 0 )
+				{
+					asDELETE(arguments[i], asCString);
+				}
+			}
+		}
+
+		void Release()
+		{
+			released = true;
+		}
+
+	private:
+		asCArray<asCString*>& arguments;
+		bool released;
+	};
 
 	bool IsCanonicalAutomaticImportScriptFunction(const asCDecl* decl)
 	{
@@ -419,14 +472,16 @@ namespace
 
 		asCArray<asCDataType> wantParams;
 		asCArray<asETypeModifiers> wantInOut;
-		for( asUINT i = 0; i < decl->children.GetLength(); ++i )
+		const asUINT formalCount = context.GetFormalDeclCount(decl->id);
+		for( asUINT formalIndex = 0; formalIndex < formalCount; ++formalIndex )
 		{
-			const asCDecl* child = context.GetDecl(decl->children[i]);
-			if( child == 0 || child->kind != asAST_DECL_PARAM )
+			const asCDecl* child = context.GetFormalDecl(
+				decl->id, formalIndex);
+			if( child == 0 )
 			{
-				continue;
+				return 0;
 			}
-			asCDataType paramType = bridge.Resolve(context, child->type);
+			const asCDataType paramType = bridge.Resolve(context, child->type);
 			if( !paramType.IsValid() )
 			{
 				return 0;
@@ -537,14 +592,15 @@ namespace
 
 		asCArray<asCDataType> parameterTypes;
 		asCArray<asETypeModifiers> inOutFlags;
-		for( asUINT childIndex = 0;
-			childIndex < decl->children.GetLength(); ++childIndex )
+		const asUINT formalCount = context.GetFormalDeclCount(decl->id);
+		for( asUINT formalIndex = 0;
+			formalIndex < formalCount; ++formalIndex )
 		{
-			const asCDecl* const child = context.GetDecl(
-				decl->children[childIndex]);
-			if( child == 0 || child->kind != asAST_DECL_PARAM )
+			const asCDecl* const child = context.GetFormalDecl(
+				decl->id, formalIndex);
+			if( child == 0 )
 			{
-				continue;
+				return 0;
 			}
 			asCDataType parameterType = bridge.Resolve(
 				context, child->type);
@@ -707,13 +763,14 @@ namespace
 
 		asCArray<asCDataType> parameterTypes;
 		asCArray<asETypeModifiers> inOutFlags;
-		for( asUINT childIndex = 0;
-			childIndex < decl->children.GetLength(); ++childIndex )
+		const asUINT formalCount = context.GetFormalDeclCount(decl->id);
+		for( asUINT formalIndex = 0;
+			formalIndex < formalCount; ++formalIndex )
 		{
-			const asCDecl* const child = context.GetDecl(
-				decl->children[childIndex]);
-			if( child == 0 || child->kind != asAST_DECL_PARAM )
-				continue;
+			const asCDecl* const child = context.GetFormalDecl(
+				decl->id, formalIndex);
+			if( child == 0 )
+				return 0;
 			asCDataType parameterType = bridge.Resolve(context, child->type);
 			asETypeModifiers passing = InOutFromQuals(child->type.quals);
 			if( !parameterType.IsValid()
@@ -862,20 +919,25 @@ namespace
 
 		asCArray<asCDataType> wantParams;
 		asCArray<asETypeModifiers> wantInOut;
-		for( asUINT i = 0; i < decl->children.GetLength(); ++i )
+		const asUINT formalCount = context.GetFormalDeclCount(decl->id);
+		for( asUINT formalIndex = 0; formalIndex < formalCount; ++formalIndex )
 		{
-			const asCDecl* child = context.GetDecl(decl->children[i]);
-			if( child == 0 || child->kind != asAST_DECL_PARAM )
+			const asCDecl* child = context.GetFormalDecl(
+				decl->id, formalIndex);
+			if( child == 0 )
 			{
-				continue;
+				return 0;
 			}
 			asCDataType paramType = bridge.Resolve(context, child->type);
+			asETypeModifiers passing = InOutFromQuals(child->type.quals);
 			if( !paramType.IsValid() )
 			{
 				return 0;
 			}
+			asCRuntimeTypeBridge::NormalizeScriptParameterABI(
+				paramType, passing);
 			wantParams.PushLast(paramType);
-			wantInOut.PushLast(InOutFromQuals(child->type.quals));
+			wantInOut.PushLast(passing);
 		}
 		const asCDataType wantRet = bridge.Resolve(context, decl->type);
 		if( !wantRet.IsValid() )
@@ -890,22 +952,16 @@ namespace
 			if( function == 0 || function->module == module || function->objectType != 0
 				|| function->traits.GetTrait(asTRAIT_LOCAL)
 				|| function->parameterTypes.GetLength() != wantParams.GetLength()
-				|| function->returnType.GetTokenType() != wantRet.GetTokenType()
-				|| function->returnType.GetTypeInfo() != wantRet.GetTypeInfo()
-				|| function->returnType.IsReference() != wantRet.IsReference()
-				|| function->returnType.IsObjectHandle() != wantRet.IsObjectHandle() )
+				|| function->inOutFlags.GetLength() != wantInOut.GetLength()
+				|| function->returnType != wantRet )
 			{
 				return;
 			}
 			for( asUINT p = 0; p < wantParams.GetLength(); ++p )
 			{
 				const asCDataType& parameter = function->parameterTypes[p];
-				if( parameter.GetTokenType() != wantParams[p].GetTokenType()
-					|| parameter.GetTypeInfo() != wantParams[p].GetTypeInfo()
-					|| parameter.IsReference() != wantParams[p].IsReference()
-					|| parameter.IsObjectHandle() != wantParams[p].IsObjectHandle()
-					|| (function->inOutFlags.GetLength() > p && wantInOut[p] != asTM_NONE
-						&& function->inOutFlags[p] != wantInOut[p]) )
+				if( parameter != wantParams[p]
+					|| function->inOutFlags[p] != wantInOut[p] )
 				{
 					return;
 				}
@@ -941,20 +997,25 @@ namespace
 
 		asCArray<asCDataType> wantParams;
 		asCArray<asETypeModifiers> wantInOut;
-		for( asUINT i = 0; i < decl->children.GetLength(); ++i )
+		const asUINT formalCount = context.GetFormalDeclCount(decl->id);
+		for( asUINT formalIndex = 0; formalIndex < formalCount; ++formalIndex )
 		{
-			const asCDecl* child = context.GetDecl(decl->children[i]);
-			if( child == 0 || child->kind != asAST_DECL_PARAM )
+			const asCDecl* child = context.GetFormalDecl(
+				decl->id, formalIndex);
+			if( child == 0 )
 			{
-				continue;
+				return 0;
 			}
-			const asCDataType paramType = bridge.Resolve(context, child->type);
+			asCDataType paramType = bridge.Resolve(context, child->type);
+			asETypeModifiers passing = InOutFromQuals(child->type.quals);
 			if( !paramType.IsValid() )
 			{
 				return 0;
 			}
+			asCRuntimeTypeBridge::NormalizeScriptParameterABI(
+				paramType, passing);
 			wantParams.PushLast(paramType);
-			wantInOut.PushLast(InOutFromQuals(child->type.quals));
+			wantInOut.PushLast(passing);
 		}
 		const asCDataType wantRet = bridge.Resolve(context, decl->type);
 		if( !wantRet.IsValid() )
@@ -970,10 +1031,8 @@ namespace
 			if( function == 0 || function->module != module || function->objectType != 0
 				|| function->nameSpace != nameSpace || !function->name.Equals(decl->name)
 				|| function->parameterTypes.GetLength() != wantParams.GetLength()
-				|| function->returnType.GetTokenType() != wantRet.GetTokenType()
-				|| function->returnType.GetTypeInfo() != wantRet.GetTypeInfo()
-				|| function->returnType.IsReference() != wantRet.IsReference()
-				|| function->returnType.IsObjectHandle() != wantRet.IsObjectHandle() )
+				|| function->inOutFlags.GetLength() != wantInOut.GetLength()
+				|| function->returnType != wantRet )
 			{
 				continue;
 			}
@@ -981,12 +1040,8 @@ namespace
 			for( asUINT p = 0; p < wantParams.GetLength(); ++p )
 			{
 				const asCDataType& parameter = function->parameterTypes[p];
-				if( parameter.GetTokenType() != wantParams[p].GetTokenType()
-					|| parameter.GetTypeInfo() != wantParams[p].GetTypeInfo()
-					|| parameter.IsReference() != wantParams[p].IsReference()
-					|| parameter.IsObjectHandle() != wantParams[p].IsObjectHandle()
-					|| (function->inOutFlags.GetLength() > p && wantInOut[p] != asTM_NONE
-						&& function->inOutFlags[p] != wantInOut[p]) )
+				if( parameter != wantParams[p]
+					|| function->inOutFlags[p] != wantInOut[p] )
 				{
 					sameParams = false;
 					break;
@@ -1034,12 +1089,19 @@ namespace
 
 	asCGlobalProperty* FindRegisteredNativeGlobalProperty(
 		asCScriptEngine* engine,
+		asCModule* module,
 		asCRuntimeTypeBridge& bridge,
 		const asCASTContext& context,
 		const asCDecl* decl)
 	{
-		if( engine == 0 || decl == 0 || decl->kind != asAST_DECL_VAR
+		if( engine == 0 || module == 0 || decl == 0 || decl->kind != asAST_DECL_VAR
 			|| !IsCanonicalNativeGlobalProperty(decl) )
+		{
+			return 0;
+		}
+		asSNameSpace* const expectedNamespace = ResolveCanonicalDeclNamespace(
+			context, engine, module, decl);
+		if( expectedNamespace == 0 )
 		{
 			return 0;
 		}
@@ -1048,7 +1110,8 @@ namespace
 		for( asUINT i = 0; i < engine->registeredGlobalProps.GetLength(); ++i )
 		{
 			asCGlobalProperty* const property = engine->registeredGlobalProps[i];
-			if( property == 0 || !property->name.Equals(decl->name) )
+			if( property == 0 || property->nameSpace != expectedNamespace
+				|| !property->name.Equals(decl->name) )
 			{
 				continue;
 			}
@@ -1103,6 +1166,92 @@ namespace
 		return type.IsValid() && type == unique->type ? unique : 0;
 	}
 
+	asCObjectType* ObjectTypeFromCanonicalClassDecl(
+		asCScriptEngine* engine,
+		asCRuntimeTypeBridge& bridge,
+		const asCASTContext& context,
+		const asCDecl* cls)
+	{
+		if( engine == 0 || cls == 0 )
+		{
+			return 0;
+		}
+
+		auto TryResolve = [&](const asCQualType& type) -> asCObjectType*
+		{
+			if( !type.IsValid() )
+			{
+				return 0;
+			}
+			const asCDataType resolved = bridge.Resolve(context, type);
+			return CastToObjectType(resolved.GetTypeInfo());
+		};
+
+		if( asCObjectType* const fromDeclType = TryResolve(cls->type) )
+		{
+			return fromDeclType;
+		}
+
+		const char* const typeKey = cls->stableKey.GetLength()
+			? cls->stableKey.AddressOf() : cls->name.AddressOf();
+		if( typeKey && typeKey[0] )
+		{
+			for( asUINT typeIndex = 1;
+				typeIndex <= context.GetTypeCount(); ++typeIndex )
+			{
+				const asCType* const named =
+					context.GetType(asASTTypeRef(typeIndex));
+				if( named == 0 || !named->stableKey.Equals(typeKey) )
+				{
+					continue;
+				}
+				if( asCObjectType* const found =
+					TryResolve(asCQualType(named->id, 0)) )
+				{
+					return found;
+				}
+			}
+		}
+
+		asCObjectType* objType = typeKey && typeKey[0]
+			? CastToObjectType(static_cast<asCTypeInfo*>(
+				engine->GetTypeInfoByDecl(typeKey)))
+			: 0;
+		if( objType == 0 && cls->name.GetLength() )
+		{
+			objType = CastToObjectType(static_cast<asCTypeInfo*>(
+				engine->GetTypeInfoByName(cls->name.AddressOf())));
+		}
+		return objType;
+	}
+
+	bool CanonicalRuntimeTypeMatches(
+		const asCDataType& expected,
+		const asCDataType& actual)
+	{
+		if( expected == actual )
+		{
+			return true;
+		}
+		if( !expected.IsValid() || !actual.IsValid()
+			|| expected.GetTokenType() != actual.GetTokenType()
+			|| expected.GetTypeInfo() != actual.GetTypeInfo()
+			|| expected.IsReference() != actual.IsReference() )
+		{
+			return false;
+		}
+		asCTypeInfo* const info = expected.GetTypeInfo();
+		if( info != 0
+			&& (info->GetFlags() & asOBJ_IMPLICIT_HANDLE) != 0 )
+		{
+			// QualType round-trip of `const T&` for an implicit-handle class
+			// may add or drop the handle mark. The interned method and the live
+			// Runtime declaration still name the same object type.
+			return true;
+		}
+		return expected.IsEqualExceptConst(actual);
+	}
+
 	asCScriptFunction* FindExactRegisteredMethod(
 		asCScriptEngine* engine,
 		asCRuntimeTypeBridge& bridge,
@@ -1122,12 +1271,8 @@ namespace
 		{
 			return 0;
 		}
-		const char* typeKey = cls->stableKey.GetLength() ? cls->stableKey.AddressOf() : cls->name.AddressOf();
-		asCObjectType* objType = CastToObjectType(static_cast<asCTypeInfo*>(engine->GetTypeInfoByDecl(typeKey)));
-		if( objType == 0 && cls->name.GetLength() )
-		{
-			objType = CastToObjectType(static_cast<asCTypeInfo*>(engine->GetTypeInfoByName(cls->name.AddressOf())));
-		}
+		asCObjectType* objType = ObjectTypeFromCanonicalClassDecl(
+			engine, bridge, context, cls);
 		if( objType == 0 )
 		{
 			return 0;
@@ -1135,12 +1280,14 @@ namespace
 
 		asCArray<asCDataType> wantParams;
 		asCArray<asETypeModifiers> wantInOut;
-		for( asUINT i = 0; i < decl->children.GetLength(); ++i )
+		const asUINT formalCount = context.GetFormalDeclCount(decl->id);
+		for( asUINT formalIndex = 0; formalIndex < formalCount; ++formalIndex )
 		{
-			const asCDecl* child = context.GetDecl(decl->children[i]);
-			if( child == 0 || child->kind != asAST_DECL_PARAM )
+			const asCDecl* child = context.GetFormalDecl(
+				decl->id, formalIndex);
+			if( child == 0 )
 			{
-				continue;
+				return 0;
 			}
 			asCDataType paramType = bridge.Resolve(context, child->type);
 			if( !paramType.IsValid() )
@@ -1151,6 +1298,12 @@ namespace
 			wantInOut.PushLast(InOutFromQuals(child->type.quals));
 		}
 		asCDataType wantRet = bridge.Resolve(context, decl->type);
+		if( !wantRet.IsValid() )
+		{
+			return 0;
+		}
+		const bool wantReadOnly =
+			(decl->traits & asAST_TRAIT_CONST_METHOD) != 0;
 
 		asCScriptFunction* unique = 0;
 		int matches = 0;
@@ -1160,41 +1313,44 @@ namespace
 			{
 				return;
 			}
-			if( method->parameterTypes.GetLength() != wantParams.GetLength() )
+			if( method->parameterTypes.GetLength() != wantParams.GetLength()
+				|| method->inOutFlags.GetLength() != wantInOut.GetLength()
+				|| method->IsReadOnly() != wantReadOnly )
 			{
 				return;
 			}
 			const bool fromTemplate = objType->templateBaseType != 0
 				&& method->objectType == objType->templateBaseType;
+			bool instantiatedTemplate = false;
 			asCDataType retDt = method->returnType;
 			if( fromTemplate )
 			{
-				retDt = engine->DetermineTypeForTemplate(retDt, objType->templateBaseType, objType);
+				if( asCScriptFunction* const specialized =
+					engine->GenerateTemplateFunction(objType, method) )
+				{
+					method = specialized;
+					retDt = method->returnType;
+					instantiatedTemplate = true;
+				}
+				else
+				{
+					retDt = engine->DetermineTypeForTemplate(
+						retDt, objType->templateBaseType, objType);
+				}
 			}
-			if( retDt.GetTokenType() != wantRet.GetTokenType()
-				|| retDt.GetTypeInfo() != wantRet.GetTypeInfo()
-				|| retDt.IsReference() != wantRet.IsReference()
-				|| retDt.IsObjectHandle() != wantRet.IsObjectHandle() )
+			if( !CanonicalRuntimeTypeMatches(wantRet, retDt) )
 			{
 				return;
 			}
 			for( asUINT p = 0; p < wantParams.GetLength(); ++p )
 			{
 				asCDataType paramType = method->parameterTypes[p];
-				if( fromTemplate )
+				if( fromTemplate && !instantiatedTemplate )
 				{
 					paramType = engine->DetermineTypeForTemplate(paramType, objType->templateBaseType, objType);
 				}
-				if( paramType.GetTokenType() != wantParams[p].GetTokenType()
-					|| paramType.GetTypeInfo() != wantParams[p].GetTypeInfo()
-					|| paramType.IsReference() != wantParams[p].IsReference()
-					|| paramType.IsObjectHandle() != wantParams[p].IsObjectHandle() )
-				{
-					return;
-				}
-				if( method->inOutFlags.GetLength() > p
-					&& wantInOut[p] != asTM_NONE
-					&& method->inOutFlags[p] != wantInOut[p] )
+				if( !CanonicalRuntimeTypeMatches(wantParams[p], paramType)
+					|| method->inOutFlags[p] != wantInOut[p] )
 				{
 					return;
 				}
@@ -1242,6 +1398,18 @@ namespace
 			walk(objType->templateBaseType);
 		}
 		return (matches == 1) ? unique : 0;
+	}
+
+	bool IsUnavailableGeneratedImplicitCopyLifecycle(
+		const asCDecl* declaration)
+	{
+		return declaration != 0
+			&& (declaration->traits & asAST_TRAIT_GENERATED) != 0
+			&& !declaration->body.IsValid()
+			&& (declaration->origin.Equals(
+					"canonical-generated-implicit-copy-constructor")
+				|| declaration->origin.Equals(
+					"canonical-generated-implicit-assignment-operator"));
 	}
 
 	asCScriptFunction* FindExactPreparedInterfaceMethod(
@@ -1316,12 +1484,8 @@ namespace
 		{
 			return 0;
 		}
-		const char* typeKey = cls->stableKey.GetLength() ? cls->stableKey.AddressOf() : cls->name.AddressOf();
-		asCObjectType* objType = CastToObjectType(static_cast<asCTypeInfo*>(engine->GetTypeInfoByDecl(typeKey)));
-		if( objType == 0 && cls->name.GetLength() )
-		{
-			objType = CastToObjectType(static_cast<asCTypeInfo*>(engine->GetTypeInfoByName(cls->name.AddressOf())));
-		}
+		asCObjectType* objType = ObjectTypeFromCanonicalClassDecl(
+			engine, bridge, context, cls);
 		if( objType == 0 )
 		{
 			return 0;
@@ -1329,12 +1493,14 @@ namespace
 
 		asCArray<asCDataType> wantParams;
 		asCArray<asETypeModifiers> wantInOut;
-		for( asUINT i = 0; i < decl->children.GetLength(); ++i )
+		const asUINT formalCount = context.GetFormalDeclCount(decl->id);
+		for( asUINT formalIndex = 0; formalIndex < formalCount; ++formalIndex )
 		{
-			const asCDecl* child = context.GetDecl(decl->children[i]);
-			if( child == 0 || child->kind != asAST_DECL_PARAM )
+			const asCDecl* child = context.GetFormalDecl(
+				decl->id, formalIndex);
+			if( child == 0 )
 			{
-				continue;
+				return 0;
 			}
 			asCDataType paramType = bridge.Resolve(context, child->type);
 			if( !paramType.IsValid() )
@@ -1349,11 +1515,22 @@ namespace
 		int matches = 0;
 		asCScriptFunction* namedUnique = 0;
 		int namedMatches = 0;
+		asCScriptFunction* keyedUnique = 0;
+		int keyedMatches = 0;
 		auto consider = [&](asCScriptFunction* func)
 		{
 			if( func == 0 )
 			{
 				return;
+			}
+			if( decl->stableKey.GetLength() != 0
+				&& func->canonicalASTStableDeclKey.Equals(decl->stableKey) )
+			{
+				if( keyedUnique == 0 || keyedUnique->id != func->id )
+				{
+					++keyedMatches;
+					keyedUnique = func;
+				}
 			}
 			asUINT start = 0;
 			if( func->hiddenArgumentIndex >= 0 )
@@ -1480,6 +1657,10 @@ namespace
 		// signature, but only the stub has the canonical declaration's name and
 		// already captures the concrete template type. Prefer that exact-name
 		// match before falling back to the ordinary unique-signature rule.
+		if( keyedMatches == 1 )
+		{
+			return keyedUnique;
+		}
 		if( namedMatches == 1 )
 		{
 			return namedUnique;
@@ -1504,15 +1685,9 @@ namespace
 		{
 			return 0;
 		}
-		const char* const typeKey = cls->stableKey.GetLength()
-			? cls->stableKey.AddressOf() : cls->name.AddressOf();
-		asCObjectType* objectType = CastToObjectType(
-			static_cast<asCTypeInfo*>(engine->GetTypeInfoByDecl(typeKey)));
-		if( objectType == 0 && cls->name.GetLength() != 0 )
-		{
-			objectType = CastToObjectType(static_cast<asCTypeInfo*>(
-				engine->GetTypeInfoByName(cls->name.AddressOf())));
-		}
+		asCRuntimeTypeBridge bridge(engine);
+		asCObjectType* objectType = ObjectTypeFromCanonicalClassDecl(
+			engine, bridge, context, cls);
 		if( objectType == 0 || objectType->beh.destruct <= 0
 			|| static_cast<asUINT>(objectType->beh.destruct)
 				>= engine->scriptFunctions.GetLength() )
@@ -1548,12 +1723,8 @@ namespace
 		{
 			return 0;
 		}
-		const char* typeKey = cls->stableKey.GetLength() ? cls->stableKey.AddressOf() : cls->name.AddressOf();
-		asCObjectType* objType = CastToObjectType(static_cast<asCTypeInfo*>(engine->GetTypeInfoByDecl(typeKey)));
-		if( objType == 0 && cls->name.GetLength() )
-		{
-			objType = CastToObjectType(static_cast<asCTypeInfo*>(engine->GetTypeInfoByName(cls->name.AddressOf())));
-		}
+		asCObjectType* objType = ObjectTypeFromCanonicalClassDecl(
+			engine, bridge, context, cls);
 		if( objType == 0 || objType->beh.listFactory <= 0
 			|| (asUINT)objType->beh.listFactory >= engine->scriptFunctions.GetLength() )
 		{
@@ -1567,6 +1738,11 @@ namespace
 		{
 			return 0;
 		}
+		if( decl->stableKey.GetLength() != 0
+			&& factory->canonicalASTStableDeclKey.Equals(decl->stableKey) )
+		{
+			return factory;
+		}
 
 		asUINT start = 0;
 		if( factory->hiddenArgumentIndex >= 0 )
@@ -1576,6 +1752,11 @@ namespace
 			{
 				start = factory->parameterTypes.GetLength();
 			}
+		}
+		else if( factory->listPattern != 0
+			&& factory->parameterTypes.GetLength() > 0 )
+		{
+			start = 1;
 		}
 		else if( factory->parameterTypes.GetLength() > 0
 			&& factory->parameterTypes[0].IsReference()
@@ -1588,13 +1769,14 @@ namespace
 			start = 1;
 		}
 
-		asUINT paramIndex = 0;
-		for( asUINT i = 0; i < decl->children.GetLength(); ++i )
+		const asUINT formalCount = context.GetFormalDeclCount(decl->id);
+		for( asUINT paramIndex = 0; paramIndex < formalCount; ++paramIndex )
 		{
-			const asCDecl* param = context.GetDecl(decl->children[i]);
-			if( param == 0 || param->kind != asAST_DECL_PARAM )
+			const asCDecl* param = context.GetFormalDecl(
+				decl->id, paramIndex);
+			if( param == 0 )
 			{
-				continue;
+				return 0;
 			}
 			if( start + paramIndex >= factory->parameterTypes.GetLength() )
 			{
@@ -1622,9 +1804,8 @@ namespace
 			{
 				return 0;
 			}
-			++paramIndex;
 		}
-		return start + paramIndex == factory->parameterTypes.GetLength() ? factory : 0;
+		return start + formalCount == factory->parameterTypes.GetLength() ? factory : 0;
 	}
 
 	asASTDeclId FindInternedZeroArgConstructor(const asCASTContext& context, const asCQualType& type)
@@ -1655,16 +1836,7 @@ namespace
 				{
 					continue;
 				}
-				asUINT params = 0;
-				for( asUINT p = 0; p < child->children.GetLength(); ++p )
-				{
-					const asCDecl* param = context.GetDecl(child->children[p]);
-					if( param && param->kind == asAST_DECL_PARAM )
-					{
-						++params;
-					}
-				}
-				if( params == 0 )
+				if( context.GetFormalDeclCount(child->id) == 0 )
 				{
 					return child->id;
 				}
@@ -1715,7 +1887,22 @@ namespace
 			return asTM_OUTREF;
 		if( quals & asAST_QUAL_IN )
 			return asTM_INREF;
+		// AngelScript permits a bare '&'. Builder freezes that spelling as the
+		// effective default inout convention in the Runtime shell. Keep the
+		// source QualType free of invented direction bits, but compare and emit
+		// against the exact live ABI here.
+		if( quals & asAST_QUAL_REFERENCE )
+			return asTM_INOUTREF;
 		return asTM_NONE;
+	}
+
+	bool UsesCanonicalDirectFunctionABI(const asCDecl* decl)
+	{
+		return decl != 0
+			&& ((decl->traits & asAST_TRAIT_LAMBDA) != 0
+				|| (decl->kind == asAST_DECL_METHOD
+					&& (decl->traits & asAST_TRAIT_GENERATED) != 0
+					&& decl->accessorKind != asAST_ACCESSOR_NONE));
 	}
 
 	struct asSCodeGenSlot
@@ -2174,7 +2361,8 @@ namespace
 					// Value objects are returned through the caller-owned hidden pointer,
 					// not the eight-byte value register. For methods it follows `this`.
 					const int returnPointerOffset = func->objectType ? -AS_PTR_SIZE : 0;
-					EmitSealedStorageCopy(returnSlot, returnPointerOffset, func->returnType, true);
+					EmitValueObjectCopy(
+						returnSlot, returnPointerOffset, func->returnType, true);
 				}
 				else if( func->returnType.IsObjectHandle() || func->returnType.IsFuncdef() )
 				{
@@ -2243,6 +2431,10 @@ namespace
 			}
 			bc.Output(func->scriptData->byteCode.AddressOf());
 			if( !CaptureFinalBytecodeRelocations() )
+			{
+				return false;
+			}
+			if( !CaptureFunctionSignatureRelocations(decl) )
 			{
 				return false;
 			}
@@ -2420,6 +2612,140 @@ namespace
 			if( stableMemberKey )
 				relocation.stableMemberKey = stableMemberKey;
 			artifact.typeRelocations.PushLast(relocation);
+			return true;
+		}
+
+		bool AppendFunctionSignatureRelocation(
+			const asCQualType& canonicalType,
+			asERuntimeTypeBindingSignatureRole role,
+			asUINT formalIndex = asUINT(-1))
+		{
+			const asCType* const type = context.GetType(canonicalType.type);
+			if( type == 0 )
+			{
+				FailAt(__LINE__, asAST_VERIFY_DANGLING_ID);
+				return false;
+			}
+			// Primitive/void values have no dynamic Runtime type coordinate. Their
+			// ABI is fully represented by the sealed Canonical QualType and entry
+			// plan, so no generation binding row is required.
+			if( type->kind == asAST_TYPE_VOID
+				|| type->kind == asAST_TYPE_PRIMITIVE
+				|| type->kind == asAST_TYPE_WILDCARD )
+			{
+				return true;
+			}
+			if( activeDecl == 0 || activeDecl->stableKey.GetLength() == 0 )
+			{
+				FailAt(__LINE__, asINVALID_DECLARATION);
+				return false;
+			}
+
+			asSTypeRelocation relocation;
+			asCString detail;
+			asCTypeInfo* runtimeSignatureType = 0;
+			if( role == asRUNTIME_TYPE_SIGNATURE_RETURN )
+			{
+				if( formalIndex != asUINT(-1) )
+				{
+					FailAt(__LINE__, asINVALID_DECLARATION);
+					return false;
+				}
+				runtimeSignatureType = func->returnType.GetTypeInfo();
+			}
+			else if( role == asRUNTIME_TYPE_SIGNATURE_PARAMETER )
+			{
+				if( formalIndex >= func->parameterTypes.GetLength() )
+				{
+					FailAt(__LINE__, asINVALID_DECLARATION);
+					return false;
+				}
+				runtimeSignatureType =
+					func->parameterTypes[formalIndex].GetTypeInfo();
+			}
+			else if( role == asRUNTIME_TYPE_SIGNATURE_RECEIVER )
+			{
+				if( formalIndex != asUINT(-1) )
+				{
+					FailAt(__LINE__, asINVALID_DECLARATION);
+					return false;
+				}
+				runtimeSignatureType = func->objectType;
+			}
+			if( runtimeSignatureType == 0 )
+			{
+				FailAt(__LINE__, asINVALID_DECLARATION);
+				return false;
+			}
+			// The prepared Runtime function already carries the exact current
+			// generation type coordinate for this sealed formal/return/receiver.
+			// Prefer that coordinate over a same-name Engine scan so a retained old
+			// generation cannot make an otherwise exact signature ambiguous.
+			asCArray<asCTypeInfo*> runtimeSignatureTypes;
+			runtimeSignatureTypes.PushLast(runtimeSignatureType);
+			const int result = asCRuntimeTypeBindingTable::CaptureExpectedABI(
+				bc.GetEngine(), context, canonicalType, bindingEnvironment,
+				relocation.expectedType, &runtimeSignatureTypes, &detail);
+			if( result != asRUNTIME_TYPE_BIND_OK )
+			{
+				if( failureDetail.GetLength() == 0 )
+				{
+					failureDetail.Format(
+						"failed to capture canonical function signature binding: owner=%s role=%u formal=%u result=%d detail=%s",
+						activeDecl->stableKey.AddressOf(),
+						static_cast<asUINT>(role), formalIndex, result,
+						detail.AddressOf() ? detail.AddressOf() : "");
+				}
+				FailAt(__LINE__, result);
+				return false;
+			}
+			relocation.use = asTYPE_RELOC_FUNCTION_SIGNATURE;
+			relocation.ownerFunctionStableKey = activeDecl->stableKey;
+			relocation.signatureRole = role;
+			relocation.formalIndex = formalIndex;
+			relocation.functionArtifactIndex = functionArtifactIndex;
+			artifact.typeRelocations.PushLast(relocation);
+			return true;
+		}
+
+		bool CaptureFunctionSignatureRelocations(const asCDecl* decl)
+		{
+			if( func == 0 || decl == 0 || decl != activeDecl )
+			{
+				FailAt(__LINE__, asINVALID_CONFIGURATION);
+				return false;
+			}
+			if( !AppendFunctionSignatureRelocation(
+				decl->type, asRUNTIME_TYPE_SIGNATURE_RETURN) )
+			{
+				return false;
+			}
+			const asUINT formalCount = context.GetFormalDeclCount(decl->id);
+			for( asUINT formalIndex = 0; formalIndex < formalCount;
+				++formalIndex )
+			{
+				const asCDecl* const formal =
+					context.GetFormalDecl(decl->id, formalIndex);
+				if( formal == 0 || formal->kind != asAST_DECL_PARAM
+					|| !AppendFunctionSignatureRelocation(
+						formal->type, asRUNTIME_TYPE_SIGNATURE_PARAMETER,
+						formalIndex) )
+				{
+					FailAt(__LINE__, asINVALID_DECLARATION);
+					return false;
+				}
+			}
+			if( func->objectType != 0 )
+			{
+				const asCDecl* const receiver = context.GetDecl(decl->parent);
+				if( receiver == 0 || !receiver->type.IsValid()
+					|| !AppendFunctionSignatureRelocation(
+						receiver->type, asRUNTIME_TYPE_SIGNATURE_RECEIVER) )
+				{
+					FailAt(__LINE__, asINVALID_DECLARATION);
+					return false;
+				}
+			}
 			return true;
 		}
 
@@ -2859,6 +3185,20 @@ namespace
 			else if( bytes == 8 )
 			{
 				bc.InstrSHORT(asBC_RDR8, (short)dest);
+			}
+			else if( CanEmitSealedStorageCopy(dataType) )
+			{
+				// RDR{1,2,4,8} cannot materialize a complete wide value object.
+				// The caller has already placed the exact source address in RPtr;
+				// consume that address through the same sealed, width-authenticated
+				// COPY protocol used by assignments and hidden returns.
+				bc.Instr(asBC_PshRPtr);
+				bc.InstrSHORT(asBC_PSF, (short)dest);
+				bc.InstrSHORT_DW(asBC_COPY,
+					(short)dataType.GetSizeInMemoryBytes(), 0);
+				MarkLastTypeRelocation(
+					dataType, asTYPE_RELOC_METADATA_ONLY);
+				bc.Instr(asBC_PopPtr);
 			}
 			else
 			{
@@ -3336,6 +3676,29 @@ namespace
 			{
 				if( func->DoesReturnOnStack()
 					&& IsByValueObject(fieldType)
+					&& CanEmitSealedStorageCopy(fieldType) )
+				{
+					// A wide POD getter returns through caller-owned hidden storage.
+					// Copy the exact Sema/Runtime-authenticated width directly from
+					// the backing field; scalar RDR/WRTV opcodes cannot represent it.
+					PushThisObject();
+					bc.InstrSHORT_DW(asBC_ADDSi, (short)fieldOffset, 0);
+					MarkLastTypeRelocation(
+						ownerDataType, asTYPE_RELOC_PROPERTY, runtimeProperty);
+					const int returnPointerOffset = func->objectType
+						? -AS_PTR_SIZE : 0;
+					bc.InstrSHORT(asBC_PshVPtr,
+						(short)returnPointerOffset);
+					bc.InstrSHORT_DW(asBC_COPY,
+						(short)fieldType.GetSizeInMemoryBytes(), 0);
+					MarkLastTypeRelocation(
+						fieldType, asTYPE_RELOC_METADATA_ONLY);
+					bc.Instr(asBC_PopPtr);
+					returnSlot = 0x7fffffff;
+					return;
+				}
+				if( func->DoesReturnOnStack()
+					&& IsByValueObject(fieldType)
 					&& !CanEmitSealedStorageCopy(fieldType) )
 				{
 					const asCExpr* const copyPlan =
@@ -3345,6 +3708,54 @@ namespace
 					if( copyPlan == 0 || copyCtor == 0
 						|| copyCtor->objectType != fieldType.GetTypeInfo() )
 					{
+						// Host values such as TMap expose opAssign and a default
+						// constructor but no copy constructor. Construct the
+						// hidden return in place, then assign from the field.
+						asCScriptEngine* const engine = bc.GetEngine();
+						asCObjectType* const objectType =
+							CastToObjectType(fieldType.GetTypeInfo());
+						asCScriptFunction* assign = 0;
+						asCScriptFunction* defaultCtor = 0;
+						if( engine != 0 && objectType != 0 )
+						{
+							if( objectType->beh.copy > 0 )
+							{
+								assign = engine->GetScriptFunction(
+									objectType->beh.copy);
+							}
+							if( objectType->beh.construct > 0 )
+							{
+								defaultCtor = engine->GetScriptFunction(
+									objectType->beh.construct);
+							}
+						}
+						if( assign != 0 && defaultCtor != 0
+							&& assign->objectType == objectType
+							&& defaultCtor->objectType == objectType
+							&& defaultCtor->parameterTypes.GetLength() == 0
+							&& assign->parameterTypes.GetLength() == 1 )
+						{
+							const int returnPointerOffset = func->objectType
+								? -AS_PTR_SIZE : 0;
+							bc.InstrSHORT(asBC_PshVPtr,
+								(short)returnPointerOffset);
+							bc.Call(defaultCtor->funcType == asFUNC_SYSTEM
+									? asBC_CALLSYS : asBC_CALL,
+								defaultCtor->id, AS_PTR_SIZE);
+							PushThisObject();
+							bc.InstrSHORT_DW(asBC_ADDSi,
+								(short)fieldOffset, 0);
+							MarkLastTypeRelocation(
+								ownerDataType, asTYPE_RELOC_PROPERTY,
+								runtimeProperty);
+							bc.InstrSHORT(asBC_PshVPtr,
+								(short)returnPointerOffset);
+							bc.Call(assign->funcType == asFUNC_SYSTEM
+									? asBC_CALLSYS : asBC_CALL,
+								assign->id, AS_PTR_SIZE * 2);
+							returnSlot = 0x7fffffff;
+							return;
+						}
 						failureDetail.Format(
 							"generated non-POD getter lacks its exact sealed copy-construction route: function=%s field=%s",
 							decl->stableKey.AddressOf()
@@ -3395,16 +3806,11 @@ namespace
 				return;
 			}
 			int src = 0x7fffffff;
-			const asCDecl* parameter = 0;
-			for( asUINT i = 0; i < decl->children.GetLength(); ++i )
+			const asCDecl* const parameter =
+				context.GetFormalDecl(decl->id, 0);
+			if( parameter != 0 )
 			{
-				const asCDecl* child = context.GetDecl(decl->children[i]);
-				if( child && child->kind == asAST_DECL_PARAM )
-				{
-					parameter = child;
-					src = FindSlot(child->id);
-					break;
-				}
+				src = FindSlot(parameter->id);
 			}
 			if( src == 0x7fffffff )
 			{
@@ -3431,6 +3837,24 @@ namespace
 					assignment,
 					context.GetExpr(assignment->children[0]),
 					context.GetExpr(assignment->children[1]));
+				return;
+			}
+			if( IsByValueObject(fieldType)
+				&& CanEmitSealedStorageCopy(fieldType) )
+			{
+				// The generated setter's POD by-value parameter has already been
+				// materialized in callee-owned local storage. Copy its complete,
+				// authenticated width into the live backing field in one operation.
+				bc.InstrSHORT(asBC_PSF, (short)src);
+				PushThisObject();
+				bc.InstrSHORT_DW(asBC_ADDSi, (short)fieldOffset, 0);
+				MarkLastTypeRelocation(
+					ownerDataType, asTYPE_RELOC_PROPERTY, runtimeProperty);
+				bc.InstrSHORT_DW(asBC_COPY,
+					(short)fieldType.GetSizeInMemoryBytes(), 0);
+				MarkLastTypeRelocation(
+					fieldType, asTYPE_RELOC_METADATA_ONLY);
+				bc.Instr(asBC_PopPtr);
 				return;
 			}
 			PushThisObject();
@@ -3569,6 +3993,10 @@ namespace
 
 		int LocalDwords(const asCDataType& dataType)
 		{
+			if( dataType.IsReference() && !dataType.IsObjectHandle() )
+			{
+				return AS_PTR_SIZE;
+			}
 			if( dataType.IsNullHandle()
 				|| dataType.IsObjectHandle()
 				|| dataType.IsFuncdef() )
@@ -3600,9 +4028,12 @@ namespace
 			// null type operand during epilogue optimization. Keep the slot in the
 			// pointer directory, but never publish cleanup metadata for it.
 			const bool isNullHandle = dataType.IsNullHandle();
-			const bool isObjectSlot = !isNullHandle && (dataType.IsObject()
-				|| dataType.IsObjectHandle() || dataType.IsFuncdef());
-			const int offset = isObjectSlot || isNullHandle
+			const bool isReferenceAlias =
+				dataType.IsReference() && !dataType.IsObjectHandle();
+			const bool isObjectSlot = !isNullHandle && !isReferenceAlias
+				&& (dataType.IsObject()
+					|| dataType.IsObjectHandle() || dataType.IsFuncdef());
+			const int offset = isObjectSlot || isNullHandle || isReferenceAlias
 				? AllocDwords(LocalDwords(dataType))
 				: AllocTemporary(dataType);
 			if( isObjectSlot )
@@ -3629,10 +4060,13 @@ namespace
 					bc.InstrSHORT(asBC_ClrVPtr, (short)offset);
 				}
 			}
-			else if( isNullHandle )
+			else if( isNullHandle || isReferenceAlias )
 			{
 				PublishPointerVariable(offset);
-				bc.InstrSHORT(asBC_ClrVPtr, (short)offset);
+				if( isNullHandle )
+				{
+					bc.InstrSHORT(asBC_ClrVPtr, (short)offset);
+				}
 			}
 			return offset;
 		}
@@ -3696,6 +4130,7 @@ namespace
 			// FREE and UNINIT are one sealed lifecycle transition. The VM's
 			// exception directory must not observe a released pointer as live.
 			bc.ObjInfo(obj.offset, asOBJ_UNINIT);
+			obj.live = false;
 			return true;
 		}
 
@@ -3953,67 +4388,75 @@ namespace
 		void BindParameters(const asCDecl* decl)
 		{
 			int stackPos = 0;
-			asUINT parameterIndex = 0;
 			if( func->objectType )
 				stackPos = -AS_PTR_SIZE;
 			if( func->DoesReturnOnStack() )
 				stackPos -= AS_PTR_SIZE;
 
-			for( asUINT i = 0; i < decl->children.GetLength(); ++i )
+			const asUINT formalCount = context.GetFormalDeclCount(decl->id);
+			for( asUINT parameterIndex = 0;
+				parameterIndex < formalCount; ++parameterIndex )
 			{
-				const asCDecl* child = context.GetDecl(decl->children[i]);
-				if( child == 0 )
-					continue;
-				if( child->kind == asAST_DECL_PARAM )
+				const asCDecl* child = context.GetFormalDecl(
+					decl->id, parameterIndex);
+				if( child == 0
+					|| parameterIndex >= func->parameterTypes.GetLength() )
 				{
-					if( parameterIndex >= func->parameterTypes.GetLength() )
+					FailAt(__LINE__, asINVALID_DECLARATION);
+					return;
+				}
+				const asCDataType dataType = TypeOf(child->type);
+				const asCDataType& runtimeParameterType =
+					func->parameterTypes[parameterIndex];
+				if( !PublishDebugVariable(child, runtimeParameterType, stackPos) )
+					return;
+				if( IsByValueObject(dataType) )
+				{
+					if( CanEmitSealedStorageCopy(dataType) )
 					{
-						FailAt(__LINE__, asINVALID_DECLARATION);
-						return;
-					}
-					const asCDataType dataType = TypeOf(child->type);
-					const asCDataType& runtimeParameterType =
-						func->parameterTypes[parameterIndex];
-					if( !PublishDebugVariable(child, runtimeParameterType, stackPos) )
-						return;
-					if( IsByValueObject(dataType) )
-					{
-						if( CanEmitSealedStorageCopy(dataType) )
-						{
-							const int local = AllocTyped(dataType);
-							BindSlot(child->id, local);
-							CopySealedValueFromPointer(stackPos, local, dataType);
-						}
-						else
-						{
-							asCObjectType* const objectType =
-								CastToObjectType(dataType.GetTypeInfo());
-							if( objectType == 0 )
-							{
-								FailAt(__LINE__, asINVALID_TYPE);
-								return;
-							}
-							// Non-POD VALUE parameters are already unique heap objects.
-							// Bind the incoming pointer directly; copying it into inline
-							// storage would lose both identity and callee ownership.
-							BindSlot(child->id, stackPos, true);
-							asSCodeGenOwnedParameter owned;
-							owned.offset = stackPos;
-							owned.objectType = objectType;
-							ownedParameters.PushLast(owned);
-						}
+						const int local = AllocTyped(dataType);
+						BindSlot(child->id, local);
+						CopySealedValueFromPointer(stackPos, local, dataType);
 					}
 					else
 					{
-						BindSlot(child->id, stackPos);
+						asCObjectType* const objectType =
+							CastToObjectType(dataType.GetTypeInfo());
+						if( objectType == 0 )
+						{
+							FailAt(__LINE__, asINVALID_TYPE);
+							return;
+						}
+						// Non-POD VALUE parameters are already unique heap objects.
+						// Bind the incoming pointer directly; copying it into inline
+						// storage would lose both identity and callee ownership.
+						BindSlot(child->id, stackPos, true);
+						asSCodeGenOwnedParameter owned;
+						owned.offset = stackPos;
+						owned.objectType = objectType;
+						ownedParameters.PushLast(owned);
 					}
-					stackPos -= SizeDwords(dataType);
-					++parameterIndex;
 				}
-				else if( child->kind == asAST_DECL_VAR )
+				else
+				{
+					BindSlot(
+						child->id,
+						stackPos,
+						IsOwnedReferenceObject(dataType));
+				}
+				stackPos -= SizeDwords(dataType);
+			}
+
+			for( asUINT i = 0; i < decl->children.GetLength(); ++i )
+			{
+				const asCDecl* child = context.GetDecl(decl->children[i]);
+				if( child != 0 && child->kind == asAST_DECL_VAR )
 				{
 					const asCDataType dataType = TypeOf(child->type);
-					BindSlot(child->id, AllocTyped(dataType));
+					BindSlot(
+						child->id,
+						AllocTyped(dataType),
+						IsOwnedReferenceObject(dataType));
 				}
 			}
 			if( const asSCodeGenFuncBind* self = FindBind(func) )
@@ -4047,6 +4490,28 @@ namespace
 			{
 				bc.InstrW_W(asBC_CpyVtoV4, dest, src);
 			}
+		}
+
+		void EmitHandleRefCpy(int dest, int src, const asCDataType& destType)
+		{
+			void* const behaviour = destType.IsFuncdef()
+				? (void*)&bc.GetEngine()->functionBehaviours
+				: (void*)destType.GetTypeInfo();
+			if( behaviour == 0 )
+			{
+				FailAt(__LINE__, asINVALID_TYPE);
+				return;
+			}
+			if( dest != src )
+			{
+				// REFCPY pops the destination address and reads the source
+				// pointer still on the stack. PopPtr then discards that source.
+				bc.InstrSHORT(asBC_PshVPtr, (short)src);
+				bc.InstrSHORT(asBC_PSF, (short)dest);
+				bc.InstrPTR(asBC_REFCPY, behaviour);
+				bc.Instr(asBC_PopPtr);
+			}
+			bc.ObjInfo(dest, asOBJ_INIT);
 		}
 
 		const asCDecl* FindSealedStorageCopyClass(const asCDataType& dataType) const
@@ -4133,10 +4598,157 @@ namespace
 				&& LocalDwords(dataType) > AS_PTR_SIZE;
 		}
 
+		bool IsCopyConstructorFor(
+			asCScriptFunction* copyCtor, asCObjectType* objectType) const
+		{
+			if( copyCtor == 0 || objectType == 0
+				|| copyCtor->parameterTypes.GetLength() != 1
+				|| !copyCtor->parameterTypes[0].IsReference() )
+			{
+				return false;
+			}
+			asCTypeInfo* const parameterType =
+				copyCtor->parameterTypes[0].GetTypeInfo();
+			if( parameterType == objectType
+				&& (copyCtor->objectType == objectType
+					|| copyCtor->objectType == 0) )
+			{
+				return true;
+			}
+			asCObjectType* const parameterObject =
+				CastToObjectType(parameterType);
+			asCObjectType* const ctorObject = copyCtor->objectType;
+			asCObjectType* const templateBase = objectType->templateBaseType;
+			if( templateBase == 0 || parameterObject == 0 || ctorObject == 0 )
+			{
+				return false;
+			}
+			const bool ctorMatches = ctorObject == objectType
+				|| ctorObject == templateBase
+				|| ctorObject->templateBaseType == templateBase;
+			const bool paramMatches = parameterObject == objectType
+				|| parameterObject == templateBase
+				|| parameterObject->templateBaseType == templateBase;
+			return ctorMatches && paramMatches;
+		}
+
+		asCScriptFunction* FindCopyConstructorOn(
+			asCObjectType* searchType, asCObjectType* objectType) const
+		{
+			asCScriptEngine* const engine = bc.GetEngine();
+			if( searchType == 0 || objectType == 0 || engine == 0 )
+			{
+				return 0;
+			}
+			if( searchType->beh.copyconstruct > 0 )
+			{
+				asCScriptFunction* const copyCtor =
+					engine->GetScriptFunction(searchType->beh.copyconstruct);
+				if( IsCopyConstructorFor(copyCtor, objectType) )
+				{
+					return copyCtor;
+				}
+			}
+			for( asUINT i = 0; i < searchType->beh.constructors.GetLength(); ++i )
+			{
+				asCScriptFunction* const constructor =
+					engine->GetScriptFunction(searchType->beh.constructors[i]);
+				if( IsCopyConstructorFor(constructor, objectType) )
+				{
+					return constructor;
+				}
+			}
+			return 0;
+		}
+
+		asCScriptFunction* FindCopyConstructor(const asCDataType& dataType) const
+		{
+			asCObjectType* const objectType = CastToObjectType(dataType.GetTypeInfo());
+			if( asCScriptFunction* const copyCtor =
+				FindCopyConstructorOn(objectType, objectType) )
+			{
+				return copyCtor;
+			}
+			if( objectType != 0 && objectType->templateBaseType != 0 )
+			{
+				return FindCopyConstructorOn(
+					objectType->templateBaseType, objectType);
+			}
+			return 0;
+		}
+
+		void EmitCopyConstructValue(
+			int src, int dest, const asCDataType& dataType, bool destIsPointer)
+		{
+			asCScriptFunction* const copyCtor = FindCopyConstructor(dataType);
+			if( copyCtor == 0 )
+			{
+				if( failureDetail.GetLength() == 0 )
+				{
+					failureDetail.Format(
+						"non-trivial value copy lacks a copy constructor function=%s type=%s",
+						activeDecl && activeDecl->stableKey.AddressOf()
+							? activeDecl->stableKey.AddressOf() : "<unknown>",
+						dataType.IsValid()
+							? dataType.Format(0).AddressOf() : "<invalid>");
+				}
+				FailAt(__LINE__, asNOT_SUPPORTED);
+				return;
+			}
+			bc.InstrSHORT(asBC_PSF, (short)src);
+			if( destIsPointer )
+			{
+				bc.InstrSHORT(asBC_PshVPtr, (short)dest);
+			}
+			else
+			{
+				bc.InstrSHORT(asBC_PSF, (short)dest);
+			}
+			bc.Call(copyCtor->funcType == asFUNC_SYSTEM
+					? asBC_CALLSYS : asBC_CALL,
+				copyCtor->id, AS_PTR_SIZE * 2);
+		}
+
+		void EmitValueObjectCopy(
+			int src, int dest, const asCDataType& dataType, bool destIsPointer)
+		{
+			if( CanEmitSealedStorageCopy(dataType) )
+			{
+				EmitSealedStorageCopy(src, dest, dataType, destIsPointer);
+				return;
+			}
+			EmitCopyConstructValue(src, dest, dataType, destIsPointer);
+		}
+
 		void EmitSealedStorageCopy(int src, int dest, const asCDataType& dataType, bool destIsPointer)
 		{
 			if( !CanEmitSealedStorageCopy(dataType) )
 			{
+				if( failureDetail.GetLength() == 0 )
+				{
+					asCTypeInfo* const typeInfo = dataType.GetTypeInfo();
+					const asCDecl* const sealedClass =
+						FindSealedStorageCopyClass(dataType);
+					failureDetail.Format(
+						"sealed storage copy is not authorized function=%s type=%s "
+						"bytes=%d flags=0x%x source=%d destination=%d "
+						"destinationIsPointer=%d canonicalClass=%s origin=%s "
+						"traits=0x%x layout=%d/%u",
+						activeDecl && activeDecl->stableKey.AddressOf()
+							? activeDecl->stableKey.AddressOf() : "<unknown>",
+						dataType.IsValid()
+							? dataType.Format(0).AddressOf() : "<invalid>",
+						dataType.GetSizeInMemoryBytes(),
+						typeInfo ? typeInfo->GetFlags() : 0,
+						src, dest, destIsPointer ? 1 : 0,
+						sealedClass && sealedClass->stableKey.AddressOf()
+							? sealedClass->stableKey.AddressOf() : "<missing>",
+						sealedClass && sealedClass->origin.AddressOf()
+							? sealedClass->origin.AddressOf() : "<missing>",
+						sealedClass ? sealedClass->traits : 0,
+						sealedClass ? sealedClass->byteSize : -1,
+						sealedClass ? sealedClass->byteAlignment : 0);
+				}
 				FailAt(__LINE__, asNOT_SUPPORTED);
 				return;
 			}
@@ -4237,7 +4849,7 @@ namespace
 				// Every value-object copy, including one-dword structs, consumes the
 				// producer-carried storage-copy decision. Width must never bypass the
 				// semantic firewall and silently turn assignment into memcpy.
-				EmitSealedStorageCopy(src, dest, dataType, false);
+				EmitValueObjectCopy(src, dest, dataType, false);
 				return;
 			}
 			CopyVar(dest, src, LocalDwords(dataType));
@@ -4428,6 +5040,8 @@ namespace
 				SetConst(dest, dataType, expr->literalBits);
 				return dest;
 			}
+			case asAST_EXPR_STRING_LITERAL:
+				return EmitStringLiteralAddress(expr);
 			case asAST_EXPR_DECL_REF:
 				return EmitDeclRef(expr, dataType, dwords, false);
 			case asAST_EXPR_NULL_LITERAL:
@@ -4785,7 +5399,9 @@ namespace
 				}
 				return LoadGlobal(prop, dataType);
 			}
-			if( asCObjectProperty* member = FindThisProperty(target) )
+			asCObjectType* memberOwner = 0;
+			if( asCObjectProperty* member = FindThisProperty(
+					target, &memberOwner) )
 			{
 				if( thisOffset == 0x7fffffff )
 				{
@@ -4793,7 +5409,7 @@ namespace
 					return 0;
 				}
 				const asCDataType ownerDataType =
-					asCDataType::CreateType(func->objectType, false);
+					asCDataType::CreateType(memberOwner, false);
 				PushThisObject();
 				bc.InstrSHORT_DW(asBC_ADDSi, (short)member->byteOffset, 0);
 				MarkLastTypeRelocation(
@@ -4875,6 +5491,61 @@ namespace
 			{
 				return EmitLValueAddress(expression->children[0]);
 			}
+			if( expression->kind == asAST_EXPR_CONVERSION
+				&& expression->children.GetLength() == 1
+				&& !expression->resolvedDecl.IsValid() )
+			{
+				const asCExpr* const sourceExpression =
+					context.GetExpr(expression->children[0]);
+				const asCDataType sourceType = sourceExpression != 0
+					? TypeOf(sourceExpression->type) : asCDataType();
+				const asCDataType destinationType = TypeOf(expression->type);
+				asCObjectType* const sourceObject =
+					CastToObjectType(sourceType.GetTypeInfo());
+				asCObjectType* const destinationObject =
+					CastToObjectType(destinationType.GetTypeInfo());
+				const bool representationPreserving =
+					sourceType.IsValid() && destinationType.IsValid()
+					&& destinationType.IsNonPrimitiveValueType()
+					&& !destinationType.IsObjectHandle()
+					&& sourceType.IsEqualExceptRefAndConst(destinationType);
+				const bool covariantTemplateStorage =
+					sourceObject != 0 && destinationObject != 0
+					&& destinationType.IsNonPrimitiveValueType()
+					&& !destinationType.IsObjectHandle()
+					&& sourceObject->templateBaseType != 0
+					&& sourceObject->templateBaseType
+						== destinationObject->templateBaseType
+					&& (sourceObject->GetFlags() & asOBJ_TEMPLATE_SUBTYPE_COVARIANT) != 0
+					&& (destinationObject->GetFlags()
+						& asOBJ_TEMPLATE_SUBTYPE_COVARIANT) != 0
+					&& sourceObject->size > 0
+					&& sourceObject->size == destinationObject->size;
+				if( representationPreserving || covariantTemplateStorage )
+				{
+					// Omitted defaults receive a fresh Conversion boundary even when
+					// only value/reference/const presentation changes. Covariant
+					// TSubclassOf<Derived> -> TSubclassOf<Base> is the same inline
+					// UClass* storage, so the source lvalue is the converted object.
+					// A selected opImplConv carries resolvedDecl and is intentionally
+					// excluded because it produces a distinct value.
+					return EmitLValueAddress(expression->children[0]);
+				}
+				if( destinationType.IsValid()
+					&& destinationType.IsNonPrimitiveValueType()
+					&& !destinationType.IsObjectHandle()
+					&& !destinationType.IsReference() )
+				{
+					const int convertedSlot = EmitExpr(expression->id);
+					if( !ok )
+					{
+						return 0;
+					}
+					bc.InstrSHORT(asBC_PSF, (short)convertedSlot);
+					bc.Instr(asBC_PopRPtr);
+					return CapturePointerRegister();
+				}
+			}
 			if( expression->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
 				&& expression->children.GetLength() == 1 )
 			{
@@ -4886,7 +5557,16 @@ namespace
 				// then pass the address of that inline VALUE storage to the resolved
 				// receiver/call.  AllocTyped already records the slot as live, and
 				// the function cleanup plan destroys it in reverse order.
+				// Implicit-handle prvalues store the object pointer in that same
+				// slot; EmitMember/PshVPtr wants the slot, not PSF of VALUE
+				// storage (there is none).
 				const asCDataType materializedType = TypeOf(expression->type);
+				if( materializedType.IsValid()
+					&& materializedType.IsObjectHandle()
+					&& !materializedType.IsReference() )
+				{
+					return EmitExpr(expression->id);
+				}
 				if( !materializedType.IsValid()
 					|| !materializedType.IsNonPrimitiveValueType()
 					|| materializedType.IsReference()
@@ -4920,13 +5600,32 @@ namespace
 			}
 			if( expression->kind == asAST_EXPR_CALL )
 			{
+				const asCDataType callResultType = TypeOf(expression->type);
+				if( callResultType.IsValid()
+					&& callResultType.IsReference()
+					&& !callResultType.IsObjectHandle() )
+				{
+					// A reference-returning call leaves the aliased object address in
+					// the VM value/pointer register. EmitCall captures that address in
+					// a pointer slot; the slot is already the exact lvalue address and
+					// must not be addressed again with PSF (which would produce a
+					// pointer-to-reference-slot instead of a pointer to the object).
+					return EmitExpr(expression->id);
+				}
+				if( callResultType.IsValid()
+					&& callResultType.IsObjectHandle()
+					&& !callResultType.IsReference() )
+				{
+					// A handle-returning call stores the object pointer in the result
+					// slot. Member/index receivers PshVPtr that slot.
+					return EmitExpr(expression->id);
+				}
 				// A by-value object call owns its result in the typed slot returned by
 				// EmitCall. Hidden-return calls initialize that caller-owned storage
 				// directly and mark it live; taking the receiver address must therefore
 				// emit the call once and point at that exact slot. Recursing through a
 				// child would either address the source object or execute the getter a
 				// second time, and loading the slot as a scalar loses object identity.
-				const asCDataType callResultType = TypeOf(expression->type);
 				if( !callResultType.IsValid()
 					|| !callResultType.IsNonPrimitiveValueType()
 					|| callResultType.IsReference()
@@ -5042,6 +5741,13 @@ namespace
 					// A reference parameter/local already stores the pointee address.
 					return slot;
 				}
+				if( IsOwnedReferenceObject(valueType) )
+				{
+					// Handle / funcdef / REF locals store the object pointer in
+					// the slot. PSF would address that word; EmitMember PshVPtr
+					// wants the slot so ADDSi/RDR see the native object.
+					return slot;
+				}
 				bc.InstrSHORT(asBC_PSF, (short)slot);
 				bc.Instr(asBC_PopRPtr);
 				return CapturePointerRegister();
@@ -5056,8 +5762,10 @@ namespace
 					context.GetDecl(expression->resolvedDecl);
 				asCObjectType* const baseObject =
 					ObjectTypeFromExpr(baseExpression);
+				asCObjectType* propertyOwner = 0;
 				asCObjectProperty* const property =
-					PropertyFromFieldDecl(field, baseObject);
+					PropertyFromFieldDecl(
+						field, baseObject, &propertyOwner);
 				if( baseExpression == 0 || field == 0
 					|| field->kind != asAST_DECL_VAR
 					|| property == 0 )
@@ -5072,7 +5780,7 @@ namespace
 					return 0;
 				}
 				const asCDataType ownerDataType =
-					asCDataType::CreateType(baseObject, false);
+					asCDataType::CreateType(propertyOwner, false);
 				bc.InstrSHORT(asBC_PshVPtr, (short)basePointer);
 				bc.InstrSHORT_DW(asBC_ADDSi,
 					(short)property->byteOffset, 0);
@@ -5080,6 +5788,18 @@ namespace
 					ownerDataType, asTYPE_RELOC_PROPERTY, property);
 				bc.Instr(asBC_PopRPtr);
 				return CapturePointerRegister();
+			}
+
+			if( expression->kind == asAST_EXPR_INDEX )
+			{
+				// `int& MapValue = Map["key"]` binds a local to the opIndex
+				// reference result. EmitIndex already captures that address
+				// when asAddress is true.
+				return EmitIndex(
+					expression,
+					TypeOf(expression->type),
+					SizeDwords(TypeOf(expression->type)),
+					true);
 			}
 
 			if( failureDetail.GetLength() == 0 )
@@ -5209,22 +5929,33 @@ namespace
 				UnwrapMaterializedConstruct(wrapped);
 			const asCDecl* const sealedCtor = construct
 				? context.GetDecl(construct->resolvedDecl) : 0;
-			asCScriptFunction* const copyCtor = construct
-				? FindFunc(construct->resolvedDecl) : 0;
 			asCObjectType* const objectType =
 				CastToObjectType(formalType.GetTypeInfo());
-			if( wrapped == 0 || construct == 0
-				|| construct->kind != asAST_EXPR_CONSTRUCT
-				|| construct->children.GetLength() != 1
-				|| TypeOf(construct->type) != formalType
-				|| sealedCtor == 0
-				|| sealedCtor->kind != asAST_DECL_CONSTRUCTOR
-				|| copyCtor == 0 || objectType == 0
-				|| copyCtor->objectType != objectType
-				|| copyCtor->parameterTypes.GetLength() != 1
-				|| !copyCtor->parameterTypes[0].IsReference()
-				|| copyCtor->parameterTypes[0].GetTypeInfo()
-					!= formalType.GetTypeInfo() )
+			asCScriptFunction* copyCtor = FindCopyConstructor(formalType);
+			asASTExprId sourceExpression = argumentId;
+			if( construct != 0
+				&& construct->kind == asAST_EXPR_CONSTRUCT
+				&& construct->children.GetLength() == 1 )
+			{
+				asCScriptFunction* const constructCtor =
+					FindFunc(construct->resolvedDecl);
+				if( IsCopyConstructorFor(constructCtor, objectType) )
+				{
+					// Copy/covariant TSubclassOf<Derived> -> TSubclassOf<Base>
+					// uses the child's value-object storage.
+					sourceExpression = construct->children[0];
+					if( copyCtor == 0 )
+					{
+						copyCtor = constructCtor;
+					}
+				}
+				// Implicit TSubclassOf(UClass) keeps the materialized construct
+				// as the copy source; its child is a UClass handle, not an
+				// lvalue TSubclassOf.
+			}
+			if( wrapped == 0 || objectType == 0
+				|| !IsCopyConstructorFor(copyCtor, objectType)
+				|| !sourceExpression.IsValid() )
 			{
 				if( failureDetail.GetLength() == 0 )
 				{
@@ -5244,7 +5975,7 @@ namespace
 			}
 
 			const int sourcePointer =
-				EmitLValueAddress(construct->children[0]);
+				EmitLValueAddress(sourceExpression);
 			if( !ok )
 			{
 				return false;
@@ -5515,8 +6246,6 @@ namespace
 			{
 				const asCExpr* const lhs = UnwrapAssignLhs(
 					context.GetExpr(init->children[0]));
-				const asCExpr* const rhs = UnwrapMaterializedConstruct(
-					context.GetExpr(init->children[1]));
 				const asCDecl* const field = lhs
 					&& lhs->kind == asAST_EXPR_DECL_REF
 					? context.GetDecl(lhs->resolvedDecl) : 0;
@@ -5524,6 +6253,8 @@ namespace
 					? PropertyFromFieldDecl(field, func->objectType) : 0;
 				const asCDataType fieldType = field
 					? TypeOf(field->type) : asCDataType();
+				const asCExpr* const rhs = UnwrapMaterializedConstruct(
+					context.GetExpr(init->children[1]));
 				if( rhs && rhs->kind == asAST_EXPR_CONSTRUCT
 					&& !rhs->literal.Equals("list-pattern")
 					&& field && property && fieldType.IsNonPrimitiveValueType() )
@@ -5535,17 +6266,32 @@ namespace
 					if( !constructType.IsValid()
 						|| constructType.GetTypeInfo() != fieldType.GetTypeInfo()
 						|| fieldObject == 0 || ctor == 0
-						|| ctor->objectType != fieldObject )
+						|| ctor->objectType != fieldObject
+						|| ctor->parameterTypes.GetLength()
+							!= rhs->children.GetLength() )
 					{
 						FailAt(__LINE__, asNO_FUNCTION);
 						return;
 					}
 
 					asCArray<int> args;
+					asCArray<bool> argsStorePointer;
 					for( asUINT argIndex = 0;
 						argIndex < rhs->children.GetLength(); ++argIndex )
 					{
-						args.PushLast(EmitExpr(rhs->children[argIndex]));
+						const asCExpr* const argExpr =
+							context.GetExpr(rhs->children[argIndex]);
+						const asCDataType argType = argExpr
+							? TypeOf(argExpr->type) : asCDataType();
+						const asCDataType& formalType =
+							ctor->parameterTypes[argIndex];
+						const bool storesPointer = formalType.IsReference()
+							&& argType.IsNonPrimitiveValueType()
+							&& !argType.IsObjectHandle();
+						args.PushLast(storesPointer
+							? EmitLValueAddress(rhs->children[argIndex])
+							: EmitExpr(rhs->children[argIndex]));
+						argsStorePointer.PushLast(storesPointer);
 					}
 					if( !ok )
 					{
@@ -5557,18 +6303,28 @@ namespace
 						argIndex > 0; --argIndex )
 					{
 						const asUINT index = argIndex - 1;
-						const asCExpr* const argExpr =
-							context.GetExpr(rhs->children[index]);
-						const asCDataType argType = argExpr
-							? TypeOf(argExpr->type) : asCDataType();
-						if( !argType.IsValid() || IsWideValueObject(argType) )
+						const asCDataType& formalType =
+							ctor->parameterTypes[index];
+						if( !formalType.IsValid()
+							|| (!formalType.IsReference()
+								&& IsWideValueObject(formalType)) )
 						{
 							FailAt(__LINE__, asNOT_SUPPORTED);
 							return;
 						}
-						const int argDwords = SizeDwords(argType);
-						PushValue(args[index], argDwords);
-						pop += argDwords;
+						if( formalType.IsReference() )
+						{
+							bc.InstrSHORT(argsStorePointer[index]
+								? asBC_PshVPtr : asBC_PSF,
+								(short)args[index]);
+							pop += AS_PTR_SIZE;
+						}
+						else
+						{
+							const int argDwords = SizeDwords(formalType);
+							PushValue(args[index], argDwords);
+							pop += argDwords;
+						}
 					}
 
 					const asCDataType ownerDataType =
@@ -5626,7 +6382,9 @@ namespace
 				}
 				if( const asCDecl* lhsDecl = context.GetDecl(lhs->resolvedDecl) )
 				{
-					if( asCObjectProperty* member = FindThisProperty(lhsDecl) )
+					asCObjectType* memberOwner = 0;
+					if( asCObjectProperty* member = FindThisProperty(
+							lhsDecl, &memberOwner) )
 					{
 						const int rhs = EmitExpr(expr->children[1]);
 						if( !ok )
@@ -5637,7 +6395,7 @@ namespace
 							return 0;
 						}
 						const asCDataType ownerDataType =
-							asCDataType::CreateType(func->objectType, false);
+							asCDataType::CreateType(memberOwner, false);
 						PushThisObject();
 						bc.InstrSHORT_DW(asBC_ADDSi, (short)member->byteOffset, 0);
 						MarkLastTypeRelocation(
@@ -5704,21 +6462,41 @@ namespace
 					const int rhs = EmitExpr(expr->children[1]);
 					if( !ok )
 						return 0;
-					CopyVar(slot, rhs, AS_PTR_SIZE);
+					EmitHandleRefCpy(slot, rhs, lhsType);
 					return slot;
 				}
 				if( lhsType.IsReference() && !lhsType.IsObjectHandle() )
 				{
+					// A local `const T&` / `__auto_constref_type` initializer binds
+					// the slot to the RHS lvalue address. Writing the wide pointee
+					// through an unbound pointer is not that bind
+					// (`TMapIterator` is 32 bytes). Later stores through an already
+					// bound reference keep the write-through path.
+					if( target && target->kind == asAST_DECL_VAR
+						&& IsDeclaredInitializer(target->id, expr->children[1]) )
+					{
+						const int rhsPointer =
+							EmitLValueAddress(expr->children[1]);
+						if( !ok )
+							return 0;
+						CopyVar(slot, rhsPointer, AS_PTR_SIZE);
+						return slot;
+					}
 					const int rhs = EmitExpr(expr->children[1]);
 					if( !ok )
 						return 0;
 					bc.InstrSHORT(asBC_PshVPtr, (short)slot);
 					bc.Instr(asBC_PopRPtr);
-					EmitWriteValue(rhs, lhsType);
+					asCDataType pointeeType = lhsType;
+					pointeeType.MakeReference(false);
+					EmitWriteValue(rhs, pointeeType);
 					return rhs;
 				}
 				const asCExpr* construct = rhsExpr;
-				while( construct && (construct->kind == asAST_EXPR_MATERIALIZE_TEMPORARY || construct->kind == asAST_EXPR_CLEANUP) && construct->children.GetLength() )
+				while( construct
+					&& (construct->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+						|| construct->kind == asAST_EXPR_CLEANUP)
+					&& construct->children.GetLength() )
 				{
 					construct = context.GetExpr(construct->children[0]);
 				}
@@ -5761,6 +6539,30 @@ namespace
 					bc.ObjInfo(slot, asOBJ_INIT);
 				}
 				return slot;
+			}
+			if( lhs->kind == asAST_EXPR_MEMBER_REF )
+			{
+				const asCDataType memberType = TypeOf(lhs->type);
+				if( CanEmitSealedStorageCopy(memberType) )
+				{
+					// Preserve rhs-before-target evaluation and copy between the two
+					// exact lvalue identities. This is the POD counterpart to a
+					// Sema-selected opAssign and avoids scalarizing wide members.
+					const int rhsPointer =
+						EmitLValueAddress(expr->children[1]);
+					const int lhsPointer =
+						EmitLValueAddress(expr->children[0]);
+					if( !ok )
+						return 0;
+					bc.InstrSHORT(asBC_PshVPtr, (short)rhsPointer);
+					bc.InstrSHORT(asBC_PshVPtr, (short)lhsPointer);
+					bc.InstrSHORT_DW(asBC_COPY,
+						(short)memberType.GetSizeInMemoryBytes(), 0);
+					MarkLastTypeRelocation(
+						memberType, asTYPE_RELOC_METADATA_ONLY);
+					bc.Instr(asBC_PopPtr);
+					return lhsPointer;
+				}
 			}
 			const int rhs = EmitExpr(expr->children[1]);
 			if( !ok )
@@ -5835,7 +6637,9 @@ namespace
 			int dwords)
 		{
 			const char* const binaryOp = CompoundBinaryOperator(expr->literal);
-			if( binaryOp == 0 || lhs == 0 || lhs->kind != asAST_EXPR_DECL_REF )
+			if( binaryOp == 0 || lhs == 0
+				|| (lhs->kind != asAST_EXPR_DECL_REF
+					&& lhs->kind != asAST_EXPR_MEMBER_REF) )
 			{
 				FailAt(__LINE__, asNOT_SUPPORTED);
 				return 0;
@@ -5848,6 +6652,36 @@ namespace
 			if( !ok )
 			{
 				return 0;
+			}
+
+			if( lhs->kind == asAST_EXPR_MEMBER_REF )
+			{
+				const asCDataType memberType = TypeOf(lhs->type);
+				const int address = EmitLValueAddress(lhs->id);
+				if( !ok )
+				{
+					return 0;
+				}
+				const int current = AllocTemporary(
+					memberType, ValueDwords(memberType));
+				bc.InstrSHORT(asBC_PshVPtr, (short)address);
+				bc.Instr(asBC_PopRPtr);
+				EmitReadValue(current, memberType, expr, "member-compound");
+				const asCExpr* rhsExpr = context.GetExpr(expr->children[1]);
+				const asCDataType rhsType = rhsExpr
+					? TypeOf(rhsExpr->type) : memberType;
+				int result = EmitScalarBinaryValues(
+					binaryOp, current, rhs, memberType, rhsType,
+					ValueDwords(memberType));
+				result = NormalizeCompoundStorageValue(result, memberType);
+				if( !ok )
+				{
+					return 0;
+				}
+				bc.InstrSHORT(asBC_PshVPtr, (short)address);
+				bc.Instr(asBC_PopRPtr);
+				EmitWriteValue(result, memberType);
+				return result;
 			}
 
 			const asCDataType lhsType = TypeOf(lhs->type);
@@ -5909,7 +6743,9 @@ namespace
 			}
 			if( const asCDecl* lhsDecl = context.GetDecl(lhs->resolvedDecl) )
 			{
-				if( asCObjectProperty* member = FindThisProperty(lhsDecl) )
+				asCObjectType* memberOwner = 0;
+				if( asCObjectProperty* member = FindThisProperty(
+						lhsDecl, &memberOwner) )
 				{
 					if( thisOffset == 0x7fffffff )
 					{
@@ -5917,7 +6753,7 @@ namespace
 						return 0;
 					}
 					const asCDataType ownerDataType =
-						asCDataType::CreateType(func->objectType, false);
+						asCDataType::CreateType(memberOwner, false);
 					PushThisObject();
 					bc.InstrSHORT_DW(asBC_ADDSi, (short)member->byteOffset, 0);
 					MarkLastTypeRelocation(
@@ -6174,11 +7010,6 @@ namespace
 				FailAt(__LINE__, asNOT_SUPPORTED);
 				return 0;
 			}
-			asCArray<int> args;
-			for( asUINT i = 0; i < expr->children.GetLength(); ++i )
-				args.PushLast(EmitExpr(expr->children[i]));
-			if( !ok )
-				return 0;
 
 			asCScriptFunction* ctor = FindFunc(expr->resolvedDecl);
 			int ctorId = ctor ? ctor->id : 0;
@@ -6215,6 +7046,134 @@ namespace
 				FailAt(__LINE__, asNO_FUNCTION);
 				return 0;
 			}
+
+			const asCDecl* const sealedConstructor =
+				context.GetDecl(expr->resolvedDecl);
+			const asUINT formalCount = sealedConstructor != 0
+				? context.GetFormalDeclCount(sealedConstructor->id) : 0;
+			if( sealedConstructor == 0
+				|| sealedConstructor->kind != asAST_DECL_CONSTRUCTOR
+				|| expr->children.GetLength() != formalCount
+				|| expr->callArguments.GetLength() != formalCount )
+			{
+				failureDetail.Format(
+					"construct record/formal arity mismatch function=%s construct=%u "
+					"children=%u records=%u formals=%u",
+					activeDecl && activeDecl->stableKey.AddressOf()
+						? activeDecl->stableKey.AddressOf() : "<unknown>",
+					expr ? expr->id.value : 0,
+					expr ? expr->children.GetLength() : 0,
+					expr ? expr->callArguments.GetLength() : 0,
+					formalCount);
+				FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
+				return 0;
+			}
+
+			asCArray<asUINT> recordIndexByFormal;
+			recordIndexByFormal.SetLength(formalCount);
+			for( asUINT formalIndex = 0;
+				formalIndex < formalCount; ++formalIndex )
+			{
+				recordIndexByFormal[formalIndex] = asUINT(-1);
+			}
+			asCArray<int> args;
+			asCArray<const asCExpr*> argumentExprs;
+			asCArray<bool> argsStorePointer;
+			for( asUINT recordIndex = 0;
+				recordIndex < expr->callArguments.GetLength(); ++recordIndex )
+			{
+				const asSASTCallArgument& record =
+					expr->callArguments[recordIndex];
+				const asCDecl* const formal = record.formal.IsValid()
+					? context.GetDecl(record.formal) : 0;
+				const asCExpr* const argument =
+					context.GetExpr(record.expression);
+				const asCDecl* const expectedFormal =
+					record.formalIndex < formalCount
+						? context.GetFormalDecl(
+							sealedConstructor->id, record.formalIndex)
+						: 0;
+				if( record.formalIndex >= formalCount
+					|| recordIndexByFormal[record.formalIndex] != asUINT(-1)
+					|| expectedFormal == 0 || formal != expectedFormal
+					|| argument == 0
+					|| record.expression != expr->children[recordIndex]
+					|| record.formalType != expectedFormal->type )
+				{
+					failureDetail.Format(
+						"invalid construct record formal map function=%s construct=%u "
+						"record=%u formal=%u formals=%u",
+						activeDecl && activeDecl->stableKey.AddressOf()
+							? activeDecl->stableKey.AddressOf() : "<unknown>",
+						expr->id.value,
+						recordIndex,
+						record.formalIndex,
+						formalCount);
+					FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
+					return 0;
+				}
+				recordIndexByFormal[record.formalIndex] = recordIndex;
+				const asCDataType argumentType = TypeOf(argument->type);
+				const bool storesPointer = expectedFormal->type.IsReference()
+					&& argumentType.IsNonPrimitiveValueType()
+					&& !argumentType.IsObjectHandle();
+				// Preserve CONSTRUCT evaluation order. A VALUE-object
+				// reference formal (`const FName&`) must pass the lvalue
+				// address, matching CALL and field-construct lowering.
+				args.PushLast(storesPointer
+					? EmitLValueAddress(record.expression)
+					: EmitExpr(record.expression));
+				argumentExprs.PushLast(argument);
+				argsStorePointer.PushLast(storesPointer);
+				if( !ok )
+				{
+					return 0;
+				}
+			}
+			for( asUINT formalIndex = 0;
+				formalIndex < formalCount; ++formalIndex )
+			{
+				if( recordIndexByFormal[formalIndex] == asUINT(-1) )
+				{
+					FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
+					return 0;
+				}
+			}
+
+			auto PushConstructArguments = [&](int& pop) -> bool
+			{
+				for( asUINT formalIndex = formalCount;
+					formalIndex > 0; --formalIndex )
+				{
+					const asUINT recordIndex =
+						recordIndexByFormal[formalIndex - 1];
+					if( recordIndex >= args.GetLength()
+						|| recordIndex >= argumentExprs.GetLength() )
+					{
+						FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
+						return false;
+					}
+					const asCExpr* const argument = argumentExprs[recordIndex];
+					const asCDataType argumentType = argument != 0
+						? TypeOf(argument->type) : asCDataType();
+					if( argsStorePointer[recordIndex] )
+					{
+						bc.InstrSHORT(asBC_PshVPtr, (short)args[recordIndex]);
+						pop += AS_PTR_SIZE;
+						continue;
+					}
+					const int argumentDwords = SizeDwords(argumentType);
+					if( !argumentType.IsValid()
+						|| IsWideValueObject(argumentType) )
+					{
+						FailAt(__LINE__, asNOT_SUPPORTED);
+						return false;
+					}
+					PushValue(args[recordIndex], argumentDwords);
+					pop += argumentDwords;
+				}
+				return true;
+			};
 			if( factory && factoryId > 0 && !isValue )
 			{
 				int pop = 0;
@@ -6225,23 +7184,8 @@ namespace
 					bc.InstrSHORT(asBC_PSF, (short)typeSlot);
 					pop += AS_PTR_SIZE;
 				}
-				for( asUINT i = args.GetLength(); i > 0; --i )
-				{
-					const asUINT index = i - 1;
-					const asCExpr* const argExpr = context.GetExpr(expr->children[index]);
-					const asCDataType argType = argExpr ? TypeOf(argExpr->type) : asCDataType();
-					const int argDwords = SizeDwords(argType);
-					// Constructor/factory parameter metadata is not yet sealed in this
-					// CodeGen slice. Refuse a wide VALUE argument rather than pushing
-					// its first eight bytes as though it were an object pointer.
-					if( !argType.IsValid() || IsWideValueObject(argType) )
-					{
-						FailAt(__LINE__, asNOT_SUPPORTED);
-						return 0;
-					}
-					PushValue(args[index], argDwords);
-					pop += argDwords;
-				}
+				if( !PushConstructArguments(pop) )
+					return 0;
 				if( factory->funcType == asFUNC_SYSTEM )
 					bc.Call(asBC_CALLSYS, factoryId, pop);
 				else
@@ -6264,20 +7208,8 @@ namespace
 				bc.InstrSHORT(asBC_PSF, (short)dest);
 				pop += AS_PTR_SIZE;
 			}
-			for( asUINT i = args.GetLength(); i > 0; --i )
-			{
-				const asUINT index = i - 1;
-				const asCExpr* const argExpr = context.GetExpr(expr->children[index]);
-				const asCDataType argType = argExpr ? TypeOf(argExpr->type) : asCDataType();
-				const int argDwords = SizeDwords(argType);
-				if( !argType.IsValid() || IsWideValueObject(argType) )
-				{
-					FailAt(__LINE__, asNOT_SUPPORTED);
-					return 0;
-				}
-				PushValue(args[index], argDwords);
-				pop += argDwords;
-			}
+			if( !PushConstructArguments(pop) )
+				return 0;
 			if( isValue )
 			{
 				bc.InstrSHORT(asBC_PSF, (short)dest);
@@ -6308,27 +7240,52 @@ namespace
 				FailAt(__LINE__, asNOT_SUPPORTED);
 				return 0;
 			}
-			const asCExpr* baseExpr = context.GetExpr(expr->children[0]);
-			asCGlobalProperty* const directGlobalValue = FindDirectGlobalValueObject(baseExpr);
-			const int base = directGlobalValue ? 0 : EmitExpr(expr->children[0]);
+			// Nested member access (`this.ExampleStruct.ExampleString`) must keep
+			// the base as an lvalue. EmitExpr materializes a this-property VALUE
+			// object and then cannot RDR a non-POD width such as FExampleStruct.
+			const int basePointer = EmitLValueAddress(expr->children[0]);
 			if( !ok )
 				return 0;
+			const asCExpr* baseExpr = context.GetExpr(expr->children[0]);
 			asCObjectType* objType = ObjectTypeFromExpr(baseExpr);
 			const asCDecl* const field = context.GetDecl(expr->resolvedDecl);
+			asCObjectType* propertyOwner = 0;
 			asCObjectProperty* const property =
-				PropertyFromFieldDecl(field, objType);
+				PropertyFromFieldDecl(field, objType, &propertyOwner);
 			if( property == 0 )
 			{
+				if( failureDetail.GetLength() == 0 )
+				{
+					const asCDataType expectedType = field
+						? TypeOf(field->type) : asCDataType();
+					const asCDecl* const ownerDecl = field
+						? context.GetDecl(field->parent) : 0;
+					failureDetail.Format(
+						"member lookup failed function=%s field=%s offset=%d "
+						"fieldKind=%d fieldType=%s ownerKey=%s objType=%s "
+						"objProps=%u expr=%u",
+						activeDecl && activeDecl->stableKey.AddressOf()
+							? activeDecl->stableKey.AddressOf() : "<unknown>",
+						field && field->name.AddressOf()
+							? field->name.AddressOf() : "<missing>",
+						field ? field->byteOffset : -1,
+						field ? static_cast<int>(field->kind) : -1,
+						expectedType.IsValid()
+							? expectedType.Format(0).AddressOf() : "<invalid>",
+						ownerDecl && ownerDecl->stableKey.AddressOf()
+							? ownerDecl->stableKey.AddressOf() : "<missing>",
+						objType && objType->name.AddressOf()
+							? objType->name.AddressOf() : "<missing>",
+						objType ? objType->properties.GetLength() : 0,
+						expr ? expr->id.value : 0);
+				}
 				FailAt(__LINE__, asNOT_SUPPORTED);
 				return 0;
 			}
 			const int fieldOffset = property->byteOffset;
 			const asCDataType ownerDataType =
-				asCDataType::CreateType(objType, false);
-			if( directGlobalValue )
-				PushDirectGlobalValueObject(directGlobalValue);
-			else
-				PushMemberBase(base, baseExpr);
+				asCDataType::CreateType(propertyOwner, false);
+			bc.InstrSHORT(asBC_PshVPtr, (short)basePointer);
 			bc.InstrSHORT_DW(asBC_ADDSi, (short)fieldOffset, 0);
 			MarkLastTypeRelocation(
 				ownerDataType, asTYPE_RELOC_PROPERTY, property);
@@ -6351,27 +7308,49 @@ namespace
 				FailAt(__LINE__, asNOT_SUPPORTED);
 				return;
 			}
-			const asCExpr* baseExpr = context.GetExpr(lhs->children[0]);
-			asCGlobalProperty* const directGlobalValue = FindDirectGlobalValueObject(baseExpr);
-			const int base = directGlobalValue ? 0 : EmitExpr(lhs->children[0]);
+			const int basePointer = EmitLValueAddress(lhs->children[0]);
 			if( !ok )
 				return;
+			const asCExpr* baseExpr = context.GetExpr(lhs->children[0]);
 			asCObjectType* objType = ObjectTypeFromExpr(baseExpr);
 			const asCDecl* const field = context.GetDecl(lhs->resolvedDecl);
+			asCObjectType* propertyOwner = 0;
 			asCObjectProperty* const property =
-				PropertyFromFieldDecl(field, objType);
+				PropertyFromFieldDecl(field, objType, &propertyOwner);
 			if( property == 0 )
 			{
+				if( failureDetail.GetLength() == 0 )
+				{
+					const asCDataType expectedType = field
+						? TypeOf(field->type) : asCDataType();
+					const asCDecl* const ownerDecl = field
+						? context.GetDecl(field->parent) : 0;
+					failureDetail.Format(
+						"member store lookup failed function=%s field=%s offset=%d "
+						"fieldKind=%d fieldType=%s ownerKey=%s objType=%s "
+						"objProps=%u expr=%u",
+						activeDecl && activeDecl->stableKey.AddressOf()
+							? activeDecl->stableKey.AddressOf() : "<unknown>",
+						field && field->name.AddressOf()
+							? field->name.AddressOf() : "<missing>",
+						field ? field->byteOffset : -1,
+						field ? static_cast<int>(field->kind) : -1,
+						expectedType.IsValid()
+							? expectedType.Format(0).AddressOf() : "<invalid>",
+						ownerDecl && ownerDecl->stableKey.AddressOf()
+							? ownerDecl->stableKey.AddressOf() : "<missing>",
+						objType && objType->name.AddressOf()
+							? objType->name.AddressOf() : "<missing>",
+						objType ? objType->properties.GetLength() : 0,
+						lhs ? lhs->id.value : 0);
+				}
 				FailAt(__LINE__, asNOT_SUPPORTED);
 				return;
 			}
 			const int fieldOffset = property->byteOffset;
 			const asCDataType ownerDataType =
-				asCDataType::CreateType(objType, false);
-			if( directGlobalValue )
-				PushDirectGlobalValueObject(directGlobalValue);
-			else
-				PushMemberBase(base, baseExpr);
+				asCDataType::CreateType(propertyOwner, false);
+			bc.InstrSHORT(asBC_PshVPtr, (short)basePointer);
 			bc.InstrSHORT_DW(asBC_ADDSi, (short)fieldOffset, 0);
 			MarkLastTypeRelocation(
 				ownerDataType, asTYPE_RELOC_PROPERTY, property);
@@ -6778,8 +7757,41 @@ namespace
 				return 0;
 			const asCExpr* innerExpr = context.GetExpr(expr->children[0]);
 			asCDataType srcType = innerExpr ? TypeOf(innerExpr->type) : destType;
-			if( srcType.IsEqualExceptRefAndConst(destType) )
+			if( innerExpr != 0 && innerExpr->kind == asAST_EXPR_NULL_LITERAL )
+			{
+				// Verifier authenticates the Canonical QualType. Repeat the Runtime
+				// representation guard here so a malformed or stale snapshot cannot
+				// reinterpret a null pointer slot as a primitive/value conversion.
+				if( !destType.IsObjectHandle() || destType.IsReference() )
+				{
+					FailUnsupportedConversion(expr, srcType, destType, __LINE__);
+					return 0;
+				}
 				return inner;
+			}
+			if( srcType.IsEqualExceptRefAndConst(destType) )
+			{
+				if( srcType.IsReference() && !srcType.IsObjectHandle()
+					&& !destType.IsReference()
+					&& (srcType.IsPrimitive() || srcType.IsEnumType()) )
+				{
+					// Clang LValueToRValue of a scalar alias: EmitCall/EmitIndex
+					// leave a pointer slot. Load the payload before arithmetic.
+					asCDataType payload = destType;
+					payload.MakeReference(false);
+					int payloadDwords = payload.GetSizeInMemoryDWords();
+					if( payloadDwords < 1 )
+					{
+						payloadDwords = 1;
+					}
+					const int dest = AllocTemporary(payload, payloadDwords);
+					bc.InstrSHORT(asBC_PshVPtr, (short)inner);
+					bc.Instr(asBC_PopRPtr);
+					EmitReadValue(dest, payload, expr, "lvalue-to-rvalue");
+					return dest;
+				}
+				return inner;
+			}
 			// int and uint occupy the same single VM dword. Sema has already
 			// selected the destination type, so this is a representation-preserving
 			// conversion rather than arithmetic: preserve the slot and let later
@@ -7052,24 +8064,100 @@ namespace
 			asCArray<int> deferredOutValueOffsets;
 			asCArray<int> deferredOutReceiverOffsets;
 			asCArray<const asCDecl*> sealedFormalParams;
-			if( const asCDecl* const sealedCallee =
-				context.GetDecl(expr->resolvedDecl) )
+			const asCDecl* const sealedCallee =
+				context.GetDecl(expr->resolvedDecl);
+			if( sealedCallee != 0 )
 			{
-				for( asUINT i = 0; i < sealedCallee->children.GetLength(); ++i )
+				const asUINT formalCount =
+					context.GetFormalDeclCount(sealedCallee->id);
+				for( asUINT formalIndex = 0;
+					formalIndex < formalCount; ++formalIndex )
 				{
 					const asCDecl* const child =
-						context.GetDecl(sealedCallee->children[i]);
-					if( child != 0 && child->kind == asAST_DECL_PARAM )
+						context.GetFormalDecl(sealedCallee->id, formalIndex);
+					if( child != 0 )
 					{
 						sealedFormalParams.PushLast(child);
 					}
 				}
 			}
+			const asSCodeGenFuncBind* const calleeBind = FindBind(callee);
+			const asUINT captureCount = calleeBind
+				? calleeBind->captureCount : 0;
+			const asUINT runtimeParameterCount = callee
+				? callee->parameterTypes.GetLength()
+				: expr->callArguments.GetLength();
+			if( captureCount > runtimeParameterCount )
+			{
+				failureDetail.Format(
+					"call capture/runtime arity mismatch function=%s callExpr=%u "
+					"runtimeParams=%u captures=%u records=%u",
+					activeDecl && activeDecl->stableKey.AddressOf()
+						? activeDecl->stableKey.AddressOf() : "<unknown>",
+					expr->id.value,
+					runtimeParameterCount,
+					captureCount,
+					expr->callArguments.GetLength());
+				FailAt(__LINE__, asNOT_SUPPORTED);
+				return 0;
+			}
+			const asUINT userParameterCount =
+				runtimeParameterCount - captureCount;
+			if( expr->callArguments.GetLength() != userParameterCount )
+			{
+				failureDetail.Format(
+					"call record/runtime arity mismatch function=%s callExpr=%u "
+					"runtimeParams=%u userParams=%u captures=%u records=%u",
+					activeDecl && activeDecl->stableKey.AddressOf()
+						? activeDecl->stableKey.AddressOf() : "<unknown>",
+					expr->id.value,
+					runtimeParameterCount,
+					userParameterCount,
+					captureCount,
+					expr->callArguments.GetLength());
+				FailAt(__LINE__, asNOT_SUPPORTED);
+				return 0;
+			}
+			asCArray<asUINT> recordIndexByFormal;
+			recordIndexByFormal.SetLength(userParameterCount);
+			for( asUINT formalIndex = 0;
+				formalIndex < recordIndexByFormal.GetLength(); ++formalIndex )
+			{
+				recordIndexByFormal[formalIndex] = asUINT(-1);
+			}
+			for( asUINT recordIndex = 0;
+				recordIndex < expr->callArguments.GetLength(); ++recordIndex )
+			{
+				const asSASTCallArgument& record =
+					expr->callArguments[recordIndex];
+				if( record.formalIndex >= recordIndexByFormal.GetLength()
+					|| recordIndexByFormal[record.formalIndex] != asUINT(-1) )
+				{
+					failureDetail.Format(
+						"invalid call record formal map function=%s callExpr=%u "
+						"record=%u formal=%u userParams=%u",
+						activeDecl && activeDecl->stableKey.AddressOf()
+							? activeDecl->stableKey.AddressOf() : "<unknown>",
+						expr->id.value,
+						recordIndex,
+						record.formalIndex,
+						userParameterCount);
+					FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
+					return 0;
+				}
+				recordIndexByFormal[record.formalIndex] = recordIndex;
+			}
 			const bool hasImplicitReceiverChild = callee != 0
 				&& callee->objectType != 0
+				&& sealedCallee != 0
+				&& (sealedCallee->kind == asAST_DECL_METHOD
+					// Generated base/delegating constructor calls retain `this`
+					// as the trailing reverse child just like ordinary methods.
+					// It is not part of the constructor's formal record set.
+					|| sealedCallee->kind == asAST_DECL_CONSTRUCTOR)
 				&& expr->receiver.IsValid()
 				&& expr->children.GetLength()
-					== callee->parameterTypes.GetLength() + 1
+					== expr->callArguments.GetLength() + 1
 				&& expr->children[expr->children.GetLength() - 1]
 					== expr->receiver;
 			if( callee != 0 && callee->objectType != 0
@@ -7093,26 +8181,19 @@ namespace
 				FailAt(__LINE__, asNOT_SUPPORTED);
 				return 0;
 			}
-			for( asUINT i = 0; i < expr->children.GetLength(); ++i )
+			for( asUINT i = 0; i < expr->callArguments.GetLength(); ++i )
 			{
-				// Canonical method calls keep the effective receiver in the dedicated
-				// receiver edge and as one trailing implicit reverse-formal child.  It
-				// is not a Runtime parameter.  Evaluate it below through the receiver
-				// route so VALUE objects yield their address rather than a scalar load.
-				if( hasImplicitReceiverChild
-					&& i + 1 == expr->children.GetLength() )
-				{
-					continue;
-				}
+				const asSASTCallArgument& callArgument =
+					expr->callArguments[i];
+				const asASTExprId argumentId = callArgument.expression;
 				const asCExpr* const argument =
-					context.GetExpr(expr->children[i]);
-				const asCDecl* const sealedFormal =
-					i < sealedFormalParams.GetLength()
-						? sealedFormalParams[sealedFormalParams.GetLength() - 1 - i]
-						: 0;
+					context.GetExpr(argumentId);
+				const asCDecl* const sealedFormal = callArgument.formal.IsValid()
+					? context.GetDecl(callArgument.formal) : 0;
 				const asUINT runtimeFormalIndex =
-					callee != 0 && i < callee->parameterTypes.GetLength()
-						? callee->parameterTypes.GetLength() - 1 - i
+					callee != 0
+						&& callArgument.formalIndex < userParameterCount
+						? callArgument.formalIndex
 						: asUINT(-1);
 				const asCDataType* const runtimeFormal =
 					runtimeFormalIndex != asUINT(-1)
@@ -7121,8 +8202,80 @@ namespace
 					&& (runtimeFormal->IsReference()
 						|| (runtimeFormalIndex < callee->inOutFlags.GetLength()
 							&& callee->inOutFlags[runtimeFormalIndex] != asTM_NONE));
-				const asCDataType sealedFormalType = sealedFormal != 0
-					? TypeOf(sealedFormal->type) : asCDataType();
+				const asCDataType sealedFormalType =
+					TypeOf(callArgument.formalType);
+				if( argument == 0 || !sealedFormalType.IsValid() )
+				{
+					FailAt(__LINE__, asAST_VERIFY_INVALID_TYPE);
+					return 0;
+				}
+				if( runtimeFormal != 0 )
+				{
+					asCDataType projectedFormal = sealedFormalType;
+					asETypeModifiers projectedPassing =
+						InOutFromQuals(callArgument.formalType.quals);
+					// Parser-authored script shells pass through Builder's maintained
+					// value-parameter normalization. Registered system functions and
+					// Canonical-owned lambda/accessor shells already expose their exact
+					// direct Runtime ABI and must not be normalized a second time.
+					const bool usesDirectRuntimeFormalABI =
+						UsesCanonicalDirectFunctionABI(sealedCallee)
+						|| callee->funcType == asFUNC_SYSTEM;
+					if( !usesDirectRuntimeFormalABI )
+					{
+						asCRuntimeTypeBridge::NormalizeScriptParameterABI(
+							projectedFormal, projectedPassing);
+					}
+					const asETypeModifiers runtimePassing =
+						runtimeFormalIndex < callee->inOutFlags.GetLength()
+							? callee->inOutFlags[runtimeFormalIndex]
+							: asTM_NONE;
+					// Script shells freeze primitive value parameters as const,
+					// while registered native/system shells may retain the same
+					// by-value scalar without const. This is one VM value ABI. Do
+					// not extend that tolerance to references, direction flags or
+					// object/value normalization.
+					const bool compatibleNativePrimitiveValue =
+						sealedFormalType.IsPrimitive()
+						&& runtimeFormal->IsPrimitive()
+						&& !sealedFormalType.IsReference()
+						&& !runtimeFormal->IsReference()
+						&& projectedPassing == asTM_NONE
+						&& runtimePassing == asTM_NONE
+						&& projectedFormal.IsEqualExceptRefAndConst(
+							*runtimeFormal);
+					if( (projectedFormal != *runtimeFormal
+							&& !compatibleNativePrimitiveValue)
+						|| projectedPassing != runtimePassing )
+					{
+						if( failureDetail.GetLength() == 0 )
+						{
+							const asCString sealedName =
+								sealedFormalType.Format(0);
+							const asCString projectedName =
+								projectedFormal.Format(0);
+							const asCString runtimeName =
+								runtimeFormal->Format(0);
+							failureDetail.Format(
+								"call record/runtime formal mismatch function=%s "
+								"call=%u record=%u formal=%u sealed=%s "
+								"projected=%s projectedPassing=%d runtime=%s "
+								"runtimePassing=%d",
+								activeDecl && activeDecl->stableKey.AddressOf()
+									? activeDecl->stableKey.AddressOf() : "<unknown>",
+								expr->id.value,
+								i,
+								callArgument.formalIndex,
+								sealedName.AddressOf(),
+								projectedName.AddressOf(),
+								static_cast<int>(projectedPassing),
+								runtimeName.AddressOf(),
+								static_cast<int>(runtimePassing));
+						}
+						FailAt(__LINE__, asINVALID_TYPE);
+						return 0;
+					}
+				}
 				asCDataType sealedFormalValueType = sealedFormalType;
 				if( sealedFormalValueType.IsReference()
 					&& !sealedFormalValueType.IsObjectHandle() )
@@ -7149,10 +8302,10 @@ namespace
 					const bool runtimeIsOut = callee != 0
 						&& runtimeFormalIndex < callee->inOutFlags.GetLength()
 						&& callee->inOutFlags[runtimeFormalIndex] == asTM_OUTREF;
-					if( sealedFormal == 0 || runtimeFormal == 0
+					if( runtimeFormal == 0
 						|| planType == 0
 						|| planType->kind != asAST_TYPE_PRIMITIVE
-						|| argument->type != sealedFormal->type
+						|| argument->type != callArgument.formalType
 						|| !argument->type.IsReference()
 						|| (argument->type.quals & asAST_QUAL_OUT) == 0
 						|| (argument->type.quals & asAST_QUAL_IN) != 0
@@ -7189,8 +8342,8 @@ namespace
 						return 0;
 					}
 				}
-				const bool sealedRequiresValueAddress = sealedFormal != 0
-					&& sealedFormal->type.IsReference()
+				const bool sealedRequiresValueAddress =
+					callArgument.formalType.IsReference()
 					&& sealedFormalValueType.IsNonPrimitiveValueType()
 					&& !sealedFormalValueType.IsObjectHandle();
 				// Native projections do not always carry authored parameter children.
@@ -7204,7 +8357,7 @@ namespace
 				const bool requiresValueAddress = sealedRequiresValueAddress
 					|| runtimeRequiresValueAddress;
 				asCDataType byValueFormalType;
-				if( sealedFormal != 0 && IsByValueObject(sealedFormalType) )
+				if( IsByValueObject(sealedFormalType) )
 				{
 					byValueFormalType = sealedFormalType;
 				}
@@ -7226,8 +8379,8 @@ namespace
 				const bool argumentIsValueObject =
 					argumentValueType.IsNonPrimitiveValueType()
 					&& !argumentValueType.IsObjectHandle();
-				const bool sealedFormalIsObjectRef = sealedFormal != 0
-					&& sealedFormal->type.IsReference()
+				const bool sealedFormalIsObjectRef =
+					callArgument.formalType.IsReference()
 					&& !sealedFormalValueType.IsObjectHandle();
 				// Generic/wildcard formals such as const ?& are not themselves
 				// value objects. The argument still occupies a VALUE slot and
@@ -7261,7 +8414,7 @@ namespace
 							argumentName.AddressOf(),
 							argument && argument->type.IsReference() ? 1 : 0,
 							sealedName.AddressOf(),
-							sealedFormal && sealedFormal->type.IsReference() ? 1 : 0,
+							callArgument.formalType.IsReference() ? 1 : 0,
 							runtimeName.AddressOf(),
 							runtimeFormal != 0 && runtimeFormal->IsReference() ? 1 : 0,
 							callee != 0
@@ -7293,7 +8446,7 @@ namespace
 				else if( requiresOwnedValueTransfer )
 				{
 					if( !EmitOwnedNonPodValueArgument(
-						expr->children[i], byValueFormalType, argumentOffset) )
+						argumentId, byValueFormalType, argumentOffset) )
 					{
 						return 0;
 					}
@@ -7301,7 +8454,7 @@ namespace
 				else if( requiresValueCopy )
 				{
 					const int sourcePointer =
-						EmitLValueAddress(expr->children[i]);
+						EmitLValueAddress(argumentId);
 					if( !ok )
 					{
 						return 0;
@@ -7319,15 +8472,16 @@ namespace
 					argumentOffset = isStringLiteral
 						? EmitStringLiteralAddress(argument)
 						: ((requiresValueAddress || requiresWildcardValueAddress)
-							? EmitLValueAddress(expr->children[i])
-							: EmitExpr(expr->children[i]));
+							? EmitLValueAddress(argumentId)
+							: EmitExpr(argumentId));
 				}
 				argOffsets.PushLast(argumentOffset);
-				argExprIds.PushLast(expr->children[i].value);
+				argExprIds.PushLast(argumentId.value);
 				argOffsetsStorePointer.PushLast(storesPointer);
 				argPublicTypeIdTypes.PushLast(
-					runtimeFormal != 0
-						&& runtimeFormal->GetTokenType() == ttQuestion
+					(runtimeFormal != 0
+						&& runtimeFormal->GetTokenType() == ttQuestion)
+						|| sealedFormalType.GetTokenType() == ttQuestion
 						? argumentValueType : asCDataType());
 			}
 			if( !ok )
@@ -7414,13 +8568,9 @@ namespace
 					recvOffset = argOffsets[argOffsets.GetLength() - 1];
 				}
 			}
-			const asSCodeGenFuncBind* calleeBind = FindBind(callee);
-			const asUINT captureCount = calleeBind ? calleeBind->captureCount : 0;
-			const asUINT paramCount = callee ? callee->parameterTypes.GetLength() : argOffsets.GetLength();
-			const asUINT userParamCount = paramCount > captureCount ? paramCount - captureCount : 0;
-			const asUINT storedParams = (recvOffset != 0x7fffffff)
-				? paramCount
-				: ((captureCount > 0) ? paramCount : argOffsets.GetLength());
+			const asUINT paramCount = runtimeParameterCount;
+			const asUINT userParamCount = userParameterCount;
+			const asUINT storedParams = paramCount;
 			asCArray<int> transferredOwnedArguments;
 			// ActOnCall stores children in reverse-formal order. Push that
 			// stored order so the last formal is deepest on the stack.
@@ -7435,58 +8585,71 @@ namespace
 				const asCDataType* formalType = 0;
 				asCDataType sealedSourceFormalType;
 				const asCDataType* valueFormalType = 0;
-				if( callee && paramCount > i )
+				if( paramCount > i )
 				{
 					const asUINT formal = paramCount - 1 - i;
-					const asCDataType& paramType = callee->parameterTypes[formal];
-					formalType = &paramType;
-					// Builder's public shell represents a source `T` VALUE
-					// parameter as `const T&inout`. Call semantics must still
-					// come from the sealed source declaration: explicit `T&`
-					// aliases the caller, whereas source `T` copies (and for a
-					// non-POD value transfers callee ownership). Do not infer
-					// this distinction from the normalized Runtime datatype.
-					if( formal < sealedFormalParams.GetLength() )
+					if( callee != 0 && formal < callee->parameterTypes.GetLength() )
 					{
-						sealedSourceFormalType = TypeOf(
-							sealedFormalParams[formal]->type);
+						formalType = &callee->parameterTypes[formal];
+						byRef = formalType->IsReference();
+						argDwords = SizeDwords(*formalType);
+					}
+					if( callee != 0 && captureCount > 0
+						&& formal >= userParamCount )
+					{
+						src = FindSlot(captureDecls[calleeBind->captureBegin + (formal - userParamCount)]);
+						if( formalType != 0 && IsByValueObject(*formalType) )
+						{
+							valueFormalType = formalType;
+						}
+					}
+					else
+					{
+						const asUINT recordIndex =
+							formal < recordIndexByFormal.GetLength()
+								? recordIndexByFormal[formal] : asUINT(-1);
+						if( recordIndex == asUINT(-1)
+							|| recordIndex >= argOffsets.GetLength()
+							|| recordIndex >= expr->callArguments.GetLength() )
+						{
+							FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
+							return 0;
+						}
+						const asSASTCallArgument& callArgument =
+							expr->callArguments[recordIndex];
+						sealedSourceFormalType =
+							TypeOf(callArgument.formalType);
+						if( !sealedSourceFormalType.IsValid() )
+						{
+							FailAt(__LINE__, asAST_VERIFY_INVALID_TYPE);
+							return 0;
+						}
+						// Builder's public shell represents a source `T` VALUE
+						// parameter as `const T&inout`. Call semantics must still
+						// come from the exact sealed call record: explicit `T&`
+						// aliases the caller, whereas source `T` copies (and for a
+						// non-POD value transfers callee ownership).
 						if( IsByValueObject(sealedSourceFormalType) )
 						{
 							valueFormalType = &sealedSourceFormalType;
 						}
+						if( formalType == 0 )
+						{
+							formalType = &sealedSourceFormalType;
+							byRef = formalType->IsReference();
+							argDwords = SizeDwords(*formalType);
+						}
+						if( valueFormalType == 0 && formalType != 0
+							&& IsByValueObject(*formalType) )
+						{
+							valueFormalType = formalType;
+						}
+						src = argOffsets[recordIndex];
+						actualArgumentIndex = recordIndex;
+						srcStoresPointer =
+							recordIndex < argOffsetsStorePointer.GetLength()
+							&& argOffsetsStorePointer[recordIndex];
 					}
-					if( valueFormalType == 0 && IsByValueObject(paramType) )
-					{
-						valueFormalType = formalType;
-					}
-					byRef = paramType.IsReference();
-					argDwords = SizeDwords(paramType);
-					if( captureCount > 0 && formal >= userParamCount )
-					{
-						src = FindSlot(captureDecls[calleeBind->captureBegin + (formal - userParamCount)]);
-					}
-					else if( captureCount > 0 )
-					{
-						const asUINT userRev = userParamCount - 1 - formal;
-						src = userRev < argOffsets.GetLength() ? argOffsets[userRev] : 0x7fffffff;
-						actualArgumentIndex = userRev;
-						srcStoresPointer = userRev < argOffsetsStorePointer.GetLength()
-							&& argOffsetsStorePointer[userRev];
-					}
-					else
-					{
-						src = argOffsets[i];
-						actualArgumentIndex = i;
-						srcStoresPointer = i < argOffsetsStorePointer.GetLength()
-							&& argOffsetsStorePointer[i];
-					}
-				}
-				else
-				{
-					src = argOffsets[i];
-					actualArgumentIndex = i;
-					srcStoresPointer = i < argOffsetsStorePointer.GetLength()
-						&& argOffsetsStorePointer[i];
 				}
 				if( src == 0x7fffffff )
 				{
@@ -7705,6 +8868,17 @@ namespace
 				bc.ObjInfo(dest, asOBJ_INIT);
 				return dest;
 			}
+			if( dataType.IsReference() )
+			{
+				// Non-handle references are non-owning aliases returned through the
+				// VM value/pointer register. Preserve the pointer itself in a plain
+				// pointer slot. AllocTyped would incorrectly attach value-object
+				// lifetime/cleanup semantics, while reading the referenced payload
+				// would lose identity and truncate wide objects such as FString.
+				const int pointerSlot = AllocPointerVariable();
+				StoreReturn(pointerSlot, AS_PTR_SIZE);
+				return pointerSlot;
+			}
 			const int dest = AllocTemporary(
 				dataType, dwords > 0 ? dwords : 1);
 			StoreReturn(dest, dwords > 0 ? dwords : 1);
@@ -7806,8 +8980,9 @@ namespace
 						slot = (dataType.IsObject() || dataType.IsObjectHandle() || dataType.IsFuncdef())
 							? AllocTyped(dataType)
 							: AllocDwords(SizeDwords(dataType));
-						BindSlot(var->id, slot);
+						BindSlot(var->id, slot, IsOwnedReferenceObject(dataType));
 						if( dataType.IsObject() && !dataType.IsObjectHandle()
+							&& !dataType.IsReference()
 							&& dataType.GetTypeInfo()
 							&& (dataType.GetTypeInfo()->GetFlags() & asOBJ_VALUE)
 							&& !HasSealedValueInitializationPlan(var->id, dataType) )
@@ -7847,7 +9022,7 @@ namespace
 				const asSASTLifetimeExitPlan* const exitPlan =
 					lifetimeView.FindExitPlan(
 						stmt->id, asAST_LIFETIME_EXIT_PLAN_TRANSFER);
-				EmitExitPlan(exitPlan, false);
+				EmitExitPlan(exitPlan, true);
 				if( !ok )
 					return;
 				ValidateTransferCleanupCoverage(asASTStmtId(), exitPlan);
@@ -7886,7 +9061,7 @@ namespace
 				EmitExitPlan(
 					lifetimeView.FindExitPlan(
 						stmt->id, asAST_LIFETIME_EXIT_PLAN_TRANSFER),
-					false);
+					true);
 				break;
 			case asAST_STMT_BREAK:
 			{
@@ -7899,7 +9074,7 @@ namespace
 				const asSASTLifetimeExitPlan* const exitPlan =
 					lifetimeView.FindExitPlan(
 						stmt->id, asAST_LIFETIME_EXIT_PLAN_TRANSFER);
-				EmitExitPlan(exitPlan, false);
+				EmitExitPlan(exitPlan, true);
 				if( !ok )
 					return;
 				ValidateTransferCleanupCoverage(stmt->target, exitPlan);
@@ -7919,7 +9094,7 @@ namespace
 				const asSASTLifetimeExitPlan* const exitPlan =
 					lifetimeView.FindExitPlan(
 						stmt->id, asAST_LIFETIME_EXIT_PLAN_TRANSFER);
-				EmitExitPlan(exitPlan, false);
+				EmitExitPlan(exitPlan, true);
 				if( !ok )
 					return;
 				ValidateTransferCleanupCoverage(stmt->target, exitPlan);
@@ -8003,6 +9178,7 @@ namespace
 					? asBC_CALLSYS : asBC_CALL,
 				destructorFunction->id, AS_PTR_SIZE);
 			bc.ObjInfo(slot, asOBJ_UNINIT);
+			object->live = false;
 			return true;
 		}
 
@@ -8568,28 +9744,147 @@ namespace
 		int returnDwords;
 		bool ok;
 
-		asCObjectProperty* PropertyFromFieldDecl(const asCDecl* target, asCObjectType* objType)
+		asCObjectProperty* PropertyFromFieldDecl(
+			const asCDecl* target,
+			asCObjectType* objType,
+			asCObjectType** exactOwner = 0)
 		{
-			if( target == 0 || target->kind != asAST_DECL_VAR || objType == 0 || target->byteOffset < 0 )
+			if( exactOwner )
+			{
+				*exactOwner = 0;
+			}
+			if( target == 0 || target->kind != asAST_DECL_VAR )
 			{
 				return 0;
 			}
-			for( asUINT i = 0; i < objType->properties.GetLength(); ++i )
+
+			auto AcceptProperty = [&](asCObjectProperty* prop, bool requireOffset) -> bool
 			{
-				asCObjectProperty* prop = objType->properties[i];
-				if( prop && prop->byteOffset == target->byteOffset )
+				if( prop == 0 || !prop->name.Equals(target->name) )
+				{
+					return false;
+				}
+				if( requireOffset
+					&& target->byteOffset >= 0
+					&& prop->byteOffset != target->byteOffset )
+				{
+					return false;
+				}
+				const asCDataType expectedType = TypeOf(target->type);
+				if( !expectedType.IsValid() )
+				{
+					return true;
+				}
+				if( prop->type == expectedType
+					|| prop->type.IsEqualExceptRefAndConst(expectedType) )
+				{
+					return true;
+				}
+				return false;
+			};
+
+			auto FindExactProperty = [&](asCObjectType* owner) -> asCObjectProperty*
+			{
+				if( owner == 0 )
+				{
+					return 0;
+				}
+				asCObjectProperty* named = 0;
+				for( asUINT i = 0; i < owner->properties.GetLength(); ++i )
+				{
+					asCObjectProperty* const prop = owner->properties[i];
+					if( AcceptProperty(prop, true) )
+					{
+						if( builder )
+						{
+							builder->MarkPropertyDependency(owner, prop);
+						}
+						if( exactOwner )
+						{
+							*exactOwner = owner;
+						}
+						return prop;
+					}
+					if( named == 0 && AcceptProperty(prop, false) )
+					{
+						named = prop;
+					}
+				}
+				if( named != 0 )
 				{
 					if( builder )
 					{
-						builder->MarkPropertyDependency(objType, prop);
+						builder->MarkPropertyDependency(owner, named);
 					}
-					return prop;
+					if( exactOwner )
+					{
+						*exactOwner = owner;
+					}
+					return named;
 				}
+				return 0;
+			};
+
+			auto FindOnTypeOrTemplate = [&](asCObjectType* owner) -> asCObjectProperty*
+			{
+				if( asCObjectProperty* const found = FindExactProperty(owner) )
+				{
+					return found;
+				}
+				if( owner != 0 && owner->templateBaseType != 0
+					&& owner->templateBaseType != owner )
+				{
+					return FindExactProperty(owner->templateBaseType);
+				}
+				return 0;
+			};
+
+			// A native property inherited through the pointer-free Canonical base
+			// graph is owned by its exact ancestor declaration. The current function's
+			// Runtime objectType need not duplicate that host property (and a stable
+			// host relation deliberately does not mutate Runtime `derivedFrom`). Bind
+			// the declaration parent back to the current Engine through the existing
+			// stable type bridge, then authenticate name, type and byte offset on that
+			// exact owner. Dynamic TypeId and object addresses remain runtime-local.
+			const asCDecl* const ownerDecl = context.GetDecl(target->parent);
+			if( ownerDecl == 0 || ownerDecl->stableKey.GetLength() == 0
+				|| bridge == 0 )
+			{
+				return FindOnTypeOrTemplate(objType);
+			}
+			for( asUINT typeIndex = 1;
+				typeIndex <= context.GetTypeCount(); ++typeIndex )
+			{
+				const asCType* const canonicalType =
+					context.GetType(asASTTypeRef(typeIndex));
+				if( canonicalType == 0
+					|| !canonicalType->stableKey.Equals(ownerDecl->stableKey) )
+				{
+					continue;
+				}
+				const asCDataType ownerType = bridge->Resolve(
+					context, asCQualType(canonicalType->id, 0));
+				if( asCObjectProperty* const inherited = FindOnTypeOrTemplate(
+						CastToObjectType(ownerType.GetTypeInfo())) )
+				{
+					return inherited;
+				}
+				break;
+			}
+			// A direct Runtime owner remains the compatibility fallback for authored
+			// fields whose transient declaration type is not yet visible through the
+			// bridge. Inherited native fields select their declaration parent above,
+			// so relocation identity cannot drift to a same-shaped derived property.
+			if( asCObjectProperty* const direct = FindOnTypeOrTemplate(objType) )
+			{
+				return direct;
 			}
 			return 0;
 		}
 
-		asCObjectProperty* FindThisProperty(const asCDecl* target)
+		asCObjectProperty* FindThisProperty(
+			const asCDecl* target,
+			asCObjectType** exactOwner = 0)
 		{
 			if( target == 0 || func == 0 || func->objectType == 0 )
 			{
@@ -8599,21 +9894,153 @@ namespace
 			{
 				return 0;
 			}
-			return PropertyFromFieldDecl(target, func->objectType);
+			return PropertyFromFieldDecl(
+				target, func->objectType, exactOwner);
 		}
 	};
+
+	static const asCExpr* UnwrapCanonicalInitExpr(
+		const asCASTContext& context, asASTExprId id)
+	{
+		const asCExpr* expr = context.GetExpr(id);
+		for( int guard = 0; expr != 0 && guard < 8; ++guard )
+		{
+			if( (expr->kind == asAST_EXPR_CONVERSION
+					|| expr->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| expr->kind == asAST_EXPR_CLEANUP
+					|| expr->kind == asAST_EXPR_OPAQUE_VALUE)
+				&& expr->children.GetLength() == 1 )
+			{
+				expr = context.GetExpr(expr->children[0]);
+				continue;
+			}
+			if( expr->kind == asAST_EXPR_ASSIGN && expr->children.GetLength() >= 1 )
+			{
+				expr = context.GetExpr(
+					expr->children[expr->children.GetLength() - 1]);
+				continue;
+			}
+			if( expr->kind == asAST_EXPR_SEQUENCE && expr->children.GetLength() )
+			{
+				expr = context.GetExpr(
+					expr->children[expr->children.GetLength() - 1]);
+				continue;
+			}
+			if( expr->kind == asAST_EXPR_CONSTRUCT
+				&& expr->children.GetLength() == 1 )
+			{
+				expr = context.GetExpr(expr->children[0]);
+				continue;
+			}
+			break;
+		}
+		return expr;
+	}
+
+	static const asCExpr* FindCanonicalStringLiteralInit(
+		const asCASTContext& context, const asCDecl* decl)
+	{
+		if( decl == 0 )
+		{
+			return 0;
+		}
+		for( asUINT i = 0; i < decl->inits.GetLength(); ++i )
+		{
+			const asCExpr* const expr =
+				UnwrapCanonicalInitExpr(context, decl->inits[i]);
+			if( expr != 0 && expr->kind == asAST_EXPR_STRING_LITERAL )
+			{
+				return expr;
+			}
+		}
+		return 0;
+	}
+
+	static bool IsCanonicalEngineStringType(
+		asCScriptEngine* engine, const asCDataType& dataType)
+	{
+		return engine != 0
+			&& engine->stringType.IsValid()
+			&& dataType.IsValid()
+			&& !dataType.IsReference()
+			&& !dataType.IsObjectHandle()
+			&& dataType.GetTypeInfo() == engine->stringType.GetTypeInfo();
+	}
+
+	static bool IsCanonicalCopyConstructorFor(
+		asCScriptFunction* copyCtor, asCObjectType* objectType)
+	{
+		if( copyCtor == 0 || objectType == 0
+			|| copyCtor->parameterTypes.GetLength() != 1
+			|| !copyCtor->parameterTypes[0].IsReference() )
+		{
+			return false;
+		}
+		asCTypeInfo* const parameterType =
+			copyCtor->parameterTypes[0].GetTypeInfo();
+		if( parameterType == objectType
+			&& (copyCtor->objectType == objectType
+				|| copyCtor->objectType == 0) )
+		{
+			return true;
+		}
+		asCObjectType* const parameterObject =
+			CastToObjectType(parameterType);
+		asCObjectType* const ctorObject = copyCtor->objectType;
+		asCObjectType* const templateBase = objectType->templateBaseType;
+		if( templateBase == 0 || parameterObject == 0 || ctorObject == 0 )
+		{
+			return false;
+		}
+		const bool ctorMatches = ctorObject == objectType
+			|| ctorObject == templateBase
+			|| ctorObject->templateBaseType == templateBase;
+		const bool paramMatches = parameterObject == objectType
+			|| parameterObject == templateBase
+			|| parameterObject->templateBaseType == templateBase;
+		return ctorMatches && paramMatches;
+	}
+
+	static asCScriptFunction* FindCanonicalCopyConstructor(
+		asCScriptEngine* engine, const asCDataType& dataType)
+	{
+		asCObjectType* const objectType = CastToObjectType(dataType.GetTypeInfo());
+		if( objectType == 0 || engine == 0 )
+		{
+			return 0;
+		}
+		if( objectType->beh.copyconstruct > 0 )
+		{
+			asCScriptFunction* const copyCtor =
+				engine->GetScriptFunction(objectType->beh.copyconstruct);
+			if( IsCanonicalCopyConstructorFor(copyCtor, objectType) )
+			{
+				return copyCtor;
+			}
+		}
+		for( asUINT i = 0; i < objectType->beh.constructors.GetLength(); ++i )
+		{
+			asCScriptFunction* const constructor =
+				engine->GetScriptFunction(objectType->beh.constructors[i]);
+			if( IsCanonicalCopyConstructorFor(constructor, objectType) )
+			{
+				return constructor;
+			}
+		}
+		return 0;
+	}
 
 	// Global initialization is a lifecycle operation, not merely an allocation
 	// time store. asCModule::ResetGlobalVars clears every mutable property and
 	// later executes its init function; storing the constant directly during
 	// Generate() would therefore be observably lost before the module can run.
 	//
-	// This deliberately covers only Sema-proven scalar constants for now. It
-	// emits the same property-owned initialization-function protocol as the
-	// maintained builder, so ResetGlobalVars(), SaveByteCode(), restore, module
-	// discard, and retry ownership retain their normal behaviour. Dynamic
-	// initializers and non-scalar lifetime rules stay fail-closed until their
-	// canonical expression/lifetime lowering is implemented.
+	// Scalar constants and string-literal FString/string globals use the same
+	// property-owned initialization-function protocol as the maintained builder,
+	// so ResetGlobalVars(), SaveByteCode(), restore, module discard, and retry
+	// ownership retain their normal behaviour. Other dynamic/non-scalar
+	// initializers stay fail-closed until their canonical expression/lifetime
+	// lowering is implemented.
 	bool EmitCanonicalScalarGlobalInitializer(
 		const asCASTContext& context,
 		asCBuilder& builder,
@@ -8729,6 +10156,113 @@ namespace
 		return true;
 	}
 
+	bool EmitCanonicalStringGlobalInitializer(
+		const asCASTContext& context,
+		asCBuilder& builder,
+		asCScriptEngine* engine,
+		asCModule* module,
+		asSBytecodeCodeGenArtifact& artifact,
+		asCGlobalProperty* prop,
+		const asCDecl* decl,
+		const asCDataType& dataType,
+		asCCanonicalStringConstantLease& stringConstants,
+		bool attachToProperty = true)
+	{
+		const asCExpr* const literal = FindCanonicalStringLiteralInit(context, decl);
+		asCScriptFunction* const copyCtor =
+			FindCanonicalCopyConstructor(engine, dataType);
+		asCObjectType* const objectType =
+			CastToObjectType(dataType.GetTypeInfo());
+		if( engine == 0 || module == 0 || prop == 0 || decl == 0
+			|| literal == 0
+			|| literal->kind != asAST_EXPR_STRING_LITERAL
+			|| literal->literalBits != literal->literal.GetLength()
+			|| engine->stringFactory == 0
+			|| !IsCanonicalEngineStringType(engine, dataType)
+			|| copyCtor == 0
+			|| objectType == 0
+			|| prop->GetAddressOfValue() == 0 )
+		{
+			return false;
+		}
+
+		const void* const constant = stringConstants.Acquire(
+			literal->literal.AddressOf(),
+			static_cast<asUINT>(literal->literal.GetLength()));
+		if( constant == 0 )
+		{
+			return false;
+		}
+
+		asCScriptFunction* const initFunc =
+			asNEW(asCScriptFunction)(engine, module, asFUNC_SCRIPT);
+		if( initFunc == 0 || initFunc->scriptData == 0 )
+		{
+			if( initFunc )
+			{
+				initFunc->funcType = asFUNC_DUMMY;
+				asDELETE(initFunc, asCScriptFunction);
+			}
+			return false;
+		}
+
+		initFunc->id = artifact.GetNextPendingScriptFunctionId(engine);
+		initFunc->nameSpace = prop->nameSpace;
+		initFunc->returnType = asCDataType::CreatePrimitive(ttVoid, false);
+
+		if( decl->range.begin.IsValid() )
+		{
+			asSSourceLineColumn location = {};
+			if( context.GetSourceManager().GetLineColumn(decl->range.begin, location) )
+			{
+				const char* const key = context.GetSourceManager().GetLogicalKey(
+					decl->range.begin.fileID);
+				initFunc->scriptData->scriptSectionIdx =
+					engine->GetScriptSectionNameIndex(key ? key : "");
+				initFunc->scriptData->declaredAt =
+					(location.row & 0xFFFFF) | ((location.column & 0xFFF) << 20);
+			}
+		}
+
+		asCByteCode byteCode(&builder);
+		byteCode.InstrPTR(asBC_JitEntry, 0);
+		// Global value objects store a heap pointer in the property. ALLOC
+		// constructs the FString and writes that pointer, matching LEGACY
+		// CompileInitialization for isVarGlobOrMem == 1.
+		byteCode.InstrPTR(asBC_PGA, prop->GetAddressOfValue());
+		byteCode.InstrPTR(asBC_PGA, const_cast<void*>(constant));
+		byteCode.Alloc(
+			asBC_ALLOC,
+			objectType,
+			copyCtor->id,
+			AS_PTR_SIZE * 2,
+			true);
+		byteCode.Ret(0);
+
+		asCArray<int> temporaries;
+		byteCode.Finalize(temporaries);
+		byteCode.ExtractObjectVariableInfo(initFunc);
+		initFunc->scriptData->variableSpace = 0;
+		initFunc->scriptData->byteCode.SetLength(byteCode.GetSize());
+		if( byteCode.GetSize() == 0 )
+		{
+			initFunc->funcType = asFUNC_DUMMY;
+			asDELETE(initFunc, asCScriptFunction);
+			return false;
+		}
+		byteCode.Output(initFunc->scriptData->byteCode.AddressOf());
+		initFunc->scriptData->stackNeeded =
+			byteCode.largestStackUsed + initFunc->scriptData->variableSpace;
+		initFunc->scriptData->lineNumbers = byteCode.lineNumbers;
+		initFunc->scriptData->objVariablesOnHeap = 0;
+
+		if( attachToProperty )
+			prop->SetInitFunc(initFunc);
+		artifact.functions.PushLast(initFunc);
+		artifact.functionDeclKinds.PushLast(asBYTECODE_CODEGEN_GLOBAL_INITIALIZER);
+		return true;
+	}
+
 	void DiscardAllocatedGlobals(asCModule* module, asCArray<asSCodeGenGlobal>& globals)
 	{
 		// Global ownership moved to asSBytecodeCodeGenArtifact. Keep this small
@@ -8749,14 +10283,28 @@ namespace
 		const asCArray<asETypeModifiers>& inOutFlags,
 		const asCArray<asCString*>& defaultArgs,
 		asSNameSpace* nameSpace,
-		const asCString& sourceModule)
+		const asCString& sourceModule,
+		const asCString& stableDeclKey,
+		const asCArray<asDWORD>& sourceParameterQualifiers)
 	{
-		if( engine == 0 || module == 0 || id < 0 || nameSpace == 0 )
+		if( engine == 0 || module == 0 || id < 0 || nameSpace == 0
+			|| stableDeclKey.GetLength() == 0
+			|| sourceParameterQualifiers.GetLength() != params.GetLength() )
 		{
 			for( asUINT i = 0; i < defaultArgs.GetLength(); ++i )
 				if( defaultArgs[i] )
 					asDELETE(defaultArgs[i], asCString);
 			return 0;
+		}
+		for( asUINT i = 0; i < sourceParameterQualifiers.GetLength(); ++i )
+		{
+			if( !asASTQualifiersAreValid(sourceParameterQualifiers[i]) )
+			{
+				for( asUINT arg = 0; arg < defaultArgs.GetLength(); ++arg )
+					if( defaultArgs[arg] )
+						asDELETE(defaultArgs[arg], asCString);
+				return 0;
+			}
 		}
 
 		asCScriptFunction* func = asNEW(asCScriptFunction)(engine, module, asFUNC_IMPORTED);
@@ -8775,6 +10323,9 @@ namespace
 		func->parameterTypes = params;
 		func->inOutFlags = inOutFlags;
 		func->defaultArgs = defaultArgs;
+		func->canonicalASTStableDeclKey = stableDeclKey;
+		func->canonicalASTSourceParameterQualifiers =
+			sourceParameterQualifiers;
 		func->objectType = 0;
 		func->traits = asSFunctionTraits();
 		func->CalculateParameterOffsets();
@@ -8798,7 +10349,8 @@ namespace
 		int id,
 		const char* name,
 		const asCDataType& type,
-		asSNameSpace* nameSpace)
+		asSNameSpace* nameSpace,
+		const asCString& stableDeclKey)
 	{
 		if( engine == 0 || module == 0 || id < 0 || nameSpace == 0 )
 			return 0;
@@ -8812,6 +10364,7 @@ namespace
 		prop->type = type;
 		prop->nameSpace = nameSpace;
 		prop->module = module;
+		prop->canonicalASTStableDeclKey = stableDeclKey;
 		prop->AllocateMemory();
 		return prop;
 	}
@@ -8869,6 +10422,14 @@ namespace
 					// mapped onto an earlier script type. CodeGen has no complete
 					// merge/redeclaration contract yet, so reject before it can omit
 					// source or mutate an unrelated script module.
+					asCString conflict;
+					conflict.Format(
+						"script type '%s' already belongs to module '%s'",
+						child->name.AddressOf() ? child->name.AddressOf() : "",
+						existing->module->name.AddressOf()
+							? existing->module->name.AddressOf() : "");
+					engine->WriteMessage(
+						"", 0, 0, asMSGTYPE_ERROR, conflict.AddressOf());
 					return asINVALID_DECLARATION;
 				}
 
@@ -8913,6 +10474,14 @@ namespace
 			if( !isInterface
 				&& (child->byteSize < 0 || child->byteAlignment == 0) )
 			{
+				asCString layout;
+				layout.Format(
+					"script class '%s' has unsealed layout size=%d align=%u",
+					child->name.AddressOf() ? child->name.AddressOf() : "",
+					child->byteSize,
+					child->byteAlignment);
+				engine->WriteMessage(
+					"", 0, 0, asMSGTYPE_ERROR, layout.AddressOf());
 				st->module = 0;
 				st->ReleaseInternal();
 				return asINVALID_DECLARATION;
@@ -9122,6 +10691,12 @@ namespace
 			{
 				const asCDecl* const candidate = context.GetDecl(child->bases[baseIndex]);
 				if( candidate == 0 || candidate->kind != asAST_DECL_CLASS )
+					continue;
+				// A canonical native type view records the independent PreClass
+				// shadow/layout root. RegisterCanonicalScriptTypes already copies
+				// that exact relation to shadowType; it is not the AngelScript
+				// inheritance edge represented by derivedFrom.
+				if( candidate->origin.Equals("canonical-native-type-view") )
 					continue;
 				if( classBase != 0 )
 					return asINVALID_DECLARATION;
@@ -9360,6 +10935,7 @@ namespace
 			func->name = decl->name;
 		}
 		func->canonicalASTStableDeclKey = decl->stableKey;
+		func->canonicalASTSourceParameterQualifiers.SetLength(0);
 		if( func->funcType != asFUNC_INTERFACE
 			&& !FillFunctionSourceMetadata(
 			context, engine, func, decl, error) )
@@ -9402,15 +10978,17 @@ namespace
 		// Builder-owned source shell and intentionally keep their sealed direct
 		// ABI (notably accessor ownership-transfer parameters).
 		const bool usesCanonicalDirectFunctionABI =
-			(decl->traits & asAST_TRAIT_LAMBDA) != 0
-			|| (decl->kind == asAST_DECL_METHOD
-				&& (decl->traits & asAST_TRAIT_GENERATED) != 0
-				&& decl->accessorKind != asAST_ACCESSOR_NONE);
-		for( asUINT i = 0; i < decl->children.GetLength(); ++i )
+			UsesCanonicalDirectFunctionABI(decl);
+		const asUINT formalCount = context.GetFormalDeclCount(decl->id);
+		for( asUINT formalIndex = 0; formalIndex < formalCount; ++formalIndex )
 		{
-			const asCDecl* child = context.GetDecl(decl->children[i]);
-			if( child == 0 || child->kind != asAST_DECL_PARAM )
-				continue;
+			const asCDecl* child = context.GetFormalDecl(
+				decl->id, formalIndex);
+			if( child == 0 )
+			{
+				error = asINVALID_DECLARATION;
+				return false;
+			}
 			asCDataType paramType = bridge.Resolve(context, child->type);
 			asETypeModifiers passing = InOutFromQuals(child->type.quals);
 			if( !paramType.IsValid() || paramType.GetTokenType() == ttVoid )
@@ -9426,7 +11004,17 @@ namespace
 			func->parameterTypes.PushLast(paramType);
 			func->parameterNames.PushLast(child->name);
 			func->inOutFlags.PushLast(passing);
-			func->defaultArgs.PushLast(0);
+			bool defaultAllocationFailed = false;
+			asCString* const defaultArgument = CloneCanonicalDefaultArgument(
+				child, defaultAllocationFailed);
+			if( defaultAllocationFailed )
+			{
+				error = asOUT_OF_MEMORY;
+				return false;
+			}
+			func->defaultArgs.PushLast(defaultArgument);
+			func->canonicalASTSourceParameterQualifiers.PushLast(
+				child->type.quals);
 		}
 		if( engine
 			&& (decl->kind == asAST_DECL_METHOD
@@ -9522,6 +11110,8 @@ namespace
 		factory->traits = constructor->traits;
 		factory->traits.SetTrait(asTRAIT_UNSAFE_DURING_CONSTRUCTION, true);
 		factory->canonicalASTStableDeclKey = constructor->canonicalASTStableDeclKey;
+		factory->canonicalASTSourceParameterQualifiers =
+			constructor->canonicalASTSourceParameterQualifiers;
 		factory->artifactInvocationKind = asBUILD_ARTIFACT_INVOCATION_FACTORY;
 		factory->artifactOwnerType = constructor->objectType;
 		if( factory->scriptData && constructor->scriptData )
@@ -10232,6 +11822,43 @@ namespace
 		}
 
 		asCArray<asCScriptFunction*> ownMethods;
+		const asCDecl* initDefaultsMethod = 0;
+		auto AppendOwnMethod = [&](const asCDecl* child) -> bool
+		{
+			asCScriptFunction* const function =
+				FindExactCanonicalFunctionBinding(bindings, child->id);
+			// The prepared Stage 2 graph already owns source-declared methods,
+			// including methods explicitly marked __generated.  Only generated
+			// methods with no prepared shell are deferred to the Canonical
+			// artifact (for example synthesized accessors).  Filtering every
+			// generated trait here makes the expected method inventory disagree
+			// with the live Stage 2 type before CodeGen begins.
+			if( !includeGeneratedObjectMethods
+				&& (child->traits & asAST_TRAIT_GENERATED) != 0
+				&& function == 0 )
+			{
+				return true;
+			}
+			if( function == 0
+				&& (child->traits & asAST_TRAIT_GENERATED) != 0
+				&& child->accessorKind == asAST_ACCESSOR_GET
+				&& child->inits.GetLength() == 0 )
+			{
+				const asCType* const returnType =
+					context.GetType(child->type.type);
+				if( returnType != 0
+					&& returnType->kind == asAST_TYPE_TEMPLATE )
+				{
+					// Declaration-only GetX for non-copyable host values such as
+					// TMap. Authored field access is MEMBER_REF; the accessor is
+					// not part of this generation's dispatch inventory.
+					return true;
+				}
+			}
+			return function != 0 && function->objectType == objectType
+				&& TryPushCanonicalPlanValue(ownMethods, function)
+				&& AppendCanonicalPlanMethod(plan, function);
+		};
 		for( asUINT childIndex = 0; childIndex < record->children.GetLength(); ++childIndex )
 		{
 			const asCDecl* const child = context.GetDecl(record->children[childIndex]);
@@ -10239,19 +11866,33 @@ namespace
 				return asINVALID_DECLARATION;
 			if( child->kind != asAST_DECL_METHOD )
 				continue;
-			if( !includeGeneratedObjectMethods
-				&& (child->traits & asAST_TRAIT_GENERATED) != 0 )
+			if( IsUnavailableGeneratedImplicitCopyLifecycle(child) )
+				continue;
+			if( child->origin.Equals("canonical-init-defaults") )
 			{
+				if( !child->name.Equals("__InitDefaults")
+					|| (child->traits & asAST_TRAIT_GENERATED) == 0
+					|| initDefaultsMethod != 0 )
+				{
+					return FailPlan(
+						asINVALID_DECLARATION, "init-defaults-method-identity");
+				}
+				initDefaultsMethod = child;
 				continue;
 			}
-			asCScriptFunction* const function =
-				FindExactCanonicalFunctionBinding(bindings, child->id);
-			if( function == 0 || function->objectType != objectType
-				|| !TryPushCanonicalPlanValue(ownMethods, function)
-				|| !AppendCanonicalPlanMethod(plan, function) )
+			if( !AppendOwnMethod(child) )
 			{
 				return FailPlan(asINVALID_DECLARATION, "own-method-binding");
 			}
+		}
+		// Builder creates the one synthetic defaults helper after registering every
+		// authored class method.  The Canonical declaration is created at the first
+		// source `default` statement so its DeclContext child position is earlier;
+		// preserve that source ownership while projecting the maintained Runtime
+		// method/VFT order from the helper's exact generated origin.
+		if( initDefaultsMethod != 0 && !AppendOwnMethod(initDefaultsMethod) )
+		{
+			return FailPlan(asINVALID_DECLARATION, "init-defaults-method-binding");
 		}
 
 		if( plan.isInterface )
@@ -10929,9 +12570,44 @@ namespace
 			if( plan.methodIds != type->methods )
 			{
 				if( detail )
+				{
+					asUINT mismatchIndex = 0;
+					const asUINT commonCount = plan.methodIds.GetLength()
+						< type->methods.GetLength()
+							? plan.methodIds.GetLength() : type->methods.GetLength();
+					while( mismatchIndex < commonCount
+						&& plan.methodIds[mismatchIndex]
+							== type->methods[mismatchIndex] )
+					{
+						++mismatchIndex;
+					}
+					const int expectedId = mismatchIndex < plan.methodIds.GetLength()
+						? plan.methodIds[mismatchIndex] : -1;
+					const int actualId = mismatchIndex < type->methods.GetLength()
+						? type->methods[mismatchIndex] : -1;
+					const asCScriptFunction* const expectedFunction =
+						mismatchIndex < plan.methodFunctions.GetLength()
+							? plan.methodFunctions[mismatchIndex] : 0;
+					const asCScriptFunction* const actualFunction = actualId >= 0
+						&& static_cast<asUINT>(actualId)
+							< engine->scriptFunctions.GetLength()
+							? engine->scriptFunctions[static_cast<asUINT>(actualId)] : 0;
 					detail->Format(
-						"prepared interface dispatch graph methods mismatch: %s expected=%u actual=%u",
-						typeName, plan.methodIds.GetLength(), type->methods.GetLength());
+						"prepared interface dispatch graph methods mismatch: %s "
+						"expected=%u actual=%u first=%u expectedId=%d expectedKey=%s "
+						"actualId=%d actualKey=%s",
+						typeName, plan.methodIds.GetLength(), type->methods.GetLength(),
+						mismatchIndex, expectedId,
+						expectedFunction
+							&& expectedFunction->canonicalASTStableDeclKey.AddressOf()
+								? expectedFunction->canonicalASTStableDeclKey.AddressOf()
+								: "<missing>",
+						actualId,
+						actualFunction
+							&& actualFunction->canonicalASTStableDeclKey.AddressOf()
+								? actualFunction->canonicalASTStableDeclKey.AddressOf()
+								: "<missing>");
+				}
 				return asINVALID_DECLARATION;
 			}
 			if( plan.interfaces != type->interfaces )
@@ -11307,6 +12983,17 @@ int asSBytecodeCodeGenArtifact::ResolveAndPatchTypeRelocations(
 		}
 		asCScriptFunction* const function =
 			relocationFunctions[relocation.functionArtifactIndex];
+		if( relocation.use == asTYPE_RELOC_FUNCTION_SIGNATURE )
+		{
+			if( function == 0 )
+			{
+				if( detail ) detail->Format(
+					"relocation[%u] has null signature owner function=%u",
+					i, relocation.functionArtifactIndex);
+				return asRUNTIME_TYPE_BIND_INVALID;
+			}
+			continue;
+		}
 		if( function == 0 || function->scriptData == 0
 			|| relocation.bytecodeDwordOffset
 				>= function->scriptData->byteCode.GetLength() )
@@ -11382,6 +13069,8 @@ int asSBytecodeCodeGenArtifact::ResolveAndPatchTypeRelocations(
 	for( asUINT i = 0; i < typeRelocations.GetLength(); ++i )
 	{
 		const asSTypeRelocation& relocation = typeRelocations[i];
+		if( relocation.use == asTYPE_RELOC_FUNCTION_SIGNATURE )
+			continue;
 		const asSResolvedRuntimeTypeBinding* const binding =
 			runtimeTypeBindings.GetBinding(i);
 		asCScriptFunction* const function =
@@ -11431,6 +13120,8 @@ int asSBytecodeCodeGenArtifact::ResolveAndPatchTypeRelocations(
 			if( detail ) detail->Format("relocation[%u] has no frozen binding", i);
 			return asRUNTIME_TYPE_BIND_INVALID;
 		}
+		if( relocation.use == asTYPE_RELOC_FUNCTION_SIGNATURE )
+			continue;
 		asCScriptFunction* const function =
 			relocationFunctions[relocation.functionArtifactIndex];
 		asDWORD* const instruction =
@@ -12217,6 +13908,368 @@ int asCBytecodeCodeGen::GenerateFunction(
 		context, module, true, addToModule, outFunction);
 }
 
+int asCBytecodeCodeGen::GeneratePreparedFunctionBody(
+	const asCASTContext& context,
+	asCModule* module,
+	asASTDeclId declarationId,
+	asCScriptFunction* function)
+{
+	failed = false;
+	error = asAST_VERIFY_OK;
+	lastFailLine = 0;
+	failureDetail = "";
+	failureSection = "";
+	failureRow = 0;
+	failureColumn = 0;
+#if WITH_ANGELSCRIPT_UNITTESTS
+	testTypeRelocationFailureInjected = false;
+#endif
+
+	asSAstVerifyResult publication;
+	const int publicationResult = asCASTVerifyPublication(context, publication);
+	if( publicationResult != asAST_VERIFY_OK )
+	{
+		failed = true;
+		error = publicationResult;
+		asCASTFormatVerifyResult(publication, failureDetail);
+		return error;
+	}
+
+	const asCDecl* const declaration = context.GetDecl(declarationId);
+	if( module == 0 || module->engine == 0 || function == 0
+		|| declaration == 0 || !CanonicalDeclIsFunctionLike(declaration->kind)
+		|| !declaration->body.IsValid() || declaration->stableKey.GetLength() == 0
+		|| function->module != module || function->engine != module->engine
+		|| function->funcType != asFUNC_SCRIPT || function->scriptData == 0
+		|| function->scriptData->byteCode.GetLength() != 0
+		|| function->id < 0
+		|| static_cast<asUINT>(function->id)
+			>= module->engine->scriptFunctions.GetLength()
+		|| module->engine->scriptFunctions[function->id] != function)
+	{
+		failed = true;
+		error = asINVALID_CONFIGURATION;
+		failureDetail =
+			"prepared one-body CodeGen requires one exact sealed declaration and "
+			"an Engine-registered empty script-function shell";
+		return error;
+	}
+
+	asCScriptEngine* const engine = module->engine;
+	asCRuntimeTypeBridge bridge(engine);
+	asASTDeclId boundDeclaration;
+	asCString bindDetail;
+	if( bridge.BindFunctionDeclaration(
+		context, *function, boundDeclaration, &bindDetail)
+			!= asRUNTIME_DECL_BIND_OK
+		|| boundDeclaration != declarationId )
+	{
+		failed = true;
+		error = asINVALID_DECLARATION;
+		failureDetail.Format(
+			"prepared one-body shell does not bind its exact sealed declaration "
+			"(function=%s expected=%s detail=%s)",
+			function->GetDeclaration(true, true, false),
+			declaration->stableKey.AddressOf(),
+			bindDetail.AddressOf() ? bindDetail.AddressOf() : "");
+		return error;
+	}
+
+	asCBuilder builder(engine, module);
+	builder.silent = true;
+	asCCanonicalStringConstantLease stringConstants(engine);
+	asSBytecodeCodeGenArtifact artifact;
+	asCArray<asSCodeGenFuncBind> binds;
+	asCArray<asSCodeGenGlobal> globals;
+	asCArray<asASTDeclId> captureDecls;
+
+	asSCodeGenFuncBind targetBind;
+	targetBind.decl = declarationId;
+	targetBind.func = function;
+	targetBind.captureBegin = 0;
+	targetBind.captureCount = 0;
+	binds.PushLast(targetBind);
+
+	// Bind every already published callable that this one body may reference.
+	// Body-bearing current-module declarations are authenticated through the
+	// Runtime bridge; declaration-only host projections use the same exact
+	// resolvers as full module CodeGen. Nothing is allocated or published here.
+	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
+	{
+		const asCDecl* const candidateDecl = context.GetDecl(asASTDeclId(i));
+		if( candidateDecl == 0
+			|| !CanonicalDeclIsFunctionLike(candidateDecl->kind)
+			|| candidateDecl->id == declarationId )
+		{
+			continue;
+		}
+
+		asCScriptFunction* external = 0;
+		asUINT currentModuleMatches = 0;
+		for( asUINT functionIndex = 0;
+			functionIndex < module->scriptFunctions.GetLength(); ++functionIndex )
+		{
+			asCScriptFunction* const candidate = module->scriptFunctions[functionIndex];
+			if( candidate == 0 || candidate == function )
+				continue;
+			asASTDeclId candidateBinding;
+			if( bridge.BindFunctionDeclaration(
+				context, *candidate, candidateBinding, 0)
+					== asRUNTIME_DECL_BIND_OK
+				&& candidateBinding == candidateDecl->id )
+			{
+				external = candidate;
+				++currentModuleMatches;
+			}
+		}
+		if( currentModuleMatches > 1 )
+		{
+			failed = true;
+			error = asINVALID_DECLARATION;
+			failureDetail.Format(
+				"prepared one-body dependency has ambiguous current-module shells: %s",
+				candidateDecl->stableKey.AddressOf()
+					? candidateDecl->stableKey.AddressOf() : "<missing>");
+			artifact.Abandon(engine);
+			return error;
+		}
+
+		if( external == 0 )
+			external = FindCurrentModuleScriptGlobalFunction(
+				module, bridge, context, candidateDecl);
+		if( external == 0 )
+			external = FindAutomaticImportedScriptGlobalFunction(
+				engine, module, bridge, context, candidateDecl);
+		if( external == 0 )
+			external = FindRegisteredGlobalFunction(
+				engine, module, bridge, context, candidateDecl);
+		if( external == 0 )
+			external = FindExactPreparedInterfaceMethod(
+				engine, bridge, context, candidateDecl);
+		if( external == 0 )
+			external = FindExactRegisteredMethod(
+				engine, bridge, context, candidateDecl);
+		if( external == 0 )
+			external = FindExactRegisteredDestructor(
+				engine, context, candidateDecl);
+		if( external == 0 )
+			external = FindExactRegisteredListFactory(
+				engine, bridge, context, candidateDecl);
+		if( external == 0 )
+			external = FindExactRegisteredConstructor(
+				engine, bridge, context, candidateDecl);
+		if( external == 0 )
+			continue;
+
+		asSCodeGenFuncBind bind;
+		bind.decl = candidateDecl->id;
+		bind.func = external;
+		bind.captureBegin = 0;
+		bind.captureCount = 0;
+		binds.PushLast(bind);
+	}
+
+	// Cache restore allocates derived ClassGenerator globals from current type
+	// authority. Their sealed origin is intentionally not a CompileFunction
+	// projection, so match module-owned namespace globals by exact identity
+	// rather than by an origin string.
+	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
+	{
+		const asCDecl* const globalDecl = context.GetDecl(asASTDeclId(i));
+		if( globalDecl == 0 || globalDecl->kind != asAST_DECL_VAR
+			|| !IsCanonicalNamespaceOrTranslationUnitMember(context, globalDecl) )
+		{
+			continue;
+		}
+
+		asCGlobalProperty* property = 0;
+		asUINT matches = 0;
+		const asCDataType expectedType = bridge.Resolve(context, globalDecl->type);
+		asSNameSpace* const expectedNamespace = ResolveCanonicalDeclNamespace(
+			context, engine, module, globalDecl);
+		if( expectedType.IsValid() && expectedNamespace )
+		{
+			for( asUINT globalIndex = 0;
+				globalIndex < module->scriptGlobalsList.GetLength(); ++globalIndex )
+			{
+				asCGlobalProperty* const candidate =
+					module->scriptGlobalsList[globalIndex];
+				if( candidate && candidate->module == module
+					&& candidate->nameSpace == expectedNamespace
+					&& candidate->name.Equals(globalDecl->name)
+					&& candidate->type == expectedType )
+				{
+					property = candidate;
+					++matches;
+				}
+			}
+		}
+		if( matches > 1 )
+		{
+			failed = true;
+			error = asINVALID_DECLARATION;
+			failureDetail.Format(
+				"prepared one-body global has ambiguous module shells: %s",
+				globalDecl->name.AddressOf()
+					? globalDecl->name.AddressOf() : "<missing>");
+			artifact.Abandon(engine);
+			return error;
+		}
+		if( property == 0 )
+			property = FindAutomaticImportedScriptGlobal(
+				engine, module, bridge, context, globalDecl);
+		if( property == 0 )
+			property = FindRegisteredNativeGlobalProperty(
+				engine, module, bridge, context, globalDecl);
+		if( property == 0 )
+			continue;
+
+		asSCodeGenGlobal bind;
+		bind.decl = globalDecl->id;
+		bind.prop = property;
+		globals.PushLast(bind);
+	}
+
+	asCScriptFunction::ScriptFunctionData* const originalData =
+		function->scriptData;
+	const bool originalDontCleanUpOnException =
+		function->dontCleanUpOnException;
+	function->scriptData = 0;
+	function->AllocateScriptFunctionData();
+	if( function->scriptData == 0 )
+	{
+		function->scriptData = originalData;
+		failed = true;
+		error = asOUT_OF_MEMORY;
+		failureDetail =
+			"failed to allocate detached prepared one-body ScriptFunctionData";
+		artifact.Abandon(engine);
+		return error;
+	}
+
+	auto RollbackBody = [&]()
+	{
+		artifact.Abandon(engine);
+		function->DeallocateScriptFunctionData();
+		function->scriptData = originalData;
+		function->dontCleanUpOnException = originalDontCleanUpOnException;
+	};
+
+	if( !FillFunctionSourceMetadata(
+		context, engine, function, declaration, error) )
+	{
+		failed = true;
+		lastFailLine = __LINE__;
+		failureDetail.Format(
+			"prepared one-body declaration has no exact sealed source metadata: %s",
+			declaration->stableKey.AddressOf());
+		RollbackBody();
+		return error;
+	}
+
+	asCCanonicalFunctionEmitter emitter(
+		context, &builder, &bridge, artifact, binds, globals, captureDecls,
+		stringConstants, error, lastFailLine, failureDetail);
+	const bool oldHardDependencyPolicy = builder.bValueDependenciesAreHard;
+	builder.bValueDependenciesAreHard =
+		declaration->kind == asAST_DECL_CONSTRUCTOR;
+	const bool emitted = emitter.Emit(function, declaration);
+	builder.bValueDependenciesAreHard = oldHardDependencyPolicy;
+	if( !emitted )
+	{
+		failed = true;
+		if( error == asAST_VERIFY_OK )
+			error = asNOT_SUPPORTED;
+		if( lastFailLine == 0 )
+			lastFailLine = __LINE__;
+		if( failureDetail.GetLength() == 0 )
+		{
+			failureDetail.Format(
+				"prepared one-body emitter failed without a diagnostic: %s",
+				declaration->stableKey.AddressOf());
+		}
+		if( declaration->range.begin.IsValid() )
+		{
+			asSSourceLineColumn location = {};
+			if( context.GetSourceManager().GetLineColumn(
+				declaration->range.begin, location) )
+			{
+				const char* const key = context.GetSourceManager().GetLogicalKey(
+					declaration->range.begin.fileID);
+				failureSection = key ? key : "";
+				failureRow = location.row;
+				failureColumn = location.column;
+			}
+		}
+		RollbackBody();
+		return error;
+	}
+
+	const asSRuntimeTypeBindingEnvironment bindingEnvironment =
+		asMakeCurrentRuntimeTypeBindingEnvironment();
+	const int relocationResult = artifact.ResolveAndPatchTypeRelocations(
+		engine, context, bindingEnvironment, &failureDetail
+#if WITH_ANGELSCRIPT_UNITTESTS
+		, testFailureAtTypeRelocationUse,
+		testTypeRelocationFailureCode,
+		&testTypeRelocationFailureInjected
+#endif
+		);
+	if( relocationResult != asRUNTIME_TYPE_BIND_OK )
+	{
+		failed = true;
+		error = relocationResult;
+		lastFailLine = __LINE__;
+		RollbackBody();
+		return error;
+	}
+
+	for( asUINT i = 0; i < globals.GetLength(); ++i )
+	{
+		asCGlobalProperty* const property = globals[i].prop;
+		void* const address = property ? property->GetAddressOfValue() : 0;
+		asCGlobalProperty** const mapped = address
+			? engine->varAddressMap.Find(address) : 0;
+		if( property == 0 || address == 0 || mapped == 0 || *mapped != property )
+		{
+			failed = true;
+			error = asINVALID_CONFIGURATION;
+			lastFailLine = __LINE__;
+			failureDetail.Format(
+				"prepared one-body global address is not published "
+				"(ordinal=%u name=%s)",
+				i,
+				property && property->name.AddressOf()
+					? property->name.AddressOf() : "<missing>");
+			RollbackBody();
+			return error;
+		}
+	}
+
+	const int typeIdCommitResult = artifact.CommitPendingTypeIds(engine);
+	if( typeIdCommitResult < 0 )
+	{
+		failed = true;
+		error = typeIdCommitResult;
+		lastFailLine = __LINE__;
+		failureDetail.Format(
+			"prepared one-body TypeId projection commit failed: result=%d",
+			typeIdCommitResult);
+		RollbackBody();
+		return error;
+	}
+
+	// From this point the normal VM reference acquisition cannot fail. Transfer
+	// the generated data atomically, then destroy the displaced empty shell body.
+	function->AddReferences();
+	asCScriptFunction::ScriptFunctionData* const generatedData =
+		function->scriptData;
+	function->scriptData = originalData;
+	function->DeallocateScriptFunctionData();
+	function->scriptData = generatedData;
+	return asAST_VERIFY_OK;
+}
+
 int asCBytecodeCodeGen::GeneratePreparedModule(
 	const asCASTContext& context,
 	asCBuilder& preparedBuilder)
@@ -12663,11 +14716,20 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		const bool isGeneratedDestructor =
 			declaration->kind == asAST_DECL_DESTRUCTOR
 			&& (declaration->traits & asAST_TRAIT_GENERATED) != 0;
-		if( isGeneratedAccessor || isGeneratedDestructor )
+		const bool isGeneratedImplicitCopyLifecycle =
+			(declaration->traits & asAST_TRAIT_GENERATED) != 0
+			&& declaration->body.IsValid()
+			&& (declaration->origin.Equals(
+					"canonical-generated-implicit-copy-constructor")
+				|| declaration->origin.Equals(
+					"canonical-generated-implicit-assignment-operator"));
+		if( isGeneratedAccessor || isGeneratedDestructor
+			|| isGeneratedImplicitCopyLifecycle )
 		{
-			// Canonical Sema owns implicit field accessors and generated destructors.
+			// Canonical Sema owns implicit field accessors, generated destructors,
+			// and the sealed script-value copy lifecycle.
 			// The staged Builder has no source function description from which it
-			// could prepare either shell, so keep the declaration pending until global
+			// could prepare these shells, so keep the declaration pending until global
 			// initializers have reserved their candidate ids. The same detached
 			// artifact then publishes the complete generated callable/lifetime closure
 			// atomically after all bodies emit.
@@ -12966,7 +15028,47 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		state.publishPureConstant = false;
 		state.publishDefaultInit = false;
 
-		if( declaration->defaultArg.GetLength() != 0 )
+		if( IsCanonicalEngineStringType(engine, dataType)
+			&& FindCanonicalStringLiteralInit(context, declaration) != 0 )
+		{
+			if( (declaration->traits & asAST_TRAIT_DEFAULT_INITIALIZED) != 0 )
+			{
+				failed = true;
+				error = asINVALID_DECLARATION;
+				failureDetail.Format(
+					"prepared string global cannot own both a literal initializer and the sealed default-initialized lifecycle (name=%s)",
+					description->name.AddressOf());
+				RollbackPreparedGlobals();
+				return error;
+			}
+			const asUINT functionCountBefore =
+				globalArtifact.functions.GetLength();
+			if( !EmitCanonicalStringGlobalInitializer(
+					context,
+					preparedBuilder,
+					engine,
+					module,
+					globalArtifact,
+					description->property,
+					declaration,
+					dataType,
+					stringConstants,
+					false)
+				|| globalArtifact.functions.GetLength()
+					!= functionCountBefore + 1 )
+			{
+				failed = true;
+				error = asNOT_SUPPORTED;
+				failureDetail.Format(
+					"prepared string global initializer emission failed (name=%s)",
+					description->name.AddressOf());
+				RollbackPreparedGlobals();
+				return error;
+			}
+			state.initializer = globalArtifact.functions[
+				globalArtifact.functions.GetLength() - 1];
+		}
+		else if( declaration->defaultArg.GetLength() != 0 )
 		{
 			if( (declaration->traits & asAST_TRAIT_DEFAULT_INITIALIZED) != 0 )
 			{
@@ -13121,7 +15223,7 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 			continue;
 		}
 		asCGlobalProperty* const property = FindRegisteredNativeGlobalProperty(
-			engine, bridge, context, declaration);
+			engine, module, bridge, context, declaration);
 		if( property == 0 )
 		{
 			failed = true;
@@ -13239,7 +15341,8 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		emitFunctions.PushLast(function);
 	}
 
-	// Generated accessors and destructors are semantic declarations rather than
+	// Generated accessors, destructors, and implicit script-value copy helpers
+	// are semantic declarations rather than
 	// Parser-authored functions, so Stage 2 cannot place them in
 	// preparedBuilder.functions. Build their Runtime signatures only from the
 	// sealed declaration and keep them in the same candidate artifact as prepared
@@ -13297,8 +15400,15 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		}
 
 		globalArtifact.functions.PushLast(function);
+		const bool hiddenImplicitCopyLifecycle =
+			declaration->origin.Equals(
+				"canonical-generated-implicit-copy-constructor")
+			|| declaration->origin.Equals(
+				"canonical-generated-implicit-assignment-operator");
 		globalArtifact.functionDeclKinds.PushLast(
-			static_cast<int>(declaration->kind));
+			hiddenImplicitCopyLifecycle
+				? asBYTECODE_CODEGEN_HIDDEN_OBJECT_HELPER
+				: static_cast<int>(declaration->kind));
 
 		asSCodeGenFuncBind bind;
 		bind.decl = declaration->id;
@@ -13779,7 +15889,32 @@ int asCBytecodeCodeGen::GeneratePreparedModule(
 		RollbackPreparedGlobals();
 		return error;
 	}
+	// The parallel/prepared source path owns the same executable-generation
+	// contract as detached module Build(): the verified binding table must be
+	// published with the functions and retained AST, not left behind in the
+	// temporary artifact. Allocate the generation after every semantic/address
+	// validation and the reversible TypeId commit, while rollback can still
+	// abandon all candidate bodies and projections on allocation failure.
+	const int generationResult = module->EnsureCanonicalRuntimeTypeGeneration();
+	if( generationResult < 0 )
+	{
+		failed = true;
+		error = generationResult;
+		lastFailLine = __LINE__;
+		failureDetail.Format(
+			"prepared Runtime type generation allocation failed: result=%d",
+			generationResult);
+		RollbackBodies();
+		RollbackPreparedGlobals();
+		return error;
+	}
 	CommitPreparedGlobals();
+	// CommitPreparedGlobals first installs generated accessors/destructors and
+	// initializer functions. Adopt afterwards so every module-owned function,
+	// including those generated in this transaction, borrows the exact same
+	// generation as the frozen Runtime binding table.
+	module->AdoptCanonicalRuntimeTypeBindings(
+		globalArtifact.runtimeTypeBindings);
 	for( asUINT i = 0; i < states.GetLength(); ++i )
 	{
 		asSPreparedBodyState& state = states[i];
@@ -13884,7 +16019,8 @@ int asCBytecodeCodeGen::GenerateInternal(
 	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
 	{
 		const asCDecl* decl = context.GetDecl(asASTDeclId(i));
-		if( decl == 0 )
+		if( decl == 0
+			|| decl->origin.Equals("canonical-native-type-view") )
 		{
 			continue;
 		}
@@ -13910,6 +16046,13 @@ int asCBytecodeCodeGen::GenerateInternal(
 	{
 		failed = true;
 		error = typeRegistrationResult;
+		lastFailLine = __LINE__;
+		if( failureDetail.GetLength() == 0 )
+		{
+			failureDetail.Format(
+				"RegisterCanonicalScriptTypes failed: error=%d",
+				typeRegistrationResult);
+		}
 		artifact.Abandon(engine);
 		return error;
 	}
@@ -13975,7 +16118,8 @@ int asCBytecodeCodeGen::GenerateInternal(
 			globalPropertyId,
 			child->name.AddressOf(),
 			dataType,
-			nameSpace);
+			nameSpace,
+			child->stableKey);
 		if( prop == 0 )
 		{
 			failed = true;
@@ -13985,7 +16129,21 @@ int asCBytecodeCodeGen::GenerateInternal(
 			return error;
 		}
 		artifact.globals.PushLast(prop);
-		if( child->defaultArg.GetLength() )
+		if( IsCanonicalEngineStringType(engine, dataType)
+			&& FindCanonicalStringLiteralInit(context, child) != 0 )
+		{
+			if( !EmitCanonicalStringGlobalInitializer(
+					context, builder, engine, module, artifact, prop, child,
+					dataType, stringConstants) )
+			{
+				failed = true;
+				error = asNOT_SUPPORTED;
+				artifact.Abandon(engine);
+				DiscardAllocatedGlobals(module, globals);
+				return error;
+			}
+		}
+		else if( child->defaultArg.GetLength() )
 		{
 			// The Sema-owned constant value is the source of truth. Re-parsing
 			// defaultArg here would make CodeGen depend on presentation text and
@@ -14077,7 +16235,7 @@ int asCBytecodeCodeGen::GenerateInternal(
 		if( property == 0 )
 		{
 			property = FindRegisteredNativeGlobalProperty(
-				engine, bridge, context, decl);
+				engine, module, bridge, context, decl);
 		}
 		if( property == 0 )
 		{
@@ -14133,11 +16291,30 @@ int asCBytecodeCodeGen::GenerateInternal(
 		asCArray<asCDataType> parameterTypes;
 		asCArray<asETypeModifiers> inOutFlags;
 		asCArray<asCString *> defaultArgs;
-		for( asUINT p = 0; p < decl->children.GetLength(); ++p )
+		asCCanonicalDefaultArgumentOwner defaultArgumentOwner(defaultArgs);
+		asCArray<asDWORD> sourceParameterQualifiers;
+		if( !asCRuntimeTypeBridge::CollectSourceParameterQualifiers(
+			context, decl->id, sourceParameterQualifiers) )
 		{
-			const asCDecl* child = context.GetDecl(decl->children[p]);
-			if( child == 0 || child->kind != asAST_DECL_PARAM )
-				continue;
+			failed = true;
+			error = asINVALID_DECLARATION;
+			artifact.Abandon(engine);
+			DiscardAllocatedGlobals(module, globals);
+			return error;
+		}
+		const asUINT formalCount = context.GetFormalDeclCount(decl->id);
+		for( asUINT formalIndex = 0; formalIndex < formalCount; ++formalIndex )
+		{
+			const asCDecl* child = context.GetFormalDecl(
+				decl->id, formalIndex);
+			if( child == 0 )
+			{
+				failed = true;
+				error = asINVALID_DECLARATION;
+				artifact.Abandon(engine);
+				DiscardAllocatedGlobals(module, globals);
+				return error;
+			}
 			asCDataType paramType = bridge.Resolve(context, child->type);
 			if( !paramType.IsValid() || paramType.GetTokenType() == ttVoid )
 			{
@@ -14147,11 +16324,30 @@ int asCBytecodeCodeGen::GenerateInternal(
 				DiscardAllocatedGlobals(module, globals);
 				return error;
 			}
+			asETypeModifiers passing = InOutFromQuals(child->type.quals);
+			// An explicit import names a script function and must publish the same
+			// maintained Runtime shell ABI as the provider Builder path.  Preserve
+			// the exact authored qualifiers in sourceParameterQualifiers, while
+			// normalizing the live datatype/passing pair used by import binding.
+			asCRuntimeTypeBridge::NormalizeScriptParameterABI(
+				paramType, passing);
 			parameterTypes.PushLast(paramType);
-			inOutFlags.PushLast(InOutFromQuals(child->type.quals));
-			defaultArgs.PushLast(0);
+			inOutFlags.PushLast(passing);
+			bool defaultAllocationFailed = false;
+			asCString* const defaultArgument = CloneCanonicalDefaultArgument(
+				child, defaultAllocationFailed);
+			if( defaultAllocationFailed )
+			{
+				failed = true;
+				error = asOUT_OF_MEMORY;
+				artifact.Abandon(engine);
+				DiscardAllocatedGlobals(module, globals);
+				return error;
+			}
+			defaultArgs.PushLast(defaultArgument);
 		}
 
+		defaultArgumentOwner.Release();
 		sBindInfo* importInfo = CreateCanonicalPendingImport(
 			engine,
 			module,
@@ -14162,7 +16358,9 @@ int asCBytecodeCodeGen::GenerateInternal(
 			inOutFlags,
 			defaultArgs,
 			nameSpace,
-			decl->origin);
+			decl->origin,
+			decl->stableKey,
+			sourceParameterQualifiers);
 		if( importInfo == 0 )
 		{
 			failed = true;
@@ -14278,6 +16476,20 @@ int asCBytecodeCodeGen::GenerateInternal(
 			&& (decl->traits & asAST_TRAIT_GENERATED) == 0 )
 		{
 			continue;
+		}
+		if( (decl->traits & asAST_TRAIT_GENERATED) != 0
+			&& decl->accessorKind == asAST_ACCESSOR_GET
+			&& decl->inits.GetLength() == 0 )
+		{
+			const asCType* const returnType = context.GetType(decl->type.type);
+			if( returnType != 0
+				&& returnType->kind == asAST_TYPE_TEMPLATE )
+			{
+				// TMap/TArray-style host values have no copy constructor.
+				// Keep the generated GetX declaration-only; field MEMBER_REF
+				// is the authored access path.
+				continue;
+			}
 		}
 		asCScriptFunction* func = asNEW(asCScriptFunction)(
 			engine, module, isInterfaceMethod ? asFUNC_INTERFACE : asFUNC_SCRIPT);
@@ -14565,16 +16777,18 @@ int asCBytecodeCodeGen::GenerateInternal(
 		builder.CompleteBuildArtifactCompile(
 			invocation, pair.factory, asSUCCESS, restoreResult, emitterInvoked);
 	}
+	asCString dispatchDetail;
 	const int dispatchPlanResult = PrepareCanonicalObjectDispatchPlans(
-		context, engine, bridge, binds, artifact);
+		context, engine, bridge, binds, artifact, true, &dispatchDetail);
 	if( dispatchPlanResult < 0 )
 	{
 		failed = true;
 		error = dispatchPlanResult;
 		lastFailLine = __LINE__;
 		failureDetail.Format(
-			"failed to prepare exact Canonical object dispatch projection: error=%d",
-			dispatchPlanResult);
+			"failed to prepare exact Canonical object dispatch projection: error=%d %s",
+			dispatchPlanResult,
+			dispatchDetail.AddressOf() ? dispatchDetail.AddressOf() : "");
 		artifact.Abandon(engine);
 		DiscardAllocatedGlobals(module, globals);
 		return error;

@@ -492,6 +492,98 @@ public:
 			"IOverloaded::Resolve(bool)")));
 	}
 
+	TEST_METHOD(ReorderedParamChildrenDoNotChangeOverrideAndInterfaceMatching)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asASTDeclId TranslationUnit =
+			Sema.ActOnTranslationUnit("CanonicalReorderedMethodRelations");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+
+		const asASTDeclId Interface = Sema.ActOnInterfaceDecl(
+			TranslationUnit, "IResolve", asCSourceRange());
+		const asASTDeclId InterfaceMethod = Sema.ActOnMethodDecl(
+			Interface, "Resolve", IntType, asCSourceRange());
+		Sema.ActOnParamDecl(
+			InterfaceMethod, "First", IntType, asCSourceRange());
+		Sema.ActOnParamDecl(
+			InterfaceMethod, "Second", BoolType, asCSourceRange());
+
+		const asASTDeclId Base = Sema.ActOnClassDecl(
+			TranslationUnit, "BaseResolve", asCSourceRange());
+		const asASTDeclId BaseMethod = Sema.ActOnMethodDecl(
+			Base, "Resolve", IntType, asCSourceRange());
+		Sema.ActOnParamDecl(BaseMethod, "First", IntType, asCSourceRange());
+		Sema.ActOnParamDecl(BaseMethod, "Second", BoolType, asCSourceRange());
+
+		const asASTDeclId Derived = Sema.ActOnClassDecl(
+			TranslationUnit, "DerivedResolve", asCSourceRange());
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.AddBase(Derived, Base)));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.AddBase(Derived, Interface)));
+		const asASTDeclId DerivedMethod = Sema.ActOnMethodDecl(
+			Derived, "Resolve", IntType, asCSourceRange());
+		const asASTDeclId First = Sema.ActOnParamDecl(
+			DerivedMethod, "First", IntType, asCSourceRange());
+		const asASTDeclId Second = Sema.ActOnParamDecl(
+			DerivedMethod, "Second", BoolType, asCSourceRange());
+		Sema.ActOnFunctionTraitsAction(
+			DerivedMethod, asAST_TRAIT_OVERRIDE);
+
+		asCDecl* const MutableMethod =
+			const_cast<asCDecl*>(Context.GetDecl(DerivedMethod));
+		ASSERT_THAT(IsNotNull(MutableMethod));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+			MutableMethod != nullptr ? MutableMethod->children.GetLength() : 0));
+		if (MutableMethod == nullptr || MutableMethod->children.GetLength() != 2)
+		{
+			return;
+		}
+		MutableMethod->children[0] = Second;
+		MutableMethod->children[1] = First;
+
+		ASSERT_THAT(IsTrue(
+			Context.GetFormalDecl(DerivedMethod, 0) != nullptr
+				&& Context.GetFormalDecl(DerivedMethod, 0)->id == First
+				&& Context.GetFormalDecl(DerivedMethod, 1) != nullptr
+				&& Context.GetFormalDecl(DerivedMethod, 1)->id == Second,
+			TEXT("the adversarial fixture must preserve sealed formal identity")));
+
+		Sema.ActOnRecordFinishAction(Derived);
+		const asCDecl* const DerivedDecl = Context.GetDecl(Derived);
+		ASSERT_THAT(IsNotNull(DerivedDecl));
+		bool HasOverride = false;
+		bool HasInterface = false;
+		for (asUINT RelationIndex = 0;
+			DerivedDecl != nullptr
+				&& RelationIndex < DerivedDecl->methodRelations.GetLength();
+			++RelationIndex)
+		{
+			const asSASTMethodRelation& Relation =
+				DerivedDecl->methodRelations[RelationIndex];
+			HasOverride |=
+				Relation.kind == asAST_METHOD_RELATION_BASE_OVERRIDE
+				&& Relation.implementation == DerivedMethod
+				&& Relation.requirement == BaseMethod;
+			HasInterface |=
+				Relation.kind == asAST_METHOD_RELATION_INTERFACE_IMPLEMENTATION
+				&& Relation.implementation == DerivedMethod
+				&& Relation.requirement == InterfaceMethod;
+		}
+		ASSERT_THAT(IsTrue(HasOverride,
+			TEXT("override matching must join parameters by formalIndex")));
+		ASSERT_THAT(IsTrue(HasInterface,
+			TEXT("interface matching must join parameters by formalIndex")));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal(),
+			TEXT("reordered structural children remain a valid sealed graph")));
+	}
+
 	TEST_METHOD(MissingInterfaceImplementationProducesSemaDiagnostic)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

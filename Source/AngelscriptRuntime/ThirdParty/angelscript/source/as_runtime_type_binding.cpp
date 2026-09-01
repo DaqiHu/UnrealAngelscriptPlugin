@@ -1,5 +1,7 @@
 #include "as_runtime_type_binding.h"
 
+#include <cstring>
+
 #include "as_module.h"
 #include "as_namespace.h"
 #include "as_objecttype.h"
@@ -130,6 +132,30 @@ namespace
 		return key;
 	}
 
+	asCString StripImplicitHandleMarks(const asCString& key)
+	{
+		asCString stripped;
+		stripped.Assign(key.AddressOf(), key.GetLength());
+		asUINT write = 0;
+		for( asUINT read = 0; read < stripped.GetLength(); ++read )
+		{
+			const char current = stripped[read];
+			if( current == '@' )
+			{
+				const char next = (read + 1 < stripped.GetLength())
+					? stripped[read + 1] : '\0';
+				if( next == '\0' || next == '>' || next == ',' || next == '&' )
+				{
+					continue;
+				}
+			}
+			stripped[write] = current;
+			++write;
+		}
+		stripped.SetLength(write);
+		return stripped;
+	}
+
 	bool RuntimeTypeMatchesStableKey(const asCTypeInfo* candidate, const char* stableKey)
 	{
 		if( candidate == 0 || stableKey == 0 || stableKey[0] == 0 )
@@ -159,12 +185,18 @@ namespace
 			asSNameSpace* const ns = candidate->engine->nameSpaces.GetLength()
 				? candidate->engine->nameSpaces[0]
 				: candidate->nameSpace;
-			if( formatted.Format(ns, true).Equals(stableKey) )
+			const asCString nominalWithNs = RuntimeNominalDataTypeKey(formatted, ns, true);
+			const asCString nominalBare = RuntimeNominalDataTypeKey(formatted, ns, false);
+			if( formatted.Format(ns, true).Equals(stableKey)
+				|| nominalWithNs.Equals(stableKey)
+				|| nominalBare.Equals(stableKey) )
 			{
 				return true;
 			}
-			if( RuntimeNominalDataTypeKey(formatted, ns, true).Equals(stableKey)
-				|| RuntimeNominalDataTypeKey(formatted, ns, false).Equals(stableKey) )
+			const asCString strippedKey = StripImplicitHandleMarks(asCString(stableKey));
+			if( StripImplicitHandleMarks(nominalWithNs).Equals(strippedKey)
+				|| StripImplicitHandleMarks(nominalBare).Equals(strippedKey)
+				|| StripImplicitHandleMarks(formatted.Format(ns, true)).Equals(strippedKey) )
 			{
 				return true;
 			}
@@ -236,6 +268,17 @@ namespace
 			{
 				AddUniqueCandidate(outCandidates, module->typeDefs[t], stableKey);
 			}
+			for( int t = 0; t < module->templateInstances.Num(); ++t )
+			{
+				AddUniqueCandidate(outCandidates, module->templateInstances[t], stableKey);
+			}
+		}
+		for( const auto& bucket : engine->templateInstanceBuckets )
+		{
+			for( asCObjectType* const instance : bucket.Value )
+			{
+				AddUniqueCandidate(outCandidates, instance, stableKey);
+			}
 		}
 		if( outCandidates.GetLength() != 0 )
 		{
@@ -247,9 +290,86 @@ namespace
 			stableKey);
 		if( outCandidates.GetLength() == 0 )
 		{
-			AddUniqueCandidate(outCandidates,
-				static_cast<asCTypeInfo*>(engine->GetTypeInfoByDecl(stableKey)),
-				stableKey);
+			asCTypeInfo* const byDecl =
+				static_cast<asCTypeInfo*>(engine->GetTypeInfoByDecl(stableKey));
+			if( byDecl != 0 && !outCandidates.Exists(byDecl) )
+			{
+				// GetTypeInfoByDecl parsed the exact Canonical key. Template
+				// instances keep the base name (`TSubclassOf`) while the sealed
+				// key includes subtypes; do not reject that engine-owned match.
+				outCandidates.PushLast(byDecl);
+			}
+		}
+		if( outCandidates.GetLength() == 0 )
+		{
+			const char* const open = strchr(stableKey, '<');
+			const asUINT keyLength = asCString(stableKey).GetLength();
+			if( open != 0 && keyLength > 0 && stableKey[keyLength - 1] == '>' )
+			{
+				asCString baseName;
+				baseName.Assign(stableKey, asUINT(open - stableKey));
+				asCString innerName;
+				innerName.Assign(
+					open + 1,
+					asUINT((stableKey + keyLength - 1) - (open + 1)));
+				if( innerName.GetLength() != 0 && innerName[innerName.GetLength() - 1] == '@' )
+				{
+					innerName.SetLength(innerName.GetLength() - 1);
+				}
+				asCObjectType* const templateType = CastToObjectType(
+					static_cast<asCTypeInfo*>(engine->GetTypeInfoByName(baseName.AddressOf())));
+				asCTypeInfo* innerType =
+					static_cast<asCTypeInfo*>(engine->GetTypeInfoByName(innerName.AddressOf()));
+				if( innerType == 0 )
+				{
+					for( asUINT m = 0;
+						innerType == 0 && m < engine->scriptModules.GetLength();
+						++m )
+					{
+						asCModule* const module = engine->scriptModules[m];
+						if( module == 0 )
+						{
+							continue;
+						}
+						for( asUINT t = 0; t < module->classTypes.GetLength(); ++t )
+						{
+							if( module->classTypes[t] != 0
+								&& module->classTypes[t]->name.Equals(
+									innerName.AddressOf()) )
+							{
+								innerType = module->classTypes[t];
+								break;
+							}
+						}
+					}
+				}
+				if( templateType != 0 && innerType != 0
+					&& (templateType->GetFlags() & asOBJ_TEMPLATE) != 0 )
+				{
+					asCArray<asCDataType> subTypes;
+					asCDataType subType = asCDataType::CreateType(innerType, false);
+					if( (innerType->GetFlags() & asOBJ_REF) != 0
+						&& (innerType->GetFlags() & asOBJ_IMPLICIT_HANDLE) == 0 )
+					{
+						subType.MakeHandle(true);
+					}
+					subTypes.PushLast(subType);
+					asCObjectType* instance = engine->GetTemplateInstanceType(
+						templateType, subTypes, innerType->module);
+					if( instance == 0 && !subType.IsObjectHandle()
+						&& (innerType->GetFlags() & asOBJ_REF) != 0 )
+					{
+						subType.MakeHandle(true);
+						subTypes[0] = subType;
+						instance = engine->GetTemplateInstanceType(
+							templateType, subTypes, innerType->module);
+					}
+					if( instance != 0 && !outCandidates.Exists(instance) )
+					{
+						outCandidates.PushLast(instance);
+					}
+				}
+			}
 		}
 	}
 
@@ -354,7 +474,18 @@ namespace
 		for( asUINT i = 1; i <= context.GetTypeCount(); ++i )
 		{
 			const asCType* const candidate = context.GetType(asASTTypeRef(i));
-			if( candidate == 0 || candidate->kind != kind )
+			if( candidate == 0 )
+				continue;
+			const bool kindMatches = candidate->kind == kind
+				|| ((kind == asAST_TYPE_VALUE_OBJECT
+						|| kind == asAST_TYPE_TEMPLATE)
+					&& (candidate->kind == asAST_TYPE_VALUE_OBJECT
+						|| candidate->kind == asAST_TYPE_TEMPLATE))
+				|| ((kind == asAST_TYPE_VALUE_OBJECT
+						|| kind == asAST_TYPE_REFERENCE_OBJECT)
+					&& (candidate->kind == asAST_TYPE_VALUE_OBJECT
+						|| candidate->kind == asAST_TYPE_REFERENCE_OBJECT));
+			if( !kindMatches )
 				continue;
 			if( kind == asAST_TYPE_PRIMITIVE )
 			{
@@ -690,6 +821,73 @@ namespace
 		}
 		return result;
 	}
+
+	int ResolveSignatureRuntimeCoordinate(
+		const asSTypeRelocation& relocation,
+		const asCArray<asCScriptFunction*>* transientFunctions,
+		asCScriptFunction*& outOwner,
+		asCTypeInfo*& outType,
+		asCString* detail)
+	{
+		outOwner = 0;
+		outType = 0;
+		if( relocation.use != asTYPE_RELOC_FUNCTION_SIGNATURE
+			|| relocation.ownerFunctionStableKey.GetLength() == 0
+			|| relocation.signatureRole == asRUNTIME_TYPE_SIGNATURE_NONE
+			|| transientFunctions == 0
+			|| relocation.functionArtifactIndex >= transientFunctions->GetLength() )
+		{
+			SetDetail(detail, "invalid function signature binding coordinate",
+				relocation.ownerFunctionStableKey.AddressOf());
+			return asRUNTIME_TYPE_BIND_INVALID;
+		}
+
+		outOwner = (*transientFunctions)[relocation.functionArtifactIndex];
+		if( outOwner == 0
+			|| !outOwner->canonicalASTStableDeclKey.Equals(
+				relocation.ownerFunctionStableKey) )
+		{
+			SetDetail(detail, "function signature owner identity mismatch",
+				relocation.ownerFunctionStableKey.AddressOf());
+			return asRUNTIME_TYPE_BIND_MEMBER_MISSING;
+		}
+
+		if( relocation.signatureRole == asRUNTIME_TYPE_SIGNATURE_RETURN )
+		{
+			if( relocation.formalIndex != asUINT(-1) )
+				return asRUNTIME_TYPE_BIND_INVALID;
+			outType = outOwner->returnType.GetTypeInfo();
+		}
+		else if( relocation.signatureRole
+			== asRUNTIME_TYPE_SIGNATURE_PARAMETER )
+		{
+			if( relocation.formalIndex >= outOwner->parameterTypes.GetLength() )
+			{
+				SetDetail(detail, "function signature formal index out of range",
+					relocation.ownerFunctionStableKey.AddressOf());
+				return asRUNTIME_TYPE_BIND_INVALID;
+			}
+			outType = outOwner->parameterTypes[relocation.formalIndex].GetTypeInfo();
+		}
+		else if( relocation.signatureRole == asRUNTIME_TYPE_SIGNATURE_RECEIVER )
+		{
+			if( relocation.formalIndex != asUINT(-1)
+				|| outOwner->objectType == 0 )
+				return asRUNTIME_TYPE_BIND_INVALID;
+			outType = outOwner->objectType;
+		}
+		else
+		{
+			return asRUNTIME_TYPE_BIND_INVALID;
+		}
+		if( outType == 0 )
+		{
+			SetDetail(detail, "function signature runtime type missing",
+				relocation.ownerFunctionStableKey.AddressOf());
+			return asRUNTIME_TYPE_BIND_ABI_MISMATCH;
+		}
+		return asRUNTIME_TYPE_BIND_OK;
+	}
 }
 
 asSRuntimeTypeBindingEnvironment asMakeCurrentRuntimeTypeBindingEnvironment()
@@ -774,8 +972,21 @@ int asCRuntimeTypeBindingTable::ResolveCanonicalType(
 	}
 	if( RuntimeTypeKind(candidates[0]) != type->kind )
 	{
-		SetDetail(detail, "wrong runtime type kind", type->stableKey.AddressOf());
-		return asRUNTIME_TYPE_BIND_WRONG_KIND;
+		const asEASTTypeKind runtimeKind = RuntimeTypeKind(candidates[0]);
+		const bool templateValueAlias =
+			(type->kind == asAST_TYPE_VALUE_OBJECT
+				&& runtimeKind == asAST_TYPE_TEMPLATE)
+			|| (type->kind == asAST_TYPE_TEMPLATE
+				&& runtimeKind == asAST_TYPE_VALUE_OBJECT)
+			|| (type->kind == asAST_TYPE_VALUE_OBJECT
+				&& runtimeKind == asAST_TYPE_REFERENCE_OBJECT)
+			|| (type->kind == asAST_TYPE_REFERENCE_OBJECT
+				&& runtimeKind == asAST_TYPE_VALUE_OBJECT);
+		if( !templateValueAlias )
+		{
+			SetDetail(detail, "wrong runtime type kind", type->stableKey.AddressOf());
+			return asRUNTIME_TYPE_BIND_WRONG_KIND;
+		}
 	}
 
 	outTypeInfo = candidates[0];
@@ -919,6 +1130,21 @@ int asCRuntimeTypeBindingTable::Build(
 			return asRUNTIME_TYPE_BIND_WRONG_NATIVE_ENVIRONMENT;
 		}
 
+		asCArray<asCTypeInfo*> exactSignatureTypes;
+		asCScriptFunction* signatureOwner = 0;
+		asCTypeInfo* signatureType = 0;
+		const asCArray<asCTypeInfo*>* resolutionTypes = transientTypes;
+		if( relocation.use == asTYPE_RELOC_FUNCTION_SIGNATURE )
+		{
+			const int coordinateResult = ResolveSignatureRuntimeCoordinate(
+				relocation, transientFunctions, signatureOwner, signatureType,
+				detail);
+			if( coordinateResult != asRUNTIME_TYPE_BIND_OK )
+				return coordinateResult;
+			exactSignatureTypes.PushLast(signatureType);
+			resolutionTypes = &exactSignatureTypes;
+		}
+
 		bool foundWrongKind = false;
 		const asCType* const type = FindCanonicalType(context, expected, foundWrongKind);
 		if( type == 0 )
@@ -932,7 +1158,7 @@ int asCRuntimeTypeBindingTable::Build(
 		asCDataType dataType;
 		asCTypeInfo* typeInfo = 0;
 		const int resolveResult = ResolveCanonicalType(
-			engine, context, canonicalType, dataType, typeInfo, transientTypes, detail);
+			engine, context, canonicalType, dataType, typeInfo, resolutionTypes, detail);
 		if( resolveResult != asRUNTIME_TYPE_BIND_OK )
 		{
 			return resolveResult;
@@ -940,7 +1166,7 @@ int asCRuntimeTypeBindingTable::Build(
 
 		asSTypeABIKey actual;
 		const int captureResult = CaptureExpectedABI(
-			engine, context, canonicalType, environment, actual, transientTypes, detail);
+			engine, context, canonicalType, environment, actual, resolutionTypes, detail);
 		if( captureResult != asRUNTIME_TYPE_BIND_OK )
 		{
 			return captureResult;
@@ -952,10 +1178,26 @@ int asCRuntimeTypeBindingTable::Build(
 		}
 
 		asSResolvedRuntimeTypeBinding binding;
+		binding.expectedKey = expected;
 		binding.key = actual;
+		binding.ownerFunctionStableKey = relocation.ownerFunctionStableKey;
+		binding.relocationUse = relocation.use;
+		binding.signatureRole = relocation.signatureRole;
+		binding.formalIndex = relocation.formalIndex;
 		binding.dataType = dataType;
 		binding.typeInfo = typeInfo;
 		binding.publicTypeId = ExistingPublicTypeIdProjection(engine, dataType);
+
+		if( relocation.use == asTYPE_RELOC_FUNCTION_SIGNATURE )
+		{
+			binding.ownerFunction = signatureOwner;
+			if( signatureType != binding.typeInfo )
+			{
+				SetDetail(detail, "function signature runtime type mismatch",
+					relocation.ownerFunctionStableKey.AddressOf());
+				return asRUNTIME_TYPE_BIND_ABI_MISMATCH;
+			}
+		}
 
 		if( relocation.use == asTYPE_RELOC_PROPERTY )
 		{

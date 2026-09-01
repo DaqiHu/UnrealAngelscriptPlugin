@@ -43,6 +43,10 @@ namespace CanonicalASTSemaWildcardValueArgTest
 	static void ObserveWildcard(asIScriptGeneric*)
 	{
 	}
+
+	static void ApplyFormatUnused(asIScriptGeneric*)
+	{
+	}
 }
 
 TEST_CLASS_WITH_FLAGS(FCanonicalASTSemaWildcardValueArgTests,
@@ -177,6 +181,105 @@ public:
 				Formal->type.IsReference() ? TEXT("yes") : TEXT("no"),
 				Formal->type.IsHandle() ? TEXT("yes") : TEXT("no"),
 				*Text)));
+	}
+
+	TEST_METHOD(EnumArgumentSelectsWildcardOverIntegerOverloads)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterEnum("EVis") >= 0,
+			TEXT("enum wildcard-ranking fixture enum must register")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterEnumValue(
+			"EVis", "Collapsed", 1) >= 0,
+			TEXT("enum wildcard-ranking fixture enumerator must register")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterGlobalFunction(
+			"int ApplyFormat(int Value, int Specifier)",
+			asFUNCTION(CanonicalASTSemaWildcardValueArgTest::ApplyFormatUnused),
+			asCALL_GENERIC) >= 0,
+			TEXT("int ApplyFormat overload must register")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterGlobalFunction(
+			"int ApplyFormat(int64 Value, int Specifier)",
+			asFUNCTION(CanonicalASTSemaWildcardValueArgTest::ApplyFormatUnused),
+			asCALL_GENERIC) >= 0,
+			TEXT("int64 ApplyFormat overload must register")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterGlobalFunction(
+			"int ApplyFormat(const ?&in Value, int Specifier)",
+			asFUNCTION(CanonicalASTSemaWildcardValueArgTest::ApplyFormatUnused),
+			asCALL_GENERIC) >= 0,
+			TEXT("wildcard ApplyFormat overload must register")));
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaEnumWildcardApplyFormat");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaEnumWildcardApplyFormat module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		asCScriptCode Code;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int FormatCollapsedName()
+			{
+				return ApplyFormat(EVis::Collapsed, 1);
+			}
+			)AS");
+		Code.SetCode("SemaEnumWildcardApplyFormat.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("enum ApplyFormat fixture must parse")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("enum ApplyFormat fixture must seal without CodeGen")));
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Text = AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
+		const FString DumpMsg = FString::Printf(
+			TEXT("enum must select const ?&in, not integer overloads. dump:\n%s"),
+			*Text);
+
+		const asCDecl* Callee = nullptr;
+		for (asUINT ExprIndex = 1; ExprIndex <= Context.GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Expr = Context.GetExpr(asASTExprId(ExprIndex));
+			if (Expr == nullptr || Expr->kind != asAST_EXPR_CALL)
+			{
+				continue;
+			}
+			const asCDecl* const Target = Context.GetDecl(Expr->resolvedDecl);
+			if (Target != nullptr && Target->name.Equals("ApplyFormat"))
+			{
+				Callee = Target;
+				break;
+			}
+		}
+		ASSERT_THAT(IsNotNull(Callee, *DumpMsg));
+		if (Callee == nullptr)
+		{
+			return;
+		}
+
+		bool bSawWildcard = false;
+		asUINT FormalCount = 0;
+		for (asUINT ChildIndex = 0; ChildIndex < Callee->children.GetLength(); ++ChildIndex)
+		{
+			const asCDecl* const Param = Context.GetDecl(Callee->children[ChildIndex]);
+			if (Param == nullptr || Param->kind != asAST_DECL_PARAM)
+			{
+				continue;
+			}
+			++FormalCount;
+			if (FormalCount != 1)
+			{
+				continue;
+			}
+			const asCType* const FormalType = Context.GetType(Param->type.type);
+			bSawWildcard = FormalType != nullptr
+				&& FormalType->kind == asAST_TYPE_WILDCARD;
+		}
+		ASSERT_THAT(IsTrue(bSawWildcard, *DumpMsg));
 	}
 };
 

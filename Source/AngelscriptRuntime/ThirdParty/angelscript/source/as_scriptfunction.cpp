@@ -457,6 +457,7 @@ void asCScriptFunction::DestroyInternal()
 			templateSubTypes[subtypeIndex].GetTypeInfo()->ReleaseInternal();
 	templateSubTypes.SetLength(0);
 	parameterTypes.SetLength(0);
+	canonicalASTSourceParameterQualifiers.SetLength(0);
 	returnType = asCDataType::CreatePrimitive(ttVoid, false);
 
 	for( asUINT p = 0; p < defaultArgs.GetLength(); p++ )

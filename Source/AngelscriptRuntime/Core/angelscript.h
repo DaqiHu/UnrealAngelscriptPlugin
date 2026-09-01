@@ -1182,6 +1182,13 @@ enum asEASTDeclTrait : asDWORD
 	asAST_TRAIT_ACCESS_READONLY = 1u << 16,
 	asAST_TRAIT_ACCESS_EDITDEFAULTS = 1u << 17,
 	asAST_TRAIT_ACCESS_INHERITED = 1u << 18,
+	// The constructor may participate in one target-side implicit object
+	// conversion. This is a stable Sema fact projected from registration; the
+	// sealed AST never persists the Engine-local function id used to discover it.
+	asAST_TRAIT_IMPLICIT_CONSTRUCTOR = 1u << 19,
+	// Availability of a declaration in editor-only source. Runtime asTRAIT_EDITOR_ONLY
+	// is a current-generation projection; this Canonical bit is the sealed fact.
+	asAST_TRAIT_EDITOR_ONLY = 1u << 20,
 };
 
 struct asSASTSourceLocation
@@ -1238,6 +1245,9 @@ struct asSASTDeclView
 	// Append-only V1 extension. Older callers may pass the capacity ending at
 	// this field and still receive every preceding member.
 	asASTDeclId accessSpecifier;
+	// Append-only V1 extension. ParamDecl only: sealed source-level formal slot;
+	// 0xFFFFFFFF for every non-parameter declaration.
+	asUINT formalIndex;
 };
 
 struct asSASTStmtView

@@ -6009,16 +6009,80 @@ asITypeInfo *asCScriptEngine::GetFuncdefByIndex(asUINT index) const
 }
 
 // internal
+static bool FuncdefSourceFormalMetadataIsValid(
+	const asCScriptFunction &func)
+{
+	const asUINT parameterCount = func.parameterTypes.GetLength();
+	const asUINT qualifierCount =
+		func.canonicalASTSourceParameterQualifiers.GetLength();
+	if( qualifierCount != 0 && qualifierCount != parameterCount )
+		return false;
+
+	// A Canonical source shell with formals must carry one qualifier entry per
+	// source ordinal, including an explicit zero for an authored by-value
+	// formal. An empty vector is reserved for LEGACY and host/native functions,
+	// whose source spelling is not available.
+	if( parameterCount != 0
+		&& func.canonicalASTStableDeclKey.GetLength() != 0
+		&& qualifierCount != parameterCount )
+	{
+		return false;
+	}
+	return true;
+}
+
+static bool FuncdefSourceFormalMetadataMatches(
+	const asCScriptFunction &left,
+	const asCScriptFunction &right)
+{
+	if( !FuncdefSourceFormalMetadataIsValid(left)
+		|| !FuncdefSourceFormalMetadataIsValid(right) )
+	{
+		return false;
+	}
+
+	const bool leftHasExactSourceFormals = left.parameterTypes.GetLength() != 0
+		&& left.canonicalASTSourceParameterQualifiers.GetLength()
+			== left.parameterTypes.GetLength();
+	const bool rightHasExactSourceFormals = right.parameterTypes.GetLength() != 0
+		&& right.canonicalASTSourceParameterQualifiers.GetLength()
+			== right.parameterTypes.GetLength();
+	if( leftHasExactSourceFormals != rightHasExactSourceFormals )
+		return false;
+	if( !leftHasExactSourceFormals )
+		return true;
+
+	return left.canonicalASTSourceParameterQualifiers
+		== right.canonicalASTSourceParameterQualifiers;
+}
+
 asCFuncdefType *asCScriptEngine::FindMatchingFuncdef(asCScriptFunction *func, asCModule *module)
 {
-	asCFuncdefType *funcDef = func->funcdefType;
+	asCFuncdefType *funcDef = 0;
+
+	// asCScriptFunction::funcdefType is historical shared state in this fork,
+	// so it cannot authenticate the type of an arbitrary function. Recover a
+	// funcdef's own type by exact function identity before doing signature reuse.
+	for( asUINT n = 0; n < funcDefs.GetLength(); n++ )
+	{
+		if( funcDefs[n]->funcdef == func )
+		{
+			funcDef = funcDefs[n];
+			break;
+		}
+	}
 
 	if (funcDef == 0)
 	{
+		if( !FuncdefSourceFormalMetadataIsValid(*func) )
+			return 0;
+
 		// Check if there is any matching funcdefs already in the engine that can be reused
 		for (asUINT n = 0; n < funcDefs.GetLength(); n++)
 		{
-			if (funcDefs[n]->funcdef->IsSignatureExceptNameEqual(func))
+			if (funcDefs[n]->funcdef->IsSignatureExceptNameEqual(func)
+				&& FuncdefSourceFormalMetadataMatches(
+					*funcDefs[n]->funcdef, *func))
 			{
 				if (func->IsShared() && !funcDefs[n]->funcdef->IsShared())
 					continue;
@@ -6042,6 +6106,8 @@ asCFuncdefType *asCScriptEngine::FindMatchingFuncdef(asCScriptFunction *func, as
 		fd->spaceNeededForArguments = func->spaceNeededForArguments;
 		fd->totalSpaceBeforeFunction = func->totalSpaceBeforeFunction;
 		fd->inOutFlags = func->inOutFlags;
+		fd->canonicalASTSourceParameterQualifiers =
+			func->canonicalASTSourceParameterQualifiers;
 
 		funcDef = asNEW(asCFuncdefType)(this, fd);
 		funcDefs.PushLast(funcDef); // doesn't increase the refCount
@@ -6389,6 +6455,137 @@ void asCScriptEngine::CopyCanonicalTemplateDeclarations(
 }
 
 // internal
+int asCScriptEngine::RegisterCanonicalTypeBaseRelation(
+	const char* derivedStableKey,
+	const char* baseStableKey)
+{
+	if( derivedStableKey == 0 || derivedStableKey[0] == '\0'
+		|| baseStableKey == 0 || baseStableKey[0] == '\0' )
+	{
+		return asINVALID_ARG;
+	}
+
+	const asCString derived(derivedStableKey);
+	const asCString base(baseStableKey);
+	if( derived.Equals(base) )
+	{
+		return asINVALID_ARG;
+	}
+
+	asSMapNode<asCString, asCArray<asCString> >* relation = 0;
+	if( canonicalRegisteredTypeBaseRelations.MoveTo(&relation, derived) )
+	{
+		asCArray<asCString>& bases =
+			canonicalRegisteredTypeBaseRelations.GetValue(relation);
+		for( asUINT baseIndex = 0; baseIndex < bases.GetLength(); ++baseIndex )
+		{
+			if( bases[baseIndex].Equals(base) )
+			{
+				return asSUCCESS;
+			}
+		}
+		bases.PushLast(base);
+		return asSUCCESS;
+	}
+
+	asCArray<asCString> bases;
+	bases.PushLast(base);
+	canonicalRegisteredTypeBaseRelations.Insert(derived, bases);
+	return asSUCCESS;
+}
+
+static asSCanonicalRegisteredTypeRefFact CanonicalRegisteredTypeRefFromDataType(
+	const asCScriptEngine* engine,
+	asCDataType sourceType,
+	asETypeModifiers passing)
+{
+	asSCanonicalRegisteredTypeRefFact fact;
+	if( engine == 0 )
+	{
+		return fact;
+	}
+
+	const bool normalizedValueObject =
+		sourceType.GetTypeInfo() != 0
+		&& (sourceType.GetTypeInfo()->GetFlags() & asOBJ_VALUE) != 0
+		&& sourceType.IsReference()
+		&& sourceType.IsReadOnly()
+		&& passing == asTM_INOUTREF;
+	if( normalizedValueObject )
+	{
+		sourceType.MakeReference(false);
+		sourceType.MakeReadOnly(false);
+		passing = asTM_NONE;
+	}
+	else if( sourceType.IsPrimitive() && !sourceType.IsReference()
+		&& sourceType.IsReadOnly() && passing == asTM_NONE )
+	{
+		sourceType.MakeReadOnly(false);
+	}
+
+	asSNameSpace* const ns = engine->nameSpaces.GetLength() != 0
+		? engine->nameSpaces[0] : 0;
+	if( sourceType.GetTokenType() == ttVoid )
+	{
+		fact.kind = asAST_TYPE_VOID;
+		fact.primitiveToken = ttVoid;
+		fact.stableKey = "void";
+	}
+	else if( sourceType.IsPrimitive() )
+	{
+		fact.kind = asAST_TYPE_PRIMITIVE;
+		fact.primitiveToken = sourceType.GetTokenType();
+		fact.stableKey = sourceType.Format(ns, true);
+	}
+	else if( asCTypeInfo* const typeInfo = sourceType.GetTypeInfo() )
+	{
+		if( typeInfo->flags & asOBJ_FUNCDEF )
+		{
+			fact.kind = asAST_TYPE_FUNCDEF;
+		}
+		else if( typeInfo->flags & asOBJ_ENUM )
+		{
+			fact.kind = asAST_TYPE_ENUM;
+		}
+		else if( typeInfo->flags & asOBJ_REF )
+		{
+			fact.kind = asAST_TYPE_REFERENCE_OBJECT;
+		}
+		else
+		{
+			fact.kind = asAST_TYPE_VALUE_OBJECT;
+		}
+		fact.stableKey = asCDataType::CreateType(typeInfo, false).Format(ns, true);
+	}
+	else
+	{
+		return fact;
+	}
+
+	if( sourceType.IsReadOnly() )
+	{
+		fact.quals |= asAST_QUAL_CONST;
+	}
+	if( sourceType.IsReference() || passing != asTM_NONE )
+	{
+		fact.quals |= asAST_QUAL_REFERENCE;
+	}
+	if( passing == asTM_INREF )
+	{
+		fact.quals |= asAST_QUAL_IN;
+	}
+	else if( passing == asTM_OUTREF )
+	{
+		fact.quals |= asAST_QUAL_OUT;
+	}
+	else if( passing == asTM_INOUTREF
+		|| (passing == asTM_NONE && sourceType.IsReference()) )
+	{
+		fact.quals |= asAST_QUAL_INOUT;
+	}
+	return fact;
+}
+
 void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 	asCArray<asSCanonicalRegisteredTypeDeclarationFact>& outDeclarations,
 	const asCModule* importedTypeAuthority) const
@@ -6396,7 +6593,35 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 	outDeclarations.SetLength(0);
 	asCMap<asCString, asSCanonicalRegisteredTypeDeclarationFact>
 		declarationsByStableKey;
-	auto appendTypeFact = [this, &declarationsByStableKey](asCTypeInfo* type)
+	auto stableKeyForType = [this](asCTypeInfo* type)
+	{
+		asCString stableKey;
+		if( type == 0 )
+		{
+			return stableKey;
+		}
+		const asCFuncdefType* const funcdef = CastToFuncdefType(type);
+		if( funcdef != 0 && funcdef->parentClass != 0 )
+		{
+			// Member funcdefs need their parent's complete namespace-qualified
+			// spelling; asCDataType::Format intentionally omits it here.
+			if( funcdef->parentClass->nameSpace != 0
+				&& funcdef->parentClass->nameSpace->name.GetLength() != 0 )
+			{
+				stableKey = funcdef->parentClass->nameSpace->name;
+				stableKey += "::";
+			}
+			stableKey += funcdef->parentClass->name;
+			stableKey += "::";
+			stableKey += type->name;
+			return stableKey;
+		}
+		const asCDataType dataType = asCDataType::CreateType(type, false);
+		return dataType.Format(
+			nameSpaces.GetLength() != 0 ? nameSpaces[0] : 0, true);
+	};
+	auto appendTypeFact = [this, importedTypeAuthority, &declarationsByStableKey,
+		&stableKeyForType](asCTypeInfo* type)
 	{
 		if( type == 0
 			|| (type->flags & (asOBJ_TEMPLATE
@@ -6415,29 +6640,17 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 			return;
 		}
 
+		// Script types from historical modules remain alive for Hot Reload, but
+		// they are not Canonical lookup candidates unless this build imports them.
+		if( importedTypeAuthority != 0 && type->module != 0
+			&& type->module != importedTypeAuthority
+			&& !importedTypeAuthority->importedModules.Exists(type->module) )
+		{
+			return;
+		}
+
 		asSCanonicalRegisteredTypeDeclarationFact fact;
-		if( funcdef != 0 && funcdef->parentClass != 0 )
-		{
-			// asCDataType::Format intentionally uses only parentClass->name for a
-			// member funcdef whose own namespace pointer is null. Canonical identity
-			// must retain the parent's complete namespace-qualified stable key.
-			if( funcdef->parentClass->nameSpace != 0
-				&& funcdef->parentClass->nameSpace->name.GetLength() != 0 )
-			{
-				fact.stableKey = funcdef->parentClass->nameSpace->name;
-				fact.stableKey += "::";
-			}
-			fact.stableKey += funcdef->parentClass->name;
-			fact.stableKey += "::";
-			fact.stableKey += type->name;
-		}
-		else
-		{
-			const asCDataType dataType =
-				asCDataType::CreateType(type, false);
-			fact.stableKey = dataType.Format(
-				nameSpaces.GetLength() != 0 ? nameSpaces[0] : 0, true);
-		}
+		fact.stableKey = stableKeyForType(type);
 		if( fact.stableKey.GetLength() == 0 )
 		{
 			return;
@@ -6468,6 +6681,40 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 		else if( type->flags & asOBJ_FUNCDEF )
 		{
 			fact.kind = asAST_TYPE_FUNCDEF;
+			if( funcdef != 0 && funcdef->funcdef != 0 )
+			{
+				const asCScriptFunction* const function = funcdef->funcdef;
+				fact.funcdefReturn = CanonicalRegisteredTypeRefFromDataType(
+					this, function->returnType, asTM_NONE);
+				for( asUINT parameterIndex = 0;
+					parameterIndex < function->parameterTypes.GetLength();
+					++parameterIndex )
+				{
+					asSCanonicalRegisteredTypeRefFact formal;
+					if( parameterIndex
+						< function->canonicalASTSourceParameterQualifiers.GetLength() )
+					{
+						formal = CanonicalRegisteredTypeRefFromDataType(
+							this,
+							function->parameterTypes[parameterIndex],
+							asTM_NONE);
+						formal.quals =
+							function->canonicalASTSourceParameterQualifiers[parameterIndex];
+					}
+					else
+					{
+						const asETypeModifiers passing =
+							parameterIndex < function->inOutFlags.GetLength()
+								? function->inOutFlags[parameterIndex]
+								: asTM_NONE;
+						formal = CanonicalRegisteredTypeRefFromDataType(
+							this,
+							function->parameterTypes[parameterIndex],
+							passing);
+					}
+					fact.funcdefFormals.PushLast(formal);
+				}
+			}
 		}
 		else if( type->flags & asOBJ_REF )
 		{
@@ -6479,6 +6726,45 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 		}
 		const asCObjectType* const objectType = CastToObjectType(type);
 		fact.isInterface = objectType != 0 && objectType->IsInterface();
+		auto appendBaseStableKey = [&fact](const asCString& baseStableKey)
+		{
+			if( baseStableKey.GetLength() == 0 )
+			{
+				return;
+			}
+			for( asUINT baseIndex = 0;
+				baseIndex < fact.baseStableKeys.GetLength(); ++baseIndex )
+			{
+				if( fact.baseStableKeys[baseIndex].Equals(baseStableKey) )
+				{
+					return;
+				}
+			}
+			fact.baseStableKeys.PushLast(baseStableKey);
+		};
+		if( objectType != 0 )
+		{
+			appendBaseStableKey(stableKeyForType(objectType->derivedFrom));
+			for( asUINT interfaceIndex = 0;
+				interfaceIndex < objectType->interfaces.GetLength();
+				++interfaceIndex )
+			{
+				appendBaseStableKey(stableKeyForType(
+					objectType->interfaces[interfaceIndex]));
+			}
+		}
+		asSMapNode<asCString, asCArray<asCString> >* hostRelation = 0;
+		if( canonicalRegisteredTypeBaseRelations.MoveTo(
+			&hostRelation, fact.stableKey) )
+		{
+			const asCArray<asCString>& hostBases =
+				canonicalRegisteredTypeBaseRelations.GetValue(hostRelation);
+			for( asUINT baseIndex = 0;
+				baseIndex < hostBases.GetLength(); ++baseIndex )
+			{
+				appendBaseStableKey(hostBases[baseIndex]);
+			}
+		}
 
 		// Symbol-map iteration order is not an authority decision. Collapse equal
 		// declarations and make conflicting facts deterministically ambiguous so
@@ -6496,6 +6782,26 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 			bool sameEnumerators =
 				existing.enumerators.GetLength()
 					== fact.enumerators.GetLength();
+			bool sameFuncdef =
+				existing.funcdefReturn.Equals(fact.funcdefReturn)
+				&& existing.funcdefFormals.GetLength()
+					== fact.funcdefFormals.GetLength();
+			for( asUINT formalIndex = 0;
+				sameFuncdef && formalIndex < existing.funcdefFormals.GetLength();
+				++formalIndex )
+			{
+				sameFuncdef = existing.funcdefFormals[formalIndex].Equals(
+					fact.funcdefFormals[formalIndex]);
+			}
+			bool sameBases = existing.baseStableKeys.GetLength()
+				== fact.baseStableKeys.GetLength();
+			for( asUINT baseIndex = 0;
+				sameBases && baseIndex < existing.baseStableKeys.GetLength();
+				++baseIndex )
+			{
+				sameBases = existing.baseStableKeys[baseIndex].Equals(
+					fact.baseStableKeys[baseIndex]);
+			}
 			for( asUINT enumeratorIndex = 0;
 				sameEnumerators
 					&& enumeratorIndex < existing.enumerators.GetLength();
@@ -6510,7 +6816,9 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 				|| existing.isInterface != fact.isInterface
 				|| (existing.flags & semanticFlags)
 					!= (fact.flags & semanticFlags)
-				|| !sameEnumerators )
+				|| !sameBases
+				|| !sameEnumerators
+				|| !sameFuncdef )
 			{
 				existing.ambiguous = true;
 			}
@@ -6519,6 +6827,11 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 		declarationsByStableKey.Insert(fact.stableKey, fact);
 	};
 	allRegisteredTypes.IterateAll(appendTypeFact);
+	for( asUINT funcdefIndex = 0;
+		funcdefIndex < funcDefs.GetLength(); ++funcdefIndex )
+	{
+		appendTypeFact(funcDefs[funcdefIndex]);
+	}
 
 	// Parser type lookup checks the build module's flattened imports before any
 	// Engine-wide declaration. Copy that exact current dependency authority into

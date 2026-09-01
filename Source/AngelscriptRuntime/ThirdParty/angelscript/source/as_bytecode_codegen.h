@@ -41,6 +41,16 @@ public:
 		asCModule* module,
 		bool addToModule,
 		asCScriptFunction** outFunction);
+	// Rebuild exactly one derived body into an already registered empty Runtime
+	// shell. The declaration inventory and function identity are owned by the
+	// caller (for example Cache V2 restoring a ClassGenerator helper); this entry
+	// only performs verified Canonical lowering and atomically replaces
+	// ScriptFunctionData. Failure restores the original empty body.
+	int GeneratePreparedFunctionBody(
+		const asCASTContext& context,
+		asCModule* module,
+		asASTDeclId declaration,
+		asCScriptFunction* function);
 	// UE's staged compiler has already registered and laid out the module's
 	// Runtime type/function/global shells before body generation. Lower the
 	// sealed graph into those exact objects without replacing their identity.

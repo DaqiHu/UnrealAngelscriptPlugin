@@ -1,5 +1,6 @@
 #include "AngelscriptTestMacros.h"
 #include "../Support/AngelscriptNativeCoreTestSupport.h"
+#include "../Support/AngelscriptNativeExecutionTestSupport.h"
 
 #include "CQTest.h"
 
@@ -8,6 +9,7 @@
 #include "HAL/ThreadSafeBool.h"
 
 #include "StartAngelscriptHeaders.h"
+#include "source/as_module.h"
 #include "source/as_objecttype.h"
 #include "source/as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
@@ -24,14 +26,33 @@ public:
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
 		Engine.Create(*TestRunner);
 		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("discard lifecycle coverage requires explicit Canonical selection")));
 
 		asIScriptModule* Module = nullptr;
 		ASSERT_THAT(AreEqual(0, AngelscriptNativeTestSupport::CompileNativeModule(
-			Engine.Get(), "DiscardSnap", "int F() { return 1; }", Module), TEXT("discard default should compile")));
+			Engine.Get(), "DiscardSnap", "int F() { return 1; }", Module),
+			TEXT("Canonical discard source should compile")));
+		asCModule* const InternalModule = static_cast<asCModule*>(Module);
 		ASSERT_THAT(AreEqual((int)asAST_DISCARD_AFTER_CODEGEN, (int)Module->GetASTRetentionPolicy(),
 			TEXT("default policy is discard")));
+		ASSERT_THAT(AreEqual(asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			InternalModule->GetLastBytecodePublisher(),
+			TEXT("discard must happen only after Canonical CodeGen publishes bytecode")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			InternalModule->GetLastLegacyCompilerInvocationCount(),
+			TEXT("Canonical discard must not invoke the legacy compiler")));
+		asQWORD CanonicalDigest = 0;
+		ASSERT_THAT(IsTrue(InternalModule->GetLastCanonicalCodeGenAstDigest(
+			CanonicalDigest) && CanonicalDigest != 0,
+			TEXT("discarded AST must be the same sealed graph consumed by Canonical CodeGen")));
 		ASSERT_THAT(IsTrue(Module->AcquireASTSnapshot(asAST_API_VERSION_1) == nullptr,
 			TEXT("discard policy must not publish a public snapshot")));
+		ASSERT_THAT(IsNull(InternalModule->GetCanonicalASTContext(),
+			TEXT("discard policy must release its pending Canonical AST after CodeGen")));
 	}
 
 	TEST_METHOD(RetainPolicyPublishesImmutableV1Snapshot)
@@ -201,6 +222,9 @@ public:
 		ASSERT_THAT(IsTrue(ParameterView.name != nullptr
 			&& FCStringAnsi::Strcmp(ParameterView.name, "Value") == 0,
 			TEXT("the resolved target is the original parameter declaration")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ParameterView.formalIndex,
+			TEXT("the public ParamDecl view exposes its sealed formal slot")));
 	}
 
 	TEST_METHOD(RetainedV1SnapshotPublishesAccessSpecifierAndCapacityAwareMemberEdge)
@@ -378,6 +402,15 @@ public:
 		ASSERT_THAT(AreEqual(static_cast<asUINT>(sizeof(asSASTDeclView)),
 			LegacyCapacity.structSize,
 			TEXT("the view reports the current implementation size without writing the appended field")));
+
+		asSASTDeclView AccessSpecifierCapacity = {};
+		AccessSpecifierCapacity.structSize = static_cast<asUINT>(
+			offsetof(asSASTDeclView, formalIndex));
+		ASSERT_THAT(AreEqual(0,
+			Snapshot->GetDecl(Field, &AccessSpecifierCapacity),
+			TEXT("the previous access-specifier-capable V1 layout remains compatible")));
+		ASSERT_THAT(IsTrue(AccessSpecifierCapacity.accessSpecifier == Access,
+			TEXT("the prior appended access edge is written without requiring room for formalIndex")));
 	}
 
 	TEST_METHOD(RetainRebuildKeepsOldSnapshotLease)
@@ -428,6 +461,141 @@ public:
 		AfterFailure->Release();
 		GenerationB->Release();
 		GenerationA->Release();
+	}
+
+	TEST_METHOD(MissingPendingContextCannotReplaceLastGoodSnapshot)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("last-good snapshot publication requires explicit Canonical selection")));
+
+		asCModule* const Module = static_cast<asCModule*>(Engine.Get()->GetModule(
+			"MissingPendingSnapshot", asGM_ALWAYS_CREATE));
+		ASSERT_THAT(IsNotNull(Module,
+			TEXT("missing-pending snapshot test needs a module")));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(
+			asAST_RETAIN_SNAPSHOT)));
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"MissingPendingSnapshot.as", "int F() { return 1; }", 0, 0)));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("generation A must publish a retained snapshot")));
+
+		asIASTSnapshot* const GenerationA =
+			Module->AcquireASTSnapshot(asAST_API_VERSION_1);
+		ASSERT_THAT(IsNotNull(GenerationA,
+			TEXT("generation A needs a last-good snapshot lease")));
+		if (GenerationA == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { GenerationA->Release(); };
+		const FString GenerationKeyA =
+			UTF8_TO_TCHAR(GenerationA->GetGenerationKey());
+		ASSERT_THAT(IsTrue(GenerationA->IsCurrentGeneration(),
+			TEXT("generation A must start current")));
+
+		Module->PublishCanonicalASTSnapshot("missing-pending-context-test");
+
+		ASSERT_THAT(IsTrue(GenerationA->IsCurrentGeneration(),
+			TEXT("missing pending AST must not retire the last-good generation")));
+		asIASTSnapshot* const Current =
+			Module->AcquireASTSnapshot(asAST_API_VERSION_1);
+		ASSERT_THAT(IsNotNull(Current,
+			TEXT("missing pending AST must preserve the public last-good snapshot")));
+		if (Current == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { Current->Release(); };
+		ASSERT_THAT(IsTrue(Current == GenerationA,
+			TEXT("no replacement snapshot may be fabricated without a real pending graph")));
+		ASSERT_THAT(IsTrue(GenerationKeyA == FString(
+			UTF8_TO_TCHAR(Current->GetGenerationKey())),
+			TEXT("missing pending AST must not advance the snapshot generation key")));
+	}
+
+	TEST_METHOD(SnapshotPreparationFailureKeepsLastGoodExecutableAndSnapshot)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("candidate-first publication requires explicit Canonical selection")));
+
+		asCModule* const Module = static_cast<asCModule*>(
+			Engine.Get()->GetModule(
+				"SnapshotPreparationFailure", asGM_ALWAYS_CREATE));
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(
+			asAST_RETAIN_SNAPSHOT)));
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SnapshotPreparationFailure.as", "int F() { return 1; }", 0, 0)));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("generation A must publish executable and snapshot authority")));
+
+		asIASTSnapshot* const GenerationA =
+			Module->AcquireASTSnapshot(asAST_API_VERSION_1);
+		ASSERT_THAT(IsNotNull(GenerationA));
+		if (GenerationA == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { GenerationA->Release(); };
+		const FString GenerationKeyA =
+			UTF8_TO_TCHAR(GenerationA->GetGenerationKey());
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptSDKTestSupport::ExecuteScriptFunction<int32>(
+				*TestRunner, Engine.Get(), Module, "int F()", Value)
+			&& Value == 1,
+			TEXT("generation A executable must be current before replacement")));
+
+		Module->SetCanonicalSnapshotPreparationFailureForTesting(
+			asOUT_OF_MEMORY);
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SnapshotPreparationFailure.as", "int F() { return 2; }", 0, 0)));
+		ASSERT_THAT(AreEqual(asOUT_OF_MEMORY, Module->Build(),
+			TEXT("a valid sealed candidate that cannot prepare its snapshot must fail before publication")));
+
+		asIASTSnapshot* const Current =
+			Module->AcquireASTSnapshot(asAST_API_VERSION_1);
+		ASSERT_THAT(IsNotNull(Current));
+		if (Current == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { Current->Release(); };
+		ASSERT_THAT(IsTrue(Current == GenerationA
+			&& Current->IsCurrentGeneration()
+			&& GenerationKeyA == FString(
+				UTF8_TO_TCHAR(Current->GetGenerationKey())),
+			TEXT("snapshot preparation failure must not expose or retire a generation")));
+		Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptSDKTestSupport::ExecuteScriptFunction<int32>(
+				*TestRunner, Engine.Get(), Module, "int F()", Value)
+			&& Value == 1,
+			TEXT("snapshot preparation failure must preserve the last-good executable with its snapshot")));
+		ASSERT_THAT(AreEqual(asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Module->GetLastBytecodePublisher()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Module->GetLastLegacyCompilerInvocationCount()));
 	}
 
 	TEST_METHOD(FailedRebuildKeepsCurrentSnapshotStableForConcurrentAcquires)

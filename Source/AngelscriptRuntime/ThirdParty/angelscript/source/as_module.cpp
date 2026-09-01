@@ -41,6 +41,7 @@
 #include <stdio.h>
 #include "as_builder.h"
 #include "as_bytecode_codegen.h"
+#include "as_ast_dump.h"
 #include "as_scriptengine.h"
 #include "as_ast_public_view.h"
 #include "as_ast_verifier.h"
@@ -189,6 +190,7 @@ asCModule::asCModule(const char *name, asCScriptEngine *engine)
 	runtimeTypeGeneration = 0;
 	lastBytecodePublisher = asBYTECODE_PUBLISHER_NONE;
 	lastLegacyCompilerInvocationCount = 0;
+	lastCreateDataTypeFromNodeCount = 0;
 	lastCanonicalCodeGenAstDigest = 0;
 	hasLastCanonicalCodeGenAstDigest = false;
 #if WITH_ANGELSCRIPT_UNITTESTS
@@ -508,6 +510,7 @@ int asCModule::Build()
 
 	astRetentionFrozen = true;
 	ResetLegacyCompilerInvocationCount();
+	ResetCreateDataTypeFromNodeCount();
 	const bool isCanonicalBuild = engine->GetCompilerPipeline() == asCOMPILER_PIPELINE_CANONICAL;
 
 	// The legacy pipeline keeps its original destructive build contract. The
@@ -569,17 +572,17 @@ int asCModule::Build()
 				canonicalCandidate->runtimeTypeGeneration,
 				preparedCanonicalSnapshot);
 		}
+		const asCASTContext* const shadowContext = pending
+			? pending
+			: (preparedCanonicalSnapshot
+				? preparedCanonicalSnapshot->GetContext() : 0);
 		if( r >= 0 )
 		{
 			asCBytecodeCodeGen codegen;
-			const asCASTContext* const codegenContext = pending
-				? pending
-				: (preparedCanonicalSnapshot
-					? preparedCanonicalSnapshot->GetContext() : 0);
-			if( codegenContext == 0 )
+			if( shadowContext == 0 )
 				r = asINVALID_CONFIGURATION;
 			else
-				r = codegen.Generate(*codegenContext, canonicalCandidate);
+				r = codegen.Generate(*shadowContext, canonicalCandidate);
 			if( r != 0 )
 			{
 				asCString msg;
@@ -602,6 +605,17 @@ int asCModule::Build()
 					r = asERROR;
 				}
 			}
+		}
+#if WITH_ANGELSCRIPT_UNITTESTS
+		if( r >= 0 && builder != 0 && canonicalCandidate != 0 )
+		{
+			builder->ApplyTestShadowRuntimeFinalPerturbation(*canonicalCandidate);
+		}
+#endif
+		if( r >= 0 && shadowContext != 0 && canonicalCandidate != 0 )
+		{
+			r = asCASTValidateBuilderShadowIdentity(
+				*shadowContext, *canonicalCandidate, engine);
 		}
 		asDELETE(builder, asCBuilder);
 		builder = 0;
@@ -2205,6 +2219,7 @@ int asCModule::CompileFunction(const char *sectionName, const char *code, int li
 	// provenance counter scoped to this request instead of leaving stale data
 	// from a preceding module Build visible to diagnostics.
 	ResetLegacyCompilerInvocationCount();
+	ResetCreateDataTypeFromNodeCount();
 	ResetLastCanonicalCodeGenAstDigest();
 	SetLastBytecodePublisher(asBYTECODE_PUBLISHER_NONE);
 
@@ -2410,6 +2425,21 @@ void asCModule::RecordLegacyCompilerInvocation()
 	++lastLegacyCompilerInvocationCount;
 }
 
+asUINT asCModule::GetLastCreateDataTypeFromNodeCount() const
+{
+	return lastCreateDataTypeFromNodeCount;
+}
+
+void asCModule::ResetCreateDataTypeFromNodeCount()
+{
+	lastCreateDataTypeFromNodeCount = 0;
+}
+
+void asCModule::RecordCreateDataTypeFromNode()
+{
+	++lastCreateDataTypeFromNodeCount;
+}
+
 bool asCModule::GetLastCanonicalCodeGenAstDigest(asQWORD& outDigest) const
 {
 	if( !hasLastCanonicalCodeGenAstDigest )
@@ -2569,12 +2599,11 @@ void asCModule::PublishCanonicalASTSnapshot(const char* provenance)
 
 	if( context == 0 )
 	{
-		context = asNEW(asCASTContext);
-		if( context == 0 )
-		{
-			return;
-		}
-		context->CreateTranslationUnit(name.AddressOf());
+		// Publication may never manufacture semantic authority. A genuinely
+		// empty source build still owns a Parser/Sema-produced translation unit;
+		// a missing pending graph is an incomplete candidate and must leave the
+		// complete last-good snapshot current.
+		return;
 	}
 	if( !SealCanonicalASTForPublication(*context, engine, name) )
 	{
@@ -2918,6 +2947,7 @@ void asCModule::TransferExecutableGenerationTo(asCModule& target)
 	target.hasBreakPoints = hasBreakPoints;
 	target.lastBytecodePublisher = lastBytecodePublisher;
 	target.lastLegacyCompilerInvocationCount = lastLegacyCompilerInvocationCount;
+	target.lastCreateDataTypeFromNodeCount = lastCreateDataTypeFromNodeCount;
 	target.lastCanonicalCodeGenAstDigest = lastCanonicalCodeGenAstDigest;
 	target.hasLastCanonicalCodeGenAstDigest = hasLastCanonicalCodeGenAstDigest;
 
@@ -2925,6 +2955,7 @@ void asCModule::TransferExecutableGenerationTo(asCModule& target)
 	hasBreakPoints = false;
 	lastBytecodePublisher = asBYTECODE_PUBLISHER_NONE;
 	lastLegacyCompilerInvocationCount = 0;
+	lastCreateDataTypeFromNodeCount = 0;
 	ResetLastCanonicalCodeGenAstDigest();
 }
 

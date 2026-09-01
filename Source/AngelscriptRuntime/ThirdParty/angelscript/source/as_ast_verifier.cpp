@@ -584,6 +584,33 @@ static int ExpectedExprChildCount(asEASTExprKind kind)
 	}
 }
 
+static bool IsVerifiedNullLiteral(
+	const asCASTContext& context, const asCExpr* expression)
+{
+	if( expression == 0 || expression->kind != asAST_EXPR_NULL_LITERAL
+		|| !expression->type.IsHandle() || expression->type.IsReference() )
+	{
+		return false;
+	}
+	const asCType* const type = context.GetType(expression->type.type);
+	return type != 0 && type->kind == asAST_TYPE_VOID
+		&& type->primitiveToken == ttVoid;
+}
+
+static bool IsVerifiedNullableTarget(
+	const asCASTContext& context, const asCQualType& target)
+{
+	const asCType* const type = context.GetType(target.type);
+	return type != 0
+		&& !target.IsReference()
+		// An asOBJ_IMPLICIT_HANDLE source spelling intentionally carries no
+		// explicit HANDLE qualifier. REFERENCE_OBJECT is the nominal authority for
+		// that nullable representation; requiring the syntactic bit rejects legal
+		// `CObj Value = null`. Funcdefs remain explicit owning handles.
+		&& (type->kind == asAST_TYPE_REFERENCE_OBJECT
+			|| (type->kind == asAST_TYPE_FUNCDEF && target.IsHandle()));
+}
+
 static bool IsExactGeneratedGetterCopyPlan(
 	const asCASTContext& context,
 	const asCDecl* getter,
@@ -732,11 +759,322 @@ static bool IsExactGeneratedSetterAssignmentPlan(
 			operatorParameter = child;
 		}
 	}
+	const asDWORD direction = operatorParameter != 0
+		? (operatorParameter->type.quals & asAST_QUAL_PARAM_DIR_MASK) : 0;
 	return operatorParameterCount == 1 && operatorParameter != 0
 		&& operatorParameter->type.type == field->type.type
 		&& operatorParameter->type.IsConst()
 		&& operatorParameter->type.IsReference()
-		&& (operatorParameter->type.quals & asAST_QUAL_IN) != 0;
+		// `const T&` without an authored direction is the maintained source
+		// spelling used by generated Delegates. Preserve that absence in the
+		// Canonical signature; Runtime may normalize its current ABI to inout.
+		// Explicit in/inout are also valid, while a pure out operator is not a
+		// source-value assignment route.
+		&& (direction == 0 || (direction & asAST_QUAL_IN) != 0);
+}
+
+static int VerifyPublishedCallArguments(
+	const asCASTContext& context,
+	const asCExpr& call,
+	asSAstVerifyResult& result)
+{
+	const asCDecl* const callee = context.GetDecl(call.resolvedDecl);
+	if( callee == 0 )
+	{
+		// The enclosing publication pass owns the stable call-decl diagnostic.
+		return asAST_VERIFY_OK;
+	}
+
+	asCArray<asASTDeclId> directFormals;
+	if( call.callDispatch != asAST_CALL_DISPATCH_INDIRECT )
+	{
+		const asUINT formalCount = context.GetFormalDeclCount(callee->id);
+		for( asUINT formalIndex = 0; formalIndex < formalCount; ++formalIndex )
+		{
+			directFormals.PushLast(asASTDeclId());
+		}
+		for( asUINT childIndex = 0;
+			childIndex < callee->children.GetLength(); ++childIndex )
+		{
+			const asCDecl* const child =
+				context.GetDecl(callee->children[childIndex]);
+			if( child != 0 && child->kind == asAST_DECL_PARAM )
+			{
+				if( child->formalIndex >= directFormals.GetLength()
+					|| directFormals[child->formalIndex].IsValid() )
+				{
+					return Fail(result, asAST_VERIFY_INVALID_CHILD,
+						child->range, "call-formal-index",
+						asSASTNodeRef::FromExpr(call.id),
+						asAST_EDGE_EXPR_RESOLVED_DECL,
+						asSASTNodeRef::FromDecl(child->id));
+				}
+				directFormals[child->formalIndex] = child->id;
+			}
+		}
+	}
+
+	// Canonical CALL/CONSTRUCT arguments cover source-level formal slots exactly.
+	// CONSTRUCT stores its evaluated arguments in forward-formal order; CALL
+	// stores them in reverse-formal order. In both cases each relation record is
+	// aligned with the child at the same storage index and authenticates the
+	// exact formal ordinal independently of that physical order. An
+	// ordinary method may retain its effective receiver as the trailing reverse
+	// child, but that receiver is not a formal.  A mixin/free-function receiver
+	// is a declared formal and therefore stays in both arrays.  Lambda captures
+	// and hidden return pointers are Runtime ABI operands, not CALL children.
+	const bool hasTrailingNonFormalReceiver = call.receiver.IsValid()
+		&& call.children.GetLength() != 0
+		&& call.children[call.children.GetLength() - 1] == call.receiver
+		&& (call.callDispatch == asAST_CALL_DISPATCH_INDIRECT
+			|| callee->kind == asAST_DECL_METHOD
+			// Base/delegating constructor plans carry the destination `this`
+			// through the receiver edge and retain it as the trailing reverse
+			// child. It is an ABI receiver, not a declared constructor formal.
+			// Destructor lifetime plans use CLEANUP nodes instead of CALL, so do
+			// not broaden this exception beyond the produced call shape.
+			|| callee->kind == asAST_DECL_CONSTRUCTOR);
+	const asUINT formalChildCount = call.children.GetLength()
+		- (hasTrailingNonFormalReceiver ? 1u : 0u);
+	const asUINT expectedArgumentCount =
+		call.callDispatch == asAST_CALL_DISPATCH_INDIRECT
+			? formalChildCount : directFormals.GetLength();
+	if( call.callArguments.GetLength() != expectedArgumentCount
+		|| formalChildCount != expectedArgumentCount )
+	{
+		return Fail(result, asAST_VERIFY_INVALID_CHILD,
+			call.range, "call-argument-count",
+			asSASTNodeRef::FromExpr(call.id),
+			asAST_EDGE_EXPR_CHILD);
+	}
+	if( expectedArgumentCount == 0 )
+	{
+		return asAST_VERIFY_OK;
+	}
+
+	asUINT authoredArgumentCount = 0;
+	for( asUINT argumentIndex = 0;
+		argumentIndex < call.callArguments.GetLength(); ++argumentIndex )
+	{
+		const asSASTCallArgument& argument =
+			call.callArguments[argumentIndex];
+		if( argumentIndex >= call.children.GetLength()
+			|| !argument.expression.IsValid()
+			|| context.GetExpr(argument.expression) == 0
+			|| argument.expression != call.children[argumentIndex] )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD,
+				argument.range, "call-argument-expression",
+				asSASTNodeRef::FromExpr(call.id),
+				asAST_EDGE_EXPR_CHILD,
+				asSASTNodeRef::FromExpr(argument.expression));
+		}
+		if( (argument.range.begin.IsValid() || argument.range.end.IsValid())
+			&& !context.GetSourceManager().IsValidRange(argument.range) )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_RANGE,
+				argument.range, "call-argument-range",
+				asSASTNodeRef::FromExpr(call.id),
+				asAST_EDGE_EXPR_CHILD,
+				asSASTNodeRef::FromExpr(argument.expression));
+		}
+		if( argument.origin < asAST_CALL_ARGUMENT_POSITIONAL
+			|| argument.origin > asAST_CALL_ARGUMENT_GENERATED )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD,
+				argument.range, "call-argument-origin",
+				asSASTNodeRef::FromExpr(call.id),
+				asAST_EDGE_EXPR_CHILD,
+				asSASTNodeRef::FromExpr(argument.expression));
+		}
+
+		const bool sourceBacked =
+			argument.origin == asAST_CALL_ARGUMENT_POSITIONAL
+			|| argument.origin == asAST_CALL_ARGUMENT_NAMED;
+		const bool validSourceProvenance = sourceBacked
+			? argument.sourceOrdinal != asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+				&& (argument.origin != asAST_CALL_ARGUMENT_NAMED
+					|| argument.authoredName.GetLength() != 0)
+				&& (argument.origin != asAST_CALL_ARGUMENT_POSITIONAL
+					|| argument.authoredName.GetLength() == 0)
+			: argument.sourceOrdinal == asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+				&& argument.authoredName.GetLength() == 0;
+		if( !validSourceProvenance )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD,
+				argument.range, "call-argument-provenance",
+				asSASTNodeRef::FromExpr(call.id),
+				asAST_EDGE_EXPR_CHILD,
+				asSASTNodeRef::FromExpr(argument.expression));
+		}
+		if( sourceBacked )
+		{
+			for( asUINT previousIndex = 0;
+				previousIndex < argumentIndex; ++previousIndex )
+			{
+				const asSASTCallArgument& previous =
+					call.callArguments[previousIndex];
+				const bool previousSourceBacked =
+					previous.origin == asAST_CALL_ARGUMENT_POSITIONAL
+					|| previous.origin == asAST_CALL_ARGUMENT_NAMED;
+				if( previousSourceBacked
+					&& previous.sourceOrdinal == argument.sourceOrdinal )
+				{
+					return Fail(result, asAST_VERIFY_INVALID_CHILD,
+						argument.range, "call-argument-source-order",
+						asSASTNodeRef::FromExpr(call.id),
+						asAST_EDGE_EXPR_CHILD,
+						asSASTNodeRef::FromExpr(argument.expression));
+				}
+			}
+			++authoredArgumentCount;
+		}
+
+		if( call.callDispatch == asAST_CALL_DISPATCH_INDIRECT )
+		{
+			// An indirect funcdef invocation has no ParamDecl owned by the
+			// VAR/PARAM callee. Its durable authority is the pointer-free
+			// formal ordinal and canonical formal type captured by Sema.
+			if( argument.formal.IsValid() )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD,
+					argument.range, "call-argument-formal",
+					asSASTNodeRef::FromExpr(call.id),
+					asAST_EDGE_EXPR_RESOLVED_DECL,
+					asSASTNodeRef::FromDecl(argument.formal));
+			}
+			if( argument.formalIndex >= expectedArgumentCount )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD,
+					argument.range, "call-argument-formal",
+					asSASTNodeRef::FromExpr(call.id),
+					asAST_EDGE_EXPR_RESOLVED_DECL,
+					asSASTNodeRef::FromDecl(argument.formal));
+			}
+		}
+		else
+		{
+			const asASTDeclId expectedFormal =
+				argument.formalIndex < directFormals.GetLength()
+					? directFormals[argument.formalIndex]
+					: asASTDeclId();
+			if( !expectedFormal.IsValid()
+				|| !argument.formal.IsValid()
+				|| argument.formal != expectedFormal )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD,
+					argument.range, "call-argument-formal",
+					asSASTNodeRef::FromExpr(call.id),
+					asAST_EDGE_EXPR_RESOLVED_DECL,
+					asSASTNodeRef::FromDecl(argument.formal));
+			}
+		}
+
+		for( asUINT previousIndex = 0;
+			previousIndex < argumentIndex; ++previousIndex )
+		{
+			const asSASTCallArgument& previous =
+				call.callArguments[previousIndex];
+			if( previous.formalIndex == argument.formalIndex
+				|| (argument.formal.IsValid()
+					&& previous.formal == argument.formal) )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD,
+					argument.range, "call-argument-duplicate-formal",
+					asSASTNodeRef::FromExpr(call.id),
+					asAST_EDGE_EXPR_RESOLVED_DECL,
+					asSASTNodeRef::FromDecl(argument.formal));
+			}
+		}
+
+		if( !argument.formalType.IsValid()
+			|| argument.formalType.type.snapshotOwner != 0
+			|| context.GetType(argument.formalType.type) == 0
+			|| !asASTQualifiersAreValid(argument.formalType.quals) )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_TYPE,
+				argument.range, "call-argument-formal-type",
+				asSASTNodeRef::FromExpr(call.id),
+				asAST_EDGE_EXPR_TYPE,
+				asSASTNodeRef::FromType(argument.formalType.type));
+		}
+		if( argument.formal.IsValid() )
+		{
+			const asCDecl* const formal = context.GetDecl(argument.formal);
+			if( formal == 0 || formal->kind != asAST_DECL_PARAM
+				|| formal->formalIndex != argument.formalIndex
+				|| formal->type.type != argument.formalType.type
+				|| formal->type.quals != argument.formalType.quals )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_TYPE,
+					argument.range, "call-argument-formal-type",
+					asSASTNodeRef::FromExpr(call.id),
+					asAST_EDGE_EXPR_TYPE,
+					asSASTNodeRef::FromType(argument.formalType.type));
+			}
+			const bool formalIsHidden = formal->origin.Equals("hidden");
+			if( argument.origin == asAST_CALL_ARGUMENT_NAMED
+				&& !formal->name.Equals(argument.authoredName.AddressOf()) )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD,
+					argument.range, "call-argument-provenance",
+					asSASTNodeRef::FromExpr(call.id),
+					asAST_EDGE_EXPR_RESOLVED_DECL,
+					asSASTNodeRef::FromDecl(argument.formal));
+			}
+			if( (argument.origin == asAST_CALL_ARGUMENT_HIDDEN
+					&& !formalIsHidden)
+				|| (formalIsHidden
+					&& argument.origin != asAST_CALL_ARGUMENT_HIDDEN
+					&& argument.origin != asAST_CALL_ARGUMENT_GENERATED) )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD,
+					argument.range, "call-argument-hidden",
+					asSASTNodeRef::FromExpr(call.id),
+					asAST_EDGE_EXPR_RESOLVED_DECL,
+					asSASTNodeRef::FromDecl(argument.formal));
+			}
+			if( argument.origin == asAST_CALL_ARGUMENT_DEFAULT
+				&& formal->defaultArg.GetLength() == 0
+				&& formal->inits.GetLength() == 0 )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD,
+					argument.range, "call-argument-default",
+					asSASTNodeRef::FromExpr(call.id),
+					asAST_EDGE_EXPR_RESOLVED_DECL,
+					asSASTNodeRef::FromDecl(argument.formal));
+			}
+		}
+		if( argument.origin == asAST_CALL_ARGUMENT_IMPLICIT_RECEIVER
+			&& (call.callDispatch == asAST_CALL_DISPATCH_INDIRECT
+				|| argument.formalIndex != 0
+				|| !call.receiver.IsValid()
+				|| argument.expression != call.receiver) )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD,
+				argument.range, "call-argument-receiver",
+				asSASTNodeRef::FromExpr(call.id),
+				asAST_EDGE_EXPR_RECEIVER,
+				asSASTNodeRef::FromExpr(argument.expression));
+		}
+	}
+	for( asUINT argumentIndex = 0;
+		argumentIndex < call.callArguments.GetLength(); ++argumentIndex )
+	{
+		const asSASTCallArgument& argument =
+			call.callArguments[argumentIndex];
+		if( (argument.origin == asAST_CALL_ARGUMENT_POSITIONAL
+				|| argument.origin == asAST_CALL_ARGUMENT_NAMED)
+			&& argument.sourceOrdinal >= authoredArgumentCount )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD,
+				argument.range, "call-argument-source-order",
+				asSASTNodeRef::FromExpr(call.id),
+				asAST_EDGE_EXPR_CHILD,
+				asSASTNodeRef::FromExpr(argument.expression));
+		}
+	}
+	return asAST_VERIFY_OK;
 }
 
 static int VerifySealedRequiredTargets(const asCASTContext& context, asSAstVerifyResult& result)
@@ -786,6 +1124,17 @@ static int VerifySealedRequiredTargets(const asCASTContext& context, asSAstVerif
 				"call-dispatch",
 				asSASTNodeRef::FromExpr(expr->id));
 		}
+		if( expr->kind == asAST_EXPR_CALL
+			|| (expr->kind == asAST_EXPR_CONSTRUCT
+				&& !expr->literal.Equals("list-pattern")) )
+		{
+			const int callArguments =
+				VerifyPublishedCallArguments(context, *expr, result);
+			if( callArguments != asAST_VERIFY_OK )
+			{
+				return callArguments;
+			}
+		}
 	}
 	return asAST_VERIFY_OK;
 }
@@ -802,6 +1151,13 @@ static bool MethodRelationContainsDecl(
 		}
 	}
 	return false;
+}
+
+static bool IsCanonicalNativeTypeView(const asCDecl* declaration)
+{
+	return declaration != 0
+		&& declaration->kind == asAST_DECL_CLASS
+		&& declaration->origin.Equals("canonical-native-type-view");
 }
 
 static bool MethodRelationQualTypeIsValid(
@@ -853,39 +1209,28 @@ static bool MethodRelationSignaturesEqual(
 		return false;
 	}
 
-	asUINT lhsIndex = 0;
-	asUINT rhsIndex = 0;
-	for( ;; )
+	const asUINT lhsCount = context.GetFormalDeclCount(lhs->id);
+	const asUINT rhsCount = context.GetFormalDeclCount(rhs->id);
+	if( lhsCount != rhsCount )
 	{
-		const asCDecl* lhsParameter = 0;
-		while( lhsIndex < lhs->children.GetLength() )
-		{
-			lhsParameter = context.GetDecl(lhs->children[lhsIndex++]);
-			if( lhsParameter != 0 && lhsParameter->kind == asAST_DECL_PARAM )
-			{
-				break;
-			}
-			lhsParameter = 0;
-		}
-		const asCDecl* rhsParameter = 0;
-		while( rhsIndex < rhs->children.GetLength() )
-		{
-			rhsParameter = context.GetDecl(rhs->children[rhsIndex++]);
-			if( rhsParameter != 0 && rhsParameter->kind == asAST_DECL_PARAM )
-			{
-				break;
-			}
-			rhsParameter = 0;
-		}
+		return false;
+	}
+	for( asUINT formalIndex = 0; formalIndex < lhsCount; ++formalIndex )
+	{
+		const asCDecl* const lhsParameter =
+			context.GetFormalDecl(lhs->id, formalIndex);
+		const asCDecl* const rhsParameter =
+			context.GetFormalDecl(rhs->id, formalIndex);
 		if( lhsParameter == 0 || rhsParameter == 0 )
 		{
-			return lhsParameter == rhsParameter;
+			return false;
 		}
 		if( lhsParameter->type != rhsParameter->type )
 		{
 			return false;
 		}
 	}
+	return true;
 }
 
 static bool MethodRelationInterfaceReaches(
@@ -936,7 +1281,8 @@ static bool MethodRelationClassReaches(
 	{
 		const asCDecl* const candidate =
 			context.GetDecl(pending[pendingIndex]);
-		if( candidate == 0 || candidate->kind != asAST_DECL_CLASS )
+		if( candidate == 0 || candidate->kind != asAST_DECL_CLASS
+			|| IsCanonicalNativeTypeView(candidate) )
 		{
 			continue;
 		}
@@ -954,7 +1300,8 @@ static bool MethodRelationClassReaches(
 		{
 			const asCDecl* const base =
 				context.GetDecl(candidate->bases[baseIndex]);
-			if( base != 0 && base->kind == asAST_DECL_CLASS )
+			if( base != 0 && base->kind == asAST_DECL_CLASS
+				&& !IsCanonicalNativeTypeView(base) )
 			{
 				pending.PushLast(base->id);
 			}
@@ -979,7 +1326,8 @@ static int VerifyMethodRelationClassAncestry(
 		baseIndex < owner.bases.GetLength(); ++baseIndex )
 	{
 		const asCDecl* const base = context.GetDecl(owner.bases[baseIndex]);
-		if( base == 0 || base->kind != asAST_DECL_CLASS )
+		if( base == 0 || base->kind != asAST_DECL_CLASS
+			|| IsCanonicalNativeTypeView(base) )
 		{
 			continue;
 		}
@@ -1113,6 +1461,7 @@ static void CollectMethodRelationClassAncestors(
 		const asCDecl* const candidate =
 			context.GetDecl(pending[pendingIndex]);
 		if( candidate == 0 || candidate->kind != asAST_DECL_CLASS
+			|| IsCanonicalNativeTypeView(candidate)
 			|| MethodRelationContainsDecl(visited, candidate->id) )
 		{
 			continue;
@@ -1426,6 +1775,15 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 		{
 			return Fail(result, asAST_VERIFY_WRONG_KIND, decl->range, "decl-kind", asSASTNodeRef::FromDecl(id));
 		}
+		if( decl->type.IsValid() )
+		{
+			const asCType* const exactType = context.GetType(decl->type.type);
+			if( exactType != 0 && exactType->stableKey.Equals("auto") )
+			{
+				return Fail(result, asAST_VERIFY_WRONG_KIND, decl->range,
+					"decl-auto-placeholder", asSASTNodeRef::FromDecl(id));
+			}
+		}
 		if( decl->parent.IsValid() )
 		{
 			const asCDecl* parent = context.GetDecl(decl->parent);
@@ -1453,6 +1811,35 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 				}
 				walk = ancestor->parent;
 			}
+		}
+		if( decl->kind == asAST_DECL_PARAM )
+		{
+			const asCDecl* const owner = context.GetDecl(decl->parent);
+			const bool callableOwner = owner != 0
+				&& (owner->kind == asAST_DECL_FUNCDEF
+					|| owner->kind == asAST_DECL_FUNCTION
+					|| owner->kind == asAST_DECL_METHOD
+					|| owner->kind == asAST_DECL_CONSTRUCTOR
+					|| owner->kind == asAST_DECL_DESTRUCTOR
+					|| owner->kind == asAST_DECL_IMPORT
+					|| owner->kind == asAST_DECL_MIXIN);
+			const asUINT formalCount = owner != 0
+				? context.GetFormalDeclCount(owner->id) : 0;
+			if( !callableOwner
+				|| decl->formalIndex == asAST_FORMAL_INDEX_NONE
+				|| decl->formalIndex >= formalCount
+				|| context.GetFormalDecl(owner->id, decl->formalIndex) != decl )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD, decl->range,
+					"param-formal-index", asSASTNodeRef::FromDecl(id),
+					asAST_EDGE_DECL_PARENT,
+					asSASTNodeRef::FromDecl(decl->parent));
+			}
+		}
+		else if( decl->formalIndex != asAST_FORMAL_INDEX_NONE )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, decl->range,
+				"non-param-formal-index", asSASTNodeRef::FromDecl(id));
 		}
 		if( decl->range.begin.IsValid() && !context.GetSourceManager().IsValidRange(decl->range) )
 		{
@@ -1583,7 +1970,7 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 			{
 				const asCDecl* const candidate = context.GetDecl(decl->bases[baseIndex]);
 				if( candidate && candidate->kind == asAST_DECL_CLASS
-					&& !candidate->origin.Equals("canonical-native-type-view") )
+					&& !IsCanonicalNativeTypeView(candidate) )
 				{
 					if( layoutBase != 0 )
 					{
@@ -1930,8 +2317,7 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 					context.GetType(targetDecl->type.type);
 				if( destructorClass == 0 || destructorClass->kind != asAST_DECL_CLASS
 					|| targetType == 0
-					|| (!targetType->stableKey.Equals(destructorClass->stableKey)
-						&& !targetType->stableKey.Equals(destructorClass->name)) )
+					|| !targetType->stableKey.Equals(destructorClass->stableKey) )
 				{
 					return Fail(result, asAST_VERIFY_INVALID_TYPE, cleanup->range,
 						"foreach-cleanup-type", asSASTNodeRef::FromExpr(cleanup->id),
@@ -2311,8 +2697,7 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 				|| destructorClass->kind != asAST_DECL_CLASS
 				|| targetType == 0
 				|| targetType->kind != asAST_TYPE_VALUE_OBJECT
-				|| (!targetType->stableKey.Equals(destructorClass->stableKey)
-					&& !targetType->stableKey.Equals(destructorClass->name)) )
+				|| !targetType->stableKey.Equals(destructorClass->stableKey) )
 			{
 				return Fail(result, asAST_VERIFY_INVALID_TYPE, expr->range,
 					"scope-exit-cleanup-type", asSASTNodeRef::FromExpr(id),
@@ -2371,6 +2756,22 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 		if( expectedChildren >= 0 && (int)expr->children.GetLength() != expectedChildren )
 		{
 			return Fail(result, asAST_VERIFY_INVALID_CHILD, expr->range, "expr-operand", asSASTNodeRef::FromExpr(id), asAST_EDGE_EXPR_CHILD);
+		}
+		if( expr->kind == asAST_EXPR_CONVERSION
+			&& expr->children.GetLength() == 1 )
+		{
+			const asCExpr* const source =
+				context.GetExpr(expr->children[0]);
+			if( source != 0 && source->kind == asAST_EXPR_NULL_LITERAL
+				&& (!IsVerifiedNullLiteral(context, source)
+					|| !IsVerifiedNullableTarget(context, expr->type)
+					|| expr->resolvedDecl.IsValid()) )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_TYPE, expr->range,
+					"null-conversion-target",
+					asSASTNodeRef::FromExpr(id), asAST_EDGE_EXPR_TYPE,
+					asSASTNodeRef::FromType(expr->type.type));
+			}
 		}
 		if( expr->kind == asAST_EXPR_INDEX
 			&& expr->children.GetLength() < 2 )

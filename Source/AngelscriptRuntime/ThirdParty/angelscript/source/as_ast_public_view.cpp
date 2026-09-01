@@ -191,8 +191,8 @@ int asCASTSnapshot::GetDecl(asASTDeclId id, asSASTDeclView* outView) const
 		return asINVALID_ARG;
 	}
 	// V1 declaration views are append-only. The original published layout ended
-	// immediately before accessSpecifier; accept that capacity and write the new
-	// trailing edge only when the caller explicitly supplies room for it.
+	// immediately before accessSpecifier; accept that capacity and write each
+	// later semantic fact only when the caller explicitly supplies room for it.
 	const asUINT suppliedSize = outView->structSize;
 	const size_t originalV1Size = offsetof(asSASTDeclView, accessSpecifier);
 	if( !HasCompleteV1View(suppliedSize, originalV1Size) )
@@ -228,9 +228,14 @@ int asCASTSnapshot::GetDecl(asASTDeclId id, asSASTDeclView* outView) const
 	outView->accessorKind = decl->accessorKind;
 	outView->accessorField = MakePublicDeclId(decl->accessorField);
 	outView->childCount = decl->children.GetLength();
-	if( HasCompleteV1View(suppliedSize, sizeof(*outView)) )
+	if( HasCompleteV1View(
+		suppliedSize, offsetof(asSASTDeclView, formalIndex)) )
 	{
 		outView->accessSpecifier = MakePublicDeclId(decl->accessSpecifier);
+	}
+	if( HasCompleteV1View(suppliedSize, sizeof(*outView)) )
+	{
+		outView->formalIndex = decl->formalIndex;
 	}
 	return asSUCCESS;
 }

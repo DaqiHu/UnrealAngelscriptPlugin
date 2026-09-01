@@ -298,8 +298,7 @@ bool DestructorMatchesLocalValue(
 		&& !local.type.IsHandle()
 		&& destructorOwner != 0
 		&& destructorOwner->kind == asAST_DECL_CLASS
-		&& (localType->stableKey.Equals(destructorOwner->stableKey)
-			|| localType->stableKey.Equals(destructorOwner->name));
+		&& localType->stableKey.Equals(destructorOwner->stableKey);
 }
 
 bool ReleaseMatchesLocal(
@@ -560,8 +559,7 @@ bool ValueTypeMatchesClass(
 		&& !type.IsReference()
 		&& !type.IsHandle()
 		&& classDecl.kind == asAST_DECL_CLASS
-		&& (canonicalType->stableKey.Equals(classDecl.stableKey)
-			|| canonicalType->stableKey.Equals(classDecl.name));
+		&& canonicalType->stableKey.Equals(classDecl.stableKey);
 }
 
 bool AggregateTypeMatchesFactoryOwner(
@@ -575,8 +573,7 @@ bool AggregateTypeMatchesFactoryOwner(
 		&& (canonicalType->kind == asAST_TYPE_VALUE_OBJECT
 			|| canonicalType->kind == asAST_TYPE_REFERENCE_OBJECT)
 		&& classDecl.kind == asAST_DECL_CLASS
-		&& (canonicalType->stableKey.Equals(classDecl.stableKey)
-			|| canonicalType->stableKey.Equals(classDecl.name));
+		&& canonicalType->stableKey.Equals(classDecl.stableKey);
 }
 
 bool DestructorMatchesExprValue(

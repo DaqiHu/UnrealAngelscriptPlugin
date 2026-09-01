@@ -2,6 +2,7 @@
 #include "as_config.h"
 #include "as_datatype.h"
 #include "as_module.h"
+#include "as_objecttype.h"
 #include "as_runtime_type_bridge.h"
 #include "as_sema_lifetime.h"
 #include "as_scriptcode.h"
@@ -13,6 +14,9 @@
 #include <cstdlib>
 
 BEGIN_AS_NAMESPACE
+
+static const char* const CANONICAL_NATIVE_TYPE_VIEW_ORIGIN =
+	"canonical-native-type-view";
 
 static eTokenType CanonicalPrimitiveToken(eTokenType token)
 {
@@ -101,6 +105,77 @@ static asCQualType InternResolvedLexicalType(
 	default:
 		return asCQualType();
 	}
+}
+
+static bool StableTypeKeyHasUnqualifiedName(
+	const asCString& stableKey,
+	const char* name)
+{
+	if( name == 0 || name[0] == 0 )
+	{
+		return false;
+	}
+	const int separator = stableKey.FindLast("::");
+	return separator >= 0
+		? stableKey.SubString(separator + 2).Equals(name)
+		: stableKey.Equals(name);
+}
+
+bool asCSema::IsKnownTypeNameForParsing(const char* name) const
+{
+	if( name == 0 || name[0] == 0 )
+	{
+		return false;
+	}
+
+	// Current-source declarations are already Canonical Sema facts. Match the
+	// unqualified token exactly, mirroring Parser's historical
+	// "regardless of namespace" disambiguation without reading a native tree.
+	for( asUINT declarationIndex = 1;
+		declarationIndex <= context.GetDeclCount(); ++declarationIndex )
+	{
+		const asCDecl* const declaration =
+			context.GetDecl(asASTDeclId(declarationIndex));
+		if( declaration == 0 || !declaration->name.Equals(name) )
+		{
+			continue;
+		}
+		switch( declaration->kind )
+		{
+		case asAST_DECL_CLASS:
+		case asAST_DECL_INTERFACE:
+		case asAST_DECL_ENUM:
+		case asAST_DECL_FUNCDEF:
+		case asAST_DECL_TYPEDEF:
+			return true;
+		default:
+			break;
+		}
+	}
+
+	// Registered and explicitly imported Runtime types were copied into this
+	// generation before parsing. Keep the query pointer-free and deterministic;
+	// ambiguity still means that a type-shaped token exists, while Sema reports
+	// the actual ambiguous lookup if the expression consumes it as a type.
+	for( asUINT typeIndex = 0;
+		typeIndex < canonicalRegisteredTypeDeclarations.GetLength(); ++typeIndex )
+	{
+		if( StableTypeKeyHasUnqualifiedName(
+			canonicalRegisteredTypeDeclarations[typeIndex].stableKey, name) )
+		{
+			return true;
+		}
+	}
+	for( asUINT templateIndex = 0;
+		templateIndex < canonicalTemplateDeclarations.GetLength(); ++templateIndex )
+	{
+		if( StableTypeKeyHasUnqualifiedName(
+			canonicalTemplateDeclarations[templateIndex].stableKey, name) )
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 const asSCanonicalRegisteredTypeDeclarationFact*
@@ -220,6 +295,7 @@ asCQualType asCSema::ResolveQualifiedNominalType(
 	auto resolveExact = [this, authoredQualifiers, &ambiguous](
 		const asCString& stableKey) -> asCQualType
 	{
+		asCQualType existingNativeView;
 		for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
 		{
 			const asCDecl* const declaration =
@@ -231,6 +307,16 @@ asCQualType asCSema::ResolveQualifiedNominalType(
 					context, declaration, authoredQualifiers);
 				if( lexical.IsValid() )
 				{
+					// A range-less native symbol view may have been interned
+					// earlier for a property, method, or behaviour. Do not let
+					// that partial shell bypass the registered declaration graph;
+					// project/repair its stable base edges below first.
+					if( declaration->origin.Equals(
+						"canonical-native-type-view") )
+					{
+						existingNativeView = lexical;
+						continue;
+					}
 					return lexical;
 				}
 			}
@@ -240,7 +326,7 @@ asCQualType asCSema::ResolveQualifiedNominalType(
 			FindExactCanonicalRegisteredTypeDeclaration(stableKey);
 		if( fact == 0 )
 		{
-			return asCQualType();
+			return existingNativeView;
 		}
 		if( fact->ambiguous )
 		{
@@ -251,6 +337,51 @@ asCQualType asCSema::ResolveQualifiedNominalType(
 		if( (fact->flags & asOBJ_IMPLICIT_HANDLE) != 0 )
 		{
 			effectiveQualifiers |= asAST_QUAL_HANDLE;
+		}
+		if( (fact->kind == asAST_TYPE_REFERENCE_OBJECT
+				|| fact->kind == asAST_TYPE_VALUE_OBJECT)
+			&& context.GetTranslationUnit().IsValid() )
+		{
+			bool projectionAmbiguous = false;
+			const asASTDeclId projected =
+				ProjectCanonicalRegisteredBaseType(
+					fact->stableKey,
+					true,
+					context.GetTranslationUnit(),
+					projectionAmbiguous);
+			if( projectionAmbiguous )
+			{
+				ambiguous = true;
+				return asCQualType();
+			}
+			if( projected.IsValid() )
+			{
+				const asCQualType lexical = InternResolvedLexicalType(
+					context,
+					context.GetDecl(projected),
+					effectiveQualifiers);
+				if( lexical.IsValid() )
+				{
+					return lexical;
+				}
+			}
+		}
+		if( fact->kind == asAST_TYPE_FUNCDEF
+			&& context.GetTranslationUnit().IsValid() )
+		{
+			const asASTDeclId projected =
+				ProjectCanonicalRegisteredFuncdef(fact->stableKey);
+			if( projected.IsValid() )
+			{
+				const asCQualType lexical = InternResolvedLexicalType(
+					context,
+					context.GetDecl(projected),
+					effectiveQualifiers);
+				if( lexical.IsValid() )
+				{
+					return lexical;
+				}
+			}
 		}
 		return context.InternNamedType(
 			fact->kind,
@@ -368,6 +499,37 @@ asCSema::ResolveCanonicalTemplateDeclaration(
 	return exact;
 }
 
+asCQualType asCSema::InternCanonicalTemplateInstanceType(
+	const asSCanonicalTemplateDeclarationFact* declaration,
+	const asCString& instanceKey,
+	asDWORD quals,
+	const asCArray<asCQualType>* arguments)
+{
+	if( instanceKey.GetLength() == 0 )
+	{
+		return asCQualType();
+	}
+	const asCQualType interned = context.InternNamedType(
+		asAST_TYPE_TEMPLATE,
+		instanceKey.AddressOf(),
+		quals);
+	if( interned.IsValid()
+		&& declaration != 0
+		&& declaration->requiresRuntimeValidation )
+	{
+		context.SetTypeRequiresRuntimeValidation(interned.type, true);
+	}
+	if( interned.IsValid() && arguments != 0 )
+	{
+		if( context.SetTypeTemplateArguments(interned.type, *arguments)
+			!= asAST_VERIFY_OK )
+		{
+			return asCQualType();
+		}
+	}
+	return interned;
+}
+
 bool asCSema::IsCanonicalTemplateSubtypeAllowed(
 	const asSCanonicalTemplateDeclarationFact& declaration,
 	const asCQualType& subtype) const
@@ -464,6 +626,124 @@ bool asCSema::IsCanonicalNonPrimitiveValueType(
 	return declaration != 0 && (declaration->flags & asOBJ_VALUE) != 0;
 }
 
+bool asCSema::InferCanonicalAutoType(
+	const asCQualType& placeholder,
+	asASTExprId initializer,
+	bool allowReference,
+	bool autoConstRef,
+	asCQualType& inferred) const
+{
+	const asCType* const placeholderType = context.GetType(placeholder.type);
+	const bool isAuto = placeholderType != 0
+		&& placeholderType->stableKey.Equals("auto");
+	if( !isAuto )
+	{
+		inferred = placeholder;
+		// The preprocessor's range-for lowering applies this internal marker to
+		// explicit element types too. It is construction intent only: consume it
+		// into the final exact QualType and never persist a marker in the AST.
+		if( autoConstRef && !inferred.IsReference() )
+		{
+			if( IsCanonicalNonPrimitiveValueType(inferred) )
+			{
+				inferred.quals |= asAST_QUAL_REFERENCE;
+			}
+			inferred.quals |= asAST_QUAL_CONST;
+		}
+		return asASTQualifiersAreValid(inferred.quals);
+	}
+
+	const asCExpr* const expression = context.GetExpr(initializer);
+	const asCType* const initializerType = expression != 0
+		? context.GetType(expression->type.type) : 0;
+	const asCDecl* const resolved = expression != 0
+		? context.GetDecl(expression->resolvedDecl) : 0;
+	if( expression == 0 || initializerType == 0
+		|| expression->kind == asAST_EXPR_NULL_LITERAL
+		|| expression->kind == asAST_EXPR_ERROR
+		|| initializerType->kind == asAST_TYPE_ERROR
+		|| initializerType->kind == asAST_TYPE_WILDCARD
+		|| initializerType->stableKey.Equals("auto")
+		|| (resolved != 0 && (resolved->traits & asAST_TRAIT_LAMBDA) != 0) )
+	{
+		return false;
+	}
+
+	// Match legacy CompileAutoType: nominal identity comes from the already
+	// typed initializer; reference intent is authored by local `auto&` and is
+	// never inherited merely from expression value category.
+	inferred = expression->type;
+	inferred.quals &= ~(asAST_QUAL_REFERENCE
+		| asAST_QUAL_IN | asAST_QUAL_OUT | asAST_QUAL_INOUT
+		| asAST_QUAL_AUTO_HANDLE);
+	if( allowReference && placeholder.IsReference() )
+	{
+		inferred.quals |= asAST_QUAL_REFERENCE;
+	}
+
+	if( placeholder.IsHandle() && !inferred.IsHandle() )
+	{
+		bool supportsHandle = initializerType->kind == asAST_TYPE_REFERENCE_OBJECT
+			|| initializerType->kind == asAST_TYPE_FUNCDEF;
+		if( !supportsHandle && initializerType->kind == asAST_TYPE_TEMPLATE )
+		{
+			asCString templateBase;
+			for( asUINT index = 0;
+				index < initializerType->stableKey.GetLength(); ++index )
+			{
+				if( initializerType->stableKey[index] == '<' )
+				{
+					templateBase.Assign(
+						initializerType->stableKey.AddressOf(), index);
+					break;
+				}
+			}
+			const asSCanonicalTemplateDeclarationFact* const declaration =
+				templateBase.GetLength() != 0
+					? FindExactCanonicalTemplateDeclaration(templateBase) : 0;
+			supportsHandle = declaration != 0
+				&& (declaration->flags
+					& (asOBJ_REF | asOBJ_ASHANDLE | asOBJ_IMPLICIT_HANDLE)) != 0;
+		}
+		if( !supportsHandle )
+		{
+			const asSCanonicalRegisteredTypeDeclarationFact* const declaration =
+				FindExactCanonicalRegisteredTypeDeclaration(
+					initializerType->stableKey);
+			supportsHandle = declaration != 0
+				&& (declaration->flags
+					& (asOBJ_REF | asOBJ_ASHANDLE | asOBJ_IMPLICIT_HANDLE)) != 0;
+		}
+		if( !supportsHandle )
+		{
+			return false;
+		}
+		inferred.quals |= asAST_QUAL_HANDLE;
+	}
+
+	// On handles CONST denotes handle-to-const; on values it denotes readonly.
+	// Non-const auto values discard initializer const unless `auto&` retained
+	// the source reference, exactly as legacy CompileAutoType does.
+	if( placeholder.IsConst() )
+	{
+		inferred.quals |= asAST_QUAL_CONST;
+	}
+	else if( !(allowReference && placeholder.IsReference()) )
+	{
+		inferred.quals &= ~asAST_QUAL_CONST;
+	}
+
+	if( autoConstRef && !inferred.IsReference() )
+	{
+		if( IsCanonicalNonPrimitiveValueType(inferred) )
+		{
+			inferred.quals |= asAST_QUAL_REFERENCE;
+		}
+		inferred.quals |= asAST_QUAL_CONST;
+	}
+	return asASTQualifiersAreValid(inferred.quals);
+}
+
 asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 {
 	asCString text;
@@ -517,9 +797,9 @@ asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 				quals |= asAST_QUAL_HANDLE;
 			}
 		}
-		return context.InternNamedType(
-			asAST_TYPE_TEMPLATE,
-			stableKey.AddressOf(),
+		return InternCanonicalTemplateInstanceType(
+			declaration,
+			stableKey,
 			quals);
 	}
 
@@ -560,6 +840,14 @@ asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 		if( decl != 0 && (decl->kind == asAST_DECL_CLASS
 			|| decl->kind == asAST_DECL_INTERFACE) )
 		{
+			// Native member interning may have created only a range-less symbol
+			// shell. Route that shell through ResolveQualifiedNominalType below so
+			// the copied registered ancestry is projected before the type escapes
+			// this action. Authored script declarations remain lexical authority.
+			if( decl->origin.Equals("canonical-native-type-view") )
+			{
+				continue;
+			}
 			const char* stableKey = decl->stableKey.GetLength() != 0
 				? decl->stableKey.AddressOf()
 				: decl->name.AddressOf();
@@ -586,6 +874,10 @@ asCQualType asCSema::ActOnQualType(const char* key, asDWORD quals)
 			|| decl->kind == asAST_DECL_INTERFACE)
 			&& decl->stableKey.Equals(text) )
 		{
+			if( decl->origin.Equals("canonical-native-type-view") )
+			{
+				continue;
+			}
 			const asEASTTypeKind kind = decl->kind == asAST_DECL_INTERFACE
 				|| (decl->traits & asAST_TRAIT_VALUE) == 0
 				? asAST_TYPE_REFERENCE_OBJECT
@@ -729,7 +1021,13 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 				spelling += ",";
 			}
 			spelling += childCanonical->stableKey;
-			if( childType.quals & asAST_QUAL_HANDLE )
+			// Stable template identity preserves the authored subtype spelling.
+			// A registered asOBJ_IMPLICIT_HANDLE subtype carries HANDLE in its
+			// effective QualType even when the source omitted '@'; serializing that
+			// derived bit produces a key (for example TSubclassOf<UObject@>) that
+			// cannot bind the Runtime template instance TSubclassOf<UObject>.
+			// Explicit source '@' remains part of the nominal template key.
+			if( childNode.qualifiers & asAST_QUAL_HANDLE )
 			{
 				spelling += "@";
 			}
@@ -954,10 +1252,11 @@ asCQualType asCSema::ActOnQualTypeSyntaxNode(
 		{
 			effectiveQualifiers |= asAST_QUAL_HANDLE;
 		}
-		return context.InternNamedType(
-			asAST_TYPE_TEMPLATE,
-			canonicalSpelling.AddressOf(),
-			effectiveQualifiers);
+		return InternCanonicalTemplateInstanceType(
+			finalTemplate,
+			canonicalSpelling,
+			effectiveQualifiers,
+			&finalArgumentTypes);
 	}
 
 	// A template-bearing innermost scope denotes a child of the exact stable
@@ -1438,6 +1737,20 @@ static asASTExprId CreateDefaultMemberInit(asCSema* sema, const asCDecl* member)
 	return asASTExprId();
 }
 
+static const asCExpr* UnwrapConstructorMemberInit(
+	const asCASTContext& context,
+	const asCExpr* expression)
+{
+	while( expression
+		&& (expression->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+			|| expression->kind == asAST_EXPR_CLEANUP)
+		&& expression->children.GetLength() == 1 )
+	{
+		expression = context.GetExpr(expression->children[0]);
+	}
+	return expression;
+}
+
 static void AttachConstructorMemberInits(asCSema* sema, asASTDeclId cls)
 {
 	const asCDecl* classDecl = sema->GetContext().GetDecl(cls);
@@ -1461,11 +1774,29 @@ static void AttachConstructorMemberInits(asCSema* sema, asASTDeclId cls)
 			{
 				continue;
 			}
-			const asASTExprId rhs = member->inits.GetLength() != 0
+			asASTExprId rhs = member->inits.GetLength() != 0
 				? member->inits[0] : CreateDefaultMemberInit(sema, member);
 			if( !rhs.IsValid() )
 			{
 				continue;
+			}
+
+			// An authored initializer for a non-trivial VALUE member initializes
+			// previously-unconstructed storage. Seal an exact constructor plan here;
+			// an ordinary assignment would invoke opAssign (or a scalar write) before
+			// the member's lifetime begins. Already-authored Construct plans, including
+			// generated zero-initializers, remain unchanged.
+			const asCExpr* const unwrapped = UnwrapConstructorMemberInit(
+				sema->GetContext(), sema->GetContext().GetExpr(rhs));
+			if( sema->RequiresExactValueObjectPlan(member->type)
+				&& (unwrapped == 0
+					|| unwrapped->kind != asAST_EXPR_CONSTRUCT
+					|| unwrapped->type != member->type) )
+			{
+				asCArray<asASTExprId> arguments;
+				arguments.PushLast(rhs);
+				rhs = sema->ActOnConstruct(
+					member->type, arguments, member->range);
 			}
 			const asASTExprId ref = sema->ActOnDeclRef(
 				member->id, member->type, member->range);
@@ -1474,6 +1805,28 @@ static void AttachConstructorMemberInits(asCSema* sema, asASTDeclId cls)
 			sema->GetContext().AddDeclInit(ctorDecl->id, assign);
 		}
 	}
+}
+
+static bool IsExactImplicitCopyParameter(
+	const asCASTContext& context,
+	const asCDecl* callable,
+	const asCQualType& recordType)
+{
+	if( callable == 0 || !recordType.IsValid()
+		|| context.GetFormalDeclCount(callable->id) != 1 )
+	{
+		return false;
+	}
+	const asCDecl* const parameter =
+		context.GetFormalDecl(callable->id, 0);
+	if( parameter == 0 || parameter->type.type != recordType.type
+		|| !parameter->type.IsConst() || !parameter->type.IsReference() )
+	{
+		return false;
+	}
+	const asDWORD direction =
+		parameter->type.quals & asAST_QUAL_PARAM_DIR_MASK;
+	return direction == 0 || (direction & asAST_QUAL_IN) != 0;
 }
 
 static void EnsureGeneratedLifecycle(asCSema* sema, asASTDeclId cls)
@@ -1487,6 +1840,8 @@ static void EnsureGeneratedLifecycle(asCSema* sema, asASTDeclId cls)
 	bool hasCtor = false;
 	bool hasZeroArgumentCtor = false;
 	bool hasDtor = false;
+	bool hasCopyConstructor = false;
+	bool hasAssignmentOperator = false;
 	asASTDeclId generatedCtor;
 	for( asUINT i = 0; i < decl->children.GetLength(); ++i )
 	{
@@ -1513,10 +1868,22 @@ static void EnsureGeneratedLifecycle(asCSema* sema, asASTDeclId cls)
 			{
 				hasZeroArgumentCtor = true;
 			}
+			if( IsExactImplicitCopyParameter(
+				sema->GetContext(), child, decl->type) )
+			{
+				hasCopyConstructor = true;
+			}
 			if( (child->traits & asAST_TRAIT_GENERATED) != 0 )
 			{
 				generatedCtor = child->id;
 			}
+		}
+		if( child->kind == asAST_DECL_METHOD
+			&& child->name.Equals("opAssign")
+			&& IsExactImplicitCopyParameter(
+				sema->GetContext(), child, decl->type) )
+		{
+			hasAssignmentOperator = true;
 		}
 		if( child->kind == asAST_DECL_DESTRUCTOR )
 		{
@@ -1539,11 +1906,272 @@ static void EnsureGeneratedLifecycle(asCSema* sema, asASTDeclId cls)
 		sema->GetContext().SetOrigin(
 			generatedCtor, "canonical-generated-default-constructor");
 	}
+
+	// AngelScript's implicit script-object copy construction is semantically
+	// "default construct, then default opAssign". Preserve that contract as
+	// stable script-owned declarations instead of asking CodeGen to rediscover a
+	// Runtime behaviour id. Explicit authored special members always win.
+	if( (decl->traits & asAST_TRAIT_VALUE) != 0 )
+	{
+		const asCString recordName = decl->name;
+		const asCSourceRange recordRange = decl->range;
+		const asCQualType recordType = decl->type;
+		const asCQualType constRecordReference(
+			recordType.type,
+			(recordType.quals & ~asAST_QUAL_PARAM_DIR_MASK)
+				| asAST_QUAL_CONST | asAST_QUAL_REFERENCE);
+		const asCQualType recordReference(
+			recordType.type,
+			(recordType.quals & ~asAST_QUAL_PARAM_DIR_MASK)
+				| asAST_QUAL_REFERENCE);
+
+		if( !hasAssignmentOperator )
+		{
+			const asASTDeclId assignment = sema->ActOnMethodDecl(
+				cls, "opAssign", recordReference, recordRange);
+			sema->GetContext().AddDeclTrait(
+				assignment, asAST_TRAIT_GENERATED);
+			sema->GetContext().SetOrigin(
+				assignment,
+				"canonical-generated-implicit-assignment-operator");
+			sema->ActOnParamDecl(
+				assignment, "Other", constRecordReference, recordRange);
+		}
+		if( !hasCopyConstructor )
+		{
+			const asASTDeclId copyConstructor =
+				sema->ActOnConstructorDecl(
+					cls, recordName.AddressOf(), recordRange);
+			sema->GetContext().AddDeclTrait(
+				copyConstructor, asAST_TRAIT_GENERATED);
+			sema->GetContext().SetOrigin(
+				copyConstructor,
+				"canonical-generated-implicit-copy-constructor");
+			sema->ActOnParamDecl(
+				copyConstructor, "Other",
+				constRecordReference, recordRange);
+		}
+	}
 	AttachConstructorMemberInits(sema, cls);
 	if( !hasDtor )
 	{
 		const asASTDeclId dtor = sema->ActOnDestructorDecl(cls, decl->name.AddressOf(), decl->range);
 		sema->GetContext().AddDeclTrait(dtor, asAST_TRAIT_GENERATED);
+	}
+}
+
+static bool FinalizeGeneratedImplicitAssignmentBody(
+	asCSema* sema,
+	asASTDeclId classId,
+	asASTDeclId assignmentId,
+	asASTDeclId parameterId,
+	const asCArray<asASTDeclId>& fields)
+{
+	asCASTContext& context = sema->GetContext();
+	const asCDecl* const existing = context.GetDecl(assignmentId);
+	const asCDecl* const classDecl = context.GetDecl(classId);
+	if( existing == 0 || classDecl == 0 || existing->body.IsValid()
+		|| !parameterId.IsValid() || !classDecl->type.IsValid() )
+	{
+		return existing != 0 && existing->body.IsValid();
+	}
+
+	const asCQualType classType = classDecl->type;
+	const asCSourceRange classRange = classDecl->range;
+	asCArray<asASTStmtId> statements;
+	bool canGenerate = true;
+	for( asUINT fieldIndex = 0; fieldIndex < fields.GetLength(); ++fieldIndex )
+	{
+		const asCDecl* const field = context.GetDecl(fields[fieldIndex]);
+		if( field == 0 || field->kind != asAST_DECL_VAR
+			|| !field->type.IsValid() )
+		{
+			continue;
+		}
+
+		// Native-method projection can grow the declaration table. Copy every
+		// field fact before resolving its assignment so no retained Decl pointer
+		// crosses that mutation boundary.
+		const asASTDeclId fieldId = field->id;
+		const asCString fieldName = field->name;
+		const asCQualType fieldType = field->type;
+		const asCSourceRange fieldRange = field->range;
+		const asASTExprId targetBase = sema->ActOnThisExpr(
+			classType, fieldRange);
+		const asCDecl* const parameter = context.GetDecl(parameterId);
+		const asASTExprId sourceBase = parameter != 0
+			? sema->ActOnDeclRef(
+				parameterId, parameter->type, fieldRange)
+			: asASTExprId();
+		const asASTExprId target = sema->ActOnMemberRef(
+			targetBase, fieldName.AddressOf(), fieldType, fieldRange);
+		const asASTExprId source = sema->ActOnMemberRef(
+			sourceBase, fieldName.AddressOf(), fieldType, fieldRange);
+		context.SetResolvedDecl(target, fieldId);
+		context.SetResolvedDecl(source, fieldId);
+		const asASTExprId assignment = sema->ActOnGeneratedAssign(
+			target, source, fieldType, fieldRange);
+		const asCExpr* const assignmentExpr = context.GetExpr(assignment);
+		if( sema->RequiresExactValueObjectPlan(fieldType)
+			&& (assignmentExpr == 0
+				|| !assignmentExpr->resolvedDecl.IsValid()) )
+		{
+			// An implicit script-value assignment operator is conditionally
+			// available. A member that has no exact opAssign makes this generated
+			// special member unavailable, but must not reject a module that never
+			// uses the owner assignment (for example an unrelated generated getter
+			// that only needs the member's copy constructor). Leave the generated
+			// declaration bodyless so overload use cannot be published by CodeGen;
+			// never replace the missing operation with a raw storage copy.
+			canGenerate = false;
+		}
+		statements.PushLast(sema->ActOnExprStmt(
+			assignmentId, assignment, fieldRange));
+	}
+	if( !canGenerate )
+	{
+		return false;
+	}
+
+	const asASTExprId returnValue = sema->ActOnThisExpr(
+		classType, classRange);
+	statements.PushLast(sema->ActOnReturnStmt(
+		assignmentId, returnValue, classRange));
+	context.SetBody(
+		assignmentId,
+		sema->ActOnBlock(assignmentId, statements, classRange));
+	return true;
+}
+
+static void FinalizeGeneratedImplicitCopyConstructorBody(
+	asCSema* sema,
+	asASTDeclId classId,
+	asASTDeclId copyConstructorId,
+	asASTDeclId copyParameterId,
+	asASTDeclId assignmentId)
+{
+	asCASTContext& context = sema->GetContext();
+	const asCDecl* const copyConstructor =
+		context.GetDecl(copyConstructorId);
+	const asCDecl* const classDecl = context.GetDecl(classId);
+	const asCDecl* const parameter = context.GetDecl(copyParameterId);
+	if( copyConstructor == 0 || classDecl == 0 || parameter == 0
+		|| copyConstructor->body.IsValid()
+		|| !classDecl->type.IsValid() )
+	{
+		return;
+	}
+
+	const asCQualType classType = classDecl->type;
+	const asCSourceRange range = classDecl->range;
+	const asASTExprId target = sema->ActOnThisExpr(classType, range);
+	const asASTExprId source = sema->ActOnDeclRef(
+		copyParameterId, parameter->type, range);
+	const asASTExprId assignment = sema->ActOnGeneratedAssign(
+		target, source, classType, range);
+	const asCExpr* const assignmentExpr = context.GetExpr(assignment);
+	if( assignmentExpr == 0 || assignmentExpr->kind != asAST_EXPR_ASSIGN
+		|| assignmentExpr->resolvedDecl != assignmentId )
+	{
+		sema->AddDiagnostic(
+			"implicit-copy-assignment-operator-unavailable", range);
+	}
+	asCArray<asASTStmtId> statements;
+	statements.PushLast(sema->ActOnExprStmt(
+		copyConstructorId, assignment, range));
+	context.SetBody(
+		copyConstructorId,
+		sema->ActOnBlock(copyConstructorId, statements, range));
+}
+
+static void FinalizeGeneratedImplicitCopyLifecycle(asCSema* sema)
+{
+	asCASTContext& context = sema->GetContext();
+	const asUINT declarationCount = context.GetDeclCount();
+	for( asUINT declarationIndex = 1;
+		declarationIndex <= declarationCount; ++declarationIndex )
+	{
+		const asCDecl* const candidate = context.GetDecl(
+			asASTDeclId(declarationIndex));
+		if( candidate == 0 || candidate->kind != asAST_DECL_CLASS
+			|| (candidate->traits & asAST_TRAIT_VALUE) == 0
+			|| candidate->origin.Equals("canonical-native-type-view") )
+		{
+			continue;
+		}
+
+		const asASTDeclId classId = candidate->id;
+		const asCArray<asASTDeclId> children = candidate->children;
+		asCArray<asASTDeclId> fields;
+		asASTDeclId generatedAssignment;
+		asASTDeclId generatedAssignmentParameter;
+		asASTDeclId effectiveAssignment;
+		asASTDeclId generatedCopyConstructor;
+		asASTDeclId generatedCopyParameter;
+		for( asUINT childIndex = 0;
+			childIndex < children.GetLength(); ++childIndex )
+		{
+			const asCDecl* const child = context.GetDecl(children[childIndex]);
+			if( child == 0 )
+			{
+				continue;
+			}
+			if( child->kind == asAST_DECL_VAR )
+			{
+				fields.PushLast(child->id);
+				continue;
+			}
+			if( child->kind == asAST_DECL_METHOD
+				&& child->name.Equals("opAssign")
+				&& IsExactImplicitCopyParameter(
+					context, child, candidate->type) )
+			{
+				// Explicit authored semantics win. There is at most one exact
+				// signature, but retain the first in source/declaration order.
+				if( !effectiveAssignment.IsValid()
+					|| (context.GetDecl(effectiveAssignment)->traits
+						& asAST_TRAIT_GENERATED) != 0 )
+				{
+					effectiveAssignment = child->id;
+				}
+				if( child->origin.Equals(
+					"canonical-generated-implicit-assignment-operator") )
+				{
+					generatedAssignment = child->id;
+					const asCDecl* const parameter =
+						context.GetFormalDecl(child->id, 0);
+					generatedAssignmentParameter = parameter != 0
+						? parameter->id : asASTDeclId();
+				}
+			}
+			if( child->kind == asAST_DECL_CONSTRUCTOR
+				&& child->origin.Equals(
+					"canonical-generated-implicit-copy-constructor") )
+			{
+				generatedCopyConstructor = child->id;
+				const asCDecl* const parameter =
+					context.GetFormalDecl(child->id, 0);
+				generatedCopyParameter = parameter != 0
+					? parameter->id : asASTDeclId();
+			}
+		}
+
+		bool generatedAssignmentAvailable = false;
+		if( generatedAssignment.IsValid() )
+		{
+			generatedAssignmentAvailable = FinalizeGeneratedImplicitAssignmentBody(
+				sema, classId, generatedAssignment,
+				generatedAssignmentParameter, fields);
+		}
+		if( generatedCopyConstructor.IsValid()
+			&& effectiveAssignment.IsValid()
+			&& (effectiveAssignment != generatedAssignment
+				|| generatedAssignmentAvailable) )
+		{
+			FinalizeGeneratedImplicitCopyConstructorBody(
+				sema, classId, generatedCopyConstructor,
+				generatedCopyParameter, effectiveAssignment);
+		}
 	}
 }
 
@@ -1565,6 +2193,23 @@ static bool ClassHasNamedMethod(asCSema* sema, const asCDecl* cls, const char* n
 	return false;
 }
 
+static asCString StripCanonicalHandleMarksLocal(const asCString& key)
+{
+	asCString stripped;
+	stripped.Assign(key.AddressOf(), key.GetLength());
+	asUINT write = 0;
+	for( asUINT read = 0; read < stripped.GetLength(); ++read )
+	{
+		if( stripped[read] == '@' )
+		{
+			continue;
+		}
+		stripped[write++] = stripped[read];
+	}
+	stripped.SetLength(write);
+	return stripped;
+}
+
 static const asCExpr* UnwrapGeneratedAccessorPlan(
 	const asCASTContext& context, const asCExpr* expr)
 {
@@ -1578,6 +2223,36 @@ static const asCExpr* UnwrapGeneratedAccessorPlan(
 	return expr;
 }
 
+static const asCDecl* FindGeneratedAccessorValueClass(
+	const asCASTContext& context,
+	const asCQualType& valueType)
+{
+	const asCType* const canonicalType = context.GetType(valueType.type);
+	if( canonicalType == 0
+		|| (canonicalType->kind != asAST_TYPE_VALUE_OBJECT
+			&& canonicalType->kind != asAST_TYPE_TEMPLATE)
+		|| canonicalType->stableKey.GetLength() == 0 )
+	{
+		return 0;
+	}
+	for( asUINT declIndex = 1;
+		declIndex <= context.GetDeclCount(); ++declIndex )
+	{
+		const asCDecl* const classDecl =
+			context.GetDecl(asASTDeclId(declIndex));
+		if( classDecl != 0 && classDecl->kind == asAST_DECL_CLASS
+			&& (classDecl->stableKey.Equals(canonicalType->stableKey)
+				|| (classDecl->stableKey.GetLength() != 0
+					&& canonicalType->stableKey.GetLength() != 0
+					&& StripCanonicalHandleMarksLocal(classDecl->stableKey).Equals(
+						StripCanonicalHandleMarksLocal(canonicalType->stableKey)))) )
+		{
+			return classDecl;
+		}
+	}
+	return 0;
+}
+
 static void AttachGeneratedGetterCopyPlan(
 	asCSema* sema, asASTDeclId getter, const asCDecl* field)
 {
@@ -1587,18 +2262,52 @@ static void AttachGeneratedGetterCopyPlan(
 		return;
 	}
 
-	// A generated getter for a non-POD native VALUE object is not a storage read.
+	// A generated getter for a non-trivial VALUE object is not a storage read.
 	// It constructs a detached return value from the live backing field. Record
 	// that exact copy-construction route in the sealed declaration so CodeGen
 	// never guesses a constructor from Runtime type metadata or widens a scalar
 	// read into an unsafe memcpy.
-	asCRuntimeTypeBridge bridge(sema->GetEngine());
-	const asCDataType runtimeType = bridge.Resolve(
+	sema->InternNativeCallablesForType(field->type);
+	const asCDecl* const valueClass = FindGeneratedAccessorValueClass(
 		sema->GetContext(), field->type);
-	asCTypeInfo* const typeInfo = runtimeType.GetTypeInfo();
-	if( !runtimeType.IsNonPrimitiveValueType() || typeInfo == 0
-		|| (typeInfo->GetFlags() & asOBJ_VALUE) == 0
-		|| (typeInfo->GetFlags() & asOBJ_POD) != 0 )
+	asASTDeclId selectedCopy;
+	if( valueClass != 0 )
+	{
+		for( asUINT childIndex = 0;
+			childIndex < valueClass->children.GetLength(); ++childIndex )
+		{
+			const asCDecl* const child = sema->GetContext().GetDecl(
+				valueClass->children[childIndex]);
+			if( child == 0 || child->kind != asAST_DECL_CONSTRUCTOR
+				|| sema->GetContext().GetFormalDeclCount(child->id) != 1 )
+			{
+				continue;
+			}
+			const asCDecl* const parameter =
+				sema->GetContext().GetFormalDecl(child->id, 0);
+			const asCType* const paramType = parameter != 0
+				? sema->GetContext().GetType(parameter->type.type) : 0;
+			const asCType* const fieldNamed =
+				sema->GetContext().GetType(field->type.type);
+			if( parameter == 0 || paramType == 0 || fieldNamed == 0
+				|| !parameter->type.IsConst()
+				|| !parameter->type.IsReference() )
+			{
+				continue;
+			}
+			if( parameter->type.type == field->type.type
+				|| paramType->stableKey.Equals(fieldNamed->stableKey)
+				|| (paramType->stableKey.GetLength() != 0
+					&& fieldNamed->stableKey.GetLength() != 0
+					&& StripCanonicalHandleMarksLocal(paramType->stableKey).Equals(
+						StripCanonicalHandleMarksLocal(fieldNamed->stableKey))) )
+			{
+				selectedCopy = child->id;
+				break;
+			}
+		}
+	}
+	if( !selectedCopy.IsValid() )
 	{
 		return;
 	}
@@ -1608,15 +2317,38 @@ static void AttachGeneratedGetterCopyPlan(
 	asCArray<asASTExprId> arguments;
 	arguments.PushLast(source);
 	const asASTExprId plan = sema->ActOnConstruct(
-		field->type, arguments, field->range);
+		field->type, arguments, field->range, selectedCopy);
 	const asCExpr* const construct = UnwrapGeneratedAccessorPlan(
 		sema->GetContext(), sema->GetContext().GetExpr(plan));
+	const asCDecl* const constructor = construct != 0
+		? sema->GetContext().GetDecl(construct->resolvedDecl) : 0;
+	const asCDecl* const copyParameter = constructor != 0
+		? sema->GetContext().GetFormalDecl(constructor->id, 0) : 0;
+	const asCType* const copyType = copyParameter != 0
+		? sema->GetContext().GetType(copyParameter->type.type) : 0;
+	const asCType* const fieldNamed = sema->GetContext().GetType(field->type.type);
+	const bool sameValueType = copyType != 0 && fieldNamed != 0
+		&& (copyParameter->type.type == field->type.type
+			|| copyType->stableKey.Equals(fieldNamed->stableKey)
+			|| (copyType->stableKey.GetLength() != 0
+				&& fieldNamed->stableKey.GetLength() != 0
+				&& StripCanonicalHandleMarksLocal(copyType->stableKey).Equals(
+					StripCanonicalHandleMarksLocal(fieldNamed->stableKey))));
 	if( construct == 0 || construct->kind != asAST_EXPR_CONSTRUCT
-		|| !construct->resolvedDecl.IsValid()
-		|| construct->children.GetLength() != 1 )
+		|| constructor == 0
+		|| constructor->kind != asAST_DECL_CONSTRUCTOR
+		|| valueClass == 0 || constructor->parent != valueClass->id
+		|| sema->GetContext().GetFormalDeclCount(constructor->id) != 1
+		|| copyParameter == 0
+		|| !sameValueType
+		|| !copyParameter->type.IsConst()
+		|| !copyParameter->type.IsReference()
+		|| construct->children.GetLength() != 1
+		|| construct->children[0] != source )
 	{
-		sema->AddDiagnostic(
-			"generated-accessor-copy-constructor-unavailable", field->range);
+		// Host value types such as TMap register opAssign but no copy
+		// constructor. A generated by-value GetX cannot be sealed; leave the
+		// accessor declaration-only so field MEMBER_REF remains the authored path.
 		return;
 	}
 	sema->GetContext().AddDeclInit(getter, plan);
@@ -1634,21 +2366,10 @@ static void AttachGeneratedSetterAssignmentPlan(
 		return;
 	}
 
-	// Primitive/POD setters remain exact storage writes. A non-POD VALUE setter
+	// Primitive/POD setters remain exact storage writes. A non-trivial VALUE setter
 	// is an assignment operation: its backing object is already live and must be
 	// mutated through the overload selected by Sema, never reconstructed or
 	// widened into a raw storage copy by a backend.
-	asCRuntimeTypeBridge bridge(sema->GetEngine());
-	const asCDataType runtimeType = bridge.Resolve(
-		sema->GetContext(), field->type);
-	asCTypeInfo* const typeInfo = runtimeType.GetTypeInfo();
-	if( !runtimeType.IsNonPrimitiveValueType() || typeInfo == 0
-		|| (typeInfo->GetFlags() & asOBJ_VALUE) == 0
-		|| (typeInfo->GetFlags() & asOBJ_POD) != 0 )
-	{
-		return;
-	}
-
 	const asASTExprId lhs = sema->ActOnDeclRef(
 		field->id, field->type, field->range);
 	const asASTExprId rhs = sema->ActOnDeclRef(
@@ -1656,15 +2377,88 @@ static void AttachGeneratedSetterAssignmentPlan(
 	const asASTExprId plan = sema->ActOnGeneratedAssign(
 		lhs, rhs, field->type, field->range);
 	const asCExpr* const assign = sema->GetContext().GetExpr(plan);
+	const asCDecl* const valueClass = FindGeneratedAccessorValueClass(
+		sema->GetContext(), field->type);
+	const asCDecl* const assignOperator = assign != 0
+		? sema->GetContext().GetDecl(assign->resolvedDecl) : 0;
+	const asCDecl* const assignParameter = assignOperator != 0
+		? sema->GetContext().GetFormalDecl(assignOperator->id, 0) : 0;
+	const asDWORD assignDirection = assignParameter != 0
+		? (assignParameter->type.quals & asAST_QUAL_PARAM_DIR_MASK) : 0;
 	if( assign == 0 || assign->kind != asAST_EXPR_ASSIGN
+		|| assign->type != field->type
 		|| assign->children.GetLength() != 2
-		|| !assign->resolvedDecl.IsValid() )
+		|| assign->children[0] != lhs || assign->children[1] != rhs
+		|| assignOperator == 0
+		|| assignOperator->kind != asAST_DECL_METHOD
+		|| !assignOperator->name.Equals("opAssign")
+		|| valueClass == 0 || assignOperator->parent != valueClass->id
+		|| sema->GetContext().GetFormalDeclCount(assignOperator->id) != 1
+		|| assignParameter == 0
+		|| assignParameter->type.type != field->type.type
+		|| !assignParameter->type.IsConst()
+		|| !assignParameter->type.IsReference()
+		|| (assignDirection != 0
+			&& (assignDirection & asAST_QUAL_IN) == 0) )
 	{
 		sema->AddDiagnostic(
 			"generated-accessor-assignment-operator-unavailable", field->range);
 		return;
 	}
 	sema->GetContext().AddDeclInit(setter, plan);
+}
+
+void asCSema::ReconcileGeneratedAccessorPlans()
+{
+	// Accessor declarations are synthesized as soon as their owning field is
+	// parsed, but a later source section can still supply the field type's final
+	// storage trait, copy constructor and opAssign. Author plans once at the
+	// final layout boundary instead of baking parser callback order into them.
+	const asUINT declarationCount = context.GetDeclCount();
+	for( asUINT declarationIndex = 1;
+		declarationIndex <= declarationCount; ++declarationIndex )
+	{
+		const asCDecl* const accessor = context.GetDecl(
+			asASTDeclId(declarationIndex));
+		if( accessor == 0 || accessor->kind != asAST_DECL_METHOD
+			|| (accessor->traits & asAST_TRAIT_GENERATED) == 0
+			|| accessor->accessorKind == asAST_ACCESSOR_NONE
+			|| !accessor->accessorField.IsValid()
+			|| accessor->inits.GetLength() != 0 )
+		{
+			continue;
+		}
+
+		const asCDecl* const field = context.GetDecl(accessor->accessorField);
+		if( field == 0 || field->kind != asAST_DECL_VAR
+			|| !RequiresExactValueObjectPlan(field->type) )
+		{
+			continue;
+		}
+
+		if( accessor->accessorKind == asAST_ACCESSOR_GET )
+		{
+			AttachGeneratedGetterCopyPlan(this, accessor->id, field);
+			continue;
+		}
+		if( accessor->accessorKind != asAST_ACCESSOR_SET
+			|| context.GetFormalDeclCount(accessor->id) != 1 )
+		{
+			AddDiagnostic(
+				"generated-accessor-parameter-unavailable", accessor->range);
+			continue;
+		}
+		const asCDecl* const parameter =
+			context.GetFormalDecl(accessor->id, 0);
+		if( parameter == 0 || parameter->type != field->type )
+		{
+			AddDiagnostic(
+				"generated-accessor-parameter-unavailable", accessor->range);
+			continue;
+		}
+		AttachGeneratedSetterAssignmentPlan(
+			this, accessor->id, parameter->id, field);
+	}
 }
 
 static void EnsureGeneratedAccessors(asCSema* sema, asASTDeclId cls)
@@ -1701,7 +2495,11 @@ static void EnsureGeneratedAccessors(asCSema* sema, asASTDeclId cls)
 			const asASTDeclId getter = sema->ActOnMethodDecl(cls, getName.AddressOf(), field->type, field->range);
 			sema->GetContext().AddDeclTrait(getter, asAST_TRAIT_GENERATED);
 			sema->GetContext().SetGeneratedAccessor(getter, asAST_ACCESSOR_GET, field->id);
-			AttachGeneratedGetterCopyPlan(sema, getter, field);
+			if( field->accessSpecifier.IsValid() )
+			{
+				sema->GetContext().SetDeclAccessSpecifier(
+					getter, field->accessSpecifier);
+			}
 		}
 		if( !ClassHasNamedMethod(sema, decl, setName.AddressOf()) )
 		{
@@ -1711,8 +2509,11 @@ static void EnsureGeneratedAccessors(asCSema* sema, asASTDeclId cls)
 			const asASTDeclId parameter =
 				sema->ActOnParamDecl(setter, "value", field->type, field->range);
 			sema->GetContext().SetGeneratedAccessor(setter, asAST_ACCESSOR_SET, field->id);
-			AttachGeneratedSetterAssignmentPlan(
-				sema, setter, parameter, field);
+			if( field->accessSpecifier.IsValid() )
+			{
+				sema->GetContext().SetDeclAccessSpecifier(
+					setter, field->accessSpecifier);
+			}
 		}
 	}
 }
@@ -1744,38 +2545,246 @@ asASTDeclId asCSema::ProjectCanonicalRegisteredBaseType(
 		return asASTDeclId();
 	}
 
-	const asCQualType canonicalType = context.InternNamedType(
-		fact->kind, stableKey.AddressOf(), 0);
+	// Build the reachable registered graph in two phases. Creating/finding all
+	// declaration shells before adding edges makes projection idempotent, repairs
+	// shells previously interned for native members, and terminates even if a
+	// malformed host registry contains an ancestry cycle.
+	asCArray<asCString> projectedKeys;
+	asCArray<asASTDeclId> projectedDeclarations;
+	projectedKeys.PushLast(stableKey);
+	for( asUINT projectedIndex = 0;
+		projectedIndex < projectedKeys.GetLength(); ++projectedIndex )
+	{
+		const asCString projectedKey = projectedKeys[projectedIndex];
+		const asSCanonicalRegisteredTypeDeclarationFact* const projectedFact =
+			FindExactCanonicalRegisteredTypeDeclaration(projectedKey);
+		if( projectedFact == 0
+			|| projectedFact->ambiguous
+			|| (projectedFact->kind != asAST_TYPE_REFERENCE_OBJECT
+				&& projectedFact->kind != asAST_TYPE_VALUE_OBJECT) )
+		{
+			ambiguous = projectedFact != 0 && projectedFact->ambiguous;
+			AddDiagnostic(ambiguous
+				? "registered-native-base-ambiguous"
+				: "registered-native-base-unresolved");
+			return asASTDeclId();
+		}
+
+		asASTDeclId projected;
+		for( asUINT declarationIndex = 1;
+			declarationIndex <= context.GetDeclCount(); ++declarationIndex )
+		{
+			const asCDecl* const existing =
+				context.GetDecl(asASTDeclId(declarationIndex));
+			if( existing != 0
+				&& (existing->kind == asAST_DECL_CLASS
+					|| existing->kind == asAST_DECL_INTERFACE)
+				&& existing->origin.Equals(CANONICAL_NATIVE_TYPE_VIEW_ORIGIN)
+				&& existing->stableKey.Equals(projectedKey) )
+			{
+				projected = existing->id;
+				break;
+			}
+		}
+		if( !projected.IsValid() )
+		{
+			projected = projectedFact->isInterface
+				? ActOnInterfaceDecl(
+					context.GetTranslationUnit(),
+					projectedKey.AddressOf(),
+					asCSourceRange())
+				: ActOnClassDecl(
+					context.GetTranslationUnit(),
+					projectedKey.AddressOf(),
+					asCSourceRange());
+			if( !projected.IsValid() )
+			{
+				return projected;
+			}
+		}
+
+		context.SetOrigin(projected, CANONICAL_NATIVE_TYPE_VIEW_ORIGIN);
+		asDWORD projectedQuals = 0;
+		if( (projectedFact->flags & asOBJ_IMPLICIT_HANDLE) != 0 )
+		{
+			projectedQuals |= asAST_QUAL_HANDLE;
+		}
+		context.SetDeclType(projected, context.InternNamedType(
+			projectedFact->kind, projectedKey.AddressOf(), projectedQuals));
+		if( (projectedFact->flags & asOBJ_VALUE) != 0 )
+		{
+			context.AddDeclTrait(projected, asAST_TRAIT_VALUE);
+		}
+		projectedDeclarations.PushLast(projected);
+
+		for( asUINT baseIndex = 0;
+			baseIndex < projectedFact->baseStableKeys.GetLength(); ++baseIndex )
+		{
+			const asCString& baseKey =
+				projectedFact->baseStableKeys[baseIndex];
+			bool alreadyQueued = false;
+			for( asUINT keyIndex = 0;
+				keyIndex < projectedKeys.GetLength(); ++keyIndex )
+			{
+				if( projectedKeys[keyIndex].Equals(baseKey) )
+				{
+					alreadyQueued = true;
+					break;
+				}
+			}
+			if( !alreadyQueued )
+			{
+				projectedKeys.PushLast(baseKey);
+			}
+		}
+	}
+
+	for( asUINT projectedIndex = 0;
+		projectedIndex < projectedKeys.GetLength(); ++projectedIndex )
+	{
+		const asSCanonicalRegisteredTypeDeclarationFact* const projectedFact =
+			FindExactCanonicalRegisteredTypeDeclaration(
+				projectedKeys[projectedIndex]);
+		for( asUINT baseIndex = 0;
+			projectedFact != 0
+				&& baseIndex < projectedFact->baseStableKeys.GetLength();
+			++baseIndex )
+		{
+			asASTDeclId base;
+			for( asUINT keyIndex = 0;
+				keyIndex < projectedKeys.GetLength(); ++keyIndex )
+			{
+				if( projectedKeys[keyIndex].Equals(
+					projectedFact->baseStableKeys[baseIndex]) )
+				{
+					base = projectedDeclarations[keyIndex];
+					break;
+				}
+			}
+			if( !base.IsValid() )
+			{
+				AddDiagnostic("registered-native-base-unresolved");
+				return asASTDeclId();
+			}
+
+			const asCDecl* const declaration =
+				context.GetDecl(projectedDeclarations[projectedIndex]);
+			bool alreadyRecorded = false;
+			for( asUINT recordedIndex = 0;
+				declaration != 0
+					&& recordedIndex < declaration->bases.GetLength();
+				++recordedIndex )
+			{
+				if( declaration->bases[recordedIndex] == base )
+				{
+					alreadyRecorded = true;
+					break;
+				}
+			}
+			if( !alreadyRecorded )
+			{
+				context.AddBase(projectedDeclarations[projectedIndex], base);
+			}
+		}
+	}
+	return projectedDeclarations.GetLength() != 0
+		? projectedDeclarations[0]
+		: asASTDeclId();
+}
+
+asCQualType asCSema::InternCanonicalRegisteredTypeRef(
+	const asSCanonicalRegisteredTypeRefFact& fact)
+{
+	if( fact.kind == asAST_TYPE_VOID || fact.kind == asAST_TYPE_PRIMITIVE )
+	{
+		return context.InternPrimitive(fact.primitiveToken, fact.quals);
+	}
+	if( fact.kind == asAST_TYPE_INVALID || fact.stableKey.GetLength() == 0 )
+	{
+		return asCQualType();
+	}
+	return context.InternNamedType(
+		fact.kind, fact.stableKey.AddressOf(), fact.quals);
+}
+
+asASTDeclId asCSema::ProjectCanonicalRegisteredFuncdef(const asCString& stableKey)
+{
+	if( stableKey.GetLength() == 0
+		|| !context.GetTranslationUnit().IsValid() )
+	{
+		return asASTDeclId();
+	}
+	const asSCanonicalRegisteredTypeDeclarationFact* const fact =
+		FindExactCanonicalRegisteredTypeDeclaration(stableKey);
+	if( fact == 0 || fact->ambiguous
+		|| fact->kind != asAST_TYPE_FUNCDEF
+		|| (fact->funcdefReturn.kind != asAST_TYPE_VOID
+			&& fact->funcdefReturn.kind != asAST_TYPE_PRIMITIVE
+			&& fact->funcdefReturn.stableKey.GetLength() == 0) )
+	{
+		return asASTDeclId();
+	}
+
+	asASTDeclId projected;
 	for( asUINT declarationIndex = 1;
 		declarationIndex <= context.GetDeclCount(); ++declarationIndex )
 	{
 		const asCDecl* const existing =
 			context.GetDecl(asASTDeclId(declarationIndex));
 		if( existing != 0
-			&& (existing->kind == asAST_DECL_CLASS
-				|| existing->kind == asAST_DECL_INTERFACE)
-			&& existing->origin.Equals("canonical-native-type-view")
-			&& existing->type == canonicalType )
+			&& existing->kind == asAST_DECL_FUNCDEF
+			&& existing->origin.Equals(CANONICAL_NATIVE_TYPE_VIEW_ORIGIN)
+			&& existing->stableKey.Equals(stableKey) )
 		{
-			return existing->id;
+			projected = existing->id;
+			break;
 		}
 	}
-
-	const asASTDeclId projected = fact->isInterface
-		? ActOnInterfaceDecl(
-			context.GetTranslationUnit(), stableKey.AddressOf(), asCSourceRange())
-		: ActOnClassDecl(
-			context.GetTranslationUnit(), stableKey.AddressOf(), asCSourceRange());
 	if( !projected.IsValid() )
 	{
-		return projected;
+		projected = ActOnStartFuncDefDecl(
+			context.GetTranslationUnit(),
+			stableKey.AddressOf(),
+			asCSourceRange());
+		if( !projected.IsValid() )
+		{
+			return projected;
+		}
+		context.SetOrigin(projected, CANONICAL_NATIVE_TYPE_VIEW_ORIGIN);
 	}
-	context.SetOrigin(projected, "canonical-native-type-view");
-	context.SetDeclType(projected, canonicalType);
-	if( (fact->flags & asOBJ_VALUE) != 0 )
+
+	const asCQualType returnType = InternCanonicalRegisteredTypeRef(
+		fact->funcdefReturn);
+	if( !returnType.IsValid() )
 	{
-		context.AddDeclTrait(projected, asAST_TRAIT_VALUE);
+		return asASTDeclId();
 	}
+	context.SetDeclType(projected, returnType);
+
+	if( context.GetFormalDeclCount(projected) == 0 )
+	{
+		for( asUINT formalIndex = 0;
+			formalIndex < fact->funcdefFormals.GetLength(); ++formalIndex )
+		{
+			const asCQualType formalType = InternCanonicalRegisteredTypeRef(
+				fact->funcdefFormals[formalIndex]);
+			if( !formalType.IsValid() )
+			{
+				return asASTDeclId();
+			}
+			if( !ActOnParamDecl(
+				projected, "", formalType, asCSourceRange()).IsValid() )
+			{
+				return asASTDeclId();
+			}
+		}
+	}
+	else if( context.GetFormalDeclCount(projected)
+		!= fact->funcdefFormals.GetLength() )
+	{
+		return asASTDeclId();
+	}
+	context.SetOrigin(projected, CANONICAL_NATIVE_TYPE_VIEW_ORIGIN);
 	return projected;
 }
 
@@ -1806,39 +2815,26 @@ static bool CanonicalMethodSignaturesEqual(
 		return false;
 	}
 
-	asUINT lhsParameterIndex = 0;
-	asUINT rhsParameterIndex = 0;
-	for( ;; )
+	const asUINT lhsParameterCount = context.GetFormalDeclCount(lhs->id);
+	const asUINT rhsParameterCount = context.GetFormalDeclCount(rhs->id);
+	if( lhsParameterCount != rhsParameterCount )
 	{
-		const asCDecl* lhsParameter = 0;
-		while( lhsParameterIndex < lhs->children.GetLength() )
-		{
-			lhsParameter = context.GetDecl(lhs->children[lhsParameterIndex++]);
-			if( lhsParameter != 0 && lhsParameter->kind == asAST_DECL_PARAM )
-			{
-				break;
-			}
-			lhsParameter = 0;
-		}
-		const asCDecl* rhsParameter = 0;
-		while( rhsParameterIndex < rhs->children.GetLength() )
-		{
-			rhsParameter = context.GetDecl(rhs->children[rhsParameterIndex++]);
-			if( rhsParameter != 0 && rhsParameter->kind == asAST_DECL_PARAM )
-			{
-				break;
-			}
-			rhsParameter = 0;
-		}
-		if( lhsParameter == 0 || rhsParameter == 0 )
-		{
-			return lhsParameter == rhsParameter;
-		}
-		if( lhsParameter->type != rhsParameter->type )
+		return false;
+	}
+	for( asUINT formalIndex = 0;
+		formalIndex < lhsParameterCount; ++formalIndex )
+	{
+		const asCDecl* const lhsParameter =
+			context.GetFormalDecl(lhs->id, formalIndex);
+		const asCDecl* const rhsParameter =
+			context.GetFormalDecl(rhs->id, formalIndex);
+		if( lhsParameter == 0 || rhsParameter == 0
+			|| lhsParameter->type != rhsParameter->type )
 		{
 			return false;
 		}
 	}
+	return true;
 }
 
 static bool ContainsDeclId(
@@ -2338,23 +3334,26 @@ void asCSema::ActOnRecordBaseSpecifiersAction(
 	}
 
 	// The UE preprocessor deliberately erases a native code superclass from the
-	// Parser text while retaining it in the module's PreClass metadata. Consume
-	// the pointer-free fact captured at that registration boundary after the
-	// complete authored base list, and publish only stable AST identity.
+	// Parser text while retaining it in the module's PreClass metadata. The
+	// native shadow is an orthogonal embedding/layout relation: it may coexist
+	// with one authored script base. Consume the pointer-free fact captured at
+	// that registration boundary after the complete authored base list, and
+	// publish only stable AST identity.
 	const asCDecl* declaration = context.GetDecl(derived);
-	if( declaration != 0 && declaration->bases.GetLength() == 0
-		&& buildModule != 0 )
+	if( declaration != 0 && buildModule != 0 )
 	{
 		const asSCanonicalPreClassFact* const classFact =
 			buildModule->FindCanonicalPreClassFact(declaration->name);
 		if( classFact != 0 && classFact->hasShadowType )
 		{
+			const asASTDeclId declarationParent = declaration->parent;
+			const asCSourceRange declarationRange = declaration->range;
 			bool ambiguous = false;
 			const asASTDeclId nativeBase =
 				ProjectCanonicalRegisteredBaseType(
 					classFact->shadowTypeStableKey,
 					true,
-					declaration->parent,
+					declarationParent,
 					ambiguous);
 			if( nativeBase.IsValid() )
 			{
@@ -2363,7 +3362,23 @@ void asCSema::ActOnRecordBaseSpecifiersAction(
 					projected != 0 && projected->stableKey.GetLength() != 0
 						? projected->stableKey.AddressOf()
 						: classFact->shadowTypeStableKey.AddressOf());
-				context.AddBase(derived, nativeBase);
+				const asCDecl* const currentDerived = context.GetDecl(derived);
+				bool alreadyRecorded = false;
+				for( asUINT baseIndex = 0;
+					currentDerived != 0
+						&& baseIndex < currentDerived->bases.GetLength();
+					++baseIndex )
+				{
+					if( currentDerived->bases[baseIndex] == nativeBase )
+					{
+						alreadyRecorded = true;
+						break;
+					}
+				}
+				if( !alreadyRecorded )
+				{
+					context.AddBase(derived, nativeBase);
+				}
 			}
 			else
 			{
@@ -2371,7 +3386,7 @@ void asCSema::ActOnRecordBaseSpecifiersAction(
 					ambiguous
 						? "preclass-native-base-ambiguous"
 						: "preclass-native-base-unresolved",
-					declaration->range);
+					declarationRange);
 			}
 		}
 	}
@@ -2527,6 +3542,168 @@ void asCSema::ValidateCapturedLambdaUses()
 		if( !hasDirectCall )
 		{
 			AddDiagnostic("capturing-lambda-cannot-escape", lambda->range);
+		}
+	}
+}
+
+static bool CanonicalFormalHasDefault(const asCDecl* parameter)
+{
+	return parameter != 0
+		&& (parameter->defaultArg.GetLength() != 0
+			|| parameter->inits.GetLength() != 0);
+}
+
+static bool CanonicalDefaultArgOverloadConflict(
+	const asCASTContext& context,
+	const asCDecl* left,
+	const asCDecl* right)
+{
+	if( left == 0 || right == 0 || left == right
+		|| !left->name.Equals(right->name)
+		|| left->parent != right->parent )
+	{
+		return false;
+	}
+	const asDWORD constMask = asAST_TRAIT_CONST_METHOD;
+	if( (left->traits & constMask) != (right->traits & constMask) )
+	{
+		return false;
+	}
+
+	const asUINT leftCount = context.GetFormalDeclCount(left->id);
+	const asUINT rightCount = context.GetFormalDeclCount(right->id);
+	asUINT prefix = 0;
+	const asUINT shared = leftCount < rightCount ? leftCount : rightCount;
+	for( ; prefix < shared; ++prefix )
+	{
+		const asCDecl* const leftFormal =
+			context.GetFormalDecl(left->id, prefix);
+		const asCDecl* const rightFormal =
+			context.GetFormalDecl(right->id, prefix);
+		if( CanonicalFormalHasDefault(leftFormal)
+			|| CanonicalFormalHasDefault(rightFormal) )
+		{
+			break;
+		}
+		if( leftFormal == 0 || rightFormal == 0
+			|| leftFormal->type != rightFormal->type )
+		{
+			return false;
+		}
+	}
+
+	if( prefix >= leftCount && prefix < rightCount )
+	{
+		return CanonicalFormalHasDefault(
+			context.GetFormalDecl(right->id, prefix));
+	}
+	if( prefix >= rightCount && prefix < leftCount )
+	{
+		return CanonicalFormalHasDefault(
+			context.GetFormalDecl(left->id, prefix));
+	}
+	return false;
+}
+
+void asCSema::ValidateDefaultArgumentOverloads()
+{
+	const asUINT declarationCount = context.GetDeclCount();
+	for( asUINT leftIndex = 1; leftIndex <= declarationCount; ++leftIndex )
+	{
+		const asCDecl* const left = context.GetDecl(asASTDeclId(leftIndex));
+		if( left == 0
+			|| (left->kind != asAST_DECL_FUNCTION
+				&& left->kind != asAST_DECL_METHOD
+				&& left->kind != asAST_DECL_MIXIN)
+			|| (left->traits & asAST_TRAIT_GENERATED) != 0
+			|| (left->traits & asAST_TRAIT_LAMBDA) != 0 )
+		{
+			continue;
+		}
+		for( asUINT rightIndex = leftIndex + 1;
+			rightIndex <= declarationCount; ++rightIndex )
+		{
+			const asCDecl* const right =
+				context.GetDecl(asASTDeclId(rightIndex));
+			if( right == 0
+				|| right->kind != left->kind
+				|| (right->traits & asAST_TRAIT_GENERATED) != 0
+				|| (right->traits & asAST_TRAIT_LAMBDA) != 0 )
+			{
+				continue;
+			}
+			if( CanonicalDefaultArgOverloadConflict(context, left, right) )
+			{
+				AddDiagnostic("default-argument-overload-conflict", right->range);
+			}
+		}
+	}
+}
+
+void asCSema::AddEditorOnlyCharacterRange(asUINT begin, asUINT end)
+{
+	if( end < begin )
+	{
+		return;
+	}
+	editorOnlyBegin.PushLast(begin);
+	editorOnlyEnd.PushLast(end);
+}
+
+void asCSema::ApplyEditorOnlyTraitFromSource(asASTDeclId declaration)
+{
+	const asCDecl* const decl = context.GetDecl(declaration);
+	if( decl == 0 || !decl->range.begin.IsValid() )
+	{
+		return;
+	}
+	const asUINT offset = decl->range.begin.offset;
+	for( asUINT index = 0; index < editorOnlyBegin.GetLength()
+		&& index < editorOnlyEnd.GetLength(); ++index )
+	{
+		if( offset >= editorOnlyBegin[index]
+			&& offset <= editorOnlyEnd[index] )
+		{
+			context.AddDeclTrait(declaration, asAST_TRAIT_EDITOR_ONLY);
+			return;
+		}
+	}
+}
+
+void asCSema::ValidateEditorOnlyOverrides()
+{
+	const asUINT declarationCount = context.GetDeclCount();
+	for( asUINT index = 1; index <= declarationCount; ++index )
+	{
+		const asCDecl* const record = context.GetDecl(asASTDeclId(index));
+		if( record == 0 || record->kind != asAST_DECL_CLASS )
+		{
+			continue;
+		}
+		for( asUINT relationIndex = 0;
+			relationIndex < record->methodRelations.GetLength();
+			++relationIndex )
+		{
+			const asSASTMethodRelation& relation =
+				record->methodRelations[relationIndex];
+			if( relation.kind != asAST_METHOD_RELATION_BASE_OVERRIDE )
+			{
+				continue;
+			}
+			const asCDecl* const implementation =
+				context.GetDecl(relation.implementation);
+			const asCDecl* const requirement =
+				context.GetDecl(relation.requirement);
+			if( implementation == 0 || requirement == 0 )
+			{
+				continue;
+			}
+			if( (requirement->traits & asAST_TRAIT_EDITOR_ONLY) != 0
+				&& (implementation->traits & asAST_TRAIT_EDITOR_ONLY) == 0 )
+			{
+				AddDiagnostic(
+					"editor-only-override-mismatch", implementation->range);
+			}
 		}
 	}
 }
@@ -2718,6 +3895,17 @@ asASTDeclId asCSema::ActOnStartClassDecl(asASTDeclId parent, const char* name, c
 	}
 	else if( const asCDecl* const existing = context.GetDecl(id) )
 	{
+		// Runtime preparation can create a native-view shell before the parser
+		// reaches a later current-module class declaration.  The first valid
+		// source spelling promotes that same stable Decl identity to authored
+		// script ownership.  Leaving the native origin behind would let lazy
+		// Runtime callable projection append ABI-normalized constructors beside
+		// the authored declarations during finalization.
+		if( range.IsValid()
+			&& existing->origin.Equals(CANONICAL_NATIVE_TYPE_VIEW_ORIGIN) )
+		{
+			context.SetOrigin(id, "");
+		}
 		// Type/layout preparation may publish the script class identity before
 		// the parser reaches its authored declaration. Preserve that identity,
 		// but let the first real spelling become the source authority. Generated
@@ -3303,6 +4491,7 @@ void asCSema::ActOnFunctionTraitsAction(
 		| asAST_TRAIT_OVERRIDE
 		| asAST_TRAIT_FINAL
 		| asAST_TRAIT_MIXIN
+		| asAST_TRAIT_GENERATED
 		| asAST_TRAIT_EXTERNAL_IMPLICIT_THIS;
 	const asCDecl* const declaration = context.GetDecl(functionDecl);
 	if( declaration == 0
@@ -3317,6 +4506,7 @@ void asCSema::ActOnFunctionTraitsAction(
 		return;
 	}
 	context.AddDeclTrait(functionDecl, traits);
+	ApplyEditorOnlyTraitFromSource(functionDecl);
 	FinishDecl(functionDecl);
 	NoteActedDecl(functionDecl);
 }
@@ -3675,6 +4865,7 @@ asASTDeclId asCSema::ActOnVariableHeaderAction(
 	{
 		if( named->kind != asAST_TYPE_PRIMITIVE
 			&& named->kind != asAST_TYPE_VOID
+			&& !named->stableKey.Equals("auto")
 			&& named->stableKey.GetLength() != 0 )
 		{
 			RecordDependency(variable, named->stableKey.AddressOf());
@@ -3713,19 +4904,56 @@ bool asCSema::ActOnVariableInitializerAction(
 		AddDiagnostic("variable-initializer-source-range-invalid");
 		return false;
 	}
+	auto commitVariableType = [this, &action, &range](
+		const asCQualType& type) -> bool
+	{
+		const asCDecl* const current = context.GetDecl(action.variable);
+		if( current == 0 )
+		{
+			return false;
+		}
+		if( current->type != type
+			&& context.SetDeclType(action.variable, type) != asAST_VERIFY_OK )
+		{
+			AddDiagnostic("variable-auto-type-commit-invalid", range);
+			return false;
+		}
+		const asCType* const named = context.GetType(type.type);
+		if( named != 0 && named->kind != asAST_TYPE_PRIMITIVE
+			&& named->kind != asAST_TYPE_VOID
+			&& !named->stableKey.Equals("auto")
+			&& named->stableKey.GetLength() != 0 )
+		{
+			RecordDependency(action.variable, named->stableKey.AddressOf());
+		}
+		return true;
+	};
 
 	if( action.kind == asVARIABLE_INITIALIZER_NONE )
 	{
 		if( action.expression.IsValid() || action.arguments.GetLength() != 0
+			|| action.argumentNames.GetLength() != 0
 			|| variable->inits.GetLength() != 0 )
 		{
 			AddDiagnostic("variable-initializer-action-invalid", range);
 			return false;
 		}
+		asCQualType committedType;
+		if( !InferCanonicalAutoType(
+			variable->type, asASTExprId(), false,
+			action.autoConstRef, committedType) )
+		{
+			AddDiagnostic("variable-auto-inference-invalid", range);
+			return false;
+		}
+		if( !commitVariableType(committedType) )
+		{
+			return false;
+		}
 		if( parent->kind == asAST_DECL_TRANSLATION_UNIT
 			|| parent->kind == asAST_DECL_NAMESPACE )
 		{
-			if( IsCanonicalNonPrimitiveValueType(variable->type) )
+			if( IsCanonicalNonPrimitiveValueType(committedType) )
 			{
 				context.AddDeclTrait(
 					action.variable, asAST_TRAIT_DEFAULT_INITIALIZED);
@@ -3740,6 +4968,7 @@ bool asCSema::ActOnVariableInitializerAction(
 	{
 		if( !action.expression.IsValid()
 			|| action.arguments.GetLength() != 0
+			|| action.argumentNames.GetLength() != 0
 			|| context.GetExpr(action.expression) == 0 )
 		{
 			AddDiagnostic("variable-initializer-expression-invalid", range);
@@ -3749,7 +4978,10 @@ bool asCSema::ActOnVariableInitializerAction(
 	}
 	else
 	{
-		if( action.expression.IsValid() )
+		if( action.expression.IsValid()
+			|| (action.argumentNames.GetLength() != 0
+				&& action.argumentNames.GetLength()
+					!= action.arguments.GetLength()) )
 		{
 			AddDiagnostic("variable-initializer-construct-invalid", range);
 			return false;
@@ -3763,6 +4995,18 @@ bool asCSema::ActOnVariableInitializerAction(
 				return false;
 			}
 		}
+	}
+	asCQualType committedType;
+	if( !InferCanonicalAutoType(
+		variable->type, initExpr, false,
+		action.autoConstRef, committedType) )
+	{
+		AddDiagnostic("variable-auto-inference-invalid", range);
+		return false;
+	}
+	if( !commitVariableType(committedType) )
+	{
+		return false;
 	}
 
 	if( variable->inits.GetLength() != 0 )
@@ -3802,7 +5046,13 @@ bool asCSema::ActOnVariableInitializerAction(
 	}
 	if( action.kind == asVARIABLE_INITIALIZER_DIRECT_CONSTRUCT )
 	{
-		initExpr = ActOnConstruct(variable->type, action.arguments, range);
+		initExpr = ActOnConstructCall(
+			variable->parent,
+			committedType,
+			action.arguments,
+			action.argumentNames.GetLength() != 0
+				? &action.argumentNames : 0,
+			range);
 		if( !initExpr.IsValid() )
 		{
 			return false;
@@ -3815,10 +5065,7 @@ bool asCSema::ActOnVariableInitializerAction(
 		// ActOnGlobalVarInit owns constant evaluation and writes the normalized
 		// canonical default text. Do not replace `40 + 1` with the first source
 		// literal (`40`) after it has sealed the evaluated value (`41`).
-		ActOnGlobalVarInit(action.variable, initExpr);
-		const asCDecl* const initialized = context.GetDecl(action.variable);
-		if( initialized == 0 || !initialized->hasConstantValue
-			|| initialized->defaultArg.GetLength() == 0 )
+		if( !ActOnGlobalVarInit(action.variable, initExpr) )
 		{
 			NoteActedDecl(action.variable);
 			return false;
@@ -4044,7 +5291,39 @@ static bool LayoutOneScriptClass(
 	{
 		// Native type views already contain host-registered member offsets. Their
 		// object extent and alignment are owned by the embedding ABI, not by the
-		// script class-layout algorithm.
+		// script class-layout algorithm. Still seal the current Engine size so
+		// Bytecode COPY/read of POD or destructor-free values is authorized from
+		// producer facts rather than remaining at the unlaid-out -1/0 sentinel.
+		asCScriptEngine* const engine = sema->GetEngine();
+		if( engine != 0 && (classDecl->traits & asAST_TRAIT_VALUE) != 0 )
+		{
+			const asCDataType runtimeType = bridge.Resolve(
+				context, classDecl->type.IsValid()
+					? classDecl->type
+					: context.InternNamedType(
+						asAST_TYPE_VALUE_OBJECT,
+						classDecl->stableKey.GetLength()
+							? classDecl->stableKey.AddressOf()
+							: classDecl->name.AddressOf(),
+						0));
+			asCTypeInfo* const typeInfo = runtimeType.GetTypeInfo();
+			if( typeInfo != 0 && (typeInfo->GetFlags() & asOBJ_VALUE) != 0
+				&& typeInfo->size > 0 )
+			{
+				asUINT alignment = runtimeType.GetAlignment();
+				if( alignment == 0 )
+				{
+					alignment = 1;
+				}
+				context.SetDeclLayout(classDecl->id, typeInfo->size, alignment);
+				if( (typeInfo->GetFlags() & asOBJ_POD) != 0
+					|| (typeInfo->GetFlags() & asOBJ_APP_CLASS_DESTRUCTOR) == 0 )
+				{
+					context.AddDeclTrait(
+						classDecl->id, asAST_TRAIT_TRIVIAL_STORAGE_COPY);
+				}
+			}
+		}
 		states[classId.value] = 2;
 		return true;
 	}
@@ -4198,6 +5477,18 @@ static bool LayoutOneScriptClass(
 		size = (size + static_cast<int>(alignment) - 1)
 			& ~(static_cast<int>(alignment) - 1);
 	}
+	if( size <= 0 )
+	{
+		// A script class with no authored fields still needs a sealed extent.
+		// Native REF bases are not layout owners; extra-module compiles also
+		// have no PreClassData. Keep a pointer-sized object so CodeGen can
+		// publish the type instead of leaving the -1/0 unlaid-out sentinel.
+		size = AS_PTR_SIZE * 4;
+		if( alignment < static_cast<asUINT>(AS_PTR_SIZE * 4) )
+		{
+			alignment = static_cast<asUINT>(AS_PTR_SIZE * 4);
+		}
+	}
 	context.SetDeclLayout(classDecl->id, size, alignment);
 	if( trivialStorageCopy )
 	{
@@ -4303,8 +5594,7 @@ static const asCDecl* FindValueTypeDestructor(
 			&& destructor->kind == asAST_DECL_DESTRUCTOR
 			? context.GetDecl(destructor->parent) : 0;
 		if( owner != 0 && owner->kind == asAST_DECL_CLASS
-			&& (owner->stableKey.Equals(type->stableKey)
-				|| owner->name.Equals(type->stableKey)) )
+			&& owner->stableKey.Equals(type->stableKey) )
 		{
 			return destructor;
 		}
@@ -4564,8 +5854,14 @@ void asCSema::LayoutScriptClassFields(asCModule* module)
 		}
 		LayoutOneScriptClass(this, bridge, module, cls->id, states);
 	}
+	FinalizeGeneratedImplicitCopyLifecycle(this);
 	AttachBaseConstructorPlans(this);
 	AuthorConstructorLifetimePlans(this);
+	ReconcileGeneratedAccessorPlans();
+	// Generated wrappers can be declared after an already-resolved consumer.
+	// Their final trivial-copy trait and copy constructor are authoritative only
+	// after this layout pass, so close those earlier call edges before Seal.
+	ReconcileDeferredByValueCopyPlans();
 }
 
 END_AS_NAMESPACE

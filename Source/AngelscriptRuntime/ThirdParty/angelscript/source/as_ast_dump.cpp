@@ -1,5 +1,14 @@
 #include "as_ast_dump.h"
 #include "as_ast_traversal.h"
+#include "as_datatype.h"
+#include "as_module.h"
+#include "as_namespace.h"
+#include "as_objecttype.h"
+#include "as_property.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
+#include "as_typeinfo.h"
+#include <cstring>
 
 BEGIN_AS_NAMESPACE
 
@@ -159,6 +168,20 @@ static const char* CallDispatchName(asEASTCallDispatch dispatch)
 	case asAST_CALL_DISPATCH_VIRTUAL: return "virtual";
 	case asAST_CALL_DISPATCH_INDIRECT: return "indirect";
 	default: return "none";
+	}
+}
+
+static const char* CallArgumentOriginName(asEASTCallArgumentOrigin origin)
+{
+	switch( origin )
+	{
+	case asAST_CALL_ARGUMENT_POSITIONAL: return "positional";
+	case asAST_CALL_ARGUMENT_NAMED: return "named";
+	case asAST_CALL_ARGUMENT_DEFAULT: return "default";
+	case asAST_CALL_ARGUMENT_HIDDEN: return "hidden";
+	case asAST_CALL_ARGUMENT_IMPLICIT_RECEIVER: return "implicit-receiver";
+	case asAST_CALL_ARGUMENT_GENERATED: return "generated";
+	default: return "invalid";
 	}
 }
 
@@ -1255,6 +1278,14 @@ void asCASTDump(const asCASTContext& context, asCString& out)
 			line += layoutDump;
 			line += "\n";
 		}
+		if( decl->kind == asAST_DECL_PARAM )
+		{
+			line.SetLength(line.GetLength() - 1);
+			asCString formalDump;
+			formalDump.Format(" formal=%u", decl->formalIndex);
+			line += formalDump;
+			line += "\n";
+		}
 		out += line;
 	}
 
@@ -1444,14 +1475,54 @@ void asCASTDump(const asCASTContext& context, asCString& out)
 					expr->children.GetLength(),
 					argsDump.AddressOf() ? argsDump.AddressOf() : "");
 			}
-			if( expr->kind == asAST_EXPR_CALL )
+			if( expr->kind == asAST_EXPR_CALL
+				|| expr->kind == asAST_EXPR_CONSTRUCT )
 			{
 				if( line.GetLength() && line[line.GetLength() - 1] == '\n' )
 				{
 					line.SetLength(line.GetLength() - 1);
 				}
-				line += " dispatch=";
-				line += CallDispatchName(expr->callDispatch);
+				if( expr->kind == asAST_EXPR_CALL )
+				{
+					line += " dispatch=";
+					line += CallDispatchName(expr->callDispatch);
+				}
+				asCString callArgumentCount;
+				callArgumentCount.Format(" callArgs=%u", expr->callArguments.GetLength());
+				line += callArgumentCount;
+				for( asUINT argumentIndex = 0;
+					argumentIndex < expr->callArguments.GetLength(); ++argumentIndex )
+				{
+					const asSASTCallArgument& argument =
+						expr->callArguments[argumentIndex];
+					const asCDecl* const formal = argument.formal.IsValid()
+						? context.GetDecl(argument.formal) : 0;
+					asCString record;
+					record.Format(
+						" callArg%u={expr=%u formal=%s formalId=%u formalIndex=%u formalType=%s origin=%s sourceOrdinal=",
+						argumentIndex,
+						argument.expression.value,
+						formal && formal->name.GetLength()
+							? formal->name.AddressOf() : "<indirect>",
+						argument.formal.value,
+						argument.formalIndex,
+						TypeStableKey(context, argument.formalType),
+						CallArgumentOriginName(argument.origin));
+					line += record;
+					if( argument.sourceOrdinal
+						== asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL )
+					{
+						line += "none";
+					}
+					else
+					{
+						record.Format("%u", argument.sourceOrdinal);
+						line += record;
+					}
+					line += " authoredName=";
+					line += argument.authoredName;
+					line += "}";
+				}
 				line += "\n";
 			}
 			if( const asCDecl* target = expr->resolvedDecl.IsValid() ? context.GetDecl(expr->resolvedDecl) : 0 )
@@ -1818,6 +1889,9 @@ void asCASTShadowDiff(const asCASTContext& left, const asCASTContext& right, asC
 		if( ShadowUnsignedMismatch(out, path, "kind", leftType->kind, rightType->kind) ) return;
 		if( ShadowUnsignedMismatch(out, path, "primitiveToken", leftType->primitiveToken, rightType->primitiveToken) ) return;
 		if( ShadowStringMismatch(out, path, "stableKey", leftType->stableKey, rightType->stableKey) ) return;
+		if( ShadowUnsignedMismatch(out, path, "requiresRuntimeValidation",
+			leftType->requiresRuntimeValidation ? 1u : 0u,
+			rightType->requiresRuntimeValidation ? 1u : 0u) ) return;
 	}
 
 	for( asUINT i = 1; i <= left.GetDeclCount(); ++i )
@@ -1843,6 +1917,7 @@ void asCASTShadowDiff(const asCASTContext& left, const asCASTContext& right, asC
 		if( ShadowUnsignedMismatch(out, path, "accessorKind", leftDecl->accessorKind, rightDecl->accessorKind) ) return;
 		if( ShadowIdMismatch(out, path, "accessorField", leftDecl->accessorField.value, rightDecl->accessorField.value) ) return;
 		if( ShadowIdMismatch(out, path, "accessSpecifier", leftDecl->accessSpecifier.value, rightDecl->accessSpecifier.value) ) return;
+		if( ShadowUnsignedMismatch(out, path, "formalIndex", leftDecl->formalIndex, rightDecl->formalIndex) ) return;
 		if( ShadowStringMismatch(out, path, "origin", leftDecl->origin, rightDecl->origin) ) return;
 		if( ShadowStringMismatch(out, path, "defaultArg", leftDecl->defaultArg, rightDecl->defaultArg) ) return;
 		if( ShadowSignedMismatch(out, path, "byteOffset", leftDecl->byteOffset, rightDecl->byteOffset) ) return;
@@ -2032,6 +2107,653 @@ void asCASTDumpOnVerifyFail(const asCASTContext& context, const asSAstVerifyResu
 	asCString dump;
 	asCASTDump(context, dump);
 	out += dump;
+}
+
+static asCString BuilderOwnerIdentity(const asCScriptFunction& function)
+{
+	if( function.objectType != 0 && function.objectType->GetName() )
+	{
+		asCString owner("class:");
+		owner += function.objectType->GetName();
+		return owner;
+	}
+	if( function.nameSpace != 0 && function.nameSpace->name.GetLength() != 0 )
+	{
+		asCString owner("ns:");
+		owner += function.nameSpace->name;
+		return owner;
+	}
+	return asCString("tu");
+}
+
+static asCString CanonicalNamespaceQualifiedName(
+	const asCASTContext& canonical,
+	const asCDecl& namespaceDecl)
+{
+	asCArray<const asCDecl*> scopes;
+	const asCDecl* scope = &namespaceDecl;
+	while( scope != 0 && scope->kind == asAST_DECL_NAMESPACE )
+	{
+		scopes.PushLast(scope);
+		scope = scope->parent.IsValid() ? canonical.GetDecl(scope->parent) : 0;
+	}
+	asCString qualified;
+	for( asUINT index = scopes.GetLength(); index > 0; --index )
+	{
+		const asCDecl* const segment = scopes[index - 1];
+		if( segment == 0 || segment->name.GetLength() == 0 )
+		{
+			continue;
+		}
+		if( qualified.GetLength() != 0 )
+		{
+			qualified += "::";
+		}
+		qualified += segment->name;
+	}
+	return qualified;
+}
+
+static asCString CanonicalOwnerIdentity(
+	const asCASTContext& canonical,
+	const asCDecl& declaration)
+{
+	const asCDecl* const parent = canonical.GetDecl(declaration.parent);
+	if( parent == 0 )
+	{
+		return asCString();
+	}
+	if( parent->kind == asAST_DECL_TRANSLATION_UNIT )
+	{
+		return asCString("tu");
+	}
+	if( parent->kind == asAST_DECL_NAMESPACE )
+	{
+		asCString owner("ns:");
+		owner += CanonicalNamespaceQualifiedName(canonical, *parent);
+		return owner;
+	}
+	asCString owner("class:");
+	owner += parent->name;
+	return owner;
+}
+
+static asDWORD BuilderTraitIdentity(const asCScriptFunction& function)
+{
+	asDWORD traits = asAST_TRAIT_NONE;
+	if( function.traits.GetTrait(asTRAIT_PRIVATE) ) traits |= asAST_TRAIT_PRIVATE;
+	if( function.traits.GetTrait(asTRAIT_PROTECTED) ) traits |= asAST_TRAIT_PROTECTED;
+	if( function.traits.GetTrait(asTRAIT_CONST) ) traits |= asAST_TRAIT_CONST_METHOD;
+	if( function.traits.GetTrait(asTRAIT_OVERRIDE) ) traits |= asAST_TRAIT_OVERRIDE;
+	if( function.traits.GetTrait(asTRAIT_FINAL) ) traits |= asAST_TRAIT_FINAL;
+	if( function.traits.GetTrait(asTRAIT_SHARED) ) traits |= asAST_TRAIT_SHARED;
+	if( function.traits.GetTrait(asTRAIT_EXTERNAL) ) traits |= asAST_TRAIT_EXTERNAL;
+	if( function.traits.GetTrait(asTRAIT_MIXIN) ) traits |= asAST_TRAIT_MIXIN;
+	if( function.traits.GetTrait(asTRAIT_GENERATED_FUNCTION) ) traits |= asAST_TRAIT_GENERATED;
+	if( function.traits.GetTrait(asTRAIT_EXTERNAL_IMPLICIT_THIS) )
+		traits |= asAST_TRAIT_EXTERNAL_IMPLICIT_THIS;
+	return traits;
+}
+
+static asCString BuilderTypeKey(const asCScriptFunction& function, asDWORD& outQuals)
+{
+	outQuals = 0;
+	asCDataType dataType = function.returnType;
+	if( dataType.IsObjectConst() || dataType.IsReadOnly() )
+	{
+		outQuals |= asAST_QUAL_CONST;
+	}
+	if( dataType.IsObjectHandle() )
+	{
+		outQuals |= asAST_QUAL_HANDLE;
+	}
+	if( dataType.IsReference() )
+	{
+		outQuals |= asAST_QUAL_REFERENCE;
+	}
+	dataType.MakeConstValueOrConstObject(false);
+	if( dataType.IsObjectHandle() )
+	{
+		dataType.MakeHandleToConst(false);
+	}
+	dataType.MakeReadOnly(false);
+	dataType.MakeHandle(false);
+	dataType.MakeReference(false);
+	asSNameSpace* nameSpace = 0;
+	if( function.engine != 0 && function.engine->nameSpaces.GetLength() != 0 )
+	{
+		nameSpace = function.engine->nameSpaces[0];
+	}
+	return dataType.Format(nameSpace, true);
+}
+
+// Product `float` is float64. Canonical intern uses the resolved token key
+// (`float64`); Runtime Format() still spells the language name (`float`).
+// float32 remains a distinct width and must not alias either.
+static bool CanonicalFloatTypeFactAliasesBuilder(
+	const asCString& canonicalFact,
+	const asCString& builderFact)
+{
+	const char* const left = canonicalFact.AddressOf();
+	const char* const right = builderFact.AddressOf();
+	if( left == 0 || right == 0 )
+	{
+		return false;
+	}
+	const char* leftQual = strrchr(left, '/');
+	const char* rightQual = strrchr(right, '/');
+	if( leftQual == 0 || rightQual == 0 || strcmp(leftQual, rightQual) != 0 )
+	{
+		return false;
+	}
+	const size_t leftLen = static_cast<size_t>(leftQual - left);
+	const size_t rightLen = static_cast<size_t>(rightQual - right);
+	const auto isDefaultFloat = [](const char* key, size_t len) -> bool
+	{
+		return (len == 5 && strncmp(key, "float", 5) == 0)
+			|| (len == 6 && strncmp(key, "double", 6) == 0)
+			|| (len == 7 && strncmp(key, "float64", 7) == 0);
+	};
+	return isDefaultFloat(left, leftLen) && isDefaultFloat(right, rightLen);
+}
+
+static void BuilderSourceIdentity(
+	const asCScriptFunction& function,
+	asCString& outSection,
+	int& outRow,
+	int& outColumn)
+{
+	outSection = function.GetScriptSectionName() ? function.GetScriptSectionName() : "";
+	outRow = 0;
+	outColumn = 0;
+	if( function.scriptData != 0 )
+	{
+		outRow = function.scriptData->declaredAt & 0xFFFFF;
+		outColumn = (function.scriptData->declaredAt >> 20) & 0xFFF;
+	}
+}
+
+static void CanonicalSourceIdentity(
+	const asCASTContext& canonical,
+	const asCDecl& declaration,
+	asCString& outSection,
+	int& outRow,
+	int& outColumn)
+{
+	const asCSourceManager& sources = canonical.GetSourceManager();
+	outSection = sources.GetLogicalKey(declaration.range.begin.fileID);
+	asSSourceLineColumn lineColumn;
+	if( sources.GetLineColumn(declaration.range.begin, lineColumn) )
+	{
+		outRow = lineColumn.row;
+		outColumn = lineColumn.column;
+		return;
+	}
+	outRow = -1;
+	outColumn = -1;
+}
+
+static asCString BuilderImportOrigin(const asCScriptFunction& function)
+{
+	if( function.funcType != asFUNC_IMPORTED || function.engine == 0 )
+	{
+		return asCString();
+	}
+	for( asUINT index = 0; index < function.engine->importedFunctions.GetLength(); ++index )
+	{
+		sBindInfo* const info = function.engine->importedFunctions[index];
+		if( info != 0 && info->importedFunctionSignature == &function )
+		{
+			return info->importFromModule;
+		}
+	}
+	return asCString();
+}
+
+static asCString BuilderDependencyIdentity(const asCScriptFunction& function)
+{
+	asCString joined;
+	if( function.scriptData != 0 )
+	{
+		for( asUINT index = 0;
+			index < function.scriptData->artifactDependencies.GetLength();
+			++index )
+		{
+			const asSBuildArtifactDependency& dependency =
+				function.scriptData->artifactDependencies[index];
+			asCString key;
+			if( dependency.type != 0 && dependency.type->GetName() )
+			{
+				key = dependency.type->GetName();
+			}
+			else if( dependency.function != 0 && dependency.function->GetName() )
+			{
+				key = dependency.function->GetName();
+			}
+			else if( dependency.globalProperty != 0 )
+			{
+				key = dependency.globalProperty->name;
+			}
+			if( key.GetLength() == 0 )
+			{
+				continue;
+			}
+			if( joined.GetLength() != 0 )
+			{
+				joined += ",";
+			}
+			joined += key;
+		}
+	}
+	const asCString origin = BuilderImportOrigin(function);
+	if( origin.GetLength() != 0 )
+	{
+		if( joined.GetLength() != 0 )
+		{
+			joined += ",";
+		}
+		joined += origin;
+	}
+	return joined;
+}
+
+static asCString CanonicalDependencyIdentity(const asCDecl& declaration)
+{
+	asCString joined;
+	for( asUINT index = 0; index < declaration.dependencies.GetLength(); ++index )
+	{
+		if( index != 0 )
+		{
+			joined += ",";
+		}
+		joined += declaration.dependencies[index];
+	}
+	return joined;
+}
+
+void asCASTShadowDiffBuilderFunctionIdentity(
+	const asCASTContext& canonical,
+	asASTDeclId canonicalDecl,
+	const asCScriptFunction& builderFunction,
+	asCString& out,
+	bool compareDependencies)
+{
+	out = "match";
+	const asCDecl* const declaration = canonical.GetDecl(canonicalDecl);
+	if( declaration == 0 )
+	{
+		ShadowMismatch(out, asCString("decl"), "present", asCString("0"), asCString("1"));
+		return;
+	}
+
+	const asCString path("decl");
+	if( ShadowStringMismatch(out, path, "parent",
+		CanonicalOwnerIdentity(canonical, *declaration),
+		BuilderOwnerIdentity(builderFunction)) )
+	{
+		return;
+	}
+
+	const asCType* const canonicalType = canonical.GetType(declaration->type.type);
+	asDWORD builderQuals = 0;
+	const asCString builderType = BuilderTypeKey(builderFunction, builderQuals);
+	asCString canonicalTypeKey = canonicalType ? canonicalType->stableKey : asCString();
+	asCString canonicalTypeFact;
+	canonicalTypeFact.Format("%s/q%u",
+		canonicalTypeKey.AddressOf() ? canonicalTypeKey.AddressOf() : "",
+		declaration->type.quals);
+	asCString builderTypeFact;
+	builderTypeFact.Format("%s/q%u",
+		builderType.AddressOf() ? builderType.AddressOf() : "",
+		builderQuals);
+	if( !canonicalTypeFact.Equals(builderTypeFact)
+		&& !CanonicalFloatTypeFactAliasesBuilder(canonicalTypeFact, builderTypeFact)
+		&& ShadowStringMismatch(out, path, "type", canonicalTypeFact, builderTypeFact) )
+	{
+		return;
+	}
+
+	if( ShadowUnsignedMismatch(out, path, "traits",
+		declaration->traits, BuilderTraitIdentity(builderFunction)) )
+	{
+		return;
+	}
+
+	asCString canonicalSection;
+	int canonicalRow = 0;
+	int canonicalColumn = 0;
+	CanonicalSourceIdentity(canonical, *declaration, canonicalSection, canonicalRow, canonicalColumn);
+	asCString builderSection;
+	int builderRow = 0;
+	int builderColumn = 0;
+	BuilderSourceIdentity(builderFunction, builderSection, builderRow, builderColumn);
+	asCString canonicalRange;
+	canonicalRange.Format("%s:%d:%d",
+		canonicalSection.AddressOf() ? canonicalSection.AddressOf() : "",
+		canonicalRow, canonicalColumn);
+	asCString builderRange;
+	builderRange.Format("%s:%d:%d",
+		builderSection.AddressOf() ? builderSection.AddressOf() : "",
+		builderRow, builderColumn);
+	if( ShadowStringMismatch(out, path, "range", canonicalRange, builderRange) )
+	{
+		return;
+	}
+
+	if( compareDependencies
+		&& ShadowStringMismatch(out, path, "dependencies",
+			CanonicalDependencyIdentity(*declaration),
+			BuilderDependencyIdentity(builderFunction)) )
+	{
+		return;
+	}
+}
+
+int asCASTValidateBuilderShadowIdentity(
+	const asCASTContext& canonical,
+	asCModule& candidate,
+	asCScriptEngine* engine)
+{
+	for( asUINT index = 0; index < candidate.globalFunctionList.GetLength(); ++index )
+	{
+		asCScriptFunction* const function = candidate.globalFunctionList[index];
+		if( function == 0
+			|| function->funcType != asFUNC_SCRIPT
+			|| function->objectType != 0
+			|| function->name.GetLength() == 0
+			|| function->name[0] == '$' )
+		{
+			continue;
+		}
+		asCString diff;
+		asASTDeclId declarationId;
+		bool matched = false;
+		declarationId.value = 0;
+		for( asUINT declIndex = 1; declIndex <= canonical.GetDeclCount(); ++declIndex )
+		{
+			const asCDecl* const candidateDecl =
+				canonical.GetDecl(asASTDeclId(declIndex));
+			if( candidateDecl == 0
+				|| candidateDecl->kind != asAST_DECL_FUNCTION
+				|| (candidateDecl->traits & asAST_TRAIT_GENERATED) != 0
+				|| (candidateDecl->traits & asAST_TRAIT_LAMBDA) != 0
+				|| !candidateDecl->name.Equals(function->name) )
+			{
+				continue;
+			}
+			asCString candidateDiff;
+			asCASTShadowDiffBuilderFunctionIdentity(
+				canonical, candidateDecl->id, *function, candidateDiff, false);
+			if( candidateDiff.Equals("match") )
+			{
+				matched = true;
+				declarationId = candidateDecl->id;
+				diff = candidateDiff;
+				break;
+			}
+			declarationId = candidateDecl->id;
+			diff = candidateDiff;
+		}
+		if( !declarationId.IsValid() )
+		{
+			continue;
+		}
+		if( matched )
+		{
+			continue;
+		}
+		asCString message;
+		message.Format("shadow-declaration-mismatch %s",
+			diff.AddressOf() ? diff.AddressOf() : "mismatch");
+		if( engine != 0 )
+		{
+			const asCDecl* const declaration = canonical.GetDecl(declarationId);
+			asCString sectionName;
+			int row = 0;
+			int column = 0;
+			if( declaration != 0 )
+			{
+				CanonicalSourceIdentity(
+					canonical, *declaration, sectionName, row, column);
+			}
+			engine->WriteMessage(
+				sectionName.AddressOf() ? sectionName.AddressOf() : "",
+				row,
+				column,
+				asMSGTYPE_ERROR,
+				message.AddressOf());
+		}
+		return asINVALID_DECLARATION;
+	}
+	return asSUCCESS;
+}
+
+static asCString BuilderTypeOwnerIdentity(const asCTypeInfo& type)
+{
+	if( type.nameSpace != 0 && type.nameSpace->name.GetLength() != 0 )
+	{
+		asCString owner("ns:");
+		owner += type.nameSpace->name;
+		return owner;
+	}
+	return asCString("tu");
+}
+
+static asDWORD BuilderTypeTraitIdentity(const asCTypeInfo& type)
+{
+	asDWORD traits = asAST_TRAIT_NONE;
+	if( type.flags & asOBJ_SHARED ) traits |= asAST_TRAIT_SHARED;
+	if( type.flags & asOBJ_ENUM )
+	{
+		return traits;
+	}
+	if( type.flags & asOBJ_VALUE ) traits |= asAST_TRAIT_VALUE;
+	// Script structs always set asOBJ_NOINHERIT; that is the value-type
+	// layout, not the language `final` trait. Map NOINHERIT to FINAL only
+	// for reference classes.
+	if( (type.flags & asOBJ_VALUE) == 0 && (type.flags & asOBJ_NOINHERIT) )
+		traits |= asAST_TRAIT_FINAL;
+	return traits;
+}
+
+static asCString BuilderObjectTypeKey(const asCTypeInfo& type, asDWORD& outQuals)
+{
+	outQuals = 0;
+	if( (type.flags & asOBJ_ENUM) == 0 && (type.flags & asOBJ_VALUE) == 0 )
+	{
+		outQuals |= asAST_QUAL_HANDLE;
+	}
+	return type.name;
+}
+
+static asEASTTypeKind BuilderObjectTypeKind(const asCTypeInfo& type)
+{
+	if( type.flags & asOBJ_ENUM )
+	{
+		return asAST_TYPE_ENUM;
+	}
+	if( type.flags & asOBJ_VALUE )
+	{
+		return asAST_TYPE_VALUE_OBJECT;
+	}
+	return asAST_TYPE_REFERENCE_OBJECT;
+}
+
+static void BuilderTypeSourceIdentity(
+	const asCTypeInfo& type,
+	asCString& outSection,
+	int& outRow,
+	int& outColumn)
+{
+	outSection = "";
+	if( type.engine != 0
+		&& type.scriptSectionIdx >= 0
+		&& type.scriptSectionIdx < (int)type.engine->scriptSectionNames.GetLength()
+		&& type.engine->scriptSectionNames[type.scriptSectionIdx] != 0 )
+	{
+		outSection = *type.engine->scriptSectionNames[type.scriptSectionIdx];
+	}
+	outRow = type.declaredAt & 0xFFFFF;
+	outColumn = (type.declaredAt >> 20) & 0xFFF;
+}
+
+static asCString BuilderTypeDependencyIdentity(const asCTypeInfo& type)
+{
+	asCString joined;
+	if( type.flags & asOBJ_ENUM )
+	{
+		return joined;
+	}
+	const asCObjectType* const objectType =
+		CastToObjectType(const_cast<asCTypeInfo*>(&type));
+	if( objectType == 0 )
+	{
+		return joined;
+	}
+	if( objectType->derivedFrom != 0 && objectType->derivedFrom->name.GetLength() != 0 )
+	{
+		joined = objectType->derivedFrom->name;
+	}
+	for( asUINT index = 0; index < objectType->interfaces.GetLength(); ++index )
+	{
+		const asCObjectType* const iface = objectType->interfaces[index];
+		if( iface == 0 || iface->name.GetLength() == 0 )
+		{
+			continue;
+		}
+		if( joined.GetLength() != 0 )
+		{
+			joined += ",";
+		}
+		joined += iface->name;
+	}
+	return joined;
+}
+
+static const char* BuilderTypeDeclKindName(const asCTypeInfo& type)
+{
+	if( type.flags & asOBJ_ENUM )
+	{
+		return "Enum";
+	}
+	const asCObjectType* const objectType =
+		CastToObjectType(const_cast<asCTypeInfo*>(&type));
+	if( objectType != 0 && objectType->IsInterface() )
+	{
+		return "Interface";
+	}
+	return "Class";
+}
+
+static bool CanonicalDeclKindMatchesBuilderType(
+	const asCDecl& declaration,
+	const asCTypeInfo& type)
+{
+	if( type.flags & asOBJ_ENUM )
+	{
+		return declaration.kind == asAST_DECL_ENUM;
+	}
+	const asCObjectType* const objectType =
+		CastToObjectType(const_cast<asCTypeInfo*>(&type));
+	if( objectType != 0 && objectType->IsInterface() )
+	{
+		return declaration.kind == asAST_DECL_INTERFACE;
+	}
+	return declaration.kind == asAST_DECL_CLASS;
+}
+
+void asCASTShadowDiffBuilderTypeIdentity(
+	const asCASTContext& canonical,
+	asASTDeclId canonicalDecl,
+	const asCTypeInfo& builderType,
+	asCString& out)
+{
+	out = "match";
+	const asCDecl* const declaration = canonical.GetDecl(canonicalDecl);
+	if( declaration == 0 )
+	{
+		ShadowMismatch(out, asCString("decl"), "present", asCString("0"), asCString("1"));
+		return;
+	}
+
+	const asCString path("decl");
+	if( !CanonicalDeclKindMatchesBuilderType(*declaration, builderType) )
+	{
+		ShadowMismatch(out, path, "kind",
+			asCString(DeclKindName(declaration->kind)),
+			asCString(BuilderTypeDeclKindName(builderType)));
+		return;
+	}
+
+	if( ShadowStringMismatch(out, path, "parent",
+		CanonicalOwnerIdentity(canonical, *declaration),
+		BuilderTypeOwnerIdentity(builderType)) )
+	{
+		return;
+	}
+
+	const asCType* const canonicalType = canonical.GetType(declaration->type.type);
+	asDWORD builderQuals = 0;
+	const asCString builderTypeKey = BuilderObjectTypeKey(builderType, builderQuals);
+	asCString canonicalTypeFact;
+	canonicalTypeFact.Format("%u:%s/q%u",
+		canonicalType ? (unsigned)canonicalType->kind : 0u,
+		canonicalType && canonicalType->stableKey.AddressOf()
+			? canonicalType->stableKey.AddressOf() : "",
+		declaration->type.quals);
+	asCString builderTypeFact;
+	builderTypeFact.Format("%u:%s/q%u",
+		(unsigned)BuilderObjectTypeKind(builderType),
+		builderTypeKey.AddressOf() ? builderTypeKey.AddressOf() : "",
+		builderQuals);
+	if( ShadowStringMismatch(out, path, "type", canonicalTypeFact, builderTypeFact) )
+	{
+		return;
+	}
+
+	if( ShadowUnsignedMismatch(out, path, "traits",
+		declaration->traits, BuilderTypeTraitIdentity(builderType)) )
+	{
+		return;
+	}
+
+	asCString canonicalSection;
+	int canonicalRow = 0;
+	int canonicalColumn = 0;
+	CanonicalSourceIdentity(canonical, *declaration, canonicalSection, canonicalRow, canonicalColumn);
+	asCString builderSection;
+	int builderRow = 0;
+	int builderColumn = 0;
+	BuilderTypeSourceIdentity(builderType, builderSection, builderRow, builderColumn);
+	asCString canonicalRange;
+	canonicalRange.Format("%s:%d:%d",
+		canonicalSection.AddressOf() ? canonicalSection.AddressOf() : "",
+		canonicalRow, canonicalColumn);
+	asCString builderRange;
+	builderRange.Format("%s:%d:%d",
+		builderSection.AddressOf() ? builderSection.AddressOf() : "",
+		builderRow, builderColumn);
+	if( ShadowStringMismatch(out, path, "range", canonicalRange, builderRange) )
+	{
+		return;
+	}
+
+	if( ShadowStringMismatch(out, path, "dependencies",
+		CanonicalDependencyIdentity(*declaration),
+		BuilderTypeDependencyIdentity(builderType)) )
+	{
+		return;
+	}
+}
+
+void asCASTShadowDiffBuilderTypeIdentity(
+	const asCASTContext& canonical,
+	asASTDeclId canonicalDecl,
+	const asCObjectType& builderType,
+	asCString& out)
+{
+	asCASTShadowDiffBuilderTypeIdentity(
+		canonical, canonicalDecl, static_cast<const asCTypeInfo&>(builderType), out);
 }
 
 END_AS_NAMESPACE

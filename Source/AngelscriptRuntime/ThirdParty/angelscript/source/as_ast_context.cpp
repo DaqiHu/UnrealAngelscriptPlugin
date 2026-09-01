@@ -163,12 +163,9 @@ asQWORD asCASTContext::GetLifetimeProtocolHash() const
 		lifetimeRecords.GetLength());
 }
 
-void asCASTContext::ResetUnsealedForSidecarDecode()
+void asCASTContext::ResetForSidecarDecodeFailure()
 {
-	if( !IsPublishable() )
-	{
-		DestroyAll();
-	}
+	DestroyAll();
 }
 
 asASTDeclId asCASTContext::CreateTranslationUnit(const char* moduleName)
@@ -205,6 +202,12 @@ asASTDeclId asCASTContext::CreateDecl(asEASTDeclKind kind, asASTDeclId parent, c
 	decl->kind = kind;
 	decl->parent = parent;
 	decl->range = range;
+	if( kind == asAST_DECL_PARAM && parent.IsValid() )
+	{
+		// Construction order is the Sema-authored formal order. Persist that
+		// relation on the ParamDecl before children can be reordered for traversal.
+		decl->formalIndex = GetFormalDeclCount(parent);
+	}
 	if( name )
 	{
 		decl->name = name;
@@ -325,8 +328,10 @@ asCQualType asCASTContext::InternPrimitive(eTokenType primitiveToken, asDWORD qu
 	case ttUInt8: key = "uint8"; break;
 	case ttUInt16: key = "uint16"; break;
 	case ttUInt64: key = "uint64"; break;
-	case ttFloat:
 	case ttFloat32:
+		key = "float32";
+		break;
+	case ttFloat:
 		key = "float";
 		break;
 	case ttDouble:
@@ -355,6 +360,52 @@ const asCDecl* asCASTContext::GetDecl(asASTDeclId id) const
 		return 0;
 	}
 	return decls[id.value - 1];
+}
+
+asUINT asCASTContext::GetFormalDeclCount(asASTDeclId owner) const
+{
+	const asCDecl* const declaration = GetDecl(owner);
+	if( declaration == 0 )
+	{
+		return 0;
+	}
+	asUINT count = 0;
+	for( asUINT index = 0; index < declaration->children.GetLength(); ++index )
+	{
+		const asCDecl* const child = GetDecl(declaration->children[index]);
+		if( child != 0 && child->kind == asAST_DECL_PARAM )
+		{
+			++count;
+		}
+	}
+	return count;
+}
+
+const asCDecl* asCASTContext::GetFormalDecl(
+	asASTDeclId owner,
+	asUINT formalIndex) const
+{
+	const asCDecl* const declaration = GetDecl(owner);
+	if( declaration == 0 )
+	{
+		return 0;
+	}
+	const asCDecl* match = 0;
+	for( asUINT index = 0; index < declaration->children.GetLength(); ++index )
+	{
+		const asCDecl* const child = GetDecl(declaration->children[index]);
+		if( child == 0 || child->kind != asAST_DECL_PARAM
+			|| child->formalIndex != formalIndex )
+		{
+			continue;
+		}
+		if( match != 0 )
+		{
+			return 0;
+		}
+		match = child;
+	}
+	return match;
 }
 
 const asCStmt* asCASTContext::GetStmt(asASTStmtId id) const
@@ -494,6 +545,74 @@ asCExpr* asCASTContext::MutableExpr(asASTExprId id)
 		return 0;
 	}
 	return exprs[id.value - 1];
+}
+
+asCType* asCASTContext::MutableType(asASTTypeRef id)
+{
+	if( !IsBuilding() || !id.IsValid() || id.snapshotOwner != 0 || id.value > types.GetLength() )
+	{
+		return 0;
+	}
+	return types[id.value - 1];
+}
+
+int asCASTContext::SetTypeRequiresRuntimeValidation(asASTTypeRef id, bool required)
+{
+	if( RejectPostSealMutation() != asAST_VERIFY_OK )
+	{
+		return asAST_VERIFY_POST_SEAL_MUTATION;
+	}
+	asCType* type = MutableType(id);
+	if( type == 0 )
+	{
+		return asAST_VERIFY_DANGLING_ID;
+	}
+	type->requiresRuntimeValidation = required;
+	return asAST_VERIFY_OK;
+}
+
+int asCASTContext::SetTypeTemplateArguments(
+	asASTTypeRef id,
+	const asCArray<asCQualType>& arguments)
+{
+	if( RejectPostSealMutation() != asAST_VERIFY_OK )
+	{
+		return asAST_VERIFY_POST_SEAL_MUTATION;
+	}
+	asCType* type = MutableType(id);
+	if( type == 0 )
+	{
+		return asAST_VERIFY_DANGLING_ID;
+	}
+	if( type->templateArguments.GetLength() != 0 )
+	{
+		if( type->templateArguments.GetLength() != arguments.GetLength() )
+		{
+			return asAST_VERIFY_INVALID_TYPE;
+		}
+		for( asUINT index = 0; index < arguments.GetLength(); ++index )
+		{
+			if( type->templateArguments[index].type != arguments[index].type
+				|| type->templateArguments[index].quals != arguments[index].quals )
+			{
+				return asAST_VERIFY_INVALID_TYPE;
+			}
+		}
+		return asAST_VERIFY_OK;
+	}
+	for( asUINT index = 0; index < arguments.GetLength(); ++index )
+	{
+		if( !arguments[index].IsValid()
+			|| GetType(arguments[index].type) == 0 )
+		{
+			return asAST_VERIFY_DANGLING_ID;
+		}
+		asSAstTemplateArgument argument;
+		argument.type = arguments[index].type;
+		argument.quals = arguments[index].quals;
+		type->templateArguments.PushLast(argument);
+	}
+	return asAST_VERIFY_OK;
 }
 
 asASTFileID asCASTContext::AddSourceSection(
@@ -797,6 +916,26 @@ int asCASTContext::SetDeclConstantValue(asASTDeclId id, asQWORD value)
 	return asAST_VERIFY_OK;
 }
 
+int asCASTContext::SetDeclFormalIndex(asASTDeclId id, asUINT formalIndex)
+{
+	if( RejectPostSealMutation() != asAST_VERIFY_OK )
+	{
+		return asAST_VERIFY_POST_SEAL_MUTATION;
+	}
+	asCDecl* decl = MutableDecl(id);
+	if( decl == 0 )
+	{
+		return asAST_VERIFY_DANGLING_ID;
+	}
+	if( decl->kind != asAST_DECL_PARAM
+		|| formalIndex == asAST_FORMAL_INDEX_NONE )
+	{
+		return asAST_VERIFY_WRONG_KIND;
+	}
+	decl->formalIndex = formalIndex;
+	return asAST_VERIFY_OK;
+}
+
 int asCASTContext::SetDeclByteOffset(asASTDeclId id, int byteOffset)
 {
 	if( RejectPostSealMutation() != asAST_VERIFY_OK )
@@ -1063,7 +1202,8 @@ int asCASTContext::SetExprCallDispatch(asASTExprId id, asEASTCallDispatch dispat
 	{
 		return asAST_VERIFY_DANGLING_ID;
 	}
-	if( expr->kind != asAST_EXPR_CALL )
+	if( expr->kind != asAST_EXPR_CALL
+		&& expr->kind != asAST_EXPR_CONSTRUCT )
 	{
 		return asAST_VERIFY_WRONG_KIND;
 	}
@@ -1162,6 +1302,92 @@ int asCASTContext::ClearExprChildren(asASTExprId id)
 		return asAST_VERIFY_DANGLING_ID;
 	}
 	expr->children.SetLength(0);
+	return asAST_VERIFY_OK;
+}
+
+int asCASTContext::AddCallArgument(
+	asASTExprId call,
+	const asSASTCallArgument& argument)
+{
+	if( RejectPostSealMutation() != asAST_VERIFY_OK )
+	{
+		return asAST_VERIFY_POST_SEAL_MUTATION;
+	}
+	asCExpr* const expr = MutableExpr(call);
+	if( expr == 0 )
+	{
+		return asAST_VERIFY_DANGLING_ID;
+	}
+	if( expr->kind != asAST_EXPR_CALL
+		&& expr->kind != asAST_EXPR_CONSTRUCT )
+	{
+		return asAST_VERIFY_WRONG_KIND;
+	}
+	if( !argument.expression.IsValid()
+		|| GetExpr(argument.expression) == 0
+		|| (argument.formal.IsValid() && GetDecl(argument.formal) == 0) )
+	{
+		return asAST_VERIFY_DANGLING_ID;
+	}
+	expr->callArguments.PushLast(argument);
+	return asAST_VERIFY_OK;
+}
+
+int asCASTContext::ClearCallArguments(asASTExprId call)
+{
+	if( RejectPostSealMutation() != asAST_VERIFY_OK )
+	{
+		return asAST_VERIFY_POST_SEAL_MUTATION;
+	}
+	asCExpr* const expr = MutableExpr(call);
+	if( expr == 0 )
+	{
+		return asAST_VERIFY_DANGLING_ID;
+	}
+	if( expr->kind != asAST_EXPR_CALL )
+	{
+		return asAST_VERIFY_WRONG_KIND;
+	}
+	expr->callArguments.SetLength(0);
+	return asAST_VERIFY_OK;
+}
+
+int asCASTContext::ReplaceCallArgumentExpression(
+	asASTExprId call,
+	asUINT argumentIndex,
+	asASTExprId replacement)
+{
+	if( RejectPostSealMutation() != asAST_VERIFY_OK )
+	{
+		return asAST_VERIFY_POST_SEAL_MUTATION;
+	}
+	asCExpr* const expr = MutableExpr(call);
+	if( expr == 0 || !replacement.IsValid() || GetExpr(replacement) == 0 )
+	{
+		return asAST_VERIFY_DANGLING_ID;
+	}
+	if( expr->kind != asAST_EXPR_CALL
+		&& expr->kind != asAST_EXPR_CONSTRUCT )
+	{
+		return asAST_VERIFY_WRONG_KIND;
+	}
+	if( argumentIndex >= expr->callArguments.GetLength()
+		|| argumentIndex >= expr->children.GetLength() )
+	{
+		return asAST_VERIFY_INVALID_CHILD;
+	}
+	const asASTExprId previous =
+		expr->callArguments[argumentIndex].expression;
+	if( !previous.IsValid() || expr->children[argumentIndex] != previous
+		|| replacement == expr->id )
+	{
+		return asAST_VERIFY_INVALID_CHILD;
+	}
+	// Validate the complete dual relation before mutating either edge. The two
+	// assignments below are then one semantic operation while the context is
+	// exclusively owned by the building Sema.
+	expr->children[argumentIndex] = replacement;
+	expr->callArguments[argumentIndex].expression = replacement;
 	return asAST_VERIFY_OK;
 }
 
@@ -1345,6 +1571,21 @@ int asCASTContext::ReplaceExprUses(asASTExprId oldExpr, asASTExprId replacement)
 					return asAST_VERIFY_INVALID_CHILD;
 				}
 				expr->children[child] = replacement;
+			}
+		}
+		for( asUINT argumentIndex = 0;
+			argumentIndex < expr->callArguments.GetLength();
+			++argumentIndex )
+		{
+			asSASTCallArgument& argument =
+				expr->callArguments[argumentIndex];
+			if( argument.expression == oldExpr )
+			{
+				if( expr->id == replacement )
+				{
+					return asAST_VERIFY_INVALID_CHILD;
+				}
+				argument.expression = replacement;
 			}
 		}
 	}

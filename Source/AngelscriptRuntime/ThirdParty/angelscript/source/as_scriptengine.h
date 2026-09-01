@@ -342,6 +342,11 @@ public:
 	bool               IsTemplateType(const char *name) const;
 	void               CopyCanonicalTemplateDeclarations(
 		asCArray<asSCanonicalTemplateDeclarationFact>& outDeclarations) const;
+	// Embeddings whose native type system does not use asCObjectType::derivedFrom
+	// can publish pointer-free nominal ancestry for Canonical Sema. Both inputs
+	// are exact, namespace-qualified stable type spellings; no TypeId is retained.
+	int                RegisterCanonicalTypeBaseRelation(
+		const char* derivedStableKey, const char* baseStableKey);
 	void               CopyCanonicalRegisteredTypeDeclarations(
 		asCArray<asSCanonicalRegisteredTypeDeclarationFact>& outDeclarations,
 		const asCModule* importedTypeAuthority = 0) const;
@@ -396,6 +401,10 @@ public:
 	asCSymbolMap<asCScriptFunction*> registeredGlobalFuncTable;
 	asCArray<asCFuncdefType *>        registeredFuncDefs;      // doesn't increase ref count
 	asCArray<asCObjectType *>         registeredTemplateTypes; // doesn't increase ref count
+	// Host-declared native ancestry that cannot be represented by the maintained
+	// AngelScript Runtime object model. Values are stable names only and are
+	// copied into each ephemeral Canonical Sema fact snapshot.
+	asCMap<asCString, asCArray<asCString> > canonicalRegisteredTypeBaseRelations;
 	asIStringFactory                 *stringFactory;
 	asCDataType                       stringType;
 	bool configFailed;

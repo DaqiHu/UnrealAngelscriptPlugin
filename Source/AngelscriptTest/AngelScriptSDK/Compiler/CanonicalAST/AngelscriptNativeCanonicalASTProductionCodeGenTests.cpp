@@ -41,6 +41,11 @@ struct FProdDefaultGlobalValue
 	int32 Stored = 0;
 };
 
+struct FProdAutomaticImportValue
+{
+	int32 Stored = 0;
+};
+
 static int32 GProdDefaultGlobalConstructed = 0;
 static int32 GProdDefaultGlobalDestructed = 0;
 
@@ -263,6 +268,22 @@ static void ProdNativeLifecycleMemberObserveReference(asIScriptGeneric* Generic)
 	{
 		Generic->SetReturnDWord(static_cast<asDWORD>(
 			Value != nullptr ? Value->Stored : 0));
+	}
+}
+
+static void ProdNativeLifecycleMemberAppendAndReturnReference(
+	asIScriptGeneric* Generic)
+{
+	FProdNativeLifecycleMember* const Self = Generic != nullptr
+		? static_cast<FProdNativeLifecycleMember*>(Generic->GetObject())
+		: nullptr;
+	if (Self != nullptr && Generic != nullptr)
+	{
+		Self->Stored += static_cast<int32>(Generic->GetArgDWord(0));
+	}
+	if (Generic != nullptr)
+	{
+		Generic->SetReturnAddress(Self);
 	}
 }
 
@@ -1073,6 +1094,35 @@ static FString ProdBytecodeCallTargets(asIScriptFunction* Function)
 	return Out.IsEmpty() ? FString(TEXT("<no CALL/CALLSYS/ALLOC>")) : Out;
 }
 
+static FString ProdRuntimeObjectDirectory(asIScriptFunction* Function)
+{
+	const asCScriptFunction* const Internal =
+		static_cast<const asCScriptFunction*>(Function);
+	if (Internal == nullptr || Internal->scriptData == nullptr)
+	{
+		return TEXT("<no script data>");
+	}
+
+	FString Out = FString::Printf(
+		TEXT("heap=%u objects=%u"),
+		Internal->scriptData->objVariablesOnHeap,
+		Internal->scriptData->objVariablePos.GetLength());
+	for (asUINT Index = 0;
+		Index < Internal->scriptData->objVariablePos.GetLength(); ++Index)
+	{
+		const asCTypeInfo* const Type =
+			Index < Internal->scriptData->objVariableTypes.GetLength()
+				? Internal->scriptData->objVariableTypes[Index] : nullptr;
+		Out += FString::Printf(
+			TEXT(" [%u:%d:%s]"),
+			Index,
+			Internal->scriptData->objVariablePos[Index],
+			Type != nullptr && Type->GetName() != nullptr
+				? UTF8_TO_TCHAR(Type->GetName()) : TEXT("<null>"));
+	}
+	return Out;
+}
+
 static FString ProdBytecodeImmediates(asIScriptFunction* Function)
 {
 	FString Out;
@@ -1555,6 +1605,302 @@ public:
 			TEXT("the prepared Runtime shell must execute its canonical body")));
 	}
 
+	TEST_METHOD(PreparedBytecodeParametersUseSealedFormalOrdinalRelation)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalExactFormalRelation");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			int EncodeFormals(int First, int Second)
+			{
+				return First * 10 + Second;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"PreparedCanonicalExactFormalRelation.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("the exact-formal fixture must reach the prepared Runtime shell")));
+		asCASTContext* const BuildingContext = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(BuildingContext));
+		if (BuildingContext == nullptr)
+		{
+			return;
+		}
+
+		asCDecl* FunctionDecl = nullptr;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= BuildingContext->GetDeclCount(); ++DeclIndex)
+		{
+			asCDecl* const Candidate = const_cast<asCDecl*>(
+				BuildingContext->GetDecl(asASTDeclId(DeclIndex)));
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_DECL_FUNCTION
+				&& Candidate->name == "EncodeFormals")
+			{
+				ASSERT_THAT(IsNull(FunctionDecl,
+					TEXT("the exact-formal fixture must own one function declaration")));
+				FunctionDecl = Candidate;
+			}
+		}
+		ASSERT_THAT(IsNotNull(FunctionDecl));
+		if (FunctionDecl == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const FirstFormal =
+			BuildingContext->GetFormalDecl(FunctionDecl->id, 0);
+		const asCDecl* const SecondFormal =
+			BuildingContext->GetFormalDecl(FunctionDecl->id, 1);
+		ASSERT_THAT(IsTrue(FirstFormal != nullptr && SecondFormal != nullptr
+			&& FirstFormal->name == "First" && SecondFormal->name == "Second",
+			TEXT("Sema must publish the authored formal relation before reordering")));
+		if (FirstFormal == nullptr || SecondFormal == nullptr)
+		{
+			return;
+		}
+
+		asUINT FirstChildIndex = asUINT(-1);
+		asUINT SecondChildIndex = asUINT(-1);
+		for (asUINT ChildIndex = 0;
+			ChildIndex < FunctionDecl->children.GetLength(); ++ChildIndex)
+		{
+			if (FunctionDecl->children[ChildIndex] == FirstFormal->id)
+			{
+				FirstChildIndex = ChildIndex;
+			}
+			else if (FunctionDecl->children[ChildIndex] == SecondFormal->id)
+			{
+				SecondChildIndex = ChildIndex;
+			}
+		}
+		ASSERT_THAT(IsTrue(FirstChildIndex != asUINT(-1)
+			&& SecondChildIndex != asUINT(-1)));
+		if (FirstChildIndex == asUINT(-1) || SecondChildIndex == asUINT(-1))
+		{
+			return;
+		}
+
+		// Children are a traversal container. Preserve each sealed formalIndex
+		// while adversarially changing only structural order; both parameters are
+		// int so positional binding would silently change 42 into 24.
+		FunctionDecl->children[FirstChildIndex] = SecondFormal->id;
+		FunctionDecl->children[SecondChildIndex] = FirstFormal->id;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST(),
+			TEXT("the reordered same-typed formal graph must remain publishable")));
+
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		asCBytecodeCodeGen CodeGen;
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK,
+			CodeGen.GeneratePreparedModule(*Context, Builder),
+			*FString::Printf(TEXT("exact-formal CodeGen must succeed: %s"),
+				UTF8_TO_TCHAR(CodeGen.GetFailureDetail().AddressOf()
+					? CodeGen.GetFailureDetail().AddressOf() : ""))));
+
+		asIScriptFunction* const Function = Module->GetFunctionByDecl(
+			"int EncodeFormals(int, int)");
+		ASSERT_THAT(IsNotNull(Function));
+		if (Function == nullptr)
+		{
+			return;
+		}
+		asIScriptContext* const RuntimeContext = ScriptEngine->CreateContext();
+		ASSERT_THAT(IsNotNull(RuntimeContext));
+		if (RuntimeContext == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { RuntimeContext->Release(); };
+		ASSERT_THAT(AreEqual(asSUCCESS, RuntimeContext->Prepare(Function)));
+		ASSERT_THAT(AreEqual(asSUCCESS, RuntimeContext->SetArgDWord(0, 4)));
+		ASSERT_THAT(AreEqual(asSUCCESS, RuntimeContext->SetArgDWord(1, 2)));
+		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, RuntimeContext->Execute()));
+		ASSERT_THAT(AreEqual(static_cast<asDWORD>(42),
+			RuntimeContext->GetReturnDWord(),
+			TEXT("Runtime slots must bind through sealed formalIndex, not PARAM child order")));
+	}
+
+	TEST_METHOD(PreparedConstructArgumentsUseSealedFormalOrdinalRelation)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalConstructFormalRelation");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			struct FConstructPlan
+			{
+				int A;
+				int B;
+
+				FConstructPlan(int InA = 40 + 2, int InB = 1)
+				{
+					A = InA;
+					B = InB;
+				}
+			}
+
+			int Entry()
+			{
+				FConstructPlan Value(InB: 7);
+				return Value.A * 10 + Value.B;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"PreparedCanonicalConstructFormalRelation.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("construct exact-formal fixture must reach prepared Runtime shells")));
+		asCASTContext* const BuildingContext = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(BuildingContext));
+		if (BuildingContext == nullptr)
+		{
+			return;
+		}
+
+		asCExpr* Construct = nullptr;
+		for (asUINT ExprIndex = 1;
+			ExprIndex <= BuildingContext->GetExprCount(); ++ExprIndex)
+		{
+			asCExpr* const Candidate = const_cast<asCExpr*>(
+				BuildingContext->GetExpr(asASTExprId(ExprIndex)));
+			if (Candidate == nullptr
+				|| Candidate->kind != asAST_EXPR_CONSTRUCT
+				|| Candidate->children.GetLength() != 2
+				|| Candidate->callArguments.GetLength() != 2)
+			{
+				continue;
+			}
+			const asCDecl* const Callee = BuildingContext->GetDecl(
+				Candidate->resolvedDecl);
+			if (Callee != nullptr
+				&& Callee->kind == asAST_DECL_CONSTRUCTOR
+				&& BuildingContext->GetFormalDeclCount(Callee->id) == 2)
+			{
+				ASSERT_THAT(IsNull(Construct,
+					TEXT("fixture must own one two-formal ordinary CONSTRUCT")));
+				Construct = Candidate;
+			}
+		}
+		ASSERT_THAT(IsNotNull(Construct,
+			TEXT("Sema must publish the named/default CONSTRUCT relation")));
+		if (Construct == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(
+			Construct->callArguments[0].formalIndex == 0
+			&& Construct->callArguments[0].origin == asAST_CALL_ARGUMENT_DEFAULT
+			&& Construct->callArguments[1].formalIndex == 1
+			&& Construct->callArguments[1].origin == asAST_CALL_ARGUMENT_NAMED,
+			TEXT("source Sema must first seal default InA and named InB exactly")));
+
+		// Children and records are an evaluation-order sequence, not the ABI map.
+		// Reorder each expression/record pair while preserving its sealed formalIndex.
+		// Both formals are int, so a positional consumer can silently execute the
+		// wrong value without any type mismatch.
+		const asASTExprId FirstChild = Construct->children[0];
+		Construct->children[0] = Construct->children[1];
+		Construct->children[1] = FirstChild;
+		const asSASTCallArgument FirstRecord = Construct->callArguments[0];
+		Construct->callArguments[0] = Construct->callArguments[1];
+		Construct->callArguments[1] = FirstRecord;
+		ASSERT_THAT(IsTrue(
+			Construct->callArguments[0].formalIndex == 1
+			&& Construct->callArguments[1].formalIndex == 0,
+			TEXT("adversarial graph must differ from formal ABI order")));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST(),
+			TEXT("reordered expression/record pairs must remain publishable")));
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		asCBytecodeCodeGen CodeGen;
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK,
+			CodeGen.GeneratePreparedModule(*Context, Builder),
+			*FString::Printf(
+				TEXT("exact construct-formal CodeGen must succeed: %s"),
+				UTF8_TO_TCHAR(CodeGen.GetFailureDetail().AddressOf()
+					? CodeGen.GetFailureDetail().AddressOf() : ""))));
+
+		int32 Value = 0;
+		FString Exception;
+		const int ExecuteStatus = AngelscriptNativeTestSupport::CanonicalExecuteIntStatus(
+			Engine.Get(), Module, "int Entry()", Value, Exception);
+		ASSERT_THAT(IsTrue(
+			ExecuteStatus == asEXECUTION_FINISHED && Value == 427,
+			*FString::Printf(TEXT(
+				"constructor ABI slots must use sealed formalIndex, not reordered record position; status=%d got=%d exception=%s calls={%s} immediates={%s} objects={%s}"),
+				ExecuteStatus, Value, *Exception,
+				*ProdBytecodeCallTargets(Module->GetFunctionByDecl("int Entry()")),
+				*ProdBytecodeImmediates(Module->GetFunctionByDecl("int Entry()")),
+				*ProdRuntimeObjectDirectory(Module->GetFunctionByDecl("int Entry()")))));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Module->GetLastBytecodePublisher(),
+			TEXT("adversarial construct relation must publish through CodeGen")));
+	}
+
 	TEST_METHOD(PreparedAccessSpecifierDefinitionsAndMemberEdgesUseExactCanonicalDeclIds)
 	{
 		using namespace AngelscriptBuilderTestSupport;
@@ -1643,6 +1989,10 @@ public:
 		{
 			return;
 		}
+		ASSERT_THAT(IsTrue(
+			Builder.classDeclarations[0]->canonicalASTStableDeclKey.GetLength() > 0,
+			TEXT("Stage 1 must carry the exact Parser/Sema class identity before member projection")));
+		++Builder.classDeclarations[0]->node->tokenPos;
 		asCScriptNode* NativeAccessNodes[2] = { nullptr, nullptr };
 		asUINT NativeAccessNodeCount = 0;
 		for (asCScriptNode* Node =
@@ -3114,6 +3464,137 @@ public:
 				Value)));
 	}
 
+	TEST_METHOD(PreparedInitDefaultsAuthenticatesAfterAuthoredMethodOrder)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalInitDefaultsOrder");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class PreparedDefaultsOrderProbe
+			{
+				int Value;
+				default Value = 7;
+
+				int Read()
+				{
+					return Value;
+				}
+
+				int Twice()
+				{
+					return Read() * 2;
+				}
+			}
+
+			int RunPreparedDefaultsOrder()
+			{
+				PreparedDefaultsOrderProbe Object;
+				return Object.Read();
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"PreparedCanonicalInitDefaultsOrder.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module)));
+		asCObjectType* const ObjectType = static_cast<asCObjectType*>(
+			Module->GetTypeInfoByName("PreparedDefaultsOrderProbe"));
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(3),
+			ObjectType->methods.GetLength(),
+			TEXT("Stage 2 must own two authored methods followed by one defaults helper")));
+		if (ObjectType->methods.GetLength() != 3)
+		{
+			return;
+		}
+		auto ResolveMethod = [&](asUINT Index) -> asCScriptFunction*
+		{
+			const int FunctionId = ObjectType->methods[Index];
+			return FunctionId >= 0
+				&& static_cast<asUINT>(FunctionId)
+					< ScriptEngine->scriptFunctions.GetLength()
+					? ScriptEngine->scriptFunctions[
+						static_cast<asUINT>(FunctionId)] : nullptr;
+		};
+		asCScriptFunction* const Read = ResolveMethod(0);
+		asCScriptFunction* const Twice = ResolveMethod(1);
+		asCScriptFunction* const InitDefaults = ResolveMethod(2);
+		ASSERT_THAT(IsTrue(
+			Read != nullptr && Read->name.Equals("Read")
+				&& Twice != nullptr && Twice->name.Equals("Twice")
+				&& InitDefaults != nullptr
+				&& InitDefaults->name.Equals("__InitDefaults"),
+			TEXT("the maintained Builder appends __InitDefaults after authored methods")));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST()));
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		const asCDecl* DefaultsDecl = nullptr;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_DECL_METHOD
+				&& Candidate->name.Equals("__InitDefaults"))
+			{
+				DefaultsDecl = Candidate;
+			}
+		}
+		ASSERT_THAT(IsTrue(
+			DefaultsDecl != nullptr
+				&& DefaultsDecl->origin.Equals("canonical-init-defaults")
+				&& DefaultsDecl->body.IsValid(),
+			TEXT("Sema must seal one exact defaults declaration and body")));
+
+		asCBytecodeCodeGen CodeGen;
+		const int CodeGenResult =
+			CodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, CodeGenResult,
+			*FString::Printf(
+				TEXT("the sealed defaults helper must authenticate in maintained Runtime order; result=%d detail=%s"),
+				CodeGenResult,
+				UTF8_TO_TCHAR(CodeGen.GetFailureDetail().AddressOf()
+					? CodeGen.GetFailureDetail().AddressOf() : ""))));
+	}
+
 	TEST_METHOD(PreparedNamespaceSameNameTypeShellSwapFailsExactAuthentication)
 	{
 		using namespace AngelscriptBuilderTestSupport;
@@ -3747,9 +4228,9 @@ public:
 			Engine,
 			"PreparedCanonicalImportProvider",
 			ASTEST_AS_ANSI(R"AS(
-				int PreparedSharedValue(int Value)
+				int PreparedSharedValue(int A = 1, int B = 2)
 				{
-					return Value;
+					return A * 10 + B;
 				}
 				)AS"));
 		ASSERT_THAT(IsTrue(Provider.IsValid(),
@@ -3764,11 +4245,12 @@ public:
 		}
 
 		const std::string ConsumerSource = ASTEST_AS_ANSI(R"AS(
-			import int PreparedSharedValue(int Value) from "PreparedCanonicalImportProvider";
+			import int PreparedSharedValue(int A = 1, int B = 2)
+				from "PreparedCanonicalImportProvider";
 
 			int PreparedImportEntry()
 			{
-				return PreparedSharedValue(41) + 1;
+				return PreparedSharedValue(B: 7);
 			}
 			)AS");
 		ASSERT_THAT(IsTrue(AddBuilderSection(
@@ -3852,13 +4334,24 @@ public:
 			PreparedImport->canonicalASTStableDeclKey == ImportDecl->stableKey,
 			TEXT("Stage2 must publish the producer-carried import declaration key")));
 		ASSERT_THAT(IsTrue(
-			PreparedImport->parameterTypes.GetLength() == 1
+			PreparedImport->parameterTypes.GetLength() == 2
 				&& PreparedImport->parameterTypes[0].IsPrimitive()
 				&& PreparedImport->parameterTypes[0].IsReadOnly()
 				&& !PreparedImport->parameterTypes[0].IsReference()
-				&& PreparedImport->inOutFlags.GetLength() == 1
-				&& PreparedImport->inOutFlags[0] == asTM_NONE,
+				&& PreparedImport->parameterTypes[1].IsPrimitive()
+				&& PreparedImport->parameterTypes[1].IsReadOnly()
+				&& !PreparedImport->parameterTypes[1].IsReference()
+				&& PreparedImport->inOutFlags.GetLength() == 2
+				&& PreparedImport->inOutFlags[0] == asTM_NONE
+				&& PreparedImport->inOutFlags[1] == asTM_NONE,
 			TEXT("prepared import matching must compare Builder's normalized primitive ABI")));
+		ASSERT_THAT(IsTrue(
+			PreparedImport->defaultArgs.GetLength() == 2
+				&& PreparedImport->defaultArgs[0] != nullptr
+				&& PreparedImport->defaultArgs[0]->Equals("1")
+				&& PreparedImport->defaultArgs[1] != nullptr
+				&& PreparedImport->defaultArgs[1]->Equals("2"),
+			TEXT("Stage2 prepared import shell must retain both owning authored defaults")));
 
 		const asCString OriginalImportKey =
 			PreparedImport->canonicalASTStableDeclKey;
@@ -3920,7 +4413,8 @@ public:
 			TEXT("prepared import shell must retain the producer-carried sealed key")));
 
 		asIScriptFunction* const ProviderFunction =
-			Provider->GetFunctionByDecl("int PreparedSharedValue(const int)");
+			Provider->GetFunctionByDecl(
+				"int PreparedSharedValue(const int, const int)");
 		ASSERT_THAT(IsNotNull(ProviderFunction));
 		ASSERT_THAT(AreEqual(asSUCCESS,
 			Module->BindImportedFunction(0, ProviderFunction),
@@ -3939,8 +4433,8 @@ public:
 			Engine.Get(),
 			Module,
 			"int PreparedImportEntry()",
-			Value) && Value == 42,
-			TEXT("bound prepared import must execute provider value plus one")));
+			Value) && Value == 17,
+			TEXT("bound prepared import must execute named B=7 with default A=1")));
 		ASSERT_THAT(AreEqual(
 			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
 			Module->GetLastBytecodePublisher()));
@@ -6228,6 +6722,113 @@ public:
 		ASSERT_THAT(AreEqual(1, GProdNativeLifecycleMemberDestructed));
 	}
 
+	TEST_METHOD(CanonicalReferenceReturningTemporaryReceiverPreservesExactValueAddress)
+	{
+		GProdNativeLifecycleMemberConstructed = 0;
+		GProdNativeLifecycleMemberDestructed = 0;
+		GProdNativeLifecycleMemberReferenceObserved = 0;
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"FProdNativeLifecycleMember",
+				sizeof(FProdNativeLifecycleMember),
+				asOBJ_VALUE | asOBJ_APP_CLASS_CD
+					| asOBJ_APP_CLASS_ALLINTS) >= 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectBehaviour(
+			"FProdNativeLifecycleMember",
+			asBEHAVE_CONSTRUCT,
+			"void f()",
+			asFUNCTION(ProdNativeLifecycleMemberConstruct),
+			asCALL_GENERIC) > 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectBehaviour(
+			"FProdNativeLifecycleMember",
+			asBEHAVE_DESTRUCT,
+			"void f()",
+			asFUNCTION(ProdNativeLifecycleMemberDestruct),
+			asCALL_GENERIC) > 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectMethod(
+			"FProdNativeLifecycleMember",
+			"FProdNativeLifecycleMember& Append(int Value) accept_temporary_this",
+			asFUNCTION(ProdNativeLifecycleMemberAppendAndReturnReference),
+			asCALL_GENERIC) > 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterGlobalFunction(
+			"int ObserveNativeMember(const FProdNativeLifecycleMember&in Value)",
+			asFUNCTION(ProdNativeLifecycleMemberObserveReference),
+			asCALL_GENERIC) > 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdReferenceReturningTemporaryReceiver", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Entry()
+			{
+				return ObserveNativeMember(
+					FProdNativeLifecycleMember().Append(1));
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdReferenceReturningTemporaryReceiver.as",
+			ScriptSource.c_str(),
+			static_cast<asUINT>(ScriptSource.size()))));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("a reference-returning call on a materialized value receiver must lower through Canonical CodeGen")));
+
+		const asCModule* const Internal = static_cast<asCModule*>(Module);
+		const asCASTContext* const Ast = Internal->GetCanonicalASTContext();
+		bool bReferenceCallStayedUnmaterialized = false;
+		for (asUINT ExprIndex = 1;
+			Ast != nullptr && ExprIndex <= Ast->GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Expr = Ast->GetExpr(asASTExprId(ExprIndex));
+			const asCDecl* const Callee = Expr != nullptr
+				? Ast->GetDecl(Expr->resolvedDecl) : nullptr;
+			if (Expr != nullptr && Expr->kind == asAST_EXPR_CALL
+				&& Callee != nullptr && Callee->name.Equals("Append"))
+			{
+				bReferenceCallStayedUnmaterialized = Expr->type.IsReference();
+				for (asUINT WrapperIndex = 1;
+					WrapperIndex <= Ast->GetExprCount(); ++WrapperIndex)
+				{
+					const asCExpr* const Wrapper =
+						Ast->GetExpr(asASTExprId(WrapperIndex));
+					if (Wrapper != nullptr
+						&& Wrapper->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+						&& Wrapper->children.GetLength() == 1
+						&& Wrapper->children[0] == Expr->id)
+					{
+						bReferenceCallStayedUnmaterialized = false;
+					}
+				}
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(bReferenceCallStayedUnmaterialized,
+			TEXT("a reference result is an lvalue alias of the receiver, not a new materialized object")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 42,
+			TEXT("the chained reference return must preserve the temporary object's exact address")));
+		ASSERT_THAT(AreEqual(1, GProdNativeLifecycleMemberConstructed));
+		ASSERT_THAT(AreEqual(1, GProdNativeLifecycleMemberReferenceObserved));
+		ASSERT_THAT(AreEqual(1, GProdNativeLifecycleMemberDestructed));
+	}
+
 	TEST_METHOD(PreparedStringLiteralUsesFactoryAndExactReferenceABI)
 	{
 		using namespace AngelscriptBuilderTestSupport;
@@ -6863,17 +7464,41 @@ public:
 		asCBuilder& Builder = *Module->builder;
 		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
 		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
-		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateFunctions()));
-		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildLayoutClasses()));
-		Builder.BuildAllocateGlobalVariables();
-		ASSERT_THAT(AreEqual(asSUCCESS,
-			Builder.BuildLayoutFunctionsWithoutGlobalInitializers()));
-		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST()));
+
+		// Split BuildGenerateFunctions at its existing Stage 2 boundary. Parser/Sema
+		// has already authored the exact VarDecl, while ParseScripts materializes
+		// the Runtime global description from the retained native syntax tree.
+		// Poison that tree only after the Runtime name/type shell exists: a
+		// Canonical build must carry the producer DeclId directly and must not
+		// reconstruct semantic identity from these mutable coordinates later.
+		Builder.ParseScripts();
+		ASSERT_THAT(AreEqual(0, Builder.numErrors));
+		Builder.CompileInterfaces();
+		Builder.CompileClasses(0);
 		ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
 			Builder.globVariableList.GetLength()));
 		sGlobalVariableDescription* const Description =
 			Builder.globVariableList.GetLength() == 1
 				? Builder.globVariableList[0] : nullptr;
+		ASSERT_THAT(IsTrue(Description != nullptr
+			&& Description->declaredAtNode != nullptr
+			&& Description->name == "_PreparedObjectGlobal",
+			TEXT("the fixture must materialize one exact Runtime global shell before late registration")));
+		if (Description == nullptr || Description->declaredAtNode == nullptr)
+		{
+			return;
+		}
+		++Description->declaredAtNode->tokenPos;
+		Builder.RegisterGlobalVariables();
+		ASSERT_THAT(AreEqual(0, Builder.numErrors));
+		ASSERT_THAT(IsTrue(
+			Description->canonicalASTStableDeclKey.GetLength() > 0,
+			TEXT("the Runtime global shell must retain the Parser/Sema producer identity after its native node coordinates change")));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildLayoutClasses()));
+		Builder.BuildAllocateGlobalVariables();
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			Builder.BuildLayoutFunctionsWithoutGlobalInitializers()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST()));
 		ASSERT_THAT(IsTrue(Description != nullptr
 			&& Description->property != nullptr
 			&& Description->datatype.IsNonPrimitiveValueType()));
@@ -8063,6 +8688,786 @@ public:
 			TEXT("CANONICAL value-object Build must not record asCCompiler")));
 	}
 
+	TEST_METHOD(CanonicalOverloadedAssignExecutesOpAssignCallWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opAssign CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdOpAssignCallRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				T& opAssign(int Value)
+				{
+					Stored = Value;
+					return this;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				Object = 7;
+				return Object.Stored;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdOpAssignCallRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Object = 7 must publish Canonical CodeGen, not asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("overloaded assignment Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("overloaded assignment must not construct asCCompiler")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 7,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute Object = 7 through T::opAssign(int); Entry()=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(CanonicalOverloadedCompoundAssignExecutesOpAddAssignCallWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opAddAssign CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdOpAddAssignCallRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				T& opAddAssign(int Value)
+				{
+					Stored = Stored + Value;
+					return this;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				Object += 7;
+				return Object.Stored;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdOpAddAssignCallRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Object += 7 must publish Canonical CodeGen, not asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("overloaded compound assignment Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("overloaded compound assignment must not construct asCCompiler")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 7,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute Object += 7 through T::opAddAssign(int); Entry()=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(CanonicalReverseOperatorExecutesOpAddRCallWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opAdd_r CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdOpAddRCallRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 2;
+
+				int opAdd_r(int Value) const
+				{
+					return Value + Stored;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				return 40 + Object;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdOpAddRCallRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("40 + Object must publish Canonical CodeGen, not asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("reverse operator Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("reverse operator must not construct asCCompiler")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 42,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute 40 + Object through T::opAdd_r(int); Entry()=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(CanonicalInequalityExecutesNegatedOpEqualsCallWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opEquals inequality CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdOpEqualsInequalityRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				bool opEquals(const T&in Other) const
+				{
+					return Stored == Other.Stored;
+				}
+			}
+
+			int Entry()
+			{
+				T Left;
+				T Right;
+				Right.Stored = 1;
+				return Left != Right ? 42 : 0;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdOpEqualsInequalityRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Left != Right must publish Canonical CodeGen, not asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("inequality Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("inequality must not construct asCCompiler")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 42,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute Left != Right as !opEquals; Entry()=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(CanonicalLessThanExecutesOpCmpComparedAgainstZeroWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opCmp less-than CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdOpCmpLessThanRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				int opCmp(const T&in Other) const
+				{
+					return Stored - Other.Stored;
+				}
+			}
+
+			int Entry()
+			{
+				T Left;
+				T Right;
+				Left.Stored = 3;
+				Right.Stored = 1;
+				return Left < Right ? 42 : 0;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdOpCmpLessThanRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Left < Right must publish Canonical CodeGen, not asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("less-than Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("less-than must not construct asCCompiler")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 0,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute Left < Right as opCmp < 0; 3<1 is false so Entry()=0, not leftover truthy opCmp; Entry()=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(CanonicalBitwiseOrExecutesOpOrCallWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opOr CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdOpOrCallRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				int opOr(int Value) const
+				{
+					return Stored | Value;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				Object.Stored = 8;
+				return Object | 2;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdOpOrCallRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Object | 2 must publish Canonical CodeGen, not asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("bitwise-or Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("bitwise-or must not construct asCCompiler")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 10,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute Object | 2 as opOr; Entry()=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(CanonicalSwappedLessThanExecutesOpCmpComparedAgainstZeroWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 swapped opCmp less-than CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdSwappedOpCmpLessThanRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				int opCmp(int Value) const
+				{
+					return Stored - Value;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				Object.Stored = 5;
+				return 3 < Object ? 42 : 0;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdSwappedOpCmpLessThanRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("3 < Object must publish Canonical CodeGen, not asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("swapped less-than Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("swapped less-than must not construct asCCompiler")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 42,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute 3 < Object as swapped opCmp > 0; 5>3 so Entry()=42, not leftover Binary or unswapped < 0; Entry()=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(CanonicalBitwiseNotExecutesOpComCallWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opCom CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdOpComCallRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				int opCom() const
+				{
+					return Stored == 5 ? 42 : 0;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				Object.Stored = 5;
+				return ~Object;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdOpComCallRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("~Object must publish Canonical CodeGen, not asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("bitwise-not Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("bitwise-not must not construct asCCompiler")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 42,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute ~Object as opCom; Entry()=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(CanonicalPrefixPropertyIncrementExecutesWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 prefix property CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdPrefixPropertyInc", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int Stored = 5;
+
+				int GetValue()
+				{
+					return Stored;
+				}
+
+				void SetValue(int Next)
+				{
+					Stored = Next;
+				}
+			}
+
+			T Make()
+			{
+				T Object;
+				return Object;
+			}
+
+			int Entry()
+			{
+				return ++Make().Value;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdPrefixPropertyInc.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("++Make().Value must publish Canonical CodeGen, not leftover Unary pre++ or asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("prefix property increment Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("prefix property increment must not construct asCCompiler")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 6,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute ++Make().Value as Get then Set yielding 6 from Stored=5; Entry()=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(CanonicalPrefixIndexIncrementExecutesWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 prefix index CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdPrefixIndexInc", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int Stored = 5;
+
+				int &opIndex(int Index)
+				{
+					return Stored;
+				}
+			}
+
+			T Make()
+			{
+				T Object;
+				return Object;
+			}
+
+			int Entry()
+			{
+				return ++Make()[0];
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdPrefixIndexInc.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("++Make()[0] must publish Canonical CodeGen, not leftover Unary pre++ or asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("prefix index increment Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("prefix index increment must not construct asCCompiler")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 6,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute ++Make()[0] as opIndex then Assign yielding 6 from Stored=5; Entry()=%d"),
+				Value)));
+	}
+
+	TEST_METHOD(CanonicalPostfixIndexIncrementExecutesOldValueWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 postfix index CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdPostfixIndexInc", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int Stored = 5;
+
+				int &opIndex(int Index)
+				{
+					return Stored;
+				}
+			}
+
+			T Make()
+			{
+				T Object;
+				return Object;
+			}
+
+			int Entry()
+			{
+				return Make()[0]++;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdPostfixIndexInc.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Make()[0]++ must publish Canonical CodeGen, not leftover Unary post++ or asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("postfix index increment Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("postfix index increment must not construct asCCompiler")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 5,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute Make()[0]++ as postfix: yield 5 from Stored=5 then write 6; Entry()=%d"),
+				Value)));
+	}
+
 	TEST_METHOD(CanonicalBytecodeLifetimeEmitterConsumesOnlyProtocolExitPlans)
 	{
 		const FString SourcePath = FPaths::Combine(
@@ -8300,18 +9705,32 @@ public:
 				TEXT("both initializer bodies must be attempted")));
 			if (bFailSecond)
 			{
+				const FString ActualOrder = FString::JoinBy(
+					GProdSuccessSensitiveDestructionOrder,
+					TEXT(","),
+					[](const int32 Id) { return FString::FromInt(Id); });
 				ASSERT_THAT(IsTrue(
 					GProdSuccessSensitiveDestructionOrder.Num() == 1
 						&& GProdSuccessSensitiveDestructionOrder[0] == 1,
-					TEXT("the abort edge destroys First only; failed Second is never live")));
+					*FString::Printf(
+						TEXT("the abort edge destroys First only; failed Second is never live; actual=[%s]"),
+						*ActualOrder)));
 			}
 			else
 			{
+				const FString ActualOrder = FString::JoinBy(
+					GProdSuccessSensitiveDestructionOrder,
+					TEXT(","),
+					[](const int32 Id) { return FString::FromInt(Id); });
 				ASSERT_THAT(IsTrue(
 					GProdSuccessSensitiveDestructionOrder.Num() == 2
 						&& GProdSuccessSensitiveDestructionOrder[0] == 2
 						&& GProdSuccessSensitiveDestructionOrder[1] == 1,
-					TEXT("the normal edge destroys committed locals in strict reverse order")));
+					*FString::Printf(
+						TEXT("the normal edge destroys committed locals in strict reverse order; actual=[%s] calls={%s} objects={%s}"),
+						*ActualOrder,
+						*ProdBytecodeCallTargets(Entry),
+						*ProdRuntimeObjectDirectory(Entry))));
 			}
 		};
 		Execute(false);
@@ -9038,15 +10457,14 @@ public:
 				*ProdBytecodeCallTargets(Published))));
 
 		int32 Value = 0;
+		FString Exception;
+		const int ExecuteStatus = AngelscriptNativeTestSupport::CanonicalExecuteIntStatus(
+			Engine.Get(), Module, "int RunNestedReturnOrder()", Value, Exception);
 		ASSERT_THAT(IsTrue(
-			AngelscriptNativeTestSupport::CanonicalExecuteInt(
-				*TestRunner,
-				Engine.Get(),
-				Module,
-				"int RunNestedReturnOrder()",
-				Value)
-				&& Value == 42,
-			TEXT("return inside object foreach must execute through CANONICAL bytecode")));
+			ExecuteStatus == asEXECUTION_FINISHED && Value == 42,
+			*FString::Printf(
+				TEXT("return inside object foreach must execute through CANONICAL bytecode; status=%d got=%d exception=%s"),
+				ExecuteStatus, Value, *Exception)));
 		ASSERT_THAT(IsTrue(
 			GProdSuccessSensitiveDestructionOrder.Num() == 2
 				&& GProdSuccessSensitiveDestructionOrder[0] == 3
@@ -9227,7 +10645,10 @@ public:
 		auto RegisterSurface = [&](asCScriptEngine* ScriptEngine)
 		{
 			if (ScriptEngine == nullptr
-				|| ScriptEngine->RegisterFuncdef("int FDefaultNullCallback()") < 0)
+				|| ScriptEngine->RegisterFuncdef("int FDefaultNullCallback()") < 0
+				|| ScriptEngine->RegisterObjectType(
+					"FDefaultNullReference", 0,
+					asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) < 0)
 			{
 				return false;
 			}
@@ -9245,6 +10666,7 @@ public:
 			int ObserveDefaultNullLocals()
 			{
 				FDefaultNullCallback Callback;
+				FDefaultNullReference Reference;
 				return 42;
 			}
 			)AS");
@@ -9301,6 +10723,7 @@ public:
 				static_cast<asCModule*>(Module)->GetCanonicalASTContext();
 			ASSERT_THAT(IsNotNull(Ast));
 			const asCDecl* Callback = nullptr;
+			const asCDecl* Reference = nullptr;
 			for (asUINT DeclIndex = 1; Ast != nullptr && DeclIndex <= Ast->GetDeclCount(); ++DeclIndex)
 			{
 				const asCDecl* const Decl = Ast->GetDecl(asASTDeclId(DeclIndex));
@@ -9308,11 +10731,18 @@ public:
 					&& Decl->name.Equals("Callback"))
 				{
 					Callback = Decl;
-					break;
+				}
+				else if (Decl != nullptr && Decl->kind == asAST_DECL_VAR
+					&& Decl->name.Equals("Reference"))
+				{
+					Reference = Decl;
 				}
 			}
 			const asCExpr* const Init = Callback != nullptr && Callback->inits.GetLength() == 1
 				? Ast->GetExpr(Callback->inits[0]) : nullptr;
+			const asCExpr* const ReferenceInit = Reference != nullptr
+				&& Reference->inits.GetLength() == 1
+				? Ast->GetExpr(Reference->inits[0]) : nullptr;
 			int32 ReleasePlanCount = 0;
 			for (asUINT ExprIndex = 1; Ast != nullptr && ExprIndex <= Ast->GetExprCount(); ++ExprIndex)
 			{
@@ -9330,6 +10760,10 @@ public:
 			}
 			ASSERT_THAT(IsTrue(Init != nullptr && Init->kind == asAST_EXPR_NULL_LITERAL,
 				TEXT("production funcdef local must seal an explicit default-null initializer")));
+			ASSERT_THAT(IsTrue(
+				ReferenceInit != nullptr
+					&& ReferenceInit->kind == asAST_EXPR_NULL_LITERAL,
+				TEXT("implicit-handle reference local must seal null instead of an unresolved inline Construct")));
 			ASSERT_THAT(AreEqual(2, ReleasePlanCount,
 				TEXT("production funcdef local must seal normal plus return releases")));
 			int32 Value = 0;
@@ -11092,17 +12526,14 @@ public:
 				*ProdBytecodeCallTargets(Published))));
 
 		int32 Value = 0;
+		FString Exception;
+		const int ExecuteStatus = CanonicalExecuteIntStatus(
+			Engine.Get(), Module, "int CanonicalObjectForeachBreak()", Value, Exception);
 		ASSERT_THAT(IsTrue(
-			CanonicalExecuteInt(
-				*TestRunner,
-				Engine.Get(),
-				Module,
-				"int CanonicalObjectForeachBreak()",
-				Value)
-				&& Value == 21,
+			ExecuteStatus == asEXECUTION_FINISHED && Value == 21,
 			*FString::Printf(
-				TEXT("object-iterator foreach must execute the first value, break, clean up, then return 21; got=%d"),
-				Value)));
+				TEXT("object-iterator foreach must execute the first value, break, clean up, then return 21; status=%d got=%d exception=%s"),
+				ExecuteStatus, Value, *Exception)));
 		asCModule* const InternalModule = static_cast<asCModule*>(Module);
 		ASSERT_THAT(AreEqual(
 			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
@@ -12231,6 +13662,90 @@ public:
 			TEXT("bytecode must not CALLSYS Get(bool)")));
 	}
 
+	TEST_METHOD(CanonicalNativeConstAndMutableMemberExecutesReceiverQualifiedSelection)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"FBindBox",
+				sizeof(FProdBindBox),
+				asOBJ_VALUE | asOBJ_POD | asOBJ_APP_CLASS) >= 0,
+			TEXT("FBindBox VALUE POD")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectBehaviour(
+				"FBindBox",
+				asBEHAVE_CONSTRUCT,
+				"void f()",
+				asFUNCTION(ProdBindBoxConstruct),
+				asCALL_GENERIC) >= 0,
+			TEXT("FBindBox default construct")));
+		const int ConstReadId = ScriptEngine->RegisterObjectMethod(
+			"FBindBox",
+			"int Read() const",
+			asFUNCTION(ProdBindBoxGetBoolPoison),
+			asCALL_GENERIC);
+		ASSERT_THAT(IsTrue(ConstReadId >= 0, TEXT("poison const Read() first")));
+		const int MutableReadId = ScriptEngine->RegisterObjectMethod(
+			"FBindBox",
+			"int Read()",
+			asFUNCTION(ProdBindBoxGetInt),
+			asCALL_GENERIC);
+		ASSERT_THAT(IsTrue(MutableReadId >= 0, TEXT("selected mutable Read() second")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("FBindBox receiver-qualified Read selects CANONICAL")));
+
+		asIScriptModule* Module = ScriptEngine->GetModule("ProdBindReceiverQualifiedRead", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int F()
+			{
+				FBindBox b;
+				return b.Read();
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdBindReceiverQualifiedRead",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		asCModule* const InternalModule = static_cast<asCModule*>(Module);
+		FString AstDump = TEXT("<no retained AST>");
+		if (const asCASTContext* const Sealed = InternalModule->GetCanonicalASTContext())
+		{
+			asCString Dump;
+			asCASTDump(*Sealed, Dump);
+			AstDump = AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
+		}
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(TEXT("receiver-qualified mutable Read() must Generate; ast {%s}"), *AstDump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			InternalModule->GetLastBytecodePublisher(),
+			TEXT("receiver-qualified native method must publish CodeGen")));
+
+		asIScriptFunction* const MutableRead = ScriptEngine->GetFunctionById(MutableReadId);
+		asIScriptFunction* const ConstRead = ScriptEngine->GetFunctionById(ConstReadId);
+		ASSERT_THAT(IsNotNull(MutableRead));
+		ASSERT_THAT(IsNotNull(ConstRead));
+
+		asIScriptFunction* const Published = AngelscriptNativeTestSupport::GetNativeFunctionByDecl(Module, "int F()");
+		ASSERT_THAT(IsNotNull(Published));
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(*TestRunner, Engine.Get(), Module, "int F()", Value)
+			&& Value == 42,
+			*FString::Printf(TEXT("mutable receiver must execute mutable Read() and return 42, not const poison 0; got=%d"), Value)));
+		ASSERT_THAT(IsTrue(ProdBytecodeCallsFunction(Published, MutableRead->GetId()),
+			TEXT("bytecode must CALLSYS mutable Read()")));
+		ASSERT_THAT(IsFalse(ProdBytecodeCallsFunction(Published, ConstRead->GetId()),
+			TEXT("bytecode must not CALLSYS const Read() for a mutable receiver")));
+	}
+
 	TEST_METHOD(CanonicalNativeSameArityConstructorExecutesSelectedNotFirstRegistered)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
@@ -12741,6 +14256,288 @@ public:
 			TEXT("F() must emit CALLBND, not CALL/CallPtr without an import slot")));
 	}
 
+	TEST_METHOD(CanonicalSourceQualifierMetadataDirectImportPublishesExactFormalIdentity)
+	{
+		using namespace AngelscriptNativeTestSupport;
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"FProdAutomaticImportValue",
+			sizeof(FProdAutomaticImportValue),
+			asOBJ_VALUE | asOBJ_POD
+				| asGetTypeTraits<FProdAutomaticImportValue>()) >= 0,
+			TEXT("direct-import source-qualifier fixture must register its value type")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		FScopedNativeModule Provider(
+			*TestRunner,
+			Engine,
+			"ProdSourceQualifierImportProvider",
+			ASTEST_AS_ANSI(R"AS(
+				int ReadExplicit(
+					const FProdAutomaticImportValue& inout Value)
+				{
+					return 42;
+				}
+			)AS"));
+		ASSERT_THAT(IsTrue(Provider.IsValid(),
+			TEXT("source-qualifier import provider must compile")));
+		if (!Provider.IsValid())
+		{
+			return;
+		}
+
+		asIScriptModule* Consumer = nullptr;
+		const std::string ConsumerSource = ASTEST_AS_ANSI(R"AS(
+			import int ReadExplicit(
+				const FProdAutomaticImportValue& inout Value)
+				from "ProdSourceQualifierImportProvider";
+
+			int Entry(const FProdAutomaticImportValue& inout Value)
+			{
+				return ReadExplicit(Value);
+			}
+		)AS");
+		ASSERT_THAT(AreEqual(0, CompileNativeModule(
+			Engine.Get(),
+			"ProdSourceQualifierImportConsumer",
+			ConsumerSource.c_str(),
+			Consumer),
+			TEXT("direct Canonical import consumer must compile")));
+		ASSERT_THAT(IsNotNull(Consumer));
+		if (Consumer == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(AreEqual(1u, Consumer->GetImportedFunctionCount()));
+		asCScriptFunction* const Imported =
+			static_cast<asCModule*>(Consumer)->GetImportedFunction(0);
+		const asDWORD ExpectedQualifiers = asAST_QUAL_CONST
+			| asAST_QUAL_REFERENCE | asAST_QUAL_INOUT;
+		ASSERT_THAT(IsTrue(Imported != nullptr
+			&& Imported->canonicalASTStableDeclKey.GetLength() > 0,
+			TEXT("direct pending import must publish its exact Canonical declaration identity")));
+		ASSERT_THAT(IsTrue(Imported != nullptr
+			&& Imported->canonicalASTSourceParameterQualifiers.GetLength() == 1
+			&& Imported->canonicalASTSourceParameterQualifiers[0]
+				== ExpectedQualifiers,
+			TEXT("direct pending import must publish exact source qualifiers instead of relying on Runtime ABI inversion")));
+
+		asIScriptFunction* const ProviderFunction =
+			Provider->GetFunctionByName("ReadExplicit");
+		ASSERT_THAT(IsNotNull(ProviderFunction));
+		ASSERT_THAT(AreEqual(0,
+			Consumer->BindImportedFunction(0, ProviderFunction),
+			TEXT("the source-exact imported shell must retain the established Runtime binding ABI")));
+	}
+
+	TEST_METHOD(CanonicalDirectImportOwnsAuthoredDefaultsAndExecutesNamedCall)
+	{
+		// Production mutation caught: a null defaultArgs entry on the detached
+		// import shell loses reflection/Cache identity even when the sealed AST
+		// can still execute the same-source named/default call.
+		using namespace AngelscriptNativeTestSupport;
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		FScopedNativeModule Provider(
+			*TestRunner,
+			Engine,
+			"ProdDirectDefaultImportProvider",
+			ASTEST_AS_ANSI(R"AS(
+				int ImportedPack(int A = 1, int B = 2)
+				{
+					return A * 10 + B;
+				}
+			)AS"));
+		ASSERT_THAT(IsTrue(Provider.IsValid(),
+			TEXT("direct default-import provider must compile")));
+		if (!Provider.IsValid())
+		{
+			return;
+		}
+
+		asIScriptModule* Consumer = nullptr;
+		const std::string ConsumerSource = ASTEST_AS_ANSI(R"AS(
+			import int ImportedPack(int A = 1, int B = 2)
+				from "ProdDirectDefaultImportProvider";
+
+			int Entry()
+			{
+				return ImportedPack(B: 7);
+			}
+		)AS");
+		ASSERT_THAT(AreEqual(0, CompileNativeModule(
+			Engine.Get(),
+			"ProdDirectDefaultImportConsumer",
+			ConsumerSource.c_str(),
+			Consumer),
+			TEXT("direct named/default import consumer must compile")));
+		ASSERT_THAT(IsNotNull(Consumer));
+		if (Consumer == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(AreEqual(1u, Consumer->GetImportedFunctionCount(),
+			TEXT("direct default-import consumer must publish one import shell")));
+		asIScriptFunction* const Imported =
+			static_cast<asCModule*>(Consumer)->GetImportedFunction(0);
+		ASSERT_THAT(IsNotNull(Imported));
+		if (Imported == nullptr)
+		{
+			return;
+		}
+
+		const char* DefaultA = nullptr;
+		const char* DefaultB = nullptr;
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			Imported->GetParam(0, nullptr, nullptr, nullptr, &DefaultA),
+			TEXT("direct import formal A metadata must be queryable")));
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			Imported->GetParam(1, nullptr, nullptr, nullptr, &DefaultB),
+			TEXT("direct import formal B metadata must be queryable")));
+		ASSERT_THAT(AreEqual(FString(TEXT("1")),
+			FString(UTF8_TO_TCHAR(DefaultA != nullptr ? DefaultA : "")),
+			TEXT("direct import shell must own authored default A=1")));
+		ASSERT_THAT(AreEqual(FString(TEXT("2")),
+			FString(UTF8_TO_TCHAR(DefaultB != nullptr ? DefaultB : "")),
+			TEXT("direct import shell must own authored default B=2")));
+
+		asIScriptFunction* const ProviderFunction =
+			Provider->GetFunctionByDecl("int ImportedPack(int, int)");
+		ASSERT_THAT(IsNotNull(ProviderFunction));
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			Consumer->BindImportedFunction(0, ProviderFunction),
+			TEXT("default metadata must not alter the Runtime import ABI")));
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+			*TestRunner, Engine.Get(), Consumer, "int Entry()", Value)
+			&& Value == 17,
+			*FString::Printf(TEXT(
+				"ImportedPack(B: 7) must execute A=1 B=7; got=%d"), Value)));
+	}
+
+	TEST_METHOD(CanonicalSourceQualifierMetadataConstructorFactoryCopiesExactFormalIdentity)
+	{
+		using namespace AngelscriptNativeTestSupport;
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"FProdAutomaticImportValue",
+			sizeof(FProdAutomaticImportValue),
+			asOBJ_VALUE | asOBJ_POD
+				| asGetTypeTraits<FProdAutomaticImportValue>()) >= 0,
+			TEXT("constructor-factory source-qualifier fixture must register its value type")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* PublicModule = nullptr;
+		const std::string FactorySource = ASTEST_AS_ANSI(R"AS(
+			class FProdSourceQualifierFactory
+			{
+				FProdSourceQualifierFactory(
+					const FProdAutomaticImportValue& inout Value)
+				{
+				}
+			}
+		)AS");
+		ASSERT_THAT(AreEqual(0, CompileNativeModule(
+			Engine.Get(),
+			"ProdSourceQualifierFactory",
+			FactorySource.c_str(),
+			PublicModule),
+			TEXT("direct Canonical constructor/factory module must compile")));
+		asCModule* const Module = static_cast<asCModule*>(PublicModule);
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		asCObjectType* ObjectType = nullptr;
+		for (asUINT Index = 0; Index < Module->classTypes.GetLength(); ++Index)
+		{
+			asCObjectType* const Candidate = Module->classTypes[Index];
+			if (Candidate != nullptr
+				&& Candidate->name.Equals("FProdSourceQualifierFactory"))
+			{
+				ObjectType = Candidate;
+				break;
+			}
+		}
+		ASSERT_THAT(IsNotNull(ObjectType));
+		if (ObjectType == nullptr)
+		{
+			return;
+		}
+
+		asCScriptFunction* Constructor = nullptr;
+		for (asUINT Index = 0; Index < ObjectType->beh.constructors.GetLength(); ++Index)
+		{
+			const int FunctionId = ObjectType->beh.constructors[Index];
+			asCScriptFunction* const Candidate = FunctionId > 0
+				&& static_cast<asUINT>(FunctionId)
+					< ScriptEngine->scriptFunctions.GetLength()
+				? ScriptEngine->scriptFunctions[FunctionId] : nullptr;
+			if (Candidate != nullptr
+				&& Candidate->parameterTypes.GetLength() == 1)
+			{
+				Constructor = Candidate;
+				break;
+			}
+		}
+		asCScriptFunction* Factory = nullptr;
+		for (asUINT Index = 0; Index < ObjectType->beh.factories.GetLength(); ++Index)
+		{
+			const int FunctionId = ObjectType->beh.factories[Index];
+			asCScriptFunction* const Candidate = FunctionId > 0
+				&& static_cast<asUINT>(FunctionId)
+					< ScriptEngine->scriptFunctions.GetLength()
+				? ScriptEngine->scriptFunctions[FunctionId] : nullptr;
+			if (Candidate != nullptr
+				&& Candidate->parameterTypes.GetLength() == 1)
+			{
+				Factory = Candidate;
+				break;
+			}
+		}
+		ASSERT_THAT(IsNotNull(Constructor));
+		ASSERT_THAT(IsNotNull(Factory));
+		const asDWORD ExpectedQualifiers = asAST_QUAL_CONST
+			| asAST_QUAL_REFERENCE | asAST_QUAL_INOUT;
+		ASSERT_THAT(IsTrue(Constructor != nullptr
+			&& Constructor->canonicalASTSourceParameterQualifiers.GetLength() == 1
+			&& Constructor->canonicalASTSourceParameterQualifiers[0]
+				== ExpectedQualifiers,
+			TEXT("direct constructor must retain its exact source formal identity")));
+		ASSERT_THAT(IsTrue(Factory != nullptr && Constructor != nullptr
+			&& Factory->canonicalASTStableDeclKey
+				== Constructor->canonicalASTStableDeclKey,
+			TEXT("synthetic factory must derive the exact constructor declaration identity")));
+		ASSERT_THAT(IsTrue(Factory != nullptr
+			&& Factory->canonicalASTSourceParameterQualifiers.GetLength() == 1
+			&& Factory->canonicalASTSourceParameterQualifiers[0]
+				== ExpectedQualifiers,
+			TEXT("synthetic factory must copy exact constructor source qualifiers")));
+	}
+
 	TEST_METHOD(CanonicalAutomaticImportsPublishGlobalsAndResolveFunctions)
 	{
 		using namespace AngelscriptNativeTestSupport;
@@ -12881,6 +14678,151 @@ public:
 			TEXT("consumer GC sweep must complete after releasing the provider property reference")));
 		ASSERT_THAT(IsNull(ScriptEngine->varAddressMap.Find(ProviderGlobalAddress),
 			TEXT("provider global address must be reclaimed after its final consumer retires")));
+	}
+
+	TEST_METHOD(CanonicalAutomaticImportProjectsDefaultsForNamedCall)
+	{
+		// Production mutation caught: projecting only Runtime type/name data
+		// makes the omitted defaulted A formal non-viable for Pack(B: 7).
+		using namespace AngelscriptNativeTestSupport;
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("automatic default-import fixture selects CANONICAL")));
+		ASSERT_THAT(AreEqual(static_cast<int32>(asSUCCESS),
+			ScriptEngine->SetEngineProperty(asEP_AUTOMATIC_IMPORTS, true),
+			TEXT("automatic default-import fixture enables cross-module lookup")));
+
+		FScopedNativeModule Provider(
+			*TestRunner,
+			Engine,
+			"ProdAutomaticDefaultImportProvider",
+			ASTEST_AS_ANSI(R"AS(
+				namespace AutoDefault
+				{
+					int Pack(int A = 1, int B = 2)
+					{
+						return A * 10 + B;
+					}
+				}
+			)AS"));
+		ASSERT_THAT(IsTrue(Provider.IsValid(),
+			TEXT("automatic default-import provider must compile")));
+		if (!Provider.IsValid())
+		{
+			return;
+		}
+
+		asIScriptModule* Consumer = nullptr;
+		const std::string ConsumerSource = ASTEST_AS_ANSI(R"AS(
+			int Entry()
+			{
+				return AutoDefault::Pack(B: 7);
+			}
+		)AS");
+		const int BuildResult = CompileNativeModule(
+			Engine.Get(),
+			"ProdAutomaticDefaultImportConsumer",
+			ConsumerSource.c_str(),
+			Consumer);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			TEXT("automatic-import named/default call must compile canonically")));
+		if (BuildResult < 0 || Consumer == nullptr)
+		{
+			return;
+		}
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+			*TestRunner, Engine.Get(), Consumer, "int Entry()", Value)
+			&& Value == 17,
+			*FString::Printf(TEXT(
+				"AutoDefault::Pack(B: 7) must execute A=1 B=7; got=%d"), Value)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			static_cast<asCModule*>(Consumer)->GetLastBytecodePublisher(),
+			TEXT("automatic default-import call must use Canonical CodeGen")));
+	}
+
+	TEST_METHOD(CanonicalAutomaticImportBindsScriptValueParameterABI)
+	{
+		using namespace AngelscriptNativeTestSupport;
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"FProdAutomaticImportValue",
+			sizeof(FProdAutomaticImportValue),
+			asOBJ_VALUE | asOBJ_POD
+				| asGetTypeTraits<FProdAutomaticImportValue>()) >= 0,
+			TEXT("automatic-import ABI fixture must register its value type")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		ASSERT_THAT(AreEqual(static_cast<int32>(asSUCCESS),
+			ScriptEngine->SetEngineProperty(asEP_AUTOMATIC_IMPORTS, true)));
+
+		FScopedNativeModule Provider(
+			*TestRunner,
+			Engine,
+			"ProdAutomaticImportValueABIProvider",
+			ASTEST_AS_ANSI(R"AS(
+				namespace AutoValueProvider
+				{
+					int ReadValue(FProdAutomaticImportValue Value)
+					{
+						return 42;
+					}
+				}
+			)AS"));
+		ASSERT_THAT(IsTrue(Provider.IsValid(),
+			TEXT("automatic-import value ABI provider must build")));
+		if (!Provider.IsValid())
+		{
+			return;
+		}
+
+		FScopedNativeModule Consumer(
+			*TestRunner,
+			Engine,
+			"ProdAutomaticImportValueABIConsumer",
+			ASTEST_AS_ANSI(R"AS(
+				int Entry(FProdAutomaticImportValue Value)
+				{
+					return AutoValueProvider::ReadValue(Value);
+				}
+			)AS"));
+		ASSERT_THAT(IsTrue(Consumer.IsValid(),
+			TEXT("automatic-import consumer must bind source by-value identity to the provider Runtime ABI")));
+		if (!Consumer.IsValid())
+		{
+			return;
+		}
+
+		asIScriptFunction* const Entry = Consumer->GetFunctionByDecl(
+			"int Entry(FProdAutomaticImportValue)");
+		ASSERT_THAT(IsNotNull(Entry));
+		asIScriptContext* const Context = Engine.Get()->CreateContext();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Entry != nullptr && Context != nullptr)
+		{
+			FProdAutomaticImportValue Argument;
+			ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(Entry)));
+			ASSERT_THAT(AreEqual(
+				asSUCCESS, Context->SetArgObject(0, &Argument)));
+			ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
+			ASSERT_THAT(AreEqual(
+				42, static_cast<int32>(Context->GetReturnDWord()),
+				TEXT("automatic-import value ABI consumer must execute the exact provider function")));
+			Context->Release();
+		}
 	}
 
 	TEST_METHOD(CanonicalGeneratedAccessorBuildPublishesCodeGenAndExecutes)
@@ -14972,6 +16914,181 @@ public:
 			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
 			InternalModule->GetLastBytecodePublisher(),
 			TEXT("twelve-byte POD assignment must be published by CodeGen")));
+	}
+
+	TEST_METHOD(CanonicalWidePODGeneratedGetterCopiesBackingFieldIntoHiddenReturnStorage)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"FProdTriple",
+				sizeof(FProdTriple),
+				asOBJ_VALUE | asOBJ_POD | asOBJ_APP_CLASS
+					| asOBJ_APP_CLASS_CONSTRUCTOR) >= 0,
+			TEXT("the generated getter gate requires a wide POD VALUE type")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectBehaviour(
+				"FProdTriple",
+				asBEHAVE_CONSTRUCT,
+				"void f()",
+				asFUNCTION(ProdTripleConstruct),
+				asCALL_GENERIC) >= 0));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectProperty(
+				"FProdTriple", "int First",
+				asOFFSET(FProdTriple, First)) >= 0
+			&& ScriptEngine->RegisterObjectProperty(
+				"FProdTriple", "int Second",
+				asOFFSET(FProdTriple, Second)) >= 0
+			&& ScriptEngine->RegisterObjectProperty(
+				"FProdTriple", "int Third",
+				asOFFSET(FProdTriple, Third)) >= 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdWidePODGeneratedGetter", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(
+			asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct FWidePODGetterOwner
+			{
+				FProdTriple Inner;
+
+				// Isolate the generated getter; no setter body is needed here.
+				void SetInner() {}
+			}
+
+			int Entry()
+			{
+				FWidePODGetterOwner Owner;
+				FProdTriple Output = Owner.Inner;
+				return Output.First * 100 + Output.Second * 10 + Output.Third;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdWidePODGeneratedGetter.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("a wide POD generated getter must compile without scalarizing its backing field")));
+
+		asITypeInfo* const OwnerType =
+			Module->GetTypeInfoByName("FWidePODGetterOwner");
+		asIScriptFunction* const Getter = OwnerType != nullptr
+			? OwnerType->GetMethodByName("GetInner") : nullptr;
+		ASSERT_THAT(IsNotNull(Getter));
+		ASSERT_THAT(IsTrue(
+			static_cast<const asCScriptFunction*>(Getter)->DoesReturnOnStack(),
+			TEXT("the wide POD getter ABI must expose caller-owned hidden return storage")));
+		ASSERT_THAT(IsTrue(
+			AngelscriptCompilerBytecodeTestSupport::ContainsOpcode(
+				Getter, asBC_COPY),
+			TEXT("the generated getter must copy the exact sealed POD width into hidden return storage")));
+
+		int32 Result = -1;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Result)
+				&& Result == 0,
+			*FString::Printf(
+				TEXT("the detached wide POD getter result must execute intact; got=%d"),
+				Result)));
+	}
+
+	TEST_METHOD(CanonicalWidePODGeneratedSetterCopiesOwnedParameterIntoBackingField)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"FProdTriple",
+				sizeof(FProdTriple),
+				asOBJ_VALUE | asOBJ_POD | asOBJ_APP_CLASS
+					| asOBJ_APP_CLASS_CONSTRUCTOR) >= 0));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectBehaviour(
+				"FProdTriple",
+				asBEHAVE_CONSTRUCT,
+				"void f()",
+				asFUNCTION(ProdTripleConstruct),
+				asCALL_GENERIC) >= 0));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectProperty(
+				"FProdTriple", "int First",
+				asOFFSET(FProdTriple, First)) >= 0
+			&& ScriptEngine->RegisterObjectProperty(
+				"FProdTriple", "int Second",
+				asOFFSET(FProdTriple, Second)) >= 0
+			&& ScriptEngine->RegisterObjectProperty(
+				"FProdTriple", "int Third",
+				asOFFSET(FProdTriple, Third)) >= 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdWidePODGeneratedSetter", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(
+			asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct FWidePODSetterOwner
+			{
+				FProdTriple Inner;
+			}
+
+			int Entry()
+			{
+				FWidePODSetterOwner Owner;
+				FProdTriple Input;
+				Input.First = 1;
+				Input.Second = 2;
+				Input.Third = 3;
+				Owner.Inner = Input;
+				FProdTriple Output = Owner.Inner;
+				return Output.First * 100 + Output.Second * 10 + Output.Third;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdWidePODGeneratedSetter.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("a wide POD generated setter must copy its complete owned parameter")));
+
+		asITypeInfo* const OwnerType =
+			Module->GetTypeInfoByName("FWidePODSetterOwner");
+		asIScriptFunction* const Getter = OwnerType != nullptr
+			? OwnerType->GetMethodByName("GetInner") : nullptr;
+		asIScriptFunction* const Setter = OwnerType != nullptr
+			? OwnerType->GetMethodByName("SetInner") : nullptr;
+		ASSERT_THAT(IsNotNull(Getter));
+		ASSERT_THAT(IsNotNull(Setter));
+		ASSERT_THAT(IsTrue(
+			AngelscriptCompilerBytecodeTestSupport::ContainsOpcode(
+				Getter, asBC_COPY)
+			&& AngelscriptCompilerBytecodeTestSupport::ContainsOpcode(
+				Setter, asBC_COPY),
+			TEXT("both generated accessors must use the exact sealed POD copy protocol")));
+
+		int32 Result = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Result)
+				&& Result == 123,
+			*FString::Printf(
+				TEXT("the generated setter/getter round trip must preserve all twelve bytes; got=%d"),
+				Result)));
 	}
 
 	TEST_METHOD(CanonicalPODTripleReturnUsesHiddenReturnStorage)

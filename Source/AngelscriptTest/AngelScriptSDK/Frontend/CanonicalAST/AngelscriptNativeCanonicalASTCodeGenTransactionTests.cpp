@@ -574,6 +574,90 @@ public:
 		Module->Discard();
 	}
 
+	TEST_METHOD(CodeGenRejectsForgedCallArgumentFormalBeforeMutation)
+	{
+		// Production mutation caught: even if verifier learns the exact formal
+		// relation, Generate must run that firewall before registering any
+		// function/type/global candidate. A later emitter failure is insufficient.
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "TxnForgedCallArgument");
+		ASSERT_THAT(IsNotNull(Module,
+			TEXT("forged call-argument transaction test needs a module")));
+
+		asCASTContext Context;
+		const asASTDeclId Tu = Context.CreateTranslationUnit("TxnForgedCallArgument");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId Callee = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, asCSourceRange(), "Pack");
+		const asASTDeclId A = Context.CreateDecl(
+			asAST_DECL_PARAM, Callee, asCSourceRange(), "A");
+		const asASTDeclId B = Context.CreateDecl(
+			asAST_DECL_PARAM, Callee, asCSourceRange(), "B");
+		const asASTDeclId Entry = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, asCSourceRange(), "Entry");
+		const asASTStmtId Return = Context.CreateStmt(
+			asAST_STMT_RETURN, Entry, asCSourceRange());
+		const asASTExprId ArgA = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE, asCSourceRange());
+		const asASTExprId ArgB = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE, asCSourceRange());
+		const asASTExprId Call = Context.CreateExpr(
+			asAST_EXPR_CALL, IntType, asAST_VALUE_PRVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Callee, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(A, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(B, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Entry, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(ArgA, 1)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(ArgB, 2)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Call, ArgB)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Call, ArgA)));
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(Call, Callee)));
+		ASSERT_THAT(AreEqual(0, Context.SetExprCallDispatch(
+			Call, asAST_CALL_DISPATCH_DIRECT)));
+
+		asSASTCallArgument WrongB;
+		WrongB.expression = ArgB;
+		WrongB.formal = A;
+		WrongB.formalIndex = 1;
+		WrongB.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+		WrongB.sourceOrdinal = 1;
+		ASSERT_THAT(AreEqual(0, Context.AddCallArgument(Call, WrongB)));
+		asSASTCallArgument ExactA;
+		ExactA.expression = ArgA;
+		ExactA.formal = A;
+		ExactA.formalIndex = 0;
+		ExactA.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+		ExactA.sourceOrdinal = 0;
+		ASSERT_THAT(AreEqual(0, Context.AddCallArgument(Call, ExactA)));
+		ASSERT_THAT(AreEqual(0, Context.SetBody(Entry, Return)));
+		ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Return, Call)));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("ordinary seal must preserve forged facts for publication diagnostics")));
+
+		const FCodeGenTableSnapshot Before =
+			CaptureCodeGenTables(ScriptEngine, Module);
+		asCBytecodeCodeGen CodeGen;
+		ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+			CodeGen.Generate(Context, Module),
+			TEXT("forged call formal must fail at the publication firewall")));
+		ASSERT_THAT(IsTrue(CodeGen.Failed(),
+			TEXT("publication rejection must set CodeGen failure state")));
+		ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD, CodeGen.GetError(),
+			TEXT("CodeGen must preserve the verifier category")));
+		ASSERT_THAT(IsTrue(AssertCodeGenTablesEqual(
+			*TestRunner,
+			TEXT("forged call argument formal"),
+			Before,
+			CaptureCodeGenTables(ScriptEngine, Module)),
+			TEXT("forged call plan must be rejected before any table mutation")));
+		Module->Discard();
+	}
+
 	TEST_METHOD(CodeGenRejectsMissingConstructTargetBeforeGlobalRegistration)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

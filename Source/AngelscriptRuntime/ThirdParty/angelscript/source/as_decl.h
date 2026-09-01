@@ -40,6 +40,11 @@ struct asSASTMethodRelation
 	}
 };
 
+// ParamDecls carry their source-level formal slot independently of declaration
+// child order. children remains a traversal/ownership container; no Runtime ABI
+// or call-binding consumer may reconstruct a formal slot from its position.
+static const asUINT asAST_FORMAL_INDEX_NONE = asUINT(-1);
+
 // Writers use asCASTContext construction APIs. Fields stay public POD for placement-new.
 class ANGELSCRIPTRUNTIME_API asCDecl
 {
@@ -64,6 +69,7 @@ public:
 	asCArray<asASTDeclId> bases;
 	asCArray<asSASTMethodRelation> methodRelations;
 	asCArray<asASTExprId> inits;
+	asUINT formalIndex;
 	int byteOffset;
 	int byteSize;
 	asUINT byteAlignment;
@@ -74,6 +80,7 @@ public:
 		: kind(asAST_DECL_INVALID)
 		, traits(0)
 		, accessorKind(asAST_ACCESSOR_NONE)
+		, formalIndex(asAST_FORMAL_INDEX_NONE)
 		, byteOffset(-1)
 		, byteSize(-1)
 		, byteAlignment(0)

@@ -193,6 +193,11 @@ public:
 	asUINT GetLastLegacyCompilerInvocationCount() const;
 	void ResetLegacyCompilerInvocationCount();
 	void RecordLegacyCompilerInvocation();
+	// Build-provenance diagnostic. Fork-internal: proves CANONICAL Build did not
+	// walk asCBuilder::CreateDataTypeFromNode. Type authority is Sema QualType.
+	asUINT GetLastCreateDataTypeFromNodeCount() const;
+	void ResetCreateDataTypeFromNodeCount();
+	void RecordCreateDataTypeFromNode();
 	// A deterministic, pointer-free digest of the sealed Canonical AST that
 	// successfully reached CodeGen Commit(). It is diagnostic state only; cache
 	// identity remains owned by Cache V2 rather than this transient build record.
@@ -326,6 +331,7 @@ public:
 	asCRuntimeTypeGeneration* runtimeTypeGeneration;
 	asEBytecodePublisher lastBytecodePublisher;
 	asUINT lastLegacyCompilerInvocationCount;
+	asUINT lastCreateDataTypeFromNodeCount;
 	asQWORD lastCanonicalCodeGenAstDigest;
 	bool hasLastCanonicalCodeGenAstDigest;
 #if WITH_ANGELSCRIPT_UNITTESTS

@@ -69,6 +69,36 @@ ANGELSCRIPTRUNTIME_API int asCASTQuery(
 	const asSASTStructuredDumpOptions& options,
 	asCString& out);
 ANGELSCRIPTRUNTIME_API void asCASTShadowDiff(const asCASTContext& left, const asCASTContext& right, asCString& out);
+// Compares one Canonical declaration's owner/type/trait/source/dependency
+// identity against a Builder/Runtime function without copying either graph
+// into the other. out is "match" or a deterministic "mismatch <field> ..." path.
+class asCScriptFunction;
+class asCObjectType;
+class asCTypeInfo;
+class asCModule;
+class asCScriptEngine;
+ANGELSCRIPTRUNTIME_API void asCASTShadowDiffBuilderFunctionIdentity(
+	const asCASTContext& canonical,
+	asASTDeclId canonicalDecl,
+	const asCScriptFunction& builderFunction,
+	asCString& out,
+	bool compareDependencies = true);
+ANGELSCRIPTRUNTIME_API void asCASTShadowDiffBuilderTypeIdentity(
+	const asCASTContext& canonical,
+	asASTDeclId canonicalDecl,
+	const asCObjectType& builderType,
+	asCString& out);
+ANGELSCRIPTRUNTIME_API void asCASTShadowDiffBuilderTypeIdentity(
+	const asCASTContext& canonical,
+	asASTDeclId canonicalDecl,
+	const asCTypeInfo& builderType,
+	asCString& out);
+// Production publication gate: sealed Canonical function Decls must match the
+// candidate Runtime functions. A mismatch fails closed and does not merge graphs.
+ANGELSCRIPTRUNTIME_API int asCASTValidateBuilderShadowIdentity(
+	const asCASTContext& canonical,
+	asCModule& candidate,
+	asCScriptEngine* engine);
 ANGELSCRIPTRUNTIME_API void asCASTFormatVerifyResult(const asSAstVerifyResult& result, asCString& out);
 ANGELSCRIPTRUNTIME_API void asCASTDumpOnVerifyFail(const asCASTContext& context, const asSAstVerifyResult& result, asCString& out);
 

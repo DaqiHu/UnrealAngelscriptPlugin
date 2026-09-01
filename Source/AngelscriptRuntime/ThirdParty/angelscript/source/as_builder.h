@@ -111,8 +111,11 @@ struct sGlobalVariableDescription
 	bool               isPureConstant;
 	bool               isEnumValue;
 	asQWORD            constantValue;
-	// Exact sealed declaration identity captured while Parser/Sema nodes are
-	// still alive. Prepared staged CodeGen must not bind globals by name alone.
+	// Exact build-generation coordinate and durable key captured at the
+	// Parser/Sema -> Runtime-shell producer boundary. The numeric DeclId never
+	// leaves this Builder generation; prepared CodeGen must not reconstruct it
+	// from a retained native node, source coordinates, or a global-name scan.
+	asUINT             canonicalASTDeclaration = 0;
 	asCString          canonicalASTStableDeclKey;
 };
 
@@ -145,9 +148,11 @@ struct sClassDeclaration
 	bool           isLayouting = false;
 	bool           hasLayouted = false;
 	bool           evaluatedDestructor = false;
-	// Exact sealed declaration identity captured from the Parser/Sema producer.
-	// Prepared CodeGen uses this to select the current Builder generation's type
-	// shell even when Hot Reload keeps an older same-name Runtime type alive.
+	// Exact build-generation coordinate and durable key captured from the
+	// Parser/Sema producer. Prepared member projection and CodeGen use this to
+	// select the current Runtime type shell even when Hot Reload keeps an older
+	// same-name type alive; the numeric DeclId never crosses this Builder.
+	asUINT         canonicalASTDeclaration = 0;
 	asCString      canonicalASTStableDeclKey;
 
 	asCArray<sPropertyInitializer> propInits;
@@ -240,6 +245,15 @@ public:
 	{
 		return testCanonicalAccessPermissionAppendFailureInjected;
 	}
+	// Test-only 4.6 seam: after Canonical CodeGen installs Runtime F, mark that
+	// script function FINAL so sealed Canonical Decl traits and the candidate
+	// function disagree. Reset() must not clear this request.
+	void SetTestShadowRuntimeFinalPerturbation(bool enable);
+	void ApplyTestShadowRuntimeFinalPerturbation(asCModule& candidate);
+	bool WasTestShadowRuntimeFinalPerturbationApplied() const
+	{
+		return testShadowRuntimeFinalPerturbationApplied;
+	}
 #endif
 #endif
 
@@ -315,6 +329,8 @@ public:
 		asCScriptFunction *function,
 		const asCScriptNode *node,
 		const asCScriptCode *script);
+	void BindCanonicalGlobalIdentity(
+		sGlobalVariableDescription *declaration);
 	void BindCanonicalTypeIdentity(sClassDeclaration *declaration);
 
 	asSNameSpace      *GetNameSpaceFromNode(asCScriptNode *node, asCScriptCode *script, asSNameSpace *implicitNs, asCScriptNode **next, asCObjectType **objType = 0);
@@ -437,6 +453,8 @@ public:
 	asUINT testFailureBeforeCanonicalAccessPermissionAppend;
 	asUINT testCanonicalAccessPermissionAppendOrdinal;
 	bool testCanonicalAccessPermissionAppendFailureInjected;
+	bool testShadowRuntimeFinalPerturbation;
+	bool testShadowRuntimeFinalPerturbationApplied;
 #endif
 
 #if WITH_EDITOR

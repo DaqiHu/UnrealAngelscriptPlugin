@@ -581,6 +581,45 @@ namespace AngelscriptNativeTestSupport
 			OutValue);
 	}
 
+	inline int CanonicalExecuteIntStatus(
+		asIScriptEngine* ScriptEngine,
+		asIScriptModule* Module,
+		const char* Declaration,
+		int32& OutValue,
+		FString& OutException)
+	{
+		OutValue = 0;
+		OutException.Reset();
+		asIScriptFunction* const Function = GetNativeFunctionByDecl(Module, Declaration);
+		if (ScriptEngine == nullptr || Function == nullptr)
+		{
+			return asNO_FUNCTION;
+		}
+		asIScriptContext* const Context = ScriptEngine->CreateContext();
+		if (Context == nullptr)
+		{
+			return asERROR;
+		}
+		const int Prepare = Context->Prepare(Function);
+		if (Prepare < 0)
+		{
+			Context->Release();
+			return Prepare;
+		}
+		const int Status = Context->Execute();
+		if (Status == asEXECUTION_FINISHED)
+		{
+			OutValue = static_cast<int32>(Context->GetReturnDWord());
+		}
+		else if (Status == asEXECUTION_EXCEPTION)
+		{
+			const char* Exception = Context->GetExceptionString();
+			OutException = UTF8_TO_TCHAR(Exception != nullptr ? Exception : "");
+		}
+		Context->Release();
+		return Status;
+	}
+
 	inline int CanonicalExecuteStatus(
 		asIScriptEngine* ScriptEngine,
 		asIScriptModule* Module,

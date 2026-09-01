@@ -968,6 +968,13 @@ static bool BindCastExprAction(
 			MakeParseActionIdentity(sema, node), expression);
 }
 
+static bool BuildCallArgumentActions(
+	const asCScriptNode* argsNode,
+	const asCScriptCode* script,
+	asCSema* sema,
+	asCArray<asSCallArgumentAction>& arguments,
+	bool allowTrailingRecoveryHole);
+
 static bool BuildConstructExprAction(
 	const asCScriptNode* node,
 	const asCScriptCode* script,
@@ -992,23 +999,17 @@ static bool BuildConstructExprAction(
 		return false;
 	}
 
-	for( const asCScriptNode* arg = argsNode->firstChild;
-		arg != 0; arg = arg->next )
+	asCArray<asSCallArgumentAction> arguments;
+	if( !BuildCallArgumentActions(
+		argsNode, script, sema, arguments, false) )
 	{
-		// Named constructor arguments need the complete call-plan action that
-		// also owns parameter provenance/order. Do not silently discard the name
-		// in this bounded TYPE ARGLIST migration.
-		if( arg->nodeType == snNamedArgument )
-		{
-			return false;
-		}
-		const asASTExprId expression =
-			FindSingleExactParsedExpressionIdentity(sema, arg);
-		if( !expression.IsValid() )
-		{
-			return false;
-		}
-		action.arguments.PushLast(expression);
+		return false;
+	}
+	for( asUINT argumentIndex = 0;
+		argumentIndex < arguments.GetLength(); ++argumentIndex )
+	{
+		action.arguments.PushLast(arguments[argumentIndex].expression);
+		action.argumentNames.PushLast(arguments[argumentIndex].name);
 	}
 	action.beginOffset = (asUINT)node->tokenPos;
 	action.endOffset = (asUINT)(node->tokenPos + node->tokenLength);
@@ -1530,9 +1531,15 @@ void asCParser::BuildLambdaParameterAction(
 }
 
 asCParser::asCParser(asCBuilder *builder)
+	: asCParser(builder ? builder->engine : 0)
 {
-	this->builder    = builder;
-	this->engine     = builder->engine;
+	this->builder = builder;
+}
+
+asCParser::asCParser(asCScriptEngine *engine)
+{
+	this->builder    = 0;
+	this->engine     = engine;
 
 	script                = 0;
 	scriptNode            = 0;
@@ -1612,6 +1619,11 @@ asASTStmtId asCParser::FindExactParsedStatementIdentity(
 asCScriptNode *asCParser::GetScriptNode()
 {
 	return scriptNode;
+}
+
+asASTExprId asCParser::GetParsedExpressionIdentity() const
+{
+	return FindSingleExactParsedExpressionIdentity(sema, scriptNode);
 }
 
 int asCParser::ParseFunctionDefinition(asCScriptCode *in_script, bool in_expectListPattern)
@@ -2406,9 +2418,22 @@ asCScriptNode *asCParser::ParseParameterList(asASTDeclId callableDecl)
 				if( sema )
 				{
 					// Canonical Sema owns the default as a typed expression
-					// (Clang CXXDefaultArgExpr). Superficial token-skip leaves
-					// no operator tree for `40 + 1`.
-					defaultNode = ParseAssignment();
+					// (Clang CXXDefaultArgExpr). Keep the native parameter-list
+					// contract as `snExpression`, while retaining the complete
+					// parsed assignment beneath that transparent wrapper. Builder
+					// still consumes the original syntax-tree shape for Runtime
+					// declaration registration and LEGACY/reference routes.
+					defaultNode = CreateNode(snExpression);
+					if( defaultNode != 0 )
+					{
+						defaultNode->AddChildLast(ParseAssignment());
+						if( defaultNode->firstChild != 0 )
+						{
+							defaultNode->UpdateSourcePos(
+								defaultNode->firstChild->tokenPos,
+								defaultNode->firstChild->tokenLength);
+						}
+					}
 				}
 				else
 				{
@@ -2799,7 +2824,7 @@ bool asCParser::IsDataType(const sToken &token)
 		{
 			// Check if this is an existing type, regardless of namespace
 			tempString.Assign(&script->code[token.pos], token.length);
-			if( !builder->DoesTypeExist(tempString.AddressOf()) )
+			if( !DoesTypeExist(tempString.AddressOf()) )
 				return false;
 		}
 #endif
@@ -2809,6 +2834,23 @@ bool asCParser::IsDataType(const sToken &token)
 	if( IsRealType(token.type) )
 		return true;
 
+	return false;
+}
+
+bool asCParser::DoesTypeExist(const char* type) const
+{
+#ifndef AS_NO_COMPILER
+	if( builder != 0 )
+	{
+		return builder->DoesTypeExist(type);
+	}
+	if( sema != 0 )
+	{
+		return sema->IsKnownTypeNameForParsing(type);
+	}
+#else
+	UNUSED_VAR(type);
+#endif
 	return false;
 }
 
@@ -4204,6 +4246,8 @@ int asCParser::ParseScript(asCScriptCode *in_script)
 	{
 		sema->ResolveDeferredNames();
 		sema->ValidateCapturedLambdaUses();
+		sema->ValidateDefaultArgumentOverloads();
+		sema->ValidateEditorOnlyOverrides();
 	}
 
 	// TODO: Should allow application to request this warning to be generated.
@@ -4718,6 +4762,8 @@ asCScriptNode *asCParser::ParseEnumeration()
 				(asUINT)(ident->tokenPos + ident->tokenLength);
 			canonicalEnumerator = sema->ActOnEnumeratorName(
 				canonicalEnum, enumeratorName, script);
+			BindCompletedParsedDeclarationIdentity(
+				sema, ident, canonicalEnumerator);
 		}
 
 		GetToken(&token);
@@ -5607,7 +5653,9 @@ asCScriptNode *asCParser::ParseFunction(bool isMethod, bool notifySemaAfterParam
 			action.name.Assign(
 				script->code + nameNode->tokenPos,
 				(asUINT)nameNode->tokenLength);
-			action.beginOffset = (asUINT)nameNode->tokenPos;
+			action.beginOffset = typeNode
+				? (asUINT)typeNode->tokenPos
+				: (asUINT)nameNode->tokenPos;
 			action.endOffset =
 				(asUINT)(nameNode->tokenPos + nameNode->tokenLength);
 		}
@@ -5713,7 +5761,9 @@ asCScriptNode *asCParser::ParseInterfaceMethod()
 			action.name.Assign(
 				script->code + nameNode->tokenPos,
 				(asUINT)nameNode->tokenLength);
-			action.beginOffset = (asUINT)nameNode->tokenPos;
+			action.beginOffset = typeNode
+				? (asUINT)typeNode->tokenPos
+				: (asUINT)nameNode->tokenPos;
 			action.endOffset =
 				(asUINT)(nameNode->tokenPos + nameNode->tokenLength);
 		}
@@ -6673,6 +6723,7 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 	asCScriptNode* typeModifierNode = 0;
 
 	// Allow local reference variables
+	bool canonicalAutoConstRef = false;
 	if (!isClassProp && !isGlobalVar)
 	{
 		sToken suffix;
@@ -6688,7 +6739,10 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 		GetToken(&suffix);
 		RewindTo(&suffix);
 		if (suffix.type == ttIdentifier && IdentifierIs(suffix, AUTO_CONSTREF_TOKEN))
+		{
+			canonicalAutoConstRef = true;
 			node->AddChildLast(ParseIdentifier());
+		}
 	}
 	asCQualType canonicalVariableType;
 	if( sema )
@@ -6696,9 +6750,7 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 		canonicalVariableType = sema->ActOnQualTypeAction(
 			BuildQualTypeSyntaxAction(
 				typeNode,
-				typeModifierNode != 0
-					&& typeModifierNode->nodeType == snDataType
-					? typeModifierNode : 0), script);
+				typeModifierNode), script);
 	}
 	asCArray<asASTStmtId> canonicalLocalStatements;
 
@@ -6807,6 +6859,7 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 						? initializerNode->tokenPos + initializerNode->tokenLength
 						: nameNode->tokenPos + nameNode->tokenLength);
 				action.recovered = isSyntaxError;
+				action.autoConstRef = canonicalAutoConstRef;
 				if( initializerNode == 0 )
 				{
 					action.kind = asVARIABLE_INITIALIZER_NONE;
@@ -6820,12 +6873,8 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 					{
 						for( asUINT i = 0; i < arguments.GetLength(); ++i )
 						{
-							if( arguments[i].name.GetLength() != 0 )
-							{
-								action.kind = asVARIABLE_INITIALIZER_INVALID;
-								break;
-							}
 							action.arguments.PushLast(arguments[i].expression);
+							action.argumentNames.PushLast(arguments[i].name);
 						}
 					}
 					else
@@ -6840,7 +6889,15 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 						FindSingleExactParsedExpressionIdentity(
 							sema, initializerNode);
 				}
-				sema->ActOnVariableInitializerAction(action, script);
+				if( sema->ActOnVariableInitializerAction(action, script) )
+				{
+					const asCDecl* const committed =
+						sema->GetContext().GetDecl(canonicalVariable);
+					if( committed != 0 )
+					{
+						canonicalVariableType = committed->type;
+					}
+				}
 			}
 		}
 		else
@@ -6886,6 +6943,7 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 						? initializerNode->tokenPos + initializerNode->tokenLength
 						: nameNode->tokenPos + nameNode->tokenLength);
 				action.recovered = isSyntaxError;
+				action.autoConstRef = canonicalAutoConstRef;
 				if( initializerNode == 0 )
 				{
 					action.kind = asVARIABLE_INITIALIZER_NONE;
@@ -6899,12 +6957,8 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 					{
 						for( asUINT i = 0; i < arguments.GetLength(); ++i )
 						{
-							if( arguments[i].name.GetLength() != 0 )
-							{
-								action.kind = asVARIABLE_INITIALIZER_INVALID;
-								break;
-							}
 							action.arguments.PushLast(arguments[i].expression);
+							action.argumentNames.PushLast(arguments[i].name);
 						}
 					}
 					else
@@ -6919,8 +6973,16 @@ asCScriptNode *asCParser::ParseDeclaration(bool isClassProp, bool isGlobalVar)
 						FindSingleExactParsedExpressionIdentity(
 							sema, initializerNode);
 				}
-				sema->ActOnLocalVariableDeclaratorAction(
-					action, script, canonicalLocalStatements);
+				if( sema->ActOnLocalVariableDeclaratorAction(
+					action, script, canonicalLocalStatements) )
+				{
+					const asCDecl* const committed =
+						sema->GetContext().GetDecl(canonicalVariable);
+					if( committed != 0 )
+					{
+						canonicalVariableType = committed->type;
+					}
+				}
 			}
 			// A bounded initializer action is meaningful even when its closing
 			// delimiter is missing: preserve the completed prefix for diagnostics
@@ -7610,7 +7672,9 @@ asCScriptNode *asCParser::ParseForeachVariable()
 	GetToken(&suffix);
 	RewindTo(&suffix);
 	if( suffix.type == ttIdentifier && IdentifierIs(suffix, AUTO_CONSTREF_TOKEN) )
+	{
 		node->AddChildLast(ParseIdentifier());
+	}
 
 	GetToken(&suffix);
 	RewindTo(&suffix);
@@ -7632,9 +7696,7 @@ asCScriptNode *asCParser::ParseForeachVariable()
 		action.type = sema->ActOnQualTypeAction(
 			BuildQualTypeSyntaxAction(
 				typeNode,
-				typeModifierNode != 0
-					&& typeModifierNode->nodeType == snDataType
-					? typeModifierNode : 0), script);
+				typeModifierNode), script);
 		if( nameNode != 0 && script != 0 && script->code != 0
 			&& nameNode->tokenLength > 0
 			&& nameNode->tokenPos + nameNode->tokenLength <= script->codeLength )
@@ -8223,6 +8285,8 @@ void asCParser::ParseMethodAttributes(asCScriptNode* funcNode, asDWORD* canonica
 					*canonicalTraits |= asAST_TRAIT_MIXIN;
 				else if( IdentifierIs(t1, EXTERNAL_IMPLICIT_THIS_TOKEN) )
 					*canonicalTraits |= asAST_TRAIT_EXTERNAL_IMPLICIT_THIS;
+				else if( IdentifierIs(t1, GENERATED_FUNCTION_TOKEN) )
+					*canonicalTraits |= asAST_TRAIT_GENERATED;
 			}
 			funcNode->AddChildLast(ParseIdentifier());
 		}

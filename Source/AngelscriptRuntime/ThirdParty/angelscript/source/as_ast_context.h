@@ -51,6 +51,10 @@ public:
 		const asSSourceProvenanceRange* provenanceRanges = 0,
 		asUINT provenanceRangeCount = 0);
 	int SetDeclType(asASTDeclId id, const asCQualType& type);
+	int SetTypeRequiresRuntimeValidation(asASTTypeRef id, bool required);
+	int SetTypeTemplateArguments(
+		asASTTypeRef id,
+		const asCArray<asCQualType>& arguments);
 	int SetBody(asASTDeclId id, asASTStmtId body);
 	int AddDeclTrait(asASTDeclId id, asDWORD traits);
 	int SetDeclTraits(asASTDeclId id, asDWORD traits);
@@ -67,6 +71,7 @@ public:
 		const asSASTMethodRelation& relation);
 	int SetDefaultArg(asASTDeclId id, const char* text);
 	int SetDeclConstantValue(asASTDeclId id, asQWORD value);
+	int SetDeclFormalIndex(asASTDeclId id, asUINT formalIndex);
 	int SetDeclByteOffset(asASTDeclId id, int byteOffset);
 	int SetDeclLayout(asASTDeclId id, int byteSize, asUINT byteAlignment);
 	int AddDeclInit(asASTDeclId id, asASTExprId expr);
@@ -89,6 +94,17 @@ public:
 	int SetStmtId(asASTStmtId id, asASTStmtId newId);
 	int AddExprChild(asASTExprId parent, asASTExprId child);
 	int ClearExprChildren(asASTExprId id);
+	int AddCallArgument(
+		asASTExprId call,
+		const asSASTCallArgument& argument);
+	int ClearCallArguments(asASTExprId call);
+	// A call argument has two authenticated owning edges: children[index] and
+	// callArguments[index].expression. Sema finalization must never expose an
+	// intermediate graph where only one edge names a replacement expression.
+	int ReplaceCallArgumentExpression(
+		asASTExprId call,
+		asUINT argumentIndex,
+		asASTExprId replacement);
 	int SetExprReceiver(asASTExprId id, asASTExprId receiver);
 	int SetLiteral(asASTExprId id, const char* text);
 	// Semantic string payloads are byte sequences, not C strings. This setter
@@ -105,6 +121,8 @@ public:
 	int ReplaceExprUses(asASTExprId oldExpr, asASTExprId replacement);
 
 	const asCDecl* GetDecl(asASTDeclId id) const;
+	asUINT GetFormalDeclCount(asASTDeclId owner) const;
+	const asCDecl* GetFormalDecl(asASTDeclId owner, asUINT formalIndex) const;
 	const asCStmt* GetStmt(asASTStmtId id) const;
 	const asCExpr* GetExpr(asASTExprId id) const;
 	const asCType* GetType(asASTTypeRef id) const;
@@ -136,9 +154,10 @@ public:
 	asQWORD GetLifetimeProtocolHash() const;
 	int RejectPostSealMutation() const;
 	// Cache DTO decoding starts from a fresh context. This internal recovery
-	// helper makes a rejected DTO leave that context empty rather than exposing
-	// a partially reconstructed graph to a later consumer.
-	void ResetUnsealedForSidecarDecode();
+	// helper makes every rejected DTO, including one rejected by publication
+	// verification after Seal, leave that context empty rather than exposing a
+	// partially reconstructed or unauthenticated graph to a later consumer.
+	void ResetForSidecarDecodeFailure();
 
 	asUINT GetDeclCount() const { return decls.GetLength(); }
 	asUINT GetStmtCount() const { return stmts.GetLength(); }
@@ -158,6 +177,7 @@ private:
 	asCDecl* MutableDecl(asASTDeclId id);
 	asCStmt* MutableStmt(asASTStmtId id);
 	asCExpr* MutableExpr(asASTExprId id);
+	asCType* MutableType(asASTTypeRef id);
 
 	struct asSArenaBlock
 	{

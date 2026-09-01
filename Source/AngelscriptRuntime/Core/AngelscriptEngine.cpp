@@ -2215,6 +2215,22 @@ void FAngelscriptEngine::Shutdown()
 		}, false);
 	}
 
+	// A StaticJIT generation snapshot borrows Engine-local function/type
+	// coordinates and its Canonical AST leases may retain the matching Runtime
+// type generation. Invalidate every AST lease while the script Engine is still
+// alive, including leases reachable from external shared snapshot owners.
+// Waiting for FAngelscriptEngine member destruction would release a retained
+// retired-module carrier after ShutDownAndRelease(), when its function/type
+// cleanup can no longer consult a valid Engine. Pointer-free snapshot rows may
+// remain readable by external audit owners after this detach.
+#if AS_CAN_GENERATE_JIT
+	if (StaticJITGenerationSnapshot.IsValid())
+	{
+		StaticJITGenerationSnapshot->ReleaseEngineLocalASTLeases();
+	}
+	StaticJITGenerationSnapshot.Reset();
+#endif
+
 	// Engine teardown: the engine releases its own fields directly here.
 	if (bShouldReleaseOwnedEngine && Engine != nullptr)
 	{
@@ -3529,6 +3545,13 @@ void FAngelscriptEngine::InitialCompile()
 	FAngelscriptCompilationEventSuppressionScope SuppressCompilationEvents(
 		bStaticJITGeneration);
 #if AS_CAN_GENERATE_JIT
+	// An external owner may retain the previous immutable result. Its
+	// Engine-local AST generation must still be released before this Engine
+	// replaces the result; pointer-free audit rows remain owned by that result.
+	if (StaticJITGenerationSnapshot.IsValid())
+	{
+		StaticJITGenerationSnapshot->ReleaseEngineLocalASTLeases();
+	}
 	StaticJITGenerationSnapshot.Reset();
 	StaticJITGenerationCompilePassCount = 0;
 #endif

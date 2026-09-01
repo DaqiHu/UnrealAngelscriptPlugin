@@ -147,6 +147,11 @@ public:
 	asUINT             id;
 	asSNameSpace      *nameSpace;
 	asCModule         *module;
+	// Exact source-owned Canonical VarDecl identity assigned by the producer
+	// that materialized this current-Engine shell. This is never serialized and
+	// never replaces the generation-local property id; downstream consumers may
+	// copy the key only after structurally authenticating it against a sealed AST.
+	asCString          canonicalASTStableDeclKey;
 	asDWORD            accessMask = 0xFFFFFFFF;
 
 	void SetInitFunc(asCScriptFunction *initFunc);

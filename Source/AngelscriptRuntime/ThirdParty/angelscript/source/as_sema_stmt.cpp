@@ -108,6 +108,96 @@ static bool QualTypeNeedsDefaultConstruct(asCASTContext& context, const asCQualT
 		|| named->kind == asAST_TYPE_REFERENCE_OBJECT;
 }
 
+static const asCDecl* FindLocalNominalTypeDeclaration(
+	asCASTContext& context,
+	const asCType* nominalType)
+{
+	if( nominalType == 0 || nominalType->stableKey.GetLength() == 0 )
+	{
+		return 0;
+	}
+	const asCDecl* nativeView = 0;
+	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
+	{
+		const asCDecl* const candidate = context.GetDecl(asASTDeclId(i));
+		if( candidate == 0
+			|| (candidate->kind != asAST_DECL_CLASS
+				&& candidate->kind != asAST_DECL_INTERFACE)
+			|| (!candidate->stableKey.Equals(nominalType->stableKey)
+				&& !candidate->name.Equals(nominalType->stableKey)) )
+		{
+			continue;
+		}
+		if( !candidate->origin.Equals("canonical-native-type-view") )
+		{
+			return candidate;
+		}
+		nativeView = candidate;
+	}
+	return nativeView;
+}
+
+static bool HasLocalZeroArgConstructor(
+	asCASTContext& context,
+	const asCDecl* declaration)
+{
+	if( declaration == 0 )
+	{
+		return false;
+	}
+	for( asUINT childIndex = 0;
+		childIndex < declaration->children.GetLength(); ++childIndex )
+	{
+		const asCDecl* const child =
+			context.GetDecl(declaration->children[childIndex]);
+		if( child != 0 && child->kind == asAST_DECL_CONSTRUCTOR
+			&& context.GetFormalDeclCount(child->id) == 0 )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool QualTypeNeedsImplicitNullInitialization(
+	asCSema& sema,
+	const asCQualType& type,
+	const asCType* nominalType)
+{
+	asCASTContext& context = sema.GetContext();
+	if( nominalType == 0 || type.IsReference() )
+	{
+		return false;
+	}
+	if( nominalType->kind == asAST_TYPE_FUNCDEF )
+	{
+		return true;
+	}
+	if( nominalType->kind != asAST_TYPE_REFERENCE_OBJECT )
+	{
+		return false;
+	}
+
+	const asCDecl* declaration =
+		FindLocalNominalTypeDeclaration(context, nominalType);
+	if( declaration != 0
+		&& declaration->origin.Equals("canonical-native-type-view") )
+	{
+		// Native REF types are not uniformly null-initialized: an implicit-handle
+		// type may publish a real zero-argument factory. Project that exact Runtime
+		// callable first, then distinguish "factory default construction" from the
+		// pointer-only/no-factory case by declaration identity rather than by type
+		// kind alone.
+		sema.InternNativeZeroArgCallablesForType(type);
+		declaration = FindLocalNominalTypeDeclaration(context, nominalType);
+		return !HasLocalZeroArgConstructor(context, declaration);
+	}
+	// Authored script classes own a real default constructor even though this
+	// fork represents their values as implicit handles. Interfaces and unresolved
+	// external reference shapes are pointer-only local storage and start null.
+	return declaration == 0 || declaration->kind == asAST_DECL_INTERFACE;
+}
+
 static const asCType* ResolveStmtTypedefValueType(asCASTContext& context, const asCType* nominalType)
 {
 	const asCType* current = nominalType;
@@ -172,13 +262,12 @@ static void AppendImplicitLocalInitialization(
 	asCASTContext& context = sema.GetContext();
 	const asCType* const namedType = type.IsValid()
 		? context.GetType(type.type) : 0;
-	if( namedType != 0 && namedType->kind == asAST_TYPE_FUNCDEF
-		&& !type.IsReference() )
+	if( QualTypeNeedsImplicitNullInitialization(sema, type, namedType) )
 	{
-		// Funcdef locals are owning implicit handles in this fork.  The VM frame
-		// starts zeroed, but the sealed AST must still carry the live-state fact
-		// explicitly so cleanup planning and every backend consume the same
-		// lifetime contract instead of inferring it from frame allocation.
+		// Funcdefs, interfaces and native reference objects without a zero-argument
+		// factory use owning pointer storage. The VM frame starts zeroed, but the
+		// sealed AST still carries that live-state fact explicitly so cleanup
+		// planning and every backend consume the same lifetime contract.
 		const asASTExprId value = sema.ActOnNullLiteral(range);
 		const asASTExprId ref = sema.ActOnDeclRef(var, type, range);
 		context.AddDeclInit(var, value);
@@ -366,7 +455,7 @@ bool asCSema::ActOnLocalVariableDeclaratorAction(
 	if( action.kind == asVARIABLE_INITIALIZER_NONE )
 	{
 		if( action.expression.IsValid() || action.arguments.GetLength() != 0
-			)
+			|| action.argumentNames.GetLength() != 0 )
 		{
 			AddDiagnostic("local-variable-declarator-action-invalid", range);
 			return false;
@@ -376,6 +465,7 @@ bool asCSema::ActOnLocalVariableDeclaratorAction(
 	{
 		if( !action.expression.IsValid()
 			|| action.arguments.GetLength() != 0
+			|| action.argumentNames.GetLength() != 0
 			|| context.GetExpr(action.expression) == 0 )
 		{
 			AddDiagnostic("local-variable-initializer-expression-invalid", range);
@@ -385,7 +475,10 @@ bool asCSema::ActOnLocalVariableDeclaratorAction(
 	}
 	else
 	{
-		if( action.expression.IsValid() )
+		if( action.expression.IsValid()
+			|| (action.argumentNames.GetLength() != 0
+				&& action.argumentNames.GetLength()
+					!= action.arguments.GetLength()) )
 		{
 			AddDiagnostic("local-variable-initializer-construct-invalid", range);
 			return false;
@@ -399,14 +492,48 @@ bool asCSema::ActOnLocalVariableDeclaratorAction(
 				return false;
 			}
 		}
-		initExpr = ActOnConstruct(variable->type, action.arguments, range);
+	}
+	asCQualType committedType;
+	if( !InferCanonicalAutoType(
+		variable->type, initExpr, true,
+		action.autoConstRef, committedType) )
+	{
+		AddDiagnostic("local-auto-inference-invalid", range);
+		return false;
+	}
+	if( committedType != variable->type )
+	{
+		if( context.SetDeclType(action.variable, committedType)
+			!= asAST_VERIFY_OK )
+		{
+			AddDiagnostic("local-auto-type-commit-invalid", range);
+			return false;
+		}
+		const asCType* const named = context.GetType(committedType.type);
+		if( named != 0 && named->kind != asAST_TYPE_PRIMITIVE
+			&& named->kind != asAST_TYPE_VOID
+			&& named->stableKey.GetLength() != 0 )
+		{
+			RecordDependency(
+				action.variable, named->stableKey.AddressOf());
+		}
+	}
+	if( action.kind == asVARIABLE_INITIALIZER_DIRECT_CONSTRUCT )
+	{
+		initExpr = ActOnConstructCall(
+			variable->parent,
+			committedType,
+			action.arguments,
+			action.argumentNames.GetLength() != 0
+				? &action.argumentNames : 0,
+			range);
 		if( !initExpr.IsValid() )
 		{
 			return false;
 		}
 	}
 	EmitTypedLocalVariableStmts(
-		*this, variable->parent, action.variable, variable->type,
+		*this, variable->parent, action.variable, committedType,
 		initExpr, range, true, statements);
 	NoteActedDecl(action.variable);
 	return true;
@@ -1841,8 +1968,7 @@ static asASTDeclId FindLexicalValueDestructor(
 		}
 		const asCDecl* const parent = context.GetDecl(destructor->parent);
 		if( parent != 0
-			&& (parent->stableKey.Equals(type->stableKey)
-				|| parent->name.Equals(type->stableKey)) )
+			&& parent->stableKey.Equals(type->stableKey) )
 		{
 			return destructor->id;
 		}

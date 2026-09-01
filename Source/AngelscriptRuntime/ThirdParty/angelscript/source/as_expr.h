@@ -9,6 +9,38 @@
 
 BEGIN_AS_NAMESPACE
 
+enum asEASTCallArgumentOrigin : asBYTE
+{
+	asAST_CALL_ARGUMENT_INVALID = 0,
+	asAST_CALL_ARGUMENT_POSITIONAL,
+	asAST_CALL_ARGUMENT_NAMED,
+	asAST_CALL_ARGUMENT_DEFAULT,
+	asAST_CALL_ARGUMENT_HIDDEN,
+	asAST_CALL_ARGUMENT_IMPLICIT_RECEIVER,
+	asAST_CALL_ARGUMENT_GENERATED,
+};
+
+static const asUINT asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL = asUINT(-1);
+
+struct ANGELSCRIPTRUNTIME_API asSASTCallArgument
+{
+	asASTExprId expression;
+	asASTDeclId formal;
+	asCQualType formalType;
+	asCSourceRange range;
+	asCString authoredName;
+	asUINT formalIndex;
+	asUINT sourceOrdinal;
+	asEASTCallArgumentOrigin origin;
+
+	asSASTCallArgument()
+		: formalIndex(asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL)
+		, sourceOrdinal(asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL)
+		, origin(asAST_CALL_ARGUMENT_INVALID)
+	{
+	}
+};
+
 class ANGELSCRIPTRUNTIME_API asCExpr
 {
 public:
@@ -24,6 +56,7 @@ public:
 	asEASTSafePointRole safePointRole;
 	asEASTCallDispatch callDispatch;
 	asCArray<asASTExprId> children;
+	asCArray<asSASTCallArgument> callArguments;
 
 	asCExpr()
 		: kind(asAST_EXPR_INVALID)

@@ -540,6 +540,240 @@ static FMethodRelationVerifierFixture BuildMethodRelationVerifierFixture(
 	}
 	return Fixture;
 }
+
+static bool BuildIncompleteCallArgumentFixture(
+	asCASTContext& Context,
+	bool AddExactBRecord)
+{
+	const asASTDeclId Tu = Context.CreateTranslationUnit(
+		AddExactBRecord ? "CallPartialRecords" : "CallMissingRecords");
+	const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+	const asASTDeclId Callee = Context.CreateDecl(
+		asAST_DECL_FUNCTION, Tu, asCSourceRange(), "Pack");
+	const asASTDeclId A = Context.CreateDecl(
+		asAST_DECL_PARAM, Callee, asCSourceRange(), "A");
+	const asASTDeclId B = Context.CreateDecl(
+		asAST_DECL_PARAM, Callee, asCSourceRange(), "B");
+	const asASTDeclId Entry = Context.CreateDecl(
+		asAST_DECL_FUNCTION, Tu, asCSourceRange(), "Entry");
+	const asASTStmtId Return = Context.CreateStmt(
+		asAST_STMT_RETURN, Entry, asCSourceRange());
+	const asASTExprId ArgA = Context.CreateExpr(
+		asAST_EXPR_INTEGER_LITERAL, IntType,
+		asAST_VALUE_PRVALUE, asCSourceRange());
+	const asASTExprId ArgB = Context.CreateExpr(
+		asAST_EXPR_INTEGER_LITERAL, IntType,
+		asAST_VALUE_PRVALUE, asCSourceRange());
+	const asASTExprId Call = Context.CreateExpr(
+		asAST_EXPR_CALL, IntType,
+		asAST_VALUE_PRVALUE, asCSourceRange());
+	if( !Tu.IsValid() || !IntType.IsValid() || !Callee.IsValid()
+		|| !A.IsValid() || !B.IsValid() || !Entry.IsValid()
+		|| !Return.IsValid() || !ArgA.IsValid() || !ArgB.IsValid()
+		|| !Call.IsValid()
+		|| Context.SetDeclType(Callee, IntType) < 0
+		|| Context.SetDeclType(A, IntType) < 0
+		|| Context.SetDeclType(B, IntType) < 0
+		|| Context.SetDeclType(Entry, IntType) < 0
+		|| Context.SetLiteralBits(ArgA, 1) < 0
+		|| Context.SetLiteralBits(ArgB, 2) < 0
+		|| Context.AddExprChild(Call, ArgB) < 0
+		|| Context.AddExprChild(Call, ArgA) < 0
+		|| Context.SetResolvedDecl(Call, Callee) < 0
+		|| Context.SetExprCallDispatch(
+			Call, asAST_CALL_DISPATCH_DIRECT) < 0 )
+	{
+		return false;
+	}
+
+	if( AddExactBRecord )
+	{
+		asSASTCallArgument ExactB;
+		ExactB.expression = ArgB;
+		ExactB.formal = B;
+		ExactB.formalType = IntType;
+		ExactB.formalIndex = 1;
+		ExactB.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+		ExactB.sourceOrdinal = 1;
+		if( Context.AddCallArgument(Call, ExactB) < 0 )
+		{
+			return false;
+		}
+	}
+
+	return Context.SetBody(Entry, Return) == 0
+		&& Context.SetStmtExpr(Return, Call) == 0;
+}
+
+enum ECallArgumentProvenanceMutation
+{
+	CALL_PROVENANCE_VALID = 0,
+	CALL_PROVENANCE_INVALID_ORIGIN,
+	CALL_PROVENANCE_NAMED_WITHOUT_NAME,
+	CALL_PROVENANCE_POSITIONAL_WITH_NAME,
+	CALL_PROVENANCE_SYNTHESIZED_WITH_SOURCE,
+	CALL_PROVENANCE_DUPLICATE_SOURCE_ORDINAL,
+	CALL_PROVENANCE_FOREIGN_RANGE,
+	CALL_PROVENANCE_WRONG_NAMED_FORMAL,
+	CALL_PROVENANCE_HIDDEN_NON_HIDDEN_FORMAL,
+	CALL_PROVENANCE_DEFAULT_WITHOUT_INITIALIZER,
+	CALL_PROVENANCE_IMPLICIT_RECEIVER_WITHOUT_RECEIVER,
+};
+
+static bool BuildCallArgumentProvenanceFixture(
+	asCASTContext& Context,
+	ECallArgumentProvenanceMutation Mutation)
+{
+	const char Source[] = "Pack(1, B:2)";
+	const asASTFileID File = Context.AddSourceSection(
+		"CallArgumentProvenance.as",
+		asAST_SOURCE_AUTHORED,
+		Source,
+		sizeof(Source) - 1,
+		0);
+	if( File == 0 )
+	{
+		return false;
+	}
+	const asCSourceManager& Sources = Context.GetSourceManager();
+	const asCSourceRange CallRange = Sources.MakeRange(File, 0, sizeof(Source) - 1);
+	const asCSourceRange ARange = Sources.MakeRange(File, 5, 6);
+	const asCSourceRange BRange = Sources.MakeRange(File, 10, 11);
+	const asASTDeclId Tu = Context.CreateTranslationUnit("CallArgumentProvenance");
+	const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+	const asASTDeclId Callee = Context.CreateDecl(
+		asAST_DECL_FUNCTION, Tu, CallRange, "Pack");
+	const asASTDeclId A = Context.CreateDecl(
+		asAST_DECL_PARAM, Callee, ARange, "A");
+	const asASTDeclId B = Context.CreateDecl(
+		asAST_DECL_PARAM, Callee, BRange, "B");
+	const asASTDeclId C = Context.CreateDecl(
+		asAST_DECL_PARAM, Callee, CallRange, "C");
+	const asASTDeclId Hidden = Context.CreateDecl(
+		asAST_DECL_PARAM, Callee, CallRange, "Hidden");
+	const asASTDeclId Entry = Context.CreateDecl(
+		asAST_DECL_FUNCTION, Tu, CallRange, "Entry");
+	const asASTStmtId Return = Context.CreateStmt(
+		asAST_STMT_RETURN, Entry, CallRange);
+	const asASTExprId ArgA = Context.CreateExpr(
+		asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE, ARange);
+	const asASTExprId ArgB = Context.CreateExpr(
+		asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE, BRange);
+	const asASTExprId DefaultC = Context.CreateExpr(
+		asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE, CallRange);
+	const asASTExprId HiddenValue = Context.CreateExpr(
+		asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE, CallRange);
+	const asASTExprId Call = Context.CreateExpr(
+		asAST_EXPR_CALL, IntType, asAST_VALUE_PRVALUE, CallRange);
+	if( !Tu.IsValid() || !IntType.IsValid() || !Callee.IsValid()
+		|| !A.IsValid() || !B.IsValid() || !C.IsValid() || !Hidden.IsValid()
+		|| !Entry.IsValid() || !Return.IsValid() || !ArgA.IsValid()
+		|| !ArgB.IsValid() || !DefaultC.IsValid() || !HiddenValue.IsValid()
+		|| !Call.IsValid()
+		|| Context.SetDeclType(Callee, IntType) < 0
+		|| Context.SetDeclType(A, IntType) < 0
+		|| Context.SetDeclType(B, IntType) < 0
+		|| Context.SetDeclType(C, IntType) < 0
+		|| Context.SetDeclType(Hidden, IntType) < 0
+		|| Context.SetDeclType(Entry, IntType) < 0
+		|| Context.SetDefaultArg(C, "3") < 0
+		|| Context.SetOrigin(Hidden, "hidden") < 0
+		|| Context.SetLiteralBits(ArgA, 1) < 0
+		|| Context.SetLiteralBits(ArgB, 2) < 0
+		|| Context.SetLiteralBits(DefaultC, 3) < 0
+		|| Context.SetLiteralBits(HiddenValue, 4) < 0
+		|| Context.AddExprChild(Call, HiddenValue) < 0
+		|| Context.AddExprChild(Call, DefaultC) < 0
+		|| Context.AddExprChild(Call, ArgB) < 0
+		|| Context.AddExprChild(Call, ArgA) < 0
+		|| Context.SetResolvedDecl(Call, Callee) < 0
+		|| Context.SetExprCallDispatch(Call, asAST_CALL_DISPATCH_DIRECT) < 0 )
+	{
+		return false;
+	}
+
+	asSASTCallArgument HiddenRecord;
+	HiddenRecord.expression = HiddenValue;
+	HiddenRecord.formal = Hidden;
+	HiddenRecord.formalType = IntType;
+	HiddenRecord.range = CallRange;
+	HiddenRecord.formalIndex = 3;
+	HiddenRecord.origin = asAST_CALL_ARGUMENT_HIDDEN;
+	HiddenRecord.sourceOrdinal = asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL;
+	asSASTCallArgument DefaultRecord;
+	DefaultRecord.expression = DefaultC;
+	DefaultRecord.formal = C;
+	DefaultRecord.formalType = IntType;
+	DefaultRecord.range = CallRange;
+	DefaultRecord.formalIndex = 2;
+	DefaultRecord.origin = asAST_CALL_ARGUMENT_DEFAULT;
+	DefaultRecord.sourceOrdinal = asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL;
+	asSASTCallArgument NamedRecord;
+	NamedRecord.expression = ArgB;
+	NamedRecord.formal = B;
+	NamedRecord.formalType = IntType;
+	NamedRecord.range = BRange;
+	NamedRecord.authoredName = "B";
+	NamedRecord.formalIndex = 1;
+	NamedRecord.sourceOrdinal = 1;
+	NamedRecord.origin = asAST_CALL_ARGUMENT_NAMED;
+	asSASTCallArgument PositionalRecord;
+	PositionalRecord.expression = ArgA;
+	PositionalRecord.formal = A;
+	PositionalRecord.formalType = IntType;
+	PositionalRecord.range = ARange;
+	PositionalRecord.formalIndex = 0;
+	PositionalRecord.sourceOrdinal = 0;
+	PositionalRecord.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+
+	switch( Mutation )
+	{
+	case CALL_PROVENANCE_INVALID_ORIGIN:
+		NamedRecord.origin = static_cast<asEASTCallArgumentOrigin>(0xff);
+		break;
+	case CALL_PROVENANCE_NAMED_WITHOUT_NAME:
+		NamedRecord.authoredName = "";
+		break;
+	case CALL_PROVENANCE_POSITIONAL_WITH_NAME:
+		PositionalRecord.authoredName = "A";
+		break;
+	case CALL_PROVENANCE_SYNTHESIZED_WITH_SOURCE:
+		DefaultRecord.sourceOrdinal = 2;
+		break;
+	case CALL_PROVENANCE_DUPLICATE_SOURCE_ORDINAL:
+		NamedRecord.sourceOrdinal = 0;
+		break;
+	case CALL_PROVENANCE_FOREIGN_RANGE:
+		NamedRecord.range = asCSourceRange(
+			asCSourceLocation(File + 100, 0),
+			asCSourceLocation(File + 100, 1));
+		break;
+	case CALL_PROVENANCE_WRONG_NAMED_FORMAL:
+		NamedRecord.authoredName = "A";
+		break;
+	case CALL_PROVENANCE_HIDDEN_NON_HIDDEN_FORMAL:
+		DefaultRecord.origin = asAST_CALL_ARGUMENT_HIDDEN;
+		break;
+	case CALL_PROVENANCE_DEFAULT_WITHOUT_INITIALIZER:
+		PositionalRecord.origin = asAST_CALL_ARGUMENT_DEFAULT;
+		PositionalRecord.sourceOrdinal = asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL;
+		break;
+	case CALL_PROVENANCE_IMPLICIT_RECEIVER_WITHOUT_RECEIVER:
+		PositionalRecord.origin = asAST_CALL_ARGUMENT_IMPLICIT_RECEIVER;
+		PositionalRecord.sourceOrdinal = asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL;
+		break;
+	case CALL_PROVENANCE_VALID:
+	default:
+		break;
+	}
+
+	return Context.AddCallArgument(Call, HiddenRecord) == 0
+		&& Context.AddCallArgument(Call, DefaultRecord) == 0
+		&& Context.AddCallArgument(Call, NamedRecord) == 0
+		&& Context.AddCallArgument(Call, PositionalRecord) == 0
+		&& Context.SetBody(Entry, Return) == 0
+		&& Context.SetStmtExpr(Return, Call) == 0;
+}
 }
 
 TEST_CLASS_WITH_FLAGS(FCanonicalASTVerifierTests,
@@ -2193,6 +2427,78 @@ public:
 		ASSERT_THAT(IsTrue(Result.detail.Equals("expr-type"), TEXT("detail token must be expr-type")));
 	}
 
+	TEST_METHOD(RejectsNullConversionToReferenceFormal)
+	{
+		// Production mutation caught: accepting a reference-qualified nullable
+		// target would turn a constant null prvalue into storage for &in/&out.
+		asCASTContext Context;
+		Context.CreateTranslationUnit("NullReferenceConversionV");
+		const asCQualType NullType = Context.InternPrimitive(
+			ttVoid, asAST_QUAL_HANDLE);
+		const asCQualType ReferenceTarget = Context.InternNamedType(
+			asAST_TYPE_REFERENCE_OBJECT,
+			"FNullableReference",
+			asAST_QUAL_HANDLE | asAST_QUAL_REFERENCE | asAST_QUAL_IN);
+		const asASTExprId NullLiteral = Context.CreateExpr(
+			asAST_EXPR_NULL_LITERAL,
+			NullType,
+			asAST_VALUE_PRVALUE,
+			asCSourceRange());
+		const asASTExprId Conversion = Context.CreateExpr(
+			asAST_EXPR_CONVERSION,
+			ReferenceTarget,
+			asAST_VALUE_PRVALUE,
+			asCSourceRange());
+		ASSERT_THAT(AreEqual(0,
+			Context.AddExprChild(Conversion, NullLiteral),
+			TEXT("forged null reference conversion should be structurally connected")));
+
+		asSAstVerifyResult Result;
+		ASSERT_THAT(AreEqual(
+			(int)asAST_VERIFY_INVALID_TYPE,
+			asCASTVerify(Context, Result),
+			TEXT("null literal must not bind to a reference-qualified formal")));
+		ASSERT_THAT(IsTrue(
+			Result.detail.Equals("null-conversion-target"),
+			TEXT("null reference rejection must keep the stable detail token")));
+	}
+
+	TEST_METHOD(RejectsNullConversionToValueObjectHandleShape)
+	{
+		// Production mutation caught: HANDLE-shaped metadata on a value object
+		// (including asOBJ_ASHANDLE-like forms) is not a real object handle.
+		asCASTContext Context;
+		Context.CreateTranslationUnit("NullValueHandleConversionV");
+		const asCQualType NullType = Context.InternPrimitive(
+			ttVoid, asAST_QUAL_HANDLE);
+		const asCQualType ValueHandleShape = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT,
+			"FAsHandleValue",
+			asAST_QUAL_HANDLE);
+		const asASTExprId NullLiteral = Context.CreateExpr(
+			asAST_EXPR_NULL_LITERAL,
+			NullType,
+			asAST_VALUE_PRVALUE,
+			asCSourceRange());
+		const asASTExprId Conversion = Context.CreateExpr(
+			asAST_EXPR_CONVERSION,
+			ValueHandleShape,
+			asAST_VALUE_PRVALUE,
+			asCSourceRange());
+		ASSERT_THAT(AreEqual(0,
+			Context.AddExprChild(Conversion, NullLiteral),
+			TEXT("forged null value-handle conversion should be structurally connected")));
+
+		asSAstVerifyResult Result;
+		ASSERT_THAT(AreEqual(
+			(int)asAST_VERIFY_INVALID_TYPE,
+			asCASTVerify(Context, Result),
+			TEXT("null literal must not convert to a value-object handle shape")));
+		ASSERT_THAT(IsTrue(
+			Result.detail.Equals("null-conversion-target"),
+			TEXT("null value-object rejection must keep the stable detail token")));
+	}
+
 	TEST_METHOD(RejectsExprOperandWrongKind)
 	{
 		asCASTContext Context;
@@ -2574,6 +2880,48 @@ public:
 			TEXT("detail token must identify the forged scope-exit destructor owner")));
 	}
 
+	TEST_METHOD(RejectsScopeExitCleanupWhenOnlyUnqualifiedOwnerNameMatches)
+	{
+		asCASTContext Context;
+		const asASTDeclId Tu = Context.CreateTranslationUnit(
+			"ScopeExitCleanupQualifiedOwnerV");
+		const asCQualType ValueType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FValue", 0);
+		const asASTDeclId WrongNamespace = Context.CreateDecl(
+			asAST_DECL_NAMESPACE, Tu, asCSourceRange(), "Wrong");
+		const asASTDeclId WrongClass = Context.CreateDecl(
+			asAST_DECL_CLASS, WrongNamespace, asCSourceRange(), "FValue");
+		ASSERT_THAT(AreEqual(0,
+			Context.SetStableKey(WrongClass, "Wrong::FValue")));
+		const asASTDeclId WrongDestructor = Context.CreateDecl(
+			asAST_DECL_DESTRUCTOR, WrongClass, asCSourceRange(), "FValue");
+		const asASTDeclId Function = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, asCSourceRange(), "F");
+		const asASTDeclId Local = Context.CreateDecl(
+			asAST_DECL_VAR, Function, asCSourceRange(), "Local");
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Local, ValueType)));
+
+		const asASTExprId Target = Context.CreateExpr(
+			asAST_EXPR_DECL_REF, ValueType, asAST_VALUE_LVALUE,
+			asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(Target, Local)));
+		const asASTExprId Cleanup = Context.CreateExpr(
+			asAST_EXPR_CLEANUP, ValueType, asAST_VALUE_PRVALUE,
+			asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Cleanup, Target)));
+		ASSERT_THAT(AreEqual(0,
+			Context.SetResolvedDecl(Cleanup, WrongDestructor)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteral(Cleanup, "scope-exit")));
+
+		asSAstVerifyResult Result;
+		ASSERT_THAT(AreEqual(
+			(int)asAST_VERIFY_INVALID_TYPE,
+			asCASTVerify(Context, Result),
+			TEXT("an unqualified type key must not accept a destructor owned by a namespaced same-name class")));
+		ASSERT_THAT(IsTrue(Result.detail.Equals("scope-exit-cleanup-type"),
+			TEXT("detail token must identify the non-exact destructor owner")));
+	}
+
 	TEST_METHOD(RejectsScopeReleaseCleanupForNonOwningReference)
 	{
 		asCASTContext Context;
@@ -2821,6 +3169,284 @@ public:
 		ASSERT_THAT(AreEqual(0, Present.Seal(), TEXT("CALL with resolvedDecl must seal")));
 		ASSERT_THAT(AreEqual((int)asAST_VERIFY_OK, asCASTVerifyPublication(Present, Result),
 			TEXT("sealed CALL with a resolving target must publish")));
+	}
+
+	TEST_METHOD(RejectsCallArgumentFormalMismatch)
+	{
+		// Production mutation caught: a same-typed reverse child can be paired
+		// with the wrong ParamDecl while arity, type and callee remain valid. The
+		// publication verifier must authenticate the exact formal edge.
+		asCASTContext Context;
+		const asASTDeclId Tu = Context.CreateTranslationUnit("CallFormalMismatch");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId Callee = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, asCSourceRange(), "Pack");
+		const asASTDeclId A = Context.CreateDecl(
+			asAST_DECL_PARAM, Callee, asCSourceRange(), "A");
+		const asASTDeclId B = Context.CreateDecl(
+			asAST_DECL_PARAM, Callee, asCSourceRange(), "B");
+		const asASTDeclId Entry = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, asCSourceRange(), "Entry");
+		const asASTStmtId Return = Context.CreateStmt(
+			asAST_STMT_RETURN, Entry, asCSourceRange());
+		const asASTExprId ArgA = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE, asCSourceRange());
+		const asASTExprId ArgB = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE, asCSourceRange());
+		const asASTExprId Call = Context.CreateExpr(
+			asAST_EXPR_CALL, IntType, asAST_VALUE_PRVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Callee, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(A, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(B, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Entry, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(ArgA, 1)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(ArgB, 2)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Call, ArgB)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Call, ArgA)));
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(Call, Callee)));
+		ASSERT_THAT(AreEqual(0, Context.SetExprCallDispatch(
+			Call, asAST_CALL_DISPATCH_DIRECT)));
+
+		asSASTCallArgument WrongB;
+		WrongB.expression = ArgB;
+		WrongB.formal = A;
+		WrongB.formalType = IntType;
+		WrongB.formalIndex = 1;
+		WrongB.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+		WrongB.sourceOrdinal = 1;
+		ASSERT_THAT(AreEqual(0, Context.AddCallArgument(Call, WrongB)));
+		asSASTCallArgument ExactA;
+		ExactA.expression = ArgA;
+		ExactA.formal = A;
+		ExactA.formalType = IntType;
+		ExactA.formalIndex = 0;
+		ExactA.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+		ExactA.sourceOrdinal = 0;
+		ASSERT_THAT(AreEqual(0, Context.AddCallArgument(Call, ExactA)));
+		ASSERT_THAT(AreEqual(0, Context.SetBody(Entry, Return)));
+		ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Return, Call)));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("ordinary seal keeps malformed semantic facts for publication diagnostics")));
+
+		asSAstVerifyResult Result;
+		ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+			asCASTVerifyPublication(Context, Result),
+			TEXT("a record claiming formal slot B while pointing at A must fail closed")));
+		ASSERT_THAT(IsTrue(Result.detail.Equals("call-argument-formal"),
+			TEXT("formal mismatch must keep a stable verifier detail token")));
+	}
+
+	TEST_METHOD(RejectsDuplicateCallArgumentFormal)
+	{
+		// Production mutation caught: two valid children may both claim the same
+		// exact formal, leaving another required formal uncovered. This must fail
+		// before CodeGen can pair children with Runtime parameter positions.
+		asCASTContext Context;
+		const asASTDeclId Tu = Context.CreateTranslationUnit("CallDuplicateFormal");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId Callee = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, asCSourceRange(), "Pack");
+		const asASTDeclId A = Context.CreateDecl(
+			asAST_DECL_PARAM, Callee, asCSourceRange(), "A");
+		const asASTDeclId B = Context.CreateDecl(
+			asAST_DECL_PARAM, Callee, asCSourceRange(), "B");
+		const asASTDeclId Entry = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, asCSourceRange(), "Entry");
+		const asASTStmtId Return = Context.CreateStmt(
+			asAST_STMT_RETURN, Entry, asCSourceRange());
+		const asASTExprId ArgA = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE, asCSourceRange());
+		const asASTExprId ArgB = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE, asCSourceRange());
+		const asASTExprId Call = Context.CreateExpr(
+			asAST_EXPR_CALL, IntType, asAST_VALUE_PRVALUE, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Callee, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(A, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(B, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Entry, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(ArgA, 1)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(ArgB, 2)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Call, ArgB)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Call, ArgA)));
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(Call, Callee)));
+		ASSERT_THAT(AreEqual(0, Context.SetExprCallDispatch(
+			Call, asAST_CALL_DISPATCH_DIRECT)));
+
+		asSASTCallArgument ExactB;
+		ExactB.expression = ArgB;
+		ExactB.formal = B;
+		ExactB.formalType = IntType;
+		ExactB.formalIndex = 1;
+		ExactB.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+		ExactB.sourceOrdinal = 1;
+		ASSERT_THAT(AreEqual(0, Context.AddCallArgument(Call, ExactB)));
+		asSASTCallArgument DuplicateB;
+		DuplicateB.expression = ArgA;
+		DuplicateB.formal = B;
+		DuplicateB.formalType = IntType;
+		DuplicateB.formalIndex = 1;
+		DuplicateB.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+		DuplicateB.sourceOrdinal = 0;
+		ASSERT_THAT(AreEqual(0, Context.AddCallArgument(Call, DuplicateB)));
+		ASSERT_THAT(AreEqual(0, Context.SetBody(Entry, Return)));
+		ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Return, Call)));
+		ASSERT_THAT(AreEqual(0, Context.Seal()));
+
+		asSAstVerifyResult Result;
+		ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+			asCASTVerifyPublication(Context, Result),
+			TEXT("duplicate exact formal identities must fail publication")));
+		ASSERT_THAT(IsTrue(Result.detail.Equals("call-argument-duplicate-formal"),
+			TEXT("duplicate formal rejection must keep a stable detail token")));
+	}
+
+	TEST_METHOD(RejectsMissingCallArgumentCoverage)
+	{
+		// Production mutation caught: a direct call may keep a structurally
+		// valid reverse-formal child list while omitting every provenance record.
+		asCASTContext Context;
+		ASSERT_THAT(IsTrue(BuildIncompleteCallArgumentFixture(Context, false),
+			TEXT("missing-record fixture must build")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("ordinary seal must preserve missing semantic facts for publication diagnostics")));
+
+		asSAstVerifyResult Result;
+		ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+			asCASTVerifyPublication(Context, Result),
+			TEXT("a direct call with no provenance records must fail publication")));
+		ASSERT_THAT(IsTrue(Result.detail.Equals("call-argument-count"),
+			TEXT("missing call provenance must keep a stable detail token")));
+	}
+
+	TEST_METHOD(RejectsConstructMissingCallArgumentCoverage)
+	{
+		// Production mutation caught: CONSTRUCT used to retain only its arranged
+		// children, so a backend could infer constructor ABI slots from child
+		// position after Sema had discarded named/default source provenance.
+		asCASTContext Context;
+		const asASTDeclId Tu = Context.CreateTranslationUnit(
+			"ConstructMissingRecords");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asCQualType ObjectType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FConstructMissingRecords", 0);
+		const asASTDeclId Class = Context.CreateDecl(
+			asAST_DECL_CLASS, Tu, asCSourceRange(),
+			"FConstructMissingRecords");
+		const asASTDeclId Constructor = Context.CreateDecl(
+			asAST_DECL_CONSTRUCTOR, Class, asCSourceRange(),
+			"FConstructMissingRecords");
+		const asASTDeclId Formal = Context.CreateDecl(
+			asAST_DECL_PARAM, Constructor, asCSourceRange(), "Value");
+		const asASTExprId Argument = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		const asASTExprId Construct = Context.CreateExpr(
+			asAST_EXPR_CONSTRUCT, ObjectType,
+			asAST_VALUE_PRVALUE, asCSourceRange());
+		ASSERT_THAT(IsTrue(Tu.IsValid() && IntType.IsValid()
+			&& ObjectType.IsValid() && Class.IsValid()
+			&& Constructor.IsValid() && Formal.IsValid()
+			&& Argument.IsValid() && Construct.IsValid(),
+			TEXT("missing CONSTRUCT provenance fixture identities must exist")));
+		ASSERT_THAT(AreEqual(0, Context.SetStableKey(
+			Class, "FConstructMissingRecords")));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Class, ObjectType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Constructor, ObjectType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Formal, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(Argument, 7)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Construct, Argument)));
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(
+			Construct, Constructor)));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("ordinary Seal must retain missing CONSTRUCT provenance for publication diagnostics")));
+
+		asSAstVerifyResult Result;
+		ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+			asCASTVerifyPublication(Context, Result),
+			TEXT("a resolved CONSTRUCT with no formal provenance must fail publication")));
+		ASSERT_THAT(IsTrue(Result.detail.Equals("call-argument-count"),
+			TEXT("missing CONSTRUCT provenance must reuse the stable call relation token")));
+	}
+
+	TEST_METHOD(RejectsPartialCallArgumentCoverage)
+	{
+		// Production mutation caught: a valid record for formal B must not make
+		// publication accept an uncovered formal A and let CodeGen reconstruct it
+		// from the remaining reverse-formal child position.
+		asCASTContext Context;
+		ASSERT_THAT(IsTrue(BuildIncompleteCallArgumentFixture(Context, true),
+			TEXT("partial-record fixture must build")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("ordinary seal must preserve partial semantic facts for publication diagnostics")));
+
+		asSAstVerifyResult Result;
+		ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+			asCASTVerifyPublication(Context, Result),
+			TEXT("a direct call with partial provenance records must fail publication")));
+		ASSERT_THAT(IsTrue(Result.detail.Equals("call-argument-count"),
+			TEXT("partial call provenance must keep a stable detail token")));
+	}
+
+	TEST_METHOD(RejectsCallArgumentProvenanceMismatches)
+	{
+		// One risk-clustered gate pins every relationship that Sidecar V9 and
+		// CodeGen are allowed to trust. Structural Seal remains deliberately
+		// permissive so each forged graph reaches publication diagnostics.
+		struct FCase
+		{
+			ECallArgumentProvenanceMutation Mutation;
+			int Category;
+			const char* Detail;
+		};
+		const FCase Cases[] =
+		{
+			{ CALL_PROVENANCE_INVALID_ORIGIN,
+				asAST_VERIFY_INVALID_CHILD, "call-argument-origin" },
+			{ CALL_PROVENANCE_NAMED_WITHOUT_NAME,
+				asAST_VERIFY_INVALID_CHILD, "call-argument-provenance" },
+			{ CALL_PROVENANCE_POSITIONAL_WITH_NAME,
+				asAST_VERIFY_INVALID_CHILD, "call-argument-provenance" },
+			{ CALL_PROVENANCE_SYNTHESIZED_WITH_SOURCE,
+				asAST_VERIFY_INVALID_CHILD, "call-argument-provenance" },
+			{ CALL_PROVENANCE_DUPLICATE_SOURCE_ORDINAL,
+				asAST_VERIFY_INVALID_CHILD, "call-argument-source-order" },
+			{ CALL_PROVENANCE_FOREIGN_RANGE,
+				asAST_VERIFY_INVALID_RANGE, "call-argument-range" },
+			{ CALL_PROVENANCE_WRONG_NAMED_FORMAL,
+				asAST_VERIFY_INVALID_CHILD, "call-argument-provenance" },
+			{ CALL_PROVENANCE_HIDDEN_NON_HIDDEN_FORMAL,
+				asAST_VERIFY_INVALID_CHILD, "call-argument-hidden" },
+			{ CALL_PROVENANCE_DEFAULT_WITHOUT_INITIALIZER,
+				asAST_VERIFY_INVALID_CHILD, "call-argument-default" },
+			{ CALL_PROVENANCE_IMPLICIT_RECEIVER_WITHOUT_RECEIVER,
+				asAST_VERIFY_INVALID_CHILD, "call-argument-receiver" },
+		};
+
+		for( asUINT Index = 0; Index < sizeof(Cases) / sizeof(Cases[0]); ++Index )
+		{
+			asCASTContext Context;
+			ASSERT_THAT(IsTrue(BuildCallArgumentProvenanceFixture(
+				Context, Cases[Index].Mutation),
+				TEXT("provenance mutation fixture must build")));
+			ASSERT_THAT(AreEqual(0, Context.Seal(),
+				TEXT("ordinary Seal must retain forged provenance for publication diagnostics")));
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual(Cases[Index].Category,
+				asCASTVerifyPublication(Context, Result),
+				TEXT("publication must reject impossible CallArgument provenance")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals(Cases[Index].Detail),
+				TEXT("provenance rejection must keep its stable detail token")));
+		}
+
+		asCASTContext Valid;
+		ASSERT_THAT(IsTrue(BuildCallArgumentProvenanceFixture(
+			Valid, CALL_PROVENANCE_VALID),
+			TEXT("valid provenance fixture must build")));
+		ASSERT_THAT(AreEqual(0, Valid.Seal()));
+		asSAstVerifyResult ValidResult;
+		ASSERT_THAT(AreEqual((int)asAST_VERIFY_OK,
+			asCASTVerifyPublication(Valid, ValidResult),
+			TEXT("complete valid provenance must remain publishable")));
 	}
 
 	TEST_METHOD(RejectsSealedPublicationConstructWithoutResolvedDecl)

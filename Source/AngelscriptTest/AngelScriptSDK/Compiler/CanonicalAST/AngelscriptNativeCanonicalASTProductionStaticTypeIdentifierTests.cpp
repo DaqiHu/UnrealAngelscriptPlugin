@@ -1,6 +1,7 @@
 #include "AngelscriptTestMacros.h"
 #include "../../Support/AngelscriptNativeCanonicalASTTestSupport.h"
 #include "../../Support/AngelscriptNativeCompilerBytecodeTestSupport.h"
+#include "Core/AngelscriptEngine.h"
 
 #include "CQTest.h"
 
@@ -33,6 +34,116 @@ TEST_CLASS_WITH_FLAGS(FCanonicalASTProductionStaticTypeIdentifierTests,
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 public:
+	TEST_METHOD(AmbientUEScriptDeclaredStaticTypeValueProjectsTSubclassOfGet)
+	{
+		// Generated class helpers use `__StaticType_<Class>.Get()` before
+		// calling SpawnActor/subsystem helpers. Unlike native classes such as
+		// AActor, a script class owns a script-declared static-type global.
+		// Exercise that exact declaration identity against the real UE
+		// TSubclassOf<T> template instance and method surface.
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(
+			FAngelscriptEngine::Get().GetScriptEngine());
+		ASSERT_THAT(IsNotNull(ScriptEngine,
+			TEXT("ambient UE AngelScript Engine must be initialized")));
+		if (ScriptEngine == nullptr)
+		{
+			return;
+		}
+
+		const asECompilerPipeline PreviousPipeline =
+			ScriptEngine->GetCompilerPipeline();
+		static const char* const ModuleName =
+			"ProdAmbientStaticTypeSubclassGet";
+		ON_SCOPE_EXIT
+		{
+			ScriptEngine->SetCompilerPipeline(PreviousPipeline);
+			ScriptEngine->DiscardModule(ModuleName);
+		};
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* Module = nullptr;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			const TSubclassOf<UObject> __StaticType_LocalScriptClass;
+
+			UClass Entry()
+			{
+				return __StaticType_LocalScriptClass.Get();
+			}
+			)AS");
+		const int BuildResult =
+			AngelscriptNativeTestSupport::CompileNativeModule(
+				ScriptEngine,
+				ModuleName,
+				ScriptSource.c_str(),
+				Module);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			TEXT("ambient UE static type value must project TSubclassOf<T>.Get canonically")));
+		if (BuildResult < 0 || Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			static_cast<asCModule*>(Module)->GetLastBytecodePublisher(),
+			TEXT("ambient static-type Get must use Canonical CodeGen")));
+	}
+
+	TEST_METHOD(AmbientUEScriptStaticTypeGetUsesTargetImplicitConstructor)
+	{
+		// Generated SpawnActor helpers deliberately call Get() on the
+		// script-owned TSubclassOf value. The resulting UClass must be accepted
+		// through TSubclassOf<AActor>'s target-side implicit constructor; merely
+		// ranking the overload is insufficient because CodeGen needs the sealed
+		// Construct expression and its exact constructor declaration.
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(
+			FAngelscriptEngine::Get().GetScriptEngine());
+		ASSERT_THAT(IsNotNull(ScriptEngine,
+			TEXT("ambient UE AngelScript Engine must be initialized")));
+		if (ScriptEngine == nullptr)
+		{
+			return;
+		}
+
+		const asECompilerPipeline PreviousPipeline =
+			ScriptEngine->GetCompilerPipeline();
+		static const char* const ModuleName =
+			"ProdAmbientStaticTypeImplicitConstruct";
+		ON_SCOPE_EXIT
+		{
+			ScriptEngine->SetCompilerPipeline(PreviousPipeline);
+			ScriptEngine->DiscardModule(ModuleName);
+		};
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* Module = nullptr;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			const TSubclassOf<UObject> __StaticType_LocalScriptClass;
+
+			AActor SpawnGeneratedLike()
+			{
+				return SpawnActor(__StaticType_LocalScriptClass.Get());
+			}
+			)AS");
+		const int BuildResult =
+			AngelscriptNativeTestSupport::CompileNativeModule(
+				ScriptEngine,
+				ModuleName,
+				ScriptSource.c_str(),
+				Module);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			TEXT("UClass must use the target TSubclassOf implicit constructor")));
+		if (BuildResult < 0 || Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			static_cast<asCModule*>(Module)->GetLastBytecodePublisher(),
+			TEXT("target implicit construction must use Canonical CodeGen")));
+	}
+
 	TEST_METHOD(TypeIdentifierArgumentPassesStaticTypeGlobal)
 	{
 		GProdStaticTypeObserved = nullptr;

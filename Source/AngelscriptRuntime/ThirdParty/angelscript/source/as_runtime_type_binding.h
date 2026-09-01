@@ -40,7 +40,20 @@ enum asERuntimeTypeRelocationUse
 	// type. Its durable identity is the exact list-factory function plus the
 	// owning canonical object ABI, never the helper pointer or a fabricated name.
 	asTYPE_RELOC_LIST_PATTERN_TARGET,
+	// ABI authentication row for one exact Canonical function-signature
+	// coordinate. It owns no bytecode coordinate and is never patched into an
+	// instruction; the generation-local binding table retains it for StaticJIT
+	// admission and other same-generation consumers.
+	asTYPE_RELOC_FUNCTION_SIGNATURE,
 	asTYPE_RELOC_USE_COUNT
+};
+
+enum asERuntimeTypeBindingSignatureRole
+{
+	asRUNTIME_TYPE_SIGNATURE_NONE = 0,
+	asRUNTIME_TYPE_SIGNATURE_RETURN,
+	asRUNTIME_TYPE_SIGNATURE_PARAMETER,
+	asRUNTIME_TYPE_SIGNATURE_RECEIVER
 };
 
 struct ANGELSCRIPTRUNTIME_API asSRuntimeTypeBindingEnvironment
@@ -81,7 +94,14 @@ struct ANGELSCRIPTRUNTIME_API asSTypeRelocation
 {
 	asSTypeABIKey expectedType;
 	asCString stableMemberKey;
+	// Exact producer-carried owner identity for signature rows. This is kept
+	// separate from stableMemberKey, whose existing meaning is the property or
+	// callable target patched by non-signature relocations.
+	asCString ownerFunctionStableKey;
 	asERuntimeTypeRelocationUse use = asTYPE_RELOC_METADATA_ONLY;
+	asERuntimeTypeBindingSignatureRole signatureRole =
+		asRUNTIME_TYPE_SIGNATURE_NONE;
+	asUINT formalIndex = asUINT(-1);
 	asUINT functionArtifactIndex = 0;
 	asUINT bytecodeDwordOffset = 0;
 	// Generation-local ordinal of the exact function operand captured from the
@@ -95,9 +115,19 @@ struct ANGELSCRIPTRUNTIME_API asSTypeRelocation
 // only for the generation that owns the frozen table.
 struct ANGELSCRIPTRUNTIME_API asSResolvedRuntimeTypeBinding
 {
+	// Preserve both sides of the validate-all comparison. `expectedKey` is the
+	// detached producer requirement; `key` is the exact generation-local ABI
+	// captured after resolution.
+	asSTypeABIKey expectedKey;
 	asSTypeABIKey key;
+	asCString ownerFunctionStableKey;
+	asERuntimeTypeRelocationUse relocationUse = asTYPE_RELOC_METADATA_ONLY;
+	asERuntimeTypeBindingSignatureRole signatureRole =
+		asRUNTIME_TYPE_SIGNATURE_NONE;
+	asUINT formalIndex = asUINT(-1);
 	asCDataType dataType;
 	asCTypeInfo* typeInfo = 0;
+	asCScriptFunction* ownerFunction = 0;
 	asCObjectProperty* property = 0;
 	asCScriptFunction* function = 0;
 	int publicTypeId = -1;

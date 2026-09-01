@@ -52,6 +52,32 @@ struct asSCanonicalRegisteredEnumeratorFact
 // projection. Enum facts additionally own exact enumerator names/values so
 // expression Sema never walks a live asCEnumType. Template declarations/
 // instances use the separate template fact contract above.
+// Pointer-free QualType spelling for one registered funcdef return or formal.
+// Snapshot-local TypeRefs are interned later; these facts contain no Engine
+// pointer or numeric TypeId.
+struct asSCanonicalRegisteredTypeRefFact
+{
+	asEASTTypeKind kind;
+	eTokenType primitiveToken;
+	asCString stableKey;
+	asDWORD quals;
+
+	asSCanonicalRegisteredTypeRefFact()
+		: kind(asAST_TYPE_INVALID)
+		, primitiveToken(ttUnrecognizedToken)
+		, quals(0)
+	{
+	}
+
+	bool Equals(const asSCanonicalRegisteredTypeRefFact& other) const
+	{
+		return kind == other.kind
+			&& primitiveToken == other.primitiveToken
+			&& quals == other.quals
+			&& stableKey.Equals(other.stableKey);
+	}
+};
+
 struct asSCanonicalRegisteredTypeDeclarationFact
 {
 	asCString stableKey;
@@ -59,7 +85,13 @@ struct asSCanonicalRegisteredTypeDeclarationFact
 	asQWORD flags;
 	bool isInterface;
 	bool ambiguous;
+	// Stable direct class/interface ancestry captured at the Runtime registration
+	// boundary. Canonical Sema projects these keys into ordinary Decl::bases;
+	// live type pointers and generation-local TypeIds never enter the AST.
+	asCArray<asCString> baseStableKeys;
 	asCArray<asSCanonicalRegisteredEnumeratorFact> enumerators;
+	asSCanonicalRegisteredTypeRefFact funcdefReturn;
+	asCArray<asSCanonicalRegisteredTypeRefFact> funcdefFormals;
 
 	asSCanonicalRegisteredTypeDeclarationFact()
 		: kind(asAST_TYPE_INVALID)
@@ -310,6 +342,9 @@ struct asSConstructExprAction
 {
 	asCQualType targetType;
 	asCArray<asASTExprId> arguments;
+	// Empty entries denote positional arguments. A non-empty entry preserves
+	// the authored `Name: expression` spelling at the same source ordinal.
+	asCArray<asCString> argumentNames;
 	asUINT beginOffset;
 	asUINT endOffset;
 
@@ -841,15 +876,18 @@ struct asSVariableInitializerAction
 	asEVariableInitializerActionKind kind;
 	asASTExprId expression;
 	asCArray<asASTExprId> arguments;
+	asCArray<asCString> argumentNames;
 	asUINT beginOffset;
 	asUINT endOffset;
 	bool recovered;
+	bool autoConstRef;
 
 	asSVariableInitializerAction()
 		: kind(asVARIABLE_INITIALIZER_INVALID)
 		, beginOffset(0)
 		, endOffset(0)
 		, recovered(false)
+		, autoConstRef(false)
 	{
 	}
 };
@@ -865,15 +903,18 @@ struct asSLocalVariableDeclaratorAction
 	asEVariableInitializerActionKind kind;
 	asASTExprId expression;
 	asCArray<asASTExprId> arguments;
+	asCArray<asCString> argumentNames;
 	asUINT beginOffset;
 	asUINT endOffset;
 	bool recovered;
+	bool autoConstRef;
 
 	asSLocalVariableDeclaratorAction()
 		: kind(asVARIABLE_INITIALIZER_INVALID)
 		, beginOffset(0)
 		, endOffset(0)
 		, recovered(false)
+		, autoConstRef(false)
 	{
 	}
 };
@@ -1196,7 +1237,7 @@ public:
 		asUINT beginOffset,
 		asUINT endOffset);
 	asASTDeclId ActOnListPatternDecl(asASTDeclId parent, const char* structured, const asCSourceRange& range);
-	void ActOnGlobalVarInit(asASTDeclId var, asASTExprId init);
+	bool ActOnGlobalVarInit(asASTDeclId var, asASTExprId init);
 	asASTDeclId ActOnFunctionDecl(asASTDeclId parent, const char* name, const asCQualType& returnType, const asCSourceRange& range);
 	asASTDeclId ActOnStartFunctionDecl(asASTDeclId parent, const char* name, const asCQualType& returnType, const asCSourceRange& range);
 	asASTDeclId ActOnFunctionSignatureAction(
@@ -1280,6 +1321,15 @@ public:
 	asASTExprId ActOnStringLiteral(const char* text, const asCSourceRange& range);
 	asASTExprId ActOnStringLiteral(const char* bytes, asUINT length, const asCSourceRange& range);
 	asASTExprId ActOnNullLiteral(const asCSourceRange& range);
+	// Reuse the maintained expression parser to turn a Runtime-owned default
+	// spelling into one exact typed Canonical expression. The generated source
+	// identity is stable and the caller's active authored parse session is
+	// restored before this returns.
+	asASTExprId ActOnProjectedRuntimeDefaultArgument(
+		const char* authoredText,
+		const char* stableCallableKey,
+		asUINT runtimeParameterIndex,
+		asASTDeclId callable);
 	asASTExprId ActOnLiteralExprAction(
 		const asSLiteralExprAction& action,
 		class asCScriptCode* script);
@@ -1333,8 +1383,12 @@ public:
 	asASTExprId ActOnDeferredOutArgument(asASTExprId receiver, const asCQualType& formalType, asASTDeclId setter, const asCSourceRange& range);
 	asASTExprId ActOnThisExpr(const asCQualType& type, const asCSourceRange& range);
 	asEASTCallDispatch ClassifyCallDispatch(asASTDeclId callee) const;
-	asASTExprId ActOnCall(asASTDeclId callee, const asCArray<asASTExprId>& args, const asCQualType& type, const asCSourceRange& range);
-	asASTExprId ActOnCallExpr(asASTDeclId owner, const char* name, const asCArray<asASTExprId>& args, const asCSourceRange& range, asASTExprId implicitReceiver = asASTExprId(), const asCArray<asCString>* argumentNames = 0, bool exactScope = false);
+	asASTExprId ActOnCall(asASTDeclId callee,
+		const asCArray<asASTExprId>& args,
+		const asCQualType& type,
+		const asCSourceRange& range,
+		const asCArray<asSASTCallArgument>* callArguments = 0);
+	asASTExprId ActOnCallExpr(asASTDeclId owner, const char* name, const asCArray<asASTExprId>& args, const asCSourceRange& range, asASTExprId implicitReceiver = asASTExprId(), const asCArray<asCString>* argumentNames = 0, bool exactScope = false, const asCQualType* typeNameTarget = 0);
 	asASTExprId ActOnPostfixCallExpr(asASTDeclId owner, asASTExprId calleeExpr, const asCArray<asASTExprId>& args, const asCSourceRange& range, const asCArray<asCString>* argumentNames = 0);
 	asASTExprId ActOnCastExpr(asASTExprId inner, const asCQualType& dest, const asCSourceRange& range);
 	asASTExprId ActOnConversion(asASTExprId inner, const asCQualType& dest, const asCSourceRange& range);
@@ -1360,10 +1414,48 @@ public:
 		class asCScriptCode* script);
 	asASTExprId ActOnLambdaExpr(asASTDeclId owner, const asCQualType& returnType, const asCSourceRange& range);
 	asASTDeclId ActOnLambdaCapture(asASTDeclId lambda, asASTDeclId captured);
-	asASTExprId ActOnConstruct(const asCQualType& type, const asCArray<asASTExprId>& args, const asCSourceRange& range);
+	// Source-authored construction goes through the ordinary call-plan authority
+	// so named/default provenance and the exact selected constructor are frozen
+	// before the CONSTRUCT node is published. Generated exact-positional plans
+	// may continue to call ActOnConstruct directly.
+	asASTExprId ActOnConstructCall(
+		asASTDeclId owner,
+		const asCQualType& type,
+		const asCArray<asASTExprId>& args,
+		const asCArray<asCString>* argumentNames,
+		const asCSourceRange& range);
+	asASTExprId ActOnConstruct(
+		const asCQualType& type,
+		const asCArray<asASTExprId>& args,
+		const asCSourceRange& range,
+		asASTDeclId selectedConstructor = asASTDeclId(),
+		const asCArray<asSASTCallArgument>* callArguments = 0);
 	void InternNativeCallablesForType(const asCQualType& type);
 	void InternNativeZeroArgCallablesForType(const asCQualType& type);
 	asASTDeclId InternNativeListFactoryForType(const asCQualType& type);
+	// Resolve one application-registered global property through its exact
+	// Runtime namespace and project a pointer-free VarDecl into the Canonical
+	// graph.  The lookup follows AngelScript's enclosing-namespace rules; the
+	// returned declaration is the exact selected property, never a name-only
+	// first match from the Engine-wide registry.
+	asASTDeclId InternNativeGlobalProperty(
+		asASTDeclId lookupScope,
+		const asCArray<asCString>& scopeSegments,
+		bool absoluteScope,
+		const char* name);
+	// Project one requested native property onto the exact registered record that
+	// owns it. `owner` may be a class or any declaration nested inside one; the
+	// pointer-free Canonical base graph supplies inherited lookup. Authored script
+	// records are never populated from a same-spelled Runtime shadow.
+	void InternNativePropertyCandidates(
+		asASTDeclId owner,
+		const char* name);
+	// A native template receiver such as TArrayIterator<T> may exist only as a
+	// QualType on the expression until a member is requested. Intern the host
+	// CLASS view from that type, then walk Canonical bases as usual.
+	void InternNativePropertyCandidates(
+		const asCQualType& recvType,
+		const char* name);
 	// asIScriptModule::CompileFunction parses an intentionally incomplete source
 	// unit. Project the already-published symbols owned by that same module into
 	// its ephemeral canonical graph so Sema can resolve ordinary module-local
@@ -1415,6 +1507,20 @@ public:
 	// in the same source. Reconcile those parser-time placeholders after the
 	// complete declaration surface is known and before the AST is published.
 	void ResolveDeferredNames();
+	// A resolved call can still precede the generated value-type declaration
+	// that decides whether its by-value formal uses trivial storage copy or an
+	// exact copy constructor. Reconcile those call edges only after final class
+	// layout/traits exist and before the graph is sealed.
+	void ReconcileDeferredByValueCopyPlans();
+	// One final value-object classification authority is shared by calls and
+	// compiler-generated accessors. Script classes use their finalized Canonical
+	// storage trait; native views inspect only the current Runtime generation.
+	// Engine-local numeric TypeIds never become semantic identity.
+	bool RequiresExactValueObjectPlan(const asCQualType& valueType);
+	// Generated accessors can precede a later script value-type definition.
+	// Attach their exact copy/assignment plans only after all class traits and
+	// lifecycle/operator declarations are available.
+	void ReconcileGeneratedAccessorPlans();
 	// Local declarations remain children of their function DeclContext, matching
 	// Clang's AST ownership model. Their visibility is instead determined by the
 	// nested Stmt scope that contains each DeclStmt. Replay those scopes after all
@@ -1426,6 +1532,14 @@ public:
 	// the current language/runtime ABI. Diagnose every captured lambda that has
 	// no Call node naming its exact declaration before seal/publication.
 	void ValidateCapturedLambdaUses();
+	// Default-argument overload conflicts are a Sema fact over sealed formals.
+	// Builder must not recover them by walking the native syntax tree.
+	void ValidateDefaultArgumentOverloads();
+	// Editor-only availability is a sealed Decl trait. Builder must not recover
+	// override mismatches by walking native syntax-tree coordinates.
+	void AddEditorOnlyCharacterRange(asUINT begin, asUINT end);
+	void ApplyEditorOnlyTraitFromSource(asASTDeclId declaration);
+	void ValidateEditorOnlyOverrides();
 	void PushControl(asASTStmtId id);
 	void PopControl();
 	void PushDeclContext(asASTDeclId id);
@@ -1468,9 +1582,16 @@ public:
 		bool absoluteScope,
 		asASTDeclId lookupScope,
 		bool& ambiguous);
+	asASTDeclId ProjectCanonicalRegisteredFuncdef(const asCString& stableKey);
+	asCQualType InternCanonicalRegisteredTypeRef(
+		const asSCanonicalRegisteredTypeRefFact& fact);
 
 	asCASTContext& GetContext() { return context; }
 	asCScriptEngine* GetEngine() const { return engine; }
+	// Parser uses this only for identifier/type grammar disambiguation. The
+	// answer comes from the Sema generation's pointer-free declaration facts;
+	// expression-only parsing never requires a second Builder owner.
+	bool IsKnownTypeNameForParsing(const char* name) const;
 	const asCArray<asCString>& GetDiagnostics() const { return diagnostics; }
 	const asCArray<asCSourceRange>& GetDiagnosticRanges() const { return diagnosticRanges; }
 	void AddDiagnostic(const char* text);
@@ -1510,11 +1631,22 @@ private:
 	bool IsCanonicalTemplateSubtypeAllowed(
 		const asSCanonicalTemplateDeclarationFact& declaration,
 		const asCQualType& subtype) const;
+	asCQualType InternCanonicalTemplateInstanceType(
+		const asSCanonicalTemplateDeclarationFact* declaration,
+		const asCString& instanceKey,
+		asDWORD quals,
+		const asCArray<asCQualType>* arguments = 0);
 	bool CanonicalTemplateHasChildFuncdef(
 		const asSCanonicalTemplateDeclarationFact& declaration,
 		const asCString& name) const;
 	bool IsCanonicalNonPrimitiveValueType(
 		const asCQualType& type) const;
+	bool InferCanonicalAutoType(
+		const asCQualType& placeholder,
+		asASTExprId initializer,
+		bool allowReference,
+		bool autoConstRef,
+		asCQualType& inferred) const;
 	void ContextualizeLambdaToFuncdef(
 		asASTExprId inner,
 		const asCQualType& destination,
@@ -1536,6 +1668,8 @@ private:
 	asCModule* buildModule;
 	asCASTContext& context;
 	asCArray<asCString> diagnostics;
+	asCArray<asUINT> editorOnlyBegin;
+	asCArray<asUINT> editorOnlyEnd;
 	asCArray<asCSourceRange> diagnosticRanges;
 	// Immutable for one Sema/build generation. These copied facts contain no
 	// Engine-local pointer, Parser node or numeric Runtime identity.
@@ -1619,6 +1753,7 @@ private:
 	asCString parsedSection;
 	asCString parsedSourceBytes;
 	int parsedLineOffset;
+	asEASTSourceOrigin parsedSourceOrigin;
 };
 
 END_AS_NAMESPACE

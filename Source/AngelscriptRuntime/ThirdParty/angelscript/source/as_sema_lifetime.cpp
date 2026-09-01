@@ -45,7 +45,8 @@ asASTExprId asCSema::ActOnCleanup(asASTExprId inner, const asCSourceRange& range
 					continue;
 				}
 				const asCDecl* parent = context.GetDecl(decl->parent);
-				if( parent && parent->name.Equals(named->stableKey) )
+				if( parent && parent->kind == asAST_DECL_CLASS
+					&& parent->stableKey.Equals(named->stableKey) )
 				{
 					context.SetResolvedDecl(id, decl->id);
 					break;

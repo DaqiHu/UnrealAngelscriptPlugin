@@ -11,6 +11,7 @@ class asCScriptEngine;
 class asCTypeInfo;
 class asCModule;
 class asCScriptFunction;
+class asCGlobalProperty;
 
 // Deterministic result codes for binding a live VM function to an exact
 // declaration in a sealed canonical AST. Keep these distinct so diagnostics
@@ -65,6 +66,25 @@ public:
 		const asCScriptFunction& function,
 		asASTDeclId& outDeclaration,
 		asCString* detail = 0) const;
+	// Resolve a registered system function only through the exact declaration
+	// key assigned by the Sema projection that interned it. The selected
+	// external declaration must also agree structurally with the current Engine
+	// function's owner, namespace, return/parameter ABI and constness. Runtime
+	// declaration text and Engine-local FunctionId are never identity inputs.
+	int BindSystemFunctionDeclaration(
+		const asCASTContext& context,
+		const asCScriptFunction& function,
+		asASTDeclId& outDeclaration,
+		asCString* detail = 0) const;
+	// Resolve a script global only through the exact VarDecl key assigned while
+	// its Runtime shell was materialized. The current property id is an Engine-
+	// local coordinate and its namespace/name are structural checks, never
+	// identity recovery inputs.
+	int BindGlobalDeclaration(
+		const asCASTContext& context,
+		const asCGlobalProperty& property,
+		asASTDeclId& outDeclaration,
+		asCString* detail = 0) const;
 	// Source identity keeps `T`/`int` by-value parameters exactly as written,
 	// while maintained script-function Runtime shells freeze value objects as
 	// `const T&inout` and primitive values as const. Canonical producers and
@@ -73,6 +93,15 @@ public:
 	static void NormalizeScriptParameterABI(
 		asCDataType& type,
 		asETypeModifiers& passing);
+	// Capture the exact source qualifier bits of a Canonical callable in formal
+	// order.  Runtime signatures cannot invert Builder's value-object ABI
+	// normalization, so every source-owned shell publishes this vector together
+	// with its stable declaration key.  Collection is transactional: malformed
+	// or incomplete formal relations leave the output empty.
+	static bool CollectSourceParameterQualifiers(
+		const asCASTContext& context,
+		asASTDeclId declaration,
+		asCArray<asDWORD>& outQualifiers);
 	// Recover the source-facing QualType of a Runtime function parameter. Live
 	// script shells normalize primitive values to const and value objects to
 	// const T&inout; those ABI-only facts must not leak into Canonical identity.
@@ -81,6 +110,17 @@ public:
 		asCASTContext& context,
 		const asCDataType& dataType,
 		asETypeModifiers passing) const;
+	// Recover one script formal through producer-carried source metadata. The
+	// Runtime datatype is still authenticated as either the direct Canonical ABI
+	// or the maintained normalized script ABI; the qualifier vector is not
+	// accepted as an unchecked side channel. A keyed Canonical shell with missing
+	// or inconsistent metadata fails closed. Only unkeyed legacy shells retain
+	// the historical heuristic projection above.
+	asCQualType FromScriptFunctionParameterABI(
+		asCASTContext& context,
+		const asCScriptFunction& function,
+		asUINT runtimeParameterIndex,
+		asUINT sourceFormalIndex) const;
 	asCQualType FromDataType(asCASTContext& context, const asCDataType& dataType) const;
 
 private:

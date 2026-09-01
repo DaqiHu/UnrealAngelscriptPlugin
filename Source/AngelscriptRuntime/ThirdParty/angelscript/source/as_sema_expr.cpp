@@ -2,6 +2,7 @@
 #include "as_datatype.h"
 #include "as_module.h"
 #include "as_objecttype.h"
+#include "as_parser.h"
 #include "as_property.h"
 #include "as_runtime_type_bridge.h"
 #include "as_scriptcode.h"
@@ -32,6 +33,94 @@ static bool ResolveCallableResultType(
 	asCASTContext& context,
 	const asCDecl& callee,
 	asCQualType& outType);
+
+static bool ShouldMaterializeCallResult(
+	asCASTContext& context,
+	const asCQualType& type)
+{
+	if( !type.IsValid() || type.IsReference() )
+	{
+		return false;
+	}
+	const asCType* const named = context.GetType(type.type);
+	return named != 0
+		&& named->kind != asAST_TYPE_PRIMITIVE
+		&& named->kind != asAST_TYPE_VOID;
+}
+
+asASTExprId asCSema::ActOnProjectedRuntimeDefaultArgument(
+	const char* authoredText,
+	const char* stableCallableKey,
+	asUINT runtimeParameterIndex,
+	asASTDeclId callable)
+{
+	if( engine == 0 || authoredText == 0 || authoredText[0] == 0
+		|| stableCallableKey == 0 || stableCallableKey[0] == 0
+		|| context.GetDecl(callable) == 0 )
+	{
+		AddDiagnostic("runtime-default-argument-input-invalid");
+		return asASTExprId();
+	}
+
+	// Expression actions update the active parsed source. Runtime projections
+	// can occur recursively while the outer authored Parser is still building a
+	// call, so save and restore the complete source/action context. The generated
+	// default expression remains in the AST and SourceManager, but it cannot
+	// steal the outer Parser's section identity.
+	const asASTFileID savedParsedFile = parsedFile;
+	const asCString savedParsedSection = parsedSection;
+	const asCString savedParsedSourceBytes = parsedSourceBytes;
+	const int savedParsedLineOffset = parsedLineOffset;
+	const asEASTSourceOrigin savedParsedSourceOrigin = parsedSourceOrigin;
+	const asASTDeclId savedLastActedDecl = lastActedDecl;
+	const asCArray<asASTDeclId> savedDeclContextStack = declContextStack;
+
+	asCString sectionName;
+	sectionName.Format(
+		"<canonical-runtime-default:%s#%u>",
+		stableCallableKey,
+		runtimeParameterIndex);
+	asCScriptCode source;
+	const int sourceResult = source.SetCode(
+		sectionName.AddressOf(), authoredText, true);
+	asASTExprId expression;
+	if( sourceResult >= 0 )
+	{
+		parsedSourceOrigin = asAST_SOURCE_GENERATED;
+		PushDeclContext(callable);
+		asCParser parser(engine);
+		parser.SetSema(this);
+		if( parser.ParseExpression(&source) >= 0 )
+		{
+			expression = parser.GetParsedExpressionIdentity();
+		}
+	}
+
+	declContextStack = savedDeclContextStack;
+	lastActedDecl = savedLastActedDecl;
+	parsedFile = savedParsedFile;
+	parsedSection = savedParsedSection;
+	parsedSourceBytes = savedParsedSourceBytes;
+	parsedLineOffset = savedParsedLineOffset;
+	parsedSourceOrigin = savedParsedSourceOrigin;
+
+	if( sourceResult < 0 )
+	{
+		AddDiagnostic("runtime-default-argument-source-unavailable");
+		return asASTExprId();
+	}
+	if( !expression.IsValid() || context.GetExpr(expression) == 0 )
+	{
+		asCString detail;
+		detail.Format(
+			"runtime-default-argument-expression-invalid:callable=%s parameter=%u",
+			stableCallableKey,
+			runtimeParameterIndex);
+		AddDiagnostic(detail.AddressOf());
+		return asASTExprId();
+	}
+	return expression;
+}
 
 static void AddStringDecodeDiagnostic(
 	asCSema& sema,
@@ -353,6 +442,73 @@ static asASTDeclId InternNamespacePath(asCSema& sema, asCASTContext& context, co
 	return parent;
 }
 
+static asCQualType CanonicalScriptParameterType(
+	asCRuntimeTypeBridge& bridge,
+	asCASTContext& context,
+	const asCScriptFunction* function,
+	asUINT parameterIndex)
+{
+	if( function == 0 || parameterIndex >= function->parameterTypes.GetLength() )
+	{
+		return asCQualType();
+	}
+	return bridge.FromScriptFunctionParameterABI(
+		context, *function, parameterIndex, parameterIndex);
+}
+
+static bool ProjectRuntimeDefaultArgument(
+	asCSema& sema,
+	asCASTContext& context,
+	asCScriptFunction* function,
+	asUINT runtimeParameterIndex,
+	asASTDeclId parameter)
+{
+	const asCDecl* const parameterDecl = context.GetDecl(parameter);
+	if( function == 0 || parameterDecl == 0
+		|| parameterDecl->kind != asAST_DECL_PARAM )
+	{
+		sema.AddDiagnostic("runtime-default-argument-owner-invalid");
+		return false;
+	}
+
+	const char* authoredText = 0;
+	if( runtimeParameterIndex < function->defaultArgs.GetLength()
+		&& function->defaultArgs[runtimeParameterIndex] != 0
+		&& function->defaultArgs[runtimeParameterIndex]->GetLength() != 0 )
+	{
+		authoredText = function->defaultArgs[runtimeParameterIndex]->AddressOf();
+	}
+	else if( function->hiddenArgumentIndex >= 0
+		&& runtimeParameterIndex == (asUINT)function->hiddenArgumentIndex
+		&& function->hiddenArgumentDefault.GetLength() != 0 )
+	{
+		authoredText = function->hiddenArgumentDefault.AddressOf();
+	}
+	if( authoredText == 0 || authoredText[0] == 0 )
+	{
+		return true;
+	}
+
+	asCString stableCallableKey = function->canonicalASTStableDeclKey;
+	if( stableCallableKey.GetLength() == 0 )
+	{
+		stableCallableKey = function->GetDeclaration(true, true, true);
+	}
+	const asASTExprId expression =
+		sema.ActOnProjectedRuntimeDefaultArgument(
+			authoredText,
+			stableCallableKey.AddressOf(),
+			runtimeParameterIndex,
+			parameterDecl->parent);
+	if( !expression.IsValid() || context.GetExpr(expression) == 0 )
+	{
+		return false;
+	}
+	context.SetDefaultArg(parameter, authoredText);
+	context.AddDeclInit(parameter, expression);
+	return true;
+}
+
 static bool HasMatchingExternalScriptFunction(
 	asCASTContext& context,
 	asASTDeclId parent,
@@ -373,26 +529,29 @@ static bool HasMatchingExternalScriptFunction(
 		{
 			continue;
 		}
-		if( bridge.FromDataType(context, function->returnType).type.value != candidate->type.type.value )
+		const asCQualType runtimeReturn =
+			bridge.FromDataType(context, function->returnType);
+		if( runtimeReturn.type.value != candidate->type.type.value
+			|| runtimeReturn.quals != candidate->type.quals )
 		{
 			continue;
 		}
 		bool sameParameters = true;
-		asUINT parameterIndex = 0;
-		for( asUINT c = 0; c < candidate->children.GetLength(); ++c )
+		for( asUINT parameterIndex = 0;
+			parameterIndex < function->parameterTypes.GetLength(); ++parameterIndex )
 		{
-			const asCDecl* parameter = context.GetDecl(candidate->children[c]);
-			if( parameter == 0 || parameter->kind != asAST_DECL_PARAM )
-			{
-				continue;
-			}
-			if( parameterIndex >= function->parameterTypes.GetLength()
-				|| bridge.FromDataType(context, function->parameterTypes[parameterIndex]).type.value != parameter->type.type.value )
+			const asCDecl* parameter =
+				context.GetFormalDecl(candidate->id, parameterIndex);
+			const asCQualType runtimeParameter =
+				CanonicalScriptParameterType(
+					bridge, context, function, parameterIndex);
+			if( parameter == 0
+				|| runtimeParameter.type.value != parameter->type.type.value
+				|| runtimeParameter.quals != parameter->type.quals )
 			{
 				sameParameters = false;
 				break;
 			}
-			++parameterIndex;
 		}
 		if( sameParameters )
 		{
@@ -465,8 +624,11 @@ void asCSema::InternCompileFunctionModuleScope(asCModule* module)
 				p < function->parameterNames.GetLength() && function->parameterNames[p].GetLength()
 					? function->parameterNames[p].AddressOf()
 					: "";
-			ActOnParamDecl(declaration, parameterName,
-				bridge.FromDataType(ast, function->parameterTypes[p]), asCSourceRange());
+			const asASTDeclId parameter = ActOnParamDecl(declaration, parameterName,
+				CanonicalScriptParameterType(bridge, ast, function, p),
+				asCSourceRange());
+			ProjectRuntimeDefaultArgument(
+				*this, ast, function, p, parameter);
 		}
 		FinishDecl(declaration);
 	}
@@ -540,8 +702,12 @@ static void InternAutomaticImportScriptFunctions(
 			const char* parameterName = p < function->parameterNames.GetLength() && function->parameterNames[p].GetLength()
 				? function->parameterNames[p].AddressOf()
 				: "";
-			sema.ActOnParamDecl(declaration, parameterName,
-				bridge.FromDataType(context, function->parameterTypes[p]), asCSourceRange());
+			const asASTDeclId parameter = sema.ActOnParamDecl(declaration, parameterName,
+				CanonicalScriptParameterType(
+					bridge, context, function, p),
+				asCSourceRange());
+			ProjectRuntimeDefaultArgument(
+				sema, context, function, p, parameter);
 		}
 		sema.FinishDecl(declaration);
 	});
@@ -690,6 +856,30 @@ static bool IsQualifierScopeDecl(const asCDecl* decl)
 			|| decl->kind == asAST_DECL_ENUM);
 }
 
+static bool IsCompanionTypeScopeDecl(const asCDecl* decl)
+{
+	return decl != 0
+		&& (decl->kind == asAST_DECL_CLASS
+			|| decl->kind == asAST_DECL_INTERFACE
+			|| decl->kind == asAST_DECL_ENUM);
+}
+
+static bool AreTypeAndCompanionNamespace(
+	const asCDecl* left,
+	const asCDecl* right)
+{
+	if( left == 0 || right == 0
+		|| left->parent != right->parent
+		|| !left->stableKey.Equals(right->stableKey) )
+	{
+		return false;
+	}
+	return (left->kind == asAST_DECL_NAMESPACE
+			&& IsCompanionTypeScopeDecl(right))
+		|| (right->kind == asAST_DECL_NAMESPACE
+			&& IsCompanionTypeScopeDecl(left));
+}
+
 static asASTDeclId FindQualifierScopeCandidate(
 	asCASTContext& context,
 	const asCArray<asASTDeclId>& hits)
@@ -704,9 +894,22 @@ static asASTDeclId FindQualifierScopeCandidate(
 		}
 		if( candidate.IsValid() && candidate != hits[i] )
 		{
-			// A qualifier is a unique scope identity, not a first-name-wins
-			// recovery. Duplicate candidates fail closed and are diagnosed by the
-			// ordinary unresolved-scope publication gate.
+			const asCDecl* const selected = context.GetDecl(candidate);
+			if( AreTypeAndCompanionNamespace(selected, decl) )
+			{
+				// UE's AngelScript surface deliberately uses one source qualifier
+				// for a type and a same-key namespace of static-looking helpers.
+				// Keep the type as the representative identity; exact member lookup
+				// consults its companion namespace after the type scope itself.
+				if( selected != 0
+					&& selected->kind == asAST_DECL_NAMESPACE )
+				{
+					candidate = hits[i];
+				}
+				continue;
+			}
+			// Any other duplicate remains a real ambiguous scope. Never select
+			// an arena-order winner for two namespaces or two type declarations.
 			return asASTDeclId();
 		}
 		candidate = hits[i];
@@ -752,6 +955,80 @@ static asASTDeclId FindDirectChildNamed(asCSema* sema, asASTDeclId parent, const
 	return FindQualifierScopeCandidate(sema->GetContext(), hits);
 }
 
+static asASTDeclId FindCompanionNamespace(
+	asCASTContext& context,
+	asASTDeclId typeScope)
+{
+	const asCDecl* const type = context.GetDecl(typeScope);
+	if( !IsCompanionTypeScopeDecl(type) )
+	{
+		return asASTDeclId();
+	}
+	const asCDecl* const parent = context.GetDecl(type->parent);
+	if( parent == 0 )
+	{
+		return asASTDeclId();
+	}
+	asASTDeclId companion;
+	for( asUINT childIndex = 0;
+		childIndex < parent->children.GetLength(); ++childIndex )
+	{
+		const asCDecl* const child =
+			context.GetDecl(parent->children[childIndex]);
+		if( child == 0 || child->kind != asAST_DECL_NAMESPACE
+			|| !child->stableKey.Equals(type->stableKey) )
+		{
+			continue;
+		}
+		if( companion.IsValid() && companion != child->id )
+		{
+			return asASTDeclId();
+		}
+		companion = child->id;
+	}
+	return companion;
+}
+
+static const asCDecl* FindEnclosingClass(
+	asCASTContext& context, asASTDeclId owner);
+
+static asASTDeclId FindDirectBaseClass(
+	asCASTContext& context, asASTDeclId owner)
+{
+	const asCDecl* const enclosingClass =
+		FindEnclosingClass(context, owner);
+	asASTDeclId directBase;
+	for( asUINT baseIndex = 0;
+		enclosingClass != 0
+			&& baseIndex < enclosingClass->bases.GetLength(); ++baseIndex )
+	{
+		const asCDecl* const base =
+			context.GetDecl(enclosingClass->bases[baseIndex]);
+		if( base == 0 || base->kind != asAST_DECL_CLASS )
+		{
+			continue;
+		}
+		if( base->origin.Equals(CANONICAL_NATIVE_TYPE_VIEW_ORIGIN) )
+		{
+			// A UE PreClass may publish both its authored script superclass and
+			// an embedding-owned native shadow as base relations.  The shadow is
+			// a layout/type projection, not the source-language target of Super::.
+			// Ignore it here just as script-class layout does, while preserving the
+			// fail-closed rule below for multiple authored concrete bases.
+			continue;
+		}
+		if( directBase.IsValid() && directBase != base->id )
+		{
+			// AngelScript has one concrete base class. Preserve fail-closed
+			// behavior if a malformed graph presents more than one rather than
+			// selecting an arena-order winner for Super::.
+			return asASTDeclId();
+		}
+		directBase = base->id;
+	}
+	return directBase;
+}
+
 static asASTDeclId ResolveScopeSegments(
 	asCSema* sema,
 	asASTDeclId owner,
@@ -772,7 +1049,15 @@ static asASTDeclId ResolveScopeSegments(
 	for( asUINT segmentIndex = 0; segmentIndex < segments.GetLength(); ++segmentIndex )
 	{
 		const asCString& name = segments[segmentIndex];
-		if( !current.IsValid() && segmentIndex == 0 && !absoluteScope )
+		if( !absoluteScope && segmentIndex == 0 && name.Equals("Super") )
+		{
+			// Super is a source-language base qualifier, not a lexical class or
+			// namespace declaration. Project it to the exact direct ClassDecl so
+			// the resulting CallExpr owns stable declaration identity and DIRECT
+			// dispatch without retaining Parser or Runtime object pointers.
+			current = FindDirectBaseClass(sema->GetContext(), owner);
+		}
+		else if( !current.IsValid() && segmentIndex == 0 && !absoluteScope )
 		{
 			current = FindNamedScopeDecl(sema, owner, name.AddressOf());
 		}
@@ -850,14 +1135,13 @@ static const asCExpr* UnwrapByValueCopyPlan(
 static asASTExprId SealNonPodByValueCopyPlan(
 	asCSema& sema,
 	asCASTContext& context,
-	const asCDecl* formal,
+	const asCQualType& formalType,
 	asASTExprId argument,
 	const asCSourceRange& range)
 {
 	const asCExpr* const source = context.GetExpr(argument);
-	if( formal == 0 || formal->kind != asAST_DECL_PARAM
-		|| source == 0 || !formal->type.IsValid()
-		|| formal->type.IsReference() || formal->type.IsHandle()
+	if( source == 0 || !formalType.IsValid()
+		|| formalType.IsReference() || formalType.IsHandle()
 		|| source->valueCategory != asAST_VALUE_LVALUE
 		|| sema.GetEngine() == 0 )
 	{
@@ -869,7 +1153,7 @@ static asASTExprId SealNonPodByValueCopyPlan(
 	// backend then only chooses the VM ownership-transfer mechanics. POD/trivial
 	// storage remains on the explicit storage-copy route.
 	asCRuntimeTypeBridge bridge(sema.GetEngine());
-	const asCDataType runtimeType = bridge.Resolve(context, formal->type);
+	const asCDataType runtimeType = bridge.Resolve(context, formalType);
 	asCTypeInfo* const typeInfo = runtimeType.GetTypeInfo();
 	if( !runtimeType.IsNonPrimitiveValueType() || typeInfo == 0
 		|| (typeInfo->GetFlags() & asOBJ_VALUE) == 0
@@ -881,11 +1165,11 @@ static asASTExprId SealNonPodByValueCopyPlan(
 	asCArray<asASTExprId> copyArguments;
 	copyArguments.PushLast(argument);
 	const asASTExprId plan = sema.ActOnConstruct(
-		formal->type, copyArguments, range);
+		formalType, copyArguments, range);
 	const asCExpr* const construct = UnwrapByValueCopyPlan(
 		context, context.GetExpr(plan));
 	if( construct == 0 || construct->kind != asAST_EXPR_CONSTRUCT
-		|| construct->type != formal->type
+		|| construct->type != formalType
 		|| !construct->resolvedDecl.IsValid()
 		|| construct->children.GetLength() != 1
 		|| construct->children[0] != argument )
@@ -924,6 +1208,46 @@ static asASTExprId TryRewritePropertyGet(asCSema& sema, asCASTContext& context, 
 	const asASTExprId call = sema.ActOnCall(getter, args, type, range);
 	context.SetExprReceiver(call, base);
 	return call;
+}
+
+static bool IsExactValueInPlaceProtocolMethod(const char* name)
+{
+	if( name == 0 || name[0] == 0 )
+		return false;
+	return std::strcmp(name, "Iterator") == 0
+		|| std::strcmp(name, "opForBegin") == 0
+		|| std::strcmp(name, "opForEnd") == 0
+		|| std::strcmp(name, "opForNext") == 0
+		|| std::strcmp(name, "opForValue") == 0
+		|| std::strcmp(name, "opForKey") == 0;
+}
+
+static asASTExprId RewriteGeneratedPropertyGetForRvalueCallReceiver(
+	asCSema& sema,
+	asCASTContext& context,
+	asASTExprId receiver,
+	const char* calleeName)
+{
+	if( IsExactValueInPlaceProtocolMethod(calleeName) )
+		return receiver;
+	const asCExpr* expr = context.GetExpr(receiver);
+	if( expr == 0 || expr->kind != asAST_EXPR_MEMBER_REF
+		|| expr->children.GetLength() == 0
+		|| !expr->resolvedDecl.IsValid() )
+	{
+		return receiver;
+	}
+	const asCDecl* field = context.GetDecl(expr->resolvedDecl);
+	if( field == 0 || field->kind != asAST_DECL_VAR
+		|| field->name.GetLength() == 0
+		|| !sema.RequiresExactValueObjectPlan(field->type) )
+	{
+		return receiver;
+	}
+	const asASTExprId rewritten = TryRewritePropertyGet(
+		sema, context, expr->children[0], field->name.AddressOf(),
+		field->type, expr->range);
+	return rewritten.IsValid() ? rewritten : receiver;
 }
 
 static asASTExprId TryRewritePropertySet(asCSema& sema, asCASTContext& context, asASTExprId lhs, asASTExprId rhs, const asCQualType& fallbackType, const asCSourceRange& range)
@@ -979,13 +1303,9 @@ static asASTExprId TryRewritePropertySet(asCSema& sema, asCASTContext& context, 
 	}
 	if( const asCDecl* setterDecl = context.GetDecl(setter) )
 	{
-		for( asUINT p = 0; p < setterDecl->children.GetLength(); ++p )
+		const asCDecl* const param = context.GetFormalDecl(setterDecl->id, 0);
+		if( param != 0 && context.GetFormalDeclCount(setterDecl->id) == 1 )
 		{
-			const asCDecl* param = context.GetDecl(setterDecl->children[p]);
-			if( param == 0 || param->kind != asAST_DECL_PARAM )
-			{
-				continue;
-			}
 			if( const asCExpr* rhsExpr = context.GetExpr(rhs) )
 			{
 				if( rhsExpr->type.type.value != param->type.type.value )
@@ -994,8 +1314,7 @@ static asASTExprId TryRewritePropertySet(asCSema& sema, asCASTContext& context, 
 				}
 			}
 			rhs = SealNonPodByValueCopyPlan(
-				sema, context, param, rhs, range);
-			break;
+				sema, context, param->type, rhs, range);
 		}
 	}
 	asCArray<asASTExprId> args;
@@ -1018,8 +1337,8 @@ static asASTDeclId FindNamedTypeDecl(asCASTContext& context, const asCQualType& 
 	{
 		const asCDecl* decl = context.GetDecl(asASTDeclId(i));
 		if( decl && (decl->kind == asAST_DECL_CLASS || decl->kind == asAST_DECL_INTERFACE)
-			&& (decl->name.Equals(named->stableKey)
-				|| (decl->stableKey.GetLength() && decl->stableKey.Equals(named->stableKey))) )
+			&& decl->stableKey.GetLength()
+			&& decl->stableKey.Equals(named->stableKey) )
 		{
 			return decl->id;
 		}
@@ -1029,52 +1348,44 @@ static asASTDeclId FindNamedTypeDecl(asCASTContext& context, const asCQualType& 
 
 static asUINT CountParams(asCASTContext& context, const asCDecl* decl)
 {
-	asUINT count = 0;
-	if( decl == 0 )
-	{
-		return 0;
-	}
-	for( asUINT i = 0; i < decl->children.GetLength(); ++i )
-	{
-		const asCDecl* child = context.GetDecl(decl->children[i]);
-		if( child && child->kind == asAST_DECL_PARAM )
-		{
-			++count;
-		}
-	}
-	return count;
+	return decl != 0 ? context.GetFormalDeclCount(decl->id) : 0;
 }
 
-static asASTDeclId FindBestCallee(asCASTContext& context, asASTDeclId owner, const char* name, const asCArray<asASTExprId>& args, asCSema* sema = 0, const asCQualType* receiverType = 0, bool exactScope = false);
+static asASTDeclId FindBestCallee(asCASTContext& context, asASTDeclId owner,
+	const char* name, const asCArray<asASTExprId>& args, asCSema* sema = 0,
+	const asCQualType* receiverType = 0, bool exactScope = false,
+	const asCArray<asCString>* argumentNames = 0,
+	asASTExprId implicitReceiver = asASTExprId());
+static asASTDeclId FindBestConstructor(asCASTContext& context,
+	asASTDeclId classDecl, const asCArray<asASTExprId>& args,
+	asCSema* sema, const asCArray<asCString>* argumentNames = 0);
 static int RankArgument(asCASTContext& context, const asCQualType& paramType, const asCExpr* arg, asCSema* sema);
 static bool IsFuncdefType(asCASTContext& context, const asCQualType& type);
 void InternNativeMethods(asCSema& sema, asCScriptEngine* engine, asCASTContext& context, const asCQualType& recvType, const char* name);
+static asCQualType QualTypeFromClassDecl(
+	asCASTContext& context, const asCDecl* classDecl);
 static asASTDeclId FindFuncdefHandle(asCSema& sema, asCASTContext& context, asASTDeclId searchOwner, const char* name, bool exactScope = false);
+static asASTExprId DecayScalarLValueReferenceToRValue(
+	asCSema& sema,
+	asCASTContext& context,
+	asASTExprId expr,
+	const asCSourceRange& range);
 
 static asCQualType CanonicalRuntimeParameterType(
 	asCRuntimeTypeBridge& bridge,
 	asCASTContext& context,
-	const asCScriptFunction* function,
-	asUINT parameterIndex)
+	const asCDataType& runtimeType,
+	asETypeModifiers passing)
 {
-	if( function == 0 || parameterIndex >= function->parameterTypes.GetLength() )
-	{
-		return asCQualType();
-	}
-
 	asCQualType type = bridge.FromDataType(
-		context, function->parameterTypes[parameterIndex]);
-	if( parameterIndex >= function->inOutFlags.GetLength() )
-	{
-		return type;
-	}
+		context, runtimeType);
 
 	// asCDataType owns const/handle/reference representation, while the
 	// parameter direction is stored separately by the Runtime declaration.
 	// Project both facts into the sealed QualType so downstream consumers never
 	// need to recover source semantics from an Engine-local function shell.
 	type.quals &= ~asAST_QUAL_PARAM_DIR_MASK;
-	switch( function->inOutFlags[parameterIndex] )
+	switch( passing )
 	{
 	case asTM_INREF:
 		type.quals |= asAST_QUAL_REFERENCE | asAST_QUAL_IN;
@@ -1089,6 +1400,53 @@ static asCQualType CanonicalRuntimeParameterType(
 		break;
 	}
 	return type;
+}
+
+static asCQualType CanonicalRuntimeParameterType(
+	asCRuntimeTypeBridge& bridge,
+	asCASTContext& context,
+	const asCScriptFunction* function,
+	asUINT parameterIndex)
+{
+	if( function == 0 || parameterIndex >= function->parameterTypes.GetLength() )
+	{
+		return asCQualType();
+	}
+	const asETypeModifiers passing =
+		parameterIndex < function->inOutFlags.GetLength()
+			? function->inOutFlags[parameterIndex] : asTM_NONE;
+	return CanonicalRuntimeParameterType(
+		bridge, context, function->parameterTypes[parameterIndex], passing);
+}
+
+static bool PublishNativeFunctionDeclarationIdentity(
+	asCSema& sema,
+	asCASTContext& context,
+	asASTDeclId declaration,
+	asCScriptFunction* function)
+{
+	const asCDecl* const decl = context.GetDecl(declaration);
+	if( decl == 0 || decl->stableKey.GetLength() == 0 || function == 0
+		|| function->engine != sema.GetEngine()
+		|| function->funcType != asFUNC_SYSTEM )
+	{
+		sema.AddDiagnostic("native-function-canonical-identity-invalid");
+		return false;
+	}
+	if( function->canonicalASTStableDeclKey.GetLength() != 0
+		&& !function->canonicalASTStableDeclKey.Equals(decl->stableKey) )
+	{
+		asCString detail;
+		detail.Format(
+			"native-function-canonical-identity-conflict:function=%s existing=%s projected=%s",
+			function->GetDeclaration(false, true, false),
+			function->canonicalASTStableDeclKey.AddressOf(),
+			decl->stableKey.AddressOf());
+		sema.AddDiagnostic(detail.AddressOf());
+		return false;
+	}
+	function->canonicalASTStableDeclKey = decl->stableKey;
+	return true;
 }
 
 static void InternNativeGlobals(asCSema& sema, asCScriptEngine* engine, asCASTContext& context, const char* name)
@@ -1117,7 +1475,7 @@ static void InternNativeGlobals(asCSema& sema, asCScriptEngine* engine, asCASTCo
 		{
 			continue;
 		}
-		bool exists = false;
+		asASTDeclId existingDeclaration;
 		for( asUINT c = 0; c < ownerDecl->children.GetLength(); ++c )
 		{
 			const asCDecl* child = context.GetDecl(ownerDecl->children[c]);
@@ -1127,40 +1485,42 @@ static void InternNativeGlobals(asCSema& sema, asCScriptEngine* engine, asCASTCo
 				continue;
 			}
 			const asCQualType internedRet = bridge.FromDataType(context, func->returnType);
-			if( internedRet.type.value != child->type.type.value )
+			if( internedRet.type.value != child->type.type.value
+				|| internedRet.quals != child->type.quals )
 			{
 				continue;
 			}
 			bool sameTypes = true;
-			asUINT paramIndex = 0;
-			for( asUINT d = 0; d < child->children.GetLength() && sameTypes; ++d )
+			for( asUINT paramIndex = 0;
+				paramIndex < func->parameterTypes.GetLength() && sameTypes;
+				++paramIndex )
 			{
-				const asCDecl* param = context.GetDecl(child->children[d]);
-				if( param == 0 || param->kind != asAST_DECL_PARAM )
-				{
-					continue;
-				}
-				if( paramIndex >= func->parameterTypes.GetLength() )
+				const asCDecl* param =
+					context.GetFormalDecl(child->id, paramIndex);
+				if( param == 0 )
 				{
 					sameTypes = false;
 					break;
 				}
-				const asCQualType interned = bridge.FromDataType(context, func->parameterTypes[paramIndex]);
-				if( interned.type.value != param->type.type.value )
+				const asCQualType interned = CanonicalRuntimeParameterType(
+					bridge, context, func, paramIndex);
+				if( interned.type.value != param->type.type.value
+					|| interned.quals != param->type.quals )
 				{
 					sameTypes = false;
 					break;
 				}
-				++paramIndex;
 			}
 			if( sameTypes )
 			{
-				exists = true;
+				existingDeclaration = child->id;
 				break;
 			}
 		}
-		if( exists )
+		if( existingDeclaration.IsValid() )
 		{
+			PublishNativeFunctionDeclarationIdentity(
+				sema, context, existingDeclaration, func);
 			continue;
 		}
 		const asCQualType ret = bridge.FromDataType(context, func->returnType);
@@ -1183,13 +1543,12 @@ static void InternNativeGlobals(asCSema& sema, asCScriptEngine* engine, asCASTCo
 			if( func->hiddenArgumentIndex >= 0 && p == (asUINT)func->hiddenArgumentIndex )
 			{
 				context.SetOrigin(param, "hidden");
-				if( func->hiddenArgumentDefault.GetLength() )
-				{
-					context.SetDefaultArg(param, func->hiddenArgumentDefault.AddressOf());
-				}
 			}
+			ProjectRuntimeDefaultArgument(
+				sema, context, func, p, param);
 		}
 		sema.FinishDecl(fn);
+		PublishNativeFunctionDeclarationIdentity(sema, context, fn, func);
 	}
 }
 
@@ -1207,6 +1566,83 @@ static asASTDeclId FindTypeMemberVar(asCASTContext& context, asASTDeclId classDe
 		{
 			return child->id;
 		}
+	}
+	return asASTDeclId();
+}
+
+static asASTDeclId FindTypeMemberVarFromBases(
+	asCASTContext& context,
+	asASTDeclId classDecl,
+	const char* name)
+{
+	const asASTDeclId direct = FindTypeMemberVar(context, classDecl, name);
+	if( direct.IsValid() )
+	{
+		return direct;
+	}
+	const asCDecl* const record = context.GetDecl(classDecl);
+	if( record == 0 )
+	{
+		return asASTDeclId();
+	}
+
+	asCArray<asASTDeclId> frontier = record->bases;
+	asCArray<asASTDeclId> visited;
+	while( frontier.GetLength() != 0 )
+	{
+		asCArray<asASTDeclId> next;
+		asASTDeclId selected;
+		for( asUINT baseIndex = 0; baseIndex < frontier.GetLength(); ++baseIndex )
+		{
+			const asASTDeclId base = frontier[baseIndex];
+			bool alreadyVisited = false;
+			for( asUINT visitedIndex = 0;
+				visitedIndex < visited.GetLength(); ++visitedIndex )
+			{
+				if( visited[visitedIndex] == base )
+				{
+					alreadyVisited = true;
+					break;
+				}
+			}
+			if( alreadyVisited )
+			{
+				continue;
+			}
+			visited.PushLast(base);
+
+			const asASTDeclId property =
+				FindTypeMemberVar(context, base, name);
+			if( property.IsValid() )
+			{
+				// Two distinct properties at the same inheritance depth are not a
+				// deterministic member identity. Leave the reference unresolved so
+				// the ordinary diagnostic path fails closed.
+				if( selected.IsValid() && selected != property )
+				{
+					return asASTDeclId();
+				}
+				selected = property;
+			}
+
+			const asCDecl* const baseDecl = context.GetDecl(base);
+			if( baseDecl == 0
+				|| (baseDecl->kind != asAST_DECL_CLASS
+					&& baseDecl->kind != asAST_DECL_INTERFACE) )
+			{
+				continue;
+			}
+			for( asUINT inheritedIndex = 0;
+				inheritedIndex < baseDecl->bases.GetLength(); ++inheritedIndex )
+			{
+				next.PushLast(baseDecl->bases[inheritedIndex]);
+			}
+		}
+		if( selected.IsValid() )
+		{
+			return selected;
+		}
+		frontier = next;
 	}
 	return asASTDeclId();
 }
@@ -1247,7 +1683,89 @@ static bool IsAuthoredScriptClass(
 		&& !decl->origin.Equals(CANONICAL_NATIVE_TYPE_VIEW_ORIGIN);
 }
 
-static void InternNativeProperties(asCSema& sema, asCScriptEngine* engine, asCASTContext& context, const asCQualType& recvType)
+static bool ContainsNativeMethodBase(
+	const asCArray<asASTDeclId>& declarations,
+	asASTDeclId declaration)
+{
+	for( asUINT index = 0; index < declarations.GetLength(); ++index )
+	{
+		if( declarations[index] == declaration )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+static void InternNativeMethodsFromCanonicalBases(
+	asCSema& sema,
+	asCScriptEngine* engine,
+	asCASTContext& context,
+	asASTDeclId record,
+	const char* name)
+{
+	const asCDecl* const recordDecl = context.GetDecl(record);
+	if( recordDecl == 0 )
+	{
+		return;
+	}
+
+	// Runtime ancestry may intentionally remain empty for UE host classes. Walk
+	// the pointer-free Canonical base graph instead and project each method onto
+	// the native declaration that owns it. LookupCandidatesFrom then applies the
+	// ordinary nearest-base hiding/overload rules without copying a method onto
+	// the authored derived class or changing LEGACY Runtime semantics.
+	asCArray<asASTDeclId> frontier = recordDecl->bases;
+	asCArray<asASTDeclId> visited;
+	while( frontier.GetLength() != 0 )
+	{
+		asCArray<asASTDeclId> next;
+		for( asUINT baseIndex = 0;
+			baseIndex < frontier.GetLength(); ++baseIndex )
+		{
+			const asASTDeclId base = frontier[baseIndex];
+			if( !base.IsValid()
+				|| ContainsNativeMethodBase(visited, base) )
+			{
+				continue;
+			}
+			visited.PushLast(base);
+
+			const asCDecl* const baseDecl = context.GetDecl(base);
+			if( baseDecl == 0
+				|| (baseDecl->kind != asAST_DECL_CLASS
+					&& baseDecl->kind != asAST_DECL_INTERFACE) )
+			{
+				continue;
+			}
+
+			// Interning can grow the Decl table. Copy every input needed for the
+			// next breadth before calling it so no retained Decl pointer can be
+			// invalidated by projection.
+			const asCQualType baseType =
+				QualTypeFromClassDecl(context, baseDecl);
+			const asCArray<asASTDeclId> inherited = baseDecl->bases;
+			if( baseType.IsValid() )
+			{
+				InternNativeMethods(
+					sema, engine, context, baseType, name);
+			}
+			for( asUINT inheritedIndex = 0;
+				inheritedIndex < inherited.GetLength(); ++inheritedIndex )
+			{
+				next.PushLast(inherited[inheritedIndex]);
+			}
+		}
+		frontier = next;
+	}
+}
+
+static void InternNativeProperties(
+	asCSema& sema,
+	asCScriptEngine* engine,
+	asCASTContext& context,
+	const asCQualType& recvType,
+	const char* requestedName)
 {
 	if( engine == 0 )
 	{
@@ -1278,22 +1796,218 @@ static void InternNativeProperties(asCSema& sema, asCScriptEngine* engine, asCAS
 		sema.FinishDecl(classDecl);
 	}
 	SyncImportedNativeClassKind(context, classDecl, dataType);
-	for( asUINT p = 0; p < objectType->properties.GetLength(); ++p )
+
+	auto internPropertiesOf = [&](asCObjectType* declaringType, asASTDeclId ownerDecl)
 	{
-		asCObjectProperty* prop = objectType->properties[p];
-		if( prop == 0 || prop->name.GetLength() == 0 )
+		if( declaringType == 0 || !ownerDecl.IsValid() )
 		{
-			continue;
+			return;
 		}
-		if( FindTypeMemberVar(context, classDecl, prop->name.AddressOf()).IsValid() )
+		for( asUINT p = 0; p < declaringType->properties.GetLength(); ++p )
 		{
-			continue;
+			asCObjectProperty* prop = declaringType->properties[p];
+			if( prop == 0 || prop->name.GetLength() == 0
+				|| (requestedName != 0 && requestedName[0] != 0
+					&& !prop->name.Equals(requestedName)) )
+			{
+				continue;
+			}
+			if( FindTypeMemberVar(context, ownerDecl, prop->name.AddressOf()).IsValid() )
+			{
+				continue;
+			}
+			asCQualType pt = bridge.FromDataType(context, prop->type);
+			const asASTDeclId var = sema.ActOnVarDecl(
+				ownerDecl, prop->name.AddressOf(), pt, asCSourceRange());
+			context.SetDeclByteOffset(var, prop->byteOffset);
+			sema.FinishDecl(var);
 		}
-		asCQualType pt = bridge.FromDataType(context, prop->type);
-		const asASTDeclId var = sema.ActOnVarDecl(classDecl, prop->name.AddressOf(), pt, asCSourceRange());
-		context.SetDeclByteOffset(var, prop->byteOffset);
-		sema.FinishDecl(var);
+	};
+
+	internPropertiesOf(objectType, classDecl);
+	if( objectType->templateBaseType != 0
+		&& objectType->templateBaseType != objectType )
+	{
+		// Specialized template instances keep the registered property set on
+		// the generic object type. Project those names onto the current CLASS
+		// view so member-ref lookup does not depend on Runtime copying them.
+		internPropertiesOf(objectType->templateBaseType, classDecl);
+		// Generic template methods/constructors still carry the unspecialized
+		// object type. Intern that Format key so final bytecode relocation can
+		// authenticate FREE/CALLSYS against the same Canonical type.
+		const asCDataType genericDt =
+			asCDataType::CreateType(objectType->templateBaseType, false);
+		bridge.FromDataType(context, genericDt);
 	}
+
+	// Native UObject properties are registered on the declaring ancestor
+	// (`derivedFrom` / `shadowType`), not copied onto every derived AS type.
+	// Class-default lookup only sees Canonical bases, so project those
+	// ancestors into the same native-view graph and intern the requested field
+	// on its exact declaring owner.
+	asCObjectType* ancestor = objectType->derivedFrom;
+	if( ancestor == 0 )
+	{
+		ancestor = static_cast<asCObjectType*>(objectType->shadowType);
+	}
+	asCArray<asCObjectType*> visitedAncestors;
+	while( ancestor != 0 )
+	{
+		bool alreadyVisited = false;
+		for( asUINT visitedIndex = 0;
+			visitedIndex < visitedAncestors.GetLength(); ++visitedIndex )
+		{
+			if( visitedAncestors[visitedIndex] == ancestor )
+			{
+				alreadyVisited = true;
+				break;
+			}
+		}
+		if( alreadyVisited )
+		{
+			break;
+		}
+		visitedAncestors.PushLast(ancestor);
+
+		const asCDataType ancestorDt = asCDataType::CreateType(ancestor, false);
+		const asCQualType ancestorType = bridge.FromDataType(context, ancestorDt);
+		asASTDeclId ancestorDecl = FindNamedTypeDecl(context, ancestorType);
+		if( !ancestorDecl.IsValid() )
+		{
+			const char* const ancestorKey = ancestor->name.AddressOf();
+			ancestorDecl = sema.ActOnClassDecl(
+				context.GetTranslationUnit(), ancestorKey, asCSourceRange());
+			sema.FinishDecl(ancestorDecl);
+		}
+		SyncImportedNativeClassKind(context, ancestorDecl, ancestorDt);
+		internPropertiesOf(ancestor, ancestorDecl);
+
+		const asCDecl* const owner = context.GetDecl(classDecl);
+		bool alreadyBase = false;
+		for( asUINT baseIndex = 0;
+			owner != 0 && baseIndex < owner->bases.GetLength(); ++baseIndex )
+		{
+			if( owner->bases[baseIndex] == ancestorDecl )
+			{
+				alreadyBase = true;
+				break;
+			}
+		}
+		if( !alreadyBase )
+		{
+			context.AddBase(classDecl, ancestorDecl);
+		}
+
+		asCObjectType* const next = ancestor->derivedFrom != 0
+			? ancestor->derivedFrom
+			: static_cast<asCObjectType*>(ancestor->shadowType);
+		ancestor = next;
+	}
+}
+
+void asCSema::InternNativePropertyCandidates(
+	asASTDeclId owner,
+	const char* name)
+{
+	if( engine == 0 || name == 0 || name[0] == 0 )
+	{
+		return;
+	}
+
+	asASTDeclId record = owner;
+	while( record.IsValid() )
+	{
+		const asCDecl* const declaration = context.GetDecl(record);
+		if( declaration == 0 )
+		{
+			return;
+		}
+		if( declaration->kind == asAST_DECL_CLASS
+			|| declaration->kind == asAST_DECL_INTERFACE )
+		{
+			break;
+		}
+		record = declaration->parent;
+	}
+	const asCDecl* const recordDecl = context.GetDecl(record);
+	if( recordDecl == 0 )
+	{
+		return;
+	}
+
+	// A native receiver can own the requested property directly. For an authored
+	// script record this call deliberately performs no projection; only its exact
+	// Canonical bases are allowed to contribute host declarations.
+	const asCQualType recordType = QualTypeFromClassDecl(context, recordDecl);
+	if( recordType.IsValid() )
+	{
+		InternNativeProperties(
+			*this, engine, context, recordType, name);
+	}
+
+	// Interning can grow the declaration table. Retain only ids and copied base
+	// arrays across projection calls, never pointers into the mutable table.
+	asCArray<asASTDeclId> frontier = recordDecl->bases;
+	asCArray<asASTDeclId> visited;
+	while( frontier.GetLength() != 0 )
+	{
+		asCArray<asASTDeclId> next;
+		for( asUINT baseIndex = 0;
+			baseIndex < frontier.GetLength(); ++baseIndex )
+		{
+			const asASTDeclId base = frontier[baseIndex];
+			bool alreadyVisited = false;
+			for( asUINT visitedIndex = 0;
+				visitedIndex < visited.GetLength(); ++visitedIndex )
+			{
+				if( visited[visitedIndex] == base )
+				{
+					alreadyVisited = true;
+					break;
+				}
+			}
+			if( alreadyVisited )
+			{
+				continue;
+			}
+			visited.PushLast(base);
+
+			const asCDecl* const baseDecl = context.GetDecl(base);
+			if( baseDecl == 0
+				|| (baseDecl->kind != asAST_DECL_CLASS
+					&& baseDecl->kind != asAST_DECL_INTERFACE) )
+			{
+				continue;
+			}
+			const asCQualType baseType =
+				QualTypeFromClassDecl(context, baseDecl);
+			const asCArray<asASTDeclId> inherited = baseDecl->bases;
+			if( baseType.IsValid() )
+			{
+				InternNativeProperties(
+					*this, engine, context, baseType, name);
+			}
+			for( asUINT inheritedIndex = 0;
+				inheritedIndex < inherited.GetLength(); ++inheritedIndex )
+			{
+				next.PushLast(inherited[inheritedIndex]);
+			}
+		}
+		frontier = next;
+	}
+}
+
+void asCSema::InternNativePropertyCandidates(
+	const asCQualType& recvType,
+	const char* name)
+{
+	if( engine == 0 || name == 0 || name[0] == 0 || !recvType.IsValid() )
+	{
+		return;
+	}
+	InternNativeProperties(*this, engine, context, recvType, name);
+	InternNativePropertyCandidates(
+		FindNamedTypeDecl(context, recvType), name);
 }
 
 void InternNativeMethods(asCSema& sema, asCScriptEngine* engine, asCASTContext& context, const asCQualType& recvType, const char* name)
@@ -1309,12 +2023,26 @@ void InternNativeMethods(asCSema& sema, asCScriptEngine* engine, asCASTContext& 
 	{
 		return;
 	}
-	asASTDeclId classDecl = FindNamedTypeDecl(context, recvType);
-	// Host conversion operators are language facts of the native type. An
-	// authored class with the same spelling must not hide `opImplConv`.
-	if( classDecl.IsValid() && IsAuthoredScriptClass(context, classDecl)
-		&& !asCString(name).Equals("opImplConv") )
+	if( objectType->templateBaseType != 0
+		&& objectType->templateBaseType != objectType )
 	{
+		const asCDataType genericDt =
+			asCDataType::CreateType(objectType->templateBaseType, false);
+		bridge.FromDataType(context, genericDt);
+	}
+	asASTDeclId classDecl = FindNamedTypeDecl(context, recvType);
+	// Runtime methods are language facts of the native declaration that owns
+	// them, never of a current-module script class that happens to resolve to a
+	// Runtime type with the same stable spelling.  This boundary also applies to
+	// `opImplConv`: overload ranking asks for it eagerly on every argument type,
+	// so projecting it onto an authored value class would reclassify that class as
+	// a native type view and append ABI-normalized callables beside its source
+	// declarations.  Native-base conversion operators remain visible by
+	// projecting them onto the exact Canonical base declarations below.
+	if( classDecl.IsValid() && IsAuthoredScriptClass(context, classDecl) )
+	{
+		InternNativeMethodsFromCanonicalBases(
+			sema, engine, context, classDecl, name);
 		return;
 	}
 	if( !classDecl.IsValid() )
@@ -1375,36 +2103,47 @@ void InternNativeMethods(asCSema& sema, asCScriptEngine* engine, asCASTContext& 
 					continue;
 				}
 				const asCQualType internedRet = bridge.FromDataType(context, retDt);
-				if( internedRet.type.value != child->type.type.value )
+				if( internedRet.type.value != child->type.type.value
+					|| internedRet.quals != child->type.quals
+					|| internMethod->IsReadOnly()
+						!= ((child->traits & asAST_TRAIT_CONST_METHOD) != 0) )
 				{
 					// Zero-arg `opImplConv` overloads differ by return type
 					// (`UClass` vs `UObject`). Name+arity alone is not identity.
 					continue;
 				}
 				bool sameTypes = true;
-				asUINT paramIndex = 0;
-				for( asUINT d = 0; d < child->children.GetLength() && sameTypes; ++d )
+				for( asUINT paramIndex = 0;
+					paramIndex < substParams.GetLength() && sameTypes;
+					++paramIndex )
 				{
-					const asCDecl* param = context.GetDecl(child->children[d]);
-					if( param == 0 || param->kind != asAST_DECL_PARAM )
-					{
-						continue;
-					}
-					if( paramIndex >= substParams.GetLength() )
+					const asCDecl* param =
+						context.GetFormalDecl(child->id, paramIndex);
+					if( param == 0 )
 					{
 						sameTypes = false;
 						break;
 					}
-					const asCQualType interned = bridge.FromDataType(context, substParams[paramIndex]);
-					if( interned.type.value != param->type.type.value )
+					const asETypeModifiers passing =
+						paramIndex < internMethod->inOutFlags.GetLength()
+							? internMethod->inOutFlags[paramIndex] : asTM_NONE;
+					const asCQualType interned = CanonicalRuntimeParameterType(
+						bridge, context, substParams[paramIndex], passing);
+					if( interned.type.value != param->type.type.value
+						|| interned.quals != param->type.quals )
 					{
 						sameTypes = false;
 						break;
 					}
-					++paramIndex;
 				}
 				if( sameTypes )
 				{
+					context.AddDeclTrait(child->id, asAST_TRAIT_EXTERNAL);
+					if( internMethod->objectType == objectType )
+					{
+						PublishNativeFunctionDeclarationIdentity(
+							sema, context, child->id, internMethod);
+					}
 					return false;
 				}
 			}
@@ -1412,35 +2151,36 @@ void InternNativeMethods(asCSema& sema, asCScriptEngine* engine, asCASTContext& 
 		const asCQualType ret = bridge.FromDataType(context, retDt);
 		const asASTDeclId fn = sema.ActOnMethodDecl(classDecl, name, ret, asCSourceRange());
 		context.SetOrigin(fn, internMethod->GetDeclaration(false, false, false));
+		context.AddDeclTrait(fn, asAST_TRAIT_EXTERNAL);
 		if( internMethod->IsReadOnly() )
 		{
 			context.AddDeclTrait(fn, asAST_TRAIT_CONST_METHOD);
 		}
+		if( internMethod->traits.GetTrait(asTRAIT_EDITOR_ONLY) )
+		{
+			context.AddDeclTrait(fn, asAST_TRAIT_EDITOR_ONLY);
+		}
 		for( asUINT p = 0; p < substParams.GetLength(); ++p )
 		{
-			asCDataType paramType = substParams[p];
-			asCQualType pt = bridge.FromDataType(context, paramType);
-			if( internMethod->inOutFlags.GetLength() > p )
-			{
-				if( internMethod->inOutFlags[p] == asTM_INREF || paramType.IsReference() )
-				{
-					pt.quals |= asAST_QUAL_IN | asAST_QUAL_REFERENCE;
-				}
-				if( internMethod->inOutFlags[p] == asTM_OUTREF )
-				{
-					pt.quals |= asAST_QUAL_OUT | asAST_QUAL_REFERENCE;
-				}
-				if( internMethod->inOutFlags[p] == asTM_INOUTREF )
-				{
-					pt.quals |= asAST_QUAL_INOUT | asAST_QUAL_REFERENCE;
-				}
-			}
+			const asETypeModifiers passing =
+				p < internMethod->inOutFlags.GetLength()
+					? internMethod->inOutFlags[p] : asTM_NONE;
+			const asCQualType pt = CanonicalRuntimeParameterType(
+				bridge, context, substParams[p], passing);
 			const char* pname = (p < internMethod->parameterNames.GetLength() && internMethod->parameterNames[p].GetLength())
 				? internMethod->parameterNames[p].AddressOf()
 				: "";
-			sema.ActOnParamDecl(fn, pname, pt, asCSourceRange());
+			const asASTDeclId parameter =
+				sema.ActOnParamDecl(fn, pname, pt, asCSourceRange());
+			ProjectRuntimeDefaultArgument(
+				sema, context, internMethod, p, parameter);
 		}
 		sema.FinishDecl(fn);
+		if( internMethod->objectType == objectType )
+		{
+			PublishNativeFunctionDeclarationIdentity(
+				sema, context, fn, internMethod);
+		}
 		return false;
 	});
 }
@@ -1462,7 +2202,7 @@ static asASTDeclId ResolveNativeIndexOp(
 	}
 	const asASTDeclId typeDecl = FindNamedTypeDecl(context, baseExpr->type);
 	return FindBestCallee(
-		context, typeDecl, "opIndex", indexArgs, &sema);
+		context, typeDecl, "opIndex", indexArgs, &sema, &baseExpr->type);
 }
 
 static bool NativeBehaviourParamsMatch(
@@ -1470,32 +2210,83 @@ static bool NativeBehaviourParamsMatch(
 	asCRuntimeTypeBridge& bridge,
 	const asCDecl* child,
 	asCScriptFunction* func,
-	const asCArray<asCDataType>& substParams)
+	const asCArray<asCDataType>& substParams,
+	asUINT sourceParameterStart)
 {
 	if( child == 0 || func == 0 || CountParams(context, child) != substParams.GetLength() )
 	{
 		return false;
 	}
-	asUINT paramIndex = 0;
-	for( asUINT d = 0; d < child->children.GetLength(); ++d )
+	for( asUINT paramIndex = 0;
+		paramIndex < substParams.GetLength(); ++paramIndex )
 	{
-		const asCDecl* param = context.GetDecl(child->children[d]);
-		if( param == 0 || param->kind != asAST_DECL_PARAM )
-		{
-			continue;
-		}
-		if( paramIndex >= substParams.GetLength() )
+		const asCDecl* param = context.GetFormalDecl(child->id, paramIndex);
+		if( param == 0 )
 		{
 			return false;
 		}
-		const asCQualType interned = bridge.FromDataType(context, substParams[paramIndex]);
-		if( interned.type.value != param->type.type.value )
+		const asUINT sourceParameterIndex = sourceParameterStart + paramIndex;
+		const asETypeModifiers passing =
+			sourceParameterIndex < func->inOutFlags.GetLength()
+				? func->inOutFlags[sourceParameterIndex] : asTM_NONE;
+		const asCQualType interned = CanonicalRuntimeParameterType(
+			bridge, context, substParams[paramIndex], passing);
+		if( interned.type.value != param->type.type.value
+			|| interned.quals != param->type.quals )
 		{
 			return false;
 		}
-		++paramIndex;
 	}
 	return true;
+}
+
+static asCString CanonicalListPatternOrigin(const asCScriptFunction* function)
+{
+	asCString origin;
+	if( function == 0 || function->listPattern == 0 )
+	{
+		return origin;
+	}
+	for( const asSListPatternNode* node = function->listPattern;
+		node != 0; node = node->next )
+	{
+		asCString token;
+		if( node->type == asLPT_REPEAT )
+			token = "repeat";
+		else if( node->type == asLPT_REPEAT_SAME )
+			token = "repeat_same";
+		else if( node->type == asLPT_TYPE )
+		{
+			const asSListPatternDataTypeNode* const typed =
+				static_cast<const asSListPatternDataTypeNode*>(node);
+			token = typed->dataType.Format(0);
+		}
+		else
+			continue;
+		if( token.GetLength() == 0 )
+			continue;
+		if( origin.GetLength() != 0 )
+			origin += " ";
+		origin += token;
+	}
+	return origin;
+}
+
+static void PublishCanonicalListFactoryOrigin(
+	asCASTContext& context,
+	asASTDeclId declaration,
+	const asCScriptFunction* function,
+	asDWORD traits)
+{
+	if( (traits & asAST_TRAIT_LIST_FACTORY) == 0 || !declaration.IsValid() )
+	{
+		return;
+	}
+	const asCString origin = CanonicalListPatternOrigin(function);
+	if( origin.GetLength() != 0 )
+	{
+		context.SetOrigin(declaration, origin.AddressOf());
+	}
 }
 
 static asASTDeclId InternNativeBehaviourList(
@@ -1552,14 +2343,25 @@ static asASTDeclId InternNativeBehaviourList(
 				start = func->parameterTypes.GetLength();
 			}
 		}
+		else if( isFactory && func->listPattern != 0
+			&& func->parameterTypes.GetLength() > 0 )
+		{
+			start = 1;
+		}
 		else if( isFactory && func->parameterTypes.GetLength() > 0
 			&& func->parameterTypes[0].IsReference()
 			&& !func->parameterTypes[0].IsPrimitive() )
 		{
 			start = 1;
 		}
-		else if( isFactory && objectType->templateBaseType && func->parameterTypes.GetLength() > 0 )
+		else if( isFactory && objectType->templateBaseType
+			&& func->funcType != asFUNC_SCRIPT
+			&& func->parameterTypes.GetLength() > 0 )
 		{
+			// A registered template factory still carries the leading type-info
+			// formal. GenerateTemplateFactoryStub removes that hidden formal from
+			// the instance-local script stub, so skipping again would discard its
+			// first authored argument.
 			start = 1;
 		}
 		for( asUINT p = start; p < func->parameterTypes.GetLength(); ++p )
@@ -1576,6 +2378,11 @@ static asASTDeclId InternNativeBehaviourList(
 			continue;
 		}
 		const char* ctorName = func->name.GetLength() ? func->name.AddressOf() : objectType->name.AddressOf();
+		asDWORD effectiveTraits = traits;
+		if( func->traits.GetTrait(asEFuncTrait::asTRAIT_IMPLICITCONSTRUCTOR) )
+		{
+			effectiveTraits |= asAST_TRAIT_IMPLICIT_CONSTRUCTOR;
+		}
 		bool exists = false;
 		const asCDecl* cls = context.GetDecl(classDecl);
 		if( cls )
@@ -1584,16 +2391,26 @@ static asASTDeclId InternNativeBehaviourList(
 			{
 				const asCDecl* child = context.GetDecl(cls->children[c]);
 				if( child && child->kind == asAST_DECL_CONSTRUCTOR
-					&& (traits == asAST_TRAIT_NONE
-						|| (child->traits & traits) == traits)
-					&& (traits == asAST_TRAIT_NONE || child->name.Equals(ctorName))
-					&& NativeBehaviourParamsMatch(context, bridge, child, func, substParams) )
+					&& (effectiveTraits == asAST_TRAIT_NONE
+						|| (child->traits & effectiveTraits) == effectiveTraits)
+					&& (effectiveTraits == asAST_TRAIT_NONE || child->name.Equals(ctorName))
+					&& NativeBehaviourParamsMatch(
+						context, bridge, child, func, substParams, start) )
 				{
 					exists = true;
 					if( !selected.IsValid() )
 					{
 						selected = child->id;
 					}
+					if( func->funcType == asFUNC_SYSTEM
+						&& (func->objectType == objectType
+							|| (isFactory && func->objectType == 0)) )
+					{
+						PublishNativeFunctionDeclarationIdentity(
+							sema, context, child->id, func);
+					}
+					PublishCanonicalListFactoryOrigin(
+						context, child->id, func, effectiveTraits);
 					break;
 				}
 			}
@@ -1603,35 +2420,36 @@ static asASTDeclId InternNativeBehaviourList(
 			continue;
 		}
 		const asASTDeclId ctor = sema.ActOnConstructorDecl(classDecl, ctorName, asCSourceRange());
-		if( traits != asAST_TRAIT_NONE )
+		if( effectiveTraits != asAST_TRAIT_NONE )
 		{
-			context.AddDeclTrait(ctor, traits);
+			context.AddDeclTrait(ctor, effectiveTraits);
 		}
 		for( asUINT p = 0; p < substParams.GetLength(); ++p )
 		{
-			asCQualType pt = bridge.FromDataType(context, substParams[p]);
 			const asUINT src = start + p;
-			if( src < func->inOutFlags.GetLength() )
-			{
-				if( func->inOutFlags[src] == asTM_INREF || substParams[p].IsReference() )
-				{
-					pt.quals |= asAST_QUAL_IN | asAST_QUAL_REFERENCE;
-				}
-				if( func->inOutFlags[src] == asTM_OUTREF )
-				{
-					pt.quals |= asAST_QUAL_OUT | asAST_QUAL_REFERENCE;
-				}
-				if( func->inOutFlags[src] == asTM_INOUTREF )
-				{
-					pt.quals |= asAST_QUAL_INOUT | asAST_QUAL_REFERENCE;
-				}
-			}
+			const asETypeModifiers passing =
+				src < func->inOutFlags.GetLength()
+					? func->inOutFlags[src] : asTM_NONE;
+			const asCQualType pt = CanonicalRuntimeParameterType(
+				bridge, context, substParams[p], passing);
 			const char* pname = (src < func->parameterNames.GetLength() && func->parameterNames[src].GetLength())
 				? func->parameterNames[src].AddressOf()
 				: "";
-			sema.ActOnParamDecl(ctor, pname, pt, asCSourceRange());
+			const asASTDeclId parameter =
+				sema.ActOnParamDecl(ctor, pname, pt, asCSourceRange());
+			ProjectRuntimeDefaultArgument(
+				sema, context, func, src, parameter);
 		}
 		sema.FinishDecl(ctor);
+		PublishCanonicalListFactoryOrigin(
+			context, ctor, func, effectiveTraits);
+		if( func->funcType == asFUNC_SYSTEM
+			&& (func->objectType == objectType
+				|| (isFactory && func->objectType == 0)) )
+		{
+			PublishNativeFunctionDeclarationIdentity(
+				sema, context, ctor, func);
+		}
 		if( !selected.IsValid() )
 		{
 			selected = ctor;
@@ -1813,8 +2631,34 @@ asASTDeclId asCSema::InternNativeListFactoryForType(const asCQualType& type)
 		asAST_TRAIT_LIST_FACTORY);
 }
 
-static asASTDeclId ResolveCallee(asCSema& sema, asCASTContext& context, asASTDeclId searchOwner, asASTExprId implicitReceiver, const char* name, const asCArray<asASTExprId>& args, bool exactScope = false)
+static asASTDeclId ResolveCallee(asCSema& sema, asCASTContext& context,
+	asASTDeclId searchOwner, asASTExprId implicitReceiver, const char* name,
+	const asCArray<asASTExprId>& args,
+	const asCArray<asCString>* argumentNames = 0,
+	bool exactScope = false)
 {
+	if( !implicitReceiver.IsValid() && !exactScope )
+	{
+		// An unqualified class-body call receives its implicit `this` only after
+		// overload selection has identified a MethodDecl. Native methods inherited
+		// through a pointer-free host base relation must therefore be projected
+		// before that first lookup; waiting for the receiver path below creates a
+		// cycle (no projected method -> no selected method -> no implicit `this`).
+		// Import onto the exact native base declarations only. Ordinary lexical
+		// lookup still decides whether the name denotes a method, global, or local,
+		// and ActOnCallExpr remains the sole owner of implicit-receiver creation.
+		const asCDecl* const enclosingClass =
+			FindEnclosingClass(context, searchOwner);
+		if( enclosingClass != 0
+			&& IsAuthoredScriptClass(context, enclosingClass->id) )
+		{
+			if( asCScriptEngine* const engine = sema.GetEngine() )
+			{
+				InternNativeMethodsFromCanonicalBases(
+					sema, engine, context, enclosingClass->id, name);
+			}
+		}
+	}
 	if( implicitReceiver.IsValid() )
 	{
 		if( const asCExpr* recv = context.GetExpr(implicitReceiver) )
@@ -1831,7 +2675,21 @@ static asASTDeclId ResolveCallee(asCSema& sema, asCASTContext& context, asASTDec
 				{
 					withoutReceiver.PushLast(args[i]);
 				}
-				const asASTDeclId method = FindBestCallee(context, typeDecl, name, withoutReceiver, &sema, &recv->type);
+				asCArray<asCString> withoutReceiverNames;
+				if( argumentNames != 0 )
+				{
+					const bool namesIncludeReceiver =
+						argumentNames->GetLength() == args.GetLength();
+					const asUINT nameBegin = namesIncludeReceiver ? 1 : 0;
+					for( asUINT i = nameBegin;
+						i < argumentNames->GetLength(); ++i )
+					{
+						withoutReceiverNames.PushLast((*argumentNames)[i]);
+					}
+				}
+				const asASTDeclId method = FindBestCallee(
+					context, typeDecl, name, withoutReceiver, &sema, &recv->type,
+					false, argumentNames != 0 ? &withoutReceiverNames : 0);
 				if( method.IsValid() )
 				{
 					return method;
@@ -1849,6 +2707,73 @@ static asASTDeclId ResolveCallee(asCSema& sema, asCASTContext& context, asASTDec
 						}
 					}
 				}
+				if( asCScriptEngine* const engine = sema.GetEngine() )
+				{
+					// Extra-module compiles may not project PreClass native
+					// ancestry onto an authored script class. Native methods such
+					// as UAngelscriptTestSuite::AssertNotNull still live on the
+					// registered type views; intern and select them by argument
+					// ranking when Canonical bases were not copied onto the
+					// derived class.
+					InternNativeMethodsFromCanonicalBases(
+						sema, engine, context, typeDecl, name);
+					const asCQualType objectType = context.InternNamedType(
+						asAST_TYPE_REFERENCE_OBJECT,
+						"UObject",
+						asAST_QUAL_HANDLE | asAST_QUAL_AUTO_HANDLE);
+					const asCQualType suiteType = context.InternNamedType(
+						asAST_TYPE_REFERENCE_OBJECT,
+						"UAngelscriptTestSuite",
+						asAST_QUAL_HANDLE | asAST_QUAL_AUTO_HANDLE);
+					InternNativeMethods(sema, engine, context, objectType, name);
+					InternNativeMethods(sema, engine, context, suiteType, name);
+					asASTDeclId inherited = FindBestCallee(
+						context, typeDecl, name, withoutReceiver, &sema,
+						&recv->type, false,
+						argumentNames != 0 ? &withoutReceiverNames : 0);
+					if( inherited.IsValid() )
+					{
+						return inherited;
+					}
+					asASTDeclId selectedNative;
+					for( asUINT declarationIndex = 1;
+						declarationIndex <= context.GetDeclCount();
+						++declarationIndex )
+					{
+						const asCDecl* const nativeView =
+							context.GetDecl(asASTDeclId(declarationIndex));
+						if( nativeView == 0
+							|| (nativeView->kind != asAST_DECL_CLASS
+								&& nativeView->kind != asAST_DECL_INTERFACE)
+							|| !nativeView->origin.Equals(
+								CANONICAL_NATIVE_TYPE_VIEW_ORIGIN) )
+						{
+							continue;
+						}
+						InternNativeMethods(
+							sema, engine, context,
+							QualTypeFromClassDecl(context, nativeView), name);
+						const asASTDeclId nativeMethod = FindBestCallee(
+							context, nativeView->id, name, withoutReceiver,
+							&sema, &recv->type, true,
+							argumentNames != 0 ? &withoutReceiverNames : 0);
+						if( !nativeMethod.IsValid() )
+						{
+							continue;
+						}
+						if( selectedNative.IsValid()
+							&& selectedNative != nativeMethod )
+						{
+							selectedNative = asASTDeclId();
+							break;
+						}
+						selectedNative = nativeMethod;
+					}
+					if( selectedNative.IsValid() )
+					{
+						return selectedNative;
+					}
+				}
 				// Member miss is fail-closed for script methods. Fall through
 				// with the full arg list (receiver included) so mixin
 				// MixHelper(T, int) can bind v.MixHelper(3). Free Get(int)
@@ -1860,11 +2785,49 @@ static asASTDeclId ResolveCallee(asCSema& sema, asCASTContext& context, asASTDec
 	{
 		InternNativeGlobals(sema, engine, context, name);
 	}
+	const asCDecl* const explicitOwner = exactScope
+		? context.GetDecl(searchOwner) : 0;
+	if( explicitOwner != 0
+		&& (explicitOwner->kind == asAST_DECL_CLASS
+			|| explicitOwner->kind == asAST_DECL_INTERFACE) )
+	{
+		// The maintained UE language surface publishes BlueprintEvent/
+		// BlueprintOverride bodies as <Name>_Implementation. An explicitly
+		// qualified base call must select that authored implementation before
+		// the event wrapper, matching the source compiler's established route.
+		// This is Sema-owned overload selection: CodeGen receives only the exact
+		// stable MethodDecl and DIRECT dispatch fact.
+		asCString implementationName = name ? name : "";
+		implementationName += "_Implementation";
+		const asASTDeclId implementation = FindBestCallee(
+			context, searchOwner, implementationName.AddressOf(), args,
+			&sema, 0, true, argumentNames, implicitReceiver);
+		if( implementation.IsValid() )
+		{
+			return implementation;
+		}
+	}
 	const asASTDeclId direct = FindBestCallee(
-		context, searchOwner, name, args, &sema, 0, exactScope);
+		context, searchOwner, name, args, &sema, 0, exactScope,
+		argumentNames, implicitReceiver);
 	if( direct.IsValid() )
 	{
 		return direct;
+	}
+	if( exactScope )
+	{
+		const asASTDeclId companion =
+			FindCompanionNamespace(context, searchOwner);
+		if( companion.IsValid() )
+		{
+			const asASTDeclId staticHelper = FindBestCallee(
+				context, companion, name, args, &sema, 0, true,
+				argumentNames, implicitReceiver);
+			if( staticHelper.IsValid() )
+			{
+				return staticHelper;
+			}
+		}
 	}
 	return FindFuncdefHandle(sema, context, searchOwner, name, exactScope);
 }
@@ -1886,6 +2849,31 @@ static asCQualType QualTypeFromClassDecl(asCASTContext& context, const asCDecl* 
 	}
 	const char* name = (classDecl && classDecl->name.GetLength()) ? classDecl->name.AddressOf() : "";
 	return context.InternNamedType(kind, name, quals);
+}
+
+static asCQualType QualTypeForConstructExpression(
+	asCASTContext& context,
+	const asCQualType& exactTargetType)
+{
+	if( !exactTargetType.IsValid() )
+	{
+		return exactTargetType;
+	}
+	const asCType* const target = context.GetType(exactTargetType.type);
+	if( target == 0 || target->kind != asAST_TYPE_REFERENCE_OBJECT )
+	{
+		return exactTargetType;
+	}
+
+	// The typed target identifies the exact nominal/template specialization,
+	// while construction owns the result-value qualifier. A reference-object
+	// type name can carry only its intrinsic implicit-handle bit; the temporary
+	// produced by C(...) additionally owns AUTO_HANDLE so lifetime transfer and
+	// cleanup are explicit. Preserve every authored qualifier and the exact TypeId
+	// while adding only the construct-result semantics.
+	return asCQualType(
+		exactTargetType.type,
+		exactTargetType.quals | asAST_QUAL_HANDLE | asAST_QUAL_AUTO_HANDLE);
 }
 
 static const asCDecl* FindEnclosingClass(asCASTContext& context, asASTDeclId owner)
@@ -1980,7 +2968,14 @@ static asASTExprId FindExistingExactConversion(asCASTContext& context,
 	return asASTExprId();
 }
 
-static asASTExprId ConstructFromCallee(asCSema& sema, asCASTContext& context, asASTDeclId callee, const asCArray<asASTExprId>& args, const asCSourceRange& range)
+static asASTExprId ConstructFromCallee(
+	asCSema& sema,
+	asCASTContext& context,
+	asASTDeclId callee,
+	const asCArray<asASTExprId>& args,
+	const asCSourceRange& range,
+	const asCArray<asSASTCallArgument>* callArguments,
+	const asCQualType* exactTargetType)
 {
 	const asCDecl* decl = context.GetDecl(callee);
 	if( decl == 0 )
@@ -1996,25 +2991,44 @@ static asASTExprId ConstructFromCallee(asCSema& sema, asCASTContext& context, as
 	{
 		return asASTExprId();
 	}
-	const asCQualType type = QualTypeFromClassDecl(context, classDecl);
-	return sema.ActOnConstruct(type, args, range);
+	// A type-name call already owns the exact source target. Rebuilding it from
+	// the selected ClassDecl can lose a template specialization or handle
+	// qualifier, so keep the Sema-authored QualType when it is available.
+	const asCQualType exactType = exactTargetType != 0
+		&& exactTargetType->IsValid()
+		&& context.GetType(exactTargetType->type) != 0
+		? *exactTargetType : QualTypeFromClassDecl(context, classDecl);
+	const asCQualType type = QualTypeForConstructExpression(context, exactType);
+	return sema.ActOnConstruct(
+		type, args, range,
+		decl->kind == asAST_DECL_CONSTRUCTOR ? decl->id : asASTDeclId(),
+		callArguments);
 }
 
 static bool QualTypesMatch(const asCQualType& left, const asCQualType& right);
 static void ArrangeCallArguments(asCSema& sema, asCASTContext& context,
 	asASTDeclId callee, asCArray<asASTExprId>& args,
 	asCArray<asCString>& names, const asCSourceRange& range,
-	asASTExprId implicitReceiver);
+	asASTExprId implicitReceiver,
+	asCArray<asSASTCallArgument>& callArguments);
 static void ConvertCallArgumentsToFormalTypes(asCSema& sema, asCASTContext& context,
 	const asCDecl& callee, asCArray<asASTExprId>& args,
-	const asCSourceRange& range, asASTExprId implicitReceiver);
+	const asCSourceRange& range, asASTExprId implicitReceiver,
+	asCArray<asSASTCallArgument>& callArguments);
 
-asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const asCArray<asASTExprId>& inArgs, const asCSourceRange& range, asASTExprId implicitReceiver, const asCArray<asCString>* argumentNames, bool exactScope)
+asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const asCArray<asASTExprId>& inArgs, const asCSourceRange& range, asASTExprId implicitReceiver, const asCArray<asCString>* argumentNames, bool exactScope, const asCQualType* typeNameTarget)
 {
+	const asASTExprId originalReceiver = implicitReceiver;
+	if( implicitReceiver.IsValid() )
+	{
+		implicitReceiver = RewriteGeneratedPropertyGetForRvalueCallReceiver(
+			*this, context, implicitReceiver, name);
+	}
 	asCArray<asASTExprId> args;
 	if( implicitReceiver.IsValid() )
 	{
-		const bool alreadyHasReceiver = inArgs.GetLength() && inArgs[0] == implicitReceiver;
+		const bool alreadyHasReceiver = inArgs.GetLength()
+			&& (inArgs[0] == originalReceiver || inArgs[0] == implicitReceiver);
 		if( !alreadyHasReceiver )
 		{
 			args.PushLast(implicitReceiver);
@@ -2022,7 +3036,7 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 	}
 	for( asUINT i = 0; i < inArgs.GetLength(); ++i )
 	{
-		args.PushLast(inArgs[i]);
+		args.PushLast(inArgs[i] == originalReceiver ? implicitReceiver : inArgs[i]);
 	}
 	if( !implicitReceiver.IsValid() && args.GetLength() == 1 )
 	{
@@ -2039,11 +3053,57 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 			return ActOnConversion(args[0], enumType, range);
 		}
 	}
-	const asASTDeclId callee = ResolveCallee(
-		*this, context, owner, implicitReceiver, name, args, exactScope);
+	asCArray<asSASTCallArgument> callArguments;
+	asASTDeclId callee = ResolveCallee(
+		*this, context, owner, implicitReceiver, name, args,
+		argumentNames, exactScope);
+	const asCDecl* calleeDecl = context.GetDecl(callee);
+	if( !implicitReceiver.IsValid()
+		&& ((calleeDecl != 0 && calleeDecl->kind == asAST_DECL_CLASS)
+			|| (!callee.IsValid() && typeNameTarget != 0
+				&& typeNameTarget->IsValid()
+				&& context.GetType(typeNameTarget->type) != 0)) )
+	{
+		const asCQualType constructType = calleeDecl != 0
+			? QualTypeFromClassDecl(context, calleeDecl) : *typeNameTarget;
+		InternNativeCallablesForType(constructType);
+		const asASTDeclId classDecl = FindNamedTypeDecl(context, constructType);
+		const asASTDeclId selectedConstructor = FindBestConstructor(
+			context, classDecl, args, this, argumentNames);
+		bool hasConstructorDeclaration = false;
+		if( const asCDecl* const constructClass = context.GetDecl(classDecl) )
+		{
+			for( asUINT childIndex = 0;
+				childIndex < constructClass->children.GetLength(); ++childIndex )
+			{
+				const asCDecl* const child =
+					context.GetDecl(constructClass->children[childIndex]);
+				if( child != 0 && child->kind == asAST_DECL_CONSTRUCTOR )
+				{
+					hasConstructorDeclaration = true;
+					break;
+				}
+			}
+		}
+		bool hasNamedArgument = false;
+		for( asUINT argumentIndex = 0;
+			argumentNames != 0
+				&& argumentIndex < argumentNames->GetLength(); ++argumentIndex )
+		{
+			if( (*argumentNames)[argumentIndex].GetLength() != 0 )
+			{
+				hasNamedArgument = true;
+				break;
+			}
+		}
+		callee = selectedConstructor.IsValid()
+			? selectedConstructor
+			: (!hasConstructorDeclaration && args.GetLength() == 0
+				&& !hasNamedArgument ? classDecl : asASTDeclId());
+		calleeDecl = context.GetDecl(callee);
+	}
 	if( callee.IsValid() )
 	{
-		const asCDecl* const calleeDecl = context.GetDecl(callee);
 		if( !implicitReceiver.IsValid() && calleeDecl != 0
 			&& calleeDecl->kind == asAST_DECL_METHOD )
 		{
@@ -2066,9 +3126,23 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 		{
 			names = *argumentNames;
 		}
-		ArrangeCallArguments(*this, context, callee, args, names, range, implicitReceiver);
+		// A type-name invocation may deliberately resolve to the ClassDecl when
+		// lookup has not selected one constructor declaration. ActOnConstruct is
+		// the authority that selects a constructor from the class children. A
+		// ClassDecl has no callable formal list of its own, so do not manufacture
+		// CALL records or reject its source arguments here.
+		if( calleeDecl != 0 && calleeDecl->kind != asAST_DECL_CLASS )
+		{
+			ArrangeCallArguments(*this, context, callee, args, names, range,
+				implicitReceiver, callArguments);
+		}
 	}
-	const asASTExprId constructed = ConstructFromCallee(*this, context, callee, args, range);
+	const asCArray<asSASTCallArgument>* const constructArguments =
+		calleeDecl != 0 && calleeDecl->kind == asAST_DECL_CONSTRUCTOR
+			? &callArguments : 0;
+	const asASTExprId constructed = ConstructFromCallee(
+		*this, context, callee, args, range, constructArguments,
+		typeNameTarget);
 	if( constructed.IsValid() )
 	{
 		return constructed;
@@ -2101,15 +3175,16 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 			}
 			extra.Format(" hit%u kind=%d params=", hitIndex, (int)hit->kind);
 			msg += extra;
-			asUINT hitParams = 0;
-			for( asUINT childIndex = 0; childIndex < hit->children.GetLength(); ++childIndex )
+			const asUINT hitParams = context.GetFormalDeclCount(hit->id);
+			for( asUINT formalIndex = 0; formalIndex < hitParams; ++formalIndex )
 			{
-				const asCDecl* const param = context.GetDecl(hit->children[childIndex]);
-				if( param == 0 || param->kind != asAST_DECL_PARAM )
+				const asCDecl* const param =
+					context.GetFormalDecl(hit->id, formalIndex);
+				if( param == 0 )
 				{
 					continue;
 				}
-				if( hitParams )
+				if( formalIndex )
 				{
 					msg += ",";
 				}
@@ -2121,7 +3196,6 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 				{
 					msg += "<untyped>";
 				}
-				++hitParams;
 			}
 			extra.Format("(%u)", hitParams);
 			msg += extra;
@@ -2136,7 +3210,8 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 				msg += "<null>";
 				continue;
 			}
-			if( const asCType* const argType = context.GetType(arg->type.type) )
+			const asCType* const argType = context.GetType(arg->type.type);
+			if( argType )
 			{
 				if( argType->stableKey.GetLength() )
 				{
@@ -2175,6 +3250,49 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 				typeCls && IsAuthoredScriptClass(context, typeDecl) ? 1 : 0,
 				implConv);
 			msg += extra;
+			if( typeCls == 0 && argType != 0
+				&& argType->stableKey.GetLength() != 0 )
+			{
+				asUINT sameNameCount = 0;
+				asUINT recordCount = 0;
+				for( asUINT declarationIndex = 1;
+					declarationIndex <= context.GetDeclCount();
+					++declarationIndex )
+				{
+					const asCDecl* const declaration =
+						context.GetDecl(asASTDeclId(declarationIndex));
+					if( declaration == 0
+						|| (declaration->kind != asAST_DECL_CLASS
+							&& declaration->kind != asAST_DECL_INTERFACE) )
+					{
+						continue;
+					}
+					if( recordCount < 8 )
+					{
+						extra.Format(" record%u=%s/%s",
+							recordCount,
+							declaration->name.GetLength() != 0
+								? declaration->name.AddressOf() : "<empty>",
+							declaration->stableKey.GetLength() != 0
+								? declaration->stableKey.AddressOf() : "<empty>");
+						msg += extra;
+					}
+					++recordCount;
+					if( !declaration->name.Equals(argType->stableKey) )
+					{
+						continue;
+					}
+					++sameNameCount;
+					extra.Format(" sameName%u=%s",
+						sameNameCount - 1,
+						declaration->stableKey.GetLength() != 0
+							? declaration->stableKey.AddressOf() : "<empty>");
+					msg += extra;
+				}
+				extra.Format(" sameNameCount=%u recordCount=%u",
+					sameNameCount, recordCount);
+				msg += extra;
+			}
 			if( asCScriptEngine* const resolvedEngine = GetEngine() )
 			{
 				asCRuntimeTypeBridge bridge(resolvedEngine);
@@ -2184,7 +3302,6 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 					resolvedInfo && resolvedInfo->GetName() ? resolvedInfo->GetName() : "miss");
 				msg += extra;
 			}
-			asUINT paramCursor = 0;
 			const asCDecl* rankParam = 0;
 			for( asUINT hitIndex = 0; hitIndex < unresolvedHits.GetLength() && rankParam == 0; ++hitIndex )
 			{
@@ -2193,20 +3310,7 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 				{
 					continue;
 				}
-				for( asUINT childIndex = 0; childIndex < hit->children.GetLength(); ++childIndex )
-				{
-					const asCDecl* const param = context.GetDecl(hit->children[childIndex]);
-					if( param == 0 || param->kind != asAST_DECL_PARAM )
-					{
-						continue;
-					}
-					if( paramCursor == argIndex )
-					{
-						rankParam = param;
-						break;
-					}
-					++paramCursor;
-				}
+				rankParam = context.GetFormalDecl(hit->id, argIndex);
 			}
 			if( rankParam )
 			{
@@ -2244,7 +3348,8 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 	if( const asCDecl* decl = context.GetDecl(callee) )
 	{
 		ConvertCallArgumentsToFormalTypes(
-			*this, context, *decl, args, range, implicitReceiver);
+			*this, context, *decl, args, range, implicitReceiver,
+			callArguments);
 	}
 	asCQualType type = context.InternPrimitive(ttInt, 0);
 	if( const asCDecl* decl = context.GetDecl(callee) )
@@ -2255,19 +3360,14 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 			type = context.InternNamedType(asAST_TYPE_ERROR, "<funcdef-signature>", 0);
 		}
 	}
-	const asASTExprId call = ActOnCall(callee, args, type, range);
+	const asASTExprId call = ActOnCall(
+		callee, args, type, range, &callArguments);
 	if( implicitReceiver.IsValid() )
 	{
 		context.SetExprReceiver(call, implicitReceiver);
 	}
-	if( const asCType* named = context.GetType(type.type) )
-	{
-		if( named && named->kind != asAST_TYPE_PRIMITIVE && named->kind != asAST_TYPE_VOID )
-		{
-			return ActOnMaterializeTemporary(call, range);
-		}
-	}
-	return call;
+	return ShouldMaterializeCallResult(context, type)
+		? ActOnMaterializeTemporary(call, range) : call;
 }
 
 static bool DiagnosticMatchesUnresolvedCallee(const asCString& text, const asCString& name)
@@ -2642,8 +3742,212 @@ bool asCSema::ReconcileContextualLambdaBody(
 	return true;
 }
 
+void asCSema::ReconcileDeferredByValueCopyPlans()
+{
+	// Iterate only expressions that existed when finalization began. A newly
+	// authored copy ConstructExpr has a const-reference formal and therefore
+	// cannot itself require another by-value copy, but the fixed bound also
+	// makes the one-pass ownership transition explicit.
+	const asUINT expressionCount = context.GetExprCount();
+	for( asUINT expressionIndex = 1;
+		expressionIndex <= expressionCount; ++expressionIndex )
+	{
+		const asCExpr* const call = context.GetExpr(
+			asASTExprId(expressionIndex));
+		if( call == 0 || (call->kind != asAST_EXPR_CALL
+			&& call->kind != asAST_EXPR_CONSTRUCT) )
+		{
+			continue;
+		}
+
+		const asUINT argumentCount = call->callArguments.GetLength();
+		for( asUINT argumentIndex = 0;
+			argumentIndex < argumentCount; ++argumentIndex )
+		{
+			const asSASTCallArgument argument =
+				call->callArguments[argumentIndex];
+			if( argument.origin == asAST_CALL_ARGUMENT_IMPLICIT_RECEIVER
+				|| !RequiresExactValueObjectPlan(argument.formalType) )
+			{
+				continue;
+			}
+
+			const asCExpr* const source = context.GetExpr(argument.expression);
+			if( source == 0
+				|| source->valueCategory != asAST_VALUE_LVALUE )
+			{
+				// Existing Construct/Materialize/Cleanup plans are prvalues and must
+				// remain single-evaluation. Only the raw lvalue shape is incomplete.
+				continue;
+			}
+
+			asCArray<asASTExprId> copyArguments;
+			copyArguments.PushLast(argument.expression);
+			const asCSourceRange planRange =
+				argument.range.begin.IsValid() ? argument.range : call->range;
+			const asASTExprId plan = ActOnConstruct(
+				argument.formalType, copyArguments, planRange);
+			const asCExpr* const construct = UnwrapByValueCopyPlan(
+				context, context.GetExpr(plan));
+			const asCDecl* const constructor = construct != 0
+				? context.GetDecl(construct->resolvedDecl) : 0;
+			const asCDecl* const copyParameter = constructor != 0
+				? context.GetFormalDecl(constructor->id, 0) : 0;
+			const asASTDeclId valueClass =
+				FindNamedTypeDecl(context, argument.formalType);
+			const bool exactCopyPlan = construct != 0
+				&& construct->kind == asAST_EXPR_CONSTRUCT
+				&& construct->type == argument.formalType
+				&& constructor != 0
+				&& constructor->kind == asAST_DECL_CONSTRUCTOR
+				&& constructor->parent == valueClass
+				&& context.GetFormalDeclCount(constructor->id) == 1
+				&& copyParameter != 0
+				&& copyParameter->type.type == argument.formalType.type
+				&& copyParameter->type.IsConst()
+				&& copyParameter->type.IsReference()
+				&& construct->children.GetLength() == 1
+				&& construct->children[0] == argument.expression;
+			if( !exactCopyPlan )
+			{
+				AddDiagnostic(
+					"by-value-copy-constructor-unavailable", planRange);
+				continue;
+			}
+
+			const int replacement = context.ReplaceCallArgumentExpression(
+				call->id, argumentIndex, plan);
+			if( replacement != asAST_VERIFY_OK )
+			{
+				AddDiagnostic(
+					"by-value-copy-relation-rewrite-failed", planRange);
+			}
+		}
+	}
+}
+
 void asCSema::ResolveDeferredNames()
 {
+	// Forward-referenced script classes intern as VALUE_OBJECT before the
+	// matching ClassDecl exists. Once the record is finished, rebind those
+	// named types onto the authored reference QualType so deferred method
+	// lookup and derived-to-base ranking see the completed declaration.
+	for( asUINT expressionIndex = 1;
+		expressionIndex <= context.GetExprCount(); ++expressionIndex )
+	{
+		const asCExpr* const expr = context.GetExpr(asASTExprId(expressionIndex));
+		if( expr == 0 || !expr->type.IsValid() )
+		{
+			continue;
+		}
+		const asCType* const named = context.GetType(expr->type.type);
+		if( named == 0 || named->kind != asAST_TYPE_VALUE_OBJECT
+			|| named->stableKey.GetLength() == 0 )
+		{
+			continue;
+		}
+		const asASTDeclId record = FindNamedTypeDecl(context, expr->type);
+		const asCDecl* const declaration = context.GetDecl(record);
+		if( declaration == 0
+			|| (declaration->kind != asAST_DECL_CLASS
+				&& declaration->kind != asAST_DECL_INTERFACE)
+			|| (declaration->traits & asAST_TRAIT_VALUE) != 0
+			|| !declaration->type.IsValid() )
+		{
+			continue;
+		}
+		context.SetExprType(expr->id, declaration->type);
+	}
+
+	// A generated script record can be appended by the UE preprocessor after an
+	// earlier source section has already default-constructed that exact type.
+	// ActOnConstruct deliberately leaves the constructor identity invalid when
+	// no declaration exists yet; retry only the zero-argument shape once later
+	// record finalization has published its generated default constructor. The
+	// expression's exact QualType remains the lookup authority, so this does not
+	// manufacture a backend fallback or pick a same-spelled declaration.
+	for( asUINT expressionIndex = 1;
+		expressionIndex <= context.GetExprCount(); ++expressionIndex )
+	{
+		const asCExpr* const construct = context.GetExpr(
+			asASTExprId(expressionIndex));
+		if( construct == 0 || construct->kind != asAST_EXPR_CONSTRUCT
+			|| construct->resolvedDecl.IsValid()
+			|| construct->children.GetLength() != 0
+			|| construct->callArguments.GetLength() != 0 )
+		{
+			continue;
+		}
+
+		const asASTDeclId record = FindNamedTypeDecl(
+			context, construct->type);
+		asCArray<asASTExprId> noArguments;
+		const asASTDeclId constructor = FindBestConstructor(
+			context, record, noArguments, this, 0);
+		const asCDecl* const declaration = context.GetDecl(constructor);
+		if( declaration == 0
+			|| declaration->kind != asAST_DECL_CONSTRUCTOR
+			|| context.GetFormalDeclCount(constructor) != 0 )
+		{
+			continue;
+		}
+
+		context.SetResolvedDecl(construct->id, constructor);
+		context.SetLiteral(
+			construct->id,
+			declaration->stableKey.GetLength() != 0
+				? declaration->stableKey.AddressOf()
+				: declaration->name.AddressOf());
+	}
+
+	// AngelScript lets an earlier method body name a later script class field.
+	// ActOnMemberExpr records an unbound MEMBER_REF when the record body has
+	// not been parsed yet. Rebind those edges after every class in the
+	// translation unit has published its fields, matching Clang's delayed
+	// lookup after a complete type. Immediate ActOnMemberExpr rewrites
+	// primitive/POD reads to GetX and keeps exact-value (TMap/TArray) fields
+	// as MEMBER_REF. This pass only fills resolvedDecl on leftover MEMBER_REF
+	// (non-POD fields and forward-referenced names).
+	for( asUINT expressionIndex = 1;
+		expressionIndex <= context.GetExprCount(); ++expressionIndex )
+	{
+		const asCExpr* const memberRef = context.GetExpr(
+			asASTExprId(expressionIndex));
+		if( memberRef == 0
+			|| memberRef->kind != asAST_EXPR_MEMBER_REF
+			|| memberRef->resolvedDecl.IsValid()
+			|| memberRef->children.GetLength() == 0
+			|| memberRef->literal.GetLength() == 0 )
+		{
+			continue;
+		}
+
+		const asCExpr* const baseExpr =
+			context.GetExpr(memberRef->children[0]);
+		if( baseExpr == 0 || !baseExpr->type.IsValid() )
+		{
+			continue;
+		}
+
+		InternNativePropertyCandidates(
+			baseExpr->type, memberRef->literal.AddressOf());
+		const asASTDeclId field = FindTypeMemberVarFromBases(
+			context,
+			FindNamedTypeDecl(context, baseExpr->type),
+			memberRef->literal.AddressOf());
+		const asCDecl* const fieldDecl = context.GetDecl(field);
+		if( fieldDecl == 0 || fieldDecl->kind != asAST_DECL_VAR )
+		{
+			continue;
+		}
+
+		context.SetResolvedDecl(memberRef->id, field);
+		if( fieldDecl->type.IsValid() )
+		{
+			context.SetExprType(memberRef->id, fieldDecl->type);
+		}
+	}
+
 	asCArray<asSDeferredCall> unresolved;
 	for( asUINT deferredIndex = 0; deferredIndex < deferredCalls.GetLength(); ++deferredIndex )
 	{
@@ -2694,7 +3998,8 @@ void asCSema::ResolveDeferredNames()
 			|| deferred.absoluteScope;
 		const asASTDeclId callee = ResolveCallee(
 			*this, context, lookupOwner, deferred.implicitReceiver,
-			deferred.name.AddressOf(), args, exactScope);
+			deferred.name.AddressOf(), args, &deferred.argumentNames,
+			exactScope);
 		const asCDecl* const decl = context.GetDecl(callee);
 		if( decl == 0
 			|| (decl->kind != asAST_DECL_FUNCTION
@@ -2730,12 +4035,13 @@ void asCSema::ResolveDeferredNames()
 		}
 
 		asCArray<asCString> argumentNames = deferred.argumentNames;
+		asCArray<asSASTCallArgument> callArguments;
 		ArrangeCallArguments(*this, context, callee, args, argumentNames,
-			deferred.range, effectiveReceiver);
+			deferred.range, effectiveReceiver, callArguments);
 
 		ConvertCallArgumentsToFormalTypes(
 			*this, context, *decl, args, deferred.range,
-			effectiveReceiver);
+			effectiveReceiver, callArguments);
 
 		context.SetResolvedDecl(deferred.expression, callee);
 		context.SetExprType(deferred.expression, decl->type);
@@ -2751,9 +4057,15 @@ void asCSema::ResolveDeferredNames()
 		literal += ":reverse-formal";
 		context.SetLiteral(deferred.expression, literal.AddressOf());
 		context.ClearExprChildren(deferred.expression);
+		context.ClearCallArguments(deferred.expression);
 		for( asUINT i = args.GetLength(); i > 0; --i )
 		{
 			context.AddExprChild(deferred.expression, args[i - 1]);
+		}
+		for( asUINT i = callArguments.GetLength(); i > 0; --i )
+		{
+			context.AddCallArgument(
+				deferred.expression, callArguments[i - 1]);
 		}
 		if( effectiveReceiver.IsValid() )
 		{
@@ -2957,22 +4269,24 @@ asASTExprId asCSema::ActOnPostfixCallExpr(asASTDeclId owner, asASTExprId calleeE
 				{
 					asCArray<asASTExprId> callArgs = args;
 					asCArray<asCString> names;
+					asCArray<asSASTCallArgument> callArguments;
 					if( argumentNames != 0 )
 					{
 						names = *argumentNames;
 					}
 					ArrangeCallArguments(
 						*this, context, callee->id, callArgs, names,
-						range, asASTExprId());
+						range, asASTExprId(), callArguments);
 					ConvertCallArgumentsToFormalTypes(
 						*this, context, *callee, callArgs,
-						range, asASTExprId());
+						range, asASTExprId(), callArguments);
 					asCQualType type = context.InternPrimitive(ttInt, 0);
 					if( callee->type.IsValid() )
 					{
 						type = callee->type;
 					}
-					return ActOnCall(callee->id, callArgs, type, range);
+					return ActOnCall(
+						callee->id, callArgs, type, range, &callArguments);
 				}
 			}
 		}
@@ -3113,6 +4427,107 @@ asASTExprId asCSema::ActOnCastExprAction(
 	return expression;
 }
 
+asASTExprId asCSema::ActOnConstructCall(
+	asASTDeclId owner,
+	const asCQualType& type,
+	const asCArray<asASTExprId>& args,
+	const asCArray<asCString>* argumentNames,
+	const asCSourceRange& range)
+{
+	const asCQualType constructType =
+		QualTypeForConstructExpression(context, type);
+	const asCType* const target = context.GetType(constructType.type);
+	if( !constructType.IsValid() || target == 0
+		|| target->stableKey.GetLength() == 0
+		|| (argumentNames != 0
+			&& argumentNames->GetLength() != 0
+			&& argumentNames->GetLength() != args.GetLength()) )
+	{
+		AddDiagnostic("construct-call-action-invalid", range);
+		return asASTExprId();
+	}
+	const asCArray<asCString>* const names = argumentNames != 0
+		&& argumentNames->GetLength() != 0 ? argumentNames : 0;
+	bool hasNamedArgument = false;
+	for( asUINT argumentIndex = 0;
+		names != 0 && argumentIndex < names->GetLength(); ++argumentIndex )
+	{
+		if( (*names)[argumentIndex].GetLength() != 0 )
+		{
+			hasNamedArgument = true;
+			break;
+		}
+	}
+	InternNativeCallablesForType(constructType);
+	const asASTDeclId classDecl = FindNamedTypeDecl(context, constructType);
+	const asASTDeclId constructor = FindBestConstructor(
+		context, classDecl, args, this, names);
+	if( constructor.IsValid() )
+	{
+		asCArray<asASTExprId> arrangedArgs = args;
+		asCArray<asCString> arrangedNames;
+		if( names != 0 )
+		{
+			arrangedNames = *names;
+		}
+		asCArray<asSASTCallArgument> callArguments;
+		ArrangeCallArguments(
+			*this, context, constructor, arrangedArgs, arrangedNames, range,
+			asASTExprId(), callArguments);
+		return ActOnConstruct(
+			constructType, arrangedArgs, range, constructor, &callArguments);
+	}
+
+	if( hasNamedArgument )
+	{
+		// Preserve the ordinary call diagnostic for an invalid named plan. This
+		// route may also resolve a declaration that is not indexed by the exact
+		// nominal-type relation yet, but it must retain the source target type.
+		return ActOnCallExpr(
+			owner,
+			target->stableKey.AddressOf(),
+			args,
+			range,
+			asASTExprId(),
+			names,
+			false,
+			&constructType);
+	}
+
+	// Retain the existing positional constructor-selection semantics for
+	// compatibility shapes such as maintained-fork template factories whose
+	// Runtime hidden-formal view differs from the authored source fixture. The
+	// fallback still publishes one complete exact relation; reclassify only the
+	// source-backed generated placeholders as positional provenance.
+	const asASTExprId result = ActOnConstruct(constructType, args, range);
+	asCExpr* construct = const_cast<asCExpr*>(context.GetExpr(result));
+	while( construct != 0
+		&& (construct->kind == asAST_EXPR_CLEANUP
+			|| construct->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+		&& construct->children.GetLength() == 1 )
+	{
+		construct = const_cast<asCExpr*>(
+			context.GetExpr(construct->children[0]));
+	}
+	if( construct != 0 && construct->kind == asAST_EXPR_CONSTRUCT
+		&& construct->children.GetLength() == args.GetLength()
+		&& construct->callArguments.GetLength() == args.GetLength() )
+	{
+		for( asUINT argumentIndex = 0;
+			argumentIndex < construct->callArguments.GetLength(); ++argumentIndex )
+		{
+			asSASTCallArgument& argument =
+				construct->callArguments[argumentIndex];
+			if( argument.origin == asAST_CALL_ARGUMENT_GENERATED )
+			{
+				argument.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+				argument.sourceOrdinal = argumentIndex;
+			}
+		}
+	}
+	return result;
+}
+
 asASTExprId asCSema::ActOnConstructExprAction(
 	const asSConstructExprAction& action,
 	asCScriptCode* script)
@@ -3134,6 +4549,12 @@ asASTExprId asCSema::ActOnConstructExprAction(
 		AddDiagnostic("construct-expression-action-target-invalid", range);
 		return asASTExprId();
 	}
+	if( action.argumentNames.GetLength() != 0
+		&& action.argumentNames.GetLength() != action.arguments.GetLength() )
+	{
+		AddDiagnostic("construct-expression-action-argument-names-invalid", range);
+		return asASTExprId();
+	}
 	for( asUINT i = 0; i < action.arguments.GetLength(); ++i )
 	{
 		if( !action.arguments[i].IsValid()
@@ -3150,6 +4571,16 @@ asASTExprId asCSema::ActOnConstructExprAction(
 		&& (target->kind == asAST_TYPE_PRIMITIVE
 			|| target->kind == asAST_TYPE_ENUM) )
 	{
+		for( asUINT argumentIndex = 0;
+			argumentIndex < action.argumentNames.GetLength(); ++argumentIndex )
+		{
+			if( action.argumentNames[argumentIndex].GetLength() != 0 )
+			{
+				AddDiagnostic(
+					"construct-expression-action-named-scalar-invalid", range);
+				return asASTExprId();
+			}
+		}
 		if( action.arguments.GetLength() != 1 )
 		{
 			AddDiagnostic("construct-expression-action-scalar-arity-invalid", range);
@@ -3160,8 +4591,13 @@ asASTExprId asCSema::ActOnConstructExprAction(
 	}
 	else
 	{
-		expression = ActOnConstruct(
-			action.targetType, action.arguments, range);
+		expression = ActOnConstructCall(
+			CurrentDeclContext(),
+			action.targetType,
+			action.arguments,
+			action.argumentNames.GetLength() != 0
+				? &action.argumentNames : 0,
+			range);
 	}
 	if( !expression.IsValid() || context.GetExpr(expression) == 0 )
 	{
@@ -3258,6 +4694,137 @@ asASTExprId asCSema::ActOnInitListExprAction(
 	return expression;
 }
 
+static const char* AssignOperatorMethodName(const char* op)
+{
+	if( op == 0 || op[0] == 0 )
+	{
+		return 0;
+	}
+	if( op[0] == '=' && op[1] == 0 )
+	{
+		return "opAssign";
+	}
+	if( std::strcmp(op, "+=") == 0 )
+	{
+		return "opAddAssign";
+	}
+	if( std::strcmp(op, "-=") == 0 )
+	{
+		return "opSubAssign";
+	}
+	if( std::strcmp(op, "*=") == 0 )
+	{
+		return "opMulAssign";
+	}
+	if( std::strcmp(op, "/=") == 0 )
+	{
+		return "opDivAssign";
+	}
+	if( std::strcmp(op, "%=") == 0 )
+	{
+		return "opModAssign";
+	}
+	if( std::strcmp(op, "**=") == 0 )
+	{
+		return "opPowAssign";
+	}
+	if( std::strcmp(op, "&=") == 0 )
+	{
+		return "opAndAssign";
+	}
+	if( std::strcmp(op, "|=") == 0 )
+	{
+		return "opOrAssign";
+	}
+	if( std::strcmp(op, "^=") == 0 )
+	{
+		return "opXorAssign";
+	}
+	if( std::strcmp(op, "<<=") == 0 )
+	{
+		return "opShlAssign";
+	}
+	if( std::strcmp(op, ">>=") == 0 )
+	{
+		return "opShrAssign";
+	}
+	if( std::strcmp(op, ">>>=") == 0 )
+	{
+		return "opUShrAssign";
+	}
+	return 0;
+}
+
+static asASTExprId TryRewriteOverloadedAssignmentToCall(
+	asCSema& sema,
+	asCScriptEngine* engine,
+	asCASTContext& context,
+	asASTExprId lhs,
+	asASTExprId rhs,
+	const asCSourceRange& range,
+	const char* methodName)
+{
+	const asCExpr* const leftExpr = context.GetExpr(lhs);
+	const asCExpr* const rightExpr = context.GetExpr(rhs);
+	if( leftExpr == 0 || rightExpr == 0 || !leftExpr->type.IsValid()
+		|| methodName == 0 || methodName[0] == 0 )
+	{
+		return asASTExprId();
+	}
+
+	const asCType* const leftType = context.GetType(leftExpr->type.type);
+	if( leftType == 0
+		|| leftType->kind == asAST_TYPE_PRIMITIVE
+		|| leftType->kind == asAST_TYPE_ENUM
+		|| leftType->kind == asAST_TYPE_VOID )
+	{
+		return asASTExprId();
+	}
+
+	if( engine != 0 )
+	{
+		InternNativeMethods(sema, engine, context,
+			leftExpr->type, methodName);
+	}
+	asCArray<asASTExprId> args;
+	args.PushLast(rhs);
+	const asASTDeclId selected = FindBestCallee(
+		context,
+		FindNamedTypeDecl(context, leftExpr->type),
+		methodName,
+		args,
+		&sema,
+		&leftExpr->type);
+	const asCDecl* const method = context.GetDecl(selected);
+	if( method == 0
+		|| method->kind != asAST_DECL_METHOD
+		|| !method->name.Equals(methodName)
+		|| (method->traits & (asAST_TRAIT_GENERATED | asAST_TRAIT_EXTERNAL)) != 0 )
+	{
+		return asASTExprId();
+	}
+
+	// Clang publishes overloaded `=` / `+=` as calls. Rank against the authored
+	// rhs before ActOnAssign converts it to the lhs type; otherwise
+	// `Object += 7` becomes int→T conversion and CodeGen reinterprets leftover
+	// Assign the same way `Object = 7` did.
+	asCArray<asCString> names;
+	asCArray<asSASTCallArgument> callArguments;
+	ArrangeCallArguments(
+		sema, context, selected, args, names, range, lhs, callArguments);
+	ConvertCallArgumentsToFormalTypes(
+		sema, context, *method, args, range, lhs, callArguments);
+	asCQualType resultType = method->type.IsValid()
+		? method->type : leftExpr->type;
+	const asASTExprId call = sema.ActOnCall(
+		selected, args, resultType, range, &callArguments);
+	if( call.IsValid() && lhs.IsValid() )
+	{
+		context.SetExprReceiver(call, lhs);
+	}
+	return call;
+}
+
 static void ResolvePlainAssignmentOperator(
 	asCSema& sema,
 	asCScriptEngine* engine,
@@ -3299,6 +4866,55 @@ static void ResolvePlainAssignmentOperator(
 	if( selected.IsValid() )
 	{
 		context.SetResolvedDecl(assign, selected);
+	}
+}
+
+static bool IsDeclarationInitializerAssignment(
+	const asCASTContext& context,
+	asASTExprId assign)
+{
+	const asCExpr* const assignExpr = context.GetExpr(assign);
+	if( assignExpr == 0 || assignExpr->kind != asAST_EXPR_ASSIGN
+		|| assignExpr->children.GetLength() != 2 )
+	{
+		return false;
+	}
+
+	const asCExpr* const target = context.GetExpr(assignExpr->children[0]);
+	const asCDecl* const variable = target != 0
+		&& target->kind == asAST_EXPR_DECL_REF
+		? context.GetDecl(target->resolvedDecl) : 0;
+	if( variable == 0 || variable->kind != asAST_DECL_VAR )
+	{
+		return false;
+	}
+
+	// A typed local declaration is lowered to a sibling Assign so statement
+	// consumers have an explicit execution edge, while VarDecl::inits remains
+	// the authoritative initialization relation. ActOnAssign may insert a
+	// representation conversion around that exact initializer, so compare the
+	// wrapper and its conversion source. This identity test cannot classify a
+	// later authored assignment, whose rhs owns a distinct expression id.
+	asASTExprId candidate = assignExpr->children[1];
+	for( ;; )
+	{
+		for( asUINT initIndex = 0;
+			initIndex < variable->inits.GetLength(); ++initIndex )
+		{
+			if( variable->inits[initIndex] == candidate )
+			{
+				return true;
+			}
+		}
+
+		const asCExpr* const candidateExpr = context.GetExpr(candidate);
+		if( candidateExpr == 0
+			|| candidateExpr->kind != asAST_EXPR_CONVERSION
+			|| candidateExpr->children.GetLength() != 1 )
+		{
+			return false;
+		}
+		candidate = candidateExpr->children[0];
 	}
 }
 
@@ -3627,6 +5243,68 @@ asASTExprId asCSema::ActOnAssignExpr(asASTExprId lhs, asASTExprId rhs, const asC
 		}
 		if( const asCExpr* left = context.GetExpr(target) )
 		{
+			const asCDecl* const leftCallee = left->resolvedDecl.IsValid()
+				? context.GetDecl(left->resolvedDecl) : 0;
+			if( left->kind == asAST_EXPR_CALL
+				&& leftCallee != 0
+				&& leftCallee->name.Equals("opIndex")
+				&& left->receiver.IsValid() )
+			{
+				const asASTExprId indexBase = left->receiver;
+				asCSourceRange ovRange = range;
+				if( const asCExpr* baseExpr = context.GetExpr(indexBase) )
+				{
+					ovRange = baseExpr->range;
+				}
+				asASTExprId ov = FindExistingExpr(
+					context, asAST_EXPR_OPAQUE_VALUE, ovRange);
+				if( !ov.IsValid() )
+				{
+					ov = ActOnOpaqueValueExpr(indexBase, ovRange);
+				}
+				asCArray<asASTExprId> indexArgs;
+				indexArgs.SetLength(left->callArguments.GetLength());
+				for( asUINT argumentIndex = 0;
+					argumentIndex < left->callArguments.GetLength();
+					++argumentIndex )
+				{
+					const asSASTCallArgument& argument =
+						left->callArguments[argumentIndex];
+					if( argument.formalIndex >= indexArgs.GetLength() )
+					{
+						indexArgs.SetLength(argument.formalIndex + 1);
+					}
+					indexArgs[argument.formalIndex] = argument.expression;
+				}
+				asCArray<asCString> names;
+				asCArray<asSASTCallArgument> callArguments;
+				ArrangeCallArguments(
+					*this, context, left->resolvedDecl, indexArgs, names,
+					left->range, ov, callArguments);
+				asCQualType idxType = left->type.IsValid()
+					? left->type : context.InternPrimitive(ttInt, 0);
+				const asASTExprId rewritten = ActOnCall(
+					left->resolvedDecl, indexArgs, idxType, left->range,
+					&callArguments);
+				context.SetExprReceiver(rewritten, ov);
+				const asASTExprId add = ActOnBinaryExpr(
+					rewritten, "+", rhs,
+					rhs.IsValid() && context.GetExpr(rhs)
+						? context.GetExpr(rhs)->range : range);
+				const asASTExprId write = ActOnAssign(
+					rewritten, add, idxType, range);
+				asCArray<asASTExprId> parts;
+				parts.PushLast(ov);
+				parts.PushLast(rewritten);
+				parts.PushLast(add);
+				parts.PushLast(write);
+				const asASTExprId seq = ActOnSequenceExpr(parts, range);
+				if( seq.IsValid() )
+				{
+					context.SetLiteral(seq, "opaque");
+				}
+				return seq;
+			}
 			if( left->kind == asAST_EXPR_INDEX && left->children.GetLength() >= 2 )
 			{
 				const asASTExprId base = left->children[0];
@@ -3715,8 +5393,79 @@ asASTExprId asCSema::ActOnAssignExpr(asASTExprId lhs, asASTExprId rhs, const asC
 	{
 		return asASTExprId();
 	}
+	if( const char* const assignMethod = AssignOperatorMethodName(op) )
+	{
+		asASTExprId target = lhs;
+		for( ;; )
+		{
+			const asCExpr* wrap = context.GetExpr(target);
+			if( wrap == 0 )
+			{
+				break;
+			}
+			if( wrap->kind == asAST_EXPR_SEQUENCE && wrap->children.GetLength() > 0 )
+			{
+				target = wrap->children[wrap->children.GetLength() - 1];
+				continue;
+			}
+			if( (wrap->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| wrap->kind == asAST_EXPR_CLEANUP)
+				&& wrap->children.GetLength() > 0 )
+			{
+				target = wrap->children[0];
+				continue;
+			}
+			break;
+		}
+		const asCExpr* const left = context.GetExpr(target);
+		if( left != 0
+			&& left->valueCategory == asAST_VALUE_LVALUE
+			&& !left->type.IsConst() )
+		{
+			const asASTExprId rewrittenCall = TryRewriteOverloadedAssignmentToCall(
+				*this, engine, context, target, rhs, range, assignMethod);
+			if( rewrittenCall.IsValid() )
+			{
+				return rewrittenCall;
+			}
+		}
+	}
 	const asASTExprId assign = ActOnAssign(lhs, rhs, fallback, range);
-	if( assign.IsValid() && op[0] == '=' && op[1] == 0 )
+	if( assign.IsValid()
+		&& !IsDeclarationInitializerAssignment(context, assign) )
+	{
+		asASTExprId target = lhs;
+		for( ;; )
+		{
+			const asCExpr* wrap = context.GetExpr(target);
+			if( wrap == 0 )
+			{
+				break;
+			}
+			if( wrap->kind == asAST_EXPR_SEQUENCE && wrap->children.GetLength() > 0 )
+			{
+				target = wrap->children[wrap->children.GetLength() - 1];
+				continue;
+			}
+			if( (wrap->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| wrap->kind == asAST_EXPR_CLEANUP)
+				&& wrap->children.GetLength() > 0 )
+			{
+				target = wrap->children[0];
+				continue;
+			}
+			break;
+		}
+		const asCExpr* const left = context.GetExpr(target);
+		if( left == 0
+			|| left->valueCategory != asAST_VALUE_LVALUE
+			|| left->type.IsConst() )
+		{
+			AddDiagnostic("expression-not-assignable", range);
+		}
+	}
+	if( assign.IsValid() && op[0] == '=' && op[1] == 0
+		&& !IsDeclarationInitializerAssignment(context, assign) )
 	{
 		// Overloaded value assignment is a Sema decision, not a storage-width
 		// decision for Bytecode CodeGen. Project the current Runtime method set,
@@ -3739,21 +5488,17 @@ asASTExprId asCSema::ActOnAssignExpr(asASTExprId lhs, asASTExprId rhs, const asC
 asASTExprId asCSema::ActOnMemberExpr(asASTExprId base, const char* name, const asCSourceRange& range)
 {
 	const asCQualType intType = context.InternPrimitive(ttInt, 0);
-	const asASTExprId rewritten = TryRewritePropertyGet(*this, context, base, name, intType, range);
-	if( rewritten.IsValid() )
-	{
-		return rewritten;
-	}
 	const asCExpr* baseExpr = context.GetExpr(base);
 	if( baseExpr && engine )
 	{
-		InternNativeProperties(*this, engine, context, baseExpr->type);
+		InternNativePropertyCandidates(baseExpr->type, name);
 	}
 	asCQualType fieldType = intType;
 	asASTDeclId member;
 	if( baseExpr )
 	{
-		member = FindTypeMemberVar(context, FindNamedTypeDecl(context, baseExpr->type), name);
+		member = FindTypeMemberVarFromBases(
+			context, FindNamedTypeDecl(context, baseExpr->type), name);
 		if( const asCDecl* field = context.GetDecl(member) )
 		{
 			if( field->type.IsValid() )
@@ -3762,12 +5507,30 @@ asASTExprId asCSema::ActOnMemberExpr(asASTExprId base, const char* name, const a
 			}
 		}
 	}
-	const asASTExprId id = ActOnMemberRef(base, name ? name : "", fieldType, range);
+	// Clang MemberExpr is storage/lvalue. Generated GetX is by-value sugar.
+	// A stored non-POD / TMap / TArray field used as an Iterator or other
+	// exact-value receiver must stay MEMBER_REF; GetActorMap() would copy.
+	// Primitive/POD reads still rewrite to GetX when a getter binds.
+	if( member.IsValid() && RequiresExactValueObjectPlan(fieldType) )
+	{
+		const asASTExprId id = ActOnMemberRef(base, name ? name : "", fieldType, range);
+		context.SetResolvedDecl(id, member);
+		return id;
+	}
+	const asASTExprId rewritten = TryRewritePropertyGet(
+		*this, context, base, name,
+		fieldType.IsValid() ? fieldType : intType, range);
+	if( rewritten.IsValid() )
+	{
+		return rewritten;
+	}
 	if( member.IsValid() )
 	{
+		const asASTExprId id = ActOnMemberRef(base, name ? name : "", fieldType, range);
 		context.SetResolvedDecl(id, member);
+		return id;
 	}
-	return id;
+	return ActOnMemberRef(base, name ? name : "", fieldType, range);
 }
 
 static asASTExprId MaterializeOwningIndexResult(
@@ -3870,39 +5633,40 @@ asASTExprId asCSema::ActOnIndexExpr(
 	asCQualType resultType = intType;
 	if( const asCDecl* method = context.GetDecl(opIndex) )
 	{
+		asCArray<asASTExprId> args = indices;
 		asCArray<asCString> names;
+		asCArray<asSASTCallArgument> callArguments;
 		if( argumentNames != 0 )
 		{
 			names = *argumentNames;
 		}
+		// Clang publishes overloaded [] as a call with an exact callee,
+		// receiver and argument plan. Keep a leftover Index only when no
+		// opIndex declaration exists (builtin array indexing).
 		ArrangeCallArguments(
-			*this, context, opIndex, indices, names,
-			range, asASTExprId());
+			*this, context, opIndex, args, names, range, base, callArguments);
 		ConvertCallArgumentsToFormalTypes(
-			*this, context, *method, indices,
-			range, asASTExprId());
+			*this, context, *method, args, range, base, callArguments);
 		if( method->type.IsValid() )
 		{
 			resultType = method->type;
 		}
+		const asASTExprId call = ActOnCall(
+			opIndex, args, resultType, range, &callArguments);
+		if( base.IsValid() )
+		{
+			context.SetExprReceiver(call, base);
+		}
+		return MaterializeOwningIndexResult(*this, context, call, range);
 	}
 	const asASTExprId existing = FindExistingExactIndex(
 		context, base, indices, range);
 	if( existing.IsValid() )
 	{
-		if( opIndex.IsValid() )
-		{
-			context.SetResolvedDecl(existing, opIndex);
-			context.SetExprType(existing, resultType);
-		}
 		return MaterializeOwningIndexResult(
 			*this, context, existing, range);
 	}
-	asASTExprId value = ActOnIndex(base, indices, resultType, range);
-	if( opIndex.IsValid() )
-	{
-		context.SetResolvedDecl(value, opIndex);
-	}
+	const asASTExprId value = ActOnIndex(base, indices, resultType, range);
 	return MaterializeOwningIndexResult(*this, context, value, range);
 }
 
@@ -4083,6 +5847,176 @@ static asASTExprId FindExistingExactUnaryCall(
 	return asASTExprId();
 }
 
+static asASTExprId UnwrapMutationTargetExpr(asCASTContext& context, asASTExprId target)
+{
+	for( ;; )
+	{
+		const asCExpr* const wrap = context.GetExpr(target);
+		if( wrap == 0 )
+		{
+			break;
+		}
+		if( wrap->kind == asAST_EXPR_SEQUENCE && wrap->children.GetLength() > 0 )
+		{
+			target = wrap->children[wrap->children.GetLength() - 1];
+			continue;
+		}
+		if( (wrap->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+				|| wrap->kind == asAST_EXPR_CLEANUP)
+			&& wrap->children.GetLength() > 0 )
+		{
+			target = wrap->children[0];
+			continue;
+		}
+		break;
+	}
+	return target;
+}
+
+// Clang prefix/postfix increment of a pseudo-object: OpaqueValue of the base,
+// load, increment, store. Postfix yields the loaded value; prefix yields the
+// incremented value. Compound += already does this for Get/opIndex; leftover
+// Unary pre++/post++ is not an lvalue for CodeGen.
+static asASTExprId RewritePostfixPropertyOrIndexMutation(
+	asCSema& sema,
+	asCASTContext& context,
+	asASTExprId inner,
+	bool decrement,
+	const asCSourceRange& range,
+	bool yieldOriginal)
+{
+	const asASTExprId target = UnwrapMutationTargetExpr(context, inner);
+	const asCExpr* const left = context.GetExpr(target);
+	const asCDecl* const leftCallee = left != 0 && left->resolvedDecl.IsValid()
+		? context.GetDecl(left->resolvedDecl) : 0;
+	if( left == 0 )
+	{
+		return asASTExprId();
+	}
+
+	const asASTExprId one = sema.ActOnIntegerLiteral(1, range);
+	const char* const binOp = decrement ? "-" : "+";
+	if( !one.IsValid() )
+	{
+		return asASTExprId();
+	}
+
+	if( left->kind == asAST_EXPR_CALL && leftCallee != 0
+		&& leftCallee->name.GetLength() > 3
+		&& std::strncmp(leftCallee->name.AddressOf(), "Get", 3) == 0 )
+	{
+		asASTExprId receiver = left->receiver.IsValid()
+			? left->receiver
+			: (left->children.GetLength() > 0
+				? left->children[left->children.GetLength() - 1]
+				: asASTExprId());
+		if( !receiver.IsValid() )
+		{
+			return asASTExprId();
+		}
+		asCSourceRange ovRange = range;
+		if( const asCExpr* const recv = context.GetExpr(receiver) )
+		{
+			ovRange = recv->range;
+		}
+		asASTExprId ov = FindExistingExpr(
+			context, asAST_EXPR_OPAQUE_VALUE, ovRange);
+		if( !ov.IsValid() )
+		{
+			ov = sema.ActOnOpaqueValueExpr(receiver, ovRange);
+		}
+		asCArray<asASTExprId> getArgs;
+		getArgs.PushLast(ov);
+		asCQualType getType = left->type.IsValid()
+			? left->type : context.InternPrimitive(ttInt, 0);
+		const asASTExprId get = sema.ActOnCall(
+			left->resolvedDecl, getArgs, getType, left->range);
+		context.SetExprReceiver(get, ov);
+		const asASTExprId orig = sema.ActOnOpaqueValueExpr(get, range);
+		const asASTExprId add = sema.ActOnBinaryExpr(
+			orig, binOp, one, range);
+		asCQualType fallback = context.InternPrimitive(ttInt, 0);
+		const asASTExprId set = TryRewritePropertySet(
+			sema, context, get, add, fallback, range);
+		if( !set.IsValid() )
+		{
+			return asASTExprId();
+		}
+		asCArray<asASTExprId> parts;
+		parts.PushLast(ov);
+		parts.PushLast(orig);
+		parts.PushLast(add);
+		parts.PushLast(set);
+		parts.PushLast(yieldOriginal ? orig : add);
+		return sema.ActOnSequenceExpr(parts, range);
+	}
+
+	if( left->kind == asAST_EXPR_CALL && leftCallee != 0
+		&& leftCallee->name.Equals("opIndex")
+		&& left->receiver.IsValid()
+		&& left->valueCategory == asAST_VALUE_LVALUE )
+	{
+		const asASTExprId indexBase = left->receiver;
+		asCSourceRange ovRange = range;
+		if( const asCExpr* const baseExpr = context.GetExpr(indexBase) )
+		{
+			ovRange = baseExpr->range;
+		}
+		asASTExprId ov = FindExistingExpr(
+			context, asAST_EXPR_OPAQUE_VALUE, ovRange);
+		if( !ov.IsValid() )
+		{
+			ov = sema.ActOnOpaqueValueExpr(indexBase, ovRange);
+		}
+		asCArray<asASTExprId> indexArgs;
+		indexArgs.SetLength(left->callArguments.GetLength());
+		for( asUINT argumentIndex = 0;
+			argumentIndex < left->callArguments.GetLength();
+			++argumentIndex )
+		{
+			const asSASTCallArgument& argument =
+				left->callArguments[argumentIndex];
+			if( argument.formalIndex >= indexArgs.GetLength() )
+			{
+				indexArgs.SetLength(argument.formalIndex + 1);
+			}
+			indexArgs[argument.formalIndex] = argument.expression;
+		}
+		asCArray<asCString> names;
+		asCArray<asSASTCallArgument> callArguments;
+		ArrangeCallArguments(
+			sema, context, left->resolvedDecl, indexArgs, names,
+			left->range, ov, callArguments);
+		asCQualType idxType = left->type.IsValid()
+			? left->type : context.InternPrimitive(ttInt, 0);
+		const asASTExprId rewritten = sema.ActOnCall(
+			left->resolvedDecl, indexArgs, idxType, left->range,
+			&callArguments);
+		context.SetExprReceiver(rewritten, ov);
+		const asASTExprId loaded = DecayScalarLValueReferenceToRValue(
+			sema, context, rewritten, range);
+		const asASTExprId orig = sema.ActOnOpaqueValueExpr(loaded, range);
+		const asASTExprId add = sema.ActOnBinaryExpr(
+			orig, binOp, one, range);
+		const asASTExprId write = sema.ActOnAssign(
+			rewritten, add, idxType, range);
+		if( !write.IsValid() )
+		{
+			return asASTExprId();
+		}
+		asCArray<asASTExprId> parts;
+		parts.PushLast(ov);
+		parts.PushLast(rewritten);
+		parts.PushLast(orig);
+		parts.PushLast(add);
+		parts.PushLast(write);
+		parts.PushLast(yieldOriginal ? orig : add);
+		return sema.ActOnSequenceExpr(parts, range);
+	}
+
+	return asASTExprId();
+}
+
 asASTExprId asCSema::ActOnUnaryExpr(const char* op, asASTExprId inner, const asCSourceRange& range, bool postfix)
 {
 	const asCQualType intType = context.InternPrimitive(ttInt, 0);
@@ -4091,6 +6025,12 @@ asASTExprId asCSema::ActOnUnaryExpr(const char* op, asASTExprId inner, const asC
 	{
 		methodName = "opNeg";
 	}
+	else if( op && op[0] == '~' && op[1] == 0 )
+	{
+		// LEGACY CompileUnaryOperator maps ttBitNot on objects to opCom.
+		// `~Object` must be a Sema Call, not leftover Unary ~ of T typed as int.
+		methodName = "opCom";
+	}
 	else if( op && op[0] == '+' && op[1] == '+' && op[2] == 0 )
 	{
 		methodName = postfix ? "opPostInc" : "opPreInc";
@@ -4098,6 +6038,23 @@ asASTExprId asCSema::ActOnUnaryExpr(const char* op, asASTExprId inner, const asC
 	else if( op && op[0] == '-' && op[1] == '-' && op[2] == 0 )
 	{
 		methodName = postfix ? "opPostDec" : "opPreDec";
+	}
+	if( methodName
+		&& (std::strcmp(methodName, "opPostInc") == 0
+			|| std::strcmp(methodName, "opPostDec") == 0
+			|| std::strcmp(methodName, "opPreInc") == 0
+			|| std::strcmp(methodName, "opPreDec") == 0) )
+	{
+		const asASTExprId rewritten = RewritePostfixPropertyOrIndexMutation(
+			*this, context, inner,
+			std::strcmp(methodName, "opPostDec") == 0
+				|| std::strcmp(methodName, "opPreDec") == 0,
+			range,
+			postfix);
+		if( rewritten.IsValid() )
+		{
+			return rewritten;
+		}
 	}
 	if( methodName )
 	{
@@ -4123,19 +6080,30 @@ asASTExprId asCSema::ActOnUnaryExpr(const char* op, asASTExprId inner, const asC
 					{
 						type = method->type;
 					}
+					// Unary operator methods take the operand as receiver.
+					// Pushing it as a positional child made 0-arg opCom look
+					// like a one-argument Call.
 					asCArray<asASTExprId> callArgs;
-					callArgs.PushLast(inner);
+					asCArray<asCString> names;
+					asCArray<asSASTCallArgument> callArguments;
+					ArrangeCallArguments(
+						*this, context, callee, callArgs, names, range,
+						inner, callArguments);
+					ConvertCallArgumentsToFormalTypes(
+						*this, context, *method, callArgs, range, inner,
+						callArguments);
 					asASTExprId call = FindExistingExactUnaryCall(
 						context, range, callee, inner);
 					if( !call.IsValid() )
 					{
-						call = ActOnCall(callee, callArgs, type, range);
-						context.SetExprReceiver(call, inner);
+						call = ActOnCall(
+							callee, callArgs, type, range, &callArguments);
+						if( call.IsValid() && inner.IsValid() )
+						{
+							context.SetExprReceiver(call, inner);
+						}
 					}
-					const asCType* const resultType = context.GetType(type.type);
-					return resultType != 0
-						&& resultType->kind != asAST_TYPE_PRIMITIVE
-						&& resultType->kind != asAST_TYPE_VOID
+					return ShouldMaterializeCallResult(context, type)
 						? ActOnMaterializeTemporary(call, range) : call;
 				}
 			}
@@ -4250,8 +6218,7 @@ static asASTDeclId FindAggregateElementDestructor(
 			&& destructor->kind == asAST_DECL_DESTRUCTOR
 			? context.GetDecl(destructor->parent) : 0;
 		if( owner != 0 && owner->kind == asAST_DECL_CLASS
-			&& (owner->stableKey.Equals(type->stableKey)
-				|| owner->name.Equals(type->stableKey)) )
+			&& owner->stableKey.Equals(type->stableKey) )
 		{
 			return destructor->id;
 		}
@@ -4434,6 +6401,34 @@ static const char* OperatorMethodNameFromText(const char* op)
 	{
 		return "opMod";
 	}
+	if( std::strcmp(op, "**") == 0 )
+	{
+		return "opPow";
+	}
+	if( std::strcmp(op, "|") == 0 )
+	{
+		return "opOr";
+	}
+	if( std::strcmp(op, "&") == 0 )
+	{
+		return "opAnd";
+	}
+	if( std::strcmp(op, "^") == 0 )
+	{
+		return "opXor";
+	}
+	if( std::strcmp(op, "<<") == 0 )
+	{
+		return "opShl";
+	}
+	if( std::strcmp(op, ">>") == 0 )
+	{
+		return "opShr";
+	}
+	if( std::strcmp(op, ">>>") == 0 )
+	{
+		return "opUShr";
+	}
 	if( std::strcmp(op, "==") == 0 || std::strcmp(op, "!=") == 0 )
 	{
 		return "opEquals";
@@ -4444,6 +6439,31 @@ static const char* OperatorMethodNameFromText(const char* op)
 		return "opCmp";
 	}
 	return 0;
+}
+
+static const char* InvertComparisonOperator(const char* op)
+{
+	if( op == 0 )
+	{
+		return 0;
+	}
+	if( std::strcmp(op, "<") == 0 )
+	{
+		return ">";
+	}
+	if( std::strcmp(op, ">") == 0 )
+	{
+		return "<";
+	}
+	if( std::strcmp(op, "<=") == 0 )
+	{
+		return ">=";
+	}
+	if( std::strcmp(op, ">=") == 0 )
+	{
+		return "<=";
+	}
+	return op;
 }
 
 asASTExprId asCSema::ActOnConditionalExpr(asASTExprId cond, asASTExprId thenExpr, asASTExprId elseExpr, const asCSourceRange& range)
@@ -4683,6 +6703,109 @@ asASTExprId asCSema::ActOnLogicalExpr(asASTExprId lhs, const char* op, asASTExpr
 	return ActOnLogical(op ? op : "", lhs, rhs, ident);
 }
 
+static asASTExprId DecayScalarLValueReferenceToRValue(
+	asCSema& sema,
+	asCASTContext& context,
+	asASTExprId expr,
+	const asCSourceRange& range)
+{
+	const asCExpr* const value = context.GetExpr(expr);
+	if( value == 0 || !value->type.IsReference() || value->type.IsHandle() )
+	{
+		return expr;
+	}
+	// EmitCall/EmitIndex of T& leave a pointer slot. EmitDeclRef of a
+	// parameter or local T& already loads the pointee, so wrapping that
+	// DeclRef in LValueToRValue double-dereferences and crashes
+	// (`Iterator = Iterator + 1` in foreach opForNext).
+	if( value->kind != asAST_EXPR_CALL && value->kind != asAST_EXPR_INDEX )
+	{
+		return expr;
+	}
+	const asCType* const named = context.GetType(value->type.type);
+	if( named == 0
+		|| (named->kind != asAST_TYPE_PRIMITIVE
+			&& named->kind != asAST_TYPE_ENUM) )
+	{
+		return expr;
+	}
+	asCQualType dest = value->type;
+	// LValueToRValue is a value, not a parameter. Stripping only REFERENCE
+	// leaves IN/OUT/INOUT on a non-reference QualType, which
+	// asASTQualifiersAreValid rejects (`const T&in` Call results).
+	dest.quals &= ~(asAST_QUAL_REFERENCE | asAST_QUAL_PARAM_DIR_MASK);
+	return sema.ActOnConversion(expr, dest, range);
+}
+
+static asASTExprId TryRewriteOverloadedBinaryToCall(
+	asCSema& sema,
+	asCScriptEngine* engine,
+	asCASTContext& context,
+	asASTExprId receiver,
+	asASTExprId argument,
+	const char* methodName,
+	const asCSourceRange& range)
+{
+	const asCExpr* const receiverExpr = context.GetExpr(receiver);
+	if( receiverExpr == 0 || !receiverExpr->type.IsValid()
+		|| methodName == 0 || methodName[0] == 0 )
+	{
+		return asASTExprId();
+	}
+
+	const asCType* const receiverType = context.GetType(receiverExpr->type.type);
+	if( receiverType == 0
+		|| receiverType->kind == asAST_TYPE_PRIMITIVE
+		|| receiverType->kind == asAST_TYPE_ENUM
+		|| receiverType->kind == asAST_TYPE_VOID )
+	{
+		return asASTExprId();
+	}
+
+	if( engine != 0 )
+	{
+		InternNativeMethods(sema, engine, context,
+			receiverExpr->type, methodName);
+	}
+
+	asCArray<asASTExprId> args;
+	if( argument.IsValid() )
+	{
+		args.PushLast(argument);
+	}
+	const asASTDeclId selected = FindBestCallee(
+		context,
+		FindNamedTypeDecl(context, receiverExpr->type),
+		methodName,
+		args,
+		&sema,
+		&receiverExpr->type);
+	const asCDecl* const method = context.GetDecl(selected);
+	if( method == 0
+		|| method->kind != asAST_DECL_METHOD
+		|| !method->name.Equals(methodName) )
+	{
+		return asASTExprId();
+	}
+
+	asCArray<asCString> names;
+	asCArray<asSASTCallArgument> callArguments;
+	ArrangeCallArguments(
+		sema, context, selected, args, names, range, receiver, callArguments);
+	ConvertCallArgumentsToFormalTypes(
+		sema, context, *method, args, range, receiver, callArguments);
+	asCQualType resultType = method->type.IsValid()
+		? method->type : context.InternPrimitive(ttInt, 0);
+	const asASTExprId call = sema.ActOnCall(
+		selected, args, resultType, range, &callArguments);
+	if( call.IsValid() && receiver.IsValid() )
+	{
+		context.SetExprReceiver(call, receiver);
+	}
+	return ShouldMaterializeCallResult(context, resultType)
+		? sema.ActOnMaterializeTemporary(call, range) : call;
+}
+
 asASTExprId asCSema::ActOnBinaryExpr(asASTExprId lhs, const char* op, asASTExprId rhs, const asCSourceRange& range)
 {
 	const asCSourceRange ident = SpanExprRange(context, lhs, rhs, range);
@@ -4690,72 +6813,83 @@ asASTExprId asCSema::ActOnBinaryExpr(asASTExprId lhs, const char* op, asASTExprI
 	const char* methodName = OperatorMethodNameFromText(op);
 	if( methodName )
 	{
-		if( const asCExpr* lhsExpr = context.GetExpr(lhs) )
+		const asASTExprId rewrittenCall = TryRewriteOverloadedBinaryToCall(
+			*this, engine, context, lhs, rhs, methodName, ident);
+		if( rewrittenCall.IsValid() )
 		{
-			if( engine != 0 )
+			asASTExprId result = rewrittenCall;
+			// `==` and `!=` both rank `opEquals`. Inequality is a
+			// Sema fact: wrap the equality Call in Unary `!` so
+			// `Left != Right` cannot execute as a bare equality.
+			if( op && std::strcmp(op, "!=") == 0 )
 			{
-				// Native operators are not eagerly copied into every Canonical AST.
-				// Project only the requested operator before overload resolution, as
-				// the ordinary member-call path does.  Otherwise `FString + FString`
-				// is misclassified as builtin scalar arithmetic and later acquires a
-				// meaningless conversion back to FString.
-				InternNativeMethods(*this, engine, context,
-					lhsExpr->type, methodName);
+				result = ActOnUnaryExpr("!", result, ident, false);
 			}
-			const asASTDeclId typeDecl = FindNamedTypeDecl(context, lhsExpr->type);
-			if( typeDecl.IsValid() )
+			// `<`/`>`/`<=`/`>=` all rank `opCmp`, which returns
+			// int. AngelScript compares that ranking against 0;
+			// a leftover Call would treat any non-zero result as
+			// true (`3 < 1` became truthy because opCmp returned 2).
+			else if( op
+				&& (std::strcmp(op, "<") == 0
+					|| std::strcmp(op, ">") == 0
+					|| std::strcmp(op, "<=") == 0
+					|| std::strcmp(op, ">=") == 0) )
 			{
-				asCArray<asASTExprId> opArgs;
-				if( rhs.IsValid() )
+				const asCQualType boolType =
+					context.InternPrimitive(ttBool, 0);
+				const asASTExprId zero =
+					ActOnIntegerLiteral(0, ident);
+				result = ActOnBinary(op, result, zero, boolType, ident);
+			}
+			return result;
+		}
+		if( rhs.IsValid() )
+		{
+			// `opEquals`/`opCmp` have no `_r` names. When the lhs cannot host
+			// the method, AngelScript retries the same name on the rhs and
+			// inverts comparison operators (`3 < Object` is Object.opCmp(3) > 0).
+			if( std::strcmp(methodName, "opEquals") == 0
+				|| std::strcmp(methodName, "opCmp") == 0 )
+			{
+				const asASTExprId swappedCall = TryRewriteOverloadedBinaryToCall(
+					*this, engine, context, rhs, lhs, methodName, ident);
+				if( swappedCall.IsValid() )
 				{
-					opArgs.PushLast(rhs);
-				}
-				const asASTDeclId callee = FindBestCallee(context, typeDecl, methodName, opArgs, this);
-				if( const asCDecl* method = context.GetDecl(callee) )
-				{
-					if( method->kind == asAST_DECL_METHOD && method->name.Equals(methodName) )
+					asASTExprId result = swappedCall;
+					if( op && std::strcmp(op, "!=") == 0 )
 					{
-						asUINT paramIndex = 0;
-						for( asUINT p = 0; p < method->children.GetLength(); ++p )
-						{
-							const asCDecl* param = context.GetDecl(method->children[p]);
-							if( param == 0 || param->kind != asAST_DECL_PARAM )
-							{
-								continue;
-							}
-							if( paramIndex >= opArgs.GetLength() )
-							{
-								break;
-							}
-							const asCExpr* arg = context.GetExpr(opArgs[paramIndex]);
-							if( arg && !QualTypesMatch(param->type, arg->type) )
-							{
-								opArgs[paramIndex] = ActOnConversion(opArgs[paramIndex], param->type, ident);
-							}
-							++paramIndex;
-						}
-						asCQualType type = intType;
-						if( method->type.IsValid() )
-						{
-							type = method->type;
-						}
-						asCArray<asASTExprId> callArgs;
-						callArgs.PushLast(lhs);
-						for( asUINT argumentIndex = 0;
-							argumentIndex < opArgs.GetLength(); ++argumentIndex )
-						{
-							callArgs.PushLast(opArgs[argumentIndex]);
-						}
-						const asASTExprId call = ActOnCall(
-							callee, callArgs, type, ident);
-						context.SetExprReceiver(call, lhs);
-						const asCType* const resultType =
-							context.GetType(type.type);
-						return resultType != 0
-							&& resultType->kind != asAST_TYPE_PRIMITIVE
-							&& resultType->kind != asAST_TYPE_VOID
-							? ActOnMaterializeTemporary(call, ident) : call;
+						result = ActOnUnaryExpr("!", result, ident, false);
 					}
+					else if( op
+						&& (std::strcmp(op, "<") == 0
+							|| std::strcmp(op, ">") == 0
+							|| std::strcmp(op, "<=") == 0
+							|| std::strcmp(op, ">=") == 0) )
+					{
+						const asCQualType boolType =
+							context.InternPrimitive(ttBool, 0);
+						const asASTExprId zero =
+							ActOnIntegerLiteral(0, ident);
+						result = ActOnBinary(
+							InvertComparisonOperator(op), result, zero,
+							boolType, ident);
+					}
+					return result;
+				}
+			}
+			else
+			{
+				// AngelScript reverse operators (`opAdd_r`) live on the rhs when
+				// the lhs has no matching `opAdd`. `40 + Object` must become a
+				// Call of `T::opAdd_r(int)` with receiver=Object.
+				asCString reverseName(methodName);
+				reverseName += "_r";
+				const asASTExprId reverseCall = TryRewriteOverloadedBinaryToCall(
+					*this, engine, context, rhs, lhs,
+					reverseName.AddressOf(), ident);
+				if( reverseCall.IsValid() )
+				{
+					return reverseCall;
 				}
 			}
 		}
@@ -4763,6 +6897,16 @@ asASTExprId asCSema::ActOnBinaryExpr(asASTExprId lhs, const char* op, asASTExprI
 	if( !lhs.IsValid() )
 	{
 		return asASTExprId();
+	}
+
+	// Clang UsualUnaryConversions includes LValueToRValue. A builtin arithmetic
+	// operand whose QualType is a scalar reference (array opIndex returning
+	// T&) must decay before the Binary node is sealed. Otherwise CodeGen keeps
+	// the pointer slot and `Values[0] + 1` adds 1 to an address.
+	lhs = DecayScalarLValueReferenceToRValue(*this, context, lhs, ident);
+	if( rhs.IsValid() )
+	{
+		rhs = DecayScalarLValueReferenceToRValue(*this, context, rhs, ident);
 	}
 
 	// The parser resolves the source spelling `float` according to the engine
@@ -4944,19 +7088,44 @@ static bool IsDerivedReferenceArgument(
 {
 	const asCType* const parameter = context.GetType(parameterType.type);
 	const asCType* const argument = context.GetType(argumentType.type);
-	if( parameter == 0 || argument == 0
-		|| parameter->kind != asAST_TYPE_REFERENCE_OBJECT
-		|| argument->kind != asAST_TYPE_REFERENCE_OBJECT )
+	if( parameter == 0 || argument == 0 )
 	{
 		return false;
 	}
 
 	const asASTDeclId argumentDecl = FindNamedTypeDecl(context, argumentType);
+	const asASTDeclId parameterDecl = FindNamedTypeDecl(context, parameterType);
+	const asCDecl* const argumentRecord = context.GetDecl(argumentDecl);
+	const asCDecl* const parameterRecord = context.GetDecl(parameterDecl);
+	const bool argumentIsReferenceRecord =
+		argument->kind == asAST_TYPE_REFERENCE_OBJECT
+		|| (argumentRecord != 0
+			&& (argumentRecord->kind == asAST_DECL_CLASS
+				|| argumentRecord->kind == asAST_DECL_INTERFACE)
+			&& (argumentRecord->traits & asAST_TRAIT_VALUE) == 0);
+	const bool parameterIsReferenceRecord =
+		parameter->kind == asAST_TYPE_REFERENCE_OBJECT
+		|| (parameterRecord != 0
+			&& (parameterRecord->kind == asAST_DECL_CLASS
+				|| parameterRecord->kind == asAST_DECL_INTERFACE)
+			&& (parameterRecord->traits & asAST_TRAIT_VALUE) == 0);
+	if( !argumentIsReferenceRecord || !parameterIsReferenceRecord )
+	{
+		return false;
+	}
 	if( !argumentDecl.IsValid() )
 	{
 		return false;
 	}
-	const asASTDeclId parameterDecl = FindNamedTypeDecl(context, parameterType);
+	if( argumentRecord != 0
+		&& IsAuthoredScriptClass(context, argumentDecl)
+		&& parameter != 0
+		&& parameter->stableKey.Equals("UObject") )
+	{
+		// UE script classes are UObject-derived even when extra-module
+		// compile has not yet projected PreClass native ancestry onto Decl::bases.
+		return true;
+	}
 	asCArray<asASTDeclId> frontier;
 	frontier.PushLast(argumentDecl);
 	asCArray<asASTDeclId> visited;
@@ -5064,7 +7233,37 @@ static bool HasZeroArgImplConvTo(
 	return FindZeroArgImplConv(context, fromType, toType).IsValid();
 }
 
-static int RankArgument(asCASTContext& context, const asCQualType& paramType, const asCExpr* arg, asCSema* sema)
+static bool IsCanonicalNullLiteral(const asCASTContext& context, const asCExpr* expr)
+{
+	if( expr == 0 || expr->kind != asAST_EXPR_NULL_LITERAL
+		|| !expr->type.IsHandle() || expr->type.IsReference() )
+	{
+		return false;
+	}
+	const asCType* const type = context.GetType(expr->type.type);
+	return type != 0 && type->kind == asAST_TYPE_VOID
+		&& type->primitiveToken == ttVoid;
+}
+
+static bool IsCanonicalNullableFormal(
+	const asCASTContext& context, const asCQualType& formalType)
+{
+	const asCType* const type = context.GetType(formalType.type);
+	// Match legacy ImplicitConvObjectRef exactly for the supported Canonical
+	// surface: null converts to a non-reference REFERENCE_OBJECT, including an
+	// asOBJ_IMPLICIT_HANDLE spelling that intentionally has no explicit HANDLE
+	// qualifier. A HANDLE bit on a value/template shape is not sufficient, and
+	// funcdefs need their own independently sealed owning-handle contract.
+	return type != 0
+		&& !formalType.IsReference()
+		&& type->kind == asAST_TYPE_REFERENCE_OBJECT;
+}
+
+// Rank only exact and language-standard conversions. User-defined conversions
+// are layered on top by RankArgument so one call cannot silently chain
+// opImplConv with a target-side implicit constructor.
+static int RankStandardArgument(asCASTContext& context,
+	const asCQualType& paramType, const asCExpr* arg, asCSema* sema)
 {
 	if( arg == 0 )
 	{
@@ -5075,11 +7274,21 @@ static int RankArgument(asCASTContext& context, const asCQualType& paramType, co
 		return 2;
 	}
 	const asCType* const directParamType = context.GetType(paramType.type);
-	if( directParamType != 0 && directParamType->kind == asAST_TYPE_WILDCARD )
+	if( (directParamType != 0 && directParamType->kind == asAST_TYPE_WILDCARD)
+		|| (directParamType != 0 && directParamType->stableKey.Equals("?")) )
 	{
-		// A registered `?` formal accepts the call-site value's exact runtime
-		// type.  Keep it viable but rank it below a concrete exact overload.
+		// A registered `?` / `const ?&` formal accepts the call-site value,
+		// including enum literals and other rvalues. Keep it viable but rank it
+		// below a concrete exact overload.
 		return 0;
+	}
+	if( IsCanonicalNullLiteral(context, arg) )
+	{
+		// Match legacy ImplicitConvObjectRef: null is a reference conversion only
+		// to a non-reference object handle. Keep it below an exact overload and
+		// equal across unrelated nullable overloads so
+		// ambiguity remains deterministic rather than registration-order driven.
+		return IsCanonicalNullableFormal(context, paramType) ? 1 : -1;
 	}
 	if( IsFuncdefType(context, paramType) )
 	{
@@ -5103,13 +7312,110 @@ static int RankArgument(asCASTContext& context, const asCQualType& paramType, co
 		// seal the explicit reference conversion after overload selection.
 		return 1;
 	}
-	if( HasZeroArgImplConvTo(context, arg->type, paramType) )
+	if( sema != 0 )
 	{
-		return 1;
+		asCRuntimeTypeBridge derivedBridge(sema->GetEngine());
+		const asCDataType paramDt = derivedBridge.Resolve(context, paramType);
+		const asCDataType argDt = derivedBridge.Resolve(context, arg->type);
+		asCObjectType* const paramObject = CastToObjectType(paramDt.GetTypeInfo());
+		asCObjectType* const argObject = CastToObjectType(argDt.GetTypeInfo());
+		if( paramObject != 0 && argObject != 0
+			&& (paramObject->GetFlags() & asOBJ_REF) != 0
+			&& (argObject->GetFlags() & asOBJ_REF) != 0
+			&& (argObject == paramObject
+				|| argObject->DerivesOrShadows(paramObject)
+				|| argObject->Implements(paramObject)) )
+		{
+			return 1;
+		}
+	}
+	if( sema != 0 )
+	{
+		// Host templates such as TSubclassOf<T> are value objects. A derived
+		// script/native T is accepted by TSubclassOf<Base> through the same
+		// covariant subtype relationship LEGACY implements with DerivesOrShadows.
+		asCRuntimeTypeBridge bridge(sema->GetEngine());
+		const asCDataType paramDt = bridge.Resolve(context, paramType);
+		const asCDataType argDt = bridge.Resolve(context, arg->type);
+		asCObjectType* const paramObject = CastToObjectType(paramDt.GetTypeInfo());
+		asCObjectType* const argObject = CastToObjectType(argDt.GetTypeInfo());
+		const bool covariantTemplates = paramObject != 0 && argObject != 0
+			&& (paramObject->GetFlags() & asOBJ_TEMPLATE_SUBTYPE_COVARIANT) != 0
+			&& (argObject->GetFlags() & asOBJ_TEMPLATE_SUBTYPE_COVARIANT) != 0
+			&& paramObject->templateBaseType != 0
+			&& paramObject->templateBaseType == argObject->templateBaseType
+			&& paramObject->templateSubTypes.GetLength()
+				== argObject->templateSubTypes.GetLength()
+			&& paramObject->templateSubTypes.GetLength() != 0;
+		if( covariantTemplates )
+		{
+			bool covariant = true;
+			for( asUINT subIndex = 0;
+				covariant && subIndex < paramObject->templateSubTypes.GetLength();
+				++subIndex )
+			{
+				asCObjectType* const paramSub = CastToObjectType(
+					paramObject->templateSubTypes[subIndex].GetTypeInfo());
+				asCObjectType* const argSub = CastToObjectType(
+					argObject->templateSubTypes[subIndex].GetTypeInfo());
+				if( paramSub == 0 || argSub == 0 )
+				{
+					covariant = false;
+					break;
+				}
+				if( argSub != paramSub
+					&& !argSub->DerivesOrShadows(paramSub)
+					&& !argSub->Implements(paramSub) )
+				{
+					covariant = false;
+				}
+			}
+			if( covariant )
+			{
+				return 1;
+			}
+		}
+
+		const asCType* const paramNamed = context.GetType(paramType.type);
+		const asCType* const argNamed = context.GetType(arg->type.type);
+		if( paramNamed != 0 && argNamed != 0
+			&& paramNamed->stableKey.GetLength() != 0
+			&& argNamed->stableKey.GetLength() != 0 )
+		{
+			const char* const paramKey = paramNamed->stableKey.AddressOf();
+			const char* const argKey = argNamed->stableKey.AddressOf();
+			const char* const paramOpen = strchr(paramKey, '<');
+			const char* const argOpen = strchr(argKey, '<');
+			const asUINT paramLen = paramNamed->stableKey.GetLength();
+			const asUINT argLen = argNamed->stableKey.GetLength();
+			if( paramOpen != 0 && argOpen != 0
+				&& paramKey[paramLen - 1] == '>'
+				&& argKey[argLen - 1] == '>'
+				&& (paramOpen - paramKey) == (argOpen - argKey)
+				&& strncmp(paramKey, argKey, paramOpen - paramKey) == 0 )
+			{
+				asCString paramInner;
+				asCString argInner;
+				paramInner.Assign(
+					paramOpen + 1,
+					static_cast<asUINT>((paramKey + paramLen - 1) - (paramOpen + 1)));
+				argInner.Assign(
+					argOpen + 1,
+					static_cast<asUINT>((argKey + argLen - 1) - (argOpen + 1)));
+				const asCQualType paramSubType = context.InternNamedType(
+					asAST_TYPE_REFERENCE_OBJECT, paramInner.AddressOf(), 0);
+				const asCQualType argSubType = context.InternNamedType(
+					asAST_TYPE_REFERENCE_OBJECT, argInner.AddressOf(), 0);
+				if( IsDerivedReferenceArgument(context, paramSubType, argSubType) )
+				{
+					return 1;
+				}
+			}
+		}
 	}
 	const asCType* param = ResolveTypedefValueType(context, context.GetType(paramType.type));
 	const asCType* argType = ResolveTypedefValueType(context, context.GetType(arg->type.type));
-	if( IsIntegerLike(param) && IsIntegerLike(argType) )
+	if( IsIntegerPrimitive(param) && IsIntegerPrimitive(argType) )
 	{
 		return 1;
 	}
@@ -5122,18 +7428,415 @@ static int RankArgument(asCASTContext& context, const asCQualType& paramType, co
 		// an otherwise exact native target merely because the widths differ.
 		return 1;
 	}
-	if( IsFloatPrimitive(param) && IsIntegerLike(argType) )
+	if( IsFloatPrimitive(param) && IsIntegerPrimitive(argType) )
 	{
 		return 1;
 	}
-	if( IsIntegerLike(param) && IsFloatPrimitive(argType) )
+	if( IsIntegerPrimitive(param) && IsFloatPrimitive(argType) )
 	{
 		return 0;
 	}
 	return -1;
 }
 
-static asASTDeclId FindBestCallee(asCASTContext& context, asASTDeclId owner, const char* name, const asCArray<asASTExprId>& args, asCSema* sema, const asCQualType* receiverType, bool exactScope)
+static asASTDeclId FindTargetImplicitConstructor(
+	asCASTContext& context,
+	const asCQualType& targetType,
+	const asCExpr* argument,
+	asCSema* sema)
+{
+	const asCDecl* const target =
+		context.GetDecl(FindNamedTypeDecl(context, targetType));
+	if( target == 0 || target->kind != asAST_DECL_CLASS || argument == 0 )
+	{
+		return asASTDeclId();
+	}
+
+	asASTDeclId best;
+	int bestRank = -1;
+	bool ambiguous = false;
+	for( asUINT childIndex = 0;
+		childIndex < target->children.GetLength(); ++childIndex )
+	{
+		const asCDecl* const constructor =
+			context.GetDecl(target->children[childIndex]);
+		if( constructor == 0
+			|| constructor->kind != asAST_DECL_CONSTRUCTOR
+			|| CountParams(context, constructor) != 1 )
+		{
+			continue;
+		}
+		// Native constructors convert only when the host marked them implicit.
+		// Script one-parameter constructors are converting constructors, matching
+		// Clang's non-explicit CXXConstructorDecl used as CXXConstructExpr.
+		if( (constructor->traits & asAST_TRAIT_IMPLICIT_CONSTRUCTOR) == 0
+			&& (constructor->traits & asAST_TRAIT_EXTERNAL) != 0 )
+		{
+			continue;
+		}
+		const asCDecl* const parameter =
+			context.GetFormalDecl(constructor->id, 0);
+		const int rank = parameter != 0
+			? RankStandardArgument(context, parameter->type, argument, sema)
+			: -1;
+		if( rank < 0 )
+		{
+			continue;
+		}
+		if( rank > bestRank )
+		{
+			bestRank = rank;
+			best = constructor->id;
+			ambiguous = false;
+		}
+		else if( rank == bestRank && best.IsValid() )
+		{
+			ambiguous = true;
+		}
+	}
+	return ambiguous ? asASTDeclId() : best;
+}
+
+static int RankArgument(asCASTContext& context, const asCQualType& paramType,
+	const asCExpr* arg, asCSema* sema)
+{
+	const int standardRank =
+		RankStandardArgument(context, paramType, arg, sema);
+	if( standardRank >= 0 )
+	{
+		return standardRank;
+	}
+	if( HasZeroArgImplConvTo(context, arg->type, paramType) )
+	{
+		return 1;
+	}
+	// A target implicit constructor is one user-defined conversion and ranks
+	// below a source-owned opImplConv. Its constructor argument is deliberately
+	// tested with RankStandardArgument, so the two user conversions cannot chain.
+	return FindTargetImplicitConstructor(
+		context, paramType, arg, sema).IsValid() ? 0 : -1;
+}
+
+struct asSCallArgumentPlanSlot
+{
+	asASTDeclId formal;
+	asCQualType formalType;
+	asCString formalName;
+	asUINT formalIndex;
+	asUINT argumentIndex;
+	asUINT sourceOrdinal;
+	asEASTCallArgumentOrigin origin;
+	asCString authoredName;
+
+	asSCallArgumentPlanSlot()
+		: formalIndex(asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL)
+		, argumentIndex(asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL)
+		, sourceOrdinal(asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL)
+		, origin(asAST_CALL_ARGUMENT_INVALID)
+	{
+	}
+};
+
+static bool AppendCallArgumentFormal(
+	asCASTContext& context,
+	const asCDecl& formal,
+	asUINT formalIndex,
+	asCArray<asSCallArgumentPlanSlot>& plan)
+{
+	if( formal.kind != asAST_DECL_PARAM
+		|| formal.formalIndex != formalIndex )
+	{
+		return false;
+	}
+	asSCallArgumentPlanSlot slot;
+	slot.formal = formal.id;
+	slot.formalType = formal.type;
+	slot.formalName = formal.name;
+	slot.formalIndex = formalIndex;
+	if( formal.origin.Equals("hidden") )
+	{
+		slot.origin = asAST_CALL_ARGUMENT_HIDDEN;
+	}
+	plan.PushLast(slot);
+	return true;
+}
+
+static bool BuildCallableFormalView(
+	asCSema* sema,
+	asCASTContext& context,
+	const asCDecl& callee,
+	asCArray<asSCallArgumentPlanSlot>& plan)
+{
+	plan.SetLength(0);
+	if( callee.kind != asAST_DECL_PARAM && callee.kind != asAST_DECL_VAR )
+	{
+		const asUINT formalCount = context.GetFormalDeclCount(callee.id);
+		for( asUINT formalIndex = 0; formalIndex < formalCount; ++formalIndex )
+		{
+			const asCDecl* const param =
+				context.GetFormalDecl(callee.id, formalIndex);
+			if( param == 0
+				|| !AppendCallArgumentFormal(
+					context, *param, formalIndex, plan) )
+			{
+				plan.SetLength(0);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	const asCType* const callableType = context.GetType(callee.type.type);
+	if( callableType == 0 || callableType->kind != asAST_TYPE_FUNCDEF
+		|| callableType->stableKey.GetLength() == 0 )
+	{
+		return false;
+	}
+
+	const asCDecl* canonicalFuncdef = 0;
+	for( asUINT declarationIndex = 1;
+		declarationIndex <= context.GetDeclCount(); ++declarationIndex )
+	{
+		const asCDecl* const declaration =
+			context.GetDecl(asASTDeclId(declarationIndex));
+		if( declaration == 0 || declaration->kind != asAST_DECL_FUNCDEF
+			|| !declaration->stableKey.Equals(callableType->stableKey) )
+		{
+			continue;
+		}
+		if( canonicalFuncdef != 0 )
+		{
+			return false;
+		}
+		canonicalFuncdef = declaration;
+	}
+	if( canonicalFuncdef == 0 && sema != 0 )
+	{
+		const asASTDeclId projected =
+			sema->ProjectCanonicalRegisteredFuncdef(callableType->stableKey);
+		canonicalFuncdef = context.GetDecl(projected);
+	}
+	if( canonicalFuncdef == 0 )
+	{
+		return false;
+	}
+
+	// Indirect VAR/PARAM calls have no callee-owned ParamDecl. Verifier
+	// requires pointer-free formalIndex + QualType only.
+	const asUINT formalCount =
+		context.GetFormalDeclCount(canonicalFuncdef->id);
+	for( asUINT formalIndex = 0; formalIndex < formalCount; ++formalIndex )
+	{
+		const asCDecl* const param =
+			context.GetFormalDecl(canonicalFuncdef->id, formalIndex);
+		if( param == 0 || !param->type.IsValid() )
+		{
+			plan.SetLength(0);
+			return false;
+		}
+		asSCallArgumentPlanSlot slot;
+		slot.formalType = param->type;
+		slot.formalName = param->name;
+		slot.formalIndex = formalIndex;
+		plan.PushLast(slot);
+	}
+	return true;
+}
+
+// Build the source-to-formal binding without creating or rewriting AST nodes.
+// Overload viability and the selected-callee arrangement pass must agree on
+// named/default/hidden slots before any synthesized expression exists.
+static bool TryBuildCallArgumentPlan(
+	asCSema* sema,
+	asCASTContext& context,
+	const asCDecl& callee,
+	const asCArray<asASTExprId>& args,
+	const asCArray<asCString>* argumentNames,
+	asASTExprId implicitReceiver,
+	asCArray<asSCallArgumentPlanSlot>& plan)
+{
+	if( !BuildCallableFormalView(sema, context, callee, plan) )
+	{
+		return false;
+	}
+
+	const bool hasReceiver = implicitReceiver.IsValid()
+		&& args.GetLength() != 0 && args[0] == implicitReceiver;
+	const bool receiverIsFormal = hasReceiver
+		&& callee.kind == asAST_DECL_MIXIN;
+	const bool receiverBelongsToCallee = hasReceiver
+		&& (callee.kind == asAST_DECL_METHOD
+			|| callee.kind == asAST_DECL_MIXIN);
+	const asUINT sourceBegin = receiverBelongsToCallee ? 1 : 0;
+	const asUINT sourceCount = args.GetLength() - sourceBegin;
+	const asUINT nameCount = argumentNames != 0
+		? argumentNames->GetLength() : 0;
+	const bool namesIncludeReceiver = receiverBelongsToCallee
+		&& nameCount == args.GetLength();
+	if( nameCount != 0 && nameCount != sourceCount
+		&& !namesIncludeReceiver )
+	{
+		return false;
+	}
+
+	if( receiverIsFormal )
+	{
+		if( plan.GetLength() == 0
+			|| plan[0].origin != asAST_CALL_ARGUMENT_INVALID )
+		{
+			return false;
+		}
+		plan[0].argumentIndex = 0;
+		plan[0].origin = asAST_CALL_ARGUMENT_IMPLICIT_RECEIVER;
+	}
+
+	asUINT nextPositional = receiverIsFormal ? 1 : 0;
+	for( asUINT argumentIndex = sourceBegin;
+		argumentIndex < args.GetLength(); ++argumentIndex )
+	{
+		if( context.GetExpr(args[argumentIndex]) == 0 )
+		{
+			return false;
+		}
+		const asUINT sourceOrdinal = argumentIndex - sourceBegin;
+		const asUINT nameIndex = namesIncludeReceiver
+			? argumentIndex : sourceOrdinal;
+		const asCString* const authoredName =
+			argumentNames != 0 && nameIndex < nameCount
+				? &(*argumentNames)[nameIndex] : 0;
+		if( authoredName != 0 && authoredName->GetLength() != 0 )
+		{
+			bool matched = false;
+			for( asUINT formalIndex = 0;
+				formalIndex < plan.GetLength(); ++formalIndex )
+			{
+				asSCallArgumentPlanSlot& slot = plan[formalIndex];
+				if( slot.origin != asAST_CALL_ARGUMENT_INVALID
+					|| slot.formalName.GetLength() == 0
+					|| !slot.formalName.Equals(authoredName->AddressOf()) )
+				{
+					continue;
+				}
+				slot.argumentIndex = argumentIndex;
+				slot.sourceOrdinal = sourceOrdinal;
+				slot.origin = asAST_CALL_ARGUMENT_NAMED;
+				slot.authoredName = *authoredName;
+				matched = true;
+				break;
+			}
+			if( !matched )
+			{
+				return false;
+			}
+			continue;
+		}
+
+		while( nextPositional < plan.GetLength()
+			&& plan[nextPositional].origin
+				!= asAST_CALL_ARGUMENT_INVALID )
+		{
+			++nextPositional;
+		}
+		if( nextPositional >= plan.GetLength() )
+		{
+			return false;
+		}
+		asSCallArgumentPlanSlot& slot = plan[nextPositional];
+		slot.argumentIndex = argumentIndex;
+		slot.sourceOrdinal = sourceOrdinal;
+		slot.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+		++nextPositional;
+	}
+
+	for( asUINT formalIndex = 0;
+		formalIndex < plan.GetLength(); ++formalIndex )
+	{
+		asSCallArgumentPlanSlot& slot = plan[formalIndex];
+		if( slot.origin != asAST_CALL_ARGUMENT_INVALID )
+		{
+			continue;
+		}
+		const asCDecl* const formal = context.GetDecl(slot.formal);
+		if( formal == 0 || formal->inits.GetLength() == 0 )
+		{
+			return false;
+		}
+		slot.origin = asAST_CALL_ARGUMENT_DEFAULT;
+	}
+	return true;
+}
+
+static asCSourceRange DiagnosticRangeFromCallArguments(
+	asCASTContext& context,
+	const asCArray<asASTExprId>& args,
+	asASTExprId implicitReceiver)
+{
+	asCSourceRange range;
+	if( implicitReceiver.IsValid() )
+	{
+		if( const asCExpr* const receiver = context.GetExpr(implicitReceiver) )
+		{
+			if( receiver->range.IsValid() )
+			{
+				range = receiver->range;
+			}
+		}
+	}
+	for( asUINT i = 0; i < args.GetLength(); ++i )
+	{
+		const asCExpr* const arg = context.GetExpr(args[i]);
+		if( arg == 0 || !arg->range.IsValid() )
+		{
+			continue;
+		}
+		if( !range.IsValid() )
+		{
+			range = arg->range;
+			continue;
+		}
+		if( arg->range.begin.fileID != range.begin.fileID )
+		{
+			continue;
+		}
+		if( arg->range.begin.offset < range.begin.offset )
+		{
+			range.begin = arg->range.begin;
+		}
+		if( arg->range.end.offset > range.end.offset )
+		{
+			range.end = arg->range.end;
+		}
+	}
+	return range;
+}
+
+static asUINT CountWildcardFormals(asCASTContext& context, const asCDecl& callee)
+{
+	asUINT count = 0;
+	const asUINT formalCount = context.GetFormalDeclCount(callee.id);
+	for( asUINT i = 0; i < formalCount; ++i )
+	{
+		const asCDecl* const formal = context.GetFormalDecl(callee.id, i);
+		if( formal == 0 )
+		{
+			continue;
+		}
+		const asCType* const type = context.GetType(formal->type.type);
+		if( type != 0
+			&& (type->kind == asAST_TYPE_WILDCARD
+				|| type->stableKey.Equals("?")) )
+		{
+			++count;
+		}
+	}
+	return count;
+}
+
+static asASTDeclId FindBestCallee(asCASTContext& context, asASTDeclId owner,
+	const char* name, const asCArray<asASTExprId>& args, asCSema* sema,
+	const asCQualType* receiverType, bool exactScope,
+	const asCArray<asCString>* argumentNames,
+	asASTExprId implicitReceiver)
 {
 	asASTDeclId best;
 	int bestScore = -1;
@@ -5162,6 +7865,31 @@ static asASTDeclId FindBestCallee(asCASTContext& context, asASTDeclId owner, con
 				}
 			}
 		}
+		// Target-side implicit constructors are registration facts of each
+		// formal type. Import them before walking candidates: interning may grow
+		// the declaration table, so doing it from RankArgument would invalidate
+		// a candidate pointer held by this loop.
+		for( asUINT hitIndex = 0; hitIndex < hits.GetLength(); ++hitIndex )
+		{
+			const asCDecl* const candidate = context.GetDecl(hits[hitIndex]);
+			if( candidate == 0 )
+			{
+				continue;
+			}
+			const asUINT formalCount =
+				context.GetFormalDeclCount(candidate->id);
+			for( asUINT formalIndex = 0;
+				formalIndex < formalCount; ++formalIndex )
+			{
+				const asCDecl* const formal =
+					context.GetFormalDecl(candidate->id, formalIndex);
+				if( formal != 0 )
+				{
+					const asCQualType formalType = formal->type;
+					sema->InternNativeCallablesForType(formalType);
+				}
+			}
+		}
 	}
 	for( asUINT i = 0; i < hits.GetLength(); ++i )
 	{
@@ -5176,16 +7904,10 @@ static asASTDeclId FindBestCallee(asCASTContext& context, asASTDeclId owner, con
 		{
 			continue;
 		}
-		asUINT paramCount = 0;
-		for( asUINT p = 0; p < child->children.GetLength(); ++p )
-		{
-			const asCDecl* param = context.GetDecl(child->children[p]);
-			if( param && param->kind == asAST_DECL_PARAM )
-			{
-				++paramCount;
-			}
-		}
-		if( paramCount < args.GetLength() )
+		asCArray<asSCallArgumentPlanSlot> plan;
+		if( !TryBuildCallArgumentPlan(
+				sema, context, *child, args, argumentNames,
+				implicitReceiver, plan) )
 		{
 			continue;
 		}
@@ -5207,37 +7929,31 @@ static asASTDeclId FindBestCallee(asCASTContext& context, asASTDeclId owner, con
 				++score;
 			}
 		}
-		asUINT paramIndex = 0;
 		bool ok = true;
-		for( asUINT p = 0; p < child->children.GetLength(); ++p )
+		for( asUINT formalIndex = 0;
+			formalIndex < plan.GetLength(); ++formalIndex )
 		{
-			const asCDecl* param = context.GetDecl(child->children[p]);
-			if( param == 0 || param->kind != asAST_DECL_PARAM )
+			const asSCallArgumentPlanSlot& slot = plan[formalIndex];
+			if( slot.argumentIndex
+				== asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL )
 			{
 				continue;
 			}
-			if( paramIndex < args.GetLength() )
-			{
-				const asCExpr* arg = context.GetExpr(args[paramIndex]);
-				if( arg == 0 )
-				{
-					ok = false;
-					break;
-				}
-				const int rank = RankArgument(context, param->type, arg, sema);
-				if( rank < 0 )
-				{
-					ok = false;
-					break;
-				}
-				score += rank;
-			}
-			else if( param->defaultArg.GetLength() == 0 && param->inits.GetLength() == 0 )
+			const asCExpr* const arg =
+				context.GetExpr(args[slot.argumentIndex]);
+			if( !slot.formalType.IsValid()
+				|| context.GetType(slot.formalType.type) == 0 || arg == 0 )
 			{
 				ok = false;
 				break;
 			}
-			++paramIndex;
+			const int rank = RankArgument(context, slot.formalType, arg, sema);
+			if( rank < 0 )
+			{
+				ok = false;
+				break;
+			}
+			score += rank;
 		}
 		if( !ok )
 		{
@@ -5251,14 +7967,43 @@ static asASTDeclId FindBestCallee(asCASTContext& context, asASTDeclId owner, con
 		}
 		else if( score == bestScore && best.IsValid() )
 		{
-			ambiguous = true;
+			// LEGACY costs asCC_TO_OBJECT_CONV below asCC_VARIABLE_CONV, so a
+			// concrete formal that matches through an implicit constructor
+			// (`FString(FName)`) beats `const ?&`. Equal numeric ranks must
+			// not become ambiguous-overload for ApplyFormat(GetName(), spec).
+			const asCDecl* const bestDecl = context.GetDecl(best);
+			const asUINT bestWild = bestDecl != 0
+				? CountWildcardFormals(context, *bestDecl) : 0;
+			const asUINT childWild = CountWildcardFormals(context, *child);
+			if( childWild < bestWild )
+			{
+				best = child->id;
+				ambiguous = false;
+			}
+			else if( childWild > bestWild )
+			{
+				ambiguous = false;
+			}
+			else
+			{
+				ambiguous = true;
+			}
 		}
 	}
 	if( ambiguous )
 	{
 		if( sema )
 		{
-			sema->AddDiagnostic("ambiguous-overload");
+			const asCSourceRange range = DiagnosticRangeFromCallArguments(
+				context, args, implicitReceiver);
+			if( range.IsValid() )
+			{
+				sema->AddDiagnostic("ambiguous-overload", range);
+			}
+			else
+			{
+				sema->AddDiagnostic("ambiguous-overload");
+			}
 		}
 		return asASTDeclId();
 	}
@@ -5279,143 +8024,207 @@ static asASTDeclId FindBestCallee(asCASTContext& context, asASTDeclId owner, con
 	return asASTDeclId();
 }
 
+static asASTDeclId FindBestConstructor(asCASTContext& context,
+	asASTDeclId classDecl, const asCArray<asASTExprId>& args,
+	asCSema* sema, const asCArray<asCString>* argumentNames)
+{
+	const asCDecl* const owner = context.GetDecl(classDecl);
+	if( owner == 0 || owner->kind != asAST_DECL_CLASS )
+	{
+		return asASTDeclId();
+	}
+	if( sema != 0 )
+	{
+		if( asCScriptEngine* const engine = sema->GetEngine() )
+		{
+			for( asUINT argumentIndex = 0;
+				argumentIndex < args.GetLength(); ++argumentIndex )
+			{
+				if( const asCExpr* const argument =
+					context.GetExpr(args[argumentIndex]) )
+				{
+					InternNativeMethods(
+						*sema, engine, context, argument->type, "opImplConv");
+				}
+			}
+		}
+	}
+
+	asASTDeclId best;
+	int bestScore = -1;
+	bool ambiguous = false;
+	for( asUINT childIndex = 0;
+		childIndex < owner->children.GetLength(); ++childIndex )
+	{
+		const asCDecl* const candidate =
+			context.GetDecl(owner->children[childIndex]);
+		if( candidate == 0 || candidate->kind != asAST_DECL_CONSTRUCTOR )
+		{
+			continue;
+		}
+		asCArray<asSCallArgumentPlanSlot> plan;
+		if( !TryBuildCallArgumentPlan(
+				sema, context, *candidate, args, argumentNames,
+				asASTExprId(), plan) )
+		{
+			continue;
+		}
+		int score = 0;
+		bool viable = true;
+		for( asUINT formalIndex = 0;
+			formalIndex < plan.GetLength(); ++formalIndex )
+		{
+			const asSCallArgumentPlanSlot& slot = plan[formalIndex];
+			if( slot.argumentIndex == asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL )
+			{
+				continue;
+			}
+			const asCExpr* const argument =
+				context.GetExpr(args[slot.argumentIndex]);
+			if( !slot.formalType.IsValid()
+				|| context.GetType(slot.formalType.type) == 0
+				|| argument == 0 )
+			{
+				viable = false;
+				break;
+			}
+			const int rank = RankArgument(
+				context, slot.formalType, argument, sema);
+			if( rank < 0 )
+			{
+				viable = false;
+				break;
+			}
+			score += rank;
+		}
+		if( !viable )
+		{
+			continue;
+		}
+		if( score > bestScore )
+		{
+			bestScore = score;
+			best = candidate->id;
+			ambiguous = false;
+		}
+		else if( score == bestScore && best.IsValid() )
+		{
+			ambiguous = true;
+		}
+	}
+	if( ambiguous )
+	{
+		if( sema != 0 )
+		{
+			sema->AddDiagnostic("ambiguous-constructor-overload");
+		}
+		return asASTDeclId();
+	}
+	return best;
+}
+
 static void ArrangeCallArguments(asCSema& sema, asCASTContext& context,
 	asASTDeclId callee, asCArray<asASTExprId>& args,
 	asCArray<asCString>& names, const asCSourceRange& range,
-	asASTExprId implicitReceiver)
+	asASTExprId implicitReceiver,
+	asCArray<asSASTCallArgument>& callArguments)
 {
-	const asCDecl* decl = context.GetDecl(callee);
+	callArguments.SetLength(0);
+	const asCDecl* const decl = context.GetDecl(callee);
 	if( decl == 0 )
 	{
 		return;
 	}
-	asCArray<const asCDecl*> params;
-	for( asUINT p = 0; p < decl->children.GetLength(); ++p )
-	{
-		const asCDecl* const param = context.GetDecl(decl->children[p]);
-		if( param && param->kind == asAST_DECL_PARAM )
-		{
-			params.PushLast(param);
-		}
-	}
-	if( params.GetLength() == 0 )
-	{
-		return;
-	}
-
 	const bool hasReceiver = implicitReceiver.IsValid()
 		&& args.GetLength() != 0 && args[0] == implicitReceiver;
 	const bool receiverIsFormal = hasReceiver && decl->kind == asAST_DECL_MIXIN;
-	const asUINT sourceBegin = hasReceiver ? 1 : 0;
-	const bool namesIncludeReceiver = hasReceiver && names.GetLength() == args.GetLength();
-
-	asCArray<asASTExprId> formal;
-	asCArray<bool> filled;
-	formal.SetLength(params.GetLength());
-	filled.SetLength(params.GetLength());
-	for( asUINT p = 0; p < filled.GetLength(); ++p )
+	asCArray<asSCallArgumentPlanSlot> plan;
+	if( !TryBuildCallArgumentPlan(
+			&sema, context, *decl, args, &names, implicitReceiver, plan) )
 	{
-		filled[p] = false;
+		asCString detail;
+		detail.Format(
+			"call-argument-plan-invalid:callee=%s kind=%d args=%u names=%u receiver=%u formals=%u",
+			decl->stableKey.GetLength() != 0
+				? decl->stableKey.AddressOf() : decl->name.AddressOf(),
+			static_cast<int>(decl->kind),
+			args.GetLength(), names.GetLength(), implicitReceiver.value,
+			plan.GetLength());
+		for( asUINT formalIndex = 0;
+			formalIndex < plan.GetLength(); ++formalIndex )
+		{
+			asCString slot;
+			slot.Format(
+				" formal%u{name=%s,arg=%u,source=%u,origin=%d}",
+				formalIndex,
+				plan[formalIndex].formalName.GetLength() != 0
+					? plan[formalIndex].formalName.AddressOf() : "<unnamed>",
+				plan[formalIndex].argumentIndex,
+				plan[formalIndex].sourceOrdinal,
+				static_cast<int>(plan[formalIndex].origin));
+			detail += slot;
+		}
+		sema.AddDiagnostic(detail.AddressOf(), range);
+		return;
 	}
 
-	asUINT nextPositional = 0;
-	if( receiverIsFormal && formal.GetLength() != 0 )
-	{
-		// Member syntax for a mixin is sugar for a free function whose first
-		// declared parameter is the receiver.  Keep receiver metadata on the
-		// CALL, but reserve formal zero before arranging authored/named/default
-		// arguments.  Ordinary methods instead carry their receiver outside the
-		// formal parameter list.
-		formal[0] = implicitReceiver;
-		filled[0] = true;
-		nextPositional = 1;
-	}
-	for( asUINT i = sourceBegin; i < args.GetLength(); ++i )
-	{
-		const asUINT nameIndex = namesIncludeReceiver ? i : i - sourceBegin;
-		const asCString* const argName = nameIndex < names.GetLength() ? &names[nameIndex] : 0;
-		if( argName && argName->GetLength() != 0 )
-		{
-			for( asUINT p = 0; p < params.GetLength(); ++p )
-			{
-				if( filled[p] || !params[p]->name.Equals(argName->AddressOf()) )
-				{
-					continue;
-				}
-				formal[p] = args[i];
-				filled[p] = true;
-				if( const asCExpr* expr = context.GetExpr(args[i]) )
-				{
-					asCString lit = "named:";
-					lit += *argName;
-					lit += "=";
-					lit += expr->literal;
-					context.SetLiteral(args[i], lit.AddressOf());
-				}
-				break;
-			}
-			continue;
-		}
-		while( nextPositional < filled.GetLength() && filled[nextPositional] )
-		{
-			++nextPositional;
-		}
-		if( nextPositional < formal.GetLength() )
-		{
-			formal[nextPositional] = args[i];
-			filled[nextPositional] = true;
-			++nextPositional;
-		}
-	}
-
-	for( asUINT p = 0; p < params.GetLength(); ++p )
-	{
-		if( filled[p] )
-		{
-			continue;
-		}
-		asASTExprId syn;
-		if( params[p]->inits.GetLength() )
-		{
-			syn = sema.ActOnConversion(params[p]->inits[0], params[p]->type, range);
-		}
-		else if( params[p]->defaultArg.GetLength() == 0 )
-		{
-			continue;
-		}
-		else
-		{
-			asCString text = params[p]->defaultArg;
-			const asQWORD value = (asQWORD)strtoull(text.AddressOf() ? text.AddressOf() : "0", 0, 0);
-			syn = sema.ActOnIntegerLiteral(value, range);
-		}
-		asCString lit = params[p]->origin.Equals("hidden") ? "hidden:" : "default:";
-		if( params[p]->defaultArg.GetLength() )
-		{
-			lit += params[p]->defaultArg;
-		}
-		context.SetLiteral(syn, lit.AddressOf());
-		formal[p] = syn;
-		filled[p] = true;
-	}
-
-	args.SetLength(0);
+	asCArray<asASTExprId> arranged;
 	if( hasReceiver && !receiverIsFormal )
 	{
-		args.PushLast(implicitReceiver);
+		arranged.PushLast(implicitReceiver);
 	}
-	for( asUINT p = 0; p < formal.GetLength(); ++p )
+	for( asUINT formalIndex = 0;
+		formalIndex < plan.GetLength(); ++formalIndex )
 	{
-		if( filled[p] )
+		const asSCallArgumentPlanSlot& slot = plan[formalIndex];
+		const asCDecl* const formal = slot.formal.IsValid()
+			? context.GetDecl(slot.formal) : 0;
+		if( !slot.formalType.IsValid()
+			|| context.GetType(slot.formalType.type) == 0
+			|| (slot.formal.IsValid() && formal == 0) )
 		{
-			args.PushLast(formal[p]);
+			sema.AddDiagnostic("call-argument-formal-invalid", range);
+			return;
 		}
+
+		asASTExprId expression;
+		if( slot.argumentIndex != asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL )
+		{
+			expression = args[slot.argumentIndex];
+		}
+		else if( formal->inits.GetLength() != 0 )
+		{
+			expression = sema.ActOnConversion(
+				formal->inits[0], formal->type, range);
+		}
+		if( !expression.IsValid() || context.GetExpr(expression) == 0 )
+		{
+			sema.AddDiagnostic("call-argument-expression-invalid", range);
+			return;
+		}
+
+		asSASTCallArgument argument;
+		argument.expression = expression;
+		argument.formal = slot.formal;
+		argument.formalType = slot.formalType;
+		argument.formalIndex = slot.formalIndex;
+		argument.sourceOrdinal = slot.sourceOrdinal;
+		argument.origin = slot.origin;
+		argument.authoredName = slot.authoredName;
+		const asCExpr* const expressionNode = context.GetExpr(expression);
+		argument.range = slot.argumentIndex
+			!= asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+				? expressionNode->range : range;
+		arranged.PushLast(expression);
+		callArguments.PushLast(argument);
 	}
+	args = arranged;
 }
 
 static void ConvertCallArgumentsToFormalTypes(asCSema& sema, asCASTContext& context,
 	const asCDecl& callee, asCArray<asASTExprId>& args,
-	const asCSourceRange& range, asASTExprId implicitReceiver)
+	const asCSourceRange& range, asASTExprId implicitReceiver,
+	asCArray<asSASTCallArgument>& callArguments)
 {
 	// CALL argument arrays are still in forward-formal order here.  A normal
 	// method keeps its receiver in the leading non-formal slot, while a mixin
@@ -5424,15 +8233,25 @@ static void ConvertCallArgumentsToFormalTypes(asCSema& sema, asCASTContext& cont
 	const bool receiverIsFormal = implicitReceiver.IsValid()
 		&& callee.kind == asAST_DECL_MIXIN;
 	asUINT argIndex = implicitReceiver.IsValid() && !receiverIsFormal ? 1 : 0;
-	for( asUINT p = 0; p < callee.children.GetLength(); ++p )
+	for( asUINT formalIndex = 0;
+		formalIndex < callArguments.GetLength(); ++formalIndex )
 	{
-		const asCDecl* const param = context.GetDecl(callee.children[p]);
-		if( param == 0 || param->kind != asAST_DECL_PARAM )
-		{
-			continue;
-		}
 		if( argIndex >= args.GetLength() )
 		{
+			break;
+		}
+		asSASTCallArgument& callArgument = callArguments[formalIndex];
+		const asCDecl* const param = callArgument.formal.IsValid()
+			? context.GetDecl(callArgument.formal) : 0;
+		asCQualType formalType = callArgument.formalType;
+		if( !formalType.IsValid() && param != 0 )
+		{
+			formalType = param->type;
+			callArgument.formalType = formalType;
+		}
+		if( !formalType.IsValid() || context.GetType(formalType.type) == 0 )
+		{
+			sema.AddDiagnostic("call-argument-formal-type-invalid", range);
 			break;
 		}
 
@@ -5440,10 +8259,10 @@ static void ConvertCallArgumentsToFormalTypes(asCSema& sema, asCASTContext& cont
 		// exact generated setter and one opaque receiver before ordinary argument
 		// conversion can erase that property identity. Direct locals/references
 		// stay on the normal lvalue-address route.
-		const bool isExactOutOnly = param->type.IsReference()
-			&& (param->type.quals & asAST_QUAL_OUT) != 0
-			&& (param->type.quals & asAST_QUAL_IN) == 0;
-		const asCType* const outValueType = context.GetType(param->type.type);
+		const bool isExactOutOnly = formalType.IsReference()
+			&& (formalType.quals & asAST_QUAL_OUT) != 0
+			&& (formalType.quals & asAST_QUAL_IN) == 0;
+		const asCType* const outValueType = context.GetType(formalType.type);
 		const asCExpr* propertyGet = context.GetExpr(args[argIndex]);
 		while( propertyGet != 0
 			&& propertyGet->kind == asAST_EXPR_CONVERSION
@@ -5464,7 +8283,7 @@ static void ConvertCallArgumentsToFormalTypes(asCSema& sema, asCASTContext& cont
 				&& getter->kind == asAST_DECL_METHOD
 				&& getter->accessorKind == asAST_ACCESSOR_GET
 				&& getter->accessorField.IsValid()
-				&& getter->type.type == param->type.type )
+				&& getter->type.type == formalType.type )
 			{
 				asASTDeclId setter;
 				for( asUINT candidateIndex = 1;
@@ -5482,22 +8301,12 @@ static void ConvertCallArgumentsToFormalTypes(asCSema& sema, asCASTContext& cont
 						continue;
 					}
 
-					asUINT valueParamCount = 0;
-					const asCDecl* valueParam = 0;
-					for( asUINT childIndex = 0;
-						childIndex < candidate->children.GetLength();
-						++childIndex )
-					{
-						const asCDecl* const child = context.GetDecl(
-							candidate->children[childIndex]);
-						if( child != 0 && child->kind == asAST_DECL_PARAM )
-						{
-							++valueParamCount;
-							valueParam = child;
-						}
-					}
+					const asUINT valueParamCount =
+						context.GetFormalDeclCount(candidate->id);
+					const asCDecl* const valueParam = valueParamCount == 1
+						? context.GetFormalDecl(candidate->id, 0) : 0;
 					if( valueParamCount == 1 && valueParam != 0
-						&& valueParam->type.type == param->type.type
+						&& valueParam->type.type == formalType.type
 						&& valueParam->type.quals == 0 )
 					{
 						setter = candidate->id;
@@ -5510,12 +8319,16 @@ static void ConvertCallArgumentsToFormalTypes(asCSema& sema, asCASTContext& cont
 					const asASTExprId deferred =
 						sema.ActOnDeferredOutArgument(
 							propertyGet->receiver,
-							param->type,
+							formalType,
 							setter,
 							range);
 					if( deferred.IsValid() )
 					{
 						args[argIndex] = deferred;
+						if( formalIndex < callArguments.GetLength() )
+						{
+							callArgument.expression = deferred;
+						}
 						++argIndex;
 						continue;
 					}
@@ -5523,22 +8336,55 @@ static void ConvertCallArgumentsToFormalTypes(asCSema& sema, asCASTContext& cont
 			}
 		}
 		const asCExpr* const arg = context.GetExpr(args[argIndex]);
-		const asCType* const paramType = context.GetType(param->type.type);
+		const asCType* const paramType = context.GetType(formalType.type);
 		if( arg != 0
 			&& (paramType == 0 || paramType->kind != asAST_TYPE_WILDCARD)
-			&& !QualTypesMatch(param->type, arg->type) )
+			&& !QualTypesMatch(formalType, arg->type) )
 		{
 			const asASTDeclId implConv = FindZeroArgImplConv(
-				context, arg->type, param->type);
-			args[argIndex] = sema.ActOnConversion(
-				args[argIndex], param->type, range);
-			if( implConv.IsValid() )
+				context, arg->type, formalType);
+			const asASTDeclId implicitConstructor = !implConv.IsValid()
+				? FindTargetImplicitConstructor(
+					context, formalType, arg, &sema)
+				: asASTDeclId();
+			if( implicitConstructor.IsValid() )
 			{
-				context.SetResolvedDecl(args[argIndex], implConv);
+				asCArray<asASTExprId> constructorArgs;
+				constructorArgs.PushLast(args[argIndex]);
+				asCArray<asCString> constructorNames;
+				asCArray<asSASTCallArgument> constructorArguments;
+				ArrangeCallArguments(
+					sema, context, implicitConstructor,
+					constructorArgs, constructorNames, range,
+					asASTExprId(), constructorArguments);
+				asCQualType constructedValueType = formalType;
+				// The formal describes how the finished temporary is passed
+				// (`const T&in` for SpawnActor), not the value category produced by
+				// the constructor. Keep the exact nominal/template TypeRef while
+				// removing parameter-only presentation from the Construct result.
+				constructedValueType.quals &= ~(
+					asAST_QUAL_CONST
+					| asAST_QUAL_REFERENCE
+					| asAST_QUAL_PARAM_DIR_MASK);
+				args[argIndex] = sema.ActOnConstruct(
+					QualTypeForConstructExpression(
+						context, constructedValueType),
+					constructorArgs, range, implicitConstructor,
+					&constructorArguments);
+			}
+			else
+			{
+				args[argIndex] = sema.ActOnConversion(
+					args[argIndex], formalType, range);
+				if( implConv.IsValid() )
+				{
+					context.SetResolvedDecl(args[argIndex], implConv);
+				}
 			}
 		}
 		args[argIndex] = SealNonPodByValueCopyPlan(
-			sema, context, param, args[argIndex], range);
+			sema, context, formalType, args[argIndex], range);
+		callArgument.expression = args[argIndex];
 		++argIndex;
 	}
 }
@@ -5719,8 +8565,21 @@ asASTExprId asCSema::ActOnDeclRefExprAction(
 	const asASTDeclId searchOwner = ResolveScopeSegments(
 		this, owner, action.scopeSegments,
 		action.absoluteScope, &unresolvedScope);
-	const asASTDeclId target = ResolveExactDeclRef(
+	asASTDeclId target = ResolveExactDeclRef(
 		*this, context, searchOwner, action.name.AddressOf());
+	if( !target.IsValid() && engine != 0 )
+	{
+		// Application globals may live in a namespace whose spelling also names a
+		// registered value type (for example FLinearColor::LucBlue). Resolve the
+		// exact Runtime namespace/property coordinate from the structured Parser
+		// action, then publish only its pointer-free VarDecl. This also avoids
+		// treating a namespace/type spelling collision as an arbitrary first hit.
+		target = InternNativeGlobalProperty(
+			owner,
+			action.scopeSegments,
+			action.absoluteScope,
+			action.name.AddressOf());
+	}
 	if( const asCDecl* const declaration = context.GetDecl(target) )
 	{
 		const asASTExprId ref = existingRef.IsValid()
@@ -5874,6 +8733,17 @@ asASTExprId asCSema::ActOnCallExprAction(
 	const bool hasExplicitScope = action.absoluteScope
 		|| action.scopeSegments.GetLength() != 0;
 	const asCString qualifiedScope = JoinScopeSegments(action.scopeSegments);
+	asCString typeName = qualifiedScope;
+	if( typeName.GetLength() != 0 )
+	{
+		typeName += "::";
+	}
+	typeName += action.name;
+	bool typeNameAmbiguous = false;
+	const asCQualType typeNameTarget = !action.implicitReceiver.IsValid()
+		? ResolveQualifiedNominalType(
+			typeName, action.absoluteScope, 0, typeNameAmbiguous)
+		: asCQualType();
 	InternAutomaticImportScriptFunctions(
 		*this, qualifiedScope, action.name.AddressOf());
 	if( engine != 0 )
@@ -5921,7 +8791,8 @@ asASTExprId asCSema::ActOnCallExprAction(
 
 	const asASTExprId result = ActOnCallExpr(
 		searchOwner, action.name.AddressOf(), args, range,
-		action.implicitReceiver, &argumentNames, hasExplicitScope);
+		action.implicitReceiver, &argumentNames, hasExplicitScope,
+		typeNameTarget.IsValid() ? &typeNameTarget : 0);
 	if( hasExplicitScope )
 	{
 		const asASTExprId call = FindTransparentCallExpression(context, result);

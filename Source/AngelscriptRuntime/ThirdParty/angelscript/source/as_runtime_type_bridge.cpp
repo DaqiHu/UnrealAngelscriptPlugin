@@ -3,6 +3,7 @@
 #include "as_module.h"
 #include "as_namespace.h"
 #include "as_objecttype.h"
+#include "as_property.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
 #include "as_typeinfo.h"
@@ -133,6 +134,41 @@ void asCRuntimeTypeBridge::NormalizeScriptParameterABI(
 	}
 }
 
+bool asCRuntimeTypeBridge::CollectSourceParameterQualifiers(
+	const asCASTContext& context,
+	asASTDeclId declaration,
+	asCArray<asDWORD>& outQualifiers)
+{
+	outQualifiers.SetLength(0);
+	const asCDecl* const callable = context.GetDecl(declaration);
+	if( callable == 0 )
+	{
+		return false;
+	}
+
+	asCArray<asDWORD> staged;
+	const asUINT formalCount = context.GetFormalDeclCount(declaration);
+	staged.Allocate(formalCount, false);
+	for( asUINT formalIndex = 0; formalIndex < formalCount; ++formalIndex )
+	{
+		const asCDecl* const parameter =
+			context.GetFormalDecl(declaration, formalIndex);
+		if( parameter == 0
+			|| parameter->kind != asAST_DECL_PARAM
+			|| parameter->parent != declaration
+			|| parameter->formalIndex != formalIndex
+			|| !parameter->type.IsValid()
+			|| !asASTQualifiersAreValid(parameter->type.quals) )
+		{
+			return false;
+		}
+		staged.PushLast(parameter->type.quals);
+	}
+
+	outQualifiers.SwapWith(staged);
+	return true;
+}
+
 asCQualType asCRuntimeTypeBridge::FromScriptParameterABI(
 	asCASTContext& context,
 	const asCDataType& dataType,
@@ -192,6 +228,62 @@ asCQualType asCRuntimeTypeBridge::FromScriptParameterABI(
 		? result : asCQualType();
 }
 
+asCQualType asCRuntimeTypeBridge::FromScriptFunctionParameterABI(
+	asCASTContext& context,
+	const asCScriptFunction& function,
+	asUINT runtimeParameterIndex,
+	asUINT sourceFormalIndex) const
+{
+	if( runtimeParameterIndex >= function.parameterTypes.GetLength()
+		|| function.canonicalASTSourceParameterQualifiers.GetLength()
+			> function.parameterTypes.GetLength() )
+	{
+		return asCQualType();
+	}
+
+	const asETypeModifiers runtimePassing =
+		runtimeParameterIndex < function.inOutFlags.GetLength()
+			? function.inOutFlags[runtimeParameterIndex] : asTM_NONE;
+	if( sourceFormalIndex
+		< function.canonicalASTSourceParameterQualifiers.GetLength() )
+	{
+		asCQualType sourceType = FromDataType(
+			context, function.parameterTypes[runtimeParameterIndex]);
+		sourceType.quals =
+			function.canonicalASTSourceParameterQualifiers[sourceFormalIndex];
+		if( !sourceType.IsValid()
+			|| !asASTQualifiersAreValid(sourceType.quals) )
+		{
+			return asCQualType();
+		}
+
+		asCDataType directType = Resolve(context, sourceType);
+		asETypeModifiers directPassing =
+			CanonicalParameterPassing(sourceType.quals);
+		if( !directType.IsValid() )
+		{
+			return asCQualType();
+		}
+		if( directType == function.parameterTypes[runtimeParameterIndex]
+			&& directPassing == runtimePassing )
+		{
+			return sourceType;
+		}
+
+		NormalizeScriptParameterABI(directType, directPassing);
+		return directType == function.parameterTypes[runtimeParameterIndex]
+			&& directPassing == runtimePassing
+				? sourceType : asCQualType();
+	}
+
+	if( function.canonicalASTStableDeclKey.GetLength() != 0 )
+	{
+		return asCQualType();
+	}
+	return FromScriptParameterABI(
+		context, function.parameterTypes[runtimeParameterIndex], runtimePassing);
+}
+
 static asCString CanonicalNamespaceKey(
 	const asCASTContext& context,
 	const asCDecl& decl)
@@ -245,10 +337,11 @@ static asCString CanonicalStableKey(
 	{
 		key += "(";
 		bool first = true;
-		for( asUINT i = 0; i < decl.children.GetLength(); ++i )
+		const asUINT formalCount = context.GetFormalDeclCount(decl.id);
+		for( asUINT i = 0; i < formalCount; ++i )
 		{
-			const asCDecl* child = context.GetDecl(decl.children[i]);
-			if( child == 0 || child->kind != asAST_DECL_PARAM )
+			const asCDecl* child = context.GetFormalDecl(decl.id, i);
+			if( child == 0 )
 			{
 				continue;
 			}
@@ -304,24 +397,35 @@ static asCString CanonicalStableKey(
 static bool FunctionBindsCanonicalDecl(
 	const asCRuntimeTypeBridge& bridge,
 	const asCASTContext& context,
-	const asCModule& module,
+	const asCModule* module,
 	const asCDecl& decl,
 	const asCScriptFunction& function,
 	asCString* detail)
 {
-	const bool isLambda = (decl.traits & asAST_TRAIT_LAMBDA) != 0;
-	const bool isFactory = function.artifactInvocationKind
+	const bool isSystem = module == 0;
+	const bool isLambda = !isSystem
+		&& (decl.traits & asAST_TRAIT_LAMBDA) != 0;
+	const bool isFactory = !isSystem && function.artifactInvocationKind
 		== asBUILD_ARTIFACT_INVOCATION_FACTORY;
 	const asCDecl* parent = context.GetDecl(decl.parent);
 	const bool isInterfaceRequirement = decl.kind == asAST_DECL_METHOD
 		&& parent != 0 && parent->kind == asAST_DECL_INTERFACE
 		&& !decl.body.IsValid();
-	const asEFuncType expectedFunctionType = isInterfaceRequirement
-		? asFUNC_INTERFACE : asFUNC_SCRIPT;
-	const bool usesCanonicalDirectFunctionABI = isLambda
+	const asEFuncType expectedFunctionType = isSystem
+		? asFUNC_SYSTEM
+		: (isInterfaceRequirement ? asFUNC_INTERFACE : asFUNC_SCRIPT);
+	const bool usesCanonicalDirectFunctionABI = isSystem || isLambda
 		|| (decl.kind == asAST_DECL_METHOD
 			&& (decl.traits & asAST_TRAIT_GENERATED) != 0
 			&& decl.accessorKind != asAST_ACCESSOR_NONE);
+	if( isSystem && (decl.body.IsValid() || decl.origin.GetLength() == 0) )
+	{
+		if( detail )
+		{
+			*detail = "system function requires one external body-free canonical projection";
+		}
+		return false;
+	}
 	if( isFactory && decl.kind != asAST_DECL_CONSTRUCTOR )
 	{
 		if( detail )
@@ -345,14 +449,14 @@ static bool FunctionBindsCanonicalDecl(
 		: (decl.kind == asAST_DECL_DESTRUCTOR
 			? (function.name.Equals(decl.name) || function.name.Equals(destructorName))
 			: function.name.Equals(decl.name));
-	if( function.module != &module || function.funcType != expectedFunctionType
+	if( function.module != module || function.funcType != expectedFunctionType
 		|| !nameMatches )
 	{
 		if( detail )
 		{
 			detail->Format(
 				"function identity mismatch: expected name='%s' module=%p kind=%d; actual name='%s' module=%p kind=%d",
-				decl.name.AddressOf(), &module, (int)expectedFunctionType,
+				decl.name.AddressOf(), module, (int)expectedFunctionType,
 				function.name.AddressOf(), function.module, (int)function.funcType);
 		}
 		return false;
@@ -459,13 +563,22 @@ static bool FunctionBindsCanonicalDecl(
 		}
 		return false;
 	}
+	const asUINT canonicalParameterCount =
+		context.GetFormalDeclCount(decl.id);
 	asUINT parameterIndex = 0;
-	for( asUINT i = 0; i < decl.children.GetLength(); ++i )
+	for( ; parameterIndex < canonicalParameterCount; ++parameterIndex )
 	{
-		const asCDecl* param = context.GetDecl(decl.children[i]);
-		if( param == 0 || param->kind != asAST_DECL_PARAM )
+		const asCDecl* param =
+			context.GetFormalDecl(decl.id, parameterIndex);
+		if( param == 0 )
 		{
-			continue;
+			if( detail )
+			{
+				detail->Format(
+					"canonical formal[%u] is missing or ambiguous",
+					parameterIndex);
+			}
+			return false;
 		}
 		asCDataType expectedParam = bridge.Resolve(context, param->type);
 		asETypeModifiers expectedPassing =
@@ -521,7 +634,6 @@ static bool FunctionBindsCanonicalDecl(
 			}
 			return false;
 		}
-		++parameterIndex;
 	}
 	// Canonical lambda captures are hidden VM formals appended after the user
 	// parameters. They are part of structural binding even though they are not
@@ -644,13 +756,196 @@ int asCRuntimeTypeBridge::BindFunctionDeclaration(
 		return asRUNTIME_DECL_BIND_AMBIGUOUS;
 	}
 	if( match == 0 || !FunctionBindsCanonicalDecl(
-		*this, context, *function.module, *match, function, detail) )
+		*this, context, function.module, *match, function, detail) )
 	{
 		if( detail && detail->GetLength() == 0 )
 		{
 			detail->Format("canonical declaration key '%s' does not match the live function signature",
 				function.canonicalASTStableDeclKey.AddressOf());
 		}
+		return asRUNTIME_DECL_BIND_SIGNATURE_MISMATCH;
+	}
+
+	outDeclaration = match->id;
+	return asRUNTIME_DECL_BIND_OK;
+}
+
+int asCRuntimeTypeBridge::BindSystemFunctionDeclaration(
+	const asCASTContext& context,
+	const asCScriptFunction& function,
+	asASTDeclId& outDeclaration,
+	asCString* detail) const
+{
+	outDeclaration = asASTDeclId();
+	if( detail )
+	{
+		*detail = "";
+	}
+	if( !context.IsPublishable() || engine == 0
+		|| function.engine != engine || function.module != 0
+		|| function.funcType != asFUNC_SYSTEM )
+	{
+		if( detail )
+		{
+			*detail = "system declaration bind requires a sealed AST and a current-Engine registered system function";
+		}
+		return asRUNTIME_DECL_BIND_INVALID;
+	}
+	if( function.canonicalASTStableDeclKey.GetLength() == 0 )
+	{
+		if( detail )
+		{
+			*detail = "system function has no producer-carried canonical declaration key";
+		}
+		return asRUNTIME_DECL_BIND_MISSING_KEY;
+	}
+
+	const asCDecl* match = 0;
+	asUINT matches = 0;
+	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
+	{
+		const asCDecl* decl = context.GetDecl(asASTDeclId(i));
+		if( decl != 0 && IsRuntimeBoundFunctionLike(decl->kind)
+			&& decl->stableKey.Equals(function.canonicalASTStableDeclKey) )
+		{
+			match = decl;
+			++matches;
+		}
+	}
+	if( matches == 0 )
+	{
+		if( detail )
+		{
+			detail->Format("system canonical declaration key '%s' was not found",
+				function.canonicalASTStableDeclKey.AddressOf());
+		}
+		return asRUNTIME_DECL_BIND_NOT_FOUND;
+	}
+	if( matches != 1 )
+	{
+		if( detail )
+		{
+			detail->Format("system canonical declaration key '%s' matched %u declarations",
+				function.canonicalASTStableDeclKey.AddressOf(), matches);
+		}
+		return asRUNTIME_DECL_BIND_AMBIGUOUS;
+	}
+	if( match == 0 || !FunctionBindsCanonicalDecl(
+		*this, context, 0, *match, function, detail) )
+	{
+		if( detail && detail->GetLength() == 0 )
+		{
+			detail->Format("system canonical declaration key '%s' does not match the registered function signature",
+				function.canonicalASTStableDeclKey.AddressOf());
+		}
+		return asRUNTIME_DECL_BIND_SIGNATURE_MISMATCH;
+	}
+
+	outDeclaration = match->id;
+	return asRUNTIME_DECL_BIND_OK;
+}
+
+static asSNameSpace* FindCanonicalGlobalNamespace(
+	const asCASTContext& context,
+	asCScriptEngine* engine,
+	const asCModule& module,
+	const asCDecl& decl)
+{
+	if( engine == 0 || module.defaultNamespace == 0 )
+		return 0;
+
+	asCArray<const asCDecl*> namespaceScopes;
+	const asCDecl* scope = &decl;
+	while( scope )
+	{
+		if( scope->kind == asAST_DECL_NAMESPACE )
+			namespaceScopes.PushLast(scope);
+		scope = scope->parent.IsValid() ? context.GetDecl(scope->parent) : 0;
+	}
+
+	asCString qualifiedName = module.defaultNamespace->name;
+	for( asUINT i = namespaceScopes.GetLength(); i > 0; --i )
+	{
+		const asCDecl* const namespaceDecl = namespaceScopes[i - 1];
+		if( namespaceDecl == 0 || namespaceDecl->name.GetLength() == 0 )
+			return 0;
+		if( qualifiedName.GetLength() )
+			qualifiedName += "::";
+		qualifiedName += namespaceDecl->name;
+	}
+	return engine->FindNameSpace(qualifiedName.AddressOf());
+}
+
+int asCRuntimeTypeBridge::BindGlobalDeclaration(
+	const asCASTContext& context,
+	const asCGlobalProperty& property,
+	asASTDeclId& outDeclaration,
+	asCString* detail) const
+{
+	outDeclaration = asASTDeclId();
+	if( detail )
+		*detail = "";
+	if( !context.IsPublishable() || engine == 0 || property.module == 0
+		|| property.module->engine != engine
+		|| property.id >= engine->globalProperties.GetLength()
+		|| engine->globalProperties[property.id] != &property )
+	{
+		if( detail )
+			*detail = "global declaration bind requires a sealed AST and a current-Engine script global";
+		return asRUNTIME_DECL_BIND_INVALID;
+	}
+	if( property.canonicalASTStableDeclKey.GetLength() == 0 )
+	{
+		if( detail )
+			*detail = "live global has no producer-carried canonical declaration key";
+		return asRUNTIME_DECL_BIND_MISSING_KEY;
+	}
+
+	const asCDecl* match = 0;
+	asUINT matches = 0;
+	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
+	{
+		const asCDecl* const decl = context.GetDecl(asASTDeclId(i));
+		if( decl != 0 && decl->kind == asAST_DECL_VAR
+			&& decl->stableKey.Equals(property.canonicalASTStableDeclKey) )
+		{
+			match = decl;
+			++matches;
+		}
+	}
+	if( matches == 0 )
+	{
+		if( detail )
+			detail->Format("global canonical declaration key '%s' was not found",
+				property.canonicalASTStableDeclKey.AddressOf());
+		return asRUNTIME_DECL_BIND_NOT_FOUND;
+	}
+	if( matches != 1 )
+	{
+		if( detail )
+			detail->Format("global canonical declaration key '%s' matched %u declarations",
+				property.canonicalASTStableDeclKey.AddressOf(), matches);
+		return asRUNTIME_DECL_BIND_AMBIGUOUS;
+	}
+
+	const asCDecl* const parent = match != 0
+		? context.GetDecl(match->parent) : 0;
+	const asCDataType expectedType = match != 0
+		? Resolve(context, match->type) : asCDataType();
+	asSNameSpace* const expectedNamespace = match != 0
+		? FindCanonicalGlobalNamespace(context, engine, *property.module, *match)
+		: 0;
+	if( match == 0 || parent == 0
+		|| (parent->kind != asAST_DECL_TRANSLATION_UNIT
+			&& parent->kind != asAST_DECL_NAMESPACE)
+		|| match->name != property.name
+		|| !expectedType.IsValid() || expectedType != property.type
+		|| expectedNamespace == 0 || expectedNamespace != property.nameSpace )
+	{
+		if( detail )
+			detail->Format(
+				"global canonical declaration key '%s' does not match the live owner/name/type/namespace",
+				property.canonicalASTStableDeclKey.AddressOf());
 		return asRUNTIME_DECL_BIND_SIGNATURE_MISMATCH;
 	}
 
@@ -711,7 +1006,7 @@ static bool ValidateContextDeclarationBindings(
 		{
 			asCScriptFunction* function = module.scriptFunctions[f];
 			if( function && FunctionBindsCanonicalDecl(
-				bridge, context, module, *decl, *function, 0) )
+				bridge, context, &module, *decl, *function, 0) )
 			{
 				if( matches == 0 && boundFunctions )
 				{
@@ -802,7 +1097,7 @@ asCQualType asCRuntimeTypeBridge::FromDataType(asCASTContext& context, const asC
 	{
 		quals |= asAST_QUAL_REFERENCE;
 	}
-	if( dataType.GetTokenType() == ttQuestion )
+	if( dataType.IsAnyType() || dataType.GetTokenType() == ttQuestion )
 	{
 		return context.InternNamedType(asAST_TYPE_WILDCARD, "?", quals);
 	}

@@ -1,4 +1,5 @@
 #include "as_ast_sidecar.h"
+#include "as_ast_verifier.h"
 #include <cstring>
 
 BEGIN_AS_NAMESPACE
@@ -401,6 +402,7 @@ struct asSSidecarDeclDTO
 	asCArray<asUINT> bases;
 	asCArray<asSSidecarMethodRelationDTO> methodRelations;
 	asCArray<asUINT> inits;
+	asUINT formalIndex;
 	int byteOffset;
 	int byteSize;
 	asUINT byteAlignment;
@@ -420,6 +422,30 @@ struct asSSidecarStmtDTO
 	asCArray<asUINT> children;
 };
 
+struct asSSidecarCallArgumentDTO
+{
+	asUINT expression;
+	asUINT formal;
+	asUINT formalType;
+	asDWORD formalQuals;
+	asCSourceRange range;
+	asCString authoredName;
+	asUINT formalIndex;
+	asUINT sourceOrdinal;
+	asEASTCallArgumentOrigin origin;
+
+	asSSidecarCallArgumentDTO()
+		: expression(0)
+		, formal(0)
+		, formalType(0)
+		, formalQuals(0)
+		, formalIndex(asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL)
+		, sourceOrdinal(asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL)
+		, origin(asAST_CALL_ARGUMENT_INVALID)
+	{
+	}
+};
+
 struct asSSidecarExprDTO
 {
 	asEASTExprKind kind;
@@ -434,7 +460,79 @@ struct asSSidecarExprDTO
 	asEASTSafePointRole safePointRole;
 	asEASTCallDispatch callDispatch;
 	asCArray<asUINT> children;
+	asCArray<asSSidecarCallArgumentDTO> callArguments;
 };
+
+static bool IsAbsentOrOwnedRange(
+	const asCSourceManager& sources,
+	const asCSourceRange& range)
+{
+	return (!range.begin.IsValid() && !range.end.IsValid())
+		|| sources.IsValidRange(range);
+}
+
+static bool SupportsCallArgumentRelation(
+	asEASTExprKind kind,
+	const asCString& literal)
+{
+	return kind == asAST_EXPR_CALL
+		|| (kind == asAST_EXPR_CONSTRUCT
+			&& !literal.Equals("list-pattern"));
+}
+
+static int AppendCallArgumentArray(
+	const asCASTContext& context,
+	const asCExpr& expr,
+	asCArray<asBYTE>& out,
+	asUINT& totalCallArgumentCount)
+{
+	const asUINT count = expr.callArguments.GetLength();
+	if( count > kMaxNodes || totalCallArgumentCount > kMaxNodes - count )
+	{
+		return asAST_SIDECAR_BUDGET;
+	}
+	if( !SupportsCallArgumentRelation(expr.kind, expr.literal) && count != 0 )
+	{
+		return asAST_SIDECAR_MALFORMED;
+	}
+	totalCallArgumentCount += count;
+	AppendU32(out, count);
+	for( asUINT index = 0; index < count; ++index )
+	{
+		const asSASTCallArgument& argument = expr.callArguments[index];
+		if( argument.expression.snapshotOwner != 0
+			|| argument.formal.snapshotOwner != 0
+			|| argument.formalType.type.snapshotOwner != 0 )
+		{
+			return asAST_SIDECAR_POINTER;
+		}
+		if( !argument.expression.IsValid()
+			|| context.GetExpr(argument.expression) == 0
+			|| (argument.formal.IsValid()
+				&& context.GetDecl(argument.formal) == 0)
+			|| !argument.formalType.IsValid()
+			|| context.GetType(argument.formalType.type) == 0
+			|| !asASTQualifiersAreValid(argument.formalType.quals)
+			|| !IsAbsentOrOwnedRange(
+				context.GetSourceManager(), argument.range)
+			|| argument.origin <= asAST_CALL_ARGUMENT_INVALID
+			|| argument.origin > asAST_CALL_ARGUMENT_GENERATED )
+		{
+			return asAST_SIDECAR_MALFORMED;
+		}
+
+		AppendU32(out, argument.expression.value);
+		AppendU32(out, argument.formal.value);
+		AppendU32(out, argument.formalType.type.value);
+		AppendU32(out, argument.formalType.quals);
+		AppendRange(out, argument.range);
+		AppendBytes(out, argument.authoredName.AddressOf());
+		AppendU32(out, argument.formalIndex);
+		AppendU32(out, argument.sourceOrdinal);
+		AppendU32(out, static_cast<asUINT>(argument.origin));
+	}
+	return asAST_SIDECAR_OK;
+}
 
 static bool ReadIdArray(const asBYTE* bytes, asUINT length, asUINT& offset, asCArray<asUINT>& values)
 {
@@ -523,6 +621,11 @@ int asCASTEncodeSidecar(const asCASTContext& context, const asSASTSidecarHeader&
 		|| context.GetDeclCount() == 0 || context.GetDeclCount() > kMaxNodes
 		|| context.GetStmtCount() > kMaxNodes || context.GetExprCount() > kMaxNodes
 		|| context.GetTypeCount() > kMaxNodes )
+	{
+		return asAST_SIDECAR_MALFORMED;
+	}
+	asSAstVerifyResult publication;
+	if( asCASTVerifyPublication(context, publication) != asAST_VERIFY_OK )
 	{
 		return asAST_SIDECAR_MALFORMED;
 	}
@@ -650,6 +753,7 @@ int asCASTEncodeSidecar(const asCASTContext& context, const asSASTSidecarHeader&
 		AppendU32(out, decl->hasConstantValue ? 1 : 0);
 		AppendU64(out, decl->constantValue);
 		AppendMethodRelationArray(out, decl->methodRelations);
+		AppendU32(out, decl->formalIndex);
 	}
 
 	AppendU32(out, context.GetStmtCount());
@@ -713,6 +817,27 @@ int asCASTEncodeSidecar(const asCASTContext& context, const asSASTSidecarHeader&
 		}
 	}
 
+	// V9 is append-only relative to V8. CallArgument records follow the complete
+	// lifetime protocol so a previous schema is an ordinary version miss and no
+	// decoder can mistake argument authority for a legacy expression field.
+	asUINT totalCallArgumentCount = 0;
+	for( asUINT i = 1; i <= context.GetExprCount(); ++i )
+	{
+		const asCExpr* const expr = context.GetExpr(asASTExprId(i));
+		if( expr == 0 )
+		{
+			out.SetLength(0);
+			return asAST_SIDECAR_MALFORMED;
+		}
+		const int callArgumentStatus = AppendCallArgumentArray(
+			context, *expr, out, totalCallArgumentCount);
+		if( callArgumentStatus != asAST_SIDECAR_OK )
+		{
+			out.SetLength(0);
+			return callArgumentStatus;
+		}
+	}
+
 	if( out.GetLength() > kMaxBytes )
 	{
 		out.SetLength(0);
@@ -723,7 +848,7 @@ int asCASTEncodeSidecar(const asCASTContext& context, const asSASTSidecarHeader&
 
 static int DecodeFail(asCASTContext& context, int status)
 {
-	context.ResetUnsealedForSidecarDecode();
+	context.ResetForSidecarDecodeFailure();
 	return status;
 }
 
@@ -774,6 +899,11 @@ static bool ReadDeclDTO(
 		bytes, length, offset, out.methodRelations);
 	if( outStatus != asAST_SIDECAR_OK )
 	{
+		return false;
+	}
+	if( !ReadU32(bytes, length, offset, out.formalIndex) )
+	{
+		outStatus = asAST_SIDECAR_MALFORMED;
 		return false;
 	}
 	out.kind = (asEASTDeclKind)kind;
@@ -856,6 +986,68 @@ static bool IsValidStmtRef(asUINT id, asUINT count)
 static bool IsValidExprRef(asUINT id, asUINT count)
 {
 	return id == 0 || id <= count;
+}
+
+static int ReadCallArgumentArray(
+	const asBYTE* bytes,
+	asUINT length,
+	asUINT& offset,
+	const asCSourceManager& sources,
+	asUINT declCount,
+	asUINT exprCount,
+	asUINT typeCount,
+	asSSidecarExprDTO& expr,
+	asUINT& totalCallArgumentCount)
+{
+	asUINT count = 0;
+	if( !ReadU32(bytes, length, offset, count) )
+	{
+		return asAST_SIDECAR_MALFORMED;
+	}
+	if( count > kMaxNodes || totalCallArgumentCount > kMaxNodes - count )
+	{
+		return asAST_SIDECAR_BUDGET;
+	}
+	if( !SupportsCallArgumentRelation(expr.kind, expr.literal) && count != 0 )
+	{
+		return asAST_SIDECAR_MALFORMED;
+	}
+	totalCallArgumentCount += count;
+	expr.callArguments.SetLength(0);
+	for( asUINT index = 0; index < count; ++index )
+	{
+		asSSidecarCallArgumentDTO argument;
+		asUINT formalQuals = 0;
+		asUINT origin = 0;
+		if( !ReadU32(bytes, length, offset, argument.expression)
+			|| !ReadU32(bytes, length, offset, argument.formal)
+			|| !ReadU32(bytes, length, offset, argument.formalType)
+			|| !ReadU32(bytes, length, offset, formalQuals)
+			|| !ReadRange(bytes, length, offset, argument.range)
+			|| !ReadBytes(bytes, length, offset, argument.authoredName)
+			|| !ReadU32(bytes, length, offset, argument.formalIndex)
+			|| !ReadU32(bytes, length, offset, argument.sourceOrdinal)
+			|| !ReadU32(bytes, length, offset, origin) )
+		{
+			return asAST_SIDECAR_MALFORMED;
+		}
+		argument.formalQuals = formalQuals;
+		argument.origin = static_cast<asEASTCallArgumentOrigin>(origin);
+		if( argument.expression == 0
+			|| !IsValidExprRef(argument.expression, exprCount)
+			|| !IsValidDeclRef(argument.formal, declCount)
+			|| argument.formalType == 0
+			|| argument.formalType > typeCount
+			|| !asASTQualifiersAreValid(argument.formalQuals)
+			|| !IsAbsentOrOwnedRange(sources, argument.range)
+			|| origin <= asAST_CALL_ARGUMENT_INVALID
+			|| origin > asAST_CALL_ARGUMENT_GENERATED )
+		{
+			return asAST_SIDECAR_MALFORMED;
+		}
+		expr.callArguments.PushLast(argument);
+	}
+	return asAST_SIDECAR_OK;
 }
 
 int asCASTReadSidecarHeader(const asBYTE* bytes, asUINT length, asSASTSidecarHeader& outHeader)
@@ -1071,6 +1263,13 @@ int asCASTDecodeSidecar(asCASTContext& context, const asSASTSidecarHeader& expec
 			return DecodeFail(context, asAST_SIDECAR_MALFORMED);
 		}
 		if( dto.hasConstantValue && context.SetDeclConstantValue(id, dto.constantValue) != asAST_VERIFY_OK )
+		{
+			return DecodeFail(context, asAST_SIDECAR_MALFORMED);
+		}
+		if( (dto.kind == asAST_DECL_PARAM
+				&& context.SetDeclFormalIndex(id, dto.formalIndex) != asAST_VERIFY_OK)
+			|| (dto.kind != asAST_DECL_PARAM
+				&& dto.formalIndex != asAST_FORMAL_INDEX_NONE) )
 		{
 			return DecodeFail(context, asAST_SIDECAR_MALFORMED);
 		}
@@ -1302,7 +1501,63 @@ int asCASTDecodeSidecar(asCASTContext& context, const asSASTSidecarHeader& expec
 		}
 	}
 
-	if( offset != length || context.Seal() != asAST_VERIFY_OK )
+	// Read and authenticate the entire append-only V9 trailer before exposing
+	// even one CallArgument record through the candidate Context.
+	asUINT totalCallArgumentCount = 0;
+	for( asUINT i = 0; i < exprCount; ++i )
+	{
+		const int callArgumentStatus = ReadCallArgumentArray(
+			bytes,
+			length,
+			offset,
+			context.GetSourceManager(),
+			declCount,
+			exprCount,
+			typeCount,
+			exprs[i],
+			totalCallArgumentCount);
+		if( callArgumentStatus != asAST_SIDECAR_OK )
+		{
+			return DecodeFail(context, callArgumentStatus);
+		}
+	}
+	if( offset != length )
+	{
+		return DecodeFail(context, asAST_SIDECAR_MALFORMED);
+	}
+
+	for( asUINT i = 0; i < exprCount; ++i )
+	{
+		const asASTExprId call(i + 1);
+		for( asUINT argumentIndex = 0;
+			argumentIndex < exprs[i].callArguments.GetLength();
+			++argumentIndex )
+		{
+			const asSSidecarCallArgumentDTO& dto =
+				exprs[i].callArguments[argumentIndex];
+			asSASTCallArgument argument;
+			argument.expression = asASTExprId(dto.expression);
+			argument.formal = asASTDeclId(dto.formal);
+			argument.formalType = asCQualType(
+				asASTTypeRef(dto.formalType), dto.formalQuals);
+			argument.range = dto.range;
+			argument.authoredName = dto.authoredName;
+			argument.formalIndex = dto.formalIndex;
+			argument.sourceOrdinal = dto.sourceOrdinal;
+			argument.origin = dto.origin;
+			if( context.AddCallArgument(call, argument) != asAST_VERIFY_OK )
+			{
+				return DecodeFail(context, asAST_SIDECAR_MALFORMED);
+			}
+		}
+	}
+
+	if( context.Seal() != asAST_VERIFY_OK )
+	{
+		return DecodeFail(context, asAST_SIDECAR_MALFORMED);
+	}
+	asSAstVerifyResult publication;
+	if( asCASTVerifyPublication(context, publication) != asAST_VERIFY_OK )
 	{
 		return DecodeFail(context, asAST_SIDECAR_MALFORMED);
 	}
@@ -1433,6 +1688,7 @@ static void AppendDeclReferenceIdentity(const asCASTContext& context, asASTDeclI
 	AppendBytes(material, decl->name.AddressOf());
 	AppendTypeIdentity(context, decl->type, material);
 	AppendRangeIdentity(context, decl->range, material);
+	AppendU32(material, decl->formalIndex);
 }
 
 static void AppendExprIdentity(const asCASTContext& context, asASTExprId id, asCArray<asBYTE>& material);
@@ -1455,6 +1711,7 @@ static void AppendDeclIdentity(const asCASTContext& context, const asCDecl& decl
 	AppendU32(material, (asUINT)decl.byteOffset);
 	AppendU32(material, (asUINT)decl.byteSize);
 	AppendU32(material, decl.byteAlignment);
+	AppendU32(material, decl.formalIndex);
 
 	AppendU32(material, decl.dependencies.GetLength());
 	for( asUINT i = 0; i < decl.dependencies.GetLength(); ++i )
@@ -1563,11 +1820,29 @@ static void AppendExprIdentity(const asCASTContext& context, asASTExprId id, asC
 	{
 		AppendExprIdentity(context, expr->children[i], material);
 	}
+
+	// The verifier authenticates each record expression against the child at
+	// the same stored evaluation record. Hash the formal ordinal plus the non-derivable
+	// binding facts here; recursively hashing the expression again would only
+	// duplicate the child closure above.
+	AppendU32(material, expr->callArguments.GetLength());
+	for( asUINT i = 0; i < expr->callArguments.GetLength(); ++i )
+	{
+		const asSASTCallArgument& argument = expr->callArguments[i];
+		AppendU32(material, i);
+		AppendDeclReferenceIdentity(context, argument.formal, material);
+		AppendTypeIdentity(context, argument.formalType, material);
+		AppendRangeIdentity(context, argument.range, material);
+		AppendBytes(material, argument.authoredName.AddressOf());
+		AppendU32(material, argument.formalIndex);
+		AppendU32(material, argument.sourceOrdinal);
+		AppendU32(material, static_cast<asUINT>(argument.origin));
+	}
 }
 
 static void AppendFunctionRecordMaterial(const asCASTContext& context, const asCDecl& function, const char* profile, asCArray<asBYTE>& material)
 {
-	AppendBytes(material, "canonical-ast-function-record-v2");
+	AppendBytes(material, "canonical-ast-function-record-v3");
 	AppendBytes(material, profile ? profile : "");
 	AppendDeclIdentity(context, function, material);
 

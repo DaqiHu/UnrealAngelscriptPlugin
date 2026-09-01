@@ -58,6 +58,9 @@ public:
 	FMemStackBase MemStack;
 
 	asCParser(asCBuilder *builder);
+	// Runtime declaration projection needs the maintained expression parser and
+	// Canonical Sema actions without creating a second Builder/publication owner.
+	explicit asCParser(asCScriptEngine *engine);
 	~asCParser();
 
 	void SetSema(class asCSema* inSema) { sema = inSema; }
@@ -78,6 +81,7 @@ public:
 #endif
 
 	asCScriptNode *GetScriptNode();
+	asASTExprId GetParsedExpressionIdentity() const;
 
 protected:
 	void Reset();
@@ -122,6 +126,7 @@ protected:
 
 	bool IsRealType(int tokenType);
 	bool IsDataType(const sToken &token);
+	bool DoesTypeExist(const char* type) const;
 	bool IsType(sToken &nextToken);
 	bool IdentifierIs(const sToken &t, const char *str);
 

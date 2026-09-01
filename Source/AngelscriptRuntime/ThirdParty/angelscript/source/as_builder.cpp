@@ -41,7 +41,10 @@
 #include "as_parser.h"
 #include "as_compiler.h"
 #include "as_ast_context.h"
+#include "as_ast_dump.h"
+#include "as_ast_verifier.h"
 #include "as_sema.h"
+#include "as_scriptfunction.h"
 #include "as_runtime_type_bridge.h"
 #include "as_tokendef.h"
 #include "as_string_util.h"
@@ -423,6 +426,207 @@ static asSParseActionIdentity MakeCanonicalParseActionIdentity(
 	return identity;
 }
 
+static bool IsCanonicalCallableDeclKind(asEASTDeclKind kind)
+{
+	return kind == asAST_DECL_FUNCTION
+		|| kind == asAST_DECL_METHOD
+		|| kind == asAST_DECL_CONSTRUCTOR
+		|| kind == asAST_DECL_DESTRUCTOR
+		|| kind == asAST_DECL_MIXIN
+		|| kind == asAST_DECL_FUNCDEF
+		|| kind == asAST_DECL_IMPORT;
+}
+
+static asASTDeclId FindCanonicalParsedCallableDeclaration(
+	asCBuilder& builder,
+	const asCScriptNode* functionNode,
+	const asCScriptCode* file)
+{
+	if( functionNode == 0 || builder.canonicalSema == 0 )
+		return asASTDeclId();
+	asASTDeclId declarationId = builder.canonicalSema->FindParsedDeclaration(
+		MakeCanonicalParseActionIdentity(functionNode, file));
+	if( declarationId.IsValid() )
+		return declarationId;
+	// Parser binds completed import identity on snImport. GetParsedFunctionDetails
+	// still walks the inner snFunction for tokens.
+	if( functionNode->parent != 0 && functionNode->parent->nodeType == snImport )
+	{
+		declarationId = builder.canonicalSema->FindParsedDeclaration(
+			MakeCanonicalParseActionIdentity(functionNode->parent, file));
+	}
+	return declarationId;
+}
+
+static asETypeModifiers CanonicalQualsToParameterPassing(asDWORD quals)
+{
+	if( (quals & asAST_QUAL_PARAM_DIR_MASK) == asAST_QUAL_INOUT )
+		return asTM_INOUTREF;
+	if( quals & asAST_QUAL_OUT )
+		return asTM_OUTREF;
+	if( quals & asAST_QUAL_IN )
+		return asTM_INREF;
+	if( quals & asAST_QUAL_REFERENCE )
+		return asTM_INOUTREF;
+	return asTM_NONE;
+}
+
+static void CollectCanonicalImportedTypeAuthority(
+	const asCModule* module,
+	asCArray<asCTypeInfo*>& outTypes)
+{
+	if( module == 0 )
+		return;
+	auto appendModule = [&outTypes](const asCModule* imported)
+	{
+		if( imported == 0 )
+			return;
+		for( asUINT i = 0; i < imported->classTypes.GetLength(); ++i )
+			outTypes.PushLast(imported->classTypes[i]);
+		for( asUINT i = 0; i < imported->enumTypes.GetLength(); ++i )
+			outTypes.PushLast(imported->enumTypes[i]);
+		for( asUINT i = 0; i < imported->typeDefs.GetLength(); ++i )
+			outTypes.PushLast(imported->typeDefs[i]);
+		for( asUINT i = 0; i < imported->funcDefs.GetLength(); ++i )
+			outTypes.PushLast(imported->funcDefs[i]);
+		for( int i = 0; i < imported->templateInstances.Num(); ++i )
+			outTypes.PushLast(imported->templateInstances[i]);
+	};
+	appendModule(module);
+	for( asUINT i = 0; i < module->importedModules.GetLength(); ++i )
+		appendModule(module->importedModules[i]);
+}
+
+static bool TryFillCanonicalParsedFunctionTypes(
+	asCBuilder& builder,
+	const asCScriptNode* functionNode,
+	const asCScriptCode* file,
+	asCDataType& returnType,
+	asCArray<asCString>& parameterNames,
+	asCArray<asCDataType>& parameterTypes,
+	asCArray<asETypeModifiers>& inOutFlags,
+	asCArray<asCString*>& defaultArgs)
+{
+	if( builder.engine == 0
+		|| builder.engine->GetCompilerPipeline() != asCOMPILER_PIPELINE_CANONICAL
+		|| builder.canonicalSema == 0
+		|| builder.canonicalAST == 0
+		|| functionNode == 0 )
+	{
+		return false;
+	}
+	const asASTDeclId declarationId = FindCanonicalParsedCallableDeclaration(
+		builder, functionNode, file);
+	const asCDecl* const function = builder.canonicalAST->GetDecl(declarationId);
+	if( function == 0 || function->id != declarationId
+		|| !IsCanonicalCallableDeclKind(function->kind) )
+	{
+		return false;
+	}
+
+	asCArray<asCTypeInfo*> importedTypeAuthority;
+	CollectCanonicalImportedTypeAuthority(builder.module, importedTypeAuthority);
+	asCRuntimeTypeBridge bridge(builder.engine);
+	if( importedTypeAuthority.GetLength() != 0 )
+		bridge.SetTransientTypes(&importedTypeAuthority);
+	if( function->kind == asAST_DECL_CONSTRUCTOR
+		|| function->kind == asAST_DECL_DESTRUCTOR )
+	{
+		returnType = asCDataType::CreatePrimitive(ttVoid, false);
+	}
+	else
+	{
+		returnType = bridge.Resolve(*builder.canonicalAST, function->type);
+		if( !returnType.IsValid() )
+			return false;
+	}
+
+	asUINT paramCount = 0;
+	for( asUINT i = 0; i < function->children.GetLength(); ++i )
+	{
+		const asCDecl* const child =
+			builder.canonicalAST->GetDecl(function->children[i]);
+		if( child != 0 && child->kind == asAST_DECL_PARAM )
+			++paramCount;
+	}
+
+	asCArray<asASTDeclId> ordered;
+	ordered.SetLength(paramCount);
+	for( asUINT i = 0; i < paramCount; ++i )
+		ordered[i] = asASTDeclId();
+	for( asUINT i = 0; i < function->children.GetLength(); ++i )
+	{
+		const asCDecl* const child =
+			builder.canonicalAST->GetDecl(function->children[i]);
+		if( child == 0 || child->kind != asAST_DECL_PARAM )
+			continue;
+		if( child->formalIndex == asAST_FORMAL_INDEX_NONE
+			|| child->formalIndex >= paramCount
+			|| ordered[child->formalIndex].IsValid() )
+		{
+			return false;
+		}
+		ordered[child->formalIndex] = child->id;
+	}
+
+	parameterNames.Allocate(paramCount, false);
+	parameterTypes.Allocate(paramCount, false);
+	inOutFlags.Allocate(paramCount, false);
+	defaultArgs.Allocate(paramCount, false);
+	for( asUINT i = 0; i < paramCount; ++i )
+	{
+		const asCDecl* const parameter =
+			builder.canonicalAST->GetDecl(ordered[i]);
+		if( parameter == 0 || parameter->kind != asAST_DECL_PARAM )
+			return false;
+		asCDataType type = bridge.Resolve(*builder.canonicalAST, parameter->type);
+		if( !type.IsValid() )
+			return false;
+		asETypeModifiers passing =
+			CanonicalQualsToParameterPassing(parameter->type.quals);
+		asCRuntimeTypeBridge::NormalizeScriptParameterABI(type, passing);
+		parameterTypes.PushLast(type);
+		inOutFlags.PushLast(passing);
+		parameterNames.PushLast(parameter->name);
+		if( parameter->defaultArg.GetLength() != 0 )
+		{
+			asCString* defaultArgStr = asNEW(asCString)(parameter->defaultArg);
+			defaultArgs.PushLast(defaultArgStr);
+		}
+		else
+			defaultArgs.PushLast(0);
+	}
+	return true;
+}
+
+static bool TryResolveCanonicalBoundDeclType(
+	asCBuilder& builder,
+	const asCScriptNode* identityNode,
+	const asCScriptCode* file,
+	asCDataType& outType)
+{
+	outType = asCDataType();
+	if( builder.engine == 0
+		|| builder.engine->GetCompilerPipeline() != asCOMPILER_PIPELINE_CANONICAL
+		|| builder.canonicalSema == 0
+		|| builder.canonicalAST == 0
+		|| identityNode == 0 )
+	{
+		return false;
+	}
+	const asASTDeclId declarationId = builder.canonicalSema->FindParsedDeclaration(
+		MakeCanonicalParseActionIdentity(identityNode, file));
+	const asCDecl* const declaration = builder.canonicalAST->GetDecl(declarationId);
+	if( declaration == 0 || declaration->id != declarationId
+		|| !declaration->type.IsValid() )
+	{
+		return false;
+	}
+	asCRuntimeTypeBridge bridge(builder.engine);
+	outType = bridge.Resolve(*builder.canonicalAST, declaration->type);
+	return outType.IsValid();
+}
+
 static bool UsesCanonicalAccessSpecifierProjection(const asCBuilder& builder)
 {
 	return builder.engine != 0
@@ -451,8 +655,7 @@ static asASTDeclId FindCanonicalObjectDeclaration(
 	const asCBuilder& builder,
 	const asCObjectType* objectType)
 {
-	if( objectType == 0 || builder.canonicalSema == 0
-		|| builder.canonicalAST == 0 )
+	if( objectType == 0 || builder.canonicalAST == 0 )
 	{
 		return asASTDeclId();
 	}
@@ -465,19 +668,20 @@ static asASTDeclId FindCanonicalObjectDeclaration(
 		{
 			const sClassDeclaration* const declaration = declarations[i];
 			if( declaration == 0 || declaration->typeInfo != objectType
-				|| declaration->node == 0 )
+				|| declaration->canonicalASTDeclaration == 0 )
 			{
 				continue;
 			}
-			const asASTDeclId candidate =
-				builder.canonicalSema->FindParsedDeclaration(
-					MakeCanonicalParseActionIdentity(
-						declaration->node, declaration->script));
+			const asASTDeclId candidate(
+				declaration->canonicalASTDeclaration);
 			const asCDecl* const record =
 				builder.canonicalAST->GetDecl(candidate);
 			if( !candidate.IsValid() || record == 0 || record->id != candidate
 				|| (record->kind != asAST_DECL_CLASS
-				&& record->kind != asAST_DECL_INTERFACE) )
+				&& record->kind != asAST_DECL_INTERFACE)
+				|| record->name != declaration->name
+				|| record->stableKey
+					!= declaration->canonicalASTStableDeclKey )
 			{
 				return asASTDeclId();
 			}
@@ -942,9 +1146,39 @@ void asCBuilder::BindCanonicalFunctionIdentity(
 	const asASTDeclId declaration = canonicalSema->FindParsedDeclaration(
 		MakeCanonicalParseActionIdentity(node, script));
 	const asCDecl* const decl = canonicalAST->GetDecl(declaration);
-	if( decl != 0 && decl->stableKey.GetLength() != 0 )
+	asCArray<asDWORD> sourceParameterQualifiers;
+	if( decl != 0 && decl->stableKey.GetLength() != 0
+		&& asCRuntimeTypeBridge::CollectSourceParameterQualifiers(
+			*canonicalAST, declaration, sourceParameterQualifiers) )
 	{
+		// The key and source-formal metadata are one semantic identity. Publish
+		// neither until the complete formal relation has been validated.
 		function->canonicalASTStableDeclKey = decl->stableKey;
+		function->canonicalASTSourceParameterQualifiers.SwapWith(
+			sourceParameterQualifiers);
+	}
+}
+
+void asCBuilder::BindCanonicalGlobalIdentity(
+	sGlobalVariableDescription *declaration)
+{
+	if( declaration == 0 || declaration->declaredAtNode == 0
+		|| canonicalSema == 0 || canonicalAST == 0 )
+	{
+		return;
+	}
+	const asASTDeclId declarationId = canonicalSema->FindParsedDeclaration(
+		MakeCanonicalParseActionIdentity(
+			declaration->declaredAtNode, declaration->script));
+	const asCDecl* const decl = canonicalAST->GetDecl(declarationId);
+	if( declarationId.IsValid() && decl != 0
+		&& decl->id == declarationId
+		&& decl->kind == asAST_DECL_VAR
+		&& decl->name == declaration->name
+		&& decl->stableKey.GetLength() != 0 )
+	{
+		declaration->canonicalASTDeclaration = declarationId.value;
+		declaration->canonicalASTStableDeclKey = decl->stableKey;
 	}
 }
 
@@ -964,6 +1198,7 @@ void asCBuilder::BindCanonicalTypeIdentity(sClassDeclaration *declaration)
 			|| decl->kind == asAST_DECL_INTERFACE)
 		&& decl->stableKey.GetLength() != 0 )
 	{
+		declaration->canonicalASTDeclaration = declarationId.value;
 		declaration->canonicalASTStableDeclKey = decl->stableKey;
 	}
 }
@@ -1011,6 +1246,8 @@ asCBuilder::asCBuilder(asCScriptEngine *_engine, asCModule *_module)
 	testFailureBeforeCanonicalAccessPermissionAppend = asUINT(-1);
 	testCanonicalAccessPermissionAppendOrdinal = 0;
 	testCanonicalAccessPermissionAppendFailureInjected = false;
+	testShadowRuntimeFinalPerturbation = false;
+	testShadowRuntimeFinalPerturbationApplied = false;
 #endif
 }
 
@@ -1034,6 +1271,29 @@ bool asCBuilder::ShouldInjectTestCanonicalAccessPermissionAppendFailure()
 	testFailureBeforeCanonicalAccessPermissionAppend = asUINT(-1);
 	testCanonicalAccessPermissionAppendFailureInjected = true;
 	return true;
+}
+
+void asCBuilder::SetTestShadowRuntimeFinalPerturbation(bool enable)
+{
+	testShadowRuntimeFinalPerturbation = enable;
+	testShadowRuntimeFinalPerturbationApplied = false;
+}
+
+void asCBuilder::ApplyTestShadowRuntimeFinalPerturbation(asCModule& candidate)
+{
+	if( !testShadowRuntimeFinalPerturbation )
+	{
+		return;
+	}
+	asIScriptFunction* const publicFunction = candidate.GetFunctionByName("F");
+	asCScriptFunction* const function =
+		static_cast<asCScriptFunction*>(publicFunction);
+	if( function == 0 || function->funcType != asFUNC_SCRIPT )
+	{
+		return;
+	}
+	function->SetFinal(true);
+	testShadowRuntimeFinalPerturbationApplied = true;
 }
 #endif
 
@@ -1702,6 +1962,14 @@ int asCBuilder::AttachCanonicalSemaIfNeeded()
 	}
 	canonicalSema->ActOnTranslationUnit(
 		module && module->GetName() ? module->GetName() : "<module>");
+#if WITH_EDITOR
+	for( const TPair<size_t, size_t>& range : EditorOnlyBlockCharacterPositions )
+	{
+		canonicalSema->AddEditorOnlyCharacterRange(
+			static_cast<asUINT>(range.Key),
+			static_cast<asUINT>(range.Value));
+	}
+#endif
 	return 0;
 }
 
@@ -1745,6 +2013,8 @@ int asCBuilder::SealCanonicalAST()
 		// at the publication boundary for staged Builder/CompileFunction callers;
 		// range-keyed diagnostics are idempotent.
 		canonicalSema->ValidateCapturedLambdaUses();
+		canonicalSema->ValidateDefaultArgumentOverloads();
+		canonicalSema->ValidateEditorOnlyOverrides();
 	}
 	if( canonicalSema && canonicalSema->GetDiagnostics().GetLength() > 0 )
 	{
@@ -1786,6 +2056,25 @@ int asCBuilder::SealCanonicalAST()
 		const int seal = canonicalAST->Seal();
 		if( seal != asAST_VERIFY_OK )
 		{
+			// Seal returns only the verifier category. Preserve the exact rejected
+			// invariant at the Builder publication boundary; otherwise a failed
+			// module Build collapses to asINVALID_CONFIGURATION with no actionable
+			// compiler diagnostic after the pending graph is destroyed.
+			asSAstVerifyResult verifyResult;
+			asCASTVerify(*canonicalAST, verifyResult);
+			asCString verifyDetail;
+			asCASTFormatVerifyResult(verifyResult, verifyDetail);
+			if( engine )
+			{
+				engine->WriteMessage(
+					verifyResult.logicalSource.AddressOf(),
+					verifyResult.line,
+					verifyResult.column,
+					asMSGTYPE_ERROR,
+					verifyDetail.AddressOf());
+			}
+			printf("Canonical AST verifier diagnostic: %s\n",
+				verifyDetail.AddressOf());
 			NotifyCanonicalBuildArtifactFailure(*canonicalAST, seal);
 			return seal;
 		}
@@ -3666,7 +3955,20 @@ int asCBuilder::RegisterGlobalVar(asCScriptNode *node, asCScriptCode *file, asSN
 		WriteError(TXT_GLOBAL_VARS_NOT_ALLOWED, file, node);
 
 	// What data type is it?
-	asCDataType type = CreateDataTypeFromNode(node->firstChild, file, ns);
+	asCDataType type;
+	if( engine && engine->GetCompilerPipeline() == asCOMPILER_PIPELINE_CANONICAL )
+	{
+		asCScriptNode* const nameNode = node->firstChild ? node->firstChild->next : 0;
+		if( !TryResolveCanonicalBoundDeclType(*this, nameNode, file, type) )
+		{
+			WriteError("Canonical global variable registration cannot recover Sema QualTypes",
+				file, node);
+			type = asCDataType::CreatePrimitive(ttInt, false);
+			type.SetIsErrorDataType(true);
+		}
+	}
+	else
+		type = CreateDataTypeFromNode(node->firstChild, file, ns);
 
 	if( !type.CanBeInstantiated() )
 	{
@@ -3749,6 +4051,7 @@ int asCBuilder::RegisterGlobalVar(asCScriptNode *node, asCScriptCode *file, asSN
 			n = n->next;
 			gvar->initializationNode->DisconnectParent();
 		}
+		BindCanonicalGlobalIdentity(gvar);
 	}
 
 	return 0;
@@ -4034,6 +4337,10 @@ int asCBuilder::RegisterClass(asCScriptNode *node, asCScriptCode *file, asSNameS
 		st->nameSpace = ns;
 		st->module = module;
 		st->compilingDeclaration = decl;
+		// Class identity uses the authored name token, matching Canonical
+		// record-header beginOffset and the already computed diagnostic r,c.
+		st->scriptSectionIdx = file->idx;
+		st->declaredAt = (r & 0xFFFFF)|((c & 0xFFF)<<20);
 		module->classTypes.PushLast(st);
 		module->allLocalTypes.Add(st);
 		if (isShared)
@@ -4227,58 +4534,31 @@ void asCBuilder::RegisterGlobalVariables()
 	{
 		auto* gvar = globVariableList[i];
 		const asCDecl* canonicalDeclaration = 0;
-		if( gvar && canonicalSema && canonicalAST && gvar->declaredAtNode )
+		if( gvar && canonicalAST && gvar->canonicalASTDeclaration != 0 )
 		{
-			asASTDeclId declarationId =
-				canonicalSema->FindParsedDeclaration(
-					MakeCanonicalParseActionIdentity(
-						gvar->declaredAtNode, gvar->script));
-			canonicalDeclaration = canonicalAST->GetDecl(declarationId);
-			if( canonicalDeclaration == 0 && gvar->script )
+			const asASTDeclId declarationId(
+				gvar->canonicalASTDeclaration);
+			const asCDecl* const candidate =
+				canonicalAST->GetDecl(declarationId);
+			if( candidate != 0 && candidate->id == declarationId
+				&& candidate->kind == asAST_DECL_VAR
+				&& candidate->name == gvar->name
+				&& candidate->stableKey
+					== gvar->canonicalASTStableDeclKey )
 			{
-				// Sema remembers the complete snDeclaration node, while the
-				// legacy Builder retains the identifier child for each declared
-				// global. Recover the producer identity only from exact logical
-				// section + identifier offset + name, and reject ambiguity.
-				asASTDeclId exactMatch;
-				asUINT exactMatches = 0;
-				for( asUINT declarationIndex = 1;
-					declarationIndex <= canonicalAST->GetDeclCount();
-					++declarationIndex )
-				{
-					const asCDecl* const candidate =
-						canonicalAST->GetDecl(asASTDeclId(declarationIndex));
-					if( candidate == 0 || candidate->kind != asAST_DECL_VAR
-						|| candidate->name != gvar->name
-						|| !candidate->range.begin.IsValid()
-						|| candidate->range.begin.offset
-							!= (asUINT)gvar->declaredAtNode->tokenPos )
-					{
-						continue;
-					}
-					const char* const logicalKey =
-						canonicalAST->GetSourceManager().GetLogicalKey(
-							candidate->range.begin.fileID);
-					if( logicalKey && gvar->script->name.Equals(logicalKey) )
-					{
-						exactMatch = candidate->id;
-						++exactMatches;
-					}
-				}
-				if( exactMatches == 1 )
-				{
-					declarationId = exactMatch;
-					canonicalDeclaration =
-						canonicalAST->GetDecl(declarationId);
-				}
+				canonicalDeclaration = candidate;
 			}
-			if( canonicalDeclaration
-				&& canonicalDeclaration->kind == asAST_DECL_VAR
-				&& canonicalDeclaration->stableKey.GetLength() != 0 )
-			{
-				gvar->canonicalASTStableDeclKey =
-					canonicalDeclaration->stableKey;
-			}
+		}
+		if( gvar && engine->GetCompilerPipeline()
+				== asCOMPILER_PIPELINE_CANONICAL
+			&& canonicalAST != 0 && canonicalDeclaration == 0 )
+		{
+			asCString detail;
+			detail.Format(
+				"Canonical global '%s' lacks its exact producer-carried declaration identity",
+				gvar->name.AddressOf());
+			WriteError(detail, gvar->script, gvar->declaredAtNode);
+			continue;
 		}
 		if (gvar->isEnumValue)
 		{
@@ -4435,6 +4715,22 @@ void asCBuilder::RegisterGlobalVariables()
 			module->scriptGlobals.Add(prop);
 			module->scriptGlobalsList.PushLast(prop);
 			prop->AddRef();
+		}
+		if( !gvar->isEnumValue && gvar->property != 0 )
+		{
+			if( gvar->property->canonicalASTStableDeclKey.GetLength() != 0
+				&& gvar->property->canonicalASTStableDeclKey
+					!= gvar->canonicalASTStableDeclKey )
+			{
+				asCString detail;
+				detail.Format(
+					"Canonical global '%s' conflicts with its existing Runtime declaration identity",
+					gvar->name.AddressOf());
+				WriteError(detail, gvar->script, gvar->declaredAtNode);
+				continue;
+			}
+			gvar->property->canonicalASTStableDeclKey =
+				gvar->canonicalASTStableDeclKey;
 		}
 	}
 }
@@ -5251,7 +5547,20 @@ void asCBuilder::CompileClass(sClassDeclaration* decl)
 
 		// Determine the type of the property
 		asCScriptCode *file = decl->script;
-		asCDataType dt = CreateDataTypeFromNode(nd, file, ot->nameSpace, false, ot);
+		asCDataType dt;
+		if( engine && engine->GetCompilerPipeline() == asCOMPILER_PIPELINE_CANONICAL )
+		{
+			asCScriptNode* const nameNode = nd ? nd->next : 0;
+			if( !TryResolveCanonicalBoundDeclType(*this, nameNode, file, dt) )
+			{
+				WriteError("Canonical class property registration cannot recover Sema QualTypes",
+					file, node);
+				dt = asCDataType::CreatePrimitive(ttInt, false);
+				dt.SetIsErrorDataType(true);
+			}
+		}
+		else
+			dt = CreateDataTypeFromNode(nd, file, ot->nameSpace, false, ot);
 		//if( dt.IsReadOnly() )
 			//WriteError(TXT_PROPERTY_CANT_BE_CONST, file, node);
 
@@ -5937,7 +6246,20 @@ void asCBuilder::IncludePropertiesFromMixins(sClassDeclaration *decl)
 					}
 
 					asCScriptCode *file = mixin->script;
-					asCDataType dt = CreateDataTypeFromNode(n2, file, mixin->ns);
+					asCDataType dt;
+					if( engine && engine->GetCompilerPipeline() == asCOMPILER_PIPELINE_CANONICAL )
+					{
+						asCScriptNode* const nameNode = n2 ? n2->next : 0;
+						if( !TryResolveCanonicalBoundDeclType(*this, nameNode, file, dt) )
+						{
+							WriteError("Canonical mixin property registration cannot recover Sema QualTypes",
+								file, n);
+							dt = asCDataType::CreatePrimitive(ttInt, false);
+							dt.SetIsErrorDataType(true);
+						}
+					}
+					else
+						dt = CreateDataTypeFromNode(n2, file, mixin->ns);
 
 					if( decl->typeInfo->IsShared() && dt.GetTypeInfo() && !dt.GetTypeInfo()->IsShared() )
 					{
@@ -6347,6 +6669,13 @@ int asCBuilder::RegisterEnum(asCScriptNode *node, asCScriptCode *file, asSNameSp
 			st->name      = name;
 			st->nameSpace = ns;
 			st->module    = module;
+			// Enum identity uses the authored name token, matching Canonical
+			// enum-name beginOffset.
+			int row = 0, col = 0;
+			if( tmp->firstChild )
+				file->ConvertPosToRowCol(tmp->firstChild->tokenPos, &row, &col);
+			st->scriptSectionIdx = file->idx;
+			st->declaredAt = (row & 0xFFFFF)|((col & 0xFFF)<<20);
 		}
 		module->enumTypes.PushLast(st);
 		module->allLocalTypes.Add(st);
@@ -6368,7 +6697,7 @@ int asCBuilder::RegisterEnum(asCScriptNode *node, asCScriptCode *file, asSNameSp
 		namedTypeDeclarations.PushLast(decl);
 		engine->allScriptDeclaredTypes.Add(st);
 
-		asCDataType type = CreateDataTypeFromNode(tmp, file, ns);
+		asCDataType type = asCDataType::CreateType(st, false);
 		asASSERT(!type.IsReference());
 
 		// External shared enums must not redeclare the enum values
@@ -6481,6 +6810,7 @@ int asCBuilder::RegisterEnum(asCScriptNode *node, asCScriptCode *file, asSNameSp
 				gvar->property->type      = gvar->datatype;
 				gvar->property->id        = 0;
 
+				BindCanonicalGlobalIdentity(gvar);
 				globVariables.Add(gvar);
 				globVariableList.PushLast(gvar);
 				engine->allScriptGlobalVariables.Add(gvar->property);
@@ -6548,6 +6878,7 @@ int asCBuilder::RegisterTypedef(asCScriptNode *node, asCScriptCode *file, asSNam
 
 void asCBuilder::GetParsedFunctionDetails(asCScriptNode *node, asCScriptCode *file, asCObjectType *objType, asCString &name, asCDataType &returnType, asCArray<asCString> &parameterNames, asCArray<asCDataType> &parameterTypes, asCArray<asETypeModifiers> &inOutFlags, asCArray<asCString *> &defaultArgs, asSFunctionTraits &funcTraits, asSNameSpace *implicitNamespace, asCString* accessSpecifier)
 {
+	asCScriptNode *const functionNode = node;
 	node = node->firstChild;
 
 	// Is the function shared?
@@ -6621,7 +6952,23 @@ void asCBuilder::GetParsedFunctionDetails(asCScriptNode *node, asCScriptCode *fi
 	}
 	name.Assign(&file->code[n->tokenPos], n->tokenLength);
 
-	if( !funcTraits.GetTrait(asTRAIT_CONSTRUCTOR) && !funcTraits.GetTrait(asTRAIT_DESTRUCTOR) )
+	const bool canonicalFunctionTypes =
+		engine && engine->GetCompilerPipeline() == asCOMPILER_PIPELINE_CANONICAL;
+	const bool filledCanonicalTypes = canonicalFunctionTypes
+		&& TryFillCanonicalParsedFunctionTypes(
+			*this, functionNode, file, returnType,
+			parameterNames, parameterTypes, inOutFlags, defaultArgs);
+	if( canonicalFunctionTypes && !filledCanonicalTypes )
+	{
+		WriteError("Canonical function registration cannot recover Sema QualTypes",
+			file, functionNode);
+		returnType = asCDataType::CreatePrimitive(ttInt, false);
+		returnType.SetIsErrorDataType(true);
+	}
+
+	if( !canonicalFunctionTypes
+		&& !funcTraits.GetTrait(asTRAIT_CONSTRUCTOR)
+		&& !funcTraits.GetTrait(asTRAIT_DESTRUCTOR) )
 	{
 		returnType = CreateDataTypeFromNode(node, file, implicitNamespace, false, objType);
 		returnType = ModifyDataTypeFromNode(returnType, node->next, file, 0, 0);
@@ -6636,7 +6983,7 @@ void asCBuilder::GetParsedFunctionDetails(asCScriptNode *node, asCScriptCode *fi
 			WriteError(TXT_REF_TYPE_CANT_BE_RETURNED_BY_VAL, file, node);
 		}
 	}
-	else
+	else if( !canonicalFunctionTypes )
 		returnType = asCDataType::CreatePrimitive(ttVoid, false);
 
 	funcTraits.SetTrait(asTRAIT_CONST, false);
@@ -6685,6 +7032,9 @@ void asCBuilder::GetParsedFunctionDetails(asCScriptNode *node, asCScriptCode *fi
 			decorator = decorator->next;
 		}
 	}
+
+	if( canonicalFunctionTypes )
+		return;
 
 	// Count the number of parameters
 	int count = 0;
@@ -7514,8 +7864,22 @@ int asCBuilder::RegisterVirtualProperty(asCScriptNode *node, asCScriptCode *file
 		node = node->next;
 	}
 
-	emulatedType = CreateDataTypeFromNode(node, file, ns);
-	emulatedType = ModifyDataTypeFromNode(emulatedType, node->next, file, 0, 0);
+	if( engine && engine->GetCompilerPipeline() == asCOMPILER_PIPELINE_CANONICAL )
+	{
+		asCScriptNode* const nameNode = node && node->next ? node->next->next : 0;
+		if( !TryResolveCanonicalBoundDeclType(*this, nameNode, file, emulatedType) )
+		{
+			WriteError("Canonical virtual property registration cannot recover Sema QualTypes",
+				file, mainNode);
+			emulatedType = asCDataType::CreatePrimitive(ttInt, false);
+			emulatedType.SetIsErrorDataType(true);
+		}
+	}
+	else
+	{
+		emulatedType = CreateDataTypeFromNode(node, file, ns);
+		emulatedType = ModifyDataTypeFromNode(emulatedType, node->next, file, 0, 0);
+	}
 	node = node->next->next;
 	emulatedName.Assign(&file->code[node->tokenPos], node->tokenLength);
 
@@ -7779,8 +8143,26 @@ int asCBuilder::RegisterImportedFunction(int importID, asCScriptNode *node, asCS
 		funcTraits, ns, moduleName);
 	if( registerResult >= 0 )
 	{
-		BindCanonicalFunctionIdentity(
-			GetFunctionDescription(importID), node, file);
+		asCScriptFunction* const registered = GetFunctionDescription(importID);
+		BindCanonicalFunctionIdentity(registered, node, file);
+		if( registered != 0 )
+		{
+			// Import identity uses the authored name token, matching Canonical
+			// import-signature beginOffset.
+			registered->AllocateScriptFunctionData();
+			asCScriptNode* ident = 0;
+			if( node != 0 && node->firstChild != 0 )
+			{
+				ident = node->firstChild->firstChild;
+				while( ident && ident->nodeType != snIdentifier )
+					ident = ident->next;
+			}
+			int row = 0, col = 0;
+			if( ident != 0 )
+				file->ConvertPosToRowCol(ident->tokenPos, &row, &col);
+			registered->scriptData->scriptSectionIdx = file->idx;
+			registered->scriptData->declaredAt = (row & 0xFFFFF)|((col & 0xFFF)<<20);
+		}
 	}
 
 	return registerResult;
@@ -8221,6 +8603,24 @@ asSNameSpace *asCBuilder::GetNameSpaceByString(const asCString &nsName, asSNameS
 asCDataType asCBuilder::CreateDataTypeFromNode(asCScriptNode *node, asCScriptCode *file, asSNameSpace *implicitNamespace, bool acceptHandleForScope, asCObjectType *currentType, bool reportError, bool *isValid)
 {
 	asASSERT(node->nodeType == snDataType || node->nodeType == snIdentifier || node->nodeType == snScope );
+
+	if( module )
+		module->RecordCreateDataTypeFromNode();
+
+	// Host Register* APIs parse C++ declaration strings on a builder without
+	// Canonical Sema. Fail-close only the script compilation path, where type
+	// authority is already interned as Sema QualTypes.
+	if( engine && engine->GetCompilerPipeline() == asCOMPILER_PIPELINE_CANONICAL
+		&& canonicalSema != 0 )
+	{
+		if( reportError )
+			WriteError("Canonical type production cannot walk CreateDataTypeFromNode", file, node);
+		if( isValid )
+			*isValid = false;
+		asCDataType errorType = asCDataType::CreatePrimitive(ttInt, false);
+		errorType.SetIsErrorDataType(true);
+		return errorType;
+	}
 
 	asCDataType dt;
 

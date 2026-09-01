@@ -2,6 +2,8 @@
 #include "../../Support/AngelscriptNativeCanonicalASTTestSupport.h"
 #include "../../Support/AngelscriptNativeBuilderTestSupport.h"
 #include "../../Support/AngelscriptNativeExecutionTestSupport.h"
+#include "Shared/AngelscriptTestModuleBuilder.h"
+#include "Core/AngelscriptEngine.h"
 
 #include "CQTest.h"
 
@@ -20,11 +22,14 @@
 #include "source/as_builder.h"
 #include "source/as_generic.h"
 #include "source/as_module.h"
+#include "source/as_objecttype.h"
 #include "source/as_parser.h"
+#include "source/as_runtime_type_bridge.h"
 #include "source/as_scriptcode.h"
 #include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
 #include "source/as_sema.h"
+#include "source/as_stmt.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS
@@ -101,6 +106,23 @@ namespace CanonicalASTSemaAuthorityTest
 		int32 Stored = 0;
 	};
 
+	static int32 GTemplateCallbackInvocations = 0;
+	static bool GTemplateCallbackAccept = true;
+
+	static void SemaTemplateCallbackGate(asIScriptGeneric* Generic)
+	{
+		++GTemplateCallbackInvocations;
+		if (Generic == nullptr)
+		{
+			return;
+		}
+		if (int* const OutFlag = static_cast<int*>(Generic->GetAddressOfArg(1)))
+		{
+			*OutFlag = 0;
+		}
+		Generic->SetReturnByte(GTemplateCallbackAccept ? 1 : 0);
+	}
+
 	struct FSemaScopeRef
 	{
 		int32 ReferenceCount = 1;
@@ -131,6 +153,37 @@ namespace CanonicalASTSemaAuthorityTest
 		if (Object != nullptr && --Object->ReferenceCount == 0)
 		{
 			delete Object;
+		}
+	}
+
+	static void NativeDispatchHostRead(asIScriptGeneric* Generic)
+	{
+		if (Generic != nullptr)
+		{
+			Generic->SetReturnDWord(7);
+		}
+	}
+
+	struct FWorldContextHostDummy
+	{
+		int32 Unused = 0;
+	};
+
+	static FWorldContextHostDummy GWorldContextHost;
+
+	static void InjectWorldContextGeneric(asIScriptGeneric* Generic)
+	{
+		if (Generic != nullptr)
+		{
+			Generic->SetReturnAddress(&GWorldContextHost);
+		}
+	}
+
+	static void WithWorldGeneric(asIScriptGeneric* Generic)
+	{
+		if (Generic != nullptr)
+		{
+			Generic->SetReturnDWord(Generic->GetArgDWord(1));
 		}
 	}
 
@@ -191,6 +244,56 @@ namespace CanonicalASTSemaAuthorityTest
 			*Self = *Other;
 		}
 		Generic->SetReturnAddress(Self);
+	}
+
+	struct FGeneratedGetterValue
+	{
+		int32 Stored = 0;
+		int32 Padding[7] = {};
+	};
+
+	static void ConstructGeneratedGetterValue(asIScriptGeneric* Generic)
+	{
+		if (Generic != nullptr && Generic->GetObject() != nullptr)
+		{
+			new (Generic->GetObject()) FGeneratedGetterValue();
+		}
+	}
+
+	static void CopyConstructGeneratedGetterValue(asIScriptGeneric* Generic)
+	{
+		if (Generic == nullptr)
+		{
+			return;
+		}
+		FGeneratedGetterValue* const Destination =
+			static_cast<FGeneratedGetterValue*>(Generic->GetObject());
+		const FGeneratedGetterValue* const Source =
+			static_cast<const FGeneratedGetterValue*>(Generic->GetArgAddress(0));
+		if (Destination != nullptr && Source != nullptr)
+		{
+			new (Destination) FGeneratedGetterValue(*Source);
+		}
+	}
+
+	static void DestructGeneratedGetterValue(asIScriptGeneric* Generic)
+	{
+		if (Generic != nullptr && Generic->GetObject() != nullptr)
+		{
+			static_cast<FGeneratedGetterValue*>(Generic->GetObject())
+				->~FGeneratedGetterValue();
+		}
+	}
+
+	static void ReadGeneratedGetterValue(asIScriptGeneric* Generic)
+	{
+		if (Generic == nullptr)
+		{
+			return;
+		}
+		const FGeneratedGetterValue* const Value =
+			static_cast<const FGeneratedGetterValue*>(Generic->GetObject());
+		Generic->SetReturnDWord(Value != nullptr ? static_cast<asDWORD>(Value->Stored) : 0);
 	}
 
 	struct FListBox
@@ -294,6 +397,15 @@ namespace CanonicalASTSemaAuthorityTest
 
 	static void RankArrayInsertLastUnused(asIScriptGeneric*)
 	{
+	}
+
+	static void RankArrayOpIndex(asIScriptGeneric* Generic)
+	{
+		static int32 Missing = 0;
+		if (Generic != nullptr)
+		{
+			Generic->SetReturnAddress(&Missing);
+		}
 	}
 
 	static void MetadataHiddenGeneric(asIScriptGeneric* Generic)
@@ -609,7 +721,7 @@ namespace CanonicalASTSemaAuthorityTest
 	}
 
 	static const asCDecl* FindOnlyParameterDecl(
-		asCASTContext& Context,
+		const asCASTContext& Context,
 		const asCDecl* Callable)
 	{
 		if (Callable == nullptr)
@@ -1461,6 +1573,3955 @@ public:
 		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
 			Sema.GetDiagnostics().GetLength(),
 			*FString::Printf(TEXT("captured PreClass facts must resolve without a Sema diagnostic. AST:\n%s"), *Dump)));
+	}
+
+	TEST_METHOD(SemaPreClassShadowTypeInternsImplicitHandleQualType)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"ShadowHandleHost", 0,
+				asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("shadow-handle host must register as an implicit-handle reference type")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"ShadowBareHost", 0,
+				asOBJ_REF | asOBJ_NOCOUNT) >= 0,
+			TEXT("shadow-bare host must register as a non-implicit-handle reference type")));
+
+		asITypeInfo* const HandleHost = ScriptEngine->GetTypeInfoByName("ShadowHandleHost");
+		asITypeInfo* const BareHost = ScriptEngine->GetTypeInfoByName("ShadowBareHost");
+		ASSERT_THAT(IsTrue(HandleHost != nullptr && BareHost != nullptr,
+			TEXT("both shadow hosts must resolve before PreClass capture")));
+
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaPreClassShadowQualType");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaPreClassShadowQualType module")));
+
+		asPreClassData HandleData;
+		HandleData.ShadowType = HandleHost;
+		Module->AddPreClassData("DerivedHandleShadow", HandleData);
+		asPreClassData BareData;
+		BareData.ShadowType = BareHost;
+		Module->AddPreClassData("DerivedBareShadow", BareData);
+
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class DerivedHandleShadow
+			{
+			}
+
+			class DerivedBareShadow
+			{
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaPreClassShadowQualType.as", ScriptSource.c_str(), true);
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context, Module);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("PreClass shadow QualType fixture must parse through typed Sema actions")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("PreClass shadow QualTypes must seal without CodeGen or Builder CreateDataTypeFromNode")));
+
+		const asCDecl* HandleShadow = nullptr;
+		const asCDecl* BareShadow = nullptr;
+		const asCDecl* HandleHostDecl = nullptr;
+		const asCDecl* BareHostDecl = nullptr;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			if (Decl == nullptr || Decl->kind != asAST_DECL_CLASS)
+			{
+				continue;
+			}
+			if (Decl->name.Equals("DerivedHandleShadow"))
+			{
+				HandleShadow = Decl;
+			}
+			else if (Decl->name.Equals("DerivedBareShadow"))
+			{
+				BareShadow = Decl;
+			}
+			else if (Decl->origin.Equals("canonical-native-type-view")
+				&& Decl->name.Equals("ShadowHandleHost"))
+			{
+				HandleHostDecl = Decl;
+			}
+			else if (Decl->origin.Equals("canonical-native-type-view")
+				&& Decl->name.Equals("ShadowBareHost"))
+			{
+				BareHostDecl = Decl;
+			}
+		}
+
+		const asCType* const HandleHostType = HandleHostDecl != nullptr
+			? Context.GetType(HandleHostDecl->type.type) : nullptr;
+		const asCType* const BareHostType = BareHostDecl != nullptr
+			? Context.GetType(BareHostDecl->type.type) : nullptr;
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("PreClass ShadowType must intern Clang-style QualType on the native-view Decl: implicit-handle hosts get HANDLE, bare hosts do not. diagnostics:\n%s\nAST:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(HandleShadow != nullptr && HandleHostDecl != nullptr
+			&& HandleShadow->bases.GetLength() == 1
+			&& HandleShadow->bases[0] == HandleHostDecl->id
+			&& HandleHostType != nullptr
+			&& HandleHostType->kind == asAST_TYPE_REFERENCE_OBJECT
+			&& HandleHostType->stableKey.Equals("ShadowHandleHost")
+			&& HandleHostDecl->type.IsHandle(),
+			*Evidence));
+		ASSERT_THAT(IsTrue(BareShadow != nullptr && BareHostDecl != nullptr
+			&& BareShadow->bases.GetLength() == 1
+			&& BareShadow->bases[0] == BareHostDecl->id
+			&& BareHostType != nullptr
+			&& BareHostType->kind == asAST_TYPE_REFERENCE_OBJECT
+			&& BareHostType->stableKey.Equals("ShadowBareHost")
+			&& !BareHostDecl->type.IsHandle(),
+			*Evidence));
+	}
+
+	TEST_METHOD(SemaScriptTemplateSubtypeInternsAstLocalTemplateArguments)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"TSemaScriptArgGate<class T>", 0,
+			asOBJ_REF | asOBJ_TEMPLATE | asOBJ_NOCOUNT
+				| asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("script-subtype template fixture must register a unique host template")));
+
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaScriptTemplateArg");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaScriptTemplateArg module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class LocalScript
+			{
+			}
+
+			void F(TSemaScriptArgGate<LocalScript> Values)
+			{
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaScriptTemplateArg.as", ScriptSource.c_str(), true);
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		const int32 RuntimeBucketCountBefore =
+			ScriptEngine->templateInstanceBuckets.Num();
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("script-subtype template parameter must parse through typed QualType actions")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("script-subtype template QualType must seal without Runtime instantiation")));
+
+		const asCDecl* Values = nullptr;
+		const asCDecl* LocalScript = nullptr;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			if (Decl == nullptr)
+			{
+				continue;
+			}
+			if (Decl->kind == asAST_DECL_PARAM && Decl->name.Equals("Values"))
+			{
+				Values = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_CLASS && Decl->name.Equals("LocalScript"))
+			{
+				LocalScript = Decl;
+			}
+		}
+		const asCType* const ValuesType = Values != nullptr
+			? Context.GetType(Values->type.type) : nullptr;
+		const asCType* const ArgumentType =
+			ValuesType != nullptr && ValuesType->templateArguments.GetLength() == 1
+				? Context.GetType(ValuesType->templateArguments[0].type) : nullptr;
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("TSemaScriptArgGate<LocalScript> must intern AST-local template arguments from the script class QualType without GetTemplateInstanceType. buckets before=%d after=%d diagnostics:\n%s\nAST:\n%s"),
+			RuntimeBucketCountBefore,
+			ScriptEngine->templateInstanceBuckets.Num(),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(LocalScript != nullptr
+			&& ValuesType != nullptr
+			&& ValuesType->kind == asAST_TYPE_TEMPLATE
+			&& ValuesType->stableKey.Equals("TSemaScriptArgGate<LocalScript>")
+			&& ValuesType->templateArguments.GetLength() == 1
+			&& ArgumentType != nullptr
+			&& ArgumentType->kind == asAST_TYPE_REFERENCE_OBJECT
+			&& ArgumentType->stableKey.Equals("LocalScript")
+			&& (ValuesType->templateArguments[0].quals & asAST_QUAL_HANDLE) != 0,
+			*Evidence));
+		ASSERT_THAT(AreEqual(RuntimeBucketCountBefore,
+			ScriptEngine->templateInstanceBuckets.Num(), *Evidence));
+	}
+
+	TEST_METHOD(SemaHostFuncdefInternsCanonicalFormalQualTypesWithoutRuntimeBridge)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"void TSemaHostFnGate(int)") >= 0,
+			TEXT("host-funcdef formal fixture must register a unique funcdef")));
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaHostFuncdefFormals");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaHostFuncdefFormals module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void F()
+			{
+				TSemaHostFnGate Callback = function(int x)
+				{
+				};
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaHostFuncdefFormals.as", ScriptSource.c_str(), true);
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("host-funcdef lambda assignment must parse through typed QualType actions")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("host-funcdef formals must seal without Runtime funcdef objects")));
+
+		const asCDecl* HostFuncdef = nullptr;
+		const asCDecl* Callback = nullptr;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			if (Decl == nullptr)
+			{
+				continue;
+			}
+			if (Decl->kind == asAST_DECL_FUNCDEF
+				&& Decl->origin.Equals("canonical-native-type-view")
+				&& Decl->stableKey.Equals("TSemaHostFnGate"))
+			{
+				HostFuncdef = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_VAR && Decl->name.Equals("Callback"))
+			{
+				Callback = Decl;
+			}
+		}
+		const asCDecl* const HostFormal =
+			CanonicalASTSemaAuthorityTest::FindOnlyParameterDecl(Context, HostFuncdef);
+		const asCType* const HostReturn = HostFuncdef != nullptr
+			? Context.GetType(HostFuncdef->type.type) : nullptr;
+		const asCType* const HostFormalType = HostFormal != nullptr
+			? Context.GetType(HostFormal->type.type) : nullptr;
+		const asCExpr* const Conversion = Callback != nullptr
+			&& Callback->inits.GetLength() == 1
+			? Context.GetExpr(Callback->inits[0]) : nullptr;
+		const asCExpr* const LambdaRef = Conversion != nullptr
+			&& Conversion->children.GetLength() == 1
+			? Context.GetExpr(Conversion->children[0]) : nullptr;
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("TSemaHostFnGate must project a native-view FUNCDEF Decl with interned void/int QualTypes so lambda viability does not consult asCRuntimeTypeBridge. diagnostics:\n%s\nAST:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(HostFuncdef != nullptr
+			&& HostReturn != nullptr
+			&& HostReturn->kind == asAST_TYPE_VOID
+			&& HostReturn->stableKey.Equals("void")
+			&& HostFormal != nullptr
+			&& HostFormalType != nullptr
+			&& HostFormalType->kind == asAST_TYPE_PRIMITIVE
+			&& HostFormalType->stableKey.Equals("int")
+			&& HostFormal->type.quals == 0
+			&& Callback != nullptr
+			&& LambdaRef != nullptr
+			&& LambdaRef->kind == asAST_EXPR_DECL_REF
+			&& Sema.IsLambdaViableForFuncdef(LambdaRef->id, Callback->type),
+			*Evidence));
+	}
+
+	TEST_METHOD(CanonicalBuildDoesNotWalkCreateDataTypeFromNodeForScriptFunction)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("CreateDataTypeFromNode isolation fixture selects CANONICAL")));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "SemaCanonicalNoCreateDataTypeFromNode");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void F(int x)
+			{
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"SemaCanonicalNoCreateDataTypeFromNode.as",
+			ScriptSource.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		Module->ResetCreateDataTypeFromNodeCount();
+		Module->ResetLegacyCompilerInvocationCount();
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts(),
+			TEXT("CANONICAL parse/Sema must intern F(int) before Stage 2 registration")));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateFunctions(),
+			TEXT("CANONICAL Stage 2 must register F from Sema QualTypes without CreateDataTypeFromNode")));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST(),
+			TEXT("CANONICAL must seal F(int) after Stage 2")));
+
+		const asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context));
+		const asCDecl* Function = nullptr;
+		for (asUINT Index = 1; Context != nullptr && Index <= Context->GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context->GetDecl(asASTDeclId(Index));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_FUNCTION
+				&& Decl->name.Equals("F"))
+			{
+				Function = Decl;
+			}
+		}
+		const asCDecl* const Parameter = Context != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOnlyParameterDecl(*Context, Function)
+			: nullptr;
+		const asCType* const ParameterType = Parameter != nullptr && Context != nullptr
+			? Context->GetType(Parameter->type.type) : nullptr;
+		asCString Dump;
+		if (Context != nullptr)
+		{
+			asCASTDump(*Context, Dump);
+		}
+		const FString Evidence = FString::Printf(
+			TEXT("CANONICAL Stage 2 must intern F(int) from Sema QualTypes and fail-close Builder CreateDataTypeFromNode. count=%u legacy=%u AST:\n%s"),
+			Module->GetLastCreateDataTypeFromNodeCount(),
+			Module->GetLastLegacyCompilerInvocationCount(),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Module->GetLastCreateDataTypeFromNodeCount(), *Evidence));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Module->GetLastLegacyCompilerInvocationCount(), *Evidence));
+		ASSERT_THAT(IsTrue(Function != nullptr
+			&& Parameter != nullptr
+			&& ParameterType != nullptr
+			&& ParameterType->kind == asAST_TYPE_PRIMITIVE
+			&& ParameterType->stableKey.Equals("int")
+			&& Parameter->type.quals == 0,
+			*Evidence));
+	}
+
+	TEST_METHOD(CanonicalDeclDefaultsLambdaBodyAndListPatternFactoryOrigin)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("4.4 declaration fixture selects CANONICAL")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"FSemaDeclPatternBox",
+				0,
+				asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("list-pattern host type must register")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectProperty(
+				"FSemaDeclPatternBox",
+				"int Marker",
+				asOFFSET(CanonicalASTSemaAuthorityTest::FListBox, Marker)) >= 0,
+			TEXT("list-pattern host type must expose Marker")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectBehaviour(
+				"FSemaDeclPatternBox",
+				asBEHAVE_LIST_FACTORY,
+				"FSemaDeclPatternBox f(int &in) {repeat int}",
+				asFUNCTION(CanonicalASTSemaAuthorityTest::CreateListBox),
+				asCALL_GENERIC) >= 0,
+			TEXT("list factory {repeat int} must register")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterFuncdef(
+			"int TSemaDeclLambdaGate()") >= 0,
+			TEXT("lambda body fixture must register a unique funcdef")));
+
+		asIScriptModule* const PublicModule = ScriptEngine->GetModule(
+			"SemaDeclDefaultLambdaListPattern", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(PublicModule));
+		asCModule* const Module = static_cast<asCModule*>(PublicModule);
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int F(int a, int b = 7)
+			{
+				return a + b;
+			}
+
+			int Entry()
+			{
+				TSemaDeclLambdaGate L = function()
+				{
+					FSemaDeclPatternBox Box = {1, 2};
+					return F(a: 3);
+				};
+				return L();
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, PublicModule->AddScriptSection(
+			"SemaDeclDefaultLambdaListPattern.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		ASSERT_THAT(AreEqual(0, PublicModule->Build(),
+			TEXT("4.4 combined declaration fixture must compile")));
+
+		const asCASTContext* const Context = Module->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context));
+		asCASTContext& MutableContext = *const_cast<asCASTContext*>(Context);
+		const asCDecl* Function = nullptr;
+		const asCDecl* ListFactory = nullptr;
+		const asCDecl* ParamB = nullptr;
+		for (asUINT Index = 1; Context != nullptr && Index <= Context->GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context->GetDecl(asASTDeclId(Index));
+			if (Decl == nullptr)
+			{
+				continue;
+			}
+			if (Decl->kind == asAST_DECL_FUNCTION && Decl->name.Equals("F")
+				&& (Decl->traits & asAST_TRAIT_LAMBDA) == 0)
+			{
+				Function = Decl;
+			}
+			if ((Decl->traits & asAST_TRAIT_LIST_FACTORY) != 0)
+			{
+				ListFactory = Decl;
+			}
+		}
+		if (Function != nullptr)
+		{
+			for (asUINT Child = 0; Child < Function->children.GetLength(); ++Child)
+			{
+				const asCDecl* const Candidate =
+					Context->GetDecl(Function->children[Child]);
+				if (Candidate != nullptr && Candidate->kind == asAST_DECL_PARAM
+					&& Candidate->name.Equals("b"))
+				{
+					ParamB = Candidate;
+					break;
+				}
+			}
+		}
+		const asCDecl* const Lambda =
+			CanonicalASTSemaAuthorityTest::FindOnlyLambdaDecl(MutableContext);
+		const asCStmt* const LambdaBody = Lambda != nullptr
+			? Context->GetStmt(Lambda->body)
+			: nullptr;
+		const asCExpr* const NamedCall =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				MutableContext, "F");
+		const asCExpr* const DefaultInit = ParamB != nullptr
+			&& ParamB->inits.GetLength() == 1
+			? Context->GetExpr(ParamB->inits[0]) : nullptr;
+		const asCType* const DefaultType = DefaultInit != nullptr
+			? Context->GetType(DefaultInit->type.type) : nullptr;
+		asCString Dump;
+		asCASTDump(*Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("4.4 must seal default ParamDecl b=7, named call F(a: 3), lambda body Block, and list-factory origin 'repeat int'. factoryOrigin=%s AST:\n%s"),
+			ListFactory != nullptr
+				? UTF8_TO_TCHAR(ListFactory->origin.AddressOf())
+				: TEXT("<missing-factory>"),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(ParamB != nullptr
+			&& ParamB->defaultArg.Equals("7")
+			&& ParamB->inits.GetLength() == 1
+			&& DefaultType != nullptr
+			&& DefaultType->kind == asAST_TYPE_PRIMITIVE
+			&& DefaultType->stableKey.Equals("int"),
+			*Evidence));
+		ASSERT_THAT(IsTrue(NamedCall != nullptr
+			&& NamedCall->callArguments.GetLength() == 2
+			&& NamedCall->callArguments[0].origin == asAST_CALL_ARGUMENT_DEFAULT
+			&& NamedCall->callArguments[1].origin == asAST_CALL_ARGUMENT_NAMED
+			&& NamedCall->callArguments[1].authoredName.Equals("a"),
+			*Evidence));
+		ASSERT_THAT(IsTrue(Lambda != nullptr
+			&& LambdaBody != nullptr
+			&& Lambda->body == LambdaBody->id
+			&& LambdaBody->kind == asAST_STMT_BLOCK
+			&& LambdaBody->owner == Lambda->id,
+			*Evidence));
+		ASSERT_THAT(IsTrue(ListFactory != nullptr
+			&& ListFactory->origin.Equals("repeat int"),
+			*Evidence));
+	}
+
+	TEST_METHOD(CanonicalDeclAccessTraitsMixinAndVirtualPropertyRejection)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("4.4 remaining declaration fixture selects CANONICAL")));
+		asIScriptModule* const PublicModule = ScriptEngine->GetModule(
+			"SemaDeclAccessTraitsMixin", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(PublicModule));
+		asCModule* const Module = static_cast<asCModule*>(PublicModule);
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class Base
+			{
+				int F() const { return 1; }
+			}
+
+			class Vault : Base
+			{
+				access Internal = private, Friend(inherited), *(readonly, editdefaults);
+				access:Internal int Value;
+				private int F() const final override { return Value; }
+			}
+
+			mixin int MixHelper(Vault self)
+			{
+				return self.F();
+			}
+
+			int Entry()
+			{
+				Vault Object;
+				return Object.MixHelper();
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, PublicModule->AddScriptSection(
+			"SemaDeclAccessTraitsMixin.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = PublicModule->Build();
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("4.4 remaining declaration fixture must compile; result=%d messages=%s"),
+				BuildResult,
+				*AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages()))));
+
+		const asCASTContext* const Context = Module->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context));
+		const asCDecl* Vault = nullptr;
+		const asCDecl* Specifier = nullptr;
+		const asCDecl* Field = nullptr;
+		const asCDecl* MethodF = nullptr;
+		const asCDecl* Mixin = nullptr;
+		const asCDecl* Getter = nullptr;
+		const asCDecl* Setter = nullptr;
+		const asCDecl* FriendPermission = nullptr;
+		const asCDecl* WildcardPermission = nullptr;
+		bool bSawPropertyDecl = false;
+		for (asUINT Index = 1; Context != nullptr && Index <= Context->GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context->GetDecl(asASTDeclId(Index));
+			if (Decl == nullptr)
+			{
+				continue;
+			}
+			if (Decl->kind == asAST_DECL_PROPERTY)
+			{
+				bSawPropertyDecl = true;
+			}
+			if (Decl->kind == asAST_DECL_CLASS && Decl->name.Equals("Vault"))
+			{
+				Vault = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_ACCESS_SPECIFIER && Decl->name.Equals("Internal"))
+			{
+				Specifier = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_VAR && Decl->name.Equals("Value"))
+			{
+				Field = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_METHOD && Decl->name.Equals("F")
+				&& (Decl->traits & asAST_TRAIT_OVERRIDE) != 0)
+			{
+				MethodF = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_MIXIN && Decl->name.Equals("MixHelper"))
+			{
+				Mixin = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_METHOD && Decl->name.Equals("GetValue"))
+			{
+				Getter = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_METHOD && Decl->name.Equals("SetValue"))
+			{
+				Setter = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_ACCESS_PERMISSION && Decl->name.Equals("Friend"))
+			{
+				FriendPermission = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_ACCESS_PERMISSION && Decl->name.Equals("*"))
+			{
+				WildcardPermission = Decl;
+			}
+		}
+
+		asCString Dump;
+		if (Context != nullptr)
+		{
+			asCASTDump(*Context, Dump);
+		}
+		const FString Evidence = FString::Printf(
+			TEXT("4.4 must seal access Internal, Vault::F traits, mixin MixHelper, and generated accessors that inherit the field specifier. AST:\n%s"),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		const asDWORD MethodTraits = asAST_TRAIT_PRIVATE
+			| asAST_TRAIT_CONST_METHOD
+			| asAST_TRAIT_FINAL
+			| asAST_TRAIT_OVERRIDE;
+		ASSERT_THAT(IsTrue(Vault != nullptr
+			&& Specifier != nullptr
+			&& Specifier->parent == Vault->id
+			&& (Specifier->traits & asAST_TRAIT_PRIVATE) != 0
+			&& Specifier->children.GetLength() == 2
+			&& FriendPermission != nullptr
+			&& FriendPermission->parent == Specifier->id
+			&& (FriendPermission->traits & asAST_TRAIT_ACCESS_INHERITED) != 0
+			&& WildcardPermission != nullptr
+			&& WildcardPermission->parent == Specifier->id
+			&& (WildcardPermission->traits & asAST_TRAIT_ACCESS_WILDCARD) != 0
+			&& (WildcardPermission->traits & asAST_TRAIT_ACCESS_READONLY) != 0
+			&& (WildcardPermission->traits & asAST_TRAIT_ACCESS_EDITDEFAULTS) != 0,
+			*Evidence));
+		ASSERT_THAT(IsTrue(Field != nullptr
+			&& Field->accessSpecifier == Specifier->id
+			&& Getter != nullptr
+			&& Setter != nullptr
+			&& (Getter->traits & asAST_TRAIT_GENERATED) != 0
+			&& (Setter->traits & asAST_TRAIT_GENERATED) != 0
+			&& Getter->accessorKind == asAST_ACCESSOR_GET
+			&& Setter->accessorKind == asAST_ACCESSOR_SET
+			&& Getter->accessorField == Field->id
+			&& Setter->accessorField == Field->id
+			&& Getter->accessSpecifier == Specifier->id
+			&& Setter->accessSpecifier == Specifier->id,
+			*Evidence));
+		ASSERT_THAT(IsTrue(MethodF != nullptr
+			&& (MethodF->traits & MethodTraits) == MethodTraits,
+			*Evidence));
+		ASSERT_THAT(IsTrue(Mixin != nullptr
+			&& (Mixin->traits & asAST_TRAIT_MIXIN) != 0
+			&& Mixin->origin.Equals("Vault"),
+			*Evidence));
+		ASSERT_THAT(IsFalse(bSawPropertyDecl,
+			TEXT("generated accessors must remain methods; virtual-property PropertyDecls are forbidden")));
+
+		asIScriptModule* const BrokenModule = ScriptEngine->GetModule(
+			"SemaDeclVirtualPropertyRejected", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(BrokenModule));
+		ASSERT_THAT(AreEqual(0, BrokenModule->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string BrokenSource = ASTEST_AS_ANSI(R"AS(
+			class Broken
+			{
+				int Prop { get { return 1; } }
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, BrokenModule->AddScriptSection(
+			"SemaDeclVirtualPropertyRejected.as",
+			BrokenSource.c_str(),
+			static_cast<unsigned int>(BrokenSource.size()))));
+		ASSERT_THAT(IsTrue(BrokenModule->Build() < 0,
+			TEXT("virtual property syntax must stay rejected")));
+		const FString BrokenMessages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BrokenMessages.Contains(
+			TEXT("Virtual property syntax has been removed")),
+			*FString::Printf(
+				TEXT("CANONICAL must keep the removal diagnostic, not restore the dialect. messages=%s"),
+				*BrokenMessages)));
+		asCModule* const BrokenCanonical = static_cast<asCModule*>(BrokenModule);
+		const asCASTContext* const BrokenContext =
+			BrokenCanonical != nullptr ? BrokenCanonical->GetCanonicalASTContext() : nullptr;
+		bool bBrokenProperty = false;
+		for (asUINT Index = 1;
+			BrokenContext != nullptr && Index <= BrokenContext->GetDeclCount();
+			++Index)
+		{
+			const asCDecl* const Decl = BrokenContext->GetDecl(asASTDeclId(Index));
+			bBrokenProperty |= Decl != nullptr && Decl->kind == asAST_DECL_PROPERTY;
+		}
+		ASSERT_THAT(IsFalse(bBrokenProperty,
+			TEXT("rejected virtual-property syntax must intern no PropertyDecl")));
+	}
+
+	TEST_METHOD(CanonicalDeclInheritanceLifecycleGlobalAndDefaultArgConflict)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("4.5 declaration fixture selects CANONICAL")));
+		asIScriptModule* const PublicModule = ScriptEngine->GetModule(
+			"SemaDeclLifecycleDeps", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(PublicModule));
+		asCModule* const Module = static_cast<asCModule*>(PublicModule);
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class Base
+			{
+			}
+
+			class Vault : Base
+			{
+				int Value;
+				default Value = 7;
+			}
+
+			const int Global = 40 + 1;
+
+			int Entry()
+			{
+				Vault Object;
+				return Object.Value + Global;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, PublicModule->AddScriptSection(
+			"SemaDeclLifecycleDeps.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = PublicModule->Build();
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("4.5 inheritance/lifecycle/global fixture must compile; result=%d messages=%s"),
+				BuildResult,
+				*AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages()))));
+
+		const asCASTContext* const Context = Module->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context));
+		const asCDecl* Base = nullptr;
+		const asCDecl* Vault = nullptr;
+		const asCDecl* InitDefaults = nullptr;
+		const asCDecl* Global = nullptr;
+		for (asUINT Index = 1; Context != nullptr && Index <= Context->GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context->GetDecl(asASTDeclId(Index));
+			if (Decl == nullptr)
+			{
+				continue;
+			}
+			if (Decl->kind == asAST_DECL_CLASS && Decl->name.Equals("Base"))
+			{
+				Base = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_CLASS && Decl->name.Equals("Vault"))
+			{
+				Vault = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_METHOD
+				&& Decl->name.Equals("__InitDefaults"))
+			{
+				InitDefaults = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_VAR && Decl->name.Equals("Global"))
+			{
+				Global = Decl;
+			}
+		}
+
+		asCString Dump;
+		if (Context != nullptr)
+		{
+			asCASTDump(*Context, Dump);
+		}
+		const FString Evidence = FString::Printf(
+			TEXT("4.5 must seal Vault:Base, generated InitDefaults, and Global=41. AST:\n%s"),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		bool bVaultDependsOnBase = false;
+		for (asUINT Dep = 0; Vault != nullptr && Dep < Vault->dependencies.GetLength(); ++Dep)
+		{
+			if (Vault->dependencies[Dep].Equals("Base"))
+			{
+				bVaultDependsOnBase = true;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(Base != nullptr
+			&& Vault != nullptr
+			&& Vault->bases.GetLength() >= 1
+			&& Vault->bases[0] == Base->id
+			&& bVaultDependsOnBase
+			&& InitDefaults != nullptr
+			&& (InitDefaults->traits & asAST_TRAIT_GENERATED) != 0
+			&& InitDefaults->origin.Equals("canonical-init-defaults")
+			&& Global != nullptr
+			&& Global->hasConstantValue
+			&& Global->constantValue == 41,
+			*Evidence));
+
+		asIScriptModule* const ConflictModule = ScriptEngine->GetModule(
+			"SemaDeclDefaultArgConflict", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(ConflictModule));
+		ASSERT_THAT(AreEqual(0, ConflictModule->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ConflictSource = ASTEST_AS_ANSI(R"AS(
+			int F(int a)
+			{
+				return a;
+			}
+
+			int F(int a, int b = 1)
+			{
+				return a + b;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, ConflictModule->AddScriptSection(
+			"SemaDeclDefaultArgConflict.as",
+			ConflictSource.c_str(),
+			static_cast<unsigned int>(ConflictSource.size()))));
+		ASSERT_THAT(IsTrue(ConflictModule->Build() < 0,
+			TEXT("default-argument overload conflict must fail CANONICAL Build")));
+		const FString ConflictMessages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(ConflictMessages.Contains(
+			TEXT("default-argument-overload-conflict")),
+			*FString::Printf(
+				TEXT("conflict must be a Canonical Sema diagnostic, not a Builder node walk. messages=%s"),
+				*ConflictMessages)));
+	}
+
+	TEST_METHOD(CanonicalDeclEditorOnlyOverrideMismatchIsSemaOwned)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("4.5 editor-only override fixture selects CANONICAL")));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "SemaDeclEditorOnlyOverride");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class EditorOnlyBase
+			{
+				void EditorHook()
+				{
+				}
+			}
+
+			class EditorOnlyDerived : EditorOnlyBase
+			{
+				void EditorHook() override
+				{
+				}
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"SemaDeclEditorOnlyOverride.as",
+			ScriptSource.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		int32 Line = 1;
+		int32 BaseHookLine = 0;
+		int32 DerivedHookLine = 0;
+		const char* Cursor = ScriptSource.c_str();
+		while (*Cursor != '\0')
+		{
+			if (FCStringAnsi::Strncmp(Cursor, "void EditorHook()", 17) == 0)
+			{
+				if (BaseHookLine == 0)
+				{
+					BaseHookLine = Line;
+				}
+				else
+				{
+					DerivedHookLine = Line;
+					break;
+				}
+			}
+			if (*Cursor == '\n')
+			{
+				++Line;
+			}
+			++Cursor;
+		}
+		ASSERT_THAT(IsTrue(
+			BaseHookLine > 0 && DerivedHookLine > BaseHookLine,
+			TEXT("fixture must expose distinct base and derived EditorHook lines")));
+		TArray<TPair<int, int>> EditorOnlyLines;
+		EditorOnlyLines.Add(TPair<int, int>(BaseHookLine, BaseHookLine + 2));
+		Module->builder->SetEditorOnlyBlockLinePositions(EditorOnlyLines);
+
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0,
+			*FString::Printf(
+				TEXT("non-editor override of an editor-only parent must fail CANONICAL Build; result=%d messages=%s"),
+				BuildResult,
+				*Messages)));
+		ASSERT_THAT(IsTrue(Messages.Contains(TEXT("editor-only-override-mismatch")),
+			*FString::Printf(
+				TEXT("mismatch must be a Canonical Sema diagnostic, not a Builder node walk. messages=%s"),
+				*Messages)));
+	}
+
+	TEST_METHOD(CanonicalProductionBuildFailsClosedOnBuilderShadowMismatch)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("4.6 production shadow-mismatch fixture selects CANONICAL")));
+
+		asIScriptModule* const ControlModule = ScriptEngine->GetModule(
+			"SemaDeclShadowControl", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(ControlModule));
+		ASSERT_THAT(AreEqual(0, ControlModule->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int F(int a)
+			{
+				return a;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, ControlModule->AddScriptSection(
+			"SemaDeclShadowControl.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int ControlResult = ControlModule->Build();
+		ASSERT_THAT(AreEqual(0, ControlResult,
+			*FString::Printf(
+				TEXT("unperturbed F(int) must still compile on CANONICAL; result=%d messages=%s"),
+				ControlResult,
+				*AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages()))));
+		asIScriptFunction* const ControlF = ControlModule->GetFunctionByName("F");
+		ASSERT_THAT(IsNotNull(ControlF, TEXT("control F")));
+		ASSERT_THAT(IsFalse(ControlF->IsFinal(),
+			TEXT("unperturbed production F must not absorb a FINAL trait")));
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "SemaDeclShadowMismatch");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"SemaDeclShadowMismatch.as",
+			ScriptSource.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+		Module->builder->SetTestShadowRuntimeFinalPerturbation(true);
+
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0,
+			*FString::Printf(
+				TEXT("CANONICAL Build must fail closed when Runtime F is FINAL and sealed Canonical F is not; result=%d messages=%s"),
+				BuildResult,
+				*Messages)));
+		ASSERT_THAT(IsTrue(Messages.Contains(TEXT("shadow-declaration-mismatch")),
+			*FString::Printf(
+				TEXT("mismatch must be a production shadow-identity diagnostic, not a merged graph. messages=%s"),
+				*Messages)));
+		ASSERT_THAT(IsNull(Module->GetCanonicalASTContext(),
+			TEXT("fail-closed shadow mismatch must not publish a sealed snapshot")));
+		ASSERT_THAT(AreEqual(0, static_cast<int>(Module->GetFunctionCount()),
+			TEXT("fail-closed shadow mismatch must not publish Runtime F")));
+	}
+
+	TEST_METHOD(CanonicalExprConstLvalueIsNotAssignable)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.2 assignability fixture selects CANONICAL")));
+
+		asIScriptModule* const ControlModule = ScriptEngine->GetModule(
+			"SemaExprAssignControl", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(ControlModule));
+		ASSERT_THAT(AreEqual(0, ControlModule->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ControlSource = ASTEST_AS_ANSI(R"AS(
+			int Y = 1;
+			int F()
+			{
+				Y = 2;
+				return Y;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, ControlModule->AddScriptSection(
+			"SemaExprAssignControl.as",
+			ControlSource.c_str(),
+			static_cast<unsigned int>(ControlSource.size()))));
+		const int ControlResult = ControlModule->Build();
+		ASSERT_THAT(AreEqual(0, ControlResult,
+			*FString::Printf(
+				TEXT("mutable lvalue assignment must still compile; result=%d messages=%s"),
+				ControlResult,
+				*AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages()))));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaExprConstAssign", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			const int X = 1;
+			int Entry()
+			{
+				X = 2;
+				return X;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaExprConstAssign.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0,
+			*FString::Printf(
+				TEXT("assignment to a const lvalue must fail CANONICAL Build; result=%d messages=%s"),
+				BuildResult,
+				*Messages)));
+		ASSERT_THAT(IsTrue(Messages.Contains(TEXT("expression-not-assignable")),
+			*FString::Printf(
+				TEXT("assignability must be a Canonical Sema diagnostic, not bytecode emission. messages=%s"),
+				*Messages)));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		ASSERT_THAT(IsNull(Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr,
+			TEXT("fail-closed assignability must not publish a sealed snapshot")));
+	}
+
+	TEST_METHOD(CanonicalIndexReadRewritesToOpIndexCall)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opIndex rewrite fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaIndexOpIndexRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int opIndex(int Index)
+				{
+					return Index;
+				}
+			}
+
+			int Entry()
+			{
+				T Values;
+				return Values[3];
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaIndexOpIndexRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Values[3] must compile so the sealed call rewrite is observable; result=%d messages=%s"),
+				BuildResult,
+				*Messages)));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const ReturnStmt = Entry != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				*const_cast<asCASTContext*>(Context),
+				Entry->id,
+				asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* Returned = ReturnStmt != nullptr
+			? Context->GetExpr(ReturnStmt->expr) : nullptr;
+		while (Returned != nullptr
+			&& (Returned->kind == asAST_EXPR_CLEANUP
+				|| Returned->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+				|| Returned->kind == asAST_EXPR_SEQUENCE)
+			&& Returned->children.GetLength() != 0)
+		{
+			Returned = Context->GetExpr(
+				Returned->children[Returned->children.GetLength() - 1]);
+		}
+		const asCDecl* const Callee = Returned != nullptr
+			? Context->GetDecl(Returned->resolvedDecl) : nullptr;
+		const asCDecl* const Formal = Returned != nullptr
+			&& Returned->callArguments.GetLength() == 1
+			? Context->GetDecl(Returned->callArguments[0].formal) : nullptr;
+
+		ASSERT_THAT(IsTrue(
+			Returned != nullptr
+				&& Returned->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD
+				&& Callee->stableKey.Equals("T::opIndex(int)"),
+			*FString::Printf(
+				TEXT("Values[3] must rewrite to a Call of T::opIndex(int), not a leftover Index. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			Returned != nullptr
+				&& Returned->receiver.IsValid()
+				&& Context->GetExpr(Returned->receiver) != nullptr,
+			*FString::Printf(
+				TEXT("the opIndex Call must seal receiver=, not leave CodeGen to recover the base. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			Returned != nullptr
+				&& Returned->callDispatch != asAST_CALL_DISPATCH_NONE,
+			*FString::Printf(
+				TEXT("the opIndex Call must seal a call-dispatch route. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			Returned != nullptr
+				&& Returned->callArguments.GetLength() == 1
+				&& Returned->callArguments[0].origin == asAST_CALL_ARGUMENT_POSITIONAL
+				&& Returned->callArguments[0].formalIndex == 0
+				&& Formal != nullptr
+				&& Formal->name.Equals("Index"),
+			*FString::Printf(
+				TEXT("the rewritten opIndex Call must seal one positional Index formal. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalNativeRefMethodCallSealsDirectDispatch)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 native-ABI fixture selects CANONICAL")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"NativeDispatchHost",
+				0,
+				asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("native REF host type must register")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectMethod(
+				"NativeDispatchHost",
+				"int Read() const",
+				asFUNCTION(CanonicalASTSemaAuthorityTest::NativeDispatchHostRead),
+				asCALL_GENERIC) >= 0,
+			TEXT("native REF method must register")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaNativeRefDispatch", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Entry(NativeDispatchHost Host)
+			{
+				return Host.Read();
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaNativeRefDispatch.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Host.Read() must compile so native dispatch is observable; result=%d messages=%s"),
+				BuildResult,
+				*Messages)));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const asCExpr* const Call =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				*const_cast<asCASTContext*>(Context), "Read");
+		const asCDecl* const Callee = Call != nullptr
+			? Context->GetDecl(Call->resolvedDecl) : nullptr;
+		ASSERT_THAT(IsTrue(
+			Call != nullptr
+				&& Call->kind == asAST_EXPR_CALL
+				&& Call->receiver.IsValid()
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD,
+			*FString::Printf(
+				TEXT("Host.Read() must seal one native method Call with a receiver. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int>(asAST_CALL_DISPATCH_DIRECT),
+			static_cast<int>(Call != nullptr ? Call->callDispatch : asAST_CALL_DISPATCH_NONE),
+			*FString::Printf(
+				TEXT("a native REF method has no AngelScript vtable; Sema must seal direct dispatch, not virtual. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalOverloadedAssignRewritesToOpAssignCallWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opAssign rewrite fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaOpAssignCallRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				T& opAssign(int Value)
+				{
+					Stored = Value;
+					return this;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				Object = 7;
+				return Object.Stored;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaOpAssignCallRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Object = 7 must compile from sealed opAssign Call / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("CANONICAL Bytecode for overloaded assignment must come from CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("CANONICAL overloaded assignment must not construct asCCompiler")));
+
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCExpr* Assigned = nullptr;
+		for (asUINT StmtIndex = 1;
+			Entry != nullptr && Assigned == nullptr
+				&& StmtIndex <= Context->GetStmtCount();
+			++StmtIndex)
+		{
+			const asCStmt* const Stmt = Context->GetStmt(asASTStmtId(StmtIndex));
+			if (Stmt == nullptr
+				|| Stmt->owner != Entry->id
+				|| Stmt->kind != asAST_STMT_EXPR)
+			{
+				continue;
+			}
+			const asCExpr* Candidate = Context->GetExpr(Stmt->expr);
+			while (Candidate != nullptr
+				&& (Candidate->kind == asAST_EXPR_CLEANUP
+					|| Candidate->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| Candidate->kind == asAST_EXPR_SEQUENCE)
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(
+					Candidate->children[Candidate->children.GetLength() - 1]);
+			}
+			const asCDecl* const CandidateCallee = Candidate != nullptr
+				? Context->GetDecl(Candidate->resolvedDecl) : nullptr;
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_EXPR_CALL
+				&& CandidateCallee != nullptr
+				&& CandidateCallee->stableKey.Equals("T::opAssign(int)"))
+			{
+				Assigned = Candidate;
+			}
+		}
+		const asCDecl* const Callee = Assigned != nullptr
+			? Context->GetDecl(Assigned->resolvedDecl) : nullptr;
+		const asCDecl* const Formal = Assigned != nullptr
+			&& Assigned->callArguments.GetLength() == 1
+			? Context->GetDecl(Assigned->callArguments[0].formal) : nullptr;
+
+		ASSERT_THAT(IsTrue(
+			Assigned != nullptr
+				&& Assigned->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD
+				&& Callee->stableKey.Equals("T::opAssign(int)"),
+			*FString::Printf(
+				TEXT("Object = 7 must rewrite to a Call of T::opAssign(int), not a leftover Assign. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			Assigned != nullptr
+				&& Assigned->receiver.IsValid()
+				&& Context->GetExpr(Assigned->receiver) != nullptr,
+			*FString::Printf(
+				TEXT("the opAssign Call must seal receiver=, not leave CodeGen to recover the target. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int>(asAST_CALL_DISPATCH_DIRECT),
+			static_cast<int>(Assigned != nullptr
+				? Assigned->callDispatch
+				: asAST_CALL_DISPATCH_NONE),
+			*FString::Printf(
+				TEXT("a VALUE-owner opAssign has no script vtable; Sema must seal direct dispatch. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			Assigned != nullptr
+				&& Assigned->callArguments.GetLength() == 1
+				&& Assigned->callArguments[0].origin == asAST_CALL_ARGUMENT_POSITIONAL
+				&& Assigned->callArguments[0].formalIndex == 0
+				&& Formal != nullptr
+				&& Formal->name.Equals("Value"),
+			*FString::Printf(
+				TEXT("the rewritten opAssign Call must seal one positional Value formal. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalArrayIndexCallDecaysToRvalueBeforeArithmetic)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"array<class T>",
+				0,
+				asOBJ_REF | asOBJ_TEMPLATE | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("array index rvalue fixture registers host array<T>")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectBehaviour(
+				"array<T>",
+				asBEHAVE_FACTORY,
+				"array<T> f(int&in)",
+				asFUNCTION(CanonicalASTSemaAuthorityTest::RankArrayFactory),
+				asCALL_GENERIC) >= 0,
+			TEXT("array index rvalue fixture registers factory")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectMethod(
+				"array<T>",
+				"void insertLast(const T&in value)",
+				asFUNCTION(CanonicalASTSemaAuthorityTest::RankArrayInsertLastUnused),
+				asCALL_GENERIC) >= 0,
+			TEXT("array index rvalue fixture registers insertLast")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectMethod(
+				"array<T>",
+				"T &opIndex(uint index)",
+				asFUNCTION(CanonicalASTSemaAuthorityTest::RankArrayOpIndex),
+				asCALL_GENERIC) >= 0,
+			TEXT("array index rvalue fixture registers opIndex")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 array index rvalue fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaArrayIndexRvalue", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Entry()
+			{
+				array<int> Values;
+				Values.insertLast(41);
+				return Values[0] + 1;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaArrayIndexRvalue.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Values[0] + 1 must compile so the sealed index Call is observable; result=%d messages=%s"),
+				BuildResult,
+				*Messages)));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const ReturnStmt = Entry != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				*const_cast<asCASTContext*>(Context),
+				Entry->id,
+				asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* Returned = ReturnStmt != nullptr
+			? Context->GetExpr(ReturnStmt->expr) : nullptr;
+		while (Returned != nullptr
+			&& (Returned->kind == asAST_EXPR_CLEANUP
+				|| Returned->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& Returned->children.GetLength() != 0)
+		{
+			Returned = Context->GetExpr(
+				Returned->children[Returned->children.GetLength() - 1]);
+		}
+
+		const asCExpr* IndexCall = nullptr;
+		for (asUINT ExprIndex = 1; ExprIndex <= Context->GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Expr = Context->GetExpr(asASTExprId(ExprIndex));
+			const asCDecl* const Callee = Expr != nullptr
+				? Context->GetDecl(Expr->resolvedDecl) : nullptr;
+			if (Expr != nullptr && Expr->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->stableKey.Equals("array<int>::opIndex(uint)"))
+			{
+				IndexCall = Expr;
+				break;
+			}
+		}
+
+		const asCExpr* AddLhs = nullptr;
+		if (Returned != nullptr && Returned->kind == asAST_EXPR_BINARY
+			&& Returned->children.GetLength() == 2)
+		{
+			AddLhs = Context->GetExpr(Returned->children[0]);
+		}
+		const asCExpr* DecayedSource = nullptr;
+		if (AddLhs != nullptr && AddLhs->kind == asAST_EXPR_CONVERSION
+			&& AddLhs->children.GetLength() == 1)
+		{
+			DecayedSource = Context->GetExpr(AddLhs->children[0]);
+		}
+
+		ASSERT_THAT(IsTrue(
+			IndexCall != nullptr
+				&& IndexCall->type.IsReference()
+				&& IndexCall->valueCategory == asAST_VALUE_LVALUE,
+			*FString::Printf(
+				TEXT("Values[0] must seal a Call of array<int>::opIndex(uint) as int& lvalue. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			AddLhs != nullptr
+				&& !AddLhs->type.IsReference()
+				&& AddLhs->valueCategory == asAST_VALUE_PRVALUE
+				&& DecayedSource == IndexCall,
+			*FString::Printf(
+				TEXT("Values[0] + 1 must decay the opIndex int& Call to an rvalue int Conversion; leftover reference Call makes CodeGen add 1 to a pointer. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalFloat64ToFloat32CastSealsConversion)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 float64-to-float32 cast fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaFloat64ToFloat32Cast", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			float32 Narrow(float64 Value)
+			{
+				return float32(Value);
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaFloat64ToFloat32Cast.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString Dump;
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		if (const asCASTContext* const Sealed =
+				Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr)
+		{
+			asCASTDump(*Sealed, Dump);
+		}
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("float32(Value) must compile so the sealed conversion QualType is observable; result=%d messages=%s dump=%s"),
+				BuildResult,
+				*Messages,
+				*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump))));
+		ASSERT_THAT(IsTrue(
+			CanonicalASTSemaAuthorityTest::DumpSealedCanonicalAst(Module, Dump),
+			*FString::Printf(
+				TEXT("float32(Value) must seal a dumpable AST; messages=%s dump=%s"),
+				*Messages,
+				*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump))));
+
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const FString Text =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
+		const auto Conversion =
+			AngelscriptNativeTestSupport::CanonicalASTConversion(
+				*Context, "float32", "double");
+		ASSERT_THAT(IsTrue(Conversion.IsMatch(),
+			*FString::Printf(
+				TEXT("float32(Value) must be a typed Conversion dest=float32 src=double, not an unresolved call. %s dump:\n%s"),
+				*Conversion.FailureMessage,
+				*Text)));
+
+		const asCType* DestType = nullptr;
+		for (asUINT Index = 1; Index <= Context->GetExprCount(); ++Index)
+		{
+			const asCExpr* const Expr = Context->GetExpr(asASTExprId(Index));
+			if (Expr == nullptr || Expr->kind != asAST_EXPR_CONVERSION)
+			{
+				continue;
+			}
+			DestType = Context->GetType(Expr->type.type);
+			break;
+		}
+		ASSERT_THAT(IsTrue(
+			DestType != nullptr && DestType->primitiveToken == ttFloat32,
+			*FString::Printf(
+				TEXT("conversion dest must intern ttFloat32, not the engine float64 spelling of float. dump:\n%s"),
+				*Text)));
+	}
+
+	TEST_METHOD(CanonicalNamespacedFunctionSealsExactRuntimeNamespace)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 namespaced function fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaNamespacedFunction", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			namespace Tools::Utilities
+			{
+				const int Value = 41;
+
+				int Entry()
+				{
+					return Value;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaNamespacedFunction.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString Dump;
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		if (const asCASTContext* const Sealed =
+				Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr)
+		{
+			asCASTDump(*Sealed, Dump);
+		}
+		const FString Text =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Tools::Utilities::Entry must compile so sealed namespace ownership is observable; result=%d messages=%s dump=%s"),
+				BuildResult,
+				*Messages,
+				*Text)));
+
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const auto Entry =
+			AngelscriptNativeTestSupport::CanonicalASTUniqueDecl(
+				*Context, "Tools::Utilities::Entry()");
+		ASSERT_THAT(IsTrue(Entry.IsMatch(),
+			*FString::Printf(
+				TEXT("sealed function must use the complete namespace-qualified key. %s dump:\n%s"),
+				*Entry.FailureMessage,
+				*Text)));
+		const asCDecl* const EntryDecl = Context->GetDecl(asASTDeclId(Entry.Node.value));
+		const asCDecl* const EntryParent = EntryDecl != nullptr
+			? Context->GetDecl(EntryDecl->parent) : nullptr;
+		ASSERT_THAT(IsTrue(
+			EntryParent != nullptr
+				&& EntryParent->kind == asAST_DECL_NAMESPACE
+				&& EntryParent->name.Equals("Utilities"),
+			*FString::Printf(
+				TEXT("Entry must be owned by the inner Utilities namespace, not the translation unit. dump:\n%s"),
+				*Text)));
+		ASSERT_THAT(IsTrue(
+			Text.Contains(TEXT("kind=Namespace name=Tools"))
+				&& Text.Contains(TEXT("kind=Namespace name=Utilities")),
+			*FString::Printf(
+				TEXT("nested namespace Tools::Utilities must remain visible as two Namespace decls. dump:\n%s"),
+				*Text)));
+		ASSERT_THAT(IsTrue(
+			Text.Contains(TEXT("key=Tools::Utilities::Entry()")),
+			*FString::Printf(
+				TEXT("dump must publish the complete namespaced function key. dump:\n%s"),
+				*Text)));
+	}
+
+	TEST_METHOD(CanonicalGeneratedNonPodGetterCallRewritesMemberRead)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"FGeneratedGetterValue",
+				sizeof(CanonicalASTSemaAuthorityTest::FGeneratedGetterValue),
+				asOBJ_VALUE | asOBJ_APP_CLASS_CD
+					| asOBJ_APP_CLASS_ALLINTS) >= 0,
+			TEXT("5.3 non-POD getter fixture registers a native VALUE type")));
+		const int NativeCtorId = ScriptEngine->RegisterObjectBehaviour(
+			"FGeneratedGetterValue",
+			asBEHAVE_CONSTRUCT,
+			"void f()",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::ConstructGeneratedGetterValue),
+			asCALL_GENERIC);
+		const int NativeCopyCtorId = ScriptEngine->RegisterObjectBehaviour(
+			"FGeneratedGetterValue",
+			asBEHAVE_CONSTRUCT,
+			"void f(const FGeneratedGetterValue&in Other)",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::CopyConstructGeneratedGetterValue),
+			asCALL_GENERIC);
+		const int NativeDtorId = ScriptEngine->RegisterObjectBehaviour(
+			"FGeneratedGetterValue",
+			asBEHAVE_DESTRUCT,
+			"void f()",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::DestructGeneratedGetterValue),
+			asCALL_GENERIC);
+		const int NativeReadId = ScriptEngine->RegisterObjectMethod(
+			"FGeneratedGetterValue",
+			"int ReadStored() const",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::ReadGeneratedGetterValue),
+			asCALL_GENERIC);
+		ASSERT_THAT(IsTrue(
+			NativeCtorId > 0 && NativeCopyCtorId > 0
+				&& NativeDtorId > 0 && NativeReadId > 0));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 non-POD getter fixture selects CANONICAL")));
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "SemaGeneratedNonPodGetterCall");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"SemaGeneratedNonPodGetterCall.as",
+			R"AS(
+				struct FGeneratedGetterOwner
+				{
+					FGeneratedGetterValue Inner;
+
+					void SetInner()
+					{
+					}
+				}
+
+				int Entry()
+				{
+					FGeneratedGetterOwner Owner;
+					return Owner.Inner.ReadStored() + 1;
+				}
+			)AS")));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("Stage2 must prepare the owner and entry shells")));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST()));
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		asCString Dump;
+		asCASTDump(*Context, Dump);
+		const FString Text = CanonicalAstDumpToFString(Dump);
+
+		const asCDecl* Getter = nullptr;
+		const asCExpr* ReadStored = nullptr;
+		for (asUINT DeclIndex = 1; DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate = Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_DECL_METHOD
+				&& Candidate->name.Equals("GetInner")
+				&& Candidate->accessorKind == asAST_ACCESSOR_GET)
+			{
+				Getter = Candidate;
+			}
+		}
+		for (asUINT ExprIndex = 1; ExprIndex <= Context->GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Candidate = Context->GetExpr(asASTExprId(ExprIndex));
+			if (Candidate == nullptr || Candidate->kind != asAST_EXPR_CALL)
+			{
+				continue;
+			}
+			const asCDecl* const Callee = Context->GetDecl(Candidate->resolvedDecl);
+			if (Callee != nullptr && Callee->name.Equals("ReadStored"))
+			{
+				ReadStored = Candidate;
+				break;
+			}
+		}
+		const asCExpr* const Receiver =
+			ReadStored != nullptr ? Context->GetExpr(ReadStored->receiver) : nullptr;
+		const asCDecl* const ReceiverCallee =
+			Receiver != nullptr ? Context->GetDecl(Receiver->resolvedDecl) : nullptr;
+		ASSERT_THAT(IsTrue(
+			Getter != nullptr
+				&& ReadStored != nullptr
+				&& Receiver != nullptr
+				&& Receiver->kind == asAST_EXPR_CALL
+				&& ReceiverCallee == Getter,
+			*FString::Printf(
+				TEXT("Owner.Inner.ReadStored() must rewrite Inner to a Call of generated GetInner, not leftover MemberRef. dump:\n%s"),
+				*Text)));
+	}
+
+	TEST_METHOD(CanonicalPreparedImportSealsExactRuntimeShell)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 prepared-import fixture selects CANONICAL")));
+
+		FScopedNativeModule Provider(
+			*TestRunner,
+			Engine,
+			"SemaPreparedImportProvider",
+			ASTEST_AS_ANSI(R"AS(
+				int PreparedSharedValue(int A = 1, int B = 2)
+				{
+					return A * 10 + B;
+				}
+				)AS"));
+		ASSERT_THAT(IsTrue(Provider.IsValid(),
+			TEXT("prepared-import provider must compile canonically")));
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "SemaPreparedImportConsumer");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string ConsumerSource = ASTEST_AS_ANSI(R"AS(
+			import int PreparedSharedValue(int A = 1, int B = 2)
+				from "SemaPreparedImportProvider";
+
+			int PreparedImportEntry()
+			{
+				return PreparedSharedValue(B: 7);
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"SemaPreparedImportConsumer.as",
+			ConsumerSource.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		const bool bLayout = RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module);
+		const FString Messages =
+			CollectMessages(Engine.GetMessages());
+		asCString Dump;
+		if (Builder.SealCanonicalAST() == asSUCCESS && Builder.canonicalAST != nullptr)
+		{
+			asCASTDump(*Builder.canonicalAST, Dump);
+		}
+		const FString Text =
+			CanonicalAstDumpToFString(Dump);
+		ASSERT_THAT(IsTrue(bLayout,
+			*FString::Printf(
+				TEXT("Stage2 must register the import Runtime shell from sealed Sema QualTypes, not snImport node types; messages=%s dump=%s"),
+				*Messages,
+				*Text)));
+		ASSERT_THAT(AreEqual(1u, Module->GetImportedFunctionCount(),
+			*FString::Printf(
+				TEXT("Stage2 must own exactly one prepared import shell. dump:\n%s"),
+				*Text)));
+
+		const asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("prepared-import Stage2 must retain a Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		const asCDecl* ImportDecl = nullptr;
+		for (asUINT Index = 1; Index <= Context->GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Candidate = Context->GetDecl(asASTDeclId(Index));
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_DECL_IMPORT
+				&& Candidate->name.Equals("PreparedSharedValue"))
+			{
+				ImportDecl = Candidate;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(
+			ImportDecl != nullptr
+				&& ImportDecl->origin.Equals("SemaPreparedImportProvider"),
+			*FString::Printf(
+				TEXT("sealed import must keep origin SemaPreparedImportProvider. dump:\n%s"),
+				*Text)));
+		asCScriptFunction* const PreparedImport = Module->GetImportedFunction(0);
+		ASSERT_THAT(IsNotNull(PreparedImport));
+		ASSERT_THAT(IsTrue(
+			PreparedImport != nullptr
+				&& PreparedImport->name.Equals("PreparedSharedValue")
+				&& PreparedImport->canonicalASTStableDeclKey.GetLength() != 0,
+			TEXT("Runtime import shell must carry the Canonical declaration identity")));
+	}
+
+	TEST_METHOD(CanonicalImportedDependencySealsCurrentProviderType)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 imported-dependency fixture selects CANONICAL")));
+
+		FScopedNativeModule CurrentProvider(
+			*TestRunner,
+			Engine,
+			"SemaImportedDependencyProviderCurrent",
+			ASTEST_AS_ANSI(R"AS(
+				namespace PreparedDependency
+				{
+					class Payload
+					{
+						int Padding;
+						int Value;
+					}
+				}
+				)AS"));
+		ASSERT_THAT(IsTrue(CurrentProvider.IsValid(),
+			TEXT("current imported provider must compile canonically")));
+		asCModule* const CurrentProviderModule =
+			static_cast<asCModule*>(CurrentProvider.Get());
+		if (!CurrentProvider.IsValid() || CurrentProviderModule == nullptr)
+		{
+			return;
+		}
+
+		asCModule* const OldProviderModule = CreateBuilderModule(
+			ScriptEngine, "SemaImportedDependencyProviderOld");
+		ASSERT_THAT(IsNotNull(OldProviderModule));
+		if (OldProviderModule == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT
+		{
+			ScriptEngine->DiscardModule("SemaImportedDependencyProviderOld");
+		};
+		const std::string OldProviderSource = ASTEST_AS_ANSI(R"AS(
+			namespace PreparedDependency
+			{
+				class Payload
+				{
+					int Padding;
+				}
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*OldProviderModule,
+			"SemaImportedDependencyProviderOld.as",
+			OldProviderSource.c_str())));
+		ASSERT_THAT(IsNotNull(OldProviderModule->builder));
+		if (OldProviderModule->builder == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner,
+			*OldProviderModule->builder,
+			OldProviderModule),
+			TEXT("old staged Payload must coexist without replacing the current provider")));
+		asCTypeInfo* const OldPayload = static_cast<asCTypeInfo*>(
+			OldProviderModule->GetTypeInfoByDecl("PreparedDependency::Payload"));
+		asCTypeInfo* const CurrentPayload = static_cast<asCTypeInfo*>(
+			CurrentProviderModule->GetTypeInfoByDecl("PreparedDependency::Payload"));
+		ASSERT_THAT(IsTrue(
+			OldPayload != nullptr && CurrentPayload != nullptr
+				&& OldPayload != CurrentPayload,
+			TEXT("old/current providers must expose distinct same-nominal Runtime revisions")));
+		if (OldPayload == nullptr || CurrentPayload == nullptr)
+		{
+			return;
+		}
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "SemaImportedDependencyConsumer");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		Module->ImportModule(CurrentProviderModule);
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"SemaImportedDependencyConsumer.as",
+			R"AS(
+				int PreparedImportedDependencyProbe(
+					PreparedDependency::Payload Value)
+				{
+					return 42;
+				}
+			)AS")));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		const bool bLayout = RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module);
+		const FString Messages = CollectMessages(Engine.GetMessages());
+		asCString Dump;
+		if (Builder.SealCanonicalAST() == asSUCCESS && Builder.canonicalAST != nullptr)
+		{
+			asCASTDump(*Builder.canonicalAST, Dump);
+		}
+		const FString Text = CanonicalAstDumpToFString(Dump);
+		ASSERT_THAT(IsTrue(bLayout,
+			*FString::Printf(
+				TEXT("Stage2 must bind Payload through the current imported provider. messages=%s dump=%s"),
+				*Messages,
+				*Text)));
+		asCScriptFunction* const Probe = static_cast<asCScriptFunction*>(
+			Module->GetFunctionByName("PreparedImportedDependencyProbe"));
+		ASSERT_THAT(IsTrue(
+			Probe != nullptr
+				&& Probe->parameterTypes.GetLength() == 1
+				&& Probe->parameterTypes[0].GetTypeInfo() == CurrentPayload
+				&& Probe->parameterTypes[0].GetTypeInfo() != OldPayload,
+			*FString::Printf(
+				TEXT("Stage2 probe parameter must be the current Payload generation. dump:\n%s"),
+				*Text)));
+		asCASTContext* const Context = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		const asCDecl* ProbeParam = nullptr;
+		for (asUINT DeclIndex = 1; DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate = Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Candidate == nullptr
+				|| Candidate->kind != asAST_DECL_FUNCTION
+				|| !Candidate->name.Equals("PreparedImportedDependencyProbe"))
+			{
+				continue;
+			}
+			for (asUINT ChildIndex = 0;
+				ChildIndex < Candidate->children.GetLength(); ++ChildIndex)
+			{
+				const asCDecl* const Child =
+					Context->GetDecl(Candidate->children[ChildIndex]);
+				if (Child != nullptr && Child->kind == asAST_DECL_PARAM)
+				{
+					ProbeParam = Child;
+					break;
+				}
+			}
+			break;
+		}
+		ASSERT_THAT(IsNotNull(ProbeParam,
+			*FString::Printf(
+				TEXT("sealed Probe must own a Payload parameter. dump:\n%s"),
+				*Text)));
+		if (ProbeParam == nullptr)
+		{
+			return;
+		}
+		const asCType* const CanonicalProbeParamType =
+			Context->GetType(ProbeParam->type.type);
+		ASSERT_THAT(IsTrue(
+			CanonicalProbeParamType != nullptr
+				&& CanonicalProbeParamType->kind == asAST_TYPE_REFERENCE_OBJECT
+				&& CanonicalProbeParamType->stableKey.Equals(
+					"PreparedDependency::Payload"),
+			*FString::Printf(
+				TEXT("Sema must intern the imported class as REFERENCE_OBJECT PreparedDependency::Payload. dump:\n%s"),
+				*Text)));
+	}
+
+	TEST_METHOD(CanonicalOverloadedCompoundAssignRewritesToOpAddAssignCallWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opAddAssign rewrite fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaOpAddAssignCallRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				T& opAddAssign(int Value)
+				{
+					Stored = Stored + Value;
+					return this;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				Object += 7;
+				return Object.Stored;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaOpAddAssignCallRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Object += 7 must compile from sealed opAddAssign Call / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("CANONICAL Bytecode for overloaded compound assignment must come from CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("CANONICAL overloaded compound assignment must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCExpr* Assigned = nullptr;
+		for (asUINT StmtIndex = 1;
+			Entry != nullptr && Assigned == nullptr
+				&& StmtIndex <= Context->GetStmtCount();
+			++StmtIndex)
+		{
+			const asCStmt* const Stmt = Context->GetStmt(asASTStmtId(StmtIndex));
+			if (Stmt == nullptr
+				|| Stmt->owner != Entry->id
+				|| Stmt->kind != asAST_STMT_EXPR)
+			{
+				continue;
+			}
+			const asCExpr* Candidate = Context->GetExpr(Stmt->expr);
+			while (Candidate != nullptr
+				&& (Candidate->kind == asAST_EXPR_CLEANUP
+					|| Candidate->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| Candidate->kind == asAST_EXPR_SEQUENCE)
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(
+					Candidate->children[Candidate->children.GetLength() - 1]);
+			}
+			const asCDecl* const CandidateCallee = Candidate != nullptr
+				? Context->GetDecl(Candidate->resolvedDecl) : nullptr;
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_EXPR_CALL
+				&& CandidateCallee != nullptr
+				&& CandidateCallee->stableKey.Equals("T::opAddAssign(int)"))
+			{
+				Assigned = Candidate;
+			}
+		}
+		const asCDecl* const Callee = Assigned != nullptr
+			? Context->GetDecl(Assigned->resolvedDecl) : nullptr;
+		const asCDecl* const Formal = Assigned != nullptr
+			&& Assigned->callArguments.GetLength() == 1
+			? Context->GetDecl(Assigned->callArguments[0].formal) : nullptr;
+
+		ASSERT_THAT(IsTrue(
+			Assigned != nullptr
+				&& Assigned->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD
+				&& Callee->stableKey.Equals("T::opAddAssign(int)"),
+			*FString::Printf(
+				TEXT("Object += 7 must rewrite to a Call of T::opAddAssign(int), not a leftover Assign. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			Assigned != nullptr
+				&& Assigned->receiver.IsValid()
+				&& Context->GetExpr(Assigned->receiver) != nullptr,
+			*FString::Printf(
+				TEXT("the opAddAssign Call must seal receiver=, not leave CodeGen to recover the target. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int>(asAST_CALL_DISPATCH_DIRECT),
+			static_cast<int>(Assigned != nullptr
+				? Assigned->callDispatch
+				: asAST_CALL_DISPATCH_NONE),
+			*FString::Printf(
+				TEXT("a VALUE-owner opAddAssign has no script vtable; Sema must seal direct dispatch. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			Assigned != nullptr
+				&& Assigned->callArguments.GetLength() == 1
+				&& Assigned->callArguments[0].origin == asAST_CALL_ARGUMENT_POSITIONAL
+				&& Assigned->callArguments[0].formalIndex == 0
+				&& Formal != nullptr
+				&& Formal->name.Equals("Value"),
+			*FString::Printf(
+				TEXT("the rewritten opAddAssign Call must seal one positional Value formal. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalReverseOperatorRewritesToOpAddRCallWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opAdd_r rewrite fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaOpAddRCallRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 2;
+
+				int opAdd_r(int Value) const
+				{
+					return Value + Stored;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				return 40 + Object;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaOpAddRCallRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("40 + Object must compile from sealed opAdd_r Call / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("CANONICAL Bytecode for reverse operator must come from CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("CANONICAL reverse operator must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCExpr* ReverseCall = nullptr;
+		for (asUINT StmtIndex = 1;
+			Entry != nullptr && ReverseCall == nullptr
+				&& StmtIndex <= Context->GetStmtCount();
+			++StmtIndex)
+		{
+			const asCStmt* const Stmt = Context->GetStmt(asASTStmtId(StmtIndex));
+			if (Stmt == nullptr
+				|| Stmt->owner != Entry->id
+				|| Stmt->kind != asAST_STMT_RETURN)
+			{
+				continue;
+			}
+			const asCExpr* Candidate = Context->GetExpr(Stmt->expr);
+			while (Candidate != nullptr
+				&& (Candidate->kind == asAST_EXPR_CLEANUP
+					|| Candidate->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| Candidate->kind == asAST_EXPR_SEQUENCE)
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(
+					Candidate->children[Candidate->children.GetLength() - 1]);
+			}
+			const asCDecl* const CandidateCallee = Candidate != nullptr
+				? Context->GetDecl(Candidate->resolvedDecl) : nullptr;
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_EXPR_CALL
+				&& CandidateCallee != nullptr
+				&& CandidateCallee->stableKey.Equals("T::opAdd_r(int) const"))
+			{
+				ReverseCall = Candidate;
+			}
+		}
+		const asCDecl* const Callee = ReverseCall != nullptr
+			? Context->GetDecl(ReverseCall->resolvedDecl) : nullptr;
+		const asCDecl* const Formal = ReverseCall != nullptr
+			&& ReverseCall->callArguments.GetLength() == 1
+			? Context->GetDecl(ReverseCall->callArguments[0].formal) : nullptr;
+
+		ASSERT_THAT(IsTrue(
+			ReverseCall != nullptr
+				&& ReverseCall->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD
+				&& Callee->stableKey.Equals("T::opAdd_r(int) const"),
+			*FString::Printf(
+				TEXT("40 + Object must rewrite to a Call of T::opAdd_r(int) const, not leftover Binary. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			ReverseCall != nullptr
+				&& ReverseCall->receiver.IsValid()
+				&& Context->GetExpr(ReverseCall->receiver) != nullptr,
+			*FString::Printf(
+				TEXT("the opAdd_r Call must seal receiver= of Object, not leave CodeGen to recover the rhs. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int>(asAST_CALL_DISPATCH_DIRECT),
+			static_cast<int>(ReverseCall != nullptr
+				? ReverseCall->callDispatch
+				: asAST_CALL_DISPATCH_NONE),
+			*FString::Printf(
+				TEXT("a VALUE-owner opAdd_r has no script vtable; Sema must seal direct dispatch. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			ReverseCall != nullptr
+				&& ReverseCall->callArguments.GetLength() == 1
+				&& ReverseCall->callArguments[0].origin == asAST_CALL_ARGUMENT_POSITIONAL
+				&& ReverseCall->callArguments[0].formalIndex == 0
+				&& Formal != nullptr
+				&& Formal->name.Equals("Value"),
+			*FString::Printf(
+				TEXT("the rewritten opAdd_r Call must seal one positional Value formal (the original lhs). dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalInequalityRewritesToNegatedOpEqualsCallWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opEquals inequality rewrite fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaOpEqualsInequalityRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				bool opEquals(const T&in Other) const
+				{
+					return Stored == Other.Stored;
+				}
+			}
+
+			int Entry()
+			{
+				T Left;
+				T Right;
+				Right.Stored = 1;
+				return Left != Right ? 42 : 0;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaOpEqualsInequalityRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Left != Right must compile from sealed !opEquals Call / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("CANONICAL Bytecode for != must come from CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("CANONICAL != must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCExpr* Inequality = nullptr;
+		for (asUINT StmtIndex = 1;
+			Entry != nullptr && Inequality == nullptr
+				&& StmtIndex <= Context->GetStmtCount();
+			++StmtIndex)
+		{
+			const asCStmt* const Stmt = Context->GetStmt(asASTStmtId(StmtIndex));
+			if (Stmt == nullptr
+				|| Stmt->owner != Entry->id
+				|| Stmt->kind != asAST_STMT_RETURN)
+			{
+				continue;
+			}
+			const asCExpr* Candidate = Context->GetExpr(Stmt->expr);
+			while (Candidate != nullptr
+				&& (Candidate->kind == asAST_EXPR_CLEANUP
+					|| Candidate->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| Candidate->kind == asAST_EXPR_SEQUENCE)
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(
+					Candidate->children[Candidate->children.GetLength() - 1]);
+			}
+			if (Candidate != nullptr && Candidate->kind == asAST_EXPR_CONDITIONAL
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(Candidate->children[0]);
+			}
+			Inequality = Candidate;
+		}
+
+		const asCExpr* Negation = Inequality;
+		if (Negation != nullptr
+			&& Negation->kind == asAST_EXPR_UNARY
+			&& Negation->literal.Equals("!")
+			&& Negation->children.GetLength() != 0)
+		{
+			Negation = Context->GetExpr(Negation->children[0]);
+		}
+		else
+		{
+			Negation = nullptr;
+		}
+		const asCDecl* const Callee = Negation != nullptr
+			? Context->GetDecl(Negation->resolvedDecl) : nullptr;
+		ASSERT_THAT(IsTrue(
+			Inequality != nullptr
+				&& Inequality->kind == asAST_EXPR_UNARY
+				&& Inequality->literal.Equals("!")
+				&& Negation != nullptr
+				&& Negation->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD
+				&& Callee->name.Equals("opEquals"),
+			*FString::Printf(
+				TEXT("Left != Right must seal Unary ! of T::opEquals, not leftover Binary or a bare equality Call. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			Negation != nullptr
+				&& Negation->receiver.IsValid()
+				&& Context->GetExpr(Negation->receiver) != nullptr,
+			*FString::Printf(
+				TEXT("the opEquals Call under != must seal receiver=. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalLessThanRewritesToOpCmpComparedAgainstZeroWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opCmp less-than rewrite fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaOpCmpLessThanRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				int opCmp(const T&in Other) const
+				{
+					return Stored - Other.Stored;
+				}
+			}
+
+			int Entry()
+			{
+				T Left;
+				T Right;
+				Left.Stored = 3;
+				Right.Stored = 1;
+				return Left < Right ? 42 : 0;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaOpCmpLessThanRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Left < Right must compile from sealed opCmp < 0 / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("CANONICAL Bytecode for < must come from CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("CANONICAL < must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCExpr* Comparison = nullptr;
+		for (asUINT StmtIndex = 1;
+			Entry != nullptr && Comparison == nullptr
+				&& StmtIndex <= Context->GetStmtCount();
+			++StmtIndex)
+		{
+			const asCStmt* const Stmt = Context->GetStmt(asASTStmtId(StmtIndex));
+			if (Stmt == nullptr
+				|| Stmt->owner != Entry->id
+				|| Stmt->kind != asAST_STMT_RETURN)
+			{
+				continue;
+			}
+			const asCExpr* Candidate = Context->GetExpr(Stmt->expr);
+			while (Candidate != nullptr
+				&& (Candidate->kind == asAST_EXPR_CLEANUP
+					|| Candidate->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| Candidate->kind == asAST_EXPR_SEQUENCE)
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(
+					Candidate->children[Candidate->children.GetLength() - 1]);
+			}
+			if (Candidate != nullptr && Candidate->kind == asAST_EXPR_CONDITIONAL
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(Candidate->children[0]);
+			}
+			while (Candidate != nullptr
+				&& (Candidate->kind == asAST_EXPR_CLEANUP
+					|| Candidate->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| Candidate->kind == asAST_EXPR_SEQUENCE)
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(
+					Candidate->children[Candidate->children.GetLength() - 1]);
+			}
+			Comparison = Candidate;
+		}
+
+		const asCExpr* CmpCall = nullptr;
+		const asCExpr* Zero = nullptr;
+		if (Comparison != nullptr
+			&& Comparison->kind == asAST_EXPR_BINARY
+			&& Comparison->literal.Equals("<")
+			&& Comparison->children.GetLength() == 2)
+		{
+			CmpCall = Context->GetExpr(Comparison->children[0]);
+			while (CmpCall != nullptr
+				&& (CmpCall->kind == asAST_EXPR_CLEANUP
+					|| CmpCall->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| CmpCall->kind == asAST_EXPR_SEQUENCE)
+				&& CmpCall->children.GetLength() != 0)
+			{
+				CmpCall = Context->GetExpr(
+					CmpCall->children[CmpCall->children.GetLength() - 1]);
+			}
+			Zero = Context->GetExpr(Comparison->children[1]);
+		}
+		const asCDecl* const Callee = CmpCall != nullptr
+			? Context->GetDecl(CmpCall->resolvedDecl) : nullptr;
+		ASSERT_THAT(IsTrue(
+			Comparison != nullptr
+				&& Comparison->kind == asAST_EXPR_BINARY
+				&& Comparison->literal.Equals("<")
+				&& CmpCall != nullptr
+				&& CmpCall->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD
+				&& Callee->name.Equals("opCmp")
+				&& Zero != nullptr
+				&& Zero->kind == asAST_EXPR_INTEGER_LITERAL
+				&& Zero->literalBits == 0,
+			*FString::Printf(
+				TEXT("Left < Right must seal Binary < of T::opCmp against 0, not leftover Binary of T or a bare opCmp Call. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			CmpCall != nullptr
+				&& CmpCall->receiver.IsValid()
+				&& Context->GetExpr(CmpCall->receiver) != nullptr,
+			*FString::Printf(
+				TEXT("the opCmp Call under < must seal receiver=. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalBitwiseOrRewritesToOpOrCallWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opOr rewrite fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaOpOrCallRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				int opOr(int Value) const
+				{
+					return Stored | Value;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				Object.Stored = 8;
+				return Object | 2;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaOpOrCallRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Object | 2 must compile from sealed opOr Call / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("CANONICAL Bytecode for | must come from CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("CANONICAL | must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCExpr* OrCall = nullptr;
+		for (asUINT StmtIndex = 1;
+			Entry != nullptr && OrCall == nullptr
+				&& StmtIndex <= Context->GetStmtCount();
+			++StmtIndex)
+		{
+			const asCStmt* const Stmt = Context->GetStmt(asASTStmtId(StmtIndex));
+			if (Stmt == nullptr
+				|| Stmt->owner != Entry->id
+				|| Stmt->kind != asAST_STMT_RETURN)
+			{
+				continue;
+			}
+			const asCExpr* Candidate = Context->GetExpr(Stmt->expr);
+			while (Candidate != nullptr
+				&& (Candidate->kind == asAST_EXPR_CLEANUP
+					|| Candidate->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| Candidate->kind == asAST_EXPR_SEQUENCE)
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(
+					Candidate->children[Candidate->children.GetLength() - 1]);
+			}
+			const asCDecl* const CandidateCallee = Candidate != nullptr
+				? Context->GetDecl(Candidate->resolvedDecl) : nullptr;
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_EXPR_CALL
+				&& CandidateCallee != nullptr
+				&& CandidateCallee->stableKey.Equals("T::opOr(int) const"))
+			{
+				OrCall = Candidate;
+			}
+		}
+		const asCDecl* const Callee = OrCall != nullptr
+			? Context->GetDecl(OrCall->resolvedDecl) : nullptr;
+		const asCDecl* const Formal = OrCall != nullptr
+			&& OrCall->callArguments.GetLength() == 1
+			? Context->GetDecl(OrCall->callArguments[0].formal) : nullptr;
+
+		ASSERT_THAT(IsTrue(
+			OrCall != nullptr
+				&& OrCall->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD
+				&& Callee->stableKey.Equals("T::opOr(int) const"),
+			*FString::Printf(
+				TEXT("Object | 2 must rewrite to a Call of T::opOr(int) const, not leftover Binary. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			OrCall != nullptr
+				&& OrCall->receiver.IsValid()
+				&& Context->GetExpr(OrCall->receiver) != nullptr,
+			*FString::Printf(
+				TEXT("the opOr Call must seal receiver= of Object. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int>(asAST_CALL_DISPATCH_DIRECT),
+			static_cast<int>(OrCall != nullptr
+				? OrCall->callDispatch
+				: asAST_CALL_DISPATCH_NONE),
+			*FString::Printf(
+				TEXT("a VALUE-owner opOr has no script vtable; Sema must seal direct dispatch. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			OrCall != nullptr
+				&& OrCall->callArguments.GetLength() == 1
+				&& OrCall->callArguments[0].origin == asAST_CALL_ARGUMENT_POSITIONAL
+				&& OrCall->callArguments[0].formalIndex == 0
+				&& Formal != nullptr
+				&& Formal->name.Equals("Value"),
+			*FString::Printf(
+				TEXT("the rewritten opOr Call must seal one positional Value formal. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalSwappedLessThanRewritesToOpCmpComparedAgainstZeroWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 swapped opCmp less-than rewrite fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaSwappedOpCmpLessThanRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				int opCmp(int Value) const
+				{
+					return Stored - Value;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				Object.Stored = 5;
+				return 3 < Object ? 42 : 0;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaSwappedOpCmpLessThanRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("3 < Object must compile from sealed swapped opCmp > 0 / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("CANONICAL Bytecode for swapped < must come from CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("CANONICAL swapped < must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCExpr* Comparison = nullptr;
+		for (asUINT StmtIndex = 1;
+			Entry != nullptr && Comparison == nullptr
+				&& StmtIndex <= Context->GetStmtCount();
+			++StmtIndex)
+		{
+			const asCStmt* const Stmt = Context->GetStmt(asASTStmtId(StmtIndex));
+			if (Stmt == nullptr
+				|| Stmt->owner != Entry->id
+				|| Stmt->kind != asAST_STMT_RETURN)
+			{
+				continue;
+			}
+			const asCExpr* Candidate = Context->GetExpr(Stmt->expr);
+			while (Candidate != nullptr
+				&& (Candidate->kind == asAST_EXPR_CLEANUP
+					|| Candidate->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| Candidate->kind == asAST_EXPR_SEQUENCE)
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(
+					Candidate->children[Candidate->children.GetLength() - 1]);
+			}
+			if (Candidate != nullptr && Candidate->kind == asAST_EXPR_CONDITIONAL
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(Candidate->children[0]);
+			}
+			while (Candidate != nullptr
+				&& (Candidate->kind == asAST_EXPR_CLEANUP
+					|| Candidate->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| Candidate->kind == asAST_EXPR_SEQUENCE)
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(
+					Candidate->children[Candidate->children.GetLength() - 1]);
+			}
+			Comparison = Candidate;
+		}
+
+		const asCExpr* CmpCall = nullptr;
+		const asCExpr* Zero = nullptr;
+		if (Comparison != nullptr
+			&& Comparison->kind == asAST_EXPR_BINARY
+			&& Comparison->literal.Equals(">")
+			&& Comparison->children.GetLength() == 2)
+		{
+			CmpCall = Context->GetExpr(Comparison->children[0]);
+			while (CmpCall != nullptr
+				&& (CmpCall->kind == asAST_EXPR_CLEANUP
+					|| CmpCall->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| CmpCall->kind == asAST_EXPR_SEQUENCE)
+				&& CmpCall->children.GetLength() != 0)
+			{
+				CmpCall = Context->GetExpr(
+					CmpCall->children[CmpCall->children.GetLength() - 1]);
+			}
+			Zero = Context->GetExpr(Comparison->children[1]);
+		}
+		const asCDecl* const Callee = CmpCall != nullptr
+			? Context->GetDecl(CmpCall->resolvedDecl) : nullptr;
+		const asCDecl* const Formal = CmpCall != nullptr
+			&& CmpCall->callArguments.GetLength() == 1
+			? Context->GetDecl(CmpCall->callArguments[0].formal) : nullptr;
+		ASSERT_THAT(IsTrue(
+			Comparison != nullptr
+				&& Comparison->kind == asAST_EXPR_BINARY
+				&& Comparison->literal.Equals(">")
+				&& CmpCall != nullptr
+				&& CmpCall->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD
+				&& Callee->stableKey.Equals("T::opCmp(int) const")
+				&& Zero != nullptr
+				&& Zero->kind == asAST_EXPR_INTEGER_LITERAL
+				&& Zero->literalBits == 0,
+			*FString::Printf(
+				TEXT("3 < Object must seal Binary > of T::opCmp(int) against 0 (swapped <), not leftover Binary of int and T or unswapped opCmp < 0. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			CmpCall != nullptr
+				&& CmpCall->receiver.IsValid()
+				&& Context->GetExpr(CmpCall->receiver) != nullptr
+				&& CmpCall->callArguments.GetLength() == 1
+				&& CmpCall->callArguments[0].origin == asAST_CALL_ARGUMENT_POSITIONAL
+				&& Formal != nullptr
+				&& Formal->name.Equals("Value"),
+			*FString::Printf(
+				TEXT("the swapped opCmp Call must seal receiver=Object and positional Value (the original lhs 3). dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalBitwiseNotRewritesToOpComCallWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 opCom bitwise-not rewrite fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaOpComCallRewrite", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				int opCom() const
+				{
+					return Stored == 5 ? 42 : 0;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				Object.Stored = 5;
+				return ~Object;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaOpComCallRewrite.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("~Object must compile from sealed opCom Call / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("CANONICAL Bytecode for ~ must come from CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("CANONICAL ~ must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCExpr* ComCall = nullptr;
+		for (asUINT StmtIndex = 1;
+			Entry != nullptr && ComCall == nullptr
+				&& StmtIndex <= Context->GetStmtCount();
+			++StmtIndex)
+		{
+			const asCStmt* const Stmt = Context->GetStmt(asASTStmtId(StmtIndex));
+			if (Stmt == nullptr
+				|| Stmt->owner != Entry->id
+				|| Stmt->kind != asAST_STMT_RETURN)
+			{
+				continue;
+			}
+			const asCExpr* Candidate = Context->GetExpr(Stmt->expr);
+			while (Candidate != nullptr
+				&& (Candidate->kind == asAST_EXPR_CLEANUP
+					|| Candidate->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| Candidate->kind == asAST_EXPR_SEQUENCE)
+				&& Candidate->children.GetLength() != 0)
+			{
+				Candidate = Context->GetExpr(
+					Candidate->children[Candidate->children.GetLength() - 1]);
+			}
+			const asCDecl* const CandidateCallee = Candidate != nullptr
+				? Context->GetDecl(Candidate->resolvedDecl) : nullptr;
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_EXPR_CALL
+				&& CandidateCallee != nullptr
+				&& CandidateCallee->stableKey.Equals("T::opCom() const"))
+			{
+				ComCall = Candidate;
+			}
+		}
+		const asCDecl* const Callee = ComCall != nullptr
+			? Context->GetDecl(ComCall->resolvedDecl) : nullptr;
+
+		ASSERT_THAT(IsTrue(
+			ComCall != nullptr
+				&& ComCall->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD
+				&& Callee->stableKey.Equals("T::opCom() const"),
+			*FString::Printf(
+				TEXT("~Object must rewrite to a Call of T::opCom() const, not leftover Unary ~ of T. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			ComCall != nullptr
+				&& ComCall->receiver.IsValid()
+				&& Context->GetExpr(ComCall->receiver) != nullptr,
+			*FString::Printf(
+				TEXT("the opCom Call must seal receiver= of Object. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			static_cast<int>(asAST_CALL_DISPATCH_DIRECT),
+			static_cast<int>(ComCall != nullptr
+				? ComCall->callDispatch
+				: asAST_CALL_DISPATCH_NONE),
+			*FString::Printf(
+				TEXT("a VALUE-owner opCom has no script vtable; Sema must seal direct dispatch. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			ComCall != nullptr
+				&& ComCall->callArguments.GetLength() == 0,
+			*FString::Printf(
+				TEXT("T::opCom() takes no formals; the operand is the receiver, not a positional argument. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalApplyFormatFNameSelectsFStringOverloadAndNamedPrintWithoutLegacyCompiler)
+	{
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(
+			FAngelscriptEngine::Get().GetScriptEngine());
+		ASSERT_THAT(IsNotNull(ScriptEngine,
+			TEXT("5.3 ApplyFormat/Print fixture needs the ambient UE AngelScript Engine")));
+		if (ScriptEngine == nullptr)
+		{
+			return;
+		}
+
+		const asECompilerPipeline Previous = ScriptEngine->GetCompilerPipeline();
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 ApplyFormat FName rewrite fixture selects CANONICAL")));
+		ON_SCOPE_EXIT
+		{
+			ScriptEngine->SetCompilerPipeline(Previous);
+		};
+
+		static const char* const ModuleName = "SemaApplyFormatFNameNamedPrint";
+		ON_SCOPE_EXIT { ScriptEngine->DiscardModule(ModuleName); };
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			ModuleName, asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class ASemaFormatPrintActor : AActor
+			{
+				void ShowFormatted()
+				{
+					Print(FString::ApplyFormat((GetName()), ">40"));
+					Print("Jump was pressed!", Duration = 5.0);
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaApplyFormatFNameNamedPrint.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("ApplyFormat(GetName(), \">40\") plus named Print Duration must compile from a unique Canonical call plan, not ambiguous-overload vs const ?&; result=%d publisher=%d legacy=%u dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("CANONICAL Bytecode for ApplyFormat/Print must come from CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("CANONICAL ApplyFormat/Print must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCExpr* ApplyFormatCall = nullptr;
+		const asCExpr* NamedPrintCall = nullptr;
+		for (asUINT ExprIndex = 1; ExprIndex <= Context->GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Expr = Context->GetExpr(asASTExprId(ExprIndex));
+			const asCDecl* const Callee = Expr != nullptr
+				? Context->GetDecl(Expr->resolvedDecl) : nullptr;
+			if (Expr == nullptr || Expr->kind != asAST_EXPR_CALL || Callee == nullptr)
+			{
+				continue;
+			}
+			if (Callee->name.Equals("ApplyFormat") && ApplyFormatCall == nullptr)
+			{
+				ApplyFormatCall = Expr;
+			}
+			if (Callee->name.Equals("Print")
+				&& Expr->callArguments.GetLength() >= 2)
+			{
+				for (asUINT ArgIndex = 0;
+					ArgIndex < Expr->callArguments.GetLength();
+					++ArgIndex)
+				{
+					if (Expr->callArguments[ArgIndex].origin
+							== asAST_CALL_ARGUMENT_NAMED
+						&& Expr->callArguments[ArgIndex].authoredName.Equals(
+							"Duration"))
+					{
+						NamedPrintCall = Expr;
+						break;
+					}
+				}
+			}
+		}
+		const asCDecl* const ApplyFormatCallee = ApplyFormatCall != nullptr
+			? Context->GetDecl(ApplyFormatCall->resolvedDecl) : nullptr;
+		const asCDecl* const FirstFormal = ApplyFormatCall != nullptr
+			&& ApplyFormatCall->callArguments.GetLength() >= 1
+			? Context->GetDecl(ApplyFormatCall->callArguments[0].formal)
+			: nullptr;
+		const asCType* const FirstFormalType = FirstFormal != nullptr
+			? Context->GetType(FirstFormal->type.type) : nullptr;
+		ASSERT_THAT(IsTrue(
+			ApplyFormatCall != nullptr
+				&& ApplyFormatCallee != nullptr
+				&& FirstFormalType != nullptr
+				&& FirstFormalType->kind != asAST_TYPE_WILDCARD
+				&& FirstFormalType->stableKey.Equals("FString"),
+			*FString::Printf(
+				TEXT("ApplyFormat(GetName(), \">40\") must uniquely select FString::ApplyFormat(const FString&, const FString&), not tie with const ?& and not leftover unresolved-callee. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			NamedPrintCall != nullptr
+				&& NamedPrintCall->callArguments.GetLength() >= 2,
+			*FString::Printf(
+				TEXT("Print(..., Duration = 5.0) must seal a named Duration argument. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalImplicitCtorConversionSealsConstructPlan)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 implicit-ctor fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaImplicitCtorConversion", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct TConv
+			{
+				TConv(int A)
+				{
+				}
+			}
+
+			int Consume(TConv Value)
+			{
+				return 1;
+			}
+
+			int Entry()
+			{
+				return Consume(3);
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaImplicitCtorConversion.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Consume(3) must compile so the implicit constructor plan is observable; result=%d messages=%s"),
+				BuildResult,
+				*Messages)));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const asCExpr* const ConsumeCall =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				*const_cast<asCASTContext*>(Context), "Consume");
+		ASSERT_THAT(IsTrue(
+			ConsumeCall != nullptr
+				&& ConsumeCall->callArguments.GetLength() == 1,
+			*FString::Printf(
+				TEXT("Consume(3) must seal one call-argument record. dump:\n%s"),
+				*Dump)));
+		if (ConsumeCall == nullptr || ConsumeCall->callArguments.GetLength() != 1)
+		{
+			return;
+		}
+
+		const asCExpr* Argument =
+			Context->GetExpr(ConsumeCall->callArguments[0].expression);
+		while (Argument != nullptr
+			&& (Argument->kind == asAST_EXPR_CLEANUP
+				|| Argument->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& Argument->children.GetLength() == 1)
+		{
+			Argument = Context->GetExpr(Argument->children[0]);
+		}
+		const asCDecl* const Constructor = Argument != nullptr
+			? Context->GetDecl(Argument->resolvedDecl) : nullptr;
+		const asCDecl* const Formal = Argument != nullptr
+			&& Argument->callArguments.GetLength() == 1
+			? Context->GetDecl(Argument->callArguments[0].formal) : nullptr;
+		ASSERT_THAT(IsTrue(
+			Argument != nullptr
+				&& Argument->kind == asAST_EXPR_CONSTRUCT
+				&& Constructor != nullptr
+				&& Constructor->kind == asAST_DECL_CONSTRUCTOR
+				&& Constructor->stableKey.Equals("TConv::TConv(int)"),
+			*FString::Printf(
+				TEXT("Consume(3) must construct TConv::TConv(int), not a constructor-less conversion. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			Argument != nullptr
+				&& Argument->callArguments.GetLength() == 1
+				&& Argument->callArguments[0].origin == asAST_CALL_ARGUMENT_POSITIONAL
+				&& Argument->callArguments[0].formalIndex == 0
+				&& Formal != nullptr
+				&& Formal->name.Equals("A"),
+			*FString::Printf(
+				TEXT("the implicit constructor must seal one positional formal A. dump:\n%s"),
+				*Dump)));
+		FString ConstructLine;
+		TArray<FString> ConstructLineArray;
+		Dump.ParseIntoArray(ConstructLineArray, TEXT("\n"));
+		for (const FString& Line : ConstructLineArray)
+		{
+			if (Argument != nullptr
+				&& Line.Contains(FString::Printf(TEXT("EXPR id=%u kind=Construct"), Argument->id.value)))
+			{
+				ConstructLine = Line;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(
+			ConstructLine.Contains(TEXT("callArgs=1"))
+				&& ConstructLine.Contains(TEXT("origin=positional"))
+				&& ConstructLine.Contains(TEXT("formal=A")),
+			*FString::Printf(
+				TEXT("Construct dump must print the sealed call-argument plan, not omit callArgs=. line=%s dump:\n%s"),
+				*ConstructLine,
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalWorldContextHiddenCallSealsInjectedCall)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 WorldContext fixture selects CANONICAL")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"WorldContextHost",
+				0,
+				asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("WorldContext host type must register")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterGlobalFunction(
+				"WorldContextHost __WorldContext()",
+				asFUNCTION(CanonicalASTSemaAuthorityTest::InjectWorldContextGeneric),
+				asCALL_GENERIC) >= 0,
+			TEXT("__WorldContext injector must register")));
+		const int WithWorldId = ScriptEngine->RegisterGlobalFunction(
+			"int WithWorld(WorldContextHost WorldContext, int Visible)",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::WithWorldGeneric),
+			asCALL_GENERIC);
+		ASSERT_THAT(IsTrue(WithWorldId >= 0, TEXT("WithWorld must register")));
+		asCScriptFunction* const WithWorldFn =
+			static_cast<asCScriptFunction*>(ScriptEngine->GetFunctionById(WithWorldId));
+		ASSERT_THAT(IsNotNull(WithWorldFn, TEXT("WithWorld script function")));
+		if (WithWorldFn != nullptr)
+		{
+			WithWorldFn->hiddenArgumentIndex = 0;
+			WithWorldFn->hiddenArgumentDefault = "__WorldContext()";
+		}
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaWorldContextHidden", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Entry()
+			{
+				return WithWorld(3);
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaWorldContextHidden.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("WithWorld(3) must compile so the WorldContext hidden plan is observable; result=%d messages=%s"),
+				BuildResult,
+				*Messages)));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const asCExpr* const WithWorldCall =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				*const_cast<asCASTContext*>(Context), "WithWorld");
+		ASSERT_THAT(IsTrue(
+			WithWorldCall != nullptr
+				&& WithWorldCall->callArguments.GetLength() == 2,
+			*FString::Printf(
+				TEXT("WithWorld(3) must seal two call-argument records. dump:\n%s"),
+				*Dump)));
+		if (WithWorldCall == nullptr || WithWorldCall->callArguments.GetLength() != 2)
+		{
+			return;
+		}
+
+		const asSASTCallArgument* Hidden = nullptr;
+		const asSASTCallArgument* Visible = nullptr;
+		for (asUINT Index = 0; Index < WithWorldCall->callArguments.GetLength(); ++Index)
+		{
+			const asSASTCallArgument& Argument = WithWorldCall->callArguments[Index];
+			if (Argument.origin == asAST_CALL_ARGUMENT_HIDDEN
+				&& Argument.formalIndex == 0)
+			{
+				Hidden = &Argument;
+			}
+			else if (Argument.origin == asAST_CALL_ARGUMENT_POSITIONAL
+				&& Argument.formalIndex == 1)
+			{
+				Visible = &Argument;
+			}
+		}
+		const asCDecl* const HiddenFormal = Hidden != nullptr
+			? Context->GetDecl(Hidden->formal) : nullptr;
+		const asCDecl* const VisibleFormal = Visible != nullptr
+			? Context->GetDecl(Visible->formal) : nullptr;
+		const asCExpr* HiddenExpr = Hidden != nullptr
+			? Context->GetExpr(Hidden->expression) : nullptr;
+		while (HiddenExpr != nullptr
+			&& (HiddenExpr->kind == asAST_EXPR_CLEANUP
+				|| HiddenExpr->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+				|| HiddenExpr->kind == asAST_EXPR_CONVERSION)
+			&& HiddenExpr->children.GetLength() == 1)
+		{
+			HiddenExpr = Context->GetExpr(HiddenExpr->children[0]);
+		}
+		const asCDecl* const InjectedCallee = HiddenExpr != nullptr
+			? Context->GetDecl(HiddenExpr->resolvedDecl) : nullptr;
+		const asCExpr* const VisibleExpr = Visible != nullptr
+			? Context->GetExpr(Visible->expression) : nullptr;
+		const asCSourceManager& SourceManager = Context->GetSourceManager();
+		const char* const HiddenLogicalKey = HiddenExpr != nullptr
+			&& HiddenExpr->range.begin.IsValid()
+			? SourceManager.GetLogicalKey(HiddenExpr->range.begin.fileID)
+			: nullptr;
+
+		ASSERT_THAT(IsTrue(
+			Hidden != nullptr
+				&& Hidden->sourceOrdinal == asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+				&& HiddenFormal != nullptr
+				&& HiddenFormal->name.Equals("WorldContext")
+				&& HiddenExpr != nullptr
+				&& HiddenExpr->kind == asAST_EXPR_CALL
+				&& InjectedCallee != nullptr
+				&& InjectedCallee->name.Equals("__WorldContext")
+				&& HiddenLogicalKey != nullptr
+				&& FCStringAnsi::Strstr(HiddenLogicalKey, "canonical-runtime-default") != nullptr,
+			*FString::Printf(
+				TEXT("formal zero must be a generated HIDDEN Call of __WorldContext(), not an authored WorldContext. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			Visible != nullptr
+				&& Visible->sourceOrdinal == 0
+				&& VisibleFormal != nullptr
+				&& VisibleFormal->name.Equals("Visible")
+				&& VisibleExpr != nullptr
+				&& VisibleExpr->kind == asAST_EXPR_INTEGER_LITERAL
+				&& VisibleExpr->literal.Equals("3"),
+			*FString::Printf(
+				TEXT("formal one must remain the authored positional 3. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalMixinCallSealsImplicitReceiverArgument)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 mixin receiver fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaMixinImplicitReceiver", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+			}
+
+			mixin int MixHelper(T self, int a)
+			{
+				return a;
+			}
+
+			int Entry()
+			{
+				T v;
+				return v.MixHelper(3);
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaMixinImplicitReceiver.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("v.MixHelper(3) must compile so the mixin receiver plan is observable; result=%d messages=%s"),
+				BuildResult,
+				*Messages)));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const asCExpr* const MixinCall =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				*const_cast<asCASTContext*>(Context), "MixHelper");
+		const asCDecl* const Callee = MixinCall != nullptr
+			? Context->GetDecl(MixinCall->resolvedDecl) : nullptr;
+		ASSERT_THAT(IsTrue(
+			MixinCall != nullptr
+				&& MixinCall->kind == asAST_EXPR_CALL
+				&& MixinCall->receiver.IsValid()
+				&& MixinCall->callArguments.GetLength() == 2
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_MIXIN,
+			*FString::Printf(
+				TEXT("v.MixHelper(3) must seal a Mixin Call with two argument records. dump:\n%s"),
+				*Dump)));
+		if (MixinCall == nullptr || MixinCall->callArguments.GetLength() != 2)
+		{
+			return;
+		}
+
+		const asSASTCallArgument* Receiver = nullptr;
+		const asSASTCallArgument* Value = nullptr;
+		for (asUINT Index = 0; Index < MixinCall->callArguments.GetLength(); ++Index)
+		{
+			const asSASTCallArgument& Argument = MixinCall->callArguments[Index];
+			if (Argument.origin == asAST_CALL_ARGUMENT_IMPLICIT_RECEIVER
+				&& Argument.formalIndex == 0)
+			{
+				Receiver = &Argument;
+			}
+			else if (Argument.origin == asAST_CALL_ARGUMENT_POSITIONAL
+				&& Argument.formalIndex == 1)
+			{
+				Value = &Argument;
+			}
+		}
+		const asCDecl* const ReceiverFormal = Receiver != nullptr
+			? Context->GetDecl(Receiver->formal) : nullptr;
+		const asCDecl* const ValueFormal = Value != nullptr
+			? Context->GetDecl(Value->formal) : nullptr;
+		const asCExpr* const ValueExpr = Value != nullptr
+			? Context->GetExpr(Value->expression) : nullptr;
+		ASSERT_THAT(IsTrue(
+			Receiver != nullptr
+				&& Receiver->expression == MixinCall->receiver
+				&& Receiver->sourceOrdinal == asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+				&& ReceiverFormal != nullptr
+				&& ReceiverFormal->name.Equals("self"),
+			*FString::Printf(
+				TEXT("mixin formal zero must be IMPLICIT_RECEIVER bound to receiver=, not a positional T. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			Value != nullptr
+				&& Value->sourceOrdinal == 0
+				&& ValueFormal != nullptr
+				&& ValueFormal->name.Equals("a")
+				&& ValueExpr != nullptr
+				&& ValueExpr->kind == asAST_EXPR_INTEGER_LITERAL
+				&& ValueExpr->literal.Equals("3"),
+			*FString::Printf(
+				TEXT("mixin formal one must remain authored positional 3. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalImportCallSealsNamedAndDefaultArguments)
+	{
+		using namespace AngelscriptNativeTestSupport;
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 import call fixture selects CANONICAL")));
+
+		FScopedNativeModule Provider(
+			*TestRunner,
+			Engine,
+			"CanonicalASTSemaImportNamedProvider",
+			ASTEST_AS_ANSI(R"AS(
+				int SharedValue(int a, int b = 7)
+				{
+					return a + b;
+				}
+			)AS"));
+		ASSERT_THAT(IsTrue(Provider.IsValid(), TEXT("import named-default provider must compile")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaImportNamedDefault", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			import int SharedValue(int a, int b = 7) from "CanonicalASTSemaImportNamedProvider";
+
+			int Entry()
+			{
+				return SharedValue(a: 3);
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaImportNamedDefault.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("SharedValue(a: 3) must compile so the import call plan is observable; result=%d messages=%s"),
+				BuildResult,
+				*Messages)));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const asCExpr* const ImportCall =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				*const_cast<asCASTContext*>(Context), "SharedValue");
+		const asCDecl* const Callee = ImportCall != nullptr
+			? Context->GetDecl(ImportCall->resolvedDecl) : nullptr;
+		ASSERT_THAT(IsTrue(
+			ImportCall != nullptr
+				&& ImportCall->kind == asAST_EXPR_CALL
+				&& ImportCall->callArguments.GetLength() == 2
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_IMPORT
+				&& Callee->origin.Equals("CanonicalASTSemaImportNamedProvider"),
+			*FString::Printf(
+				TEXT("SharedValue(a: 3) must seal an Import Call with two argument records. dump:\n%s"),
+				*Dump)));
+		if (ImportCall == nullptr || ImportCall->callArguments.GetLength() != 2)
+		{
+			return;
+		}
+
+		const asSASTCallArgument* NamedA = nullptr;
+		const asSASTCallArgument* DefaultB = nullptr;
+		for (asUINT Index = 0; Index < ImportCall->callArguments.GetLength(); ++Index)
+		{
+			const asSASTCallArgument& Argument = ImportCall->callArguments[Index];
+			if (Argument.origin == asAST_CALL_ARGUMENT_NAMED
+				&& Argument.formalIndex == 0)
+			{
+				NamedA = &Argument;
+			}
+			else if (Argument.origin == asAST_CALL_ARGUMENT_DEFAULT
+				&& Argument.formalIndex == 1)
+			{
+				DefaultB = &Argument;
+			}
+		}
+		const asCDecl* const FormalA = NamedA != nullptr
+			? Context->GetDecl(NamedA->formal) : nullptr;
+		const asCDecl* const FormalB = DefaultB != nullptr
+			? Context->GetDecl(DefaultB->formal) : nullptr;
+		const asCExpr* NamedExpr = NamedA != nullptr
+			? Context->GetExpr(NamedA->expression) : nullptr;
+		while (NamedExpr != nullptr
+			&& NamedExpr->kind == asAST_EXPR_CONVERSION
+			&& NamedExpr->children.GetLength() == 1)
+		{
+			NamedExpr = Context->GetExpr(NamedExpr->children[0]);
+		}
+		const asCExpr* DefaultExpr = DefaultB != nullptr
+			? Context->GetExpr(DefaultB->expression) : nullptr;
+		while (DefaultExpr != nullptr
+			&& DefaultExpr->kind == asAST_EXPR_CONVERSION
+			&& DefaultExpr->children.GetLength() == 1)
+		{
+			DefaultExpr = Context->GetExpr(DefaultExpr->children[0]);
+		}
+		ASSERT_THAT(IsTrue(
+			NamedA != nullptr
+				&& NamedA->sourceOrdinal == 0
+				&& NamedA->authoredName.Equals("a")
+				&& FormalA != nullptr
+				&& FormalA->name.Equals("a")
+				&& NamedExpr != nullptr
+				&& NamedExpr->kind == asAST_EXPR_INTEGER_LITERAL
+				&& NamedExpr->literal.Equals("3"),
+			*FString::Printf(
+				TEXT("import formal a must be NAMED 3, not a local/global rewrite. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			DefaultB != nullptr
+				&& DefaultB->sourceOrdinal == asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+				&& FormalB != nullptr
+				&& FormalB->name.Equals("b")
+				&& DefaultExpr != nullptr
+				&& DefaultExpr->kind == asAST_EXPR_INTEGER_LITERAL
+				&& DefaultExpr->literal.Equals("7"),
+			*FString::Printf(
+				TEXT("import formal b must fill DEFAULT 7 from the import signature. dump:\n%s"),
+				*Dump)));
 	}
 
 	TEST_METHOD(ScriptReferenceFieldLayoutIsSealedWithoutRuntimeRegistration)
@@ -2350,6 +6411,520 @@ public:
 				*Dump)));
 	}
 
+	TEST_METHOD(PreClassNativeBaseChainIsVisibleToDerivedArgumentConversion)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("native-base-chain fixture selects CANONICAL")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"NativeHostRoot", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0,
+			TEXT("native-base-chain fixture registers its root host type")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"NativeHostLeaf", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0,
+			TEXT("native-base-chain fixture registers its leaf host type")));
+
+		asCObjectType* const NativeHostRoot = static_cast<asCObjectType*>(
+			ScriptEngine->GetTypeInfoByName("NativeHostRoot"));
+		asCObjectType* const NativeHostLeaf = static_cast<asCObjectType*>(
+			ScriptEngine->GetTypeInfoByName("NativeHostLeaf"));
+		ASSERT_THAT(IsTrue(NativeHostRoot != nullptr && NativeHostLeaf != nullptr,
+			TEXT("native-base-chain fixture resolves both registered object types")));
+		if (NativeHostRoot == nullptr || NativeHostLeaf == nullptr)
+		{
+			return;
+		}
+		NativeHostRoot->AddRefInternal();
+		NativeHostLeaf->derivedFrom = NativeHostRoot;
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaPreClassNativeBaseChain", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+
+		asPreClassData ClassData;
+		ClassData.ShadowType = NativeHostLeaf;
+		Module->AddPreClassData("DerivedHostValue", ClassData);
+
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int ReadNativeRoot(NativeHostRoot Object)
+			{
+				return 42;
+			}
+
+			class DerivedHostValue
+			{
+				int ReadThroughNativeChain()
+				{
+					return ReadNativeRoot(this);
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaPreClassNativeBaseChain.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("a script class using a native leaf shadow must convert through the complete native base chain")));
+
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("native-base-chain fixture retains its sealed AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(IsTrue(
+			Dump.Contains(TEXT("callee=ReadNativeRoot(NativeHostRoot)"))
+				&& Dump.Contains(TEXT("kind=Conversion")),
+			*FString::Printf(
+				TEXT("the native base chain must seal a derived-to-root conversion before CodeGen. AST:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(HostStableNativeBaseRelationIsVisibleToDerivedArgumentConversion)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("host-native-base fixture selects CANONICAL")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"HostStableRoot", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"HostStableLeaf", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0));
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			ScriptEngine->RegisterCanonicalTypeBaseRelation(
+				"HostStableLeaf", "HostStableRoot"),
+			TEXT("the host must publish native ancestry by stable names only")));
+
+		asCObjectType* const HostStableLeaf = static_cast<asCObjectType*>(
+			ScriptEngine->GetTypeInfoByName("HostStableLeaf"));
+		ASSERT_THAT(IsNotNull(HostStableLeaf));
+		ASSERT_THAT(IsTrue(HostStableLeaf != nullptr
+			&& HostStableLeaf->derivedFrom == nullptr,
+			TEXT("host ancestry must not mutate LEGACY Runtime derivedFrom semantics")));
+		if (HostStableLeaf == nullptr)
+		{
+			return;
+		}
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaHostStableNativeBase", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+
+		asPreClassData ClassData;
+		ClassData.ShadowType = HostStableLeaf;
+		Module->AddPreClassData("DerivedHostStableValue", ClassData);
+
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int ReadHostStableRoot(HostStableRoot Object)
+			{
+				return 42;
+			}
+
+			class DerivedHostStableValue
+			{
+				int ReadThroughHostStableChain()
+				{
+					return ReadHostStableRoot(this);
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaHostStableNativeBase.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("a host-published stable base relation must participate in Canonical conversion")));
+
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(IsTrue(
+			Dump.Contains(TEXT("callee=ReadHostStableRoot(HostStableRoot)"))
+				&& Dump.Contains(TEXT("kind=Conversion")),
+			*FString::Printf(
+				TEXT("stable host ancestry must seal a derived-to-root conversion. AST:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(HostStableNativeBaseMethodIsVisibleToDerivedImplicitReceiver)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("host-native-method fixture selects CANONICAL")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"HostMethodRoot", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"HostMethodLeaf", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectMethod(
+				"HostMethodRoot",
+				"void MarkFromRoot() const",
+				asFUNCTION(CanonicalASTSemaAuthorityTest::RankArrayInsertLastUnused),
+				asCALL_GENERIC) >= 0,
+			TEXT("the host root must publish the inherited native method")));
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			ScriptEngine->RegisterCanonicalTypeBaseRelation(
+				"HostMethodLeaf", "HostMethodRoot"),
+			TEXT("the host must publish native ancestry by stable names only")));
+
+		asCObjectType* const HostMethodLeaf = static_cast<asCObjectType*>(
+			ScriptEngine->GetTypeInfoByName("HostMethodLeaf"));
+		ASSERT_THAT(IsNotNull(HostMethodLeaf));
+		ASSERT_THAT(IsTrue(HostMethodLeaf != nullptr
+			&& HostMethodLeaf->derivedFrom == nullptr,
+			TEXT("Canonical inherited-method lookup must not mutate LEGACY Runtime ancestry")));
+		if (HostMethodLeaf == nullptr)
+		{
+			return;
+		}
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaHostStableNativeMethod", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+
+		asPreClassData ClassData;
+		ClassData.ShadowType = HostMethodLeaf;
+		Module->AddPreClassData("DerivedHostMethodValue", ClassData);
+
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class DerivedHostMethodValue
+			{
+				void InvokeInheritedHostMethod()
+				{
+					MarkFromRoot();
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaHostStableNativeMethod.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("a script class must resolve an implicit receiver call through its host-published native base graph; result=%d messages=%s"),
+				BuildResult,
+				*AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages()))));
+
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(IsTrue(
+			Dump.Contains(TEXT("callee=void HostMethodRoot::MarkFromRoot() const"))
+				|| Dump.Contains(TEXT("callee=HostMethodRoot::MarkFromRoot")),
+			*FString::Printf(
+				TEXT("the sealed call must name the exact native ancestor method. AST:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(HostStableNativeBasePropertyIsVisibleToDerivedReceivers)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("host-native-property fixture selects CANONICAL")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"HostPropertyRoot", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectProperty(
+				"HostPropertyRoot",
+				"int NativeMarker",
+				asOFFSET(CanonicalASTSemaAuthorityTest::FListBox, Marker)) >= 0,
+			TEXT("the host root must publish the inherited native property")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"HostPropertyLeaf", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0));
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			ScriptEngine->RegisterCanonicalTypeBaseRelation(
+				"HostPropertyLeaf", "HostPropertyRoot"),
+			TEXT("the host must publish native property ancestry by stable names only")));
+
+		asCObjectType* const HostPropertyLeaf = static_cast<asCObjectType*>(
+			ScriptEngine->GetTypeInfoByName("HostPropertyLeaf"));
+		ASSERT_THAT(IsNotNull(HostPropertyLeaf));
+		ASSERT_THAT(IsTrue(HostPropertyLeaf != nullptr
+			&& HostPropertyLeaf->derivedFrom == nullptr,
+			TEXT("Canonical inherited-property lookup must not mutate LEGACY Runtime ancestry")));
+		if (HostPropertyLeaf == nullptr)
+		{
+			return;
+		}
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaHostStableNativeProperty", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+
+		asPreClassData ClassData;
+		ClassData.ShadowType = HostPropertyLeaf;
+		Module->AddPreClassData("DerivedHostPropertyValue", ClassData);
+
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class DerivedHostPropertyValue
+			{
+				int ReadInheritedHostProperty()
+				{
+					return NativeMarker;
+				}
+
+				int ReadExplicitInheritedHostProperty()
+				{
+					return this.NativeMarker;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaHostStableNativeProperty.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("a script class must resolve an inherited native property through implicit and explicit receivers; result=%d messages=%s"),
+				BuildResult,
+				*AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages()))));
+
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(IsTrue(
+			Dump.Contains(TEXT("name=NativeMarker"))
+				&& Dump.Contains(TEXT("key=HostPropertyRoot::NativeMarker")),
+			*FString::Printf(
+				TEXT("both property references must own the exact native ancestor VarDecl. AST:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(ClassDefaultStatementResolvesInheritedNativeProperty)
+	{
+		// Production `default NodeName = "..."` is a class-default assignment to a
+		// native ancestor property. UE preprocessing may erase the authored
+		// superclass, so this fixture uses PreClass shadow identity only.
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("class-default inherited-property fixture selects CANONICAL")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"HostDefaultPropertyRoot", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectProperty(
+				"HostDefaultPropertyRoot",
+				"int NativeMarker",
+				asOFFSET(CanonicalASTSemaAuthorityTest::FListBox, Marker)) >= 0,
+			TEXT("the host root must publish the inherited native property")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"HostDefaultPropertyLeaf", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0));
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			ScriptEngine->RegisterCanonicalTypeBaseRelation(
+				"HostDefaultPropertyLeaf", "HostDefaultPropertyRoot"),
+			TEXT("the host must publish native property ancestry by stable names only")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaClassDefaultInheritedNativeProperty", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+
+		asPreClassData ClassData;
+		ClassData.ShadowType = ScriptEngine->GetTypeInfoByName("HostDefaultPropertyLeaf");
+		ASSERT_THAT(IsNotNull(ClassData.ShadowType));
+		Module->AddPreClassData("DerivedHostPropertyDefault", ClassData);
+
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class DerivedHostPropertyDefault
+			{
+				default NativeMarker = 7;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaClassDefaultInheritedNativeProperty.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("class default syntax must resolve an inherited native property; result=%d messages=%s"),
+				BuildResult,
+				*AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages()))));
+
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(IsTrue(
+			Dump.Contains(TEXT("name=__InitDefaults"))
+				&& Dump.Contains(TEXT("name=NativeMarker"))
+				&& Dump.Contains(TEXT("key=HostDefaultPropertyRoot::NativeMarker")),
+			*FString::Printf(
+				TEXT("the generated InitDefaults body must assign the exact native ancestor field. AST:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(PreClassShadowCoexistsWithAuthoredScriptBase)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("pre-class dual-relation fixture selects CANONICAL")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"NativeReloadShadow", 0, asOBJ_REF | asOBJ_NOCOUNT) >= 0,
+			TEXT("pre-class dual-relation fixture must register its host shadow type")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaPreClassDualRelation", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+
+		asPreClassData ClassData;
+		ClassData.ShadowType = ScriptEngine->GetTypeInfoByName("NativeReloadShadow");
+		ASSERT_THAT(IsNotNull(
+			ClassData.ShadowType,
+			TEXT("pre-class dual-relation fixture must resolve the registered shadow type")));
+		Module->AddPreClassData("ReloadChild", ClassData);
+
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class ScriptBase
+			{
+			}
+
+			class ReloadChild : ScriptBase
+			{
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaPreClassDualRelation.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("an authored script base and a PreClass native shadow are orthogonal sealed relations; result=%d messages=%s"),
+				BuildResult,
+				*AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages()))));
+
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("pre-class dual-relation fixture must retain its sealed AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* ScriptBase = nullptr;
+		const asCDecl* NativeReloadShadow = nullptr;
+		const asCDecl* ReloadChild = nullptr;
+		for (asUINT DeclIndex = 1; DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl = Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl == nullptr || Decl->kind != asAST_DECL_CLASS)
+			{
+				continue;
+			}
+			if (Decl->name.Equals("ScriptBase"))
+			{
+				ScriptBase = Decl;
+			}
+			else if (Decl->name.Equals("NativeReloadShadow"))
+			{
+				NativeReloadShadow = Decl;
+			}
+			else if (Decl->name.Equals("ReloadChild"))
+			{
+				ReloadChild = Decl;
+			}
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(IsTrue(
+			ScriptBase != nullptr
+				&& NativeReloadShadow != nullptr
+				&& ReloadChild != nullptr
+				&& NativeReloadShadow->origin.Equals("canonical-native-type-view")
+				&& ReloadChild->bases.GetLength() == 2
+				&& ReloadChild->bases[0] == ScriptBase->id
+				&& ReloadChild->bases[1] == NativeReloadShadow->id,
+			*FString::Printf(
+				TEXT("ReloadChild must seal its authored script base first and its orthogonal PreClass shadow second. AST:\n%s"),
+				*Dump)));
+	}
+
 	TEST_METHOD(CrossSectionForwardCallResolvesAfterAllDeclarationsAreVisible)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
@@ -2454,6 +7029,1060 @@ public:
 			TEXT("cross-section forward call must execute through Canonical CodeGen")));
 		ASSERT_THAT(AreEqual(42, Result,
 			TEXT("cross-section forward call must preserve its exact runtime result")));
+	}
+
+	TEST_METHOD(GeneratedWrapperMethodReconcilesAfterEarlierConsumer)
+	{
+		// Delegate helpers are appended after authored source. Stage 2 may expose
+		// their Runtime script shells while Canonical parsing is still processing
+		// the earlier consumer. The later generated declaration must reconcile
+		// with one stable ClassDecl/MethodDecl; it must not be projected through
+		// the asFUNC_SYSTEM-only native identity path.
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("generated-wrapper reconciliation fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaGeneratedWrapperReconciliation", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+
+		const std::string ConsumerSource = ASTEST_AS_ANSI(R"AS(
+			void Consume(FGeneratedWrapper Value)
+			{
+				Value.Execute(7);
+			}
+			)AS");
+		const std::string GeneratedSource = ASTEST_AS_ANSI(R"AS(
+			struct FGeneratedWrapper
+			{
+				void Execute(int Value) const __generated
+				{
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"GeneratedWrapperConsumer.as",
+			ConsumerSource.c_str(),
+			static_cast<unsigned int>(ConsumerSource.size()))));
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"GeneratedWrapperHelper.as",
+			GeneratedSource.c_str(),
+			static_cast<unsigned int>(GeneratedSource.size()))));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("earlier consumer must bind the later generated script method without native identity publication")));
+
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("generated-wrapper fixture must retain its sealed AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* Wrapper = nullptr;
+		const asCDecl* Execute = nullptr;
+		asUINT WrapperCount = 0;
+		asUINT ExecuteCount = 0;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl == nullptr)
+			{
+				continue;
+			}
+			if (Decl->kind == asAST_DECL_CLASS
+				&& Decl->name.Equals("FGeneratedWrapper"))
+			{
+				Wrapper = Decl;
+				++WrapperCount;
+			}
+			if (Decl->kind == asAST_DECL_METHOD
+				&& Decl->name.Equals("Execute"))
+			{
+				const asCDecl* const Owner = Context->GetDecl(Decl->parent);
+				if (Owner != nullptr
+					&& Owner->name.Equals("FGeneratedWrapper"))
+				{
+					Execute = Decl;
+					++ExecuteCount;
+				}
+			}
+		}
+
+		const asCExpr* ExecuteCall = nullptr;
+		for (asUINT ExprIndex = 1;
+			Execute != nullptr && ExprIndex <= Context->GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Expr =
+				Context->GetExpr(asASTExprId(ExprIndex));
+			if (Expr != nullptr && Expr->kind == asAST_EXPR_CALL
+				&& Expr->resolvedDecl == Execute->id)
+			{
+				ExecuteCall = Expr;
+				break;
+			}
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString Evidence = FString::Printf(
+			TEXT("generated wrapper must have one reconciled script identity and one resolved earlier call. AST:\n%s"),
+			*Dump);
+		ASSERT_THAT(AreEqual(1, static_cast<int32>(WrapperCount), *Evidence));
+		ASSERT_THAT(AreEqual(1, static_cast<int32>(ExecuteCount), *Evidence));
+		ASSERT_THAT(IsTrue(Wrapper != nullptr
+			&& Wrapper->range.IsValid()
+			&& Execute != nullptr
+			&& Execute->range.IsValid()
+			&& (Execute->traits & asAST_TRAIT_GENERATED) != 0,
+			*Evidence));
+		ASSERT_THAT(IsTrue(ExecuteCall != nullptr
+			&& ExecuteCall->receiver.IsValid()
+			&& ExecuteCall->callDispatch == asAST_CALL_DISPATCH_DIRECT,
+			*Evidence));
+		ASSERT_THAT(IsTrue(Context->IsPublishable(), *Evidence));
+	}
+
+	TEST_METHOD(GeneratedValueCopyReconcilesAfterEarlierConsumer)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		// Preprocessor-generated value wrappers are appended after authored
+		// consumers. The earlier call is resolved before the later wrapper has a
+		// Runtime type shell, but the sealed Canonical graph must still own the
+		// exact copy-construction plan required by a non-trivial by-value formal.
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("generated value-copy reconciliation fixture selects CANONICAL")));
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "SemaGeneratedValueCopyReconciliation");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const char* const ConsumerSource = R"AS(
+			void ConsumeGeneratedCopy(FGeneratedCopyWrapper Value)
+			{
+			}
+
+			int EntryGeneratedCopy()
+			{
+				FGeneratedCopyWrapper Local;
+				Local.Payload = 41;
+				ConsumeGeneratedCopy(Local);
+				return Local.Payload + 1;
+			}
+		)AS";
+		const char* const GeneratedSource = R"AS(
+			struct FGeneratedCopyWrapper
+			{
+				int Payload;
+
+				FGeneratedCopyWrapper() __generated
+				{
+				}
+
+				FGeneratedCopyWrapper(const FGeneratedCopyWrapper& Other)
+				{
+					Payload = Other.Payload;
+				}
+			}
+		)AS";
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "GeneratedValueCopyConsumer.as", ConsumerSource)));
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "GeneratedValueCopyHelper.as", GeneratedSource)));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("generated value-copy fixture must reach the pre-CodeGen seal boundary")));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST(),
+			TEXT("generated value-copy fixture must seal before any backend executes")));
+
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		const asCDecl* Wrapper = nullptr;
+		const asCDecl* Consume = nullptr;
+		const asCDecl* ConsumeParameter = nullptr;
+		const asCDecl* Entry = nullptr;
+		const asCDecl* Local = nullptr;
+		const asCDecl* CopyConstructor = nullptr;
+		const asCDecl* CopyParameter = nullptr;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl == nullptr)
+			{
+				continue;
+			}
+			if (Decl->kind == asAST_DECL_CLASS
+				&& Decl->name.Equals("FGeneratedCopyWrapper"))
+			{
+				Wrapper = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_FUNCTION
+				&& Decl->name.Equals("ConsumeGeneratedCopy"))
+			{
+				Consume = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_FUNCTION
+				&& Decl->name.Equals("EntryGeneratedCopy"))
+			{
+				Entry = Decl;
+			}
+		}
+
+		for (asUINT DeclIndex = 1;
+			Wrapper != nullptr && DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl == nullptr)
+			{
+				continue;
+			}
+			if (Entry != nullptr && Decl->kind == asAST_DECL_VAR
+				&& Decl->parent == Entry->id && Decl->name.Equals("Local"))
+			{
+				Local = Decl;
+			}
+			if (Decl->kind == asAST_DECL_CONSTRUCTOR
+				&& Decl->parent == Wrapper->id
+				&& Context->GetFormalDeclCount(Decl->id) == 1)
+			{
+				const asCDecl* const Formal = Context->GetFormalDecl(Decl->id, 0);
+				if (Formal != nullptr && Formal->type.type == Wrapper->type.type
+					&& Formal->type.IsConst() && Formal->type.IsReference())
+				{
+					CopyConstructor = Decl;
+					CopyParameter = Formal;
+				}
+			}
+		}
+		ConsumeParameter = Consume != nullptr
+			? Context->GetFormalDecl(Consume->id, 0) : nullptr;
+
+		const asCExpr* ConsumeCall = nullptr;
+		for (asUINT ExprIndex = 1;
+			Consume != nullptr && ExprIndex <= Context->GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Expr =
+				Context->GetExpr(asASTExprId(ExprIndex));
+			if (Expr != nullptr && Expr->kind == asAST_EXPR_CALL
+				&& Expr->resolvedDecl == Consume->id)
+			{
+				ConsumeCall = Expr;
+				break;
+			}
+		}
+
+		const asCExpr* WrappedPlan = ConsumeCall != nullptr
+			&& ConsumeCall->callArguments.GetLength() == 1
+			? Context->GetExpr(ConsumeCall->callArguments[0].expression)
+			: nullptr;
+		const asCExpr* CopyPlan = WrappedPlan;
+		while (CopyPlan != nullptr
+			&& (CopyPlan->kind == asAST_EXPR_CLEANUP
+				|| CopyPlan->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& CopyPlan->children.GetLength() == 1)
+		{
+			CopyPlan = Context->GetExpr(CopyPlan->children[0]);
+		}
+		const asCExpr* CopySource = CopyPlan != nullptr
+			&& CopyPlan->children.GetLength() == 1
+			? Context->GetExpr(CopyPlan->children[0]) : nullptr;
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString Evidence = FString::Printf(
+			TEXT("the earlier by-value call must own the later generated value type's exact copy plan. AST:\n%s"),
+			*Dump);
+		ASSERT_THAT(IsTrue(Wrapper != nullptr
+			&& (Wrapper->traits & asAST_TRAIT_TRIVIAL_STORAGE_COPY) == 0
+			&& Consume != nullptr && ConsumeParameter != nullptr
+			&& Entry != nullptr && Local != nullptr
+			&& CopyConstructor != nullptr && CopyParameter != nullptr,
+			*Evidence));
+		ASSERT_THAT(IsTrue(ConsumeCall != nullptr
+			&& ConsumeCall->children.GetLength() == 1
+			&& ConsumeCall->callArguments.GetLength() == 1
+			&& ConsumeCall->children[0]
+				== ConsumeCall->callArguments[0].expression
+			&& ConsumeCall->callArguments[0].formal == ConsumeParameter->id
+			&& ConsumeCall->callArguments[0].formalType == ConsumeParameter->type,
+			*Evidence));
+		ASSERT_THAT(IsTrue(CopyPlan != nullptr
+			&& CopyPlan->kind == asAST_EXPR_CONSTRUCT
+			&& CopyPlan->resolvedDecl == CopyConstructor->id
+			&& CopyPlan->type == ConsumeParameter->type
+			&& CopySource != nullptr
+			&& CopySource->kind == asAST_EXPR_DECL_REF
+			&& CopySource->resolvedDecl == Local->id,
+			*Evidence));
+		ASSERT_THAT(IsTrue(Context->IsPublishable(), *Evidence));
+	}
+
+	TEST_METHOD(GeneratedAccessorCopyReconcilesAfterLaterValueType)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		// An authored class can expose a field whose generated value-wrapper
+		// declaration is appended later. The generated getter is synthesized while
+		// that field still lacks a Runtime shell, so final Sema layout must attach
+		// the exact field-to-copy-constructor plan before publication.
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("generated accessor reconciliation fixture selects CANONICAL")));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "SemaGeneratedAccessorCopyReconciliation");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "GeneratedAccessorConsumer.as", R"AS(
+				struct FGeneratedAccessorOwner
+				{
+					FGeneratedAccessorValue Value;
+				}
+			)AS")));
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "GeneratedAccessorValue.as", R"AS(
+				struct FGeneratedAccessorValue
+				{
+					int Payload;
+
+					FGeneratedAccessorValue() __generated
+					{
+					}
+
+					FGeneratedAccessorValue(
+						const FGeneratedAccessorValue& Other)
+					{
+						Payload = Other.Payload;
+					}
+
+					FGeneratedAccessorValue& opAssign(
+						const FGeneratedAccessorValue& Other)
+					{
+						Payload = Other.Payload;
+						return this;
+					}
+				}
+			)AS")));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("generated accessor fixture must reach the pre-CodeGen seal boundary")));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST(),
+			TEXT("generated accessor fixture must seal before any backend executes")));
+
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		const asCDecl* Owner = nullptr;
+		const asCDecl* ValueClass = nullptr;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_CLASS
+				&& Decl->name.Equals("FGeneratedAccessorOwner"))
+			{
+				Owner = Decl;
+			}
+			else if (Decl != nullptr && Decl->kind == asAST_DECL_CLASS
+				&& Decl->name.Equals("FGeneratedAccessorValue"))
+			{
+				ValueClass = Decl;
+			}
+		}
+
+		const asCDecl* Field = nullptr;
+		const asCDecl* Getter = nullptr;
+		const asCDecl* Setter = nullptr;
+		const asCDecl* SetterParameter = nullptr;
+		const asCDecl* CopyConstructor = nullptr;
+		const asCDecl* CopyParameter = nullptr;
+		asUINT CopyConstructorCount = 0;
+		const asCDecl* AssignOperator = nullptr;
+		const asCDecl* AssignParameter = nullptr;
+		for (asUINT DeclIndex = 1;
+			Owner != nullptr && ValueClass != nullptr
+				&& DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl == nullptr)
+			{
+				continue;
+			}
+			if (Decl->kind == asAST_DECL_VAR && Decl->parent == Owner->id
+				&& Decl->name.Equals("Value"))
+			{
+				Field = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_METHOD
+				&& Decl->parent == Owner->id
+				&& Decl->name.Equals("GetValue"))
+			{
+				Getter = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_METHOD
+				&& Decl->parent == Owner->id
+				&& Decl->name.Equals("SetValue"))
+			{
+				Setter = Decl;
+				SetterParameter = Context->GetFormalDecl(Decl->id, 0);
+			}
+			else if (Decl->kind == asAST_DECL_CONSTRUCTOR
+				&& Decl->parent == ValueClass->id
+				&& Context->GetFormalDeclCount(Decl->id) == 1)
+			{
+				const asCDecl* const Formal = Context->GetFormalDecl(Decl->id, 0);
+				if (Formal != nullptr && Formal->type.type == ValueClass->type.type
+					&& Formal->type.IsConst() && Formal->type.IsReference())
+				{
+					++CopyConstructorCount;
+					if (Decl->range.IsValid()
+						&& (Formal->type.quals
+							& asAST_QUAL_PARAM_DIR_MASK) == 0)
+					{
+						CopyConstructor = Decl;
+						CopyParameter = Formal;
+					}
+				}
+			}
+			else if (Decl->kind == asAST_DECL_METHOD
+				&& Decl->parent == ValueClass->id
+				&& Decl->name.Equals("opAssign")
+				&& Context->GetFormalDeclCount(Decl->id) == 1)
+			{
+				const asCDecl* const Formal = Context->GetFormalDecl(Decl->id, 0);
+				if (Formal != nullptr && Formal->type.type == ValueClass->type.type
+					&& Formal->type.IsConst() && Formal->type.IsReference())
+				{
+					AssignOperator = Decl;
+					AssignParameter = Formal;
+				}
+			}
+		}
+
+		const asCExpr* WrappedPlan = Getter != nullptr
+			&& Getter->inits.GetLength() == 1
+			? Context->GetExpr(Getter->inits[0]) : nullptr;
+		const asCExpr* CopyPlan = WrappedPlan;
+		while (CopyPlan != nullptr
+			&& (CopyPlan->kind == asAST_EXPR_CLEANUP
+				|| CopyPlan->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& CopyPlan->children.GetLength() == 1)
+		{
+			CopyPlan = Context->GetExpr(CopyPlan->children[0]);
+		}
+		const asCExpr* CopySource = CopyPlan != nullptr
+			&& CopyPlan->children.GetLength() == 1
+			? Context->GetExpr(CopyPlan->children[0]) : nullptr;
+		const asCExpr* const AssignmentPlan = Setter != nullptr
+			&& Setter->inits.GetLength() == 1
+			? Context->GetExpr(Setter->inits[0]) : nullptr;
+		const asCExpr* const AssignmentLhs = AssignmentPlan != nullptr
+			&& AssignmentPlan->children.GetLength() == 2
+			? Context->GetExpr(AssignmentPlan->children[0]) : nullptr;
+		const asCExpr* const AssignmentRhs = AssignmentPlan != nullptr
+			&& AssignmentPlan->children.GetLength() == 2
+			? Context->GetExpr(AssignmentPlan->children[1]) : nullptr;
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString Evidence = FString::Printf(
+			TEXT("the earlier generated getter/setter must own the later value type's exact copy/assignment plans. AST:\n%s"),
+			*Dump);
+		ASSERT_THAT(IsTrue(Owner != nullptr && ValueClass != nullptr
+			&& ValueClass->range.IsValid()
+			&& !ValueClass->origin.Equals("canonical-native-type-view")
+			&& (ValueClass->traits & asAST_TRAIT_TRIVIAL_STORAGE_COPY) == 0
+			&& Field != nullptr && Getter != nullptr
+			&& Getter->accessorKind == asAST_ACCESSOR_GET
+			&& Getter->accessorField == Field->id
+			&& Getter->type == Field->type
+			&& Setter != nullptr
+			&& Setter->accessorKind == asAST_ACCESSOR_SET
+			&& Setter->accessorField == Field->id
+			&& SetterParameter != nullptr
+			&& SetterParameter->type == Field->type
+			&& CopyConstructorCount == 1
+			&& CopyConstructor != nullptr && CopyParameter != nullptr
+			&& AssignOperator != nullptr && AssignParameter != nullptr
+			&& (AssignParameter->type.quals
+				& asAST_QUAL_PARAM_DIR_MASK) == 0,
+			*Evidence));
+		ASSERT_THAT(IsTrue(Getter != nullptr
+			&& Getter->inits.GetLength() == 1
+			&& CopyPlan != nullptr
+			&& CopyPlan->kind == asAST_EXPR_CONSTRUCT
+			&& CopyPlan->type == Field->type
+			&& CopyPlan->resolvedDecl == CopyConstructor->id
+			&& CopySource != nullptr
+			&& CopySource->kind == asAST_EXPR_DECL_REF
+			&& CopySource->resolvedDecl == Field->id,
+			*Evidence));
+		ASSERT_THAT(IsTrue(Setter != nullptr
+			&& Setter->inits.GetLength() == 1
+			&& AssignmentPlan != nullptr
+			&& AssignmentPlan->kind == asAST_EXPR_ASSIGN
+			&& AssignmentPlan->type == Field->type
+			&& AssignmentPlan->resolvedDecl == AssignOperator->id
+			&& AssignmentPlan->children.GetLength() == 2
+			&& AssignmentLhs != nullptr
+			&& AssignmentLhs->kind == asAST_EXPR_DECL_REF
+			&& AssignmentLhs->resolvedDecl == Field->id
+			&& AssignmentRhs != nullptr
+			&& AssignmentRhs->kind == asAST_EXPR_DECL_REF
+			&& AssignmentRhs->resolvedDecl == SetterParameter->id,
+			*Evidence));
+		ASSERT_THAT(IsTrue(Context->IsPublishable(), *Evidence));
+	}
+
+	TEST_METHOD(ImplicitScriptValueCopyLifecycleSealsBeforeGeneratedAccessors)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		// Production-derived from Script/Examples/Core/Example_Struct.as. A script
+		// value containing FString is not storage-trivial: Canonical Sema must own
+		// its implicit copy lifecycle before generated accessors are reconciled.
+		FAngelscriptEngine& RuntimeEngine = ASTEST_CREATE_ENGINE_FULL();
+		asIScriptEngine* const PublicScriptEngine =
+			RuntimeEngine.GetScriptEngine();
+		ASSERT_THAT(IsNotNull(PublicScriptEngine));
+		if (PublicScriptEngine == nullptr)
+		{
+			return;
+		}
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(PublicScriptEngine);
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("implicit script copy fixture selects CANONICAL")));
+
+		static const char* const ModuleName =
+			"SemaImplicitScriptValueCopyLifecycle";
+		ON_SCOPE_EXIT
+		{
+			RuntimeEngine.DiscardModule(ANSI_TO_TCHAR(ModuleName));
+		};
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, ModuleName);
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "ImplicitScriptValueCopyLifecycle.as", R"AS(
+				struct FImplicitCopyValue
+				{
+					float Number = 4.0;
+					FString Text = "Example String";
+				}
+
+				struct FImplicitCopyOwner
+				{
+					FImplicitCopyValue Value;
+				}
+			)AS")));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("implicit script copy fixture reaches the pre-CodeGen seal boundary")));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST(),
+			TEXT("implicit script copy lifecycle must seal before any backend executes")));
+
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		const asCDecl* ValueClass = nullptr;
+		const asCDecl* OwnerClass = nullptr;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_CLASS
+				&& Decl->name.Equals("FImplicitCopyValue"))
+			{
+				ValueClass = Decl;
+			}
+			else if (Decl != nullptr && Decl->kind == asAST_DECL_CLASS
+				&& Decl->name.Equals("FImplicitCopyOwner"))
+			{
+				OwnerClass = Decl;
+			}
+		}
+
+		const asCDecl* NumberField = nullptr;
+		const asCDecl* TextField = nullptr;
+		const asCDecl* OwnerField = nullptr;
+		const asCDecl* Getter = nullptr;
+		const asCDecl* Setter = nullptr;
+		const asCDecl* DefaultConstructor = nullptr;
+		const asCDecl* CopyConstructor = nullptr;
+		const asCDecl* CopyParameter = nullptr;
+		const asCDecl* AssignOperator = nullptr;
+		const asCDecl* AssignParameter = nullptr;
+		asUINT GeneratedCopyConstructorCount = 0;
+		asUINT GeneratedAssignOperatorCount = 0;
+		for (asUINT DeclIndex = 1;
+			ValueClass != nullptr && OwnerClass != nullptr
+				&& DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl == nullptr)
+			{
+				continue;
+			}
+
+			if (Decl->kind == asAST_DECL_VAR
+				&& Decl->parent == ValueClass->id)
+			{
+				if (Decl->name.Equals("Number"))
+				{
+					NumberField = Decl;
+				}
+				else if (Decl->name.Equals("Text"))
+				{
+					TextField = Decl;
+				}
+			}
+			else if (Decl->kind == asAST_DECL_VAR
+				&& Decl->parent == OwnerClass->id
+				&& Decl->name.Equals("Value"))
+			{
+				OwnerField = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_METHOD
+				&& Decl->parent == OwnerClass->id
+				&& Decl->name.Equals("GetValue"))
+			{
+				Getter = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_METHOD
+				&& Decl->parent == OwnerClass->id
+				&& Decl->name.Equals("SetValue"))
+			{
+				Setter = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_CONSTRUCTOR
+				&& Decl->parent == ValueClass->id
+				&& Decl->origin.Equals(
+					"canonical-generated-implicit-copy-constructor"))
+			{
+				++GeneratedCopyConstructorCount;
+				CopyConstructor = Decl;
+				CopyParameter = Context->GetFormalDecl(Decl->id, 0);
+			}
+			else if (Decl->kind == asAST_DECL_CONSTRUCTOR
+				&& Decl->parent == ValueClass->id
+				&& (Decl->traits & asAST_TRAIT_GENERATED) != 0)
+			{
+				DefaultConstructor = Decl;
+			}
+			else if (Decl->kind == asAST_DECL_METHOD
+				&& Decl->parent == ValueClass->id
+				&& Decl->name.Equals("opAssign")
+				&& Decl->origin.Equals(
+					"canonical-generated-implicit-assignment-operator"))
+			{
+				++GeneratedAssignOperatorCount;
+				AssignOperator = Decl;
+				AssignParameter = Context->GetFormalDecl(Decl->id, 0);
+			}
+		}
+
+		const asCExpr* GetterCopyPlan = Getter != nullptr
+			&& Getter->inits.GetLength() == 1
+			? Context->GetExpr(Getter->inits[0]) : nullptr;
+		while (GetterCopyPlan != nullptr
+			&& (GetterCopyPlan->kind == asAST_EXPR_CLEANUP
+				|| GetterCopyPlan->kind
+					== asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& GetterCopyPlan->children.GetLength() == 1)
+		{
+			GetterCopyPlan = Context->GetExpr(
+				GetterCopyPlan->children[0]);
+		}
+		const asCExpr* const SetterAssignPlan = Setter != nullptr
+			&& Setter->inits.GetLength() == 1
+			? Context->GetExpr(Setter->inits[0]) : nullptr;
+
+		const asCExpr* TextInitPlan = nullptr;
+		for (asUINT InitIndex = 0;
+			DefaultConstructor != nullptr
+				&& InitIndex < DefaultConstructor->inits.GetLength();
+			++InitIndex)
+		{
+			const asCExpr* const Candidate = Context->GetExpr(
+				DefaultConstructor->inits[InitIndex]);
+			const asCExpr* const Target = Candidate != nullptr
+				&& Candidate->kind == asAST_EXPR_ASSIGN
+				&& Candidate->children.GetLength() == 2
+				? Context->GetExpr(Candidate->children[0]) : nullptr;
+			if (Target == nullptr || TextField == nullptr
+				|| Target->kind != asAST_EXPR_DECL_REF
+				|| Target->resolvedDecl != TextField->id)
+			{
+				continue;
+			}
+			TextInitPlan = Context->GetExpr(Candidate->children[1]);
+			while (TextInitPlan != nullptr
+				&& (TextInitPlan->kind == asAST_EXPR_CLEANUP
+					|| TextInitPlan->kind
+						== asAST_EXPR_MATERIALIZE_TEMPORARY)
+				&& TextInitPlan->children.GetLength() == 1)
+			{
+				TextInitPlan = Context->GetExpr(
+					TextInitPlan->children[0]);
+			}
+			break;
+		}
+		const asCDecl* const TextInitConstructor = TextInitPlan != nullptr
+			? Context->GetDecl(TextInitPlan->resolvedDecl) : nullptr;
+		const asCDecl* const TextInitParameter = TextInitConstructor != nullptr
+			? Context->GetFormalDecl(TextInitConstructor->id, 0) : nullptr;
+		const asCExpr* const TextInitSource = TextInitPlan != nullptr
+			&& TextInitPlan->children.GetLength() == 1
+			? Context->GetExpr(TextInitPlan->children[0]) : nullptr;
+
+		const asCStmt* const CopyBody = CopyConstructor != nullptr
+			? Context->GetStmt(CopyConstructor->body) : nullptr;
+		const asCStmt* const CopyAssignStmt = CopyBody != nullptr
+			&& CopyBody->kind == asAST_STMT_BLOCK
+			&& CopyBody->children.GetLength() == 1
+			? Context->GetStmt(CopyBody->children[0]) : nullptr;
+		const asCExpr* const CopyAssignExpr = CopyAssignStmt != nullptr
+			&& CopyAssignStmt->kind == asAST_STMT_EXPR
+			? Context->GetExpr(CopyAssignStmt->expr) : nullptr;
+
+		const asCStmt* const AssignBody = AssignOperator != nullptr
+			? Context->GetStmt(AssignOperator->body) : nullptr;
+		bool HasNumberAssignment = false;
+		bool HasExactTextAssignment = false;
+		bool HasReturnThis = false;
+		for (asUINT StatementIndex = 0;
+			AssignBody != nullptr && AssignBody->kind == asAST_STMT_BLOCK
+				&& StatementIndex < AssignBody->children.GetLength();
+			++StatementIndex)
+		{
+			const asCStmt* const Statement = Context->GetStmt(
+				AssignBody->children[StatementIndex]);
+			const asCExpr* const Expression = Statement != nullptr
+				? Context->GetExpr(Statement->expr) : nullptr;
+			if (Statement != nullptr && Statement->kind == asAST_STMT_RETURN)
+			{
+				HasReturnThis = Expression != nullptr
+					&& Expression->kind == asAST_EXPR_THIS;
+				continue;
+			}
+			if (Statement == nullptr || Statement->kind != asAST_STMT_EXPR
+				|| Expression == nullptr
+				|| Expression->kind != asAST_EXPR_ASSIGN
+				|| Expression->children.GetLength() != 2)
+			{
+				continue;
+			}
+
+			const asCExpr* const Target = Context->GetExpr(
+				Expression->children[0]);
+			const asCExpr* const Source = Context->GetExpr(
+				Expression->children[1]);
+			if (Target == nullptr || Source == nullptr
+				|| Target->kind != asAST_EXPR_MEMBER_REF
+				|| Source->kind != asAST_EXPR_MEMBER_REF
+				|| Target->resolvedDecl != Source->resolvedDecl)
+			{
+				continue;
+			}
+
+			if (NumberField != nullptr
+				&& Target->resolvedDecl == NumberField->id)
+			{
+				HasNumberAssignment = true;
+			}
+			else if (TextField != nullptr
+				&& Target->resolvedDecl == TextField->id)
+			{
+				const asCDecl* const ExactAssignment =
+					Context->GetDecl(Expression->resolvedDecl);
+				HasExactTextAssignment = ExactAssignment != nullptr
+					&& ExactAssignment->kind == asAST_DECL_METHOD
+					&& ExactAssignment->name.Equals("opAssign")
+					&& ExactAssignment->parent != ValueClass->id;
+			}
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString Evidence = FString::Printf(
+			TEXT("implicit non-trivial script copy lifecycle must be fully authored before generated accessors. AST:\n%s"),
+			*Dump);
+		ASSERT_THAT(IsTrue(ValueClass != nullptr
+			&& ValueClass->range.IsValid()
+			&& !ValueClass->origin.Equals("canonical-native-type-view")
+			&& (ValueClass->traits & asAST_TRAIT_TRIVIAL_STORAGE_COPY) == 0
+			&& NumberField != nullptr && TextField != nullptr
+			&& OwnerClass != nullptr && OwnerField != nullptr,
+			*Evidence));
+		ASSERT_THAT(IsTrue(GeneratedCopyConstructorCount == 1
+			&& CopyConstructor != nullptr
+			&& (CopyConstructor->traits & asAST_TRAIT_GENERATED) != 0
+			&& CopyParameter != nullptr
+			&& CopyParameter->type.type == ValueClass->type.type
+			&& CopyParameter->type.IsConst()
+			&& CopyParameter->type.IsReference()
+			&& (CopyParameter->type.quals & asAST_QUAL_PARAM_DIR_MASK) == 0
+			&& GeneratedAssignOperatorCount == 1
+			&& AssignOperator != nullptr
+			&& (AssignOperator->traits & asAST_TRAIT_GENERATED) != 0
+			&& AssignOperator->type.type == ValueClass->type.type
+			&& AssignOperator->type.IsReference()
+			&& AssignParameter != nullptr
+			&& AssignParameter->type.type == ValueClass->type.type
+			&& AssignParameter->type.IsConst()
+			&& AssignParameter->type.IsReference()
+			&& (AssignParameter->type.quals & asAST_QUAL_PARAM_DIR_MASK) == 0,
+			*Evidence));
+		ASSERT_THAT(IsTrue(CopyAssignExpr != nullptr
+			&& CopyAssignExpr->kind == asAST_EXPR_ASSIGN
+			&& CopyAssignExpr->resolvedDecl == AssignOperator->id
+			&& HasNumberAssignment && HasExactTextAssignment
+			&& HasReturnThis,
+			*Evidence));
+		ASSERT_THAT(IsTrue(DefaultConstructor != nullptr
+			&& TextInitPlan != nullptr
+			&& TextInitPlan->kind == asAST_EXPR_CONSTRUCT
+			&& TextInitConstructor != nullptr
+			&& TextInitConstructor->kind == asAST_DECL_CONSTRUCTOR
+			&& TextInitParameter != nullptr
+			&& TextInitParameter->type.type == TextField->type.type
+			&& TextInitParameter->type.IsConst()
+			&& TextInitParameter->type.IsReference()
+			&& TextInitSource != nullptr
+			&& TextInitSource->kind == asAST_EXPR_STRING_LITERAL,
+			*Evidence));
+		ASSERT_THAT(IsTrue(Getter != nullptr
+			&& Getter->accessorField == OwnerField->id
+			&& GetterCopyPlan != nullptr
+			&& GetterCopyPlan->kind == asAST_EXPR_CONSTRUCT
+			&& GetterCopyPlan->resolvedDecl == CopyConstructor->id
+			&& Setter != nullptr
+			&& Setter->accessorField == OwnerField->id
+			&& SetterAssignPlan != nullptr
+			&& SetterAssignPlan->kind == asAST_EXPR_ASSIGN
+			&& SetterAssignPlan->resolvedDecl == AssignOperator->id,
+			*Evidence));
+		ASSERT_THAT(IsTrue(Context->IsPublishable(), *Evidence));
+	}
+
+	TEST_METHOD(PreprocessedProductionExampleStructUsesImplicitScriptCopyLifecycle)
+	{
+		FAngelscriptEngine& RuntimeEngine = ASTEST_CREATE_ENGINE_FULL();
+		asIScriptEngine* const ScriptEngine = RuntimeEngine.GetScriptEngine();
+		ASSERT_THAT(IsNotNull(ScriptEngine));
+		if (ScriptEngine == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(
+			static_cast<asCScriptEngine*>(ScriptEngine)->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("production Example_Struct fixture selects CANONICAL")));
+
+		static const char* const ModuleName =
+			"SemaPreprocessedProductionExampleStruct";
+		ON_SCOPE_EXIT
+		{
+			RuntimeEngine.DiscardModule(ANSI_TO_TCHAR(ModuleName));
+		};
+		const FString ProductionPath = FPaths::Combine(
+			FPaths::ProjectDir(),
+			TEXT("Script/Examples/Core/Example_Struct.as"));
+		FString ScriptSource;
+		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(
+			ScriptSource, *ProductionPath),
+			TEXT("load the production struct example")));
+		if (ScriptSource.IsEmpty())
+		{
+			return;
+		}
+		asIScriptModule* const Module = BuildModule(
+			*TestRunner,
+			RuntimeEngine,
+			ModuleName,
+			ScriptSource);
+		ASSERT_THAT(IsNotNull(Module,
+			TEXT("the unchanged production struct example must compile through the sealed implicit-copy lifecycle")));
+	}
+
+	TEST_METHOD(PreprocessedProductionDelegateExecuteUsesGeneratedScriptMethodIdentity)
+	{
+		// This is the production-shaped counterpart to the synthetic control
+		// above. The UE preprocessor appends a complete delegate helper whose
+		// Runtime object type and script methods exist during Canonical parsing.
+		// Execute must still bind to the parsed generated MethodDecl and must not
+		// be republished as a native asFUNC_SYSTEM method.
+		FAngelscriptEngine& RuntimeEngine = ASTEST_CREATE_ENGINE_FULL();
+		asIScriptEngine* const ScriptEngine = RuntimeEngine.GetScriptEngine();
+		ASSERT_THAT(IsNotNull(ScriptEngine));
+		if (ScriptEngine == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(
+			static_cast<asCScriptEngine*>(ScriptEngine)->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("preprocessed delegate fixture selects CANONICAL")));
+
+		static const char* const ModuleName =
+			"SemaPreprocessedProductionDelegateExecute";
+		ON_SCOPE_EXIT
+		{
+			RuntimeEngine.DiscardModule(ANSI_TO_TCHAR(ModuleName));
+		};
+		const FString ProductionPath = FPaths::Combine(
+			FPaths::ProjectDir(),
+			TEXT("Script/Examples/Core/Example_Delegates.as"));
+		FString ScriptSource;
+		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(
+			ScriptSource, *ProductionPath),
+			TEXT("load the production delegate example")));
+		if (ScriptSource.IsEmpty())
+		{
+			return;
+		}
+		asIScriptModule* const Module = BuildModule(
+			*TestRunner,
+			RuntimeEngine,
+			ModuleName,
+			ScriptSource);
+		ASSERT_THAT(IsNotNull(Module,
+			TEXT("real preprocessed delegate helper must compile through CANONICAL")));
+	}
+
+	TEST_METHOD(PreprocessedObjectDelegateExecuteSeparatesParameterConversionFromProductionIdentity)
+	{
+		// Keep the production delegate parameter and call shapes while removing
+		// the surrounding event/class declarations and the globally familiar
+		// FExampleDelegate name.  This discriminates nullable UObject argument
+		// conversion from generated-type identity/reconciliation failures.
+		FAngelscriptEngine& RuntimeEngine = ASTEST_CREATE_ENGINE_FULL();
+		asIScriptEngine* const ScriptEngine = RuntimeEngine.GetScriptEngine();
+		ASSERT_THAT(IsNotNull(ScriptEngine));
+		if (ScriptEngine == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(
+			static_cast<asCScriptEngine*>(ScriptEngine)->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("object-delegate discriminator selects CANONICAL")));
+
+		static const char* const ModuleName =
+			"SemaPreprocessedObjectDelegateExecute";
+		ON_SCOPE_EXIT
+		{
+			RuntimeEngine.DiscardModule(ANSI_TO_TCHAR(ModuleName));
+		};
+		const FString ScriptSource = TEXT(R"AS(
+			delegate void FCanonicalObjectDelegate_7F2A(UObject Object, float Value);
+
+			void ConsumeCanonicalObjectDelegate_7F2A(
+				FCanonicalObjectDelegate_7F2A InDelegate)
+			{
+				InDelegate.Execute(nullptr, 5.4);
+				InDelegate.ExecuteIfBound(nullptr, 1.0);
+			}
+			)AS");
+		asIScriptModule* const Module = BuildModule(
+			*TestRunner,
+			RuntimeEngine,
+			ModuleName,
+			ScriptSource);
+		ASSERT_THAT(IsNotNull(Module,
+			TEXT("object-delegate discriminator must compile through CANONICAL")));
 	}
 
 	TEST_METHOD(GlobalExternalImplicitThisFunctionIsVisibleToEarlierCall)
@@ -2832,6 +8461,30 @@ public:
 				*Dump)));
 		ASSERT_THAT(AreEqual(1, static_cast<int32>(IndirectCall->children.GetLength()),
 			*FString::Printf(TEXT("Cb(X) must retain one formal argument. AST:\n%s"), *Dump)));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
+			IndirectCall->callArguments.GetLength(),
+			*FString::Printf(TEXT(
+				"Cb(X) must seal one authenticated indirect-formal record. AST:\n%s"),
+				*Dump)));
+		if (IndirectCall->callArguments.GetLength() == 1)
+		{
+			const asSASTCallArgument& Argument = IndirectCall->callArguments[0];
+			const asCType* const FormalType = Context->GetType(
+				Argument.formalType.type);
+			ASSERT_THAT(IsTrue(
+				Argument.expression == IndirectCall->children[0]
+					&& !Argument.formal.IsValid()
+					&& Argument.formalIndex == 0
+					&& FormalType != nullptr
+					&& FormalType->kind == asAST_TYPE_PRIMITIVE
+					&& FormalType->stableKey.Equals("int")
+					&& Argument.origin == asAST_CALL_ARGUMENT_POSITIONAL
+					&& Argument.sourceOrdinal == 0
+					&& Argument.authoredName.GetLength() == 0,
+				*FString::Printf(TEXT(
+					"host funcdef record must authenticate ordinal zero and its canonical int formal type without inventing a ParamDecl. AST:\n%s"),
+					*Dump)));
+		}
 		ASSERT_THAT(AreEqual(2, static_cast<int32>(InvokeCall->children.GetLength()),
 			*FString::Printf(TEXT("Invoke(Double, 21) must retain two reverse-formal arguments. AST:\n%s"), *Dump)));
 		if (InvokeCall->children.GetLength() == 2)
@@ -3214,15 +8867,331 @@ public:
 		ASSERT_THAT(AreEqual(0, Module->AddScriptSection("SemaDefault.as", ScriptSource.c_str())));
 		ASSERT_THAT(AreEqual(0, Module->Build(), TEXT("default-arg module must compile")));
 
+		// Production mutation caught: ArrangeCallArguments may synthesize the
+		// value 7 yet lose the exact B formal or relabel it as authored. The
+		// backend must not recover either fact from child position or literal text.
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("default-argument fixture must retain its sealed call plan")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		const asCExpr* const Call = Context != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				*const_cast<asCASTContext*>(Context), "F")
+			: nullptr;
+		ASSERT_THAT(IsNotNull(Call,
+			TEXT("default-argument fixture must contain one exact call to F")));
+		if (Call != nullptr)
+		{
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+				Call->callArguments.GetLength(),
+				TEXT("F(3) must seal one record for each formal argument")));
+			if (Call->callArguments.GetLength() == 2)
+			{
+				const asSASTCallArgument& DefaultB = Call->callArguments[0];
+				const asSASTCallArgument& PositionalA = Call->callArguments[1];
+				const asCDecl* const B = Context->GetDecl(DefaultB.formal);
+				const asCDecl* const A = Context->GetDecl(PositionalA.formal);
+				ASSERT_THAT(IsTrue(
+					DefaultB.expression == Call->children[0]
+						&& DefaultB.formalIndex == 1
+						&& B != nullptr && B->name.Equals("b")
+						&& DefaultB.origin == asAST_CALL_ARGUMENT_DEFAULT
+						&& DefaultB.sourceOrdinal == asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+						&& DefaultB.authoredName.GetLength() == 0,
+					TEXT("reverse-formal child zero must be exact default formal b")));
+				ASSERT_THAT(IsTrue(
+					PositionalA.expression == Call->children[1]
+						&& PositionalA.formalIndex == 0
+						&& A != nullptr && A->name.Equals("a")
+						&& PositionalA.origin == asAST_CALL_ARGUMENT_POSITIONAL
+						&& PositionalA.sourceOrdinal == 0
+						&& PositionalA.authoredName.GetLength() == 0,
+					TEXT("reverse-formal child one must retain authored positional formal a")));
+			}
+		}
+
 		asCString Dump;
-		asCASTDump(*static_cast<asCModule*>(Module)->GetCanonicalASTContext(), Dump);
+		asCASTDump(*Context, Dump);
 		const FString Text = AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
 		const FString DumpMsg = FString::Printf(TEXT("F(3) must fill default b=7 on the call plan. dump:\n%s"), *Text);
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("default=7")), *DumpMsg));
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("callee=F(int,int)")), *DumpMsg));
-		ASSERT_THAT(IsTrue(Text.Contains(TEXT("literal=default:7")), *DumpMsg));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT("callArgs=2")), *DumpMsg));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT("formalIndex=1"))
+			&& Text.Contains(TEXT("origin=default")), *DumpMsg));
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("nargs=2")), *DumpMsg));
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("reverse-formal")), *DumpMsg));
+	}
+
+	TEST_METHOD(ConstructNamedDefaultArgumentsSealExactFormalProvenance)
+	{
+		// Production mutation caught: preserving only the arranged CONSTRUCT
+		// children lets execution pass while losing which child was authored,
+		// named, or synthesized from a default. Verifier and CodeGen must consume
+		// the exact sealed source-to-formal relation instead of child position.
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaConstructArgumentProvenance", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module,
+			TEXT("construct provenance module must be available")));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct TConstructCallPlan
+			{
+				TConstructCallPlan(int A = 40 + 2, int B = 1)
+				{
+				}
+			}
+
+			int Entry()
+			{
+				TConstructCallPlan Value(B: 7);
+				return 1;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaConstructArgumentProvenance.as",
+			ScriptSource.c_str(),
+			static_cast<asUINT>(ScriptSource.size()))));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("named/default construction must compile before AST inspection")));
+
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("named/default construction must retain its sealed AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCExpr* Construct = nullptr;
+		asUINT MatchingConstructs = 0;
+		for (asUINT ExprIndex = 1;
+			ExprIndex <= Context->GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Candidate =
+				Context->GetExpr(asASTExprId(ExprIndex));
+			const asCDecl* const Constructor = Candidate != nullptr
+				? Context->GetDecl(Candidate->resolvedDecl) : nullptr;
+			const asCDecl* const Owner = Constructor != nullptr
+				? Context->GetDecl(Constructor->parent) : nullptr;
+			if (Candidate == nullptr
+				|| Candidate->kind != asAST_EXPR_CONSTRUCT
+				|| Constructor == nullptr
+				|| Constructor->kind != asAST_DECL_CONSTRUCTOR
+				|| Owner == nullptr
+				|| !Owner->name.Equals("TConstructCallPlan")
+				|| Context->GetFormalDeclCount(Constructor->id) != 2)
+			{
+				continue;
+			}
+			Construct = Candidate;
+			++MatchingConstructs;
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1), MatchingConstructs,
+			TEXT("fixture must contain one exact two-formal TConstructCallPlan construction")));
+		ASSERT_THAT(IsNotNull(Construct,
+			TEXT("named/default construction must resolve its exact constructor")));
+		if (Construct == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+			Construct->children.GetLength(),
+			TEXT("construction must retain one stored child per formal")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+			Construct->callArguments.GetLength(),
+			TEXT("construction must seal one provenance record per formal child")));
+		if (Construct->children.GetLength() != 2
+			|| Construct->callArguments.GetLength() != 2)
+		{
+			return;
+		}
+
+		const asSASTCallArgument& DefaultA = Construct->callArguments[0];
+		const asSASTCallArgument& NamedB = Construct->callArguments[1];
+		const asCDecl* const A = Context->GetDecl(DefaultA.formal);
+		const asCDecl* const B = Context->GetDecl(NamedB.formal);
+		const asCExpr* const DefaultExpression =
+			Context->GetExpr(DefaultA.expression);
+		const asCExpr* const NamedExpression =
+			Context->GetExpr(NamedB.expression);
+		const asCType* const DefaultType = DefaultExpression != nullptr
+			? Context->GetType(DefaultExpression->type.type) : nullptr;
+		const asCType* const NamedType = NamedExpression != nullptr
+			? Context->GetType(NamedExpression->type.type) : nullptr;
+
+		ASSERT_THAT(IsTrue(
+			DefaultA.expression == Construct->children[0]
+				&& DefaultA.formalIndex == 0
+				&& A != nullptr && A->name.Equals("A")
+				&& DefaultA.origin == asAST_CALL_ARGUMENT_DEFAULT
+				&& DefaultA.sourceOrdinal == asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+				&& DefaultA.authoredName.GetLength() == 0
+				&& DefaultType != nullptr && DefaultType->stableKey.Equals("int"),
+			TEXT("formal A must retain its typed default-expression provenance")));
+		ASSERT_THAT(IsTrue(
+			NamedB.expression == Construct->children[1]
+				&& NamedB.formalIndex == 1
+				&& B != nullptr && B->name.Equals("B")
+				&& NamedB.origin == asAST_CALL_ARGUMENT_NAMED
+				&& NamedB.sourceOrdinal == 0
+				&& NamedB.authoredName.Equals("B")
+				&& NamedType != nullptr && NamedType->stableKey.Equals("int"),
+			TEXT("formal B must retain source ordinal zero and authored name B")));
+	}
+
+	TEST_METHOD(ReorderedParamChildrenDoNotChangeNamedDefaultCallPlan)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asASTDeclId Tu = Sema.ActOnTranslationUnit("SemaReorderedFormalPlan");
+		const asCSourceRange Range;
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId Function = Sema.ActOnFunctionDecl(Tu, "F", IntType, Range);
+		const asASTDeclId A = Sema.ActOnParamDecl(Function, "A", IntType, Range);
+		const asASTDeclId B = Sema.ActOnParamDecl(Function, "B", IntType, Range);
+		const asASTExprId Seven = Sema.ActOnIntegerLiteral(7, Range);
+		ASSERT_THAT(IsTrue(Function.IsValid() && A.IsValid() && B.IsValid() && Seven.IsValid(),
+			TEXT("reordered formal call-plan fixture must create one callable and two formals")));
+
+		const std::string Source = "int F(int A, int B = 7)";
+		asCScriptCode Code;
+		Code.SetCode("SemaReorderedFormalPlan.as", Source.c_str(), true);
+		asSParameterDefaultAction DefaultAction;
+		DefaultAction.parameter = B;
+		DefaultAction.expression = Seven;
+		DefaultAction.authoredText = "7";
+		DefaultAction.beginOffset = static_cast<asUINT>(Source.find('7'));
+		DefaultAction.endOffset = DefaultAction.beginOffset + 1;
+		ASSERT_THAT(IsTrue(Sema.ActOnParameterDefaultAction(DefaultAction, &Code),
+			TEXT("formal B must own its default before structural child reordering")));
+
+		const asCDecl* const FormalZero = Context.GetFormalDecl(Function, 0);
+		const asCDecl* const FormalOne = Context.GetFormalDecl(Function, 1);
+		asCDecl* const MutableFunction = const_cast<asCDecl*>(Context.GetDecl(Function));
+		ASSERT_THAT(IsTrue(FormalZero != nullptr && FormalZero->id == A
+			&& FormalZero->formalIndex == 0
+			&& FormalOne != nullptr && FormalOne->id == B
+			&& FormalOne->formalIndex == 1
+			&& MutableFunction != nullptr && MutableFunction->children.GetLength() == 2,
+			TEXT("the authored relation must be A=0, B=1 before reordering")));
+		if (MutableFunction == nullptr || MutableFunction->children.GetLength() != 2)
+		{
+			return;
+		}
+		MutableFunction->children[0] = B;
+		MutableFunction->children[1] = A;
+
+		asCArray<asASTExprId> Arguments;
+		const asASTExprId Three = Sema.ActOnIntegerLiteral(3, Range);
+		Arguments.PushLast(Three);
+		asCArray<asCString> ArgumentNames;
+		ArgumentNames.PushLast(asCString("A"));
+		const asASTExprId CallId = Sema.ActOnCallExpr(
+			Tu, "F", Arguments, Range, asASTExprId(), &ArgumentNames);
+		const asCExpr* const Call = Context.GetExpr(CallId);
+		ASSERT_THAT(IsTrue(Call != nullptr && Call->resolvedDecl == Function
+			&& Call->callArguments.GetLength() == 2,
+			TEXT("production Sema must build one named and one default call record")));
+		if (Call == nullptr || Call->callArguments.GetLength() != 2)
+		{
+			return;
+		}
+
+		const asSASTCallArgument& DefaultB = Call->callArguments[0];
+		const asSASTCallArgument& NamedA = Call->callArguments[1];
+		ASSERT_THAT(IsTrue(DefaultB.formal == B
+			&& DefaultB.formalIndex == 1
+			&& DefaultB.origin == asAST_CALL_ARGUMENT_DEFAULT
+			&& DefaultB.sourceOrdinal == asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL,
+			TEXT("reverse-formal record zero must remain default formal B at slot 1")));
+		ASSERT_THAT(IsTrue(NamedA.formal == A
+			&& NamedA.formalIndex == 0
+			&& NamedA.origin == asAST_CALL_ARGUMENT_NAMED
+			&& NamedA.sourceOrdinal == 0
+			&& NamedA.authoredName.Equals("A"),
+			TEXT("reverse-formal record one must remain named formal A at slot 0")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("structural ParamDecl order must not invalidate the exact formal call plan")));
+	}
+
+	TEST_METHOD(ReorderedParamChildrenDoNotChangeGeneratedCallRecords)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asASTDeclId Tu = Sema.ActOnTranslationUnit("SemaReorderedGeneratedCall");
+		const asCSourceRange Range;
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId Function = Sema.ActOnFunctionDecl(Tu, "F", IntType, Range);
+		const asASTDeclId First = Sema.ActOnParamDecl(Function, "First", IntType, Range);
+		const asASTDeclId Second = Sema.ActOnParamDecl(Function, "Second", IntType, Range);
+		asCDecl* const MutableFunction = const_cast<asCDecl*>(Context.GetDecl(Function));
+		ASSERT_THAT(IsTrue(MutableFunction != nullptr
+			&& MutableFunction->children.GetLength() == 2
+			&& Context.GetFormalDecl(Function, 0)->id == First
+			&& Context.GetFormalDecl(Function, 1)->id == Second,
+			TEXT("generated-call fixture must publish First=0 and Second=1")));
+		if (MutableFunction == nullptr || MutableFunction->children.GetLength() != 2)
+		{
+			return;
+		}
+		MutableFunction->children[0] = Second;
+		MutableFunction->children[1] = First;
+
+		const asASTExprId Four = Sema.ActOnIntegerLiteral(4, Range);
+		const asASTExprId Two = Sema.ActOnIntegerLiteral(2, Range);
+		asCArray<asASTExprId> Arguments;
+		Arguments.PushLast(Four);
+		Arguments.PushLast(Two);
+		const asASTExprId CallId = Sema.ActOnCall(Function, Arguments, IntType, Range);
+		const asCExpr* const Call = Context.GetExpr(CallId);
+		ASSERT_THAT(IsTrue(Call != nullptr && Call->callArguments.GetLength() == 2,
+			TEXT("generated ActOnCall must publish one exact record per formal")));
+		if (Call == nullptr || Call->callArguments.GetLength() != 2)
+		{
+			return;
+		}
+
+		const asSASTCallArgument& SecondRecord = Call->callArguments[0];
+		const asSASTCallArgument& FirstRecord = Call->callArguments[1];
+		ASSERT_THAT(IsTrue(SecondRecord.expression == Two
+			&& SecondRecord.formal == Second
+			&& SecondRecord.formalIndex == 1
+			&& SecondRecord.origin == asAST_CALL_ARGUMENT_GENERATED,
+			TEXT("reverse generated record zero must remain formal Second at slot 1")));
+		ASSERT_THAT(IsTrue(FirstRecord.expression == Four
+			&& FirstRecord.formal == First
+			&& FirstRecord.formalIndex == 0
+			&& FirstRecord.origin == asAST_CALL_ARGUMENT_GENERATED,
+			TEXT("reverse generated record one must remain formal First at slot 0")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("generated call records must authenticate after structural child reordering")));
 	}
 
 	TEST_METHOD(ContinueTargetsEnclosingWhileOnCompileSealPath)
@@ -3289,16 +9258,64 @@ public:
 		ASSERT_THAT(AreEqual(0, Module->AddScriptSection("SemaNamed.as", ScriptSource.c_str())));
 		ASSERT_THAT(AreEqual(0, Module->Build(), TEXT("named-argument module must compile")));
 
+		// Production mutation caught: formal-slot reordering can stay ABI-shaped
+		// while authored B,A source order is lost. Exact ParamDecl edges and source
+		// ordinals must survive independently of reverse-formal storage.
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("named-argument fixture must retain its sealed call plan")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		const asCExpr* const Call = Context != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				*const_cast<asCASTContext*>(Context), "F")
+			: nullptr;
+		ASSERT_THAT(IsNotNull(Call,
+			TEXT("named-argument fixture must contain one exact call to F")));
+		if (Call != nullptr)
+		{
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+				Call->callArguments.GetLength(),
+				TEXT("F(b:2,a:1) must seal one record per formal")));
+			if (Call->callArguments.GetLength() == 2)
+			{
+				const asSASTCallArgument& NamedB = Call->callArguments[0];
+				const asSASTCallArgument& NamedA = Call->callArguments[1];
+				const asCDecl* const B = Context->GetDecl(NamedB.formal);
+				const asCDecl* const A = Context->GetDecl(NamedA.formal);
+				ASSERT_THAT(IsTrue(
+					NamedB.expression == Call->children[0]
+						&& NamedB.formalIndex == 1
+						&& B != nullptr && B->name.Equals("b")
+						&& NamedB.origin == asAST_CALL_ARGUMENT_NAMED
+						&& NamedB.sourceOrdinal == 0
+						&& NamedB.authoredName.Equals("b"),
+					TEXT("stored child zero must bind authored source argument zero to formal b")));
+				ASSERT_THAT(IsTrue(
+					NamedA.expression == Call->children[1]
+						&& NamedA.formalIndex == 0
+						&& A != nullptr && A->name.Equals("a")
+						&& NamedA.origin == asAST_CALL_ARGUMENT_NAMED
+						&& NamedA.sourceOrdinal == 1
+						&& NamedA.authoredName.Equals("a"),
+					TEXT("stored child one must bind authored source argument one to formal a")));
+			}
+		}
+
 		asCString Dump;
-		asCASTDump(*static_cast<asCModule*>(Module)->GetCanonicalASTContext(), Dump);
+		asCASTDump(*Context, Dump);
 		const FString Text = AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
 		const FString DumpMsg = FString::Printf(
 			TEXT("F(b: 2, a: 1) must store formal a=1, b=2. dump:\n%s"), *Text);
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("callee=F(int,int)")), *DumpMsg));
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("nargs=2")), *DumpMsg));
-		ASSERT_THAT(IsTrue(Text.Contains(TEXT("args=named:b=2,named:a=1")), *DumpMsg));
-		ASSERT_THAT(IsTrue(!Text.Contains(TEXT("args=named:a=1,named:b=2")),
-			TEXT("named arguments are formal-slotted then stored reverse-formal")));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT("callArgs=2")), *DumpMsg));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT("origin=named"))
+			&& Text.Contains(TEXT("sourceOrdinal=0"))
+			&& Text.Contains(TEXT("authoredName=b")), *DumpMsg));
 	}
 
 	TEST_METHOD(MixinCallBindsReceiverNotFreeGlobal)
@@ -4666,6 +10683,87 @@ public:
 		ASSERT_THAT(IsTrue(bGeneratedGet, *DumpMsg));
 	}
 
+	TEST_METHOD(StoredTMapIteratorReceiverStaysMemberRefNotGeneratedGet)
+	{
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(
+			FAngelscriptEngine::Get().GetScriptEngine());
+		ASSERT_THAT(IsNotNull(ScriptEngine,
+			TEXT("ambient UE AngelScript Engine must be initialized")));
+		if (ScriptEngine == nullptr)
+		{
+			return;
+		}
+
+		const asECompilerPipeline Previous = ScriptEngine->GetCompilerPipeline();
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("TMap Iterator MEMBER_REF fixture selects CANONICAL")));
+		ON_SCOPE_EXIT { ScriptEngine->SetCompilerPipeline(Previous); };
+
+		static const char* const ModuleName = "SemaTMapIteratorMemberRef";
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			ModuleName, asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ON_SCOPE_EXIT { ScriptEngine->DiscardModule(ModuleName); };
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class ASemaMapActor : AActor
+			{
+				TMap<AActor, FString> ActorMap;
+			}
+
+			void PrintActorMap(ASemaMapActor Owner)
+			{
+				for (auto Iterator = Owner.ActorMap.Iterator(); Iterator.CanProceed; )
+				{
+					auto Element = Iterator.Proceed();
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaTMapIteratorMemberRef.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		asCString Dump;
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*Context, Dump);
+		}
+		const FString Text =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
+		const FString DumpMsg = FString::Printf(
+			TEXT("Owner.ActorMap.Iterator() on a complete type must stay MEMBER_REF of the stored TMap, not GetActorMap() by-value copy. build=%d dump:\n%s"),
+			BuildResult,
+			*Text);
+		ASSERT_THAT(AreEqual(0, BuildResult, *DumpMsg));
+		ASSERT_THAT(IsNotNull(Context, *DumpMsg));
+		ASSERT_THAT(AreEqual(
+			0,
+			CanonicalASTSemaAuthorityTest::CountDumpCallLinesWithCallee(
+				Text, TEXT("GetActorMap()")),
+			*DumpMsg));
+		bool bMemberRefActorMap = false;
+		TArray<FString> Lines;
+		Text.ParseIntoArrayLines(Lines);
+		for (const FString& Line : Lines)
+		{
+			if (Line.Contains(TEXT("kind=MemberRef"))
+				&& Line.Contains(TEXT("ActorMap"))
+				&& !Line.Contains(TEXT("GetActorMap")))
+			{
+				bMemberRefActorMap = true;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(bMemberRefActorMap, *DumpMsg));
+		ASSERT_THAT(IsTrue(
+			Text.Contains(TEXT("TMap<AActor,FString>::Iterator()")),
+			*DumpMsg));
+	}
+
 	TEST_METHOD(GeneratedNonPodSetterSealsExactAssignmentPlanBeforeCodeGen)
 	{
 		using namespace AngelscriptBuilderTestSupport;
@@ -5307,8 +11405,10 @@ public:
 			TEXT("opIndex call site must seal a dumpable AST")));
 		const FString Text = AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
 		const FString DumpMsg = FString::Printf(
-			TEXT("Values[3] must be an Index node (and later an opIndex callee), not a missing expr. dump:\n%s"), *Text);
-		ASSERT_THAT(IsTrue(Text.Contains(TEXT("kind=Index")), *DumpMsg));
+			TEXT("Values[3] must rewrite to a Call of T::opIndex(int). dump:\n%s"), *Text);
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT("kind=Call")), *DumpMsg));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT("callee=T::opIndex(int)")), *DumpMsg));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT("receiver=")), *DumpMsg));
 	}
 
 	TEST_METHOD(AmbiguousOverloadIsRejectedNotFirstName)
@@ -5421,6 +11521,44 @@ public:
 					"native AST Decl origin must equal the runtime canonical declaration. expected=%s actual=%s"),
 					UTF8_TO_TCHAR(ExpectedOrigin.AddressOf()),
 					UTF8_TO_TCHAR(NativeDecl->origin.AddressOf()))));
+		}
+
+		// Production mutation caught: a Runtime hidden slot must be backed by one
+		// exact sealed HIDDEN record. An equal-valued authored argument cannot be
+		// accepted merely because child count and Runtime parameter types match.
+		const asCExpr* const HiddenCall =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				*const_cast<asCASTContext*>(HiddenContext), "MetadataHidden");
+		ASSERT_THAT(IsNotNull(HiddenCall,
+			TEXT("hidden-argument fixture must contain one exact native call")));
+		if (HiddenCall != nullptr)
+		{
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+				HiddenCall->callArguments.GetLength(),
+				TEXT("visible plus hidden formals require two sealed records")));
+			if (HiddenCall->callArguments.GetLength() == 2)
+			{
+				const asSASTCallArgument& Hidden = HiddenCall->callArguments[0];
+				const asSASTCallArgument& Visible = HiddenCall->callArguments[1];
+				const asCDecl* const HiddenFormal = HiddenContext->GetDecl(Hidden.formal);
+				const asCDecl* const VisibleFormal = HiddenContext->GetDecl(Visible.formal);
+				ASSERT_THAT(IsTrue(
+					Hidden.expression == HiddenCall->children[0]
+						&& Hidden.formalIndex == 1
+						&& HiddenFormal != nullptr
+						&& HiddenFormal->name.Equals("Hidden")
+						&& Hidden.origin == asAST_CALL_ARGUMENT_HIDDEN
+						&& Hidden.sourceOrdinal == asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL,
+					TEXT("reverse-formal child zero must be the exact injected Hidden formal")));
+				ASSERT_THAT(IsTrue(
+					Visible.expression == HiddenCall->children[1]
+						&& Visible.formalIndex == 0
+						&& VisibleFormal != nullptr
+						&& VisibleFormal->name.Equals("Visible")
+						&& Visible.origin == asAST_CALL_ARGUMENT_POSITIONAL
+						&& Visible.sourceOrdinal == 0,
+					TEXT("visible authored argument must retain formal zero provenance")));
+			}
 		}
 
 		asCString Dump;
@@ -5605,21 +11743,21 @@ public:
 				for (asUINT ChildIndex = 0; ChildIndex < OpaqueSequence->children.GetLength(); ++ChildIndex)
 				{
 					const asCExpr* const Child = Context->GetExpr(OpaqueSequence->children[ChildIndex]);
-					if (Child == nullptr || Child->kind != asAST_EXPR_INDEX
-						|| Child->children.GetLength() == 0)
+					if (Child == nullptr || Child->kind != asAST_EXPR_CALL
+						|| !Child->receiver.IsValid())
 					{
 						continue;
 					}
 					const asCDecl* const Callee = Context->GetDecl(Child->resolvedDecl);
 					if (Callee != nullptr && Callee->stableKey.Equals("T::opIndex(int)"))
 					{
-						OpaqueBase = Context->GetExpr(Child->children[0]);
+						OpaqueBase = Context->GetExpr(Child->receiver);
 						break;
 					}
 				}
 			}
 			ASSERT_THAT(IsTrue(OpaqueBase != nullptr && OpaqueBase->kind == asAST_EXPR_OPAQUE_VALUE,
-				*FString::Printf(TEXT("body-owned opIndex base must be the OpaqueValue. dump:\n%s"), *Text)));
+				*FString::Printf(TEXT("body-owned opIndex receiver must be the OpaqueValue. dump:\n%s"), *Text)));
 		}
 	}
 
@@ -5751,6 +11889,687 @@ public:
 				}
 			}
 		}
+	}
+
+	TEST_METHOD(CanonicalPostfixPropertyIncrementSealsOpaqueSequence)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.4 postfix property fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaPostfixPropertyInc", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int Stored = 0;
+
+				int GetValue()
+				{
+					return Stored;
+				}
+
+				void SetValue(int Next)
+				{
+					Stored = Next;
+				}
+			}
+
+			T Make()
+			{
+				T Object;
+				return Object;
+			}
+
+			int Entry()
+			{
+				return Make().Value++;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaPostfixPropertyInc.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Make().Value++ must compile so postfix single-evaluation is observable; result=%d messages=%s"),
+				BuildResult,
+				*Messages)));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const ReturnStmt = Entry != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				*const_cast<asCASTContext*>(Context),
+				Entry->id,
+				asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* Returned = ReturnStmt != nullptr
+			? Context->GetExpr(ReturnStmt->expr) : nullptr;
+		while (Returned != nullptr
+			&& (Returned->kind == asAST_EXPR_CLEANUP
+				|| Returned->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& Returned->children.GetLength() != 0)
+		{
+			Returned = Context->GetExpr(
+				Returned->children[Returned->children.GetLength() - 1]);
+		}
+
+		int32 MakeCalleeCount = 0;
+		TArray<FString> Lines;
+		Dump.ParseIntoArrayLines(Lines);
+		for (const FString& Line : Lines)
+		{
+			if (Line.Contains(TEXT("kind=Call")) && Line.Contains(TEXT("callee=Make()"))
+				&& !Line.Contains(TEXT("callee=Make()::")))
+			{
+				++MakeCalleeCount;
+			}
+		}
+
+		const asCExpr* Opaque = nullptr;
+		const asCExpr* Get = nullptr;
+		const asCExpr* Set = nullptr;
+		if (Returned != nullptr && Returned->kind == asAST_EXPR_SEQUENCE)
+		{
+			for (asUINT Index = 0; Index < Returned->children.GetLength(); ++Index)
+			{
+				const asCExpr* const Child = Context->GetExpr(Returned->children[Index]);
+				if (Child == nullptr)
+				{
+					continue;
+				}
+				const asCExpr* Inspected = Child;
+				if (Child->kind == asAST_EXPR_OPAQUE_VALUE)
+				{
+					if (Opaque == nullptr)
+					{
+						Opaque = Child;
+					}
+					Inspected = Child->children.GetLength() != 0
+						? Context->GetExpr(Child->children[0]) : nullptr;
+				}
+				const asCDecl* const Callee = Inspected != nullptr
+					? Context->GetDecl(Inspected->resolvedDecl) : nullptr;
+				if (Inspected != nullptr && Inspected->kind == asAST_EXPR_CALL
+					&& Callee != nullptr
+					&& Callee->stableKey.Equals("T::GetValue()"))
+				{
+					Get = Inspected;
+				}
+				if (Inspected != nullptr && Inspected->kind == asAST_EXPR_CALL
+					&& Callee != nullptr
+					&& Callee->stableKey.Equals("T::SetValue(int)"))
+				{
+					Set = Inspected;
+				}
+			}
+		}
+
+		ASSERT_THAT(IsTrue(
+			Returned != nullptr
+				&& Returned->kind == asAST_EXPR_SEQUENCE
+				&& Opaque != nullptr
+				&& Get != nullptr
+				&& Set != nullptr
+				&& Get->receiver == Opaque->id
+				&& Set->receiver == Opaque->id
+				&& MakeCalleeCount == 1,
+			*FString::Printf(
+				TEXT("Make().Value++ must sequence OpaqueValue/GetValue/SetValue on one Make() receiver, not a leftover Unary post++. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalPrefixPropertyIncrementSealsOpaqueSequence)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 prefix property fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaPrefixPropertyInc", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int Stored = 5;
+
+				int GetValue()
+				{
+					return Stored;
+				}
+
+				void SetValue(int Next)
+				{
+					Stored = Next;
+				}
+			}
+
+			T Make()
+			{
+				T Object;
+				return Object;
+			}
+
+			int Entry()
+			{
+				return ++Make().Value;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaPrefixPropertyInc.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("++Make().Value must compile so prefix Get/Set is a Call rewrite, not leftover Unary pre++; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("prefix property increment Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("prefix property increment must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const ReturnStmt = Entry != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				*const_cast<asCASTContext*>(Context),
+				Entry->id,
+				asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* Returned = ReturnStmt != nullptr
+			? Context->GetExpr(ReturnStmt->expr) : nullptr;
+		while (Returned != nullptr
+			&& (Returned->kind == asAST_EXPR_CLEANUP
+				|| Returned->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& Returned->children.GetLength() != 0)
+		{
+			Returned = Context->GetExpr(
+				Returned->children[Returned->children.GetLength() - 1]);
+		}
+
+		int32 MakeCalleeCount = 0;
+		bool bLeftoverPrefixUnary = false;
+		TArray<FString> Lines;
+		Dump.ParseIntoArrayLines(Lines);
+		for (const FString& Line : Lines)
+		{
+			if (Line.Contains(TEXT("kind=Call")) && Line.Contains(TEXT("callee=Make()"))
+				&& !Line.Contains(TEXT("callee=Make()::")))
+			{
+				++MakeCalleeCount;
+			}
+			if (Line.Contains(TEXT("kind=Unary")) && Line.Contains(TEXT("literal=pre++")))
+			{
+				bLeftoverPrefixUnary = true;
+			}
+		}
+
+		const asCExpr* Opaque = nullptr;
+		const asCExpr* Get = nullptr;
+		const asCExpr* Set = nullptr;
+		if (Returned != nullptr && Returned->kind == asAST_EXPR_SEQUENCE)
+		{
+			for (asUINT Index = 0; Index < Returned->children.GetLength(); ++Index)
+			{
+				const asCExpr* const Child = Context->GetExpr(Returned->children[Index]);
+				if (Child == nullptr)
+				{
+					continue;
+				}
+				const asCExpr* Inspected = Child;
+				if (Child->kind == asAST_EXPR_OPAQUE_VALUE)
+				{
+					if (Opaque == nullptr)
+					{
+						Opaque = Child;
+					}
+					Inspected = Child->children.GetLength() != 0
+						? Context->GetExpr(Child->children[0]) : nullptr;
+				}
+				const asCDecl* const Callee = Inspected != nullptr
+					? Context->GetDecl(Inspected->resolvedDecl) : nullptr;
+				if (Inspected != nullptr && Inspected->kind == asAST_EXPR_CALL
+					&& Callee != nullptr
+					&& Callee->stableKey.Equals("T::GetValue()"))
+				{
+					Get = Inspected;
+				}
+				if (Inspected != nullptr && Inspected->kind == asAST_EXPR_CALL
+					&& Callee != nullptr
+					&& Callee->stableKey.Equals("T::SetValue(int)"))
+				{
+					Set = Inspected;
+				}
+			}
+		}
+
+		ASSERT_THAT(IsTrue(
+			!bLeftoverPrefixUnary
+				&& Returned != nullptr
+				&& Returned->kind == asAST_EXPR_SEQUENCE
+				&& Opaque != nullptr
+				&& Get != nullptr
+				&& Set != nullptr
+				&& Get->receiver == Opaque->id
+				&& Set->receiver == Opaque->id
+				&& MakeCalleeCount == 1,
+			*FString::Printf(
+				TEXT("++Make().Value must sequence OpaqueValue/GetValue/SetValue on one Make() receiver, not leftover Unary pre++ of GetValue. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalPrefixIndexIncrementSealsOpaqueSequence)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 prefix index fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaPrefixIndexInc", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int Stored = 5;
+
+				int &opIndex(int Index)
+				{
+					return Stored;
+				}
+			}
+
+			T Make()
+			{
+				T Object;
+				return Object;
+			}
+
+			int Entry()
+			{
+				return ++Make()[0];
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaPrefixIndexInc.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("++Make()[0] must compile so prefix opIndex is a Call rewrite, not leftover Unary pre++; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("prefix index increment Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("prefix index increment must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const ReturnStmt = Entry != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				*const_cast<asCASTContext*>(Context),
+				Entry->id,
+				asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* Returned = ReturnStmt != nullptr
+			? Context->GetExpr(ReturnStmt->expr) : nullptr;
+		while (Returned != nullptr
+			&& (Returned->kind == asAST_EXPR_CLEANUP
+				|| Returned->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& Returned->children.GetLength() != 0)
+		{
+			Returned = Context->GetExpr(
+				Returned->children[Returned->children.GetLength() - 1]);
+		}
+
+		int32 MakeCalleeCount = 0;
+		bool bLeftoverPrefixUnary = false;
+		TArray<FString> Lines;
+		Dump.ParseIntoArrayLines(Lines);
+		for (const FString& Line : Lines)
+		{
+			if (Line.Contains(TEXT("kind=Call")) && Line.Contains(TEXT("callee=Make()"))
+				&& !Line.Contains(TEXT("callee=Make()::")))
+			{
+				++MakeCalleeCount;
+			}
+			if (Line.Contains(TEXT("kind=Unary")) && Line.Contains(TEXT("literal=pre++")))
+			{
+				bLeftoverPrefixUnary = true;
+			}
+		}
+
+		const asCExpr* Opaque = nullptr;
+		const asCExpr* IndexCall = nullptr;
+		const asCExpr* Write = nullptr;
+		if (Returned != nullptr && Returned->kind == asAST_EXPR_SEQUENCE)
+		{
+			for (asUINT Index = 0; Index < Returned->children.GetLength(); ++Index)
+			{
+				const asCExpr* const Child = Context->GetExpr(Returned->children[Index]);
+				if (Child == nullptr)
+				{
+					continue;
+				}
+				const asCExpr* Inspected = Child;
+				if (Child->kind == asAST_EXPR_OPAQUE_VALUE)
+				{
+					if (Opaque == nullptr)
+					{
+						Opaque = Child;
+					}
+					Inspected = Child->children.GetLength() != 0
+						? Context->GetExpr(Child->children[0]) : nullptr;
+				}
+				const asCDecl* const Callee = Inspected != nullptr
+					? Context->GetDecl(Inspected->resolvedDecl) : nullptr;
+				if (Inspected != nullptr && Inspected->kind == asAST_EXPR_CALL
+					&& Callee != nullptr
+					&& Callee->stableKey.Equals("T::opIndex(int)"))
+				{
+					IndexCall = Inspected;
+				}
+				if (Child->kind == asAST_EXPR_ASSIGN)
+				{
+					Write = Child;
+				}
+			}
+		}
+
+		ASSERT_THAT(IsTrue(
+			!bLeftoverPrefixUnary
+				&& Returned != nullptr
+				&& Returned->kind == asAST_EXPR_SEQUENCE
+				&& Opaque != nullptr
+				&& IndexCall != nullptr
+				&& Write != nullptr
+				&& IndexCall->receiver == Opaque->id
+				&& MakeCalleeCount == 1,
+			*FString::Printf(
+				TEXT("++Make()[0] must sequence OpaqueValue/opIndex/Assign on one Make() receiver, not leftover Unary pre++ of opIndex. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalPostfixIndexIncrementSealsOldValueSequence)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 postfix index fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaPostfixIndexInc", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int Stored = 5;
+
+				int &opIndex(int Index)
+				{
+					return Stored;
+				}
+			}
+
+			T Make()
+			{
+				T Object;
+				return Object;
+			}
+
+			int Entry()
+			{
+				return Make()[0]++;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaPostfixIndexInc.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Make()[0]++ must compile so postfix opIndex yields the loaded int, not leftover Unary post++ or the lvalue Call; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("postfix index increment Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("postfix index increment must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const ReturnStmt = Entry != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				*const_cast<asCASTContext*>(Context),
+				Entry->id,
+				asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* Returned = ReturnStmt != nullptr
+			? Context->GetExpr(ReturnStmt->expr) : nullptr;
+		while (Returned != nullptr
+			&& (Returned->kind == asAST_EXPR_CLEANUP
+				|| Returned->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& Returned->children.GetLength() != 0)
+		{
+			Returned = Context->GetExpr(
+				Returned->children[Returned->children.GetLength() - 1]);
+		}
+
+		int32 MakeCalleeCount = 0;
+		bool bLeftoverPostfixUnary = false;
+		TArray<FString> Lines;
+		Dump.ParseIntoArrayLines(Lines);
+		for (const FString& Line : Lines)
+		{
+			if (Line.Contains(TEXT("kind=Call")) && Line.Contains(TEXT("callee=Make()"))
+				&& !Line.Contains(TEXT("callee=Make()::")))
+			{
+				++MakeCalleeCount;
+			}
+			if (Line.Contains(TEXT("kind=Unary")) && Line.Contains(TEXT("literal=post++")))
+			{
+				bLeftoverPostfixUnary = true;
+			}
+		}
+
+		const asCExpr* Opaque = nullptr;
+		const asCExpr* IndexCall = nullptr;
+		const asCExpr* Write = nullptr;
+		if (Returned != nullptr && Returned->kind == asAST_EXPR_SEQUENCE
+			&& Returned->children.GetLength() != 0)
+		{
+			for (asUINT Index = 0; Index < Returned->children.GetLength(); ++Index)
+			{
+				const asCExpr* const Child = Context->GetExpr(Returned->children[Index]);
+				if (Child == nullptr)
+				{
+					continue;
+				}
+				const asCExpr* Inspected = Child;
+				if (Child->kind == asAST_EXPR_OPAQUE_VALUE)
+				{
+					if (Opaque == nullptr)
+					{
+						Opaque = Child;
+					}
+					Inspected = Child->children.GetLength() != 0
+						? Context->GetExpr(Child->children[0]) : nullptr;
+				}
+				if (Inspected != nullptr && Inspected->kind == asAST_EXPR_CONVERSION
+					&& Inspected->children.GetLength() != 0)
+				{
+					Inspected = Context->GetExpr(Inspected->children[0]);
+				}
+				const asCDecl* const Callee = Inspected != nullptr
+					? Context->GetDecl(Inspected->resolvedDecl) : nullptr;
+				if (Inspected != nullptr && Inspected->kind == asAST_EXPR_CALL
+					&& Callee != nullptr
+					&& Callee->stableKey.Equals("T::opIndex(int)"))
+				{
+					IndexCall = Inspected;
+				}
+				if (Child->kind == asAST_EXPR_ASSIGN)
+				{
+					Write = Child;
+				}
+			}
+		}
+
+		const asCExpr* const LastChild = Returned != nullptr
+			&& Returned->kind == asAST_EXPR_SEQUENCE
+			&& Returned->children.GetLength() != 0
+			? Context->GetExpr(Returned->children[Returned->children.GetLength() - 1])
+			: nullptr;
+		const bool bYieldsRvalueInt = LastChild != nullptr
+			&& !LastChild->type.IsReference()
+			&& LastChild->valueCategory != asAST_VALUE_LVALUE;
+
+		ASSERT_THAT(IsTrue(
+			!bLeftoverPostfixUnary
+				&& Returned != nullptr
+				&& Returned->kind == asAST_EXPR_SEQUENCE
+				&& Opaque != nullptr
+				&& IndexCall != nullptr
+				&& Write != nullptr
+				&& IndexCall->receiver == Opaque->id
+				&& MakeCalleeCount == 1
+				&& bYieldsRvalueInt,
+			*FString::Printf(
+				TEXT("Make()[0]++ must sequence OpaqueValue/opIndex/Assign and yield the loaded rvalue int, not leftover Unary post++ or the lvalue Call. dump:\n%s"),
+				*Dump)));
 	}
 
 	TEST_METHOD(SequenceSingleEvalShortCircuitConditionalAndGeneratedDefaultAreSealedTogether)
@@ -8418,6 +15237,76 @@ public:
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("kind=Construct")), *DumpMsg));
 	}
 
+	TEST_METHOD(CompileSealScriptReferenceLocalDefaultConstructRecordsInitOnVar)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("script-reference local default-construct dump uses the compile→seal path")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaLocalScriptReferenceInit", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaLocalScriptReferenceInit module")));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class FScriptReference
+			{
+				int Value = 41;
+			}
+
+			int Entry()
+			{
+				FScriptReference Object;
+				return Object.Value + 1;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaLocalScriptReferenceInit.as", ScriptSource.c_str())));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("CANONICAL FScriptReference Object; must Build on the compile-seal path")));
+		asCString Dump;
+		ASSERT_THAT(IsTrue(CanonicalASTSemaAuthorityTest::DumpSealedCanonicalAst(Module, Dump),
+			TEXT("script-reference local default-construct must seal a dumpable AST")));
+		const FString Text = AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
+		const FString DumpMsg = FString::Printf(
+			TEXT("FScriptReference Object; must own a Construct initializer, not a null handle. dump:\n%s"),
+			*Text);
+		bool bObjectVarHasInit = false;
+		TArray<FString> Lines;
+		Text.ParseIntoArrayLines(Lines);
+		for (const FString& Line : Lines)
+		{
+			if (Line.Contains(TEXT("kind=Var name=Object")) && Line.Contains(TEXT("init=")))
+			{
+				bObjectVarHasInit = true;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(bObjectVarHasInit, *DumpMsg));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT("kind=Construct")), *DumpMsg));
+
+		asIScriptFunction* const Entry = Module->GetFunctionByDecl("int Entry()");
+		ASSERT_THAT(IsNotNull(Entry, TEXT("script-reference local execution entry")));
+		if (Entry != nullptr)
+		{
+			asIScriptContext* const ExecutionContext = ScriptEngine->CreateContext();
+			ASSERT_THAT(IsNotNull(ExecutionContext, TEXT("script-reference local execution context")));
+			if (ExecutionContext != nullptr)
+			{
+				ASSERT_THAT(AreEqual(asSUCCESS, ExecutionContext->Prepare(Entry)));
+				ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, ExecutionContext->Execute(),
+					TEXT("bare script reference local must construct before member access")));
+				ASSERT_THAT(AreEqual(42,
+					static_cast<int32>(ExecutionContext->GetReturnDWord()),
+					TEXT("constructed script reference local retains field defaults")));
+				ExecutionContext->Release();
+			}
+		}
+	}
+
 	TEST_METHOD(NamespacedValueLocalLifetimeMatchesExactQualifiedDestructorOwner)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
@@ -8509,6 +15398,165 @@ public:
 			*FString::Printf(
 				TEXT("the exact namespaced value-local lifetime protocol must seal. AST:\n%s"),
 				*Dump)));
+	}
+
+	TEST_METHOD(LexicalLifetimeAuthoringRejectsUnqualifiedSameNameDestructorOwner)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const std::string Source = "{ FValue Object = MakeValue(); }";
+		asCScriptCode Code;
+		Code.SetCode("SemaUnqualifiedLifetimeOwner.as", Source.c_str(), true);
+		const asASTFileID File = Context.AddSourceSection(
+			"SemaUnqualifiedLifetimeOwner.as", asAST_SOURCE_AUTHORED,
+			Source.c_str(), Source.size());
+		const asCSourceRange Range = Context.GetSourceManager().MakeRange(
+			File, 0u, static_cast<asUINT>(Source.size()));
+
+		const asASTDeclId Tu = Sema.ActOnTranslationUnit(
+			"SemaUnqualifiedLifetimeOwner");
+		const asASTDeclId WrongNamespace = Context.CreateDecl(
+			asAST_DECL_NAMESPACE, Tu, Range, "Wrong");
+		const asASTDeclId WrongClass = Context.CreateDecl(
+			asAST_DECL_CLASS, WrongNamespace, Range, "FValue");
+		ASSERT_THAT(AreEqual(0,
+			Context.SetStableKey(WrongClass, "Wrong::FValue")));
+		const asASTDeclId WrongDestructor = Sema.ActOnDestructorDecl(
+			WrongClass, "FValue", Range);
+		ASSERT_THAT(IsTrue(WrongDestructor.IsValid()));
+
+		const asCQualType ValueType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FValue", 0);
+		const asASTDeclId Function = Sema.ActOnFunctionDecl(
+			Tu, "Entry", Context.InternPrimitive(ttVoid, 0), Range);
+		const asASTDeclId Local = Sema.ActOnVarDecl(
+			Function, "Object", ValueType, Range);
+		const asASTExprId Initializer = Context.CreateExpr(
+			asAST_EXPR_CONSTRUCT, ValueType, asAST_VALUE_PRVALUE, Range);
+		ASSERT_THAT(AreEqual(0, Context.AddDeclInit(Local, Initializer)));
+
+		const asASTStmtId Declaration = Context.CreateStmt(
+			asAST_STMT_DECL, Function, Range);
+		ASSERT_THAT(AreEqual(0, Context.SetStmtDecl(Declaration, Local)));
+		const asASTExprId Activation = Sema.ActOnAssignExpr(
+			Sema.ActOnDeclRef(Local, ValueType, Range), Initializer, Range);
+		const asASTStmtId ActivationStatement = Sema.ActOnExprStmt(
+			Function, Activation, Range);
+
+		asSBlockStatementAction Action;
+		Action.owner = Function;
+		Action.children.PushLast(Declaration);
+		Action.children.PushLast(ActivationStatement);
+		Action.beginOffset = 0;
+		Action.endOffset = static_cast<asUINT>(Source.size());
+		const asASTStmtId Block = Sema.ActOnBlockStatementAction(Action, &Code);
+		ASSERT_THAT(IsTrue(Block.IsValid(),
+			TEXT("the typed block itself remains structurally valid")));
+
+		const asCStmt* const BlockStmt = Context.GetStmt(Block);
+		bool bHasForgedScopeExit = false;
+		for (asUINT ChildIndex = 0; BlockStmt != nullptr
+			&& ChildIndex < BlockStmt->children.GetLength(); ++ChildIndex)
+		{
+			const asCStmt* const Child = Context.GetStmt(
+				BlockStmt->children[ChildIndex]);
+			const asCExpr* const Expr = Child != nullptr
+				&& Child->kind == asAST_STMT_EXPR
+				? Context.GetExpr(Child->expr) : nullptr;
+			if (Expr != nullptr && Expr->kind == asAST_EXPR_CLEANUP
+				&& Expr->literal.Equals("scope-exit"))
+			{
+				bHasForgedScopeExit = true;
+			}
+		}
+		ASSERT_THAT(AreEqual(
+			0, static_cast<int32>(Context.GetLifetimeRecordCount()),
+			TEXT("an unqualified type key must not author lifetime ownership from a namespaced same-name class")));
+		ASSERT_THAT(IsFalse(bHasForgedScopeExit,
+			TEXT("Sema must not emit a compatibility cleanup for a destructor whose complete owner key differs")));
+	}
+
+	TEST_METHOD(LifetimeAuthorsNeverFallbackFromStableOwnerKeyToUnqualifiedName)
+	{
+		const FString SourceRoot = FPaths::Combine(
+			FPaths::ProjectPluginsDir(),
+			TEXT("Angelscript/Source/AngelscriptRuntime/ThirdParty/angelscript/source"));
+		const TCHAR* const Files[] = {
+			TEXT("as_sema_decl.cpp"),
+			TEXT("as_sema_expr.cpp"),
+			TEXT("as_sema_lifetime.cpp"),
+			TEXT("as_sema_stmt.cpp"),
+		};
+		for (const TCHAR* const File : Files)
+		{
+			FString SourceText;
+			ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(
+				SourceText, *FPaths::Combine(SourceRoot, File))));
+			ASSERT_THAT(IsFalse(
+				SourceText.Contains(TEXT("name.Equals(type->stableKey)")),
+				*FString::Printf(
+					TEXT("%s must bind lifetime owners only by the complete Canonical stable key"),
+					File)));
+		}
+	}
+
+	TEST_METHOD(ExpressionSemaRejectsUnqualifiedSameNameTypeOwner)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asCSourceRange Range;
+		const asASTDeclId Tu = Sema.ActOnTranslationUnit(
+			"SemaUnqualifiedExpressionTypeOwner");
+		const asASTDeclId WrongNamespace = Sema.ActOnNamespaceDecl(
+			Tu, "Wrong", Range);
+		const asASTDeclId WrongClass = Sema.ActOnClassDecl(
+			WrongNamespace, "FValue", Range);
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId WrongGetter = Sema.ActOnMethodDecl(
+			WrongClass, "GetValue", IntType, Range);
+		ASSERT_THAT(IsTrue(WrongGetter.IsValid()));
+		ASSERT_THAT(IsTrue(Context.GetDecl(WrongClass) != nullptr
+			&& Context.GetDecl(WrongClass)->stableKey.Equals("Wrong::FValue")));
+
+		const asCQualType UnqualifiedType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FValue", 0);
+		const asASTDeclId Local = Sema.ActOnVarDecl(
+			Tu, "Object", UnqualifiedType, Range);
+		const asASTExprId Receiver = Sema.ActOnDeclRef(
+			Local, UnqualifiedType, Range);
+		const asASTExprId Member = Sema.ActOnMemberExpr(
+			Receiver, "Value", Range);
+		const asCExpr* const MemberExpr = Context.GetExpr(Member);
+
+		ASSERT_THAT(IsTrue(MemberExpr != nullptr
+			&& MemberExpr->kind == asAST_EXPR_MEMBER_REF,
+			TEXT("an unresolved unqualified FValue member must remain a member reference instead of calling Wrong::FValue::GetValue")));
+		ASSERT_THAT(IsTrue(MemberExpr != nullptr
+			&& MemberExpr->resolvedDecl != WrongGetter,
+			TEXT("expression Sema must not substitute a namespaced same-name class for the receiver's complete type identity")));
+	}
+
+	TEST_METHOD(ExpressionNamedTypeLookupNeverFallsBackToShortDeclarationName)
+	{
+		const FString SourcePath = FPaths::Combine(
+			FPaths::ProjectPluginsDir(),
+			TEXT("Angelscript/Source/AngelscriptRuntime/ThirdParty/angelscript/source/as_sema_expr.cpp"));
+		FString SourceText;
+		ASSERT_THAT(IsTrue(FFileHelper::LoadFileToString(
+			SourceText, *SourcePath)));
+		ASSERT_THAT(IsFalse(
+			SourceText.Contains(TEXT("decl->name.Equals(named->stableKey)")),
+			TEXT("expression type owners must bind by complete Canonical stable key, never short declaration name")));
 	}
 
 	TEST_METHOD(DoWhileStmtRecordsNamedBodyTrailingCondOnCompileSealPath)
@@ -13654,13 +20702,13 @@ public:
 			&& Root->children.GetLength() == 1
 			? Context.GetExpr(Root->children[0]) : nullptr;
 		ASSERT_THAT(IsTrue(IndexExpr != nullptr
-			&& IndexExpr->kind == asAST_EXPR_INDEX
+			&& IndexExpr->kind == asAST_EXPR_CALL
 			&& IndexExpr->resolvedDecl == OpIndex
-			&& IndexExpr->children.GetLength() == 3,
-			TEXT("Index must retain base plus both authored opIndex arguments")));
+			&& IndexExpr->receiver.IsValid()
+			&& IndexExpr->callArguments.GetLength() == 2,
+			TEXT("rewritten opIndex Call must retain the receiver and both authored formals")));
 		const asCExpr* NextResult = IndexExpr != nullptr
-			&& IndexExpr->children.GetLength() == 3
-			? Context.GetExpr(IndexExpr->children[0]) : nullptr;
+			? Context.GetExpr(IndexExpr->receiver) : nullptr;
 		while (NextResult != nullptr
 			&& (NextResult->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
 				|| NextResult->kind == asAST_EXPR_CLEANUP)
@@ -13747,21 +20795,18 @@ public:
 			TEXT("Parser must bind one exact structural typed-action root")));
 		const asCExpr* const Root = Context.GetExpr(RootId);
 		ASSERT_THAT(IsTrue(Root != nullptr
-			&& Root->kind == asAST_EXPR_INDEX
-			&& Root->children.GetLength() == 2,
-			TEXT("index must own the nested member call, not a replay Sequence")));
+			&& Root->kind == asAST_EXPR_CALL
+			&& Root->receiver.IsValid()
+			&& Root->callArguments.GetLength() == 1,
+			TEXT("index rewrite must own the nested member call as receiver, not a replay Sequence")));
 		const asCExpr* const IndexExpr = Root;
-		ASSERT_THAT(IsTrue(IndexExpr != nullptr
-			&& IndexExpr->children.GetLength() == 2,
-			TEXT("Parser index step must retain its exact receiver and argument")));
 		const asCDecl* const IndexTarget = IndexExpr != nullptr
 			? Context.GetDecl(IndexExpr->resolvedDecl) : nullptr;
 		ASSERT_THAT(IsTrue(IndexTarget != nullptr
 			&& IndexTarget->stableKey.Equals("T::opIndex(int)"),
 			TEXT("complete structural action must select T::opIndex(int)")));
 		const asCExpr* NextResult = IndexExpr != nullptr
-			&& IndexExpr->children.GetLength() == 2
-			? Context.GetExpr(IndexExpr->children[0]) : nullptr;
+			? Context.GetExpr(IndexExpr->receiver) : nullptr;
 		while (NextResult != nullptr
 			&& (NextResult->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
 				|| NextResult->kind == asAST_EXPR_CLEANUP)
@@ -14037,7 +21082,7 @@ public:
 			&& Distinct->children.GetLength() == 1
 			&& Distinct->children[0].value == Value.value
 			&& DistinctType != nullptr
-			&& DistinctType->stableKey.Equals("float"),
+			&& DistinctType->stableKey.Equals("float32"),
 			TEXT("same-range casts with different exact targets must not alias")));
 	}
 
@@ -14216,6 +21261,991 @@ public:
 			&& DistinctConstruct->children.GetLength() == 1
 			&& DistinctConstruct->children[0] == SecondArgument,
 			TEXT("same-range construct actions with distinct exact arguments must not alias")));
+	}
+
+	TEST_METHOD(ReorderedParamChildrenDoNotChangeConstructorSelectionAndConversion)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asCSourceRange Range;
+		const asASTDeclId TranslationUnit =
+			Sema.ActOnTranslationUnit("SemaReorderedConstructor");
+		const asCQualType DoubleType = Context.InternPrimitive(ttDouble, 0);
+		const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+		const asASTDeclId Class = Sema.ActOnClassDecl(
+			TranslationUnit, "TReorderedCtor", Range);
+		const asASTDeclId Constructor = Sema.ActOnConstructorDecl(
+			Class, "TReorderedCtor", Range);
+		const asASTDeclId First = Sema.ActOnParamDecl(
+			Constructor, "First", DoubleType, Range);
+		const asASTDeclId Second = Sema.ActOnParamDecl(
+			Constructor, "Second", BoolType, Range);
+		asCDecl* const MutableConstructor =
+			const_cast<asCDecl*>(Context.GetDecl(Constructor));
+		ASSERT_THAT(IsNotNull(MutableConstructor));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+			MutableConstructor != nullptr
+				? MutableConstructor->children.GetLength() : 0));
+		if (MutableConstructor == nullptr
+			|| MutableConstructor->children.GetLength() != 2)
+		{
+			return;
+		}
+		MutableConstructor->children[0] = Second;
+		MutableConstructor->children[1] = First;
+
+		const asASTExprId AuthoredFirst =
+			Sema.ActOnIntegerLiteral(7, Range);
+		const asASTExprId AuthoredSecond =
+			Sema.ActOnBoolLiteral(true, Range);
+		asCArray<asASTExprId> Arguments;
+		Arguments.PushLast(AuthoredFirst);
+		Arguments.PushLast(AuthoredSecond);
+		const asCQualType ClassType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "TReorderedCtor", 0);
+		const asASTExprId Root =
+			Sema.ActOnConstruct(ClassType, Arguments, Range);
+		const asCExpr* Construct = Context.GetExpr(Root);
+		while (Construct != nullptr
+			&& (Construct->kind == asAST_EXPR_CLEANUP
+				|| Construct->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& Construct->children.GetLength() == 1)
+		{
+			Construct = Context.GetExpr(Construct->children[0]);
+		}
+		ASSERT_THAT(IsTrue(Construct != nullptr
+			&& Construct->kind == asAST_EXPR_CONSTRUCT
+			&& Construct->resolvedDecl == Constructor,
+			TEXT("constructor selection must join arguments by formalIndex")));
+		const asCExpr* const ConvertedFirst = Construct != nullptr
+			&& Construct->children.GetLength() == 2
+			? Context.GetExpr(Construct->children[0]) : nullptr;
+		ASSERT_THAT(IsTrue(ConvertedFirst != nullptr
+			&& ConvertedFirst->kind == asAST_EXPR_CONVERSION
+			&& ConvertedFirst->type == DoubleType
+			&& ConvertedFirst->children.GetLength() == 1
+			&& ConvertedFirst->children[0] == AuthoredFirst,
+			TEXT("formal zero must receive the int-to-double conversion")));
+		ASSERT_THAT(IsTrue(Construct != nullptr
+			&& Construct->children.GetLength() == 2
+			&& Construct->children[1] == AuthoredSecond,
+			TEXT("formal one must retain the authored bool expression")));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal()));
+	}
+
+	TEST_METHOD(ReorderedParamChildrenDoNotDuplicateNativeGlobalProjection)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterGlobalFunction(
+			"void CTAProjectionRoute(int Source, bool Destination)",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::AcceptWildcardGeneric),
+			asCALL_GENERIC) >= 0,
+			TEXT("native projection fixture must register CTAProjectionRoute")));
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asCSourceRange Range;
+		const asASTDeclId TranslationUnit =
+			Sema.ActOnTranslationUnit("SemaReorderedNativeProjection");
+		asCArray<asASTExprId> FirstArguments;
+		FirstArguments.PushLast(Sema.ActOnIntegerLiteral(7, Range));
+		FirstArguments.PushLast(Sema.ActOnBoolLiteral(true, Range));
+		ASSERT_THAT(IsTrue(Sema.ActOnCallExpr(
+			TranslationUnit, "CTAProjectionRoute", FirstArguments, Range).IsValid(),
+			TEXT("first native call must project and resolve CTAProjectionRoute")));
+
+		asASTDeclId Projected;
+		asUINT ProjectedCount = 0;
+		const asCDecl* const TuDecl = Context.GetDecl(TranslationUnit);
+		for (asUINT ChildIndex = 0;
+			TuDecl != nullptr && ChildIndex < TuDecl->children.GetLength();
+			++ChildIndex)
+		{
+			const asCDecl* const Child =
+				Context.GetDecl(TuDecl->children[ChildIndex]);
+			if (Child != nullptr && Child->kind == asAST_DECL_FUNCTION
+				&& Child->name.Equals("CTAProjectionRoute"))
+			{
+				Projected = Child->id;
+				++ProjectedCount;
+			}
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1), ProjectedCount,
+			TEXT("first native lookup must publish one canonical projection")));
+		asCDecl* const MutableProjected =
+			const_cast<asCDecl*>(Context.GetDecl(Projected));
+		ASSERT_THAT(IsTrue(MutableProjected != nullptr
+			&& MutableProjected->children.GetLength() == 2,
+			TEXT("native projection fixture must own exactly two formals")));
+		if (MutableProjected == nullptr
+			|| MutableProjected->children.GetLength() != 2)
+		{
+			return;
+		}
+		const asASTDeclId FirstFormal = MutableProjected->children[0];
+		MutableProjected->children[0] = MutableProjected->children[1];
+		MutableProjected->children[1] = FirstFormal;
+
+		asCArray<asASTExprId> SecondArguments;
+		SecondArguments.PushLast(Sema.ActOnIntegerLiteral(9, Range));
+		SecondArguments.PushLast(Sema.ActOnBoolLiteral(false, Range));
+		ASSERT_THAT(IsTrue(Sema.ActOnCallExpr(
+			TranslationUnit, "CTAProjectionRoute", SecondArguments, Range).IsValid(),
+			TEXT("second native call must resolve the existing projection")));
+
+		ProjectedCount = 0;
+		for (asUINT ChildIndex = 0;
+			TuDecl != nullptr && ChildIndex < TuDecl->children.GetLength();
+			++ChildIndex)
+		{
+			const asCDecl* const Child =
+				Context.GetDecl(TuDecl->children[ChildIndex]);
+			if (Child != nullptr && Child->kind == asAST_DECL_FUNCTION
+				&& Child->name.Equals("CTAProjectionRoute"))
+			{
+				++ProjectedCount;
+			}
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1), ProjectedCount,
+			TEXT("native Runtime signature matching must join parameters by formalIndex")));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal()));
+	}
+
+	TEST_METHOD(ReorderedParamChildrenDoNotChangeMixinReceiverOrigin)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asCSourceRange Range;
+		const asASTDeclId TranslationUnit =
+			Sema.ActOnTranslationUnit("SemaReorderedMixinOrigin");
+		Sema.ActOnClassDecl(TranslationUnit, "CTAReceiverA", Range);
+		Sema.ActOnClassDecl(TranslationUnit, "CTAReceiverB", Range);
+		const asCQualType ReceiverAType = Context.InternNamedType(
+			asAST_TYPE_REFERENCE_OBJECT, "CTAReceiverA",
+			asAST_QUAL_HANDLE | asAST_QUAL_AUTO_HANDLE);
+		const asCQualType ReceiverBType = Context.InternNamedType(
+			asAST_TYPE_REFERENCE_OBJECT, "CTAReceiverB",
+			asAST_QUAL_HANDLE | asAST_QUAL_AUTO_HANDLE);
+		const asASTDeclId Mixin = Sema.ActOnMixinDecl(
+			TranslationUnit, "Route", Range);
+		const asASTDeclId ReceiverA = Sema.ActOnParamDecl(
+			Mixin, "ReceiverA", ReceiverAType, Range);
+		const asASTDeclId ReceiverB = Sema.ActOnParamDecl(
+			Mixin, "ReceiverB", ReceiverBType, Range);
+		asCDecl* const MutableMixin =
+			const_cast<asCDecl*>(Context.GetDecl(Mixin));
+		ASSERT_THAT(IsTrue(MutableMixin != nullptr
+			&& MutableMixin->children.GetLength() == 2));
+		if (MutableMixin == nullptr || MutableMixin->children.GetLength() != 2)
+		{
+			return;
+		}
+		MutableMixin->children[0] = ReceiverB;
+		MutableMixin->children[1] = ReceiverA;
+		ASSERT_THAT(AreEqual(0, Context.SetOrigin(Mixin, "")));
+		Sema.FinishDecl(Mixin);
+
+		const asCDecl* const FinishedMixin = Context.GetDecl(Mixin);
+		ASSERT_THAT(IsTrue(FinishedMixin != nullptr
+			&& FinishedMixin->origin.Equals("CTAReceiverA"),
+			TEXT("mixin receiver origin must come from exact formal zero")));
+		ASSERT_THAT(IsTrue(Context.GetFormalDecl(Mixin, 0) != nullptr
+			&& Context.GetFormalDecl(Mixin, 0)->id == ReceiverA
+			&& Context.GetFormalDecl(Mixin, 1) != nullptr
+			&& Context.GetFormalDecl(Mixin, 1)->id == ReceiverB,
+			TEXT("mixin exact formal relation must remain independent from children")));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal()));
+	}
+
+	TEST_METHOD(CurrentModuleProjectionDistinguishesParameterPassingMode)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("passing-mode projection fixture selects CANONICAL")));
+		asIScriptModule* const RuntimeModule = ScriptEngine->GetModule(
+			"SemaCurrentModulePassingMode", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(RuntimeModule));
+		const std::string RuntimeSource = ASTEST_AS_ANSI(R"AS(
+			void CTAProjectionPassingMode(int &out Destination)
+			{
+				Destination = 7;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, RuntimeModule->AddScriptSection(
+			"SemaCurrentModulePassingMode.as", RuntimeSource.c_str(),
+			static_cast<unsigned int>(RuntimeSource.size()))));
+		ASSERT_THAT(AreEqual(0, RuntimeModule->Build(),
+			TEXT("passing-mode projection Runtime module must build")));
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asCSourceRange Range;
+		const asASTDeclId TranslationUnit = Sema.ActOnTranslationUnit(
+			"SemaCurrentModulePassingModeConsumer");
+		const asCQualType VoidType = Context.InternPrimitive(ttVoid, 0);
+		const asCQualType IntInRefType = Context.InternPrimitive(
+			ttInt, asAST_QUAL_REFERENCE | asAST_QUAL_IN);
+		const asASTDeclId AuthoredIn = Sema.ActOnFunctionDecl(
+			TranslationUnit, "CTAProjectionPassingMode", VoidType, Range);
+		Sema.ActOnParamDecl(AuthoredIn, "Source", IntInRefType, Range);
+		Sema.FinishDecl(AuthoredIn);
+
+		Sema.InternCompileFunctionModuleScope(
+			static_cast<asCModule*>(RuntimeModule));
+
+		asUINT MatchingFunctions = 0;
+		bool bHasIn = false;
+		bool bHasOut = false;
+		const asCDecl* const TuDecl = Context.GetDecl(TranslationUnit);
+		for (asUINT ChildIndex = 0;
+			TuDecl != nullptr && ChildIndex < TuDecl->children.GetLength();
+			++ChildIndex)
+		{
+			const asCDecl* const Child =
+				Context.GetDecl(TuDecl->children[ChildIndex]);
+			if (Child == nullptr || Child->kind != asAST_DECL_FUNCTION
+				|| !Child->name.Equals("CTAProjectionPassingMode"))
+			{
+				continue;
+			}
+			++MatchingFunctions;
+			const asCDecl* const Formal = Context.GetFormalDecl(Child->id, 0);
+			if (Formal == nullptr)
+			{
+				continue;
+			}
+			const asDWORD Direction =
+				Formal->type.quals & asAST_QUAL_PARAM_DIR_MASK;
+			bHasIn |= Direction == asAST_QUAL_IN;
+			bHasOut |= Direction == asAST_QUAL_OUT;
+		}
+
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2), MatchingFunctions,
+			TEXT("current-module projection must not collapse in/out overload identity")));
+		ASSERT_THAT(IsTrue(bHasIn && bHasOut,
+			TEXT("projected Runtime formal must preserve its exact passing direction")));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal()));
+	}
+
+	TEST_METHOD(CurrentModuleProjectionRestoresSourceValueParameterABI)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"FCTAProjectionValue",
+			sizeof(CanonicalASTSemaAuthorityTest::FSemaPod),
+			asOBJ_VALUE | asOBJ_POD
+				| asGetTypeTraits<CanonicalASTSemaAuthorityTest::FSemaPod>()) >= 0,
+			TEXT("script ABI projection fixture must register its value type")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("script ABI projection fixture selects CANONICAL")));
+		asIScriptModule* const RuntimeModule = ScriptEngine->GetModule(
+			"SemaCurrentModuleValueABI", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(RuntimeModule));
+		const std::string RuntimeSource = ASTEST_AS_ANSI(R"AS(
+			void CTAProjectionValueABI(FCTAProjectionValue Value)
+			{
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, RuntimeModule->AddScriptSection(
+			"SemaCurrentModuleValueABI.as", RuntimeSource.c_str(),
+			static_cast<unsigned int>(RuntimeSource.size()))));
+		ASSERT_THAT(AreEqual(0, RuntimeModule->Build(),
+			TEXT("script ABI projection Runtime module must build")));
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asASTDeclId TranslationUnit = Sema.ActOnTranslationUnit(
+			"SemaCurrentModuleValueABIConsumer");
+		Sema.InternCompileFunctionModuleScope(
+			static_cast<asCModule*>(RuntimeModule));
+
+		const asCDecl* ProjectedFunction = nullptr;
+		const asCDecl* const TuDecl = Context.GetDecl(TranslationUnit);
+		for (asUINT ChildIndex = 0;
+			TuDecl != nullptr && ChildIndex < TuDecl->children.GetLength();
+			++ChildIndex)
+		{
+			const asCDecl* const Child =
+				Context.GetDecl(TuDecl->children[ChildIndex]);
+			if (Child != nullptr && Child->kind == asAST_DECL_FUNCTION
+				&& Child->name.Equals("CTAProjectionValueABI"))
+			{
+				ProjectedFunction = Child;
+				break;
+			}
+		}
+		ASSERT_THAT(IsNotNull(ProjectedFunction,
+			TEXT("current-module script function must be projected")));
+		const asCDecl* const Formal = ProjectedFunction != nullptr
+			? Context.GetFormalDecl(ProjectedFunction->id, 0) : nullptr;
+		const asCType* const FormalType = Formal != nullptr
+			? Context.GetType(Formal->type.type) : nullptr;
+		ASSERT_THAT(IsTrue(Formal != nullptr && FormalType != nullptr
+			&& FormalType->stableKey.Equals("FCTAProjectionValue"),
+			TEXT("projected formal must retain the authored value type")));
+		ASSERT_THAT(IsTrue(Formal != nullptr
+			&& (Formal->type.quals
+				& (asAST_QUAL_CONST | asAST_QUAL_REFERENCE
+					| asAST_QUAL_PARAM_DIR_MASK)) == 0,
+			TEXT("Runtime const T&inout normalization must not leak into source identity")));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal()));
+	}
+
+	TEST_METHOD(CurrentModuleProjectionPreservesExplicitConstValueInOutSourceIdentity)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"FCTAProjectionExplicitValue",
+			sizeof(CanonicalASTSemaAuthorityTest::FSemaPod),
+			asOBJ_VALUE | asOBJ_POD
+				| asGetTypeTraits<CanonicalASTSemaAuthorityTest::FSemaPod>()) >= 0,
+			TEXT("explicit source-ABI fixture must register its value type")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("explicit source-ABI fixture selects CANONICAL")));
+		asIScriptModule* const RuntimeModule = ScriptEngine->GetModule(
+			"SemaCurrentModuleExplicitValueABI", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(RuntimeModule));
+		const std::string RuntimeSource = ASTEST_AS_ANSI(R"AS(
+			void CTAProjectionExplicitValueABI(
+				const FCTAProjectionExplicitValue &inout Value)
+			{
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, RuntimeModule->AddScriptSection(
+			"SemaCurrentModuleExplicitValueABI.as", RuntimeSource.c_str(),
+			static_cast<unsigned int>(RuntimeSource.size()))));
+		ASSERT_THAT(AreEqual(0, RuntimeModule->Build(),
+			TEXT("explicit const value &inout Runtime module must build")));
+
+		asIScriptFunction* const RuntimeFunction = RuntimeModule->GetFunctionByDecl(
+			"void CTAProjectionExplicitValueABI(const FCTAProjectionExplicitValue&inout)");
+		ASSERT_THAT(IsNotNull(RuntimeFunction));
+		const asCScriptFunction* const InternalRuntimeFunction =
+			static_cast<const asCScriptFunction*>(RuntimeFunction);
+		ASSERT_THAT(IsTrue(
+			InternalRuntimeFunction->parameterTypes.GetLength() == 1
+				&& InternalRuntimeFunction->parameterTypes[0].GetTypeInfo() != nullptr
+				&& (InternalRuntimeFunction->parameterTypes[0].GetTypeInfo()->GetFlags()
+					& asOBJ_VALUE) != 0
+				&& InternalRuntimeFunction->parameterTypes[0].IsReference()
+				&& InternalRuntimeFunction->parameterTypes[0].IsReadOnly()
+				&& InternalRuntimeFunction->inOutFlags.GetLength() == 1
+				&& InternalRuntimeFunction->inOutFlags[0] == asTM_INOUTREF,
+			TEXT("fixture must expose the same const value-object &inout Runtime ABI used by normalized by-value parameters")));
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asASTDeclId TranslationUnit = Sema.ActOnTranslationUnit(
+			"SemaCurrentModuleExplicitValueABIConsumer");
+		Sema.InternCompileFunctionModuleScope(
+			static_cast<asCModule*>(RuntimeModule));
+
+		const asCDecl* ProjectedFunction = nullptr;
+		const asCDecl* const TuDecl = Context.GetDecl(TranslationUnit);
+		for (asUINT ChildIndex = 0;
+			TuDecl != nullptr && ChildIndex < TuDecl->children.GetLength();
+			++ChildIndex)
+		{
+			const asCDecl* const Child =
+				Context.GetDecl(TuDecl->children[ChildIndex]);
+			if (Child != nullptr && Child->kind == asAST_DECL_FUNCTION
+				&& Child->name.Equals("CTAProjectionExplicitValueABI"))
+			{
+				ProjectedFunction = Child;
+				break;
+			}
+		}
+		ASSERT_THAT(IsNotNull(ProjectedFunction,
+			TEXT("current-module explicit-ref function must be projected")));
+		const asCDecl* const Formal = ProjectedFunction != nullptr
+			? Context.GetFormalDecl(ProjectedFunction->id, 0) : nullptr;
+		const asDWORD ExpectedQualifiers = asAST_QUAL_CONST
+			| asAST_QUAL_REFERENCE | asAST_QUAL_INOUT;
+		ASSERT_THAT(IsTrue(Formal != nullptr
+			&& Formal->type.quals == ExpectedQualifiers,
+			*FString::Printf(TEXT(
+				"producer-carried source formal must preserve explicit const &inout instead of being heuristically inverted to by-value; quals=0x%X expected=0x%X"),
+				Formal != nullptr ? Formal->type.quals : 0,
+				ExpectedQualifiers)));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal()));
+	}
+
+	TEST_METHOD(PreparedBuilderPublishesExplicitConstValueInOutSourceIdentity)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"FCTAPreparedExplicitValue",
+			sizeof(CanonicalASTSemaAuthorityTest::FSemaPod),
+			asOBJ_VALUE | asOBJ_POD
+				| asGetTypeTraits<CanonicalASTSemaAuthorityTest::FSemaPod>()) >= 0,
+			TEXT("prepared source-ABI fixture must register its value type")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("prepared source-ABI fixture selects CANONICAL")));
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "SemaPreparedExplicitValueABI");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			void CTAPreparedExplicitValueABI(
+				const FCTAPreparedExplicitValue &inout Value)
+			{
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module, "SemaPreparedExplicitValueABI.as", Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateFunctions()));
+
+		asCScriptFunction* RuntimeFunction = nullptr;
+		for (asUINT FunctionIndex = 0;
+			FunctionIndex < Module->globalFunctionList.GetLength();
+			++FunctionIndex)
+		{
+			asCScriptFunction* const Candidate =
+				Module->globalFunctionList[FunctionIndex];
+			if (Candidate != nullptr
+				&& Candidate->name.Equals("CTAPreparedExplicitValueABI"))
+			{
+				RuntimeFunction = Candidate;
+				break;
+			}
+		}
+		const asDWORD ExpectedQualifiers = asAST_QUAL_CONST
+			| asAST_QUAL_REFERENCE | asAST_QUAL_INOUT;
+		ASSERT_THAT(IsTrue(RuntimeFunction != nullptr
+			&& RuntimeFunction->canonicalASTStableDeclKey.GetLength() > 0,
+			TEXT("prepared Builder must publish the exact Canonical declaration identity")));
+		ASSERT_THAT(IsTrue(RuntimeFunction != nullptr
+			&& RuntimeFunction->canonicalASTSourceParameterQualifiers.GetLength() == 1
+			&& RuntimeFunction->canonicalASTSourceParameterQualifiers[0]
+				== ExpectedQualifiers,
+			TEXT("prepared Builder must publish exact source qualifiers before CodeGen consumes the Runtime shell")));
+	}
+
+	TEST_METHOD(DerivedFuncdefPreservesExactSourceFormalIdentityAcrossReuseAndSemaConsumers)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"FCTADerivedFuncdefValue",
+			sizeof(CanonicalASTSemaAuthorityTest::FSemaPod),
+			asOBJ_VALUE | asOBJ_POD
+				| asGetTypeTraits<CanonicalASTSemaAuthorityTest::FSemaPod>()) >= 0,
+			TEXT("derived-funcdef source-formal fixture must register its value type")));
+		const int HostFuncdefTypeId = ScriptEngine->RegisterFuncdef(
+			"bool CTAHostNormalizedFuncdef(const FCTADerivedFuncdefValue&inout Value)");
+		ASSERT_THAT(IsTrue(HostFuncdefTypeId >= 0,
+			TEXT("fixture needs a host funcdef with the colliding normalized Runtime ABI")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* PublicModule = nullptr;
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			bool CTADerivedByValue(FCTADerivedFuncdefValue Value)
+			{
+				return true;
+			}
+
+			bool CTADerivedExplicit(
+				const FCTADerivedFuncdefValue&inout Value)
+			{
+				return true;
+			}
+		)AS");
+		ASSERT_THAT(AreEqual(0,
+			AngelscriptNativeTestSupport::CompileNativeModule(
+				Engine.Get(), "SemaDerivedFuncdefSourceFormal",
+				Source.c_str(), PublicModule),
+			TEXT("derived-funcdef source-formal provider must compile canonically")));
+		asCModule* const Module = static_cast<asCModule*>(PublicModule);
+		asCScriptFunction* const ByValue = PublicModule != nullptr
+			? static_cast<asCScriptFunction*>(
+				PublicModule->GetFunctionByName("CTADerivedByValue"))
+			: nullptr;
+		asCScriptFunction* const Explicit = PublicModule != nullptr
+			? static_cast<asCScriptFunction*>(
+				PublicModule->GetFunctionByName("CTADerivedExplicit"))
+			: nullptr;
+		asITypeInfo* const HostTypeInfo = HostFuncdefTypeId >= 0
+			? ScriptEngine->GetTypeInfoById(HostFuncdefTypeId) : nullptr;
+		asCFuncdefType* const HostFuncdef = HostTypeInfo != nullptr
+			? static_cast<asCFuncdefType*>(
+				static_cast<asCTypeInfo*>(HostTypeInfo))
+			: nullptr;
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(IsNotNull(ByValue));
+		ASSERT_THAT(IsNotNull(Explicit));
+		ASSERT_THAT(IsNotNull(HostFuncdef));
+		if (Module == nullptr || ByValue == nullptr || Explicit == nullptr
+			|| HostFuncdef == nullptr)
+		{
+			return;
+		}
+
+		const asDWORD ExplicitQualifiers = asAST_QUAL_CONST
+			| asAST_QUAL_REFERENCE | asAST_QUAL_INOUT;
+		ASSERT_THAT(IsTrue(ByValue->parameterTypes.GetLength() == 1
+			&& Explicit->parameterTypes.GetLength() == 1
+			&& ByValue->parameterTypes[0] == Explicit->parameterTypes[0]
+			&& ByValue->inOutFlags.GetLength() == 1
+			&& Explicit->inOutFlags.GetLength() == 1
+			&& ByValue->inOutFlags[0] == Explicit->inOutFlags[0]
+			&& ByValue->inOutFlags[0] == asTM_INOUTREF,
+			TEXT("fixture must prove by-value and explicit const &inout collide only after Runtime ABI normalization")));
+		ASSERT_THAT(IsTrue(ByValue->canonicalASTSourceParameterQualifiers.GetLength() == 1
+			&& ByValue->canonicalASTSourceParameterQualifiers[0] == 0
+			&& Explicit->canonicalASTSourceParameterQualifiers.GetLength() == 1
+			&& Explicit->canonicalASTSourceParameterQualifiers[0]
+				== ExplicitQualifiers,
+			TEXT("the source function producers must already expose distinct exact qualifier vectors")));
+		ASSERT_THAT(IsTrue(HostFuncdef->funcdef != nullptr
+			&& HostFuncdef->funcdef->canonicalASTSourceParameterQualifiers.GetLength() == 0,
+			TEXT("host/native funcdefs deliberately have no Canonical source-formal vector")));
+
+		asCFuncdefType* const ByValueFuncdef =
+			ScriptEngine->FindMatchingFuncdef(ByValue, Module);
+		asCFuncdefType* const ExplicitFuncdef =
+			ScriptEngine->FindMatchingFuncdef(Explicit, Module);
+		ASSERT_THAT(IsTrue(ByValueFuncdef != nullptr
+			&& ByValueFuncdef != HostFuncdef,
+			TEXT("a source-owned by-value function must not reuse a host funcdef whose normalized ABI lost that source identity")));
+		ASSERT_THAT(IsTrue(ExplicitFuncdef != nullptr
+			&& ExplicitFuncdef != HostFuncdef,
+			TEXT("a source-owned explicit const &inout function must not reuse an empty-metadata host funcdef")));
+		ASSERT_THAT(IsTrue(ByValueFuncdef != nullptr
+			&& ExplicitFuncdef != nullptr
+			&& ByValueFuncdef != ExplicitFuncdef,
+			TEXT("source-distinct signatures that share one Runtime ABI need distinct derived funcdef types")));
+		ASSERT_THAT(IsTrue(ByValueFuncdef != nullptr
+			&& ByValueFuncdef->funcdef != nullptr
+			&& ByValueFuncdef->funcdef->canonicalASTSourceParameterQualifiers.GetLength() == 1
+			&& ByValueFuncdef->funcdef->canonicalASTSourceParameterQualifiers[0] == 0,
+			TEXT("derived by-value funcdef must copy the exact zero-qualifier source formal")));
+		ASSERT_THAT(IsTrue(ExplicitFuncdef != nullptr
+			&& ExplicitFuncdef->funcdef != nullptr
+			&& ExplicitFuncdef->funcdef->canonicalASTSourceParameterQualifiers.GetLength() == 1
+			&& ExplicitFuncdef->funcdef->canonicalASTSourceParameterQualifiers[0]
+				== ExplicitQualifiers,
+			TEXT("derived explicit funcdef must copy the complete source qualifier bits")));
+		ASSERT_THAT(AreEqual(ByValueFuncdef,
+			ScriptEngine->FindMatchingFuncdef(ByValue, Module),
+			TEXT("source-owned funcdef reuse must select the same exact qualifier vector")));
+		ASSERT_THAT(AreEqual(ExplicitFuncdef,
+			ScriptEngine->FindMatchingFuncdef(Explicit, Module),
+			TEXT("explicit source-owned funcdef reuse must remain stable")));
+		if (ByValueFuncdef == nullptr || ExplicitFuncdef == nullptr)
+		{
+			return;
+		}
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCRuntimeTypeBridge Bridge(ScriptEngine);
+		const asASTDeclId TranslationUnit = Sema.ActOnTranslationUnit(
+			"SemaDerivedFuncdefConsumers");
+		asITypeInfo* const RuntimeValueType =
+			ScriptEngine->GetTypeInfoByName("FCTADerivedFuncdefValue");
+		const asCQualType ByValueType = RuntimeValueType != nullptr
+			? Bridge.FromDataType(Context, asCDataType::CreateType(
+				static_cast<asCTypeInfo*>(RuntimeValueType), false))
+			: asCQualType();
+		asCQualType ExplicitType = ByValueType;
+		ExplicitType.quals = ExplicitQualifiers;
+		const asCQualType ByValueFuncdefType = Bridge.FromDataType(
+			Context, asCDataType::CreateType(ByValueFuncdef, false));
+		const asCQualType ExplicitFuncdefType = Bridge.FromDataType(
+			Context, asCDataType::CreateType(ExplicitFuncdef, false));
+		const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+		ASSERT_THAT(IsTrue(TranslationUnit.IsValid()
+			&& ByValueType.IsValid() && ExplicitType.IsValid()
+			&& ByValueFuncdefType.IsValid()
+			&& ExplicitFuncdefType.IsValid()));
+
+		const std::string LambdaSource = "function(Value)";
+		asCScriptCode LambdaCode;
+		LambdaCode.SetCode(
+			"SemaDerivedFuncdefConsumers.as", LambdaSource.c_str(), true);
+		auto MakeExplicitLambda = [&Sema, &TranslationUnit, &BoolType,
+			&LambdaCode, &LambdaSource](
+			const char* OwnerName,
+			const asCQualType& ParameterType) -> asASTExprId
+		{
+			const asASTDeclId Owner = Sema.ActOnFunctionDecl(
+				TranslationUnit, OwnerName, BoolType, asCSourceRange());
+			asSLambdaHeaderAction Header;
+			Header.owner = Owner;
+			Header.recoveryReturnType = BoolType;
+			Header.parameterCount = 1;
+			Header.explicitlyTypedParameterCount = 1;
+			Header.beginOffset = 0;
+			Header.endOffset = static_cast<asUINT>(LambdaSource.size());
+			const asASTDeclId Lambda =
+				Sema.ActOnLambdaHeaderAction(Header, &LambdaCode);
+			Sema.ActOnParamDecl(
+				Lambda, "Value", ParameterType, asCSourceRange());
+			Sema.FinishDecl(Lambda);
+			asSLambdaExpressionAction Expression;
+			Expression.lambdaDecl = Lambda;
+			Expression.beginOffset = Header.beginOffset;
+			Expression.endOffset = Header.endOffset;
+			return Sema.ActOnLambdaExpressionAction(
+				Expression, &LambdaCode);
+		};
+
+		const asASTExprId ByValueLambda = MakeExplicitLambda(
+			"ByValueLambdaOwner", ByValueType);
+		const asASTExprId ExplicitLambda = MakeExplicitLambda(
+			"ExplicitLambdaOwner", ExplicitType);
+		ASSERT_THAT(IsTrue(Sema.IsLambdaViableForFuncdef(
+			ByValueLambda, ByValueFuncdefType),
+			TEXT("by-value lambda must remain viable for the exact by-value derived funcdef")));
+		ASSERT_THAT(IsFalse(Sema.IsLambdaViableForFuncdef(
+			ByValueLambda, ExplicitFuncdefType),
+			TEXT("by-value lambda must not become viable for explicit const &inout merely because Runtime ABI matches")));
+		ASSERT_THAT(IsTrue(Sema.IsLambdaViableForFuncdef(
+			ExplicitLambda, ExplicitFuncdefType),
+			TEXT("explicit lambda must remain viable for the exact explicit derived funcdef")));
+		ASSERT_THAT(IsFalse(Sema.IsLambdaViableForFuncdef(
+			ExplicitLambda, ByValueFuncdefType),
+			TEXT("explicit lambda must not become viable for the by-value derived funcdef")));
+
+		const asASTDeclId OmittedOwner = Sema.ActOnFunctionDecl(
+			TranslationUnit, "OmittedLambdaOwner", BoolType,
+			asCSourceRange());
+		asSLambdaHeaderAction OmittedHeader;
+		OmittedHeader.owner = OmittedOwner;
+		OmittedHeader.recoveryReturnType = BoolType;
+		OmittedHeader.parameterCount = 1;
+		OmittedHeader.explicitlyTypedParameterCount = 0;
+		OmittedHeader.beginOffset = 0;
+		OmittedHeader.endOffset = static_cast<asUINT>(LambdaSource.size());
+		const asASTDeclId OmittedLambda =
+			Sema.ActOnLambdaHeaderAction(OmittedHeader, &LambdaCode);
+		asSParameterDeclAction OmittedParameterAction;
+		OmittedParameterAction.callable = OmittedLambda;
+		OmittedParameterAction.name = "Value";
+		OmittedParameterAction.beginOffset = 9;
+		OmittedParameterAction.endOffset = 14;
+		OmittedParameterAction.typeOmitted = true;
+		const asASTDeclId OmittedParameter =
+			Sema.ActOnParameterDeclAction(
+				OmittedParameterAction, &LambdaCode);
+		Sema.FinishDecl(OmittedLambda);
+		asSLambdaExpressionAction OmittedExpression;
+		OmittedExpression.lambdaDecl = OmittedLambda;
+		OmittedExpression.beginOffset = OmittedHeader.beginOffset;
+		OmittedExpression.endOffset = OmittedHeader.endOffset;
+		const asASTExprId OmittedLambdaRef =
+			Sema.ActOnLambdaExpressionAction(
+				OmittedExpression, &LambdaCode);
+		const asASTExprId OmittedConversion = Sema.ActOnConversion(
+			OmittedLambdaRef, ExplicitFuncdefType, asCSourceRange());
+		const asCDecl* const InferredOmitted =
+			Context.GetDecl(OmittedParameter);
+		ASSERT_THAT(IsTrue(OmittedConversion.IsValid()
+			&& InferredOmitted != nullptr
+			&& InferredOmitted->type == ExplicitType,
+			*FString::Printf(TEXT(
+				"omitted lambda formal must infer exact explicit source qualifiers from the derived funcdef; actual=0x%X expected=0x%X"),
+				InferredOmitted != nullptr ? InferredOmitted->type.quals : 0,
+				ExplicitQualifiers)));
+
+		const asASTDeclId CallOwner = Sema.ActOnFunctionDecl(
+			TranslationUnit, "IndirectCallOwner", BoolType,
+			asCSourceRange());
+		Sema.ActOnParamDecl(
+			CallOwner, "Callback", ExplicitFuncdefType, asCSourceRange());
+		const asASTDeclId CallValue = Sema.ActOnParamDecl(
+			CallOwner, "Value", ExplicitType, asCSourceRange());
+		asCArray<asASTExprId> CallArguments;
+		CallArguments.PushLast(Sema.ActOnDeclRef(
+			CallValue, ExplicitType, asCSourceRange()));
+		const asASTExprId IndirectCall = Sema.ActOnCallExpr(
+			CallOwner, "Callback", CallArguments, asCSourceRange());
+		const asCExpr* const Call = Context.GetExpr(IndirectCall);
+		bool bHasExactCallFormal = false;
+		for (asUINT Index = 0;
+			Call != nullptr && Index < Call->callArguments.GetLength(); ++Index)
+		{
+			const asSASTCallArgument& Argument = Call->callArguments[Index];
+			if (Argument.formalIndex == 0
+				&& Argument.formalType == ExplicitType)
+			{
+				bHasExactCallFormal = true;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(bHasExactCallFormal,
+			TEXT("indirect funcdef call-plan must consume the derived signature's exact source formal instead of the lossy ABI inverse")));
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("derived funcdef source-formal producer/consumer graph must seal. diagnostics:\n%s\nAST:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal(), *Evidence));
+	}
+
+	TEST_METHOD(NativeBehaviourProjectionDistinguishesParameterPassingMode)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"array<class T>", 0,
+			asOBJ_REF | asOBJ_TEMPLATE | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("native behaviour fixture must register array<T>")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectBehaviour(
+			"array<T>", asBEHAVE_FACTORY,
+			"array<T> f(int&in TypeInfo, int&in Source)",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::SemaIntArrayFactory),
+			asCALL_GENERIC) >= 0,
+			TEXT("native behaviour fixture must register an in-ref factory")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectBehaviour(
+			"array<T>", asBEHAVE_FACTORY,
+			"array<T> f(int&in TypeInfo, int&out Destination)",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::SemaIntArrayFactory),
+			asCALL_GENERIC) >= 0,
+			TEXT("native behaviour fixture must register an out-ref factory")));
+		asITypeInfo* const RuntimeType =
+			ScriptEngine->GetTypeInfoByDecl("array<int>");
+		ASSERT_THAT(IsNotNull(RuntimeType));
+		if (RuntimeType == nullptr)
+		{
+			return;
+		}
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCRuntimeTypeBridge Bridge(ScriptEngine);
+		const asCSourceRange Range;
+		const asASTDeclId TranslationUnit = Sema.ActOnTranslationUnit(
+			"SemaNativeBehaviourPassingMode");
+		const asCDataType RuntimeDataType = asCDataType::CreateType(
+			static_cast<asCTypeInfo*>(RuntimeType), false);
+		const asCQualType ArrayType =
+			Bridge.FromDataType(Context, RuntimeDataType);
+		const asCType* const CanonicalArrayType =
+			Context.GetType(ArrayType.type);
+		ASSERT_THAT(IsTrue(ArrayType.IsValid()
+			&& CanonicalArrayType != nullptr
+			&& CanonicalArrayType->stableKey.Equals("array<int>")));
+		if (!ArrayType.IsValid() || CanonicalArrayType == nullptr)
+		{
+			return;
+		}
+
+		Sema.InternNativeCallablesForType(ArrayType);
+
+		asUINT OneFormalConstructors = 0;
+		bool bHasIn = false;
+		bool bHasOut = false;
+		const asCDecl* ClassDecl = nullptr;
+		const asCDecl* const TuDecl = Context.GetDecl(TranslationUnit);
+		for (asUINT ChildIndex = 0;
+			TuDecl != nullptr && ChildIndex < TuDecl->children.GetLength();
+			++ChildIndex)
+		{
+			const asCDecl* const Child =
+				Context.GetDecl(TuDecl->children[ChildIndex]);
+			if (Child != nullptr && Child->kind == asAST_DECL_CLASS
+				&& Child->stableKey.Equals("array<int>"))
+			{
+				ClassDecl = Child;
+				break;
+			}
+		}
+		ASSERT_THAT(IsNotNull(ClassDecl,
+			TEXT("native behaviour projection must materialize its native class view")));
+		for (asUINT ChildIndex = 0;
+			ClassDecl != nullptr && ChildIndex < ClassDecl->children.GetLength();
+			++ChildIndex)
+		{
+			const asCDecl* const Child =
+				Context.GetDecl(ClassDecl->children[ChildIndex]);
+			if (Child == nullptr || Child->kind != asAST_DECL_CONSTRUCTOR
+				|| Context.GetFormalDeclCount(Child->id) != 1)
+			{
+				continue;
+			}
+			++OneFormalConstructors;
+			const asCDecl* const Formal = Context.GetFormalDecl(Child->id, 0);
+			if (Formal == nullptr)
+			{
+				continue;
+			}
+			const asDWORD Direction =
+				Formal->type.quals & asAST_QUAL_PARAM_DIR_MASK;
+			bHasIn |= Direction == asAST_QUAL_IN;
+			bHasOut |= Direction == asAST_QUAL_OUT;
+		}
+
+		const FString ConstructorInventory = FString::Printf(
+			TEXT("native behaviour projection must retain two one-formal constructors; count=%u in=%s out=%s"),
+			OneFormalConstructors,
+			bHasIn ? TEXT("true") : TEXT("false"),
+			bHasOut ? TEXT("true") : TEXT("false"));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(2), OneFormalConstructors,
+			*ConstructorInventory));
+		ASSERT_THAT(IsTrue(bHasIn && bHasOut,
+			TEXT("projected native behaviour formal must preserve its passing direction")));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal()));
+	}
+
+	TEST_METHOD(NativeMethodProjectionPreservesExactOutDirection)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"CCTAPassingReceiver", 0,
+			asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("native method fixture must register its receiver")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectMethod(
+			"CCTAPassingReceiver", "void Route(int&in)",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::SemaIntArrayInsertLast),
+			asCALL_GENERIC) >= 0,
+			TEXT("native method fixture must register its in-ref overload")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectMethod(
+			"CCTAPassingReceiver", "void Route(int&out)",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::SemaIntArrayInsertLast),
+			asCALL_GENERIC) >= 0,
+			TEXT("native method fixture must register its out-ref overload")));
+
+		asITypeInfo* const RuntimeType =
+			ScriptEngine->GetTypeInfoByDecl("CCTAPassingReceiver");
+		ASSERT_THAT(IsNotNull(RuntimeType));
+		if (RuntimeType == nullptr)
+		{
+			return;
+		}
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCRuntimeTypeBridge Bridge(ScriptEngine);
+		const asCSourceRange Range;
+		const asASTDeclId TranslationUnit = Sema.ActOnTranslationUnit(
+			"SemaNativeMethodPassingMode");
+		const asCDataType RuntimeDataType = asCDataType::CreateType(
+			static_cast<asCTypeInfo*>(RuntimeType), false);
+		const asCQualType ReceiverType =
+			Bridge.FromDataType(Context, RuntimeDataType);
+		const asASTDeclId Class = Sema.ActOnClassDecl(
+			TranslationUnit, "CCTAPassingReceiver", Range);
+		Sema.FinishDecl(Class);
+
+		const asASTDeclId Receiver = Sema.ActOnVarDecl(
+			TranslationUnit, "Receiver", ReceiverType, Range);
+		Sema.FinishDecl(Receiver);
+		const asASTExprId ReceiverExpr = Sema.ActOnDeclRef(
+			Receiver, ReceiverType, Range);
+		asCArray<asASTExprId> Arguments;
+		Arguments.PushLast(Sema.ActOnIntegerLiteral(7, Range));
+		const asASTExprId Call = Sema.ActOnCallExpr(
+			TranslationUnit, "Route", Arguments, Range, ReceiverExpr);
+		ASSERT_THAT(IsTrue(Call.IsValid(),
+			TEXT("native method fixture must select its in-ref overload")));
+
+		asUINT OneFormalMethods = 0;
+		bool bHasIn = false;
+		bool bHasOut = false;
+		const asCDecl* const ClassDecl = Context.GetDecl(Class);
+		for (asUINT ChildIndex = 0;
+			ClassDecl != nullptr && ChildIndex < ClassDecl->children.GetLength();
+			++ChildIndex)
+		{
+			const asCDecl* const Child =
+				Context.GetDecl(ClassDecl->children[ChildIndex]);
+			if (Child == nullptr || Child->kind != asAST_DECL_METHOD
+				|| !Child->name.Equals("Route")
+				|| Context.GetFormalDeclCount(Child->id) != 1)
+			{
+				continue;
+			}
+			++OneFormalMethods;
+			const asCDecl* const Formal = Context.GetFormalDecl(Child->id, 0);
+			if (Formal == nullptr)
+			{
+				continue;
+			}
+			const asDWORD Direction =
+				Formal->type.quals & asAST_QUAL_PARAM_DIR_MASK;
+			bHasIn |= Direction == asAST_QUAL_IN;
+			bHasOut |= Direction == asAST_QUAL_OUT;
+		}
+
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2), OneFormalMethods,
+			TEXT("native method projection must retain both passing overloads")));
+		ASSERT_THAT(IsTrue(bHasIn && bHasOut,
+			TEXT("native method projection must not rewrite out as inout")));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal()));
 	}
 
 	TEST_METHOD(ParserConstructExprActionBindsScalarAndObjectFormsWithoutNodeReplay)
@@ -14404,13 +22434,32 @@ public:
 			&& Call->children[1] == Second
 			&& Call->children[2] == First,
 			TEXT("qualified call action must seal exact callee, reverse-formal named arguments and range")));
-		ASSERT_THAT(IsTrue(Context.GetExpr(Third) != nullptr
-			&& Context.GetExpr(Third)->literal.Equals("named:Third=33")
-			&& Context.GetExpr(Second) != nullptr
-			&& Context.GetExpr(Second)->literal.Equals("named:Second=22")
-			&& Context.GetExpr(First) != nullptr
-			&& Context.GetExpr(First)->literal.Equals("named:First=11"),
-			TEXT("Sema must own named-source to formal-slot provenance")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(3),
+			Call != nullptr ? Call->callArguments.GetLength() : 0,
+			TEXT("qualified named action must seal one record per formal")));
+		if (Call != nullptr && Call->callArguments.GetLength() == 3)
+		{
+			const asSASTCallArgument& ThirdRecord = Call->callArguments[0];
+			const asSASTCallArgument& SecondRecord = Call->callArguments[1];
+			const asSASTCallArgument& FirstRecord = Call->callArguments[2];
+			ASSERT_THAT(IsTrue(
+				ThirdRecord.expression == Third
+					&& ThirdRecord.formalIndex == 2
+					&& ThirdRecord.origin == asAST_CALL_ARGUMENT_NAMED
+					&& ThirdRecord.sourceOrdinal == 0
+					&& ThirdRecord.authoredName.Equals("Third")
+					&& SecondRecord.expression == Second
+					&& SecondRecord.formalIndex == 1
+					&& SecondRecord.origin == asAST_CALL_ARGUMENT_NAMED
+					&& SecondRecord.sourceOrdinal == 2
+					&& SecondRecord.authoredName.Equals("Second")
+					&& FirstRecord.expression == First
+					&& FirstRecord.formalIndex == 0
+					&& FirstRecord.origin == asAST_CALL_ARGUMENT_NAMED
+					&& FirstRecord.sourceOrdinal == 1
+					&& FirstRecord.authoredName.Equals("First"),
+				TEXT("Sema must own named-source to formal-slot provenance without rewriting literal text")));
+		}
 
 		asSCallExprAction DistinctAction = Action;
 		DistinctAction.arguments[2].expression = DistinctSecond;
@@ -14503,12 +22552,21 @@ public:
 			&& Call->range.end.offset == EndOffset
 			&& Call->children.GetLength() == 3,
 			*Diagnostic));
-		ASSERT_THAT(IsTrue(Context.GetExpr(Call->children[0]) != nullptr
-			&& Context.GetExpr(Call->children[0])->literal.Equals("named:Third=33")
-			&& Context.GetExpr(Call->children[1]) != nullptr
-			&& Context.GetExpr(Call->children[1])->literal.Equals("named:Second=22")
-			&& Context.GetExpr(Call->children[2]) != nullptr
-			&& Context.GetExpr(Call->children[2])->literal.Equals("named:First=11"),
+		ASSERT_THAT(IsTrue(Call != nullptr
+			&& Call->callArguments.GetLength() == 3
+			&& Call->callArguments[0].expression == Call->children[0]
+			&& Call->callArguments[0].formalIndex == 2
+			&& Call->callArguments[0].origin == asAST_CALL_ARGUMENT_NAMED
+			&& Call->callArguments[0].sourceOrdinal == 0
+			&& Call->callArguments[0].authoredName.Equals("Third")
+			&& Call->callArguments[1].expression == Call->children[1]
+			&& Call->callArguments[1].formalIndex == 1
+			&& Call->callArguments[1].sourceOrdinal == 2
+			&& Call->callArguments[1].authoredName.Equals("Second")
+			&& Call->callArguments[2].expression == Call->children[2]
+			&& Call->callArguments[2].formalIndex == 0
+			&& Call->callArguments[2].sourceOrdinal == 1
+			&& Call->callArguments[2].authoredName.Equals("First"),
 			*Diagnostic));
 
 		const FString SourceRoot = FPaths::Combine(
@@ -14532,6 +22590,111 @@ public:
 			TEXT("ParseFunctionCall must publish through the dedicated typed action")));
 		ASSERT_THAT(IsFalse(CallSlice.Contains(TEXT("ActOnParsedExpr(")),
 			TEXT("complete/recoverable ordinary call must not replay snFunctionCall semantics")));
+	}
+
+	TEST_METHOD(ParserSuperCallBindsExactDirectBaseMethodBeforePublication)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaParserSuperCall");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaParserSuperCall module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			class SemaSuperBase
+			{
+				int Compute()
+				{
+					return 1;
+				}
+			}
+
+			class SemaSuperDerived : SemaSuperBase
+			{
+				int Compute()
+				{
+					return Super::Compute() + 10;
+				}
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaParserSuperCall.as", Source.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context, Module);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("Super call authority fixture must parse")));
+		Sema.ResolveDeferredNames();
+		Sema.ResolveLexicalScopes();
+		Sema.LayoutScriptClassFields(Module);
+
+		const asCDecl* Base = nullptr;
+		const asCDecl* Derived = nullptr;
+		const asCDecl* BaseCompute = nullptr;
+		const asCExpr* SuperCall = nullptr;
+		for (asUINT DeclIndex = 1; DeclIndex <= Context.GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(DeclIndex));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_CLASS
+				&& Decl->name.Equals("SemaSuperBase"))
+			{
+				Base = Decl;
+			}
+			if (Decl != nullptr && Decl->kind == asAST_DECL_CLASS
+				&& Decl->name.Equals("SemaSuperDerived"))
+			{
+				Derived = Decl;
+			}
+		}
+		for (asUINT ChildIndex = 0;
+			Base != nullptr && ChildIndex < Base->children.GetLength(); ++ChildIndex)
+		{
+			const asCDecl* const Child = Context.GetDecl(Base->children[ChildIndex]);
+			if (Child != nullptr && Child->kind == asAST_DECL_METHOD
+				&& Child->name.Equals("Compute"))
+			{
+				BaseCompute = Child;
+				break;
+			}
+		}
+		for (asUINT ExprIndex = 1; ExprIndex <= Context.GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Expr = Context.GetExpr(asASTExprId(ExprIndex));
+			if (Expr != nullptr && Expr->kind == asAST_EXPR_CALL
+				&& Expr->range.begin.IsValid()
+				&& Source.substr(
+					Expr->range.begin.offset,
+					Expr->range.end.offset - Expr->range.begin.offset)
+					== "Super::Compute()")
+			{
+				SuperCall = Expr;
+				break;
+			}
+		}
+
+		const FString Evidence = FString::Printf(
+			TEXT("Super call must own exact direct-base MethodDecl before publication. diagnostics:\n%s"),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema));
+		ASSERT_THAT(IsTrue(Base != nullptr && Derived != nullptr
+			&& Derived->bases.GetLength() == 1
+			&& Derived->bases[0] == Base->id,
+			*Evidence));
+		ASSERT_THAT(IsTrue(BaseCompute != nullptr
+			&& SuperCall != nullptr
+			&& SuperCall->resolvedDecl == BaseCompute->id
+			&& SuperCall->callDispatch == asAST_CALL_DISPATCH_DIRECT
+			&& SuperCall->type == BaseCompute->type,
+			*Evidence));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal(), *Evidence));
+		asSAstVerifyResult Publication;
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK,
+			asCASTVerifyPublication(Context, Publication), *Evidence));
 	}
 
 	TEST_METHOD(SemaUnaryExprActionSelectsOpPostIncWithoutScriptNode)
@@ -15550,8 +23713,8 @@ public:
 		const asCType* const DoubleType = Context.GetType(DoubleExpr->type.type);
 		ASSERT_THAT(IsNotNull(FloatType));
 		ASSERT_THAT(IsNotNull(DoubleType));
-		ASSERT_THAT(IsTrue(FloatType != nullptr && FloatType->stableKey.Equals("float"),
-			TEXT("float32 literal action must retain canonical float type")));
+		ASSERT_THAT(IsTrue(FloatType != nullptr && FloatType->stableKey.Equals("float32"),
+			TEXT("float32 literal action must retain canonical float32 type")));
 		ASSERT_THAT(IsTrue(DoubleType != nullptr && DoubleType->stableKey.Equals("double"),
 			TEXT("float64 literal action must retain canonical double type")));
 		ASSERT_THAT(AreEqual(asAST_EXPR_NULL_LITERAL, NullExpr->kind));
@@ -18858,6 +27021,190 @@ public:
 		ASSERT_THAT(IsTrue(CanonicalASTSemaAuthorityTest::SemaHasDiagnosticPrefix(Sema, "unresolved-callee:F"), *DumpMsg));
 	}
 
+	TEST_METHOD(ParserTypeAndCompanionNamespaceShareQualifiedScope)
+	{
+		// UE exposes static-looking script APIs through a namespace that has the
+		// same stable spelling as its type (including generated StaticClass and
+		// native FString/FText helpers). The qualifier is one language scope even
+		// though the Canonical AST preserves both declaration owners.
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaTypeCompanionNamespaceScope");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaTypeCompanionNamespaceScope module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		asCScriptCode Code;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class Companion
+			{
+			}
+
+			namespace Companion
+			{
+				int StaticValue()
+				{
+					return 42;
+				}
+			}
+
+			int Entry()
+			{
+				return Companion::StaticValue();
+			}
+			)AS");
+		Code.SetCode("SemaTypeCompanionNamespaceScope.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("type/companion-namespace fixture must parse")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("type/companion-namespace AST must seal")));
+
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Text =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
+		const FString Diagnostics =
+			CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema);
+		const FString Evidence = FString::Printf(
+			TEXT("Companion::StaticValue must resolve through the companion namespace. dump:\n%s\ndiag:\n%s"),
+			*Text, *Diagnostics);
+		ASSERT_THAT(AreEqual(0,
+			static_cast<int32>(Sema.GetDiagnostics().GetLength()), *Evidence));
+		ASSERT_THAT(AreEqual(1,
+			CanonicalASTSemaAuthorityTest::CountDumpCallLinesWithCallee(
+				Text, TEXT("callee=Companion::StaticValue()")),
+			*Evidence));
+	}
+
+	TEST_METHOD(ParserLocalAutoInferenceSealsRangeForIteratorAndElementTypes)
+	{
+		// The UE preprocessor lowers range-for into two ordinary local auto
+		// declarations. Canonical Sema must commit the initializer's exact type to
+		// each VarDecl before later property/member/call actions observe it.
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaLocalAutoRangeForTypes");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaLocalAutoRangeForTypes module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		asCScriptCode Code;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct FAutoElement
+			{
+				int GetValue() const
+				{
+					return 42;
+				}
+			}
+
+			struct FAutoIterator
+			{
+				bool CanProceed;
+
+				FAutoElement Proceed()
+				{
+					FAutoElement Value;
+					return Value;
+				}
+			}
+
+			FAutoIterator MakeIterator()
+			{
+				FAutoIterator Iterator;
+				Iterator.CanProceed = true;
+				return Iterator;
+			}
+
+			int Consume(int Value)
+			{
+				return Value;
+			}
+
+			int Entry()
+			{
+				auto _Iterator = MakeIterator();
+				if (_Iterator.CanProceed)
+				{
+					auto __auto_constref_type Element = _Iterator.Proceed();
+					return Consume(Element.GetValue());
+				}
+				return 0;
+			}
+			)AS");
+		Code.SetCode("SemaLocalAutoRangeForTypes.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("range-for-shaped local auto fixture must parse")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("range-for-shaped local auto AST must seal")));
+
+		const asCDecl* Iterator = nullptr;
+		const asCDecl* Element = nullptr;
+		for (asUINT DeclIndex = 1; DeclIndex <= Context.GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(DeclIndex));
+			if (Decl != nullptr && Decl->kind == asAST_DECL_VAR)
+			{
+				if (Decl->name.Equals("_Iterator"))
+				{
+					Iterator = Decl;
+				}
+				else if (Decl->name.Equals("Element"))
+				{
+					Element = Decl;
+				}
+			}
+		}
+		const asCType* const IteratorType = Iterator != nullptr
+			? Context.GetType(Iterator->type.type) : nullptr;
+		const asCType* const ElementType = Element != nullptr
+			? Context.GetType(Element->type.type) : nullptr;
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Text =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
+		const FString Diagnostics =
+			CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema);
+		const FString Evidence = FString::Printf(
+			TEXT("range-for auto locals must own exact initializer types before their uses. dump:\n%s\ndiag:\n%s"),
+			*Text, *Diagnostics);
+		ASSERT_THAT(IsTrue(IteratorType != nullptr
+			&& IteratorType->kind == asAST_TYPE_VALUE_OBJECT
+			&& IteratorType->stableKey.Equals("FAutoIterator"), *Evidence));
+		ASSERT_THAT(IsTrue(ElementType != nullptr
+			&& ElementType->kind == asAST_TYPE_VALUE_OBJECT
+			&& ElementType->stableKey.Equals("FAutoElement")
+			&& Element->type.IsConst()
+			&& Element->type.IsReference(), *Evidence));
+		ASSERT_THAT(AreEqual(0,
+			static_cast<int32>(Sema.GetDiagnostics().GetLength()), *Evidence));
+		ASSERT_THAT(AreEqual(1,
+			CanonicalASTSemaAuthorityTest::CountDumpCallLinesWithCallee(
+				Text, TEXT("callee=FAutoIterator::Proceed()")), *Evidence));
+		ASSERT_THAT(AreEqual(1,
+			CanonicalASTSemaAuthorityTest::CountDumpCallLinesWithCallee(
+				Text, TEXT("callee=FAutoElement::GetValue()")), *Evidence));
+		ASSERT_THAT(AreEqual(1,
+			CanonicalASTSemaAuthorityTest::CountDumpCallLinesWithCallee(
+				Text, TEXT("callee=Consume(int)")), *Evidence));
+	}
+
 	TEST_METHOD(ParserExplicitMissingScopeDoesNotFallBackToGlobalCallee)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
@@ -21643,15 +29990,16 @@ public:
 			TEXT("Parser index action plus WalkOne must intern opIndex once. dump:\n%s"), *Text);
 		TArray<FString> Lines;
 		Text.ParseIntoArrayLines(Lines);
-		int32 IndexCount = 0;
+		int32 OpIndexCallCount = 0;
 		for (const FString& Line : Lines)
 		{
-			if (Line.Contains(TEXT("kind=Index")))
+			if (Line.Contains(TEXT("kind=Call"))
+				&& Line.Contains(TEXT("callee=T::opIndex(int)")))
 			{
-				++IndexCount;
+				++OpIndexCallCount;
 			}
 		}
-		ASSERT_THAT(AreEqual(1, IndexCount, *DumpMsg));
+		ASSERT_THAT(AreEqual(1, OpIndexCallCount, *DumpMsg));
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("callee=T::opIndex(int)")), *DumpMsg));
 	}
 
@@ -22777,6 +31125,93 @@ public:
 		ASSERT_THAT(IsTrue(bHasExactFuncdefDependency, *Evidence));
 	}
 
+	TEST_METHOD(ReorderedParamChildrenDoNotChangeLambdaFuncdefContextualization)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		const std::string ScriptSource =
+			"function(int First, bool Second)";
+		asCScriptCode Code;
+		Code.SetCode(
+			"SemaReorderedLambdaFuncdef.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		const asASTDeclId TranslationUnit = Sema.ActOnTranslationUnit(
+			"SemaReorderedLambdaFuncdef");
+		const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId FuncdefId = Sema.ActOnFuncDefDecl(
+			TranslationUnit, "ScriptPairCallback", asCSourceRange());
+		Context.SetDeclType(FuncdefId, BoolType);
+		Sema.ActOnParamDecl(FuncdefId, "First", IntType, asCSourceRange());
+		Sema.ActOnParamDecl(FuncdefId, "Second", BoolType, asCSourceRange());
+		Sema.FinishDecl(FuncdefId);
+
+		const asASTDeclId Entry = Sema.ActOnFunctionDecl(
+			TranslationUnit, "Entry", IntType, asCSourceRange());
+		asSLambdaHeaderAction Header;
+		Header.owner = Entry;
+		Header.recoveryReturnType = IntType;
+		Header.parameterCount = 2;
+		Header.explicitlyTypedParameterCount = 2;
+		Header.beginOffset = 0;
+		Header.endOffset = static_cast<asUINT>(ScriptSource.size());
+		const asASTDeclId LambdaId =
+			Sema.ActOnLambdaHeaderAction(Header, &Code);
+		const asASTDeclId First = Sema.ActOnParamDecl(
+			LambdaId, "First", IntType, asCSourceRange());
+		const asASTDeclId Second = Sema.ActOnParamDecl(
+			LambdaId, "Second", BoolType, asCSourceRange());
+		Sema.FinishDecl(LambdaId);
+		asCDecl* const MutableLambda =
+			const_cast<asCDecl*>(Context.GetDecl(LambdaId));
+		ASSERT_THAT(IsNotNull(MutableLambda));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(2),
+			MutableLambda != nullptr ? MutableLambda->children.GetLength() : 0));
+		if (MutableLambda == nullptr || MutableLambda->children.GetLength() != 2)
+		{
+			return;
+		}
+		MutableLambda->children[0] = Second;
+		MutableLambda->children[1] = First;
+
+		asSLambdaExpressionAction Expression;
+		Expression.lambdaDecl = LambdaId;
+		Expression.beginOffset = 0;
+		Expression.endOffset = static_cast<asUINT>(ScriptSource.size());
+		const asASTExprId LambdaRef =
+			Sema.ActOnLambdaExpressionAction(Expression, &Code);
+		const asCDecl* const Funcdef = Context.GetDecl(FuncdefId);
+		const asCQualType FuncdefType = Funcdef != nullptr
+			? Context.InternNamedType(
+				asAST_TYPE_FUNCDEF, Funcdef->stableKey.AddressOf(), 0)
+			: asCQualType();
+		ASSERT_THAT(IsTrue(Sema.IsLambdaViableForFuncdef(
+			LambdaRef, FuncdefType),
+			TEXT("lambda viability must join parameters by formalIndex")));
+
+		const asASTExprId Conversion = Sema.ActOnConversion(
+			LambdaRef, FuncdefType, asCSourceRange());
+		ASSERT_THAT(IsTrue(Conversion.IsValid()));
+		const asCDecl* const Lambda = Context.GetDecl(LambdaId);
+		ASSERT_THAT(IsTrue(Lambda != nullptr
+			&& Lambda->type == BoolType,
+			TEXT("contextualization must publish the funcdef return type")));
+		ASSERT_THAT(IsTrue(
+			CanonicalASTSemaAuthorityTest::DeclHasDependency(
+				Lambda, "ScriptPairCallback"),
+			TEXT("contextualization must publish the exact funcdef dependency")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Sema.GetDiagnostics().GetLength(),
+			TEXT("structural parameter order must not produce a type mismatch")));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, Context.Seal()));
+	}
+
 	TEST_METHOD(SemaHostFuncdefRejectsExplicitLambdaParameterDirectionMismatch)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
@@ -23458,21 +31893,30 @@ public:
 		asCASTDump(*static_cast<asCModule*>(Module)->GetCanonicalASTContext(), Dump);
 		const FString Text = AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
 		const FString DumpMsg = FString::Printf(
-			TEXT("compile→seal a < b must call T::opCmp(T), not a builtin Binary. dump:\n%s"), *Text);
+			TEXT("compile→seal a < b must call T::opCmp then Binary < against 0, not leftover Binary of two T values. dump:\n%s"), *Text);
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("key=T::opCmp(const T&in)")), *DumpMsg));
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("callee=T::opCmp(const T&in)")), *DumpMsg));
 		TArray<FString> Lines;
 		Text.ParseIntoArrayLines(Lines);
-		bool bLessBinary = false;
+		bool bBoolLess = false;
+		bool bObjectLess = false;
 		for (const FString& Line : Lines)
 		{
-			if (Line.Contains(TEXT("kind=Binary")) && Line.Contains(TEXT("literal=<")))
+			if (!(Line.Contains(TEXT("kind=Binary")) && Line.Contains(TEXT("literal=<"))))
 			{
-				bLessBinary = true;
-				break;
+				continue;
+			}
+			if (Line.Contains(TEXT("type=bool")))
+			{
+				bBoolLess = true;
+			}
+			if (Line.Contains(TEXT("type=T ")))
+			{
+				bObjectLess = true;
 			}
 		}
-		ASSERT_THAT(IsFalse(bLessBinary, *DumpMsg));
+		ASSERT_THAT(IsTrue(bBoolLess, *DumpMsg));
+		ASSERT_THAT(IsFalse(bObjectLess, *DumpMsg));
 	}
 
 	TEST_METHOD(CastConversionRecordsOnCompileSealPath)
@@ -26762,6 +35206,166 @@ public:
 			ScriptEngine->templateInstanceBuckets.Num(), *Evidence));
 	}
 
+	TEST_METHOD(SemaTemplateCallbackValidationIsSealedWithoutRuntimeInstantiation)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		CanonicalASTSemaAuthorityTest::GTemplateCallbackInvocations = 0;
+		CanonicalASTSemaAuthorityTest::GTemplateCallbackAccept = true;
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"TSemaCallbackGate<class T>", 0,
+			asOBJ_REF | asOBJ_TEMPLATE | asOBJ_NOCOUNT
+				| asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("callback-gate fixture must register a unique host template")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectBehaviour(
+			"TSemaCallbackGate<T>",
+			asBEHAVE_TEMPLATE_CALLBACK,
+			"bool f(int&in, int&out)",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::SemaTemplateCallbackGate),
+			asCALL_GENERIC) >= 0,
+			TEXT("callback-gate fixture must register an application template callback")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"TSemaNoCallbackGate<class T>", 0,
+			asOBJ_REF | asOBJ_TEMPLATE | asOBJ_NOCOUNT
+				| asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("callback-gate fixture must register a control template without a callback")));
+
+		asCModule* const Module = AngelscriptBuilderTestSupport::CreateBuilderModule(
+			ScriptEngine, "SemaTemplateCallbackGate");
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaTemplateCallbackGate module")));
+		asCBuilder Builder(ScriptEngine, Module);
+		Builder.silent = true;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void F(TSemaCallbackGate<int> Validated, TSemaNoCallbackGate<int> Direct)
+			{
+			}
+			)AS");
+		asCScriptCode Code;
+		Code.SetCode("SemaTemplateCallbackGate.as", ScriptSource.c_str(), true);
+
+		asCASTContext Context;
+		asCSema Sema(ScriptEngine, Context);
+		asCParser Parser(&Builder);
+		Parser.SetSema(&Sema);
+		const int32 RuntimeBucketCountBefore =
+			ScriptEngine->templateInstanceBuckets.Num();
+		ASSERT_THAT(AreEqual(0, Parser.ParseScript(&Code),
+			TEXT("callback-gate parameter types must parse through typed QualType actions")));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("callback-gate QualTypes must seal without Runtime instantiation")));
+
+		const asCDecl* Validated = nullptr;
+		const asCDecl* Direct = nullptr;
+		for (asUINT Index = 1; Index <= Context.GetDeclCount(); ++Index)
+		{
+			const asCDecl* const Decl = Context.GetDecl(asASTDeclId(Index));
+			if (Decl == nullptr || Decl->kind != asAST_DECL_PARAM)
+			{
+				continue;
+			}
+			if (Decl->name.Equals("Validated"))
+			{
+				Validated = Decl;
+			}
+			else if (Decl->name.Equals("Direct"))
+			{
+				Direct = Decl;
+			}
+		}
+		const asCType* const ValidatedType = Validated != nullptr
+			? Context.GetType(Validated->type.type) : nullptr;
+		const asCType* const DirectType = Direct != nullptr
+			? Context.GetType(Direct->type.type) : nullptr;
+		asCString Dump;
+		asCASTDump(Context, Dump);
+		const FString Evidence = FString::Printf(
+			TEXT("Sema must seal requiresRuntimeValidation from copied template facts without calling the callback or allocating a Runtime instance. callbacks=%d before=%d after=%d diagnostics:\n%s\nAST:\n%s"),
+			CanonicalASTSemaAuthorityTest::GTemplateCallbackInvocations,
+			RuntimeBucketCountBefore,
+			ScriptEngine->templateInstanceBuckets.Num(),
+			*CanonicalASTSemaAuthorityTest::JoinDiagnostics(Sema),
+			*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump));
+		ASSERT_THAT(IsTrue(ValidatedType != nullptr
+			&& ValidatedType->kind == asAST_TYPE_TEMPLATE
+			&& ValidatedType->stableKey.Equals("TSemaCallbackGate<int>")
+			&& ValidatedType->requiresRuntimeValidation,
+			*Evidence));
+		ASSERT_THAT(IsTrue(DirectType != nullptr
+			&& DirectType->kind == asAST_TYPE_TEMPLATE
+			&& DirectType->stableKey.Equals("TSemaNoCallbackGate<int>")
+			&& !DirectType->requiresRuntimeValidation,
+			*Evidence));
+		ASSERT_THAT(AreEqual(0, CanonicalASTSemaAuthorityTest::GTemplateCallbackInvocations,
+			*Evidence));
+		ASSERT_THAT(AreEqual(RuntimeBucketCountBefore,
+			ScriptEngine->templateInstanceBuckets.Num(), *Evidence));
+	}
+
+	TEST_METHOD(CanonicalBuildFailsClosedWhenTemplateCallbackRejectsInstance)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("rejecting-callback install fixture must select CANONICAL")));
+		CanonicalASTSemaAuthorityTest::GTemplateCallbackInvocations = 0;
+		CanonicalASTSemaAuthorityTest::GTemplateCallbackAccept = false;
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"TSemaRejectGate<class T>", 0,
+			asOBJ_REF | asOBJ_TEMPLATE | asOBJ_NOCOUNT
+				| asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("rejecting-callback fixture must register a unique host template")));
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectBehaviour(
+			"TSemaRejectGate<T>",
+			asBEHAVE_TEMPLATE_CALLBACK,
+			"bool f(int&in, int&out)",
+			asFUNCTION(CanonicalASTSemaAuthorityTest::SemaTemplateCallbackGate),
+			asCALL_GENERIC) >= 0,
+			TEXT("rejecting-callback fixture must register an application template callback")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaTemplateCallbackReject", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module, TEXT("SemaTemplateCallbackReject module")));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void F(TSemaRejectGate<int> Validated)
+			{
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaTemplateCallbackReject.as", ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int32 BuildResult = Module->Build();
+		asCModule* const Concrete = static_cast<asCModule*>(Module);
+		const asCScriptFunction* Published = nullptr;
+		if (Concrete != nullptr)
+		{
+			for (asUINT Index = 0; Index < Concrete->scriptFunctions.GetLength(); ++Index)
+			{
+				asCScriptFunction* const Function = Concrete->scriptFunctions[Index];
+				if (Function != nullptr && Function->name.Equals("F"))
+				{
+					Published = Function;
+					break;
+				}
+			}
+		}
+		const FString Evidence = FString::Printf(
+			TEXT("CANONICAL Build must fail closed before publishing F when the application callback rejects the instance. build=%d callbacks=%d published=%s"),
+			BuildResult,
+			CanonicalASTSemaAuthorityTest::GTemplateCallbackInvocations,
+			Published != nullptr ? TEXT("yes") : TEXT("no"));
+		ASSERT_THAT(IsTrue(BuildResult != 0, *Evidence));
+		ASSERT_THAT(IsTrue(
+			CanonicalASTSemaAuthorityTest::GTemplateCallbackInvocations > 0, *Evidence));
+		ASSERT_THAT(IsNull(Published, *Evidence));
+	}
+
 	TEST_METHOD(SemaRegisteredNominalSnapshotIsTranslationUnitLocal)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
@@ -27663,6 +36267,82 @@ public:
 			Sema.FindParsedExpressionIdentity(DistinctIdentity)
 				== SecondExpression,
 			TEXT("syntax length participates in pointer-free identity")));
+	}
+
+	TEST_METHOD(ParsedGeneratedDecoratorSealsGeneratedTraitBeforeCodeGen)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("generated-decorator fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaGeneratedDecorator", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module,
+			TEXT("SemaGeneratedDecorator module")));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int GeneratedByHost() __generated
+			{
+				return 42;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaGeneratedDecorator.as", ScriptSource.c_str(),
+			static_cast<asUINT>(ScriptSource.size()))));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			TEXT("generated-decorator fixture must build before AST inspection")));
+
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("generated-decorator fixture must retain a Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(Context->IsPublishable(),
+			TEXT("generated trait must be frozen before CodeGen consumers inspect it")));
+
+		const asCDecl* Generated = nullptr;
+		asUINT GeneratedCount = 0;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_DECL_FUNCTION
+				&& Candidate->stableKey.Equals("GeneratedByHost()"))
+			{
+				Generated = Candidate;
+				++GeneratedCount;
+			}
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(1, static_cast<int32>(GeneratedCount),
+			*FString::Printf(
+				TEXT("the exact source-generated function must be sealed once. AST:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(Generated != nullptr && Generated->body.IsValid(),
+			*FString::Printf(
+				TEXT("the generated function must retain its authored body. AST:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(Generated != nullptr
+			&& (Generated->traits & asAST_TRAIT_GENERATED) != 0,
+			*FString::Printf(
+				TEXT("Canonical Sema must seal the parsed __generated decorator. AST:\n%s"),
+				*Dump)));
 	}
 
 	TEST_METHOD(CanonicalSemaStoresNoNativeParserNodeIdentity)

@@ -20,6 +20,11 @@ enum asEBytecodeCodeGenSyntheticFunctionKind
 {
 	asBYTECODE_CODEGEN_GLOBAL_INITIALIZER = -1,
 	asBYTECODE_CODEGEN_CONSTRUCTOR_FACTORY = -2,
+	// A sealed script-owned lifecycle helper that is callable by exact DeclId
+	// from candidate bytecode but intentionally absent from the public Runtime
+	// behaviour/method graph. The owner module and Engine function table retain
+	// the emitted function after commit.
+	asBYTECODE_CODEGEN_HIDDEN_OBJECT_HELPER = -3,
 };
 
 struct asSCanonicalConstructorFactoryPair
