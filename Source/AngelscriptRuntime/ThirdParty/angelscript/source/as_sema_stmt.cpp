@@ -605,6 +605,11 @@ asASTStmtId asCSema::ActOnForeachVariableAction(
 
 asASTStmtId asCSema::ActOnIfStmt(asASTDeclId owner, asASTExprId cond, asASTStmtId thenStmt, asASTStmtId elseStmt, const asCSourceRange& range)
 {
+	// LEGACY CompileCondition converts VALUE objects with `bool opImplConv()`
+	// before the branch. `if (Object)` must be a stmt cond Call of that method,
+	// not leftover DeclRef of T.
+	cond = RewriteValueToBoolViaOpImplConv(
+		*this, context, engine, cond, range);
 	const asASTStmtId existing = FindExistingStmt(asAST_STMT_IF, range);
 	if( existing.IsValid() )
 	{
@@ -628,9 +633,18 @@ asASTStmtId asCSema::ActOnIfStmt(asASTDeclId owner, asASTExprId cond, asASTStmtI
 
 asASTStmtId asCSema::ActOnWhileStmt(asASTDeclId owner, asASTExprId cond, asASTStmtId body, const asCSourceRange& range)
 {
+	// LEGACY CompileCondition converts VALUE objects with `bool opImplConv()`
+	// before the loop test. `while (Object)` must be a stmt cond Call of that
+	// method, not leftover DeclRef of T.
+	cond = RewriteValueToBoolViaOpImplConv(
+		*this, context, engine, cond, range);
 	asASTStmtId loop = FindExistingStmt(asAST_STMT_WHILE, range);
 	if( loop.IsValid() && !ControlNeedsFill(context.GetStmt(loop)) )
 	{
+		if( cond.IsValid() )
+		{
+			context.SetStmtExpr(loop, cond);
+		}
 		return loop;
 	}
 	if( !loop.IsValid() )
@@ -2546,8 +2560,16 @@ asASTStmtId asCSema::ActOnWhileStatementAction(
 		control = context.CreateStmt(statementKind, action.owner, range);
 	}
 
+	asASTExprId cond = action.condition;
+	if( cond.IsValid() )
+	{
+		// Typed while/do-while finish writes the condition directly. LEGACY
+		// CompileCondition converts VALUE objects with `bool opImplConv()`.
+		cond = RewriteValueToBoolViaOpImplConv(
+			*this, context, engine, cond, range);
+	}
 	context.SetStmtRange(control, range);
-	context.SetStmtExpr(control, action.condition);
+	context.SetStmtExpr(control, cond);
 	context.ClearStmtChildren(control);
 	if( action.body.IsValid() )
 	{

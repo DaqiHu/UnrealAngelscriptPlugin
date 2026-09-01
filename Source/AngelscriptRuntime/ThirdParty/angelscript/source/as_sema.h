@@ -1756,6 +1756,13 @@ private:
 	asEASTSourceOrigin parsedSourceOrigin;
 };
 
+asASTExprId RewriteValueToBoolViaOpImplConv(
+	asCSema& sema,
+	asCASTContext& context,
+	asCScriptEngine* engine,
+	asASTExprId inner,
+	const asCSourceRange& range);
+
 END_AS_NAMESPACE
 
 #endif

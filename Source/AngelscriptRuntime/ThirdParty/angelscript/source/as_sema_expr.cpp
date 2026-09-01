@@ -6034,7 +6034,7 @@ static asASTExprId RewritePostfixPropertyOrIndexMutation(
 // LEGACY CompileUnaryOperator / CompileCondition convert VALUE objects with
 // `bool opImplConv()` before treating the value as a boolean. Canonical must
 // seal that Call rather than leftover Unary/Conditional of T.
-static asASTExprId RewriteValueToBoolViaOpImplConv(
+asASTExprId RewriteValueToBoolViaOpImplConv(
 	asCSema& sema,
 	asCASTContext& context,
 	asCScriptEngine* engine,
