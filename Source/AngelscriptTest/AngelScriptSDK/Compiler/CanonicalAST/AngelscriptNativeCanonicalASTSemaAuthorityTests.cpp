@@ -2771,6 +2771,103 @@ public:
 				*Dump)));
 	}
 
+	TEST_METHOD(CanonicalScalarReferenceIndexReturnSealsLValueToRValueConversion)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.4 scalar-reference return fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaScalarReferenceIndexReturn", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int Value = 41;
+
+				int& opIndex(int Index)
+				{
+					return Value;
+				}
+			}
+
+			int Entry()
+			{
+				T Values = T();
+				return Values[0];
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaScalarReferenceIndexReturn.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("return Values[0] must compile so its sealed value conversion is observable; result=%d messages=%s"),
+				BuildResult,
+				*Messages)));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const ReturnStmt = Entry != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				*const_cast<asCASTContext*>(Context),
+				Entry->id,
+				asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* const Returned = ReturnStmt != nullptr
+			? Context->GetExpr(ReturnStmt->expr) : nullptr;
+		const asCExpr* const IndexCall = Returned != nullptr
+			&& Returned->kind == asAST_EXPR_CONVERSION
+			&& Returned->children.GetLength() == 1
+			? Context->GetExpr(Returned->children[0]) : nullptr;
+		const asCDecl* const Callee = IndexCall != nullptr
+			? Context->GetDecl(IndexCall->resolvedDecl) : nullptr;
+
+		ASSERT_THAT(IsTrue(
+			Returned != nullptr
+				&& Returned->kind == asAST_EXPR_CONVERSION
+				&& !Returned->type.IsReference()
+				&& Entry != nullptr
+				&& Returned->type == Entry->type
+				&& Returned->valueCategory == asAST_VALUE_PRVALUE
+				&& IndexCall != nullptr
+				&& IndexCall->kind == asAST_EXPR_CALL
+				&& IndexCall->type.IsReference()
+				&& IndexCall->type.type == Returned->type.type
+				&& (IndexCall->type.quals
+					& ~static_cast<asDWORD>(asAST_QUAL_REFERENCE)) == Returned->type.quals
+				&& IndexCall->valueCategory == asAST_VALUE_LVALUE
+				&& Callee != nullptr
+				&& Callee->stableKey.Equals("T::opIndex(int)"),
+			*FString::Printf(
+				TEXT("a non-reference return must seal Conversion(Call int&) -> int; CodeGen must not infer whether the reference address or payload is returned. dump:\n%s"),
+				*Dump)));
+	}
+
 	TEST_METHOD(CanonicalNativeRefMethodCallSealsDirectDispatch)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
@@ -11640,7 +11737,7 @@ public:
 
 			T Make()
 			{
-				T v;
+				T v = T();
 				return v;
 			}
 
@@ -11718,10 +11815,10 @@ public:
 			TEXT("Make()[0] += 1 must seal a dumpable AST")));
 		const FString Text = AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump);
 		const FString DumpMsg = FString::Printf(
-			TEXT("Make()[0] += 1 must dump OpaqueValue + Sequence literal=opaque and opIndex. dump:\n%s"),
+			TEXT("Make()[0] += 1 must seal RHS-first Sequence/OpaqueValue identities and opIndex. dump:\n%s"),
 			*Text);
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("kind=OpaqueValue")), *DumpMsg));
-		ASSERT_THAT(IsTrue(Text.Contains(TEXT("kind=Sequence")) && Text.Contains(TEXT("literal=opaque")), *DumpMsg));
+		ASSERT_THAT(IsTrue(Text.Contains(TEXT("kind=Sequence")) && Text.Contains(TEXT("literal=seq")), *DumpMsg));
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("callee=T::opIndex(int)")), *DumpMsg));
 		ASSERT_THAT(IsTrue(
 			Text.Contains(TEXT("kind=Index")) || Text.Contains(TEXT("callee=T::opIndex(int)")),
@@ -11729,7 +11826,6 @@ public:
 		TArray<FString> Lines;
 		Text.ParseIntoArrayLines(Lines);
 		bool bOpaqueSource = false;
-		bool bOpaqueSequence = false;
 		int32 MakeCalleeCount = 0;
 		for (const FString& Line : Lines)
 		{
@@ -11741,10 +11837,6 @@ public:
 					bOpaqueSource = true;
 				}
 			}
-			if (Line.Contains(TEXT("kind=Sequence")) && Line.Contains(TEXT("literal=opaque")))
-			{
-				bOpaqueSequence = true;
-			}
 			if (Line.Contains(TEXT("kind=Call")) && Line.Contains(TEXT("callee=Make()"))
 				&& !Line.Contains(TEXT("callee=Make()::")))
 			{
@@ -11752,7 +11844,6 @@ public:
 			}
 		}
 		ASSERT_THAT(IsTrue(bOpaqueSource, *DumpMsg));
-		ASSERT_THAT(IsTrue(bOpaqueSequence, *DumpMsg));
 		ASSERT_THAT(AreEqual(1, MakeCalleeCount, *DumpMsg));
 
 		const asCASTContext* const Context =
@@ -11760,41 +11851,60 @@ public:
 		ASSERT_THAT(IsNotNull(Context, *DumpMsg));
 		if (Context != nullptr)
 		{
-			const asCExpr* OpaqueSequence = nullptr;
+			const asCExpr* SequencedMutation = nullptr;
 			for (asUINT ExprIndex = 1; ExprIndex <= Context->GetExprCount(); ++ExprIndex)
 			{
 				const asCExpr* const Candidate = Context->GetExpr(asASTExprId(ExprIndex));
 				if (Candidate != nullptr && Candidate->kind == asAST_EXPR_SEQUENCE
-					&& Candidate->literal.Equals("opaque"))
+					&& Candidate->literal.Equals("seq")
+					&& Candidate->children.GetLength() == 5)
 				{
-					ASSERT_THAT(IsNull(OpaqueSequence,
-						*FString::Printf(TEXT("compound index must own one opaque sequence. dump:\n%s"), *Text)));
-					OpaqueSequence = Candidate;
+					ASSERT_THAT(IsNull(SequencedMutation,
+						*FString::Printf(TEXT("compound index must own one five-phase sequence. dump:\n%s"), *Text)));
+					SequencedMutation = Candidate;
 				}
 			}
-			ASSERT_THAT(IsNotNull(OpaqueSequence,
-				*FString::Printf(TEXT("compound index must own an opaque sequence. dump:\n%s"), *Text)));
-			const asCExpr* OpaqueBase = nullptr;
-			if (OpaqueSequence != nullptr)
+			ASSERT_THAT(IsNotNull(SequencedMutation,
+				*FString::Printf(TEXT("compound index must own an RHS-first sequence. dump:\n%s"), *Text)));
+			if (SequencedMutation != nullptr)
 			{
-				for (asUINT ChildIndex = 0; ChildIndex < OpaqueSequence->children.GetLength(); ++ChildIndex)
-				{
-					const asCExpr* const Child = Context->GetExpr(OpaqueSequence->children[ChildIndex]);
-					if (Child == nullptr || Child->kind != asAST_EXPR_CALL
-						|| !Child->receiver.IsValid())
-					{
-						continue;
-					}
-					const asCDecl* const Callee = Context->GetDecl(Child->resolvedDecl);
-					if (Callee != nullptr && Callee->stableKey.Equals("T::opIndex(int)"))
-					{
-						OpaqueBase = Context->GetExpr(Child->receiver);
-						break;
-					}
-				}
+				const asCExpr* const RhsValue = Context->GetExpr(SequencedMutation->children[0]);
+				const asCExpr* const OpaqueBase = Context->GetExpr(SequencedMutation->children[1]);
+				const asCExpr* const ReferenceValue = Context->GetExpr(SequencedMutation->children[2]);
+				const asCExpr* const UpdatedValue = Context->GetExpr(SequencedMutation->children[3]);
+				const asCExpr* const Write = Context->GetExpr(SequencedMutation->children[4]);
+				const asCExpr* const IndexCall = ReferenceValue != nullptr
+					&& ReferenceValue->children.GetLength() == 1
+					? Context->GetExpr(ReferenceValue->children[0]) : nullptr;
+				const asCDecl* const IndexDecl = IndexCall != nullptr
+					? Context->GetDecl(IndexCall->resolvedDecl) : nullptr;
+				const asCExpr* const Add = UpdatedValue != nullptr
+					&& UpdatedValue->children.GetLength() == 1
+					? Context->GetExpr(UpdatedValue->children[0]) : nullptr;
+				ASSERT_THAT(IsTrue(RhsValue != nullptr
+					&& RhsValue->kind == asAST_EXPR_OPAQUE_VALUE,
+					*FString::Printf(TEXT("phase 0 must capture RHS before target acquisition. dump:\n%s"), *Text)));
+				ASSERT_THAT(IsTrue(OpaqueBase != nullptr
+					&& OpaqueBase->kind == asAST_EXPR_OPAQUE_VALUE,
+					*FString::Printf(TEXT("phase 1 must capture the receiver once. dump:\n%s"), *Text)));
+				ASSERT_THAT(IsTrue(ReferenceValue != nullptr
+					&& ReferenceValue->kind == asAST_EXPR_OPAQUE_VALUE
+					&& ReferenceValue->type.IsReference()
+					&& IndexCall != nullptr && IndexCall->kind == asAST_EXPR_CALL
+					&& IndexDecl != nullptr && IndexDecl->stableKey.Equals("T::opIndex(int)")
+					&& IndexCall->receiver == OpaqueBase->id,
+					*FString::Printf(TEXT("phase 2 must acquire one opIndex alias from the captured receiver. dump:\n%s"), *Text)));
+				ASSERT_THAT(IsTrue(UpdatedValue != nullptr
+					&& UpdatedValue->kind == asAST_EXPR_OPAQUE_VALUE
+					&& Add != nullptr && Add->kind == asAST_EXPR_BINARY,
+					*FString::Printf(TEXT("phase 3 must capture the computed value once. dump:\n%s"), *Text)));
+				ASSERT_THAT(IsTrue(Write != nullptr
+					&& Write->kind == asAST_EXPR_ASSIGN
+					&& Write->children.GetLength() == 2
+					&& Write->children[0] == ReferenceValue->id
+					&& Write->children[1] == UpdatedValue->id,
+					*FString::Printf(TEXT("phase 4 must write the captured value through the same alias. dump:\n%s"), *Text)));
 			}
-			ASSERT_THAT(IsTrue(OpaqueBase != nullptr && OpaqueBase->kind == asAST_EXPR_OPAQUE_VALUE,
-				*FString::Printf(TEXT("body-owned opIndex receiver must be the OpaqueValue. dump:\n%s"), *Text)));
 		}
 	}
 
@@ -11935,6 +12045,9 @@ public:
 		ON_SCOPE_EXIT { Engine.Destroy(); };
 
 		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			ScriptEngine->SetEngineProperty(asEP_PROPERTY_ACCESSOR_MODE, 2),
+			TEXT("postfix property Sema gate uses the maintained accessor profile")));
 		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
 			TEXT("5.4 postfix property fixture selects CANONICAL")));
 
@@ -11983,6 +12096,23 @@ public:
 				*Messages)));
 
 		asCModule* const Internal = static_cast<asCModule*>(Module);
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("postfix property mutation must publish Canonical CodeGen")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("postfix property mutation must not construct asCCompiler")));
+		asQWORD CanonicalDigest = 0;
+		ASSERT_THAT(IsTrue(Internal != nullptr
+			&& Internal->GetLastCanonicalCodeGenAstDigest(CanonicalDigest)
+			&& CanonicalDigest != 0,
+			TEXT("postfix property mutation must publish the sealed AST digest")));
 		const asCASTContext* const Context =
 			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
 		ASSERT_THAT(IsNotNull(Context,
@@ -12017,6 +12147,7 @@ public:
 		}
 
 		int32 MakeCalleeCount = 0;
+		bool bLeftoverPostfixUnary = false;
 		TArray<FString> Lines;
 		Dump.ParseIntoArrayLines(Lines);
 		for (const FString& Line : Lines)
@@ -12025,6 +12156,11 @@ public:
 				&& !Line.Contains(TEXT("callee=Make()::")))
 			{
 				++MakeCalleeCount;
+			}
+			if (Line.Contains(TEXT("kind=Unary"))
+				&& Line.Contains(TEXT("literal=post++")))
+			{
+				bLeftoverPostfixUnary = true;
 			}
 		}
 
@@ -12068,16 +12204,29 @@ public:
 		}
 
 		ASSERT_THAT(IsTrue(
-			Returned != nullptr
+			!bLeftoverPostfixUnary
+				&& Returned != nullptr
 				&& Returned->kind == asAST_EXPR_SEQUENCE
+				&& Returned->literal.Equals("seq")
+				&& Returned->children.GetLength() == 5
 				&& Opaque != nullptr
 				&& Get != nullptr
 				&& Set != nullptr
+				&& Context->GetExpr(Returned->children[0]) == Opaque
+				&& Context->GetExpr(Returned->children[1]) != nullptr
+				&& Context->GetExpr(Returned->children[1])->kind == asAST_EXPR_OPAQUE_VALUE
+				&& Context->GetExpr(Returned->children[1])->children.GetLength() == 1
+				&& Context->GetExpr(
+					Context->GetExpr(Returned->children[1])->children[0]) == Get
+				&& Context->GetExpr(Returned->children[2]) != nullptr
+				&& Context->GetExpr(Returned->children[2])->kind == asAST_EXPR_BINARY
+				&& Context->GetExpr(Returned->children[3]) == Set
+				&& Returned->children[4] == Returned->children[1]
 				&& Get->receiver == Opaque->id
 				&& Set->receiver == Opaque->id
 				&& MakeCalleeCount == 1,
 			*FString::Printf(
-				TEXT("Make().Value++ must sequence OpaqueValue/GetValue/SetValue on one Make() receiver, not a leftover Unary post++. dump:\n%s"),
+				TEXT("Make().Value++ must seal receiver/original/updated/set/original-yield phases on one Make() receiver, not a leftover Unary post++. dump:\n%s"),
 				*Dump)));
 	}
 
@@ -12423,6 +12572,58 @@ public:
 			*FString::Printf(
 				TEXT("++Make()[0] must sequence OpaqueValue/opIndex/Assign on one Make() receiver, not leftover Unary pre++ of opIndex. dump:\n%s"),
 				*Dump)));
+		ASSERT_THAT(IsTrue(Returned != nullptr
+			&& Returned->kind == asAST_EXPR_SEQUENCE
+			&& Returned->children.GetLength() == 6,
+			*FString::Printf(
+				TEXT("prefix index mutation must seal base/reference/original/updated/write/yield phases. dump:\n%s"),
+				*Dump)));
+		if (Returned != nullptr && Returned->kind == asAST_EXPR_SEQUENCE
+			&& Returned->children.GetLength() == 6)
+		{
+			const asCExpr* const BaseValue = Context->GetExpr(Returned->children[0]);
+			const asCExpr* const ReferenceValue = Context->GetExpr(Returned->children[1]);
+			const asCExpr* const OriginalValue = Context->GetExpr(Returned->children[2]);
+			const asCExpr* const UpdatedValue = Context->GetExpr(Returned->children[3]);
+			const asCExpr* const ExactWrite = Context->GetExpr(Returned->children[4]);
+			const asCExpr* const ExactYield = Context->GetExpr(Returned->children[5]);
+			const asCExpr* const ExactIndex = ReferenceValue != nullptr
+				&& ReferenceValue->children.GetLength() == 1
+				? Context->GetExpr(ReferenceValue->children[0]) : nullptr;
+			const asCExpr* const OriginalLoad = OriginalValue != nullptr
+				&& OriginalValue->children.GetLength() == 1
+				? Context->GetExpr(OriginalValue->children[0]) : nullptr;
+			const asCExpr* const UpdatedBinary = UpdatedValue != nullptr
+				&& UpdatedValue->children.GetLength() == 1
+				? Context->GetExpr(UpdatedValue->children[0]) : nullptr;
+			ASSERT_THAT(IsTrue(BaseValue != nullptr
+				&& BaseValue->kind == asAST_EXPR_OPAQUE_VALUE
+				&& ReferenceValue != nullptr
+				&& ReferenceValue->kind == asAST_EXPR_OPAQUE_VALUE
+				&& ReferenceValue->type.IsReference()
+				&& ExactIndex != nullptr
+				&& ExactIndex->kind == asAST_EXPR_CALL
+				&& ExactIndex->receiver == BaseValue->id
+				&& OriginalValue != nullptr
+				&& OriginalValue->kind == asAST_EXPR_OPAQUE_VALUE
+				&& OriginalLoad != nullptr
+				&& OriginalLoad->kind == asAST_EXPR_CONVERSION
+				&& OriginalLoad->children.GetLength() == 1
+				&& OriginalLoad->children[0] == ReferenceValue->id
+				&& UpdatedValue != nullptr
+				&& UpdatedValue->kind == asAST_EXPR_OPAQUE_VALUE
+				&& UpdatedBinary != nullptr
+				&& UpdatedBinary->kind == asAST_EXPR_BINARY
+				&& ExactWrite != nullptr
+				&& ExactWrite->kind == asAST_EXPR_ASSIGN
+				&& ExactWrite->children.GetLength() == 2
+				&& ExactWrite->children[0] == ReferenceValue->id
+				&& ExactWrite->children[1] == UpdatedValue->id
+				&& ExactYield == UpdatedValue,
+				*FString::Printf(
+					TEXT("prefix index mutation must load and write one captured opIndex alias, then yield the captured updated value. dump:\n%s"),
+					*Dump)));
+		}
 	}
 
 	TEST_METHOD(CanonicalPostfixIndexIncrementSealsOldValueSequence)
@@ -12606,6 +12807,220 @@ public:
 				&& bYieldsRvalueInt,
 			*FString::Printf(
 				TEXT("Make()[0]++ must sequence OpaqueValue/opIndex/Assign and yield the loaded rvalue int, not leftover Unary post++ or the lvalue Call. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(Returned != nullptr
+			&& Returned->kind == asAST_EXPR_SEQUENCE
+			&& Returned->children.GetLength() == 6,
+			*FString::Printf(
+				TEXT("postfix index mutation must seal base/reference/original/updated/write/yield phases. dump:\n%s"),
+				*Dump)));
+		if (Returned != nullptr && Returned->kind == asAST_EXPR_SEQUENCE
+			&& Returned->children.GetLength() == 6)
+		{
+			const asCExpr* const BaseValue = Context->GetExpr(Returned->children[0]);
+			const asCExpr* const ReferenceValue = Context->GetExpr(Returned->children[1]);
+			const asCExpr* const OriginalValue = Context->GetExpr(Returned->children[2]);
+			const asCExpr* const UpdatedValue = Context->GetExpr(Returned->children[3]);
+			const asCExpr* const ExactWrite = Context->GetExpr(Returned->children[4]);
+			const asCExpr* const ExactYield = Context->GetExpr(Returned->children[5]);
+			const asCExpr* const ExactIndex = ReferenceValue != nullptr
+				&& ReferenceValue->children.GetLength() == 1
+				? Context->GetExpr(ReferenceValue->children[0]) : nullptr;
+			const asCExpr* const OriginalLoad = OriginalValue != nullptr
+				&& OriginalValue->children.GetLength() == 1
+				? Context->GetExpr(OriginalValue->children[0]) : nullptr;
+			const asCExpr* const UpdatedBinary = UpdatedValue != nullptr
+				&& UpdatedValue->children.GetLength() == 1
+				? Context->GetExpr(UpdatedValue->children[0]) : nullptr;
+			ASSERT_THAT(IsTrue(BaseValue != nullptr
+				&& BaseValue->kind == asAST_EXPR_OPAQUE_VALUE
+				&& ReferenceValue != nullptr
+				&& ReferenceValue->kind == asAST_EXPR_OPAQUE_VALUE
+				&& ReferenceValue->type.IsReference()
+				&& ExactIndex != nullptr
+				&& ExactIndex->kind == asAST_EXPR_CALL
+				&& ExactIndex->receiver == BaseValue->id
+				&& OriginalValue != nullptr
+				&& OriginalValue->kind == asAST_EXPR_OPAQUE_VALUE
+				&& OriginalLoad != nullptr
+				&& OriginalLoad->kind == asAST_EXPR_CONVERSION
+				&& OriginalLoad->children.GetLength() == 1
+				&& OriginalLoad->children[0] == ReferenceValue->id
+				&& UpdatedValue != nullptr
+				&& UpdatedValue->kind == asAST_EXPR_OPAQUE_VALUE
+				&& UpdatedBinary != nullptr
+				&& UpdatedBinary->kind == asAST_EXPR_BINARY
+				&& ExactWrite != nullptr
+				&& ExactWrite->kind == asAST_EXPR_ASSIGN
+				&& ExactWrite->children.GetLength() == 2
+				&& ExactWrite->children[0] == ReferenceValue->id
+				&& ExactWrite->children[1] == UpdatedValue->id
+				&& ExactYield == OriginalValue,
+				*FString::Printf(
+					TEXT("postfix index mutation must load and write one captured opIndex alias, then yield the captured original value. dump:\n%s"),
+					*Dump)));
+		}
+	}
+
+	TEST_METHOD(CanonicalObjectReferenceIndexUnarySelectsObjectOperators)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("object-reference index unary fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaObjectReferenceIndexUnary", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct FCounter
+			{
+				int Value = 41;
+
+				int opPreInc()
+				{
+					Value += 1;
+					return Value;
+				}
+
+				int opPostInc()
+				{
+					int Original = Value;
+					Value += 1;
+					return Original;
+				}
+			}
+
+			struct FCounterBox
+			{
+				FCounter Item;
+
+				FCounter &opIndex(int Index)
+				{
+					return Item;
+				}
+			}
+
+			int Prefix(FCounterBox &inout Box)
+			{
+				return ++Box[0];
+			}
+
+			int Postfix(FCounterBox &inout Box)
+			{
+				return Box[0]++;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaObjectReferenceIndexUnary.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("object-reference index unary forms must compile through object operators; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("object-reference index unary Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("object-reference index unary must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		auto FindReturnedCall = [Context](const char* FunctionName) -> const asCExpr*
+		{
+			const asCDecl* const Function =
+				CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+					*const_cast<asCASTContext*>(Context), FunctionName);
+			const asCStmt* const ReturnStmt = Function != nullptr
+				? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+					*const_cast<asCASTContext*>(Context),
+					Function->id,
+					asAST_STMT_RETURN)
+				: nullptr;
+			const asCExpr* Returned = ReturnStmt != nullptr
+				? Context->GetExpr(ReturnStmt->expr) : nullptr;
+			while (Returned != nullptr
+				&& (Returned->kind == asAST_EXPR_CLEANUP
+					|| Returned->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| Returned->kind == asAST_EXPR_CONVERSION)
+				&& Returned->children.GetLength() == 1)
+			{
+				Returned = Context->GetExpr(Returned->children[0]);
+			}
+			return Returned;
+		};
+
+		const asCExpr* const PrefixCall = FindReturnedCall("Prefix");
+		const asCExpr* const PostfixCall = FindReturnedCall("Postfix");
+		const asCDecl* const PrefixCallee = PrefixCall != nullptr
+			? Context->GetDecl(PrefixCall->resolvedDecl) : nullptr;
+		const asCDecl* const PostfixCallee = PostfixCall != nullptr
+			? Context->GetDecl(PostfixCall->resolvedDecl) : nullptr;
+		const asCExpr* const PrefixIndex = PrefixCall != nullptr
+			? Context->GetExpr(PrefixCall->receiver) : nullptr;
+		const asCExpr* const PostfixIndex = PostfixCall != nullptr
+			? Context->GetExpr(PostfixCall->receiver) : nullptr;
+		const asCDecl* const PrefixIndexCallee = PrefixIndex != nullptr
+			? Context->GetDecl(PrefixIndex->resolvedDecl) : nullptr;
+		const asCDecl* const PostfixIndexCallee = PostfixIndex != nullptr
+			? Context->GetDecl(PostfixIndex->resolvedDecl) : nullptr;
+
+		ASSERT_THAT(IsTrue(
+			PrefixCall != nullptr
+				&& PrefixCall->kind == asAST_EXPR_CALL
+				&& PrefixCallee != nullptr
+				&& PrefixCallee->stableKey.Equals("FCounter::opPreInc()")
+				&& PrefixIndex != nullptr
+				&& PrefixIndex->kind == asAST_EXPR_CALL
+				&& PrefixIndexCallee != nullptr
+				&& PrefixIndexCallee->stableKey.Equals("FCounterBox::opIndex(int)"),
+			*FString::Printf(
+				TEXT("++Box[0] must seal as opIndex -> opPreInc, not a scalar synthesized read/modify/write sequence. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(IsTrue(
+			PostfixCall != nullptr
+				&& PostfixCall->kind == asAST_EXPR_CALL
+				&& PostfixCallee != nullptr
+				&& PostfixCallee->stableKey.Equals("FCounter::opPostInc()")
+				&& PostfixIndex != nullptr
+				&& PostfixIndex->kind == asAST_EXPR_CALL
+				&& PostfixIndexCallee != nullptr
+				&& PostfixIndexCallee->stableKey.Equals("FCounterBox::opIndex(int)"),
+			*FString::Printf(
+				TEXT("Box[0]++ must seal as opIndex -> opPostInc, not a scalar synthesized read/modify/write sequence. dump:\n%s"),
 				*Dump)));
 	}
 

@@ -9355,6 +9355,115 @@ public:
 				Value)));
 	}
 
+	TEST_METHOD(CanonicalPostfixPropertyIncrementExecutesOldValueAndWriteThrough)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			ScriptEngine->SetEngineProperty(asEP_PROPERTY_ACCESSOR_MODE, 2),
+			TEXT("postfix property CodeGen gate uses the maintained accessor profile")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.4 postfix property CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdPostfixPropertyInc", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int SequenceState = 0;
+
+			class T
+			{
+				int Stored = 5;
+
+				int GetValue()
+				{
+					SequenceState = SequenceState == 1 ? 2 : 99;
+					return Stored;
+				}
+
+				void SetValue(int Next)
+				{
+					SequenceState = SequenceState == 2 ? 3 : 99;
+					Stored = Next;
+				}
+			}
+
+			T Make()
+			{
+				SequenceState = SequenceState == 0 ? 1 : 99;
+				T Object = T();
+				return Object;
+			}
+
+			int RunMakePostfix()
+			{
+				SequenceState = 0;
+				int Original = Make().Value++;
+				return Original * 100 + SequenceState;
+			}
+
+			int RunLocalPostfixAndRead()
+			{
+				T Object = T();
+				SequenceState = 1;
+				int Original = Object.Value++;
+				return Original * 10000 + Object.Stored * 100 + SequenceState;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdPostfixPropertyInc.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("postfix property mutation must publish Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("postfix property increment Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("postfix property increment must not construct asCCompiler")));
+		asQWORD CanonicalDigest = 0;
+		ASSERT_THAT(IsTrue(Internal != nullptr
+			&& Internal->GetLastCanonicalCodeGenAstDigest(CanonicalDigest)
+			&& CanonicalDigest != 0,
+			TEXT("postfix property increment must publish a sealed AST digest")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int RunMakePostfix()", Value)
+				&& Value == 503,
+			*FString::Printf(
+				TEXT("Make().Value++ must yield old 5 and observe Make->Get->Set state 3; value=%d"),
+				Value)));
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module,
+				"int RunLocalPostfixAndRead()", Value)
+				&& Value == 50603,
+			*FString::Printf(
+				TEXT("local Value++ must yield 5, write Stored=6, and execute Get->Set once; value=%d"),
+				Value)));
+	}
+
 	TEST_METHOD(CanonicalPrefixIndexIncrementExecutesWithoutLegacyCompiler)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

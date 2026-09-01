@@ -251,6 +251,33 @@ static bool IsNumericScalar(asCASTContext& context, const asCType* nominalType)
 	return valueType->primitiveToken != ttVoid && valueType->primitiveToken != ttBool;
 }
 
+static bool IsScalarValue(asCASTContext& context, const asCType* nominalType)
+{
+	const asCType* valueType = ResolveStmtTypedefValueType(context, nominalType);
+	return valueType != 0
+		&& (valueType->kind == asAST_TYPE_ENUM
+			|| (valueType->kind == asAST_TYPE_PRIMITIVE
+				&& valueType->primitiveToken != ttVoid));
+}
+
+static asASTExprId DecayReturnedScalarReferenceToRValue(
+	asCSema& sema,
+	asCASTContext& context,
+	asASTExprId value,
+	const asCSourceRange& range)
+{
+	const asCExpr* const returned = context.GetExpr(value);
+	if( returned == 0 || !returned->type.IsReference()
+		|| returned->type.IsHandle()
+		|| !IsScalarValue(context, context.GetType(returned->type.type)) )
+	{
+		return value;
+	}
+	asCQualType destination = returned->type;
+	destination.quals &= ~(asAST_QUAL_REFERENCE | asAST_QUAL_PARAM_DIR_MASK);
+	return sema.ActOnConversion(value, destination, range);
+}
+
 static void AppendImplicitLocalInitialization(
 	asCSema& sema,
 	asASTDeclId owner,
@@ -1876,12 +1903,18 @@ asASTStmtId asCSema::ActOnLeafStatementAction(
 					context.SetLiteral(value, "return");
 				}
 			}
+			const bool functionReturn = owner->kind == asAST_DECL_FUNCTION
+				|| owner->kind == asAST_DECL_METHOD;
+			if( functionReturn && !owner->type.IsReference() )
+			{
+				value = DecayReturnedScalarReferenceToRValue(
+					*this, context, value, range);
+			}
 			const asCExpr* const returnedExpr = context.GetExpr(value);
 			const asCType* const returnType = context.GetType(owner->type.type);
 			const asCType* const returnedType = returnedExpr != 0
 				? context.GetType(returnedExpr->type.type) : 0;
-			if( (owner->kind == asAST_DECL_FUNCTION
-					|| owner->kind == asAST_DECL_METHOD)
+			if( functionReturn
 				&& IsNumericScalar(context, returnType)
 				&& IsNumericScalar(context, returnedType)
 				&& owner->type.type != returnedExpr->type.type )

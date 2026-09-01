@@ -5748,23 +5748,27 @@ asASTExprId asCSema::ActOnAssignExpr(asASTExprId lhs, asASTExprId rhs, const asC
 					left->resolvedDecl, indexArgs, idxType, left->range,
 					&callArguments);
 				context.SetExprReceiver(rewritten, ov);
+				const asCSourceRange rhsRange = rhs.IsValid() && context.GetExpr(rhs)
+					? context.GetExpr(rhs)->range : range;
+				const asASTExprId rhsSnapshot = DecayScalarLValueReferenceToRValue(
+					*this, context, rhs, rhsRange);
+				const asASTExprId rhsValue = ActOnOpaqueValueExpr(
+					rhsSnapshot, rhsRange);
+				const asASTExprId referenceValue =
+					ActOnOpaqueValueExpr(rewritten, left->range);
 				const asASTExprId add = ActOnBinaryExpr(
-					rewritten, "+", rhs,
-					rhs.IsValid() && context.GetExpr(rhs)
-						? context.GetExpr(rhs)->range : range);
-				const asASTExprId write = ActOnAssign(
-					rewritten, add, idxType, range);
+					referenceValue, "+", rhsValue, rhsRange);
+				const asASTExprId updatedValue =
+					ActOnOpaqueValueExpr(add, range);
+				const asASTExprId write = ActOnGeneratedAssign(
+					referenceValue, updatedValue, idxType, range);
 				asCArray<asASTExprId> parts;
+				parts.PushLast(rhsValue);
 				parts.PushLast(ov);
-				parts.PushLast(rewritten);
-				parts.PushLast(add);
+				parts.PushLast(referenceValue);
+				parts.PushLast(updatedValue);
 				parts.PushLast(write);
-				const asASTExprId seq = ActOnSequenceExpr(parts, range);
-				if( seq.IsValid() )
-				{
-					context.SetLiteral(seq, "opaque");
-				}
-				return seq;
+				return ActOnSequenceExpr(parts, range);
 			}
 			if( left->kind == asAST_EXPR_INDEX && left->children.GetLength() >= 2 )
 			{
@@ -5786,19 +5790,27 @@ asASTExprId asCSema::ActOnAssignExpr(asASTExprId lhs, asASTExprId rhs, const asC
 				{
 					context.SetResolvedDecl(wrappedIndex, left->resolvedDecl);
 				}
-				const asASTExprId add = ActOnBinaryExpr(wrappedIndex, "+", rhs, rhs.IsValid() && context.GetExpr(rhs) ? context.GetExpr(rhs)->range : range);
-				const asASTExprId write = ActOnAssign(wrappedIndex, add, idxType, range);
+				const asCSourceRange rhsRange = rhs.IsValid() && context.GetExpr(rhs)
+					? context.GetExpr(rhs)->range : range;
+				const asASTExprId rhsSnapshot = DecayScalarLValueReferenceToRValue(
+					*this, context, rhs, rhsRange);
+				const asASTExprId rhsValue = ActOnOpaqueValueExpr(
+					rhsSnapshot, rhsRange);
+				const asASTExprId referenceValue =
+					ActOnOpaqueValueExpr(wrappedIndex, left->range);
+				const asASTExprId add = ActOnBinaryExpr(
+					referenceValue, "+", rhsValue, rhsRange);
+				const asASTExprId updatedValue =
+					ActOnOpaqueValueExpr(add, range);
+				const asASTExprId write = ActOnGeneratedAssign(
+					referenceValue, updatedValue, idxType, range);
 				asCArray<asASTExprId> parts;
+				parts.PushLast(rhsValue);
 				parts.PushLast(ov);
-				parts.PushLast(wrappedIndex);
-				parts.PushLast(add);
+				parts.PushLast(referenceValue);
+				parts.PushLast(updatedValue);
 				parts.PushLast(write);
-				const asASTExprId seq = ActOnSequenceExpr(parts, range);
-				if( seq.IsValid() )
-				{
-					context.SetLiteral(seq, "opaque");
-				}
-				return seq;
+				return ActOnSequenceExpr(parts, range);
 			}
 			if( left->kind == asAST_EXPR_CALL && left->resolvedDecl.IsValid() && left->children.GetLength() > 0 )
 			{
@@ -6439,6 +6451,20 @@ static asASTExprId RewritePostfixPropertyOrIndexMutation(
 		&& left->receiver.IsValid()
 		&& left->valueCategory == asAST_VALUE_LVALUE )
 	{
+		asCQualType idxType = left->type.IsValid()
+			? left->type : context.InternPrimitive(ttInt, 0);
+		const asCType* const mutationType = ResolveTypedefValueType(
+			context, context.GetType(idxType.type));
+		if( mutationType == 0
+			|| (mutationType->kind != asAST_TYPE_PRIMITIVE
+				&& mutationType->kind != asAST_TYPE_ENUM) )
+		{
+			// An object reference returned by opIndex keeps its own unary
+			// overload semantics. Let ActOnUnaryExpr select opPreInc/opPostInc
+			// (or the decrement variants) on the referenced object instead of
+			// manufacturing a scalar load +/- 1 / raw assign plan.
+			return asASTExprId();
+		}
 		const asASTExprId indexBase = left->receiver;
 		asCSourceRange ovRange = range;
 		if( const asCExpr* const baseExpr = context.GetExpr(indexBase) )
@@ -6470,30 +6496,31 @@ static asASTExprId RewritePostfixPropertyOrIndexMutation(
 		ArrangeCallArguments(
 			sema, context, left->resolvedDecl, indexArgs, names,
 			left->range, ov, callArguments);
-		asCQualType idxType = left->type.IsValid()
-			? left->type : context.InternPrimitive(ttInt, 0);
 		const asASTExprId rewritten = sema.ActOnCall(
 			left->resolvedDecl, indexArgs, idxType, left->range,
 			&callArguments);
 		context.SetExprReceiver(rewritten, ov);
+		const asASTExprId referenceValue = sema.ActOnOpaqueValueExpr(
+			rewritten, left->range);
 		const asASTExprId loaded = DecayScalarLValueReferenceToRValue(
-			sema, context, rewritten, range);
+			sema, context, referenceValue, range);
 		const asASTExprId orig = sema.ActOnOpaqueValueExpr(loaded, range);
 		const asASTExprId add = sema.ActOnBinaryExpr(
 			orig, binOp, one, range);
-		const asASTExprId write = sema.ActOnAssign(
-			rewritten, add, idxType, range);
+		const asASTExprId updatedValue = sema.ActOnOpaqueValueExpr(add, range);
+		const asASTExprId write = sema.ActOnGeneratedAssign(
+			referenceValue, updatedValue, idxType, range);
 		if( !write.IsValid() )
 		{
 			return asASTExprId();
 		}
 		asCArray<asASTExprId> parts;
 		parts.PushLast(ov);
-		parts.PushLast(rewritten);
+		parts.PushLast(referenceValue);
 		parts.PushLast(orig);
-		parts.PushLast(add);
+		parts.PushLast(updatedValue);
 		parts.PushLast(write);
-		parts.PushLast(yieldOriginal ? orig : add);
+		parts.PushLast(yieldOriginal ? orig : updatedValue);
 		return sema.ActOnSequenceExpr(parts, range);
 	}
 
@@ -7297,14 +7324,6 @@ static asASTExprId DecayScalarLValueReferenceToRValue(
 {
 	const asCExpr* const value = context.GetExpr(expr);
 	if( value == 0 || !value->type.IsReference() || value->type.IsHandle() )
-	{
-		return expr;
-	}
-	// EmitCall/EmitIndex of T& leave a pointer slot. EmitDeclRef of a
-	// parameter or local T& already loads the pointee, so wrapping that
-	// DeclRef in LValueToRValue double-dereferences and crashes
-	// (`Iterator = Iterator + 1` in foreach opForNext).
-	if( value->kind != asAST_EXPR_CALL && value->kind != asAST_EXPR_INDEX )
 	{
 		return expr;
 	}

@@ -36,6 +36,49 @@ private:
 				asCALL_GENERIC) >= 0;
 	}
 
+	void AssertLegacyCompilerProvenance(asIScriptModule* Module, const TCHAR* Fixture)
+	{
+		asCModule* const ConcreteModule = static_cast<asCModule*>(Module);
+		ASSERT_THAT(IsNotNull(ConcreteModule,
+			*FString::Printf(TEXT("%s must expose a concrete module"), Fixture)));
+		if (ConcreteModule == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_COMPILER,
+			ConcreteModule->GetLastBytecodePublisher(),
+			*FString::Printf(TEXT("%s must publish through asCCompiler"), Fixture)));
+		ASSERT_THAT(IsTrue(ConcreteModule->GetLastLegacyCompilerInvocationCount() > 0,
+			*FString::Printf(TEXT("%s must record a legacy compiler invocation"), Fixture)));
+		asQWORD CanonicalDigest = 0;
+		ASSERT_THAT(IsFalse(ConcreteModule->GetLastCanonicalCodeGenAstDigest(CanonicalDigest),
+			*FString::Printf(TEXT("%s must not publish a Canonical AST digest"), Fixture)));
+	}
+
+	void AssertCanonicalCodeGenProvenance(asIScriptModule* Module, const TCHAR* Fixture)
+	{
+		asCModule* const ConcreteModule = static_cast<asCModule*>(Module);
+		ASSERT_THAT(IsNotNull(ConcreteModule,
+			*FString::Printf(TEXT("%s must expose a concrete module"), Fixture)));
+		if (ConcreteModule == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			ConcreteModule->GetLastBytecodePublisher(),
+			*FString::Printf(TEXT("%s must publish through Canonical CodeGen"), Fixture)));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			ConcreteModule->GetLastLegacyCompilerInvocationCount(),
+			*FString::Printf(TEXT("%s must not instantiate asCCompiler"), Fixture)));
+		asQWORD CanonicalDigest = 0;
+		ASSERT_THAT(IsTrue(
+			ConcreteModule->GetLastCanonicalCodeGenAstDigest(CanonicalDigest)
+				&& CanonicalDigest != 0,
+			*FString::Printf(TEXT("%s must publish a sealed AST digest"), Fixture)));
+	}
+
 public:
 	TEST_METHOD(EvaluationOrderAndReverseFormalArguments)
 	{
@@ -229,7 +272,7 @@ public:
 				T Make()
 				{
 					Trace(1);
-					T v;
+					T v = T();
 					return v;
 				}
 
@@ -286,7 +329,7 @@ public:
 				T Make()
 				{
 					Trace(1);
-					T v;
+					T v = T();
 					return v;
 				}
 
@@ -324,7 +367,6 @@ public:
 		ON_SCOPE_EXIT { Engine.Destroy(); };
 		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
 		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL)));
-		ASSERT_THAT(IsTrue(RegisterTrace(Engine), TEXT("canonical index write-through needs Trace register")));
 
 		FScopedNativeModule Module(
 			*TestRunner,
@@ -341,10 +383,16 @@ public:
 					}
 				}
 
-				int Entry()
+				int MutateAndReadField()
 				{
-					T v;
+					T v = T();
 					v[0] += 1;
+					return v.Value;
+				}
+
+				int ReadIndex()
+				{
+					T v = T();
 					return v[0];
 				}
 				)AS"));
@@ -357,9 +405,449 @@ public:
 
 		int32 Result = 0;
 		ASSERT_THAT(IsTrue(CanonicalExecuteInt(
-			*TestRunner, Engine.Get(), Module, "int Entry()", Result)));
+			*TestRunner, Engine.Get(), Module, "int MutateAndReadField()", Result)));
 		ASSERT_THAT(AreEqual(42, Result,
 			*FString::Printf(TEXT("v[0] += 1 must write through opIndex, not a CopyVar temp. got=%d"), Result)));
+		ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+			*TestRunner, Engine.Get(), Module, "int ReadIndex()", Result)));
+		ASSERT_THAT(AreEqual(41, Result,
+			*FString::Printf(TEXT("reading v[0] must load the scalar through opIndex's returned reference. got=%d"), Result)));
+	}
+
+	TEST_METHOD(IsolatedIndexCompoundAssignMatchesLegacyCanonicalTrace)
+	{
+		using namespace AngelscriptNativeTestSupport;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int Value = 41;
+
+				int &opIndex(int Index)
+				{
+					Trace(2);
+					return Value;
+				}
+			}
+
+			T Make()
+			{
+				Trace(1);
+				T v = T();
+				return v;
+			}
+
+			int MakeRhs()
+			{
+				Trace(3);
+				return 1;
+			}
+
+			int RunMake()
+			{
+				Make()[0] += MakeRhs();
+				return 1;
+			}
+
+			class AliasingT
+			{
+				int SharedRhs = 10;
+				int SharedSink = 1;
+
+				int &GetSharedRhs()
+				{
+					Trace(8);
+					return SharedRhs;
+				}
+
+				int &opIndex(int Index)
+				{
+					Trace(2);
+					return SharedSink;
+				}
+
+				AliasingT MutateAndReturn()
+				{
+					Trace(9);
+					SharedRhs = 20;
+					return this;
+				}
+
+				int RunAliasedRhs()
+				{
+					SharedRhs = 10;
+					SharedSink = 1;
+					MutateAndReturn()[0] += GetSharedRhs();
+					return SharedSink;
+				}
+			}
+
+			int RunAliasedRhs()
+			{
+				AliasingT Value = AliasingT();
+				return Value.RunAliasedRhs();
+			}
+
+			int RunLocal()
+			{
+				T v = T();
+				v[0] += 1;
+				return v.Value;
+			}
+
+			int RunMakePrefix()
+			{
+				return ++Make()[0];
+			}
+
+			int RunLocalPrefixAndRead()
+			{
+				T v = T();
+				int Updated = ++v[0];
+				return Updated * 100 + v.Value;
+			}
+
+			int RunMakePostfix()
+			{
+				return Make()[0]++;
+			}
+
+			int RunLocalPostfixAndRead()
+			{
+				T v = T();
+				v[0]++;
+				return v.Value;
+			}
+
+			int ReadLocal()
+			{
+				T v = T();
+				return v[0];
+			}
+
+			struct FCounter
+			{
+				int Value = 41;
+
+				int opPreInc()
+				{
+					Trace(5);
+					Value += 1;
+					return Value;
+				}
+
+				int opPostInc()
+				{
+					Trace(7);
+					int Original = Value;
+					Value += 1;
+					return Original;
+				}
+			}
+
+			struct FCounterBox
+			{
+				FCounter Item;
+
+				FCounter &opIndex(int Index)
+				{
+					Trace(6);
+					return Item;
+				}
+			}
+
+			int RunObjectPrefixAndRead()
+			{
+				FCounterBox Box;
+				int Updated = ++Box[0];
+				return Updated * 100 + Box.Item.Value;
+			}
+
+			int RunObjectPostfixAndRead()
+			{
+				FCounterBox Box;
+				int Original = Box[0]++;
+				return Original * 100 + Box.Item.Value;
+			}
+
+			class BoolBox
+			{
+				bool Value = false;
+				int Marker = 8;
+
+				bool &opIndex(int Index)
+				{
+					Trace(Marker);
+					return Value;
+				}
+			}
+
+			bool ReadFalseBoolValue()
+			{
+				BoolBox Box = BoolBox();
+				return Box[0];
+			}
+
+			bool ReadConditionalBoolValue(bool PickFirst)
+			{
+				BoolBox First = BoolBox();
+				BoolBox Second = BoolBox();
+				Second.Value = true;
+				Second.Marker = 9;
+				return PickFirst ? First[0] : Second[0];
+			}
+
+			int ReadFalseBool()
+			{
+				return ReadFalseBoolValue() ? 1 : 0;
+			}
+
+			int ReadConditionalFirstFalseBool()
+			{
+				return ReadConditionalBoolValue(true) ? 1 : 0;
+			}
+
+			int ReadConditionalSecondTrueBool()
+			{
+				return ReadConditionalBoolValue(false) ? 1 : 0;
+			}
+
+			int ReadReferenceConditional(
+				bool PickFirst,
+				const int &in First,
+				const int &in Second)
+			{
+				return PickFirst ? First : Second;
+			}
+
+			int ReadFirstReferenceConditional()
+			{
+				int First = 11;
+				int Second = 29;
+				return ReadReferenceConditional(true, First, Second);
+			}
+
+			int ReadSecondReferenceConditional()
+			{
+				int First = 11;
+				int Second = 29;
+				return ReadReferenceConditional(false, First, Second);
+			}
+			)AS");
+
+		auto RunAll = [&](FNativeTestEngine& Engine, asIScriptModule* Module, const TCHAR* Side)
+		{
+			FCanonicalExecutionTrace Trace;
+			int32 Result = 0;
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module, "int RunMake()", Result)));
+			}
+			ASSERT_THAT(AreEqual(1, Result,
+				*FString::Printf(TEXT("%s RunMake result"), Side)));
+			ASSERT_THAT(AreEqual(FString(TEXT("3,1,2")), Trace.ToNormalizedString(),
+				*FString::Printf(TEXT("%s RHS then Make then opIndex exactly once. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module, "int RunAliasedRhs()", Result)));
+			}
+			ASSERT_THAT(AreEqual(11, Result,
+				*FString::Printf(
+					TEXT("%s scalar-reference RHS must snapshot 10 before receiver mutates the shared source; got=%d"),
+					Side, Result)));
+			ASSERT_THAT(AreEqual(FString(TEXT("8,9,2")), Trace.ToNormalizedString(),
+				*FString::Printf(
+					TEXT("%s aliased RHS must evaluate and load before receiver then opIndex exactly once. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module, "int RunLocal()", Result)));
+			}
+			ASSERT_THAT(AreEqual(42, Result,
+				*FString::Printf(TEXT("%s local index compound assignment must write through"), Side)));
+			ASSERT_THAT(AreEqual(FString(TEXT("2")), Trace.ToNormalizedString(),
+				*FString::Printf(TEXT("%s local mutation calls opIndex once. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module, "int ReadLocal()", Result)));
+			}
+			ASSERT_THAT(AreEqual(41, Result,
+				*FString::Printf(TEXT("%s scalar reference index read must load the payload"), Side)));
+			ASSERT_THAT(AreEqual(FString(TEXT("2")), Trace.ToNormalizedString(),
+				*FString::Printf(TEXT("%s local read calls opIndex once. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module, "int RunMakePrefix()", Result)));
+			}
+			ASSERT_THAT(AreEqual(42, Result,
+				*FString::Printf(TEXT("%s prefix index mutation must yield the updated value"), Side)));
+			ASSERT_THAT(AreEqual(FString(TEXT("1,2")), Trace.ToNormalizedString(),
+				*FString::Printf(TEXT("%s prefix index mutation evaluates Make then opIndex once. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module, "int RunLocalPrefixAndRead()", Result)));
+			}
+			ASSERT_THAT(AreEqual(4242, Result,
+				*FString::Printf(
+					TEXT("%s local prefix index mutation must yield and store the same updated value"),
+					Side)));
+			ASSERT_THAT(AreEqual(FString(TEXT("2")), Trace.ToNormalizedString(),
+				*FString::Printf(TEXT("%s local prefix index mutation calls opIndex once. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module, "int RunMakePostfix()", Result)));
+			}
+			ASSERT_THAT(AreEqual(41, Result,
+				*FString::Printf(TEXT("%s postfix index mutation must yield the original value"), Side)));
+			ASSERT_THAT(AreEqual(FString(TEXT("1,2")), Trace.ToNormalizedString(),
+				*FString::Printf(TEXT("%s postfix index mutation evaluates Make then opIndex once. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module, "int RunLocalPostfixAndRead()", Result)));
+			}
+			ASSERT_THAT(AreEqual(42, Result,
+				*FString::Printf(TEXT("%s postfix index mutation must write through its reference"), Side)));
+			ASSERT_THAT(AreEqual(FString(TEXT("2")), Trace.ToNormalizedString(),
+				*FString::Printf(TEXT("%s local postfix index mutation calls opIndex once. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module, "int RunObjectPrefixAndRead()", Result)));
+			}
+			ASSERT_THAT(AreEqual(4242, Result,
+				*FString::Printf(
+					TEXT("%s object-reference prefix must call opPreInc and update the indexed object"),
+					Side)));
+			ASSERT_THAT(AreEqual(FString(TEXT("6,5")), Trace.ToNormalizedString(),
+				*FString::Printf(
+					TEXT("%s object-reference prefix must call opIndex then opPreInc once. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module, "int RunObjectPostfixAndRead()", Result)));
+			}
+			ASSERT_THAT(AreEqual(4142, Result,
+				*FString::Printf(
+					TEXT("%s object-reference postfix must yield old value and update the indexed object"),
+					Side)));
+			ASSERT_THAT(AreEqual(FString(TEXT("6,7")), Trace.ToNormalizedString(),
+				*FString::Printf(
+					TEXT("%s object-reference postfix must call opIndex then opPostInc once. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+
+			ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int ReadFalseBool()", Result)));
+			ASSERT_THAT(AreEqual(0, Result,
+				*FString::Printf(TEXT("%s bool reference return must load false payload"), Side)));
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module,
+					"int ReadConditionalFirstFalseBool()", Result)));
+			}
+			ASSERT_THAT(AreEqual(0, Result,
+				*FString::Printf(
+					TEXT("%s conditional bool reference must select and load the first false payload"),
+					Side)));
+			ASSERT_THAT(AreEqual(FString(TEXT("8")), Trace.ToNormalizedString(),
+				*FString::Printf(
+					TEXT("%s reference Conditional true path must evaluate only the first address arm. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module,
+					"int ReadConditionalSecondTrueBool()", Result)));
+			}
+			ASSERT_THAT(AreEqual(1, Result,
+				*FString::Printf(
+					TEXT("%s conditional bool reference must select and load the second true payload"),
+					Side)));
+			ASSERT_THAT(AreEqual(FString(TEXT("9")), Trace.ToNormalizedString(),
+				*FString::Printf(
+					TEXT("%s reference Conditional false path must evaluate only the second address arm. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+			ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module,
+				"int ReadFirstReferenceConditional()", Result)));
+			ASSERT_THAT(AreEqual(11, Result,
+				*FString::Printf(
+					TEXT("%s reference Conditional must preserve the first DeclRef address"), Side)));
+			ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module,
+				"int ReadSecondReferenceConditional()", Result)));
+			ASSERT_THAT(AreEqual(29, Result,
+				*FString::Printf(
+					TEXT("%s reference Conditional must preserve the second DeclRef address"), Side)));
+		};
+
+		{
+			FNativeTestEngine LegacyEngine;
+			LegacyEngine.Create(*TestRunner);
+			ON_SCOPE_EXIT { LegacyEngine.Destroy(); };
+			asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(LegacyEngine.Get());
+			ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_LEGACY)));
+			ASSERT_THAT(AreEqual(asCOMPILER_PIPELINE_LEGACY, ScriptEngine->GetCompilerPipeline(),
+				TEXT("LEGACY engine must retain the explicitly selected pipeline")));
+			ASSERT_THAT(IsTrue(RegisterTrace(LegacyEngine), TEXT("LEGACY index mutation Trace")));
+			FScopedNativeModule Module(
+				*TestRunner, LegacyEngine, "CanonicalASTVmIndexLegacy", ScriptSource);
+			ASSERT_THAT(IsTrue(Module.IsValid(), TEXT("LEGACY index mutation fixture must compile")));
+			if (!Module.IsValid())
+			{
+				TestRunner->AddInfo(LegacyEngine.GetMessagesText());
+				return;
+			}
+			AssertLegacyCompilerProvenance(
+				static_cast<asIScriptModule*>(Module), TEXT("LEGACY index fixture"));
+			RunAll(LegacyEngine, Module, TEXT("LEGACY"));
+		}
+
+		{
+			FNativeTestEngine CanonicalEngine;
+			CanonicalEngine.Create(*TestRunner);
+			ON_SCOPE_EXIT { CanonicalEngine.Destroy(); };
+			asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(CanonicalEngine.Get());
+			ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL)));
+			ASSERT_THAT(AreEqual(asCOMPILER_PIPELINE_CANONICAL, ScriptEngine->GetCompilerPipeline(),
+				TEXT("CANONICAL engine must retain the explicitly selected pipeline")));
+			ASSERT_THAT(IsTrue(RegisterTrace(CanonicalEngine), TEXT("CANONICAL index mutation Trace")));
+			FScopedNativeModule Module(
+				*TestRunner, CanonicalEngine, "CanonicalASTVmIndexCanonical", ScriptSource);
+			ASSERT_THAT(IsTrue(Module.IsValid(), TEXT("CANONICAL index mutation fixture must Generate")));
+			if (!Module.IsValid())
+			{
+				TestRunner->AddInfo(CanonicalEngine.GetMessagesText());
+				return;
+			}
+			AssertCanonicalCodeGenProvenance(
+				static_cast<asIScriptModule*>(Module), TEXT("CANONICAL index fixture"));
+			RunAll(CanonicalEngine, Module, TEXT("CANONICAL"));
+		}
 	}
 
 	TEST_METHOD(IsolatedLogicalShortCircuitMatchesLegacyCanonicalTrace)
@@ -471,6 +959,8 @@ public:
 				asBYTECODE_PUBLISHER_COMPILER,
 				static_cast<asCModule*>(static_cast<asIScriptModule*>(Module))->GetLastBytecodePublisher(),
 				TEXT("LEGACY engine must stay asCCompiler")));
+			AssertLegacyCompilerProvenance(
+				static_cast<asIScriptModule*>(Module), TEXT("LEGACY logical fixture"));
 			RunFour(LegacyEngine, Module, TEXT("LEGACY"));
 		}
 
@@ -493,6 +983,8 @@ public:
 				asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
 				static_cast<asCModule*>(static_cast<asIScriptModule*>(Module))->GetLastBytecodePublisher(),
 				TEXT("CANONICAL engine must publish CodeGen, not asCCompiler")));
+			AssertCanonicalCodeGenProvenance(
+				static_cast<asIScriptModule*>(Module), TEXT("CANONICAL logical fixture"));
 			RunFour(CanonicalEngine, Module, TEXT("CANONICAL"));
 		}
 	}
@@ -581,6 +1073,8 @@ public:
 				asBYTECODE_PUBLISHER_COMPILER,
 				static_cast<asCModule*>(static_cast<asIScriptModule*>(Module))->GetLastBytecodePublisher(),
 				TEXT("LEGACY engine must stay asCCompiler")));
+			AssertLegacyCompilerProvenance(
+				static_cast<asIScriptModule*>(Module), TEXT("LEGACY conditional fixture"));
 			RunBoth(LegacyEngine, Module, TEXT("LEGACY"));
 		}
 
@@ -603,6 +1097,8 @@ public:
 				asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
 				static_cast<asCModule*>(static_cast<asIScriptModule*>(Module))->GetLastBytecodePublisher(),
 				TEXT("CANONICAL engine must publish CodeGen, not asCCompiler")));
+			AssertCanonicalCodeGenProvenance(
+				static_cast<asIScriptModule*>(Module), TEXT("CANONICAL conditional fixture"));
 			RunBoth(CanonicalEngine, Module, TEXT("CANONICAL"));
 		}
 	}
@@ -669,6 +1165,8 @@ public:
 				asBYTECODE_PUBLISHER_COMPILER,
 				static_cast<asCModule*>(static_cast<asIScriptModule*>(Module))->GetLastBytecodePublisher(),
 				TEXT("LEGACY engine must stay asCCompiler")));
+			AssertLegacyCompilerProvenance(
+				static_cast<asIScriptModule*>(Module), TEXT("LEGACY value-temporary fixture"));
 			RunOnce(LegacyEngine, Module, TEXT("LEGACY"));
 		}
 
@@ -691,8 +1189,187 @@ public:
 				asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
 				static_cast<asCModule*>(static_cast<asIScriptModule*>(Module))->GetLastBytecodePublisher(),
 				TEXT("CANONICAL engine must publish CodeGen, not asCCompiler")));
+			AssertCanonicalCodeGenProvenance(
+				static_cast<asIScriptModule*>(Module), TEXT("CANONICAL value-temporary fixture"));
 			RunOnce(CanonicalEngine, Module, TEXT("CANONICAL"));
 		}
+	}
+
+	TEST_METHOD(IsolatedCompilerGeneratedDefaultConstructorMatchesLegacyCanonicalTrace)
+	{
+		using namespace AngelscriptNativeTestSupport;
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int MakeGenerated(int Value)
+			{
+				Trace(Value);
+				return Value;
+			}
+
+			struct FGenerated
+			{
+				int First = MakeGenerated(1);
+				int Second = MakeGenerated(2);
+			}
+
+			int Entry()
+			{
+				FGenerated v;
+				return v.First * 10 + v.Second;
+			}
+			)AS");
+
+		auto RunOnce = [&](FNativeTestEngine& Engine, asIScriptModule* Module, const TCHAR* Side)
+		{
+			FCanonicalExecutionTrace Trace;
+			int32 Result = 0;
+			{
+				FCanonicalTraceScope Scope(Trace);
+				ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+					*TestRunner, Engine.Get(), Module, "int Entry()", Result)));
+			}
+			ASSERT_THAT(AreEqual(12, Result,
+				*FString::Printf(TEXT("%s compiler-generated default constructor result"), Side)));
+			ASSERT_THAT(AreEqual(FString(TEXT("1,2")), Trace.ToNormalizedString(),
+				*FString::Printf(
+					TEXT("%s generated construction must evaluate member initializers in declaration order once. trace=%s"),
+					Side, *Trace.ToNormalizedString())));
+		};
+
+		{
+			FNativeTestEngine LegacyEngine;
+			LegacyEngine.Create(*TestRunner);
+			ON_SCOPE_EXIT { LegacyEngine.Destroy(); };
+			asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(LegacyEngine.Get());
+			ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_LEGACY)));
+			ASSERT_THAT(AreEqual(asCOMPILER_PIPELINE_LEGACY, ScriptEngine->GetCompilerPipeline()));
+			ASSERT_THAT(IsTrue(RegisterTrace(LegacyEngine), TEXT("LEGACY generated-value Trace")));
+			FScopedNativeModule Module(
+				*TestRunner, LegacyEngine, "CanonicalASTVmGeneratedLegacy", ScriptSource);
+			ASSERT_THAT(IsTrue(Module.IsValid(), TEXT("LEGACY generated default constructor must compile")));
+			if (!Module.IsValid())
+			{
+				TestRunner->AddInfo(LegacyEngine.GetMessagesText());
+				return;
+			}
+			AssertLegacyCompilerProvenance(
+				static_cast<asIScriptModule*>(Module), TEXT("LEGACY generated-value fixture"));
+			RunOnce(LegacyEngine, Module, TEXT("LEGACY"));
+		}
+
+		{
+			FNativeTestEngine CanonicalEngine;
+			CanonicalEngine.Create(*TestRunner);
+			ON_SCOPE_EXIT { CanonicalEngine.Destroy(); };
+			asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(CanonicalEngine.Get());
+			ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL)));
+			ASSERT_THAT(AreEqual(asCOMPILER_PIPELINE_CANONICAL, ScriptEngine->GetCompilerPipeline()));
+			ASSERT_THAT(IsTrue(RegisterTrace(CanonicalEngine), TEXT("CANONICAL generated-value Trace")));
+			FScopedNativeModule Module(
+				*TestRunner, CanonicalEngine, "CanonicalASTVmGeneratedCanonical", ScriptSource);
+			ASSERT_THAT(IsTrue(Module.IsValid(), TEXT("CANONICAL generated default constructor must Generate")));
+			if (!Module.IsValid())
+			{
+				TestRunner->AddInfo(CanonicalEngine.GetMessagesText());
+				return;
+			}
+			AssertCanonicalCodeGenProvenance(
+				static_cast<asIScriptModule*>(Module), TEXT("CANONICAL generated-value fixture"));
+			RunOnce(CanonicalEngine, Module, TEXT("CANONICAL"));
+		}
+	}
+
+	TEST_METHOD(LegacyPropertyUnaryAccessorFormsRemainRejected)
+	{
+		using namespace AngelscriptNativeTestSupport;
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			ScriptEngine->SetEngineProperty(asEP_PROPERTY_ACCESSOR_MODE, 2),
+			TEXT("LEGACY negative gate uses the maintained accessor profile")));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_LEGACY),
+			TEXT("LEGACY negative gate must explicitly select asCCompiler")));
+		ASSERT_THAT(IsTrue(RegisterTrace(Engine),
+			TEXT("LEGACY negative property gate registers an observable runtime trace")));
+
+		const std::string SharedSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int Stored = 5;
+
+				int GetValue()
+				{
+					Trace(2);
+					return Stored;
+				}
+
+				void SetValue(int Next)
+				{
+					Trace(3);
+					Stored = Next;
+				}
+			}
+
+			T Make()
+			{
+				Trace(1);
+				T Object = T();
+				return Object;
+			}
+			)AS");
+
+		auto AssertRejected = [&](const char* ModuleName, const std::string& EntrySource,
+			const TCHAR* ExpectedDiagnostic, const TCHAR* Form)
+		{
+			Engine.ResetMessages();
+			asIScriptModule* const Module = ScriptEngine->GetModule(
+				ModuleName, asGM_ALWAYS_CREATE);
+			ASSERT_THAT(IsNotNull(Module));
+			const std::string ScriptSource = SharedSource + EntrySource;
+			ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+				ModuleName, ScriptSource.c_str(),
+				static_cast<unsigned int>(ScriptSource.size()))));
+
+			FCanonicalExecutionTrace Trace;
+			int BuildResult = asSUCCESS;
+			{
+				FCanonicalTraceScope Scope(Trace);
+				BuildResult = Module->Build();
+			}
+			const FString Messages = CollectMessages(Engine.GetMessages());
+			ASSERT_THAT(IsTrue(BuildResult < 0,
+				*FString::Printf(
+					TEXT("LEGACY %s must remain rejected independently; result=%d messages=%s"),
+					Form, BuildResult, *Messages)));
+			ASSERT_THAT(IsTrue(Messages.Contains(ExpectedDiagnostic),
+				*FString::Printf(
+					TEXT("LEGACY %s must retain diagnostic '%s'. messages=%s"),
+					Form, ExpectedDiagnostic, *Messages)));
+			ASSERT_THAT(IsNull(Module->GetFunctionByDecl("int Entry()"),
+				*FString::Printf(TEXT("failed LEGACY %s build must not publish Entry"), Form)));
+			ASSERT_THAT(AreEqual(FString(), Trace.ToNormalizedString(),
+				*FString::Printf(
+					TEXT("LEGACY %s compile rejection must not execute Make/Get/Set"), Form)));
+		};
+
+		AssertRejected(
+			"CanonicalASTVmPropertyPrefixTemporaryLegacyNegative",
+			ASTEST_AS_ANSI("int Entry() { return ++Make().Value; }"),
+			TEXT("Reference is temporary"),
+			TEXT("temporary property prefix"));
+		AssertRejected(
+			"CanonicalASTVmPropertyPostfixTemporaryLegacyNegative",
+			ASTEST_AS_ANSI("int Entry() { return Make().Value++; }"),
+			TEXT("Reference is temporary"),
+			TEXT("temporary property postfix"));
+		AssertRejected(
+			"CanonicalASTVmPropertyPostfixLocalLegacyNegative",
+			ASTEST_AS_ANSI(
+				"int Entry() { T Object = T(); Object.Value++; return Object.Stored; }"),
+			TEXT("Property accessors cannot be used in combined read/write operations"),
+			TEXT("local property postfix"));
 	}
 
 	TEST_METHOD(IsolatedPropertyCompoundAssignMatchesLegacyCanonicalTrace)
@@ -723,17 +1400,22 @@ public:
 				return v;
 			}
 
+			int MakeRhs()
+			{
+				Trace(4);
+				return 1;
+			}
+
 			int RunMake()
 			{
-				T t = Make();
-				t.SetValue(t.GetValue() + 1);
+				Make().Value += MakeRhs();
 				return 1;
 			}
 
 			int RunLocal()
 			{
 				T v = T();
-				v.SetValue(v.GetValue() + 1);
+				v.Value += 1;
 				return v.Stored;
 			}
 			)AS");
@@ -748,8 +1430,8 @@ public:
 					*TestRunner, Engine.Get(), Module, "int RunMake()", Result)));
 			}
 			ASSERT_THAT(AreEqual(1, Result, *FString::Printf(TEXT("%s RunMake result"), Side)));
-			ASSERT_THAT(AreEqual(FString(TEXT("1,2,3")), Trace.ToNormalizedString(),
-				*FString::Printf(TEXT("%s Make then Get then Set. trace=%s"),
+			ASSERT_THAT(AreEqual(FString(TEXT("1,2,4,3")), Trace.ToNormalizedString(),
+				*FString::Printf(TEXT("%s Make then Get then RHS then Set. trace=%s"),
 					Side, *Trace.ToNormalizedString())));
 
 			{
@@ -759,7 +1441,7 @@ public:
 			}
 			ASSERT_THAT(AreEqual(42, Result, *FString::Printf(TEXT("%s RunLocal Stored after += 1"), Side)));
 			ASSERT_THAT(AreEqual(FString(TEXT("2,3")), Trace.ToNormalizedString(),
-				*FString::Printf(TEXT("%s v.SetValue(GetValue()+1) must Get then Set. trace=%s result=%d"),
+				*FString::Printf(TEXT("%s v.Value += 1 must Get then Set. trace=%s result=%d"),
 					Side, *Trace.ToNormalizedString(), Result)));
 		};
 
@@ -768,6 +1450,9 @@ public:
 			LegacyEngine.Create(*TestRunner);
 			ON_SCOPE_EXIT { LegacyEngine.Destroy(); };
 			asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(LegacyEngine.Get());
+			ASSERT_THAT(AreEqual(asSUCCESS,
+				ScriptEngine->SetEngineProperty(asEP_PROPERTY_ACCESSOR_MODE, 2),
+				TEXT("LEGACY property fixture enables the shared GetX/SetX accessor profile")));
 			ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_LEGACY),
 				TEXT("differential LEGACY fixture explicitly selects the rollback compiler")));
 			ASSERT_THAT(AreEqual(asCOMPILER_PIPELINE_LEGACY, ScriptEngine->GetCompilerPipeline()));
@@ -784,6 +1469,8 @@ public:
 				asBYTECODE_PUBLISHER_COMPILER,
 				static_cast<asCModule*>(static_cast<asIScriptModule*>(Module))->GetLastBytecodePublisher(),
 				TEXT("LEGACY engine must stay asCCompiler")));
+			AssertLegacyCompilerProvenance(
+				static_cast<asIScriptModule*>(Module), TEXT("LEGACY property fixture"));
 			RunBoth(LegacyEngine, Module, TEXT("LEGACY"));
 		}
 
@@ -792,7 +1479,11 @@ public:
 			CanonicalEngine.Create(*TestRunner);
 			ON_SCOPE_EXIT { CanonicalEngine.Destroy(); };
 			asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(CanonicalEngine.Get());
+			ASSERT_THAT(AreEqual(asSUCCESS,
+				ScriptEngine->SetEngineProperty(asEP_PROPERTY_ACCESSOR_MODE, 2),
+				TEXT("CANONICAL property fixture enables the shared GetX/SetX accessor profile")));
 			ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL)));
+			ASSERT_THAT(AreEqual(asCOMPILER_PIPELINE_CANONICAL, ScriptEngine->GetCompilerPipeline()));
 			ASSERT_THAT(IsTrue(RegisterTrace(CanonicalEngine), TEXT("CANONICAL property mutation Trace")));
 			FScopedNativeModule Module(
 				*TestRunner, CanonicalEngine, "CanonicalASTVmPropCanonical", ScriptSource);
@@ -806,6 +1497,8 @@ public:
 				asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
 				static_cast<asCModule*>(static_cast<asIScriptModule*>(Module))->GetLastBytecodePublisher(),
 				TEXT("CANONICAL engine must publish CodeGen, not asCCompiler")));
+			AssertCanonicalCodeGenProvenance(
+				static_cast<asIScriptModule*>(Module), TEXT("CANONICAL property fixture"));
 			RunBoth(CanonicalEngine, Module, TEXT("CANONICAL"));
 		}
 	}

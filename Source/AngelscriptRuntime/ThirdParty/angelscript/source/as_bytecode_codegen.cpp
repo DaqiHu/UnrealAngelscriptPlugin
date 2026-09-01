@@ -5088,7 +5088,11 @@ namespace
 				{
 					return 0;
 				}
-				const int slot = EmitExpr(expr->children[0]);
+				const asCDataType opaqueType = TypeOf(expr->type);
+				const int slot = opaqueType.IsReference()
+					&& !opaqueType.IsObjectHandle()
+					? EmitLValueAddress(expr->children[0])
+					: EmitExpr(expr->children[0]);
 				BindExprSlot(opaqueSlots, expr->id, slot);
 				return slot;
 			}
@@ -5473,18 +5477,38 @@ namespace
 				return 0;
 			}
 
-			// Member-chain sequencing stores the base and the terminal member as
-			// named children. The terminal member owns that same base edge, so
-			// descending to it evaluates the address exactly once; emitting every
-			// Sequence child first would evaluate the receiver twice.
 			if( expression->kind == asAST_EXPR_SEQUENCE
 				&& expression->children.GetLength() > 0 )
 			{
+				// Member-chain sequencing stores the base and the terminal member as
+				// named children. The terminal member owns that same base edge, so
+				// descending to it evaluates the address exactly once; emitting every
+				// Sequence child first would evaluate the receiver twice.
 				return EmitLValueAddress(
 					expression->children[expression->children.GetLength() - 1]);
 			}
-			if( (expression->kind == asAST_EXPR_OPAQUE_VALUE
-					|| expression->kind == asAST_EXPR_CLEANUP
+			if( expression->kind == asAST_EXPR_OPAQUE_VALUE
+				&& expression->children.GetLength() == 1 )
+			{
+				const asCDataType opaqueType = TypeOf(expression->type);
+				if( opaqueType.IsReference() && !opaqueType.IsObjectHandle() )
+				{
+					return EmitExpr(expression->id);
+				}
+				if( IsByValueObject(opaqueType) )
+				{
+					const int valueSlot = EmitExpr(expression->id);
+					if( !ok )
+					{
+						return 0;
+					}
+					bc.InstrSHORT(asBC_PSF, (short)valueSlot);
+					bc.Instr(asBC_PopRPtr);
+					return CapturePointerRegister();
+				}
+				return EmitLValueAddress(expression->children[0]);
+			}
+			if( (expression->kind == asAST_EXPR_CLEANUP
 					|| expression->kind == asAST_EXPR_CALL_REWRITE)
 				&& expression->children.GetLength() == 1 )
 			{
@@ -5596,6 +5620,15 @@ namespace
 				bc.InstrSHORT(asBC_PSF, (short)materializedSlot);
 				bc.Instr(asBC_PopRPtr);
 				return CapturePointerRegister();
+			}
+			if( expression->kind == asAST_EXPR_CONDITIONAL )
+			{
+				const asCDataType conditionalType = TypeOf(expression->type);
+				if( conditionalType.IsReference()
+					&& !conditionalType.IsObjectHandle() )
+				{
+					return EmitExpr(expression->id);
+				}
 			}
 			if( expression->kind == asAST_EXPR_CALL )
 			{
@@ -6571,9 +6604,30 @@ namespace
 				EmitMemberStore(lhs, rhs);
 				return rhs;
 			}
+			const asCDataType lhsType = TypeOf(lhs->type);
+			if( lhsType.IsReference() )
+			{
+				asCDataType payloadType = lhsType;
+				payloadType.MakeReference(false);
+				if( !lhsType.IsObjectHandle()
+					&& (payloadType.IsPrimitive() || payloadType.IsEnumType()) )
+				{
+					const int ptr = EmitLValueAddress(expr->children[0]);
+					if( !ok )
+						return 0;
+					bc.InstrSHORT(asBC_PshVPtr, (short)ptr);
+					bc.Instr(asBC_PopRPtr);
+					EmitWriteValue(rhs, payloadType);
+					return rhs;
+				}
+				// Non-scalar aliases require a Sema-selected opAssign (handled above)
+				// or an explicit authenticated storage-copy plan. Never reinterpret a
+				// reference slot as an inline object and copy its pointer bits.
+				FailAt(__LINE__, asNOT_SUPPORTED);
+				return 0;
+			}
 			if( lhs->kind == asAST_EXPR_INDEX )
 			{
-				const asCDataType lhsType = TypeOf(lhs->type);
 				asCDataType payloadType = lhsType;
 				if( payloadType.IsReference() )
 				{
@@ -7687,15 +7741,24 @@ namespace
 				return 0;
 			const int elseLabel = nextLabel++;
 			const int endLabel = nextLabel++;
-			const int dest = AllocTemporary(
-				dataType, dwords > 0 ? dwords : 1);
+			const bool yieldsReference = dataType.IsReference()
+				&& !dataType.IsObjectHandle();
+			const int resultDwords = yieldsReference
+				? AS_PTR_SIZE : (dwords > 0 ? dwords : 1);
+			const int dest = yieldsReference
+				? AllocPointerVariable()
+				: AllocTemporary(dataType, resultDwords);
 			EmitBoolJump(cond, asBC_JLowZ, elseLabel);
-			const int thenV = EmitExpr(expr->children[1]);
-			CopyVar(dest, thenV, dwords > 0 ? dwords : 1);
+			const int thenV = yieldsReference
+				? EmitLValueAddress(expr->children[1])
+				: EmitExpr(expr->children[1]);
+			CopyVar(dest, thenV, resultDwords);
 			bc.InstrINT(asBC_JMP, endLabel);
 			bc.Label((short)elseLabel);
-			const int elseV = EmitExpr(expr->children[2]);
-			CopyVar(dest, elseV, dwords > 0 ? dwords : 1);
+			const int elseV = yieldsReference
+				? EmitLValueAddress(expr->children[2])
+				: EmitExpr(expr->children[2]);
+			CopyVar(dest, elseV, resultDwords);
 			bc.Label((short)endLabel);
 			return dest;
 		}
@@ -7751,11 +7814,36 @@ namespace
 					return 0;
 				}
 			}
+			const asCExpr* innerExpr = context.GetExpr(expr->children[0]);
+			asCDataType srcType = innerExpr ? TypeOf(innerExpr->type) : destType;
+			if( srcType.IsEqualExceptRefAndConst(destType)
+				&& srcType.IsReference() && !srcType.IsObjectHandle()
+				&& !destType.IsReference()
+				&& (srcType.IsPrimitive() || srcType.IsEnumType()) )
+			{
+				// A scalar LValueToRValue conversion consumes the authenticated
+				// address route for every lvalue shape. This keeps Call, Index,
+				// DeclRef, OpaqueValue and reference Conditional representations
+				// uniform and prevents Index from being loaded twice.
+				const int pointer = EmitLValueAddress(expr->children[0]);
+				if( !ok )
+					return 0;
+				asCDataType payload = destType;
+				payload.MakeReference(false);
+				int payloadDwords = payload.GetSizeInMemoryDWords();
+				if( payloadDwords < 1 )
+				{
+					payloadDwords = 1;
+				}
+				const int dest = AllocTemporary(payload, payloadDwords);
+				bc.InstrSHORT(asBC_PshVPtr, (short)pointer);
+				bc.Instr(asBC_PopRPtr);
+				EmitReadValue(dest, payload, expr, "lvalue-to-rvalue");
+				return dest;
+			}
 			const int inner = EmitExpr(expr->children[0]);
 			if( !ok )
 				return 0;
-			const asCExpr* innerExpr = context.GetExpr(expr->children[0]);
-			asCDataType srcType = innerExpr ? TypeOf(innerExpr->type) : destType;
 			if( innerExpr != 0 && innerExpr->kind == asAST_EXPR_NULL_LITERAL )
 			{
 				// Verifier authenticates the Canonical QualType. Repeat the Runtime
@@ -7770,25 +7858,6 @@ namespace
 			}
 			if( srcType.IsEqualExceptRefAndConst(destType) )
 			{
-				if( srcType.IsReference() && !srcType.IsObjectHandle()
-					&& !destType.IsReference()
-					&& (srcType.IsPrimitive() || srcType.IsEnumType()) )
-				{
-					// Clang LValueToRValue of a scalar alias: EmitCall/EmitIndex
-					// leave a pointer slot. Load the payload before arithmetic.
-					asCDataType payload = destType;
-					payload.MakeReference(false);
-					int payloadDwords = payload.GetSizeInMemoryDWords();
-					if( payloadDwords < 1 )
-					{
-						payloadDwords = 1;
-					}
-					const int dest = AllocTemporary(payload, payloadDwords);
-					bc.InstrSHORT(asBC_PshVPtr, (short)inner);
-					bc.Instr(asBC_PopRPtr);
-					EmitReadValue(dest, payload, expr, "lvalue-to-rvalue");
-					return dest;
-				}
 				return inner;
 			}
 			// int and uint occupy the same single VM dword. Sema has already
@@ -9005,9 +9074,15 @@ namespace
 					const asCExpr* retExpr = context.GetExpr(stmt->expr);
 					int value = 0;
 					if( func->returnType.IsReference() && !func->returnType.IsObjectHandle()
-						&& retExpr && retExpr->kind == asAST_EXPR_DECL_REF )
+						&& retExpr )
 					{
-						value = EmitDeclRef(retExpr, TypeOf(retExpr->type), SizeDwords(TypeOf(retExpr->type)), true);
+						// A non-handle reference return transfers an alias identity, not
+						// the referenced payload. This applies to every legal lvalue form:
+						// DeclRef, MemberRef, Index, Conditional and reference-returning
+						// Call. Restricting this route to DeclRef scalarized an object field
+						// such as `return Item;` and published its first data word as the
+						// receiver pointer of a later object-operator call.
+						value = EmitLValueAddress(stmt->expr);
 					}
 					else
 					{
