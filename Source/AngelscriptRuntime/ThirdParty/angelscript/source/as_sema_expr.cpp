@@ -6031,6 +6031,65 @@ static asASTExprId RewritePostfixPropertyOrIndexMutation(
 	return asASTExprId();
 }
 
+// LEGACY CompileUnaryOperator / CompileCondition convert VALUE objects with
+// `bool opImplConv()` before treating the value as a boolean. Canonical must
+// seal that Call rather than leftover Unary/Conditional of T.
+static asASTExprId RewriteValueToBoolViaOpImplConv(
+	asCSema& sema,
+	asCASTContext& context,
+	asCScriptEngine* engine,
+	asASTExprId inner,
+	const asCSourceRange& range)
+{
+	const asCExpr* innerExpr = context.GetExpr(inner);
+	if( innerExpr == 0 )
+	{
+		return inner;
+	}
+	const asCType* const innerType = context.GetType(innerExpr->type.type);
+	if( innerType != 0
+		&& innerType->kind == asAST_TYPE_PRIMITIVE
+		&& innerType->primitiveToken == ttBool )
+	{
+		return inner;
+	}
+	if( engine != 0 )
+	{
+		InternNativeMethods(sema, engine, context, innerExpr->type, "opImplConv");
+	}
+	const asCQualType boolType = context.InternPrimitive(ttBool, 0);
+	const asASTDeclId typeDecl = FindNamedTypeDecl(context, innerExpr->type);
+	asCArray<asASTExprId> opArgs;
+	const asASTDeclId callee = FindBestCallee(
+		context, typeDecl, "opImplConv", opArgs, &sema);
+	const asCDecl* method = context.GetDecl(callee);
+	if( method == 0
+		|| method->kind != asAST_DECL_METHOD
+		|| !method->name.Equals("opImplConv") )
+	{
+		return inner;
+	}
+	asCQualType convType = method->type.IsValid() ? method->type : boolType;
+	asCArray<asASTExprId> callArgs;
+	asCArray<asCString> names;
+	asCArray<asSASTCallArgument> callArguments;
+	ArrangeCallArguments(
+		sema, context, callee, callArgs, names, range, inner, callArguments);
+	ConvertCallArgumentsToFormalTypes(
+		sema, context, *method, callArgs, range, inner, callArguments);
+	asASTExprId conv = sema.ActOnCall(
+		callee, callArgs, convType, range, &callArguments);
+	if( conv.IsValid() && inner.IsValid() )
+	{
+		context.SetExprReceiver(conv, inner);
+	}
+	if( ShouldMaterializeCallResult(context, convType) )
+	{
+		conv = sema.ActOnMaterializeTemporary(conv, range);
+	}
+	return conv.IsValid() ? conv : inner;
+}
+
 asASTExprId asCSema::ActOnUnaryExpr(const char* op, asASTExprId inner, const asCSourceRange& range, bool postfix)
 {
 	const asCQualType intType = context.InternPrimitive(ttInt, 0);
@@ -6128,64 +6187,18 @@ asASTExprId asCSema::ActOnUnaryExpr(const char* op, asASTExprId inner, const asC
 		// LEGACY CompileUnaryOperator converts VALUE objects with
 		// `bool opImplConv()` then emits NOT. `!Object` must be Unary ! of
 		// that Call, not leftover Unary ! of T typed as int.
-		if( const asCExpr* innerExpr = context.GetExpr(inner) )
+		const asASTExprId conv = RewriteValueToBoolViaOpImplConv(
+			*this, context, engine, inner, range);
+		if( conv.IsValid() && conv.value != inner.value )
 		{
-			const asCType* const innerType = context.GetType(innerExpr->type.type);
-			const bool alreadyBool = innerType != 0
-				&& innerType->kind == asAST_TYPE_PRIMITIVE
-				&& innerType->primitiveToken == ttBool;
-			if( !alreadyBool )
+			const asCQualType boolType = context.InternPrimitive(ttBool, 0);
+			const asASTExprId existingNot =
+				FindExistingExactUnary(context, range, "!", conv);
+			if( existingNot.IsValid() )
 			{
-				if( engine != 0 )
-				{
-					InternNativeMethods(*this, engine, context,
-						innerExpr->type, "opImplConv");
-				}
-				const asCQualType boolType = context.InternPrimitive(ttBool, 0);
-				const asASTDeclId typeDecl = FindNamedTypeDecl(
-					context, innerExpr->type);
-				asCArray<asASTExprId> opArgs;
-				const asASTDeclId callee = FindBestCallee(
-					context, typeDecl, "opImplConv", opArgs, this);
-				if( const asCDecl* method = context.GetDecl(callee) )
-				{
-					if( method->kind == asAST_DECL_METHOD
-						&& method->name.Equals("opImplConv") )
-					{
-						asCQualType convType = method->type.IsValid()
-							? method->type : boolType;
-						asCArray<asASTExprId> callArgs;
-						asCArray<asCString> names;
-						asCArray<asSASTCallArgument> callArguments;
-						ArrangeCallArguments(
-							*this, context, callee, callArgs, names, range,
-							inner, callArguments);
-						ConvertCallArgumentsToFormalTypes(
-							*this, context, *method, callArgs, range, inner,
-							callArguments);
-						asASTExprId conv = ActOnCall(
-							callee, callArgs, convType, range, &callArguments);
-						if( conv.IsValid() && inner.IsValid() )
-						{
-							context.SetExprReceiver(conv, inner);
-						}
-						if( ShouldMaterializeCallResult(context, convType) )
-						{
-							conv = ActOnMaterializeTemporary(conv, range);
-						}
-						if( conv.IsValid() )
-						{
-							const asASTExprId existingNot =
-								FindExistingExactUnary(context, range, "!", conv);
-							if( existingNot.IsValid() )
-							{
-								return existingNot;
-							}
-							return ActOnUnary("!", conv, boolType, range);
-						}
-					}
-				}
+				return existingNot;
 			}
+			return ActOnUnary("!", conv, boolType, range);
 		}
 	}
 	// A raw source spelling is not enough for primitive ++/--. Unlike a class
@@ -6575,6 +6588,11 @@ asASTExprId asCSema::ActOnConditionalExpr(asASTExprId cond, asASTExprId thenExpr
 			elseExpr = ActOnConversion(elseExpr, type, range);
 		}
 	}
+	// LEGACY CompileCondition converts VALUE objects with `bool opImplConv()`
+	// before the branch. `Object ? 42 : 0` must be Conditional of that Call,
+	// not leftover cond DeclRef of T.
+	cond = RewriteValueToBoolViaOpImplConv(
+		*this, context, engine, cond, range);
 	return ActOnConditional(cond, thenExpr, elseExpr, type, range);
 }
 
