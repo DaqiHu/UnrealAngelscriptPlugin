@@ -347,6 +347,12 @@ static void EmitTypedLocalVariableStmts(
 	out.PushLast(declStmt);
 	if( init.IsValid() )
 	{
+		const asASTExprId rewritten = TryRewriteObjectConvOperator(
+			sema, context, sema.GetEngine(), init, type, range, false);
+		if( rewritten.IsValid() )
+		{
+			init = rewritten;
+		}
 		bool convertedToFuncdef = false;
 		if( const asCExpr* const initExpr = context.GetExpr(init) )
 		{

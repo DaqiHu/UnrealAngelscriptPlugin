@@ -14385,6 +14385,147 @@ public:
 				*Dump)));
 	}
 
+	TEST_METHOD(CanonicalLocalInitObjectRewritesThroughOpImplConvWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 implicit opImplConv local-init fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaLocalInitOpImplConv", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int opImplConv() const
+				{
+					return 40 + 2;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				int Value = Object;
+				return Value;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaLocalInitOpImplConv.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("int Value = Object must compile from sealed T::opImplConv / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("implicit opImplConv local-init Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("implicit opImplConv local-init must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCDecl* ValueDecl = nullptr;
+		for (asUINT DeclIndex = 1; DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl = Context->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl != nullptr
+				&& Decl->kind == asAST_DECL_VAR
+				&& Decl->name.Equals("Value")
+				&& Entry != nullptr
+				&& Decl->parent == Entry->id)
+			{
+				ValueDecl = Decl;
+				break;
+			}
+		}
+		const asCExpr* Init = ValueDecl != nullptr && ValueDecl->inits.GetLength() != 0
+			? Context->GetExpr(ValueDecl->inits[0]) : nullptr;
+		while (Init != nullptr
+			&& (Init->kind == asAST_EXPR_CLEANUP
+				|| Init->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+				|| Init->kind == asAST_EXPR_CONVERSION)
+			&& Init->children.GetLength() != 0)
+		{
+			Init = Context->GetExpr(
+				Init->children[Init->children.GetLength() - 1]);
+		}
+		const asCDecl* const Callee = Init != nullptr
+			? Context->GetDecl(Init->resolvedDecl) : nullptr;
+		bool bLeftoverDeclRefOfT = false;
+		bool bLeftoverConversionOfT = false;
+		TArray<FString> Lines;
+		Dump.ParseIntoArrayLines(Lines);
+		for (const FString& Line : Lines)
+		{
+			if (Line.Contains(TEXT("kind=Conversion"))
+				&& Line.Contains(TEXT("type=int"))
+				&& (Line.Contains(TEXT("src=T")) || Line.Contains(TEXT("from=T"))))
+			{
+				bLeftoverConversionOfT = true;
+			}
+		}
+		if (Init != nullptr
+			&& Init->kind == asAST_EXPR_DECL_REF
+			&& Init->type.IsValid())
+		{
+			const asCType* const InitType = Context->GetType(Init->type.type);
+			if (InitType != nullptr && InitType->stableKey.Equals("T"))
+			{
+				bLeftoverDeclRefOfT = true;
+			}
+		}
+
+		ASSERT_THAT(IsTrue(
+			!bLeftoverDeclRefOfT
+				&& !bLeftoverConversionOfT
+				&& Init != nullptr
+				&& Init->kind == asAST_EXPR_CALL
+				&& Callee != nullptr
+				&& Callee->kind == asAST_DECL_METHOD
+				&& Callee->name.Equals("opImplConv")
+				&& Init->receiver.IsValid(),
+			*FString::Printf(
+				TEXT("int Value = Object must rewrite to a Call of T::opImplConv() const, not leftover DeclRef T or Conversion of T to int. dump:\n%s"),
+				*Dump)));
+	}
+
 	TEST_METHOD(SequenceSingleEvalShortCircuitConditionalAndGeneratedDefaultAreSealedTogether)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
