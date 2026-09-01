@@ -119,7 +119,74 @@ public:
 			TEXT("unknown node/type/schema kind fails closed")));
 	}
 
-	TEST_METHOD(SidecarV12RoundTripPreservesCompileOutCallRewriteAuthority)
+	TEST_METHOD(SidecarV13RoundTripPreservesLoopBodyEdgeSafePoint)
+	{
+		asCASTContext Context;
+		const asASTDeclId Tu = Context.CreateTranslationUnit(
+			"SidecarLoopBodySafePoint");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+		const asASTDeclId Function = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, asCSourceRange(), "F");
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Function, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetStableKey(
+			Function, "SidecarLoopBodySafePoint.F()")));
+		const asASTStmtId FunctionBody = Context.CreateStmt(
+			asAST_STMT_BLOCK, Function, asCSourceRange());
+		const asASTStmtId Loop = Context.CreateStmt(
+			asAST_STMT_WHILE, Function, asCSourceRange());
+		const asASTStmtId LoopBody = Context.CreateStmt(
+			asAST_STMT_BLOCK, Function, asCSourceRange());
+		const asASTExprId Condition = Context.CreateExpr(
+			asAST_EXPR_BOOL_LITERAL, BoolType, asAST_VALUE_PRVALUE,
+			asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetBody(Function, FunctionBody)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(FunctionBody, Loop)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, LoopBody)));
+		ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Loop, Condition)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(Condition, 1)));
+		ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+			FunctionBody, asAST_SAFEPOINT_FUNCTION_ENTRY)));
+		ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+			Loop, asAST_SAFEPOINT_LOOP_BACKEDGE)));
+		ASSERT_THAT(AreEqual(0, Context.SetLoopBodySafePointRole(
+			Loop, asAST_SAFEPOINT_LOOP_ENTRY)));
+		ASSERT_THAT(AreEqual(0, Context.Seal()));
+
+		asSASTSidecarHeader Header;
+		Header.functionKey = "SidecarLoopBodySafePoint.F()";
+		Header.profile = "Win64";
+		Header.version = asAST_SIDECAR_SCHEMA_VERSION;
+		asCArray<asBYTE> Bytes;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTEncodeSidecar(Context, Header, Bytes)));
+
+		asCASTContext Restored;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTDecodeSidecar(
+				Restored, Header, Bytes.AddressOf(), Bytes.GetLength())));
+		const asCStmt* const RestoredLoop = Restored.GetStmt(Loop);
+		const asCStmt* const RestoredBody = Restored.GetStmt(LoopBody);
+		ASSERT_THAT(IsNotNull(RestoredLoop));
+		ASSERT_THAT(IsNotNull(RestoredBody));
+		ASSERT_THAT(IsTrue(RestoredLoop != nullptr
+			&& RestoredLoop->safePointRole == asAST_SAFEPOINT_LOOP_BACKEDGE
+			&& RestoredLoop->loopBodySafePointRole
+				== asAST_SAFEPOINT_LOOP_ENTRY));
+		ASSERT_THAT(IsTrue(RestoredBody != nullptr
+			&& RestoredBody->safePointRole == asAST_SAFEPOINT_NONE
+			&& RestoredBody->loopBodySafePointRole == asAST_SAFEPOINT_NONE));
+
+		asCArray<asBYTE> Reencoded;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTEncodeSidecar(Restored, Header, Reencoded)));
+		ASSERT_THAT(AreEqual(Bytes.GetLength(), Reencoded.GetLength()));
+		ASSERT_THAT(IsTrue(std::memcmp(
+			Bytes.AddressOf(), Reencoded.AddressOf(), Bytes.GetLength()) == 0,
+			TEXT("V13 loop-edge safe-point round trip remains byte exact")));
+	}
+
+	TEST_METHOD(SidecarV13RoundTripPreservesCompileOutCallRewriteAuthority)
 	{
 		// CTA-S174 schema gate: CALL_REWRITE is append-only semantic authority.
 		// Persistence must retain its exact disposition declaration, final value
@@ -251,9 +318,9 @@ public:
 			return;
 		}
 
-		ASSERT_THAT(AreEqual(static_cast<asUINT>(12),
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(13),
 			asAST_SIDECAR_SCHEMA_VERSION,
-			TEXT("CALL_REWRITE is admitted by Sidecar schema V12")));
+			TEXT("CALL_REWRITE remains admitted by Sidecar schema V13")));
 		asSASTSidecarHeader Header;
 		Header.functionKey = "CallRewriteSidecar.Entry";
 		Header.profile = "Win64";
@@ -318,7 +385,7 @@ public:
 				&& (Bytes.GetLength() == 0 || std::memcmp(
 					Bytes.AddressOf(), RestoredBytes.AddressOf(),
 					Bytes.GetLength()) == 0),
-			TEXT("CALL_REWRITE V12 decode/encode must be byte exact")));
+			TEXT("CALL_REWRITE V13 decode/encode must be byte exact")));
 	}
 
 	TEST_METHOD(SidecarCallArgumentsRoundTripDeterministicallyAndRejectCorruption)
@@ -493,14 +560,14 @@ public:
 				&& (Bytes.GetLength() == 0 || std::memcmp(
 					Bytes.AddressOf(), RepeatedBytes.AddressOf(),
 					Bytes.GetLength()) == 0),
-			TEXT("repeated V12 encode must be byte deterministic")));
+			TEXT("repeated V13 encode must be byte deterministic")));
 
 		asCASTContext Restored;
 		const int DecodeStatus =
 			asCASTDecodeSidecar(
 				Restored, Header, Bytes.AddressOf(), Bytes.GetLength());
 		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK, DecodeStatus,
-			TEXT("V12 decode must restore formal and CallArgument authority before Seal")));
+			TEXT("V13 decode must restore formal and CallArgument authority before Seal")));
 		if (DecodeStatus != asAST_SIDECAR_OK)
 		{
 			return;
@@ -517,7 +584,7 @@ public:
 			&& RestoredBDecl->formalIndex == 1
 			&& RestoredCDecl->formalIndex == 2
 			&& RestoredHiddenDecl->formalIndex == 3,
-			TEXT("V12 must round-trip sealed ParamDecl formal ordinals independently of child position")));
+			TEXT("V13 must round-trip sealed ParamDecl formal ordinals independently of child position")));
 		const asCExpr* const RestoredCall = Restored.GetExpr(Call);
 		ASSERT_THAT(IsNotNull(RestoredCall,
 			TEXT("Sidecar restore must preserve the call expression identity")));
@@ -620,9 +687,9 @@ public:
 						TEXT("indirect funcdef formal ordinal/type provenance must round-trip without a Runtime owner")));
 				}
 			}
-			ASSERT_THAT(AreEqual(static_cast<asUINT>(12),
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(13),
 				asAST_SIDECAR_SCHEMA_VERSION,
-				TEXT("V12 admits CALL_REWRITE and retains V11 CallArgument/formal authority")));
+				TEXT("V13 retains V12 CALL_REWRITE and V11 CallArgument/formal authority")));
 
 		asCArray<asBYTE> RestoredBytes;
 		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
@@ -631,7 +698,7 @@ public:
 				&& (Bytes.GetLength() == 0 || std::memcmp(
 					Bytes.AddressOf(), RestoredBytes.AddressOf(),
 					Bytes.GetLength()) == 0),
-			TEXT("decode then encode must preserve exact V12 bytes")));
+			TEXT("decode then encode must preserve exact V13 bytes")));
 
 			// The V9 trailer ends with the indirect funcdef's positional record. Its
 			// fixed-size payload is 48 bytes because authoredName and formal are empty.
@@ -656,7 +723,7 @@ public:
 				TEXT("corrupt CallArgument bytes must not publish a partial graph")));
 			ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
 				Candidate.GetExprCount(),
-				TEXT("failed V12 decode must discard the complete candidate graph")));
+				TEXT("failed V13 decode must discard the complete candidate graph")));
 		};
 
 		asCArray<asBYTE> BadExpression = Bytes;
@@ -928,7 +995,7 @@ public:
 				&& RestoredNamed.authoredName.Equals("B")
 				&& RestoredNamed.range.begin.offset == NamedRange.begin.offset
 				&& RestoredNamed.range.end.offset == NamedRange.end.offset,
-			TEXT("V12 must restore the exact default/named constructor formal relation")));
+			TEXT("V13 must restore the exact default/named constructor formal relation")));
 
 		asCArray<asBYTE> RestoredBytes;
 		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
@@ -1060,7 +1127,7 @@ public:
 		}
 
 		asCArray<asBYTE> CorruptBytes = Bytes;
-		// V12 ends with the per-expression CallArgument counts. The final
+		// V13 ends with the per-expression CallArgument counts. The final
 		// zero-formal CONSTRUCT has no record bytes, so claiming one is malformed.
 		CorruptBytes[CorruptBytes.GetLength() - 4] = 1;
 		asCASTContext CorruptRestore;

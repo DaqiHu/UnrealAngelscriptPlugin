@@ -1376,6 +1376,17 @@ void asCASTDump(const asCASTContext& context, asCString& out)
 			line += "\n";
 		}
 		AppendSafePoint(line, stmt->safePointRole);
+		if( const char* const bodySafePoint =
+			SafePointName(stmt->loopBodySafePointRole) )
+		{
+			if( line.GetLength() && line[line.GetLength() - 1] == '\n' )
+			{
+				line.SetLength(line.GetLength() - 1);
+			}
+			line += " body-safepoint=";
+			line += bodySafePoint;
+			line += "\n";
+		}
 		out += line;
 	}
 
@@ -1994,6 +2005,7 @@ void asCASTShadowDiff(const asCASTContext& left, const asCASTContext& right, asC
 		if( ShadowIdMismatch(out, path, "expr", leftStmt->expr.value, rightStmt->expr.value) ) return;
 		if( ShadowIdMismatch(out, path, "decl", leftStmt->decl.value, rightStmt->decl.value) ) return;
 		if( ShadowUnsignedMismatch(out, path, "safePointRole", leftStmt->safePointRole, rightStmt->safePointRole) ) return;
+		if( ShadowUnsignedMismatch(out, path, "loopBodySafePointRole", leftStmt->loopBodySafePointRole, rightStmt->loopBodySafePointRole) ) return;
 		if( ShadowUnsignedMismatch(out, path, "children.count", leftStmt->children.GetLength(), rightStmt->children.GetLength()) ) return;
 		for( asUINT n = 0; n < leftStmt->children.GetLength(); ++n )
 		{

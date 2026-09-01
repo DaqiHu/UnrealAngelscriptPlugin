@@ -343,6 +343,14 @@ public:
 		ASSERT_THAT(AreEqual(0, Context.SetTarget(Brk, Ret), TEXT("break targets return")));
 		asSAstVerifyResult Result;
 		ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND, asCASTVerify(Context, Result), TEXT("break to return is wrong-kind")));
+		ASSERT_THAT(IsTrue(Result.detail.Equals("break-target"),
+			TEXT("wrong-kind Break keeps the stable control detail")));
+		ASSERT_THAT(IsTrue(
+			Result.offendingNode == asSASTNodeRef::FromStmt(Brk)));
+		ASSERT_THAT(AreEqual((int)asAST_EDGE_STMT_TARGET,
+			(int)Result.edgeRole));
+		ASSERT_THAT(IsTrue(
+			Result.relatedNode == asSASTNodeRef::FromStmt(Ret)));
 
 		asCASTContext Dup;
 		const asASTDeclId DupTu = Dup.CreateTranslationUnit("Dup");

@@ -419,6 +419,7 @@ struct asSSidecarStmtDTO
 	asUINT expr;
 	asUINT decl;
 	asEASTSafePointRole safePointRole;
+	asEASTSafePointRole loopBodySafePointRole;
 	asCArray<asUINT> children;
 };
 
@@ -773,6 +774,7 @@ int asCASTEncodeSidecar(const asCASTContext& context, const asSASTSidecarHeader&
 		AppendU32(out, stmt->expr.value);
 		AppendU32(out, stmt->decl.value);
 		AppendU32(out, (asUINT)stmt->safePointRole);
+		AppendU32(out, (asUINT)stmt->loopBodySafePointRole);
 		AppendStmtIdArray(out, stmt->children);
 	}
 
@@ -928,6 +930,7 @@ static bool ReadStmtDTO(const asBYTE* bytes, asUINT length, asUINT& offset, asSS
 {
 	asUINT kind = 0;
 	asUINT safePointRole = 0;
+	asUINT loopBodySafePointRole = 0;
 	if( !ReadU32(bytes, length, offset, kind)
 		|| !ReadU32(bytes, length, offset, out.owner)
 		|| !ReadRange(bytes, length, offset, out.range)
@@ -935,12 +938,15 @@ static bool ReadStmtDTO(const asBYTE* bytes, asUINT length, asUINT& offset, asSS
 		|| !ReadU32(bytes, length, offset, out.expr)
 		|| !ReadU32(bytes, length, offset, out.decl)
 		|| !ReadU32(bytes, length, offset, safePointRole)
+		|| !ReadU32(bytes, length, offset, loopBodySafePointRole)
 		|| !ReadIdArray(bytes, length, offset, out.children) )
 	{
 		return false;
 	}
 	out.kind = (asEASTStmtKind)kind;
 	out.safePointRole = (asEASTSafePointRole)safePointRole;
+	out.loopBodySafePointRole =
+		(asEASTSafePointRole)loopBodySafePointRole;
 	return true;
 }
 
@@ -1385,7 +1391,11 @@ int asCASTDecodeSidecar(asCASTContext& context, const asSASTSidecarHeader& expec
 			return DecodeFail(context, asAST_SIDECAR_MALFORMED);
 		}
 		const asASTStmtId id = context.CreateStmt(dto.kind, asASTDeclId(dto.owner), dto.range);
-		if( !id.IsValid() || id.value != i + 1 || context.SetStmtSafePointRole(id, dto.safePointRole) != asAST_VERIFY_OK )
+		if( !id.IsValid() || id.value != i + 1
+			|| context.SetStmtSafePointRole(id, dto.safePointRole)
+				!= asAST_VERIFY_OK
+			|| context.SetLoopBodySafePointRole(
+				id, dto.loopBodySafePointRole) != asAST_VERIFY_OK )
 		{
 			return DecodeFail(context, asAST_SIDECAR_MALFORMED);
 		}
@@ -1764,6 +1774,7 @@ static void AppendStmtIdentity(const asCASTContext& context, asASTStmtId id, asC
 	AppendU32(material, (asUINT)stmt->kind);
 	AppendRangeIdentity(context, stmt->range, material);
 	AppendU32(material, (asUINT)stmt->safePointRole);
+	AppendU32(material, (asUINT)stmt->loopBodySafePointRole);
 	AppendDeclReferenceIdentity(context, stmt->owner, material);
 	AppendDeclReferenceIdentity(context, stmt->decl, material);
 	AppendExprIdentity(context, stmt->expr, material);

@@ -17418,7 +17418,8 @@ public:
 			&& InitTarget->resolvedDecl == InitVariable->id,
 			*DumpMsg));
 		ASSERT_THAT(IsTrue(Body != nullptr
-			&& Body->safePointRole == asAST_SAFEPOINT_LOOP_ENTRY,
+			&& Body->safePointRole == asAST_SAFEPOINT_NONE
+			&& Loop->loopBodySafePointRole == asAST_SAFEPOINT_LOOP_ENTRY,
 			*DumpMsg));
 		ASSERT_THAT(IsNotNull(IncrementPhase, *DumpMsg));
 		ASSERT_THAT(IsTrue(CanonicalASTSemaAuthorityTest::StmtChildrenContainKind(
@@ -17750,17 +17751,13 @@ public:
 		bool bBreakTransfer = false;
 		bool bContinueTransfer = false;
 		bool bFunctionEntry = false;
-		int32 WhileBodyId = 0;
 		for (const FString& Line : Lines)
 		{
-			if (Line.Contains(TEXT("kind=While")) && Line.Contains(TEXT("safepoint=LoopBackedge")))
+			if (Line.Contains(TEXT("kind=While"))
+				&& Line.Contains(TEXT("safepoint=LoopBackedge")))
 			{
 				bWhileBackedge = true;
-				const int32 BodyAt = Line.Find(TEXT("body="));
-				if (BodyAt != INDEX_NONE)
-				{
-					WhileBodyId = FCString::Atoi(*Line.Mid(BodyAt + 5));
-				}
+				bBodyEntry = Line.Contains(TEXT("body-safepoint=LoopEntry"));
 			}
 			if (Line.Contains(TEXT("kind=Return")) && Line.Contains(TEXT("safepoint=Return")))
 			{
@@ -17784,23 +17781,6 @@ public:
 				bFunctionEntry = true;
 			}
 		}
-		if (WhileBodyId > 0)
-		{
-			for (const FString& Line : Lines)
-			{
-				if (!Line.Contains(TEXT("STMT id=")))
-				{
-					continue;
-				}
-				const int32 IdBegin = Line.Find(TEXT("id="));
-				const int32 Id = FCString::Atoi(*Line.Mid(IdBegin + 3));
-				if (Id == WhileBodyId && Line.Contains(TEXT("safepoint=LoopEntry")))
-				{
-					bBodyEntry = true;
-				}
-			}
-		}
-
 		ASSERT_THAT(IsTrue(bWhileBackedge, *DumpMsg));
 		ASSERT_THAT(IsTrue(bBodyEntry, *DumpMsg));
 		ASSERT_THAT(IsTrue(bReturnRole, *DumpMsg));
@@ -17810,6 +17790,147 @@ public:
 		ASSERT_THAT(IsTrue(bFunctionEntry, *DumpMsg));
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("kind=Continue")), *DumpMsg));
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("target=")), *DumpMsg));
+	}
+
+	TEST_METHOD(UnbracedLoopBodiesRetainTheirIntrinsicSafePointRoles)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaUnbracedLoopSafePoints", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int WhileBreak(bool Run)
+			{
+				while (Run)
+					break;
+				return 1;
+			}
+
+			int NestedWhile(bool Outer, bool Inner)
+			{
+				while (Outer)
+					while (Inner)
+						break;
+				return 2;
+			}
+
+			int ForContinue(bool Run)
+			{
+				for (; Run; )
+					continue;
+				return 3;
+			}
+
+			int DoContinue()
+			{
+				do
+					continue;
+				while (false);
+				return 4;
+			}
+
+			int WhileIf(bool Run, bool Stop)
+			{
+				while (Run)
+					if (Stop)
+						return 5;
+				return 6;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaUnbracedLoopSafePoints.as", ScriptSource.c_str())));
+		const int BuildResult = Module->Build();
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			TEXT("legal unbraced loop bodies must seal, publish and reach Canonical CodeGen")));
+		if (BuildResult < 0)
+		{
+			return;
+		}
+
+		asCASTContext* const Context = const_cast<asCASTContext*>(
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext());
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		int32 DirectTransferBodyCount = 0;
+		int32 DirectNestedLoopBodyCount = 0;
+		int32 DirectIfBodyCount = 0;
+		for (asUINT StatementIndex = 1;
+			StatementIndex <= Context->GetStmtCount(); ++StatementIndex)
+		{
+			const asCStmt* const Loop =
+				Context->GetStmt(asASTStmtId(StatementIndex));
+			if (Loop == nullptr
+				|| (Loop->kind != asAST_STMT_WHILE
+					&& Loop->kind != asAST_STMT_DO_WHILE
+					&& Loop->kind != asAST_STMT_FOR))
+			{
+				continue;
+			}
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_SAFEPOINT_LOOP_BACKEDGE),
+				static_cast<int32>(Loop->safePointRole),
+				TEXT("every authored loop keeps its intrinsic LoopBackedge role")));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asAST_SAFEPOINT_LOOP_ENTRY),
+				static_cast<int32>(Loop->loopBodySafePointRole),
+				TEXT("every authored loop seals LoopEntry on its body edge")));
+			const asUINT BodyIndex = Loop->kind == asAST_STMT_FOR ? 1u : 0u;
+			const asCStmt* const Body = BodyIndex < Loop->children.GetLength()
+				? Context->GetStmt(Loop->children[BodyIndex]) : nullptr;
+			ASSERT_THAT(IsNotNull(Body));
+			if (Body == nullptr)
+			{
+				continue;
+			}
+			if (Body->kind == asAST_STMT_BREAK
+				|| Body->kind == asAST_STMT_CONTINUE)
+			{
+				++DirectTransferBodyCount;
+				ASSERT_THAT(AreEqual(
+					static_cast<int32>(asAST_SAFEPOINT_TRANSFER),
+					static_cast<int32>(Body->safePointRole),
+					TEXT("a direct transfer body must not lose Transfer to LoopEntry")));
+				ASSERT_THAT(IsTrue(Body->target == Loop->id));
+			}
+			else if (Body->kind == asAST_STMT_WHILE)
+			{
+				++DirectNestedLoopBodyCount;
+				ASSERT_THAT(AreEqual(
+					static_cast<int32>(asAST_SAFEPOINT_LOOP_BACKEDGE),
+					static_cast<int32>(Body->safePointRole),
+					TEXT("a direct nested loop must not lose LoopBackedge to LoopEntry")));
+			}
+			else if (Body->kind == asAST_STMT_IF)
+			{
+				++DirectIfBodyCount;
+				ASSERT_THAT(AreEqual(
+					static_cast<int32>(asAST_SAFEPOINT_STATEMENT),
+					static_cast<int32>(Body->safePointRole),
+					TEXT("a direct If body must not lose Statement to LoopEntry")));
+			}
+		}
+
+		ASSERT_THAT(AreEqual(4, DirectTransferBodyCount));
+		ASSERT_THAT(AreEqual(1, DirectNestedLoopBodyCount));
+		ASSERT_THAT(AreEqual(1, DirectIfBodyCount));
+		asSAstVerifyResult VerifyResult;
+		ASSERT_THAT(AreEqual((int)asAST_VERIFY_OK,
+			asCASTVerifyPublication(*Context, VerifyResult),
+			TEXT("the complete unbraced source graph must remain publishable")));
 	}
 
 	TEST_METHOD(LocalDeclAndExprStmtAreSiblingsOnCompileSealPath)
@@ -18379,6 +18500,7 @@ public:
 		Text.ParseIntoArrayLines(Lines);
 		bool bNamed = false;
 		bool bBackedge = false;
+		bool bBodyEntry = false;
 		int32 BodyId = 0;
 		for (const FString& Line : Lines)
 		{
@@ -18396,22 +18518,7 @@ public:
 			const int32 ExprId = FCString::Atoi(*Line.Mid(ExprAt + 5));
 			bNamed = BodyId > 0 && ExprId > 0 && BodyId != ExprId;
 			bBackedge = Line.Contains(TEXT("safepoint=LoopBackedge"));
-		}
-		bool bBodyEntry = false;
-		if (BodyId > 0)
-		{
-			for (const FString& Line : Lines)
-			{
-				if (!Line.Contains(TEXT("STMT id=")))
-				{
-					continue;
-				}
-				const int32 Id = FCString::Atoi(*Line.Mid(Line.Find(TEXT("id=")) + 3));
-				if (Id == BodyId && Line.Contains(TEXT("safepoint=LoopEntry")))
-				{
-					bBodyEntry = true;
-				}
-			}
+			bBodyEntry = Line.Contains(TEXT("body-safepoint=LoopEntry"));
 		}
 		ASSERT_THAT(IsTrue(bNamed, *DumpMsg));
 		ASSERT_THAT(IsTrue(bBackedge, *DumpMsg));
@@ -18608,9 +18715,18 @@ public:
 			if (CaseIndex < 3)
 			{
 				const asCExpr* const Value = Context->GetExpr(CaseStatement->expr);
+				const asCType* const ValueType = Value != nullptr
+					? Context->GetType(Value->type.type) : nullptr;
+				const asCExpr* const AuthoredLiteral = Value != nullptr
+					&& Value->children.GetLength() == 1
+					? Context->GetExpr(Value->children[0]) : nullptr;
 				ASSERT_THAT(IsTrue(Value != nullptr
-					&& Value->kind == asAST_EXPR_INTEGER_LITERAL
-					&& Value->literalBits == CaseIndex
+					&& Value->kind == asAST_EXPR_CONVERSION
+					&& ValueType != nullptr
+					&& ValueType->primitiveToken == ttUInt
+					&& AuthoredLiteral != nullptr
+					&& AuthoredLiteral->kind == asAST_EXPR_INTEGER_LITERAL
+					&& AuthoredLiteral->literalBits == CaseIndex
 					&& Value->range.begin.offset
 						< CaseStatement->range.end.offset,
 					*FactMessage));
@@ -18630,6 +18746,1528 @@ public:
 		ASSERT_THAT(IsTrue(SecondCase != nullptr
 			&& SecondCase->children.GetLength() > 0,
 			*FactMessage));
+	}
+
+	TEST_METHOD(MixedExactTypeDuplicateCaseFailsInSelectorDomainWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaSelectorDomainDuplicateCase", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void Entry(uint Selector)
+			{
+				switch (Selector)
+				{
+				case 1:
+					break;
+				case uint(1):
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaSelectorDomainDuplicateCase.as", ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0,
+			*FString::Printf(TEXT(
+				"case 1 and case uint(1) are the same uint32 selector-domain value and must fail; build=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr
+					? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr
+					? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		if (BuildResult >= 0)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(Messages.Contains(TEXT("Duplicate switch case"))
+			|| Messages.Contains(TEXT("duplicate-case")),
+			*FString::Printf(TEXT(
+				"the rejected selector-domain duplicate must keep a stable duplicate diagnostic; messages=%s"),
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("selector-domain duplicate rejection must not construct asCCompiler")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByDecl("void Entry(uint)"),
+			TEXT("a rejected duplicate switch must not publish Runtime Bytecode")));
+		ASSERT_THAT(IsNull(Internal != nullptr
+			? Internal->GetCanonicalASTContext() : nullptr,
+			TEXT("a rejected duplicate switch must not publish a retained Canonical snapshot")));
+	}
+
+	TEST_METHOD(NarrowedConstantDuplicateCaseFailsInSelectorDomainWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaSelectorDomainNarrowedDuplicateCase", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void Entry(uint Selector)
+			{
+				switch (Selector)
+				{
+				case uint8(257):
+					break;
+				case 1:
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaSelectorDomainNarrowedDuplicateCase.as",
+			ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0,
+			*FString::Printf(TEXT(
+				"uint8(257) narrows to the same uint32 selector-domain value as 1 and must fail; build=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr
+					? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr
+					? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		if (BuildResult >= 0)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(Messages.Contains(TEXT("Duplicate switch case"))
+			|| Messages.Contains(TEXT("duplicate-case")),
+			*FString::Printf(TEXT(
+				"the rejected narrowed duplicate must keep a stable duplicate diagnostic; messages=%s"),
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("narrowed duplicate rejection must not construct asCCompiler")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByDecl("void Entry(uint)"),
+			TEXT("a rejected narrowed duplicate must not publish Runtime Bytecode")));
+		ASSERT_THAT(IsNull(Internal != nullptr
+			? Internal->GetCanonicalASTContext() : nullptr,
+			TEXT("a rejected narrowed duplicate must not publish a retained Canonical snapshot")));
+	}
+
+	TEST_METHOD(NonConstantCaseFailsInSemaWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaNonConstantCase", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void Entry(uint Selector)
+			{
+				switch (Selector)
+				{
+				case Selector:
+					break;
+				default:
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaNonConstantCase.as", ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0,
+			*FString::Printf(TEXT(
+				"a Case expression must be a Sema-proven constant, never a runtime comparison; build=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr
+					? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr
+					? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		if (BuildResult >= 0)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(Messages.Contains(TEXT(
+			"Case expressions must be constants")),
+			*FString::Printf(TEXT(
+				"non-constant Case rejection must keep the language diagnostic; messages=%s"),
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("non-constant Case rejection must not construct asCCompiler")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByDecl("void Entry(uint)"),
+			TEXT("a rejected non-constant Case must not publish Runtime Bytecode")));
+		ASSERT_THAT(IsNull(Internal != nullptr
+			? Internal->GetCanonicalASTContext() : nullptr,
+			TEXT("a rejected non-constant Case must not publish a retained Canonical snapshot")));
+	}
+
+	TEST_METHOD(MixedExactTypeDistinctCasesSealSelectorDomainConversions)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaSelectorDomainDistinctCases", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Entry(uint Selector)
+			{
+				switch (Selector)
+				{
+				case 1:
+					return 10;
+				case uint(2):
+					return 20;
+				default:
+					return 30;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaSelectorDomainDistinctCases.as", ScriptSource.c_str())));
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(TEXT(
+				"distinct mixed exact-type Cases must build after explicit uint selector-domain normalization; build=%d messages=%s"),
+				BuildResult, *Messages)));
+		if (BuildResult < 0 || Internal == nullptr)
+		{
+			return;
+		}
+
+		asCASTContext* const Context = const_cast<asCASTContext*>(
+			Internal->GetCanonicalASTContext());
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*Context, "Entry");
+		const asCStmt* SwitchStatement = nullptr;
+		for (asUINT StatementIndex = 1;
+			Entry != nullptr && StatementIndex <= Context->GetStmtCount();
+			++StatementIndex)
+		{
+			const asCStmt* const Statement =
+				Context->GetStmt(asASTStmtId(StatementIndex));
+			if (Statement != nullptr && Statement->owner == Entry->id
+				&& Statement->kind == asAST_STMT_SWITCH)
+			{
+				SwitchStatement = Statement;
+				break;
+			}
+		}
+
+		asCString RawDump;
+		asCASTDump(*Context, RawDump);
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		const FString FactMessage = FString::Printf(TEXT(
+			"both non-default Cases must be exact uint-domain expressions before CodeGen; AST:\n%s"),
+			*Dump);
+		ASSERT_THAT(IsTrue(SwitchStatement != nullptr
+			&& SwitchStatement->children.GetLength() == 3,
+			*FactMessage));
+		if (SwitchStatement == nullptr
+			|| SwitchStatement->children.GetLength() < 2)
+		{
+			return;
+		}
+		for (asUINT CaseIndex = 0; CaseIndex < 2; ++CaseIndex)
+		{
+			const asCStmt* const CaseStatement = Context->GetStmt(
+				SwitchStatement->children[CaseIndex]);
+			const asCExpr* const CaseValue = CaseStatement != nullptr
+				? Context->GetExpr(CaseStatement->expr) : nullptr;
+			const asCType* const CaseType = CaseValue != nullptr
+				? Context->GetType(CaseValue->type.type) : nullptr;
+			const asCExpr* const AuthoredValue = CaseValue != nullptr
+				&& CaseValue->children.GetLength() == 1
+				? Context->GetExpr(CaseValue->children[0]) : nullptr;
+			ASSERT_THAT(IsTrue(CaseValue != nullptr
+				&& CaseValue->kind == asAST_EXPR_CONVERSION
+				&& CaseType != nullptr
+				&& CaseType->primitiveToken == ttUInt
+				&& CaseValue->literal.Equals("switch-case-domain")
+				&& CaseValue->literalBits == CaseIndex + 1
+				&& AuthoredValue != nullptr
+				&& CaseValue->range == AuthoredValue->range
+				&& (CaseIndex == 0
+					? AuthoredValue->kind == asAST_EXPR_INTEGER_LITERAL
+					: AuthoredValue->kind == asAST_EXPR_CONVERSION),
+				*FactMessage));
+		}
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal->GetLastBytecodePublisher(),
+			TEXT("the normalized Case graph must be lowered by Canonical CodeGen")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal->GetLastLegacyCompilerInvocationCount(),
+			TEXT("selector-domain normalization must not construct asCCompiler")));
+	}
+
+	TEST_METHOD(LogicalRightShiftCaseConstantMatchesLegacySelectorDomain)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaLogicalRightShiftCaseConstant", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void Entry(int Selector)
+			{
+				switch (Selector)
+				{
+				case -2 >> 1:
+					break;
+				case 2147483647:
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaLogicalRightShiftCaseConstant.as", ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0
+			&& Messages.Contains(TEXT("Duplicate switch case")),
+			*FString::Printf(TEXT(
+				"AngelScript >> is a logical 32-bit right shift, so -2 >> 1 and 2147483647 must be duplicate Case values; build=%d messages=%s"),
+				BuildResult, *Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("logical-shift Case folding must remain Canonical-only")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByDecl("void Entry(int)"),
+			TEXT("a logical-shift duplicate must not publish Runtime Bytecode")));
+	}
+
+	TEST_METHOD(ArithmeticRightShiftCaseConstantMatchesLegacySelectorDomain)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaArithmeticRightShiftCaseConstant", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void Entry(int Selector)
+			{
+				switch (Selector)
+				{
+				case -2 >>> 1:
+					break;
+				case -1:
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaArithmeticRightShiftCaseConstant.as", ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0
+			&& Messages.Contains(TEXT("Duplicate switch case")),
+			*FString::Printf(TEXT(
+				"AngelScript >>> is an arithmetic 32-bit right shift, so -2 >>> 1 and -1 must be duplicate Case values; build=%d messages=%s"),
+				BuildResult, *Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("arithmetic-shift Case folding must remain Canonical-only")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByDecl("void Entry(int)"),
+			TEXT("an arithmetic-shift duplicate must not publish Runtime Bytecode")));
+	}
+
+	TEST_METHOD(ThirtyTwoBitShiftCountUsesVmWidthMaskInCaseConstant)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaThirtyTwoBitShiftCountCaseConstant", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void Entry(int Selector)
+			{
+				switch (Selector)
+				{
+				case 1 << 32:
+					break;
+				case 1:
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaThirtyTwoBitShiftCountCaseConstant.as",
+			ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0
+			&& Messages.Contains(TEXT("Duplicate switch case")),
+			*FString::Printf(TEXT(
+				"32-bit integer shift counts use the VM width mask, so 1 << 32 and 1 must be duplicate Case values; build=%d messages=%s"),
+				BuildResult, *Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("masked shift-count Case folding must remain Canonical-only")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByDecl("void Entry(int)"),
+			TEXT("a masked shift-count duplicate must not publish Runtime Bytecode")));
+	}
+
+	TEST_METHOD(IntegerPowerCaseConstantMatchesLegacySelectorDomain)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaIntegerPowerCaseConstant", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void Entry(int Selector)
+			{
+				switch (Selector)
+				{
+				case 2 ** 3:
+					break;
+				case 8:
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaIntegerPowerCaseConstant.as", ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0
+			&& Messages.Contains(TEXT("Duplicate switch case")),
+			*FString::Printf(TEXT(
+				"integer ** must remain a folded Case constant, so 2 ** 3 and 8 must be duplicate values; build=%d messages=%s"),
+				BuildResult, *Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("integer-power Case folding must remain Canonical-only")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByDecl("void Entry(int)"),
+			TEXT("an integer-power duplicate must not publish Runtime Bytecode")));
+	}
+
+	TEST_METHOD(MutableGlobalCaseFailsInSemaWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaMutableGlobalCase", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Mutable = 7;
+
+			void Entry(int Selector)
+			{
+				switch (Selector)
+				{
+				case Mutable:
+					break;
+				default:
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaMutableGlobalCase.as", ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0
+			&& Messages.Contains(TEXT("Case expressions must be constants")),
+			*FString::Printf(TEXT(
+				"a mutable global with a constant initializer is storage, not a pure Case constant; build=%d messages=%s"),
+				BuildResult, *Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("mutable-global Case rejection must remain Canonical-only")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByDecl("void Entry(int)"),
+			TEXT("a mutable-global Case must not publish Runtime Bytecode")));
+	}
+
+	TEST_METHOD(SwitchCaseIntegerConstantEdgeMatrixMatchesLegacy)
+	{
+		struct FCase
+		{
+			const char* ModuleName;
+			const char* Source;
+			const TCHAR* Description;
+		};
+		const FCase Cases[] = {
+			{
+				"SemaLocalConstCaseDuplicate",
+				R"AS(
+					void Entry(int Selector)
+					{
+						const int K = 1;
+						switch (Selector) { case K: break; case 1: break; }
+					}
+				)AS",
+				TEXT("a primitive readonly local remains a pure Case constant"),
+			},
+			{
+				"SemaFloatCastCaseDuplicate",
+				R"AS(
+					void Entry(int Selector)
+					{
+						switch (Selector) { case int(1.9f): break; case 1: break; }
+					}
+				)AS",
+				TEXT("an explicit constant float-to-int conversion remains a Case constant"),
+			},
+			{
+				"SemaIntMinDivisionCaseDuplicate",
+				R"AS(
+					void Entry(int Selector)
+					{
+						switch (Selector) { case int(0x80000000) / -1: break; case 0: break; }
+					}
+				)AS",
+				TEXT("int MIN / -1 keeps Legacy's constant recovery value zero"),
+			},
+			{
+				"SemaInt64MinDivisionCaseDuplicate",
+				R"AS(
+					void Entry(int Selector)
+					{
+						switch (Selector) { case int64(0x8000000000000000) / -1: break; case 0: break; }
+					}
+				)AS",
+				TEXT("int64 MIN / -1 keeps Legacy's constant recovery value zero"),
+			},
+			{
+				"SemaUnsignedMinModuloCaseDuplicate",
+				R"AS(
+					void Entry(uint Selector)
+					{
+						switch (Selector) { case uint(0x80000000) % uint(0xFFFFFFFF): break; case 0: break; }
+					}
+				)AS",
+				TEXT("uint MIN-bits % minus-one-bits keeps Legacy's constant recovery value zero"),
+			},
+		};
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		for (const FCase& Case : Cases)
+		{
+			Engine.ResetMessages();
+			asIScriptModule* const Module = ScriptEngine->GetModule(
+				Case.ModuleName, asGM_ALWAYS_CREATE);
+			ASSERT_THAT(IsNotNull(Module));
+			if (Module == nullptr)
+			{
+				continue;
+			}
+			ASSERT_THAT(AreEqual(0,
+				Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+			ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+				Case.ModuleName, Case.Source)));
+			asCModule* const Internal = static_cast<asCModule*>(Module);
+			const int BuildResult = Module->Build();
+			const FString Messages =
+				AngelscriptNativeTestSupport::CollectMessages(
+					Engine.GetMessages());
+			const FString FailureMessage = FString::Printf(TEXT(
+				"%s; module=%s build=%d messages=%s"),
+				Case.Description, UTF8_TO_TCHAR(Case.ModuleName),
+				BuildResult, *Messages);
+			ASSERT_THAT(IsTrue(BuildResult < 0
+				&& Messages.Contains(TEXT("Duplicate switch case")),
+				*FailureMessage));
+			ASSERT_THAT(AreEqual(
+				static_cast<asUINT>(0),
+				Internal != nullptr
+					? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+				*FString::Printf(TEXT(
+					"%s must remain Canonical-only"), Case.Description)));
+		}
+	}
+
+	TEST_METHOD(SwitchCaseConstantErrorDiagnosticsMatchLegacy)
+	{
+		struct FCase
+		{
+			const char* ModuleName;
+			const char* Source;
+			const TCHAR* ExpectedDiagnostic;
+		};
+		const FCase Cases[] = {
+			{
+				"SemaPowerOverflowCase",
+				R"AS(void Entry(int Selector) { switch (Selector) { case 2 ** 31: break; } })AS",
+				TEXT("Overflow in exponent operation"),
+			},
+			{
+				"SemaDivideByZeroCase",
+				R"AS(void Entry(int Selector) { switch (Selector) { case 1 / 0: break; } })AS",
+				TEXT("Divide by zero"),
+			},
+			{
+				"SemaNonIntegralConstantCase",
+				R"AS(void Entry(int Selector) { switch (Selector) { case 1.5f: break; } })AS",
+				TEXT("Switch expressions must be integral numbers"),
+			},
+			{
+				"SemaConditionalNonConstantCase",
+				R"AS(void Entry(int Selector) { switch (Selector) { case (true ? 7 : 9): break; } })AS",
+				TEXT("Case expressions must be constants"),
+			},
+		};
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		for (const FCase& Case : Cases)
+		{
+			Engine.ResetMessages();
+			asIScriptModule* const Module = ScriptEngine->GetModule(
+				Case.ModuleName, asGM_ALWAYS_CREATE);
+			ASSERT_THAT(IsNotNull(Module));
+			if (Module == nullptr)
+			{
+				continue;
+			}
+			ASSERT_THAT(AreEqual(0,
+				Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+			ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+				Case.ModuleName, Case.Source)));
+			asCModule* const Internal = static_cast<asCModule*>(Module);
+			const int BuildResult = Module->Build();
+			const FString Messages =
+				AngelscriptNativeTestSupport::CollectMessages(
+					Engine.GetMessages());
+			const FString FailureMessage = FString::Printf(TEXT(
+				"module=%s must preserve diagnostic '%s'; build=%d messages=%s"),
+				UTF8_TO_TCHAR(Case.ModuleName), Case.ExpectedDiagnostic,
+				BuildResult, *Messages);
+			ASSERT_THAT(IsTrue(BuildResult < 0
+				&& Messages.Contains(Case.ExpectedDiagnostic),
+				*FailureMessage));
+			ASSERT_THAT(AreEqual(
+				static_cast<asUINT>(0),
+				Internal != nullptr
+					? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+				TEXT("Case constant diagnostics must remain Canonical-only")));
+		}
+	}
+
+	TEST_METHOD(DisableIntegerDivisionKeepsSwitchCaseNonIntegral)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+		ASSERT_THAT(AreEqual(0, ScriptEngine->SetEngineProperty(
+			asEP_DISABLE_INTEGER_DIVISION, 1)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaDisabledIntegerDivisionCase", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void Entry(int Selector)
+			{
+				switch (Selector) { case 4 / 2: break; }
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaDisabledIntegerDivisionCase.as", ScriptSource.c_str())));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0
+			&& Messages.Contains(TEXT(
+				"Switch expressions must be integral numbers")),
+			*FString::Printf(TEXT(
+				"DISABLE_INTEGER_DIVISION makes 4 / 2 a float64 constant, not an integral Case; build=%d messages=%s"),
+				BuildResult, *Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("integer-division policy rejection must remain Canonical-only")));
+	}
+
+	TEST_METHOD(NonIntegralSwitchSelectorFailsInSemaWithoutLegacyCompiler)
+	{
+		struct FCase
+		{
+			const char* ModuleName;
+			const char* Source;
+			const char* FunctionDecl;
+			const TCHAR* Description;
+		};
+		const FCase Cases[] = {
+			{
+				"SemaBoolSwitchSelector",
+				R"AS(
+					void Entry(bool Selector)
+					{
+						switch (Selector) { case 0: break; }
+					}
+				)AS",
+				"void Entry(bool)",
+				TEXT("bool Switch selector"),
+			},
+			{
+				"SemaFloatSwitchSelector",
+				R"AS(
+					void Entry(float Selector)
+					{
+						switch (Selector) { case 0: break; }
+					}
+				)AS",
+				"void Entry(float)",
+				TEXT("float Switch selector"),
+			},
+			{
+				"SemaObjectSwitchSelector",
+				R"AS(
+					class Box {}
+					void Entry(Box Selector)
+					{
+						switch (Selector) { case 0: break; }
+					}
+				)AS",
+				"void Entry(Box)",
+				TEXT("object Switch selector"),
+			},
+		};
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		for (const FCase& Case : Cases)
+		{
+			Engine.ResetMessages();
+			asIScriptModule* const Module = ScriptEngine->GetModule(
+				Case.ModuleName, asGM_ALWAYS_CREATE);
+			ASSERT_THAT(IsNotNull(Module));
+			if (Module == nullptr)
+			{
+				continue;
+			}
+			ASSERT_THAT(AreEqual(0,
+				Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+			ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+				Case.ModuleName, Case.Source)));
+
+			asCModule* const Internal = static_cast<asCModule*>(Module);
+			const int BuildResult = Module->Build();
+			const FString Messages =
+				AngelscriptNativeTestSupport::CollectMessages(
+					Engine.GetMessages());
+			const FString FailureMessage = FString::Printf(TEXT(
+				"%s must fail in Canonical Sema with the maintained integral diagnostic; build=%d messages=%s"),
+				Case.Description, BuildResult, *Messages);
+			ASSERT_THAT(IsTrue(BuildResult < 0
+				&& Messages.Contains(TEXT(
+					"Switch expressions must be integral numbers"))
+				&& !Messages.Contains(TEXT(
+					"Case expressions must be constants")),
+				*FailureMessage));
+			ASSERT_THAT(AreEqual(
+				static_cast<asUINT>(0),
+				Internal != nullptr
+					? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+				*FString::Printf(TEXT(
+					"%s rejection must not construct asCCompiler"),
+					Case.Description)));
+			ASSERT_THAT(IsNull(Module->GetFunctionByDecl(Case.FunctionDecl),
+				*FString::Printf(TEXT(
+					"%s rejection must not publish Runtime Bytecode"),
+					Case.Description)));
+			ASSERT_THAT(IsNull(Internal != nullptr
+				? Internal->GetCanonicalASTContext() : nullptr,
+				*FString::Printf(TEXT(
+					"%s rejection must not publish a retained Canonical snapshot"),
+					Case.Description)));
+		}
+	}
+
+	TEST_METHOD(FloatBinaryExplicitIntCaseMatrixMatchesLegacyConstants)
+	{
+		struct FCase
+		{
+			const char* ModuleName;
+			const char* Source;
+			const TCHAR* Description;
+		};
+		const FCase Cases[] = {
+			{
+				"SemaFloatBinaryAddCase",
+				R"AS(void Entry(int S) { switch (S) { case int(0.5f + 0.5f): break; case 1: break; } })AS",
+				TEXT("float32 addition"),
+			},
+			{
+				"SemaFloatBinaryRoundCase",
+				R"AS(void Entry(int S) { switch (S) { case int(16777216.0f + 1.0f): break; case 16777216: break; } })AS",
+				TEXT("float32 per-operation rounding"),
+			},
+			{
+				"SemaFloatBinarySubCase",
+				R"AS(void Entry(int S) { switch (S) { case int(3.5f - 0.5f): break; case 3: break; } })AS",
+				TEXT("float32 subtraction"),
+			},
+			{
+				"SemaFloatBinaryMulCase",
+				R"AS(void Entry(int S) { switch (S) { case int(1.5f * 2.0f): break; case 3: break; } })AS",
+				TEXT("float32 multiplication"),
+			},
+			{
+				"SemaFloatBinaryDivCase",
+				R"AS(void Entry(int S) { switch (S) { case int(3.0f / 2.0f): break; case 1: break; } })AS",
+				TEXT("float32 division"),
+			},
+			{
+				"SemaFloatBinaryModCase",
+				R"AS(void Entry(int S) { switch (S) { case int(5.5f % 2.0f): break; case 1: break; } })AS",
+				TEXT("float32 modulo"),
+			},
+			{
+				"SemaFloatBinaryPowCase",
+				R"AS(void Entry(int S) { switch (S) { case int(2.0f ** 3.0f): break; case 8: break; } })AS",
+				TEXT("float32 exponentiation"),
+			},
+		};
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		for (const FCase& Case : Cases)
+		{
+			Engine.ResetMessages();
+			asIScriptModule* const Module = ScriptEngine->GetModule(
+				Case.ModuleName, asGM_ALWAYS_CREATE);
+			ASSERT_THAT(IsNotNull(Module));
+			if (Module == nullptr)
+			{
+				continue;
+			}
+			ASSERT_THAT(AreEqual(0,
+				Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+			ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+				Case.ModuleName, Case.Source)));
+
+			asCModule* const Internal = static_cast<asCModule*>(Module);
+			const int BuildResult = Module->Build();
+			const FString Messages =
+				AngelscriptNativeTestSupport::CollectMessages(
+					Engine.GetMessages());
+			const FString FailureMessage = FString::Printf(TEXT(
+				"%s under an explicit int conversion must preserve the Legacy constant and collide with its literal Case; build=%d messages=%s"),
+				Case.Description, BuildResult, *Messages);
+			ASSERT_THAT(IsTrue(BuildResult < 0
+				&& Messages.Contains(TEXT("Duplicate switch case")),
+				*FailureMessage));
+			ASSERT_THAT(AreEqual(
+				static_cast<asUINT>(0),
+				Internal != nullptr
+					? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+				*FString::Printf(TEXT(
+					"%s Case folding must remain Canonical-only"),
+					Case.Description)));
+			ASSERT_THAT(IsNull(Module->GetFunctionByDecl("void Entry(int)"),
+				*FString::Printf(TEXT(
+					"%s duplicate must not publish Runtime Bytecode"),
+					Case.Description)));
+			ASSERT_THAT(IsNull(Internal != nullptr
+				? Internal->GetCanonicalASTContext() : nullptr,
+				*FString::Printf(TEXT(
+					"%s duplicate must not publish a retained Canonical snapshot"),
+					Case.Description)));
+		}
+	}
+
+	TEST_METHOD(SwitchBooleanCaseClassificationMatchesLegacy)
+	{
+		struct FCase
+		{
+			const char* ModuleName;
+			const char* CaseExpression;
+			const TCHAR* Description;
+		};
+		const FCase Cases[] = {
+			{ "SemaBoolLiteralCase", "true", TEXT("bool literal") },
+			{ "SemaBoolComparisonCase", "1 == 1", TEXT("constant comparison") },
+			{ "SemaBoolNotCase", "!false", TEXT("constant logical-not") },
+			{ "SemaBoolAndCase", "true && false", TEXT("constant logical-and") },
+			{ "SemaBoolOrCase", "true || false", TEXT("constant logical-or") },
+			{ "SemaBoolXorCase", "true ^^ false", TEXT("constant logical-xor") },
+		};
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		for (const FCase& Case : Cases)
+		{
+			Engine.ResetMessages();
+			asIScriptModule* const Module = ScriptEngine->GetModule(
+				Case.ModuleName, asGM_ALWAYS_CREATE);
+			ASSERT_THAT(IsNotNull(Module));
+			if (Module == nullptr)
+			{
+				continue;
+			}
+			ASSERT_THAT(AreEqual(0,
+				Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+			const std::string ScriptSource = std::string(
+				"void Entry(int Selector) { switch (Selector) { case ")
+				+ Case.CaseExpression + ": break; } }";
+			ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+				Case.ModuleName, ScriptSource.c_str())));
+
+			asCModule* const Internal = static_cast<asCModule*>(Module);
+			const int BuildResult = Module->Build();
+			const FString Messages =
+				AngelscriptNativeTestSupport::CollectMessages(
+					Engine.GetMessages());
+			const FString FailureMessage = FString::Printf(TEXT(
+				"%s must remain a constant-but-nonintegral Case; build=%d messages=%s"),
+				Case.Description, BuildResult, *Messages);
+			ASSERT_THAT(IsTrue(BuildResult < 0
+				&& Messages.Contains(TEXT(
+					"Switch expressions must be integral numbers"))
+				&& !Messages.Contains(TEXT(
+					"Case expressions must be constants")),
+				*FailureMessage));
+			ASSERT_THAT(AreEqual(
+				static_cast<asUINT>(0),
+				Internal != nullptr
+					? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+				TEXT("bool Case classification must remain Canonical-only")));
+			ASSERT_THAT(IsNull(Module->GetFunctionByDecl("void Entry(int)"),
+				TEXT("a nonintegral bool Case must not publish Runtime Bytecode")));
+			ASSERT_THAT(IsNull(Internal != nullptr
+				? Internal->GetCanonicalASTContext() : nullptr,
+				TEXT("a nonintegral bool Case must not publish a retained snapshot")));
+		}
+	}
+
+	TEST_METHOD(SwitchRuntimeBooleanCasePreservesLegacyDiagnosticSequence)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaRuntimeBoolSwitchCase", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			void Entry(int Selector)
+			{
+				switch (Selector) { case Selector == 1: break; }
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaRuntimeBoolSwitchCase.as", ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		const int32 ConstantIndex = Messages.Find(
+			TEXT("Case expressions must be constants"));
+		const int32 IntegralIndex = Messages.Find(
+			TEXT("Switch expressions must be integral numbers"));
+		ASSERT_THAT(IsTrue(BuildResult < 0
+			&& ConstantIndex != INDEX_NONE
+			&& IntegralIndex > ConstantIndex,
+			*FString::Printf(TEXT(
+				"a runtime bool Case must preserve Legacy nonconstant-then-nonintegral diagnostics; build=%d messages=%s"),
+				BuildResult, *Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("runtime bool Case rejection must remain Canonical-only")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByDecl("void Entry(int)"),
+			TEXT("a runtime bool Case must not publish Runtime Bytecode")));
+		ASSERT_THAT(IsNull(Internal != nullptr
+			? Internal->GetCanonicalASTContext() : nullptr,
+			TEXT("a runtime bool Case must not publish a retained snapshot")));
+	}
+
+	TEST_METHOD(SwitchArithmeticRecoveryContinuesDuplicateDiagnosisMatchesLegacy)
+	{
+		struct FCase
+		{
+			const char* ModuleName;
+			const char* Source;
+			const TCHAR* FirstDiagnostic;
+		};
+		const FCase Cases[] = {
+			{
+				"SemaDivideRecoveryDuplicateCase",
+				R"AS(void Entry(int S) { switch (S) { case 1 / 0: break; case 0: break; } })AS",
+				TEXT("Divide by zero"),
+			},
+			{
+				"SemaPowerRecoveryDuplicateCase",
+				R"AS(void Entry(int S) { switch (S) { case 2 ** 31: break; case 0: break; } })AS",
+				TEXT("Overflow in exponent operation"),
+			},
+		};
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		for (const FCase& Case : Cases)
+		{
+			Engine.ResetMessages();
+			asIScriptModule* const Module = ScriptEngine->GetModule(
+				Case.ModuleName, asGM_ALWAYS_CREATE);
+			ASSERT_THAT(IsNotNull(Module));
+			if (Module == nullptr)
+			{
+				continue;
+			}
+			ASSERT_THAT(AreEqual(0,
+				Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+			ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+				Case.ModuleName, Case.Source)));
+
+			asCModule* const Internal = static_cast<asCModule*>(Module);
+			const int BuildResult = Module->Build();
+			const FString Messages =
+				AngelscriptNativeTestSupport::CollectMessages(
+					Engine.GetMessages());
+			const int32 ArithmeticIndex = Messages.Find(Case.FirstDiagnostic);
+			const int32 DuplicateIndex = Messages.Find(
+				TEXT("Duplicate switch case"));
+			ASSERT_THAT(IsTrue(BuildResult < 0
+				&& ArithmeticIndex != INDEX_NONE
+				&& DuplicateIndex > ArithmeticIndex,
+				*FString::Printf(TEXT(
+					"%s must retain its recovery value and continue duplicate diagnosis; build=%d messages=%s"),
+					Case.FirstDiagnostic, BuildResult, *Messages)));
+			ASSERT_THAT(AreEqual(
+				static_cast<asUINT>(0),
+				Internal != nullptr
+					? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+				TEXT("arithmetic recovery diagnosis must remain Canonical-only")));
+			ASSERT_THAT(IsNull(Module->GetFunctionByDecl("void Entry(int)"),
+				TEXT("a diagnosed recovery Switch must not publish Runtime Bytecode")));
+			ASSERT_THAT(IsNull(Internal != nullptr
+				? Internal->GetCanonicalASTContext() : nullptr,
+				TEXT("a diagnosed recovery Switch must not publish a retained snapshot")));
+		}
+	}
+
+	TEST_METHOD(SwitchRuntimeDividendZeroDivisorPreservesLegacyDiagnosticSequence)
+	{
+		struct FCase
+		{
+			const char* ModuleName;
+			const char* Operator;
+		};
+		const FCase Cases[] = {
+			{ "SemaRuntimeDivideByZeroCase", "/" },
+			{ "SemaRuntimeModuloByZeroCase", "%" },
+		};
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		for (const FCase& Case : Cases)
+		{
+			Engine.ResetMessages();
+			asIScriptModule* const Module = ScriptEngine->GetModule(
+				Case.ModuleName, asGM_ALWAYS_CREATE);
+			ASSERT_THAT(IsNotNull(Module));
+			if (Module == nullptr)
+			{
+				continue;
+			}
+			ASSERT_THAT(AreEqual(0,
+				Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+			const std::string Source = std::string(
+				"void Entry(int Selector, int Runtime) { switch (Selector) { case Runtime ")
+				+ Case.Operator + " 0: break; } }";
+			ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+				Case.ModuleName, Source.c_str())));
+
+			asCModule* const Internal = static_cast<asCModule*>(Module);
+			const int BuildResult = Module->Build();
+			const FString Messages =
+				AngelscriptNativeTestSupport::CollectMessages(
+					Engine.GetMessages());
+			const int32 DivideIndex = Messages.Find(TEXT("Divide by zero"));
+			const int32 ConstantIndex = Messages.Find(
+				TEXT("Case expressions must be constants"));
+			ASSERT_THAT(IsTrue(BuildResult < 0
+				&& DivideIndex != INDEX_NONE
+				&& ConstantIndex > DivideIndex,
+				*FString::Printf(TEXT(
+					"a runtime dividend with a constant zero divisor must preserve "
+					"Legacy divide-by-zero then nonconstant diagnostics; op=%s build=%d messages=%s"),
+					UTF8_TO_TCHAR(Case.Operator), BuildResult, *Messages)));
+			ASSERT_THAT(AreEqual(
+				static_cast<asUINT>(0),
+				Internal != nullptr
+					? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+				TEXT("runtime divide-by-zero Case rejection must remain Canonical-only")));
+			ASSERT_THAT(IsNull(Module->GetFunctionByDecl(
+				"void Entry(int, int)"),
+				TEXT("a diagnosed runtime-dividend Switch must not publish Runtime Bytecode")));
+			ASSERT_THAT(IsNull(Internal != nullptr
+				? Internal->GetCanonicalASTContext() : nullptr,
+				TEXT("a diagnosed runtime-dividend Switch must not publish a retained snapshot")));
+		}
+	}
+
+	TEST_METHOD(EnumRuntimeParameterCaseFailsInSemaWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaEnumRuntimeParameterCase", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			enum EMode
+			{
+				Idle = 0,
+				Active = 1
+			}
+
+			void Entry(EMode Selector, EMode RuntimeCase)
+			{
+				switch (Selector)
+				{
+				case RuntimeCase:
+					break;
+				default:
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaEnumRuntimeParameterCase.as", ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0
+			&& Messages.Contains(TEXT("Case expressions must be constants")),
+			*FString::Printf(TEXT(
+				"an enum Case parameter is a runtime value and must fail in Canonical Sema; build=%d messages=%s"),
+				BuildResult, *Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("enum runtime-Case rejection must not construct asCCompiler")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByName("Entry"),
+			TEXT("a rejected enum runtime Case must not publish Runtime Bytecode")));
+		ASSERT_THAT(IsNull(Internal != nullptr
+			? Internal->GetCanonicalASTContext() : nullptr,
+			TEXT("a rejected enum runtime Case must not publish a retained Canonical snapshot")));
+	}
+
+	TEST_METHOD(EnumSameValueCasesFailInSemaWithoutVerifierFallback)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaEnumSameValueCases", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			enum EMode
+			{
+				Primary = 7,
+				Alias = 7
+			}
+
+			void Entry(EMode Selector)
+			{
+				switch (Selector)
+				{
+				case EMode::Primary:
+					break;
+				case EMode::Alias:
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaEnumSameValueCases.as", ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0
+			&& Messages.Contains(TEXT("Duplicate switch case")),
+			*FString::Printf(TEXT(
+				"same-enum members with the same 32-bit value must be rejected by Canonical Sema, not verifier fallback; build=%d messages=%s"),
+				BuildResult, *Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("same-value enum Case rejection must not construct asCCompiler")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByName("Entry"),
+			TEXT("duplicate enum Cases must not publish Runtime Bytecode")));
+		ASSERT_THAT(IsNull(Internal != nullptr
+			? Internal->GetCanonicalASTContext() : nullptr,
+			TEXT("duplicate enum Cases must not publish a retained Canonical snapshot")));
+	}
+
+	TEST_METHOD(CrossEnumCaseFailsTypeCheckInSemaWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+		ASSERT_THAT(AreEqual(0, ScriptEngine->SetEngineProperty(
+			asEP_TYPECHECK_SWITCH_ENUMS, 1)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaCrossEnumCaseTypeCheck", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			enum EPrimary
+			{
+				Value = 1
+			}
+
+			enum EOther
+			{
+				Value = 1
+			}
+
+			void Entry(EPrimary Selector)
+			{
+				switch (Selector)
+				{
+				case EOther::Value:
+					break;
+				default:
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaCrossEnumCaseTypeCheck.as", ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(IsTrue(BuildResult < 0
+			&& Messages.Contains(TEXT(
+				"Enumeration types are not the same in switch statement ('EPrimary' and 'EOther')")),
+			*FString::Printf(TEXT(
+				"TYPECHECK_SWITCH_ENUMS must preserve selector and Case nominal identity in Canonical Sema; build=%d messages=%s"),
+				BuildResult, *Messages)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("cross-enum Case rejection must not construct asCCompiler")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByName("Entry"),
+			TEXT("a cross-enum Case must not publish Runtime Bytecode")));
+		ASSERT_THAT(IsNull(Internal != nullptr
+			? Internal->GetCanonicalASTContext() : nullptr,
+			TEXT("a cross-enum Case must not publish a retained Canonical snapshot")));
+	}
+
+	TEST_METHOD(CrossEnumCaseMismatchContinuesDuplicateDiagnosisWithoutPublishing)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine != nullptr
+			&& ScriptEngine->SetCompilerPipeline(
+				asCOMPILER_PIPELINE_CANONICAL)));
+		ASSERT_THAT(AreEqual(0, ScriptEngine->SetEngineProperty(
+			asEP_TYPECHECK_SWITCH_ENUMS, 1)));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaCrossEnumCaseMismatchRecovery", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			enum EPrimary
+			{
+				Primary = 1
+			}
+
+			enum EOther
+			{
+				Alias = 1
+			}
+
+			void Entry(EPrimary Selector)
+			{
+				switch (Selector)
+				{
+				case EPrimary::Primary:
+					break;
+				case EOther::Alias:
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaCrossEnumCaseMismatchRecovery.as", ScriptSource.c_str())));
+
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		const int32 MismatchIndex = Messages.Find(TEXT(
+			"Enumeration types are not the same in switch statement ('EPrimary' and 'EOther')"));
+		const int32 DuplicateIndex = Messages.Find(
+			TEXT("Duplicate switch case"));
+		ASSERT_THAT(IsTrue(BuildResult < 0
+			&& MismatchIndex != INDEX_NONE
+			&& DuplicateIndex > MismatchIndex,
+			*FString::Printf(TEXT(
+				"cross-enum mismatch recovery must continue 32-bit duplicate diagnosis in source order; build=%d messages=%s"),
+				BuildResult, *Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_NONE,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("diagnosed cross-enum recovery must not publish Bytecode")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount() : 1u,
+			TEXT("cross-enum recovery must not construct asCCompiler")));
+		ASSERT_THAT(IsNull(Module->GetFunctionByName("Entry"),
+			TEXT("diagnosed cross-enum recovery must not publish Entry")));
+		ASSERT_THAT(IsNull(Internal != nullptr
+			? Internal->GetCanonicalASTContext() : nullptr,
+			TEXT("diagnosed cross-enum recovery must not publish a retained snapshot")));
 	}
 
 	TEST_METHOD(LoopInsideSwitchTransfersTargetNearestControl)
@@ -18784,6 +20422,7 @@ public:
 			{
 				First,
 				Second,
+				Negative = -1,
 			}
 
 			int Entry(EMode Mode)
@@ -18794,6 +20433,8 @@ public:
 					return 10;
 				case EMode::Second:
 					return 20;
+				case EMode::Negative:
+					return 30;
 				}
 			}
 			)AS");
@@ -18832,6 +20473,175 @@ public:
 			*FString::Printf(TEXT(
 				"Sema must publish the exhaustive-enum invalid-value edge as a canonical switch fact. dump:\n%s"),
 				*AngelscriptNativeTestSupport::CanonicalAstDumpToFString(Dump))));
+	}
+
+	TEST_METHOD(EnumSentinelNamesPreserveLegacyExhaustivenessRoleCaseSensitively)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaEnumSentinelExhaustiveness", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			enum EExactSentinel
+			{
+				First = 0,
+				MAX = 17
+			}
+
+			enum ESuffixSentinel
+			{
+				First = 0,
+				Value_MAX = -1
+			}
+
+			enum EOrdinaryMember
+			{
+				First = 0,
+				Max = 17
+			}
+
+			void ExactSentinel(EExactSentinel Value)
+			{
+				switch (Value)
+				{
+				case EExactSentinel::First:
+					break;
+				}
+			}
+
+			void SuffixSentinel(ESuffixSentinel Value)
+			{
+				switch (Value)
+				{
+				case ESuffixSentinel::First:
+					break;
+				}
+			}
+
+			void OrdinaryMember(EOrdinaryMember Value)
+			{
+				switch (Value)
+				{
+				case EOrdinaryMember::First:
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaEnumSentinelExhaustiveness.as", ScriptSource.c_str())));
+
+		asCString RawDump;
+		ASSERT_THAT(IsTrue(
+			CanonicalASTSemaAuthorityTest::DumpSealedCanonicalAst(
+				Module, RawDump),
+			TEXT("enum sentinel matrix must seal a retained Canonical AST")));
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		auto RequireSwitchRole = [&](const char* FunctionName,
+			const char* OmittedMemberName,
+			asEASTSafePointRole ExpectedRole)
+		{
+			const asCDecl* Function = nullptr;
+			const asCDecl* OmittedMember = nullptr;
+			const asCStmt* SwitchStatement = nullptr;
+			for (asUINT DeclIndex = 1;
+				DeclIndex <= Context->GetDeclCount(); ++DeclIndex)
+			{
+				const asCDecl* const Candidate =
+					Context->GetDecl(asASTDeclId(DeclIndex));
+				if (Candidate != nullptr
+					&& Candidate->kind == asAST_DECL_FUNCTION
+					&& Candidate->name.Equals(FunctionName))
+				{
+					Function = Candidate;
+				}
+				if (Candidate != nullptr
+					&& Candidate->kind == asAST_DECL_VAR
+					&& Candidate->name.Equals(OmittedMemberName))
+				{
+					OmittedMember = Candidate;
+				}
+			}
+			for (asUINT StatementIndex = 1;
+				Function != nullptr
+					&& StatementIndex <= Context->GetStmtCount(); ++StatementIndex)
+			{
+				const asCStmt* const Candidate =
+					Context->GetStmt(asASTStmtId(StatementIndex));
+				if (Candidate != nullptr
+					&& Candidate->kind == asAST_STMT_SWITCH
+					&& Candidate->owner == Function->id)
+				{
+					SwitchStatement = Candidate;
+					break;
+				}
+			}
+
+			bool bHasDefault = false;
+			bool bCasesUseAuthenticatedDomainFacts =
+				SwitchStatement != nullptr;
+			for (asUINT ChildIndex = 0;
+				SwitchStatement != nullptr
+					&& ChildIndex < SwitchStatement->children.GetLength(); ++ChildIndex)
+			{
+				const asCStmt* const CaseStatement =
+					Context->GetStmt(SwitchStatement->children[ChildIndex]);
+				if (CaseStatement == nullptr
+					|| CaseStatement->kind != asAST_STMT_CASE)
+				{
+					bCasesUseAuthenticatedDomainFacts = false;
+					continue;
+				}
+				if (!CaseStatement->expr.IsValid())
+				{
+					bHasDefault = true;
+					continue;
+				}
+				const asCExpr* const CaseFact =
+					Context->GetExpr(CaseStatement->expr);
+				bCasesUseAuthenticatedDomainFacts =
+					bCasesUseAuthenticatedDomainFacts
+					&& CaseFact != nullptr
+					&& CaseFact->kind == asAST_EXPR_CONVERSION
+					&& CaseFact->literal.Equals("switch-case-domain");
+			}
+
+			const FString FactMessage = FString::Printf(TEXT(
+				"%hs with omitted %hs must preserve the exact case-sensitive Legacy sentinel rule. AST:\n%s"),
+				FunctionName, OmittedMemberName, *Dump);
+			ASSERT_THAT(IsNotNull(Function, *FactMessage));
+			ASSERT_THAT(IsTrue(OmittedMember != nullptr
+				&& OmittedMember->hasConstantValue, *FactMessage));
+			ASSERT_THAT(IsNotNull(SwitchStatement, *FactMessage));
+			ASSERT_THAT(IsFalse(bHasDefault, *FactMessage));
+			ASSERT_THAT(IsTrue(
+				bCasesUseAuthenticatedDomainFacts, *FactMessage));
+			ASSERT_THAT(IsTrue(SwitchStatement != nullptr
+				&& SwitchStatement->safePointRole == ExpectedRole,
+				*FactMessage));
+		};
+
+		RequireSwitchRole("ExactSentinel", "MAX",
+			asAST_SAFEPOINT_SWITCH_INVALID_VALUE);
+		RequireSwitchRole("SuffixSentinel", "Value_MAX",
+			asAST_SAFEPOINT_SWITCH_INVALID_VALUE);
+		RequireSwitchRole("OrdinaryMember", "Max",
+			asAST_SAFEPOINT_STATEMENT);
 	}
 
 	TEST_METHOD(SourceStatementsPublishDistinctSafePointRoles)

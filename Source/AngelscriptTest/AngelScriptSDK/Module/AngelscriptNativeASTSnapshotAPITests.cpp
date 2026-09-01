@@ -227,6 +227,134 @@ public:
 			TEXT("the public ParamDecl view exposes its sealed formal slot")));
 	}
 
+	TEST_METHOD(RetainedV1StmtViewAppendsLoopBodyEdgeSafePointCompatibly)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asIScriptModule* const Module = Engine.Get()->GetModule(
+			"SnapshotLoopBodySafePoint", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SnapshotLoopBodySafePoint.as",
+			"int F(bool Run) { while (Run) break; return 0; }")));
+		ASSERT_THAT(AreEqual(0, Module->Build()));
+
+		asIASTSnapshot* const Snapshot =
+			Module->AcquireASTSnapshot(asAST_API_VERSION_1);
+		ASSERT_THAT(IsNotNull(Snapshot));
+		if (Snapshot == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { Snapshot->Release(); };
+
+		asSASTDeclView TranslationUnit = {};
+		TranslationUnit.structSize = sizeof(TranslationUnit);
+		const asASTDeclId TranslationUnitId =
+			Snapshot->GetTranslationUnitDecl();
+		ASSERT_THAT(AreEqual(0,
+			Snapshot->GetDecl(TranslationUnitId, &TranslationUnit)));
+		asASTDeclId FunctionId;
+		asSASTDeclView Function = {};
+		for (asUINT Index = 0; Index < TranslationUnit.childCount; ++Index)
+		{
+			asASTDeclId Candidate;
+			ASSERT_THAT(AreEqual(0, Snapshot->GetDeclChild(
+				TranslationUnitId, Index, &Candidate)));
+			asSASTDeclView CandidateView = {};
+			CandidateView.structSize = sizeof(CandidateView);
+			ASSERT_THAT(AreEqual(0,
+				Snapshot->GetDecl(Candidate, &CandidateView)));
+			if (CandidateView.kind == asAST_DECL_FUNCTION
+				&& CandidateView.name != nullptr
+				&& FCStringAnsi::Strcmp(CandidateView.name, "F") == 0)
+			{
+				FunctionId = Candidate;
+				Function = CandidateView;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(FunctionId.IsValid()));
+		ASSERT_THAT(IsTrue(Function.body.IsValid()));
+		if (!Function.body.IsValid())
+		{
+			return;
+		}
+
+		asSASTStmtView FunctionBody = {};
+		FunctionBody.structSize = sizeof(FunctionBody);
+		ASSERT_THAT(AreEqual(0,
+			Snapshot->GetStmt(Function.body, &FunctionBody)));
+		asASTStmtId LoopId;
+		for (asUINT Index = 0; Index < FunctionBody.childCount; ++Index)
+		{
+			asASTStmtId Candidate;
+			ASSERT_THAT(AreEqual(0, Snapshot->GetStmtChild(
+				Function.body, Index, &Candidate)));
+			asSASTStmtView CandidateView = {};
+			CandidateView.structSize = sizeof(CandidateView);
+			ASSERT_THAT(AreEqual(0,
+				Snapshot->GetStmt(Candidate, &CandidateView)));
+			if (CandidateView.kind == asAST_STMT_WHILE)
+			{
+				LoopId = Candidate;
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(LoopId.IsValid()));
+		if (!LoopId.IsValid())
+		{
+			return;
+		}
+
+		asSASTStmtView Loop = {};
+		Loop.structSize = sizeof(Loop);
+		ASSERT_THAT(AreEqual(0, Snapshot->GetStmt(LoopId, &Loop)));
+		ASSERT_THAT(AreEqual((int)asAST_SAFEPOINT_LOOP_BACKEDGE,
+			(int)Loop.safePointRole));
+		ASSERT_THAT(AreEqual((int)asAST_SAFEPOINT_LOOP_ENTRY,
+			(int)Loop.loopBodySafePointRole));
+		ASSERT_THAT(AreEqual((asUINT)1, Loop.childCount));
+
+		asASTStmtId BreakId;
+		ASSERT_THAT(AreEqual(0,
+			Snapshot->GetStmtChild(LoopId, 0, &BreakId)));
+		asSASTStmtView Break = {};
+		Break.structSize = sizeof(Break);
+		ASSERT_THAT(AreEqual(0, Snapshot->GetStmt(BreakId, &Break)));
+		ASSERT_THAT(AreEqual(asAST_STMT_BREAK, Break.kind));
+		ASSERT_THAT(AreEqual((int)asAST_SAFEPOINT_TRANSFER,
+			(int)Break.safePointRole,
+			TEXT("unbraced Break retains its intrinsic role")));
+		ASSERT_THAT(AreEqual((int)asAST_SAFEPOINT_NONE,
+			(int)Break.loopBodySafePointRole));
+
+		asSASTStmtView LegacyLoop = {};
+		LegacyLoop.structSize = static_cast<asUINT>(
+			offsetof(asSASTStmtView, loopBodySafePointRole));
+		LegacyLoop.loopBodySafePointRole =
+			asAST_SAFEPOINT_SWITCH_INVALID_VALUE;
+		ASSERT_THAT(AreEqual(0, Snapshot->GetStmt(LoopId, &LegacyLoop),
+			TEXT("pre-extension V1 StmtView capacity remains supported")));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(sizeof(asSASTStmtView)),
+			LegacyLoop.structSize));
+		ASSERT_THAT(AreEqual((int)asAST_SAFEPOINT_SWITCH_INVALID_VALUE,
+			(int)LegacyLoop.loopBodySafePointRole,
+			TEXT("legacy capacity must not be overwritten past its extent")));
+	}
+
 	TEST_METHOD(RetainedV1SnapshotPublishesAccessSpecifierAndCapacityAwareMemberEdge)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

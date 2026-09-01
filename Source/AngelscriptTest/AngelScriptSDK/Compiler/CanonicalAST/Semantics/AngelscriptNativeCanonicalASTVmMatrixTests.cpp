@@ -1757,13 +1757,13 @@ public:
 			{
 				++FunctionEntryCount;
 			}
-			else if (Statement->safePointRole == asAST_SAFEPOINT_LOOP_ENTRY)
-			{
-				++LoopEntryCount;
-			}
 			else if (Statement->safePointRole == asAST_SAFEPOINT_LOOP_BACKEDGE)
 			{
 				++LoopBackedgeCount;
+			}
+			if (Statement->loopBodySafePointRole == asAST_SAFEPOINT_LOOP_ENTRY)
+			{
+				++LoopEntryCount;
 			}
 		}
 		ASSERT_THAT(AreEqual(1, ForCount, TEXT("exactly one canonical for")));
@@ -1774,7 +1774,7 @@ public:
 		ASSERT_THAT(AreEqual(1, FunctionEntryCount,
 			TEXT("function body owns the exact entry role")));
 		ASSERT_THAT(AreEqual(3, LoopEntryCount,
-			TEXT("for/while/do bodies own exact loop-entry roles")));
+			TEXT("for/while/do body edges own exact loop-entry roles")));
 		ASSERT_THAT(AreEqual(3, LoopBackedgeCount,
 			TEXT("for/while/do loops own exact backedge roles")));
 		ASSERT_THAT(AreEqual(2, ReturnCount,
@@ -1822,6 +1822,218 @@ public:
 			TEXT("break targets the nearest switch")));
 		ASSERT_THAT(IsTrue(bContinueTargetsFor,
 			TEXT("continue targets the nearest loop, not the switch")));
+	}
+
+	TEST_METHOD(LocalCompoundTailKeepsOneDeclAndFreshFrameAcrossContextReuse)
+	{
+		using namespace AngelscriptNativeTestSupport;
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("the reduced Tail probe selects CANONICAL")));
+
+		FScopedNativeModule Module(
+			*TestRunner,
+			Engine,
+			"CanonicalASTVmLocalCompoundTail",
+			ASTEST_AS_ANSI(R"AS(
+				int Probe(bool Mutate)
+				{
+					int Tail = 0;
+					if (Mutate)
+						Tail += 100;
+					return Tail;
+				}
+			)AS"),
+			asAST_RETAIN_SNAPSHOT);
+		ASSERT_THAT(IsTrue(Module.IsValid(),
+			TEXT("the reduced Tail probe must compile through Canonical CodeGen")));
+		if (!Module.IsValid())
+		{
+			TestRunner->AddInfo(Engine.GetMessagesText());
+			return;
+		}
+		AssertCanonicalCodeGenProvenance(Module, TEXT("the reduced Tail probe"));
+
+		asIScriptFunction* const Function =
+			GetNativeFunctionByDecl(Module, "int Probe(bool)");
+		ASSERT_THAT(IsNotNull(Function,
+			*FString::Printf(
+				TEXT("the reduced Tail function must exist; functions={%s}; diagnostics={%s}"),
+				*CollectFunctionDeclarations(Module), *Engine.GetMessagesText())));
+		if (Function == nullptr)
+		{
+			return;
+		}
+
+		const auto ExecuteFresh = [this, &Engine, Function](
+			const bool bMutate,
+			const int32 Expected,
+			const TCHAR* const Label)
+		{
+			asIScriptContext* const Context = Engine.Get()->CreateContext();
+			ASSERT_THAT(IsNotNull(Context,
+				*FString::Printf(TEXT("fresh context for %s"), Label)));
+			if (Context == nullptr)
+			{
+				return;
+			}
+			ON_SCOPE_EXIT { Context->Release(); };
+			ASSERT_THAT(AreEqual(asSUCCESS, Context->Prepare(Function)));
+			ASSERT_THAT(AreEqual(
+				asSUCCESS,
+				Context->SetArgByte(0, bMutate ? 1 : 0)));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asEXECUTION_FINISHED),
+				Context->Execute(),
+				*FString::Printf(TEXT("fresh execution for %s"), Label)));
+			ASSERT_THAT(AreEqual(
+				Expected,
+				static_cast<int32>(Context->GetReturnDWord()),
+				*FString::Printf(TEXT("fresh result for %s"), Label)));
+		};
+		ExecuteFresh(false, 0, TEXT("Mutate=false"));
+		ExecuteFresh(true, 100, TEXT("Mutate=true"));
+
+		asIScriptContext* const ReusedContext = Engine.Get()->CreateContext();
+		ASSERT_THAT(IsNotNull(ReusedContext,
+			TEXT("the reduced Tail probe needs one reusable VM context")));
+		ON_SCOPE_EXIT { if (ReusedContext != nullptr) { ReusedContext->Release(); } };
+		if (ReusedContext == nullptr)
+		{
+			return;
+		}
+		const auto ExecuteReused = [this, ReusedContext, Function](
+			const bool bMutate,
+			const int32 Expected,
+			const TCHAR* const Label)
+		{
+			ASSERT_THAT(AreEqual(asSUCCESS, ReusedContext->Prepare(Function)));
+			ASSERT_THAT(AreEqual(
+				asSUCCESS,
+				ReusedContext->SetArgByte(0, bMutate ? 1 : 0)));
+			ASSERT_THAT(AreEqual(
+				static_cast<int32>(asEXECUTION_FINISHED),
+				ReusedContext->Execute(),
+				*FString::Printf(TEXT("reused execution for %s"), Label)));
+			ASSERT_THAT(AreEqual(
+				Expected,
+				static_cast<int32>(ReusedContext->GetReturnDWord()),
+				*FString::Printf(TEXT("reused result for %s"), Label)));
+		};
+		ExecuteReused(false, 0, TEXT("first false"));
+		ExecuteReused(true, 100, TEXT("middle true"));
+		ExecuteReused(false, 0, TEXT("final false"));
+
+		const asCASTContext* const AST =
+			static_cast<asCModule*>(static_cast<asIScriptModule*>(Module))
+				->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(AST,
+			TEXT("the reduced Tail probe must retain its sealed Canonical AST")));
+		if (AST == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* TailDecl = nullptr;
+		int32 TailDeclCount = 0;
+		for (asUINT DeclIndex = 1; DeclIndex <= AST->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Decl = AST->GetDecl(asASTDeclId(DeclIndex));
+			if (Decl != nullptr
+				&& Decl->kind == asAST_DECL_VAR
+				&& Decl->name.Equals("Tail"))
+			{
+				TailDecl = Decl;
+				++TailDeclCount;
+			}
+		}
+
+		const asCStmt* TailDeclStatement = nullptr;
+		const asCStmt* ReturnStatement = nullptr;
+		for (asUINT StmtIndex = 1; StmtIndex <= AST->GetStmtCount(); ++StmtIndex)
+		{
+			const asCStmt* const Statement = AST->GetStmt(asASTStmtId(StmtIndex));
+			if (Statement == nullptr)
+			{
+				continue;
+			}
+			if (TailDecl != nullptr
+				&& Statement->kind == asAST_STMT_DECL
+				&& Statement->decl == TailDecl->id)
+			{
+				TailDeclStatement = Statement;
+			}
+			else if (Statement->kind == asAST_STMT_RETURN)
+			{
+				ReturnStatement = Statement;
+			}
+		}
+
+		const asCExpr* InitializerAssign = nullptr;
+		const asCExpr* CompoundAssign = nullptr;
+		for (asUINT ExprIndex = 1; ExprIndex <= AST->GetExprCount(); ++ExprIndex)
+		{
+			const asCExpr* const Expr = AST->GetExpr(asASTExprId(ExprIndex));
+			if (Expr != nullptr
+				&& Expr->kind == asAST_EXPR_ASSIGN
+				&& Expr->literal.Equals("=")
+				&& Expr->children.GetLength() == 2
+				&& TailDecl != nullptr
+				&& TailDecl->inits.GetLength() == 1
+				&& Expr->children[1] == TailDecl->inits[0])
+			{
+				ASSERT_THAT(IsNull(InitializerAssign,
+					TEXT("the reduced fixture must contain one Tail initializer assignment")));
+				InitializerAssign = Expr;
+			}
+			else if (Expr != nullptr
+				&& Expr->kind == asAST_EXPR_ASSIGN
+				&& Expr->literal.Equals("+="))
+			{
+				ASSERT_THAT(IsNull(CompoundAssign,
+					TEXT("the reduced fixture must contain exactly one compound assignment")));
+				CompoundAssign = Expr;
+			}
+		}
+
+		const asCExpr* const Initializer = TailDecl != nullptr
+			&& TailDecl->inits.GetLength() == 1
+			? AST->GetExpr(TailDecl->inits[0]) : nullptr;
+		const asCExpr* const InitializerLhs = InitializerAssign != nullptr
+			&& InitializerAssign->children.GetLength() == 2
+			? AST->GetExpr(InitializerAssign->children[0]) : nullptr;
+		const asCExpr* const CompoundLhs = CompoundAssign != nullptr
+			&& CompoundAssign->children.GetLength() == 2
+			? AST->GetExpr(CompoundAssign->children[0]) : nullptr;
+		const asCExpr* const ReturnExpr = ReturnStatement != nullptr
+			&& ReturnStatement->expr.IsValid()
+			? AST->GetExpr(ReturnStatement->expr) : nullptr;
+
+		ASSERT_THAT(IsTrue(
+			TailDeclCount == 1
+			&& TailDecl != nullptr
+			&& TailDeclStatement != nullptr
+			&& Initializer != nullptr
+			&& Initializer->kind == asAST_EXPR_INTEGER_LITERAL
+			&& Initializer->literalBits == 0
+			&& InitializerLhs != nullptr
+			&& InitializerLhs->kind == asAST_EXPR_DECL_REF
+			&& InitializerLhs->resolvedDecl == TailDecl->id,
+			TEXT("the declaration, initializer write, and zero RHS must belong to one exact Tail VarDecl")));
+		ASSERT_THAT(IsTrue(
+			CompoundAssign != nullptr
+			&& CompoundLhs != nullptr
+			&& CompoundLhs->kind == asAST_EXPR_DECL_REF
+			&& CompoundLhs->resolvedDecl == TailDecl->id,
+			TEXT("Tail += 100 must write the exact initialized Tail DeclId")));
+		ASSERT_THAT(IsTrue(
+			ReturnExpr != nullptr
+			&& ReturnExpr->kind == asAST_EXPR_DECL_REF
+			&& ReturnExpr->resolvedDecl == TailDecl->id,
+			TEXT("return Tail must read the same exact initialized Tail DeclId")));
 	}
 
 	TEST_METHOD(CleanupDestructionExceptionsImportsAndGlobals)

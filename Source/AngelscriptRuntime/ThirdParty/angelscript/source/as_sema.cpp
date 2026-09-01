@@ -2967,7 +2967,7 @@ static void ApplyLoopSafePoints(asCASTContext& context, asASTStmtId loop, asASTS
 	context.SetStmtSafePointRole(loop, asAST_SAFEPOINT_LOOP_BACKEDGE);
 	if( body.IsValid() )
 	{
-		context.SetStmtSafePointRole(body, asAST_SAFEPOINT_LOOP_ENTRY);
+		context.SetLoopBodySafePointRole(loop, asAST_SAFEPOINT_LOOP_ENTRY);
 	}
 }
 

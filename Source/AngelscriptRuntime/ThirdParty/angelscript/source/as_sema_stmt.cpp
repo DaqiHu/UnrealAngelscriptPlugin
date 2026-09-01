@@ -1,7 +1,12 @@
 #include "as_sema_stmt.h"
 #include "as_sema_lifetime.h"
+#include "as_context.h"
 #include "as_scriptcode.h"
+#include "as_scriptengine.h"
 #include "as_tokendef.h"
+
+#include <cstring>
+#include <math.h>
 
 BEGIN_AS_NAMESPACE
 
@@ -198,7 +203,7 @@ static bool QualTypeNeedsImplicitNullInitialization(
 	return declaration == 0 || declaration->kind == asAST_DECL_INTERFACE;
 }
 
-static const asCType* ResolveStmtTypedefValueType(asCASTContext& context, const asCType* nominalType)
+static const asCType* ResolveStmtTypedefValueType(const asCASTContext& context, const asCType* nominalType)
 {
 	const asCType* current = nominalType;
 	for( asUINT depth = 0; current != 0 && depth < 8; ++depth )
@@ -713,7 +718,7 @@ asASTStmtId asCSema::ActOnWhileStmt(asASTDeclId owner, asASTExprId cond, asASTSt
 	context.SetStmtSafePointRole(loop, asAST_SAFEPOINT_LOOP_BACKEDGE);
 	if( body.IsValid() )
 	{
-		context.SetStmtSafePointRole(body, asAST_SAFEPOINT_LOOP_ENTRY);
+		context.SetLoopBodySafePointRole(loop, asAST_SAFEPOINT_LOOP_ENTRY);
 	}
 	PopControl();
 	return loop;
@@ -770,7 +775,7 @@ asASTStmtId asCSema::ActOnForStmt(asASTDeclId owner, asASTStmtId initStmt, asAST
 	context.SetStmtSafePointRole(loop, asAST_SAFEPOINT_LOOP_BACKEDGE);
 	if( body.IsValid() )
 	{
-		context.SetStmtSafePointRole(body, asAST_SAFEPOINT_LOOP_ENTRY);
+		context.SetLoopBodySafePointRole(loop, asAST_SAFEPOINT_LOOP_ENTRY);
 	}
 	PopControl();
 	return loop;
@@ -796,7 +801,7 @@ asASTStmtId asCSema::ActOnDoWhileStmt(asASTDeclId owner, asASTStmtId body, asAST
 	context.SetStmtSafePointRole(loop, asAST_SAFEPOINT_LOOP_BACKEDGE);
 	if( body.IsValid() )
 	{
-		context.SetStmtSafePointRole(body, asAST_SAFEPOINT_LOOP_ENTRY);
+		context.SetLoopBodySafePointRole(loop, asAST_SAFEPOINT_LOOP_ENTRY);
 	}
 	PopControl();
 	return loop;
@@ -1161,7 +1166,8 @@ asASTStmtId asCSema::ActOnForeachStmt(
 					}
 				}
 				context.SetStmtSafePointRole(loop, asAST_SAFEPOINT_LOOP_BACKEDGE);
-				context.SetStmtSafePointRole(canonicalBody, asAST_SAFEPOINT_LOOP_ENTRY);
+				context.SetLoopBodySafePointRole(
+					loop, asAST_SAFEPOINT_LOOP_ENTRY);
 				PopControl();
 				return loop;
 			}
@@ -1182,7 +1188,7 @@ asASTStmtId asCSema::ActOnForeachStmt(
 	context.SetStmtSafePointRole(loop, asAST_SAFEPOINT_LOOP_BACKEDGE);
 	if( body.IsValid() )
 	{
-		context.SetStmtSafePointRole(body, asAST_SAFEPOINT_LOOP_ENTRY);
+		context.SetLoopBodySafePointRole(loop, asAST_SAFEPOINT_LOOP_ENTRY);
 	}
 	PopControl();
 	return loop;
@@ -1240,30 +1246,808 @@ static const asCDecl* FindSwitchEnumDecl(
 	return match;
 }
 
-static bool TryGetSwitchCaseConstant(
+static bool GetSwitchIntegerShape(
 	const asCASTContext& context,
-	asASTExprId expression,
-	asQWORD& outValue)
+	const asCQualType& type,
+	bool& outUnsigned,
+	asUINT& outBitWidth)
 {
-	const asCExpr* expr = context.GetExpr(expression);
-	if( expr == 0 )
+	const asCType* const valueType = ResolveStmtTypedefValueType(
+		context, context.GetType(type.type));
+	if( valueType == 0 )
 	{
 		return false;
+	}
+	if( valueType->kind == asAST_TYPE_ENUM )
+	{
+		outUnsigned = false;
+		outBitWidth = 32;
+		return true;
+	}
+	if( valueType->kind != asAST_TYPE_PRIMITIVE )
+	{
+		return false;
+	}
+	switch( valueType->primitiveToken )
+	{
+	case ttInt:
+	case ttInt8:
+	case ttInt16:
+		outUnsigned = false;
+		outBitWidth = 32;
+		return true;
+	case ttUInt:
+	case ttUInt8:
+	case ttUInt16:
+		outUnsigned = true;
+		outBitWidth = 32;
+		return true;
+	case ttInt64:
+		outUnsigned = false;
+		outBitWidth = 64;
+		return true;
+	case ttUInt64:
+		outUnsigned = true;
+		outBitWidth = 64;
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool ApplySwitchIntegerConversion(
+	const asCASTContext& context,
+	const asCQualType& type,
+	asQWORD& value)
+{
+	const asCType* const valueType = ResolveStmtTypedefValueType(
+		context, context.GetType(type.type));
+	if( valueType == 0 )
+	{
+		return false;
+	}
+	if( valueType->kind == asAST_TYPE_ENUM )
+	{
+		value = static_cast<asQWORD>(static_cast<asINT64>(
+			static_cast<int>(static_cast<asDWORD>(value))));
+		return true;
+	}
+	if( valueType->kind != asAST_TYPE_PRIMITIVE )
+	{
+		return false;
+	}
+	switch( valueType->primitiveToken )
+	{
+	case ttInt8:
+		value = static_cast<asQWORD>(static_cast<asINT64>(
+			static_cast<signed char>(static_cast<asBYTE>(value))));
+		return true;
+	case ttUInt8:
+		value = static_cast<asBYTE>(value);
+		return true;
+	case ttInt16:
+		value = static_cast<asQWORD>(static_cast<asINT64>(
+			static_cast<short>(static_cast<asWORD>(value))));
+		return true;
+	case ttUInt16:
+		value = static_cast<asWORD>(value);
+		return true;
+	case ttInt:
+		value = static_cast<asQWORD>(static_cast<asINT64>(
+			static_cast<int>(static_cast<asDWORD>(value))));
+		return true;
+	case ttUInt:
+		value = static_cast<asDWORD>(value);
+		return true;
+	case ttInt64:
+	case ttUInt64:
+		return true;
+	default:
+		return false;
+	}
+}
+
+enum asESwitchConstantDiagnosticKind
+{
+	asSWITCH_CONSTANT_DIAG_DIVIDE_BY_ZERO = 0,
+	asSWITCH_CONSTANT_DIAG_POW_OVERFLOW,
+};
+
+struct asSSwitchConstantDiagnostic
+{
+	asESwitchConstantDiagnosticKind kind;
+	asCSourceRange range;
+
+	asSSwitchConstantDiagnostic()
+		: kind(asSWITCH_CONSTANT_DIAG_DIVIDE_BY_ZERO)
+	{
+	}
+
+	asSSwitchConstantDiagnostic(
+		asESwitchConstantDiagnosticKind inKind,
+		const asCSourceRange& inRange)
+		: kind(inKind)
+		, range(inRange)
+	{
+	}
+};
+
+// Keep value availability, exact Sema type, and diagnostics orthogonal. This
+// mirrors the APValue + EvalStatus shape used by Clang: an operation such as
+// integer division by zero may diagnose while still producing the maintained
+// recovery value consumed by later Switch duplicate analysis.
+struct asSSwitchConstantAnalysis
+{
+	bool hasValue;
+	asQWORD bits;
+	asCQualType exactType;
+	asCArray<asSSwitchConstantDiagnostic> diagnostics;
+
+	asSSwitchConstantAnalysis()
+		: hasValue(false)
+		, bits(0)
+	{
+	}
+};
+
+static bool IsSwitchFloatingType(
+	const asCASTContext& context,
+	const asCQualType& type,
+	eTokenType& outToken)
+{
+	const asCType* const valueType = ResolveStmtTypedefValueType(
+		context, context.GetType(type.type));
+	if( valueType == 0 || valueType->kind != asAST_TYPE_PRIMITIVE )
+	{
+		return false;
+	}
+	outToken = valueType->primitiveToken;
+	return outToken == ttFloat || outToken == ttFloat32
+		|| outToken == ttDouble || outToken == ttFloat64;
+}
+
+static bool IsSwitchBooleanType(
+	const asCASTContext& context,
+	const asCQualType& type)
+{
+	const asCType* const valueType = ResolveStmtTypedefValueType(
+		context, context.GetType(type.type));
+	return valueType != 0 && valueType->kind == asAST_TYPE_PRIMITIVE
+		&& valueType->primitiveToken == ttBool;
+}
+
+static void AppendSwitchConstantDiagnostics(
+	asSSwitchConstantAnalysis& destination,
+	const asSSwitchConstantAnalysis& source)
+{
+	for( asUINT i = 0; i < source.diagnostics.GetLength(); ++i )
+	{
+		destination.diagnostics.PushLast(source.diagnostics[i]);
+	}
+}
+
+static void AddSwitchConstantDiagnostic(
+	asSSwitchConstantAnalysis& analysis,
+	asESwitchConstantDiagnosticKind kind,
+	const asCSourceRange& range)
+{
+	analysis.diagnostics.PushLast(asSSwitchConstantDiagnostic(kind, range));
+}
+
+static bool StoreSwitchFloatingBits(
+	const asCASTContext& context,
+	const asCQualType& type,
+	double value,
+	asQWORD& outBits)
+{
+	eTokenType token = ttUnrecognizedToken;
+	if( !IsSwitchFloatingType(context, type, token) )
+	{
+		return false;
+	}
+	if( token == ttFloat || token == ttFloat32 )
+	{
+		const float stored = static_cast<float>(value);
+		asDWORD bits = 0;
+		std::memcpy(&bits, &stored, sizeof(bits));
+		outBits = bits;
+		return true;
+	}
+	std::memcpy(&outBits, &value, sizeof(outBits));
+	return true;
+}
+
+static bool GetSwitchNumericAsDouble(
+	const asCASTContext& context,
+	const asSSwitchConstantAnalysis& analysis,
+	double& outValue)
+{
+	if( !analysis.hasValue )
+	{
+		return false;
+	}
+	eTokenType floatToken = ttUnrecognizedToken;
+	if( IsSwitchFloatingType(context, analysis.exactType, floatToken) )
+	{
+		if( floatToken == ttFloat || floatToken == ttFloat32 )
+		{
+			const asDWORD bits = static_cast<asDWORD>(analysis.bits);
+			float value = 0.0f;
+			std::memcpy(&value, &bits, sizeof(value));
+			outValue = value;
+			return true;
+		}
+		std::memcpy(&outValue, &analysis.bits, sizeof(outValue));
+		return true;
+	}
+	bool isUnsigned = false;
+	asUINT bitWidth = 0;
+	if( GetSwitchIntegerShape(
+		context, analysis.exactType, isUnsigned, bitWidth) )
+	{
+		if( isUnsigned )
+		{
+			outValue = bitWidth == 32
+				? static_cast<double>(static_cast<asDWORD>(analysis.bits))
+				: static_cast<double>(analysis.bits);
+		}
+		else
+		{
+			outValue = bitWidth == 32
+				? static_cast<double>(static_cast<int>(
+					static_cast<asDWORD>(analysis.bits)))
+				: static_cast<double>(static_cast<asINT64>(analysis.bits));
+		}
+		return true;
+	}
+	if( IsSwitchBooleanType(context, analysis.exactType) )
+	{
+		outValue = analysis.bits != 0 ? 1.0 : 0.0;
+		return true;
+	}
+	return false;
+}
+
+static bool IsSwitchConstantZero(
+	const asCASTContext& context,
+	const asSSwitchConstantAnalysis& analysis)
+{
+	double value = 0.0;
+	return GetSwitchNumericAsDouble(context, analysis, value)
+		&& value == 0.0;
+}
+
+static bool IsSwitchPureConstantDecl(
+	const asCASTContext& context,
+	const asCDecl* target)
+{
+	if( target == 0 || target->kind != asAST_DECL_VAR )
+	{
+		return false;
+	}
+	const asCDecl* const parent = context.GetDecl(target->parent);
+	if( parent != 0 && parent->kind == asAST_DECL_ENUM )
+	{
+		return target->hasConstantValue;
+	}
+	if( IsTypedLocalVariableOwner(parent) )
+	{
+		// Readonly locals may either consume an already sealed value or recurse
+		// through their initializer below. Mutable local storage is never a Case
+		// constant even when an initializer happened to fold.
+		return target->type.IsConst();
+	}
+	// Global constants must arrive with Sema-sealed bits. Class fields and other
+	// readonly storage are not source-language Case constants, and mutable global
+	// storage must not become one merely because its initializer folded.
+	const bool isGlobal = parent != 0
+		&& (parent->kind == asAST_DECL_TRANSLATION_UNIT
+			|| parent->kind == asAST_DECL_NAMESPACE);
+	return isGlobal && target->type.IsConst() && target->hasConstantValue;
+}
+
+static bool IsSwitchComparisonOperator(const asCString& op)
+{
+	return op.Equals("==") || op.Equals("!=")
+		|| op.Equals("<") || op.Equals("<=")
+		|| op.Equals(">") || op.Equals(">=");
+}
+
+static bool ConvertSwitchConstantValue(
+	const asCASTContext& context,
+	const asSSwitchConstantAnalysis& source,
+	const asCQualType& destination,
+	asQWORD& outBits)
+{
+	bool destinationUnsigned = false;
+	asUINT destinationWidth = 0;
+	if( GetSwitchIntegerShape(
+		context, destination, destinationUnsigned, destinationWidth) )
+	{
+		eTokenType sourceFloat = ttUnrecognizedToken;
+		if( IsSwitchFloatingType(context, source.exactType, sourceFloat) )
+		{
+			double floating = 0.0;
+			if( !GetSwitchNumericAsDouble(context, source, floating) )
+			{
+				return false;
+			}
+			outBits = destinationUnsigned
+				? (destinationWidth == 32
+					? static_cast<asDWORD>(floating)
+					: static_cast<asQWORD>(static_cast<asINT64>(floating)))
+				: static_cast<asQWORD>(destinationWidth == 32
+					? static_cast<asINT64>(static_cast<int>(floating))
+					: static_cast<asINT64>(floating));
+			return ApplySwitchIntegerConversion(context, destination, outBits);
+		}
+		if( IsSwitchBooleanType(context, source.exactType) )
+		{
+			outBits = source.bits != 0 ? 1 : 0;
+			return ApplySwitchIntegerConversion(context, destination, outBits);
+		}
+		bool sourceUnsigned = false;
+		asUINT sourceWidth = 0;
+		if( !GetSwitchIntegerShape(
+			context, source.exactType, sourceUnsigned, sourceWidth) )
+		{
+			return false;
+		}
+		outBits = source.bits;
+		return ApplySwitchIntegerConversion(context, destination, outBits);
+	}
+	eTokenType destinationFloat = ttUnrecognizedToken;
+	if( IsSwitchFloatingType(context, destination, destinationFloat) )
+	{
+		double value = 0.0;
+		return GetSwitchNumericAsDouble(context, source, value)
+			&& StoreSwitchFloatingBits(context, destination, value, outBits);
+	}
+	if( IsSwitchBooleanType(context, destination) )
+	{
+		double value = 0.0;
+		if( !GetSwitchNumericAsDouble(context, source, value) )
+		{
+			return false;
+		}
+		outBits = value != 0.0 ? 1 : 0;
+		return true;
+	}
+	return false;
+}
+
+static bool CompareSwitchIntegerConstants(
+	const asCASTContext& context,
+	const asSSwitchConstantAnalysis& lhs,
+	const asSSwitchConstantAnalysis& rhs,
+	const asCString& op,
+	bool& outValue)
+{
+	bool isUnsigned = false;
+	asUINT bitWidth = 0;
+	if( !GetSwitchIntegerShape(context, lhs.exactType, isUnsigned, bitWidth) )
+	{
+		return false;
+	}
+	if( bitWidth == 32 && isUnsigned )
+	{
+		const asDWORD left = static_cast<asDWORD>(lhs.bits);
+		const asDWORD right = static_cast<asDWORD>(rhs.bits);
+		outValue = op.Equals("==") ? left == right
+			: op.Equals("!=") ? left != right
+			: op.Equals("<") ? left < right
+			: op.Equals("<=") ? left <= right
+			: op.Equals(">") ? left > right : left >= right;
+		return true;
+	}
+	if( bitWidth == 32 )
+	{
+		const int left = static_cast<int>(static_cast<asDWORD>(lhs.bits));
+		const int right = static_cast<int>(static_cast<asDWORD>(rhs.bits));
+		outValue = op.Equals("==") ? left == right
+			: op.Equals("!=") ? left != right
+			: op.Equals("<") ? left < right
+			: op.Equals("<=") ? left <= right
+			: op.Equals(">") ? left > right : left >= right;
+		return true;
+	}
+	if( isUnsigned )
+	{
+		const asQWORD left = lhs.bits;
+		const asQWORD right = rhs.bits;
+		outValue = op.Equals("==") ? left == right
+			: op.Equals("!=") ? left != right
+			: op.Equals("<") ? left < right
+			: op.Equals("<=") ? left <= right
+			: op.Equals(">") ? left > right : left >= right;
+		return true;
+	}
+	const asINT64 left = static_cast<asINT64>(lhs.bits);
+	const asINT64 right = static_cast<asINT64>(rhs.bits);
+	outValue = op.Equals("==") ? left == right
+		: op.Equals("!=") ? left != right
+		: op.Equals("<") ? left < right
+		: op.Equals("<=") ? left <= right
+		: op.Equals(">") ? left > right : left >= right;
+	return true;
+}
+
+static void EvaluateSwitchConstant(
+	const asCASTContext& context,
+	asASTExprId expression,
+	asSSwitchConstantAnalysis& out,
+	asCArray<asASTDeclId>& activeDecls,
+	asUINT depth)
+{
+	out.hasValue = false;
+	out.bits = 0;
+	out.exactType = asCQualType();
+	out.diagnostics.SetLength(0);
+	if( depth > 64 )
+	{
+		return;
+	}
+	const asCExpr* const expr = context.GetExpr(expression);
+	if( expr == 0 )
+	{
+		return;
+	}
+	out.exactType = expr->type;
+
+	if( expr->kind == asAST_EXPR_INTEGER_LITERAL )
+	{
+		out.bits = expr->literalBits;
+		out.hasValue = ApplySwitchIntegerConversion(
+			context, expr->type, out.bits);
+		return;
+	}
+	if( expr->kind == asAST_EXPR_FLOAT_LITERAL )
+	{
+		eTokenType token = ttUnrecognizedToken;
+		out.bits = expr->literalBits;
+		out.hasValue = IsSwitchFloatingType(context, expr->type, token);
+		return;
+	}
+	if( expr->kind == asAST_EXPR_BOOL_LITERAL )
+	{
+		out.bits = expr->literalBits != 0 ? 1 : 0;
+		out.hasValue = IsSwitchBooleanType(context, expr->type);
+		return;
 	}
 	if( expr->kind == asAST_EXPR_DECL_REF )
 	{
-		const asCDecl* target = context.GetDecl(expr->resolvedDecl);
-		if( target != 0 && target->hasConstantValue )
+		const asCDecl* const target = context.GetDecl(expr->resolvedDecl);
+		if( !IsSwitchPureConstantDecl(context, target) )
 		{
-			outValue = target->constantValue;
-			return true;
+			return;
 		}
-		return false;
+		asSSwitchConstantAnalysis source;
+		if( target->hasConstantValue )
+		{
+			source.hasValue = true;
+			source.bits = target->constantValue;
+			source.exactType = target->type;
+		}
+		else if( target->inits.GetLength() != 0
+			&& activeDecls.IndexOf(target->id) < 0 )
+		{
+			activeDecls.PushLast(target->id);
+			EvaluateSwitchConstant(
+				context, target->inits[0], source, activeDecls, depth + 1);
+			activeDecls.PopLast();
+		}
+		AppendSwitchConstantDiagnostics(out, source);
+		out.hasValue = source.hasValue && ConvertSwitchConstantValue(
+			context, source, expr->type, out.bits);
+		return;
 	}
-	if( expr->kind == asAST_EXPR_INTEGER_LITERAL )
+	if( expr->kind == asAST_EXPR_UNARY
+		&& expr->children.GetLength() == 1 )
 	{
-		outValue = expr->literalBits;
-		return true;
+		asSSwitchConstantAnalysis inner;
+		EvaluateSwitchConstant(
+			context, expr->children[0], inner, activeDecls, depth + 1);
+		AppendSwitchConstantDiagnostics(out, inner);
+		if( !inner.hasValue )
+		{
+			return;
+		}
+		if( expr->literal.Equals("!")
+			&& IsSwitchBooleanType(context, expr->type) )
+		{
+			out.bits = inner.bits == 0 ? 1 : 0;
+			out.hasValue = true;
+			return;
+		}
+		eTokenType floatToken = ttUnrecognizedToken;
+		if( IsSwitchFloatingType(context, expr->type, floatToken) )
+		{
+			double value = 0.0;
+			if( !GetSwitchNumericAsDouble(context, inner, value)
+				|| (!expr->literal.Equals("+")
+					&& !expr->literal.Equals("-")) )
+			{
+				return;
+			}
+			if( expr->literal.Equals("-") )
+			{
+				value = -value;
+			}
+			out.hasValue = StoreSwitchFloatingBits(
+				context, expr->type, value, out.bits);
+			return;
+		}
+		bool isUnsigned = false;
+		asUINT bitWidth = 0;
+		if( !GetSwitchIntegerShape(
+			context, expr->type, isUnsigned, bitWidth) )
+		{
+			return;
+		}
+		out.bits = inner.bits;
+		if( expr->literal.Equals("-") )
+		{
+			out.bits = asQWORD(0) - out.bits;
+		}
+		else if( expr->literal.Equals("~") )
+		{
+			out.bits = ~out.bits;
+		}
+		else if( !expr->literal.Equals("+") )
+		{
+			return;
+		}
+		out.hasValue = ApplySwitchIntegerConversion(
+			context, expr->type, out.bits);
+		return;
+	}
+	if( (expr->kind == asAST_EXPR_BINARY
+			|| expr->kind == asAST_EXPR_LOGICAL)
+		&& expr->children.GetLength() == 2 )
+	{
+		asSSwitchConstantAnalysis lhs;
+		asSSwitchConstantAnalysis rhs;
+		EvaluateSwitchConstant(
+			context, expr->children[0], lhs, activeDecls, depth + 1);
+		EvaluateSwitchConstant(
+			context, expr->children[1], rhs, activeDecls, depth + 1);
+		AppendSwitchConstantDiagnostics(out, lhs);
+		AppendSwitchConstantDiagnostics(out, rhs);
+		if( !lhs.hasValue || !rhs.hasValue )
+		{
+			// Keep diagnostics orthogonal to value availability. Legacy diagnoses a
+			// constant zero divisor even when the dividend is runtime/nonconstant;
+			// Switch analysis then adds its independent nonconstant-Case diagnostic.
+			if( (expr->literal.Equals("/") || expr->literal.Equals("%"))
+				&& rhs.hasValue && IsSwitchConstantZero(context, rhs) )
+			{
+				AddSwitchConstantDiagnostic(out,
+					asSWITCH_CONSTANT_DIAG_DIVIDE_BY_ZERO, expr->range);
+			}
+			return;
+		}
+		if( expr->kind == asAST_EXPR_LOGICAL
+			|| expr->literal.Equals("&&") || expr->literal.Equals("||")
+			|| expr->literal.Equals("^^") )
+		{
+			const bool left = lhs.bits != 0;
+			const bool right = rhs.bits != 0;
+			out.bits = expr->literal.Equals("&&") ? left && right
+				: expr->literal.Equals("||") ? left || right
+				: left != right;
+			out.hasValue = IsSwitchBooleanType(context, expr->type);
+			return;
+		}
+		if( IsSwitchComparisonOperator(expr->literal) )
+		{
+			bool value = false;
+			eTokenType lhsFloat = ttUnrecognizedToken;
+			if( IsSwitchFloatingType(context, lhs.exactType, lhsFloat) )
+			{
+				double left = 0.0;
+				double right = 0.0;
+				if( !GetSwitchNumericAsDouble(context, lhs, left)
+					|| !GetSwitchNumericAsDouble(context, rhs, right) )
+				{
+					return;
+				}
+				value = expr->literal.Equals("==") ? left == right
+					: expr->literal.Equals("!=") ? left != right
+					: expr->literal.Equals("<") ? left < right
+					: expr->literal.Equals("<=") ? left <= right
+					: expr->literal.Equals(">") ? left > right : left >= right;
+			}
+			else if( IsSwitchBooleanType(context, lhs.exactType) )
+			{
+				const bool left = lhs.bits != 0;
+				const bool right = rhs.bits != 0;
+				value = expr->literal.Equals("==") ? left == right
+					: expr->literal.Equals("!=") ? left != right
+					: expr->literal.Equals("<") ? left < right
+					: expr->literal.Equals("<=") ? left <= right
+					: expr->literal.Equals(">") ? left > right : left >= right;
+			}
+			else if( !CompareSwitchIntegerConstants(
+				context, lhs, rhs, expr->literal, value) )
+			{
+				return;
+			}
+			out.bits = value ? 1 : 0;
+			out.hasValue = IsSwitchBooleanType(context, expr->type);
+			return;
+		}
+
+		eTokenType resultFloat = ttUnrecognizedToken;
+		if( IsSwitchFloatingType(context, expr->type, resultFloat) )
+		{
+			double left = 0.0;
+			double right = 0.0;
+			if( !GetSwitchNumericAsDouble(context, lhs, left)
+				|| !GetSwitchNumericAsDouble(context, rhs, right) )
+			{
+				return;
+			}
+			double value = 0.0;
+			if( resultFloat == ttFloat || resultFloat == ttFloat32 )
+			{
+				const float typedLeft = static_cast<float>(left);
+				const float typedRight = static_cast<float>(right);
+				float typedValue = 0.0f;
+				if( expr->literal.Equals("+") ) typedValue = typedLeft + typedRight;
+				else if( expr->literal.Equals("-") ) typedValue = typedLeft - typedRight;
+				else if( expr->literal.Equals("*") ) typedValue = typedLeft * typedRight;
+				else if( expr->literal.Equals("/") || expr->literal.Equals("%") )
+				{
+					if( typedRight == 0.0f )
+					{
+						AddSwitchConstantDiagnostic(out,
+							asSWITCH_CONSTANT_DIAG_DIVIDE_BY_ZERO, expr->range);
+						typedValue = 0.0f;
+					}
+					else
+					{
+						typedValue = expr->literal.Equals("/")
+							? typedLeft / typedRight
+							: fmodf(typedLeft, typedRight);
+					}
+				}
+				else if( expr->literal.Equals("**") )
+				{
+					typedValue = powf(typedLeft, typedRight);
+					if( typedValue == HUGE_VAL )
+					{
+						AddSwitchConstantDiagnostic(out,
+							asSWITCH_CONSTANT_DIAG_POW_OVERFLOW, expr->range);
+					}
+				}
+				else return;
+				value = typedValue;
+			}
+			else
+			{
+				if( expr->literal.Equals("+") ) value = left + right;
+				else if( expr->literal.Equals("-") ) value = left - right;
+				else if( expr->literal.Equals("*") ) value = left * right;
+				else if( expr->literal.Equals("/") || expr->literal.Equals("%") )
+				{
+					if( right == 0.0 )
+					{
+						AddSwitchConstantDiagnostic(out,
+							asSWITCH_CONSTANT_DIAG_DIVIDE_BY_ZERO, expr->range);
+						value = 0.0;
+					}
+					else
+					{
+						value = expr->literal.Equals("/")
+							? left / right : fmod(left, right);
+					}
+				}
+				else if( expr->literal.Equals("**") )
+				{
+					value = pow(left, right);
+					if( value == HUGE_VAL )
+					{
+						AddSwitchConstantDiagnostic(out,
+							asSWITCH_CONSTANT_DIAG_POW_OVERFLOW, expr->range);
+					}
+				}
+				else return;
+			}
+			out.hasValue = StoreSwitchFloatingBits(
+				context, expr->type, value, out.bits);
+			return;
+		}
+
+		bool isUnsigned = false;
+		asUINT bitWidth = 0;
+		if( !GetSwitchIntegerShape(
+			context, expr->type, isUnsigned, bitWidth) )
+		{
+			return;
+		}
+		const asQWORD left = lhs.bits;
+		const asQWORD right = rhs.bits;
+		if( expr->literal.Equals("+") ) out.bits = left + right;
+		else if( expr->literal.Equals("-") ) out.bits = left - right;
+		else if( expr->literal.Equals("*") ) out.bits = left * right;
+		else if( expr->literal.Equals("/") || expr->literal.Equals("%") )
+		{
+			if( right == 0 )
+			{
+				out.bits = 0;
+				AddSwitchConstantDiagnostic(out,
+					asSWITCH_CONSTANT_DIAG_DIVIDE_BY_ZERO, expr->range);
+			}
+			else
+			{
+				const bool minMinusOne = bitWidth == 32
+					? static_cast<asDWORD>(left) == 0x80000000u
+						&& static_cast<asDWORD>(right) == 0xFFFFFFFFu
+					: left == (asQWORD(1) << 63) && right == ~asQWORD(0);
+				if( minMinusOne ) out.bits = 0;
+				else if( bitWidth == 32 && isUnsigned )
+					out.bits = expr->literal.Equals("/")
+						? static_cast<asDWORD>(left) / static_cast<asDWORD>(right)
+						: static_cast<asDWORD>(left) % static_cast<asDWORD>(right);
+				else if( bitWidth == 32 )
+					out.bits = static_cast<asQWORD>(expr->literal.Equals("/")
+						? static_cast<int>(static_cast<asDWORD>(left))
+							/ static_cast<int>(static_cast<asDWORD>(right))
+						: static_cast<int>(static_cast<asDWORD>(left))
+							% static_cast<int>(static_cast<asDWORD>(right)));
+				else if( isUnsigned )
+					out.bits = expr->literal.Equals("/") ? left / right : left % right;
+				else
+					out.bits = static_cast<asQWORD>(expr->literal.Equals("/")
+						? static_cast<asINT64>(left) / static_cast<asINT64>(right)
+						: static_cast<asINT64>(left) % static_cast<asINT64>(right));
+			}
+		}
+		else if( expr->literal.Equals("**") )
+		{
+			bool overflow = false;
+			if( bitWidth == 32 && isUnsigned )
+				out.bits = as_powu(static_cast<asDWORD>(left),
+					static_cast<asDWORD>(right), overflow);
+			else if( bitWidth == 32 )
+				out.bits = static_cast<asQWORD>(as_powi(
+					static_cast<int>(static_cast<asDWORD>(left)),
+					static_cast<int>(static_cast<asDWORD>(right)), overflow));
+			else if( isUnsigned ) out.bits = as_powu64(left, right, overflow);
+			else out.bits = static_cast<asQWORD>(as_powi64(
+				static_cast<asINT64>(left), static_cast<asINT64>(right), overflow));
+			if( overflow ) AddSwitchConstantDiagnostic(out,
+				asSWITCH_CONSTANT_DIAG_POW_OVERFLOW, expr->range);
+		}
+		else if( expr->literal.Equals("&") ) out.bits = left & right;
+		else if( expr->literal.Equals("|") ) out.bits = left | right;
+		else if( expr->literal.Equals("^") ) out.bits = left ^ right;
+		else if( expr->literal.Equals("<<") )
+		{
+			const asUINT mask = bitWidth == 32 ? 31u : 63u;
+			out.bits = bitWidth == 32
+				? static_cast<asDWORD>(left) << (right & mask)
+				: left << (right & mask);
+		}
+		else if( expr->literal.Equals(">>") )
+		{
+			const asUINT mask = bitWidth == 32 ? 31u : 63u;
+			out.bits = bitWidth == 32
+				? static_cast<asDWORD>(left) >> (right & mask)
+				: left >> (right & mask);
+		}
+		else if( expr->literal.Equals(">>>") )
+		{
+			const asUINT mask = bitWidth == 32 ? 31u : 63u;
+			out.bits = bitWidth == 32
+				? static_cast<asQWORD>(static_cast<int>(
+					static_cast<asDWORD>(left)) >> (right & mask))
+				: static_cast<asQWORD>(static_cast<asINT64>(left) >> (right & mask));
+		}
+		else return;
+		out.hasValue = ApplySwitchIntegerConversion(
+			context, expr->type, out.bits);
+		return;
 	}
 	if( (expr->kind == asAST_EXPR_CONSTRUCT
 			|| expr->kind == asAST_EXPR_CONVERSION
@@ -1271,10 +2055,299 @@ static bool TryGetSwitchCaseConstant(
 			|| expr->kind == asAST_EXPR_CLEANUP)
 		&& expr->children.GetLength() == 1 )
 	{
-		return TryGetSwitchCaseConstant(
-			context, expr->children[0], outValue);
+		asSSwitchConstantAnalysis child;
+		EvaluateSwitchConstant(
+			context, expr->children[0], child, activeDecls, depth + 1);
+		AppendSwitchConstantDiagnostics(out, child);
+		out.hasValue = child.hasValue && ConvertSwitchConstantValue(
+			context, child, expr->type, out.bits);
 	}
-	return false;
+}
+
+static void EvaluateSwitchConstant(
+	const asCASTContext& context,
+	asASTExprId expression,
+	asSSwitchConstantAnalysis& out)
+{
+	asCArray<asASTDeclId> activeDecls;
+	EvaluateSwitchConstant(context, expression, out, activeDecls, 0);
+}
+
+static bool GetSwitchPrimitiveComparisonDomain(
+	asCASTContext& context,
+	asASTExprId selector,
+	asCQualType& outDomain)
+{
+	outDomain = asCQualType();
+	const asCExpr* const selectorExpr = context.GetExpr(selector);
+	const asCType* const selectorType = selectorExpr != 0
+		? ResolveStmtTypedefValueType(
+			context, context.GetType(selectorExpr->type.type))
+		: 0;
+	if( selectorType == 0 || selectorType->kind != asAST_TYPE_PRIMITIVE )
+	{
+		// Enum selectors retain their nominal type so enum compatibility and the
+		// invalid-value safe-point fact remain explicit. Primitive selectors use
+		// the Legacy language's signed/unsigned 32-bit comparison domain.
+		return false;
+	}
+
+	switch( selectorType->primitiveToken )
+	{
+	case ttInt:
+	case ttInt8:
+	case ttInt16:
+	case ttInt64:
+		outDomain = context.InternPrimitive(ttInt, 0);
+		break;
+	case ttUInt:
+	case ttUInt8:
+	case ttUInt16:
+	case ttUInt64:
+		outDomain = context.InternPrimitive(ttUInt, 0);
+		break;
+	default:
+		return false;
+	}
+	return outDomain.IsValid();
+}
+
+enum asESwitchDomainSealResult
+{
+	asSWITCH_DOMAIN_SEAL_OK = 0,
+	asSWITCH_DOMAIN_SEAL_NON_INTEGRAL,
+	asSWITCH_DOMAIN_SEAL_DIAGNOSED,
+};
+
+static const asCDecl* FindSwitchEnumDeclForType(
+	const asCASTContext& context,
+	const asCType* enumType)
+{
+	if( enumType == 0 || enumType->kind != asAST_TYPE_ENUM
+		|| enumType->stableKey.GetLength() == 0 )
+	{
+		return 0;
+	}
+	const asCDecl* match = 0;
+	for( asUINT i = 1; i <= context.GetDeclCount(); ++i )
+	{
+		const asCDecl* const decl = context.GetDecl(asASTDeclId(i));
+		if( decl != 0 && decl->kind == asAST_DECL_ENUM
+			&& decl->stableKey.Equals(enumType->stableKey) )
+		{
+			if( match != 0 )
+			{
+				return 0;
+			}
+			match = decl;
+		}
+	}
+	return match;
+}
+
+static asESwitchDomainSealResult NormalizeSwitchComparisonDomain(
+	asCSema& sema,
+	asCASTContext& context,
+	asASTExprId& selector,
+	const asCArray<asASTStmtId>& cases,
+	const asCSourceRange& switchRange,
+	asCSourceRange& outDiagnosticRange)
+{
+	const asCExpr* const authoredSelector = context.GetExpr(selector);
+	const asCType* const authoredSelectorType = authoredSelector != 0
+		? ResolveStmtTypedefValueType(
+			context, context.GetType(authoredSelector->type.type))
+		: 0;
+	asCQualType domain;
+	const bool primitiveDomain =
+		GetSwitchPrimitiveComparisonDomain(context, selector, domain);
+	const bool enumDomain = authoredSelectorType != 0
+		&& authoredSelectorType->kind == asAST_TYPE_ENUM;
+	if( !primitiveDomain && !enumDomain )
+	{
+		if( authoredSelector != 0 && authoredSelectorType != 0
+			&& authoredSelectorType->kind != asAST_TYPE_INVALID
+			&& authoredSelectorType->kind != asAST_TYPE_ERROR )
+		{
+			outDiagnosticRange = authoredSelector->range.IsValid()
+				? authoredSelector->range : switchRange;
+			return asSWITCH_DOMAIN_SEAL_NON_INTEGRAL;
+		}
+		return asSWITCH_DOMAIN_SEAL_OK;
+	}
+	if( enumDomain )
+	{
+		// Preserve nominal enum identity in the Canonical graph. The sealed Case
+		// fact still stores the maintained 32-bit comparison value, while its
+		// exact QualType records which enum the Switch selects.
+		domain = authoredSelector->type;
+	}
+
+	// Analyse the complete ordered Case set before mutating the graph. A failed
+	// duplicate/constant check therefore cannot leave a recovery Switch with a
+	// converted prefix and authored suffix.
+	asCArray<asDWORD> normalizedByCase;
+	normalizedByCase.SetLength(cases.GetLength());
+	asCArray<asBYTE> hasNormalizedValue;
+	hasNormalizedValue.SetLength(cases.GetLength());
+	for( asUINT i = 0; i < cases.GetLength(); ++i )
+	{
+		normalizedByCase[i] = 0;
+		hasNormalizedValue[i] = 0;
+	}
+
+	asCArray<asDWORD> normalizedValues;
+	bool diagnosed = false;
+	for( asUINT i = 0; i < cases.GetLength(); ++i )
+	{
+		const asCStmt* caseStmt = context.GetStmt(cases[i]);
+		if( caseStmt == 0 || !caseStmt->expr.IsValid() )
+		{
+			continue;
+		}
+		const asCExpr* caseExpr = context.GetExpr(caseStmt->expr);
+		if( caseExpr == 0 )
+		{
+			const asCSourceRange diagnosticRange = caseStmt->range.IsValid()
+				? caseStmt->range : switchRange;
+			sema.AddDiagnostic(
+				"Case expressions must be constants", diagnosticRange);
+			diagnosed = true;
+			continue;
+		}
+		if( enumDomain && sema.GetEngine() != 0
+			&& sema.GetEngine()->ep.typeCheckSwitchEnums )
+		{
+			const asCType* const caseType = ResolveStmtTypedefValueType(
+				context, context.GetType(caseExpr->type.type));
+			if( caseType != 0 && caseType->kind == asAST_TYPE_ENUM
+				&& !caseType->stableKey.Equals(
+					authoredSelectorType->stableKey) )
+			{
+				const asCDecl* const selectorDecl =
+					FindSwitchEnumDeclForType(context, authoredSelectorType);
+				const asCDecl* const caseDecl =
+					FindSwitchEnumDeclForType(context, caseType);
+				const char* const selectorName = selectorDecl != 0
+					? selectorDecl->name.AddressOf()
+					: authoredSelectorType->stableKey.AddressOf();
+				const char* const caseName = caseDecl != 0
+					? caseDecl->name.AddressOf()
+					: caseType->stableKey.AddressOf();
+				asCString diagnostic;
+				diagnostic.Format(
+					"Enumeration types are not the same in switch statement ('%s' and '%s') ",
+					selectorName, caseName);
+				const asCSourceRange diagnosticRange = caseExpr->range.IsValid()
+					? caseExpr->range
+					: (caseStmt->range.IsValid()
+						? caseStmt->range : switchRange);
+				sema.AddDiagnostic(diagnostic.AddressOf(), diagnosticRange);
+				diagnosed = true;
+			}
+		}
+
+		const asCSourceRange caseDiagnosticRange = caseExpr->range.IsValid()
+			? caseExpr->range
+			: (caseStmt->range.IsValid() ? caseStmt->range : switchRange);
+		asSSwitchConstantAnalysis analysis;
+		EvaluateSwitchConstant(context, caseStmt->expr, analysis);
+		for( asUINT diagnosticIndex = 0;
+			diagnosticIndex < analysis.diagnostics.GetLength(); ++diagnosticIndex )
+		{
+			const asSSwitchConstantDiagnostic& diagnostic =
+				analysis.diagnostics[diagnosticIndex];
+			const asCSourceRange diagnosticRange = diagnostic.range.IsValid()
+				? diagnostic.range : caseDiagnosticRange;
+			sema.AddDiagnostic(
+				diagnostic.kind == asSWITCH_CONSTANT_DIAG_DIVIDE_BY_ZERO
+					? "Divide by zero" : "Overflow in exponent operation",
+				diagnosticRange);
+			diagnosed = true;
+		}
+
+		bool caseUnsigned = false;
+		asUINT caseBitWidth = 0;
+		const bool integralCaseType = GetSwitchIntegerShape(
+			context, analysis.exactType, caseUnsigned, caseBitWidth);
+		if( !analysis.hasValue )
+		{
+			sema.AddDiagnostic(
+				"Case expressions must be constants", caseDiagnosticRange);
+			diagnosed = true;
+		}
+		if( !integralCaseType )
+		{
+			sema.AddDiagnostic(
+				"Switch expressions must be integral numbers", caseDiagnosticRange);
+			diagnosed = true;
+		}
+		if( !analysis.hasValue || !integralCaseType )
+		{
+			continue;
+		}
+
+		asQWORD bits = analysis.bits;
+		if( !ApplySwitchIntegerConversion(context, domain, bits) )
+		{
+			sema.AddDiagnostic(
+				"Switch expressions must be integral numbers", caseDiagnosticRange);
+			diagnosed = true;
+			continue;
+		}
+		// Switch comparison is intentionally 32-bit even for int64/uint64
+		// source expressions. Match Legacy GetConstantDW() after conversion.
+		const asDWORD normalized = static_cast<asDWORD>(bits);
+		if( normalizedValues.IndexOf(normalized) >= 0 )
+		{
+			sema.AddDiagnostic(
+				"Duplicate switch case",
+				caseStmt->range.IsValid() ? caseStmt->range : switchRange);
+			diagnosed = true;
+			continue;
+		}
+		normalizedValues.PushLast(normalized);
+		normalizedByCase[i] = normalized;
+		hasNormalizedValue[i] = 1;
+	}
+	if( diagnosed )
+	{
+		return asSWITCH_DOMAIN_SEAL_DIAGNOSED;
+	}
+
+	// Commit only after the whole analysis succeeds. The selector conversion
+	// and every Case-domain wrapper are explicit AST facts; authored Case
+	// expressions remain their unique children.
+	const asCExpr* selectorExpr = context.GetExpr(selector);
+	if( primitiveDomain && selectorExpr != 0
+		&& selectorExpr->type != domain )
+	{
+		selector = sema.ActOnConversion(selector, domain,
+			selectorExpr->range.IsValid() ? selectorExpr->range : switchRange);
+	}
+	for( asUINT i = 0; i < cases.GetLength(); ++i )
+	{
+		if( !hasNormalizedValue[i] )
+		{
+			continue;
+		}
+		const asCStmt* const caseStmt = context.GetStmt(cases[i]);
+		const asCExpr* const authored = caseStmt != 0
+			? context.GetExpr(caseStmt->expr) : 0;
+		if( caseStmt == 0 || authored == 0 )
+		{
+			continue;
+		}
+		const asCSourceRange factRange = authored->range.IsValid()
+			? authored->range
+			: (caseStmt->range.IsValid() ? caseStmt->range : switchRange);
+		const asASTExprId fact = sema.ActOnConversion(
+			caseStmt->expr, domain, factRange);
+		context.SetLiteral(fact, "switch-case-domain");
+		context.SetLiteralBits(fact, normalizedByCase[i]);
+		context.SetStmtExpr(caseStmt->id, fact);
+	}
+	return asSWITCH_DOMAIN_SEAL_OK;
 }
 
 static bool SwitchHasInvalidEnumValueEdge(
@@ -1301,12 +2374,13 @@ static bool SwitchHasInvalidEnumValueEdge(
 			// implicit invalid-enum edge.
 			return false;
 		}
-		asQWORD value = 0;
-		if( !TryGetSwitchCaseConstant(context, caseStmt->expr, value) )
+		const asCExpr* const fact = context.GetExpr(caseStmt->expr);
+		if( fact == 0 || fact->kind != asAST_EXPR_CONVERSION
+			|| !fact->literal.Equals("switch-case-domain") )
 		{
 			return false;
 		}
-		caseValues.PushLast(value);
+		caseValues.PushLast(fact->literalBits);
 	}
 
 	for( asUINT i = 0; i < enumDecl->children.GetLength(); ++i )
@@ -1318,11 +2392,20 @@ static bool SwitchHasInvalidEnumValueEdge(
 		{
 			continue;
 		}
+		// Match the legacy compiler's exact, case-sensitive enum sentinel rule:
+		// MAX and names ending in _MAX describe the range and are not values that
+		// an exhaustive source switch must spell as cases.
+		if( valueDecl->name.Equals("MAX") || valueDecl->name.EndsWith("_MAX") )
+		{
+			continue;
+		}
 		bool covered = false;
+		const asQWORD normalizedEnumValue = static_cast<asQWORD>(
+			static_cast<asDWORD>(valueDecl->constantValue));
 		for( asUINT caseIndex = 0;
 			caseIndex < caseValues.GetLength(); ++caseIndex )
 		{
-			if( caseValues[caseIndex] == valueDecl->constantValue )
+			if( caseValues[caseIndex] == normalizedEnumValue )
 			{
 				covered = true;
 				break;
@@ -2662,8 +3745,8 @@ asASTStmtId asCSema::ActOnWhileStatementAction(
 	if( action.body.IsValid() )
 	{
 		context.AddStmtChild(control, action.body);
-		context.SetStmtSafePointRole(
-			action.body, asAST_SAFEPOINT_LOOP_ENTRY);
+		context.SetLoopBodySafePointRole(
+			control, asAST_SAFEPOINT_LOOP_ENTRY);
 	}
 	context.SetStmtSafePointRole(control, asAST_SAFEPOINT_LOOP_BACKEDGE);
 	if( ownsTop )
@@ -2788,8 +3871,8 @@ asASTStmtId asCSema::ActOnForStatementAction(
 	if( action.body.IsValid() )
 	{
 		context.AddStmtChild(control, action.body);
-		context.SetStmtSafePointRole(
-			action.body, asAST_SAFEPOINT_LOOP_ENTRY);
+		context.SetLoopBodySafePointRole(
+			control, asAST_SAFEPOINT_LOOP_ENTRY);
 	}
 	if( increment.IsValid() )
 	{
@@ -3055,8 +4138,31 @@ asASTStmtId asCSema::ActOnSwitchStatementAction(
 		}
 	}
 
+	asASTExprId selector = action.selector;
+	asCSourceRange domainDiagnosticRange;
+	const asESwitchDomainSealResult domainResult =
+		NormalizeSwitchComparisonDomain(
+			*this, context, selector, action.cases, range,
+			domainDiagnosticRange);
+	if( domainResult == asSWITCH_DOMAIN_SEAL_NON_INTEGRAL )
+	{
+		return fail("Switch expressions must be integral numbers",
+			domainDiagnosticRange);
+	}
+	if( domainResult == asSWITCH_DOMAIN_SEAL_DIAGNOSED )
+	{
+		// NormalizeSwitchComparisonDomain already published the complete ordered
+		// diagnostic set. Pop only the parser-control shell; do not add a synthetic
+		// terminal message or commit any partially normalized AST facts.
+		if( ownsTop )
+		{
+			PopControl();
+		}
+		return asASTStmtId();
+	}
+
 	context.SetStmtRange(control, range);
-	context.SetStmtExpr(control, action.selector);
+	context.SetStmtExpr(control, selector);
 	context.ClearStmtChildren(control);
 	for( asUINT i = 0; i < action.cases.GetLength(); ++i )
 	{

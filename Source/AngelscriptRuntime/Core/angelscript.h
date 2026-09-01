@@ -1275,6 +1275,10 @@ struct asSASTStmtView
 	asASTDeclId decl;
 	asEASTSafePointRole safePointRole;
 	asUINT childCount;
+	// Append-only V1 extension. For loop statements this is the Sema-authored
+	// role on the exact structural body edge; it does not replace the body
+	// statement's intrinsic safePointRole.
+	asEASTSafePointRole loopBodySafePointRole;
 };
 
 struct asSASTExprView

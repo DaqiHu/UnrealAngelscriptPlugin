@@ -9548,7 +9548,9 @@ namespace
 			// for each loop shape, but must not infer the role from stmt kind or
 			// silently publish a loop whose sealed role is missing/corrupt.
 			if( stmt == 0
-				|| stmt->safePointRole != asAST_SAFEPOINT_LOOP_BACKEDGE )
+				|| stmt->safePointRole != asAST_SAFEPOINT_LOOP_BACKEDGE
+				|| stmt->loopBodySafePointRole
+					!= asAST_SAFEPOINT_LOOP_ENTRY )
 			{
 				FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
 				return false;
@@ -9717,6 +9719,12 @@ namespace
 
 		void EmitSwitch(const asCStmt* stmt)
 		{
+			if( stmt->safePointRole != asAST_SAFEPOINT_STATEMENT
+				&& stmt->safePointRole != asAST_SAFEPOINT_SWITCH_INVALID_VALUE )
+			{
+				FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
+				return;
+			}
 			if( !stmt->expr.IsValid() )
 			{
 				FailAt(__LINE__, asNOT_SUPPORTED);
@@ -9756,13 +9764,64 @@ namespace
 				if( cs && cs->kind == asAST_STMT_CASE && !cs->expr.IsValid() )
 					defaultIndex = int(i);
 			}
+			const int invalidValue = defaultIndex < 0
+				&& stmt->safePointRole == asAST_SAFEPOINT_SWITCH_INVALID_VALUE
+				? nextLabel++ : -1;
 
 			for( asUINT i = 0; i < stmt->children.GetLength(); ++i )
 			{
 				const asCStmt* cs = context.GetStmt(stmt->children[i]);
 				if( cs == 0 || cs->kind != asAST_STMT_CASE || !cs->expr.IsValid() )
 					continue;
-				const int caseVal = EmitExpr(cs->expr);
+				int caseVal = 0;
+				if( selectorType.IsEnumType() )
+				{
+					// Enum Case values use the same authenticated constant firewall as
+					// primitive Cases while retaining the selector's nominal QualType.
+					// The authored expression is provenance only and must never become a
+					// dynamic Case comparison at runtime.
+					const asCExpr* const fact = context.GetExpr(cs->expr);
+					if( fact == 0
+						|| fact->kind != asAST_EXPR_CONVERSION
+						|| !fact->literal.Equals("switch-case-domain")
+						|| fact->children.GetLength() != 1
+						|| fact->type != selectorExpr->type
+						|| fact->literalBits != static_cast<asQWORD>(
+							static_cast<asDWORD>(fact->literalBits)) )
+					{
+						FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
+						PopLoop();
+						return;
+					}
+					caseVal = AllocTemporary(selectorType, 1);
+					// Enum expressions and Switch comparison operands live in a VM
+					// dword evaluation slot even when the enum's object/global storage
+					// uses one byte. Consume the authenticated 32-bit domain fact with
+					// SetV4 so negative values retain their normalized bit pattern.
+					bc.InstrSHORT_DW(asBC_SetV4, (short)caseVal,
+						static_cast<asDWORD>(fact->literalBits));
+				}
+				else
+				{
+					// Primitive Case comparison values are authenticated Sema facts.
+					// The authored expression is retained only as provenance beneath
+					// the wrapper and must never be re-evaluated by CodeGen.
+					const asCExpr* const fact = context.GetExpr(cs->expr);
+					if( fact == 0
+						|| fact->kind != asAST_EXPR_CONVERSION
+						|| !fact->literal.Equals("switch-case-domain")
+						|| fact->children.GetLength() != 1
+						|| fact->type != selectorExpr->type
+						|| fact->literalBits != static_cast<asQWORD>(
+							static_cast<asDWORD>(fact->literalBits)) )
+					{
+						FailAt(__LINE__, asAST_VERIFY_INVALID_CHILD);
+						PopLoop();
+						return;
+					}
+					caseVal = AllocTemporary(selectorType, 1);
+					SetConst(caseVal, selectorType, fact->literalBits);
+				}
 				if( !ok )
 				{
 					PopLoop();
@@ -9778,6 +9837,8 @@ namespace
 			}
 			if( defaultIndex >= 0 )
 				bc.InstrINT(asBC_JMP, bodyLabels[asUINT(defaultIndex)]);
+			else if( invalidValue >= 0 )
+				bc.InstrINT(asBC_JMP, invalidValue);
 			else
 				bc.InstrINT(asBC_JMP, end);
 
@@ -9796,6 +9857,15 @@ namespace
 						return;
 					}
 				}
+			}
+			if( invalidValue >= 0 )
+			{
+				// Normal fallthrough from the final Case must skip the synthetic
+				// unmatched-enum edge. Sema already proved and sealed the role;
+				// CodeGen only materializes that authenticated control edge.
+				bc.InstrINT(asBC_JMP, end);
+				bc.Label((short)invalidValue);
+				bc.InstrWORD(asBC_ThrowException, 0);
 			}
 			bc.Label((short)end);
 			PopLoop();

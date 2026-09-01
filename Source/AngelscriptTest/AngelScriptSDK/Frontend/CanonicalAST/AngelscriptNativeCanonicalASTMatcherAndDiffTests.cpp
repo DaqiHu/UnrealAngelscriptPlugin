@@ -30,6 +30,7 @@ struct FMatcherFixture
 	asASTStmtId Loop;
 	asASTStmtId Continue;
 	asASTStmtId ConversionStmt;
+	asASTExprId Literal;
 	asASTExprId Conversion;
 	asASTExprId Receiver;
 	asASTExprId Call;
@@ -45,6 +46,7 @@ FMatcherFixture BuildMatcherFixture(asCASTContext& Context, EMatcherFixtureDiffe
 	Fixture.Tu = Context.CreateTranslationUnit("MatcherFixture");
 	const asCQualType ScalarType = Context.InternPrimitive(
 		Difference == EMatcherFixtureDifference::Type ? ttUInt : ttInt, 0);
+	const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
 	Fixture.Dtor = Context.CreateDecl(asAST_DECL_DESTRUCTOR, Fixture.Tu, asCSourceRange(), "~T");
 	Context.SetStableKey(Fixture.Dtor, "T::~T()");
 	Fixture.Function = Context.CreateDecl(
@@ -62,9 +64,25 @@ FMatcherFixture BuildMatcherFixture(asCASTContext& Context, EMatcherFixtureDiffe
 	Fixture.Loop = Context.CreateStmt(
 		asAST_STMT_WHILE, Fixture.Function, Context.GetSourceManager().MakeRange(File, 10, 40));
 	Context.SetBody(Fixture.Function, Fixture.Loop);
+	const asASTExprId LoopCondition = Context.CreateExpr(
+		asAST_EXPR_BOOL_LITERAL, BoolType, asAST_VALUE_PRVALUE,
+		Context.GetSourceManager().MakeRange(File, 17, 21));
+	Context.SetLiteral(LoopCondition, "true");
+	Context.SetLiteralBits(LoopCondition, 1);
+	Context.SetStmtExpr(Fixture.Loop, LoopCondition);
+	Context.SetStmtSafePointRole(
+		Fixture.Loop, asAST_SAFEPOINT_LOOP_BACKEDGE);
+	const asASTStmtId LoopBody = Context.CreateStmt(
+		asAST_STMT_BLOCK, Fixture.Function,
+		Context.GetSourceManager().MakeRange(File, 23, 40));
+	Context.SetLoopBodySafePointRole(
+		Fixture.Loop, asAST_SAFEPOINT_LOOP_ENTRY);
+	Context.AddStmtChild(Fixture.Loop, LoopBody);
 	Fixture.Continue = Context.CreateStmt(
 		asAST_STMT_CONTINUE, Fixture.Function, Context.GetSourceManager().MakeRange(File, 29, 38));
-	Context.AddStmtChild(Fixture.Loop, Fixture.Continue);
+	Context.SetStmtSafePointRole(
+		Fixture.Continue, asAST_SAFEPOINT_TRANSFER);
+	Context.AddStmtChild(LoopBody, Fixture.Continue);
 	Context.SetTarget(Fixture.Continue, Fixture.Loop);
 
 	Fixture.ConversionStmt = Context.CreateStmt(
@@ -73,17 +91,18 @@ FMatcherFixture BuildMatcherFixture(asCASTContext& Context, EMatcherFixtureDiffe
 	{
 		Context.SetStmtSafePointRole(Fixture.ConversionStmt, asAST_SAFEPOINT_STATEMENT);
 	}
-	Context.AddStmtChild(Fixture.Loop, Fixture.ConversionStmt);
-	const asASTExprId Literal = Context.CreateExpr(
+	Context.AddStmtChild(LoopBody, Fixture.ConversionStmt);
+	Fixture.Literal = Context.CreateExpr(
 		asAST_EXPR_INTEGER_LITERAL, ScalarType, asAST_VALUE_PRVALUE, Context.GetSourceManager().MakeRange(File, 4, 5));
-	Context.SetLiteral(Literal, Difference == EMatcherFixtureDifference::Expr ? "2" : "1");
+	Context.SetLiteral(Fixture.Literal,
+		Difference == EMatcherFixtureDifference::Expr ? "2" : "1");
 	Fixture.Conversion = Context.CreateExpr(
 		asAST_EXPR_CONVERSION, ScalarType, asAST_VALUE_PRVALUE, Context.GetSourceManager().MakeRange(File, 4, 5));
-	Context.AddExprChild(Fixture.Conversion, Literal);
+	Context.AddExprChild(Fixture.Conversion, Fixture.Literal);
 	Context.SetStmtExpr(Fixture.ConversionStmt, Fixture.Conversion);
 
 	const asASTStmtId CleanupStmt = Context.CreateStmt(asAST_STMT_EXPR, Fixture.Function, asCSourceRange());
-	Context.AddStmtChild(Fixture.Loop, CleanupStmt);
+	Context.AddStmtChild(LoopBody, CleanupStmt);
 	const asASTExprId CleanupValue = Context.CreateExpr(asAST_EXPR_INTEGER_LITERAL, ScalarType, asAST_VALUE_PRVALUE, asCSourceRange());
 	Fixture.Cleanup = Context.CreateExpr(asAST_EXPR_CLEANUP, ScalarType, asAST_VALUE_PRVALUE, asCSourceRange());
 	Context.AddExprChild(Fixture.Cleanup, CleanupValue);
@@ -91,7 +110,7 @@ FMatcherFixture BuildMatcherFixture(asCASTContext& Context, EMatcherFixtureDiffe
 	Context.SetStmtExpr(CleanupStmt, Fixture.Cleanup);
 
 	const asASTStmtId CallStmt = Context.CreateStmt(asAST_STMT_EXPR, Fixture.Function, asCSourceRange());
-	Context.AddStmtChild(Fixture.Loop, CallStmt);
+	Context.AddStmtChild(LoopBody, CallStmt);
 	Fixture.Receiver = Context.CreateExpr(asAST_EXPR_DECL_REF, ScalarType, asAST_VALUE_LVALUE, asCSourceRange());
 	Context.SetResolvedDecl(Fixture.Receiver, Fixture.Function);
 	Fixture.Call = Context.CreateExpr(asAST_EXPR_CALL, ScalarType, asAST_VALUE_PRVALUE, asCSourceRange());
@@ -182,14 +201,20 @@ public:
 		ASSERT_THAT(IsTrue(Diff.Contains(TEXT("path=D1/decl-child[1]/D3.traits")), *Diff));
 
 		asCASTContext StmtDifferent;
-		BuildMatcherFixture(StmtDifferent, EMatcherFixtureDifference::Stmt);
+		const FMatcherFixture StmtFixture = BuildMatcherFixture(
+			StmtDifferent, EMatcherFixtureDifference::Stmt);
 		Diff = ShadowDiff(Left, StmtDifferent);
-		ASSERT_THAT(IsTrue(Diff.Contains(TEXT("S3.safePointRole")), *Diff));
+		const FString ExpectedStmtPath = FString::Printf(
+			TEXT("S%u.safePointRole"), StmtFixture.ConversionStmt.value);
+		ASSERT_THAT(IsTrue(Diff.Contains(ExpectedStmtPath), *Diff));
 
 		asCASTContext ExprDifferent;
-		BuildMatcherFixture(ExprDifferent, EMatcherFixtureDifference::Expr);
+		const FMatcherFixture ExprFixture = BuildMatcherFixture(
+			ExprDifferent, EMatcherFixtureDifference::Expr);
 		Diff = ShadowDiff(Left, ExprDifferent);
-		ASSERT_THAT(IsTrue(Diff.Contains(TEXT("E1.literal")), *Diff));
+		const FString ExpectedExprPath = FString::Printf(
+			TEXT("E%u.literal"), ExprFixture.Literal.value);
+		ASSERT_THAT(IsTrue(Diff.Contains(ExpectedExprPath), *Diff));
 		ASSERT_THAT(IsTrue(!Diff.Contains(TEXT("0x")) && !Diff.Contains(TEXT("EngineLocal"))));
 	}
 };

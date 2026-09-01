@@ -19,11 +19,16 @@ public:
 	asASTExprId expr;
 	asASTDeclId decl;
 	asEASTSafePointRole safePointRole;
+	// Sema-owned annotation on this loop's structural body edge. Keeping this
+	// distinct from the body node's intrinsic role preserves Transfer,
+	// Statement, Return, or a nested LoopBackedge for unbraced bodies.
+	asEASTSafePointRole loopBodySafePointRole;
 	asCArray<asASTStmtId> children;
 
 	asCStmt()
 		: kind(asAST_STMT_INVALID)
 		, safePointRole(asAST_SAFEPOINT_NONE)
+		, loopBodySafePointRole(asAST_SAFEPOINT_NONE)
 	{
 	}
 };

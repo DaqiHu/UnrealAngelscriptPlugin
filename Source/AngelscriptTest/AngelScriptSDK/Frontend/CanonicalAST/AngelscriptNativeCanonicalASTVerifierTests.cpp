@@ -77,6 +77,25 @@ static asASTDeclId CreateListFactory(
 	return Factory;
 }
 
+static int CreateSwitchCaseDomainFact(
+	asCASTContext& Context,
+	const asCQualType& DomainType,
+	const asCSourceRange& Range,
+	asASTExprId AuthoredValue,
+	asQWORD LiteralBits,
+	asASTExprId& OutFact)
+{
+	OutFact = Context.CreateExpr(
+		asAST_EXPR_CONVERSION, DomainType, asAST_VALUE_PRVALUE, Range);
+	int r = Context.SetLiteral(OutFact, "switch-case-domain");
+	if( r < 0 )
+		return r;
+	r = Context.SetLiteralBits(OutFact, LiteralBits);
+	if( r < 0 )
+		return r;
+	return Context.AddExprChild(OutFact, AuthoredValue);
+}
+
 static FAggregateLifetimeViewFixture BuildAggregateLifetimeViewFixture(
 	asCASTContext& Context)
 {
@@ -2528,6 +2547,67 @@ public:
 		ASSERT_THAT(IsTrue(Result.detail.Equals("stmt-multi-owner"), TEXT("detail token must be stmt-multi-owner")));
 	}
 
+	TEST_METHOD(RejectsDuplicateStructuralChildEdgeFromTheSameParent)
+	{
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"DuplicateBlockChildV");
+			const asASTStmtId Block = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Child = Context.CreateStmt(
+				asAST_STMT_EXPR, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Block, Child)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Block, Child)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerify(Context, Result),
+				TEXT("one Block cannot structurally execute the same statement identity twice")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("stmt-multi-owner")));
+			ASSERT_THAT(IsTrue(Result.offendingNode
+				== asSASTNodeRef::FromStmt(Child)));
+			ASSERT_THAT(AreEqual((int)asAST_EDGE_STMT_CHILD,
+				(int)Result.edgeRole));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromStmt(Block)));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"DuplicateSwitchCaseIdentityV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTExprId Selector = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId Value = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Switch = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId Case = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Switch, Selector)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Case, Value)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Case, Switch)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, Case)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, Case)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerify(Context, Result),
+				TEXT("one Switch cannot list the same Case identity twice")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("stmt-multi-owner")));
+			ASSERT_THAT(IsTrue(Result.offendingNode
+				== asSASTNodeRef::FromStmt(Case)));
+			ASSERT_THAT(AreEqual((int)asAST_EDGE_STMT_CHILD,
+				(int)Result.edgeRole));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromStmt(Switch)));
+		}
+	}
+
 	TEST_METHOD(RejectsStmtCycle)
 	{
 		asCASTContext Context;
@@ -3063,6 +3143,124 @@ public:
 			TEXT("detail token must be continue-skipped-nearer")));
 	}
 
+	TEST_METHOD(RejectsBlockWrappedTransferThatSkipsTheNearestLoop)
+	{
+		struct FCase
+		{
+			asEASTStmtKind Kind;
+			const char* Detail;
+		};
+		const FCase Cases[] = {
+			{ asAST_STMT_BREAK, "break-skipped-nearer" },
+			{ asAST_STMT_CONTINUE, "continue-skipped-nearer" },
+		};
+
+		for( asUINT CaseIndex = 0;
+			CaseIndex < sizeof(Cases) / sizeof(Cases[0]); ++CaseIndex )
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"BlockWrappedSkippedNearestV");
+			const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+			const asASTExprId OuterCondition = Context.CreateExpr(
+				asAST_EXPR_BOOL_LITERAL, BoolType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId InnerCondition = Context.CreateExpr(
+				asAST_EXPR_BOOL_LITERAL, BoolType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Outer = Context.CreateStmt(
+				asAST_STMT_WHILE, Tu, asCSourceRange());
+			const asASTStmtId Inner = Context.CreateStmt(
+				asAST_STMT_WHILE, Tu, asCSourceRange());
+			// Match Parser/Sema construction order: the contained transfer is
+			// interned before the Blocks that later become its parent chain.
+			const asASTStmtId Transfer = Context.CreateStmt(
+				Cases[CaseIndex].Kind, Tu, asCSourceRange());
+			const asASTStmtId InnerBody = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId OuterBody = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(OuterCondition, 1)));
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(InnerCondition, 1)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Outer, OuterCondition)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Inner, InnerCondition)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Outer, OuterBody)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(OuterBody, Inner)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Inner, InnerBody)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(InnerBody, Transfer)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Transfer, Outer),
+				TEXT("forged transfer skips the inner loop")));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Outer, asAST_SAFEPOINT_LOOP_BACKEDGE)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Inner, asAST_SAFEPOINT_LOOP_BACKEDGE)));
+			ASSERT_THAT(AreEqual(0, Context.SetLoopBodySafePointRole(
+				Outer, asAST_SAFEPOINT_LOOP_ENTRY)));
+			ASSERT_THAT(AreEqual(0, Context.SetLoopBodySafePointRole(
+				Inner, asAST_SAFEPOINT_LOOP_ENTRY)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Transfer, asAST_SAFEPOINT_TRANSFER)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+				asCASTVerify(Context, Result),
+				TEXT("nearest-target authentication must not depend on statement ID order")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals(Cases[CaseIndex].Detail),
+				TEXT("Block-wrapped skipped-nearer failures keep their transfer-specific token")));
+		}
+	}
+
+	TEST_METHOD(RejectsContinueTargetWrongKindAndNonAncestor)
+	{
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ContinueWrongKindV");
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_WHILE, Tu, asCSourceRange());
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Continue = Context.CreateStmt(
+				asAST_STMT_CONTINUE, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Body)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Body, Continue)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Continue, Body),
+				TEXT("forged Continue targets an ancestor Block")));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+				asCASTVerify(Context, Result),
+				TEXT("Continue targets only loops")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("continue-target")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ContinueNonAncestorV");
+			const asASTStmtId Root = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId LoopA = Context.CreateStmt(
+				asAST_STMT_WHILE, Tu, asCSourceRange());
+			const asASTStmtId LoopB = Context.CreateStmt(
+				asAST_STMT_FOR, Tu, asCSourceRange());
+			const asASTStmtId Continue = Context.CreateStmt(
+				asAST_STMT_CONTINUE, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Root, LoopA)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Root, LoopB)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(LoopA, Continue)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Continue, LoopB),
+				TEXT("forged Continue targets a sibling loop")));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+				asCASTVerify(Context, Result),
+				TEXT("Continue target must be an enclosing loop")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("continue-ancestor")));
+		}
+	}
+
 	TEST_METHOD(RejectsDuplicateCaseAndDefaultNotLast)
 	{
 		asCASTContext Dup;
@@ -3129,6 +3327,1139 @@ public:
 			TEXT("fallthrough target must be the next ordered case")));
 		ASSERT_THAT(IsTrue(Result.detail.Equals("fallthrough-target"),
 			TEXT("detail token must be fallthrough-target")));
+	}
+
+	TEST_METHOD(RejectsMissingBreakAndContinueTargetsBeforePublication)
+	{
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"MissingBreakTargetV");
+			const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+			const asASTExprId Condition = Context.CreateExpr(
+				asAST_EXPR_BOOL_LITERAL, BoolType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_WHILE, Tu, asCSourceRange());
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Break = Context.CreateStmt(
+				asAST_STMT_BREAK, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetLiteral(Condition, "true")));
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(Condition, 1)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Loop, Condition)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Body)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Body, Break)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Loop, asAST_SAFEPOINT_LOOP_BACKEDGE)));
+			ASSERT_THAT(AreEqual(0, Context.SetLoopBodySafePointRole(
+				Loop, asAST_SAFEPOINT_LOOP_ENTRY)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Break, asAST_SAFEPOINT_TRANSFER)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_OK,
+				asCASTVerify(Context, Result),
+				TEXT("an unsealed recovery graph may retain a targetless break")));
+			ASSERT_THAT(AreEqual(0, Context.Seal(),
+				TEXT("ordinary Seal must preserve the forged graph for publication diagnostics")));
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_DANGLING_ID,
+				asCASTVerifyPublication(Context, Result),
+				TEXT("a publishable break must carry its exact Sema-resolved target")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("break-target-missing"),
+				TEXT("missing break target must keep a stable detail token")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"MissingContinueTargetV");
+			const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+			const asASTExprId Condition = Context.CreateExpr(
+				asAST_EXPR_BOOL_LITERAL, BoolType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_WHILE, Tu, asCSourceRange());
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Continue = Context.CreateStmt(
+				asAST_STMT_CONTINUE, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetLiteral(Condition, "true")));
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(Condition, 1)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Loop, Condition)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Body)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Body, Continue)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Loop, asAST_SAFEPOINT_LOOP_BACKEDGE)));
+			ASSERT_THAT(AreEqual(0, Context.SetLoopBodySafePointRole(
+				Loop, asAST_SAFEPOINT_LOOP_ENTRY)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Continue, asAST_SAFEPOINT_TRANSFER)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_OK,
+				asCASTVerify(Context, Result),
+				TEXT("an unsealed recovery graph may retain a targetless continue")));
+			ASSERT_THAT(AreEqual(0, Context.Seal()));
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_DANGLING_ID,
+				asCASTVerifyPublication(Context, Result),
+				TEXT("a publishable continue must carry its exact Sema-resolved target")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("continue-target-missing"),
+				TEXT("missing continue target must keep a stable detail token")));
+		}
+	}
+
+	TEST_METHOD(RejectsMissingAndMismatchedCaseTargets)
+	{
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"MissingCaseTargetV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTExprId Selector = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId Value = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			asASTExprId ValueDomain;
+			const asASTStmtId Switch = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId Case = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(Selector, 0)));
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(Value, 1)));
+			ASSERT_THAT(AreEqual(0, CreateSwitchCaseDomainFact(
+				Context, IntType, asCSourceRange(), Value, 1, ValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Switch, Selector)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Case, ValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, Case)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Switch, asAST_SAFEPOINT_STATEMENT)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Case, asAST_SAFEPOINT_STATEMENT)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual(0, Context.Seal()));
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_DANGLING_ID,
+				asCASTVerifyPublication(Context, Result),
+				TEXT("every published Case must reference its exact enclosing Switch")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("case-target-missing"),
+				TEXT("missing Case target must keep a stable detail token")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"MismatchedCaseTargetV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTExprId SelectorA = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId SelectorB = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId Value = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			asASTExprId ValueDomain;
+			const asASTStmtId SwitchA = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId SwitchB = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId Case = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, CreateSwitchCaseDomainFact(
+				Context, IntType, asCSourceRange(), Value, 0, ValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(SwitchA, SelectorA)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(SwitchB, SelectorB)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Case, ValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(SwitchA, Case)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Case, SwitchB)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+				asCASTVerify(Context, Result),
+				TEXT("a Case target must be the structural parent Switch, not a sibling Switch")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("case-target"),
+				TEXT("mismatched Case target must keep a stable detail token")));
+		}
+	}
+
+	TEST_METHOD(RejectsMissingNonFinalFallthroughAndAcceptsUntargetedFinalFallthrough)
+	{
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"MissingFallthroughTargetV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTExprId Selector = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId FirstValue = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId SecondValue = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			asASTExprId FirstValueDomain;
+			asASTExprId SecondValueDomain;
+			const asASTStmtId Switch = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId FirstCase = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			const asASTStmtId SecondCase = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			const asASTStmtId Fallthrough = Context.CreateStmt(
+				asAST_STMT_FALLTHROUGH, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(FirstValue, 0)));
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(SecondValue, 1)));
+			ASSERT_THAT(AreEqual(0, CreateSwitchCaseDomainFact(
+				Context, IntType, asCSourceRange(), FirstValue, 0,
+				FirstValueDomain)));
+			ASSERT_THAT(AreEqual(0, CreateSwitchCaseDomainFact(
+				Context, IntType, asCSourceRange(), SecondValue, 1,
+				SecondValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Switch, Selector)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(
+				FirstCase, FirstValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(
+				SecondCase, SecondValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, FirstCase)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, SecondCase)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(FirstCase, Switch)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(SecondCase, Switch)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(
+				FirstCase, Fallthrough)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual(0, Context.Seal()));
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_DANGLING_ID,
+				asCASTVerifyPublication(Context, Result),
+				TEXT("a non-final explicit fallthrough must target the exact next Case")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals(
+				"fallthrough-target-missing"),
+				TEXT("missing fallthrough target must keep a stable detail token")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"LastCaseFallthroughV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTExprId Selector = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId Value = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			asASTExprId ValueDomain;
+			const asASTStmtId Switch = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId LastCase = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			const asASTStmtId Fallthrough = Context.CreateStmt(
+				asAST_STMT_FALLTHROUGH, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, CreateSwitchCaseDomainFact(
+				Context, IntType, asCSourceRange(), Value, 0, ValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Switch, Selector)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(
+				LastCase, ValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, LastCase)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(LastCase, Switch)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Switch, asAST_SAFEPOINT_STATEMENT)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				LastCase, asAST_SAFEPOINT_STATEMENT)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(
+				LastCase, Fallthrough)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual(0, Context.Seal()));
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_OK,
+				asCASTVerifyPublication(Context, Result),
+				TEXT("LEGACY-compatible final-Case fallthrough has no next target and must remain publishable")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ForgedLastCaseFallthroughTargetV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTExprId Selector = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId Value = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			asASTExprId ValueDomain;
+			const asASTStmtId Switch = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId LastCase = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			const asASTStmtId Fallthrough = Context.CreateStmt(
+				asAST_STMT_FALLTHROUGH, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, CreateSwitchCaseDomainFact(
+				Context, IntType, asCSourceRange(), Value, 0, ValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Switch, Selector)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(
+				LastCase, ValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, LastCase)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(LastCase, Switch)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(
+				LastCase, Fallthrough)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Fallthrough, Switch)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+				asCASTVerify(Context, Result),
+				TEXT("a final-Case fallthrough cannot carry a forged valid target")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("fallthrough-target")));
+			ASSERT_THAT(AreEqual((int)asAST_EDGE_STMT_TARGET,
+				(int)Result.edgeRole));
+			ASSERT_THAT(IsTrue(Result.offendingNode
+				== asSASTNodeRef::FromStmt(Fallthrough)));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromStmt(Switch)));
+		}
+	}
+
+	TEST_METHOD(RejectsFallthroughWithInvalidStructuralPlacement)
+	{
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"NestedFallthroughPlacementV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTExprId Selector = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId Value = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			asASTExprId ValueDomain;
+			const asASTStmtId Switch = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId Case = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			const asASTStmtId NestedBlock = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Fallthrough = Context.CreateStmt(
+				asAST_STMT_FALLTHROUGH, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, CreateSwitchCaseDomainFact(
+				Context, IntType, asCSourceRange(), Value, 0, ValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Switch, Selector)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Case, ValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, Case)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Case, Switch)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Case, NestedBlock)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(
+				NestedBlock, Fallthrough)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+				asCASTVerify(Context, Result),
+				TEXT("explicit fallthrough must be a direct Case child")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("fallthrough-case")));
+			ASSERT_THAT(AreEqual((int)asAST_EDGE_STMT_CHILD,
+				(int)Result.edgeRole));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromStmt(NestedBlock)));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"NonFinalFallthroughPlacementV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTExprId Selector = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId Value = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			asASTExprId ValueDomain;
+			const asASTStmtId Switch = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId Case = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			const asASTStmtId Fallthrough = Context.CreateStmt(
+				asAST_STMT_FALLTHROUGH, Tu, asCSourceRange());
+			const asASTStmtId After = Context.CreateStmt(
+				asAST_STMT_EXPR, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, CreateSwitchCaseDomainFact(
+				Context, IntType, asCSourceRange(), Value, 0, ValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Switch, Selector)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Case, ValueDomain)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, Case)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Case, Switch)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Case, Fallthrough)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Case, After)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerify(Context, Result),
+				TEXT("explicit fallthrough must be the final Case child")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals(
+				"fallthrough-position")));
+			ASSERT_THAT(AreEqual((int)asAST_EDGE_STMT_CHILD,
+				(int)Result.edgeRole));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromStmt(Case)));
+		}
+	}
+
+	TEST_METHOD(RejectsSwitchNonCaseChildrenAndNormalizedDuplicateValues)
+	{
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"SwitchWrongChildV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTExprId Selector = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Switch = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId NotCase = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Switch, Selector)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, NotCase)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+				asCASTVerify(Context, Result),
+				TEXT("Switch children are ordered Case nodes, not arbitrary statements")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("switch-child-kind"),
+				TEXT("wrong Switch child kind must keep a stable detail token")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"NormalizedDuplicateCaseV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asCQualType UIntType = Context.InternPrimitive(ttUInt, 0);
+			const asASTExprId Selector = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, UIntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId Decimal = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId HexLiteral = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId Hex = Context.CreateExpr(
+				asAST_EXPR_CONVERSION, UIntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId DecimalDomain = Context.CreateExpr(
+				asAST_EXPR_CONVERSION, UIntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId HexDomain = Context.CreateExpr(
+				asAST_EXPR_CONVERSION, UIntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Switch = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId DecimalCase = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			const asASTStmtId HexCase = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetLiteral(Decimal, "1")));
+			ASSERT_THAT(AreEqual(0, Context.SetLiteral(HexLiteral, "0x1")));
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(Decimal, 1)));
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(HexLiteral, 1)));
+			ASSERT_THAT(AreEqual(0, Context.AddExprChild(Hex, HexLiteral)));
+			ASSERT_THAT(AreEqual(0,
+				Context.SetLiteral(DecimalDomain, "switch-case-domain")));
+			ASSERT_THAT(AreEqual(0,
+				Context.SetLiteral(HexDomain, "switch-case-domain")));
+			ASSERT_THAT(AreEqual(0,
+				Context.SetLiteralBits(DecimalDomain, 1)));
+			ASSERT_THAT(AreEqual(0,
+				Context.SetLiteralBits(HexDomain, 1)));
+			ASSERT_THAT(AreEqual(0,
+				Context.AddExprChild(DecimalDomain, Decimal)));
+			ASSERT_THAT(AreEqual(0,
+				Context.AddExprChild(HexDomain, Hex)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Switch, Selector)));
+			ASSERT_THAT(AreEqual(0,
+				Context.SetStmtExpr(DecimalCase, DecimalDomain)));
+			ASSERT_THAT(AreEqual(0,
+				Context.SetStmtExpr(HexCase, HexDomain)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, DecimalCase)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, HexCase)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(DecimalCase, Switch)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(HexCase, Switch)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerify(Context, Result),
+				TEXT("duplicate Case values must be compared after conversion to the uint selector domain, not by exact authored AST type")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("duplicate-case"),
+				TEXT("normalized duplicate Case must keep a stable detail token")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"MissingCaseDomainFactV");
+			const asCQualType UIntType = Context.InternPrimitive(ttUInt, 0);
+			const asASTExprId Selector = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, UIntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId Authored = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, UIntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Switch = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId Case = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(Authored, 2)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Switch, Selector)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Case, Authored)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, Case)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Case, Switch)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerify(Context, Result),
+				TEXT("a primitive Case must carry Sema's explicit normalized-domain fact")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("case-domain-fact"),
+				TEXT("missing Case-domain fact must keep a stable detail token")));
+		}
+	}
+
+	TEST_METHOD(MalformedStructuredControlCannotSealOrPublish)
+	{
+		asCASTContext Context;
+		const asASTDeclId Tu = Context.CreateTranslationUnit(
+			"MalformedControlFirewallV");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTExprId Selector = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+			asCSourceRange());
+		const asASTStmtId Switch = Context.CreateStmt(
+			asAST_STMT_SWITCH, Tu, asCSourceRange());
+		const asASTStmtId NotCase = Context.CreateStmt(
+			asAST_STMT_BLOCK, Tu, asCSourceRange());
+		ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Switch, Selector)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, NotCase)));
+
+		asCString Before;
+		asCASTDump(Context, Before);
+		const asUINT DeclCount = Context.GetDeclCount();
+		const asUINT StmtCount = Context.GetStmtCount();
+		const asUINT ExprCount = Context.GetExprCount();
+
+		asSAstVerifyResult Result;
+		ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+			asCASTVerify(Context, Result),
+			TEXT("a Switch with a non-Case child is structurally malformed")));
+		ASSERT_THAT(IsTrue(Result.detail.Equals("switch-child-kind")));
+		ASSERT_THAT(IsTrue(
+			Result.offendingNode == asSASTNodeRef::FromStmt(Switch)));
+		ASSERT_THAT(AreEqual((int)asAST_EDGE_STMT_CHILD,
+			(int)Result.edgeRole));
+		ASSERT_THAT(IsTrue(
+			Result.relatedNode == asSASTNodeRef::FromStmt(NotCase)));
+
+		ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND, Context.Seal(),
+			TEXT("Seal must fail closed with the same structural category")));
+		ASSERT_THAT(IsFalse(Context.IsPublishable(),
+			TEXT("malformed structured control must never become publishable")));
+
+		asCString After;
+		asCASTDump(Context, After);
+		ASSERT_THAT(AreEqual(DeclCount, Context.GetDeclCount()));
+		ASSERT_THAT(AreEqual(StmtCount, Context.GetStmtCount()));
+		ASSERT_THAT(AreEqual(ExprCount, Context.GetExprCount()));
+		ASSERT_THAT(IsTrue(Before == After,
+			TEXT("failed control verification and Seal must be mutation free")));
+
+		ASSERT_THAT(AreEqual((int)asAST_VERIFY_UNSEALED_PUBLICATION,
+			asCASTVerifyPublication(Context, Result),
+			TEXT("publication must reject the still-unsealed malformed graph")));
+		ASSERT_THAT(IsTrue(Result.detail.Equals("unsealed-publication")));
+	}
+
+	TEST_METHOD(RejectsMalformedStructuredControlPhaseCounts)
+	{
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit("IfPhaseCountV");
+			const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+			const asASTExprId Condition = Context.CreateExpr(
+				asAST_EXPR_BOOL_LITERAL, BoolType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId If = Context.CreateStmt(
+				asAST_STMT_IF, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(If, Condition)));
+			for( int ChildIndex = 0; ChildIndex < 3; ++ChildIndex )
+			{
+				ASSERT_THAT(AreEqual(0, Context.AddStmtChild(If,
+					Context.CreateStmt(asAST_STMT_BLOCK, Tu, asCSourceRange()))));
+			}
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerify(Context, Result),
+				TEXT("If has exactly then and optional else phases")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("if-phase-count")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit("WhilePhaseCountV");
+			const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+			const asASTExprId Condition = Context.CreateExpr(
+				asAST_EXPR_BOOL_LITERAL, BoolType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_WHILE, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Loop, Condition)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop,
+				Context.CreateStmt(asAST_STMT_BLOCK, Tu, asCSourceRange()))));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop,
+				Context.CreateStmt(asAST_STMT_BLOCK, Tu, asCSourceRange()))));
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerify(Context, Result),
+				TEXT("While has exactly one body phase")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("while-phase-count")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"DoWhilePhaseCountV");
+			const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+			const asASTExprId Condition = Context.CreateExpr(
+				asAST_EXPR_BOOL_LITERAL, BoolType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_DO_WHILE, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Loop, Condition)));
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerify(Context, Result),
+				TEXT("DoWhile has exactly one body phase before its trailing condition")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("do-while-phase-count")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit("ForPhaseCountV");
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_FOR, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop,
+				Context.CreateStmt(asAST_STMT_BLOCK, Tu, asCSourceRange()))));
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerify(Context, Result),
+				TEXT("For must retain initializer and body, plus only an optional increment phase")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("for-phase-count")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ForIncrementKindV");
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_FOR, Tu, asCSourceRange());
+			const asASTStmtId Init = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId WrongIncrement = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Init)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Body)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(
+				Loop, WrongIncrement)));
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+				asCASTVerify(Context, Result),
+				TEXT("the optional For increment phase must be an ExprStmt")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("for-increment-kind")));
+			ASSERT_THAT(AreEqual((int)asAST_EDGE_STMT_CHILD,
+				(int)Result.edgeRole));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromStmt(WrongIncrement)));
+		}
+	}
+
+	TEST_METHOD(RejectsMalformedForAndForeachPhaseKinds)
+	{
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ForInitKindV");
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_FOR, Tu, asCSourceRange());
+			const asASTStmtId WrongInit = Context.CreateStmt(
+				asAST_STMT_BREAK, Tu, asCSourceRange());
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(WrongInit, Loop)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, WrongInit)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Body)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+				asCASTVerify(Context, Result),
+				TEXT("For initializer must be a Block or ExprStmt phase")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("for-init-kind")));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromStmt(WrongInit)));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ForeachInitKindV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_FOREACH, Tu, asCSourceRange());
+			const asASTStmtId WrongInit = Context.CreateStmt(
+				asAST_STMT_EXPR, Tu, asCSourceRange());
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Increment = Context.CreateStmt(
+				asAST_STMT_EXPR, Tu, asCSourceRange());
+			const asASTExprId InitExpr = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId IncrementExpr = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(InitExpr, 0)));
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(IncrementExpr, 1)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(WrongInit, InitExpr)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Increment, IncrementExpr)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, WrongInit)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Body)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Increment)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+				asCASTVerify(Context, Result),
+				TEXT("Foreach initializer must be its canonical Block phase")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("foreach-init-kind")));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromStmt(WrongInit)));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ForeachBodyKindV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_FOREACH, Tu, asCSourceRange());
+			const asASTStmtId Init = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId WrongBody = Context.CreateStmt(
+				asAST_STMT_EXPR, Tu, asCSourceRange());
+			const asASTStmtId Increment = Context.CreateStmt(
+				asAST_STMT_EXPR, Tu, asCSourceRange());
+			const asASTExprId BodyExpr = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId IncrementExpr = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(BodyExpr, 0)));
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(IncrementExpr, 1)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(WrongBody, BodyExpr)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Increment, IncrementExpr)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Init)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, WrongBody)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Increment)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+				asCASTVerify(Context, Result),
+				TEXT("Foreach authored body must remain its canonical Block phase")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("foreach-body-kind")));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromStmt(WrongBody)));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ForeachIncrementKindV");
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_FOREACH, Tu, asCSourceRange());
+			const asASTStmtId Init = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId WrongIncrement = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Init)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Body)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, WrongIncrement)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_WRONG_KIND,
+				asCASTVerify(Context, Result),
+				TEXT("Foreach increment must be its canonical ExprStmt phase")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("foreach-increment-kind")));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromStmt(WrongIncrement)));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ForIncrementExprV");
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_FOR, Tu, asCSourceRange());
+			const asASTStmtId Init = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Increment = Context.CreateStmt(
+				asAST_STMT_EXPR, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Init)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Body)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Increment)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_DANGLING_ID,
+				asCASTVerify(Context, Result),
+				TEXT("a present For increment phase requires its exact Expr")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("for-increment-expr")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ForeachIncrementExprV");
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_FOREACH, Tu, asCSourceRange());
+			const asASTStmtId Init = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Increment = Context.CreateStmt(
+				asAST_STMT_EXPR, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Init)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Body)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Increment)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_DANGLING_ID,
+				asCASTVerify(Context, Result),
+				TEXT("the canonical Foreach increment phase requires its exact Expr")));
+			ASSERT_THAT(IsTrue(
+				Result.detail.Equals("foreach-increment-expr")));
+		}
+	}
+
+	TEST_METHOD(RejectsStructuredTransferPayloads)
+	{
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"BreakExprPayloadV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_WHILE, Tu, asCSourceRange());
+			const asASTStmtId Break = Context.CreateStmt(
+				asAST_STMT_BREAK, Tu, asCSourceRange());
+			const asASTExprId Payload = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Break)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Break, Loop)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Break, Payload)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerify(Context, Result),
+				TEXT("Break must be an expression-free transfer leaf")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("transfer-expr")));
+			ASSERT_THAT(IsTrue(Result.offendingNode
+				== asSASTNodeRef::FromStmt(Break)));
+			ASSERT_THAT(AreEqual((int)asAST_EDGE_STMT_EXPR,
+				(int)Result.edgeRole));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromExpr(Payload)));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ContinueDeclPayloadV");
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_FOR, Tu, asCSourceRange());
+			const asASTStmtId Init = Context.CreateStmt(
+				asAST_STMT_EXPR, Tu, asCSourceRange());
+			const asASTStmtId Continue = Context.CreateStmt(
+				asAST_STMT_CONTINUE, Tu, asCSourceRange());
+			const asASTDeclId Payload = Context.CreateDecl(
+				asAST_DECL_VAR, Tu, asCSourceRange(), "Payload");
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Init)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Continue)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Continue, Loop)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtDecl(Continue, Payload)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerify(Context, Result),
+				TEXT("Continue must be a declaration-free transfer leaf")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("transfer-decl")));
+			ASSERT_THAT(IsTrue(Result.offendingNode
+				== asSASTNodeRef::FromStmt(Continue)));
+			ASSERT_THAT(AreEqual((int)asAST_EDGE_STMT_DECL,
+				(int)Result.edgeRole));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromDecl(Payload)));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"FallthroughChildPayloadV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTExprId FirstValue = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTExprId SecondValue = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Switch = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId FirstCase = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			const asASTStmtId SecondCase = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			const asASTStmtId Fallthrough = Context.CreateStmt(
+				asAST_STMT_FALLTHROUGH, Tu, asCSourceRange());
+			const asASTStmtId Payload = Context.CreateStmt(
+				asAST_STMT_EXPR, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(FirstValue, 0)));
+			ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(SecondValue, 1)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(FirstCase, FirstValue)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(SecondCase, SecondValue)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, FirstCase)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, SecondCase)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(FirstCase, Switch)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(SecondCase, Switch)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(
+				FirstCase, Fallthrough)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(
+				Fallthrough, Payload)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(
+				Fallthrough, SecondCase)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerify(Context, Result),
+				TEXT("Fallthrough must not own executable structural children")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("transfer-child")));
+			ASSERT_THAT(IsTrue(Result.offendingNode
+				== asSASTNodeRef::FromStmt(Fallthrough)));
+			ASSERT_THAT(AreEqual((int)asAST_EDGE_STMT_CHILD,
+				(int)Result.edgeRole));
+			ASSERT_THAT(IsTrue(Result.relatedNode
+				== asSASTNodeRef::FromStmt(Payload)));
+		}
+	}
+
+	TEST_METHOD(RejectsMissingControlConditionsBeforePublication)
+	{
+		struct FCase
+		{
+			asEASTStmtKind Kind;
+			const char* Detail;
+		};
+		const FCase Cases[] = {
+			{ asAST_STMT_IF, "if-condition" },
+			{ asAST_STMT_WHILE, "while-condition" },
+			{ asAST_STMT_DO_WHILE, "do-while-condition" },
+			{ asAST_STMT_SWITCH, "switch-condition" },
+		};
+
+		for( asUINT CaseIndex = 0;
+			CaseIndex < sizeof(Cases) / sizeof(Cases[0]); ++CaseIndex )
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"MissingControlConditionV");
+			const asASTStmtId Control = Context.CreateStmt(
+				Cases[CaseIndex].Kind, Tu, asCSourceRange());
+			const asEASTStmtKind BodyKind =
+				Cases[CaseIndex].Kind == asAST_STMT_SWITCH
+					? asAST_STMT_CASE
+					: asAST_STMT_BLOCK;
+			const asASTStmtId Body = Context.CreateStmt(
+				BodyKind, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Control, Body)));
+			if( Cases[CaseIndex].Kind == asAST_STMT_SWITCH )
+			{
+				ASSERT_THAT(AreEqual(0, Context.SetTarget(Body, Control)));
+				ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+					Control, asAST_SAFEPOINT_STATEMENT)));
+				ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+					Body, asAST_SAFEPOINT_STATEMENT)));
+			}
+			else if( Cases[CaseIndex].Kind == asAST_STMT_IF )
+			{
+				ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+					Control, asAST_SAFEPOINT_STATEMENT)));
+			}
+			else
+			{
+				ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+					Control, asAST_SAFEPOINT_LOOP_BACKEDGE)));
+				ASSERT_THAT(AreEqual(0, Context.SetLoopBodySafePointRole(
+					Control, asAST_SAFEPOINT_LOOP_ENTRY)));
+			}
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual(0, Context.Seal()));
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_DANGLING_ID,
+				asCASTVerifyPublication(Context, Result),
+				TEXT("a published conditional control must retain its exact typed condition")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals(Cases[CaseIndex].Detail),
+				TEXT("missing condition must keep its kind-specific detail token")));
+		}
+	}
+
+	TEST_METHOD(RejectsForgedStructuredControlSafePointRolesBeforePublication)
+	{
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ForgedLoopSafePointV");
+			const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+			const asASTExprId Condition = Context.CreateExpr(
+				asAST_EXPR_BOOL_LITERAL, BoolType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_WHILE, Tu, asCSourceRange());
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Loop, Condition)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Body)));
+			ASSERT_THAT(AreEqual(0, Context.SetLoopBodySafePointRole(
+				Loop, asAST_SAFEPOINT_LOOP_ENTRY)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Loop, asAST_SAFEPOINT_STATEMENT)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual(0, Context.Seal()));
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerifyPublication(Context, Result),
+				TEXT("published loops require the exact LoopBackedge role")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("loop-safepoint")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ForgedTransferSafePointV");
+			const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+			const asASTExprId Condition = Context.CreateExpr(
+				asAST_EXPR_BOOL_LITERAL, BoolType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_WHILE, Tu, asCSourceRange());
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			const asASTStmtId Break = Context.CreateStmt(
+				asAST_STMT_BREAK, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Loop, Condition)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Body)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Body, Break)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Break, Loop)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Loop, asAST_SAFEPOINT_LOOP_BACKEDGE)));
+			ASSERT_THAT(AreEqual(0, Context.SetLoopBodySafePointRole(
+				Loop, asAST_SAFEPOINT_LOOP_ENTRY)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Break, asAST_SAFEPOINT_RETURN)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual(0, Context.Seal()));
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerifyPublication(Context, Result),
+				TEXT("published Break/Continue statements require the Transfer role")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("transfer-safepoint")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"MissingLoopBodyEdgeSafePointV");
+			const asCQualType BoolType = Context.InternPrimitive(ttBool, 0);
+			const asASTExprId Condition = Context.CreateExpr(
+				asAST_EXPR_BOOL_LITERAL, BoolType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Loop = Context.CreateStmt(
+				asAST_STMT_WHILE, Tu, asCSourceRange());
+			const asASTStmtId Body = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Loop, Condition)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Loop, Body)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Loop, asAST_SAFEPOINT_LOOP_BACKEDGE)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual(0, Context.Seal()));
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerifyPublication(Context, Result),
+				TEXT("published loops require LoopEntry on the exact body edge")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("loop-body-safepoint")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ForgedNonLoopBodyEdgeSafePointV");
+			const asASTStmtId Block = Context.CreateStmt(
+				asAST_STMT_BLOCK, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetLoopBodySafePointRole(
+				Block, asAST_SAFEPOINT_LOOP_ENTRY)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual(0, Context.Seal()));
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerifyPublication(Context, Result),
+				TEXT("only loop statements may carry a body-edge safe point")));
+			ASSERT_THAT(IsTrue(
+				Result.detail.Equals("non-loop-body-safepoint")));
+		}
+
+		{
+			asCASTContext Context;
+			const asASTDeclId Tu = Context.CreateTranslationUnit(
+				"ForgedSwitchCaseSafePointV");
+			const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+			const asASTExprId Selector = Context.CreateExpr(
+				asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+				asCSourceRange());
+			const asASTStmtId Switch = Context.CreateStmt(
+				asAST_STMT_SWITCH, Tu, asCSourceRange());
+			const asASTStmtId Case = Context.CreateStmt(
+				asAST_STMT_CASE, Tu, asCSourceRange());
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Switch, Selector)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Switch, Case)));
+			ASSERT_THAT(AreEqual(0, Context.SetTarget(Case, Switch)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Switch, asAST_SAFEPOINT_STATEMENT)));
+			ASSERT_THAT(AreEqual(0, Context.SetStmtSafePointRole(
+				Case, asAST_SAFEPOINT_TRANSFER)));
+
+			asSAstVerifyResult Result;
+			ASSERT_THAT(AreEqual(0, Context.Seal()));
+			ASSERT_THAT(AreEqual((int)asAST_VERIFY_INVALID_CHILD,
+				asCASTVerifyPublication(Context, Result),
+				TEXT("published Case nodes require their authored Statement role")));
+			ASSERT_THAT(IsTrue(Result.detail.Equals("case-safepoint")));
+		}
 	}
 
 	TEST_METHOD(RejectsSealedPublicationCallWithoutResolvedDecl)

@@ -224,7 +224,7 @@ public:
 
 		FSnapshotFingerprint Baseline;
 		ASSERT_THAT(IsTrue(CaptureFingerprint(*Context, Baseline),
-			TEXT("publishable import snapshot must encode as Sidecar V12")));
+			TEXT("publishable import snapshot must encode as Sidecar V13")));
 		auto AssertUnchanged = [this, Context, &Baseline](const TCHAR* Phase)
 		{
 			FSnapshotFingerprint Current;

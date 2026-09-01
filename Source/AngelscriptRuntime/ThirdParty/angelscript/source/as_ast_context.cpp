@@ -1176,6 +1176,23 @@ int asCASTContext::SetStmtSafePointRole(asASTStmtId id, asEASTSafePointRole role
 	return asAST_VERIFY_OK;
 }
 
+int asCASTContext::SetLoopBodySafePointRole(
+	asASTStmtId id,
+	asEASTSafePointRole role)
+{
+	if( RejectPostSealMutation() != asAST_VERIFY_OK )
+	{
+		return asAST_VERIFY_POST_SEAL_MUTATION;
+	}
+	asCStmt* stmt = MutableStmt(id);
+	if( stmt == 0 )
+	{
+		return asAST_VERIFY_DANGLING_ID;
+	}
+	stmt->loopBodySafePointRole = role;
+	return asAST_VERIFY_OK;
+}
+
 int asCASTContext::SetExprSafePointRole(asASTExprId id, asEASTSafePointRole role)
 {
 	if( RejectPostSealMutation() != asAST_VERIFY_OK )

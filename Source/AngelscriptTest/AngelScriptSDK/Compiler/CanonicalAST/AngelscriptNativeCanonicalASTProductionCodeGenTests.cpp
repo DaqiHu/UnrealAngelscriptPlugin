@@ -43,6 +43,15 @@ struct FProdWorldContextHost
 
 static FProdWorldContextHost GProdWorldContextHost;
 static int32 GProdWorldContextInjectCount = 0;
+static int32 GProdSwitchDomainObserved = 0;
+
+static void ProdObserveSwitchDomainGeneric(asIScriptGeneric* Generic)
+{
+	if (Generic != nullptr)
+	{
+		GProdSwitchDomainObserved = static_cast<int32>(Generic->GetArgDWord(0));
+	}
+}
 
 static void ProdInjectWorldContextGeneric(asIScriptGeneric* Generic)
 {
@@ -1636,6 +1645,530 @@ public:
 				"int PreparedEntry()", Value)
 			&& Value == 42,
 			TEXT("the prepared Runtime shell must execute its canonical body")));
+	}
+
+	TEST_METHOD(SwitchDispatchConsumesAuthenticatedDomainFactNotAuthoredChild)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		GProdSwitchDomainObserved = 0;
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterGlobalFunction(
+			"void ObserveSwitchDomain(int)",
+			asFUNCTION(ProdObserveSwitchDomainGeneric),
+			asCALL_GENERIC) > 0));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalSwitchDomainAuthority");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			void Entry()
+			{
+				switch (9)
+				{
+				case 7:
+					ObserveSwitchDomain(70);
+					break;
+				default:
+					ObserveSwitchDomain(90);
+					break;
+				}
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"PreparedCanonicalSwitchDomainAuthority.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("the switch-domain authority fixture must reach the prepared Runtime shell")));
+		asCASTContext* const BuildingContext = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(BuildingContext));
+		if (BuildingContext == nullptr)
+		{
+			return;
+		}
+
+		const asCStmt* NonDefaultCase = nullptr;
+		const asCExpr* DomainFact = nullptr;
+		const asCExpr* AuthoredChild = nullptr;
+		for (asUINT StmtIndex = 1;
+			StmtIndex <= BuildingContext->GetStmtCount(); ++StmtIndex)
+		{
+			const asCStmt* const Candidate =
+				BuildingContext->GetStmt(asASTStmtId(StmtIndex));
+			if (Candidate == nullptr
+				|| Candidate->kind != asAST_STMT_CASE
+				|| !Candidate->expr.IsValid())
+			{
+				continue;
+			}
+			ASSERT_THAT(IsNull(NonDefaultCase,
+				TEXT("the authority fixture must contain one non-default Case")));
+			NonDefaultCase = Candidate;
+			DomainFact = BuildingContext->GetExpr(Candidate->expr);
+			AuthoredChild = DomainFact != nullptr
+				&& DomainFact->children.GetLength() == 1
+				? BuildingContext->GetExpr(DomainFact->children[0]) : nullptr;
+		}
+		ASSERT_THAT(IsTrue(NonDefaultCase != nullptr
+			&& DomainFact != nullptr
+			&& DomainFact->kind == asAST_EXPR_CONVERSION
+			&& DomainFact->literal == "switch-case-domain"
+			&& DomainFact->literalBits == 7
+			&& AuthoredChild != nullptr
+			&& AuthoredChild->kind == asAST_EXPR_INTEGER_LITERAL
+			&& AuthoredChild->literalBits == 7,
+			TEXT("Sema must publish one normalized Case fact over the authored literal")));
+		if (DomainFact == nullptr || AuthoredChild == nullptr)
+		{
+			return;
+		}
+
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK,
+			BuildingContext->SetLiteralBits(DomainFact->id, 9),
+			TEXT("the pre-Seal fixture may forge only the authenticated domain fact")));
+		ASSERT_THAT(IsTrue(DomainFact->literalBits == 9
+			&& AuthoredChild->literalBits == 7,
+			TEXT("the forged fact and authored provenance must intentionally disagree")));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST(),
+			TEXT("the verifier authenticates the sealed fact without re-evaluating its authored child")));
+
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		asCBytecodeCodeGen CodeGen;
+		const int CodeGenResult =
+			CodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, CodeGenResult,
+			*FString::Printf(
+				TEXT("prepared switch-domain CodeGen must succeed: result=%d line=%d detail=%s"),
+				CodeGenResult,
+				CodeGen.GetLastFailLine(),
+				UTF8_TO_TCHAR(CodeGen.GetFailureDetail().AddressOf()
+					? CodeGen.GetFailureDetail().AddressOf() : ""))));
+		ASSERT_THAT(AreEqual(asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Module->GetLastBytecodePublisher()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Module->GetLastLegacyCompilerInvocationCount()));
+
+		FString Exception;
+		const int ExecuteStatus =
+			AngelscriptNativeTestSupport::CanonicalExecuteStatus(
+				Engine.Get(), Module, "void Entry()", Exception);
+		ASSERT_THAT(IsTrue(
+			ExecuteStatus == asEXECUTION_FINISHED
+			&& GProdSwitchDomainObserved == 70,
+			*FString::Printf(TEXT(
+				"Switch dispatch must consume fact=9 rather than authored child=7; "
+				"status=%d observed=%d exception=%s"),
+				ExecuteStatus,
+				GProdSwitchDomainObserved,
+				*Exception)));
+	}
+
+	TEST_METHOD(EnumSwitchDispatchConsumesAuthenticatedNominalDomainFactNotAuthoredChild)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalEnumSwitchDomainAuthority");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			enum ESwitchDomain
+			{
+				Authored = 7,
+				Selected = -1
+			}
+
+			int Entry()
+			{
+				switch (ESwitchDomain::Selected)
+				{
+				case ESwitchDomain::Authored:
+					return 70;
+				default:
+					return 90;
+				}
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"PreparedCanonicalEnumSwitchDomainAuthority.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("the enum switch-domain authority fixture must reach the prepared Runtime shell")));
+		asCASTContext* const BuildingContext = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(BuildingContext));
+		if (BuildingContext == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* EnumDecl = nullptr;
+		const asCDecl* AuthoredEnumerator = nullptr;
+		for (asUINT DeclIndex = 1;
+			DeclIndex <= BuildingContext->GetDeclCount(); ++DeclIndex)
+		{
+			const asCDecl* const Candidate =
+				BuildingContext->GetDecl(asASTDeclId(DeclIndex));
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_DECL_ENUM
+				&& Candidate->name.Equals("ESwitchDomain"))
+			{
+				EnumDecl = Candidate;
+			}
+			const asCDecl* const Owner = Candidate != nullptr
+				? BuildingContext->GetDecl(Candidate->parent) : nullptr;
+			if (Candidate != nullptr
+				&& Candidate->kind == asAST_DECL_VAR
+				&& Candidate->name.Equals("Authored")
+				&& Candidate->hasConstantValue
+				&& Candidate->constantValue == 7
+				&& Owner != nullptr
+				&& Owner->kind == asAST_DECL_ENUM
+				&& Owner->name.Equals("ESwitchDomain"))
+			{
+				AuthoredEnumerator = Candidate;
+			}
+		}
+
+		const asCStmt* Switch = nullptr;
+		const asCStmt* NonDefaultCase = nullptr;
+		int32 NonDefaultCaseCount = 0;
+		int32 DefaultCaseCount = 0;
+		for (asUINT StmtIndex = 1;
+			StmtIndex <= BuildingContext->GetStmtCount(); ++StmtIndex)
+		{
+			const asCStmt* const Candidate =
+				BuildingContext->GetStmt(asASTStmtId(StmtIndex));
+			if (Candidate == nullptr)
+			{
+				continue;
+			}
+			if (Candidate->kind == asAST_STMT_SWITCH)
+			{
+				ASSERT_THAT(IsNull(Switch,
+					TEXT("the authority fixture must contain exactly one switch")));
+				Switch = Candidate;
+			}
+			else if (Candidate->kind == asAST_STMT_CASE)
+			{
+				if (Candidate->expr.IsValid())
+				{
+					NonDefaultCase = Candidate;
+					++NonDefaultCaseCount;
+				}
+				else
+				{
+					++DefaultCaseCount;
+				}
+			}
+		}
+
+		const asCExpr* const Selector = Switch != nullptr
+			&& Switch->expr.IsValid()
+			? BuildingContext->GetExpr(Switch->expr) : nullptr;
+		const asCExpr* const DomainFact = NonDefaultCase != nullptr
+			&& NonDefaultCase->expr.IsValid()
+			? BuildingContext->GetExpr(NonDefaultCase->expr) : nullptr;
+		const asCExpr* const AuthoredChild = DomainFact != nullptr
+			&& DomainFact->children.GetLength() == 1
+			? BuildingContext->GetExpr(DomainFact->children[0]) : nullptr;
+		const asCType* const SelectorType = Selector != nullptr
+			? BuildingContext->GetType(Selector->type.type) : nullptr;
+
+		ASSERT_THAT(IsTrue(
+			EnumDecl != nullptr
+			&& AuthoredEnumerator != nullptr
+			&& Switch != nullptr
+			&& NonDefaultCaseCount == 1
+			&& DefaultCaseCount == 1
+			&& Selector != nullptr
+			&& SelectorType != nullptr
+			&& SelectorType->kind == asAST_TYPE_ENUM
+			&& SelectorType->stableKey == EnumDecl->stableKey
+			&& DomainFact != nullptr
+			&& DomainFact->kind == asAST_EXPR_CONVERSION
+			&& DomainFact->literal.Equals("switch-case-domain")
+			&& DomainFact->type == Selector->type
+			&& DomainFact->literalBits == 7
+			&& AuthoredChild != nullptr
+			&& AuthoredChild->kind == asAST_EXPR_DECL_REF
+			&& AuthoredChild->resolvedDecl == AuthoredEnumerator->id,
+			TEXT("Sema must publish one nominal enum-domain fact over the exact authored enumerator provenance")));
+		if (DomainFact == nullptr || AuthoredChild == nullptr)
+		{
+			return;
+		}
+
+		const asQWORD SelectedDomainBits =
+			static_cast<asQWORD>(static_cast<asDWORD>(-1));
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK,
+			BuildingContext->SetLiteralBits(
+				DomainFact->id, SelectedDomainBits),
+			TEXT("the pre-Seal fixture may forge only the authenticated enum domain fact")));
+		ASSERT_THAT(IsTrue(
+			DomainFact->literalBits == SelectedDomainBits
+			&& AuthoredChild->resolvedDecl == AuthoredEnumerator->id
+			&& AuthoredEnumerator->constantValue == 7,
+			TEXT("the authenticated fact and authored enumerator provenance must intentionally disagree")));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST(),
+			TEXT("the verifier authenticates the nominal enum fact without re-evaluating authored provenance")));
+
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		asCBytecodeCodeGen CodeGen;
+		const int CodeGenResult =
+			CodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, CodeGenResult,
+			*FString::Printf(TEXT(
+				"prepared enum switch-domain CodeGen must succeed: "
+				"result=%d line=%d detail=%s"),
+				CodeGenResult,
+				CodeGen.GetLastFailLine(),
+				UTF8_TO_TCHAR(CodeGen.GetFailureDetail().AddressOf()
+					? CodeGen.GetFailureDetail().AddressOf() : ""))));
+		ASSERT_THAT(AreEqual(asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Module->GetLastBytecodePublisher()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Module->GetLastLegacyCompilerInvocationCount()));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(CanonicalExecuteInt(
+			*TestRunner, ScriptEngine, Module, "int Entry()", Value)
+			&& Value == 70,
+			*FString::Printf(TEXT(
+				"enum Switch dispatch must consume fact=-1 rather than "
+				"authored enumerator=7; value=%d"), Value)));
+	}
+
+	TEST_METHOD(PreparedExhaustiveScriptEnumSwitchRaisesVmExceptionForInvalidRawValue)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalSwitchInvalidValue");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			enum ESwitchInvalidValue
+			{
+				First = 1,
+				Second = 2,
+				Negative = -1
+			}
+
+			int Entry(ESwitchInvalidValue Value)
+			{
+				switch (Value)
+				{
+				case ESwitchInvalidValue::First:
+					return 10;
+				case ESwitchInvalidValue::Second:
+					return 20;
+				case ESwitchInvalidValue::Negative:
+					return 30;
+				}
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"PreparedCanonicalSwitchInvalidValue.as",
+			Source.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("the invalid-enum switch fixture must reach the prepared Runtime shell")));
+		asCASTContext* const BuildingContext = Builder.canonicalAST;
+		ASSERT_THAT(IsNotNull(BuildingContext));
+		if (BuildingContext == nullptr)
+		{
+			return;
+		}
+
+		const asCStmt* Switch = nullptr;
+		int32 NonDefaultCaseCount = 0;
+		int32 DefaultCaseCount = 0;
+		bool bCasesUseAuthenticatedDomainFacts = true;
+		for (asUINT StmtIndex = 1;
+			StmtIndex <= BuildingContext->GetStmtCount(); ++StmtIndex)
+		{
+			const asCStmt* const Candidate =
+				BuildingContext->GetStmt(asASTStmtId(StmtIndex));
+			if (Candidate == nullptr)
+			{
+				continue;
+			}
+			if (Candidate->kind == asAST_STMT_SWITCH)
+			{
+				ASSERT_THAT(IsNull(Switch,
+					TEXT("the invalid-enum fixture must contain exactly one switch")));
+				Switch = Candidate;
+			}
+			else if (Candidate->kind == asAST_STMT_CASE)
+			{
+				if (!Candidate->expr.IsValid())
+				{
+					++DefaultCaseCount;
+					continue;
+				}
+				++NonDefaultCaseCount;
+				const asCExpr* const DomainFact =
+					BuildingContext->GetExpr(Candidate->expr);
+				bCasesUseAuthenticatedDomainFacts =
+					bCasesUseAuthenticatedDomainFacts
+					&& DomainFact != nullptr
+					&& DomainFact->kind == asAST_EXPR_CONVERSION
+					&& DomainFact->literal.Equals("switch-case-domain");
+			}
+		}
+		ASSERT_THAT(IsTrue(
+			Switch != nullptr
+			&& Switch->safePointRole
+				== asAST_SAFEPOINT_SWITCH_INVALID_VALUE
+			&& NonDefaultCaseCount == 3
+			&& DefaultCaseCount == 0
+			&& bCasesUseAuthenticatedDomainFacts,
+			TEXT("Sema must seal the exhaustive script-enum invalid-value edge over three authenticated cases")));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST(),
+			TEXT("the verifier must authenticate the exhaustive switch role")));
+
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		asCBytecodeCodeGen CodeGen;
+		const int CodeGenResult =
+			CodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, CodeGenResult,
+			*FString::Printf(TEXT(
+				"prepared invalid-enum switch CodeGen must succeed: "
+				"result=%d line=%d detail=%s"),
+				CodeGenResult,
+				CodeGen.GetLastFailLine(),
+				UTF8_TO_TCHAR(CodeGen.GetFailureDetail().AddressOf()
+					? CodeGen.GetFailureDetail().AddressOf() : ""))));
+		if (CodeGenResult != asAST_VERIFY_OK)
+		{
+			return;
+		}
+		ASSERT_THAT(AreEqual(asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Module->GetLastBytecodePublisher()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Module->GetLastLegacyCompilerInvocationCount()));
+
+		asIScriptFunction* const Entry = Module->GetFunctionByDecl(
+			"int Entry(ESwitchInvalidValue)");
+		ASSERT_THAT(IsNotNull(Entry));
+		if (Entry == nullptr)
+		{
+			return;
+		}
+		asIScriptContext* const RuntimeContext = ScriptEngine->CreateContext();
+		ASSERT_THAT(IsNotNull(RuntimeContext));
+		if (RuntimeContext == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { RuntimeContext->Release(); };
+
+		ASSERT_THAT(AreEqual(asSUCCESS, RuntimeContext->Prepare(Entry)));
+		ASSERT_THAT(AreEqual(asSUCCESS, RuntimeContext->SetArgDWord(0, 1)));
+		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, RuntimeContext->Execute(),
+			TEXT("a valid enum value must still select its canonical case")));
+		ASSERT_THAT(AreEqual(static_cast<asDWORD>(10),
+			RuntimeContext->GetReturnDWord()));
+		ASSERT_THAT(AreEqual(asSUCCESS, RuntimeContext->Unprepare()));
+
+		ASSERT_THAT(AreEqual(asSUCCESS, RuntimeContext->Prepare(Entry)));
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			RuntimeContext->SetArgDWord(0, 0x13579bdfu)));
+		const int InvalidStatus = RuntimeContext->Execute();
+		const FString InvalidException = FString(UTF8_TO_TCHAR(
+			RuntimeContext->GetExceptionString()));
+		ASSERT_THAT(IsTrue(
+			InvalidStatus == asEXECUTION_EXCEPTION
+			&& InvalidException == TEXT(
+				"Invalid enum value passed to switch"),
+			*FString::Printf(TEXT(
+				"sealed SwitchInvalidValue must raise the maintained VM exception; "
+				"status=%d exception=%s"),
+				InvalidStatus, *InvalidException)));
 	}
 
 	TEST_METHOD(PreparedBytecodeParametersUseSealedFormalOrdinalRelation)

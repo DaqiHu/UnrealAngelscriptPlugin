@@ -246,7 +246,10 @@ int asCASTSnapshot::GetStmt(asASTStmtId id, asSASTStmtView* outView) const
 	{
 		return asINVALID_ARG;
 	}
-	if( !HasCompleteV1View(outView->structSize, sizeof(*outView)) )
+	const asUINT suppliedSize = outView->structSize;
+	const size_t originalV1Size =
+		offsetof(asSASTStmtView, loopBodySafePointRole);
+	if( !HasCompleteV1View(suppliedSize, originalV1Size) )
 	{
 		return asINVALID_ARG;
 	}
@@ -275,6 +278,10 @@ int asCASTSnapshot::GetStmt(asASTStmtId id, asSASTStmtView* outView) const
 	outView->decl = MakePublicDeclId(stmt->decl);
 	outView->safePointRole = stmt->safePointRole;
 	outView->childCount = stmt->children.GetLength();
+	if( HasCompleteV1View(suppliedSize, sizeof(*outView)) )
+	{
+		outView->loopBodySafePointRole = stmt->loopBodySafePointRole;
+	}
 	return asSUCCESS;
 }
 

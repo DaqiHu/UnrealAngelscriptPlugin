@@ -7548,11 +7548,20 @@ asASTExprId asCSema::ActOnBinaryExpr(asASTExprId lhs, const char* op, asASTExprI
 	}
 	else if( lhsType && rhsType && IsIntegerLike(lhsType) && IsIntegerLike(rhsType) )
 	{
-		// Materialize integer promotions in Canonical AST. A result type label
+		// asEP_DISABLE_INTEGER_DIVISION is a source-language typing rule, so
+		// author it here with the other usual arithmetic conversions. Downstream
+		// constant evaluation and CodeGen must consume the sealed float64 Binary;
+		// they must not query the Engine and reinterpret an integer-typed AST.
+		const bool forceFloatingDivision = op != 0
+			&& std::strcmp(op, "/") == 0
+			&& engine != 0 && engine->ep.disableIntegerDivision;
+		const asCQualType commonType = forceFloatingDivision
+			? context.InternPrimitive(ttFloat64, 0)
+			: context.InternPrimitive(
+				CommonIntegerToken(lhsType, rhsType), 0);
+		// Materialize the chosen promotions in Canonical AST. A result type label
 		// alone is insufficient: compact enum/typedef inputs must be extended
 		// before VM arithmetic, otherwise -1 is observed as 0xFF.
-		const asCQualType commonType = context.InternPrimitive(
-			CommonIntegerToken(lhsType, rhsType), 0);
 		if( lhsExpr->type.type != commonType.type )
 		{
 			lhs = ActOnConversion(lhs, commonType, ident);

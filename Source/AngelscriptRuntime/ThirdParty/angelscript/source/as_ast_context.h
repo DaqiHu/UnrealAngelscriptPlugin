@@ -86,6 +86,7 @@ public:
 	int SetStmtExpr(asASTStmtId id, asASTExprId expr);
 	int SetTarget(asASTStmtId id, asASTStmtId target);
 	int SetStmtSafePointRole(asASTStmtId id, asEASTSafePointRole role);
+	int SetLoopBodySafePointRole(asASTStmtId id, asEASTSafePointRole role);
 	int SetExprSafePointRole(asASTExprId id, asEASTSafePointRole role);
 	int SetExprCallDispatch(asASTExprId id, asEASTCallDispatch dispatch);
 	int SetStmtDecl(asASTStmtId id, asASTDeclId decl);

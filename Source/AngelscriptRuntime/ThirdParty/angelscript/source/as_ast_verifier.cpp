@@ -425,47 +425,140 @@ static bool DeclListsChild(const asCDecl* parent, asASTDeclId child)
 	return false;
 }
 
-static bool StmtContains(const asCASTContext& context, asASTStmtId root, asASTStmtId needle)
+static bool IsLoopStatementKind(asEASTStmtKind kind)
 {
-	if( !root.IsValid() || !needle.IsValid() || root == needle )
+	return kind == asAST_STMT_WHILE
+		|| kind == asAST_STMT_DO_WHILE
+		|| kind == asAST_STMT_FOR
+		|| kind == asAST_STMT_FOREACH;
+}
+
+static bool GetSealedCaseConstant(
+	const asCASTContext& context,
+	const asCExpr* expression,
+	asQWORD& outValue)
+{
+	if( expression == 0 )
 	{
 		return false;
 	}
-
-	asCArray<asASTStmtId> stack;
-	asCArray<asBYTE> visiting;
-	visiting.SetLength(context.GetStmtCount() + 1);
-	for( asUINT i = 0; i < visiting.GetLength(); ++i )
+	if( expression->kind == asAST_EXPR_INTEGER_LITERAL
+		|| expression->kind == asAST_EXPR_BOOL_LITERAL )
 	{
-		visiting[i] = 0;
+		outValue = expression->literalBits;
+		return true;
 	}
-
-	stack.PushLast(root);
-	while( stack.GetLength() > 0 )
+	if( expression->kind == asAST_EXPR_DECL_REF )
 	{
-		const asASTStmtId current = stack[stack.GetLength() - 1];
-		stack.SetLength(stack.GetLength() - 1);
-		if( !current.IsValid() || current.value >= visiting.GetLength() || visiting[current.value] )
+		const asCDecl* const declaration =
+			context.GetDecl(expression->resolvedDecl);
+		if( declaration != 0 && declaration->hasConstantValue )
 		{
-			continue;
+			outValue = declaration->constantValue;
+			return true;
 		}
-		visiting[current.value] = 1;
-		const asCStmt* stmt = context.GetStmt(current);
-		if( stmt == 0 )
-		{
-			continue;
-		}
-		for( asUINT c = 0; c < stmt->children.GetLength(); ++c )
-		{
-			const asASTStmtId child = stmt->children[c];
-			if( child == needle )
-			{
-				return true;
-			}
-			stack.PushLast(child);
-		}
+	}
+	if( (expression->kind == asAST_EXPR_CONSTRUCT
+			|| expression->kind == asAST_EXPR_CONVERSION
+			|| expression->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+			|| expression->kind == asAST_EXPR_CLEANUP)
+		&& expression->children.GetLength() == 1 )
+	{
+		return GetSealedCaseConstant(
+			context,
+			context.GetExpr(expression->children[0]),
+			outValue);
 	}
 	return false;
+}
+
+static eTokenType GetSealedSwitchPrimitiveDomain(
+	const asCASTContext& context,
+	const asCStmt* statement)
+{
+	const asCExpr* const selector = statement != 0
+		? context.GetExpr(statement->expr) : 0;
+	const asCType* const selectorType = selector != 0
+		? context.GetType(selector->type.type) : 0;
+	if( selectorType == 0 || selectorType->kind != asAST_TYPE_PRIMITIVE )
+	{
+		return ttUnrecognizedToken;
+	}
+	switch( selectorType->primitiveToken )
+	{
+	case ttInt:
+	case ttInt8:
+	case ttInt16:
+	case ttInt64:
+		return ttInt;
+	case ttUInt:
+	case ttUInt8:
+	case ttUInt16:
+	case ttUInt64:
+		return ttUInt;
+	default:
+		return ttUnrecognizedToken;
+	}
+}
+
+static bool IsExactSealedSwitchPrimitiveDomain(
+	const asCASTContext& context,
+	const asCExpr* expression,
+	eTokenType domain)
+{
+	const asCType* const type = expression != 0
+		? context.GetType(expression->type.type) : 0;
+	return type != 0 && type->kind == asAST_TYPE_PRIMITIVE
+		&& type->primitiveToken == domain && expression->type.quals == 0;
+}
+
+static bool IsSealedSwitchCaseDomainFact(
+	const asCASTContext& context,
+	const asCExpr* expression,
+	eTokenType domain)
+{
+	if( !IsExactSealedSwitchPrimitiveDomain(context, expression, domain)
+		|| expression->kind != asAST_EXPR_CONVERSION
+		|| !expression->literal.Equals("switch-case-domain")
+		|| expression->children.GetLength() != 1
+		|| expression->literalBits
+			!= static_cast<asQWORD>(
+				static_cast<asDWORD>(expression->literalBits)) )
+	{
+		return false;
+	}
+	const asCExpr* const authored =
+		context.GetExpr(expression->children[0]);
+	if( authored == 0 )
+	{
+		return false;
+	}
+	return !expression->range.IsValid() || !authored->range.IsValid()
+		|| expression->range == authored->range;
+}
+
+static bool IsSealedSwitchCaseDomainFactForExactType(
+	const asCASTContext& context,
+	const asCExpr* expression,
+	const asCQualType& domain)
+{
+	if( expression == 0 || expression->type != domain
+		|| expression->kind != asAST_EXPR_CONVERSION
+		|| !expression->literal.Equals("switch-case-domain")
+		|| expression->children.GetLength() != 1
+		|| expression->literalBits != static_cast<asQWORD>(
+			static_cast<asDWORD>(expression->literalBits)) )
+	{
+		return false;
+	}
+	const asCExpr* const authored =
+		context.GetExpr(expression->children[0]);
+	if( authored == 0 )
+	{
+		return false;
+	}
+	return !expression->range.IsValid() || !authored->range.IsValid()
+		|| expression->range == authored->range;
 }
 
 static bool StmtSubtreeDeclares(
@@ -1201,6 +1294,183 @@ static int VerifyPublishedCallRewrite(
 			asSASTNodeRef::FromExpr(rewrite.id),
 			asAST_EDGE_EXPR_RECEIVER,
 			asSASTNodeRef::FromExpr(rewrite.receiver));
+	}
+	return asAST_VERIFY_OK;
+}
+
+static int VerifyPublishedStructuredControlFacts(
+	const asCASTContext& context,
+	asSAstVerifyResult& result)
+{
+	asCArray<asASTStmtId> stmtParent;
+	stmtParent.SetLength(context.GetStmtCount() + 1);
+	for( asUINT i = 0; i < stmtParent.GetLength(); ++i )
+	{
+		stmtParent[i] = asASTStmtId();
+	}
+	for( asUINT i = 1; i <= context.GetStmtCount(); ++i )
+	{
+		const asCStmt* const stmt = context.GetStmt(asASTStmtId(i));
+		if( stmt == 0 )
+		{
+			continue;
+		}
+		for( asUINT c = 0; c < stmt->children.GetLength(); ++c )
+		{
+			const asASTStmtId child = stmt->children[c];
+			if( child.IsValid() && child.value < stmtParent.GetLength() )
+			{
+				stmtParent[child.value] = stmt->id;
+			}
+		}
+	}
+
+	// Required Sema facts are publication-only. An incremental/recovery graph
+	// may retain missing edges for diagnostics, but no backend or sidecar may
+	// consume a publishable graph with an unresolved control decision.
+	for( asUINT i = 1; i <= context.GetStmtCount(); ++i )
+	{
+		const asASTStmtId id(i);
+		const asCStmt* const stmt = context.GetStmt(id);
+		if( stmt == 0 )
+		{
+			continue;
+		}
+		const char* conditionDetail = 0;
+		switch( stmt->kind )
+		{
+		case asAST_STMT_IF:
+			conditionDetail = "if-condition";
+			break;
+		case asAST_STMT_WHILE:
+			conditionDetail = "while-condition";
+			break;
+		case asAST_STMT_DO_WHILE:
+			conditionDetail = "do-while-condition";
+			break;
+		case asAST_STMT_SWITCH:
+			conditionDetail = "switch-condition";
+			break;
+		default:
+			break;
+		}
+		if( conditionDetail != 0 && !stmt->expr.IsValid() )
+		{
+			return Fail(result, asAST_VERIFY_DANGLING_ID, stmt->range,
+				conditionDetail, asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_EXPR,
+				asSASTNodeRef::FromExpr(stmt->expr));
+		}
+		if( stmt->kind == asAST_STMT_BREAK && !stmt->target.IsValid() )
+		{
+			return Fail(result, asAST_VERIFY_DANGLING_ID, stmt->range,
+				"break-target-missing", asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_TARGET,
+				asSASTNodeRef::FromStmt(stmt->target));
+		}
+		if( stmt->kind == asAST_STMT_CONTINUE && !stmt->target.IsValid() )
+		{
+			return Fail(result, asAST_VERIFY_DANGLING_ID, stmt->range,
+				"continue-target-missing", asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_TARGET,
+				asSASTNodeRef::FromStmt(stmt->target));
+		}
+		if( stmt->kind == asAST_STMT_CASE && !stmt->target.IsValid() )
+		{
+			return Fail(result, asAST_VERIFY_DANGLING_ID, stmt->range,
+				"case-target-missing", asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_TARGET,
+				asSASTNodeRef::FromStmt(stmt->target));
+		}
+		if( stmt->kind == asAST_STMT_FALLTHROUGH )
+		{
+			const asASTStmtId ownerCaseId = id.value < stmtParent.GetLength()
+				? stmtParent[id.value] : asASTStmtId();
+			const asASTStmtId switchId = ownerCaseId.value < stmtParent.GetLength()
+				? stmtParent[ownerCaseId.value] : asASTStmtId();
+			const asCStmt* const sw = context.GetStmt(switchId);
+			asASTStmtId nextCase;
+			if( sw != 0 )
+			{
+				for( asUINT c = 0; c < sw->children.GetLength(); ++c )
+				{
+					if( sw->children[c] == ownerCaseId )
+					{
+						nextCase = c + 1 < sw->children.GetLength()
+							? sw->children[c + 1] : asASTStmtId();
+						break;
+					}
+				}
+			}
+			if( nextCase.IsValid() && !stmt->target.IsValid() )
+			{
+				return Fail(result, asAST_VERIFY_DANGLING_ID, stmt->range,
+					"fallthrough-target-missing",
+					asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_TARGET,
+					asSASTNodeRef::FromStmt(nextCase));
+			}
+		}
+	}
+
+	// Safe-point roles are authored by Sema and are part of the sealed control
+	// contract. The verifier authenticates those stored facts; it does not infer
+	// debugger policy, enum exhaustiveness, or backend control flow.
+	for( asUINT i = 1; i <= context.GetStmtCount(); ++i )
+	{
+		const asASTStmtId id(i);
+		const asCStmt* const stmt = context.GetStmt(id);
+		if( stmt == 0 )
+		{
+			continue;
+		}
+		if( stmt->kind == asAST_STMT_IF
+			&& stmt->safePointRole != asAST_SAFEPOINT_STATEMENT )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+				"if-safepoint", asSASTNodeRef::FromStmt(id));
+		}
+		if( IsLoopStatementKind(stmt->kind) )
+		{
+			if( stmt->safePointRole != asAST_SAFEPOINT_LOOP_BACKEDGE )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+					"loop-safepoint", asSASTNodeRef::FromStmt(id));
+			}
+			if( stmt->loopBodySafePointRole
+				!= asAST_SAFEPOINT_LOOP_ENTRY )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+					"loop-body-safepoint", asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_CHILD);
+			}
+		}
+		else if( stmt->loopBodySafePointRole != asAST_SAFEPOINT_NONE )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+				"non-loop-body-safepoint", asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_CHILD);
+		}
+		if( (stmt->kind == asAST_STMT_BREAK
+				|| stmt->kind == asAST_STMT_CONTINUE)
+			&& stmt->safePointRole != asAST_SAFEPOINT_TRANSFER )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+				"transfer-safepoint", asSASTNodeRef::FromStmt(id));
+		}
+		if( stmt->kind == asAST_STMT_SWITCH
+			&& stmt->safePointRole != asAST_SAFEPOINT_STATEMENT
+			&& stmt->safePointRole != asAST_SAFEPOINT_SWITCH_INVALID_VALUE )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+				"switch-safepoint", asSASTNodeRef::FromStmt(id));
+		}
+		if( stmt->kind == asAST_STMT_CASE
+			&& stmt->safePointRole != asAST_SAFEPOINT_STATEMENT )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+				"case-safepoint", asSASTNodeRef::FromStmt(id));
+		}
 	}
 	return asAST_VERIFY_OK;
 }
@@ -2403,7 +2673,7 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 			}
 			if( child.IsValid() && child.value < stmtParent.GetLength() )
 			{
-				if( stmtParent[child.value].IsValid() && stmtParent[child.value] != id )
+				if( stmtParent[child.value].IsValid() )
 				{
 					return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range, "stmt-multi-owner", asSASTNodeRef::FromStmt(child), asAST_EDGE_STMT_CHILD, asSASTNodeRef::FromStmt(id));
 				}
@@ -2417,6 +2687,41 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 				return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
 					"foreach-phase-count", asSASTNodeRef::FromStmt(id),
 					asAST_EDGE_STMT_CHILD);
+			}
+			const asCStmt* const init =
+				context.GetStmt(stmt->children[0]);
+			if( init == 0 || init->kind != asAST_STMT_BLOCK )
+			{
+				return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+					"foreach-init-kind", asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_CHILD,
+					asSASTNodeRef::FromStmt(stmt->children[0]));
+			}
+			const asCStmt* const body =
+				context.GetStmt(stmt->children[1]);
+			if( body == 0 || body->kind != asAST_STMT_BLOCK )
+			{
+				return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+					"foreach-body-kind", asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_CHILD,
+					asSASTNodeRef::FromStmt(stmt->children[1]));
+			}
+			const asCStmt* const increment =
+				context.GetStmt(stmt->children[2]);
+			if( increment == 0 || increment->kind != asAST_STMT_EXPR )
+			{
+				return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+					"foreach-increment-kind", asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_CHILD,
+					asSASTNodeRef::FromStmt(stmt->children[2]));
+			}
+			if( !increment->expr.IsValid() )
+			{
+				return Fail(result, asAST_VERIFY_DANGLING_ID, increment->range,
+					"foreach-increment-expr",
+					asSASTNodeRef::FromStmt(increment->id),
+					asAST_EDGE_STMT_EXPR,
+					asSASTNodeRef::FromExpr(increment->expr));
 			}
 			if( stmt->children.GetLength() == 4 )
 			{
@@ -2481,78 +2786,39 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 				}
 			}
 		}
-		if( stmt->kind == asAST_STMT_BREAK || stmt->kind == asAST_STMT_CONTINUE )
-		{
-			if( stmt->target.IsValid() )
-			{
-				const asCStmt* target = context.GetStmt(stmt->target);
-				if( target == 0 )
-				{
-					return Fail(result, asAST_VERIFY_DANGLING_ID, stmt->range, "ctrl-target", asSASTNodeRef::FromStmt(id), asAST_EDGE_STMT_TARGET, asSASTNodeRef::FromStmt(stmt->target));
-				}
-				const bool loopTarget = target->kind == asAST_STMT_WHILE || target->kind == asAST_STMT_DO_WHILE || target->kind == asAST_STMT_FOR || target->kind == asAST_STMT_FOREACH;
-				const bool switchTarget = target->kind == asAST_STMT_SWITCH;
-				if( stmt->kind == asAST_STMT_CONTINUE && !loopTarget )
-				{
-					return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range, "continue-target", asSASTNodeRef::FromStmt(id), asAST_EDGE_STMT_TARGET, asSASTNodeRef::FromStmt(stmt->target));
-				}
-				if( stmt->kind == asAST_STMT_BREAK && !loopTarget && !switchTarget )
-				{
-					return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range, "break-target", asSASTNodeRef::FromStmt(id), asAST_EDGE_STMT_TARGET, asSASTNodeRef::FromStmt(stmt->target));
-				}
-				if( !StmtContains(context, stmt->target, id) )
-				{
-					const char* detail = stmt->kind == asAST_STMT_CONTINUE ? "continue-ancestor" : "break-ancestor";
-					return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range, detail, asSASTNodeRef::FromStmt(id), asAST_EDGE_STMT_TARGET, asSASTNodeRef::FromStmt(stmt->target));
-				}
-				asASTStmtId nearest;
-				asASTStmtId walk = (id.value < stmtParent.GetLength()) ? stmtParent[id.value] : asASTStmtId();
-				asUINT nearerGuard = 0;
-				while( walk.IsValid() && nearerGuard++ < context.GetStmtCount() + 1 )
-				{
-					const asCStmt* ancestor = context.GetStmt(walk);
-					if( ancestor )
-					{
-						const bool loop = ancestor->kind == asAST_STMT_WHILE
-							|| ancestor->kind == asAST_STMT_DO_WHILE
-							|| ancestor->kind == asAST_STMT_FOR
-							|| ancestor->kind == asAST_STMT_FOREACH;
-						const bool sw = ancestor->kind == asAST_STMT_SWITCH;
-						if( stmt->kind == asAST_STMT_CONTINUE && loop )
-						{
-							nearest = walk;
-							break;
-						}
-						if( stmt->kind == asAST_STMT_BREAK && (loop || sw) )
-						{
-							nearest = walk;
-							break;
-						}
-					}
-					if( walk.value >= stmtParent.GetLength() )
-					{
-						break;
-					}
-					walk = stmtParent[walk.value];
-				}
-				if( nearest.IsValid() && nearest != stmt->target )
-				{
-					const char* detail = stmt->kind == asAST_STMT_CONTINUE ? "continue-skipped-nearer" : "break-skipped-nearer";
-					return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range, detail, asSASTNodeRef::FromStmt(id), asAST_EDGE_STMT_TARGET, asSASTNodeRef::FromStmt(stmt->target));
-				}
-			}
-		}
 		if( stmt->kind == asAST_STMT_SWITCH )
 		{
+			const eTokenType primitiveDomain =
+				GetSealedSwitchPrimitiveDomain(context, stmt);
+			const asCExpr* const selector = context.GetExpr(stmt->expr);
+			const asCType* const selectorType = selector != 0
+				? context.GetType(selector->type.type) : 0;
+			const bool enumDomain = selectorType != 0
+				&& selectorType->kind == asAST_TYPE_ENUM;
+			if( primitiveDomain != ttUnrecognizedToken
+				&& !IsExactSealedSwitchPrimitiveDomain(
+					context, selector, primitiveDomain) )
+			{
+				return Fail(result, asAST_VERIFY_INVALID_TYPE, stmt->range,
+					"switch-selector-domain", asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_EXPR,
+					selector ? asSASTNodeRef::FromExpr(selector->id)
+						: asSASTNodeRef());
+			}
 			bool sawDefault = false;
 			asUINT lastDefaultCaseIndex = ~0u;
 			asUINT lastCaseIndex = ~0u;
+			asCArray<asDWORD> primitiveCaseValues;
+			asCArray<asDWORD> enumCaseValues;
 			for( asUINT c = 0; c < stmt->children.GetLength(); ++c )
 			{
 				const asCStmt* cs = context.GetStmt(stmt->children[c]);
 				if( cs == 0 || cs->kind != asAST_STMT_CASE )
 				{
-					continue;
+					return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+						"switch-child-kind", asSASTNodeRef::FromStmt(id),
+						asAST_EDGE_STMT_CHILD,
+						asSASTNodeRef::FromStmt(stmt->children[c]));
 				}
 				lastCaseIndex = c;
 				if( !cs->expr.IsValid() )
@@ -2564,16 +2830,91 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 					sawDefault = true;
 					lastDefaultCaseIndex = c;
 				}
-				for( asUINT d = c + 1; d < stmt->children.GetLength(); ++d )
+				else if( primitiveDomain != ttUnrecognizedToken )
 				{
-					const asCStmt* other = context.GetStmt(stmt->children[d]);
-					if( other && other->kind == asAST_STMT_CASE && cs->expr.IsValid() && other->expr.IsValid() )
+					const asCExpr* const fact = context.GetExpr(cs->expr);
+					if( !IsExactSealedSwitchPrimitiveDomain(
+						context, fact, primitiveDomain) )
 					{
-						const asCExpr* left = context.GetExpr(cs->expr);
-						const asCExpr* right = context.GetExpr(other->expr);
-						if( left && right && left->literalBits == right->literalBits && left->literal.Equals(right->literal) )
+						return Fail(result, asAST_VERIFY_INVALID_TYPE, cs->range,
+							"case-selector-domain", asSASTNodeRef::FromStmt(cs->id),
+							asAST_EDGE_STMT_EXPR,
+							asSASTNodeRef::FromExpr(cs->expr));
+					}
+					if( !IsSealedSwitchCaseDomainFact(
+						context, fact, primitiveDomain) )
+					{
+						return Fail(result, asAST_VERIFY_INVALID_CHILD, cs->range,
+							"case-domain-fact", asSASTNodeRef::FromStmt(cs->id),
+							asAST_EDGE_STMT_EXPR,
+							asSASTNodeRef::FromExpr(cs->expr));
+					}
+					const asDWORD normalized =
+						static_cast<asDWORD>(fact->literalBits);
+					if( primitiveCaseValues.IndexOf(normalized) >= 0 )
+					{
+						return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+							"duplicate-case", asSASTNodeRef::FromStmt(id),
+							asAST_EDGE_STMT_CHILD,
+							asSASTNodeRef::FromStmt(stmt->children[c]));
+					}
+					primitiveCaseValues.PushLast(normalized);
+				}
+				else if( enumDomain )
+				{
+					const asCExpr* const fact = context.GetExpr(cs->expr);
+					if( !IsSealedSwitchCaseDomainFactForExactType(
+						context, fact, selector->type) )
+					{
+						return Fail(result, asAST_VERIFY_INVALID_CHILD, cs->range,
+							"enum-case-domain-fact", asSASTNodeRef::FromStmt(cs->id),
+							asAST_EDGE_STMT_EXPR,
+							asSASTNodeRef::FromExpr(cs->expr));
+					}
+					const asDWORD normalized =
+						static_cast<asDWORD>(fact->literalBits);
+					if( enumCaseValues.IndexOf(normalized) >= 0 )
+					{
+						return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+							"duplicate-case", asSASTNodeRef::FromStmt(id),
+							asAST_EDGE_STMT_CHILD,
+							asSASTNodeRef::FromStmt(stmt->children[c]));
+					}
+					enumCaseValues.PushLast(normalized);
+				}
+			}
+			if( primitiveDomain == ttUnrecognizedToken && !enumDomain )
+			{
+				for( asUINT c = 0; c < stmt->children.GetLength(); ++c )
+				{
+					const asCStmt* const leftCase =
+						context.GetStmt(stmt->children[c]);
+					if( leftCase == 0 || !leftCase->expr.IsValid() )
+					{
+						continue;
+					}
+					for( asUINT d = c + 1; d < stmt->children.GetLength(); ++d )
+					{
+						const asCStmt* const rightCase =
+							context.GetStmt(stmt->children[d]);
+						if( rightCase == 0 || !rightCase->expr.IsValid() )
 						{
-							return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range, "duplicate-case", asSASTNodeRef::FromStmt(id), asAST_EDGE_STMT_CHILD, asSASTNodeRef::FromStmt(stmt->children[d]));
+							continue;
+						}
+						const asCExpr* const left = context.GetExpr(leftCase->expr);
+						const asCExpr* const right = context.GetExpr(rightCase->expr);
+						asQWORD leftValue = 0;
+						asQWORD rightValue = 0;
+						if( left != 0 && right != 0 && left->type == right->type
+							&& GetSealedCaseConstant(context, left, leftValue)
+							&& GetSealedCaseConstant(context, right, rightValue)
+							&& static_cast<asDWORD>(leftValue)
+								== static_cast<asDWORD>(rightValue) )
+						{
+							return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+								"duplicate-case", asSASTNodeRef::FromStmt(id),
+								asAST_EDGE_STMT_CHILD,
+								asSASTNodeRef::FromStmt(stmt->children[d]));
 						}
 					}
 				}
@@ -2596,6 +2937,113 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 	if( stmtCycleStatus != asAST_VERIFY_OK )
 		return stmtCycleStatus;
 
+	// Parent authentication is deliberately a second pass. Parser/Sema may
+	// intern a contained statement before the Block that later owns it, so
+	// validating nearest control targets while stmtParent is still being built
+	// would make correctness depend on arena ID order.
+	for( asUINT i = 1; i <= context.GetStmtCount(); ++i )
+	{
+		const asASTStmtId id(i);
+		const asCStmt* const stmt = context.GetStmt(id);
+		if( stmt == 0 )
+		{
+			continue;
+		}
+		if( (stmt->kind == asAST_STMT_BREAK
+				|| stmt->kind == asAST_STMT_CONTINUE)
+			&& stmt->target.IsValid() )
+		{
+			const asCStmt* const target = context.GetStmt(stmt->target);
+			if( target == 0 )
+			{
+				return Fail(result, asAST_VERIFY_DANGLING_ID, stmt->range,
+					"ctrl-target", asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_TARGET,
+					asSASTNodeRef::FromStmt(stmt->target));
+			}
+			const bool loopTarget = IsLoopStatementKind(target->kind);
+			const bool switchTarget = target->kind == asAST_STMT_SWITCH;
+			if( stmt->kind == asAST_STMT_CONTINUE && !loopTarget )
+			{
+				return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+					"continue-target", asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_TARGET,
+					asSASTNodeRef::FromStmt(stmt->target));
+			}
+			if( stmt->kind == asAST_STMT_BREAK
+				&& !loopTarget && !switchTarget )
+			{
+				return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+					"break-target", asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_TARGET,
+					asSASTNodeRef::FromStmt(stmt->target));
+			}
+
+			bool targetIsAncestor = false;
+			asASTStmtId nearest;
+			asASTStmtId walk = id.value < stmtParent.GetLength()
+				? stmtParent[id.value] : asASTStmtId();
+			asUINT guard = 0;
+			while( walk.IsValid()
+				&& guard++ < context.GetStmtCount() + 1 )
+			{
+				const asCStmt* const ancestor = context.GetStmt(walk);
+				if( walk == stmt->target )
+				{
+					targetIsAncestor = true;
+				}
+				if( !nearest.IsValid() && ancestor != 0 )
+				{
+					const bool eligible = stmt->kind == asAST_STMT_CONTINUE
+						? IsLoopStatementKind(ancestor->kind)
+						: IsLoopStatementKind(ancestor->kind)
+							|| ancestor->kind == asAST_STMT_SWITCH;
+					if( eligible )
+					{
+						nearest = walk;
+					}
+				}
+				if( walk.value >= stmtParent.GetLength() )
+				{
+					break;
+				}
+				walk = stmtParent[walk.value];
+			}
+			if( !targetIsAncestor )
+			{
+				const char* const detail = stmt->kind == asAST_STMT_CONTINUE
+					? "continue-ancestor" : "break-ancestor";
+				return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+					detail, asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_TARGET,
+					asSASTNodeRef::FromStmt(stmt->target));
+			}
+			if( nearest != stmt->target )
+			{
+				const char* const detail = stmt->kind == asAST_STMT_CONTINUE
+					? "continue-skipped-nearer" : "break-skipped-nearer";
+				return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+					detail, asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_TARGET,
+					asSASTNodeRef::FromStmt(stmt->target));
+			}
+		}
+		if( stmt->kind == asAST_STMT_CASE && stmt->target.IsValid() )
+		{
+			const asCStmt* const target = context.GetStmt(stmt->target);
+			const asASTStmtId directParent = id.value < stmtParent.GetLength()
+				? stmtParent[id.value] : asASTStmtId();
+			if( target == 0 || target->kind != asAST_STMT_SWITCH
+				|| directParent != stmt->target )
+			{
+				return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+					"case-target", asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_TARGET,
+					asSASTNodeRef::FromStmt(stmt->target));
+			}
+		}
+	}
+
 	for( asUINT i = 1; i <= context.GetStmtCount(); ++i )
 	{
 		const asASTStmtId id(i);
@@ -2605,12 +3053,14 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 			continue;
 		}
 		bool underSwitch = false;
-		asASTStmtId walk = (id.value < stmtParent.GetLength()) ? stmtParent[id.value] : asASTStmtId();
+		asASTStmtId walk = id.value < stmtParent.GetLength()
+			? stmtParent[id.value] : asASTStmtId();
 		asUINT guard = 0;
-		while( walk.IsValid() && guard++ < context.GetStmtCount() + 1 )
+		while( walk.IsValid()
+			&& guard++ < context.GetStmtCount() + 1 )
 		{
-			const asCStmt* ancestor = context.GetStmt(walk);
-			if( ancestor && ancestor->kind == asAST_STMT_SWITCH )
+			const asCStmt* const ancestor = context.GetStmt(walk);
+			if( ancestor != 0 && ancestor->kind == asAST_STMT_SWITCH )
 			{
 				underSwitch = true;
 				break;
@@ -2625,53 +3075,153 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 		{
 			return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range, "fallthrough-switch", asSASTNodeRef::FromStmt(id));
 		}
-		if( stmt->target.IsValid() )
+
+		const asASTStmtId ownerCaseId = id.value < stmtParent.GetLength()
+			? stmtParent[id.value] : asASTStmtId();
+		const asCStmt* const ownerCase = context.GetStmt(ownerCaseId);
+		if( ownerCase == 0 || ownerCase->kind != asAST_STMT_CASE )
 		{
-			asASTStmtId switchId;
-			asASTStmtId switchWalk = (id.value < stmtParent.GetLength()) ? stmtParent[id.value] : asASTStmtId();
-			asUINT switchGuard = 0;
-			while( switchWalk.IsValid() && switchGuard++ < context.GetStmtCount() + 1 )
+			return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+				"fallthrough-case", asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_CHILD,
+				asSASTNodeRef::FromStmt(ownerCaseId));
+		}
+		if( ownerCase->children.GetLength() == 0
+			|| ownerCase->children[ownerCase->children.GetLength() - 1] != id )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+				"fallthrough-position", asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_CHILD,
+				asSASTNodeRef::FromStmt(ownerCaseId));
+		}
+
+		const asASTStmtId switchId = ownerCaseId.value < stmtParent.GetLength()
+			? stmtParent[ownerCaseId.value] : asASTStmtId();
+		const asCStmt* const sw = context.GetStmt(switchId);
+		if( sw == 0 || sw->kind != asAST_STMT_SWITCH )
+		{
+			return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+				"fallthrough-switch", asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_CHILD,
+				asSASTNodeRef::FromStmt(switchId));
+		}
+
+		asASTStmtId nextCase;
+		for( asUINT c = 0; c < sw->children.GetLength(); ++c )
+		{
+			if( sw->children[c] == ownerCaseId )
 			{
-				const asCStmt* ancestor = context.GetStmt(switchWalk);
-				if( ancestor && ancestor->kind == asAST_STMT_SWITCH )
-				{
-					switchId = switchWalk;
-					break;
-				}
-				if( switchWalk.value >= stmtParent.GetLength() )
-				{
-					break;
-				}
-				switchWalk = stmtParent[switchWalk.value];
+				nextCase = c + 1 < sw->children.GetLength()
+					? sw->children[c + 1] : asASTStmtId();
+				break;
 			}
-			const asCStmt* sw = context.GetStmt(switchId);
-			if( sw )
+		}
+		if( stmt->target.IsValid() && nextCase != stmt->target )
+		{
+			return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+				"fallthrough-target", asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_TARGET,
+				asSASTNodeRef::FromStmt(stmt->target));
+		}
+	}
+
+	// Exact phase cardinality is structural and must be rejected before a
+	// backend can silently consume only the prefix it understands. Required
+	// semantic facts such as conditions and resolved targets stay publication-
+	// only so construction/recovery graphs remain inspectable.
+	for( asUINT i = 1; i <= context.GetStmtCount(); ++i )
+	{
+		const asASTStmtId id(i);
+		const asCStmt* const stmt = context.GetStmt(id);
+		if( stmt == 0 )
+		{
+			continue;
+		}
+		const asUINT childCount = stmt->children.GetLength();
+		const bool transferLeaf = stmt->kind == asAST_STMT_BREAK
+			|| stmt->kind == asAST_STMT_CONTINUE
+			|| stmt->kind == asAST_STMT_FALLTHROUGH;
+		if( transferLeaf && stmt->expr.IsValid() )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+				"transfer-expr", asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_EXPR,
+				asSASTNodeRef::FromExpr(stmt->expr));
+		}
+		if( transferLeaf && stmt->decl.IsValid() )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+				"transfer-decl", asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_DECL,
+				asSASTNodeRef::FromDecl(stmt->decl));
+		}
+		if( transferLeaf && childCount != 0 )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+				"transfer-child", asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_CHILD,
+				asSASTNodeRef::FromStmt(stmt->children[0]));
+		}
+		const char* detail = 0;
+		if( stmt->kind == asAST_STMT_IF
+			&& (childCount < 1 || childCount > 2) )
+		{
+			detail = "if-phase-count";
+		}
+		else if( stmt->kind == asAST_STMT_WHILE && childCount != 1 )
+		{
+			detail = "while-phase-count";
+		}
+		else if( stmt->kind == asAST_STMT_DO_WHILE && childCount != 1 )
+		{
+			detail = "do-while-phase-count";
+		}
+		else if( stmt->kind == asAST_STMT_FOR
+			&& (childCount < 2 || childCount > 3) )
+		{
+			detail = "for-phase-count";
+		}
+		if( detail != 0 )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD, stmt->range,
+				detail, asSASTNodeRef::FromStmt(id),
+				asAST_EDGE_STMT_CHILD,
+				childCount != 0
+					? asSASTNodeRef::FromStmt(
+						stmt->children[childCount - 1])
+					: asSASTNodeRef());
+		}
+		if( stmt->kind == asAST_STMT_FOR )
+		{
+			const asCStmt* const init = context.GetStmt(stmt->children[0]);
+			if( init == 0
+				|| (init->kind != asAST_STMT_BLOCK
+					&& init->kind != asAST_STMT_EXPR) )
 			{
-				asCArray<asASTStmtId> cases;
-				for( asUINT c = 0; c < sw->children.GetLength(); ++c )
+				return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+					"for-init-kind", asSASTNodeRef::FromStmt(id),
+					asAST_EDGE_STMT_CHILD,
+					asSASTNodeRef::FromStmt(stmt->children[0]));
+			}
+			if( childCount == 3 )
+			{
+				const asCStmt* const increment =
+					context.GetStmt(stmt->children[2]);
+				if( increment == 0 || increment->kind != asAST_STMT_EXPR )
 				{
-					const asCStmt* cs = context.GetStmt(sw->children[c]);
-					if( cs && cs->kind == asAST_STMT_CASE )
-					{
-						cases.PushLast(sw->children[c]);
-					}
+					return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range,
+						"for-increment-kind", asSASTNodeRef::FromStmt(id),
+						asAST_EDGE_STMT_CHILD,
+						asSASTNodeRef::FromStmt(stmt->children[2]));
 				}
-				asASTStmtId ownerCase;
-				for( asUINT c = 0; c < cases.GetLength(); ++c )
+				if( !increment->expr.IsValid() )
 				{
-					if( cases[c] == ((id.value < stmtParent.GetLength()) ? stmtParent[id.value] : asASTStmtId())
-						|| StmtContains(context, cases[c], id) )
-					{
-						ownerCase = cases[c];
-						asASTStmtId nextCase = (c + 1 < cases.GetLength()) ? cases[c + 1] : asASTStmtId();
-						if( nextCase != stmt->target )
-						{
-							return Fail(result, asAST_VERIFY_WRONG_KIND, stmt->range, "fallthrough-target", asSASTNodeRef::FromStmt(id), asAST_EDGE_STMT_TARGET, asSASTNodeRef::FromStmt(stmt->target));
-						}
-						break;
-					}
+					return Fail(result, asAST_VERIFY_DANGLING_ID,
+						increment->range, "for-increment-expr",
+						asSASTNodeRef::FromStmt(increment->id),
+						asAST_EDGE_STMT_EXPR,
+						asSASTNodeRef::FromExpr(increment->expr));
 				}
-				(void)ownerCase;
 			}
 		}
 	}
@@ -3021,6 +3571,13 @@ int asCASTVerifyPublication(const asCASTContext& context, asSAstVerifyResult& re
 	{
 		EnrichVerifyResult(context, result);
 		return structural;
+	}
+	const int structuredControl =
+		VerifyPublishedStructuredControlFacts(context, result);
+	if( structuredControl != asAST_VERIFY_OK )
+	{
+		EnrichVerifyResult(context, result);
+		return structuredControl;
 	}
 	const int requiredTargets = VerifySealedRequiredTargets(context, result);
 	if( requiredTargets != asAST_VERIFY_OK ) EnrichVerifyResult(context, result);
