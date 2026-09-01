@@ -1639,6 +1639,7 @@ private:
 	bool CanonicalTemplateHasChildFuncdef(
 		const asSCanonicalTemplateDeclarationFact& declaration,
 		const asCString& name) const;
+	bool IsCanonicalAsHandleType(const asCQualType& type) const;
 	bool IsCanonicalNonPrimitiveValueType(
 		const asCQualType& type) const;
 	bool InferCanonicalAutoType(

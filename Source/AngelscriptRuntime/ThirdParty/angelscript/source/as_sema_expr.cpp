@@ -5003,10 +5003,13 @@ static asASTExprId TryRewriteOverloadedAssignmentToCall(
 		&sema,
 		&leftExpr->type);
 	const asCDecl* const method = context.GetDecl(selected);
+	const bool isHandleAssignment = std::strcmp(methodName, "opHndlAssign") == 0;
 	if( method == 0
 		|| method->kind != asAST_DECL_METHOD
 		|| !method->name.Equals(methodName)
-		|| (method->traits & (asAST_TRAIT_GENERATED | asAST_TRAIT_EXTERNAL)) != 0 )
+		|| (method->traits & asAST_TRAIT_GENERATED) != 0
+		|| (!isHandleAssignment
+			&& (method->traits & asAST_TRAIT_EXTERNAL) != 0) )
 	{
 		return asASTExprId();
 	}
@@ -5612,7 +5615,7 @@ asASTExprId asCSema::ActOnAssignExpr(asASTExprId lhs, asASTExprId rhs, const asC
 	{
 		return asASTExprId();
 	}
-	if( const char* const assignMethod = AssignOperatorMethodName(op) )
+	if( const char* const defaultAssignMethod = AssignOperatorMethodName(op) )
 	{
 		asASTExprId target = lhs;
 		for( ;; )
@@ -5639,6 +5642,18 @@ asASTExprId asCSema::ActOnAssignExpr(asASTExprId lhs, asASTExprId rhs, const asC
 		const asCExpr* const left = context.GetExpr(target);
 		if( left != 0 && !left->type.IsConst() )
 		{
+			const char* assignMethod = defaultAssignMethod;
+			const bool requiresHandleAssignment =
+				op[0] == '=' && op[1] == 0
+				&& IsCanonicalAsHandleType(left->type);
+			if( requiresHandleAssignment )
+			{
+				// asOBJ_ASHANDLE is a source-language semantic trait: LEGACY
+				// selects opHndlAssign for plain `=` even though the type is
+				// represented as a value object. Seal that decision as the
+				// actual Call; CodeGen must not reopen Runtime type flags.
+				assignMethod = "opHndlAssign";
+			}
 			// Overloaded += is a method Call, not a store. VALUE temporaries
 			// such as Make() += 7 are valid receivers, matching LEGACY
 			// CompileOverloadedDualOperator. The leftover Assign path below
@@ -5648,6 +5663,14 @@ asASTExprId asCSema::ActOnAssignExpr(asASTExprId lhs, asASTExprId rhs, const asC
 			if( rewrittenCall.IsValid() )
 			{
 				return rewrittenCall;
+			}
+			if( requiresHandleAssignment )
+			{
+				// An ASHANDLE assignment has no bytewise/plain-opAssign fallback.
+				// Retaining a generic Assign here would let a backend silently
+				// reinterpret the source operation after Sema publication.
+				AddDiagnostic("no-appropriate-opHndlAssign", range);
+				return asASTExprId();
 			}
 		}
 	}

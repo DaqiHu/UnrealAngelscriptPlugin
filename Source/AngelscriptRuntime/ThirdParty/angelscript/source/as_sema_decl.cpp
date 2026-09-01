@@ -590,6 +590,40 @@ bool asCSema::CanonicalTemplateHasChildFuncdef(
 	return false;
 }
 
+bool asCSema::IsCanonicalAsHandleType(const asCQualType& type) const
+{
+	const asCType* const canonical = context.GetType(type.type);
+	if( canonical == 0 )
+	{
+		return false;
+	}
+
+	const asSCanonicalRegisteredTypeDeclarationFact* const registered =
+		FindExactCanonicalRegisteredTypeDeclaration(canonical->stableKey);
+	if( registered != 0 && (registered->flags & asOBJ_ASHANDLE) != 0 )
+	{
+		return true;
+	}
+
+	if( canonical->kind != asAST_TYPE_TEMPLATE )
+	{
+		return false;
+	}
+	asCString templateBase;
+	for( asUINT index = 0; index < canonical->stableKey.GetLength(); ++index )
+	{
+		if( canonical->stableKey[index] == '<' )
+		{
+			templateBase.Assign(canonical->stableKey.AddressOf(), index);
+			break;
+		}
+	}
+	const asSCanonicalTemplateDeclarationFact* const declaration =
+		templateBase.GetLength() != 0
+			? FindExactCanonicalTemplateDeclaration(templateBase) : 0;
+	return declaration != 0 && (declaration->flags & asOBJ_ASHANDLE) != 0;
+}
+
 bool asCSema::IsCanonicalNonPrimitiveValueType(
 	const asCQualType& type) const
 {
