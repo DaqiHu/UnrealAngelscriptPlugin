@@ -12961,6 +12961,139 @@ public:
 			TEXT("CANONICAL temporary Build must not invoke asCCompiler")));
 	}
 
+	TEST_METHOD(CanonicalDirectTemporaryDestroysAtFullExpressionBoundary)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("direct-temporary lifetime fixture selects CANONICAL")));
+
+		asIScriptModule* Module = Engine.Get()->GetModule(
+			"ProdDirectTemporaryFullExpression", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module,
+			TEXT("direct temporary fixture needs a module")));
+		ASSERT_THAT(AreEqual(0,
+			Module != nullptr
+				? Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)
+				: asNO_MODULE,
+			TEXT("direct temporary fixture must retain the sealed Canonical snapshot")));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int DestructionTrace = 0;
+
+			struct FTracked
+			{
+				int Id;
+
+				FTracked(int InId)
+				{
+					Id = InId;
+				}
+
+				~FTracked()
+				{
+					DestructionTrace = DestructionTrace * 10 + Id;
+				}
+			}
+
+			int Entry()
+			{
+				DestructionTrace = 0;
+				FTracked(7);
+				return DestructionTrace;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0,
+			Module != nullptr
+				? Module->AddScriptSection(
+					"ProdDirectTemporaryFullExpression",
+					ScriptSource.c_str(),
+					static_cast<asUINT>(ScriptSource.size()))
+				: asNO_MODULE,
+			TEXT("direct temporary fixture must add its source section")));
+		ASSERT_THAT(AreEqual(0,
+			Module != nullptr ? Module->Build() : asNO_MODULE,
+			TEXT("direct temporary must compile through Canonical CodeGen")));
+		if (Module == nullptr)
+		{
+			return;
+		}
+
+		const asCASTContext* const Context =
+			static_cast<asCModule*>(Module)->GetCanonicalASTContext();
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("direct temporary fixture must retain its sealed snapshot")));
+		asCASTLifetimeView LifetimeView;
+		ASSERT_THAT(IsTrue(Context != nullptr
+			&& asCASTBuildLifetimeView(*Context, LifetimeView) == asAST_VERIFY_OK,
+			TEXT("direct temporary fixture must publish an authenticated lifetime view")));
+		const asSASTLifetimeRecord* TemporaryRecord = nullptr;
+		const asSASTLifetimeExitPlan* FullExpressionPlan = nullptr;
+		for (asUINT RecordIndex = 0;
+			Context != nullptr && RecordIndex < Context->GetLifetimeRecordCount();
+			++RecordIndex)
+		{
+			const asSASTLifetimeRecord* const Record =
+				Context->GetLifetimeRecord(RecordIndex);
+			if (Record == nullptr
+				|| Record->subjectKind != asAST_LIFETIME_SUBJECT_TEMPORARY
+				|| Record->phase != asAST_LIFETIME_PHASE_FULL_EXPRESSION)
+			{
+				continue;
+			}
+			TemporaryRecord = Record;
+			if (Record->semanticRegion.nodeClass == asAST_LIFETIME_NODE_STMT)
+			{
+				FullExpressionPlan = LifetimeView.FindExitPlan(
+					asASTStmtId(Record->semanticRegion.value),
+					asAST_LIFETIME_EXIT_PLAN_FULL_EXPRESSION);
+			}
+			break;
+		}
+		ASSERT_THAT(IsTrue(TemporaryRecord != nullptr
+			&& FullExpressionPlan != nullptr
+			&& FullExpressionPlan->recordIndices.GetLength() == 1,
+			TEXT("direct temporary must reach CodeGen through its exact full-expression exit plan")));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module, "int Entry()", Value)
+				&& Value == 7,
+			*FString::Printf(
+				TEXT("FTracked(7) must be destroyed before the following Return reads DestructionTrace; got %d"),
+				Value)));
+
+		const int32* Trace = nullptr;
+		for (asUINT GlobalIndex = 0;
+			GlobalIndex < Module->GetGlobalVarCount(); ++GlobalIndex)
+		{
+			const char* Name = nullptr;
+			Module->GetGlobalVar(GlobalIndex, &Name);
+			if (Name != nullptr
+				&& FCStringAnsi::Strcmp(Name, "DestructionTrace") == 0)
+			{
+				Trace = static_cast<const int32*>(
+					Module->GetAddressOfGlobalVar(GlobalIndex));
+				break;
+			}
+		}
+		ASSERT_THAT(IsTrue(Trace != nullptr && *Trace == 7,
+			TEXT("the epilogue must not destroy the already-retired temporary a second time")));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			static_cast<asCModule*>(Module)->GetLastBytecodePublisher(),
+			TEXT("direct temporary lifetime must be published by Canonical CodeGen")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			static_cast<asCModule*>(Module)->GetLastLegacyCompilerInvocationCount(),
+			TEXT("direct temporary lifetime must not invoke asCCompiler")));
+	}
+
 	TEST_METHOD(CanonicalTryCatchRejectedDoesNotPublishCompiler)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;

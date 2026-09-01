@@ -9064,9 +9064,23 @@ namespace
 				}
 				break;
 			case asAST_STMT_EXPR:
+			{
 				if( stmt->expr.IsValid() )
+				{
 					EmitExpr(stmt->expr);
+					if( !ok )
+						return;
+					if( !EmitExitPlan(
+						lifetimeView.FindExitPlan(
+							stmt->id,
+							asAST_LIFETIME_EXIT_PLAN_FULL_EXPRESSION),
+						true) )
+					{
+						return;
+					}
+				}
 				break;
+			}
 			case asAST_STMT_RETURN:
 			{
 				if( stmt->expr.IsValid() && returnSlot != 0x7fffffff )
@@ -9256,6 +9270,67 @@ namespace
 			return true;
 		}
 
+		bool EmitTemporaryLifetimeCleanup(asUINT recordIndex)
+		{
+			const asSASTLifetimeViewRecord* const viewRecord =
+				GetLifetimeRecord(recordIndex);
+			if( viewRecord == 0 ) return false;
+			const asSASTLifetimeRecord& action = viewRecord->record;
+			const asCExpr* const temporary = action.subject.nodeClass
+				== asAST_LIFETIME_NODE_EXPR
+				? context.GetExpr(asASTExprId(action.subject.value)) : 0;
+			const asCDecl* const destructor = action.actionTarget.nodeClass
+				== asAST_LIFETIME_NODE_DECL
+				? context.GetDecl(asASTDeclId(action.actionTarget.value)) : 0;
+			if( action.subjectKind != asAST_LIFETIME_SUBJECT_TEMPORARY
+				|| action.actionKind != asAST_LIFETIME_ACTION_DESTROY_VALUE
+				|| action.phase != asAST_LIFETIME_PHASE_FULL_EXPRESSION
+				|| action.activationPoint != action.subject
+				|| temporary == 0
+				|| temporary->kind != asAST_EXPR_MATERIALIZE_TEMPORARY
+				|| destructor == 0
+				|| destructor->kind != asAST_DECL_DESTRUCTOR )
+			{
+				FailAt(__LINE__, asAST_VERIFY_INVALID_LIFETIME_PROTOCOL);
+				return false;
+			}
+
+			const int slot = FindExprSlot(
+				materializedSlots, temporary->id);
+			asSCodeGenObject* const object = FindTrackedObject(slot);
+			const asCDataType temporaryType = TypeOf(temporary->type);
+			if( !ok ) return false;
+			asCTypeInfo* const temporaryTypeInfo = temporaryType.GetTypeInfo();
+			asCObjectType* const objectType = object
+				? CastToObjectType(object->type.GetTypeInfo()) : 0;
+			asCScriptFunction* const destructorFunction =
+				FindFunc(destructor->id);
+			if( slot == 0x7fffffff || object == 0 || objectType == 0
+				|| temporaryTypeInfo == 0
+				|| !temporaryType.IsObject()
+				|| temporaryType.IsReference()
+				|| temporaryType.IsObjectHandle()
+				|| (temporaryTypeInfo->GetFlags() & asOBJ_VALUE) == 0
+				|| temporaryTypeInfo != object->type.GetTypeInfo()
+				|| destructorFunction == 0
+				|| destructorFunction->objectType != objectType )
+			{
+				FailAt(__LINE__, asNO_FUNCTION);
+				return false;
+			}
+			if( builder )
+			{
+				builder->MarkDependency(destructorFunction, 0, 0);
+			}
+			bc.InstrSHORT(asBC_PSF, (short)slot);
+			bc.Call(destructorFunction->funcType == asFUNC_SYSTEM
+					? asBC_CALLSYS : asBC_CALL,
+				destructorFunction->id, AS_PTR_SIZE);
+			bc.ObjInfo(slot, asOBJ_UNINIT);
+			object->live = false;
+			return true;
+		}
+
 		bool EmitScopeReleaseCleanup(asUINT recordIndex)
 		{
 			const asSASTLifetimeViewRecord* const viewRecord =
@@ -9308,6 +9383,11 @@ namespace
 			if( viewRecord->record.actionKind
 				== asAST_LIFETIME_ACTION_DESTROY_VALUE )
 			{
+				if( viewRecord->record.subjectKind
+					== asAST_LIFETIME_SUBJECT_TEMPORARY )
+				{
+					return EmitTemporaryLifetimeCleanup(recordIndex);
+				}
 				return EmitScopeExitCleanup(recordIndex);
 			}
 			if( viewRecord->record.actionKind
@@ -9387,11 +9467,23 @@ namespace
 		{
 			const asSASTLifetimeViewRecord* const viewRecord =
 				GetLifetimeRecord(recordIndex);
-			const int slot = viewRecord != 0
-				&& viewRecord->record.subject.nodeClass
-					== asAST_LIFETIME_NODE_DECL
-				? FindSlot(asASTDeclId(viewRecord->record.subject.value))
-				: 0x7fffffff;
+			int slot = 0x7fffffff;
+			if( viewRecord != 0 )
+			{
+				if( viewRecord->record.subject.nodeClass
+					== asAST_LIFETIME_NODE_DECL )
+				{
+					slot = FindSlot(
+						asASTDeclId(viewRecord->record.subject.value));
+				}
+				else if( viewRecord->record.subject.nodeClass
+					== asAST_LIFETIME_NODE_EXPR )
+				{
+					slot = FindExprSlot(
+						materializedSlots,
+						asASTExprId(viewRecord->record.subject.value));
+				}
+			}
 			for( asUINT objectIndex = 0; objectIndex < objects.GetLength(); ++objectIndex )
 			{
 				if( objects[objectIndex].offset == slot )
