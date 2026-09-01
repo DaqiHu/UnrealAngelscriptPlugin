@@ -48,6 +48,7 @@ enum class EAngelscriptTypedASTJITFallbackReason : uint8
 	UnsupportedGlobalInitializer,
 	UnsupportedImportedRoute,
 	SemanticDependencyMismatch,
+	RuntimeTypeBindingMismatch,
 	NonPortableNumericConversion,
 	UnsupportedExecutionObservability,
 	UnsupportedExecutionControl,
@@ -180,8 +181,19 @@ struct FAngelscriptTypedASTJITCanonicalLifetimeFacts
 ANGELSCRIPTRUNTIME_API const TCHAR* LexToString(
 	EAngelscriptTypedASTJITFallbackReason Reason);
 
+enum class EAngelscriptTypedASTJITBodyParameterABI : uint8
+{
+	ScalarValue = 0,
+	BorrowedValueAddress,
+};
+
 /**
  * Provider-independent, already-resolved scalar entry shape.
+ *
+ * Production generation freezes the exact C++ body signature from the shared
+ * EntryPlan before this value reaches eligibility, dependency analysis, or
+ * emission. Provider-independent scalar inspection tests may omit that frozen
+ * signature; the no-frozen path never admits managed/reference parameters.
  *
  * This structure intentionally carries no script function pointer, bytecode,
  * provider catalog, UObject, UFunction, or runtime coordinator state.
@@ -191,6 +203,10 @@ struct FAngelscriptTypedASTJITFunctionShape
 	FString SymbolName;
 	TArray<asCDataType> ParameterTypes;
 	asCDataType ReturnType;
+	bool bHasFrozenBodySignature = false;
+	FString FrozenBodyReturnCppType;
+	TArray<FString> FrozenBodyParameterCppTypes;
+	TArray<EAngelscriptTypedASTJITBodyParameterABI> FrozenBodyParameterABIs;
 	EAngelscriptTypedASTJITInvocationKind InvocationKind =
 		EAngelscriptTypedASTJITInvocationKind::Global;
 	EAngelscriptTypedASTJITReceiverKind ReceiverKind =
@@ -226,9 +242,12 @@ struct FAngelscriptTypedASTJITNativeCallEmissionPlan
 	FAngelscriptArtifactReference TargetReference;
 
 	// Direct-route metadata. The emitted expression names Symbol and includes
-	// Include; neither field is consulted by a current-Engine bound route.
+	// Include, and consumes the exact structurally validated C++ callable type;
+	// none of these fields is consulted by a current-Engine bound route.
 	FString Symbol;
 	FString Include;
+	FString ReviewedCppReturnType;
+	TArray<FString> ReviewedCppParameterTypes;
 
 	// Current-Engine bound metadata. Dispatch is the pre-adopted reference slot;
 	// the declaration and registered target are diagnostic text only.

@@ -112,6 +112,11 @@ public:
 		ASSERT_THAT(AreEqual(
 			EAngelscriptStaticJITEntryReturnPlacement::Direct,
 			Plan.Return.Placement));
+
+		FStaticJITEntryPlan TamperedPlan = Plan;
+		TamperedPlan.Parameters[0].BodyCppType = TEXT("uint32");
+		ASSERT_THAT(IsFalse(TamperedPlan.IsStructurallyComplete(),
+			TEXT("a frozen C++ ABI field changed after hashing must fail admission")));
 	}
 
 	TEST_METHOD(ExternalImplicitThisKeepsFormalParameterZero)

@@ -6,6 +6,7 @@
 #include "Cache/AngelscriptCacheCleanCapture.h"
 #include "Cache/AngelscriptCacheEnvironment.h"
 #include "Cache/AngelscriptCacheStableSymbolIdentity.h"
+#include "Misc/ScopeLock.h"
 #include "StaticJIT/AngelscriptJITGeneration.h"
 
 #include "StartAngelscriptHeaders.h"
@@ -19,6 +20,7 @@
 #include "source/as_objecttype.h"
 #include "source/as_property.h"
 #include "source/as_runtime_type_bridge.h"
+#include "source/as_runtime_type_binding.h"
 #include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
@@ -45,12 +47,33 @@ FAngelscriptStaticJITGenerationASTLease::
 FAngelscriptStaticJITGenerationASTLease::
 	~FAngelscriptStaticJITGenerationASTLease()
 {
-	if (Snapshot != nullptr)
+	ReleaseBeforeEngineShutdown();
+}
+
+const asCASTContext*
+FAngelscriptStaticJITGenerationASTLease::GetContext() const
+{
+	FScopeLock Lock(&LeaseMutex);
+	return SealedContext;
+}
+
+void FAngelscriptStaticJITGenerationASTLease::
+	ReleaseBeforeEngineShutdown()
+{
+	asIASTSnapshot* SnapshotToRelease = nullptr;
 	{
-		Snapshot->Release();
+		FScopeLock Lock(&LeaseMutex);
+		SnapshotToRelease = Snapshot;
 		Snapshot = nullptr;
+		SealedContext = nullptr;
 	}
-	SealedContext = nullptr;
+
+	// Runtime-generation teardown may re-enter AngelScript object cleanup. Do
+	// not hold the lease mutex while releasing the public snapshot reference.
+	if (SnapshotToRelease != nullptr)
+	{
+		SnapshotToRelease->Release();
+	}
 }
 
 namespace AngelscriptStaticJITGenerationSnapshot_Private
@@ -879,9 +902,10 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 	static void CaptureNativeCallTarget(
 		FAngelscriptStaticJITGenerationSnapshot& Snapshot,
 		asCScriptEngine& ScriptEngine,
-		const int32 FunctionId)
+		const int32 FunctionId,
+		const asCString& CanonicalTargetDeclKey)
 	{
-		if (FunctionId < 0
+		if (FunctionId < 0 || CanonicalTargetDeclKey.GetLength() == 0
 			|| Snapshot.NativeCallTargets.ContainsByPredicate(
 				[FunctionId](
 					const FAngelscriptStaticJITNativeCallTarget& Candidate)
@@ -916,6 +940,11 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 					*TargetFunction, ExpectedVMBridgeABI);
 			const auto& ScriptFunction =
 				*static_cast<asCScriptFunction*>(TargetFunction);
+			if (!ScriptFunction.canonicalASTStableDeclKey.Equals(
+					CanonicalTargetDeclKey))
+			{
+				return;
+			}
 			if (Descriptor == nullptr)
 			{
 				if (InventoryEntry == nullptr
@@ -929,6 +958,8 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 				FAngelscriptStaticJITNativeCallTarget& Added =
 					Snapshot.NativeCallTargets.Emplace_GetRef();
 				Added.EngineLocalFunctionId = FunctionId;
+				Added.CanonicalTargetDeclKey = UTF8_TO_TCHAR(
+					CanonicalTargetDeclKey.AddressOf());
 				Added.CanonicalDeclaration =
 					InventoryEntry->CanonicalDeclaration;
 				Added.Reference = InventoryEntry->StableReference;
@@ -981,6 +1012,8 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 			FAngelscriptStaticJITNativeCallTarget& Added =
 				Snapshot.NativeCallTargets.Emplace_GetRef();
 			Added.EngineLocalFunctionId = FunctionId;
+			Added.CanonicalTargetDeclKey = UTF8_TO_TCHAR(
+				CanonicalTargetDeclKey.AddressOf());
 			Added.CanonicalDeclaration = UTF8_TO_TCHAR(
 				TargetFunction->GetDeclaration(false, false, false));
 			Added.Reference = StableReference;
@@ -994,6 +1027,91 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 			Added.bCurrentNativeCallable = bDescriptorCurrentNative;
 			Added.bScalarBridgeCallable = bDescriptorBridge;
 			Added.Descriptor = *Descriptor;
+	}
+
+	static FAngelscriptStaticJITRuntimeTypeABIKey CopyRuntimeTypeABIKey(
+		const asSTypeABIKey& Source)
+	{
+		FAngelscriptStaticJITRuntimeTypeABIKey Result;
+		Result.StableTypeKey = UTF8_TO_TCHAR(Source.stableTypeKey.AddressOf());
+		Result.TargetProfileKey = UTF8_TO_TCHAR(
+			Source.targetProfileKey.AddressOf());
+		Result.NativeEnvironmentKey = UTF8_TO_TCHAR(
+			Source.nativeEnvironmentKey.AddressOf());
+		Result.TypeKind = static_cast<uint8>(Source.typeKind);
+		Result.Qualifiers = Source.qualifiers;
+		Result.ObjectFlags = Source.objectFlags;
+		Result.ByteSize = Source.byteSize;
+		Result.ByteAlignment = Source.byteAlignment;
+		Result.LayoutSignature = UTF8_TO_TCHAR(
+			Source.layoutSignature.AddressOf());
+		Result.BehaviourSignature = UTF8_TO_TCHAR(
+			Source.behaviourSignature.AddressOf());
+		Result.LayoutHash = Source.layoutHash;
+		return Result;
+	}
+
+	static EAngelscriptStaticJITRuntimeTypeBindingRole MapSignatureRole(
+		const asERuntimeTypeBindingSignatureRole Role)
+	{
+		switch (Role)
+		{
+		case asRUNTIME_TYPE_SIGNATURE_RETURN:
+			return EAngelscriptStaticJITRuntimeTypeBindingRole::Return;
+		case asRUNTIME_TYPE_SIGNATURE_PARAMETER:
+			return EAngelscriptStaticJITRuntimeTypeBindingRole::Parameter;
+		case asRUNTIME_TYPE_SIGNATURE_RECEIVER:
+			return EAngelscriptStaticJITRuntimeTypeBindingRole::Receiver;
+		default:
+			return EAngelscriptStaticJITRuntimeTypeBindingRole::Invalid;
+		}
+	}
+
+	static bool CaptureRuntimeTypeBindingView(
+		FAngelscriptStaticJITGenerationSnapshot& Snapshot,
+		const FAngelscriptStableModuleKey& ModuleKey,
+		const asCASTSnapshot& CanonicalSnapshot,
+		FString* OutError)
+	{
+		for (asUINT BindingIndex = 0;
+			BindingIndex < CanonicalSnapshot.
+				GetRuntimeTypeBindingCountForDiagnostics();
+			++BindingIndex)
+		{
+			const asSResolvedRuntimeTypeBinding* const Source =
+				CanonicalSnapshot.GetRuntimeTypeBindingForDiagnostics(
+					BindingIndex);
+			if (Source == nullptr
+				|| Source->relocationUse
+					!= asTYPE_RELOC_FUNCTION_SIGNATURE)
+			{
+				continue;
+			}
+
+			FAngelscriptStaticJITRuntimeTypeBinding& Added =
+				Snapshot.RuntimeTypeBindings.Emplace_GetRef();
+			Added.Summary.ModuleKey = ModuleKey;
+			Added.Summary.OwnerCanonicalFunctionDeclKey = UTF8_TO_TCHAR(
+				Source->ownerFunctionStableKey.AddressOf());
+			Added.Summary.Role = MapSignatureRole(Source->signatureRole);
+			Added.Summary.FormalIndex =
+				Source->signatureRole == asRUNTIME_TYPE_SIGNATURE_PARAMETER
+					? Source->formalIndex : MAX_uint32;
+			Added.Summary.ExpectedABI =
+				CopyRuntimeTypeABIKey(Source->expectedKey);
+			Added.Summary.ResolvedABI = CopyRuntimeTypeABIKey(Source->key);
+			Added.EngineLocalType = Source->typeInfo;
+			if (!Added.IsStructurallyComplete())
+			{
+				return Fail(OutError, FString::Printf(TEXT(
+					"StaticJIT generation captured an incomplete Runtime type binding: Module=%s Owner=%s Role=%u Formal=%u."),
+					*ModuleKey.Hash.ToHexString(),
+					*Added.Summary.OwnerCanonicalFunctionDeclKey,
+					static_cast<uint8>(Added.Summary.Role),
+					Added.Summary.FormalIndex));
+			}
+		}
+		return true;
 	}
 
 	class FCanonicalCallCollector final : public asIASTConstVisitor
@@ -1037,45 +1155,6 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 		}
 	};
 
-	static bool NativeFunctionOwnerMatchesCanonicalDecl(
-		const asCASTContext& Context,
-		const asCDecl& Target,
-		const asCScriptFunction& Candidate)
-	{
-		const asCDecl* const Owner = Context.GetDecl(Target.parent);
-		if (Target.kind == asAST_DECL_METHOD)
-		{
-			if (Candidate.objectType == nullptr)
-			{
-				return false;
-			}
-			const FString Receiver = Owner != nullptr
-				? UTF8_TO_TCHAR(Owner->stableKey.GetLength()
-					? Owner->stableKey.AddressOf() : Owner->name.AddressOf())
-				: FString();
-			const FString ReceiverNamespace = UTF8_TO_TCHAR(
-				Candidate.objectType->GetNamespace());
-			const FString ReceiverName = UTF8_TO_TCHAR(
-				Candidate.objectType->GetName());
-			const FString CandidateReceiver = ReceiverNamespace.IsEmpty()
-				? ReceiverName
-				: ReceiverNamespace + TEXT("::") + ReceiverName;
-			return !Receiver.IsEmpty()
-				&& CandidateReceiver == Receiver;
-		}
-
-		if (Candidate.objectType != nullptr)
-		{
-			return false;
-		}
-		const FString Namespace = Owner != nullptr
-			&& Owner->kind == asAST_DECL_NAMESPACE
-			? UTF8_TO_TCHAR(Owner->stableKey.GetLength()
-				? Owner->stableKey.AddressOf() : Owner->name.AddressOf())
-			: FString();
-		return FString(UTF8_TO_TCHAR(Candidate.GetNamespace())) == Namespace;
-	}
-
 	static void CaptureNativeCallTargets(
 		FAngelscriptStaticJITGenerationSnapshot& Snapshot,
 		asCScriptEngine& ScriptEngine,
@@ -1104,19 +1183,19 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 			return;
 		}
 
+		asCRuntimeTypeBridge Bridge(&ScriptEngine);
 		for (const asASTExprId CallId : Collector.Calls)
 		{
 			const asCExpr* const Expression = Context.GetExpr(CallId);
 			const asCDecl* const Target = Expression != nullptr
 				? Context.GetDecl(Expression->resolvedDecl) : nullptr;
-			if (Target == nullptr || Target->origin.GetLength() == 0)
+			if (Target == nullptr || Target->stableKey.GetLength() == 0)
 			{
 				continue;
 			}
 
-			const FString CanonicalDeclaration =
-				UTF8_TO_TCHAR(Target->origin.AddressOf());
-			TArray<const asCScriptFunction*> ExactDeclarationMatches;
+			const asCScriptFunction* Match = nullptr;
+			bool bAmbiguous = false;
 			for (asUINT FunctionIndex = 0;
 				FunctionIndex < ScriptEngine.scriptFunctions.GetLength();
 				++FunctionIndex)
@@ -1126,42 +1205,31 @@ namespace AngelscriptStaticJITGenerationSnapshot_Private
 				if (Candidate == nullptr
 					|| Candidate->engine != &ScriptEngine
 					|| Candidate->funcType != asFUNC_SYSTEM
-					|| CanonicalDeclaration != UTF8_TO_TCHAR(
-						Candidate->GetDeclaration(false, false, false)))
+					|| !Candidate->canonicalASTStableDeclKey.Equals(
+						Target->stableKey))
 				{
 					continue;
 				}
-				ExactDeclarationMatches.Add(Candidate);
-			}
-
-			const asCScriptFunction* Match = nullptr;
-			if (ExactDeclarationMatches.Num() == 1)
-			{
-				Match = ExactDeclarationMatches[0];
-			}
-			else if (ExactDeclarationMatches.Num() > 1)
-			{
-				for (const asCScriptFunction* Candidate
-					: ExactDeclarationMatches)
+				asASTDeclId BoundDeclaration;
+				if (Bridge.BindSystemFunctionDeclaration(
+						Context, *Candidate, BoundDeclaration, nullptr)
+						!= asRUNTIME_DECL_BIND_OK
+					|| BoundDeclaration != Target->id)
 				{
-					if (Candidate == nullptr
-						|| !NativeFunctionOwnerMatchesCanonicalDecl(
-							Context, *Target, *Candidate))
-					{
-						continue;
-					}
-					if (Match != nullptr)
-					{
-						Match = nullptr;
-						break;
-					}
-					Match = Candidate;
+					continue;
 				}
+				if (Match != nullptr)
+				{
+					Match = nullptr;
+					bAmbiguous = true;
+					break;
+				}
+				Match = Candidate;
 			}
-			if (Match != nullptr)
+			if (Match != nullptr && !bAmbiguous)
 			{
 				CaptureNativeCallTarget(
-					Snapshot, ScriptEngine, Match->id);
+					Snapshot, ScriptEngine, Match->id, Target->stableKey);
 			}
 		}
 	}
@@ -1456,6 +1524,12 @@ bool BuildAngelscriptStaticJITGenerationSnapshot(
 	{
 		return false;
 	}
+	const asSRuntimeTypeBindingEnvironment RuntimeTypeBindingEnvironment =
+		asMakeCurrentRuntimeTypeBindingEnvironment();
+	Snapshot->RuntimeTypeBindingTargetProfileKey = UTF8_TO_TCHAR(
+		RuntimeTypeBindingEnvironment.targetProfileKey.AddressOf());
+	Snapshot->RuntimeTypeBindingNativeEnvironmentKey = UTF8_TO_TCHAR(
+		RuntimeTypeBindingEnvironment.nativeEnvironmentKey.AddressOf());
 	const bool bRequireCanonicalAST =
 		Engine.GetRuntimeConfig().bRequireCanonicalASTForStaticJITGeneration;
 	Snapshot->CaptureProfile = bRequireCanonicalAST
@@ -1527,6 +1601,13 @@ bool BuildAngelscriptStaticJITGenerationSnapshot(
 					TEXT("StaticJIT generation module '%s' retained no sealed public AST V1 snapshot."),
 					*ModuleDesc->ModuleName));
 			}
+			const asCASTSnapshot* const ConcreteSnapshot =
+				static_cast<const asCASTSnapshot*>(PublicSnapshot);
+			if (!CaptureRuntimeTypeBindingView(
+					*Snapshot, ModuleKey, *ConcreteSnapshot, OutError))
+			{
+				return false;
+			}
 			Snapshot->CanonicalASTLeases.Add(ASTLease);
 		}
 		else if (bRequireCanonicalAST)
@@ -1570,6 +1651,7 @@ bool BuildAngelscriptStaticJITGenerationSnapshot(
 				ScriptModule->funcDefs[TypeIndex]);
 		}
 
+		asCRuntimeTypeBridge GlobalDeclarationBridge(ScriptEngine);
 		for (asUINT GlobalIndex = 0;
 			GlobalIndex < ScriptModule->GetGlobalVarCount(); ++GlobalIndex)
 		{
@@ -1602,6 +1684,34 @@ bool BuildAngelscriptStaticJITGenerationSnapshot(
 				FAngelscriptArtifactIdentityBuilder::BuildGlobalKey(Identity);
 			Global.CanonicalDeclaration = UTF8_TO_TCHAR(
 				ScriptModule->GetGlobalVarDeclaration(GlobalIndex, true));
+			if (CanonicalAST != nullptr)
+			{
+				asASTDeclId BoundGlobalDecl;
+				asCString BindDetail;
+				const int BindResult =
+					GlobalDeclarationBridge.BindGlobalDeclaration(
+						*CanonicalAST, *GlobalProperty,
+						BoundGlobalDecl, &BindDetail);
+				if (BindResult == asRUNTIME_DECL_BIND_OK)
+				{
+					const asCDecl* const Bound =
+						CanonicalAST->GetDecl(BoundGlobalDecl);
+					if (Bound != nullptr)
+					{
+						Global.CanonicalASTDeclKey = UTF8_TO_TCHAR(
+							Bound->stableKey.AddressOf());
+					}
+				}
+				else if (bRequireCanonicalAST)
+				{
+					return Fail(OutError, FString::Printf(TEXT(
+						"StaticJIT canonical global '%s' did not bind its producer-carried declaration identity '%s': %s."),
+						*Global.CanonicalDeclaration,
+						UTF8_TO_TCHAR(GlobalProperty->
+							canonicalASTStableDeclKey.AddressOf()),
+						UTF8_TO_TCHAR(BindDetail.AddressOf())));
+				}
+			}
 		}
 
 		for (asUINT FunctionIndex = 0;
@@ -1989,6 +2099,7 @@ bool BuildAngelscriptStaticJITGenerationSnapshot(
 		{
 			Dependency.EngineLocalGlobalPropertyId =
 				Match->EngineLocalGlobalPropertyId;
+			Dependency.CanonicalASTDeclKey = Match->CanonicalASTDeclKey;
 		}
 	}
 	Snapshot->Dependencies.Sort([](const auto& Left, const auto& Right)

@@ -62,6 +62,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJITEligibilityInput
 	EAngelscriptTypedASTJITSignatureFlags SignatureFlags =
 		EAngelscriptTypedASTJITSignatureFlags::None;
 	TArray<FAngelscriptTypedASTJITGlobalDependency> GlobalDependencies;
+	/** Non-empty only when a production EntryPlan cannot author one exact body ABI. */
+	FString FrozenBodySignatureFailure;
 	FString CapabilityDetail;
 };
 
@@ -118,6 +120,19 @@ ANGELSCRIPTRUNTIME_API bool BuildAngelscriptTypedASTJITRootIndex(
 ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJITEligibility
 EvaluateAngelscriptTypedASTJITEligibility(
 	const FAngelscriptTypedASTJITEligibilityInput& Input);
+
+/**
+ * Builds the one production function shape shared by eligibility, dependency
+ * analysis, and body emission. Exact C++ spellings come only from the
+ * authenticated shared EntryPlan; Runtime datatypes remain generation-local
+ * structural coordinates and are never a post-freeze spelling authority.
+ */
+ANGELSCRIPTRUNTIME_API bool BuildAngelscriptTypedASTJITFunctionShape(
+	const FAngelscriptStaticJITCompiledFunctionView& Function,
+	const FStaticJITEntryPlan& EntryPlan,
+	const FString& SymbolName,
+	FAngelscriptTypedASTJITFunctionShape& OutShape,
+	FString* OutError = nullptr);
 
 /** Normalizes the exact Engine-local root/function into task-local facts. */
 ANGELSCRIPTRUNTIME_API FAngelscriptTypedASTJITEligibilityInput

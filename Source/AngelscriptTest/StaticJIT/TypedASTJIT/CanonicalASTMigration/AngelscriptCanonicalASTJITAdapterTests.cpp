@@ -1618,6 +1618,72 @@ public:
 			TEXT("repeated canonical emission is deterministic")));
 	}
 
+	TEST_METHOD(ReceiverBearingCallFallsBackBeforeTypedClosure)
+	{
+		asCASTContext Context;
+		asCSema Sema(nullptr, Context);
+		const asASTDeclId Tu = Sema.ActOnTranslationUnit("JitAstReceiverCall");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId ReceiverClass =
+			Sema.ActOnClassDecl(Tu, "FReceiver", asCSourceRange());
+		const asCDecl* const ReceiverClassDecl = Context.GetDecl(ReceiverClass);
+		ASSERT_THAT(IsTrue(ReceiverClassDecl != nullptr,
+			TEXT("receiver class must have a canonical declaration")));
+		if (ReceiverClassDecl == nullptr)
+		{
+			return;
+		}
+		const asCQualType ReceiverType = Context.InternNamedType(
+			asAST_TYPE_REFERENCE_OBJECT,
+			ReceiverClassDecl->stableKey.AddressOf(),
+			asAST_QUAL_HANDLE | asAST_QUAL_AUTO_HANDLE);
+		Context.SetDeclType(ReceiverClass, ReceiverType);
+		const asASTDeclId Method = Sema.ActOnMethodDecl(
+			ReceiverClass, "Read", IntType, asCSourceRange());
+		const asASTDeclId MakeReceiver = Sema.ActOnFunctionDecl(
+			Tu, "MakeReceiver", ReceiverType, asCSourceRange());
+		const asASTDeclId Fn =
+			Sema.ActOnFunctionDecl(Tu, "Run", IntType, asCSourceRange());
+
+		asCArray<asASTExprId> NoArguments;
+		const asASTExprId ReceiverCall = Sema.ActOnCall(
+			MakeReceiver, NoArguments, ReceiverType, asCSourceRange());
+		const asASTExprId MethodCall = Sema.ActOnCall(
+			Method, NoArguments, IntType, asCSourceRange());
+		ASSERT_THAT(AreEqual(
+			0,
+			Context.SetExprReceiver(MethodCall, ReceiverCall),
+			TEXT("method call must retain its receiver through the dedicated edge")));
+		asCArray<asASTStmtId> Body;
+		Body.PushLast(Sema.ActOnReturnStmt(Fn, MethodCall, asCSourceRange()));
+		Context.SetBody(Fn, Sema.ActOnCompoundStmt(Fn, Body, asCSourceRange()));
+		Sema.FinishDecl(Fn);
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("receiver-only edge fixture must seal")));
+
+		const asCExpr* const SealedMethodCall = Context.GetExpr(MethodCall);
+		ASSERT_THAT(IsTrue(SealedMethodCall != nullptr
+			&& SealedMethodCall->receiver == ReceiverCall
+			&& SealedMethodCall->children.GetLength() == 0,
+			TEXT("fixture must keep receiver evaluation outside ordinary call children")));
+
+		FAngelscriptTypedASTJITEligibilityInput Input;
+		Input.bIsUFunctionRoot = true;
+		Input.Purpose = EAngelscriptTypedASTJITEligibilityPurpose::RootCallClosure;
+		Input.SealedAST = &Context;
+		Input.CanonicalFunctionDecl = Fn;
+		Input.Shape.SymbolName = TEXT("ASJIT_Run");
+		Input.Shape.ReturnType = asCDataType::CreatePrimitive(ttInt, false);
+		const FAngelscriptTypedASTJITEligibility Eligibility =
+			EvaluateAngelscriptTypedASTJITEligibility(Input);
+		ASSERT_THAT(IsFalse(Eligibility.bEligible,
+			TEXT("receiver evaluation is outside the current typed closure contract")));
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(EAngelscriptTypedASTJITFallbackReason::UnsupportedReceiver),
+			static_cast<int32>(Eligibility.Reason),
+			TEXT("receiver-bearing calls must fail closed before closure collection or emission")));
+	}
+
 	TEST_METHOD(CanonicalCallWithoutPlanStaysUnsupportedCall)
 	{
 		asCASTContext Context;
@@ -1718,6 +1784,170 @@ public:
 			&& CallAt > FirstEvaluationAt,
 			*FString::Printf(TEXT(
 				"C++ emission must evaluate reverse-formal AST children in stored order, then restore formal order at the call. definition:\n%s"),
+				*Emission.Definition)));
+	}
+
+	TEST_METHOD(CanonicalCallEmissionConsumesSealedFormalArgumentRelation)
+	{
+		asCASTContext Context;
+		asCSema Sema(nullptr, Context);
+		const asASTDeclId Tu =
+			Sema.ActOnTranslationUnit("JitAstCallExactFormalRelation");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId Callee =
+			Sema.ActOnFunctionDecl(Tu, "Helper", IntType, asCSourceRange());
+		const asASTDeclId FirstFormal =
+			Sema.ActOnParamDecl(Callee, "First", IntType, asCSourceRange());
+		const asASTDeclId SecondFormal =
+			Sema.ActOnParamDecl(Callee, "Second", IntType, asCSourceRange());
+		Sema.FinishDecl(Callee);
+
+		const asASTDeclId Fn =
+			Sema.ActOnFunctionDecl(Tu, "Run", IntType, asCSourceRange());
+		const asASTExprId FirstArg =
+			Sema.ActOnIntegerLiteral(1, asCSourceRange());
+		const asASTExprId SecondArg =
+			Sema.ActOnIntegerLiteral(2, asCSourceRange());
+		asCArray<asASTExprId> Args;
+		Args.PushLast(FirstArg);
+		Args.PushLast(SecondArg);
+
+		// Keep evaluation/storage order independent from formal placement. Both
+		// formals intentionally have the same type, so an emitter that ignores
+		// this sealed relation can silently swap values without a type error.
+		asCArray<asSASTCallArgument> CallArguments;
+		asSASTCallArgument FirstEvaluation;
+		FirstEvaluation.expression = FirstArg;
+		FirstEvaluation.formal = SecondFormal;
+		FirstEvaluation.formalType = IntType;
+		FirstEvaluation.formalIndex = 1;
+		FirstEvaluation.origin = asAST_CALL_ARGUMENT_GENERATED;
+		CallArguments.PushLast(FirstEvaluation);
+		asSASTCallArgument SecondEvaluation;
+		SecondEvaluation.expression = SecondArg;
+		SecondEvaluation.formal = FirstFormal;
+		SecondEvaluation.formalType = IntType;
+		SecondEvaluation.formalIndex = 0;
+		SecondEvaluation.origin = asAST_CALL_ARGUMENT_GENERATED;
+		CallArguments.PushLast(SecondEvaluation);
+
+		const asASTExprId Call = Sema.ActOnCall(
+			Callee, Args, IntType, asCSourceRange(), &CallArguments);
+		asCArray<asASTStmtId> Body;
+		Body.PushLast(Sema.ActOnReturnStmt(Fn, Call, asCSourceRange()));
+		Context.SetBody(Fn,
+			Sema.ActOnCompoundStmt(Fn, Body, asCSourceRange()));
+		Sema.FinishDecl(Fn);
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("exact formal-relation fixture must pass publication verification")));
+
+		const asCExpr* const SealedCall = Context.GetExpr(Call);
+		ASSERT_THAT(IsTrue(SealedCall != nullptr
+			&& SealedCall->children.GetLength() == 2
+			&& SealedCall->callArguments.GetLength() == 2));
+		if (SealedCall == nullptr
+			|| SealedCall->callArguments.GetLength() != 2)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(
+			SealedCall->callArguments[0].expression
+				== SealedCall->children[0]
+			&& SealedCall->callArguments[0].formalIndex == 0
+			&& SealedCall->callArguments[1].expression
+				== SealedCall->children[1]
+			&& SealedCall->callArguments[1].formalIndex == 1,
+			TEXT("the sealed graph must retain a verifier-valid mapping that differs from reverse-position reconstruction")));
+
+		FAngelscriptTypedASTJITFunctionShape Shape;
+		Shape.SymbolName = TEXT("ASJIT_Run");
+		Shape.ReturnType = asCDataType::CreatePrimitive(ttInt, false);
+		TArray<FAngelscriptTypedASTJITScriptCallEmissionPlan> ScriptCalls;
+		FAngelscriptTypedASTJITScriptCallEmissionPlan& Plan =
+			ScriptCalls.Emplace_GetRef();
+		Plan.Expression = Call;
+		Plan.Symbol = TEXT("ASJIT_Helper");
+		FAngelscriptTypedASTJITEmitOptions Options;
+		Options.ScriptCalls = ScriptCalls;
+		const FAngelscriptTypedASTJITEmission Emission =
+			EmitTypedASTJITFunction(Context, Fn, Shape, Options);
+		ASSERT_THAT(IsTrue(Emission.bSuccess,
+			*FString::Printf(TEXT("exact formal relation must emit: %s"),
+				*Emission.FailureDetail)));
+		const int32 FormalZeroEvaluationAt = Emission.Definition.Find(
+			TEXT("const int32 as_ast_e3_arg0 = int32(2);"));
+		const int32 FormalOneEvaluationAt = Emission.Definition.Find(
+			TEXT("const int32 as_ast_e3_arg1 = int32(1);"));
+		const int32 CallAt = Emission.Definition.Find(
+			TEXT("ASJIT_Helper(Execution, as_ast_e3_arg0, as_ast_e3_arg1)"));
+		ASSERT_THAT(IsTrue(FormalZeroEvaluationAt != INDEX_NONE
+			&& FormalOneEvaluationAt > FormalZeroEvaluationAt
+			&& CallAt > FormalOneEvaluationAt,
+			*FString::Printf(TEXT(
+				"C++ emission must preserve stored evaluation order and use the sealed formalIndex relation for invocation placement. definition:\n%s"),
+				*Emission.Definition)));
+	}
+
+	TEST_METHOD(CanonicalRootEmissionRequiresSealedFormalOrdinalRelation)
+	{
+		asCASTContext Context;
+		asCSema Sema(nullptr, Context);
+		const asASTDeclId Tu =
+			Sema.ActOnTranslationUnit("JitAstRootExactFormalRelation");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId Fn =
+			Sema.ActOnFunctionDecl(Tu, "Subtract", IntType, asCSourceRange());
+		const asASTDeclId FirstFormal =
+			Sema.ActOnParamDecl(Fn, "First", IntType, asCSourceRange());
+		const asASTDeclId SecondFormal =
+			Sema.ActOnParamDecl(Fn, "Second", IntType, asCSourceRange());
+		const asASTExprId FirstRef =
+			Sema.ActOnDeclRef(FirstFormal, IntType, asCSourceRange());
+		const asASTExprId SecondRef =
+			Sema.ActOnDeclRef(SecondFormal, IntType, asCSourceRange());
+		const asASTExprId Difference = Sema.ActOnBinary(
+			"-", FirstRef, SecondRef, IntType, asCSourceRange());
+		asCArray<asASTStmtId> Body;
+		Body.PushLast(Sema.ActOnReturnStmt(Fn, Difference, asCSourceRange()));
+		Context.SetBody(Fn,
+			Sema.ActOnCompoundStmt(Fn, Body, asCSourceRange()));
+		Sema.FinishDecl(Fn);
+
+		// Declaration children are a traversal container, not the Runtime entry
+		// ABI relation. Keep the two formals same-typed so a consumer that binds
+		// the nth PARAM child to the nth Runtime slot silently changes Subtract's
+		// meaning instead of failing a type check.
+		asCDecl* const MutableFunction =
+			const_cast<asCDecl*>(Context.GetDecl(Fn));
+		ASSERT_THAT(IsTrue(MutableFunction != nullptr
+			&& MutableFunction->children.GetLength() == 2));
+		if (MutableFunction == nullptr
+			|| MutableFunction->children.GetLength() != 2)
+		{
+			return;
+		}
+		MutableFunction->children[0] = SecondFormal;
+		MutableFunction->children[1] = FirstFormal;
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("reordered traversal children must retain a publishable exact-formal fixture")));
+
+		FAngelscriptTypedASTJITFunctionShape Shape;
+		Shape.SymbolName = TEXT("ASJIT_Subtract");
+		Shape.ParameterTypes.Add(asCDataType::CreatePrimitive(ttInt, false));
+		Shape.ParameterTypes.Add(asCDataType::CreatePrimitive(ttInt, false));
+		Shape.ReturnType = asCDataType::CreatePrimitive(ttInt, false);
+		const FAngelscriptTypedASTJITEmission Emission =
+			EmitTypedASTJITFunction(Context, Fn, Shape, {});
+		ASSERT_THAT(IsTrue(Emission.bSuccess,
+			*FString::Printf(TEXT("exact root formal relation must emit: %s"),
+				*Emission.FailureDetail)));
+		const int32 FirstSlot = Emission.Definition.Find(FString::Printf(
+			TEXT("const int32 as_ast_d%u"), FirstFormal.value));
+		const int32 SecondSlot = Emission.Definition.Find(FString::Printf(
+			TEXT("const int32 as_ast_d%u"), SecondFormal.value));
+		ASSERT_THAT(IsTrue(FirstSlot != INDEX_NONE && SecondSlot > FirstSlot,
+			*FString::Printf(TEXT(
+				"root C++ ABI slots must follow the sealed formal ordinal, not PARAM child position. definition:\n%s"),
 				*Emission.Definition)));
 	}
 

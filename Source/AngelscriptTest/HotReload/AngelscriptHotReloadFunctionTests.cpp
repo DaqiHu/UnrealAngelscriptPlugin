@@ -446,9 +446,8 @@ public:
 
 	TEST_METHOD(FailureKeepsOldCodeAndDiagnostics)
 	{
-		TestRunner->AddExpectedError(TEXT("HotReloadFailureKeepsOldCode.as:"), EAutomationExpectedErrorFlags::Contains, 2);
+		TestRunner->AddExpectedError(TEXT("HotReloadFailureKeepsOldCode.as:"), EAutomationExpectedErrorFlags::Contains, 1);
 		TestRunner->AddExpectedError(TEXT("Identifier 'MissingType' is not a data type in global namespace"), EAutomationExpectedErrorFlags::Contains, 1);
-		TestRunner->AddExpectedError(TEXT("Identifier 'MissingType' is not a data type"), EAutomationExpectedErrorFlags::Contains, 1);
 		TestRunner->AddExpectedError(TEXT("Hot reload failed due to script compile errors. Keeping all old script code."), EAutomationExpectedErrorFlags::Contains, 1);
 
 		FAngelscriptEngine& Engine = ASTEST_GET_ENGINE();

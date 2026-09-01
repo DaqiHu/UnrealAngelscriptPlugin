@@ -529,6 +529,31 @@ int Answer()
 		return true;
 	}
 
+	static bool SkipAstSidecarMethodRelations(
+		const TArray<uint8>& Payload,
+		int32& Offset)
+	{
+		uint32 RelationCount = 0;
+		if (!ReadAstSidecarUInt32(Payload, Offset, RelationCount))
+		{
+			return false;
+		}
+		for (uint32 RelationIndex = 0;
+			RelationIndex < RelationCount;
+			++RelationIndex)
+		{
+			uint32 Ignored = 0;
+			// V8 declaration trailer: kind, implementation and requirement.
+			if (!ReadAstSidecarUInt32(Payload, Offset, Ignored)
+				|| !ReadAstSidecarUInt32(Payload, Offset, Ignored)
+				|| !ReadAstSidecarUInt32(Payload, Offset, Ignored))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	static bool MutateAstSidecarUnremappableType(TArray<uint8>& Payload)
 	{
 		// Walk only the encoded type table. The source text, declarations, and
@@ -805,7 +830,9 @@ int Answer()
 				// alignment, constant-present flag, and 64-bit constant bits.
 				|| !ReadUInt32(Ignored) || !ReadUInt32(Ignored)
 				|| !ReadUInt32(Ignored) || !ReadUInt32(Ignored)
-				|| !ReadUInt32(Ignored) || !ReadUInt32(Ignored))
+				|| !ReadUInt32(Ignored) || !ReadUInt32(Ignored)
+				|| !SkipAstSidecarMethodRelations(Payload, Offset)
+				|| !ReadUInt32(Ignored)) // V10 formal ordinal
 			{
 				return false;
 			}
@@ -968,7 +995,9 @@ int Answer()
 				// alignment, constant-present flag, and 64-bit constant bits.
 				|| !ReadUInt32(Ignored) || !ReadUInt32(Ignored)
 				|| !ReadUInt32(Ignored) || !ReadUInt32(Ignored)
-				|| !ReadUInt32(Ignored) || !ReadUInt32(Ignored))
+				|| !ReadUInt32(Ignored) || !ReadUInt32(Ignored)
+				|| !SkipAstSidecarMethodRelations(Payload, Offset)
+				|| !ReadUInt32(Ignored)) // V10 formal ordinal
 			{
 				return false;
 			}

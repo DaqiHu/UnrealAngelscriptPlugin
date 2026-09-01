@@ -2,7 +2,6 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_scriptfunction.h"
-#include "source/as_typeinfo.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace
@@ -45,55 +44,6 @@ namespace
 			}
 		}
 		return Result;
-	}
-
-	bool TrySpellScalarEntryType(
-		const asCDataType& Type,
-		FString& OutType)
-	{
-		if (!TrySpellAngelscriptTypedASTJITCppType(Type, OutType)
-			|| Type.IsFloatExtendedToDouble())
-		{
-			return false;
-		}
-
-		switch (Type.GetSizeInMemoryBytes())
-		{
-		case 1:
-			OutType = TEXT("asBYTE");
-			return true;
-		case 2:
-			OutType = TEXT("asWORD");
-			return true;
-		case 4:
-			OutType = Type.GetTokenType() == ttFloat32
-				? TEXT("float") : TEXT("asDWORD");
-			return true;
-		case 8:
-			OutType = Type.GetTokenType() == ttFloat64
-				? TEXT("double") : TEXT("asQWORD");
-			return true;
-		default:
-			return false;
-		}
-	}
-
-	bool TrySpellBorrowedValueType(
-		const asCDataType& Type,
-		FString& OutType)
-	{
-		if (!Type.IsValid() || !Type.IsReference() || !Type.IsReadOnly()
-			|| Type.IsObjectHandle() || Type.GetTypeInfo() == nullptr)
-		{
-			return false;
-		}
-		const asCString& Name = Type.GetTypeInfo()->name;
-		if (Name != "FString" && Name != "FLinearColor")
-		{
-			return false;
-		}
-		OutType = UTF8_TO_TCHAR(Name.AddressOf());
-		return true;
 	}
 
 	FString BuildRawParameterList(

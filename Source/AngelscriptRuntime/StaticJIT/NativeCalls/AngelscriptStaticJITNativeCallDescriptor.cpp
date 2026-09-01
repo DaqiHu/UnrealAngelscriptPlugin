@@ -176,6 +176,206 @@ namespace AngelscriptStaticJITNativeCallDescriptor_Private
 			|| Value.Contains(TEXT("\r"))
 			|| Value.Contains(TEXT("\""));
 	}
+
+	static bool IsReviewedCppTypeCharacter(const TCHAR Character)
+	{
+		return FChar::IsAlnum(Character)
+			|| FChar::IsWhitespace(Character)
+			|| Character == TEXT('_')
+			|| Character == TEXT(':')
+			|| Character == TEXT('<')
+			|| Character == TEXT('>')
+			|| Character == TEXT(',')
+			|| Character == TEXT('*')
+			|| Character == TEXT('&')
+			|| Character == TEXT('(')
+			|| Character == TEXT(')')
+			|| Character == TEXT('[')
+			|| Character == TEXT(']');
+	}
+
+	static bool TryParseReviewedCppCallableSignature(
+		const FString& Input,
+		FAngelscriptStaticJITNativeCallCppSignature& OutSignature,
+		FString& OutError)
+	{
+		constexpr int32 MaxSignatureLength = 4096;
+		constexpr int32 MaxNestingDepth = 64;
+		constexpr int32 MaxParameterCount = 256;
+
+		OutSignature = {};
+		OutError.Reset();
+		const FString Signature = Input.TrimStartAndEnd();
+		if (Signature.IsEmpty() || Signature.Len() > MaxSignatureLength)
+		{
+			OutError = TEXT(
+				"the reviewed callable type is empty or exceeds the bounded length");
+			return false;
+		}
+
+		for (const TCHAR Character : Signature)
+		{
+			if (!IsReviewedCppTypeCharacter(Character))
+			{
+				OutError = FString::Printf(TEXT(
+					"the reviewed callable type contains unsupported character U+%04x"),
+					static_cast<uint32>(Character));
+				return false;
+			}
+		}
+
+		int32 AngleDepth = 0;
+		int32 SquareDepth = 0;
+		int32 ParenthesisDepth = 0;
+		int32 OuterOpen = INDEX_NONE;
+		int32 OuterClose = INDEX_NONE;
+		for (int32 Index = 0; Index < Signature.Len(); ++Index)
+		{
+			const TCHAR Character = Signature[Index];
+			switch (Character)
+			{
+			case TEXT('<'):
+				++AngleDepth;
+				break;
+			case TEXT('>'):
+				if (--AngleDepth < 0)
+				{
+					OutError = TEXT(
+						"the reviewed callable type has an unmatched '>'");
+					return false;
+				}
+				break;
+			case TEXT('['):
+				++SquareDepth;
+				break;
+			case TEXT(']'):
+				if (--SquareDepth < 0)
+				{
+					OutError = TEXT(
+						"the reviewed callable type has an unmatched ']'");
+					return false;
+				}
+				break;
+			case TEXT('('):
+				if (OuterOpen == INDEX_NONE
+					&& AngleDepth == 0
+					&& SquareDepth == 0
+					&& ParenthesisDepth == 0)
+				{
+					OuterOpen = Index;
+				}
+				++ParenthesisDepth;
+				break;
+			case TEXT(')'):
+				if (--ParenthesisDepth < 0)
+				{
+					OutError = TEXT(
+						"the reviewed callable type has an unmatched ')'");
+					return false;
+				}
+				if (OuterOpen != INDEX_NONE && ParenthesisDepth == 0)
+				{
+					OuterClose = Index;
+					if (!Signature.Mid(Index + 1).TrimStartAndEnd().IsEmpty())
+					{
+						OutError = TEXT(
+							"the reviewed callable type has tokens after its outer parameter list");
+						return false;
+					}
+					Index = Signature.Len();
+				}
+				break;
+			default:
+				break;
+			}
+
+			if (AngleDepth > MaxNestingDepth
+				|| SquareDepth > MaxNestingDepth
+				|| ParenthesisDepth > MaxNestingDepth)
+			{
+				OutError = TEXT(
+					"the reviewed callable type exceeds the bounded nesting depth");
+				return false;
+			}
+		}
+
+		if (OuterOpen == INDEX_NONE || OuterClose == INDEX_NONE
+			|| AngleDepth != 0 || SquareDepth != 0 || ParenthesisDepth != 0)
+		{
+			OutError = TEXT(
+				"the reviewed callable type must be one balanced return-type(parameter-types...) form");
+			return false;
+		}
+
+		OutSignature.ReturnType =
+			Signature.Left(OuterOpen).TrimStartAndEnd();
+		if (OutSignature.ReturnType.IsEmpty())
+		{
+			OutError = TEXT(
+				"the reviewed callable type has no return type");
+			return false;
+		}
+
+		auto AddParameter = [&](const int32 Begin, const int32 End)
+		{
+			FString Parameter = Signature.Mid(Begin, End - Begin)
+				.TrimStartAndEnd();
+			if (Parameter.IsEmpty() || Parameter == TEXT("void"))
+			{
+				OutError = TEXT(
+					"the reviewed callable type has an empty or void parameter slot");
+				return false;
+			}
+			if (OutSignature.ParameterTypes.Num() >= MaxParameterCount)
+			{
+				OutError = TEXT(
+					"the reviewed callable type exceeds the bounded parameter count");
+				return false;
+			}
+			OutSignature.ParameterTypes.Add(MoveTemp(Parameter));
+			return true;
+		};
+
+		const int32 ParametersBegin = OuterOpen + 1;
+		if (ParametersBegin != OuterClose)
+		{
+			AngleDepth = 0;
+			SquareDepth = 0;
+			ParenthesisDepth = 0;
+			int32 ParameterBegin = ParametersBegin;
+			for (int32 Index = ParametersBegin; Index < OuterClose; ++Index)
+			{
+				switch (Signature[Index])
+				{
+				case TEXT('<'): ++AngleDepth; break;
+				case TEXT('>'): --AngleDepth; break;
+				case TEXT('['): ++SquareDepth; break;
+				case TEXT(']'): --SquareDepth; break;
+				case TEXT('('): ++ParenthesisDepth; break;
+				case TEXT(')'): --ParenthesisDepth; break;
+				case TEXT(','):
+					if (AngleDepth == 0 && SquareDepth == 0
+						&& ParenthesisDepth == 0)
+					{
+						if (!AddParameter(ParameterBegin, Index))
+						{
+							return false;
+						}
+						ParameterBegin = Index + 1;
+					}
+					break;
+				default:
+					break;
+				}
+			}
+			if (!AddParameter(ParameterBegin, OuterClose))
+			{
+				return false;
+			}
+		}
+
+		return OutSignature.IsValid();
+	}
 }
 
 FAngelscriptStaticJITNativeABIIdentity
@@ -652,11 +852,21 @@ ValidateAngelscriptStaticJITNativeCallDescriptor(
 			EAngelscriptStaticJITNativeCallValidationCode::MissingCppCallableSignature,
 			TEXT("MissingCppCallableSignature: a reviewed target needs its exact public C++ function type."));
 	}
-	if (ContainsUnsafeText(Descriptor.CppCallableSignature))
+	FAngelscriptStaticJITNativeCallCppSignature ReviewedCppSignature;
+	FString ReviewedCppSignatureError;
+	if (ContainsUnsafeText(Descriptor.CppCallableSignature)
+		|| !TryParseReviewedCppCallableSignature(
+			Descriptor.CppCallableSignature,
+			ReviewedCppSignature,
+			ReviewedCppSignatureError))
 	{
 		return Fail(
 			EAngelscriptStaticJITNativeCallValidationCode::InvalidCppCallableSignature,
-			TEXT("InvalidCppCallableSignature: callable type cannot contain quotes or line breaks."));
+			FString::Printf(TEXT(
+				"InvalidCppCallableSignature: %s."),
+				ReviewedCppSignatureError.IsEmpty()
+					? TEXT("callable type cannot contain quotes or line breaks")
+					: *ReviewedCppSignatureError));
 	}
 	if (Descriptor.NativeABI.Canonical.IsEmpty()
 		|| Descriptor.NativeABI.Hash.IsZero())
@@ -788,6 +998,7 @@ ValidateAngelscriptStaticJITNativeCallDescriptor(
 		FAngelscriptStaticJITNativeCallValidation Result;
 		Result.bMetadataValid = true;
 		Result.bScalarBridgeCallable = true;
+		Result.ReviewedCppSignature = ReviewedCppSignature;
 		Result.Code = EAngelscriptStaticJITNativeCallValidationCode::Valid;
 		Result.Detail = Descriptor.DumpNormalized();
 		return Result;
@@ -815,6 +1026,7 @@ ValidateAngelscriptStaticJITNativeCallDescriptor(
 		}
 		FAngelscriptStaticJITNativeCallValidation Result;
 		Result.bMetadataValid = true;
+		Result.ReviewedCppSignature = ReviewedCppSignature;
 		Result.Code =
 			EAngelscriptStaticJITNativeCallValidationCode::TypedABIUnavailable;
 		Result.Detail = TEXT(
@@ -850,6 +1062,7 @@ ValidateAngelscriptStaticJITNativeCallDescriptor(
 		FAngelscriptStaticJITNativeCallValidation Result;
 		Result.bMetadataValid = true;
 		Result.bDirectCallable = true;
+		Result.ReviewedCppSignature = ReviewedCppSignature;
 		Result.Code = EAngelscriptStaticJITNativeCallValidationCode::Valid;
 		Result.Detail = Descriptor.DumpNormalized();
 		return Result;
@@ -934,6 +1147,7 @@ ValidateAngelscriptStaticJITNativeCallDescriptor(
 	Result.bDirectCallable = bDirectRequested;
 	Result.bCurrentNativeCallable = bCurrentNativeRequested;
 	Result.bScalarBridgeCallable = bBridgeRequested;
+	Result.ReviewedCppSignature = ReviewedCppSignature;
 	Result.Code = EAngelscriptStaticJITNativeCallValidationCode::Valid;
 	Result.Detail = Descriptor.DumpNormalized();
 	return Result;

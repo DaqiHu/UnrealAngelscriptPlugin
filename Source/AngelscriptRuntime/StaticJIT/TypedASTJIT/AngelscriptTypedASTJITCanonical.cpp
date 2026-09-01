@@ -386,32 +386,26 @@ namespace AngelscriptTypedASTJITCanonical_Private
 		const asCQualType& QualType,
 		FString& OutType)
 	{
-		if (TrySpellCanonicalScalarCppType(Context, QualType, OutType))
+		const asCType* const Type = Context.GetType(QualType.type);
+		if (Type != nullptr
+			&& Type->kind == asAST_TYPE_VALUE_OBJECT
+			&& QualType.IsConst()
+			&& QualType.IsReference()
+			&& !QualType.IsHandle()
+			&& !QualType.IsAutoHandle()
+			&& (Type->stableKey == "FString"
+				|| Type->stableKey == "FLinearColor"))
 		{
+			// The reviewed BorrowedManagedPOD route owns these exact names as
+			// part of its public C++ ABI. Resolve the spelling from the sealed,
+			// address-free Canonical type key before consulting any Runtime
+			// coordinate. No arbitrary user-defined value object is admitted.
+			OutType = UTF8_TO_TCHAR(Type->stableKey.AddressOf());
+			OutType += TEXT("&");
 			return true;
 		}
 
-		const asCType* const Type = Context.GetType(QualType.type);
-		if (Type == nullptr
-			|| Type->kind != asAST_TYPE_VALUE_OBJECT
-			|| !QualType.IsConst()
-			|| !QualType.IsReference()
-			|| QualType.IsHandle()
-			|| QualType.IsAutoHandle()
-			|| (Type->stableKey != "FString"
-				&& Type->stableKey != "FLinearColor"))
-		{
-			OutType.Reset();
-			return false;
-		}
-
-		// The reviewed BorrowedManagedPOD route owns these exact names as part
-		// of its public C++ ABI. Resolve them from the sealed, address-free
-		// Canonical type key instead of requiring a live asCTypeInfo pointer.
-		// No arbitrary user-defined value object is admitted by this path.
-		OutType = UTF8_TO_TCHAR(Type->stableKey.AddressOf());
-		OutType += TEXT("&");
-		return true;
+		return TrySpellCanonicalScalarCppType(Context, QualType, OutType);
 	}
 
 	bool IsByValueScalarOrEnum(const asCDataType& Type, const bool bAllowVoid)
@@ -452,7 +446,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 		}
 	}
 
-	bool IsReviewedManagedInput(const asCDataType& Type)
+	bool IsStructurallyBorrowedManagedInput(const asCDataType& Type)
 	{
 		const asCTypeInfo* const TypeInfo = Type.GetTypeInfo();
 		return TypeInfo != nullptr
@@ -460,15 +454,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			&& Type.IsObject()
 			&& Type.IsReference()
 			&& Type.IsReadOnly()
-			&& !Type.IsObjectHandle()
-			&& (TypeInfo->name == "FString"
-				|| TypeInfo->name == "FLinearColor");
-	}
-
-	bool IsReviewedParameterType(const asCDataType& Type)
-	{
-		return IsByValueScalarOrEnum(Type, false)
-			|| IsReviewedManagedInput(Type);
+			&& !Type.IsObjectHandle();
 	}
 
 	const asCDecl* FindFunctionDecl(
@@ -642,6 +628,14 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			}
 			if (Expr->kind == asAST_EXPR_CALL)
 			{
+				if (Expr->receiver.IsValid())
+				{
+					OutFailure = Reject(
+						EFallback::UnsupportedReceiver,
+						MakeSpan(Context, Expr->range),
+						TEXT("Canonical call receivers require explicit receiver evaluation, object-identity, null-state, and ABI lowering before TypedASTJIT closure emission."));
+					return false;
+				}
 				if (const asCDecl* Callee = Context.GetDecl(Expr->resolvedDecl))
 				{
 					if (Callee->kind == asAST_DECL_IMPORT)
@@ -698,8 +692,8 @@ namespace AngelscriptTypedASTJITCanonical_Private
 		bool LeaveNode(const asCASTContext&, const asSASTNodeRef&, const asSASTTraversalEdge*, asUINT) override { return true; }
 		bool ShouldTraverseEdge(const asCASTContext&, const asSASTTraversalEdge& Edge, asUINT) override
 		{
-			// Keep this eligibility migration behavior-neutral. The legacy canonical
-			// walk inspected call arguments but not the separately stored receiver.
+			// Receiver-bearing calls fail closed in EnterNode. Do not independently
+			// reinterpret receiver expressions as ordinary call arguments here.
 			return Edge.role != asAST_EDGE_EXPR_RECEIVER;
 		}
 
@@ -1988,10 +1982,40 @@ namespace AngelscriptTypedASTJITCanonical_Private
 					return Fail(TEXT(
 						"Resolved call requires exactly one exact native or direct script-helper emission plan"));
 				}
+				if (Expr->callDispatch != asAST_CALL_DISPATCH_DIRECT)
+				{
+					return Fail(FString::Printf(TEXT(
+						"Canonical call emission only supports a sealed direct dispatch: Call=%u Dispatch=%u"),
+						Id.value, static_cast<uint32>(Expr->callDispatch)));
+				}
+				if (Expr->callArguments.GetLength()
+					!= Expr->children.GetLength())
+				{
+					return Fail(FString::Printf(TEXT(
+						"Canonical call emission requires one sealed formal relation per argument: Call=%u Arguments=%u Relations=%u"),
+						Id.value,
+						Expr->children.GetLength(),
+						Expr->callArguments.GetLength()));
+				}
 				const bool bScriptCall = Script != nullptr;
 				const bool bBoundNative = Native != nullptr
 					&& Native->Route
 						!= EAngelscriptTypedASTJITCallEmissionRoute::Direct;
+				const bool bDirectNative = Native != nullptr && !bBoundNative;
+				if (bDirectNative
+					&& (Native->ReviewedCppReturnType.IsEmpty()
+						|| Native->ReviewedCppParameterTypes.Num()
+							!= static_cast<int32>(Expr->children.GetLength())))
+				{
+					return Fail(FString::Printf(TEXT(
+						"Canonical direct native call requires one validated reviewed C++ formal per sealed argument: Call=%u Arguments=%u ReviewedFormals=%d Return=%s"),
+						Id.value,
+						Expr->children.GetLength(),
+						Native->ReviewedCppParameterTypes.Num(),
+						Native->ReviewedCppReturnType.IsEmpty()
+							? TEXT("<missing>")
+							: *Native->ReviewedCppReturnType));
+				}
 				if (bBoundNative)
 				{
 					RequiredIncludes.AddUnique(TEXT(
@@ -2006,7 +2030,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 					RequiredIncludes.AddUnique(TEXT("StaticJIT/StaticJITHeader.h"));
 				}
 
-				if (Native != nullptr && !bBoundNative
+				if (bDirectNative
 					&& Expr->children.GetLength() == 0)
 				{
 					if (!RecordNativeCallSite(Id, *Native, Native->Symbol))
@@ -2018,7 +2042,11 @@ namespace AngelscriptTypedASTJITCanonical_Private
 				}
 
 				FString ReturnType;
-				if (!TrySpellCanonicalScalarCppType(
+				if (bDirectNative)
+				{
+					ReturnType = Native->ReviewedCppReturnType;
+				}
+				else if (!TrySpellCanonicalScalarCppType(
 					Context, Expr->type, ReturnType))
 				{
 					return Fail(TEXT(
@@ -2036,10 +2064,31 @@ namespace AngelscriptTypedASTJITCanonical_Private
 					EvaluationIndex < Expr->children.GetLength();
 					++EvaluationIndex)
 				{
-					const asUINT FormalIndex =
-						Expr->children.GetLength() - EvaluationIndex - 1;
+					const asSASTCallArgument& Argument =
+						Expr->callArguments[EvaluationIndex];
 					const asASTExprId OperandId =
 						Expr->children[EvaluationIndex];
+					const asUINT FormalIndex = Argument.formalIndex;
+					if (Argument.expression != OperandId)
+					{
+						return Fail(FString::Printf(TEXT(
+							"Canonical call formal relation does not own its stored argument: Call=%u Evaluation=%u Child=%u Relation=%u"),
+							Id.value, EvaluationIndex, OperandId.value,
+							Argument.expression.value));
+					}
+					if (FormalIndex >= Expr->children.GetLength())
+					{
+						return Fail(FString::Printf(TEXT(
+							"Canonical call formal relation is out of range: Call=%u Evaluation=%u Formal=%u Count=%u"),
+							Id.value, EvaluationIndex, FormalIndex,
+							Expr->children.GetLength()));
+					}
+					if (!FormalTemporaries[FormalIndex].IsEmpty())
+					{
+						return Fail(FString::Printf(TEXT(
+							"Canonical call formal relation is duplicated: Call=%u Evaluation=%u Formal=%u"),
+							Id.value, EvaluationIndex, FormalIndex));
+					}
 					const asCExpr* const Operand = Context.GetExpr(OperandId);
 					FString OperandText;
 					FString OperandType;
@@ -2053,31 +2102,47 @@ namespace AngelscriptTypedASTJITCanonical_Private
 					{
 						return false;
 					}
-					if (!TrySpellCanonicalCallArgumentCppType(
-							Context, Operand->type, OperandType))
+					if (bDirectNative)
 					{
-						const asCType* const OperandCanonicalType =
-							Context.GetType(Operand->type.type);
+						OperandType =
+							Native->ReviewedCppParameterTypes[FormalIndex];
+					}
+					else if (!TrySpellCanonicalCallArgumentCppType(
+						Context, Argument.formalType, OperandType))
+					{
+						const asCType* const FormalCanonicalType =
+							Context.GetType(Argument.formalType.type);
 						return Fail(FString::Printf(TEXT(
-							"Canonical call argument has no reviewed C++ spelling: Call=%u Operand=%u Kind=%u Formal=%u Type=%s Quals=0x%08x"),
+							"Canonical call formal type has no reviewed C++ spelling: Call=%u Operand=%u Kind=%u Formal=%u Type=%s Quals=0x%08x"),
 							Id.value,
 							OperandId.value,
 							static_cast<uint32>(Operand->kind),
 							FormalIndex,
-							OperandCanonicalType != nullptr
+							FormalCanonicalType != nullptr
 								? UTF8_TO_TCHAR(
-									OperandCanonicalType->stableKey.AddressOf())
+									FormalCanonicalType->stableKey.AddressOf())
 								: TEXT("<missing>"),
-							Operand->type.quals));
+							Argument.formalType.quals));
 					}
 					FormalTypes[FormalIndex] = OperandType;
 					FormalTemporaries[FormalIndex] = FString::Printf(
 						TEXT("as_ast_e%u_arg%u"), Id.value, FormalIndex);
-					Out += FString::Printf(TEXT("%sconst %s %s = %s;\n"),
+					Out += FString::Printf(TEXT("%s%s%s %s = %s;\n"),
 						*BodyPrefix,
+						bDirectNative ? TEXT("") : TEXT("const "),
 						*OperandType,
 						*FormalTemporaries[FormalIndex],
 						*OperandText);
+				}
+				for (int32 FormalIndex = 0;
+					FormalIndex < FormalTemporaries.Num(); ++FormalIndex)
+				{
+					if (FormalTemporaries[FormalIndex].IsEmpty())
+					{
+						return Fail(FString::Printf(TEXT(
+							"Canonical call formal relation is incomplete: Call=%u Formal=%d"),
+							Id.value, FormalIndex));
+					}
 				}
 
 				FString Invocation;
@@ -2648,6 +2713,13 @@ EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
 		return Reject(EFallback::InvalidCanonicalAST, {},
 			TEXT("CanonicalFunctionDecl / DeclId 0 must not bind the first function or walk the whole module."));
 	}
+	if (!Input.FrozenBodySignatureFailure.IsEmpty())
+	{
+		return Reject(
+			EFallback::UnsupportedSignature,
+			MakeSpan(*Input.SealedAST, FunctionDecl->range),
+			Input.FrozenBodySignatureFailure);
+	}
 	if (FunctionDecl->kind == asAST_DECL_CONSTRUCTOR
 		|| FunctionDecl->kind == asAST_DECL_DESTRUCTOR)
 	{
@@ -2707,6 +2779,22 @@ EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
 		&& Shape.InvocationKind == EAngelscriptTypedASTJITInvocationKind::Global)
 	{
 		Shape.InvocationKind = EAngelscriptTypedASTJITInvocationKind::InstanceMethod;
+	}
+	if (Shape.bHasFrozenBodySignature
+		&& (Shape.FrozenBodyReturnCppType.IsEmpty()
+			|| Shape.FrozenBodyParameterCppTypes.Num()
+				!= Shape.ParameterTypes.Num()
+			|| Shape.FrozenBodyParameterABIs.Num()
+				!= Shape.ParameterTypes.Num()
+			|| Shape.FrozenBodyParameterCppTypes.ContainsByPredicate(
+				[](const FString& Type)
+				{
+					return Type.IsEmpty();
+				})))
+	{
+		return Reject(EFallback::UnsupportedSignature,
+			MakeSpan(*Input.SealedAST, FunctionDecl->range),
+			TEXT("TypedASTJITFrozenBodySignatureMalformed: frozen return/parameter C++ ABI fields are incomplete."));
 	}
 
 	constexpr asDWORD KnownTraitBits =
@@ -2778,12 +2866,9 @@ EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
 			TEXT("A final instance scalar root requires the exact native object-this slot."));
 	}
 
-	const bool bHasReviewedManagedInput =
-		Shape.ParameterTypes.ContainsByPredicate(
-			[](const asCDataType& ParameterType)
-			{
-				return IsReviewedManagedInput(ParameterType);
-			});
+	const bool bHasReviewedManagedInput = Shape.bHasFrozenBodySignature
+		&& Shape.FrozenBodyParameterABIs.Contains(
+			EAngelscriptTypedASTJITBodyParameterABI::BorrowedValueAddress);
 	if ((EnumHasAnyFlags(Input.SignatureFlags,
 			EAngelscriptTypedASTJITSignatureFlags::Reference)
 			&& !bHasReviewedManagedInput)
@@ -2812,12 +2897,23 @@ EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
 		return Reject(EFallback::UnsupportedType, {},
 			TEXT("Return type is not a by-value scalar or enum."));
 	}
-	for (const asCDataType& ParameterType : Shape.ParameterTypes)
+	for (int32 ParameterIndex = 0;
+		ParameterIndex < Shape.ParameterTypes.Num(); ++ParameterIndex)
 	{
-		if (!IsReviewedParameterType(ParameterType))
+		const asCDataType& ParameterType =
+			Shape.ParameterTypes[ParameterIndex];
+		const bool bReviewedParameter = Shape.bHasFrozenBodySignature
+			? (Shape.FrozenBodyParameterABIs[ParameterIndex]
+					== EAngelscriptTypedASTJITBodyParameterABI::ScalarValue
+					? IsByValueScalarOrEnum(ParameterType, false)
+					: IsStructurallyBorrowedManagedInput(ParameterType))
+			: IsByValueScalarOrEnum(ParameterType, false);
+		if (!bReviewedParameter)
 		{
 			return Reject(EFallback::UnsupportedType, {},
-				TEXT("Parameter type is neither a by-value scalar/enum nor a reviewed const FString/FLinearColor input."));
+				FString::Printf(TEXT(
+					"TypedASTJITFrozenBodySignatureParameterMismatch: formal %d is not compatible with its frozen scalar/borrowed body ABI."),
+					ParameterIndex));
 		}
 	}
 
@@ -2994,21 +3090,44 @@ FAngelscriptTypedASTJITEmission EmitTypedASTJITFunction(
 		return EmissionFail(EFallback::UnsupportedSignature, {},
 			TEXT("The resolved C++ symbol name is empty"));
 	}
-	FString ReturnType;
-	if (!TrySpellAngelscriptTypedASTJITCppType(Shape.ReturnType, ReturnType))
+	const asCDecl* const Decl = FindFunctionDecl(
+		Context, FunctionDecl, nullptr);
+	if (Decl == nullptr)
 	{
-		asCDataType Derived = Shape.ReturnType;
-		if (!Derived.IsValid())
+		return EmissionFail(EFallback::InvalidCanonicalAST, {},
+			TEXT("The exact Canonical function declaration is missing"));
+	}
+	FString CanonicalReturnType;
+	if (!TrySpellCanonicalScalarCppType(
+			Context, Decl->type, CanonicalReturnType))
+	{
+		return EmissionFail(EFallback::EmitterFailure, {},
+			TEXT("Canonical return type is outside the reviewed scalar C++ spelling set"));
+	}
+	FString ReturnType;
+	if (Shape.bHasFrozenBodySignature)
+	{
+		if (Shape.FrozenBodyReturnCppType != CanonicalReturnType)
 		{
-			if (const asCDecl* Decl = FindFunctionDecl(
-				Context, FunctionDecl, nullptr))
-			{
-				Derived = ResolveType(Context, Decl->type);
-			}
+			return EmissionFail(EFallback::EmitterFailure, {},
+				FString::Printf(TEXT(
+					"TypedASTJITFrozenBodySignatureReturnMismatch: Canonical=%s EntryPlan=%s"),
+					*CanonicalReturnType,
+					*Shape.FrozenBodyReturnCppType));
 		}
-		if (!TrySpellAngelscriptTypedASTJITCppType(Derived, ReturnType))
+		ReturnType = Shape.FrozenBodyReturnCppType;
+	}
+	else if (!TrySpellAngelscriptTypedASTJITCppType(
+		Shape.ReturnType, ReturnType))
+	{
+		// Provider-independent scalar inspection may omit Runtime type
+		// coordinates for script enums. Its only fallback is the sealed
+		// Canonical scalar spelling; production always takes the frozen branch.
+		ReturnType = CanonicalReturnType;
+		if (ReturnType.IsEmpty())
 		{
-			ReturnType = TEXT("int32");
+			return EmissionFail(EFallback::EmitterFailure, {},
+				TEXT("Return type has no exact reviewed C++ spelling"));
 		}
 	}
 
@@ -3024,7 +3143,6 @@ FAngelscriptTypedASTJITEmission EmitTypedASTJITFunction(
 	// FScriptExecution while lowering. Freezing the signature first would publish
 	// a body that references Execution without declaring the hidden parameter.
 	FString EmittedBody;
-	const asCDecl* Decl = FindFunctionDecl(Context, FunctionDecl, nullptr);
 	if (Decl != nullptr && Decl->body.IsValid())
 	{
 		const asCStmt* Body = Context.GetStmt(Decl->body);
@@ -3127,39 +3245,52 @@ FAngelscriptTypedASTJITEmission EmitTypedASTJITFunction(
 	}
 	else
 	{
+		const asUINT CanonicalFormalCount =
+			Context.GetFormalDeclCount(FunctionDecl);
+		if (CanonicalFormalCount != static_cast<asUINT>(
+			Shape.ParameterTypes.Num()))
+		{
+			return EmissionFail(EFallback::EmitterFailure, {},
+				FString::Printf(TEXT(
+					"Canonical formal count does not match the Runtime entry ABI: Canonical=%u Runtime=%d"),
+					CanonicalFormalCount, Shape.ParameterTypes.Num()));
+		}
 		for (int32 Index = 0; Index < Shape.ParameterTypes.Num(); ++Index)
 		{
 			FString ParameterType;
-			if (!TrySpellAngelscriptTypedASTJITCppType(
+			if (Shape.bHasFrozenBodySignature)
+			{
+				ParameterType = Shape.FrozenBodyParameterCppTypes[Index];
+			}
+			else if (!TrySpellAngelscriptTypedASTJITCppType(
 				Shape.ParameterTypes[Index], ParameterType))
 			{
 				return EmissionFail(EFallback::EmitterFailure, {},
 					TEXT("Parameter type is outside the reviewed scalar C++ spelling set"));
 			}
-			asASTDeclId ParamDecl;
-			if (const asCDecl* Fn = Context.GetDecl(FunctionDecl))
+			const asCDecl* const ParamDecl = Context.GetFormalDecl(
+				FunctionDecl, static_cast<asUINT>(Index));
+			if (ParamDecl == nullptr)
 			{
-				asUINT ParamOrdinal = 0;
-				for (asUINT Child = 0; Child < Fn->children.GetLength(); ++Child)
-				{
-					const asCDecl* ChildDecl = Context.GetDecl(Fn->children[Child]);
-					if (ChildDecl != nullptr
-						&& ChildDecl->kind == asAST_DECL_PARAM)
-					{
-						if (static_cast<int32>(ParamOrdinal) == Index)
-						{
-							ParamDecl = ChildDecl->id;
-							break;
-						}
-						++ParamOrdinal;
-					}
-				}
+				return EmissionFail(EFallback::EmitterFailure, {},
+					FString::Printf(TEXT(
+						"Canonical formal slot %d is missing or ambiguous"), Index));
+			}
+			FString CanonicalParameterType;
+			if (!TrySpellCanonicalCallArgumentCppType(
+					Context, ParamDecl->type, CanonicalParameterType)
+				|| CanonicalParameterType != ParameterType)
+			{
+				return EmissionFail(EFallback::EmitterFailure, {},
+					FString::Printf(TEXT(
+						"Canonical formal slot %d type does not match the Runtime entry ABI"),
+						Index));
 			}
 			++EmittedParameterCount;
 			const FString Parameter = FString::Printf(
 				TEXT("\tconst %s as_ast_d%u%s\n"),
 				*ParameterType,
-				ParamDecl.value,
+				ParamDecl->id.value,
 				EmittedParameterCount == TotalParameterCount
 					? TEXT(")") : TEXT(","));
 			Candidate.Declaration += Parameter;

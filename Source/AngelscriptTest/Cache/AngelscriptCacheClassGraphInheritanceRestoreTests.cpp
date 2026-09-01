@@ -11,6 +11,7 @@
 #include "as_scriptfunction.h"
 
 #include "StartAngelscriptHeaders.h"
+#include "source/as_ast_public_view.h"
 #include "source/as_module.h"
 #include "EndAngelscriptHeaders.h"
 
@@ -211,6 +212,94 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptCacheClassGraphInheritanceRestoreTests,
 							: TEXT("<none>"),
 						Function != nullptr ? Function->vfTableIdx : -1));
 				}
+			}
+
+			asIASTSnapshot* const Snapshot =
+				ScriptModule->AcquireASTSnapshot(asAST_API_VERSION_1);
+			ASSERT_THAT(IsNotNull(Snapshot));
+			const asCASTContext* const CanonicalAST = Snapshot != nullptr
+				? static_cast<const asCASTSnapshot*>(Snapshot)->GetContext()
+				: nullptr;
+			ASSERT_THAT(IsNotNull(CanonicalAST));
+			const asCDecl* CanonicalBase = nullptr;
+			const asCDecl* CanonicalMiddle = nullptr;
+			const asCDecl* CanonicalLeaf = nullptr;
+			const asCDecl* BaseComputeImplementation = nullptr;
+			const asCDecl* MiddleComputeImplementation = nullptr;
+			for (asUINT DeclIndex = 1;
+				CanonicalAST != nullptr && DeclIndex <= CanonicalAST->GetDeclCount();
+				++DeclIndex)
+			{
+				const asCDecl* const Decl =
+					CanonicalAST->GetDecl(asASTDeclId(DeclIndex));
+				if (Decl == nullptr)
+				{
+					continue;
+				}
+				if (Decl->kind == asAST_DECL_CLASS)
+				{
+					CanonicalBase = Decl->name.Equals("UCacheV2VftBase")
+						? Decl : CanonicalBase;
+					CanonicalMiddle = Decl->name.Equals("UCacheV2VftMiddle")
+						? Decl : CanonicalMiddle;
+					CanonicalLeaf = Decl->name.Equals("UCacheV2VftLeaf")
+						? Decl : CanonicalLeaf;
+				}
+				else if (Decl->kind == asAST_DECL_METHOD)
+				{
+					BaseComputeImplementation = Decl->stableKey.Equals(
+						"UCacheV2VftBase::Compute_Implementation()")
+						? Decl : BaseComputeImplementation;
+					MiddleComputeImplementation = Decl->stableKey.Equals(
+						"UCacheV2VftMiddle::Compute_Implementation()")
+						? Decl : MiddleComputeImplementation;
+				}
+			}
+			ASSERT_THAT(IsTrue(CanonicalBase != nullptr
+				&& CanonicalMiddle != nullptr && CanonicalLeaf != nullptr
+				&& BaseComputeImplementation != nullptr
+				&& MiddleComputeImplementation != nullptr,
+				TEXT("the retained Canonical graph must expose the exact script inheritance chain and override implementations")));
+			bool bMiddleHasAuthoredBase = false;
+			bool bMiddleHasNativeShadow = false;
+			for (asUINT BaseIndex = 0;
+				CanonicalAST != nullptr && CanonicalMiddle != nullptr
+					&& BaseIndex < CanonicalMiddle->bases.GetLength(); ++BaseIndex)
+			{
+				const asCDecl* const Base =
+					CanonicalAST->GetDecl(CanonicalMiddle->bases[BaseIndex]);
+				bMiddleHasAuthoredBase |= Base != nullptr
+					&& CanonicalBase != nullptr && Base->id == CanonicalBase->id;
+				bMiddleHasNativeShadow |= Base != nullptr
+					&& Base->origin.Equals("canonical-native-type-view");
+			}
+			ASSERT_THAT(IsTrue(bMiddleHasAuthoredBase && bMiddleHasNativeShadow,
+				TEXT("UE PreClass must retain both its authored script base and orthogonal native shadow relation")));
+			asUINT BaseSuperCallCount = 0;
+			asUINT MiddleSuperCallCount = 0;
+			for (asUINT ExprIndex = 1;
+				CanonicalAST != nullptr && ExprIndex <= CanonicalAST->GetExprCount();
+				++ExprIndex)
+			{
+				const asCExpr* const Expr =
+					CanonicalAST->GetExpr(asASTExprId(ExprIndex));
+				if (Expr == nullptr || Expr->kind != asAST_EXPR_CALL
+					|| Expr->callDispatch != asAST_CALL_DISPATCH_DIRECT)
+				{
+					continue;
+				}
+				BaseSuperCallCount += BaseComputeImplementation != nullptr
+					&& Expr->resolvedDecl == BaseComputeImplementation->id ? 1 : 0;
+				MiddleSuperCallCount += MiddleComputeImplementation != nullptr
+					&& Expr->resolvedDecl == MiddleComputeImplementation->id ? 1 : 0;
+			}
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(1), BaseSuperCallCount,
+				TEXT("Middle Super::Compute must bind the direct Base implementation before publication")));
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(1), MiddleSuperCallCount,
+				TEXT("Leaf Super::Compute must bind the direct Middle implementation before publication")));
+			if (Snapshot != nullptr)
+			{
+				Snapshot->Release();
 			}
 
 			const FAngelscriptCacheCleanCaptureResult Capture =

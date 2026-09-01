@@ -5,6 +5,7 @@
 #include "StaticJIT/AngelscriptStaticJITCaptureProfile.h"
 #include "StaticJIT/AngelscriptStaticJITEntryPlan.h"
 #include "StaticJIT/AngelscriptStaticJITFunctionMetadata.h"
+#include "StaticJIT/AngelscriptStaticJITRuntimeTypeBinding.h"
 #include "StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallTarget.h"
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITExecutionProfile.h"
 
@@ -138,6 +139,8 @@ struct FAngelscriptStaticJITCompiledGlobalView
 	int32 EngineLocalGlobalPropertyId = INDEX_NONE;
 	FAngelscriptHash256 StableGlobalKey;
 	FStringView CanonicalDeclaration;
+	/** Exact sealed VarDecl key; never reconstructed from Runtime presentation. */
+	FStringView CanonicalASTDeclKey;
 };
 
 enum class EAngelscriptStaticJITDescriptorKind : uint8
@@ -186,6 +189,8 @@ struct FAngelscriptStaticJITSemanticDependencyView
 	FAngelscriptArtifactReference Reference;
 	TOptional<FAngelscriptHash256> ExpectedContentOrValue;
 	int32 EngineLocalGlobalPropertyId = INDEX_NONE;
+	/** Exact producer-carried Canonical global target relation. */
+	FStringView CanonicalASTDeclKey;
 };
 
 /**
@@ -210,6 +215,11 @@ struct FAngelscriptStaticJITCompiledSourceGraph
 	TConstArrayView<const FAngelscriptModuleDesc*>
 		ResolvedModuleDescriptors;
 	TConstArrayView<FAngelscriptStaticJITCompiledFunctionView> Functions;
+	/** Exact same-generation signature binding rows copied from the frozen table. */
+	TConstArrayView<FAngelscriptStaticJITRuntimeTypeBinding>
+		RuntimeTypeBindings;
+	FStringView RuntimeTypeBindingTargetProfileKey;
+	FStringView RuntimeTypeBindingNativeEnvironmentKey;
 	TConstArrayView<FAngelscriptStaticJITCompiledTypeView> Types;
 	TConstArrayView<FAngelscriptStaticJITCompiledGlobalView> Globals;
 	TConstArrayView<FAngelscriptStaticJITDescriptorView> Descriptors;
@@ -283,6 +293,7 @@ enum class EAngelscriptStaticJITExceptionPayloadState : uint8
 	NotRequired,
 	DirectFailureRecord,
 	NestedBridgeAdoption,
+	DirectFailureRecordAndNestedBridgeAdoption,
 };
 
 enum class EAngelscriptStaticJITTypedCallDisposition : uint8

@@ -1839,6 +1839,9 @@ FStaticJITDiagnostics::BuildArtifactRequestRecord(
 			return TEXT("DirectFailureRecord");
 		case EAngelscriptStaticJITExceptionPayloadState::NestedBridgeAdoption:
 			return TEXT("NestedBridgeAdoption");
+		case EAngelscriptStaticJITExceptionPayloadState::
+			DirectFailureRecordAndNestedBridgeAdoption:
+			return TEXT("DirectFailureRecordAndNestedBridgeAdoption");
 		case EAngelscriptStaticJITExceptionPayloadState::Unavailable:
 		default:
 			return TEXT("Unavailable");

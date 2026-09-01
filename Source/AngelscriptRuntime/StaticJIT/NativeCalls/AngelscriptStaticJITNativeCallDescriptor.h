@@ -161,7 +161,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptStaticJITNativeCallDescriptor
 	FString Include;
 	FName OwningModule;
 	FString ApiMacro;
-	/** Exact public C++ function type, for review/diagnostics rather than lookup. */
+	/**
+	 * Exact reviewed public C++ function type. Descriptor validation parses this
+	 * into a bounded type-only signature before a direct emitter may consume it;
+	 * it is never inferred from an AngelScript Runtime type name.
+	 */
 	FString CppCallableSignature;
 	FAngelscriptStaticJITNativeABIIdentity NativeABI;
 	EAngelscriptStaticJITNativeCallABIDomain ABIDomain =
@@ -184,6 +188,24 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptStaticJITNativeCallDescriptor
 	bool IsAbsent() const;
 	FString DumpNormalized() const;
 };
+
+/**
+ * Pointer-free, structurally validated projection of CppCallableSignature.
+ * Spellings are retained exactly (apart from outer whitespace trimming) so a
+ * direct C++ emitter consumes the reviewed descriptor ABI rather than trying
+ * to reconstruct native names from Canonical or Runtime AngelScript types.
+ */
+struct ANGELSCRIPTRUNTIME_API FAngelscriptStaticJITNativeCallCppSignature
+{
+	FString ReturnType;
+	TArray<FString> ParameterTypes;
+
+	bool IsValid() const
+	{
+		return !ReturnType.IsEmpty();
+	}
+};
+
 /**
  * Engine-owned descriptor attachment surface. Returned pointers are transient:
  * callers that cross an Engine/lifetime boundary must copy the descriptor into
@@ -250,6 +272,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptStaticJITNativeCallValidation
 	bool bDirectCallable = false;
 	bool bCurrentNativeCallable = false;
 	bool bScalarBridgeCallable = false;
+	/** Present only after the descriptor's reviewed C++ type is validated. */
+	FAngelscriptStaticJITNativeCallCppSignature ReviewedCppSignature;
 	EAngelscriptStaticJITNativeCallValidationCode Code =
 		EAngelscriptStaticJITNativeCallValidationCode::UnknownLinkage;
 	FString Detail;

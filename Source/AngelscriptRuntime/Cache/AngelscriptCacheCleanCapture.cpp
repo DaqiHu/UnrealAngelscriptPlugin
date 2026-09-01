@@ -24,8 +24,10 @@
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
 #include "source/as_ast_context.h"
+#include "source/as_ast_dump.h"
 #include "source/as_ast_sidecar.h"
 #include "source/as_ast_public_view.h"
+#include "source/as_ast_verifier.h"
 
 namespace AngelscriptCacheCleanCapture_Private
 {
@@ -238,12 +240,30 @@ namespace AngelscriptCacheCleanCapture_Private
 		Header.functionKey = reinterpret_cast<const char*>(OwnerUtf8.Get());
 		Header.profile = reinterpret_cast<const char*>(ProfileUtf8.Get());
 		Header.version = FAngelscriptCacheASTBodySidecar::SchemaVersion;
+		asSAstVerifyResult Publication;
+		const int PublicationStatus =
+			asCASTVerifyPublication(*CanonicalAST, Publication);
+		if (PublicationStatus != asAST_VERIFY_OK)
+		{
+			asCString Diagnostic;
+			asCASTFormatVerifyResult(Publication, Diagnostic);
+			OutError = Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
+				FString::Printf(
+					TEXT("The retained Canonical AST failed publication verification (%d): %s"),
+					PublicationStatus,
+					UTF8_TO_TCHAR(Diagnostic.AddressOf()
+						? Diagnostic.AddressOf() : "")));
+			return false;
+		}
 		asCArray<asBYTE> ForkBytes;
-		if (asCASTEncodeSidecar(*CanonicalAST, Header, ForkBytes)
-			!= asAST_SIDECAR_OK)
+		const int SidecarStatus =
+			asCASTEncodeSidecar(*CanonicalAST, Header, ForkBytes);
+		if (SidecarStatus != asAST_SIDECAR_OK)
 		{
 			OutError = Failure(EAngelscriptCacheCleanCaptureError::NotCacheable,
-				TEXT("The retained Canonical AST could not be serialized as V2"));
+				FString::Printf(
+					TEXT("The retained Canonical AST could not be serialized as V2 (%d)"),
+					SidecarStatus));
 			return false;
 		}
 		Sidecar.CanonicalAstBytes.Append(
@@ -874,8 +894,18 @@ namespace AngelscriptCacheCleanCapture_Private
 		const asCScriptFunction& Function)
 	{
 		const asCModule* const RuntimeModule = Function.module;
-		const asCASTContext* const Context = RuntimeModule != nullptr
-			? RuntimeModule->GetCanonicalASTContext() : nullptr;
+		asIASTSnapshot* const Snapshot = RuntimeModule != nullptr
+			? RuntimeModule->AcquireASTSnapshot(asAST_API_VERSION_1) : nullptr;
+		if (Snapshot == nullptr)
+		{
+			return TEXT("ast=<not-retained>");
+		}
+		ON_SCOPE_EXIT
+		{
+			Snapshot->Release();
+		};
+		const asCASTContext* const Context =
+			static_cast<const asCASTSnapshot*>(Snapshot)->GetContext();
 		if (Context == nullptr)
 		{
 			return TEXT("ast=<not-retained>");

@@ -51,9 +51,11 @@
 #include "source/as_decl.h"
 #include "source/as_expr.h"
 #include "source/as_objecttype.h"
+#include "source/as_property.h"
 #include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
 #include "source/as_thread.h"
+#include "source/as_typeinfo.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS && AS_CAN_GENERATE_JIT
@@ -949,6 +951,9 @@ int EvaluateGenerationEmit_65C28A(int Value)
 		TArray<asIScriptModule*> Modules;
 		TArray<const FAngelscriptModuleDesc*> ResolvedModuleDescriptors;
 		TArray<FAngelscriptStaticJITCompiledFunctionView> Functions;
+		TArray<FAngelscriptStaticJITRuntimeTypeBinding> RuntimeTypeBindings;
+		FString RuntimeTypeBindingTargetProfileKey;
+		FString RuntimeTypeBindingNativeEnvironmentKey;
 		TArray<FAngelscriptStaticJITCompiledTypeView> Types;
 		TArray<FAngelscriptStaticJITCompiledGlobalView> Globals;
 		TArray<FAngelscriptStaticJITDescriptorView> Descriptors;
@@ -1000,6 +1005,11 @@ int EvaluateGenerationEmit_65C28A(int Value)
 		}
 
 		Storage.Types.Reserve(Snapshot.Types.Num());
+		Storage.RuntimeTypeBindings = Snapshot.RuntimeTypeBindings;
+		Storage.RuntimeTypeBindingTargetProfileKey =
+			Snapshot.RuntimeTypeBindingTargetProfileKey;
+		Storage.RuntimeTypeBindingNativeEnvironmentKey =
+			Snapshot.RuntimeTypeBindingNativeEnvironmentKey;
 		for (const FAngelscriptStaticJITGenerationType& Type : Snapshot.Types)
 		{
 			Storage.Types.Add({
@@ -1017,7 +1027,8 @@ int EvaluateGenerationEmit_65C28A(int Value)
 				Global.EngineLocalGlobal,
 				Global.EngineLocalGlobalPropertyId,
 				Global.GlobalKey.Hash,
-				Global.CanonicalDeclaration});
+				Global.CanonicalDeclaration,
+				Global.CanonicalASTDeclKey});
 		}
 
 		Storage.Descriptors.Reserve(Snapshot.Descriptors.Num());
@@ -1063,7 +1074,8 @@ int EvaluateGenerationEmit_65C28A(int Value)
 				Dependency.Kind,
 				Dependency.Reference,
 				Dependency.ExpectedContentOrValue,
-				Dependency.EngineLocalGlobalPropertyId});
+				Dependency.EngineLocalGlobalPropertyId,
+				Dependency.CanonicalASTDeclKey});
 		}
 		AppendDependencies(
 			Snapshot.ExternalNativeCalls, Storage.ExternalNativeCalls);
@@ -1095,6 +1107,11 @@ int EvaluateGenerationEmit_65C28A(int Value)
 		Storage.Graph.ResolvedModuleDescriptors =
 			Storage.ResolvedModuleDescriptors;
 		Storage.Graph.Functions = Storage.Functions;
+		Storage.Graph.RuntimeTypeBindings = Storage.RuntimeTypeBindings;
+		Storage.Graph.RuntimeTypeBindingTargetProfileKey =
+			Storage.RuntimeTypeBindingTargetProfileKey;
+		Storage.Graph.RuntimeTypeBindingNativeEnvironmentKey =
+			Storage.RuntimeTypeBindingNativeEnvironmentKey;
 		Storage.Graph.Types = Storage.Types;
 		Storage.Graph.Globals = Storage.Globals;
 		Storage.Graph.Descriptors = Storage.Descriptors;
@@ -1381,6 +1398,26 @@ class UTypedASTFoldedGlobalOwner_65C28A : UObject
 			TEXT("The sealed AST must retain the folded global declaration identity")));
 		ASSERT_THAT(IsTrue(FoldedGlobalDecl->hasConstantValue));
 		ASSERT_THAT(AreEqual(asQWORD{7}, FoldedGlobalDecl->constantValue));
+		const FString ExpectedCanonicalGlobalDeclKey = UTF8_TO_TCHAR(
+			FoldedGlobalDecl->stableKey.AddressOf());
+		ASSERT_THAT(IsFalse(ExpectedCanonicalGlobalDeclKey.IsEmpty()));
+		ASSERT_THAT(AreEqual(ExpectedCanonicalGlobalDeclKey,
+			Global->CanonicalASTDeclKey,
+			TEXT("generation capture must retain the producer-carried exact Canonical global declaration key")));
+		asCScriptEngine* const RuntimeEngine = static_cast<asCScriptEngine*>(
+			Fixture->Engine->GetScriptEngine());
+		ASSERT_THAT(IsNotNull(RuntimeEngine));
+		ASSERT_THAT(IsTrue(static_cast<asUINT>(
+			Global->EngineLocalGlobalPropertyId)
+			< RuntimeEngine->globalProperties.GetLength()));
+		asCGlobalProperty* const RuntimeGlobal =
+			RuntimeEngine->globalProperties[
+				Global->EngineLocalGlobalPropertyId];
+		ASSERT_THAT(IsNotNull(RuntimeGlobal));
+		ASSERT_THAT(AreEqual(ExpectedCanonicalGlobalDeclKey,
+			FString(UTF8_TO_TCHAR(
+				RuntimeGlobal->canonicalASTStableDeclKey.AddressOf())),
+			TEXT("the Runtime global shell must retain the Sema producer identity")));
 
 		const FAngelscriptStaticJITGenerationDependency* const FlatGlobal =
 			Snapshot->Dependencies.FindByPredicate(
@@ -1418,6 +1455,9 @@ class UTypedASTFoldedGlobalOwner_65C28A : UObject
 			TEXT("Generation global identity must exactly match the Cache-authoritative dependency key")));
 		ASSERT_THAT(IsTrue(HardValue->EngineLocalGlobalPropertyId
 			== Global->EngineLocalGlobalPropertyId));
+		ASSERT_THAT(AreEqual(ExpectedCanonicalGlobalDeclKey,
+			HardValue->CanonicalASTDeclKey,
+			TEXT("the frozen semantic dependency must carry the exact Canonical global target")));
 		ASSERT_THAT(IsFalse(HardValue->Reference.ExpectedAbi.IsZero()));
 		ASSERT_THAT(IsTrue(HardValue->ExpectedContentOrValue.IsSet()));
 		ASSERT_THAT(IsFalse(
@@ -1425,6 +1465,26 @@ class UTypedASTFoldedGlobalOwner_65C28A : UObject
 
 		FCompiledGraphStorage GraphStorage = BuildCompiledGraphStorage(
 			*Snapshot, TEXTVIEW("Folded Global Hard Value"));
+		const FAngelscriptStaticJITSemanticDependencyView* const GraphHardValue =
+			GraphStorage.SemanticDependencies.FindByPredicate(
+				[Reader](const auto& Dependency)
+				{
+					return Dependency.OwnerFunctionKey == Reader->FunctionKey
+						&& Dependency.Kind
+							== EAngelscriptArtifactSemanticDependencyKind::HardValue;
+				});
+		ASSERT_THAT(IsNotNull(GraphHardValue));
+		ASSERT_THAT(AreEqual(ExpectedCanonicalGlobalDeclKey,
+			FString(GraphHardValue->CanonicalASTDeclKey),
+			TEXT("the backend graph view must preserve exact global declaration identity")));
+
+		const asCString OriginalRuntimeGlobalName = RuntimeGlobal->name;
+		ON_SCOPE_EXIT
+		{
+			RuntimeGlobal->name = OriginalRuntimeGlobalName;
+		};
+		RuntimeGlobal->name =
+			"TypedASTFoldedGlobal_DiagnosticSpellingOnly_65C28A";
 		const FAngelscriptStableModuleKey EmitModuleSet[] = {
 			Reader->ModuleKey};
 		const FAngelscriptStaticJITBackendRequest BackendRequest{
@@ -1459,6 +1519,74 @@ class UTypedASTFoldedGlobalOwner_65C28A : UObject
 					&& Reference.Reference.StableKey == Global->GlobalKey.Hash
 					&& !Reference.Reference.ExpectedAbi.IsZero();
 			})));
+
+		const int32 GraphHardValueIndex =
+			GraphStorage.SemanticDependencies.IndexOfByPredicate(
+				[Reader](const auto& Dependency)
+				{
+					return Dependency.OwnerFunctionKey == Reader->FunctionKey
+						&& Dependency.Kind
+							== EAngelscriptArtifactSemanticDependencyKind::HardValue;
+				});
+		ASSERT_THAT(IsTrue(GraphHardValueIndex != INDEX_NONE));
+		const FStringView OriginalCanonicalASTDeclKey =
+			GraphStorage.SemanticDependencies[
+				GraphHardValueIndex].CanonicalASTDeclKey;
+		auto AssertCanonicalGlobalRelationRejected =
+			[&](const FStringView Scenario)
+			{
+				GraphStorage.Graph.SemanticDependencies =
+					GraphStorage.SemanticDependencies;
+				FAngelscriptTypedASTJIT RejectionBackend;
+				FAngelscriptStaticJITBackendOutput RejectionOutput;
+				FString RejectionError;
+				ASSERT_THAT(IsTrue(RejectionBackend.Generate(
+					BackendRequest, RejectionOutput, &RejectionError),
+					*FString::Printf(TEXT("%.*s: %s"),
+						Scenario.Len(), Scenario.GetData(), *RejectionError)));
+				const FAngelscriptStaticJITFunctionResult* const
+					RejectedResult = RejectionOutput.Functions.FindByPredicate(
+						[Reader](const auto& Candidate)
+						{
+							return Candidate.FunctionKey
+								== Reader->FunctionKey;
+						});
+				ASSERT_THAT(IsNotNull(RejectedResult));
+				ASSERT_THAT(IsTrue(RejectedResult->Disposition
+					== EAngelscriptStaticJITFunctionDisposition::Unsupported,
+					RejectedResult->Detail));
+				ASSERT_THAT(IsFalse(RejectedResult->EmittedFunction.IsSet(),
+					TEXT("An invalid Canonical global relation must never emit native code")));
+				ASSERT_THAT(IsTrue(RejectedResult->TypedDiagnostic.IsSet()));
+				ASSERT_THAT(AreEqual(
+					EAngelscriptTypedASTJITFallbackReason::
+						SemanticDependencyMismatch,
+					RejectedResult->TypedDiagnostic->FallbackReason));
+				ASSERT_THAT(IsTrue(RejectedResult->Detail.Contains(
+					TEXT("TypedASTJITSemanticDependencyMismatch")),
+					RejectedResult->Detail));
+			};
+
+		GraphStorage.SemanticDependencies[
+			GraphHardValueIndex].CanonicalASTDeclKey = {};
+		AssertCanonicalGlobalRelationRejected(
+			TEXTVIEW("missing Canonical global declaration key"));
+
+		GraphStorage.SemanticDependencies[
+			GraphHardValueIndex].CanonicalASTDeclKey =
+			TEXTVIEW("variable:wrong-canonical-global-identity");
+		AssertCanonicalGlobalRelationRejected(
+			TEXTVIEW("wrong Canonical global declaration key"));
+
+		GraphStorage.SemanticDependencies[
+			GraphHardValueIndex].CanonicalASTDeclKey =
+			OriginalCanonicalASTDeclKey;
+		const FAngelscriptStaticJITSemanticDependencyView
+			DuplicateHardValue =
+				GraphStorage.SemanticDependencies[GraphHardValueIndex];
+		GraphStorage.SemanticDependencies.Add(DuplicateHardValue);
+		AssertCanonicalGlobalRelationRejected(
+			TEXTVIEW("duplicate Canonical global declaration key"));
 	}
 
 	TEST_METHOD(LiteralAssetRolesUseAuthoritativePostInitPairs)
@@ -1656,6 +1784,9 @@ bool InvokeReviewedUEHeaderInline_65C28A(int Ignored)
 		ASSERT_THAT(AreEqual(
 			FString(TEXT("CoreGlobals.h")),
 			NativeTarget->Descriptor.Include));
+		ASSERT_THAT(AreEqual(
+			FString(TEXT("bool()")),
+			NativeTarget->Descriptor.CppCallableSignature));
 		ASSERT_THAT(IsTrue(
 			NativeTarget->Descriptor.OwningModule == FName(TEXT("Core"))));
 		ASSERT_THAT(AreEqual(
@@ -1701,6 +1832,17 @@ bool InvokeReviewedUEHeaderInline_65C28A(int Ignored)
 		ASSERT_THAT(IsNotNull(PlannedCall));
 		ASSERT_THAT(IsTrue(PlannedCall->Disposition
 			== EAngelscriptTypedASTJITCallDisposition::DirectInline));
+		ASSERT_THAT(IsTrue(
+			PlannedCall->ExternalCallValidation.bDirectCallable));
+		ASSERT_THAT(IsTrue(
+			PlannedCall->ExternalCallValidation.ReviewedCppSignature.IsValid()));
+		ASSERT_THAT(AreEqual(
+			FString(TEXT("bool")),
+			PlannedCall->ExternalCallValidation.ReviewedCppSignature.ReturnType));
+		ASSERT_THAT(AreEqual(
+			0,
+			PlannedCall->ExternalCallValidation.ReviewedCppSignature
+				.ParameterTypes.Num()));
 
 		FAngelscriptTypedASTJITNativeCallEmissionPlan NativeEmissionPlan;
 		NativeEmissionPlan.Expression = PlannedCall->Expression;
@@ -1710,6 +1852,10 @@ bool InvokeReviewedUEHeaderInline_65C28A(int Ignored)
 			PlannedCall->ExternalCallDescriptor.Symbol;
 		NativeEmissionPlan.Include =
 			PlannedCall->ExternalCallDescriptor.Include;
+		NativeEmissionPlan.ReviewedCppReturnType =
+			PlannedCall->ExternalCallValidation.ReviewedCppSignature.ReturnType;
+		NativeEmissionPlan.ReviewedCppParameterTypes =
+			PlannedCall->ExternalCallValidation.ReviewedCppSignature.ParameterTypes;
 		FAngelscriptTypedASTJITEmitOptions EmitOptions;
 		EmitOptions.NativeCalls =
 			MakeArrayView(&NativeEmissionPlan, 1);
@@ -1790,6 +1936,22 @@ bool InvokeReviewedUEHeaderInline_65C28A(int Ignored)
 			TEXT("#include \"CoreGlobals.h\""))));
 		ASSERT_THAT(IsFalse(ProviderFunction.ImplementationTemplate.Contains(
 			TEXT("FAngelscriptJITExecutionContext"))));
+		ASSERT_THAT(IsTrue(BackendResult->TypedDiagnostic.IsSet()));
+		ASSERT_THAT(IsTrue(
+			BackendResult->TypedDiagnostic->CallClosure.IsSet()));
+		if (BackendResult->TypedDiagnostic.IsSet()
+			&& BackendResult->TypedDiagnostic->CallClosure.IsSet())
+		{
+			const FAngelscriptStaticJITTypedCallClosureDiagnostic& Diagnostic =
+				BackendResult->TypedDiagnostic->CallClosure.GetValue();
+			ASSERT_THAT(IsTrue(Diagnostic.ExceptionControlState
+				== EAngelscriptStaticJITExceptionControlState::
+					DirectExecutionState));
+			ASSERT_THAT(IsTrue(Diagnostic.ExceptionPayloadState
+				== EAngelscriptStaticJITExceptionPayloadState::
+					DirectFailureRecord,
+				TEXT("A direct-only Provider root owns the mandatory direct first-failure record")));
+		}
 
 		ASSERT_THAT(IsTrue(RegisterAngelscriptTypedASTJITBackend(&Error), Error));
 		FAngelscriptStaticJITGenerator Generator(
@@ -1906,6 +2068,394 @@ int InvokeReviewedUEExportedSymbol_65C28A(int Year, int Month)
 		ASSERT_THAT(AreEqual(
 			FString(TEXT("cdecl:i32(i32,i32)")),
 			NativeTarget->ExpectedScalarABI.Canonical));
+	}
+
+	TEST_METHOD(MaySuspendNativeCallUsesTypedSuspendFallback)
+	{
+		using namespace AngelscriptStaticJITGenerationEngineTests;
+		TUniquePtr<FFixture> Fixture = CreateFixture(
+			*TestRunner, TEXT("TypedASTMaySuspendFallback"),
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			TEXTVIEW(R"AS(
+UFUNCTION()
+bool TypedASTMaySuspendFallback_65C28A()
+{
+	return IsRunningCommandlet();
+}
+)AS"));
+		ASSERT_THAT(IsNotNull(Fixture.Get()));
+		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+			ESPMode::ThreadSafe> Snapshot =
+			Fixture->Engine->GetStaticJITGenerationSnapshot();
+		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
+
+		const FAngelscriptStaticJITGenerationFunction* const Caller =
+			Snapshot->Functions.FindByPredicate([](const auto& Function)
+			{
+				return Function.CanonicalDeclaration.Contains(
+					TEXT("TypedASTMaySuspendFallback_65C28A"));
+			});
+		ASSERT_THAT(IsNotNull(Caller));
+
+		TArray<FAngelscriptStaticJITNativeCallTarget> NativeTargets =
+			Snapshot->NativeCallTargets;
+		FAngelscriptStaticJITNativeCallTarget* const NativeTarget =
+			NativeTargets.FindByPredicate([](const auto& Candidate)
+			{
+				return Candidate.Descriptor.Symbol
+					== TEXT("IsRunningCommandlet");
+			});
+		ASSERT_THAT(IsNotNull(NativeTarget));
+		NativeTarget->Descriptor.RouteFlags |=
+			EAngelscriptStaticJITNativeCallRouteFlags::MaySuspend;
+
+		FCompiledGraphStorage GraphStorage = BuildCompiledGraphStorage(
+			*Snapshot, TEXTVIEW("TypedAST MaySuspend Fallback"));
+		GraphStorage.Graph.Settings.KnownNativeCallModules.Add(TEXT("Core"));
+		GraphStorage.Graph.Settings.PublicNativeCallDependencyModules.Add(
+			TEXT("Core"));
+		FAngelscriptTypedASTJITRootIndex RootIndex;
+		FString Error;
+		ASSERT_THAT(IsTrue(BuildAngelscriptTypedASTJITRootIndex(
+			GraphStorage.Graph, RootIndex, &Error), Error));
+		TArray<FAngelscriptTypedASTJITCallClosureFunctionInput>
+			ClosureInputs;
+		ASSERT_THAT(IsTrue(BuildAngelscriptTypedASTJITCallClosureInputs(
+			GraphStorage.Graph, RootIndex, ClosureInputs, &Error), Error));
+		FAngelscriptTypedASTJITCallClosureOptions ClosureOptions;
+		ClosureOptions.ExecutionRequirements =
+			GraphStorage.Graph.TypedASTJITExecutionRequirements;
+		ClosureOptions.NativeCallTargets = NativeTargets;
+		ClosureOptions.KnownNativeCallModules =
+			GraphStorage.Graph.Settings.KnownNativeCallModules;
+		ClosureOptions.PublicNativeCallDependencyModules =
+			GraphStorage.Graph.Settings.PublicNativeCallDependencyModules;
+		FAngelscriptTypedASTJITCallClosurePlan ClosurePlan;
+		ASSERT_THAT(IsTrue(BuildAngelscriptTypedASTJITCallClosure(
+			ClosureInputs, Caller->FunctionKey, ClosureOptions,
+			ClosurePlan, &Error), Error));
+		ASSERT_THAT(IsFalse(ClosurePlan.bEligible));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::SuspendOrExceptionState,
+			ClosurePlan.RootEligibility.Reason,
+			TEXT("MaySuspend is a reviewed per-function fallback, not a generic unsupported call")));
+		ASSERT_THAT(IsTrue(ClosurePlan.RootEligibility.Detail.Contains(
+			TEXT("NativeCallMaySuspend"))));
+	}
+
+	TEST_METHOD(DirectNativeExceptionPolicyRequiresTypedPayloadRoute)
+	{
+		using namespace AngelscriptStaticJITGenerationEngineTests;
+		TUniquePtr<FFixture> Fixture = CreateFixture(
+			*TestRunner, TEXT("TypedASTDirectExceptionFallback"),
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			TEXTVIEW(R"AS(
+UFUNCTION()
+bool TypedASTDirectExceptionFallback_65C28A()
+{
+	return IsRunningCommandlet();
+}
+)AS"));
+		ASSERT_THAT(IsNotNull(Fixture.Get()));
+		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+			ESPMode::ThreadSafe> Snapshot =
+			Fixture->Engine->GetStaticJITGenerationSnapshot();
+		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
+
+		const FAngelscriptStaticJITGenerationFunction* const Caller =
+			Snapshot->Functions.FindByPredicate([](const auto& Function)
+			{
+				return Function.CanonicalDeclaration.Contains(
+					TEXT("TypedASTDirectExceptionFallback_65C28A"));
+			});
+		ASSERT_THAT(IsNotNull(Caller));
+
+		TArray<FAngelscriptStaticJITNativeCallTarget> NativeTargets =
+			Snapshot->NativeCallTargets;
+		FAngelscriptStaticJITNativeCallTarget* const NativeTarget =
+			NativeTargets.FindByPredicate([](const auto& Candidate)
+			{
+				return Candidate.Descriptor.Symbol
+					== TEXT("IsRunningCommandlet");
+			});
+		ASSERT_THAT(IsNotNull(NativeTarget));
+		NativeTarget->Descriptor.ExceptionPolicy =
+			EAngelscriptStaticJITNativeCallExceptionPolicy::
+				MaySetScriptException;
+
+		FCompiledGraphStorage GraphStorage = BuildCompiledGraphStorage(
+			*Snapshot, TEXTVIEW("TypedAST Direct Exception Fallback"));
+		GraphStorage.Graph.Settings.KnownNativeCallModules.Add(TEXT("Core"));
+		GraphStorage.Graph.Settings.PublicNativeCallDependencyModules.Add(
+			TEXT("Core"));
+		FAngelscriptTypedASTJITRootIndex RootIndex;
+		FString Error;
+		ASSERT_THAT(IsTrue(BuildAngelscriptTypedASTJITRootIndex(
+			GraphStorage.Graph, RootIndex, &Error), Error));
+		TArray<FAngelscriptTypedASTJITCallClosureFunctionInput>
+			ClosureInputs;
+		ASSERT_THAT(IsTrue(BuildAngelscriptTypedASTJITCallClosureInputs(
+			GraphStorage.Graph, RootIndex, ClosureInputs, &Error), Error));
+		FAngelscriptTypedASTJITCallClosureOptions ClosureOptions;
+		ClosureOptions.ExecutionRequirements =
+			GraphStorage.Graph.TypedASTJITExecutionRequirements;
+		ClosureOptions.NativeCallTargets = NativeTargets;
+		ClosureOptions.KnownNativeCallModules =
+			GraphStorage.Graph.Settings.KnownNativeCallModules;
+		ClosureOptions.PublicNativeCallDependencyModules =
+			GraphStorage.Graph.Settings.PublicNativeCallDependencyModules;
+		FAngelscriptTypedASTJITCallClosurePlan ClosurePlan;
+		ASSERT_THAT(IsTrue(BuildAngelscriptTypedASTJITCallClosure(
+			ClosureInputs, Caller->FunctionKey, ClosureOptions,
+			ClosurePlan, &Error), Error));
+		ASSERT_THAT(IsFalse(ClosurePlan.bEligible));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::ExceptionPayloadUnavailable,
+			ClosurePlan.RootEligibility.Reason,
+			TEXT("A direct call that may set a script exception needs an explicit payload route")));
+		ASSERT_THAT(IsTrue(ClosurePlan.RootEligibility.Detail.Contains(
+			TEXT("DirectNativeExceptionPayloadUnavailable"))));
+	}
+
+	TEST_METHOD(NativeCallProjectionPublishesExactCanonicalTargetIdentity)
+	{
+		using namespace AngelscriptStaticJITGenerationEngineTests;
+		TUniquePtr<FFixture> Fixture = CreateFixture(
+			*TestRunner, TEXT("TypedASTNativeTargetProducerIdentity"),
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			TEXTVIEW(R"AS(
+UFUNCTION()
+bool TypedASTNativeTargetProducerIdentity_65C28A()
+{
+	return IsRunningCommandlet();
+}
+)AS"));
+		ASSERT_THAT(IsNotNull(Fixture.Get()));
+		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+			ESPMode::ThreadSafe> Snapshot =
+			Fixture->Engine->GetStaticJITGenerationSnapshot();
+		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
+
+		const FAngelscriptStaticJITGenerationFunction* const Caller =
+			Snapshot->Functions.FindByPredicate([](const auto& Function)
+			{
+				return Function.CanonicalDeclaration.Contains(
+					TEXT("TypedASTNativeTargetProducerIdentity_65C28A"));
+			});
+		ASSERT_THAT(IsNotNull(Caller));
+		const asCDecl* const CanonicalTarget = FindCanonicalExpressionTarget(
+			*Caller, asAST_EXPR_CALL, TEXTVIEW("IsRunningCommandlet"));
+		ASSERT_THAT(IsNotNull(CanonicalTarget));
+		ASSERT_THAT(IsTrue(CanonicalTarget->stableKey.GetLength() != 0));
+
+		const FAngelscriptStaticJITNativeCallTarget* const NativeTarget =
+			Snapshot->NativeCallTargets.FindByPredicate([](const auto& Candidate)
+			{
+				return Candidate.Descriptor.Symbol
+					== TEXT("IsRunningCommandlet");
+			});
+		ASSERT_THAT(IsNotNull(NativeTarget));
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(
+			Fixture->Engine->GetScriptEngine());
+		const asCScriptFunction* const RuntimeTarget =
+			static_cast<const asCScriptFunction*>(
+				ScriptEngine->GetFunctionById(
+					NativeTarget->EngineLocalFunctionId));
+		ASSERT_THAT(IsNotNull(RuntimeTarget));
+		const FString ExpectedTargetDeclKey = UTF8_TO_TCHAR(
+			CanonicalTarget->stableKey.AddressOf());
+		ASSERT_THAT(AreEqual(
+			ExpectedTargetDeclKey,
+			NativeTarget->CanonicalTargetDeclKey,
+			TEXT("The frozen native-call target must carry the exact producer-published Canonical declaration key")));
+		ASSERT_THAT(AreEqual(
+			ExpectedTargetDeclKey,
+			FString(UTF8_TO_TCHAR(
+				RuntimeTarget->canonicalASTStableDeclKey.AddressOf())),
+			TEXT("Sema must publish the exact resolved Canonical declaration key on the selected system function")));
+	}
+
+	TEST_METHOD(NativeCallClosureIgnoresDiagnosticDeclarationSpelling)
+	{
+		using namespace AngelscriptStaticJITGenerationEngineTests;
+		TUniquePtr<FFixture> Fixture = CreateFixture(
+			*TestRunner, TEXT("TypedASTNativeTargetDiagnosticIndependence"),
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			TEXTVIEW(R"AS(
+UFUNCTION()
+bool TypedASTNativeTargetDiagnosticIndependence_65C28A()
+{
+	return IsRunningCommandlet();
+}
+)AS"));
+		ASSERT_THAT(IsNotNull(Fixture.Get()));
+		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+			ESPMode::ThreadSafe> Snapshot =
+			Fixture->Engine->GetStaticJITGenerationSnapshot();
+		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
+
+		const FAngelscriptStaticJITGenerationFunction* const Caller =
+			Snapshot->Functions.FindByPredicate([](const auto& Function)
+			{
+				return Function.CanonicalDeclaration.Contains(
+					TEXT("TypedASTNativeTargetDiagnosticIndependence_65C28A"));
+			});
+		ASSERT_THAT(IsNotNull(Caller));
+
+		TArray<FAngelscriptStaticJITNativeCallTarget> NativeTargets =
+			Snapshot->NativeCallTargets;
+		FAngelscriptStaticJITNativeCallTarget* const NativeTarget =
+			NativeTargets.FindByPredicate([](const auto& Candidate)
+			{
+				return Candidate.Descriptor.Symbol
+					== TEXT("IsRunningCommandlet");
+			});
+		ASSERT_THAT(IsNotNull(NativeTarget));
+		NativeTarget->CanonicalDeclaration =
+			TEXT("diagnostic-only spelling deliberately changed by the test");
+
+		FCompiledGraphStorage GraphStorage = BuildCompiledGraphStorage(
+			*Snapshot, TEXTVIEW("TypedAST Native Target Diagnostic Independence"));
+		GraphStorage.Graph.Settings.KnownNativeCallModules.Add(TEXT("Core"));
+		GraphStorage.Graph.Settings.PublicNativeCallDependencyModules.Add(
+			TEXT("Core"));
+		FAngelscriptTypedASTJITRootIndex RootIndex;
+		FString Error;
+		ASSERT_THAT(IsTrue(BuildAngelscriptTypedASTJITRootIndex(
+			GraphStorage.Graph, RootIndex, &Error), Error));
+		TArray<FAngelscriptTypedASTJITCallClosureFunctionInput>
+			ClosureInputs;
+		ASSERT_THAT(IsTrue(BuildAngelscriptTypedASTJITCallClosureInputs(
+			GraphStorage.Graph, RootIndex, ClosureInputs, &Error), Error));
+		FAngelscriptTypedASTJITCallClosureOptions ClosureOptions;
+		ClosureOptions.ExecutionRequirements =
+			GraphStorage.Graph.TypedASTJITExecutionRequirements;
+		ClosureOptions.NativeCallTargets = NativeTargets;
+		ClosureOptions.KnownNativeCallModules =
+			GraphStorage.Graph.Settings.KnownNativeCallModules;
+		ClosureOptions.PublicNativeCallDependencyModules =
+			GraphStorage.Graph.Settings.PublicNativeCallDependencyModules;
+		FAngelscriptTypedASTJITCallClosurePlan ClosurePlan;
+		ASSERT_THAT(IsTrue(BuildAngelscriptTypedASTJITCallClosure(
+			ClosureInputs, Caller->FunctionKey, ClosureOptions,
+			ClosurePlan, &Error), Error));
+		ASSERT_THAT(IsTrue(ClosurePlan.bEligible,
+			TEXT("Human-readable declaration spelling must not participate in native target identity")));
+		const FAngelscriptTypedASTJITCallClosureCall* const PlannedCall =
+			ClosurePlan.Calls.FindByPredicate([](const auto& Call)
+			{
+				return Call.TargetKind
+					== EAngelscriptTypedASTJITCallTargetKind::SystemFunction;
+			});
+		ASSERT_THAT(IsNotNull(PlannedCall));
+		ASSERT_THAT(IsTrue(PlannedCall->Disposition
+			!= EAngelscriptTypedASTJITCallDisposition::Unsupported));
+	}
+
+	TEST_METHOD(NativeCallClosureRejectsWrongCanonicalTargetKey)
+	{
+		using namespace AngelscriptStaticJITGenerationEngineTests;
+		TUniquePtr<FFixture> Fixture = CreateFixture(
+			*TestRunner, TEXT("TypedASTNativeTargetWrongIdentity"),
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			TEXTVIEW(R"AS(
+UFUNCTION()
+bool TypedASTNativeTargetWrongIdentity_65C28A()
+{
+	return IsRunningCommandlet();
+}
+)AS"));
+		ASSERT_THAT(IsNotNull(Fixture.Get()));
+		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+			ESPMode::ThreadSafe> Snapshot =
+			Fixture->Engine->GetStaticJITGenerationSnapshot();
+		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
+
+		const FAngelscriptStaticJITGenerationFunction* const Caller =
+			Snapshot->Functions.FindByPredicate([](const auto& Function)
+			{
+				return Function.CanonicalDeclaration.Contains(
+					TEXT("TypedASTNativeTargetWrongIdentity_65C28A"));
+			});
+		ASSERT_THAT(IsNotNull(Caller));
+
+		TArray<FAngelscriptStaticJITNativeCallTarget> NativeTargets =
+			Snapshot->NativeCallTargets;
+		FAngelscriptStaticJITNativeCallTarget* const NativeTarget =
+			NativeTargets.FindByPredicate([](const auto& Candidate)
+			{
+				return Candidate.Descriptor.Symbol
+					== TEXT("IsRunningCommandlet");
+			});
+		ASSERT_THAT(IsNotNull(NativeTarget));
+		const FString OriginalDeclaration = NativeTarget->CanonicalDeclaration;
+		const FString OriginalTargetDeclKey = NativeTarget->CanonicalTargetDeclKey;
+		NativeTarget->CanonicalTargetDeclKey =
+			TEXT("function:wrong-native-target()");
+		ASSERT_THAT(AreEqual(
+			OriginalDeclaration,
+			NativeTarget->CanonicalDeclaration,
+			TEXT("The negative fixture must preserve diagnostic spelling while corrupting only identity")));
+
+		FCompiledGraphStorage GraphStorage = BuildCompiledGraphStorage(
+			*Snapshot, TEXTVIEW("TypedAST Native Target Wrong Identity"));
+		GraphStorage.Graph.Settings.KnownNativeCallModules.Add(TEXT("Core"));
+		GraphStorage.Graph.Settings.PublicNativeCallDependencyModules.Add(
+			TEXT("Core"));
+		FAngelscriptTypedASTJITRootIndex RootIndex;
+		FString Error;
+		ASSERT_THAT(IsTrue(BuildAngelscriptTypedASTJITRootIndex(
+			GraphStorage.Graph, RootIndex, &Error), Error));
+		TArray<FAngelscriptTypedASTJITCallClosureFunctionInput>
+			ClosureInputs;
+		ASSERT_THAT(IsTrue(BuildAngelscriptTypedASTJITCallClosureInputs(
+			GraphStorage.Graph, RootIndex, ClosureInputs, &Error), Error));
+		FAngelscriptTypedASTJITCallClosureOptions ClosureOptions;
+		ClosureOptions.ExecutionRequirements =
+			GraphStorage.Graph.TypedASTJITExecutionRequirements;
+		ClosureOptions.NativeCallTargets = NativeTargets;
+		ClosureOptions.KnownNativeCallModules =
+			GraphStorage.Graph.Settings.KnownNativeCallModules;
+		ClosureOptions.PublicNativeCallDependencyModules =
+			GraphStorage.Graph.Settings.PublicNativeCallDependencyModules;
+		FAngelscriptTypedASTJITCallClosurePlan ClosurePlan;
+		ASSERT_THAT(IsTrue(BuildAngelscriptTypedASTJITCallClosure(
+			ClosureInputs, Caller->FunctionKey, ClosureOptions,
+			ClosurePlan, &Error), Error));
+		ASSERT_THAT(IsFalse(ClosurePlan.bEligible,
+			TEXT("A mismatched native target key must fail closed even when diagnostic spelling still matches")));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedCall,
+			ClosurePlan.RootEligibility.Reason));
+		ASSERT_THAT(IsTrue(ClosurePlan.RootEligibility.Detail.Contains(
+			TEXT("ExactNativeMatches=none"))));
+		ASSERT_THAT(IsTrue(ClosurePlan.RootEligibility.Detail.Contains(
+			TEXT("IsRunningCommandlet"))));
+
+		NativeTarget->CanonicalTargetDeclKey.Reset();
+		ClosureOptions.NativeCallTargets = NativeTargets;
+		FAngelscriptTypedASTJITCallClosurePlan MissingKeyPlan;
+		Error.Reset();
+		ASSERT_THAT(IsFalse(BuildAngelscriptTypedASTJITCallClosure(
+			ClosureInputs, Caller->FunctionKey, ClosureOptions,
+			MissingKeyPlan, &Error),
+			TEXT("A native target without an exact Canonical identity must be rejected as malformed input")));
+		ASSERT_THAT(IsTrue(Error.Contains(
+			TEXT("TypedASTJITCallGraphInvalidNativeCallTarget"))));
+
+		NativeTarget->CanonicalTargetDeclKey = OriginalTargetDeclKey;
+		FAngelscriptStaticJITNativeCallTarget DuplicateTarget = *NativeTarget;
+		DuplicateTarget.EngineLocalFunctionId = MAX_int32;
+		NativeTargets.Add(MoveTemp(DuplicateTarget));
+		ClosureOptions.NativeCallTargets = NativeTargets;
+		FAngelscriptTypedASTJITCallClosurePlan DuplicateKeyPlan;
+		Error.Reset();
+		ASSERT_THAT(IsFalse(BuildAngelscriptTypedASTJITCallClosure(
+			ClosureInputs, Caller->FunctionKey, ClosureOptions,
+			DuplicateKeyPlan, &Error),
+			TEXT("Two native rows cannot claim the same exact Canonical target identity")));
+		ASSERT_THAT(IsTrue(Error.Contains(
+			TEXT("TypedASTJITCallGraphDuplicateNativeCanonicalTarget"))));
 	}
 
 	TEST_METHOD(ReviewedRuntimePrintCallUsesResolvedCanonicalTarget)
@@ -2092,6 +2642,426 @@ int InvokeReviewedRuntimePrint_65C28A(
 				TEXT("AngelscriptStaticJITNativeCallables::Print("))));
 		ASSERT_THAT(IsTrue(BackendOutput.ModuleSourcePreamble.Contains(
 			TEXT("StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallables.h"))));
+	}
+
+	TEST_METHOD(RootBodySignatureUsesFrozenEntryPlanAfterRuntimeTypeNameChanges)
+	{
+		using namespace AngelscriptStaticJITGenerationEngineTests;
+		TUniquePtr<FFixture> Fixture = CreateFixture(
+			*TestRunner, TEXT("FrozenRootBodySignature"),
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			TEXTVIEW(R"AS(
+UFUNCTION()
+int TypedFrozenRootBodySignature_65C28A(const FString&in Text)
+{
+	return 101;
+}
+)AS"));
+		ASSERT_THAT(IsNotNull(Fixture.Get()));
+		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+			ESPMode::ThreadSafe> Snapshot =
+			Fixture->Engine->GetStaticJITGenerationSnapshot();
+		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
+		const FAngelscriptStaticJITGenerationFunction* const Function =
+			Snapshot->Functions.FindByPredicate([](const auto& Candidate)
+			{
+				return Candidate.CanonicalDeclaration.Contains(
+					TEXT("TypedFrozenRootBodySignature_65C28A"));
+			});
+		ASSERT_THAT(IsNotNull(Function));
+		ASSERT_THAT(AreEqual(1, Function->EntryPlan.Parameters.Num()));
+		ASSERT_THAT(AreEqual(FString(TEXT("FString")),
+			Function->EntryPlan.Parameters[0].BodyCppType));
+		ASSERT_THAT(IsTrue(Function->EntryPlan.Parameters[0].Marshalling
+			== EAngelscriptStaticJITEntryParameterMarshalling::
+				BorrowedValueAddress));
+
+		const asCScriptFunction* const ScriptFunction =
+			static_cast<const asCScriptFunction*>(Function->EngineLocalFunction);
+		ASSERT_THAT(IsNotNull(ScriptFunction));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
+			ScriptFunction->parameterTypes.GetLength()));
+		asCTypeInfo* const RuntimeType =
+			ScriptFunction->parameterTypes[0].GetTypeInfo();
+		ASSERT_THAT(IsNotNull(RuntimeType));
+		const asCString OriginalRuntimeTypeName = RuntimeType->name;
+		ON_SCOPE_EXIT
+		{
+			RuntimeType->name = OriginalRuntimeTypeName;
+		};
+		RuntimeType->name = "FStringDisplayPoison_65C28A";
+
+		FCompiledGraphStorage GraphStorage = BuildCompiledGraphStorage(
+			*Snapshot, TEXTVIEW("frozen root body signature"));
+		const FAngelscriptStableModuleKey EmitModuleSet[] = {
+			Function->ModuleKey};
+		const FAngelscriptStaticJITBackendRequest Request{
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			GraphStorage.Graph,
+			EmitModuleSet,
+		};
+		FAngelscriptTypedASTJIT Backend;
+		FAngelscriptStaticJITBackendOutput Output;
+		FString Error;
+		ASSERT_THAT(IsTrue(Backend.Generate(Request, Output, &Error), Error));
+		const FAngelscriptStaticJITFunctionResult* const Result =
+			Output.Functions.FindByPredicate([Function](const auto& Candidate)
+			{
+				return Candidate.FunctionKey == Function->FunctionKey;
+			});
+		ASSERT_THAT(IsNotNull(Result));
+		ASSERT_THAT(IsTrue(Result->Disposition
+			== EAngelscriptStaticJITFunctionDisposition::Emitted,
+			Result->Detail));
+		ASSERT_THAT(IsTrue(Result->EmittedFunction.IsSet()));
+		ASSERT_THAT(IsTrue(Result->EmittedFunction->ImplementationTemplate.Contains(
+			TEXT("const FString& as_ast_d")),
+			TEXT("the root body must consume the exact frozen EntryPlan C++ ABI")));
+		ASSERT_THAT(IsFalse(Result->EmittedFunction->ImplementationTemplate.Contains(
+			TEXT("FStringDisplayPoison_65C28A")),
+			TEXT("a live Runtime display name must not enter generated C++")));
+	}
+
+	TEST_METHOD(RuntimeTypeBindingAuthenticationFailsClosedPerFunction)
+	{
+		using namespace AngelscriptStaticJITGenerationEngineTests;
+		TUniquePtr<FFixture> Fixture = CreateFixture(
+			*TestRunner, TEXT("RuntimeTypeBindingAuthentication"),
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			TEXTVIEW(R"AS(
+UFUNCTION()
+int TypedRuntimeBindingManaged_65C28A(const FString&in Text)
+{
+	return 101;
+}
+
+UFUNCTION()
+int TypedRuntimeBindingIndependent_65C28A(int Value)
+{
+	return Value + 2;
+}
+)AS"));
+		ASSERT_THAT(IsNotNull(Fixture.Get()));
+		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+			ESPMode::ThreadSafe> Snapshot =
+			Fixture->Engine->GetStaticJITGenerationSnapshot();
+		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
+		const FAngelscriptStaticJITGenerationFunction* const Managed =
+			Snapshot->Functions.FindByPredicate([](const auto& Function)
+			{
+				return Function.CanonicalDeclaration.Contains(
+					TEXT("TypedRuntimeBindingManaged_65C28A"));
+			});
+		const FAngelscriptStaticJITGenerationFunction* const Independent =
+			Snapshot->Functions.FindByPredicate([](const auto& Function)
+			{
+				return Function.CanonicalDeclaration.Contains(
+					TEXT("TypedRuntimeBindingIndependent_65C28A"));
+			});
+		ASSERT_THAT(IsNotNull(Managed));
+		ASSERT_THAT(IsNotNull(Independent));
+		ASSERT_THAT(IsTrue(Managed->bHasVMEntry));
+
+		const asCScriptFunction* const ManagedScriptFunction =
+			static_cast<const asCScriptFunction*>(Managed->EngineLocalFunction);
+		ASSERT_THAT(IsNotNull(ManagedScriptFunction));
+		const FString ManagedCanonicalDeclKey = UTF8_TO_TCHAR(
+			ManagedScriptFunction->canonicalASTStableDeclKey.AddressOf());
+		const TArray<FAngelscriptStaticJITRuntimeTypeBinding> ManagedBindings =
+			Snapshot->RuntimeTypeBindings.FilterByPredicate(
+				[&](const FAngelscriptStaticJITRuntimeTypeBinding& Binding)
+				{
+					return Binding.Summary.ModuleKey == Managed->ModuleKey
+						&& Binding.Summary.OwnerCanonicalFunctionDeclKey
+							== ManagedCanonicalDeclKey;
+				});
+		FString BindingRows = FString::Printf(TEXT(
+			"Expected one managed row; filtered=%d total=%d managedModule=%s managedOwner=%s"),
+			ManagedBindings.Num(), Snapshot->RuntimeTypeBindings.Num(),
+			*Managed->ModuleKey.Hash.ToHexString(), *ManagedCanonicalDeclKey);
+		for (int32 BindingIndex = 0;
+			BindingIndex < Snapshot->RuntimeTypeBindings.Num(); ++BindingIndex)
+		{
+			const auto& Binding = Snapshot->RuntimeTypeBindings[BindingIndex];
+			BindingRows += FString::Printf(TEXT(
+				"\n[%d] module=%s owner=%s role=%u formal=%u stableType=%s"),
+				BindingIndex,
+				*Binding.Summary.ModuleKey.Hash.ToHexString(),
+				*Binding.Summary.OwnerCanonicalFunctionDeclKey,
+				static_cast<uint8>(Binding.Summary.Role),
+				Binding.Summary.FormalIndex,
+				*Binding.Summary.ExpectedABI.StableTypeKey);
+		}
+		ASSERT_THAT(AreEqual(1, ManagedBindings.Num(),
+			BindingRows));
+		ASSERT_THAT(IsTrue(ManagedBindings[0].Summary.Role
+			== EAngelscriptStaticJITRuntimeTypeBindingRole::Parameter));
+		ASSERT_THAT(AreEqual(static_cast<uint32>(0),
+			ManagedBindings[0].Summary.FormalIndex));
+		ASSERT_THAT(AreEqual(FString(TEXT("FString")),
+			ManagedBindings[0].Summary.ExpectedABI.StableTypeKey));
+		ASSERT_THAT(IsTrue(ManagedBindings[0].Summary.ExpectedABI.
+			IsExactlyCompatibleWith(
+				ManagedBindings[0].Summary.ResolvedABI)));
+
+		FCompiledGraphStorage PositiveStorage = BuildCompiledGraphStorage(
+			*Snapshot, TEXTVIEW("authenticated Runtime type binding output"));
+		PositiveStorage.Graph.Settings.KnownNativeCallModules.Add(
+			TEXT("AngelscriptRuntime"));
+		PositiveStorage.Graph.Settings.PublicNativeCallDependencyModules.Add(
+			TEXT("AngelscriptRuntime"));
+		PositiveStorage.Graph.RuntimeTypeBindings =
+			PositiveStorage.RuntimeTypeBindings;
+		PositiveStorage.Graph.RuntimeTypeBindingTargetProfileKey =
+			PositiveStorage.RuntimeTypeBindingTargetProfileKey;
+		PositiveStorage.Graph.RuntimeTypeBindingNativeEnvironmentKey =
+			PositiveStorage.RuntimeTypeBindingNativeEnvironmentKey;
+		const FAngelscriptStableModuleKey PositiveEmitModuleSet[] = {
+			Managed->ModuleKey};
+		const FAngelscriptStaticJITBackendRequest PositiveRequest{
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			PositiveStorage.Graph,
+			PositiveEmitModuleSet,
+		};
+		FAngelscriptTypedASTJIT PositiveBackend;
+		FAngelscriptStaticJITBackendOutput PositiveOutput;
+		FString PositiveError;
+		ASSERT_THAT(IsTrue(PositiveBackend.Generate(
+			PositiveRequest, PositiveOutput, &PositiveError), PositiveError));
+		const FAngelscriptStaticJITFunctionResult* const PositiveManagedResult =
+			PositiveOutput.Functions.FindByPredicate(
+				[Managed](const auto& Candidate)
+				{
+					return Candidate.FunctionKey == Managed->FunctionKey;
+				});
+		const FAngelscriptStaticJITFunctionResult* const
+			PositiveIndependentResult = PositiveOutput.Functions.FindByPredicate(
+				[Independent](const auto& Candidate)
+				{
+					return Candidate.FunctionKey == Independent->FunctionKey;
+				});
+		ASSERT_THAT(IsNotNull(PositiveManagedResult));
+		ASSERT_THAT(IsNotNull(PositiveIndependentResult));
+		ASSERT_THAT(IsTrue(PositiveManagedResult->Disposition
+			== EAngelscriptStaticJITFunctionDisposition::Emitted,
+			PositiveManagedResult->Detail));
+		ASSERT_THAT(IsTrue(PositiveManagedResult->EmittedFunction.IsSet()));
+		ASSERT_THAT(AreEqual(1, PositiveManagedResult->EmittedFunction->
+			AuthenticatedRuntimeTypeBindings.Num()));
+		const FAngelscriptStaticJITRuntimeTypeBindingSummary&
+			AuthenticatedSummary = PositiveManagedResult->EmittedFunction->
+				AuthenticatedRuntimeTypeBindings[0];
+		ASSERT_THAT(IsTrue(AuthenticatedSummary.IsStructurallyComplete()));
+		ASSERT_THAT(IsTrue(AuthenticatedSummary.ModuleKey
+			== Managed->ModuleKey));
+		ASSERT_THAT(AreEqual(ManagedCanonicalDeclKey,
+			AuthenticatedSummary.OwnerCanonicalFunctionDeclKey));
+		ASSERT_THAT(IsTrue(AuthenticatedSummary.Role
+			== EAngelscriptStaticJITRuntimeTypeBindingRole::Parameter));
+		ASSERT_THAT(AreEqual(static_cast<uint32>(0),
+			AuthenticatedSummary.FormalIndex));
+		ASSERT_THAT(AreEqual(FString(TEXT("FString")),
+			AuthenticatedSummary.ExpectedABI.StableTypeKey));
+		ASSERT_THAT(IsTrue(AuthenticatedSummary.ExpectedABI.
+			IsExactlyCompatibleWith(AuthenticatedSummary.ResolvedABI)));
+		ASSERT_THAT(IsTrue(PositiveIndependentResult->Disposition
+			== EAngelscriptStaticJITFunctionDisposition::Emitted,
+			PositiveIndependentResult->Detail));
+		ASSERT_THAT(IsTrue(PositiveIndependentResult->EmittedFunction.IsSet()));
+		ASSERT_THAT(AreEqual(0, PositiveIndependentResult->EmittedFunction->
+			AuthenticatedRuntimeTypeBindings.Num()));
+
+		const int32 PositiveBindingIndex =
+			PositiveStorage.RuntimeTypeBindings.IndexOfByPredicate(
+				[&](const FAngelscriptStaticJITRuntimeTypeBinding& Binding)
+				{
+					return Binding.Summary.ModuleKey == Managed->ModuleKey
+						&& Binding.Summary.OwnerCanonicalFunctionDeclKey
+							== ManagedCanonicalDeclKey;
+				});
+		ASSERT_THAT(IsTrue(PositiveBindingIndex != INDEX_NONE));
+		PositiveStorage.RuntimeTypeBindings[PositiveBindingIndex].Summary.
+			ExpectedABI.StableTypeKey = TEXT("mutated-after-generation");
+		ASSERT_THAT(AreEqual(FString(TEXT("FString")),
+			PositiveManagedResult->EmittedFunction->
+				AuthenticatedRuntimeTypeBindings[0].ExpectedABI.StableTypeKey));
+		const FAngelscriptStaticJITCompiledTypeView* const WrongSameEngineType =
+			PositiveStorage.Types.FindByPredicate(
+				[&](const FAngelscriptStaticJITCompiledTypeView& Type)
+				{
+					return Type.EngineLocalType != nullptr
+						&& Type.EngineLocalType
+							!= ManagedBindings[0].EngineLocalType;
+				});
+		ASSERT_THAT(IsNotNull(WrongSameEngineType));
+		ASSERT_THAT(IsTrue(WrongSameEngineType->EngineLocalType->GetEngine()
+			== ManagedBindings[0].EngineLocalType->GetEngine()));
+
+		auto RunNegative = [this, &Snapshot, Managed, Independent,
+			&ManagedCanonicalDeclKey](
+			const FStringView Label,
+			TFunction<void(FCompiledGraphStorage&, int32)> Mutate)
+		{
+			FCompiledGraphStorage Storage = BuildCompiledGraphStorage(
+				*Snapshot, Label);
+			Storage.Graph.Settings.KnownNativeCallModules.Add(
+				TEXT("AngelscriptRuntime"));
+			Storage.Graph.Settings.PublicNativeCallDependencyModules.Add(
+				TEXT("AngelscriptRuntime"));
+			const int32 BindingIndex =
+				Storage.RuntimeTypeBindings.IndexOfByPredicate(
+					[&](const FAngelscriptStaticJITRuntimeTypeBinding& Binding)
+					{
+						return Binding.Summary.ModuleKey == Managed->ModuleKey
+							&& Binding.Summary.OwnerCanonicalFunctionDeclKey
+								== ManagedCanonicalDeclKey
+							&& Binding.Summary.Role
+								== EAngelscriptStaticJITRuntimeTypeBindingRole::Parameter
+							&& Binding.Summary.FormalIndex == 0;
+					});
+			ASSERT_THAT(IsTrue(BindingIndex != INDEX_NONE));
+			Mutate(Storage, BindingIndex);
+			// Mutations may reallocate the owned array. Rebind the request view so
+			// the backend always observes the exact corrupted request-local rows.
+			Storage.Graph.RuntimeTypeBindings = Storage.RuntimeTypeBindings;
+			Storage.Graph.RuntimeTypeBindingTargetProfileKey =
+				Storage.RuntimeTypeBindingTargetProfileKey;
+			Storage.Graph.RuntimeTypeBindingNativeEnvironmentKey =
+				Storage.RuntimeTypeBindingNativeEnvironmentKey;
+
+			const FAngelscriptStableModuleKey EmitModuleSet[] = {
+				Managed->ModuleKey};
+			const FAngelscriptStaticJITBackendRequest Request{
+				FAngelscriptStaticJITBackendId::TypedAST(),
+				Storage.Graph,
+				EmitModuleSet,
+			};
+			FAngelscriptTypedASTJIT Backend;
+			FAngelscriptStaticJITBackendOutput Output;
+			FString Error;
+			ASSERT_THAT(IsTrue(Backend.Generate(Request, Output, &Error), Error));
+			const FAngelscriptStaticJITFunctionResult* const ManagedResult =
+				Output.Functions.FindByPredicate([Managed](const auto& Candidate)
+				{
+					return Candidate.FunctionKey == Managed->FunctionKey;
+				});
+			const FAngelscriptStaticJITFunctionResult* const IndependentResult =
+				Output.Functions.FindByPredicate(
+					[Independent](const auto& Candidate)
+					{
+						return Candidate.FunctionKey == Independent->FunctionKey;
+					});
+			ASSERT_THAT(IsNotNull(ManagedResult));
+			ASSERT_THAT(IsNotNull(IndependentResult));
+			ASSERT_THAT(IsTrue(ManagedResult->Disposition
+				== EAngelscriptStaticJITFunctionDisposition::Unsupported,
+				FString::Printf(TEXT("%.*s: %s"), Label.Len(), Label.GetData(),
+					*ManagedResult->Detail)));
+			ASSERT_THAT(IsFalse(ManagedResult->EmittedFunction.IsSet()));
+			ASSERT_THAT(IsTrue(ManagedResult->TypedDiagnostic.IsSet()));
+			ASSERT_THAT(IsTrue(
+				ManagedResult->TypedDiagnostic->FallbackReason
+					== EAngelscriptTypedASTJITFallbackReason::
+						RuntimeTypeBindingMismatch));
+			ASSERT_THAT(IsTrue(ManagedResult->Detail.Contains(
+				TEXT("TypedASTJITRuntimeTypeBindingMismatch"))));
+			ASSERT_THAT(IsTrue(IndependentResult->Disposition
+				== EAngelscriptStaticJITFunctionDisposition::Emitted,
+				FString::Printf(TEXT("%.*s independent root: %s"),
+					Label.Len(), Label.GetData(), *IndependentResult->Detail)));
+			ASSERT_THAT(IsTrue(IndependentResult->EmittedFunction.IsSet()));
+		};
+
+		RunNegative(TEXTVIEW("missing"),
+			[](FCompiledGraphStorage& Storage, const int32 Index)
+			{
+				Storage.RuntimeTypeBindings.RemoveAt(Index);
+			});
+		RunNegative(TEXTVIEW("duplicate"),
+			[](FCompiledGraphStorage& Storage, const int32 Index)
+			{
+				const FAngelscriptStaticJITRuntimeTypeBinding Duplicate =
+					Storage.RuntimeTypeBindings[Index];
+				Storage.RuntimeTypeBindings.Add(Duplicate);
+			});
+		RunNegative(TEXTVIEW("wrong-profile"),
+			[](FCompiledGraphStorage& Storage, const int32 Index)
+			{
+				auto& Summary = Storage.RuntimeTypeBindings[Index].Summary;
+				Summary.ExpectedABI.TargetProfileKey += TEXT(".wrong");
+				Summary.ResolvedABI.TargetProfileKey += TEXT(".wrong");
+			});
+		RunNegative(TEXTVIEW("wrong-native-environment"),
+			[](FCompiledGraphStorage& Storage, const int32 Index)
+			{
+				auto& Summary = Storage.RuntimeTypeBindings[Index].Summary;
+				Summary.ExpectedABI.NativeEnvironmentKey += TEXT(".wrong");
+				Summary.ResolvedABI.NativeEnvironmentKey += TEXT(".wrong");
+			});
+		RunNegative(TEXTVIEW("wrong-layout"),
+			[](FCompiledGraphStorage& Storage, const int32 Index)
+			{
+				Storage.RuntimeTypeBindings[Index].Summary.ResolvedABI.
+					LayoutSignature += TEXT("|wrong-layout");
+			});
+		RunNegative(TEXTVIEW("wrong-behaviour"),
+			[](FCompiledGraphStorage& Storage, const int32 Index)
+			{
+				Storage.RuntimeTypeBindings[Index].Summary.ResolvedABI.
+					BehaviourSignature += TEXT("|wrong-behaviour");
+			});
+		RunNegative(TEXTVIEW("wrong-kind"),
+			[](FCompiledGraphStorage& Storage, const int32 Index)
+			{
+				++Storage.RuntimeTypeBindings[Index].Summary.ResolvedABI.TypeKind;
+			});
+		RunNegative(TEXTVIEW("wrong-generation-coordinate"),
+			[](FCompiledGraphStorage& Storage, const int32 Index)
+			{
+				Storage.RuntimeTypeBindings[Index].EngineLocalType = nullptr;
+			});
+		RunNegative(TEXTVIEW("wrong-same-engine-type-coordinate"),
+			[WrongType = WrongSameEngineType->EngineLocalType](
+				FCompiledGraphStorage& Storage, const int32 Index)
+			{
+				Storage.RuntimeTypeBindings[Index].EngineLocalType = WrongType;
+			});
+	}
+
+	TEST_METHOD(RuntimeDefaultProjectionResolvesUnreferencedQualifiedType)
+	{
+		using namespace AngelscriptStaticJITGenerationEngineTests;
+		TUniquePtr<FFixture> Fixture = CreateFixture(
+			*TestRunner, TEXT("RuntimeDefaultQualifiedType"),
+			FAngelscriptStaticJITBackendId::TypedAST(),
+			TEXTVIEW(R"AS(
+UFUNCTION()
+int TypedRuntimeDefaultQualifiedType_65C28A(const FString&in Text)
+{
+	Print(Text);
+	return 101;
+}
+)AS"));
+		ASSERT_THAT(IsNotNull(Fixture.Get(),
+			TEXT("A Runtime-owned default argument must resolve a qualified type that the authored function does not otherwise mention")));
+		const TSharedPtr<const FAngelscriptStaticJITGenerationSnapshot,
+			ESPMode::ThreadSafe> Snapshot =
+			Fixture->Engine->GetStaticJITGenerationSnapshot();
+		ASSERT_THAT(IsTrue(Snapshot.IsValid()));
+		const FAngelscriptStaticJITGenerationFunction* const Caller =
+			Snapshot->Functions.FindByPredicate([](const auto& Function)
+			{
+				return Function.CanonicalDeclaration.Contains(
+					TEXT("TypedRuntimeDefaultQualifiedType_65C28A"));
+			});
+		ASSERT_THAT(IsNotNull(Caller));
+		const asCDecl* const PrintCallDecl = FindCanonicalExpressionTarget(
+			*Caller, asAST_EXPR_CALL, TEXTVIEW("Print"));
+		ASSERT_THAT(IsNotNull(PrintCallDecl,
+			TEXT("The call must retain its exact resolved Runtime declaration after materializing omitted defaults")));
+		ASSERT_THAT(IsTrue(FStringView(UTF8_TO_TCHAR(
+			PrintCallDecl->origin.AddressOf())).Contains(
+			TEXTVIEW("FLinearColor = FLinearColor :: LucBlue"))));
 	}
 
 	TEST_METHOD(HiddenFirstParameterMetadataRemainsOnAuthoritativeVMFallback)
@@ -2504,6 +3474,22 @@ int TypedASTSharedBridgeEntry_65C28A(int A, int B)
 			TEXT("InvokeBoundViaVM"))));
 		ASSERT_THAT(IsFalse(GeneratedFunction.ImplementationTemplate.Contains(
 			TEXT("FAngelscriptJITExecutionContext"))));
+		ASSERT_THAT(IsTrue(RootResult->TypedDiagnostic.IsSet()));
+		ASSERT_THAT(IsTrue(
+			RootResult->TypedDiagnostic->CallClosure.IsSet()));
+		if (RootResult->TypedDiagnostic.IsSet()
+			&& RootResult->TypedDiagnostic->CallClosure.IsSet())
+		{
+			const FAngelscriptStaticJITTypedCallClosureDiagnostic& Diagnostic =
+				RootResult->TypedDiagnostic->CallClosure.GetValue();
+			ASSERT_THAT(IsTrue(Diagnostic.ExceptionControlState
+				== EAngelscriptStaticJITExceptionControlState::
+					DirectExecutionState));
+			ASSERT_THAT(IsTrue(Diagnostic.ExceptionPayloadState
+				== EAngelscriptStaticJITExceptionPayloadState::
+					DirectFailureRecord,
+				TEXT("A current-native closure must own a structured direct payload for resolver failure")));
+		}
 	}
 
 	TEST_METHOD(ProviderPrivateGenericVMBridgeIsFrozenAndEmittedByTypedAST)
@@ -2609,6 +3595,22 @@ int TypedASTSharedBridgeEntry_65C28A(int A, int B)
 			TEXT("Execution.bExceptionThrown"))));
 		ASSERT_THAT(IsFalse(GeneratedFunction.ImplementationTemplate.Contains(
 			TEXT("FAngelscriptJITExecutionContext"))));
+		ASSERT_THAT(IsTrue(RootResult->TypedDiagnostic.IsSet()));
+		ASSERT_THAT(IsTrue(
+			RootResult->TypedDiagnostic->CallClosure.IsSet()));
+		if (RootResult->TypedDiagnostic.IsSet()
+			&& RootResult->TypedDiagnostic->CallClosure.IsSet())
+		{
+			const FAngelscriptStaticJITTypedCallClosureDiagnostic& Diagnostic =
+				RootResult->TypedDiagnostic->CallClosure.GetValue();
+			ASSERT_THAT(IsTrue(Diagnostic.ExceptionControlState
+				== EAngelscriptStaticJITExceptionControlState::
+					DirectExecutionState));
+			ASSERT_THAT(IsTrue(Diagnostic.ExceptionPayloadState
+				== EAngelscriptStaticJITExceptionPayloadState::
+					DirectFailureRecordAndNestedBridgeAdoption,
+				TEXT("A mixed current-native and VM-bridge closure must retain both direct first-failure records and nested exception adoption")));
+		}
 	}
 
 	TEST_METHOD(ProductionTypedASTSelfRecursionOwnsOneBoundedRootWrapper)
@@ -3241,6 +4243,15 @@ int TypedASTSharedBridgeEntry_65C28A(int A, int B)
 			FirstInventoryCount,
 			FirstSnapshot->NativeCallInventory.Num(),
 			TEXT("The pointer-free inventory must remain owned by its immutable snapshot after Engine teardown")));
+		ASSERT_THAT(IsFalse(FirstSnapshot->CanonicalASTLeases.IsEmpty()));
+		ASSERT_THAT(IsFalse(
+			FirstSnapshot->CanonicalASTLeases.ContainsByPredicate(
+				[](const auto& Lease)
+				{
+					return Lease.IsValid()
+						&& Lease->GetContext() != nullptr;
+				}),
+			TEXT("Engine teardown must revoke every Engine-local AST lease even when an external snapshot owner survives")));
 		const auto* const RetainedFirstPrint =
 			FirstSnapshot->NativeCallInventory.FindByPredicate(
 				[&FirstPrintDeclaration](const auto& Entry)

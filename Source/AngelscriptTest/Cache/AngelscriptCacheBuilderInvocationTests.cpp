@@ -217,6 +217,10 @@ int GlobalInvocation()
 		ASSERT_THAT(IsTrue(Fixture.IsValid()));
 		asIScriptEngine* ScriptEngine = Fixture.GetEngine().GetScriptEngine();
 		ASSERT_THAT(IsNotNull(ScriptEngine));
+		asCScriptEngine* const InternalEngine =
+			static_cast<asCScriptEngine*>(ScriptEngine);
+		ASSERT_THAT(IsTrue(InternalEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
 		asCModule* Module = static_cast<asCModule*>(ScriptEngine->GetModule(
 			"ASCacheV2PublicSingleInvocation", asGM_ALWAYS_CREATE));
 		ASSERT_THAT(IsNotNull(Module));
@@ -233,6 +237,10 @@ int GlobalInvocation()
 		ASSERT_THAT(IsNotNull(Function));
 		Function->Release();
 		LogInvocations(*TestRunner, Log);
+		ASSERT_THAT(AreEqual(asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Module->GetLastBytecodePublisher()));
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+			Module->GetLastLegacyCompilerInvocationCount()));
 
 		ASSERT_THAT(AreEqual(1, CountKind(
 			Log, asBUILD_ARTIFACT_INVOCATION_PUBLIC_SINGLE_FUNCTION)));
@@ -245,6 +253,8 @@ int GlobalInvocation()
 		ASSERT_THAT(IsFalse(PublicSingle->ModuleName.IsEmpty()));
 		ASSERT_THAT(IsFalse(PublicSingle->Declaration.IsEmpty()));
 		ASSERT_THAT(IsFalse(PublicSingle->CanonicalSource.IsEmpty()));
+		ASSERT_THAT(IsFalse(PublicSingle->SourceSection.IsEmpty()));
+		ASSERT_THAT(IsFalse(PublicSingle->bHasNode));
 	}
 
 	TEST_METHOD(UnstableLambdaAndInvalidKindsAreTypedNotCacheable)

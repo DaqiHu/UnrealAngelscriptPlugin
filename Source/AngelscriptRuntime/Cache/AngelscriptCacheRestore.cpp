@@ -12,6 +12,7 @@
 #include "Misc/ScopeExit.h"
 
 #include "StartAngelscriptHeaders.h"
+#include "source/as_bytecode_codegen.h"
 #include "source/as_module.h"
 #include "source/as_ast_context.h"
 #include "source/as_ast_sidecar.h"
@@ -1456,6 +1457,137 @@ namespace AngelscriptCacheRestore_Private
 		return true;
 	}
 
+	static bool RebuildGeneratedStaticClassHelper(
+		asCScriptEngine& ScriptEngine,
+		asCModule& Module,
+		const FAngelscriptCachedTypeSchema& TypeSchema,
+		const asCASTContext& CanonicalAST,
+		FString& OutFailure)
+	{
+		FString HelperNamespace = TypeSchema.CanonicalNamespace;
+		if (!HelperNamespace.IsEmpty())
+		{
+			HelperNamespace += TEXT("::");
+		}
+		HelperNamespace += TypeSchema.CanonicalName;
+		const FString ExpectedStableKey = FString::Printf(
+			TEXT("%s::StaticClass()"), *HelperNamespace);
+
+		const asCDecl* HelperDeclaration = nullptr;
+		for (asUINT DeclarationIndex = 1;
+			DeclarationIndex <= CanonicalAST.GetDeclCount(); ++DeclarationIndex)
+		{
+			const asCDecl* Candidate = CanonicalAST.GetDecl(
+				asASTDeclId(DeclarationIndex));
+			if (Candidate == nullptr
+				|| Candidate->kind != asAST_DECL_FUNCTION
+				|| !Candidate->name.Equals("StaticClass")
+				|| !Candidate->body.IsValid()
+				|| (Candidate->traits & asAST_TRAIT_GENERATED) == 0
+				|| !Candidate->stableKey.Equals(
+					TCHAR_TO_UTF8(*ExpectedStableKey)))
+			{
+				continue;
+			}
+			if (HelperDeclaration != nullptr)
+			{
+				OutFailure = FString::Printf(
+					TEXT("The retained Canonical AST has duplicate generated helper '%s'"),
+					*ExpectedStableKey);
+				return false;
+			}
+			HelperDeclaration = Candidate;
+		}
+		if (HelperDeclaration == nullptr)
+		{
+			OutFailure = FString::Printf(
+				TEXT("The retained Canonical AST has no generated helper '%s'"),
+				*ExpectedStableKey);
+			return false;
+		}
+
+		asCRuntimeTypeBridge RuntimeTypeBridge(&ScriptEngine);
+		const asCDataType ReturnType = RuntimeTypeBridge.Resolve(
+			CanonicalAST, HelperDeclaration->type);
+		asCTypeInfo* const UClassType = static_cast<asCTypeInfo*>(
+			ScriptEngine.GetTypeInfoByDecl("UClass"));
+		asUINT ParameterCount = 0;
+		for (asUINT ChildIndex = 0;
+			ChildIndex < HelperDeclaration->children.GetLength(); ++ChildIndex)
+		{
+			const asCDecl* Child = CanonicalAST.GetDecl(
+				HelperDeclaration->children[ChildIndex]);
+			if (Child != nullptr && Child->kind == asAST_DECL_PARAM)
+			{
+				++ParameterCount;
+			}
+		}
+		if (!ReturnType.IsValid() || UClassType == nullptr
+			|| ReturnType.GetTypeInfo() != UClassType
+			|| !ReturnType.IsObjectHandle() || ReturnType.IsReference()
+			|| ParameterCount != 0)
+		{
+			OutFailure = FString::Printf(
+				TEXT("The generated helper '%s' has an invalid UClass return ABI"),
+				*ExpectedStableKey);
+			return false;
+		}
+
+		asCArray<asCDataType> Parameters;
+		asCArray<asCString> ParameterNames;
+		asCArray<asETypeModifiers> InOutFlags;
+		asCArray<asCString*> DefaultArgs;
+		asSFunctionTraits Traits;
+		Traits.SetTrait(asTRAIT_GENERATED_FUNCTION, true);
+		const int FunctionId = ScriptEngine.GetNextScriptFunctionId();
+		const int AddResult = Module.AddScriptFunction(
+			0, 0, FunctionId, "StaticClass", ReturnType,
+			Parameters, ParameterNames, InOutFlags, DefaultArgs,
+			false, nullptr, true, Traits,
+			ScriptEngine.AddNameSpace(TCHAR_TO_UTF8(*HelperNamespace)));
+		if (AddResult < 0)
+		{
+			OutFailure = FString::Printf(
+				TEXT("The target VM rejected generated helper shell '%s'"),
+				*ExpectedStableKey);
+			return false;
+		}
+
+		asCScriptFunction* const HelperFunction =
+			ScriptEngine.GetScriptFunction(FunctionId);
+		if (HelperFunction == nullptr)
+		{
+			OutFailure = FString::Printf(
+				TEXT("The target VM lost generated helper shell '%s'"),
+				*ExpectedStableKey);
+			return false;
+		}
+		HelperFunction->artifactInvocationKind =
+			asBUILD_ARTIFACT_INVOCATION_GLOBAL_FUNCTION;
+		HelperFunction->artifactOwnerType = nullptr;
+		HelperFunction->canonicalASTStableDeclKey =
+			HelperDeclaration->stableKey;
+		HelperFunction->CalculateParameterOffsets();
+
+		asCBytecodeCodeGen CodeGen;
+		const int CodeGenResult = CodeGen.GeneratePreparedFunctionBody(
+			CanonicalAST, &Module, HelperDeclaration->id, HelperFunction);
+		if (CodeGenResult < 0)
+		{
+			OutFailure = FString::Printf(
+				TEXT("Canonical CodeGen could not rebuild generated helper '%s': "
+					"Error=%d Detail=%s"),
+				*ExpectedStableKey,
+				CodeGenResult,
+				UTF8_TO_TCHAR(CodeGen.GetFailureDetail().AddressOf()
+					? CodeGen.GetFailureDetail().AddressOf() : ""));
+			return false;
+		}
+
+		ScriptEngine.allScriptGlobalFunctions.Add(HelperFunction);
+		return true;
+	}
+
 	static bool BuildClassDescriptor(
 		const FAngelscriptCachedModuleInterface& ModuleInterface,
 		const FAngelscriptCachedTypeSchema& TypeSchema,
@@ -2524,6 +2656,16 @@ public:
 			StagingModule->AdoptPendingCanonicalAST(RestoredCanonicalAST);
 			RestoredCanonicalAST = nullptr;
 		}
+		const asCASTContext* const CanonicalAST = bRetainCanonicalAST
+			? StagingModule->GetCanonicalASTContext() : nullptr;
+		if (bRetainCanonicalAST && CanonicalAST == nullptr)
+		{
+			DiscardStagingModule(ScriptEngine, StagingModule);
+			return Failure(
+				EAngelscriptCacheRestoreError::CanonicalAstRestoreFailed,
+				EAngelscriptCacheRestoreStage::RestoreCanonicalAST,
+				TEXT("The staging module lost its restored Canonical AST"));
+		}
 		FString MaterializationFailure;
 
 		if (EnumTypeSchema != nullptr)
@@ -2697,6 +2839,10 @@ public:
 					|| (!bStaticsClass && !AllocateStaticClassGlobal(
 						ScriptEngine, *StagingModule, *Type.Schema,
 						MaterializationFailure))
+					|| (!bStaticsClass && CanonicalAST != nullptr
+						&& !RebuildGeneratedStaticClassHelper(
+							ScriptEngine, *StagingModule, *Type.Schema,
+							*CanonicalAST, MaterializationFailure))
 					|| !BuildClassDescriptor(
 						*ModuleInterface, *Type.Schema, Type.BaseSchema,
 						Type.LiveType, *Type.CodeRoot, FunctionInputs,
@@ -2727,8 +2873,6 @@ public:
 		}
 		if (bRetainCanonicalAST)
 		{
-			const asCASTContext* const CanonicalAST =
-				StagingModule->GetCanonicalASTContext();
 			asCString UnresolvedStableKey;
 			asCRuntimeTypeBridge RuntimeTypeBridge(&ScriptEngine);
 			if (CanonicalAST == nullptr

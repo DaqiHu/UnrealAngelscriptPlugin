@@ -13,6 +13,9 @@
 struct ANGELSCRIPTRUNTIME_API FAngelscriptStaticJITNativeCallTarget
 {
 	int32 EngineLocalFunctionId = INDEX_NONE;
+	/** Exact producer-carried Canonical target identity. */
+	FString CanonicalTargetDeclKey;
+	/** Human-readable Runtime declaration; diagnostic-only. */
 	FString CanonicalDeclaration;
 	/** Stable current-Engine adoption identity; never an executable pointer. */
 	FAngelscriptArtifactReference Reference;

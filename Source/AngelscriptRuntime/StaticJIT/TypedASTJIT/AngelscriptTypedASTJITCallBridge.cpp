@@ -16,7 +16,16 @@ namespace AngelscriptTypedASTJIT
 			FScriptExecution& Execution,
 			const EAngelscriptTypedASTJITBridgeResult Result)
 		{
-			Execution.bExceptionThrown = true;
+			const FString FailureMessage = FString::Printf(
+				TEXT("TypedASTJIT bound call failed: %s"),
+				LexToString(Result));
+			const FTCHARToUTF8 FailureMessageUtf8(*FailureMessage);
+			// Bound-call resolution and bridge infrastructure failures are
+			// authored by the current generated route. Preserve the same
+			// first-failure payload contract as other generated native calls;
+			// an already-adopted nested VM exception remains authoritative.
+			FStaticJITFunction::SetExternalException(
+				Execution, FailureMessageUtf8.Get());
 			return Result;
 		}
 

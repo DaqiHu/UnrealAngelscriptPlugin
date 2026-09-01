@@ -142,10 +142,14 @@ namespace AngelscriptTypedASTJITBackend_Private
 			++GTaskObservation.StructuredRootClosureDiagnosticCount;
 			const FAngelscriptStaticJITTypedCallClosureDiagnostic& Closure =
 				Diagnostic.CallClosure.GetValue();
+			// Unavailable and NotRequired are the only states without a
+			// structured payload route. Direct, nested and their aggregate all
+			// count as an observed structured exception-payload contract.
 			GTaskObservation.StructuredExceptionPayloadDiagnosticCount +=
 				Closure.ExceptionPayloadState
-					== EAngelscriptStaticJITExceptionPayloadState::
-						DirectFailureRecord
+					!= EAngelscriptStaticJITExceptionPayloadState::Unavailable
+				&& Closure.ExceptionPayloadState
+					!= EAngelscriptStaticJITExceptionPayloadState::NotRequired
 				? 1 : 0;
 			for (const FAngelscriptStaticJITCanonicalFunctionDiagnostic&
 				SemanticFunction : Closure.Functions)
@@ -613,6 +617,296 @@ namespace AngelscriptTypedASTJITBackend_Private
 		Diagnostic.ProcessedSource = BuildProcessedSource(SourceSpan, Graph);
 	}
 
+	struct FExpectedRuntimeTypeBindingCoordinate
+	{
+		EAngelscriptStaticJITRuntimeTypeBindingRole Role =
+			EAngelscriptStaticJITRuntimeTypeBindingRole::Invalid;
+		uint32 FormalIndex = MAX_uint32;
+		FString StableTypeKey;
+		uint8 TypeKind = 0;
+		uint32 Qualifiers = 0;
+	};
+
+	bool AppendExpectedRuntimeTypeBindingCoordinate(
+		const asCASTContext& Context,
+		const asCQualType& QualType,
+		const EAngelscriptStaticJITRuntimeTypeBindingRole Role,
+		const uint32 FormalIndex,
+		TArray<FExpectedRuntimeTypeBindingCoordinate>& OutCoordinates,
+		FString& OutError)
+	{
+		const asCType* const Type = Context.GetType(QualType.type);
+		if (Type == nullptr || !QualType.IsValid())
+		{
+			OutError = TEXT(
+				"Canonical signature contains an invalid type coordinate.");
+			return false;
+		}
+		if (Type->kind == asAST_TYPE_VOID
+			|| Type->kind == asAST_TYPE_PRIMITIVE
+			|| Type->kind == asAST_TYPE_WILDCARD)
+		{
+			return true;
+		}
+		if (Type->stableKey.GetLength() == 0)
+		{
+			OutError = TEXT(
+				"Canonical signature contains a Runtime-bound type without stable identity.");
+			return false;
+		}
+
+		FExpectedRuntimeTypeBindingCoordinate& Added =
+			OutCoordinates.Emplace_GetRef();
+		Added.Role = Role;
+		Added.FormalIndex = FormalIndex;
+		Added.StableTypeKey = UTF8_TO_TCHAR(Type->stableKey.AddressOf());
+		Added.TypeKind = static_cast<uint8>(Type->kind);
+		Added.Qualifiers = QualType.quals;
+		return true;
+	}
+
+	void SortRuntimeTypeBindingSummaries(
+		TArray<FAngelscriptStaticJITRuntimeTypeBindingSummary>& Summaries)
+	{
+		Summaries.Sort([](
+			const FAngelscriptStaticJITRuntimeTypeBindingSummary& Left,
+			const FAngelscriptStaticJITRuntimeTypeBindingSummary& Right)
+		{
+			if (Left.ModuleKey.Hash != Right.ModuleKey.Hash)
+			{
+				return Left.ModuleKey.Hash < Right.ModuleKey.Hash;
+			}
+			const int32 OwnerCompare = Left.OwnerCanonicalFunctionDeclKey.Compare(
+				Right.OwnerCanonicalFunctionDeclKey,
+				ESearchCase::CaseSensitive);
+			if (OwnerCompare != 0)
+			{
+				return OwnerCompare < 0;
+			}
+			if (Left.Role != Right.Role)
+			{
+				return static_cast<uint8>(Left.Role)
+					< static_cast<uint8>(Right.Role);
+			}
+			return Left.FormalIndex < Right.FormalIndex;
+		});
+	}
+
+	asITypeInfo* ResolveRuntimeSignatureTypeCoordinate(
+		const FAngelscriptStaticJITCompiledFunctionView& Function,
+		const EAngelscriptStaticJITRuntimeTypeBindingRole Role,
+		const uint32 FormalIndex)
+	{
+		const asCScriptFunction* const RuntimeFunction =
+			static_cast<const asCScriptFunction*>(Function.EngineLocalFunction);
+		if (RuntimeFunction == nullptr)
+		{
+			return nullptr;
+		}
+		switch (Role)
+		{
+		case EAngelscriptStaticJITRuntimeTypeBindingRole::Return:
+			return FormalIndex == MAX_uint32
+				? RuntimeFunction->returnType.GetTypeInfo() : nullptr;
+		case EAngelscriptStaticJITRuntimeTypeBindingRole::Parameter:
+			return FormalIndex < RuntimeFunction->parameterTypes.GetLength()
+				? RuntimeFunction->parameterTypes[FormalIndex].GetTypeInfo()
+				: nullptr;
+		case EAngelscriptStaticJITRuntimeTypeBindingRole::Receiver:
+			return FormalIndex == MAX_uint32
+				? RuntimeFunction->objectType : nullptr;
+		default:
+			return nullptr;
+		}
+	}
+
+	bool AuthenticateRuntimeTypeBindingsForFunction(
+		const FAngelscriptStaticJITCompiledSourceGraph& Graph,
+		const FAngelscriptStaticJITCompiledFunctionView& Function,
+		asIScriptEngine* const ScriptEngine,
+		TArray<FAngelscriptStaticJITRuntimeTypeBindingSummary>& OutSummaries,
+		FString& OutError)
+	{
+		OutSummaries.Reset();
+		OutError.Reset();
+		if (Function.SealedAST == nullptr
+			|| Function.CanonicalFunctionDeclValue == 0)
+		{
+			OutError = TEXT(
+				"The function has no same-compilation Canonical signature.");
+			return false;
+		}
+
+		const asCASTContext& Context = *Function.SealedAST;
+		const asCDecl* const FunctionDecl = Context.GetDecl(
+			asASTDeclId(Function.CanonicalFunctionDeclValue));
+		if (FunctionDecl == nullptr
+			|| FunctionDecl->stableKey.GetLength() == 0)
+		{
+			OutError = TEXT(
+				"The Canonical function declaration has no stable identity.");
+			return false;
+		}
+		const FString OwnerStableKey = UTF8_TO_TCHAR(
+			FunctionDecl->stableKey.AddressOf());
+
+		TArray<FExpectedRuntimeTypeBindingCoordinate> ExpectedCoordinates;
+		if (!AppendExpectedRuntimeTypeBindingCoordinate(
+				Context, FunctionDecl->type,
+				EAngelscriptStaticJITRuntimeTypeBindingRole::Return,
+				MAX_uint32, ExpectedCoordinates, OutError))
+		{
+			return false;
+		}
+		const asUINT FormalCount = Context.GetFormalDeclCount(FunctionDecl->id);
+		for (asUINT FormalIndex = 0; FormalIndex < FormalCount; ++FormalIndex)
+		{
+			const asCDecl* const Formal = Context.GetFormalDecl(
+				FunctionDecl->id, FormalIndex);
+			if (Formal == nullptr || Formal->kind != asAST_DECL_PARAM
+				|| !AppendExpectedRuntimeTypeBindingCoordinate(
+					Context, Formal->type,
+					EAngelscriptStaticJITRuntimeTypeBindingRole::Parameter,
+					FormalIndex, ExpectedCoordinates, OutError))
+			{
+				if (OutError.IsEmpty())
+				{
+					OutError = FString::Printf(TEXT(
+						"Canonical formal relation is incomplete at index %u."),
+						FormalIndex);
+				}
+				return false;
+			}
+		}
+		if (FunctionDecl->kind == asAST_DECL_METHOD
+			|| FunctionDecl->kind == asAST_DECL_CONSTRUCTOR
+			|| FunctionDecl->kind == asAST_DECL_DESTRUCTOR)
+		{
+			const asCDecl* const Receiver = Context.GetDecl(FunctionDecl->parent);
+			if (Receiver == nullptr
+				|| (Receiver->kind != asAST_DECL_CLASS
+					&& Receiver->kind != asAST_DECL_INTERFACE)
+				|| !AppendExpectedRuntimeTypeBindingCoordinate(
+					Context, Receiver->type,
+					EAngelscriptStaticJITRuntimeTypeBindingRole::Receiver,
+					MAX_uint32, ExpectedCoordinates, OutError))
+			{
+				if (OutError.IsEmpty())
+				{
+					OutError = TEXT(
+						"Canonical instance function has no exact receiver type.");
+				}
+				return false;
+			}
+		}
+
+		TArray<const FAngelscriptStaticJITRuntimeTypeBinding*> OwnerRows;
+		for (const FAngelscriptStaticJITRuntimeTypeBinding& Binding
+			: Graph.RuntimeTypeBindings)
+		{
+			if (Binding.Summary.ModuleKey == Function.ModuleKey
+				&& Binding.Summary.OwnerCanonicalFunctionDeclKey
+					== OwnerStableKey)
+			{
+				OwnerRows.Add(&Binding);
+			}
+		}
+		if (OwnerRows.Num() != ExpectedCoordinates.Num())
+		{
+			OutError = FString::Printf(TEXT(
+				"Function=%s Owner=%s expected %d exact Runtime signature row(s), found %d."),
+				*FString(Function.CanonicalDeclaration), *OwnerStableKey,
+				ExpectedCoordinates.Num(), OwnerRows.Num());
+			return false;
+		}
+
+		for (const FExpectedRuntimeTypeBindingCoordinate& Expected
+			: ExpectedCoordinates)
+		{
+			TArray<const FAngelscriptStaticJITRuntimeTypeBinding*> Matches;
+			for (const FAngelscriptStaticJITRuntimeTypeBinding* const Row
+				: OwnerRows)
+			{
+				if (Row != nullptr
+					&& Row->Summary.Role == Expected.Role
+					&& Row->Summary.FormalIndex == Expected.FormalIndex)
+				{
+					Matches.Add(Row);
+				}
+			}
+			if (Matches.Num() != 1)
+			{
+				OutError = FString::Printf(TEXT(
+					"Function=%s Owner=%s role=%u formal=%u expected one Runtime signature row, found %d."),
+					*FString(Function.CanonicalDeclaration), *OwnerStableKey,
+					static_cast<uint8>(Expected.Role), Expected.FormalIndex,
+					Matches.Num());
+				return false;
+			}
+
+			const FAngelscriptStaticJITRuntimeTypeBinding& Binding =
+				*Matches[0];
+			const FAngelscriptStaticJITRuntimeTypeBindingSummary& Summary =
+				Binding.Summary;
+			asITypeInfo* const RuntimeSignatureType =
+				ResolveRuntimeSignatureTypeCoordinate(
+					Function, Expected.Role, Expected.FormalIndex);
+			const bool bSameGenerationType = Binding.EngineLocalType != nullptr
+				&& Binding.EngineLocalType->GetEngine() == ScriptEngine
+				&& RuntimeSignatureType == Binding.EngineLocalType;
+			const bool bCanonicalCoordinateMatches =
+				Summary.ExpectedABI.StableTypeKey == Expected.StableTypeKey
+				&& Summary.ExpectedABI.TypeKind == Expected.TypeKind
+				&& Summary.ExpectedABI.Qualifiers == Expected.Qualifiers;
+			const bool bEnvironmentMatches =
+				!Graph.RuntimeTypeBindingTargetProfileKey.IsEmpty()
+				&& !Graph.RuntimeTypeBindingNativeEnvironmentKey.IsEmpty()
+				&& Summary.ExpectedABI.TargetProfileKey
+					== Graph.RuntimeTypeBindingTargetProfileKey
+				&& Summary.ResolvedABI.TargetProfileKey
+					== Graph.RuntimeTypeBindingTargetProfileKey
+				&& Summary.ExpectedABI.NativeEnvironmentKey
+					== Graph.RuntimeTypeBindingNativeEnvironmentKey
+				&& Summary.ResolvedABI.NativeEnvironmentKey
+					== Graph.RuntimeTypeBindingNativeEnvironmentKey;
+			const bool bStructurallyComplete =
+				Binding.IsStructurallyComplete();
+			const bool bExactABI = Summary.ExpectedABI.IsExactlyCompatibleWith(
+				Summary.ResolvedABI);
+			if (!bStructurallyComplete
+				|| !bCanonicalCoordinateMatches
+				|| !bEnvironmentMatches
+				|| !bExactABI
+				|| !bSameGenerationType)
+			{
+				OutError = FString::Printf(TEXT(
+					"Function=%s Owner=%s role=%u formal=%u failed exact Canonical/generation/profile/environment/layout/behaviour authentication for type %s: checks=[structural=%d canonical-coordinate=%d environment=%d exact-abi=%d same-generation=%d] canonical=[kind=%u quals=%u] row=[kind=%u quals=%u profile=%s environment=%s] graph=[profile=%.*s environment=%.*s]."),
+					*FString(Function.CanonicalDeclaration), *OwnerStableKey,
+					static_cast<uint8>(Expected.Role), Expected.FormalIndex,
+					*Expected.StableTypeKey,
+					bStructurallyComplete ? 1 : 0,
+					bCanonicalCoordinateMatches ? 1 : 0,
+					bEnvironmentMatches ? 1 : 0,
+					bExactABI ? 1 : 0,
+					bSameGenerationType ? 1 : 0,
+					Expected.TypeKind, Expected.Qualifiers,
+					Summary.ExpectedABI.TypeKind,
+					Summary.ExpectedABI.Qualifiers,
+					*Summary.ExpectedABI.TargetProfileKey,
+					*Summary.ExpectedABI.NativeEnvironmentKey,
+					Graph.RuntimeTypeBindingTargetProfileKey.Len(),
+					Graph.RuntimeTypeBindingTargetProfileKey.GetData(),
+					Graph.RuntimeTypeBindingNativeEnvironmentKey.Len(),
+					Graph.RuntimeTypeBindingNativeEnvironmentKey.GetData());
+				return false;
+			}
+			OutSummaries.Add(Summary);
+		}
+
+		SortRuntimeTypeBindingSummaries(OutSummaries);
+		return true;
+	}
+
 	bool ResolveSourceMetadata(
 		const FAngelscriptStaticJITCompiledSourceGraph& Graph,
 		const FAngelscriptStaticJITCompiledFunctionView& Function,
@@ -800,35 +1094,6 @@ namespace AngelscriptTypedASTJITBackend_Private
 		return true;
 	}
 
-	void BuildFunctionShape(
-		const FAngelscriptStaticJITCompiledFunctionView& Function,
-		const FString& SymbolName,
-		FAngelscriptTypedASTJITFunctionShape& OutShape)
-	{
-		OutShape = {};
-		const asCScriptFunction* const ScriptFunction =
-			static_cast<const asCScriptFunction*>(
-				Function.EngineLocalFunction);
-		OutShape.SymbolName = SymbolName;
-		OutShape.ReturnType = ScriptFunction->returnType;
-		OutShape.InvocationKind = ScriptFunction->objectType != nullptr
-			? EAngelscriptTypedASTJITInvocationKind::InstanceMethod
-			: EAngelscriptTypedASTJITInvocationKind::Global;
-		OutShape.ReceiverKind = ScriptFunction->objectType != nullptr
-			? EAngelscriptTypedASTJITReceiverKind::NativeObjectThis
-			: EAngelscriptTypedASTJITReceiverKind::None;
-		OutShape.ReceiverParameterIndex = INDEX_NONE;
-		OutShape.bReturnsOnStack = ScriptFunction->DoesReturnOnStack();
-		OutShape.bHasNativeObjectSlot = ScriptFunction->objectType != nullptr;
-		for (asUINT ParameterIndex = 0;
-			ParameterIndex < ScriptFunction->parameterTypes.GetLength();
-			++ParameterIndex)
-		{
-			OutShape.ParameterTypes.Add(
-				ScriptFunction->parameterTypes[ParameterIndex]);
-		}
-	}
-
 	struct FDirectClosureMemberEmission
 	{
 		const FAngelscriptTypedASTJITCallClosureFunction* Plan = nullptr;
@@ -842,6 +1107,7 @@ namespace AngelscriptTypedASTJITBackend_Private
 		TArray<FAngelscriptTypedASTJITNativeCallEmissionPlan> NativeCalls;
 		TArray<FAngelscriptTypedASTJITScriptCallEmissionPlan> ScriptCalls;
 		TArray<FAngelscriptTypedASTJITGlobalDependency> GlobalDependencies;
+		FAngelscriptTypedASTJITFunctionShape Shape;
 		FAngelscriptTypedASTJITDependencyAnalysis DependencyAnalysis;
 		FAngelscriptTypedASTJITEmission Body;
 		FAngelscriptTypedASTJITProviderEntryPlan EntryPlan;
@@ -905,6 +1171,33 @@ namespace AngelscriptTypedASTJITBackend_Private
 				}
 			}
 		}
+	}
+
+	void RecordEmittedExceptionDiagnostics(
+		FAngelscriptStaticJITTypedCallClosureDiagnostic& Closure,
+		const TConstArrayView<FDirectClosureMemberEmission> Members)
+	{
+		bool bHasNestedBridgeAdoption = false;
+		for (const FDirectClosureMemberEmission& Member : Members)
+		{
+			bHasNestedBridgeAdoption |= Member.Body.NativeCallSites.ContainsByPredicate(
+				[](const FAngelscriptTypedASTJITNativeCallSiteMetadata& Call)
+				{
+					return Call.Route
+						== EAngelscriptJITNativeCallSiteRoute::Bridge;
+				});
+		}
+
+		// Every published TypedASTJIT root owns the shared execution frame and
+		// first-failure record. A VM bridge additionally adopts failures from
+		// its nested context; keep both mechanisms in the aggregate instead of
+		// selecting one and erasing the other.
+		Closure.ExceptionControlState =
+			EAngelscriptStaticJITExceptionControlState::DirectExecutionState;
+		Closure.ExceptionPayloadState = bHasNestedBridgeAdoption
+			? EAngelscriptStaticJITExceptionPayloadState::
+				DirectFailureRecordAndNestedBridgeAdoption
+			: EAngelscriptStaticJITExceptionPayloadState::DirectFailureRecord;
 	}
 }
 
@@ -1158,7 +1451,10 @@ bool FAngelscriptTypedASTJIT::Generate(
 
 		using namespace AngelscriptTypedASTJITBackend_Private;
 		TArray<FDirectClosureMemberEmission> DirectMembers;
+		TArray<FAngelscriptStaticJITRuntimeTypeBindingSummary>
+			AuthenticatedRuntimeTypeBindings;
 		FString ClosureEmissionError;
+		bool bRuntimeTypeBindingFailure = false;
 		FAngelscriptJITGenerationModule GeneratedModule;
 		for (const FAngelscriptTypedASTJITCallClosureFunction& PlannedFunction
 			: Plan->Functions)
@@ -1180,6 +1476,22 @@ bool FAngelscriptTypedASTJIT::Generate(
 					"TypedASTJITProviderClosureFunctionMissing: every direct closure member requires the exact same-compilation sealed Canonical AST view.");
 				break;
 			}
+			TArray<FAngelscriptStaticJITRuntimeTypeBindingSummary>
+				MemberRuntimeTypeBindings;
+			FString RuntimeTypeBindingError;
+			if (!AuthenticateRuntimeTypeBindingsForFunction(
+					Request.CompiledSourceGraph, *CompiledFunction,
+					ScriptEngine, MemberRuntimeTypeBindings,
+					RuntimeTypeBindingError))
+			{
+				bRuntimeTypeBindingFailure = true;
+				ClosureEmissionError = FString::Printf(TEXT(
+					"TypedASTJITRuntimeTypeBindingMismatch: %s"),
+					*RuntimeTypeBindingError);
+				break;
+			}
+			AuthenticatedRuntimeTypeBindings.Append(
+				MemberRuntimeTypeBindings);
 
 			FDirectClosureMemberEmission& Member =
 				DirectMembers.Emplace_GetRef();
@@ -1211,28 +1523,8 @@ bool FAngelscriptTypedASTJIT::Generate(
 					Member.GlobalDependencies.Emplace_GetRef();
 				Global.EngineLocalGlobalPropertyId =
 					Dependency.EngineLocalGlobalPropertyId;
-				const asCScriptEngine* const InternalEngine =
-					static_cast<const asCScriptEngine*>(ScriptEngine);
-				if (Global.EngineLocalGlobalPropertyId >= 0
-					&& static_cast<asUINT>(
-						Global.EngineLocalGlobalPropertyId)
-						< InternalEngine->globalProperties.GetLength())
-				{
-					const asCGlobalProperty* const Property =
-						InternalEngine->globalProperties[
-							Global.EngineLocalGlobalPropertyId];
-					if (Property != nullptr)
-					{
-						const FString Namespace = Property->nameSpace != nullptr
-							? UTF8_TO_TCHAR(
-								Property->nameSpace->name.AddressOf())
-							: FString();
-						const FString Name =
-							UTF8_TO_TCHAR(Property->name.AddressOf());
-						Global.CanonicalASTDeclKey = Namespace.IsEmpty()
-							? Name : Namespace + TEXT("::") + Name;
-					}
-				}
+				Global.CanonicalASTDeclKey =
+					FString(Dependency.CanonicalASTDeclKey);
 				Global.Kind = Dependency.Kind;
 				Global.Reference = Dependency.Reference;
 				Global.ExpectedContentOrValue =
@@ -1283,7 +1575,30 @@ bool FAngelscriptTypedASTJIT::Generate(
 			Member.EntryPlan.SourceLine = Member.SourceLine;
 			Member.EntryPlan.InstrumentationProfile =
 				Request.CompiledSourceGraph.TypedASTJITCapabilityProfile;
+			FString BodySignatureError;
+			if (!BuildAngelscriptTypedASTJITFunctionShape(
+					*CompiledFunction,
+					*SharedEntryPlan,
+					Member.BodySymbol,
+					Member.Shape,
+					&BodySignatureError))
+			{
+				ClosureEmissionError = BodySignatureError;
+				break;
+			}
 		}
+		if (bRuntimeTypeBindingFailure)
+		{
+			Result.Detail += TEXT(" ") + ClosureEmissionError;
+			UpdateTypedFallback(Result.TypedDiagnostic.GetValue(),
+				EAngelscriptTypedASTJITFallbackReason::
+					RuntimeTypeBindingMismatch,
+				Plan->RootEligibility.SourceSpan,
+				ClosureEmissionError,
+				Request.CompiledSourceGraph);
+			continue;
+		}
+		SortRuntimeTypeBindingSummaries(AuthenticatedRuntimeTypeBindings);
 		DirectMembers.Sort([](const auto& Left, const auto& Right)
 		{
 			return Left.Function->FunctionKey.Hash
@@ -1503,8 +1818,22 @@ bool FAngelscriptTypedASTJIT::Generate(
 					: Target->RegisteredTargetDisplay;
 			if (bDirectSymbol)
 			{
+				const FAngelscriptStaticJITNativeCallCppSignature&
+					ReviewedCppSignature =
+						Call.ExternalCallValidation.ReviewedCppSignature;
+				if (!Call.ExternalCallValidation.bDirectCallable
+					|| !ReviewedCppSignature.IsValid())
+				{
+					ClosureEmissionError = TEXT(
+						"TypedASTJITProviderDirectCppSignatureMissing: a direct native call has no structurally validated reviewed C++ callable type.");
+					break;
+				}
 				NativeCall.Symbol = Call.ExternalCallDescriptor.Symbol;
 				NativeCall.Include = Call.ExternalCallDescriptor.Include;
+				NativeCall.ReviewedCppReturnType =
+					ReviewedCppSignature.ReturnType;
+				NativeCall.ReviewedCppParameterTypes =
+					ReviewedCppSignature.ParameterTypes;
 				switch (Call.Disposition)
 				{
 				case EAngelscriptTypedASTJITCallDisposition::DirectInline:
@@ -1572,13 +1901,11 @@ bool FAngelscriptTypedASTJIT::Generate(
 				}
 			}
 
-			FAngelscriptTypedASTJITFunctionShape Shape;
-			BuildFunctionShape(*Member.Function, Member.BodySymbol, Shape);
 			Member.DependencyAnalysis =
 				AnalyzeAngelscriptTypedASTJITDependencies(
 					*Member.Function->SealedAST,
 					asASTDeclId(Member.Function->CanonicalFunctionDeclValue),
-					Shape,
+					Member.Shape,
 					*Member.Function,
 					Request.CompiledSourceGraph,
 					MemberNativeCalls,
@@ -1678,8 +2005,6 @@ bool FAngelscriptTypedASTJIT::Generate(
 			{
 				break;
 			}
-			FAngelscriptTypedASTJITFunctionShape Shape;
-			BuildFunctionShape(*Member.Function, Member.BodySymbol, Shape);
 			FAngelscriptTypedASTJITEmitOptions EmitOptions;
 			EmitOptions.NativeCalls = Member.NativeCalls;
 			EmitOptions.ScriptCalls = Member.ScriptCalls;
@@ -1690,7 +2015,7 @@ bool FAngelscriptTypedASTJIT::Generate(
 			Member.Body = EmitTypedASTJITFunction(
 				*Member.Function->SealedAST,
 				asASTDeclId(Member.Function->CanonicalFunctionDeclValue),
-				Shape,
+				Member.Shape,
 				EmitOptions);
 			if (!Member.Body.bSuccess)
 			{
@@ -1879,6 +2204,8 @@ bool FAngelscriptTypedASTJIT::Generate(
 		GeneratedFunction.SourceSection = SourceSection;
 		GeneratedFunction.SourceLine = SourceLine;
 		GeneratedFunction.SourceColumn = SourceColumn;
+		GeneratedFunction.AuthenticatedRuntimeTypeBindings =
+			MoveTemp(AuthenticatedRuntimeTypeBindings);
 		GeneratedFunction.bHasVMEntry = Function.bHasVMEntry;
 		GeneratedFunction.bHasRawEntry = Function.bHasRawEntry;
 		GeneratedFunction.bHasParmsEntry = Function.bHasParmsEntry;
@@ -2098,14 +2425,8 @@ bool FAngelscriptTypedASTJIT::Generate(
 			FAngelscriptStaticJITTypedCallClosureDiagnostic& DiagnosticClosure =
 				Result.TypedDiagnostic->CallClosure.GetValue();
 			RecordEmittedCallDiagnostics(DiagnosticClosure, DirectMembers);
-			// Successful Provider emission always passes the root through the
-			// shared execution state/frame and its owned first-failure record.
-			DiagnosticClosure.ExceptionControlState =
-				EAngelscriptStaticJITExceptionControlState::
-					DirectExecutionState;
-			DiagnosticClosure.ExceptionPayloadState =
-				EAngelscriptStaticJITExceptionPayloadState::
-					DirectFailureRecord;
+			RecordEmittedExceptionDiagnostics(
+				DiagnosticClosure, DirectMembers);
 		}
 		Result.Detail += FString::Printf(TEXT(
 			" TypedASTJITProviderEmitted: exact scalar raw/VM/Parms adapters and %d direct closure member(s) generated."),

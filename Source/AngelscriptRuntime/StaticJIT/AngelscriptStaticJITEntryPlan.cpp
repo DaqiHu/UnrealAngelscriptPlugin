@@ -93,6 +93,52 @@ namespace AngelscriptStaticJITEntryPlan_Private
 			Plan.TypedAdapterFailure = Detail;
 		}
 	}
+
+	FAngelscriptHash256 BuildEntryPlanHash(const FStaticJITEntryPlan& Plan)
+	{
+		FAngelscriptArtifactCanonicalWriter Writer(
+			TEXT("static-jit-entry-plan-v2"));
+		Writer.WriteString(Plan.CanonicalDeclaration);
+		Writer.WriteString(Plan.SourceSection);
+		Writer.WriteUInt32(Plan.SourceLine);
+		Writer.WriteBool(Plan.bHasVMEntry);
+		Writer.WriteBool(Plan.bHasRawEntry);
+		Writer.WriteBool(Plan.bHasParmsEntry);
+		Writer.WriteBool(Plan.bHasNativeObjectSlot);
+		Writer.WriteBool(Plan.bTypedAdapterRepresentable);
+		Writer.WriteString(Plan.TypedAdapterFailure);
+		Writer.WriteUInt32(static_cast<uint32>(Plan.ReceiverKind));
+		Writer.WriteUInt32(static_cast<uint32>(Plan.ReceiverParameterIndex));
+		Writer.WriteUInt32(static_cast<uint32>(Plan.ReflectedParmsLayout));
+		Writer.WriteUInt32(static_cast<uint32>(Plan.Parameters.Num()));
+		for (const FStaticJITEntryParameterPlan& Parameter : Plan.Parameters)
+		{
+			Writer.WriteString(Parameter.CanonicalName);
+			Writer.WriteString(Parameter.BodyCppType);
+			Writer.WriteString(Parameter.EntryCppType);
+			Writer.WriteString(Parameter.ReflectedStorageCppType);
+			Writer.WriteUInt32(static_cast<uint32>(
+				Parameter.FormalParameterIndex));
+			Writer.WriteUInt32(static_cast<uint32>(
+				Parameter.VMFrameOffsetDWords));
+			Writer.WriteUInt32(static_cast<uint32>(
+				Parameter.ReflectedParameterIndex));
+			Writer.WriteUInt32(static_cast<uint32>(Parameter.Role));
+			Writer.WriteUInt32(static_cast<uint32>(Parameter.Marshalling));
+		}
+		Writer.WriteString(Plan.Return.BodyCppType);
+		Writer.WriteString(Plan.Return.EntryCppType);
+		Writer.WriteString(Plan.Return.ReflectedStorageCppType);
+		Writer.WriteUInt32(static_cast<uint32>(
+			Plan.Return.VMResultOffsetDWords));
+		Writer.WriteUInt32(static_cast<uint32>(Plan.Return.Placement));
+		Writer.WriteUInt32(static_cast<uint32>(Plan.RequiredIncludes.Num()));
+		for (const FString& Include : Plan.RequiredIncludes)
+		{
+			Writer.WriteString(Include);
+		}
+		return Writer.FinalizeHash();
+	}
 }
 
 bool FStaticJITEntryPlan::IsStructurallyComplete() const
@@ -131,9 +177,12 @@ bool FStaticJITEntryPlan::IsStructurallyComplete() const
 			return false;
 		}
 	}
-	return Return.Placement
+	const bool bReturnComplete = Return.Placement
 		== EAngelscriptStaticJITEntryReturnPlacement::None
 		|| (!Return.BodyCppType.IsEmpty() && !Return.EntryCppType.IsEmpty());
+	return bReturnComplete
+		&& EntryPlanHash
+			== AngelscriptStaticJITEntryPlan_Private::BuildEntryPlanHash(*this);
 }
 
 bool TrySpellAngelscriptStaticJITBodyCppType(
@@ -218,43 +267,8 @@ bool TrySpellAngelscriptStaticJITEntryCppType(
 
 void FinalizeAngelscriptStaticJITEntryPlan(FStaticJITEntryPlan& Plan)
 {
-	FAngelscriptArtifactCanonicalWriter Writer(TEXT("static-jit-entry-plan-v2"));
-	Writer.WriteString(Plan.CanonicalDeclaration);
-	Writer.WriteString(Plan.SourceSection);
-	Writer.WriteUInt32(Plan.SourceLine);
-	Writer.WriteBool(Plan.bHasVMEntry);
-	Writer.WriteBool(Plan.bHasRawEntry);
-	Writer.WriteBool(Plan.bHasParmsEntry);
-	Writer.WriteBool(Plan.bHasNativeObjectSlot);
-	Writer.WriteBool(Plan.bTypedAdapterRepresentable);
-	Writer.WriteString(Plan.TypedAdapterFailure);
-	Writer.WriteUInt32(static_cast<uint32>(Plan.ReceiverKind));
-	Writer.WriteUInt32(static_cast<uint32>(Plan.ReceiverParameterIndex));
-	Writer.WriteUInt32(static_cast<uint32>(Plan.ReflectedParmsLayout));
-	Writer.WriteUInt32(static_cast<uint32>(Plan.Parameters.Num()));
-	for (const FStaticJITEntryParameterPlan& Parameter : Plan.Parameters)
-	{
-		Writer.WriteString(Parameter.CanonicalName);
-		Writer.WriteString(Parameter.BodyCppType);
-		Writer.WriteString(Parameter.EntryCppType);
-		Writer.WriteString(Parameter.ReflectedStorageCppType);
-		Writer.WriteUInt32(static_cast<uint32>(Parameter.FormalParameterIndex));
-		Writer.WriteUInt32(static_cast<uint32>(Parameter.VMFrameOffsetDWords));
-		Writer.WriteUInt32(static_cast<uint32>(Parameter.ReflectedParameterIndex));
-		Writer.WriteUInt32(static_cast<uint32>(Parameter.Role));
-		Writer.WriteUInt32(static_cast<uint32>(Parameter.Marshalling));
-	}
-	Writer.WriteString(Plan.Return.BodyCppType);
-	Writer.WriteString(Plan.Return.EntryCppType);
-	Writer.WriteString(Plan.Return.ReflectedStorageCppType);
-	Writer.WriteUInt32(static_cast<uint32>(Plan.Return.VMResultOffsetDWords));
-	Writer.WriteUInt32(static_cast<uint32>(Plan.Return.Placement));
-	Writer.WriteUInt32(static_cast<uint32>(Plan.RequiredIncludes.Num()));
-	for (const FString& Include : Plan.RequiredIncludes)
-	{
-		Writer.WriteString(Include);
-	}
-	Plan.EntryPlanHash = Writer.FinalizeHash();
+	Plan.EntryPlanHash =
+		AngelscriptStaticJITEntryPlan_Private::BuildEntryPlanHash(Plan);
 }
 
 bool BuildAngelscriptStaticJITEntryPlan(

@@ -319,6 +319,17 @@ public:
 		ASSERT_THAT(AreEqual(
 			EAngelscriptStaticJITNativeCallValidationCode::Valid,
 			Validation.Code));
+		ASSERT_THAT(IsTrue(Validation.ReviewedCppSignature.IsValid()));
+		ASSERT_THAT(AreEqual(FString(TEXT("void")),
+			Validation.ReviewedCppSignature.ReturnType));
+		ASSERT_THAT(AreEqual(3,
+			Validation.ReviewedCppSignature.ParameterTypes.Num()));
+		ASSERT_THAT(AreEqual(FString(TEXT("const FString&")),
+			Validation.ReviewedCppSignature.ParameterTypes[0]));
+		ASSERT_THAT(AreEqual(FString(TEXT("float")),
+			Validation.ReviewedCppSignature.ParameterTypes[1]));
+		ASSERT_THAT(AreEqual(FString(TEXT("FLinearColor")),
+			Validation.ReviewedCppSignature.ParameterTypes[2]));
 	}
 
 	TEST_METHOD(ScalarABIIdentityComesFromExactRegisteredSystemFunction)
@@ -568,6 +579,37 @@ public:
 			MakeExportedSymbol(ScalarABI(TEXT("cdecl:i64(i32)")));
 		Cases.Add({TEXT("abi-mismatch"), MismatchedABI,
 			EAngelscriptStaticJITNativeCallValidationCode::ScalarABIMismatch});
+
+		FAngelscriptStaticJITNativeCallDescriptor MissingCallableParameters =
+			MakeExportedSymbol(ABI);
+		MissingCallableParameters.CppCallableSignature = TEXT("uint32");
+		Cases.Add({TEXT("missing-callable-parameters"),
+			MissingCallableParameters,
+			EAngelscriptStaticJITNativeCallValidationCode::
+				InvalidCppCallableSignature});
+
+		FAngelscriptStaticJITNativeCallDescriptor UnbalancedCallable =
+			MakeExportedSymbol(ABI);
+		UnbalancedCallable.CppCallableSignature = TEXT("uint32(uint32");
+		Cases.Add({TEXT("unbalanced-callable"), UnbalancedCallable,
+			EAngelscriptStaticJITNativeCallValidationCode::
+				InvalidCppCallableSignature});
+
+		FAngelscriptStaticJITNativeCallDescriptor EmptyCallableParameter =
+			MakeExportedSymbol(ABI);
+		EmptyCallableParameter.CppCallableSignature =
+			TEXT("uint32(, uint32)");
+		Cases.Add({TEXT("empty-callable-parameter"), EmptyCallableParameter,
+			EAngelscriptStaticJITNativeCallValidationCode::
+				InvalidCppCallableSignature});
+
+		FAngelscriptStaticJITNativeCallDescriptor InjectedCallable =
+			MakeExportedSymbol(ABI);
+		InjectedCallable.CppCallableSignature =
+			TEXT("uint32(uint32); FInjected::Run()");
+		Cases.Add({TEXT("injected-callable"), InjectedCallable,
+			EAngelscriptStaticJITNativeCallValidationCode::
+				InvalidCppCallableSignature});
 
 		FAngelscriptStaticJITNativeCallDescriptor UnsafeRoute =
 			MakeExportedSymbol(ABI);

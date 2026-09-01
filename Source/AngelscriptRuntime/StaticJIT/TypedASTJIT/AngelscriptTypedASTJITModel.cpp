@@ -277,6 +277,7 @@ const TCHAR* LexToString(
 	case EAngelscriptTypedASTJITFallbackReason::UnsupportedGlobalInitializer: return TEXT("UnsupportedGlobalInitializer");
 	case EAngelscriptTypedASTJITFallbackReason::UnsupportedImportedRoute: return TEXT("UnsupportedImportedRoute");
 	case EAngelscriptTypedASTJITFallbackReason::SemanticDependencyMismatch: return TEXT("SemanticDependencyMismatch");
+	case EAngelscriptTypedASTJITFallbackReason::RuntimeTypeBindingMismatch: return TEXT("RuntimeTypeBindingMismatch");
 	case EAngelscriptTypedASTJITFallbackReason::NonPortableNumericConversion: return TEXT("NonPortableNumericConversion");
 	case EAngelscriptTypedASTJITFallbackReason::UnsupportedExecutionObservability: return TEXT("UnsupportedExecutionObservability");
 	case EAngelscriptTypedASTJITFallbackReason::UnsupportedExecutionControl: return TEXT("UnsupportedExecutionControl");

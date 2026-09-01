@@ -4,16 +4,19 @@
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheASTBodySidecar
 {
-	// Must match asAST_SIDECAR_SCHEMA_VERSION in the maintained fork. V8 adds
-	// pointer-free record-owned method-relation triples. V7 added the
-	// pointer-free Sema-authored Canonical lifetime protocol. V6 added
-	// snapshot-owned neutral source-provenance ranges. V5 added the sealed
-	// member-to-access-specifier declaration edge. V4 added the
-	// sealed direct/virtual/indirect CallExpr dispatch fact. V3 added
-	// the sealed class-layout and constant-value facts consumed by Cache V2;
-	// accepting the old V2 number here makes the Runtime wrapper reject every
-	// valid current DTO after the fork encoder has already verified it.
-	static constexpr uint16 SchemaVersion = 8;
+	// Must match asAST_SIDECAR_SCHEMA_VERSION in the maintained fork. V11 admits
+	// pointer-free CallArgument records on ordinary CONSTRUCT as well as CALL;
+	// list-pattern construction remains the separate aggregate protocol. V10
+	// added the sealed ParamDecl formal ordinal. V9 added pointer-free
+	// Sema-authored CallArgument records. V8 added pointer-free record-owned
+	// method-relation triples. V7 added the pointer-free Sema-authored Canonical
+	// lifetime protocol. V6 added snapshot-owned neutral source-provenance
+	// ranges. V5 added the sealed member-to-access-specifier declaration edge.
+	// V4 added the sealed direct/virtual/indirect CallExpr dispatch fact. V3
+	// added the sealed class-layout and constant-value facts
+	// consumed by Cache V2; accepting the old V2 number here makes the Runtime
+	// wrapper reject every valid current DTO after the fork encoder verified it.
+	static constexpr uint16 SchemaVersion = 11;
 
 	FString FunctionKey;
 	FString Profile;

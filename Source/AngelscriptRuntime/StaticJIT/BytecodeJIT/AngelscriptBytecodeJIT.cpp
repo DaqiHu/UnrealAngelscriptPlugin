@@ -4977,7 +4977,8 @@ bool GenerateStaticJITProviderArtifacts(
 		{
 			GlobalViews.Add({Global.EngineLocalGlobal,
 				Global.EngineLocalGlobalPropertyId,
-				Global.GlobalKey.Hash, Global.CanonicalDeclaration});
+				Global.GlobalKey.Hash, Global.CanonicalDeclaration,
+				Global.CanonicalASTDeclKey});
 		}
 		for (const FAngelscriptStaticJITGenerationDescriptor& Descriptor
 			: GenerationSnapshot->Descriptors)
@@ -5018,13 +5019,20 @@ bool GenerateStaticJITProviderArtifacts(
 				Dependency.Kind,
 				Dependency.Reference,
 				Dependency.ExpectedContentOrValue,
-				Dependency.EngineLocalGlobalPropertyId});
+				Dependency.EngineLocalGlobalPropertyId,
+				Dependency.CanonicalASTDeclKey});
 		}
 		AppendDependencies(
 			GenerationSnapshot->ExternalNativeCalls,
 			ExternalNativeCallViews);
 		Graph.ResolvedModuleDescriptors = ResolvedModuleDescriptorViews;
 		Graph.Functions = FunctionViews;
+		Graph.RuntimeTypeBindings =
+			GenerationSnapshot->RuntimeTypeBindings;
+		Graph.RuntimeTypeBindingTargetProfileKey =
+			GenerationSnapshot->RuntimeTypeBindingTargetProfileKey;
+		Graph.RuntimeTypeBindingNativeEnvironmentKey =
+			GenerationSnapshot->RuntimeTypeBindingNativeEnvironmentKey;
 		Graph.Types = TypeViews;
 		Graph.Globals = GlobalViews;
 		Graph.Descriptors = DescriptorViews;

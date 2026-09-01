@@ -92,14 +92,14 @@ public:
 					return 42;
 				}
 
-				int AddFixtureValue(int Value)
+				int AddFixtureValue(int Value = 41)
 				{
 					return Value + 1;
 				}
 
 				int ParameterFixtureEntry()
 				{
-					return AddFixtureValue(41);
+					return AddFixtureValue();
 				}
 			)AS");
 			asIScriptModule* ScriptModule = Producer.BuildModule(
@@ -152,6 +152,50 @@ public:
 			TEXT("Global-function-only generation should validate")));
 		ASSERT_THAT(IsTrue(Validated.IsSet(),
 			TEXT("Validation should promote the generation")));
+		const FAngelscriptCachedDeclaration* PersistedDefaultedDeclaration = nullptr;
+		if (Validated.IsSet())
+		{
+			for (const FAngelscriptDecodedCacheRecordHandle& Record :
+				Validated.GetValue().ReachableRecords)
+			{
+				const FAngelscriptCachedModuleInterface* Interface =
+					Record->TryGetModuleInterface();
+				if (Interface == nullptr)
+				{
+					continue;
+				}
+				PersistedDefaultedDeclaration =
+					Interface->Declarations.FindByPredicate(
+						[](const FAngelscriptCachedDeclaration& Declaration)
+						{
+							return Declaration.CanonicalName
+								== TEXT("AddFixtureValue");
+						});
+				if (PersistedDefaultedDeclaration != nullptr)
+				{
+					break;
+				}
+			}
+		}
+		ASSERT_THAT(IsNotNull(PersistedDefaultedDeclaration,
+			TEXT("The validated ModuleInterface must retain AddFixtureValue")));
+		ASSERT_THAT(AreEqual(1,
+			PersistedDefaultedDeclaration != nullptr
+				? PersistedDefaultedDeclaration->OrderedParameters.Num() : 0,
+			TEXT("The validated defaulted declaration must retain one formal")));
+		const TOptional<FString>* PersistedDefault =
+			PersistedDefaultedDeclaration != nullptr
+				&& PersistedDefaultedDeclaration->OrderedParameters.Num() == 1
+				? &PersistedDefaultedDeclaration->OrderedParameters[0]
+					.CanonicalDefaultExpression
+				: nullptr;
+		ASSERT_THAT(IsTrue(PersistedDefault != nullptr
+			&& PersistedDefault->IsSet(),
+			TEXT("The validated ModuleInterface must own the default expression")));
+		ASSERT_THAT(AreEqual(FString(TEXT("41")),
+			PersistedDefault != nullptr && PersistedDefault->IsSet()
+				? PersistedDefault->GetValue() : FString(),
+			TEXT("The validated ModuleInterface default must be byte-exact")));
 
 		FAngelscriptTestFixture Consumer(
 			*TestRunner, ETestEngineMode::IsolatedFull);
@@ -192,9 +236,24 @@ public:
 		asIScriptFunction* ParameterEntry =
 			RestoredModule->ScriptModule->GetFunctionByDecl(
 				"int ParameterFixtureEntry()");
+		asIScriptFunction* DefaultedFunction =
+			RestoredModule->ScriptModule->GetFunctionByDecl(
+				"int AddFixtureValue(const int)");
 		ASSERT_THAT(IsNotNull(First));
 		ASSERT_THAT(IsNotNull(Second));
 		ASSERT_THAT(IsNotNull(ParameterEntry));
+		ASSERT_THAT(IsNotNull(DefaultedFunction));
+		const char* RestoredDefault = nullptr;
+		ASSERT_THAT(AreEqual(asSUCCESS,
+			DefaultedFunction != nullptr
+				? DefaultedFunction->GetParam(
+					0, nullptr, nullptr, nullptr, &RestoredDefault)
+				: asNO_FUNCTION));
+		ASSERT_THAT(AreEqual(
+			FString(TEXT("41")),
+			FString(UTF8_TO_TCHAR(
+				RestoredDefault != nullptr ? RestoredDefault : "")),
+			TEXT("Cache restore must recreate the owning Runtime default string")));
 		int32 FirstValue = 0;
 		int32 SecondValue = 0;
 		int32 ParameterValue = 0;

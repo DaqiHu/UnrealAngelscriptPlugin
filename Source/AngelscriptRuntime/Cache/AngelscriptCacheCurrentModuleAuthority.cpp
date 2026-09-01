@@ -3165,6 +3165,12 @@ BuildAngelscriptCacheCurrentModuleAuthority(
 						TEXT("Global function %s parameter %u has an unsupported passing mode"),
 						*Declaration.CanonicalDeclaration, ParameterIndex));
 			}
+			if (ParameterIndex < Function->defaultArgs.GetLength()
+				&& Function->defaultArgs[ParameterIndex] != nullptr)
+			{
+				Parameter.CanonicalDefaultExpression = UTF8_TO_TCHAR(
+					Function->defaultArgs[ParameterIndex]->AddressOf());
+			}
 		}
 		Declaration.Slots.Add({
 			EAngelscriptCacheDeclarationSlotKind::Function, FunctionIndex});

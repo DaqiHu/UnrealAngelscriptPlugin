@@ -92,9 +92,8 @@ private:
 
 	static void RegisterFailedReloadExpectedErrors(FAutomationTestBase& Test)
 	{
-		Test.AddExpectedError(TEXT("HotReloadFailedReloadEventMod.as:"), EAutomationExpectedErrorFlags::Contains, 2);
+		Test.AddExpectedError(TEXT("HotReloadFailedReloadEventMod.as:"), EAutomationExpectedErrorFlags::Contains, 1);
 		Test.AddExpectedError(TEXT("Identifier 'MissingType' is not a data type in global namespace"), EAutomationExpectedErrorFlags::Contains, 1);
-		Test.AddExpectedError(TEXT("Identifier 'MissingType' is not a data type"), EAutomationExpectedErrorFlags::Contains, 1);
 		Test.AddExpectedError(TEXT("Hot reload failed due to script compile errors. Keeping all old script code."), EAutomationExpectedErrorFlags::Contains, 1);
 	}
 

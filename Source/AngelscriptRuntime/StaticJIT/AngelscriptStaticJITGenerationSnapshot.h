@@ -8,6 +8,7 @@
 #include "StaticJIT/AngelscriptStaticJITCaptureProfile.h"
 #include "StaticJIT/AngelscriptStaticJITEntryPlan.h"
 #include "StaticJIT/AngelscriptStaticJITFunctionMetadata.h"
+#include "StaticJIT/AngelscriptStaticJITRuntimeTypeBinding.h"
 #include "StaticJIT/NativeCalls/AngelscriptStaticJITNativeCallTarget.h"
 #include "StaticJIT/StaticJITConfig.h"
 
@@ -44,8 +45,11 @@ struct FAngelscriptStaticJITGenerationModule
 /**
  * Owns one public V1 AST lease captured for an immutable StaticJIT generation
  * snapshot. The caller transfers the single reference returned by
- * AcquireASTSnapshot(); this holder releases it when the final snapshot owner
- * goes away. Function rows borrow only GetContext() from this owner.
+ * AcquireASTSnapshot(). The owning generation Engine must release that lease
+ * before replacing its snapshot or shutting the script Engine down; external
+ * snapshot owners may retain pointer-free authentication data afterwards, but
+ * GetContext() then returns null. Function rows borrow only GetContext() from
+ * this owner and are never valid beyond the generation Engine lifetime.
  */
 class ANGELSCRIPTRUNTIME_API FAngelscriptStaticJITGenerationASTLease final
 {
@@ -58,12 +62,16 @@ public:
 	FAngelscriptStaticJITGenerationASTLease& operator=(
 		const FAngelscriptStaticJITGenerationASTLease&) = delete;
 
-	const asCASTContext* GetContext() const
-	{
-		return SealedContext;
-	}
+	const asCASTContext* GetContext() const;
+
+	/**
+	 * Drops the public AST reference while its Runtime Engine is still alive.
+	 * Safe to call repeatedly; the destructor uses the same path.
+	 */
+	void ReleaseBeforeEngineShutdown();
 
 private:
+	mutable FCriticalSection LeaseMutex;
 	asIASTSnapshot* Snapshot = nullptr;
 	const asCASTContext* SealedContext = nullptr;
 };
@@ -109,6 +117,8 @@ struct FAngelscriptStaticJITGenerationGlobal
 	FAngelscriptStableModuleKey ModuleKey;
 	FAngelscriptStableGlobalKey GlobalKey;
 	FString CanonicalDeclaration;
+	/** Exact sealed VarDecl key authenticated against EngineLocalGlobalPropertyId. */
+	FString CanonicalASTDeclKey;
 };
 
 struct FAngelscriptStaticJITGenerationDescriptor
@@ -140,6 +150,8 @@ struct FAngelscriptStaticJITGenerationSemanticDependency
 	FAngelscriptArtifactReference Reference;
 	TOptional<FAngelscriptHash256> ExpectedContentOrValue;
 	int32 EngineLocalGlobalPropertyId = INDEX_NONE;
+	/** Exact producer-carried Canonical target; empty means no authenticated mapping. */
+	FString CanonicalASTDeclKey;
 };
 
 enum class EAngelscriptStaticJITInstalledCallableKind : uint8
@@ -259,10 +271,12 @@ ValidateAngelscriptStaticJITInstalledNativeCallDispatch(
 /**
  * Engine-local, immutable Static generation result. Raw AngelScript and
  * descriptor pointers are valid only while the owning generation Engine lives.
- * CanonicalASTLeases additionally own any retained public AST V1 snapshots,
- * so SealedAST function borrows remain valid while this result lives. Typed
- * capture requires every compiled module to have such a lease; Bytecode
- * capture may also retain one for AST identity metadata.
+ * CanonicalASTLeases own retained public AST V1 snapshots only until that
+ * Engine replaces this result or starts shutdown. External shared owners may
+ * retain the pointer-free fields afterwards, but Engine-local pointers and
+ * SealedAST borrows are invalid and every lease returns a null context. Typed
+ * capture requires every compiled module to have a live lease; Bytecode capture
+ * may also retain one for AST identity metadata.
  */
 struct FAngelscriptStaticJITGenerationSnapshot
 {
@@ -271,6 +285,14 @@ struct FAngelscriptStaticJITGenerationSnapshot
 	TArray<TSharedPtr<FAngelscriptStaticJITGenerationASTLease,
 		ESPMode::ThreadSafe>> CanonicalASTLeases;
 	TArray<FAngelscriptStaticJITGenerationFunction> Functions;
+	/**
+	 * Owned view copied from the exact generation-local frozen Runtime table.
+	 * Only function-signature rows are exposed to StaticJIT; numeric TypeIds and
+	 * table/snapshot pointers never enter this collection.
+	 */
+	TArray<FAngelscriptStaticJITRuntimeTypeBinding> RuntimeTypeBindings;
+	FString RuntimeTypeBindingTargetProfileKey;
+	FString RuntimeTypeBindingNativeEnvironmentKey;
 	TArray<FAngelscriptStaticJITGenerationType> Types;
 	TArray<FAngelscriptStaticJITGenerationGlobal> Globals;
 	TArray<FAngelscriptStaticJITGenerationDescriptor> Descriptors;
@@ -290,6 +312,23 @@ struct FAngelscriptStaticJITGenerationSnapshot
 	EAngelscriptStaticJITCaptureProfile CaptureProfile =
 		EAngelscriptStaticJITCaptureProfile::Bytecode;
 	bool bHasVerifiedCanonicalAST = false;
+
+	/**
+	 * Invalidates Engine-local AST borrows before the Runtime Engine can tear
+	 * down the retained type generation. Pointer-free snapshot data is preserved
+	 * for external audit owners.
+	 */
+	void ReleaseEngineLocalASTLeases() const
+	{
+		for (const TSharedPtr<FAngelscriptStaticJITGenerationASTLease,
+			ESPMode::ThreadSafe>& Lease : CanonicalASTLeases)
+		{
+			if (Lease.IsValid())
+			{
+				Lease->ReleaseBeforeEngineShutdown();
+			}
+		}
+	}
 
 	bool IsComplete() const
 	{
@@ -336,7 +375,7 @@ struct FAngelscriptStaticJITGenerationSnapshot
 							Target.Descriptor.RouteFlags,
 							EAngelscriptStaticJITNativeCallRouteFlags::CurrentNativeCall);
 					return Target.EngineLocalFunctionId < 0
-						|| Target.CanonicalDeclaration.IsEmpty()
+						|| Target.CanonicalTargetDeclKey.IsEmpty()
 						|| Target.RegisteredTargetDisplay.IsEmpty()
 						|| !Target.Reference.IsValid()
 						|| Target.Reference.Kind
@@ -390,6 +429,15 @@ struct FAngelscriptStaticJITGenerationSnapshot
 				{
 					return Function.SealedAST == nullptr;
 				}) == false;
+		const bool bRuntimeTypeBindingsComplete =
+			CaptureProfile != EAngelscriptStaticJITCaptureProfile::VerifiedCanonicalAST
+			|| (!RuntimeTypeBindingTargetProfileKey.IsEmpty()
+				&& !RuntimeTypeBindingNativeEnvironmentKey.IsEmpty()
+				&& RuntimeTypeBindings.ContainsByPredicate(
+					[](const FAngelscriptStaticJITRuntimeTypeBinding& Binding)
+					{
+						return !Binding.IsStructurallyComplete();
+					}) == false);
 		return bDescriptorAnalysisComplete
 			&& SourceCompilePassCount == 1
 			&& !ArtifactProfile.Hash.IsZero()
@@ -401,7 +449,8 @@ struct FAngelscriptStaticJITGenerationSnapshot
 			&& bNativeCallTargetsComplete
 			&& bNativeCallInventoryComplete
 			&& bCanonicalASTLeasesComplete
-			&& bTypedFunctionContextsComplete;
+			&& bTypedFunctionContextsComplete
+			&& bRuntimeTypeBindingsComplete;
 	}
 };
 

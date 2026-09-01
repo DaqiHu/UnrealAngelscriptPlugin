@@ -289,6 +289,18 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationDiagnosticTests,
 			TEXT("\"role\":\"InternalSemanticHelper\""))));
 		ASSERT_THAT(IsTrue(Result.Json.Contains(
 			TEXT("\"recursiveComponent\":true"))));
+
+		Closure.ExceptionPayloadState =
+			EAngelscriptStaticJITExceptionPayloadState::
+				DirectFailureRecordAndNestedBridgeAdoption;
+		Snapshot.ArtifactRequest =
+			FStaticJITDiagnostics::BuildArtifactRequestRecord(GeneratorOutput);
+		const FStaticJITDiagnostics::FJsonResult MixedPayloadResult =
+			FStaticJITDiagnostics::Serialize(Snapshot);
+		ASSERT_THAT(IsTrue(
+			MixedPayloadResult.IsSuccess(), MixedPayloadResult.Detail));
+		ASSERT_THAT(IsTrue(MixedPayloadResult.Json.Contains(TEXT(
+			"\"exceptionPayloadState\":\"DirectFailureRecordAndNestedBridgeAdoption\""))));
 	}
 
 	TEST_METHOD(PrePublicationFailuresUseStableCategoryAndBoundary)

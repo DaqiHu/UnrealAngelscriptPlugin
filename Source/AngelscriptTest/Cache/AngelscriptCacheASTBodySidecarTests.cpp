@@ -119,6 +119,625 @@ public:
 			TEXT("unknown node/type/schema kind fails closed")));
 	}
 
+	TEST_METHOD(SidecarCallArgumentsRoundTripDeterministicallyAndRejectCorruption)
+	{
+		// Production mutation caught: V8-style child-only persistence can restore
+		// values and callee shape while losing source-to-formal binding authority.
+		// No decoder may reconstruct origin/type/range facts from literals or child
+		// position. Keep the four origins in one fixture so this remains a schema
+		// gate rather than four near-identical CQTest processes.
+		const char Source[] = "Pack(1, B:7, C:3, Hidden:4)";
+		asCASTContext Context;
+		const asASTFileID File = Context.AddSourceSection(
+			"CallArgumentSidecar.as",
+			asAST_SOURCE_AUTHORED,
+			Source,
+			sizeof(Source) - 1,
+			0);
+		ASSERT_THAT(IsTrue(File != 0,
+			TEXT("call-argument fixture must own its authored source")));
+		const asCSourceManager& Sources = Context.GetSourceManager();
+		const asCSourceRange CallRange =
+			Sources.MakeRange(File, 0, sizeof(Source) - 1);
+		const asCSourceRange PositionalRange = Sources.MakeRange(File, 5, 6);
+		const asCSourceRange NamedRange = Sources.MakeRange(File, 10, 11);
+		const asCSourceRange DefaultRange = Sources.MakeRange(File, 15, 16);
+		const asCSourceRange HiddenRange = Sources.MakeRange(File, 25, 26);
+		const asASTDeclId Tu = Context.CreateTranslationUnit("CallArgumentSidecar");
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asASTDeclId Callee = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, CallRange, "Pack");
+		const asASTDeclId A = Context.CreateDecl(
+			asAST_DECL_PARAM, Callee, PositionalRange, "A");
+		const asASTDeclId B = Context.CreateDecl(
+			asAST_DECL_PARAM, Callee, NamedRange, "B");
+		const asASTDeclId C = Context.CreateDecl(
+			asAST_DECL_PARAM, Callee, DefaultRange, "C");
+		const asASTDeclId Hidden = Context.CreateDecl(
+			asAST_DECL_PARAM, Callee, HiddenRange, "Hidden");
+		const asASTDeclId Entry = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, CallRange, "Entry");
+		const asASTStmtId Return = Context.CreateStmt(
+			asAST_STMT_RETURN, Entry, CallRange);
+		const asASTExprId PositionalA = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+			PositionalRange);
+		const asASTExprId NamedB = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+			NamedRange);
+		const asASTExprId DefaultC = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+			DefaultRange);
+		const asASTExprId HiddenValue = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+			HiddenRange);
+		const asASTExprId Call = Context.CreateExpr(
+			asAST_EXPR_CALL, IntType, asAST_VALUE_PRVALUE, CallRange);
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Callee, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(A, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(B, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(C, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Hidden, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Entry, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDefaultArg(C, "3")));
+		ASSERT_THAT(AreEqual(0, Context.SetOrigin(Hidden, "hidden")));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(PositionalA, 1)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(NamedB, 7)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(DefaultC, 3)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(HiddenValue, 4)));
+		// CALL children and records use the Runtime reverse-formal order.
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Call, HiddenValue)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Call, DefaultC)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Call, NamedB)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Call, PositionalA)));
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(Call, Callee)));
+		ASSERT_THAT(AreEqual(0, Context.SetExprCallDispatch(
+			Call, asAST_CALL_DISPATCH_DIRECT)));
+
+		asSASTCallArgument HiddenRecord;
+		HiddenRecord.expression = HiddenValue;
+		HiddenRecord.formal = Hidden;
+		HiddenRecord.formalType = IntType;
+		HiddenRecord.range = HiddenRange;
+		HiddenRecord.formalIndex = 3;
+		HiddenRecord.origin = asAST_CALL_ARGUMENT_HIDDEN;
+		HiddenRecord.sourceOrdinal = asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL;
+		ASSERT_THAT(AreEqual(0, Context.AddCallArgument(Call, HiddenRecord)));
+		asSASTCallArgument CRecord;
+		CRecord.expression = DefaultC;
+		CRecord.formal = C;
+		CRecord.formalType = IntType;
+		CRecord.range = DefaultRange;
+		CRecord.formalIndex = 2;
+		CRecord.origin = asAST_CALL_ARGUMENT_DEFAULT;
+		CRecord.sourceOrdinal = asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL;
+		ASSERT_THAT(AreEqual(0, Context.AddCallArgument(Call, CRecord)));
+		asSASTCallArgument BRecord;
+		BRecord.expression = NamedB;
+		BRecord.formal = B;
+		BRecord.formalType = IntType;
+		BRecord.range = NamedRange;
+		BRecord.formalIndex = 1;
+		BRecord.origin = asAST_CALL_ARGUMENT_NAMED;
+		BRecord.authoredName = "B";
+		BRecord.sourceOrdinal = 1;
+		ASSERT_THAT(AreEqual(0, Context.AddCallArgument(Call, BRecord)));
+		asSASTCallArgument ARecord;
+		ARecord.expression = PositionalA;
+		ARecord.formal = A;
+		ARecord.formalType = IntType;
+		ARecord.range = PositionalRange;
+		ARecord.formalIndex = 0;
+		ARecord.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+		ARecord.sourceOrdinal = 0;
+		ASSERT_THAT(AreEqual(0, Context.AddCallArgument(Call, ARecord)));
+		ASSERT_THAT(AreEqual(0, Context.SetBody(Entry, Return)));
+		ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Return, Call)));
+
+		// An indirect funcdef invocation resolves through a VAR/PARAM declaration,
+		// which does not own the invocation ParamDecl list. V9 must therefore keep
+		// its pointer-free formal ordinal/type authority with an invalid formal ID.
+		const asCQualType CallbackType = Context.InternNamedType(
+			asAST_TYPE_FUNCDEF, "FCallback(int)", 0);
+		const asASTDeclId IndirectEntry = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, CallRange, "IndirectEntry");
+		const asASTDeclId Callback = Context.CreateDecl(
+			asAST_DECL_PARAM, IndirectEntry, CallRange, "Callback");
+		const asASTStmtId IndirectReturn = Context.CreateStmt(
+			asAST_STMT_RETURN, IndirectEntry, CallRange);
+		const asASTExprId IndirectArg = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+			PositionalRange);
+		const asASTExprId IndirectCall = Context.CreateExpr(
+			asAST_EXPR_CALL, IntType, asAST_VALUE_PRVALUE, CallRange);
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(IndirectEntry, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Callback, CallbackType)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(IndirectArg, 9)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(IndirectCall, IndirectArg)));
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(IndirectCall, Callback)));
+		ASSERT_THAT(AreEqual(0, Context.SetExprCallDispatch(
+			IndirectCall, asAST_CALL_DISPATCH_INDIRECT)));
+		asSASTCallArgument IndirectRecord;
+		IndirectRecord.expression = IndirectArg;
+		IndirectRecord.formalType = IntType;
+		IndirectRecord.range = PositionalRange;
+		IndirectRecord.formalIndex = 0;
+		IndirectRecord.sourceOrdinal = 0;
+		IndirectRecord.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+		ASSERT_THAT(AreEqual(0,
+			Context.AddCallArgument(IndirectCall, IndirectRecord)));
+		ASSERT_THAT(AreEqual(0,
+			Context.SetBody(IndirectEntry, IndirectReturn)));
+		ASSERT_THAT(AreEqual(0,
+			Context.SetStmtExpr(IndirectReturn, IndirectCall)));
+		const int SealStatus = Context.Seal();
+		ASSERT_THAT(AreEqual(0, SealStatus,
+			TEXT("call-argument sidecar fixture must publish")));
+		if (SealStatus != 0)
+		{
+			return;
+		}
+		asSASTSidecarHeader Header;
+		Header.functionKey = "CallArgumentSidecar.Entry";
+		Header.profile = "Win64";
+		Header.version = asAST_SIDECAR_SCHEMA_VERSION;
+		asCArray<asBYTE> Bytes;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTEncodeSidecar(Context, Header, Bytes)));
+		asCArray<asBYTE> RepeatedBytes;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTEncodeSidecar(Context, Header, RepeatedBytes)));
+		ASSERT_THAT(IsTrue(Bytes.GetLength() == RepeatedBytes.GetLength()
+				&& (Bytes.GetLength() == 0 || std::memcmp(
+					Bytes.AddressOf(), RepeatedBytes.AddressOf(),
+					Bytes.GetLength()) == 0),
+			TEXT("repeated V11 encode must be byte deterministic")));
+
+		asCASTContext Restored;
+		const int DecodeStatus =
+			asCASTDecodeSidecar(
+				Restored, Header, Bytes.AddressOf(), Bytes.GetLength());
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK, DecodeStatus,
+			TEXT("V11 decode must restore formal and CallArgument authority before Seal")));
+		if (DecodeStatus != asAST_SIDECAR_OK)
+		{
+			return;
+		}
+		const asCDecl* const RestoredADecl = Restored.GetDecl(A);
+		const asCDecl* const RestoredBDecl = Restored.GetDecl(B);
+		const asCDecl* const RestoredCDecl = Restored.GetDecl(C);
+		const asCDecl* const RestoredHiddenDecl = Restored.GetDecl(Hidden);
+		ASSERT_THAT(IsTrue(RestoredADecl != nullptr
+			&& RestoredBDecl != nullptr
+			&& RestoredCDecl != nullptr
+			&& RestoredHiddenDecl != nullptr
+			&& RestoredADecl->formalIndex == 0
+			&& RestoredBDecl->formalIndex == 1
+			&& RestoredCDecl->formalIndex == 2
+			&& RestoredHiddenDecl->formalIndex == 3,
+			TEXT("V11 must round-trip sealed ParamDecl formal ordinals independently of child position")));
+		const asCExpr* const RestoredCall = Restored.GetExpr(Call);
+		ASSERT_THAT(IsNotNull(RestoredCall,
+			TEXT("Sidecar restore must preserve the call expression identity")));
+		if (RestoredCall != nullptr)
+		{
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(4),
+				RestoredCall->callArguments.GetLength(),
+				TEXT("Sidecar must preserve every formal binding record")));
+			if (RestoredCall->callArguments.GetLength() == 4)
+			{
+				const asSASTCallArgument& RestoredHidden =
+					RestoredCall->callArguments[0];
+				const asSASTCallArgument& RestoredC =
+					RestoredCall->callArguments[1];
+				const asSASTCallArgument& RestoredB =
+					RestoredCall->callArguments[2];
+				const asSASTCallArgument& RestoredA =
+					RestoredCall->callArguments[3];
+				ASSERT_THAT(IsTrue(
+					RestoredHidden.expression == HiddenValue
+						&& RestoredHidden.formal == Hidden
+						&& RestoredHidden.formalType == IntType
+						&& RestoredHidden.formalIndex == 3
+						&& RestoredHidden.origin == asAST_CALL_ARGUMENT_HIDDEN
+						&& RestoredHidden.sourceOrdinal
+							== asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+						&& RestoredHidden.range.begin.offset
+							== HiddenRange.begin.offset
+						&& RestoredHidden.range.end.offset
+							== HiddenRange.end.offset,
+					TEXT("hidden argument authority must round-trip exactly")));
+				ASSERT_THAT(IsTrue(
+					RestoredC.expression == DefaultC
+						&& RestoredC.formal == C
+						&& RestoredC.formalType == IntType
+						&& RestoredC.formalIndex == 2
+						&& RestoredC.origin == asAST_CALL_ARGUMENT_DEFAULT
+						&& RestoredC.sourceOrdinal
+							== asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+						&& RestoredC.range.begin.offset
+							== DefaultRange.begin.offset
+						&& RestoredC.range.end.offset
+							== DefaultRange.end.offset,
+					TEXT("default argument authority must round-trip exactly")));
+				ASSERT_THAT(IsTrue(
+					RestoredB.expression == NamedB
+						&& RestoredB.formal == B
+						&& RestoredB.formalType == IntType
+						&& RestoredB.formalIndex == 1
+						&& RestoredB.origin == asAST_CALL_ARGUMENT_NAMED
+						&& RestoredB.authoredName.Equals("B")
+						&& RestoredB.sourceOrdinal == 1
+						&& RestoredB.range.begin.offset == NamedRange.begin.offset
+						&& RestoredB.range.end.offset == NamedRange.end.offset,
+					TEXT("named B provenance must round-trip exactly")));
+				ASSERT_THAT(IsTrue(
+					RestoredA.expression == PositionalA
+						&& RestoredA.formal == A
+						&& RestoredA.formalType == IntType
+						&& RestoredA.formalIndex == 0
+						&& RestoredA.origin == asAST_CALL_ARGUMENT_POSITIONAL
+						&& RestoredA.authoredName.GetLength() == 0
+						&& RestoredA.sourceOrdinal == 0
+						&& RestoredA.range.begin.offset
+							== PositionalRange.begin.offset
+						&& RestoredA.range.end.offset
+							== PositionalRange.end.offset,
+						TEXT("positional A provenance must round-trip exactly")));
+				}
+			}
+			const asCExpr* const RestoredIndirectCall =
+				Restored.GetExpr(IndirectCall);
+			ASSERT_THAT(IsNotNull(RestoredIndirectCall,
+				TEXT("V9 restore must preserve the indirect funcdef call")));
+			if (RestoredIndirectCall != nullptr)
+			{
+				ASSERT_THAT(AreEqual(
+					static_cast<asUINT>(asAST_CALL_DISPATCH_INDIRECT),
+					static_cast<asUINT>(RestoredIndirectCall->callDispatch),
+					TEXT("indirect funcdef dispatch must round-trip")));
+				ASSERT_THAT(AreEqual(static_cast<asUINT>(1),
+					RestoredIndirectCall->callArguments.GetLength(),
+					TEXT("indirect funcdef call must retain one formal record")));
+				if (RestoredIndirectCall->callArguments.GetLength() == 1)
+				{
+					const asSASTCallArgument& RestoredIndirect =
+						RestoredIndirectCall->callArguments[0];
+					ASSERT_THAT(IsTrue(
+						RestoredIndirect.expression == IndirectArg
+							&& !RestoredIndirect.formal.IsValid()
+							&& RestoredIndirect.formalType == IntType
+							&& RestoredIndirect.formalIndex == 0
+							&& RestoredIndirect.origin
+								== asAST_CALL_ARGUMENT_POSITIONAL
+							&& RestoredIndirect.sourceOrdinal == 0
+							&& RestoredIndirect.range.begin.offset
+								== PositionalRange.begin.offset
+							&& RestoredIndirect.range.end.offset
+								== PositionalRange.end.offset,
+						TEXT("indirect funcdef formal ordinal/type provenance must round-trip without a Runtime owner")));
+				}
+			}
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(11),
+				asAST_SIDECAR_SCHEMA_VERSION,
+				TEXT("V11 admits ordinary CONSTRUCT CallArgument records and retains V10 formal ordinals")));
+
+		asCArray<asBYTE> RestoredBytes;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTEncodeSidecar(Restored, Header, RestoredBytes)));
+		ASSERT_THAT(IsTrue(Bytes.GetLength() == RestoredBytes.GetLength()
+				&& (Bytes.GetLength() == 0 || std::memcmp(
+					Bytes.AddressOf(), RestoredBytes.AddressOf(),
+					Bytes.GetLength()) == 0),
+			TEXT("decode then encode must preserve exact V11 bytes")));
+
+			// The V9 trailer ends with the indirect funcdef's positional record. Its
+			// fixed-size payload is 48 bytes because authoredName and formal are empty.
+			// These mutations pin the indirect admission path without duplicating the
+			// whole sidecar decoder here.
+		ASSERT_THAT(IsTrue(Bytes.GetLength() > 48,
+			TEXT("V9 fixture must contain one complete trailing record")));
+		if (Bytes.GetLength() <= 48)
+		{
+			return;
+		}
+		const asUINT LastRecordOffset = Bytes.GetLength() - 48;
+			auto DecodeMustFailClosed = [&](const asCArray<asBYTE>& Corrupt,
+			const TCHAR* Message)
+		{
+			asCASTContext Candidate;
+			ASSERT_THAT(AreEqual((int)asAST_SIDECAR_MALFORMED,
+				asCASTDecodeSidecar(
+					Candidate, Header, Corrupt.AddressOf(), Corrupt.GetLength()),
+				Message));
+			ASSERT_THAT(IsFalse(Candidate.IsPublishable(),
+				TEXT("corrupt CallArgument bytes must not publish a partial graph")));
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
+				Candidate.GetExprCount(),
+				TEXT("failed V11 decode must discard the complete candidate graph")));
+		};
+
+		asCArray<asBYTE> BadExpression = Bytes;
+		BadExpression[LastRecordOffset] = 0;
+		BadExpression[LastRecordOffset + 1] = 0;
+		BadExpression[LastRecordOffset + 2] = 0;
+		BadExpression[LastRecordOffset + 3] = 0;
+		DecodeMustFailClosed(BadExpression,
+			TEXT("dangling CallArgument expression must fail closed"));
+
+		asCArray<asBYTE> BadFormalType = Bytes;
+		BadFormalType[LastRecordOffset + 8] = 0xff;
+		BadFormalType[LastRecordOffset + 9] = 0xff;
+		BadFormalType[LastRecordOffset + 10] = 0xff;
+		BadFormalType[LastRecordOffset + 11] = 0xff;
+		DecodeMustFailClosed(BadFormalType,
+			TEXT("unknown CallArgument formal type must fail closed"));
+
+		asCArray<asBYTE> BadRange = Bytes;
+		BadRange[LastRecordOffset + 16] = 0xff;
+		BadRange[LastRecordOffset + 17] = 0xff;
+		BadRange[LastRecordOffset + 18] = 0xff;
+		BadRange[LastRecordOffset + 19] = 0xff;
+		DecodeMustFailClosed(BadRange,
+			TEXT("foreign CallArgument source range must fail closed"));
+
+		asCArray<asBYTE> BadOrigin = Bytes;
+		BadOrigin[BadOrigin.GetLength() - 4] = 0xff;
+		BadOrigin[BadOrigin.GetLength() - 3] = 0xff;
+		BadOrigin[BadOrigin.GetLength() - 2] = 0xff;
+		BadOrigin[BadOrigin.GetLength() - 1] = 0xff;
+		DecodeMustFailClosed(BadOrigin,
+			TEXT("unknown CallArgument origin must fail closed"));
+
+		asCArray<asBYTE> Truncated = Bytes;
+		Truncated.SetLength(Truncated.GetLength() - 1);
+		DecodeMustFailClosed(Truncated,
+			TEXT("truncated CallArgument record must fail closed"));
+
+		asCArray<asSASTSidecarRecordId> BaselineRecords;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTCollectFunctionRecords(Restored, "Win64", BaselineRecords),
+			TEXT("collect baseline V9 function identity")));
+		asCExpr* const MutatedCall =
+			const_cast<asCExpr*>(Restored.GetExpr(Call));
+		ASSERT_THAT(IsNotNull(MutatedCall,
+			TEXT("identity mutation must find the restored call")));
+		if (MutatedCall == nullptr || MutatedCall->callArguments.GetLength() != 4)
+		{
+			return;
+		}
+		MutatedCall->callArguments[2].origin = asAST_CALL_ARGUMENT_POSITIONAL;
+		MutatedCall->callArguments[2].authoredName = "";
+		asCArray<asSASTSidecarRecordId> MutatedRecords;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTCollectFunctionRecords(Restored, "Win64", MutatedRecords),
+			TEXT("collect call-provenance mutation identity")));
+		const asSASTSidecarRecordId* BaselineEntry = nullptr;
+		const asSASTSidecarRecordId* MutatedEntry = nullptr;
+		for (asUINT Index = 0; Index < BaselineRecords.GetLength(); ++Index)
+		{
+			if (BaselineRecords[Index].functionKey.Equals("Entry"))
+			{
+				BaselineEntry = &BaselineRecords[Index];
+				break;
+			}
+		}
+		for (asUINT Index = 0; Index < MutatedRecords.GetLength(); ++Index)
+		{
+			if (MutatedRecords[Index].functionKey.Equals("Entry"))
+			{
+				MutatedEntry = &MutatedRecords[Index];
+				break;
+			}
+		}
+			ASSERT_THAT(IsTrue(BaselineEntry != nullptr && MutatedEntry != nullptr
+					&& !BaselineEntry->contentHash.Equals(
+						MutatedEntry->contentHash),
+				TEXT("CallArgument provenance must participate in function identity")));
+
+			// Restore the direct record, then prove that the pointer-free indirect
+			// record independently participates in its owning function identity.
+			MutatedCall->callArguments[2].origin = asAST_CALL_ARGUMENT_NAMED;
+			MutatedCall->callArguments[2].authoredName = "B";
+			asCExpr* const MutatedIndirectCall =
+				const_cast<asCExpr*>(Restored.GetExpr(IndirectCall));
+			ASSERT_THAT(IsNotNull(MutatedIndirectCall,
+				TEXT("indirect identity mutation must find the restored call")));
+			if (MutatedIndirectCall == nullptr
+				|| MutatedIndirectCall->callArguments.GetLength() != 1)
+			{
+				return;
+			}
+			MutatedIndirectCall->callArguments[0].range.begin.offset -= 1;
+			asCArray<asSASTSidecarRecordId> IndirectMutatedRecords;
+			ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+				asCASTCollectFunctionRecords(
+					Restored, "Win64", IndirectMutatedRecords),
+				TEXT("collect indirect funcdef provenance mutation identity")));
+			const asSASTSidecarRecordId* BaselineIndirect = nullptr;
+			const asSASTSidecarRecordId* MutatedIndirect = nullptr;
+			for (asUINT Index = 0; Index < BaselineRecords.GetLength(); ++Index)
+			{
+				if (BaselineRecords[Index].functionKey.Equals("IndirectEntry"))
+				{
+					BaselineIndirect = &BaselineRecords[Index];
+					break;
+				}
+			}
+			for (asUINT Index = 0; Index < IndirectMutatedRecords.GetLength(); ++Index)
+			{
+				if (IndirectMutatedRecords[Index].functionKey.Equals("IndirectEntry"))
+				{
+					MutatedIndirect = &IndirectMutatedRecords[Index];
+					break;
+				}
+			}
+			ASSERT_THAT(IsTrue(
+				BaselineIndirect != nullptr && MutatedIndirect != nullptr
+					&& !BaselineIndirect->contentHash.Equals(
+						MutatedIndirect->contentHash),
+				TEXT("indirect funcdef CallArgument provenance must participate in function identity")));
+		}
+
+	TEST_METHOD(SidecarConstructCallArgumentsRoundTripExactFormalRelation)
+	{
+		// CTA-S92 persistence gate: an ordinary CONSTRUCT owns the same sealed
+		// source-to-formal relation as CALL. Cache/Hot Reload must persist that
+		// authority instead of accepting only the child expression sequence.
+		const char Source[] = "FConstructPlan(B:7)";
+		asCASTContext Context;
+		const asASTFileID File = Context.AddSourceSection(
+			"ConstructArgumentSidecar.as",
+			asAST_SOURCE_AUTHORED,
+			Source,
+			sizeof(Source) - 1,
+			0);
+		ASSERT_THAT(IsTrue(File != 0,
+			TEXT("construct sidecar fixture must own its authored source")));
+		const asCSourceManager& Sources = Context.GetSourceManager();
+		const asCSourceRange ConstructRange =
+			Sources.MakeRange(File, 0, sizeof(Source) - 1);
+		const asCSourceRange DefaultRange = Sources.MakeRange(File, 0, 0);
+		const asCSourceRange NamedRange = Sources.MakeRange(File, 17, 18);
+
+		const asASTDeclId Tu =
+			Context.CreateTranslationUnit("ConstructArgumentSidecar");
+		const asCQualType VoidType = Context.InternPrimitive(ttVoid, 0);
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asCQualType ConstructType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FConstructPlan", 0);
+		const asASTDeclId Class = Context.CreateDecl(
+			asAST_DECL_CLASS, Tu, ConstructRange, "FConstructPlan");
+		ASSERT_THAT(AreEqual(0,
+			Context.SetStableKey(Class, "FConstructPlan")));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Class, ConstructType)));
+		const asASTDeclId Constructor = Context.CreateDecl(
+			asAST_DECL_CONSTRUCTOR, Class, ConstructRange, "FConstructPlan");
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Constructor, VoidType)));
+		const asASTDeclId A = Context.CreateDecl(
+			asAST_DECL_PARAM, Constructor, DefaultRange, "A");
+		const asASTDeclId B = Context.CreateDecl(
+			asAST_DECL_PARAM, Constructor, NamedRange, "B");
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(A, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(B, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDefaultArg(A, "42")));
+
+		const asASTDeclId Entry = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, ConstructRange, "Entry");
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Entry, VoidType)));
+		const asASTStmtId Body = Context.CreateStmt(
+			asAST_STMT_BLOCK, Entry, ConstructRange);
+		const asASTStmtId Statement = Context.CreateStmt(
+			asAST_STMT_EXPR, Entry, ConstructRange);
+		ASSERT_THAT(AreEqual(0, Context.SetBody(Entry, Body)));
+		ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Body, Statement)));
+
+		const asASTExprId DefaultA = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+			DefaultRange);
+		const asASTExprId NamedB = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE,
+			NamedRange);
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(DefaultA, 42)));
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(NamedB, 7)));
+		const asASTExprId Construct = Context.CreateExpr(
+			asAST_EXPR_CONSTRUCT, ConstructType, asAST_VALUE_PRVALUE,
+			ConstructRange);
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(Construct, Constructor)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Construct, DefaultA)));
+		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Construct, NamedB)));
+
+		asSASTCallArgument DefaultRecord;
+		DefaultRecord.expression = DefaultA;
+		DefaultRecord.formal = A;
+		DefaultRecord.formalType = IntType;
+		DefaultRecord.range = DefaultRange;
+		DefaultRecord.formalIndex = 0;
+		DefaultRecord.origin = asAST_CALL_ARGUMENT_DEFAULT;
+		DefaultRecord.sourceOrdinal = asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL;
+		ASSERT_THAT(AreEqual(0,
+			Context.AddCallArgument(Construct, DefaultRecord)));
+
+		asSASTCallArgument NamedRecord;
+		NamedRecord.expression = NamedB;
+		NamedRecord.formal = B;
+		NamedRecord.formalType = IntType;
+		NamedRecord.range = NamedRange;
+		NamedRecord.formalIndex = 1;
+		NamedRecord.origin = asAST_CALL_ARGUMENT_NAMED;
+		NamedRecord.sourceOrdinal = 0;
+		NamedRecord.authoredName = "B";
+		ASSERT_THAT(AreEqual(0,
+			Context.AddCallArgument(Construct, NamedRecord)));
+		ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Statement, Construct)));
+		ASSERT_THAT(AreEqual(0, Context.Seal(),
+			TEXT("ordinary construct relation must be publishable before persistence")));
+
+		asSASTSidecarHeader Header;
+		Header.functionKey = "ConstructArgumentSidecar.Entry";
+		Header.profile = "Win64";
+		Header.version = asAST_SIDECAR_SCHEMA_VERSION;
+		asCArray<asBYTE> Bytes;
+		const int EncodeStatus = asCASTEncodeSidecar(Context, Header, Bytes);
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK, EncodeStatus,
+			TEXT("ordinary CONSTRUCT must persist its sealed CallArgument relation")));
+		if (EncodeStatus != asAST_SIDECAR_OK)
+		{
+			return;
+		}
+
+		asCASTContext Restored;
+		const int DecodeStatus = asCASTDecodeSidecar(
+			Restored, Header, Bytes.AddressOf(), Bytes.GetLength());
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK, DecodeStatus,
+			TEXT("ordinary CONSTRUCT relation must restore before publication")));
+		if (DecodeStatus != asAST_SIDECAR_OK)
+		{
+			return;
+		}
+		const asCExpr* const RestoredConstruct = Restored.GetExpr(Construct);
+		ASSERT_THAT(IsNotNull(RestoredConstruct));
+		if (RestoredConstruct == nullptr
+			|| RestoredConstruct->callArguments.GetLength() != 2)
+		{
+			return;
+		}
+		const asSASTCallArgument& RestoredDefault =
+			RestoredConstruct->callArguments[0];
+		const asSASTCallArgument& RestoredNamed =
+			RestoredConstruct->callArguments[1];
+		ASSERT_THAT(IsTrue(
+			RestoredConstruct->kind == asAST_EXPR_CONSTRUCT
+				&& RestoredConstruct->resolvedDecl == Constructor
+				&& RestoredDefault.expression == DefaultA
+				&& RestoredDefault.formal == A
+				&& RestoredDefault.formalType == IntType
+				&& RestoredDefault.formalIndex == 0
+				&& RestoredDefault.origin == asAST_CALL_ARGUMENT_DEFAULT
+				&& RestoredDefault.sourceOrdinal
+					== asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+				&& RestoredDefault.authoredName.GetLength() == 0
+				&& RestoredNamed.expression == NamedB
+				&& RestoredNamed.formal == B
+				&& RestoredNamed.formalType == IntType
+				&& RestoredNamed.formalIndex == 1
+				&& RestoredNamed.origin == asAST_CALL_ARGUMENT_NAMED
+				&& RestoredNamed.sourceOrdinal == 0
+				&& RestoredNamed.authoredName.Equals("B")
+				&& RestoredNamed.range.begin.offset == NamedRange.begin.offset
+				&& RestoredNamed.range.end.offset == NamedRange.end.offset,
+			TEXT("V11 must restore the exact default/named constructor formal relation")));
+
+		asCArray<asBYTE> RestoredBytes;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTEncodeSidecar(Restored, Header, RestoredBytes)));
+		ASSERT_THAT(IsTrue(Bytes.GetLength() == RestoredBytes.GetLength()
+				&& (Bytes.GetLength() == 0 || std::memcmp(
+					Bytes.AddressOf(), RestoredBytes.AddressOf(),
+					Bytes.GetLength()) == 0),
+			TEXT("CONSTRUCT relation decode then encode must remain byte exact")));
+	}
+
 	TEST_METHOD(SidecarRoundTripPreservesCanonicalLifetimeProtocol)
 	{
 		asCASTContext Context;
@@ -141,6 +760,11 @@ public:
 			asCSourceRange(), "FElement");
 		ASSERT_THAT(AreEqual(0,
 			Context.SetDeclType(ElementDestructor, VoidType)));
+		const asASTDeclId ElementConstructor = Context.CreateDecl(
+			asAST_DECL_CONSTRUCTOR, ElementClass,
+			asCSourceRange(), "FElement");
+		ASSERT_THAT(AreEqual(0,
+			Context.SetDeclType(ElementConstructor, VoidType)));
 
 		const asASTDeclId ArrayClass = Context.CreateDecl(
 			asAST_DECL_CLASS, TranslationUnit,
@@ -177,6 +801,8 @@ public:
 			asAST_VALUE_PRVALUE, asCSourceRange());
 		ASSERT_THAT(AreEqual(0,
 			Context.SetLiteral(Element, "FElement::FElement()")));
+		ASSERT_THAT(AreEqual(0,
+			Context.SetResolvedDecl(Element, ElementConstructor)));
 		ASSERT_THAT(AreEqual(0, Context.AddExprChild(Aggregate, Element)));
 		const asASTStmtId AggregateStatement = Context.CreateStmt(
 			asAST_STMT_EXPR, Function, asCSourceRange());
@@ -232,7 +858,9 @@ public:
 		}
 
 		asCArray<asBYTE> CorruptBytes = Bytes;
-		CorruptBytes[CorruptBytes.GetLength() - 1] = 0xff;
+		// V11 ends with the per-expression CallArgument counts. The final
+		// zero-formal CONSTRUCT has no record bytes, so claiming one is malformed.
+		CorruptBytes[CorruptBytes.GetLength() - 4] = 1;
 		asCASTContext CorruptRestore;
 		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_MALFORMED,
 			asCASTDecodeSidecar(

@@ -151,6 +151,147 @@ FAngelscriptTypedASTJITEligibility EvaluateAngelscriptTypedASTJITEligibility(
 	return EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(Input);
 }
 
+bool BuildAngelscriptTypedASTJITFunctionShape(
+	const FAngelscriptStaticJITCompiledFunctionView& Function,
+	const FStaticJITEntryPlan& EntryPlan,
+	const FString& SymbolName,
+	FAngelscriptTypedASTJITFunctionShape& OutShape,
+	FString* OutError)
+{
+	OutShape = {};
+	auto Fail = [&OutShape, OutError](const FString& Detail)
+	{
+		OutShape = {};
+		if (OutError != nullptr)
+		{
+			*OutError = Detail;
+		}
+		return false;
+	};
+
+	if (Function.EngineLocalFunction == nullptr)
+	{
+		return Fail(TEXT(
+			"TypedASTJITFrozenBodySignatureFunctionMissing: an exact generation-local function is required."));
+	}
+	if (!EntryPlan.IsStructurallyComplete())
+	{
+		return Fail(TEXT(
+			"TypedASTJITFrozenBodySignaturePlanMalformed: the shared EntryPlan hash or frozen fields are invalid."));
+	}
+	if (!EntryPlan.bTypedAdapterRepresentable)
+	{
+		return Fail(EntryPlan.TypedAdapterFailure.IsEmpty()
+			? TEXT("TypedASTJITFrozenBodySignatureUnsupported")
+			: EntryPlan.TypedAdapterFailure);
+	}
+
+	const asCScriptFunction* const ScriptFunction =
+		static_cast<const asCScriptFunction*>(Function.EngineLocalFunction);
+	const int32 RuntimeParameterCount = static_cast<int32>(
+		ScriptFunction->parameterTypes.GetLength());
+	if (EntryPlan.Parameters.Num() != RuntimeParameterCount)
+	{
+		return Fail(FString::Printf(TEXT(
+			"TypedASTJITFrozenBodySignatureParameterCountMismatch: EntryPlan=%d Runtime=%d."),
+			EntryPlan.Parameters.Num(), RuntimeParameterCount));
+	}
+	if (EntryPlan.Return.BodyCppType.IsEmpty()
+		|| (EntryPlan.Return.Placement
+			!= EAngelscriptStaticJITEntryReturnPlacement::None
+			&& EntryPlan.Return.Placement
+				!= EAngelscriptStaticJITEntryReturnPlacement::Direct))
+	{
+		return Fail(TEXT(
+			"TypedASTJITFrozenBodySignatureReturnMalformed: only exact void or direct body returns are supported."));
+	}
+
+	OutShape.SymbolName = SymbolName;
+	OutShape.ReturnType = ScriptFunction->returnType;
+	OutShape.FrozenBodyReturnCppType = EntryPlan.Return.BodyCppType;
+	OutShape.InvocationKind = ScriptFunction->objectType != nullptr
+		? EAngelscriptTypedASTJITInvocationKind::InstanceMethod
+		: EAngelscriptTypedASTJITInvocationKind::Global;
+	OutShape.ReceiverKind = ScriptFunction->objectType != nullptr
+		? EAngelscriptTypedASTJITReceiverKind::NativeObjectThis
+		: EAngelscriptTypedASTJITReceiverKind::None;
+	OutShape.ReceiverParameterIndex = INDEX_NONE;
+	OutShape.bReturnsOnStack = ScriptFunction->DoesReturnOnStack();
+	OutShape.bHasNativeObjectSlot = ScriptFunction->objectType != nullptr;
+
+	for (int32 ParameterIndex = 0;
+		ParameterIndex < RuntimeParameterCount; ++ParameterIndex)
+	{
+		const FStaticJITEntryParameterPlan& Parameter =
+			EntryPlan.Parameters[ParameterIndex];
+		const asCDataType& RuntimeType =
+			ScriptFunction->parameterTypes[ParameterIndex];
+		if (Parameter.FormalParameterIndex != ParameterIndex
+			|| Parameter.BodyCppType.IsEmpty())
+		{
+			return Fail(FString::Printf(TEXT(
+				"TypedASTJITFrozenBodySignatureFormalMalformed: formal %d has no exact body C++ ABI."),
+				ParameterIndex));
+		}
+
+		OutShape.ParameterTypes.Add(RuntimeType);
+		switch (Parameter.Marshalling)
+		{
+		case EAngelscriptStaticJITEntryParameterMarshalling::ScalarValue:
+			if (RuntimeType.IsReference() || RuntimeType.IsObjectHandle()
+				|| (RuntimeType.GetTypeInfo() != nullptr
+					&& !RuntimeType.IsEnumType()))
+			{
+				return Fail(FString::Printf(TEXT(
+					"TypedASTJITFrozenBodySignatureScalarMismatch: formal %d is not a by-value scalar/enum Runtime coordinate."),
+					ParameterIndex));
+			}
+			OutShape.FrozenBodyParameterCppTypes.Add(
+				Parameter.BodyCppType);
+			OutShape.FrozenBodyParameterABIs.Add(
+				EAngelscriptTypedASTJITBodyParameterABI::ScalarValue);
+			break;
+
+		case EAngelscriptStaticJITEntryParameterMarshalling::
+			BorrowedValueAddress:
+			if (!RuntimeType.IsObject() || !RuntimeType.IsReference()
+				|| !RuntimeType.IsReadOnly() || RuntimeType.IsObjectHandle()
+				|| RuntimeType.GetTypeInfo() == nullptr
+				|| Parameter.EntryCppType
+					!= Parameter.BodyCppType + TEXT("*")
+				|| Parameter.BodyCppType.EndsWith(TEXT("&"))
+				|| ParameterIndex >= static_cast<int32>(
+					ScriptFunction->inOutFlags.GetLength())
+				|| ScriptFunction->inOutFlags[ParameterIndex] != asTM_INREF)
+			{
+				return Fail(FString::Printf(TEXT(
+					"TypedASTJITFrozenBodySignatureBorrowedMismatch: formal %d does not match the reviewed const-input address ABI."),
+					ParameterIndex));
+			}
+			OutShape.FrozenBodyParameterCppTypes.Add(
+				Parameter.BodyCppType + TEXT("&"));
+			OutShape.FrozenBodyParameterABIs.Add(
+				EAngelscriptTypedASTJITBodyParameterABI::
+					BorrowedValueAddress);
+			break;
+
+		case EAngelscriptStaticJITEntryParameterMarshalling::
+			OpaqueCompatibilityValue:
+		default:
+			return Fail(FString::Printf(TEXT(
+				"TypedASTJITFrozenBodySignatureOpaqueParameter: formal %d is outside the reviewed body ABI."),
+				ParameterIndex));
+		}
+	}
+
+	OutShape.bHasFrozenBodySignature = true;
+	if (OutError != nullptr)
+	{
+		OutError->Reset();
+	}
+	return true;
+}
+
 FAngelscriptTypedASTJITEligibilityInput
 BuildAngelscriptTypedASTJITEligibilityInput(
 	const FAngelscriptTypedASTJITRoot* Root,
@@ -163,28 +304,28 @@ BuildAngelscriptTypedASTJITEligibilityInput(
 	Input.CanonicalFunctionDecl = asASTDeclId(Function.CanonicalFunctionDeclValue);
 	if (Function.EngineLocalFunction == nullptr)
 	{
+		Input.FrozenBodySignatureFailure = TEXT(
+			"TypedASTJITFrozenBodySignatureFunctionMissing: the compiled function has no generation-local Runtime coordinate.");
 		return Input;
 	}
 
 	const asCScriptFunction* const ScriptFunction =
 		static_cast<const asCScriptFunction*>(Function.EngineLocalFunction);
 	Input.RawTraitBits = ScriptFunction->traits.traits;
-	Input.Shape.SymbolName = Function.FunctionKey.Hash.ToHexString();
-	Input.Shape.ReturnType = ScriptFunction->returnType;
-	Input.Shape.bReturnsOnStack = ScriptFunction->DoesReturnOnStack();
-	for (asUINT Index = 0;
-		Index < ScriptFunction->parameterTypes.GetLength(); ++Index)
+	const FStaticJITEntryPlan* const EntryPlan =
+		Root != nullptr && Root->EntryPlan != nullptr
+			? Root->EntryPlan : Function.EntryPlan;
+	if (EntryPlan == nullptr)
 	{
-		Input.Shape.ParameterTypes.Add(ScriptFunction->parameterTypes[Index]);
+		Input.FrozenBodySignatureFailure = TEXT(
+			"TypedASTJITFrozenBodySignaturePlanMissing: production eligibility requires the shared EntryPlan.");
 	}
-	Input.Shape.bHasNativeObjectSlot = ScriptFunction->objectType != nullptr;
-	Input.Shape.InvocationKind = Input.Shape.bHasNativeObjectSlot
-		? EAngelscriptTypedASTJITInvocationKind::InstanceMethod
-		: EAngelscriptTypedASTJITInvocationKind::Global;
-	Input.Shape.ReceiverKind = Input.Shape.bHasNativeObjectSlot
-		? EAngelscriptTypedASTJITReceiverKind::NativeObjectThis
-		: EAngelscriptTypedASTJITReceiverKind::None;
-	Input.Shape.ReceiverParameterIndex = INDEX_NONE;
+	else
+	{
+		BuildAngelscriptTypedASTJITFunctionShape(
+			Function, *EntryPlan, Function.FunctionKey.Hash.ToHexString(),
+			Input.Shape, &Input.FrozenBodySignatureFailure);
+	}
 	Input.bVirtualOrNonFinal =
 		ScriptFunction->funcType == asFUNC_VIRTUAL
 		|| (ScriptFunction->objectType != nullptr

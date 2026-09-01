@@ -104,6 +104,9 @@ int Answer(
 		Config.bIsEditor = false;
 		Config.bDevelopmentMode = false;
 		Config.bSkipThreadedInitialize = true;
+		Config.bOverrideCacheV2Enablement = true;
+		Config.bEnableCacheV2 = true;
+		Config.CacheV2RootOverride = Project.Root / TEXT("CacheV2");
 		Config.bOverridePackagedRuntimeReloadMode = bOverrideMode;
 		Config.PackagedRuntimeReloadMode = Mode;
 		Config.PackagedRuntimeReloadScanIntervalSeconds = 0.1f;

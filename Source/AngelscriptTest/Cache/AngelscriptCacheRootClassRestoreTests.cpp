@@ -8,6 +8,7 @@
 #include "UObject/UObjectGlobals.h"
 
 #include "StartAngelscriptHeaders.h"
+#include "source/as_ast_context.h"
 #include "source/as_module.h"
 #include "EndAngelscriptHeaders.h"
 
@@ -119,6 +120,40 @@ public:
 			ASSERT_THAT(AreEqual(1, Module->Classes.Num()));
 			ASSERT_THAT(AreEqual(1, Module->Classes[0]->Properties.Num()));
 			ASSERT_THAT(AreEqual(1, Module->Classes[0]->Methods.Num()));
+			asCModule* const InternalModule =
+				static_cast<asCModule*>(ScriptModule);
+			const asCASTContext* const CanonicalAST =
+				InternalModule->GetCanonicalASTContext();
+			ASSERT_THAT(IsNotNull(CanonicalAST,
+				TEXT("Root-class producer must retain its sealed Canonical AST")));
+			const asCDecl* StaticClassDeclaration = nullptr;
+			asUINT StaticClassDeclarationCount = 0;
+			if (CanonicalAST != nullptr)
+			{
+				for (asUINT DeclarationIndex = 1;
+					DeclarationIndex <= CanonicalAST->GetDeclCount(); ++DeclarationIndex)
+				{
+					const asCDecl* const Declaration = CanonicalAST->GetDecl(
+						asASTDeclId(DeclarationIndex));
+					if (Declaration != nullptr
+						&& Declaration->kind == asAST_DECL_FUNCTION
+						&& Declaration->stableKey.Equals(
+							"UCacheV2RestoredRootObject::StaticClass()"))
+					{
+						StaticClassDeclaration = Declaration;
+						++StaticClassDeclarationCount;
+					}
+				}
+			}
+			ASSERT_THAT(AreEqual(1, static_cast<int32>(
+				StaticClassDeclarationCount),
+				TEXT("The sealed Canonical AST must own exactly one stable StaticClass helper")));
+			ASSERT_THAT(IsTrue(StaticClassDeclaration != nullptr
+				&& StaticClassDeclaration->body.IsValid(),
+				TEXT("The sealed StaticClass helper must own its source-derived body before Cache capture")));
+			ASSERT_THAT(IsTrue(StaticClassDeclaration != nullptr
+				&& (StaticClassDeclaration->traits & asAST_TRAIT_GENERATED) != 0,
+				TEXT("Canonical Sema must seal the parsed __generated decorator before Cache capture")));
 
 			const FAngelscriptCacheCleanCaptureResult Capture =
 				CaptureAngelscriptCleanCompiledModule(

@@ -406,6 +406,7 @@ bool BuildAngelscriptTypedASTJITCallClosureInputs(
 			Global.Reference = Dependency.Reference;
 			Global.ExpectedContentOrValue =
 				Dependency.ExpectedContentOrValue;
+			Global.CanonicalASTDeclKey = Dependency.CanonicalASTDeclKey;
 		}
 		// The scalar bridge is opened by its later implementation task. Every
 		// function receives the one immutable generation capability profile;
@@ -454,6 +455,8 @@ bool BuildAngelscriptTypedASTJITCallClosure(
 	TMap<int32, int32> IndexByFunctionId;
 	TMap<int32, const FAngelscriptStaticJITNativeCallTarget*>
 		NativeCallTargetByFunctionId;
+	TMap<FString, const FAngelscriptStaticJITNativeCallTarget*>
+		NativeCallTargetByCanonicalDeclKey;
 	for (const FAngelscriptStaticJITNativeCallTarget& Target
 		: Options.NativeCallTargets)
 	{
@@ -467,7 +470,7 @@ bool BuildAngelscriptTypedASTJITCallClosure(
 				Target.Descriptor.RouteFlags,
 				EAngelscriptStaticJITNativeCallRouteFlags::CurrentNativeCall);
 		if (Target.EngineLocalFunctionId < 0
-			|| Target.CanonicalDeclaration.IsEmpty()
+			|| Target.CanonicalTargetDeclKey.IsEmpty()
 			|| !Target.ExpectedNativeABI.IsValid()
 			|| (bDescriptorAbsent
 				&& (!Target.bScalarBridgeCallable
@@ -492,7 +495,7 @@ bool BuildAngelscriptTypedASTJITCallClosure(
 				&& Target.ExpectedScalarABI.IsValid()))
 		{
 			return FailInput(TEXT(
-				"TypedASTJITCallGraphInvalidNativeCallTarget: target ID, declaration, registered native ABI, and lowering-domain ABI must be complete."));
+				"TypedASTJITCallGraphInvalidNativeCallTarget: target ID, exact Canonical target key, registered native ABI, and lowering-domain ABI must be complete."));
 		}
 		if (NativeCallTargetByFunctionId.Contains(
 			Target.EngineLocalFunctionId))
@@ -501,8 +504,17 @@ bool BuildAngelscriptTypedASTJITCallClosure(
 				"TypedASTJITCallGraphDuplicateNativeCallTarget: FunctionId=%d."),
 				Target.EngineLocalFunctionId));
 		}
+		if (NativeCallTargetByCanonicalDeclKey.Contains(
+			Target.CanonicalTargetDeclKey))
+		{
+			return FailInput(FString::Printf(TEXT(
+				"TypedASTJITCallGraphDuplicateNativeCanonicalTarget: CanonicalTargetDeclKey=%s."),
+				*Target.CanonicalTargetDeclKey));
+		}
 		NativeCallTargetByFunctionId.Add(
 			Target.EngineLocalFunctionId, &Target);
+		NativeCallTargetByCanonicalDeclKey.Add(
+			Target.CanonicalTargetDeclKey, &Target);
 	}
 	TSet<FString> SeenStableKeys;
 	int32 RootIndex = INDEX_NONE;
@@ -608,6 +620,21 @@ bool BuildAngelscriptTypedASTJITCallClosure(
 		Call.TargetKind = EAngelscriptTypedASTJITCallTargetKind::SystemFunction;
 		Call.EngineLocalTargetFunctionId = Target.EngineLocalFunctionId;
 		Call.ExternalCallDescriptor = Target.Descriptor;
+		if (!Target.Descriptor.IsAbsent()
+			&& EnumHasAnyFlags(
+				Target.Descriptor.RouteFlags,
+				EAngelscriptStaticJITNativeCallRouteFlags::MaySuspend))
+		{
+			SetFailure(OutPlan,
+				EAngelscriptTypedASTJITFallbackReason::SuspendOrExceptionState,
+				SourceSpan,
+				FString::Printf(TEXT(
+					"NativeCallMaySuspend: SystemFunctionId=%d Declaration=%s"),
+					Target.EngineLocalFunctionId,
+					*Target.CanonicalDeclaration));
+			bSemanticFailure = true;
+			return false;
+		}
 		if (Target.Descriptor.IsAbsent())
 		{
 			Call.ExternalCallValidation.bMetadataValid =
@@ -662,6 +689,20 @@ bool BuildAngelscriptTypedASTJITCallClosure(
 					Target.EngineLocalFunctionId,
 					*Target.CanonicalDeclaration,
 					*Call.ExternalCallValidation.Detail));
+			bSemanticFailure = true;
+			return false;
+		}
+		if (Call.ExternalCallValidation.bDirectCallable
+			&& Target.Descriptor.ExceptionPolicy
+				== EAngelscriptStaticJITNativeCallExceptionPolicy::MaySetScriptException)
+		{
+			SetFailure(OutPlan,
+				EAngelscriptTypedASTJITFallbackReason::ExceptionPayloadUnavailable,
+				SourceSpan,
+				FString::Printf(TEXT(
+					"DirectNativeExceptionPayloadUnavailable: SystemFunctionId=%d Declaration=%s"),
+					Target.EngineLocalFunctionId,
+					*Target.CanonicalDeclaration));
 			bSemanticFailure = true;
 			return false;
 		}
@@ -791,26 +832,14 @@ bool BuildAngelscriptTypedASTJITCallClosure(
 					FindExactCanonicalFunctionIndex(Functions, Context, Target->id, bAmbiguous);
 				if (CalleeIndex == INDEX_NONE)
 				{
+					const FString TargetStableKey = UTF8_TO_TCHAR(
+						Target->stableKey.AddressOf());
 					const FString TargetOrigin = UTF8_TO_TCHAR(Target->origin.AddressOf());
 					const FAngelscriptStaticJITNativeCallTarget* NativeTarget = nullptr;
-					bool bNativeAmbiguous = false;
-					if (!bAmbiguous && !TargetOrigin.IsEmpty())
+					if (!bAmbiguous && !TargetStableKey.IsEmpty())
 					{
-						for (const FAngelscriptStaticJITNativeCallTarget& Candidate :
-							 Options.NativeCallTargets)
-						{
-							if (Candidate.CanonicalDeclaration != TargetOrigin)
-							{
-								continue;
-							}
-							if (NativeTarget != nullptr)
-							{
-								bNativeAmbiguous = true;
-								NativeTarget = nullptr;
-								break;
-							}
-							NativeTarget = &Candidate;
-						}
+						NativeTarget = NativeCallTargetByCanonicalDeclKey.FindRef(
+							TargetStableKey);
 					}
 					if (NativeTarget != nullptr)
 					{
@@ -822,7 +851,7 @@ bool BuildAngelscriptTypedASTJITCallClosure(
 						continue;
 					}
 
-					Call.TargetKind = TargetOrigin.IsEmpty()
+					Call.TargetKind = TargetStableKey.IsEmpty()
 										  ? EAngelscriptTypedASTJITCallTargetKind::Unspecified
 										  : EAngelscriptTypedASTJITCallTargetKind::SystemFunction;
 					SetFailure(
@@ -837,10 +866,10 @@ bool BuildAngelscriptTypedASTJITCallClosure(
 										*KeyString(Caller.FunctionKey),
 										CallId.value,
 										Target->id.value,
-										UTF8_TO_TCHAR(Target->stableKey.AddressOf()),
+										*TargetStableKey,
 										*TargetOrigin,
 										bAmbiguous ? TEXT("ambiguous") : TEXT("none"),
-										bNativeAmbiguous ? TEXT("ambiguous") : TEXT("none")));
+										TEXT("none")));
 					bSemanticFailure = true;
 					break;
 				}

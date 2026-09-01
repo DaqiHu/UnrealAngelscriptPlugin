@@ -330,9 +330,13 @@ public:
 			asCThreadManager::GetLocalData());
 		RejectedNativeExecution.jitEngine = EngineA->GetScriptEngine();
 		RejectedNativeExecution.jitReferenceTable = &TableA;
-		ASSERT_THAT(AreEqual(0,
-			AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32>(
-				RejectedNativeExecution, CallSite, 41)));
+		{
+			FAngelscriptScriptTestCallbackScope
+				SuppressExpectedExceptionLog(true);
+			ASSERT_THAT(AreEqual(0,
+				AngelscriptTypedASTJIT::InvokeBoundNative<int32, int32>(
+					RejectedNativeExecution, CallSite, 41)));
+		}
 		ASSERT_THAT(IsTrue(RejectedNativeExecution.bExceptionThrown));
 		ASSERT_THAT(AreEqual(
 			CallsBeforeRejectedNative, ScriptFunctionMetadataCallCount));
@@ -639,6 +643,7 @@ public:
 	TEST_METHOD(MissingWrongKindAndWrongEngineSlotsFailClosedBeforeCalling)
 	{
 		using namespace AngelscriptTypedASTJITNativeBridgeTests_Private;
+		FAngelscriptScriptTestCallbackScope SuppressExpectedExceptionLog(true);
 		FNativeTestEngine FirstEngine;
 		FNativeTestEngine OtherEngine;
 		FirstEngine.Create(*TestRunner);
@@ -735,6 +740,65 @@ public:
 			0,
 			AddCallCount,
 			TEXT("Missing, unbound, mismatched and wrong-Engine slots must fail before invoking a retained caller")));
+	}
+
+	TEST_METHOD(BoundCallInfrastructureFailuresOwnStructuredFirstFailurePayload)
+	{
+		using namespace AngelscriptTypedASTJITNativeBridgeTests_Private;
+
+		auto AssertStructuredFailure = [this](
+			FScriptExecution& Execution,
+			const EAngelscriptTypedASTJITBridgeResult ExpectedResult,
+			const EAngelscriptTypedASTJITBridgeResult ActualResult)
+		{
+			ASSERT_THAT(AreEqual(ExpectedResult, ActualResult));
+			ASSERT_THAT(IsTrue(Execution.bExceptionThrown));
+			const asSJITFailureRecord* const Failure = Execution.FailureRecord;
+			ASSERT_THAT(IsNotNull(Failure));
+			if (Failure == nullptr)
+			{
+				return;
+			}
+			ASSERT_THAT(IsTrue(Failure->bHasFailure,
+				TEXT("A bound-call infrastructure failure must retain a public exception payload, not only the generated-code control bit")));
+			ASSERT_THAT(IsFalse(Failure->bAdopted,
+				TEXT("Infrastructure failures are authored directly by the bound-call route, not adopted from a nested VM context")));
+			ASSERT_THAT(AreEqual(
+				FString(TEXT("generated-native-call")),
+				FString(UTF8_TO_TCHAR(Failure->RouteOrigin.AddressOf()))));
+			ASSERT_THAT(IsTrue(
+				FString(UTF8_TO_TCHAR(Failure->Message.AddressOf())).Contains(
+					AngelscriptTypedASTJIT::LexToString(ExpectedResult)),
+				TEXT("The first-failure payload must identify the exact rejected bound-call condition")));
+		};
+
+		{
+			FScriptExecution Execution(asCThreadManager::GetLocalData());
+			FAngelscriptScriptTestCallbackScope SuppressExpectedExceptionLog(true);
+			AssertStructuredFailure(
+				Execution,
+				EAngelscriptTypedASTJITBridgeResult::MissingExecutionEngine,
+				AngelscriptTypedASTJIT::InvokeBoundViaVM(
+					Execution,
+					MakeCallSite(),
+					nullptr,
+					0,
+					EAngelscriptTypedASTJITScalarKind::Void,
+					nullptr));
+		}
+
+		{
+			FScriptExecution Execution(asCThreadManager::GetLocalData());
+			FAngelscriptScriptTestCallbackScope SuppressExpectedExceptionLog(true);
+			const int32 Result =
+				AngelscriptTypedASTJIT::InvokeBoundNative<int32>(
+					Execution, MakeCallSite());
+			ASSERT_THAT(AreEqual(0, Result));
+			AssertStructuredFailure(
+				Execution,
+				EAngelscriptTypedASTJITBridgeResult::MissingExecutionEngine,
+				EAngelscriptTypedASTJITBridgeResult::MissingExecutionEngine);
+		}
 	}
 
 	TEST_METHOD(NestedVMExceptionStopsTheTypedCallerAndReturnsNoValue)

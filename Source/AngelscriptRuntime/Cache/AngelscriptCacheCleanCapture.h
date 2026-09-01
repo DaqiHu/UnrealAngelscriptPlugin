@@ -134,6 +134,13 @@ private:
 		FAngelscriptCacheCrossModuleFunctionAuthorityBuilderAccess;
 };
 
+// Lifetime/threading contract for every capture seam below: the caller owns a
+// successful compile transaction (or equivalent engine-mutation exclusion)
+// that keeps the module, function, ScriptFunctionData and dependency graph
+// generations alive for the whole call. A TSharedRef keeps only the descriptor
+// alive; it is not a lease on Module->ScriptModule. Individual Canonical AST
+// traversals additionally acquire their public V1 snapshot lease. These APIs
+// are read-only capture operations, not concurrent reload/discard entry points.
 ANGELSCRIPTRUNTIME_API FAngelscriptCacheCleanCaptureResult
 CaptureAngelscriptCleanCompiledModule(
 	const TSharedRef<FAngelscriptModuleDesc>& Module,
