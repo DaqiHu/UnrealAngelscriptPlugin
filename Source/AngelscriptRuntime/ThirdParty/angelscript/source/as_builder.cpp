@@ -2215,7 +2215,9 @@ int asCBuilder::BuildLayoutFunctionsInternal(bool compileGlobalInitializers)
 	// LEGACY compilation resolves auto globals and emits their initializer
 	// functions here. A CANONICAL staged host has already sealed those semantic
 	// facts and must leave the prepared properties untouched for Stage 3.
-	if( compileGlobalInitializers )
+	if( compileGlobalInitializers
+		&& !(engine && engine->GetCompilerPipeline()
+			== asCOMPILER_PIPELINE_CANONICAL) )
 		CompileGlobalVariables();
 
 	if( numErrors == 0 )
@@ -2329,10 +2331,20 @@ int asCBuilder::BuildCompileCode()
 			bool compilerInvoked = false;
 			if( restoreResult != asBUILD_ARTIFACT_RESTORE_RESTORED )
 			{
-				asCCompiler compiler(this);
-				compilerInvoked = true;
-				compileResult =
-					compiler.CompileFactory(this, factoryDesc.script, func);
+				if( engine && engine->GetCompilerPipeline()
+					== asCOMPILER_PIPELINE_CANONICAL )
+				{
+					// CANONICAL factory bytecode is published by CodeGen.
+					// Do not construct asCCompiler on a restore miss.
+					compileResult = asSUCCESS;
+				}
+				else
+				{
+					asCCompiler compiler(this);
+					compilerInvoked = true;
+					compileResult =
+						compiler.CompileFactory(this, factoryDesc.script, func);
+				}
 			}
 			CompleteBuildArtifactCompile(
 				invocation, func, compileResult, restoreResult, compilerInvoked);
@@ -2579,6 +2591,13 @@ int asCBuilder::CompileFunction(const char *sectionName, const char *code, int l
 		bool compilerInvoked = false;
 		if( restoreResult == asBUILD_ARTIFACT_RESTORE_RESTORED )
 			r = asSUCCESS;
+		else if( engine && engine->GetCompilerPipeline()
+			== asCOMPILER_PIPELINE_CANONICAL )
+		{
+			// Public CompileFunction on CANONICAL uses GenerateFunction.
+			// This Builder entry must not fall back to asCCompiler.
+			r = asSUCCESS;
+		}
 		else
 		{
 			asCCompiler compiler(this);
@@ -3022,7 +3041,14 @@ void asCBuilder::CompileFunctions()
 			TryRestoreBuildArtifact(invocation, func);
 		int compileResult = asSUCCESS;
 		bool compilerInvoked = false;
-		if( restoreResult != asBUILD_ARTIFACT_RESTORE_RESTORED )
+		if( restoreResult != asBUILD_ARTIFACT_RESTORE_RESTORED
+			&& engine && engine->GetCompilerPipeline()
+				== asCOMPILER_PIPELINE_CANONICAL )
+		{
+			// CANONICAL function bytecode is published by CodeGen.
+			compileResult = asSUCCESS;
+		}
+		else if( restoreResult != asBUILD_ARTIFACT_RESTORE_RESTORED )
 		{
 			asCCompiler compiler(this);
 			compilerInvoked = true;
@@ -4756,6 +4782,14 @@ void asCBuilder::BuildAllocateGlobalVariables()
 
 void asCBuilder::CompileGlobalVariables()
 {
+	if( engine && engine->GetCompilerPipeline()
+		== asCOMPILER_PIPELINE_CANONICAL )
+	{
+		// CANONICAL global initializers are sealed facts for CodeGen.
+		// Do not construct asCCompiler here.
+		return;
+	}
+
 	TGuardValue<bool> MakeHardDependencies(bValueDependenciesAreHard, true);
 
 	bool compileSucceeded = true;

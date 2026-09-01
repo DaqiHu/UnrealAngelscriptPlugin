@@ -13775,6 +13775,98 @@ public:
 				*Dump)));
 	}
 
+	TEST_METHOD(CanonicalStagedBuilderDoesNotConstructCompilerForFactoryFunctionOrGlobalInit)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 staged asCCompiler isolation fixture selects CANONICAL")));
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "SemaCanonicalNoLegacyCompilerSites");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			const int G = 40 + 2;
+
+			class T
+			{
+				int Stored = 0;
+			}
+
+			int Entry()
+			{
+				return G;
+			}
+			)AS");
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"SemaCanonicalNoLegacyCompilerSites.as",
+			ScriptSource.c_str())));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildParallelParseScripts(),
+			TEXT("CANONICAL parse/Sema must intern G, T, and Entry")));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateTypes()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildGenerateFunctions()));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildLayoutClasses()));
+		Builder.BuildAllocateGlobalVariables();
+		const int SealResult = Builder.SealCanonicalAST();
+		const FString SealMessages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(asSUCCESS, SealResult,
+			*FString::Printf(
+				TEXT("CANONICAL must seal G/T/Entry before staged layout/bytecode. result=%d messages=%s"),
+				SealResult,
+				*SealMessages)));
+
+		asCString RawDump;
+		if (Builder.canonicalAST != nullptr)
+		{
+			asCASTDump(*Builder.canonicalAST, RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+
+		Module->ResetLegacyCompilerInvocationCount();
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildLayoutFunctions(),
+			*FString::Printf(
+				TEXT("CANONICAL staged BuildLayoutFunctions must not compile globals through asCCompiler. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Module->GetLastLegacyCompilerInvocationCount(),
+			*FString::Printf(
+				TEXT("CANONICAL BuildLayoutFunctions/global-init must not construct asCCompiler. legacy=%u dump:\n%s"),
+				Module->GetLastLegacyCompilerInvocationCount(),
+				*Dump)));
+
+		Module->ResetLegacyCompilerInvocationCount();
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.BuildCompileCode(),
+			*FString::Printf(
+				TEXT("CANONICAL staged BuildCompileCode must not compile factories/functions through asCCompiler. dump:\n%s"),
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Module->GetLastLegacyCompilerInvocationCount(),
+			*FString::Printf(
+				TEXT("CANONICAL factory/CompileFunction sites must not construct asCCompiler. legacy=%u dump:\n%s"),
+				Module->GetLastLegacyCompilerInvocationCount(),
+				*Dump)));
+	}
+
 	TEST_METHOD(SequenceSingleEvalShortCircuitConditionalAndGeneratedDefaultAreSealedTogether)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
