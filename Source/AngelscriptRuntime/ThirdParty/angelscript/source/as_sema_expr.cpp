@@ -3101,13 +3101,14 @@ static bool QualTypeMatchesCastTarget(
 // LEGACY CompileConversion for explicit Cast looks up 0-arg opConv, then
 // opImplConv, matching the target primitive. Canonical must seal that Call
 // rather than leftover Conversion dest=int src=T.
-static asASTExprId TryRewriteObjectConvOperator(
+asASTExprId TryRewriteObjectConvOperator(
 	asCSema& sema,
 	asCASTContext& context,
 	asCScriptEngine* engine,
 	asASTExprId inner,
 	const asCQualType& dest,
-	const asCSourceRange& range)
+	const asCSourceRange& range,
+	bool allowExplicitOpConv)
 {
 	const asCExpr* const innerExpr = context.GetExpr(inner);
 	if( innerExpr == 0 || !innerExpr->type.IsValid() )
@@ -3123,7 +3124,8 @@ static asASTExprId TryRewriteObjectConvOperator(
 	}
 
 	const char* const methodNames[2] = { "opConv", "opImplConv" };
-	for( int methodIndex = 0; methodIndex < 2; ++methodIndex )
+	const int methodBegin = allowExplicitOpConv ? 0 : 1;
+	for( int methodIndex = methodBegin; methodIndex < 2; ++methodIndex )
 	{
 		const char* const methodName = methodNames[methodIndex];
 		if( engine != 0 )
@@ -4587,7 +4589,7 @@ asASTExprId asCSema::ActOnCastExpr(asASTExprId inner, const asCQualType& dest, c
 		return existing;
 	}
 	const asASTExprId rewritten = TryRewriteObjectConvOperator(
-		*this, context, engine, inner, dest, range);
+		*this, context, engine, inner, dest, range, true);
 	if( rewritten.IsValid() )
 	{
 		return rewritten;

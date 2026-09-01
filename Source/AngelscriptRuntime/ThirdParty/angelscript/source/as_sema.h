@@ -1763,6 +1763,15 @@ asASTExprId RewriteValueToBoolViaOpImplConv(
 	asASTExprId inner,
 	const asCSourceRange& range);
 
+asASTExprId TryRewriteObjectConvOperator(
+	asCSema& sema,
+	asCASTContext& context,
+	asCScriptEngine* engine,
+	asASTExprId inner,
+	const asCQualType& dest,
+	const asCSourceRange& range,
+	bool allowExplicitOpConv = true);
+
 END_AS_NAMESPACE
 
 #endif

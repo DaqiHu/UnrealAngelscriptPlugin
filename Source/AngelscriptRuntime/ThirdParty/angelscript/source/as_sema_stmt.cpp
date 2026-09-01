@@ -1849,6 +1849,15 @@ asASTStmtId asCSema::ActOnLeafStatementAction(
 	case asLEAF_STATEMENT_RETURN:
 		{
 			asASTExprId value = action.expression;
+			if( owner->type.IsValid() )
+			{
+				const asASTExprId rewritten = TryRewriteObjectConvOperator(
+					*this, context, engine, value, owner->type, range, false);
+				if( rewritten.IsValid() )
+				{
+					value = rewritten;
+				}
+			}
 			if( const asCExpr* expr = context.GetExpr(value) )
 			{
 				const asCType* type = context.GetType(expr->type.type);
