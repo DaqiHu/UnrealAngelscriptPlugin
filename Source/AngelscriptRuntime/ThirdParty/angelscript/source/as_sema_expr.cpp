@@ -8698,11 +8698,29 @@ static void ConvertCallArgumentsToFormalTypes(asCSema& sema, asCASTContext& cont
 			}
 			else
 			{
-				args[argIndex] = sema.ActOnConversion(
-					args[argIndex], formalType, range);
+				// Overload ranking already proved that this implicit conversion is
+				// viable.  Publish the selected operator as an ordinary canonical
+				// Call so the sealed AST owns its exact callee, receiver and result
+				// type; CodeGen must not reinterpret a Conversion annotation.
 				if( implConv.IsValid() )
 				{
-					context.SetResolvedDecl(args[argIndex], implConv);
+					const asASTExprId rewritten = TryRewriteObjectConvOperator(
+						sema, context, sema.GetEngine(), args[argIndex],
+						formalType, range, false);
+					if( rewritten.IsValid() )
+					{
+						args[argIndex] = rewritten;
+					}
+					else
+					{
+						args[argIndex] = sema.ActOnConversion(
+							args[argIndex], formalType, range);
+					}
+				}
+				else
+				{
+					args[argIndex] = sema.ActOnConversion(
+						args[argIndex], formalType, range);
 				}
 			}
 		}

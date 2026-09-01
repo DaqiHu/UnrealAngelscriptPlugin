@@ -14526,6 +14526,139 @@ public:
 				*Dump)));
 	}
 
+	TEST_METHOD(CanonicalCallArgumentObjectRewritesThroughOpImplConvWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 implicit opImplConv call-argument fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaCallArgumentOpImplConv", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			class T
+			{
+				int opImplConv() const
+				{
+					return 40 + 2;
+				}
+			}
+
+			int Consume(int Value)
+			{
+				return Value;
+			}
+
+			int Entry()
+			{
+				T Object;
+				return Consume(Object);
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaCallArgumentOpImplConv.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Consume(Object) must compile from a sealed T::opImplConv Call; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("implicit opImplConv call-argument Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("implicit opImplConv call argument must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCExpr* const ConsumeCall =
+			CanonicalASTSemaAuthorityTest::FindOnlyResolvedCallNamed(
+				*const_cast<asCASTContext*>(Context), "Consume");
+		ASSERT_THAT(IsTrue(
+			ConsumeCall != nullptr
+				&& ConsumeCall->callArguments.GetLength() == 1,
+			*FString::Printf(
+				TEXT("Consume(Object) must seal one positional call argument. dump:\n%s"),
+				*Dump)));
+		if (ConsumeCall == nullptr || ConsumeCall->callArguments.GetLength() != 1)
+		{
+			return;
+		}
+
+		const asSASTCallArgument& ArgumentRecord = ConsumeCall->callArguments[0];
+		const asCExpr* Argument = Context->GetExpr(ArgumentRecord.expression);
+		while (Argument != nullptr
+			&& (Argument->kind == asAST_EXPR_CLEANUP
+				|| Argument->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& Argument->children.GetLength() == 1)
+		{
+			Argument = Context->GetExpr(Argument->children[0]);
+		}
+		const asCDecl* const ConversionMethod = Argument != nullptr
+			? Context->GetDecl(Argument->resolvedDecl) : nullptr;
+		const asCDecl* const Formal = Context->GetDecl(ArgumentRecord.formal);
+		ASSERT_THAT(IsTrue(
+			Argument != nullptr
+				&& Argument->kind == asAST_EXPR_CALL
+				&& ConversionMethod != nullptr
+				&& ConversionMethod->kind == asAST_DECL_METHOD
+				&& ConversionMethod->name.Equals("opImplConv")
+				&& Argument->receiver.IsValid()
+				&& Formal != nullptr
+				&& Formal->name.Equals("Value")
+				&& ArgumentRecord.formalIndex == 0
+				&& ArgumentRecord.origin == asAST_CALL_ARGUMENT_POSITIONAL
+				&& ArgumentRecord.formalType == Formal->type
+				&& Argument->type.type == Formal->type.type,
+			*FString::Printf(
+				TEXT("Consume(Object) must store a real Call of T::opImplConv() in the exact Value formal slot, not a Conversion annotated with a callee. dump:\n%s"),
+				*Dump)));
+
+		int32 Value = 0;
+		FString Exception;
+		const int ExecuteStatus = AngelscriptNativeTestSupport::CanonicalExecuteIntStatus(
+			Engine.Get(), Module, "int Entry()", Value, Exception);
+		ASSERT_THAT(IsTrue(
+			ExecuteStatus == asEXECUTION_FINISHED && Value == 42,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must consume the sealed call-argument opImplConv; status=%d Entry()=%d exception=%s"),
+				ExecuteStatus,
+				Value,
+				*Exception)));
+	}
+
 	TEST_METHOD(SequenceSingleEvalShortCircuitConditionalAndGeneratedDefaultAreSealedTogether)
 	{
 		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
