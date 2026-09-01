@@ -114,6 +114,10 @@ public:
 	int SetResolvedDecl(asASTExprId id, asASTDeclId decl);
 	int SetExprType(asASTExprId id, const asCQualType& type);
 	int SetExprId(asASTExprId id, asASTExprId newId);
+	// Append-only Sema recovery cannot erase an arena node. Convert one discarded
+	// unresolved expression into a locally valid, edge-free Error tombstone so
+	// whole-snapshot verification remains strict even for unreachable artifacts.
+	int TombstoneDiscardedExpr(asASTExprId id);
 	// Pre-seal Sema recovery may replace a provisional expression after a later
 	// declaration makes its exact type and callee available. Rewrite every
 	// owning edge, while leaving the arena-allocated old node as an unreachable

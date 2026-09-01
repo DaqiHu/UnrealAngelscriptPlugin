@@ -3478,7 +3478,9 @@ namespace
 			{
 				return 0;
 			}
-			if( expr->kind == asAST_EXPR_SEQUENCE && expr->children.GetLength() )
+			if( (expr->kind == asAST_EXPR_SEQUENCE
+				|| expr->kind == asAST_EXPR_CALL_REWRITE)
+				&& expr->children.GetLength() )
 			{
 				return ObjectTypeFromExpr(context.GetExpr(expr->children[expr->children.GetLength() - 1]));
 			}
@@ -5191,6 +5193,17 @@ namespace
 			}
 			case asAST_EXPR_CALL:
 				return EmitCall(expr, dataType, dwords);
+			case asAST_EXPR_CALL_REWRITE:
+				if( expr->literal.Equals("compile-out-entirely") )
+				{
+					return 0;
+				}
+				if( expr->children.GetLength() == 1 )
+				{
+					return EmitExpr(expr->children[0]);
+				}
+				FailAt(__LINE__, asNOT_SUPPORTED);
+				return 0;
 			default:
 			{
 				const asCDecl* const target =
@@ -5486,7 +5499,8 @@ namespace
 					expression->children[expression->children.GetLength() - 1]);
 			}
 			if( (expression->kind == asAST_EXPR_OPAQUE_VALUE
-					|| expression->kind == asAST_EXPR_CLEANUP)
+					|| expression->kind == asAST_EXPR_CLEANUP
+					|| expression->kind == asAST_EXPR_CALL_REWRITE)
 				&& expression->children.GetLength() == 1 )
 			{
 				return EmitLValueAddress(expression->children[0]);

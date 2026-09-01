@@ -119,6 +119,208 @@ public:
 			TEXT("unknown node/type/schema kind fails closed")));
 	}
 
+	TEST_METHOD(SidecarV12RoundTripPreservesCompileOutCallRewriteAuthority)
+	{
+		// CTA-S174 schema gate: CALL_REWRITE is append-only semantic authority.
+		// Persistence must retain its exact disposition declaration, final value
+		// edge and source-to-formal/receiver provenance without Runtime pointers.
+		const char Source[] = "Erase(9); Keep(7, 9); Probe.Chain(5);";
+		asCASTContext Context;
+		const asASTFileID File = Context.AddSourceSection(
+			"CallRewriteSidecar.as",
+			asAST_SOURCE_AUTHORED,
+			Source,
+			sizeof(Source) - 1,
+			0);
+		ASSERT_THAT(IsTrue(File != 0));
+		const asCSourceRange Range = Context.GetSourceManager().MakeRange(
+			File, 0, sizeof(Source) - 1);
+		const asASTDeclId Tu =
+			Context.CreateTranslationUnit("CallRewriteSidecar");
+		const asCQualType VoidType = Context.InternPrimitive(ttVoid, 0);
+		const asCQualType IntType = Context.InternPrimitive(ttInt, 0);
+		const asCQualType ProbeType = Context.InternNamedType(
+			asAST_TYPE_VALUE_OBJECT, "FCallRewriteSidecarProbe", 0);
+
+		const asASTDeclId Erase = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, Range, "Erase");
+		const asASTDeclId EraseValue = Context.CreateDecl(
+			asAST_DECL_PARAM, Erase, Range, "Value");
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Erase, VoidType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(EraseValue, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclTraits(
+			Erase, asAST_TRAIT_COMPILE_OUT_ENTIRELY)));
+
+		const asASTDeclId Keep = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, Range, "Keep");
+		const asASTDeclId First = Context.CreateDecl(
+			asAST_DECL_PARAM, Keep, Range, "First");
+		const asASTDeclId Ignored = Context.CreateDecl(
+			asAST_DECL_PARAM, Keep, Range, "Ignored");
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Keep, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(First, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Ignored, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclTraits(
+			Keep, asAST_TRAIT_REPLACE_WITH_FIRST_PARAM)));
+
+		const asASTDeclId ProbeClass = Context.CreateDecl(
+			asAST_DECL_CLASS, Tu, Range, "FCallRewriteSidecarProbe");
+		ASSERT_THAT(AreEqual(0, Context.SetStableKey(
+			ProbeClass, "FCallRewriteSidecarProbe")));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(ProbeClass, ProbeType)));
+		const asASTDeclId Chain = Context.CreateDecl(
+			asAST_DECL_METHOD, ProbeClass, Range, "Chain");
+		const asASTDeclId ChainIgnored = Context.CreateDecl(
+			asAST_DECL_PARAM, Chain, Range, "Ignored");
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Chain, ProbeType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(ChainIgnored, IntType)));
+		ASSERT_THAT(AreEqual(0, Context.SetDeclTraits(
+			Chain, asAST_TRAIT_COMPILE_OUT_AS_METHOD_CHAIN)));
+
+		const asASTDeclId Entry = Context.CreateDecl(
+			asAST_DECL_FUNCTION, Tu, Range, "Entry");
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Entry, VoidType)));
+		const asASTDeclId Probe = Context.CreateDecl(
+			asAST_DECL_VAR, Entry, Range, "Probe");
+		ASSERT_THAT(AreEqual(0, Context.SetDeclType(Probe, ProbeType)));
+		const asASTStmtId Body = Context.CreateStmt(
+			asAST_STMT_BLOCK, Entry, Range);
+		ASSERT_THAT(AreEqual(0, Context.SetBody(Entry, Body)));
+
+		const asASTExprId Entirely = Context.CreateExpr(
+			asAST_EXPR_CALL_REWRITE, VoidType, asAST_VALUE_PRVALUE, Range);
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(Entirely, Erase)));
+		ASSERT_THAT(AreEqual(0,
+			Context.SetLiteral(Entirely, "compile-out-entirely")));
+
+		const asASTExprId FirstValue = Context.CreateExpr(
+			asAST_EXPR_INTEGER_LITERAL, IntType, asAST_VALUE_PRVALUE, Range);
+		ASSERT_THAT(AreEqual(0, Context.SetLiteralBits(FirstValue, 7)));
+		const asASTExprId FirstRewrite = Context.CreateExpr(
+			asAST_EXPR_CALL_REWRITE, IntType, asAST_VALUE_PRVALUE, Range);
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(FirstRewrite, Keep)));
+		ASSERT_THAT(AreEqual(0,
+			Context.SetLiteral(FirstRewrite, "compile-out-first-param")));
+		ASSERT_THAT(AreEqual(0,
+			Context.AddExprChild(FirstRewrite, FirstValue)));
+		asSASTCallArgument FirstRecord;
+		FirstRecord.expression = FirstValue;
+		FirstRecord.formal = First;
+		FirstRecord.formalType = IntType;
+		FirstRecord.range = Range;
+		FirstRecord.formalIndex = 0;
+		FirstRecord.sourceOrdinal = 0;
+		FirstRecord.origin = asAST_CALL_ARGUMENT_POSITIONAL;
+		ASSERT_THAT(AreEqual(0,
+			Context.AddCallArgument(FirstRewrite, FirstRecord)));
+
+		const asASTExprId Receiver = Context.CreateExpr(
+			asAST_EXPR_DECL_REF, ProbeType, asAST_VALUE_LVALUE, Range);
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(Receiver, Probe)));
+		const asASTExprId MethodRewrite = Context.CreateExpr(
+			asAST_EXPR_CALL_REWRITE, ProbeType, asAST_VALUE_LVALUE, Range);
+		ASSERT_THAT(AreEqual(0, Context.SetResolvedDecl(MethodRewrite, Chain)));
+		ASSERT_THAT(AreEqual(0,
+			Context.SetLiteral(MethodRewrite, "compile-out-method-chain")));
+		ASSERT_THAT(AreEqual(0, Context.SetExprReceiver(
+			MethodRewrite, Receiver)));
+		ASSERT_THAT(AreEqual(0,
+			Context.AddExprChild(MethodRewrite, Receiver)));
+		asSASTCallArgument ReceiverRecord;
+		ReceiverRecord.expression = Receiver;
+		ReceiverRecord.formalType = ProbeType;
+		ReceiverRecord.range = Range;
+		ReceiverRecord.origin = asAST_CALL_ARGUMENT_IMPLICIT_RECEIVER;
+		ASSERT_THAT(AreEqual(0,
+			Context.AddCallArgument(MethodRewrite, ReceiverRecord)));
+
+		const asASTExprId Rewrites[] = {
+			Entirely, FirstRewrite, MethodRewrite };
+		for (const asASTExprId Rewrite : Rewrites)
+		{
+			const asASTStmtId Statement = Context.CreateStmt(
+				asAST_STMT_EXPR, Entry, Range);
+			ASSERT_THAT(AreEqual(0, Context.SetStmtExpr(Statement, Rewrite)));
+			ASSERT_THAT(AreEqual(0, Context.AddStmtChild(Body, Statement)));
+		}
+		const int SealStatus = Context.Seal();
+		ASSERT_THAT(AreEqual(0, SealStatus,
+			TEXT("all three CALL_REWRITE dispositions must publish")));
+		if (SealStatus != 0)
+		{
+			return;
+		}
+
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(12),
+			asAST_SIDECAR_SCHEMA_VERSION,
+			TEXT("CALL_REWRITE is admitted by Sidecar schema V12")));
+		asSASTSidecarHeader Header;
+		Header.functionKey = "CallRewriteSidecar.Entry";
+		Header.profile = "Win64";
+		Header.version = asAST_SIDECAR_SCHEMA_VERSION;
+		asCArray<asBYTE> Bytes;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTEncodeSidecar(Context, Header, Bytes)));
+		asCASTContext Restored;
+		const int DecodeStatus = asCASTDecodeSidecar(
+			Restored, Header, Bytes.AddressOf(), Bytes.GetLength());
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK, DecodeStatus));
+		if (DecodeStatus != asAST_SIDECAR_OK)
+		{
+			return;
+		}
+
+		const asCExpr* const RestoredEntirely = Restored.GetExpr(Entirely);
+		const asCExpr* const RestoredFirst = Restored.GetExpr(FirstRewrite);
+		const asCExpr* const RestoredMethod = Restored.GetExpr(MethodRewrite);
+		const asCDecl* const RestoredErase = Restored.GetDecl(Erase);
+		const asCDecl* const RestoredKeep = Restored.GetDecl(Keep);
+		const asCDecl* const RestoredChain = Restored.GetDecl(Chain);
+		ASSERT_THAT(IsTrue(
+			RestoredEntirely != nullptr
+				&& RestoredEntirely->kind == asAST_EXPR_CALL_REWRITE
+				&& RestoredEntirely->resolvedDecl == Erase
+				&& RestoredEntirely->literal.Equals("compile-out-entirely")
+				&& RestoredErase != nullptr
+				&& (RestoredErase->traits
+					& asAST_TRAIT_COMPILE_OUT_ENTIRELY) != 0));
+		ASSERT_THAT(IsTrue(
+			RestoredFirst != nullptr
+				&& RestoredFirst->kind == asAST_EXPR_CALL_REWRITE
+				&& RestoredFirst->resolvedDecl == Keep
+				&& RestoredFirst->children.GetLength() == 1
+				&& RestoredFirst->callArguments.GetLength() == 1
+				&& RestoredFirst->callArguments[0].expression == FirstValue
+				&& RestoredFirst->callArguments[0].formal == First
+				&& RestoredFirst->callArguments[0].formalIndex == 0
+				&& RestoredFirst->callArguments[0].sourceOrdinal == 0
+				&& RestoredKeep != nullptr
+				&& (RestoredKeep->traits
+					& asAST_TRAIT_REPLACE_WITH_FIRST_PARAM) != 0));
+		ASSERT_THAT(IsTrue(
+			RestoredMethod != nullptr
+				&& RestoredMethod->kind == asAST_EXPR_CALL_REWRITE
+				&& RestoredMethod->resolvedDecl == Chain
+				&& RestoredMethod->receiver == Receiver
+				&& RestoredMethod->children.GetLength() == 1
+				&& RestoredMethod->callArguments.GetLength() == 1
+				&& RestoredMethod->callArguments[0].expression == Receiver
+				&& RestoredMethod->callArguments[0].origin
+					== asAST_CALL_ARGUMENT_IMPLICIT_RECEIVER
+				&& RestoredChain != nullptr
+				&& (RestoredChain->traits
+					& asAST_TRAIT_COMPILE_OUT_AS_METHOD_CHAIN) != 0));
+
+		asCArray<asBYTE> RestoredBytes;
+		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
+			asCASTEncodeSidecar(Restored, Header, RestoredBytes)));
+		ASSERT_THAT(IsTrue(Bytes.GetLength() == RestoredBytes.GetLength()
+				&& (Bytes.GetLength() == 0 || std::memcmp(
+					Bytes.AddressOf(), RestoredBytes.AddressOf(),
+					Bytes.GetLength()) == 0),
+			TEXT("CALL_REWRITE V12 decode/encode must be byte exact")));
+	}
+
 	TEST_METHOD(SidecarCallArgumentsRoundTripDeterministicallyAndRejectCorruption)
 	{
 		// Production mutation caught: V8-style child-only persistence can restore
@@ -291,14 +493,14 @@ public:
 				&& (Bytes.GetLength() == 0 || std::memcmp(
 					Bytes.AddressOf(), RepeatedBytes.AddressOf(),
 					Bytes.GetLength()) == 0),
-			TEXT("repeated V11 encode must be byte deterministic")));
+			TEXT("repeated V12 encode must be byte deterministic")));
 
 		asCASTContext Restored;
 		const int DecodeStatus =
 			asCASTDecodeSidecar(
 				Restored, Header, Bytes.AddressOf(), Bytes.GetLength());
 		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK, DecodeStatus,
-			TEXT("V11 decode must restore formal and CallArgument authority before Seal")));
+			TEXT("V12 decode must restore formal and CallArgument authority before Seal")));
 		if (DecodeStatus != asAST_SIDECAR_OK)
 		{
 			return;
@@ -315,7 +517,7 @@ public:
 			&& RestoredBDecl->formalIndex == 1
 			&& RestoredCDecl->formalIndex == 2
 			&& RestoredHiddenDecl->formalIndex == 3,
-			TEXT("V11 must round-trip sealed ParamDecl formal ordinals independently of child position")));
+			TEXT("V12 must round-trip sealed ParamDecl formal ordinals independently of child position")));
 		const asCExpr* const RestoredCall = Restored.GetExpr(Call);
 		ASSERT_THAT(IsNotNull(RestoredCall,
 			TEXT("Sidecar restore must preserve the call expression identity")));
@@ -418,9 +620,9 @@ public:
 						TEXT("indirect funcdef formal ordinal/type provenance must round-trip without a Runtime owner")));
 				}
 			}
-			ASSERT_THAT(AreEqual(static_cast<asUINT>(11),
+			ASSERT_THAT(AreEqual(static_cast<asUINT>(12),
 				asAST_SIDECAR_SCHEMA_VERSION,
-				TEXT("V11 admits ordinary CONSTRUCT CallArgument records and retains V10 formal ordinals")));
+				TEXT("V12 admits CALL_REWRITE and retains V11 CallArgument/formal authority")));
 
 		asCArray<asBYTE> RestoredBytes;
 		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
@@ -429,7 +631,7 @@ public:
 				&& (Bytes.GetLength() == 0 || std::memcmp(
 					Bytes.AddressOf(), RestoredBytes.AddressOf(),
 					Bytes.GetLength()) == 0),
-			TEXT("decode then encode must preserve exact V11 bytes")));
+			TEXT("decode then encode must preserve exact V12 bytes")));
 
 			// The V9 trailer ends with the indirect funcdef's positional record. Its
 			// fixed-size payload is 48 bytes because authoredName and formal are empty.
@@ -454,7 +656,7 @@ public:
 				TEXT("corrupt CallArgument bytes must not publish a partial graph")));
 			ASSERT_THAT(AreEqual(static_cast<asUINT>(0),
 				Candidate.GetExprCount(),
-				TEXT("failed V11 decode must discard the complete candidate graph")));
+				TEXT("failed V12 decode must discard the complete candidate graph")));
 		};
 
 		asCArray<asBYTE> BadExpression = Bytes;
@@ -726,7 +928,7 @@ public:
 				&& RestoredNamed.authoredName.Equals("B")
 				&& RestoredNamed.range.begin.offset == NamedRange.begin.offset
 				&& RestoredNamed.range.end.offset == NamedRange.end.offset,
-			TEXT("V11 must restore the exact default/named constructor formal relation")));
+			TEXT("V12 must restore the exact default/named constructor formal relation")));
 
 		asCArray<asBYTE> RestoredBytes;
 		ASSERT_THAT(AreEqual((int)asAST_SIDECAR_OK,
@@ -858,7 +1060,7 @@ public:
 		}
 
 		asCArray<asBYTE> CorruptBytes = Bytes;
-		// V11 ends with the per-expression CallArgument counts. The final
+		// V12 ends with the per-expression CallArgument counts. The final
 		// zero-formal CONSTRUCT has no record bytes, so claiming one is malformed.
 		CorruptBytes[CorruptBytes.GetLength() - 4] = 1;
 		asCASTContext CorruptRestore;

@@ -20,7 +20,9 @@ enum asEASTSidecarError : int
 };
 
 // V2 is the first pointer-free DTO layout. V1 persisted a dump plus a
-// declaration skeleton and is intentionally a safe restore miss. V11 admits
+// declaration skeleton and is intentionally a safe restore miss. V12 admits
+// the append-only CallRewrite Expr kind plus its retained first-value/receiver
+// CallArgument relation. V11 admits
 // pointer-free CallArgument records on ordinary CONSTRUCT as well as CALL;
 // list-pattern construction remains the separate aggregate protocol. V10
 // appended the sealed ParamDecl formal ordinal. V9 appended pointer-free
@@ -28,7 +30,7 @@ enum asEASTSidecarError : int
 // method-relation triples. V7 appended the pointer-free Sema-authored Canonical
 // lifetime protocol. V6 appended snapshot-owned neutral source-provenance
 // ranges; V5 appended the member-to-access-specifier declaration reference.
-static const asUINT asAST_SIDECAR_SCHEMA_VERSION = 11;
+static const asUINT asAST_SIDECAR_SCHEMA_VERSION = 12;
 
 struct asSASTSidecarHeader
 {

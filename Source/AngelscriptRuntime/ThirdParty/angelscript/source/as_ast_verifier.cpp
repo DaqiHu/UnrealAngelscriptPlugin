@@ -80,6 +80,7 @@ const char* DiagnosticExprKindName(asEASTExprKind kind)
 	case asAST_EXPR_ERROR: return "Error";
 	case asAST_EXPR_THIS: return "This";
 	case asAST_EXPR_DEFERRED_OUT: return "DeferredOut";
+	case asAST_EXPR_CALL_REWRITE: return "CallRewrite";
 	default: return "Invalid";
 	}
 }
@@ -1077,6 +1078,133 @@ static int VerifyPublishedCallArguments(
 	return asAST_VERIFY_OK;
 }
 
+static int VerifyPublishedCallRewrite(
+	const asCASTContext& context,
+	const asCExpr& rewrite,
+	asSAstVerifyResult& result)
+{
+	const asCDecl* const callee = context.GetDecl(rewrite.resolvedDecl);
+	const asDWORD dispositionMask =
+		asAST_TRAIT_COMPILE_OUT_ENTIRELY
+		| asAST_TRAIT_REPLACE_WITH_FIRST_PARAM
+		| asAST_TRAIT_COMPILE_OUT_AS_METHOD_CHAIN;
+	if( callee == 0
+		|| (callee->kind != asAST_DECL_FUNCTION
+			&& callee->kind != asAST_DECL_METHOD
+			&& callee->kind != asAST_DECL_MIXIN) )
+	{
+		return Fail(result, asAST_VERIFY_INVALID_CHILD,
+			rewrite.range, "call-rewrite-callee",
+			asSASTNodeRef::FromExpr(rewrite.id),
+			asAST_EDGE_EXPR_RESOLVED_DECL,
+			asSASTNodeRef::FromDecl(rewrite.resolvedDecl));
+	}
+	const asDWORD disposition = callee->traits & dispositionMask;
+	const bool entirely = rewrite.literal.Equals("compile-out-entirely");
+	const bool first = rewrite.literal.Equals("compile-out-first-param");
+	const bool methodChain = rewrite.literal.Equals("compile-out-method-chain");
+	const asDWORD expectedDisposition = entirely
+		? asAST_TRAIT_COMPILE_OUT_ENTIRELY
+		: (first ? asAST_TRAIT_REPLACE_WITH_FIRST_PARAM
+			: (methodChain ? asAST_TRAIT_COMPILE_OUT_AS_METHOD_CHAIN : 0));
+	if( expectedDisposition == 0 || disposition != expectedDisposition
+		|| rewrite.callDispatch != asAST_CALL_DISPATCH_NONE
+		|| rewrite.safePointRole != asAST_SAFEPOINT_NONE )
+	{
+		return Fail(result, asAST_VERIFY_INVALID_CHILD,
+			rewrite.range, "call-rewrite-disposition",
+			asSASTNodeRef::FromExpr(rewrite.id),
+			asAST_EDGE_EXPR_RESOLVED_DECL,
+			asSASTNodeRef::FromDecl(rewrite.resolvedDecl));
+	}
+
+	if( entirely )
+	{
+		const asCType* const resultType = context.GetType(rewrite.type.type);
+		if( resultType == 0 || resultType->kind != asAST_TYPE_VOID
+			|| rewrite.type.quals != 0
+			|| rewrite.valueCategory != asAST_VALUE_PRVALUE
+			|| rewrite.receiver.IsValid()
+			|| rewrite.children.GetLength() != 0
+			|| rewrite.callArguments.GetLength() != 0 )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD,
+				rewrite.range, "call-rewrite-entirely-shape",
+				asSASTNodeRef::FromExpr(rewrite.id));
+		}
+		return asAST_VERIFY_OK;
+	}
+
+	if( rewrite.children.GetLength() != 1
+		|| rewrite.callArguments.GetLength() != 1 )
+	{
+		return Fail(result, asAST_VERIFY_INVALID_CHILD,
+			rewrite.range, "call-rewrite-value-shape",
+			asSASTNodeRef::FromExpr(rewrite.id),
+			asAST_EDGE_EXPR_CHILD);
+	}
+	const asCExpr* const retained = context.GetExpr(rewrite.children[0]);
+	const asSASTCallArgument& argument = rewrite.callArguments[0];
+	if( retained == 0 || argument.expression != retained->id
+		|| rewrite.type != retained->type
+		|| rewrite.valueCategory != retained->valueCategory
+		|| !argument.formalType.IsValid()
+		|| context.GetType(argument.formalType.type) == 0 )
+	{
+		return Fail(result, asAST_VERIFY_INVALID_TYPE,
+			rewrite.range, "call-rewrite-retained-value",
+			asSASTNodeRef::FromExpr(rewrite.id),
+			asAST_EDGE_EXPR_CHILD,
+			asSASTNodeRef::FromExpr(rewrite.children[0]));
+	}
+
+	if( first )
+	{
+		const asCDecl* const formal = context.GetFormalDecl(callee->id, 0);
+		const bool sourceOrigin =
+			argument.origin == asAST_CALL_ARGUMENT_POSITIONAL
+			|| argument.origin == asAST_CALL_ARGUMENT_NAMED;
+		if( rewrite.receiver.IsValid() || formal == 0
+			|| argument.formal != formal->id
+			|| argument.formalIndex != 0
+			|| argument.formalType != formal->type
+			|| !sourceOrigin
+			|| argument.sourceOrdinal
+				== asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+			|| (argument.origin == asAST_CALL_ARGUMENT_NAMED
+				&& (!formal->name.Equals(argument.authoredName)
+					|| argument.authoredName.GetLength() == 0))
+			|| (argument.origin == asAST_CALL_ARGUMENT_POSITIONAL
+				&& argument.authoredName.GetLength() != 0) )
+		{
+			return Fail(result, asAST_VERIFY_INVALID_CHILD,
+				rewrite.range, "call-rewrite-first-param",
+				asSASTNodeRef::FromExpr(rewrite.id),
+				asAST_EDGE_EXPR_RESOLVED_DECL,
+				asSASTNodeRef::FromDecl(argument.formal));
+		}
+		return asAST_VERIFY_OK;
+	}
+
+	if( callee->kind != asAST_DECL_METHOD
+		|| !rewrite.receiver.IsValid()
+		|| rewrite.receiver != retained->id
+		|| argument.formal.IsValid()
+		|| argument.formalIndex != asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+		|| argument.sourceOrdinal != asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+		|| argument.origin != asAST_CALL_ARGUMENT_IMPLICIT_RECEIVER
+		|| argument.authoredName.GetLength() != 0
+		|| argument.formalType != retained->type )
+	{
+		return Fail(result, asAST_VERIFY_INVALID_CHILD,
+			rewrite.range, "call-rewrite-method-chain",
+			asSASTNodeRef::FromExpr(rewrite.id),
+			asAST_EDGE_EXPR_RECEIVER,
+			asSASTNodeRef::FromExpr(rewrite.receiver));
+	}
+	return asAST_VERIFY_OK;
+}
+
 static int VerifySealedRequiredTargets(const asCASTContext& context, asSAstVerifyResult& result)
 {
 	for( asUINT i = 1; i <= context.GetExprCount(); ++i )
@@ -1096,6 +1224,9 @@ static int VerifySealedRequiredTargets(const asCASTContext& context, asSAstVerif
 			break;
 		case asAST_EXPR_CONSTRUCT:
 			detail = "construct-decl";
+			break;
+		case asAST_EXPR_CALL_REWRITE:
+			detail = "call-rewrite-decl";
 			break;
 		case asAST_EXPR_DECL_REF:
 			detail = "declref-decl";
@@ -1123,6 +1254,15 @@ static int VerifySealedRequiredTargets(const asCASTContext& context, asSAstVerif
 				expr->range,
 				"call-dispatch",
 				asSASTNodeRef::FromExpr(expr->id));
+		}
+		if( expr->kind == asAST_EXPR_CALL_REWRITE )
+		{
+			const int rewrite =
+				VerifyPublishedCallRewrite(context, *expr, result);
+			if( rewrite != asAST_VERIFY_OK )
+			{
+				return rewrite;
+			}
 		}
 		if( expr->kind == asAST_EXPR_CALL
 			|| (expr->kind == asAST_EXPR_CONSTRUCT
@@ -1840,6 +1980,20 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 		{
 			return Fail(result, asAST_VERIFY_INVALID_CHILD, decl->range,
 				"non-param-formal-index", asSASTNodeRef::FromDecl(id));
+		}
+		const asDWORD compileOutDisposition = decl->traits
+			& (asAST_TRAIT_COMPILE_OUT_ENTIRELY
+				| asAST_TRAIT_REPLACE_WITH_FIRST_PARAM
+				| asAST_TRAIT_COMPILE_OUT_AS_METHOD_CHAIN);
+		const bool compileOutCallable = decl->kind == asAST_DECL_FUNCTION
+			|| decl->kind == asAST_DECL_METHOD
+			|| decl->kind == asAST_DECL_MIXIN;
+		if( compileOutDisposition != 0
+			&& (!compileOutCallable
+				|| (compileOutDisposition & (compileOutDisposition - 1)) != 0) )
+		{
+			return Fail(result, asAST_VERIFY_WRONG_KIND, decl->range,
+				"decl-compile-out-disposition", asSASTNodeRef::FromDecl(id));
 		}
 		if( decl->range.begin.IsValid() && !context.GetSourceManager().IsValidRange(decl->range) )
 		{
@@ -2575,7 +2729,8 @@ static int VerifyImpl(const asCASTContext& context, asSAstVerifyResult& result)
 		if( expr->receiver.IsValid() )
 		{
 			if( expr->kind != asAST_EXPR_CALL
-				&& expr->kind != asAST_EXPR_DEFERRED_OUT )
+				&& expr->kind != asAST_EXPR_DEFERRED_OUT
+				&& expr->kind != asAST_EXPR_CALL_REWRITE )
 			{
 				return Fail(result, asAST_VERIFY_WRONG_KIND, expr->range, "expr-receiver-kind", asSASTNodeRef::FromExpr(id), asAST_EDGE_EXPR_RECEIVER, asSASTNodeRef::FromExpr(expr->receiver));
 			}

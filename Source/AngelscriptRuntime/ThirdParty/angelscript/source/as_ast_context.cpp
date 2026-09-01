@@ -1319,7 +1319,8 @@ int asCASTContext::AddCallArgument(
 		return asAST_VERIFY_DANGLING_ID;
 	}
 	if( expr->kind != asAST_EXPR_CALL
-		&& expr->kind != asAST_EXPR_CONSTRUCT )
+		&& expr->kind != asAST_EXPR_CONSTRUCT
+		&& expr->kind != asAST_EXPR_CALL_REWRITE )
 	{
 		return asAST_VERIFY_WRONG_KIND;
 	}
@@ -1344,7 +1345,8 @@ int asCASTContext::ClearCallArguments(asASTExprId call)
 	{
 		return asAST_VERIFY_DANGLING_ID;
 	}
-	if( expr->kind != asAST_EXPR_CALL )
+	if( expr->kind != asAST_EXPR_CALL
+		&& expr->kind != asAST_EXPR_CALL_REWRITE )
 	{
 		return asAST_VERIFY_WRONG_KIND;
 	}
@@ -1367,7 +1369,8 @@ int asCASTContext::ReplaceCallArgumentExpression(
 		return asAST_VERIFY_DANGLING_ID;
 	}
 	if( expr->kind != asAST_EXPR_CALL
-		&& expr->kind != asAST_EXPR_CONSTRUCT )
+		&& expr->kind != asAST_EXPR_CONSTRUCT
+		&& expr->kind != asAST_EXPR_CALL_REWRITE )
 	{
 		return asAST_VERIFY_WRONG_KIND;
 	}
@@ -1403,7 +1406,8 @@ int asCASTContext::SetExprReceiver(asASTExprId id, asASTExprId receiver)
 		return asAST_VERIFY_DANGLING_ID;
 	}
 	if( expr->kind != asAST_EXPR_CALL
-		&& expr->kind != asAST_EXPR_DEFERRED_OUT )
+		&& expr->kind != asAST_EXPR_DEFERRED_OUT
+		&& expr->kind != asAST_EXPR_CALL_REWRITE )
 	{
 		return asAST_VERIFY_WRONG_KIND;
 	}
@@ -1503,6 +1507,30 @@ int asCASTContext::SetExprId(asASTExprId id, asASTExprId newId)
 		return asAST_VERIFY_DANGLING_ID;
 	}
 	expr->id = newId;
+	return asAST_VERIFY_OK;
+}
+
+int asCASTContext::TombstoneDiscardedExpr(asASTExprId id)
+{
+	if( RejectPostSealMutation() != asAST_VERIFY_OK )
+	{
+		return asAST_VERIFY_POST_SEAL_MUTATION;
+	}
+	asCExpr* expr = MutableExpr(id);
+	if( expr == 0 )
+	{
+		return asAST_VERIFY_DANGLING_ID;
+	}
+	expr->kind = asAST_EXPR_ERROR;
+	expr->valueCategory = asAST_VALUE_PRVALUE;
+	expr->resolvedDecl = asASTDeclId();
+	expr->receiver = asASTExprId();
+	expr->literal = "discarded-semantic-subtree";
+	expr->literalBits = 0;
+	expr->safePointRole = asAST_SAFEPOINT_NONE;
+	expr->callDispatch = asAST_CALL_DISPATCH_NONE;
+	expr->children.SetLength(0);
+	expr->callArguments.SetLength(0);
 	return asAST_VERIFY_OK;
 }
 

@@ -4,6 +4,11 @@
 #include "source/as_ast_sidecar.h"
 #include "EndAngelscriptHeaders.h"
 
+static_assert(
+	FAngelscriptCacheASTBodySidecar::SchemaVersion
+		== asAST_SIDECAR_SCHEMA_VERSION,
+	"UE Cache wrapper and maintained-fork Canonical AST Sidecar schemas must advance together");
+
 namespace
 {
 	EAngelscriptCacheASTBodySidecarError MapError(const int Status)

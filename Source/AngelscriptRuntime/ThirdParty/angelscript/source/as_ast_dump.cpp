@@ -96,6 +96,7 @@ static const char* ExprKindName(asEASTExprKind kind)
 	case asAST_EXPR_OPAQUE_VALUE: return "OpaqueValue";
 	case asAST_EXPR_THIS: return "This";
 	case asAST_EXPR_DEFERRED_OUT: return "DeferredOut";
+	case asAST_EXPR_CALL_REWRITE: return "CallRewrite";
 	default: return "Expr";
 	}
 }
@@ -1391,7 +1392,9 @@ void asCASTDump(const asCASTContext& context, asCString& out)
 		{
 			if( const asCDecl* target = context.GetDecl(expr->resolvedDecl) )
 			{
-				const bool handleCallee = (expr->kind == asAST_EXPR_CALL || expr->kind == asAST_EXPR_CONSTRUCT)
+				const bool handleCallee = (expr->kind == asAST_EXPR_CALL
+						|| expr->kind == asAST_EXPR_CONSTRUCT
+						|| expr->kind == asAST_EXPR_CALL_REWRITE)
 					&& (target->kind == asAST_DECL_PARAM || target->kind == asAST_DECL_VAR)
 					&& target->name.GetLength() != 0;
 				callee = handleCallee
@@ -1400,7 +1403,9 @@ void asCASTDump(const asCASTContext& context, asCString& out)
 			}
 		}
 		asCString line;
-		if( expr->kind == asAST_EXPR_CALL || expr->kind == asAST_EXPR_CONSTRUCT )
+		if( expr->kind == asAST_EXPR_CALL
+			|| expr->kind == asAST_EXPR_CONSTRUCT
+			|| expr->kind == asAST_EXPR_CALL_REWRITE )
 		{
 			asCString argsDump;
 			for( asUINT c = 0; c < expr->children.GetLength(); ++c )
@@ -1476,7 +1481,8 @@ void asCASTDump(const asCASTContext& context, asCString& out)
 					argsDump.AddressOf() ? argsDump.AddressOf() : "");
 			}
 			if( expr->kind == asAST_EXPR_CALL
-				|| expr->kind == asAST_EXPR_CONSTRUCT )
+				|| expr->kind == asAST_EXPR_CONSTRUCT
+				|| expr->kind == asAST_EXPR_CALL_REWRITE )
 			{
 				if( line.GetLength() && line[line.GetLength() - 1] == '\n' )
 				{

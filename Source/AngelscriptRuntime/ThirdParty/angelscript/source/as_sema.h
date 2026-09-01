@@ -1597,6 +1597,10 @@ public:
 	void AddDiagnostic(const char* text);
 	void AddDiagnostic(const char* text, const asCSourceRange& range);
 private:
+	// Compile-out call dispositions discard authored operand subtrees before the
+	// deferred-resolution pass. Remove only diagnostics and retry records wholly
+	// owned by that subtree; retained operands keep their normal Sema obligations.
+	void DiscardSemanticSubtree(asASTExprId expression);
 	void RefreshCanonicalTemplateDeclarations();
 	void RefreshCanonicalRegisteredTypeDeclarations();
 	const asSCanonicalRegisteredTypeDeclarationFact*

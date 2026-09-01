@@ -4,9 +4,11 @@
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheASTBodySidecar
 {
-	// Must match asAST_SIDECAR_SCHEMA_VERSION in the maintained fork. V11 admits
-	// pointer-free CallArgument records on ordinary CONSTRUCT as well as CALL;
-	// list-pattern construction remains the separate aggregate protocol. V10
+	// Must match asAST_SIDECAR_SCHEMA_VERSION in the maintained fork. V12 admits
+	// the append-only CallRewrite Expr kind plus its retained first-value/receiver
+	// CallArgument relation. V11 admits pointer-free CallArgument records on
+	// ordinary CONSTRUCT as well as CALL; list-pattern construction remains the
+	// separate aggregate protocol. V10
 	// added the sealed ParamDecl formal ordinal. V9 added pointer-free
 	// Sema-authored CallArgument records. V8 added pointer-free record-owned
 	// method-relation triples. V7 added the pointer-free Sema-authored Canonical
@@ -16,7 +18,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptCacheASTBodySidecar
 	// added the sealed class-layout and constant-value facts
 	// consumed by Cache V2; accepting the old V2 number here makes the Runtime
 	// wrapper reject every valid current DTO after the fork encoder verified it.
-	static constexpr uint16 SchemaVersion = 11;
+	static constexpr uint16 SchemaVersion = 12;
 
 	FString FunctionKey;
 	FString Profile;

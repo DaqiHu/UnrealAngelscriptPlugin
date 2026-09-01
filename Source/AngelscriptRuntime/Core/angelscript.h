@@ -1081,6 +1081,12 @@ enum asEASTExprKind : asBYTE
 	// seals the setter declaration and a single-evaluation opaque receiver; a
 	// backend may allocate the out temporary and perform only that write-back.
 	asAST_EXPR_DEFERRED_OUT,
+	// Append-only non-executable call-rewrite expression. Registration-time
+	// compile-out dispositions are projected onto Canonical declarations, then
+	// Sema seals one of the verifier-defined literal/edge shapes on this node.
+	// Backends consume only that final value/void/receiver expression and never
+	// consult a live Runtime function's compileOutType.
+	asAST_EXPR_CALL_REWRITE,
 };
 
 enum asEASTTypeKind : asBYTE
@@ -1189,6 +1195,12 @@ enum asEASTDeclTrait : asDWORD
 	// Availability of a declaration in editor-only source. Runtime asTRAIT_EDITOR_ONLY
 	// is a current-generation projection; this Canonical bit is the sealed fact.
 	asAST_TRAIT_EDITOR_ONLY = 1u << 20,
+	// Registered source-language call rewrites. Exactly zero or one disposition
+	// may be present on a callable declaration. These are pointer-free semantic
+	// facts; compileOutType remains only the current Runtime registration input.
+	asAST_TRAIT_COMPILE_OUT_ENTIRELY = 1u << 21,
+	asAST_TRAIT_REPLACE_WITH_FIRST_PARAM = 1u << 22,
+	asAST_TRAIT_COMPILE_OUT_AS_METHOD_CHAIN = 1u << 23,
 };
 
 struct asSASTSourceLocation

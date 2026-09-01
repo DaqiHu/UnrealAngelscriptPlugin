@@ -1419,6 +1419,40 @@ static asCQualType CanonicalRuntimeParameterType(
 		bridge, context, function->parameterTypes[parameterIndex], passing);
 }
 
+static const asDWORD CANONICAL_COMPILE_OUT_DISPOSITION_MASK =
+	asAST_TRAIT_COMPILE_OUT_ENTIRELY
+	| asAST_TRAIT_REPLACE_WITH_FIRST_PARAM
+	| asAST_TRAIT_COMPILE_OUT_AS_METHOD_CHAIN;
+
+static asDWORD CanonicalCompileOutDisposition(
+	const asCScriptFunction* function)
+{
+	if( function == 0 )
+	{
+		return 0;
+	}
+	switch( function->compileOutType )
+	{
+	case asECompileOutType::CompileCalls:
+		return 0;
+	case asECompileOutType::CompileOutEntirely:
+		return asAST_TRAIT_COMPILE_OUT_ENTIRELY;
+	case asECompileOutType::ReplaceWithFirstParam:
+		return asAST_TRAIT_REPLACE_WITH_FIRST_PARAM;
+	case asECompileOutType::CompileOutAsMethodChain:
+		return asAST_TRAIT_COMPILE_OUT_AS_METHOD_CHAIN;
+	default:
+		return 0;
+	}
+}
+
+static asDWORD CanonicalCompileOutDisposition(const asCDecl* declaration)
+{
+	return declaration != 0
+		? declaration->traits & CANONICAL_COMPILE_OUT_DISPOSITION_MASK
+		: 0;
+}
+
 static bool PublishNativeFunctionDeclarationIdentity(
 	asCSema& sema,
 	asCASTContext& context,
@@ -1443,6 +1477,29 @@ static bool PublishNativeFunctionDeclarationIdentity(
 			function->canonicalASTStableDeclKey.AddressOf(),
 			decl->stableKey.AddressOf());
 		sema.AddDiagnostic(detail.AddressOf());
+		return false;
+	}
+	const asDWORD projectedDisposition =
+		CanonicalCompileOutDisposition(function);
+	const asDWORD existingDisposition =
+		CanonicalCompileOutDisposition(decl);
+	if( existingDisposition != 0
+		&& existingDisposition != projectedDisposition )
+	{
+		asCString detail;
+		detail.Format(
+			"native-function-canonical-compile-out-conflict:function=%s existing=%u projected=%u",
+			function->GetDeclaration(false, true, false),
+			static_cast<unsigned int>(existingDisposition),
+			static_cast<unsigned int>(projectedDisposition));
+		sema.AddDiagnostic(detail.AddressOf());
+		return false;
+	}
+	if( projectedDisposition != 0
+		&& context.AddDeclTrait(declaration, projectedDisposition)
+			!= asAST_VERIFY_OK )
+	{
+		sema.AddDiagnostic("native-function-canonical-compile-out-projection-failed");
 		return false;
 	}
 	function->canonicalASTStableDeclKey = decl->stableKey;
@@ -3164,6 +3221,65 @@ asASTExprId TryRewriteObjectConvOperator(
 	return asASTExprId();
 }
 
+static bool CanonicalSourceRangeContains(
+	const asCSourceRange& owner,
+	const asCSourceRange& nested)
+{
+	return owner.IsValid() && nested.IsValid()
+		&& owner.begin.fileID == nested.begin.fileID
+		&& owner.end.fileID == nested.end.fileID
+		&& owner.begin.offset <= nested.begin.offset
+		&& owner.end.offset >= nested.end.offset;
+}
+
+void asCSema::DiscardSemanticSubtree(asASTExprId expression)
+{
+	const asCExpr* const discarded = context.GetExpr(expression);
+	if( discarded == 0 || !discarded->range.IsValid() )
+	{
+		return;
+	}
+	for( asUINT diagnosticIndex = diagnostics.GetLength();
+		diagnosticIndex > 0; --diagnosticIndex )
+	{
+		const asUINT index = diagnosticIndex - 1;
+		if( index < diagnosticRanges.GetLength()
+			&& CanonicalSourceRangeContains(
+				discarded->range, diagnosticRanges[index]) )
+		{
+			diagnostics.RemoveIndex(index);
+			diagnosticRanges.RemoveIndex(index);
+		}
+	}
+	for( asUINT callIndex = deferredCalls.GetLength(); callIndex > 0; --callIndex )
+	{
+		const asUINT index = callIndex - 1;
+		if( CanonicalSourceRangeContains(
+			discarded->range, deferredCalls[index].range) )
+		{
+			context.TombstoneDiscardedExpr(
+				deferredCalls[index].expression);
+			deferredCalls.RemoveIndex(index);
+		}
+	}
+	for( asUINT refIndex = deferredDeclRefs.GetLength(); refIndex > 0; --refIndex )
+	{
+		const asUINT index = refIndex - 1;
+		if( CanonicalSourceRangeContains(
+			discarded->range, deferredDeclRefs[index].range) )
+		{
+			context.TombstoneDiscardedExpr(
+				deferredDeclRefs[index].expression);
+			deferredDeclRefs.RemoveIndex(index);
+		}
+	}
+	// The discarded argument root may never have entered a deferred queue (for
+	// example, an unresolved DeclRef is itself the argument).  It must still be
+	// replaced by an inert append-only tombstone so verification cannot observe
+	// a dangling semantic node after the compile-out rewrite drops the edge.
+	context.TombstoneDiscardedExpr(expression);
+}
+
 asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const asCArray<asASTExprId>& inArgs, const asCSourceRange& range, asASTExprId implicitReceiver, const asCArray<asCString>* argumentNames, bool exactScope, const asCQualType* typeNameTarget)
 {
 	const asASTExprId originalReceiver = implicitReceiver;
@@ -3268,6 +3384,129 @@ asASTExprId asCSema::ActOnCallExpr(asASTDeclId owner, const char* name, const as
 				}
 				args = withReceiver;
 			}
+		}
+		const asDWORD compileOutDisposition =
+			CanonicalCompileOutDisposition(calleeDecl);
+		if( compileOutDisposition != 0 )
+		{
+			const bool hasReceiver = implicitReceiver.IsValid()
+				&& args.GetLength() != 0 && args[0] == implicitReceiver;
+			const asUINT authoredArgumentBegin = hasReceiver ? 1u : 0u;
+			const bool namesIncludeReceiver = argumentNames != 0
+				&& argumentNames->GetLength() == args.GetLength();
+			auto DiscardAuthoredArguments = [this, &args, authoredArgumentBegin](
+				asUINT retainedIndex)
+			{
+				for( asUINT argumentIndex = authoredArgumentBegin;
+					argumentIndex < args.GetLength(); ++argumentIndex )
+				{
+					if( argumentIndex != retainedIndex )
+					{
+						DiscardSemanticSubtree(args[argumentIndex]);
+					}
+				}
+			};
+
+			if( compileOutDisposition == asAST_TRAIT_COMPILE_OUT_ENTIRELY )
+			{
+				DiscardAuthoredArguments(asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL);
+				const asASTExprId rewrite = context.CreateExpr(
+					asAST_EXPR_CALL_REWRITE,
+					context.InternPrimitive(ttVoid, 0),
+					asAST_VALUE_PRVALUE,
+					range);
+				context.SetResolvedDecl(rewrite, callee);
+				context.SetLiteral(rewrite, "compile-out-entirely");
+				return rewrite;
+			}
+
+			if( compileOutDisposition
+				== asAST_TRAIT_COMPILE_OUT_AS_METHOD_CHAIN )
+			{
+				DiscardAuthoredArguments(asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL);
+				const asCExpr* const receiver =
+					context.GetExpr(implicitReceiver);
+				if( calleeDecl == 0 || calleeDecl->kind != asAST_DECL_METHOD
+					|| receiver == 0 )
+				{
+					AddDiagnostic(
+						"compile-out-method-chain-receiver-invalid", range);
+					return asASTExprId();
+				}
+				const asASTExprId rewrite = context.CreateExpr(
+					asAST_EXPR_CALL_REWRITE,
+					receiver->type,
+					receiver->valueCategory,
+					range);
+				context.SetResolvedDecl(rewrite, callee);
+				context.SetLiteral(rewrite, "compile-out-method-chain");
+				context.SetExprReceiver(rewrite, implicitReceiver);
+				context.AddExprChild(rewrite, implicitReceiver);
+				asSASTCallArgument retained;
+				retained.expression = implicitReceiver;
+				retained.formalType = receiver->type;
+				retained.range = receiver->range;
+				retained.origin = asAST_CALL_ARGUMENT_IMPLICIT_RECEIVER;
+				context.AddCallArgument(rewrite, retained);
+				return rewrite;
+			}
+
+			const asCDecl* const firstFormal =
+				context.GetFormalDecl(callee, 0);
+			asUINT selectedArgument = asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL;
+			asCString selectedName;
+			for( asUINT argumentIndex = authoredArgumentBegin;
+				argumentIndex < args.GetLength(); ++argumentIndex )
+			{
+				const asUINT authoredOrdinal =
+					argumentIndex - authoredArgumentBegin;
+				const asUINT nameIndex = namesIncludeReceiver
+					? argumentIndex : authoredOrdinal;
+				const asCString authoredName = argumentNames != 0
+					&& nameIndex < argumentNames->GetLength()
+						? (*argumentNames)[nameIndex] : asCString();
+				if( authoredName.GetLength() != 0
+					&& (firstFormal == 0
+						|| firstFormal->name.GetLength() == 0
+						|| !firstFormal->name.Equals(authoredName)) )
+				{
+					continue;
+				}
+				selectedArgument = argumentIndex;
+				selectedName = authoredName;
+				break;
+			}
+			const asCExpr* const retainedExpression =
+				selectedArgument != asAST_CALL_ARGUMENT_NO_SOURCE_ORDINAL
+					? context.GetExpr(args[selectedArgument]) : 0;
+			if( firstFormal == 0 || retainedExpression == 0 )
+			{
+				AddDiagnostic("compile-out-first-param-missing", range);
+				return asASTExprId();
+			}
+			DiscardAuthoredArguments(selectedArgument);
+			const asASTExprId rewrite = context.CreateExpr(
+				asAST_EXPR_CALL_REWRITE,
+				retainedExpression->type,
+				retainedExpression->valueCategory,
+				range);
+			context.SetResolvedDecl(rewrite, callee);
+			context.SetLiteral(rewrite, "compile-out-first-param");
+			context.AddExprChild(rewrite, args[selectedArgument]);
+			asSASTCallArgument retained;
+			retained.expression = args[selectedArgument];
+			retained.formal = firstFormal->id;
+			retained.formalType = firstFormal->type;
+			retained.range = retainedExpression->range;
+			retained.authoredName = selectedName;
+			retained.formalIndex = 0;
+			retained.sourceOrdinal =
+				selectedArgument - authoredArgumentBegin;
+			retained.origin = selectedName.GetLength() != 0
+				? asAST_CALL_ARGUMENT_NAMED
+				: asAST_CALL_ARGUMENT_POSITIONAL;
+			context.AddCallArgument(rewrite, retained);
+			return rewrite;
 		}
 		asCArray<asCString> names;
 		if( argumentNames != 0 )
@@ -8237,6 +8476,74 @@ static asASTDeclId FindBestCallee(asCASTContext& context, asASTDeclId owner,
 				}
 			}
 		}
+	}
+	// The maintained source language defines compile-out as a callable-family
+	// rewrite, before argument compilation and overload ranking. Preserve that
+	// contract in Sema: all visible callables must agree, and a non-executable
+	// family selects a stable representative declaration without inspecting
+	// operands that the rewrite will discard.
+	asASTDeclId rewriteRepresentative;
+	asDWORD rewriteDisposition = 0;
+	bool sawCallable = false;
+	bool dispositionMismatch = false;
+	for( asUINT hitIndex = 0; hitIndex < hits.GetLength(); ++hitIndex )
+	{
+		const asCDecl* const candidate = context.GetDecl(hits[hitIndex]);
+		if( candidate == 0 || name == 0 || !candidate->name.Equals(name)
+			|| (candidate->kind != asAST_DECL_FUNCTION
+				&& candidate->kind != asAST_DECL_METHOD
+				&& candidate->kind != asAST_DECL_CONSTRUCTOR
+				&& candidate->kind != asAST_DECL_MIXIN
+				&& candidate->kind != asAST_DECL_IMPORT) )
+		{
+			continue;
+		}
+		const asDWORD disposition =
+			CanonicalCompileOutDisposition(candidate);
+		if( !sawCallable )
+		{
+			sawCallable = true;
+			rewriteDisposition = disposition;
+		}
+		else if( disposition != rewriteDisposition )
+		{
+			dispositionMismatch = true;
+		}
+		if( disposition != 0 )
+		{
+			const asCDecl* const current =
+				context.GetDecl(rewriteRepresentative);
+			if( current == 0
+				|| candidate->stableKey.Compare(current->stableKey) < 0 )
+			{
+				rewriteRepresentative = candidate->id;
+			}
+		}
+	}
+	if( dispositionMismatch )
+	{
+		if( sema != 0 )
+		{
+			asCString detail = "compile-out-disposition-mismatch:";
+			detail += name ? name : "";
+			const asCSourceRange diagnosticRange =
+				DiagnosticRangeFromCallArguments(
+					context, args, implicitReceiver);
+			if( diagnosticRange.IsValid() )
+			{
+				sema->AddDiagnostic(detail.AddressOf(), diagnosticRange);
+			}
+			else
+			{
+				sema->AddDiagnostic(detail.AddressOf());
+			}
+		}
+		return asASTDeclId();
+	}
+	if( sawCallable && rewriteDisposition != 0
+		&& rewriteRepresentative.IsValid() )
+	{
+		return rewriteRepresentative;
 	}
 	for( asUINT i = 0; i < hits.GetLength(); ++i )
 	{

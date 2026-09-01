@@ -476,6 +476,7 @@ static bool SupportsCallArgumentRelation(
 	const asCString& literal)
 {
 	return kind == asAST_EXPR_CALL
+		|| kind == asAST_EXPR_CALL_REWRITE
 		|| (kind == asAST_EXPR_CONSTRUCT
 			&& !literal.Equals("list-pattern"));
 }
