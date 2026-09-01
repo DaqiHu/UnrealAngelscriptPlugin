@@ -36,6 +36,39 @@ static void ProdCanonicalHandleRelease(asIScriptGeneric*)
 {
 }
 
+struct FProdWorldContextHost
+{
+	int32 Unused = 0;
+};
+
+static FProdWorldContextHost GProdWorldContextHost;
+static int32 GProdWorldContextInjectCount = 0;
+
+static void ProdInjectWorldContextGeneric(asIScriptGeneric* Generic)
+{
+	++GProdWorldContextInjectCount;
+	if (Generic != nullptr)
+	{
+		Generic->SetReturnAddress(&GProdWorldContextHost);
+	}
+}
+
+static void ProdWithWorldGeneric(asIScriptGeneric* Generic)
+{
+	if (Generic == nullptr)
+	{
+		return;
+	}
+	void* const Host = Generic->GetArgAddress(0);
+	const asDWORD Visible = Generic->GetArgDWord(1);
+	if (Host == &GProdWorldContextHost)
+	{
+		Generic->SetReturnDWord(Visible + 40);
+		return;
+	}
+	Generic->SetReturnDWord(0);
+}
+
 struct FProdDefaultGlobalValue
 {
 	int32 Stored = 0;
@@ -10041,6 +10074,167 @@ public:
 			ExecuteStatus == asEXECUTION_FINISHED && Value == 42,
 			*FString::Printf(
 				TEXT("Canonical CodeGen must execute !false as true and return 42; status=%d Entry()=%d exception=%s"),
+				ExecuteStatus,
+				Value,
+				*Exception)));
+	}
+
+	TEST_METHOD(CanonicalWorldContextHiddenCallExecutesWithoutLegacyCompiler)
+	{
+		GProdWorldContextInjectCount = 0;
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 WorldContext execute fixture selects CANONICAL")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterObjectType(
+				"WorldContextHost",
+				0,
+				asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE) >= 0,
+			TEXT("WorldContext host type must register")));
+		ASSERT_THAT(IsTrue(
+			ScriptEngine->RegisterGlobalFunction(
+				"WorldContextHost __WorldContext()",
+				asFUNCTION(ProdInjectWorldContextGeneric),
+				asCALL_GENERIC) >= 0,
+			TEXT("__WorldContext injector must register")));
+		const int WithWorldId = ScriptEngine->RegisterGlobalFunction(
+			"int WithWorld(WorldContextHost WorldContext, int Visible)",
+			asFUNCTION(ProdWithWorldGeneric),
+			asCALL_GENERIC);
+		ASSERT_THAT(IsTrue(WithWorldId >= 0, TEXT("WithWorld must register")));
+		asCScriptFunction* const WithWorldFn =
+			static_cast<asCScriptFunction*>(ScriptEngine->GetFunctionById(WithWorldId));
+		ASSERT_THAT(IsNotNull(WithWorldFn, TEXT("WithWorld script function")));
+		if (WithWorldFn != nullptr)
+		{
+			WithWorldFn->hiddenArgumentIndex = 0;
+			WithWorldFn->hiddenArgumentDefault = "__WorldContext()";
+		}
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdWorldContextHidden", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			int Entry()
+			{
+				return WithWorld(3);
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdWorldContextHidden.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("WithWorld(3) must publish Canonical CodeGen, not leftover hidden WorldContext or asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("WorldContext hidden Call Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("WorldContext hidden Call must not construct asCCompiler")));
+
+		int32 Value = 0;
+		FString Exception;
+		const int ExecuteStatus = AngelscriptNativeTestSupport::CanonicalExecuteIntStatus(
+			Engine.Get(), Module, "int Entry()", Value, Exception);
+		ASSERT_THAT(IsTrue(
+			ExecuteStatus == asEXECUTION_FINISHED
+				&& Value == 43
+				&& GProdWorldContextInjectCount == 1,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must execute injected __WorldContext() then WithWorld(3) as 43; status=%d Entry()=%d injects=%d exception=%s"),
+				ExecuteStatus,
+				Value,
+				GProdWorldContextInjectCount,
+				*Exception)));
+	}
+
+	TEST_METHOD(CanonicalLogicalAndOpImplConvExecutesWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 logical-and opImplConv CodeGen fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"ProdLogicalAndOpImplConv", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				bool opImplConv() const
+				{
+					return Stored != 0;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				return Object && true ? 42 : 0;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"ProdLogicalAndOpImplConv.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Object && true must publish Canonical CodeGen, not leftover Logical of T or asCCompiler; result=%d publisher=%d legacy=%u messages=%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("logical-and opImplConv Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("logical-and opImplConv must not construct asCCompiler")));
+
+		int32 Value = 0;
+		FString Exception;
+		const int ExecuteStatus = AngelscriptNativeTestSupport::CanonicalExecuteIntStatus(
+			Engine.Get(), Module, "int Entry()", Value, Exception);
+		ASSERT_THAT(IsTrue(
+			ExecuteStatus == asEXECUTION_FINISHED && Value == 0,
+			*FString::Printf(
+				TEXT("Canonical CodeGen must skip Object && true when opImplConv of Stored=0 is false, not leftover object-as-true; status=%d Entry()=%d exception=%s"),
 				ExecuteStatus,
 				Value,
 				*Exception)));

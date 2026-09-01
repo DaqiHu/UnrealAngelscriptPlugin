@@ -5258,6 +5258,18 @@ public:
 			*FString::Printf(
 				TEXT("formal one must remain the authored positional 3. dump:\n%s"),
 				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("WorldContext hidden Call Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("WorldContext hidden Call must not construct asCCompiler")));
 	}
 
 	TEST_METHOD(CanonicalMixinCallSealsImplicitReceiverArgument)
@@ -13618,6 +13630,148 @@ public:
 				&& CondType->primitiveToken == ttBool,
 			*FString::Printf(
 				TEXT("!Flag must be Unary ! typed bool, not leftover Unary ! typed int. dump:\n%s"),
+				*Dump)));
+	}
+
+	TEST_METHOD(CanonicalLogicalAndRewritesValueOpImplConvWithoutLegacyCompiler)
+	{
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine = static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("5.3 logical-and opImplConv fixture selects CANONICAL")));
+
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"SemaLogicalAndOpImplConv", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module));
+		ASSERT_THAT(AreEqual(0, Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string ScriptSource = ASTEST_AS_ANSI(R"AS(
+			struct T
+			{
+				int Stored = 0;
+
+				bool opImplConv() const
+				{
+					return Stored != 0;
+				}
+			}
+
+			int Entry()
+			{
+				T Object;
+				return Object && true ? 42 : 0;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"SemaLogicalAndOpImplConv.as",
+			ScriptSource.c_str(),
+			static_cast<unsigned int>(ScriptSource.size()))));
+		asCModule* const Internal = static_cast<asCModule*>(Module);
+		const int BuildResult = Module->Build();
+		const FString Messages =
+			AngelscriptNativeTestSupport::CollectMessages(Engine.GetMessages());
+		asCString RawDump;
+		const asCASTContext* const Context =
+			Internal != nullptr ? Internal->GetCanonicalASTContext() : nullptr;
+		if (Context != nullptr)
+		{
+			asCASTDump(*const_cast<asCASTContext*>(Context), RawDump);
+		}
+		const FString Dump =
+			AngelscriptNativeTestSupport::CanonicalAstDumpToFString(RawDump);
+		ASSERT_THAT(AreEqual(0, BuildResult,
+			*FString::Printf(
+				TEXT("Object && true must compile from sealed T::opImplConv / Canonical CodeGen; result=%d publisher=%d legacy=%u messages=%s dump:\n%s"),
+				BuildResult,
+				Internal != nullptr ? static_cast<int>(Internal->GetLastBytecodePublisher()) : -1,
+				Internal != nullptr ? Internal->GetLastLegacyCompilerInvocationCount() : 0u,
+				*Messages,
+				*Dump)));
+		ASSERT_THAT(AreEqual(
+			asBYTECODE_PUBLISHER_CANONICAL_CODEGEN,
+			Internal != nullptr
+				? Internal->GetLastBytecodePublisher()
+				: asBYTECODE_PUBLISHER_NONE,
+			TEXT("logical-and opImplConv Bytecode must be CodeGen, not asCCompiler")));
+		ASSERT_THAT(AreEqual(
+			static_cast<asUINT>(0),
+			Internal != nullptr
+				? Internal->GetLastLegacyCompilerInvocationCount()
+				: 1u,
+			TEXT("logical-and opImplConv must not construct asCCompiler")));
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("retain policy must keep the sealed Canonical AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+
+		const asCDecl* const Entry =
+			CanonicalASTSemaAuthorityTest::FindNamedFunctionDecl(
+				*const_cast<asCASTContext*>(Context), "Entry");
+		const asCStmt* const ReturnStmt = Entry != nullptr
+			? CanonicalASTSemaAuthorityTest::FindOwnedStmtOfKind(
+				*const_cast<asCASTContext*>(Context),
+				Entry->id,
+				asAST_STMT_RETURN)
+			: nullptr;
+		const asCExpr* Returned = ReturnStmt != nullptr
+			? Context->GetExpr(ReturnStmt->expr) : nullptr;
+		while (Returned != nullptr
+			&& (Returned->kind == asAST_EXPR_CLEANUP
+				|| Returned->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& Returned->children.GetLength() != 0)
+		{
+			Returned = Context->GetExpr(
+				Returned->children[Returned->children.GetLength() - 1]);
+		}
+		const asCExpr* Cond = Returned != nullptr
+			&& Returned->kind == asAST_EXPR_CONDITIONAL
+			&& Returned->children.GetLength() != 0
+			? Context->GetExpr(Returned->children[0]) : nullptr;
+		while (Cond != nullptr && Cond->kind == asAST_EXPR_CONVERSION
+			&& Cond->children.GetLength() == 1)
+		{
+			Cond = Context->GetExpr(Cond->children[0]);
+		}
+		const asCExpr* AndLhs = Cond != nullptr
+			&& Cond->kind == asAST_EXPR_LOGICAL
+			&& Cond->literal.Equals("&&")
+			&& Cond->children.GetLength() >= 1
+			? Context->GetExpr(Cond->children[0]) : nullptr;
+		while (AndLhs != nullptr
+			&& (AndLhs->kind == asAST_EXPR_CONVERSION
+				|| AndLhs->kind == asAST_EXPR_MATERIALIZE_TEMPORARY)
+			&& AndLhs->children.GetLength() == 1)
+		{
+			AndLhs = Context->GetExpr(AndLhs->children[0]);
+		}
+		const asCDecl* const ConvCallee = AndLhs != nullptr
+			? Context->GetDecl(AndLhs->resolvedDecl) : nullptr;
+		bool bLeftoverAndOfT = false;
+		TArray<FString> Lines;
+		Dump.ParseIntoArrayLines(Lines);
+		for (const FString& Line : Lines)
+		{
+			if (Line.Contains(TEXT("kind=Logical")) && Line.Contains(TEXT("literal=&&"))
+				&& Line.Contains(TEXT("type=T")))
+			{
+				bLeftoverAndOfT = true;
+			}
+		}
+		ASSERT_THAT(IsTrue(
+			!bLeftoverAndOfT
+				&& Cond != nullptr
+				&& Cond->kind == asAST_EXPR_LOGICAL
+				&& Cond->literal.Equals("&&")
+				&& AndLhs != nullptr
+				&& AndLhs->kind == asAST_EXPR_CALL
+				&& ConvCallee != nullptr
+				&& ConvCallee->name.Equals("opImplConv"),
+			*FString::Printf(
+				TEXT("Object && true must be Logical && of T::opImplConv() bool, not leftover Logical of T. dump:\n%s"),
 				*Dump)));
 	}
 

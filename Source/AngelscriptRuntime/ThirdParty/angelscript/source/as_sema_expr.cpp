@@ -6791,11 +6791,24 @@ static bool IsComparisonOperator(const char* op)
 asASTExprId asCSema::ActOnLogicalExpr(asASTExprId lhs, const char* op, asASTExprId rhs, const asCSourceRange& range)
 {
 	const asCSourceRange ident = SpanExprRange(context, lhs, rhs, range);
+	// LEGACY CompileCondition converts VALUE objects with `bool opImplConv()`
+	// before `&&`/`||`. `Object && true` must be Logical of that Call, not
+	// leftover Logical && of T.
+	lhs = RewriteValueToBoolViaOpImplConv(
+		*this, context, engine, lhs, ident);
+	if( rhs.IsValid() )
+	{
+		rhs = RewriteValueToBoolViaOpImplConv(
+			*this, context, engine, rhs, ident);
+	}
 	const asASTExprId existing = FindExistingExpr(context, asAST_EXPR_LOGICAL, ident);
 	if( existing.IsValid() )
 	{
 		const asCExpr* existingExpr = context.GetExpr(existing);
-		if( existingExpr && existingExpr->literal.Equals(op ? op : "") )
+		if( existingExpr && existingExpr->literal.Equals(op ? op : "")
+			&& existingExpr->children.GetLength() >= 2
+			&& existingExpr->children[0].value == lhs.value
+			&& existingExpr->children[1].value == rhs.value )
 		{
 			return existing;
 		}
