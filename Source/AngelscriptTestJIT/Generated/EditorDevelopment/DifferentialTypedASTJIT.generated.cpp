@@ -4,7 +4,7 @@
  * Backend            : TypedASTJIT
  * Declaration        : int DifferentialScalarValue(const int, const int)
  * StableFunctionKey  : bcc16a42d6581e28f5fd897a3719e70c37469f91213349e84390b2ae478ef35b
- * OriginalSymbolSet  : ASJIT_bcc16a42d6581e28f5fd897a3719e70c37469f91213349e84390b2ae478ef35b_df81f198ae9cc8880f4b4e416ec96091ac1043eb47e016199fc5636cc2f4cac1
+ * OriginalSymbolSet  : ASJIT_bcc16a42d6581e28f5fd897a3719e70c37469f91213349e84390b2ae478ef35b_e8048493f15f25a9795b805ece588735db7476836c7b75f94df6059f532def96
  * TestSymbolSet      : AS_Test_Differential_TypedAST_DifferentialScalarValue
  * CleanupPlan       : VerifiedEmpty (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -24,10 +24,10 @@
 /*
  * AngelScript Static JIT Function
  * Declaration       : int DifferentialScalarValue(const int, const int)
- * Source             : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:14:6
+ * Source             : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:14:2
  * StableFunctionKey  : bcc16a42d6581e28f5fd897a3719e70c37469f91213349e84390b2ae478ef35b
- * ExecutionHash      : df81f198ae9cc8880f4b4e416ec96091ac1043eb47e016199fc5636cc2f4cac1
- * DebugHash          : 4d5aca58287100e22b66d35028d96ff3e762893097e1f897fd643f8d6f8f3d94
+ * ExecutionHash      : e8048493f15f25a9795b805ece588735db7476836c7b75f94df6059f532def96
+ * DebugHash          : ecf76d4c9b112b12596ea777d3e92bd73c591af07200b418e57b4271fa199f5c
  * EntryAbiHash       : dabb76ccb243078a57121d4c3a40ed732a70a68cca7584d9e9320a1fd5a679c4
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
@@ -67,7 +67,7 @@ static int32 AS_Test_Differential_TypedAST_DifferentialScalarValue_TypedBody(
 }
 
 // AS Function : int DifferentialScalarValue(const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:14:6
+// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:14:2
 // JIT Entry   : Raw
 int32 AS_Test_Differential_TypedAST_DifferentialScalarValue_Raw(FScriptExecution& Execution, void* Object, asDWORD p_0, asDWORD p_1)
 {
@@ -88,7 +88,7 @@ int32 AS_Test_Differential_TypedAST_DifferentialScalarValue_Raw(FScriptExecution
 }
 
 // AS Function : int DifferentialScalarValue(const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:14:6
+// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:14:2
 // JIT Entry   : VM
 void AS_Test_Differential_TypedAST_DifferentialScalarValue_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
@@ -99,7 +99,7 @@ void AS_Test_Differential_TypedAST_DifferentialScalarValue_VM(FScriptExecution& 
 }
 
 // AS Function : int DifferentialScalarValue(const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:14:6
+// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:14:2
 // JIT Entry   : Parms
 void AS_Test_Differential_TypedAST_DifferentialScalarValue_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
@@ -138,7 +138,7 @@ namespace
 				TEXT("int DifferentialScalarValue(const int, const int)"),
 				TEXT("/Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as"),
 				14u,
-				6u,
+				2u,
 				AngelscriptTestJITProbes::EIsolatedDifferentialCleanupPlanState::VerifiedEmpty,
 				0u,
 				FTypedASTJITDifferentialEntryRegistrationReferenceSlots,

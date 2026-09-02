@@ -4,7 +4,7 @@
  * Backend            : TypedASTJIT
  * Declaration        : float SemanticPowerBoundary(const float, const float)
  * StableFunctionKey  : 23f1e6dec794e6d7cc42917a3dd1fc6f8bae9cee3cb91a0bb0338624ad3b6b67
- * OriginalSymbolSet  : ASJIT_23f1e6dec794e6d7cc42917a3dd1fc6f8bae9cee3cb91a0bb0338624ad3b6b67_b949dc71a767ba38728abfed5206f2c8c6158a7a0a8f4605d6d47f473c3e3ffa
+ * OriginalSymbolSet  : ASJIT_23f1e6dec794e6d7cc42917a3dd1fc6f8bae9cee3cb91a0bb0338624ad3b6b67_9dbf977650aa4edb4b93031a8dd0deaeb606af68a3eed3cab50d0fbdf8b0aa62
  * TestSymbolSet      : AS_Test_Differential_TypedAST_SemanticPowerBoundary
  * CleanupPlan       : VerifiedEmpty (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -24,10 +24,10 @@
 /*
  * AngelScript Static JIT Function
  * Declaration       : float SemanticPowerBoundary(const float, const float)
- * Source             : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:73:10
+ * Source             : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:73:2
  * StableFunctionKey  : 23f1e6dec794e6d7cc42917a3dd1fc6f8bae9cee3cb91a0bb0338624ad3b6b67
- * ExecutionHash      : b949dc71a767ba38728abfed5206f2c8c6158a7a0a8f4605d6d47f473c3e3ffa
- * DebugHash          : 798475a1356cd9ede000e9e257db5305fb567fcc5b26c13d548682ff2b212846
+ * ExecutionHash      : 9dbf977650aa4edb4b93031a8dd0deaeb606af68a3eed3cab50d0fbdf8b0aa62
+ * DebugHash          : 740f5496c25fc7d3489cdb4b02baf5f276ff7221015973e38360b2812a97c9fe
  * EntryAbiHash       : 5bdf2107db2403a739f0c1ec988a215ef8d4496714c3a85248de4057037ca025
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
@@ -36,31 +36,31 @@
 static double AS_Test_Differential_TypedAST_SemanticPowerBoundary_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const double as_ast_d25,
-	const double as_ast_d26);
+	const double as_ast_d20,
+	const double as_ast_d21);
 
 static double AS_Test_Differential_TypedAST_SemanticPowerBoundary_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const double as_ast_d25,
-	const double as_ast_d26)
+	const double as_ast_d20,
+	const double as_ast_d21)
 {
 	{
 		TypedFrame.SetSourcePosition(77, 3);
 		return ([&]() -> double
 	{
 		TypedFrame.SetSourcePosition(77, 3);
-		const double as_ast_e70_left = as_ast_d25;
+		const double as_ast_e81_left = as_ast_d20;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return double{};
 		}
-		const double as_ast_e70_right = as_ast_d26;
+		const double as_ast_e81_right = as_ast_d21;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return double{};
 		}
-		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_ast_e70_left, as_ast_e70_right);
+		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_ast_e81_left, as_ast_e81_right);
 	}());
 	}
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
@@ -68,7 +68,7 @@ static double AS_Test_Differential_TypedAST_SemanticPowerBoundary_TypedBody(
 }
 
 // AS Function : float SemanticPowerBoundary(const float, const float)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:73:10
+// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:73:2
 // JIT Entry   : Raw
 double AS_Test_Differential_TypedAST_SemanticPowerBoundary_Raw(FScriptExecution& Execution, void* Object, double p_0, double p_1)
 {
@@ -89,7 +89,7 @@ double AS_Test_Differential_TypedAST_SemanticPowerBoundary_Raw(FScriptExecution&
 }
 
 // AS Function : float SemanticPowerBoundary(const float, const float)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:73:10
+// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:73:2
 // JIT Entry   : VM
 void AS_Test_Differential_TypedAST_SemanticPowerBoundary_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
@@ -100,7 +100,7 @@ void AS_Test_Differential_TypedAST_SemanticPowerBoundary_VM(FScriptExecution& Ex
 }
 
 // AS Function : float SemanticPowerBoundary(const float, const float)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:73:10
+// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:73:2
 // JIT Entry   : Parms
 void AS_Test_Differential_TypedAST_SemanticPowerBoundary_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
@@ -139,7 +139,7 @@ namespace
 				TEXT("float SemanticPowerBoundary(const float, const float)"),
 				TEXT("/Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as"),
 				73u,
-				10u,
+				2u,
 				AngelscriptTestJITProbes::EIsolatedDifferentialCleanupPlanState::VerifiedEmpty,
 				0u,
 				FTypedASTJITDifferentialEntryRegistrationReferenceSlots,

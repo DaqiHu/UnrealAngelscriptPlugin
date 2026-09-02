@@ -128,6 +128,7 @@ enum class EAngelscriptTypedASTJITLifetimeExitPlanFlags : uint32
 	Normal = 1u << 0,
 	Transfer = 1u << 1,
 	ForEach = 1u << 2,
+	FullExpression = 1u << 3,
 };
 ENUM_CLASS_FLAGS(EAngelscriptTypedASTJITLifetimeExitPlanFlags)
 

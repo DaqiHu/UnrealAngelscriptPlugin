@@ -956,6 +956,9 @@ namespace AngelscriptTypedASTJITCanonical_Private
 		case asAST_LIFETIME_EXIT_PLAN_FOREACH:
 			Flags |= EFlags::ForEach;
 			return true;
+		case asAST_LIFETIME_EXIT_PLAN_FULL_EXPRESSION:
+			Flags |= EFlags::FullExpression;
+			return true;
 		default:
 			return false;
 		}
@@ -977,7 +980,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 		RecordStableKeys.SetNum(LifetimeView.GetRecordCount());
 		TArray<asUINT> FunctionRecordIndices;
 		FAngelscriptArtifactCanonicalWriter ABIWriter(
-			TEXT("Angelscript.TypedASTJIT.CanonicalLifetimeABI.v2"));
+			TEXT("Angelscript.TypedASTJIT.CanonicalLifetimeABI.v3"));
 		ABIWriter.WriteUInt32(LifetimeView.GetProtocolRevision());
 
 		bool bHasPartialConstruction = false;
@@ -1029,6 +1032,57 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			const asCDecl* Storage = Record.subject.nodeClass
 				== asAST_LIFETIME_NODE_DECL
 				? Context.GetDecl(asASTDeclId(Record.subject.value)) : nullptr;
+			asCQualType StorageType = Storage != nullptr
+				? Storage->type : asCQualType();
+			if (Record.subjectKind == asAST_LIFETIME_SUBJECT_TEMPORARY)
+			{
+				const asCExpr* const Materialize =
+					Record.subject.nodeClass == asAST_LIFETIME_NODE_EXPR
+					? Context.GetExpr(
+						asASTExprId(Record.subject.value)) : nullptr;
+				const asCDecl* const Destructor =
+					Record.actionTarget.nodeClass == asAST_LIFETIME_NODE_DECL
+					? Context.GetDecl(
+						asASTDeclId(Record.actionTarget.value)) : nullptr;
+				const asCDecl* const DestructorOwner = Destructor != nullptr
+					? Context.GetDecl(Destructor->parent) : nullptr;
+				const asCType* const MaterializedType = Materialize != nullptr
+					&& Materialize->type.IsValid()
+					? Context.GetType(Materialize->type.type) : nullptr;
+				const asCStmt* const SemanticRegion =
+					Record.semanticRegion.nodeClass == asAST_LIFETIME_NODE_STMT
+					? Context.GetStmt(
+						asASTStmtId(Record.semanticRegion.value)) : nullptr;
+				if (Materialize == nullptr
+					|| Materialize->kind
+						!= asAST_EXPR_MATERIALIZE_TEMPORARY
+					|| Materialize->valueCategory != asAST_VALUE_XVALUE
+					|| Materialize->type.IsReference()
+					|| Materialize->type.IsHandle()
+					|| Record.activationPoint != Record.subject
+					|| Record.actionKind
+						!= asAST_LIFETIME_ACTION_DESTROY_VALUE
+					|| Record.phase != asAST_LIFETIME_PHASE_FULL_EXPRESSION
+					|| Record.supportedExitMask
+						!= (asAST_LIFETIME_EXIT_NORMAL
+							| asAST_LIFETIME_EXIT_EXCEPTION)
+					|| Destructor == nullptr
+					|| Destructor->kind != asAST_DECL_DESTRUCTOR
+					|| DestructorOwner == nullptr
+					|| DestructorOwner->kind != asAST_DECL_CLASS
+					|| MaterializedType == nullptr
+					|| MaterializedType->kind != asAST_TYPE_VALUE_OBJECT
+					|| !MaterializedType->stableKey.Equals(
+						DestructorOwner->stableKey)
+					|| SemanticRegion == nullptr
+					|| SemanticRegion->kind != asAST_STMT_EXPR
+					|| SemanticRegion->owner != FunctionDecl)
+				{
+					return false;
+				}
+				Storage = DestructorOwner;
+				StorageType = Materialize->type;
+			}
 			if (Record.subjectKind
 				== asAST_LIFETIME_SUBJECT_AGGREGATE_ELEMENT)
 			{
@@ -1041,6 +1095,8 @@ namespace AngelscriptTypedASTJITCanonical_Private
 						asASTDeclId(Record.actionTarget.value)) : nullptr;
 				Storage = ElementDestructor != nullptr
 					? Context.GetDecl(ElementDestructor->parent) : nullptr;
+				StorageType = Storage != nullptr
+					? Storage->type : asCQualType();
 				if (AggregatePlan == nullptr
 					|| AggregatePlan->semanticOwner != FunctionDecl
 					|| AggregatePlan->actionKind != Record.actionKind
@@ -1058,7 +1114,7 @@ namespace AngelscriptTypedASTJITCanonical_Private
 			}
 			if (Storage == nullptr
 				|| !WriteCanonicalLifetimeTypeIdentity(
-					ABIWriter, Context, Storage->type, Storage)
+					ABIWriter, Context, StorageType, Storage)
 				|| !WriteCanonicalLifetimeNodeStableIdentity(
 					ABIWriter, Context, Record.actionTarget))
 			{
@@ -1141,10 +1197,14 @@ namespace AngelscriptTypedASTJITCanonical_Private
 		OutFacts.LifetimeSummary.StableKey = StableWriter.FinalizeHash();
 		ABIWriter.WriteUInt32(static_cast<uint32>(
 			OutFacts.LifetimeSummary.ActionFlags));
+		ABIWriter.WriteUInt32(static_cast<uint32>(
+			OutFacts.LifetimeSummary.ExitPlanFlags));
 		ABIWriter.WriteUInt32(
 			OutFacts.LifetimeSummary.SupportedExitMask);
 		ABIWriter.WriteUInt32(
 			OutFacts.LifetimeSummary.RecordCount);
+		ABIWriter.WriteUInt32(
+			OutFacts.LifetimeSummary.ExitPlanCount);
 		OutFacts.LifetimeSummary.ABIKey = ABIWriter.FinalizeHash();
 		OutFacts.LifetimeSummary.bNativeObjectFrameABIAvailable =
 			OutFacts.LifetimeSummary.RecordCount == 0;
@@ -2936,9 +2996,15 @@ EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
 			EnumHasAnyFlags(
 				LifetimeFacts.LifetimeSummary.ActionFlags,
 				EAngelscriptTypedASTJITLifetimeActionFlags::DestroyElement);
-		const TCHAR* const Prefix = bRequiresAggregateElementFrame
-			? TEXT("AuthenticatedAggregatePartialConstructionRequiresNativeElementFrameABI")
-			: TEXT("AuthenticatedLifetimeRequiresNativeObjectFrameABI");
+		const bool bRequiresFullExpressionTemporaryFrame =
+			EnumHasAnyFlags(
+				LifetimeFacts.LifetimeSummary.ExitPlanFlags,
+				EAngelscriptTypedASTJITLifetimeExitPlanFlags::FullExpression);
+		const TCHAR* const Prefix = bRequiresFullExpressionTemporaryFrame
+			? TEXT("AuthenticatedFullExpressionTemporaryRequiresNativeObjectFrameABI")
+			: bRequiresAggregateElementFrame
+				? TEXT("AuthenticatedAggregatePartialConstructionRequiresNativeElementFrameABI")
+				: TEXT("AuthenticatedLifetimeRequiresNativeObjectFrameABI");
 		return Reject(
 			EFallback::UnsupportedLifetime,
 			MakeSpan(*Input.SealedAST, FunctionDecl->range),

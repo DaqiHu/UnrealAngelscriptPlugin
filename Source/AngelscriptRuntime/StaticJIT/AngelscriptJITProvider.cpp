@@ -266,7 +266,7 @@ FAngelscriptHash256 FAngelscriptJITProviderManifest::BuildDiagnosticsDigest(
 	const FAngelscriptJITProviderDiagnostics& Diagnostics)
 {
 	FAngelscriptArtifactCanonicalWriter Writer(
-		TEXT("jit-provider-diagnostics-v2"));
+		TEXT("jit-provider-diagnostics-v3"));
 	Writer.WriteUInt32(Diagnostics.SchemaRevision);
 	Writer.WriteString(Diagnostics.RequestKind != nullptr
 		? Diagnostics.RequestKind : TEXT(""));
@@ -710,8 +710,12 @@ namespace
 					INDEX_NONE, INDEX_NONE, SignedSemanticIndex);
 			}
 			static constexpr uint32 ValidLifetimeActionFlags = 0x0fu;
-			static constexpr uint32 ValidLifetimeExitPlanFlags = 0x07u;
+			static constexpr uint32 ValidLifetimeExitPlanFlags = 0x0fu;
 			static constexpr uint32 ValidLifetimeExitMask = 0x3fu;
+			static constexpr uint32 DestroyValueActionFlag = 1u << 0;
+			static constexpr uint32 FullExpressionExitPlanFlag = 1u << 3;
+			static constexpr uint32 FullExpressionExitMask =
+				(1u << 0) | (1u << 5);
 			const bool bEmptyLifetime = Function.LifetimeRecordCount == 0;
 			const bool bPartialConstructionCleanupPlan =
 				Function.CleanupPlanState != nullptr
@@ -723,6 +727,24 @@ namespace
 			const bool bHasNoLexicalExitPlans =
 				Function.LifetimeExitPlanFlags == 0
 				&& Function.LifetimeExitPlanCount == 0;
+			const bool bHasFullExpressionExitPlan =
+				(Function.LifetimeExitPlanFlags
+					& FullExpressionExitPlanFlag) != 0;
+			const bool bOnlyFullExpressionExitPlans =
+				Function.LifetimeExitPlanFlags
+					== FullExpressionExitPlanFlag;
+			const bool bFullExpressionLifetimeShapeValid =
+				!bHasFullExpressionExitPlan
+				|| ((Function.LifetimeActionFlags
+						& DestroyValueActionFlag) != 0
+					&& (!bOnlyFullExpressionExitPlans
+						|| Function.LifetimeActionFlags
+							== DestroyValueActionFlag)
+					&& (Function.LifetimeSupportedExitMask
+						& FullExpressionExitMask)
+						== FullExpressionExitMask
+					&& Function.bNativeObjectFrameABIAvailable == 0
+					&& Function.bHasExceptionCleanup == 1);
 			const bool bAuthenticatedLifetimeSummary =
 				Function.LifetimeProtocolRevision != 0
 				&& !Function.LifetimeStableKey.IsZero()
@@ -734,6 +756,7 @@ namespace
 				&& (Function.LifetimeSupportedExitMask
 					& ~ValidLifetimeExitMask) == 0
 				&& IsBoolean(Function.bNativeObjectFrameABIAvailable)
+				&& bFullExpressionLifetimeShapeValid
 				&& (bEmptyLifetime
 					? Function.LifetimeActionFlags == 0
 						&& Function.LifetimeExitPlanFlags == 0

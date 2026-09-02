@@ -2732,7 +2732,7 @@ namespace AngelscriptStaticJITAotGeneration
 					TEXT("DifferentialRejectedObjectLifetimeTypedASTJIT.generated.cpp"),
 					InOutOutput,
 					Result,
-					TEXT("UnsupportedFunctionTrait"),
+					TEXT("UnsupportedSignature"),
 					false,
 					&Result.IsolatedTypedASTNonCloneableFallbackDetail,
 					TEXT("NonCloneableEffectRejected")))

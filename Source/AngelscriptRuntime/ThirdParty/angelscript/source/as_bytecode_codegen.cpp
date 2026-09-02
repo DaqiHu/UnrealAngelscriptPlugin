@@ -2362,7 +2362,7 @@ namespace
 					// not the eight-byte value register. For methods it follows `this`.
 					const int returnPointerOffset = func->objectType ? -AS_PTR_SIZE : 0;
 					EmitValueObjectCopy(
-						returnSlot, returnPointerOffset, func->returnType, true);
+						returnSlot, returnPointerOffset, func->returnType, false, true);
 				}
 				else if( func->returnType.IsObjectHandle() || func->returnType.IsFuncdef() )
 				{
@@ -4680,7 +4680,8 @@ namespace
 		}
 
 		void EmitCopyConstructValue(
-			int src, int dest, const asCDataType& dataType, bool destIsPointer)
+			int src, int dest, const asCDataType& dataType,
+			bool srcIsPointer, bool destIsPointer)
 		{
 			asCScriptFunction* const copyCtor = FindCopyConstructor(dataType);
 			if( copyCtor == 0 )
@@ -4697,7 +4698,22 @@ namespace
 				FailAt(__LINE__, asNOT_SUPPORTED);
 				return;
 			}
-			bc.InstrSHORT(asBC_PSF, (short)src);
+			// The emitted CALL/CALLSYS embeds the selected copy-constructor id.
+			// Publish the same exact function dependency while the authoritative
+			// function-artifact capture is active so its stable relocation cannot
+			// outlive or disagree with the dependency declaration.
+			if( builder )
+			{
+				builder->MarkDependency(copyCtor, 0, 0);
+			}
+			if( srcIsPointer )
+			{
+				bc.InstrSHORT(asBC_PshVPtr, (short)src);
+			}
+			else
+			{
+				bc.InstrSHORT(asBC_PSF, (short)src);
+			}
 			if( destIsPointer )
 			{
 				bc.InstrSHORT(asBC_PshVPtr, (short)dest);
@@ -4712,17 +4728,22 @@ namespace
 		}
 
 		void EmitValueObjectCopy(
-			int src, int dest, const asCDataType& dataType, bool destIsPointer)
+			int src, int dest, const asCDataType& dataType,
+			bool srcIsPointer, bool destIsPointer)
 		{
 			if( CanEmitSealedStorageCopy(dataType) )
 			{
-				EmitSealedStorageCopy(src, dest, dataType, destIsPointer);
+				EmitSealedStorageCopy(
+					src, dest, dataType, srcIsPointer, destIsPointer);
 				return;
 			}
-			EmitCopyConstructValue(src, dest, dataType, destIsPointer);
+			EmitCopyConstructValue(
+				src, dest, dataType, srcIsPointer, destIsPointer);
 		}
 
-		void EmitSealedStorageCopy(int src, int dest, const asCDataType& dataType, bool destIsPointer)
+		void EmitSealedStorageCopy(
+			int src, int dest, const asCDataType& dataType,
+			bool srcIsPointer, bool destIsPointer)
 		{
 			if( !CanEmitSealedStorageCopy(dataType) )
 			{
@@ -4757,7 +4778,10 @@ namespace
 
 			const int byteSize = dataType.GetSizeInMemoryBytes();
 			// `COPY` pops destination before source and leaves its lvalue result.
-			bc.InstrSHORT(asBC_PSF, (short)src);
+			if( srcIsPointer )
+				bc.InstrSHORT(asBC_PshVPtr, (short)src);
+			else
+				bc.InstrSHORT(asBC_PSF, (short)src);
 			if( destIsPointer )
 				bc.InstrSHORT(asBC_PshVPtr, (short)dest);
 			else
@@ -4799,7 +4823,7 @@ namespace
 			// pass its pointer. This is also what external SetArgObject callers
 			// already provide to the VM.
 			const int temporary = AllocTyped(dataType);
-			EmitSealedStorageCopy(src, temporary, dataType, false);
+			EmitSealedStorageCopy(src, temporary, dataType, false, false);
 			if( !ok )
 			{
 				return false;
@@ -4835,7 +4859,7 @@ namespace
 			bc.InstrSHORT(asBC_ClrVPtr, (short)pointerSlot);
 			bc.InstrSHORT(asBC_PSF, (short)pointerSlot);
 			bc.Alloc(asBC_ALLOC, objectType, 0, AS_PTR_SIZE, false);
-			EmitSealedStorageCopy(src, pointerSlot, dataType, true);
+			EmitSealedStorageCopy(src, pointerSlot, dataType, false, true);
 			if( !ok )
 			{
 				return false;
@@ -4844,14 +4868,17 @@ namespace
 			return true;
 		}
 
-		void CopyValue(int dest, int src, const asCDataType& dataType)
+		void CopyValue(
+			int dest, int src, const asCDataType& dataType,
+			bool srcIsPointer = false)
 		{
 			if( IsByValueObject(dataType) )
 			{
 				// Every value-object copy, including one-dword structs, consumes the
 				// producer-carried storage-copy decision. Width must never bypass the
 				// semantic firewall and silently turn assignment into memcpy.
-				EmitValueObjectCopy(src, dest, dataType, false);
+				EmitValueObjectCopy(
+					src, dest, dataType, srcIsPointer, false);
 				return;
 			}
 			CopyVar(dest, src, LocalDwords(dataType));
@@ -5009,6 +5036,27 @@ namespace
 			bc.InstrPTR(asBC_PGA, const_cast<void*>(constant));
 			bc.Instr(asBC_PopRPtr);
 			return CapturePointerRegister();
+		}
+
+		bool ExprResultStoresPointer(const asCExpr* expr) const
+		{
+			for( int guard = 0; expr != 0 && guard < 8; ++guard )
+			{
+				if( expr->kind == asAST_EXPR_STRING_LITERAL )
+				{
+					return true;
+				}
+				if( (expr->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+						|| expr->kind == asAST_EXPR_CLEANUP
+						|| expr->kind == asAST_EXPR_OPAQUE_VALUE)
+					&& expr->children.GetLength() == 1 )
+				{
+					expr = context.GetExpr(expr->children[0]);
+					continue;
+				}
+				break;
+			}
+			return false;
 		}
 
 		int EmitExpr(asASTExprId id)
@@ -6564,7 +6612,9 @@ namespace
 				const int rhs = EmitExpr(expr->children[1]);
 				if( !ok )
 					return 0;
-				CopyValue(slot, rhs, lhsType.IsValid() ? lhsType : dataType);
+				CopyValue(
+					slot, rhs, lhsType.IsValid() ? lhsType : dataType,
+					ExprResultStoresPointer(rhsExpr));
 				if( ok && IsByValueObject(lhsType)
 					&& IsDeclaredInitializer(lhs->resolvedDecl, expr->children[1]) )
 				{
@@ -9104,7 +9154,9 @@ namespace
 					}
 					if( !ok )
 						return;
-					CopyValue(returnSlot, value, func->returnType);
+					CopyValue(
+						returnSlot, value, func->returnType,
+						ExprResultStoresPointer(retExpr));
 					DetachReturnedHandle(value);
 				}
 				const asSASTLifetimeExitPlan* const exitPlan =

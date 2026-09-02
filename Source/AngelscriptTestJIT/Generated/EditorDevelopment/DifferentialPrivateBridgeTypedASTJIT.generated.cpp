@@ -4,7 +4,7 @@
  * Backend            : TypedASTJIT
  * Declaration        : int TypedASTPrivateBridgeShowcase(const int, const int)
  * StableFunctionKey  : 6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e
- * OriginalSymbolSet  : ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_1ff0682c38f7a2216be76ae289956859b5e29ca7121a84dcfcd2a29f9e10fc5d
+ * OriginalSymbolSet  : ASJIT_6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e_ebd531a22644c20beeacc4a09bd0ca89aa8382bdde484cef102699ef450b76c6
  * TestSymbolSet      : AS_Test_Differential_TypedAST_TypedASTPrivateBridgeShowcase
  * CleanupPlan       : VerifiedEmpty (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -24,10 +24,10 @@
 /*
  * AngelScript Static JIT Function
  * Declaration       : int TypedASTPrivateBridgeShowcase(const int, const int)
- * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:5
+ * Source             : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:1
  * StableFunctionKey  : 6608a6a94c2205850a5fb4a8b02ab7c08d63ec5722236ff400d6d9d50cd0625e
- * ExecutionHash      : 1ff0682c38f7a2216be76ae289956859b5e29ca7121a84dcfcd2a29f9e10fc5d
- * DebugHash          : a299b2efa48d37e5e4fa1b8480f8666cd52e85b0c6aca9497886ea102d10cbaa
+ * ExecutionHash      : ebd531a22644c20beeacc4a09bd0ca89aa8382bdde484cef102699ef450b76c6
+ * DebugHash          : faff0fb0ee1a3b884c6dd9b85d881b444bebb6ee16384918f5d03ec7f2609082
  * EntryAbiHash       : 32c0c27f47fe1029322c0ce7e17536b36a031cc3ce9c01a4ee37be56f1b14a15
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
@@ -82,7 +82,7 @@ static int32 AS_Test_Differential_TypedAST_TypedASTPrivateBridgeShowcase_TypedBo
 }
 
 // AS Function : int TypedASTPrivateBridgeShowcase(const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:1
 // JIT Entry   : Raw
 int32 AS_Test_Differential_TypedAST_TypedASTPrivateBridgeShowcase_Raw(FScriptExecution& Execution, asDWORD p_0, asDWORD p_1)
 {
@@ -103,7 +103,7 @@ int32 AS_Test_Differential_TypedAST_TypedASTPrivateBridgeShowcase_Raw(FScriptExe
 }
 
 // AS Function : int TypedASTPrivateBridgeShowcase(const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:1
 // JIT Entry   : VM
 void AS_Test_Differential_TypedAST_TypedASTPrivateBridgeShowcase_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
@@ -113,7 +113,7 @@ void AS_Test_Differential_TypedAST_TypedASTPrivateBridgeShowcase_VM(FScriptExecu
 }
 
 // AS Function : int TypedASTPrivateBridgeShowcase(const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as:2:1
 // JIT Entry   : Parms
 void AS_Test_Differential_TypedAST_TypedASTPrivateBridgeShowcase_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
@@ -156,7 +156,7 @@ namespace
 				TEXT("int TypedASTPrivateBridgeShowcase(const int, const int)"),
 				TEXT("/Angelscript/Game/ASStaticJITTypedPrivateBridgeFixture.as"),
 				2u,
-				5u,
+				1u,
 				AngelscriptTestJITProbes::EIsolatedDifferentialCleanupPlanState::VerifiedEmpty,
 				0u,
 				FTypedASTJITDifferentialEntryRegistrationReferenceSlots,

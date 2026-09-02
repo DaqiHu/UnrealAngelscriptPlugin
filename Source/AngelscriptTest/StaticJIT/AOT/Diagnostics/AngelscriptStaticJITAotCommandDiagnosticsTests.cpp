@@ -1,5 +1,6 @@
 #include "CQTest.h"
 
+#include "StaticJIT/AngelscriptJITProviderDiagnostics.h"
 #include "StaticJIT/StaticJITDiagnostics.h"
 
 #include "HAL/FileManager.h"
@@ -34,7 +35,9 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotCommandDiagnosticTests,
 		ASSERT_THAT(AreEqual(First.Json, Second.Json));
 		ASSERT_THAT(IsTrue(First.Json.Contains(TEXT("\"schemaVersion\":9"))));
 		ASSERT_THAT(IsTrue(First.Json.Contains(
-			TEXT("\"generationDiagnostics\":{\"schemaRevision\":1"))));
+			FString::Printf(
+				TEXT("\"generationDiagnostics\":{\"schemaRevision\":%u"),
+				FAngelscriptJITProviderDiagnosticsAbi::SchemaRevision))));
 		ASSERT_THAT(IsTrue(First.Json.Contains(
 			TEXT("\"requestKind\":\"StaticJITArtifact\""))));
 		ASSERT_THAT(IsTrue(First.Json.Contains(

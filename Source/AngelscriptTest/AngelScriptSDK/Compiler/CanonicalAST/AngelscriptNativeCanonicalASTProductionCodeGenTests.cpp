@@ -313,6 +313,61 @@ static void ProdNativeLifecycleMemberObserveReference(asIScriptGeneric* Generic)
 	}
 }
 
+class FProdCanonicalNonPodStringFactory final : public asIStringFactory
+{
+public:
+	FProdCanonicalNonPodStringFactory()
+	{
+		Constant.Stored = 42;
+	}
+
+	const void* GetStringConstant(const char* Data, asUINT Length) override
+	{
+		static const char Expected[] = "route";
+		if (Data == nullptr || Length != sizeof(Expected) - 1
+			|| std::memcmp(Data, Expected, Length) != 0)
+		{
+			return nullptr;
+		}
+		++ReferenceCount;
+		return &Constant;
+	}
+
+	int ReleaseStringConstant(const void* String) override
+	{
+		if (String != &Constant || ReferenceCount <= 0)
+		{
+			return asINVALID_ARG;
+		}
+		--ReferenceCount;
+		return asSUCCESS;
+	}
+
+	int GetRawStringData(
+		const void* String,
+		char* Data,
+		asUINT* Length) const override
+	{
+		static const char Expected[] = "route";
+		if (String != &Constant || Length == nullptr)
+		{
+			return asINVALID_ARG;
+		}
+		*Length = sizeof(Expected) - 1;
+		if (Data != nullptr)
+		{
+			std::memcpy(Data, Expected, sizeof(Expected) - 1);
+		}
+		return asSUCCESS;
+	}
+
+	int32 GetReferenceCount() const { return ReferenceCount; }
+
+private:
+	FProdNativeLifecycleMember Constant;
+	int32 ReferenceCount = 0;
+};
+
 static void ProdNativeLifecycleMemberAppendAndReturnReference(
 	asIScriptGeneric* Generic)
 {
@@ -853,6 +908,60 @@ static bool ProdBytecodeCallsFunction(asIScriptFunction* Function, int FunctionI
 	return ProdBytecodeCallsFunctionWithOpcode(Function, FunctionId, asBC_CALL)
 		|| ProdBytecodeCallsFunctionWithOpcode(Function, FunctionId, asBC_CALLINTF)
 		|| ProdBytecodeCallsFunctionWithOpcode(Function, FunctionId, asBC_CALLSYS);
+}
+
+static bool ProdBytecodeCallUsesPushPair(
+	asIScriptFunction* Function,
+	int FunctionId,
+	asEBCInstr ExpectedSourcePush,
+	asEBCInstr ExpectedDestinationPush)
+{
+	if (Function == nullptr || FunctionId <= 0)
+	{
+		return false;
+	}
+
+	asUINT BytecodeLength = 0;
+	const asDWORD* const Bytecode = Function->GetByteCode(&BytecodeLength);
+	asEBCInstr PreviousPrevious = asBC_MAXBYTECODE;
+	asEBCInstr Previous = asBC_MAXBYTECODE;
+	for (asUINT DwordIndex = 0;
+		Bytecode != nullptr && DwordIndex < BytecodeLength;)
+	{
+		const asDWORD* const Instr = Bytecode + DwordIndex;
+		const asEBCInstr Opcode = static_cast<asEBCInstr>(
+			*reinterpret_cast<const asBYTE*>(Instr));
+		bool bMatchesCall = false;
+		if ((Opcode == asBC_CALL || Opcode == asBC_CALLINTF)
+			&& static_cast<int>(asBC_DWORDARG(Instr)) == FunctionId)
+		{
+			bMatchesCall = true;
+		}
+		else if (Opcode == asBC_CALLSYS)
+		{
+			asCScriptFunction* const Callee =
+				reinterpret_cast<asCScriptFunction*>(asBC_PTRARG(Instr));
+			bMatchesCall = Callee != nullptr && Callee->GetId() == FunctionId;
+		}
+		if (bMatchesCall)
+		{
+			return PreviousPrevious == ExpectedSourcePush
+				&& Previous == ExpectedDestinationPush;
+		}
+		if (static_cast<int32>(Opcode) > static_cast<int32>(asBC_MAXBYTECODE))
+		{
+			break;
+		}
+		const int32 InstructionSize = asBCTypeSize[asBCInfo[Opcode].type];
+		if (InstructionSize <= 0)
+		{
+			break;
+		}
+		PreviousPrevious = Previous;
+		Previous = Opcode;
+		DwordIndex += static_cast<asUINT>(InstructionSize);
+	}
+	return false;
 }
 
 static int32 ProdCountBytecodeCallsFunction(
@@ -7570,6 +7679,122 @@ public:
 			TEXT("Engine/module retirement must release the function-owned constant")));
 		ASSERT_THAT(AreEqual(0, StringFactory.GetEntryCount()));
 		ASSERT_THAT(AreEqual(0, StringFactory.GetTotalReferenceCount()));
+	}
+
+	TEST_METHOD(PreparedNonPodStringLiteralCopyPushesFactoryObjectIdentity)
+	{
+		using namespace AngelscriptBuilderTestSupport;
+
+		GProdNativeLifecycleMemberConstructed = 0;
+		GProdNativeLifecycleMemberDestructed = 0;
+		GProdNativeLifecycleMemberCopyConstructed = 0;
+		GProdNativeLifecycleMemberCopiedValue = 0;
+		FProdCanonicalNonPodStringFactory StringFactory;
+		AngelscriptNativeTestSupport::FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType(
+			"FProdNonPodString",
+			sizeof(FProdNativeLifecycleMember),
+			asOBJ_VALUE | asOBJ_APP_CLASS_CD | asOBJ_APP_CLASS_ALLINTS) >= 0));
+		const int DefaultCtorId = ScriptEngine->RegisterObjectBehaviour(
+			"FProdNonPodString", asBEHAVE_CONSTRUCT, "void f()",
+			asFUNCTION(ProdNativeLifecycleMemberConstruct), asCALL_GENERIC);
+		const int CopyCtorId = ScriptEngine->RegisterObjectBehaviour(
+			"FProdNonPodString", asBEHAVE_CONSTRUCT,
+			"void f(const FProdNonPodString&in Other)",
+			asFUNCTION(ProdNativeLifecycleMemberCopyConstruct), asCALL_GENERIC);
+		const int DtorId = ScriptEngine->RegisterObjectBehaviour(
+			"FProdNonPodString", asBEHAVE_DESTRUCT, "void f()",
+			asFUNCTION(ProdNativeLifecycleMemberDestruct), asCALL_GENERIC);
+		const int ReadId = ScriptEngine->RegisterObjectMethod(
+			"FProdNonPodString", "int ReadStored() const",
+			asFUNCTION(ProdNativeLifecycleMemberReadStored), asCALL_GENERIC);
+		ASSERT_THAT(IsTrue(
+			DefaultCtorId > 0 && CopyCtorId > 0 && DtorId > 0 && ReadId > 0,
+			TEXT("the non-POD string gate requires exact lifecycle and observer declarations")));
+		ASSERT_THAT(AreEqual(asSUCCESS, ScriptEngine->RegisterStringFactory(
+			"FProdNonPodString", &StringFactory)));
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL)));
+
+		asCModule* const Module = CreateBuilderModule(
+			ScriptEngine, "PreparedCanonicalNonPodStringLiteralCopy");
+		ASSERT_THAT(IsNotNull(Module));
+		if (Module == nullptr)
+		{
+			return;
+		}
+		ASSERT_THAT(IsTrue(AddBuilderSection(
+			*Module,
+			"PreparedCanonicalNonPodStringLiteralCopy.as",
+			R"AS(
+				int CopyStringLiteralIntoNonPodValue()
+				{
+					FProdNonPodString Value = "route";
+					return Value.ReadStored();
+				}
+			)AS")));
+		ASSERT_THAT(IsNotNull(Module->builder));
+		if (Module->builder == nullptr)
+		{
+			return;
+		}
+
+		asCBuilder& Builder = *Module->builder;
+		ASSERT_THAT(IsTrue(RunBuilderPipelineThroughLayout(
+			*TestRunner, Builder, Module),
+			TEXT("the staged Builder must prepare the non-POD string initializer")));
+		ASSERT_THAT(AreEqual(asSUCCESS, Builder.SealCanonicalAST()));
+		asCASTContext* const Context = Builder.TakeCanonicalAST();
+		ASSERT_THAT(IsNotNull(Context));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { asDELETE(Context, asCASTContext); };
+
+		asCBytecodeCodeGen CodeGen;
+		const int CodeGenResult = CodeGen.GeneratePreparedModule(*Context, Builder);
+		ASSERT_THAT(AreEqual(asAST_VERIFY_OK, CodeGenResult,
+			*FString::Printf(
+				TEXT("non-POD string initializer CodeGen must publish: result=%d line=%d detail=%s"),
+				CodeGenResult,
+				CodeGen.GetLastFailLine(),
+				UTF8_TO_TCHAR(CodeGen.GetFailureDetail().AddressOf()
+					? CodeGen.GetFailureDetail().AddressOf() : ""))));
+		if (CodeGenResult != asAST_VERIFY_OK)
+		{
+			return;
+		}
+
+		asIScriptFunction* const Entry = Module->GetFunctionByDecl(
+			"int CopyStringLiteralIntoNonPodValue()");
+		ASSERT_THAT(IsNotNull(Entry));
+		ASSERT_THAT(IsTrue(
+			ProdBytecodeCallUsesPushPair(
+				Entry, CopyCtorId, asBC_PshVPtr, asBC_PSF),
+			*FString::Printf(
+				TEXT("copy construction must push the factory object identity, then destination storage; bytecode:%s"),
+				*ProdBytecodeImmediates(Entry))));
+
+		int32 Value = 0;
+		ASSERT_THAT(IsTrue(
+			AngelscriptNativeTestSupport::CanonicalExecuteInt(
+				*TestRunner, Engine.Get(), Module,
+				"int CopyStringLiteralIntoNonPodValue()", Value)
+				&& Value == 42,
+			*FString::Printf(
+				TEXT("the copied non-POD string must preserve the factory value; got=%d"),
+				Value)));
+		ASSERT_THAT(AreEqual(1, GProdNativeLifecycleMemberCopyConstructed));
+		ASSERT_THAT(AreEqual(42, GProdNativeLifecycleMemberCopiedValue));
+		ASSERT_THAT(AreEqual(1, GProdNativeLifecycleMemberDestructed));
+		ASSERT_THAT(AreEqual(1, StringFactory.GetReferenceCount(),
+			TEXT("the published bytecode must retain exactly one string constant reference")));
 	}
 
 	TEST_METHOD(PreparedValueParameterBindsSourceIdentityToNormalizedRuntimeSignature)

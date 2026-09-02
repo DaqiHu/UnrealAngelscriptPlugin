@@ -107,7 +107,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGenerationVerificationTests,
 			Second.IsolatedTypedASTImportedFallbackDetail));
 		ASSERT_THAT(IsTrue(
 			First.IsolatedTypedASTNonCloneableFallbackDetail.StartsWith(
-				TEXT("NonCloneableEffectRejected: UnsupportedFunctionTrait:"),
+				TEXT("NonCloneableEffectRejected: UnsupportedSignature: StaticJITEntryPlanTypedReceiverUnsupported"),
 				ESearchCase::CaseSensitive)));
 		ASSERT_THAT(AreEqual(
 			First.IsolatedTypedASTNonCloneableFallbackDetail,

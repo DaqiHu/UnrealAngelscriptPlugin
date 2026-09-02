@@ -4,7 +4,7 @@
  * Backend            : TypedASTJIT
  * Declaration        : int SemanticCheckedDivide(const int, const int)
  * StableFunctionKey  : a17ec19a98294d0303cc3ef87a4c4c4c3966667c2d6e59668fe556b0282624d5
- * OriginalSymbolSet  : ASJIT_a17ec19a98294d0303cc3ef87a4c4c4c3966667c2d6e59668fe556b0282624d5_5821bbe194a5e0baea8666a1f2ffdd243992a522b594aea35a9cf34698f5a18e
+ * OriginalSymbolSet  : ASJIT_a17ec19a98294d0303cc3ef87a4c4c4c3966667c2d6e59668fe556b0282624d5_2d6f94e8736fe05095956f3338d3e474d08496f05b81aceeda3f8357b3575a55
  * TestSymbolSet      : AS_Test_Differential_TypedAST_SemanticCheckedDivide
  * CleanupPlan       : VerifiedEmpty (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -24,10 +24,10 @@
 /*
  * AngelScript Static JIT Function
  * Declaration       : int SemanticCheckedDivide(const int, const int)
- * Source             : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:116:5
+ * Source             : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:116:1
  * StableFunctionKey  : a17ec19a98294d0303cc3ef87a4c4c4c3966667c2d6e59668fe556b0282624d5
- * ExecutionHash      : 5821bbe194a5e0baea8666a1f2ffdd243992a522b594aea35a9cf34698f5a18e
- * DebugHash          : 89a3d6ad2685fce9c5148240b40ea3ef2c7c0164e92a49f023034e651886331a
+ * ExecutionHash      : 2d6f94e8736fe05095956f3338d3e474d08496f05b81aceeda3f8357b3575a55
+ * DebugHash          : 1c1aea33e7d9a3c50555638e8ca9006895853eecf51796f36e1416f1d9e4436f
  * EntryAbiHash       : 34574e76e092ff59a9ab137303c6c8a1a00f50e50bf9ce931ed07453463297ff
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
@@ -50,17 +50,17 @@ static int32 AS_Test_Differential_TypedAST_SemanticCheckedDivide_TypedBody(
 		return ([&]() -> int32
 	{
 		TypedFrame.SetSourcePosition(118, 2);
-		const int32 as_ast_e109_left = as_ast_d19;
+		const int32 as_ast_e122_left = as_ast_d19;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		const int32 as_ast_e109_right = as_ast_d20;
+		const int32 as_ast_e122_right = as_ast_d20;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return int32{};
 		}
-		return AngelscriptTypedASTJIT::CheckedDivide<int32>(Execution, as_ast_e109_left, as_ast_e109_right);
+		return AngelscriptTypedASTJIT::CheckedDivide<int32>(Execution, as_ast_e122_left, as_ast_e122_right);
 	}());
 	}
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
@@ -68,7 +68,7 @@ static int32 AS_Test_Differential_TypedAST_SemanticCheckedDivide_TypedBody(
 }
 
 // AS Function : int SemanticCheckedDivide(const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:116:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:116:1
 // JIT Entry   : Raw
 int32 AS_Test_Differential_TypedAST_SemanticCheckedDivide_Raw(FScriptExecution& Execution, asDWORD p_0, asDWORD p_1)
 {
@@ -89,7 +89,7 @@ int32 AS_Test_Differential_TypedAST_SemanticCheckedDivide_Raw(FScriptExecution& 
 }
 
 // AS Function : int SemanticCheckedDivide(const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:116:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:116:1
 // JIT Entry   : VM
 void AS_Test_Differential_TypedAST_SemanticCheckedDivide_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
@@ -99,7 +99,7 @@ void AS_Test_Differential_TypedAST_SemanticCheckedDivide_VM(FScriptExecution& Ex
 }
 
 // AS Function : int SemanticCheckedDivide(const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:116:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:116:1
 // JIT Entry   : Parms
 void AS_Test_Differential_TypedAST_SemanticCheckedDivide_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
@@ -137,7 +137,7 @@ namespace
 				TEXT("int SemanticCheckedDivide(const int, const int)"),
 				TEXT("/Angelscript/Game/ASStaticJITTypedControlFlowFixture.as"),
 				116u,
-				5u,
+				1u,
 				AngelscriptTestJITProbes::EIsolatedDifferentialCleanupPlanState::VerifiedEmpty,
 				0u,
 				nullptr,

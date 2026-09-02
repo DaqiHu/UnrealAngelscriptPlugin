@@ -614,6 +614,216 @@ public:
 			TEXT("AOT must not publish a partial native cleanup plan")));
 	}
 
+	TEST_METHOD(SourceTemporaryFullExpressionPublishesAuthenticatedTypedFallback)
+	{
+		using namespace AngelscriptNativeTestSupport;
+
+		FNativeTestEngine Engine;
+		Engine.Create(*TestRunner);
+		ON_SCOPE_EXIT { Engine.Destroy(); };
+
+		asCScriptEngine* const ScriptEngine =
+			static_cast<asCScriptEngine*>(Engine.Get());
+		ASSERT_THAT(IsTrue(ScriptEngine->SetCompilerPipeline(
+			asCOMPILER_PIPELINE_CANONICAL),
+			TEXT("source full-expression lifetime fixture selects CANONICAL")));
+		asIScriptModule* const Module = ScriptEngine->GetModule(
+			"JitSourceFullExpressionLifetime", asGM_ALWAYS_CREATE);
+		ASSERT_THAT(IsNotNull(Module,
+			TEXT("source full-expression lifetime module must exist")));
+		ASSERT_THAT(AreEqual(0,
+			Module->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT)));
+		const std::string Source = ASTEST_AS_ANSI(R"AS(
+			int DestructionTrace = 0;
+
+			struct FJitFullExpressionTracked
+			{
+				int Id;
+
+				FJitFullExpressionTracked(int InId)
+				{
+					Id = InId;
+				}
+
+				~FJitFullExpressionTracked()
+				{
+					DestructionTrace = DestructionTrace * 10 + Id;
+				}
+			}
+
+			int ProveSourceFullExpressionLifetime()
+			{
+				DestructionTrace = 0;
+				FJitFullExpressionTracked(7);
+				return DestructionTrace;
+			}
+			)AS");
+		ASSERT_THAT(AreEqual(0, Module->AddScriptSection(
+			"JitSourceFullExpressionLifetime.as", Source.c_str(),
+			static_cast<unsigned int>(Source.size()))));
+		ASSERT_THAT(AreEqual(0, Module->Build(),
+			*FString::Printf(TEXT(
+				"source full-expression lifetime fixture must compile and seal: %s"),
+				*CollectMessages(Engine.GetMessages()))));
+
+		const asCModule* const Concrete = static_cast<asCModule*>(Module);
+		const asCASTContext* const Context = Concrete != nullptr
+			? Concrete->GetCanonicalASTContext() : nullptr;
+		ASSERT_THAT(IsNotNull(Context,
+			TEXT("source full-expression lifetime fixture must retain sealed AST")));
+		if (Context == nullptr)
+		{
+			return;
+		}
+		const asASTDeclId FunctionDecl =
+			FindAngelscriptTypedASTJITCanonicalFunctionDecl(
+				*Context, "ProveSourceFullExpressionLifetime");
+		ASSERT_THAT(IsTrue(FunctionDecl.IsValid(),
+			TEXT("source full-expression lifetime fixture needs one exact function")));
+
+		asCASTLifetimeView LifetimeView;
+		ASSERT_THAT(AreEqual(
+			static_cast<int32>(asAST_VERIFY_OK),
+			static_cast<int32>(asCASTBuildLifetimeView(*Context, LifetimeView)),
+			TEXT("source full-expression lifetime must expose an authenticated view")));
+		const asSASTLifetimeRecord* TemporaryRecord = nullptr;
+		asUINT TemporaryRecordIndex = 0;
+		asUINT TemporaryRecordCount = 0;
+		for (asUINT RecordIndex = 0;
+			RecordIndex < Context->GetLifetimeRecordCount(); ++RecordIndex)
+		{
+			const asSASTLifetimeRecord* const Record =
+				Context->GetLifetimeRecord(RecordIndex);
+			if (Record != nullptr
+				&& Record->subjectKind == asAST_LIFETIME_SUBJECT_TEMPORARY
+				&& Record->phase == asAST_LIFETIME_PHASE_FULL_EXPRESSION)
+			{
+				TemporaryRecord = Record;
+				TemporaryRecordIndex = RecordIndex;
+				++TemporaryRecordCount;
+			}
+		}
+		ASSERT_THAT(AreEqual(static_cast<asUINT>(1), TemporaryRecordCount,
+			TEXT("source fixture must retain exactly one full-expression temporary")));
+		ASSERT_THAT(IsNotNull(TemporaryRecord,
+			TEXT("source fixture needs the exact Sema-authored temporary record")));
+		if (TemporaryRecord == nullptr)
+		{
+			return;
+		}
+
+		const asCExpr* const Materialize = TemporaryRecord->subject.nodeClass
+			== asAST_LIFETIME_NODE_EXPR
+			? Context->GetExpr(asASTExprId(TemporaryRecord->subject.value)) : nullptr;
+		const asCDecl* const Destructor = TemporaryRecord->actionTarget.nodeClass
+			== asAST_LIFETIME_NODE_DECL
+			? Context->GetDecl(asASTDeclId(TemporaryRecord->actionTarget.value)) : nullptr;
+		const asCDecl* const DestructorOwner = Destructor != nullptr
+			? Context->GetDecl(Destructor->parent) : nullptr;
+		const asCStmt* const SemanticRegion = TemporaryRecord->semanticRegion.nodeClass
+			== asAST_LIFETIME_NODE_STMT
+			? Context->GetStmt(asASTStmtId(TemporaryRecord->semanticRegion.value)) : nullptr;
+		const asSASTLifetimeExitPlan* const FullExpressionPlan =
+			SemanticRegion != nullptr
+			? LifetimeView.FindExitPlan(
+				SemanticRegion->id,
+				asAST_LIFETIME_EXIT_PLAN_FULL_EXPRESSION)
+			: nullptr;
+		ASSERT_THAT(IsTrue(Materialize != nullptr
+			&& Materialize->kind == asAST_EXPR_MATERIALIZE_TEMPORARY
+			&& TemporaryRecord->activationPoint == TemporaryRecord->subject
+			&& TemporaryRecord->actionKind == asAST_LIFETIME_ACTION_DESTROY_VALUE
+			&& Destructor != nullptr
+			&& Destructor->kind == asAST_DECL_DESTRUCTOR
+			&& DestructorOwner != nullptr
+			&& DestructorOwner->name.Equals("FJitFullExpressionTracked")
+			&& SemanticRegion != nullptr
+			&& SemanticRegion->kind == asAST_STMT_EXPR
+			&& SemanticRegion->owner == FunctionDecl
+			&& TemporaryRecord->supportedExitMask
+				== (asAST_LIFETIME_EXIT_NORMAL | asAST_LIFETIME_EXIT_EXCEPTION)
+			&& FullExpressionPlan != nullptr
+			&& FullExpressionPlan->exitMask
+				== (asAST_LIFETIME_EXIT_NORMAL | asAST_LIFETIME_EXIT_EXCEPTION)
+			&& FullExpressionPlan->recordIndices.GetLength() == 1
+			&& FullExpressionPlan->recordIndices[0] == TemporaryRecordIndex,
+			TEXT("source Sema/view must already own the exact temporary and full-expression plan")));
+
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts Facts =
+			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+				*Context, FunctionDecl);
+		const FAngelscriptTypedASTJITCanonicalLifetimeFacts RepeatedFacts =
+			AnalyzeAngelscriptTypedASTJITCanonicalLifetimeFacts(
+				*Context, FunctionDecl);
+		constexpr uint32 FullExpressionFlag = 1u << 3;
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITCleanupPlanState::ScriptDestructor,
+			Facts.CleanupPlanState,
+			TEXT("a legal full-expression temporary must authenticate as a script destructor plan")));
+		ASSERT_THAT(IsTrue(Facts.LifetimeSummary.IsAuthenticated(),
+			TEXT("a legal temporary plan needs one detached authenticated summary")));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint32>(asAST_LIFETIME_PROTOCOL_REVISION),
+			Facts.LifetimeSummary.ProtocolRevision));
+		ASSERT_THAT(IsFalse(Facts.LifetimeSummary.StableKey.IsZero()));
+		ASSERT_THAT(IsFalse(Facts.LifetimeSummary.ABIKey.IsZero()));
+		ASSERT_THAT(IsTrue(Facts.LifetimeSummary.StableKey
+			== RepeatedFacts.LifetimeSummary.StableKey));
+		ASSERT_THAT(IsTrue(Facts.LifetimeSummary.ABIKey
+			== RepeatedFacts.LifetimeSummary.ABIKey));
+		ASSERT_THAT(AreEqual(1u, Facts.LifetimeSummary.RecordCount));
+		ASSERT_THAT(AreEqual(1u, Facts.LifetimeSummary.ExitPlanCount));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint32>(
+				EAngelscriptTypedASTJITLifetimeActionFlags::DestroyValue),
+			static_cast<uint32>(Facts.LifetimeSummary.ActionFlags)));
+		ASSERT_THAT(AreEqual(FullExpressionFlag,
+			static_cast<uint32>(Facts.LifetimeSummary.ExitPlanFlags)));
+		ASSERT_THAT(AreEqual(
+			static_cast<uint32>(
+				asAST_LIFETIME_EXIT_NORMAL | asAST_LIFETIME_EXIT_EXCEPTION),
+			Facts.LifetimeSummary.SupportedExitMask));
+		ASSERT_THAT(IsFalse(
+			Facts.LifetimeSummary.bNativeObjectFrameABIAvailable));
+		ASSERT_THAT(IsTrue(Facts.bHasExceptionCleanup));
+		ASSERT_THAT(IsFalse(Facts.bHasSuspendState));
+		ASSERT_THAT(IsTrue(Facts.bCleanupPlanCoversAllTransfers));
+
+		FAngelscriptTypedASTJITEligibilityInput EligibilityInput;
+		EligibilityInput.bIsUFunctionRoot = true;
+		EligibilityInput.Purpose =
+			EAngelscriptTypedASTJITEligibilityPurpose::RootCallClosure;
+		EligibilityInput.SealedAST = Context;
+		EligibilityInput.CanonicalFunctionDecl = FunctionDecl;
+		EligibilityInput.Shape.SymbolName =
+			TEXT("ASJIT_ProveSourceFullExpressionLifetime");
+		EligibilityInput.Shape.ReturnType =
+			asCDataType::CreatePrimitive(ttInt, false);
+		const FAngelscriptTypedASTJITEligibility Eligibility =
+			EvaluateAngelscriptTypedASTJITEligibilityFromCanonical(
+				EligibilityInput);
+		ASSERT_THAT(IsFalse(Eligibility.bEligible));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
+			Eligibility.Reason,
+			TEXT("an authenticated full-expression temporary is unsupported, not invalid")));
+		ASSERT_THAT(IsTrue(Eligibility.Detail.Contains(
+			TEXT("AuthenticatedFullExpressionTemporaryRequiresNativeObjectFrameABI")),
+			TEXT("fallback must name the exact missing temporary frame ABI")));
+
+		FAngelscriptTypedASTJITEmitOptions EmitOptions;
+		const FAngelscriptTypedASTJITEmission Emission =
+			EmitTypedASTJITFunction(
+				*Context, FunctionDecl, EligibilityInput.Shape, EmitOptions);
+		ASSERT_THAT(IsFalse(Emission.bSuccess));
+		ASSERT_THAT(AreEqual(
+			EAngelscriptTypedASTJITFallbackReason::UnsupportedLifetime,
+			Emission.FailureReason,
+			TEXT("AOT must not publish a partial temporary cleanup frame")));
+		ASSERT_THAT(IsTrue(Emission.FailureDetail.Contains(
+			TEXT("AuthenticatedFullExpressionTemporaryRequiresNativeObjectFrameABI"))));
+	}
+
 	TEST_METHOD(SourceConstructorPartialConstructionPublishesAuthenticatedTypedFallback)
 	{
 		using namespace AngelscriptNativeTestSupport;

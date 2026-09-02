@@ -4,7 +4,7 @@
  * Backend            : TypedASTJIT
  * Declaration        : int SemanticExhaustiveEnum(const int)
  * StableFunctionKey  : 0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4
- * OriginalSymbolSet  : ASJIT_0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4_9f66be3bac5f691ee91f3728c339fdd3b53089aa0b40a8ff647198f26b3c29df
+ * OriginalSymbolSet  : ASJIT_0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4_4510fb38109260be32bcfce50e86695d28f31269bf605fdb6e474f5cf57480a5
  * TestSymbolSet      : AS_Test_Differential_TypedAST_SemanticExhaustiveEnum
  * CleanupPlan       : VerifiedEmpty (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -24,10 +24,10 @@
 /*
  * AngelScript Static JIT Function
  * Declaration       : int SemanticExhaustiveEnum(const int)
- * Source             : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:5
+ * Source             : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:1
  * StableFunctionKey  : 0145fa4429b9ae62be79d15799167aacc5b06d72777cceecf717a910ebec9dd4
- * ExecutionHash      : 9f66be3bac5f691ee91f3728c339fdd3b53089aa0b40a8ff647198f26b3c29df
- * DebugHash          : eb35fee034448a8ea8818e4e236e9542c76c9ddb2744a6c4f421f31127dbd279
+ * ExecutionHash      : 4510fb38109260be32bcfce50e86695d28f31269bf605fdb6e474f5cf57480a5
+ * DebugHash          : 56fda596b4afaff9e3abd0815538ef23617c4a0b90467947532d2fcfda90cde7
  * EntryAbiHash       : ac5e9740aa5289dba47d6e5ba3f40c6f1f11e575d2ab2615b198bbbc11568b3d
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
@@ -48,10 +48,10 @@ static int32 AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_TypedBody(
 		TypedFrame.SetSourcePosition(103, 23);
 		([&]() -> int8
 		{
-			const int8 as_ast_e99_value = AngelscriptTypedASTJIT::WrapNarrow<int8>(as_ast_d16);
-			int8& as_ast_e99_target = as_ast_d17;
-			as_ast_e99_target = as_ast_e99_value;
-			return as_ast_e99_target;
+			const int8 as_ast_e109_value = AngelscriptTypedASTJIT::WrapNarrow<int8>(as_ast_d16);
+			int8& as_ast_e109_target = as_ast_d17;
+			as_ast_e109_target = as_ast_e109_value;
+			return as_ast_e109_target;
 		}());
 	}
 	{
@@ -63,17 +63,17 @@ static int32 AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_TypedBody(
 		}
 		switch (as_ast_stmt_84_condition)
 		{
-			case int8(0):
+			case static_cast<int8>(int8(0)):
 				{
 					TypedFrame.SetSourcePosition(107, 3);
 					return int32(10);
 				}
-			case int8(1):
+			case static_cast<int8>(int8(1)):
 				{
 					TypedFrame.SetSourcePosition(109, 3);
 					return int32(20);
 				}
-			case int8(2):
+			case static_cast<int8>(int8(2)):
 				{
 					TypedFrame.SetSourcePosition(111, 3);
 					return int32(30);
@@ -93,7 +93,7 @@ static int32 AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_TypedBody(
 }
 
 // AS Function : int SemanticExhaustiveEnum(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:1
 // JIT Entry   : Raw
 int32 AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_Raw(FScriptExecution& Execution, asDWORD p_0)
 {
@@ -114,7 +114,7 @@ int32 AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_Raw(FScriptExecution&
 }
 
 // AS Function : int SemanticExhaustiveEnum(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:1
 // JIT Entry   : VM
 void AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
@@ -123,7 +123,7 @@ void AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_VM(FScriptExecution& E
 }
 
 // AS Function : int SemanticExhaustiveEnum(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedControlFlowFixture.as:101:1
 // JIT Entry   : Parms
 void AS_Test_Differential_TypedAST_SemanticExhaustiveEnum_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
@@ -162,7 +162,7 @@ namespace
 				TEXT("int SemanticExhaustiveEnum(const int)"),
 				TEXT("/Angelscript/Game/ASStaticJITTypedControlFlowFixture.as"),
 				101u,
-				5u,
+				1u,
 				AngelscriptTestJITProbes::EIsolatedDifferentialCleanupPlanState::VerifiedEmpty,
 				0u,
 				FTypedASTJITDifferentialEntryRegistrationReferenceSlots,

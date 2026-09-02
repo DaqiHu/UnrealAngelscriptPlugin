@@ -27,10 +27,10 @@ constexpr SIZE_T TSIZE_UStaticJITAotFunctionCarrier = Align(POFFSET_UStaticJITAo
 /*
  * AngelScript Static JIT Function
  * Declaration       : int ImportedValueForAOT(const int)
- * Source             : /Angelscript/Game/ASStaticJITAotImportProvider.as:1:5
+ * Source             : /Angelscript/Game/ASStaticJITAotImportProvider.as:1:1
  * StableFunctionKey  : 69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304
- * ExecutionHash      : b90c957b05c82e463e82b7bcd35afe10b797255a6e9ee8df24d62d2e1c0737b3
- * DebugHash          : f95388c4616d62cd5321aa25f1d08d28957b3f98f225c75d4adcaf6e90388f63
+ * ExecutionHash      : 9914a68310eddcf93e409b77b518a926b96cf924042aa1b8ad49987d08d59e64
+ * DebugHash          : 7f90fd72243da11dc964db16306b645bb222a39cf73ea06179a9e287dda5a0af
  * EntryAbiHash       : ea282433da811db8e11096c0eb4d74a8ad9f3e312688cd7887a915f4447e361e
  * ExecutionCaps      : 0
  * RuntimeTriggers    : 0
@@ -38,14 +38,14 @@ constexpr SIZE_T TSIZE_UStaticJITAotFunctionCarrier = Align(POFFSET_UStaticJITAo
  */
 #if AS_JIT_DEBUG_CALLSTACKS
 #undef SCRIPT_DEBUG_FILENAME
-static const char* MODULENAME_ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_b90c957b05c82e463e82b7bcd35afe10b797255a6e9ee8df24d62d2e1c0737b3 = "ASStaticJITAotImportProvider";
-#define SCRIPT_DEBUG_FILENAME MODULENAME_ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_b90c957b05c82e463e82b7bcd35afe10b797255a6e9ee8df24d62d2e1c0737b3
+static const char* MODULENAME_ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_9914a68310eddcf93e409b77b518a926b96cf924042aa1b8ad49987d08d59e64 = "ASStaticJITAotImportProvider";
+#define SCRIPT_DEBUG_FILENAME MODULENAME_ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_9914a68310eddcf93e409b77b518a926b96cf924042aa1b8ad49987d08d59e64
 #endif
 
 // AS Function : int ImportedValueForAOT(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITAotImportProvider.as:1:5
+// AS Source   : /Angelscript/Game/ASStaticJITAotImportProvider.as:1:1
 // JIT Entry   : Raw
-int32 ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_b90c957b05c82e463e82b7bcd35afe10b797255a6e9ee8df24d62d2e1c0737b3(FScriptExecution& Execution, asDWORD p_Value)
+int32 ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_9914a68310eddcf93e409b77b518a926b96cf924042aa1b8ad49987d08d59e64(FScriptExecution& Execution, asDWORD p_Value)
 {
 // == Jit at BC 0 ==
 SCRIPT_DEBUG_CALLSTACK_FRAME("int ImportedValueForAOT(int)", 2);
@@ -75,33 +75,33 @@ l_dwordRegister = v_TEMP_dword_1;
   return (int32)l_dwordRegister;
 }
 // AS Function : int ImportedValueForAOT(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITAotImportProvider.as:1:5
+// AS Source   : /Angelscript/Game/ASStaticJITAotImportProvider.as:1:1
 // JIT Entry   : VM
-void ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_b90c957b05c82e463e82b7bcd35afe10b797255a6e9ee8df24d62d2e1c0737b3_VMEntry(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
+void ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_9914a68310eddcf93e409b77b518a926b96cf924042aa1b8ad49987d08d59e64_VMEntry(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
-	*(int32*)l_outValue = ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_b90c957b05c82e463e82b7bcd35afe10b797255a6e9ee8df24d62d2e1c0737b3(Execution,
+	*(int32*)l_outValue = ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_9914a68310eddcf93e409b77b518a926b96cf924042aa1b8ad49987d08d59e64(Execution,
 		*(asDWORD*)(l_fp + 0));
 }
 // AS Function : int ImportedValueForAOT(const int)
-// AS Source   : /Angelscript/Game/ASStaticJITAotImportProvider.as:1:5
+// AS Source   : /Angelscript/Game/ASStaticJITAotImportProvider.as:1:1
 // JIT Entry   : Parms
-void ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_b90c957b05c82e463e82b7bcd35afe10b797255a6e9ee8df24d62d2e1c0737b3_ParmsEntry(FScriptExecution& Execution, void* Object, void* Parms)
+void ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_9914a68310eddcf93e409b77b518a926b96cf924042aa1b8ad49987d08d59e64_ParmsEntry(FScriptExecution& Execution, void* Object, void* Parms)
 {
 	SIZE_T ParmsOffset = 0;
 	const SIZE_T ParmOffset_0_Value = ParmsOffset;
 	ParmsOffset += sizeof(int32);
 	ParmsOffset = Align(ParmsOffset, alignof(int32));
 	const SIZE_T ReturnParmOffset = ParmsOffset;
-	*(int32*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_b90c957b05c82e463e82b7bcd35afe10b797255a6e9ee8df24d62d2e1c0737b3(Execution,
+	*(int32*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_9914a68310eddcf93e409b77b518a926b96cf924042aa1b8ad49987d08d59e64(Execution,
 		(asDWORD)*(int32*)(((SIZE_T)Parms) + ParmOffset_0_Value));
 }
 /*
  * AngelScript Static JIT Function
  * Declaration       : int IndependentModuleEntryForAOT()
- * Source             : /Angelscript/Game/ASStaticJITAotImportProvider.as:6:5
+ * Source             : /Angelscript/Game/ASStaticJITAotImportProvider.as:6:1
  * StableFunctionKey  : 6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17
- * ExecutionHash      : 8186a69f387a122950bec39b74e9afc9fc7674f2150a1091ddb943928c82ed07
- * DebugHash          : 883d145de981a4ecd4b18db561881e8ccbc361a4ffed6a9cbe7ac5819635016b
+ * ExecutionHash      : 5e078b1b9d52d1d84b98aba0fb3b39e3819af75f263adae24e4f05fc8c1fb58e
+ * DebugHash          : 348ad201ee5dc38139e3dfcf4bfd58684e47735d07ae64a056ae5451315d27de
  * EntryAbiHash       : bb45c9109478b2a9359d66c35fcbf092a8728f92b5800436659d51e95cc228a8
  * ExecutionCaps      : 0
  * RuntimeTriggers    : 0
@@ -109,14 +109,14 @@ void ASJIT_69a0ada34d03f3f5ff2259420f361c1c3aca5cffc47a6b52965cb976fd8f2304_b90c
  */
 #if AS_JIT_DEBUG_CALLSTACKS
 #undef SCRIPT_DEBUG_FILENAME
-static const char* MODULENAME_ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_8186a69f387a122950bec39b74e9afc9fc7674f2150a1091ddb943928c82ed07 = "ASStaticJITAotImportProvider";
-#define SCRIPT_DEBUG_FILENAME MODULENAME_ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_8186a69f387a122950bec39b74e9afc9fc7674f2150a1091ddb943928c82ed07
+static const char* MODULENAME_ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_5e078b1b9d52d1d84b98aba0fb3b39e3819af75f263adae24e4f05fc8c1fb58e = "ASStaticJITAotImportProvider";
+#define SCRIPT_DEBUG_FILENAME MODULENAME_ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_5e078b1b9d52d1d84b98aba0fb3b39e3819af75f263adae24e4f05fc8c1fb58e
 #endif
 
 // AS Function : int IndependentModuleEntryForAOT()
-// AS Source   : /Angelscript/Game/ASStaticJITAotImportProvider.as:6:5
+// AS Source   : /Angelscript/Game/ASStaticJITAotImportProvider.as:6:1
 // JIT Entry   : Raw
-int32 ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_8186a69f387a122950bec39b74e9afc9fc7674f2150a1091ddb943928c82ed07(FScriptExecution& Execution)
+int32 ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_5e078b1b9d52d1d84b98aba0fb3b39e3819af75f263adae24e4f05fc8c1fb58e(FScriptExecution& Execution)
 {
 // == Jit at BC 0 ==
 SCRIPT_DEBUG_CALLSTACK_FRAME("int IndependentModuleEntryForAOT()", 7);
@@ -145,20 +145,20 @@ l_dwordRegister = v_TEMP_dword_1;
   return (int32)l_dwordRegister;
 }
 // AS Function : int IndependentModuleEntryForAOT()
-// AS Source   : /Angelscript/Game/ASStaticJITAotImportProvider.as:6:5
+// AS Source   : /Angelscript/Game/ASStaticJITAotImportProvider.as:6:1
 // JIT Entry   : VM
-void ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_8186a69f387a122950bec39b74e9afc9fc7674f2150a1091ddb943928c82ed07_VMEntry(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
+void ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_5e078b1b9d52d1d84b98aba0fb3b39e3819af75f263adae24e4f05fc8c1fb58e_VMEntry(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
-	*(int32*)l_outValue = ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_8186a69f387a122950bec39b74e9afc9fc7674f2150a1091ddb943928c82ed07(Execution);
+	*(int32*)l_outValue = ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_5e078b1b9d52d1d84b98aba0fb3b39e3819af75f263adae24e4f05fc8c1fb58e(Execution);
 }
 // AS Function : int IndependentModuleEntryForAOT()
-// AS Source   : /Angelscript/Game/ASStaticJITAotImportProvider.as:6:5
+// AS Source   : /Angelscript/Game/ASStaticJITAotImportProvider.as:6:1
 // JIT Entry   : Parms
-void ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_8186a69f387a122950bec39b74e9afc9fc7674f2150a1091ddb943928c82ed07_ParmsEntry(FScriptExecution& Execution, void* Object, void* Parms)
+void ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_5e078b1b9d52d1d84b98aba0fb3b39e3819af75f263adae24e4f05fc8c1fb58e_ParmsEntry(FScriptExecution& Execution, void* Object, void* Parms)
 {
 	SIZE_T ParmsOffset = 0;
 	const SIZE_T ReturnParmOffset = ParmsOffset;
-	*(int32*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_8186a69f387a122950bec39b74e9afc9fc7674f2150a1091ddb943928c82ed07(Execution);
+	*(int32*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_6e91286ea26e37e3990fb6a25366dd42719eb66bac5a8e3ea5593c32105dcb17_5e078b1b9d52d1d84b98aba0fb3b39e3819af75f263adae24e4f05fc8c1fb58e(Execution);
 }
 #endif
 #endif // WITH_EDITOR && UE_BUILD_DEVELOPMENT

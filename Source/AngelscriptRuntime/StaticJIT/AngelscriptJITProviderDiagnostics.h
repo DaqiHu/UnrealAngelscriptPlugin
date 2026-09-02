@@ -8,7 +8,7 @@
 
 namespace FAngelscriptJITProviderDiagnosticsAbi
 {
-	inline constexpr uint32 SchemaRevision = 2;
+	inline constexpr uint32 SchemaRevision = 3;
 	inline constexpr uint32 MaximumFallbackChainCount = 8;
 	inline constexpr uint32 MaximumBackendAttemptCount = 1u << 20;
 	inline constexpr uint32 MaximumSemanticFunctionCount = 1u << 20;

@@ -291,6 +291,123 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotInstalledDiagnosticTests,
 			0, OrdinaryLifetimeWithoutPlan.DiagnosticSemanticIndex));
 	}
 
+	TEST_METHOD(FullExpressionLifetimeDiagnosticRequiresAuthenticatedPlanShape)
+	{
+		using namespace
+			AngelscriptStaticJITAotInstalledDiagnosticsTests_Private;
+		FProvider Provider;
+		Provider.Semantic.CleanupPlanState = TEXT("ScriptDestructor");
+		Provider.Semantic.LifetimeActionFlags = 1u;
+		Provider.Semantic.LifetimeExitPlanFlags = 1u << 3;
+		Provider.Semantic.LifetimeSupportedExitMask = (1u << 0) | (1u << 5);
+		Provider.Semantic.LifetimeRecordCount = 1u;
+		Provider.Semantic.LifetimeExitPlanCount = 1u;
+		Provider.Semantic.bNativeObjectFrameABIAvailable = 0u;
+		Provider.Semantic.bHasExceptionCleanup = 1u;
+		Provider.RebuildIdentity();
+
+		const FAngelscriptJITProviderValidationResult FullExpression =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(FullExpression.IsValid(),
+			TEXT("one authenticated full-expression temporary must be a valid provider diagnostic")));
+		const FAngelscriptHash256 ArtifactSet = Provider.View.ArtifactSetDigest;
+		const FAngelscriptJITProviderGeneration ProviderGeneration =
+			Provider.View.ProviderGeneration;
+		FAngelscriptJITProviderRegistry Registry;
+		const FAngelscriptJITProviderRegistrationResult Registered =
+			Registry.RegisterProvider(&Provider, Provider);
+		ASSERT_THAT(IsTrue(Registered.Code
+			== EAngelscriptJITProviderRegistrationCode::Registered));
+		const TSharedPtr<const FAngelscriptJITProviderRegistrySnapshot,
+			ESPMode::ThreadSafe> Snapshot = Registry.GetSnapshot();
+		ASSERT_THAT(AreEqual(1, Snapshot->Providers.Num()));
+		ASSERT_THAT(IsTrue(Snapshot->Providers[0]->Diagnostics.IsSet()));
+		ASSERT_THAT(AreEqual(1u << 3, Snapshot->Providers[0]->Diagnostics
+			->SemanticFunctions[0].LifetimeExitPlanFlags,
+			TEXT("registry snapshot must deep-copy the full-expression plan bit")));
+		ASSERT_THAT(IsTrue(Provider.View.ArtifactSetDigest == ArtifactSet));
+		ASSERT_THAT(IsTrue(
+			Provider.View.ProviderGeneration == ProviderGeneration));
+		ASSERT_THAT(IsTrue(Registry.UnregisterOwner(&Provider)));
+
+		Provider.Diagnostics.SchemaRevision =
+			FAngelscriptJITProviderDiagnosticsAbi::SchemaRevision - 1u;
+		Provider.RebuildIdentity();
+		const FAngelscriptJITProviderValidationResult OldSchema =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(OldSchema.Code
+			== EAngelscriptJITProviderValidationCode::UnsupportedDiagnosticSchema,
+			TEXT("the previous diagnostics schema must fail closed")));
+		Provider.Diagnostics.SchemaRevision =
+			FAngelscriptJITProviderDiagnosticsAbi::SchemaRevision;
+
+		Provider.Semantic.LifetimeExitPlanFlags = (1u << 3) | (1u << 4);
+		Provider.RebuildIdentity();
+		const FAngelscriptJITProviderValidationResult UnknownPlanBit =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(UnknownPlanBit.Code
+			== EAngelscriptJITProviderValidationCode::InvalidDiagnosticString));
+		ASSERT_THAT(AreEqual(0, UnknownPlanBit.DiagnosticSemanticIndex));
+
+		Provider.Semantic.LifetimeExitPlanFlags = 1u << 3;
+		Provider.Semantic.LifetimeExitPlanCount = 0u;
+		Provider.RebuildIdentity();
+		const FAngelscriptJITProviderValidationResult MissingPlan =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(MissingPlan.Code
+			== EAngelscriptJITProviderValidationCode::InvalidDiagnosticString));
+		ASSERT_THAT(AreEqual(0, MissingPlan.DiagnosticSemanticIndex));
+
+		Provider.Semantic.LifetimeExitPlanCount = 1u;
+		Provider.Semantic.LifetimeRecordCount = 0u;
+		Provider.RebuildIdentity();
+		const FAngelscriptJITProviderValidationResult MissingRecord =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(MissingRecord.Code
+			== EAngelscriptJITProviderValidationCode::InvalidDiagnosticString));
+		ASSERT_THAT(AreEqual(0, MissingRecord.DiagnosticSemanticIndex));
+
+		Provider.Semantic.LifetimeRecordCount = 1u;
+		Provider.Semantic.CleanupPlanState = TEXT("Unverified");
+		Provider.RebuildIdentity();
+		const FAngelscriptJITProviderValidationResult UnverifiedSummary =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(UnverifiedSummary.Code
+			== EAngelscriptJITProviderValidationCode::InvalidDiagnosticString));
+		ASSERT_THAT(AreEqual(0, UnverifiedSummary.DiagnosticSemanticIndex));
+
+		Provider.Semantic.CleanupPlanState = TEXT("ScriptDestructor");
+		Provider.Semantic.LifetimeActionFlags = 1u << 1;
+		Provider.RebuildIdentity();
+		const FAngelscriptJITProviderValidationResult WrongActionFamily =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(WrongActionFamily.Code
+			== EAngelscriptJITProviderValidationCode::InvalidDiagnosticString,
+			TEXT("a full-expression temporary cannot forge a release action")));
+		ASSERT_THAT(AreEqual(0, WrongActionFamily.DiagnosticSemanticIndex));
+
+		Provider.Semantic.LifetimeActionFlags = 1u;
+		Provider.Semantic.LifetimeSupportedExitMask = 1u << 0;
+		Provider.RebuildIdentity();
+		const FAngelscriptJITProviderValidationResult WrongExitMask =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(WrongExitMask.Code
+			== EAngelscriptJITProviderValidationCode::InvalidDiagnosticString,
+			TEXT("a standalone full-expression temporary requires normal and exception exits")));
+		ASSERT_THAT(AreEqual(0, WrongExitMask.DiagnosticSemanticIndex));
+
+		Provider.Semantic.LifetimeSupportedExitMask =
+			(1u << 0) | (1u << 5);
+		Provider.Semantic.bNativeObjectFrameABIAvailable = 1u;
+		Provider.RebuildIdentity();
+		const FAngelscriptJITProviderValidationResult ForgedNativeFrame =
+			FAngelscriptJITProviderManifest::Validate(Provider.View);
+		ASSERT_THAT(IsTrue(ForgedNativeFrame.Code
+			== EAngelscriptJITProviderValidationCode::InvalidDiagnosticString,
+			TEXT("schema 3 must not claim native execution for this unsupported frame family")));
+		ASSERT_THAT(AreEqual(0, ForgedNativeFrame.DiagnosticSemanticIndex));
+	}
+
 	TEST_METHOD(SystemCallUsesStableTargetIdentityWithoutScriptFunctionKey)
 	{
 		using namespace

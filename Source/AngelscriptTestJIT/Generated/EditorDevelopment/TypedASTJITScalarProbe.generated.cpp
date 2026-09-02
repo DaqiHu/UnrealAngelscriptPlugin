@@ -66,15 +66,15 @@ static int32 AS_Test_Semantic_SemanticScalarBranch(
 }
 
 static int32 AS_Test_Semantic_SemanticMutationParity(
-	const int32 as_ast_d14,
-	const int32 as_ast_d15)
+	const int32 as_ast_d11,
+	const int32 as_ast_d12)
 {
-	int32 as_ast_d16;
+	int32 as_ast_d13;
 	{
 		([&]() -> int32
 		{
-			const int32 as_ast_e20_value = as_ast_d14;
-			int32& as_ast_e20_target = as_ast_d16;
+			const int32 as_ast_e20_value = as_ast_d11;
+			int32& as_ast_e20_target = as_ast_d13;
 			as_ast_e20_target = as_ast_e20_value;
 			return as_ast_e20_target;
 		}());
@@ -82,8 +82,8 @@ static int32 AS_Test_Semantic_SemanticMutationParity(
 	{
 		([&]() -> int32
 		{
-			const int32 as_ast_e23_value = as_ast_d15;
-			int32& as_ast_e23_target = as_ast_d16;
+			const int32 as_ast_e23_value = as_ast_d12;
+			int32& as_ast_e23_target = as_ast_d13;
 			as_ast_e23_target = as_ast_e23_value;
 			return as_ast_e23_target;
 		}());
@@ -92,51 +92,51 @@ static int32 AS_Test_Semantic_SemanticMutationParity(
 		([&]() -> int32
 		{
 			const int32 as_ast_e26_value = int32(3);
-			int32& as_ast_e26_target = as_ast_d16;
+			int32& as_ast_e26_target = as_ast_d13;
 			as_ast_e26_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e26_target, as_ast_e26_value);
 			return as_ast_e26_target;
 		}());
 	}
-	int32 as_ast_d17;
+	int32 as_ast_d14;
 	{
 		([&]() -> int32
 		{
-			const int32 as_ast_e30_value = AngelscriptTypedASTJIT::WrapPreIncrement<int32>(as_ast_d16);
-			int32& as_ast_e30_target = as_ast_d17;
-			as_ast_e30_target = as_ast_e30_value;
-			return as_ast_e30_target;
+			const int32 as_ast_e31_value = AngelscriptTypedASTJIT::WrapPreIncrement<int32>(as_ast_d13);
+			int32& as_ast_e31_target = as_ast_d14;
+			as_ast_e31_target = as_ast_e31_value;
+			return as_ast_e31_target;
 		}());
 	}
-	int32 as_ast_d18;
+	int32 as_ast_d15;
 	{
 		([&]() -> int32
 		{
-			const int32 as_ast_e34_value = AngelscriptTypedASTJIT::WrapPostIncrement<int32>(as_ast_d16);
-			int32& as_ast_e34_target = as_ast_d18;
-			as_ast_e34_target = as_ast_e34_value;
-			return as_ast_e34_target;
+			const int32 as_ast_e36_value = AngelscriptTypedASTJIT::WrapPostIncrement<int32>(as_ast_d13);
+			int32& as_ast_e36_target = as_ast_d15;
+			as_ast_e36_target = as_ast_e36_value;
+			return as_ast_e36_target;
 		}());
 	}
 	return ([&]() -> int32
 	{
-		const int32 as_ast_e43_left = ([&]() -> int32
+		const int32 as_ast_e45_left = ([&]() -> int32
 	{
-		const int32 as_ast_e42_left = ([&]() -> int32
+		const int32 as_ast_e44_left = ([&]() -> int32
 	{
-		const int32 as_ast_e40_left = as_ast_d16;
-		const int32 as_ast_e40_right = int32(1000);
-		return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e40_left, as_ast_e40_right);
+		const int32 as_ast_e42_left = as_ast_d13;
+		const int32 as_ast_e42_right = int32(1000);
+		return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e42_left, as_ast_e42_right);
 	}());
-		const int32 as_ast_e42_right = ([&]() -> int32
+		const int32 as_ast_e44_right = ([&]() -> int32
 	{
-		const int32 as_ast_e41_left = as_ast_d17;
-		const int32 as_ast_e41_right = int32(100);
-		return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e41_left, as_ast_e41_right);
+		const int32 as_ast_e43_left = as_ast_d14;
+		const int32 as_ast_e43_right = int32(100);
+		return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e43_left, as_ast_e43_right);
 	}());
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e42_left, as_ast_e42_right);
+		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e44_left, as_ast_e44_right);
 	}());
-		const int32 as_ast_e43_right = as_ast_d18;
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e43_left, as_ast_e43_right);
+		const int32 as_ast_e45_right = as_ast_d15;
+		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e45_left, as_ast_e45_right);
 	}());
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
 	return int32{};
@@ -144,22 +144,22 @@ static int32 AS_Test_Semantic_SemanticMutationParity(
 
 static float AS_Test_Semantic_SemanticPowerFloat(
 	FScriptExecution& Execution,
-	const float as_ast_d20,
-	const float as_ast_d21)
+	const float as_ast_d17,
+	const float as_ast_d18)
 {
 	return ([&]() -> float
 	{
-		const float as_ast_e46_left = as_ast_d20;
+		const float as_ast_e48_left = as_ast_d17;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return float{};
 		}
-		const float as_ast_e46_right = as_ast_d21;
+		const float as_ast_e48_right = as_ast_d18;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return float{};
 		}
-		return AngelscriptTypedASTJIT::CheckedPower<float>(Execution, as_ast_e46_left, as_ast_e46_right);
+		return AngelscriptTypedASTJIT::CheckedPower<float>(Execution, as_ast_e48_left, as_ast_e48_right);
 	}());
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
 	return float{};
@@ -167,22 +167,22 @@ static float AS_Test_Semantic_SemanticPowerFloat(
 
 static double AS_Test_Semantic_SemanticPowerDouble(
 	FScriptExecution& Execution,
-	const double as_ast_d23,
-	const double as_ast_d24)
+	const double as_ast_d20,
+	const double as_ast_d21)
 {
 	return ([&]() -> double
 	{
-		const double as_ast_e49_left = as_ast_d23;
+		const double as_ast_e51_left = as_ast_d20;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return double{};
 		}
-		const double as_ast_e49_right = as_ast_d24;
+		const double as_ast_e51_right = as_ast_d21;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return double{};
 		}
-		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_ast_e49_left, as_ast_e49_right);
+		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_ast_e51_left, as_ast_e51_right);
 	}());
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
 	return double{};
@@ -190,22 +190,22 @@ static double AS_Test_Semantic_SemanticPowerDouble(
 
 static double AS_Test_Semantic_SemanticPowerDoubleInt(
 	FScriptExecution& Execution,
-	const double as_ast_d26,
-	const int32 as_ast_d27)
+	const double as_ast_d23,
+	const int32 as_ast_d24)
 {
 	return ([&]() -> double
 	{
-		const double as_ast_e53_left = as_ast_d26;
+		const double as_ast_e55_left = as_ast_d23;
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return double{};
 		}
-		const double as_ast_e53_right = static_cast<double>(as_ast_d27);
+		const double as_ast_e55_right = static_cast<double>(as_ast_d24);
 		if (UNLIKELY(Execution.bExceptionThrown))
 		{
 			return double{};
 		}
-		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_ast_e53_left, as_ast_e53_right);
+		return AngelscriptTypedASTJIT::CheckedPower<double>(Execution, as_ast_e55_left, as_ast_e55_right);
 	}());
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
 	return double{};
@@ -246,9 +246,9 @@ static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
 			{
 				if (([&]() -> bool
 				{
-					const int32 as_ast_e14_left = as_ast_d10;
-					const int32 as_ast_e14_right = int32(1);
-					return (as_ast_e14_left == as_ast_e14_right);
+					const int32 as_ast_e15_left = as_ast_d10;
+					const int32 as_ast_e15_right = int32(1);
+					return (as_ast_e15_left == as_ast_e15_right);
 				}()))
 				{
 					continue;
@@ -257,25 +257,25 @@ static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
 			{
 				switch (as_ast_d10)
 				{
-					case int32(2):
+					case static_cast<int32>(int32(2)):
 						{
 							([&]() -> int32
 							{
-								const int32 as_ast_e19_value = int32(20);
-								int32& as_ast_e19_target = as_ast_d9;
-								as_ast_e19_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e19_target, as_ast_e19_value);
-								return as_ast_e19_target;
+								const int32 as_ast_e20_value = int32(20);
+								int32& as_ast_e20_target = as_ast_d9;
+								as_ast_e20_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e20_target, as_ast_e20_value);
+								return as_ast_e20_target;
 							}());
 						}
 						break;
-					case int32(3):
+					case static_cast<int32>(int32(3)):
 						{
 							([&]() -> int32
 							{
-								const int32 as_ast_e23_value = int32(30);
-								int32& as_ast_e23_target = as_ast_d9;
-								as_ast_e23_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e23_target, as_ast_e23_value);
-								return as_ast_e23_target;
+								const int32 as_ast_e24_value = int32(30);
+								int32& as_ast_e24_target = as_ast_d9;
+								as_ast_e24_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e24_target, as_ast_e24_value);
+								return as_ast_e24_target;
 							}());
 						}
 						continue;
@@ -283,10 +283,10 @@ static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
 						{
 							([&]() -> int32
 							{
-								const int32 as_ast_e26_value = as_ast_d10;
-								int32& as_ast_e26_target = as_ast_d9;
-								as_ast_e26_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e26_target, as_ast_e26_value);
-								return as_ast_e26_target;
+								const int32 as_ast_e27_value = as_ast_d10;
+								int32& as_ast_e27_target = as_ast_d9;
+								as_ast_e27_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e27_target, as_ast_e27_value);
+								return as_ast_e27_target;
 							}());
 						}
 						break;
@@ -295,9 +295,9 @@ static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
 			{
 				if (([&]() -> bool
 				{
-					const int32 as_ast_e29_left = as_ast_d9;
-					const int32 as_ast_e29_right = int32(45);
-					return (as_ast_e29_left > as_ast_e29_right);
+					const int32 as_ast_e32_left = as_ast_d9;
+					const int32 as_ast_e32_right = int32(45);
+					return (as_ast_e32_left > as_ast_e32_right);
 				}()))
 				{
 					break;
@@ -309,18 +309,18 @@ static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
 	{
 		([&]() -> int32
 		{
-			const int32 as_ast_e32_value = int32(0);
-			int32& as_ast_e32_target = as_ast_d11;
-			as_ast_e32_target = as_ast_e32_value;
-			return as_ast_e32_target;
+			const int32 as_ast_e35_value = int32(0);
+			int32& as_ast_e35_target = as_ast_d11;
+			as_ast_e35_target = as_ast_e35_value;
+			return as_ast_e35_target;
 		}());
 	}
 	{
 		while (([&]() -> bool
 		{
-			const int32 as_ast_e35_left = as_ast_d11;
-			const int32 as_ast_e35_right = as_ast_d7;
-			return (as_ast_e35_left < as_ast_e35_right);
+			const int32 as_ast_e38_left = as_ast_d11;
+			const int32 as_ast_e38_right = as_ast_d7;
+			return (as_ast_e38_left < as_ast_e38_right);
 		}()))
 		{
 			{
@@ -329,9 +329,9 @@ static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
 			{
 				if (([&]() -> bool
 				{
-					const int32 as_ast_e40_left = as_ast_d11;
-					const int32 as_ast_e40_right = int32(2);
-					return (as_ast_e40_left == as_ast_e40_right);
+					const int32 as_ast_e44_left = as_ast_d11;
+					const int32 as_ast_e44_right = int32(2);
+					return (as_ast_e44_left == as_ast_e44_right);
 				}()))
 				{
 					continue;
@@ -340,18 +340,18 @@ static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
 			{
 				([&]() -> int32
 				{
-					const int32 as_ast_e43_value = int32(3);
-					int32& as_ast_e43_target = as_ast_d9;
-					as_ast_e43_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e43_target, as_ast_e43_value);
-					return as_ast_e43_target;
+					const int32 as_ast_e47_value = int32(3);
+					int32& as_ast_e47_target = as_ast_d9;
+					as_ast_e47_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e47_target, as_ast_e47_value);
+					return as_ast_e47_target;
 				}());
 			}
 			{
 				if (([&]() -> bool
 				{
-					const int32 as_ast_e46_left = as_ast_d11;
-					const int32 as_ast_e46_right = int32(4);
-					return (as_ast_e46_left >= as_ast_e46_right);
+					const int32 as_ast_e50_left = as_ast_d11;
+					const int32 as_ast_e50_right = int32(4);
+					return (as_ast_e50_left >= as_ast_e50_right);
 				}()))
 				{
 					break;
@@ -363,10 +363,10 @@ static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
 	{
 		([&]() -> int32
 		{
-			const int32 as_ast_e49_value = int32(0);
-			int32& as_ast_e49_target = as_ast_d12;
-			as_ast_e49_target = as_ast_e49_value;
-			return as_ast_e49_target;
+			const int32 as_ast_e53_value = int32(0);
+			int32& as_ast_e53_target = as_ast_d12;
+			as_ast_e53_target = as_ast_e53_value;
+			return as_ast_e53_target;
 		}());
 	}
 	{
@@ -378,9 +378,9 @@ static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
 			{
 				if (([&]() -> bool
 				{
-					const int32 as_ast_e54_left = as_ast_d12;
-					const int32 as_ast_e54_right = int32(1);
-					return (as_ast_e54_left == as_ast_e54_right);
+					const int32 as_ast_e59_left = as_ast_d12;
+					const int32 as_ast_e59_right = int32(1);
+					return (as_ast_e59_left == as_ast_e59_right);
 				}()))
 				{
 					continue;
@@ -389,94 +389,94 @@ static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
 			{
 				([&]() -> int32
 				{
-					const int32 as_ast_e57_value = int32(5);
-					int32& as_ast_e57_target = as_ast_d9;
-					as_ast_e57_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e57_target, as_ast_e57_value);
-					return as_ast_e57_target;
+					const int32 as_ast_e62_value = int32(5);
+					int32& as_ast_e62_target = as_ast_d9;
+					as_ast_e62_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e62_target, as_ast_e62_value);
+					return as_ast_e62_target;
 				}());
 			}
 		}
 		while (([&]() -> bool
 		{
-			const int32 as_ast_e60_left = as_ast_d12;
-			const int32 as_ast_e60_right = int32(2);
-			return (as_ast_e60_left < as_ast_e60_right);
+			const int32 as_ast_e65_left = as_ast_d12;
+			const int32 as_ast_e65_right = int32(2);
+			return (as_ast_e65_left < as_ast_e65_right);
 		}()));
 	}
 	{
 		switch (as_ast_d8)
 		{
-			case int32(0):
+			case static_cast<int32>(int32(0)):
 				{
 					([&]() -> int32
 					{
-						const int32 as_ast_e65_value = int32(100);
-						int32& as_ast_e65_target = as_ast_d9;
-						as_ast_e65_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e65_target, as_ast_e65_value);
-						return as_ast_e65_target;
+						const int32 as_ast_e70_value = int32(100);
+						int32& as_ast_e70_target = as_ast_d9;
+						as_ast_e70_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e70_target, as_ast_e70_value);
+						return as_ast_e70_target;
 					}());
 				}
 				break;
-			case int32(1):
+			case static_cast<int32>(int32(1)):
 				{
 					([&]() -> int32
 					{
-						const int32 as_ast_e69_value = int32(200);
-						int32& as_ast_e69_target = as_ast_d9;
-						as_ast_e69_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e69_target, as_ast_e69_value);
-						return as_ast_e69_target;
+						const int32 as_ast_e74_value = int32(200);
+						int32& as_ast_e74_target = as_ast_d9;
+						as_ast_e74_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e74_target, as_ast_e74_value);
+						return as_ast_e74_target;
 					}());
 				}
-			case int32(2):
+			case static_cast<int32>(int32(2)):
 				{
 					int32 as_ast_d13;
 					{
 						([&]() -> int32
 						{
-							const int32 as_ast_e73_value = int32(20);
-							int32& as_ast_e73_target = as_ast_d13;
-							as_ast_e73_target = as_ast_e73_value;
-							return as_ast_e73_target;
+							const int32 as_ast_e78_value = int32(20);
+							int32& as_ast_e78_target = as_ast_d13;
+							as_ast_e78_target = as_ast_e78_value;
+							return as_ast_e78_target;
 						}());
 					}
 					{
 						([&]() -> int32
 						{
-							const int32 as_ast_e76_value = as_ast_d13;
-							int32& as_ast_e76_target = as_ast_d9;
-							as_ast_e76_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e76_target, as_ast_e76_value);
-							return as_ast_e76_target;
+							const int32 as_ast_e81_value = as_ast_d13;
+							int32& as_ast_e81_target = as_ast_d9;
+							as_ast_e81_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e81_target, as_ast_e81_value);
+							return as_ast_e81_target;
 						}());
 					}
 					break;
 				}
-			case int32(3):
+			case static_cast<int32>(int32(3)):
 				{
 					int32 as_ast_d14;
 					{
 						([&]() -> int32
 						{
-							const int32 as_ast_e80_value = int32(0);
-							int32& as_ast_e80_target = as_ast_d14;
-							as_ast_e80_target = as_ast_e80_value;
-							return as_ast_e80_target;
+							const int32 as_ast_e85_value = int32(0);
+							int32& as_ast_e85_target = as_ast_d14;
+							as_ast_e85_target = as_ast_e85_value;
+							return as_ast_e85_target;
 						}());
 					}
 					{
 						while (([&]() -> bool
 						{
-							const int32 as_ast_e83_left = as_ast_d14;
-							const int32 as_ast_e83_right = int32(2);
-							return (as_ast_e83_left < as_ast_e83_right);
+							const int32 as_ast_e88_left = as_ast_d14;
+							const int32 as_ast_e88_right = int32(2);
+							return (as_ast_e88_left < as_ast_e88_right);
 						}()))
 						{
 							{
 								([&]() -> int32
 								{
-									const int32 as_ast_e86_value = int32(7);
-									int32& as_ast_e86_target = as_ast_d9;
-									as_ast_e86_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e86_target, as_ast_e86_value);
-									return as_ast_e86_target;
+									const int32 as_ast_e91_value = int32(7);
+									int32& as_ast_e91_target = as_ast_d9;
+									as_ast_e91_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e91_target, as_ast_e91_value);
+									return as_ast_e91_target;
 								}());
 							}
 							{
@@ -485,9 +485,9 @@ static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
 							{
 								if (([&]() -> bool
 								{
-									const int32 as_ast_e91_left = as_ast_d14;
-									const int32 as_ast_e91_right = int32(1);
-									return (as_ast_e91_left == as_ast_e91_right);
+									const int32 as_ast_e97_left = as_ast_d14;
+									const int32 as_ast_e97_right = int32(1);
+									return (as_ast_e97_left == as_ast_e97_right);
 								}()))
 								{
 									continue;
@@ -502,10 +502,10 @@ static int32 AS_Test_Semantic_SemanticStructuredControlFlow(
 				{
 					([&]() -> int32
 					{
-						const int32 as_ast_e94_value = int32(9);
-						int32& as_ast_e94_target = as_ast_d9;
-						as_ast_e94_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e94_target, as_ast_e94_value);
-						return as_ast_e94_target;
+						const int32 as_ast_e100_value = int32(9);
+						int32& as_ast_e100_target = as_ast_d9;
+						as_ast_e100_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e100_target, as_ast_e100_value);
+						return as_ast_e100_target;
 					}());
 				}
 				break;
@@ -524,10 +524,10 @@ static int32 AS_Test_Semantic_SemanticExhaustiveEnum(
 	{
 		([&]() -> int8
 		{
-			const int8 as_ast_e99_value = AngelscriptTypedASTJIT::WrapNarrow<int8>(as_ast_d16);
-			int8& as_ast_e99_target = as_ast_d17;
-			as_ast_e99_target = as_ast_e99_value;
-			return as_ast_e99_target;
+			const int8 as_ast_e109_value = AngelscriptTypedASTJIT::WrapNarrow<int8>(as_ast_d16);
+			int8& as_ast_e109_target = as_ast_d17;
+			as_ast_e109_target = as_ast_e109_value;
+			return as_ast_e109_target;
 		}());
 	}
 	{
@@ -538,11 +538,11 @@ static int32 AS_Test_Semantic_SemanticExhaustiveEnum(
 		}
 		switch (as_ast_stmt_84_condition)
 		{
-			case int8(0):
+			case static_cast<int8>(int8(0)):
 				return int32(10);
-			case int8(1):
+			case static_cast<int8>(int8(1)):
 				return int32(20);
-			case int8(2):
+			case static_cast<int8>(int8(2)):
 				return int32(30);
 			default:
 				FStaticJITFunction::SetSwitchValueInvalidException(Execution);

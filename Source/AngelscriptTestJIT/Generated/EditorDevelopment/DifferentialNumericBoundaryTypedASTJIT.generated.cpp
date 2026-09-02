@@ -4,7 +4,7 @@
  * Backend            : TypedASTJIT
  * Declaration        : int SemanticNumericBoundary(const int, const int, const int, const int)
  * StableFunctionKey  : de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc256e
- * OriginalSymbolSet  : ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc256e_e0fe8c2cfcfada2c40ea089f18c78e9feb710c6195f0711860b0af886352893c
+ * OriginalSymbolSet  : ASJIT_de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc256e_d466fbd7c311f586c660bf1891bcc9980d671125c47235ba656a6627a6a2cada
  * TestSymbolSet      : AS_Test_Differential_TypedAST_SemanticNumericBoundary
  * CleanupPlan       : VerifiedEmpty (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -24,10 +24,10 @@
 /*
  * AngelScript Static JIT Function
  * Declaration       : int SemanticNumericBoundary(const int, const int, const int, const int)
- * Source             : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:6
+ * Source             : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:2
  * StableFunctionKey  : de11fe956606b543fa19fba3bf01592edab537ccc7e1e46ed59d0b8e3bdc256e
- * ExecutionHash      : e0fe8c2cfcfada2c40ea089f18c78e9feb710c6195f0711860b0af886352893c
- * DebugHash          : 298092bc25472d52eb973f769b952fdeb6d5acb420383e9766f3aad735d13526
+ * ExecutionHash      : d466fbd7c311f586c660bf1891bcc9980d671125c47235ba656a6627a6a2cada
+ * DebugHash          : 1e4c533c5f2e17b6fb8e76ca82448d30c76521a59d318c7d4520f8cc9653f633
  * EntryAbiHash       : ce69b03c30f4aba54525c218c4551a91f6dfe1f289fefa74e6e6ea01b1bab739
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
@@ -36,65 +36,65 @@
 static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_ast_d17,
-	const int32 as_ast_d18,
-	const int32 as_ast_d19,
-	const int32 as_ast_d20);
+	const int32 as_ast_d14,
+	const int32 as_ast_d15,
+	const int32 as_ast_d16,
+	const int32 as_ast_d17);
 
 static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 	FScriptExecution& Execution,
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_ast_d17,
-	const int32 as_ast_d18,
-	const int32 as_ast_d19,
-	const int32 as_ast_d20)
+	const int32 as_ast_d14,
+	const int32 as_ast_d15,
+	const int32 as_ast_d16,
+	const int32 as_ast_d17)
 {
 	{
 		TypedFrame.SetSourcePosition(32, 3);
-		switch (as_ast_d20)
+		switch (as_ast_d17)
 		{
-			case int32(0):
+			case static_cast<int32>(int32(0)):
 				{
 					TypedFrame.SetSourcePosition(35, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e16_left = as_ast_d17;
-					const int32 as_ast_e16_right = as_ast_d18;
+					const int32 as_ast_e16_left = as_ast_d14;
+					const int32 as_ast_e16_right = as_ast_d15;
 					return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e16_left, as_ast_e16_right);
 				}());
 				}
-			case int32(1):
+			case static_cast<int32>(int32(1)):
 				{
 					TypedFrame.SetSourcePosition(37, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e20_left = as_ast_d17;
-					const int32 as_ast_e20_right = as_ast_d18;
+					const int32 as_ast_e20_left = as_ast_d14;
+					const int32 as_ast_e20_right = as_ast_d15;
 					return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e20_left, as_ast_e20_right);
 				}());
 				}
-			case int32(2):
+			case static_cast<int32>(int32(2)):
 				{
 					TypedFrame.SetSourcePosition(39, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e24_left = as_ast_d17;
-					const int32 as_ast_e24_right = as_ast_d18;
+					const int32 as_ast_e24_left = as_ast_d14;
+					const int32 as_ast_e24_right = as_ast_d15;
 					return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e24_left, as_ast_e24_right);
 				}());
 				}
-			case int32(3):
+			case static_cast<int32>(int32(3)):
 				{
 					TypedFrame.SetSourcePosition(41, 4);
 					return ([&]() -> int32
 				{
 					TypedFrame.SetSourcePosition(41, 4);
-					const int32 as_ast_e28_left = as_ast_d17;
+					const int32 as_ast_e28_left = as_ast_d14;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e28_right = as_ast_d18;
+					const int32 as_ast_e28_right = as_ast_d15;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
@@ -102,18 +102,18 @@ static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 					return AngelscriptTypedASTJIT::CheckedDivide<int32>(Execution, as_ast_e28_left, as_ast_e28_right);
 				}());
 				}
-			case int32(4):
+			case static_cast<int32>(int32(4)):
 				{
 					TypedFrame.SetSourcePosition(43, 4);
 					return ([&]() -> int32
 				{
 					TypedFrame.SetSourcePosition(43, 4);
-					const int32 as_ast_e32_left = as_ast_d17;
+					const int32 as_ast_e32_left = as_ast_d14;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e32_right = as_ast_d18;
+					const int32 as_ast_e32_right = as_ast_d15;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
@@ -121,17 +121,17 @@ static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 					return AngelscriptTypedASTJIT::CheckedRemainder<int32>(Execution, as_ast_e32_left, as_ast_e32_right);
 				}());
 				}
-			case int32(5):
+			case static_cast<int32>(int32(5)):
 				{
 					TypedFrame.SetSourcePosition(45, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e36_left = as_ast_d17;
+					const int32 as_ast_e36_left = as_ast_d14;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e36_right = as_ast_d19;
+					const int32 as_ast_e36_right = as_ast_d16;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
@@ -139,17 +139,17 @@ static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 					return AngelscriptTypedASTJIT::ShiftLeft<int32>(as_ast_e36_left, as_ast_e36_right);
 				}());
 				}
-			case int32(6):
+			case static_cast<int32>(int32(6)):
 				{
 					TypedFrame.SetSourcePosition(47, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e40_left = as_ast_d17;
+					const int32 as_ast_e40_left = as_ast_d14;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e40_right = as_ast_d19;
+					const int32 as_ast_e40_right = as_ast_d16;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
@@ -157,17 +157,17 @@ static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 					return AngelscriptTypedASTJIT::LogicalShiftRight<int32>(as_ast_e40_left, as_ast_e40_right);
 				}());
 				}
-			case int32(7):
+			case static_cast<int32>(int32(7)):
 				{
 					TypedFrame.SetSourcePosition(49, 4);
 					return ([&]() -> int32
 				{
-					const int32 as_ast_e44_left = as_ast_d17;
+					const int32 as_ast_e44_left = as_ast_d14;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
 					}
-					const int32 as_ast_e44_right = as_ast_d19;
+					const int32 as_ast_e44_right = as_ast_d16;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
@@ -175,19 +175,19 @@ static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 					return AngelscriptTypedASTJIT::ArithmeticShiftRight<int32>(as_ast_e44_left, as_ast_e44_right);
 				}());
 				}
-			case int32(8):
+			case static_cast<int32>(int32(8)):
 				{
-					int64 as_ast_d23;
+					int64 as_ast_d18;
 					{
 						TypedFrame.SetSourcePosition(52, 10);
 						([&]() -> int64
 						{
-							const int64 as_ast_e49_value = static_cast<int64>(as_ast_d17);
+							const int64 as_ast_e49_value = static_cast<int64>(as_ast_d14);
 							if (UNLIKELY(Execution.bExceptionThrown))
 							{
 								return int64{};
 							}
-							int64& as_ast_e49_target = as_ast_d23;
+							int64& as_ast_e49_target = as_ast_d18;
 							as_ast_e49_target = as_ast_e49_value;
 							return as_ast_e49_target;
 						}());
@@ -200,12 +200,12 @@ static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 						TypedFrame.SetSourcePosition(53, 4);
 						const bool as_ast_stmt_29_condition = ([&]() -> bool
 						{
-							const int64 as_ast_e53_left = as_ast_d23;
+							const int64 as_ast_e53_left = as_ast_d18;
 							if (UNLIKELY(Execution.bExceptionThrown))
 							{
 								return bool{};
 							}
-							const int64 as_ast_e53_right = static_cast<int64>(as_ast_d17);
+							const int64 as_ast_e53_right = static_cast<int64>(as_ast_d14);
 							if (UNLIKELY(Execution.bExceptionThrown))
 							{
 								return bool{};
@@ -220,7 +220,7 @@ static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 						{
 							{
 								TypedFrame.SetSourcePosition(55, 5);
-								return as_ast_d17;
+								return as_ast_d14;
 							}
 						}
 					}
@@ -229,12 +229,12 @@ static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 						return int32(0);
 					}
 				}
-			case int32(9):
+			case static_cast<int32>(int32(9)):
 				{
 					TypedFrame.SetSourcePosition(60, 4);
 					const bool as_ast_stmt_35_condition = ([&]() -> bool
 					{
-						const int32 as_ast_e59_left = as_ast_d17;
+						const int32 as_ast_e59_left = as_ast_d14;
 						if (UNLIKELY(Execution.bExceptionThrown))
 						{
 							return bool{};
@@ -262,7 +262,7 @@ static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 					TypedFrame.SetSourcePosition(64, 4);
 					return int32(0);
 				}
-			case int32(10):
+			case static_cast<int32>(int32(10)):
 				{
 					TypedFrame.SetSourcePosition(66, 4);
 					return ([&]() -> int32
@@ -272,7 +272,7 @@ static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 					{
 						return int32{};
 					}
-					const int32 as_ast_e65_right = as_ast_d17;
+					const int32 as_ast_e65_right = as_ast_d14;
 					if (UNLIKELY(Execution.bExceptionThrown))
 					{
 						return int32{};
@@ -296,7 +296,7 @@ static int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_TypedBody(
 }
 
 // AS Function : int SemanticNumericBoundary(const int, const int, const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:6
+// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:2
 // JIT Entry   : Raw
 int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_Raw(FScriptExecution& Execution, void* Object, asDWORD p_0, asDWORD p_1, asDWORD p_2, asDWORD p_3)
 {
@@ -317,7 +317,7 @@ int32 AS_Test_Differential_TypedAST_SemanticNumericBoundary_Raw(FScriptExecution
 }
 
 // AS Function : int SemanticNumericBoundary(const int, const int, const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:6
+// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:2
 // JIT Entry   : VM
 void AS_Test_Differential_TypedAST_SemanticNumericBoundary_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
@@ -330,7 +330,7 @@ void AS_Test_Differential_TypedAST_SemanticNumericBoundary_VM(FScriptExecution& 
 }
 
 // AS Function : int SemanticNumericBoundary(const int, const int, const int, const int)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:6
+// AS Source   : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:26:2
 // JIT Entry   : Parms
 void AS_Test_Differential_TypedAST_SemanticNumericBoundary_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
@@ -378,7 +378,7 @@ namespace
 				TEXT("int SemanticNumericBoundary(const int, const int, const int, const int)"),
 				TEXT("/Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as"),
 				26u,
-				6u,
+				2u,
 				AngelscriptTestJITProbes::EIsolatedDifferentialCleanupPlanState::VerifiedEmpty,
 				0u,
 				FTypedASTJITDifferentialEntryRegistrationReferenceSlots,

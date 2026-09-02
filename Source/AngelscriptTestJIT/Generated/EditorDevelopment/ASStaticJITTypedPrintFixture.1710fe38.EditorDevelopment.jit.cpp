@@ -27,20 +27,20 @@ constexpr SIZE_T TSIZE_UStaticJITAotFunctionCarrier = Align(POFFSET_UStaticJITAo
 /*
  * AngelScript Static JIT Function
  * Declaration       : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
- * Source             : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:5
+ * Source             : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:1
  * StableFunctionKey  : 9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4
- * ExecutionHash      : 22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae
- * DebugHash          : 36f43385af144221f040238a169f370914ca7474de6082afa6911c20a2943f43
+ * ExecutionHash      : 98ad2eecb9f20770f9060f6aa2d0398fd0d541ed3a542347441854dbedf5e55f
+ * DebugHash          : 54fb5fe4495387e4eab30aa491f296a91d22301d5a51eb739e0f35f21506abf6
  * EntryAbiHash       : 97fbcd10bc26610e92f0705696227e7d6c0a85c0ece2feeca0b53d76f314e25a
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
  * CapabilityHash     : 5fff2a330081dc25acb31e4837294258d821f8533d45073e34a20c6aea6c3eb1
  */
-static int32 ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae_TypedBody(
+static int32 ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_98ad2eecb9f20770f9060f6aa2d0398fd0d541ed3a542347441854dbedf5e55f_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const FString& as_ast_d3,
-	const double as_ast_d4,
-	const FLinearColor& as_ast_d5);
+	const FString& as_ast_d4,
+	const double as_ast_d5,
+	const FLinearColor& as_ast_d7);
 
 /*
  * AngelScript Native Call Site 0
@@ -52,20 +52,20 @@ static int32 ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee9
  * Metadata Row        : <none>
  * Reference Slot      : -1
  */
-static int32 ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae_TypedBody(
+static int32 ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_98ad2eecb9f20770f9060f6aa2d0398fd0d541ed3a542347441854dbedf5e55f_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const FString& as_ast_d3,
-	const double as_ast_d4,
-	const FLinearColor& as_ast_d5)
+	const FString& as_ast_d4,
+	const double as_ast_d5,
+	const FLinearColor& as_ast_d7)
 {
 	{
 		TypedFrame.SetSourcePosition(7, 2);
 		([&]() -> void
 		{
-			const FLinearColor& as_ast_e5_arg2 = as_ast_d5;
-			const float as_ast_e5_arg1 = static_cast<float>(as_ast_d4);
-			const FString& as_ast_e5_arg0 = as_ast_d3;
-			AngelscriptStaticJITNativeCallables::Print(as_ast_e5_arg0, as_ast_e5_arg1, as_ast_e5_arg2);
+			FLinearColor as_ast_e9_arg2 = as_ast_d7;
+			float as_ast_e9_arg1 = static_cast<float>(as_ast_d5);
+			const FString& as_ast_e9_arg0 = as_ast_d4;
+			AngelscriptStaticJITNativeCallables::Print(as_ast_e9_arg0, as_ast_e9_arg1, as_ast_e9_arg2);
 			return;
 		}());
 	}
@@ -78,9 +78,9 @@ static int32 ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee9
 }
 
 // AS Function : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:1
 // JIT Entry   : Raw
-int32 ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae_Raw(FScriptExecution& Execution, FString* p_0, double p_1, FLinearColor* p_2)
+int32 ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_98ad2eecb9f20770f9060f6aa2d0398fd0d541ed3a542347441854dbedf5e55f_Raw(FScriptExecution& Execution, FString* p_0, double p_1, FLinearColor* p_2)
 {
 	SCRIPT_ASSUME_NO_EXCEPTION()
 	FScopeTypedASTJITExecutionFrame TypedFrame(
@@ -95,24 +95,24 @@ int32 ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_225
 	{
 		return {};
 	}
-	return ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae_TypedBody(TypedFrame, *p_0, static_cast<double>(p_1), *p_2);
+	return ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_98ad2eecb9f20770f9060f6aa2d0398fd0d541ed3a542347441854dbedf5e55f_TypedBody(TypedFrame, *p_0, static_cast<double>(p_1), *p_2);
 }
 
 // AS Function : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:1
 // JIT Entry   : VM
-void ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
+void ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_98ad2eecb9f20770f9060f6aa2d0398fd0d541ed3a542347441854dbedf5e55f_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
-	*(int32*)l_outValue = ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae_Raw(Execution,
+	*(int32*)l_outValue = ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_98ad2eecb9f20770f9060f6aa2d0398fd0d541ed3a542347441854dbedf5e55f_Raw(Execution,
 		*(FString**)(l_fp + 0),
 		*(double*)(l_fp + 2),
 		*(FLinearColor**)(l_fp + 4));
 }
 
 // AS Function : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:1
 // JIT Entry   : Parms
-void ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae_Parms(FScriptExecution& Execution, void* Object, void* Parms)
+void ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_98ad2eecb9f20770f9060f6aa2d0398fd0d541ed3a542347441854dbedf5e55f_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
 	static_cast<void>(Object);
 	SIZE_T ParmsOffset = 0;
@@ -130,7 +130,7 @@ void ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_2252
 	static_cast<void>(GeneratedWorldContextParmOffset);
 	ParmsOffset = Align(ParmsOffset, alignof(int32));
 	const SIZE_T ReturnParmOffset = ParmsOffset;
-	*(int32*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae_Raw(Execution,
+	*(int32*)(((SIZE_T)Parms) + ReturnParmOffset) = ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_98ad2eecb9f20770f9060f6aa2d0398fd0d541ed3a542347441854dbedf5e55f_Raw(Execution,
 		(FString*)(((SIZE_T)Parms) + ParmOffset_0),
 		static_cast<double>(*(double*)(((SIZE_T)Parms) + ParmOffset_1)),
 		(FLinearColor*)(((SIZE_T)Parms) + ParmOffset_2));

@@ -4,7 +4,7 @@
  * Backend            : TypedASTJIT
  * Declaration        : int TypedASTCapabilityShowcase(const int, const int, const bool, const bool)
  * StableFunctionKey  : a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b
- * OriginalSymbolSet  : ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_18d15b8d5bd3f4789e921a45ff54539d9afce9dffd62cb44825a273ffda2328f
+ * OriginalSymbolSet  : ASJIT_a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b_e75fe728e40dc52aa18508e8758d65b02d0c622da99b6e53f885a65d7dd31bf5
  * TestSymbolSet      : AS_Test_Differential_TypedAST_TypedASTCapabilityShowcase
  * CleanupPlan       : VerifiedEmpty (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -24,10 +24,10 @@
 /*
  * AngelScript Static JIT Function
  * Declaration       : int TypedASTCapabilityShowcase(const int, const int, const bool, const bool)
- * Source             : /Angelscript/Game/ASStaticJITAotFixture.as:50:5
+ * Source             : /Angelscript/Game/ASStaticJITAotFixture.as:50:1
  * StableFunctionKey  : a0a3a72e853494a38f163859b7f08309652a533ad47d19f3c50819091312c67b
- * ExecutionHash      : 18d15b8d5bd3f4789e921a45ff54539d9afce9dffd62cb44825a273ffda2328f
- * DebugHash          : 8bf65cc1e4776ade1eddfe8d564cb923a8b581a4b6b32e04bb343fb30a2638a0
+ * ExecutionHash      : e75fe728e40dc52aa18508e8758d65b02d0c622da99b6e53f885a65d7dd31bf5
+ * DebugHash          : f1675cc2d072786fb7cbe4777d1caac574993ce75d470854da1303c4a98ee287
  * EntryAbiHash       : 315429bd98bc57e8264be8ad0e7bc5007a550d671431aa6b3c1f76f34b2aa667
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
@@ -35,10 +35,10 @@
  */
 static int32 AS_Test_Differential_TypedAST_TypedASTCapabilityShowcase_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_ast_d40,
-	const int32 as_ast_d41,
-	const bool as_ast_d42,
-	const bool as_ast_d43);
+	const int32 as_ast_d37,
+	const int32 as_ast_d38,
+	const bool as_ast_d39,
+	const bool as_ast_d40);
 
 /*
  * AngelScript Native Call Site 0
@@ -52,191 +52,191 @@ static int32 AS_Test_Differential_TypedAST_TypedASTCapabilityShowcase_TypedBody(
  */
 static int32 AS_Test_Differential_TypedAST_TypedASTCapabilityShowcase_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const int32 as_ast_d40,
-	const int32 as_ast_d41,
-	const bool as_ast_d42,
-	const bool as_ast_d43)
+	const int32 as_ast_d37,
+	const int32 as_ast_d38,
+	const bool as_ast_d39,
+	const bool as_ast_d40)
 {
-	int32 as_ast_d44;
+	int32 as_ast_d41;
 	{
 		TypedFrame.SetSourcePosition(56, 6);
 		([&]() -> int32
 		{
-			const int32 as_ast_e61_value = ([&]() -> int32
+			const int32 as_ast_e63_value = ([&]() -> int32
 		{
-			const int32 as_ast_e59_left = as_ast_d40;
-			const int32 as_ast_e59_right = as_ast_d41;
-			return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e59_left, as_ast_e59_right);
+			const int32 as_ast_e61_left = as_ast_d37;
+			const int32 as_ast_e61_right = as_ast_d38;
+			return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e61_left, as_ast_e61_right);
 		}());
-			int32& as_ast_e61_target = as_ast_d44;
-			as_ast_e61_target = as_ast_e61_value;
-			return as_ast_e61_target;
+			int32& as_ast_e63_target = as_ast_d41;
+			as_ast_e63_target = as_ast_e63_value;
+			return as_ast_e63_target;
 		}());
 	}
 	{
 		TypedFrame.SetSourcePosition(57, 2);
 		([&]() -> int32
 		{
-			const int32 as_ast_e66_value = ([&]() -> int32
+			const int32 as_ast_e68_value = ([&]() -> int32
 		{
-			const int32 as_ast_e65_left = as_ast_d44;
-			const int32 as_ast_e65_right = int32(1);
-			return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e65_left, as_ast_e65_right);
+			const int32 as_ast_e67_left = as_ast_d41;
+			const int32 as_ast_e67_right = int32(1);
+			return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e67_left, as_ast_e67_right);
 		}());
-			int32& as_ast_e66_target = as_ast_d44;
-			as_ast_e66_target = as_ast_e66_value;
-			return as_ast_e66_target;
+			int32& as_ast_e68_target = as_ast_d41;
+			as_ast_e68_target = as_ast_e68_value;
+			return as_ast_e68_target;
 		}());
 	}
 	{
 		TypedFrame.SetSourcePosition(58, 2);
 		([&]() -> int32
 		{
-			const int32 as_ast_e69_value = int32(3);
-			int32& as_ast_e69_target = as_ast_d44;
-			as_ast_e69_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e69_target, as_ast_e69_value);
-			return as_ast_e69_target;
+			const int32 as_ast_e71_value = int32(3);
+			int32& as_ast_e71_target = as_ast_d41;
+			as_ast_e71_target = AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e71_target, as_ast_e71_value);
+			return as_ast_e71_target;
 		}());
 	}
 	{
 		TypedFrame.SetSourcePosition(59, 2);
 		([&]() -> int32
 		{
-			const int32 as_ast_e72_value = int32(1);
-			int32& as_ast_e72_target = as_ast_d44;
-			as_ast_e72_target = AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e72_target, as_ast_e72_value);
-			return as_ast_e72_target;
+			const int32 as_ast_e74_value = int32(1);
+			int32& as_ast_e74_target = as_ast_d41;
+			as_ast_e74_target = AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e74_target, as_ast_e74_value);
+			return as_ast_e74_target;
 		}());
 	}
 	{
 		TypedFrame.SetSourcePosition(60, 2);
 		([&]() -> int32
 		{
-			const int32 as_ast_e75_value = int32(2);
-			int32& as_ast_e75_target = as_ast_d44;
-			as_ast_e75_target = AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e75_target, as_ast_e75_value);
-			return as_ast_e75_target;
+			const int32 as_ast_e77_value = int32(2);
+			int32& as_ast_e77_target = as_ast_d41;
+			as_ast_e77_target = AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e77_target, as_ast_e77_value);
+			return as_ast_e77_target;
 		}());
 	}
-	int32 as_ast_d45;
+	int32 as_ast_d42;
 	{
 		TypedFrame.SetSourcePosition(62, 6);
 		([&]() -> int32
 		{
-			const int32 as_ast_e79_value = AngelscriptTypedASTJIT::WrapPreIncrement<int32>(as_ast_d44);
-			int32& as_ast_e79_target = as_ast_d45;
-			as_ast_e79_target = as_ast_e79_value;
-			return as_ast_e79_target;
+			const int32 as_ast_e82_value = AngelscriptTypedASTJIT::WrapPreIncrement<int32>(as_ast_d41);
+			int32& as_ast_e82_target = as_ast_d42;
+			as_ast_e82_target = as_ast_e82_value;
+			return as_ast_e82_target;
 		}());
 	}
-	int32 as_ast_d46;
+	int32 as_ast_d43;
 	{
 		TypedFrame.SetSourcePosition(63, 6);
 		([&]() -> int32
 		{
-			const int32 as_ast_e83_value = AngelscriptTypedASTJIT::WrapPostIncrement<int32>(as_ast_d44);
-			int32& as_ast_e83_target = as_ast_d46;
-			as_ast_e83_target = as_ast_e83_value;
-			return as_ast_e83_target;
-		}());
-	}
-	int32 as_ast_d47;
-	{
-		TypedFrame.SetSourcePosition(64, 6);
-		([&]() -> int32
-		{
-			const int32 as_ast_e87_value = AngelscriptTypedASTJIT::WrapNegate<int32>(as_ast_d45);
-			int32& as_ast_e87_target = as_ast_d47;
+			const int32 as_ast_e87_value = AngelscriptTypedASTJIT::WrapPostIncrement<int32>(as_ast_d41);
+			int32& as_ast_e87_target = as_ast_d43;
 			as_ast_e87_target = as_ast_e87_value;
 			return as_ast_e87_target;
 		}());
 	}
-	int32 as_ast_d48;
+	int32 as_ast_d44;
 	{
-		TypedFrame.SetSourcePosition(65, 6);
+		TypedFrame.SetSourcePosition(64, 6);
 		([&]() -> int32
 		{
-			const int32 as_ast_e91_value = AngelscriptTypedASTJIT::BitwiseNot<int32>(as_ast_d46);
-			int32& as_ast_e91_target = as_ast_d48;
+			const int32 as_ast_e91_value = AngelscriptTypedASTJIT::WrapNegate<int32>(as_ast_d42);
+			int32& as_ast_e91_target = as_ast_d44;
 			as_ast_e91_target = as_ast_e91_value;
 			return as_ast_e91_target;
 		}());
 	}
-	int32 as_ast_d49;
+	int32 as_ast_d45;
+	{
+		TypedFrame.SetSourcePosition(65, 6);
+		([&]() -> int32
+		{
+			const int32 as_ast_e95_value = AngelscriptTypedASTJIT::BitwiseNot<int32>(as_ast_d43);
+			int32& as_ast_e95_target = as_ast_d45;
+			as_ast_e95_target = as_ast_e95_value;
+			return as_ast_e95_target;
+		}());
+	}
+	int32 as_ast_d46;
 	{
 		TypedFrame.SetSourcePosition(66, 6);
 		([&]() -> int32
 		{
-			const int32 as_ast_e96_value = ([&]() -> int32
+			const int32 as_ast_e100_value = ([&]() -> int32
 		{
-			const int32 as_ast_e94_left = as_ast_d44;
-			const int32 as_ast_e94_right = int32(1);
-			return AngelscriptTypedASTJIT::ShiftLeft<int32>(as_ast_e94_left, as_ast_e94_right);
+			const int32 as_ast_e98_left = as_ast_d41;
+			const int32 as_ast_e98_right = int32(1);
+			return AngelscriptTypedASTJIT::ShiftLeft<int32>(as_ast_e98_left, as_ast_e98_right);
 		}());
-			int32& as_ast_e96_target = as_ast_d49;
-			as_ast_e96_target = as_ast_e96_value;
-			return as_ast_e96_target;
+			int32& as_ast_e100_target = as_ast_d46;
+			as_ast_e100_target = as_ast_e100_value;
+			return as_ast_e100_target;
 		}());
 	}
-	int32 as_ast_d50;
+	int32 as_ast_d47;
 	{
 		TypedFrame.SetSourcePosition(67, 6);
 		([&]() -> int32
 		{
-			const int32 as_ast_e101_value = ([&]() -> int32
+			const int32 as_ast_e105_value = ([&]() -> int32
 		{
-			const int32 as_ast_e99_left = as_ast_d44;
-			const int32 as_ast_e99_right = int32(1);
-			return AngelscriptTypedASTJIT::LogicalShiftRight<int32>(as_ast_e99_left, as_ast_e99_right);
+			const int32 as_ast_e103_left = as_ast_d41;
+			const int32 as_ast_e103_right = int32(1);
+			return AngelscriptTypedASTJIT::LogicalShiftRight<int32>(as_ast_e103_left, as_ast_e103_right);
 		}());
-			int32& as_ast_e101_target = as_ast_d50;
-			as_ast_e101_target = as_ast_e101_value;
-			return as_ast_e101_target;
+			int32& as_ast_e105_target = as_ast_d47;
+			as_ast_e105_target = as_ast_e105_value;
+			return as_ast_e105_target;
 		}());
 	}
-	bool as_ast_d51;
+	bool as_ast_d48;
 	{
 		TypedFrame.SetSourcePosition(69, 7);
 		([&]() -> bool
 		{
-			const bool as_ast_e109_value = (as_ast_d42 && ([&]() -> bool
+			const bool as_ast_e114_value = (as_ast_d39 && ([&]() -> bool
 		{
-			const int32 as_ast_e106_left = AngelscriptTypedASTJIT::WrapPreIncrement<int32>(as_ast_d44);
-			const int32 as_ast_e106_right = as_ast_d41;
-			return (as_ast_e106_left > as_ast_e106_right);
+			const int32 as_ast_e111_left = AngelscriptTypedASTJIT::WrapPreIncrement<int32>(as_ast_d41);
+			const int32 as_ast_e111_right = as_ast_d38;
+			return (as_ast_e111_left > as_ast_e111_right);
 		}()));
-			bool& as_ast_e109_target = as_ast_d51;
-			as_ast_e109_target = as_ast_e109_value;
-			return as_ast_e109_target;
+			bool& as_ast_e114_target = as_ast_d48;
+			as_ast_e114_target = as_ast_e114_value;
+			return as_ast_e114_target;
 		}());
 	}
-	bool as_ast_d52;
+	bool as_ast_d49;
 	{
 		TypedFrame.SetSourcePosition(70, 7);
 		([&]() -> bool
 		{
-			const bool as_ast_e116_value = ((as_ast_d51 && as_ast_d43) && IsRunningCommandlet());
-			bool& as_ast_e116_target = as_ast_d52;
-			as_ast_e116_target = as_ast_e116_value;
-			return as_ast_e116_target;
+			const bool as_ast_e121_value = ((as_ast_d48 && as_ast_d40) && IsRunningCommandlet());
+			bool& as_ast_e121_target = as_ast_d49;
+			as_ast_e121_target = as_ast_e121_value;
+			return as_ast_e121_target;
 		}());
 	}
 	{
 		TypedFrame.SetSourcePosition(72, 2);
-		if (as_ast_d52)
+		if (as_ast_d49)
 		{
 			{
 				TypedFrame.SetSourcePosition(74, 3);
 				return ([&]() -> int32
 			{
-				const int32 as_ast_e122_left = ([&]() -> int32
+				const int32 as_ast_e127_left = ([&]() -> int32
 			{
-				const int32 as_ast_e121_left = as_ast_d49;
-				const int32 as_ast_e121_right = as_ast_d48;
-				return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e121_left, as_ast_e121_right);
+				const int32 as_ast_e126_left = as_ast_d46;
+				const int32 as_ast_e126_right = as_ast_d45;
+				return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e126_left, as_ast_e126_right);
 			}());
-				const int32 as_ast_e122_right = as_ast_d44;
-				return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e122_left, as_ast_e122_right);
+				const int32 as_ast_e127_right = as_ast_d41;
+				return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e127_left, as_ast_e127_right);
 			}());
 			}
 		}
@@ -245,23 +245,23 @@ static int32 AS_Test_Differential_TypedAST_TypedASTCapabilityShowcase_TypedBody(
 		TypedFrame.SetSourcePosition(76, 2);
 		if (([&]() -> bool
 		{
-			const int32 as_ast_e125_left = as_ast_d50;
-			const int32 as_ast_e125_right = int32(10);
-			return (as_ast_e125_left > as_ast_e125_right);
+			const int32 as_ast_e130_left = as_ast_d47;
+			const int32 as_ast_e130_right = int32(10);
+			return (as_ast_e130_left > as_ast_e130_right);
 		}()))
 		{
 			{
 				TypedFrame.SetSourcePosition(78, 3);
 				return ([&]() -> int32
 			{
-				const int32 as_ast_e130_left = ([&]() -> int32
+				const int32 as_ast_e135_left = ([&]() -> int32
 			{
-				const int32 as_ast_e129_left = as_ast_d50;
-				const int32 as_ast_e129_right = int32(2);
-				return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e129_left, as_ast_e129_right);
+				const int32 as_ast_e134_left = as_ast_d47;
+				const int32 as_ast_e134_right = int32(2);
+				return AngelscriptTypedASTJIT::WrapMultiply<int32>(as_ast_e134_left, as_ast_e134_right);
 			}());
-				const int32 as_ast_e130_right = as_ast_d44;
-				return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e130_left, as_ast_e130_right);
+				const int32 as_ast_e135_right = as_ast_d41;
+				return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e135_left, as_ast_e135_right);
 			}());
 			}
 		}
@@ -270,14 +270,14 @@ static int32 AS_Test_Differential_TypedAST_TypedASTCapabilityShowcase_TypedBody(
 		TypedFrame.SetSourcePosition(80, 2);
 		return ([&]() -> int32
 	{
-		const int32 as_ast_e135_left = ([&]() -> int32
+		const int32 as_ast_e140_left = ([&]() -> int32
 	{
-		const int32 as_ast_e134_left = as_ast_d47;
-		const int32 as_ast_e134_right = int32(1);
-		return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e134_left, as_ast_e134_right);
+		const int32 as_ast_e139_left = as_ast_d44;
+		const int32 as_ast_e139_right = int32(1);
+		return AngelscriptTypedASTJIT::WrapSubtract<int32>(as_ast_e139_left, as_ast_e139_right);
 	}());
-		const int32 as_ast_e135_right = as_ast_d44;
-		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e135_left, as_ast_e135_right);
+		const int32 as_ast_e140_right = as_ast_d41;
+		return AngelscriptTypedASTJIT::WrapAdd<int32>(as_ast_e140_left, as_ast_e140_right);
 	}());
 	}
 	// Canonical Sema proves source-level return completeness; this fallback keeps C++ structurally total when it cannot prove enum switch exhaustiveness.
@@ -285,7 +285,7 @@ static int32 AS_Test_Differential_TypedAST_TypedASTCapabilityShowcase_TypedBody(
 }
 
 // AS Function : int TypedASTCapabilityShowcase(const int, const int, const bool, const bool)
-// AS Source   : /Angelscript/Game/ASStaticJITAotFixture.as:50:5
+// AS Source   : /Angelscript/Game/ASStaticJITAotFixture.as:50:1
 // JIT Entry   : Raw
 int32 AS_Test_Differential_TypedAST_TypedASTCapabilityShowcase_Raw(FScriptExecution& Execution, asDWORD p_0, asDWORD p_1, asBYTE p_2, asBYTE p_3)
 {
@@ -306,7 +306,7 @@ int32 AS_Test_Differential_TypedAST_TypedASTCapabilityShowcase_Raw(FScriptExecut
 }
 
 // AS Function : int TypedASTCapabilityShowcase(const int, const int, const bool, const bool)
-// AS Source   : /Angelscript/Game/ASStaticJITAotFixture.as:50:5
+// AS Source   : /Angelscript/Game/ASStaticJITAotFixture.as:50:1
 // JIT Entry   : VM
 void AS_Test_Differential_TypedAST_TypedASTCapabilityShowcase_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
@@ -318,7 +318,7 @@ void AS_Test_Differential_TypedAST_TypedASTCapabilityShowcase_VM(FScriptExecutio
 }
 
 // AS Function : int TypedASTCapabilityShowcase(const int, const int, const bool, const bool)
-// AS Source   : /Angelscript/Game/ASStaticJITAotFixture.as:50:5
+// AS Source   : /Angelscript/Game/ASStaticJITAotFixture.as:50:1
 // JIT Entry   : Parms
 void AS_Test_Differential_TypedAST_TypedASTCapabilityShowcase_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
@@ -369,7 +369,7 @@ namespace
 				TEXT("int TypedASTCapabilityShowcase(const int, const int, const bool, const bool)"),
 				TEXT("/Angelscript/Game/ASStaticJITAotFixture.as"),
 				50u,
-				5u,
+				1u,
 				AngelscriptTestJITProbes::EIsolatedDifferentialCleanupPlanState::VerifiedEmpty,
 				0u,
 				FTypedASTJITDifferentialEntryRegistrationReferenceSlots,

@@ -4,7 +4,7 @@
  * Backend            : TypedASTJIT
  * Declaration        : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
  * StableFunctionKey  : 9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4
- * OriginalSymbolSet  : ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae
+ * OriginalSymbolSet  : ASJIT_9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4_98ad2eecb9f20770f9060f6aa2d0398fd0d541ed3a542347441854dbedf5e55f
  * TestSymbolSet      : AS_Test_Differential_TypedAST_TypedASTPrintShowcase
  * CleanupPlan       : VerifiedEmpty (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -24,10 +24,10 @@
 /*
  * AngelScript Static JIT Function
  * Declaration       : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
- * Source             : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:5
+ * Source             : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:1
  * StableFunctionKey  : 9b9ea7239812ba225616d8419fc67d8fee16a911d0b51872166534a2d0ee91a4
- * ExecutionHash      : 22520f4a76bcce5aecea9e6cf76f4b4e677dd04139ba6f5432f5fc11fe35b0ae
- * DebugHash          : 36f43385af144221f040238a169f370914ca7474de6082afa6911c20a2943f43
+ * ExecutionHash      : 98ad2eecb9f20770f9060f6aa2d0398fd0d541ed3a542347441854dbedf5e55f
+ * DebugHash          : 54fb5fe4495387e4eab30aa491f296a91d22301d5a51eb739e0f35f21506abf6
  * EntryAbiHash       : 97fbcd10bc26610e92f0705696227e7d6c0a85c0ece2feeca0b53d76f314e25a
  * ExecutionCaps      : 129
  * RuntimeTriggers    : 0
@@ -35,9 +35,9 @@
  */
 static int32 AS_Test_Differential_TypedAST_TypedASTPrintShowcase_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const FString& as_ast_d3,
-	const double as_ast_d4,
-	const FLinearColor& as_ast_d5);
+	const FString& as_ast_d4,
+	const double as_ast_d5,
+	const FLinearColor& as_ast_d7);
 
 /*
  * AngelScript Native Call Site 0
@@ -51,18 +51,18 @@ static int32 AS_Test_Differential_TypedAST_TypedASTPrintShowcase_TypedBody(
  */
 static int32 AS_Test_Differential_TypedAST_TypedASTPrintShowcase_TypedBody(
 	FScopeTypedASTJITExecutionFrame& TypedFrame,
-	const FString& as_ast_d3,
-	const double as_ast_d4,
-	const FLinearColor& as_ast_d5)
+	const FString& as_ast_d4,
+	const double as_ast_d5,
+	const FLinearColor& as_ast_d7)
 {
 	{
 		TypedFrame.SetSourcePosition(7, 2);
 		([&]() -> void
 		{
-			const FLinearColor& as_ast_e5_arg2 = as_ast_d5;
-			const float as_ast_e5_arg1 = static_cast<float>(as_ast_d4);
-			const FString& as_ast_e5_arg0 = as_ast_d3;
-			AngelscriptStaticJITNativeCallables::Print(as_ast_e5_arg0, as_ast_e5_arg1, as_ast_e5_arg2);
+			FLinearColor as_ast_e9_arg2 = as_ast_d7;
+			float as_ast_e9_arg1 = static_cast<float>(as_ast_d5);
+			const FString& as_ast_e9_arg0 = as_ast_d4;
+			AngelscriptStaticJITNativeCallables::Print(as_ast_e9_arg0, as_ast_e9_arg1, as_ast_e9_arg2);
 			return;
 		}());
 	}
@@ -75,7 +75,7 @@ static int32 AS_Test_Differential_TypedAST_TypedASTPrintShowcase_TypedBody(
 }
 
 // AS Function : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:1
 // JIT Entry   : Raw
 int32 AS_Test_Differential_TypedAST_TypedASTPrintShowcase_Raw(FScriptExecution& Execution, FString* p_0, double p_1, FLinearColor* p_2)
 {
@@ -96,7 +96,7 @@ int32 AS_Test_Differential_TypedAST_TypedASTPrintShowcase_Raw(FScriptExecution& 
 }
 
 // AS Function : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:1
 // JIT Entry   : VM
 void AS_Test_Differential_TypedAST_TypedASTPrintShowcase_VM(FScriptExecution& Execution, asDWORD* l_fp, asQWORD* l_outValue)
 {
@@ -107,7 +107,7 @@ void AS_Test_Differential_TypedAST_TypedASTPrintShowcase_VM(FScriptExecution& Ex
 }
 
 // AS Function : int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)
-// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:5
+// AS Source   : /Angelscript/Game/ASStaticJITTypedPrintFixture.as:2:1
 // JIT Entry   : Parms
 void AS_Test_Differential_TypedAST_TypedASTPrintShowcase_Parms(FScriptExecution& Execution, void* Object, void* Parms)
 {
@@ -156,7 +156,7 @@ namespace
 				TEXT("int TypedASTPrintShowcase(const FString&in, const float, const FLinearColor&in)"),
 				TEXT("/Angelscript/Game/ASStaticJITTypedPrintFixture.as"),
 				2u,
-				5u,
+				1u,
 				AngelscriptTestJITProbes::EIsolatedDifferentialCleanupPlanState::VerifiedEmpty,
 				0u,
 				FTypedASTJITDifferentialEntryRegistrationReferenceSlots,

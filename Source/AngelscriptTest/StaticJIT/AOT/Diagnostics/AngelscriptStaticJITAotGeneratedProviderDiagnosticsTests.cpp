@@ -176,6 +176,50 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptStaticJITAotGeneratedProviderDiagnosticTests,
 		ASSERT_THAT(IsFalse(ProviderSource->Content.Contains(
 			TEXT("GProviderDiagnostics"))));
 	}
+
+	TEST_METHOD(EditorProviderTransportsFullExpressionLifetimeSummary)
+	{
+		using namespace
+			AngelscriptStaticJITAotGeneratedProviderDiagnosticsTests_Private;
+		FAngelscriptJITGenerationRequest Request = MakeRequest(
+			EAngelscriptJITTargetProfile::EditorDevelopment);
+		FAngelscriptJITGenerationCanonicalFunctionDiagnostic& Semantic =
+			Request.Diagnostics->Functions[0].BackendAttempts[0]
+				.SemanticFunctions[0];
+		Semantic.CleanupPlanState = TEXT("ScriptDestructor");
+		Semantic.LifetimeActionFlags = 1u;
+		Semantic.LifetimeExitPlanFlags = 1u << 3;
+		Semantic.LifetimeSupportedExitMask = (1u << 0) | (1u << 5);
+		Semantic.LifetimeRecordCount = 1u;
+		Semantic.LifetimeExitPlanCount = 1u;
+		Semantic.bNativeObjectFrameABIAvailable = false;
+		Semantic.bHasExceptionCleanup = true;
+		Semantic.EligibilityReason = TEXT("UnsupportedLifetime");
+		Semantic.EligibilityDetail =
+			TEXT("AuthenticatedFullExpressionTemporaryRequiresNativeObjectFrameABI");
+
+		FAngelscriptJITGenerationOutput Output;
+		FString Error;
+		ASSERT_THAT(IsTrue(FAngelscriptJITGeneration::Generate(
+			Request, Output, &Error), Error));
+		const FAngelscriptJITGeneratedFile* ProviderSource =
+			FindProviderSource(Output);
+		ASSERT_THAT(IsNotNull(ProviderSource));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			TEXT("LifetimeActionFlags = 1;"))));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			TEXT("LifetimeExitPlanFlags = 8;"))));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			TEXT("LifetimeSupportedExitMask = 33;"))));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			TEXT("LifetimeRecordCount = 1;"))));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			TEXT("LifetimeExitPlanCount = 1;"))));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			TEXT("bNativeObjectFrameABIAvailable = 0;"))));
+		ASSERT_THAT(IsTrue(ProviderSource->Content.Contains(
+			TEXT("AuthenticatedFullExpressionTemporaryRequiresNativeObjectFrameABI"))));
+	}
 };
 
 #endif // WITH_ANGELSCRIPT_UNITTESTS && AS_WITH_STATIC_JIT_DIAGNOSTICS

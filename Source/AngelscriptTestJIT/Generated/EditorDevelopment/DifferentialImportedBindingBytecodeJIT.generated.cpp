@@ -4,7 +4,7 @@
  * Backend            : BytecodeJIT
  * Declaration        : int SemanticImportedBinding(const int)
  * StableFunctionKey  : cc438c3e7ddfcc3025b48910f03aa06f782d90388781b3b7ac3ef3303476b746
- * OriginalSymbolSet  : ASJIT_cc438c3e7ddfcc3025b48910f03aa06f782d90388781b3b7ac3ef3303476b746_d058635e3c75e6d21eaea3526da99683d0b06744dd8a3db4eb3599d34dfd4585
+ * OriginalSymbolSet  : ASJIT_cc438c3e7ddfcc3025b48910f03aa06f782d90388781b3b7ac3ef3303476b746_383dd866d3614d6e9abe45058b7220a88aeb08d14db304d15ab06c9007deea46
  * TestSymbolSet      : AS_Test_Differential_Bytecode_SemanticImportedBinding
  * CleanupPlan       : NotCaptured (0 actions)
  * Publication        : test-only entry accessors; no Provider registration
@@ -26,7 +26,7 @@
  * Declaration       : int SemanticImportedBinding(const int)
  * Source             : /Angelscript/Game/ASStaticJITTypedFinalScalarFixture.as:20:2
  * StableFunctionKey  : cc438c3e7ddfcc3025b48910f03aa06f782d90388781b3b7ac3ef3303476b746
- * ExecutionHash      : d058635e3c75e6d21eaea3526da99683d0b06744dd8a3db4eb3599d34dfd4585
+ * ExecutionHash      : 383dd866d3614d6e9abe45058b7220a88aeb08d14db304d15ab06c9007deea46
  * DebugHash          : 4e812d41acefcdde1a5d04df3f8a0ddbbcb2dee67d6a67d001583b4ee7660916
  * EntryAbiHash       : a4b711dd5134aeaca25a93796be749414190495c109eeba3fb1015c75b1a90b1
  * ExecutionCaps      : 0
