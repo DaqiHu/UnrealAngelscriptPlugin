@@ -10,6 +10,28 @@ namespace UnrealBuildTool.Rules
 	{
 		internal static bool ShouldCompileUnitTests(ReadOnlyTargetRules Target, ModuleRules Rules)
 		{
+			return ReadBooleanCompileOption(
+				Target,
+				Rules,
+				"bCompileAngelscriptUnitTests",
+				false);
+		}
+
+		internal static bool ShouldCompileTests(ReadOnlyTargetRules Target, ModuleRules Rules)
+		{
+			return ReadBooleanCompileOption(
+				Target,
+				Rules,
+				"bCompileAngelscriptTests",
+				true);
+		}
+
+		private static bool ReadBooleanCompileOption(
+			ReadOnlyTargetRules Target,
+			ModuleRules Rules,
+			string SettingName,
+			bool DefaultValue)
+		{
 			if (!Target.bBuildEditor || Target.ProjectFile == null)
 			{
 				return false;
@@ -22,14 +44,16 @@ namespace UnrealBuildTool.Rules
 			}
 
 			string ConfigPath = Path.Combine(ProjectDirectory, "Config", "DefaultAngelscriptCompileOptions.ini");
-			Rules.ExternalDependencies.Add(ConfigPath);
+			if (!Rules.ExternalDependencies.Contains(ConfigPath))
+			{
+				Rules.ExternalDependencies.Add(ConfigPath);
+			}
 			if (!File.Exists(ConfigPath))
 			{
-				return false;
+				return DefaultValue;
 			}
 
 			const string SettingSection = "/Script/AngelscriptRuntime.AngelscriptCompileOptions";
-			const string SettingName = "bCompileAngelscriptUnitTests";
 			bool bInSection = false;
 			foreach (string RawLine in File.ReadAllLines(ConfigPath))
 			{
@@ -61,7 +85,7 @@ namespace UnrealBuildTool.Rules
 					|| Value.Equals("1", StringComparison.OrdinalIgnoreCase)
 					|| Value.Equals("yes", StringComparison.OrdinalIgnoreCase);
 			}
-			return false;
+			return DefaultValue;
 		}
 	}
 
@@ -82,6 +106,8 @@ namespace UnrealBuildTool.Rules
 			PublicDefinitions.Add("ANGELSCRIPT_RUNTIME_UNITTEST_POLICY_OWNER=1");
 			PublicDefinitions.Add("WITH_ANGELSCRIPT_UNITTESTS=" + (
 				AngelscriptBuildSettings.ShouldCompileUnitTests(Target, this) ? "1" : "0"));
+			PublicDefinitions.Add("WITH_ANGELSCRIPT_TESTS=" + (
+				AngelscriptBuildSettings.ShouldCompileTests(Target, this) ? "1" : "0"));
 			PublicDefinitions.Add("AS_REFERENCE_DEBUGGING=" + (Target.bBuildEditor ? "1" : "0"));
 			PublicDefinitions.Add("WITH_AS_DEBUGSERVER=" + (
 				Target.Configuration != UnrealTargetConfiguration.Test

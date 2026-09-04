@@ -7,6 +7,7 @@
 
 #include "AngelscriptEditorDebugBridge.h"
 #include "AngelscriptEngine.h"
+#include "AngelscriptRuntimeModule.h"
 #include "ClassGenerator/ASClass.h"
 #include "EditorMenuExtensions/ScriptEditorMenuExtension.h"
 #include "Snippet/AngelscriptSnippetRunnerWindow.h"
@@ -922,6 +923,31 @@ void OnLiteralAssetPreSave(UObject* Object, FObjectPreSaveContext SaveContext)
 
 void FAngelscriptEditorModule::StartupModule()
 {
+	// Keep configuration available while every legacy editor integration is dormant.
+	ISettingsModule& SettingsModule = FModuleManager::LoadModuleChecked<ISettingsModule>("Settings");
+	SettingsModule.RegisterSettings(
+		"Project", "Plugins", "Angelscript",
+		NSLOCTEXT("Angelscript", "AngelscriptSettingsTitle", "Angelscript"),
+		NSLOCTEXT("Angelscript", "AngelscriptSettingsDescription", "Configuration for behavior of the angelscript compiler and script engine."),
+		GetMutableDefault<UAngelscriptSettings>()
+	);
+	TSharedPtr<ISettingsSection> CompileOptionsSection = SettingsModule.RegisterSettings(
+		"Project", "Plugins", "AngelscriptCompileOptions",
+		NSLOCTEXT("Angelscript", "AngelscriptCompileOptionsTitle", "Angelscript Compile Options"),
+		NSLOCTEXT("Angelscript", "AngelscriptCompileOptionsDescription", "Compile-affecting Angelscript options."),
+		GetMutableDefault<UAngelscriptCompileOptions>()
+	);
+	if (CompileOptionsSection.IsValid())
+	{
+		CompileOptionsSection->OnModified().BindStatic(&ValidateFunctionBindingMethod);
+	}
+
+	if (!FAngelscriptRuntimeModule::IsLegacyRuntimeEnabled())
+	{
+		return;
+	}
+
+	bLegacyServicesStarted = true;
 	FClassReloadHelper::Init();
 	RegisterAngelscriptSourceNavigation();
 	if (!StaticJITRefreshService.IsValid())
@@ -985,29 +1011,6 @@ void FAngelscriptEditorModule::StartupModule()
 				DirectoryWatchHandles.Emplace(RootPath, WatchHandle);
 			}
 		}
-	}
-
-	// Register the angelscript settings that can be edited in project settings
-	// This module starts at PostDefault, before Settings is necessarily loaded.
-	// The settings sections are part of the editor surface, not optional work
-	// that may be skipped based on startup order; Settings is already a declared
-	// private dependency of this module.
-	ISettingsModule& SettingsModule = FModuleManager::LoadModuleChecked<ISettingsModule>("Settings");
-	SettingsModule.RegisterSettings(
-		"Project", "Plugins", "Angelscript",
-		NSLOCTEXT("Angelscript", "AngelscriptSettingsTitle", "Angelscript"),
-		NSLOCTEXT("Angelscript", "AngelscriptSettingsDescription", "Configuration for behavior of the angelscript compiler and script engine."),
-		GetMutableDefault<UAngelscriptSettings>()
-	);
-	TSharedPtr<ISettingsSection> CompileOptionsSection = SettingsModule.RegisterSettings(
-		"Project", "Plugins", "AngelscriptCompileOptions",
-		NSLOCTEXT("Angelscript", "AngelscriptCompileOptionsTitle", "Angelscript Compile Options"),
-		NSLOCTEXT("Angelscript", "AngelscriptCompileOptionsDescription", "Compile-affecting Angelscript options."),
-		GetMutableDefault<UAngelscriptCompileOptions>()
-	);
-	if (CompileOptionsSection.IsValid())
-	{
-		CompileOptionsSection->OnModified().BindStatic(&ValidateFunctionBindingMethod);
 	}
 
 	// Helper to pop open the content browser or asset editor from the debug server
@@ -1218,6 +1221,17 @@ void FAngelscriptEditorModule::ShowAssetListPopup(const TArray<FString>& AssetPa
 
 void FAngelscriptEditorModule::ShutdownModule()
 {
+	if (!bLegacyServicesStarted)
+	{
+		if (ISettingsModule* SettingsModule = FModuleManager::GetModulePtr<ISettingsModule>("Settings"))
+		{
+			SettingsModule->UnregisterSettings("Project", "Plugins", "Angelscript");
+			SettingsModule->UnregisterSettings("Project", "Plugins", "AngelscriptCompileOptions");
+		}
+		return;
+	}
+
+	bLegacyServicesStarted = false;
 	if (StaticJITRefreshConsoleCommand != nullptr)
 	{
 		IConsoleManager::Get().UnregisterConsoleObject(

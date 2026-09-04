@@ -1,6 +1,7 @@
 #include "AngelscriptSubsystem.h"
 
 #include "AngelscriptBinds.h"
+#include "AngelscriptRuntimeModule.h"
 
 #include "Engine/Engine.h"
 
@@ -87,6 +88,11 @@ TStatId UAngelscriptSubsystem::GetStatId() const
 
 void UAngelscriptSubsystem::EnsurePrimaryEngineInitialized()
 {
+	if (!FAngelscriptRuntimeModule::IsLegacyRuntimeEnabled())
+	{
+		return;
+	}
+
 	if (bInitializedPrimaryEngine && PrimaryEngine != nullptr)
 	{
 		return;

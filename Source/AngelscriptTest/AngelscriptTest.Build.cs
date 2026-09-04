@@ -10,58 +10,68 @@ namespace UnrealBuildTool.Rules
 			PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 			bUseUnity = true;
 			PrivateDefinitions.Add("AS_ENABLE_EDITOR_JITTED_CODE=1");
+			bool bCompileLegacyTests = AngelscriptBuildSettings.ShouldCompileUnitTests(Target, this);
 
-			ForceIncludeFiles.Add("AngelscriptCQTest.h");
-
-			// Module root + subdirectories mirroring AngelscriptRuntime layout
 			PublicIncludePaths.Add(ModuleDirectory);
 			PrivateIncludePaths.Add(ModuleDirectory);
-			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Core"));
-			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Debugger"));
-			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Dump"));
-			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "AngelScriptSDK"));
-
-			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Preprocessor"));
-			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Generator"));
-			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Shared"));
-			PrivateIncludePaths.Add(Path.GetFullPath(Path.Combine(
-				ModuleDirectory, "..", "AngelscriptTestJIT")));
 
 			PublicDependencyModuleNames.AddRange(new string[]
 			{
 				"Core",
 				"CoreUObject",
 				"Engine",
-				"GameplayTags",
-				"Json",
-				"JsonUtilities",
-				"PropertyBindingUtils",
 				"AngelscriptRuntime",
 			});
 
-			PrivateDependencyModuleNames.AddRange(new string[]
+			if (bCompileLegacyTests)
 			{
-				"AIModule",
-				"EnhancedInput",
-				"InputCore",
-				"Slate",
-				"SlateCore",
-				"UMG",
-			});
+				ForceIncludeFiles.Add(Path.Combine(ModuleDirectory, "Legacy", "AngelscriptCQTest.h"));
 
-			if (Target.bBuildEditor)
-			{
+				// Retained only beside the quarantined source as reconstruction context.
+				// The default hard gate is false and .ubtignore markers keep the legacy
+				// corpus outside active UBT/UHT discovery.
+				PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Legacy", "Core"));
+				PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Legacy", "Debugger"));
+				PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Legacy", "Dump"));
+				PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Legacy", "AngelScriptSDK"));
+				PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Legacy", "Preprocessor"));
+				PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Legacy", "Generator"));
+				PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Legacy", "Shared"));
+				PrivateIncludePaths.Add(Path.GetFullPath(Path.Combine(
+					ModuleDirectory, "..", "AngelscriptTestJIT")));
+
+				PublicDependencyModuleNames.AddRange(new string[]
+				{
+					"GameplayTags",
+					"Json",
+					"JsonUtilities",
+					"PropertyBindingUtils",
+				});
+
 				PrivateDependencyModuleNames.AddRange(new string[]
 				{
-					"BlueprintGraph",
-					"CQTest",
-					"LevelEditor",
-					"Networking",
-					"Sockets",
-					"UnrealEd",
-					"AngelscriptEditor",
-					"AngelscriptTestJIT",
+					"AIModule",
+					"EnhancedInput",
+					"InputCore",
+					"Slate",
+					"SlateCore",
+					"UMG",
 				});
+
+				if (Target.bBuildEditor)
+				{
+					PrivateDependencyModuleNames.AddRange(new string[]
+					{
+						"BlueprintGraph",
+						"CQTest",
+						"LevelEditor",
+						"Networking",
+						"Sockets",
+						"UnrealEd",
+						"AngelscriptEditor",
+						"AngelscriptTestJIT",
+					});
+				}
 			}
 		}
 	}

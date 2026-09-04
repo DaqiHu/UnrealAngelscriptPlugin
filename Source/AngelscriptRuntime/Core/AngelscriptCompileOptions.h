@@ -21,6 +21,9 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Tests", Meta = (ConfigRestartRequired = true))
 	bool bCompileAngelscriptUnitTests = false;
 
+	UPROPERTY(Config, EditAnywhere, Category = "Tests", Meta = (ConfigRestartRequired = true))
+	bool bCompileAngelscriptTests = true;
+
 	UPROPERTY(Config, EditAnywhere, Category = "Bindings", Meta = (ConfigRestartRequired = true))
 	EAngelscriptFunctionBindingMethod FunctionBindingMethod = EAngelscriptFunctionBindingMethod::NativeRuntimeLinked;
 

@@ -23,6 +23,13 @@ FAngelscriptEngine* FAngelscriptRuntimeModule::InitializedOverrideEngineForTesti
 void FAngelscriptRuntimeModule::StartupModule()
 {
 	UE_LOG(Angelscript, Verbose, TEXT("[RuntimeStartup] StartupModule."));
+	if (!IsLegacyRuntimeEnabled())
+	{
+		UE_LOG(Angelscript, Display, TEXT("[RuntimeStartup] Legacy runtime is disabled; module remains dormant."));
+		return;
+	}
+
+	bLegacyServicesStarted = true;
 #if AS_CAN_GENERATE_JIT
 	FString StaticJITBackendError;
 	if (!RegisterAngelscriptBytecodeJITBackend(&StaticJITBackendError))
@@ -43,6 +50,12 @@ void FAngelscriptRuntimeModule::ShutdownModule()
 {
 	UE_LOG(Angelscript, Verbose, TEXT("[RuntimeStartup] ShutdownModule ownedEngine=%s"),
 		OwnedPrimaryEngine.IsValid() ? TEXT("true") : TEXT("false"));
+	if (!bLegacyServicesStarted)
+	{
+		return;
+	}
+
+	bLegacyServicesStarted = false;
 	FAngelscriptScriptTestRunner::CancelAll(
 		TEXT("AngelscriptRuntime module shutdown"));
 	FAngelscriptJITProviderRegistry::Get().StopModularFeatureDiscovery();
@@ -61,6 +74,13 @@ void FAngelscriptRuntimeModule::ShutdownModule()
 
 void FAngelscriptRuntimeModule::InitializeAngelscript()
 {
+	FModuleManager::Get().LoadModuleChecked(TEXT("AngelscriptRuntime"));
+	if (!IsLegacyRuntimeEnabled())
+	{
+		UE_LOG(Angelscript, Display, TEXT("[RuntimeStartup] InitializeAngelscript ignored because the legacy runtime is disabled."));
+		return;
+	}
+
 	if (bInitializeAngelscriptCalled)
 	{
 		UE_LOG(Angelscript, Verbose, TEXT("[RuntimeStartup] InitializeAngelscript skipped because initialization already ran."));
@@ -88,7 +108,6 @@ void FAngelscriptRuntimeModule::InitializeAngelscript()
 	}
 	#endif
 
-	FModuleManager::Get().LoadModuleChecked(TEXT("AngelscriptRuntime"));
 	FString BindPreparationDiagnostic;
 	if (!FAngelscriptBind::PrepareForEngineInitialization(BindPreparationDiagnostic))
 	{
@@ -135,6 +154,11 @@ void FAngelscriptRuntimeModule::InitializeAngelscript()
 		FAngelscriptEngineContextStack::Push(OwnedPrimaryEngine.Get());
 		UE_LOG(Angelscript, Display, TEXT("[RuntimeStartup] Published owned primary engine=%p."), OwnedPrimaryEngine.Get());
 	}
+}
+
+bool FAngelscriptRuntimeModule::IsLegacyRuntimeEnabled()
+{
+	return false;
 }
 
 #if WITH_DEV_AUTOMATION_TESTS

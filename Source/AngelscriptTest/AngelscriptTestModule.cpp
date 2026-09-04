@@ -1,7 +1,9 @@
 #include "Core/AngelscriptTestModule.h"
 
+#if WITH_ANGELSCRIPT_UNITTESTS
 #include "Preprocessor/AngelscriptPreprocessorTestHelpers.h"
 #include "AngelscriptTestEnginePool.h"
+#endif
 
 #include "Logging/LogMacros.h"
 #include "Misc/CommandLine.h"
@@ -24,7 +26,7 @@ void FAngelscriptTestModule::StartupModule()
 	const bool bPrewarmEngine = FParse::Param(FCommandLine::Get(), TEXT("AngelscriptTestPrewarmEngine"));
 	StartupTestEnginePool(bPrewarmEngine);
 #endif
-	UE_LOG(LogAngelscriptTest, Log, TEXT("AngelscriptTest module started."));
+	UE_LOG(LogAngelscriptTest, Log, TEXT("AngelscriptTest replacement module shell started."));
 }
 
 void FAngelscriptTestModule::ShutdownModule()
@@ -32,5 +34,5 @@ void FAngelscriptTestModule::ShutdownModule()
 #if WITH_ANGELSCRIPT_UNITTESTS
 	ShutdownTestEnginePool();
 #endif
-	UE_LOG(LogAngelscriptTest, Log, TEXT("AngelscriptTest module shut down."));
+	UE_LOG(LogAngelscriptTest, Log, TEXT("AngelscriptTest replacement module shell shut down."));
 }

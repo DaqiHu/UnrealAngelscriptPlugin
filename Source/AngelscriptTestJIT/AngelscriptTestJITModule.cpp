@@ -1,3 +1,4 @@
+#include "Core/AngelscriptRuntimeModule.h"
 #include "Features/IModularFeatures.h"
 #include "Modules/ModuleManager.h"
 #include "StaticJIT/AngelscriptJITProvider.h"
@@ -31,14 +32,24 @@ class FAngelscriptTestJITModule final
 public:
 	virtual void StartupModule() override
 	{
+		if (!FAngelscriptRuntimeModule::IsLegacyRuntimeEnabled())
+		{
+			return;
+		}
+
 		IModularFeatures::Get().RegisterModularFeature(
 			IAngelscriptJITArtifactProvider::FeatureName(), this);
+		bRegistered = true;
 	}
 
 	virtual void ShutdownModule() override
 	{
-		IModularFeatures::Get().UnregisterModularFeature(
-			IAngelscriptJITArtifactProvider::FeatureName(), this);
+		if (bRegistered)
+		{
+			IModularFeatures::Get().UnregisterModularFeature(
+				IAngelscriptJITArtifactProvider::FeatureName(), this);
+			bRegistered = false;
+		}
 	}
 
 	virtual bool SupportsDynamicReloading() override
@@ -51,6 +62,9 @@ public:
 	{
 		return GetCurrentGeneratedAngelscriptTestJITProviderView();
 	}
+
+private:
+	bool bRegistered = false;
 };
 
 IMPLEMENT_MODULE(FAngelscriptTestJITModule, AngelscriptTestJIT)

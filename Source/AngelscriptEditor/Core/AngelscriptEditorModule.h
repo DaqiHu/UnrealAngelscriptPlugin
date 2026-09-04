@@ -110,6 +110,7 @@ private:
 	TSharedPtr<AngelscriptEditor::StaticJIT::FAngelscriptJITRefreshService>
 		StaticJITRefreshService;
 	IConsoleObject* StaticJITRefreshConsoleCommand = nullptr;
+	bool bLegacyServicesStarted = false;
 };
 
 #if WITH_DEV_AUTOMATION_TESTS

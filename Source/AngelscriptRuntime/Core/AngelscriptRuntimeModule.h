@@ -13,6 +13,7 @@ public:
 	virtual void ShutdownModule() override;
 
 	static void InitializeAngelscript();
+	static bool IsLegacyRuntimeEnabled();
 
 private:
 	friend struct FAngelscriptRuntimeModuleTickTestAccess;
@@ -24,6 +25,7 @@ private:
 	#endif
 	static bool bInitializeAngelscriptCalled;
 	static TUniquePtr<FAngelscriptEngine> OwnedPrimaryEngine;
+	bool bLegacyServicesStarted = false;
 	FDelegateHandle CrashSnapshotExtensionHandle;
 	FDelegateHandle CodeCoverageExtensionHandle;
 
