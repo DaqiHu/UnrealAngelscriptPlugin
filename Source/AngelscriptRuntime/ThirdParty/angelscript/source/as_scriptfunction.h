@@ -48,15 +48,19 @@
 #include "as_buildartifact.h"
 
 #include <mutex>
+#include <memory>
+#include "frontend/as_stable_key.h"
 
 BEGIN_AS_NAMESPACE
+
+class asCMetadataImage;
+ enum class asEFunctionIdentityKind : uint8; 
 
 class asCScriptEngine;
 class asCModule;
 class asCRuntimeTypeGeneration;
 class asCConfigGroup;
 class asCGlobalProperty;
-class asCScriptNode;
 class asCFuncdefType;
 struct asSNameSpace;
 
@@ -300,6 +304,18 @@ public:
 
 	asCScriptFunction(asCScriptEngine *engine, asCModule *mod, asEFuncType funcType);
 	~asCScriptFunction();
+	const asSStableKey& GetStableKey() const { return metadataStableKey; }
+	asEFunctionIdentityKind GetMetadataDeclarationKind() const { return static_cast<asEFunctionIdentityKind>(metadataDeclarationKind); }
+	asCScriptFunction* GetMetadataEnclosingFunction() const { return metadataEnclosingFunction; }
+	asUINT GetMetadataLambdaOrdinal() const { return metadataLambdaOrdinal; }
+	bool IsMetadataLocal() const { return traits.GetTrait(asTRAIT_LOCAL); }
+	bool IsMetadataCallableSignature() const { return metadataCallableSignature; }
+	asCMetadataImage* GetMetadataImage() const { return metadataOwner; }
+	const asCDataType& GetReturnDataType() const { return returnType; }
+	const asCDataType* GetParameterDataType(asUINT index) const
+	{
+		return index < parameterTypes.GetLength() ? &parameterTypes[index] : nullptr;
+	}
 
 	// Keep an internal reference counter to separate references coming from
 	// application or script objects and references coming from the script code
@@ -342,9 +358,6 @@ public:
 	asCTypeInfo *GetTypeInfoOfLocalVar(short varOffset);
 
 	void      MakeDelegate(asCScriptFunction *func, void *obj);
-
-	int       RegisterListPattern(const char *decl, asCScriptNode *listPattern);
-	int       ParseListPattern(asSListPatternNode *&target, const char *decl, asCScriptNode *listPattern);
 
 	bool      DoesReturnOnStack() const;
 
@@ -581,6 +594,23 @@ public:
 #if WITH_EDITOR
 	asCString deprecationMessage;
 #endif
+
+private:
+	friend class asCMetadataImage;
+	asCScriptFunction(asCMetadataImage& owner, const asSStableKey& key, asEFuncType funcType);
+	asCMetadataImage* metadataOwner = nullptr;
+	asSStableKey metadataStableKey;
+	mutable std::mutex metadataReferenceMutex;
+	mutable std::shared_ptr<asCMetadataImage> metadataExternalLease;
+	bool metadataSignatureDefined = false;
+	bool metadataCallableSignature = false;
+	asCFuncdefType* metadataNominalFuncdefType = nullptr;
+	asBYTE metadataDeclarationKind = 0;
+	asCScriptFunction* metadataEnclosingFunction = nullptr;
+	asUINT metadataLambdaOrdinal = 0;
+	asUINT metadataGenericArity = 0;
+	asCTypeInfo* metadataDeclarationOwner = nullptr;
+	bool metadataStaticDeclaration = false;
 
 };
 

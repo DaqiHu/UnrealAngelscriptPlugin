@@ -132,6 +132,8 @@ class ANGELSCRIPTRUNTIME_API asCGlobalProperty
 public:
 	asCGlobalProperty();
 	~asCGlobalProperty();
+	const asSStableKey& GetStableKey() const { return metadataStableKey; }
+	asCMetadataImage* GetMetadataImage() const { return metadataOwner; }
 
 	void AddRef();
 	void Release();
@@ -174,6 +176,14 @@ public:
 #if WITH_EDITOR
 	bool isEditorOnly = false;
 #endif
+
+private:
+	friend class asCMetadataImage;
+	asCMetadataImage* metadataOwner = nullptr;
+	asSStableKey metadataStableKey;
+	asSStableKey metadataTypeUseKey;
+	std::mutex metadataReferenceMutex;
+	std::shared_ptr<asCMetadataImage> metadataExternalLease;
 };
 
 class asCCompGlobPropType : public asIFilter

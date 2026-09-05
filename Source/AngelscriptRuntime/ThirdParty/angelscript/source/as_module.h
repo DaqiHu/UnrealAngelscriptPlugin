@@ -40,7 +40,6 @@
 #define AS_MODULE_H
 
 #include "as_config.h"
-#include "as_ast_fwd.h"
 #include "as_symboltable.h"
 #include "as_atomic.h"
 #include "as_string.h"
@@ -50,10 +49,67 @@
 #include "as_property.h"
 #include "as_buildartifact.h"
 #include "as_runtime_type_binding.h"
-#include "as_source_provenance.h"
 #include "HAL/CriticalSection.h"
 
 BEGIN_AS_NAMESPACE
+
+enum asEBytecodePublisher
+{
+	asBYTECODE_PUBLISHER_NONE = 0,
+	asBYTECODE_PUBLISHER_COMPILER = 1,
+	asBYTECODE_PUBLISHER_CANONICAL_CODEGEN = 2,
+};
+
+struct asSSourceAnchor
+{
+	asCString section;
+	asUINT sourceOffset = 0;
+	asUINT sourceLength = 0;
+	asUINT row = 0;
+	asUINT column = 0;
+};
+
+enum class asEGeneratedSourceKind : asBYTE
+{
+	None,
+	LiteralAsset,
+	SubsystemAccessor,
+	ClassHelper,
+	StaticClassHelper,
+	DelegateHelper,
+	RangeBasedFor,
+};
+
+struct asSGeneratedSourceOrigin
+{
+	asEGeneratedSourceKind kind = asEGeneratedSourceKind::None;
+	asCString generatorName;
+	bool hasAuthoredAnchor = false;
+	asSSourceAnchor authoredAnchor;
+};
+
+struct asSSourceSpan
+{
+	asCString section;
+	asUINT sourceOffset = 0;
+	asUINT sourceLength = 0;
+	asUINT row = 0;
+	asUINT column = 0;
+	bool hasAuthoredOrigin = false;
+	asSSourceAnchor authoredOrigin;
+	bool hasGeneratedOrigin = false;
+	asSGeneratedSourceOrigin generatedOrigin;
+};
+
+struct asSSourceProvenanceRange
+{
+	asUINT processedOffset = 0;
+	asUINT processedLength = 0;
+	bool hasAuthoredOrigin = false;
+	asSSourceAnchor authoredOrigin;
+	bool hasGeneratedOrigin = false;
+	asSGeneratedSourceOrigin generatedOrigin;
+};
 
 // Build-generation input copied from the embedding-owned PreClass metadata at
 // AddPreClassData. Canonical Sema consumes this immutable, pointer-free view;
@@ -77,7 +133,6 @@ struct asSCanonicalPreClassFact
 const int FUNC_IMPORTED = 0x40000000;
 
 class asCScriptEngine;
-class asCCompiler;
 class asCBuilder;
 class asCContext;
 class asCConfigGroup;
@@ -204,11 +259,6 @@ public:
 	bool GetLastCanonicalCodeGenAstDigest(asQWORD& outDigest) const;
 	void SetLastCanonicalCodeGenAstDigest(asQWORD digest);
 	void ResetLastCanonicalCodeGenAstDigest();
-	void AdoptPendingCanonicalAST(class asCASTContext* context);
-	const class asCASTContext* GetCanonicalASTContext() const;
-	// Cache V2 exact-start restores have already decoded and sealed a complete
-	// context off the active module maps. Publish only that pending context; do
-	// not synthesize an empty AST as the regular build fallback does.
 	int PublishRestoredCanonicalASTSnapshot();
 	void                SetBuildArtifactInvocationCallback(
 		asBUILDARTIFACTINVOCATIONCALLBACK_t callback,
@@ -299,7 +349,6 @@ public:
 //protected:
 	friend class asCScriptEngine;
 	friend class asCBuilder;
-	friend class asCCompiler;
 	friend class asCContext;
 	friend class asCRestore;
 
@@ -313,21 +362,13 @@ public:
 		asCRuntimeTypeBindingTable& bindings);
 	void RetireCanonicalRuntimeTypeGeneration();
 	void TransferExecutableGenerationTo(asCModule& target);
-	int PrepareCanonicalASTSnapshot(
-		class asCASTContext*& context,
-		asCRuntimeTypeGeneration* runtimeGeneration,
-		class asCASTSnapshot*& outSnapshot,
-		const char* provenance = "source-build");
-	void PublishPreparedCanonicalASTSnapshot(
-		class asCASTSnapshot* candidate);
 	void PublishCanonicalASTSnapshot(const char* provenance = "source-build");
 	void ReleaseCanonicalASTSnapshot();
 	asEASTRetentionPolicy astRetentionPolicy;
 	bool astRetentionFrozen;
 	int astGeneration;
 	mutable FCriticalSection astSnapshotLock;
-	class asCASTSnapshot* astSnapshot;
-	class asCASTContext* pendingCanonicalAST;
+	asIASTSnapshot* astSnapshot;
 	asCRuntimeTypeGeneration* runtimeTypeGeneration;
 	asEBytecodePublisher lastBytecodePublisher;
 	asUINT lastLegacyCompilerInvocationCount;

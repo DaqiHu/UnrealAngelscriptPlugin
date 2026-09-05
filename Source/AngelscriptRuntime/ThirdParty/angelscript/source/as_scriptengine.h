@@ -51,15 +51,94 @@
 #include "as_configgroup.h"
 #include "as_memory.h"
 #include "as_gc.h"
-#include "as_tokenizer.h"
-#include "as_ast_fwd.h"
+#include "as_tokendef.h"
+#include "as_metadata_image.h"
 
 BEGIN_AS_NAMESPACE
 
+enum asECompilerPipeline
+{
+	asCOMPILER_PIPELINE_LEGACY = 0,
+	asCOMPILER_PIPELINE_CANONICAL = 1,
+};
+
 class asCBuilder;
 class asCContext;
-struct asSCanonicalTemplateDeclarationFact;
-struct asSCanonicalRegisteredTypeDeclarationFact;
+
+struct asSCanonicalTemplateDeclarationFact
+{
+	asCString stableKey;
+	asQWORD flags;
+	asUINT subtypeCount;
+	bool acceptValueSubtype;
+	bool acceptReferenceSubtype;
+	bool requiresRuntimeValidation;
+	asCArray<asCString> childFuncdefs;
+
+	asSCanonicalTemplateDeclarationFact()
+		: flags(0)
+		, subtypeCount(0)
+		, acceptValueSubtype(true)
+		, acceptReferenceSubtype(true)
+		, requiresRuntimeValidation(false)
+	{
+	}
+};
+
+struct asSCanonicalRegisteredEnumeratorFact
+{
+	asCString name;
+	int value;
+
+	asSCanonicalRegisteredEnumeratorFact()
+		: value(0)
+	{
+	}
+};
+
+struct asSCanonicalRegisteredTypeRefFact
+{
+	asEASTTypeKind kind;
+	eTokenType primitiveToken;
+	asCString stableKey;
+	asDWORD quals;
+
+	asSCanonicalRegisteredTypeRefFact()
+		: kind(asAST_TYPE_INVALID)
+		, primitiveToken(ttUnrecognizedToken)
+		, quals(0)
+	{
+	}
+
+	bool Equals(const asSCanonicalRegisteredTypeRefFact& other) const
+	{
+		return kind == other.kind
+			&& primitiveToken == other.primitiveToken
+			&& quals == other.quals
+			&& stableKey.Equals(other.stableKey);
+	}
+};
+
+struct asSCanonicalRegisteredTypeDeclarationFact
+{
+	asCString stableKey;
+	asEASTTypeKind kind;
+	asQWORD flags;
+	bool isInterface;
+	bool ambiguous;
+	asCArray<asCString> baseStableKeys;
+	asCArray<asSCanonicalRegisteredEnumeratorFact> enumerators;
+	asSCanonicalRegisteredTypeRefFact funcdefReturn;
+	asCArray<asSCanonicalRegisteredTypeRefFact> funcdefFormals;
+
+	asSCanonicalRegisteredTypeDeclarationFact()
+		: kind(asAST_TYPE_INVALID)
+		, flags(0)
+		, isInterface(false)
+		, ambiguous(false)
+	{
+	}
+};
 
 // TODO: import: Remove this when import is removed
 struct sBindInfo;
@@ -215,6 +294,14 @@ public:
 public:
 	asCScriptEngine();
 	virtual ~asCScriptEngine();
+	// Semantic registration only: does not prepare VM bytecode or callables.
+	asEMetadataRegistrationResult RegisterMetadataImage(const std::shared_ptr<asCMetadataImage>& Image);
+	void RetireMetadataImages();
+	asCTypeInfo* FindMetadataType(const char* Namespace, const char* Name) const;
+	asCTypeInfo* FindMetadataType(const asSStableKey& Key) const;
+	asCScriptFunction* FindMetadataFunction(const asSStableKey& Key) const;
+	asCGlobalProperty* FindMetadataGlobalProperty(const char* Namespace, const char* Name) const;
+	TPair<asUINT, asUINT> GetMetadataRegistrationCounts() const;
 
 	// LEGACY remains the source-module Build default until the final cutover gate.
 	// Explicit CANONICAL selection publishes Bytecode from sealed-AST CodeGen.
@@ -473,9 +560,6 @@ public:
 	bool                   deferValidationOfTemplateTypes;
 	bool                   deferCalculatingTemplateSize = false;
 
-	// Tokenizer is instantiated once to share resources
-	asCTokenizer tok;
-
 	// Stores shared script declared types (classes, interfaces, enums)
 	asCArray<asCTypeInfo *> sharedScriptTypes; // increases ref count
 	// Stores the funcdefs
@@ -557,6 +641,25 @@ public:
 
 	// Synchronization for threads
 	DECLAREREADWRITELOCK(mutable engineRWLock)
+
+private:
+	void InitializeMetadataBuiltins();
+	asUINT CountMetadataTypes(asQWORD Include, asQWORD Exclude = 0) const;
+	asCTypeInfo* MetadataTypeByIndex(asUINT Index, asQWORD Include, asQWORD Exclude = 0) const;
+	mutable std::mutex metadataRegistrationMutex;
+	TArray<std::shared_ptr<asCMetadataImage>> metadataImages;
+	TMap<asSStableKey, asCTypeInfo*> metadataTypesByKey;
+	TMap<FString, asCTypeInfo*> metadataTypesByName;
+	TMap<int, asCTypeInfo*> metadataTypesById;
+	TMap<asSStableKey, asCScriptFunction*> metadataFunctionsByKey;
+	TMap<asSStableKey, asCGlobalProperty*> metadataGlobalsByKey;
+	TMap<FString, asCGlobalProperty*> metadataGlobalsByName;
+	TMap<int, asCScriptFunction*> metadataFunctionsById;
+	int nextMetadataTypeId = asTYPEID_FLOAT64 + 1;
+	int nextMetadataFunctionId = 1;
+	bool metadataRegistrationRetired = false;
+
+public:
 
 	// Engine properties
 	struct

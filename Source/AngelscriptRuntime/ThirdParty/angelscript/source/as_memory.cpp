@@ -38,8 +38,6 @@
 
 #include "as_memory.h"
 #include "as_config.h"
-#include "as_scriptnode.h"
-#include "as_bytecode.h"
 #include "as_string.h"
 
 //[UE++]: Pull in the AngelscriptRuntime LLM tag declaration so the SDK
@@ -260,7 +258,7 @@ void *asCMemoryMgr::AllocScriptNode()
 	//[UE++]: Tag fresh script-node pages under Angelscript; pool reuse hits
 	//[UE++]: the early return above and skips the allocator entirely.
 	LLM_SCOPE_BYTAG(Angelscript);
-	return FMemory::Malloc(sizeof(asCScriptNode), alignof(asCScriptNode));
+	return FMemory::Malloc(64, 16);
 	//[UE--]
 }
 
@@ -274,7 +272,7 @@ void asCMemoryMgr::FreeScriptNode(void *ptr)
 	scriptNodePool.Add(ptr);
 
 #ifdef AS_DEBUG
-	FMemory::Memset(ptr, 0xCD, sizeof(asCScriptNode));
+	FMemory::Memset(ptr, 0xCD, 64);
 #endif
 
 	LEAVECRITICALSECTION(cs);
@@ -291,7 +289,7 @@ void *asCMemoryMgr::AllocByteInstruction()
 	//[UE++]: bytecode-buffer growth shows up under the Angelscript bucket
 	//[UE++]: rather than the unattributed default tag.
 	LLM_SCOPE_BYTAG(Angelscript);
-	return FMemory::Malloc(sizeof(asCByteInstruction), alignof(asCByteInstruction));
+	return FMemory::Malloc(64, 16);
 	//[UE--]
 }
 
@@ -303,7 +301,7 @@ void asCMemoryMgr::FreeByteInstruction(void *ptr)
 	byteInstructionPool.Add(ptr);
 
 #ifdef AS_DEBUG
-	FMemory::Memset(ptr, 0xCD, sizeof(asCByteInstruction));
+	FMemory::Memset(ptr, 0xCD, 64);
 #endif
 }
 

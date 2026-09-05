@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Hash/Blake3.h"
+#include "frontend/as_stable_key.h"
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptHash256
 {
@@ -290,7 +291,11 @@ public:
 
 	static FAngelscriptStableModuleKey BuildModuleKey(const FAngelscriptModuleIdentityDescriptor& Descriptor);
 	static FAngelscriptStableTypeKey BuildTypeKey(const FAngelscriptTypeIdentityDescriptor& Descriptor);
+	static FAngelscriptStableTypeKey ProjectTypeKey(
+		const AS_NAMESPACE_QUALIFIER asSStableKey& StableKey);
 	static FAngelscriptStableFunctionKey BuildFunctionKey(const FAngelscriptFunctionIdentityDescriptor& Descriptor);
+	static FAngelscriptStableFunctionKey ProjectFunctionKey(
+		const AS_NAMESPACE_QUALIFIER asSStableKey& StableKey);
 	static FAngelscriptStableGlobalKey BuildGlobalKey(const FAngelscriptGlobalIdentityDescriptor& Descriptor);
 	static FAngelscriptStablePropertyKey BuildPropertyKey(const FAngelscriptPropertyIdentityDescriptor& Descriptor);
 

@@ -2,9 +2,9 @@
 #define AS_RUNTIME_TYPE_BINDING_H
 
 #include "as_array.h"
-#include "as_ast_context.h"
 #include "as_datatype.h"
 #include "as_string.h"
+#include "frontend/as_type_identity.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -26,8 +26,36 @@ enum asERuntimeTypeBindingResult
 	asRUNTIME_TYPE_BIND_WRONG_NATIVE_ENVIRONMENT = -6,
 	asRUNTIME_TYPE_BIND_ABI_MISMATCH = -7,
 	asRUNTIME_TYPE_BIND_MEMBER_MISSING = -8,
-	asRUNTIME_TYPE_BIND_ALREADY_FROZEN = -9
+	asRUNTIME_TYPE_BIND_ALREADY_FROZEN = -9,
+	asRUNTIME_TYPE_BIND_INVALID_OWNER = -10,
+	asRUNTIME_TYPE_BIND_INVALID_DURABLE_ID = -11
 };
+
+struct asSRuntimeTypeGeneration
+{
+	asQWORD Value = 0;
+	bool IsValid() const { return Value != 0; }
+	bool operator==(const asSRuntimeTypeGeneration& Other) const { return Value == Other.Value; }
+};
+
+struct asSRuntimeTypeId
+{
+	asSRuntimeTypeGeneration Generation;
+	int Value = -1;
+	bool IsValid() const { return Generation.IsValid() && Value >= 0; }
+	bool Equals(const asSRuntimeTypeId& Other) const
+	{
+		return IsValid() && Other.IsValid()
+			&& Generation == Other.Generation
+			&& Value == Other.Value;
+	}
+};
+
+ANGELSCRIPTRUNTIME_API int asValidateRuntimeTypeIdOwner(
+	const asSRuntimeTypeId& RuntimeTypeId,
+	const asSRuntimeTypeGeneration& ExpectedGeneration);
+ANGELSCRIPTRUNTIME_API int asRejectRuntimeTypeIdForDurableEncoding(
+	const asSRuntimeTypeId& RuntimeTypeId);
 
 enum asERuntimeTypeRelocationUse
 {
@@ -73,6 +101,7 @@ asMakeCurrentRuntimeTypeBindingEnvironment();
 // with those complete values.
 struct ANGELSCRIPTRUNTIME_API asSTypeABIKey
 {
+	asSStableKey canonicalTypeUse;
 	asCString stableTypeKey;
 	asCString targetProfileKey;
 	asCString nativeEnvironmentKey;
@@ -87,6 +116,11 @@ struct ANGELSCRIPTRUNTIME_API asSTypeABIKey
 
 	bool Equals(const asSTypeABIKey& other) const;
 };
+
+ANGELSCRIPTRUNTIME_API int asProjectCanonicalTypeUse(
+	const asCStableIdentityRegistry& Registry,
+	const asSStableKey& CanonicalTypeUse,
+	asSTypeABIKey& OutKey);
 
 // Detached artifacts carry this record. It deliberately contains no
 // snapshot-local TypeRef, Engine pointer, TypeInfo pointer, or numeric typeId.
@@ -138,51 +172,6 @@ class ANGELSCRIPTRUNTIME_API asCRuntimeTypeBindingTable
 {
 public:
 	asCRuntimeTypeBindingTable();
-
-	// Capture the full expected ABI from the current candidate. Artifact
-	// producers may then carry the returned pointer-free value to installation.
-	static int CaptureExpectedABI(
-		asCScriptEngine* engine,
-		const asCASTContext& context,
-		const asCQualType& canonicalType,
-		const asSRuntimeTypeBindingEnvironment& environment,
-		asSTypeABIKey& outKey,
-		const asCArray<asCTypeInfo*>* transientTypes = 0,
-		asCString* detail = 0);
-	// Capture from an already-resolved Runtime datatype without requesting a
-	// numeric type ID. This is the canonical emitter path: candidate types stay
-	// detached until the aggregate install transaction commits.
-	static int CaptureExpectedABI(
-		asCScriptEngine* engine,
-		const asCASTContext& context,
-		const asCDataType& dataType,
-		const asSRuntimeTypeBindingEnvironment& environment,
-		asSTypeABIKey& outKey,
-		const asCArray<asCTypeInfo*>* transientTypes = 0,
-		asCString* detail = 0);
-
-	// Minimal live bridge used during Sema/CodeGen. Unlike historical string-
-	// only lookup it verifies the canonical type kind and reports ambiguity.
-	static int ResolveCanonicalType(
-		asCScriptEngine* engine,
-		const asCASTContext& context,
-		const asCQualType& canonicalType,
-		asCDataType& outDataType,
-		asCTypeInfo*& outTypeInfo,
-		const asCArray<asCTypeInfo*>* transientTypes = 0,
-		asCString* detail = 0);
-
-	// Validate-all/commit-none. A successful Build freezes the table; every
-	// failed Build leaves it empty and mutable so the candidate can be abandoned
-	// or retried without publishing partial Runtime state.
-	int Build(
-		asCScriptEngine* engine,
-		const asCASTContext& context,
-		const asCArray<asSTypeRelocation>& relocations,
-		const asSRuntimeTypeBindingEnvironment& environment,
-		const asCArray<asCTypeInfo*>* transientTypes = 0,
-		asCString* detail = 0,
-		const asCArray<asCScriptFunction*>* transientFunctions = 0);
 
 	// Refresh only the process-local numeric projections after the aggregate
 	// artifact has assigned its candidate-local TypeIds. Stable identity, ABI,

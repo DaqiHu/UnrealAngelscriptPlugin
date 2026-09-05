@@ -109,7 +109,7 @@ struct FAngelscriptStaticJITCompiledFunctionView
 	FAngelscriptHash256 EntryAbiHash;
 	FStringView CanonicalDeclaration;
 	TConstArrayView<uint8> Bytecode;
-	const class asCASTContext* SealedAST = nullptr;
+	const void* SealedAST = nullptr;
 	asUINT CanonicalFunctionDeclValue = 0;
 	bool bRequiresCanonicalAST = false;
 	bool bHasVerifiedArtifactIdentity = false;

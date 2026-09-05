@@ -37,22 +37,19 @@
 
 
 #include "as_scriptengine.h"
+#include "frontend/as_type_identity.h"
 
 #include "as_config.h"
 #include "as_builder.h"
 #include "as_context.h"
 #include "as_string_util.h"
-#include "as_tokenizer.h"
 #include "as_texts.h"
 #include "as_module.h"
 #include "as_map.h"
 #include "as_callfunc.h"
 #include "as_generic.h"
 #include "as_scriptobject.h"
-#include "as_compiler.h"
-#include "as_bytecode.h"
 #include "as_debug.h"
-#include "as_sema.h"
 
 #include "AngelscriptEngine.h"
 #include "ClassGenerator/ASClass.h"
@@ -547,8 +544,9 @@ int asCScriptEngine::SetEngineProperty(asEEngineProp property, asPWORD value)
 		break;
 
 	case asEP_FLOAT_IS_FLOAT64:
-		ep.floatIsFloat64 = value ? true : false;
-		asCDataType::floatIsFloat64 = value ? true : false;
+		// New compilation contexts are immutable. An Engine cannot reinterpret
+		// already authenticated metadata by rewriting a process-global default.
+		if ((value != 0) != ep.floatIsFloat64) return asNOT_SUPPORTED;
 		break;
 
 	case asEP_WARN_ON_FLOAT_CONSTANTS_FOR_DOUBLES:
@@ -793,7 +791,6 @@ asCScriptEngine::asCScriptEngine()
 	initialContextStackSize = ep.initContextStackSize;
 
 	gc.engine = this;
-	tok.engine = this;
 
 	refCount.set(1);
 	stringFactory = 0;
@@ -843,8 +840,7 @@ asCScriptEngine::asCScriptEngine()
 
 	defaultArrayObjectType = 0;
 
-	RegisterScriptObject(this);
-	RegisterScriptFunction(this);
+	InitializeMetadataBuiltins();
 
 #ifndef AS_NO_EXCEPTIONS
 	translateExceptionCallback = false;
@@ -879,6 +875,7 @@ void asCScriptEngine::DeleteDiscardedModules()
 
 asCScriptEngine::~asCScriptEngine()
 {
+	RetireMetadataImages();
 	// TODO: clean-up: Clean up redundant code
 
 	inDestructor = true;
@@ -1196,6 +1193,7 @@ int asCScriptEngine::Release() const
 // interface
 int asCScriptEngine::ShutDownAndRelease()
 {
+	RetireMetadataImages();
 	// Do a full garbage collection cycle to clean up any object that may still hold on to the engine
 	GarbageCollect();
 
@@ -1281,23 +1279,43 @@ int asCScriptEngine::ParseNamespace(const char *nameSpace, asCArray<asCString> &
 	{
 		size_t pos = 0;
 		bool expectIdentifier = true;
-		size_t len;
-		eTokenType t = ttIdentifier;
-
-		for( ; pos < ns.GetLength(); pos += len )
+		while( pos < ns.GetLength() )
 		{
-			t = tok.GetToken(ns.AddressOf() + pos, ns.GetLength() - pos, &len);
-			if( (expectIdentifier && t != ttIdentifier) || (!expectIdentifier && t != ttScope) )
-				return asINVALID_DECLARATION;
-
 			if( expectIdentifier )
-				nsStrings.PushLast(ns.SubString(0, pos + len));
-
-			expectIdentifier = !expectIdentifier;
+			{
+				if( pos >= ns.GetLength() )
+					return asINVALID_DECLARATION;
+				const unsigned char first = static_cast<unsigned char>(ns[pos]);
+				if( !((first >= 'A' && first <= 'Z')
+					|| (first >= 'a' && first <= 'z')
+					|| first == '_'
+					|| first >= 0x80) )
+					return asINVALID_DECLARATION;
+				++pos;
+				while( pos < ns.GetLength() )
+				{
+					const unsigned char next = static_cast<unsigned char>(ns[pos]);
+					if( !((next >= 'A' && next <= 'Z')
+						|| (next >= 'a' && next <= 'z')
+						|| (next >= '0' && next <= '9')
+						|| next == '_'
+						|| next >= 0x80) )
+						break;
+					++pos;
+				}
+				nsStrings.PushLast(ns.SubString(0, pos));
+				expectIdentifier = false;
+			}
+			else
+			{
+				if( pos + 1 >= ns.GetLength() || ns[pos] != ':' || ns[pos + 1] != ':' )
+					return asINVALID_DECLARATION;
+				pos += 2;
+				expectIdentifier = true;
+			}
 		}
-
-		if( t == ttScope )
-			ns.SetLength(ns.GetLength() - 2);
+		if( expectIdentifier )
+			return asINVALID_DECLARATION;
 	}
 	nsStrings.PushLast(ns);
 
@@ -1495,17 +1513,11 @@ asIJITCompiler *asCScriptEngine::GetJITCompiler() const
 // interface
 asETokenClass asCScriptEngine::ParseToken(const char *string, size_t stringLength, asUINT *tokenLength) const
 {
-	if( stringLength == 0 )
-		stringLength = strlen(string);
-
-	size_t len;
-	asETokenClass tc;
-	tok.GetToken(string, stringLength, &len, &tc);
-
 	if( tokenLength )
-		*tokenLength = (asUINT)len;
-
-	return tc;
+		*tokenLength = 0;
+	(void)string;
+	(void)stringLength;
+	return asTC_UNKNOWN;
 }
 
 // interface
@@ -1561,6 +1573,10 @@ asIScriptModule *asCScriptEngine::GetModuleByIndex(asUINT index) const
 // internal
 int asCScriptEngine::GetFactoryIdByDecl(const asCObjectType *ot, const char *decl)
 {
+	(void)ot;
+	(void)decl;
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	asCModule *mod = 0;
 
 	// Is this a script class?
@@ -1592,12 +1608,18 @@ int asCScriptEngine::GetFactoryIdByDecl(const asCObjectType *ot, const char *dec
 	if( id == -1 ) return asNO_FUNCTION;
 
 	return id;
+#endif
 }
 
 
 // internal
 int asCScriptEngine::GetMethodIdByDecl(const asCObjectType *ot, const char *decl, asCModule *mod)
 {
+	(void)ot;
+	(void)decl;
+	(void)mod;
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	asCBuilder bld(this, mod);
 
 	// Don't write parser errors to the message callback
@@ -1634,6 +1656,7 @@ int asCScriptEngine::GetMethodIdByDecl(const asCObjectType *ot, const char *decl
 	if( id == -1 ) return asNO_FUNCTION;
 
 	return id;
+#endif
 }
 
 
@@ -1651,6 +1674,8 @@ asCString asCScriptEngine::GetFunctionDeclaration(int funcId)
 // internal
 asCScriptFunction *asCScriptEngine::GetScriptFunction(int funcId) const
 {
+	std::lock_guard<std::mutex> MetadataLock(metadataRegistrationMutex);
+	if (asCScriptFunction* Function = metadataFunctionsById.FindRef(funcId)) return Function;
 	if( funcId < 0 || funcId >= (int)scriptFunctions.GetLength() )
 		return 0;
 
@@ -1669,6 +1694,10 @@ asIScriptContext *asCScriptEngine::CreateContext()
 // internal
 int asCScriptEngine::CreateContext(asIScriptContext **context, bool isInternal)
 {
+	if (!context) return asINVALID_ARG;
+	*context = nullptr;
+	return asNOT_SUPPORTED; // Metadata registration does not prepare the dormant VM.
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	*context = asNEW(asCContext)(this, !isInternal);
 	if( *context == 0 )
 		return asOUT_OF_MEMORY;
@@ -1678,11 +1707,14 @@ int asCScriptEngine::CreateContext(asIScriptContext **context, bool isInternal)
 	PrepareEngine();
 
 	return 0;
+#endif // Dormant backend reference.
 }
 
 // interface
 int asCScriptEngine::RegisterObjectProperty(const char *obj, const char *declaration, int byteOffset, int compositeOffset, bool isCompositeIndirect, const asUINT accessorType, bool isProtected)
 {
+	return asNOT_SUPPORTED; // Use an explicit typed metadata draft and whole-image registration.
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	int r;
 	asCDataType dt;
 	asCBuilder bld(this, 0);
@@ -1735,11 +1767,14 @@ int asCScriptEngine::RegisterObjectProperty(const char *obj, const char *declara
 	}
 
 	return asSUCCESS;
+#endif // Dormant backend reference.
 }
 
 // interface
 int asCScriptEngine::RegisterInterface(const char *name)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	if( name == 0 ) return ConfigError(asINVALID_NAME, "RegisterInterface", 0, 0);
 
 	// Verify if the name has been registered as a type already
@@ -1797,11 +1832,14 @@ int asCScriptEngine::RegisterInterface(const char *name)
 	registeredObjTypes.PushLast(st);
 
 	return GetTypeIdByDecl(name);
+#endif // Dormant backend reference.
 }
 
 // interface
 int asCScriptEngine::RegisterInterfaceMethod(const char *intf, const char *declaration)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	asCDataType dt;
 	asCBuilder bld(this, 0);
 	int r = bld.ParseDataType(intf, &dt, defaultNamespace, false, true);
@@ -1845,11 +1883,14 @@ int asCScriptEngine::RegisterInterfaceMethod(const char *intf, const char *decla
 
 	// Return function id as success
 	return func->id;
+#endif // Dormant backend reference.
 }
 
 //[UE++]: Widen object flags to preserve APV2 private high bits on the stock 2.38 layout.
 int asCScriptEngine::RegisterObjectType(const char *name, int byteSize, asQWORD flags)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	int r;
 
 	isPrepared = false;
@@ -2106,12 +2147,15 @@ int asCScriptEngine::RegisterObjectType(const char *name, int byteSize, asQWORD 
 		return asSUCCESS;
 
 	return GetTypeIdByDecl(name);
+#endif // Dormant backend reference.
 }
 //[UE--]
 
 // interface
 int asCScriptEngine::RegisterObjectBehaviour(const char *datatype, asEBehaviours behaviour, const char *decl, const asSFuncPtr &funcPointer, asDWORD callConv, asFunctionCaller caller, void *auxiliary, int compositeOffset, bool isCompositeIndirect)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	if( datatype == 0 ) return ConfigError(asINVALID_ARG, "RegisterObjectBehaviour", datatype, decl);
 
 	// Determine the object type
@@ -2133,11 +2177,14 @@ int asCScriptEngine::RegisterObjectBehaviour(const char *datatype, asEBehaviours
 		return ConfigError(asINVALID_TYPE, "RegisterObjectBehaviour", datatype, decl);
 
 	return RegisterBehaviourToObjectType(CastToObjectType(type.GetTypeInfo()), behaviour, decl, funcPointer, callConv, caller, auxiliary, compositeOffset, isCompositeIndirect);
+#endif // Dormant backend reference.
 }
 
 // internal
 int asCScriptEngine::RegisterBehaviourToObjectType(asCObjectType *objectType, asEBehaviours behaviour, const char *decl, const asSFuncPtr &funcPointer, asDWORD callConv, asFunctionCaller caller, void *auxiliary, int compositeOffset, bool isCompositeIndirect)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 #ifdef AS_MAX_PORTABILITY
 	if( callConv != asCALL_GENERIC )
 		return ConfigError(asNOT_SUPPORTED, "RegisterObjectBehaviour", objectType->name.AddressOf(), decl);
@@ -2546,6 +2593,7 @@ int asCScriptEngine::RegisterBehaviourToObjectType(asCObjectType *objectType, as
 
 	// Return function id as success
 	return func.id;
+#endif // Dormant backend reference.
 }
 
 int asCScriptEngine::SetTemplateRestrictions(asCObjectType *templateType, asCScriptFunction *func, const char *caller, const char *decl)
@@ -2643,6 +2691,8 @@ int asCScriptEngine::AddBehaviourFunction(asCScriptFunction &func, asSSystemFunc
 // interface
 int asCScriptEngine::RegisterGlobalProperty(const char *declaration, void *pointer)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	// Don't accept a null pointer
 	if( pointer == 0 )
 		return ConfigError(asINVALID_ARG, "RegisterGlobalProperty", declaration, 0);
@@ -2673,6 +2723,7 @@ int asCScriptEngine::RegisterGlobalProperty(const char *declaration, void *point
 	prop->AddRef();
 
 	return prop->id;
+#endif // Dormant backend reference.
 }
 
 // internal
@@ -2755,6 +2806,8 @@ int asCScriptEngine::GetGlobalPropertyByIndex(asUINT index, const char **name, c
 // interface
 int asCScriptEngine::RegisterObjectMethod(const char *obj, const char *declaration, const asSFuncPtr &funcPointer, asDWORD callConv, asFunctionCaller caller, void *auxiliary, int compositeOffset, bool isCompositeIndirect, const asUINT accessorType)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	if( obj == 0 )
 		return ConfigError(asINVALID_ARG, "RegisterObjectMethod", obj, declaration);
 
@@ -2776,11 +2829,14 @@ int asCScriptEngine::RegisterObjectMethod(const char *obj, const char *declarati
 		return ConfigError(asINVALID_ARG, "RegisterObjectMethod", obj, declaration);
 
 	return RegisterMethodToObjectType(CastToObjectType(dt.GetTypeInfo()), declaration, funcPointer, callConv, caller, auxiliary, compositeOffset, isCompositeIndirect, accessorType);
+#endif // Dormant backend reference.
 }
 
 // internal
 int asCScriptEngine::RegisterMethodToObjectType(asCObjectType *objectType, const char *declaration, const asSFuncPtr &funcPointer, asDWORD callConv, asFunctionCaller caller, void *auxiliary, int compositeOffset, bool isCompositeIndirect, const asUINT accessorType)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 #ifdef AS_MAX_PORTABILITY
 	if( callConv != asCALL_GENERIC )
 		return ConfigError(asNOT_SUPPORTED, "RegisterObjectMethod", objectType->name.AddressOf(), declaration);
@@ -2905,11 +2961,14 @@ int asCScriptEngine::RegisterMethodToObjectType(asCObjectType *objectType, const
 
 	// Return the function id as success
 	return func->id;
+#endif // Dormant backend reference.
 }
 
 // interface
 int asCScriptEngine::RegisterGlobalFunction(const char *declaration, const asSFuncPtr &funcPointer, asDWORD callConv, asFunctionCaller caller, void *auxiliary)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 #ifdef AS_MAX_PORTABILITY
 	if( callConv != asCALL_GENERIC )
 		return ConfigError(asNOT_SUPPORTED, "RegisterGlobalFunction", declaration, 0);
@@ -2992,30 +3051,39 @@ int asCScriptEngine::RegisterGlobalFunction(const char *declaration, const asSFu
 
 	// Return the function id as success
 	return func->id;
+#endif // Dormant backend reference.
 }
 
 // interface
 asUINT asCScriptEngine::GetGlobalFunctionCount() const
 {
-	// Don't count the builtin delegate factory
-	return asUINT(registeredGlobalFuncs.GetLength()-1);
+	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
+	asUINT Count = 0;
+	for (const auto& Image : metadataImages)
+		for (auto* Function : Image->GetFunctions())
+			if (Function->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Global && Function->funcType != asFUNC_FUNCDEF) ++Count;
+	return Count;
 }
 
 // interface
 asIScriptFunction *asCScriptEngine::GetGlobalFunctionByIndex(asUINT index) const
 {
-	// Don't count the builtin delegate factory
-	index++;
-
-	if( index >= registeredGlobalFuncs.GetLength() )
-		return 0;
-
-	return static_cast<asIScriptFunction*>(registeredGlobalFuncs[index]);
+	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
+	for (const auto& Image : metadataImages)
+		for (auto* Function : Image->GetFunctions())
+			if (Function->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Global && Function->funcType != asFUNC_FUNCDEF)
+			{
+				if (index == 0) return Function;
+				--index;
+			}
+	return nullptr;
 }
 
 // interface
 asIScriptFunction *asCScriptEngine::GetGlobalFunctionByDecl(const char *decl) const
 {
+	return nullptr; // No dormant parser fallback for declaration-text queries.
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	asCBuilder bld(const_cast<asCScriptEngine*>(this), 0);
 
 	// Don't write parser errors to the message callback
@@ -3078,6 +3146,7 @@ asIScriptFunction *asCScriptEngine::GetGlobalFunctionByDecl(const char *decl) co
 	}
 
 	return 0;
+#endif // Dormant backend reference.
 }
 
 void asCScriptEngine::DeprecateGlobalFunctionsByName(const char *name, const char* deprecationMessage)
@@ -3226,6 +3295,8 @@ int asCScriptEngine::ConfigError(int err, const char *funcName, const char *arg1
 // interface
 int asCScriptEngine::RegisterDefaultArrayType(const char *type)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	asCBuilder bld(this, 0);
 	asCDataType dt;
 	int r = bld.ParseDataType(type, &dt, defaultNamespace, false, true);
@@ -3239,6 +3310,7 @@ int asCScriptEngine::RegisterDefaultArrayType(const char *type)
 	defaultArrayObjectType->AddRefInternal();
 
 	return 0;
+#endif // Dormant backend reference.
 }
 
 // interface
@@ -3253,6 +3325,8 @@ int asCScriptEngine::GetDefaultArrayTypeId() const
 // interface
 int asCScriptEngine::RegisterStringFactory(const char *datatype, asIStringFactory *factory)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	if (factory == 0)
 		return ConfigError(asINVALID_ARG, "RegisterStringFactory", datatype, 0);
 
@@ -3274,6 +3348,7 @@ int asCScriptEngine::RegisterStringFactory(const char *datatype, asIStringFactor
 	stringFactory = factory;
 
 	return asSUCCESS;
+#endif // Dormant backend reference.
 }
 
 // interface
@@ -3290,6 +3365,7 @@ int asCScriptEngine::GetStringFactoryReturnTypeId(asDWORD *flags) const
 // internal
 asCModule *asCScriptEngine::GetModule(const char *name, bool create)
 {
+	if (create) return nullptr; // Use the independent Builder, not the dormant backend.
 	// Accept null as well as zero-length string
 	if( name == 0 ) name = "";
 
@@ -5175,6 +5251,13 @@ void asCScriptEngine::ForwardGCReleaseReferences(void *ref, asITypeInfo *type)
 
 int asCScriptEngine::GetTypeIdFromDataType(const asCDataType &dtIn) const
 {
+	if (dtIn.GetTypeInfo() && dtIn.GetTypeInfo()->GetMetadataImage())
+	{
+		std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
+		auto* Type = dtIn.GetTypeInfo();
+		if (metadataTypesByKey.FindRef(Type->GetStableKey()) != Type) return -1;
+		return Type->GetMetadataImage()->GetBoundDataTypeId(dtIn);
+	}
 	if( dtIn.IsNullHandle() ) return asTYPEID_VOID;
 
 	if( dtIn.GetTypeInfo() == 0 )
@@ -5240,6 +5323,17 @@ int asCScriptEngine::GetTypeIdFromDataType(const asCDataType &dtIn) const
 
 asCDataType asCScriptEngine::GetDataTypeFromTypeId(int typeId) const
 {
+	if (typeId < 0) return asCDataType();
+	{
+		std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
+		if (asCTypeInfo* Type = metadataTypesById.FindRef(typeId & (asTYPEID_MASK_OBJECT | asTYPEID_MASK_SEQNBR)))
+		{
+			asCDataType Result = asCDataType::CreateType(Type, false);
+			if (typeId & asTYPEID_OBJHANDLE) Result.MakeHandle(true, true);
+			if (typeId & asTYPEID_HANDLETOCONST) Result.MakeHandleToConst(true);
+			return Result;
+		}
+	}
 	int baseId = typeId & (asTYPEID_MASK_OBJECT | asTYPEID_MASK_SEQNBR);
 
 	if( typeId <= asTYPEID_FLOAT64 )
@@ -5278,6 +5372,8 @@ void asCScriptEngine::RemoveFromTypeIdMap(asCTypeInfo *type)
 // interface
 asITypeInfo *asCScriptEngine::GetTypeInfoByDecl(const char *decl) const
 {
+	return nullptr; // Structured frontend type lookup is the replacement contract.
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	asCDataType dt;
 	// This cast is ok, because we are not changing anything in the engine
 	asCBuilder bld(const_cast<asCScriptEngine*>(this), 0);
@@ -5290,11 +5386,14 @@ asITypeInfo *asCScriptEngine::GetTypeInfoByDecl(const char *decl) const
 		return 0;
 
 	return dt.GetTypeInfo();
+#endif // Dormant backend reference.
 }
 
 // interface
 int asCScriptEngine::GetTypeIdByDecl(const char *decl) const
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	asCDataType dt;
 	// This cast is ok, because we are not changing anything in the engine
 	asCBuilder bld(const_cast<asCScriptEngine*>(this), 0);
@@ -5307,6 +5406,7 @@ int asCScriptEngine::GetTypeIdByDecl(const char *decl) const
 		return asINVALID_TYPE;
 
 	return GetTypeIdFromDataType(dt);
+#endif // Dormant backend reference.
 }
 
 // interface
@@ -5939,6 +6039,8 @@ void asCScriptEngine::RemoveFuncdef(asCFuncdefType *funcdef)
 // interface
 int asCScriptEngine::RegisterFuncdef(const char *decl)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	if( decl == 0 ) return ConfigError(asINVALID_ARG, "RegisterFuncdef", decl, 0);
 
 	// Parse the function declaration
@@ -5991,21 +6093,19 @@ int asCScriptEngine::RegisterFuncdef(const char *decl)
 
 	// Return the type id as success
 	return GetTypeIdFromDataType(asCDataType::CreateType(fdt, false));
+#endif // Dormant backend reference.
 }
 
 // interface
 asUINT asCScriptEngine::GetFuncdefCount() const
 {
-	return asUINT(registeredFuncDefs.GetLength());
+	return CountMetadataTypes(asOBJ_FUNCDEF);
 }
 
 // interface
 asITypeInfo *asCScriptEngine::GetFuncdefByIndex(asUINT index) const
 {
-	if( index >= registeredFuncDefs.GetLength() )
-		return 0;
-
-	return registeredFuncDefs[index];
+	return MetadataTypeByIndex(index, asOBJ_FUNCDEF);
 }
 
 // internal
@@ -6152,6 +6252,8 @@ asCFuncdefType *asCScriptEngine::FindMatchingFuncdef(asCScriptFunction *func, as
 // TODO: typedef: Accept complex types for the typedefs
 int asCScriptEngine::RegisterTypedef(const char *type, const char *decl)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	if( type == 0 ) return ConfigError(asINVALID_NAME, "RegisterTypedef", type, decl);
 
 	// Verify if the name has been registered as a type already
@@ -6221,26 +6323,26 @@ int asCScriptEngine::RegisterTypedef(const char *type, const char *decl)
 	registeredTypeDefs.PushLast(td);
 
 	return GetTypeIdByDecl(type);
+#endif // Dormant backend reference.
 }
 
 // interface
 asUINT asCScriptEngine::GetTypedefCount() const
 {
-	return asUINT(registeredTypeDefs.GetLength());
+	return CountMetadataTypes(asOBJ_TYPEDEF);
 }
 
 // interface
 asITypeInfo *asCScriptEngine::GetTypedefByIndex(asUINT index) const
 {
-	if( index >= registeredTypeDefs.GetLength() )
-		return 0;
-
-	return registeredTypeDefs[index];
+	return MetadataTypeByIndex(index, asOBJ_TYPEDEF);
 }
 
 // interface
 int asCScriptEngine::RegisterEnum(const char *name)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	//	Check the name
 	if( NULL == name )
 		return ConfigError(asINVALID_NAME, "RegisterEnum", name, 0);
@@ -6293,11 +6395,14 @@ int asCScriptEngine::RegisterEnum(const char *name)
 	registeredEnums.PushLast(st);
 
 	return GetTypeIdByDecl(name);
+#endif // Dormant backend reference.
 }
 
 // interface
 int asCScriptEngine::RegisterEnumValue(const char *typeName, const char *valueName, int value)
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	asCDataType dt;
 	int r;
 	asCBuilder bld(this, 0);
@@ -6334,46 +6439,43 @@ int asCScriptEngine::RegisterEnumValue(const char *typeName, const char *valueNa
 	ot->enumValues.PushLast(e);
 
 	return asSUCCESS;
+#endif // Dormant backend reference.
 }
 
 // interface
 asUINT asCScriptEngine::GetEnumCount() const
 {
-	return registeredEnums.GetLength();
+	return CountMetadataTypes(asOBJ_ENUM);
 }
 
 // interface
 asITypeInfo *asCScriptEngine::GetEnumByIndex(asUINT index) const
 {
-	if( index >= registeredEnums.GetLength() )
-		return 0;
-
-	return registeredEnums[index];
+	return MetadataTypeByIndex(index, asOBJ_ENUM);
 }
 
 // interface
 asUINT asCScriptEngine::GetObjectTypeCount() const
 {
-	return asUINT(registeredObjTypes.GetLength());
+	return CountMetadataTypes(asOBJ_VALUE | asOBJ_REF, asOBJ_FUNCDEF);
 }
 
 // interface
 asITypeInfo *asCScriptEngine::GetObjectTypeByIndex(asUINT index) const
 {
-	if( index >= registeredObjTypes.GetLength() )
-		return 0;
-
-	return registeredObjTypes[index];
+	return MetadataTypeByIndex(index, asOBJ_VALUE | asOBJ_REF, asOBJ_FUNCDEF);
 }
 
 // interface
 asITypeInfo *asCScriptEngine::GetTypeInfoByName(const char *name) const
 {
+	if (auto* Type = FindMetadataType(defaultNamespace->name.AddressOf(), name)) return Type;
 	return allRegisteredTypesByName.FindFirst(name);
 }
 
 asITypeInfo* asCScriptEngine::GetTypeInfo(const char *name, asSNameSpace* ns) const
 {
+	if (ns) if (auto* Type = FindMetadataType(ns->name.AddressOf(), name)) return Type;
 	asITypeInfo* Type = nullptr;
 	allRegisteredTypesByName.FindAllUntil(name, [&](asITypeInfo* CheckType)
 	{
@@ -6389,7 +6491,9 @@ asITypeInfo* asCScriptEngine::GetTypeInfo(const char *name, asSNameSpace* ns) co
 // interface
 asITypeInfo *asCScriptEngine::GetTypeInfoById(int typeId) const
 {
+	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
 	int baseId = typeId & (asTYPEID_MASK_OBJECT | asTYPEID_MASK_SEQNBR);
+	if (auto* Type = metadataTypesById.FindRef(baseId)) return Type;
 	if( typeId <= asTYPEID_FLOAT64 )
 		return nullptr;
 

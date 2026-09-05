@@ -34,6 +34,7 @@
 #include "as_config.h"
 #include "as_property.h"
 #include "as_scriptengine.h"
+#include "as_metadata_image.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -63,17 +64,36 @@ asCGlobalProperty::~asCGlobalProperty()
 
 void asCGlobalProperty::AddRef()
 {
+	if (metadataOwner)
+	{
+		std::lock_guard<std::mutex> Lock(metadataReferenceMutex);
+		if (refCount.get() == 0) metadataExternalLease = metadataOwner->shared_from_this();
+		refCount.atomicInc();
+		return;
+	}
 	refCount.atomicInc();
 }
 
 void asCGlobalProperty::Release()
 {
+	if (metadataOwner)
+	{
+		std::shared_ptr<asCMetadataImage> Released;
+		{
+			std::lock_guard<std::mutex> Lock(metadataReferenceMutex);
+			asASSERT(refCount.get() > 0);
+			if (refCount.atomicDec() == 0) Released = std::move(metadataExternalLease);
+		}
+		// May destroy this object; never touch fields after releasing the image.
+		return;
+	}
 	if( refCount.atomicDec() == 0 )
 		asDELETE(this, asCGlobalProperty);
 }
 
 void asCGlobalProperty::DestroyInternal()
 {
+	if (metadataOwner) return;
 	if( initFunc )
 	{
 		initFunc->ReleaseInternal();
@@ -83,6 +103,7 @@ void asCGlobalProperty::DestroyInternal()
 
 void *asCGlobalProperty::GetAddressOfValue()
 { 
+	if (metadataOwner) return nullptr;
 	return memory;
 }
 
@@ -92,6 +113,7 @@ void *asCGlobalProperty::GetAddressOfValue()
 // any time.
 void asCGlobalProperty::AllocateMemory() 
 { 
+	if (metadataOwner) return;
 	if( type.GetSizeOnStackDWords() > 2 ) 
 	{ 
 #ifndef WIP_16BYTE_ALIGNED
@@ -106,6 +128,7 @@ void asCGlobalProperty::AllocateMemory()
 
 void asCGlobalProperty::SetRegisteredAddress(void *p) 
 { 
+	if (metadataOwner) return;
 	realAddress = p;
 	if( type.IsObject() && !type.IsReference() && !type.IsObjectHandle() )
 	{
@@ -123,6 +146,7 @@ void *asCGlobalProperty::GetRegisteredAddress() const
 
 void asCGlobalProperty::SetInitFunc(asCScriptFunction *in_initFunc)
 {
+	if (metadataOwner) return;
 	// This should only be done once
 	asASSERT( initFunc == 0 );
 

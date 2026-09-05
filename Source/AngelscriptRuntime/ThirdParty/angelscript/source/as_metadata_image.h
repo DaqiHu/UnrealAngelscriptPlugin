@@ -1,0 +1,223 @@
+/* Maintained Unreal AngelScript fork — engine-independent definition ownership. */
+#pragma once
+
+#include "as_config.h"
+#include "as_datatype.h"
+#include "as_metadata_list_pattern.h"
+#include "frontend/as_stable_key.h"
+#include "Containers/Array.h"
+#include "Containers/Map.h"
+#include "Templates/SharedPointer.h"
+
+#include <atomic>
+#include <memory>
+#include <mutex>
+
+BEGIN_AS_NAMESPACE
+
+class asCTypeInfo;
+class asCObjectType;
+class asCEnumType;
+class asCTypedefType;
+class asCFuncdefType;
+class asCScriptFunction;
+class asCObjectProperty;
+class asCGlobalProperty;
+struct asSNameSpace;
+class asCScriptEngine;
+class asCTypeContext;
+	enum class asETypeDeclKind : uint8;
+	enum class asEFunctionIdentityKind : uint8;
+
+struct asSMetadataOptions
+{
+	bool FloatIsFloat64 = true;
+	bool ExpandDefaultArrayToTemplate = true;
+	asUINT PointerByteSize = sizeof(void*);
+	asCString TargetProfile = "native";
+};
+
+enum class asEMetadataImageState : asBYTE
+{
+	Building, Frozen, Attaching, Attached, Retired
+};
+
+enum class asEMetadataResult : asBYTE
+{
+	Succeeded, InvalidArgument, InvalidState, ForeignOwner, DuplicateIdentity,
+	DuplicateName, UnfrozenDependency, IncompleteDefinition, InvalidLayout,
+	RecursiveValueType, InvalidSignature
+};
+
+enum class asEMetadataRegistrationResult : asBYTE
+{
+	Succeeded, InvalidArgument, InvalidState, InvalidIdentity, InvalidLayout,
+	IdentityConflict, NameConflict, AlreadyRegistered, ForeignEngine, Retired
+};
+
+struct asSMetadataParameter
+{
+	asCString Name;
+	asCDataType Type;
+	asDWORD Flags = asTM_NONE;
+	asCString DefaultArgument;
+};
+
+// An image owns actual runtime metadata, never proxy records. Shared image
+// handles and external type/function AddRef leases own the graph; graph edges
+// themselves are non-owning. Draft mutation is serialized by this API. Frozen
+// images are immutable and dependencies can only name already frozen images.
+// Array views and legacy public field inspection require an externally quiet
+// draft or a frozen image; direct writes to legacy fields are not this API's
+// mutation protocol. A producer-owned canonical identity context authenticates
+// keys at integration time; accepting a nonzero shell key does not do so.
+class ANGELSCRIPTRUNTIME_API asCMetadataImage final
+	: public std::enable_shared_from_this<asCMetadataImage>
+{
+public:
+	static std::shared_ptr<asCMetadataImage> Create(const asSMetadataOptions& Options = {});
+	~asCMetadataImage();
+	asCMetadataImage(const asCMetadataImage&) = delete;
+	asCMetadataImage& operator=(const asCMetadataImage&) = delete;
+
+	const asSMetadataOptions& GetOptions() const { return Options; }
+	asEMetadataImageState GetState() const { return State.load(std::memory_order_acquire); }
+	bool IsFrozen() const { return GetState() != asEMetadataImageState::Building; }
+	bool IsDestroying() const { return bDestroying; }
+	TConstArrayView<asCTypeInfo*> GetTypes() const { return MakeArrayView(Types); }
+	TConstArrayView<asCScriptFunction*> GetFunctions() const { return MakeArrayView(Functions); }
+	TConstArrayView<asCGlobalProperty*> GetGlobalProperties() const { return MakeArrayView(Globals); }
+	TConstArrayView<std::shared_ptr<asCMetadataImage>> GetDependencies() const { return MakeArrayView(Dependencies); }
+	bool Owns(const asCTypeInfo* Type) const;
+	bool Owns(const asCScriptFunction* Function) const;
+	bool CanReference(const asCTypeInfo* Type) const;
+	bool CanReference(const asCScriptFunction* Function) const;
+	asCTypeInfo* FindType(const asSStableKey& Key) const;
+	asCScriptFunction* FindFunction(const asSStableKey& Key) const;
+	asCGlobalProperty* FindGlobalProperty(const asSStableKey& Key) const;
+	asEMetadataResult CreateGlobalProperty(const asSStableKey& Key, const asSStableKey& TypeUseKey,
+		const char* Name, const char* Namespace, const asCDataType& Type, asCGlobalProperty*& Out);
+	asCDataType Primitive(eTokenType Token, bool IsConst = false) const;
+	asEMetadataResult SetIdentityContext(TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> Context);
+	TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> GetIdentityContext() const;
+	asCScriptEngine* GetBoundEngine() const;
+	int GetBoundTypeId(const asCTypeInfo* Type) const;
+	int GetBoundFunctionId(const asCScriptFunction* Function) const;
+	int GetBoundDataTypeId(const asCDataType& Type) const;
+
+	asEMetadataResult AddDependency(const std::shared_ptr<asCMetadataImage>& Dependency);
+	asEMetadataResult CreateObjectType(const asSStableKey& Key,
+		const char* Name, const char* Namespace, asQWORD Flags, asCObjectType*& Out);
+	asEMetadataResult CreateEnumType(const asSStableKey& Key,
+		const char* Name, const char* Namespace, asCEnumType*& Out);
+	asEMetadataResult CreateTypedefType(const asSStableKey& Key,
+		const char* Name, const char* Namespace, asCTypedefType*& Out);
+	asEMetadataResult CreateFuncdefType(const asSStableKey& Key,
+		const char* Name, const char* Namespace, asCScriptFunction& Signature, asCFuncdefType*& Out);
+	asEMetadataResult CreateFunction(const asSStableKey& Key,
+		const char* Name, const char* Namespace, asEFuncType Kind, asCScriptFunction*& Out);
+	// A structural Callable TypeUse is a signature, not a Function entity.
+	// Multiple nominal delegate/event types may share this image-owned object.
+	asEMetadataResult CreateCallableSignature(const asSStableKey& SignatureKey, asCScriptFunction*& Out);
+	asEMetadataResult DefineFunction(asCScriptFunction& Function, const asCDataType& ReturnType,
+		TConstArrayView<asSMetadataParameter> Parameters, asCObjectType* Owner = nullptr);
+	asEMetadataResult SetTypeDeclarationFacts(asCTypeInfo& Type, asETypeDeclKind Kind,
+		asUINT GenericArity = 0, asCTypeInfo* Owner = nullptr);
+	asEMetadataResult SetFunctionDeclarationFacts(asCScriptFunction& Function, asEFunctionIdentityKind Kind,
+		asCTypeInfo* Owner = nullptr, asUINT GenericArity = 0, bool IsStatic = false);
+	asEMetadataResult SetLambdaOrigin(asCScriptFunction& Function, asCScriptFunction& EnclosingFunction, asUINT Ordinal);
+	asEMetadataResult SetFunctionLocal(asCScriptFunction& Function, bool IsLocal);
+	asEMetadataResult DefineAccessSpecifier(asCObjectType& Owner, const asSAccessSpecifier& Definition, asSAccessSpecifier*& Out);
+	asEMetadataResult SetPropertyAccess(asCObjectType& Owner, asCObjectProperty& Property, asSAccessSpecifier& Policy);
+	asEMetadataResult SetFunctionAccess(asCScriptFunction& Function, asSAccessSpecifier& Policy);
+	asEMetadataResult SetListInitializer(asCObjectType& Type, asCScriptFunction& Factory, const asSMetadataListPattern& Pattern);
+	const asSMetadataListInitializer* GetListInitializer(const asCObjectType& Type) const;
+	asEMetadataResult AddProperty(asCObjectType& Owner, const char* Name,
+		const asCDataType& Type, asCObjectProperty*& Out, bool IsPrivate = false, bool IsProtected = false);
+	asEMetadataResult SetBaseType(asCObjectType& Type, asCObjectType& Base);
+	asEMetadataResult SetInterfaceDeclaration(asCObjectType& Type);
+	asEMetadataResult AddInterface(asCObjectType& Type, asCObjectType& Interface);
+	asEMetadataResult AddBehaviour(asCObjectType& Type, asEBehaviours Behaviour, asCScriptFunction& Function);
+	asEMetadataResult AddTemplateArgument(asCObjectType& Type, const asCDataType& Argument);
+	asEMetadataResult SetDefaultArrayType(asCObjectType& Type);
+	bool IsDefaultArrayType(const asCTypeInfo* Type) const;
+	asEMetadataResult AddEnumValue(asCEnumType& Type, const char* Name, int Value);
+	asEMetadataResult SetAlias(asCTypedefType& Type, const asCDataType& Alias);
+	asEMetadataResult AddChildFuncdef(asCObjectType& Type, asCFuncdefType& Funcdef);
+	asEMetadataResult SetNativeLayout(asCObjectType& Type, asUINT Size, asUINT Alignment);
+	asEMetadataResult SetFixedTemplateLayout(asCObjectType& Type, asUINT Size, asUINT Alignment);
+	asEMetadataResult CreateTemplateInstance(asCObjectType& Template, const asSStableKey& TypeUseKey,
+		TConstArrayView<asCDataType> Arguments, asCObjectType*& Out);
+	bool ValidateFrozenDefinitions() const;
+	asEMetadataResult FinalizeLayouts();
+	asEMetadataResult Freeze();
+
+private:
+	friend class asCScriptEngine; // Engine binding is a later, whole-image transaction.
+	explicit asCMetadataImage(const asSMetadataOptions& InOptions);
+	asEMetadataResult ValidateNew(const asSStableKey& Key, const char* Name,
+		const char* Namespace, bool IsType) const;
+	asSNameSpace* InternNamespace(const char* Name);
+	asEMetadataResult ValidateDataType(const asCDataType& Type, bool AllowVoid) const;
+	asCDataType NormalizeOptions(const asCDataType& Type) const;
+	bool ReferencesImage(const asCMetadataImage* Image) const;
+	bool ValidateFrozenIdentity() const;
+	bool ValidateListInitializers() const;
+	bool ValidateListPattern(const asSMetadataListPattern& Pattern, asUINT GenericArity, int Depth, int& NodeBudget) const;
+	bool ValidateGlobalIdentity(const asCGlobalProperty& Global) const;
+	bool ValidateTypeUse(const asSStableKey& Key, const asCDataType& Actual, int Depth = 0) const;
+	bool ValidateFrozenLayout() const;
+	bool CanUseAccessSpecifier(const asCObjectType& Owner, const asSAccessSpecifier* Policy) const;
+	struct asSAccessPolicySnapshot
+	{
+		const asCObjectType* Owner = nullptr;
+		TArray<uint8> Encoding;
+	};
+	struct asSMemberAccessSnapshot
+	{
+		const asSAccessSpecifier* Policy = nullptr;
+		uint8 StandardAccess = 0;
+		bool operator==(const asSMemberAccessSnapshot& Other) const { return Policy == Other.Policy && StandardAccess == Other.StandardAccess; }
+	};
+	bool CollectAccessSnapshot(TMap<const asSAccessSpecifier*, asSAccessPolicySnapshot>& Policies,
+		TMap<const asCObjectProperty*, asSMemberAccessSnapshot>& Properties,
+		TMap<const asCScriptFunction*, asSMemberAccessSnapshot>& Methods) const;
+	bool CaptureAccessSnapshot();
+	bool ValidateAccessSnapshot() const;
+	void InvalidateLayouts() { bLayoutsFinalized = false; }
+
+	const asSMetadataOptions Options;
+	std::atomic<asEMetadataImageState> State{asEMetadataImageState::Building};
+	mutable std::mutex MutationMutex;
+	TArray<asCTypeInfo*> Types;
+	TArray<asCScriptFunction*> Functions;
+	TArray<asCGlobalProperty*> Globals;
+	TMap<asSStableKey, asCGlobalProperty*> GlobalsByKey;
+	TMap<FString, asCGlobalProperty*> GlobalsByName;
+	TArray<asSNameSpace*> Namespaces;
+	TArray<std::shared_ptr<asCMetadataImage>> Dependencies;
+	TMap<asSStableKey, asCTypeInfo*> TypesByKey;
+	TMap<asSStableKey, asCScriptFunction*> FunctionsByKey;
+	TMap<FString, asCTypeInfo*> TypesByName;
+	TMap<asCObjectType*, TPair<asUINT, asUINT>> NativeLayouts;
+	TMap<const asCObjectType*, asSMetadataListInitializer> ListInitializers;
+	asCObjectType* DefaultArrayType = nullptr;
+	bool bLayoutsFinalized = false;
+	bool bDestroying = false;
+	TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> IdentityContext;
+	TMap<asCTypeInfo*, TPair<int, int>> FrozenLayouts;
+	TMap<asCTypeInfo*, asQWORD> FrozenTypeFlags;
+	TMap<asCObjectProperty*, int> FrozenPropertyOffsets;
+	TMap<asCObjectProperty*, asCDataType> FrozenPropertyTypes;
+	TMap<asCObjectType*, bool> FrozenTemplateLayoutPolicies;
+	// Exact, private freeze witnesses, not semantic proxies or persistent keys.
+	TMap<const asSAccessSpecifier*, asSAccessPolicySnapshot> FrozenAccessPolicies;
+	TMap<const asCObjectProperty*, asSMemberAccessSnapshot> FrozenPropertyAccess;
+	TMap<const asCScriptFunction*, asSMemberAccessSnapshot> FrozenFunctionAccess;
+	// Guarded by MutationMutex. Neither pointer nor IDs live in semantic fields.
+	asCScriptEngine* BoundEngine = nullptr;
+	TMap<const asCTypeInfo*, int> BoundTypeIds;
+	TMap<const asCScriptFunction*, int> BoundFunctionIds;
+};
+
+END_AS_NAMESPACE

@@ -403,6 +403,15 @@ int PrepareSystemFunction(asCScriptFunction *func, asSSystemFunctionInterface *i
 	return 0;
 }
 
+int CallSystemFunction(int id, asCContext *context)
+{
+	(void)id;
+	if( context )
+		context->SetInternalException(TXT_INVALID_CALLING_CONVENTION);
+	return 0;
+}
+
+#if 0 // Preserved dormant native call backends; not a supported configuration path.
 #ifdef AS_MAX_PORTABILITY
 
 int CallSystemFunction(int id, asCContext *context)
@@ -801,6 +810,7 @@ int CallSystemFunction(int id, asCContext *context)
 }
 
 #endif // AS_MAX_PORTABILITY
+#endif
 
 END_AS_NAMESPACE
 

@@ -42,10 +42,16 @@
 #include "as_string.h"
 #include "as_atomic.h"
 #include "as_datatype.h"
+#include "frontend/as_stable_key.h"
+#include <memory>
+#include <mutex>
 
 BEGIN_AS_NAMESPACE
 
+ enum class asETypeDeclKind : uint8; 
+
 class asCScriptEngine;
+class asCMetadataImage;
 class asCModule;
 class asCObjectType;
 class asCEnumType;
@@ -143,6 +149,10 @@ public:
 public:
 	asCTypeInfo(asCScriptEngine *engine);
 	virtual ~asCTypeInfo();
+	const asSStableKey& GetStableKey() const { return metadataStableKey; }
+	asETypeDeclKind GetMetadataDeclarationKind() const { return static_cast<asETypeDeclKind>(metadataDeclarationKind); }
+	asCMetadataImage* GetMetadataImage() const { return metadataOwner; }
+	asCTypeInfo* GetMetadataDeclarationOwner() const { return metadataDeclarationOwner; }
 
 	// Keep an internal reference counter to separate references coming from 
 	// application or script objects and references coming from the script code
@@ -188,14 +198,23 @@ public:
 	asCArray<asPWORD> userData;
 
 protected:
+	friend class asCMetadataImage;
 	friend class asCScriptEngine;
 	friend class asCConfigGroup;
 	friend class asCModule;
 	friend class asCObjectType;
 	asCTypeInfo();
+	asCTypeInfo(asCMetadataImage& owner, const asSStableKey& key);
 
 	mutable asCAtomic externalRefCount;
 	asCAtomic         internalRefCount;
+	asCMetadataImage* metadataOwner = nullptr;
+	asSStableKey metadataStableKey;
+	asBYTE metadataDeclarationKind = 0;
+	asUINT metadataGenericArity = 0;
+	asCTypeInfo* metadataDeclarationOwner = nullptr;
+	mutable std::mutex metadataReferenceMutex;
+	mutable std::shared_ptr<asCMetadataImage> metadataExternalLease;
 };
 
 struct asSEnumValue
@@ -220,6 +239,8 @@ public:
 	const char *GetEnumValueByIndex(asUINT index, int *outValue) const;
 
 protected:
+	friend class asCMetadataImage;
+	asCEnumType(asCMetadataImage& owner, const asSStableKey& key) : asCTypeInfo(owner, key) {}
 	asCEnumType() : asCTypeInfo() {}
 };
 
@@ -238,6 +259,8 @@ public:
 	int GetTypedefTypeId() const;
 
 protected:
+	friend class asCMetadataImage;
+	asCTypedefType(asCMetadataImage& owner, const asSStableKey& key) : asCTypeInfo(owner, key) {}
 	asCTypedefType() : asCTypeInfo() {}
 };
 
@@ -257,6 +280,8 @@ public:
 	asCObjectType     *parentClass; // doesn't increase refCount
 
 protected:
+	friend class asCMetadataImage;
+	asCFuncdefType(asCMetadataImage& owner, const asSStableKey& key, asCScriptFunction* func);
 	asCFuncdefType() : asCTypeInfo(), funcdef(0), parentClass(0) {}
 };
 

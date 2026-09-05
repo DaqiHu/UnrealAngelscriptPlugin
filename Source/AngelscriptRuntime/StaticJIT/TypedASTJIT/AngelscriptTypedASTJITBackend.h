@@ -3,7 +3,6 @@
 #include "CoreMinimal.h"
 
 #include "StaticJIT/Backends/AngelscriptStaticJITBackend.h"
-#include "source/as_source_provenance.h"
 
 #if AS_CAN_GENERATE_JIT
 

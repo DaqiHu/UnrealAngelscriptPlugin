@@ -11,6 +11,7 @@ namespace UnrealBuildTool.Rules
 			bUseUnity = true;
 			PrivateDefinitions.Add("AS_ENABLE_EDITOR_JITTED_CODE=1");
 			bool bCompileLegacyTests = AngelscriptBuildSettings.ShouldCompileUnitTests(Target, this);
+			bool bCompileReplacementTests = AngelscriptBuildSettings.ShouldCompileTests(Target, this);
 
 			PublicIncludePaths.Add(ModuleDirectory);
 			PrivateIncludePaths.Add(ModuleDirectory);
@@ -72,6 +73,19 @@ namespace UnrealBuildTool.Rules
 						"AngelscriptTestJIT",
 					});
 				}
+			}
+
+			if (bCompileReplacementTests)
+			{
+				// Replacement frontend tests deserialize stage dumps independently.
+				PrivateDependencyModuleNames.Add("Json");
+			}
+
+			if (Target.bBuildEditor
+				&& bCompileReplacementTests
+				&& !PrivateDependencyModuleNames.Contains("CQTest"))
+			{
+				PrivateDependencyModuleNames.Add("CQTest");
 			}
 		}
 	}

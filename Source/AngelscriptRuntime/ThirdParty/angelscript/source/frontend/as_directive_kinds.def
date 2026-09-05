@@ -1,0 +1,9 @@
+// name, authored spelling
+AS_DIRECTIVE(If, "if")
+AS_DIRECTIVE(Ifdef, "ifdef")
+AS_DIRECTIVE(Ifndef, "ifndef")
+AS_DIRECTIVE(Elif, "elif")
+AS_DIRECTIVE(Else, "else")
+AS_DIRECTIVE(Endif, "endif")
+AS_DIRECTIVE(Restrict, "restrict")
+AS_DIRECTIVE(Include, "include")

@@ -71,6 +71,7 @@ public:
 	asCString Format(asSNameSpace *currNs, bool includeNamespace = false, bool forDisplay = false) const;
 
 	static asCDataType CreatePrimitive(eTokenType tt, bool isConst);
+	static asCDataType CreatePrimitive(eTokenType tt, bool isConst, bool float64Default);
 	static asCDataType CreateType(asCTypeInfo *ti, bool isConst);
 	static asCDataType CreateAuto(bool isConst);
 	static asCDataType CreateObjectHandle(asCTypeInfo *ot, bool isConst);
@@ -161,6 +162,18 @@ public:
 	bool IsAnyImplicitIntegerType() const { return anyImplicitIntegerType; }
 
 	static bool floatIsFloat64;
+	bool IsMetadataNullable() const { return metadataNullable; }
+	void SetMetadataNullable(bool Value) { metadataNullable = Value; }
+	// New compilation images snapshot language spelling per datatype. The old
+	// mutable default remains only for dormant Engine consumers until cutover.
+	void SetFloatSpellingOption(bool float64Default) { explicitFloatSpelling = true; float64Spelling = float64Default; }
+	void SetMetadataOptions(bool float64Default, asUINT pointerByteSize)
+	{
+		SetFloatSpellingOption(float64Default);
+		metadataPointerByteSize = static_cast<asBYTE>(pointerByteSize);
+		if (!typeInfo && tokenType == ttFloat) tokenType = float64Default ? ttFloat64 : ttFloat32;
+		if (!typeInfo && tokenType == ttDouble) tokenType = ttFloat64;
+	}
 
 protected:
 	// Base object type
@@ -182,6 +195,10 @@ protected:
 	bool isErrorDataType:1; // Used when the datatype was replaced because of a lookup error
 	bool isFloatExtendedToDouble : 1;
 	bool anyImplicitIntegerType : 1;
+	bool explicitFloatSpelling : 1;
+	bool float64Spelling : 1;
+	bool metadataNullable : 1;
+	asBYTE metadataPointerByteSize;
 };
 
 struct asSAccessPermission
@@ -204,7 +221,7 @@ struct asSAccessSpecifier
 
 	asCArray<asSAccessPermission> permissions;
 
-	void GetAllowedAccess(bool bAccessedFromDerivedClass, class asCScriptFunction* accessFromFunction, bool& Read, bool& Write, bool& Edit);
+	void ANGELSCRIPTRUNTIME_API GetAllowedAccess(bool bAccessedFromDerivedClass, class asCScriptFunction* accessFromFunction, bool& Read, bool& Write, bool& Edit);
 };
 
 END_AS_NAMESPACE

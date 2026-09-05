@@ -85,7 +85,6 @@
 #include "source/as_objecttype.h"
 #include "source/as_module.h"
 #include "source/as_builder.h"
-#include "source/as_bytecode_codegen.h"
 #include "EndAngelscriptHeaders.h"
 
 #include "Testing/AngelscriptBindExecutionObservation.h"
@@ -5751,7 +5750,7 @@ ECompileResult FAngelscriptEngine::CompileModules(
 							continue;
 
 						// Add types from the module into the engine
-						auto Result = ScriptModule->builder->BuildParallelParseScripts();
+						int Result = asNOT_SUPPORTED;
 						if (Result != asSUCCESS)
 						{
 							Module->bCompileError = true;
@@ -5791,7 +5790,7 @@ ECompileResult FAngelscriptEngine::CompileModules(
 						continue;
 
 					// Add types from the module into the engine
-					auto Result = ScriptModule->builder->BuildGenerateTypes();
+					int Result = asNOT_SUPPORTED;
 					if (Result != asSUCCESS)
 					{
 						Module->bCompileError = true;
@@ -6293,7 +6292,7 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				if (Module->bCompileError)
 					continue;
 
-				auto Result = ScriptModule->builder->BuildLayoutClasses();
+				int Result = asNOT_SUPPORTED;
 				if (Result != asSUCCESS)
 				{
 					Module->bCompileError = true;
@@ -6322,12 +6321,8 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				if (Module->bCompileError)
 					continue;
 
-				ScriptModule->builder->BuildAllocateGlobalVariables();
-				if (ScriptModule->builder->numErrors > 0)
-				{
-					Module->bCompileError = true;
-					bHadCompileErrors = true;
-				}
+				Module->bCompileError = true;
+				bHadCompileErrors = true;
 			}
 
 			if (ModulesToUpdateReferences.Num() != 0)
@@ -6368,12 +6363,7 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				if (Module->bCompileError)
 					continue;
 
-				const bool bCompileGlobalsWithLegacyCompiler =
-					ScriptModule->engine->GetCompilerPipeline()
-						!= asCOMPILER_PIPELINE_CANONICAL;
-				auto Result = bCompileGlobalsWithLegacyCompiler
-					? ScriptModule->builder->BuildLayoutFunctions()
-					: ScriptModule->builder->BuildLayoutFunctionsWithoutGlobalInitializers();
+				int Result = asNOT_SUPPORTED;
 				if (Result != asSUCCESS)
 				{
 					Module->bCompileError = true;
@@ -6537,13 +6527,7 @@ ECompileResult FAngelscriptEngine::CompileModules(
 			// Validate all template instances we've created
 			ScriptEngine->PartitionDeferredTemplateInstances(
 				CollectFailedScriptModules());
-			asCBuilder builder(ScriptEngine, nullptr);
-			builder.Reset();
-			builder.EvaluateTemplateInstances(false);
 			ScriptEngine->deferValidationOfTemplateTypes = false;
-
-			if (builder.numErrors > 0)
-				bHadCompileErrors = true;
 
 			if (!bHadCompileErrors)
 			{
@@ -7709,9 +7693,6 @@ void FAngelscriptEngine::CompileModule_Types_Stage1(
 #endif
 
 #if WITH_EDITOR
-	// Allow the script compiler to see which lines are editor-only so it can emit warnings
-	ScriptModule->builder->SetEditorOnlyBlockLinePositions(Module->EditorOnlyBlockLines);
-	ScriptModule->builder->isEditorOnlyModule = Module->ModuleName.StartsWith(TEXT("Editor.")) || Module->ModuleName.Contains(TEXT(".Editor."));
 #endif
 
 	Module->ScriptModule = ScriptModule;
@@ -7725,9 +7706,7 @@ void FAngelscriptEngine::CompileModule_Functions_Stage2(ECompileType CompileType
 	if (ScriptModule == nullptr)
 		return;
 
-	auto Result = ScriptModule->builder->BuildGenerateFunctions();
-	if (Result != asSUCCESS)
-		Module->bCompileError = true;
+	Module->bCompileError = true;
 }
 
 void FAngelscriptEngine::CompileModule_Code_Stage3(ECompileType CompileType, TSharedRef<struct FAngelscriptModuleDesc> Module)
@@ -7750,84 +7729,11 @@ void FAngelscriptEngine::CompileModule_Code_Stage3(ECompileType CompileType, TSh
 		return;
 	}
 
-	int Result = asERROR;
-	asCASTContext* CanonicalAST = nullptr;
-	if (ScriptModule->engine->GetCompilerPipeline()
-		== asCOMPILER_PIPELINE_CANONICAL)
+	Module->bCompileError = true;
+	if (ScriptModule->builder != nullptr)
 	{
-		Result = ScriptModule->builder->SealCanonicalAST();
-		if (Result == asSUCCESS)
-		{
-			CanonicalAST = ScriptModule->builder->TakeCanonicalAST();
-			if (CanonicalAST == nullptr)
-			{
-				Result = asINVALID_CONFIGURATION;
-			}
-		}
-		if (Result == asSUCCESS)
-		{
-			asCBytecodeCodeGen CodeGen;
-			Result = CodeGen.GeneratePreparedModule(
-				*CanonicalAST, *ScriptModule->builder);
-			if (Result != asAST_VERIFY_OK)
-			{
-				asCString Message;
-				const asCString& Detail = CodeGen.GetFailureDetail();
-				if (Detail.GetLength())
-				{
-					Message.Format(
-						"Canonical staged CodeGen failed code=%d line=%d: %s",
-						Result,
-						CodeGen.GetLastFailLine(),
-						Detail.AddressOf());
-				}
-				else
-				{
-					Message.Format(
-						"Canonical staged CodeGen failed code=%d line=%d",
-						Result,
-						CodeGen.GetLastFailLine());
-				}
-				ScriptModule->engine->WriteMessage(
-					CodeGen.GetFailureSection().AddressOf()
-						? CodeGen.GetFailureSection().AddressOf() : "",
-					CodeGen.GetFailureRow(),
-					CodeGen.GetFailureColumn(),
-					asMSGTYPE_ERROR,
-					Message.AddressOf());
-				if (Result > 0)
-				{
-					Result = asERROR;
-				}
-			}
-		}
-	}
-	else
-	{
-		Result = ScriptModule->builder->BuildCompileCode();
-		CanonicalAST = ScriptModule->builder->TakeCanonicalAST();
-	}
-	if (Result != asSUCCESS)
-		Module->bCompileError = true;
-
-	if (!Module->bCompileError)
-	{
-		ScriptModule->AdoptPendingCanonicalAST(CanonicalAST);
-		CanonicalAST = nullptr;
-	}
-	if (CanonicalAST != nullptr)
-	{
-		asDELETE(CanonicalAST, asCASTContext);
-		CanonicalAST = nullptr;
-	}
-	asDELETE(ScriptModule->builder, asCBuilder);
-	ScriptModule->builder = nullptr;
-
-	if (!Module->bCompileError)
-	{
-		ScriptModule->JITCompile();
-		ScriptModule->astRetentionFrozen = true;
-		ScriptModule->PublishCanonicalASTSnapshot();
+		asDELETE(ScriptModule->builder, asCBuilder);
+		ScriptModule->builder = nullptr;
 	}
 }
 

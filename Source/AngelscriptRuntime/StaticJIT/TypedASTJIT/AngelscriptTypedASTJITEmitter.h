@@ -12,5 +12,3 @@ ANGELSCRIPTRUNTIME_API bool EmitAngelscriptTypedASTJITBridgeCallSiteRows(
 	TConstArrayView<FAngelscriptTypedASTJITNativeCallEmissionPlan> NativeCalls,
 	FString& OutDefinitions,
 	FString* OutError = nullptr);
-
-class asCASTContext;

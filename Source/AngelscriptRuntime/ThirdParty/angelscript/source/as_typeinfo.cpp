@@ -35,6 +35,7 @@
 
 
 #include "as_typeinfo.h"
+#include "as_metadata_image.h"
 #include "as_config.h"
 #include "as_scriptengine.h"
 
@@ -74,6 +75,13 @@ asCTypeInfo::asCTypeInfo(asCScriptEngine *in_engine)
 	nameSpace = engine->nameSpaces[0];
 }
 
+asCTypeInfo::asCTypeInfo(asCMetadataImage& owner, const asSStableKey& key)
+	: asCTypeInfo()
+{
+	metadataOwner = &owner;
+	metadataStableKey = key;
+}
+
 asCTypeInfo::~asCTypeInfo()
 {
 }
@@ -81,12 +89,32 @@ asCTypeInfo::~asCTypeInfo()
 // interface
 int asCTypeInfo::AddRef() const
 {
+	if (metadataOwner)
+	{
+		std::lock_guard<std::mutex> lock(metadataReferenceMutex);
+		if (externalRefCount.get() == 0) metadataExternalLease = metadataOwner->shared_from_this();
+		return externalRefCount.atomicInc();
+	}
 	return externalRefCount.atomicInc();
 }
 
 // interface
 int asCTypeInfo::Release() const
 {
+	if (metadataOwner)
+	{
+		std::shared_ptr<asCMetadataImage> releasedLease;
+		int remaining;
+		{
+			std::lock_guard<std::mutex> lock(metadataReferenceMutex);
+			asASSERT(externalRefCount.get() > 0);
+			remaining = externalRefCount.atomicDec();
+			if (remaining == 0) releasedLease.swap(metadataExternalLease);
+		}
+		// Destruction may delete this object. No member access after this reset.
+		releasedLease.reset();
+		return remaining;
+	}
 	int r = externalRefCount.atomicDec();
 
 	if (r == 0)
@@ -112,6 +140,7 @@ int asCTypeInfo::AddRefInternal()
 int asCTypeInfo::ReleaseInternal()
 {
 	int r = internalRefCount.atomicDec();
+	if (metadataOwner) return r;
 
 	if (r == 0)
 	{
@@ -238,6 +267,8 @@ asUINT asCTypeInfo::GetSize() const
 // interface
 int asCTypeInfo::GetTypeId() const
 {
+	if (metadataOwner) return metadataOwner->GetBoundTypeId(this);
+	if (!engine) return -1;
 	if (typeId == -1)
 	{
 		// We need a non const pointer to create the asCDataType object.
@@ -255,12 +286,14 @@ int asCTypeInfo::GetTypeId() const
 // interface
 asIScriptEngine *asCTypeInfo::GetEngine() const
 {
+	if (metadataOwner) return metadataOwner->GetBoundEngine();
 	return engine;
 }
 
 // interface
 const char *asCTypeInfo::GetConfigGroup() const
 {
+	if (!engine) return nullptr;
 	asCConfigGroup *group = engine->FindConfigGroupForTypeInfo(this);
 	if (group == 0)
 		return 0;
@@ -427,6 +460,11 @@ asCTypedefType::~asCTypedefType()
 
 void asCTypedefType::DestroyInternal()
 {
+	if (metadataOwner)
+	{
+		if (metadataOwner->IsDestroying()) aliasForType = asCDataType();
+		return;
+	}
 	if (engine == 0) return;
 
 	// Release the object types held by the alias
@@ -448,6 +486,8 @@ void asCTypedefType::DestroyInternal()
 // interface
 int asCTypedefType::GetTypedefTypeId() const
 {
+	if (metadataOwner) return metadataOwner->GetBoundDataTypeId(aliasForType);
+	if (!engine) return -1;
 	return engine->GetTypeIdFromDataType(aliasForType);
 }
 
@@ -469,6 +509,13 @@ asCFuncdefType::asCFuncdefType(asCScriptEngine *en, asCScriptFunction *func) : a
 	func->funcdefType = this;
 }
 
+asCFuncdefType::asCFuncdefType(asCMetadataImage& owner,
+	const asSStableKey& key, asCScriptFunction* func)
+	: asCTypeInfo(owner, key), funcdef(func), parentClass(nullptr)
+{
+	flags = asOBJ_REF | asOBJ_FUNCDEF;
+}
+
 asCFuncdefType::~asCFuncdefType()
 {
 	DestroyInternal();
@@ -476,6 +523,11 @@ asCFuncdefType::~asCFuncdefType()
 
 void asCFuncdefType::DestroyInternal()
 {
+	if (metadataOwner)
+	{
+		if (metadataOwner->IsDestroying()) { funcdef = nullptr; parentClass = nullptr; }
+		return;
+	}
 	if (engine == 0) return;
 
 	// Release the funcdef

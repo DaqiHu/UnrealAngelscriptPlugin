@@ -1,0 +1,4 @@
+// Class, Base, Kind
+AS_ATTR_NODE(asCFlagAttr, asCAttr, Flag)
+AS_ATTR_NODE(asCStringAttr, asCAttr, String)
+AS_ATTR_NODE(asCAnnotationAttr, asCAttr, Annotation)

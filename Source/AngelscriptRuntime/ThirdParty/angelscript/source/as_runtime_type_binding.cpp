@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "Containers/StringConv.h"
+
 #include "as_module.h"
 #include "as_namespace.h"
 #include "as_objecttype.h"
@@ -429,6 +431,7 @@ namespace
 		return asAST_TYPE_INVALID;
 	}
 
+#if 0 // Preserved dormant Canonical AST binding; not a supported configuration path.
 	bool FindCanonicalTypeForDataType(
 		const asCASTContext& context,
 		const asCDataType& dataType,
@@ -888,6 +891,7 @@ namespace
 		}
 		return asRUNTIME_TYPE_BIND_OK;
 	}
+#endif
 }
 
 asSRuntimeTypeBindingEnvironment asMakeCurrentRuntimeTypeBindingEnvironment()
@@ -909,9 +913,43 @@ asSRuntimeTypeBindingEnvironment asMakeCurrentRuntimeTypeBindingEnvironment()
 	return environment;
 }
 
+int asValidateRuntimeTypeIdOwner(
+	const asSRuntimeTypeId& runtimeTypeId,
+	const asSRuntimeTypeGeneration& expectedGeneration)
+{
+	if( !runtimeTypeId.IsValid() || !expectedGeneration.IsValid() )
+		return asRUNTIME_TYPE_BIND_INVALID;
+	return runtimeTypeId.Generation == expectedGeneration
+		? asRUNTIME_TYPE_BIND_OK
+		: asRUNTIME_TYPE_BIND_INVALID_OWNER;
+}
+
+int asRejectRuntimeTypeIdForDurableEncoding(const asSRuntimeTypeId& runtimeTypeId)
+{
+	return runtimeTypeId.IsValid()
+		? asRUNTIME_TYPE_BIND_INVALID_DURABLE_ID
+		: asRUNTIME_TYPE_BIND_INVALID;
+}
+
+int asProjectCanonicalTypeUse(
+	const asCStableIdentityRegistry& registry,
+	const asSStableKey& canonicalTypeUse,
+	asSTypeABIKey& outKey)
+{
+	asEStableIdentityRole role = asEStableIdentityRole::Invalid;
+	if( registry.ResolveIdentityRole(canonicalTypeUse, role)
+		!= asETypeIdentityStatus::Succeeded || role != asEStableIdentityRole::TypeUse )
+	{
+		return asRUNTIME_TYPE_BIND_INVALID;
+	}
+	outKey.canonicalTypeUse = canonicalTypeUse;
+	return asRUNTIME_TYPE_BIND_OK;
+}
+
 bool asSTypeABIKey::Equals(const asSTypeABIKey& other) const
 {
-	return stableTypeKey.Equals(other.stableTypeKey)
+	return canonicalTypeUse == other.canonicalTypeUse
+		&& stableTypeKey.Equals(other.stableTypeKey)
 		&& targetProfileKey.Equals(other.targetProfileKey)
 		&& nativeEnvironmentKey.Equals(other.nativeEnvironmentKey)
 		&& typeKind == other.typeKind
@@ -928,6 +966,7 @@ asCRuntimeTypeBindingTable::asCRuntimeTypeBindingTable()
 {
 }
 
+#if 0 // Preserved dormant Canonical AST binding; not a supported configuration path.
 int asCRuntimeTypeBindingTable::ResolveCanonicalType(
 	asCScriptEngine* engine,
 	const asCASTContext& context,
@@ -1267,6 +1306,7 @@ int asCRuntimeTypeBindingTable::Build(
 	frozen = true;
 	return asRUNTIME_TYPE_BIND_OK;
 }
+#endif
 
 int asCRuntimeTypeBindingTable::RefreshPublicTypeIdProjections(
 	asCScriptEngine* engine)

@@ -257,6 +257,15 @@ FAngelscriptStableTypeKey FAngelscriptArtifactIdentityBuilder::BuildTypeKey(
 	return FAngelscriptStableTypeKey{Writer.FinalizeHash()};
 }
 
+FAngelscriptStableTypeKey FAngelscriptArtifactIdentityBuilder::ProjectTypeKey(
+	const AS_NAMESPACE_QUALIFIER asSStableKey& StableKey)
+{
+	FBlake3Hash::ByteArray Bytes;
+	static_assert(sizeof(Bytes) == AS_NAMESPACE_QUALIFIER asSStableKey::ByteCount);
+	FMemory::Memcpy(Bytes, StableKey.GetBytes().GetData(), sizeof(Bytes));
+	return FAngelscriptStableTypeKey{FAngelscriptHash256{FBlake3Hash(Bytes)}};
+}
+
 FAngelscriptStableFunctionKey FAngelscriptArtifactIdentityBuilder::BuildFunctionKey(
 	const FAngelscriptFunctionIdentityDescriptor& Descriptor)
 {
@@ -268,6 +277,15 @@ FAngelscriptStableFunctionKey FAngelscriptArtifactIdentityBuilder::BuildFunction
 	Writer.WriteString(Descriptor.CanonicalDeclaration);
 	AngelscriptArtifactIdentity_Private::WriteSortedStrings(Writer, Descriptor.CanonicalTraits);
 	return FAngelscriptStableFunctionKey{Writer.FinalizeHash()};
+}
+
+FAngelscriptStableFunctionKey FAngelscriptArtifactIdentityBuilder::ProjectFunctionKey(
+	const AS_NAMESPACE_QUALIFIER asSStableKey& StableKey)
+{
+	FBlake3Hash::ByteArray Bytes;
+	static_assert(sizeof(Bytes) == AS_NAMESPACE_QUALIFIER asSStableKey::ByteCount);
+	FMemory::Memcpy(Bytes, StableKey.GetBytes().GetData(), sizeof(Bytes));
+	return FAngelscriptStableFunctionKey{FAngelscriptHash256{FBlake3Hash(Bytes)}};
 }
 
 FAngelscriptStableGlobalKey FAngelscriptArtifactIdentityBuilder::BuildGlobalKey(

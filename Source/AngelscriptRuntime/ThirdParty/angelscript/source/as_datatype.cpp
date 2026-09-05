@@ -36,13 +36,13 @@
 //
 
 #include "as_datatype.h"
+#include "as_metadata_image.h"
 #include "as_config.h"
 #include "as_tokendef.h"
 #include "as_typeinfo.h"
 #include "as_objecttype.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
-#include "as_tokenizer.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -62,6 +62,10 @@ asCDataType::asCDataType()
 	isErrorDataType        = false;
 	isFloatExtendedToDouble = false;
 	anyImplicitIntegerType = false;
+	explicitFloatSpelling = false;
+	float64Spelling = true;
+	metadataNullable = false;
+	metadataPointerByteSize = sizeof(void*);
 }
 
 asCDataType::asCDataType(const asCDataType &dt)
@@ -80,6 +84,10 @@ asCDataType::asCDataType(const asCDataType &dt)
 	isErrorDataType     = dt.isErrorDataType;
 	isFloatExtendedToDouble = dt.isFloatExtendedToDouble;
 	anyImplicitIntegerType = dt.anyImplicitIntegerType;
+	explicitFloatSpelling = dt.explicitFloatSpelling;
+	float64Spelling = dt.float64Spelling;
+	metadataNullable = dt.metadataNullable;
+	metadataPointerByteSize = dt.metadataPointerByteSize;
 }
 
 asCDataType::~asCDataType()
@@ -102,6 +110,8 @@ asCDataType asCDataType::CreateType(asCTypeInfo *ti, bool isConst)
 	dt.tokenType        = ttIdentifier;
 	dt.typeInfo         = ti;
 	dt.isReadOnly       = isConst;
+	if (ti && ti->GetMetadataImage())
+		dt.SetMetadataOptions(ti->GetMetadataImage()->GetOptions().FloatIsFloat64, ti->GetMetadataImage()->GetOptions().PointerByteSize);
 
 	return dt;
 }
@@ -127,6 +137,8 @@ asCDataType asCDataType::CreateObjectHandle(asCTypeInfo *ot, bool isConst)
 	dt.typeInfo         = ot;
 	dt.isObjectHandle   = true;
 	dt.isConstHandle    = isConst;
+	if (ot && ot->GetMetadataImage())
+		dt.SetMetadataOptions(ot->GetMetadataImage()->GetOptions().FloatIsFloat64, ot->GetMetadataImage()->GetOptions().PointerByteSize);
 
 	return dt;
 }
@@ -139,6 +151,15 @@ asCDataType asCDataType::CreatePrimitive(eTokenType tt, bool isConst)
 	dt.isReadOnly       = isConst;
 
 	return dt;
+}
+
+asCDataType asCDataType::CreatePrimitive(eTokenType tt, bool isConst, bool float64Default)
+{
+	if (tt == ttFloat) tt = float64Default ? ttFloat64 : ttFloat32;
+	if (tt == ttDouble) tt = ttFloat64;
+	asCDataType result = CreatePrimitive(tt, isConst);
+	result.SetFloatSpellingOption(float64Default);
+	return result;
 }
 
 asCDataType asCDataType::CreateNullHandle()
@@ -194,7 +215,7 @@ asCString asCDataType::Format(asSNameSpace *currNs, bool includeNamespace, bool 
 		if (typeInfo && typeInfo->nameSpace && typeInfo->nameSpace->name != "")
 			str += typeInfo->nameSpace->name + "::";
 	}
-	if (typeInfo && typeInfo->nameSpace == 0)
+	if (typeInfo && typeInfo->nameSpace == 0 && CastToFuncdefType(typeInfo) && CastToFuncdefType(typeInfo)->parentClass)
 	{
 		// If funcDef->nameSpace is null it means the funcDef was declared as member of 
 		// another type, in which case the scope should be built with the name of that type
@@ -205,7 +226,7 @@ asCString asCDataType::Format(asSNameSpace *currNs, bool includeNamespace, bool 
 	{
 		if (tokenType == ttFloat64)
 		{
-			if (asCDataType::floatIsFloat64)
+			if (explicitFloatSpelling ? float64Spelling : asCDataType::floatIsFloat64)
 			{
 				str += "float";
 			}
@@ -216,7 +237,7 @@ asCString asCDataType::Format(asSNameSpace *currNs, bool includeNamespace, bool 
 		}
 		else if (tokenType == ttFloat32)
 		{
-			if (asCDataType::floatIsFloat64)
+			if (explicitFloatSpelling ? float64Spelling : asCDataType::floatIsFloat64)
 			{
 				str += "float32";
 			}
@@ -227,10 +248,21 @@ asCString asCDataType::Format(asSNameSpace *currNs, bool includeNamespace, bool 
 		}
 		else
 		{
-			str += asCTokenizer::GetDefinition(tokenType);
+			const char* TokenWord = nullptr;
+			for( asUINT TokenIndex = 0; TokenIndex < numTokenWords; ++TokenIndex )
+			{
+				if( tokenWords[TokenIndex].tokenType == tokenType )
+				{
+					TokenWord = tokenWords[TokenIndex].word;
+					break;
+				}
+			}
+			str += TokenWord ? TokenWord : "<token>";
 		}
 	}
-	else if( IsArrayType() && typeInfo && !typeInfo->engine->ep.expandDefaultArrayToTemplate )
+	else if( IsArrayType() && typeInfo && (typeInfo->GetMetadataImage()
+		? !typeInfo->GetMetadataImage()->GetOptions().ExpandDefaultArrayToTemplate
+		: typeInfo->engine && !typeInfo->engine->ep.expandDefaultArrayToTemplate) )
 	{
 		asCObjectType *ot = CastToObjectType(typeInfo);
 		asASSERT( ot && ot->templateSubTypes.GetLength() == 1 );
@@ -291,6 +323,9 @@ asCDataType &asCDataType::operator =(const asCDataType &dt)
 	isErrorDataType     = dt.isErrorDataType;
 	isFloatExtendedToDouble     = dt.isFloatExtendedToDouble;
 	anyImplicitIntegerType     = dt.anyImplicitIntegerType;
+	explicitFloatSpelling = dt.explicitFloatSpelling;
+	float64Spelling = dt.float64Spelling;
+	metadataPointerByteSize = dt.metadataPointerByteSize;
 
 	return (asCDataType &)*this;
 }
@@ -339,6 +374,7 @@ int asCDataType::MakeHandle(bool b, bool acceptHandleForScope)
 
 int asCDataType::MakeArray(asCScriptEngine *engine, asCModule *module)
 {
+	if (!engine) return asNOT_SUPPORTED;
 	if( engine->defaultArrayObjectType == 0 )
 		return asINVALID_TYPE;
 
@@ -421,7 +457,7 @@ bool asCDataType::CanBeInstantiated() const
 		return false;
 
 	asCObjectType *ot = CastToObjectType(typeInfo);
-	if( ot && (ot->flags & asOBJ_REF) && ot->beh.factories.GetLength() == 0 ) // ref types without factories
+	if( ot && (ot->flags & asOBJ_REF) && ot->GetFactoryCount() == 0 ) // ref types without factories
 		return false;
 
 	if( ot && (ot->flags & asOBJ_ABSTRACT) && !IsObjectHandle() ) // Can't instantiate abstract classes
@@ -490,8 +526,9 @@ bool asCDataType::IsObjectConst() const
 // TODO: 3.0.0: This should be removed
 bool asCDataType::IsArrayType() const
 {
+	if (typeInfo && typeInfo->GetMetadataImage()) return typeInfo->GetMetadataImage()->IsDefaultArrayType(typeInfo);
 	// This is only true if the type used is the default array type, i.e. the one used for the [] syntax form
-	if( typeInfo && typeInfo->engine->defaultArrayObjectType )
+	if( typeInfo && typeInfo->engine && typeInfo->engine->defaultArrayObjectType )
 		return typeInfo->name == typeInfo->engine->defaultArrayObjectType->name;
 	
 	return false;
@@ -547,6 +584,7 @@ bool asCDataType::IsEqualExceptRef(const asCDataType &dt) const
 
 bool asCDataType::IsEqualExceptRefAndConst(const asCDataType &dt) const
 {
+	if (metadataNullable != dt.metadataNullable) return false;
 	// Check base type
 	if( tokenType != dt.tokenType ) return false;
 	if( typeInfo != dt.typeInfo ) return false;
@@ -568,6 +606,7 @@ bool asCDataType::IsEqualExceptConst(const asCDataType &dt) const
 
 bool asCDataType::IsEqualExceptTypeInfo(const asCDataType &dt) const
 {
+	if (metadataNullable != dt.metadataNullable) return false;
 	// Check base type
 	if( tokenType != dt.tokenType ) return false;
 	if( (typeInfo == nullptr) != (dt.typeInfo == nullptr) ) return false;
@@ -711,6 +750,8 @@ int asCDataType::GetSizeInMemoryBytes() const
 
 int asCDataType::GetSizeOfVariableBytes() const
 {
+	if (explicitFloatSpelling && (isReference || isObjectHandle || (typeInfo && (typeInfo->flags & asOBJ_REF))))
+		return metadataPointerByteSize;
 	if (typeInfo != nullptr && (typeInfo->flags & asOBJ_REF) != 0)
 		return 4*AS_PTR_SIZE;
 
@@ -735,8 +776,9 @@ int asCDataType::GetSizeOnStackDWords() const
 	// If the type is the variable type then the typeid is stored on the stack too
 	int size = tokenType == ttQuestion ? 1 : 0;
 
-	if( isReference ) return AS_PTR_SIZE + size;
-	if( typeInfo && !IsEnumType() ) return AS_PTR_SIZE + size;
+	const int pointerDWords = explicitFloatSpelling ? metadataPointerByteSize / 4 : AS_PTR_SIZE;
+	if( isReference ) return pointerDWords + size;
+	if( typeInfo && !IsEnumType() ) return pointerDWords + size;
 
 	return GetSizeInMemoryDWords() + size;
 }
@@ -745,7 +787,7 @@ int  asCDataType::GetAlignment() const
 {
 	if (IsReference() || IsObjectHandle())
 	{
-		return 8;
+		return explicitFloatSpelling ? metadataPointerByteSize : 8;
 	}
 
 	if (typeInfo == NULL)

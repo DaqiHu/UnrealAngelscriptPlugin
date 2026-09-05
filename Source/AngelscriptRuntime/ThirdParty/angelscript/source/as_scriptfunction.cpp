@@ -38,6 +38,7 @@
 
 
 #include "as_scriptfunction.h"
+#include "as_metadata_image.h"
 #include "as_config.h"
 #include "as_tokendef.h"
 #include "as_scriptengine.h"
@@ -45,9 +46,7 @@
 #include "as_callfunc.h"
 #include "as_bytecode.h"
 #include "as_texts.h"
-#include "as_scriptnode.h"
 #include "as_builder.h"
-#include "as_scriptcode.h"
 
 #include <cstdlib> // qsort
 
@@ -254,6 +253,7 @@ bool asCScriptFunction::operator==(const asCScriptFunction &other) const
 }
 */
 
+#if 0 // Preserved dormant asCScriptNode list-pattern parser; not a supported configuration path.
 // internal
 int asCScriptFunction::RegisterListPattern(const char *decl, asCScriptNode *listNodes)
 {
@@ -338,6 +338,7 @@ int asCScriptFunction::ParseListPattern(asSListPatternNode *&target, const char 
 	target = node;
 	return 0;
 }
+#endif
 
 // internal
 asCScriptFunction::asCScriptFunction(asCScriptEngine *engine, asCModule *mod, asEFuncType _funcType)
@@ -369,19 +370,28 @@ asCScriptFunction::asCScriptFunction(asCScriptEngine *engine, asCModule *mod, as
 	userData               = 0;
 	exposedType            = 255;
 	id                     = 0;
-	nameSpace              = engine->nameSpaces[0];
+	nameSpace              = engine ? engine->nameSpaces[0] : nullptr;
 	objForDelegate         = 0;
 	funcForDelegate        = 0;
 	listPattern            = 0;
-	funcdefType            = 0;
+	if (engine) funcdefType = 0; // Detached construction must not mutate dormant process-global funcdef state.
 	accessSpecifier = nullptr;
 
 	if( funcType == asFUNC_SCRIPT )
 		AllocateScriptFunctionData();
 
 	// Notify the GC of delegates
-	if( funcType == asFUNC_DELEGATE )
+	if( funcType == asFUNC_DELEGATE && engine )
 		engine->gc.AddScriptObjectToGC(this, &engine->functionBehaviours);
+}
+
+asCScriptFunction::asCScriptFunction(asCMetadataImage& owner,
+	const asSStableKey& key, asEFuncType kind)
+	: asCScriptFunction(nullptr, nullptr, kind)
+{
+	metadataOwner = &owner;
+	metadataStableKey = key;
+	id = -1;
 }
 
 void asCScriptFunction::AllocateScriptFunctionData()
@@ -411,6 +421,11 @@ void asCScriptFunction::DeallocateScriptFunctionData()
 // internal
 asCScriptFunction::~asCScriptFunction()
 {
+	if (metadataOwner)
+	{
+		DestroyInternal();
+		return;
+	}
 	// Remove the script function from the engine's scriptFunctions array here
 	// Don't remove it before, because there may still be functions referring to it
 	// by index until now. If it was removed in DestroyInternal, those would not
@@ -430,6 +445,8 @@ asCScriptFunction::~asCScriptFunction()
 // internal
 void asCScriptFunction::DestroyHalfCreated()
 {
+	// The image owns this allocation even while its signature is incomplete.
+	if (metadataOwner) return;
 	asASSERT( externalRefCount.get() == 0 && internalRefCount.get() == 1 );
 
 	// Set the funcType to dummy so the destructor won't complain
@@ -447,6 +464,24 @@ void asCScriptFunction::DestroyHalfCreated()
 // internal
 void asCScriptFunction::DestroyInternal()
 {
+	if (metadataOwner)
+	{
+		if (!metadataOwner->IsDestroying()) return;
+		for (asUINT i = 0; i < defaultArgs.GetLength(); ++i)
+			if (defaultArgs[i]) asDELETE(defaultArgs[i], asCString);
+		defaultArgs.SetLength(0);
+		if (sysFuncIntf) asDELETE(sysFuncIntf, asSSystemFunctionInterface);
+		sysFuncIntf = nullptr;
+		DeallocateScriptFunctionData();
+		while (listPattern)
+		{
+			asSListPatternNode* next = listPattern->next;
+			asDELETE(listPattern, asSListPatternNode);
+			listPattern = next;
+		}
+		objectType = nullptr;
+		return;
+	}
 	asSJITFunctionBinding emptyBinding;
 	SetJITBinding(emptyBinding);
 
@@ -489,12 +524,19 @@ void asCScriptFunction::DestroyInternal()
 // interface
 int asCScriptFunction::GetId() const
 {
+	if (metadataOwner) return metadataOwner->GetBoundFunctionId(this);
 	return id;
 }
 
 // interface
 int asCScriptFunction::AddRef() const
 {
+	if (metadataOwner)
+	{
+		std::lock_guard<std::mutex> lock(metadataReferenceMutex);
+		if (externalRefCount.get() == 0) metadataExternalLease = metadataOwner->shared_from_this();
+		return externalRefCount.atomicInc();
+	}
 	gcFlag = false;
 	const int result = externalRefCount.atomicInc();
 	if( result == 1 && runtimeTypeGeneration )
@@ -505,6 +547,19 @@ int asCScriptFunction::AddRef() const
 // interface
 int asCScriptFunction::Release() const
 {
+	if (metadataOwner)
+	{
+		std::shared_ptr<asCMetadataImage> releasedLease;
+		int remaining;
+		{
+			std::lock_guard<std::mutex> lock(metadataReferenceMutex);
+			asASSERT(externalRefCount.get() > 0);
+			remaining = externalRefCount.atomicDec();
+			if (remaining == 0) releasedLease.swap(metadataExternalLease);
+		}
+		releasedLease.reset();
+		return remaining;
+	}
 	gcFlag = false;
 	int r = externalRefCount.atomicDec();
 	if( r == 0 && runtimeTypeGeneration )
@@ -552,6 +607,7 @@ int asCScriptFunction::AddRefInternal()
 int asCScriptFunction::ReleaseInternal()
 {
 	int r = internalRefCount.atomicDec();
+	if (metadataOwner) return r;
 	if( r == 0 &&
 		funcType != asFUNC_DUMMY )
 	{
@@ -569,6 +625,8 @@ int asCScriptFunction::ReleaseInternal()
 // interface
 int asCScriptFunction::GetTypeId() const
 {
+	if (metadataOwner) return metadataNominalFuncdefType ? metadataOwner->GetBoundTypeId(metadataNominalFuncdefType) : -1;
+	if (!engine) return -1;
 	// This const cast is ok, the object won't be modified
 	asCDataType dt = asCDataType::CreateType(engine->FindMatchingFuncdef(const_cast<asCScriptFunction*>(this), 0), false);
 	return engine->GetTypeIdFromDataType(dt);
@@ -577,6 +635,7 @@ int asCScriptFunction::GetTypeId() const
 // interface
 bool asCScriptFunction::IsCompatibleWithTypeId(int typeId) const
 {
+	if (!engine) return false;
 	asCDataType dt = engine->GetDataTypeFromTypeId(typeId);
 
 	// Make sure the type is a function
@@ -743,7 +802,7 @@ asCString asCScriptFunction::GetDeclarationStr(bool includeObjectName, bool incl
 		else
 			str += "_unnamed_type_::";
 	}
-	else if (funcdefType && funcdefType->parentClass && includeObjectName)
+	else if (!metadataOwner && funcdefType && funcdefType->parentClass && includeObjectName)
 	{
 		if (includeNamespace && funcdefType->parentClass->nameSpace->name != "")
 			str += funcdefType->parentClass->nameSpace->name + "::";
@@ -1715,7 +1774,7 @@ int asCScriptFunction::GetReturnTypeId(asDWORD *flags) const
 			*flags = asTM_NONE;
 	}
 
-	return engine->GetTypeIdFromDataType(returnType);
+	return metadataOwner ? metadataOwner->GetBoundDataTypeId(returnType) : engine ? engine->GetTypeIdFromDataType(returnType) : -1;
 }
 
 // interface
@@ -1731,7 +1790,7 @@ int asCScriptFunction::GetParam(asUINT index, int *out_typeId, asDWORD *out_flag
 		return asINVALID_ARG;
 
 	if( out_typeId )
-		*out_typeId = engine->GetTypeIdFromDataType(parameterTypes[index]);
+		*out_typeId = metadataOwner ? metadataOwner->GetBoundDataTypeId(parameterTypes[index]) : engine ? engine->GetTypeIdFromDataType(parameterTypes[index]) : -1;
 
 	if( out_flags )
 	{
@@ -1762,13 +1821,15 @@ int asCScriptFunction::GetParam(asUINT index, int *out_typeId, asDWORD *out_flag
 // interface
 asIScriptEngine *asCScriptFunction::GetEngine() const
 {
+	if (metadataOwner) return metadataOwner->GetBoundEngine();
 	return engine;
 }
 
 // interface
 const char *asCScriptFunction::GetDeclaration(bool includeObjectName, bool includeNamespace, bool includeParamNames, bool forDisplay) const
 {
-	asCString *tempString = &asCThreadManager::GetLocalData()->string;
+	thread_local asCString metadataString;
+	asCString *tempString = metadataOwner ? &metadataString : &asCThreadManager::GetLocalData()->string;
 	*tempString = GetDeclarationStr(includeObjectName, includeNamespace, includeParamNames, forDisplay);
 	return tempString->AddressOf();
 }
@@ -1776,6 +1837,7 @@ const char *asCScriptFunction::GetDeclaration(bool includeObjectName, bool inclu
 // interface
 const char *asCScriptFunction::GetScriptSectionName() const
 {
+	if (!engine) return nullptr;
 	if( scriptData && scriptData->scriptSectionIdx >= 0 )
 		return engine->scriptSectionNames[scriptData->scriptSectionIdx]->AddressOf();
 
@@ -1785,6 +1847,7 @@ const char *asCScriptFunction::GetScriptSectionName() const
 // interface
 const char *asCScriptFunction::GetConfigGroup() const
 {
+	if (!engine) return nullptr;
 	asCConfigGroup *group = 0;
 	if( funcType != asFUNC_FUNCDEF )
 		group = engine->FindConfigGroupForFunction(id);

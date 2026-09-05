@@ -1,0 +1,6 @@
+// Class, Base, Kind
+AS_TYPE_NODE(asCBuiltinType, asCType, Builtin)
+AS_TYPE_NODE(asCNominalType, asCType, Nominal)
+AS_TYPE_NODE(asCGenericType, asCType, Generic)
+AS_TYPE_NODE(asCFunctionType, asCType, Function)
+AS_TYPE_NODE(asCErrorType, asCType, Error)

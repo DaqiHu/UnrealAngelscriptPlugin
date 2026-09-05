@@ -1,0 +1,12 @@
+// Class, Base, Kind
+AS_DECL_NODE(asCTranslationUnitDecl, asCDecl, TranslationUnit)
+AS_DECL_NODE(asCNamespaceDecl, asCNamedDecl, Namespace)
+AS_DECL_NODE(asCRecordDecl, asCNamedDecl, Record)
+AS_DECL_NODE(asCEnumConstantDecl, asCNamedDecl, EnumConstant)
+AS_DECL_NODE(asCFunctionDecl, asCNamedDecl, Function)
+AS_DECL_NODE(asCVarDecl, asCNamedDecl, Var)
+AS_DECL_NODE(asCRecoveryDecl, asCDecl, Recovery)
+AS_DECL_NODE(asCDelegateDecl, asCCallableTypeDecl, Delegate)
+AS_DECL_NODE(asCEventDecl, asCCallableTypeDecl, Event)
+AS_DECL_NODE(asCTypeAliasDecl, asCNamedDecl, TypeAlias)
+AS_DECL_NODE(asCAccessSpecifierDecl, asCNamedDecl, AccessSpecifier)

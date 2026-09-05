@@ -18,7 +18,6 @@ class asIScriptFunction;
 class asIScriptModule;
 class asIASTSnapshot;
 class asITypeInfo;
-class asCASTContext;
 struct FAngelscriptCacheCleanModuleArtifacts;
 struct FAngelscriptEngine;
 struct FAngelscriptModuleDesc;
@@ -62,7 +61,7 @@ public:
 	FAngelscriptStaticJITGenerationASTLease& operator=(
 		const FAngelscriptStaticJITGenerationASTLease&) = delete;
 
-	const asCASTContext* GetContext() const;
+	const void* GetContext() const;
 
 	/**
 	 * Drops the public AST reference while its Runtime Engine is still alive.
@@ -73,7 +72,7 @@ public:
 private:
 	mutable FCriticalSection LeaseMutex;
 	asIASTSnapshot* Snapshot = nullptr;
-	const asCASTContext* SealedContext = nullptr;
+	const void* SealedContext = nullptr;
 };
 
 struct FAngelscriptStaticJITGenerationFunction
@@ -86,7 +85,7 @@ struct FAngelscriptStaticJITGenerationFunction
 	FAngelscriptHash256 EntryAbiHash;
 	FString CanonicalDeclaration;
 	TArray<uint8> Bytecode;
-	const class asCASTContext* SealedAST = nullptr;
+	const void* SealedAST = nullptr;
 	asUINT CanonicalFunctionDeclValue = 0;
 	/** This source function was mapped to an exact canonical body at freeze time. */
 	bool bRequiresCanonicalAST = false;

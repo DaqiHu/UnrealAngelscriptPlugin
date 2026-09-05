@@ -158,6 +158,15 @@ public:
 
 	asCArray<int> methods;
 	asCMapByName<asCScriptFunction*> methodTable;
+	// Image-owned semantic relations, valid before registration and after retirement.
+	asCArray<asCScriptFunction*> metadataMethods;
+	asCArray<asCScriptFunction*> metadataFactories;
+	struct asSMetadataBehaviour
+	{
+		asEBehaviours kind;
+		asCScriptFunction* function;
+	};
+	asCArray<asSMetadataBehaviour> metadataBehaviours;
 
 	asCArray<asSAccessSpecifier*> accessSpecifiers;
 	asSAccessSpecifier* GetAccessSpecifier(const char* name);
@@ -184,6 +193,15 @@ public:
 
 	// Used for template types
 	asCArray<asCDataType> templateSubTypes;   // increases refCount for typeinfo held in datatype
+	// Detached specialization edges are borrowed through the image dependency
+	// graph; host templates must explicitly promise argument-independent layout.
+	asCObjectType* GetMetadataTemplateDefinition() const { return metadataTemplateDefinition; }
+	bool HasFixedTemplateLayout() const { return metadataFixedTemplateLayout; }
+	private:
+	friend class asCMetadataImage;
+	asCObjectType* metadataTemplateDefinition = nullptr;
+	bool metadataFixedTemplateLayout = false;
+	public:
 	bool                  acceptValueSubType;
 	bool                  acceptRefSubType;
 	bool hasImplicitConstructors = false;
@@ -370,6 +388,8 @@ public:
 	}
 
 protected:
+	friend class asCMetadataImage;
+	asCObjectType(asCMetadataImage& owner, const asSStableKey& key);
 	friend class asCScriptEngine;
 	friend class asCConfigGroup;
 	friend class asCModule;

@@ -40,11 +40,7 @@
 #include "as_config.h"
 #include <stdio.h>
 #include "as_builder.h"
-#include "as_bytecode_codegen.h"
-#include "as_ast_dump.h"
 #include "as_scriptengine.h"
-#include "as_ast_public_view.h"
-#include "as_ast_verifier.h"
 #include "as_context.h"
 #include "as_restore.h"
 #include "as_texts.h"
@@ -56,6 +52,7 @@
 
 BEGIN_AS_NAMESPACE
 
+#if 0 // Preserved dormant Canonical AST publication; not a supported configuration path.
 static bool SealCanonicalASTForPublication(asCASTContext& context, asCScriptEngine* engine, const asCString& moduleName)
 {
 	if( context.IsPublishable() )
@@ -93,6 +90,7 @@ static bool SealCanonicalASTForPublication(asCASTContext& context, asCScriptEngi
 	printf("%s\n", message.AddressOf());
 	return false;
 }
+#endif
 
 asCRuntimeTypeGeneration::asCRuntimeTypeGeneration()
 	: retiredOwner(0)
@@ -186,7 +184,6 @@ asCModule::asCModule(const char *name, asCScriptEngine *engine)
 	astRetentionFrozen = false;
 	astGeneration = 0;
 	astSnapshot = 0;
-	pendingCanonicalAST = 0;
 	runtimeTypeGeneration = 0;
 	lastBytecodePublisher = asBYTECODE_PUBLISHER_NONE;
 	lastLegacyCompilerInvocationCount = 0;
@@ -208,8 +205,6 @@ void asCModule::SetBuildArtifactCompileResultCallback(
 {
 	buildArtifactCompileResultCallback = callback;
 	buildArtifactCompileResultUserData = callbackUserData;
-	if( builder )
-		builder->SetBuildArtifactCompileResultCallback(callback, callbackUserData);
 }
 
 void asCModule::SetBuildArtifactInvocationCallback(
@@ -218,8 +213,6 @@ void asCModule::SetBuildArtifactInvocationCallback(
 {
 	buildArtifactInvocationCallback = callback;
 	buildArtifactInvocationUserData = callbackUserData;
-	if( builder )
-		builder->SetBuildArtifactInvocationCallback(callback, callbackUserData);
 }
 
 void asCModule::SetBuildArtifactRestoreCallback(
@@ -228,8 +221,6 @@ void asCModule::SetBuildArtifactRestoreCallback(
 {
 	buildArtifactRestoreCallback = callback;
 	buildArtifactRestoreUserData = callbackUserData;
-	if( builder )
-		builder->SetBuildArtifactRestoreCallback(callback, callbackUserData);
 }
 
 // internal
@@ -366,9 +357,16 @@ const char *asCModule::GetDefaultNamespace() const
 // interface
 int asCModule::SetDefaultNamespace(const char *nameSpace)
 {
-	// TODO: cleanup: This function is similar to asCScriptEngine::SetDefaultNamespace. Can we reuse the code?
 	if( nameSpace == 0 )
 		return asINVALID_ARG;
+	asCArray<asCString> nsStrings;
+	const int parsed = engine->ParseNamespace(nameSpace, nsStrings);
+	if( parsed < 0 )
+		return parsed;
+	for( asUINT n = 0; n < nsStrings.GetLength(); n++ )
+		defaultNamespace = engine->AddNameSpace(nsStrings[n].AddressOf());
+	return 0;
+#if 0 // Preserved dormant tokenizer-backed namespace scan.
 
 	asCString ns = nameSpace;
 	if( ns != "" )
@@ -396,11 +394,18 @@ int asCModule::SetDefaultNamespace(const char *nameSpace)
 	defaultNamespace = engine->AddNameSpace(ns.AddressOf());
 
 	return 0;
+#endif
 }
 
 // interface
 int asCModule::AddScriptSection(const char *in_name, const char *in_code, size_t in_codeLength, int in_lineOffset)
 {
+	UNUSED_VAR(in_name);
+	UNUSED_VAR(in_code);
+	UNUSED_VAR(in_codeLength);
+	UNUSED_VAR(in_lineOffset);
+	return asNOT_SUPPORTED;
+#if 0
 #ifdef AS_NO_COMPILER
 	UNUSED_VAR(in_name);
 	UNUSED_VAR(in_code);
@@ -417,6 +422,7 @@ int asCModule::AddScriptSection(const char *in_name, const char *in_code, size_t
 
 	return builder->AddCode(in_name, in_code, (int)in_codeLength, in_lineOffset, (int)engine->GetScriptSectionNameIndex(in_name ? in_name : ""), engine->ep.copyScriptSections);
 #endif
+#endif
 }
 
 // internal: add one processed section and its pointer-free provenance before
@@ -429,6 +435,14 @@ int asCModule::AddScriptSectionWithSourceProvenance(
 	const asSSourceProvenanceRange *ranges,
 	asUINT rangeCount)
 {
+	UNUSED_VAR(in_name);
+	UNUSED_VAR(in_code);
+	UNUSED_VAR(in_codeLength);
+	UNUSED_VAR(in_lineOffset);
+	UNUSED_VAR(ranges);
+	UNUSED_VAR(rangeCount);
+	return asNOT_SUPPORTED;
+#if 0
 #ifdef AS_NO_COMPILER
 	UNUSED_VAR(in_name);
 	UNUSED_VAR(in_code);
@@ -464,6 +478,7 @@ int asCModule::AddScriptSectionWithSourceProvenance(
 	}
 	return asSUCCESS;
 #endif
+#endif
 }
 
 // internal
@@ -480,6 +495,8 @@ void asCModule::JITCompile()
 // interface
 int asCModule::Build()
 {
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant Canonical/legacy compile; not a supported configuration path.
 #ifdef AS_NO_COMPILER
 	return asNOT_SUPPORTED;
 #else
@@ -729,6 +746,7 @@ int asCModule::Build()
 		r = ResetGlobalVars(0);
 
 	return r;
+#endif
 #endif
 }
 
@@ -1229,6 +1247,9 @@ asUINT asCModule::GetImportedFunctionCount() const
 // interface
 int asCModule::GetImportedFunctionIndexByDecl(const char *decl) const
 {
+	(void)decl;
+	return asNO_FUNCTION;
+#if 0 // Preserved dormant declaration-string parser.
 	asCBuilder bld(engine, const_cast<asCModule*>(this));
 
 	// Don't write parser errors to the message callback
@@ -1269,6 +1290,7 @@ int asCModule::GetImportedFunctionIndexByDecl(const char *decl) const
 	if( id == -1 ) return asNO_FUNCTION;
 
 	return id;
+#endif
 }
 
 // interface
@@ -1280,6 +1302,9 @@ asUINT asCModule::GetFunctionCount() const
 // interface
 asIScriptFunction *asCModule::GetFunctionByDecl(const char *decl) const
 {
+	(void)decl;
+	return 0;
+#if 0 // Preserved dormant declaration-string parser.
 	asCBuilder bld(engine, const_cast<asCModule*>(this));
 
 	// Don't write parser errors to the message callback
@@ -1308,6 +1333,7 @@ asIScriptFunction *asCModule::GetFunctionByDecl(const char *decl) const
 	}
 
 	return 0;
+#endif
 }
 
 asIScriptFunction *asCModule::GetFunctionByDecl(asSNameSpace* ns, asCScriptFunction& func) const
@@ -1436,7 +1462,9 @@ int asCModule::GetGlobalVarIndexByName(const char *in_name) const
 // interface
 int asCModule::GetGlobalVarIndexByDecl(const char *decl) const
 {
-	//[UE++]: Provide the stock 2.38 declaration lookup API while keeping the APV2 symbol storage and hot-reload state intact.
+	(void)decl;
+	return asNO_GLOBAL_VAR;
+#if 0 // Preserved dormant declaration-string parser.
 	asCBuilder bld(engine, const_cast<asCModule*>(this));
 
 	// Don't write parser errors to the message callback
@@ -1463,6 +1491,7 @@ int asCModule::GetGlobalVarIndexByDecl(const char *decl) const
 
 	return asNO_GLOBAL_VAR;
 	//[UE--]
+#endif
 }
 
 // interface
@@ -1607,6 +1636,9 @@ asITypeInfo *asCModule::GetTypeInfoByName(const char *in_name) const
 // interface
 int asCModule::GetTypeIdByDecl(const char *decl) const
 {
+	(void)decl;
+	return asINVALID_TYPE;
+#if 0 // Preserved dormant declaration-string parser.
 	asCDataType dt;
 
 	// This const cast is safe since we know the engine won't be modified
@@ -1620,11 +1652,15 @@ int asCModule::GetTypeIdByDecl(const char *decl) const
 		return asINVALID_TYPE;
 
 	return engine->GetTypeIdFromDataType(dt);
+#endif
 }
 
 // interface
 asITypeInfo *asCModule::GetTypeInfoByDecl(const char *decl) const
 {
+	(void)decl;
+	return 0;
+#if 0 // Preserved dormant declaration-string parser.
 	asCDataType dt;
 
 	// This const cast is safe since we know the engine won't be modified
@@ -1638,6 +1674,7 @@ asITypeInfo *asCModule::GetTypeInfoByDecl(const char *decl) const
 		return 0;
 
 	return dt.GetTypeInfo();
+#endif
 }
 
 // interface
@@ -2126,6 +2163,10 @@ bool asCModule::IsEmpty() const
 // interface
 int asCModule::SaveByteCode(asIBinaryStream *out, bool stripDebugInfo) const
 {
+	UNUSED_VAR(out);
+	UNUSED_VAR(stripDebugInfo);
+	return asNOT_SUPPORTED;
+#if 0
 #ifdef AS_NO_COMPILER
 	UNUSED_VAR(out);
 	UNUSED_VAR(stripDebugInfo);
@@ -2139,12 +2180,16 @@ int asCModule::SaveByteCode(asIBinaryStream *out, bool stripDebugInfo) const
 	asCWriter write(const_cast<asCModule*>(this), out, engine, stripDebugInfo);
 	return write.Write();
 #endif
+#endif
 }
 
 // interface
 int asCModule::LoadByteCode(asIBinaryStream *in, bool *wasDebugInfoStripped)
 {
-	if( in == 0 ) return asINVALID_ARG;
+	(void)in;
+	(void)wasDebugInfoStripped;
+	return asNOT_SUPPORTED;
+#if 0 // Preserved dormant bytecode restore.
 
 	if( HasExternalReferences(false) )
 	{
@@ -2178,6 +2223,7 @@ int asCModule::LoadByteCode(asIBinaryStream *in, bool *wasDebugInfoStripped)
 	engine->BuildCompleted();
 
 	return r;
+#endif
 }
 
 // interface
@@ -2188,6 +2234,12 @@ int asCModule::CompileFunction(const char *sectionName, const char *code, int li
 	if( outFunc )
 		*outFunc = 0;
 
+	UNUSED_VAR(sectionName);
+	UNUSED_VAR(code);
+	UNUSED_VAR(lineOffset);
+	UNUSED_VAR(compileFlags);
+	return asNOT_SUPPORTED;
+#if 0
 #ifdef AS_NO_COMPILER
 	UNUSED_VAR(sectionName);
 	UNUSED_VAR(code);
@@ -2342,6 +2394,7 @@ int asCModule::CompileFunction(const char *sectionName, const char *code, int li
 
 	return r;
 #endif
+#endif
 }
 
 // interface
@@ -2473,27 +2526,29 @@ void asCModule::SetCanonicalSnapshotPreparationFailureForTesting(
 
 void asCModule::ReleaseCanonicalASTSnapshot()
 {
-	asCASTSnapshot* snapshot = 0;
+	asIASTSnapshot* snapshot = 0;
 	{
 		FScopeLock SnapshotLock(&astSnapshotLock);
 		snapshot = astSnapshot;
 		astSnapshot = 0;
-		if( snapshot )
-		{
-			snapshot->SetCurrentGeneration(false);
-		}
 	}
 	if( snapshot )
 	{
 		snapshot->Release();
 	}
-	if( pendingCanonicalAST )
-	{
-		asDELETE(pendingCanonicalAST, asCASTContext);
-		pendingCanonicalAST = 0;
-	}
 }
 
+int asCModule::PublishRestoredCanonicalASTSnapshot()
+{
+	return asNOT_SUPPORTED;
+}
+
+void asCModule::PublishCanonicalASTSnapshot(const char* provenance)
+{
+	UNUSED_VAR(provenance);
+}
+
+#if 0 // Preserved dormant Canonical AST snapshot APIs; not a supported configuration path.
 void asCModule::AdoptPendingCanonicalAST(asCASTContext* context)
 {
 	if( pendingCanonicalAST && pendingCanonicalAST != context )
@@ -2642,6 +2697,7 @@ void asCModule::PublishCanonicalASTSnapshot(const char* provenance)
 		previous->Release();
 	}
 }
+#endif
 
 void asCModule::AddPreClassData(const char* preClassName, asPreClassData Data)
 {
@@ -3299,18 +3355,7 @@ void asCModule::DiffForReferenceUpdate(asCModule* OldModule, asModuleReferenceUp
 				// If the old class had a destructor, we _must_ also have a destructor, or
 				// all our replacement stuff goes out the window. We don't have the information about
 				// parent properties to fix this yet, so we just add it always, right now
-				sClassDeclaration* classDecl = nullptr;
-				for (asUINT n = 0; n < builder->classDeclarations.GetLength(); n++)
-				{
-					if (builder->classDeclarations[n]->typeInfo == NewClass)
-					{
-						classDecl = builder->classDeclarations[n];
-						break;
-					}
-				}
-
-				builder->AddDefaultDestructor(NewClass, classDecl->script);
-				check(NewClass->beh.destruct != 0);
+				OutHadStructuralChanges = true;
 			}
 
 			asCScriptFunction* OldFunction = engine->scriptFunctions[OldClass->beh.destruct];
@@ -3725,14 +3770,7 @@ void asCModule::UpdateReferencesInReflectionDataOnly(const asModuleReferenceUpda
 		UpdateDataType(Global->type, false);
 	}
 
-	// Global properties that are currently being compiled need to be updated too
-	if (builder != nullptr)
-	{
-		builder->globVariables.IterateAll([&](sGlobalVariableDescription* gvar)
-		{
-			UpdateDataType(gvar->datatype, false);
-		});
-	}
+	// Isolated old Builder no longer owns in-flight global descriptions.
 
 	// Update module references
 	auto OldDependencies = MoveTemp(moduleDependencies);
