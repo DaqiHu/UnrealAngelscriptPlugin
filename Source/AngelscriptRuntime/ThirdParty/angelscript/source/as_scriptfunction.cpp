@@ -377,10 +377,9 @@ asCScriptFunction::asCScriptFunction(asCScriptEngine *engine, asCModule *mod, as
 	if (engine) funcdefType = 0; // Detached construction must not mutate dormant process-global funcdef state.
 	accessSpecifier = nullptr;
 
-	if( funcType == asFUNC_SCRIPT )
+	if( funcType == asFUNC_SCRIPT && engine )
 		AllocateScriptFunctionData();
 
-	// Notify the GC of delegates
 	if( funcType == asFUNC_DELEGATE && engine )
 		engine->gc.AddScriptObjectToGC(this, &engine->functionBehaviours);
 }
@@ -2175,8 +2174,6 @@ asUINT asCScriptFunction::GenerateExposedType(bool editable, bool readable, bool
 }
 
 asCFuncdefType * asCScriptFunction::funcdefType = nullptr;
-void * asCScriptFunction::objForDelegate = nullptr;
-asCScriptFunction * asCScriptFunction::funcForDelegate = nullptr;
 
 END_AS_NAMESPACE
 

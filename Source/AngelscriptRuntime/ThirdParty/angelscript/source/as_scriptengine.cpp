@@ -49,6 +49,8 @@
 #include "as_callfunc.h"
 #include "as_generic.h"
 #include "as_scriptobject.h"
+#include "as_scriptfunction.h"
+#include "as_vm_object.h"
 #include "as_debug.h"
 
 #include "AngelscriptEngine.h"
@@ -1193,6 +1195,19 @@ int asCScriptEngine::Release() const
 // interface
 int asCScriptEngine::ShutDownAndRelease()
 {
+	if (shuttingDown)
+	{
+		return Release();
+	}
+	if (asIScriptContext* Active = asGetActiveContext())
+	{
+		if (Active->GetEngine() == this)
+		{
+			shuttingDown = true;
+			return Release();
+		}
+	}
+	GarbageCollect();
 	RetireMetadataImages();
 	// Do a full garbage collection cycle to clean up any object that may still hold on to the engine
 	GarbageCollect();
@@ -1696,18 +1711,11 @@ int asCScriptEngine::CreateContext(asIScriptContext **context, bool isInternal)
 {
 	if (!context) return asINVALID_ARG;
 	*context = nullptr;
-	return asNOT_SUPPORTED; // Metadata registration does not prepare the dormant VM.
-#if 0 // Preserved dormant backend reference; not a supported configuration path.
 	*context = asNEW(asCContext)(this, !isInternal);
 	if( *context == 0 )
 		return asOUT_OF_MEMORY;
-
-	// We need to make sure the engine has been
-	// prepared before any context is executed
 	PrepareEngine();
-
 	return 0;
-#endif // Dormant backend reference.
 }
 
 // interface
@@ -3905,6 +3913,9 @@ asILockableSharedBool *asCScriptEngine::GetWeakRefFlagOfScriptObject(void *obj, 
 	// Make sure it is not a null pointer
 	if( obj == 0 || type == 0 ) return 0;
 
+	if (asCLockableSharedBool* VmFlag = asVmGetWeakFlag(obj))
+		return VmFlag;
+
 	const asCObjectType *objType = static_cast<const asCObjectType *>(type);
 	asILockableSharedBool *dest = 0;
 	if( objType->beh.getWeakRefFlag )
@@ -5189,6 +5200,98 @@ bool asCScriptEngine::ReleaseRawScriptObject(
 	return true;
 }
 
+int asCScriptEngine::GcGetRefCount(void *obj, asCObjectType *type) const
+{
+	if (!obj || !type) return 0;
+	if (type == &functionBehaviours)
+		return static_cast<asCScriptFunction*>(obj)->GetRefCount();
+	if (asVmHeaderFromPayload(obj)) return asVmGetRefCount(obj);
+	if (type->beh.gcGetRefCount)
+		return CallObjectMethodRetInt(obj, type->beh.gcGetRefCount);
+	return 0;
+}
+
+void asCScriptEngine::GcAddRef(void *obj, asCObjectType *type) const
+{
+	if (!obj || !type) return;
+	if (type == &functionBehaviours)
+	{
+		static_cast<asCScriptFunction*>(obj)->AddRef();
+		return;
+	}
+	if (asVmHeaderFromPayload(obj)) { asVmAddRef(obj); return; }
+	if (type->beh.addref) CallObjectMethod(obj, type->beh.addref);
+}
+
+void asCScriptEngine::GcRelease(void *obj, asCObjectType *type) const
+{
+	if (!obj || !type) return;
+	if (type == &functionBehaviours)
+	{
+		static_cast<asCScriptFunction*>(obj)->Release();
+		return;
+	}
+	if (asVmHeaderFromPayload(obj)) { asVmRelease(obj); return; }
+	if (type->beh.release) CallObjectMethod(obj, type->beh.release);
+}
+
+void asCScriptEngine::GcSetFlag(void *obj, asCObjectType *type) const
+{
+	if (!obj || !type) return;
+	if (type == &functionBehaviours)
+	{
+		static_cast<asCScriptFunction*>(obj)->SetFlag();
+		return;
+	}
+	if (asVmHeaderFromPayload(obj)) { asVmSetGcFlag(obj, true); return; }
+	if (type->beh.gcSetFlag) CallObjectMethod(obj, type->beh.gcSetFlag);
+}
+
+bool asCScriptEngine::GcGetFlag(void *obj, asCObjectType *type) const
+{
+	if (!obj || !type) return false;
+	if (type == &functionBehaviours)
+		return static_cast<asCScriptFunction*>(obj)->GetFlag();
+	if (asVmHeaderFromPayload(obj)) return asVmGetGcFlag(obj);
+	if (type->beh.gcGetFlag)
+		return CallObjectMethodRetBool(obj, type->beh.gcGetFlag);
+	return false;
+}
+
+void asCScriptEngine::GcEnumReferences(void *obj, asCObjectType *type)
+{
+	if (!obj || !type) return;
+	if (type == &functionBehaviours)
+	{
+		static_cast<asCScriptFunction*>(obj)->EnumReferences(this);
+		return;
+	}
+	if (asVmHeaderFromPayload(obj)) { asVmEnumReferences(obj, this); return; }
+	if (type->beh.gcEnumReferences)
+		CallObjectMethod(obj, this, type->beh.gcEnumReferences);
+}
+
+void asCScriptEngine::GcReleaseAllReferences(void *obj, asCObjectType *type)
+{
+	if (!obj || !type) return;
+	if (type == &functionBehaviours)
+	{
+		static_cast<asCScriptFunction*>(obj)->ReleaseAllHandles(this);
+		return;
+	}
+	if (asVmHeaderFromPayload(obj))
+	{
+		asVmReleaseAllReferences(obj, this);
+		return;
+	}
+	if ((type->flags & asOBJ_SCRIPT_OBJECT) && type->beh.gcReleaseAllReferences == 0)
+		return;
+	if (type->flags & asOBJ_SCRIPT_OBJECT)
+		reinterpret_cast<asCScriptObject*>(obj)->CallDestructor(type);
+	if (type->beh.gcReleaseAllReferences)
+		CallObjectMethod(obj, this, type->beh.gcReleaseAllReferences);
+}
+
 // interface
 int asCScriptEngine::NotifyGarbageCollectorOfNewObject(void *obj, asITypeInfo *type)
 {
@@ -5836,6 +5939,12 @@ void asCScriptEngine::AddRefScriptObject(void *obj, const asITypeInfo *type)
 	// Make sure it is not a null pointer
 	if( obj == 0 || type == 0 ) return;
 
+	if (asVmHeaderFromPayload(obj))
+	{
+		asVmAddRef(obj);
+		return;
+	}
+
 	const asCTypeInfo *ti = static_cast<const asCTypeInfo*>(type);
 	if (ti->flags & asOBJ_FUNCDEF)
 	{
@@ -5868,6 +5977,12 @@ void asCScriptEngine::ReleaseScriptObject(void *obj, const asITypeInfo *type)
 {
 	// Make sure it is not a null pointer
 	if( obj == 0 || type == 0 ) return;
+
+	if (asVmHeaderFromPayload(obj))
+	{
+		asVmRelease(obj);
+		return;
+	}
 
 	const asCTypeInfo *ti = static_cast<const asCTypeInfo*>(type);
 	if (ti->flags & asOBJ_FUNCDEF)

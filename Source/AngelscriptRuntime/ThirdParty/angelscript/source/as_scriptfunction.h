@@ -306,6 +306,7 @@ public:
 	~asCScriptFunction();
 	const asSStableKey& GetStableKey() const { return metadataStableKey; }
 	asEFunctionIdentityKind GetMetadataDeclarationKind() const { return static_cast<asEFunctionIdentityKind>(metadataDeclarationKind); }
+	bool IsMetadataStatic() const { return metadataStaticDeclaration; }
 	asCScriptFunction* GetMetadataEnclosingFunction() const { return metadataEnclosingFunction; }
 	asUINT GetMetadataLambdaOrdinal() const { return metadataLambdaOrdinal; }
 	bool IsMetadataLocal() const { return traits.GetTrait(asTRAIT_LOCAL); }
@@ -423,8 +424,8 @@ public:
 
 	// Used by asFUNC_DELEGATE
 	static asCFuncdefType              *funcdefType; // Doesn't increase refCount
-	static void              *objForDelegate;
-	static asCScriptFunction *funcForDelegate;
+	void              *objForDelegate;
+	asCScriptFunction *funcForDelegate;
 
 	// Used by list factory behaviour
 	asSListPatternNode *listPattern;

@@ -270,10 +270,13 @@ public:
 		ASSERT_THAT(AreEqual(asNOT_SUPPORTED, Engine.Ptr->RegisterFuncdef("void LegacyCallback()")));
 		ASSERT_THAT(IsNull(Engine.Ptr->GetTypeInfoByDecl("array<Frozen@>")));
 		ASSERT_THAT(IsNull(Engine.Ptr->GetGlobalFunctionByDecl("void Legacy()")));
-		ASSERT_THAT(IsNull(Engine.Ptr->CreateContext()));
+		asIScriptContext* Created = Engine.Ptr->CreateContext();
+		ASSERT_THAT(IsNotNull(Created));
+		Created->Release();
 		asIScriptContext* Context = nullptr;
-		ASSERT_THAT(AreEqual(asNOT_SUPPORTED, Engine.Ptr->CreateContext(&Context, true)));
-		ASSERT_THAT(IsNull(Context));
+		ASSERT_THAT(AreEqual(0, Engine.Ptr->CreateContext(&Context, true)));
+		ASSERT_THAT(IsNotNull(Context));
+		Context->Release();
 		ASSERT_THAT(IsNull(Engine.Ptr->GetModule("Dormant", asGM_ALWAYS_CREATE)));
 		ASSERT_THAT(AreEqual(0, static_cast<int>(Definition.Type->GetPropertyCount())));
 	}

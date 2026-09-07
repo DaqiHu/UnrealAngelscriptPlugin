@@ -1,0 +1,257 @@
+#include "as_vm_object.h"
+#include "as_objecttype.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
+#include "as_scriptobject.h"
+#include "as_property.h"
+#include "HAL/CriticalSection.h"
+#include "HAL/UnrealMemory.h"
+
+BEGIN_AS_NAMESPACE
+
+namespace
+{
+	FCriticalSection GVmPayloadMutex;
+	TMap<void*, asSVmObjectHeader*> GVmPayloadHeaders;
+
+	void* AlignPointer(void* Pointer, asUINT Alignment)
+	{
+		const asPWORD Value = reinterpret_cast<asPWORD>(Pointer);
+		const asPWORD Mask = static_cast<asPWORD>(Alignment) - 1;
+		const asPWORD Aligned = (Value + Mask) & ~Mask;
+		return reinterpret_cast<void*>(Aligned);
+	}
+
+	void RegisterPayload(void* Payload, asSVmObjectHeader* Header)
+	{
+		FScopeLock Lock(&GVmPayloadMutex);
+		GVmPayloadHeaders.Add(Payload, Header);
+	}
+
+	void UnregisterPayload(void* Payload)
+	{
+		FScopeLock Lock(&GVmPayloadMutex);
+		GVmPayloadHeaders.Remove(Payload);
+	}
+}
+
+void* asVmAllocateObject(asCObjectType* Type)
+{
+	if (!Type) return nullptr;
+	const asUINT PayloadSize = Type->size > 0 ? static_cast<asUINT>(Type->size) : 4u;
+	asUINT Align = static_cast<asUINT>(FMath::Max(8, Type->alignment));
+	if (Align < static_cast<asUINT>(sizeof(void*))) Align = static_cast<asUINT>(sizeof(void*));
+	const asUINT Prefix = sizeof(asSVmObjectHeader) + sizeof(void*);
+	void* Base = FMemory::Malloc(Prefix + PayloadSize + Align, Align);
+	if (!Base) return nullptr;
+	asSVmObjectHeader* Header = static_cast<asSVmObjectHeader*>(Base);
+	Header->Magic = asSVmObjectHeader::MagicValue;
+	Header->PayloadSize = PayloadSize;
+	Header->RefCount.set(1);
+	Header->GcFlag = false;
+	Header->InGc = false;
+	Header->WeakFlag = nullptr;
+	Header->Type = Type;
+	Header->Engine = static_cast<asCScriptEngine*>(Type->GetEngine());
+	char* Payload = static_cast<char*>(AlignPointer(static_cast<char*>(Base) + Prefix, Align));
+	void** BackPointer = reinterpret_cast<void**>(Payload - sizeof(void*));
+	*BackPointer = Base;
+	FMemory::Memzero(Payload, PayloadSize);
+	RegisterPayload(Payload, Header);
+	if ((Type->flags & asOBJ_GC) && Type->GetEngine())
+	{
+		static_cast<asCScriptEngine*>(Type->GetEngine())->NotifyGarbageCollectorOfNewObject(Payload, Type);
+		if (asSVmObjectHeader* Published = asVmHeaderFromPayload(Payload))
+		{
+			Published->InGc = true;
+		}
+	}
+	return Payload;
+}
+
+void asVmFreeObject(void* Payload)
+{
+	asSVmObjectHeader* Header = asVmHeaderFromPayload(Payload);
+	if (!Header) return;
+	UnregisterPayload(Payload);
+	FMemory::Free(Header);
+}
+
+asSVmObjectHeader* asVmHeaderFromPayload(void* Payload)
+{
+	if (!Payload) return nullptr;
+	FScopeLock Lock(&GVmPayloadMutex);
+	if (asSVmObjectHeader* const* Found = GVmPayloadHeaders.Find(Payload)) return *Found;
+	return nullptr;
+}
+
+asCObjectType* asVmTypeFromPayload(void* Payload)
+{
+	asSVmObjectHeader* Header = asVmHeaderFromPayload(Payload);
+	return Header ? Header->Type : nullptr;
+}
+
+void asVmInvokeDestruct(void* Payload, asCObjectType* Type)
+{
+	if (!Payload || !Type) return;
+	asCScriptEngine* Engine = static_cast<asCScriptEngine*>(Type->GetEngine());
+	if (!Engine)
+	{
+		if (asSVmObjectHeader* Header = asVmHeaderFromPayload(Payload))
+		{
+			Engine = Header->Engine;
+		}
+	}
+	if (!Engine) return;
+	for (asUINT Index = 0; Index < Type->metadataBehaviours.GetLength(); ++Index)
+	{
+		const asCObjectType::asSMetadataBehaviour& Behaviour = Type->metadataBehaviours[Index];
+		if (Behaviour.kind != asBEHAVE_DESTRUCT || !Behaviour.function) continue;
+		asCScriptFunction* Function = Behaviour.function;
+		if (Function->funcType == asFUNC_SYSTEM)
+		{
+			if (asSSystemFunctionInterface* Interface = Engine->ResolveSystemInterface(Function))
+			{
+				Engine->CallObjectMethod(Payload, Interface, Function);
+			}
+			continue;
+		}
+		if (Function->funcType != asFUNC_SCRIPT) continue;
+		asIScriptContext* Context = Engine->CreateContext();
+		if (!Context) continue;
+		if (Context->Prepare(Function) >= 0)
+		{
+			Context->SetObject(Payload);
+			Context->Execute();
+		}
+		Context->Release();
+	}
+}
+
+int asVmAddRef(void* Payload)
+{
+	asSVmObjectHeader* Header = asVmHeaderFromPayload(Payload);
+	if (!Header) return 0;
+	Header->GcFlag = false;
+	return static_cast<int>(Header->RefCount.atomicInc());
+}
+
+int asVmRelease(void* Payload)
+{
+	asSVmObjectHeader* Header = asVmHeaderFromPayload(Payload);
+	if (!Header || Header->RefCount.get() == 0) return 0;
+	Header->GcFlag = false;
+	const asDWORD Remaining = Header->RefCount.atomicDec();
+	if (Remaining > 0) return static_cast<int>(Remaining);
+	asCObjectType* Type = Header->Type;
+	if (Header->WeakFlag)
+	{
+		Header->WeakFlag->Set(true);
+		Header->WeakFlag->Release();
+		Header->WeakFlag = nullptr;
+	}
+	asVmInvokeDestruct(Payload, Type);
+	asVmFreeObject(Payload);
+	return 0;
+}
+
+int asVmGetRefCount(void* Payload)
+{
+	asSVmObjectHeader* Header = asVmHeaderFromPayload(Payload);
+	return Header ? static_cast<int>(Header->RefCount.get()) : 0;
+}
+
+void asVmSetGcFlag(void* Payload, bool Flag)
+{
+	if (asSVmObjectHeader* Header = asVmHeaderFromPayload(Payload)) Header->GcFlag = Flag;
+}
+
+bool asVmGetGcFlag(void* Payload)
+{
+	asSVmObjectHeader* Header = asVmHeaderFromPayload(Payload);
+	return Header && Header->GcFlag;
+}
+
+namespace
+{
+	template <typename Callback>
+	void ForEachVmHandle(void* Payload, Callback&& Visit)
+	{
+		asCObjectType* Type = asVmTypeFromPayload(Payload);
+		if (!Type) return;
+		const asCArray<asCObjectProperty*>& Properties =
+			Type->localProperties.GetLength() ? Type->localProperties : Type->properties;
+		for (asUINT Index = 0; Index < Properties.GetLength(); ++Index)
+		{
+			asCObjectProperty* Property = Properties[Index];
+			if (!Property) continue;
+			if (!Property->type.IsObjectHandle() && !Property->type.IsFuncdef()) continue;
+			void** Slot = reinterpret_cast<void**>(static_cast<char*>(Payload) + Property->byteOffset);
+			if (*Slot) Visit(*Slot, Property);
+		}
+	}
+}
+
+void asVmEnumReferences(void* Payload, asCScriptEngine* Engine)
+{
+	if (!Engine) return;
+	ForEachVmHandle(Payload, [Engine](void* Reference, asCObjectProperty*)
+	{
+		Engine->GCEnumCallback(Reference);
+	});
+}
+
+void asVmReleaseAllReferences(void* Payload, asCScriptEngine* Engine)
+{
+	if (!Engine) return;
+	ForEachVmHandle(Payload, [Engine, Payload](void* Reference, asCObjectProperty* Property)
+	{
+		void** Slot = reinterpret_cast<void**>(static_cast<char*>(Payload) + Property->byteOffset);
+		*Slot = nullptr;
+		if (asCObjectType* Held = asVmTypeFromPayload(Reference))
+		{
+			Engine->ReleaseScriptObject(Reference, Held);
+			return;
+		}
+		if (Property && Property->type.IsFuncdef() && Reference)
+		{
+			static_cast<asCScriptFunction*>(Reference)->Release();
+		}
+	});
+}
+
+void asVmAbortPartialConstruction(void* Payload, asUINT ConstructedMemberCount)
+{
+	asSVmObjectHeader* Header = asVmHeaderFromPayload(Payload);
+	if (!Header || !Header->Type) return;
+	asCObjectType* Type = Header->Type;
+	const asCArray<asCObjectProperty*>& Properties =
+		Type->localProperties.GetLength() ? Type->localProperties : Type->properties;
+	TArray<asCObjectProperty*> ValueMembers;
+	for (asUINT Index = 0; Index < Properties.GetLength(); ++Index)
+	{
+		asCObjectProperty* Property = Properties[Index];
+		if (!Property || !Property->type.IsObject() || Property->type.IsObjectHandle()) continue;
+		ValueMembers.Add(Property);
+	}
+	const asUINT Limit = FMath::Min(ConstructedMemberCount, static_cast<asUINT>(ValueMembers.Num()));
+	for (asUINT Index = Limit; Index > 0; --Index)
+	{
+		asCObjectProperty* Property = ValueMembers[Index - 1];
+		asCObjectType* MemberType = static_cast<asCObjectType*>(Property->type.GetTypeInfo());
+		if (!MemberType) continue;
+		asVmInvokeDestruct(static_cast<char*>(Payload) + Property->byteOffset, MemberType);
+	}
+	asVmFreeObject(Payload);
+}
+
+asCLockableSharedBool* asVmGetWeakFlag(void* Payload)
+{
+	asSVmObjectHeader* Header = asVmHeaderFromPayload(Payload);
+	if (!Header) return nullptr;
+	if (!Header->WeakFlag) Header->WeakFlag = asNEW(asCLockableSharedBool);
+	if (Header->WeakFlag) Header->WeakFlag->AddRef();
+	return Header->WeakFlag;
+}
+
+END_AS_NAMESPACE

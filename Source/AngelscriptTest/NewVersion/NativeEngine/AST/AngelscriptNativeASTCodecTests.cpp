@@ -1018,7 +1018,7 @@ namespace TypedASTCodecTests
 			ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEASTCodecStatus::Succeeded,
 				AS_NAMESPACE_QUALIFIER asCASTCodec::Encode(Projection, Second)));
 			ASSERT_THAT(IsTrue(First == Second));
-			ASSERT_THAT(AreEqual(static_cast<uint8>(7), First[4]));
+			ASSERT_THAT(AreEqual(static_cast<uint8>(AS_NAMESPACE_QUALIFIER asCASTCodec::CurrentVersion), First[4]));
 			AS_NAMESPACE_QUALIFIER asCASTProjection Decoded;
 			ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEASTCodecStatus::Succeeded,
 				AS_NAMESPACE_QUALIFIER asCASTCodec::Decode(First, Decoded)));

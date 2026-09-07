@@ -63,6 +63,7 @@ public:
 	void   GCEnumCallback(void *reference);
 	int    AddScriptObjectToGC(void *obj, asCObjectType *objType);
 	int    GetObjectInGC(asUINT idx, asUINT *seqNbr, void **obj, asITypeInfo **type);
+	int    DiscardUnconstructedObject(void *obj);
 
 	int    ReportAndReleaseUndestroyedObjects();
 

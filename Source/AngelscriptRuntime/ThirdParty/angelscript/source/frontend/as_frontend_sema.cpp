@@ -202,9 +202,10 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 
 
 	void asCSema::BeginInitializer(asCVarDecl& Declaration, asFBodyNameLookup InLookup, asFBodyTypeLookup InTypeLookup,
-		asFStructuredTypeLookup InStructuredLookup, asFNominalDeclLookup InNominalLookup, asFBodyInputLookup InBodyInputLookup, asFListInitializationLookup InListLookup)
+		asFStructuredTypeLookup InStructuredLookup, asFNominalDeclLookup InNominalLookup, asFBodyInputLookup InBodyInputLookup, asFListInitializationLookup InListLookup,
+		asFExternalCallableLookup InExternalLookup)
 	{
-		BeginInitializerContext(Declaration, MoveTemp(InLookup), MoveTemp(InTypeLookup), MoveTemp(InStructuredLookup), MoveTemp(InNominalLookup), MoveTemp(InBodyInputLookup), MoveTemp(InListLookup));
+		BeginInitializerContext(Declaration, MoveTemp(InLookup), MoveTemp(InTypeLookup), MoveTemp(InStructuredLookup), MoveTemp(InNominalLookup), MoveTemp(InBodyInputLookup), MoveTemp(InListLookup), MoveTemp(InExternalLookup));
 	}
 
 	void asCSema::BeginConstantInitializer(asCEnumConstantDecl& Declaration, asFBodyNameLookup InLookup, asFBodyTypeLookup InTypeLookup,
@@ -214,12 +215,14 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 	}
 
 	void asCSema::BeginInitializerContext(asCNamedDecl& Declaration, asFBodyNameLookup InLookup, asFBodyTypeLookup InTypeLookup,
-		asFStructuredTypeLookup InStructuredLookup, asFNominalDeclLookup InNominalLookup, asFBodyInputLookup InBodyInputLookup, asFListInitializationLookup InListLookup)
+		asFStructuredTypeLookup InStructuredLookup, asFNominalDeclLookup InNominalLookup, asFBodyInputLookup InBodyInputLookup, asFListInitializationLookup InListLookup,
+		asFExternalCallableLookup InExternalLookup)
 	{
 		CurrentBody = nullptr;
 		CurrentInitializer = &Declaration;
 		ListInitializationLookup = MoveTemp(InListLookup);
 		BodyInputLookup = MoveTemp(InBodyInputLookup);
+		ExternalCallableLookup = MoveTemp(InExternalLookup);
 		bExpressionErrors = false;
 		BodyLookup = MoveTemp(InLookup);
 		BodyTypeLookup = MoveTemp(InTypeLookup);
@@ -238,6 +241,7 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 		CurrentInitializer = nullptr;
 		BodyLookup = {}; BodyTypeLookup = {}; StructuredTypeLookup = {}; NominalDeclLookup = {};
 		BodyInputLookup = {};
+		ExternalCallableLookup = {};
 		return bSucceeded;
 	}
 

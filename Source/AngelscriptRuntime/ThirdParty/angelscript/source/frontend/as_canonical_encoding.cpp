@@ -82,6 +82,8 @@ asCCanonicalEncoding::asCCanonicalEncoding(
 	{
 		return Domain == asECanonicalIdentityDomain::TypeDecl
 			|| Domain == asECanonicalIdentityDomain::TypeUse
+			|| Domain == asECanonicalIdentityDomain::Schema
+			|| Domain == asECanonicalIdentityDomain::Layout
 			|| Domain == asECanonicalIdentityDomain::Function
 			|| Domain == asECanonicalIdentityDomain::Declaration;
 	}

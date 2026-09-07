@@ -49,6 +49,22 @@
 BEGIN_AS_NAMESPACE
 
 struct asSNameSpace;
+class asCTypeInfo;
+
+enum class asENativeAddressMode : asBYTE
+{
+	Direct = 0,
+	CompositeInline = 1,
+	CompositeIndirect = 2
+};
+
+struct asSNativePropertyAddress
+{
+	asENativeAddressMode Mode = asENativeAddressMode::Direct;
+	int Offset = 0;
+	int MemberOffset = 0;
+	asCTypeInfo* CompositeStorageType = nullptr;
+};
 
 class asCObjectProperty
 {
@@ -61,7 +77,7 @@ public:
 	asCObjectProperty(const asCObjectProperty &o)
 		: name(o.name), type(o.type), byteOffset(o.byteOffset), accessMask(o.accessMask), compositeOffset(o.compositeOffset),
 		isCompositeIndirect(o.isCompositeIndirect), isPrivate(o.isPrivate), isProtected(o.isProtected), isInherited(o.isInherited), isAppBindProperty(o.isAppBindProperty),
-		exposedType(o.exposedType)
+		exposedType(o.exposedType), isNativeAddress(o.isNativeAddress), nativeAddressMode(o.nativeAddressMode)
 #if WITH_EDITOR
 		, DeprecationMessage(o.DeprecationMessage)
 		, isDeprecated(o.isDeprecated)
@@ -81,6 +97,8 @@ public:
 	bool        isAppBindProperty;
 	asUINT		exposedType;
 	asSAccessSpecifier* accessSpecifier = nullptr;
+	bool isNativeAddress = false;
+	asENativeAddressMode nativeAddressMode = asENativeAddressMode::Direct;
 
 #if WITH_EDITOR
 	asCString DeprecationMessage;

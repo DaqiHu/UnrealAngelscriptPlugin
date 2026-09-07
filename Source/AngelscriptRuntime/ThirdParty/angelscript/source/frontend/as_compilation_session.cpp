@@ -623,7 +623,8 @@ namespace
 				[this, Variable](const asSTypeSyntax& Syntax) { return ResolveTypeSyntax(Syntax, *Variable); },
 				[this](const asSStableKey& Key) { return FindNominalDeclaration(Key); },
 				[this](const asCSourceRange& Range) { return GetRetainedBodyInput(Range); },
-				[this](asCQualType Type, asSListInitialization& Out) { return ResolveListInitializer(Type, Out); });
+				[this](asCQualType Type, asSListInitialization& Out) { return ResolveListInitializer(Type, Out); },
+				[this](const FString& Name) { return FindExternalCallables(Name); });
 			asCParser Parser(InitializerSema);
 			const bool Parsed = Parser.ParseInitializer(GetRetainedBodyInput(Variable->GetDeferredInitializerRange()), *Variable);
 			const bool Analyzed = InitializerSema.EndInitializer();

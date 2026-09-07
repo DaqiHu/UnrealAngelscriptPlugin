@@ -86,6 +86,34 @@ asCTypeInfo::~asCTypeInfo()
 {
 }
 
+asEFingerprintStatus asCTypeInfo::TryGetSchemaHash(asSSchemaHash& OutHash, TConstArrayView<uint8>* OutWitness) const
+{
+	OutHash = {};
+	if (OutWitness)
+	{
+		*OutWitness = {};
+	}
+	if (!metadataOwner)
+	{
+		return asEFingerprintStatus::InvalidDefinition;
+	}
+	return metadataOwner->TryGetSchemaHash(*this, OutHash, OutWitness);
+}
+
+asEFingerprintStatus asCTypeInfo::TryGetLayoutHash(asSLayoutHash& OutHash, TConstArrayView<uint8>* OutWitness) const
+{
+	OutHash = {};
+	if (OutWitness)
+	{
+		*OutWitness = {};
+	}
+	if (!metadataOwner)
+	{
+		return asEFingerprintStatus::InvalidDefinition;
+	}
+	return metadataOwner->TryGetLayoutHash(*this, OutHash, OutWitness);
+}
+
 // interface
 int asCTypeInfo::AddRef() const
 {

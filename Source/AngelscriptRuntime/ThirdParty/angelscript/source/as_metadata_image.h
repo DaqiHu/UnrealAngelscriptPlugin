@@ -4,7 +4,9 @@
 #include "as_config.h"
 #include "as_datatype.h"
 #include "as_metadata_list_pattern.h"
+#include "as_property.h"
 #include "frontend/as_stable_key.h"
+#include "as_metadata_fingerprint.h"
 #include "Containers/Array.h"
 #include "Containers/Map.h"
 #include "Templates/SharedPointer.h"
@@ -134,6 +136,8 @@ public:
 	const asSMetadataListInitializer* GetListInitializer(const asCObjectType& Type) const;
 	asEMetadataResult AddProperty(asCObjectType& Owner, const char* Name,
 		const asCDataType& Type, asCObjectProperty*& Out, bool IsPrivate = false, bool IsProtected = false);
+	asEMetadataResult DefineNativeProperty(asCObjectType& Owner, const char* Name,
+		const asCDataType& Type, const asSNativePropertyAddress& Address, asCObjectProperty*& Out);
 	asEMetadataResult SetBaseType(asCObjectType& Type, asCObjectType& Base);
 	asEMetadataResult SetInterfaceDeclaration(asCObjectType& Type);
 	asEMetadataResult AddInterface(asCObjectType& Type, asCObjectType& Interface);
@@ -151,9 +155,16 @@ public:
 	bool ValidateFrozenDefinitions() const;
 	asEMetadataResult FinalizeLayouts();
 	asEMetadataResult Freeze();
+	asEFingerprintStatus TryGetSchemaHash(const asCTypeInfo& Type, asSSchemaHash& OutHash,
+		TConstArrayView<uint8>* OutWitness = nullptr) const;
+	asEFingerprintStatus TryGetLayoutHash(const asCTypeInfo& Type, asSLayoutHash& OutHash,
+		TConstArrayView<uint8>* OutWitness = nullptr) const;
+	void SetFingerprintDigestProvider(const asIFingerprintDigestProvider* Provider);
 
 private:
 	friend class asCScriptEngine; // Engine binding is a later, whole-image transaction.
+	friend class asCTypeInfo;
+	friend struct asSMetadataFingerprintEncoder;
 	explicit asCMetadataImage(const asSMetadataOptions& InOptions);
 	asEMetadataResult ValidateNew(const asSStableKey& Key, const char* Name,
 		const char* Namespace, bool IsType) const;
@@ -218,6 +229,16 @@ private:
 	asCScriptEngine* BoundEngine = nullptr;
 	TMap<const asCTypeInfo*, int> BoundTypeIds;
 	TMap<const asCScriptFunction*, int> BoundFunctionIds;
+	const asIFingerprintDigestProvider* FingerprintDigestProvider = nullptr;
+	struct asSCachedFingerprint
+	{
+		asSSchemaHash Schema;
+		asSLayoutHash Layout;
+		TArray<uint8> SchemaWitness;
+		TArray<uint8> LayoutWitness;
+	};
+	mutable TMap<const asCTypeInfo*, asSCachedFingerprint> Fingerprints;
+	asEFingerprintStatus EnsureFingerprintsLocked(const asCTypeInfo& Type, const asSCachedFingerprint*& Out) const;
 };
 
 END_AS_NAMESPACE

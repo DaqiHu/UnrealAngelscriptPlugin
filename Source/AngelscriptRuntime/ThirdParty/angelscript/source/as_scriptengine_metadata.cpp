@@ -165,6 +165,19 @@ void asCScriptEngine::RetireMetadataImages()
 		metadataTypesByKey.Empty(); metadataTypesByName.Empty(); metadataTypesById.Empty();
 		metadataFunctionsByKey.Empty(); metadataFunctionsById.Empty();
 		metadataGlobalsByKey.Empty(); metadataGlobalsByName.Empty();
+		metadataGlobalBindings.Empty();
+		TArray<asCExecutableSnapshot*> SnapshotLeases;
+		{
+			std::lock_guard<std::mutex> PublishLock(executablePublicationMutex);
+			++executablePublicationGeneration;
+			publishedExecutables.Empty();
+			SnapshotLeases = MoveTemp(publishedSnapshotLeases);
+			metadataRegistrationRetired = true;
+		}
+		for (asCExecutableSnapshot* Snapshot : SnapshotLeases)
+		{
+			if (Snapshot) Snapshot->Release();
+		}
 		for (const auto& Item : metadataImages)
 		{
 			Item->BoundEngine = nullptr;
@@ -203,6 +216,12 @@ asCGlobalProperty* asCScriptEngine::FindMetadataGlobalProperty(const char* Names
 	if (!Namespace || !Name) return nullptr;
 	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
 	return metadataGlobalsByName.FindRef(MetadataName(Namespace, Name));
+}
+
+asCGlobalProperty* asCScriptEngine::FindMetadataGlobalProperty(const asSStableKey& Key) const
+{
+	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
+	return metadataGlobalsByKey.FindRef(Key);
 }
 
 TPair<asUINT, asUINT> asCScriptEngine::GetMetadataRegistrationCounts() const

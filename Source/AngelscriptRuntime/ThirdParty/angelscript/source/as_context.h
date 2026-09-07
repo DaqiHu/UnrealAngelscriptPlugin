@@ -46,13 +46,17 @@
 #include "as_thread.h"
 #include "as_objecttype.h"
 #include "as_callfunc.h"
+#include "as_scriptfunction.h"
 #include "AngelscriptEngine.h"
 
 BEGIN_AS_NAMESPACE
 
 class asCScriptFunction;
 class asCScriptEngine;
+class asCExecutableSnapshot;
+class asCExecutableFunction;
 struct FScriptExecution;
+struct asSStableKey;
 
 // Call-scoped exception payload shared by direct JIT calls. Context-mediated
 // calls copy their first public exception into the caller's record exactly
@@ -100,6 +104,7 @@ public:
 
 	// Execution
 	int             Prepare(asIScriptFunction *func);
+	int             Prepare(asCExecutableSnapshot* Snapshot, const asSStableKey& Key);
 	int             Unprepare();
 	int             Execute();
 	int             Abort();
@@ -181,6 +186,8 @@ public:
 //protected:
 	friend class asCScriptEngine;
 	friend struct FScriptExecution;
+	friend int CallSystemFunction(int id, asCContext *context);
+	friend int CallSystemFunction(asCScriptFunction *function, asCContext *context);
 
 	void CallExceptionCallback();
 
@@ -197,6 +204,7 @@ public:
 	bool CleanStackFrame(bool catchException = false);
 	void CleanArgsOnStack();
 	void CleanReturnObject();
+	void ReleaseRegisteredVmPayloadsFromFrame();
 	void DetermineLiveObjects(asCArray<int> &liveObjects, asUINT stackLevel);
 
 	void PushCallState();
@@ -204,6 +212,9 @@ public:
 	void CallScriptFunction(asCScriptFunction *func);
 	bool CallInterfaceMethod(asCScriptFunction *func);
 	void PrepareScriptFunction();
+	void BindExecutableFor(asCScriptFunction* Function);
+	void ReleaseBoundSnapshot();
+	asCScriptFunction::ScriptFunctionData* ActiveScriptData() const;
 
 	bool ReserveStackSpace(asUINT size);
 
@@ -226,6 +237,9 @@ public:
 	bool m_executeVirtualCall;
 
 	asCScriptFunction *m_currentFunction;
+	asCExecutableFunction *m_currentExecutable;
+	asCExecutableFunction *m_initialExecutable;
+	asCExecutableSnapshot *m_boundSnapshot;
 	asCScriptFunction *m_callingSystemFunction;
 
 	// The call stack holds program pointer, stack pointer, etc for caller functions

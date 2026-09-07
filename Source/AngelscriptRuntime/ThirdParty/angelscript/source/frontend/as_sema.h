@@ -71,7 +71,8 @@ using asFBodyNameLookup = TFunction<TConstArrayView<asCDecl*>(const FString&)>;
 			asFExternalCallableLookup InExternalLookup = {});
 		void EndBody();
 		void BeginInitializer(asCVarDecl& Declaration, asFBodyNameLookup InLookup, asFBodyTypeLookup InTypeLookup,
-			asFStructuredTypeLookup InStructuredLookup = {}, asFNominalDeclLookup InNominalLookup = {}, asFBodyInputLookup InBodyInputLookup = {}, asFListInitializationLookup InListLookup = {});
+			asFStructuredTypeLookup InStructuredLookup = {}, asFNominalDeclLookup InNominalLookup = {}, asFBodyInputLookup InBodyInputLookup = {}, asFListInitializationLookup InListLookup = {},
+			asFExternalCallableLookup InExternalLookup = {});
 		void BeginConstantInitializer(asCEnumConstantDecl& Declaration, asFBodyNameLookup InLookup, asFBodyTypeLookup InTypeLookup,
 			asFStructuredTypeLookup InStructuredLookup = {}, asFNominalDeclLookup InNominalLookup = {});
 		bool EndInitializer();
@@ -143,7 +144,8 @@ using asFBodyNameLookup = TFunction<TConstArrayView<asCDecl*>(const FString&)>;
 	private:
 		bool Attach(asCDecl* Decl, TConstArrayView<asCAttr*> Attrs);
 		void BeginInitializerContext(asCNamedDecl& Declaration, asFBodyNameLookup InLookup, asFBodyTypeLookup InTypeLookup,
-			asFStructuredTypeLookup InStructuredLookup, asFNominalDeclLookup InNominalLookup, asFBodyInputLookup InBodyInputLookup = {}, asFListInitializationLookup InListLookup = {});
+			asFStructuredTypeLookup InStructuredLookup, asFNominalDeclLookup InNominalLookup, asFBodyInputLookup InBodyInputLookup = {}, asFListInitializationLookup InListLookup = {},
+			asFExternalCallableLookup InExternalLookup = {});
 		bool AnalyzeLambda(asCLambdaExpr& Lambda, asCFunctionType* Expected, TConstArrayView<asSParsedCallArgument> Arguments, bool bMayCapture);
 		bool FinalizeLambdaIdentity(asCFunctionDecl& Function);
 		asCExpr* ConvertLambda(asCLambdaExpr& Lambda, asCQualType Target);

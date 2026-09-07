@@ -1069,10 +1069,37 @@ BEGIN_AS_NAMESPACE
 			case asEStmtKind::ConstructExpr:
 			{
 				const auto& Construct = static_cast<const asCConstructExpr&>(Stmt);
-				if (ValidateTypeSyntax(Context, Construct.GetTypeSyntax())
-					&& IsContainedRange(Stmt.GetSourceRange(), Construct.GetTypeSyntax().Range)) return true;
-				return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Stmt,
-					TEXT("construction expression has invalid authored type syntax"));
+				if (!ValidateTypeSyntax(Context, Construct.GetTypeSyntax())
+					|| !IsContainedRange(Stmt.GetSourceRange(), Construct.GetTypeSyntax().Range))
+				{
+					return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Stmt,
+						TEXT("construction expression has invalid authored type syntax"));
+				}
+				const TConstArrayView<int32> Ordinals = Construct.GetArgumentSourceOrdinals();
+				if (Ordinals.Num() != Construct.GetArguments().Num())
+				{
+					return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Stmt,
+						TEXT("constructor argument-source mapping has the wrong size"));
+				}
+				TSet<int32> Authored;
+				for (int32 Index = 0; Index < Ordinals.Num(); ++Index)
+				{
+					const int32 Ordinal = Ordinals[Index];
+					const bool bDefault = isa<asCDefaultArgumentExpr>(Construct.GetArguments()[Index]);
+					if ((Ordinal == INDEX_NONE) != bDefault
+						|| Ordinal < INDEX_NONE || Ordinal >= Ordinals.Num()
+						|| (Ordinal != INDEX_NONE && Authored.Contains(Ordinal)))
+					{
+						return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Stmt,
+							TEXT("constructor argument-source mapping is not a unique authored permutation"));
+					}
+					if (Ordinal != INDEX_NONE) Authored.Add(Ordinal);
+				}
+				for (int32 Ordinal = 0; Ordinal < Authored.Num(); ++Ordinal)
+					if (!Authored.Contains(Ordinal))
+						return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Stmt,
+							TEXT("constructor argument-source mapping has a gap"));
+				return true;
 			}
 			case asEStmtKind::StringLiteral:
 				return true; // the decoded value may intentionally be empty

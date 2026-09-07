@@ -487,7 +487,20 @@ namespace
 			}
 			if (const auto* Member = R.Payload.TryGet<asSASTMemberExprPayload>()) return CodecAnchorWithin(Member->MemberSource, R.Source);
 			if (const auto* ExplicitCast = R.Payload.TryGet<asSASTExplicitCastPayload>()) return ExplicitCast->TypeSyntax.bPresent && CodecIsValidTypeSyntaxForRecord(ExplicitCast->TypeSyntax, R);
-			if (const auto* Construct = R.Payload.TryGet<asSASTConstructExprPayload>()) return Construct->TypeSyntax.bPresent && CodecIsValidTypeSyntaxForRecord(Construct->TypeSyntax, R);
+			if (const auto* Construct = R.Payload.TryGet<asSASTConstructExprPayload>())
+			{
+				if (!Construct->TypeSyntax.bPresent || !CodecIsValidTypeSyntaxForRecord(Construct->TypeSyntax, R)) return false;
+				if (Construct->ArgumentSourceOrdinals.Num() != R.Children.Num()) return false;
+				TSet<int32> Authored;
+				for (int32 Ordinal : Construct->ArgumentSourceOrdinals)
+				{
+					if (Ordinal < INDEX_NONE || Ordinal >= Construct->ArgumentSourceOrdinals.Num()) return false;
+					if (Ordinal != INDEX_NONE && Authored.Contains(Ordinal)) return false;
+					if (Ordinal != INDEX_NONE) Authored.Add(Ordinal);
+				}
+				for (int32 Ordinal = 0; Ordinal < Authored.Num(); ++Ordinal) if (!Authored.Contains(Ordinal)) return false;
+				return true;
+			}
 			if (const auto* Initializer = R.Payload.TryGet<asSASTInitListExprPayload>())
 			{
 				if (Initializer->InitializerIdentity.IsZero()
@@ -1156,7 +1169,12 @@ namespace
 			else if (const auto* Call = Payload.TryGet<asSASTCallExprPayload>()) { W.U32(static_cast<uint32>(Call->ArgumentSourceOrdinals.Num())); for (int32 Ordinal : Call->ArgumentSourceOrdinals) W.U32(static_cast<uint32>(Ordinal)); }
 			else if (const auto* Member = Payload.TryGet<asSASTMemberExprPayload>()) CodecWriteAnchor(W, Member->MemberSource);
 			else if (const auto* ExplicitCast = Payload.TryGet<asSASTExplicitCastPayload>()) CodecWriteTypeSyntax(W, ExplicitCast->TypeSyntax);
-			else if (const auto* Construct = Payload.TryGet<asSASTConstructExprPayload>()) CodecWriteTypeSyntax(W, Construct->TypeSyntax);
+			else if (const auto* Construct = Payload.TryGet<asSASTConstructExprPayload>())
+			{
+				CodecWriteTypeSyntax(W, Construct->TypeSyntax);
+				W.U32(static_cast<uint32>(Construct->ArgumentSourceOrdinals.Num()));
+				for (int32 Ordinal : Construct->ArgumentSourceOrdinals) W.U32(static_cast<uint32>(Ordinal));
+			}
 			else if (const auto* StringLiteral = Payload.TryGet<asSASTStringLiteralPayload>()) W.String(StringLiteral->Value);
 			else if (const auto* This = Payload.TryGet<asSASTThisExprPayload>()) W.Bool(This->bImplicit);
 			else if (const auto* Lambda = Payload.TryGet<asSASTLambdaExprPayload>()) { W.U32(Lambda->CaptureCount); W.Bool(Lambda->bCapturesThis); }
@@ -1320,7 +1338,24 @@ namespace
 			}
 			case asEASTCodecPayloadTag::MemberExpr: { asSASTMemberExprPayload P; if (!CodecReadAnchor(R, P.MemberSource)) return asEASTCodecStatus::Malformed; CodecSetPayload(Out, MoveTemp(P)); break; }
 			case asEASTCodecPayloadTag::ExplicitCast: { asSASTExplicitCastPayload P; auto S = CodecReadTypeSyntax(R, P.TypeSyntax, Items, B); if (S != asEASTCodecStatus::Succeeded) return S; CodecSetPayload(Out, MoveTemp(P)); break; }
-			case asEASTCodecPayloadTag::ConstructExpr: { asSASTConstructExprPayload P; auto S = CodecReadTypeSyntax(R, P.TypeSyntax, Items, B); if (S != asEASTCodecStatus::Succeeded) return S; CodecSetPayload(Out, MoveTemp(P)); break; }
+			case asEASTCodecPayloadTag::ConstructExpr:
+			{
+				asSASTConstructExprPayload P;
+				auto S = CodecReadTypeSyntax(R, P.TypeSyntax, Items, B);
+				if (S != asEASTCodecStatus::Succeeded) return S;
+				uint32 N = 0;
+				S = CodecReadCount(R, N, Items, B);
+				if (S != asEASTCodecStatus::Succeeded) return S;
+				P.ArgumentSourceOrdinals.Reserve(N);
+				for (uint32 I = 0; I < N; ++I)
+				{
+					uint32 Encoded = 0;
+					if (!R.U32(Encoded)) return asEASTCodecStatus::Malformed;
+					P.ArgumentSourceOrdinals.Add(static_cast<int32>(Encoded));
+				}
+				CodecSetPayload(Out, MoveTemp(P));
+				break;
+			}
 			case asEASTCodecPayloadTag::StringLiteral: { asSASTStringLiteralPayload P; if (!R.String(P.Value)) return asEASTCodecStatus::Malformed; CodecSetPayload(Out, MoveTemp(P)); break; }
 			case asEASTCodecPayloadTag::ThisExpr: { asSASTThisExprPayload P; if (!R.Bool(P.bImplicit)) return asEASTCodecStatus::Malformed; CodecSetPayload(Out, P); break; }
 			case asEASTCodecPayloadTag::LambdaExpr: { asSASTLambdaExprPayload P; if (!R.U32(P.CaptureCount) || !R.Bool(P.bCapturesThis)) return asEASTCodecStatus::Malformed; CodecSetPayload(Out, P); break; }

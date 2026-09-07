@@ -53,6 +53,7 @@
 #include "as_gc.h"
 #include "as_tokendef.h"
 #include "as_metadata_image.h"
+#include "as_execution_snapshot.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -297,10 +298,24 @@ public:
 	// Semantic registration only: does not prepare VM bytecode or callables.
 	asEMetadataRegistrationResult RegisterMetadataImage(const std::shared_ptr<asCMetadataImage>& Image);
 	void RetireMetadataImages();
+	asEByteCodeLinkStatus LinkByteCodeImage(const asCByteCodeImage& Image, class asCExecutableSnapshot*& OutSnapshot);
+	asEByteCodeLinkStatus BindNativeFunction(const asSStableKey& FunctionKey, void* Native);
+	asEByteCodeLinkStatus BindNativeFunction(const asSStableKey& FunctionKey, const asSFuncPtr& Function, asDWORD CallConv, asFunctionCaller Caller = nullptr, void* Auxiliary = nullptr, int BaseOffset = 0);
+	asEByteCodeLinkStatus BindGlobalStorage(const asSStableKey& DeclarationKey, void* Storage);
+	void* FindBoundGlobalStorage(const asSStableKey& DeclarationKey) const;
+	class asCExecutableFunction* FindPublishedExecutable(const asSStableKey& Key) const;
+	class asCExecutableFunction* AcquirePublishedExecutable(const asSStableKey& Key, class asCExecutableSnapshot*& OutSnapshot);
+	void DetachPublishedSnapshot(class asCExecutableSnapshot* Snapshot);
+	asSSystemFunctionInterface* ResolveSystemInterface(asCScriptFunction* Function) const;
+	asEByteCodeLinkStatus BeginExecutablePublication(asQWORD& OutGeneration);
+	asEByteCodeLinkStatus CommitExecutablePublication(class asCExecutableSnapshot& Snapshot, asQWORD Generation);
+	void PublishExecutable(const asSStableKey& Key, class asCExecutableFunction* Executable);
+	void UnpublishExecutable(const asSStableKey& Key, class asCExecutableFunction* Executable);
 	asCTypeInfo* FindMetadataType(const char* Namespace, const char* Name) const;
 	asCTypeInfo* FindMetadataType(const asSStableKey& Key) const;
 	asCScriptFunction* FindMetadataFunction(const asSStableKey& Key) const;
 	asCGlobalProperty* FindMetadataGlobalProperty(const char* Namespace, const char* Name) const;
+	asCGlobalProperty* FindMetadataGlobalProperty(const asSStableKey& Key) const;
 	TPair<asUINT, asUINT> GetMetadataRegistrationCounts() const;
 
 	// LEGACY remains the source-module Build default until the final cutover gate.
@@ -353,6 +368,13 @@ public:
 	bool  ReleaseRawScriptObject(
 		void *obj,
 		asCObjectType *objType) const;
+	int   GcGetRefCount(void *obj, asCObjectType *type) const;
+	void  GcAddRef(void *obj, asCObjectType *type) const;
+	void  GcRelease(void *obj, asCObjectType *type) const;
+	void  GcSetFlag(void *obj, asCObjectType *type) const;
+	bool  GcGetFlag(void *obj, asCObjectType *type) const;
+	void  GcEnumReferences(void *obj, asCObjectType *type);
+	void  GcReleaseAllReferences(void *obj, asCObjectType *type);
 
 	void *AllocScriptObject(const asCObjectType *objType) const;
 	void FinishConstructObject(asIScriptObject* obj, asITypeInfo* type) const;
@@ -647,6 +669,8 @@ private:
 	asUINT CountMetadataTypes(asQWORD Include, asQWORD Exclude = 0) const;
 	asCTypeInfo* MetadataTypeByIndex(asUINT Index, asQWORD Include, asQWORD Exclude = 0) const;
 	mutable std::mutex metadataRegistrationMutex;
+	mutable std::mutex executablePublicationMutex;
+	asQWORD executablePublicationGeneration = 0;
 	TArray<std::shared_ptr<asCMetadataImage>> metadataImages;
 	TMap<asSStableKey, asCTypeInfo*> metadataTypesByKey;
 	TMap<FString, asCTypeInfo*> metadataTypesByName;
@@ -654,6 +678,10 @@ private:
 	TMap<asSStableKey, asCScriptFunction*> metadataFunctionsByKey;
 	TMap<asSStableKey, asCGlobalProperty*> metadataGlobalsByKey;
 	TMap<FString, asCGlobalProperty*> metadataGlobalsByName;
+	TMap<asSStableKey, void*> metadataGlobalBindings;
+	TMap<asSStableKey, class asCExecutableFunction*> publishedExecutables;
+	TArray<class asCExecutableSnapshot*> publishedSnapshotLeases;
+	TMap<asSStableKey, asSSystemFunctionInterface*> nativeInterfaces;
 	TMap<int, asCScriptFunction*> metadataFunctionsById;
 	int nextMetadataTypeId = asTYPEID_FLOAT64 + 1;
 	int nextMetadataFunctionId = 1;

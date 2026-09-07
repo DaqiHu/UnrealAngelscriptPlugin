@@ -130,7 +130,7 @@ struct asSASTProjectedTypeSyntax
 	struct asSASTCallExprPayload { TArray<int32> ArgumentSourceOrdinals; };
 	struct asSASTMemberExprPayload { asSStableSourceAnchor MemberSource; };
 	struct asSASTExplicitCastPayload { asSASTProjectedTypeSyntax TypeSyntax; };
-	struct asSASTConstructExprPayload { asSASTProjectedTypeSyntax TypeSyntax; };
+	struct asSASTConstructExprPayload { asSASTProjectedTypeSyntax TypeSyntax; TArray<int32> ArgumentSourceOrdinals; };
 	struct asSASTStringLiteralPayload { FString Value; };
 	struct asSASTThisExprPayload { bool bImplicit = false; };
 	struct asSASTLambdaExprPayload { uint32 CaptureCount = 0; bool bCapturesThis = false; };

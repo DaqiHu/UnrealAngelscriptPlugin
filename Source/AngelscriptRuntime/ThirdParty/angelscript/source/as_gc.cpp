@@ -39,6 +39,7 @@
 #include "as_gc.h"
 #include "as_scriptengine.h"
 #include "as_scriptobject.h"
+#include "as_vm_object.h"
 #include "as_texts.h"
 #include <stdlib.h>
 
@@ -71,6 +72,34 @@ asCGarbageCollector::~asCGarbageCollector()
 	freeNodes.SetLength(0);
 }
 
+int asCGarbageCollector::DiscardUnconstructedObject(void *obj)
+{
+	if( !obj ) return asERROR;
+	ENTERCRITICALSECTION(gcCritical);
+	for( asUINT n = 0; n < gcNewObjects.GetLength(); ++n )
+	{
+		if( gcNewObjects[n].obj == obj )
+		{
+			if( n == gcNewObjects.GetLength() - 1 ) gcNewObjects.PopLast();
+			else gcNewObjects[n] = gcNewObjects.PopLast();
+			LEAVECRITICALSECTION(gcCritical);
+			return 0;
+		}
+	}
+	for( asUINT n = 0; n < gcOldObjects.GetLength(); ++n )
+	{
+		if( gcOldObjects[n].obj == obj )
+		{
+			if( n == gcOldObjects.GetLength() - 1 ) gcOldObjects.PopLast();
+			else gcOldObjects[n] = gcOldObjects.PopLast();
+			LEAVECRITICALSECTION(gcCritical);
+			return 0;
+		}
+	}
+	LEAVECRITICALSECTION(gcCritical);
+	return asNO_FUNCTION;
+}
+
 int asCGarbageCollector::AddScriptObjectToGC(void *obj, asCObjectType *objType)
 {
 	if( obj == 0 || objType == 0 )
@@ -79,7 +108,7 @@ int asCGarbageCollector::AddScriptObjectToGC(void *obj, asCObjectType *objType)
 		return asINVALID_ARG;
 	}
 
-	engine->CallObjectMethod(obj, objType->beh.addref);
+	engine->GcAddRef(obj, objType);
 	asSObjTypePair ot = {obj, objType, 0};
 
 	// Invoke the garbage collector to destroy a little garbage as new comes in
@@ -393,36 +422,13 @@ int asCGarbageCollector::DestroyNewGarbage()
 			if( ++destroyNewIdx < gcNewObjects.GetLength() )
 			{
 				asSObjTypePair gcObj = GetNewObjectAtIdx(destroyNewIdx);
-				if( engine->CallObjectMethodRetInt(gcObj.obj, gcObj.type->beh.gcGetRefCount) == 1 )
+				if( engine->GcGetRefCount(gcObj.obj, gcObj.type) == 1 )
 				{
-					// Release the object immediately
-
-					// Make sure the refCount is really 0, because the
-					// destructor may have increased the refCount again.
-					bool addRef = false;
-					if( gcObj.type->flags & asOBJ_SCRIPT_OBJECT )
-					{
-						// Script objects may actually be resurrected in the destructor
-						//int refCount = ((asCScriptObject*)gcObj.obj)->Release();
-						//if( refCount > 0 ) addRef = true;
-					}
-					else
-						engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.release);
-
-					// Was the object really destroyed?
-					if( !addRef )
-					{
-						numDestroyed++;
-						numNewDestroyed++;
-						RemoveNewObjectAtIdx(destroyNewIdx);
-						destroyNewIdx--;
-					}
-					else
-					{
-						// Since the object was resurrected in the
-						// destructor, we must add our reference again
-						engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.addref);
-					}
+					engine->GcRelease(gcObj.obj, gcObj.type);
+					numDestroyed++;
+					numNewDestroyed++;
+					RemoveNewObjectAtIdx(destroyNewIdx);
+					destroyNewIdx--;
 
 					destroyNewState = destroyGarbage_haveMore;
 				}
@@ -475,9 +481,7 @@ int asCGarbageCollector::ReportAndReleaseUndestroyedObjects()
 	{
 		asSObjTypePair gcObj = GetOldObjectAtIdx(n);
 
-		int refCount = 0;
-		if( gcObj.type->beh.gcGetRefCount && engine->scriptFunctions[gcObj.type->beh.gcGetRefCount] )
-			refCount = engine->CallObjectMethodRetInt(gcObj.obj, gcObj.type->beh.gcGetRefCount);
+		int refCount = engine->GcGetRefCount(gcObj.obj, gcObj.type);
 
 		// Report the object as not being properly destroyed
 		asCString msg;
@@ -499,8 +503,7 @@ int asCGarbageCollector::ReportAndReleaseUndestroyedObjects()
 		}
 
 		// Release the reference that the GC holds if the release functions is still available
-		if( gcObj.type->beh.release && engine->scriptFunctions[gcObj.type->beh.release] )
-			engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.release);
+		engine->GcRelease(gcObj.obj, gcObj.type);
 
 		items++;
 	}
@@ -541,52 +544,12 @@ int asCGarbageCollector::DestroyOldGarbage()
 			{
 				asSObjTypePair gcObj = GetOldObjectAtIdx(destroyOldIdx);
 
-				if( gcObj.type->beh.gcGetRefCount == 0 )
+				if( engine->GcGetRefCount(gcObj.obj, gcObj.type) == 1 )
 				{
-					// If circular references are formed with registered types that hasn't 
-					// registered the GC behaviours, then the engine may be forced to free
-					// the object type before the actual object instance. In this case we
-					// will be forced to skip the destruction of the objects, so as not to 
-					// crash the application.
-					asCString msg;
-					msg.Format(TXT_d_GC_CANNOT_FREE_OBJ_OF_TYPE_s, gcObj.seqNbr, gcObj.type->name.AddressOf());
-					engine->WriteMessage("", 0, 0, asMSGTYPE_ERROR, msg.AddressOf());
-
-					// Just remove the object, as we will not bother to destroy it
+					engine->GcRelease(gcObj.obj, gcObj.type);
 					numDestroyed++;
 					RemoveOldObjectAtIdx(destroyOldIdx);
 					destroyOldIdx--;
-				}
-				else if( engine->CallObjectMethodRetInt(gcObj.obj, gcObj.type->beh.gcGetRefCount) == 1 )
-				{
-					// Release the object immediately
-
-					// Make sure the refCount is really 0, because the
-					// destructor may have increased the refCount again.
-					bool addRef = false;
-					if( gcObj.type->flags & asOBJ_SCRIPT_OBJECT )
-					{
-						// Script objects may actually be resurrected in the destructor
-						//int refCount = ((asCScriptObject*)gcObj.obj)->Release();
-						//if( refCount > 0 ) addRef = true;
-					}
-					else
-						engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.release);
-
-					// Was the object really destroyed?
-					if( !addRef )
-					{
-						numDestroyed++;
-						RemoveOldObjectAtIdx(destroyOldIdx);
-						destroyOldIdx--;
-					}
-					else
-					{
-						// Since the object was resurrected in the
-						// destructor, we must add our reference again
-						engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.addref);
-					}
-
 					destroyOldState = destroyGarbage_haveMore;
 				}
 
@@ -642,7 +605,7 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 				void *obj = gcMap.GetKey(cursor);
 				asSIntTypePair it = gcMap.GetValue(cursor);
 
-				engine->CallObjectMethod(obj, it.type->beh.release);
+				engine->GcRelease(obj, it.type);
 
 				ReturnNode(gcMap.Remove(cursor));
 
@@ -676,9 +639,7 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 				// Add the gc count for this object
 				asSObjTypePair gcObj = GetOldObjectAtIdx(detectIdx);
 	
-				int refCount = 0;
-				if( gcObj.type->beh.gcGetRefCount )
-					refCount = engine->CallObjectMethodRetInt(gcObj.obj, gcObj.type->beh.gcGetRefCount);
+				int refCount = engine->GcGetRefCount(gcObj.obj, gcObj.type);
 
 				if( refCount > 1 )
 				{
@@ -687,11 +648,11 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 					gcMap.Insert(GetNode(gcObj.obj, it));
 
 					// Increment the object's reference counter when putting it in the map
-					engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.addref);
+					engine->GcAddRef(gcObj.obj, gcObj.type);
 
 					// Mark the object so that we can
 					// see if it has changed since read
-					engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.gcSetFlag);
+					engine->GcSetFlag(gcObj.obj, gcObj.type);
 				}
 
 				detectIdx++; 
@@ -730,9 +691,9 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 				asCObjectType *type = gcMap.GetValue(gcMapCursor).type;
 				gcMap.MoveNext(&gcMapCursor, gcMapCursor);
 
-				if( engine->CallObjectMethodRetBool(obj, type->beh.gcGetFlag) )
+				if( engine->GcGetFlag(obj, type) )
 				{
-					engine->CallObjectMethod(obj, engine, type->beh.gcEnumReferences);
+					engine->GcEnumReferences(obj, type);
 				}
 
 				// Allow the application to work a little
@@ -769,7 +730,7 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 				void *obj = gcMap.GetKey(cursor);
 				asSIntTypePair it = gcMap.GetValue(cursor);
 
-				bool gcFlag = engine->CallObjectMethodRetBool(obj, it.type->beh.gcGetFlag);
+				bool gcFlag = engine->GcGetFlag(obj, it.type);
 				if( !gcFlag || it.i > 0 )
 				{
 					liveObjects.PushLast(obj);
@@ -802,10 +763,10 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 					ReturnNode(gcMap.Remove(cursor));
 
 					// We need to decrease the reference count again as we remove the object from the map
-					engine->CallObjectMethod(gcObj, type->beh.release);
+					engine->GcRelease(gcObj, type);
 
 					// Enumerate all the object's references so that they too can be marked as alive
-					engine->CallObjectMethod(gcObj, engine, type->beh.gcEnumReferences);
+					engine->GcEnumReferences(gcObj, type);
 				}
 
 				// Allow the application to work a little
@@ -831,7 +792,7 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 				void *gcObj = gcMap.GetKey(gcMapCursor);
 				asCObjectType *type = gcMap.GetValue(gcMapCursor).type;
 
-				bool gcFlag = engine->CallObjectMethodRetBool(gcObj, type->beh.gcGetFlag);
+				bool gcFlag = engine->GcGetFlag(gcObj, type);
 				if( !gcFlag )
 				{
 					// The unmarked object was touched, rerun the detectGarbage loop
@@ -871,15 +832,7 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 				numDetected++;
 				void *gcObj = gcMap.GetKey(gcMapCursor);
 				asCObjectType *type = gcMap.GetValue(gcMapCursor).type;
-				if( type->flags & asOBJ_SCRIPT_OBJECT )
-				{
-					// For script objects we must call the class destructor before
-					// releasing the references, otherwise the destructor may not
-					// be able to perform the necessary clean-up as the handles will 
-					// be null.
-					reinterpret_cast<asCScriptObject*>(gcObj)->CallDestructor(type);
-				}
-				engine->CallObjectMethod(gcObj, engine, type->beh.gcReleaseAllReferences);
+				engine->GcReleaseAllReferences(gcObj, type);
 
 				gcMap.MoveNext(&gcMapCursor, gcMapCursor);
 

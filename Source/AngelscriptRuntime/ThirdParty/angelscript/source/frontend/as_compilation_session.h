@@ -56,6 +56,9 @@ enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, Decl
 		asSStableKey GetModuleIdentity(const FString& LogicalSourceKey) const { const auto* Key = ModuleIdentities.Find(LogicalSourceKey); return Key ? *Key : asSStableKey{}; }
 		asCType* GetDeclaredType(const asSStableKey& Identity) const { auto* Type = DeclaredTypes.Find(Identity); return Type ? *Type : nullptr; }
 		asCSema& GetSema() { return Sema; }
+		asCDiagnosticsEngine& GetDiagnosticsEngine() const { return Diagnostics; }
+		const asCMetadataImage* GetFrozenDefinitions() const { return FrozenDefinitions; }
+		void BindFrozenDefinitions(const asCMetadataImage* Image) { FrozenDefinitions = Image; }
 
 	private:
 		bool ResolveConstantDeclarations();
@@ -94,6 +97,7 @@ enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, Decl
 		bool bHasRecoveryNodes = false;
 		FString VerificationError;
 		asSBodyAnalysisStatistics BodyStatistics;
+		const asCMetadataImage* FrozenDefinitions = nullptr;
 	};
 
 END_AS_NAMESPACE

@@ -226,7 +226,10 @@ namespace
 			if (const auto* A = Left.TryGet<asSASTExplicitCastPayload>())
 				return A->TypeSyntax.Equals(Right.TryGet<asSASTExplicitCastPayload>()->TypeSyntax);
 			if (const auto* A = Left.TryGet<asSASTConstructExprPayload>())
-				return A->TypeSyntax.Equals(Right.TryGet<asSASTConstructExprPayload>()->TypeSyntax);
+			{
+				const auto* B = Right.TryGet<asSASTConstructExprPayload>();
+				return A->TypeSyntax.Equals(B->TypeSyntax) && A->ArgumentSourceOrdinals == B->ArgumentSourceOrdinals;
+			}
 			if (const auto* A = Left.TryGet<asSASTStringLiteralPayload>())
 				return A->Value == Right.TryGet<asSASTStringLiteralPayload>()->Value;
 			if (const auto* A = Left.TryGet<asSASTThisExprPayload>())
@@ -382,7 +385,12 @@ namespace
 			}
 			if (const auto* Value = Payload.TryGet<asSASTMemberExprPayload>()) return FString::Printf(TEXT("member-source=%u-%u"), Value->MemberSource.BeginByteOffset, Value->MemberSource.EndByteOffset);
 			if (const auto* Value = Payload.TryGet<asSASTExplicitCastPayload>()) return FString(TEXT("target=")) + Value->TypeSyntax.Spelling;
-			if (const auto* Value = Payload.TryGet<asSASTConstructExprPayload>()) return FString(TEXT("type=")) + Value->TypeSyntax.Spelling;
+			if (const auto* Value = Payload.TryGet<asSASTConstructExprPayload>())
+			{
+				TArray<FString> Ordinals;
+				for (int32 Ordinal : Value->ArgumentSourceOrdinals) Ordinals.Add(FString::FromInt(Ordinal));
+				return FString(TEXT("type=")) + Value->TypeSyntax.Spelling + TEXT(" argument-source-ordinals=[") + FString::Join(Ordinals, TEXT(",")) + TEXT("]");
+			}
 			if (const auto* Value = Payload.TryGet<asSASTStringLiteralPayload>()) return FString::Printf(TEXT("value=\"%s\""), *Value->Value);
 			if (const auto* Value = Payload.TryGet<asSASTThisExprPayload>()) return Value->bImplicit ? TEXT("implicit=true") : TEXT("implicit=false");
 			if (const auto* Value = Payload.TryGet<asSASTLambdaExprPayload>()) return FString::Printf(TEXT("captures=%u this=%u"), Value->CaptureCount, Value->bCapturesThis ? 1 : 0);
@@ -592,7 +600,16 @@ namespace
 			if (const auto* Value = Payload.TryGet<asSASTExplicitCastPayload>())
 				return FString::Printf(TEXT("{\"type\":\"explicit-cast\",\"typeSyntax\":%s}"), *TypeSyntaxJson(Value->TypeSyntax));
 			if (const auto* Value = Payload.TryGet<asSASTConstructExprPayload>())
-				return FString::Printf(TEXT("{\"type\":\"construct-expr\",\"typeSyntax\":%s}"), *TypeSyntaxJson(Value->TypeSyntax));
+			{
+				FString Ordinals = TEXT("[");
+				for (int32 Index = 0; Index < Value->ArgumentSourceOrdinals.Num(); ++Index)
+				{
+					if (Index) Ordinals += TEXT(",");
+					Ordinals += FString::FromInt(Value->ArgumentSourceOrdinals[Index]);
+				}
+				return FString::Printf(TEXT("{\"type\":\"construct-expr\",\"typeSyntax\":%s,\"argumentSourceOrdinals\":%s]}"),
+					*TypeSyntaxJson(Value->TypeSyntax), *Ordinals);
+			}
 			if (const auto* Value = Payload.TryGet<asSASTStringLiteralPayload>())
 				return FString::Printf(TEXT("{\"type\":\"string-literal\",\"value\":\"%s\"}"), *EscapeJson(Value->Value));
 			if (const auto* Value = Payload.TryGet<asSASTThisExprPayload>())
@@ -830,6 +847,8 @@ namespace
 					asSASTConstructExprPayload Payload;
 					if (!ProjectTypeSyntax(Snapshot, static_cast<const asCConstructExpr&>(Node).GetTypeSyntax(),
 						Payload.TypeSyntax)) return false;
+					Payload.ArgumentSourceOrdinals.Append(
+						static_cast<const asCConstructExpr&>(Node).GetArgumentSourceOrdinals());
 					return SetPayload(Out, MoveTemp(Payload));
 				}
 				case asEStmtKind::StringLiteral:

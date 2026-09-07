@@ -56,6 +56,7 @@ int PrepareSystemFunctionGeneric(asCScriptFunction *func, asSSystemFunctionInter
 int PrepareSystemFunction(asCScriptFunction *func, asSSystemFunctionInterface *internal, asCScriptEngine *engine);
 
 int CallSystemFunction(int id, asCContext *context);
+int CallSystemFunction(asCScriptFunction *function, asCContext *context);
 
 inline asPWORD FuncPtrToUInt(asFUNCTION_t func)
 {

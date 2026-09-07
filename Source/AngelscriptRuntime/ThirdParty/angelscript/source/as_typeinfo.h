@@ -43,6 +43,7 @@
 #include "as_atomic.h"
 #include "as_datatype.h"
 #include "frontend/as_stable_key.h"
+#include "as_metadata_fingerprint.h"
 #include <memory>
 #include <mutex>
 
@@ -151,8 +152,11 @@ public:
 	virtual ~asCTypeInfo();
 	const asSStableKey& GetStableKey() const { return metadataStableKey; }
 	asETypeDeclKind GetMetadataDeclarationKind() const { return static_cast<asETypeDeclKind>(metadataDeclarationKind); }
+	asUINT GetMetadataGenericArity() const { return metadataGenericArity; }
 	asCMetadataImage* GetMetadataImage() const { return metadataOwner; }
 	asCTypeInfo* GetMetadataDeclarationOwner() const { return metadataDeclarationOwner; }
+	asEFingerprintStatus TryGetSchemaHash(asSSchemaHash& OutHash, TConstArrayView<uint8>* OutWitness = nullptr) const;
+	asEFingerprintStatus TryGetLayoutHash(asSLayoutHash& OutHash, TConstArrayView<uint8>* OutWitness = nullptr) const;
 
 	// Keep an internal reference counter to separate references coming from 
 	// application or script objects and references coming from the script code

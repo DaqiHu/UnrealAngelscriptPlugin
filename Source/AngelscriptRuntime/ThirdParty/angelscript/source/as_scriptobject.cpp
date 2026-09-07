@@ -380,7 +380,8 @@ void *asIScriptObject::SetUserData(void *data, asPWORD type)
 asIScriptEngine *asIScriptObject::GetEngine() const
 {
 	auto* objType = (asCObjectType*)GetObjectType();
-	return objType->engine;
+	if (!objType) return nullptr;
+	return objType->GetEngine();
 }
 
 /*int asCScriptObject::AddRef() const

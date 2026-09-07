@@ -127,6 +127,7 @@ enum class asEDiagnosticSeverity : uint8
 		bool Submit(asCDiagnosticFragment&& Fragment);
 		void EmitTo(asIDiagnosticConsumer& Consumer) const;
 		asUINT GetPendingCount() const;
+		const asCSourceSnapshot& GetSnapshot() const { return Snapshot.Get(); }
 
 	private:
 		TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot;

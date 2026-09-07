@@ -311,6 +311,10 @@ if (!frontendState || Target >= asEBuilderStage::Failed || uint8(Target) != uint
 	case asEBuilderStage::DefinitionsFrozen:
 		MetadataStatus = State.Definitions->Freeze();
 		Success = MetadataStatus.GetValue() == asEMetadataResult::Succeeded;
+		if (Success && State.Session)
+		{
+			State.Session->BindFrozenDefinitions(State.Definitions.get());
+		}
 		Text = State.DefinitionText();
 		break;
 	default: return false;

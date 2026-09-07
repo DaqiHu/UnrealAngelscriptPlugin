@@ -180,10 +180,13 @@ class ANGELSCRIPTRUNTIME_API asCBooleanLiteral final : public asCExpr
 		const asSTypeSyntax& GetTypeSyntax() const { return TypeSyntax; }
 		TConstArrayView<asCExpr*> GetArguments() const { return MakeArrayView(Arguments); }
 		asCFunctionDecl* GetConstructor() const { return Constructor; }
+		bool SetArgumentSourceOrdinals(TArray<int32> Ordinals) { if (!CanMutate() || Ordinals.Num() != Arguments.Num()) return false; ArgumentSourceOrdinals = MoveTemp(Ordinals); return true; }
+		TConstArrayView<int32> GetArgumentSourceOrdinals() const { return MakeArrayView(ArgumentSourceOrdinals); }
 		static bool classof(const asCASTNode* Node) { return Node && Node->GetFamily() == asEASTNodeFamily::Stmt && Node->GetRawKind() == static_cast<uint16>(asEStmtKind::ConstructExpr); }
 	private:
 		asSTypeSyntax TypeSyntax;
 		TArray<asCExpr*> Arguments;
+		TArray<int32> ArgumentSourceOrdinals;
 		asCFunctionDecl* Constructor = nullptr;
 	};
 

@@ -264,6 +264,7 @@ namespace asPostfixSema
 		case ttFloat32: return asEPrimitiveType::Float32;
 		case ttFloat64: case ttDouble: return asEPrimitiveType::Float64;
 		case ttFloat: return asEPrimitiveType::Float32;
+		case ttVoid: return asEPrimitiveType::Void;
 		default: return asEPrimitiveType::Invalid;
 		}
 	}
@@ -282,9 +283,19 @@ namespace asPostfixSema
 		return Builtin && Primitive != asEPrimitiveType::Invalid && Builtin->GetPrimitive() == Primitive;
 	}
 
+	asETypeQualifiers QualifiersFromHost(const asCDataType& Type)
+	{
+		asETypeQualifiers Qualifiers = asETypeQualifiers::None;
+		if (Type.IsReadOnly()) Qualifiers = Qualifiers | asETypeQualifiers::Const;
+		if (Type.IsReference()) Qualifiers = Qualifiers | asETypeQualifiers::Reference;
+		if (Type.IsObjectHandle()) Qualifiers = Qualifiers | asETypeQualifiers::Handle;
+		return Qualifiers;
+	}
+
 	asCQualType QualTypeFromHost(asCASTContext& Context, const asCDataType& Type)
 	{
 		asCQualType Result;
+		const asETypeQualifiers Qualifiers = QualifiersFromHost(Type);
 		if (asCTypeInfo* Info = Type.GetTypeInfo())
 		{
 			asSStableTypeUseDescriptor Use;
@@ -292,12 +303,12 @@ namespace asPostfixSema
 			Use.Declaration = Info->GetStableKey();
 			asSStableKey Key;
 			if (Context.GetTypeContext()->GetIdentityRegistry().InternTypeUse(Use, Key) != asETypeIdentityStatus::Succeeded) return {};
-			asCQualType::TryCreate(Context.GetNominalType(Use.Declaration, Key), asETypeQualifiers::None, Result);
+			asCQualType::TryCreate(Context.GetNominalType(Use.Declaration, Key), Qualifiers, Result);
 			return Result;
 		}
 		const asEPrimitiveType Primitive = PrimitiveFromToken(Type.GetTokenType());
 		if (Primitive == asEPrimitiveType::Invalid) return {};
-		asCQualType::TryCreate(Context.GetBuiltinType(Primitive), asETypeQualifiers::None, Result);
+		asCQualType::TryCreate(Context.GetBuiltinType(Primitive), Qualifiers, Result);
 		return Result;
 	}
 
@@ -378,8 +389,15 @@ namespace asPostfixSema
 		OutOrdinals = MoveTemp(BestOrdinals);
 		for (int32 Index = 0; Index < OutOrdinals.Num(); ++Index)
 		{
-			asCExpr* Value = ConvertTo(Arguments[OutOrdinals[Index]].Value,
-				QualTypeFromHost(Context, Best->Function->parameterTypes[Index]));
+			asCExpr* Argument = Arguments[OutOrdinals[Index]].Value;
+			const asETypeModifiers Flags = Index < static_cast<int32>(Best->Function->inOutFlags.GetLength())
+				? Best->Function->inOutFlags[Index] : asTM_NONE;
+			if ((Flags == asTM_OUTREF || Flags == asTM_INOUTREF)
+				&& (Argument->GetValueCategory() != asEValueCategory::LValue || Argument->IsReadOnly()))
+			{
+				return nullptr;
+			}
+			asCExpr* Value = ConvertTo(Argument, QualTypeFromHost(Context, Best->Function->parameterTypes[Index]));
 			if (!Value) return nullptr;
 			OutArguments.Add(Value);
 		}
@@ -413,8 +431,16 @@ namespace asPostfixSema
 				if (Registry.ResolveTypeUse(Parameter.Type, Use) != asETypeIdentityStatus::Succeeded
 					|| Use.Kind != asETypeUseKind::Primitive)
 					return ActOnRecoveryExpression(Range, TEXT("unresolved-host-parameter"));
+				asETypeQualifiers Qualifiers = asETypeQualifiers::None;
+				if ((static_cast<uint16>(Use.Qualifiers) & static_cast<uint16>(asETypeUseQualifiers::Const)) != 0)
+					Qualifiers = Qualifiers | asETypeQualifiers::Const;
+				if ((static_cast<uint16>(Use.Qualifiers) & static_cast<uint16>(asETypeUseQualifiers::Reference)) != 0
+					|| Parameter.PassingMode != asEParameterPassingMode::Value)
+					Qualifiers = Qualifiers | asETypeQualifiers::Reference;
+				if ((static_cast<uint16>(Use.Qualifiers) & static_cast<uint16>(asETypeUseQualifiers::Handle)) != 0)
+					Qualifiers = Qualifiers | asETypeQualifiers::Handle;
 				asCQualType ParameterType;
-				asCQualType::TryCreate(Context.GetBuiltinType(Use.Primitive), asETypeQualifiers::None, ParameterType);
+				asCQualType::TryCreate(Context.GetBuiltinType(Use.Primitive), Qualifiers, ParameterType);
 				ParameterTypes.Add(ParameterType);
 				Modes.Add(Parameter.PassingMode);
 			}
@@ -656,6 +682,7 @@ namespace asPostfixSema
 		const asCQualType Type = ResolveBodyType(TypeSyntax);
 		if (!Type.IsValid() || Type.IsHandle() || Type.IsReference()) return ActOnRecoveryExpression(Range, TEXT("invalid-construction-type"));
 		TArray<asCExpr*> Converted;
+		TArray<int32> Ordinals;
 		asCFunctionDecl* Constructor = nullptr;
 		if (asCBuiltinType* Builtin = dyn_cast<asCBuiltinType>(Type.GetType()))
 		{
@@ -674,7 +701,6 @@ namespace asPostfixSema
 			LookupMembers(Record, Record->GetName(), Candidates);
 			if (!Candidates.IsEmpty())
 			{
-				TArray<int32> Ordinals;
 				Constructor = ResolveCall(Candidates, Arguments, Converted, Ordinals, Range);
 				if (!Constructor) return ActOnRecoveryExpression(Range, TEXT("unresolved-constructor"));
 			}
@@ -689,6 +715,12 @@ namespace asPostfixSema
 			else if (!Arguments.IsEmpty()) return ActOnRecoveryExpression(Range, TEXT("no-matching-constructor"));
 		}
 		auto* Construction = Context.Create<asCConstructExpr>(MoveTemp(TypeSyntax), MoveTemp(Converted), Constructor, Range);
+		if (Ordinals.Num() != Construction->GetArguments().Num())
+		{
+			Ordinals.Reset();
+			for (int32 Index = 0; Index < Construction->GetArguments().Num(); ++Index) Ordinals.Add(Index);
+		}
+		Construction->SetArgumentSourceOrdinals(MoveTemp(Ordinals));
 		Construction->SetExpressionQualType(Type, asEValueCategory::PRValue);
 		return Construction;
 	}

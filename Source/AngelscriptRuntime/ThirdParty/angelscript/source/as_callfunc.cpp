@@ -40,6 +40,7 @@
 #include "as_callfunc.h"
 #include "as_config.h"
 #include "as_scriptengine.h"
+#include "as_scriptfunction.h"
 #include "as_texts.h"
 #include "as_context.h"
 
@@ -400,6 +401,25 @@ int PrepareSystemFunction(asCScriptFunction *func, asSSystemFunctionInterface *i
 		}
 	}
 #endif // !defined(AS_MAX_PORTABILITY)
+	return 0;
+}
+
+int CallSystemFunction(asCScriptFunction *function, asCContext *context)
+{
+	if( !context )
+		return 0;
+	asSSystemFunctionInterface *sysFunc = context->m_engine ? context->m_engine->ResolveSystemInterface(function) : (function ? function->sysFuncIntf : nullptr);
+	if( !function || !sysFunc )
+	{
+		context->SetInternalException(TXT_INVALID_CALLING_CONVENTION);
+		return 0;
+	}
+	if( sysFunc->caller.IsBound() )
+		return context->CallFunctionCaller(function);
+	if( sysFunc->callConv == ICC_GENERIC_FUNC || sysFunc->callConv == ICC_GENERIC_METHOD )
+		return context->CallGeneric(function);
+
+	context->SetInternalException(TXT_INVALID_CALLING_CONVENTION);
 	return 0;
 }
 

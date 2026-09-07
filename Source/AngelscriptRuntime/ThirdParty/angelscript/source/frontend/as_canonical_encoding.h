@@ -17,6 +17,8 @@ enum class asECanonicalIdentityDomain : uint8
 	{
 		TypeDecl = 1,
 		TypeUse = 2,
+		Schema = 3,
+		Layout = 4,
 		Function = 6,
 		Declaration = 7,
 	};

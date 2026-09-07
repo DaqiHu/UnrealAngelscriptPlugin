@@ -27,7 +27,7 @@ enum class asEASTCodecStatus : uint8
 	class ANGELSCRIPTRUNTIME_API asCASTCodec
 	{
 	public:
-		static constexpr uint16 CurrentVersion = 7;
+		static constexpr uint16 CurrentVersion = 8;
 		static asEASTCodecStatus Encode(const asCASTProjection& Projection, TArray<uint8>& OutBytes);
 		static asEASTCodecStatus Decode(TConstArrayView<uint8> Bytes, asCASTProjection& OutProjection, const asSASTCodecBudgets& Budgets = {});
 	};

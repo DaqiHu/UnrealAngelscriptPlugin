@@ -7,8 +7,11 @@
 #include "as_memory.h"
 #include "Containers/StringConv.h"
 #include "Containers/Set.h"
+#include "frontend/as_canonical_encoding.h"
 #include "frontend/as_type_context.h"
+#include "Hash/Blake3.h"
 
+#include <algorithm>
 #include <functional>
 
 BEGIN_AS_NAMESPACE
@@ -573,7 +576,7 @@ asEMetadataResult asCMetadataImage::CreateFunction(const asSStableKey& Key,
 	if (Result != asEMetadataResult::Succeeded) return Result;
 	// A delegate instance is a runtime allocation with GC/callable state, not a
 	// function declaration. Funcdef signatures describe delegate/event types.
-	if (Kind != asFUNC_SCRIPT && Kind != asFUNC_SYSTEM && Kind != asFUNC_FUNCDEF)
+	if (Kind != asFUNC_SCRIPT && Kind != asFUNC_SYSTEM && Kind != asFUNC_FUNCDEF && Kind != asFUNC_INTERFACE)
 		return asEMetadataResult::InvalidArgument;
 	Out = asNEW(asCScriptFunction)(*this, Key, Kind);
 	Out->name = Name; Out->nameSpace = InternNamespace(Namespace);
@@ -618,6 +621,16 @@ asEMetadataResult asCMetadataImage::DefineFunction(asCScriptFunction& Function,
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
 	if (!Owns(&Function) || (Owner && !Owns(Owner))) return asEMetadataResult::ForeignOwner;
+	if (Function.funcType == asFUNC_INTERFACE && (!Owner || !Owner->IsInterface()))
+	{
+		if (!Function.metadataSignatureDefined)
+		{
+			Functions.Remove(&Function);
+			FunctionsByKey.Remove(Function.GetStableKey());
+			asDELETE(&Function, asCScriptFunction);
+		}
+		return asEMetadataResult::InvalidArgument;
+	}
 	if (Function.metadataSignatureDefined) return asEMetadataResult::InvalidState;
 	auto Result = ValidateDataType(ReturnType, true);
 	if (Result != asEMetadataResult::Succeeded) return Result;
@@ -772,6 +785,138 @@ asEMetadataResult asCMetadataImage::AddProperty(asCObjectType& Owner, const char
 		if (Owner.localProperties[Index]->name == Name) return asEMetadataResult::DuplicateName;
 	Out = asNEW(asCObjectProperty);
 	Out->name = Name; Out->type = NormalizeOptions(Type); Out->isPrivate = IsPrivate; Out->isProtected = IsProtected;
+	Owner.localProperties.PushLast(Out); Owner.properties.PushLast(Out); Owner.propertyTable.Add(Out);
+	InvalidateLayouts();
+	return asEMetadataResult::Succeeded;
+}
+
+namespace
+{
+	bool NativeMemberLayout(const asCMetadataImage& Image, const asCDataType& Type, asUINT& Size, asUINT& Alignment)
+	{
+		if (Type.IsObjectHandle() || Type.IsReference())
+		{
+			Size = Image.GetOptions().PointerByteSize;
+			Alignment = Image.GetOptions().PointerByteSize;
+			return true;
+		}
+		if (asCTypeInfo* Info = Type.GetTypeInfo())
+		{
+			if (Info->size < 0 || Info->alignment <= 0) return false;
+			Size = static_cast<asUINT>(Info->size);
+			Alignment = static_cast<asUINT>(Info->alignment);
+			return true;
+		}
+		switch (Type.GetTokenType())
+		{
+		case ttBool: case ttInt8: case ttUInt8: Size = 1; Alignment = 1; return true;
+		case ttInt16: case ttUInt16: Size = 2; Alignment = 2; return true;
+		case ttInt: case ttUInt: case ttFloat32: Size = 4; Alignment = 4; return true;
+		case ttInt64: case ttUInt64: case ttFloat64: case ttDouble: Size = 8; Alignment = 8; return true;
+		case ttFloat:
+			Size = Image.GetOptions().FloatIsFloat64 ? 8 : 4;
+			Alignment = Size;
+			return true;
+		default:
+			return false;
+		}
+	}
+}
+
+asEMetadataResult asCMetadataImage::DefineNativeProperty(asCObjectType& Owner, const char* Name,
+	const asCDataType& Type, const asSNativePropertyAddress& Address, asCObjectProperty*& Out)
+{
+	Out = nullptr;
+	std::lock_guard<std::mutex> Lock(MutationMutex);
+	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
+	if (!Owns(&Owner)) return asEMetadataResult::ForeignOwner;
+	if (!Name || !*Name || Owner.IsInterface() || (Owner.flags & asOBJ_SCRIPT_OBJECT)) return asEMetadataResult::InvalidArgument;
+	const auto* Native = NativeLayouts.Find(&Owner);
+	if (!Native) return asEMetadataResult::IncompleteDefinition;
+	auto Result = ValidateDataType(Type, false);
+	if (Result != asEMetadataResult::Succeeded) return Result;
+	for (asUINT Index = 0; Index < Owner.localProperties.GetLength(); ++Index)
+		if (Owner.localProperties[Index]->name == Name) return asEMetadataResult::DuplicateName;
+	asUINT MemberSize = 0;
+	asUINT MemberAlign = 0;
+	if (!NativeMemberLayout(*this, NormalizeOptions(Type), MemberSize, MemberAlign) || MemberSize == 0) return asEMetadataResult::InvalidLayout;
+	int ResolvedOffset = Address.Offset;
+	int ResolvedComposite = 0;
+	bool bIndirect = false;
+	if (Address.Mode == asENativeAddressMode::Direct)
+	{
+		if (Address.Offset < 0 || Address.MemberOffset != 0 || Address.CompositeStorageType) return asEMetadataResult::InvalidLayout;
+		if ((static_cast<uint64>(Address.Offset) + MemberSize) > Native->Key) return asEMetadataResult::InvalidLayout;
+		if ((MemberAlign > 1) && (Address.Offset % static_cast<int>(MemberAlign)) != 0) return asEMetadataResult::InvalidLayout;
+		ResolvedOffset = Address.Offset;
+	}
+	else if (Address.Mode == asENativeAddressMode::CompositeInline)
+	{
+		if (Address.Offset < 0 || Address.MemberOffset < 0 || !Address.CompositeStorageType) return asEMetadataResult::InvalidLayout;
+		if (!CanReference(Address.CompositeStorageType)) return asEMetadataResult::InvalidLayout;
+		asUINT CompositeSize = 0;
+		if (const auto* CompositeNative = NativeLayouts.Find(CastToObjectType(Address.CompositeStorageType)))
+		{
+			CompositeSize = CompositeNative->Key;
+		}
+		else if (Address.CompositeStorageType->size > 0)
+		{
+			CompositeSize = static_cast<asUINT>(Address.CompositeStorageType->size);
+		}
+		else
+		{
+			return asEMetadataResult::IncompleteDefinition;
+		}
+		if ((static_cast<uint64>(Address.Offset) + CompositeSize) > Native->Key) return asEMetadataResult::InvalidLayout;
+		if ((static_cast<uint64>(Address.MemberOffset) + MemberSize) > CompositeSize) return asEMetadataResult::InvalidLayout;
+		ResolvedOffset = Address.MemberOffset;
+		ResolvedComposite = Address.Offset;
+	}
+	else if (Address.Mode == asENativeAddressMode::CompositeIndirect)
+	{
+		if (Address.Offset < 0 || Address.MemberOffset < 0 || !Address.CompositeStorageType) return asEMetadataResult::InvalidLayout;
+		if ((static_cast<uint64>(Address.Offset) + Options.PointerByteSize) > Native->Key) return asEMetadataResult::InvalidLayout;
+		asUINT PointeeSize = 0;
+		if (const auto* CompositeNative = NativeLayouts.Find(CastToObjectType(Address.CompositeStorageType)))
+		{
+			PointeeSize = CompositeNative->Key;
+		}
+		else if (Address.CompositeStorageType->size > 0)
+		{
+			PointeeSize = static_cast<asUINT>(Address.CompositeStorageType->size);
+		}
+		else
+		{
+			return asEMetadataResult::IncompleteDefinition;
+		}
+		if ((static_cast<uint64>(Address.MemberOffset) + MemberSize) > PointeeSize) return asEMetadataResult::InvalidLayout;
+		ResolvedOffset = Address.MemberOffset;
+		ResolvedComposite = Address.Offset;
+		bIndirect = true;
+	}
+	else
+	{
+		return asEMetadataResult::InvalidArgument;
+	}
+	for (asUINT Index = 0; Index < Owner.localProperties.GetLength(); ++Index)
+	{
+		const asCObjectProperty* Existing = Owner.localProperties[Index];
+		if (!Existing->isNativeAddress || Existing->nativeAddressMode != asENativeAddressMode::Direct || Address.Mode != asENativeAddressMode::Direct) continue;
+		asUINT ExistingSize = 0;
+		asUINT ExistingAlign = 0;
+		if (!NativeMemberLayout(*this, Existing->type, ExistingSize, ExistingAlign)) return asEMetadataResult::InvalidLayout;
+		const int ExistingEnd = Existing->byteOffset + static_cast<int>(ExistingSize);
+		const int NewEnd = ResolvedOffset + static_cast<int>(MemberSize);
+		if (ResolvedOffset < ExistingEnd && Existing->byteOffset < NewEnd) return asEMetadataResult::InvalidLayout;
+	}
+	Out = asNEW(asCObjectProperty);
+	Out->name = Name;
+	Out->type = NormalizeOptions(Type);
+	Out->byteOffset = ResolvedOffset;
+	Out->compositeOffset = ResolvedComposite;
+	Out->isCompositeIndirect = bIndirect;
+	Out->isNativeAddress = true;
+	Out->nativeAddressMode = Address.Mode;
 	Owner.localProperties.PushLast(Out); Owner.properties.PushLast(Out); Owner.propertyTable.Add(Out);
 	InvalidateLayouts();
 	return asEMetadataResult::Succeeded;
@@ -1017,25 +1162,42 @@ asEMetadataResult asCMetadataImage::FinalizeLayouts()
 			const auto* Native = NativeLayouts.Find(Object);
 			if (!(Object->flags & asOBJ_SCRIPT_OBJECT) && !Object->IsInterface() && !Native)
 			{ Result = asEMetadataResult::IncompleteDefinition; return false; }
-			uint64 Position = Out.Size;
-			for (asUINT Index = 0; Index < Object->localProperties.GetLength(); ++Index)
-			{
-				asCObjectProperty* Property = Object->localProperties[Index];
-				FLayout Member;
-				if (!DataLayout(Property->type, Member)) return false;
-				Position = (Position + Member.Alignment - 1) & ~(uint64(Member.Alignment) - 1);
-				if (Position + Member.Size > MAX_int32) { Result = asEMetadataResult::InvalidLayout; return false; }
-				Offsets.Add(Property, static_cast<int>(Position));
-				Position += Member.Size;
-				Out.Alignment = FMath::Max(Out.Alignment, Member.Alignment);
-			}
-			Position = (Position + Out.Alignment - 1) & ~(uint64(Out.Alignment) - 1);
-			if (Position > MAX_int32) { Result = asEMetadataResult::InvalidLayout; return false; }
-			Out.Size = static_cast<asUINT>(Position);
 			if (Native)
 			{
-				if (Native->Key < Out.Size || Native->Value < Out.Alignment) { Result = asEMetadataResult::InvalidLayout; return false; }
 				Out = {Native->Key, Native->Value};
+				for (asUINT Index = 0; Index < Object->localProperties.GetLength(); ++Index)
+				{
+					asCObjectProperty* Property = Object->localProperties[Index];
+					if (!Property->isNativeAddress) { Result = asEMetadataResult::IncompleteDefinition; return false; }
+					asUINT MemberSize = 0;
+					asUINT MemberAlign = 0;
+					if (!NativeMemberLayout(*this, Property->type, MemberSize, MemberAlign)) { Result = asEMetadataResult::InvalidLayout; return false; }
+					const uint64 Extent = Property->nativeAddressMode == asENativeAddressMode::Direct
+						? static_cast<uint64>(Property->byteOffset) + MemberSize
+						: (Property->isCompositeIndirect
+							? static_cast<uint64>(Property->compositeOffset) + Options.PointerByteSize
+							: static_cast<uint64>(Property->compositeOffset) + MemberSize);
+					if (Extent > Native->Key) { Result = asEMetadataResult::InvalidLayout; return false; }
+					Offsets.Add(Property, Property->byteOffset);
+				}
+			}
+			else
+			{
+				uint64 Position = Out.Size;
+				for (asUINT Index = 0; Index < Object->localProperties.GetLength(); ++Index)
+				{
+					asCObjectProperty* Property = Object->localProperties[Index];
+					FLayout Member;
+					if (!DataLayout(Property->type, Member)) return false;
+					Position = (Position + Member.Alignment - 1) & ~(uint64(Member.Alignment) - 1);
+					if (Position + Member.Size > MAX_int32) { Result = asEMetadataResult::InvalidLayout; return false; }
+					Offsets.Add(Property, static_cast<int>(Position));
+					Position += Member.Size;
+					Out.Alignment = FMath::Max(Out.Alignment, Member.Alignment);
+				}
+				Position = (Position + Out.Alignment - 1) & ~(uint64(Out.Alignment) - 1);
+				if (Position > MAX_int32) { Result = asEMetadataResult::InvalidLayout; return false; }
+				Out.Size = static_cast<asUINT>(Position);
 			}
 		}
 		else { Result = asEMetadataResult::InvalidLayout; return false; }
@@ -1104,6 +1266,639 @@ asEMetadataResult asCMetadataImage::Freeze()
 	}
 	State.store(asEMetadataImageState::Frozen, std::memory_order_release);
 	return asEMetadataResult::Succeeded;
+}
+
+namespace
+{
+	FString AsString(const asCString& Value)
+	{
+		return FString(UTF8_TO_TCHAR(Value.AddressOf()));
+	}
+
+	int32 CompareKeys(const asSStableKey& Left, const asSStableKey& Right)
+	{
+		return FMemory::Memcmp(Left.GetBytes().GetData(), Right.GetBytes().GetData(), asSStableKey::ByteCount);
+	}
+
+	void WriteKey(asCCanonicalEncoding& Encoding, const asSStableKey& Key)
+	{
+		Encoding.WriteBytes(Key.GetBytes());
+	}
+
+	asDWORD SemanticFlags(const asCTypeInfo& Type)
+	{
+		asDWORD Flags = 0;
+		if (const asCObjectType* Object = CastToObjectType(const_cast<asCTypeInfo*>(&Type)))
+		{
+			if (Object->flags & asOBJ_VALUE) Flags |= 1u;
+			if (Object->flags & asOBJ_REF) Flags |= 2u;
+			if (Object->flags & asOBJ_SCRIPT_OBJECT) Flags |= 4u;
+			if (Object->flags & asOBJ_GC) Flags |= 8u;
+			if (Object->flags & asOBJ_TEMPLATE) Flags |= 16u;
+			if (Object->flags & asOBJ_POD) Flags |= 32u;
+			if (Object->IsInterface()) Flags |= 64u;
+		}
+		return Flags;
+	}
+
+	uint8 StorageCategory(const asCTypeInfo& Type)
+	{
+		if (CastToEnumType(const_cast<asCTypeInfo*>(&Type))) return 0;
+		if (CastToTypedefType(const_cast<asCTypeInfo*>(&Type))) return 4;
+		if (CastToFuncdefType(const_cast<asCTypeInfo*>(&Type))) return 3;
+		if (const asCObjectType* Object = CastToObjectType(const_cast<asCTypeInfo*>(&Type)))
+		{
+			return (Object->flags & asOBJ_REF) ? 2 : 1;
+		}
+		return 0;
+	}
+
+	asSFingerprintDigest HashWitness(TConstArrayView<uint8> Witness, const asIFingerprintDigestProvider* Provider)
+	{
+		if (Provider)
+		{
+			return Provider->ComputeDigest(Witness);
+		}
+		const FBlake3Hash Hash = FBlake3::HashBuffer(Witness.GetData(), static_cast<uint64>(Witness.Num()));
+		asSFingerprintDigest Result;
+		asSFingerprintDigest::TryCreate(MakeArrayView(Hash.GetBytes(), asSFingerprintDigest::ByteCount), Result);
+		return Result;
+	}
+
+	asDWORD PassingMode(asDWORD InOutFlag)
+	{
+		if (InOutFlag == asTM_INREF) return 1;
+		if (InOutFlag == asTM_OUTREF) return 2;
+		if (InOutFlag == asTM_INOUTREF) return 3;
+		return 0;
+	}
+}
+
+struct asSMetadataFingerprintEncoder
+{
+	explicit asSMetadataFingerprintEncoder(const asCMetadataImage& InImage)
+		: Image(InImage)
+	{
+	}
+
+	const asCMetadataImage& Image;
+
+	bool InternDataTypeUse(const asCDataType& Type, asSStableKey& OutKey) const
+	{
+		OutKey = {};
+		if (!Image.IdentityContext.IsValid())
+		{
+			return false;
+		}
+		asCTypeContext* Context = const_cast<asCTypeContext*>(Image.IdentityContext.Get());
+		asCStableIdentityRegistry& Registry = Context->GetIdentityRegistry();
+		asSStableTypeUseDescriptor Descriptor;
+		if (Type.IsReadOnly() || Type.IsHandleToConst())
+		{
+			Descriptor.Qualifiers = Descriptor.Qualifiers | asETypeUseQualifiers::Const;
+		}
+		if (Type.IsReference())
+		{
+			Descriptor.Qualifiers = Descriptor.Qualifiers | asETypeUseQualifiers::Reference;
+		}
+		if (Type.IsObjectHandle())
+		{
+			Descriptor.Qualifiers = Descriptor.Qualifiers | asETypeUseQualifiers::Handle;
+		}
+		if (Type.IsMetadataNullable())
+		{
+			Descriptor.Qualifiers = Descriptor.Qualifiers | asETypeUseQualifiers::Nullable;
+		}
+		if (asCTypeInfo* Info = Type.GetTypeInfo())
+		{
+			Descriptor.Kind = asETypeUseKind::Nominal;
+			asCObjectType* Object = CastToObjectType(Info);
+			if (Object && Object->GetMetadataTemplateDefinition())
+			{
+				Descriptor.Declaration = Object->GetMetadataTemplateDefinition()->GetStableKey();
+				for (asUINT Index = 0; Index < Object->templateSubTypes.GetLength(); ++Index)
+				{
+					asSStableKey Argument;
+					if (!InternDataTypeUse(Object->templateSubTypes[Index], Argument))
+					{
+						return false;
+					}
+					Descriptor.Arguments.Add(Argument);
+				}
+			}
+			else
+			{
+				Descriptor.Declaration = Info->GetStableKey();
+			}
+		}
+		else
+		{
+			Descriptor.Kind = asETypeUseKind::Primitive;
+			switch (Type.GetTokenType())
+			{
+			case ttVoid: Descriptor.Primitive = asEPrimitiveType::Void; break;
+			case ttBool: Descriptor.Primitive = asEPrimitiveType::Bool; break;
+			case ttInt8: Descriptor.Primitive = asEPrimitiveType::Int8; break;
+			case ttInt16: Descriptor.Primitive = asEPrimitiveType::Int16; break;
+			case ttInt: Descriptor.Primitive = asEPrimitiveType::Int32; break;
+			case ttInt64: Descriptor.Primitive = asEPrimitiveType::Int64; break;
+			case ttUInt8: Descriptor.Primitive = asEPrimitiveType::UInt8; break;
+			case ttUInt16: Descriptor.Primitive = asEPrimitiveType::UInt16; break;
+			case ttUInt: Descriptor.Primitive = asEPrimitiveType::UInt32; break;
+			case ttUInt64: Descriptor.Primitive = asEPrimitiveType::UInt64; break;
+			case ttFloat32: Descriptor.Primitive = asEPrimitiveType::Float32; break;
+			case ttFloat64: Descriptor.Primitive = asEPrimitiveType::Float64; break;
+			case ttDouble: Descriptor.Primitive = asEPrimitiveType::Float64; break;
+			case ttFloat:
+				Descriptor.Primitive = Image.Options.FloatIsFloat64
+					? asEPrimitiveType::Float64
+					: asEPrimitiveType::Float32;
+				break;
+			default:
+				return false;
+			}
+		}
+		return Registry.InternTypeUse(Descriptor, OutKey) == asETypeIdentityStatus::Succeeded;
+	}
+
+	void WriteFunctionContract(asCCanonicalEncoding& Encoding, const asCScriptFunction& Function) const
+	{
+		WriteKey(Encoding, Function.GetStableKey());
+		asSStableKey ReturnKey;
+		if (!InternDataTypeUse(Function.returnType, ReturnKey))
+		{
+			WriteKey(Encoding, {});
+		}
+		else
+		{
+			WriteKey(Encoding, ReturnKey);
+		}
+		Encoding.WriteUInt32(Function.parameterTypes.GetLength());
+		for (asUINT Index = 0; Index < Function.parameterTypes.GetLength(); ++Index)
+		{
+			asSStableKey ParameterKey;
+			InternDataTypeUse(Function.parameterTypes[Index], ParameterKey);
+			WriteKey(Encoding, ParameterKey);
+			Encoding.WriteUInt8(static_cast<uint8>(PassingMode(Function.inOutFlags[Index])));
+		}
+		Encoding.WriteUInt32(static_cast<uint32>(Function.IsMetadataStatic() ? 1 : 0)
+			| (Function.IsFinal() ? 2u : 0u)
+			| (Function.IsOverride() ? 4u : 0u)
+			| (Function.IsProperty() ? 8u : 0u)
+			| (Function.IsReadOnly() ? 16u : 0u));
+		Encoding.WriteUInt16(static_cast<uint16>(Function.IsReadOnly() ? asEFunctionIdentityModifiers::ConstMethod : asEFunctionIdentityModifiers::None));
+		Encoding.WriteUInt8(static_cast<uint8>(Function.GetMetadataDeclarationKind()));
+	}
+
+	void WriteListPattern(asCCanonicalEncoding& Encoding, const asSMetadataListPattern& Pattern) const
+	{
+		Encoding.WriteUInt8(static_cast<uint8>(Pattern.Kind));
+		Encoding.WriteUInt32(Pattern.TemplateParameterIndex);
+		asSStableKey ValueKey;
+		if (Pattern.ValueType.IsValid())
+		{
+			InternDataTypeUse(Pattern.ValueType, ValueKey);
+		}
+		WriteKey(Encoding, ValueKey);
+		Encoding.WriteUInt32(static_cast<uint32>(Pattern.Children.Num()));
+		for (const asSMetadataListPattern& Child : Pattern.Children)
+		{
+			WriteListPattern(Encoding, Child);
+		}
+	}
+
+	bool EncodeSchema(const asCTypeInfo& Type, TArray<uint8>& Out) const
+	{
+		asCCanonicalEncoding Encoding(asECanonicalIdentityDomain::Schema);
+		Encoding.WriteUInt8(static_cast<uint8>(Type.GetMetadataDeclarationKind()));
+		Encoding.WriteUInt32(SemanticFlags(Type));
+		WriteKey(Encoding, Type.GetMetadataDeclarationOwner() ? Type.GetMetadataDeclarationOwner()->GetStableKey() : asSStableKey{});
+		const asCObjectType* Object = CastToObjectType(const_cast<asCTypeInfo*>(&Type));
+		WriteKey(Encoding, Object && Object->derivedFrom ? Object->derivedFrom->GetStableKey() : asSStableKey{});
+		TArray<asSStableKey> Interfaces;
+		if (Object)
+		{
+			for (asUINT Index = 0; Index < Object->interfaces.GetLength(); ++Index)
+			{
+				if (Object->interfaces[Index])
+				{
+					Interfaces.Add(Object->interfaces[Index]->GetStableKey());
+				}
+			}
+			Interfaces.Sort([](const asSStableKey& Left, const asSStableKey& Right)
+			{
+				return CompareKeys(Left, Right) < 0;
+			});
+		}
+		Encoding.WriteUInt32(static_cast<uint32>(Interfaces.Num()));
+		for (const asSStableKey& Key : Interfaces)
+		{
+			WriteKey(Encoding, Key);
+		}
+		Encoding.WriteUInt32(Type.GetMetadataGenericArity());
+		TArray<asSStableKey> Arguments;
+		if (Object)
+		{
+			for (asUINT Index = 0; Index < Object->templateSubTypes.GetLength(); ++Index)
+			{
+				asSStableKey Argument;
+				if (!InternDataTypeUse(Object->templateSubTypes[Index], Argument))
+				{
+					return false;
+				}
+				Arguments.Add(Argument);
+			}
+		}
+		Encoding.WriteUInt32(static_cast<uint32>(Arguments.Num()));
+		for (const asSStableKey& Key : Arguments)
+		{
+			WriteKey(Encoding, Key);
+		}
+		const asUINT FieldCount = Object ? Object->localProperties.GetLength() : 0;
+		Encoding.WriteUInt32(FieldCount);
+		for (asUINT Index = 0; Index < FieldCount; ++Index)
+		{
+			const asCObjectProperty* Property = Object->localProperties[Index];
+			Encoding.WriteString(AsString(Property->name));
+			asSStableKey TypeUse;
+			if (!InternDataTypeUse(Property->type, TypeUse))
+			{
+				return false;
+			}
+			WriteKey(Encoding, TypeUse);
+			Encoding.WriteUInt8(Property->isPrivate ? 1 : 0);
+			Encoding.WriteUInt8(Property->isProtected ? 1 : 0);
+			Encoding.WriteString(Property->accessSpecifier ? AsString(Property->accessSpecifier->name) : FString());
+		}
+		const asCEnumType* EnumType = CastToEnumType(const_cast<asCTypeInfo*>(&Type));
+		const asUINT EnumCount = EnumType ? EnumType->enumValues.GetLength() : 0;
+		Encoding.WriteUInt32(EnumCount);
+		for (asUINT Index = 0; Index < EnumCount; ++Index)
+		{
+			const asSEnumValue* Value = EnumType->enumValues[Index];
+			Encoding.WriteString(AsString(Value->name));
+			Encoding.WriteUInt32(static_cast<uint32>(Value->value));
+		}
+		asSStableKey AliasKey;
+		if (const asCTypedefType* Alias = CastToTypedefType(const_cast<asCTypeInfo*>(&Type)))
+		{
+			if (Alias->aliasForType.IsValid() && !InternDataTypeUse(Alias->aliasForType, AliasKey))
+			{
+				return false;
+			}
+		}
+		WriteKey(Encoding, AliasKey);
+		TArray<const asCScriptFunction*> Methods;
+		if (Object)
+		{
+			for (asUINT Index = 0; Index < Object->metadataMethods.GetLength(); ++Index)
+			{
+				if (Object->metadataMethods[Index])
+				{
+					Methods.Add(Object->metadataMethods[Index]);
+				}
+			}
+		}
+		Methods.Sort([](const asCScriptFunction& Left, const asCScriptFunction& Right)
+		{
+			return CompareKeys(Left.GetStableKey(), Right.GetStableKey()) < 0;
+		});
+		Encoding.WriteUInt32(static_cast<uint32>(Methods.Num()));
+		for (const asCScriptFunction* Method : Methods)
+		{
+			WriteFunctionContract(Encoding, *Method);
+		}
+		TArray<asCObjectType::asSMetadataBehaviour> Behaviours;
+		if (Object)
+		{
+			for (asUINT Index = 0; Index < Object->metadataBehaviours.GetLength(); ++Index)
+			{
+				Behaviours.Add(Object->metadataBehaviours[Index]);
+			}
+		}
+		Behaviours.Sort([](const asCObjectType::asSMetadataBehaviour& Left, const asCObjectType::asSMetadataBehaviour& Right)
+		{
+			if (Left.kind != Right.kind)
+			{
+				return static_cast<uint8>(Left.kind) < static_cast<uint8>(Right.kind);
+			}
+			const asSStableKey LeftKey = Left.function ? Left.function->GetStableKey() : asSStableKey{};
+			const asSStableKey RightKey = Right.function ? Right.function->GetStableKey() : asSStableKey{};
+			return CompareKeys(LeftKey, RightKey) < 0;
+		});
+		Encoding.WriteUInt32(static_cast<uint32>(Behaviours.Num()));
+		for (const asCObjectType::asSMetadataBehaviour& Behaviour : Behaviours)
+		{
+			Encoding.WriteUInt8(static_cast<uint8>(Behaviour.kind));
+			if (Behaviour.function)
+			{
+				WriteFunctionContract(Encoding, *Behaviour.function);
+			}
+			else
+			{
+				WriteKey(Encoding, {});
+			}
+		}
+		const asSMetadataListInitializer* List = Object ? Image.ListInitializers.Find(Object) : nullptr;
+		Encoding.WriteUInt8(List ? 1 : 0);
+		if (List)
+		{
+			WriteKey(Encoding, List->Factory ? List->Factory->GetStableKey() : asSStableKey{});
+			WriteListPattern(Encoding, List->Pattern);
+		}
+		TArray<const asSAccessSpecifier*> Policies;
+		if (Object)
+		{
+			for (asUINT Index = 0; Index < Object->accessSpecifiers.GetLength(); ++Index)
+			{
+				if (Object->accessSpecifiers[Index])
+				{
+					Policies.Add(Object->accessSpecifiers[Index]);
+				}
+			}
+		}
+		Policies.Sort([](const asSAccessSpecifier& Left, const asSAccessSpecifier& Right)
+		{
+			return AsString(Left.name) < AsString(Right.name);
+		});
+		Encoding.WriteUInt32(static_cast<uint32>(Policies.Num()));
+		for (const asSAccessSpecifier* Policy : Policies)
+		{
+			Encoding.WriteString(AsString(Policy->name));
+			Encoding.WriteUInt8(Policy->bIsPrivate ? 1 : 0);
+			Encoding.WriteUInt8(Policy->bIsProtected ? 1 : 0);
+			Encoding.WriteUInt8(Policy->bAnyReadOnly ? 1 : 0);
+			Encoding.WriteUInt8(Policy->bAnyEditDefaults ? 1 : 0);
+			Encoding.WriteUInt32(Policy->permissions.GetLength());
+			for (asUINT Index = 0; Index < Policy->permissions.GetLength(); ++Index)
+			{
+				const asSAccessPermission& Permission = Policy->permissions[Index];
+				Encoding.WriteString(AsString(Permission.accessName));
+				Encoding.WriteUInt8(Permission.bInherited ? 1 : 0);
+				Encoding.WriteUInt8(Permission.bReadOnly ? 1 : 0);
+				Encoding.WriteUInt8(Permission.bEditDefaults ? 1 : 0);
+			}
+		}
+		Out = TArray<uint8>(Encoding.GetBytes().GetData(), Encoding.GetBytes().Num());
+		return true;
+	}
+
+	bool MemberLayout(const asCDataType& Type, asUINT& Size, asUINT& Alignment, bool& bPointer) const
+	{
+		bPointer = Type.IsObjectHandle() || Type.IsReference();
+		if (bPointer)
+		{
+			Size = Image.Options.PointerByteSize;
+			Alignment = Image.Options.PointerByteSize;
+			return true;
+		}
+		if (asCTypeInfo* Info = Type.GetTypeInfo())
+		{
+			if (Info->size < 0 || Info->alignment <= 0)
+			{
+				return false;
+			}
+			Size = static_cast<asUINT>(Info->size);
+			Alignment = static_cast<asUINT>(Info->alignment);
+			return true;
+		}
+		switch (Type.GetTokenType())
+		{
+		case ttBool: case ttInt8: case ttUInt8: Size = 1; Alignment = 1; return true;
+		case ttInt16: case ttUInt16: Size = 2; Alignment = 2; return true;
+		case ttInt: case ttUInt: case ttFloat32: Size = 4; Alignment = 4; return true;
+		case ttInt64: case ttUInt64: case ttFloat64: case ttDouble: Size = 8; Alignment = 8; return true;
+		case ttFloat:
+			Size = Image.Options.FloatIsFloat64 ? 8 : 4;
+			Alignment = Size;
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool EncodeLayout(const asCTypeInfo& Type, TArray<uint8>& Out, TSet<const asCTypeInfo*>& Visiting) const
+	{
+		if (Visiting.Contains(&Type))
+		{
+			return false;
+		}
+		const asCObjectType* Object = CastToObjectType(const_cast<asCTypeInfo*>(&Type));
+		const bool bValueObject = Object && (Object->flags & asOBJ_VALUE) && !(Object->flags & asOBJ_REF);
+		if (bValueObject)
+		{
+			Visiting.Add(&Type);
+		}
+		asCCanonicalEncoding Encoding(asECanonicalIdentityDomain::Layout);
+		Encoding.WriteUInt16(1);
+		Encoding.WriteUInt8(static_cast<uint8>(Image.Options.PointerByteSize));
+		Encoding.WriteUInt8(1);
+		Encoding.WriteUInt8(Image.Options.FloatIsFloat64 ? 1 : 0);
+		Encoding.WriteUInt8(StorageCategory(Type));
+		if (Type.size < 0 || Type.alignment <= 0)
+		{
+			if (bValueObject)
+			{
+				Visiting.Remove(&Type);
+			}
+			return false;
+		}
+		Encoding.WriteUInt32(static_cast<uint32>(Type.size));
+		Encoding.WriteUInt32(static_cast<uint32>(Type.alignment));
+		WriteKey(Encoding, Object && Object->derivedFrom ? Object->derivedFrom->GetStableKey() : asSStableKey{});
+		if (Object && Object->derivedFrom && (Object->derivedFrom->flags & asOBJ_VALUE))
+		{
+			TArray<uint8> BaseLayout;
+			if (!EncodeLayout(*Object->derivedFrom, BaseLayout, Visiting))
+			{
+				if (bValueObject)
+				{
+					Visiting.Remove(&Type);
+				}
+				return false;
+			}
+			Encoding.WriteBytes(MakeArrayView(BaseLayout));
+		}
+		else
+		{
+			Encoding.WriteUInt32(0);
+		}
+		const asUINT FieldCount = Object ? Object->localProperties.GetLength() : 0;
+		Encoding.WriteUInt32(FieldCount);
+		for (asUINT Index = 0; Index < FieldCount; ++Index)
+		{
+			const asCObjectProperty* Property = Object->localProperties[Index];
+			asUINT Size = 0;
+			asUINT Alignment = 0;
+			bool bPointer = false;
+			if (!MemberLayout(Property->type, Size, Alignment, bPointer))
+			{
+				if (bValueObject)
+				{
+					Visiting.Remove(&Type);
+				}
+				return false;
+			}
+			Encoding.WriteString(AsString(Property->name));
+			Encoding.WriteUInt32(static_cast<uint32>(Property->byteOffset));
+			Encoding.WriteUInt32(Size);
+			Encoding.WriteUInt32(Alignment);
+			Encoding.WriteUInt8(static_cast<uint8>(Property->nativeAddressMode));
+			Encoding.WriteUInt8((bPointer || Property->isCompositeIndirect) ? 1 : 0);
+			Encoding.WriteUInt32(static_cast<uint32>(Property->compositeOffset));
+			if (!bPointer && Property->type.GetTypeInfo() && CastToObjectType(Property->type.GetTypeInfo())
+				&& (Property->type.GetTypeInfo()->flags & asOBJ_VALUE))
+			{
+				TArray<uint8> Child;
+				if (!EncodeLayout(*Property->type.GetTypeInfo(), Child, Visiting))
+				{
+					if (bValueObject)
+					{
+						Visiting.Remove(&Type);
+					}
+					return false;
+				}
+				Encoding.WriteBytes(MakeArrayView(Child));
+			}
+		}
+		if (bValueObject)
+		{
+			Visiting.Remove(&Type);
+		}
+		Out = TArray<uint8>(Encoding.GetBytes().GetData(), Encoding.GetBytes().Num());
+		return true;
+	}
+};
+
+void asCMetadataImage::SetFingerprintDigestProvider(const asIFingerprintDigestProvider* Provider)
+{
+	std::lock_guard<std::mutex> Lock(MutationMutex);
+	FingerprintDigestProvider = Provider;
+}
+
+asEFingerprintStatus asCMetadataImage::EnsureFingerprintsLocked(const asCTypeInfo& Type, const asSCachedFingerprint*& Out) const
+{
+	Out = nullptr;
+	if (!Owns(&Type) && !CanReference(&Type))
+	{
+		return asEFingerprintStatus::InvalidDefinition;
+	}
+	const asEMetadataImageState ImageState = GetState();
+	if (ImageState == asEMetadataImageState::Building)
+	{
+		return asEFingerprintStatus::NotReady;
+	}
+	if (ImageState == asEMetadataImageState::Attaching)
+	{
+		return asEFingerprintStatus::NotReady;
+	}
+	if (!bLayoutsFinalized)
+	{
+		return asEFingerprintStatus::NotReady;
+	}
+	if (Options.PointerByteSize != 4 && Options.PointerByteSize != 8)
+	{
+		return asEFingerprintStatus::UnsupportedTarget;
+	}
+	if (!IdentityContext.IsValid())
+	{
+		return asEFingerprintStatus::UnauthenticatedDefinition;
+	}
+	if (!ValidateFrozenIdentity())
+	{
+		return asEFingerprintStatus::UnauthenticatedDefinition;
+	}
+	if (!ValidateFrozenLayout() || !ValidateAccessSnapshot())
+	{
+		return asEFingerprintStatus::InvalidDefinition;
+	}
+	asSMetadataFingerprintEncoder Encoder(*this);
+	TArray<uint8> SchemaWitness;
+	TArray<uint8> LayoutWitness;
+	TSet<const asCTypeInfo*> Visiting;
+	if (!Encoder.EncodeSchema(Type, SchemaWitness))
+	{
+		return asEFingerprintStatus::InvalidDefinition;
+	}
+	if (!Encoder.EncodeLayout(Type, LayoutWitness, Visiting))
+	{
+		return asEFingerprintStatus::InvalidDefinition;
+	}
+	if (SchemaWitness.Num() == 0 || LayoutWitness.Num() == 0)
+	{
+		return asEFingerprintStatus::InvalidDefinition;
+	}
+	asCMetadataImage::asSCachedFingerprint Computed;
+	Computed.SchemaWitness = MoveTemp(SchemaWitness);
+	Computed.LayoutWitness = MoveTemp(LayoutWitness);
+	Computed.Schema.Digest = HashWitness(MakeArrayView(Computed.SchemaWitness), FingerprintDigestProvider);
+	Computed.Layout.Digest = HashWitness(MakeArrayView(Computed.LayoutWitness), FingerprintDigestProvider);
+	if (Computed.Schema.Digest.IsZero() || Computed.Layout.Digest.IsZero())
+	{
+		return asEFingerprintStatus::InvalidDefinition;
+	}
+	if (const asSCachedFingerprint* Existing = Fingerprints.Find(&Type))
+	{
+		if (Existing->SchemaWitness != Computed.SchemaWitness || Existing->LayoutWitness != Computed.LayoutWitness)
+		{
+			return asEFingerprintStatus::InvalidDefinition;
+		}
+		if (Existing->Schema.Digest != Computed.Schema.Digest || Existing->Layout.Digest != Computed.Layout.Digest)
+		{
+			return asEFingerprintStatus::InvalidDefinition;
+		}
+		Out = Existing;
+		return asEFingerprintStatus::Succeeded;
+	}
+	const asSCachedFingerprint& Stored = Fingerprints.Add(&Type, MoveTemp(Computed));
+	Out = &Stored;
+	return asEFingerprintStatus::Succeeded;
+}
+
+asEFingerprintStatus asCMetadataImage::TryGetSchemaHash(const asCTypeInfo& Type, asSSchemaHash& OutHash,
+	TConstArrayView<uint8>* OutWitness) const
+{
+	OutHash = {};
+	if (OutWitness)
+	{
+		*OutWitness = {};
+	}
+	std::lock_guard<std::mutex> Lock(MutationMutex);
+	const asSCachedFingerprint* Cached = nullptr;
+	const asEFingerprintStatus Status = EnsureFingerprintsLocked(Type, Cached);
+	if (Status != asEFingerprintStatus::Succeeded || !Cached)
+	{
+		return Status;
+	}
+	OutHash = Cached->Schema;
+	if (OutWitness)
+	{
+		*OutWitness = MakeArrayView(Cached->SchemaWitness);
+	}
+	return asEFingerprintStatus::Succeeded;
+}
+
+asEFingerprintStatus asCMetadataImage::TryGetLayoutHash(const asCTypeInfo& Type, asSLayoutHash& OutHash,
+	TConstArrayView<uint8>* OutWitness) const
+{
+	OutHash = {};
+	if (OutWitness)
+	{
+		*OutWitness = {};
+	}
+	std::lock_guard<std::mutex> Lock(MutationMutex);
+	const asSCachedFingerprint* Cached = nullptr;
+	const asEFingerprintStatus Status = EnsureFingerprintsLocked(Type, Cached);
+	if (Status != asEFingerprintStatus::Succeeded || !Cached)
+	{
+		return Status;
+	}
+	OutHash = Cached->Layout;
+	if (OutWitness)
+	{
+		*OutWitness = MakeArrayView(Cached->LayoutWitness);
+	}
+	return asEFingerprintStatus::Succeeded;
 }
 
 END_AS_NAMESPACE
