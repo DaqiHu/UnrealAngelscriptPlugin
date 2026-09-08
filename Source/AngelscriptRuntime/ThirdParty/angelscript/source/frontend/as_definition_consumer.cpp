@@ -143,12 +143,6 @@ namespace
 			}
 		};
 		Collect(*TranslationUnit);
-		// LambdaExpr owns its implicit FunctionDecl. It is not a second owning
-		// member of the enclosing declaration context, but still produces one
-		// actual image-owned function with an explicit lexical origin.
-		for (const asCASTNode* Node : AST.GetNodes())
-			if (const auto* Function = dyn_cast<asCFunctionDecl>(Node);
-				Function && Function->GetFunctionKind() == asEFunctionKind::Lambda) Declarations.Add(Function);
 		TMap<const asCDecl*, asCTypeInfo*> Types;
 		TMap<const asCDecl*, asCScriptFunction*> Functions;
 		TSet<asCScriptFunction*> DefinedSignatures;
@@ -186,8 +180,8 @@ namespace
 				else Status = Image->CreateCallableSignature(Callable->GetResolvedSignature()->GetStableIdentity(), Signature);
 				if (Status == asEMetadataResult::Succeeded)
 				{
-					asCFuncdefType* Type = nullptr;
-					Status = Image->CreateFuncdefType(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), *Signature, Type);
+					asCCallableType* Type = nullptr;
+					Status = Image->CreateCallableType(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), *Signature, Type);
 					if (Type) Types.Add(Decl, Type);
 					Functions.Add(Decl, Signature);
 				}
@@ -242,7 +236,7 @@ namespace
 			{
 				const auto* Template = dyn_cast<asCNominalType>(Generic->GetTemplateType());
 				asCTypeInfo* Definition = Template ? FindType(Image, Template->GetDeclarationIdentity()) : nullptr;
-				if (!Definition || !(Definition->flags & asOBJ_TEMPLATE) || (Definition->flags & asOBJ_FUNCDEF)) return false;
+				if (!Definition || !(Definition->flags & asOBJ_TEMPLATE) || (Definition->flags & asOBJ_CALLABLE_TYPE)) return false;
 				TArray<asCDataType> Arguments;
 				for (const auto& Argument : Generic->GetArguments())
 				{
@@ -266,7 +260,7 @@ namespace
 		{
 			const auto* Access = dyn_cast<asCAccessSpecifierDecl>(Decl);
 			asCTypeInfo* OwnerType = Access ? Types.FindRef(RecordOwner(*Decl)) : nullptr;
-			asCObjectType* Owner = OwnerType && (OwnerType->flags & (asOBJ_VALUE | asOBJ_REF)) && !(OwnerType->flags & asOBJ_FUNCDEF)
+			asCObjectType* Owner = OwnerType && (OwnerType->flags & (asOBJ_VALUE | asOBJ_REF)) && !(OwnerType->flags & asOBJ_CALLABLE_TYPE)
 				? static_cast<asCObjectType*>(OwnerType) : nullptr;
 			if (!Access) continue;
 			::asSAccessSpecifier* Actual = nullptr;
@@ -282,7 +276,7 @@ namespace
 		for (const asCDecl* Decl : Declarations)
 		{
 			asCTypeInfo* OwnerType = Types.FindRef(RecordOwner(*Decl));
-			asCObjectType* Owner = OwnerType && (OwnerType->flags & (asOBJ_VALUE | asOBJ_REF)) && !(OwnerType->flags & asOBJ_FUNCDEF)
+			asCObjectType* Owner = OwnerType && (OwnerType->flags & (asOBJ_VALUE | asOBJ_REF)) && !(OwnerType->flags & asOBJ_CALLABLE_TYPE)
 				? static_cast<asCObjectType*>(OwnerType) : nullptr;
 			asEMetadataResult Status = asEMetadataResult::Succeeded;
 			if (asCTypeInfo* Type = Types.FindRef(Decl))
@@ -290,8 +284,8 @@ namespace
 				const asETypeDeclKind Kind = isa<asCTypeAliasDecl>(Decl) ? asETypeDeclKind::Typedef :
 					isa<asCRecordDecl>(Decl) ? cast<asCRecordDecl>(Decl)->GetDeclaredTypeKind() : cast<asCCallableTypeDecl>(Decl)->GetDeclaredTypeKind();
 				Status = Image->SetTypeDeclarationFacts(*Type, Kind, 0, OwnerType);
-				if (Status == asEMetadataResult::Succeeded && Owner && (Type->flags & asOBJ_FUNCDEF))
-					Status = Image->AddChildFuncdef(*Owner, *static_cast<asCFuncdefType*>(Type));
+				if (Status == asEMetadataResult::Succeeded && Owner && (Type->flags & asOBJ_CALLABLE_TYPE))
+					Status = Image->AddChildCallableType(*Owner, *static_cast<asCCallableType*>(Type));
 			}
 			if (Status == asEMetadataResult::Succeeded)
 				if (const auto* Record = dyn_cast<asCRecordDecl>(Decl))
@@ -303,7 +297,7 @@ namespace
 						asCDataType BaseType;
 						if (!asCQualType::TryCreate(const_cast<asCType*>(Base), asETypeQualifiers::None, BaseQual) ||
 							!ResolveType(BaseQual, BaseType) || !BaseType.GetTypeInfo() ||
-							!(BaseType.GetTypeInfo()->flags & (asOBJ_VALUE | asOBJ_REF)) || (BaseType.GetTypeInfo()->flags & asOBJ_FUNCDEF) ||
+							!(BaseType.GetTypeInfo()->flags & (asOBJ_VALUE | asOBJ_REF)) || (BaseType.GetTypeInfo()->flags & asOBJ_CALLABLE_TYPE) ||
 							!(Type->flags & (asOBJ_VALUE | asOBJ_REF)))
 						{ Status = asEMetadataResult::InvalidSignature; break; }
 						auto* BaseObject = static_cast<asCObjectType*>(BaseType.GetTypeInfo());
@@ -381,8 +375,7 @@ namespace
 				}
 				if (Status == asEMetadataResult::Succeeded && !DefinedSignatures.Contains(Function))
 				{
-					const bool IsLambda = FunctionDecl && FunctionDecl->GetFunctionKind() == asEFunctionKind::Lambda;
-					Status = Image->DefineFunction(*Function, ReturnType, Converted, FunctionDecl && !IsLambda ? Owner : nullptr);
+					Status = Image->DefineFunction(*Function, ReturnType, Converted, FunctionDecl ? Owner : nullptr);
 					if (Status == asEMetadataResult::Succeeded && FunctionDecl)
 					{
 						Function->SetReadOnly(FunctionDecl->IsConstMethod());
@@ -409,16 +402,10 @@ namespace
 						}
 						const auto Kind = FunctionDecl->GetFunctionKind() == asEFunctionKind::Constructor ? asEFunctionIdentityKind::Constructor :
 							FunctionDecl->GetFunctionKind() == asEFunctionKind::Destructor ? asEFunctionIdentityKind::Destructor :
-							FunctionDecl->GetFunctionKind() == asEFunctionKind::Lambda ? asEFunctionIdentityKind::Lambda :
 							FunctionDecl->GetFunctionKind() == asEFunctionKind::ClassDefault ? asEFunctionIdentityKind::ClassDefault :
 							FunctionDecl->GetFunctionKind() == asEFunctionKind::Conversion ? asEFunctionIdentityKind::Conversion :
 							Owner ? asEFunctionIdentityKind::Method : asEFunctionIdentityKind::Global;
-						if (Status == asEMetadataResult::Succeeded && IsLambda)
-						{
-							auto* Enclosing = Functions.FindRef(FunctionDecl->GetEnclosingFunction());
-							Status = Enclosing ? Image->SetLambdaOrigin(*Function, *Enclosing, FunctionDecl->GetLambdaOrdinal()) : asEMetadataResult::InvalidSignature;
-						}
-						else if (Status == asEMetadataResult::Succeeded) Status = Image->SetFunctionDeclarationFacts(*Function, Kind, Owner);
+						if (Status == asEMetadataResult::Succeeded) Status = Image->SetFunctionDeclarationFacts(*Function, Kind, Owner);
 						if (Status == asEMetadataResult::Succeeded && Owner && (Kind == asEFunctionIdentityKind::Constructor || Kind == asEFunctionIdentityKind::Destructor))
 							Status = Image->AddBehaviour(*Owner, Kind == asEFunctionIdentityKind::Constructor ? asBEHAVE_CONSTRUCT : asBEHAVE_DESTRUCT, *Function);
 					}

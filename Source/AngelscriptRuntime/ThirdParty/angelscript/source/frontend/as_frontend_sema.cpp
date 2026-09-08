@@ -32,6 +32,38 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 			bool bTargetValid = Attr && Attr->AllowsTarget(Decl->GetKind());
 			if (const asCAnnotationAttr* Annotation = dyn_cast<asCAnnotationAttr>(Attr))
 			{
+				const auto ValidateArguments = [&](auto&& Self, TConstArrayView<asSAnnotationArgument> Arguments) -> bool
+				{
+					bool bValid = true;
+					for (const asSAnnotationArgument& Argument : Arguments)
+					{
+						if (Argument.Name.Equals(TEXT("BlueprintGetter"), ESearchCase::IgnoreCase)
+							|| Argument.Name.Equals(TEXT("BlueprintSetter"), ESearchCase::IgnoreCase))
+						{
+							bValid = false;
+							if (DiagnosticFragment)
+							{
+								asSDiagnosticRecord Record;
+								Record.DiagnosticID = 3002;
+								Record.Severity = asEDiagnosticSeverity::Error;
+								Record.PrimaryRange = Argument.Range;
+								Record.PrimaryRange.End = Record.PrimaryRange.Begin;
+								Record.PrimaryRange.End.ByteOffset += static_cast<asUINT>(Argument.Name.Len());
+								Record.Arguments.Add(asSDiagnosticArgument::FromText(TEXT("blueprint-accessor-metadata-removed")));
+								Record.Arguments.Add(asSDiagnosticArgument::FromText(Argument.Name));
+								DiagnosticFragment->Report(MoveTemp(Record));
+							}
+						}
+						if (!Self(Self, Argument.Arguments)) bValid = false;
+					}
+					return bValid;
+				};
+				if (!ValidateArguments(ValidateArguments, Annotation->GetArguments()))
+				{
+					Decl->MarkInvalid();
+					CurrentFragment->MarkError();
+					continue;
+				}
 				if (const asCRecordDecl* Record = dyn_cast<asCRecordDecl>(Decl))
 				{
 					if (Annotation->GetAnnotationKind() == asEAnnotationKind::UClass) bTargetValid &= Record->GetDeclaredTypeKind() == asETypeDeclKind::Class;
@@ -133,8 +165,26 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 	asCRecoveryDecl* asCSema::ActOnRecovery(asCSourceRange Range, FString Message, asUINT DiagnosticID)
 	{
 		auto* Decl = Context.Create<asCRecoveryDecl>(Range); if (CurrentFragment) CurrentFragment->MarkError(); Attach(Decl, {});
-		if (DiagnosticFragment) { asSDiagnosticRecord Record; Record.DiagnosticID = DiagnosticID; Record.Severity = asEDiagnosticSeverity::Error; Record.PrimaryRange = Range; Record.Arguments.Add(asSDiagnosticArgument::FromText(Message)); DiagnosticFragment->Report(MoveTemp(Record)); }
+		if (DiagnosticFragment && DiagnosticID != 0) { asSDiagnosticRecord Record; Record.DiagnosticID = DiagnosticID; Record.Severity = asEDiagnosticSeverity::Error; Record.PrimaryRange = Range; Record.Arguments.Add(asSDiagnosticArgument::FromText(Message)); DiagnosticFragment->Report(MoveTemp(Record)); }
 		return Decl;
+	}
+
+	void asCSema::DiagnoseRemovedFeature(asERemovedLanguageFeature Feature, asCSourceRange Range)
+	{
+		const TCHAR* Name = asRemovedLanguageFeatureName(Feature);
+		if (CurrentFragment) CurrentFragment->MarkError();
+		if (CurrentBody) CurrentBody->MarkError(Name);
+		if (CurrentInitializer) CurrentInitializer->MarkInvalid();
+		bExpressionErrors = true;
+		if (DiagnosticFragment)
+		{
+			asSDiagnosticRecord Record;
+			Record.DiagnosticID = asRemovedLanguageFeatureDiagnostic;
+			Record.Severity = asEDiagnosticSeverity::Error;
+			Record.PrimaryRange = Range;
+			Record.Arguments.Add(asSDiagnosticArgument::FromText(Name));
+			DiagnosticFragment->Report(MoveTemp(Record));
+		}
 	}
 
 	asCAnnotationAttr* asCSema::CreateAnnotation(asEAnnotationKind Kind, TArray<asSAnnotationArgument> Arguments, asCSourceRange Range)
@@ -279,7 +329,7 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 	{
 		for (int32 Index = ContextStack.Num() - 1; Index >= 0; --Index)
 			if (asCRecordDecl* Record = dyn_cast<asCRecordDecl>(ContextStack[Index]->GetOwnerDecl())) return Record;
-		for (asCFunctionDecl* Function = GetCurrentFunction(); Function; Function = Function->GetEnclosingFunction())
+		if (asCFunctionDecl* Function = GetCurrentFunction())
 		{
 			if (Function->GetDeclContext())
 				if (asCRecordDecl* Record = dyn_cast<asCRecordDecl>(Function->GetDeclContext()->GetOwnerDecl())) return Record;

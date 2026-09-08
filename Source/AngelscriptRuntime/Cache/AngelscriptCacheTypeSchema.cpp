@@ -915,7 +915,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 			break;
 		case EAngelscriptCachedTypeKind::Typedef:
 			break;
-		case EAngelscriptCachedTypeKind::Funcdef:
+		case EAngelscriptCachedTypeKind::CallableType:
 			Required = ReferenceType;
 			Allowed = Required | Shared;
 			break;
@@ -2488,10 +2488,10 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 			&& ReflectionKind == EAngelscriptCachedReflectionKind::UDelegate;
 		const bool bTypedef = Value.TypeKind == EAngelscriptCachedTypeKind::Typedef
 			&& ReflectionKind == EAngelscriptCachedReflectionKind::None;
-		const bool bFuncdef = Value.TypeKind == EAngelscriptCachedTypeKind::Funcdef
+		const bool bCallableType = Value.TypeKind == EAngelscriptCachedTypeKind::CallableType
 			&& ReflectionKind == EAngelscriptCachedReflectionKind::None;
 		if (!bClassNone && !bUClass && !bStructNone && !bUStruct
-			&& !bInterfaceNone && !bEnum && !bDelegate && !bTypedef && !bFuncdef)
+			&& !bInterfaceNone && !bEnum && !bDelegate && !bTypedef && !bCallableType)
 		{
 			return FailureAt(EAngelscriptCacheValidationError::InvalidPresence,
 				OutFailureCoordinate,
@@ -3039,7 +3039,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 		FAngelscriptTypeSchemaFieldCoordinate* OutFailureCoordinate)
 	{
 		if (Value.TypeKind != EAngelscriptCachedTypeKind::Typedef
-			&& Value.TypeKind != EAngelscriptCachedTypeKind::Funcdef)
+			&& Value.TypeKind != EAngelscriptCachedTypeKind::CallableType)
 		{
 			return {};
 		}
@@ -3167,7 +3167,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 
 		const bool bEnum = Value.TypeKind == EAngelscriptCachedTypeKind::Enum;
 		const bool bCallable = Value.TypeKind == EAngelscriptCachedTypeKind::Delegate
-			|| Value.TypeKind == EAngelscriptCachedTypeKind::Funcdef;
+			|| Value.TypeKind == EAngelscriptCachedTypeKind::CallableType;
 		const bool bTypedef = Value.TypeKind == EAngelscriptCachedTypeKind::Typedef;
 		if (Value.KindPayload.Enum.IsSet() != bEnum
 			|| Value.KindPayload.Callable.IsSet() != bCallable
@@ -3245,7 +3245,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 			{
 				return Failure(EAngelscriptCacheValidationError::MissingExpectedAbi);
 			}
-			if (Value.TypeKind == EAngelscriptCachedTypeKind::Funcdef
+			if (Value.TypeKind == EAngelscriptCachedTypeKind::CallableType
 				&& Callable.bMulticast)
 			{
 				return Failure(
@@ -4584,7 +4584,7 @@ namespace AngelscriptCacheTypeSchema_Private
 				break;
 			}
 			case EAngelscriptCachedTypeKind::Delegate:
-			case EAngelscriptCachedTypeKind::Funcdef:
+			case EAngelscriptCachedTypeKind::CallableType:
 			{
 				FAngelscriptCachedCallableTypePayload Callable;
 				uint8 Multicast = 0;
@@ -4968,7 +4968,7 @@ namespace AngelscriptCacheTypeSchema_Private
 				return ScanSkip(Offset, sizeof(FBlake3Hash::ByteArray));
 			}
 			if (Value.TypeKind == EAngelscriptCachedTypeKind::Delegate
-				|| Value.TypeKind == EAngelscriptCachedTypeKind::Funcdef)
+				|| Value.TypeKind == EAngelscriptCachedTypeKind::CallableType)
 			{
 				Capture(Offsets.FlatSelectedArmOffsets,
 					EAngelscriptTypeSchemaCapturedField::CallableSignature, Offset);
@@ -5428,7 +5428,7 @@ namespace AngelscriptCacheTypeSchemaProducer_Private
 			break;
 		}
 		case EAngelscriptCachedTypeKind::Delegate:
-		case EAngelscriptCachedTypeKind::Funcdef:
+		case EAngelscriptCachedTypeKind::CallableType:
 		{
 			const FAngelscriptCachedCallableTypePayload* CallablePayload =
 				Value.KindPayload.Callable.IsSet() ? &Value.KindPayload.Callable.GetValue() : nullptr;

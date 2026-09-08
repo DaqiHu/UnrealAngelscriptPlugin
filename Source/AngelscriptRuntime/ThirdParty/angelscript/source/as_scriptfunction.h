@@ -61,7 +61,7 @@ class asCModule;
 class asCRuntimeTypeGeneration;
 class asCConfigGroup;
 class asCGlobalProperty;
-class asCFuncdefType;
+class asCCallableType;
 struct asSNameSpace;
 
 struct asSScriptVariable
@@ -164,8 +164,6 @@ enum asEFuncTrait
 	asTRAIT_PROTECTED   = 0x10,
 	asTRAIT_FINAL       = 0x20,
 	asTRAIT_OVERRIDE    = 0x40,
-	asTRAIT_SHARED      = 0x80,
-	asTRAIT_EXTERNAL    = 0x100,
 	asTRAIT_PROPERTY    = 0x200,
 	asTRAIT_IMPLICITCONSTRUCTOR = 0x400,
 	asTRAIT_MIXIN = 0x800,
@@ -235,8 +233,6 @@ public:
 	// Miscellaneous
 	int                  GetId() const;
 	asEFuncType          GetFuncType() const;
-	const char          *GetModuleName() const;
-	asIScriptModule     *GetModule() const;
 	const char          *GetScriptSectionName() const;
 	const char          *GetConfigGroup() const;
 	asDWORD              GetAccessMask() const;
@@ -257,7 +253,6 @@ public:
 	bool                 IsProtected() const;
 	bool                 IsFinal() const;
 	bool                 IsOverride() const;
-	bool                 IsShared() const;
 	bool                 IsProperty() const;
 	bool                 IsMixin() const;
 	asUINT               GetParamCount() const;
@@ -292,7 +287,6 @@ public:
 	//-----------------------------------
 	// Internal methods
 
-	void SetShared(bool set) {traits.SetTrait(asTRAIT_SHARED, set);}
 	void SetReadOnly(bool set) { traits.SetTrait(asTRAIT_CONST, set); }
 	void SetFinal(bool set) { traits.SetTrait(asTRAIT_FINAL, set); }
 	void SetOverride(bool set) { traits.SetTrait(asTRAIT_OVERRIDE, set); }
@@ -307,8 +301,6 @@ public:
 	const asSStableKey& GetStableKey() const { return metadataStableKey; }
 	asEFunctionIdentityKind GetMetadataDeclarationKind() const { return static_cast<asEFunctionIdentityKind>(metadataDeclarationKind); }
 	bool IsMetadataStatic() const { return metadataStaticDeclaration; }
-	asCScriptFunction* GetMetadataEnclosingFunction() const { return metadataEnclosingFunction; }
-	asUINT GetMetadataLambdaOrdinal() const { return metadataLambdaOrdinal; }
 	bool IsMetadataLocal() const { return traits.GetTrait(asTRAIT_LOCAL); }
 	bool IsMetadataCallableSignature() const { return metadataCallableSignature; }
 	asCMetadataImage* GetMetadataImage() const { return metadataOwner; }
@@ -423,7 +415,7 @@ public:
 	asSNameSpace                *nameSpace;
 
 	// Used by asFUNC_DELEGATE
-	static asCFuncdefType              *funcdefType; // Doesn't increase refCount
+	static asCCallableType              *callableType; // Doesn't increase refCount
 	void              *objForDelegate;
 	asCScriptFunction *funcForDelegate;
 
@@ -605,10 +597,8 @@ private:
 	mutable std::shared_ptr<asCMetadataImage> metadataExternalLease;
 	bool metadataSignatureDefined = false;
 	bool metadataCallableSignature = false;
-	asCFuncdefType* metadataNominalFuncdefType = nullptr;
+	asCCallableType* metadataNominalCallableType = nullptr;
 	asBYTE metadataDeclarationKind = 0;
-	asCScriptFunction* metadataEnclosingFunction = nullptr;
-	asUINT metadataLambdaOrdinal = 0;
 	asUINT metadataGenericArity = 0;
 	asCTypeInfo* metadataDeclarationOwner = nullptr;
 	bool metadataStaticDeclaration = false;

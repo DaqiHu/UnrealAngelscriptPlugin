@@ -33,7 +33,7 @@ enum class asEASTNodeFamily : uint8
 	enum class asEAccessSpecifier : uint8 { Public, Protected, Private };
 	enum class asEAccessPermissionSubject : uint8 { Named, Wildcard };
 	enum class asEAccessPermissionModifier : uint8 { ReadOnly, EditDefaults, Inherited };
-	enum class asEFunctionKind : uint8 { Ordinary, Constructor, Destructor, Getter, Setter, Lambda, ClassDefault, Conversion };
+	enum class asEFunctionKind : uint8 { Ordinary, Constructor, Destructor, Getter, Setter, ReservedAnonymousFunction, ClassDefault, Conversion };
 	enum class asEFunctionModifiers : uint16
 	{
 		None = 0, Final = 1, Override = 2, Property = 4, Explicit = 8, Local = 16, Mixin = 32,
@@ -75,7 +75,7 @@ enum class asEASTNodeFamily : uint8
 		NullPtrLiteral,
 		DefaultArgumentExpr,
 		ThisExpr,
-		LambdaExpr,
+		ReservedAnonymousFunction, // Retired wire ordinal; never construct.
 		InitListExpr,
 		ValueInitExpr,
 		DeclGroupStmt,

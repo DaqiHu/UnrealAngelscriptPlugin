@@ -186,11 +186,6 @@ int asCTypeInfo::ReleaseInternal()
 }
 
 // interface
-asIScriptModule *asCTypeInfo::GetModule() const
-{
-	return module;
-}
-
 void *asCTypeInfo::SetUserData(void *data, asPWORD type)
 {
 	if( type == 0 )
@@ -358,7 +353,7 @@ asCObjectType *CastToObjectType(asCTypeInfo *ti)
 	if (ti == 0) return 0;
 
 	// TODO: type: Should List pattern have its own type class?
-	if ((ti->flags & (asOBJ_VALUE | asOBJ_REF | asOBJ_LIST_PATTERN)) && !(ti->flags & asOBJ_FUNCDEF))
+	if ((ti->flags & (asOBJ_VALUE | asOBJ_REF | asOBJ_LIST_PATTERN)) && !(ti->flags & asOBJ_CALLABLE_TYPE))
 		return static_cast<asCObjectType*>(ti);
 
 	return 0;
@@ -389,13 +384,13 @@ asCTypedefType *CastToTypedefType(asCTypeInfo *ti)
 }
 
 // internal
-asCFuncdefType *CastToFuncdefType(asCTypeInfo *ti)
+asCCallableType *CastToCallableType(asCTypeInfo *ti)
 {
 	// Allow call on null pointer
 	if (ti == 0) return 0;
 
-	if (ti->flags & (asOBJ_FUNCDEF))
-		return static_cast<asCFuncdefType*>(ti);
+	if (ti->flags & (asOBJ_CALLABLE_TYPE))
+		return static_cast<asCCallableType*>(ti);
 
 	return 0;
 }
@@ -436,15 +431,6 @@ void asCTypeInfo::CleanUserData()
 }
 
 // internal
-bool asCTypeInfo::IsShared() const
-{
-	// Types that can be declared by scripts need to have the explicit flag asOBJ_SHARED
-	if (flags & (asOBJ_SCRIPT_OBJECT | asOBJ_ENUM)) return flags & asOBJ_SHARED ? true : false;
-
-	// Otherwise we assume the type to be shared
-	return true;
-}
-
 ////////////////////////////////////////////////////////////////////////////////////////
 
 asCEnumType::~asCEnumType()
@@ -521,52 +507,52 @@ int asCTypedefType::GetTypedefTypeId() const
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
-asCFuncdefType::asCFuncdefType(asCScriptEngine *en, asCScriptFunction *func) : asCTypeInfo(en)
+asCCallableType::asCCallableType(asCScriptEngine *en, asCScriptFunction *func) : asCTypeInfo(en)
 {
-	asASSERT(func->funcType == asFUNC_FUNCDEF);
-	asASSERT(func->funcdefType == 0);
+	asASSERT(func->funcType == asFUNC_CALLABLE_SIGNATURE);
+	asASSERT(func->callableType == 0);
 
 	// A function pointer is special kind of reference type
-	flags       = asOBJ_REF | asOBJ_GC | asOBJ_FUNCDEF | (func->IsShared() ? asOBJ_SHARED : 0);
+	flags       = asOBJ_REF | asOBJ_GC | asOBJ_CALLABLE_TYPE;
 	name        = func->name;
 	nameSpace   = func->nameSpace;
 	module      = func->module;
-	funcdef     = func; // reference already counted by the asCScriptFunction constructor
+	callableSignature     = func; // reference already counted by the asCScriptFunction constructor
 	parentClass = 0;
 
-	func->funcdefType = this;
+	func->callableType = this;
 }
 
-asCFuncdefType::asCFuncdefType(asCMetadataImage& owner,
+asCCallableType::asCCallableType(asCMetadataImage& owner,
 	const asSStableKey& key, asCScriptFunction* func)
-	: asCTypeInfo(owner, key), funcdef(func), parentClass(nullptr)
+	: asCTypeInfo(owner, key), callableSignature(func), parentClass(nullptr)
 {
-	flags = asOBJ_REF | asOBJ_FUNCDEF;
+	flags = asOBJ_REF | asOBJ_CALLABLE_TYPE;
 }
 
-asCFuncdefType::~asCFuncdefType()
+asCCallableType::~asCCallableType()
 {
 	DestroyInternal();
 }
 
-void asCFuncdefType::DestroyInternal()
+void asCCallableType::DestroyInternal()
 {
 	if (metadataOwner)
 	{
-		if (metadataOwner->IsDestroying()) { funcdef = nullptr; parentClass = nullptr; }
+		if (metadataOwner->IsDestroying()) { callableSignature = nullptr; parentClass = nullptr; }
 		return;
 	}
 	if (engine == 0) return;
 
 	// Release the funcdef
-	if( funcdef )
-		funcdef->ReleaseInternal();
-	funcdef = 0;
+	if( callableSignature )
+		callableSignature->ReleaseInternal();
+	callableSignature = 0;
 
 	// Detach from parent class
 	if (parentClass)
 	{
-		parentClass->childFuncDefs.RemoveValue(this);
+		parentClass->childCallableTypes.RemoveValue(this);
 		parentClass = 0;
 	}
 
@@ -581,13 +567,13 @@ void asCFuncdefType::DestroyInternal()
 }
 
 // interface
-asIScriptFunction *asCFuncdefType::GetFuncdefSignature() const
+asIScriptFunction *asCCallableType::GetCallableSignature() const
 {
-	return funcdef;
+	return callableSignature;
 }
 
 // interface
-asITypeInfo *asCFuncdefType::GetParentType() const
+asITypeInfo *asCCallableType::GetParentType() const
 {
 	return parentClass;
 }

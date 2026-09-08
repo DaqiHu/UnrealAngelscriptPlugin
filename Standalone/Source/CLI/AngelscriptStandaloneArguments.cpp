@@ -1,23 +1,11 @@
 #include "CLI/AngelscriptStandaloneArguments.h"
 
-#include <charconv>
 #include <string_view>
 
 namespace AngelscriptStandalone
 {
 	namespace
 	{
-		bool ParsePositiveInteger(std::string_view Text, int& OutValue)
-		{
-			int Value = 0;
-			const auto Result = std::from_chars(Text.data(), Text.data() + Text.size(), Value);
-			if (Result.ec != std::errc() || Result.ptr != Text.data() + Text.size() || Value <= 0)
-			{
-				return false;
-			}
-			OutValue = Value;
-			return true;
-		}
 
 		FArgumentParseResult Fail(std::string Error)
 		{
@@ -56,7 +44,7 @@ namespace AngelscriptStandalone
 		}
 		else if (Command == "run")
 		{
-			Result.Options.Command = ECommand::Run;
+			return Fail("AS-NATIVE-UNSUPPORTED-LIBRARY: native execution is unavailable after removal of its runtime library");
 		}
 		else
 		{
@@ -67,14 +55,6 @@ namespace AngelscriptStandalone
 		for (int Index = 2; Index < ArgumentCount; ++Index)
 		{
 			const std::string_view Option = Arguments[Index];
-			if (Option == "--" && Result.Options.Command == ECommand::Run)
-			{
-				for (++Index; Index < ArgumentCount; ++Index)
-				{
-					Result.Options.ScriptArguments.emplace_back(Arguments[Index]);
-				}
-				break;
-			}
 
 			auto RequireValue = [&](std::string_view Name) -> const char*
 			{
@@ -175,24 +155,6 @@ namespace AngelscriptStandalone
 			{
 				Result.Options.bAllowUERequired = true;
 			}
-			else if (Option == "--timeout-ms")
-			{
-				const char* Value = RequireValue(Option);
-				if (Value == nullptr
-					|| !ParsePositiveInteger(Value, Result.Options.TimeoutMilliseconds))
-				{
-					return Fail("--timeout-ms requires a positive integer");
-				}
-			}
-			else if (Option == "--memory-limit-mb")
-			{
-				const char* Value = RequireValue(Option);
-				if (Value == nullptr
-					|| !ParsePositiveInteger(Value, Result.Options.MemoryLimitMegabytes))
-				{
-					return Fail("--memory-limit-mb requires a positive integer");
-				}
-			}
 			else
 			{
 				return Fail("unknown option: " + std::string(Option));
@@ -207,20 +169,7 @@ namespace AngelscriptStandalone
 		{
 			return Fail("compile requires --dialect native or ue");
 		}
-		if (Result.Options.Command == ECommand::Run)
-		{
-			if (SawDialect && Result.Options.Dialect != EDialect::Native)
-			{
-				return Fail("run supports only the native profile");
-			}
-			if (!Result.Options.Bundle.empty()
-				|| Result.Options.bStrictResources
-				|| Result.Options.bAllowUERequired)
-			{
-				return Fail("run does not accept UE-validation options");
-			}
-			Result.Options.Dialect = EDialect::Native;
-		}
+
 		if (Result.Options.Dialect == EDialect::Native
 			&& (!Result.Options.Bundle.empty()
 				|| Result.Options.bStrictResources
@@ -240,9 +189,7 @@ namespace AngelscriptStandalone
 			"as-standalone compile --dialect native|ue --script-root <directory> "
 			"--entry <file> [--bundle <directory>] --output <directory> "
 			"--diagnostics text|json [--emit-bytecode] [--strict-resources] "
-			"[--allow-ue-required]\n"
-			"as-standalone run --script-root <directory> --entry <file> "
-			"[--timeout-ms 5000] [--memory-limit-mb 256] "
-			"[--diagnostics text|json] [-- <arguments...>]\n";
+			"[--allow-ue-required]\n";
+
 	}
 }

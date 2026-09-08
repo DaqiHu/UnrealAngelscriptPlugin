@@ -21,7 +21,7 @@ class asCTypeInfo;
 class asCObjectType;
 class asCEnumType;
 class asCTypedefType;
-class asCFuncdefType;
+class asCCallableType;
 class asCScriptFunction;
 class asCObjectProperty;
 class asCGlobalProperty;
@@ -114,8 +114,8 @@ public:
 		const char* Name, const char* Namespace, asCEnumType*& Out);
 	asEMetadataResult CreateTypedefType(const asSStableKey& Key,
 		const char* Name, const char* Namespace, asCTypedefType*& Out);
-	asEMetadataResult CreateFuncdefType(const asSStableKey& Key,
-		const char* Name, const char* Namespace, asCScriptFunction& Signature, asCFuncdefType*& Out);
+	asEMetadataResult CreateCallableType(const asSStableKey& Key,
+		const char* Name, const char* Namespace, asCScriptFunction& Signature, asCCallableType*& Out);
 	asEMetadataResult CreateFunction(const asSStableKey& Key,
 		const char* Name, const char* Namespace, asEFuncType Kind, asCScriptFunction*& Out);
 	// A structural Callable TypeUse is a signature, not a Function entity.
@@ -127,7 +127,6 @@ public:
 		asUINT GenericArity = 0, asCTypeInfo* Owner = nullptr);
 	asEMetadataResult SetFunctionDeclarationFacts(asCScriptFunction& Function, asEFunctionIdentityKind Kind,
 		asCTypeInfo* Owner = nullptr, asUINT GenericArity = 0, bool IsStatic = false);
-	asEMetadataResult SetLambdaOrigin(asCScriptFunction& Function, asCScriptFunction& EnclosingFunction, asUINT Ordinal);
 	asEMetadataResult SetFunctionLocal(asCScriptFunction& Function, bool IsLocal);
 	asEMetadataResult DefineAccessSpecifier(asCObjectType& Owner, const asSAccessSpecifier& Definition, asSAccessSpecifier*& Out);
 	asEMetadataResult SetPropertyAccess(asCObjectType& Owner, asCObjectProperty& Property, asSAccessSpecifier& Policy);
@@ -147,7 +146,7 @@ public:
 	bool IsDefaultArrayType(const asCTypeInfo* Type) const;
 	asEMetadataResult AddEnumValue(asCEnumType& Type, const char* Name, int Value);
 	asEMetadataResult SetAlias(asCTypedefType& Type, const asCDataType& Alias);
-	asEMetadataResult AddChildFuncdef(asCObjectType& Type, asCFuncdefType& Funcdef);
+	asEMetadataResult AddChildCallableType(asCObjectType& Type, asCCallableType& CallableType);
 	asEMetadataResult SetNativeLayout(asCObjectType& Type, asUINT Size, asUINT Alignment);
 	asEMetadataResult SetFixedTemplateLayout(asCObjectType& Type, asUINT Size, asUINT Alignment);
 	asEMetadataResult CreateTemplateInstance(asCObjectType& Template, const asSStableKey& TypeUseKey,

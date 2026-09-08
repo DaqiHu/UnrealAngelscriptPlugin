@@ -362,7 +362,7 @@ if (!IdentityContext.IsValid()) return false;
 		if (Function->metadataCallableSignature)
 		{
 			asSStableTypeUseDescriptor Signature;
-			if (Function->funcType != asFUNC_FUNCDEF || Function->objectType || Function->metadataDeclarationOwner ||
+			if (Function->funcType != asFUNC_CALLABLE_SIGNATURE || Function->objectType || Function->metadataDeclarationOwner ||
 				Registry.ResolveTypeUse(Function->GetStableKey(), Signature) != asETypeIdentityStatus::Succeeded ||
 				Signature.Kind != asETypeUseKind::Callable || Signature.Qualifiers != asETypeUseQualifiers::None ||
 				Signature.Parameters.Num() != int(Function->parameterTypes.GetLength()) ||
@@ -386,10 +386,6 @@ if (!IdentityContext.IsValid()) return false;
 		Descriptor.Kind = static_cast<asEFunctionIdentityKind>(Function->metadataDeclarationKind);
 		if (Function->traits.GetTrait(asTRAIT_CONSTRUCTOR) != (Descriptor.Kind == asEFunctionIdentityKind::Constructor) ||
 			Function->traits.GetTrait(asTRAIT_DESTRUCTOR) != (Descriptor.Kind == asEFunctionIdentityKind::Destructor)) return false;
-		Descriptor.EnclosingFunction = Function->metadataEnclosingFunction ? Function->metadataEnclosingFunction->GetStableKey() : asSStableKey{};
-		Descriptor.LambdaOrdinal = Function->metadataLambdaOrdinal;
-		if (Descriptor.Kind == asEFunctionIdentityKind::Lambda &&
-			(!Owns(Function->metadataEnclosingFunction) || Function->metadataEnclosingFunction == Function)) return false;
 		Descriptor.GenericArity = Function->metadataGenericArity;
 		Descriptor.DefinitionModifiers = Function->metadataStaticDeclaration ? asEFunctionDefinitionModifiers::Static : asEFunctionDefinitionModifiers::None;
 		if (Function->IsFinal()) Descriptor.DefinitionModifiers = Descriptor.DefinitionModifiers | asEFunctionDefinitionModifiers::Final;
@@ -460,7 +456,7 @@ asEMetadataResult asCMetadataImage::ValidateNew(const asSStableKey& Key,
 		asSFunctionIdentityDescriptor Identity;
 		if (IsType || !IdentityContext.IsValid() ||
 			IdentityContext->GetIdentityRegistry().ResolveFunction(Key, Identity) != asETypeIdentityStatus::Succeeded ||
-			(Identity.Kind != asEFunctionIdentityKind::Lambda && Identity.Kind != asEFunctionIdentityKind::ClassDefault))
+			(Identity.Kind != asEFunctionIdentityKind::ClassDefault))
 			return asEMetadataResult::InvalidArgument;
 	}
 	if (TypesByKey.Contains(Key) || FunctionsByKey.Contains(Key) || GlobalsByKey.Contains(Key)) return asEMetadataResult::DuplicateIdentity;
@@ -503,7 +499,7 @@ asEMetadataResult asCMetadataImage::CreateObjectType(const asSStableKey& Key,
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	auto Result = ValidateNew(Key, Name, Namespace, true);
 	if (Result != asEMetadataResult::Succeeded) return Result;
-	if ((Flags & (asOBJ_ENUM | asOBJ_TYPEDEF | asOBJ_FUNCDEF | asOBJ_LIST_PATTERN)) ||
+	if ((Flags & (asOBJ_ENUM | asOBJ_TYPEDEF | asOBJ_CALLABLE_TYPE | asOBJ_LIST_PATTERN)) ||
 		!(Flags & (asOBJ_VALUE | asOBJ_REF)) || ((Flags & asOBJ_VALUE) && (Flags & asOBJ_REF)))
 		return asEMetadataResult::InvalidArgument;
 	Out = asNEW(asCObjectType)(*this, Key);
@@ -547,19 +543,19 @@ asEMetadataResult asCMetadataImage::CreateTypedefType(const asSStableKey& Key,
 	return asEMetadataResult::Succeeded;
 }
 
-asEMetadataResult asCMetadataImage::CreateFuncdefType(const asSStableKey& Key,
-	const char* Name, const char* Namespace, asCScriptFunction& Signature, asCFuncdefType*& Out)
+asEMetadataResult asCMetadataImage::CreateCallableType(const asSStableKey& Key,
+	const char* Name, const char* Namespace, asCScriptFunction& Signature, asCCallableType*& Out)
 {
 	Out = nullptr;
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	auto Result = ValidateNew(Key, Name, Namespace, true);
 	if (Result != asEMetadataResult::Succeeded) return Result;
 	if (!Owns(&Signature)) return asEMetadataResult::ForeignOwner;
-	if (Signature.funcType != asFUNC_FUNCDEF || (!Signature.metadataCallableSignature && Signature.metadataNominalFuncdefType))
+	if (Signature.funcType != asFUNC_CALLABLE_SIGNATURE || (!Signature.metadataCallableSignature && Signature.metadataNominalCallableType))
 		return asEMetadataResult::InvalidSignature;
-	Out = asNEW(asCFuncdefType)(*this, Key, &Signature);
-	if (!Signature.metadataCallableSignature) Signature.metadataNominalFuncdefType = Out;
-	Out->metadataDeclarationKind = static_cast<asBYTE>(asETypeDeclKind::Funcdef);
+	Out = asNEW(asCCallableType)(*this, Key, &Signature);
+	if (!Signature.metadataCallableSignature) Signature.metadataNominalCallableType = Out;
+	Out->metadataDeclarationKind = static_cast<asBYTE>(asETypeDeclKind::CallableType);
 	Out->name = Name; Out->nameSpace = InternNamespace(Namespace);
 	Out->size = Options.PointerByteSize; Out->alignment = Options.PointerByteSize;
 	Types.Add(Out); TypesByKey.Add(Key, Out); TypesByName.Add(TypeNameKey(IdentityContext.Get(), Key, Namespace, Name), Out);
@@ -576,7 +572,7 @@ asEMetadataResult asCMetadataImage::CreateFunction(const asSStableKey& Key,
 	if (Result != asEMetadataResult::Succeeded) return Result;
 	// A delegate instance is a runtime allocation with GC/callable state, not a
 	// function declaration. Funcdef signatures describe delegate/event types.
-	if (Kind != asFUNC_SCRIPT && Kind != asFUNC_SYSTEM && Kind != asFUNC_FUNCDEF && Kind != asFUNC_INTERFACE)
+	if (Kind != asFUNC_SCRIPT && Kind != asFUNC_SYSTEM && Kind != asFUNC_CALLABLE_SIGNATURE && Kind != asFUNC_INTERFACE)
 		return asEMetadataResult::InvalidArgument;
 	Out = asNEW(asCScriptFunction)(*this, Key, Kind);
 	Out->name = Name; Out->nameSpace = InternNamespace(Namespace);
@@ -604,7 +600,7 @@ Out = nullptr;
 	}
 	const auto Result = ValidateNew(SignatureKey, "$signature", "", false);
 	if (Result != asEMetadataResult::Succeeded) return Result;
-	Out = asNEW(asCScriptFunction)(*this, SignatureKey, asFUNC_FUNCDEF);
+	Out = asNEW(asCScriptFunction)(*this, SignatureKey, asFUNC_CALLABLE_SIGNATURE);
 	Out->metadataCallableSignature = true;
 	Out->name = "$signature";
 	Out->nameSpace = InternNamespace("");
@@ -677,7 +673,7 @@ std::lock_guard<std::mutex> Lock(MutationMutex);
 	bool ValidKind = false;
 	if (CastToEnumType(&Type)) ValidKind = Kind == asETypeDeclKind::Enum;
 	else if (CastToTypedefType(&Type)) ValidKind = Kind == asETypeDeclKind::Typedef;
-	else if (CastToFuncdefType(&Type)) ValidKind = Kind == asETypeDeclKind::Funcdef || Kind == asETypeDeclKind::Delegate || Kind == asETypeDeclKind::Event;
+	else if (CastToCallableType(&Type)) ValidKind = Kind == asETypeDeclKind::CallableType || Kind == asETypeDeclKind::Delegate || Kind == asETypeDeclKind::Event;
 	else if (auto* Object = CastToObjectType(&Type))
 		ValidKind = Kind == (Object->IsInterface() ? asETypeDeclKind::Interface : (Object->flags & asOBJ_VALUE) ? asETypeDeclKind::Struct : asETypeDeclKind::Class);
 	if (!ValidKind) return asEMetadataResult::InvalidArgument;
@@ -694,10 +690,9 @@ asEMetadataResult asCMetadataImage::SetFunctionDeclarationFacts(asCScriptFunctio
 std::lock_guard<std::mutex> Lock(MutationMutex);
 	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
 	if (!Owns(&Function) || (Owner && !CanReference(Owner))) return asEMetadataResult::ForeignOwner;
-	if (!Function.metadataSignatureDefined || GenericArity > 1024 || Kind <= asEFunctionIdentityKind::Invalid || Kind > asEFunctionIdentityKind::Conversion)
+	if (!Function.metadataSignatureDefined || GenericArity > 1024 || Kind <= asEFunctionIdentityKind::Invalid || Kind > asEFunctionIdentityKind::Conversion || Kind == asEFunctionIdentityKind::ReservedAnonymousFunction)
 		return asEMetadataResult::InvalidArgument;
-	if ((Kind == asEFunctionIdentityKind::Global || Kind == asEFunctionIdentityKind::Lambda) != (Owner == nullptr)) return asEMetadataResult::InvalidArgument;
-	if (Kind == asEFunctionIdentityKind::Lambda && !Function.metadataEnclosingFunction) return asEMetadataResult::InvalidArgument;
+	if ((Kind == asEFunctionIdentityKind::Global) != (Owner == nullptr)) return asEMetadataResult::InvalidArgument;
 	if (Kind == asEFunctionIdentityKind::ClassDefault &&
 		(Function.returnType.GetTokenType() != ttVoid || Function.returnType.GetTypeInfo() || Function.returnType.IsReference() ||
 		 Function.parameterTypes.GetLength() != 0 || GenericArity || IsStatic)) return asEMetadataResult::InvalidSignature;
@@ -735,7 +730,6 @@ std::lock_guard<std::mutex> Lock(MutationMutex);
 	Function.metadataGenericArity = GenericArity;
 	Function.metadataDeclarationOwner = Owner;
 	Function.metadataStaticDeclaration = IsStatic;
-	if (Kind != asEFunctionIdentityKind::Lambda) { Function.metadataEnclosingFunction = nullptr; Function.metadataLambdaOrdinal = 0; }
 	InvalidateLayouts();
 	return asEMetadataResult::Succeeded;
 }
@@ -749,27 +743,6 @@ asEMetadataResult asCMetadataImage::SetFunctionLocal(asCScriptFunction& Function
 	return asEMetadataResult::Succeeded;
 }
 
-asEMetadataResult asCMetadataImage::SetLambdaOrigin(asCScriptFunction& Function, asCScriptFunction& EnclosingFunction, asUINT Ordinal)
-{
-std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Function) || !Owns(&EnclosingFunction)) return asEMetadataResult::ForeignOwner;
-	if (&Function == &EnclosingFunction || !Function.metadataSignatureDefined || Function.objectType || !IdentityContext.IsValid())
-		return asEMetadataResult::InvalidArgument;
-	asSFunctionIdentityDescriptor Descriptor;
-	if (IdentityContext->GetIdentityRegistry().ResolveFunction(Function.GetStableKey(), Descriptor) != asETypeIdentityStatus::Succeeded ||
-		Descriptor.Kind != asEFunctionIdentityKind::Lambda || Descriptor.EnclosingFunction != EnclosingFunction.GetStableKey() ||
-		Descriptor.LambdaOrdinal != Ordinal || Function.name.GetLength() != 0)
-		return asEMetadataResult::InvalidSignature;
-	Function.metadataDeclarationKind = static_cast<asBYTE>(asEFunctionIdentityKind::Lambda);
-	Function.metadataDeclarationOwner = nullptr;
-	Function.metadataGenericArity = 0;
-	Function.metadataStaticDeclaration = false;
-	Function.metadataEnclosingFunction = &EnclosingFunction;
-	Function.metadataLambdaOrdinal = Ordinal;
-	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
-}
 
 asEMetadataResult asCMetadataImage::AddProperty(asCObjectType& Owner, const char* Name,
 	const asCDataType& Type, asCObjectProperty*& Out, bool IsPrivate, bool IsProtected)
@@ -1029,15 +1002,15 @@ asEMetadataResult asCMetadataImage::SetAlias(asCTypedefType& Type, const asCData
 	return asEMetadataResult::Succeeded;
 }
 
-asEMetadataResult asCMetadataImage::AddChildFuncdef(asCObjectType& Type, asCFuncdefType& Funcdef)
+asEMetadataResult asCMetadataImage::AddChildCallableType(asCObjectType& Type, asCCallableType& CallableType)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type) || !Owns(&Funcdef)) return asEMetadataResult::ForeignOwner;
-	if (Funcdef.parentClass) return asEMetadataResult::InvalidState;
-	Funcdef.parentClass = &Type;
-	Funcdef.metadataDeclarationOwner = &Type;
-	Type.childFuncDefs.PushLast(&Funcdef);
+	if (!Owns(&Type) || !Owns(&CallableType)) return asEMetadataResult::ForeignOwner;
+	if (CallableType.parentClass) return asEMetadataResult::InvalidState;
+	CallableType.parentClass = &Type;
+	CallableType.metadataDeclarationOwner = &Type;
+	Type.childCallableTypes.PushLast(&CallableType);
 	InvalidateLayouts();
 	return asEMetadataResult::Succeeded;
 }
@@ -1152,7 +1125,7 @@ asEMetadataResult asCMetadataImage::FinalizeLayouts()
 			if (!DataLayout(Alias->aliasForType, Out)) return false;
 		}
 		else if (CastToEnumType(Type)) Out = {4, 4};
-		else if (CastToFuncdefType(Type)) Out = {Options.PointerByteSize, Options.PointerByteSize};
+		else if (CastToCallableType(Type)) Out = {Options.PointerByteSize, Options.PointerByteSize};
 		else if (asCObjectType* Object = CastToObjectType(Type))
 		{
 			Out = {};
@@ -1305,7 +1278,7 @@ namespace
 	{
 		if (CastToEnumType(const_cast<asCTypeInfo*>(&Type))) return 0;
 		if (CastToTypedefType(const_cast<asCTypeInfo*>(&Type))) return 4;
-		if (CastToFuncdefType(const_cast<asCTypeInfo*>(&Type))) return 3;
+		if (CastToCallableType(const_cast<asCTypeInfo*>(&Type))) return 3;
 		if (const asCObjectType* Object = CastToObjectType(const_cast<asCTypeInfo*>(&Type)))
 		{
 			return (Object->flags & asOBJ_REF) ? 2 : 1;

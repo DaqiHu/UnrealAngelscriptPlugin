@@ -133,7 +133,7 @@ enum eTokenType
 	ttForeach,             // foreach
 	ttWhile,               // while
 	ttBool,                // bool
-	ttFuncDef,             // funcdef
+	ttCallableType,             // funcdef
 	ttImport,              // import
 	ttInt,                 // int
 	ttInt8,                // int8

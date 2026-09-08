@@ -176,7 +176,7 @@ int PrepareSystemFunctionGeneric(asCScriptFunction *func, asSSystemFunctionInter
 			dt.GetTypeInfo() != nullptr
 			&& (dt.GetTypeInfo()->GetFlags() & asOBJ_REF) != 0
 			&& (dt.GetTypeInfo()->GetFlags() & asOBJ_NOCOUNT) != 0;
-		if ((dt.IsObject() || dt.IsFuncdef())
+		if ((dt.IsObject() || dt.IsCallableType())
 			&& !dt.IsReference()
 			// MoveArgsToStack emits GETOBJ for all by-value object
 			// parameters, including a bare implicit-handle type. The latter is
@@ -191,7 +191,7 @@ int PrepareSystemFunctionGeneric(asCScriptFunction *func, asSSystemFunctionInter
 			asSSystemFunctionInterface::SClean clean;
 			clean.ot = CastToObjectType(dt.GetTypeInfo());
 			clean.off = short(offset);
-			if (dt.IsFuncdef()
+			if (dt.IsCallableType()
 				|| (dt.GetTypeInfo()->flags & asOBJ_REF))
 			{
 				clean.op = 0;
@@ -659,7 +659,7 @@ int CallSystemFunction(int id, asCContext *context)
 	tld->activeFunction = prevActiveFunction;
 
 	// Store the returned value in our stack
-	if( (descr->returnType.IsObject() || descr->returnType.IsFuncdef()) && !descr->returnType.IsReference() )
+	if( (descr->returnType.IsObject() || descr->returnType.IsCallableType()) && !descr->returnType.IsReference() )
 	{
 		if( descr->returnType.IsObjectHandle() )
 		{

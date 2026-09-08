@@ -247,9 +247,9 @@ namespace
 		{
 			AddUniqueCandidate(outCandidates, static_cast<asCTypeInfo*>(engine->GetObjectTypeByIndex(i)), stableKey);
 		}
-		for( asUINT i = 0; i < engine->funcDefs.GetLength(); ++i )
+		for( asUINT i = 0; i < engine->callableTypes.GetLength(); ++i )
 		{
-			AddUniqueCandidate(outCandidates, engine->funcDefs[i], stableKey);
+			AddUniqueCandidate(outCandidates, engine->callableTypes[i], stableKey);
 		}
 		for( asUINT m = 0; m < engine->scriptModules.GetLength(); ++m )
 		{
@@ -406,9 +406,9 @@ namespace
 			return asAST_TYPE_INVALID;
 		}
 		const asQWORD flags = info->GetFlags();
-		if( (flags & asOBJ_FUNCDEF) != 0 )
+		if( (flags & asOBJ_CALLABLE_TYPE) != 0 )
 		{
-			return asAST_TYPE_FUNCDEF;
+			return asAST_TYPE_CALLABLE_TYPE;
 		}
 		if( (flags & asOBJ_ENUM) != 0 )
 		{
@@ -532,7 +532,7 @@ namespace
 		else if( info != 0 )
 		{
 			dataType = asCDataType::CreateType(info, (qualifiers & asAST_QUAL_CONST) != 0);
-			if( (info->GetFlags() & asOBJ_REF) != 0 || (info->GetFlags() & asOBJ_FUNCDEF) != 0 )
+			if( (info->GetFlags() & asOBJ_REF) != 0 || (info->GetFlags() & asOBJ_CALLABLE_TYPE) != 0 )
 			{
 				dataType.MakeHandle(true);
 			}
@@ -633,10 +633,10 @@ namespace
 				outLayout += objectType->templateSubTypes[i].Format(typeInfo->nameSpace, true);
 			}
 		}
-		else if( (flags & asOBJ_FUNCDEF) != 0 )
+		else if( (flags & asOBJ_CALLABLE_TYPE) != 0 )
 		{
 			outBehaviour += ";funcdef=";
-			AppendFunctionSignature(outBehaviour, CastToFuncdefType(typeInfo)->funcdef);
+			AppendFunctionSignature(outBehaviour, CastToCallableType(typeInfo)->callableSignature);
 		}
 		else if( (flags & asOBJ_TYPEDEF) != 0 )
 		{

@@ -252,10 +252,6 @@ namespace AngelscriptCacheCurrentModuleAuthority_Private
 			EAngelscriptCachedDeclarationTraitFlags::Override);
 		AddTrait(asTRAIT_GENERATED_FUNCTION,
 			EAngelscriptCachedDeclarationTraitFlags::Generated);
-		AddTrait(asTRAIT_SHARED,
-			EAngelscriptCachedDeclarationTraitFlags::Shared);
-		AddTrait(asTRAIT_EXTERNAL,
-			EAngelscriptCachedDeclarationTraitFlags::External);
 		AddTrait(asTRAIT_PROPERTY,
 			EAngelscriptCachedDeclarationTraitFlags::Property);
 		AddTrait(asTRAIT_IMPLICITCONSTRUCTOR,

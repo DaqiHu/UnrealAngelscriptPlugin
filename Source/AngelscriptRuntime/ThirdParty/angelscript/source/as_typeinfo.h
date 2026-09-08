@@ -57,13 +57,13 @@ class asCModule;
 class asCObjectType;
 class asCEnumType;
 class asCTypedefType;
-class asCFuncdefType;
+class asCCallableType;
 struct asSNameSpace;
 
 // TODO: type: asCPrimitiveType shall be implemented to represent primitives (void, int, double, etc)
 
 // TODO: type: asCTypeInfo should have an internal virtual method GetBehaviours. For asCObjectType it 
-//             should return the beh member. For asCFuncdefType it should return the beh member of 
+//             should return the beh member. For asCCallableType it should return the beh member of
 //             engine->functionBehaviours. This will allow the code that needs the behaviour to handle 
 //             both object types and funcdefs the same way
 
@@ -78,7 +78,6 @@ public:
 	asIScriptEngine *GetEngine() const final;
 	const char      *GetConfigGroup() const final;
 	asDWORD          GetAccessMask() const final;
-	asIScriptModule *GetModule() const final;
 
 	// Memory management
 	int AddRef() const;
@@ -126,8 +125,8 @@ public:
 	asIScriptFunction *GetBehaviourByIndex(asUINT index, asEBehaviours *outBehaviour) const { UNUSED_VAR(index); UNUSED_VAR(outBehaviour); return 0; }
 
 	// Child types
-	asUINT       GetChildFuncdefCount() const { return 0; }
-	asITypeInfo *GetChildFuncdef(asUINT index) const { UNUSED_VAR(index); return 0; }
+	asUINT       GetChildCallableTypeCount() const { return 0; }
+	asITypeInfo *GetChildCallableType(asUINT index) const { UNUSED_VAR(index); return 0; }
 	asITypeInfo *GetParentType() const { return 0; }
 
 	// Enums
@@ -137,8 +136,8 @@ public:
 	// Typedef
 	virtual int GetTypedefTypeId() const { return asERROR; }
 
-	// Funcdef
-	virtual asIScriptFunction *GetFuncdefSignature() const { return 0; }
+	// Callable type
+	virtual asIScriptFunction *GetCallableSignature() const { return 0; }
 
 	// User data
 	void *SetUserData(void *data, asPWORD type);
@@ -172,13 +171,12 @@ public:
 
 	void CleanUserData();
 
-	bool IsShared() const;
 
 	// These can be safely used on null pointers (which will return null)
 	friend asCObjectType  *CastToObjectType(asCTypeInfo *);
 	friend asCEnumType    *CastToEnumType(asCTypeInfo *);
 	friend asCTypedefType *CastToTypedefType(asCTypeInfo *);
-	friend asCFuncdefType *CastToFuncdefType(asCTypeInfo *);
+	friend asCCallableType *CastToCallableType(asCTypeInfo *);
 
 
 	asCString                      name;
@@ -268,25 +266,25 @@ protected:
 	asCTypedefType() : asCTypeInfo() {}
 };
 
-//[UE++]: Export funcdef-type internals for the AngelscriptTest module without changing layout.
-class ANGELSCRIPTRUNTIME_API asCFuncdefType : public asCTypeInfo
+//[UE++]: Export callable-type internals for the AngelscriptTest module without changing layout.
+class ANGELSCRIPTRUNTIME_API asCCallableType : public asCTypeInfo
 //[UE--]
 {
 public:
-	asCFuncdefType(asCScriptEngine *engine, asCScriptFunction *func);
-	~asCFuncdefType();
+	asCCallableType(asCScriptEngine *engine, asCScriptFunction *func);
+	~asCCallableType();
 
-	asIScriptFunction *GetFuncdefSignature() const;
+	asIScriptFunction *GetCallableSignature() const;
 	asITypeInfo       *GetParentType() const;
 
 	void DestroyInternal();
-	asCScriptFunction *funcdef;     // increases refCount
+	asCScriptFunction *callableSignature;     // increases refCount
 	asCObjectType     *parentClass; // doesn't increase refCount
 
 protected:
 	friend class asCMetadataImage;
-	asCFuncdefType(asCMetadataImage& owner, const asSStableKey& key, asCScriptFunction* func);
-	asCFuncdefType() : asCTypeInfo(), funcdef(0), parentClass(0) {}
+	asCCallableType(asCMetadataImage& owner, const asSStableKey& key, asCScriptFunction* func);
+	asCCallableType() : asCTypeInfo(), callableSignature(0), parentClass(0) {}
 };
 
 END_AS_NAMESPACE

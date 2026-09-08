@@ -403,13 +403,6 @@ int asCScriptEngine::SetEngineProperty(asEEngineProp property, asPWORD value)
 			return asINVALID_ARG;
 		break;
 
-	case asEP_PROPERTY_ACCESSOR_MODE:
-		if( value <= 3 )
-			ep.propertyAccessorMode = (int)value;
-		else
-			return asINVALID_ARG;
-		break;
-
 	case asEP_EXPAND_DEF_ARRAY_TO_TMPL:
 		ep.expandDefaultArrayToTemplate = value ? true : false;
 		break;
@@ -613,9 +606,6 @@ asPWORD asCScriptEngine::GetEngineProperty(asEEngineProp property) const
 	case asEP_STRING_ENCODING:
 		return ep.stringEncoding;
 
-	case asEP_PROPERTY_ACCESSOR_MODE:
-		return ep.propertyAccessorMode;
-
 	case asEP_EXPAND_DEF_ARRAY_TO_TMPL:
 		return ep.expandDefaultArrayToTemplate;
 
@@ -755,7 +745,6 @@ asCScriptEngine::asCScriptEngine()
 		ep.scanner                       = 1;         // utf8. 0 = ascii
 		ep.includeJitInstructions        = false;
 		ep.stringEncoding                = 0;         // utf8. 1 = utf16
-		ep.propertyAccessorMode          = 3;         // 0 = disable, 1 = app registered only, 2 = app and script created, 3 = flag with 'property' attribute
 		ep.expandDefaultArrayToTemplate  = false;
 		ep.autoGarbageCollect            = true;
 		ep.disallowGlobalVars            = false;
@@ -914,7 +903,6 @@ asCScriptEngine::~asCScriptEngine()
 	listPatternTypes.SetLength(0);
 
 	// No script types must have survived
-	asASSERT( sharedScriptTypes.GetLength() == 0 );
 
 	// It is allowed to create new references to the engine temporarily while destroying objects
 	// but these references must be release immediately or else something is can go wrong later on
@@ -973,22 +961,22 @@ asCScriptEngine::~asCScriptEngine()
 	// registered types. The APV2 configuration-group removal path is empty, so
 	// explicitly perform the same release at engine shutdown. Funcdefs remain
 	// owned by funcDefs and are released in the dedicated pass below.
-	TArray<asCTypeInfo*> RegisteredNonFuncdefTypes;
-	allRegisteredTypes.IterateAll([&RegisteredNonFuncdefTypes](asCTypeInfo* Type)
+	TArray<asCTypeInfo*> RegisteredNonCallableTypes;
+	allRegisteredTypes.IterateAll([&RegisteredNonCallableTypes](asCTypeInfo* Type)
 	{
 		// DestroyInternal can cascade-release funcdefs. Classify them while every
 		// entry is still alive instead of reading flags during the release pass.
-		if (Type != nullptr && !(Type->flags & asOBJ_FUNCDEF))
-			RegisteredNonFuncdefTypes.Add(Type);
+		if (Type != nullptr && !(Type->flags & asOBJ_CALLABLE_TYPE))
+			RegisteredNonCallableTypes.Add(Type);
 	});
 	allRegisteredTypes.EraseAll();
 	allRegisteredTypesByName.EraseAll();
-	for (asCTypeInfo* Type : RegisteredNonFuncdefTypes)
+	for (asCTypeInfo* Type : RegisteredNonCallableTypes)
 	{
 		if (asCObjectType* ObjectType = CastToObjectType(Type))
 			ObjectType->ReleaseAllFunctions();
 	}
-	for (asCTypeInfo* Type : RegisteredNonFuncdefTypes)
+	for (asCTypeInfo* Type : RegisteredNonCallableTypes)
 	{
 		Type->DestroyInternal();
 		Type->ReleaseInternal();
@@ -1018,13 +1006,13 @@ asCScriptEngine::~asCScriptEngine()
 
 	// Destroy the funcdefs
 	// As funcdefs are shared between modules it shouldn't be a problem to keep the objects until the engine is released
-	for( asUINT n = 0; n < funcDefs.GetLength(); n++ )
-		if( funcDefs[n] )
+	for( asUINT n = 0; n < callableTypes.GetLength(); n++ )
+		if( callableTypes[n] )
 		{
-			funcDefs[n]->DestroyInternal();
-			funcDefs[n]->ReleaseInternal();
+			callableTypes[n]->DestroyInternal();
+			callableTypes[n]->ReleaseInternal();
 		}
-	funcDefs.SetLength(0);
+	callableTypes.SetLength(0);
 
 	// Free the global properties
 	for( asUINT n = 0; n < globalProperties.GetLength(); n++ )
@@ -1095,65 +1083,7 @@ asIScriptContext *asCScriptEngine::RequestContext()
 }
 
 // internal
-asCModule *asCScriptEngine::FindNewOwnerForSharedType(asCTypeInfo *in_type, asCModule *in_mod)
-{
-	asASSERT( in_type->IsShared() );
-
-	if( in_type->module != in_mod)
-		return in_type->module;
-
-	for( asUINT n = 0; n < scriptModules.GetLength(); n++ )
-	{
-		// TODO: optimize: If the modules already stored the shared types separately, this would be quicker
-		int foundIdx = -1;
-		asCModule *mod = scriptModules[n];
-		if( mod == in_type->module ) continue;
-		if( in_type->flags & asOBJ_ENUM )
-			foundIdx = mod->enumTypes.IndexOf(CastToEnumType(in_type));
-		else if (in_type->flags & asOBJ_TYPEDEF)
-			foundIdx = mod->typeDefs.IndexOf(CastToTypedefType(in_type));
-		else if (in_type->flags & asOBJ_FUNCDEF)
-			foundIdx = mod->funcDefs.IndexOf(CastToFuncdefType(in_type));
-		else
-			foundIdx = mod->classTypes.IndexOf(CastToObjectType(in_type));
-
-		if( foundIdx >= 0 )
-		{
-			in_type->module = mod;
-			break;
-		}
-	}
-
-	return in_type->module;
-}
-
 // internal
-asCModule *asCScriptEngine::FindNewOwnerForSharedFunc(asCScriptFunction *in_func, asCModule *in_mod)
-{
-	asASSERT( in_func->IsShared() );
-	asASSERT(!(in_func->funcType & asFUNC_FUNCDEF));
-
-	if( in_func->module != in_mod)
-		return in_func->module;
-
-	for( asUINT n = 0; n < scriptModules.GetLength(); n++ )
-	{
-		// TODO: optimize: If the modules already stored the shared types separately, this would be quicker
-		int foundIdx = -1;
-		asCModule *mod = scriptModules[n];
-		if( mod == in_func->module ) continue;
-		foundIdx = mod->scriptFunctions.IndexOf(in_func);
-
-		if( foundIdx >= 0 )
-		{
-			in_func->module = mod;
-			break;
-		}
-	}
-
-	return in_func->module;
-}
-
 // interface
 void asCScriptEngine::ReturnContext(asIScriptContext *ctx)
 {
@@ -1536,55 +1466,9 @@ asETokenClass asCScriptEngine::ParseToken(const char *string, size_t stringLengt
 }
 
 // interface
-asIScriptModule *asCScriptEngine::GetModule(const char *module, asEGMFlags flag)
-{
-	asCModule *mod = GetModule(module, false);
-
-	if( flag == asGM_ALWAYS_CREATE )
-	{
-		if( mod != 0 )
-			mod->Discard();
-
-		return GetModule(module, true);
-	}
-
-	if( mod == 0 && flag == asGM_CREATE_IF_NOT_EXISTS )
-		return GetModule(module, true);
-
-	return mod;
-}
-
 // interface
-int asCScriptEngine::DiscardModule(const char *module)
-{
-	asCModule *mod = GetModule(module, false);
-	if( mod == 0 ) return asNO_MODULE;
-
-	mod->Discard();
-
-	return 0;
-}
-
 // interface
-asUINT asCScriptEngine::GetModuleCount() const
-{
-	ACQUIRESHARED(engineRWLock);
-	asUINT length = asUINT(scriptModules.GetLength());
-	RELEASESHARED(engineRWLock);
-	return length;
-}
-
 // interface
-asIScriptModule *asCScriptEngine::GetModuleByIndex(asUINT index) const
-{
-	asIScriptModule *mod = 0;
-	ACQUIRESHARED(engineRWLock);
-	if( index < scriptModules.GetLength() )
-		mod = scriptModules[index];
-	RELEASESHARED(engineRWLock);
-	return mod;
-}
-
 // internal
 int asCScriptEngine::GetFactoryIdByDecl(const asCObjectType *ot, const char *decl)
 {
@@ -1821,7 +1705,7 @@ int asCScriptEngine::RegisterInterface(const char *name)
 	if( st == 0 )
 		return ConfigError(asOUT_OF_MEMORY, "RegisterInterface", name, 0);
 
-	st->flags = asOBJ_REF | asOBJ_SCRIPT_OBJECT | asOBJ_SHARED;
+	st->flags = asOBJ_REF | asOBJ_SCRIPT_OBJECT;
 	st->isInterfaceDeclaration = true;
 	st->size = 0; // Cannot be instantiated
 	st->name = name;
@@ -2833,7 +2717,7 @@ int asCScriptEngine::RegisterObjectMethod(const char *obj, const char *declarati
 	// Don't allow application to modify built-in types or funcdefs
 	if( dt.GetTypeInfo() == &functionBehaviours ||
 		dt.GetTypeInfo() == &scriptTypeBehaviours ||
-		CastToFuncdefType(dt.GetTypeInfo()) )
+		CastToCallableType(dt.GetTypeInfo()) )
 		return ConfigError(asINVALID_ARG, "RegisterObjectMethod", obj, declaration);
 
 	return RegisterMethodToObjectType(CastToObjectType(dt.GetTypeInfo()), declaration, funcPointer, callConv, caller, auxiliary, compositeOffset, isCompositeIndirect, accessorType);
@@ -3069,7 +2953,7 @@ asUINT asCScriptEngine::GetGlobalFunctionCount() const
 	asUINT Count = 0;
 	for (const auto& Image : metadataImages)
 		for (auto* Function : Image->GetFunctions())
-			if (Function->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Global && Function->funcType != asFUNC_FUNCDEF) ++Count;
+			if (Function->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Global && Function->funcType != asFUNC_CALLABLE_SIGNATURE) ++Count;
 	return Count;
 }
 
@@ -3079,7 +2963,7 @@ asIScriptFunction *asCScriptEngine::GetGlobalFunctionByIndex(asUINT index) const
 	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
 	for (const auto& Image : metadataImages)
 		for (auto* Function : Image->GetFunctions())
-			if (Function->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Global && Function->funcType != asFUNC_FUNCDEF)
+			if (Function->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Global && Function->funcType != asFUNC_CALLABLE_SIGNATURE)
 			{
 				if (index == 0) return Function;
 				--index;
@@ -3371,38 +3255,6 @@ int asCScriptEngine::GetStringFactoryReturnTypeId(asDWORD *flags) const
 }
 
 // internal
-asCModule *asCScriptEngine::GetModule(const char *name, bool create)
-{
-	if (create) return nullptr; // Use the independent Builder, not the dormant backend.
-	// Accept null as well as zero-length string
-	if( name == 0 ) name = "";
-
-	asCModule* retModule = scriptModulesByName.FindFirst(name);
-	if( create && retModule == nullptr )
-	{
-		retModule = asNEW(asCModule)(name, this);
-		if( retModule == 0 )
-		{
-			// Out of memory
-			return 0;
-		}
-
-		scriptModules.PushLast(retModule);
-		scriptModulesByName.Add(retModule);
-	}
-
-	return retModule;
-}
-
-asCModule *asCScriptEngine::GetModuleFromFuncId(int id)
-{
-	if( id < 0 ) return 0;
-	if( id >= (int)scriptFunctions.GetLength() ) return 0;
-	asCScriptFunction *func = scriptFunctions[id];
-	if( func == 0 ) return 0;
-	return func->module;
-}
-
 // internal
 int asCScriptEngine::RequestBuild()
 {
@@ -3823,11 +3675,11 @@ asCObjectType *asCScriptEngine::GetTemplateInstanceType(asCObjectType *templateT
 	// Any child funcdefs must be copied to the template instance (with adjustments in case of template subtypes)
 	// This must be done before resolving other methods, to make sure the other methods that may refer to the
 	// templated funcdef will resolve to the new funcdef
-	for (n = 0; n < templateType->childFuncDefs.GetLength(); n++)
+	for (n = 0; n < templateType->childCallableTypes.GetLength(); n++)
 	{
-		asCFuncdefType *funcdef = GenerateNewTemplateFuncdef(templateType, ot, templateType->childFuncDefs[n]);
-		funcdef->parentClass = ot;
-		ot->childFuncDefs.PushLast(funcdef);
+		asCCallableType *callableSignature = GenerateNewTemplateCallableType(templateType, ot, templateType->childCallableTypes[n]);
+		callableSignature->parentClass = ot;
+		ot->childCallableTypes.PushLast(callableSignature);
 	}
 
 	ot->beh.addref = templateType->beh.addref;
@@ -4037,15 +3889,15 @@ asCDataType asCScriptEngine::DetermineTypeForTemplate(const asCDataType &orig, a
 		dt.MakeReference(orig.IsReference());
 		dt.MakeReadOnly(orig.IsReadOnly());
 	}
-	else if (orig.GetTypeInfo() && (orig.GetTypeInfo()->flags & asOBJ_FUNCDEF) && CastToFuncdefType(orig.GetTypeInfo())->parentClass == tmpl)
+	else if (orig.GetTypeInfo() && (orig.GetTypeInfo()->flags & asOBJ_CALLABLE_TYPE) && CastToCallableType(orig.GetTypeInfo())->parentClass == tmpl)
 	{
 		// The type is a child funcdef. Find the corresponding child funcdef in the template instance
-		for (asUINT n = 0; n < ot->childFuncDefs.GetLength(); n++)
+		for (asUINT n = 0; n < ot->childCallableTypes.GetLength(); n++)
 		{
-			if (ot->childFuncDefs[n]->name == orig.GetTypeInfo()->name)
+			if (ot->childCallableTypes[n]->name == orig.GetTypeInfo()->name)
 			{
 				dt = orig;
-				dt.SetTypeInfo(ot->childFuncDefs[n]);
+				dt.SetTypeInfo(ot->childCallableTypes[n]);
 			}
 		}
 	}
@@ -4077,7 +3929,6 @@ asCScriptFunction *asCScriptEngine::GenerateTemplateFactoryStub(asCObjectType *t
 	AddScriptFunction(func);
 
 	func->traits = factory->traits;
-	func->SetShared(true);
 	if( templateType->flags & asOBJ_REF )
 	{
 		func->name = "$fact";
@@ -4192,7 +4043,7 @@ bool asCScriptEngine::RequireTypeReplacement(asCDataType &type, asCObjectType *t
 				ot->templateSubTypes[n].GetTypeInfo()->flags & asOBJ_TEMPLATE_SUBTYPE )
 				return true;
 	}
-	if (type.GetTypeInfo() && (type.GetTypeInfo()->flags & asOBJ_FUNCDEF) && CastToFuncdefType(type.GetTypeInfo())->parentClass == templateType)
+	if (type.GetTypeInfo() && (type.GetTypeInfo()->flags & asOBJ_CALLABLE_TYPE) && CastToCallableType(type.GetTypeInfo())->parentClass == templateType)
 		return true;
 
 	return false;
@@ -4292,7 +4143,7 @@ asCScriptFunction* asCScriptEngine::GenerateTemplateFunction(asCObjectType *ot, 
 	return func2;
 }
 
-asCFuncdefType *asCScriptEngine::GenerateNewTemplateFuncdef(asCObjectType *templateType, asCObjectType *ot, asCFuncdefType *func)
+asCCallableType *asCScriptEngine::GenerateNewTemplateCallableType(asCObjectType *templateType, asCObjectType *ot, asCCallableType *func)
 {
 	// TODO: Only generate the new funcdef if it used the template subtypes.
 	//       Remember to also update the clean up in asCObjectType::DestroyInternal so it doesn't delete
@@ -4300,7 +4151,7 @@ asCFuncdefType *asCScriptEngine::GenerateNewTemplateFuncdef(asCObjectType *templ
 	//       Perhaps a new funcdef is always needed, since the funcdef will have a reference to the
 	//       parent class (in this case the template instance).
 
-	asCScriptFunction *func2 = asNEW(asCScriptFunction)(this, 0, func->funcdef->funcType);
+	asCScriptFunction *func2 = asNEW(asCScriptFunction)(this, 0, func->callableSignature->funcType);
 	if (func2 == 0)
 	{
 		// Out of memory
@@ -4309,27 +4160,27 @@ asCFuncdefType *asCScriptEngine::GenerateNewTemplateFuncdef(asCObjectType *templ
 
 	func2->name = func->name;
 
-	func2->returnType = DetermineTypeForTemplate(func->funcdef->returnType, templateType, ot);
-	func2->parameterTypes.SetLength(func->funcdef->parameterTypes.GetLength());
-	for (asUINT p = 0; p < func->funcdef->parameterTypes.GetLength(); p++)
-		func2->parameterTypes[p] = DetermineTypeForTemplate(func->funcdef->parameterTypes[p], templateType, ot);
+	func2->returnType = DetermineTypeForTemplate(func->callableSignature->returnType, templateType, ot);
+	func2->parameterTypes.SetLength(func->callableSignature->parameterTypes.GetLength());
+	for (asUINT p = 0; p < func->callableSignature->parameterTypes.GetLength(); p++)
+		func2->parameterTypes[p] = DetermineTypeForTemplate(func->callableSignature->parameterTypes[p], templateType, ot);
 
 	// TODO: template: Must be careful when instantiating templates for garbage collected types
 	//                 If the template hasn't been registered with the behaviours, it shouldn't
 	//                 permit instantiation of garbage collected types that in turn may refer to
 	//                 this instance.
 
-	func2->inOutFlags = func->funcdef->inOutFlags;
-	func2->SetReadOnly(func->funcdef->IsReadOnly());
-	asASSERT(func->funcdef->objectType == 0);
-	asASSERT(func->funcdef->sysFuncIntf == 0);
+	func2->inOutFlags = func->callableSignature->inOutFlags;
+	func2->SetReadOnly(func->callableSignature->IsReadOnly());
+	asASSERT(func->callableSignature->objectType == 0);
+	asASSERT(func->callableSignature->sysFuncIntf == 0);
 
 	func2->id = GetNextScriptFunctionId();
 	func2->CalculateParameterOffsets();
 	AddScriptFunction(func2);
 
-	asCFuncdefType *fdt2 = asNEW(asCFuncdefType)(this, func2);
-	funcDefs.PushLast(fdt2); // don't increase refCount as the constructor already set it to 1
+	asCCallableType *fdt2 = asNEW(asCCallableType)(this, func2);
+	callableTypes.PushLast(fdt2); // don't increase refCount as the constructor already set it to 1
 
 	// Return the new function
 	return fdt2;
@@ -5552,12 +5403,12 @@ int asCScriptEngine::RefCastObject(void *obj, asITypeInfo *fromType, asITypeInfo
 	}
 
 	// Check for funcdefs
-	if ((fromType->GetFlags() & asOBJ_FUNCDEF) && (toType->GetFlags() & asOBJ_FUNCDEF))
+	if ((fromType->GetFlags() & asOBJ_CALLABLE_TYPE) && (toType->GetFlags() & asOBJ_CALLABLE_TYPE))
 	{
-		asCFuncdefType *fromFunc = CastToFuncdefType(static_cast<asCTypeInfo*>(fromType));
-		asCFuncdefType *toFunc = CastToFuncdefType(static_cast<asCTypeInfo*>(toType));
+		asCCallableType *fromFunc = CastToCallableType(static_cast<asCTypeInfo*>(fromType));
+		asCCallableType *toFunc = CastToCallableType(static_cast<asCTypeInfo*>(toType));
 
-		if (fromFunc && toFunc && fromFunc->funcdef->IsSignatureExceptNameEqual(toFunc->funcdef))
+		if (fromFunc && toFunc && fromFunc->callableSignature->IsSignatureExceptNameEqual(toFunc->callableSignature))
 		{
 			*newPtr = obj;
 			AddRefScriptObject(*newPtr, toType);
@@ -5946,7 +5797,7 @@ void asCScriptEngine::AddRefScriptObject(void *obj, const asITypeInfo *type)
 	}
 
 	const asCTypeInfo *ti = static_cast<const asCTypeInfo*>(type);
-	if (ti->flags & asOBJ_FUNCDEF)
+	if (ti->flags & asOBJ_CALLABLE_TYPE)
 	{
 		CallObjectMethod(obj, functionBehaviours.beh.addref);
 	}
@@ -5985,7 +5836,7 @@ void asCScriptEngine::ReleaseScriptObject(void *obj, const asITypeInfo *type)
 	}
 
 	const asCTypeInfo *ti = static_cast<const asCTypeInfo*>(type);
-	if (ti->flags & asOBJ_FUNCDEF)
+	if (ti->flags & asOBJ_CALLABLE_TYPE)
 	{
 		CallObjectMethod(obj, functionBehaviours.beh.release);
 	}
@@ -6063,7 +5914,7 @@ asCConfigGroup *asCScriptEngine::FindConfigGroupForTypeInfo(const asCTypeInfo *o
 	return 0;
 }
 
-asCConfigGroup *asCScriptEngine::FindConfigGroupForFuncDef(const asCFuncdefType *funcDef) const
+asCConfigGroup *asCScriptEngine::FindConfigGroupForCallableType(const asCCallableType *callableType) const
 {
 	return 0;
 }
@@ -6146,85 +5997,22 @@ void asCScriptEngine::RemoveScriptFunction(asCScriptFunction *func)
 }
 
 // internal
-void asCScriptEngine::RemoveFuncdef(asCFuncdefType *funcdef)
+void asCScriptEngine::RemoveCallableType(asCCallableType *callableSignature)
 {
-	funcDefs.RemoveValue(funcdef);
+	callableTypes.RemoveValue(callableSignature);
 }
 
 // interface
-int asCScriptEngine::RegisterFuncdef(const char *decl)
-{
-	return asNOT_SUPPORTED;
-#if 0 // Preserved dormant backend reference; not a supported configuration path.
-	if( decl == 0 ) return ConfigError(asINVALID_ARG, "RegisterFuncdef", decl, 0);
 
-	// Parse the function declaration
-	asCScriptFunction *func = asNEW(asCScriptFunction)(this, 0, asFUNC_FUNCDEF);
-	if( func == 0 )
-		return ConfigError(asOUT_OF_MEMORY, "RegisterFuncdef", decl, 0);
-
-	asCBuilder bld(this, 0);
-	asCObjectType *parentClass = 0;
-	int r = bld.ParseFunctionDeclaration(0, decl, func, false, 0, 0, defaultNamespace, 0, &parentClass);
-	if( r < 0 )
-	{
-		// Set as dummy function before deleting
-		func->funcType = asFUNC_DUMMY;
-		asDELETE(func,asCScriptFunction);
-		return ConfigError(asINVALID_DECLARATION, "RegisterFuncdef", decl, 0);
-	}
-
-	// Check name conflicts
-	r = bld.CheckNameConflict(func->name.AddressOf(), 0, 0, defaultNamespace);
-	if( r < 0 )
-	{
-		asDELETE(func,asCScriptFunction);
-		return ConfigError(asNAME_TAKEN, "RegisterFuncdef", decl, 0);
-	}
-
-	func->id = GetNextScriptFunctionId();
-	func->CalculateParameterOffsets();
-	AddScriptFunction(func);
-
-	asCFuncdefType *fdt = asNEW(asCFuncdefType)(this, func);
-	funcDefs.PushLast(fdt); // doesn't increase refcount
-	registeredFuncDefs.PushLast(fdt); // doesn't increase refcount
-	allRegisteredTypes.Add(fdt); // constructor already set the ref count to 1
-	allRegisteredTypesByName.Add(fdt);
-
-	if (parentClass)
-	{
-		parentClass->childFuncDefs.PushLast(fdt);
-		fdt->parentClass = parentClass;
-
-		// Check if the method restricts that use of the template to value types or reference types
-		if (parentClass->flags & asOBJ_TEMPLATE)
-		{
-			r = SetTemplateRestrictions(parentClass, func, "RegisterFuncdef", decl);
-			if (r < 0)
-				return r;
-		}
-	}
-
-	// Return the type id as success
-	return GetTypeIdFromDataType(asCDataType::CreateType(fdt, false));
-#endif // Dormant backend reference.
-}
 
 // interface
-asUINT asCScriptEngine::GetFuncdefCount() const
-{
-	return CountMetadataTypes(asOBJ_FUNCDEF);
-}
+
 
 // interface
-asITypeInfo *asCScriptEngine::GetFuncdefByIndex(asUINT index) const
-{
-	return MetadataTypeByIndex(index, asOBJ_FUNCDEF);
-}
+
 
 // internal
-static bool FuncdefSourceFormalMetadataIsValid(
+static bool CallableSignatureSourceFormalMetadataIsValid(
 	const asCScriptFunction &func)
 {
 	const asUINT parameterCount = func.parameterTypes.GetLength();
@@ -6246,12 +6034,12 @@ static bool FuncdefSourceFormalMetadataIsValid(
 	return true;
 }
 
-static bool FuncdefSourceFormalMetadataMatches(
+static bool CallableSignatureSourceFormalMetadataMatches(
 	const asCScriptFunction &left,
 	const asCScriptFunction &right)
 {
-	if( !FuncdefSourceFormalMetadataIsValid(left)
-		|| !FuncdefSourceFormalMetadataIsValid(right) )
+	if( !CallableSignatureSourceFormalMetadataIsValid(left)
+		|| !CallableSignatureSourceFormalMetadataIsValid(right) )
 	{
 		return false;
 	}
@@ -6271,49 +6059,46 @@ static bool FuncdefSourceFormalMetadataMatches(
 		== right.canonicalASTSourceParameterQualifiers;
 }
 
-asCFuncdefType *asCScriptEngine::FindMatchingFuncdef(asCScriptFunction *func, asCModule *module)
+asCCallableType *asCScriptEngine::FindMatchingCallableType(asCScriptFunction *func)
 {
-	asCFuncdefType *funcDef = 0;
+	asCCallableType *callableType = 0;
 
-	// asCScriptFunction::funcdefType is historical shared state in this fork,
-	// so it cannot authenticate the type of an arbitrary function. Recover a
-	// funcdef's own type by exact function identity before doing signature reuse.
-	for( asUINT n = 0; n < funcDefs.GetLength(); n++ )
+	// The compatibility callableType pointer cannot authenticate an arbitrary function,
+	// so recover a callable type by exact function identity before signature reuse.
+	for( asUINT n = 0; n < callableTypes.GetLength(); n++ )
 	{
-		if( funcDefs[n]->funcdef == func )
+		if( callableTypes[n]->callableSignature == func )
 		{
-			funcDef = funcDefs[n];
+			callableType = callableTypes[n];
 			break;
 		}
 	}
 
-	if (funcDef == 0)
+	if (callableType == 0)
 	{
-		if( !FuncdefSourceFormalMetadataIsValid(*func) )
+		if( !CallableSignatureSourceFormalMetadataIsValid(*func) )
 			return 0;
 
 		// Check if there is any matching funcdefs already in the engine that can be reused
-		for (asUINT n = 0; n < funcDefs.GetLength(); n++)
+		for (asUINT n = 0; n < callableTypes.GetLength(); n++)
 		{
-			if (funcDefs[n]->funcdef->IsSignatureExceptNameEqual(func)
-				&& FuncdefSourceFormalMetadataMatches(
-					*funcDefs[n]->funcdef, *func))
+			if (callableTypes[n]->callableSignature->IsSignatureExceptNameEqual(func)
+				&& CallableSignatureSourceFormalMetadataMatches(
+					*callableTypes[n]->callableSignature, *func))
 			{
-				if (func->IsShared() && !funcDefs[n]->funcdef->IsShared())
-					continue;
-				funcDef = funcDefs[n];
+
+				callableType = callableTypes[n];
 				break;
 			}
 		}
 	}
 
-	if (funcDef == 0)
+	if (callableType == 0)
 	{
 		// Create a matching funcdef
-		asCScriptFunction *fd = asNEW(asCScriptFunction)(this, 0, asFUNC_FUNCDEF);
+		asCScriptFunction *fd = asNEW(asCScriptFunction)(this, 0, asFUNC_CALLABLE_SIGNATURE);
 		fd->name = func->name;
 		fd->nameSpace = func->nameSpace;
-		fd->SetShared(func->IsShared());
 
 		fd->returnType = func->returnType;
 		fd->parameterTypes = func->parameterTypes;
@@ -6324,43 +6109,14 @@ asCFuncdefType *asCScriptEngine::FindMatchingFuncdef(asCScriptFunction *func, as
 		fd->canonicalASTSourceParameterQualifiers =
 			func->canonicalASTSourceParameterQualifiers;
 
-		funcDef = asNEW(asCFuncdefType)(this, fd);
-		funcDefs.PushLast(funcDef); // doesn't increase the refCount
+		callableType = asNEW(asCCallableType)(this, fd);
+		callableTypes.PushLast(callableType); // doesn't increase the refCount
 
 		fd->id = GetNextScriptFunctionId();
 		AddScriptFunction(fd);
-
-		if (module)
-		{
-			// Add the new funcdef to the module so it will
-			// be available when saving the bytecode
-			funcDef->module = module;
-			module->funcDefs.PushLast(funcDef); // the refCount was already accounted for in the constructor
-			module->allLocalTypes.Add(funcDef);
-		}
-
-		// Observe, if the funcdef is created without informing a module a reference will be stored in the
-		// engine's funcDefs array, but it will not be owned by any module. This means that it will live on
-		// until the engine is released.
+		// The engine owns this compatibility signature until shutdown.
 	}
-
-	if (funcDef && module && funcDef->module && funcDef->module != module)
-	{
-		// Unless this is a registered funcDef the returned funcDef must
-		// be stored as part of the module for saving/loading bytecode
-		if (!module->funcDefs.Exists(funcDef))
-		{
-			module->funcDefs.PushLast(funcDef);
-			module->allLocalTypes.Add(funcDef);
-			funcDef->AddRefInternal();
-		}
-		else
-		{
-			asASSERT(funcDef->IsShared());
-		}
-	}
-
-	return funcDef;
+	return callableType;
 }
 
 // interface
@@ -6499,7 +6255,7 @@ int asCScriptEngine::RegisterEnum(const char *name)
 	asCDataType dataType;
 	dataType.CreatePrimitive(ttInt, false);
 
-	st->flags = asOBJ_ENUM | asOBJ_SHARED;
+	st->flags = asOBJ_ENUM;
 	st->size = 1;
 	st->alignment = 1;
 	st->name = name;
@@ -6572,13 +6328,13 @@ asITypeInfo *asCScriptEngine::GetEnumByIndex(asUINT index) const
 // interface
 asUINT asCScriptEngine::GetObjectTypeCount() const
 {
-	return CountMetadataTypes(asOBJ_VALUE | asOBJ_REF, asOBJ_FUNCDEF);
+	return CountMetadataTypes(asOBJ_VALUE | asOBJ_REF, asOBJ_CALLABLE_TYPE);
 }
 
 // interface
 asITypeInfo *asCScriptEngine::GetObjectTypeByIndex(asUINT index) const
 {
-	return MetadataTypeByIndex(index, asOBJ_VALUE | asOBJ_REF, asOBJ_FUNCDEF);
+	return MetadataTypeByIndex(index, asOBJ_VALUE | asOBJ_REF, asOBJ_CALLABLE_TYPE);
 }
 
 // interface
@@ -6661,12 +6417,12 @@ void asCScriptEngine::CopyCanonicalTemplateDeclarations(
 		fact.acceptReferenceSubtype = type->acceptRefSubType;
 		fact.requiresRuntimeValidation = type->beh.templateCallback != 0;
 		for( asUINT childIndex = 0;
-			childIndex < type->childFuncDefs.GetLength(); ++childIndex )
+			childIndex < type->childCallableTypes.GetLength(); ++childIndex )
 		{
-			const asCFuncdefType* const child = type->childFuncDefs[childIndex];
+			const asCCallableType* const child = type->childCallableTypes[childIndex];
 			if( child != 0 && child->name.GetLength() != 0 )
 			{
-				fact.childFuncdefs.PushLast(child->name);
+				fact.childCallableTypes.PushLast(child->name);
 			}
 		}
 		outDeclarations.PushLast(fact);
@@ -6758,9 +6514,9 @@ static asSCanonicalRegisteredTypeRefFact CanonicalRegisteredTypeRefFromDataType(
 	}
 	else if( asCTypeInfo* const typeInfo = sourceType.GetTypeInfo() )
 	{
-		if( typeInfo->flags & asOBJ_FUNCDEF )
+		if( typeInfo->flags & asOBJ_CALLABLE_TYPE )
 		{
-			fact.kind = asAST_TYPE_FUNCDEF;
+			fact.kind = asAST_TYPE_CALLABLE_TYPE;
 		}
 		else if( typeInfo->flags & asOBJ_ENUM )
 		{
@@ -6819,18 +6575,18 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 		{
 			return stableKey;
 		}
-		const asCFuncdefType* const funcdef = CastToFuncdefType(type);
-		if( funcdef != 0 && funcdef->parentClass != 0 )
+		const asCCallableType* const callableSignature = CastToCallableType(type);
+		if( callableSignature != 0 && callableSignature->parentClass != 0 )
 		{
 			// Member funcdefs need their parent's complete namespace-qualified
 			// spelling; asCDataType::Format intentionally omits it here.
-			if( funcdef->parentClass->nameSpace != 0
-				&& funcdef->parentClass->nameSpace->name.GetLength() != 0 )
+			if( callableSignature->parentClass->nameSpace != 0
+				&& callableSignature->parentClass->nameSpace->name.GetLength() != 0 )
 			{
-				stableKey = funcdef->parentClass->nameSpace->name;
+				stableKey = callableSignature->parentClass->nameSpace->name;
 				stableKey += "::";
 			}
-			stableKey += funcdef->parentClass->name;
+			stableKey += callableSignature->parentClass->name;
 			stableKey += "::";
 			stableKey += type->name;
 			return stableKey;
@@ -6852,9 +6608,9 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 		// A child funcdef of a template declaration/instance is derived from the
 		// CTA-S64 template fact. Copying a live generated child here would make an
 		// old Runtime instance an alternative source of Canonical identity.
-		const asCFuncdefType* const funcdef = CastToFuncdefType(type);
-		if( funcdef != 0 && funcdef->parentClass != 0
-			&& (funcdef->parentClass->flags & asOBJ_TEMPLATE) != 0 )
+		const asCCallableType* const callableSignature = CastToCallableType(type);
+		if( callableSignature != 0 && callableSignature->parentClass != 0
+			&& (callableSignature->parentClass->flags & asOBJ_TEMPLATE) != 0 )
 		{
 			return;
 		}
@@ -6897,13 +6653,13 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 				fact.enumerators.PushLast(enumerator);
 			}
 		}
-		else if( type->flags & asOBJ_FUNCDEF )
+		else if( type->flags & asOBJ_CALLABLE_TYPE )
 		{
-			fact.kind = asAST_TYPE_FUNCDEF;
-			if( funcdef != 0 && funcdef->funcdef != 0 )
+			fact.kind = asAST_TYPE_CALLABLE_TYPE;
+			if( callableSignature != 0 && callableSignature->callableSignature != 0 )
 			{
-				const asCScriptFunction* const function = funcdef->funcdef;
-				fact.funcdefReturn = CanonicalRegisteredTypeRefFromDataType(
+				const asCScriptFunction* const function = callableSignature->callableSignature;
+				fact.callableReturn = CanonicalRegisteredTypeRefFromDataType(
 					this, function->returnType, asTM_NONE);
 				for( asUINT parameterIndex = 0;
 					parameterIndex < function->parameterTypes.GetLength();
@@ -6931,7 +6687,7 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 							function->parameterTypes[parameterIndex],
 							passing);
 					}
-					fact.funcdefFormals.PushLast(formal);
+					fact.callableFormals.PushLast(formal);
 				}
 			}
 		}
@@ -6990,7 +6746,7 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 		// Sema never chooses whichever old/current module entry happened to visit
 		// first.
 		const asQWORD semanticFlags =
-			asOBJ_VALUE | asOBJ_REF | asOBJ_ENUM | asOBJ_FUNCDEF
+			asOBJ_VALUE | asOBJ_REF | asOBJ_ENUM | asOBJ_CALLABLE_TYPE
 			| asOBJ_TYPEDEF | asOBJ_IMPLICIT_HANDLE | asOBJ_NOHANDLE
 			| asOBJ_SCOPED | asOBJ_ASHANDLE;
 		asSMapNode<asCString, asSCanonicalRegisteredTypeDeclarationFact>* cursor = 0;
@@ -7001,16 +6757,16 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 			bool sameEnumerators =
 				existing.enumerators.GetLength()
 					== fact.enumerators.GetLength();
-			bool sameFuncdef =
-				existing.funcdefReturn.Equals(fact.funcdefReturn)
-				&& existing.funcdefFormals.GetLength()
-					== fact.funcdefFormals.GetLength();
+			bool sameCallableType =
+				existing.callableReturn.Equals(fact.callableReturn)
+				&& existing.callableFormals.GetLength()
+					== fact.callableFormals.GetLength();
 			for( asUINT formalIndex = 0;
-				sameFuncdef && formalIndex < existing.funcdefFormals.GetLength();
+				sameCallableType && formalIndex < existing.callableFormals.GetLength();
 				++formalIndex )
 			{
-				sameFuncdef = existing.funcdefFormals[formalIndex].Equals(
-					fact.funcdefFormals[formalIndex]);
+				sameCallableType = existing.callableFormals[formalIndex].Equals(
+					fact.callableFormals[formalIndex]);
 			}
 			bool sameBases = existing.baseStableKeys.GetLength()
 				== fact.baseStableKeys.GetLength();
@@ -7037,7 +6793,7 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 					!= (fact.flags & semanticFlags)
 				|| !sameBases
 				|| !sameEnumerators
-				|| !sameFuncdef )
+				|| !sameCallableType )
 			{
 				existing.ambiguous = true;
 			}
@@ -7046,10 +6802,10 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 		declarationsByStableKey.Insert(fact.stableKey, fact);
 	};
 	allRegisteredTypes.IterateAll(appendTypeFact);
-	for( asUINT funcdefIndex = 0;
-		funcdefIndex < funcDefs.GetLength(); ++funcdefIndex )
+	for( asUINT callableIndex = 0;
+		callableIndex < callableTypes.GetLength(); ++callableIndex )
 	{
-		appendTypeFact(funcDefs[funcdefIndex]);
+		appendTypeFact(callableTypes[callableIndex]);
 	}
 
 	// Parser type lookup checks the build module's flattened imports before any
@@ -7077,8 +6833,8 @@ void asCScriptEngine::CopyCanonicalRegisteredTypeDeclarations(
 				typeIndex < importedModule->typeDefs.GetLength(); ++typeIndex )
 				appendTypeFact(importedModule->typeDefs[typeIndex]);
 			for( asUINT typeIndex = 0;
-				typeIndex < importedModule->funcDefs.GetLength(); ++typeIndex )
-				appendTypeFact(importedModule->funcDefs[typeIndex]);
+				typeIndex < importedModule->callableTypes.GetLength(); ++typeIndex )
+				appendTypeFact(importedModule->callableTypes[typeIndex]);
 		}
 	}
 

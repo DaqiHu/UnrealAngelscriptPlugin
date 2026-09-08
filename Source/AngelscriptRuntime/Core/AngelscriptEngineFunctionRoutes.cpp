@@ -59,7 +59,7 @@ bool FAngelscriptEngine::TryResolveStableFunctionKey(
 	OutFunctionKey = {};
 	if (Function == nullptr
 		|| Function->GetEngine() != Engine
-		|| Function->GetModule() == nullptr)
+		|| static_cast<const asCScriptFunction*>(Function)->module == nullptr)
 	{
 		return false;
 	}
@@ -82,7 +82,7 @@ bool FAngelscriptEngine::TryResolveStableFunctionKey(
 	}
 
 	TSharedPtr<FAngelscriptModuleDesc> Module = GetModule(
-		Function->GetModule());
+		static_cast<const asCScriptFunction*>(Function)->module);
 	if (!Module.IsValid())
 	{
 		return false;
@@ -186,7 +186,7 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 			: VerifiedArtifactRoutes)
 		{
 			if (Verified.Function != nullptr
-				&& Verified.Function->GetModule() == ScriptModule)
+				&& static_cast<asCScriptFunction*>(Verified.Function)->module == ScriptModule)
 			{
 				ModuleKey = Verified.ModuleKey;
 				break;
@@ -368,9 +368,9 @@ void FAngelscriptEngine::RebuildFunctionRouteSnapshot(
 	{
 		if (Verified.Function == nullptr
 			|| Verified.Function->GetEngine() != Engine
-			|| Verified.Function->GetModule() == nullptr
+			|| static_cast<asCScriptFunction*>(Verified.Function)->module == nullptr
 			|| Verified.NumericFunctionId != Verified.Function->GetId()
-			|| !ModulesByScriptModule.Contains(Verified.Function->GetModule())
+			|| !ModulesByScriptModule.Contains(static_cast<asCScriptFunction*>(Verified.Function)->module)
 			|| Verified.Identity.FunctionKey.Hash.IsZero())
 		{
 			continue;

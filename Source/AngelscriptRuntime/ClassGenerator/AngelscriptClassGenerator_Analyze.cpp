@@ -117,7 +117,7 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FClassData& Cl
 				auto* ReplacedScriptType = bIsCurrentReloadedStruct ? nullptr : (asITypeInfo*)ReplacedStruct->ScriptType;
 				if (ReplacedScriptType != nullptr)
 				{
-					auto Module = FAngelscriptEngine::Get().GetModule(ReplacedScriptType->GetModule());
+					auto Module = FAngelscriptEngine::Get().GetModule(static_cast<const asCTypeInfo*>(ReplacedScriptType)->module);
 					if (Module.IsValid() && !IsReloadingModule(Module))
 					{
 						FAngelscriptEngine::Get().ScriptCompileError(ModuleData.NewModule, ClassData.NewClass->LineNumber, FString::Printf(
@@ -144,7 +144,7 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FClassData& Cl
 				auto* ReplacedScriptType = bIsCurrentReloadedClass ? nullptr : (asITypeInfo*)ReplacedClass->ScriptTypePtr;
 				if (ReplacedScriptType != nullptr)
 				{
-					auto Module = FAngelscriptEngine::Get().GetModule(ReplacedScriptType->GetModule());
+					auto Module = FAngelscriptEngine::Get().GetModule(static_cast<const asCTypeInfo*>(ReplacedScriptType)->module);
 					if (Module.IsValid() && !IsReloadingModule(Module))
 					{
 						FAngelscriptEngine::Get().ScriptCompileError(ModuleData.NewModule, ClassData.NewClass->LineNumber, FString::Printf(

@@ -3,7 +3,6 @@
 #include "Compiler/AngelscriptStandaloneNativeCompiler.h"
 #include "Compiler/AngelscriptStandaloneUECompiler.h"
 #include "Compiler/AngelscriptValidationArtifact.h"
-#include "Runtime/AngelscriptStandaloneRunner.h"
 #include "Support/AngelscriptStandaloneJson.h"
 
 #include "UnrealAngelscriptVersion.h"
@@ -171,53 +170,6 @@ namespace AngelscriptStandalone
 			return CompileResult.bSuccess ? 0 : 1;
 		}
 
-		int RunNative(const FCommandLineOptions& Options)
-		{
-			FRunRequest Request;
-			Request.ScriptRoots = Options.ScriptRoots;
-			Request.Entry = Options.Entry;
-			Request.Arguments = Options.ScriptArguments;
-			Request.TimeoutMilliseconds = Options.TimeoutMilliseconds;
-			Request.MemoryLimitBytes =
-				static_cast<std::uint64_t>(Options.MemoryLimitMegabytes) * 1024ull * 1024ull;
-
-			const FRunResult RunResult = RunNativeScript(Request);
-			if (!RunResult.StandardOutput.empty())
-			{
-				std::cout << RunResult.StandardOutput;
-			}
-			PrintDiagnostics(RunResult.Diagnostics, Options.DiagnosticFormat);
-
-			if (RunResult.ModuleId.empty())
-			{
-				std::cerr
-					<< (RunResult.Error.empty()
-						? "native run failed before source resolution"
-						: RunResult.Error)
-					<< '\n';
-				return 2;
-			}
-
-			const std::filesystem::path OutputDirectory =
-				ResolveOutputDirectory(Options.OutputDirectory);
-			FRunArtifactWriteRequest ArtifactRequest;
-			ArtifactRequest.OutputDirectory = OutputDirectory;
-			ArtifactRequest.RunResult = &RunResult;
-			const FArtifactWriteResult ArtifactResult = WriteRunArtifacts(ArtifactRequest);
-			if (!ArtifactResult.bSuccess)
-			{
-				std::cerr << ArtifactResult.Error << '\n';
-				return 2;
-			}
-
-			std::cerr << "artifacts: " << OutputDirectory.generic_string() << '\n';
-			if (!RunResult.Error.empty() && RunResult.Diagnostics.empty())
-			{
-				std::cerr << RunResult.Error << '\n';
-			}
-			return RunResult.ExitCode;
-		}
-
 		std::string GetVersionText()
 		{
 			return
@@ -270,8 +222,6 @@ int main(int ArgumentCount, char** Arguments)
 				Executable.lexically_normal());
 		}
 		return CompileNative(Parsed.Options);
-	case ECommand::Run:
-		return RunNative(Parsed.Options);
 	default:
 		std::cerr << "a command is required\n";
 		return 2;

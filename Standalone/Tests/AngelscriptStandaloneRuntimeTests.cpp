@@ -1,14 +1,9 @@
-#include "Runtime/AngelscriptStandaloneRunner.h"
 #include "Runtime/AngelscriptStandaloneAllocator.h"
 
 #include "ClassGenerator/ASClass.h"
 #include "CoreMinimal.h"
 #include "angelscript.h"
-#include "scriptstdstring/scriptstdstring.h"
 
-#include <chrono>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -31,24 +26,6 @@ namespace
 			std::cerr << "FAILED: " << What << '\n';
 		}
 		return Condition;
-	}
-
-	std::filesystem::path MakeTemporaryDirectory()
-	{
-		const auto Suffix = std::chrono::steady_clock::now().time_since_epoch().count();
-		const auto Directory = std::filesystem::temp_directory_path()
-			/ ("angelscript-standalone-runtime-" + std::to_string(Suffix));
-		std::filesystem::create_directories(Directory);
-		return Directory;
-	}
-
-	void WriteSource(
-		const std::filesystem::path& Root,
-		const std::string& Name,
-		const std::string& Source)
-	{
-		std::ofstream Output(Root / Name, std::ios::binary | std::ios::trunc);
-		Output << Source << '\n';
 	}
 
 	void FailBeforeFirstInstruction(
@@ -149,37 +126,6 @@ namespace
 			NextAllocator.GetCurrentBytes() == 0,
 			"allocator accounting after delayed zero-size free");
 		NextAllocator.Uninstall();
-		return bPassed;
-	}
-
-	bool TestScriptStringStorageUsesCountingAllocator()
-	{
-		using namespace AngelscriptStandalone;
-
-		FCountingAllocator Allocator(64);
-		bool bPassed = Require(
-			Allocator.Install(),
-			"script-string allocator installation");
-		bool bRejected = false;
-		try
-		{
-			scriptstring_t Value;
-			Value.resize(256);
-		}
-		catch (const std::bad_alloc&)
-		{
-			bRejected = true;
-		}
-		bPassed &= Require(
-			bRejected,
-			"script string storage must propagate allocation rejection");
-		bPassed &= Require(
-			Allocator.RejectedAnyAllocation(),
-			"script string storage must use the counting allocator");
-		bPassed &= Require(
-			Allocator.GetCurrentBytes() == 0,
-			"rejected script string allocation must not leak");
-		Allocator.Uninstall();
 		return bPassed;
 	}
 
@@ -306,91 +252,7 @@ int main()
 	bool Passed = true;
 	Passed &= TestHardMemoryLimitRejectsBeforeAllocation();
 	Passed &= TestZeroSizeAllocationCanOutliveAllocatorOwner();
-	Passed &= TestScriptStringStorageUsesCountingAllocator();
 	Passed &= TestAbortBeforeInstructionHasNoAfterEvent();
 	Passed &= TestDirectEngineReleaseDrainsRawScriptObjects();
-	const std::filesystem::path Root = MakeTemporaryDirectory();
-	WriteSource(
-		Root,
-		"success.as",
-		"int main(const array<string> args) { print(\"running\"); return args.length() == 2 ? 31 : -1; }");
-	WriteSource(
-		Root,
-		"exception.as",
-		"void main(const array<string> args) { assert(false, \"expected failure\"); }");
-	WriteSource(
-		Root,
-		"timeout.as",
-		"void main(const array<string> args) { while (true) { int value = 1; } }");
-	WriteSource(
-		Root,
-		"bad-entry.as",
-		"int helper() { return 1; }");
-	WriteSource(
-		Root,
-		"memory-limit.as",
-		"int main(const array<string> args) { string value; value.resize(33554432); return 0; }");
-
-	FRunRequest Request;
-	Request.ScriptRoots.push_back(Root);
-	Request.Entry = "success.as";
-	Request.Arguments = {"first", "second"};
-	Request.TimeoutMilliseconds = 5000;
-	Request.MemoryLimitBytes = 256ull * 1024ull * 1024ull;
-	const FRunResult Success = RunNativeScript(Request);
-	if (Success.AllocatedBytesAfterShutdown != 0)
-	{
-		std::cerr
-			<< "successful run allocator residue: current="
-			<< Success.AllocatedBytesAfterShutdown
-			<< ", peak=" << Success.PeakAllocatedBytes << '\n';
-	}
-	Passed &= Require(Success.ExitCode == 0, "successful run exit");
-	Passed &= Require(Success.ScriptResult.has_value() && *Success.ScriptResult == 31, "script result");
-	Passed &= Require(Success.StandardOutput == "running\n", "captured print output");
-	Passed &= Require(Success.PeakAllocatedBytes > 0, "tracked peak allocation");
-	Passed &= Require(Success.AllocatedBytesAfterShutdown == 0, "zero tracked allocations after shutdown");
-
-	Request.Entry = "exception.as";
-	Request.Arguments.clear();
-	const FRunResult Exception = RunNativeScript(Request);
-	Passed &= Require(Exception.ExitCode == 3, "script exception exit");
-	Passed &= Require(Exception.ExceptionMessage == "expected failure", "script exception message");
-
-	Request.Entry = "timeout.as";
-	Request.TimeoutMilliseconds = 25;
-	const FRunResult Timeout = RunNativeScript(Request);
-	Passed &= Require(Timeout.ExitCode == 4, "timeout exit");
-	Passed &= Require(Timeout.bTimedOut, "timeout category");
-
-	Request.Entry = "bad-entry.as";
-	Request.TimeoutMilliseconds = 5000;
-	const FRunResult BadEntry = RunNativeScript(Request);
-	Passed &= Require(BadEntry.ExitCode == 1, "invalid entry exit");
-
-	Request.Entry = "success.as";
-	Request.MemoryLimitBytes = 128ull * 1024ull;
-	const FRunResult MemoryLimited = RunNativeScript(Request);
-	Passed &= Require(MemoryLimited.ExitCode == 4, "memory limit exit");
-	Passed &= Require(MemoryLimited.bMemoryLimitReached, "memory limit category");
-	Passed &= Require(
-		MemoryLimited.AllocatedBytesAfterShutdown == 0,
-		"zero tracked allocations after memory rejection");
-
-	Request.Entry = "memory-limit.as";
-	Request.MemoryLimitBytes = 20ull * 1024ull * 1024ull;
-	const FRunResult AddonMemoryLimited = RunNativeScript(Request);
-	Passed &= Require(
-		AddonMemoryLimited.ExitCode == 4,
-		"bounded-library memory limit exit");
-	Passed &= Require(
-		AddonMemoryLimited.bMemoryLimitReached,
-		"bounded-library memory limit category");
-	Passed &= Require(
-		AddonMemoryLimited.AllocatedBytesAfterShutdown == 0,
-		"zero tracked allocations after bounded-library rejection");
-
-	std::error_code CleanupError;
-	std::filesystem::remove_all(Root, CleanupError);
 	return Passed ? 0 : 1;
 }

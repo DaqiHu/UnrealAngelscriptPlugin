@@ -1,7 +1,6 @@
 #include "Compiler/AngelscriptStandaloneNativeCompiler.h"
 #include "Compiler/AngelscriptStandaloneUECompiler.h"
 #include "Contract/AngelscriptOfflineBundleLoader.h"
-#include "Runtime/AngelscriptStandaloneRunner.h"
 
 #include "angelscript.h"
 
@@ -122,14 +121,11 @@ int main(int ArgumentCount, char** Arguments)
 
 	std::vector<FMetric> Metrics = {
 		{"cold-engine-create-shutdown-ms", {}},
-		{"native-compile-ms", {}},
-		{"native-compile-run-ms", {}},
 		{"bundle-load-index-ms", {}},
 		{"ue-core-analysis-ms", {}},
 		{"template-analysis-ms", {}},
 		{"resource-analysis-ms", {}},
 	};
-	std::uint64_t PeakMemoryBytes = 0;
 	std::string BundleIdentity;
 	for (int Sample = 0; Sample < SampleCount; ++Sample)
 	{
@@ -147,31 +143,6 @@ int main(int ArgumentCount, char** Arguments)
 		}));
 
 		Metrics[1].Samples.push_back(MeasureMilliseconds([&]
-		{
-			FCompileRequest Request;
-			Request.ScriptRoots = {CorpusRoot / "Native"};
-			Request.Entry = "basic.as";
-			Request.bEmitByteCode = true;
-			const FCompileResult Result =
-				FNativeCompiler().Compile(Request);
-			bPassed &= Result.bSuccess
-				&& !Result.ByteCode.empty();
-		}));
-
-		Metrics[2].Samples.push_back(MeasureMilliseconds([&]
-		{
-			FRunRequest Request;
-			Request.ScriptRoots = {CorpusRoot / "Native"};
-			Request.Entry = "basic.as";
-			const FRunResult Result = RunNativeScript(Request);
-			bPassed &= Result.ExitCode == 0
-				&& Result.AllocatedBytesAfterShutdown == 0;
-			PeakMemoryBytes = std::max(
-				PeakMemoryBytes,
-				Result.PeakAllocatedBytes);
-		}));
-
-		Metrics[3].Samples.push_back(MeasureMilliseconds([&]
 		{
 			FOfflineBundleLoadOptions Options;
 			Options.Compatibility.ExpectedForkVersion =
@@ -191,7 +162,7 @@ int main(int ArgumentCount, char** Arguments)
 			}
 		}));
 
-		Metrics[4].Samples.push_back(MeasureMilliseconds([&]
+		Metrics[2].Samples.push_back(MeasureMilliseconds([&]
 		{
 			FUECompileRequest Request;
 			Request.ScriptRoots = {CorpusRoot / "UECore"};
@@ -204,7 +175,7 @@ int main(int ArgumentCount, char** Arguments)
 				&& !Result.ByteCode.empty();
 		}));
 
-		Metrics[5].Samples.push_back(MeasureMilliseconds([&]
+		Metrics[3].Samples.push_back(MeasureMilliseconds([&]
 		{
 			FUECompileRequest Request;
 			Request.ScriptRoots = {CorpusRoot / "Templates"};
@@ -216,7 +187,7 @@ int main(int ArgumentCount, char** Arguments)
 				&& !Result.bInfrastructureFailure;
 		}));
 
-		Metrics[6].Samples.push_back(MeasureMilliseconds([&]
+		Metrics[4].Samples.push_back(MeasureMilliseconds([&]
 		{
 			FUECompileRequest Request;
 			Request.ScriptRoots = {CorpusRoot / "Resources"};
@@ -263,8 +234,6 @@ int main(int ArgumentCount, char** Arguments)
 			<< ',' << std::fixed << std::setprecision(6)
 			<< Median(Metric.Samples) << '\n';
 	}
-	Csv << "native-peak-memory-bytes," << SampleCount
-		<< ',' << PeakMemoryBytes << '\n';
 
 	std::ofstream Json(
 		OutputRoot / "benchmark-results.json",
@@ -296,9 +265,7 @@ int main(int ArgumentCount, char** Arguments)
 			<< '}';
 	}
 	Json
-		<< "],\"nativePeakMemoryBytes\":"
-		<< PeakMemoryBytes
-		<< ",\"regressionThresholdPercent\":20"
+		<< "],\"regressionThresholdPercent\":20"
 		<< ",\"schema\":\"angelscript-standalone-benchmark/1.0\"}\n";
 
 	return bPassed && Csv.good() && Json.good() ? 0 : 1;

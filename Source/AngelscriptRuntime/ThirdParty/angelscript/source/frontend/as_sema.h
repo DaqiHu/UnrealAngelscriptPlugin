@@ -1,6 +1,8 @@
 /* Maintained Unreal AngelScript fork — typed declaration semantic actions. */
 #pragma once
 
+#include "frontend/as_language_surface.h"
+
 #include "frontend/as_ast_context.h"
 #include "frontend/as_attr.h"
 #include "frontend/as_body_fragment.h"
@@ -28,12 +30,6 @@ using asFBodyNameLookup = TFunction<TConstArrayView<asCDecl*>(const FString&)>;
 		FString Name;
 		asCSourceRange NameRange;
 	};
-	struct asSParsedLambdaParameter
-	{
-		asSTypeSyntax Type;
-		FString Name;
-		asCSourceRange Range;
-	};
 
 	struct asSParsedForeachVariable
 	{
@@ -59,6 +55,7 @@ using asFBodyNameLookup = TFunction<TConstArrayView<asCDecl*>(const FString&)>;
 		asCCallableTypeDecl* ActOnCallableType(bool bMulticast, FString Name, asSTypeSyntax ReturnType, asCSourceRange Range, TConstArrayView<asCAttr*> Attrs);
 		asCVarDecl* ActOnVariable(FString Name, FString Type, bool bParameter, asCSourceRange Range, TConstArrayView<asCAttr*> Attrs);
 		asCRecoveryDecl* ActOnRecovery(asCSourceRange Range, FString Message, asUINT DiagnosticID = 3001);
+		void DiagnoseRemovedFeature(asERemovedLanguageFeature Feature, asCSourceRange Range);
 		asCAnnotationAttr* CreateAnnotation(asEAnnotationKind Kind, TArray<asSAnnotationArgument> Arguments, asCSourceRange Range);
 		asCFlagAttr* CreateAnnotation(FString Name, asCSourceRange Range);
 		asCStringAttr* CreateStringAnnotation(FString Name, FString Value, asCSourceRange Range);
@@ -82,9 +79,6 @@ using asFBodyNameLookup = TFunction<TConstArrayView<asCDecl*>(const FString&)>;
 		asCRecordDecl* GetCurrentRecord() const;
 		asCFunctionDecl* GetCurrentFunction() const;
 		asCExpr* ActOnThis(bool bImplicit, asCSourceRange Range);
-		asCExpr* ActOnLambda(TArray<asSParsedLambdaParameter> Parameters, asCSourceRange BodyRange, asCSourceRange Range);
-		bool IsInferringLambdaReturn() const { return bInferLambdaReturn; }
-		asCReturnStmt* ActOnInferredLambdaReturn(asCExpr* Value, asCSourceRange Range);
 		asCInitListExpr* ActOnInitList(TArray<asCExpr*> Elements, asCSourceRange Range);
 		asCValueInitExpr* ActOnValueInit(asCSourceRange Range);
 		asCExpr* ActOnStringLiteral(FString Spelling, asCSourceRange Range);
@@ -146,9 +140,6 @@ using asFBodyNameLookup = TFunction<TConstArrayView<asCDecl*>(const FString&)>;
 		void BeginInitializerContext(asCNamedDecl& Declaration, asFBodyNameLookup InLookup, asFBodyTypeLookup InTypeLookup,
 			asFStructuredTypeLookup InStructuredLookup, asFNominalDeclLookup InNominalLookup, asFBodyInputLookup InBodyInputLookup = {}, asFListInitializationLookup InListLookup = {},
 			asFExternalCallableLookup InExternalLookup = {});
-		bool AnalyzeLambda(asCLambdaExpr& Lambda, asCFunctionType* Expected, TConstArrayView<asSParsedCallArgument> Arguments, bool bMayCapture);
-		bool FinalizeLambdaIdentity(asCFunctionDecl& Function);
-		asCExpr* ConvertLambda(asCLambdaExpr& Lambda, asCQualType Target);
 		asCExpr* ConvertInitList(asCInitListExpr& List, asCQualType Target);
 		void ReportBodyError(const asCSourceRange& Range, FString Message);
 		void ReportBodyWarning(const asCSourceRange& Range, FString Message);
@@ -189,12 +180,6 @@ using asFBodyNameLookup = TFunction<TConstArrayView<asCDecl*>(const FString&)>;
 		asFBodyInputLookup BodyInputLookup;
 		asFListInitializationLookup ListInitializationLookup;
 		asFExternalCallableLookup ExternalCallableLookup;
-		TMap<asCFunctionDecl*, TMap<FString, asCVarDecl*>> LambdaOuterVariables;
-		TArray<asCFunctionDecl*> CompletedLambdaFunctions;
-		TArray<asCReturnStmt*> InferredLambdaReturns;
-		bool bInferLambdaReturn = false;
-		bool bInheritedEditDefaultsContext = false;
-		bool bInheritedConstructionContext = false;
 		TArray<TMap<FString, asCVarDecl*>> BodyScopes;
 		struct asSControlTarget
 		{

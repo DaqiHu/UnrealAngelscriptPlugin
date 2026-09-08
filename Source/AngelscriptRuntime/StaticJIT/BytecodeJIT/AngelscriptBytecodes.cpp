@@ -932,7 +932,7 @@ struct FScriptSystemCall
 		if (ScriptFunction->returnType.IsValid() && ScriptFunction->returnType.GetTokenType() != ttVoid)
 		{
 			// Store the returned value into the script vm
-			if ((ScriptFunction->returnType.IsObject() || ScriptFunction->returnType.IsFuncdef()) && !ScriptFunction->returnType.IsReference())
+			if ((ScriptFunction->returnType.IsObject() || ScriptFunction->returnType.IsCallableType()) && !ScriptFunction->returnType.IsReference())
 			{
 				if (ScriptFunction->returnType.IsObjectHandle())
 				{

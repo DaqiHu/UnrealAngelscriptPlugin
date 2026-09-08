@@ -899,7 +899,7 @@ void *asCContext::GetReturnAddress()
 
 	if( dt->IsReference() )
 		return *(void**)&m_regs.valueRegister;
-	else if( dt->IsObject() || dt->IsFuncdef() )
+	else if( dt->IsObject() || dt->IsCallableType() )
 	{
 		if( m_initialFunction->DoesReturnOnStack() )
 		{
@@ -923,7 +923,7 @@ void *asCContext::GetReturnObject()
 
 	asCDataType *dt = &m_initialFunction->returnType;
 
-	if( !dt->IsObject() && !dt->IsFuncdef() ) return 0;
+	if( !dt->IsObject() && !dt->IsCallableType() ) return 0;
 
 	if( dt->IsReference() )
 		return *(void**)(asPWORD)m_regs.valueRegister;
@@ -963,7 +963,7 @@ void *asCContext::GetAddressOfReturnValue()
 	asCDataType *dt = &m_initialFunction->returnType;
 
 	// An object is stored in the objectRegister
-	if( !dt->IsReference() && (dt->IsObject() || dt->IsFuncdef()) )
+	if( !dt->IsReference() && (dt->IsObject() || dt->IsCallableType()) )
 	{
 		// Need to dereference objects
 		if( !dt->IsObjectHandle() )
@@ -4987,7 +4987,7 @@ void asCContext::CleanReturnObject()
 
 		if( m_regs.objectType )
 		{
-			if( m_regs.objectType->GetFlags() & asOBJ_FUNCDEF )
+			if( m_regs.objectType->GetFlags() & asOBJ_CALLABLE_TYPE )
 			{
 				// Release the function pointer
 				reinterpret_cast<asIScriptFunction*>(m_regs.objectRegister)->Release();
@@ -5270,7 +5270,7 @@ void asCContext::CleanArgsOnStack()
 		for( v = 0; v < ActiveScriptData()->objVariablePos.GetLength(); v++ )
 			if( ActiveScriptData()->objVariablePos[v] == var )
 			{
-				func = CastToFuncdefType(ActiveScriptData()->objVariableTypes[v])->funcdef;
+				func = CastToCallableType(ActiveScriptData()->objVariableTypes[v])->callableSignature;
 				break;
 			}
 
@@ -5286,8 +5286,8 @@ void asCContext::CleanArgsOnStack()
 			{
 				if( var == paramPos )
 				{
-					if (m_currentFunction->parameterTypes[v].IsFuncdef())
-						func = CastToFuncdefType(m_currentFunction->parameterTypes[v].GetTypeInfo())->funcdef;
+					if (m_currentFunction->parameterTypes[v].IsCallableType())
+						func = CastToCallableType(m_currentFunction->parameterTypes[v].GetTypeInfo())->callableSignature;
 					break;
 				}
 				paramPos -= m_currentFunction->parameterTypes[v].GetSizeOnStackDWords();
@@ -5311,14 +5311,14 @@ void asCContext::CleanArgsOnStack()
 		offset += AS_PTR_SIZE;
 	for( asUINT n = 0; n < func->parameterTypes.GetLength(); n++ )
 	{
-		if( (func->parameterTypes[n].IsObject() || func->parameterTypes[n].IsFuncdef()) && !func->parameterTypes[n].IsReference() )
+		if( (func->parameterTypes[n].IsObject() || func->parameterTypes[n].IsCallableType()) && !func->parameterTypes[n].IsReference() )
 		{
 			// TODO: cleanup: This logic is repeated twice in CleanStackFrame too. Should create a common function to share the code
 			if( *(asPWORD*)&m_regs.stackPointer[offset] )
 			{
 				// Call the object's destructor
 				asSTypeBehaviour *beh = func->parameterTypes[n].GetBehaviour();
-				if (func->parameterTypes[n].GetTypeInfo()->flags & asOBJ_FUNCDEF)
+				if (func->parameterTypes[n].GetTypeInfo()->flags & asOBJ_CALLABLE_TYPE)
 				{
 					(*(asCScriptFunction**)&m_regs.stackPointer[offset])->Release();
 				}
@@ -5557,7 +5557,7 @@ bool asCContext::CleanStackFrame(bool catchException)
 						*(asPWORD*)&m_regs.stackFramePointer[-pos] = 0;
 						continue;
 					}
-					if (variableType->flags & asOBJ_FUNCDEF)
+					if (variableType->flags & asOBJ_CALLABLE_TYPE)
 					{
 						(*(asCScriptFunction**)&m_regs.stackFramePointer[-pos])->Release();
 					}
@@ -5670,7 +5670,7 @@ bool asCContext::CleanStackFrame(bool catchException)
 						if( retained == 0 )
 							continue;
 						if( cleanup.objectType == &m_engine->functionBehaviours
-							|| (cleanup.objectType->flags & asOBJ_FUNCDEF) != 0 )
+							|| (cleanup.objectType->flags & asOBJ_CALLABLE_TYPE) != 0 )
 						{
 							((asCScriptFunction*)retained)->Release();
 						}
@@ -5827,13 +5827,13 @@ bool asCContext::CleanStackFrame(bool catchException)
 		offset += AS_PTR_SIZE;
 	for( asUINT n = 0; n < m_currentFunction->parameterTypes.GetLength(); n++ )
 	{
-		if( (m_currentFunction->parameterTypes[n].IsObject() ||m_currentFunction->parameterTypes[n].IsFuncdef()) && !m_currentFunction->parameterTypes[n].IsReference() )
+		if( (m_currentFunction->parameterTypes[n].IsObject() ||m_currentFunction->parameterTypes[n].IsCallableType()) && !m_currentFunction->parameterTypes[n].IsReference() )
 		{
 			if( *(asPWORD*)&m_regs.stackFramePointer[offset] )
 			{
 				// Call the object's destructor
 				asSTypeBehaviour *beh = m_currentFunction->parameterTypes[n].GetBehaviour();
-				if (m_currentFunction->parameterTypes[n].GetTypeInfo()->flags & asOBJ_FUNCDEF)
+				if (m_currentFunction->parameterTypes[n].GetTypeInfo()->flags & asOBJ_CALLABLE_TYPE)
 				{
 					(*(asCScriptFunction**)&m_regs.stackFramePointer[offset])->Release();
 				}

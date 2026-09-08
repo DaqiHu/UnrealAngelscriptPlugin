@@ -1,93 +1,37 @@
 # Unreal AngelScript Standalone
 
-`as-standalone` is the no-Unreal delivery surface of the maintained
-`Plugins/Angelscript` fork. It builds the same maintained AngelScript compiler
-sources with CMake and compiles its private standard-C++ frontend directly
-into `AngelscriptStandaloneHost`; it does not include or link Unreal Engine.
-The UE plugin keeps its original `FAngelscriptPreprocessor` and descriptor
-graph. The two hosts share the maintained fork and the complete offline JSON
-bundle, not an in-memory frontend or public Language layer.
+Standalone is retained as dormant tooling during reconstruction of the UE language
+stack. Its CMake manifest and compiler adapters still reference retired SDK files
+and interfaces. This change does not restore a buildable Standalone executable;
+historical CTest/package results do not prove the current tree.
 
-The maintained fork compiled here is the same Parser / Sema / sealed AST
-scaffold used by the UE plugin. New standalone engines default to
-`asCOMPILER_PIPELINE_LEGACY`. `asCOMPILER_PIPELINE_CANONICAL` is a selectable
-capture/shadow attach; `IsCanonicalBytecodeCodeGenReady()` stays false until
-`Build()` publishes from `asCBytecodeCodeGen::Generate()`. Production Bytecode
-is still `asCCompiler`. CMake must not find_package LLVM or Clang AST; LLVM is
-a non-goal. The `AngelscriptStandalone.CanonicalAST` CTest covers
-discard/retain policy, public AST V1 traversal, deterministic dump, and
-default execution.
+The upstream runtime library packages and their dedicated execution operation
+have been removed. Native compilation registers no bundled container, string or
+math library. Its profile identity is `native-compiler-v2`, with host-provided
+libraries only. The retained CLI parser rejects `run` with usage exit `2` and
+`AS-NATIVE-UNSUPPORTED-LIBRARY` before creating an engine. There is no replacement
+runtime library in this distribution.
 
-It exposes two deliberately different profiles:
+The independent private frontend, offline bundle selection, UE analysis adapters,
+resource validation and artifact contracts remain as source. Their implementation
+boundaries below describe retained tooling, not current executable certification.
 
-- `compile --dialect native` compiles portable AngelScript and may emit
-  bytecode. `run` executes only this native profile in the restricted
-  standalone standard library.
-- `compile --dialect ue` performs compile-only analysis against one complete
-  offline Unreal declaration bundle. Its bytecode and class records are
-  validation artifacts only: they cannot be run and are not advertised as
-  Unreal-loadable.
+## Source distribution check
 
-There is no UE execution command. The standalone process never loads Unreal,
-project or plugin DLLs, UObjects, assets, native binding addresses, or
-ClassGenerator.
-
-## Build and test
-
-From this directory with CMake 3.25+ and Visual Studio 2022:
+From the repository root:
 
 ```powershell
-cmake --preset win64-msvc
-cmake --build --preset win64-msvc-debug
-ctest --preset win64-msvc-debug --output-on-failure
+python Plugins/Angelscript/Standalone/Tests/CheckRemovedAddons.py
+python Plugins/Angelscript/Standalone/Tests/CheckRemovedAddons.py --self-test
 ```
 
-From the repository root, the supported runner is:
+This read-only audit proves package/dependency absence. It excludes explicit
+generated build/output directories and its own exact file; it has no historical
+source/document exclusions. Negative controls introduce a removed include and a
+package into temporary fixtures; ordinary host and C++ library names remain valid.
+Active plugin builds and Automation tests use Harness for the selected workspace.
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File Tools\RunTestSuite.ps1 -Suite Standalone -LabelPrefix standalone -TimeoutMs 600000
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File Tools\RunTestSuite.ps1 -Suite StandaloneRelease -TimeoutMs 1200000
-```
-
-The Debug and Release suites each run 19 CTests and have isolated report
-directories. Their counts remain separate from the repository's Unreal
-Automation counts. `StandaloneRelease` also builds the final package target
-before CTest and intentionally remains outside the repository `All` suite.
-
-Build and inspect the Win64 Release distribution:
-
-```powershell
-cmake --build --preset win64-msvc-release --target AngelscriptStandalonePackage
-ctest --preset win64-msvc-release -R AngelscriptStandalone.Package --output-on-failure
-```
-
-The directory and zip are written below
-`out/build/win64-msvc/package/Release/`. Package inspection runs the installed
-executable, validates both examples and stable per-file hashes, requires the
-generated `contracts/default-engine/`, and rejects project bundles or any
-unlisted delivery surface.
-
-From the repository root, validate the package against an external consuming
-project after the Release suite succeeds:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File Tools\RunStandaloneExternalSmoke.ps1 -TimeoutMs 1200000
-```
-
-The smoke project has no C++ host module. It exports its complete Project
-bundle through the plugin-owned commandlet twice, compares the three files
-byte for byte, extracts the final ZIP, and runs that installed CLI against the
-explicit bundle. Evidence is written below
-`Saved/StandaloneExternalSmoke/<RunId>/`.
-
-## Commands
-
-Compile and run native AngelScript:
-
-```powershell
-as-standalone compile --dialect native --script-root Examples/Native --entry hello.as --output out/native --diagnostics text --emit-bytecode
-as-standalone run --script-root Examples/Native --entry hello.as --output out/run --diagnostics text -- Codex
-```
+## Retained compiler command shapes
 
 Analyze UE AngelScript with the packaged default contract:
 
@@ -114,31 +58,6 @@ virtual identity. This is distinct from the private Standalone frontend's
 internal source identity and allows exact replacement of the same module's
 exported script baseline. That internal identity is not a UE/Standalone ABI.
 V1 does not guess plugin or memory mounts from arbitrary filesystem roots.
-
-## Native profile boundary
-
-The native standard library contains UTF-8 `string`, `array`, `dictionary`,
-math, `print`, and `assert`. Application calls use AngelScript's generic
-calling convention. The profile does not register file, network, process,
-dynamic-library, Unreal reflection, arbitrary native-address, or FFI APIs.
-
-`run` defaults to a 5-second deadline and a 256 MiB tracked allocation limit;
-values below 16 MiB are rejected before engine creation because they cannot
-safely satisfy the measured engine-bootstrap floor. The hard limit counts the
-engine, contexts, script objects, Compat container storage, arrays, dictionary
-objects/keys/maps, and script string/stream/constant-cache storage. CLI/result
-objects, diagnostics/JSON storage, the C/C++ runtime, and operating-system
-allocations are outside this counter. The result records current/peak tracked
-allocation, abort/timeout/exception state, script result and normalized
-diagnostics. A counted allocation that would exceed the limit is not performed;
-the standalone-only exception-enabled fork build converts bounded-library
-failure to exit `4`, and all tracked allocations must return to zero after
-shutdown. These are defense-in-depth process limits, not an operating-system
-sandbox.
-
-`AS_USE_EXCEPTIONS=1` is private to the standalone CMake maintained-fork
-target. Unreal/UBT keeps the fork's historical `AS_NO_EXCEPTIONS` policy; this
-is not a `.uplugin` setting, public plugin macro, or supported consumer option.
 
 ## UE-validation profile boundary
 
@@ -189,11 +108,9 @@ UE-validation also writes `.classes.jsonl`. Identity fields are canonical and
 deterministic; elapsed time and process-local runtime IDs are not compile
 identity.
 
-- `0`: requested compile/run completed successfully
+- `0`: requested compilation completed successfully
 - `1`: source validation or compilation failed
 - `2`: usage, bundle, I/O, schema, integrity, or other infrastructure failure
-- `3`: native script exception/assertion
-- `4`: native timeout, cancellation, or allocation-limit termination
 
 Use `as-standalone --version` for product, upstream lineage and profile/schema
 versions. See `Schemas/` for the shipped machine-readable contracts and
@@ -203,5 +120,5 @@ versions. See `Schemas/` for the shipped machine-readable contracts and
 
 Package license files live under `LICENSES/`. The maintained engine sources
 remain under the plugin runtime rather than being copied into this directory.
-Pinned standalone add-on and RapidJSON provenance, source revisions, hashes
-and maintained deltas are recorded in `ThirdParty/README.md`.
+Retained third-party distribution information is in `ThirdParty/README.md`.
+Historical removed-library provenance remains available in Git history.

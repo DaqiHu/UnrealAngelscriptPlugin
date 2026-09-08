@@ -84,8 +84,7 @@ namespace
 			return TEXT("<null-function>");
 		}
 
-		const FString ModuleName = Function->GetModuleName() != nullptr ? CharToString(Function->GetModuleName()) : TEXT("<engine>");
-		return FString::Printf(TEXT("%s::%s"), *ModuleName, *CharToString(Function->GetName()));
+		return FString::Printf(TEXT("%s::%s"), *Function->GetStableKey().ToHexString(), *CharToString(Function->GetName()));
 	}
 
 	void AddCountRow(FAngelscriptStateSnapshot& Snapshot, const FString& Category, const FString& Identity, const FString& Field, const int32 Count, const FString& Source)
@@ -188,7 +187,7 @@ namespace
 		{
 			Snapshot.AddRow(TEXT("AsTypeInternal"), Identity, TEXT("Kind"), TEXT("TypedefType"), TEXT("String"), Source);
 		}
-		else if (CastToFuncdefType(const_cast<asCTypeInfo*>(Type)) != nullptr)
+		else if (CastToCallableType(const_cast<asCTypeInfo*>(Type)) != nullptr)
 		{
 			Snapshot.AddRow(TEXT("AsTypeInternal"), Identity, TEXT("Kind"), TEXT("FuncdefType"), TEXT("String"), Source);
 		}
@@ -265,7 +264,7 @@ namespace
 		AddCountRow(Snapshot, TEXT("AsModuleInternal"), ModuleName, TEXT("ClassTypeCount"), AsArrayCount(Module->classTypes), Source);
 		AddCountRow(Snapshot, TEXT("AsModuleInternal"), ModuleName, TEXT("EnumTypeCount"), AsArrayCount(Module->enumTypes), Source);
 		AddCountRow(Snapshot, TEXT("AsModuleInternal"), ModuleName, TEXT("TypedefCount"), AsArrayCount(Module->typeDefs), Source);
-		AddCountRow(Snapshot, TEXT("AsModuleInternal"), ModuleName, TEXT("FuncdefCount"), AsArrayCount(Module->funcDefs), Source);
+		AddCountRow(Snapshot, TEXT("AsModuleInternal"), ModuleName, TEXT("FuncdefCount"), AsArrayCount(Module->callableTypes), Source);
 		AddCountRow(Snapshot, TEXT("AsModuleInternal"), ModuleName, TEXT("ExternalTypeCount"), AsArrayCount(Module->externalTypes), Source);
 		AddCountRow(Snapshot, TEXT("AsModuleInternal"), ModuleName, TEXT("ExternalFunctionCount"), AsArrayCount(Module->externalFunctions), Source);
 		AddBoolRow(Snapshot, TEXT("AsModuleInternal"), ModuleName, TEXT("bIsGlobalVarInitialized"), Module->isGlobalVarInitialized, Source);
@@ -309,9 +308,9 @@ namespace
 		{
 			AddTypeRows(Snapshot, Module->typeDefs[TypeIndex], Source);
 		}
-		for (asUINT TypeIndex = 0; TypeIndex < Module->funcDefs.GetLength(); ++TypeIndex)
+		for (asUINT TypeIndex = 0; TypeIndex < Module->callableTypes.GetLength(); ++TypeIndex)
 		{
-			AddTypeRows(Snapshot, Module->funcDefs[TypeIndex], Source);
+			AddTypeRows(Snapshot, Module->callableTypes[TypeIndex], Source);
 		}
 	}
 }
@@ -571,7 +570,7 @@ FAngelscriptStateSnapshot FAngelscriptStateSnapshotBuilder::Capture(FAngelscript
 		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("RegisteredEnumCount"), AsArrayCount(ScriptEngine->registeredEnums), Source);
 		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("RegisteredGlobalPropertyCount"), AsArrayCount(ScriptEngine->registeredGlobalProps), Source);
 		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("RegisteredGlobalFunctionCount"), AsArrayCount(ScriptEngine->registeredGlobalFuncs), Source);
-		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("RegisteredFuncdefCount"), AsArrayCount(ScriptEngine->registeredFuncDefs), Source);
+		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("RegisteredFuncdefCount"), AsArrayCount(ScriptEngine->registeredCallableTypes), Source);
 		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("RegisteredTemplateTypeCount"), AsArrayCount(ScriptEngine->registeredTemplateTypes), Source);
 		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("TemplateSubTypeCount"), AsArrayCount(ScriptEngine->templateSubTypes), Source);
 		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("UnvalidatedTemplateInstanceCount"), ScriptEngine->unvalidatedTemplateInstances.Num(), Source);
@@ -580,8 +579,7 @@ FAngelscriptStateSnapshot FAngelscriptStateSnapshotBuilder::Capture(FAngelscript
 		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("GlobalPropertyCount"), AsArrayCount(ScriptEngine->globalProperties), Source);
 		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("ScriptFunctionCount"), AsArrayCount(ScriptEngine->scriptFunctions), Source);
 		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("ImportedFunctionCount"), AsArrayCount(ScriptEngine->importedFunctions), Source);
-		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("SharedScriptTypeCount"), AsArrayCount(ScriptEngine->sharedScriptTypes), Source);
-		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("FuncDefCount"), AsArrayCount(ScriptEngine->funcDefs), Source);
+		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("FuncDefCount"), AsArrayCount(ScriptEngine->callableTypes), Source);
 		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("ScriptSectionNameCount"), AsArrayCount(ScriptEngine->scriptSectionNames), Source);
 		AddCountRow(Snapshot, TEXT("AsEngineInternal"), TEXT("ScriptEngine"), TEXT("TypeIdMapCount"), ScriptEngine->mapTypeIdToTypeInfo.Num(), Source);
 		int32 ScriptModulesByNameCount = 0;
@@ -657,9 +655,9 @@ FAngelscriptStateSnapshot FAngelscriptStateSnapshotBuilder::Capture(FAngelscript
 		{
 			AddTypeRows(Snapshot, ScriptEngine->registeredTypeDefs[TypeIndex], Source);
 		}
-		for (asUINT TypeIndex = 0; TypeIndex < ScriptEngine->registeredFuncDefs.GetLength(); ++TypeIndex)
+		for (asUINT TypeIndex = 0; TypeIndex < ScriptEngine->registeredCallableTypes.GetLength(); ++TypeIndex)
 		{
-			AddTypeRows(Snapshot, ScriptEngine->registeredFuncDefs[TypeIndex], Source);
+			AddTypeRows(Snapshot, ScriptEngine->registeredCallableTypes[TypeIndex], Source);
 		}
 	}
 	else

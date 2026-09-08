@@ -610,17 +610,17 @@ public:
 			asCScriptFunction* Method = Fixture.DefineFunction(
 				TEXT("Read"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {}, Point);
 			asCScriptFunction* Signature = Fixture.DefineFunction(
-				TEXT("Callback"), TEXT(""), asFUNC_FUNCDEF, Fixture.Image->Primitive(ttInt), {});
+				TEXT("Callback"), TEXT(""), asFUNC_CALLABLE_SIGNATURE, Fixture.Image->Primitive(ttInt), {});
 			AS_NAMESPACE_QUALIFIER asSNominalTypeDescriptor TypeDescriptor;
 			TypeDescriptor.StableScope = Fixture.Scope;
 			TypeDescriptor.Name = TEXT("CallbackType");
-			TypeDescriptor.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::Funcdef;
+			TypeDescriptor.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::CallableType;
 			asSStableKey TypeKey;
 			ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded,
 				Fixture.Context->GetIdentityRegistry().InternNominalType(TypeDescriptor, TypeKey)));
-			asCFuncdefType* Funcdef = nullptr;
+			asCCallableType* CallableType = nullptr;
 			ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-				Fixture.Image->CreateFuncdefType(TypeKey, "CallbackType", "", *Signature, Funcdef)));
+				Fixture.Image->CreateCallableType(TypeKey, "CallbackType", "", *Signature, CallableType)));
 			asCScriptFunction* Run = Fixture.DefineFunction(
 				TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
@@ -638,17 +638,17 @@ public:
 		asCScriptFunction* MethodB = FixtureB.DefineFunction(
 			TEXT("Read"), TEXT(""), asFUNC_SCRIPT, FixtureB.Image->Primitive(ttInt), {}, PointB);
 		asCScriptFunction* SignatureB = FixtureB.DefineFunction(
-			TEXT("Callback"), TEXT(""), asFUNC_FUNCDEF, FixtureB.Image->Primitive(ttInt), {});
+			TEXT("Callback"), TEXT(""), asFUNC_CALLABLE_SIGNATURE, FixtureB.Image->Primitive(ttInt), {});
 		AS_NAMESPACE_QUALIFIER asSNominalTypeDescriptor TypeDescriptorB;
 		TypeDescriptorB.StableScope = FixtureB.Scope;
 		TypeDescriptorB.Name = TEXT("CallbackType");
-		TypeDescriptorB.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::Funcdef;
+		TypeDescriptorB.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::CallableType;
 		asSStableKey TypeKeyB;
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded,
 			FixtureB.Context->GetIdentityRegistry().InternNominalType(TypeDescriptorB, TypeKeyB)));
-		asCFuncdefType* FuncdefB = nullptr;
+		asCCallableType* CallableTypeB = nullptr;
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			FixtureB.Image->CreateFuncdefType(TypeKeyB, "CallbackType", "", *SignatureB, FuncdefB)));
+			FixtureB.Image->CreateCallableType(TypeKeyB, "CallbackType", "", *SignatureB, CallableTypeB)));
 		asCScriptFunction* RunB = FixtureB.DefineFunction(
 			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureB.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(FixtureB.FinalizeAndFreeze()));

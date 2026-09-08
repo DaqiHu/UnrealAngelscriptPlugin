@@ -1911,7 +1911,7 @@ void FAngelscriptDebugServer::SendCallStack(FSocket* Client)
 					Frame.Source = SectionName ? ANSI_TO_TCHAR(SectionName) : TEXT("");
 
 					if (AngelscriptDebugServer::DebugAdapterVersion >= 1)
-						Frame.ModuleName = ScriptFunction->GetModuleName() ? ANSI_TO_TCHAR(ScriptFunction->GetModuleName()) : TEXT("");
+						Frame.ModuleName = ScriptFunction->GetStableKey().ToHexString();
 
 					Stack.Frames.Insert(Frame, 0);
 				}
@@ -2977,7 +2977,7 @@ bool FAngelscriptDebugServer::GetDebuggerValue(const FString& Path, FDebuggerVal
 		if (!bValidValue && Context != nullptr && Frame < (int32)Context->GetCallstackSize() && (!bHasPrefix || bPrefixModule))
 		{
 			auto* Function = Context->GetFunction(Frame);
-			auto* Module = Function != nullptr ? Function->GetModule() : nullptr;
+			auto* Module = Function != nullptr ? static_cast<const asCScriptFunction*>(Function)->module : nullptr;
 			if (Module != nullptr)
 			{
 				int32 VarCount = Module->GetGlobalVarCount();
@@ -2985,7 +2985,7 @@ bool FAngelscriptDebugServer::GetDebuggerValue(const FString& Path, FDebuggerVal
 				{
 					const char* VarName;
 					int32 TypeId;
-					Module->GetGlobalVar(i, &VarName, nullptr, &TypeId);
+					Module->GetGlobalVar(i, &VarName, nullptr, &TypeId, nullptr);
 
 					if (FCStringAnsi::Strcmp(VarName, AnsiStartVar.Get()) == 0)
 					{
@@ -3270,7 +3270,7 @@ bool FAngelscriptDebugServer::GetDebuggerScope(const FString& Path, FDebuggerSco
 			if (Context != nullptr && Frame < (int32)Context->GetCallstackSize())
 			{
 				auto* Function = Context->GetFunction(Frame);
-				auto* Module = Function != nullptr ? Function->GetModule() : nullptr;
+				auto* Module = Function != nullptr ? static_cast<const asCScriptFunction*>(Function)->module : nullptr;
 				if (Module != nullptr)
 				{
 					int32 VarCount = Module->GetGlobalVarCount();
@@ -3278,7 +3278,7 @@ bool FAngelscriptDebugServer::GetDebuggerScope(const FString& Path, FDebuggerSco
 					{
 						const char* VarName;
 						int32 TypeId;
-						Module->GetGlobalVar(i, &VarName, nullptr, &TypeId);
+						Module->GetGlobalVar(i, &VarName, nullptr, &TypeId, nullptr);
 						auto Usage = FAngelscriptTypeUsage::FromTypeId(TypeId);
 
 						FDebuggerValue VarValue;

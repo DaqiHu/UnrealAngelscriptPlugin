@@ -312,6 +312,43 @@ bool asCParser::ParseBody(const asSDirectiveProcessResult& Input, asCBodyFragmen
 	{
 		if (!Tokens.IsValidIndex(Cursor)) return nullptr;
 		const int32 Begin = Cursor;
+		if (Tokens[Cursor].Kind == asETokenKind::Identifier && Tokens.IsValidIndex(Cursor + 1))
+		{
+			const FString Name = Text(Cursor);
+			const asETokenKind Next = Tokens[Cursor + 1].Kind;
+			const bool bBlock = Next == asETokenKind::LeftBrace;
+			const bool bStatementValue = Next == asETokenKind::Semicolon || Next == asETokenKind::NumericLiteral
+				|| Next == asETokenKind::Identifier || Next == asETokenKind::StringLiteral
+				|| Next == asETokenKind::KwNullptr || Next == asETokenKind::KwTrue || Next == asETokenKind::KwFalse
+				|| Next == asETokenKind::Plus || Next == asETokenKind::Minus || Next == asETokenKind::Bang
+				|| Next == asETokenKind::Tilde || Next == asETokenKind::At;
+			const int32 CatchClose = Name == TEXT("catch") && Next == asETokenKind::LeftParen
+				? FindMatching(Cursor + 1, asETokenKind::LeftParen, asETokenKind::RightParen) : INDEX_NONE;
+			const bool bCatch = Name == TEXT("catch") && (bBlock || (CatchClose != INDEX_NONE
+				&& Tokens.IsValidIndex(CatchClose + 1) && Tokens[CatchClose + 1].Kind == asETokenKind::LeftBrace));
+			const bool bException = (Name == TEXT("try") && bBlock) || bCatch
+				|| (Name == TEXT("throw") && (bStatementValue || Next == asETokenKind::LeftParen));
+			const bool bCoroutine = (Name == TEXT("coroutine") && bBlock) || (Name == TEXT("yield") && bStatementValue);
+			if (bException || bCoroutine)
+			{
+				Sema.DiagnoseRemovedFeature(bException ? asERemovedLanguageFeature::ScriptException
+					: asERemovedLanguageFeature::ScriptCoroutine, Tokens[Begin].Range);
+				// Skip one complete removed statement; a following catch is diagnosed separately.
+				// Braces inside a removed construct must not terminate the containing function.
+				++Cursor;
+				while (Cursor < Tokens.Num() && Tokens[Cursor].Kind != asETokenKind::RightBrace)
+				{
+					if (Tokens[Cursor].Kind == asETokenKind::LeftBrace)
+					{
+						const int32 Close = FindMatching(Cursor, asETokenKind::LeftBrace, asETokenKind::RightBrace);
+						Cursor = Close != INDEX_NONE ? Close + 1 : Tokens.Num();
+						break;
+					}
+					if (Tokens[Cursor++].Kind == asETokenKind::Semicolon) break;
+				}
+				return Sema.GetASTContext().Create<asCRecoveryStmt>(Span(Begin, Cursor - 1));
+			}
+		}
 		if (Tokens[Cursor].Kind == asETokenKind::LeftBrace) return ParseCompoundStatement();
 		if (Tokens[Cursor].Kind == asETokenKind::Semicolon) return Sema.ActOnNullStatement(Tokens[Cursor++].Range);
 		if (Tokens[Cursor].Kind == asETokenKind::KwIf)

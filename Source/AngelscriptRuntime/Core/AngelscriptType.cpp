@@ -447,7 +447,7 @@ FAngelscriptTypeUsage FAngelscriptTypeUsage::FromTypeId(int32 TypeId)
 
 			if (ScriptType->GetFlags() & asOBJ_ENUM)
 			{
-				if (ScriptType->GetModule() != nullptr)
+				if (static_cast<asCTypeInfo*>(ScriptType)->module != nullptr)
 				{
 					// This is a script enum, so we should use our generic script enum type
 					Usage.Type = FAngelscriptType::GetScriptEnum();

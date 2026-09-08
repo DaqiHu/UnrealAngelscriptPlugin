@@ -194,13 +194,13 @@ public:
 		ASSERT_THAT(IsTrue(Input.Session->VerifyAST()));
 		const auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session);
 		ASSERT_THAT(IsTrue(Result.Succeeded()));
-		auto* Callback = static_cast<asCFuncdefType*>(FindType(*Result.Image, "Callback"));
-		auto* Changed = static_cast<asCFuncdefType*>(FindType(*Result.Image, "Changed"));
+		auto* Callback = static_cast<asCCallableType*>(FindType(*Result.Image, "Callback"));
+		auto* Changed = static_cast<asCCallableType*>(FindType(*Result.Image, "Changed"));
 		ASSERT_THAT(IsNotNull(Callback));
 		ASSERT_THAT(IsNotNull(Changed));
-		auto* Signature = static_cast<asCScriptFunction*>(Callback->GetFuncdefSignature());
-		ASSERT_THAT(IsTrue(Signature == Changed->GetFuncdefSignature()));
-		ASSERT_THAT(IsTrue(Signature->funcType == asFUNC_FUNCDEF));
+		auto* Signature = static_cast<asCScriptFunction*>(Callback->GetCallableSignature());
+		ASSERT_THAT(IsTrue(Signature == Changed->GetCallableSignature()));
+		ASSERT_THAT(IsTrue(Signature->funcType == asFUNC_CALLABLE_SIGNATURE));
 		ASSERT_THAT(IsTrue(Signature->IsMetadataCallableSignature()));
 		ASSERT_THAT(IsTrue(Callback->GetStableKey() != Changed->GetStableKey()));
 		ASSERT_THAT(IsTrue(Callback->GetMetadataDeclarationKind() == AS_NAMESPACE_QUALIFIER asETypeDeclKind::Delegate));

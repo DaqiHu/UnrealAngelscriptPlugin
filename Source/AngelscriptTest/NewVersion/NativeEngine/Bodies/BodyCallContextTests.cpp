@@ -7,12 +7,12 @@ namespace BodyCallContextTests
 	using FSessionRun = AngelscriptNativeEngineTest::FFrontendSessionRun;
 	TEST_CLASS_WITH_FLAGS(BodiesCallContext, "Angelscript.UnitTest.NativeEngine", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 	{
-		TEST_METHOD(ImmediateLambdaInDefaultsMayCallDefaultsOnly)
+		TEST_METHOD(ImmediateAnonymousFunctionInDefaultsIsRejected)
 		{
 			FSessionRun Run({{TEXT("ImmediateDefaults.as"),
 				TEXT("void Edit() defaults; void F() defaults { function() { Edit(); }(); }")}});
 			ASSERT_THAT(IsTrue(Run.ResolveDeclarations()));
-			ASSERT_THAT(IsTrue(Run.Session->AnalyzeBodies(1)));
+			ASSERT_THAT(IsFalse(Run.Session->AnalyzeBodies(1)));
 		}
 
 		TEST_METHOD(EscapingLambdaDoesNotKeepDefaultsPrivilege)

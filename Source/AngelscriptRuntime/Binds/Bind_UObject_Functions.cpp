@@ -17,6 +17,7 @@
 #include "StartAngelscriptHeaders.h"
 #include "source/as_objecttype.h"
 #include "source/as_scriptengine.h"
+#include "source/as_module.h"
 #include "EndAngelscriptHeaders.h"
 
 bool FAngelscriptUObjectBinds::IsTransient(UObject* Object)
@@ -213,7 +214,7 @@ FString FAngelscriptUObjectBinds::GetScriptModuleName(UClass* Class)
 		return FString();
 	}
 	auto& Manager = FAngelscriptEngine::Get();
-	auto Module = Manager.GetModule(static_cast<asITypeInfo*>(ScriptClass->ScriptTypePtr)->GetModule());
+	auto Module = Manager.GetModule(static_cast<asCTypeInfo*>(ScriptClass->ScriptTypePtr)->module);
 	return Module.IsValid() ? Module->ModuleName : FString();
 }
 

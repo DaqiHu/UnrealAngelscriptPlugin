@@ -6,8 +6,6 @@ asCQualType asCSema::ResolveAutoVariableType(const asSTypeSyntax& Syntax, asCExp
 		if (!Initializer || Initializer->IsInvalid() || Syntax.NameParts.Num() != 1 || Syntax.NameParts[0] != TEXT("auto")
 			|| Syntax.bGlobal || !Syntax.GenericArguments.IsEmpty() || !Syntax.ArrayDimensions.IsEmpty()
 			|| Syntax.Reference != asETypeReferenceDirection::None) return {};
-		if (asCLambdaExpr* Lambda = dyn_cast<asCLambdaExpr>(Initializer))
-			if (!AnalyzeLambda(*Lambda, nullptr, {}, false)) return {};
 		const asCQualType Actual = Initializer->GetExpressionQualType();
 		if (!Actual.IsValid() || (Syntax.bHandle && !Actual.IsHandle())) return {};
 		if (const asCBuiltinType* Builtin = dyn_cast<asCBuiltinType>(Actual.GetType()))

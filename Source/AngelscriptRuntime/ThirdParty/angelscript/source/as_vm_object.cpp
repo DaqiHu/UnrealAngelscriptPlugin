@@ -185,7 +185,7 @@ namespace
 		{
 			asCObjectProperty* Property = Properties[Index];
 			if (!Property) continue;
-			if (!Property->type.IsObjectHandle() && !Property->type.IsFuncdef()) continue;
+			if (!Property->type.IsObjectHandle() && !Property->type.IsCallableType()) continue;
 			void** Slot = reinterpret_cast<void**>(static_cast<char*>(Payload) + Property->byteOffset);
 			if (*Slot) Visit(*Slot, Property);
 		}
@@ -213,7 +213,7 @@ void asVmReleaseAllReferences(void* Payload, asCScriptEngine* Engine)
 			Engine->ReleaseScriptObject(Reference, Held);
 			return;
 		}
-		if (Property && Property->type.IsFuncdef() && Reference)
+		if (Property && Property->type.IsCallableType() && Reference)
 		{
 			static_cast<asCScriptFunction*>(Reference)->Release();
 		}

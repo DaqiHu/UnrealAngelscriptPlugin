@@ -301,20 +301,12 @@ bool BuildAngelscriptStaticJITEntryPlan(
 		return Fail(TEXT(
 			"StaticJITEntryPlanEntrySetMalformed: every captured script function requires VM and raw entries."));
 	}
-	const bool bLambda = ScriptFunction.artifactInvocationKind
-		== asBUILD_ARTIFACT_INVOCATION_LAMBDA
-		|| (ScriptFunction.name.GetLength() > 0 && ScriptFunction.name[0] == '$');
-	if (bLambda
-		&& ScriptFunction.parameterOffsets.GetLength()
-			!= ScriptFunction.parameterTypes.GetLength())
-	{
-		const_cast<asCScriptFunction&>(ScriptFunction).CalculateParameterOffsets();
-	}
+	if (ScriptFunction.artifactInvocationKind == asBUILD_ARTIFACT_INVOCATION_RESERVED_ANONYMOUS_FUNCTION)
+		return Fail(TEXT("Anonymous-function invocation artifacts are not supported."));
 	if (ScriptFunction.parameterOffsets.GetLength()
 			!= ScriptFunction.parameterTypes.GetLength()
-		|| (!bLambda
-			&& ScriptFunction.parameterNames.GetLength()
-				!= ScriptFunction.parameterTypes.GetLength()))
+		|| ScriptFunction.parameterNames.GetLength()
+			!= ScriptFunction.parameterTypes.GetLength())
 	{
 		return Fail(TEXT(
 			"StaticJITEntryPlanParameterLayoutMalformed: parameter metadata arrays disagree."));

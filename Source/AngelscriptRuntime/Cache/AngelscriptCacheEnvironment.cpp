@@ -21,7 +21,7 @@ namespace AngelscriptCacheEnvironment_Private
 		Object = 1,
 		Enum = 2,
 		Typedef = 3,
-		Funcdef = 4,
+		CallableType = 4,
 	};
 
 	static EEnvironmentTypeShape Classify(const asCTypeInfo& Type)
@@ -38,9 +38,9 @@ namespace AngelscriptCacheEnvironment_Private
 		{
 			return EEnvironmentTypeShape::Typedef;
 		}
-		if (CastToFuncdefType(const_cast<asCTypeInfo*>(&Type)) != nullptr)
+		if (CastToCallableType(const_cast<asCTypeInfo*>(&Type)) != nullptr)
 		{
-			return EEnvironmentTypeShape::Funcdef;
+			return EEnvironmentTypeShape::CallableType;
 		}
 		return EEnvironmentTypeShape::Invalid;
 	}
@@ -221,11 +221,11 @@ namespace AngelscriptCacheEnvironment_Private
 			Writer.WriteString(FormatTypeId(
 				*Type.engine, TypedefType->GetTypedefTypeId()));
 		}
-		else if (const asCFuncdefType* FuncdefType = CastToFuncdefType(
+		else if (const asCCallableType* CallableType = CastToCallableType(
 			const_cast<asCTypeInfo*>(&Type)))
 		{
 			const asIScriptFunction* Signature =
-				FuncdefType->GetFuncdefSignature();
+				CallableType->GetCallableSignature();
 			if (Signature == nullptr)
 			{
 				return false;

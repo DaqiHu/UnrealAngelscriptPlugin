@@ -849,7 +849,7 @@ static inline bool ShouldDestructProperty(asCObjectProperty* prop)
 				return true;
 		}
 	}
-	else if (prop->type.IsFuncdef())
+	else if (prop->type.IsCallableType())
 	{
 		return true;
 	}
@@ -885,7 +885,7 @@ void FAngelscriptPrecompiledClass::ProcessProperties(FAngelscriptPrecompiledData
 {
 	FAngelscriptScopeTotalTimer Timer(TIMER_ProcessProperties);
 
-	auto* Module = (asCModule*)Type->GetModule();
+	auto* Module = (asCModule*)static_cast<asCTypeInfo*>(Type)->module;
 
 	Type->derivedFrom = (asCObjectType*)Context.GetTypeInfo(DerivedFrom);
 	Type->shadowType = Context.GetTypeInfo(ShadowType);
@@ -946,7 +946,7 @@ void FAngelscriptPrecompiledClass::ProcessProperties(FAngelscriptPrecompiledData
 			else
 				Type->size += Property->type.GetSizeOnStackDWords() * 4;
 		}
-		else if (Property->type.IsFuncdef())
+		else if (Property->type.IsCallableType())
 		{
 			Type->size += AS_PTR_SIZE*4;
 		}
@@ -964,7 +964,7 @@ void FAngelscriptPrecompiledClass::CreateFunctions(FAngelscriptPrecompiledData& 
 {
 	FAngelscriptScopeTotalTimer Timer(TIMER_CreateFunctions);
 
-	auto* Module = (asCModule*)Type->GetModule();
+	auto* Module = (asCModule*)static_cast<asCTypeInfo*>(Type)->module;
 
 	// Create all functions
 	bool bIsStruct = (Type->flags & asOBJ_VALUE) != 0;
@@ -1083,7 +1083,7 @@ void FAngelscriptPrecompiledClass::PreProcessFunctions(FAngelscriptPrecompiledDa
 {
 	FAngelscriptScopeTotalTimer Timer(TIMER_PreProcessFunctions);
 
-	auto* Module = (asCModule*)Type->GetModule();
+	auto* Module = (asCModule*)static_cast<asCTypeInfo*>(Type)->module;
 	bFunctionsPreProcessed = true;
 
 	int32 PotentialMethods = Type->methods.GetLength();
@@ -1249,7 +1249,7 @@ void FAngelscriptPrecompiledClass::ProcessFunctions(FAngelscriptPrecompiledData&
 			else
 				PropSize = Property->type.GetSizeOnStackDWords()*4;
 		}
-		else if (Property->type.IsFuncdef())
+		else if (Property->type.IsCallableType())
 			PropSize = AS_PTR_SIZE*4;
 		else
 			PropSize = Property->type.GetSizeInMemoryBytes();
@@ -1668,7 +1668,7 @@ FAngelscriptPrecompiledReference FAngelscriptPrecompiledData::ReferenceTypeInfo(
 			// Regular types are stored by name and subtypes
 			Ref.Namespace = TypeInfo->GetNamespace();
 
-			if (asCModule* Module = (asCModule*)TypeInfo->GetModule())
+			if (asCModule* Module = (asCModule*)static_cast<asCTypeInfo*>(TypeInfo)->module)
 				Ref.Module = Module->GetName();
 
 			int32 SubTypeCount = TypeInfo->GetSubTypeCount();
@@ -1775,7 +1775,7 @@ asCTypeInfo* FAngelscriptPrecompiledData::GetTypeInfo(const FAngelscriptPrecompi
 		asCModule* Module;
 		{
 			FAngelscriptScopeTotalTimer SubTimer(TIMER_FindModuleForType);
-			Module = (asCModule*)Engine->GetModule(*Ref.Module, false);
+			Module = (asCModule*)Engine->scriptModulesByName.FindFirst(*Ref.Module);
 		}
 		if (Module != nullptr)
 		{
@@ -1989,7 +1989,7 @@ asCScriptFunction* FAngelscriptPrecompiledData::GetFunction(const FAngelscriptPr
 	{
 		// Look up the imported function declaration from the appropriate module
 		asSNameSpace* ns = GetNamespace(Ref.Namespace);
-		asCModule* Module = Engine->GetModule(*Ref.Module, false);
+		asCModule* Module = Engine->scriptModulesByName.FindFirst(*Ref.Module);
 
 		for (int32 i = 0, Count = Module->bindInformations.GetLength(); i < Count; ++i)
 		{
@@ -2119,7 +2119,7 @@ asCScriptFunction* FAngelscriptPrecompiledData::GetFunction(const FAngelscriptPr
 		if (Ref.Module.Len() != 0)
 		{
 			// Look up global script function from a module
-			asCModule* Module = Engine->GetModule(*Ref.Module, false);
+			asCModule* Module = Engine->scriptModulesByName.FindFirst(*Ref.Module);
 			Module->globalFunctions.FindAllUntil(*Ref.Name, ns, [&](asCScriptFunction* CheckFunc)
 			{
 				if (CheckFunc == nullptr)
@@ -2291,7 +2291,7 @@ void* FAngelscriptPrecompiledData::GetGlobalVariable(const FAngelscriptPrecompil
 		if (Ref.Module.Len() != 0)
 		{
 			// Look up a script global from a module
-			asCModule* Module = Engine->GetModule(*Ref.Module, false);
+			asCModule* Module = Engine->scriptModulesByName.FindFirst(*Ref.Module);
 			Property = Module->scriptGlobals.FindFirst(*Ref.Name, ns);
 		}
 		else
@@ -2414,11 +2414,11 @@ void FAngelscriptPrecompiledData::InitFromActiveScript()
 	{
 		return;
 	}
-	int32 ModuleCount = Engine->GetModuleCount();
+	int32 ModuleCount = Engine->scriptModules.GetLength();
 	Modules.Reserve(ModuleCount);
 	for (int32 i = 0; i < ModuleCount; ++i)
 	{
-		asCModule* Module = (asCModule*)Engine->GetModuleByIndex(i);
+		asCModule* Module = (asCModule*)Engine->scriptModules[i];
 		ModuleDesc = RuntimeEngine->GetModule(Module);
 		if (!ModuleDesc.IsValid())
 		{
@@ -2450,11 +2450,11 @@ uint32 FAngelscriptPrecompiledData::CreateFunctionId(asIScriptFunction* Function
 	else
 	{
 		// Generate a consistent Guid for the function, to improve iteration times
-		auto* ScriptModule = Function->GetModule();
+		auto* ScriptModule = static_cast<asCScriptFunction*>(Function)->module;
 		if (ScriptModule != nullptr)
 		{
 			Id = HashCombine(Id, FCrc::StrCrc_DEPRECATED((const ANSICHAR*)ScriptModule->GetName()));
-			Id = HashCombine(Id, (uint32)(size_t)ScriptModule->GetUserData());
+			Id = HashCombine(Id, (uint32)(size_t)ScriptModule->GetUserData(0));
 		}
 
 		auto* ObjectType = Function->GetObjectType();

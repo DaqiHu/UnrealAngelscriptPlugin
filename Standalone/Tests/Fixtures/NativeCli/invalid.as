@@ -1,4 +1,4 @@
-int main(const array<string> args)
+int main()
 {
 	return missingSymbol;
 }

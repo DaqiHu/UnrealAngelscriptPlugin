@@ -900,8 +900,8 @@ namespace
 			return EAngelscriptCachedTypeKind::Delegate;
 		case EAngelscriptArtifactEntityKind::Typedef:
 			return EAngelscriptCachedTypeKind::Typedef;
-		case EAngelscriptArtifactEntityKind::Funcdef:
-			return EAngelscriptCachedTypeKind::Funcdef;
+		case EAngelscriptArtifactEntityKind::CallableType:
+			return EAngelscriptCachedTypeKind::CallableType;
 		default:
 			return {};
 		}

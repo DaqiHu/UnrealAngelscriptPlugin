@@ -262,8 +262,7 @@ BEGIN_AS_NAMESPACE
 
 		bool ValidateCallableSignature(
 			const asCFunctionType& Signature,
-			TConstArrayView<asCVarDecl*> Parameters,
-			bool bAllowInferredParameterSyntax = false)
+			TConstArrayView<asCVarDecl*> Parameters)
 		{
 			if (Signature.GetParameterTypes().Num() != Parameters.Num()
 				|| Signature.GetParameterPassingModes().Num() != Parameters.Num())
@@ -274,12 +273,7 @@ BEGIN_AS_NAMESPACE
 			{
 				const asCVarDecl* Parameter = Parameters[Index];
 				if (!Parameter || Parameter->GetResolvedQualType() != Signature.GetParameterTypes()[Index]) return false;
-				if (!Parameter->GetTypeSyntax().IsValid())
-				{
-					if (!bAllowInferredParameterSyntax
-						|| Signature.GetParameterPassingModes()[Index] > asEParameterPassingMode::InOut) return false;
-					continue;
-				}
+				if (!Parameter->GetTypeSyntax().IsValid()) return false;
 				asEParameterPassingMode ExpectedMode = asEParameterPassingMode::Value;
 				switch (Parameter->GetTypeSyntax().Reference)
 				{
@@ -497,8 +491,7 @@ BEGIN_AS_NAMESPACE
 			{
 				const auto* Function = dyn_cast<asCFunctionDecl>(&Decl);
 				const bool bImplicitFunction = Function
-					&& (Function->GetFunctionKind() == asEFunctionKind::Lambda
-						|| Function->GetFunctionKind() == asEFunctionKind::ClassDefault);
+					&& Function->GetFunctionKind() == asEFunctionKind::ClassDefault;
 				if (Decl.GetKind() != asEDeclKind::ParmVar && !bImplicitFunction)
 					return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Decl,
 						TEXT("named declaration requires a non-empty name"));
@@ -572,15 +565,15 @@ BEGIN_AS_NAMESPACE
 					| static_cast<uint16>(asEFunctionModifiers::Defaults)
 					| static_cast<uint16>(asEFunctionModifiers::UnsafeDuringConstruction);
 				if (Function.GetFunctionKind() > asEFunctionKind::Conversion
+					|| Function.GetFunctionKind() == asEFunctionKind::ReservedAnonymousFunction
 					|| (static_cast<uint16>(Function.GetModifiers()) & ~ValidFunctionModifiers) != 0)
 				{
 					return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Decl,
 						TEXT("function declaration has an invalid kind or modifier bits"));
 				}
-				const bool bLambda = Function.GetFunctionKind() == asEFunctionKind::Lambda;
 				const bool bClassDefault = Function.GetFunctionKind() == asEFunctionKind::ClassDefault;
 				const bool bConversion = Function.GetFunctionKind() == asEFunctionKind::Conversion;
-				const bool bImplicitFunction = bLambda || bClassDefault;
+				const bool bImplicitFunction = bClassDefault;
 				if (Function.GetName().IsEmpty() != bImplicitFunction)
 					return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Decl,
 						TEXT("implicit and authored functions disagree with their naming contract"));
@@ -594,7 +587,7 @@ BEGIN_AS_NAMESPACE
 				}
 				if (!Function.GetResolvedReturnType()
 					|| Function.GetResolvedSignature()->GetReturnType().GetType() != Function.GetResolvedReturnType()
-					|| !ValidateCallableSignature(*Function.GetResolvedSignature(), Function.GetParameters(), bLambda))
+					|| !ValidateCallableSignature(*Function.GetResolvedSignature(), Function.GetParameters()))
 				{
 					return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Decl,
 						TEXT("function declaration and resolved callable signature disagree"));
@@ -640,22 +633,6 @@ BEGIN_AS_NAMESPACE
 						|| !IsContainedRange(Function.GetSourceRange(), Function.GetDeferredBodyRange())))
 					return Fail(Out, asEASTVerificationStatus::InvalidSourceRange, &Decl,
 						TEXT("function deferred body range is invalid"));
-				if (Function.GetFunctionKind() == asEFunctionKind::Lambda)
-				{
-					if (!Function.GetEnclosingFunction() || Function.GetLambdaOrdinal() == MAX_uint32)
-						return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Decl,
-							TEXT("lambda function requires a stable enclosing coordinate"));
-					for (asCVarDecl* Capture : Function.GetCaptures())
-						if (!Capture || !Context.Owns(Capture))
-							return Fail(Out, asEASTVerificationStatus::InvalidCrossReference, &Decl,
-								TEXT("lambda capture is absent or foreign"));
-				}
-				else if (Function.GetEnclosingFunction() || Function.GetLambdaOrdinal() != MAX_uint32
-					|| !Function.GetCaptures().IsEmpty() || Function.GetCapturedThisRecord())
-				{
-					return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Decl,
-						TEXT("non-lambda function carries lambda-only source state"));
-				}
 				if (Function.GetFunctionKind() == asEFunctionKind::ClassDefault)
 				{
 					for (const asCSourceRange& Range : Function.GetDeferredStatementRanges())
@@ -720,12 +697,7 @@ BEGIN_AS_NAMESPACE
 			{
 				const auto& Variable = static_cast<const asCVarDecl&>(Decl);
 				const bool bMissingSyntax = !Variable.GetTypeSyntax().IsValid();
-				const asCDecl* ParentOwner = Variable.GetDeclContext()
-					? Variable.GetDeclContext()->GetOwnerDecl() : nullptr;
-				const auto* ParentFunction = dyn_cast<asCFunctionDecl>(ParentOwner);
-				const bool bInferredLambdaParameter = Variable.GetKind() == asEDeclKind::ParmVar
-					&& ParentFunction && ParentFunction->GetFunctionKind() == asEFunctionKind::Lambda;
-				if (!Variable.GetResolvedType() || (bMissingSyntax && !bInferredLambdaParameter)
+				if (!Variable.GetResolvedType() || bMissingSyntax
 					|| (Variable.GetTypeSyntax().IsValid()
 						&& (!ValidateTypeSyntax(Context, Variable.GetTypeSyntax())
 							|| !IsContainedRange(Variable.GetSourceRange(), Variable.GetTypeSyntax().Range))))
@@ -1145,35 +1117,6 @@ BEGIN_AS_NAMESPACE
 				return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Stmt,
 					TEXT("this expression does not reference its canonical record type"));
 			}
-			case asEStmtKind::LambdaExpr:
-			{
-				const auto& Lambda = static_cast<const asCLambdaExpr&>(Stmt);
-				const asCFunctionDecl* Function = Lambda.GetFunction();
-				bool bTypeMatches = Function && Lambda.GetExpressionType() == Function->GetResolvedSignature();
-				if (!bTypeMatches && Function)
-				{
-					const auto* Nominal = dyn_cast<asCNominalType>(Lambda.GetExpressionType());
-					asSNominalTypeDescriptor Descriptor;
-					if (Nominal && Context.GetTypeContext()->GetIdentityRegistry().ResolveNominalType(
-							Nominal->GetDeclarationIdentity(), Descriptor) == asETypeIdentityStatus::Succeeded
-						&& (Descriptor.Kind == asETypeDeclKind::Delegate || Descriptor.Kind == asETypeDeclKind::Event))
-					{
-						for (asCASTNode* Candidate : Context.GetNodes())
-						{
-							const auto* Callable = dyn_cast<asCCallableTypeDecl>(Candidate);
-							if (Callable && Callable->GetStableIdentity() == Nominal->GetDeclarationIdentity()
-								&& Callable->GetResolvedSignature() == Function->GetResolvedSignature())
-							{
-								bTypeMatches = true;
-								break;
-							}
-						}
-					}
-				}
-				if (Function && Function->GetFunctionKind() == asEFunctionKind::Lambda && bTypeMatches) return true;
-				return Fail(Out, asEASTVerificationStatus::InvalidPayload, &Stmt,
-					TEXT("lambda expression requires its owned typed lambda function"));
-			}
 			case asEStmtKind::InitListExpr:
 			{
 				const auto& Init = static_cast<const asCInitListExpr&>(Stmt);
@@ -1414,12 +1357,7 @@ BEGIN_AS_NAMESPACE
 				return Function && Function->GetFunctionKind() == asEFunctionKind::Conversion;
 			}
 			case asEASTCrossReferenceKind::ThisRecord:
-			case asEASTCrossReferenceKind::LambdaCapturedThis:
 				return isa<asCRecordDecl>(Reference.Target);
-			case asEASTCrossReferenceKind::LambdaCapture:
-				return isa<asCVarDecl>(Reference.Target);
-			case asEASTCrossReferenceKind::LambdaEnclosingFunction:
-				return Active.Contains(Reference.Target) && isa<asCFunctionDecl>(Reference.Target);
 			default: return false;
 			}
 		}

@@ -28,58 +28,42 @@ if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return f
 				Image->CreateFunction(EnclosingKey, "Enclosing", "", asFUNC_SCRIPT, Enclosing) == asEMetadataResult::Succeeded &&
 				Image->DefineFunction(*Enclosing, Image->Primitive(ttVoid), {}) == asEMetadataResult::Succeeded;
 		}
-		AS_NAMESPACE_QUALIFIER asSFunctionIdentityDescriptor Lambda(asUINT Ordinal = 0) const
-		{
-			AS_NAMESPACE_QUALIFIER asSFunctionIdentityDescriptor Identity;
-			Identity.StableScope = TEXT("implicit-definition-test"); Identity.Kind = AS_NAMESPACE_QUALIFIER asEFunctionIdentityKind::Lambda;
-			Identity.ReturnType = Int; Identity.EnclosingFunction = EnclosingKey; Identity.LambdaOrdinal = Ordinal; return Identity;
-		}
 	};
 public:
-	TEST_METHOD(LexicalOriginAndOrdinalAreStableWithoutFabricatedNames)
+	TEST_METHOD(NamedFunctionIdentityRemainsStableAcrossContexts)
 	{
-FFixture First, Second; ASSERT_THAT(IsTrue(First.Initialize() && Second.Initialize()));
-		asSStableKey A, B, Repeated;
-		ASSERT_THAT(IsTrue(First.Context->GetIdentityRegistry().InternFunction(First.Lambda(0), A) == asETypeIdentityStatus::Succeeded));
-		ASSERT_THAT(IsTrue(First.Context->GetIdentityRegistry().InternFunction(First.Lambda(1), B) == asETypeIdentityStatus::Succeeded));
-		ASSERT_THAT(IsTrue(Second.Context->GetIdentityRegistry().InternFunction(Second.Lambda(0), Repeated) == asETypeIdentityStatus::Succeeded));
-		ASSERT_THAT(IsTrue(A == Repeated && A != B));
+		FFixture First, Second;
+		ASSERT_THAT(IsTrue(First.Initialize() && Second.Initialize()));
+		ASSERT_THAT(IsTrue(First.EnclosingKey == Second.EnclosingKey));
 		asSFunctionIdentityDescriptor Observed;
-		ASSERT_THAT(IsTrue(First.Context->GetIdentityRegistry().ResolveFunction(A, Observed) == asETypeIdentityStatus::Succeeded));
-		ASSERT_THAT(IsTrue(Observed.Name.IsEmpty() && Observed.Owner.IsZero() && Observed.EnclosingFunction == First.EnclosingKey));
+		ASSERT_THAT(IsTrue(First.Context->GetIdentityRegistry().ResolveFunction(First.EnclosingKey, Observed) == asETypeIdentityStatus::Succeeded));
+		ASSERT_THAT(IsTrue(Observed.Name == TEXT("Enclosing") && Observed.Owner.IsZero()));
 	}
-	TEST_METHOD(MissingForeignOrWrongRoleOriginCannotAcquireAFunctionIdentity)
+	TEST_METHOD(RetiredAnonymousKindCannotAcquireAFunctionIdentity)
 	{
-FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize()));
-		auto Identity = Fixture.Lambda(); asSStableKey Rejected;
-		Identity.EnclosingFunction = {};
-		ASSERT_THAT(IsTrue(Fixture.Context->GetIdentityRegistry().InternFunction(Identity, Rejected) == asETypeIdentityStatus::NonCacheable));
-		Identity = Fixture.Lambda(); Identity.EnclosingFunction = Fixture.Int;
-		ASSERT_THAT(IsTrue(Fixture.Context->GetIdentityRegistry().InternFunction(Identity, Rejected) != asETypeIdentityStatus::Succeeded));
-		Identity = Fixture.Lambda(); Identity.StableScope = TEXT("foreign-scope");
-		ASSERT_THAT(IsTrue(Fixture.Context->GetIdentityRegistry().InternFunction(Identity, Rejected) != asETypeIdentityStatus::Succeeded));
-		Identity = Fixture.Lambda(); Identity.Name = TEXT("$lambda");
-		ASSERT_THAT(IsTrue(Fixture.Context->GetIdentityRegistry().InternFunction(Identity, Rejected) != asETypeIdentityStatus::Succeeded));
+		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize()));
+		asSFunctionIdentityDescriptor Identity;
+		Identity.StableScope = TEXT("implicit-definition-test");
+		Identity.Kind = static_cast<asEFunctionIdentityKind>(7); Identity.ReturnType = Fixture.Int;
+		asSStableKey Rejected;
+		ASSERT_THAT(IsTrue(Fixture.Context->GetIdentityRegistry().InternFunction(Identity, Rejected) == asETypeIdentityStatus::InvalidDescriptor));
+		Identity.Name = TEXT("Disguised");
+		ASSERT_THAT(IsTrue(Fixture.Context->GetIdentityRegistry().InternFunction(Identity, Rejected) == asETypeIdentityStatus::InvalidDescriptor));
 		ASSERT_THAT(IsTrue(Rejected.IsZero()));
 	}
-	TEST_METHOD(ActualLambdaFunctionRegistersWithSamePointerAndRetainsItsOrigin)
+	TEST_METHOD(NamedFunctionRegistersWithSamePointerAndRetainsItsDefinition)
 	{
-FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize()));
-		asSStableKey Key; asCScriptFunction* Lambda = nullptr;
-		ASSERT_THAT(IsTrue(Fixture.Context->GetIdentityRegistry().InternFunction(Fixture.Lambda(2), Key) == asETypeIdentityStatus::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->CreateFunction(Key, "", "", asFUNC_SCRIPT, Lambda) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->DefineFunction(*Lambda, Fixture.Image->Primitive(ttInt), {}) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetLambdaOrigin(*Lambda, *Fixture.Enclosing, 1) == asEMetadataResult::InvalidSignature));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetLambdaOrigin(*Lambda, *Fixture.Enclosing, 2) == asEMetadataResult::Succeeded));
+		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize()));
+		ASSERT_THAT(IsTrue(Fixture.Image->SetFunctionDeclarationFacts(*Fixture.Enclosing, static_cast<asEFunctionIdentityKind>(7)) == asEMetadataResult::InvalidArgument));
 		ASSERT_THAT(IsTrue(Fixture.Image->FinalizeLayouts() == asEMetadataResult::Succeeded && Fixture.Image->Freeze() == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
 		asCScriptEngine* Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
 		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Fixture.Image) == asEMetadataRegistrationResult::Succeeded));
-		ASSERT_THAT(IsTrue(Engine->FindMetadataFunction(Key) == Lambda));
-		ASSERT_THAT(IsTrue(Lambda->GetMetadataEnclosingFunction() == Fixture.Enclosing));
-		ASSERT_THAT(AreEqual(asUINT(2), Lambda->GetMetadataLambdaOrdinal()));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetLambdaOrigin(*Lambda, *Fixture.Enclosing, 2) == asEMetadataResult::InvalidState));
+		asCScriptFunction* Retained = Fixture.Enclosing;
+		ASSERT_THAT(IsTrue(Engine->FindMetadataFunction(Fixture.EnclosingKey) == Retained));
+		Fixture.Image.reset();
+		ASSERT_THAT(IsTrue(Retained->GetStableKey() == Fixture.EnclosingKey && Retained->name == "Enclosing"));
 	}
 	TEST_METHOD(ClassDefaultHasAnOwnerButIsNotAnOrdinaryMethod)
 	{

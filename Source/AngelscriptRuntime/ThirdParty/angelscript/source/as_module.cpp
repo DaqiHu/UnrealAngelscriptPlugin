@@ -913,7 +913,7 @@ void asCModule::UninitializeGlobalProp(asCGlobalProperty *prop)
 			*obj = 0;
 		}
 	}
-	else if (prop->type.IsFuncdef())
+	else if (prop->type.IsCallableType())
 	{
 		asCScriptFunction **func = (asCScriptFunction**)prop->GetAddressOfValue();
 		if (*func)
@@ -971,9 +971,7 @@ bool asCModule::HasExternalReferences(bool shuttingDown)
 		asCScriptFunction *func = scriptFunctions[n];
 		if (func && func->externalRefCount.get())
 		{
-			// If the func is shared and can be moved to another module then this is not a reason to keep the module alive
-			if (func->IsShared() && engine->FindNewOwnerForSharedFunc(func, this) != this)
-				continue;
+
 
 			if (!shuttingDown)
 				return true;
@@ -994,9 +992,7 @@ bool asCModule::HasExternalReferences(bool shuttingDown)
 		asCObjectType *obj = classTypes[n];
 		if (obj && obj->externalRefCount.get())
 		{
-			// If the obj is shared and can be moved to another module then this is not a reason to keep the module alive
-			if (obj->IsShared() && engine->FindNewOwnerForSharedType(obj, this) != this)
-				continue;
+
 
 			if (!shuttingDown)
 				return true;
@@ -1012,14 +1008,12 @@ bool asCModule::HasExternalReferences(bool shuttingDown)
 		}
 	}
 
-	for (asUINT n = 0; n < funcDefs.GetLength(); n++)
+	for (asUINT n = 0; n < callableTypes.GetLength(); n++)
 	{
-		asCFuncdefType *func = funcDefs[n];
+		asCCallableType *func = callableTypes[n];
 		if (func && func->externalRefCount.get())
 		{
-			// If the funcdef is shared and can be moved to another module then this is not a reason to keep the module alive
-			if (func->IsShared() && engine->FindNewOwnerForSharedType(func, this) != this)
-				continue;
+
 
 			if (!shuttingDown)
 				return true;
@@ -1029,7 +1023,7 @@ bool asCModule::HasExternalReferences(bool shuttingDown)
 				msg.Format(TXT_EXTRNL_REF_TO_MODULE_s, name.AddressOf());
 				engine->WriteMessage("", 0, 0, asMSGTYPE_WARNING, msg.AddressOf());
 
-				msg.Format(TXT_PREV_FUNC_IS_NAMED_s_TYPE_IS_d, funcDefs[n]->GetName(), funcDefs[n]->funcdef->GetFuncType());
+				msg.Format(TXT_PREV_FUNC_IS_NAMED_s_TYPE_IS_d, callableTypes[n]->GetName(), callableTypes[n]->callableSignature->GetFuncType());
 				engine->WriteMessage("", 0, 0, asMSGTYPE_INFORMATION, msg.AddressOf());
 			}
 		}
@@ -1087,27 +1081,10 @@ void asCModule::InternalReset()
 	for( n = 0; n < classTypes.GetLength(); n++ )
 	{
 		asCObjectType *type = classTypes[n];
-		if( type->IsShared() )
-		{
-			// The type is shared, so transfer ownership to another module that also uses it
-			if( engine->FindNewOwnerForSharedType(type, this) != this )
-			{
-				// The type is owned by another module, just release our reference
-				type->ReleaseInternal();
-				continue;
-			}
-		}
-
 		// The type should be destroyed now
 		type->DestroyInternal();
 
 		// Remove the type from the engine
-		if( type->IsShared() )
-		{
-			engine->sharedScriptTypes.RemoveValue(type);
-			type->ReleaseInternal();
-		}
-
 		// Release it from the module
 		type->module = 0;
 		type->ReleaseInternal();
@@ -1116,24 +1093,7 @@ void asCModule::InternalReset()
 	for( n = 0; n < enumTypes.GetLength(); n++ )
 	{
 		asCEnumType *type = enumTypes[n];
-		if( type->IsShared() )
-		{
-			// The type is shared, so transfer ownership to another module that also uses it
-			if( engine->FindNewOwnerForSharedType(type, this) != this )
-			{
-				// The type is owned by another module, just release our reference
-				type->ReleaseInternal();
-				continue;
-			}
-		}
-
 		// Remove the type from the engine
-		if( type->IsShared() )
-		{
-			engine->sharedScriptTypes.RemoveValue(type);
-			type->ReleaseInternal();
-		}
-
 		// Release it from the module
 		type->module = 0;
 		type->ReleaseInternal();
@@ -1153,43 +1113,21 @@ void asCModule::InternalReset()
 	typeDefs.SetLength(0);
 
 	// Free funcdefs
-	for( n = 0; n < funcDefs.GetLength(); n++ )
+	for( n = 0; n < callableTypes.GetLength(); n++ )
 	{
-		asCFuncdefType *func = funcDefs[n];
+		asCCallableType *func = callableTypes[n];
 		asASSERT(func);
-		if( func->funcdef && func->funcdef->IsShared() )
-		{
-			// The funcdef is shared, so transfer ownership to another module that also uses it
-			if( engine->FindNewOwnerForSharedType(func, this) != this )
-			{
-				// The funcdef is owned by another module, just release our reference
-				func->ReleaseInternal();
-				continue;
-			}
-		}
-
 		func->DestroyInternal();
-		engine->RemoveFuncdef(func);
+		engine->RemoveCallableType(func);
 		func->module = 0;
 		func->ReleaseInternal();
 	}
-	funcDefs.SetLength(0);
+	callableTypes.SetLength(0);
 
 	// Then release the functions
 	for( n = 0; n < scriptFunctions.GetLength(); n++ )
 	{
 		asCScriptFunction *func = scriptFunctions[n];
-		if( func->IsShared() )
-		{
-			// The func is shared, so transfer ownership to another module that also uses it
-			if( engine->FindNewOwnerForSharedFunc(func, this) != this )
-			{
-				// The func is owned by another module, just release our reference
-				func->ReleaseInternal();
-				continue;
-			}
-		}
-
 		func->DestroyInternal();
 		func->module = 0;
 		func->ReleaseInternal();
@@ -1738,9 +1676,6 @@ int asCModule::AddScriptFunction(int sectionIdx, int declaredAt, int id, const a
 	if( ns == 0 )
 		ns = engine->nameSpaces[0];
 
-	// All methods of shared objects are also shared
-	if( objType && objType->IsShared() )
-		funcTraits.SetTrait(asTRAIT_SHARED, true);
 
 	func->name             = funcName;
 	func->nameSpace        = ns;
@@ -1787,34 +1722,6 @@ int asCModule::AddScriptFunction(asCScriptFunction *func)
 	scriptFunctions.PushLast(func);
 	func->AddRefInternal();
 	engine->AddScriptFunction(func);
-
-	// If the function that is being added is an already compiled shared function
-	// then it is necessary to look for anonymous functions that may be declared
-	// within it and add those as well
-	if( func->IsShared() && func->funcType == asFUNC_SCRIPT )
-	{
-		// Loop through the byte code and check all the
-		// asBC_FuncPtr instructions for anonymous functions
-		asDWORD *bc = func->scriptData->byteCode.AddressOf();
-		asUINT bcLength = (asUINT)func->scriptData->byteCode.GetLength();
-		for( asUINT n = 0; n < bcLength; )
-		{
-			int c = *(asBYTE*)&bc[n];
-			if( c == asBC_FuncPtr )
-			{
-				asCScriptFunction *f = reinterpret_cast<asCScriptFunction*>(asBC_PTRARG(&bc[n]));
-				// Anonymous functions start with $
-				// There are never two equal anonymous functions so it is not necessary to look for duplicates
-				if( f && f->name[0] == '$' )
-				{
-					AddScriptFunction(f);
-					globalFunctions.Add(f);
-					globalFunctionList.PushLast(f);
-				}
-			}
-			n += asBCTypeSize[asBCInfo[c].type];
-		}
-	}
 
 	return 0;
 }
@@ -1894,17 +1801,17 @@ void asCModule::AddTypeDef(asCTypedefType* type)
 	allLocalTypes.Add(type);
 }
 
-void asCModule::AddFuncDef(asCFuncdefType* type)
+void asCModule::AddCallableType(asCCallableType* type)
 {
-	funcDefs.PushLast(type);
+	callableTypes.PushLast(type);
 	allLocalTypes.Add(type);
 }
 
-void asCModule::ReplaceFuncDef(asCFuncdefType *oldType, asCFuncdefType *newType)
+void asCModule::ReplaceCallableType(asCCallableType *oldType, asCCallableType *newType)
 {
-	int index = funcDefs.IndexOf(oldType);
+	int index = callableTypes.IndexOf(oldType);
 	if( index >= 0 )
-		funcDefs[index] = newType;
+		callableTypes[index] = newType;
 
 	if( oldType )
 		allLocalTypes.Remove(oldType);
@@ -2016,7 +1923,7 @@ int asCModule::BindAllImportedFunctions()
 		const char *moduleName = GetImportedFunctionSourceModule(n);
 		if( moduleName == 0 ) return asERROR;
 
-		asCModule *srcMod = engine->GetModule(moduleName, false);
+		asCModule *srcMod = engine->scriptModulesByName.FindFirst(moduleName);
 		asIScriptFunction *func = 0;
 		if( srcMod )
 			func = srcMod->GetFunctionByDecl(str.AddressOf());
@@ -2155,7 +2062,7 @@ bool asCModule::IsEmpty() const
 	if( classTypes.GetLength()       ) return false;
 	if( enumTypes.GetLength()        ) return false;
 	if( typeDefs.GetLength()         ) return false;
-	if( funcDefs.GetLength()         ) return false;
+	if( callableTypes.GetLength()         ) return false;
 
 	return true;
 }
@@ -2733,12 +2640,12 @@ const asSCanonicalPreClassFact* asCModule::FindCanonicalPreClassFact(
 
 #ifndef AS_NO_COMPILER
 // internal
-int asCModule::AddFuncDef(const asCString &funcName, asSNameSpace *ns, asCObjectType *parent)
+int asCModule::AddCallableType(const asCString &funcName, asSNameSpace *ns, asCObjectType *parent)
 {
 	// namespace and parent are mutually exclusive
 	asASSERT((ns == 0 && parent) || (ns && parent == 0));
 
-	asCScriptFunction *func = asNEW(asCScriptFunction)(engine, 0, asFUNC_FUNCDEF);
+	asCScriptFunction *func = asNEW(asCScriptFunction)(engine, 0, asFUNC_CALLABLE_SIGNATURE);
 	if (func == 0)
 		return asOUT_OF_MEMORY;
 
@@ -2746,21 +2653,21 @@ int asCModule::AddFuncDef(const asCString &funcName, asSNameSpace *ns, asCObject
 	func->nameSpace = ns;
 	func->module    = this;
 
-	asCFuncdefType *fdt = asNEW(asCFuncdefType)(engine, func);
-	funcDefs.PushLast(fdt); // The constructor set the refcount to 1
+	asCCallableType *fdt = asNEW(asCCallableType)(engine, func);
+	callableTypes.PushLast(fdt); // The constructor set the refcount to 1
 	allLocalTypes.Add(fdt);
 
-	engine->funcDefs.PushLast(fdt); // doesn't increase refcount
+	engine->callableTypes.PushLast(fdt); // doesn't increase refcount
 	func->id = engine->GetNextScriptFunctionId();
 	engine->AddScriptFunction(func);
 
 	if (parent)
 	{
-		parent->childFuncDefs.PushLast(fdt);
+		parent->childCallableTypes.PushLast(fdt);
 		fdt->parentClass = parent;
 	}
 
-	return (int)funcDefs.GetLength()-1;
+	return (int)callableTypes.GetLength()-1;
 }
 #endif
 
@@ -2952,7 +2859,7 @@ void asCModule::TransferExecutableGenerationTo(asCModule& target)
 	target.classTypes.SwapWith(classTypes);
 	target.enumTypes.SwapWith(enumTypes);
 	target.typeDefs.SwapWith(typeDefs);
-	target.funcDefs.SwapWith(funcDefs);
+	target.callableTypes.SwapWith(callableTypes);
 	target.externalTypes.SwapWith(externalTypes);
 	target.externalFunctions.SwapWith(externalFunctions);
 
@@ -2971,13 +2878,13 @@ void asCModule::TransferExecutableGenerationTo(asCModule& target)
 		if( target.typeDefs[n] )
 			target.typeDefs[n]->module = &target;
 	}
-	for( asUINT n = 0; n < target.funcDefs.GetLength(); ++n )
+	for( asUINT n = 0; n < target.callableTypes.GetLength(); ++n )
 	{
-		if( target.funcDefs[n] )
+		if( target.callableTypes[n] )
 		{
-			target.funcDefs[n]->module = &target;
-			if( target.funcDefs[n]->funcdef )
-				target.funcDefs[n]->funcdef->module = &target;
+			target.callableTypes[n]->module = &target;
+			if( target.callableTypes[n]->callableSignature )
+				target.callableTypes[n]->callableSignature->module = &target;
 		}
 	}
 	for( asUINT n = 0; n < target.scriptGlobalsList.GetLength(); ++n )

@@ -137,7 +137,7 @@ class asCBuilder;
 class asCContext;
 class asCConfigGroup;
 class asCTypedefType;
-class asCFuncdefType;
+class asCCallableType;
 class asCModule;
 struct asSNameSpace;
 
@@ -340,7 +340,7 @@ public:
 	asCModule(const char *name, asCScriptEngine *engine);
 	~asCModule();
 
-	virtual void AddPreClassData(const char* name, asPreClassData Data) override;
+	void AddPreClassData(const char* name, asPreClassData Data);
 	TMap<asCString, asPreClassData> PreClassData;
 	const asSCanonicalPreClassFact* FindCanonicalPreClassFact(
 		const asCString& className) const;
@@ -394,7 +394,7 @@ public:
 	int  AddImportedFunction(int id, const asCString &name, const asCDataType &returnType, const asCArray<asCDataType> &params, const asCArray<asETypeModifiers> &inOutFlags, const asCArray<asCString *> &defaultArgs, asSFunctionTraits funcTraits, asSNameSpace *ns, const asCString &moduleName);
 	int  AddImportedFunction(int id, const asCString &name, const asCDataType &returnType, const asCArray<asCDataType> &params, const asCArray<asETypeModifiers> &inOutFlags, const asCArray<asCString *> &defaultArgs, asSNameSpace *ns, const asCString &moduleName);
 	//[UE--]
-	int  AddFuncDef(const asCString &name, asSNameSpace *ns, asCObjectType *parent);
+	int  AddCallableType(const asCString &name, asSNameSpace *ns, asCObjectType *parent);
 #endif
 
 	int                GetNextImportedFunctionId();
@@ -407,8 +407,8 @@ public:
 	void               AddClassType(asCObjectType* type);
 	void               AddEnumType(asCEnumType* type);
 	void               AddTypeDef(asCTypedefType* type);
-	void               AddFuncDef(asCFuncdefType* type);
-	void               ReplaceFuncDef(asCFuncdefType *oldType, asCFuncdefType *newType);
+	void               AddCallableType(asCCallableType* type);
+	void               ReplaceCallableType(asCCallableType *oldType, asCCallableType *newType);
 	//[UE--]
 
 	asCString name;
@@ -467,7 +467,7 @@ public:
 	// This array holds typedefs
 	asCArray<asCTypedefType*>      typeDefs; // increases ref count
 	// This array holds the funcdefs declared in the module
-	asCArray<asCFuncdefType*>      funcDefs; // increases ref count
+	asCArray<asCCallableType*>      callableTypes; // increases ref count
 
 	// This array holds types that have been explicitly declared with 'external'
 	asCArray<asCTypeInfo*>       externalTypes; // doesn't increase ref count

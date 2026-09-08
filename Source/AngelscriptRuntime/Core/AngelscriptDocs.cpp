@@ -663,10 +663,10 @@ void FAngelscriptDocs::DumpDocumentation(asIScriptEngine* Engine)
 		ProcessScriptType(ScriptEngine->GetObjectTypeByIndex(TypeIndex));
 	}
 
-	int32 ModuleCount = ScriptEngine->GetModuleCount();
+	int32 ModuleCount = ScriptEngine->scriptModules.GetLength();
 	for (int32 ModuleIndex = 0; ModuleIndex < ModuleCount; ++ModuleIndex)
 	{
-		asIScriptModule* ScriptModule = ScriptEngine->GetModuleByIndex(ModuleIndex);
+		asIScriptModule* ScriptModule = ScriptEngine->scriptModules[ModuleIndex];
 		if (ScriptModule == nullptr)
 			continue;
 

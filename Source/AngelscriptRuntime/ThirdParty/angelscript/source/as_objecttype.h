@@ -134,8 +134,8 @@ public:
 	const char        *GetPropertyDeclaration(asUINT index, bool includeNamespace = false) const;
 	asUINT             GetBehaviourCount() const;
 	asIScriptFunction *GetBehaviourByIndex(asUINT index, asEBehaviours *outBehaviour) const;
-	asUINT             GetChildFuncdefCount() const;
-	asITypeInfo       *GetChildFuncdef(asUINT index) const;
+	asUINT             GetChildCallableTypeCount() const;
+	asITypeInfo       *GetChildCallableType(asUINT index) const;
 	void CopySystemType(asITypeInfo* SystemType);
 public:
 	asCObjectType(asCScriptEngine *engine);
@@ -187,7 +187,7 @@ public:
 
 	// Used for funcdefs declared as members of class.
 	// TODO: child funcdef: Should be possible to enumerate these from application
-	asCArray<asCFuncdefType*> childFuncDefs;
+	asCArray<asCCallableType*> childCallableTypes;
 
 	asSTypeBehaviour beh;
 

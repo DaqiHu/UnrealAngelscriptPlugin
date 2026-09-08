@@ -10,6 +10,7 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_module.h"
+#include "source/as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptOfflineContract
@@ -62,9 +63,9 @@ namespace AngelscriptOfflineContract
 			{
 				return ETypeKind::Typedef;
 			}
-			if ((Flags & asOBJ_FUNCDEF) != 0)
+			if ((Flags & asOBJ_CALLABLE_TYPE) != 0)
 			{
-				return ETypeKind::Funcdef;
+				return ETypeKind::CallableType;
 			}
 			if ((Flags & asOBJ_TEMPLATE) != 0)
 			{
@@ -83,9 +84,9 @@ namespace AngelscriptOfflineContract
 			{
 				return ESymbolKind::Typedef;
 			}
-			if ((Flags & asOBJ_FUNCDEF) != 0)
+			if ((Flags & asOBJ_CALLABLE_TYPE) != 0)
 			{
-				return ESymbolKind::Funcdef;
+				return ESymbolKind::CallableType;
 			}
 			return ESymbolKind::Type;
 		}
@@ -116,9 +117,8 @@ namespace AngelscriptOfflineContract
 			AddFlag(Result, Flags, asOBJ_NOCOUNT, TEXT("no-count"));
 			AddFlag(Result, Flags, asOBJ_IMPLICIT_HANDLE, TEXT("implicit-handle"));
 			AddFlag(Result, Flags, asOBJ_SCRIPT_OBJECT, TEXT("script-object"));
-			AddFlag(Result, Flags, asOBJ_SHARED, TEXT("shared"));
 			AddFlag(Result, Flags, asOBJ_NOINHERIT, TEXT("no-inherit"));
-			AddFlag(Result, Flags, asOBJ_FUNCDEF, TEXT("funcdef"));
+			AddFlag(Result, Flags, asOBJ_CALLABLE_TYPE, TEXT("funcdef"));
 			AddFlag(Result, Flags, asOBJ_ENUM, TEXT("enum"));
 			AddFlag(Result, Flags, asOBJ_TYPEDEF, TEXT("typedef"));
 			AddFlag(Result, Flags, asOBJ_ABSTRACT, TEXT("abstract"));
@@ -598,9 +598,9 @@ namespace AngelscriptOfflineContract
 						TypeInfo->GetTypedefTypeId()),
 					*FromAnsi(TypeInfo->GetName()));
 			}
-			else if (Observed.TypeKind == ETypeKind::Funcdef)
+			else if (Observed.TypeKind == ETypeKind::CallableType)
 			{
-				if (asIScriptFunction* Signature = TypeInfo->GetFuncdefSignature())
+				if (asIScriptFunction* Signature = TypeInfo->GetCallableSignature())
 				{
 					Observed.CompleteDeclaration = BuildCallableDeclaration(
 						ScriptEngine,
@@ -640,10 +640,9 @@ namespace AngelscriptOfflineContract
 		{
 			ObserveType(ScriptEngine.GetEnumByIndex(Index));
 		}
-		for (asUINT Index = 0; Index < ScriptEngine.GetFuncdefCount(); ++Index)
-		{
-			ObserveType(ScriptEngine.GetFuncdefByIndex(Index));
-		}
+		for (const auto& Image : static_cast<asCScriptEngine&>(ScriptEngine).GetRegisteredMetadataImages())
+			for (asCTypeInfo* Type : Image->GetTypes())
+				if (Type->GetFlags() & asOBJ_CALLABLE_TYPE) ObserveType(Type);
 		for (asUINT Index = 0; Index < ScriptEngine.GetTypedefCount(); ++Index)
 		{
 			ObserveType(ScriptEngine.GetTypedefByIndex(Index));
@@ -1193,11 +1192,11 @@ namespace AngelscriptOfflineContract
 					*FromAnsi(TypeInfo->GetName()));
 			}
 			else if (
-				Baseline.Type.TypeKind == ETypeKind::Funcdef
+				Baseline.Type.TypeKind == ETypeKind::CallableType
 				|| Baseline.Type.TypeKind == ETypeKind::Delegate)
 			{
 				if (asIScriptFunction* Signature =
-					TypeInfo->GetFuncdefSignature())
+					TypeInfo->GetCallableSignature())
 				{
 					Baseline.Type.CompleteDeclaration =
 						BuildCallableDeclaration(
@@ -1271,14 +1270,12 @@ namespace AngelscriptOfflineContract
 					Module.ScriptModule->GetTypedefByIndex(Index),
 					Module.Origin);
 			}
-			for (asUINT Index = 0;
-				Index < ScriptEngine->GetFuncdefCount();
-				++Index)
+			const auto& CallableTypes = static_cast<asCModule*>(Module.ScriptModule)->callableTypes;
+			for (asUINT Index = 0; Index < CallableTypes.GetLength(); ++Index)
 			{
-				asITypeInfo* TypeInfo =
-					ScriptEngine->GetFuncdefByIndex(Index);
+				asCTypeInfo* TypeInfo = CallableTypes[Index];
 				if (TypeInfo == nullptr
-					|| TypeInfo->GetModule() != Module.ScriptModule)
+					|| static_cast<asCTypeInfo*>(TypeInfo)->module != Module.ScriptModule)
 				{
 					continue;
 				}
@@ -1330,10 +1327,10 @@ namespace AngelscriptOfflineContract
 						TypeInfo->GetTypedefTypeId()),
 					*FromAnsi(TypeInfo->GetName()));
 			}
-			else if ((TypeInfo->GetFlags() & asOBJ_FUNCDEF) != 0)
+			else if ((TypeInfo->GetFlags() & asOBJ_CALLABLE_TYPE) != 0)
 			{
 				if (asIScriptFunction* Signature =
-					TypeInfo->GetFuncdefSignature())
+					TypeInfo->GetCallableSignature())
 				{
 					Identity.CompleteDeclaration =
 						BuildCallableDeclaration(

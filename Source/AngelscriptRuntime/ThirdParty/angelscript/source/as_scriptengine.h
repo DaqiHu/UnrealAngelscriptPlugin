@@ -74,7 +74,7 @@ struct asSCanonicalTemplateDeclarationFact
 	bool acceptValueSubtype;
 	bool acceptReferenceSubtype;
 	bool requiresRuntimeValidation;
-	asCArray<asCString> childFuncdefs;
+	asCArray<asCString> childCallableTypes;
 
 	asSCanonicalTemplateDeclarationFact()
 		: flags(0)
@@ -129,8 +129,8 @@ struct asSCanonicalRegisteredTypeDeclarationFact
 	bool ambiguous;
 	asCArray<asCString> baseStableKeys;
 	asCArray<asSCanonicalRegisteredEnumeratorFact> enumerators;
-	asSCanonicalRegisteredTypeRefFact funcdefReturn;
-	asCArray<asSCanonicalRegisteredTypeRefFact> funcdefFormals;
+	asSCanonicalRegisteredTypeRefFact callableReturn;
+	asCArray<asSCanonicalRegisteredTypeRefFact> callableFormals;
 
 	asSCanonicalRegisteredTypeDeclarationFact()
 		: kind(asAST_TYPE_INVALID)
@@ -210,9 +210,6 @@ public:
 	virtual asITypeInfo *GetEnumByIndex(asUINT index) const;
 
 	// Funcdefs
-	virtual int          RegisterFuncdef(const char *decl);
-	virtual asUINT       GetFuncdefCount() const;
-	virtual asITypeInfo *GetFuncdefByIndex(asUINT index) const;
 
 	// Typedefs
 	// TODO: interface: Should perhaps rename this to Alias, since it doesn't really create a new type
@@ -229,10 +226,6 @@ public:
 	virtual const char *GetDefaultNamespace() const;
 
 	// Script modules
-	virtual asIScriptModule *GetModule(const char *module, asEGMFlags flag);
-	virtual int              DiscardModule(const char *module);
-	virtual asUINT           GetModuleCount() const;
-	virtual asIScriptModule *GetModuleByIndex(asUINT index) const;
 
 	// Script functions
 	virtual asIScriptFunction *GetFunctionById(int funcId) const;
@@ -317,6 +310,7 @@ public:
 	asCGlobalProperty* FindMetadataGlobalProperty(const char* Namespace, const char* Name) const;
 	asCGlobalProperty* FindMetadataGlobalProperty(const asSStableKey& Key) const;
 	TPair<asUINT, asUINT> GetMetadataRegistrationCounts() const;
+	TArray<std::shared_ptr<const asCMetadataImage>> GetRegisteredMetadataImages() const;
 
 	// LEGACY remains the source-module Build default until the final cutover gate.
 	// Explicit CANONICAL selection publishes Bytecode from sealed-AST CodeGen.
@@ -405,7 +399,7 @@ public:
 	asCConfigGroup *FindConfigGroupForFunction(int funcId) const;
 	asCConfigGroup *FindConfigGroupForGlobalVar(int gvarId) const;
 	asCConfigGroup *FindConfigGroupForTypeInfo(const asCTypeInfo *type) const;
-	asCConfigGroup *FindConfigGroupForFuncDef(const asCFuncdefType *funcDef) const;
+	asCConfigGroup *FindConfigGroupForCallableType(const asCCallableType *callableType) const;
 
 	int  RequestBuild();
 	void BuildCompleted();
@@ -430,8 +424,6 @@ public:
 
 	asCScriptFunction *GetScriptFunction(int funcId) const;
 
-	asCModule *GetModule(const char *name, bool create);
-	asCModule *GetModuleFromFuncId(int funcId);
 
 	int  GetMethodIdByDecl(const asCObjectType *ot, const char *decl, asCModule *mod);
 	int  GetFactoryIdByDecl(const asCObjectType *ot, const char *decl);
@@ -439,7 +431,7 @@ public:
 	int  GetNextScriptFunctionId();
 	void AddScriptFunction(asCScriptFunction *func);
 	void RemoveScriptFunction(asCScriptFunction *func);
-	void RemoveFuncdef(asCFuncdefType *func);
+	void RemoveCallableType(asCCallableType *func);
 
 	int ConfigError(int err, const char *funcName, const char *arg1, const char *arg2);
 
@@ -466,16 +458,14 @@ public:
 	void               PartitionDeferredTemplateInstances(const TSet<asCModule *> &failedModules);
 	void               EndTemplateInstanceBuildTracking();
 	asCScriptFunction *GenerateTemplateFactoryStub(asCObjectType *templateType, asCObjectType *templateInstanceType, int origFactoryId);
-	asCFuncdefType    *GenerateNewTemplateFuncdef(asCObjectType *templateType, asCObjectType *templateInstanceType, asCFuncdefType *templateFuncdef);
+	asCCallableType    *GenerateNewTemplateCallableType(asCObjectType *templateType, asCObjectType *templateInstanceType, asCCallableType *templateCallableType);
 	asCDataType        DetermineTypeForTemplate(const asCDataType &orig, asCObjectType *tmpl, asCObjectType *ot);
 	bool               RequireTypeReplacement(asCDataType &type, asCObjectType *templateType);
 	void               DiscardTemplateInstance(asCObjectType* TemplateType);
 	asCScriptFunction* GenerateTemplateFunction(asCObjectType* objectType, asCScriptFunction* templateFunc);
 
-	asCModule         *FindNewOwnerForSharedType(asCTypeInfo *type, asCModule *mod);
-	asCModule         *FindNewOwnerForSharedFunc(asCScriptFunction *func, asCModule *mod);
 
-	asCFuncdefType    *FindMatchingFuncdef(asCScriptFunction *func, asCModule *mod);
+	asCCallableType    *FindMatchingCallableType(asCScriptFunction *func);
 
 	// Global property management
 	asCGlobalProperty *AllocateGlobalProperty();
@@ -508,7 +498,7 @@ public:
 	asCSymbolMap<asCGlobalProperty*> registeredGlobalPropTable;   // increases ref count
 	asCArray<asCScriptFunction*> registeredGlobalFuncs;
 	asCSymbolMap<asCScriptFunction*> registeredGlobalFuncTable;
-	asCArray<asCFuncdefType *>        registeredFuncDefs;      // doesn't increase ref count
+	asCArray<asCCallableType *>        registeredCallableTypes;      // doesn't increase ref count
 	asCArray<asCObjectType *>         registeredTemplateTypes; // doesn't increase ref count
 	// Host-declared native ancestry that cannot be represented by the maintained
 	// AngelScript Runtime object model. Values are stable names only and are
@@ -583,11 +573,10 @@ public:
 	bool                   deferCalculatingTemplateSize = false;
 
 	// Stores shared script declared types (classes, interfaces, enums)
-	asCArray<asCTypeInfo *> sharedScriptTypes; // increases ref count
 	// Stores the funcdefs
 	// TODO: redesign: Only shared funcdefs should be stored here
 	//                 a funcdef becomes shared if all arguments and the return type are shared (or application registered)
-	asCArray<asCFuncdefType *> funcDefs; // doesn't increases ref count
+	asCArray<asCCallableType *> callableTypes; // doesn't increases ref count
 
 	// Stores the names of the script sections for debugging purposes
 	asCArray<asCString *> scriptSectionNames;
@@ -706,7 +695,6 @@ public:
 		int    scanner;
 		bool   includeJitInstructions;
 		int    stringEncoding;
-		int    propertyAccessorMode;
 		bool   expandDefaultArrayToTemplate;
 		bool   autoGarbageCollect;
 		bool   disallowGlobalVars;

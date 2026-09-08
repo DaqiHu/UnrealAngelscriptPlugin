@@ -15,7 +15,7 @@ namespace
 			FunctionType, FlagAttr, StringAttr, AnnotationAttr,
 			TypeAliasDecl, CallExpr, MemberExpr, ExplicitCast, ConstructExpr,
 			StringLiteral,
-			ThisExpr, LambdaExpr, InitListExpr, ValueInitExpr, DeclGroupStmt,
+			ThisExpr, ReservedAnonymousFunction, InitListExpr, ValueInitExpr, DeclGroupStmt,
 			ClassDefaultStmt, ForStmt, SwitchStmt, CaseStmt, DefaultStmt,
 			FallthroughStmt, ForeachStmt,
 			AccessSpecifierDecl, UserConversion,
@@ -272,7 +272,6 @@ namespace
 				case asEStmtKind::ConstructExpr: return asEASTCodecPayloadTag::ConstructExpr;
 				case asEStmtKind::StringLiteral: return asEASTCodecPayloadTag::StringLiteral;
 				case asEStmtKind::ThisExpr: return asEASTCodecPayloadTag::ThisExpr;
-				case asEStmtKind::LambdaExpr: return asEASTCodecPayloadTag::LambdaExpr;
 				case asEStmtKind::InitListExpr: return asEASTCodecPayloadTag::InitListExpr;
 				case asEStmtKind::ValueInitExpr: return asEASTCodecPayloadTag::ValueInitExpr;
 				case asEStmtKind::DeclGroupStmt: return asEASTCodecPayloadTag::DeclGroupStmt;
@@ -308,7 +307,8 @@ namespace
 		asEASTCodecPayloadTag CodecGetPayloadTag(const asFASTProjectionPayload& P)
 		{
 			// Projection groups the new payloads beside their related AST shapes.
-			// The wire keeps every v6 tag stable and appends both v7 alternatives.
+			// The wire keeps every v6 tag stable, appends both v7 alternatives,
+			// and reserves the removed anonymous-function tag in v9.
 			if (P.TryGet<asSASTAccessSpecifierDeclPayload>())
 				return asEASTCodecPayloadTag::AccessSpecifierDecl;
 			if (P.TryGet<asSASTUserConversionPayload>())
@@ -318,7 +318,9 @@ namespace
 				return static_cast<asEASTCodecPayloadTag>(VariantIndex);
 			if (VariantIndex < 12)
 				return static_cast<asEASTCodecPayloadTag>(VariantIndex - 1);
-			return static_cast<asEASTCodecPayloadTag>(VariantIndex - 2);
+			if (VariantIndex < 28)
+				return static_cast<asEASTCodecPayloadTag>(VariantIndex - 2);
+			return static_cast<asEASTCodecPayloadTag>(VariantIndex - 1);
 		}
 
 		bool CodecValidateAccessSpecifierPayload(
@@ -441,18 +443,17 @@ namespace
 					| static_cast<uint16>(asEFunctionModifiers::Deprecated)
 					| static_cast<uint16>(asEFunctionModifiers::Defaults)
 					| static_cast<uint16>(asEFunctionModifiers::UnsafeDuringConstruction);
-				const bool bImplicitFunction = Function->FunctionKind == asEFunctionKind::Lambda
-					|| Function->FunctionKind == asEFunctionKind::ClassDefault;
+				const bool bImplicitFunction = Function->FunctionKind == asEFunctionKind::ClassDefault;
 				if (Function->Name.IsEmpty() != bImplicitFunction
 					|| bImplicitFunction == Function->ReturnTypeSyntax.bPresent
 					|| !CodecIsValidTypeSyntaxForRecord(Function->ReturnTypeSyntax, R)
 					|| !CodecEnumAtMost(Function->FunctionKind, asEFunctionKind::Conversion)
+					|| Function->FunctionKind == asEFunctionKind::ReservedAnonymousFunction
 					|| (Function->FunctionKind == asEFunctionKind::Conversion
 						&& !CodecIsConversionFunctionName(Function->Name))
 					|| (static_cast<uint16>(Function->Modifiers) & ~ValidModifiers) != 0
 					|| !((!Function->bHasDeferredBody && CodecIsEmptyAnchor(Function->DeferredBodySource))
 						|| (Function->bHasDeferredBody && CodecAnchorWithin(Function->DeferredBodySource, R.Source)))) return false;
-				if ((Function->FunctionKind == asEFunctionKind::Lambda) != (Function->LambdaOrdinal != MAX_uint32)) return false;
 				if (Function->FunctionKind != asEFunctionKind::ClassDefault && !Function->DeferredStatementSources.IsEmpty()) return false;
 				for (const asSStableSourceAnchor& Source : Function->DeferredStatementSources)
 					if (!CodecAnchorWithin(Source, R.Source)) return false;
@@ -509,8 +510,6 @@ namespace
 					if (Index < 0) return false;
 				return true;
 			}
-			if (const auto* Lambda = R.Payload.TryGet<asSASTLambdaExprPayload>())
-				return Lambda->CaptureCount <= static_cast<uint32>(MAX_int32);
 			if (const auto* Group = R.Payload.TryGet<asSASTDeclGroupStmtPayload>())
 				return Group->DeclarationCount >= 2 && Group->DeclarationCount == static_cast<uint32>(R.Children.Num());
 			if (const auto* ClassDefault = R.Payload.TryGet<asSASTClassDefaultStmtPayload>())
@@ -551,7 +550,7 @@ namespace
 			if (R.Family == asEASTNodeFamily::Attr && !R.Children.IsEmpty()) return false;
 			for (uint32 Child : R.Children) if (Child >= Count) return false;
 			for (const auto& Ref : R.CrossReferences)
-				if (!CodecEnumAtMost(Ref.Kind, asEASTCrossReferenceKind::ConversionFunction) || Ref.LocalIndex > Count || (Ref.LocalIndex == 0 && Ref.StableIdentity.IsZero())) return false;
+				if (!CodecEnumAtMost(Ref.Kind, asEASTCrossReferenceKind::ConversionFunction) || (Ref.Kind >= asEASTCrossReferenceKind::ReservedAnonymousEnclosingFunction && Ref.Kind <= asEASTCrossReferenceKind::ReservedAnonymousCapturedThis) || Ref.LocalIndex > Count || (Ref.LocalIndex == 0 && Ref.StableIdentity.IsZero())) return false;
 			for (const auto& Ref : R.SemanticReferences)
 				if (!CodecEnumAtMost(Ref.Kind, asEASTSemanticTypeReferenceKind::ForeachIteratorType) || !CodecEnumAtMost(Ref.PassingMode, asEParameterPassingMode::InOut) || Ref.TypeIdentity.IsZero()) return false;
 			if (R.Declaration.bPresent != (R.Family == asEASTNodeFamily::Decl)
@@ -661,13 +660,6 @@ namespace
 			case asEStmtKind::ConstructExpr:
 			case asEStmtKind::InitListExpr:
 				return AllChildrenAreExpressions();
-			case asEStmtKind::LambdaExpr:
-			{
-				if (Record.Children.Num() != 1 || Child(0).Family != asEASTNodeFamily::Decl
-					|| Child(0).Kind != static_cast<uint16>(asEDeclKind::Function)) return false;
-				const auto* Function = Child(0).TryGetPayload<asSASTFunctionDeclPayload>();
-				return Function && Function->FunctionKind == asEFunctionKind::Lambda;
-			}
 			case asEStmtKind::DeclGroupStmt:
 			{
 				const auto* Payload = Record.TryGetPayload<asSASTDeclGroupStmtPayload>();
@@ -793,7 +785,6 @@ namespace
 				case asEASTCrossReferenceKind::ContinueTarget:
 				case asEASTCrossReferenceKind::SwitchParent:
 				case asEASTCrossReferenceKind::FallthroughTarget:
-				case asEASTCrossReferenceKind::LambdaEnclosingFunction:
 					return false;
 				default:
 					return !Reference.StableIdentity.IsZero();
@@ -830,7 +821,6 @@ namespace
 			case asEASTCrossReferenceKind::ForeachKeyFunction:
 				return IsDeclKind(asEDeclKind::Function);
 			case asEASTCrossReferenceKind::ReturnTarget:
-			case asEASTCrossReferenceKind::LambdaEnclosingFunction:
 				return IsDeclKind(asEDeclKind::Function)
 					&& CodecIsAncestor(TargetIndex, NodeIndex, Parents);
 			case asEASTCrossReferenceKind::Constructor:
@@ -842,10 +832,7 @@ namespace
 			case asEASTCrossReferenceKind::DefaultParameter:
 				return IsDeclKind(asEDeclKind::ParmVar);
 			case asEASTCrossReferenceKind::ThisRecord:
-			case asEASTCrossReferenceKind::LambdaCapturedThis:
 				return IsDeclKind(asEDeclKind::Record);
-			case asEASTCrossReferenceKind::LambdaCapture:
-				return IsDeclKind(asEDeclKind::Var) || IsDeclKind(asEDeclKind::ParmVar);
 			case asEASTCrossReferenceKind::BreakTarget:
 				return IsControlKind(true) && CodecIsAncestor(TargetIndex, NodeIndex, Parents);
 			case asEASTCrossReferenceKind::ContinueTarget:
@@ -896,27 +883,7 @@ namespace
 					}
 					Start = 1;
 				}
-				if (Record.Kind != static_cast<uint16>(asEDeclKind::Function))
-					return Record.CrossReferences.Num() == Start;
-				const auto* Function = Record.TryGetPayload<asSASTFunctionDeclPayload>();
-				if (!Function || Function->FunctionKind != asEFunctionKind::Lambda)
-					return Record.CrossReferences.Num() == Start;
-				if (Record.CrossReferences.Num() <= Start
-					|| Record.CrossReferences[Start].Kind != asEASTCrossReferenceKind::LambdaEnclosingFunction) return false;
-				bool bSeenCapturedThis = false;
-				for (int32 Index = Start + 1; Index < Record.CrossReferences.Num(); ++Index)
-				{
-					const asEASTCrossReferenceKind Kind = Record.CrossReferences[Index].Kind;
-					if (Kind == asEASTCrossReferenceKind::LambdaCapture && !bSeenCapturedThis) continue;
-					if (Kind == asEASTCrossReferenceKind::LambdaCapturedThis
-						&& !bSeenCapturedThis && Index + 1 == Record.CrossReferences.Num())
-					{
-						bSeenCapturedThis = true;
-						continue;
-					}
-					return false;
-				}
-				return true;
+				return Record.CrossReferences.Num() == Start;
 			}
 			if (Record.Family != asEASTNodeFamily::Stmt) return Record.CrossReferences.IsEmpty();
 
@@ -1091,21 +1058,6 @@ namespace
 					|| Record.CrossReferences[0].LocalIndex != Switch.Children[ClauseOrdinal + 1] + 1u) return false;
 			}
 
-			for (const asSASTProjectionRecord& Record : Records)
-			{
-				if (!CodecIsStmtKind(Record, asEStmtKind::LambdaExpr)) continue;
-				const auto* Payload = Record.TryGetPayload<asSASTLambdaExprPayload>();
-				if (!Payload || Record.Children.Num() != 1) return false;
-				const asSASTProjectionRecord& Function = Records[static_cast<int32>(Record.Children[0])];
-				uint32 CaptureCount = 0;
-				bool bCapturesThis = false;
-				for (const auto& Reference : Function.CrossReferences)
-				{
-					if (Reference.Kind == asEASTCrossReferenceKind::LambdaCapture) ++CaptureCount;
-					else if (Reference.Kind == asEASTCrossReferenceKind::LambdaCapturedThis) bCapturesThis = true;
-				}
-				if (Payload->CaptureCount != CaptureCount || Payload->bCapturesThis != bCapturesThis) return false;
-			}
 			return true;
 		}
 
@@ -1128,7 +1080,7 @@ namespace
 			else if (const auto* Record = Payload.TryGet<asSASTRecordDeclPayload>()) { W.String(Record->Name); W.U8(static_cast<uint8>(Record->DeclaredTypeKind)); W.U32(static_cast<uint32>(Record->UnresolvedBases.Num())); for (const FString& Base : Record->UnresolvedBases) W.String(Base); W.U8(static_cast<uint8>(Record->Modifiers)); }
 			else if (const auto* Variable = Payload.TryGet<asSASTVarDeclPayload>()) { W.String(Variable->Name); CodecWriteTypeSyntax(W, Variable->TypeSyntax); W.Bool(Variable->bHasDeferredInitializer); if (Variable->bHasDeferredInitializer) CodecWriteAnchor(W, Variable->DeferredInitializerSource); }
 			else if (const auto* Constant = Payload.TryGet<asSASTEnumConstantDeclPayload>()) { W.String(Constant->Name); W.U64(static_cast<uint64>(Constant->Value)); W.Bool(Constant->bExplicitValue); W.Bool(Constant->bResolvedValue); W.Bool(Constant->bHasDeferredInitializer); if (Constant->bHasDeferredInitializer) CodecWriteAnchor(W, Constant->DeferredInitializerSource); }
-			else if (const auto* Function = Payload.TryGet<asSASTFunctionDeclPayload>()) { W.String(Function->Name); CodecWriteTypeSyntax(W, Function->ReturnTypeSyntax); W.Bool(Function->bConstMethod); W.U8(static_cast<uint8>(Function->FunctionKind)); W.U16(static_cast<uint16>(Function->Modifiers)); W.Bool(Function->bHasDeferredBody); if (Function->bHasDeferredBody) CodecWriteAnchor(W, Function->DeferredBodySource); W.U32(Function->LambdaOrdinal); W.U32(static_cast<uint32>(Function->DeferredStatementSources.Num())); for (const asSStableSourceAnchor& Source : Function->DeferredStatementSources) CodecWriteAnchor(W, Source); }
+			else if (const auto* Function = Payload.TryGet<asSASTFunctionDeclPayload>()) { W.String(Function->Name); CodecWriteTypeSyntax(W, Function->ReturnTypeSyntax); W.Bool(Function->bConstMethod); W.U8(static_cast<uint8>(Function->FunctionKind)); W.U16(static_cast<uint16>(Function->Modifiers)); W.Bool(Function->bHasDeferredBody); if (Function->bHasDeferredBody) CodecWriteAnchor(W, Function->DeferredBodySource); W.U32(static_cast<uint32>(Function->DeferredStatementSources.Num())); for (const asSStableSourceAnchor& Source : Function->DeferredStatementSources) CodecWriteAnchor(W, Source); }
 			else if (const auto* Callable = Payload.TryGet<asSASTCallableTypeDeclPayload>()) { W.String(Callable->Name); CodecWriteTypeSyntax(W, Callable->ReturnTypeSyntax); W.Bool(Callable->bMulticast); }
 			else if (const auto* Access = Payload.TryGet<asSASTAccessSpecifierDeclPayload>())
 			{
@@ -1177,7 +1129,6 @@ namespace
 			}
 			else if (const auto* StringLiteral = Payload.TryGet<asSASTStringLiteralPayload>()) W.String(StringLiteral->Value);
 			else if (const auto* This = Payload.TryGet<asSASTThisExprPayload>()) W.Bool(This->bImplicit);
-			else if (const auto* Lambda = Payload.TryGet<asSASTLambdaExprPayload>()) { W.U32(Lambda->CaptureCount); W.Bool(Lambda->bCapturesThis); }
 			else if (const auto* Initializer = Payload.TryGet<asSASTInitListExprPayload>()) { W.Key(Initializer->InitializerIdentity); W.U32(static_cast<uint32>(Initializer->ElementPatternIndices.Num())); for (int32 Index : Initializer->ElementPatternIndices) W.U32(static_cast<uint32>(Index)); }
 			else if (const auto* Group = Payload.TryGet<asSASTDeclGroupStmtPayload>()) W.U32(Group->DeclarationCount);
 			else if (const auto* ClassDefault = Payload.TryGet<asSASTClassDefaultStmtPayload>()) CodecWriteAnchor(W, ClassDefault->KeywordSource);
@@ -1265,8 +1216,7 @@ namespace
 				asSASTFunctionDeclPayload P; if (!R.String(P.Name)) return asEASTCodecStatus::Malformed; auto S = CodecReadTypeSyntax(R, P.ReturnTypeSyntax, Items, B); if (S != asEASTCodecStatus::Succeeded) return S;
 				uint8 FunctionKind = 0; uint16 Modifiers = 0;
 				if (!R.Bool(P.bConstMethod) || !R.U8(FunctionKind) || !R.U16(Modifiers)
-					|| !R.Bool(P.bHasDeferredBody) || (P.bHasDeferredBody && !CodecReadAnchor(R, P.DeferredBodySource))
-					|| !R.U32(P.LambdaOrdinal)) return asEASTCodecStatus::Malformed;
+					|| !R.Bool(P.bHasDeferredBody) || (P.bHasDeferredBody && !CodecReadAnchor(R, P.DeferredBodySource))) return asEASTCodecStatus::Malformed;
 				uint32 DeferredCount = 0; auto DeferredStatus = CodecReadCount(R, DeferredCount, Items, B);
 				if (DeferredStatus != asEASTCodecStatus::Succeeded) return DeferredStatus;
 				P.DeferredStatementSources.Reserve(DeferredCount);
@@ -1358,7 +1308,6 @@ namespace
 			}
 			case asEASTCodecPayloadTag::StringLiteral: { asSASTStringLiteralPayload P; if (!R.String(P.Value)) return asEASTCodecStatus::Malformed; CodecSetPayload(Out, MoveTemp(P)); break; }
 			case asEASTCodecPayloadTag::ThisExpr: { asSASTThisExprPayload P; if (!R.Bool(P.bImplicit)) return asEASTCodecStatus::Malformed; CodecSetPayload(Out, P); break; }
-			case asEASTCodecPayloadTag::LambdaExpr: { asSASTLambdaExprPayload P; if (!R.U32(P.CaptureCount) || !R.Bool(P.bCapturesThis)) return asEASTCodecStatus::Malformed; CodecSetPayload(Out, P); break; }
 			case asEASTCodecPayloadTag::InitListExpr:
 			{
 				asSASTInitListExprPayload P; uint32 N = 0; if (!R.Key(P.InitializerIdentity)) return asEASTCodecStatus::Malformed;

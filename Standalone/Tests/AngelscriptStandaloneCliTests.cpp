@@ -96,7 +96,9 @@ int main()
 		const FArgumentParseResult Parsed = ParseArguments(
 			static_cast<int>(std::size(Arguments)),
 			const_cast<char**>(Arguments));
-		Passed &= Require(!Parsed.bSuccess, "run rejects UE bundle option");
+		Passed &= Require(!Parsed.bSuccess
+			&& Parsed.Error.find("AS-NATIVE-UNSUPPORTED-LIBRARY") != std::string::npos,
+			"removed execution rejects before invocation");
 		Passed &= Require(Parsed.ExitCode == 2, "usage error exit code");
 	}
 
@@ -106,7 +108,7 @@ int main()
 	std::filesystem::create_directories(ScriptRoot);
 	{
 		std::ofstream Source(ScriptRoot / "main.as", std::ios::binary);
-		Source << "int main(const array<string> args) { return args.length() == 0 ? 23 : -1; }\n";
+		Source << "int main() { return 23; }\n";
 	}
 
 	FCompileRequest Request;

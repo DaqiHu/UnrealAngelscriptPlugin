@@ -808,43 +808,6 @@ int main()
 				/ "Source/AngelscriptRuntime/Core/AngelscriptSDKHostServices.cpp"),
 		"obsolete UE Runtime SDK host-service adapter remains present");
 
-	static constexpr std::string_view ForbiddenNativeLibrarySurface[] = {
-		"fopen(",
-		"CreateProcess",
-		"ShellExecute",
-		"LoadLibrary",
-		"WinHttp",
-		"socket(",
-		"std::filesystem",
-		"system(",
-	};
-	for (const fs::path& NativeSurfaceRoot
-		: {StandaloneRoot / "Source/StdLib",
-			StandaloneRoot / "ThirdParty/AngelScriptAddons"})
-	{
-		for (const fs::directory_entry& Entry
-			: fs::recursive_directory_iterator(NativeSurfaceRoot))
-		{
-			if (!Entry.is_regular_file()
-				|| (Entry.path().extension() != ".h"
-					&& Entry.path().extension() != ".cpp"))
-			{
-				continue;
-			}
-			const std::string Text =
-				RemoveCommentOnlyLines(ReadText(Entry.path()));
-			for (const std::string_view Pattern
-				: ForbiddenNativeLibrarySurface)
-			{
-				bPassed &= Require(
-					Text.find(Pattern) == std::string::npos,
-					"native standard library exposes a forbidden host "
-					"surface '" + std::string(Pattern) + "': "
-						+ Entry.path().string());
-			}
-		}
-	}
-
 	const fs::path ProjectFile = BuildRoot / "AngelscriptMaintainedFork.vcxproj";
 	bPassed &= Require(fs::exists(ProjectFile), "generated maintained-fork project is missing");
 	if (fs::exists(ProjectFile))

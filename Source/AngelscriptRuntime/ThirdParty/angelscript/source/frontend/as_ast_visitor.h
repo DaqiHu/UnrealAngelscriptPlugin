@@ -64,9 +64,9 @@ enum class asEASTVisitStatus : uint8
 		ForeachValueFunction,
 		ForeachKeyFunction,
 		ThisRecord,
-		LambdaEnclosingFunction,
-		LambdaCapture,
-		LambdaCapturedThis,
+		ReservedAnonymousEnclosingFunction,
+		ReservedAnonymousCapture,
+		ReservedAnonymousCapturedThis,
 		CustomAccessSpecifier,
 		ConversionFunction,
 	};
@@ -250,8 +250,6 @@ enum class asEASTVisitStatus : uint8
 			case asEStmtKind::ConstructExpr:
 				for (asCExpr* Argument : static_cast<const asCConstructExpr&>(Stmt).GetArguments()) Out.Add(Argument);
 				return true;
-			case asEStmtKind::LambdaExpr:
-				Out.Add(static_cast<const asCLambdaExpr&>(Stmt).GetFunction()); return true;
 			case asEStmtKind::InitListExpr:
 				for (asCExpr* Element : static_cast<const asCInitListExpr&>(Stmt).GetElements()) Out.Add(Element);
 				return true;
@@ -400,15 +398,6 @@ enum class asEASTVisitStatus : uint8
 			if (Function) AccessUse = Function->GetAuthoredAccessUse();
 			if (AccessUse && AccessUse->Resolved)
 				Out.Add({asEASTCrossReferenceKind::CustomAccessSpecifier, AccessUse->Resolved});
-			if (Function && Function->GetFunctionKind() == asEFunctionKind::Lambda)
-			{
-				if (asCFunctionDecl* Enclosing = Function->GetEnclosingFunction())
-					Out.Add({asEASTCrossReferenceKind::LambdaEnclosingFunction, Enclosing});
-				for (asCVarDecl* Capture : Function->GetCaptures())
-					Out.Add({asEASTCrossReferenceKind::LambdaCapture, Capture});
-				if (asCRecordDecl* Record = Function->GetCapturedThisRecord())
-					Out.Add({asEASTCrossReferenceKind::LambdaCapturedThis, Record});
-			}
 			return true;
 		}
 		if (Node.GetFamily() != asEASTNodeFamily::Stmt) return true;

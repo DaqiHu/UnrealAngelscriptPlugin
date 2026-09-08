@@ -110,20 +110,6 @@ endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/Tests/CMake/AssertTargetInterfaces.cmake")
 
-set(ANGELSCRIPT_ADDON_ROOT "${CMAKE_CURRENT_LIST_DIR}/ThirdParty/AngelScriptAddons")
-set(ANGELSCRIPT_STANDALONE_ADDON_SOURCES
-	"${ANGELSCRIPT_ADDON_ROOT}/scriptarray/scriptarray.cpp"
-	"${ANGELSCRIPT_ADDON_ROOT}/scriptdictionary/scriptdictionary.cpp"
-	"${ANGELSCRIPT_ADDON_ROOT}/scriptmath/scriptmath.cpp"
-	"${ANGELSCRIPT_ADDON_ROOT}/scriptstdstring/scriptstdstring.cpp"
-	"${ANGELSCRIPT_ADDON_ROOT}/scriptstdstring/scriptstdstring_utils.cpp"
-)
-
-add_library(AngelscriptStandaloneAddons STATIC ${ANGELSCRIPT_STANDALONE_ADDON_SOURCES})
-target_compile_features(AngelscriptStandaloneAddons PUBLIC cxx_std_20)
-target_include_directories(AngelscriptStandaloneAddons PUBLIC "${ANGELSCRIPT_ADDON_ROOT}")
-target_link_libraries(AngelscriptStandaloneAddons PUBLIC AngelscriptMaintainedFork)
-
 set(ANGELSCRIPT_STANDALONE_HOST_SOURCES
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Adapters/AngelscriptAdapterRegistry.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Adapters/AngelscriptTemplateTraits.cpp"
@@ -151,7 +137,6 @@ set(ANGELSCRIPT_STANDALONE_HOST_SOURCES
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Host/AngelscriptStandaloneFileSystem.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Runtime/AngelscriptStandaloneAllocator.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Runtime/AngelscriptStandaloneExecutionGuard.cpp"
-	"${CMAKE_CURRENT_LIST_DIR}/Source/Runtime/AngelscriptStandaloneRunner.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Registration/AngelscriptCapabilityClassification.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Registration/AngelscriptCompileOnlyStub.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Registration/AngelscriptRegistrationLoader.cpp"
@@ -162,7 +147,6 @@ set(ANGELSCRIPT_STANDALONE_HOST_SOURCES
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Resources/AngelscriptResourceContext.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Resources/AngelscriptResourceDiagnostics.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Resources/AngelscriptResourceValidator.cpp"
-	"${CMAKE_CURRENT_LIST_DIR}/Source/StdLib/AngelscriptStandaloneStdLib.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Support/AngelscriptStandaloneHash.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Support/AngelscriptStandaloneJson.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/Source/Support/AngelscriptStandaloneStreamingHash.cpp"
@@ -177,7 +161,7 @@ target_include_directories(
 	PRIVATE
 		"${CMAKE_CURRENT_LIST_DIR}/ThirdParty/RapidJSON/include"
 )
-target_link_libraries(AngelscriptStandaloneHost PUBLIC AngelscriptStandaloneAddons)
+target_link_libraries(AngelscriptStandaloneHost PUBLIC AngelscriptMaintainedFork)
 
 add_executable(
 	AngelscriptStandaloneCli
@@ -249,7 +233,6 @@ add_custom_command(
 
 if(MSVC)
 	target_compile_options(AngelscriptMaintainedFork PRIVATE /W4 /permissive- /EHsc)
-	target_compile_options(AngelscriptStandaloneAddons PRIVATE /W4 /permissive- /EHsc)
 	target_compile_options(AngelscriptStandaloneHost PRIVATE /W4 /permissive- /EHsc)
 	target_compile_options(AngelscriptStandaloneCli PRIVATE /W4 /permissive- /EHsc)
 endif()
@@ -295,19 +278,6 @@ set_tests_properties(
 	PROPERTIES
 		LABELS "standalone;frontend;preprocessor"
 )
-
-add_executable(
-	AngelscriptStandaloneAddonsTests
-	"${CMAKE_CURRENT_LIST_DIR}/Tests/AngelscriptStandaloneAddonsTests.cpp"
-)
-target_link_libraries(
-	AngelscriptStandaloneAddonsTests
-	PRIVATE
-		AngelscriptStandaloneAddons
-)
-
-add_test(NAME AngelscriptStandalone.Addons COMMAND AngelscriptStandaloneAddonsTests)
-set_tests_properties(AngelscriptStandalone.Addons PROPERTIES LABELS "standalone;native-core;addons;stdlib")
 
 add_executable(
 	AngelscriptStandaloneCliTests
@@ -665,31 +635,6 @@ set_tests_properties(
 )
 
 add_executable(
-	AngelscriptStandaloneSoakTests
-	"${CMAKE_CURRENT_LIST_DIR}/Tests/AngelscriptStandaloneSoakTests.cpp"
-)
-target_compile_definitions(
-	AngelscriptStandaloneSoakTests
-	PRIVATE
-		ANGELSCRIPT_STANDALONE_CORPUS_ROOT="${CMAKE_CURRENT_LIST_DIR}/Tests/Corpus"
-)
-target_link_libraries(
-	AngelscriptStandaloneSoakTests
-	PRIVATE
-		AngelscriptStandaloneHost
-)
-add_test(
-	NAME AngelscriptStandalone.Soak
-	COMMAND AngelscriptStandaloneSoakTests
-)
-set_tests_properties(
-	AngelscriptStandalone.Soak
-	PROPERTIES
-		LABELS "standalone;soak;determinism;limits;release"
-		TIMEOUT 120
-)
-
-add_executable(
 	AngelscriptStandaloneBenchmarkTests
 	"${CMAKE_CURRENT_LIST_DIR}/Tests/AngelscriptStandaloneBenchmarkTests.cpp"
 )
@@ -722,13 +667,11 @@ set_tests_properties(
 # consumers that compile against that header select Compat explicitly and
 # privately; AngelscriptMaintainedFork must not propagate the include tree.
 set(ANGELSCRIPT_STANDALONE_COMPAT_CONSUMERS
-	AngelscriptStandaloneAddons
 	AngelscriptStandaloneHost
 	AngelscriptStandaloneCli
 	AngelscriptStandaloneSmokeTests
 	AngelscriptStandaloneCanonicalASTTests
 	AngelscriptSemanticObserverTests
-	AngelscriptStandaloneAddonsTests
 	AngelscriptStandaloneCliTests
 	AngelscriptStandaloneRuntimeTests
 	AngelscriptStandaloneAllocatorLifetimeTests
@@ -738,7 +681,6 @@ set(ANGELSCRIPT_STANDALONE_COMPAT_CONSUMERS
 	AngelscriptStandaloneResourcesTests
 	AngelscriptStandaloneCompatTests
 	AngelscriptStandaloneCorpusTests
-	AngelscriptStandaloneSoakTests
 	AngelscriptStandaloneBenchmarkTests
 )
 foreach(compat_consumer IN LISTS ANGELSCRIPT_STANDALONE_COMPAT_CONSUMERS)

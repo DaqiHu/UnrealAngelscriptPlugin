@@ -348,7 +348,7 @@ void FAngelscriptClassGenerator::DoFullReloadClass(FModuleData& ModuleData, FCla
 		// If the type's super class is in a module we're currently compiling,
 		// force that to do its full reload first.
 		asITypeInfo* ScriptSuperType = ScriptType->GetBaseType();
-		asIScriptModule* ScriptSuperModule = ScriptSuperType->GetModule();
+		asIScriptModule* ScriptSuperModule = static_cast<const asCTypeInfo*>(ScriptSuperType)->module;
 
 		bool bFoundInCompilingModules = false;
 		for (auto& CheckModuleData : Modules)

@@ -139,7 +139,7 @@ enum class EAngelscriptArtifactEntityKind : uint8
 	Enum = 4,
 	Delegate = 5,
 	Typedef = 6,
-	Funcdef = 7,
+	CallableType = 7,
 	GlobalVariable = 16,
 	Property = 17,
 	GlobalFunction = 32,

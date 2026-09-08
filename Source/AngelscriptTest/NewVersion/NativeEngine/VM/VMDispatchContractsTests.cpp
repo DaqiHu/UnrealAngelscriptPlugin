@@ -185,7 +185,7 @@ public:
 	{
 		FDetachedDefinitionFixture Fixture;
 		asCScriptFunction* Signature = Fixture.DefineFunction(
-			TEXT("Callback"), TEXT(""), asFUNC_FUNCDEF, Fixture.Image->Primitive(ttInt), {});
+			TEXT("Callback"), TEXT(""), asFUNC_CALLABLE_SIGNATURE, Fixture.Image->Primitive(ttInt), {});
 		asCScriptFunction* Match = Fixture.DefineFunction(
 			TEXT("Match"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 		asCScriptFunction* Mismatch = Fixture.DefineFunction(
@@ -194,16 +194,16 @@ public:
 		AS_NAMESPACE_QUALIFIER asSNominalTypeDescriptor TypeDescriptor;
 		TypeDescriptor.StableScope = Fixture.Scope;
 		TypeDescriptor.Name = TEXT("CallbackType");
-		TypeDescriptor.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::Funcdef;
+		TypeDescriptor.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::CallableType;
 		asSStableKey TypeKey;
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded,
 			Fixture.Context->GetIdentityRegistry().InternNominalType(TypeDescriptor, TypeKey)));
-		asCFuncdefType* Funcdef = nullptr;
+		asCCallableType* CallableType = nullptr;
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Fixture.Image->CreateFuncdefType(TypeKey, "CallbackType", "", *Signature, Funcdef)));
-		ASSERT_THAT(IsNotNull(Funcdef));
+			Fixture.Image->CreateCallableType(TypeKey, "CallbackType", "", *Signature, CallableType)));
+		ASSERT_THAT(IsNotNull(CallableType));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
-		ASSERT_THAT(AreEqual(static_cast<int32>(asFUNC_FUNCDEF), static_cast<int32>(Signature->funcType)));
+		ASSERT_THAT(AreEqual(static_cast<int32>(asFUNC_CALLABLE_SIGNATURE), static_cast<int32>(Signature->funcType)));
 		ASSERT_THAT(IsTrue(Match->IsSignatureExceptNameEqual(Signature)));
 		ASSERT_THAT(IsFalse(Mismatch->IsSignatureExceptNameEqual(Signature)));
 		ASSERT_THAT(IsNull(Signature->scriptData));

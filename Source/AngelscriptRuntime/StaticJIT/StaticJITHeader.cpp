@@ -94,7 +94,7 @@ namespace
 				if (FailureRecord->CapturedStackModule.GetLength() == 0)
 				{
 					FailureRecord->CapturedStackModule =
-						ScriptFunction->GetModuleName();
+						TCHAR_TO_UTF8(*static_cast<asCScriptFunction*>(ScriptFunction)->GetStableKey().ToHexString());
 				}
 			}
 		};
@@ -141,14 +141,14 @@ namespace
 		FString& OutSectionName)
 	{
 		OutSectionName.Reset();
-		if (Function == nullptr || Function->GetModule() == nullptr
+		if (Function == nullptr || static_cast<asCScriptFunction*>(Function)->module == nullptr
 			|| SectionName == nullptr || SectionName[0] == '\0')
 		{
 			return false;
 		}
 
 		const TSharedPtr<FAngelscriptModuleDesc> Module =
-			RuntimeEngine.GetModule(Function->GetModule());
+			RuntimeEngine.GetModule(static_cast<asCScriptFunction*>(Function)->module);
 		if (!Module.IsValid())
 		{
 			return false;

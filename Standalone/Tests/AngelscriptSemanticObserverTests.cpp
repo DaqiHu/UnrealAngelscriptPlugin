@@ -1,7 +1,6 @@
 #include "Compiler/AngelscriptStandaloneSemanticObserver.h"
 
 #include "angelscript.h"
-#include "scriptstdstring/scriptstdstring.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -122,7 +121,6 @@ namespace
 		int& OutUIntOverload,
 		int& OutConstructor)
 	{
-		RegisterStdString(&Engine);
 		OutIntOverload = Engine.RegisterGlobalFunction(
 			"int Select(int Value)",
 			asFUNCTION(CompileOnlyTrap),
@@ -160,7 +158,6 @@ namespace
 			"    int Value = Select(7);\n"
 			"    FObserved Constructed(9);\n"
 			"    Value = 3;\n"
-			"    string Path = \"/Game/Observed.Asset\";\n"
 			"    return Value;\n"
 			"}\n"
 			"\n"
@@ -257,9 +254,6 @@ int main()
 	bPassed &= Require(
 		HasEvent(asSEMANTIC_OBSERVATION_ASSIGNMENT),
 		"assignment observation is missing");
-	bPassed &= Require(
-		HasEvent(asSEMANTIC_OBSERVATION_CONSTANT_STRING),
-		"constant-string observation is missing");
 
 	const auto ResolvedCall = std::find_if(
 		Observer.Events.begin(),
@@ -317,20 +311,6 @@ int main()
 	bPassed &= Require(
 		Assignment != Observer.Events.end(),
 		"observer did not expose resolved assignment types");
-
-	const auto Constant = std::find_if(
-		Observer.Events.begin(),
-		Observer.Events.end(),
-		[](const FObservedEvent& Event)
-		{
-			return Event.Kind
-					== asSEMANTIC_OBSERVATION_CONSTANT_STRING
-				&& Event.ConstantString
-					== "/Game/Observed.Asset";
-		});
-	bPassed &= Require(
-		Constant != Observer.Events.end(),
-		"observer did not expose the bounded constant string");
 
 	AngelscriptStandalone::FRegistrationRuntimeMap RuntimeMap;
 	RuntimeMap.FunctionIdByStableId.emplace(

@@ -3417,7 +3417,7 @@ void FAngelscriptBytecodeJIT::GenerateCppCode(asIScriptFunction* ScriptFunction,
 	}
 
 	uint32 FunctionId = PrecompiledData->CreateFunctionId(ScriptFunction);
-	FJITFile& File = GetFile(ScriptFunction->GetModule());
+	FJITFile& File = GetFile(static_cast<asCScriptFunction*>(ScriptFunction)->module);
 	const int32 FirstFunctionContentIndex = File.Content.Num();
 	const FStaticJITEntryPlan* const SharedEntryPlan =
 		SharedEntryPlans.FindRef(static_cast<asCScriptFunction*>(ScriptFunction));
@@ -3694,7 +3694,7 @@ void FAngelscriptBytecodeJIT::AnalyzeScriptFunction(asCScriptFunction* ScriptFun
 #if WITH_ANGELSCRIPT_UNITTESTS
 	FAngelscriptStaticJITBytecodeAccessAudit::RecordBytecodeAnalysis();
 #endif
-	FJITFile& File = GetFile(ScriptFunction->GetModule());
+	FJITFile& File = GetFile(static_cast<asCScriptFunction*>(ScriptFunction)->module);
 	if (Generate.FunctionSymbolName.IsEmpty())
 	{
 		Generate.FunctionSymbolName = GetUniqueFunctionName(
@@ -4171,7 +4171,7 @@ static bool GenerateStaticJITProviderBackendOutputImpl(
 				*FunctionAndRoute.Route->ModuleKey.Hash.ToHexString()));
 		}
 		asIScriptModule* const ScriptFunctionModule =
-			FunctionAndRoute.Function->GetModule();
+			static_cast<asCScriptFunction*>(FunctionAndRoute.Function)->module;
 		TSharedPtr<FAngelscriptModuleDesc>& ModuleDesc =
 			ModuleDescs.FindOrAdd(ScriptFunctionModule);
 		if (!ModuleDesc.IsValid())
@@ -4286,7 +4286,7 @@ static bool GenerateStaticJITProviderBackendOutputImpl(
 		Function.CanonicalDeclaration =
 			FunctionAndRoute.Route->CanonicalDeclaration;
 		const TSharedPtr<FAngelscriptModuleDesc>* const ModuleDescPtr =
-			ModuleDescs.Find(FunctionAndRoute.Function->GetModule());
+			ModuleDescs.Find(static_cast<asCScriptFunction*>(FunctionAndRoute.Function)->module);
 		const char* const ScriptSectionAnsi =
 			FunctionAndRoute.Function->GetScriptSectionName();
 		if (ModuleDescPtr == nullptr || !ModuleDescPtr->IsValid()
@@ -4426,7 +4426,7 @@ static bool GenerateStaticJITProviderBackendOutputImpl(
 			TEXT("#define SCRIPT_DEBUG_FILENAME %s\n")
 			TEXT("#endif\n\n"),
 			*DebugFilenameSymbol,
-			ANSI_TO_TCHAR(FunctionAndRoute.Function->GetModuleName()),
+			ANSI_TO_TCHAR((static_cast<asCScriptFunction*>(FunctionAndRoute.Function)->module ? static_cast<asCScriptFunction*>(FunctionAndRoute.Function)->module->GetName() : "")),
 			*DebugFilenameSymbol);
 		Function.ImplementationTemplate += GeneratedCode.EmittedFunctionContent;
 	}
@@ -4589,7 +4589,7 @@ namespace AngelscriptBytecodeStaticBackend_Private
 				Module = &OutPublication.Modules.Emplace_GetRef();
 				Module->ModuleKey = Function.ModuleKey;
 				Module->CanonicalModuleName = UTF8_TO_TCHAR(
-					Function.EngineLocalFunction->GetModuleName());
+					(static_cast<asCScriptFunction*>(Function.EngineLocalFunction)->module ? static_cast<asCScriptFunction*>(Function.EngineLocalFunction)->module->GetName() : ""));
 			}
 			FAngelscriptFunctionArtifactIdentity Identity;
 			Identity.FunctionKey = Function.FunctionKey;
@@ -4869,7 +4869,7 @@ bool GenerateStaticJITProviderArtifacts(
 					[Module](const FAngelscriptFunctionRoute& Candidate)
 					{
 						return Candidate.Function != nullptr
-							&& Candidate.Function->GetModule() == Module
+							&& static_cast<asCScriptFunction*>(Candidate.Function)->module == Module
 							&& Candidate.bHasVerifiedArtifactIdentity;
 					});
 			if (Route != nullptr)
@@ -5159,7 +5159,7 @@ bool GenerateStaticJITSourceTextForDiagnostics(
 		: Routes->FunctionRoutes)
 	{
 		if (CurrentRoute.Function == nullptr
-			|| CurrentRoute.Function->GetModule() != Module)
+			|| static_cast<asCScriptFunction*>(CurrentRoute.Function)->module != Module)
 		{
 			continue;
 		}

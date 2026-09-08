@@ -338,7 +338,7 @@ namespace AngelscriptOfflineContract
 		{
 		case ESymbolKind::Type:
 		case ESymbolKind::Typedef:
-		case ESymbolKind::Funcdef:
+		case ESymbolKind::CallableType:
 		case ESymbolKind::Delegate:
 			Result.Set(TEXT("type"), TypeJson(Record.Type));
 			break;

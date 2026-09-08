@@ -21,7 +21,7 @@ namespace AngelscriptOfflineContract
 		case ESymbolKind::Property: return TEXT("property");
 		case ESymbolKind::EnumValue: return TEXT("enum-value");
 		case ESymbolKind::Typedef: return TEXT("typedef");
-		case ESymbolKind::Funcdef: return TEXT("funcdef");
+		case ESymbolKind::CallableType: return TEXT("funcdef");
 		case ESymbolKind::Delegate: return TEXT("delegate");
 		case ESymbolKind::Global: return TEXT("global");
 		default: return TEXT("unknown");
@@ -38,7 +38,7 @@ namespace AngelscriptOfflineContract
 		case ETypeKind::Template: return TEXT("template");
 		case ETypeKind::Enum: return TEXT("enum");
 		case ETypeKind::Typedef: return TEXT("typedef");
-		case ETypeKind::Funcdef: return TEXT("funcdef");
+		case ETypeKind::CallableType: return TEXT("funcdef");
 		case ETypeKind::Delegate: return TEXT("delegate");
 		default: return TEXT("unknown");
 		}

@@ -1754,7 +1754,7 @@ FStaticJITDiagnostics::BuildArtifactRequestRecord(
 			return TEXT("Imported");
 		case EAngelscriptTypedASTJITInvocationKind::System:
 			return TEXT("System");
-		case EAngelscriptTypedASTJITInvocationKind::Funcdef:
+		case EAngelscriptTypedASTJITInvocationKind::CallableType:
 			return TEXT("Funcdef");
 		case EAngelscriptTypedASTJITInvocationKind::Synthesized:
 			return TEXT("Synthesized");

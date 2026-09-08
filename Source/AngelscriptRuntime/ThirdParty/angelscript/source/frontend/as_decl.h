@@ -343,10 +343,6 @@ struct asSAccessPermissionModifier
 		};
 		struct asSImplicitFunctionSource
 		{
-			asCFunctionDecl* EnclosingFunction = nullptr;
-			uint32 LambdaOrdinal = MAX_uint32;
-			TArray<asCVarDecl*> Captures;
-			asCRecordDecl* CapturedThisRecord = nullptr;
 			TArray<asCSourceRange> DeferredStatements;
 		};
 	public:
@@ -380,33 +376,8 @@ struct asSAccessPermissionModifier
 		bool SetConstMethod(bool Value) { if (!CanMutate()) return false; bConstMethod = Value; return true; }
 		bool IsConstMethod() const { return bConstMethod; }
 		asEFunctionKind GetFunctionKind() const { return FunctionKind; }
-		bool SetFunctionKind(asEFunctionKind Value) { if (!CanMutate()) return false; FunctionKind = Value; return true; }
-		bool IsImplicit() const { return FunctionKind == asEFunctionKind::Lambda || FunctionKind == asEFunctionKind::ClassDefault; }
-		bool SetLambdaOrigin(asCFunctionDecl* Enclosing, uint32 Ordinal)
-		{
-			if (!CanMutate() || !Enclosing || Enclosing == this || Ordinal == MAX_uint32 || Enclosing->GetOwnerContext() != GetOwnerContext()) return false;
-			if (!ImplicitSource) ImplicitSource = MakeUnique<asSImplicitFunctionSource>();
-			if (ImplicitSource->EnclosingFunction) return false;
-			FunctionKind = asEFunctionKind::Lambda;
-			SetDeclContext(Enclosing);
-			ImplicitSource->EnclosingFunction = Enclosing; ImplicitSource->LambdaOrdinal = Ordinal; return true;
-		}
-		asCFunctionDecl* GetEnclosingFunction() const { return ImplicitSource ? ImplicitSource->EnclosingFunction : nullptr; }
-		uint32 GetLambdaOrdinal() const { return ImplicitSource ? ImplicitSource->LambdaOrdinal : MAX_uint32; }
-		bool AddCapture(asCVarDecl* Variable)
-		{
-			if (!CanMutate() || FunctionKind != asEFunctionKind::Lambda || !Variable || Variable->GetOwnerContext() != GetOwnerContext()) return false;
-			if (!ImplicitSource) ImplicitSource = MakeUnique<asSImplicitFunctionSource>();
-			ImplicitSource->Captures.AddUnique(Variable); return true;
-		}
-		TConstArrayView<asCVarDecl*> GetCaptures() const { return ImplicitSource ? MakeArrayView(ImplicitSource->Captures) : TConstArrayView<asCVarDecl*>{}; }
-		bool SetCapturedThisRecord(asCRecordDecl* Record)
-		{
-			if (!CanMutate() || FunctionKind != asEFunctionKind::Lambda || !Record || Record->GetOwnerContext() != GetOwnerContext()) return false;
-			if (!ImplicitSource) ImplicitSource = MakeUnique<asSImplicitFunctionSource>();
-			ImplicitSource->CapturedThisRecord = Record; return true;
-		}
-		asCRecordDecl* GetCapturedThisRecord() const { return ImplicitSource ? ImplicitSource->CapturedThisRecord : nullptr; }
+		bool SetFunctionKind(asEFunctionKind Value) { if (!CanMutate() || Value == asEFunctionKind::ReservedAnonymousFunction || Value > asEFunctionKind::Conversion) return false; FunctionKind = Value; return true; }
+		bool IsImplicit() const { return FunctionKind == asEFunctionKind::ClassDefault; }
 		bool AddDeferredStatementRange(asCSourceRange Range)
 		{
 			if (!CanMutate() || FunctionKind != asEFunctionKind::ClassDefault || !Range.IsOrdered()) return false;

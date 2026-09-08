@@ -556,7 +556,7 @@ namespace AngelscriptOfflineContract
 		{
 			if (Symbol.Kind != ESymbolKind::Type
 				&& Symbol.Kind != ESymbolKind::Typedef
-				&& Symbol.Kind != ESymbolKind::Funcdef
+				&& Symbol.Kind != ESymbolKind::CallableType
 				&& Symbol.Kind != ESymbolKind::Delegate)
 			{
 				continue;

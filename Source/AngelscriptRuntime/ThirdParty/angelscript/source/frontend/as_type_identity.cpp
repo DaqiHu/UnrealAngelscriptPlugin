@@ -230,21 +230,19 @@ namespace
 			TArray<uint8>& OutDescription)
 		{
 			OutDescription.Reset();
-			const bool Lambda = Descriptor.Kind == asEFunctionIdentityKind::Lambda;
-			if (Lambda && Descriptor.LambdaOrdinal == MAX_uint32) return asETypeIdentityStatus::InvalidDescriptor;
 			const bool ClassDefault = Descriptor.Kind == asEFunctionIdentityKind::ClassDefault;
 			const bool Conversion = Descriptor.Kind == asEFunctionIdentityKind::Conversion;
-			if (Lambda && Descriptor.EnclosingFunction.IsZero()) return asETypeIdentityStatus::NonCacheable;
 			const uint16 ModifierBits = static_cast<uint16>(Descriptor.Modifiers);
 			const uint16 DefinitionModifierBits =
 				static_cast<uint16>(Descriptor.DefinitionModifiers);
 			if (Descriptor.StableScope.IsEmpty()
-				|| ((Lambda || ClassDefault) ? !Descriptor.Name.IsEmpty() : Descriptor.Name.IsEmpty())
+				|| (ClassDefault ? !Descriptor.Name.IsEmpty() : Descriptor.Name.IsEmpty())
 				|| !HasValidStablePath(Descriptor.NamespacePath)
 				|| Descriptor.NamespacePath.Num()
 					> static_cast<int32>(asCStableIdentityRegistry::MaxDescriptorEdges)
 				|| Descriptor.Kind <= asEFunctionIdentityKind::Invalid
 				|| Descriptor.Kind > asEFunctionIdentityKind::Conversion
+				|| Descriptor.Kind == asEFunctionIdentityKind::ReservedAnonymousFunction
 				|| Descriptor.GenericArity > asCStableIdentityRegistry::MaxDescriptorEdges
 				|| Descriptor.ReturnType.IsZero()
 				|| Descriptor.Parameters.Num()
@@ -260,13 +258,12 @@ namespace
 			{
 				return asETypeIdentityStatus::InvalidDescriptor;
 			}
-			if ((Descriptor.Kind == asEFunctionIdentityKind::Global || Lambda)
+			if ((Descriptor.Kind == asEFunctionIdentityKind::Global)
 				!= Descriptor.Owner.IsZero())
 			{
 				return asETypeIdentityStatus::InvalidOwner;
 			}
-			if ((!Lambda && (!Descriptor.EnclosingFunction.IsZero() || Descriptor.LambdaOrdinal)) ||
-				((Lambda || ClassDefault) && (Descriptor.GenericArity || ModifierBits || DefinitionModifierBits)) ||
+			if ((ClassDefault && (Descriptor.GenericArity || ModifierBits || DefinitionModifierBits)) ||
 				(ClassDefault && !Descriptor.Parameters.IsEmpty()) ||
 				(Conversion && (!IsConversionFunctionName(Descriptor.Name)
 					|| !Descriptor.Parameters.IsEmpty()
@@ -294,11 +291,6 @@ namespace
 			Encoding.WriteBytes(Descriptor.Owner.GetBytes());
 			Encoding.WriteUInt8(static_cast<uint8>(Descriptor.Kind));
 			Encoding.WriteString(Descriptor.Name);
-			if (Lambda)
-			{
-				Encoding.WriteBytes(Descriptor.EnclosingFunction.GetBytes());
-				Encoding.WriteUInt32(Descriptor.LambdaOrdinal);
-			}
 			Encoding.WriteUInt32(Descriptor.GenericArity);
 			Encoding.WriteUInt16(ModifierBits);
 			Encoding.WriteUInt32(static_cast<uint32>(Descriptor.Parameters.Num()));
@@ -833,16 +825,9 @@ namespace
 		const asSFunctionIdentityDescriptor& Descriptor) const
 	{
 		if (Descriptor.Kind != asEFunctionIdentityKind::Global
-			&& Descriptor.Kind != asEFunctionIdentityKind::Lambda
 			&& !HasIdentityRoleLocked(Descriptor.Owner, asEStableIdentityRole::NominalType))
 		{
 			return asETypeIdentityStatus::InvalidOwner;
-		}
-		if (Descriptor.Kind == asEFunctionIdentityKind::Lambda)
-		{
-			if (!HasIdentityRoleLocked(Descriptor.EnclosingFunction, asEStableIdentityRole::Function)) return asETypeIdentityStatus::InvalidOwner;
-			const auto& Parent = IdentityRecords[*IdentityRecordByKey.Find(Descriptor.EnclosingFunction)].Function;
-			if (Parent.StableScope != Descriptor.StableScope || Parent.NamespacePath != Descriptor.NamespacePath) return asETypeIdentityStatus::InvalidOwner;
 		}
 		const asETypeIdentityStatus ReturnStatus = ValidateIdentityRoleLocked(
 			Descriptor.ReturnType, asEStableIdentityRole::TypeUse);

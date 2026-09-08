@@ -18,7 +18,7 @@ bool asCCompilationSession::ResolveListInitializer(asCQualType Type, asSListInit
 		const asCObjectType* Target = nullptr;
 		for (const auto& Image : ExternalDefinitions)
 			if (const auto* Candidate = Image->FindType(Nominal->GetDeclarationIdentity());
-				Candidate && (Candidate->flags & (asOBJ_REF | asOBJ_VALUE)) && !(Candidate->flags & asOBJ_FUNCDEF))
+				Candidate && (Candidate->flags & (asOBJ_REF | asOBJ_VALUE)) && !(Candidate->flags & asOBJ_CALLABLE_TYPE))
 			{ Target = static_cast<const asCObjectType*>(Candidate); break; }
 		if (!Target) return false;
 		const auto* Initializer = Target->GetMetadataImage()->GetListInitializer(*Target);
@@ -30,7 +30,7 @@ bool asCCompilationSession::ResolveListInitializer(asCQualType Type, asSListInit
 			asCType* Result = nullptr;
 			if (const auto* Info = Input.GetTypeInfo())
 			{
-				const asCObjectType* Instance = (Info->flags & (asOBJ_VALUE | asOBJ_REF)) && !(Info->flags & asOBJ_FUNCDEF) ? static_cast<const asCObjectType*>(Info) : nullptr;
+				const asCObjectType* Instance = (Info->flags & (asOBJ_VALUE | asOBJ_REF)) && !(Info->flags & asOBJ_CALLABLE_TYPE) ? static_cast<const asCObjectType*>(Info) : nullptr;
 				const auto* Definition = Instance ? Instance->GetMetadataTemplateDefinition() : nullptr;
 				asSStableTypeUseDescriptor Use; Use.Kind = asETypeUseKind::Nominal; Use.Declaration = Definition ? Definition->GetStableKey() : Info->GetStableKey();
 				asSStableKey BaseKey;

@@ -30,11 +30,6 @@ namespace AngelscriptCacheStableSymbolIdentity_Private
 			return EAngelscriptArtifactEntityKind::GeneratedDefaultDestructor;
 		case asBUILD_ARTIFACT_INVOCATION_INIT_DEFAULTS:
 			return EAngelscriptArtifactEntityKind::InitDefaults;
-		case asBUILD_ARTIFACT_INVOCATION_LAMBDA:
-			// Lambdas are module-owned script functions with unique $name$N
-			// declarations; reuse GlobalFunction so FunctionKey is cacheable
-			// without a new entity-kind ordinal.
-			return EAngelscriptArtifactEntityKind::GlobalFunction;
 		default:
 			return {};
 		}
@@ -211,9 +206,7 @@ bool FAngelscriptCacheStableSymbolIdentity::TryBuildFunctionKey(
 	}
 
 	if (Function.artifactInvocationKind
-		== asBUILD_ARTIFACT_INVOCATION_GLOBAL_FUNCTION
-		|| Function.artifactInvocationKind
-			== asBUILD_ARTIFACT_INVOCATION_LAMBDA)
+		== asBUILD_ARTIFACT_INVOCATION_GLOBAL_FUNCTION)
 	{
 		if (Function.artifactOwnerType != nullptr
 			|| Function.objectType != nullptr)

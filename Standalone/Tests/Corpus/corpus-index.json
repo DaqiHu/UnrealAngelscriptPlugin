@@ -2,38 +2,6 @@
   "schemaVersion": 1,
   "cases": [
     {
-      "id": "native.basic",
-      "sourceRoot": "corpus",
-      "source": "Native/basic.as",
-      "provenance": "standalone-native-corpus",
-      "dependencies": ["native-runtime", "string-addon"],
-      "profile": "native",
-      "classification": "supported",
-      "automation": "standalone",
-      "expected": {
-        "compile": "success",
-        "run": "success",
-        "scriptResult": 17
-      },
-      "evidence": "AngelscriptStandalone.Corpus"
-    },
-    {
-      "id": "native.collections",
-      "sourceRoot": "corpus",
-      "source": "Native/collections.as",
-      "provenance": "standalone-native-corpus",
-      "dependencies": ["native-runtime", "array-addon", "dictionary-addon"],
-      "profile": "native",
-      "classification": "supported",
-      "automation": "standalone",
-      "expected": {
-        "compile": "success",
-        "run": "success",
-        "scriptResult": 23
-      },
-      "evidence": "AngelscriptStandalone.Corpus"
-    },
-    {
       "id": "ue-core.declarations",
       "sourceRoot": "corpus",
       "source": "UECore/declarations.as",

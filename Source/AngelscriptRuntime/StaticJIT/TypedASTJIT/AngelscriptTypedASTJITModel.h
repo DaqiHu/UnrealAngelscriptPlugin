@@ -76,7 +76,7 @@ enum class EAngelscriptTypedASTJITInvocationKind : uint8
 	Factory,
 	Imported,
 	System,
-	Funcdef,
+	CallableType,
 	Synthesized,
 };
 

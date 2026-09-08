@@ -232,15 +232,6 @@ class ANGELSCRIPTRUNTIME_API asCBooleanLiteral final : public asCExpr
 		bool bImplicit = false;
 	};
 
-	class ANGELSCRIPTRUNTIME_API asCLambdaExpr final : public asCExpr
-	{
-	public:
-		asCLambdaExpr(asCFunctionDecl* Function, asCSourceRange Range) : asCExpr(asEStmtKind::LambdaExpr, MoveTemp(Range)), Function(Function) {}
-		asCFunctionDecl* GetFunction() const { return Function; }
-		static bool classof(const asCASTNode* Node) { return Node && Node->GetFamily() == asEASTNodeFamily::Stmt && Node->GetRawKind() == static_cast<uint16>(asEStmtKind::LambdaExpr); }
-	private:
-		asCFunctionDecl* Function = nullptr;
-	};
 
 	class ANGELSCRIPTRUNTIME_API asCInitListExpr final : public asCExpr
 	{

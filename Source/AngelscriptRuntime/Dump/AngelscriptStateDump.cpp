@@ -948,10 +948,10 @@ FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpScriptEngineState
 
 	asUINT ModuleFunctionCount = 0;
 	asUINT ModuleGlobalVarCount = 0;
-	const asUINT ModuleCount = ScriptEngine->GetModuleCount();
+	const asUINT ModuleCount = static_cast<asCScriptEngine*>(ScriptEngine)->scriptModules.GetLength();
 	for (asUINT ModuleIndex = 0; ModuleIndex < ModuleCount; ++ModuleIndex)
 	{
-		if (asIScriptModule* ScriptModule = ScriptEngine->GetModuleByIndex(ModuleIndex))
+		if (asIScriptModule* ScriptModule = static_cast<asCScriptEngine*>(ScriptEngine)->scriptModules[ModuleIndex])
 		{
 			ModuleFunctionCount += ScriptModule->GetFunctionCount();
 			ModuleGlobalVarCount += ScriptModule->GetGlobalVarCount();
@@ -970,7 +970,11 @@ FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpScriptEngineState
 	AddStat(TEXT("GlobalPropertyCount"), LexToString(ScriptEngine->GetGlobalPropertyCount()));
 	AddStat(TEXT("ObjectTypeCount"), LexToString(ScriptEngine->GetObjectTypeCount()));
 	AddStat(TEXT("EnumCount"), LexToString(ScriptEngine->GetEnumCount()));
-	AddStat(TEXT("FuncdefCount"), LexToString(ScriptEngine->GetFuncdefCount()));
+	asUINT CallableTypeCount = 0;
+	for (const auto& Image : static_cast<asCScriptEngine*>(ScriptEngine)->GetRegisteredMetadataImages())
+		for (const asCTypeInfo* Type : Image->GetTypes())
+			if (Type->GetFlags() & asOBJ_CALLABLE_TYPE) ++CallableTypeCount;
+	AddStat(TEXT("CallableTypeCount"), LexToString(CallableTypeCount));
 	AddStat(TEXT("TypedefCount"), LexToString(ScriptEngine->GetTypedefCount()));
 	AddStat(TEXT("ModuleFunctionCount"), LexToString(ModuleFunctionCount));
 	AddStat(TEXT("ModuleGlobalVarCount"), LexToString(ModuleGlobalVarCount));

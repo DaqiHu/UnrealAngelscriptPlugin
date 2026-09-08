@@ -503,7 +503,7 @@ namespace BodySemanticTests
 		}
 	};
 
-	TEST_CLASS_WITH_FLAGS(BodiesControlFlow, "Angelscript.UnitTest.NativeEngine", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+	TEST_CLASS_WITH_FLAGS(BodiesStructuredControlFlow, "Angelscript.UnitTest.NativeEngine", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 	{
 		TEST_METHOD(ForOwnsTypedInitConditionIncrementAndContinueTarget)
 		{

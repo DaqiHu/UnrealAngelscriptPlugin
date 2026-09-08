@@ -38,7 +38,7 @@ run_cli(0 --help)
 if(NOT LAST_STDOUT MATCHES "compile --dialect native\\|ue")
 	message(FATAL_ERROR "--help is missing compile profiles: ${LAST_STDOUT}")
 endif()
-if(LAST_STDOUT MATCHES "run --dialect ue")
+if(LAST_STDOUT MATCHES "as-standalone run")
 	message(FATAL_ERROR "--help must not expose a UE run command: ${LAST_STDOUT}")
 endif()
 
@@ -70,42 +70,14 @@ if(NOT ByteCodeCount EQUAL 1)
 	message(FATAL_ERROR "compile must publish exactly one bytecode file")
 endif()
 
-set(RunOutput "${AS_STANDALONE_TEST_ROOT}/run")
 run_cli(
 	0
-	run
-	--script-root "${AS_STANDALONE_FIXTURE_ROOT}"
-	--entry main.as
-	--output "${RunOutput}"
-	--timeout-ms 5000
-	--memory-limit-mb 256
-	--
-	first
-	second
-)
-if(NOT LAST_STDOUT STREQUAL "running\n")
-	message(FATAL_ERROR "run must preserve script stdout exactly: ${LAST_STDOUT}")
-endif()
-file(READ "${RunOutput}/result.json" RunResult)
-if(NOT RunResult MATCHES "\"scriptResult\": 31")
-	message(FATAL_ERROR "run result did not record scriptResult: ${RunResult}")
-endif()
-if(NOT RunResult MATCHES "\"allocatedBytesAfterShutdown\": 0")
-	message(FATAL_ERROR "run result did not prove clean shutdown: ${RunResult}")
-endif()
-
-set(ConditionalOutput "${AS_STANDALONE_TEST_ROOT}/conditional")
-run_cli(
-	0
-	run
+	compile
+	--dialect native
 	--script-root "${AS_STANDALONE_FIXTURE_ROOT}"
 	--entry conditional.as
-	--output "${ConditionalOutput}"
+	--output "${AS_STANDALONE_TEST_ROOT}/conditional"
 )
-file(READ "${ConditionalOutput}/result.json" ConditionalResult)
-if(NOT ConditionalResult MATCHES "\"scriptResult\": 41")
-	message(FATAL_ERROR "LanguageCore conditional was not applied: ${ConditionalResult}")
-endif()
 
 set(UnknownConditionOutput "${AS_STANDALONE_TEST_ROOT}/unknown-condition")
 run_cli(
@@ -140,19 +112,6 @@ if(NOT InvalidResult MATCHES "\"status\": \"failed\"")
 	message(FATAL_ERROR "invalid source must publish a failed result: ${InvalidResult}")
 endif()
 
-set(ExceptionOutput "${AS_STANDALONE_TEST_ROOT}/exception")
-run_cli(
-	3
-	run
-	--script-root "${AS_STANDALONE_FIXTURE_ROOT}"
-	--entry exception.as
-	--output "${ExceptionOutput}"
-)
-file(READ "${ExceptionOutput}/result.json" ExceptionResult)
-if(NOT ExceptionResult MATCHES "\"executionStatus\": \"exception\"")
-	message(FATAL_ERROR "exception result category missing: ${ExceptionResult}")
-endif()
-
 run_cli(
 	2
 	run
@@ -160,3 +119,7 @@ run_cli(
 	--entry main.as
 	--bundle forbidden
 )
+
+if(NOT LAST_STDERR MATCHES "AS-NATIVE-UNSUPPORTED-LIBRARY")
+	message(FATAL_ERROR "removed execution must reject before invocation: ${LAST_STDERR}")
+endif()

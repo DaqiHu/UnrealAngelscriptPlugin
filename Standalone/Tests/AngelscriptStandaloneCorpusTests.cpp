@@ -1,6 +1,5 @@
 #include "Compiler/AngelscriptStandaloneUECompiler.h"
 #include "Compiler/AngelscriptStandaloneDifferentialResult.h"
-#include "Runtime/AngelscriptStandaloneRunner.h"
 
 #include <rapidjson/document.h>
 #include <rapidjson/error/en.h>
@@ -309,9 +308,7 @@ int main()
 		++Automated;
 
 		const bool bBundleShapeValid =
-			Profile == "native"
-				? !Entry.HasMember("bundle")
-				: Entry.HasMember("bundle")
+			Profile == "ue-validation" && Entry.HasMember("bundle")
 					&& Entry["bundle"].IsString()
 					&& std::string_view(
 						Entry["bundle"].GetString())
@@ -325,32 +322,7 @@ int main()
 			&& Expected["compile"].IsString()
 			&& std::string_view(Expected["compile"].GetString())
 				== "success";
-		if (Profile == "native")
-		{
-			FRunRequest Request;
-			Request.ScriptRoots = {Source.parent_path()};
-			Request.Entry = Source.filename();
-			const FRunResult Result = RunNativeScript(Request);
-			const bool bRunSucceeded = Result.ExitCode == 0;
-			bPassed &= Require(
-				bRunSucceeded == bExpectCompile,
-				Id,
-				Result.Error.empty()
-					? "native outcome differs"
-					: Result.Error);
-			if (bRunSucceeded)
-			{
-				bPassed &= Require(
-					Expected.HasMember("scriptResult")
-						&& Expected["scriptResult"].IsInt()
-						&& Result.ScriptResult.has_value()
-						&& *Result.ScriptResult
-							== Expected["scriptResult"].GetInt(),
-					Id,
-					"native script result differs");
-			}
-		}
-		else if (Profile == "ue-validation")
+		if (Profile == "ue-validation")
 		{
 			FUECompileRequest Request;
 			Request.ScriptRoots = {Source.parent_path()};
@@ -385,7 +357,7 @@ int main()
 	}
 
 	bPassed &= Require(
-		Automated >= 5 && External >= 1,
+		Automated >= 3 && External >= 1,
 		"corpus-index",
 		"corpus family coverage or external evidence is missing");
 	return bPassed ? 0 : 1;

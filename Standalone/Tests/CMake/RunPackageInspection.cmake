@@ -58,7 +58,6 @@ set(EXPECTED_FILES
 	"contracts/default-engine/manifest.json"
 	"contracts/default-engine/symbols.jsonl"
 	"contracts/default-engine/assets.jsonl"
-	"Examples/Native/hello.as"
 	"Examples/UEValidation/basic.as")
 foreach(EXPECTED IN LISTS EXPECTED_FILES)
 	if(NOT EXISTS "${PACKAGE_A}/${EXPECTED}")
@@ -119,28 +118,19 @@ execute_process(
 	ERROR_VARIABLE HELP_ERROR)
 if(NOT HELP_RESULT EQUAL 0
 	OR NOT HELP_OUTPUT MATCHES "compile --dialect native\\|ue"
-	OR HELP_OUTPUT MATCHES "run --dialect ue"
+	OR HELP_OUTPUT MATCHES "as-standalone run"
 	OR HELP_OUTPUT MATCHES "run-ue")
 	message(FATAL_ERROR
 		"installed --help contract failed\n${HELP_OUTPUT}\n${HELP_ERROR}")
 endif()
 
 execute_process(
-	COMMAND
-		"${EXECUTABLE}" run
-		--script-root "${PACKAGE_A}/Examples/Native"
-		--entry hello.as
-		--output "${AS_STANDALONE_TEST_ROOT}/native-output"
-		--diagnostics text
-		--
-		Package
+	COMMAND "${EXECUTABLE}" run
 	RESULT_VARIABLE NATIVE_RESULT
-	OUTPUT_VARIABLE NATIVE_STDOUT
 	ERROR_VARIABLE NATIVE_STDERR)
-if(NOT NATIVE_RESULT EQUAL 0
-	OR NOT NATIVE_STDOUT MATCHES "hello, Package")
-	message(FATAL_ERROR
-		"installed native example failed (${NATIVE_RESULT})\n${NATIVE_STDOUT}\n${NATIVE_STDERR}")
+if(NOT NATIVE_RESULT EQUAL 2
+	OR NOT NATIVE_STDERR MATCHES "AS-NATIVE-UNSUPPORTED-LIBRARY")
+	message(FATAL_ERROR "removed execution must reject before invocation: ${NATIVE_STDERR}")
 endif()
 
 execute_process(

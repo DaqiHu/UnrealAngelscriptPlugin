@@ -521,7 +521,8 @@ FString asCParser::Text(int32 Index) const
 			if (PrefixModifiers != asEFunctionModifiers::None) return false;
 			if (Tokens[Cursor].Kind == asETokenKind::LeftBrace)
 			{
-				Recover(Begin, TEXT("virtual-property-syntax-removed"));
+				Sema.DiagnoseRemovedFeature(asERemovedLanguageFeature::VirtualProperty, Tokens[Cursor].Range);
+				Recover(Begin, {}, 0);
 				return true;
 			}
 			asCSourceRange InitializerRange;
@@ -574,7 +575,8 @@ FString asCParser::Text(int32 Index) const
 			const FString Modifier = Text(Cursor);
 			if (Modifier == TEXT("property"))
 			{
-				Recover(Begin, TEXT("property-decorator-removed"));
+				Sema.DiagnoseRemovedFeature(asERemovedLanguageFeature::VirtualProperty, Tokens[Cursor].Range);
+				Recover(Begin, {}, 0);
 				return true;
 			}
 			uint16 Bit = Modifier == TEXT("final") ? static_cast<uint16>(asEFunctionModifiers::Final)
@@ -750,6 +752,27 @@ FString asCParser::Text(int32 Index) const
 	{
 		if (Tokens[Cursor].Kind != asETokenKind::Identifier) return false;
 		const int32 Begin = Cursor;
+		const FString Spelling = Text(Cursor);
+		asERemovedLanguageFeature Feature = asERemovedLanguageFeature::ModuleSharing;
+		bool bRemovedFeature = false;
+		const bool bRecordFollows = Tokens.IsValidIndex(Cursor + 1)
+			&& (Tokens[Cursor + 1].Kind == asETokenKind::KwClass || Tokens[Cursor + 1].Kind == asETokenKind::KwStruct
+				|| Tokens[Cursor + 1].Kind == asETokenKind::KwInterface || Tokens[Cursor + 1].Kind == asETokenKind::KwEnum);
+		// A same-spelling type or function name is still an ordinary identifier.
+		// Only a modifier followed by a typed callable declaration is retired.
+		int32 TypeEnd = Cursor + 1;
+		asSTypeSyntax ReturnType;
+		const bool bFunctionFollows = ParseTypeSyntax(TypeEnd, Tokens.Num(), ReturnType)
+			&& Tokens.IsValidIndex(TypeEnd + 1) && Tokens[TypeEnd].Kind == asETokenKind::Identifier
+			&& Tokens[TypeEnd + 1].Kind == asETokenKind::LeftParen;
+		if ((Spelling == TEXT("shared") || Spelling == TEXT("external")) && (bRecordFollows || bFunctionFollows))
+			bRemovedFeature = true;
+		else if (Spelling == TEXT("funcdef") && bFunctionFollows)
+		{ Feature = asERemovedLanguageFeature::FuncdefDeclaration; bRemovedFeature = true; }
+		else if (Spelling == TEXT("template") && Tokens.IsValidIndex(Cursor + 1) && Tokens[Cursor + 1].Kind == asETokenKind::Less)
+		{ Feature = asERemovedLanguageFeature::UserTemplate; bRemovedFeature = true; }
+		else if (Spelling == TEXT("coroutine") && bFunctionFollows)
+		{ Feature = asERemovedLanguageFeature::ScriptCoroutine; bRemovedFeature = true; }
 		const bool bAsset = Text(Cursor) == TEXT("asset") && Tokens.IsValidIndex(Cursor + 2)
 			&& Tokens[Cursor + 1].Kind == asETokenKind::Identifier && Text(Cursor + 2) == TEXT("of");
 		bool bImport = false;
@@ -761,7 +784,7 @@ FString asCParser::Text(int32 Index) const
 					&& Tokens.IsValidIndex(I + 1) && Tokens[I + 1].Kind == asETokenKind::StringLiteral) { bImport = true; break; }
 			}
 		}
-		if (!bAsset && !bImport) return false;
+		if (!bAsset && !bImport && !bRemovedFeature) return false;
 		// Consume the complete authored construct, including nested initializer braces.
 		// Recovery creates no semantic callable, variable, type or synthetic initializer.
 		int32 End = Begin;
@@ -778,8 +801,14 @@ FString asCParser::Text(int32 Index) const
 			}
 			if (Tokens[Cursor++].Kind == asETokenKind::Semicolon) break;
 		}
-		Sema.ActOnRecovery(Span(Begin, End), bAsset ? TEXT("asset-syntax-removed") : TEXT("import-syntax-removed"),
-			static_cast<asUINT>(bAsset ? asEDeclarationDiagnostic::RemovedAsset : asEDeclarationDiagnostic::RemovedImport));
+		if (bRemovedFeature)
+		{
+			Sema.DiagnoseRemovedFeature(Feature, Tokens[Begin].Range);
+			Sema.ActOnRecovery(Span(Begin, End), {}, 0);
+		}
+		else
+			Sema.ActOnRecovery(Span(Begin, End), bAsset ? TEXT("asset-syntax-removed") : TEXT("import-syntax-removed"),
+				static_cast<asUINT>(bAsset ? asEDeclarationDiagnostic::RemovedAsset : asEDeclarationDiagnostic::RemovedImport));
 		return true;
 	}
 
@@ -984,40 +1013,23 @@ FString asCParser::Text(int32 Index) const
 		const int32 Begin = Cursor;
 		if (Tokens[Cursor].Kind == asETokenKind::Identifier && Text(Cursor) == TEXT("this"))
 			return Sema.ActOnThis(false, Tokens[Cursor++].Range);
-		if (Tokens[Cursor].Kind == asETokenKind::Identifier && Text(Cursor) == TEXT("function"))
+		if ((Tokens[Cursor].Kind == asETokenKind::Identifier && Text(Cursor) == TEXT("function")
+			&& Tokens.IsValidIndex(Cursor + 1)
+			&& (Tokens[Cursor + 1].Kind == asETokenKind::LeftParen || Tokens[Cursor + 1].Kind == asETokenKind::LeftBracket))
+			|| Tokens[Cursor].Kind == asETokenKind::LeftBracket)
 		{
-			++Cursor;
-			if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind != asETokenKind::LeftParen)
-				return Sema.ActOnRecoveryExpression(Span(Begin, Cursor - 1), TEXT("lambda-parameters-required"));
-			const int32 ParameterClose = FindMatching(Cursor, asETokenKind::LeftParen, asETokenKind::RightParen);
-			if (ParameterClose == INDEX_NONE) return Sema.ActOnRecoveryExpression(Span(Begin, Cursor), TEXT("lambda-parameters-unclosed"));
-			++Cursor;
-			TArray<asSParsedLambdaParameter> Parameters;
-			while (Cursor < ParameterClose)
+			Sema.DiagnoseRemovedFeature(asERemovedLanguageFeature::AnonymousFunction, Tokens[Begin].Range);
+			if (Tokens[Cursor].Kind == asETokenKind::Identifier) ++Cursor;
+			for (const auto Pair : {TPair<asETokenKind, asETokenKind>(asETokenKind::LeftBracket, asETokenKind::RightBracket),
+				TPair<asETokenKind, asETokenKind>(asETokenKind::LeftParen, asETokenKind::RightParen),
+				TPair<asETokenKind, asETokenKind>(asETokenKind::LeftBrace, asETokenKind::RightBrace)})
 			{
-				const int32 ParameterBegin = Cursor;
-				asSParsedLambdaParameter Parameter;
-				int32 TypeEnd = Cursor;
-				asSTypeSyntax Type;
-				if (ParseTypeSyntax(TypeEnd, ParameterClose, Type) && TypeEnd < ParameterClose && Tokens[TypeEnd].Kind == asETokenKind::Identifier)
-				{ Parameter.Type = MoveTemp(Type); Cursor = TypeEnd; }
-				if (Tokens[Cursor].Kind != asETokenKind::Identifier)
-					return Sema.ActOnRecoveryExpression(Span(Begin, Cursor), TEXT("lambda-parameter-name-required"));
-				Parameter.Name = Text(Cursor++);
-				Parameter.Range = Span(ParameterBegin, Cursor - 1);
-				Parameters.Add(MoveTemp(Parameter));
-				if (Cursor == ParameterClose) break;
-				if (Tokens[Cursor++].Kind != asETokenKind::Comma || Cursor == ParameterClose)
-					return Sema.ActOnRecoveryExpression(Span(Begin, Cursor - 1), TEXT("malformed-lambda-parameter"));
+				if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind != Pair.Key) continue;
+				const int32 Close = FindMatching(Cursor, Pair.Key, Pair.Value);
+				if (Close == INDEX_NONE) { ++Cursor; break; }
+				Cursor = Close + 1;
 			}
-			Cursor = ParameterClose + 1;
-			if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind != asETokenKind::LeftBrace)
-				return Sema.ActOnRecoveryExpression(Span(Begin, Cursor - 1), TEXT("lambda-body-required"));
-			const int32 BodyClose = FindMatching(Cursor, asETokenKind::LeftBrace, asETokenKind::RightBrace);
-			if (BodyClose == INDEX_NONE) return Sema.ActOnRecoveryExpression(Span(Begin, Cursor), TEXT("lambda-body-unclosed"));
-			const asCSourceRange BodyRange = Span(Cursor, BodyClose);
-			Cursor = BodyClose + 1;
-			return Sema.ActOnLambda(MoveTemp(Parameters), BodyRange, Span(Begin, BodyClose));
+			return Sema.GetASTContext().Create<asCRecoveryExpr>(Span(Begin, FMath::Max(Begin, Cursor - 1)));
 		}
 		if (Tokens[Cursor].Kind == asETokenKind::LeftBrace)
 		{

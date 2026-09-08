@@ -43,7 +43,6 @@ namespace asPostfixSema
 	asCExpr* asCSema::ConvertTo(asCExpr* Value, asCQualType Target)
 	{
 		if (!Value || !Target.IsValid()) return nullptr;
-		if (asCLambdaExpr* Lambda = dyn_cast<asCLambdaExpr>(Value)) return ConvertLambda(*Lambda, Target);
 		if (asCInitListExpr* List = dyn_cast<asCInitListExpr>(Value)) return ConvertInitList(*List, Target);
 		if (asCNullPtrLiteral* Null = dyn_cast<asCNullPtrLiteral>(Value))
 		{
@@ -87,11 +86,6 @@ namespace asPostfixSema
 		if (Context.GetTypeContext()->GetIdentityRegistry().InternTypeUse(Use, Key) != asETypeIdentityStatus::Succeeded)
 			return ActOnRecoveryExpression(Range, TEXT("invalid-this-type"));
 		asCFunctionDecl* Function = GetCurrentFunction();
-		for (asCFunctionDecl* Lambda = Function; Lambda && Lambda->GetFunctionKind() == asEFunctionKind::Lambda; Lambda = Lambda->GetEnclosingFunction())
-		{
-			Lambda->SetCapturedThisRecord(Record);
-			Function = Lambda->GetEnclosingFunction();
-		}
 		asETypeQualifiers Qualifiers = asETypeQualifiers::Handle;
 		if (Function && Function->IsConstMethod()) Qualifiers = Qualifiers | asETypeQualifiers::Const;
 		asCQualType Type;
@@ -163,23 +157,6 @@ namespace asPostfixSema
 				const asCQualType Formal = Parameters[ParameterIndex]->GetResolvedQualType();
 				const asCQualType Actual = Argument.Value->GetExpressionQualType();
 				const asETypeReferenceDirection Direction = Parameters[ParameterIndex]->GetTypeSyntax().Reference;
-				if (auto* Lambda = dyn_cast<asCLambdaExpr>(Argument.Value))
-				{
-					asCFunctionType* Expected = dyn_cast<asCFunctionType>(Formal.GetType());
-					if (!Expected && NominalDeclLookup)
-						if (asCNominalType* Nominal = dyn_cast<asCNominalType>(Formal.GetType()))
-							if (auto* Callable = dyn_cast<asCCallableTypeDecl>(NominalDeclLookup(Nominal->GetDeclarationIdentity())))
-								if (!Callable->IsMulticast()) Expected = Callable->GetResolvedSignature();
-					if (!Expected || !Lambda->GetFunction() || Expected->GetParameterTypes().Num() != Lambda->GetFunction()->GetParameters().Num())
-					{ bValid = false; break; }
-					for (int32 LambdaIndex = 0; LambdaIndex < Lambda->GetFunction()->GetParameters().Num(); ++LambdaIndex)
-					{
-						const asSTypeSyntax& Syntax = Lambda->GetFunction()->GetParameters()[LambdaIndex]->GetTypeSyntax();
-						if (Syntax.IsValid() && ResolveBodyType(Syntax) != Expected->GetParameterTypes()[LambdaIndex]) { bValid = false; break; }
-					}
-					if (!bValid) break;
-					continue;
-				}
 				if (isa<asCInitListExpr>(Argument.Value))
 				{
 					asSListInitialization Contract;
@@ -585,9 +562,6 @@ namespace asPostfixSema
 
 	asCExpr* asCSema::ActOnIndirectCall(asCExpr* Callee, TArray<asSParsedCallArgument> Arguments, asCSourceRange Range)
 	{
-		if (asCLambdaExpr* Lambda = dyn_cast<asCLambdaExpr>(Callee))
-			if (!AnalyzeLambda(*Lambda, nullptr, Arguments, true))
-				return ActOnRecoveryExpression(Range, TEXT("invalid-immediately-invoked-lambda"));
 		asCFunctionType* Signature = Callee ? dyn_cast<asCFunctionType>(Callee->GetExpressionType()) : nullptr;
 		if (!Signature && Callee && NominalDeclLookup)
 		{

@@ -73,18 +73,18 @@ asCObjectType::asCObjectType(asCMetadataImage& owner, const asSStableKey& key)
 	acceptRefSubType = true;
 }
 
-asUINT asCObjectType::GetChildFuncdefCount() const
+asUINT asCObjectType::GetChildCallableTypeCount() const
 {
-	return childFuncDefs.GetLength();
+	return childCallableTypes.GetLength();
 }
 
 // interface
-asITypeInfo *asCObjectType::GetChildFuncdef(asUINT index) const
+asITypeInfo *asCObjectType::GetChildCallableType(asUINT index) const
 {
-	if (index >= childFuncDefs.GetLength())
+	if (index >= childCallableTypes.GetLength())
 		return 0;
 
-	return childFuncDefs[index];
+	return childCallableTypes[index];
 }
 
 // internal
@@ -128,9 +128,9 @@ void asCObjectType::DestroyInternal()
 	templateSubTypes.SetLength(0);
 
 	// Clear the child types
-	for (asUINT n = 0; n < childFuncDefs.GetLength(); n++)
+	for (asUINT n = 0; n < childCallableTypes.GetLength(); n++)
 	{
-		asCFuncdefType *func = childFuncDefs[n];
+		asCCallableType *func = childCallableTypes[n];
 		if (func)
 		{
 			func->parentClass = 0;
@@ -142,14 +142,14 @@ void asCObjectType::DestroyInternal()
 				if (func->externalRefCount.get() == 0)
 				{
 					func->DestroyInternal();
-					engine->RemoveFuncdef(func);
+					engine->RemoveCallableType(func);
 					func->module = 0;
 					func->ReleaseInternal();
 				}
 			}
 		}
 	}
-	childFuncDefs.SetLength(0);
+	childCallableTypes.SetLength(0);
 
 	ReleaseAllProperties();
 

@@ -188,7 +188,7 @@ FString UASFunction::GetSourceFilePath() const
 	if (ScriptFunction == nullptr)
 		return TEXT("");
 	auto& Manager = FAngelscriptEngine::Get();
-	auto Module = Manager.GetModule(ScriptFunction->GetModule());
+	auto Module = Manager.GetModule(static_cast<const asCScriptFunction*>(ScriptFunction)->module);
 	if (!Module.IsValid())
 		return TEXT("");
 	if (Module->Code.Num() == 0)

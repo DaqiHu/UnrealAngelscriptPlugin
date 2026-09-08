@@ -1,5 +1,4 @@
-int main(const array<string> args)
+int main()
 {
-	print("running");
-	return args.length() == 2 ? 31 : -1;
+	return 31;
 }

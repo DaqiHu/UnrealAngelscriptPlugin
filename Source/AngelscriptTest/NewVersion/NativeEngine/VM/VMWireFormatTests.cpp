@@ -191,6 +191,11 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, First.EndFunction()));
 		TUniquePtr<asCByteCodeImage> ImageA;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, First.Finish(ImageA)));
+		// A declared live slot must be cleaned on the normal path as well.
+		ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::InvalidFrame, asCByteCodeVerifier::Verify(*ImageA)));
+		ImageA->Functions[0].Cleanup[0].Path = asEByteCodeCleanupPath::Both;
+		Cleanup.Path = asEByteCodeCleanupPath::Both;
+		ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::Succeeded, asCByteCodeVerifier::Verify(*ImageA)));
 
 		asCByteCodeImageBuilder Second;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Second.AddString(TEXT("alpha"), StringA)));
@@ -218,6 +223,7 @@ public:
 		ASSERT_THAT(AreEqual(1, Round->Requirements.Num()));
 		ASSERT_THAT(AreEqual(4, Round->Requirements[0].SchemaWitness.Num()));
 		ASSERT_THAT(AreEqual(1, Round->Functions[0].Cleanup.Num()));
+		ASSERT_THAT(AreEqual(asEByteCodeCleanupPath::Both, Round->Functions[0].Cleanup[0].Path));
 		ASSERT_THAT(AreEqual(7, Round->Functions[0].Source[0].Line));
 		ASSERT_THAT(AreEqual(1u, Round->Functions[0].Frame.ResultDwords));
 		ASSERT_THAT(AreEqual(TEXT("alpha"), Round->Strings[Round->Functions[0].Source[0].FileStringSlot]));

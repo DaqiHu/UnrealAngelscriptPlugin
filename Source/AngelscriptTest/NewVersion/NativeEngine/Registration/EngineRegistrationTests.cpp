@@ -267,7 +267,7 @@ public:
 		ASSERT_THAT(AreEqual(asNOT_SUPPORTED, Engine.Ptr->RegisterObjectType("Legacy", 4, asOBJ_VALUE | asOBJ_POD)));
 		ASSERT_THAT(AreEqual(asNOT_SUPPORTED, Engine.Ptr->RegisterObjectProperty("Frozen", "int Field", 0)));
 		ASSERT_THAT(AreEqual(asNOT_SUPPORTED, Engine.Ptr->RegisterEnum("LegacyEnum")));
-		ASSERT_THAT(AreEqual(asNOT_SUPPORTED, Engine.Ptr->RegisterFuncdef("void LegacyCallback()")));
+		ASSERT_THAT(IsFalse([]<class T>() { return requires(T& Value) { Value.RegisterFuncdef("void LegacyCallback()"); }; }.operator()<asCScriptEngine>()));
 		ASSERT_THAT(IsNull(Engine.Ptr->GetTypeInfoByDecl("array<Frozen@>")));
 		ASSERT_THAT(IsNull(Engine.Ptr->GetGlobalFunctionByDecl("void Legacy()")));
 		asIScriptContext* Created = Engine.Ptr->CreateContext();
@@ -277,7 +277,7 @@ public:
 		ASSERT_THAT(AreEqual(0, Engine.Ptr->CreateContext(&Context, true)));
 		ASSERT_THAT(IsNotNull(Context));
 		Context->Release();
-		ASSERT_THAT(IsNull(Engine.Ptr->GetModule("Dormant", asGM_ALWAYS_CREATE)));
+		ASSERT_THAT(IsFalse([]<class T>(T&) { return requires(T& Value) { Value.GetModule("Dormant"); }; }(*Engine.Ptr)));
 		ASSERT_THAT(AreEqual(0, static_cast<int>(Definition.Type->GetPropertyCount())));
 	}
 

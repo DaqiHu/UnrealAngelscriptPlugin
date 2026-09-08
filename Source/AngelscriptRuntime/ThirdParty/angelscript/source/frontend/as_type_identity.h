@@ -36,7 +36,7 @@ enum class asETypeIdentityStatus : uint8
 		Enum,
 		Delegate,
 		Typedef,
-		Funcdef,
+		CallableType,
 		Primitive,
 		Event,
 	};
@@ -159,7 +159,7 @@ enum class asETypeIdentityStatus : uint8
 		Destructor,
 		Factory,
 		Behaviour,
-		Lambda,
+		ReservedAnonymousFunction, // Retired wire ordinal.
 		ClassDefault,
 		Conversion,
 	};
@@ -226,8 +226,6 @@ enum class asETypeIdentityStatus : uint8
 		asEFunctionDefinitionModifiers DefinitionModifiers =
 			asEFunctionDefinitionModifiers::None;
 		asSStableKey ReturnType;
-		asSStableKey EnclosingFunction;
-		asUINT LambdaOrdinal = 0;
 		asSStableKey ConversionDestination;
 	};
 

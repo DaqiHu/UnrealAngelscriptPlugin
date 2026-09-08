@@ -119,36 +119,36 @@ namespace AngelscriptBuilderStageTests
 			ASSERT_THAT(IsTrue(FoundOverride)); ASSERT_THAT(IsTrue(Builder.GetDefinitions()->ValidateFrozenDefinitions()));
 		}
 
-		TEST_METHOD(ParsedLambdaPublishesAnActualFunctionWithAnImageOwnedOrigin)
+		TEST_METHOD(NamedFunctionRetainsItsImageAndNamespaceAfterBuilderRelease)
 		{
 			asCScriptFunction* Retained = nullptr;
 			{
-				FInput Input(TEXT("namespace N { int Read() { return function(int Value) { return Value + 1; }(41); } }"));
+				FInput Input(TEXT("namespace N { int AddOne(int Value) { return Value + 1; } int Read() { return AddOne(41); } }"));
 				asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 				ASSERT_THAT(IsTrue(Builder.RunThrough()));
 				ASSERT_THAT(AreEqual(2, Builder.GetDefinitions()->GetFunctions().Num()));
 				for (auto* Function : Builder.GetDefinitions()->GetFunctions())
-					if (Function->GetMetadataDeclarationKind() == AS_NAMESPACE_QUALIFIER asEFunctionIdentityKind::Lambda) Retained = Function;
-				ASSERT_THAT(IsNotNull(Retained)); ASSERT_THAT(IsNotNull(Retained->GetMetadataEnclosingFunction()));
+					if (Function->name == "AddOne") Retained = Function;
+				ASSERT_THAT(IsNotNull(Retained));
 				ASSERT_THAT(AreEqual(FString(TEXT("N")), FString(UTF8_TO_TCHAR(Retained->GetNamespace()))));
-				ASSERT_THAT(IsTrue(Retained->GetMetadataEnclosingFunction()->name == "Read"));
+				ASSERT_THAT(IsTrue(Retained->name == "AddOne"));
 				ASSERT_THAT(IsTrue(Builder.GetDefinitions()->ValidateFrozenDefinitions()));
 				Retained->AddRef();
 			}
-			ASSERT_THAT(IsTrue(Retained->GetMetadataEnclosingFunction()->name == "Read"));
+			ASSERT_THAT(IsTrue(Retained->name == "AddOne"));
 			ASSERT_THAT(IsNull(Retained->GetEngine()));
 			Retained->Release();
 		}
 
-		TEST_METHOD(ParallelLambdaBodiesKeepTheSameActualFunctionKeysAndObservations)
+		TEST_METHOD(ParallelNamedBodiesKeepTheSameActualFunctionKeysAndObservations)
 		{
-			FString Source;
+			FString Source = TEXT("int AddOne(int Value) { return Value + 1; }\n");
 			for (int32 Index = 0; Index < 16; ++Index)
-				Source += FString::Printf(TEXT("int Read%d() { return function(int Value) { return Value + 1; }(%d); }\n"), Index, Index);
+				Source += FString::Printf(TEXT("int Read%d() { return AddOne(%d); }\n"), Index, Index);
 			FInput SerialInput(Source, 1), ParallelInput(Source, 8);
 			asCBuilder Serial(SerialInput.Snapshot, SerialInput.Diagnostics, SerialInput.Options), Parallel(ParallelInput.Snapshot, ParallelInput.Diagnostics, ParallelInput.Options);
 			ASSERT_THAT(IsTrue(Serial.RunThrough())); ASSERT_THAT(IsTrue(Parallel.RunThrough()));
-			ASSERT_THAT(AreEqual(32, Parallel.GetDefinitions()->GetFunctions().Num()));
+			ASSERT_THAT(AreEqual(17, Parallel.GetDefinitions()->GetFunctions().Num()));
 			ASSERT_THAT(AreEqual(8, Parallel.GetCompilationSession()->GetBodyAnalysisStatistics().StartedWorkers));
 			ASSERT_THAT(AreEqual(Serial.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::ASTVerified)->Json, Parallel.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::ASTVerified)->Json));
 			ASSERT_THAT(AreEqual(Serial.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::DefinitionsFrozen)->Text, Parallel.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::DefinitionsFrozen)->Text));

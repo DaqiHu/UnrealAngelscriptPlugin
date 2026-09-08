@@ -16,7 +16,7 @@ enum class EAngelscriptCachedTypeKind : uint8
 	Enum = 4,
 	Delegate = 5,
 	Typedef = 6,
-	Funcdef = 7,
+	CallableType = 7,
 };
 
 enum class EAngelscriptCachedTypeSemanticFlags : uint32

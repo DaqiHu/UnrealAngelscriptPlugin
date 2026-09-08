@@ -604,7 +604,7 @@ FAngelscriptRuntimeJITSnapshotCaptureResult
 	};
 	if (Input.Function == nullptr || Input.Route == nullptr
 		|| Input.Function != Input.Route->Function
-		|| Input.Function->GetModule() == nullptr
+		|| static_cast<const asCScriptFunction*>(Input.Function)->module == nullptr
 		|| Input.Route->NumericFunctionId != Input.Function->GetId())
 	{
 		return Failure(EAngelscriptRuntimeJITSnapshotCaptureCode::InvalidInput,
@@ -878,7 +878,7 @@ FAngelscriptRuntimeJITSnapshotCaptureResult
 	FAngelscriptRuntimeJITCompileSnapshot Candidate = FromOwnedData(
 		Header, MoveTemp(Bytecode), MoveTemp(Values),
 		MoveTemp(InstructionOffsets), MoveTemp(Edges), MoveTemp(HelperTokens), Declaration,
-		UTF8_TO_TCHAR(Function->GetModuleName()));
+		*Function->GetStableKey().ToHexString());
 	Candidate.Header.FunctionRevision = BuildFunctionRevision(
 		Candidate, Input.Route->Identity.Content.Execution);
 	const FAngelscriptRuntimeJITContractValidationResult Validation =

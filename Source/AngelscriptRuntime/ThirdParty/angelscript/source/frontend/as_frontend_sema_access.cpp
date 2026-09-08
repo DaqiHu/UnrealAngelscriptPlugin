@@ -36,7 +36,6 @@ namespace asAccessSema
 	{
 		const asCFunctionDecl* Function = GetCurrentFunction();
 		if (!Function) return false;
-		if (Function->GetFunctionKind() == asEFunctionKind::Lambda) return bInheritedEditDefaultsContext;
 		const FString& Name = Function->GetName();
 		return Function->GetFunctionKind() == asEFunctionKind::ClassDefault
 			|| asAccessSema::HasModifier(*Function, asEFunctionModifiers::Defaults)
@@ -74,8 +73,6 @@ namespace asAccessSema
 		if (!Use) return {};
 
 		const asCFunctionDecl* CallingFunction = GetCurrentFunction();
-		while (CallingFunction && CallingFunction->GetFunctionKind() == asEFunctionKind::Lambda)
-			CallingFunction = CallingFunction->GetEnclosingFunction();
 		const FString Namespace = asAccessSema::NamespaceName(Caller ? static_cast<const asCDecl*>(Caller) : CallingFunction);
 		asSMemberAccess Access;
 		for (const asSAuthoredAccessPermission& Permission : Use->Resolved->GetPermissions())
@@ -119,7 +116,6 @@ namespace asAccessSema
 
 	bool asCSema::IsConstructionContext() const
 	{
-		if (bInheritedConstructionContext) return true;
 		const asCFunctionDecl* Caller = GetCurrentFunction();
 		const asCRecordDecl* Record = GetCurrentRecord();
 		return Caller && (Caller->GetFunctionKind() == asEFunctionKind::ClassDefault

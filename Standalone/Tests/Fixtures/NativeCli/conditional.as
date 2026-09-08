@@ -10,7 +10,7 @@ int SelectedValue()
 }
 #endif
 
-int main(const array<string> args)
+int main()
 {
 	return SelectedValue();
 }

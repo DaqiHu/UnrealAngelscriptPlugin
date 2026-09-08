@@ -2,7 +2,6 @@
 
 #include "Compiler/AngelscriptStandaloneFrontend.h"
 #include "Host/AngelscriptStandaloneFileSystem.h"
-#include "StdLib/AngelscriptStandaloneStdLib.h"
 #include "Support/AngelscriptStandaloneByteCodeStream.h"
 #include "Support/AngelscriptStandaloneHash.h"
 
@@ -38,11 +37,11 @@ namespace AngelscriptStandalone
 	std::string FNativeCompiler::GetProfileHash()
 	{
 		const std::string Profile =
-			std::string("profile=native-runtime-v1\n")
+			std::string("profile=native-compiler-v2\n")
 			+ "product=" UNREAL_ANGELSCRIPT_VERSION_STRING "\n"
 			+ "upstream=" UNREAL_ANGELSCRIPT_UPSTREAM_LINEAGE_STRING "\n"
 			+ "options=" + asGetLibraryOptions() + "\n"
-			+ "addons=scriptstdstring,scriptarray,scriptdictionary,scriptmath@2.38.0-patched\n";
+			+ "libraries=host-provided-only\n";
 		return Sha256(Profile);
 	}
 
@@ -88,8 +87,7 @@ namespace AngelscriptStandalone
 		Engine->SetEngineProperty(asEP_ALLOW_IMPLICIT_HANDLE_TYPES, 1);
 		Engine->SetEngineProperty(asEP_ALLOW_UNSAFE_REFERENCES, 1);
 
-		std::string RegistrationError;
-		if (!RegisterNativeStandardLibrary(Engine.get(), {}, RegistrationError))
+, RegistrationError))
 		{
 			Result.Error = RegistrationError;
 			Result.Diagnostics = DiagnosticSink.GetDiagnostics();

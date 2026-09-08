@@ -114,7 +114,7 @@ public:
 	bool IsHandleToAsHandleType() const {return isHandleToAsHandleType;}
 	bool IsAbstractClass()        const;
 	bool IsInterface()            const;
-	bool IsFuncdef()              const;
+	bool IsCallableType()              const;
 	bool IsUnresolvedObject()     const { return isUnresolvedObject; }
 
 	void SetFloatExtendedToDouble(bool b) { isFloatExtendedToDouble = b; }

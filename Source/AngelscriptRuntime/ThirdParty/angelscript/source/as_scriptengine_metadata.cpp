@@ -230,6 +230,15 @@ TPair<asUINT, asUINT> asCScriptEngine::GetMetadataRegistrationCounts() const
 	return {static_cast<asUINT>(metadataTypesByKey.Num()), static_cast<asUINT>(metadataFunctionsById.Num())};
 }
 
+TArray<std::shared_ptr<const asCMetadataImage>> asCScriptEngine::GetRegisteredMetadataImages() const
+{
+	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
+	TArray<std::shared_ptr<const asCMetadataImage>> Result;
+	Result.Reserve(metadataImages.Num());
+	for (const auto& Image : metadataImages) Result.Add(Image);
+	return Result;
+}
+
 void asCScriptEngine::InitializeMetadataBuiltins()
 {
 auto Context = MakeShared<asCTypeContext, ESPMode::ThreadSafe>();

@@ -72,7 +72,6 @@ struct asSASTProjectedTypeSyntax
 		asEFunctionModifiers Modifiers = asEFunctionModifiers::None;
 		bool bHasDeferredBody = false;
 		asSStableSourceAnchor DeferredBodySource;
-		uint32 LambdaOrdinal = MAX_uint32;
 		TArray<asSStableSourceAnchor> DeferredStatementSources;
 	};
 	struct asSASTCallableTypeDeclPayload
@@ -133,7 +132,6 @@ struct asSASTProjectedTypeSyntax
 	struct asSASTConstructExprPayload { asSASTProjectedTypeSyntax TypeSyntax; TArray<int32> ArgumentSourceOrdinals; };
 	struct asSASTStringLiteralPayload { FString Value; };
 	struct asSASTThisExprPayload { bool bImplicit = false; };
-	struct asSASTLambdaExprPayload { uint32 CaptureCount = 0; bool bCapturesThis = false; };
 	struct asSASTInitListExprPayload
 	{
 		asSStableKey InitializerIdentity;
@@ -225,7 +223,6 @@ struct asSASTProjectedTypeSyntax
 		asSASTConstructExprPayload,
 		asSASTStringLiteralPayload,
 		asSASTThisExprPayload,
-		asSASTLambdaExprPayload,
 		asSASTInitListExprPayload,
 		asSASTValueInitExprPayload,
 		asSASTDeclGroupStmtPayload,

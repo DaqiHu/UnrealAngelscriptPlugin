@@ -78,7 +78,6 @@ namespace
 
 	asCReturnStmt* asCSema::ActOnReturn(asCExpr* Value, asCSourceRange Range)
 	{
-		if (IsInferringLambdaReturn()) return ActOnInferredLambdaReturn(Value, MoveTemp(Range));
 		asCFunctionDecl* Function = CurrentBody ? CurrentBody->GetWorkItem().Function : nullptr;
 		asCType* ReturnType = Function ? Function->GetResolvedReturnType() : nullptr;
 		const asCBuiltinType* Builtin = dyn_cast<asCBuiltinType>(ReturnType);

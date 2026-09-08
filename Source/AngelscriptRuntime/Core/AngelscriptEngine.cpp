@@ -104,8 +104,6 @@
 DEFINE_LOG_CATEGORY(Angelscript);
 
 static FName NAME_ReplicatedUsing("ReplicatedUsing");
-static FName NAME_BlueprintSetter("BlueprintSetter");
-static FName NAME_BlueprintGetter("BlueprintGetter");
 
 namespace AngelscriptEngineStaticJITIdentity_Private
 {
@@ -1406,7 +1404,6 @@ bool FAngelscriptEngine::InitializeWithoutInitialCompile()
 	Engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_COPY, 1);
 	Engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_COPY_CONSTRUCT, 1);
 	Engine->SetEngineProperty(asEP_MEMBER_INIT_MODE, 0);
-	Engine->SetEngineProperty(asEP_PROPERTY_ACCESSOR_MODE, 0);
 	Engine->SetEngineProperty(asEP_TYPECHECK_SWITCH_ENUMS, 1);
 	Engine->SetEngineProperty(asEP_FLOAT_IS_FLOAT64, ConfigSettings->bScriptFloatIsFloat64 ? 1 : 0);
 	Engine->SetEngineProperty(asEP_ALLOW_DOUBLE_TYPE, ConfigSettings->bDeprecateDoubleType ? 0 : 1);
@@ -1801,15 +1798,13 @@ bool FAngelscriptEngine::DiscardModule(const TCHAR* ModuleName)
 		? static_cast<asCModule*>(ModuleToDiscard->ScriptModule)
 		: nullptr;
 	auto AnsiName = StringCast<ANSICHAR>(*InternalModuleName);
-	if (ScriptModuleToDiscard == nullptr || Engine->GetModule(AnsiName.Get(), false) != ScriptModuleToDiscard)
+	if (ScriptModuleToDiscard == nullptr || Engine->scriptModulesByName.FindFirst(AnsiName.Get()) != ScriptModuleToDiscard)
 	{
 		return false;
 	}
 
 	ScriptModuleToDiscard->RemoveTypesAndGlobalsFromEngineAvailability();
-	int r = Engine->DiscardModule(AnsiName.Get());
-	if (r < 0)
-		return false;
+	ScriptModuleToDiscard->Discard();
 
 	if (ModuleToDiscard.IsValid())
 	{
@@ -2621,7 +2616,6 @@ bool FAngelscriptEngine::Initialize_AnyThread()
 	Engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_COPY_CONSTRUCT, 1);
 	Engine->SetEngineProperty(asEP_MEMBER_INIT_MODE, 0);
 
-	Engine->SetEngineProperty(asEP_PROPERTY_ACCESSOR_MODE, 0);
 
 	Engine->SetEngineProperty(asEP_TYPECHECK_SWITCH_ENUMS, 1);
 
@@ -4414,11 +4408,7 @@ bool FAngelscriptEngine::VerifyPropertySpecifiers(const TArray<TSharedRef<FAngel
 				FString* RepNotifyFunc = Property->Meta.Find(NAME_ReplicatedUsing);
 				bPassedVerification &= VerifyRepFunc(RepNotifyFunc, Property, Class, Module);
 
-				FString* BlueprintSetFunc = Property->Meta.Find(NAME_BlueprintSetter);
-				bPassedVerification &= VerifyBlueprintSetFunc(BlueprintSetFunc, Property, Class, Module);
 
-				FString* BlueprintGetFunc = Property->Meta.Find(NAME_BlueprintGetter);
-				bPassedVerification &= VerifyBlueprintGetFunc(BlueprintGetFunc, Property, Class, Module);
 			}
 		}
 	}
@@ -4483,141 +4473,6 @@ bool FAngelscriptEngine::VerifyRepFunc(FString* FuncName, const TSharedRef<FAnge
 				);
 				return false;
 			}
-		}
-	}
-	return true;
-}
-
-bool FAngelscriptEngine::VerifyBlueprintSetFunc(FString* FuncName,
-	const TSharedRef<FAngelscriptPropertyDesc>& Property, const TSharedRef<FAngelscriptClassDesc>& Class,
-	const TSharedRef<FAngelscriptModuleDesc>& Module)
-{
-	if (FuncName != nullptr)
-	{
-		auto FuncDesc = Class->GetMethod(*FuncName);
-		// First make sure we can find the method
-		if (!FuncDesc.IsValid())
-		{
-			ScriptCompileError(Module, Property->LineNumber,
-				FString::Printf(TEXT("The function '%s' which is specified for BlueprintSetter on property %s::%s "
-									 "could not be found within the script class. (It also has to be UFUNCTION())"),
-					**FuncName,
-					*Class->ClassName,
-					*Property->PropertyName
-				)
-			);
-			return false;
-		}
-
-		// Having an BlueprintSetter callback requires a func with one argument matching the property type
-		if (FuncDesc->Arguments.Num() == 1)
-		{
-			const FAngelscriptTypeUsage& FuncArgType = FuncDesc->Arguments[0].Type;
-			const FAngelscriptTypeUsage& PropType = Property->PropertyType;
-
-			// The type of the argument in the function has to be the same as the type of the variable we're
-			// replicating!
-			if (!FuncArgType.EqualsUnqualified(PropType))
-			{
-				ScriptCompileError(Module, FuncDesc->LineNumber,
-					FString::Printf(TEXT("The function '%s' which is specified for BlueprintSetter on property %s::%s "
-										 "takes an argument of type '%s', but the value written is of type '%s'."),
-						**FuncName,
-						*Class->ClassName,
-						*Property->PropertyName,
-						*FuncArgType.GetFriendlyTypeName(),
-						*PropType.GetFriendlyTypeName()
-					)
-				);
-				return false;
-			}
-		}
-		else
-		{
-			ScriptCompileError(Module, Property->LineNumber,
-				FString::Printf(TEXT("The function '%s' which is specified for BlueprintSetter on property %s::%s "
-									 "should take exactly 1 argument."),
-					**FuncName,
-					*Class->ClassName,
-					*Property->PropertyName
-				)
-			);
-			return false;
-		}
-	}
-	return true;
-}
-
-bool FAngelscriptEngine::VerifyBlueprintGetFunc(FString* FuncName,
-	const TSharedRef<FAngelscriptPropertyDesc>& Property, const TSharedRef<FAngelscriptClassDesc>& Class,
-	const TSharedRef<FAngelscriptModuleDesc>& Module)
-{
-	if (FuncName != nullptr)
-	{
-		auto FuncDesc = Class->GetMethod(*FuncName);
-		// First make sure we can find the method
-		if (!FuncDesc.IsValid())
-		{
-			ScriptCompileError(Module, Property->LineNumber,
-				FString::Printf(TEXT("The function '%s' which is specified for BlueprintGetter on property %s::%s "
-									 "could not be found within the script class. (It also has to be UFUNCTION())"),
-					**FuncName,
-					*Class->ClassName,
-					*Property->PropertyName
-				)
-			);
-			return false;
-		}
-
-		// BlueprintGetters need to be BlueprintPure
-		if (!FuncDesc->bBlueprintPure)
-		{
-			ScriptCompileError(Module, Property->LineNumber,
-				FString::Printf(TEXT("The function '%s' which is specified for BlueprintGetter on property %s::%s "
-									 "needs to be marked as BlueprintPure."),
-					**FuncName,
-					*Class->ClassName,
-					*Property->PropertyName
-				)
-			);
-			return false;
-		}
-
-		// Having an BlueprintGetter callback requires a function with 0 arguments
-		if (FuncDesc->Arguments.Num() == 0)
-		{
-			const FAngelscriptTypeUsage& FuncRetType = FuncDesc->ReturnType;
-			const FAngelscriptTypeUsage& PropType = Property->PropertyType;
-
-			// The type of the argument in the function has to be the same as the type of the variable we're
-			// replicating!
-			if (!FuncRetType.EqualsUnqualified(PropType))
-			{
-				FString FriendlyTypeName = FuncRetType.Type == NULL ? FString("void") : *FuncRetType.GetFriendlyTypeName();
-				ScriptCompileError(Module, FuncDesc->LineNumber,
-					FString::Printf(TEXT("The function '%s' which is specified for BlueprintGetter on property %s::%s "
-										 "returns type '%s', but the value read is of type '%s'."),
-						**FuncName,
-						*Class->ClassName,
-						*Property->PropertyName,
-						*FriendlyTypeName,
-						*PropType.GetFriendlyTypeName()
-					)
-				);
-				return false;
-			}
-		}
-		else
-		{
-			ScriptCompileError(Module, Property->LineNumber,
-				FString::Printf(TEXT("The function '%s' which is specified for BlueprintGetter on property %s::%s "
-									 "should not take any arguments."),
-					**FuncName,
-					*Class->ClassName,
-					*Property->PropertyName
-				)
-			);
-			return false;
 		}
 	}
 	return true;
@@ -7230,7 +7085,7 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				if (OldModule->ScriptModule != nullptr)
 				{
 					// Discard it from the engine as well
-					Engine->DiscardModule(OldModule->ScriptModule->GetName());
+					OldModule->ScriptModule->Discard();
 					OldModule->ScriptModule = nullptr;
 				}
 			}
@@ -7350,7 +7205,7 @@ ECompileResult FAngelscriptEngine::CompileModules(
 				auto* OldScriptModule = (asCModule*)Module->ScriptModule;
 				OldScriptModule->RemoveTypesAndGlobalsFromEngineAvailability();
 				OldScriptModule->InternalReset();
-				Engine->DiscardModule(OldScriptModule->GetName());
+				OldScriptModule->Discard();
 
 				Module->ScriptModule = nullptr;
 			}
@@ -7511,191 +7366,10 @@ void FAngelscriptEngine::CompileModule_Types_Stage1(
 	const TArray<TSharedRef<struct FAngelscriptModuleDesc>>& ImportedModules,
 	const FAngelscriptCompileOptions& CompileOptions)
 {
-	// Modules always compile with a temporary name, the code
-	// then later decides whether to use them and rename them.
-	FString TempName = MakeModuleName(Module->ModuleName);
-	if (CompileType != ECompileType::Initial)
-	{
-		TempName = FString::Printf(TEXT("%s_NEW_%d"), *TempName, TempNameIndex);
-		TempNameIndex += 1;
-	}
-
-	// Generate the angelscript module
-	asCModule* const PreviousScriptModule = Module->ScriptModule;
-	auto* ScriptModule = (asCModule*)Engine->GetModule(TCHAR_TO_ANSI(*TempName), asGM_ALWAYS_CREATE);
-	ScriptModule->baseModuleName = TCHAR_TO_ANSI(*Module->ModuleName);
-	const bool bRetainSnapshot =
-		NextCompileASTRetentionPolicy == static_cast<int32>(asAST_RETAIN_SNAPSHOT)
-		|| (PreviousScriptModule != nullptr
-			&& PreviousScriptModule->GetASTRetentionPolicy() == asAST_RETAIN_SNAPSHOT);
-	if (bRetainSnapshot)
-	{
-		ScriptModule->SetASTRetentionPolicy(asAST_RETAIN_SNAPSHOT);
-	}
-
-	Module->CombinedDependencyHash = Module->CodeHash;
-
-	// Add stuff from all imported modules into the newly generated module
-	for (auto ImportModule : ImportedModules)
-	{
-		if (ensure(ImportModule->ScriptModule != nullptr))
-		{
-			ImportIntoModule(ScriptModule, ImportModule->ScriptModule);
-		}
-		// Combine the hash of the imported module into our own dependency hash
-		Module->CombinedDependencyHash ^= ImportModule->CombinedDependencyHash;
-	}
-
-	(void)CompileOptions;
-
-	// Set up proper pre-class data, this tells angelscript how
-	// to treat compilation for classes derived from code classes.
-	for (auto ClassDesc : Module->Classes)
-	{
-		asPreClassData Data;
-		bool bHasPreClassData = false;
-
-		if (ClassDesc->bIsStruct)
-		{
-			Data.PropertyOffset = UASStruct::ScriptValueOffset;
-			bHasPreClassData = true;
-		}
-
-		if (ClassDesc->CodeSuperClass != nullptr)
-		{
-			Data.PropertyOffset = ClassDesc->CodeSuperClass->GetPropertiesSize();
-
-			FString SuperClassName = FAngelscriptType::GetBoundClassName(ClassDesc->CodeSuperClass);
-			Data.ShadowType = Engine->allRegisteredTypesByName.FindFirst_CaseInsensitive(TCHAR_TO_ANSI(*SuperClassName));
-
-			checkf(Data.ShadowType != nullptr, TEXT("Unable to find C++ class %s to inherit from"), *SuperClassName);
-			bHasPreClassData = true;
-		}
-
-		if (bHasPreClassData)
-			ScriptModule->AddPreClassData(TCHAR_TO_ANSI(*ClassDesc->ClassName), Data);
-	}
-
-	// Delegates need to be tagged with a userdata tag so they can be detected correctly during compilation
-	for (auto DelegateDesc : Module->Delegates)
-	{
-		asPreClassData Data;
-		if (DelegateDesc->bIsMulticast)
-			Data.InitialUserData = FAngelscriptType::TAG_UserData_Multicast_Delegate;
-		else
-			Data.InitialUserData = FAngelscriptType::TAG_UserData_Delegate;
-
-		ScriptModule->AddPreClassData(TCHAR_TO_ANSI(*DelegateDesc->DelegateName), Data);
-	}
-
-	// Add all code we need
-	for (auto& Section : Module->Code)
-	{
-		const FString SectionName = Section.AbsoluteFilename.IsEmpty() ? Section.VirtualPath : Section.AbsoluteFilename;
-		TArray<asSSourceProvenanceRange> Provenance;
-		Provenance.Reserve(Section.SourceProvenance.Num());
-		const auto ConvertAnchor = [](
-			const FAngelscriptSourceProvenanceAnchor& Source)
-		{
-			asSSourceAnchor Target;
-			Target.section = TCHAR_TO_UTF8(*Source.Section);
-			Target.sourceOffset = Source.SourceOffset;
-			Target.sourceLength = Source.SourceLength;
-			Target.row = Source.Row;
-			Target.column = Source.Column;
-			return Target;
-		};
-		const auto ConvertGeneratedKind = [](
-			const EAngelscriptGeneratedSourceKind Kind)
-		{
-			switch (Kind)
-			{
-			case EAngelscriptGeneratedSourceKind::LiteralAsset:
-				return asEGeneratedSourceKind::LiteralAsset;
-			case EAngelscriptGeneratedSourceKind::SubsystemAccessor:
-				return asEGeneratedSourceKind::SubsystemAccessor;
-			case EAngelscriptGeneratedSourceKind::ClassHelper:
-				return asEGeneratedSourceKind::ClassHelper;
-			case EAngelscriptGeneratedSourceKind::StaticClassHelper:
-				return asEGeneratedSourceKind::StaticClassHelper;
-			case EAngelscriptGeneratedSourceKind::DelegateHelper:
-				return asEGeneratedSourceKind::DelegateHelper;
-			case EAngelscriptGeneratedSourceKind::RangeBasedFor:
-				return asEGeneratedSourceKind::RangeBasedFor;
-			case EAngelscriptGeneratedSourceKind::None:
-			default:
-				return asEGeneratedSourceKind::None;
-			}
-		};
-
-		for (const FAngelscriptProcessedSourceProvenanceRange& Source
-			: Section.SourceProvenance)
-		{
-			checkf(Source.ProcessedCodeUnitOffset >= 0
-				&& Source.ProcessedCodeUnitLength > 0
-				&& Source.ProcessedCodeUnitOffset <= Section.Code.Len()
-				&& Source.ProcessedCodeUnitLength
-					<= Section.Code.Len() - Source.ProcessedCodeUnitOffset,
-				TEXT("Invalid processed source provenance range for %s."),
-				*SectionName);
-			const FString Prefix = Section.Code.Left(
-				Source.ProcessedCodeUnitOffset);
-			const FString Slice = Section.Code.Mid(
-				Source.ProcessedCodeUnitOffset,
-				Source.ProcessedCodeUnitLength);
-			const FTCHARToUTF8 PrefixUtf8(*Prefix);
-			const FTCHARToUTF8 SliceUtf8(*Slice);
-
-			asSSourceProvenanceRange& Target =
-				Provenance.Emplace_GetRef();
-			Target.processedOffset = asUINT(PrefixUtf8.Length());
-			Target.processedLength = asUINT(SliceUtf8.Length());
-			Target.hasAuthoredOrigin = Source.bHasAuthoredOrigin;
-			if (Source.bHasAuthoredOrigin)
-			{
-				Target.authoredOrigin = ConvertAnchor(Source.AuthoredOrigin);
-			}
-			Target.hasGeneratedOrigin = Source.bHasGeneratedOrigin;
-			if (Source.bHasGeneratedOrigin)
-			{
-				Target.generatedOrigin.kind =
-					ConvertGeneratedKind(Source.GeneratedKind);
-				Target.generatedOrigin.generatorName =
-					TCHAR_TO_UTF8(*Source.GeneratorName);
-				Target.generatedOrigin.hasAuthoredAnchor =
-					Source.bHasGeneratedAuthoredAnchor;
-				if (Source.bHasGeneratedAuthoredAnchor)
-				{
-					Target.generatedOrigin.authoredAnchor =
-						ConvertAnchor(Source.GeneratedAuthoredAnchor);
-				}
-			}
-		}
-
-		const FTCHARToUTF8 ProcessedUtf8(*Section.Code);
-		const int AddResult = ScriptModule->
-			AddScriptSectionWithSourceProvenance(
-				TCHAR_TO_ANSI(*SectionName),
-				ProcessedUtf8.Get(),
-				ProcessedUtf8.Length(),
-				0,
-				Provenance.GetData(),
-				asUINT(Provenance.Num()));
-		checkf(AddResult >= 0,
-			TEXT("Failed to install source provenance for %s (error %d)."),
-			*SectionName,
-			AddResult);
-	}
-	
-	// Set the code hash as userdata so we can find it later
-#if AS_CAN_GENERATE_JIT
-	ScriptModule->SetUserData((void*)(size_t)Module->CombinedDependencyHash, 0);
-#endif
-
-#if WITH_EDITOR
-#endif
-
-	Module->ScriptModule = ScriptModule;
+	// The reconstruction pipeline takes frozen Builder inputs. The legacy
+	// module compiler has no creation path or configuration reactivation.
+	Module->bCompileError = true;
+	ScriptCompileError(Module, 1, TEXT("Legacy module compilation is unavailable; use frozen Builder inputs."));
 }
 
 void FAngelscriptEngine::CompileModule_Functions_Stage2(ECompileType CompileType, TSharedRef<struct FAngelscriptModuleDesc> Module)
@@ -7757,7 +7431,7 @@ void FAngelscriptEngine::CompileModule_Globals_Stage4(ECompileType CompileType, 
 void FAngelscriptEngine::ImportIntoModule(class asIScriptModule* IntoModule, class asIScriptModule* FromModuleIntf)
 {
 	asCModule* FromModule = (asCModule*)FromModuleIntf;
-	IntoModule->ImportModule(FromModule);
+	static_cast<asCModule*>(IntoModule)->ImportModule(FromModule);
 }
 
 void FAngelscriptEngine::ResolveAllDeclaredImports()
@@ -7945,8 +7619,9 @@ void FAngelscriptEngine::CheckUsageRestrictions(const TArray<TSharedRef<struct F
 }
 #endif
 
-void FAngelscriptEngine::ResolveDeclaredImports(class asIScriptModule* Module)
+void FAngelscriptEngine::ResolveDeclaredImports(class asIScriptModule* ModuleInterface)
 {
+	asCModule* Module = static_cast<asCModule*>(ModuleInterface);
 	if (Module == nullptr)
 		return;
 
@@ -8102,7 +7777,7 @@ bool FAngelscriptEngine::IsOutdated(asIScriptFunction* Function)
 {
 	// Outdated functions will have a null module set,
 	// since the module has been discarded.
-	return Function->GetModule() == nullptr;
+	return static_cast<asCScriptFunction*>(Function)->module == nullptr;
 }
 
 void FAngelscriptEngine::SetOutdated(asIScriptModule* OldModule)
@@ -8310,8 +7985,8 @@ void FAngelscriptEngine::ScriptCompileError(UClass* InsideClass, const FString& 
 		return;
 	}
 
-	//auto* ScriptModule = ScriptTypePtr->GetModule();
-	asIScriptModule* ScriptModule = ScriptTypePtr->GetModule();
+	//auto* ScriptModule = static_cast<asCTypeInfo*>(ScriptTypePtr)->module;
+	asIScriptModule* ScriptModule = static_cast<asCTypeInfo*>(ScriptTypePtr)->module;
 	TSharedPtr<FAngelscriptModuleDesc> ModuleDesc;
 	for (auto Elem : ActiveModules)
 	{
@@ -8528,7 +8203,7 @@ void GetStackTrace(
 				Desc.Frame = FString::Printf(TEXT("  %s | Line %d | Col %d"),
 					ANSI_TO_TCHAR(ScriptFunction->GetDeclaration(true, false, false, true)),
 					Line, Column);
-				Desc.Module = ANSI_TO_TCHAR(ScriptFunction->GetModuleName());
+				Desc.Module = ANSI_TO_TCHAR((static_cast<asCScriptFunction*>(ScriptFunction)->module ? static_cast<asCScriptFunction*>(ScriptFunction)->module->GetName() : ""));
 				Desc.ThisObject = nullptr;
 
 				int ThisTypeId = Context->GetThisTypeId(i);
@@ -9047,7 +8722,7 @@ void AngelscriptLineCallback(asCContext* Context)
 		int Column;
 		int Line = Context->GetLineNumber(0, &Column, nullptr);
 		asIScriptFunction* CurrentFunction = Context->GetFunction(0);
-		FString ModuleName = ANSI_TO_TCHAR(CurrentFunction->GetModuleName());
+		FString ModuleName = ANSI_TO_TCHAR((static_cast<asCScriptFunction*>(CurrentFunction)->module ? static_cast<asCScriptFunction*>(CurrentFunction)->module->GetName() : ""));
 		TSharedPtr<struct FAngelscriptModuleDesc> Module =
 			AngelscriptManager->GetModule(ModuleName);
 		if (Module != nullptr)

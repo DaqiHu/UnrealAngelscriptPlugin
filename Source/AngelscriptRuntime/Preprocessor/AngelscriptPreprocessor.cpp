@@ -1940,8 +1940,6 @@ static FName PP_NAME_ForcedAssets("ForcedAssets");
 static FName PP_NAME_BlueprintAuthorityOnly("BlueprintAuthorityOnly");
 static FName PP_NAME_Exec("Exec");
 static FName PP_NAME_BlueprintProtected("BlueprintProtected");
-static FName PP_NAME_BlueprintSetter("BlueprintSetter");
-static FName PP_NAME_BlueprintGetter("BlueprintGetter");
 static FName PP_NAME_EditorOnly("EditorOnly");
 static FName PP_NAME_AngelscriptTest("AngelscriptTest");
 
@@ -3214,32 +3212,6 @@ void FAngelscriptPreprocessor::ProcessPropertyMacro(FFile& File, FChunk& Chunk, 
 		else if (Spec.Name == PP_NAME_Instanced)
 		{
 			PropDesc->bPersistentInstance = true;
-		}
-		else if (Spec.Name == PP_NAME_BlueprintSetter)
-		{
-			if (!Spec.Value.IsEmpty())
-			{
-				PropDesc->Meta.Add(PP_NAME_BlueprintSetter, Spec.Value);
-			}
-			else
-			{
-				MacroError(File, Macro,	FString::Printf(TEXT("No function specified for BlueprintSetter on property %s::%s."),
-						*ClassDesc->ClassName, *PropDesc->PropertyName));
-				bHasError = true;
-			}
-		}
-		else if (Spec.Name == PP_NAME_BlueprintGetter)
-		{
-			if (!Spec.Value.IsEmpty())
-			{
-				PropDesc->Meta.Add(PP_NAME_BlueprintGetter, Spec.Value);
-			}
-			else
-			{
-				MacroError(File, Macro,	FString::Printf(TEXT("No function specified for BlueprintGetter on property %s::%s."),
-						*ClassDesc->ClassName, *PropDesc->PropertyName));
-				bHasError = true;
-			}
 		}
 		else
 		{

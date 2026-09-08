@@ -110,7 +110,7 @@ FString UASClass::GetSourceFilePath() const
 	if (ScriptTypePtr == nullptr)
 		return TEXT("");
 	auto& Manager = FAngelscriptEngine::Get();
-	auto Module = Manager.GetModule(((asITypeInfo*)ScriptTypePtr)->GetModule());
+	auto Module = Manager.GetModule(static_cast<asCTypeInfo*>(ScriptTypePtr)->module);
 	if (!Module.IsValid())
 		return TEXT("");
 	if (Module->Code.Num() == 0)
@@ -123,7 +123,7 @@ FString UASClass::GetRelativeSourceFilePath() const
 	if (ScriptTypePtr == nullptr)
 		return TEXT("");
 	auto& Manager = FAngelscriptEngine::Get();
-	auto Module = Manager.GetModule(((asITypeInfo*)ScriptTypePtr)->GetModule());
+	auto Module = Manager.GetModule(static_cast<asCTypeInfo*>(ScriptTypePtr)->module);
 	if (!Module.IsValid())
 		return TEXT("");
 	if (Module->Code.Num() == 0)
@@ -136,7 +136,7 @@ bool UASClass::IsDeveloperOnly() const
 	if (ScriptTypePtr == nullptr)
 		return false;
 	auto& Manager = FAngelscriptEngine::Get();
-	auto Module = Manager.GetModule(((asITypeInfo*)ScriptTypePtr)->GetModule());
+	auto Module = Manager.GetModule(static_cast<asCTypeInfo*>(ScriptTypePtr)->module);
 	if (!Module.IsValid())
 		return false;
 	const FString& ModuleName = Module->ModuleName;

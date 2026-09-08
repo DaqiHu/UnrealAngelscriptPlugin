@@ -174,7 +174,6 @@ namespace
 					&& A->bConstMethod == B.bConstMethod && A->FunctionKind == B.FunctionKind
 					&& A->Modifiers == B.Modifiers && A->bHasDeferredBody == B.bHasDeferredBody
 					&& AnchorEquals(A->DeferredBodySource, B.DeferredBodySource)
-					&& A->LambdaOrdinal == B.LambdaOrdinal
 					&& AnchorArrayEquals(A->DeferredStatementSources, B.DeferredStatementSources);
 			}
 			if (const auto* A = Left.TryGet<asSASTCallableTypeDeclPayload>())
@@ -234,11 +233,6 @@ namespace
 				return A->Value == Right.TryGet<asSASTStringLiteralPayload>()->Value;
 			if (const auto* A = Left.TryGet<asSASTThisExprPayload>())
 				return A->bImplicit == Right.TryGet<asSASTThisExprPayload>()->bImplicit;
-			if (const auto* A = Left.TryGet<asSASTLambdaExprPayload>())
-			{
-				const auto& B = *Right.TryGet<asSASTLambdaExprPayload>();
-				return A->CaptureCount == B.CaptureCount && A->bCapturesThis == B.bCapturesThis;
-			}
 			if (const auto* A = Left.TryGet<asSASTInitListExprPayload>())
 			{
 				const auto& B = *Right.TryGet<asSASTInitListExprPayload>();
@@ -353,7 +347,7 @@ namespace
 			if (const auto* Value = Payload.TryGet<asSASTRecordDeclPayload>()) return FString::Printf(TEXT("name=%s type-kind=%u modifiers=%u bases=[%s]"), *Value->Name, static_cast<uint8>(Value->DeclaredTypeKind), static_cast<uint8>(Value->Modifiers), *FString::Join(Value->UnresolvedBases, TEXT(",")));
 			if (const auto* Value = Payload.TryGet<asSASTVarDeclPayload>()) return FString::Printf(TEXT("name=%s type=%s deferred-initializer=%u"), *Value->Name, *Value->TypeSyntax.Spelling, Value->bHasDeferredInitializer ? 1 : 0);
 			if (const auto* Value = Payload.TryGet<asSASTEnumConstantDeclPayload>()) return FString::Printf(TEXT("name=%s value=%lld explicit=%u resolved=%u deferred=%u"), *Value->Name, Value->Value, Value->bExplicitValue ? 1 : 0, Value->bResolvedValue ? 1 : 0, Value->bHasDeferredInitializer ? 1 : 0);
-			if (const auto* Value = Payload.TryGet<asSASTFunctionDeclPayload>()) return FString::Printf(TEXT("name=%s return=%s kind=%u modifiers=%u const=%u lambda-ordinal=%u deferred-statements=%d"), *Value->Name, *Value->ReturnTypeSyntax.Spelling, static_cast<uint8>(Value->FunctionKind), static_cast<uint16>(Value->Modifiers), Value->bConstMethod ? 1 : 0, Value->LambdaOrdinal, Value->DeferredStatementSources.Num());
+			if (const auto* Value = Payload.TryGet<asSASTFunctionDeclPayload>()) return FString::Printf(TEXT("name=%s return=%s kind=%u modifiers=%u const=%u deferred-statements=%d"), *Value->Name, *Value->ReturnTypeSyntax.Spelling, static_cast<uint8>(Value->FunctionKind), static_cast<uint16>(Value->Modifiers), Value->bConstMethod ? 1 : 0, Value->DeferredStatementSources.Num());
 			if (const auto* Value = Payload.TryGet<asSASTCallableTypeDeclPayload>()) return FString::Printf(TEXT("name=%s return=%s multicast=%u"), *Value->Name, *Value->ReturnTypeSyntax.Spelling, Value->bMulticast ? 1 : 0);
 			if (const auto* Value = Payload.TryGet<asSASTTypeAliasDeclPayload>()) return FString::Printf(TEXT("name=%s target=%s"), *Value->Name, *Value->TypeSyntax.Spelling);
 			if (const auto* Value = Payload.TryGet<asSASTAccessSpecifierDeclPayload>())
@@ -393,7 +387,6 @@ namespace
 			}
 			if (const auto* Value = Payload.TryGet<asSASTStringLiteralPayload>()) return FString::Printf(TEXT("value=\"%s\""), *Value->Value);
 			if (const auto* Value = Payload.TryGet<asSASTThisExprPayload>()) return Value->bImplicit ? TEXT("implicit=true") : TEXT("implicit=false");
-			if (const auto* Value = Payload.TryGet<asSASTLambdaExprPayload>()) return FString::Printf(TEXT("captures=%u this=%u"), Value->CaptureCount, Value->bCapturesThis ? 1 : 0);
 			if (const auto* Value = Payload.TryGet<asSASTInitListExprPayload>())
 			{
 				TArray<FString> Patterns;
@@ -528,11 +521,11 @@ namespace
 					DeferredStatements += AnchorJson(Value->DeferredStatementSources[Index]);
 				}
 				DeferredStatements += TEXT("]");
-				return FString::Printf(TEXT("{\"type\":\"function-decl\",\"name\":\"%s\",\"returnTypeSyntax\":%s,\"constMethod\":%s,\"functionKind\":%u,\"modifiers\":%u,\"hasDeferredBody\":%s,\"deferredBody\":%s,\"lambdaOrdinal\":%u,\"deferredStatements\":%s}"),
+				return FString::Printf(TEXT("{\"type\":\"function-decl\",\"name\":\"%s\",\"returnTypeSyntax\":%s,\"constMethod\":%s,\"functionKind\":%u,\"modifiers\":%u,\"hasDeferredBody\":%s,\"deferredBody\":%s,\"deferredStatements\":%s}"),
 					*EscapeJson(Value->Name), *TypeSyntaxJson(Value->ReturnTypeSyntax),
 					Value->bConstMethod ? TEXT("true") : TEXT("false"), static_cast<uint8>(Value->FunctionKind),
 					static_cast<uint16>(Value->Modifiers), Value->bHasDeferredBody ? TEXT("true") : TEXT("false"),
-					*AnchorJson(Value->DeferredBodySource), Value->LambdaOrdinal, *DeferredStatements);
+					*AnchorJson(Value->DeferredBodySource), *DeferredStatements);
 			}
 			if (const auto* Value = Payload.TryGet<asSASTCallableTypeDeclPayload>())
 				return FString::Printf(TEXT("{\"type\":\"callable-decl\",\"name\":\"%s\",\"returnTypeSyntax\":%s,\"multicast\":%s}"),
@@ -614,8 +607,6 @@ namespace
 				return FString::Printf(TEXT("{\"type\":\"string-literal\",\"value\":\"%s\"}"), *EscapeJson(Value->Value));
 			if (const auto* Value = Payload.TryGet<asSASTThisExprPayload>())
 				return Value->bImplicit ? TEXT("{\"type\":\"this-expr\",\"implicit\":true}") : TEXT("{\"type\":\"this-expr\",\"implicit\":false}");
-			if (const auto* Value = Payload.TryGet<asSASTLambdaExprPayload>())
-				return FString::Printf(TEXT("{\"type\":\"lambda-expr\",\"captureCount\":%u,\"capturesThis\":%s}"), Value->CaptureCount, Value->bCapturesThis ? TEXT("true") : TEXT("false"));
 			if (const auto* Value = Payload.TryGet<asSASTInitListExprPayload>())
 			{
 				FString Patterns = TEXT("[");
@@ -739,7 +730,6 @@ namespace
 					Payload.Modifiers = Function.GetModifiers(); Payload.bHasDeferredBody = Function.HasDeferredBody();
 					if (!ProjectTypeSyntax(Snapshot, Function.GetReturnTypeSyntax(), Payload.ReturnTypeSyntax)) return false;
 					if (Payload.bHasDeferredBody && !MakeAnchor(Snapshot, Function.GetDeferredBodyRange(), Payload.DeferredBodySource)) return false;
-					Payload.LambdaOrdinal = Function.GetLambdaOrdinal();
 					for (const asCSourceRange& Deferred : Function.GetDeferredStatementRanges())
 					{
 						asSStableSourceAnchor Anchor;
@@ -856,13 +846,6 @@ namespace
 						static_cast<const asCStringLiteral&>(Node).GetValue()});
 				case asEStmtKind::ThisExpr:
 					return SetPayload(Out, asSASTThisExprPayload{static_cast<const asCThisExpr&>(Node).IsImplicit()});
-				case asEStmtKind::LambdaExpr:
-				{
-					const asCFunctionDecl* Function = static_cast<const asCLambdaExpr&>(Node).GetFunction();
-					return SetPayload(Out, asSASTLambdaExprPayload{
-						Function ? static_cast<uint32>(Function->GetCaptures().Num()) : 0,
-						Function && Function->GetCapturedThisRecord() != nullptr});
-				}
 				case asEStmtKind::InitListExpr:
 				{
 					const auto& Init = static_cast<const asCInitListExpr&>(Node);
@@ -1305,8 +1288,7 @@ namespace
 					if (Reference.Kind == asEASTCrossReferenceKind::MemberDeclaration
 						&& LocalTarget->Family != asEASTNodeFamily::Decl)
 						return FailIdentity(TEXT("member cross-reference does not target a declaration"));
-					if ((Reference.Kind == asEASTCrossReferenceKind::ReturnTarget
-							|| Reference.Kind == asEASTCrossReferenceKind::LambdaEnclosingFunction)
+					if (Reference.Kind == asEASTCrossReferenceKind::ReturnTarget
 						&& (LocalTarget->Family != asEASTNodeFamily::Decl
 							|| LocalTarget->Kind != static_cast<uint16>(asEDeclKind::Function)))
 						return FailIdentity(TEXT("return cross-reference does not target a function"));
@@ -1346,16 +1328,10 @@ namespace
 							|| (LocalTarget->Kind != static_cast<uint16>(asEStmtKind::Case)
 								&& LocalTarget->Kind != static_cast<uint16>(asEStmtKind::Default))))
 						return FailIdentity(TEXT("fallthrough cross-reference does not target a clause"));
-					if ((Reference.Kind == asEASTCrossReferenceKind::ThisRecord
-							|| Reference.Kind == asEASTCrossReferenceKind::LambdaCapturedThis)
+					if (Reference.Kind == asEASTCrossReferenceKind::ThisRecord
 						&& (LocalTarget->Family != asEASTNodeFamily::Decl
 							|| LocalTarget->Kind != static_cast<uint16>(asEDeclKind::Record)))
 						return FailIdentity(TEXT("record cross-reference does not target a record"));
-					if (Reference.Kind == asEASTCrossReferenceKind::LambdaCapture
-						&& (LocalTarget->Family != asEASTNodeFamily::Decl
-							|| (LocalTarget->Kind != static_cast<uint16>(asEDeclKind::Var)
-								&& LocalTarget->Kind != static_cast<uint16>(asEDeclKind::ParmVar))))
-						return FailIdentity(TEXT("lambda capture cross-reference does not target a variable"));
 					if (Reference.Kind == asEASTCrossReferenceKind::CustomAccessSpecifier
 						&& (LocalTarget->Family != asEASTNodeFamily::Decl
 							|| LocalTarget->Kind != static_cast<uint16>(asEDeclKind::AccessSpecifier)))
@@ -1371,7 +1347,6 @@ namespace
 				const bool bFunctionReference = Reference.Kind == asEASTCrossReferenceKind::ReturnTarget
 					|| Reference.Kind == asEASTCrossReferenceKind::OperatorFunction
 					|| Reference.Kind == asEASTCrossReferenceKind::Constructor
-					|| Reference.Kind == asEASTCrossReferenceKind::LambdaEnclosingFunction
 					|| Reference.Kind == asEASTCrossReferenceKind::ForeachBeginFunction
 					|| Reference.Kind == asEASTCrossReferenceKind::ForeachEndFunction
 					|| Reference.Kind == asEASTCrossReferenceKind::ForeachNextFunction
@@ -1379,10 +1354,8 @@ namespace
 					|| Reference.Kind == asEASTCrossReferenceKind::ForeachKeyFunction
 					|| Reference.Kind == asEASTCrossReferenceKind::ConversionFunction;
 				const bool bNamedDeclarationReference = Reference.Kind == asEASTCrossReferenceKind::Declaration
-					|| Reference.Kind == asEASTCrossReferenceKind::MemberDeclaration
-					|| Reference.Kind == asEASTCrossReferenceKind::LambdaCapture;
-				const bool bNominalReference = Reference.Kind == asEASTCrossReferenceKind::ThisRecord
-					|| Reference.Kind == asEASTCrossReferenceKind::LambdaCapturedThis;
+					|| Reference.Kind == asEASTCrossReferenceKind::MemberDeclaration;
+				const bool bNominalReference = Reference.Kind == asEASTCrossReferenceKind::ThisRecord;
 				if (Registry.ResolveIdentityRole(Reference.StableIdentity, Actual) != asETypeIdentityStatus::Succeeded
 					|| (bFunctionReference && Actual != asEStableIdentityRole::Function)
 					|| (bNominalReference && Actual != asEStableIdentityRole::NominalType)
@@ -1527,23 +1500,6 @@ namespace
 						|| Record.Expression.bReadOnly
 							!= ((static_cast<uint16>(ThisType.Qualifiers) & ConstBit) != 0))
 						return FailIdentity(TEXT("projected this expression has an invalid typed edge shape"));
-					break;
-				}
-				case asEStmtKind::LambdaExpr:
-				{
-					const auto* Payload = Record.TryGetPayload<asSASTLambdaExprPayload>();
-					const asSASTProjectionRecord* Function = GetChild(Record, 0);
-					const auto* FunctionPayload = Function
-						? Function->TryGetPayload<asSASTFunctionDeclPayload>() : nullptr;
-					if (!Payload || Record.Children.Num() != 1 || !Function
-						|| Function->Family != asEASTNodeFamily::Decl
-						|| Function->Kind != static_cast<uint16>(asEDeclKind::Function)
-						|| !FunctionPayload || FunctionPayload->FunctionKind != asEFunctionKind::Lambda
-						|| Payload->CaptureCount != static_cast<uint32>(CountCrossReference(
-							*Function, asEASTCrossReferenceKind::LambdaCapture))
-						|| Payload->bCapturesThis != (CountCrossReference(
-							*Function, asEASTCrossReferenceKind::LambdaCapturedThis) == 1))
-						return FailIdentity(TEXT("projected lambda expression does not own its exact lambda function payload"));
 					break;
 				}
 				case asEStmtKind::InitListExpr:
@@ -1910,12 +1866,12 @@ namespace
 						| static_cast<uint16>(asEFunctionModifiers::UnsafeDuringConstruction);
 					if (!Payload || Registry.ResolveFunction(Record.StableIdentity, Descriptor) != asETypeIdentityStatus::Succeeded)
 						return FailIdentity(TEXT("projected function declaration cannot be resolved"));
-					const bool bImplicitFunction = Payload->FunctionKind == asEFunctionKind::Lambda
-						|| Payload->FunctionKind == asEFunctionKind::ClassDefault;
+					const bool bImplicitFunction = Payload->FunctionKind == asEFunctionKind::ClassDefault;
 					if (Payload->Name != Descriptor.Name
 						|| Payload->Name.IsEmpty() != bImplicitFunction
 						|| Payload->ReturnTypeSyntax.bPresent == bImplicitFunction
 						|| Payload->FunctionKind > asEFunctionKind::Conversion
+						|| Payload->FunctionKind == asEFunctionKind::ReservedAnonymousFunction
 						|| (static_cast<uint16>(Payload->Modifiers) & ~ValidModifiers) != 0
 						|| Payload->bConstMethod != ((static_cast<uint16>(Descriptor.Modifiers)
 							& static_cast<uint16>(asEFunctionIdentityModifiers::ConstMethod)) != 0)
@@ -1924,15 +1880,12 @@ namespace
 							&& Descriptor.Kind != asEFunctionIdentityKind::Constructor)
 						|| (Payload->FunctionKind == asEFunctionKind::Destructor
 							&& Descriptor.Kind != asEFunctionIdentityKind::Destructor)
-						|| (Payload->FunctionKind == asEFunctionKind::Lambda
-							&& Descriptor.Kind != asEFunctionIdentityKind::Lambda)
 						|| (Payload->FunctionKind == asEFunctionKind::ClassDefault
 							&& Descriptor.Kind != asEFunctionIdentityKind::ClassDefault)
 						|| (Payload->FunctionKind == asEFunctionKind::Conversion
 							&& Descriptor.Kind != asEFunctionIdentityKind::Conversion)
 						|| (Payload->FunctionKind != asEFunctionKind::Constructor
 							&& Payload->FunctionKind != asEFunctionKind::Destructor
-							&& Payload->FunctionKind != asEFunctionKind::Lambda
 							&& Payload->FunctionKind != asEFunctionKind::ClassDefault
 							&& Payload->FunctionKind != asEFunctionKind::Conversion
 							&& Descriptor.Kind != asEFunctionIdentityKind::Global
@@ -1950,23 +1903,6 @@ namespace
 							|| ClassDefaultReturn.Primitive != asEPrimitiveType::Void
 							|| ClassDefaultReturn.Qualifiers != asETypeUseQualifiers::None))
 						return FailIdentity(TEXT("projected class-default function is not an implicit void zero-parameter function"));
-					if (Payload->FunctionKind == asEFunctionKind::Lambda)
-					{
-						const int32 EnclosingCount = CountCrossReference(
-							Record, asEASTCrossReferenceKind::LambdaEnclosingFunction);
-						if (Payload->LambdaOrdinal == MAX_uint32 || Payload->LambdaOrdinal != Descriptor.LambdaOrdinal
-							|| EnclosingCount != 1 || Descriptor.EnclosingFunction.IsZero())
-							return FailIdentity(TEXT("projected lambda function lacks its enclosing function coordinate"));
-						for (const asSASTProjectedCrossReference& Reference : Record.CrossReferences)
-							if (Reference.Kind == asEASTCrossReferenceKind::LambdaEnclosingFunction
-								&& Reference.StableIdentity != Descriptor.EnclosingFunction)
-								return FailIdentity(TEXT("projected lambda enclosing edge disagrees with its identity descriptor"));
-					}
-					else if (Payload->LambdaOrdinal != MAX_uint32
-						|| CountCrossReference(Record, asEASTCrossReferenceKind::LambdaEnclosingFunction) != 0
-						|| CountCrossReference(Record, asEASTCrossReferenceKind::LambdaCapture) != 0
-						|| CountCrossReference(Record, asEASTCrossReferenceKind::LambdaCapturedThis) != 0)
-						return FailIdentity(TEXT("projected non-lambda function carries lambda-only payload"));
 					if (Payload->FunctionKind != asEFunctionKind::ClassDefault
 						&& !Payload->DeferredStatementSources.IsEmpty())
 						return FailIdentity(TEXT("projected non-class-default function carries default statements"));

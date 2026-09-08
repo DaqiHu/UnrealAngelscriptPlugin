@@ -137,7 +137,6 @@ enum asEEngineProp
 	asEP_SCRIPT_SCANNER                     = 11,
 	asEP_INCLUDE_JIT_INSTRUCTIONS           = 12,
 	asEP_STRING_ENCODING                    = 13,
-	asEP_PROPERTY_ACCESSOR_MODE             = 14,
 	asEP_EXPAND_DEF_ARRAY_TO_TMPL           = 15,
 	asEP_AUTO_GARBAGE_COLLECT               = 16,
 	asEP_DISALLOW_GLOBAL_VARS               = 17,
@@ -243,9 +242,8 @@ enum asEObjTypeFlags : AS_OBJFLAG_UINT64
 	asOBJ_APP_CLASS_UNION            = (AS_OBJFLAG_ONE<<32),
 	// Internal flags
 	asOBJ_SCRIPT_OBJECT              = (AS_OBJFLAG_ONE<<21),
-	asOBJ_SHARED                     = (AS_OBJFLAG_ONE<<22),
 	asOBJ_NOINHERIT                  = (AS_OBJFLAG_ONE<<23),
-	asOBJ_FUNCDEF                    = (AS_OBJFLAG_ONE<<24),
+	asOBJ_CALLABLE_TYPE                    = (AS_OBJFLAG_ONE<<24),
 	asOBJ_LIST_PATTERN               = (AS_OBJFLAG_ONE<<25),
 	asOBJ_ENUM                       = (AS_OBJFLAG_ONE<<26),
 	asOBJ_TEMPLATE_SUBTYPE           = (AS_OBJFLAG_ONE<<27),
@@ -373,13 +371,6 @@ enum asETypeModifiers
 	asTM_CONST    = 4
 };
 
-// GetModule flags
-enum asEGMFlags
-{
-	asGM_ONLY_IF_EXISTS       = 0,
-	asGM_CREATE_IF_NOT_EXISTS = 1,
-	asGM_ALWAYS_CREATE        = 2
-};
 
 // Compile flags
 enum asECompileFlags
@@ -395,7 +386,7 @@ enum asEFuncType
 	asFUNC_SCRIPT    = 1,
 	asFUNC_INTERFACE = 2,
 	asFUNC_VIRTUAL   = 3,
-	asFUNC_FUNCDEF   = 4,
+	asFUNC_CALLABLE_SIGNATURE   = 4,
 	asFUNC_IMPORTED  = 5,
 	asFUNC_DELEGATE  = 6
 };
@@ -867,10 +858,7 @@ public:
 	virtual asUINT       GetEnumCount() const = 0;
 	virtual asITypeInfo *GetEnumByIndex(asUINT index) const = 0;
 
-	// Funcdefs
-	virtual int          RegisterFuncdef(const char *decl) = 0;
-	virtual asUINT       GetFuncdefCount() const = 0;
-	virtual asITypeInfo *GetFuncdefByIndex(asUINT index) const = 0;
+	// Callable types
 
 	// Typedefs
 	virtual int          RegisterTypedef(const char *type, const char *decl) = 0;
@@ -886,10 +874,6 @@ public:
 	virtual const char *GetDefaultNamespace() const = 0;
 
 	// Script modules
-	virtual asIScriptModule *GetModule(const char *module, asEGMFlags flag = asGM_ONLY_IF_EXISTS) = 0;
-	virtual int              DiscardModule(const char *module) = 0;
-	virtual asUINT           GetModuleCount() const = 0;
-	virtual asIScriptModule *GetModuleByIndex(asUINT index) const = 0;
 
 	// Script functions
 	virtual asIScriptFunction *GetFunctionById(int funcId) const = 0;
@@ -1011,7 +995,7 @@ enum asEASTDeclKind : asBYTE
 	asAST_DECL_CLASS,
 	asAST_DECL_INTERFACE,
 	asAST_DECL_ENUM,
-	asAST_DECL_FUNCDEF,
+	asAST_DECL_CALLABLE_TYPE,
 	asAST_DECL_FUNCTION,
 	asAST_DECL_METHOD,
 	asAST_DECL_CONSTRUCTOR,
@@ -1095,7 +1079,7 @@ enum asEASTTypeKind : asBYTE
 	asAST_TYPE_VOID,
 	asAST_TYPE_PRIMITIVE,
 	asAST_TYPE_ENUM,
-	asAST_TYPE_FUNCDEF,
+	asAST_TYPE_CALLABLE_TYPE,
 	asAST_TYPE_VALUE_OBJECT,
 	asAST_TYPE_REFERENCE_OBJECT,
 	asAST_TYPE_TEMPLATE,
@@ -1170,7 +1154,7 @@ enum asEASTDeclTrait : asDWORD
 	asAST_TRAIT_EXTERNAL = 1u << 6,
 	asAST_TRAIT_MIXIN = 1u << 7,
 	asAST_TRAIT_GENERATED = 1u << 8,
-	asAST_TRAIT_LAMBDA = 1u << 9,
+	asAST_TRAIT_RESERVED_ANONYMOUS_FUNCTION = 1u << 9,
 	asAST_TRAIT_VALUE = 1u << 10,
 	asAST_TRAIT_LIST_FACTORY = 1u << 11,
 	asAST_TRAIT_EXTERNAL_IMPLICIT_THIS = 1u << 12,
@@ -1338,17 +1322,9 @@ class asIScriptModule
 {
 public:
 	virtual asIScriptEngine *GetEngine() const = 0;
-	virtual void             SetName(const char *name) = 0;
 	virtual const char      *GetName() const = 0;
-	virtual void             Discard() = 0;
 
 	// Compilation
-	virtual void        AddPreClassData(const char* name, asPreClassData Data) = 0;
-	virtual int         AddScriptSection(const char *name, const char *code, size_t codeLength = 0, int lineOffset = 0) = 0;
-	virtual int         Build() = 0;
-	virtual int         CompileFunction(const char *sectionName, const char *code, int lineOffset, asDWORD compileFlags, asIScriptFunction **outFunc) = 0;
-	virtual asDWORD     SetAccessMask(asDWORD accessMask) = 0;
-	virtual int         SetDefaultNamespace(const char *nameSpace) = 0;
 	virtual const char *GetDefaultNamespace() const = 0;
 
 	// Functions
@@ -1356,15 +1332,12 @@ public:
 	virtual asIScriptFunction *GetFunctionByIndex(asUINT index) const = 0;
 	virtual asIScriptFunction *GetFunctionByDecl(const char *decl) const = 0;
 	virtual asIScriptFunction *GetFunctionByName(const char *name) const = 0;
-	virtual int                RemoveFunction(asIScriptFunction *func) = 0;
 
 	// Global variables
-	virtual int         ResetGlobalVars(asIScriptContext *ctx = 0) = 0;
 	virtual asUINT      GetGlobalVarCount() const = 0;
 	virtual const char *GetGlobalVarDeclaration(asUINT index, bool includeNamespace = false) const = 0;
 	virtual int         GetGlobalVar(asUINT index, const char **name, const char **nameSpace = 0, int *typeId = 0, bool *isConst = 0) const = 0;
 	virtual void       *GetAddressOfGlobalVar(asUINT index) = 0;
-	virtual int         RemoveGlobalVar(asUINT index) = 0;
 
 	// Type identification
 	virtual asUINT         GetObjectTypeCount() const = 0;
@@ -1381,30 +1354,14 @@ public:
 	virtual asUINT       GetTypedefCount() const = 0;
 	virtual asITypeInfo *GetTypedefByIndex(asUINT index) const = 0;
 
-	// Dynamic binding between modules
-	virtual asUINT      GetImportedFunctionCount() const = 0;
-	virtual int         GetImportedFunctionIndexByDecl(const char *decl) const = 0;
-	virtual const char *GetImportedFunctionDeclaration(asUINT importIndex) const = 0;
-	virtual const char *GetImportedFunctionSourceModule(asUINT importIndex) const = 0;
-	virtual int         BindImportedFunction(asUINT importIndex, asIScriptFunction *func) = 0;
-	virtual int         UnbindImportedFunction(asUINT importIndex) = 0;
-	virtual int         BindAllImportedFunctions() = 0;
-	virtual int         UnbindAllImportedFunctions() = 0;
 
-	// Byte code saving and loading
-	virtual int SaveByteCode(asIBinaryStream *out, bool stripDebugInfo = false) const = 0;
-	virtual int LoadByteCode(asIBinaryStream *in, bool *wasDebugInfoStripped = 0) = 0;
 
 	// User data
 	virtual void *SetUserData(void *data, asPWORD type = 0) = 0;
 	virtual void *GetUserData(asPWORD type = 0) const = 0;
 
-	// Cross-module imports
-	virtual void ImportModule(asIScriptModule* module) = 0;
-	virtual void ClearImports() = 0;
 
-	// Canonical AST V1. These are trailing slots so all pre-existing module
-	// virtual-method positions remain compatible with the product 1.0.0 ABI.
+	// Retained immutable AST snapshot queries on dormant compatibility objects.
 	virtual int         SetASTRetentionPolicy(asEASTRetentionPolicy policy) = 0;
 	virtual asEASTRetentionPolicy GetASTRetentionPolicy() const = 0;
 	virtual asIASTSnapshot* AcquireASTSnapshot(asDWORD apiVersion) const = 0;
@@ -1584,7 +1541,6 @@ public:
 	virtual asIScriptEngine *GetEngine() const = 0;
 	virtual const char      *GetConfigGroup() const = 0;
 	virtual asDWORD          GetAccessMask() const = 0;
-	virtual asIScriptModule *GetModule() const = 0;
 
 	// Memory management
 	virtual int AddRef() const = 0;
@@ -1632,8 +1588,8 @@ public:
 	virtual asIScriptFunction *GetBehaviourByIndex(asUINT index, asEBehaviours *outBehaviour) const = 0;
 
 	// Child types
-	virtual asUINT       GetChildFuncdefCount() const = 0;
-	virtual asITypeInfo *GetChildFuncdef(asUINT index) const = 0;
+	virtual asUINT       GetChildCallableTypeCount() const = 0;
+	virtual asITypeInfo *GetChildCallableType(asUINT index) const = 0;
 	virtual asITypeInfo *GetParentType() const = 0;
 
 	// Enums
@@ -1643,8 +1599,8 @@ public:
 	// Typedef
 	virtual int GetTypedefTypeId() const = 0;
 
-	// Funcdef
-	virtual asIScriptFunction *GetFuncdefSignature() const = 0;
+	// Callable type
+	virtual asIScriptFunction *GetCallableSignature() const = 0;
 
 	// User data
 	virtual void *SetUserData(void *data, asPWORD type = 0) = 0;
@@ -1668,8 +1624,6 @@ public:
 	// Miscellaneous
 	virtual int              GetId() const = 0;
 	virtual asEFuncType      GetFuncType() const = 0;
-	virtual const char      *GetModuleName() const = 0;
-	virtual asIScriptModule *GetModule() const = 0;
 	virtual const char      *GetScriptSectionName() const = 0;
 	virtual const char      *GetConfigGroup() const = 0;
 	virtual asDWORD          GetAccessMask() const = 0;
@@ -1687,7 +1641,6 @@ public:
 	virtual bool             IsProtected() const = 0;
 	virtual bool             IsFinal() const = 0;
 	virtual bool             IsOverride() const = 0;
-	virtual bool             IsShared() const = 0;
 	virtual bool             IsProperty() const = 0;
 	virtual asUINT           GetParamCount() const = 0;
 	virtual int              GetParam(asUINT index, int *typeId, asDWORD *flags = 0, const char **name = 0, const char **defaultArg = 0) const = 0;

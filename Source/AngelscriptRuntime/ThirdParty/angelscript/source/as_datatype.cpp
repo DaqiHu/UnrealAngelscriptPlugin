@@ -215,11 +215,11 @@ asCString asCDataType::Format(asSNameSpace *currNs, bool includeNamespace, bool 
 		if (typeInfo && typeInfo->nameSpace && typeInfo->nameSpace->name != "")
 			str += typeInfo->nameSpace->name + "::";
 	}
-	if (typeInfo && typeInfo->nameSpace == 0 && CastToFuncdefType(typeInfo) && CastToFuncdefType(typeInfo)->parentClass)
+	if (typeInfo && typeInfo->nameSpace == 0 && CastToCallableType(typeInfo) && CastToCallableType(typeInfo)->parentClass)
 	{
 		// If funcDef->nameSpace is null it means the funcDef was declared as member of 
 		// another type, in which case the scope should be built with the name of that type
-		str += CastToFuncdefType(typeInfo)->parentClass->name + "::";
+		str += CastToCallableType(typeInfo)->parentClass->name + "::";
 	}
 
 	if( tokenType != ttIdentifier )
@@ -352,7 +352,7 @@ int asCDataType::MakeHandle(bool b, bool acceptHandleForScope)
 			// funcdefs are special reference types and support handles
 			// value types with asOBJ_ASHANDLE are treated as a handle
 			if( (!typeInfo ||
-				!((typeInfo->flags & asOBJ_REF) || (typeInfo->flags & asOBJ_TEMPLATE_SUBTYPE) || (typeInfo->flags & asOBJ_ASHANDLE) || (typeInfo->flags & asOBJ_FUNCDEF)) ||
+				!((typeInfo->flags & asOBJ_REF) || (typeInfo->flags & asOBJ_TEMPLATE_SUBTYPE) || (typeInfo->flags & asOBJ_ASHANDLE) || (typeInfo->flags & asOBJ_CALLABLE_TYPE)) ||
 				(typeInfo->flags & asOBJ_NOHANDLE) ||
 				((typeInfo->flags & asOBJ_SCOPED) && !acceptHandleForScope)) )
 				return -1;
@@ -429,7 +429,7 @@ int asCDataType::MakeHandleToConst(bool b)
 bool asCDataType::SupportHandles() const
 {
 	if( typeInfo &&
-		(typeInfo->flags & (asOBJ_REF | asOBJ_ASHANDLE | asOBJ_FUNCDEF)) &&
+		(typeInfo->flags & (asOBJ_REF | asOBJ_ASHANDLE | asOBJ_CALLABLE_TYPE)) &&
 		!(typeInfo->flags & asOBJ_NOHANDLE) &&
 		!isObjectHandle )
 		return true;
@@ -442,7 +442,7 @@ bool asCDataType::CanBeInstantiated() const
 	if( GetSizeOnStackDWords() == 0 ) // Void
 		return false;
 
-	if( !IsObject() && !IsFuncdef() ) // Primitives
+	if( !IsObject() && !IsCallableType() ) // Primitives
 		return true; 
 
 	if (IsNullHandle()) // null
@@ -453,7 +453,7 @@ bool asCDataType::CanBeInstantiated() const
 
 	// Funcdefs cannot be instantiated without being handles
 	// The exception being delegates, but these can only be created as temporary objects
-	if (IsFuncdef())
+	if (IsCallableType())
 		return false;
 
 	asCObjectType *ot = CastToObjectType(typeInfo);
@@ -708,9 +708,9 @@ bool asCDataType::IsObject() const
 	return CastToObjectType(typeInfo) ? true : false;
 }
 
-bool asCDataType::IsFuncdef() const
+bool asCDataType::IsCallableType() const
 {
-	if (typeInfo && (typeInfo->flags & asOBJ_FUNCDEF))
+	if (typeInfo && (typeInfo->flags & asOBJ_CALLABLE_TYPE))
 		return true;
 
 	return false;

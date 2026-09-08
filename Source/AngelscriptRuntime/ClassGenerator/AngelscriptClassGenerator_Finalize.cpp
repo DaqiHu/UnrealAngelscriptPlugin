@@ -53,7 +53,7 @@ void FAngelscriptClassGenerator::SetScriptStaticClass(TSharedPtr<FAngelscriptCla
 	// AngelscriptPreprocessor added a global UClass variable in script
 	// that it expects us to fill in with the class we generate,
 	// this way, ::StaticClass() works on script classes.
-	asCModule* ScriptModule = (asCModule*)ClassDesc->ScriptType->GetModule();
+	asCModule* ScriptModule = (asCModule*)static_cast<asCTypeInfo*>(ClassDesc->ScriptType)->module;
 
 	asSNameSpace* ScriptNamespace = nullptr;
 	if (ClassDesc->Namespace.IsSet())

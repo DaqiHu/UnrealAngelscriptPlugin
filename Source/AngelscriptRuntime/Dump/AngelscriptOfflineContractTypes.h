@@ -25,7 +25,7 @@ namespace AngelscriptOfflineContract
 		Property,
 		EnumValue,
 		Typedef,
-		Funcdef,
+		CallableType,
 		Delegate,
 		Global,
 	};
@@ -38,7 +38,7 @@ namespace AngelscriptOfflineContract
 		Template,
 		Enum,
 		Typedef,
-		Funcdef,
+		CallableType,
 		Delegate,
 	};
 

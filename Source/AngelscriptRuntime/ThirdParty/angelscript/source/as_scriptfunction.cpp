@@ -374,7 +374,7 @@ asCScriptFunction::asCScriptFunction(asCScriptEngine *engine, asCModule *mod, as
 	objForDelegate         = 0;
 	funcForDelegate        = 0;
 	listPattern            = 0;
-	if (engine) funcdefType = 0; // Detached construction must not mutate dormant process-global funcdef state.
+	if (engine) callableType = 0; // Detached construction must not mutate dormant process-global funcdef state.
 	accessSpecifier = nullptr;
 
 	if( funcType == asFUNC_SCRIPT && engine )
@@ -624,10 +624,10 @@ int asCScriptFunction::ReleaseInternal()
 // interface
 int asCScriptFunction::GetTypeId() const
 {
-	if (metadataOwner) return metadataNominalFuncdefType ? metadataOwner->GetBoundTypeId(metadataNominalFuncdefType) : -1;
+	if (metadataOwner) return metadataNominalCallableType ? metadataOwner->GetBoundTypeId(metadataNominalCallableType) : -1;
 	if (!engine) return -1;
 	// This const cast is ok, the object won't be modified
-	asCDataType dt = asCDataType::CreateType(engine->FindMatchingFuncdef(const_cast<asCScriptFunction*>(this), 0), false);
+	asCDataType dt = asCDataType::CreateType(engine->FindMatchingCallableType(const_cast<asCScriptFunction*>(this)), false);
 	return engine->GetTypeIdFromDataType(dt);
 }
 
@@ -638,10 +638,10 @@ bool asCScriptFunction::IsCompatibleWithTypeId(int typeId) const
 	asCDataType dt = engine->GetDataTypeFromTypeId(typeId);
 
 	// Make sure the type is a function
-	if (!dt.IsFuncdef())
+	if (!dt.IsCallableType())
 		return false;
 
-	asCScriptFunction *func = CastToFuncdefType(dt.GetTypeInfo())->funcdef;
+	asCScriptFunction *func = CastToCallableType(dt.GetTypeInfo())->callableSignature;
 	if( !IsSignatureExceptNameEqual(func) )
 		return false;
 
@@ -653,22 +653,7 @@ bool asCScriptFunction::IsCompatibleWithTypeId(int typeId) const
 }
 
 // interface
-const char *asCScriptFunction::GetModuleName() const
-{
-	if( module )
-	{
-		return module->name.AddressOf();
-	}
-
-	return 0;
-}
-
 // interface
-asIScriptModule *asCScriptFunction::GetModule() const
-{
-	return module;
-}
-
 // interface
 asITypeInfo *asCScriptFunction::GetObjectType() const
 {
@@ -801,13 +786,13 @@ asCString asCScriptFunction::GetDeclarationStr(bool includeObjectName, bool incl
 		else
 			str += "_unnamed_type_::";
 	}
-	else if (!metadataOwner && funcdefType && funcdefType->parentClass && includeObjectName)
+	else if (!metadataOwner && callableType && callableType->parentClass && includeObjectName)
 	{
-		if (includeNamespace && funcdefType->parentClass->nameSpace->name != "")
-			str += funcdefType->parentClass->nameSpace->name + "::";
+		if (includeNamespace && callableType->parentClass->nameSpace->name != "")
+			str += callableType->parentClass->nameSpace->name + "::";
 
-		if (funcdefType->parentClass->name != "")
-			str += funcdefType->parentClass->name + "::";
+		if (callableType->parentClass->name != "")
+			str += callableType->parentClass->name + "::";
 		else
 			str += "_unnamed_type_::";
 	}
@@ -1848,10 +1833,10 @@ const char *asCScriptFunction::GetConfigGroup() const
 {
 	if (!engine) return nullptr;
 	asCConfigGroup *group = 0;
-	if( funcType != asFUNC_FUNCDEF )
+	if( funcType != asFUNC_CALLABLE_SIGNATURE )
 		group = engine->FindConfigGroupForFunction(id);
 	else
-		group = engine->FindConfigGroupForFuncDef(this->funcdefType);
+		group = engine->FindConfigGroupForCallableType(this->callableType);
 
 	if( group == 0 )
 		return 0;
@@ -2092,22 +2077,6 @@ void asCScriptFunction::ReleaseAllHandles(asIScriptEngine *)
 }
 
 // internal
-bool asCScriptFunction::IsShared() const
-{
-	// All system functions are shared
-	if( funcType == asFUNC_SYSTEM ) return true;
-
-	// All class methods for shared classes are also shared
-	asASSERT( objectType == 0 || objectType->engine == engine || objectType->engine == 0 );
-	if( objectType && (objectType->flags & asOBJ_SHARED) ) return true;
-
-	// funcdefs that are registered by the application are shared
-	if (funcType == asFUNC_FUNCDEF && module == 0) return true;
-
-	// Functions that have been specifically marked as shared are shared
-	return traits.GetTrait(asTRAIT_SHARED);
-}
-
 // internal
 bool asCScriptFunction::IsProperty() const
 {
@@ -2173,7 +2142,7 @@ asUINT asCScriptFunction::GenerateExposedType(bool editable, bool readable, bool
 	return 255;
 }
 
-asCFuncdefType * asCScriptFunction::funcdefType = nullptr;
+asCCallableType * asCScriptFunction::callableType = nullptr;
 
 END_AS_NAMESPACE
 

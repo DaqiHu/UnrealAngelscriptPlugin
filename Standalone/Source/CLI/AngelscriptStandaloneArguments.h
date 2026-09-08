@@ -10,7 +10,6 @@ namespace AngelscriptStandalone
 	{
 		None,
 		Compile,
-		Run,
 		Help,
 		Version,
 	};
@@ -39,9 +38,6 @@ namespace AngelscriptStandalone
 		bool bEmitByteCode = false;
 		bool bStrictResources = false;
 		bool bAllowUERequired = false;
-		int TimeoutMilliseconds = 5000;
-		int MemoryLimitMegabytes = 256;
-		std::vector<std::string> ScriptArguments;
 	};
 
 	struct FArgumentParseResult

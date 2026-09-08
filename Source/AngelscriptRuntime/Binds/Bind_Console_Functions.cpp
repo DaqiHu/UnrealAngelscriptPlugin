@@ -9,6 +9,7 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_context.h"
+#include "source/as_module.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace
@@ -26,7 +27,7 @@ FScriptConsoleCommand::FScriptConsoleCommand(const FString& Name, const FString&
 		return;
 	}
 
-	asIScriptModule* Module = Function->GetModule();
+	asIScriptModule* Module = static_cast<asCScriptFunction*>(Function)->module;
 	if (!ensure(Module != nullptr))
 	{
 		return;
@@ -64,7 +65,7 @@ FScriptConsoleCommand::FScriptConsoleCommand(const FString& Name, const FString&
 					return;
 				}
 
-				asIScriptModule* FunctionModule = FunctionPtr->GetModule();
+				asIScriptModule* FunctionModule = static_cast<asCScriptFunction*>(FunctionPtr.Get())->module;
 				if (FunctionModule == nullptr)
 				{
 					return;

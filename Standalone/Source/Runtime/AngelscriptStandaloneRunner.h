@@ -3,25 +3,12 @@
 #include "Host/AngelscriptStandaloneDiagnosticSink.h"
 
 #include <cstdint>
-#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace AngelscriptStandalone
 {
-	inline constexpr std::uint64_t MinimumNativeRunMemoryBytes =
-		16ull * 1024ull * 1024ull;
-
-	struct FRunRequest
-	{
-		std::vector<std::filesystem::path> ScriptRoots;
-		std::filesystem::path Entry;
-		std::vector<std::string> Arguments;
-		int TimeoutMilliseconds = 5000;
-		std::uint64_t MemoryLimitBytes = 256ull * 1024ull * 1024ull;
-	};
-
 	struct FCallStackFrame
 	{
 		std::string Declaration;
@@ -50,5 +37,4 @@ namespace AngelscriptStandalone
 		std::vector<FCallStackFrame> CallStack;
 	};
 
-	FRunResult RunNativeScript(const FRunRequest& Request);
 }

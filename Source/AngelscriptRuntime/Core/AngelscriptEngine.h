@@ -637,11 +637,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngine
 		const TSharedRef<struct FAngelscriptClassDesc>& Class,
 		const TSharedRef<struct FAngelscriptModuleDesc>& Module);
 
-	bool VerifyBlueprintSetFunc(FString* FuncDesc, const TSharedRef<struct FAngelscriptPropertyDesc>& Property,
-		const TSharedRef<struct FAngelscriptClassDesc>& Class, const TSharedRef<struct FAngelscriptModuleDesc>& Module);
 
-	bool VerifyBlueprintGetFunc(FString* FuncDesc, const TSharedRef<struct FAngelscriptPropertyDesc>& Property,
-		const TSharedRef<struct FAngelscriptClassDesc>& Class, const TSharedRef<struct FAngelscriptModuleDesc>& Module);
 
 
 	void Tick(float DeltaTime);

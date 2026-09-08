@@ -207,7 +207,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 		case EAngelscriptArtifactEntityKind::Enum:
 		case EAngelscriptArtifactEntityKind::Delegate:
 		case EAngelscriptArtifactEntityKind::Typedef:
-		case EAngelscriptArtifactEntityKind::Funcdef:
+		case EAngelscriptArtifactEntityKind::CallableType:
 		case EAngelscriptArtifactEntityKind::GlobalVariable:
 		case EAngelscriptArtifactEntityKind::Property:
 		case EAngelscriptArtifactEntityKind::GlobalFunction:
@@ -3879,7 +3879,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 			|| Kind == EAngelscriptArtifactEntityKind::Enum
 			|| Kind == EAngelscriptArtifactEntityKind::Delegate
 			|| Kind == EAngelscriptArtifactEntityKind::Typedef
-			|| Kind == EAngelscriptArtifactEntityKind::Funcdef;
+			|| Kind == EAngelscriptArtifactEntityKind::CallableType;
 	}
 
 	static bool IsFunctionEntity(const EAngelscriptArtifactEntityKind Kind)
@@ -5190,7 +5190,7 @@ namespace AngelscriptCacheSemanticRecords_Private
 						break;
 					case EAngelscriptArtifactEntityKind::DelegateSignature:
 						bAllowedOwner = Owner.EntityKind == EAngelscriptArtifactEntityKind::Delegate
-							|| Owner.EntityKind == EAngelscriptArtifactEntityKind::Funcdef;
+							|| Owner.EntityKind == EAngelscriptArtifactEntityKind::CallableType;
 						break;
 					default:
 						break;
