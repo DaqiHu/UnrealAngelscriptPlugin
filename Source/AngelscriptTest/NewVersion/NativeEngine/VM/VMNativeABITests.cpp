@@ -309,7 +309,7 @@ namespace
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		Status = Builder.AddFunctionRequirement(*Run, RunSlot);
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
-		Status = Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, 0);
+		Status = Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, ByteArgumentDwords(*Run));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		asSByteCodeOperand RightOp = ByteImm32(Right);
 		Status = Builder.Emit(asBC_PshC4, MakeArrayView(&RightOp, 1));
@@ -320,7 +320,7 @@ namespace
 		asSByteCodeOperand Call = ByteSlot(asEByteCodeOperandKind::FunctionSlot, NativeSlot);
 		Status = Builder.Emit(asBC_CALLSYS, MakeArrayView(&Call, 1));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Run));
 		Status = Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		return Builder.EndFunction();
@@ -342,7 +342,7 @@ namespace
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		Status = Builder.AddFunctionRequirement(*Run, RunSlot);
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
-		Status = Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, 2);
+		Status = Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, ByteArgumentDwords(*Run));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		asSByteCodeOperand Five = ByteImm32(Addend);
 		Status = Builder.Emit(asBC_PshC4, MakeArrayView(&Five, 1));
@@ -353,7 +353,7 @@ namespace
 		asSByteCodeOperand Call = ByteSlot(asEByteCodeOperandKind::FunctionSlot, MethodSlot);
 		Status = Builder.Emit(asBC_CALLSYS, MakeArrayView(&Call, 1));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Run));
 		Status = Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		return Builder.EndFunction();
@@ -637,14 +637,14 @@ public:
 			asUINT RunSlot = 0;
 			if (Builder.AddFunctionRequirement(*Native, NativeSlot) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			if (Builder.AddFunctionRequirement(*Run, RunSlot) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
-			if (Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, 0) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
+			if (Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, ByteArgumentDwords(*Run)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			asSByteCodeOperand Right = ByteImm64(22);
 			if (Builder.Emit(asBC_PshC8, MakeArrayView(&Right, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			asSByteCodeOperand Left = ByteImm64(20);
 			if (Builder.Emit(asBC_PshC8, MakeArrayView(&Left, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			asSByteCodeOperand Call = ByteSlot(asEByteCodeOperandKind::FunctionSlot, NativeSlot);
 			if (Builder.Emit(asBC_CALLSYS, MakeArrayView(&Call, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
-			asSByteCodeOperand Ret = ByteImm16(0);
+			asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Run));
 			if (Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			return Builder.EndFunction();
 		};
@@ -663,14 +663,14 @@ public:
 			asUINT RunSlot = 0;
 			if (Builder.AddFunctionRequirement(*Native, NativeSlot) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			if (Builder.AddFunctionRequirement(*Run, RunSlot) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
-			if (Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, 0) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
+			if (Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, ByteArgumentDwords(*Run)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			asSByteCodeOperand Right = AbiBits32(AbiFloatBits(0.25f));
 			if (Builder.Emit(asBC_PshC4, MakeArrayView(&Right, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			asSByteCodeOperand Left = AbiBits32(AbiFloatBits(0.5f));
 			if (Builder.Emit(asBC_PshC4, MakeArrayView(&Left, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			asSByteCodeOperand Call = ByteSlot(asEByteCodeOperandKind::FunctionSlot, NativeSlot);
 			if (Builder.Emit(asBC_CALLSYS, MakeArrayView(&Call, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
-			asSByteCodeOperand Ret = ByteImm16(0);
+			asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Run));
 			if (Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			return Builder.EndFunction();
 		};
@@ -689,7 +689,7 @@ public:
 			asUINT RunSlot = 0;
 			if (Builder.AddFunctionRequirement(*Native, NativeSlot) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			if (Builder.AddFunctionRequirement(*Run, RunSlot) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
-			if (Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, 0) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
+			if (Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, ByteArgumentDwords(*Run)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			int64 RightBits = 0;
 			const double RightValue = 0.25;
 			FMemory::Memcpy(&RightBits, &RightValue, sizeof(RightBits));
@@ -702,7 +702,7 @@ public:
 			if (Builder.Emit(asBC_PshC8, MakeArrayView(&Left, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			asSByteCodeOperand Call = ByteSlot(asEByteCodeOperandKind::FunctionSlot, NativeSlot);
 			if (Builder.Emit(asBC_CALLSYS, MakeArrayView(&Call, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
-			asSByteCodeOperand Ret = ByteImm16(0);
+			asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Run));
 			if (Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			return Builder.EndFunction();
 		};
@@ -748,7 +748,7 @@ public:
 			asUINT RunSlot = 0;
 			if (Builder.AddFunctionRequirement(*Native, NativeSlot) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			if (Builder.AddFunctionRequirement(*Run, RunSlot) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
-			if (Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, 2) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
+			if (Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, ByteArgumentDwords(*Run)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			asSByteCodeOperand Self = ByteLocal(0);
 			if (Builder.Emit(asBC_PshVPtr, MakeArrayView(&Self, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			asSByteCodeOperand Call = ByteSlot(asEByteCodeOperandKind::FunctionSlot, NativeSlot);
@@ -758,7 +758,7 @@ public:
 				asSByteCodeOperand Read = ByteLocal(0);
 				(void)Read;
 			}
-			asSByteCodeOperand Ret = ByteImm16(0);
+			asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Run));
 			if (Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1)) != asEByteCodeImageStatus::Succeeded) return asEByteCodeImageStatus::InvalidArgument;
 			return Builder.EndFunction();
 		};
@@ -839,12 +839,12 @@ public:
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddTypeRequirement(*ValueType, NativeSlot)));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Write, NativeSlot)));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*RunWrite, RunSlot)));
-			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(RunWrite->GetStableKey(), RunWrite->GetStableKey(), 8, 2)));
+			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(RunWrite->GetStableKey(), RunWrite->GetStableKey(), 8, ByteArgumentDwords(*RunWrite))));
 			asSByteCodeOperand Self = ByteLocal(0);
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PshVPtr, MakeArrayView(&Self, 1))));
 			asSByteCodeOperand Call = ByteSlot(asEByteCodeOperandKind::FunctionSlot, NativeSlot);
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_CALLSYS, MakeArrayView(&Call, 1))));
-			asSByteCodeOperand Ret = ByteImm16(0);
+			asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*RunWrite));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
 			TUniquePtr<asCByteCodeImage> Image;
@@ -871,10 +871,10 @@ public:
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddTypeRequirement(*HandleType, NativeSlot)));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*MakeHandle, NativeSlot)));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*RunHandle, RunSlot)));
-			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(RunHandle->GetStableKey(), RunHandle->GetStableKey(), 4, 0)));
+			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(RunHandle->GetStableKey(), RunHandle->GetStableKey(), 4, ByteArgumentDwords(*RunHandle))));
 			asSByteCodeOperand Call = ByteSlot(asEByteCodeOperandKind::FunctionSlot, NativeSlot);
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_CALLSYS, MakeArrayView(&Call, 1))));
-			asSByteCodeOperand Ret = ByteImm16(0);
+			asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*RunHandle));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
 			TUniquePtr<asCByteCodeImage> Image;
@@ -940,12 +940,12 @@ public:
 			asUINT RunSlot = 0;
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Fail, FailSlot)));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*RunFail, RunSlot)));
-			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(RunFail->GetStableKey(), RunFail->GetStableKey(), 4, 0)));
+			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(RunFail->GetStableKey(), RunFail->GetStableKey(), 4, ByteArgumentDwords(*RunFail))));
 			asSByteCodeOperand Call = ByteSlot(asEByteCodeOperandKind::FunctionSlot, FailSlot);
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_CALLSYS, MakeArrayView(&Call, 1))));
 			asSByteCodeOperand Push = ByteImm32(1);
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PshC4, MakeArrayView(&Push, 1))));
-			asSByteCodeOperand Ret = ByteImm16(0);
+			asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*RunFail));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
 			TUniquePtr<asCByteCodeImage> Image;

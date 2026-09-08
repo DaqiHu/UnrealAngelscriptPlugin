@@ -103,8 +103,20 @@ enum class asEFirstParamMetaData : uint8
 	ScriptObjectType,
 };
 
+// Runtime storage derived from a frozen signature; never written into declarations.
+struct ANGELSCRIPTRUNTIME_API asSVMCallFrame
+{
+ asCArray<int> ParameterOffsets;
+ int ArgumentDwords = 0;
+ int TotalDwords = 0;
+ bool Prepare(asCScriptFunction* Function);
+};
+ANGELSCRIPTRUNTIME_API int asVMArgumentDwords(asCScriptFunction* Function);
+ANGELSCRIPTRUNTIME_API int asVMTotalArgumentDwords(asCScriptFunction* Function);
+
 struct asSSystemFunctionInterface
 {
+	asSVMCallFrame CallFrame;
 	asFUNCTION_t         func;
 	asMETHOD_t           method;
 	int                  baseOffset;
@@ -143,6 +155,7 @@ struct asSSystemFunctionInterface
 		passFirstParamMetaData = asEFirstParamMetaData::None;
 		caller = nullptr;
 		cleanArgs.SetLength(0);
+		CallFrame = asSVMCallFrame{};
 	}
 
 	asSSystemFunctionInterface &operator=(const asSSystemFunctionInterface &in)
@@ -156,6 +169,7 @@ struct asSSystemFunctionInterface
 		passFirstParamMetaData = in.passFirstParamMetaData;
 		caller = in.caller;
 		cleanArgs = in.cleanArgs;
+		CallFrame = in.CallFrame;
 		return *this;
 	}
 };

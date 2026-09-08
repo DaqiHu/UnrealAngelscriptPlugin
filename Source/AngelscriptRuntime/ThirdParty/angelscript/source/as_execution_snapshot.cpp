@@ -39,10 +39,9 @@ void asCExecutableFunction::AllocateScriptData()
 
 asCExecutableSnapshot::~asCExecutableSnapshot()
 {
-	if (Engine)
+	if (asCScriptEngine* Publisher = Engine.exchange(nullptr))
 	{
-		Engine->DetachPublishedSnapshot(this);
-		Engine = nullptr;
+		Publisher->DetachPublishedSnapshot(this);
 	}
 	Executables.Reset();
 	for (auto& Pair : Functions)

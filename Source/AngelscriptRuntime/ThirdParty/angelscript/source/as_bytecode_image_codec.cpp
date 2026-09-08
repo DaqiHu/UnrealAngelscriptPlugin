@@ -289,11 +289,15 @@ asEByteCodeImageStatus asCByteCodeImageCodec::Encode(const asCByteCodeImage& Ima
 		WriteBlob(OutBytes, Requirement.LayoutWitness);
 		WriteBytes32(OutBytes, Requirement.SignatureKey.GetBytes());
 		WriteBytes32(OutBytes, Requirement.ReturnTypeUse.GetBytes());
+		WriteU32(OutBytes, Requirement.ReturnDwords);
+		WriteU8(OutBytes, static_cast<uint8>(Requirement.ReturnStorageKind));
 		WriteU32(OutBytes, static_cast<uint32>(Requirement.Parameters.Num()));
 		for (const asSByteCodeParameterContract& Parameter : Requirement.Parameters)
 		{
 			WriteBytes32(OutBytes, Parameter.TypeUse.GetBytes());
 			WriteU8(OutBytes, Parameter.PassingMode);
+			WriteU32(OutBytes, Parameter.StorageDwords);
+			WriteU8(OutBytes, static_cast<uint8>(Parameter.StorageKind));
 		}
 		WriteU32(OutBytes, Requirement.CallableTraits);
 		WriteBytes32(OutBytes, Requirement.OwnerKey.GetBytes());
@@ -421,6 +425,9 @@ asEByteCodeImageStatus asCByteCodeImageCodec::Decode(TConstArrayView<uint8> Byte
 		if (SignatureStatus != asEByteCodeImageStatus::Succeeded) return SignatureStatus;
 		const asEByteCodeImageStatus ReturnStatus = ReadStableKey(Bytes, Cursor, Requirement.ReturnTypeUse);
 		if (ReturnStatus != asEByteCodeImageStatus::Succeeded) return ReturnStatus;
+		uint8 ReturnStorage = 0;
+		if (!ReadU32(Bytes, Cursor, Requirement.ReturnDwords) || !ReadU8(Bytes, Cursor, ReturnStorage)) return asEByteCodeImageStatus::Truncated;
+		Requirement.ReturnStorageKind = static_cast<asEByteCodeStorageKind>(ReturnStorage);
 		uint32 ParamCount = 0;
 		if (!ReadU32(Bytes, Cursor, ParamCount) || ParamCount > 10000) return ParamCount > 10000 ? asEByteCodeImageStatus::Overflow : asEByteCodeImageStatus::Truncated;
 		for (uint32 Param = 0; Param < ParamCount; ++Param)
@@ -428,7 +435,10 @@ asEByteCodeImageStatus asCByteCodeImageCodec::Decode(TConstArrayView<uint8> Byte
 			asSByteCodeParameterContract Parameter;
 			const asEByteCodeImageStatus TypeStatus = ReadStableKey(Bytes, Cursor, Parameter.TypeUse);
 			if (TypeStatus != asEByteCodeImageStatus::Succeeded) return TypeStatus;
-			if (!ReadU8(Bytes, Cursor, Parameter.PassingMode)) return asEByteCodeImageStatus::Truncated;
+			uint8 StorageKind = 0;
+			if (!ReadU8(Bytes, Cursor, Parameter.PassingMode)
+				|| !ReadU32(Bytes, Cursor, Parameter.StorageDwords) || !ReadU8(Bytes, Cursor, StorageKind)) return asEByteCodeImageStatus::Truncated;
+			Parameter.StorageKind = static_cast<asEByteCodeStorageKind>(StorageKind);
 			Requirement.Parameters.Add(Parameter);
 		}
 		if (!ReadU32(Bytes, Cursor, Requirement.CallableTraits)) return asEByteCodeImageStatus::Truncated;

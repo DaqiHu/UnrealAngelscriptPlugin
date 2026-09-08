@@ -35,10 +35,23 @@ enum class asEByteCodeRequirementRole : asBYTE
 	String = 6
 };
 
+enum class asEByteCodeStorageKind : asBYTE
+{
+	Unknown = 0,
+	Value = 1,
+	Address = 2,
+	Void = 3
+};
+
+class asCDataType;
+ANGELSCRIPTRUNTIME_API asEByteCodeStorageKind asByteCodeStorageKind(const asCDataType& Type);
+
 struct asSByteCodeParameterContract
 {
 	asSStableKey TypeUse;
 	uint8 PassingMode = 0;
+	asUINT StorageDwords = 0;
+	asEByteCodeStorageKind StorageKind = asEByteCodeStorageKind::Unknown;
 };
 
 struct asSByteCodeRequirement
@@ -52,6 +65,8 @@ struct asSByteCodeRequirement
 	TArray<uint8> ContractWitness;
 	asSStableKey SignatureKey;
 	asSStableKey ReturnTypeUse;
+	asUINT ReturnDwords = 0;
+	asEByteCodeStorageKind ReturnStorageKind = asEByteCodeStorageKind::Unknown;
 	TArray<asSByteCodeParameterContract> Parameters;
 	uint32 CallableTraits = 0;
 	asSStableKey OwnerKey;
@@ -61,9 +76,10 @@ struct asSByteCodeRequirement
 	FString Name;
 };
 
-// Canonical contract bytes (schema 1): u8 Role, Key[32], Schema digest[32],
+// Canonical contract bytes (schema 2): u8 Role, Key[32], Schema digest[32],
 // Layout digest[32], u32 SchemaWitnessLen+bytes, u32 LayoutWitnessLen+bytes,
-// SignatureKey[32], ReturnTypeUse[32], u32 ParamCount, {TypeUse[32], u8 Mode}*,
+// SignatureKey[32], ReturnTypeUse[32], u32 ReturnDwords, u8 ReturnStorageKind,
+// u32 ParamCount, {TypeUse[32], u8 Mode, u32 StorageDwords, u8 StorageKind}*,
 // u32 CallableTraits, OwnerKey[32], i32 NativeOffset, u8 NativeAddressMode,
 // u32 RefCount, sorted ReferencedKeys[32]*.
 ANGELSCRIPTRUNTIME_API void asEncodeByteCodeRequirementContract(
@@ -85,9 +101,9 @@ enum class asEByteCodeCleanupKind : asBYTE
 
 enum class asEByteCodeCleanupPath : asBYTE
 {
-	Normal = 1,
-	Exception = 2,
-	Both = 3
+	Normal = 1,    // Successful FREE retires this frame-owned value.
+	Exception = 2, // Successful initialization enables exceptional destruction.
+	Both = 3       // Retained wire ordinal; ambiguous combined markers reject.
 };
 
 struct asSByteCodeCleanupAction
@@ -113,6 +129,8 @@ struct asSByteCodeFrameDescriptor
 	asUINT ParameterDwords = 0;
 	asUINT ResultDwords = 0;
 	int32 ResultOffset = 0;
+	// Storage managed by this frame's cleanup contract. Each slot starts
+	// uninitialized; executable construction establishes its live state.
 	TArray<int32> InitializedObjectSlots;
 };
 
@@ -142,7 +160,7 @@ public:
 	TArray<asSByteCodeRequirement> Requirements;
 	TArray<asSByteCodeFunctionBody> Functions;
 	TArray<FString> Strings;
-	asUINT FormatVersion = 2;
+	asUINT FormatVersion = 3;
 	asUINT OpcodeAbi = asBC_MAXBYTECODE;
 	asUINT PointerByteSize = sizeof(void*);
 	bool bFloatIsFloat64 = true;

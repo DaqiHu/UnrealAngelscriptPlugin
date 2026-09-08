@@ -1125,20 +1125,17 @@ int asCScriptEngine::Release() const
 // interface
 int asCScriptEngine::ShutDownAndRelease()
 {
-	if (shuttingDown)
+	if (shuttingDown.exchange(true)) return Release();
+	RetireMetadataImages(); // Close admission; live runtime leases defer detachment.
+	DrainVmRetirement();
+	bool PendingRuntimeDrain;
 	{
-		return Release();
+		std::lock_guard<std::mutex> Lock(executablePublicationMutex);
+		PendingRuntimeDrain = vmObjectLeases || vmOperations || vmDrainActive;
 	}
-	if (asIScriptContext* Active = asGetActiveContext())
-	{
-		if (Active->GetEngine() == this)
-		{
-			shuttingDown = true;
-			return Release();
-		}
-	}
-	GarbageCollect();
-	RetireMetadataImages();
+	// The final active operation/object completes the drain with its own lease.
+	// Release outside the publication lock: it may destroy the Engine.
+	if (PendingRuntimeDrain) return Release();
 	// Do a full garbage collection cycle to clean up any object that may still hold on to the engine
 	GarbageCollect();
 
@@ -4577,7 +4574,9 @@ void *asCScriptEngine::CallObjectMethodRetPtr(void *obj, int param1, asCScriptFu
 	asASSERT( obj != 0 );
 	asASSERT( func != 0 );
 	InScriptFunction ScopeFunction(this, func);
-	asSSystemFunctionInterface *i = func->sysFuncIntf;
+	auto Binding = AcquireSystemInterface(func);
+	asSSystemFunctionInterface *i = Binding.get();
+	if (!i) return nullptr;
 
 #ifndef AS_NO_CLASS_METHODS
 	if( i->callConv == ICC_THISCALL || i->callConv == ICC_VIRTUAL_THISCALL )
@@ -4726,9 +4725,9 @@ void *asCScriptEngine::CallGlobalFunctionRetPtr(asSSystemFunctionInterface *i, a
 	else
 	{
 		asCArray<asDWORD> paramStack;
-		paramStack.SetLength(s->totalSpaceBeforeFunction);
+		paramStack.SetLength(i->CallFrame.TotalDwords);
 		memset(paramStack.AddressOf(), 0, paramStack.GetLength() * sizeof(asDWORD));
-		*(void**)&paramStack[s->parameterOffsets[0]] = param1;
+		*(void**)&paramStack[i->CallFrame.ParameterOffsets[0]] = param1;
 		asCGeneric gen(const_cast<asCScriptEngine*>(this), s, 0, paramStack.AddressOf());
 		void (*f)(asIScriptGeneric *) = (void (*)(asIScriptGeneric *))(i->func);
 		f(&gen);
@@ -4879,10 +4878,10 @@ void asCScriptEngine::CallGlobalFunction(void *param1, void *param2, asSSystemFu
 		// array. Otherwise the compiler may put them anywhere it likes, or even keep them
 		// in the registers which causes problem.
 		asCArray<asDWORD> paramStack;
-		paramStack.SetLength(s->totalSpaceBeforeFunction);
+		paramStack.SetLength(i->CallFrame.TotalDwords);
 		memset(paramStack.AddressOf(), 0, paramStack.GetLength() * sizeof(asDWORD));
-		*(void**)&paramStack[s->parameterOffsets[0]] = param1;
-		*(void**)&paramStack[s->parameterOffsets[1]] = param2;
+		*(void**)&paramStack[i->CallFrame.ParameterOffsets[0]] = param1;
+		*(void**)&paramStack[i->CallFrame.ParameterOffsets[1]] = param2;
 		asCGeneric gen(const_cast<asCScriptEngine*>(this), s, 0, paramStack.AddressOf());
 		void (*f)(asIScriptGeneric *) = (void (*)(asIScriptGeneric *))(i->func);
 		f(&gen);
@@ -4925,10 +4924,10 @@ bool asCScriptEngine::CallGlobalFunctionRetBool(void *param1, void *param2, asSS
 		// array. Otherwise the compiler may put them anywhere it likes, or even keep them
 		// in the registers which causes problem.
 		asCArray<asDWORD> paramStack;
-		paramStack.SetLength(s->totalSpaceBeforeFunction);
+		paramStack.SetLength(i->CallFrame.TotalDwords);
 		memset(paramStack.AddressOf(), 0, paramStack.GetLength() * sizeof(asDWORD));
-		*(void**)&paramStack[s->parameterOffsets[0]] = param1;
-		*(void**)&paramStack[s->parameterOffsets[1]] = param2;
+		*(void**)&paramStack[i->CallFrame.ParameterOffsets[0]] = param1;
+		*(void**)&paramStack[i->CallFrame.ParameterOffsets[1]] = param2;
 		asCGeneric gen(const_cast<asCScriptEngine*>(this), s, 0, paramStack.AddressOf());
 		void (*f)(asIScriptGeneric *) = (void (*)(asIScriptGeneric *))(i->func);
 		f(&gen);
@@ -5158,6 +5157,11 @@ int asCScriptEngine::GetObjectInGC(asUINT idx, asUINT *seqNbr, void **obj, asITy
 // interface
 int asCScriptEngine::GarbageCollect(asDWORD flags, asUINT iterations)
 {
+	AddRef();
+	{
+		std::lock_guard<std::mutex> Lock(executablePublicationMutex);
+		++vmOperations;
+	}
 	int r = gc.GarbageCollect(flags, iterations);
 
 	if( r == 0 )
@@ -5167,7 +5171,75 @@ int asCScriptEngine::GarbageCollect(asDWORD flags, asUINT iterations)
 		DeleteDiscardedModules();
 	}
 
+	{
+		std::lock_guard<std::mutex> Lock(executablePublicationMutex);
+		--vmOperations;
+	}
+	if (vmRetirementRequested) RetireMetadataImages();
+	Release();
 	return r;
+}
+
+bool asCScriptEngine::AcquireVmObjectLease()
+{
+	const asIScriptContext* Active = asGetActiveContext();
+	const bool OwnedWork = asVmHasCleanupAuthority(this) ||
+		(Active && Active->GetEngine() == this && Active->GetState() == asEXECUTION_ACTIVE);
+	std::lock_guard<std::mutex> Lock(executablePublicationMutex);
+	if (metadataRegistrationRetired || (!OwnedWork && (vmRetirementRequested || shuttingDown))) return false;
+	++vmObjectLeases;
+	AddRef();
+	return true;
+}
+
+void asCScriptEngine::ReleaseVmObjectLease()
+{
+	{
+		std::lock_guard<std::mutex> Lock(executablePublicationMutex);
+		asASSERT(vmObjectLeases > 0);
+		--vmObjectLeases;
+	}
+	DrainVmRetirement();
+	Release();
+}
+
+bool asCScriptEngine::BeginVmOperation(bool Cleanup)
+{
+	std::lock_guard<std::mutex> Lock(executablePublicationMutex);
+	if (metadataRegistrationRetired || (!Cleanup && (shuttingDown || vmRetirementRequested))) return false;
+	++vmOperations;
+	AddRef();
+	return true;
+}
+
+void asCScriptEngine::EndVmOperation()
+{
+	{
+		std::lock_guard<std::mutex> Lock(executablePublicationMutex);
+		asASSERT(vmOperations > 0);
+		--vmOperations;
+	}
+	DrainVmRetirement();
+	Release();
+}
+
+void asCScriptEngine::DrainVmRetirement()
+{
+	{
+		std::lock_guard<std::mutex> Lock(executablePublicationMutex);
+		if (!vmRetirementRequested || vmOperations || vmDrainActive) return;
+		vmDrainActive = true;
+		AddRef();
+	}
+	// A full cycle also breaks the Engine -> GC -> payload -> Engine cycle.
+	// Never run this from the middle of an interpreter/callback/collector operation.
+	GarbageCollect();
+	{
+		std::lock_guard<std::mutex> Lock(executablePublicationMutex);
+		vmDrainActive = false;
+	}
+	RetireMetadataImages();
+	Release();
 }
 
 // interface

@@ -46,6 +46,35 @@
 
 BEGIN_AS_NAMESPACE
 
+int asVMArgumentDwords(asCScriptFunction* Function)
+{
+ int64 Size = 0;
+ for (asUINT Index = 0; Index < Function->parameterTypes.GetLength(); ++Index)
+  Size += Function->parameterTypes[Index].GetSizeOnStackDWords();
+ return Size <= 32767 ? static_cast<int>(Size) : -1;
+}
+int asVMTotalArgumentDwords(asCScriptFunction* Function)
+{
+ const int Size = asVMArgumentDwords(Function);
+ if (Size < 0) return -1;
+ return Size + (Function->objectType ? AS_PTR_SIZE : 0) + (Function->DoesReturnOnStack() ? AS_PTR_SIZE : 0);
+}
+bool asSVMCallFrame::Prepare(asCScriptFunction* Function)
+{
+ ArgumentDwords = asVMArgumentDwords(Function);
+ TotalDwords = asVMTotalArgumentDwords(Function);
+ if (ArgumentDwords < 0 || TotalDwords > 32767) return false;
+ ParameterOffsets.SetLength(Function->parameterTypes.GetLength());
+ int Offset = TotalDwords - ArgumentDwords;
+ for (asUINT Index = 0; Index < ParameterOffsets.GetLength(); ++Index)
+ {
+  ParameterOffsets[Index] = Offset;
+  Offset += Function->parameterTypes[Index].GetSizeOnStackDWords();
+ }
+ return true;
+}
+
+
 // ref: Member Function Pointers and the Fastest Possible C++ Delegates
 //      describes the structure of class method pointers for most compilers
 //      http://www.codeproject.com/Articles/7150/Member-Function-Pointers-and-the-Fastest-Possible
@@ -156,7 +185,8 @@ int PrepareSystemFunctionGeneric(asCScriptFunction *func, asSSystemFunctionInter
 	asASSERT(internal->callConv == ICC_GENERIC_METHOD || internal->callConv == ICC_GENERIC_FUNC);
 
 	// Calculate the size needed for the parameters
-	internal->paramSize = func->GetSpaceNeededForArguments();
+	if (!internal->CallFrame.Prepare(func)) return asINVALID_ARG;
+	internal->paramSize = internal->CallFrame.ArgumentDwords;
 
 	// [UE++]: The compiler moves an object passed by value into the native
 	// call stack. The generic path must retire that transferred ownership,
@@ -369,7 +399,8 @@ int PrepareSystemFunction(asCScriptFunction *func, asSSystemFunctionInterface *i
 	}
 
 	// Calculate the size needed for the parameters
-	internal->paramSize = func->GetSpaceNeededForArguments();
+	if (!internal->CallFrame.Prepare(func)) return asINVALID_ARG;
+	internal->paramSize = internal->CallFrame.ArgumentDwords;
 	internal->maxNativeStackSize = 0;
 
 	// Verify if the function takes any objects by value
@@ -408,16 +439,16 @@ int CallSystemFunction(asCScriptFunction *function, asCContext *context)
 {
 	if( !context )
 		return 0;
-	asSSystemFunctionInterface *sysFunc = context->m_engine ? context->m_engine->ResolveSystemInterface(function) : (function ? function->sysFuncIntf : nullptr);
+	auto sysFunc = context->m_engine ? context->m_engine->AcquireSystemInterface(function) : std::shared_ptr<asSSystemFunctionInterface>();
 	if( !function || !sysFunc )
 	{
 		context->SetInternalException(TXT_INVALID_CALLING_CONVENTION);
 		return 0;
 	}
 	if( sysFunc->caller.IsBound() )
-		return context->CallFunctionCaller(function);
+		return context->CallFunctionCaller(function, sysFunc);
 	if( sysFunc->callConv == ICC_GENERIC_FUNC || sysFunc->callConv == ICC_GENERIC_METHOD )
-		return context->CallGeneric(function);
+		return context->CallGeneric(function, sysFunc);
 
 	context->SetInternalException(TXT_INVALID_CALLING_CONVENTION);
 	return 0;

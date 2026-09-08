@@ -25,11 +25,32 @@ struct asSByteCodeVerifyFault
 	int32 OperandIndex = -1;
 };
 
+// Verified incoming states for frame-owned object slots. The linker lowers
+// these states into the existing PC-indexed exception-cleanup directory.
+enum class asEByteCodeObjectState : uint8
+{
+	Uninitialized,
+	Allocated,
+	Constructed
+};
+
+struct asSByteCodeFunctionLifetime
+{
+	asSStableKey FunctionKey;
+	TArray<int32> FrameOffsets;
+	TArray<asUINT> TypeSlots;
+	TArray<TArray<asEByteCodeObjectState>> Before;
+	TArray<bool> Reachable;
+	// Maximum reachable expression/argument stack extent below the local frame.
+	asUINT TemporaryStackDwords = 0;
+};
+
 class ANGELSCRIPTRUNTIME_API asCByteCodeVerifier
 {
 public:
 	static asEByteCodeVerifyStatus Verify(const asCByteCodeImage& Image);
 	static asSByteCodeVerifyFault VerifyWithFault(const asCByteCodeImage& Image);
+	static asSByteCodeVerifyFault VerifyWithLifetimes(const asCByteCodeImage& Image, TArray<asSByteCodeFunctionLifetime>& Out);
 };
 
 END_AS_NAMESPACE

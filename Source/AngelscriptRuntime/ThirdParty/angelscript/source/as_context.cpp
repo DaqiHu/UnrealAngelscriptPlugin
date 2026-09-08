@@ -165,6 +165,15 @@ AS_API asIScriptFunction *asGetActiveFunction()
 	return tld->activeFunction;
 }
 
+struct FScopeVmOperation
+{
+	asCScriptEngine* Engine;
+	bool Acquired;
+	FScopeVmOperation(asCScriptEngine* InEngine, bool Cleanup)
+		: Engine(InEngine), Acquired(Engine && Engine->BeginVmOperation(Cleanup)) {}
+	~FScopeVmOperation() { if (Acquired) Engine->EndVmOperation(); }
+};
+
 struct FScopeSetActiveContext
 {
 	asCThreadLocalData* tld;
@@ -561,9 +570,17 @@ void *asCContext::GetUserData(asPWORD type) const
 }
 
 // interface
+int asCContext::PrepareForVmCleanup(asCScriptFunction* Function)
+{
+	m_vmCleanup = true;
+	return Prepare(Function);
+}
+
 int asCContext::Prepare(asIScriptFunction *func)
 {
-	if( m_engine && m_engine->shuttingDown )
+	FScopeVmOperation Operation(m_engine, m_vmCleanup);
+	if (!Operation.Acquired) return asCONTEXT_NOT_PREPARED;
+	if( !m_vmCleanup && m_engine && m_engine->shuttingDown )
 		return asCONTEXT_NOT_PREPARED;
 
 	if( func == 0 )
@@ -661,7 +678,8 @@ int asCContext::Prepare(asIScriptFunction *func)
 		BindExecutableFor(m_currentFunction);
 		m_initialExecutable = m_currentExecutable;
 
-		m_argumentsSize = m_currentFunction->spaceNeededForArguments + (m_currentFunction->objectType ? AS_PTR_SIZE : 0);
+		if (!m_initialCallFrame.Prepare(m_currentFunction)) return asINVALID_ARG;
+		m_argumentsSize = m_initialCallFrame.ArgumentDwords + (m_currentFunction->objectType ? AS_PTR_SIZE : 0);
 
 		// Reserve space for the arguments and return value
 		if( m_currentFunction->DoesReturnOnStack() )
@@ -798,6 +816,8 @@ asCScriptFunction::ScriptFunctionData* asCContext::ActiveScriptData() const
 // Free all resources
 int asCContext::Unprepare()
 {
+	FScopeVmOperation Operation(m_engine, true);
+	m_vmCleanup = false;
 	if( m_status == asEXECUTION_ACTIVE || m_status == asEXECUTION_SUSPENDED )
 		return asCONTEXT_ACTIVE;
 
@@ -997,7 +1017,7 @@ int asCContext::SetArgByte(asUINT arg, asBYTE value)
 {
 	// Set the value
 	*(asBYTE*)&m_regs.stackFramePointer[
-		m_initialFunction->parameterOffsets[arg]
+		m_initialCallFrame.ParameterOffsets[arg]
 	] = value;
 
 	return 0;
@@ -1007,7 +1027,7 @@ int asCContext::SetArgWord(asUINT arg, asWORD value)
 {
 	// Set the value
 	*(asWORD*)&m_regs.stackFramePointer[
-		m_initialFunction->parameterOffsets[arg]
+		m_initialCallFrame.ParameterOffsets[arg]
 	] = value;
 
 	return 0;
@@ -1017,7 +1037,7 @@ int asCContext::SetArgDWord(asUINT arg, asDWORD value)
 {
 	// Set the value
 	*(asDWORD*)&m_regs.stackFramePointer[
-		m_initialFunction->parameterOffsets[arg]
+		m_initialCallFrame.ParameterOffsets[arg]
 	] = value;
 
 	return 0;
@@ -1027,7 +1047,7 @@ int asCContext::SetArgQWord(asUINT arg, asQWORD value)
 {
 	// Set the value
 	*(asQWORD*)(&m_regs.stackFramePointer[
-		m_initialFunction->parameterOffsets[arg]
+		m_initialCallFrame.ParameterOffsets[arg]
 	]) = value;
 
 	return 0;
@@ -1037,7 +1057,7 @@ int asCContext::SetArgFloat(asUINT arg, float value)
 {
 	// Set the value
 	*(float*)(&m_regs.stackFramePointer[
-		m_initialFunction->parameterOffsets[arg]
+		m_initialCallFrame.ParameterOffsets[arg]
 	]) = value;
 
 	return 0;
@@ -1047,7 +1067,7 @@ int asCContext::SetArgDouble(asUINT arg, double value)
 {
 	// Set the value
 	*(double*)(&m_regs.stackFramePointer[
-		m_initialFunction->parameterOffsets[arg]
+		m_initialCallFrame.ParameterOffsets[arg]
 	]) = value;
 
 	return 0;
@@ -1057,7 +1077,7 @@ int asCContext::SetArgAddress(asUINT arg, void *value)
 {
 	// Set the value
 	*(asPWORD*)(&m_regs.stackFramePointer[
-		m_initialFunction->parameterOffsets[arg]
+		m_initialCallFrame.ParameterOffsets[arg]
 	]) = (asPWORD)value;
 	return 0;
 }
@@ -1066,7 +1086,7 @@ int asCContext::SetArgObject(asUINT arg, void *obj)
 {
 	// Set the value
 	*(asPWORD*)(&m_regs.stackFramePointer[
-		m_initialFunction->parameterOffsets[arg]
+		m_initialCallFrame.ParameterOffsets[arg]
 	]) = (asPWORD)obj;
 
 	return 0;
@@ -1116,7 +1136,7 @@ int asCContext::SetArgVarType(asUINT arg, void *ptr, int typeId)
 // interface
 void *asCContext::GetAddressOfArg(asUINT arg)
 {
-	return &m_regs.stackFramePointer[m_initialFunction->parameterOffsets[arg]];
+	return &m_regs.stackFramePointer[m_initialCallFrame.ParameterOffsets[arg]];
 }
 
 
@@ -1156,8 +1176,10 @@ int asCContext::Suspend()
 int asCContext::Execute()
 {
 	asASSERT( m_engine != 0 );
+	FScopeVmOperation Operation(m_engine, m_vmCleanup);
+	if (!Operation.Acquired) return asCONTEXT_NOT_PREPARED;
 
-	if( m_engine && m_engine->shuttingDown )
+	if( !m_vmCleanup && m_engine && m_engine->shuttingDown )
 		return asCONTEXT_NOT_PREPARED;
 
 	if( m_status == asEXECUTION_ACTIVE )
@@ -1451,6 +1473,7 @@ int asCContext::PopState()
 
 	// Restore the previous initial function and the associated values
 	m_initialFunction      = reinterpret_cast<asCScriptFunction*>(tmp[2]);
+	m_initialCallFrame.Prepare(m_initialFunction);
 	m_callingSystemFunction= reinterpret_cast<asCScriptFunction*>(tmp[1]);
 	m_originalStackPointer = (asDWORD*)tmp[3];
 	m_originalStackIndex   = (asUINT)tmp[9];
@@ -1732,7 +1755,7 @@ bool asCContext::ReserveStackSpace(asUINT size)
 		// Leave enough room above the stackpointer to copy the arguments from the previous stackblock
 		m_regs.stackPointer = m_stackBlocks[m_stackIndex] +
 			GetStackFrameSize(m_stackIndex) -
-			m_currentFunction->totalSpaceBeforeFunction - 16;
+			asVMTotalArgumentDwords(m_currentFunction) - 16;
 
 #ifdef WIP_16BYTE_ALIGN
 		// Align the stack pointer 
@@ -1748,6 +1771,7 @@ bool asCContext::ReserveStackSpace(asUINT size)
 // internal
 void asCContext::CallScriptFunction(asCScriptFunction *func)
 {
+	if (!func) { SetInternalException("Missing script execution binding"); return; }
 	// Try to call the JIT function directly
 	const asSJITFunctionBinding jitBinding =
 		func->AcquireJITBindingForExecution();
@@ -1790,7 +1814,7 @@ void asCContext::CallScriptFunction(asCScriptFunction *func)
 					m_regs.valueRegister = outValue;
 			}
 
-			m_regs.stackPointer += func->totalSpaceBeforeFunction;
+			m_regs.stackPointer += asVMTotalArgumentDwords(func);
 			return;
 		}
 		else
@@ -1841,7 +1865,7 @@ void asCContext::PrepareScriptFunction()
 	m_regs.stackPointer = (asDWORD*)(((asPWORD)m_regs.stackPointer) & ~(16 - 1));
 	if( m_regs.stackPointer != oldStackPointer )
 	{
-		int numDwords = m_currentFunction->totalSpaceBeforeFunction;
+		int numDwords = asVMTotalArgumentDwords(m_currentFunction);
 		memmove(m_regs.stackPointer, oldStackPointer, sizeof(asDWORD)*numDwords);
 	}
 
@@ -2680,7 +2704,20 @@ void asCContext::ExecuteNext()
 		break;
 
 	case asBC_JMPP:
-		l_bc += 2 + (*(int*)(l_fp - asBC_SWORDARG0(l_bc)))*2;
+		{
+			const int32 Index = *(int*)(l_fp - asBC_SWORDARG0(l_bc));
+			const asUINT TablePc = static_cast<asUINT>(l_bc - ActiveScriptData()->byteCode.AddressOf());
+			const int32* Maximum = m_currentExecutable ? m_currentExecutable->IndexedJumpBounds.Find(TablePc) : nullptr;
+			if (!Maximum || Index < 0 || Index > *Maximum)
+			{
+				m_regs.programPointer = l_bc;
+				m_regs.stackPointer = l_sp;
+				m_regs.stackFramePointer = l_fp;
+				SetInternalException("Indexed jump index out of range");
+				return;
+			}
+			l_bc += 2 + Index * 2;
+		}
 		break;
 
 	case asBC_PopRPtr:
@@ -2888,7 +2925,7 @@ void asCContext::ExecuteNext()
 				// Call the constructor to initalize the memory
 				asCScriptFunction *f = m_engine->scriptFunctions[func];
 
-				asDWORD **a = (asDWORD**)*(asPWORD*)(m_regs.stackPointer + f->spaceNeededForArguments);
+				asDWORD **a = (asDWORD**)*(asPWORD*)(m_regs.stackPointer + asVMArgumentDwords(f));
 				if( a ) *a = mem;
 
 				// Push the object pointer on the stack
@@ -4129,6 +4166,31 @@ void asCContext::ExecuteNext()
 			}
 			else
 			{
+				const asUINT CallPc = static_cast<asUINT>(l_bc - ActiveScriptData()->byteCode.AddressOf());
+				asCScriptFunction* const* ExpectedEntry = m_currentExecutable
+					? m_currentExecutable->IndirectCallSignatures.Find(CallPc) : nullptr;
+				const asCScriptFunction* Expected = ExpectedEntry ? *ExpectedEntry : nullptr;
+				const bool bDelegate = func->funcType == asFUNC_DELEGATE;
+				const asCScriptFunction* Actual = bDelegate ? func->funcForDelegate : func;
+				const asCObjectType* ActualReceiver = Actual && !bDelegate && !Actual->IsMetadataStatic() ? Actual->objectType : nullptr;
+				const asCObjectType* ExpectedReceiver = Expected && !Expected->IsMetadataStatic() ? Expected->objectType : nullptr;
+				bool bMatch = Expected && Actual && ActualReceiver == ExpectedReceiver
+					&& Actual->returnType == Expected->returnType
+					&& Actual->DoesReturnOnStack() == Expected->DoesReturnOnStack()
+					&& Actual->parameterTypes.GetLength() == Expected->parameterTypes.GetLength()
+					&& (Actual->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Constructor)
+						== (Expected->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Constructor)
+					&& (!ActualReceiver || Actual->IsReadOnly() == Expected->IsReadOnly());
+				for (asUINT Parameter = 0; bMatch && Parameter < Actual->parameterTypes.GetLength(); ++Parameter)
+					bMatch = Actual->parameterTypes[Parameter] == Expected->parameterTypes[Parameter]
+						&& Actual->inOutFlags[Parameter] == Expected->inOutFlags[Parameter];
+				if (!bMatch)
+				{
+					m_regs.programPointer++;
+					m_needToCleanupArgs = true;
+					SetInternalException("Indirect call signature mismatch");
+					return;
+				}
 				if( func->funcType == asFUNC_SCRIPT )
 				{
 					m_regs.programPointer++;
@@ -4616,7 +4678,7 @@ void asCContext::ExecuteNext()
 			m_regs.stackPointer      = l_sp;
 			m_regs.stackFramePointer = l_fp;
 
-			asSSystemFunctionInterface* Sys = m_engine->ResolveSystemInterface(Function);
+			auto Sys = m_engine->AcquireSystemInterface(Function);
 			if( !Sys )
 			{
 				SetInternalException(TXT_UNBOUND_FUNCTION);
@@ -5083,7 +5145,9 @@ bool asCContext::IsVarInScope(asUINT varIndex, asUINT stackLevel)
 		
 		int paramOffset = func->scriptData->variables[varIndex]->stackOffset;
 		bool bIsParameter = false;
-		if (paramOffset < 0 || func->parameterOffsets.IndexOf(-paramOffset) != -1)
+		asSVMCallFrame DebugFrame;
+		DebugFrame.Prepare(func);
+		if (paramOffset < 0 || DebugFrame.ParameterOffsets.IndexOf(-paramOffset) != -1)
 			bIsParameter = true;
 		
 		if (!bIsParameter && referenceLine >= currentLine)
@@ -5263,36 +5327,9 @@ void asCContext::CleanArgsOnStack()
 	}
 	else if( bc == asBC_CallPtr )
 	{
-		asUINT v;
-		int var = asBC_SWORDARG0(prevInstr);
-
-		// Find the funcdef from the local variable
-		for( v = 0; v < ActiveScriptData()->objVariablePos.GetLength(); v++ )
-			if( ActiveScriptData()->objVariablePos[v] == var )
-			{
-				func = CastToCallableType(ActiveScriptData()->objVariableTypes[v])->callableSignature;
-				break;
-			}
-
-		if( func == 0 )
-		{
-			// Look in parameters
-			int paramPos = 0;
-			if( m_currentFunction->objectType )
-				paramPos -= AS_PTR_SIZE;
-			if( m_currentFunction->DoesReturnOnStack() )
-				paramPos -= AS_PTR_SIZE;
-			for( v = 0; v < m_currentFunction->parameterTypes.GetLength(); v++ )
-			{
-				if( var == paramPos )
-				{
-					if (m_currentFunction->parameterTypes[v].IsCallableType())
-						func = CastToCallableType(m_currentFunction->parameterTypes[v].GetTypeInfo())->callableSignature;
-					break;
-				}
-				paramPos -= m_currentFunction->parameterTypes[v].GetSizeOnStackDWords();
-			}
-		}
+		const asUINT CallPc = static_cast<asUINT>(prevInstr - ActiveScriptData()->byteCode.AddressOf());
+		if (m_currentExecutable)
+			if (asCScriptFunction* const* Expected = m_currentExecutable->IndirectCallSignatures.Find(CallPc)) func = *Expected;
 	}
 	else
 		asASSERT( false );
@@ -5750,7 +5787,7 @@ bool asCContext::CleanStackFrame(bool catchException)
 					{
 						void** const destination = (void**)*(asPWORD*)(
 							callerStackPointer + AS_PTR_SIZE
-							+ m_currentFunction->spaceNeededForArguments);
+							+ asVMArgumentDwords(m_currentFunction));
 						if( destination != 0 && *destination == object )
 						{
 							*destination = 0;
@@ -5881,17 +5918,39 @@ void asCContext::ReleaseRegisteredVmPayloadsFromFrame()
 	if (!Data || !m_regs.stackFramePointer) return;
 	const int Dwords = static_cast<int>(Data->variableSpace);
 	asDWORD* Frame = m_regs.stackFramePointer;
+	// Receiver and reference arguments are borrowed from the caller. Their
+	// aliases in temporary locals/objectRegister do not create owned holds.
+	// In particular a failed constructor must leave its pending allocation
+	// alive until the caller retires it without the complete destructor.
+	TSet<void*> Borrowed;
+	int ArgumentOffset = 0;
+	if (m_currentFunction && m_currentFunction->objectType)
+	{
+		Borrowed.Add(*reinterpret_cast<void**>(Frame));
+		ArgumentOffset += AS_PTR_SIZE;
+	}
+	if (m_currentFunction && m_currentFunction->DoesReturnOnStack())
+		ArgumentOffset += AS_PTR_SIZE;
+	if (m_currentFunction)
+		for (asUINT Index = 0; Index < m_currentFunction->parameterTypes.GetLength(); ++Index)
+		{
+			const asCDataType& Type = m_currentFunction->parameterTypes[Index];
+			if (Type.IsReference()) Borrowed.Add(*reinterpret_cast<void**>(Frame + ArgumentOffset));
+			ArgumentOffset += Type.GetSizeOnStackDWords();
+		}
 	TMap<void*, int32> Holds;
-	for (int Offset = 0; Offset + static_cast<int>(AS_PTR_SIZE) <= Dwords; Offset += static_cast<int>(AS_PTR_SIZE))
+	// Frame points at arguments (or one-past-stack for a top-level no-arg
+	// function). Locals occupy Frame[-Dwords .. -1], never Frame[0].
+	for (int Offset = static_cast<int>(AS_PTR_SIZE); Offset <= Dwords; Offset += static_cast<int>(AS_PTR_SIZE))
 	{
 		void*& Slot = *reinterpret_cast<void**>(Frame - Offset);
-		if (Slot && asVmHeaderFromPayload(Slot))
+		if (Slot && !Borrowed.Contains(Slot) && asVmHeaderFromPayload(Slot))
 		{
 			Holds.FindOrAdd(Slot)++;
 			Slot = nullptr;
 		}
 	}
-	if (m_regs.objectRegister && asVmHeaderFromPayload(m_regs.objectRegister))
+	if (m_regs.objectRegister && !Borrowed.Contains(m_regs.objectRegister) && asVmHeaderFromPayload(m_regs.objectRegister))
 	{
 		Holds.FindOrAdd(m_regs.objectRegister)++;
 		m_regs.objectRegister = nullptr;
@@ -6054,9 +6113,9 @@ void asCContext::ClearExceptionCallback()
 	m_exceptionCallback = false;
 }
 
-int asCContext::CallGeneric(asCScriptFunction *descr)
+int asCContext::CallGeneric(asCScriptFunction *descr, const std::shared_ptr<asSSystemFunctionInterface>& Binding)
 {
-	asSSystemFunctionInterface *sysFunc = m_engine->ResolveSystemInterface(descr);
+	auto sysFunc = Binding ? Binding : m_engine->AcquireSystemInterface(descr);
 	if (!sysFunc)
 	{
 		SetInternalException(TXT_INVALID_CALLING_CONVENTION);
@@ -6097,7 +6156,7 @@ int asCContext::CallGeneric(asCScriptFunction *descr)
 		cleanArgs += AS_PTR_SIZE;
 	}
 
-	asCGeneric gen(m_engine, descr, currentObject, args);
+	asCGeneric gen(m_engine, descr, currentObject, args, &sysFunc->CallFrame);
 
 	auto* tld = m_regs.tld;
 	auto* prevActiveFunction = tld->activeFunction;
@@ -6166,9 +6225,9 @@ int asCContext::CallGeneric(asCScriptFunction *descr)
 	return popSize;
 }
 
-int asCContext::CallFunctionCaller(asCScriptFunction* descr)
+int asCContext::CallFunctionCaller(asCScriptFunction* descr, const std::shared_ptr<asSSystemFunctionInterface>& Binding)
 {
-	asSSystemFunctionInterface *sysFunc = m_engine->ResolveSystemInterface(descr);
+	auto sysFunc = Binding ? Binding : m_engine->AcquireSystemInterface(descr);
 	if (!sysFunc)
 	{
 		SetInternalException(TXT_INVALID_CALLING_CONVENTION);
@@ -6266,10 +6325,10 @@ int asCContext::CallFunctionCaller(asCScriptFunction* descr)
 		ReturnAddress = &m_regs.valueRegister;
 	}
 
-	for (int i = 0, paramCount = descr->parameterOffsets.GetLength(); i < paramCount; ++i)
+	for (int i = 0, paramCount = sysFunc->CallFrame.ParameterOffsets.GetLength(); i < paramCount; ++i)
 	{
 		auto& paramType = descr->parameterTypes[i];
-		auto paramOffset = descr->parameterOffsets[i];
+		auto paramOffset = sysFunc->CallFrame.ParameterOffsets[i];
 
 		if (paramType.GetTokenType() == ttQuestion)
 		{
@@ -6309,7 +6368,7 @@ int asCContext::CallFunctionCaller(asCScriptFunction* descr)
 	m_callingSystemFunction = nullptr;
 
 	// Return how much should be popped from the stack
-	return descr->totalSpaceBeforeFunction;
+	return sysFunc->CallFrame.TotalDwords;
 }
 
 // interface

@@ -9,6 +9,7 @@
 
 #include "Containers/Map.h"
 #include "Templates/UniquePtr.h"
+#include <atomic>
 
 BEGIN_AS_NAMESPACE
 
@@ -33,10 +34,14 @@ class ANGELSCRIPTRUNTIME_API asCExecutableFunction
 {
 public:
 	asCScriptFunction* Declaration = nullptr;
+	asSVMCallFrame CallFrame;
 	asCScriptFunction::ScriptFunctionData* scriptData = nullptr;
 	asSSystemFunctionInterface* sysFuncIntf = nullptr;
 	asSStableKey Key;
 	asCExecutableSnapshot* Owner = nullptr;
+	// Verified call-site shapes, keyed by lowered DWORD position; owned by this generation.
+	TMap<asUINT, asCScriptFunction*> IndirectCallSignatures;
+	TMap<asUINT, int32> IndexedJumpBounds;
 
 	asCExecutableFunction();
 	~asCExecutableFunction();
@@ -46,7 +51,7 @@ public:
 class ANGELSCRIPTRUNTIME_API asCExecutableSnapshot
 {
 public:
-	asCScriptEngine* Engine = nullptr;
+	std::atomic<asCScriptEngine*> Engine{nullptr};
 	TUniquePtr<asCByteCodeImage> Image;
 	TMap<asSStableKey, asCScriptFunction*> Functions;
 	TMap<asSStableKey, asCTypeInfo*> Types;

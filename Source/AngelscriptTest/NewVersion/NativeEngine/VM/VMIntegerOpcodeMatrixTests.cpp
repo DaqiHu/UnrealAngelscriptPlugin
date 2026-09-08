@@ -65,12 +65,12 @@ namespace VMIntegerOpcodeMatrixPrivate
 		return Builder.Emit(Opcode, MakeArrayView(Ops, 2));
 	}
 
-	asEByteCodeImageStatus Ret4(asCByteCodeImageBuilder& Builder, int32 Offset)
+	asEByteCodeImageStatus Ret4(asCByteCodeImageBuilder& Builder, int32 Offset, int16 Pop = 0)
 	{
 		asSByteCodeOperand Copy = Loc(Offset);
 		const asEByteCodeImageStatus Status = Builder.Emit(asBC_CpyVtoR4, MakeArrayView(&Copy, 1));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
-		asSByteCodeOperand Ret = Imm16(0);
+		asSByteCodeOperand Ret = Imm16(Pop);
 		return Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1));
 	}
 
@@ -996,7 +996,7 @@ public:
 		auto RunIndex = [&](int32 Index, int32 Expected)
 		{
 			FIntCase Case;
-			ASSERT_THAT(IsTrue(Case.Start(TEXT("JMPP"), ttInt, 1, 16, 2)));
+			ASSERT_THAT(IsTrue(Case.Start(TEXT("JMPP"), ttInt, 1, 16, 1)));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Pair(Case.Builder, asBC_CpyVtoV4, 1, 0)));
 			asSByteCodeOperand Cmp[2] = {Loc(1), Imm32(3)};
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Case.Builder.Emit(asBC_CMPIu, MakeArrayView(Cmp, 2))));
@@ -1028,7 +1028,7 @@ public:
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Case.Builder.BindLabel(Arm2)));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Set4(Case.Builder, 2, 30)));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Case.Builder.BindLabel(Done)));
-			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Ret4(Case.Builder, 2)));
+			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Ret4(Case.Builder, 2, 1)));
 			ASSERT_THAT(IsTrue(Case.Close()));
 			ASSERT_THAT(AreEqual(0, Case.Context->SetArgDWord(0, static_cast<asDWORD>(Index))));
 			ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Case.Execute()));
@@ -1470,7 +1470,7 @@ public:
 		ASSERT_THAT(IsTrue(Case.Start(TEXT("ArgOffsets"), ttInt, 2, 16, 2)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Set4(Case.Builder, 1, 0x5A5A5A5A)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Ternary(Case.Builder, asBC_ADDi, 3, 0, -1)));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Ret4(Case.Builder, 3)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Ret4(Case.Builder, 3, 2)));
 		ASSERT_THAT(IsTrue(Case.Close()));
 		ASSERT_THAT(AreEqual(0, Case.Context->SetArgDWord(0, 7)));
 		ASSERT_THAT(AreEqual(0, Case.Context->SetArgDWord(1, 35)));

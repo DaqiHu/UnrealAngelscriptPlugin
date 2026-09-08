@@ -95,7 +95,8 @@ bool asEmitReturn(asSByteCodeEmitFrame& Frame, asCReturnStmt* Stmt)
 	Copy.Kind = asEByteCodeOperandKind::Local;
 	Copy.Immediate = static_cast<int64>(Local);
 	const asEPrimitiveType Primitive = StmtPrimitive(Stmt->GetValue()->GetExpressionType());
-	if (!asEmitDestroyLive(Frame)) return false;
+	// A return ends this path; sibling branches still own the lexical locals.
+	if (!asEmitDestroyFrom(Frame, 0, false, true)) return false;
 	if (Frame.Builder->Emit(StmtCopyVtoR(Primitive), MakeArrayView(&Copy, 1)) != asEByteCodeImageStatus::Succeeded)
 	{
 		return false;
@@ -346,14 +347,14 @@ bool asEmitStmt(asSByteCodeEmitFrame& Frame, asCStmt* Stmt)
 	{
 		(void)BreakStmt;
 		if (Frame.BreakLabels.Num() == 0 || Frame.BreakLiveStarts.Num() == 0) return false;
-		if (!asEmitDestroyFrom(Frame, Frame.BreakLiveStarts.Last(), false, false)) return false;
+		if (!asEmitDestroyFrom(Frame, Frame.BreakLiveStarts.Last(), false, true)) return false;
 		return EmitStmtJump(Frame, asBC_JMP, Frame.BreakLabels.Last());
 	}
 	if (auto* ContinueStmt = dyn_cast<asCContinueStmt>(Stmt))
 	{
 		(void)ContinueStmt;
 		if (Frame.ContinueLabels.Num() == 0 || Frame.ContinueLiveStarts.Num() == 0) return false;
-		if (!asEmitDestroyFrom(Frame, Frame.ContinueLiveStarts.Last(), false, false)) return false;
+		if (!asEmitDestroyFrom(Frame, Frame.ContinueLiveStarts.Last(), false, true)) return false;
 		return EmitStmtJump(Frame, asBC_JMP, Frame.ContinueLabels.Last());
 	}
 	if (dyn_cast<asCNullStmt>(Stmt) || dyn_cast<asCFallthroughStmt>(Stmt))

@@ -12,8 +12,28 @@ bool asByteCodeOpcodeIsExecutable(asEBCInstr Opcode)
 
 namespace
 {
-	uint8 LocalStorageWidth(asEBCInstr Opcode)
+	uint8 LocalStorageWidth(asEBCInstr Opcode, asUINT OperandIndex)
 	{
+		switch (Opcode)
+		{
+		case asBC_dTOi: case asBC_dTOu: case asBC_dTOf:
+		case asBC_i64TOi: case asBC_i64TOf: case asBC_u64TOf:
+			return OperandIndex == 0 ? 4 : 8;
+		case asBC_iTOd: case asBC_uTOd: case asBC_fTOd:
+		case asBC_uTOi64: case asBC_iTOi64: case asBC_fTOi64: case asBC_fTOu64:
+			return OperandIndex == 0 ? 8 : 4;
+		case asBC_BSLL64: case asBC_BSRL64: case asBC_BSRA64: case asBC_POWdi:
+			return OperandIndex == 2 ? 4 : 8;
+		case asBC_PshVPtr: case asBC_ClrVPtr: case asBC_CallPtr:
+		case asBC_LOADOBJ: case asBC_STOREOBJ: case asBC_FREE:
+		case asBC_GETOBJ: case asBC_GETOBJREF: case asBC_CmpPtr: case asBC_ChkNullV:
+		case asBC_LoadRObjR: case asBC_RefCpyV: case asBC_AllocMem:
+		case asBC_SetListSize: case asBC_PshListElmnt: case asBC_SetListType:
+		case asBC_TrackRef: case asBC_UntrackRef: case asBC_ValidateRef:
+		case asBC_CmpPtrNull: case asBC_DestructScript: case asBC_FreeNullV8:
+			return AS_PTR_SIZE * 4;
+		default: break;
+		}
 		switch (Opcode)
 		{
 		case asBC_SetV1:
@@ -160,7 +180,7 @@ namespace
 				break;
 			case asEByteCodeOperandKind::Local:
 				Operand.SignedWidth = 2;
-				Operand.StorageWidth = LocalStorageWidth(OutInfo.Opcode);
+				Operand.StorageWidth = LocalStorageWidth(OutInfo.Opcode, Index);
 				break;
 			case asEByteCodeOperandKind::Label:
 				Operand.SignedWidth = 4;
@@ -370,6 +390,12 @@ bool asByteCodeOpcodeGetInfo(asEBCInstr Opcode, asSByteCodeOpcodeInfo& OutInfo)
 	{
 		OutInfo.OperandCount = 1;
 		OutInfo.Operands[0] = asEByteCodeOperandKind::FunctionSlot;
+	}
+	if (Opcode == asBC_CallPtr)
+	{
+		OutInfo.OperandCount = 2;
+		OutInfo.Operands[0] = asEByteCodeOperandKind::Local;
+		OutInfo.Operands[1] = asEByteCodeOperandKind::FunctionSlot;
 	}
 	if (Opcode == asBC_Cast)
 	{

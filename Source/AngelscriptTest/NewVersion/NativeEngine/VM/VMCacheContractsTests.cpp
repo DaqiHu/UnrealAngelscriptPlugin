@@ -139,7 +139,7 @@ namespace VMCacheContractsPrivate
 		{
 			return nullptr;
 		}
-		if (Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 4, 0) != asEByteCodeImageStatus::Succeeded)
+		if (Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 4, ByteArgumentDwords(*Function)) != asEByteCodeImageStatus::Succeeded)
 		{
 			return nullptr;
 		}
@@ -148,7 +148,7 @@ namespace VMCacheContractsPrivate
 		{
 			return nullptr;
 		}
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Function));
 		if (Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1)) != asEByteCodeImageStatus::Succeeded)
 		{
 			return nullptr;
@@ -178,7 +178,7 @@ namespace VMCacheContractsPrivate
 		{
 			return nullptr;
 		}
-		if (Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, 0) != asEByteCodeImageStatus::Succeeded)
+		if (Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, ByteArgumentDwords(*Run)) != asEByteCodeImageStatus::Succeeded)
 		{
 			return nullptr;
 		}
@@ -197,7 +197,7 @@ namespace VMCacheContractsPrivate
 		{
 			return nullptr;
 		}
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Run));
 		if (Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1)) != asEByteCodeImageStatus::Succeeded)
 		{
 			return nullptr;
@@ -227,7 +227,7 @@ namespace VMCacheContractsPrivate
 		{
 			return nullptr;
 		}
-		if (Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, 0) != asEByteCodeImageStatus::Succeeded)
+		if (Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, ByteArgumentDwords(*Run)) != asEByteCodeImageStatus::Succeeded)
 		{
 			return nullptr;
 		}
@@ -242,7 +242,7 @@ namespace VMCacheContractsPrivate
 		{
 			return nullptr;
 		}
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Run));
 		if (Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1)) != asEByteCodeImageStatus::Succeeded)
 		{
 			return nullptr;
@@ -267,7 +267,7 @@ namespace VMCacheContractsPrivate
 		{
 			return nullptr;
 		}
-		if (Builder.BeginFunction(First->GetStableKey(), First->GetStableKey(), 4, 0) != asEByteCodeImageStatus::Succeeded)
+		if (Builder.BeginFunction(First->GetStableKey(), First->GetStableKey(), 4, ByteArgumentDwords(*First)) != asEByteCodeImageStatus::Succeeded)
 		{
 			return nullptr;
 		}
@@ -276,7 +276,7 @@ namespace VMCacheContractsPrivate
 		{
 			return nullptr;
 		}
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*First));
 		if (Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1)) != asEByteCodeImageStatus::Succeeded)
 		{
 			return nullptr;
@@ -762,10 +762,10 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,
 			Builder.AddPropertyRequirement(*TypeA, *PropertyA, PropSlot)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,
-			Builder.BeginFunction(RunA->GetStableKey(), RunA->GetStableKey(), 4, 0)));
+			Builder.BeginFunction(RunA->GetStableKey(), RunA->GetStableKey(), 4, ByteArgumentDwords(*RunA))));
 		asSByteCodeOperand Push = ByteImm32(42);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PshC4, MakeArrayView(&Push, 1))));
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*RunA));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
 		TUniquePtr<asCByteCodeImage> Image;

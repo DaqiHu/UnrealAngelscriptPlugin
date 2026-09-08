@@ -1,4 +1,5 @@
 #include "CQTest.h"
+#include "NativeVMTestSupport.h"
 #include "../Definitions/NativeDetachedDefinitionTestSupport.h"
 #include "as_bytecode_image_builder.h"
 #include "as_bytecode_image_codec.h"
@@ -31,12 +32,12 @@ private:
 		Operand.Label = Value;
 		return Operand;
 	}
-	static bool EmitReturn42(asCByteCodeImageBuilder& Builder, const asSStableKey& Key)
+	static bool EmitReturn42(asCByteCodeImageBuilder& Builder, const asSStableKey& Key, int16 Pop = 0)
 	{
-		if (Builder.BeginFunction(Key, Key, 0, 0) != asEByteCodeImageStatus::Succeeded) return false;
+		if (Builder.BeginFunction(Key, Key, 0, Pop) != asEByteCodeImageStatus::Succeeded) return false;
 		asSByteCodeOperand Push = Imm32(42);
 		if (Builder.Emit(asBC_PshC4, MakeArrayView(&Push, 1)) != asEByteCodeImageStatus::Succeeded) return false;
-		asSByteCodeOperand Ret = Imm16(0);
+		asSByteCodeOperand Ret = Imm16(Pop);
 		if (Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1)) != asEByteCodeImageStatus::Succeeded) return false;
 		return Builder.EndFunction() == asEByteCodeImageStatus::Succeeded;
 	}
@@ -57,7 +58,7 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, First.AddTypeRequirement(*Type, TypeSlot)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, First.AddFunctionRequirement(*Function, FunctionSlot)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, First.AddString(TEXT("hello"), StringSlot)));
-		ASSERT_THAT(IsTrue(EmitReturn42(First, Function->GetStableKey())));
+		ASSERT_THAT(IsTrue(EmitReturn42(First, Function->GetStableKey(), AS_PTR_SIZE)));
 		TUniquePtr<asCByteCodeImage> FirstImage;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, First.Finish(FirstImage)));
 
@@ -65,7 +66,7 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Second.AddString(TEXT("hello"), StringSlot)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Second.AddFunctionRequirement(*Function, FunctionSlot)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Second.AddTypeRequirement(*Type, TypeSlot)));
-		ASSERT_THAT(IsTrue(EmitReturn42(Second, Function->GetStableKey())));
+		ASSERT_THAT(IsTrue(EmitReturn42(Second, Function->GetStableKey(), AS_PTR_SIZE)));
 		TUniquePtr<asCByteCodeImage> SecondImage;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Second.Finish(SecondImage)));
 
@@ -97,14 +98,14 @@ public:
 			asCByteCodeImageBuilder Builder;
 			auto EmitFn = [&](asCScriptFunction* Function)
 			{
-				Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 1, 0);
+				Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 1, ByteArgumentDwords(*Function));
 				const asUINT Top = Builder.NewLabel();
 				const asUINT Done = Builder.NewLabel();
 				Builder.BindLabel(Top);
 				asSByteCodeOperand Jump = Label(Done);
 				Builder.Emit(asBC_JMP, MakeArrayView(&Jump, 1));
 				Builder.BindLabel(Done);
-				asSByteCodeOperand Ret = Imm16(0);
+				asSByteCodeOperand Ret = Imm16(ByteArgumentDwords(*Function));
 				Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1));
 				Builder.EndFunction();
 			};
@@ -132,7 +133,7 @@ public:
 		ASSERT_THAT(AreEqual(static_cast<uint8>('S'), Bytes[1]));
 		ASSERT_THAT(AreEqual(static_cast<uint8>('B'), Bytes[2]));
 		ASSERT_THAT(AreEqual(static_cast<uint8>('C'), Bytes[3]));
-		ASSERT_THAT(AreEqual(2, static_cast<int32>(Bytes[4])));
+		ASSERT_THAT(AreEqual(3, static_cast<int32>(Bytes[4])));
 		ASSERT_THAT(AreEqual(0, static_cast<int32>(Bytes[5])));
 		TUniquePtr<asCByteCodeImage> Decoded;
 		TArray<uint8> Truncated;

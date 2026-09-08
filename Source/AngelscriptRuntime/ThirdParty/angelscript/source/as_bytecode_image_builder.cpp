@@ -145,6 +145,7 @@ namespace
 		if (Left.Schema != Right.Schema || Left.Layout != Right.Layout
 			|| Left.SchemaWitness != Right.SchemaWitness || Left.LayoutWitness != Right.LayoutWitness
 			|| Left.SignatureKey != Right.SignatureKey || Left.ReturnTypeUse != Right.ReturnTypeUse
+			|| Left.ReturnDwords != Right.ReturnDwords || Left.ReturnStorageKind != Right.ReturnStorageKind
 			|| Left.CallableTraits != Right.CallableTraits || Left.OwnerKey != Right.OwnerKey
 			|| Left.NativeOffset != Right.NativeOffset || Left.NativeAddressMode != Right.NativeAddressMode
 			|| Left.Parameters.Num() != Right.Parameters.Num())
@@ -154,13 +155,22 @@ namespace
 		for (int32 Index = 0; Index < Left.Parameters.Num(); ++Index)
 		{
 			if (Left.Parameters[Index].TypeUse != Right.Parameters[Index].TypeUse
-				|| Left.Parameters[Index].PassingMode != Right.Parameters[Index].PassingMode)
+				|| Left.Parameters[Index].PassingMode != Right.Parameters[Index].PassingMode
+				|| Left.Parameters[Index].StorageDwords != Right.Parameters[Index].StorageDwords
+				|| Left.Parameters[Index].StorageKind != Right.Parameters[Index].StorageKind)
 			{
 				return false;
 			}
 		}
 		return true;
 	}
+}
+
+asEByteCodeStorageKind asByteCodeStorageKind(const asCDataType& Type)
+{
+	if (Type.GetSizeOnStackDWords() == 0) return asEByteCodeStorageKind::Void;
+	if (Type.IsReference() || (Type.GetTypeInfo() && !Type.IsEnumType())) return asEByteCodeStorageKind::Address;
+	return asEByteCodeStorageKind::Value;
 }
 
 void asEncodeByteCodeRequirementContract(const asSByteCodeRequirement& Requirement, TArray<uint8>& Out)
@@ -176,11 +186,15 @@ void asEncodeByteCodeRequirementContract(const asSByteCodeRequirement& Requireme
 	Encoding.WriteBytes(MakeArrayView(Requirement.LayoutWitness));
 	Encoding.WriteBytes(Requirement.SignatureKey.GetBytes());
 	Encoding.WriteBytes(Requirement.ReturnTypeUse.GetBytes());
+	Encoding.WriteUInt32(Requirement.ReturnDwords);
+	Encoding.WriteUInt8(static_cast<uint8>(Requirement.ReturnStorageKind));
 	Encoding.WriteUInt32(static_cast<uint32>(Requirement.Parameters.Num()));
 	for (const asSByteCodeParameterContract& Parameter : Requirement.Parameters)
 	{
 		Encoding.WriteBytes(Parameter.TypeUse.GetBytes());
 		Encoding.WriteUInt8(Parameter.PassingMode);
+		Encoding.WriteUInt32(Parameter.StorageDwords);
+		Encoding.WriteUInt8(static_cast<uint8>(Parameter.StorageKind));
 	}
 	Encoding.WriteUInt32(Requirement.CallableTraits);
 	Encoding.WriteBytes(Requirement.OwnerKey.GetBytes());
@@ -284,6 +298,8 @@ asEByteCodeImageStatus asCByteCodeImageBuilder::AddFunctionRequirement(const asC
 	{
 		return asEByteCodeImageStatus::CorruptWitness;
 	}
+	Requirement.ReturnDwords = static_cast<asUINT>(Function.GetReturnDataType().GetSizeOnStackDWords());
+	Requirement.ReturnStorageKind = asByteCodeStorageKind(Function.GetReturnDataType());
 	if (Function.GetReturnDataType().GetTypeInfo())
 	{
 		Requirement.ReferencedKeys.AddUnique(Function.GetReturnDataType().GetTypeInfo()->GetStableKey());
@@ -301,6 +317,8 @@ asEByteCodeImageStatus asCByteCodeImageBuilder::AddFunctionRequirement(const asC
 		{
 			Parameter.PassingMode = static_cast<uint8>(Function.inOutFlags[Index]);
 		}
+		Parameter.StorageDwords = static_cast<asUINT>(ParameterType->GetSizeOnStackDWords());
+		Parameter.StorageKind = asByteCodeStorageKind(*ParameterType);
 		Requirement.Parameters.Add(Parameter);
 		if (ParameterType->GetTypeInfo())
 		{
@@ -311,7 +329,9 @@ asEByteCodeImageStatus asCByteCodeImageBuilder::AddFunctionRequirement(const asC
 		| (Function.IsFinal() ? 2u : 0u)
 		| (Function.IsOverride() ? 4u : 0u)
 		| (Function.IsProperty() ? 8u : 0u)
-		| (Function.IsReadOnly() ? 16u : 0u);
+		| (Function.IsReadOnly() ? 16u : 0u)
+		| (Function.GetMetadataDeclarationKind() == asEFunctionIdentityKind::Constructor ? 32u : 0u)
+		| (Function.DoesReturnOnStack() ? 64u : 0u);
 	{
 		asCCanonicalEncoding Signature(asECanonicalIdentityDomain::Function);
 		Signature.WriteBytes(Requirement.ReturnTypeUse.GetBytes());
@@ -611,7 +631,7 @@ asEByteCodeImageStatus asCByteCodeImageBuilder::Finish(TUniquePtr<asCByteCodeIma
 	OutImage->Requirements = MoveTemp(SortedRequirements);
 	OutImage->Functions = MoveTemp(SortedFunctions);
 	OutImage->Strings = MoveTemp(SortedStrings);
-	OutImage->FormatVersion = 2;
+	OutImage->FormatVersion = 3;
 	return asEByteCodeImageStatus::Succeeded;
 }
 

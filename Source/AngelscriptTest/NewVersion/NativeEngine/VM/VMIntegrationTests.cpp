@@ -64,12 +64,12 @@ namespace
 		asUINT Slot = 0;
 		asEByteCodeImageStatus Status = Builder.AddFunctionRequirement(*Function, Slot);
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
-		Status = Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 4, 0);
+		Status = Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 4, ByteArgumentDwords(*Function));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		asSByteCodeOperand Push = ByteImm32(Value);
 		Status = Builder.Emit(asBC_PshC4, MakeArrayView(&Push, 1));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Function));
 		Status = Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		return Builder.EndFunction();
@@ -80,7 +80,7 @@ namespace
 		asUINT Slot = 0;
 		asEByteCodeImageStatus Status = Builder.AddFunctionRequirement(*Function, Slot);
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
-		Status = Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 16, 0);
+		Status = Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 16, ByteArgumentDwords(*Function));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		asSByteCodeOperand Obj = ByteLocal(2);
 		Status = Builder.Emit(asBC_PSF, MakeArrayView(&Obj, 1));
@@ -92,7 +92,7 @@ namespace
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		Status = Builder.Emit(asBC_PopRPtr, TConstArrayView<asSByteCodeOperand>());
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Function));
 		Status = Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		return Builder.EndFunction();
@@ -200,12 +200,12 @@ namespace
 		asUINT Slot = 0;
 		asEByteCodeImageStatus Status = Builder.AddFunctionRequirement(*Function, Slot);
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
-		Status = Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 4, 0);
+		Status = Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 4, ByteArgumentDwords(*Function));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		asSByteCodeOperand Kind = ByteImm16(1);
 		Status = Builder.Emit(asBC_ThrowException, MakeArrayView(&Kind, 1));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Function));
 		Status = Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1));
 		if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 		return Builder.EndFunction();
@@ -226,10 +226,10 @@ public:
 		asCByteCodeImageBuilder Builder;
 		asUINT Slot = 0;
 		Builder.AddFunctionRequirement(*Function, Slot);
-		Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 4, 0);
+		Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 4, ByteArgumentDwords(*Function));
 		asSByteCodeOperand Push = ByteImm32(42);
 		Builder.Emit(asBC_PshC4, MakeArrayView(&Push, 1));
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Function));
 		Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1));
 		Builder.EndFunction();
 		TUniquePtr<asCByteCodeImage> Image;
@@ -334,7 +334,7 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*SuspendRun, SuspendSlot)));
 
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,
-			Builder.BeginFunction(NativeWrite->GetStableKey(), NativeWrite->GetStableKey(), 8, 2)));
+			Builder.BeginFunction(NativeWrite->GetStableKey(), NativeWrite->GetStableKey(), 8, ByteArgumentDwords(*NativeWrite))));
 		asSByteCodeOperand Acc = ByteLocal(1);
 		asSByteCodeOperand Seven = ByteImm32(7);
 		asSByteCodeOperand SetSeven[2] = {Acc, Seven};
@@ -350,12 +350,12 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PopRPtr, TConstArrayView<asSByteCodeOperand>())));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RDR4, MakeArrayView(&Acc, 1))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_CpyVtoR4, MakeArrayView(&Acc, 1))));
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*NativeWrite));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
 
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,
-			Builder.BeginFunction(DispatchRun->GetStableKey(), DispatchRun->GetStableKey(), 16, 0)));
+			Builder.BeginFunction(DispatchRun->GetStableKey(), DispatchRun->GetStableKey(), 16, ByteArgumentDwords(*DispatchRun))));
 		asSByteCodeOperand DerivedLocal = ByteLocal(2);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PSF, MakeArrayView(&DerivedLocal, 1))));
 		asSByteCodeOperand AllocDerived[2] = {ByteSlot(asEByteCodeOperandKind::TypeSlot, DerivedTypeSlot), ByteImm32(0)};
@@ -368,11 +368,12 @@ public:
 		asSByteCodeOperand FreeDerived[2] = {DerivedLocal, ByteSlot(asEByteCodeOperandKind::TypeSlot, DerivedTypeSlot)};
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_FREE, MakeArrayView(FreeDerived, 2))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_CpyVtoR4, MakeArrayView(&DispatchTemp, 1))));
+		Ret = ByteImm16(ByteArgumentDwords(*DispatchRun));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
 
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,
-			Builder.BeginFunction(CycleRun->GetStableKey(), CycleRun->GetStableKey(), 16, 0)));
+			Builder.BeginFunction(CycleRun->GetStableKey(), CycleRun->GetStableKey(), 16, ByteArgumentDwords(*CycleRun))));
 		asSByteCodeOperand Cycle = ByteLocal(2);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PSF, MakeArrayView(&Cycle, 1))));
 		asSByteCodeOperand AllocCycle[2] = {ByteSlot(asEByteCodeOperandKind::TypeSlot, GcTypeSlot), ByteImm32(0)};
@@ -387,12 +388,13 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_FREE, MakeArrayView(FreeCycle, 2))));
 		asSByteCodeOperand Zero = ByteImm32(0);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PshC4, MakeArrayView(&Zero, 1))));
+		Ret = ByteImm16(ByteArgumentDwords(*CycleRun));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
 		const int32 CycleEnd = static_cast<int32>(Builder.EndFunction());
 		ASSERT_THAT(AreEqual(0, CycleEnd, TEXT("CycleEndFunction")));
 
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,
-			Builder.BeginFunction(SuspendRun->GetStableKey(), SuspendRun->GetStableKey(), 8, 0)));
+			Builder.BeginFunction(SuspendRun->GetStableKey(), SuspendRun->GetStableKey(), 8, ByteArgumentDwords(*SuspendRun))));
 		asSByteCodeOperand SuspendAcc = ByteLocal(1);
 		asSByteCodeOperand One = ByteImm32(1);
 		asSByteCodeOperand SetOne[2] = {SuspendAcc, One};
@@ -404,6 +406,7 @@ public:
 		asSByteCodeOperand SetThree[2] = {SuspendAcc, Three};
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_SetV4, MakeArrayView(SetThree, 2))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_CpyVtoR4, MakeArrayView(&SuspendAcc, 1))));
+		Ret = ByteImm16(ByteArgumentDwords(*SuspendRun));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
 
@@ -517,7 +520,7 @@ public:
 		asCByteCodeImageBuilder Builder;
 		asUINT Slot = 0;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Function, Slot)));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 32, 0)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 32, ByteArgumentDwords(*Function))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitSetLocal(Builder, 1, 21)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitSetLocal(Builder, 2, 1)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitTernary(Builder, asBC_BSLL, 3, 1, 2)));
@@ -579,7 +582,7 @@ public:
 		asCByteCodeImageBuilder Builder;
 		asUINT Slot = 0;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Function, Slot)));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 32, 0)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 32, ByteArgumentDwords(*Function))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitSetLocal(Builder, 1, LeftBits)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitSetLocal(Builder, 2, RightBits)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitTernary(Builder, asBC_ADDf, 3, 1, 2)));
@@ -629,15 +632,15 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*ListFn, ListSlot)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*ConstructFn, ConstructSlot)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddTypeRequirement(*Type, TypeSlot)));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(CopyFn->GetStableKey(), CopyFn->GetStableKey(), 8, 0)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(CopyFn->GetStableKey(), CopyFn->GetStableKey(), 8, ByteArgumentDwords(*CopyFn))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PshNull, TConstArrayView<asSByteCodeOperand>())));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PshNull, TConstArrayView<asSByteCodeOperand>())));
 		asSByteCodeOperand TypeOp = ByteSlot(asEByteCodeOperandKind::TypeSlot, TypeSlot);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_CopyScript, MakeArrayView(&TypeOp, 1))));
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*CopyFn));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(ListFn->GetStableKey(), ListFn->GetStableKey(), 32, 0)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(ListFn->GetStableKey(), ListFn->GetStableKey(), 32, ByteArgumentDwords(*ListFn))));
 		asSByteCodeOperand AllocMem[2] = {ByteLocal(8), ByteImm32(16)};
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_AllocMem, MakeArrayView(AllocMem, 2))));
 		asSByteCodeOperand ListSize[3] = {ByteLocal(8), ByteImm32(0), ByteImm32(1)};
@@ -666,7 +669,7 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_CmpPtrNull, MakeArrayView(&CmpNull, 1))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitReturnLocal(Builder, 5)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(ConstructFn->GetStableKey(), ConstructFn->GetStableKey(), 16, 0)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(ConstructFn->GetStableKey(), ConstructFn->GetStableKey(), 16, ByteArgumentDwords(*ConstructFn))));
 		asSByteCodeOperand Obj = ByteLocal(2);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PSF, MakeArrayView(&Obj, 1))));
 		asSByteCodeOperand AllocOps[2] = {ByteSlot(asEByteCodeOperandKind::TypeSlot, TypeSlot), ByteImm32(0)};
@@ -726,14 +729,14 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddTypeRequirement(*Type, TypeSlot)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Method, MethodSlot)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Run, RunSlot)));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, 2)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, ByteArgumentDwords(*Run))));
 		asSByteCodeOperand Seven = ByteImm32(7);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PshC4, MakeArrayView(&Seven, 1))));
 		asSByteCodeOperand Self = ByteLocal(0);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PshVPtr, MakeArrayView(&Self, 1))));
 		asSByteCodeOperand Call = ByteSlot(asEByteCodeOperandKind::FunctionSlot, MethodSlot);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_Thiscall1, MakeArrayView(&Call, 1))));
-		asSByteCodeOperand Ret = ByteImm16(0);
+		asSByteCodeOperand Ret = ByteImm16(ByteArgumentDwords(*Run));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
 		TUniquePtr<asCByteCodeImage> Image;
@@ -761,7 +764,7 @@ public:
 		asCByteCodeImageBuilder Builder;
 		asUINT Slot = 0;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Function, Slot)));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 16, 0)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 16, ByteArgumentDwords(*Function))));
 		asSByteCodeOperand Set1[2] = {ByteLocal(1), ByteImm32(7)};
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_SetV1, MakeArrayView(Set1, 2))));
 		asSByteCodeOperand Ld = ByteLocal(1);
@@ -779,9 +782,10 @@ public:
 		asSByteCodeOperand Add[3] = {ByteLocal(5), ByteLocal(4), ByteLocal(2)};
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_ADDi, MakeArrayView(Add, 3))));
 		asSByteCodeOperand Psh = ByteLocal(5);
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PshV4, MakeArrayView(&Psh, 1))));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PSF, MakeArrayView(&Psh, 1))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PshRPtr, TConstArrayView<asSByteCodeOperand>())));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_SwapPtr, TConstArrayView<asSByteCodeOperand>())));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PopPtr, TConstArrayView<asSByteCodeOperand>())));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PopPtr, TConstArrayView<asSByteCodeOperand>())));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitReturnLocal(Builder, 5)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
@@ -813,7 +817,7 @@ public:
 		asUINT GlobalSlot = 0;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Function, RunSlot)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, AddGlobalRequirement(Builder, *Global, GlobalSlot)));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 16, 0)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 16, ByteArgumentDwords(*Function))));
 		asSByteCodeOperand GlobalOp = ByteSlot(asEByteCodeOperandKind::GlobalSlot, GlobalSlot);
 		asSByteCodeOperand CopyIn[2] = {ByteLocal(1), GlobalOp};
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_CpyGtoV4, MakeArrayView(CopyIn, 2))));
@@ -862,7 +866,7 @@ public:
 		asUINT GlobalSlot = 0;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Function, RunSlot)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, AddGlobalRequirement(Builder, *Global, GlobalSlot)));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 32, 0)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 32, ByteArgumentDwords(*Function))));
 		asSByteCodeOperand GlobalOp = ByteSlot(asEByteCodeOperandKind::GlobalSlot, GlobalSlot);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PGA, MakeArrayView(&GlobalOp, 1))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PopRPtr, TConstArrayView<asSByteCodeOperand>())));
@@ -907,12 +911,22 @@ public:
 		asCByteCodeImageBuilder Builder;
 		asUINT Slot = 0;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Function, Slot)));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 16, 0)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 16, ByteArgumentDwords(*Function))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitSetLocal(Builder, 2, 42)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitSetLocal(Builder, 1, 1)));
-		asSByteCodeOperand Jmpp[2] = {ByteLocal(1), ByteImm32(0)};
+		const asUINT StoreZero = Builder.NewLabel();
+		const asUINT Done = Builder.NewLabel();
+		asSByteCodeOperand Jmpp[2] = {ByteLocal(1), ByteImm32(1)};
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_JMPP, MakeArrayView(Jmpp, 2))));
+		asSByteCodeOperand ToStore;
+		ToStore.Kind = asEByteCodeOperandKind::Label; ToStore.Label = StoreZero; ToStore.Immediate = StoreZero;
+		asSByteCodeOperand ToDone;
+		ToDone.Kind = asEByteCodeOperandKind::Label; ToDone.Label = Done; ToDone.Immediate = Done;
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_JMP, MakeArrayView(&ToStore, 1))));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_JMP, MakeArrayView(&ToDone, 1))));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BindLabel(StoreZero)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitSetLocal(Builder, 2, 0)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BindLabel(Done)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitReturnLocal(Builder, 2)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
 		TUniquePtr<asCByteCodeImage> Image;
@@ -937,7 +951,7 @@ public:
 		asCByteCodeImageBuilder Builder;
 		asUINT Slot = 0;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Function, Slot)));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 48, 0)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 48, ByteArgumentDwords(*Function))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitSetLocal(Builder, 1, 40)));
 		asSByteCodeOperand AddIi[3] = {ByteLocal(2), ByteLocal(1), ByteImm32(2)};
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_ADDIi, MakeArrayView(AddIi, 3))));

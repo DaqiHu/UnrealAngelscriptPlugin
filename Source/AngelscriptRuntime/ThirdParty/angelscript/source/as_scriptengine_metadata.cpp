@@ -34,7 +34,7 @@ asEMetadataRegistrationResult asCScriptEngine::RegisterMetadataImage(const std::
 {
 	if (!Image) return asEMetadataRegistrationResult::InvalidArgument;
 	std::lock_guard<std::mutex> EngineLock(metadataRegistrationMutex);
-	if (metadataRegistrationRetired) return asEMetadataRegistrationResult::Retired;
+	if (shuttingDown || vmRetirementRequested || metadataRegistrationRetired) return asEMetadataRegistrationResult::Retired;
 	if (!Image->IsFrozen()) return asEMetadataRegistrationResult::InvalidState;
 	TArray<std::shared_ptr<asCMetadataImage>> Closure;
 	TSet<asCMetadataImage*> Visited;
@@ -157,6 +157,9 @@ void asCScriptEngine::RetireMetadataImages()
 	{
 		std::lock_guard<std::mutex> EngineLock(metadataRegistrationMutex);
 		if (metadataRegistrationRetired) return;
+		std::unique_lock<std::mutex> PublishLock(executablePublicationMutex);
+		if (!vmRetirementRequested.exchange(true)) ++executablePublicationGeneration;
+		if (vmObjectLeases || vmOperations || vmDrainActive) return;
 		std::vector<asCMetadataImage*> LockOrder;
 		for (const auto& Item : metadataImages) LockOrder.push_back(Item.get());
 		std::sort(LockOrder.begin(), LockOrder.end(), std::less<asCMetadataImage*>{});
@@ -168,12 +171,19 @@ void asCScriptEngine::RetireMetadataImages()
 		metadataGlobalBindings.Empty();
 		TArray<asCExecutableSnapshot*> SnapshotLeases;
 		{
-			std::lock_guard<std::mutex> PublishLock(executablePublicationMutex);
+
 			++executablePublicationGeneration;
 			publishedExecutables.Empty();
 			SnapshotLeases = MoveTemp(publishedSnapshotLeases);
+			// Caller-held snapshots can outlive the Engine. Their immutable code
+			// remains readable, but destruction must not call a dead publisher.
+			for (asCExecutableSnapshot* Snapshot : SnapshotLeases)
+				if (Snapshot) Snapshot->Engine.store(nullptr);
+			// Current native generations remain Engine-owned cleanup leases until final
+			// drain/destruction; retired admissions cannot install or execute new work.
 			metadataRegistrationRetired = true;
 		}
+		PublishLock.unlock();
 		for (asCExecutableSnapshot* Snapshot : SnapshotLeases)
 		{
 			if (Snapshot) Snapshot->Release();

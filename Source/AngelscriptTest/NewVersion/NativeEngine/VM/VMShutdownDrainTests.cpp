@@ -164,9 +164,12 @@ public:
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
 		Engine.Ptr->AddRef();
 		Engine.Ptr->ShutDownAndRelease();
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Retired, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		asCExecutableSnapshot* RejectedSnapshot = nullptr;
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Retired, Engine.Ptr->LinkByteCodeImage(*Image, RejectedSnapshot)));
+		ASSERT_THAT(IsNull(RejectedSnapshot));
 		ASSERT_THAT(AreNotEqual(0, Context->Prepare(Run)));
 		ASSERT_THAT(IsNotNull(Run->GetName()));
+		Engine.Ptr->Release();
 		Engine.Ptr = nullptr;
 		Context->Release();
 		if (Snapshot) Snapshot->Release();
@@ -206,9 +209,13 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.SetFrameDescriptor(Frame)));
 		asSByteCodeCleanupAction Cleanup;
 		Cleanup.Kind = asEByteCodeCleanupKind::DestroyObject;
-		Cleanup.Path = asEByteCodeCleanupPath::Both;
+		Cleanup.Path = asEByteCodeCleanupPath::Exception;
+		Cleanup.InstructionIndex = 1;
 		Cleanup.FrameOffset = 2;
 		Cleanup.TypeSlot = TypeSlot;
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddCleanupAction(Cleanup)));
+		Cleanup.Path = asEByteCodeCleanupPath::Normal;
+		Cleanup.InstructionIndex = 3;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddCleanupAction(Cleanup)));
 		asSByteCodeOperand Call = ByteSlot(asEByteCodeOperandKind::FunctionSlot, YieldSlot);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_CALLSYS, MakeArrayView(&Call, 1))));
@@ -237,6 +244,7 @@ public:
 		ASSERT_THAT(AreEqual(1, GDrainDtors));
 		Context->Release();
 		if (Snapshot) Snapshot->Release();
+		Engine.Ptr->Release();
 		Engine.Ptr = nullptr;
 	}
 
@@ -260,6 +268,7 @@ public:
 		asVmRelease(Object);
 		Engine.Ptr->GarbageCollect();
 		ASSERT_THAT(AreEqual(1, GDrainDtors));
+		Engine.Ptr->Release();
 		Engine.Ptr = nullptr;
 	}
 
@@ -293,6 +302,7 @@ public:
 		asCExecutableSnapshot* Failed = nullptr;
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Retired, Raw->LinkByteCodeImage(*Image, Failed)));
 		if (Snapshot) Snapshot->Release();
+		Engine.Ptr->Release();
 		Engine.Ptr = nullptr;
 	}
 
@@ -351,6 +361,7 @@ public:
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, ExecResult.load()));
 		ASSERT_THAT(AreEqual(1, GDrainCalls));
 		if (Snapshot) Snapshot->Release();
+		Engine.Ptr->Release();
 		Engine.Ptr = nullptr;
 	}
 };

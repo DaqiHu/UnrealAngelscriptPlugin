@@ -14,10 +14,12 @@ namespace CallableSDKTests
 	bool EmitReturn(asCByteCodeImageBuilder& Builder, asCScriptFunction& Function, int32 Value)
 	{
 		asUINT Slot = 0;
-		const auto Push = ByteImm32(Value), Ret = ByteImm16(0);
+		const auto Local = ByteLocal(1), Ret = ByteImm16(ByteArgumentDwords(Function));
+		const asSByteCodeOperand Set[2] = {Local, ByteImm32(Value)};
 		return Builder.AddFunctionRequirement(Function, Slot) == asEByteCodeImageStatus::Succeeded
-			&& Builder.BeginFunction(Function.GetStableKey(), Function.GetStableKey(), 4, 0) == asEByteCodeImageStatus::Succeeded
-			&& Builder.Emit(asBC_PshC4, MakeArrayView(&Push, 1)) == asEByteCodeImageStatus::Succeeded
+			&& Builder.BeginFunction(Function.GetStableKey(), Function.GetStableKey(), 4, ByteArgumentDwords(Function)) == asEByteCodeImageStatus::Succeeded
+			&& Builder.Emit(asBC_SetV4, MakeArrayView(Set, 2)) == asEByteCodeImageStatus::Succeeded
+			&& Builder.Emit(asBC_CpyVtoR4, MakeArrayView(&Local, 1)) == asEByteCodeImageStatus::Succeeded
 			&& Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1)) == asEByteCodeImageStatus::Succeeded
 			&& Builder.EndFunction() == asEByteCodeImageStatus::Succeeded;
 	}
@@ -32,10 +34,11 @@ namespace CallableSDKTests
 			|| Builder.BeginFunction(Run.GetStableKey(), Run.GetStableKey(), 8, 0) != asEByteCodeImageStatus::Succeeded) return false;
 		const auto TargetOperand = ByteSlot(asEByteCodeOperandKind::FunctionSlot, TargetSlot);
 		const auto Local = ByteLocal(2), Ret = ByteImm16(0);
+		const asSByteCodeOperand Indirect[2] = {Local, TargetOperand};
 		return Builder.Emit(asBC_FuncPtr, MakeArrayView(&TargetOperand, 1)) == asEByteCodeImageStatus::Succeeded
 			&& Builder.Emit(asBC_PopRPtr, {}) == asEByteCodeImageStatus::Succeeded
 			&& Builder.Emit(asBC_CpyRtoV8, MakeArrayView(&Local, 1)) == asEByteCodeImageStatus::Succeeded
-			&& Builder.Emit(asBC_CallPtr, MakeArrayView(&Local, 1)) == asEByteCodeImageStatus::Succeeded
+			&& Builder.Emit(asBC_CallPtr, MakeArrayView(Indirect, 2)) == asEByteCodeImageStatus::Succeeded
 			&& Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1)) == asEByteCodeImageStatus::Succeeded
 			&& Builder.EndFunction() == asEByteCodeImageStatus::Succeeded
 			&& Builder.Finish(Out) == asEByteCodeImageStatus::Succeeded;
@@ -212,6 +215,7 @@ public:
 		Fn.Type = Fixture.Image->Primitive(ttInt64);
 		asCScriptFunction* Invoke = Fixture.DefineFunction(
 			TEXT("Invoke"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), MakeArrayView(&Fn, 1));
+		asCScriptFunction* Shape = Fixture.DefineFunction(TEXT("DelegateShape"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
 		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
@@ -221,6 +225,8 @@ public:
 		asUINT TypeSlot = 0;
 		asUINT RunSlot = 0;
 		asUINT InvokeSlot = 0;
+		asUINT ShapeSlot = 0;
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Shape, ShapeSlot)));
 		ASSERT_THAT(IsTrue(CallableSDKTests::EmitReturn(Builder, *Value, 42)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddTypeRequirement(*Type, TypeSlot)));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Run, RunSlot)));
@@ -237,9 +243,11 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,
-			Builder.BeginFunction(Invoke->GetStableKey(), Invoke->GetStableKey(), 8, 2)));
+			Builder.BeginFunction(Invoke->GetStableKey(), Invoke->GetStableKey(), 8, ByteArgumentDwords(*Invoke))));
 		asSByteCodeOperand FnLocal = ByteLocal(0);
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_CallPtr, MakeArrayView(&FnLocal, 1))));
+		asSByteCodeOperand Indirect[2] = {FnLocal, ByteSlot(asEByteCodeOperandKind::FunctionSlot, ShapeSlot)};
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_CallPtr, MakeArrayView(Indirect, 2))));
+		Ret = ByteImm16(ByteArgumentDwords(*Invoke));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
 		TUniquePtr<asCByteCodeImage> Image;

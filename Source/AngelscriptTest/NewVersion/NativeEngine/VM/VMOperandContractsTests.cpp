@@ -69,9 +69,9 @@ private:
 		return Operand;
 	}
 
-	static TUniquePtr<asCByteCodeImage> FinishRet(asCByteCodeImageBuilder& Builder)
+	static TUniquePtr<asCByteCodeImage> FinishRet(asCByteCodeImageBuilder& Builder, int16 Pop = 0)
 	{
-		asSByteCodeOperand Ret = Imm16(0);
+		asSByteCodeOperand Ret = Imm16(Pop);
 		if (Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1)) != asEByteCodeImageStatus::Succeeded) return nullptr;
 		if (Builder.EndFunction() != asEByteCodeImageStatus::Succeeded) return nullptr;
 		TUniquePtr<asCByteCodeImage> Image;
@@ -89,7 +89,7 @@ private:
 		}
 		asSByteCodeOperand SetOps[2] = { Local(Offset), Imm32(Value) };
 		if (Builder.Emit(asBC_SetV4, MakeArrayView(SetOps, 2)) != asEByteCodeImageStatus::Succeeded) return nullptr;
-		return FinishRet(Builder);
+		return FinishRet(Builder, static_cast<int16>(ParameterSize));
 	}
 
 	static asEByteCodeImageStatus DecodeMutated(const asCByteCodeImage& Image, TUniquePtr<asCByteCodeImage>& OutDecoded)
@@ -197,12 +197,12 @@ public:
 
 	TEST_METHOD(ImmediateWidthSlotRoleAndStringRejects)
 	{
-		TUniquePtr<asCByteCodeImage> Wide = MakeSetV4(4, 0, 0, 7);
+		TUniquePtr<asCByteCodeImage> Wide = MakeSetV4(4, 0, 1, 7);
 		ASSERT_THAT(IsNotNull(Wide.Get()));
 		Wide->Functions[0].Instructions[1].Operands[0].Immediate = 40000;
 		ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::InvalidOperand, asCByteCodeVerifier::Verify(*Wide)));
 
-		TUniquePtr<asCByteCodeImage> CallImage = MakeSetV4(4, 0, 0, 7);
+		TUniquePtr<asCByteCodeImage> CallImage = MakeSetV4(4, 0, 1, 7);
 		asSByteCodeRequirement TypeReq;
 		TypeReq.Role = asEByteCodeRequirementRole::Type;
 		TypeReq.Key = OperandKey(9);
@@ -211,26 +211,26 @@ public:
 		CallImage->Functions[0].Instructions[0].Operands = { Slot(asEByteCodeOperandKind::TypeSlot, 0) };
 		ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::InvalidOperand, asCByteCodeVerifier::Verify(*CallImage)));
 
-		TUniquePtr<asCByteCodeImage> GlobalImage = MakeSetV4(4, 0, 0, 7);
+		TUniquePtr<asCByteCodeImage> GlobalImage = MakeSetV4(4, 0, 1, 7);
 		GlobalImage->Functions[0].Instructions[0].Opcode = asBC_PGA;
 		GlobalImage->Functions[0].Instructions[0].Operands = { Slot(asEByteCodeOperandKind::FunctionSlot, 0) };
 		ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::InvalidOperand, asCByteCodeVerifier::Verify(*GlobalImage)));
 
-		TUniquePtr<asCByteCodeImage> PropertyImage = MakeSetV4(4, 0, 0, 7);
+		TUniquePtr<asCByteCodeImage> PropertyImage = MakeSetV4(4, 0, 1, 7);
 		PropertyImage->Functions[0].Instructions[0].Opcode = asBC_ALLOC;
 		PropertyImage->Functions[0].Instructions[0].Operands.Reset();
 		PropertyImage->Functions[0].Instructions[0].Operands.Add(Slot(asEByteCodeOperandKind::PropertySlot, 0));
 		PropertyImage->Functions[0].Instructions[0].Operands.Add(Imm32(0));
 		ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::InvalidOperand, asCByteCodeVerifier::Verify(*PropertyImage)));
 
-		TUniquePtr<asCByteCodeImage> StringImage = MakeSetV4(4, 0, 0, 7);
+		TUniquePtr<asCByteCodeImage> StringImage = MakeSetV4(4, 0, 1, 7);
 		StringImage->Functions[0].Instructions[0].Operands[1] = Slot(asEByteCodeOperandKind::StringSlot, 99);
 		ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::InvalidOperand, asCByteCodeVerifier::Verify(*StringImage)));
 	}
 
 	TEST_METHOD(FrameSpanAlignmentCrossingAndZeroSizeRejects)
 	{
-		TUniquePtr<asCByteCodeImage> PastEnd = MakeSetV4(4, 0, 4, 7);
+		TUniquePtr<asCByteCodeImage> PastEnd = MakeSetV4(4, 0, 5, 7);
 		ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::InvalidFrame, asCByteCodeVerifier::Verify(*PastEnd)));
 
 		TUniquePtr<asCByteCodeImage> Zero = MakeSetV4(0, 0, 0, 7);
@@ -242,7 +242,7 @@ public:
 		asCByteCodeImageBuilder CrossBuilder;
 		const asSStableKey CrossKey = OperandKey(3);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, CrossBuilder.BeginFunction(CrossKey, CrossKey, 4, 0)));
-		asSByteCodeOperand Set8[2] = { Local(3), Imm64(7) };
+		asSByteCodeOperand Set8[2] = { Local(1), Imm64(7) };
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, CrossBuilder.Emit(asBC_SetV8, MakeArrayView(Set8, 2))));
 		TUniquePtr<asCByteCodeImage> Crossing = FinishRet(CrossBuilder);
 		ASSERT_THAT(IsNotNull(Crossing.Get()));
@@ -250,8 +250,8 @@ public:
 
 		asCByteCodeImageBuilder OverflowBuilder;
 		const asSStableKey OverflowKey = OperandKey(4);
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, OverflowBuilder.BeginFunction(OverflowKey, OverflowKey, 40000, 0)));
-		asSByteCodeOperand OverflowOps[2] = { Local(32767), Imm64(1) };
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, OverflowBuilder.BeginFunction(OverflowKey, OverflowKey, 40000, 40000)));
+		asSByteCodeOperand OverflowOps[2] = { Local(-32768), Imm64(1) };
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, OverflowBuilder.Emit(asBC_SetV8, MakeArrayView(OverflowOps, 2))));
 		TUniquePtr<asCByteCodeImage> Overflow = FinishRet(OverflowBuilder);
 		ASSERT_THAT(IsNotNull(Overflow.Get()));
@@ -260,11 +260,11 @@ public:
 
 	TEST_METHOD(ValidNegativeParameterAndInRangeLocalPass)
 	{
-		TUniquePtr<asCByteCodeImage> LocalOk = MakeSetV4(4, 0, 0, 7);
+		TUniquePtr<asCByteCodeImage> LocalOk = MakeSetV4(4, 0, 1, 7);
 		ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::Succeeded, asCByteCodeVerifier::Verify(*LocalOk)));
 		ASSERT_THAT(AreEqual(4u, LocalOk->Functions[0].FrameSize));
 
-		TUniquePtr<asCByteCodeImage> ArgOk = MakeSetV4(4, 1, -1, 7);
+		TUniquePtr<asCByteCodeImage> ArgOk = MakeSetV4(4, 2, -1, 7);
 		ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::Succeeded, asCByteCodeVerifier::Verify(*ArgOk)));
 
 		asCByteCodeImageBuilder JumpBuilder;
@@ -287,8 +287,8 @@ public:
 		Frame.LocalDwords = 4;
 		Frame.ParameterDwords = 2;
 		Frame.ResultDwords = 1;
-		Frame.ResultOffset = 0;
-		Frame.InitializedObjectSlots.Add(0);
+		Frame.ResultOffset = 1;
+		Frame.InitializedObjectSlots.Add(2);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.SetFrameDescriptor(Frame)));
 		asSByteCodeRequirement TypeReq;
 		TypeReq.Role = asEByteCodeRequirementRole::Type;
@@ -296,31 +296,49 @@ public:
 		TypeReq.Name = TEXT("T");
 		asUINT TypeSlot = 0;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddRequirement(TypeReq, TypeSlot)));
+		asSByteCodeOperand ObjectLocal;
+		ObjectLocal.Kind = asEByteCodeOperandKind::Local;
+		ObjectLocal.Immediate = 2;
+		asSByteCodeOperand ObjectType;
+		ObjectType.Kind = asEByteCodeOperandKind::TypeSlot;
+		ObjectType.Slot = TypeSlot;
+		asSByteCodeOperand Zero;
+		Zero.Kind = asEByteCodeOperandKind::ImmediateS32;
+		Zero.Immediate = 0;
+		asSByteCodeOperand AllocOps[2] = {ObjectType, Zero};
+		asSByteCodeOperand FreeOps[2] = {ObjectLocal, ObjectType};
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PSF, MakeArrayView(&ObjectLocal, 1))));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_ALLOC, MakeArrayView(AllocOps, 2))));
 		asSByteCodeCleanupAction Cleanup;
 		Cleanup.Kind = asEByteCodeCleanupKind::DestroyObject;
-		Cleanup.Path = asEByteCodeCleanupPath::Both;
-		Cleanup.FrameOffset = 0;
+		Cleanup.Path = asEByteCodeCleanupPath::Exception;
+		Cleanup.InstructionIndex = 1;
+		Cleanup.FrameOffset = 2;
 		Cleanup.TypeSlot = TypeSlot;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddCleanupAction(Cleanup)));
+		Cleanup.Path = asEByteCodeCleanupPath::Normal;
+		Cleanup.InstructionIndex = 2;
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddCleanupAction(Cleanup)));
+		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_FREE, MakeArrayView(FreeOps, 2))));
 		asSByteCodeSourceRecord Source;
 		Source.InstructionIndex = 0;
 		Source.Line = 12;
 		Source.Column = 4;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddSourceRecord(Source)));
-		asSByteCodeOperand SetOps[2] = { Local(0), Imm32(7) };
+		asSByteCodeOperand SetOps[2] = { Local(1), Imm32(7) };
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_SetV4, MakeArrayView(SetOps, 2))));
-		TUniquePtr<asCByteCodeImage> Image = FinishRet(Builder);
+		TUniquePtr<asCByteCodeImage> Image = FinishRet(Builder, 2);
 		ASSERT_THAT(IsNotNull(Image.Get()));
 		ASSERT_THAT(AreEqual(4u, Image->Functions[0].Frame.LocalDwords));
 		ASSERT_THAT(AreEqual(2u, Image->Functions[0].Frame.ParameterDwords));
 		ASSERT_THAT(AreEqual(1u, Image->Functions[0].Frame.ResultDwords));
-		ASSERT_THAT(AreEqual(1, Image->Functions[0].Cleanup.Num()));
+		ASSERT_THAT(AreEqual(2, Image->Functions[0].Cleanup.Num()));
 		ASSERT_THAT(AreEqual(1, Image->Functions[0].Source.Num()));
 		ASSERT_THAT(AreEqual(12, Image->Functions[0].Source[0].Line));
 		ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::Succeeded, asCByteCodeVerifier::Verify(*Image)));
 
 		Image->Functions[0].Frame.ResultDwords = 2;
-		Image->Functions[0].Frame.ResultOffset = 3;
+		Image->Functions[0].Frame.ResultOffset = 1;
 		ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::InvalidFrame, asCByteCodeVerifier::Verify(*Image)));
 	}
 };

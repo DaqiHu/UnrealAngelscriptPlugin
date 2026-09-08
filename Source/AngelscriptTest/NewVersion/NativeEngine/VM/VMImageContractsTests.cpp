@@ -53,11 +53,15 @@ private:
 		Encoding.WriteBytes(MakeArrayView(Requirement.LayoutWitness));
 		Encoding.WriteBytes(Requirement.SignatureKey.GetBytes());
 		Encoding.WriteBytes(Requirement.ReturnTypeUse.GetBytes());
+		Encoding.WriteUInt32(Requirement.ReturnDwords);
+		Encoding.WriteUInt8(static_cast<uint8>(Requirement.ReturnStorageKind));
 		Encoding.WriteUInt32(static_cast<uint32>(Requirement.Parameters.Num()));
 		for (const asSByteCodeParameterContract& Parameter : Requirement.Parameters)
 		{
 			Encoding.WriteBytes(Parameter.TypeUse.GetBytes());
 			Encoding.WriteUInt8(Parameter.PassingMode);
+			Encoding.WriteUInt32(Parameter.StorageDwords);
+			Encoding.WriteUInt8(static_cast<uint8>(Parameter.StorageKind));
 		}
 		Encoding.WriteUInt32(Requirement.CallableTraits);
 		Encoding.WriteBytes(Requirement.OwnerKey.GetBytes());

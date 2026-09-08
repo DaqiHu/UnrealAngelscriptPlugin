@@ -145,6 +145,21 @@ TEST_CLASS_WITH_FLAGS(VMSourceScopeCleanup, "Angelscript.UnitTest.NativeEngine",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 public:
+	TEST_METHOD(ConditionalReturnsEachDestroyOuterLocalOnce)
+	{
+		using namespace VMSourceScopeCleanupPrivate;
+		for (int32 Flag : {0, 1})
+		{
+			ResetTraces();
+			int32 Value = 0;
+			const FString Source = FString::Printf(TEXT("int Run() { Box A(1); if (%d == 0) return 7; return 9; }"), Flag);
+			ASSERT_THAT(IsTrue(RunCleanup(Source, Value), GLastCleanupError));
+			ASSERT_THAT(AreEqual(Flag == 0 ? 7 : 9, Value));
+			ASSERT_THAT(AreEqual(1, GScopeCleanupTrace.Num()));
+			ASSERT_THAT(AreEqual(1, GScopeCleanupTrace[0]));
+		}
+	}
+
 	TEST_METHOD(IntegerControlStillSeven)
 	{
 		FSourceExecutionInput Input(TEXT("int Run() { return 1+2*3; }"));

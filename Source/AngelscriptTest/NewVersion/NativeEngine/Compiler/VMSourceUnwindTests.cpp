@@ -222,6 +222,35 @@ public:
 		if (Snapshot) Snapshot->Release();
 	}
 
+	TEST_METHOD(FailedConstructorNeverRunsCompleteDestructor)
+	{
+		VMSourceUnwindPrivate::ResetTrace();
+		VMSourceUnwindPrivate::FUnwindHost Host;
+		ASSERT_THAT(IsTrue(Host.Initialize()));
+		FSourceExecutionInput Input(
+			FString(VMSourceUnwindPrivate::BoxSource())
+			+ TEXT("class Broken { Broken() { Box Local(1); Host::Fail(); } ~Broken() { Host::Mark(99); } } ")
+			+ TEXT("int Run() { Broken X(); return 0; } int Recovery() { return 97; }"),
+			Host.Fixture.Context, Host.Fixture.Image);
+		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+		TUniquePtr<asCByteCodeImage> Image;
+		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::EmitImage(Builder, Image), VMSourceUnwindPrivate::GLastError));
+		FNativeEngineOwner Engine;
+		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::SetupEngine(*Engine.Ptr, Host, Builder), VMSourceUnwindPrivate::GLastError));
+		asCExecutableSnapshot* Snapshot = nullptr;
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		asCScriptFunction* Run = FindSourceFunction(Builder, "Run");
+		asCScriptFunction* Recovery = FindSourceFunction(Builder, "Recovery");
+		asIScriptContext* Context = Engine.Ptr->CreateContext();
+		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
+		ASSERT_THAT(AreEqual(asEXECUTION_EXCEPTION, Context->Execute()));
+		ASSERT_THAT(AreEqual(1, VMSourceUnwindPrivate::GMarkTrace.Num()));
+		ASSERT_THAT(AreEqual(1, VMSourceUnwindPrivate::GMarkTrace[0]));
+		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::RecoverNinetySeven(Context, Recovery)));
+		Context->Release();
+		if (Snapshot) Snapshot->Release();
+	}
+
 	TEST_METHOD(NestedMemberPartialConstructionOrder)
 	{
 		VMSourceUnwindPrivate::ResetTrace();

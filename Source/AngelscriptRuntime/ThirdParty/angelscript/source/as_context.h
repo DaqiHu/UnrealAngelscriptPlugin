@@ -57,6 +57,7 @@ class asCExecutableSnapshot;
 class asCExecutableFunction;
 struct FScriptExecution;
 struct asSStableKey;
+ANGELSCRIPTRUNTIME_API void asVmInvokeDestruct(void*, asCObjectType*);
 
 // Call-scoped exception payload shared by direct JIT calls. Context-mediated
 // calls copy their first public exception into the caller's record exactly
@@ -103,6 +104,11 @@ public:
 	asIScriptEngine *GetEngine() const;
 
 	// Execution
+private:
+	friend ANGELSCRIPTRUNTIME_API void asVmInvokeDestruct(void*, asCObjectType*);
+	int PrepareForVmCleanup(asCScriptFunction* Function);
+	bool m_vmCleanup = false;
+public:
 	int             Prepare(asIScriptFunction *func);
 	int             Prepare(asCExecutableSnapshot* Snapshot, const asSStableKey& Key);
 	int             Unprepare();
@@ -191,8 +197,8 @@ public:
 
 	void CallExceptionCallback();
 
-	int  CallGeneric(asCScriptFunction *func);
-	int  CallFunctionCaller(asCScriptFunction *func);
+	int  CallGeneric(asCScriptFunction *func, const std::shared_ptr<asSSystemFunctionInterface>& Binding = {});
+	int  CallFunctionCaller(asCScriptFunction *func, const std::shared_ptr<asSSystemFunctionInterface>& Binding = {});
 #ifndef AS_NO_EXCEPTIONS
 	void HandleAppException();
 #endif
@@ -272,6 +278,7 @@ public:
 	asCScriptFunction *m_initialFunction;
 	int                m_returnValueSize;
 	int                m_argumentsSize;
+	asSVMCallFrame m_initialCallFrame;
 
 	// callbacks
 	asLineCallback m_lineCallback = nullptr;

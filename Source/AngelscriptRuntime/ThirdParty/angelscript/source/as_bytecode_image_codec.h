@@ -9,7 +9,7 @@ BEGIN_AS_NAMESPACE
 class ANGELSCRIPTRUNTIME_API asCByteCodeImageCodec
 {
 public:
-	static constexpr uint16 CurrentVersion = 2;
+	static constexpr uint16 CurrentVersion = 3;
 
 	static asEByteCodeImageStatus Encode(const asCByteCodeImage& Image, TArray<uint8>& OutBytes);
 	static asEByteCodeImageStatus Decode(TConstArrayView<uint8> Bytes, TUniquePtr<asCByteCodeImage>& OutImage);

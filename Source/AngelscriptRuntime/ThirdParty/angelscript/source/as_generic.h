@@ -40,6 +40,7 @@
 #define AS_GENERIC_H
 
 #include "as_config.h"
+#include "as_callfunc.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -91,7 +92,7 @@ public:
 //------------------------
 // internal
 //-------------------------
-	asCGeneric(asCScriptEngine *engine, asCScriptFunction *sysFunction, void *currentObject, asDWORD *stackPointer);
+	asCGeneric(asCScriptEngine *engine, asCScriptFunction *sysFunction, void *currentObject, asDWORD *stackPointer, const asSVMCallFrame* Frame = nullptr);
 	virtual ~asCGeneric();
 
 	void *GetReturnPointer();
@@ -103,6 +104,7 @@ public:
 	void *objectRegister;
 
 	asQWORD returnVal;
+	asSVMCallFrame CallFrame;
 };
 
 END_AS_NAMESPACE

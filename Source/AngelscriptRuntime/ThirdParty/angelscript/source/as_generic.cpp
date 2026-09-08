@@ -46,12 +46,14 @@ BEGIN_AS_NAMESPACE
 //                         doesn't have to count the position of the argument with every call
 
 // internal
-asCGeneric::asCGeneric(asCScriptEngine *engine, asCScriptFunction *sysFunction, void *currentObject, asDWORD *stackPointer)
+asCGeneric::asCGeneric(asCScriptEngine *engine, asCScriptFunction *sysFunction, void *currentObject, asDWORD *stackPointer, const asSVMCallFrame* Frame)
 {
 	this->engine = engine;
 	this->sysFunction = sysFunction;
 	this->currentObject = currentObject;
 	this->stackPointer = stackPointer;
+	if (Frame) CallFrame = *Frame;
+	else CallFrame.Prepare(sysFunction);
 	
 	objectRegister = 0;
 	returnVal = 0;
@@ -102,7 +104,7 @@ asBYTE asCGeneric::GetArgByte(asUINT arg)
 		return 0;
 
 	// Determine the position of the argument
-	int offset = sysFunction->parameterOffsets[arg];
+	int offset = CallFrame.ParameterOffsets[arg];
 
 	// Get the value
 	return *(asBYTE*)&stackPointer[offset];
@@ -123,7 +125,7 @@ asWORD asCGeneric::GetArgWord(asUINT arg)
 		return 0;
 
 	// Determine the position of the argument
-	int offset = sysFunction->parameterOffsets[arg];
+	int offset = CallFrame.ParameterOffsets[arg];
 
 	// Get the value
 	return *(asWORD*)&stackPointer[offset];
@@ -144,7 +146,7 @@ asDWORD asCGeneric::GetArgDWord(asUINT arg)
 		return 0;
 
 	// Determine the position of the argument
-	int offset = sysFunction->parameterOffsets[arg];
+	int offset = CallFrame.ParameterOffsets[arg];
 
 	// Get the value
 	return *(asDWORD*)&stackPointer[offset];
@@ -165,7 +167,7 @@ asQWORD asCGeneric::GetArgQWord(asUINT arg)
 		return 0;
 
 	// Determine the position of the argument
-	int offset = sysFunction->parameterOffsets[arg];
+	int offset = CallFrame.ParameterOffsets[arg];
 
 	// Get the value
 	return *(asQWORD*)(&stackPointer[offset]);
@@ -186,7 +188,7 @@ float asCGeneric::GetArgFloat(asUINT arg)
 		return 0;
 
 	// Determine the position of the argument
-	int offset = sysFunction->parameterOffsets[arg];
+	int offset = CallFrame.ParameterOffsets[arg];
 
 	// Get the value
 	return *(float*)(&stackPointer[offset]);
@@ -207,7 +209,7 @@ double asCGeneric::GetArgDouble(asUINT arg)
 		return 0;
 
 	// Determine the position of the argument
-	int offset = sysFunction->parameterOffsets[arg];
+	int offset = CallFrame.ParameterOffsets[arg];
 
 	// Get the value
 	return *(double*)(&stackPointer[offset]);
@@ -225,7 +227,7 @@ void *asCGeneric::GetArgAddress(asUINT arg)
 		return 0;
 
 	// Determine the position of the argument
-	int offset = sysFunction->parameterOffsets[arg];
+	int offset = CallFrame.ParameterOffsets[arg];
 
 	// Get the value
 	return (void*)*(asPWORD*)(&stackPointer[offset]);
@@ -243,7 +245,7 @@ void *asCGeneric::GetArgObject(asUINT arg)
 		return 0;
 
 	// Determine the position of the argument
-	int offset = sysFunction->parameterOffsets[arg];
+	int offset = CallFrame.ParameterOffsets[arg];
 
 	// Get the value
 	return *(void**)(&stackPointer[offset]);
@@ -253,7 +255,7 @@ void *asCGeneric::GetArgObject(asUINT arg)
 void *asCGeneric::GetAddressOfArg(asUINT arg)
 {
 	// For object variables it's necessary to dereference the pointer to get the address of the value
-	auto offset = sysFunction->parameterOffsets[arg];
+	auto offset = CallFrame.ParameterOffsets[arg];
 	auto& paramType = sysFunction->parameterTypes[arg];
 	if( !paramType.IsReference() && paramType.IsObject() && !paramType.IsObjectHandle() )
 		return *(void**)&stackPointer[offset];
@@ -279,7 +281,7 @@ int asCGeneric::GetArgTypeId(asUINT arg, asDWORD *flags) const
 		return engine->GetTypeIdFromDataType(*dt);
 	else
 	{
-		int offset = sysFunction->parameterOffsets[arg];
+		int offset = CallFrame.ParameterOffsets[arg];
 
 		// Skip the actual value to get to the type id
 		offset += AS_PTR_SIZE;

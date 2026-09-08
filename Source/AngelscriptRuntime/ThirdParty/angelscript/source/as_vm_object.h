@@ -28,6 +28,8 @@ ANGELSCRIPTRUNTIME_API void asVmFreeObject(void* Payload);
 ANGELSCRIPTRUNTIME_API asSVmObjectHeader* asVmHeaderFromPayload(void* Payload);
 ANGELSCRIPTRUNTIME_API asCObjectType* asVmTypeFromPayload(void* Payload);
 ANGELSCRIPTRUNTIME_API void asVmInvokeDestruct(void* Payload, asCObjectType* Type);
+// Internal runtime authority scoped to an owning destructor on this thread.
+ANGELSCRIPTRUNTIME_API bool asVmHasCleanupAuthority(const asCScriptEngine* Engine);
 ANGELSCRIPTRUNTIME_API int asVmAddRef(void* Payload);
 ANGELSCRIPTRUNTIME_API int asVmRelease(void* Payload);
 ANGELSCRIPTRUNTIME_API int asVmGetRefCount(void* Payload);

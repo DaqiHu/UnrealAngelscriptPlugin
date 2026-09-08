@@ -126,7 +126,7 @@ namespace
 			asCScriptFunction* Target = ResolveFunctionSlot(Engine, Image, Instruction.Operands[0].Slot);
 			if (!Target) return asEByteCodeLinkStatus::MissingDeclaration;
 			if ((Instruction.Opcode == asBC_CALLSYS || Instruction.Opcode == asBC_Thiscall1)
-				&& Target->funcType == asFUNC_SYSTEM && Engine.ResolveSystemInterface(Target) == nullptr)
+				&& Target->funcType == asFUNC_SYSTEM && Engine.AcquireSystemInterface(Target) == nullptr)
 			{
 				return asEByteCodeLinkStatus::MissingBinding;
 			}
@@ -143,7 +143,7 @@ namespace
 			if (!Target) return asEByteCodeLinkStatus::MissingDeclaration;
 			if (Instruction.Opcode == asBC_CALLBND
 				&& Target->funcType == asFUNC_SYSTEM
-				&& Engine.ResolveSystemInterface(Target) == nullptr)
+				&& Engine.AcquireSystemInterface(Target) == nullptr)
 			{
 				return asEByteCodeLinkStatus::MissingBinding;
 			}
@@ -421,43 +421,22 @@ namespace
 		const asSByteCodeFunctionBody& Body,
 		asCExecutableFunction& Executable,
 		asCScriptEngine& Engine,
-		const asCByteCodeImage& Image)
+		const asCByteCodeImage& Image,
+		const asSByteCodeFunctionLifetime& Lifetime)
 	{
 		Executable.AllocateScriptData();
 		Executable.scriptData->byteCode.SetLength(0);
-		Executable.scriptData->stackNeeded = FMath::Max(Body.FrameSize, 16u);
-		Executable.scriptData->variableSpace = FMath::Max(Body.FrameSize, 2u);
+		const asUINT LocalDwords = FMath::Max(Body.FrameSize, 2u);
+		const uint64 StackDwords = static_cast<uint64>(LocalDwords) + Lifetime.TemporaryStackDwords;
+		if (StackDwords > static_cast<uint64>(MAX_int32) - 64u) return asEByteCodeLinkStatus::InvalidArgument;
+		Executable.scriptData->stackNeeded = FMath::Max(static_cast<asUINT>(StackDwords), 16u);
+		Executable.scriptData->variableSpace = LocalDwords;
 		Executable.scriptData->objVariablesOnHeap = 0;
 		Executable.scriptData->objVariablePos.SetLength(0);
 		Executable.scriptData->objVariableTypes.SetLength(0);
 		Executable.scriptData->objVariableInfo.SetLength(0);
-		if (Executable.Declaration && Executable.Declaration->parameterOffsets.GetLength() == 0)
-		{
-			Executable.Declaration->CalculateParameterOffsets();
-		}
+		if (!Executable.CallFrame.Prepare(Executable.Declaration)) return asEByteCodeLinkStatus::InvalidArgument;
 		TArray<asSByteCodeInstruction> Instructions = Body.Instructions;
-		for (int32 Index = 0; Index < Instructions.Num(); ++Index)
-		{
-			if (Instructions[Index].Opcode != asBC_JMPP) continue;
-			if (Instructions[Index].Operands.Num() < 2) return asEByteCodeLinkStatus::InvalidArgument;
-			const int32 MaxIndex = static_cast<int32>(Instructions[Index].Operands[1].Immediate);
-			if (MaxIndex < 0) return asEByteCodeLinkStatus::InvalidArgument;
-			const int32 TableCount = MaxIndex + 1;
-			if (Index + TableCount >= Instructions.Num()) return asEByteCodeLinkStatus::InvalidArgument;
-			for (int32 Slot = 1; Slot <= TableCount; ++Slot)
-			{
-				const asSByteCodeInstruction& Entry = Instructions[Index + Slot];
-				if (Entry.Opcode == asBC_JMP)
-				{
-					if (Entry.Operands.Num() < 1) return asEByteCodeLinkStatus::InvalidArgument;
-					const int32 Target = static_cast<int32>(Entry.Operands[0].Immediate);
-					if (Target < 0 || Target >= Instructions.Num())
-					{
-						return asEByteCodeLinkStatus::InvalidArgument;
-					}
-				}
-			}
-		}
 		if (Instructions.Num() == 2
 			&& Instructions[0].Opcode == asBC_PshC4
 			&& Instructions.Last().Opcode == asBC_RET)
@@ -473,11 +452,7 @@ namespace
 			asSByteCodeInstruction Copy;
 			Copy.Opcode = asBC_CpyVtoR4;
 			Copy.Operands.Add(Offset);
-			asSByteCodeInstruction Ret;
-			Ret.Opcode = asBC_RET;
-			asSByteCodeOperand Pop;
-			Pop.Immediate = 0;
-			Ret.Operands.Add(Pop);
+			asSByteCodeInstruction Ret = Instructions.Last();
 			Instructions = {Set, Copy, Ret};
 		}
 		TArray<TArray<asDWORD>> Parts;
@@ -499,6 +474,19 @@ namespace
 		for (int32 Index = 0; Index < Instructions.Num(); ++Index)
 		{
 			const asEBCInstr Opcode = Instructions[Index].Opcode;
+			if (Opcode == asBC_JMPP)
+			{
+				const int32 Maximum = static_cast<int32>(Instructions[Index].Operands[1].Immediate);
+				for (int32 Entry = 0; Entry <= Maximum; ++Entry)
+					if (Parts[Index + 1 + Entry].Num() != 2) return asEByteCodeLinkStatus::InvalidArgument;
+				Executable.IndexedJumpBounds.Add(static_cast<asUINT>(Offsets[Index]), Maximum);
+			}
+			if (Opcode == asBC_CallPtr)
+			{
+				asCScriptFunction* Expected = ResolveFunctionSlot(Engine, Image, Instructions[Index].Operands[1].Slot);
+				if (!Expected) return asEByteCodeLinkStatus::MissingDeclaration;
+				Executable.IndirectCallSignatures.Add(static_cast<asUINT>(Offsets[Index]), Expected);
+			}
 			if ((Opcode == asBC_JMP || Opcode == asBC_JZ || Opcode == asBC_JNZ
 				|| Opcode == asBC_JS || Opcode == asBC_JNS || Opcode == asBC_JP || Opcode == asBC_JNP
 				|| Opcode == asBC_JLowZ || Opcode == asBC_JLowNZ) && Parts[Index].Num() >= 2)
@@ -519,48 +507,38 @@ namespace
 				Executable.scriptData->byteCode.PushLast(Word);
 			}
 		}
-		TMap<int32, asUINT> OffsetToIndex;
-		for (const asSByteCodeCleanupAction& Action : Body.Cleanup)
+		for (int32 Slot = 0; Slot < Lifetime.FrameOffsets.Num(); ++Slot)
 		{
-			if (Action.Kind != asEByteCodeCleanupKind::DestroyObject) continue;
-			if (!OffsetToIndex.Contains(Action.FrameOffset))
+			asCObjectType* Type = CastToObjectType(Engine.FindMetadataType(Image.Requirements[Lifetime.TypeSlots[Slot]].Key));
+			if (!Type) return asEByteCodeLinkStatus::SchemaMismatch;
+			Executable.scriptData->objVariablePos.PushLast(Lifetime.FrameOffsets[Slot]);
+			Executable.scriptData->objVariableTypes.PushLast(Type);
+		}
+		Executable.scriptData->objVariablesOnHeap = static_cast<asUINT>(Lifetime.FrameOffsets.Num());
+		// The verifier proves one compatible incoming lifetime state at every
+		// reachable PC. Encode changes in physical instruction order: a source
+		// marker's position alone cannot describe branches or reconstruction.
+		TArray<bool> Previous;
+		Previous.Init(false, Lifetime.FrameOffsets.Num());
+		if (!Lifetime.FrameOffsets.IsEmpty())
+		{
+			for (int32 Index = 0; Index < Lifetime.Before.Num(); ++Index)
 			{
-				const asUINT Index = static_cast<asUINT>(Executable.scriptData->objVariablePos.GetLength());
-				OffsetToIndex.Add(Action.FrameOffset, Index);
-				Executable.scriptData->objVariablePos.PushLast(Action.FrameOffset);
-				asCObjectType* Type = nullptr;
-				if (Action.TypeSlot < static_cast<asUINT>(Image.Requirements.Num())
-					&& Image.Requirements[Action.TypeSlot].Role == asEByteCodeRequirementRole::Type)
+				if (!Lifetime.Reachable[Index]) continue;
+				for (int32 Slot = 0; Slot < Lifetime.FrameOffsets.Num(); ++Slot)
 				{
-					Type = CastToObjectType(Engine.FindMetadataType(Image.Requirements[Action.TypeSlot].Key));
+					const bool bConstructed = Lifetime.Before[Index][Slot] == asEByteCodeObjectState::Constructed;
+					if (Previous[Slot] == bConstructed) continue;
+					asSObjectVariableInfo Info;
+					Info.programPos = static_cast<asUINT>(Offsets[Index]);
+					Info.variableOffset = Lifetime.FrameOffsets[Slot];
+					Info.option = bConstructed ? asOBJ_INIT : asOBJ_UNINIT;
+					Executable.scriptData->objVariableInfo.PushLast(Info);
+					Previous[Slot] = bConstructed;
 				}
-				Executable.scriptData->objVariableTypes.PushLast(Type);
-			}
-			Executable.scriptData->objVariablesOnHeap = static_cast<asUINT>(Executable.scriptData->objVariablePos.GetLength());
-			asSObjectVariableInfo Info;
-			Info.programPos = Action.InstructionIndex < static_cast<asUINT>(Offsets.Num())
-				? static_cast<asUINT>(Offsets[Action.InstructionIndex])
-				: static_cast<asUINT>(Cursor);
-			Info.variableOffset = Action.FrameOffset;
-			Info.option = Action.Path == asEByteCodeCleanupPath::Normal ? asOBJ_UNINIT : asOBJ_INIT;
-			Executable.scriptData->objVariableInfo.PushLast(Info);
-		}
-		if (Executable.scriptData->objVariableInfo.GetLength() > 1)
-		{
-			TArray<asSObjectVariableInfo> Ordered;
-			for (asUINT Index = 0; Index < Executable.scriptData->objVariableInfo.GetLength(); ++Index)
-			{
-				Ordered.Add(Executable.scriptData->objVariableInfo[Index]);
-			}
-			Ordered.Sort([](const asSObjectVariableInfo& Left, const asSObjectVariableInfo& Right)
-			{
-				return Left.programPos < Right.programPos;
-			});
-			for (int32 Index = 0; Index < Ordered.Num(); ++Index)
-			{
-				Executable.scriptData->objVariableInfo[Index] = Ordered[Index];
 			}
 		}
+
 		if (Body.Source.Num() > 0)
 		{
 			if (Body.Source[0].FileStringSlot < static_cast<asUINT>(Image.Strings.Num()))
@@ -689,7 +667,9 @@ namespace
 		{
 			return asEByteCodeLinkStatus::SchemaMismatch;
 		}
-		if (Requirement.ReturnTypeUse != ReturnTypeUse)
+		if (Requirement.ReturnTypeUse != ReturnTypeUse
+			|| Requirement.ReturnDwords != static_cast<asUINT>(Function.GetReturnDataType().GetSizeOnStackDWords())
+			|| Requirement.ReturnStorageKind != asByteCodeStorageKind(Function.GetReturnDataType()))
 		{
 			return asEByteCodeLinkStatus::SchemaMismatch;
 		}
@@ -715,7 +695,9 @@ namespace
 				PassingMode = static_cast<uint8>(Function.inOutFlags[Index]);
 			}
 			if (Requirement.Parameters[Index].TypeUse != TypeUse
-				|| Requirement.Parameters[Index].PassingMode != PassingMode)
+				|| Requirement.Parameters[Index].PassingMode != PassingMode
+				|| Requirement.Parameters[Index].StorageDwords != static_cast<asUINT>(ParameterType->GetSizeOnStackDWords())
+				|| Requirement.Parameters[Index].StorageKind != asByteCodeStorageKind(*ParameterType))
 			{
 				return asEByteCodeLinkStatus::SchemaMismatch;
 			}
@@ -731,7 +713,9 @@ namespace
 			| (Function.IsFinal() ? 2u : 0u)
 			| (Function.IsOverride() ? 4u : 0u)
 			| (Function.IsProperty() ? 8u : 0u)
-			| (Function.IsReadOnly() ? 16u : 0u);
+			| (Function.IsReadOnly() ? 16u : 0u)
+		| (Function.GetMetadataDeclarationKind() == asEFunctionIdentityKind::Constructor ? 32u : 0u)
+		| (Function.DoesReturnOnStack() ? 64u : 0u);
 		if (Requirement.CallableTraits != CallableTraits)
 		{
 			return asEByteCodeLinkStatus::SchemaMismatch;
@@ -793,7 +777,7 @@ asEByteCodeLinkStatus asLinkByteCodeImage(
 {
 	OutSnapshot = nullptr;
 	if (Image.GetPointerByteSize() != sizeof(void*)
-		|| Image.GetFormatVersion() != 2
+		|| Image.GetFormatVersion() != 3
 		|| Image.GetOpcodeAbi() != asBC_MAXBYTECODE)
 	{
 		return asEByteCodeLinkStatus::InvalidArgument;
@@ -801,7 +785,8 @@ asEByteCodeLinkStatus asLinkByteCodeImage(
 	asQWORD Generation = 0;
 	const asEByteCodeLinkStatus Admission = Engine.BeginExecutablePublication(Generation);
 	if (Admission != asEByteCodeLinkStatus::Succeeded) return Admission;
-	if (asCByteCodeVerifier::Verify(Image) != asEByteCodeVerifyStatus::Succeeded)
+	TArray<asSByteCodeFunctionLifetime> Lifetimes;
+	if (asCByteCodeVerifier::VerifyWithLifetimes(Image, Lifetimes).Status != asEByteCodeVerifyStatus::Succeeded)
 	{
 		return asEByteCodeLinkStatus::Unverified;
 	}
@@ -881,6 +866,23 @@ asEByteCodeLinkStatus asLinkByteCodeImage(
 			Snapshot->Release();
 			return asEByteCodeLinkStatus::MissingDeclaration;
 		}
+		int64 ArgumentDwords = Function->objectType && !Function->IsMetadataStatic() ? AS_PTR_SIZE : 0;
+		if (Function->DoesReturnOnStack()) ArgumentDwords += AS_PTR_SIZE;
+		for (asUINT Index = 0; Index < Function->parameterTypes.GetLength(); ++Index)
+			ArgumentDwords += Function->parameterTypes[Index].GetSizeOnStackDWords();
+		if (ArgumentDwords < 0 || ArgumentDwords > 32767 || Body.ParameterSize != ArgumentDwords)
+		{
+			Snapshot->Release();
+			return asEByteCodeLinkStatus::SchemaMismatch;
+		}
+		if (Body.Instructions.Num() == 2 && Body.Instructions[0].Opcode == asBC_PshC4
+			&& Body.Instructions.Last().Opcode == asBC_RET
+			&& (Function->DoesReturnOnStack() || Function->returnType.GetSizeOnStackDWords() != 1
+				|| asByteCodeStorageKind(Function->returnType) != asEByteCodeStorageKind::Value))
+		{
+			Snapshot->Release();
+			return asEByteCodeLinkStatus::SchemaMismatch;
+		}
 		if (asCExecutableFunction* Existing = Engine.FindPublishedExecutable(Body.FunctionKey))
 		{
 			if (Existing->scriptData && Existing->scriptData->byteCode.GetLength() > 0)
@@ -894,11 +896,16 @@ asEByteCodeLinkStatus asLinkByteCodeImage(
 		Executable->Declaration = Function;
 		Executable->Key = Body.FunctionKey;
 		Executable->Owner = Snapshot;
-		if (asSSystemFunctionInterface* Bound = Engine.ResolveSystemInterface(Function))
+		if (auto Bound = Engine.AcquireSystemInterface(Function))
 		{
 			Executable->sysFuncIntf = asNEW(asSSystemFunctionInterface)(*Bound);
 		}
-		const asEByteCodeLinkStatus Lowered = LowerFunction(Body, *Executable, Engine, Image);
+		const asSByteCodeFunctionLifetime* Lifetime = Lifetimes.FindByPredicate([&](const asSByteCodeFunctionLifetime& Candidate)
+		{
+			return Candidate.FunctionKey == Body.FunctionKey;
+		});
+		const asEByteCodeLinkStatus Lowered = Lifetime
+			? LowerFunction(Body, *Executable, Engine, Image, *Lifetime) : asEByteCodeLinkStatus::Unverified;
 		if (Lowered != asEByteCodeLinkStatus::Succeeded)
 		{
 			Snapshot->Release();
@@ -923,43 +930,53 @@ asEByteCodeLinkStatus asLinkByteCodeImage(
 
 asEByteCodeLinkStatus asCScriptEngine::LinkByteCodeImage(const asCByteCodeImage& Image, asCExecutableSnapshot*& OutSnapshot)
 {
-	if (shuttingDown || metadataRegistrationRetired) return asEByteCodeLinkStatus::Retired;
+	if (shuttingDown || vmRetirementRequested || metadataRegistrationRetired) return asEByteCodeLinkStatus::Retired;
 	return asLinkByteCodeImage(*this, Image, OutSnapshot);
 }
 
 asEByteCodeLinkStatus asCScriptEngine::BindNativeFunction(const asSStableKey& FunctionKey, const asSFuncPtr& Function, asDWORD CallConv, asFunctionCaller Caller, void* Auxiliary, int BaseOffset)
 {
-	if (FunctionKey.IsZero() || Function.ptr.f.func == nullptr) return asEByteCodeLinkStatus::InvalidArgument;
-	asCScriptFunction* Target = FindMetadataFunction(FunctionKey);
-	if (!Target) return asEByteCodeLinkStatus::MissingDeclaration;
-	if (Target->funcType != asFUNC_SYSTEM) return asEByteCodeLinkStatus::InvalidArgument;
-	asSSystemFunctionInterface Internal;
-	const int Detected = DetectCallingConvention(Target->objectType != nullptr, Function, static_cast<int>(CallConv), Auxiliary, Caller, &Internal);
-	if (Detected < 0) return asEByteCodeLinkStatus::InvalidArgument;
-	if (BaseOffset != 0) Internal.baseOffset = BaseOffset;
-	if (!Caller.IsBound()
-		&& Internal.callConv != ICC_GENERIC_FUNC
-		&& Internal.callConv != ICC_GENERIC_METHOD)
-	{
-		return asEByteCodeLinkStatus::InvalidArgument;
-	}
-	if (asSSystemFunctionInterface* const* Existing = nativeInterfaces.Find(FunctionKey))
-	{
-		asDELETE(*Existing, asSSystemFunctionInterface);
-		nativeInterfaces.Remove(FunctionKey);
-	}
-	asSSystemFunctionInterface* Stored = asNEW(asSSystemFunctionInterface)(Internal);
-	if (!Stored) return asEByteCodeLinkStatus::ResourceFailure;
-	if (Target->parameterOffsets.GetLength() == 0)
-	{
-		Target->CalculateParameterOffsets();
-	}
-	if (Internal.callConv == ICC_GENERIC_FUNC || Internal.callConv == ICC_GENERIC_METHOD)
-	{
-		PrepareSystemFunctionGeneric(Target, Stored, this);
-	}
-	nativeInterfaces.Add(FunctionKey, Stored);
-	return asEByteCodeLinkStatus::Succeeded;
+ asQWORD Generation = 0;
+ const auto Admission = BeginExecutablePublication(Generation);
+ if (Admission != asEByteCodeLinkStatus::Succeeded) return Admission;
+ if (FunctionKey.IsZero() || Function.ptr.f.func == nullptr) return asEByteCodeLinkStatus::InvalidArgument;
+ std::shared_ptr<asCScriptFunction> Declaration;
+ {
+  std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
+  if (vmRetirementRequested || metadataRegistrationRetired) return asEByteCodeLinkStatus::Retired;
+  asCScriptFunction* Target = metadataFunctionsByKey.FindRef(FunctionKey);
+  if (!Target) return asEByteCodeLinkStatus::MissingDeclaration;
+  if (Target->funcType != asFUNC_SYSTEM) return asEByteCodeLinkStatus::InvalidArgument;
+  Target->AddRef();
+  Declaration = std::shared_ptr<asCScriptFunction>(Target, [](asCScriptFunction* Value) { Value->Release(); });
+ }
+ asCScriptFunction* Target = Declaration.get();
+ asSSystemFunctionInterface Internal;
+ const int Detected = DetectCallingConvention(Target->objectType != nullptr, Function, static_cast<int>(CallConv), Auxiliary, Caller, &Internal);
+ if (Detected < 0) return asEByteCodeLinkStatus::InvalidArgument;
+ if (BaseOffset != 0) Internal.baseOffset = BaseOffset;
+ if (!Caller.IsBound() && Internal.callConv != ICC_GENERIC_FUNC && Internal.callConv != ICC_GENERIC_METHOD)
+  return asEByteCodeLinkStatus::InvalidArgument;
+ if (!Internal.CallFrame.Prepare(Target)) return asEByteCodeLinkStatus::InvalidArgument;
+ Internal.paramSize = Internal.CallFrame.ArgumentDwords;
+ asSSystemFunctionInterface* Storage = asNEW(asSSystemFunctionInterface)(Internal);
+ if (!Storage) return asEByteCodeLinkStatus::ResourceFailure;
+ std::shared_ptr<asSSystemFunctionInterface> Candidate(Storage, [Declaration](asSSystemFunctionInterface* Value)
+ {
+  asDELETE(Value, asSSystemFunctionInterface);
+ });
+ if ((Internal.callConv == ICC_GENERIC_FUNC || Internal.callConv == ICC_GENERIC_METHOD)
+  && PrepareSystemFunctionGeneric(Target, Storage, this) != 0) return asEByteCodeLinkStatus::InvalidArgument;
+ std::shared_ptr<asSSystemFunctionInterface> Previous;
+ {
+  std::lock_guard<std::mutex> Lock(executablePublicationMutex);
+  if (shuttingDown || vmRetirementRequested || metadataRegistrationRetired || executablePublicationGeneration != Generation)
+   return asEByteCodeLinkStatus::Retired;
+  Previous = nativeInterfaces.FindRef(FunctionKey);
+  nativeInterfaces.Add(FunctionKey, Candidate);
+ }
+ // Release an unobserved prior generation outside publication/metadata locks.
+ return asEByteCodeLinkStatus::Succeeded;
 }
 
 asEByteCodeLinkStatus asCScriptEngine::BindNativeFunction(const asSStableKey& FunctionKey, void* Native)
@@ -980,6 +997,7 @@ asEByteCodeLinkStatus asCScriptEngine::BindGlobalStorage(const asSStableKey& Dec
 {
 	if (DeclarationKey.IsZero() || !Storage) return asEByteCodeLinkStatus::InvalidArgument;
 	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
+	if (shuttingDown || vmRetirementRequested || metadataRegistrationRetired) return asEByteCodeLinkStatus::Retired;
 	if (!metadataGlobalsByKey.Contains(DeclarationKey)) return asEByteCodeLinkStatus::MissingDeclaration;
 	metadataGlobalBindings.Add(DeclarationKey, Storage);
 	return asEByteCodeLinkStatus::Succeeded;
@@ -1032,21 +1050,29 @@ void asCScriptEngine::DetachPublishedSnapshot(asCExecutableSnapshot* Snapshot)
 	}
 }
 
-asSSystemFunctionInterface* asCScriptEngine::ResolveSystemInterface(asCScriptFunction* Function) const
+std::shared_ptr<asSSystemFunctionInterface> asCScriptEngine::AcquireSystemInterface(asCScriptFunction* Function) const
 {
-	if (!Function) return nullptr;
-	if (asCExecutableFunction* Executable = FindPublishedExecutable(Function->GetStableKey()))
-	{
-		if (Executable->sysFuncIntf) return Executable->sysFuncIntf;
-	}
-	if (asSSystemFunctionInterface* const* Bound = nativeInterfaces.Find(Function->GetStableKey())) return *Bound;
-	return Function->sysFuncIntf;
+ if (!Function) return {};
+ std::lock_guard<std::mutex> Lock(executablePublicationMutex);
+ if (const auto* Published = publishedExecutables.Find(Function->GetStableKey()))
+ {
+  auto* Executable = *Published;
+  if (Executable && Executable->sysFuncIntf && Executable->Owner)
+  {
+   auto* Snapshot = Executable->Owner;
+   Snapshot->AddRef();
+   return std::shared_ptr<asSSystemFunctionInterface>(Executable->sysFuncIntf,
+    [Snapshot](asSSystemFunctionInterface*) { Snapshot->Release(); });
+  }
+ }
+ if (const auto* Bound = nativeInterfaces.Find(Function->GetStableKey())) return *Bound;
+ return {};
 }
 
 asEByteCodeLinkStatus asCScriptEngine::BeginExecutablePublication(asQWORD& OutGeneration)
 {
 	std::lock_guard<std::mutex> Lock(executablePublicationMutex);
-	if (shuttingDown || metadataRegistrationRetired) return asEByteCodeLinkStatus::Retired;
+	if (shuttingDown || vmRetirementRequested || metadataRegistrationRetired) return asEByteCodeLinkStatus::Retired;
 	OutGeneration = executablePublicationGeneration;
 	return asEByteCodeLinkStatus::Succeeded;
 }
@@ -1054,7 +1080,7 @@ asEByteCodeLinkStatus asCScriptEngine::BeginExecutablePublication(asQWORD& OutGe
 asEByteCodeLinkStatus asCScriptEngine::CommitExecutablePublication(asCExecutableSnapshot& Snapshot, asQWORD Generation)
 {
 	std::lock_guard<std::mutex> Lock(executablePublicationMutex);
-	if (shuttingDown || metadataRegistrationRetired) return asEByteCodeLinkStatus::Retired;
+	if (shuttingDown || vmRetirementRequested || metadataRegistrationRetired) return asEByteCodeLinkStatus::Retired;
 	if (executablePublicationGeneration != Generation) return asEByteCodeLinkStatus::Retired;
 	for (auto& Pair : Snapshot.Executables)
 	{

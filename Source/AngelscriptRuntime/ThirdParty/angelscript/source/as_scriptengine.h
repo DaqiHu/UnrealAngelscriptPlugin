@@ -291,6 +291,12 @@ public:
 	// Semantic registration only: does not prepare VM bytecode or callables.
 	asEMetadataRegistrationResult RegisterMetadataImage(const std::shared_ptr<asCMetadataImage>& Image);
 	void RetireMetadataImages();
+	bool AcquireVmObjectLease();
+	void ReleaseVmObjectLease();
+	bool BeginVmOperation(bool Cleanup = false);
+	void EndVmOperation();
+	void DrainVmRetirement();
+	bool IsVmRetirementRequested() const { return vmRetirementRequested.load(); }
 	asEByteCodeLinkStatus LinkByteCodeImage(const asCByteCodeImage& Image, class asCExecutableSnapshot*& OutSnapshot);
 	asEByteCodeLinkStatus BindNativeFunction(const asSStableKey& FunctionKey, void* Native);
 	asEByteCodeLinkStatus BindNativeFunction(const asSStableKey& FunctionKey, const asSFuncPtr& Function, asDWORD CallConv, asFunctionCaller Caller = nullptr, void* Auxiliary = nullptr, int BaseOffset = 0);
@@ -299,7 +305,7 @@ public:
 	class asCExecutableFunction* FindPublishedExecutable(const asSStableKey& Key) const;
 	class asCExecutableFunction* AcquirePublishedExecutable(const asSStableKey& Key, class asCExecutableSnapshot*& OutSnapshot);
 	void DetachPublishedSnapshot(class asCExecutableSnapshot* Snapshot);
-	asSSystemFunctionInterface* ResolveSystemInterface(asCScriptFunction* Function) const;
+	std::shared_ptr<asSSystemFunctionInterface> AcquireSystemInterface(asCScriptFunction* Function) const;
 	asEByteCodeLinkStatus BeginExecutablePublication(asQWORD& OutGeneration);
 	asEByteCodeLinkStatus CommitExecutablePublication(class asCExecutableSnapshot& Snapshot, asQWORD Generation);
 	void PublishExecutable(const asSStableKey& Key, class asCExecutableFunction* Executable);
@@ -660,6 +666,10 @@ private:
 	mutable std::mutex metadataRegistrationMutex;
 	mutable std::mutex executablePublicationMutex;
 	asQWORD executablePublicationGeneration = 0;
+	std::atomic<bool> vmRetirementRequested{false};
+	asUINT vmObjectLeases = 0;
+	asUINT vmOperations = 0;
+	bool vmDrainActive = false;
 	TArray<std::shared_ptr<asCMetadataImage>> metadataImages;
 	TMap<asSStableKey, asCTypeInfo*> metadataTypesByKey;
 	TMap<FString, asCTypeInfo*> metadataTypesByName;
@@ -670,7 +680,7 @@ private:
 	TMap<asSStableKey, void*> metadataGlobalBindings;
 	TMap<asSStableKey, class asCExecutableFunction*> publishedExecutables;
 	TArray<class asCExecutableSnapshot*> publishedSnapshotLeases;
-	TMap<asSStableKey, asSSystemFunctionInterface*> nativeInterfaces;
+	TMap<asSStableKey, std::shared_ptr<asSSystemFunctionInterface>> nativeInterfaces;
 	TMap<int, asCScriptFunction*> metadataFunctionsById;
 	int nextMetadataTypeId = asTYPEID_FLOAT64 + 1;
 	int nextMetadataFunctionId = 1;
@@ -738,7 +748,7 @@ public:
 #endif
 
 	// This flag is to allow a quicker shutdown when releasing the engine
-	bool shuttingDown;
+	std::atomic<bool> shuttingDown{false};
 
 	// This flag is set when the engine's destructor is called, this is to
 	// avoid recursive calls if an object happens to increment/decrement

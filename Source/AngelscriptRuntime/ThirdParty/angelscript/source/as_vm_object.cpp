@@ -3,6 +3,7 @@
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
 #include "as_scriptobject.h"
+#include "as_context.h"
 #include "as_property.h"
 #include "HAL/CriticalSection.h"
 #include "HAL/UnrealMemory.h"
@@ -13,6 +14,7 @@ namespace
 {
 	FCriticalSection GVmPayloadMutex;
 	TMap<void*, asSVmObjectHeader*> GVmPayloadHeaders;
+	thread_local const asCScriptEngine* GVmCleanupEngine = nullptr;
 
 	void* AlignPointer(void* Pointer, asUINT Alignment)
 	{
@@ -35,15 +37,24 @@ namespace
 	}
 }
 
+bool asVmHasCleanupAuthority(const asCScriptEngine* Engine)
+{
+	return Engine && Engine == GVmCleanupEngine;
+}
+
 void* asVmAllocateObject(asCObjectType* Type)
 {
 	if (!Type) return nullptr;
+	if (Type->GetMetadataImage() && Type->GetMetadataImage()->GetState() == asEMetadataImageState::Retired) return nullptr;
+	asCScriptEngine* Engine = static_cast<asCScriptEngine*>(Type->GetEngine());
+	if (Engine && !Engine->AcquireVmObjectLease()) return nullptr;
+	Type->AddRef();
 	const asUINT PayloadSize = Type->size > 0 ? static_cast<asUINT>(Type->size) : 4u;
 	asUINT Align = static_cast<asUINT>(FMath::Max(8, Type->alignment));
 	if (Align < static_cast<asUINT>(sizeof(void*))) Align = static_cast<asUINT>(sizeof(void*));
 	const asUINT Prefix = sizeof(asSVmObjectHeader) + sizeof(void*);
 	void* Base = FMemory::Malloc(Prefix + PayloadSize + Align, Align);
-	if (!Base) return nullptr;
+	if (!Base) { Type->Release(); if (Engine) Engine->ReleaseVmObjectLease(); return nullptr; }
 	asSVmObjectHeader* Header = static_cast<asSVmObjectHeader*>(Base);
 	Header->Magic = asSVmObjectHeader::MagicValue;
 	Header->PayloadSize = PayloadSize;
@@ -52,7 +63,7 @@ void* asVmAllocateObject(asCObjectType* Type)
 	Header->InGc = false;
 	Header->WeakFlag = nullptr;
 	Header->Type = Type;
-	Header->Engine = static_cast<asCScriptEngine*>(Type->GetEngine());
+	Header->Engine = Engine;
 	char* Payload = static_cast<char*>(AlignPointer(static_cast<char*>(Base) + Prefix, Align));
 	void** BackPointer = reinterpret_cast<void**>(Payload - sizeof(void*));
 	*BackPointer = Base;
@@ -73,8 +84,12 @@ void asVmFreeObject(void* Payload)
 {
 	asSVmObjectHeader* Header = asVmHeaderFromPayload(Payload);
 	if (!Header) return;
+	asCObjectType* Type = Header->Type;
+	asCScriptEngine* Engine = Header->Engine;
 	UnregisterPayload(Payload);
 	FMemory::Free(Header);
+	Type->Release();
+	if (Engine) Engine->ReleaseVmObjectLease();
 }
 
 asSVmObjectHeader* asVmHeaderFromPayload(void* Payload)
@@ -102,7 +117,18 @@ void asVmInvokeDestruct(void* Payload, asCObjectType* Type)
 			Engine = Header->Engine;
 		}
 	}
-	if (!Engine) return;
+	if (!Engine || !Engine->BeginVmOperation(true)) return;
+	struct FEndCleanup
+	{
+		asCScriptEngine* Engine;
+		const asCScriptEngine* Previous;
+		~FEndCleanup()
+		{
+			GVmCleanupEngine = Previous;
+			Engine->EndVmOperation();
+		}
+	} Cleanup{Engine, GVmCleanupEngine};
+	GVmCleanupEngine = Engine;
 	for (asUINT Index = 0; Index < Type->metadataBehaviours.GetLength(); ++Index)
 	{
 		const asCObjectType::asSMetadataBehaviour& Behaviour = Type->metadataBehaviours[Index];
@@ -110,16 +136,16 @@ void asVmInvokeDestruct(void* Payload, asCObjectType* Type)
 		asCScriptFunction* Function = Behaviour.function;
 		if (Function->funcType == asFUNC_SYSTEM)
 		{
-			if (asSSystemFunctionInterface* Interface = Engine->ResolveSystemInterface(Function))
+			if (auto Interface = Engine->AcquireSystemInterface(Function))
 			{
-				Engine->CallObjectMethod(Payload, Interface, Function);
+				Engine->CallObjectMethod(Payload, Interface.get(), Function);
 			}
 			continue;
 		}
 		if (Function->funcType != asFUNC_SCRIPT) continue;
 		asIScriptContext* Context = Engine->CreateContext();
 		if (!Context) continue;
-		if (Context->Prepare(Function) >= 0)
+		if (static_cast<asCContext*>(Context)->PrepareForVmCleanup(Function) >= 0)
 		{
 			Context->SetObject(Payload);
 			Context->Execute();
@@ -142,7 +168,14 @@ int asVmRelease(void* Payload)
 	if (!Header || Header->RefCount.get() == 0) return 0;
 	Header->GcFlag = false;
 	const asDWORD Remaining = Header->RefCount.atomicDec();
-	if (Remaining > 0) return static_cast<int>(Remaining);
+	if (Remaining > 0)
+	{
+		// A shutdown collector may own the last reference. Do not touch the
+		// payload after draining, since it may have been destroyed by the GC.
+		asCScriptEngine* Engine = Header->Engine;
+		if (Engine && Header->InGc) Engine->DrainVmRetirement();
+		return static_cast<int>(Remaining);
+	}
 	asCObjectType* Type = Header->Type;
 	if (Header->WeakFlag)
 	{

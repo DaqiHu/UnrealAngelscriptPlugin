@@ -1,4 +1,5 @@
 #include "frontend/as_sema.h"
+#include "frontend/as_ast_cast.h"
 
 BEGIN_AS_NAMESPACE
 asCQualType asCSema::ResolveAutoVariableType(const asSTypeSyntax& Syntax, asCExpr* Initializer)

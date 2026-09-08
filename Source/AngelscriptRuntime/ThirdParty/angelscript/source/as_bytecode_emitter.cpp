@@ -283,6 +283,7 @@ asSByteCodeEmissionResult asCByteCodeEmitter::Emit(
 		Measured.LocalDwords = Frame.NextLocal;
 		Measured.ParameterDwords = ParamSize;
 		Measured.ResultDwords = static_cast<asUINT>(FMath::Max(0, Current->returnType.GetSizeOnStackDWords()));
+		Measured.ResultOffset = static_cast<int32>(Measured.ResultDwords);
 		Measured.InitializedObjectSlots = Frame.ConstructedSlots;
 		if (ImageBuilder.SetFrameDescriptor(Measured) != asEByteCodeImageStatus::Succeeded)
 		{

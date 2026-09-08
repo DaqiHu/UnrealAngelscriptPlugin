@@ -53,3 +53,13 @@ inline asSByteCodeOperand ByteSlot(asEByteCodeOperandKind Kind, asUINT Slot)
 	Operand.Slot = Slot;
 	return Operand;
 }
+
+// Positive image fixtures use the declaration's complete argument storage.
+inline int16 ByteArgumentDwords(const asCScriptFunction& Function)
+{
+ int32 Count = Function.objectType && !Function.IsMetadataStatic() ? AS_PTR_SIZE : 0;
+ if (Function.DoesReturnOnStack()) Count += AS_PTR_SIZE;
+ for (asUINT Index = 0; Index < Function.parameterTypes.GetLength(); ++Index)
+  Count += Function.parameterTypes[Index].GetSizeOnStackDWords();
+ return static_cast<int16>(Count);
+}
