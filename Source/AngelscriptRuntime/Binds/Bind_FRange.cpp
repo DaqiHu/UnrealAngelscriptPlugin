@@ -149,7 +149,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRange(
 	EAngelscriptBindPhase::PostReflectionBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		auto FloatBound = Binds.ExistingClassForTarget("FFloatRangeBound");
+		auto FloatBound = Binds.ExistingClassForTarget<FFloatRangeBound>("FFloatRangeBound");
 		FloatBound.Constructor("void f(float32 Value)", &FFloatRangeBoundBinds::ConstructValue, "FFloatRangeBound", true);
 		FloatBound.Method("bool opEquals(const FFloatRangeBound& Other) const", METHODPR_TRIVIAL(bool, FFloatRangeBound, operator==, (const FFloatRangeBound&) const));
 		FloatBound.Method("float32 GetValue() const", METHOD_TRIVIAL(FFloatRangeBound, GetValue));
@@ -159,7 +159,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRange(
 		FloatBound.Method("bool IsInclusive() const", METHOD_TRIVIAL(FFloatRangeBound, IsInclusive));
 		FloatBound.Method("bool IsOpen() const", METHOD_TRIVIAL(FFloatRangeBound, IsOpen));
 
-		auto Int32Bound = Binds.ExistingClassForTarget("FInt32RangeBound");
+		auto Int32Bound = Binds.ExistingClassForTarget<FInt32RangeBound>("FInt32RangeBound");
 		Int32Bound.Constructor("void f(int32 Value)", &FInt32RangeBoundBinds::ConstructValue, "FInt32RangeBound", true);
 		Int32Bound.Method("bool opEquals(const FInt32RangeBound& Other) const", METHODPR_TRIVIAL(bool, FInt32RangeBound, operator==, (const FInt32RangeBound&) const));
 		Int32Bound.Method("int32 GetValue() const", METHOD_TRIVIAL(FInt32RangeBound, GetValue));
@@ -169,7 +169,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRange(
 		Int32Bound.Method("bool IsInclusive() const", METHOD_TRIVIAL(FInt32RangeBound, IsInclusive));
 		Int32Bound.Method("bool IsOpen() const", METHOD_TRIVIAL(FInt32RangeBound, IsOpen));
 
-		auto FloatRange = Binds.ExistingClassForTarget("FFloatRange");
+		auto FloatRange = Binds.ExistingClassForTarget<FFloatRange>("FFloatRange");
 		FloatRange.Constructor("void f(float32 Value)", &FFloatRangeBinds::ConstructValue, "FFloatRange", true);
 		FloatRange.Constructor("void f(float32 Lower, float32 Upper)", &FFloatRangeBinds::ConstructValues, "FFloatRange", true);
 		FloatRange.Constructor("void f(const FFloatRangeBound& Lower, const FFloatRangeBound& Upper)", &FFloatRangeBinds::ConstructBounds, "FFloatRange", true);
@@ -194,7 +194,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRange(
 		FloatRange.Method("bool Overlaps(const FFloatRange& Other) const", METHOD_TRIVIAL(FFloatRange, Overlaps));
 		FloatRange.Method("TArray<FFloatRange> Split(float32 Value) const", METHODPR_TRIVIAL(TArray<FFloatRange>, FFloatRange, Split, (float) const));
 
-		auto Int32Range = Binds.ExistingClassForTarget("FInt32Range");
+		auto Int32Range = Binds.ExistingClassForTarget<FInt32Range>("FInt32Range");
 		Int32Range.Constructor("void f(int32 Value)", &FInt32RangeBinds::ConstructValue, "FInt32Range", true);
 		Int32Range.Constructor("void f(int32 Lower, int32 Upper)", &FInt32RangeBinds::ConstructValues, "FInt32Range", true);
 		Int32Range.Constructor("void f(const FInt32RangeBound& Lower, const FInt32RangeBound& Upper)", &FInt32RangeBinds::ConstructBounds, "FInt32Range", true);
@@ -219,7 +219,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRange(
 		Int32Range.Method("bool Overlaps(const FInt32Range& Other) const", METHOD_TRIVIAL(FInt32Range, Overlaps));
 		Int32Range.Method("TArray<FInt32Range> Split(int32 Value) const", METHODPR_TRIVIAL(TArray<FInt32Range>, FInt32Range, Split, (int32) const));
 
-		auto FloatInterval = Binds.ExistingClassForTarget("FFloatInterval");
+		auto FloatInterval = Binds.ExistingClassForTarget<FFloatInterval>("FFloatInterval");
 		FloatInterval.Constructor("void f(float32 Min, float32 Max)", &FFloatIntervalBinds::Construct, "FFloatInterval", true);
 		FloatInterval.Method("bool opEquals(const FFloatInterval& Other) const", METHODPR_TRIVIAL(bool, FFloatInterval, operator==, (const FFloatInterval&) const));
 		FloatInterval.Method("float32 Size() const", METHOD_TRIVIAL(FFloatInterval, Size));
@@ -229,7 +229,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRange(
 		FloatInterval.Method("void Include(float32 Value)", METHOD_TRIVIAL(FFloatInterval, Include));
 		FloatInterval.Method("float32 Interpolate(float32 Alpha) const", METHOD_TRIVIAL(FFloatInterval, Interpolate));
 
-		auto Int32Interval = Binds.ExistingClassForTarget("FInt32Interval");
+		auto Int32Interval = Binds.ExistingClassForTarget<FInt32Interval>("FInt32Interval");
 		Int32Interval.Constructor("void f(int32 Min, int32 Max)", &FInt32IntervalBinds::Construct, "FInt32Interval", true);
 		Int32Interval.Method("bool opEquals(const FInt32Interval& Other) const", METHODPR_TRIVIAL(bool, FInt32Interval, operator==, (const FInt32Interval&) const));
 		Int32Interval.Method("int32 Size() const", METHOD_TRIVIAL(FInt32Interval, Size));
@@ -240,7 +240,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRange(
 		Int32Interval.Method("int32 Interpolate(float32 Alpha) const", METHOD_TRIVIAL(FInt32Interval, Interpolate));
 
 		{
-			FAngelscriptBinds::FNamespace FloatBoundNamespace(Binds.GetTargetEngine(), "FFloatRangeBound");
+			FAngelscriptBinds::FNamespace FloatBoundNamespace(Binds, "FFloatRangeBound");
 			Binds.BindGlobalFunctionForTarget("FFloatRangeBound Exclusive(float32 Value)", &FFloatRangeBound::Exclusive);
 			Binds.BindGlobalFunctionForTarget("FFloatRangeBound Inclusive(float32 Value)", &FFloatRangeBound::Inclusive);
 			Binds.BindGlobalFunctionForTarget("FFloatRangeBound Open()", &FFloatRangeBound::Open);
@@ -252,7 +252,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRange(
 		}
 
 		{
-			FAngelscriptBinds::FNamespace Int32BoundNamespace(Binds.GetTargetEngine(), "FInt32RangeBound");
+			FAngelscriptBinds::FNamespace Int32BoundNamespace(Binds, "FInt32RangeBound");
 			Binds.BindGlobalFunctionForTarget("FInt32RangeBound Exclusive(int32 Value)", &FInt32RangeBound::Exclusive);
 			Binds.BindGlobalFunctionForTarget("FInt32RangeBound Inclusive(int32 Value)", &FInt32RangeBound::Inclusive);
 			Binds.BindGlobalFunctionForTarget("FInt32RangeBound Open()", &FInt32RangeBound::Open);
@@ -264,7 +264,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRange(
 		}
 
 		{
-			FAngelscriptBinds::FNamespace FloatRangeNamespace(Binds.GetTargetEngine(), "FFloatRange");
+			FAngelscriptBinds::FNamespace FloatRangeNamespace(Binds, "FFloatRange");
 			Binds.BindGlobalFunctionForTarget("TArray<FFloatRange> Difference(const FFloatRange& A, const FFloatRange& B)", &FFloatRange::Difference);
 		Binds.BindGlobalFunctionForTarget("FFloatRange Hull(const FFloatRange& A, const FFloatRange& B)", &FFloatRangeBinds::DifferenceHull);
 		Binds.BindGlobalFunctionForTarget("FFloatRange Hull(const TArray<FFloatRange>& Ranges)", &FFloatRangeBinds::Hull);
@@ -282,7 +282,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRange(
 		}
 
 		{
-			FAngelscriptBinds::FNamespace Int32RangeNamespace(Binds.GetTargetEngine(), "FInt32Range");
+			FAngelscriptBinds::FNamespace Int32RangeNamespace(Binds, "FInt32Range");
 			Binds.BindGlobalFunctionForTarget("TArray<FInt32Range> Difference(const FInt32Range& A, const FInt32Range& B)", &FInt32Range::Difference);
 		Binds.BindGlobalFunctionForTarget("FInt32Range Hull(const FInt32Range& A, const FInt32Range& B)", &FInt32RangeBinds::DifferenceHull);
 		Binds.BindGlobalFunctionForTarget("FInt32Range Hull(const TArray<FInt32Range>& Ranges)", &FInt32RangeBinds::Hull);

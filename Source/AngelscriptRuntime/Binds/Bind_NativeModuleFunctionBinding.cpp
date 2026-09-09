@@ -630,12 +630,42 @@ namespace
 		}
 	}
 
+	void RecordExistingNativeModuleFunctionBindings(FAngelscriptBinds& Binds)
+	{
+		FAngelscriptTypeBindInfoStore* Store = Binds.GetRecordingStore();
+		if (Store == nullptr)
+		{
+			return;
+		}
+		const TArray<IModularFeature*> Features = IModularFeatures::Get().GetModularFeatureImplementations<IModularFeature>(
+			FAngelscriptNativeModuleFunctionBindingBridge::FeatureName());
+		for (IModularFeature* Feature : Features)
+		{
+			const auto* Reader = reinterpret_cast<const FAngelscriptNativeModuleFunctionBindingView*>(Feature);
+			if (Reader == nullptr)
+			{
+				Store->ReportFailure(TEXT("Native module function-map recording found a null feature view."));
+				return;
+			}
+			FString Diagnostic;
+			if (!Store->RecordNativeFunctionMapView(*Reader, Store->GetSource(), Diagnostic))
+			{
+				return;
+			}
+		}
+	}
+
 
 	AS_FORCE_LINK const FAngelscriptBind Bind_AS_NativeModuleFunctionBinding(
 		TEXT("NativeModuleFunctionBinding.GeneratedTransport"),
 		EAngelscriptBindPhase::GeneratedBindings,
 		[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsRecording())
+		{
+			RecordExistingNativeModuleFunctionBindings(Binds);
+			return;
+		}
 		RegisterExistingNativeModuleFunctionBindings(Binds);
 	});
 }

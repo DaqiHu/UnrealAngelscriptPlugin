@@ -10,6 +10,7 @@ struct FAngelscriptAssetRegistryBinds
 	static void ConstructTopLevelAssetPathFromString(FTopLevelAssetPath* Memory, const FString& AssetPath);
 	static void ConstructTopLevelAssetPathFromNames(FTopLevelAssetPath* Memory, const FName& PackageName, const FName& AssetName);
 	static FTopLevelAssetPath* AssignTopLevelAssetPath(FTopLevelAssetPath* Self, const FString& AssetPath);
+	static uint32 GetTopLevelAssetPathHash(const FTopLevelAssetPath* Self);
 	static void AppendTopLevelAssetPathToString(void* Value, FString& OutString);
 
 	static bool IsLoadingAssets();

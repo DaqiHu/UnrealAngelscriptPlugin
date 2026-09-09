@@ -181,6 +181,19 @@ namespace
 					return asETypeIdentityStatus::InvalidDescriptor;
 				}
 			}
+			else if (Descriptor.Kind == asETypeUseKind::Wildcard)
+			{
+				if (Descriptor.Primitive != asEPrimitiveType::Invalid
+					|| !Descriptor.Declaration.IsZero()
+					|| !Descriptor.Arguments.IsEmpty()
+					|| !Descriptor.ReturnType.IsZero()
+					|| !Descriptor.Parameters.IsEmpty()
+					|| (QualifierBits & ~(static_cast<uint16>(asETypeUseQualifiers::Const)
+						| static_cast<uint16>(asETypeUseQualifiers::Reference))) != 0)
+				{
+					return asETypeIdentityStatus::InvalidDescriptor;
+				}
+			}
 			else
 			{
 				return asETypeIdentityStatus::InvalidDescriptor;

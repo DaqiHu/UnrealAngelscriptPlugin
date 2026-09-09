@@ -19,16 +19,17 @@ enum class asETypeReferenceDirection : uint8 { None, In, Out, InOut };
 		asCSourceRange Range;
 		bool bGlobal = false;
 		bool bConst = false;
+		bool bWildcard = false;
 		bool bHandle = false;
 		asETypeReferenceDirection Reference = asETypeReferenceDirection::None;
 
-		bool IsValid() const { return !NameParts.IsEmpty() && Range.IsOrdered(); }
+		bool IsValid() const { return (bWildcard || !NameParts.IsEmpty()) && Range.IsOrdered(); }
 		FString GetQualifiedName() const { return FString::Join(NameParts, TEXT("::")); }
 		FString GetSpelling() const
 		{
 			FString Result = bConst ? TEXT("const ") : TEXT("");
 			if (bGlobal) Result += TEXT("::");
-			Result += GetQualifiedName();
+			Result += bWildcard ? TEXT("?") : GetQualifiedName();
 			if (!GenericArguments.IsEmpty())
 			{
 				Result += TEXT("<");

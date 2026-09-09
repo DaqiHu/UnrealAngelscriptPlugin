@@ -5,26 +5,25 @@ namespace
 {
 	void BindDefaultSkipConfiguration(FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBindState& BindState = Binds.GetTargetBindState();
-		BindState.SkipBindNames.Add(MakeTuple(
+		Binds.AddSkipFunctionEffect(
 			FName(TEXT("StaticMesh")),
-			FName(TEXT("GetMinLODForQualityLevels"))));
-		BindState.SkipBindNames.Add(MakeTuple(
+			FName(TEXT("GetMinLODForQualityLevels")));
+		Binds.AddSkipFunctionEffect(
 			FName(TEXT("StaticMesh")),
-			FName(TEXT("SetMinLODForQualityLevels"))));
-		BindState.SkipBindNames.Add(MakeTuple(
+			FName(TEXT("SetMinLODForQualityLevels")));
+		Binds.AddSkipFunctionEffect(
 			FName(TEXT("SkeletalMesh")),
-			FName(TEXT("GetMinLODForQualityLevels"))));
-		BindState.SkipBindNames.Add(MakeTuple(
+			FName(TEXT("GetMinLODForQualityLevels")));
+		Binds.AddSkipFunctionEffect(
 			FName(TEXT("SkeletalMesh")),
-			FName(TEXT("SetMinLODForQualityLevels"))));
-		BindState.SkipBindNames.Add(MakeTuple(
+			FName(TEXT("SetMinLODForQualityLevels")));
+		Binds.AddSkipFunctionEffect(
 			FName(TEXT("SourceEffectEQPreset")),
-			FName(TEXT("SetSettings"))));
-		BindState.SkipBindClasses.Add(FName(TEXT("ClothingSimulationInteractorNv")));
-		BindState.SkipBindClasses.Add(FName(TEXT("NiagaraPreviewGrid")));
-		BindState.SkipBindClasses.Add(FName(TEXT("GameplayCamerasSubsystem")));
-		BindState.SkipBindClasses.Add(FName(TEXT("AsyncAction_PerformTargeting")));
+			FName(TEXT("SetSettings")));
+		Binds.AddSkipClassEffect(FName(TEXT("ClothingSimulationInteractorNv")));
+		Binds.AddSkipClassEffect(FName(TEXT("NiagaraPreviewGrid")));
+		Binds.AddSkipClassEffect(FName(TEXT("GameplayCamerasSubsystem")));
+		Binds.AddSkipClassEffect(FName(TEXT("AsyncAction_PerformTargeting")));
 	}
 }
 

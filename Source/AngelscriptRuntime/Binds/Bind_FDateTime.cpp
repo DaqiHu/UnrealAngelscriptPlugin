@@ -210,13 +210,14 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FDateTime(
 		FDateTime_.Method("FDateTime opSub(const FTimespan& Other) const", METHODPR_TRIVIAL(FDateTime, FDateTime, operator-, (const FTimespan&) const));
 		FDateTime_.Method("FDateTime& opSubAssign(const FTimespan& Other)", METHODPR_TRIVIAL(FDateTime&, FDateTime, operator-=, (const FTimespan&)));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FDateTime");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FDateTime");
 		FAngelscriptBoundFunction DaysInMonthFunction =
 			Binds.BindGlobalFunctionForTarget(
 				"int DaysInMonth(int Year, int Month) no_discard",
 				FUNC_TRIVIAL(FDateTime::DaysInMonth));
 #if AS_CAN_GENERATE_JIT
-		AttachDaysInMonthExternalCallDescriptor(DaysInMonthFunction);
+		if (!Binds.IsRecording())
+			AttachDaysInMonthExternalCallDescriptor(DaysInMonthFunction);
 #endif
 		Binds.BindGlobalFunctionForTarget("int DaysInYear(int Year) no_discard", FUNC_TRIVIAL(FDateTime::DaysInYear));
 		Binds.BindGlobalFunctionForTarget("bool IsLeapYear(int Year) no_discard", FUNC_TRIVIAL(FDateTime::IsLeapYear));

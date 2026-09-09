@@ -192,7 +192,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FTransform(
 			.NoDiscard();
 
 		{
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FTransform");
+			FAngelscriptBinds::FNamespace Namespace(Binds, "FTransform");
 			Binds.BindGlobalVariableForTarget("const FTransform Identity", &FTransform::Identity);
 		}
 

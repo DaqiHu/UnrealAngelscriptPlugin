@@ -588,29 +588,24 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintEvents(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		const TArray<TSharedRef<FAngelscriptType>>& Types = Binds.GetTargetTypeDatabase().RegisteredTypes;
-		for (const TSharedRef<FAngelscriptType>& Type : Types)
+		if (!Binds.IsRecording())
 		{
-			if (!Type->DescribesCompleteType(FAngelscriptTypeUsage::DefaultUsage))
-				continue;
+			const TArray<TSharedRef<FAngelscriptType>>& Types = Binds.GetTargetTypeDatabase().RegisteredTypes;
+			for (const TSharedRef<FAngelscriptType>& Type : Types)
+			{
+				if (!Type->DescribesCompleteType(FAngelscriptTypeUsage::DefaultUsage)) continue;
+				if (!Type->CanConstruct(FAngelscriptTypeUsage::DefaultUsage)) continue;
+				if (!Type->CanCopy(FAngelscriptTypeUsage::DefaultUsage)) continue;
+				if (!Type->CanDestruct(FAngelscriptTypeUsage::DefaultUsage)) continue;
+				BindPushArgument(Binds, Type->GetAngelscriptTypeName(), Type.ToSharedPtr());
+			}
 
-			// We need specific operations to be able to use this as an event argument
-			if (!Type->CanConstruct(FAngelscriptTypeUsage::DefaultUsage))
-				continue;
-			if (!Type->CanCopy(FAngelscriptTypeUsage::DefaultUsage))
-				continue;
-			if (!Type->CanDestruct(FAngelscriptTypeUsage::DefaultUsage))
-				continue;
-
-			FString PushTypeName = Type->GetAngelscriptTypeName();
-			BindPushArgument(Binds, PushTypeName, Type.ToSharedPtr());
+			// Make sure aliased arguments are bound
+			BindAliasedPushArgument(Binds, TEXT("int32"), TEXT("int32"));
+			BindAliasedPushArgument(Binds, TEXT("uint32"), TEXT("uint32"));
+			BindAliasedPushArgument(Binds, TEXT("float32"), TEXT("float32"));
+			BindAliasedPushArgument(Binds, TEXT("float64"), TEXT("float64"));
 		}
-
-		// Make sure aliased arguments are bound
-		BindAliasedPushArgument(Binds, TEXT("int32"), TEXT("int32"));
-		BindAliasedPushArgument(Binds, TEXT("uint32"), TEXT("uint32"));
-		BindAliasedPushArgument(Binds, TEXT("float32"), TEXT("float32"));
-		BindAliasedPushArgument(Binds, TEXT("float64"), TEXT("float64"));
 
 		// Bind a generic 'push argument' function that does a runtime type lookup
 		Binds.BindGlobalFunctionForTarget(
@@ -765,7 +760,7 @@ static void CommitBlueprintEventBinding(
 	{
 		Sig->StaticObject = InType->GetClass(FAngelscriptTypeUsage::DefaultUsage)->GetDefaultObject();
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), Signature.ClassName);
+		FAngelscriptBinds::FNamespace Namespace(Binds, Signature.ClassName);
 		PrimaryBinding = Binds.BindGlobalFunctionDirectForTarget(
 			Signature.Declaration,
 			asFUNCTION(FAngelscriptBlueprintEventHelperBinds::CallStaticWithSignature),

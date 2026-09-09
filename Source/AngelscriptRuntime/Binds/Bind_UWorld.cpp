@@ -16,6 +16,7 @@ struct FAngelscriptUWorldBinds
 	static bool IsStartingUp(UWorld* World);
 	static bool IsTearingDown(UWorld* World);
 	static UGameInstance* GetGameInstance(UWorld* World);
+	static EWorldType::Type GetWorldType(UWorld* World);
 	static ALevelScriptActor* GetWorldLevelScriptActor(UWorld* World);
 	static ULevel* GetPersistentLevel(UWorld* World);
 	static ALevelScriptActor* GetLevelScriptActor(ULevel* Level);
@@ -105,7 +106,7 @@ struct FAngelscriptUWorldBinds
  * +--------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------+
  * | ULevel UWorld.GetPersistentLevel() const;                                                  | Returns the world persistent level.                                                                                  |
  * +--------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------+
- * | EWorldType UWorld.WorldType;                                                               | Exposes the world-kind classification.                                                                               |
+ * | EWorldType UWorld.GetWorldType() const;                                                    | Returns the world-kind classification without exposing its byte-sized native storage.                               |
  * +--------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------+
  * | uint GFrameNumber;                                                                         | Exposes the global engine frame counter.                                                                             |
  * +--------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------+
@@ -176,7 +177,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_World(
 		UWorld_.Method("UGameInstance GetGameInstance() const", &FAngelscriptUWorldBinds::GetGameInstance);
 		UWorld_.Method("ALevelScriptActor GetLevelScriptActor() const", &FAngelscriptUWorldBinds::GetWorldLevelScriptActor);
 		UWorld_.Method("ULevel GetPersistentLevel() const", &FAngelscriptUWorldBinds::GetPersistentLevel);
-		UWorld_.Property("EWorldType WorldType", &UWorld::WorldType);
+		UWorld_.Method("EWorldType GetWorldType() const", &FAngelscriptUWorldBinds::GetWorldType);
 
 		Binds.BindGlobalVariableForTarget("uint GFrameNumber", &GFrameNumber);
 
@@ -200,9 +201,8 @@ UObject* FAngelscriptUWorldBinds::GetWorldContext()
 
 UWorld* FAngelscriptUWorldBinds::GetCurrentWorld()
 {
-	return GEngine->GetWorldFromContextObject(
-		FAngelscriptEngine::TryGetCurrentWorldContextObject(),
-		EGetWorldErrorMode::ReturnNull);
+	UObject* ContextObject = FAngelscriptEngine::TryGetCurrentWorldContextObject();
+	return GEngine->GetWorldFromContextObject(ContextObject, EGetWorldErrorMode::ReturnNull);
 }
 
 AGameStateBase* FAngelscriptUWorldBinds::GetGameState(UWorld* World)
@@ -223,6 +223,11 @@ bool FAngelscriptUWorldBinds::IsTearingDown(UWorld* World)
 UGameInstance* FAngelscriptUWorldBinds::GetGameInstance(UWorld* World)
 {
 	return World->GetGameInstance();
+}
+
+EWorldType::Type FAngelscriptUWorldBinds::GetWorldType(UWorld* World)
+{
+	return World->WorldType;
 }
 
 ALevelScriptActor* FAngelscriptUWorldBinds::GetWorldLevelScriptActor(UWorld* World)

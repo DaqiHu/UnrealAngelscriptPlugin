@@ -113,7 +113,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AssetRegistry(
 			"bool IsInstanceOf(const UClass BaseClass, bool bResolveClass = false) const",
 			&FAngelscriptAssetRegistryBinds::IsAssetDataInstanceOf);
 
-		auto TopLevelAssetPathType = Binds.ExistingClassForTarget("FTopLevelAssetPath");
+		auto TopLevelAssetPathType = Binds.ExistingClassForTarget<FTopLevelAssetPath>("FTopLevelAssetPath");
 		TopLevelAssetPathType.Constructor(
 			"void f(const UObject AssetObject)",
 			&FAngelscriptAssetRegistryBinds::ConstructTopLevelAssetPathFromObject);
@@ -127,11 +127,12 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AssetRegistry(
 		TopLevelAssetPathType.Method("bool IsNull() const", &FTopLevelAssetPath::IsNull);
 		TopLevelAssetPathType.Method("void Reset()", &FTopLevelAssetPath::Reset);
 		TopLevelAssetPathType.Method("bool opEquals(const FTopLevelAssetPath& Other) const", &FTopLevelAssetPath::operator==);
+		TopLevelAssetPathType.Method("uint GetHash() const", &FAngelscriptAssetRegistryBinds::GetTopLevelAssetPathHash);
 		TopLevelAssetPathType.Method(
 			"FTopLevelAssetPath& opAssign(const FString& AssetPath)",
 			&FAngelscriptAssetRegistryBinds::AssignTopLevelAssetPath);
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "AssetRegistry");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "AssetRegistry");
 		Binds.BindGlobalFunctionForTarget("bool IsLoadingAssets()", &FAngelscriptAssetRegistryBinds::IsLoadingAssets);
 		Binds.BindGlobalFunctionForTarget(
 			"bool HasAssets(const FName PackagePath, const bool bRecursive = false)",
@@ -182,3 +183,8 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AssetRegistry(
 			"void LoadAllBlueprintsUnderPath(FName PathToLoadFrom, FString OptionalFileIncludeRegex = \"\")",
 			&FAngelscriptAssetRegistryBinds::LoadAllBlueprintsUnderPath);
 	});
+
+uint32 FAngelscriptAssetRegistryBinds::GetTopLevelAssetPathHash(const FTopLevelAssetPath* Self)
+{
+	return GetTypeHash(*Self);
+}

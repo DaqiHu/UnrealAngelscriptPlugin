@@ -7,6 +7,7 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_module.h"
+#include "source/as_scriptengine.h"
 #include "source/as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 

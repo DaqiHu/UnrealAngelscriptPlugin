@@ -10,6 +10,7 @@
 #include "Containers/Array.h"
 #include "Containers/Map.h"
 #include "Templates/SharedPointer.h"
+#include "Misc/Crc.h"
 
 #include <atomic>
 #include <memory>
@@ -65,6 +66,32 @@ struct asSMetadataParameter
 	asCString DefaultArgument;
 };
 
+struct asSNativeFunctionFacts
+{
+	asDWORD Traits = 0;
+	asECompileOutType CompileOut = asECompileOutType::CompileCalls;
+	int DeterminesOutputTypeArgument = -1;
+	asCString DeprecationMessage;
+};
+
+struct asSNativePropertyFacts
+{
+	bool Readable = true;
+	bool Writeable = true;
+	bool Editable = true;
+	bool Protected = false;
+	bool EditorOnly = false;
+	bool Deprecated = false;
+	asCString DeprecationMessage;
+};
+
+struct asSNativeGlobalFacts
+{
+	bool PureConstant = false;
+	asQWORD ConstantValue = 0;
+	bool EditorOnly = false;
+};
+
 // An image owns actual runtime metadata, never proxy records. Shared image
 // handles and external type/function AddRef leases own the graph; graph edges
 // themselves are non-owning. Draft mutation is serialized by this API. Frozen
@@ -99,6 +126,8 @@ public:
 	asCGlobalProperty* FindGlobalProperty(const asSStableKey& Key) const;
 	asEMetadataResult CreateGlobalProperty(const asSStableKey& Key, const asSStableKey& TypeUseKey,
 		const char* Name, const char* Namespace, const asCDataType& Type, asCGlobalProperty*& Out);
+	asEMetadataResult CreateNativeGlobalProperty(const asSStableKey& Key, const asSStableKey& TypeUseKey,
+		const char* Name, const char* Namespace, const asCDataType& Type, asCGlobalProperty*& Out);
 	asCDataType Primitive(eTokenType Token, bool IsConst = false) const;
 	asEMetadataResult SetIdentityContext(TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> Context);
 	TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> GetIdentityContext() const;
@@ -128,6 +157,9 @@ public:
 	asEMetadataResult SetFunctionDeclarationFacts(asCScriptFunction& Function, asEFunctionIdentityKind Kind,
 		asCTypeInfo* Owner = nullptr, asUINT GenericArity = 0, bool IsStatic = false);
 	asEMetadataResult SetFunctionLocal(asCScriptFunction& Function, bool IsLocal);
+	asEMetadataResult SetNativeFunctionFacts(asCScriptFunction& Function, const asSNativeFunctionFacts& Facts);
+	asEMetadataResult SetNativePropertyFacts(asCObjectType& Owner, asCObjectProperty& Property, const asSNativePropertyFacts& Facts);
+	asEMetadataResult SetNativeGlobalFacts(asCGlobalProperty& Global, const asSNativeGlobalFacts& Facts);
 	asEMetadataResult DefineAccessSpecifier(asCObjectType& Owner, const asSAccessSpecifier& Definition, asSAccessSpecifier*& Out);
 	asEMetadataResult SetPropertyAccess(asCObjectType& Owner, asCObjectProperty& Property, asSAccessSpecifier& Policy);
 	asEMetadataResult SetFunctionAccess(asCScriptFunction& Function, asSAccessSpecifier& Policy);
@@ -168,13 +200,15 @@ private:
 	asEMetadataResult ValidateNew(const asSStableKey& Key, const char* Name,
 		const char* Namespace, bool IsType) const;
 	asSNameSpace* InternNamespace(const char* Name);
-	asEMetadataResult ValidateDataType(const asCDataType& Type, bool AllowVoid) const;
+	asEMetadataResult ValidateDataType(const asCDataType& Type, bool AllowVoid, bool AllowWildcard = false) const;
 	asCDataType NormalizeOptions(const asCDataType& Type) const;
 	bool ReferencesImage(const asCMetadataImage* Image) const;
 	bool ValidateFrozenIdentity() const;
 	bool ValidateListInitializers() const;
 	bool ValidateListPattern(const asSMetadataListPattern& Pattern, asUINT GenericArity, int Depth, int& NodeBudget) const;
 	bool ValidateGlobalIdentity(const asCGlobalProperty& Global) const;
+	asEMetadataResult CreateGlobalPropertyInternal(const asSStableKey& Key, const asSStableKey& TypeUseKey,
+		const char* Name, const char* Namespace, const asCDataType& Type, asCGlobalProperty*& Out, bool Native);
 	bool ValidateTypeUse(const asSStableKey& Key, const asCDataType& Actual, int Depth = 0) const;
 	bool ValidateFrozenLayout() const;
 	bool CanUseAccessSpecifier(const asCObjectType& Owner, const asSAccessSpecifier* Policy) const;
@@ -202,13 +236,19 @@ private:
 	TArray<asCTypeInfo*> Types;
 	TArray<asCScriptFunction*> Functions;
 	TArray<asCGlobalProperty*> Globals;
+	template<typename ValueType>
+	struct asTNameKeyFuncs : TDefaultMapHashableKeyFuncs<FString, ValueType, false>
+	{
+		static bool Matches(const FString& A, const FString& B) { return A.Equals(B, ESearchCase::CaseSensitive); }
+		static uint32 GetKeyHash(const FString& Key) { return FCrc::StrCrc32(*Key); }
+	};
 	TMap<asSStableKey, asCGlobalProperty*> GlobalsByKey;
-	TMap<FString, asCGlobalProperty*> GlobalsByName;
+	TMap<FString, asCGlobalProperty*, FDefaultSetAllocator, asTNameKeyFuncs<asCGlobalProperty*>> GlobalsByName;
 	TArray<asSNameSpace*> Namespaces;
 	TArray<std::shared_ptr<asCMetadataImage>> Dependencies;
 	TMap<asSStableKey, asCTypeInfo*> TypesByKey;
 	TMap<asSStableKey, asCScriptFunction*> FunctionsByKey;
-	TMap<FString, asCTypeInfo*> TypesByName;
+	TMap<FString, asCTypeInfo*, FDefaultSetAllocator, asTNameKeyFuncs<asCTypeInfo*>> TypesByName;
 	TMap<asCObjectType*, TPair<asUINT, asUINT>> NativeLayouts;
 	TMap<const asCObjectType*, asSMetadataListInitializer> ListInitializers;
 	asCObjectType* DefaultArrayType = nullptr;

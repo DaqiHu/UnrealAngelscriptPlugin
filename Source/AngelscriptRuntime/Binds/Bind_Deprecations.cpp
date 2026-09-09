@@ -13,43 +13,20 @@
  * +------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------+
  */
 
-namespace DeprecationBind
-{
-	static const FName NAME_META_DeprecatedFunction("DeprecatedFunction");
-	static const FName NAME_META_DeprecationMessage("DeprecationMessage");
-
-	void DeprecateMethod(const TCHAR* MethodPath, const TCHAR* DeprecationMessage)
-	{
-		UFunction* Function = FindObject<UFunction>(nullptr, MethodPath);
-		if (Function == nullptr)
-		{
-			UE_LOG(Angelscript, Warning, TEXT("Could not find method %s to add deprecation for"), MethodPath);
-			return;
-		}
-
-		Function->SetMetaData(NAME_META_DeprecatedFunction, TEXT(""));
-		Function->SetMetaData(NAME_META_DeprecationMessage, DeprecationMessage);
-	}
-
-}
-
 AS_FORCE_LINK const FAngelscriptBind Bind_Deprecations(
 	TEXT("Deprecations"),
 	EAngelscriptBindPhase::TypeDeclarations,
-	[](FAngelscriptBinds&)
+	[](FAngelscriptBinds& Binds)
 	{
-		DeprecationBind::DeprecateMethod(TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableLinearColor"), TEXT("Use the SetVariable variant that takes FName instead"));
-		DeprecationBind::DeprecateMethod(TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableVec4"), TEXT("Use the SetVariable variant that takes FName instead"));
-		DeprecationBind::DeprecateMethod(TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableQuat"), TEXT("Use the SetVariable variant that takes FName instead"));
-		DeprecationBind::DeprecateMethod(TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableMatrix"), TEXT("Use the SetVariable variant that takes FName instead"));
-		DeprecationBind::DeprecateMethod(TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableVec3"), TEXT("Use the SetVariable variant that takes FName instead"));
-		DeprecationBind::DeprecateMethod(TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariablePosition"), TEXT("Use the SetVariable variant that takes FName instead"));
-		DeprecationBind::DeprecateMethod(TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableVec2"), TEXT("Use the SetVariable variant that takes FName instead"));
-		DeprecationBind::DeprecateMethod(TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableFloat"), TEXT("Use the SetVariable variant that takes FName instead"));
-		DeprecationBind::DeprecateMethod(TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableInt"), TEXT("Use the SetVariable variant that takes FName instead"));
-		DeprecationBind::DeprecateMethod(TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableBool"), TEXT("Use the SetVariable variant that takes FName instead"));
-		DeprecationBind::DeprecateMethod(TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableActor"), TEXT("Use the SetVariable variant that takes FName instead"));
-		DeprecationBind::DeprecateMethod(TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableObject"), TEXT("Use the SetVariable variant that takes FName instead"));
+		static const TCHAR* Paths[] = {
+			TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableLinearColor"), TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableVec4"),
+			TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableQuat"), TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableMatrix"),
+			TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableVec3"), TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariablePosition"),
+			TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableVec2"), TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableFloat"),
+			TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableInt"), TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableBool"),
+			TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableActor"), TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableObject")};
+		for (const TCHAR* Path : Paths)
+			Binds.AddDeprecationEffect(Path, TEXT("Use the SetVariable variant that takes FName instead"));
 	});
 
 #endif

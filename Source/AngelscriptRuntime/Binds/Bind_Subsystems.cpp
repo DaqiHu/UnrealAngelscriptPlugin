@@ -3,6 +3,7 @@
 #include "AngelscriptBinds.h"
 #include "AngelscriptEngine.h"
 #include "AngelscriptType.h"
+#include "Core/AngelscriptTypeBindInfoReflection.h"
 #include "Subsystems/EngineSubsystem.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
@@ -50,7 +51,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Subsystems(
 	[](FAngelscriptBinds& Binds)
 	{
 		{
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "USubsystemLibrary");
+			FAngelscriptBinds::FNamespace Namespace(Binds, "USubsystemLibrary");
 			Binds.BindGlobalFunctionForTarget(
 				"UObject GetEngineSubsystem(UClass Class)",
 				&FAngelscriptSubsystemsBinds::GetEngineSubsystem);
@@ -69,6 +70,44 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Subsystems(
 			Binds.BindGlobalFunctionForTarget(
 				"UObject GetLocalPlayerSubsystemFromPlayerController(APlayerController PlayerController, UClass Class)",
 				&FAngelscriptSubsystemsBinds::GetLocalPlayerSubsystemFromPlayerController);
+		}
+
+		if (Binds.IsRecording())
+		{
+			const auto& Snapshot = Binds.GetRecordingStore()->GetReflectedSnapshot();
+			if (!Snapshot.IsValid())
+			{
+				Binds.GetRecordingStore()->ReportFailure(TEXT("Subsystem post-reflection bindings require a captured reflected snapshot."));
+				return;
+			}
+			for (const FAngelscriptReflectedTypeRecord& Reflected : Snapshot->GetTypes())
+			{
+				UClass* Class = Cast<UClass>(Reflected.NativeType);
+				if (!Reflected.bEligible || !Class || Class->HasAnyClassFlags(CLASS_Abstract | CLASS_NewerVersionExists | CLASS_Deprecated)
+					|| !Class->HasAllClassFlags(CLASS_Native) || !Class->IsChildOf(USubsystem::StaticClass())) continue;
+				const FString& ClassName = Reflected.Declaration.Name;
+				FAngelscriptBinds::FNamespace Namespace(Binds, ClassName);
+#if WITH_EDITOR
+				if (Class->IsChildOf(UEditorSubsystem::StaticClass()))
+				{
+					if (Binds.GetRecordingStore()->GetPolicy().bEditor)
+						Binds.BindGlobalFunctionForTarget(ClassName + TEXT(" Get()"), &FAngelscriptSubsystemsBinds::GetEditorSubsystemForClass, Class);
+				}
+				else
+#endif
+				if (Class->IsChildOf(UEngineSubsystem::StaticClass()))
+					Binds.BindGlobalFunctionForTarget(ClassName + TEXT(" Get()"), &FAngelscriptSubsystemsBinds::GetEngineSubsystemForClass, Class);
+				else if (Class->IsChildOf(UGameInstanceSubsystem::StaticClass()))
+					Binds.BindGlobalFunctionForTarget(ClassName + TEXT(" Get()"), &FAngelscriptSubsystemsBinds::GetGameInstanceSubsystemForClass, Class);
+				else if (Class->IsChildOf(UWorldSubsystem::StaticClass()))
+					Binds.BindGlobalFunctionForTarget(ClassName + TEXT(" Get()"), &FAngelscriptSubsystemsBinds::GetWorldSubsystemForClass, Class);
+				else if (Class->IsChildOf(ULocalPlayerSubsystem::StaticClass()))
+				{
+					Binds.BindGlobalFunctionForTarget(ClassName + TEXT(" Get(ULocalPlayer LocalPlayer)"), &FAngelscriptSubsystemsBinds::GetLocalPlayerSubsystemForLocalPlayer, Class);
+					Binds.BindGlobalFunctionForTarget(ClassName + TEXT(" Get(APlayerController LocalPlayer)"), &FAngelscriptSubsystemsBinds::GetLocalPlayerSubsystemForPlayerController, Class);
+				}
+			}
+			return;
 		}
 
 		// Bind easy ::Get() accessors for every native subsystem type discovered by
@@ -91,7 +130,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Subsystems(
 			}
 
 			const FString ClassName = Type->GetAngelscriptTypeName();
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), ClassName);
+			FAngelscriptBinds::FNamespace Namespace(Binds, ClassName);
 
 	#if WITH_EDITOR
 			if (Class->IsChildOf(UEditorSubsystem::StaticClass()))

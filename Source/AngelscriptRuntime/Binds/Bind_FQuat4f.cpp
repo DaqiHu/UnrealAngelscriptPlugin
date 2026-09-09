@@ -279,23 +279,23 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FQuat4f(
 		FQuat4f_.Method("FVector3f UnrotateVector(FVector3f V) const", METHOD_TRIVIAL(FQuat4f, UnrotateVector));
 
 		{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FQuat4f");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FQuat4f");
 		Binds.BindGlobalVariableForTarget("const FQuat4f Identity", &FQuat4f::Identity);
-		Binds.BindGlobalFunctionForTarget("FQuat4f MakeFromEuler(const FVector3f& Euler) no_discard", FUNC_TRIVIAL(FQuat4f::MakeFromEuler));
-		Binds.BindGlobalFunctionForTarget("FQuat4f FindBetween(const FVector3f& Vector1, const FVector3f& Vector2) no_discard", FUNC_TRIVIAL(FQuat4f::FindBetween));
-		Binds.BindGlobalFunctionForTarget("FQuat4f FindBetweenVectors(const FVector3f& Vector1, const FVector3f& Vector2) no_discard", FUNC_TRIVIAL(FQuat4f::FindBetweenVectors));
-		Binds.BindGlobalFunctionForTarget("FQuat4f FindBetweenNormals(const FVector3f& Normal1, const FVector3f& Normal2) no_discard", FUNC_TRIVIAL(FQuat4f::FindBetweenNormals));
-		Binds.BindGlobalFunctionForTarget("FQuat4f FastLerp(const FQuat4f& A, const FQuat4f& B, const float32 Alpha) no_discard", FUNC_TRIVIAL(FQuat4f::FastLerp));
-		Binds.BindGlobalFunctionForTarget("FQuat4f FastBilerp(const FQuat4f& P00, const FQuat4f& P10, const FQuat4f& P01, const FQuat4f& P11, float32 FracX, float32 FracY) no_discard", FUNC_TRIVIAL(FQuat4f::FastBilerp));
-		Binds.BindGlobalFunctionForTarget("FQuat4f Slerp_NotNormalized(const FQuat4f& Quat1, const FQuat4f& Quat2, float32 Slerp) no_discard", FUNC_TRIVIAL(FQuat4f::Slerp_NotNormalized));
-		Binds.BindGlobalFunctionForTarget("FQuat4f Slerp(const FQuat4f& Quat1, const FQuat4f& Quat2, float32 Slerp) no_discard", FUNC_TRIVIAL(FQuat4f::Slerp));
-		Binds.BindGlobalFunctionForTarget("float32 Error(const FQuat4f& Q1, const FQuat4f& Q2) no_discard", FUNC_TRIVIAL(FQuat4f::Error));
-		Binds.BindGlobalFunctionForTarget("float32 ErrorAutoNormalize(const FQuat4f& A, const FQuat4f& B) no_discard", FUNC_TRIVIAL(FQuat4f::ErrorAutoNormalize));
-		Binds.BindGlobalFunctionForTarget("FQuat4f SlerpFullPath_NotNormalized(const FQuat4f& Quat1, const FQuat4f& Quat2, float32 Slerp) no_discard", FUNC_TRIVIAL(FQuat4f::SlerpFullPath_NotNormalized));
-		Binds.BindGlobalFunctionForTarget("FQuat4f SlerpFullPath(const FQuat4f& Quat1, const FQuat4f& Quat2, float32 Slerp) no_discard", FUNC_TRIVIAL(FQuat4f::SlerpFullPath));
-		Binds.BindGlobalFunctionForTarget("FQuat4f Squad(const FQuat4f& Quat1, const FQuat4f& Tang1, const FQuat4f& Quat2, const FQuat4f& Tang2, float32 Alpha) no_discard", FUNC_TRIVIAL(FQuat4f::Squad));
-		Binds.BindGlobalFunctionForTarget("FQuat4f SquadFullPath(const FQuat4f& Quat1, const FQuat4f& Tang1, const FQuat4f& Quat2, const FQuat4f& Tang2, float32 Alpha) no_discard", FUNC_TRIVIAL(FQuat4f::SquadFullPath));
-		Binds.BindGlobalFunctionForTarget("void CalcTangents(const FQuat4f& PrevP, const FQuat4f& P, const FQuat4f& NextP, float32 Tension, FQuat4f& OutTan) no_discard", FUNC_TRIVIAL(FQuat4f::CalcTangents));
+		Binds.BindGlobalFunctionForTarget("FQuat4f MakeFromEuler(const FVector3f& Euler)", FUNC_TRIVIAL(FQuat4f::MakeFromEuler)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat4f FindBetween(const FVector3f& Vector1, const FVector3f& Vector2)", FUNC_TRIVIAL(FQuat4f::FindBetween)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat4f FindBetweenVectors(const FVector3f& Vector1, const FVector3f& Vector2)", FUNC_TRIVIAL(FQuat4f::FindBetweenVectors)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat4f FindBetweenNormals(const FVector3f& Normal1, const FVector3f& Normal2)", FUNC_TRIVIAL(FQuat4f::FindBetweenNormals)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat4f FastLerp(const FQuat4f& A, const FQuat4f& B, const float32 Alpha)", FUNC_TRIVIAL(FQuat4f::FastLerp)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat4f FastBilerp(const FQuat4f& P00, const FQuat4f& P10, const FQuat4f& P01, const FQuat4f& P11, float32 FracX, float32 FracY)", FUNC_TRIVIAL(FQuat4f::FastBilerp)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat4f Slerp_NotNormalized(const FQuat4f& Quat1, const FQuat4f& Quat2, float32 Slerp)", FUNC_TRIVIAL(FQuat4f::Slerp_NotNormalized)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat4f Slerp(const FQuat4f& Quat1, const FQuat4f& Quat2, float32 Slerp)", FUNC_TRIVIAL(FQuat4f::Slerp)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("float32 Error(const FQuat4f& Q1, const FQuat4f& Q2)", FUNC_TRIVIAL(FQuat4f::Error)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("float32 ErrorAutoNormalize(const FQuat4f& A, const FQuat4f& B)", FUNC_TRIVIAL(FQuat4f::ErrorAutoNormalize)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat4f SlerpFullPath_NotNormalized(const FQuat4f& Quat1, const FQuat4f& Quat2, float32 Slerp)", FUNC_TRIVIAL(FQuat4f::SlerpFullPath_NotNormalized)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat4f SlerpFullPath(const FQuat4f& Quat1, const FQuat4f& Quat2, float32 Slerp)", FUNC_TRIVIAL(FQuat4f::SlerpFullPath)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat4f Squad(const FQuat4f& Quat1, const FQuat4f& Tang1, const FQuat4f& Quat2, const FQuat4f& Tang2, float32 Alpha)", FUNC_TRIVIAL(FQuat4f::Squad)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat4f SquadFullPath(const FQuat4f& Quat1, const FQuat4f& Tang1, const FQuat4f& Quat2, const FQuat4f& Tang2, float32 Alpha)", FUNC_TRIVIAL(FQuat4f::SquadFullPath)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("void CalcTangents(const FQuat4f& PrevP, const FQuat4f& P, const FQuat4f& NextP, float32 Tension, FQuat4f& OutTan)", FUNC_TRIVIAL(FQuat4f::CalcTangents)).NoDiscard();
 		}
 
 		FQuat4f_.Method("FVector3f GetAxisX() const", METHOD_TRIVIAL(FQuat4f, GetAxisX));

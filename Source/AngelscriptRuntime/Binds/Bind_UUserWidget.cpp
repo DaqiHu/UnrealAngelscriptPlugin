@@ -141,11 +141,13 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UUserWidget(
 			"void DrawText(const FSlateFontInfo& Font, const FString& Text, const FVector2D& Position, const FLinearColor& Color)",
 			&FAngelscriptUUserWidgetBinds::DrawTextFont);
 
-		FAngelscriptBinds::FNamespace WidgetBlueprintNamespace(Binds.GetTargetEngine(), "WidgetBlueprint");
-		Binds.BindGlobalFunctionForTarget(
-			"UUserWidget CreateWidget(const TSubclassOf<UUserWidget>& WidgetClass, APlayerController OwningPlayer)",
-			&FAngelscriptUUserWidgetBinds::CreateWidget)
-			.WorldContext();
+		{
+			FAngelscriptBinds::FNamespace WidgetBlueprintNamespace(Binds, "WidgetBlueprint");
+			Binds.BindGlobalFunctionForTarget(
+				"UUserWidget CreateWidget(const TSubclassOf<UUserWidget>& WidgetClass, APlayerController OwningPlayer)",
+				&FAngelscriptUUserWidgetBinds::CreateWidget)
+				.WorldContext();
+		}
 
 		auto SlateColor = Binds.ExistingClassForTarget("FSlateColor");
 		SlateColor.ImplicitConstructor(

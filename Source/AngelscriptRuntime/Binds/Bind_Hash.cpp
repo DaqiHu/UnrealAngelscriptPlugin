@@ -42,7 +42,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Hash(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "Hash");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "Hash");
 		Binds.BindGlobalFunctionForTarget("uint32 CityHash32(const FString& buf)", &FAngelscriptHashBinds::CityHash32String);
 		Binds.BindGlobalFunctionForTarget("uint32 CityHash32(const TArray<int8>& buf)", &FAngelscriptHashBinds::CityHash32Bytes);
 		Binds.BindGlobalFunctionForTarget("uint64 CityHash64(const FString& buf)", &FAngelscriptHashBinds::CityHash64String);

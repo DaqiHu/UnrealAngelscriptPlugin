@@ -23,6 +23,13 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AssetManagerScriptMixins(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		// Detached reflection records these UFUNCTION wrappers and their dispatch.
+		// The legacy function-map overrides apply only to direct Engine registration.
+		if (Binds.IsRecording())
+		{
+			return;
+		}
+
 		// UHT cannot direct-bind these signatures. Install their exact entries in the
 		// selected engine before GeneratedBindings installs reflective stubs.
 		Binds.RegisterFunctionBindingForTarget(

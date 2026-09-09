@@ -56,6 +56,7 @@ enum class asETypeIdentityStatus : uint8
 		Primitive,
 		Nominal,
 		Callable,
+		Wildcard,
 	};
 
 	enum class asEPrimitiveType : uint8

@@ -774,7 +774,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FMath(
 		const bool bDeprecateDouble = UAngelscriptSettings::Get().bDeprecateDoubleType;
 
 		FAngelscriptBinds::FNamespace Namespace(
-			Binds.GetTargetEngine(),
+			Binds,
 			(UAngelscriptSettings::Get().MathNamespace == EAngelscriptMathNamespace::Math)
 			? "Math": "FMath"
 		);

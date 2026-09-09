@@ -275,24 +275,24 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FQuat(
 		FQuat_.Method("FVector UnrotateVector(FVector V) const", METHOD_TRIVIAL(FQuat, UnrotateVector));
 
 		{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FQuat");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FQuat");
 		Binds.BindGlobalVariableForTarget("const FQuat Identity", &FQuat::Identity);
-		Binds.BindGlobalFunctionForTarget("FQuat MakeFromEuler(const FVector& Euler) no_discard", FUNC_TRIVIAL(FQuat::MakeFromEuler));
-		Binds.BindGlobalFunctionForTarget("FQuat MakeFromRotator(const FRotator& Rotator) no_discard", FUNC_TRIVIAL(FQuat::MakeFromRotator));
-		Binds.BindGlobalFunctionForTarget("FQuat FindBetween(const FVector& Vector1, const FVector& Vector2) no_discard", FUNC_TRIVIAL(FQuat::FindBetween));
-		Binds.BindGlobalFunctionForTarget("FQuat FindBetweenVectors(const FVector& Vector1, const FVector& Vector2) no_discard", FUNC_TRIVIAL(FQuat::FindBetweenVectors));
-		Binds.BindGlobalFunctionForTarget("FQuat FindBetweenNormals(const FVector& Normal1, const FVector& Normal2) no_discard", FUNC_TRIVIAL(FQuat::FindBetweenNormals));
-		Binds.BindGlobalFunctionForTarget("FQuat FastLerp(const FQuat& A, const FQuat& B, const float64 Alpha) no_discard", FUNC_TRIVIAL(FQuat::FastLerp));
-		Binds.BindGlobalFunctionForTarget("FQuat FastBilerp(const FQuat& P00, const FQuat& P10, const FQuat& P01, const FQuat& P11, float64 FracX, float64 FracY) no_discard", FUNC_TRIVIAL(FQuat::FastBilerp));
-		Binds.BindGlobalFunctionForTarget("FQuat Slerp_NotNormalized(const FQuat& Quat1, const FQuat& Quat2, float64 Slerp) no_discard", FUNC_TRIVIAL(FQuat::Slerp_NotNormalized));
-		Binds.BindGlobalFunctionForTarget("FQuat Slerp(const FQuat& Quat1, const FQuat& Quat2, float64 Slerp) no_discard", FUNC_TRIVIAL(FQuat::Slerp));
-		Binds.BindGlobalFunctionForTarget("float64 Error(const FQuat& Q1, const FQuat& Q2) no_discard", FUNC_TRIVIAL(FQuat::Error));
-		Binds.BindGlobalFunctionForTarget("float64 ErrorAutoNormalize(const FQuat& A, const FQuat& B) no_discard", FUNC_TRIVIAL(FQuat::ErrorAutoNormalize));
-		Binds.BindGlobalFunctionForTarget("FQuat SlerpFullPath_NotNormalized(const FQuat& Quat1, const FQuat& Quat2, float64 Slerp) no_discard", FUNC_TRIVIAL(FQuat::SlerpFullPath_NotNormalized));
-		Binds.BindGlobalFunctionForTarget("FQuat SlerpFullPath(const FQuat& Quat1, const FQuat& Quat2, float64 Slerp) no_discard", FUNC_TRIVIAL(FQuat::SlerpFullPath));
-		Binds.BindGlobalFunctionForTarget("FQuat Squad(const FQuat& Quat1, const FQuat& Tang1, const FQuat& Quat2, const FQuat& Tang2, float64 Alpha) no_discard", FUNC_TRIVIAL(FQuat::Squad));
-		Binds.BindGlobalFunctionForTarget("FQuat SquadFullPath(const FQuat& Quat1, const FQuat& Tang1, const FQuat& Quat2, const FQuat& Tang2, float64 Alpha) no_discard", FUNC_TRIVIAL(FQuat::SquadFullPath));
-		Binds.BindGlobalFunctionForTarget("void CalcTangents(const FQuat& PrevP, const FQuat& P, const FQuat& NextP, float64 Tension, FQuat& OutTan) no_discard", FUNC_TRIVIAL(FQuat::CalcTangents));
+		Binds.BindGlobalFunctionForTarget("FQuat MakeFromEuler(const FVector& Euler)", FUNC_TRIVIAL(FQuat::MakeFromEuler)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat MakeFromRotator(const FRotator& Rotator)", FUNC_TRIVIAL(FQuat::MakeFromRotator)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat FindBetween(const FVector& Vector1, const FVector& Vector2)", FUNC_TRIVIAL(FQuat::FindBetween)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat FindBetweenVectors(const FVector& Vector1, const FVector& Vector2)", FUNC_TRIVIAL(FQuat::FindBetweenVectors)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat FindBetweenNormals(const FVector& Normal1, const FVector& Normal2)", FUNC_TRIVIAL(FQuat::FindBetweenNormals)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat FastLerp(const FQuat& A, const FQuat& B, const float64 Alpha)", FUNC_TRIVIAL(FQuat::FastLerp)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat FastBilerp(const FQuat& P00, const FQuat& P10, const FQuat& P01, const FQuat& P11, float64 FracX, float64 FracY)", FUNC_TRIVIAL(FQuat::FastBilerp)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat Slerp_NotNormalized(const FQuat& Quat1, const FQuat& Quat2, float64 Slerp)", FUNC_TRIVIAL(FQuat::Slerp_NotNormalized)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat Slerp(const FQuat& Quat1, const FQuat& Quat2, float64 Slerp)", FUNC_TRIVIAL(FQuat::Slerp)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("float64 Error(const FQuat& Q1, const FQuat& Q2)", FUNC_TRIVIAL(FQuat::Error)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("float64 ErrorAutoNormalize(const FQuat& A, const FQuat& B)", FUNC_TRIVIAL(FQuat::ErrorAutoNormalize)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat SlerpFullPath_NotNormalized(const FQuat& Quat1, const FQuat& Quat2, float64 Slerp)", FUNC_TRIVIAL(FQuat::SlerpFullPath_NotNormalized)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat SlerpFullPath(const FQuat& Quat1, const FQuat& Quat2, float64 Slerp)", FUNC_TRIVIAL(FQuat::SlerpFullPath)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat Squad(const FQuat& Quat1, const FQuat& Tang1, const FQuat& Quat2, const FQuat& Tang2, float64 Alpha)", FUNC_TRIVIAL(FQuat::Squad)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FQuat SquadFullPath(const FQuat& Quat1, const FQuat& Tang1, const FQuat& Quat2, const FQuat& Tang2, float64 Alpha)", FUNC_TRIVIAL(FQuat::SquadFullPath)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("void CalcTangents(const FQuat& PrevP, const FQuat& P, const FQuat& NextP, float64 Tension, FQuat& OutTan)", FUNC_TRIVIAL(FQuat::CalcTangents)).NoDiscard();
 		}
 
 		FQuat_.Method("FVector GetAxisX() const", METHOD_TRIVIAL(FQuat, GetAxisX));

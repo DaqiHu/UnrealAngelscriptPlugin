@@ -66,6 +66,24 @@ enum asECompilerPipeline
 class asCBuilder;
 class asCContext;
 
+// A batch requires the exact installed declaration as well as its stable key.
+struct asSNativeFunctionBinding
+{
+	asCScriptFunction* Declaration = nullptr;
+	asSFuncPtr Function;
+	asDWORD CallConv = asCALL_CDECL;
+	asFunctionCaller Caller;
+	void* Auxiliary = nullptr;
+	int BaseOffset = 0;
+	asEFirstParamMetaData FirstParameter = asEFirstParamMetaData::None;
+	int NativeParameterCount = -1;
+};
+struct asSNativeGlobalBinding
+{
+	asCGlobalProperty* Declaration = nullptr;
+	void* Storage = nullptr;
+};
+
 struct asSCanonicalTemplateDeclarationFact
 {
 	asCString stableKey;
@@ -299,6 +317,7 @@ public:
 	bool IsVmRetirementRequested() const { return vmRetirementRequested.load(); }
 	asEByteCodeLinkStatus LinkByteCodeImage(const asCByteCodeImage& Image, class asCExecutableSnapshot*& OutSnapshot);
 	asEByteCodeLinkStatus BindNativeFunction(const asSStableKey& FunctionKey, void* Native);
+	asEByteCodeLinkStatus BindNativeFunction(TConstArrayView<asSNativeFunctionBinding> Functions, TConstArrayView<asSNativeGlobalBinding> Globals, int& FailedIndex);
 	asEByteCodeLinkStatus BindNativeFunction(const asSStableKey& FunctionKey, const asSFuncPtr& Function, asDWORD CallConv, asFunctionCaller Caller = nullptr, void* Auxiliary = nullptr, int BaseOffset = 0);
 	asEByteCodeLinkStatus BindGlobalStorage(const asSStableKey& DeclarationKey, void* Storage);
 	void* FindBoundGlobalStorage(const asSStableKey& DeclarationKey) const;
@@ -672,11 +691,11 @@ private:
 	bool vmDrainActive = false;
 	TArray<std::shared_ptr<asCMetadataImage>> metadataImages;
 	TMap<asSStableKey, asCTypeInfo*> metadataTypesByKey;
-	TMap<FString, asCTypeInfo*> metadataTypesByName;
+	TMap<FString, asCTypeInfo*, FDefaultSetAllocator, asCMetadataImage::asTNameKeyFuncs<asCTypeInfo*>> metadataTypesByName;
 	TMap<int, asCTypeInfo*> metadataTypesById;
 	TMap<asSStableKey, asCScriptFunction*> metadataFunctionsByKey;
 	TMap<asSStableKey, asCGlobalProperty*> metadataGlobalsByKey;
-	TMap<FString, asCGlobalProperty*> metadataGlobalsByName;
+	TMap<FString, asCGlobalProperty*, FDefaultSetAllocator, asCMetadataImage::asTNameKeyFuncs<asCGlobalProperty*>> metadataGlobalsByName;
 	TMap<asSStableKey, void*> metadataGlobalBindings;
 	TMap<asSStableKey, class asCExecutableFunction*> publishedExecutables;
 	TArray<class asCExecutableSnapshot*> publishedSnapshotLeases;

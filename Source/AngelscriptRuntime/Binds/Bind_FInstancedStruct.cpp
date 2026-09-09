@@ -111,7 +111,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FInstancedStruct(
 			.Method("UScriptStruct GetScriptStruct() const", METHOD_TRIVIAL(FInstancedStruct, GetScriptStruct))
 			.Documentation(TEXT("Get the type of struct contained within the instanced struct"));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FInstancedStruct");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FInstancedStruct");
 		Binds.BindGlobalFunctionForTarget(
 			"FInstancedStruct Make(const ?&in Struct) no_discard",
 			FUNC(FAngelscriptFInstancedStructBinds::Make))

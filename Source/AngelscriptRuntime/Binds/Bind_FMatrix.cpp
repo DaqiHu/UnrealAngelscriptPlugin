@@ -69,7 +69,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FMatrix(
 		Matrix.Method("FRotator Rotator() const", METHOD_TRIVIAL(FMatrix, Rotator));
 		Matrix.Method("FString ToString() const", METHOD_TRIVIAL(FMatrix, ToString));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FMatrix");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FMatrix");
 		Binds.BindGlobalFunctionForTarget("FMatrix Identity()", &FAngelscriptFMatrixBinds::Identity);
 		Binds.BindGlobalFunctionForTarget("FMatrix Zero()", &FAngelscriptFMatrixBinds::Zero);
 	});

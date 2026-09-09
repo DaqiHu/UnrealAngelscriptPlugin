@@ -134,9 +134,9 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FBoxSphereBounds(
 		FBoxSphereBounds_.Method("FBoxSphereBounds ExpandBy( float64 ExpandAmount ) const", METHODPR_TRIVIAL(FBoxSphereBounds, FBoxSphereBounds, ExpandBy, (double) const));
 		FBoxSphereBounds_.Method("FBoxSphereBounds TransformBy( const FTransform& M ) const", METHODPR_TRIVIAL(FBoxSphereBounds, FBoxSphereBounds, TransformBy, (const FTransform&) const));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FBoxSphereBounds");
-		Binds.BindGlobalFunctionForTarget("bool SpheresIntersect(const FBoxSphereBounds& A, const FBoxSphereBounds& B, float64 Tolerance = KINDA_SMALL_NUMBER) no_discard", FUNC_TRIVIAL(FBoxSphereBounds::SpheresIntersect));
-		Binds.BindGlobalFunctionForTarget("bool BoxesIntersect(const FBoxSphereBounds& A, const FBoxSphereBounds& B) no_discard", FUNC_TRIVIAL(FBoxSphereBounds::BoxesIntersect));
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FBoxSphereBounds");
+		Binds.BindGlobalFunctionForTarget("bool SpheresIntersect(const FBoxSphereBounds& A, const FBoxSphereBounds& B, float64 Tolerance = KINDA_SMALL_NUMBER)", FUNC_TRIVIAL(FBoxSphereBounds::SpheresIntersect)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("bool BoxesIntersect(const FBoxSphereBounds& A, const FBoxSphereBounds& B)", FUNC_TRIVIAL(FBoxSphereBounds::BoxesIntersect)).NoDiscard();
 	});
 
 void FAngelscriptFBoxSphereBoundsBinds::ConstructDefault(FBoxSphereBounds* Address)

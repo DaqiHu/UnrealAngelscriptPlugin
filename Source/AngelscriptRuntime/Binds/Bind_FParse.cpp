@@ -34,7 +34,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FParse(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FParse");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FParse");
 		Binds.BindGlobalFunctionForTarget(
 			"bool Value(const FString& Stream, const FString& Match, FString& Value)",
 			&FAngelscriptFParseBinds::ValueString);

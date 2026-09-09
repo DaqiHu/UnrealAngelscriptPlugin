@@ -2,6 +2,14 @@
 #include "AngelscriptType.h"
 #include "AngelscriptBinds.h"
 
+namespace
+{
+	void RequestExit(bool bForce)
+	{
+		FGenericPlatformMisc::RequestExit(bForce, nullptr);
+	}
+}
+
 /**
  * Generic platform process control.
  * +------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------+
@@ -16,7 +24,6 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FGenericPlatformMisc(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FGenericPlatformMisc");
-		Binds.BindGlobalFunctionForTarget("void RequestExit(bool Force)", &FGenericPlatformMisc::RequestExit)
-			.NativeFunction("FGenericPlatformMisc::RequestExit", true);
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FGenericPlatformMisc");
+		Binds.BindGlobalFunctionForTarget("void RequestExit(bool Force)", &RequestExit);
 	});

@@ -142,20 +142,23 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector2f_Infrastructure(
 	{
 		auto Vector2fType = MakeShared<FVector2fType>();
 		Binds.RegisterTypeForTarget(Vector2fType);
-		Binds.RegisterTypeFinderForTarget([Vector2fType](FProperty* Property, FAngelscriptTypeUsage& Usage) -> bool
+		if (!Binds.IsRecording())
 		{
-			FStructProperty* StructProp = CastField<FStructProperty>(Property);
-			if (StructProp == nullptr)
-				return false;
-
-			if (StructProp->Struct == FDeprecateSlateVector2D::StaticStruct())
+			Binds.RegisterTypeFinderForTarget([Vector2fType](FProperty* Property, FAngelscriptTypeUsage& Usage) -> bool
 			{
-				Usage.Type = Vector2fType;
-				return true;
-			}
+				FStructProperty* StructProp = CastField<FStructProperty>(Property);
+				if (StructProp == nullptr)
+					return false;
 
-			return false;
-		});
+				if (StructProp->Struct == FDeprecateSlateVector2D::StaticStruct())
+				{
+					Usage.Type = Vector2fType;
+					return true;
+				}
+
+				return false;
+			});
+		}
 		FToStringHelper::Register(Binds, TEXT("FVector2f"), &FAngelscriptFVector2fBinds::AppendToString);
 	});
 
@@ -235,7 +238,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector2f(
 		FVector2f_.Method("FVector2f GetClampedToMaxSize(float32 Max) const", &FAngelscriptFVector2fBinds::GetClampedToMaxSize);
 		FVector2f_.Method("bool InitFromString(const FString& SourceString)", METHOD_TRIVIAL(FVector2f, InitFromString));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FVector2f");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FVector2f");
 		Binds.BindGlobalVariableForTarget("const FVector2f ZeroVector", &FVector2f::ZeroVector);
 		Binds.BindGlobalVariableForTarget("const FVector2f UnitVector", &FVector2f::UnitVector);
 	});

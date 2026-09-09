@@ -48,6 +48,9 @@ struct asSJITFunctionBinding;
 enum class EAngelscriptJITExecutionCapability : uint32;
 class FAngelscriptBindDatabase;
 struct FAngelscriptTypeDatabase;
+class FAngelscriptTypeBindInfoStore;
+class FAngelscriptTypeBindInfoInstallation;
+struct FAngelscriptBindingDiagnostic;
 struct FAngelscriptBindState;
 struct FAngelscriptDocumentationState;
 struct FAngelscriptNativeFormState;
@@ -444,6 +447,17 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngine
 	~FAngelscriptEngine();
 
 	static TUniquePtr<FAngelscriptEngine> Create(const FAngelscriptEngineConfig& InConfig, const FAngelscriptEngineDependencies& InDependencies);
+	static TUniquePtr<FAngelscriptEngine> CreateForBindings(TSharedRef<const FAngelscriptTypeBindInfoStore> Store, FAngelscriptBindingDiagnostic& Diagnostic);
+	static TUniquePtr<FAngelscriptEngine> CreateForBindings(FAngelscriptBindingDiagnostic& Diagnostic);
+#if WITH_DEV_AUTOMATION_TESTS
+	static uint64 GetBindingNativeEngineAllocationCountForTesting();
+#endif
+	const FAngelscriptTypeBindInfoInstallation* GetBindingInstallation() const;
+	/** Borrowed contexts: the binding Engine owns and releases them during Shutdown. */
+	asIScriptContext* CreateBindingContext();
+	asIScriptContext* GetBindingContext() const;
+	int32 GetBindingContextCount() const;
+	bool IsBindingEngine() const;
 	static FAngelscriptEngine* TryGetCurrentEngine();
 
 	/**
@@ -966,6 +980,13 @@ private:
 	// MakeUnique-d during initialization. Teardown releases these in
 	// Shutdown().
 	TUniquePtr<FAngelscriptTypeDatabase> TypeDatabase;
+	struct FBindingConstruction {};
+	explicit FAngelscriptEngine(FBindingConstruction);
+	void ShutdownBindings();
+	bool bBindingOnly = false;
+	bool bShuttingDownBindings = false;
+	TUniquePtr<FAngelscriptTypeBindInfoInstallation> BindingInstallation;
+	TArray<asIScriptContext*> BindingContexts;
 	TUniquePtr<FAngelscriptBindState> BindState;
 	TUniquePtr<TArray<FToStringType>> ToStringList;
 	TUniquePtr<FAngelscriptBindDatabase> BindDatabase;

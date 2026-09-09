@@ -62,7 +62,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FPlatformProcess(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FPlatformProcess");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FPlatformProcess");
 		Binds.BindGlobalFunctionForTarget("FString UserDir()", &FAngelscriptFPlatformProcessBinds::UserDir);
 		Binds.BindGlobalFunctionForTarget("FString UserSettingsDir()", &FAngelscriptFPlatformProcessBinds::UserSettingsDir);
 		Binds.BindGlobalFunctionForTarget("FString UserTempDir()", &FAngelscriptFPlatformProcessBinds::UserTempDir);

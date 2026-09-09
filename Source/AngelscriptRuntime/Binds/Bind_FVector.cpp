@@ -451,7 +451,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector(
 		FVector_.Method("float64 DistSquared2D(const FVector& Other) const", FUNC_TRIVIAL(FVector::DistSquared2D));
 
 		{
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FVector");
+			FAngelscriptBinds::FNamespace Namespace(Binds, "FVector");
 			Binds.BindGlobalVariableForTarget("const FVector ZeroVector", &FVector::ZeroVector);
 			Binds.BindGlobalVariableForTarget("const FVector OneVector", &FVector::OneVector);
 

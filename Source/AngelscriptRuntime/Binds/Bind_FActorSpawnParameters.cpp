@@ -83,12 +83,18 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FActorSpawnParameters(
 				operator=,
 				(const FActorSpawnParameters&)));
 		SpawnParameters.Property("FName Name", &FActorSpawnParameters::Name);
-		SpawnParameters.Property("AActor Template", &FActorSpawnParameters::Template);
-		SpawnParameters.Property("AActor Owner", &FActorSpawnParameters::Owner);
-		SpawnParameters.Property("APawn Instigator", &FActorSpawnParameters::Instigator);
-		SpawnParameters.Property("ULevel OverrideLevel", &FActorSpawnParameters::OverrideLevel);
-		SpawnParameters.Property("ESpawnActorCollisionHandlingMethod SpawnCollisionHandlingOverride", &FActorSpawnParameters::SpawnCollisionHandlingOverride);
-		SpawnParameters.Property("ESpawnActorNameMode NameMode", &FActorSpawnParameters::NameMode);
+		SpawnParameters.Method("AActor GetTemplate() const", &FAngelscriptActorSpawnParametersBinds::GetTemplate);
+		SpawnParameters.Method("void SetTemplate(AActor Value)", &FAngelscriptActorSpawnParametersBinds::SetTemplate);
+		SpawnParameters.Method("AActor GetOwner() const", &FAngelscriptActorSpawnParametersBinds::GetOwner);
+		SpawnParameters.Method("void SetOwner(AActor Value)", &FAngelscriptActorSpawnParametersBinds::SetOwner);
+		SpawnParameters.Method("APawn GetInstigator() const", &FAngelscriptActorSpawnParametersBinds::GetInstigator);
+		SpawnParameters.Method("void SetInstigator(APawn Value)", &FAngelscriptActorSpawnParametersBinds::SetInstigator);
+		SpawnParameters.Method("ULevel GetOverrideLevel() const", &FAngelscriptActorSpawnParametersBinds::GetOverrideLevel);
+		SpawnParameters.Method("void SetOverrideLevel(ULevel Value)", &FAngelscriptActorSpawnParametersBinds::SetOverrideLevel);
+		SpawnParameters.Method("ESpawnActorCollisionHandlingMethod GetSpawnCollisionHandlingOverride() const", &FAngelscriptActorSpawnParametersBinds::GetSpawnCollisionHandlingOverride);
+		SpawnParameters.Method("void SetSpawnCollisionHandlingOverride(ESpawnActorCollisionHandlingMethod Value)", &FAngelscriptActorSpawnParametersBinds::SetSpawnCollisionHandlingOverride);
+		SpawnParameters.Method("ESpawnActorNameMode GetNameMode() const", &FAngelscriptActorSpawnParametersBinds::GetNameMode);
+		SpawnParameters.Method("void SetNameMode(ESpawnActorNameMode Value)", &FAngelscriptActorSpawnParametersBinds::SetNameMode);
 		SpawnParameters.Method("bool GetbNoFail() const", &FAngelscriptActorSpawnParametersBinds::GetNoFail);
 		SpawnParameters.Method("void SetbNoFail(bool Value)", &FAngelscriptActorSpawnParametersBinds::SetNoFail);
 		SpawnParameters.Method("bool GetbDeferConstruction() const", &FAngelscriptActorSpawnParametersBinds::GetDeferConstruction);
@@ -117,6 +123,19 @@ void FAngelscriptActorSpawnParametersBinds::CopyConstruct(FActorSpawnParameters*
 {
 	new (Address) FActorSpawnParameters(Other);
 }
+
+AActor* FAngelscriptActorSpawnParametersBinds::GetTemplate(const FActorSpawnParameters* P) { return P->Template; }
+void FAngelscriptActorSpawnParametersBinds::SetTemplate(FActorSpawnParameters* P, AActor* V) { P->Template = V; }
+AActor* FAngelscriptActorSpawnParametersBinds::GetOwner(const FActorSpawnParameters* P) { return P->Owner; }
+void FAngelscriptActorSpawnParametersBinds::SetOwner(FActorSpawnParameters* P, AActor* V) { P->Owner = V; }
+APawn* FAngelscriptActorSpawnParametersBinds::GetInstigator(const FActorSpawnParameters* P) { return P->Instigator; }
+void FAngelscriptActorSpawnParametersBinds::SetInstigator(FActorSpawnParameters* P, APawn* V) { P->Instigator = V; }
+ULevel* FAngelscriptActorSpawnParametersBinds::GetOverrideLevel(const FActorSpawnParameters* P) { return P->OverrideLevel; }
+void FAngelscriptActorSpawnParametersBinds::SetOverrideLevel(FActorSpawnParameters* P, ULevel* V) { P->OverrideLevel = V; }
+ESpawnActorCollisionHandlingMethod FAngelscriptActorSpawnParametersBinds::GetSpawnCollisionHandlingOverride(const FActorSpawnParameters* P) { return P->SpawnCollisionHandlingOverride; }
+void FAngelscriptActorSpawnParametersBinds::SetSpawnCollisionHandlingOverride(FActorSpawnParameters* P, ESpawnActorCollisionHandlingMethod V) { P->SpawnCollisionHandlingOverride = V; }
+FActorSpawnParameters::ESpawnActorNameMode FAngelscriptActorSpawnParametersBinds::GetNameMode(const FActorSpawnParameters* P) { return P->NameMode; }
+void FAngelscriptActorSpawnParametersBinds::SetNameMode(FActorSpawnParameters* P, FActorSpawnParameters::ESpawnActorNameMode V) { P->NameMode = V; }
 
 bool FAngelscriptActorSpawnParametersBinds::GetNoFail(const FActorSpawnParameters* Parameters)
 {

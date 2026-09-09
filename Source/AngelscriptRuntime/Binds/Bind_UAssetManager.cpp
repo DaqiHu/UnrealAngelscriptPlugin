@@ -85,7 +85,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UAssetManager(
 		FPrimaryAssetId_.Method("bool IsValid() const", METHOD_TRIVIAL(FPrimaryAssetId, IsValid));
 		FPrimaryAssetId_.Method("bool opEquals(const FPrimaryAssetId& Other) const", METHODPR_TRIVIAL(bool, FPrimaryAssetId, operator==, (const FPrimaryAssetId&) const));
 		{
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FPrimaryAssetId");
+			FAngelscriptBinds::FNamespace Namespace(Binds, "FPrimaryAssetId");
 			Binds.BindGlobalFunctionForTarget("FPrimaryAssetId ParseTypeAndName(const FString& TypeAndName)", &FAngelscriptUAssetManagerBinds::ParsePrimaryAssetId);
 		}
 

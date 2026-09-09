@@ -124,8 +124,8 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FBox3f(
 		FBox3f_.Method("bool IsInside( const FVector3f& In ) const", METHODPR_TRIVIAL(bool, FBox3f, IsInside, (const FVector3f&) const));
 		FBox3f_.Method("bool IsInsideOrOn( const FVector3f& In ) const", METHODPR_TRIVIAL(bool, FBox3f, IsInsideOrOn, (const FVector3f&) const));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FBox3f");
-		Binds.BindGlobalFunctionForTarget("FBox3f BuildAABB( const FVector3f& Origin, const FVector3f& Extent) no_discard", FUNC_TRIVIAL(FBox3f::BuildAABB));
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FBox3f");
+		Binds.BindGlobalFunctionForTarget("FBox3f BuildAABB( const FVector3f& Origin, const FVector3f& Extent)", FUNC_TRIVIAL(FBox3f::BuildAABB)).NoDiscard();
 	});
 
 void FAngelscriptFBox3fBinds::ConstructDefault(FBox3f* Address)

@@ -422,7 +422,15 @@ namespace
 			}
 
 			void* ScriptArgumentAddress = Generic->GetAddressOfArg(ScriptArgIndex);
-			void* SourceAddress = ResolveScriptArgumentAddress(Entry.Property, ScriptArgumentAddress);
+			UObject* ObjectArgument = nullptr;
+			void* SourceAddress = nullptr;
+			if (CastField<FObjectPropertyBase>(Entry.Property) != nullptr
+				&& !Entry.Property->HasAnyPropertyFlags(CPF_ReferenceParm | CPF_OutParm))
+			{
+				ObjectArgument = static_cast<UObject*>(Generic->GetArgObject(ScriptArgIndex));
+				SourceAddress = &ObjectArgument;
+			}
+			else SourceAddress = ResolveScriptArgumentAddress(Entry.Property, ScriptArgumentAddress);
 
 			if (Entry.bIsSimpleCopy && SourceAddress != nullptr)
 			{
@@ -627,7 +635,15 @@ namespace
 			}
 
 			void* ScriptArgumentAddress = Generic->GetAddressOfArg(ScriptArgIndex);
-			void* SourceAddress = ResolveScriptArgumentAddress(Property, ScriptArgumentAddress);
+			UObject* ObjectArgument = nullptr;
+			void* SourceAddress = nullptr;
+			if (CastField<FObjectPropertyBase>(Property) != nullptr
+				&& !Property->HasAnyPropertyFlags(CPF_ReferenceParm | CPF_OutParm))
+			{
+				ObjectArgument = static_cast<UObject*>(Generic->GetArgObject(ScriptArgIndex));
+				SourceAddress = &ObjectArgument;
+			}
+			else SourceAddress = ResolveScriptArgumentAddress(Property, ScriptArgumentAddress);
 			if (SourceAddress != nullptr)
 			{
 				Property->CopySingleValue(Destination, SourceAddress);
@@ -797,7 +813,7 @@ namespace
 				Signature.ModifyScriptFunction(GlobalBinding);
 			}
 
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), Signature.ClassName);
+			FAngelscriptBinds::FNamespace Namespace(Binds, Signature.ClassName);
 			OutPrimaryBinding = Binds.BindGlobalFunctionDirectForTarget(
 				Signature.Declaration,
 				asFUNCTION(CallBlueprintCallableReflectiveFallback),

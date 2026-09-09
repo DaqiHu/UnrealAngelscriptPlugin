@@ -78,7 +78,16 @@ namespace UnrealBuildTool.Rules
 			if (bCompileReplacementTests)
 			{
 				// Replacement frontend tests deserialize stage dumps independently.
-				PrivateDependencyModuleNames.Add("Json");
+				PrivateDependencyModuleNames.AddRange(new string[]
+				{
+					"EnhancedInput",
+					"InputCore",
+					"Json",
+					"JsonUtilities",
+					"Slate",
+					"SlateCore",
+					"UMG",
+				});
 			}
 
 			if (Target.bBuildEditor

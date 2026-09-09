@@ -207,7 +207,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector2D(
 		FVector2D_.Method("FVector2D GetClampedToMaxSize(float64 Max) const", &FAngelscriptFVector2DBinds::GetClampedToMaxSize);
 		FVector2D_.Method("bool InitFromString(const FString& SourceString)", METHOD_TRIVIAL(FVector2D, InitFromString));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FVector2D");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FVector2D");
 		Binds.BindGlobalVariableForTarget("const FVector2D ZeroVector", &FVector2D::ZeroVector);
 		Binds.BindGlobalVariableForTarget("const FVector2D UnitVector", &FVector2D::UnitVector);
 	});

@@ -120,7 +120,7 @@ FTransform FAngelscriptUSceneComponentBinds::GetComponentTransform(USceneCompone
 
 void FAngelscriptUSceneComponentBinds::SetRelativeLocation(
 	USceneComponent* Component,
-	const FVector NewLocation)
+	const FVector& NewLocation)
 {
 	Component->SetRelativeLocation(NewLocation);
 	Component->UpdateComponentToWorld();
@@ -128,7 +128,7 @@ void FAngelscriptUSceneComponentBinds::SetRelativeLocation(
 
 void FAngelscriptUSceneComponentBinds::SetRelativeRotation(
 	USceneComponent* Component,
-	const FRotator NewRotation)
+	const FRotator& NewRotation)
 {
 	Component->SetRelativeRotation(NewRotation);
 	Component->UpdateComponentToWorld();

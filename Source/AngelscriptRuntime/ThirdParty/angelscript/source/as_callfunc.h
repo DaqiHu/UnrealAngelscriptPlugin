@@ -125,6 +125,7 @@ struct asSSystemFunctionInterface
 	int                  paramSize;
 	asEFirstParamMetaData passFirstParamMetaData;
 	asFunctionCaller	 caller;
+	void* auxiliary;
 
 	struct SClean
 	{
@@ -154,6 +155,7 @@ struct asSSystemFunctionInterface
 		paramSize = 0;
 		passFirstParamMetaData = asEFirstParamMetaData::None;
 		caller = nullptr;
+		auxiliary = nullptr;
 		cleanArgs.SetLength(0);
 		CallFrame = asSVMCallFrame{};
 	}
@@ -168,6 +170,7 @@ struct asSSystemFunctionInterface
 		paramSize           = in.paramSize;
 		passFirstParamMetaData = in.passFirstParamMetaData;
 		caller = in.caller;
+		auxiliary = in.auxiliary;
 		cleanArgs = in.cleanArgs;
 		CallFrame = in.CallFrame;
 		return *this;

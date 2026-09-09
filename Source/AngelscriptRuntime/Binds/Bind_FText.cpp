@@ -144,7 +144,10 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FText_Infrastructure(
 	{
 		Binds.RegisterTypeForTarget(MakeShared<FTextType>());
 		auto Text = Binds.ExistingClassForTarget("FText");
-		TGetStaticTypeInfo<FText>::SetForEngine(Binds.GetTargetEngine().GetScriptEngine(), Text.GetTypeInfo());
+		if (!Binds.IsRecording())
+		{
+			TGetStaticTypeInfo<FText>::SetForEngine(Binds.GetTargetEngine().GetScriptEngine(), Text.GetTypeInfo());
+		}
 		FToStringHelper::Register(Binds, TEXT("FText"), &FAngelscriptFTextBinds::AppendToString);
 	});
 
@@ -168,7 +171,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FText(
 		Text.Method("FText& opAssign(const FText& Other)", METHODPR_TRIVIAL(FText&, FText, operator=, (const FText&)));
 
 		{
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FText");
+			FAngelscriptBinds::FNamespace Namespace(Binds, "FText");
 			Binds.BindGlobalFunctionForTarget("FText FromStringTable(const FName InTableId, const FString& InKey, const EStringTableLoadingPolicy InLoadingPolicy = EStringTableLoadingPolicy::FindOrLoad) no_discard", FUNC_TRIVIAL(FText::FromStringTable));
 			Binds.BindGlobalFunctionForTarget("FText FromName(const FName& Val) no_discard", FUNC_TRIVIAL(FText::FromName));
 			Binds.BindGlobalFunctionForTarget("FText FromString(const FString& Val) no_discard", FUNCPR_TRIVIAL(FText, FText::FromString, (const FString&)));
@@ -176,9 +179,9 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FText(
 			Binds.BindGlobalFunctionForTarget("FText Join(const FText& Delimiter, const TArray<FFormatArgumentValue>& Args) no_discard", FUNCPR_TRIVIAL(FText, FText::Join, (const FText&, const TArray<FFormatArgumentValue>&)));
 			Binds.BindGlobalFunctionForTarget("FText Join(const FText& Delimiter, const TArray<FText>& Args) no_discard", FUNCPR_TRIVIAL(FText, FText::Join, (const FText&, const TArray<FText>&)));
 
-			Binds.BindGlobalFunctionForTarget("FText AsDate(const FDateTime& DateTime, const EDateTimeStyle::Type DateStyle = EDateTimeStyle::Default) no_discard", &FAngelscriptFTextBinds::AsDate);
-			Binds.BindGlobalFunctionForTarget("FText AsDateTime(const FDateTime& DateTime, const EDateTimeStyle::Type DateStyle = EDateTimeStyle::Default, const EDateTimeStyle::Type TimeStyle = EDateTimeStyle::Default) no_discard", &FAngelscriptFTextBinds::AsDateTime);
-			Binds.BindGlobalFunctionForTarget("FText AsTime(const FDateTime& DateTime, const EDateTimeStyle::Type TimeStyle = EDateTimeStyle::Default) no_discard", &FAngelscriptFTextBinds::AsTime);
+			Binds.BindGlobalFunctionForTarget("FText AsDate(const FDateTime& DateTime, const EDateTimeStyle DateStyle = EDateTimeStyle::Default) no_discard", &FAngelscriptFTextBinds::AsDate);
+			Binds.BindGlobalFunctionForTarget("FText AsDateTime(const FDateTime& DateTime, const EDateTimeStyle DateStyle = EDateTimeStyle::Default, const EDateTimeStyle TimeStyle = EDateTimeStyle::Default) no_discard", &FAngelscriptFTextBinds::AsDateTime);
+			Binds.BindGlobalFunctionForTarget("FText AsTime(const FDateTime& DateTime, const EDateTimeStyle TimeStyle = EDateTimeStyle::Default) no_discard", &FAngelscriptFTextBinds::AsTime);
 			Binds.BindGlobalFunctionForTarget("FText AsTimespan(const FTimespan& Timespan) no_discard", &FAngelscriptFTextBinds::AsTimespan);
 
 			Binds.BindGlobalFunctionForTarget("FText AsNumber(float32 Val, const FNumberFormattingOptions& Options) no_discard", &FAngelscriptFTextBinds::AsNumber<float>);

@@ -66,7 +66,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FFileHelper_Types(
 		EFileRead_["Silent"] = FILEREAD_Silent;
 		EFileRead_["AllowWrite"] = FILEREAD_AllowWrite;
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FFileHelper");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FFileHelper");
 		auto EHashOptions_ = Binds.EnumForTarget("EHashOptions");
 		EHashOptions_["None"] = FFileHelper::EHashOptions::None;
 		EHashOptions_["EnableVerify"] = FFileHelper::EHashOptions::EnableVerify;
@@ -85,7 +85,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FFileHelper(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FFileHelper");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FFileHelper");
 		Binds.BindGlobalFunctionForTarget(
 			"bool LoadFileToString(FString& Result, const FString& Filename, FFileHelper::EHashOptions HashOptions = FFileHelper::EHashOptions::None, uint32 ReadFlags = uint32(EFileRead::None))",
 			&FAngelscriptFFileHelperBinds::LoadFileToString);

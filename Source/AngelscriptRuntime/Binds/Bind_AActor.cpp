@@ -1,6 +1,7 @@
 #include "Bind_AActor.h"
 
 #include "AngelscriptBinds.h"
+#include "AngelscriptTypeBindInfoReflection.h"
 #include "AngelscriptType.h"
 
 #include "Components/InputComponent.h"
@@ -195,6 +196,29 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Actors(
 	EAngelscriptBindPhase::PostReflectionBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsRecording())
+		{
+			const auto& Snapshot = Binds.GetRecordingStore()->GetReflectedSnapshot();
+			if (!Snapshot.IsValid())
+			{
+				Binds.GetRecordingStore()->ReportFailure(TEXT("Actor post-reflection bindings require a captured reflected snapshot."));
+				return;
+			}
+			for (const FAngelscriptReflectedTypeRecord& Reflected : Snapshot->GetTypes())
+			{
+				UClass* Class = Cast<UClass>(Reflected.NativeType);
+				if (!Reflected.bEligible || !Class || !Class->IsChildOf(AActor::StaticClass())) continue;
+				const FString& ClassName = Reflected.Declaration.Name;
+				FAngelscriptBinds::FNamespace Namespace(Binds, ClassName);
+				Binds.BindGlobalFunctionForTarget(
+					FString::Printf(TEXT("%s Spawn(const FVector& Location = FVector::ZeroVector, const FRotator& Rotation = FRotator::ZeroRotator, const FName& Name = NAME_None, ULevel Level = nullptr)"), *ClassName),
+					FUNC(FAngelscriptActorBinds::SpawnActorFromMeta), Class).PassScriptFunctionAsFirstParam();
+				Binds.BindGlobalFunctionForTarget(
+					FString::Printf(TEXT("%s Spawn(const FTransform& SpawnTransform, const FActorSpawnParameters& SpawnParameters)"), *ClassName),
+					FUNC(FAngelscriptActorBinds::SpawnActorFromMetaWithParameters), Class).PassScriptFunctionAsFirstParam();
+			}
+			return;
+		}
 		for (UClass* Class : TObjectRange<UClass>())
 		{
 			if (!Class->IsChildOf(AActor::StaticClass()))
@@ -207,7 +231,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Actors(
 				continue;
 
 			const FString ClassName = Type->GetAngelscriptTypeName();
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), ClassName);
+			FAngelscriptBinds::FNamespace Namespace(Binds, ClassName);
 			const FString FunctionDeclaration = FString::Printf(
 				TEXT("%s Spawn(const FVector& Location = FVector::ZeroVector, ")
 				TEXT("const FRotator& Rotation = FRotator::ZeroRotator, const FName& Name = NAME_None, ULevel Level = nullptr)"),

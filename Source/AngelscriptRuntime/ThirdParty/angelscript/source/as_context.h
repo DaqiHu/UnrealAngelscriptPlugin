@@ -182,6 +182,12 @@ public:
 	// User data
 	void *SetUserData(void *data, asPWORD type);
 	void *GetUserData(asPWORD type) const;
+	// [UE++]: Borrowed from the exact acquired native binding for this invocation.
+	void *GetNativeCallAuxiliary() const { return m_nativeCallAuxiliary; }
+
+private:
+	void *m_nativeCallAuxiliary = nullptr;
+public:
 
 	void* DebugFramePtr = nullptr;
 public:

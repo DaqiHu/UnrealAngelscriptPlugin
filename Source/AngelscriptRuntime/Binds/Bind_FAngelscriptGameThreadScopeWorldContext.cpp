@@ -36,7 +36,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FAngelscriptGameThreadScopeWorldContex
 		Scope_.Destructor(
 			"void f()",
 			&FAngelscriptFAngelscriptGameThreadScopeWorldContextBinds::Destruct);
-	});
+	}, true);
 
 #include "AngelscriptEngine.h"
 

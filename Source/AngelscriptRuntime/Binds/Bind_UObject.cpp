@@ -258,7 +258,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UClass_Base(
 		UClass_.Method("UClass GetSuperClass() const", &FAngelscriptUObjectBinds::GetSuperClass);
 
 		{
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "UClass");
+			FAngelscriptBinds::FNamespace Namespace(Binds, "UClass");
 			Binds.BindGlobalFunctionForTarget("UClass FindClass(const FString& Name)", &FAngelscriptUObjectBinds::FindClassByObjectName);
 			Binds.BindGlobalFunctionForTarget("void GetAllClasses(TArray<UClass>& OutClasses)", &FAngelscriptUObjectBinds::GetAllClasses);
 			Binds.BindGlobalFunctionForTarget(

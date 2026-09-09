@@ -252,7 +252,7 @@ namespace
 			.NativeConstructor("FCollisionQueryParams", true);
 		CollisionQueryParams.Method("FCollisionQueryParams& opAssign(const FCollisionQueryParams& Other)", METHODPR_TRIVIAL(FCollisionQueryParams&, FCollisionQueryParams, operator=, (const FCollisionQueryParams&)));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FCollisionQueryParams");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FCollisionQueryParams");
 		Binds.BindGlobalVariableForTarget("const FCollisionQueryParams DefaultQueryParam", &FCollisionQueryParams::DefaultQueryParam);
 	}
 
@@ -279,7 +279,7 @@ namespace
 			.NativeConstructor("FComponentQueryParams", true);
 		ComponentQueryParams.Method("FComponentQueryParams& opAssign(const FComponentQueryParams& Other)", METHODPR_TRIVIAL(FComponentQueryParams&, FComponentQueryParams, operator=, (const FComponentQueryParams&)));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FComponentQueryParams");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FComponentQueryParams");
 		Binds.BindGlobalVariableForTarget("const FComponentQueryParams DefaultComponentQueryParams", &FComponentQueryParams::DefaultComponentQueryParams);
 	}
 
@@ -291,7 +291,7 @@ namespace
 		CollisionResponseParams.Constructor("void f(ECollisionResponse DefaultResponse)", &FAngelscriptFCollisionQueryParamsBinds::ConstructCollisionResponseParamsFromDefaultResponse)
 			.NativeConstructor("FCollisionResponseParams", true);
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FCollisionResponseParams");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FCollisionResponseParams");
 		Binds.BindGlobalVariableForTarget("const FCollisionResponseParams DefaultResponseParam", &FCollisionResponseParams::DefaultResponseParam);
 	}
 
@@ -303,7 +303,7 @@ namespace
 		CollisionObjectQueryParams.Constructor("void f(ECollisionChannel QueryChannel)", &FAngelscriptFCollisionQueryParamsBinds::ConstructCollisionObjectQueryParamsFromChannel)
 			.NativeConstructor("FCollisionObjectQueryParams", true);
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FCollisionObjectQueryParams");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FCollisionObjectQueryParams");
 		Binds.BindGlobalVariableForTarget("const FCollisionObjectQueryParams DefaultObjectQueryParam", &FCollisionObjectQueryParams::DefaultObjectQueryParam);
 	}
 
@@ -389,7 +389,7 @@ namespace
 		CollisionObjectQueryParams.Method("bool IsValid() const", METHOD_TRIVIAL(FCollisionObjectQueryParams, IsValid));
 		CollisionObjectQueryParams.Method("void DoVerify() const", METHOD_TRIVIAL(FCollisionObjectQueryParams, DoVerify));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FCollisionObjectQueryParams");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FCollisionObjectQueryParams");
 		Binds.BindGlobalFunctionForTarget("bool IsValidObjectQuery(ECollisionChannel QueryChannel) no_discard", FUNC_TRIVIAL(FCollisionObjectQueryParams::IsValidObjectQuery));
 		Binds.BindGlobalFunctionForTarget("ECollisionObjectQueryInitType GetCollisionChannelFromOverlapFilter(EOverlapFilterOption Filter) no_discard", FUNC_TRIVIAL(FCollisionObjectQueryParams::GetCollisionChannelFromOverlapFilter));
 	}
@@ -405,7 +405,7 @@ namespace
 		CollisionResponseContainer.Method("ECollisionResponse GetResponse(ECollisionChannel Channel) const", METHOD_TRIVIAL(FCollisionResponseContainer, GetResponse));
 		CollisionResponseContainer.Method("bool opEquals(const FCollisionResponseContainer& Other) const", METHODPR_TRIVIAL(bool, FCollisionResponseContainer, operator==, (const FCollisionResponseContainer&) const));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FCollisionResponseContainer");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FCollisionResponseContainer");
 		Binds.BindGlobalFunctionForTarget("const FCollisionResponseContainer& GetDefaultResponseContainer()", FUNC_TRIVIAL(FCollisionResponseContainer::GetDefaultResponseContainer));
 		Binds.BindGlobalFunctionForTarget("FCollisionResponseContainer CreateMinContainer(const FCollisionResponseContainer& A, const FCollisionResponseContainer& B)", FUNC_TRIVIAL(FCollisionResponseContainer::CreateMinContainer));
 	}

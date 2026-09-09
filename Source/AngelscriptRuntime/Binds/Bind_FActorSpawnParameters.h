@@ -14,6 +14,18 @@ struct FAngelscriptActorSpawnParametersBinds
 {
 	static void Construct(FActorSpawnParameters* Address);
 	static void CopyConstruct(FActorSpawnParameters* Address, const FActorSpawnParameters& Other);
+	static AActor* GetTemplate(const FActorSpawnParameters* Parameters);
+	static void SetTemplate(FActorSpawnParameters* Parameters, AActor* Value);
+	static AActor* GetOwner(const FActorSpawnParameters* Parameters);
+	static void SetOwner(FActorSpawnParameters* Parameters, AActor* Value);
+	static APawn* GetInstigator(const FActorSpawnParameters* Parameters);
+	static void SetInstigator(FActorSpawnParameters* Parameters, APawn* Value);
+	static ULevel* GetOverrideLevel(const FActorSpawnParameters* Parameters);
+	static void SetOverrideLevel(FActorSpawnParameters* Parameters, ULevel* Value);
+	static ESpawnActorCollisionHandlingMethod GetSpawnCollisionHandlingOverride(const FActorSpawnParameters* Parameters);
+	static void SetSpawnCollisionHandlingOverride(FActorSpawnParameters* Parameters, ESpawnActorCollisionHandlingMethod Value);
+	static FActorSpawnParameters::ESpawnActorNameMode GetNameMode(const FActorSpawnParameters* Parameters);
+	static void SetNameMode(FActorSpawnParameters* Parameters, FActorSpawnParameters::ESpawnActorNameMode Value);
 
 	static bool GetNoFail(const FActorSpawnParameters* Parameters);
 	static void SetNoFail(FActorSpawnParameters* Parameters, bool bNoFail);

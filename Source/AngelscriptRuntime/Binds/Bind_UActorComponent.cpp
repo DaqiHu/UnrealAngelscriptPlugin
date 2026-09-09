@@ -10,7 +10,7 @@ struct FAngelscriptUActorComponentBinds
 	static void Activate(UActorComponent* Component, bool bReset);
 	static void Deactivate(UActorComponent* Component);
 	static void DestroyComponent(UActorComponent* Component, bool bPromoteChildren);
-	static bool ComponentHasTag(const UActorComponent* Component, FName Tag);
+	static bool ComponentHasTag(const UActorComponent* Component, const FName& Tag);
 	static void SetTickInEditor(UActorComponent* Component, bool bTickInEditor);
 	static void SetIsEditorOnly(UActorComponent* Component, bool bEditorOnly);
 	static EComponentCreationMethod GetComponentCreationMethod(const UActorComponent* Component);
@@ -19,6 +19,7 @@ struct FAngelscriptUActorComponentBinds
 };
 
 #include "AngelscriptBinds.h"
+#include "AngelscriptTypeBindInfoReflection.h"
 #include "AngelscriptEngine.h"
 #include "AngelscriptSettings.h"
 #include "AngelscriptType.h"
@@ -133,7 +134,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UActorComponent(
 		ComponentType.Method(
 			"void DestroyComponent(bool bPromoteChildren = false)",
 			&FAngelscriptUActorComponentBinds::DestroyComponent);
-		ComponentType.Method("bool ComponentHasTag(FName Tag) const", &FAngelscriptUActorComponentBinds::ComponentHasTag);
+		ComponentType.Method("bool ComponentHasTag(const FName& Tag) const", &FAngelscriptUActorComponentBinds::ComponentHasTag);
 		ComponentType.Method("void SetbTickInEditor(bool Value)", &FAngelscriptUActorComponentBinds::SetTickInEditor);
 		ComponentType.Method("void SetbIsEditorOnly(bool Value)", &FAngelscriptUActorComponentBinds::SetIsEditorOnly);
 		ComponentType.Method(
@@ -153,16 +154,16 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UActorComponent(
 
 		Binds.BindGlobalFunctionForTarget(
 			"void __Actor_GetComponentByClass(const AActor Actor, const TSubclassOf<UObject>& Class, ?& OutComponent, const FName& WithName)",
-			FUNC_TRIVIAL(FAngelscriptActorBinds::GetComponentGeneric));
+			FUNC_TRIVIAL(FAngelscriptActorBinds::GetComponentGeneric)).Callable(false);
 		Binds.BindGlobalFunctionForTarget(
 			"void __Actor_GetOrCreateComponentByClass(AActor Actor, const TSubclassOf<UObject>& Class, ?& OutComponent, const FName& WithName)",
-			FUNC_TRIVIAL(FAngelscriptActorBinds::GetOrCreateComponentGeneric));
+			FUNC_TRIVIAL(FAngelscriptActorBinds::GetOrCreateComponentGeneric)).Callable(false);
 		Binds.BindGlobalFunctionForTarget(
 			"void __Actor_GetAllComponentsByClass(const AActor Actor, const TSubclassOf<UObject>& Class, ?& OutComponents)",
-			FUNC_TRIVIAL(FAngelscriptActorBinds::GetAllComponentsGeneric));
+			FUNC_TRIVIAL(FAngelscriptActorBinds::GetAllComponentsGeneric)).Callable(false);
 		Binds.BindGlobalFunctionForTarget(
 			"void __Actor_CreateComponentByClass(AActor Actor, const TSubclassOf<UObject>& Class, ?& OutComponent, const FName& WithName)",
-			FUNC_TRIVIAL(FAngelscriptActorBinds::CreateComponentGeneric));
+			FUNC_TRIVIAL(FAngelscriptActorBinds::CreateComponentGeneric)).Callable(false);
 
 		auto ActorType = Binds.ExistingClassForTarget("AActor");
 		ActorType.Method(
@@ -187,6 +188,39 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Components(
 	EAngelscriptBindPhase::PostReflectionBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsRecording())
+		{
+			const auto& Snapshot = Binds.GetRecordingStore()->GetReflectedSnapshot();
+			if (!Snapshot.IsValid())
+			{
+				Binds.GetRecordingStore()->ReportFailure(TEXT("Component post-reflection bindings require a captured reflected snapshot."));
+				return;
+			}
+			for (const FAngelscriptReflectedTypeRecord& Reflected : Snapshot->GetTypes())
+			{
+				UClass* Class = Cast<UClass>(Reflected.NativeType);
+				if (!Reflected.bEligible || !Class || !Class->IsChildOf(UActorComponent::StaticClass())) continue;
+				const FString& ClassName = Reflected.Declaration.Name;
+				FAngelscriptBinds::FNamespace Namespace(Binds, ClassName);
+				Binds.BindGlobalFunctionForTarget(
+					FString::Printf(TEXT("%s Get(const AActor Actor, const FName& WithName = NAME_None)"), *ClassName),
+					FUNC(FAngelscriptActorBinds::GetComponentFromMeta), Class).PassScriptFunctionAsFirstParam();
+				bool bSpawnable = true;
+			#if WITH_EDITOR
+				bSpawnable = !Class->HasMetaData(NAME_NotAngelscriptSpawnable);
+			#endif
+				if (bSpawnable)
+				{
+					Binds.BindGlobalFunctionForTarget(
+						FString::Printf(TEXT("%s GetOrCreate(AActor Actor, const FName& WithName = NAME_None)"), *ClassName),
+						FUNC(FAngelscriptActorBinds::GetOrCreateComponentFromMeta), Class).PassScriptFunctionAsFirstParam();
+					Binds.BindGlobalFunctionForTarget(
+						FString::Printf(TEXT("%s Create(AActor Actor, const FName& WithName = NAME_None)"), *ClassName),
+						FUNC(FAngelscriptActorBinds::CreateComponentFromMeta), Class).PassScriptFunctionAsFirstParam();
+				}
+			}
+			return;
+		}
 		for (UClass* Class : TObjectRange<UClass>())
 		{
 			if (!Class->IsChildOf(UActorComponent::StaticClass()))
@@ -212,7 +246,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Components(
 					.PassScriptFunctionAsFirstParam();
 			}
 
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), ClassName);
+			FAngelscriptBinds::FNamespace Namespace(Binds, ClassName);
 			const FString GetDeclaration = FString::Printf(
 				TEXT("%s Get(const AActor Actor, const FName& WithName = NAME_None)"),
 				*ClassName);
@@ -277,7 +311,7 @@ void FAngelscriptUActorComponentBinds::DestroyComponent(UActorComponent* Compone
 	Component->DestroyComponent(bPromoteChildren);
 }
 
-bool FAngelscriptUActorComponentBinds::ComponentHasTag(const UActorComponent* Component, FName Tag)
+bool FAngelscriptUActorComponentBinds::ComponentHasTag(const UActorComponent* Component, const FName& Tag)
 {
 	if (Tag.IsNone() || Tag == FName(TEXT("None")))
 		return false;

@@ -44,8 +44,11 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Debugging(
 	[](FAngelscriptBinds& Binds)
 	{
 #if WITH_EDITOR
-		FGameDelegates::Get().GetEndPlayMapDelegate().AddStatic(
-			&FAngelscriptDebuggingBinds::HandleEndPlayMap);
+		if (!Binds.IsRecording())
+		{
+			FGameDelegates::Get().GetEndPlayMapDelegate().AddStatic(
+				&FAngelscriptDebuggingBinds::HandleEndPlayMap);
+		}
 #endif
 
 		Binds.BindGlobalFunctionForTarget("void DebugBreak()", &FAngelscriptDebuggingBinds::DebugBreak);

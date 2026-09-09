@@ -1090,7 +1090,8 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TArray_TypeDeclarations(
 		Flags.bTemplate = true;
 		Flags.TemplateType = "<T>";
 		Flags.ExtraFlags = asOBJ_TEMPLATE_SUBTYPE_COVARIANT;
-		Binds.ValueClassForTarget<FScriptArray>("TArray<class T>", Flags);
+		Binds.ValueClassForTarget<FScriptArray>("TArray<class T>", Flags)
+			.ConfigureTemplateContainerForTarget(EAngelscriptTemplateContainerKind::Array);
 
 		FBindFlags IteratorFlags;
 		IteratorFlags.bTemplate = true;
@@ -1298,11 +1299,14 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TArray_TypeInfrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
-		Binds.GetTargetTypeDatabase().ArrayTemplateTypeInfo = Binds.GetTargetScriptEngine().GetTypeInfoByName("TArray");
-		Binds.GetTargetScriptEngine().RegisterDefaultArrayType("TArray<T>");
-
 		auto ArrayType = MakeShared<FAngelscriptArrayType>();
 		Binds.RegisterTypeForTarget(ArrayType);
+		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptArrayIteratorType>());
+		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptArrayConstIteratorType>());
+		if (Binds.IsRecording()) return;
+
+		Binds.GetTargetTypeDatabase().ArrayTemplateTypeInfo = Binds.GetTargetScriptEngine().GetTypeInfoByName("TArray");
+		Binds.GetTargetScriptEngine().RegisterDefaultArrayType("TArray<T>");
 
 		FAngelscriptTypeDatabase* TargetTypeDatabase = &Binds.GetTargetTypeDatabase();
 		Binds.RegisterTypeFinderForTarget([ArrayType, TargetTypeDatabase](FProperty* Property, FAngelscriptTypeUsage& Usage) -> bool
@@ -1324,8 +1328,6 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TArray_TypeInfrastructure(
 			return true;
 		});
 
-		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptArrayIteratorType>());
-		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptArrayConstIteratorType>());
 	});
 
 void FArrayIterator::CopyConstruct(FArrayIterator& Iterator, const FArrayIterator& Other)

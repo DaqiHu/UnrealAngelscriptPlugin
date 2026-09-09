@@ -46,11 +46,12 @@ BEGIN_AS_NAMESPACE
 //                         doesn't have to count the position of the argument with every call
 
 // internal
-asCGeneric::asCGeneric(asCScriptEngine *engine, asCScriptFunction *sysFunction, void *currentObject, asDWORD *stackPointer, const asSVMCallFrame* Frame)
+asCGeneric::asCGeneric(asCScriptEngine *engine, asCScriptFunction *sysFunction, void *currentObject, asDWORD *stackPointer, const asSVMCallFrame* Frame, void* Auxiliary)
 {
 	this->engine = engine;
 	this->sysFunction = sysFunction;
 	this->currentObject = currentObject;
+	this->auxiliary = Auxiliary;
 	this->stackPointer = stackPointer;
 	if (Frame) CallFrame = *Frame;
 	else CallFrame.Prepare(sysFunction);
@@ -67,7 +68,7 @@ asCGeneric::~asCGeneric()
 // interface
 void *asCGeneric::GetAuxiliary() const
 {
-	return sysFunction->GetAuxiliary();
+	return auxiliary;
 }
 
 // interface

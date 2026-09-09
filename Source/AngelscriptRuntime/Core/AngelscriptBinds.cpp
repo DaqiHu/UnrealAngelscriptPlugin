@@ -1,5 +1,6 @@
 #include "AngelscriptBinds.h"
 #include "AngelscriptBindsInternal.h"
+#include "AngelscriptTypeBindInfoStore.h"
 
 #include "AngelscriptEngine.h"
 #include "AngelscriptDocs.h"
@@ -13,6 +14,7 @@
 #include "Misc/ScopeExit.h"
 #include "Testing/AngelscriptBindExecutionObservation.h"
 #include "Testing/AngelscriptEnumTableBaselineProbe.h"
+#include "Binds/Helper_ToString.h"
 
 #include "AngelscriptInclude.h"
 #include "AngelscriptSettings.h"
@@ -380,6 +382,11 @@ static UE::Angelscript::Private::FAngelscriptBindCollection& GetRegisteredBindCo
 	return Collection;
 }
 
+const UE::Angelscript::Private::FAngelscriptBindCollection& FAngelscriptBind::GetRegisteredCollection()
+{
+	return GetRegisteredBindCollection();
+}
+
 TArray<FAngelscriptBindMetadata> FAngelscriptBind::GetRegisteredBindMetadata()
 {
 	TArray<FAngelscriptBindMetadata> Metadata;
@@ -432,6 +439,42 @@ FAngelscriptBind::FAngelscriptBind(
 {
 	FString Diagnostic;
 	if (!GetRegisteredBindCollection().Append(MakeDirectBindRecord(BindName, Phase, Callback, OwnerModule, SourceFile, SourceLine), Diagnostic))
+	{
+		UE_LOG(Angelscript, Error, TEXT("%s"), *Diagnostic);
+	}
+}
+
+FAngelscriptBind::FAngelscriptBind(
+	const FName BindName,
+	const EAngelscriptBindPhase Phase,
+	const FAngelscriptBindCallback Callback,
+	bool (*Condition)(const FAngelscriptBindRecordingPolicy&),
+	const ANSICHAR* OwnerModule,
+	const ANSICHAR* SourceFile,
+	const int32 SourceLine)
+{
+	FString Diagnostic;
+	FAngelscriptBindRecord Record = MakeDirectBindRecord(BindName, Phase, Callback, OwnerModule, SourceFile, SourceLine);
+	Record.Condition = Condition;
+	if (!GetRegisteredBindCollection().Append(MoveTemp(Record), Diagnostic))
+	{
+		UE_LOG(Angelscript, Error, TEXT("%s"), *Diagnostic);
+	}
+}
+
+FAngelscriptBind::FAngelscriptBind(
+	const FName BindName,
+	const EAngelscriptBindPhase Phase,
+	const FAngelscriptBindCallback Callback,
+	const bool bContainsTypeDeclarations,
+	const ANSICHAR* OwnerModule,
+	const ANSICHAR* SourceFile,
+	const int32 SourceLine)
+{
+	FString Diagnostic;
+	FAngelscriptBindRecord Record = MakeDirectBindRecord(BindName, Phase, Callback, OwnerModule, SourceFile, SourceLine);
+	Record.bContainsTypeDeclarations = bContainsTypeDeclarations;
+	if (!GetRegisteredBindCollection().Append(MoveTemp(Record), Diagnostic))
 	{
 		UE_LOG(Angelscript, Error, TEXT("%s"), *Diagnostic);
 	}
@@ -549,6 +592,11 @@ static void CDECL InjectedDirectBindPublicationFailure()
 
 static void ExecuteDirectBindArchitectureProbe(FAngelscriptBinds& Binds)
 {
+	if (Binds.IsRecording())
+	{
+		Binds.AddDirectBindArchitectureProbeEffect();
+		return;
+	}
 	if (Binds.GetTargetEngine().ShouldInjectDirectBindFailureForTesting())
 	{
 		Binds.BindGlobalFunctionForTarget(
@@ -576,8 +624,37 @@ static FAngelscriptBindState& GetBindState()
 	return *State;
 }
 
+FAngelscriptBoundFunction& FAngelscriptBoundFunction::EditRecord(
+	TFunctionRef<void(FAngelscriptTypeBindInfoMember&)> Edit)
+{
+	if (const auto* Existing = RecordingStore->GetMember(RecordingHandle))
+	{
+		auto Member = *Existing;
+		Edit(Member);
+		FString Diagnostic;
+		if (!RecordingStore->UpdateMember(RecordingHandle, Member, Diagnostic)) RecordingHandle = {};
+	}
+	return *this;
+}
+
+FAngelscriptBoundFunction& FAngelscriptBoundFunction::RecordTrait(
+	EAngelscriptBindFunctionTrait Trait, bool bEnabled)
+{
+	return EditRecord([&](auto& Member)
+	{
+		if (bEnabled) Member.Traits |= Trait;
+		else Member.Traits &= ~Trait;
+	});
+}
+
+FAngelscriptBoundFunction& FAngelscriptBoundFunction::RecordRecipe(FAngelscriptNativeBindRecipe Recipe)
+{
+	return EditRecord([&](auto& Member) { Member.NativeRecipes.Add(MoveTemp(Recipe)); });
+}
+
 bool FAngelscriptBoundFunction::IsValid() const
 {
+	if (RecordingStore) return RecordingStore->GetMember(RecordingHandle) != nullptr;
 	return TargetEngine != nullptr && FunctionId >= 0 && GetFunction() != nullptr;
 }
 
@@ -598,6 +675,7 @@ asIScriptFunction* FAngelscriptBoundFunction::GetFunction() const
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::EditorOnly(const bool bEditorOnly)
 {
+	if (RecordingStore) return RecordTrait(EAngelscriptBindFunctionTrait::EditorOnly, bEditorOnly);
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->traits.SetTrait(asEFuncTrait::asTRAIT_EDITOR_ONLY, bEditorOnly);
@@ -607,6 +685,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::EditorOnly(const bool bEdi
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::Deprecated(const ANSICHAR* DeprecationMessage)
 {
+	if (RecordingStore) return EditRecord([&](auto& Member) { Member.Traits |= EAngelscriptBindFunctionTrait::Deprecated; Member.DeprecationMessage = DeprecationMessage ? ANSI_TO_TCHAR(DeprecationMessage) : TEXT(""); });
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->traits.SetTrait(asEFuncTrait::asTRAIT_DEPRECATED, true);
@@ -619,6 +698,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::Deprecated(const ANSICHAR*
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::PropertyAccessor(const bool bPropertyAccessor)
 {
+	if (RecordingStore) return RecordTrait(EAngelscriptBindFunctionTrait::PropertyAccessor, bPropertyAccessor);
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->SetProperty(bPropertyAccessor);
@@ -628,6 +708,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::PropertyAccessor(const boo
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::GeneratedAccessor(const bool bGeneratedAccessor)
 {
+	if (RecordingStore) return RecordTrait(EAngelscriptBindFunctionTrait::GeneratedAccessor, bGeneratedAccessor);
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->traits.SetTrait(asEFuncTrait::asTRAIT_GENERATED_FUNCTION, bGeneratedAccessor);
@@ -637,6 +718,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::GeneratedAccessor(const bo
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NoDiscard(const bool bNoDiscard)
 {
+	if (RecordingStore) return RecordTrait(EAngelscriptBindFunctionTrait::NoDiscard, bNoDiscard);
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->traits.SetTrait(asEFuncTrait::asTRAIT_NODISCARD, bNoDiscard);
@@ -646,6 +728,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NoDiscard(const bool bNoDi
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::WorldContext(const bool bRequiresWorldContext)
 {
+	if (RecordingStore) return RecordTrait(EAngelscriptBindFunctionTrait::WorldContext, bRequiresWorldContext);
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->traits.SetTrait(asEFuncTrait::asTRAIT_USES_WORLDCONTEXT, bRequiresWorldContext);
@@ -655,6 +738,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::WorldContext(const bool bR
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::Callable(const bool bCallable)
 {
+	if (RecordingStore) return RecordTrait(EAngelscriptBindFunctionTrait::NotCallable, !bCallable);
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->traits.SetTrait(asEFuncTrait::asTRAIT_NOT_CALLABLE, !bCallable);
@@ -664,6 +748,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::Callable(const bool bCalla
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::ImplicitConstructor(const bool bImplicitConstructor)
 {
+	if (RecordingStore) return RecordTrait(EAngelscriptBindFunctionTrait::ImplicitConstructor, bImplicitConstructor);
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->traits.SetTrait(asEFuncTrait::asTRAIT_IMPLICITCONSTRUCTOR, bImplicitConstructor);
@@ -677,6 +762,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::ImplicitConstructor(const 
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::ForceConstArgumentExpressions(const bool bForceConst)
 {
+	if (RecordingStore) return RecordTrait(EAngelscriptBindFunctionTrait::ForceConstArguments, bForceConst);
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->traits.SetTrait(asEFuncTrait::asTRAIT_FORCE_CONST_ARGUMENT_EXPRESSIONS, bForceConst);
@@ -686,6 +772,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::ForceConstArgumentExpressi
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::DeterminesOutputType(const int32 ArgumentIndex)
 {
+	if (RecordingStore) return EditRecord([&](auto& Member) { Member.DeterminesOutputTypeArgument = ArgumentIndex; });
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->determinesOutputTypeArgumentIndex = static_cast<int8>(ArgumentIndex);
@@ -695,6 +782,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::DeterminesOutputType(const
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::PassScriptFunctionAsFirstParam()
 {
+	if (RecordingStore) return EditRecord([&](auto& Member) { Member.FirstParameter = EAngelscriptBindFirstParameter::ScriptFunction; });
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()); Function != nullptr && Function->sysFuncIntf != nullptr)
 	{
 		Function->sysFuncIntf->passFirstParamMetaData = asEFirstParamMetaData::ScriptFunction;
@@ -704,6 +792,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::PassScriptFunctionAsFirstP
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::PassScriptObjectTypeAsFirstParam()
 {
+	if (RecordingStore) return EditRecord([&](auto& Member) { Member.FirstParameter = EAngelscriptBindFirstParameter::ScriptObjectType; });
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()); Function != nullptr && Function->sysFuncIntf != nullptr)
 	{
 		Function->sysFuncIntf->passFirstParamMetaData = asEFirstParamMetaData::ScriptObjectType;
@@ -713,6 +802,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::PassScriptObjectTypeAsFirs
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::Documentation(FStringView Documentation, FStringView Category, UFunction* UnrealFunction)
 {
+	if (RecordingStore) return EditRecord([&](auto& Member) { Member.Documentation = FString(Documentation); Member.Category = FString(Category); Member.DocumentationFunction = UnrealFunction; });
 #if WITH_EDITOR
 	if (IsValid())
 	{
@@ -724,6 +814,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::Documentation(FStringView 
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeConstructor(const ANSICHAR* Name, const bool bTrivial, const ANSICHAR* CustomForm)
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::Constructor;
+		Recipe.Name = ANSI_TO_TCHAR(Name); Recipe.bTrivial = bTrivial; Recipe.CustomForm = CustomForm ? ANSI_TO_TCHAR(CustomForm) : TEXT("");
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -735,6 +832,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeConstructor(const AN
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeDestructor(const ANSICHAR* Name, const bool bTrivial)
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::Destructor;
+		Recipe.Name = ANSI_TO_TCHAR(Name); Recipe.bTrivial = bTrivial;
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -746,6 +850,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeDestructor(const ANS
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeAssignment(const ANSICHAR* Name, const bool bTrivial)
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::Assignment;
+		Recipe.Name = ANSI_TO_TCHAR(Name); Recipe.bTrivial = bTrivial;
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -760,6 +871,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeAssignment(const ANS
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeUObjectCast(const FString& TargetType, const bool bGuaranteed)
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::UObjectCast;
+		Recipe.Name = TargetType; Recipe.bGuaranteed = bGuaranteed;
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -774,6 +892,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeUObjectCast(const FS
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeMethod(const ANSICHAR* Name, const bool bTrivial)
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::Method;
+		Recipe.Name = ANSI_TO_TCHAR(Name); Recipe.bTrivial = bTrivial;
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -788,6 +913,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeMethod(const ANSICHA
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeFunction(const ANSICHAR* Name, const bool bTrivial)
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::Function;
+		Recipe.Name = ANSI_TO_TCHAR(Name); Recipe.bTrivial = bTrivial;
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -802,6 +934,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeFunction(const ANSIC
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeFunctionHeader(const ANSICHAR* Name, const ANSICHAR* Header, const bool bTrivial)
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::FunctionHeader;
+		Recipe.Name = ANSI_TO_TCHAR(Name); Recipe.Header = ANSI_TO_TCHAR(Header); Recipe.bTrivial = bTrivial;
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -819,6 +958,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeFunctionHeader(const
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::ExternalNativeCall(
 	const FAngelscriptStaticJITNativeCallDescriptor& Descriptor)
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::ExternalCall;
+		Recipe.ExternalCall = MakeShared<FAngelscriptStaticJITNativeCallDescriptor>(Descriptor);
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 	if (IsValid())
 	{
 		FAngelscriptStaticJITNativeCallRegistry::Attach(
@@ -831,6 +977,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::ExternalNativeCall(
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeUFunction(UFunction* Function, const FString& Name, const bool bTrivial)
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::UFunction;
+		Recipe.UnrealFunction = Function; Recipe.Name = Name; Recipe.bTrivial = bTrivial;
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -846,6 +999,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeUFunction(UFunction*
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeTArrayIndex()
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::ArrayIndex;
+
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -857,6 +1017,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeTArrayIndex()
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeTArrayIteratorCreate()
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::ArrayIteratorCreate;
+
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -868,6 +1035,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeTArrayIteratorCreate
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeTArrayIteratorProceed()
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::ArrayIteratorProceed;
+
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -883,6 +1057,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeTemplateInstantiated
 	const bool bNeedsCompare,
 	const bool bNeedsCopy)
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::TemplateCall;
+		Recipe.Name = ANSI_TO_TCHAR(Name); Recipe.bTrivial = bTrivial; Recipe.bNeedsCompare = bNeedsCompare; Recipe.bNeedsCopy = bNeedsCopy;
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -905,6 +1086,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeTemplateInstantiated
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeDelegateExecute()
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::DelegateExecute;
+
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -916,6 +1104,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeDelegateExecute()
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeMulticastExecute()
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::MulticastExecute;
+
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -927,6 +1122,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeMulticastExecute()
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeEventFunctionExecute()
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::EventExecute;
+
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -938,6 +1140,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativeEventFunctionExecute
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativePushArgument()
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::PushArgument;
+
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -949,6 +1158,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativePushArgument()
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativePushArgumentRef()
 {
+	if (RecordingStore)
+	{
+		FAngelscriptNativeBindRecipe Recipe;
+		Recipe.Kind = EAngelscriptNativeBindRecipeKind::PushArgumentRef;
+
+		return RecordRecipe(MoveTemp(Recipe));
+	}
 #if AS_CAN_GENERATE_JIT
 	if (IsValid())
 	{
@@ -960,6 +1176,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::NativePushArgumentRef()
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::CompileOutEntirely()
 {
+	if (RecordingStore) return EditRecord([&](auto& Member) { Member.CompileOut = EAngelscriptBindCompileOut::Entirely; });
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->compileOutType = asECompileOutType::CompileOutEntirely;
@@ -969,6 +1186,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::CompileOutEntirely()
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::CompileOutAsMethodChain()
 {
+	if (RecordingStore) return EditRecord([&](auto& Member) { Member.CompileOut = EAngelscriptBindCompileOut::MethodChain; });
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->compileOutType = asECompileOutType::CompileOutAsMethodChain;
@@ -978,6 +1196,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::CompileOutAsMethodChain()
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::CompileOutInTest()
 {
+	if (RecordingStore) return EditRecord([&](auto& Member) { Member.CompileOut = EAngelscriptBindCompileOut::InTest; });
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		if (UE_BUILD_TEST || UE_BUILD_SHIPPING || (WITH_EDITOR && TargetEngine->bSimulateCooked))
@@ -994,11 +1213,13 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::CompileOutInTest()
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::CompileOutIfNoLog()
 {
+	if (RecordingStore) return EditRecord([&](auto& Member) { Member.CompileOut = EAngelscriptBindCompileOut::IfNoLog; });
 	return CompileOutInTest();
 }
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::CompileOutAsEnsure()
 {
+	if (RecordingStore) return EditRecord([&](auto& Member) { Member.CompileOut = EAngelscriptBindCompileOut::Ensure; Member.Traits |= EAngelscriptBindFunctionTrait::NoDiscard; });
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		Function->traits.SetTrait(asEFuncTrait::asTRAIT_NODISCARD, true);
@@ -1012,6 +1233,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::CompileOutAsEnsure()
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::CompileOutAsCheck()
 {
+	if (RecordingStore) return EditRecord([&](auto& Member) { Member.CompileOut = EAngelscriptBindCompileOut::Check; });
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		if (UE_BUILD_SHIPPING || (WITH_EDITOR && TargetEngine->bSimulateCooked))
@@ -1028,6 +1250,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::CompileOutAsCheck()
 
 FAngelscriptBoundFunction& FAngelscriptBoundFunction::ReplaceWithFirstArgInTest()
 {
+	if (RecordingStore) return EditRecord([&](auto& Member) { Member.CompileOut = EAngelscriptBindCompileOut::ReplaceFirstArgumentInTest; });
 	if (asCScriptFunction* Function = static_cast<asCScriptFunction*>(GetFunction()))
 	{
 		if (UE_BUILD_TEST || UE_BUILD_SHIPPING || (WITH_EDITOR && TargetEngine->bSimulateCooked))
@@ -1040,6 +1263,7 @@ FAngelscriptBoundFunction& FAngelscriptBoundFunction::ReplaceWithFirstArgInTest(
 
 bool FAngelscriptBoundProperty::IsValid() const
 {
+	if (RecordingStore) return RecordingStore->GetMember(RecordingHandle) != nullptr;
 	if (TargetEngine == nullptr || PropertyId < 0 || TargetEngine->GetScriptEngine() == nullptr)
 	{
 		return false;
@@ -1060,6 +1284,20 @@ FAngelscriptEngine& FAngelscriptBoundProperty::GetTargetEngine() const
 
 FAngelscriptBoundProperty& FAngelscriptBoundProperty::PureConstant(const asQWORD ConstantValue)
 {
+	if (RecordingStore)
+	{
+		if (const auto* Existing = RecordingStore->GetMember(RecordingHandle))
+		{
+			auto Member = *Existing;
+			if (Member.Kind != EAngelscriptTypeBindMemberKind::GlobalProperty) return *this;
+			Member.bPureConstant = true;
+			Member.ConstantValue = ConstantValue;
+			Member.GlobalStorageLifetime = EAngelscriptBindHostLifetime::CopiedRecord;
+			FString Diagnostic;
+			if (!RecordingStore->UpdateMember(RecordingHandle, Member, Diagnostic)) RecordingHandle = {};
+		}
+		return *this;
+	}
 	if (IsValid() && bGlobal)
 	{
 		asCGlobalProperty* Property = TargetEngine->Engine->globalProperties[PropertyId];
@@ -1163,6 +1401,33 @@ bool FAngelscriptBinds::ShouldSkipBlueprintCallableFunction(const UFunction* Fun
 
 FAngelscriptBinds FAngelscriptBinds::ReferenceClassForTarget(FBindString Name, UClass* UnrealClass) const
 {
+	if (IsRecording())
+	{
+		FAngelscriptTypeBindDeclaration Declaration;
+		Declaration.Name = Name.ToFString();
+		Declaration.Kind = EAngelscriptTypeBindKind::ObjectHandle;
+		Declaration.UnrealType = UnrealClass;
+		Declaration.ObjectFlags = asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE;
+		if (UnrealClass)
+		{
+			Declaration.NativeSize = UnrealClass->GetStructureSize();
+			Declaration.NativeAlignment = UnrealClass->GetMinAlignment();
+			if (UClass* Super = UnrealClass->GetSuperClass())
+			{
+				for (const auto& Type : RecordingStore->GetTypes())
+				{
+					if (Type.Declaration.UnrealType == Super)
+					{
+						Declaration.BaseType = Type.Declaration.Namespace.IsEmpty() ? Type.Declaration.Name
+							: Type.Declaration.Namespace + TEXT("::") + Type.Declaration.Name;
+						break;
+					}
+				}
+			}
+		}
+		else RecordingStore->ReportFailure(TEXT("A recorded reference class requires a UClass."));
+		return RecordClass(MoveTemp(Declaration));
+	}
 	if (HasRegistrationFailure())
 	{
 		return FAngelscriptBinds(GetTargetEngine(), Name);
@@ -1281,6 +1546,25 @@ FAngelscriptBinds FAngelscriptBinds::ReferenceClassForTarget(FBindString Name, U
 
 FAngelscriptBinds FAngelscriptBinds::ExistingClassForTarget(FBindString Name) const
 {
+	if (IsRecording())
+	{
+		FAngelscriptBinds Binds(*RecordingStore, bDeclarationOnly);
+		FString TypeName = Name.ToFString();
+		FString Namespace = RecordingStore->GetNamespace();
+		int32 TemplatePosition;
+		if (TypeName.FindChar(TEXT('<'), TemplatePosition)) TypeName.LeftInline(TemplatePosition);
+		const int32 Separator = TypeName.Find(TEXT("::"), ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+		if (Separator != INDEX_NONE)
+		{
+			Namespace = TypeName.Left(Separator);
+			TypeName.RightChopInline(Separator + 2);
+		}
+		Binds.ClassName = TypeName;
+		Binds.RecordingType = RecordingStore->FindType(TypeName, Namespace);
+		if (!RecordingStore->GetType(Binds.RecordingType))
+			RecordingStore->ReportFailure(FString::Printf(TEXT("Recorded type '%s::%s' has not been declared."), *Namespace, *TypeName));
+		return Binds;
+	}
 	return FAngelscriptBinds(GetTargetEngine(), Name);
 }
 
@@ -1330,6 +1614,73 @@ TArray<FToStringType>& FAngelscriptBinds::GetTargetToStringList() const
 	return *ToStringList;
 }
 
+void FAngelscriptBinds::AddToStringEffect(const FString& TypeName,
+	void (*ToString)(void*, FString&), const bool bImplicitConversion, const bool bIsHandleType) const
+{
+	if (IsRecording())
+	{
+		FAngelscriptBindEffect Effect;
+		Effect.Kind = EAngelscriptBindEffectKind::ToString; Effect.Name = TypeName;
+		Effect.ToString = ToString; Effect.bImplicitConversion = bImplicitConversion;
+		Effect.bHandleType = bIsHandleType; Effect.Source = RecordingStore->GetSource();
+		FString Diagnostic; RecordingStore->RecordEffect(MoveTemp(Effect), Diagnostic);
+		return;
+	}
+	GetTargetToStringList().Add({TypeName, nullptr, ToString, bImplicitConversion, bIsHandleType});
+}
+
+void FAngelscriptBinds::AddSkipFunctionEffect(const FName InClassName, const FName FunctionName) const
+{
+	if (IsRecording())
+	{
+		FAngelscriptBindEffect Effect; Effect.Kind = EAngelscriptBindEffectKind::SkipFunction;
+		Effect.Name = InClassName.ToString(); Effect.SecondaryName = FunctionName.ToString(); Effect.Source = RecordingStore->GetSource();
+		FString Diagnostic; RecordingStore->RecordEffect(MoveTemp(Effect), Diagnostic); return;
+	}
+	GetTargetBindState().SkipBindNames.Add(MakeTuple(InClassName, FunctionName));
+}
+
+void FAngelscriptBinds::AddSkipClassEffect(const FName InClassName) const
+{
+	if (IsRecording())
+	{
+		FAngelscriptBindEffect Effect; Effect.Kind = EAngelscriptBindEffectKind::SkipClass;
+		Effect.Name = InClassName.ToString(); Effect.Source = RecordingStore->GetSource();
+		FString Diagnostic; RecordingStore->RecordEffect(MoveTemp(Effect), Diagnostic); return;
+	}
+	GetTargetBindState().SkipBindClasses.Add(InClassName);
+}
+
+void FAngelscriptBinds::AddDeprecationEffect(const FString& FunctionPath, const FString& Message) const
+{
+	if (IsRecording())
+	{
+		FAngelscriptBindEffect Effect; Effect.Kind = EAngelscriptBindEffectKind::DeprecateFunction;
+		Effect.Name = FunctionPath; Effect.SecondaryName = Message; Effect.Source = RecordingStore->GetSource();
+		FString Diagnostic; RecordingStore->RecordEffect(MoveTemp(Effect), Diagnostic); return;
+	}
+#if WITH_EDITOR
+	if (UFunction* Function = FindObject<UFunction>(nullptr, *FunctionPath))
+	{
+		Function->SetMetaData(TEXT("DeprecatedFunction"), TEXT(""));
+		Function->SetMetaData(TEXT("DeprecationMessage"), *Message);
+	}
+#endif
+}
+
+void FAngelscriptBinds::AddDirectBindArchitectureProbeEffect() const
+{
+	if (IsRecording())
+	{
+		FAngelscriptBindEffect Effect; Effect.Kind = EAngelscriptBindEffectKind::DirectBindArchitectureProbe;
+		Effect.Source = RecordingStore->GetSource(); FString Diagnostic;
+		RecordingStore->RecordEffect(MoveTemp(Effect), Diagnostic); return;
+	}
+#if WITH_DEV_AUTOMATION_TESTS
+	++GetTargetBindState().DirectCallbackExecutionCountForTesting;
+#endif
+}
+
 FBlueprintEventSignatureRegistry& FAngelscriptBinds::GetTargetBlueprintEventSignatureRegistry() const
 {
 	FBlueprintEventSignatureRegistry* Registry = GetTargetEngine().GetBlueprintEventSignatureRegistry();
@@ -1339,11 +1690,39 @@ FBlueprintEventSignatureRegistry& FAngelscriptBinds::GetTargetBlueprintEventSign
 
 void FAngelscriptBinds::RegisterTypeForTarget(TSharedRef<FAngelscriptType> Type) const
 {
+	if (IsRecording())
+	{
+		const FString Name = Type->GetAngelscriptTypeName();
+		FAngelscriptTypeBindHandle Handle = RecordingStore->FindType(Name);
+		if (const FAngelscriptTypeBindInfo* Existing = RecordingStore->GetType(Handle))
+		{
+			FAngelscriptTypeBindDeclaration Declaration = Existing->Declaration;
+			Declaration.AdapterName = Name + TEXT("Type");
+			if (Declaration.NativeOwner.IsEmpty()) Declaration.NativeOwner = Name;
+			FString Diagnostic; RecordingStore->UpdateTypeDeclaration(Handle, Declaration, Diagnostic);
+		}
+		return;
+	}
 	FAngelscriptType::Register(GetTargetTypeDatabase(), Type);
+}
+
+void FAngelscriptBinds::ConfigureTemplateContainerForTarget(EAngelscriptTemplateContainerKind Kind) const
+{
+	if (!IsRecording() || RecordingType.Store != RecordingStore) return;
+	if (const FAngelscriptTypeBindInfo* Existing = RecordingStore->GetType(RecordingType))
+	{
+		FAngelscriptTypeBindDeclaration Declaration = Existing->Declaration;
+		Declaration.TemplateContainer = Kind;
+		FString Diagnostic;
+		RecordingStore->UpdateTypeDeclaration(RecordingType, Declaration, Diagnostic);
+	}
 }
 
 void FAngelscriptBinds::RegisterTypeFinderForTarget(FAngelscriptType::FTypeFinder Finder) const
 {
+	// Property finders belong to a mutable legacy TypeDatabase. Detached snapshots
+	// retain the adapter identity recorded by RegisterTypeForTarget instead.
+	if (IsRecording()) return;
 	FAngelscriptType::RegisterTypeFinder(GetTargetTypeDatabase(), MoveTemp(Finder));
 }
 
@@ -1352,6 +1731,10 @@ void FAngelscriptBinds::RegisterFunctionBindingForTarget(
 	const FString& Name,
 	const FAngelscriptFunctionBinding& Binding) const
 {
+	// Generated UHT batches populate a mutable lookup for the legacy reflection
+	// pass. Detached capture imports the same callable transport from the native
+	// module function-map provider, which owns stable provenance and lifetimes.
+	if (IsRecording()) return;
 	if (Class == nullptr)
 	{
 		return;
@@ -1383,11 +1766,13 @@ void FAngelscriptBinds::RegisterGeneratedFunctionBindingForTarget(
 
 bool FAngelscriptBinds::HasRegistrationFailure() const
 {
+	if (IsRecording()) return RecordingStore->HasFailed();
 	return GetTargetBindState().bDirectBindFailed;
 }
 
 const FString& FAngelscriptBinds::GetRegistrationFailureDiagnostic() const
 {
+	if (IsRecording()) return RecordingStore->GetFailureDiagnostic();
 	return GetTargetBindState().DirectBindFailureDiagnostic;
 }
 
@@ -1418,8 +1803,113 @@ FAngelscriptEngine& FAngelscriptBinds::ResolveTargetEngine() const
 	return *TargetEngine;
 }
 
+FAngelscriptBinds FAngelscriptBinds::RecordClass(FAngelscriptTypeBindDeclaration Declaration) const
+{
+	FAngelscriptBinds Binds(*RecordingStore, bDeclarationOnly);
+	Declaration.Namespace = RecordingStore->GetNamespace();
+	Declaration.Source = RecordingStore->GetSource();
+	Binds.ClassName = Declaration.Name;
+	FString Diagnostic;
+	RecordingStore->RecordType(Declaration, Binds.RecordingType, Diagnostic);
+	return Binds;
+}
+
+FAngelscriptTypeBindMemberHandle FAngelscriptBinds::RecordMember(
+	FAngelscriptTypeBindInfoMember Member, bool bGlobal)
+{
+	auto Owner = RecordingType;
+	FString Diagnostic;
+	if (bGlobal)
+	{
+		FAngelscriptTypeBindDeclaration Scope;
+		Scope.Kind = EAngelscriptTypeBindKind::Namespace;
+		Scope.Namespace = RecordingStore->GetNamespace();
+		Scope.Source = RecordingStore->GetSource();
+		if (!RecordingStore->RecordType(Scope, Owner, Diagnostic)) return {};
+	}
+	Member.Source = RecordingStore->GetSource();
+	FAngelscriptTypeBindMemberHandle Handle;
+	RecordingStore->RecordMember(Owner, Member, Handle, Diagnostic);
+	return Handle;
+}
+
+namespace
+{
+	void CopyRecordedExposure(FAngelscriptTypeBindInfoMember& Member,
+		const FAngelscriptType::FBindParams* Params)
+	{
+		if (!Params) return;
+		Member.bCanRead = Params->bCanRead;
+		Member.bCanWrite = Params->bCanWrite;
+		Member.bCanEdit = Params->bCanEdit;
+		Member.bProtected = Params->bProtected;
+	}
+}
+
+FAngelscriptBoundFunction FAngelscriptBinds::RecordCallable(FBindString Signature,
+	asSFuncPtr Function, ASAutoCaller::FunctionCaller Caller, asECallConvTypes CallConv,
+	void* UserData, asEBehaviours Behaviour, const FAngelscriptType::FBindParams* Params, bool bGlobal)
+{
+	if (bDeclarationOnly) return {};
+	FAngelscriptTypeBindInfoMember Member;
+	Member.Kind = bGlobal ? EAngelscriptTypeBindMemberKind::GlobalFunction : EAngelscriptTypeBindMemberKind::Method;
+	if (Behaviour == asBEHAVE_CONSTRUCT) Member.Kind = EAngelscriptTypeBindMemberKind::Constructor;
+	else if (Behaviour == asBEHAVE_DESTRUCT) Member.Kind = EAngelscriptTypeBindMemberKind::Destructor;
+	else if (Behaviour != asBEHAVE_MAX) Member.Kind = EAngelscriptTypeBindMemberKind::Behaviour;
+	Member.Declaration = Signature.ToFString();
+	Member.Native.Function = Function;
+	Member.Native.Caller = Caller;
+	Member.Native.CallConv = CallConv;
+	Member.Native.Auxiliary = UserData;
+	Member.Native.Behaviour = Behaviour;
+	Member.Native.FunctionLifetime = Function.flag == 0
+		? EAngelscriptBindHostLifetime::None
+		: EAngelscriptBindHostLifetime::BorrowedHost;
+	Member.Native.AuxiliaryLifetime = UserData == nullptr
+		? EAngelscriptBindHostLifetime::None
+		: EAngelscriptBindHostLifetime::BorrowedHost;
+	CopyRecordedExposure(Member, Params);
+	return FAngelscriptBoundFunction(RecordingStore, RecordMember(MoveTemp(Member), bGlobal));
+}
+
+FAngelscriptBoundProperty FAngelscriptBinds::RecordProperty(FBindString Signature,
+	SIZE_T Offset, const FAngelscriptType::FBindParams* Params, const void* Address, bool bGlobal)
+{
+	if (bDeclarationOnly) return {};
+	FAngelscriptTypeBindInfoMember Member;
+	Member.Kind = bGlobal ? EAngelscriptTypeBindMemberKind::GlobalProperty : EAngelscriptTypeBindMemberKind::Property;
+	Member.Declaration = Signature.ToFString();
+	Member.PropertyOffset = Offset;
+	Member.GlobalAddress = Address;
+	Member.GlobalStorageLifetime = Address == nullptr
+		? EAngelscriptBindHostLifetime::None
+		: EAngelscriptBindHostLifetime::BorrowedHost;
+	CopyRecordedExposure(Member, Params);
+	return FAngelscriptBoundProperty(RecordingStore, RecordMember(MoveTemp(Member), bGlobal));
+}
+
 FAngelscriptBinds FAngelscriptBinds::ValueClassForTarget(FBindString Name, FBindFlags Flags, int32 Size)
 {
+	if (IsRecording())
+	{
+		FAngelscriptTypeBindDeclaration Declaration;
+		Declaration.Name = Name.ToFString();
+		Declaration.Kind = Flags.bTemplate ? EAngelscriptTypeBindKind::Template : EAngelscriptTypeBindKind::Value;
+		Declaration.NativeSize = Size;
+		Declaration.NativeAlignment = Flags.Alignment == -1 ? 0 : Flags.Alignment;
+		Declaration.ObjectFlags = asOBJ_VALUE | asOBJ_APP_CLASS | Flags.ExtraFlags;
+		Declaration.NativeOwner = Declaration.Name;
+		if (Flags.bPOD) Declaration.ObjectFlags |= asOBJ_POD;
+		if (Flags.bTemplate)
+		{
+			Declaration.ObjectFlags |= asOBJ_TEMPLATE;
+			Declaration.TemplateDeclaration = Declaration.Name;
+			Declaration.TemplateType = Flags.TemplateType.ToFString();
+			int32 Position;
+			if (Declaration.Name.FindChar(TEXT('<'), Position)) Declaration.Name.LeftInline(Position);
+		}
+		return RecordClass(MoveTemp(Declaration));
+	}
 	if (HasRegistrationFailure())
 	{
 		return FAngelscriptBinds(GetTargetEngine(), Name);
@@ -1501,6 +1991,7 @@ FAngelscriptBinds::FAngelscriptBinds(FAngelscriptEngine& InTargetEngine, FBindSt
 
 FAngelscriptBoundFunction FAngelscriptBinds::GenericMethod(FBindString Signature, void(CDECL *Fun)(asIScriptGeneric*), void* UserData)
 {
+	if (IsRecording()) return RecordCallable(Signature, asFUNCTION(Fun), ASAutoCaller::FunctionCaller::Make(), asCALL_GENERIC, UserData);
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -1512,6 +2003,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::GenericMethod(FBindString Signature
 
 FAngelscriptBoundFunction FAngelscriptBinds::BindBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller)
 {
+	if (IsRecording()) return RecordCallable(Signature, Ptr, Caller, asCALL_THISCALL, nullptr, Beh);
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -1614,6 +2106,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::OnBindForTarget(
 
 FAngelscriptBoundFunction FAngelscriptBinds::BindExternBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
 {
+	if (IsRecording()) return RecordCallable(Signature, Ptr, Caller, asCALL_CDECL_OBJFIRST, UserData, Beh);
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -1626,6 +2119,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindExternBehaviour(asEBehaviours B
 
 FAngelscriptBoundFunction FAngelscriptBinds::BindStaticBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
 {
+	if (IsRecording()) return RecordCallable(Signature, Ptr, Caller, asCALL_CDECL, UserData, Beh);
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -1638,6 +2132,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindStaticBehaviour(asEBehaviours B
 
 FAngelscriptBoundFunction FAngelscriptBinds::BindMethod(FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
 {
+	if (IsRecording()) return RecordCallable(Signature, Ptr, Caller, asCALL_THISCALL, UserData);
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -1649,6 +2144,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindMethod(FBindString Signature, a
 
 FAngelscriptBoundFunction FAngelscriptBinds::BindExternMethod(FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
 {
+	if (IsRecording()) return RecordCallable(Signature, Ptr, Caller, asCALL_CDECL_OBJFIRST, UserData);
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -1660,6 +2156,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindExternMethod(FBindString Signat
 
 FAngelscriptBoundFunction FAngelscriptBinds::BindExternMethod(FBindString Signature, asSFuncPtr Ptr, const FAngelscriptType::FBindParams& BindParams, ASAutoCaller::FunctionCaller Caller, void* UserData)
 {
+	if (IsRecording()) return RecordCallable(Signature, Ptr, Caller, asCALL_CDECL_OBJFIRST, UserData, asBEHAVE_MAX, &BindParams);
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -1672,6 +2169,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindExternMethod(FBindString Signat
 
 FAngelscriptBoundProperty FAngelscriptBinds::BindProperty(FBindString Signature, size_t Offset)
 {
+	if (IsRecording()) return RecordProperty(Signature, Offset);
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundProperty(TargetEngine, asERROR, false);
@@ -1687,6 +2185,7 @@ FAngelscriptBoundProperty FAngelscriptBinds::BindProperty(FBindString Signature,
 
 FAngelscriptBoundProperty FAngelscriptBinds::BindProperty(FBindString Signature, size_t Offset, const FAngelscriptType::FBindParams& BindParams)
 {
+	if (IsRecording()) return RecordProperty(Signature, Offset, &BindParams);
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundProperty(TargetEngine, asERROR, false);
@@ -1703,6 +2202,7 @@ FAngelscriptBoundProperty FAngelscriptBinds::BindProperty(FBindString Signature,
 
 FAngelscriptBoundFunction FAngelscriptBinds::BindGlobalFunctionForTarget(FBindString Signature, asSFuncPtr Function, ASAutoCaller::FunctionCaller Caller, void* UserData)
 {
+	if (IsRecording()) return RecordCallable(Signature, Function, Caller, asCALL_CDECL, UserData, asBEHAVE_MAX, nullptr, true);
 	if (HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -1718,6 +2218,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindGlobalFunctionDirectForTarget(
 	ASAutoCaller::FunctionCaller Caller,
 	void* UserData)
 {
+	if (IsRecording()) return RecordCallable(Signature, Function, Caller, CallConv, UserData, asBEHAVE_MAX, nullptr, true);
 	if (HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -1739,6 +2240,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindMethodDirectForTarget(
 	ASAutoCaller::FunctionCaller Caller,
 	void* UserData)
 {
+	if (IsRecording()) return ExistingClassForTarget(ObjectTypeName).RecordCallable(Signature, Function, Caller, CallConv, UserData);
 	if (HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -1755,6 +2257,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindMethodDirectForTarget(
 
 FAngelscriptBoundProperty FAngelscriptBinds::BindGlobalVariableForTarget(FBindString Signature, const void* Address)
 {
+	if (IsRecording()) return RecordProperty(Signature, 0, nullptr, Address, true);
 	if (HasRegistrationFailure())
 	{
 		return FAngelscriptBoundProperty(TargetEngine, asERROR, true);
@@ -1773,6 +2276,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindGlobalGenericFunctionForTarget(
 	void(CDECL* Function)(asIScriptGeneric*),
 	void* UserData)
 {
+	if (IsRecording()) return RecordCallable(Signature, asFUNCTION(Function), ASAutoCaller::FunctionCaller::Make(), asCALL_GENERIC, UserData, asBEHAVE_MAX, nullptr, true);
 	if (HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -1792,6 +2296,16 @@ FAngelscriptBinds::FEnumBind::FEnumBind(FAngelscriptBinds& InTargetBinds, FBindS
 	, TypeId(asERROR)
 	, TargetBinds(&InTargetBinds)
 {
+	if (TargetBinds->IsRecording())
+	{
+		FAngelscriptTypeBindDeclaration Declaration;
+		Declaration.Name = Name.ToFString();
+		Declaration.Kind = EAngelscriptTypeBindKind::Enum;
+		Declaration.NativeSize = sizeof(int32);
+		Declaration.NativeAlignment = alignof(int32);
+		RecordingType = TargetBinds->RecordClass(MoveTemp(Declaration)).RecordingType;
+		return;
+	}
 	asIScriptEngine& ScriptEngine = ResolveScriptEngine();
 	TypeId = ScriptEngine.RegisterEnum(Name.ToCString());
 	if (TypeId == asALREADY_REGISTERED)
@@ -1815,11 +2329,37 @@ asIScriptEngine& FAngelscriptBinds::FEnumBind::ResolveScriptEngine() const
 
 asITypeInfo* FAngelscriptBinds::FEnumBind::GetTypeInfo()
 {
+	if (TargetBinds->IsRecording()) return nullptr;
 	return ResolveScriptEngine().GetTypeInfoById(TypeId);
 }
 
 void FAngelscriptBinds::FEnumBind::FEnumElement::operator=(int32 Value)
 {
+	if (Bind->TargetBinds->IsRecording())
+	{
+		auto& Store = *Bind->TargetBinds->RecordingStore;
+		FAngelscriptTypeBindInfoMember Member;
+		Member.Kind = EAngelscriptTypeBindMemberKind::EnumValue;
+		Member.Declaration = Name.ToFString();
+		Member.EnumValue = Value;
+		Member.Source = Store.GetSource();
+		if (const auto* Type = Store.GetType(Bind->RecordingType))
+		{
+			for (const auto& Existing : Type->Members)
+			{
+				if (Existing.Declaration.Equals(Member.Declaration, ESearchCase::CaseSensitive))
+				{
+					if (Existing.EnumValue != Value)
+						Store.ReportFailure(FString::Printf(TEXT("Conflicting recorded enum value '%s'."), *Member.Declaration));
+					return;
+				}
+			}
+		}
+		FAngelscriptTypeBindMemberHandle Handle;
+		FString Diagnostic;
+		Store.RecordMember(Bind->RecordingType, Member, Handle, Diagnostic);
+		return;
+	}
 	asIScriptEngine& ScriptEngine = Bind->ResolveScriptEngine();
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -1894,8 +2434,28 @@ FAngelscriptBinds::FNamespace::FNamespace(FAngelscriptEngine& InTargetEngine, FB
 	ScriptEngine->SetDefaultNamespace(Name.ToCString());
 }
 
+FAngelscriptBinds::FNamespace::FNamespace(FAngelscriptBinds& InBinds, FBindString Name)
+{
+	if (InBinds.IsRecording())
+	{
+		RecordingStore = InBinds.RecordingStore;
+		PrevNamespace = RecordingStore->GetNamespace();
+		RecordingStore->SetNamespace(Name.ToFString());
+		return;
+	}
+	TargetEngine = &InBinds.GetTargetEngine();
+	asIScriptEngine& ScriptEngine = InBinds.GetTargetScriptEngine();
+	PrevNamespace.SetDynamic(ScriptEngine.GetDefaultNamespace());
+	ScriptEngine.SetDefaultNamespace(Name.ToCString());
+}
+
 FAngelscriptBinds::FNamespace::~FNamespace()
 {
+	if (RecordingStore != nullptr)
+	{
+		RecordingStore->SetNamespace(PrevNamespace.ToFString());
+		return;
+	}
 	check(TargetEngine != nullptr);
 	asIScriptEngine* ScriptEngine = TargetEngine->GetScriptEngine();
 	check(ScriptEngine != nullptr);
@@ -1904,6 +2464,7 @@ FAngelscriptBinds::FNamespace::~FNamespace()
 
 asITypeInfo* FAngelscriptBinds::GetTypeInfo()
 {
+	if (IsRecording()) return nullptr;
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return nullptr;
@@ -1919,6 +2480,19 @@ asITypeInfo* FAngelscriptBinds::GetTypeInfo()
 
 bool FAngelscriptBinds::HasMethod(const FString& MethodName)
 {
+	if (IsRecording())
+	{
+		const auto* Type = RecordingStore->GetType(RecordingType);
+		return Type && Type->Members.ContainsByPredicate([&](const auto& Member)
+		{
+			if (Member.Kind != EAngelscriptTypeBindMemberKind::Method) return false;
+			int32 Parenthesis;
+			if (!Member.Declaration.FindChar(TEXT('('), Parenthesis)) return false;
+			const FString Prefix = Member.Declaration.Left(Parenthesis).TrimEnd();
+			return Prefix.EndsWith(TEXT(" ") + MethodName, ESearchCase::CaseSensitive)
+				|| Prefix.EndsWith(TEXT("&") + MethodName, ESearchCase::CaseSensitive);
+		});
+	}
 	auto* Type = GetTypeInfo();
 	if (!ensure(Type != nullptr))
 		return false;
@@ -1927,6 +2501,7 @@ bool FAngelscriptBinds::HasMethod(const FString& MethodName)
 
 bool FAngelscriptBinds::HasGetter(const FString& PropertyName)
 {
+	if (IsRecording()) return HasMethod(TEXT("Get") + PropertyName);
 	TArray<ANSICHAR, TInlineAllocator<64>> FuncName;
 	FuncName.SetNumUninitialized(PropertyName.Len() + 4);
 	FuncName[0] = 'G';
@@ -1944,6 +2519,7 @@ bool FAngelscriptBinds::HasGetter(const FString& PropertyName)
 
 bool FAngelscriptBinds::HasSetter(const FString& PropertyName)
 {
+	if (IsRecording()) return HasMethod(TEXT("Set") + PropertyName);
 	TArray<ANSICHAR, TInlineAllocator<64>> FuncName;
 	FuncName.SetNumUninitialized(PropertyName.Len() + 4);
 	FuncName[0] = 'S';

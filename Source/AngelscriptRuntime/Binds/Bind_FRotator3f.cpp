@@ -168,11 +168,11 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRotator3f(
 		FRotator3f_.Method("bool ContainsNaN()", METHOD_TRIVIAL(FRotator3f, ContainsNaN));
 
 		{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FRotator3f");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FRotator3f");
 		Binds.BindGlobalVariableForTarget("const FRotator3f ZeroRotator", &FRotator3f::ZeroRotator);
-		Binds.BindGlobalFunctionForTarget("float32 NormalizeAxis(float32 Angle) no_discard", FUNC_TRIVIAL(FRotator3f::NormalizeAxis));
-		Binds.BindGlobalFunctionForTarget("float32 ClampAxis(float32 Angle) no_discard", FUNC_TRIVIAL(FRotator3f::ClampAxis));
-		Binds.BindGlobalFunctionForTarget("FRotator3f MakeFromEuler(const FVector3f& Euler) no_discard", FUNCPR_TRIVIAL(FRotator3f, FRotator3f::MakeFromEuler, (const FVector3f&)));
+		Binds.BindGlobalFunctionForTarget("float32 NormalizeAxis(float32 Angle)", FUNC_TRIVIAL(FRotator3f::NormalizeAxis)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("float32 ClampAxis(float32 Angle)", FUNC_TRIVIAL(FRotator3f::ClampAxis)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FRotator3f MakeFromEuler(const FVector3f& Euler)", FUNCPR_TRIVIAL(FRotator3f, FRotator3f::MakeFromEuler, (const FVector3f&))).NoDiscard();
 		}
 
 		FRotator3f_.Method("FVector3f Vector() const", METHOD_TRIVIAL(FRotator3f, Vector));

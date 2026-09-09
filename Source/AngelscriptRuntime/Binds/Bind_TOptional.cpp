@@ -254,7 +254,8 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TOptional_TypeDeclarations(
 		Flags.ExtraFlags |= asOBJ_TEMPLATE_SUBTYPE_DETERMINES_SIZE;
 		Flags.ExtraFlags |= asOBJ_TEMPLATE_SUBTYPE_COVARIANT;
 		Flags.Alignment = 1;
-		Binds.ValueClassForTarget("TOptional<class T>", sizeof(bool), Flags);
+		Binds.ValueClassForTarget("TOptional<class T>", sizeof(bool), Flags)
+			.ConfigureTemplateContainerForTarget(EAngelscriptTemplateContainerKind::Optional);
 	});
 
 AS_FORCE_LINK const FAngelscriptBind Bind_TOptional_MethodSurface(
@@ -334,6 +335,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TOptional_TypeInfrastructure(
 	{
 		auto OptionalType = MakeShared<FAngelscriptOptionalType>();
 		Binds.RegisterTypeForTarget(OptionalType);
+		if (Binds.IsRecording()) return;
 
 		FAngelscriptTypeDatabase* TargetTypeDatabase = &Binds.GetTargetTypeDatabase();
 		Binds.RegisterTypeFinderForTarget([OptionalType, TargetTypeDatabase](FProperty* Property, FAngelscriptTypeUsage& Usage) -> bool

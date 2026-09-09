@@ -107,7 +107,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FIntPoint(
 		FIntPoint_.Method("FIntPoint& opDivAssign(int32 Scale)", METHODPR_TRIVIAL(FIntPoint&, FIntPoint, operator/=, (int32)));
 		FIntPoint_.Method("FIntPoint opAddAssign(const FIntPoint& Other)", METHODPR_TRIVIAL(FIntPoint&, FIntPoint, operator+=, (const FIntPoint&)));
 		FIntPoint_.Method("FIntPoint opSubAssign(const FIntPoint& Other)", METHODPR_TRIVIAL(FIntPoint&, FIntPoint, operator-=, (const FIntPoint&)));
-		FIntPoint_.Method("const int32& opIndex(int32 Index) no_discard", METHODPR_TRIVIAL(int32&, FIntPoint, operator[], (const int32)));
+		FIntPoint_.Method("int32& opIndex(int32 Index)", METHODPR_TRIVIAL(int32&, FIntPoint, operator[], (const int32))).NoDiscard();
 		FIntPoint_.Method("bool opEquals(const FIntPoint& Other) const", METHODPR_TRIVIAL(bool, FIntPoint, operator==, (const FIntPoint&) const));
 		FIntPoint_.Method("int32 GetMax() const", METHOD_TRIVIAL(FIntPoint, GetMax));
 		FIntPoint_.Method("int32 GetMin() const", METHOD_TRIVIAL(FIntPoint, GetMin));

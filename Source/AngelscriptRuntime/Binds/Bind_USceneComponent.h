@@ -39,8 +39,8 @@ struct FAngelscriptUSceneComponentBinds
 		TArray<USceneComponent*>& OutComponents,
 		int TypeId);
 	static FTransform GetComponentTransform(USceneComponent* Component);
-	static void SetRelativeLocation(USceneComponent* Component, FVector NewLocation);
-	static void SetRelativeRotation(USceneComponent* Component, FRotator NewRotation);
+	static void SetRelativeLocation(USceneComponent* Component, const FVector& NewLocation);
+	static void SetRelativeRotation(USceneComponent* Component, const FRotator& NewRotation);
 	static void SetComponentVelocity(USceneComponent* Component, const FVector& Velocity);
 
 	static void ConstructScopedMovementUpdate(

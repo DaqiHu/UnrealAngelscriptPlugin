@@ -428,7 +428,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_InputEvents(
 			&FAngelscriptInputEventsBinds::SetNavigationDestination);
 
 		{
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FEventReply");
+			FAngelscriptBinds::FNamespace Namespace(Binds, "FEventReply");
 			Binds.BindGlobalFunctionForTarget("FEventReply Handled()", &FAngelscriptInputEventsBinds::MakeHandledReply);
 			Binds.BindGlobalFunctionForTarget("FEventReply Unhandled()", &FAngelscriptInputEventsBinds::MakeUnhandledReply);
 		}
@@ -490,7 +490,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_InputEvents(
 		FCharacterEvent_.Method("FString GetString() const", &FAngelscriptInputEventsBinds::GetCharacterString);
 
 		{
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "EKeys");
+			FAngelscriptBinds::FNamespace Namespace(Binds, "EKeys");
 
 	#define BIND_EKEYS(Key) Binds.BindGlobalVariableForTarget("const FKey " #Key, &EKeys::Key);
 

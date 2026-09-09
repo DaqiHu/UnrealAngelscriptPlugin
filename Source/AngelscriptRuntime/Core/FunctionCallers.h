@@ -202,6 +202,9 @@ namespace ASAutoCaller
 			FunctionCallerPtr FuncPtr;
 		};
 		int type;
+		// Number of native argument slots, including the receiver for member callers.
+		// Manually supplied erased callers retain an unknown signature.
+		int ParameterCount = -1;
 
 		static FunctionCaller Make()
 		{
@@ -354,25 +357,33 @@ namespace ASAutoCaller
 	template<typename ReturnType, typename... ParamTypes>
 	FunctionCaller MakeFunctionCaller(ReturnType(*FunctionPtr)(ParamTypes...))
 	{
-		return FunctionCaller::Make(&RedirectFunctionCaller<ReturnType, ParamTypes...>);
+		auto Caller = FunctionCaller::Make(&RedirectFunctionCaller<ReturnType, ParamTypes...>);
+		Caller.ParameterCount = sizeof...(ParamTypes);
+		return Caller;
 	}
 
 	template<typename ReturnType, typename... ParamTypes, typename ObjectType>
 	FunctionCaller MakeFunctionCaller(ReturnType(ObjectType::* FunctionPtr)(ParamTypes...))
 	{
-		return FunctionCaller::Make(&RedirectMethodCaller<ReturnType, ObjectType, ParamTypes...>);
+		auto Caller = FunctionCaller::Make(&RedirectMethodCaller<ReturnType, ObjectType, ParamTypes...>);
+		Caller.ParameterCount = sizeof...(ParamTypes) + 1;
+		return Caller;
 	}
 
 	template<typename ReturnType, typename... ParamTypes, typename ObjectType>
 	FunctionCaller MakeFunctionCaller(ReturnType(ObjectType::* FunctionPtr)(ParamTypes...) const)
 	{
-		return FunctionCaller::Make(&RedirectMethodCaller<ReturnType, ObjectType, ParamTypes...>);
+		auto Caller = FunctionCaller::Make(&RedirectMethodCaller<ReturnType, ObjectType, ParamTypes...>);
+		Caller.ParameterCount = sizeof...(ParamTypes) + 1;
+		return Caller;
 	}
 
 	template<typename ReturnType, typename... ParamTypes, typename ObjectType>
 	FunctionCaller MakeFunctionCaller(ReturnType(ObjectType::* FunctionPtr)(ParamTypes...) const&)
 	{
-		return FunctionCaller::Make(&RedirectMethodCaller<ReturnType, ObjectType, ParamTypes...>);
+		auto Caller = FunctionCaller::Make(&RedirectMethodCaller<ReturnType, ObjectType, ParamTypes...>);
+		Caller.ParameterCount = sizeof...(ParamTypes) + 1;
+		return Caller;
 	}
 }
 // END HAZE FIX

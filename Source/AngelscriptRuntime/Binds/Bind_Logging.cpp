@@ -205,8 +205,9 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Logging(
 			| EAngelscriptStaticJITNativeCallLifetimeFlags::NoEngineLocalCapture
 			| EAngelscriptStaticJITNativeCallLifetimeFlags::BorrowedInputReferences
 			| EAngelscriptStaticJITNativeCallLifetimeFlags::ByValueObjectArguments;
-		if (TryBuildAngelscriptStaticJITNativeABIIdentity(
-			*PrintFunction.GetFunction(), PrintDescriptor.NativeABI))
+		if (PrintFunction.GetFunction() != nullptr
+			&& TryBuildAngelscriptStaticJITNativeABIIdentity(
+				*PrintFunction.GetFunction(), PrintDescriptor.NativeABI))
 		{
 			PrintFunction.ExternalNativeCall(PrintDescriptor);
 		}

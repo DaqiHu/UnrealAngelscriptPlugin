@@ -105,12 +105,26 @@ asEMetadataResult asCMetadataImage::CreateGlobalProperty(const asSStableKey& Key
 	const asSStableKey& TypeUseKey, const char* Name, const char* Namespace,
 	const asCDataType& Type, asCGlobalProperty*& Out)
 {
+	return CreateGlobalPropertyInternal(Key, TypeUseKey, Name, Namespace, Type, Out, false);
+}
+
+asEMetadataResult asCMetadataImage::CreateNativeGlobalProperty(const asSStableKey& Key,
+	const asSStableKey& TypeUseKey, const char* Name, const char* Namespace,
+	const asCDataType& Type, asCGlobalProperty*& Out)
+{
+	return CreateGlobalPropertyInternal(Key, TypeUseKey, Name, Namespace, Type, Out, true);
+}
+
+asEMetadataResult asCMetadataImage::CreateGlobalPropertyInternal(const asSStableKey& Key,
+	const asSStableKey& TypeUseKey, const char* Name, const char* Namespace,
+	const asCDataType& Type, asCGlobalProperty*& Out, bool Native)
+{
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	Out = nullptr;
 	const auto Status = ValidateNew(Key, Name, Namespace, false);
 	if (Status != asEMetadataResult::Succeeded) return Status;
 	if (GlobalsByName.Contains(QualifiedName(Namespace, Name))) return asEMetadataResult::DuplicateName;
-	if ((!Type.IsReadOnly() && !Type.IsHandleToConst()) || Type.IsReference() ||
+	if ((!Native && !Type.IsReadOnly() && !Type.IsHandleToConst()) || Type.IsReference() ||
 		ValidateDataType(Type, false) != asEMetadataResult::Succeeded) return asEMetadataResult::InvalidSignature;
 	asCGlobalProperty Candidate;
 	asSNameSpace TemporaryNamespace;
@@ -118,10 +132,12 @@ asEMetadataResult asCMetadataImage::CreateGlobalProperty(const asSStableKey& Key
 	Candidate.name = Name; Candidate.nameSpace = &TemporaryNamespace; Candidate.type = NormalizeOptions(Type);
 	Candidate.metadataOwner = this; Candidate.memory = nullptr; Candidate.id = asUINT(-1);
 	Candidate.metadataStableKey = Key; Candidate.metadataTypeUseKey = TypeUseKey;
+	Candidate.metadataNativeDeclaration = Native;
 	if (!ValidateGlobalIdentity(Candidate)) return asEMetadataResult::InvalidSignature;
 	asCGlobalProperty* Global = asNEW(asCGlobalProperty);
 	Global->name = Name; Global->nameSpace = InternNamespace(Namespace); Global->type = NormalizeOptions(Type);
 	Global->metadataOwner = this; Global->metadataStableKey = Key; Global->metadataTypeUseKey = TypeUseKey;
+	Global->metadataNativeDeclaration = Native;
 	Global->id = asUINT(-1); Global->memory = nullptr; Global->refCount.set(0);
 	Globals.Add(Global); GlobalsByKey.Add(Key, Global); GlobalsByName.Add(QualifiedName(Namespace, Name), Global);
 	InvalidateLayouts();
@@ -132,7 +148,7 @@ asEMetadataResult asCMetadataImage::CreateGlobalProperty(const asSStableKey& Key
 bool asCMetadataImage::ValidateGlobalIdentity(const asCGlobalProperty& Global) const
 {
 if (!IdentityContext || Global.metadataOwner != this || !Global.nameSpace || Global.module || Global.initFunc || Global.realAddress || Global.memory || Global.memoryAllocated ||
-		(!Global.type.IsReadOnly() && !Global.type.IsHandleToConst()) || Global.type.IsReference()) return false;
+		(!Global.metadataNativeDeclaration && !Global.type.IsReadOnly() && !Global.type.IsHandleToConst()) || Global.type.IsReference()) return false;
 	const auto& Registry = IdentityContext->GetIdentityRegistry();
 	asSDeclarationIdentityDescriptor Decl;
 	if (Registry.ResolveDeclaration(Global.metadataStableKey, Decl) != asETypeIdentityStatus::Succeeded ||
@@ -173,7 +189,7 @@ asEMetadataResult asCMetadataImage::SetIdentityContext(TSharedPtr<const asCTypeC
 	if (Settings.PointerByteSize != Options.PointerByteSize || Settings.FloatIsFloat64 != Options.FloatIsFloat64 ||
 		Settings.ExpandDefaultArrayToTemplate != Options.ExpandDefaultArrayToTemplate || Settings.TargetProfile != UTF8_TO_TCHAR(Options.TargetProfile.AddressOf()))
 		return asEMetadataResult::InvalidArgument;
-	TMap<FString, asCTypeInfo*> ReboundNames;
+	decltype(TypesByName) ReboundNames;
 	for (asCTypeInfo* Type : Types)
 	{
 		if (const auto* Object = CastToObjectType(Type); Object && Object->GetMetadataTemplateDefinition()) continue;
@@ -278,7 +294,7 @@ bool asCMetadataImage::ValidateTypeUse(const asSStableKey& Key, const asCDataTyp
 {
 if (!IdentityContext.IsValid()) return false;
 	const auto& Registry = IdentityContext->GetIdentityRegistry();
-	if (Depth > 64 || ValidateDataType(Actual, true) != asEMetadataResult::Succeeded) return false;
+	if (Depth > 64 || ValidateDataType(Actual, true, true) != asEMetadataResult::Succeeded) return false;
 	asSStableTypeUseDescriptor Expected;
 	if (Registry.ResolveTypeUse(Key, Expected) != asETypeIdentityStatus::Succeeded) return false;
 	asSStableTypeUseDescriptor Observed = Expected;
@@ -314,6 +330,10 @@ if (!IdentityContext.IsValid()) return false;
 		case ttUInt64: Observed.Primitive = asEPrimitiveType::UInt64; break;
 		case ttFloat32: Observed.Primitive = asEPrimitiveType::Float32; break;
 		case ttFloat64: Observed.Primitive = asEPrimitiveType::Float64; break;
+		case ttQuestion:
+			Observed.Kind = asETypeUseKind::Wildcard;
+			Observed.Primitive = asEPrimitiveType::Invalid;
+			break;
 		default: return false;
 		}
 	}
@@ -428,7 +448,7 @@ bool asCMetadataImage::ValidateFrozenDefinitions() const
 	return IsFrozen() && ValidateFrozenLayout() && ValidateFrozenIdentity() && ValidateAccessSnapshot();
 }
 
-asEMetadataResult asCMetadataImage::ValidateDataType(const asCDataType& Type, bool AllowVoid) const
+asEMetadataResult asCMetadataImage::ValidateDataType(const asCDataType& Type, bool AllowVoid, bool AllowWildcard) const
 {
 	if (!Type.IsValid() || Type.IsAuto() || Type.IsUnresolvedObject() || Type.IsErrorDataType() || Type.IsNullHandle())
 		return asEMetadataResult::InvalidSignature;
@@ -436,6 +456,8 @@ asEMetadataResult asCMetadataImage::ValidateDataType(const asCDataType& Type, bo
 		return CanReference(Type.GetTypeInfo()) ? asEMetadataResult::Succeeded : asEMetadataResult::ForeignOwner;
 	if (Type.GetTokenType() == ttVoid)
 		return AllowVoid && !Type.IsReference() ? asEMetadataResult::Succeeded : asEMetadataResult::InvalidSignature;
+	if (Type.GetTokenType() == ttQuestion)
+		return AllowWildcard && Type.IsReference() ? asEMetadataResult::Succeeded : asEMetadataResult::InvalidSignature;
 	switch (Type.GetTokenType())
 	{
 	case ttBool: case ttInt8: case ttUInt8: case ttInt16: case ttUInt16:
@@ -633,7 +655,7 @@ asEMetadataResult asCMetadataImage::DefineFunction(asCScriptFunction& Function,
 	bool HasDefault = false;
 	for (const auto& Parameter : Parameters)
 	{
-		Result = ValidateDataType(Parameter.Type, false);
+		Result = ValidateDataType(Parameter.Type, false, true);
 		if (Result != asEMetadataResult::Succeeded) return Result;
 		if (Parameter.Flags > asTM_INOUTREF || (Parameter.Flags != asTM_NONE && !Parameter.Type.IsReference()))
 			return asEMetadataResult::InvalidSignature;
@@ -659,6 +681,59 @@ asEMetadataResult asCMetadataImage::DefineFunction(asCScriptFunction& Function,
 		Owner->methodTable.Add(&Function);
 	}
 	Function.metadataSignatureDefined = true;
+	InvalidateLayouts();
+	return asEMetadataResult::Succeeded;
+}
+
+asEMetadataResult asCMetadataImage::SetNativeGlobalFacts(asCGlobalProperty& Global, const asSNativeGlobalFacts& Facts)
+{
+	std::lock_guard<std::mutex> Lock(MutationMutex);
+	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
+	if (GlobalsByKey.FindRef(Global.GetStableKey()) != &Global || Global.metadataOwner != this)
+		return asEMetadataResult::ForeignOwner;
+	if (!Global.metadataNativeDeclaration || (Facts.PureConstant && (!Global.type.IsReadOnly() ||
+		(!Global.type.IsPrimitive() && !Global.type.IsEnumType())))) return asEMetadataResult::InvalidArgument;
+	Global.isPureConstant = Facts.PureConstant;
+	Global.storage = Facts.PureConstant ? Facts.ConstantValue : 0;
+#if WITH_EDITOR
+	Global.isEditorOnly = Facts.EditorOnly;
+#endif
+	InvalidateLayouts();
+	return asEMetadataResult::Succeeded;
+}
+
+asEMetadataResult asCMetadataImage::SetNativeFunctionFacts(asCScriptFunction& Function, const asSNativeFunctionFacts& Facts)
+{
+	std::lock_guard<std::mutex> Lock(MutationMutex);
+	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
+	if (!Owns(&Function)) return asEMetadataResult::ForeignOwner;
+	if (!Function.metadataSignatureDefined || Facts.DeterminesOutputTypeArgument < -1 ||
+		Facts.DeterminesOutputTypeArgument > 127 || Facts.DeterminesOutputTypeArgument >= int(Function.parameterTypes.GetLength()) ||
+		Facts.CompileOut < asECompileOutType::CompileCalls || Facts.CompileOut > asECompileOutType::CompileOutAsMethodChain)
+		return asEMetadataResult::InvalidArgument;
+	if ((Facts.Traits & asTRAIT_PRIVATE) && (Facts.Traits & asTRAIT_PROTECTED)) return asEMetadataResult::InvalidArgument;
+	Function.traits.traits = Facts.Traits;
+	Function.compileOutType = Facts.CompileOut;
+	Function.determinesOutputTypeArgumentIndex = int8(Facts.DeterminesOutputTypeArgument);
+#if WITH_EDITOR
+	Function.deprecationMessage = Facts.DeprecationMessage;
+#endif
+	InvalidateLayouts();
+	return asEMetadataResult::Succeeded;
+}
+
+asEMetadataResult asCMetadataImage::SetNativePropertyFacts(asCObjectType& Owner, asCObjectProperty& Property, const asSNativePropertyFacts& Facts)
+{
+	std::lock_guard<std::mutex> Lock(MutationMutex);
+	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
+	if (!Owns(&Owner) || !Owner.localProperties.Exists(&Property)) return asEMetadataResult::ForeignOwner;
+	if (!Property.isNativeAddress) return asEMetadataResult::InvalidArgument;
+	Property.exposedType = asCObjectProperty::GenerateExposedType(Facts.Editable, Facts.Readable, Facts.Writeable);
+	Property.isProtected = Facts.Protected; Property.isPrivate = false; Property.isAppBindProperty = true;
+#if WITH_EDITOR
+	Property.isEditorOnly = Facts.EditorOnly; Property.isDeprecated = Facts.Deprecated;
+	Property.DeprecationMessage = Facts.DeprecationMessage;
+#endif
 	InvalidateLayouts();
 	return asEMetadataResult::Succeeded;
 }

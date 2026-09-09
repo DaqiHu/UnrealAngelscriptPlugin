@@ -149,8 +149,10 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSoftObjectPtr_TypeDeclarations(
 		Flags.TemplateType = "<T>";
 		Flags.ExtraFlags = asOBJ_TEMPLATE_SUBTYPE_COVARIANT;
 
-		Binds.ValueClassForTarget<FSoftObjectPtr>("TSoftObjectPtr<class T>", Flags);
-		Binds.ValueClassForTarget<FSoftObjectPtr>("TSoftClassPtr<class T>", Flags);
+		Binds.ValueClassForTarget<FSoftObjectPtr>("TSoftObjectPtr<class T>", Flags)
+			.ConfigureTemplateContainerForTarget(EAngelscriptTemplateContainerKind::SoftObjectPtr);
+		Binds.ValueClassForTarget<FSoftObjectPtr>("TSoftClassPtr<class T>", Flags)
+			.ConfigureTemplateContainerForTarget(EAngelscriptTemplateContainerKind::SoftClassPtr);
 	});
 
 AS_FORCE_LINK const FAngelscriptBind Bind_TSoftObjectPtr_TypeInfrastructure(
@@ -158,12 +160,6 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSoftObjectPtr_TypeInfrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
-		TSharedRef<FSoftObjectPtrType> SoftObjectPtrType = MakeShared<FSoftObjectPtrType>(Binds.GetTargetBindDatabase());
-		Binds.RegisterTypeForTarget(SoftObjectPtrType);
-
-		TSharedRef<FSoftClassPtrType> SoftClassPtrType = MakeShared<FSoftClassPtrType>(Binds.GetTargetBindDatabase());
-		Binds.RegisterTypeForTarget(SoftClassPtrType);
-
 		auto TSoftObjectPtr_ = Binds.ExistingClassForTarget("TSoftObjectPtr<T>");
 		TSoftObjectPtr_.TemplateCallback(
 			"bool f(int&in Type, int&out ErrorMessage)",
@@ -174,6 +170,11 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSoftObjectPtr_TypeInfrastructure(
 			"bool f(int&in Type, int&out ErrorMessage)",
 			&FAngelscriptTSoftObjectPtrBinds::ValidateTemplate);
 
+		if (Binds.IsRecording()) return;
+		TSharedRef<FSoftObjectPtrType> SoftObjectPtrType = MakeShared<FSoftObjectPtrType>(Binds.GetTargetBindDatabase());
+		Binds.RegisterTypeForTarget(SoftObjectPtrType);
+		TSharedRef<FSoftClassPtrType> SoftClassPtrType = MakeShared<FSoftClassPtrType>(Binds.GetTargetBindDatabase());
+		Binds.RegisterTypeForTarget(SoftClassPtrType);
 		FAngelscriptTypeDatabase* TargetTypeDatabase = &Binds.GetTargetTypeDatabase();
 		Binds.RegisterTypeFinderForTarget([SoftObjectPtrType, SoftClassPtrType, TargetTypeDatabase](FProperty* Property, FAngelscriptTypeUsage& Usage) -> bool
 		{

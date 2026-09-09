@@ -1,5 +1,7 @@
 #pragma once
 
+#include <type_traits>
+
 #include "CoreMinimal.h"
 #include "Misc/FileHelper.h"
 #include "UObject/Class.h"
@@ -15,6 +17,7 @@
 #include "AngelscriptType.h"
 #include "StaticJIT/BytecodeJIT/StaticJITBinds.h"
 #include "FunctionCallers.h"
+#include "AngelscriptTypeBindInfoStore.h"
 
 // Need to disable some casting warnings. Trust us MSVC we know what we're doing
 #ifdef _MSC_VER
@@ -65,17 +68,6 @@ struct FAngelscriptEngine;
 struct FToStringType;
 class FBlueprintEventSignatureRegistry;
 
-enum class EAngelscriptBindPhase : uint8
-{
-	TypeDeclarations,
-	TypeInfrastructure,
-	ExplicitBindings,
-	GeneratedBindings,
-	ReflectionBindings,
-	PostReflectionBindings,
-	Finalization,
-};
-
 using FAngelscriptBindCallback = void (*)(FAngelscriptBinds&);
 
 namespace UE::Angelscript::Private
@@ -101,6 +93,22 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBind
 		const ANSICHAR* OwnerModule = UE_MODULE_NAME,
 		const ANSICHAR* SourceFile = __builtin_FILE(),
 		int32 SourceLine = __builtin_LINE());
+	FAngelscriptBind(
+		FName BindName,
+		EAngelscriptBindPhase Phase,
+		FAngelscriptBindCallback Callback,
+		bool (*Condition)(const FAngelscriptBindRecordingPolicy&),
+		const ANSICHAR* OwnerModule = UE_MODULE_NAME,
+		const ANSICHAR* SourceFile = __builtin_FILE(),
+		int32 SourceLine = __builtin_LINE());
+	FAngelscriptBind(
+		FName BindName,
+		EAngelscriptBindPhase Phase,
+		FAngelscriptBindCallback Callback,
+		bool bContainsTypeDeclarations,
+		const ANSICHAR* OwnerModule = UE_MODULE_NAME,
+		const ANSICHAR* SourceFile = __builtin_FILE(),
+		int32 SourceLine = __builtin_LINE());
 
 	static bool FinalizeRegisteredBinds(FString& OutDiagnostic);
 	static bool PrepareForEngineInitialization(FString& OutDiagnostic);
@@ -111,6 +119,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBind
 		EAngelscriptBindPhase LastPhase,
 		FString& OutDiagnostic);
 	static TArray<FAngelscriptBindMetadata> GetRegisteredBindMetadata();
+	static const UE::Angelscript::Private::FAngelscriptBindCollection& GetRegisteredCollection();
 
 #if WITH_DEV_AUTOMATION_TESTS
 	FAngelscriptBind(
@@ -261,6 +270,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBindState
 struct ANGELSCRIPTRUNTIME_API FAngelscriptBoundFunction
 {
 	FAngelscriptBoundFunction() = default;
+	FAngelscriptBoundFunction(FAngelscriptTypeBindInfoStore* Store, FAngelscriptTypeBindMemberHandle Handle)
+		: RecordingStore(Store), RecordingHandle(Handle) {}
 	FAngelscriptBoundFunction(FAngelscriptEngine* InTargetEngine, int32 InFunctionId)
 		: TargetEngine(InTargetEngine)
 		, FunctionId(InFunctionId)
@@ -316,6 +327,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBoundFunction
 	FAngelscriptBoundFunction& ReplaceWithFirstArgInTest();
 
 private:
+	FAngelscriptBoundFunction& EditRecord(TFunctionRef<void(FAngelscriptTypeBindInfoMember&)> Edit);
+	FAngelscriptBoundFunction& RecordTrait(EAngelscriptBindFunctionTrait Trait, bool bEnabled);
+	FAngelscriptBoundFunction& RecordRecipe(FAngelscriptNativeBindRecipe Recipe);
+	FAngelscriptTypeBindInfoStore* RecordingStore = nullptr;
+	FAngelscriptTypeBindMemberHandle RecordingHandle;
 	FAngelscriptEngine* TargetEngine = nullptr;
 	int32 FunctionId = asERROR;
 };
@@ -323,6 +339,8 @@ private:
 struct ANGELSCRIPTRUNTIME_API FAngelscriptBoundProperty
 {
 	FAngelscriptBoundProperty() = default;
+	FAngelscriptBoundProperty(FAngelscriptTypeBindInfoStore* Store, FAngelscriptTypeBindMemberHandle Handle)
+		: RecordingStore(Store), RecordingHandle(Handle) {}
 	FAngelscriptBoundProperty(FAngelscriptEngine* InTargetEngine, int32 InPropertyId, bool bInGlobal)
 		: TargetEngine(InTargetEngine)
 		, PropertyId(InPropertyId)
@@ -338,6 +356,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBoundProperty
 	FAngelscriptBoundProperty& PureConstant(asQWORD ConstantValue);
 
 private:
+	FAngelscriptTypeBindInfoStore* RecordingStore = nullptr;
+	FAngelscriptTypeBindMemberHandle RecordingHandle;
 	FAngelscriptEngine* TargetEngine = nullptr;
 	int32 PropertyId = asERROR;
 	bool bGlobal = false;
@@ -346,6 +366,11 @@ private:
 struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 {
 	explicit FAngelscriptBinds(FAngelscriptEngine& InTargetEngine);
+	explicit FAngelscriptBinds(FAngelscriptTypeBindInfoStore& InStore, bool bInDeclarationOnly = false)
+		: RecordingStore(&InStore), bDeclarationOnly(bInDeclarationOnly) {}
+	bool IsRecording() const { return RecordingStore != nullptr; }
+	bool IsDeclarationOnly() const { return bDeclarationOnly; }
+	FAngelscriptTypeBindInfoStore* GetRecordingStore() const { return RecordingStore; }
 
 	FAngelscriptEngine& GetTargetEngine() const;
 	asIScriptEngine& GetTargetScriptEngine() const;
@@ -353,8 +378,14 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 	FAngelscriptTypeDatabase& GetTargetTypeDatabase() const;
 	FAngelscriptBindDatabase& GetTargetBindDatabase() const;
 	TArray<FToStringType>& GetTargetToStringList() const;
+	void AddToStringEffect(const FString& TypeName, void (*ToString)(void*, FString&), bool bImplicitConversion, bool bIsHandleType) const;
+	void AddSkipFunctionEffect(FName InClassName, FName FunctionName) const;
+	void AddSkipClassEffect(FName InClassName) const;
+	void AddDeprecationEffect(const FString& FunctionPath, const FString& Message) const;
+	void AddDirectBindArchitectureProbeEffect() const;
 	FBlueprintEventSignatureRegistry& GetTargetBlueprintEventSignatureRegistry() const;
 	void RegisterTypeForTarget(TSharedRef<FAngelscriptType> Type) const;
+	void ConfigureTemplateContainerForTarget(EAngelscriptTemplateContainerKind Kind) const;
 	void RegisterTypeFinderForTarget(FAngelscriptType::FTypeFinder Finder) const;
 	void RegisterFunctionBindingForTarget(UClass* Class, const FString& Name, const FAngelscriptFunctionBinding& Binding) const;
 	void RegisterGeneratedFunctionBindingForTarget(
@@ -372,7 +403,9 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 			Flags.Alignment = alignof(T);
 		}
 		Flags.ExtraFlags |= asGetTypeTraits<T>();
-		return ValueClassForTarget(Name, Flags, sizeof(T));
+		FAngelscriptBinds Result = ValueClassForTarget(Name, Flags, sizeof(T));
+		if (Result.IsRecording()) Result.RecordNativeDefinition<T>();
+		return Result;
 	}
 
 	FAngelscriptBinds ValueClassForTarget(FBindString Name, UScriptStruct* StructType, FBindFlags Flags)
@@ -458,6 +491,13 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 	*/
 	FAngelscriptBinds ReferenceClassForTarget(FBindString Name, UClass* UnrealClass) const;
 	FAngelscriptBinds ExistingClassForTarget(FBindString Name) const;
+	template<typename T>
+	FAngelscriptBinds ExistingClassForTarget(FBindString Name) const
+	{
+		FAngelscriptBinds Binds = ExistingClassForTarget(Name);
+		Binds.RecordNativeDefinition<T>();
+		return Binds;
+	}
 
 	template<typename C, typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, Value(C::*Fun)(Args...), void* UserData = nullptr)
@@ -676,6 +716,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 
 	private:
 		FAngelscriptBinds* TargetBinds = nullptr;
+		FAngelscriptTypeBindHandle RecordingType;
 		asIScriptEngine& ResolveScriptEngine() const;
 	};
 
@@ -701,9 +742,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 	struct ANGELSCRIPTRUNTIME_API FNamespace
 	{
 		FAngelscriptEngine* TargetEngine = nullptr;
+		FAngelscriptTypeBindInfoStore* RecordingStore = nullptr;
 		FBindString PrevNamespace;
 
 		FNamespace(FAngelscriptEngine& InTargetEngine, FBindString Name);
+		FNamespace(FAngelscriptBinds& InBinds, FBindString Name);
 		~FNamespace();
 	};
 
@@ -761,16 +804,52 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 	bool HasSetter(const FString& PropertyName);
 
 private:
+	template<typename T> static void CatalogConstruct(void* Address) { new(Address) T(); }
+	template<typename T> static void CatalogCopy(void* Address, const void* Source) { new(Address) T(*static_cast<const T*>(Source)); }
+	template<typename T> static void CatalogDestroy(void* Address) { static_cast<T*>(Address)->~T(); }
+	template<typename T> static bool CatalogEqual(const void* A, const void* B) { return *static_cast<const T*>(A) == *static_cast<const T*>(B); }
+	template<typename T> static uint32 CatalogHash(const void* Address) { return GetTypeHash(*static_cast<const T*>(Address)); }
+	template<typename T, typename = void> struct THasCatalogEqual : std::false_type {};
+	template<typename T> struct THasCatalogEqual<T, std::void_t<decltype(std::declval<const T&>() == std::declval<const T&>())>> : std::true_type {};
+	template<typename T, typename = void> struct THasCatalogHash : std::false_type {};
+	template<typename T> struct THasCatalogHash<T, std::void_t<decltype(GetTypeHash(std::declval<const T&>()))>> : std::true_type {};
+	template<typename T> void RecordNativeDefinition()
+	{
+		if (!RecordingStore) return;
+		const FAngelscriptTypeBindInfo* Existing = RecordingStore->GetType(RecordingType);
+		if (!Existing) return;
+		FAngelscriptTypeBindDeclaration Declaration = Existing->Declaration;
+		Declaration.NativeOwner = Declaration.Name;
+		Declaration.bTriviallyCopyable = std::is_trivially_copy_constructible_v<T>;
+		Declaration.bTriviallyDestructible = std::is_trivially_destructible_v<T>;
+		if constexpr (std::is_default_constructible_v<T>) Declaration.DefaultConstruct = &CatalogConstruct<T>;
+		if constexpr (std::is_copy_constructible_v<T>) Declaration.CopyConstruct = &CatalogCopy<T>;
+		if constexpr (std::is_destructible_v<T>) Declaration.Destroy = &CatalogDestroy<T>;
+		if constexpr (THasCatalogEqual<T>::value) Declaration.Equal = &CatalogEqual<T>;
+		if constexpr (THasCatalogHash<T>::value) Declaration.Hash = &CatalogHash<T>;
+		FString Diagnostic; RecordingStore->UpdateTypeDeclaration(RecordingType, Declaration, Diagnostic);
+	}
 	FAngelscriptBinds ValueClassForTarget(FBindString Name, FBindFlags Flags, int32 Size);
 
 	FAngelscriptBinds(FAngelscriptEngine& InTargetEngine, FBindString Name, asQWORD Flags, int32 Size);
 	FAngelscriptBinds(FAngelscriptEngine& InTargetEngine, FBindString Name);
 
 	FAngelscriptEngine* TargetEngine = nullptr;
+	FAngelscriptTypeBindInfoStore* RecordingStore = nullptr;
+	FAngelscriptTypeBindHandle RecordingType;
+	bool bDeclarationOnly = false;
 	FBindString ClassName;
 	asITypeInfo* ScriptType = nullptr;
 
 	FAngelscriptEngine& ResolveTargetEngine() const;
+	FAngelscriptBinds RecordClass(FAngelscriptTypeBindDeclaration Declaration) const;
+	FAngelscriptTypeBindMemberHandle RecordMember(FAngelscriptTypeBindInfoMember Member, bool bGlobal);
+	FAngelscriptBoundFunction RecordCallable(FBindString Signature, asSFuncPtr Function,
+		ASAutoCaller::FunctionCaller Caller, asECallConvTypes CallConv, void* UserData,
+		asEBehaviours Behaviour = asBEHAVE_MAX, const FAngelscriptType::FBindParams* Params = nullptr,
+		bool bGlobal = false);
+	FAngelscriptBoundProperty RecordProperty(FBindString Signature, SIZE_T Offset,
+		const FAngelscriptType::FBindParams* Params = nullptr, const void* Address = nullptr, bool bGlobal = false);
 	void RecordRegistrationFailure(const TCHAR* Operation, FBindString Declaration, int32 Result);
 	FAngelscriptBoundFunction OnBindForTarget(int32 FunctionId, void* UserData, const FAngelscriptType::FBindParams* BindParams, const TCHAR* Operation, FBindString Declaration, asEBehaviours RegisteredBehaviour = asBEHAVE_MAX);
 	FAngelscriptBoundFunction BindGlobalFunctionForTarget(FBindString Signature, asSFuncPtr Function, ASAutoCaller::FunctionCaller Caller, void* UserData);

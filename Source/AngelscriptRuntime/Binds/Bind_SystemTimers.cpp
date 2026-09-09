@@ -39,7 +39,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_SystemTimers(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "System");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "System");
 		Binds.BindGlobalFunctionForTarget(
 			"FTimerHandle SetTimer(const UObject Object, const FName& FunctionName, float32 Time, bool bLooping = false)",
 			&FAngelscriptSystemTimersBinds::SetTimer);

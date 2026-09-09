@@ -73,7 +73,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FNumberFormattingOptions(
 		Options_.Method("uint32 GetTypeHash() const", &FAngelscriptFNumberFormattingOptionsBinds::Hash);
 		Options_.Method("bool IsIdentical( const FNumberFormattingOptions& Other ) const", METHOD_TRIVIAL(FNumberFormattingOptions, IsIdentical));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FNumberFormattingOptions");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FNumberFormattingOptions");
 		Binds.BindGlobalFunctionForTarget("const FNumberFormattingOptions& DefaultWithGrouping() no_discard", &FNumberFormattingOptions::DefaultWithGrouping)
 			.NativeFunction("FNumberFormattingOptions::DefaultWithGrouping", true);
 		Binds.BindGlobalFunctionForTarget("const FNumberFormattingOptions& DefaultNoGrouping() no_discard", &FNumberFormattingOptions::DefaultNoGrouping)

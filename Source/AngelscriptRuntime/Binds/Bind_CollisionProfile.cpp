@@ -40,7 +40,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_CollisionProfile(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "CollisionProfile");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "CollisionProfile");
 
 		TArray<TSharedPtr<FName>> CollisionProfiles;
 		UCollisionProfile::GetProfileNames(CollisionProfiles);
@@ -75,7 +75,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_CollisionProfile(
 
 #if WITH_EDITORONLY_DATA
 			FCollisionResponseTemplate CollisionResponseTemplate;
-			if (BoundProfile.IsValid() && UCollisionProfile::Get()->GetProfileTemplate(CollisionProfileName, CollisionResponseTemplate))
+			if (!Binds.IsRecording() && BoundProfile.IsValid() && UCollisionProfile::Get()->GetProfileTemplate(CollisionProfileName, CollisionResponseTemplate))
 			{
 				FAngelscriptDocs::AddDocumentationForGlobalVariable(Binds.GetTargetEngine(), BoundProfile.GetPropertyId(), CollisionResponseTemplate.HelpMessage);
 			}

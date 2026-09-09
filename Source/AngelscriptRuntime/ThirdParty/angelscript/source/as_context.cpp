@@ -6156,7 +6156,8 @@ int asCContext::CallGeneric(asCScriptFunction *descr, const std::shared_ptr<asSS
 		cleanArgs += AS_PTR_SIZE;
 	}
 
-	asCGeneric gen(m_engine, descr, currentObject, args, &sysFunc->CallFrame);
+	asCGeneric gen(m_engine, descr, currentObject, args, &sysFunc->CallFrame, sysFunc->auxiliary);
+	TGuardValue<void*> NativeAuxiliaryScope(m_nativeCallAuxiliary, sysFunc->auxiliary);
 
 	auto* tld = m_regs.tld;
 	auto* prevActiveFunction = tld->activeFunction;
@@ -6236,6 +6237,7 @@ int asCContext::CallFunctionCaller(asCScriptFunction* descr, const std::shared_p
 	void (*func)(asIScriptGeneric*) = (void (*)(asIScriptGeneric*))sysFunc->func;
 
 	asDWORD* StackArgs = m_regs.stackPointer;
+	TGuardValue<void*> NativeAuxiliaryScope(m_nativeCallAuxiliary, sysFunc->auxiliary);
 	m_callingSystemFunction = descr;
 
 	void* FunctionArgs[32];
@@ -6316,7 +6318,11 @@ int asCContext::CallFunctionCaller(asCScriptFunction* descr, const std::shared_p
 
 		// TODO: Do we need to destroy the object here in case of exception?
 	}
-	else if (descr->returnType.IsObjectHandle() && !descr->returnType.IsReference())
+	else if (!descr->returnType.IsReference()
+		&& (descr->returnType.IsObjectHandle()
+			|| (descr->returnType.IsObject()
+				&& descr->returnType.GetTypeInfo() != nullptr
+				&& (descr->returnType.GetTypeInfo()->flags & asOBJ_REF) != 0)))
 	{
 		ReturnAddress = &m_regs.objectRegister;
 	}

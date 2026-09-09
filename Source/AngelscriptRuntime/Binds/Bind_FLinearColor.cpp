@@ -228,7 +228,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FLinearColor(
 		FLinearColor_.Method("FLinearColor HSVToLinearRGB() const", METHOD_TRIVIAL(FLinearColor, HSVToLinearRGB));
 
 		{
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FLinearColor");
+			FAngelscriptBinds::FNamespace Namespace(Binds, "FLinearColor");
 			Binds.BindGlobalFunctionForTarget("FLinearColor MakeRandomColor() no_discard", &FLinearColor::MakeRandomColor);
 			Binds.BindGlobalFunctionForTarget("FLinearColor MakeFromColorTemperature(float32 Temp) no_discard", &FLinearColor::MakeFromColorTemperature);
 			Binds.BindGlobalFunctionForTarget("FLinearColor MakeFromHSV8(uint8 H, uint8 S, uint8 V) no_discard", &FLinearColor::MakeFromHSV8);

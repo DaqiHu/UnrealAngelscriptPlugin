@@ -21,9 +21,9 @@
  * +--------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------+
  * | FTransform USceneComponent.GetComponentTransform() const;                                  | Returns the component world transform.                                                                               |
  * +--------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------+
- * | void USceneComponent.SetRelativeLocation(FVector NewLocation);                             | Sets location relative to the attachment parent, in Unreal units.                                                    |
+ * | void USceneComponent.SetRelativeLocation(const FVector& NewLocation);                      | Sets location relative to the attachment parent, in Unreal units.                                                    |
  * +--------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------+
- * | void USceneComponent.SetRelativeRotation(FRotator NewRotation);                            | Sets rotation relative to the attachment parent, in degrees.                                                        |
+ * | void USceneComponent.SetRelativeRotation(const FRotator& NewRotation);                     | Sets rotation relative to the attachment parent, in degrees.                                                        |
  * +--------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------+
  * | void USceneComponent.SetComponentVelocity(const FVector& Velocity);                        | Sets world-space component velocity in Unreal units per second.                                                      |
  * +--------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------+
@@ -56,10 +56,10 @@ AS_FORCE_LINK const FAngelscriptBind Bind_USceneComponent(
 			"FTransform GetComponentTransform() const",
 			&FAngelscriptUSceneComponentBinds::GetComponentTransform);
 		USceneComponent_.Method(
-			"void SetRelativeLocation(FVector NewLocation)",
+			"void SetRelativeLocation(const FVector& NewLocation)",
 			&FAngelscriptUSceneComponentBinds::SetRelativeLocation);
 		USceneComponent_.Method(
-			"void SetRelativeRotation(FRotator NewRotation)",
+			"void SetRelativeRotation(const FRotator& NewRotation)",
 			&FAngelscriptUSceneComponentBinds::SetRelativeRotation);
 		USceneComponent_.Method(
 			"void SetComponentVelocity(const FVector& Velocity)",
@@ -70,17 +70,6 @@ AS_FORCE_LINK const FAngelscriptBind Bind_USceneComponent(
 		USphereComponent_.Method(
 			"void SetSphereRadius(float32 InSphereRadius, bool bUpdateOverlaps = true)",
 			METHOD_TRIVIAL(USphereComponent, SetSphereRadius));
-
-		auto FScopedMovementUpdate_ = Binds.ValueClassForTarget<FAngelscriptUSceneComponentBinds::FScriptScopedMovementUpdate>(
-			"FScopedMovementUpdate",
-			FBindFlags());
-		FScopedMovementUpdate_.Constructor(
-			"void f(USceneComponent Component)",
-			&FAngelscriptUSceneComponentBinds::ConstructScopedMovementUpdate)
-			.NoDiscard();
-		FScopedMovementUpdate_.Destructor(
-			"void f()",
-			&FAngelscriptUSceneComponentBinds::DestructScopedMovementUpdate);
 
 	#if WITH_EDITOR
 		// The Blueprint version is deprecated; suppress its reflective duplicate so
@@ -93,4 +82,21 @@ AS_FORCE_LINK const FAngelscriptBind Bind_USceneComponent(
 			Function->SetMetaData(TEXT("NotInAngelscript"), TEXT("true"));
 		}
 	#endif
+	});
+
+AS_FORCE_LINK const FAngelscriptBind Bind_FScopedMovementUpdate_TypeInfrastructure(
+	TEXT("FScopedMovementUpdate.TypeInfrastructure"),
+	EAngelscriptBindPhase::TypeDeclarations,
+	[](FAngelscriptBinds& Binds)
+	{
+		auto FScopedMovementUpdate_ = Binds.ValueClassForTarget<FAngelscriptUSceneComponentBinds::FScriptScopedMovementUpdate>(
+			"FScopedMovementUpdate",
+			FBindFlags());
+		FScopedMovementUpdate_.Constructor(
+			"void f(USceneComponent Component)",
+			&FAngelscriptUSceneComponentBinds::ConstructScopedMovementUpdate)
+			.NoDiscard();
+		FScopedMovementUpdate_.Destructor(
+			"void f()",
+			&FAngelscriptUSceneComponentBinds::DestructScopedMovementUpdate);
 	});

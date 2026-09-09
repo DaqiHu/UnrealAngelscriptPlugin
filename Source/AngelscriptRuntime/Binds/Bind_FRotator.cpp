@@ -192,20 +192,20 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRotator(
 		FRotator_.Method("bool ContainsNaN()", METHOD_TRIVIAL(FRotator, ContainsNaN));
 
 		{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FRotator");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FRotator");
 		Binds.BindGlobalVariableForTarget("const FRotator ZeroRotator", &FRotator::ZeroRotator);
-		Binds.BindGlobalFunctionForTarget("float64 NormalizeAxis(float64 Angle) no_discard", FUNC_TRIVIAL(FRotator::NormalizeAxis));
-		Binds.BindGlobalFunctionForTarget("float64 ClampAxis(float64 Angle) no_discard", FUNC_TRIVIAL(FRotator::ClampAxis));
-		Binds.BindGlobalFunctionForTarget("FRotator MakeFromEuler(const FVector& Euler) no_discard", FUNCPR_TRIVIAL(FRotator, FRotator::MakeFromEuler, (const FVector&)));
-		Binds.BindGlobalFunctionForTarget("FRotator MakeFromX(const FVector& XAxis) no_discard", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromX, (const FVector&)));
-		Binds.BindGlobalFunctionForTarget("FRotator MakeFromY(const FVector& YAxis) no_discard", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromY, (const FVector&)));
-		Binds.BindGlobalFunctionForTarget("FRotator MakeFromZ(const FVector& ZAxis) no_discard", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromZ, (const FVector&)));
-		Binds.BindGlobalFunctionForTarget("FRotator MakeFromXY(const FVector& XAxis, const FVector& YAxis) no_discard", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromXY, (const FVector&, const FVector&)));
-		Binds.BindGlobalFunctionForTarget("FRotator MakeFromXZ(const FVector& XAxis, const FVector& ZAxis) no_discard", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromXZ, (const FVector&, const FVector&)));
-		Binds.BindGlobalFunctionForTarget("FRotator MakeFromYX(const FVector& YAxis, const FVector& XAxis) no_discard", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromYX, (const FVector&, const FVector&)));
-		Binds.BindGlobalFunctionForTarget("FRotator MakeFromYZ(const FVector& YAxis, const FVector& ZAxis) no_discard", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromYZ, (const FVector&, const FVector&)));
-		Binds.BindGlobalFunctionForTarget("FRotator MakeFromZX(const FVector& ZAxis, const FVector& XAxis) no_discard", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromZX, (const FVector&, const FVector&)));
-		Binds.BindGlobalFunctionForTarget("FRotator MakeFromZY(const FVector& ZAxis, const FVector& YAxis) no_discard", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromZY, (const FVector&, const FVector&)));
+		Binds.BindGlobalFunctionForTarget("float64 NormalizeAxis(float64 Angle)", FUNC_TRIVIAL(FRotator::NormalizeAxis)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("float64 ClampAxis(float64 Angle)", FUNC_TRIVIAL(FRotator::ClampAxis)).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FRotator MakeFromEuler(const FVector& Euler)", FUNCPR_TRIVIAL(FRotator, FRotator::MakeFromEuler, (const FVector&))).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FRotator MakeFromX(const FVector& XAxis)", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromX, (const FVector&))).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FRotator MakeFromY(const FVector& YAxis)", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromY, (const FVector&))).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FRotator MakeFromZ(const FVector& ZAxis)", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromZ, (const FVector&))).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FRotator MakeFromXY(const FVector& XAxis, const FVector& YAxis)", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromXY, (const FVector&, const FVector&))).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FRotator MakeFromXZ(const FVector& XAxis, const FVector& ZAxis)", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromXZ, (const FVector&, const FVector&))).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FRotator MakeFromYX(const FVector& YAxis, const FVector& XAxis)", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromYX, (const FVector&, const FVector&))).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FRotator MakeFromYZ(const FVector& YAxis, const FVector& ZAxis)", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromYZ, (const FVector&, const FVector&))).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FRotator MakeFromZX(const FVector& ZAxis, const FVector& XAxis)", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromZX, (const FVector&, const FVector&))).NoDiscard();
+		Binds.BindGlobalFunctionForTarget("FRotator MakeFromZY(const FVector& ZAxis, const FVector& YAxis)", FUNCPR_TRIVIAL(FRotator, UKismetMathLibrary::MakeRotFromZY, (const FVector&, const FVector&))).NoDiscard();
 		}
 
 		FRotator_.Method("FVector Vector() const", METHOD_TRIVIAL(FRotator, Vector));

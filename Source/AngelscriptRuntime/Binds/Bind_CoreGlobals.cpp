@@ -14,6 +14,7 @@ namespace
 		const FName OwningModule)
 	{
 		if (!BoundFunction.IsValid()
+			|| BoundFunction.GetFunction() == nullptr
 			|| !BoundFunction.GetTargetEngine().
 				bCollectStaticJITCompatibilityBinds)
 		{

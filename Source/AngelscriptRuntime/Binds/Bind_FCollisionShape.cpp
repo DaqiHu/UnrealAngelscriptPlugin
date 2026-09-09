@@ -121,7 +121,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FCollisionShape(
 		FCollisionShape_.Method("float32 GetCapsuleRadius() const", METHOD_TRIVIAL(FCollisionShape, GetCapsuleRadius));
 		FCollisionShape_.Method("float32 GetCapsuleHalfHeight() const", METHOD_TRIVIAL(FCollisionShape, GetCapsuleHalfHeight));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FCollisionShape");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FCollisionShape");
 		Binds.BindGlobalFunctionForTarget("float32 MinBoxExtent() no_discard", FUNC_TRIVIAL(FCollisionShape::MinBoxExtent));
 		Binds.BindGlobalFunctionForTarget("float32 MinSphereRadius() no_discard", FUNC_TRIVIAL(FCollisionShape::MinSphereRadius));
 		Binds.BindGlobalFunctionForTarget("float32 MinCapsuleRadius() no_discard", FUNC_TRIVIAL(FCollisionShape::MinCapsuleRadius));

@@ -92,7 +92,7 @@ public:
 //------------------------
 // internal
 //-------------------------
-	asCGeneric(asCScriptEngine *engine, asCScriptFunction *sysFunction, void *currentObject, asDWORD *stackPointer, const asSVMCallFrame* Frame = nullptr);
+	asCGeneric(asCScriptEngine *engine, asCScriptFunction *sysFunction, void *currentObject, asDWORD *stackPointer, const asSVMCallFrame* Frame = nullptr, void* Auxiliary = nullptr);
 	virtual ~asCGeneric();
 
 	void *GetReturnPointer();
@@ -100,6 +100,7 @@ public:
 	asCScriptEngine *engine;
 	asCScriptFunction *sysFunction;
 	void *currentObject;
+	void *auxiliary;
 	asDWORD *stackPointer;
 	void *objectRegister;
 

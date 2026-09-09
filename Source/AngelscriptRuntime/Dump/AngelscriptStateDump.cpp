@@ -27,6 +27,8 @@
 
 #include "UObject/UnrealType.h"
 
+#include "as_scriptengine.h"
+
 namespace
 {
 	FString BoolToString(const bool bValue)

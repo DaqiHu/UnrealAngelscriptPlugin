@@ -95,7 +95,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FGuid(
 		FGuid_.Method("FString ToString(EGuidFormats Format) const", METHODPR_TRIVIAL(FString, FGuid, ToString, (EGuidFormats Format) const));
 		FGuid_.Method("uint32 GetTypeHash() const", &FAngelscriptFGuidBinds::Hash);
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FGuid");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FGuid");
 		Binds.BindGlobalFunctionForTarget("FGuid NewGuid()", FUNC_TRIVIAL(FGuid::NewGuid));
 		Binds.BindGlobalFunctionForTarget("bool Parse(const FString& GuidString, FGuid& OutGuid)", FUNCPR_TRIVIAL(bool, FGuid::Parse, (const FString&, FGuid&)));
 		Binds.BindGlobalFunctionForTarget("bool ParseExact(const FString& GuidString, EGuidFormats Format, FGuid& OutGuid)", FUNCPR_TRIVIAL(bool, FGuid::ParseExact, (const FString&, EGuidFormats, FGuid&)));

@@ -25,7 +25,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FCommandLine(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FCommandLine");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FCommandLine");
 		Binds.BindGlobalFunctionForTarget("FString Get()", &FAngelscriptFCommandLineBinds::Get);
 		Binds.BindGlobalFunctionForTarget(
 			"void Parse(const FString& CmdLine, TArray<FString>& OutTokens, TArray<FString>& OutSwitches)",

@@ -498,7 +498,8 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TMap_TypeDeclarations(
 		Flags.bTemplate = true;
 		Flags.TemplateType = "<K,V>";
 		Flags.ExtraFlags = asOBJ_TEMPLATE_SUBTYPE_COVARIANT;
-		Binds.ValueClassForTarget<FScriptMap>("TMap<class K, class V>", Flags);
+		Binds.ValueClassForTarget<FScriptMap>("TMap<class K, class V>", Flags)
+			.ConfigureTemplateContainerForTarget(EAngelscriptTemplateContainerKind::Map);
 
 		FBindFlags IteratorFlags;
 		IteratorFlags.bTemplate = true;
@@ -664,6 +665,9 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TMap_TypeInfrastructure(
 	{
 		auto MapType = MakeShared<FAngelscriptMapType>();
 		Binds.RegisterTypeForTarget(MapType);
+		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptMapIteratorType>());
+		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptMapConstIteratorType>());
+		if (Binds.IsRecording()) return;
 
 		FAngelscriptTypeDatabase* TargetTypeDatabase = &Binds.GetTargetTypeDatabase();
 		Binds.RegisterTypeFinderForTarget([MapType, TargetTypeDatabase](FProperty* Property, FAngelscriptTypeUsage& Usage) -> bool
@@ -686,8 +690,6 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TMap_TypeInfrastructure(
 			return true;
 		});
 
-		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptMapIteratorType>());
-		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptMapConstIteratorType>());
 	});
 
 bool ValidateMapOperations(asITypeInfo* TemplateType, asCString* ErrorMessage)

@@ -2,6 +2,7 @@
 
 #include "Engine/NetSerialization.h"
 #include "AngelscriptBinds.h"
+#include "Core/AngelscriptTypeBindInfoReflection.h"
 #include "AngelscriptEngine.h"
 #include "AngelscriptType.h"
 
@@ -243,6 +244,13 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UStruct_TypeDeclarations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsRecording())
+		{
+			FString Diagnostic;
+			if (!FAngelscriptTypeBindInfoReflection::RecordLoadedDeclarations(*Binds.GetRecordingStore(), Diagnostic, EAngelscriptReflectedDeclarationFilter::Structs))
+				Binds.GetRecordingStore()->ReportFailure(Diagnostic);
+			return;
+		}
 		for (FAngelscriptStructBind& DBBind : Binds.GetTargetBindDatabase().Structs)
 		{
 			UScriptStruct* Struct = FindObject<UScriptStruct>(nullptr, *DBBind.UnrealPath);
@@ -495,6 +503,13 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UStruct_TypeDeclarations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsRecording())
+		{
+			FString Diagnostic;
+			if (!FAngelscriptTypeBindInfoReflection::RecordLoadedDeclarations(*Binds.GetRecordingStore(), Diagnostic, EAngelscriptReflectedDeclarationFilter::Structs))
+				Binds.GetRecordingStore()->ReportFailure(Diagnostic);
+			return;
+		}
 		for (const TObjectPtr<UScriptStruct>& StructPtr : GetOrCaptureUStructTypes(Binds))
 		{
 			UScriptStruct* Struct = StructPtr.Get();
@@ -513,6 +528,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UStruct_TypeInfrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsRecording()) return;
 		for (const TObjectPtr<UScriptStruct>& StructPtr : GetOrCaptureUStructTypes(Binds))
 		{
 			UScriptStruct* Struct = StructPtr.Get();
@@ -527,6 +543,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UStruct_ReflectionBindings(
 	EAngelscriptBindPhase::ReflectionBindings,
 	[](FAngelscriptBinds& TargetBinds)
 	{
+		if (TargetBinds.IsRecording()) return;
 		FAngelscriptTypeDatabase& TargetTypeDatabase = TargetBinds.GetTargetTypeDatabase();
 		FAngelscriptBindDatabase& TargetBindDatabase = TargetBinds.GetTargetBindDatabase();
 		FAngelscriptEngine& TargetEngine = TargetBinds.GetTargetEngine();
@@ -672,3 +689,54 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UStruct_ReflectionBindings(
 		}
 	});
 #endif // AS_USE_BIND_DB
+
+namespace UE::Angelscript::Private
+{
+static void InitializeRecordedStruct(UScriptStruct* Struct, void* Value) { Struct->InitializeStruct(Value); }
+static void DestroyRecordedStruct(UScriptStruct* Struct, void* Value) { Struct->DestroyStruct(Value); }
+static void CopyRecordedStruct(UScriptStruct* Struct, void* Destination, const void* Source) { Struct->CopyScriptStruct(Destination, Source); }
+
+void DescribeReflectedStruct(UScriptStruct* Struct, const FAngelscriptBindRecordingPolicy& Policy, FAngelscriptReflectedTypeRecord& Out)
+{
+	Out.Kind = EAngelscriptReflectedKind::Struct;
+	auto& Declaration = Out.Declaration;
+	Declaration.Name = Struct->GetStructCPPName(); Declaration.Kind = EAngelscriptTypeBindKind::Value; Declaration.UnrealType = Struct;
+	Declaration.NativeSize = Struct->GetCppStructOps() ? Struct->GetCppStructOps()->GetSize() : Struct->GetStructureSize();
+	Declaration.NativeAlignment = Struct->GetMinAlignment(); Declaration.ObjectFlags = asOBJ_VALUE | asOBJ_APP_CLASS;
+	if (Struct->StructFlags & STRUCT_IsPlainOldData) Declaration.ObjectFlags |= asOBJ_POD;
+	Declaration.Source = {TEXT("AngelscriptRuntime"), TEXT("UStruct.TypeDeclarations"), TEXT("Binds/Bind_UStruct.cpp"), __LINE__};
+	Out.Lifetime.Struct = Struct; Out.Lifetime.Initialize = &InitializeRecordedStruct;
+	Out.Lifetime.Destroy = &DestroyRecordedStruct; Out.Lifetime.Copy = &CopyRecordedStruct;
+	Out.Lifetime.bNeedsDestruction = !(Struct->StructFlags & STRUCT_NoDestructor);
+	Out.Lifetime.bHasGCReferences = !!(Struct->StructFlags & STRUCT_AddStructReferencedObjects);
+	TArray<const FStructProperty*> Encountered;
+	for (FProperty* Property = Struct->PropertyLink; Property; Property = Property->PropertyLinkNext)
+		if (Property->ContainsObjectReference(Encountered)) { Out.Lifetime.bHasGCReferences = true; break; }
+	if ((!Policy.bEditor || Policy.bSimulateCooked) && Struct->GetOutermost()->HasAnyPackageFlags(PKG_EditorOnly | PKG_UncookedOnly))
+	{
+		Out.ExclusionReason = TEXT("Struct belongs to an editor-only package."); return;
+	}
+#if !AS_USE_BIND_DB
+	// Reuse the owning provider's native-family and metadata eligibility rule.
+	Out.bEligible = ShouldBindEngineType(Struct) || Struct->GetPathName() == TEXT("/Script/Engine.OverlapResult");
+#else
+	// The new capture reads loaded reflection directly; it never opens the old bind DB.
+	static const TSet<FString> NativeFamilies = {TEXT("FBox"), TEXT("FBox3f"), TEXT("FBoxSphereBounds"), TEXT("FBoxSphereBounds3f"),
+		TEXT("FVector"), TEXT("FVector3f"), TEXT("FQuat"), TEXT("FQuat4f"), TEXT("FTransform"), TEXT("FTransform3f"),
+		TEXT("FRotator"), TEXT("FRotator3f"), TEXT("FLinearColor"), TEXT("FVector2D"), TEXT("FVector2f"),
+		TEXT("FVector4"), TEXT("FVector4f"), TEXT("FIntPoint"), TEXT("FIntVector"), TEXT("FIntVector2"), TEXT("FIntVector4"),
+		TEXT("FRandomStream"), TEXT("FSphere"), TEXT("FSphere3f")};
+	Out.bEligible = !NativeFamilies.Contains(Declaration.Name) && !!(Struct->StructFlags & (STRUCT_NoExport | STRUCT_Native));
+	if (Struct->GetPathName() == TEXT("/Script/Engine.OverlapResult") || Struct->HasMetaData(TEXT("ForceAngelscriptBind"))) {}
+	else if (Struct->HasMetaData(TEXT("NoAutoAngelscriptBind")) || Struct->HasMetaData(TEXT("NotInAngelscript"))) Out.bEligible = false;
+	else if (!Struct->GetBoolMetaData(TEXT("BlueprintType")))
+	{
+		bool HasExposedProperty = false;
+		for (TFieldIterator<FProperty> It(Struct); It; ++It)
+			if (It->HasAnyPropertyFlags(CPF_BlueprintVisible | CPF_Edit | CPF_BlueprintAssignable)) { HasExposedProperty = true; break; }
+		Out.bEligible &= !Struct->GetBoolMetaData(TEXT("NotBlueprintType")) && HasExposedProperty;
+	}
+#endif
+	if (!Out.bEligible) Out.ExclusionReason = TEXT("Struct is owned by an explicit native provider or is excluded by the native reflection policy.");
+}
+}

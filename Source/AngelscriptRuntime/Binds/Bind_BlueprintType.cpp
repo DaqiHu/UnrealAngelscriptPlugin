@@ -1,4 +1,5 @@
 #include "AngelscriptBinds.h"
+#include "Core/AngelscriptTypeBindInfoReflection.h"
 #include "AngelscriptEngine.h"
 #include "AngelscriptType.h"
 #include "ClassGenerator/ASClass.h"
@@ -1069,6 +1070,19 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_ReflectionBindings(
 	EAngelscriptBindPhase::ReflectionBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsRecording())
+		{
+			FString Diagnostic;
+			const TSharedPtr<const FAngelscriptReflectedTypeSnapshot> Snapshot =
+				Binds.GetRecordingStore()->GetReflectedSnapshot();
+			if (!Snapshot.IsValid() || !FAngelscriptTypeBindInfoReflection::RecordFunctions(
+				*Binds.GetRecordingStore(), Snapshot.ToSharedRef(), Diagnostic))
+			{
+				Binds.GetRecordingStore()->ReportFailure(Snapshot.IsValid()
+					? Diagnostic : TEXT("Blueprint reflection bindings require a captured reflected snapshot."));
+			}
+			return;
+		}
 		FAngelscriptScopeTimer Timer(TEXT("blueprinttype bindings"));
 		asIScriptEngine* ScriptEngine = &Binds.GetTargetScriptEngine();
 		FAngelscriptTypeDatabase& TypeDatabase = Binds.GetTargetTypeDatabase();
@@ -1479,6 +1493,19 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_ReflectionBindings(
 	EAngelscriptBindPhase::ReflectionBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsRecording())
+		{
+			FString Diagnostic;
+			const TSharedPtr<const FAngelscriptReflectedTypeSnapshot> Snapshot =
+				Binds.GetRecordingStore()->GetReflectedSnapshot();
+			if (!Snapshot.IsValid() || !FAngelscriptTypeBindInfoReflection::RecordFunctions(
+				*Binds.GetRecordingStore(), Snapshot.ToSharedRef(), Diagnostic))
+			{
+				Binds.GetRecordingStore()->ReportFailure(Snapshot.IsValid()
+					? Diagnostic : TEXT("Blueprint reflection bindings require a captured reflected snapshot."));
+			}
+			return;
+		}
 		FAngelscriptScopeTimer Timer(TEXT("blueprinttype bindings"));
 		asIScriptEngine* ScriptEngine = &Binds.GetTargetScriptEngine();
 		FAngelscriptTypeDatabase& TypeDatabase = Binds.GetTargetTypeDatabase();
@@ -2634,6 +2661,13 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_ReferenceClassDeclaratio
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsRecording())
+		{
+			FString Diagnostic;
+			if (!FAngelscriptTypeBindInfoReflection::RecordLoadedDeclarations(*Binds.GetRecordingStore(), Diagnostic, EAngelscriptReflectedDeclarationFilter::Classes))
+				Binds.GetRecordingStore()->ReportFailure(Diagnostic);
+			return;
+		}
 		for (FAngelscriptClassBind& DBBind : Binds.GetTargetBindDatabase().Classes)
 		{
 			UClass* Class = FindObject<UClass>(nullptr, *DBBind.UnrealPath);
@@ -2707,6 +2741,13 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_ReferenceClassDeclaratio
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsRecording())
+		{
+			FString Diagnostic;
+			if (!FAngelscriptTypeBindInfoReflection::RecordLoadedDeclarations(*Binds.GetRecordingStore(), Diagnostic, EAngelscriptReflectedDeclarationFilter::Classes))
+				Binds.GetRecordingStore()->ReportFailure(Diagnostic);
+			return;
+		}
 		for (const TObjectPtr<UClass>& ClassPtr : GetOrCaptureBlueprintTypeClasses(Binds))
 		{
 			UClass* Class = ClassPtr.Get();
@@ -2730,6 +2771,9 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_StaticClasses(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		// Detached reflected identities are directly usable as class values. The
+		// compatibility StaticClass surface remains a legacy Engine setting.
+		if (Binds.IsRecording()) return;
 		for (const TObjectPtr<UClass>& ClassPtr : GetOrCaptureBlueprintTypeClasses(Binds))
 		{
 			UClass* Class = ClassPtr.Get();
@@ -2755,7 +2799,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TObjectPtr_TypeDeclarations(
 
 		Binds.ValueClassForTarget<TObjectPtr<UObject>>(
 			"TObjectPtr<class T>",
-			Flags);
+			Flags).ConfigureTemplateContainerForTarget(EAngelscriptTemplateContainerKind::ObjectPtr);
 	});
 
 AS_FORCE_LINK const FAngelscriptBind Bind_TSubclassOf_TypeDeclarations(
@@ -2770,7 +2814,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSubclassOf_TypeDeclarations(
 
 		Binds.ValueClassForTarget<TSubclassOf<UObject>>(
 			"TSubclassOf<class T>",
-			Flags);
+			Flags).ConfigureTemplateContainerForTarget(EAngelscriptTemplateContainerKind::SubclassOf);
 	});
 
 AS_FORCE_LINK const FAngelscriptBind Bind_TWeakObjectPtr_TypeDeclarations(
@@ -2785,7 +2829,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TWeakObjectPtr_TypeDeclarations(
 
 		Binds.ValueClassForTarget<TWeakObjectPtr<UObject>>(
 			"TWeakObjectPtr<class T>",
-			Flags);
+			Flags).ConfigureTemplateContainerForTarget(EAngelscriptTemplateContainerKind::WeakObjectPtr);
 	});
 
 AS_FORCE_LINK const FAngelscriptBind Bind_TObjectPtr_MethodSurface(
@@ -2949,6 +2993,9 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_Infrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		// Reflected records already retain their native class adapters. The work
+		// below only populates the mutable legacy TypeDatabase.
+		if (Binds.IsRecording()) return;
 		RegisterBlueprintTypeReferenceClasses(Binds);
 
 		// Register the type used by TSubclassOf.
@@ -3066,3 +3113,67 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_Infrastructure(
 			return Usage.IsValid();
 		});
 	});
+
+namespace UE::Angelscript::Private
+{
+static bool IsEditorClassForRecording(UClass* Class)
+{
+	for (UClass* Current = Class; Current; Current = Current->GetSuperClass())
+	{
+		if (Current->GetOutermost()->HasAnyPackageFlags(PKG_EditorOnly | PKG_UncookedOnly)) return true;
+#if WITH_EDITOR
+		FString Header;
+		if (FSourceCodeNavigation::FindClassHeaderPath(Current, Header))
+		{
+			Header.ReplaceInline(TEXT("\\"), TEXT("/"));
+			if (Header.Contains(TEXT("/Source/Editor/")) || Header.Contains(TEXT("/Plugins/Editor/"))
+				|| Header.Contains(TEXT("/Source/AngelscriptEditor/"))) return true;
+		}
+#endif
+	}
+	return false;
+}
+
+void DescribeReflectedClass(UClass* Class, const FAngelscriptBindRecordingPolicy& Policy, FAngelscriptReflectedTypeRecord& Out)
+{
+	Out.Kind = Class->HasAnyClassFlags(CLASS_Interface) ? EAngelscriptReflectedKind::Interface : EAngelscriptReflectedKind::Class;
+	auto& Declaration = Out.Declaration;
+	Declaration.Name = FAngelscriptType::GetBoundClassName(Class);
+	Declaration.Kind = Out.Kind == EAngelscriptReflectedKind::Interface
+		? EAngelscriptTypeBindKind::Interface : EAngelscriptTypeBindKind::ObjectHandle;
+	Declaration.UnrealType = Class; Declaration.NativeSize = Class->GetStructureSize(); Declaration.NativeAlignment = Class->GetMinAlignment();
+	Declaration.ObjectFlags = asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE;
+	Declaration.Source = {TEXT("AngelscriptRuntime"), TEXT("BlueprintType.ReferenceClasses"), TEXT("Binds/Bind_BlueprintType.cpp"), __LINE__};
+	Out.Lifetime.bHasGCReferences = true;
+	if (Class == UObject::StaticClass()) { Out.bEligible = true; return; }
+	if (!Class->HasAnyClassFlags(CLASS_Native)) { Out.ExclusionReason = TEXT("Only native UE classes are eligible for reflection declarations."); return; }
+	if ((!Policy.bEditor || Policy.bSimulateCooked) && IsEditorClassForRecording(Class))
+	{
+		Out.ExclusionReason = TEXT("Class belongs to an editor-only native module or ancestor."); return;
+	}
+	if (auto* ScriptClass = Cast<UASClass>(Class); ScriptClass && ScriptClass->bIsScriptClass)
+	{
+		Out.ExclusionReason = TEXT("Runtime-generated AngelScript classes are outside the loaded native snapshot."); return;
+	}
+	if (Class->HasMetaData(TEXT("NotInAngelscript"))) { Out.ExclusionReason = TEXT("Class opts out with NotInAngelscript."); return; }
+	if (Class->GetBoolMetaData(TEXT("BlueprintType"))) { Out.bEligible = true; return; }
+	if (Class->HasAnyClassFlags(CLASS_Interface) && Class != UInterface::StaticClass()) { Out.bEligible = true; return; }
+	if (Class->HasMetaData(TEXT("NotBlueprintType"))) { Out.ExclusionReason = TEXT("Class opts out with NotBlueprintType."); return; }
+	for (TFieldIterator<UFunction> It(Class, EFieldIterationFlags::IncludeSuper); It; ++It)
+	{
+		if (It->HasAnyFunctionFlags(FUNC_BlueprintCallable | FUNC_BlueprintEvent)) { Out.bEligible = true; return; }
+	}
+	Out.ExclusionReason = TEXT("Class has no eligible Blueprint type or callable surface.");
+}
+
+void DescribeReflectedDelegate(UFunction* Signature, const FAngelscriptBindRecordingPolicy& Policy, FAngelscriptReflectedTypeRecord& Out)
+{
+	Out.Kind = EAngelscriptReflectedKind::Delegate;
+	Out.Declaration.Name = Signature->GetName();
+	Out.Declaration.Source = {TEXT("AngelscriptRuntime"), TEXT("BlueprintType.ReferenceClasses"), TEXT("Binds/Bind_BlueprintType.cpp"), __LINE__};
+	Out.Lifetime.bHasGCReferences = true;
+	Out.bEligible = (Policy.bEditor && !Policy.bSimulateCooked)
+		|| !Signature->GetOutermost()->HasAnyPackageFlags(PKG_EditorOnly | PKG_UncookedOnly);
+	if (!Out.bEligible) Out.ExclusionReason = TEXT("Delegate signature belongs to an editor-only package.");
+}
+}

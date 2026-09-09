@@ -1,6 +1,7 @@
 #include "Bind_UEnum.h"
 
 #include "AngelscriptBinds.h"
+#include "Core/AngelscriptTypeBindInfoReflection.h"
 #include "AngelscriptEngine.h"
 #include "AngelscriptDocs.h"
 #include "AngelscriptType.h"
@@ -130,6 +131,13 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Enums(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsRecording())
+		{
+			FString Diagnostic;
+			if (!FAngelscriptTypeBindInfoReflection::RecordLoadedDeclarations(*Binds.GetRecordingStore(), Diagnostic, EAngelscriptReflectedDeclarationFilter::Enums))
+				Binds.GetRecordingStore()->ReportFailure(Diagnostic);
+			return;
+		}
 		auto& BindDB = Binds.GetTargetBindDatabase();
 		FAngelscriptEngine& TargetEngine = Binds.GetTargetEngine();
 		Binds.GetTargetEngine().GetScriptEnumTypeLookup().Reset();
@@ -358,3 +366,25 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UEnum(
 		UEnum_.Method("bool ContainsExistingMax() const", METHOD_TRIVIAL(UEnum, ContainsExistingMax));
 		UEnum_.Method("FString GenerateEnumPrefix() const", METHOD_TRIVIAL(UEnum, GenerateEnumPrefix));
 	});
+
+namespace UE::Angelscript::Private
+{
+void DescribeReflectedEnum(UEnum* Enum, const FAngelscriptBindRecordingPolicy& Policy, FAngelscriptReflectedTypeRecord& Out)
+{
+	Out.Kind = EAngelscriptReflectedKind::Enum; Out.Declaration.Kind = EAngelscriptTypeBindKind::Enum;
+	Out.Declaration.Name = Enum->GetName(); Out.Declaration.NativeSize = sizeof(int32); Out.Declaration.NativeAlignment = alignof(int32);
+	Out.Declaration.Source = {TEXT("AngelscriptRuntime"), TEXT("Enums"), TEXT("Binds/Bind_UEnum.cpp"), __LINE__};
+	Out.bEligible = ShouldBindEngineType(Enum);
+	if ((!Policy.bEditor || Policy.bSimulateCooked) && Enum->GetOutermost()->HasAnyPackageFlags(PKG_EditorOnly | PKG_UncookedOnly))
+	{
+		Out.bEligible = false; Out.ExclusionReason = TEXT("Enum belongs to an editor-only package.");
+	}
+	else if (!Out.bEligible) Out.ExclusionReason = TEXT("Enum is owned by an explicit provider or excluded by native reflection policy.");
+	for (int32 Index = 0; Index < Enum->NumEnums(); ++Index)
+	{
+		FString Name = Enum->GetNameByIndex(Index).ToString(); int32 Colon;
+		if (Name.FindLastChar(TEXT(':'), Colon)) Name.RightChopInline(Colon + 1);
+		Out.EnumValues.Emplace(MoveTemp(Name), Enum->GetValueByIndex(Index));
+	}
+}
+}

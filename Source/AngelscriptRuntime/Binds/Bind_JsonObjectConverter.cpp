@@ -36,7 +36,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_JsonObjectConverter(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FJsonObjectConverter");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FJsonObjectConverter");
 
 		const FString StructToStringSignature =
 			"bool UStructToJsonObjectString(const ?&in MaybeStruct, "

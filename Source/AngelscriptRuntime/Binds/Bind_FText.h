@@ -15,7 +15,7 @@ struct FTextType : TAngelscriptCppPropertyType<FTextProperty>
 	bool IsValueEqual(const FAngelscriptTypeUsage& Usage, void* SourcePtr, void* DestinationPtr) const override;
 };
 
-struct FAngelscriptFTextBinds
+struct ANGELSCRIPTRUNTIME_API FAngelscriptFTextBinds
 {
 	static void ConstructDefault(FText* Address);
 	static void ConstructCopy(FText* Address, const FText& Other);
@@ -38,6 +38,7 @@ struct FAngelscriptFTextBinds
 	}
 
 	static FText AsMemory(uint64 NumBytes);
+	static bool TryAddFormatArgument(FFormatOrderedArguments& Arguments, const void* Address, int32 TypeId, FString& Diagnostic);
 	static void GenericTextFormat(asIScriptGeneric* Generic);
 	static FText NamedTextFormat(
 		const FText& Format,

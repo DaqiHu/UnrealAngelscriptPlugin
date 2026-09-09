@@ -111,7 +111,7 @@ namespace
 			.PureConstant(RawValue);
 
 #if WITH_EDITOR
-		if (BoundConstant.IsValid() && Documentation != nullptr)
+		if (!Binds.IsRecording() && BoundConstant.IsValid() && Documentation != nullptr)
 		{
 			FAngelscriptDocs::AddDocumentationForGlobalVariable(
 				Binds.GetTargetEngine(),
@@ -130,6 +130,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_PrimitiveTypes_TypeInfrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsRecording()) return;
 		FAngelscriptTypeDatabase& TypeDatabase = Binds.GetTargetTypeDatabase();
 		const UAngelscriptSettings* ConfigSettings = Binds.GetTargetEngine().ConfigSettings;
 		check(ConfigSettings != nullptr);
@@ -242,8 +243,14 @@ AS_FORCE_LINK const FAngelscriptBind Bind_PrimitiveTypes(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
-		const UAngelscriptSettings* ConfigSettings = Binds.GetTargetEngine().ConfigSettings;
-		check(ConfigSettings != nullptr);
+		const UAngelscriptSettings* ConfigSettings = Binds.IsRecording()
+			? nullptr : Binds.GetTargetEngine().ConfigSettings;
+		const bool bDeprecateDoubleType = Binds.IsRecording()
+			? Binds.GetRecordingStore()->GetPolicy().bDeprecateDoubleType
+			: ConfigSettings->bDeprecateDoubleType;
+		const bool bScriptFloatIsFloat64 = Binds.IsRecording()
+			? Binds.GetRecordingStore()->GetPolicy().bScriptFloatIsFloat64
+			: ConfigSettings->bScriptFloatIsFloat64;
 
 		BindPrimitiveConstant(Binds, "const uint8 MIN_uint8", &AS_MIN_uint8, TEXT("Lowest number a uint8 can hold (0)"));
 		BindPrimitiveConstant(Binds, "const uint16 MIN_uint16", &AS_MIN_uint16, TEXT("Lowest number a uint16 can hold (0)"));
@@ -263,14 +270,14 @@ AS_FORCE_LINK const FAngelscriptBind Bind_PrimitiveTypes(
 		BindPrimitiveConstant(Binds, "const int32 MAX_int32", &AS_MAX_int32, TEXT("Highest number an int32 can hold (2147483647)"));
 		BindPrimitiveConstant(Binds, "const int64 MAX_int64", &AS_MAX_int64, TEXT("Highest number an int64 can hold (9223372036854775807)"));
 
-		if (!ConfigSettings->bDeprecateDoubleType)
+		if (!bDeprecateDoubleType)
 		{
 			BindPrimitiveConstant(Binds, "const float64 MIN_dbl", &AS_MIN_dbl, TEXT("Smallest positive number a double can hold (~0.0000...001)"));
 			BindPrimitiveConstant(Binds, "const float64 MAX_dbl", &AS_MAX_dbl, TEXT("Largest positive number a double can hold (~10^308)"));
 			BindPrimitiveConstant(Binds, "const float64 NAN_dbl", &AS_NAN_dbl, TEXT("Special Not-a-Number value for double floating point"));
 		}
 
-		if (ConfigSettings->bScriptFloatIsFloat64)
+		if (bScriptFloatIsFloat64)
 		{
 			BindPrimitiveConstant(Binds, "const float64 MIN_flt", &AS_MIN_dbl, TEXT("Smallest positive number a float can hold (~0.0000...001)"));
 			BindPrimitiveConstant(Binds, "const float64 MAX_flt", &AS_MAX_dbl, TEXT("Largest positive number a float can hold (~10^308)"));

@@ -330,7 +330,8 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSet_TypeDeclarations(
 		SetFlags.bTemplate = true;
 		SetFlags.TemplateType = "<T>";
 		SetFlags.ExtraFlags = asOBJ_TEMPLATE_SUBTYPE_COVARIANT;
-		Binds.ValueClassForTarget<FScriptSet>("TSet<class T>", SetFlags);
+		Binds.ValueClassForTarget<FScriptSet>("TSet<class T>", SetFlags)
+			.ConfigureTemplateContainerForTarget(EAngelscriptTemplateContainerKind::Set);
 
 		FBindFlags IteratorFlags;
 		IteratorFlags.bTemplate = true;
@@ -444,6 +445,9 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSet_TypeInfrastructure(
 	{
 		auto SetType = MakeShared<FAngelscriptSetType>();
 		Binds.RegisterTypeForTarget(SetType);
+		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptSetIteratorType>());
+		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptSetConstIteratorType>());
+		if (Binds.IsRecording()) return;
 
 		FAngelscriptTypeDatabase* TargetTypeDatabase = &Binds.GetTargetTypeDatabase();
 		Binds.RegisterTypeFinderForTarget([SetType, TargetTypeDatabase](FProperty* Property, FAngelscriptTypeUsage& Usage) -> bool
@@ -461,8 +465,6 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSet_TypeInfrastructure(
 			return true;
 		});
 
-		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptSetIteratorType>());
-		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptSetConstIteratorType>());
 	});
 
 bool ValidateSetOperations(asITypeInfo* TemplateType, asCString* ErrorMessage)

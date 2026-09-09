@@ -90,6 +90,7 @@ int DetectCallingConvention(bool isMethod, const asSFuncPtr &ptr, int callConv, 
 	internal->func      = ptr.ptr.f.func;
 	internal->method = ptr.ptr.m.mthd;
 	internal->caller = caller;
+	internal->auxiliary = auxiliary;
 
 	// Was a compatible calling convention specified?
 	if( internal->func )

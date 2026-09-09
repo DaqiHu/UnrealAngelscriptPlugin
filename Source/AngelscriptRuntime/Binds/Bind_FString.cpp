@@ -477,7 +477,7 @@ static void BindFStringCore(FAngelscriptBinds& Binds)
 
 void FToStringHelper::Register(FAngelscriptBinds& Binds, const FString& TypeName, FToStringHelper::FToStringFunction ToString, bool bImplicitConversion, bool bIsHandleType)
 {
-	Binds.GetTargetToStringList().Add({TypeName, nullptr, ToString, bImplicitConversion, bIsHandleType});
+	Binds.AddToStringEffect(TypeName, ToString, bImplicitConversion, bIsHandleType);
 }
 
 void FToStringHelper::Generic_AppendToString(FString& AppendTo, void* ValuePtr, int TypeId)
@@ -1339,55 +1339,74 @@ static void BindFStringConversion(FAngelscriptBinds& Binds)
 {
 	auto FString_ = Binds.ExistingClassForTarget("FString");
 
-	auto& ToStringList = Binds.GetTargetToStringList();
-
-	for (auto& ToString : ToStringList)
+	// Cross-type conversions are materialized from ordered detached ToString effects.
 	{
-		FString QualifiedType = ToString.TypeName;
-		FString ObjectType = ToString.TypeName;
-
-		if (!ToString.bIsHandleType)
-			QualifiedType += TEXT("&");
-
-
+		TArray<FToStringType> RecordedToStrings;
+		TArray<FToStringType>* ToStringList = nullptr;
+		if (Binds.IsRecording())
 		{
-			FString Decl = FString::Printf(TEXT("FString opAdd(const %s Value) const"), *QualifiedType);
-			FString_.Method(Decl, &FAngelscriptFStringBinds::AddConverted, (void*)ToString.ToString)
-				.PassScriptFunctionAsFirstParam();
+			for (const FAngelscriptBindEffect& Effect : Binds.GetRecordingStore()->GetEffects())
+				if (Effect.Kind == EAngelscriptBindEffectKind::ToString)
+					RecordedToStrings.Add({Effect.Name, nullptr, Effect.ToString, Effect.bImplicitConversion, Effect.bHandleType});
+			ToStringList = &RecordedToStrings;
 		}
-
+		else ToStringList = &Binds.GetTargetToStringList();
+		for (auto& ToString : *ToStringList)
 		{
-			FString Decl = FString::Printf(TEXT("FString& opAddAssign(const %s Value)"), *QualifiedType);
-			FString_.Method(Decl, &FAngelscriptFStringBinds::AddAssignConverted, (void*)ToString.ToString)
-				.PassScriptFunctionAsFirstParam();
-		}
+			FString QualifiedType = ToString.TypeName;
+			FString ObjectType = ToString.TypeName;
 
-		{
-			FString Decl = FString::Printf(TEXT("FString& Append(const %s Value) accept_temporary_this"), *QualifiedType);
-			FString_.Method(Decl, &FAngelscriptFStringBinds::AppendConverted, (void*)ToString.ToString)
-				.PassScriptFunctionAsFirstParam();
-		}
+			if (!ToString.bIsHandleType)
+				QualifiedType += TEXT("&");
 
-		auto* Type = Binds.GetTargetScriptEngine().GetTypeInfoByName(TCHAR_TO_ANSI(*ObjectType));
-		if (Type != nullptr)
-		{
-			ToString.TypeInfo = Type;
-			auto BoundType = Binds.ExistingClassForTarget(Type->GetName());
-			BoundType.Method("FString ToString() const", &FAngelscriptFStringBinds::TypeToString, (void*)ToString.ToString)
-				.PassScriptFunctionAsFirstParam();
-		}
 
-		if (ToString.bImplicitConversion)
-		{
-			FString Decl = FString::Printf(TEXT("void f(const %s Value)"), *QualifiedType);
-			FString_.Constructor(Decl, &FAngelscriptFStringBinds::ConstructConverted, (void*)ToString.ToString)
-				.PassScriptFunctionAsFirstParam();
+			{
+				FString Decl = FString::Printf(TEXT("FString opAdd(const %s Value) const"), *QualifiedType);
+				FString_.Method(Decl, &FAngelscriptFStringBinds::AddConverted, (void*)ToString.ToString)
+					.PassScriptFunctionAsFirstParam();
+			}
+
+			{
+				FString Decl = FString::Printf(TEXT("FString& opAddAssign(const %s Value)"), *QualifiedType);
+				FString_.Method(Decl, &FAngelscriptFStringBinds::AddAssignConverted, (void*)ToString.ToString)
+					.PassScriptFunctionAsFirstParam();
+			}
+
+			{
+				FString Decl = FString::Printf(TEXT("FString& Append(const %s Value) accept_temporary_this"), *QualifiedType);
+				FString_.Method(Decl, &FAngelscriptFStringBinds::AppendConverted, (void*)ToString.ToString)
+					.PassScriptFunctionAsFirstParam();
+			}
+
+			if (Binds.IsRecording())
+			{
+				if (Binds.GetRecordingStore()->GetType(Binds.GetRecordingStore()->FindType(ObjectType)))
+				{
+					auto BoundType = Binds.ExistingClassForTarget(ObjectType);
+					BoundType.Method("FString ToString() const", &FAngelscriptFStringBinds::TypeToString, (void*)ToString.ToString)
+						.PassScriptFunctionAsFirstParam();
+				}
+			}
+			else if (auto* Type = Binds.GetTargetScriptEngine().GetTypeInfoByName(TCHAR_TO_ANSI(*ObjectType)))
+			{
+				ToString.TypeInfo = Type;
+				auto BoundType = Binds.ExistingClassForTarget(Type->GetName());
+				BoundType.Method("FString ToString() const", &FAngelscriptFStringBinds::TypeToString, (void*)ToString.ToString)
+					.PassScriptFunctionAsFirstParam();
+			}
+
+			if (ToString.bImplicitConversion)
+			{
+				FString Decl = FString::Printf(TEXT("void f(const %s Value)"), *QualifiedType);
+				FString_.Constructor(Decl, &FAngelscriptFStringBinds::ConstructConverted, (void*)ToString.ToString)
+					.PassScriptFunctionAsFirstParam();
+			}
 		}
 	}
 
 	// Static conversion
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FString");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FString");
 
 		Binds.BindGlobalFunctionForTarget(
 			"FString Join(const TArray<FString>& StringArray, const FString& Separator) no_discard",
@@ -1404,21 +1423,24 @@ static void BindFStringConversion(FAngelscriptBinds& Binds)
 			"FString ChrN(int32 NumCharacters, int16 Char) no_discard",
 			&FAngelscriptFStringBinds::ChrN);
 
-		Binds.BindGlobalGenericFunctionForTarget(
-			"FString Format(const FString& Format, const ?& Arg0) no_discard",
-			&FAngelscriptFStringBinds::Format);
-		Binds.BindGlobalGenericFunctionForTarget(
-			"FString Format(const FString& Format, const ?& Arg0, const ?& Arg1) no_discard",
-			&FAngelscriptFStringBinds::Format);
-		Binds.BindGlobalGenericFunctionForTarget(
-			"FString Format(const FString& Format, const ?& Arg0, const ?& Arg1, const ?& Arg2) no_discard",
-			&FAngelscriptFStringBinds::Format);
-		Binds.BindGlobalGenericFunctionForTarget(
-			"FString Format(const FString& Format, const ?& Arg0, const ?& Arg1, const ?& Arg2, const ?& Arg3) no_discard",
-			&FAngelscriptFStringBinds::Format);
-		Binds.BindGlobalGenericFunctionForTarget(
-			"FString Format(const FString& Format, const ?& Arg0, const ?& Arg1, const ?& Arg2, const ?& Arg3, const ?& Arg4) no_discard",
-			&FAngelscriptFStringBinds::Format);
+		if (!Binds.IsRecording())
+		{
+			Binds.BindGlobalGenericFunctionForTarget(
+				"FString Format(const FString& Format, const ?& Arg0) no_discard",
+				&FAngelscriptFStringBinds::Format);
+			Binds.BindGlobalGenericFunctionForTarget(
+				"FString Format(const FString& Format, const ?& Arg0, const ?& Arg1) no_discard",
+				&FAngelscriptFStringBinds::Format);
+			Binds.BindGlobalGenericFunctionForTarget(
+				"FString Format(const FString& Format, const ?& Arg0, const ?& Arg1, const ?& Arg2) no_discard",
+				&FAngelscriptFStringBinds::Format);
+			Binds.BindGlobalGenericFunctionForTarget(
+				"FString Format(const FString& Format, const ?& Arg0, const ?& Arg1, const ?& Arg2, const ?& Arg3) no_discard",
+				&FAngelscriptFStringBinds::Format);
+			Binds.BindGlobalGenericFunctionForTarget(
+				"FString Format(const FString& Format, const ?& Arg0, const ?& Arg1, const ?& Arg2, const ?& Arg3, const ?& Arg4) no_discard",
+				&FAngelscriptFStringBinds::Format);
+		}
 
 		// Format specifiers
 		Binds.BindGlobalFunctionForTarget("FString ApplyFormat(int32 Value, const FString& Specifier)", &FAngelscriptFStringBinds::ApplyFormatInt32);
@@ -1433,14 +1455,18 @@ static void BindFStringConversion(FAngelscriptBinds& Binds)
 		Binds.BindGlobalFunctionForTarget("FString ApplyFormat(float32 Value, const FString& Specifier)", &FAngelscriptFStringBinds::ApplyFormatFloat);
 		Binds.BindGlobalFunctionForTarget("FString ApplyFormat(float64 Value, const FString& Specifier)", &FAngelscriptFStringBinds::ApplyFormatDouble);
 		Binds.BindGlobalFunctionForTarget("FString ApplyFormat(const FString& Value, const FString& Specifier)", &FAngelscriptFStringBinds::ApplyFormatString);
-		Binds.BindGlobalFunctionForTarget("FString ApplyFormat(const ?& Value, const FString& Specifier)", &FAngelscriptFStringBinds::ApplyFormatValue);
+		if (!Binds.IsRecording())
+			Binds.BindGlobalFunctionForTarget("FString ApplyFormat(const ?& Value, const FString& Specifier)", &FAngelscriptFStringBinds::ApplyFormatValue);
 	}
 
-	FString_.Method("FString opAdd(const ?& Value) const", &FAngelscriptFStringBinds::AddValue);
-	FString_.Method("FString& opAddAssign(const ?& Value)", &FAngelscriptFStringBinds::AddAssignValue);
-	FString_.Method(
-		"FString& Append(const ?& Value) accept_temporary_this",
-		&FAngelscriptFStringBinds::AppendValue);
+	if (!Binds.IsRecording())
+	{
+		FString_.Method("FString opAdd(const ?& Value) const", &FAngelscriptFStringBinds::AddValue);
+		FString_.Method("FString& opAddAssign(const ?& Value)", &FAngelscriptFStringBinds::AddAssignValue);
+		FString_.Method(
+			"FString& Append(const ?& Value) accept_temporary_this",
+			&FAngelscriptFStringBinds::AppendValue);
+	}
 
 	// Array parsing
 	FString_.Method(
@@ -1473,6 +1499,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FString_TypeInfrastructure(
 	{
 		auto FString_ = Binds.ExistingClassForTarget("FString");
 		Binds.RegisterTypeForTarget(MakeShared<FStringType>());
+		if (Binds.IsRecording()) return;
 		TGetStaticTypeInfo<FString>::SetForEngine(&Binds.GetTargetScriptEngine(), FString_.GetTypeInfo());
 		Binds.GetTargetScriptEngine().RegisterStringFactory("FString", new FAngelscriptFStringFactory());
 	});

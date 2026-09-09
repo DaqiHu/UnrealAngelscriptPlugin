@@ -1,5 +1,8 @@
 #include "AngelscriptEngine.h"
 #include "AngelscriptBinds.h"
+#include "AngelscriptTypeBindInfoRecorder.h"
+#include "AngelscriptTypeBindInfoApply.h"
+#include "AngelscriptTypeBindInfoValidation.h"
 #include "AngelscriptBindDatabase.h"
 #include "AngelscriptSourceProvider.h"
 #include "AngelscriptMemoryTags.h"
@@ -889,6 +892,12 @@ FAngelscriptEngine::FAngelscriptEngine()
 {
 }
 
+FAngelscriptEngine::FAngelscriptEngine(FBindingConstruction)
+	: LifetimeToken(MakeShared<FAngelscriptEngineLifetimeToken>())
+{
+	bBindingOnly = true;
+}
+
 FAngelscriptEngine::FAngelscriptEngine(const FAngelscriptEngineConfig& InConfig, const FAngelscriptEngineDependencies& InDependencies)
 	: LifetimeToken(MakeShared<FAngelscriptEngineLifetimeToken>())
 	, RuntimeConfig(InConfig)
@@ -1104,6 +1113,11 @@ bool FAngelscriptEngine::IsScriptDevelopmentModeForCurrentContext()
 
 FAngelscriptEngine* FAngelscriptEngine::TryGetCurrentEngine()
 {
+	if (asIScriptContext* ActiveContext = asGetActiveContext())
+	{
+		return TryGetByScriptEngine(ActiveContext->GetEngine());
+	}
+
 	if (FAngelscriptEngine* ScopedEngine = FAngelscriptEngineContextStack::Peek())
 	{
 		return ScopedEngine;
@@ -1130,6 +1144,9 @@ FAngelscriptEngine* FAngelscriptEngine::TryGetCurrentEngine()
 namespace
 {
 	uint8 GAngelscriptRuntimeEngineOwnerUserDataKey = 0;
+#if WITH_DEV_AUTOMATION_TESTS
+	uint64 GBindingNativeEngineAllocationCount = 0;
+#endif
 
 	asPWORD GetAngelscriptRuntimeEngineOwnerUserDataType()
 	{
@@ -1152,6 +1169,170 @@ FAngelscriptEngine* FAngelscriptEngine::TryGetByScriptEngine(
 	return Owner != nullptr && Owner->Engine == ScriptEngine
 		? Owner
 		: nullptr;
+}
+
+TUniquePtr<FAngelscriptEngine> FAngelscriptEngine::CreateForBindings(
+	TSharedRef<const FAngelscriptTypeBindInfoStore> Store, FAngelscriptBindingDiagnostic& Diagnostic)
+{
+	Diagnostic = {};
+	const FAngelscriptTypeBindValidationResult Validation =
+		FAngelscriptTypeBindInfoValidation::ValidateSealed(Store);
+	if (!Validation.bValid)
+	{
+		Diagnostic.Stage = Validation.Stage;
+		Diagnostic.Message = Validation.Message;
+		return {};
+	}
+	auto Owner = TUniquePtr<FAngelscriptEngine>(new FAngelscriptEngine(FBindingConstruction{}));
+	Diagnostic.Stage = EAngelscriptBindingStage::Engine;
+	Owner->Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
+	#if WITH_DEV_AUTOMATION_TESTS
+	++GBindingNativeEngineAllocationCount;
+	#endif
+	if (!Owner->Engine)
+	{
+		Diagnostic.Message = TEXT("Could not create the native binding Engine."); return {};
+	}
+	Owner->Engine->SetUserData(Owner.Get(), GetAngelscriptRuntimeEngineOwnerUserDataType());
+	Owner->TypeDatabase = MakeUnique<FAngelscriptTypeDatabase>();
+	Owner->BindState = MakeUnique<FAngelscriptBindState>();
+	Owner->ToStringList = MakeUnique<TArray<FToStringType>>();
+	if (!FAngelscriptTypeBindInfoApply::Install(Store, *static_cast<asCScriptEngine*>(Owner->Engine),
+		Owner->BindingInstallation, Diagnostic.Message, &Diagnostic.Stage)) return {};
+	Diagnostic.Stage = EAngelscriptBindingStage::Members;
+	for (const FAngelscriptBindEffect& Effect : Store->GetEffects())
+	{
+		switch (Effect.Kind)
+		{
+		case EAngelscriptBindEffectKind::ToString:
+		{
+			asITypeInfo* TypeInfo = Owner->Engine->GetTypeInfoByName(TCHAR_TO_ANSI(*Effect.Name));
+			Owner->ToStringList->Add({Effect.Name, TypeInfo, Effect.ToString,
+				Effect.bImplicitConversion, Effect.bHandleType});
+			break;
+		}
+		case EAngelscriptBindEffectKind::SkipFunction:
+			Owner->BindState->SkipBindNames.Add(MakeTuple(FName(*Effect.Name), FName(*Effect.SecondaryName)));
+			break;
+		case EAngelscriptBindEffectKind::SkipClass:
+			Owner->BindState->SkipBindClasses.Add(FName(*Effect.Name));
+			break;
+		case EAngelscriptBindEffectKind::DeprecateFunction:
+#if WITH_EDITOR
+			if (UFunction* Function = FindObject<UFunction>(nullptr, *Effect.Name))
+			{
+				Function->SetMetaData(TEXT("DeprecatedFunction"), TEXT(""));
+				Function->SetMetaData(TEXT("DeprecationMessage"), *Effect.SecondaryName);
+			}
+#endif
+			break;
+		case EAngelscriptBindEffectKind::DirectBindArchitectureProbe:
+#if WITH_DEV_AUTOMATION_TESTS
+			if (Owner->ShouldInjectDirectBindFailureForTesting() || Effect.SecondaryName == TEXT("inject-failure"))
+			{
+				Diagnostic.Message = FString::Printf(TEXT("Finalization provider '%s' at %s:%d rejected fresh Engine publication: injected direct-bind failure."),
+					*Effect.Source.Provider.ToString(), *Effect.Source.File, Effect.Source.Line);
+				return {};
+			}
+			++Owner->BindState->DirectCallbackExecutionCountForTesting;
+#endif
+			break;
+		}
+	}
+	Diagnostic.Stage = EAngelscriptBindingStage::Native;
+	if (!FAngelscriptTypeBindInfoApply::ConnectNative(*Owner->BindingInstallation,
+		*static_cast<asCScriptEngine*>(Owner->Engine), Diagnostic.Message)) return {};
+	Diagnostic.Stage = EAngelscriptBindingStage::Engine;
+	if (!Owner->CreateBindingContext())
+	{
+		Diagnostic.Message = TEXT("Could not create the owned binding Context."); return {};
+	}
+	Owner->bReadyForPublication = true;
+	Diagnostic = {};
+	return Owner;
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+uint64 FAngelscriptEngine::GetBindingNativeEngineAllocationCountForTesting()
+{
+	return GBindingNativeEngineAllocationCount;
+}
+#endif
+
+TUniquePtr<FAngelscriptEngine> FAngelscriptEngine::CreateForBindings(FAngelscriptBindingDiagnostic& Diagnostic)
+{
+	Diagnostic.Stage = EAngelscriptBindingStage::Recording;
+	if (!FAngelscriptBind::PrepareForEngineInitialization(Diagnostic.Message))
+	{
+		return {};
+	}
+
+	FAngelscriptBindRecordingPolicy Policy;
+	Policy.Platform = FName(FPlatformProperties::IniPlatformName());
+	Policy.bRuntimeModuleOnly = true;
+	if (const UAngelscriptSettings* Settings = GetDefault<UAngelscriptSettings>())
+	{
+		Policy.bScriptFloatIsFloat64 = Settings->bScriptFloatIsFloat64;
+		Policy.bDeprecateDoubleType = Settings->bDeprecateDoubleType;
+		Policy.bForceConstWithinDevelopmentOnlyFunctions =
+			Settings->bForceConstWithinDevelopmentOnlyFunctions;
+	}
+	TSharedPtr<const FAngelscriptTypeBindInfoStore> Store;
+	if (!FAngelscriptTypeBindInfoRecorder::Capture(
+		FAngelscriptBind::GetRegisteredCollection(), Policy, Store, Diagnostic.Message))
+	{
+		return {};
+	}
+	if (!Store.IsValid())
+	{
+		Diagnostic.Message = TEXT("The complete Runtime provider capture returned no sealed snapshot.");
+		return {};
+	}
+	return CreateForBindings(Store.ToSharedRef(), Diagnostic);
+}
+
+const FAngelscriptTypeBindInfoInstallation* FAngelscriptEngine::GetBindingInstallation() const { return BindingInstallation.Get(); }
+asIScriptContext* FAngelscriptEngine::GetBindingContext() const { return BindingContexts.IsEmpty() ? nullptr : BindingContexts[0]; }
+int32 FAngelscriptEngine::GetBindingContextCount() const { return BindingContexts.Num(); }
+bool FAngelscriptEngine::IsBindingEngine() const { return bBindingOnly; }
+
+asIScriptContext* FAngelscriptEngine::CreateBindingContext()
+{
+	if (!bBindingOnly || bShuttingDownBindings || !Engine || !BindingInstallation) return nullptr;
+	auto* Context = Engine->CreateContext();
+	if (Context) BindingContexts.Add(Context);
+	return Context;
+}
+
+void FAngelscriptEngine::ShutdownBindings()
+{
+	if (bShuttingDownBindings) return;
+	bShuttingDownBindings = true;
+	bReadyForPublication = false;
+	for (auto* Context : BindingContexts)
+	{
+		Context->Abort();
+		Context->Unprepare();
+		Context->Release();
+	}
+	BindingContexts.Reset();
+	auto* ScriptEngine = Engine;
+	if (ScriptEngine)
+	{
+		// Keep the owner address valid through native cleanup and sidecar release.
+		ScriptEngine->AddRef();
+		ScriptEngine->ShutDownAndRelease();
+	}
+	TypeDatabase.Reset();
+	BindState.Reset();
+	BindingInstallation.Reset();
+	if (ScriptEngine)
+	{
+		ScriptEngine->SetUserData(nullptr, GetAngelscriptRuntimeEngineOwnerUserDataType());
+		Engine = nullptr;
+		ScriptEngine->Release();
+	}
+	LifetimeToken.Reset();
 }
 
 FAngelscriptEngine* FAngelscriptEngine::TryGetGlobalEngine()
@@ -1955,6 +2136,10 @@ void FAngelscriptEngine::WriteRequestedCacheV2ProcessReport() const
 
 void FAngelscriptEngine::Shutdown()
 {
+	if (bBindingOnly)
+	{
+		ShutdownBindings(); return;
+	}
 	bReadyForPublication = false;
 	const bool bStaticJITGeneration = RuntimeConfig.Purpose
 		== EAngelscriptEnginePurpose::StaticJITGeneration;
@@ -7737,6 +7922,13 @@ bool FAngelscriptEngine::CheckFunctionImportsForNewModules(const TArray<TSharedR
 
 void* FAngelscriptEngine::GetCurrentFunctionUserDataPtr()
 {
+	if (auto* Context = static_cast<asCContext*>(asGetActiveContext()))
+	{
+		if (auto* Owner = TryGetByScriptEngine(Context->GetEngine()); Owner && Owner->IsBindingEngine())
+		{
+			return Context->GetNativeCallAuxiliary();
+		}
+	}
 	auto* Function = (asCScriptFunction*)asGetActiveFunction();
 	if (Function == nullptr)
 		return nullptr;

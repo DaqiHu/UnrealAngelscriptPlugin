@@ -119,7 +119,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FColor(
 		FColor_.Method("FLinearColor ReinterpretAsLinear() const", METHOD_TRIVIAL(FColor, ReinterpretAsLinear));
 
 		{
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FColor");
+			FAngelscriptBinds::FNamespace Namespace(Binds, "FColor");
 			Binds.BindGlobalFunctionForTarget("FColor FromHex(const FString& HexString) no_discard", &FColor::FromHex);
 			Binds.BindGlobalFunctionForTarget("FColor MakeRandomColor() no_discard", &FColor::MakeRandomColor);
 			Binds.BindGlobalFunctionForTarget("FColor MakeRedToGreenColorFromScalar(float32 Scalar) no_discard", &FColor::MakeRedToGreenColorFromScalar);

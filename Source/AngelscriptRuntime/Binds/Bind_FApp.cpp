@@ -25,7 +25,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FApp(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FApp");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FApp");
 		Binds.BindGlobalFunctionForTarget("bool CanEverRender()", &FApp::CanEverRender)
 			.NativeFunction("FApp::CanEverRender", true);
 		Binds.BindGlobalFunctionForTarget("FString GetProjectName()", &FAngelscriptFAppBinds::GetProjectName);

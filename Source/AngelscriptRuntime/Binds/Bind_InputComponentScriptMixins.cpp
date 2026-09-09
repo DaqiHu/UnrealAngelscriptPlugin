@@ -23,6 +23,14 @@ AS_FORCE_LINK const FAngelscriptBind Bind_InputComponentScriptMixins(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		// Detached reflection recording already captures these UFUNCTION wrappers and
+		// their generated/reflective dispatch. The legacy function-map overrides are
+		// meaningful only for direct Engine registration.
+		if (Binds.IsRecording())
+		{
+			return;
+		}
+
 		// UHT marks these wrappers overloaded-unresolved. Install the exact signatures
 		// in the selected engine before GeneratedBindings falls back to reflection.
 		Binds.RegisterFunctionBindingForTarget(

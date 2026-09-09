@@ -183,7 +183,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FTimespan(
 		FTimespan_.Method("bool IsZero() const", METHODPR_TRIVIAL(bool, FTimespan, IsZero, () const));
 
 		{
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FTimespan");
+			FAngelscriptBinds::FNamespace Namespace(Binds, "FTimespan");
 			Binds.BindGlobalFunctionForTarget("FTimespan FromDays(float64 Days) no_discard", FUNCPR_TRIVIAL(FTimespan, FTimespan::FromDays, (double)));
 			Binds.BindGlobalFunctionForTarget("FTimespan FromHours(float64 Hours) no_discard", FUNCPR_TRIVIAL(FTimespan, FTimespan::FromHours, (double)));
 			Binds.BindGlobalFunctionForTarget("FTimespan FromMicroseconds(float64 Microseconds) no_discard", FUNCPR_TRIVIAL(FTimespan, FTimespan::FromMicroseconds, (double)));

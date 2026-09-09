@@ -10,6 +10,8 @@ struct FAngelscriptBindRecord
 	const ANSICHAR* SourceFile = nullptr;
 	int32 SourceLine = 0;
 	FAngelscriptBindCallback Callback = nullptr;
+	bool (*Condition)(const FAngelscriptBindRecordingPolicy&) = nullptr;
+	bool bContainsTypeDeclarations = false;
 };
 
 namespace UE::Angelscript::Private
@@ -39,6 +41,7 @@ namespace UE::Angelscript::Private
 		{
 			return bSealed;
 		}
+		const FString& GetCollectionFailureDiagnostic() const { return LateRegistrationFailureDiagnostic; }
 
 	private:
 		TArray<FAngelscriptBindRecord> Records;

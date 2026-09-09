@@ -405,12 +405,34 @@
 
 namespace
 {
+	void ConstructScriptTraceDelegate(FScriptTraceDelegate* Address) { new(Address) FScriptTraceDelegate(); }
+	void DestructScriptTraceDelegate(FScriptTraceDelegate* Address) { Address->~FScriptTraceDelegate(); }
+	void CopyConstructScriptTraceDelegate(FScriptTraceDelegate* Address, const FScriptTraceDelegate& Other) { new(Address) FScriptTraceDelegate(Other); }
+	FScriptTraceDelegate& AssignScriptTraceDelegate(FScriptTraceDelegate* Address, const FScriptTraceDelegate& Other) { return *Address = Other; }
+
+	void ConstructScriptOverlapDelegate(FScriptOverlapDelegate* Address) { new(Address) FScriptOverlapDelegate(); }
+	void DestructScriptOverlapDelegate(FScriptOverlapDelegate* Address) { Address->~FScriptOverlapDelegate(); }
+	void CopyConstructScriptOverlapDelegate(FScriptOverlapDelegate* Address, const FScriptOverlapDelegate& Other) { new(Address) FScriptOverlapDelegate(Other); }
+	FScriptOverlapDelegate& AssignScriptOverlapDelegate(FScriptOverlapDelegate* Address, const FScriptOverlapDelegate& Other) { return *Address = Other; }
+
 	void BindAsyncTraceTypeDeclarations(FAngelscriptBinds& Binds)
 	{
 		auto TraceType = Binds.EnumForTarget("EAsyncTraceType");
 		TraceType["Test"] = EAsyncTraceType::Test;
 		TraceType["Single"] = EAsyncTraceType::Single;
 		TraceType["Multi"] = EAsyncTraceType::Multi;
+
+		auto TraceDelegate = Binds.ValueClassForTarget<FScriptTraceDelegate>("FScriptTraceDelegate", FBindFlags());
+		TraceDelegate.Constructor("void f()", &ConstructScriptTraceDelegate).NativeConstructor("FScriptTraceDelegate", true);
+		TraceDelegate.Destructor("void f()", &DestructScriptTraceDelegate);
+		TraceDelegate.Constructor("void f(const FScriptTraceDelegate& Other)", &CopyConstructScriptTraceDelegate);
+		TraceDelegate.Method("FScriptTraceDelegate& opAssign(const FScriptTraceDelegate& Other)", &AssignScriptTraceDelegate);
+
+		auto OverlapDelegate = Binds.ValueClassForTarget<FScriptOverlapDelegate>("FScriptOverlapDelegate", FBindFlags());
+		OverlapDelegate.Constructor("void f()", &ConstructScriptOverlapDelegate).NativeConstructor("FScriptOverlapDelegate", true);
+		OverlapDelegate.Destructor("void f()", &DestructScriptOverlapDelegate);
+		OverlapDelegate.Constructor("void f(const FScriptOverlapDelegate& Other)", &CopyConstructScriptOverlapDelegate);
+		OverlapDelegate.Method("FScriptOverlapDelegate& opAssign(const FScriptOverlapDelegate& Other)", &AssignScriptOverlapDelegate);
 	}
 
 	void BindTraceHandleTypeDeclarations(FAngelscriptBinds& Binds)
@@ -434,7 +456,6 @@ namespace
 			.NativeConstructor("FTraceHandle", true);
 		TraceHandle.Method("bool opEquals(const FTraceHandle& Other) const", METHODPR_TRIVIAL(bool, FTraceHandle, operator==, (const FTraceHandle&) const));
 		TraceHandle.Method("bool IsValid() const", METHOD_TRIVIAL(FTraceHandle, IsValid));
-		TraceHandle.Property("uint64 _Handle", &FTraceHandle::_Handle);
 		TraceHandle.Property("uint32 _FrameNumber", (size_t)&(((FTraceHandle*)nullptr)->_Data.FrameNumber));
 		TraceHandle.Property("uint32 _Index", (size_t)&(((FTraceHandle*)nullptr)->_Data.Index));
 	}
@@ -460,7 +481,7 @@ namespace
 		TraceDatum.Property("FQuat Rot", &FTraceDatum::Rot);
 		TraceDatum.Property("TArray<FHitResult> OutHits", &FTraceDatum::OutHits);
 		TraceDatum.Property("EAsyncTraceType TraceType", &FTraceDatum::TraceType);
-		TraceDatum.Property("ECollisionChannel TraceChannel", &FOverlapDatum::TraceChannel);
+		TraceDatum.Property("ECollisionChannel TraceChannel", &FTraceDatum::TraceChannel);
 		TraceDatum.Property("uint32 UserData", &FTraceDatum::UserData);
 	}
 
@@ -489,7 +510,7 @@ namespace
 
 	void BindSyncQueries(FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "System");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "System");
 
 		Binds.BindGlobalFunctionForTarget("bool LineTraceTestByChannel(const FVector& Start, const FVector& End, ECollisionChannel TraceChannel, const FCollisionQueryParams& Params = FCollisionQueryParams::DefaultQueryParam, const FCollisionResponseParams& ResponseParam = FCollisionResponseParams::DefaultResponseParam)", &FAngelscriptWorldCollisionBinds::LineTraceTestByChannel);
 		Binds.BindGlobalFunctionForTarget("bool LineTraceTestByObjectType(const FVector& Start, const FVector& End, const FCollisionObjectQueryParams& ObjectQueryParams, const FCollisionQueryParams& Params = FCollisionQueryParams::DefaultQueryParam)", &FAngelscriptWorldCollisionBinds::LineTraceTestByObjectType);
@@ -532,7 +553,7 @@ namespace
 
 	void BindAsyncQueries(FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "System");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "System");
 
 		Binds.BindGlobalFunctionForTarget("FTraceHandle AsyncLineTraceByChannel(EAsyncTraceType InTraceType, const FVector& Start,const FVector& End, ECollisionChannel TraceChannel, const FCollisionQueryParams& Params = FCollisionQueryParams::DefaultQueryParam, const FCollisionResponseParams& ResponseParam = FCollisionResponseParams::DefaultResponseParam, const FScriptTraceDelegate& InDelegate = FScriptTraceDelegate(), uint32 UserData = 0)", &FAngelscriptWorldCollisionBinds::AsyncLineTraceByChannel);
 		Binds.BindGlobalFunctionForTarget("FTraceHandle AsyncLineTraceByObjectType(EAsyncTraceType InTraceType, const FVector& Start,const FVector& End, const FCollisionObjectQueryParams& ObjectQueryParams, const FCollisionQueryParams& Params = FCollisionQueryParams::DefaultQueryParam, const FScriptTraceDelegate& InDelegate = FScriptTraceDelegate(), uint32 UserData = 0 )", &FAngelscriptWorldCollisionBinds::AsyncLineTraceByObjectType);

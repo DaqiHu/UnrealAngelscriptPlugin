@@ -69,6 +69,10 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FInputBindingHandle_Types(
 		Binds.ValueClassForTarget<FEnhancedInputActionEventBinding>("FEnhancedInputActionEventBinding", Flags);
 		Binds.ValueClassForTarget<FEnhancedInputActionValueBinding>("FEnhancedInputActionValueBinding", Flags);
 		Binds.ValueClassForTarget<FInputDebugKeyBinding>("FInputDebugKeyBinding", Flags);
+		Binds.ValueClassForTarget<FEnhancedInputActionHandlerDynamicSignature>(
+			"FEnhancedInputActionHandlerDynamicSignature", Flags);
+		Binds.ValueClassForTarget<FInputDebugKeyHandlerDynamicSignature>(
+			"FInputDebugKeyHandlerDynamicSignature", Flags);
 	});
 
 AS_FORCE_LINK const FAngelscriptBind Bind_FInputBindingHandle(

@@ -166,7 +166,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FunctionLibraryMixins(
 	}
 
 	FAngelscriptBinds::FNamespace RuntimeCurveLinearColorHelperNs(
-		Binds.GetTargetEngine(),
+		Binds,
 		"URuntimeCurveLinearColorMixinLibrary");
 	Binds.BindGlobalFunctionForTarget(
 		"void AddDefaultKey(FRuntimeCurveLinearColor& Target, float32 InTime, FLinearColor InColor)",
@@ -176,7 +176,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FunctionLibraryMixins(
 		});
 
 	FAngelscriptBinds::FNamespace RuntimeFloatCurveHelperNs(
-		Binds.GetTargetEngine(),
+		Binds,
 		"URuntimeFloatCurveMixinLibrary");
 	Binds.BindGlobalFunctionForTarget(
 		"void GetTimeRange(const FRuntimeFloatCurve& Target, float32&out MinTime, float32&out MaxTime)",

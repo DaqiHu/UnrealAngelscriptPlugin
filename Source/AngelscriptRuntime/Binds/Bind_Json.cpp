@@ -234,7 +234,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Json(
 		JsonValue.Method("bool TryGetObject(FJsonObject& Object) const", &FJsonValueContainer::TryGetObject);
 
 		{
-			FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "Json");
+			FAngelscriptBinds::FNamespace Namespace(Binds, "Json");
 			Binds.BindGlobalFunctionForTarget("FString ValueTypeToString(EJsonType T)", &FAngelscriptJsonBinds::ValueTypeToString);
 			Binds.BindGlobalFunctionForTarget("FJsonObject ParseString(const FString& JsonStr)", &FAngelscriptJsonBinds::ParseString);
 		}

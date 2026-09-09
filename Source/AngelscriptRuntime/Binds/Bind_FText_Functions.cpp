@@ -19,49 +19,6 @@ namespace
 		return true;
 	}
 
-	bool AddFormatOrderedArgument(FFormatOrderedArguments& Arguments, const void* Address, const int TypeId)
-	{
-		switch (TypeId & asTYPEID_MASK_SEQNBR)
-		{
-		case asTYPEID_INT8: return AddPrimitiveFormatOrderedArgument<int32, int8>(Arguments, Address);
-		case asTYPEID_INT16: return AddPrimitiveFormatOrderedArgument<int32, int16>(Arguments, Address);
-		case asTYPEID_INT32: return AddPrimitiveFormatOrderedArgument<int32, int32>(Arguments, Address);
-		case asTYPEID_INT64: return AddPrimitiveFormatOrderedArgument<int64, int64>(Arguments, Address);
-		case asTYPEID_UINT8: return AddPrimitiveFormatOrderedArgument<uint32, uint8>(Arguments, Address);
-		case asTYPEID_UINT16: return AddPrimitiveFormatOrderedArgument<uint32, uint16>(Arguments, Address);
-		case asTYPEID_UINT32: return AddPrimitiveFormatOrderedArgument<uint32, uint32>(Arguments, Address);
-		case asTYPEID_UINT64: return AddPrimitiveFormatOrderedArgument<uint64, uint64>(Arguments, Address);
-		case asTYPEID_FLOAT32: return AddPrimitiveFormatOrderedArgument<float, float>(Arguments, Address);
-		case asTYPEID_FLOAT64: return AddPrimitiveFormatOrderedArgument<double, double>(Arguments, Address);
-		default: break;
-		}
-
-		asITypeInfo* TypeInfo = FAngelscriptEngine::Get().Engine->GetTypeInfoById(TypeId);
-		if (ensure(TypeInfo != nullptr))
-		{
-			if ((TypeInfo->GetFlags() & asOBJ_ENUM) != 0)
-			{
-				const uint32 Value = *static_cast<const uint8*>(Address);
-				Arguments.Emplace(FFormatArgumentValue(Value));
-				return true;
-			}
-
-			if (TGetStaticTypeInfo<FText>::IsForEngine(FAngelscriptEngine::Get().GetScriptEngine(), TypeInfo))
-			{
-				Arguments.Emplace(FFormatArgumentValue(*static_cast<const FText*>(Address)));
-				return true;
-			}
-
-			const FString Message = FString::Printf(
-				TEXT("Invalid argument type passed to FText::Format: %s"),
-				ANSI_TO_TCHAR(TypeInfo->GetName()));
-			FAngelscriptEngine::Throw(TCHAR_TO_ANSI(*Message));
-			return false;
-		}
-
-		FAngelscriptEngine::Throw("Invalid argument type passed to FText::Format");
-		return false;
-	}
 }
 
 void FAngelscriptFTextBinds::ConstructDefault(FText* Address)
@@ -117,6 +74,49 @@ FText FAngelscriptFTextBinds::AsMemory(const uint64 NumBytes)
 	return FText::AsMemory(NumBytes);
 }
 
+bool FAngelscriptFTextBinds::TryAddFormatArgument(
+	FFormatOrderedArguments& Arguments, const void* Address, const int32 TypeId, FString& Diagnostic)
+{
+	Diagnostic.Reset();
+	if (!Address)
+	{
+		Diagnostic = TEXT("Invalid argument type passed to FText::Format: value address is null"); return false;
+	}
+	switch (TypeId & asTYPEID_MASK_SEQNBR)
+	{
+	case asTYPEID_INT8: return AddPrimitiveFormatOrderedArgument<int32, int8>(Arguments, Address);
+	case asTYPEID_INT16: return AddPrimitiveFormatOrderedArgument<int32, int16>(Arguments, Address);
+	case asTYPEID_INT32: return AddPrimitiveFormatOrderedArgument<int32, int32>(Arguments, Address);
+	case asTYPEID_INT64: return AddPrimitiveFormatOrderedArgument<int64, int64>(Arguments, Address);
+	case asTYPEID_UINT8: return AddPrimitiveFormatOrderedArgument<uint32, uint8>(Arguments, Address);
+	case asTYPEID_UINT16: return AddPrimitiveFormatOrderedArgument<uint32, uint16>(Arguments, Address);
+	case asTYPEID_UINT32: return AddPrimitiveFormatOrderedArgument<uint32, uint32>(Arguments, Address);
+	case asTYPEID_UINT64: return AddPrimitiveFormatOrderedArgument<uint64, uint64>(Arguments, Address);
+	case asTYPEID_FLOAT32: return AddPrimitiveFormatOrderedArgument<float, float>(Arguments, Address);
+	case asTYPEID_FLOAT64: return AddPrimitiveFormatOrderedArgument<double, double>(Arguments, Address);
+	default: break;
+	}
+	if (TypeId <= 0)
+	{
+		Diagnostic = FString::Printf(TEXT("Invalid argument type passed to FText::Format: type id %d"), TypeId); return false;
+	}
+	asITypeInfo* TypeInfo = FAngelscriptEngine::Get().Engine->GetTypeInfoById(TypeId);
+	if (!TypeInfo)
+	{
+		Diagnostic = FString::Printf(TEXT("Invalid argument type passed to FText::Format: type id %d"), TypeId); return false;
+	}
+	if ((TypeInfo->GetFlags() & asOBJ_ENUM) != 0)
+	{
+		Arguments.Emplace(FFormatArgumentValue(*static_cast<const uint8*>(Address))); return true;
+	}
+	if (TGetStaticTypeInfo<FText>::IsForEngine(FAngelscriptEngine::Get().GetScriptEngine(), TypeInfo))
+	{
+		Arguments.Emplace(FFormatArgumentValue(*static_cast<const FText*>(Address))); return true;
+	}
+	Diagnostic = FString::Printf(TEXT("Invalid argument type passed to FText::Format: %s"), ANSI_TO_TCHAR(TypeInfo->GetName()));
+	return false;
+}
+
 void FAngelscriptFTextBinds::GenericTextFormat(asIScriptGeneric* Generic)
 {
 	const FText& Format = *static_cast<FText*>(Generic->GetArgAddress(0));
@@ -125,7 +125,9 @@ void FAngelscriptFTextBinds::GenericTextFormat(asIScriptGeneric* Generic)
 	FFormatOrderedArguments Arguments;
 	for (int32 Index = 1; bSuccess && Index < Generic->GetArgCount(); ++Index)
 	{
-		bSuccess &= AddFormatOrderedArgument(Arguments, Generic->GetArgAddress(Index), Generic->GetArgTypeId(Index));
+		FString Diagnostic;
+		bSuccess &= TryAddFormatArgument(Arguments, Generic->GetArgAddress(Index), Generic->GetArgTypeId(Index), Diagnostic);
+		if (!bSuccess) FAngelscriptEngine::Throw(TCHAR_TO_ANSI(*Diagnostic));
 	}
 
 	const FText Result = bSuccess ? FText::Format(Format, Arguments) : FText();

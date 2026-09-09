@@ -92,6 +92,11 @@ AS_FORCE_LINK const FAngelscriptBind Bind_ConsoleVariables(
 		Variable_.Method("void SetString(const FString& InValue) const", &FScriptConsoleVariable<FString>::SetString);
 	});
 
+static bool AreConsoleCommandsAvailable(const FAngelscriptBindRecordingPolicy& Policy)
+{
+	return !Policy.bShipping;
+}
+
 AS_FORCE_LINK const FAngelscriptBind Bind_ConsoleCommands(
 	TEXT("Console.Commands"),
 	EAngelscriptBindPhase::ExplicitBindings,
@@ -104,4 +109,5 @@ AS_FORCE_LINK const FAngelscriptBind Bind_ConsoleCommands(
 				&FAngelscriptConsoleBinds::ConstructCommand)
 			.NoDiscard();
 		Command_.Destructor("void f()", &FAngelscriptConsoleBinds::DestructCommand);
-	});
+	},
+	&AreConsoleCommandsAvailable);

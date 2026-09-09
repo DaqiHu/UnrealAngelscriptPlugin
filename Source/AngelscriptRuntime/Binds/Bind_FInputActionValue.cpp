@@ -69,7 +69,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FInputActionValue(
 		Value_.Method("FVector2D GetAxis2D() const", METHOD_TRIVIAL(FInputActionValue, Get<FVector2D>));
 		Value_.Method("FVector GetAxis3D() const", METHOD_TRIVIAL(FInputActionValue, Get<FVector>));
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FInputActionValue");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FInputActionValue");
 		Binds.BindGlobalFunctionForTarget("EInputActionValueType GetValueTypeFromKey(FKey Key)", &FInputActionValue::GetValueTypeFromKey)
 			.NativeFunction("FInputActionValue::GetValueTypeFromKey", true);
 	});

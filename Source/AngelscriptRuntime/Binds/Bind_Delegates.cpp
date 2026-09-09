@@ -704,6 +704,12 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Delegate_Declarations(
 	[](FAngelscriptBinds& Binds)
 	{
 		FAngelscriptScopeTimer Timer(TEXT("delegate declarations"));
+		if (Binds.IsDeclarationOnly())
+		{
+			Binds.ValueClassForTarget<FScriptDelegate>("_FScriptDelegate", {});
+			Binds.ValueClassForTarget<FMulticastScriptDelegate>("_FMulticastScriptDelegate", {});
+			return;
+		}
 
 		auto DelegateInternal = MakeShared<FScriptDelegateType>(Binds.GetTargetBindDatabase());
 		Binds.GetTargetTypeDatabase().ScriptDelegateType = DelegateInternal;
@@ -788,17 +794,14 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Delegates(
 	{
 		FAngelscriptScopeTimer Timer(TEXT("delegate bindings"));
 
-		for (UDelegateFunction* Function : TObjectRange<UDelegateFunction>())
-		{
-			if (!Function->HasAnyFunctionFlags(FUNC_Delegate))
-				continue;
-			if (auto* SparseFunction = Cast<USparseDelegateFunction>(Function))
-				DeclareSparseDelegateOperations(Binds, SparseFunction);
-			else if (Function->HasAnyFunctionFlags(FUNC_MulticastDelegate))
-				DeclareMulticastDelegateOperations(Binds, Function);
-			else
-				DeclareDelegateOperations(Binds, Function);
-		}
+		if (!Binds.IsRecording())
+			for (UDelegateFunction* Function : TObjectRange<UDelegateFunction>())
+			{
+				if (!Function->HasAnyFunctionFlags(FUNC_Delegate)) continue;
+				if (auto* SparseFunction = Cast<USparseDelegateFunction>(Function)) DeclareSparseDelegateOperations(Binds, SparseFunction);
+				else if (Function->HasAnyFunctionFlags(FUNC_MulticastDelegate)) DeclareMulticastDelegateOperations(Binds, Function);
+				else DeclareDelegateOperations(Binds, Function);
+			}
 
 		// A way to look up the delegate signature from an arbitrary script delegate type,
 		// this is used by auto-generated code to bind to generic script delegates.

@@ -249,7 +249,7 @@ void BindBlueprintCallable(
 		}
 
 		// Static functions should be bound as a global function in a namespace
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), Signature.ClassName);
+		FAngelscriptBinds::FNamespace Namespace(Binds, Signature.ClassName);
 		PrimaryBinding = Binds.BindGlobalFunctionDirectForTarget(
 			Signature.Declaration,
 			ASFuncPtr,
@@ -430,7 +430,7 @@ void BindBlueprintCallable_FromPrep(
 			Signature.ModifyScriptFunction(GlobalBinding);
 		}
 
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), Signature.ClassName);
+		FAngelscriptBinds::FNamespace Namespace(Binds, Signature.ClassName);
 		PrimaryBinding = Binds.BindGlobalFunctionDirectForTarget(
 			Signature.Declaration,
 			ASFuncPtr,

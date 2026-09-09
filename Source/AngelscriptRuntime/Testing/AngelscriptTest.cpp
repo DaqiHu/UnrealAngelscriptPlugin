@@ -302,7 +302,7 @@ namespace
 	{
 		{
 			FAngelscriptBinds::FNamespace Namespace(
-				Binds.GetTargetEngine(),
+				Binds,
 				"FAngelscriptTest");
 			Binds.BindGlobalFunctionForTarget(
 				"FAngelscriptTestCommandBuilder Commands()",

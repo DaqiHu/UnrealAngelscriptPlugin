@@ -8,6 +8,7 @@ struct FAngelscriptFPathsBinds
 	static FString GetBaseFilename(const FString& Path, bool bRemovePath);
 	static FString GetPath(const FString& Path);
 	static FString GetPathLeaf(const FString& Path);
+	static bool CollapseRelativeDirectories(FString& Path);
 	static FString ConvertRelativePathToFull(const FString& Path);
 	static FString ConvertRelativePathToFullFromBase(const FString& BasePath, const FString& Path);
 };
@@ -125,7 +126,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FPaths(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
-		FAngelscriptBinds::FNamespace Namespace(Binds.GetTargetEngine(), "FPaths");
+		FAngelscriptBinds::FNamespace Namespace(Binds, "FPaths");
 
 		Binds.BindGlobalFunctionForTarget("FString RootDir()", &FPaths::RootDir);
 		Binds.BindGlobalFunctionForTarget("FString LaunchDir()", &FPaths::LaunchDir);
@@ -163,7 +164,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FPaths(
 		Binds.BindGlobalFunctionForTarget("bool IsUnderDirectory(const FString& InPath, const FString& InDirectory)", &FPaths::IsUnderDirectory);
 		Binds.BindGlobalFunctionForTarget("void NormalizeFilename(FString& InPath)", &FPaths::NormalizeFilename);
 		Binds.BindGlobalFunctionForTarget("void NormalizeDirectoryName(FString& InPath)", &FPaths::NormalizeDirectoryName);
-		Binds.BindGlobalFunctionForTarget("bool CollapseRelativeDirectories(FString& InPath)", &FPaths::CollapseRelativeDirectories);
+		Binds.BindGlobalFunctionForTarget("bool CollapseRelativeDirectories(FString& InPath)", &FAngelscriptFPathsBinds::CollapseRelativeDirectories);
 		Binds.BindGlobalFunctionForTarget("void RemoveDuplicateSlashes(FString& InPath)", FUNCPR(void, FPaths::RemoveDuplicateSlashes, (FString&)));
 		Binds.BindGlobalFunctionForTarget("void MakeStandardFilename(FString& InPath)", FPaths::MakeStandardFilename);
 		Binds.BindGlobalFunctionForTarget("void MakePlatformFilename(FString& InPath)", &FPaths::MakePlatformFilename);
@@ -201,6 +202,11 @@ FString FAngelscriptFPathsBinds::GetPath(const FString& Path)
 FString FAngelscriptFPathsBinds::GetPathLeaf(const FString& Path)
 {
 	return FPaths::GetPathLeaf(Path);
+}
+
+bool FAngelscriptFPathsBinds::CollapseRelativeDirectories(FString& Path)
+{
+	return FPaths::CollapseRelativeDirectories(Path);
 }
 
 FString FAngelscriptFPathsBinds::ConvertRelativePathToFull(const FString& Path)
