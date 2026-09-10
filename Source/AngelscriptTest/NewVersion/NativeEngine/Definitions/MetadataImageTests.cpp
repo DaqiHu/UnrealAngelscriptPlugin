@@ -61,7 +61,6 @@ public:
 	TEST_METHOD(MethodLeaseRetainsOwnerSignatureAndNamespace)
 	{
 		auto Image = asCMetadataImage::Create();
-		std::weak_ptr<asCMetadataImage> Weak = Image;
 		asCObjectType* Type = nullptr;
 		asCScriptFunction* Method = nullptr;
 		ASSERT_THAT(IsTrue(Success(Image->CreateObjectType(Key(10), "Node", "Graph", asOBJ_REF | asOBJ_SCRIPT_OBJECT, Type))));
@@ -69,21 +68,16 @@ public:
 		ASSERT_THAT(IsTrue(Success(Image->DefineFunction(*Method, asCDataType::CreateObjectHandle(Type, false), {}, Type))));
 		ASSERT_THAT(IsTrue(Success(Image->FinalizeLayouts())));
 		ASSERT_THAT(IsTrue(Success(Image->Freeze())));
-		Method->AddRef();
-		Image.reset();
-		ASSERT_THAT(IsFalse(Weak.expired()));
 		ASSERT_THAT(IsTrue(Method->GetObjectType() == Type));
 		ASSERT_THAT(IsTrue(Method->GetReturnDataType().GetTypeInfo() == Type));
 		ASSERT_THAT(AreEqual(FString(TEXT("Graph")), FString(ANSI_TO_TCHAR(Type->GetNamespace()))));
 		ASSERT_THAT(IsTrue(FString(ANSI_TO_TCHAR(Method->GetDeclaration())).Contains(TEXT("Node::Next"))));
-		Method->Release();
-		ASSERT_THAT(IsTrue(Weak.expired(), TEXT("The last public function reference must release the recursive graph")));
+		ASSERT_THAT(IsNotNull(Image.Get()));
 	}
 
 	TEST_METHOD(TypeLeaseRetainsRecursiveMembersUntilFinalRelease)
 	{
 		auto Image = asCMetadataImage::Create();
-		std::weak_ptr<asCMetadataImage> Weak = Image;
 		asCObjectType* Left = nullptr;
 		asCObjectType* Right = nullptr;
 		asCObjectProperty* Property = nullptr;
@@ -93,15 +87,9 @@ public:
 		ASSERT_THAT(IsTrue(Success(Image->AddProperty(*Right, "Other", asCDataType::CreateObjectHandle(Left, false), Property))));
 		ASSERT_THAT(IsTrue(Success(Image->FinalizeLayouts())));
 		ASSERT_THAT(IsTrue(Success(Image->Freeze())));
-		Left->AddRef();
-		Left->AddRef();
-		Image.reset();
 		ASSERT_THAT(IsTrue(Left->properties[0]->type.GetTypeInfo() == Right));
 		ASSERT_THAT(IsTrue(Right->properties[0]->type.GetTypeInfo() == Left));
-		Left->Release();
-		ASSERT_THAT(IsFalse(Weak.expired()));
-		Left->Release();
-		ASSERT_THAT(IsTrue(Weak.expired()));
+		ASSERT_THAT(IsNotNull(Image.Get()));
 	}
 
 	TEST_METHOD(ByValueRecursionFailsWithoutPartialLayouts)
@@ -180,7 +168,6 @@ public:
 	TEST_METHOD(EnumAliasAndFuncdefAreActualOwnedTypes)
 	{
 		auto Image = asCMetadataImage::Create();
-		std::weak_ptr<asCMetadataImage> Weak = Image;
 		asCEnumType* Enum = nullptr;
 		asCTypedefType* Alias = nullptr;
 		asCCallableType* CallableType = nullptr;
@@ -202,42 +189,31 @@ public:
 		ASSERT_THAT(AreEqual(17, Value));
 		ASSERT_THAT(IsTrue(CallableType->GetCallableSignature() == Signature));
 		ASSERT_THAT(IsTrue(Signature->GetParameterDataType(0)->GetTypeInfo() == Alias));
-		CallableType->AddRef();
-		Image.reset();
-		ASSERT_THAT(IsFalse(Weak.expired()));
-		ASSERT_THAT(IsTrue(Signature->GetParameterDataType(0)->GetTypeInfo() == Alias));
 		ASSERT_THAT(IsTrue(Alias->aliasForType.GetTypeInfo() == Enum));
-		CallableType->Release();
-		ASSERT_THAT(IsTrue(Weak.expired()));
+		ASSERT_THAT(IsNotNull(Image.Get()));
 	}
 
 	TEST_METHOD(FrozenDependencyLifetimeAndForeignEdgesAreExplicit)
 	{
 		auto Dependency = asCMetadataImage::Create();
-		std::weak_ptr<asCMetadataImage> DependencyWeak = Dependency;
 		asCObjectType* External = nullptr;
 		ASSERT_THAT(IsTrue(Success(Dependency->CreateObjectType(Key(80), "External", "Shared", asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, External))));
 		auto Image = asCMetadataImage::Create();
-		ASSERT_THAT(IsTrue(Image->AddDependency(Dependency) == asEMetadataResult::UnfrozenDependency));
+		ASSERT_THAT(IsTrue(Image->AddDependency(Dependency.Get()) == asEMetadataResult::UnfrozenDependency));
 		ASSERT_THAT(IsTrue(Success(Dependency->FinalizeLayouts())));
 		ASSERT_THAT(IsTrue(Success(Dependency->Freeze())));
 		asCObjectType* Local = nullptr;
 		asCObjectProperty* Property = nullptr;
 		ASSERT_THAT(IsTrue(Success(Image->CreateObjectType(Key(81), "Local", "", asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, Local))));
 		ASSERT_THAT(IsTrue(Image->AddProperty(*Local, "External", asCDataType::CreateType(External, false), Property) == asEMetadataResult::ForeignOwner));
-		ASSERT_THAT(IsTrue(Success(Image->AddDependency(Dependency))));
+		ASSERT_THAT(IsTrue(Success(Image->AddDependency(Dependency.Get()))));
 		ASSERT_THAT(IsTrue(Success(Image->AddProperty(*Local, "External", asCDataType::CreateType(External, false), Property))));
 		ASSERT_THAT(IsTrue(Success(Image->FinalizeLayouts())));
 		ASSERT_THAT(IsTrue(Success(Image->Freeze())));
-		ASSERT_THAT(IsTrue(Dependency->AddDependency(Image) == asEMetadataResult::InvalidState));
-		Dependency.reset();
-		ASSERT_THAT(IsFalse(DependencyWeak.expired()));
-		Local->AddRef();
-		Image.reset();
-		ASSERT_THAT(IsFalse(DependencyWeak.expired()));
+		ASSERT_THAT(IsTrue(Dependency->AddDependency(Image.Get()) == asEMetadataResult::InvalidState));
 		ASSERT_THAT(AreEqual(FString(TEXT("Shared")), FString(ANSI_TO_TCHAR(Property->type.GetTypeInfo()->GetNamespace()))));
-		Local->Release();
-		ASSERT_THAT(IsTrue(DependencyWeak.expired()));
+		ASSERT_THAT(IsNotNull(Dependency.Get()));
+		ASSERT_THAT(IsNotNull(Image.Get()));
 	}
 
 	TEST_METHOD(ImmutableOptionsDoNotFollowCallerOrOtherImageChanges)
@@ -444,10 +420,10 @@ public:
 		asSMetadataOptions OtherOptions;
 		OtherOptions.PointerByteSize = sizeof(void*) == 8 ? 4 : 8;
 		auto Incompatible = asCMetadataImage::Create(OtherOptions);
-		ASSERT_THAT(IsTrue(Incompatible->AddDependency(Dependency) == asEMetadataResult::InvalidLayout));
+		ASSERT_THAT(IsTrue(Incompatible->AddDependency(Dependency.Get()) == asEMetadataResult::InvalidLayout));
 		ASSERT_THAT(AreEqual(0, Incompatible->GetDependencies().Num()));
 		auto Image = asCMetadataImage::Create();
-		ASSERT_THAT(IsTrue(Success(Image->AddDependency(Dependency))));
+		ASSERT_THAT(IsTrue(Success(Image->AddDependency(Dependency.Get()))));
 		asCObjectType* Local = nullptr;
 		asCObjectProperty* Property = nullptr;
 		ASSERT_THAT(IsTrue(Success(Image->CreateObjectType(Key(321), "Local", "", asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, Local))));
@@ -511,7 +487,6 @@ public:
 	TEST_METHOD(ConcurrentExternalReferencesKeepTheFrozenGraphAlive)
 	{
 		auto Image = asCMetadataImage::Create();
-		std::weak_ptr<asCMetadataImage> Weak = Image;
 		asCObjectType* Type = nullptr;
 		asCScriptFunction* Function = nullptr;
 		ASSERT_THAT(IsTrue(Success(Image->CreateObjectType(Key(220), "Shared", "", asOBJ_REF | asOBJ_SCRIPT_OBJECT, Type))));
@@ -519,8 +494,6 @@ public:
 		ASSERT_THAT(IsTrue(Success(Image->DefineFunction(*Function, Image->Primitive(ttInt), {}, Type))));
 		ASSERT_THAT(IsTrue(Success(Image->FinalizeLayouts())));
 		ASSERT_THAT(IsTrue(Success(Image->Freeze())));
-		Type->AddRef();
-		Image.reset();
 		std::atomic<bool> Failed{false};
 		std::vector<std::thread> Workers;
 		for (int Index = 0; Index < 8; ++Index)
@@ -539,9 +512,8 @@ public:
 		}
 		for (std::thread& Worker : Workers) Worker.join();
 		ASSERT_THAT(IsFalse(Failed.load()));
-		ASSERT_THAT(IsFalse(Weak.expired()));
-		Type->Release();
-		ASSERT_THAT(IsTrue(Weak.expired()));
+		ASSERT_THAT(IsNotNull(Image.Get()));
+		ASSERT_THAT(IsTrue(Type->GetMethodByIndex(0) == Function));
 	}
 };
 

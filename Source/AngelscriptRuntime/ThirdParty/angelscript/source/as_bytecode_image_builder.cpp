@@ -82,12 +82,9 @@ namespace
 	{
 		if (!Image) return nullptr;
 		if (asCTypeInfo* Found = const_cast<asCMetadataImage*>(Image)->FindType(Key)) return Found;
-		for (const std::shared_ptr<asCMetadataImage>& Dependency : Image->GetDependencies())
+		for (asCMetadataImage* Dependency : Image->GetDependencies())
 		{
-			if (Dependency)
-			{
-				if (asCTypeInfo* Found = FindTypeInImageOrDependencies(Dependency.get(), Key)) return Found;
-			}
+			if (asCTypeInfo* Found = FindTypeInImageOrDependencies(Dependency, Key)) return Found;
 		}
 		return nullptr;
 	}

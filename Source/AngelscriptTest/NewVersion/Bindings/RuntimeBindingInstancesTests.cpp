@@ -131,7 +131,7 @@ TEST_CLASS_WITH_FLAGS(Instances, "Angelscript.UnitTest.RuntimeBindings.Container
 		FInstanceFixture F; ASSERT_THAT(IsTrue(F.Record(false, false, false, TEXT("TArray<int>"))));
 		auto* Engine = static_cast<asCScriptEngine*>(F.Owner->Engine);
 		asCObjectType* Type = nullptr; ASSERT_THAT(IsTrue(F.Instance(TEXT("TArray<int>"), Type)));
-		ASSERT_THAT(IsTrue(Type->GetMetadataImage() == F.Owner->GetBindingInstallation()->GetImage().get()));
+		ASSERT_THAT(IsTrue(Type->GetMetadataImage() == F.Owner->GetBindingInstallation()->GetImage()));
 		ASSERT_THAT(IsTrue(Engine->FindMetadataType(Type->GetStableKey()) == Type));
 	}
 
@@ -143,7 +143,7 @@ TEST_CLASS_WITH_FLAGS(Instances, "Angelscript.UnitTest.RuntimeBindings.Container
 		asCObjectType* Type = nullptr; ASSERT_THAT(IsTrue(F.Instance(TEXT("TArray<FString>"), Type)));
 		ASSERT_THAT(IsTrue(Primary->GetState() == Before && Primary->GetState() == asEMetadataImageState::Attached));
 		ASSERT_THAT(AreEqual(ImageCount + 1, Engine->GetRegisteredMetadataImages().Num()));
-		ASSERT_THAT(IsTrue(Type->GetMetadataImage() != Primary.get()));
+		ASSERT_THAT(IsTrue(Type->GetMetadataImage() != Primary));
 	}
 
 	TEST_METHOD(CountedArrayCopyAndDestructionUseElementRecipesExactlyOnce)

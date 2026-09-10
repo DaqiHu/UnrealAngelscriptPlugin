@@ -161,7 +161,7 @@ namespace VMIntegerOpcodeMatrixPrivate
 				Fixture.Image->Primitive(Return),
 				MakeArrayView(Params, ParamCount));
 			if (!Function || !Fixture.FinalizeAndFreeze()) return false;
-			if (Engine.Ptr->RegisterMetadataImage(Fixture.Image) != asEMetadataRegistrationResult::Succeeded) return false;
+			if (Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded) return false;
 			asUINT Slot = 0;
 			if (Builder.AddFunctionRequirement(*Function, Slot) != asEByteCodeImageStatus::Succeeded) return false;
 			return Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), FrameSize, ParameterSize)
@@ -1165,7 +1165,7 @@ public:
 			ASSERT_THAT(IsNotNull(Global));
 			asCScriptFunction* Function = Case.Fixture.DefineFunction(TEXT("PshGPtr"), TEXT(""), asFUNC_SCRIPT, Case.Fixture.Image->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Case.Fixture.FinalizeAndFreeze()));
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(Case.Fixture.Image)));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Fixture.Image))));
 			int32 Value = 42;
 			asPWORD Storage = reinterpret_cast<asPWORD>(&Value);
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Case.Engine.Ptr->BindGlobalStorage(Global->GetStableKey(), &Storage)));
@@ -1320,7 +1320,7 @@ public:
 			ASSERT_THAT(IsNotNull(Global));
 			asCScriptFunction* Function = Case.Fixture.DefineFunction(TEXT("PshG4"), TEXT(""), asFUNC_SCRIPT, Case.Fixture.Image->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Case.Fixture.FinalizeAndFreeze()));
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(Case.Fixture.Image)));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Fixture.Image))));
 			int32 Storage = 42;
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Case.Engine.Ptr->BindGlobalStorage(Global->GetStableKey(), &Storage)));
 			asUINT RunSlot = 0;
@@ -1346,7 +1346,7 @@ public:
 			ASSERT_THAT(IsNotNull(Global));
 			asCScriptFunction* Function = Case.Fixture.DefineFunction(TEXT("SetG4"), TEXT(""), asFUNC_SCRIPT, Case.Fixture.Image->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Case.Fixture.FinalizeAndFreeze()));
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(Case.Fixture.Image)));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Fixture.Image))));
 			int32 Storage = 7;
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Case.Engine.Ptr->BindGlobalStorage(Global->GetStableKey(), &Storage)));
 			asUINT RunSlot = 0;
@@ -1372,7 +1372,7 @@ public:
 			ASSERT_THAT(IsNotNull(Global));
 			asCScriptFunction* Function = Case.Fixture.DefineFunction(TEXT("CpyVtoG4"), TEXT(""), asFUNC_SCRIPT, Case.Fixture.Image->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Case.Fixture.FinalizeAndFreeze()));
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(Case.Fixture.Image)));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Fixture.Image))));
 			int32 Storage = 0;
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Case.Engine.Ptr->BindGlobalStorage(Global->GetStableKey(), &Storage)));
 			asUINT RunSlot = 0;
@@ -1397,7 +1397,7 @@ public:
 			ASSERT_THAT(IsNotNull(Global));
 			asCScriptFunction* Function = Case.Fixture.DefineFunction(TEXT("LdGRdR4"), TEXT(""), asFUNC_SCRIPT, Case.Fixture.Image->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Case.Fixture.FinalizeAndFreeze()));
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(Case.Fixture.Image)));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Fixture.Image))));
 			int32 Storage = 42;
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Case.Engine.Ptr->BindGlobalStorage(Global->GetStableKey(), &Storage)));
 			asUINT RunSlot = 0;
@@ -1420,7 +1420,7 @@ public:
 			ASSERT_THAT(IsNotNull(Global));
 			asCScriptFunction* Function = Case.Fixture.DefineFunction(TEXT("LDG"), TEXT(""), asFUNC_SCRIPT, Case.Fixture.Image->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Case.Fixture.FinalizeAndFreeze()));
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(Case.Fixture.Image)));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Fixture.Image))));
 			int32 Storage = 42;
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Case.Engine.Ptr->BindGlobalStorage(Global->GetStableKey(), &Storage)));
 			asUINT RunSlot = 0;
@@ -1443,7 +1443,7 @@ public:
 			ASSERT_THAT(IsNotNull(Global));
 			asCScriptFunction* Function = Case.Fixture.DefineFunction(TEXT("PGA"), TEXT(""), asFUNC_SCRIPT, Case.Fixture.Image->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Case.Fixture.FinalizeAndFreeze()));
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(Case.Fixture.Image)));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Case.Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Fixture.Image))));
 			int32 Storage = 42;
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Case.Engine.Ptr->BindGlobalStorage(Global->GetStableKey(), &Storage)));
 			asUINT RunSlot = 0;

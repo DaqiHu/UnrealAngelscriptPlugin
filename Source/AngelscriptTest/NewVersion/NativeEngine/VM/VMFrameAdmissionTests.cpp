@@ -252,7 +252,7 @@ public:
 		auto Image = Case.Finish();
 		ASSERT_THAT(IsNotNull(Image.Get()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Case.Definitions.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Definitions.Image))));
 		asCExecutableSnapshot* Snapshot = nullptr;
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();

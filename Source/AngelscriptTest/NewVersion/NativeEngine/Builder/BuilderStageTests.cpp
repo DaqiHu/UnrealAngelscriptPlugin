@@ -287,7 +287,7 @@ namespace AngelscriptBuilderStageTests
 
 		TEST_METHOD(AuthoredAccessPoliciesReachFrozenDefinitionsAndOutliveTheBuilder)
 		{
-			std::shared_ptr<asCMetadataImage> Image;
+			TUniquePtr<asCMetadataImage> Image;
 			asCObjectType* Type = nullptr;
 			asCObjectProperty* Property = nullptr;
 			asCScriptFunction* Method = nullptr;
@@ -296,7 +296,7 @@ namespace AngelscriptBuilderStageTests
 				asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 				const bool Built = Builder.RunThrough();
 				ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
-				Image = Builder.GetDefinitions();
+				Image = Builder.TakeDefinitions();
 				ASSERT_THAT(IsTrue(bool(Image)));
 				for (auto* Candidate : Image->GetTypes())
 					if (Candidate->name == "Item") Type = static_cast<asCObjectType*>(Candidate);
@@ -358,7 +358,7 @@ namespace AngelscriptBuilderStageTests
 			ASSERT_THAT(IsTrue(Builder.RunStage(AS_NAMESPACE_QUALIFIER asEBuilderStage::ASTVerified)));
 			ASSERT_THAT(IsTrue(Builder.GetCompilationSession()->IsASTVerified()));
 			ASSERT_THAT(IsTrue(Builder.RunStage(AS_NAMESPACE_QUALIFIER asEBuilderStage::DefinitionsBuilt)));
-			auto Image = Builder.GetDefinitions();
+			auto Image = Builder.TakeDefinitions();
 			ASSERT_THAT(IsTrue(bool(Image)));
 			ASSERT_THAT(AreEqual(asEMetadataImageState::Building, Image->GetState()));
 			ASSERT_THAT(AreEqual(1, Image->GetTypes().Num()));
@@ -401,7 +401,7 @@ namespace AngelscriptBuilderStageTests
 			const auto* Second = AS_NAMESPACE_QUALIFIER cast<AS_NAMESPACE_QUALIFIER asCFunctionDecl>(Session->Lookup(TEXT("Second"))[0]);
 			ASSERT_THAT(AreEqual(First->GetResolvedSignature(), Second->GetResolvedSignature()));
 			ASSERT_THAT(IsFalse(First->GetStableIdentity() == Second->GetStableIdentity()));
-			auto Image = Builder.GetDefinitions();
+			auto Image = Builder.TakeDefinitions();
 			ASSERT_THAT(IsNotNull(Image->FindFunction(First->GetStableIdentity())));
 			ASSERT_THAT(IsNotNull(Image->FindFunction(Second->GetStableIdentity())));
 			ASSERT_THAT(IsFalse(Image->FindFunction(First->GetStableIdentity()) == Image->FindFunction(Second->GetStableIdentity())));
@@ -602,12 +602,12 @@ namespace AngelscriptBuilderStageTests
 
 		TEST_METHOD(FrozenImageOutlivesTheBuilderAndRetainsIdentityContext)
 		{
-			std::shared_ptr<asCMetadataImage> Image;
+			TUniquePtr<asCMetadataImage> Image;
 			{
 				FInput Input(TEXT("class Kept {};"));
 				asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 				ASSERT_THAT(IsTrue(Builder.RunThrough()));
-				Image = Builder.GetDefinitions();
+				Image = Builder.TakeDefinitions();
 			}
 			ASSERT_THAT(IsTrue(Image->GetIdentityContext().IsValid()));
 			ASSERT_THAT(AreEqual(1, Image->GetTypes().Num()));

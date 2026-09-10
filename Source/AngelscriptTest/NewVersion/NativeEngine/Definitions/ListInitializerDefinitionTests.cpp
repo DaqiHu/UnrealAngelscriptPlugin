@@ -12,7 +12,7 @@ private:
 	struct FFixture
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		std::shared_ptr<asCMetadataImage> Host = asCMetadataImage::Create();
+		TUniquePtr<asCMetadataImage> Host = asCMetadataImage::Create();
 		asCObjectType* Type = nullptr;
 		asCScriptFunction* Factory = nullptr;
 		bool Initialize(bool Generic = false)
@@ -54,7 +54,7 @@ auto Snapshot = MakeShared<asCSourceSnapshot, ESPMode::ThreadSafe>();
 			const auto Input = AngelscriptNativeEngineTest::FSourceInput::FromText(TEXT("List.as"), Text);
 			Snapshot->AddFile(TEXT("List.as"), Input.GetUtf8Bytes()); Snapshot->Freeze();
 			AS_NAMESPACE_QUALIFIER asCSourceManager Sources(Snapshot); asCDiagnosticsEngine Diagnostics(Sources);
-			asSBuilderOptions Options; Options.StableScope = TEXT("list-tests"); Options.TypeContext = Context; Options.Dependencies.Add(Host);
+			asSBuilderOptions Options; Options.StableScope = TEXT("list-tests"); Options.TypeContext = Context; Options.Dependencies.Add(Host.Get());
 			asCBuilder Builder(Snapshot, Diagnostics, Options);
 			if (!Builder.RunThrough()) return false;
 			Lists = 0; Defaults = 0;

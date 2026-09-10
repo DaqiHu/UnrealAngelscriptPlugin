@@ -62,8 +62,8 @@ namespace
 		if (Emitted.Status != asEByteCodeImageStatus::Succeeded || !Emitted.Image.Get()) return false;
 		FNativeEngineOwner Owned;
 		asCScriptEngine* Use = Engine ? Engine : Owned.Ptr;
-		if (Use->RegisterMetadataImage(Builder.GetDefinitions()) != asEMetadataRegistrationResult::Succeeded
-			&& Use->RegisterMetadataImage(Builder.GetDefinitions()) != asEMetadataRegistrationResult::AlreadyRegistered)
+		if (Use->RegisterMetadataImage(Builder.TakeDefinitions()) != asEMetadataRegistrationResult::Succeeded
+			&& Use->RegisterMetadataImage(Builder.TakeDefinitions()) != asEMetadataRegistrationResult::AlreadyRegistered)
 		{
 			return false;
 		}
@@ -195,11 +195,11 @@ public:
 		ResetObjectMarkTrace();
 		FObjectHost Host;
 		ASSERT_THAT(IsTrue(Host.Initialize()));
-		FSourceExecutionInput Input(TEXT("class Box { int Id; Box(int Initial) { Id = Initial; } ~Box() { Host::Mark(Id); } } int Run() { Box A(1); Box B(2); return 0; }"), Host.Fixture.Context, Host.Fixture.Image);
+		FSourceExecutionInput Input(TEXT("class Box { int Id; Box(int Initial) { Id = Initial; } ~Box() { Host::Mark(Id); } } int Run() { Box A(1); Box B(2); return 0; }"), Host.Fixture.Context, Host.Fixture.Image.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Host.Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Host.Mark->GetStableKey(), asFUNCTION(GenericObjectMark), asCALL_GENERIC)));
 		int32 Value = 0;

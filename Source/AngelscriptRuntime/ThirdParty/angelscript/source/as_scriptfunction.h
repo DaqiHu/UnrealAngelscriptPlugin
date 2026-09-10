@@ -594,7 +594,7 @@ private:
 	asCMetadataImage* metadataOwner = nullptr;
 	asSStableKey metadataStableKey;
 	mutable std::mutex metadataReferenceMutex;
-	mutable std::shared_ptr<asCMetadataImage> metadataExternalLease;
+
 	bool metadataSignatureDefined = false;
 	bool metadataCallableSignature = false;
 	asCCallableType* metadataNominalCallableType = nullptr;

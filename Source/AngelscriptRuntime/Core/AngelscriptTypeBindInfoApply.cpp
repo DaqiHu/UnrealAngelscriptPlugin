@@ -1,6 +1,7 @@
 #include "AngelscriptTypeBindInfoApply.h"
 #include "as_scriptengine.h"
 #include "as_objecttype.h"
+#include "as_scriptfunction.h"
 #include "Containers/ScriptArray.h"
 #include "Containers/Map.h"
 #include "Containers/Set.h"
@@ -861,13 +862,97 @@ namespace
 		D.Kind = asEDeclarationIdentityKind::GlobalVariable; D.Name = Name;
 		return Registry.InternDeclaration(D, Out) == asETypeIdentityStatus::Succeeded;
 	}
+	asCScriptEngine* EngineFromAttachedImage(const asCMetadataImage* Image)
+	{
+		if (!Image) return nullptr;
+		for (asCTypeInfo* Type : Image->GetTypes())
+		{
+			if (Type && Type->GetEngine()) return static_cast<asCScriptEngine*>(Type->GetEngine());
+		}
+		for (asCScriptFunction* Function : Image->GetFunctions())
+		{
+			if (Function && Function->GetEngine()) return static_cast<asCScriptEngine*>(Function->GetEngine());
+		}
+		return nullptr;
+	}
+	asEMetadataRegistrationResult BuildPublishedIdMaps(
+		const FAngelscriptTypeBindInfoStore& Store,
+		asCMetadataImage& Image,
+		FAngelscriptTypeBindInfoInstallation* Prepared,
+		TMap<const asCTypeInfo*, int>& TypeIds,
+		TMap<const asCScriptFunction*, int>& FunctionIds)
+	{
+		const auto Types = Store.GetTypes();
+		for (int32 Index = 0; Index < Types.Num(); ++Index)
+		{
+			const FAngelscriptTypeBindInfo& Record = Types[Index];
+			asCTypeInfo* Type = Prepared
+				? Prepared->FindType(Record.Declaration.Name, Record.Declaration.Namespace)
+				: nullptr;
+			if (!Type && Record.Declaration.Kind != EAngelscriptTypeBindKind::Namespace)
+			{
+				for (asCTypeInfo* Candidate : Image.GetTypes())
+				{
+					if (!Candidate) continue;
+					if (FString(UTF8_TO_TCHAR(Candidate->GetName())) == Record.Declaration.Name
+						&& FString(UTF8_TO_TCHAR(Candidate->GetNamespace())) == Record.Declaration.Namespace)
+					{
+						Type = Candidate;
+						break;
+					}
+				}
+			}
+			if (Record.PublishedTypeId > asTYPEID_LAST_PRIMITIVE)
+			{
+				if (!Type) return asEMetadataRegistrationResult::InvalidArgument;
+				TypeIds.Add(Type, Record.PublishedTypeId);
+			}
+			for (int32 MemberIndex = 0; MemberIndex < Record.Members.Num(); ++MemberIndex)
+			{
+				const FAngelscriptTypeBindInfoMember& Member = Record.Members[MemberIndex];
+				if (Member.PublishedFunctionId <= 0) continue;
+				asCScriptFunction* Function = Prepared
+					? Prepared->FindFunction({{&Store, Index}, MemberIndex})
+					: nullptr;
+				FString Head = Member.Declaration;
+				const int32 Paren = Head.Find(TEXT("("));
+				if (Paren != INDEX_NONE) Head.LeftInline(Paren);
+				Head.TrimStartAndEndInline();
+				int32 Space = INDEX_NONE;
+				FString Name = Head;
+				if (Head.FindLastChar(TEXT(' '), Space)) Name = Head.Mid(Space + 1).TrimStartAndEnd();
+				if (!Function && Type)
+				{
+					if (asCObjectType* Object = CastToObjectType(Type))
+					{
+						Function = static_cast<asCScriptFunction*>(Object->GetMethodByName(TCHAR_TO_UTF8(*Name)));
+					}
+				}
+				if (!Function)
+				{
+					for (asCScriptFunction* Candidate : Image.GetFunctions())
+					{
+						if (!Candidate) continue;
+						if (FString(UTF8_TO_TCHAR(Candidate->GetName())) == Name)
+						{
+							Function = Candidate;
+							break;
+						}
+					}
+				}
+				if (!Function) return asEMetadataRegistrationResult::InvalidArgument;
+				FunctionIds.Add(Function, Member.PublishedFunctionId);
+			}
+		}
+		return asEMetadataRegistrationResult::Succeeded;
+	}
 }
 
 bool FAngelscriptTypeBindInfoApply::ConnectNative(const FAngelscriptTypeBindInfoInstallation& Installation,
 	AS_NAMESPACE_QUALIFIER asCScriptEngine& Engine, FString& Diagnostic)
 {
 	Diagnostic.Reset();
-	if (Installation.GetImage()->GetBoundEngine() != &Engine)
+	if (EngineFromAttachedImage(Installation.GetImage()) != &Engine)
 	{
 		Diagnostic = TEXT("Native calls: installation belongs to another engine."); return false;
 	}
@@ -1753,14 +1838,14 @@ bool FAngelscriptTypeBindInfoInstallation::MaterializeTemplateInstance(const FSt
 	asCScriptEngine& Engine, asCObjectType*& OutType, FString& Diagnostic) const
 {
 	OutType = nullptr; Diagnostic.Reset();
-	if (GetImage()->GetBoundEngine() != &Engine)
+	if (EngineFromAttachedImage(GetImage()) != &Engine)
 	{
 		Diagnostic = TEXT("template instance target engine does not own this installation"); return false;
 	}
-	std::shared_ptr<asCMetadataImage> NewImage;
+	TUniquePtr<asCMetadataImage> NewImage;
 	if (!Draft->MaterializeTemplateDeclaration(Declaration, NewImage, OutType, Diagnostic)) return false;
 	if (!BuildTemplateOperations(OutType, Diagnostic)) { OutType = nullptr; return false; }
-	if (NewImage && Engine.RegisterMetadataImage(NewImage) != asEMetadataRegistrationResult::Succeeded)
+	if (NewImage && Engine.RegisterMetadataImage(MoveTemp(NewImage)) != asEMetadataRegistrationResult::Succeeded)
 	{
 		OutType = nullptr; Diagnostic = TEXT("target engine rejected the complete dependent template image"); return false;
 	}
@@ -1890,11 +1975,67 @@ bool FAngelscriptTypeBindInfoApply::Install(TSharedRef<const FAngelscriptTypeBin
 	TUniquePtr<FAngelscriptTypeBindInfoInstallation> Prepared;
 	if (!Prepare(Store, Prepared, Diagnostic, Stage)) return false;
 	if (Stage) *Stage = EAngelscriptBindingStage::Members;
-	if (Engine.RegisterMetadataImage(Prepared->GetImage()) != asEMetadataRegistrationResult::Succeeded)
+	const auto Publish = Store->PublishProcessIds();
+	if (Publish != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded
+		&& Publish != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::AlreadyRegistered)
+	{
+		Diagnostic = TEXT("Members: could not publish process IDs for the binding store."); return false;
+	}
+	if (TUniquePtr<AS_NAMESPACE_QUALIFIER asCMetadataImage> Templates = Prepared->TakeTemplateImage())
+	{
+		const auto TemplateStatus = Engine.RegisterMetadataImage(MoveTemp(Templates));
+		if (TemplateStatus != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded
+			&& TemplateStatus != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::AlreadyRegistered)
+		{
+			Diagnostic = TEXT("Members: target engine rejected the template helper image."); return false;
+		}
+	}
+	TMap<const AS_NAMESPACE_QUALIFIER asCTypeInfo*, int> TypeIds;
+	TMap<const AS_NAMESPACE_QUALIFIER asCScriptFunction*, int> FunctionIds;
+	if (AS_NAMESPACE_QUALIFIER asCMetadataImage* Image = Prepared->GetImage())
+	{
+		const auto MapStatus = BuildPublishedIdMaps(Store.Get(), *Image, Prepared.Get(), TypeIds, FunctionIds);
+		if (MapStatus != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded)
+		{
+			Diagnostic = TEXT("Members: published process IDs could not be mapped onto the frozen image."); return false;
+		}
+	}
+	if (Engine.RegisterMetadataImage(Prepared->TakeImage(), TypeIds, FunctionIds)
+		!= AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded)
 	{
 		Diagnostic = TEXT("Members: target engine rejected the complete frozen image."); return false;
 	}
 	Out = MoveTemp(Prepared);
 	if (Stage) *Stage = EAngelscriptBindingStage::None;
 	return true;
+}
+
+AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult FAngelscriptTypeBindInfoApply::MaterializePublishedTypes(
+	TSharedRef<const FAngelscriptTypeBindInfoStore> Store,
+	AS_NAMESPACE_QUALIFIER asCScriptEngine& Engine,
+	TUniquePtr<AS_NAMESPACE_QUALIFIER asCMetadataImage> Image)
+{
+	if (!Store->IsPublished()) return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidState;
+	TUniquePtr<FAngelscriptTypeBindInfoInstallation> Prepared;
+	FString Diagnostic;
+	if (!Image)
+	{
+		if (!Prepare(Store, Prepared, Diagnostic)) return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidState;
+		if (TUniquePtr<AS_NAMESPACE_QUALIFIER asCMetadataImage> Templates = Prepared->TakeTemplateImage())
+		{
+			const auto Status = Engine.RegisterMetadataImage(MoveTemp(Templates));
+			if (Status != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded
+				&& Status != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::AlreadyRegistered)
+			{
+				return Status;
+			}
+		}
+		Image = Prepared->TakeImage();
+	}
+	if (!Image) return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidArgument;
+	TMap<const AS_NAMESPACE_QUALIFIER asCTypeInfo*, int> TypeIds;
+	TMap<const AS_NAMESPACE_QUALIFIER asCScriptFunction*, int> FunctionIds;
+	const auto MapStatus = BuildPublishedIdMaps(Store.Get(), *Image, Prepared.Get(), TypeIds, FunctionIds);
+	if (MapStatus != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded) return MapStatus;
+	return Engine.RegisterMetadataImage(MoveTemp(Image), TypeIds, FunctionIds);
 }

@@ -58,7 +58,7 @@ public:
 		ASSERT_THAT(IsNull(Function->scriptData));
 		ASSERT_THAT(IsNull(Function->sysFuncIntf));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		TUniquePtr<asCByteCodeImage> Image = MakeReturn42(Function);
 		ASSERT_THAT(IsNotNull(Image.Get()));
 		asCExecutableSnapshot* Snapshot = nullptr;
@@ -98,7 +98,7 @@ public:
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		ASSERT_THAT(IsNull(Add->sysFuncIntf));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Add->GetStableKey(), asFUNCTION(OwnershipGenericAdd), asCALL_GENERIC)));
 		ASSERT_THAT(IsNull(Add->sysFuncIntf));
@@ -138,7 +138,7 @@ public:
 		asCScriptFunction* Function = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		asCContext* Context = static_cast<asCContext*>(Engine.Ptr->CreateContext());
 		ASSERT_THAT(AreNotEqual(0, Context->Prepare(Function)));
 		TUniquePtr<asCByteCodeImage> Image = MakeReturn42(Function);
@@ -166,8 +166,8 @@ public:
 		ASSERT_THAT(IsTrue(FirstFn->GetStableKey() == SecondFn->GetStableKey()));
 		FNativeEngineOwner FirstEngine;
 		FNativeEngineOwner SecondEngine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, FirstEngine.Ptr->RegisterMetadataImage(FirstFixture.Image)));
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, SecondEngine.Ptr->RegisterMetadataImage(SecondFixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, FirstEngine.Ptr->RegisterMetadataImage(MoveTemp(FirstFixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, SecondEngine.Ptr->RegisterMetadataImage(MoveTemp(SecondFixture.Image))));
 		TUniquePtr<asCByteCodeImage> FirstImage = MakeReturn42(FirstFn);
 		TUniquePtr<asCByteCodeImage> SecondImage = MakeReturn42(SecondFn);
 		asCExecutableSnapshot* FirstSnap = nullptr;
@@ -200,7 +200,7 @@ public:
 		asCScriptFunction* Function = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		TUniquePtr<asCByteCodeImage> Good = MakeReturn42(Function);
 		asCExecutableSnapshot* Snapshot = nullptr;
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Good, Snapshot)));
@@ -240,7 +240,7 @@ public:
 			FDetachedDefinitionFixture Fixture;
 			asCScriptFunction* Function = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 			TUniquePtr<asCByteCodeImage> Image = MakeReturn42(Function);
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
 			Held = Snapshot->FindFunction(Function->GetStableKey());

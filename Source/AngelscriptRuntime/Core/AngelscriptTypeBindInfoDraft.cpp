@@ -86,7 +86,7 @@ bool FAngelscriptTypeBindInfoDraft::Create(TSharedRef<const FAngelscriptTypeBind
 		else
 		{
 			asCObjectType* Type = nullptr;
-			auto TargetImage = D.Kind == EAngelscriptTypeBindKind::Template ? Draft->TemplateImage : Draft->Image;
+			asCMetadataImage* TargetImage = D.Kind == EAngelscriptTypeBindKind::Template ? Draft->TemplateImage.Get() : Draft->Image.Get();
 			Status = TargetImage->CreateObjectType(Draft->Nominals[Index], TCHAR_TO_UTF8(*D.Name), TCHAR_TO_UTF8(*D.Namespace), D.ObjectFlags, Type);
 			Draft->Types[Index] = Type;
 			if (Status == asEMetadataResult::Succeeded)
@@ -102,15 +102,14 @@ bool FAngelscriptTypeBindInfoDraft::Create(TSharedRef<const FAngelscriptTypeBind
 		}
 		if (Status != asEMetadataResult::Succeeded)
 			return DraftFailure(D.Source, D.Name, TEXT("invalid native type definition or alignment"), Diagnostic);
-		auto FactsImage = D.Kind == EAngelscriptTypeBindKind::Template ? Draft->TemplateImage : Draft->Image;
 		if (D.Kind != EAngelscriptTypeBindKind::Template
-			&& FactsImage->SetTypeDeclarationFacts(*Draft->Types[Index], Nominal.Kind, Nominal.GenericArity) != asEMetadataResult::Succeeded)
+			&& Draft->Image->SetTypeDeclarationFacts(*Draft->Types[Index], Nominal.Kind, Nominal.GenericArity) != asEMetadataResult::Succeeded)
 			return DraftFailure(D.Source, D.Name, TEXT("invalid declaration facts"), Diagnostic);
 	}
 	if (Draft->TemplateImage->FinalizeLayouts() != asEMetadataResult::Succeeded
 		|| Draft->TemplateImage->Freeze() != asEMetadataResult::Succeeded
 		|| !Draft->TemplateImage->ValidateFrozenDefinitions()
-		|| Draft->Image->AddDependency(Draft->TemplateImage) != asEMetadataResult::Succeeded)
+		|| Draft->Image->AddDependency(Draft->TemplateImage.Get()) != asEMetadataResult::Succeeded)
 	{
 		Diagnostic = TEXT("Layouts: template declarations could not be frozen as a dependency."); return false;
 	}
@@ -253,8 +252,9 @@ asCTypeInfo* FAngelscriptTypeBindInfoDraft::FindTypeByKey(const asSStableKey& Ke
 {
 	if (Key.IsZero()) return nullptr;
 	if (Image) if (auto* Type = Image->FindType(Key)) return Type;
+	if (ImageView) if (auto* Type = ImageView->FindType(Key)) return Type;
 	if (TemplateImage) if (auto* Type = TemplateImage->FindType(Key)) return Type;
-	for (const auto& Late : LateImages) if (auto* Type = Late->FindType(Key)) return Type;
+	for (asCMetadataImage* Late : LateImages) if (Late) if (auto* Type = Late->FindType(Key)) return Type;
 	return nullptr;
 }
 
@@ -270,11 +270,11 @@ const FAngelscriptTypeBindDeclaration* FAngelscriptTypeBindInfoDraft::FindDeclar
 
 bool FAngelscriptTypeBindInfoDraft::ResolveTypeUse(const asSStableKey& Key, asCDataType& Out, FString& Diagnostic)
 {
-	return ResolveTypeUseInImage(Key, Image, Out, Diagnostic);
+	return ResolveTypeUseInImage(Key, Image.Get(), Out, Diagnostic);
 }
 
 bool FAngelscriptTypeBindInfoDraft::ResolveTypeUseInImage(const asSStableKey& Key,
-	const std::shared_ptr<asCMetadataImage>& Target, asCDataType& Out, FString& Diagnostic)
+	asCMetadataImage* Target, asCDataType& Out, FString& Diagnostic)
 {
 	Out = {}; Diagnostic.Reset();
 	if (!Target || Target->GetState() != asEMetadataImageState::Building)
@@ -381,9 +381,9 @@ bool FAngelscriptTypeBindInfoDraft::ResolveTypeUseInImage(const asSStableKey& Ke
 }
 
 bool FAngelscriptTypeBindInfoDraft::MaterializeTemplateDeclaration(const FString& Declaration,
-	std::shared_ptr<asCMetadataImage>& OutImage, asCObjectType*& OutType, FString& Diagnostic)
+	TUniquePtr<asCMetadataImage>& OutImage, asCObjectType*& OutType, FString& Diagnostic)
 {
-	OutImage.reset(); OutType = nullptr; Diagnostic.Reset();
+	OutImage.Reset(); OutType = nullptr; Diagnostic.Reset();
 	asSBindingDeclarationContext Environment; Environment.StableScope = StableScope;
 	asSBindingDeclaration Parsed; asSBindingDeclarationDiagnostic Error;
 	if (!asCBindingDeclarationParser::Parse(Declaration, Environment, Context.Get(),
@@ -401,11 +401,11 @@ bool FAngelscriptTypeBindInfoDraft::MaterializeTemplateDeclaration(const FString
 	}
 	auto Late = asCMetadataImage::Create(Image->GetOptions());
 	if (Late->SetIdentityContext(Context) != asEMetadataResult::Succeeded
-		|| Late->AddDependency(Image) != asEMetadataResult::Succeeded)
+		|| Late->AddDependency(Image.Get()) != asEMetadataResult::Succeeded)
 	{
 		Diagnostic = TEXT("could not create a dependent template image"); return false;
 	}
-	for (const auto& Prior : LateImages)
+	for (asCMetadataImage* Prior : LateImages)
 	{
 		if (Late->AddDependency(Prior) != asEMetadataResult::Succeeded)
 		{
@@ -413,7 +413,7 @@ bool FAngelscriptTypeBindInfoDraft::MaterializeTemplateDeclaration(const FString
 		}
 	}
 	asCDataType Type;
-	if (!ResolveTypeUseInImage(Parsed.Type, Late, Type, Diagnostic)) return false;
+	if (!ResolveTypeUseInImage(Parsed.Type, Late.Get(), Type, Diagnostic)) return false;
 	OutType = CastToObjectType(Type.GetTypeInfo());
 	if (!OutType || !OutType->GetMetadataTemplateDefinition()
 		|| Late->FinalizeLayouts() != asEMetadataResult::Succeeded
@@ -421,5 +421,7 @@ bool FAngelscriptTypeBindInfoDraft::MaterializeTemplateDeclaration(const FString
 	{
 		OutType = nullptr; Diagnostic = TEXT("dependent template image failed complete definition validation"); return false;
 	}
-	LateImages.Add(Late); OutImage = MoveTemp(Late); return true;
+	LateImages.Add(Late.Get());
+	OutImage = MoveTemp(Late);
+	return true;
 }

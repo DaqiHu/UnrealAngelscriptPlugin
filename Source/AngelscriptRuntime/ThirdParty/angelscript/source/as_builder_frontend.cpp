@@ -30,7 +30,7 @@ class asCBuilderState
 		TArray<asSSemanticSourceInput> Inputs;
 		TArray<asSDirectiveProcessResult> Preprocessed;
 		TUniquePtr<asCCompilationSession> Session;
-		std::shared_ptr<asCMetadataImage> Definitions;
+		TUniquePtr<asCMetadataImage> Definitions;
 		asEBuilderStage Stage = asEBuilderStage::SourceReady;
 		TArray<asSBuilderStageResult> Results;
 
@@ -159,7 +159,7 @@ class asCBuilderState
 			Writer->Close();
 			Results.Add(MoveTemp(Result));
 			Stage = Success ? Attempt : asEBuilderStage::Failed;
-			if (!Success) Definitions.reset();
+			if (!Success) Definitions.Reset();
 			return Success;
 		}
 	};
@@ -210,9 +210,14 @@ TConstArrayView<asSSemanticSourceInput> asCBuilder::GetLexedSources() const
 	return frontendState ? MakeArrayView(frontendState->Inputs) : TConstArrayView<asSSemanticSourceInput>{};
 }
 
-std::shared_ptr<asCMetadataImage> asCBuilder::GetDefinitions() const
+asCMetadataImage* asCBuilder::GetDefinitions() const
 {
-	return frontendState ? frontendState->Definitions : nullptr;
+	return frontendState ? frontendState->Definitions.Get() : nullptr;
+}
+
+TUniquePtr<asCMetadataImage> asCBuilder::TakeDefinitions()
+{
+	return frontendState ? MoveTemp(frontendState->Definitions) : nullptr;
 }
 
 bool asCBuilder::RunThrough(asEBuilderStage Target)
@@ -313,7 +318,7 @@ if (!frontendState || Target >= asEBuilderStage::Failed || uint8(Target) != uint
 		Success = MetadataStatus.GetValue() == asEMetadataResult::Succeeded;
 		if (Success && State.Session)
 		{
-			State.Session->BindFrozenDefinitions(State.Definitions.get());
+			State.Session->BindFrozenDefinitions(State.Definitions.Get());
 		}
 		Text = State.DefinitionText();
 		break;

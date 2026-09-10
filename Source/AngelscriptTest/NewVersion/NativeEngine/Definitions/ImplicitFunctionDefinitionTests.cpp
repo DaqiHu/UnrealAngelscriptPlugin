@@ -13,7 +13,7 @@ private:
 	struct FFixture
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		std::shared_ptr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
 		AS_NAMESPACE_QUALIFIER asSStableKey Void, Int, EnclosingKey;
 		asCScriptFunction* Enclosing = nullptr;
 		bool Initialize()
@@ -59,10 +59,10 @@ public:
 		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
 		asCScriptEngine* Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Fixture.Image) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
 		asCScriptFunction* Retained = Fixture.Enclosing;
 		ASSERT_THAT(IsTrue(Engine->FindMetadataFunction(Fixture.EnclosingKey) == Retained));
-		Fixture.Image.reset();
+		Fixture.Image.Reset();
 		ASSERT_THAT(IsTrue(Retained->GetStableKey() == Fixture.EnclosingKey && Retained->name == "Enclosing"));
 	}
 	TEST_METHOD(ClassDefaultHasAnOwnerButIsNotAnOrdinaryMethod)

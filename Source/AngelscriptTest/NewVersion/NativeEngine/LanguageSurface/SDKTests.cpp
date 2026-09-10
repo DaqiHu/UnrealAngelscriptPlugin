@@ -38,7 +38,7 @@ namespace SDKSurfaceTests
   }
   bool Install(asCScriptEngine& E)
   {
-   return E.RegisterMetadataImage(Fixture.Image) == asEMetadataRegistrationResult::Succeeded
+   return E.RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded
     && E.BindNativeFunction(MarkFn->GetStableKey(), asFUNCTION(Mark), asCALL_GENERIC) == asEByteCodeLinkStatus::Succeeded
     && E.BindNativeFunction(PauseFn->GetStableKey(), asFUNCTION(Pause), asCALL_GENERIC) == asEByteCodeLinkStatus::Succeeded
     && E.BindNativeFunction(AddFn->GetStableKey(), asFUNCTION(Add), asCALL_GENERIC) == asEByteCodeLinkStatus::Succeeded;
@@ -86,7 +86,7 @@ public:
   auto Emitted = EmitFromSession(Builder);
   ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::Succeeded, Emitted.EmissionStatus));
   FNativeEngineOwner Engine;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.GetDefinitions())));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
   asCExecutableSnapshot* Snapshot = nullptr;
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
   ON_SCOPE_EXIT { Snapshot->Release(); };
@@ -101,17 +101,17 @@ public:
  TEST_METHOD(FrozenProviderAndGenericCallSurviveFailedCandidate)
  {
   SDKSurfaceTests::FHost Host; ASSERT_THAT(IsTrue(Host.Initialize()));
-  FSourceExecutionInput Input(TEXT("int Run(){return Host::Add(20,22);}"), Host.Fixture.Context, Host.Fixture.Image);
+  FSourceExecutionInput Input(TEXT("int Run(){return Host::Add(20,22);}"), Host.Fixture.Context, Host.Fixture.Image.Get());
   asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
   ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
   auto Emitted = EmitFromSession(Builder); ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::Succeeded, Emitted.EmissionStatus));
   FNativeEngineOwner Engine; ASSERT_THAT(IsTrue(Host.Install(*Engine.Ptr)));
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.GetDefinitions())));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
   asCExecutableSnapshot* Snapshot = nullptr;
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
   ON_SCOPE_EXIT { Snapshot->Release(); };
   FNativeEngineOwner MissingProvider;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::ForeignEngine, MissingProvider.Ptr->RegisterMetadataImage(Builder.GetDefinitions())));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::ForeignEngine, MissingProvider.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
   asCExecutableSnapshot* Rejected = nullptr;
   ASSERT_THAT(IsTrue(MissingProvider.Ptr->LinkByteCodeImage(*Emitted.Image, Rejected) != asEByteCodeLinkStatus::Succeeded));
   ASSERT_THAT(IsNull(Rejected));
@@ -127,12 +127,12 @@ public:
  TEST_METHOD(HostContextSuspendResumeAbortAndRuntimeFaultKeepCleanup)
  {
   SDKSurfaceTests::FHost Host; ASSERT_THAT(IsTrue(Host.Initialize()));
-  FSourceExecutionInput Input(TEXT("class Box { Box(){} ~Box(){Host::Mark();} } int Run(){Box Hold(); Host::Pause(); return Host::Add(20,22);} int Fail(){Box Hold(); int Zero=0; return 1/Zero;} int Recovery(){return 97;}"), Host.Fixture.Context, Host.Fixture.Image);
+  FSourceExecutionInput Input(TEXT("class Box { Box(){} ~Box(){Host::Mark();} } int Run(){Box Hold(); Host::Pause(); return Host::Add(20,22);} int Fail(){Box Hold(); int Zero=0; return 1/Zero;} int Recovery(){return 97;}"), Host.Fixture.Context, Host.Fixture.Image.Get());
   asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
   ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
   auto Emitted = EmitFromSession(Builder); ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::Succeeded, Emitted.EmissionStatus));
   FNativeEngineOwner Engine; ASSERT_THAT(IsTrue(Host.Install(*Engine.Ptr)));
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.GetDefinitions())));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
   asCExecutableSnapshot* Snapshot = nullptr;
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
   ON_SCOPE_EXIT { Snapshot->Release(); };

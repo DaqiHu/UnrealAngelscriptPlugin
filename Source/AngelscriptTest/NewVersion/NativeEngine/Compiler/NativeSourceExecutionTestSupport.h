@@ -22,14 +22,14 @@ struct FSourceExecutionInput
 	explicit FSourceExecutionInput(
 		const FString& Source,
 		TSharedPtr<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> TypeContext,
-		const std::shared_ptr<asCMetadataImage>& Host)
+		asCMetadataImage* Host)
 	{
 		Initialize({{TEXT("Main.as"), Source}}, TypeContext, Host);
 	}
 	explicit FSourceExecutionInput(
 		TArray<TPair<FString, FString>> Files,
 		TSharedPtr<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> TypeContext = nullptr,
-		const std::shared_ptr<asCMetadataImage>& Host = nullptr)
+		asCMetadataImage* Host = nullptr)
 	{
 		Initialize(MoveTemp(Files), TypeContext, Host);
 	}
@@ -38,7 +38,7 @@ private:
 	void Initialize(
 		TArray<TPair<FString, FString>> Files,
 		TSharedPtr<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> TypeContext,
-		const std::shared_ptr<asCMetadataImage>& Host)
+		asCMetadataImage* Host)
 	{
 		for (const TPair<FString, FString>& File : Files)
 		{
@@ -90,6 +90,6 @@ inline asSByteCodeEmissionResult EmitFromSession(
 {
 	return asCByteCodeEmitter::Emit(
 		Builder.GetCompilationSession(),
-		Builder.GetDefinitions().get(),
+		Builder.GetDefinitions(),
 		Options);
 }

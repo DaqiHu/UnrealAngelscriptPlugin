@@ -3,6 +3,7 @@
 #include "Core/AngelscriptType.h"
 #include "Core/AngelscriptBindsInternal.h"
 #include "Core/AngelscriptTypeBindInfoRecorder.h"
+#include "as_scriptfunction.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 namespace RuntimeBindingIsolationFixture
@@ -123,12 +124,11 @@ TEST_CLASS_WITH_FLAGS(Isolation, "Angelscript.UnitTest.RuntimeBindings.Engine",
 		FAngelscriptBindingDiagnostic Diagnostic; auto A = FAngelscriptEngine::CreateForBindings(Store.ToSharedRef(), Diagnostic);
 		auto B = FAngelscriptEngine::CreateForBindings(Store.ToSharedRef(), Diagnostic); Store.Reset(); ASSERT_THAT(IsTrue(A.IsValid() && B.IsValid()));
 		ObserveCleanup(*A, Counts); ObserveCleanup(*B, Counts); A->GetBindingContext()->SetUserData(&Counts, CleanupKey); B->GetBindingContext()->SetUserData(&Counts, CleanupKey);
-		std::weak_ptr<asCMetadataImage> ImageA = A->GetBindingInstallation()->GetImage(), ImageB = B->GetBindingInstallation()->GetImage();
-		A.Reset(); ASSERT_THAT(IsTrue(ImageA.expired())); ASSERT_THAT(IsFalse(ImageB.expired())); ASSERT_THAT(AreEqual(1, Counts.Engines));
+		A.Reset(); ASSERT_THAT(AreEqual(1, Counts.Engines));
 		auto* Context = B->GetBindingContext(); ASSERT_THAT(AreEqual(0, Context->Prepare(Function(*B, TEXT("int Add(int A, int B)")))));
 		Context->SetArgDWord(0, 2); Context->SetArgDWord(1, 3); ASSERT_THAT(AreEqual(int(asEXECUTION_FINISHED), Context->Execute()));
 		ASSERT_THAT(AreEqual(asDWORD(5), Context->GetReturnDWord())); ASSERT_THAT(IsNotNull(B->GetBindingInstallation()->FindType(TEXT("Pair"))));
-		B.Reset(); ASSERT_THAT(IsTrue(ImageB.expired())); ASSERT_THAT(IsFalse(WeakStore.IsValid())); ASSERT_THAT(AreEqual(2, Counts.Contexts)); ASSERT_THAT(AreEqual(2, Counts.Engines));
+		B.Reset(); ASSERT_THAT(IsFalse(WeakStore.IsValid())); ASSERT_THAT(AreEqual(2, Counts.Contexts)); ASSERT_THAT(AreEqual(2, Counts.Engines));
 	}
 	TEST_METHOD(ForeignFunctionsAreRejectedByBothContexts)
 	{
@@ -198,6 +198,112 @@ TEST_CLASS_WITH_FLAGS(Isolation, "Angelscript.UnitTest.RuntimeBindings.Engine",
 		Context = B->GetBindingContext(); ASSERT_THAT(AreEqual(0, Context->Prepare(Function(*B, TEXT("int Auxiliary()")))));
 		ASSERT_THAT(AreEqual(int(asEXECUTION_FINISHED), Context->Execute())); ASSERT_THAT(AreEqual(asDWORD(13), Context->GetReturnDWord()));
 		ASSERT_THAT(IsTrue(State.OwnerBefore == B.Get()));
+	}
+};
+
+TEST_CLASS_WITH_FLAGS(RuntimeBindingIsolation, "Angelscript.UnitTest.Bindings",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+{
+	TEST_METHOD(PrepareOnceTwoEngines)
+	{
+		ProviderCount = 0;
+		UE::Angelscript::Private::FAngelscriptBindCollection Collection;
+		FAngelscriptBindRecord Record;
+		Record.OwnerModule = TEXT("FixtureModule");
+		Record.BindName = TEXT("FixtureProvider");
+		Record.Phase = EAngelscriptBindPhase::ExplicitBindings;
+		Record.SourceFile = "Fixture/Isolation.cpp";
+		Record.SourceLine = 12;
+		Record.Callback = &Provider;
+		FString Error;
+		ASSERT_THAT(IsTrue(Collection.Append(Record, Error)));
+		ASSERT_THAT(IsTrue(Collection.Finalize(Error)));
+		TSharedPtr<const FAngelscriptTypeBindInfoStore> Store;
+		ASSERT_THAT(IsTrue(FAngelscriptTypeBindInfoRecorder::Capture(Collection, {}, Store, Error)));
+		FAngelscriptBindingDiagnostic Diagnostic;
+		auto A = FAngelscriptEngine::CreateForBindings(Store.ToSharedRef(), Diagnostic);
+		auto B = FAngelscriptEngine::CreateForBindings(Store.ToSharedRef(), Diagnostic);
+		ASSERT_THAT(IsTrue(A.IsValid() && B.IsValid(), *Diagnostic.Message));
+		ASSERT_THAT(AreEqual(1, ProviderCount));
+		ASSERT_THAT(IsTrue(A->Engine != B->Engine));
+		const FAngelscriptTypeBindHandle PairHandle = Store->FindType(TEXT("Pair"));
+		const int PublishedTypeId = Store->GetPublishedTypeId(PairHandle);
+		ASSERT_THAT(IsTrue(PublishedTypeId > asTYPEID_LAST_PRIMITIVE));
+		asCTypeInfo* TypeA = A->GetBindingInstallation()->FindType(TEXT("Pair"));
+		asCTypeInfo* TypeB = B->GetBindingInstallation()->FindType(TEXT("Pair"));
+		ASSERT_THAT(IsNotNull(TypeA));
+		ASSERT_THAT(IsNotNull(TypeB));
+		ASSERT_THAT(IsTrue(TypeA != TypeB));
+		ASSERT_THAT(AreEqual(PublishedTypeId, TypeA->GetTypeId()));
+		ASSERT_THAT(AreEqual(PublishedTypeId, TypeB->GetTypeId()));
+		ASSERT_THAT(IsTrue(TypeA->GetEngine() == A->Engine));
+		ASSERT_THAT(IsTrue(TypeB->GetEngine() == B->Engine));
+		ASSERT_THAT(IsTrue(A->Engine->GetTypeInfoById(PublishedTypeId) == TypeA));
+		ASSERT_THAT(IsTrue(B->Engine->GetTypeInfoById(PublishedTypeId) == TypeB));
+		ASSERT_THAT(IsNull(A->GetBindingInstallation()->GetImage()->GetBoundEngine()));
+		ASSERT_THAT(IsNull(B->GetBindingInstallation()->GetImage()->GetBoundEngine()));
+		int PublishedFunctionId = -1;
+		if (const FAngelscriptTypeBindInfo* PairInfo = Store->GetType(PairHandle))
+		{
+			for (int32 Index = 0; Index < PairInfo->Members.Num(); ++Index)
+			{
+				if (PairInfo->Members[Index].Declaration.Equals(TEXT("int Sum() const"), ESearchCase::CaseSensitive))
+				{
+					PublishedFunctionId = Store->GetPublishedFunctionId({PairHandle, Index});
+					break;
+				}
+			}
+		}
+		ASSERT_THAT(IsTrue(PublishedFunctionId > 0));
+		asIScriptFunction* SumA = A->Engine->GetFunctionById(PublishedFunctionId);
+		asIScriptFunction* SumB = B->Engine->GetFunctionById(PublishedFunctionId);
+		ASSERT_THAT(IsNotNull(SumA));
+		ASSERT_THAT(IsNotNull(SumB));
+		ASSERT_THAT(IsTrue(SumA != SumB));
+		ASSERT_THAT(AreEqual(PublishedFunctionId, SumA->GetId()));
+		ASSERT_THAT(AreEqual(PublishedFunctionId, SumB->GetId()));
+		auto* Context = A->GetBindingContext();
+		ASSERT_THAT(AreEqual(0, Context->Prepare(Function(*A, TEXT("int Add(int A, int B)")))));
+		Context->SetArgDWord(0, 2);
+		Context->SetArgDWord(1, 3);
+		ASSERT_THAT(AreEqual(int(asEXECUTION_FINISHED), Context->Execute()));
+		ASSERT_THAT(AreEqual(asDWORD(5), Context->GetReturnDWord()));
+		FPair Value;
+		ASSERT_THAT(AreEqual(0, Context->Prepare(Function(*A, TEXT("int Sum() const")))));
+		ASSERT_THAT(AreEqual(0, Context->SetObject(&Value)));
+		ASSERT_THAT(AreEqual(int(asEXECUTION_FINISHED), Context->Execute()));
+		ASSERT_THAT(AreEqual(asDWORD(7), Context->GetReturnDWord()));
+	}
+
+	TEST_METHOD(DestroyOne)
+	{
+		TSharedPtr<FAngelscriptTypeBindInfoStore> Store = RecordFixture();
+		TWeakPtr<FAngelscriptTypeBindInfoStore> WeakStore = Store;
+		FAngelscriptBindingDiagnostic Diagnostic;
+		auto A = FAngelscriptEngine::CreateForBindings(Store.ToSharedRef(), Diagnostic);
+		auto B = FAngelscriptEngine::CreateForBindings(Store.ToSharedRef(), Diagnostic);
+		ASSERT_THAT(IsTrue(A.IsValid() && B.IsValid(), *Diagnostic.Message));
+		const int PublishedTypeId = Store->GetPublishedTypeId(Store->FindType(TEXT("Pair")));
+		asCTypeInfo* TypeB = B->GetBindingInstallation()->FindType(TEXT("Pair"));
+		ASSERT_THAT(IsNotNull(TypeB));
+		ASSERT_THAT(AreEqual(PublishedTypeId, TypeB->GetTypeId()));
+		Store.Reset();
+		A.Reset();
+		ASSERT_THAT(IsTrue(B->Engine->GetTypeInfoById(PublishedTypeId) == TypeB));
+		auto* Context = B->GetBindingContext();
+		ASSERT_THAT(AreEqual(0, Context->Prepare(Function(*B, TEXT("int Add(int A, int B)")))));
+		Context->SetArgDWord(0, 2);
+		Context->SetArgDWord(1, 3);
+		ASSERT_THAT(AreEqual(int(asEXECUTION_FINISHED), Context->Execute()));
+		ASSERT_THAT(AreEqual(asDWORD(5), Context->GetReturnDWord()));
+		FPair Value;
+		ASSERT_THAT(AreEqual(0, Context->Prepare(Function(*B, TEXT("int Sum() const")))));
+		ASSERT_THAT(AreEqual(0, Context->SetObject(&Value)));
+		ASSERT_THAT(AreEqual(int(asEXECUTION_FINISHED), Context->Execute()));
+		ASSERT_THAT(AreEqual(asDWORD(7), Context->GetReturnDWord()));
+		B.Reset();
+		ASSERT_THAT(IsFalse(WeakStore.IsValid()));
+		ASSERT_THAT(IsNull(FAngelscriptEngine::TryGetCurrentEngine()));
 	}
 };
 #endif

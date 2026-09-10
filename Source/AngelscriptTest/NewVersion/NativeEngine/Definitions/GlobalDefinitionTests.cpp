@@ -14,7 +14,7 @@ private:
 	struct FFixture
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		std::shared_ptr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
 		AS_NAMESPACE_QUALIFIER asSStableKey Key, TypeKey;
 		asCGlobalProperty* Global = nullptr;
 		asEMetadataResult Create(const TCHAR* Name = TEXT("Answer"), const TCHAR* Scope = TEXT("N"))
@@ -61,19 +61,14 @@ public:
 		FFixture Fixture;
 		ASSERT_THAT(IsTrue(Fixture.Create() == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(Fixture.Freeze()));
-		std::weak_ptr<asCMetadataImage> Weak = Fixture.Image;
-		Fixture.Global->AddRef();
+		asCGlobalProperty* Global = Fixture.Global;
 		{
 			FEngine Engine;
-			ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Fixture.Image) == asEMetadataRegistrationResult::Succeeded));
-			ASSERT_THAT(IsTrue(Fixture.Global == Engine.Ptr->FindMetadataGlobalProperty("N", "Answer")));
-			Fixture.Image.reset();
+			ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
+			ASSERT_THAT(IsTrue(Global == Engine.Ptr->FindMetadataGlobalProperty("N", "Answer")));
+			ASSERT_THAT(IsTrue(Global->name == "Answer"));
+			ASSERT_THAT(IsNull(Fixture.Image.Get()));
 		}
-		ASSERT_THAT(IsFalse(Weak.expired()));
-		ASSERT_THAT(IsTrue(Fixture.Global->name == "Answer"));
-		ASSERT_THAT(IsTrue(Fixture.Global->GetMetadataImage()->GetState() == asEMetadataImageState::Retired));
-		Fixture.Global->Release();
-		ASSERT_THAT(IsTrue(Weak.expired()));
 	}
 	TEST_METHOD(MutableGlobalAndVoidTypeAreRejectedWithoutPublication)
 	{
@@ -108,9 +103,9 @@ public:
 		ASSERT_THAT(IsTrue(Fixture.Freeze()));
 		Fixture.Global->type = Fixture.Image->Primitive(ttFloat32, true);
 		FEngine Engine;
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Fixture.Image) == asEMetadataRegistrationResult::InvalidIdentity));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::InvalidIdentity));
 		ASSERT_THAT(IsNull(Engine.Ptr->FindMetadataGlobalProperty("N", "Answer")));
-		ASSERT_THAT(IsTrue(Fixture.Image->GetState() == asEMetadataImageState::Frozen));
+		ASSERT_THAT(IsNull(Fixture.Image.Get()));
 	}
 	TEST_METHOD(DuplicateGlobalRegistrationDoesNotPublishNewImage)
 	{
@@ -119,24 +114,23 @@ public:
 		ASSERT_THAT(IsTrue(Second.Create() == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(First.Freeze() && Second.Freeze()));
 		FEngine Engine;
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(First.Image) == asEMetadataRegistrationResult::Succeeded));
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Second.Image) == asEMetadataRegistrationResult::IdentityConflict));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(First.Image)) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Second.Image)) == asEMetadataRegistrationResult::IdentityConflict));
 		ASSERT_THAT(IsTrue(First.Global == Engine.Ptr->FindMetadataGlobalProperty("N", "Answer")));
-		ASSERT_THAT(IsTrue(Second.Image->GetState() == asEMetadataImageState::Frozen));
+		ASSERT_THAT(IsNull(Second.Image.Get()));
 	}
 	TEST_METHOD(GlobalExternalReferencesAreConcurrentWithoutGraphCycles)
 	{
 		FFixture Fixture;
 		ASSERT_THAT(IsTrue(Fixture.Create() == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(Fixture.Freeze()));
-		std::weak_ptr<asCMetadataImage> Weak = Fixture.Image;
 		std::vector<std::thread> Workers;
 		for (int Index = 0; Index < 8; ++Index) Workers.emplace_back([&Fixture]() {
 			for (int Iteration = 0; Iteration < 1000; ++Iteration) { Fixture.Global->AddRef(); Fixture.Global->Release(); }
 		});
 		for (auto& Worker : Workers) Worker.join();
-		Fixture.Image.reset();
-		ASSERT_THAT(IsTrue(Weak.expired()));
+		ASSERT_THAT(IsNotNull(Fixture.Image.Get()));
+		ASSERT_THAT(IsTrue(Fixture.Global->name == "Answer"));
 	}
 };
 #endif

@@ -1197,6 +1197,11 @@ TUniquePtr<FAngelscriptEngine> FAngelscriptEngine::CreateForBindings(
 	Owner->TypeDatabase = MakeUnique<FAngelscriptTypeDatabase>();
 	Owner->BindState = MakeUnique<FAngelscriptBindState>();
 	Owner->ToStringList = MakeUnique<TArray<FToStringType>>();
+	if (Store->PublishProcessIds() != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded
+		&& Store->PublishProcessIds() != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::AlreadyRegistered)
+	{
+		Diagnostic.Message = TEXT("Could not publish process IDs for the binding store."); return {};
+	}
 	if (!FAngelscriptTypeBindInfoApply::Install(Store, *static_cast<asCScriptEngine*>(Owner->Engine),
 		Owner->BindingInstallation, Diagnostic.Message, &Diagnostic.Stage)) return {};
 	Diagnostic.Stage = EAngelscriptBindingStage::Members;

@@ -14,7 +14,7 @@ private:
 	struct FFixture
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		std::shared_ptr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
 		asCObjectType* Owner = nullptr;
 		asCScriptFunction* ToInt = nullptr;
 		asCScriptFunction* ToFloat = nullptr;
@@ -102,14 +102,14 @@ FFixture Fixture;
 		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
 		asCScriptEngine* Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Fixture.Image) != asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded));
 		Fixture.ToInt->returnType = Original;
 		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
 		Fixture.ToInt->traits.SetTrait(asTRAIT_CONSTRUCTOR, true);
 		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
 		Fixture.ToInt->traits.SetTrait(asTRAIT_CONSTRUCTOR, false);
 		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Fixture.Image) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
 		ASSERT_THAT(IsTrue(Engine->FindMetadataFunction(Fixture.ToInt->GetStableKey()) == Fixture.ToInt));
 	}
 
@@ -123,10 +123,10 @@ FFixture Fixture;
 		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
 		asCScriptEngine* Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Fixture.Image) != asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded));
 		Fixture.ToInt->objectType = Original;
 		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Fixture.Image) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
 	}
 
 	TEST_METHOD(ConversionDeclarationFactsRejectVoidAndParameterizedShapes)
@@ -162,7 +162,7 @@ FFixture Fixture;
 		FBuilderInput Valid(TEXT("class Source { int opImplConv() const; float64 opImplConv() const; }"));
 		asCBuilder Builder(Valid.Snapshot, Valid.Diagnostics, Valid.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
-		std::shared_ptr<asCMetadataImage> Image = Builder.GetDefinitions();
+		TUniquePtr<asCMetadataImage> Image = Builder.TakeDefinitions();
 		ASSERT_THAT(IsTrue(bool(Image)));
 		ASSERT_THAT(IsTrue(Image->ValidateFrozenDefinitions()));
 		TArray<const asCScriptFunction*> Conversions;

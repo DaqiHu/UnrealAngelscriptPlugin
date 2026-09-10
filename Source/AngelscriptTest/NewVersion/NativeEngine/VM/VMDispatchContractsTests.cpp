@@ -123,7 +123,7 @@ public:
 		Derived->interfaceVFTOffsets.PushLast(0);
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		asCByteCodeImageBuilder Builder;
 		asUINT DerivedSlot = 0;
 		asUINT InterfaceValueSlot = 0;
@@ -219,7 +219,7 @@ public:
 		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		asCByteCodeImageBuilder Builder;
 		asUINT NativeSlot = 0;
 		asUINT RunSlot = 0;
@@ -255,7 +255,7 @@ public:
 		asCScriptFunction* Right = DoubleReturn.DefineFunction(TEXT("Read"), TEXT(""), asFUNC_SCRIPT, DoubleReturn.Image->Primitive(ttFloat64), {});
 		ASSERT_THAT(IsTrue(DoubleReturn.FinalizeAndFreeze()));
 		FNativeEngineOwner Dest;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Dest.Ptr->RegisterMetadataImage(DoubleReturn.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Dest.Ptr->RegisterMetadataImage(MoveTemp(DoubleReturn.Image))));
 		asCExecutableSnapshot* Mismatch = nullptr;
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, Dest.Ptr->LinkByteCodeImage(*IntImage, Mismatch)));
 		ASSERT_THAT(IsNull(Mismatch));
@@ -271,7 +271,7 @@ public:
 		asCScriptFunction* RunNative = Fixture.DefineFunction(TEXT("RunNative"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Native->GetStableKey(), asFUNCTION(GenericContractFortyTwo), asCALL_GENERIC)));
 		{
@@ -344,7 +344,7 @@ public:
 		asCScriptFunction* Shape = Fixture.DefineFunction(TEXT("DelegateShape"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Dtor->GetStableKey(), asFUNCTION(GenericContractDestruct), asCALL_GENERIC)));
 		asCByteCodeImageBuilder Builder;

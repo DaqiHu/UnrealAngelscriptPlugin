@@ -113,7 +113,7 @@ namespace VMFloatingOpcodeMatrixPrivate
 		{
 			Function = Fixture.DefineFunction(Name, TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(Return), {});
 			if (!Function || !Fixture.FinalizeAndFreeze()) return false;
-			if (Engine.Ptr->RegisterMetadataImage(Fixture.Image) != asEMetadataRegistrationResult::Succeeded) return false;
+			if (Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded) return false;
 			asUINT Slot = 0;
 			if (Builder.AddFunctionRequirement(*Function, Slot) != asEByteCodeImageStatus::Succeeded) return false;
 			return Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), FrameSize, 0)

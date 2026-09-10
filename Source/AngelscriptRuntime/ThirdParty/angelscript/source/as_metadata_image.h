@@ -7,6 +7,7 @@
 #include "as_property.h"
 #include "frontend/as_stable_key.h"
 #include "as_metadata_fingerprint.h"
+#include "Templates/UniquePtr.h"
 #include "Containers/Array.h"
 #include "Containers/Map.h"
 #include "Templates/SharedPointer.h"
@@ -92,19 +93,18 @@ struct asSNativeGlobalFacts
 	bool EditorOnly = false;
 };
 
-// An image owns actual runtime metadata, never proxy records. Shared image
-// handles and external type/function AddRef leases own the graph; graph edges
-// themselves are non-owning. Draft mutation is serialized by this API. Frozen
-// images are immutable and dependencies can only name already frozen images.
+// An image is a unique intermediate helper for actual runtime metadata, never
+// proxy records. Callers hold TUniquePtr; Engine adopt takes unique ownership.
+// Dependency edges are non-owning. Draft mutation is serialized by this API.
+// Frozen images are immutable and dependencies can only name already frozen images.
 // Array views and legacy public field inspection require an externally quiet
 // draft or a frozen image; direct writes to legacy fields are not this API's
 // mutation protocol. A producer-owned canonical identity context authenticates
 // keys at integration time; accepting a nonzero shell key does not do so.
 class ANGELSCRIPTRUNTIME_API asCMetadataImage final
-	: public std::enable_shared_from_this<asCMetadataImage>
 {
 public:
-	static std::shared_ptr<asCMetadataImage> Create(const asSMetadataOptions& Options = {});
+	static TUniquePtr<asCMetadataImage> Create(const asSMetadataOptions& Options = {});
 	~asCMetadataImage();
 	asCMetadataImage(const asCMetadataImage&) = delete;
 	asCMetadataImage& operator=(const asCMetadataImage&) = delete;
@@ -116,7 +116,7 @@ public:
 	TConstArrayView<asCTypeInfo*> GetTypes() const { return MakeArrayView(Types); }
 	TConstArrayView<asCScriptFunction*> GetFunctions() const { return MakeArrayView(Functions); }
 	TConstArrayView<asCGlobalProperty*> GetGlobalProperties() const { return MakeArrayView(Globals); }
-	TConstArrayView<std::shared_ptr<asCMetadataImage>> GetDependencies() const { return MakeArrayView(Dependencies); }
+	TConstArrayView<asCMetadataImage*> GetDependencies() const { return MakeArrayView(Dependencies); }
 	bool Owns(const asCTypeInfo* Type) const;
 	bool Owns(const asCScriptFunction* Function) const;
 	bool CanReference(const asCTypeInfo* Type) const;
@@ -135,8 +135,7 @@ public:
 	int GetBoundTypeId(const asCTypeInfo* Type) const;
 	int GetBoundFunctionId(const asCScriptFunction* Function) const;
 	int GetBoundDataTypeId(const asCDataType& Type) const;
-
-	asEMetadataResult AddDependency(const std::shared_ptr<asCMetadataImage>& Dependency);
+	asEMetadataResult AddDependency(asCMetadataImage* Dependency);
 	asEMetadataResult CreateObjectType(const asSStableKey& Key,
 		const char* Name, const char* Namespace, asQWORD Flags, asCObjectType*& Out);
 	asEMetadataResult CreateEnumType(const asSStableKey& Key,
@@ -245,7 +244,7 @@ private:
 	TMap<asSStableKey, asCGlobalProperty*> GlobalsByKey;
 	TMap<FString, asCGlobalProperty*, FDefaultSetAllocator, asTNameKeyFuncs<asCGlobalProperty*>> GlobalsByName;
 	TArray<asSNameSpace*> Namespaces;
-	TArray<std::shared_ptr<asCMetadataImage>> Dependencies;
+	TArray<asCMetadataImage*> Dependencies;
 	TMap<asSStableKey, asCTypeInfo*> TypesByKey;
 	TMap<asSStableKey, asCScriptFunction*> FunctionsByKey;
 	TMap<FString, asCTypeInfo*, FDefaultSetAllocator, asTNameKeyFuncs<asCTypeInfo*>> TypesByName;
@@ -268,6 +267,7 @@ private:
 	asCScriptEngine* BoundEngine = nullptr;
 	TMap<const asCTypeInfo*, int> BoundTypeIds;
 	TMap<const asCScriptFunction*, int> BoundFunctionIds;
+
 	const asIFingerprintDigestProvider* FingerprintDigestProvider = nullptr;
 	struct asSCachedFingerprint
 	{

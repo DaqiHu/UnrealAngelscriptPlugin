@@ -320,7 +320,7 @@ asSByteCodeEmissionResult asCByteCodeEmitter::Emit(
 asSByteCodeEmissionResult asCByteCodeEmitter::Emit(asCBuilder& Builder, asCScriptFunction& Function)
 {
 	(void)Function;
-	return Emit(Builder.GetCompilationSession(), Builder.GetDefinitions().get(), asSByteCodeEmissionOptions());
+	return Emit(Builder.GetCompilationSession(), Builder.GetDefinitions(), asSByteCodeEmissionOptions());
 }
 
 END_AS_NAMESPACE

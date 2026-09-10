@@ -37,19 +37,17 @@ namespace
 	}
 }
 
-std::shared_ptr<asCMetadataImage> asCMetadataImage::Create(const asSMetadataOptions& Options)
+TUniquePtr<asCMetadataImage> asCMetadataImage::Create(const asSMetadataOptions& Options)
 {
 	if ((Options.PointerByteSize != 4 && Options.PointerByteSize != 8) || !Options.TargetProfile.GetLength())
-		return {};
-	return std::shared_ptr<asCMetadataImage>(new asCMetadataImage(Options));
+		return nullptr;
+	return TUniquePtr<asCMetadataImage>(new asCMetadataImage(Options));
 }
 
 asCMetadataImage::asCMetadataImage(const asSMetadataOptions& InOptions) : Options(InOptions) {}
 
 asCMetadataImage::~asCMetadataImage()
 {
-	// All semantic edges are borrowed from this graph or retained dependencies.
-	// There are no external object leases once the shared control block reaches 0.
 	bDestroying = true;
 	for (asCGlobalProperty* Global : Globals) asDELETE(Global, asCGlobalProperty);
 	for (asCScriptFunction* Function : Functions) asDELETE(Function, asCScriptFunction);
@@ -68,8 +66,8 @@ bool asCMetadataImage::IsDefaultArrayType(const asCTypeInfo* Type) const
 bool asCMetadataImage::ReferencesImage(const asCMetadataImage* Image) const
 {
 	if (this == Image) return true;
-	for (const auto& Dependency : Dependencies)
-		if (Dependency->ReferencesImage(Image)) return true;
+	for (asCMetadataImage* Dependency : Dependencies)
+		if (Dependency && Dependency->ReferencesImage(Image)) return true;
 	return false;
 }
 
@@ -218,20 +216,19 @@ int asCMetadataImage::GetBoundTypeId(const asCTypeInfo* Type) const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	const int* Id = BoundTypeIds.Find(Type);
-	return BoundEngine && Owns(Type) && Id ? *Id : -1;
+	return Owns(Type) && Id ? *Id : -1;
 }
 
 int asCMetadataImage::GetBoundFunctionId(const asCScriptFunction* Function) const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	const int* Id = BoundFunctionIds.Find(Function);
-	return BoundEngine && Owns(Function) && Id ? *Id : -1;
+	return Owns(Function) && Id ? *Id : -1;
 }
 
 int asCMetadataImage::GetBoundDataTypeId(const asCDataType& Type) const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (!BoundEngine) return -1;
 	int Id = -1;
 	if (Type.GetTypeInfo())
 	{
@@ -499,16 +496,16 @@ asSNameSpace* asCMetadataImage::InternNamespace(const char* Name)
 	return Namespace;
 }
 
-asEMetadataResult asCMetadataImage::AddDependency(const std::shared_ptr<asCMetadataImage>& Dependency)
+asEMetadataResult asCMetadataImage::AddDependency(asCMetadataImage* Dependency)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
-	if (!Dependency || Dependency.get() == this) return asEMetadataResult::InvalidArgument;
+	if (!Dependency || Dependency == this) return asEMetadataResult::InvalidArgument;
 	if (!Dependency->IsFrozen()) return asEMetadataResult::UnfrozenDependency;
 	if (Dependency->Options.PointerByteSize != Options.PointerByteSize || Dependency->Options.TargetProfile != Options.TargetProfile)
 		return asEMetadataResult::InvalidLayout;
 	if (Dependency->ReferencesImage(this)) return asEMetadataResult::InvalidArgument;
-	for (const auto& Existing : Dependencies) if (Existing == Dependency) return asEMetadataResult::Succeeded;
+	for (asCMetadataImage* Existing : Dependencies) if (Existing == Dependency) return asEMetadataResult::Succeeded;
 	Dependencies.Add(Dependency);
 	InvalidateLayouts();
 	return asEMetadataResult::Succeeded;

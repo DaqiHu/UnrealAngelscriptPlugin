@@ -14,7 +14,7 @@ struct FDetachedDefinitionFixture
 {
 	TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context =
 		MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-	std::shared_ptr<asCMetadataImage> Image = asCMetadataImage::Create();
+	TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
 	FString Scope = TEXT("vm-detached");
 
 	bool BindContext()
@@ -130,7 +130,7 @@ struct FDetachedDefinitionFixture
 
 	void Reset()
 	{
-		Image.reset();
+		Image.Reset();
 	}
 
 private:

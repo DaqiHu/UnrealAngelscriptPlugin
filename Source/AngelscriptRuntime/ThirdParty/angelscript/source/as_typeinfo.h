@@ -216,7 +216,7 @@ protected:
 	asUINT metadataGenericArity = 0;
 	asCTypeInfo* metadataDeclarationOwner = nullptr;
 	mutable std::mutex metadataReferenceMutex;
-	mutable std::shared_ptr<asCMetadataImage> metadataExternalLease;
+
 };
 
 struct asSEnumValue

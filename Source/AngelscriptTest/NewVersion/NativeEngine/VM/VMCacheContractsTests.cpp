@@ -368,7 +368,7 @@ namespace VMCacheContractsPrivate
 
 	FString GGenericError;
 
-	asCObjectType* DefineGenericIntBox(FDetachedDefinitionFixture& Fixture, std::shared_ptr<asCMetadataImage>& OutHost)
+	asCObjectType* DefineGenericIntBox(FDetachedDefinitionFixture& Fixture, TUniquePtr<asCMetadataImage>& OutHost)
 	{
 		GGenericError.Reset();
 		if (!Fixture.BindContext())
@@ -422,7 +422,7 @@ namespace VMCacheContractsPrivate
 			GGenericError = TEXT("host-freeze");
 			return nullptr;
 		}
-		if (Fixture.Image->AddDependency(OutHost) != asEMetadataResult::Succeeded)
+		if (Fixture.Image->AddDependency(OutHost.Get()) != asEMetadataResult::Succeeded)
 		{
 			GGenericError = TEXT("add-dependency");
 			return nullptr;
@@ -470,7 +470,7 @@ public:
 		{
 			FDetachedDefinitionFixture Fixture;
 			Fixture.Scope = TEXT("vm-cache-contracts");
-			std::shared_ptr<asCMetadataImage> Host;
+			TUniquePtr<asCMetadataImage> Host;
 			asCObjectType* Box = VMCacheContractsPrivate::DefineGenericIntBox(Fixture, Host);
 			ASSERT_THAT(IsTrue(Box != nullptr, *VMCacheContractsPrivate::GGenericError));
 			asCScriptFunction* Run = Fixture.DefineFunction(
@@ -479,7 +479,7 @@ public:
 			RunKey = Run->GetStableKey();
 			TypeKey = Box->GetStableKey();
 			FNativeEngineOwner EngineA;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(Fixture.Image)));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 			TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42, Box, nullptr, TEXT("cache-token"));
 			ASSERT_THAT(IsNotNull(Image.Get()));
 			asCExecutableSnapshot* Snapshot = nullptr;
@@ -490,7 +490,7 @@ public:
 		}
 		FDetachedDefinitionFixture FixtureB;
 		FixtureB.Scope = TEXT("vm-cache-contracts");
-		std::shared_ptr<asCMetadataImage> HostB;
+		TUniquePtr<asCMetadataImage> HostB;
 		asCObjectType* BoxB = VMCacheContractsPrivate::DefineGenericIntBox(FixtureB, HostB);
 		ASSERT_THAT(IsTrue(BoxB != nullptr, *VMCacheContractsPrivate::GGenericError));
 		asCScriptFunction* RunB = FixtureB.DefineFunction(
@@ -499,7 +499,7 @@ public:
 		ASSERT_THAT(IsTrue(RunB->GetStableKey() == RunKey));
 		ASSERT_THAT(IsTrue(BoxB->GetStableKey() == TypeKey));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(FixtureB.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(FixtureB.Image))));
 		ASSERT_THAT(IsTrue(EngineB.Ptr->FindMetadataFunction(RunKey) == RunB));
 		ASSERT_THAT(IsTrue(EngineB.Ptr->FindMetadataType(TypeKey) == BoxB));
 		ASSERT_THAT(IsTrue(RunB->GetId() != 0));
@@ -541,7 +541,7 @@ public:
 			AddKey = Add->GetStableKey();
 			GlobalKey = Global->GetStableKey();
 			FNativeEngineOwner EngineA;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(Fixture.Image)));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 				EngineA.Ptr->BindNativeFunction(Add->GetStableKey(), asFUNCTION(VMCacheContractsPrivate::GenericAdd), asCALL_GENERIC)));
 			int32 StorageA = 7;
@@ -576,7 +576,7 @@ public:
 		ASSERT_THAT(IsTrue(AddB->GetStableKey() == AddKey));
 		ASSERT_THAT(IsTrue(GlobalB->GetStableKey() == GlobalKey));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(FixtureB.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(FixtureB.Image))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			EngineB.Ptr->BindNativeFunction(AddB->GetStableKey(), asFUNCTION(VMCacheContractsPrivate::GenericAdd), asCALL_GENERIC)));
 		int32 StorageB = 9;
@@ -627,7 +627,7 @@ public:
 			RunKey = Run->GetStableKey();
 			MethodKey = Method->GetStableKey();
 			FNativeEngineOwner EngineA;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(Fixture.Image)));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 			TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42, Point, Method);
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Encode(*Image, Bytes)));
 		}
@@ -653,7 +653,7 @@ public:
 			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureB.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(FixtureB.FinalizeAndFreeze()));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(FixtureB.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(FixtureB.Image))));
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		asCExecutableSnapshot* SnapshotB = nullptr;
@@ -699,7 +699,7 @@ public:
 		ASSERT_THAT(IsTrue(DoubleReturn.FinalizeAndFreeze()));
 		ASSERT_THAT(IsTrue(Left->GetStableKey() == Right->GetStableKey()));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(DoubleReturn.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(DoubleReturn.Image))));
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		asCExecutableSnapshot* Failed = nullptr;
@@ -730,7 +730,7 @@ public:
 			TEXT("Write"), TEXT(""), asFUNC_SCRIPT, OutRef.Image->Primitive(ttInt), MakeArrayView(&OutParam, 1));
 		ASSERT_THAT(IsTrue(OutRef.FinalizeAndFreeze()));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(OutRef.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(OutRef.Image))));
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		asCExecutableSnapshot* Failed = nullptr;
@@ -778,7 +778,7 @@ public:
 		asCScriptFunction* RunB = FixtureB.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureB.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(FixtureB.FinalizeAndFreeze()));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(FixtureB.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(FixtureB.Image))));
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		asCExecutableSnapshot* Failed = nullptr;
@@ -795,7 +795,7 @@ public:
 		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42, Point);
 		asSByteCodeRequirement* TypeReq = VMCacheContractsPrivate::FindRequirement(
 			*Image, asEByteCodeRequirementRole::Type, Point->GetStableKey());
@@ -817,7 +817,7 @@ public:
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		VMCacheContractsPrivate::FZeroDigest Provider;
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42, Point);
 		Fixture.Image->SetFingerprintDigestProvider(&Provider);
 		asCExecutableSnapshot* Failed = nullptr;
@@ -833,9 +833,9 @@ public:
 		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner EngineA;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::ForeignEngine, EngineB.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::ForeignEngine, EngineB.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42);
 		asCExecutableSnapshot* Failed = nullptr;
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::MissingDeclaration, EngineB.Ptr->LinkByteCodeImage(*Image, Failed)));
@@ -848,7 +848,7 @@ public:
 		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42);
 		Image->PointerByteSize = 4;
 		asCExecutableSnapshot* Failed = nullptr;
@@ -865,7 +865,7 @@ public:
 		ASSERT_THAT(IsNotNull(Global));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		int32 Sentinel = 0x11223344;
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->BindGlobalStorage(Global->GetStableKey(), &Sentinel)));
 		TUniquePtr<asCByteCodeImage> Good = VMCacheContractsPrivate::MakeReturn(Run, 42);

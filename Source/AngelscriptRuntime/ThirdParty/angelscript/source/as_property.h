@@ -203,7 +203,7 @@ private:
 	// Native host declarations may be mutable; executable storage is bound separately.
 	bool metadataNativeDeclaration = false;
 	std::mutex metadataReferenceMutex;
-	std::shared_ptr<asCMetadataImage> metadataExternalLease;
+
 };
 
 class asCCompGlobPropType : public asIFilter

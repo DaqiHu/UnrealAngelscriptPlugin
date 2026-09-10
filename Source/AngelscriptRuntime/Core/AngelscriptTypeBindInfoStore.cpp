@@ -1,5 +1,6 @@
 #include "AngelscriptTypeBindInfoStore.h"
 #include "AngelscriptTypeBindInfoReflection.h"
+#include "as_type_id_registry.h"
 
 bool FAngelscriptTypeBindInfoStore::SetReflectedSnapshot(TSharedRef<const FAngelscriptReflectedTypeSnapshot> Snapshot, FString& OutDiagnostic)
 {
@@ -358,4 +359,141 @@ const FAngelscriptTypeBindInfoMember* FAngelscriptTypeBindInfoStore::GetMember(
 {
 	const auto* Type = GetType(Handle.Type);
 	return Type != nullptr && Type->Members.IsValidIndex(Handle.Index) ? &Type->Members[Handle.Index] : nullptr;
+}
+
+namespace
+{
+	bool IsPublishedCallable(EAngelscriptTypeBindMemberKind Kind)
+	{
+		return Kind == EAngelscriptTypeBindMemberKind::Constructor
+			|| Kind == EAngelscriptTypeBindMemberKind::Destructor
+			|| Kind == EAngelscriptTypeBindMemberKind::Method
+			|| Kind == EAngelscriptTypeBindMemberKind::Behaviour
+			|| Kind == EAngelscriptTypeBindMemberKind::GlobalFunction;
+	}
+
+	bool HasPublishableLayout(const FAngelscriptTypeBindDeclaration& Declaration)
+	{
+		if (Declaration.Kind == EAngelscriptTypeBindKind::Namespace) return true;
+		if (Declaration.NativeSize == 0 || Declaration.NativeAlignment == 0) return false;
+		return (Declaration.NativeAlignment & (Declaration.NativeAlignment - 1)) == 0;
+	}
+}
+
+AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult FAngelscriptTypeBindInfoStore::PublishProcessIds() const
+{
+	auto& Mutable = const_cast<FAngelscriptTypeBindInfoStore&>(*this);
+	if (!Mutable.FailureDiagnostic.IsEmpty() || !Mutable.bSealed) return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidState;
+	if (Mutable.bPublished) return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::AlreadyRegistered;
+	asUINT TypeCount = 0;
+	asUINT FunctionCount = 0;
+	for (const FAngelscriptTypeBindInfo& Type : Mutable.Types)
+	{
+		if (!HasPublishableLayout(Type.Declaration))
+		{
+			return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidLayout;
+		}
+		if (Type.Declaration.Kind != EAngelscriptTypeBindKind::Namespace) ++TypeCount;
+		for (const FAngelscriptTypeBindInfoMember& Member : Type.Members)
+		{
+			if (IsPublishedCallable(Member.Kind)) ++FunctionCount;
+		}
+	}
+	if (TypeCount == 0 && FunctionCount == 0)
+	{
+		Mutable.bPublished = true;
+		return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded;
+	}
+	AS_NAMESPACE_QUALIFIER asSTypeIdReservationRequest Request;
+	Request.TypeSequenceCount = TypeCount;
+	Request.FunctionIdCount = FunctionCount;
+	AS_NAMESPACE_QUALIFIER asSTypeIdReservation Reservation;
+	if (AS_NAMESPACE_QUALIFIER asCTypeIdRegistry::Get().Reserve(Request, Reservation)
+		!= AS_NAMESPACE_QUALIFIER asTYPE_ID_RESERVE_SUCCEEDED)
+	{
+		return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidState;
+	}
+	int NextType = Reservation.FirstTypeSequence;
+	int NextFunction = Reservation.FirstFunctionId;
+	for (FAngelscriptTypeBindInfo& Type : Mutable.Types)
+	{
+		if (Type.Declaration.Kind != EAngelscriptTypeBindKind::Namespace)
+		{
+			Type.PublishedTypeId = AS_NAMESPACE_QUALIFIER asCTypeIdAllocator::EncodeObjectTypeId(
+				NextType++, Type.Declaration.ObjectFlags);
+		}
+		for (FAngelscriptTypeBindInfoMember& Member : Type.Members)
+		{
+			if (IsPublishedCallable(Member.Kind)) Member.PublishedFunctionId = NextFunction++;
+		}
+	}
+	Mutable.bPublished = true;
+	return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded;
+}
+
+int FAngelscriptTypeBindInfoStore::GetPublishedTypeId(FAngelscriptTypeBindHandle Handle) const
+{
+	const FAngelscriptTypeBindInfo* Type = GetType(Handle);
+	return Type ? Type->PublishedTypeId : -1;
+}
+
+int FAngelscriptTypeBindInfoStore::GetPublishedFunctionId(FAngelscriptTypeBindMemberHandle Handle) const
+{
+	const FAngelscriptTypeBindInfoMember* Member = GetMember(Handle);
+	return Member ? Member->PublishedFunctionId : -1;
+}
+
+namespace
+{
+	void SplitPublishedMember(const FString& Declaration, FString& OutTypeName, FString& OutName)
+	{
+		FString Head = Declaration;
+		const int32 Paren = Head.Find(TEXT("("));
+		if (Paren != INDEX_NONE) Head.LeftInline(Paren);
+		Head.TrimStartAndEndInline();
+		int32 Space = INDEX_NONE;
+		if (!Head.FindLastChar(TEXT(' '), Space))
+		{
+			OutName = Head;
+			return;
+		}
+		OutName = Head.Mid(Space + 1).TrimStartAndEnd();
+		OutTypeName = Head.Left(Space).TrimStartAndEnd();
+	}
+}
+
+AS_NAMESPACE_QUALIFIER asETypeQueryResult FAngelscriptTypeBindInfoStore::GetPublishedClassInfo(
+	int TypeId, FAngelscriptPublishedClassInfo& Out) const
+{
+	Out = {};
+	if (TypeId <= AS_NAMESPACE_QUALIFIER asTYPEID_LAST_PRIMITIVE)
+	{
+		return AS_NAMESPACE_QUALIFIER asTYPE_QUERY_INVALID_ARGUMENT;
+	}
+	if (!bPublished)
+	{
+		return AS_NAMESPACE_QUALIFIER asTYPE_QUERY_NOT_FOUND;
+	}
+	for (const FAngelscriptTypeBindInfo& Type : Types)
+	{
+		if (Type.PublishedTypeId != TypeId) continue;
+		Out.Name = Type.Declaration.Name;
+		Out.Namespace = Type.Declaration.Namespace;
+		Out.TypeId = Type.PublishedTypeId;
+		Out.NativeSize = Type.Declaration.NativeSize;
+		Out.NativeAlignment = Type.Declaration.NativeAlignment;
+		Out.Members.Reserve(Type.Members.Num());
+		for (const FAngelscriptTypeBindInfoMember& Member : Type.Members)
+		{
+			FAngelscriptPublishedMemberInfo Published;
+			Published.Declaration = Member.Declaration;
+			Published.Kind = Member.Kind;
+			Published.PropertyOffset = Member.PropertyOffset;
+			Published.PublishedFunctionId = Member.PublishedFunctionId;
+			SplitPublishedMember(Member.Declaration, Published.TypeName, Published.Name);
+			Out.Members.Add(MoveTemp(Published));
+		}
+		return AS_NAMESPACE_QUALIFIER asTYPE_QUERY_SUCCEEDED;
+	}
+	return AS_NAMESPACE_QUALIFIER asTYPE_QUERY_NOT_FOUND;
 }

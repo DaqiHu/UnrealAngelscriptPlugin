@@ -125,7 +125,7 @@ public:
 			ASSERT_THAT(IsTrue(Host.FinalizeAndFreeze()));
 			FSourceExecutionInput Input(
 				TEXT("class Value { int Number; Value(int Initial) { this.Number = Initial; } int Read() const { return Number; } } int Run() { Value Local(Host::Mark(7)); return Local.Read(); }"),
-				Host.Context, Host.Image);
+				Host.Context, Host.Image.Get());
 			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
 			asCScriptFunction* Function = FindSourceFunction(Builder, "Run");
@@ -134,8 +134,8 @@ public:
 			asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Builder, *Function);
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 			FNativeEngineOwner EngineA;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(Host.Image)));
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(Builder.GetDefinitions())));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(MoveTemp(Host.Image))));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 				EngineA.Ptr->BindNativeFunction(Mark->GetStableKey(), asFUNCTION(GenericSourceCacheMark), asCALL_GENERIC)));
 			asCExecutableSnapshot* SnapshotA = nullptr;
@@ -164,8 +164,8 @@ public:
 		ASSERT_THAT(IsTrue(Dest.FinalizeAndFreeze()));
 		ASSERT_THAT(IsTrue(FunctionB->GetStableKey() == RunKey, TEXT("Run key")));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(HostB.Image)));
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(Dest.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(HostB.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(Dest.Image))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			EngineB.Ptr->BindNativeFunction(MarkB->GetStableKey(), asFUNCTION(GenericSourceCacheMark), asCALL_GENERIC)));
 		TUniquePtr<asCByteCodeImage> Decoded;
@@ -198,7 +198,7 @@ public:
 			asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Builder, *Function);
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 			FNativeEngineOwner EngineA;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(Builder.GetDefinitions())));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
 			asCExecutableSnapshot* SnapshotA = nullptr;
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, EngineA.Ptr->LinkByteCodeImage(*Emitted.Image, SnapshotA)));
 			asIScriptContext* ContextA = EngineA.Ptr->CreateContext();
@@ -222,7 +222,7 @@ public:
 		ASSERT_THAT(IsTrue(Dest.FinalizeAndFreeze()));
 		ASSERT_THAT(IsTrue(FunctionB->GetStableKey() == RunKey, TEXT("mixed Run key")));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(Dest.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(Dest.Image))));
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		asCExecutableSnapshot* SnapshotB = nullptr;
@@ -273,7 +273,7 @@ public:
 		TArray<uint8> Bytes;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Encode(*Emitted.Image, Bytes)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.GetDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
 		asCExecutableSnapshot* First = nullptr;
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, First)));
 		TUniquePtr<asCByteCodeImage> Decoded;

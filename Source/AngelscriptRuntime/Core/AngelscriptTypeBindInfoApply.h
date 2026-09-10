@@ -91,7 +91,9 @@ class ANGELSCRIPTRUNTIME_API FAngelscriptTypeBindInfoInstallation final
 {
 public:
 	~FAngelscriptTypeBindInfoInstallation();
-	const std::shared_ptr<AS_NAMESPACE_QUALIFIER asCMetadataImage>& GetImage() const { return Draft->GetImage(); }
+	AS_NAMESPACE_QUALIFIER asCMetadataImage* GetImage() const { return Draft->GetImage(); }
+	TUniquePtr<AS_NAMESPACE_QUALIFIER asCMetadataImage> TakeImage() { return Draft->TakeImage(); }
+	TUniquePtr<AS_NAMESPACE_QUALIFIER asCMetadataImage> TakeTemplateImage() { return Draft->TakeTemplateImage(); }
 	AS_NAMESPACE_QUALIFIER asCTypeInfo* FindType(const FString& Name, const FString& Namespace = {}) const { return Draft->FindType(Name, Namespace); }
 	AS_NAMESPACE_QUALIFIER asCScriptFunction* FindFunction(FAngelscriptTypeBindMemberHandle Record) const;
 	TConstArrayView<FAngelscriptInstalledBindMember> GetMembers() const { return Members; }
@@ -186,4 +188,8 @@ public:
 		EAngelscriptBindingStage* Stage = nullptr);
 	static bool ConnectNative(const FAngelscriptTypeBindInfoInstallation& Installation,
 		AS_NAMESPACE_QUALIFIER asCScriptEngine& Engine, FString& Diagnostic);
+	static AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult MaterializePublishedTypes(
+		TSharedRef<const FAngelscriptTypeBindInfoStore> Store,
+		AS_NAMESPACE_QUALIFIER asCScriptEngine& Engine,
+		TUniquePtr<AS_NAMESPACE_QUALIFIER asCMetadataImage> Image = {});
 };

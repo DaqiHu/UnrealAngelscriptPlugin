@@ -64,13 +64,6 @@ asCGlobalProperty::~asCGlobalProperty()
 
 void asCGlobalProperty::AddRef()
 {
-	if (metadataOwner)
-	{
-		std::lock_guard<std::mutex> Lock(metadataReferenceMutex);
-		if (refCount.get() == 0) metadataExternalLease = metadataOwner->shared_from_this();
-		refCount.atomicInc();
-		return;
-	}
 	refCount.atomicInc();
 }
 
@@ -78,13 +71,7 @@ void asCGlobalProperty::Release()
 {
 	if (metadataOwner)
 	{
-		std::shared_ptr<asCMetadataImage> Released;
-		{
-			std::lock_guard<std::mutex> Lock(metadataReferenceMutex);
-			asASSERT(refCount.get() > 0);
-			if (refCount.atomicDec() == 0) Released = std::move(metadataExternalLease);
-		}
-		// May destroy this object; never touch fields after releasing the image.
+		refCount.atomicDec();
 		return;
 	}
 	if( refCount.atomicDec() == 0 )

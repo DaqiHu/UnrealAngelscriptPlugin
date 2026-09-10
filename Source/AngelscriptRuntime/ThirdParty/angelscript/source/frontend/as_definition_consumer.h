@@ -19,9 +19,9 @@ class asCCompilationSession;
 	struct asSDefinitionConsumerResult
 	{
 		asEDefinitionConsumerStatus Status = asEDefinitionConsumerStatus::InvalidPhase;
-		std::shared_ptr<asCMetadataImage> Image;
+		TUniquePtr<asCMetadataImage> Image;
 		TArray<asSDefinitionDiagnostic> Diagnostics;
-		bool Succeeded() const { return Status == asEDefinitionConsumerStatus::Succeeded && Image != nullptr; }
+		bool Succeeded() const { return Status == asEDefinitionConsumerStatus::Succeeded && Image.IsValid(); }
 	};
 	class ANGELSCRIPTRUNTIME_API asCDefinitionConsumer final
 	{
@@ -29,6 +29,6 @@ class asCCompilationSession;
 		// Returns complete semantic edges in a Building image. Layout validation
 		// and Freeze remain explicit subsequent stages; no AST pointer is retained.
 		asSDefinitionConsumerResult Consume(const asCCompilationSession& Session,
-			TConstArrayView<std::shared_ptr<asCMetadataImage>> Dependencies = {}) const;
+			TConstArrayView<asCMetadataImage*> Dependencies = {}) const;
 	};
 END_AS_NAMESPACE

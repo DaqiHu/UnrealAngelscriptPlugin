@@ -38,6 +38,8 @@ struct asSRuntimeTypeGeneration
 	bool operator==(const asSRuntimeTypeGeneration& Other) const { return Value == Other.Value; }
 };
 
+// Process ID reservations reuse this generation record; see as_type_id_registry.h.
+
 struct asSRuntimeTypeId
 {
 	asSRuntimeTypeGeneration Generation;

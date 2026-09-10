@@ -37,7 +37,7 @@ private:
   {
    Function = Definitions.DefineFunction(TEXT("Native"), TEXT(""), asFUNC_SYSTEM, Definitions.Image->Primitive(ttInt), {});
    return Function && Definitions.FinalizeAndFreeze()
-    && Engine.Ptr->RegisterMetadataImage(Definitions.Image) == asEMetadataRegistrationResult::Succeeded;
+    && Engine.Ptr->RegisterMetadataImage(MoveTemp(Definitions.Image)) == asEMetadataRegistrationResult::Succeeded;
   }
  };
  int32 InvokeLease(FCase& T, const std::shared_ptr<asSSystemFunctionInterface>& Lease)
@@ -112,7 +112,7 @@ public:
   auto* Function = F.DefineFunction(TEXT("Consume"), TEXT(""), asFUNC_SYSTEM, F.Image->Primitive(ttInt), MakeArrayView(&P, 1));
   ASSERT_THAT(IsTrue(F.FinalizeAndFreeze()));
   FNativeEngineOwner E;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, E.Ptr->RegisterMetadataImage(F.Image)));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, E.Ptr->RegisterMetadataImage(MoveTemp(F.Image))));
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, E.Ptr->BindNativeFunction(Function->GetStableKey(), asFUNCTION(ReentrantValue), asCALL_GENERIC)));
   ASSERT_THAT(AreEqual(0u, Function->parameterOffsets.GetLength()));
   ASSERT_THAT(AreEqual(0, Function->spaceNeededForArguments));

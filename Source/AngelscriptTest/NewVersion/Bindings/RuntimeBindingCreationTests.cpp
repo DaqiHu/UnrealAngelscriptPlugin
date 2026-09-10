@@ -82,7 +82,6 @@ TEST_CLASS_WITH_FLAGS(Creation, "Angelscript.UnitTest.RuntimeBindings.Engine",
 			TSharedPtr<FAngelscriptTypeBindInfoStore> Store = RecordFixture(); TWeakPtr<FAngelscriptTypeBindInfoStore> WeakStore = Store;
 			auto Owner = FAngelscriptEngine::CreateForBindings(Store.ToSharedRef(), Diagnostic); Store.Reset(); ASSERT_THAT(IsTrue(Owner.IsValid()));
 			ASSERT_THAT(IsTrue(WeakStore.IsValid())); ObserveCleanup(*Owner, Counts);
-			std::weak_ptr<AS_NAMESPACE_QUALIFIER asCMetadataImage> WeakImage = Owner->GetBindingInstallation()->GetImage();
 			auto* First = Owner->GetBindingContext(); auto* Second = Owner->CreateBindingContext();
 			ASSERT_THAT(IsNotNull(Second)); ASSERT_THAT(IsTrue(First != Second)); ASSERT_THAT(AreEqual(2, Owner->GetBindingContextCount()));
 			for (auto* Context : {First, Second})
@@ -90,7 +89,7 @@ TEST_CLASS_WITH_FLAGS(Creation, "Angelscript.UnitTest.RuntimeBindings.Engine",
 				Context->SetUserData(&Counts, CleanupKey); ASSERT_THAT(AreEqual(0, Context->Prepare(Function(*Owner, TEXT("int Add(int A, int B)")))));
 			}
 			Owner.Reset(); ASSERT_THAT(AreEqual((Iteration + 1) * 2, Counts.Contexts)); ASSERT_THAT(AreEqual(Iteration + 1, Counts.Engines));
-			ASSERT_THAT(IsFalse(WeakStore.IsValid())); ASSERT_THAT(IsTrue(WeakImage.expired()));
+			ASSERT_THAT(IsFalse(WeakStore.IsValid()));
 		}
 	}
 	TEST_METHOD(ExplicitShutdownIsIdempotentAndStopsContextCreation)

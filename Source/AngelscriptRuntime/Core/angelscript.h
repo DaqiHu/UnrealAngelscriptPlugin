@@ -84,6 +84,7 @@ struct asSJITFunctionBinding;
 class asIThreadManager;
 class asILockableSharedBool;
 class asIStringFactory;
+class asCTypeIdRegistry;
 
 // Enumerations and constants
 

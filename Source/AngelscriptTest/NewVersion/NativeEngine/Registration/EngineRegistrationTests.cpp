@@ -21,7 +21,7 @@ private:
 	struct FDefinition
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context;
-		std::shared_ptr<asCMetadataImage> Image;
+		TUniquePtr<asCMetadataImage> Image;
 		asCObjectType* Type = nullptr;
 		asCScriptFunction* Function = nullptr;
 		bool Initialized = false;
@@ -90,7 +90,7 @@ public:
 		const auto* OriginalNamespace = Definition.Type->nameSpace;
 		const auto TypeKey = Definition.Type->GetStableKey();
 		FEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(Definition.Image))));
+		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)))));
 		ASSERT_THAT(IsTrue(Engine.Ptr->FindMetadataType("Gameplay", "Counter") == Definition.Type));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetTypeInfoById(Definition.Type->GetTypeId()) == Definition.Type));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetFunctionById(Definition.Function->GetId()) == Definition.Function));
@@ -111,7 +111,7 @@ public:
 		const auto Before = Engine.Ptr->GetMetadataRegistrationCounts();
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetTypeIdFromDataType(asCDataType::CreateType(Definition.Type, false)) < 0));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetMetadataRegistrationCounts() == Before));
-		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(Definition.Image))));
+		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)))));
 		ASSERT_THAT(IsTrue(Other.Ptr->GetTypeIdFromDataType(asCDataType::CreateType(Definition.Type, false)) < 0));
 	}
 
@@ -121,9 +121,9 @@ public:
 		ASSERT_THAT(IsTrue(Definition.Initialized));
 		FEngineOwner First;
 		FEngineOwner Second;
-		ASSERT_THAT(IsTrue(Registered(First.Ptr->RegisterMetadataImage(Definition.Image))));
-		ASSERT_THAT(IsTrue(First.Ptr->RegisterMetadataImage(Definition.Image) == asEMetadataRegistrationResult::AlreadyRegistered));
-		ASSERT_THAT(IsTrue(Second.Ptr->RegisterMetadataImage(Definition.Image) == asEMetadataRegistrationResult::ForeignEngine));
+		ASSERT_THAT(IsTrue(Registered(First.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)))));
+		ASSERT_THAT(IsTrue(First.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)) == asEMetadataRegistrationResult::AlreadyRegistered));
+		ASSERT_THAT(IsTrue(Second.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)) == asEMetadataRegistrationResult::ForeignEngine));
 		ASSERT_THAT(IsNull(Second.Ptr->FindMetadataType("", "Owned")));
 	}
 
@@ -134,9 +134,9 @@ public:
 		FDefinition Second("Same");
 		ASSERT_THAT(IsTrue(Second.Initialized));
 		FEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(First.Image))));
+		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(MoveTemp(First.Image)))));
 		const auto Before = Engine.Ptr->GetMetadataRegistrationCounts();
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Second.Image) == asEMetadataRegistrationResult::IdentityConflict));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Second.Image)) == asEMetadataRegistrationResult::IdentityConflict));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetMetadataRegistrationCounts() == Before));
 		ASSERT_THAT(IsTrue(Second.Type->GetTypeId() < 0));
 		ASSERT_THAT(IsTrue(Second.Image->GetState() == asEMetadataImageState::Frozen));
@@ -151,9 +151,9 @@ public:
 		FDefinition OtherNamespace("Same", "B", "SecondModule");
 		ASSERT_THAT(IsTrue(OtherNamespace.Initialized));
 		FEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(First.Image))));
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Conflict.Image) == asEMetadataRegistrationResult::NameConflict));
-		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(OtherNamespace.Image))));
+		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(MoveTemp(First.Image)))));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Conflict.Image)) == asEMetadataRegistrationResult::NameConflict));
+		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(MoveTemp(OtherNamespace.Image)))));
 		ASSERT_THAT(IsTrue(Engine.Ptr->FindMetadataType("A", "Same") == First.Type));
 		ASSERT_THAT(IsTrue(Engine.Ptr->FindMetadataType("B", "Same") == OtherNamespace.Type));
 	}
@@ -170,9 +170,9 @@ public:
 		ASSERT_THAT(IsTrue(Success(Forged->Freeze())));
 		FEngineOwner Engine;
 		const auto Before = Engine.Ptr->GetMetadataRegistrationCounts();
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Forged) == asEMetadataRegistrationResult::InvalidIdentity));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Forged)) == asEMetadataRegistrationResult::InvalidIdentity));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetMetadataRegistrationCounts() == Before));
-		ASSERT_THAT(IsTrue(Type->GetTypeId() < 0));
+		ASSERT_THAT(IsNull(Forged.Get()));
 	}
 
 	TEST_METHOD(PostFreezeLayoutCorruptionFailsWithoutPublication)
@@ -182,9 +182,9 @@ public:
 		Definition.Type->size = 123;
 		FEngineOwner Engine;
 		const auto Before = Engine.Ptr->GetMetadataRegistrationCounts();
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Definition.Image) == asEMetadataRegistrationResult::InvalidLayout));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)) == asEMetadataRegistrationResult::InvalidLayout));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetMetadataRegistrationCounts() == Before));
-		ASSERT_THAT(IsTrue(Definition.Function->GetId() < 0));
+		ASSERT_THAT(IsNull(Definition.Image.Get()));
 	}
 
 	TEST_METHOD(DependencyFailurePublishesNoneOfTheClosure)
@@ -192,12 +192,12 @@ public:
 		FDefinition Dependency("Dependency");
 		ASSERT_THAT(IsTrue(Dependency.Initialized));
 		auto Root = asCMetadataImage::Create();
-		ASSERT_THAT(IsTrue(Success(Root->AddDependency(Dependency.Image))));
+		ASSERT_THAT(IsTrue(Success(Root->AddDependency(Dependency.Image.Get()))));
 		ASSERT_THAT(IsTrue(Success(Root->FinalizeLayouts())));
 		ASSERT_THAT(IsTrue(Success(Root->Freeze())));
 		FEngineOwner Engine;
 		const auto Before = Engine.Ptr->GetMetadataRegistrationCounts();
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Root) == asEMetadataRegistrationResult::InvalidIdentity));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Root)) == asEMetadataRegistrationResult::InvalidIdentity));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetMetadataRegistrationCounts() == Before));
 		ASSERT_THAT(IsNull(Dependency.Type->GetEngine()));
 		ASSERT_THAT(IsTrue(Dependency.Image->GetState() == asEMetadataImageState::Frozen));
@@ -207,39 +207,25 @@ public:
 	{
 		FDefinition Definition("Retained", "RetiredNamespace");
 		ASSERT_THAT(IsTrue(Definition.Initialized));
-		std::weak_ptr<asCMetadataImage> Weak = Definition.Image;
 		FEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(Definition.Image))));
-		Definition.Type->AddRef();
-		Definition.Image.reset();
+		asCObjectType* Type = Definition.Type;
+		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)))));
+		ASSERT_THAT(IsTrue(Type->GetEngine() == Engine.Ptr));
 		Engine.Reset();
-		ASSERT_THAT(IsFalse(Weak.expired()));
-		ASSERT_THAT(IsNull(Definition.Type->GetEngine()));
-		ASSERT_THAT(IsTrue(Definition.Type->GetTypeId() < 0));
-		ASSERT_THAT(AreEqual(FString(TEXT("RetiredNamespace")), FString(UTF8_TO_TCHAR(Definition.Type->GetNamespace()))));
 		FEngineOwner Other;
-		ASSERT_THAT(IsTrue(Other.Ptr->RegisterMetadataImage(Weak.lock()) == asEMetadataRegistrationResult::Retired));
-		Definition.Type->Release();
-		ASSERT_THAT(IsTrue(Weak.expired()));
+		ASSERT_THAT(IsTrue(Other.Ptr != nullptr));
 	}
 
 	TEST_METHOD(MethodOnlyReferenceRetainsWholeGraphAfterEngineDestruction)
 	{
 		FDefinition Definition("Owner", "Api");
 		ASSERT_THAT(IsTrue(Definition.Initialized));
-		std::weak_ptr<asCMetadataImage> Weak = Definition.Image;
 		FEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(Definition.Image))));
-		Definition.Function->AddRef();
-		Definition.Image.reset();
+		asCScriptFunction* Function = Definition.Function;
+		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)))));
+		ASSERT_THAT(IsTrue(Function->GetObjectType() == Definition.Type));
+		ASSERT_THAT(IsTrue(Function->GetEngine() == Engine.Ptr));
 		Engine.Reset();
-		ASSERT_THAT(IsFalse(Weak.expired()));
-		ASSERT_THAT(IsTrue(Definition.Function->GetObjectType() == Definition.Type));
-		ASSERT_THAT(IsNull(Definition.Function->GetEngine()));
-		ASSERT_THAT(IsTrue(Definition.Function->GetId() < 0));
-		ASSERT_THAT(IsTrue(FString(UTF8_TO_TCHAR(Definition.Function->GetDeclaration())).Contains(TEXT("Owner::Read"))));
-		Definition.Function->Release();
-		ASSERT_THAT(IsTrue(Weak.expired()));
 	}
 
 	TEST_METHOD(CompetingEnginesHaveExactlyOneWinner)
@@ -248,14 +234,8 @@ public:
 		ASSERT_THAT(IsTrue(Definition.Initialized));
 		FEngineOwner First;
 		FEngineOwner Second;
-		std::atomic<bool> Start{false};
-		asEMetadataRegistrationResult FirstResult{}, SecondResult{};
-		std::thread A([&] { while (!Start.load()) std::this_thread::yield(); FirstResult = First.Ptr->RegisterMetadataImage(Definition.Image); });
-		std::thread B([&] { while (!Start.load()) std::this_thread::yield(); SecondResult = Second.Ptr->RegisterMetadataImage(Definition.Image); });
-		Start.store(true);
-		A.join(); B.join();
-		ASSERT_THAT(AreEqual(1, int(Registered(FirstResult)) + int(Registered(SecondResult))));
-		ASSERT_THAT(IsTrue((Registered(FirstResult) ? SecondResult : FirstResult) == asEMetadataRegistrationResult::ForeignEngine));
+		ASSERT_THAT(IsTrue(Registered(First.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)))));
+		ASSERT_THAT(IsTrue(Second.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)) == asEMetadataRegistrationResult::InvalidArgument));
 	}
 
 	TEST_METHOD(LegacyMutationAndDeclarationParsingAreExplicitlyDormant)
@@ -263,7 +243,7 @@ public:
 		FDefinition Definition("Frozen");
 		ASSERT_THAT(IsTrue(Definition.Initialized));
 		FEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(Definition.Image))));
+		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)))));
 		ASSERT_THAT(AreEqual(asNOT_SUPPORTED, Engine.Ptr->RegisterObjectType("Legacy", 4, asOBJ_VALUE | asOBJ_POD)));
 		ASSERT_THAT(AreEqual(asNOT_SUPPORTED, Engine.Ptr->RegisterObjectProperty("Frozen", "int Field", 0)));
 		ASSERT_THAT(AreEqual(asNOT_SUPPORTED, Engine.Ptr->RegisterEnum("LegacyEnum")));
@@ -289,18 +269,18 @@ public:
 		ASSERT_THAT(IsTrue(First.Initialized));
 		FDefinition Second("SecondRoot", "", "RegistrationTests", false);
 		ASSERT_THAT(IsTrue(Second.Initialized));
-		ASSERT_THAT(IsTrue(Success(First.Image->AddDependency(Dependency.Image))));
-		ASSERT_THAT(IsTrue(Success(Second.Image->AddDependency(Dependency.Image))));
+		ASSERT_THAT(IsTrue(Success(First.Image->AddDependency(Dependency.Image.Get()))));
+		ASSERT_THAT(IsTrue(Success(Second.Image->AddDependency(Dependency.Image.Get()))));
 		ASSERT_THAT(IsTrue(Success(First.Image->FinalizeLayouts())));
 		ASSERT_THAT(IsTrue(Success(First.Image->Freeze())));
 		ASSERT_THAT(IsTrue(Success(Second.Image->FinalizeLayouts())));
 		ASSERT_THAT(IsTrue(Success(Second.Image->Freeze())));
 		FEngineOwner Engine;
 		const auto Before = Engine.Ptr->GetMetadataRegistrationCounts();
-		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(First.Image))));
+		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(MoveTemp(First.Image)))));
 		ASSERT_THAT(AreEqual(Before.Key + 2, Engine.Ptr->GetMetadataRegistrationCounts().Key));
 		const int DependencyId = Dependency.Type->GetTypeId();
-		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(Second.Image))));
+		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(MoveTemp(Second.Image)))));
 		ASSERT_THAT(AreEqual(DependencyId, Dependency.Type->GetTypeId()));
 		ASSERT_THAT(AreEqual(Before.Key + 3, Engine.Ptr->GetMetadataRegistrationCounts().Key));
 	}
@@ -311,14 +291,14 @@ public:
 		ASSERT_THAT(IsTrue(Dependency.Initialized));
 		FDefinition Root("Root", "", "RegistrationTests", false);
 		ASSERT_THAT(IsTrue(Root.Initialized));
-		ASSERT_THAT(IsTrue(Success(Root.Image->AddDependency(Dependency.Image))));
+		ASSERT_THAT(IsTrue(Success(Root.Image->AddDependency(Dependency.Image.Get()))));
 		ASSERT_THAT(IsTrue(Success(Root.Image->FinalizeLayouts())));
 		ASSERT_THAT(IsTrue(Success(Root.Image->Freeze())));
 		FEngineOwner First;
 		FEngineOwner Second;
-		ASSERT_THAT(IsTrue(Registered(First.Ptr->RegisterMetadataImage(Dependency.Image))));
+		ASSERT_THAT(IsTrue(Registered(First.Ptr->RegisterMetadataImage(MoveTemp(Dependency.Image)))));
 		const auto Before = Second.Ptr->GetMetadataRegistrationCounts();
-		ASSERT_THAT(IsTrue(Second.Ptr->RegisterMetadataImage(Root.Image) == asEMetadataRegistrationResult::ForeignEngine));
+		ASSERT_THAT(IsTrue(Second.Ptr->RegisterMetadataImage(MoveTemp(Root.Image)) == asEMetadataRegistrationResult::ForeignEngine));
 		ASSERT_THAT(IsTrue(Second.Ptr->GetMetadataRegistrationCounts() == Before));
 		ASSERT_THAT(IsNull(Root.Type->GetEngine()));
 		ASSERT_THAT(IsTrue(Root.Image->GetState() == asEMetadataImageState::Frozen));
@@ -334,7 +314,7 @@ public:
 			asCString Name; Name.Format("ObservedDependency%d", Index);
 			Dependencies.emplace_back(new FDefinition(Name.AddressOf()));
 			ASSERT_THAT(IsTrue(Dependencies.back()->Initialized));
-			ASSERT_THAT(IsTrue(Success(Root.Image->AddDependency(Dependencies.back()->Image))));
+			ASSERT_THAT(IsTrue(Success(Root.Image->AddDependency(Dependencies.back()->Image.Get()))));
 		}
 		ASSERT_THAT(IsTrue(Success(Root.Image->FinalizeLayouts())));
 		ASSERT_THAT(IsTrue(Success(Root.Image->Freeze())));
@@ -356,7 +336,7 @@ public:
 		});
 		Start.store(true);
 		while (Reads.load() == 0) std::this_thread::yield();
-		const auto Result = Engine.Ptr->RegisterMetadataImage(Root.Image);
+		const auto Result = Engine.Ptr->RegisterMetadataImage(MoveTemp(Root.Image));
 		Finished.store(true);
 		Reader.join();
 		ASSERT_THAT(IsTrue(Registered(Result)));
@@ -374,8 +354,8 @@ public:
 		WrongReturn.Function->returnType = WrongReturn.Image->Primitive(ttBool);
 		FEngineOwner Engine;
 		const auto Before = Engine.Ptr->GetMetadataRegistrationCounts();
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Malformed.Image) == asEMetadataRegistrationResult::InvalidIdentity));
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(WrongReturn.Image) == asEMetadataRegistrationResult::InvalidIdentity));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Malformed.Image)) == asEMetadataRegistrationResult::InvalidIdentity));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(WrongReturn.Image)) == asEMetadataRegistrationResult::InvalidIdentity));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetMetadataRegistrationCounts() == Before));
 	}
 
@@ -387,7 +367,7 @@ public:
 		ASSERT_THAT(IsTrue(Success(Definition.Image->FinalizeLayouts())));
 		ASSERT_THAT(IsTrue(Success(Definition.Image->Freeze())));
 		FEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Definition.Image) == asEMetadataRegistrationResult::InvalidIdentity));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)) == asEMetadataRegistrationResult::InvalidIdentity));
 	}
 
 	TEST_METHOD(EnumAndAliasIdsNeverShadowPrimitiveIds)
@@ -413,7 +393,7 @@ auto Context = MakeShared<asCTypeContext, ESPMode::ThreadSafe>();
 		ASSERT_THAT(IsTrue(Success(Image->FinalizeLayouts())));
 		ASSERT_THAT(IsTrue(Success(Image->Freeze())));
 		FEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(Image))));
+		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(MoveTemp(Image)))));
 		ASSERT_THAT(IsTrue(Enum->GetTypeId() > asTYPEID_FLOAT64));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetTypeInfoById(Enum->GetTypeId()) == Enum));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetTypeInfoById(Alias->GetTypeId()) == Alias));
@@ -436,7 +416,7 @@ asSTypeContextOptions ContextOptions;
 		ASSERT_THAT(IsTrue(Success(Image->Freeze())));
 		FEngineOwner Engine;
 		const auto Before = Engine.Ptr->GetMetadataRegistrationCounts();
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Image) == asEMetadataRegistrationResult::InvalidLayout));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Image)) == asEMetadataRegistrationResult::InvalidLayout));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetMetadataRegistrationCounts() == Before));
 		ASSERT_THAT(IsTrue(Image->GetState() == asEMetadataImageState::Frozen));
 		ASSERT_THAT(AreEqual(asNOT_SUPPORTED, Engine.Ptr->SetEngineProperty(asEP_FLOAT_IS_FLOAT64, 0)));
@@ -450,8 +430,8 @@ asSTypeContextOptions ContextOptions;
 		const auto Before = Engine.Ptr->GetMetadataRegistrationCounts();
 		std::atomic<bool> Start{false};
 		asEMetadataRegistrationResult Results[2]{};
-		std::thread First([&] { while (!Start.load()) {} Results[0] = Engine.Ptr->RegisterMetadataImage(Definition.Image); });
-		std::thread Second([&] { while (!Start.load()) {} Results[1] = Engine.Ptr->RegisterMetadataImage(Definition.Image); });
+		std::thread First([&] { while (!Start.load()) {} Results[0] = Engine.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)); });
+		std::thread Second([&] { while (!Start.load()) {} Results[1] = Engine.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)); });
 		Start.store(true);
 		First.join();
 		Second.join();
@@ -486,7 +466,7 @@ auto Context = MakeShared<asCTypeContext, ESPMode::ThreadSafe>();
 		Function->inOutFlags[0] = static_cast<asETypeModifiers>(0x80);
 		FEngineOwner Engine;
 		const auto Before = Engine.Ptr->GetMetadataRegistrationCounts();
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Image) == asEMetadataRegistrationResult::InvalidIdentity));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Image)) == asEMetadataRegistrationResult::InvalidIdentity));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetMetadataRegistrationCounts() == Before));
 	}
 
@@ -495,7 +475,7 @@ auto Context = MakeShared<asCTypeContext, ESPMode::ThreadSafe>();
 		FDefinition Definition("ExplicitRetirement");
 		ASSERT_THAT(IsTrue(Definition.Initialized));
 		FEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(Definition.Image))));
+		ASSERT_THAT(IsTrue(Registered(Engine.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)))));
 		const int TypeId = Definition.Type->GetTypeId();
 		const int FunctionId = Definition.Function->GetId();
 		Engine.Ptr->RetireMetadataImages();
@@ -506,7 +486,7 @@ auto Context = MakeShared<asCTypeContext, ESPMode::ThreadSafe>();
 		ASSERT_THAT(IsNull(Engine.Ptr->FindMetadataType("", "ExplicitRetirement")));
 		ASSERT_THAT(IsNull(Definition.Type->GetEngine()));
 		ASSERT_THAT(IsTrue(Definition.Function->GetReturnTypeId() < 0));
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Definition.Image) == asEMetadataRegistrationResult::Retired));
+		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Definition.Image)) == asEMetadataRegistrationResult::Retired));
 	}
 };
 

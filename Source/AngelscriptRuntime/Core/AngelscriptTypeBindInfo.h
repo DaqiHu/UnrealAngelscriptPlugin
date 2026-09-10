@@ -253,6 +253,7 @@ struct FAngelscriptRecordedNativeCallable
 struct FAngelscriptTypeBindInfoMember
 {
 	EAngelscriptTypeBindMemberKind Kind = EAngelscriptTypeBindMemberKind::Method;
+	int PublishedFunctionId = -1;
 	FString Declaration;
 	SIZE_T PropertyOffset = 0;
 	int32 EnumValue = 0;
@@ -280,8 +281,29 @@ struct FAngelscriptTypeBindInfoMember
 struct FAngelscriptTypeBindInfo
 {
 	FAngelscriptTypeBindDeclaration Declaration;
+	int PublishedTypeId = -1;
 	TArray<FAngelscriptTypeBindSource> Sources;
 	TArray<FAngelscriptTypeBindInfoMember> Members;
+};
+
+struct FAngelscriptPublishedMemberInfo
+{
+	FString Name;
+	FString Declaration;
+	FString TypeName;
+	EAngelscriptTypeBindMemberKind Kind = EAngelscriptTypeBindMemberKind::Method;
+	SIZE_T PropertyOffset = 0;
+	int PublishedFunctionId = -1;
+};
+
+struct FAngelscriptPublishedClassInfo
+{
+	FString Name;
+	FString Namespace;
+	int TypeId = -1;
+	uint32 NativeSize = 0;
+	uint32 NativeAlignment = 0;
+	TArray<FAngelscriptPublishedMemberInfo> Members;
 };
 
 /** An index remains stable while recording grows; the owning store is never moved. */

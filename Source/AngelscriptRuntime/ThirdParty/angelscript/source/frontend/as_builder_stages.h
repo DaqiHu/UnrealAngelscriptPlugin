@@ -24,7 +24,7 @@ class asCBuilderState;
 		int32 WorkerCount = 1;
 		TMap<FString, bool> PreprocessorFlags;
 		TSharedPtr<asCTypeContext, ESPMode::ThreadSafe> TypeContext;
-		TArray<std::shared_ptr<asCMetadataImage>> Dependencies;
+		TArray<asCMetadataImage*> Dependencies;
 	};
 
 	// An immutable observation of a completed attempt, not another AST or an

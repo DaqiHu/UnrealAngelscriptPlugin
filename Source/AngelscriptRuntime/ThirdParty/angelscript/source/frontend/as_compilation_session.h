@@ -26,7 +26,7 @@ enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, Decl
 		asCCompilationSession(TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot, asCDiagnosticsEngine& Diagnostics,
 			FString StableScope, TSharedRef<asCTypeContext, ESPMode::ThreadSafe> TypeContext);
 		bool CollectSource(asCPreprocessor& Preprocessor, const asSDirectiveProcessResult& Input, FString LogicalSourceKey);
-		bool AddExternalDefinitions(const std::shared_ptr<asCMetadataImage>& Image);
+		bool AddExternalDefinitions(asCMetadataImage* Image);
 		asCQualType ResolveTypeSyntax(const asSTypeSyntax& Syntax, const asCDecl& Scope);
 		bool ResolveListInitializer(asCQualType Type, asSListInitialization& Out);
 		asCRecordDecl* FindRecordDeclaration(const asSStableKey& Identity) const;
@@ -86,7 +86,7 @@ enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, Decl
 		TMap<asSStableKey, asCRecordDecl*> RecordDeclarations;
 		TMap<asSStableKey, asCNamedDecl*> NominalDeclarations;
 		TMap<FString, asCType*> ExternalTypes;
-		TArray<std::shared_ptr<asCMetadataImage>> ExternalDefinitions;
+		TArray<asCMetadataImage*> ExternalDefinitions;
 		TMap<FString, TArray<asSExternalCallable>> ExternalCallables;
 		TConstArrayView<asSExternalCallable> FindExternalCallables(const FString& Name) const;
 		TArray<FString> StableProjection;

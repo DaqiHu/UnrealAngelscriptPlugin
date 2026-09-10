@@ -530,15 +530,9 @@ int asCScriptFunction::GetId() const
 // interface
 int asCScriptFunction::AddRef() const
 {
-	if (metadataOwner)
-	{
-		std::lock_guard<std::mutex> lock(metadataReferenceMutex);
-		if (externalRefCount.get() == 0) metadataExternalLease = metadataOwner->shared_from_this();
-		return externalRefCount.atomicInc();
-	}
 	gcFlag = false;
 	const int result = externalRefCount.atomicInc();
-	if( result == 1 && runtimeTypeGeneration )
+	if (!metadataOwner && result == 1 && runtimeTypeGeneration)
 		runtimeTypeGeneration->AddRef();
 	return result;
 }
@@ -548,16 +542,7 @@ int asCScriptFunction::Release() const
 {
 	if (metadataOwner)
 	{
-		std::shared_ptr<asCMetadataImage> releasedLease;
-		int remaining;
-		{
-			std::lock_guard<std::mutex> lock(metadataReferenceMutex);
-			asASSERT(externalRefCount.get() > 0);
-			remaining = externalRefCount.atomicDec();
-			if (remaining == 0) releasedLease.swap(metadataExternalLease);
-		}
-		releasedLease.reset();
-		return remaining;
+		return externalRefCount.atomicDec();
 	}
 	gcFlag = false;
 	int r = externalRefCount.atomicDec();
@@ -1805,8 +1790,9 @@ int asCScriptFunction::GetParam(asUINT index, int *out_typeId, asDWORD *out_flag
 // interface
 asIScriptEngine *asCScriptFunction::GetEngine() const
 {
+	if (engine) return engine;
 	if (metadataOwner) return metadataOwner->GetBoundEngine();
-	return engine;
+	return nullptr;
 }
 
 // interface

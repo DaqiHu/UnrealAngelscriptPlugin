@@ -1,6 +1,8 @@
 #pragma once
 
 #include "AngelscriptTypeBindInfo.h"
+#include "as_metadata_image.h"
+#include "as_type_id_registry.h"
 
 class FAngelscriptReflectedTypeSnapshot;
 
@@ -51,6 +53,12 @@ public:
 	FAngelscriptTypeBindHandle FindScope(const FString& Namespace = FString()) const;
 	const FAngelscriptTypeBindInfo* GetType(FAngelscriptTypeBindHandle Handle) const;
 	const FAngelscriptTypeBindInfoMember* GetMember(FAngelscriptTypeBindMemberHandle Handle) const;
+	AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult PublishProcessIds() const;
+	int GetPublishedTypeId(FAngelscriptTypeBindHandle Handle) const;
+	int GetPublishedFunctionId(FAngelscriptTypeBindMemberHandle Handle) const;
+	AS_NAMESPACE_QUALIFIER asETypeQueryResult GetPublishedClassInfo(
+		int TypeId, FAngelscriptPublishedClassInfo& Out) const;
+	bool IsPublished() const { return bPublished; }
 
 private:
 	struct FTypeKeyFuncs : TDefaultMapHashableKeyFuncs<FString, int32, false>
@@ -78,4 +86,5 @@ private:
 	TArray<FAngelscriptNativeFunctionMapRecord> NativeFunctionMaps;
 	TSharedPtr<const FAngelscriptReflectedTypeSnapshot> ReflectedSnapshot;
 	bool bSealed = false;
+	bool bPublished = false;
 };

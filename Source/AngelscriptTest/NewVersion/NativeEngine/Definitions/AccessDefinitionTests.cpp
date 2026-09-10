@@ -15,7 +15,7 @@ private:
 	struct FFixture
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		std::shared_ptr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
 		asCObjectType* Owner = nullptr;
 		asCScriptFunction* Method = nullptr;
 		asCObjectProperty* Property = nullptr;
@@ -134,10 +134,10 @@ public:
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
 		Actual->permissions[0].bReadOnly = false;
 		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Fixture.Image) != asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded));
 		Actual->permissions[0].bReadOnly = true;
 		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Fixture.Image) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
 		ASSERT_THAT(IsTrue(Engine->FindMetadataType(Fixture.Owner->GetStableKey()) == Fixture.Owner));
 	}
 
@@ -164,13 +164,13 @@ public:
 		const auto Before = Engine->GetMetadataRegistrationCounts();
 		Fixture.Property->type = Fixture.Image->Primitive(ttInt64);
 		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Fixture.Image) != asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded));
 		ASSERT_THAT(IsTrue(Engine->GetMetadataRegistrationCounts() == Before));
 		Fixture.Property->type = Fixture.Image->Primitive(ttFloat32);
 		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
 		Fixture.Property->type = Original;
 		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Fixture.Image) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
 		ASSERT_THAT(IsTrue(Engine->FindMetadataType(Fixture.Owner->GetStableKey()) == Fixture.Owner));
 	}
 
@@ -204,7 +204,7 @@ public:
 		const auto Before = Engine->GetMetadataRegistrationCounts();
 		Fixture.Method->objectType = nullptr;
 		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Fixture.Image) != asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded));
 		Fixture.Method->objectType = Other;
 		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
 		auto ForeignContext = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
@@ -221,7 +221,7 @@ public:
 		Fixture.Method->objectType = Original;
 		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
 		ASSERT_THAT(IsTrue(Engine->GetMetadataRegistrationCounts() == Before));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Fixture.Image) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
 	}
 };
 #endif

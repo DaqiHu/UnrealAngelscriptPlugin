@@ -14,7 +14,7 @@ private:
 	struct FFixture
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		std::shared_ptr<asCMetadataImage> Host = asCMetadataImage::Create();
+		TUniquePtr<asCMetadataImage> Host = asCMetadataImage::Create();
 		asCObjectType* Template = nullptr;
 		AS_NAMESPACE_QUALIFIER asSStableKey Declaration;
 		bool Initialize(bool Fixed = true)
@@ -38,9 +38,9 @@ asSStableKey Argument, Result;
 			Context->GetIdentityRegistry().InternTypeUse(Descriptor, Result);
 			return Result;
 		}
-		std::shared_ptr<asCMetadataImage> Draft()
+		TUniquePtr<asCMetadataImage> Draft()
 		{
-			auto Image = asCMetadataImage::Create(); Image->SetIdentityContext(Context); Image->AddDependency(Host); return Image;
+			auto Image = asCMetadataImage::Create(); Image->SetIdentityContext(Context); Image->AddDependency(Host.Get()); return Image;
 		}
 	};
 public:
@@ -93,7 +93,7 @@ public:
 		AS_NAMESPACE_QUALIFIER asCSourceManager Sources(Snapshot); AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics(Sources);
 		AS_NAMESPACE_QUALIFIER asCCompilationSession Session(Snapshot, Diagnostics, TEXT("host-validation"), Fixture.Context);
 		Fixture.Template->name = "tampered";
-		ASSERT_THAT(IsFalse(Session.AddExternalDefinitions(Fixture.Host)));
+		ASSERT_THAT(IsFalse(Session.AddExternalDefinitions(Fixture.Host.Get())));
 	}
 	TEST_METHOD(DetachedBuilderResolvesExplicitAndArrayShorthandToOneConcreteType)
 	{
@@ -102,18 +102,18 @@ auto Snapshot = MakeShared<asCSourceSnapshot, ESPMode::ThreadSafe>();
 		const auto Source = AngelscriptNativeEngineTest::FSourceInput::FromText(TEXT("Generic.as"), TEXT("class Values { array<int> Explicit; int[] Shorthand; };"));
 		Snapshot->AddFile(TEXT("Generic.as"), Source.GetUtf8Bytes()); Snapshot->Freeze();
 		AS_NAMESPACE_QUALIFIER asCSourceManager Sources(Snapshot); asCDiagnosticsEngine Diagnostics(Sources);
-		asSBuilderOptions Options; Options.StableScope = TEXT("generic-tests"); Options.TypeContext = Fixture.Context; Options.Dependencies.Add(Fixture.Host);
+		asSBuilderOptions Options; Options.StableScope = TEXT("generic-tests"); Options.TypeContext = Fixture.Context; Options.Dependencies.Add(Fixture.Host.Get());
 		asCBuilder Builder(Snapshot, Diagnostics, Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		const asCObjectType* Record = nullptr;
 		for (const auto* Type : Builder.GetDefinitions()->GetTypes()) if (Type->name == "Values") Record = static_cast<const asCObjectType*>(Type);
 		ASSERT_THAT(IsNotNull(Record)); ASSERT_THAT(AreEqual(asUINT(2), Record->GetPropertyCount()));
 		ASSERT_THAT(IsTrue(Record->properties[0]->type.GetTypeInfo() == Record->properties[1]->type.GetTypeInfo()));
-		ASSERT_THAT(IsTrue(Record->properties[0]->type.GetTypeInfo()->GetMetadataImage() == Builder.GetDefinitions().get()));
+		ASSERT_THAT(IsTrue(Record->properties[0]->type.GetTypeInfo()->GetMetadataImage() == Builder.GetDefinitions()));
 		ASSERT_THAT(IsNull(Builder.GetDefinitions()->GetBoundEngine()));
 		asCScriptEngine* Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Builder.GetDefinitions()) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Builder.TakeDefinitions()) == asEMetadataRegistrationResult::Succeeded));
 		const auto* Concrete = Record->properties[0]->type.GetTypeInfo();
 		ASSERT_THAT(IsTrue(Engine->FindMetadataType(Concrete->GetStableKey()) == Concrete));
 		ASSERT_THAT(IsTrue(Engine->FindMetadataType("", "array") == Fixture.Template));
@@ -128,7 +128,7 @@ auto Snapshot = MakeShared<asCSourceSnapshot, ESPMode::ThreadSafe>();
 		const auto Source = AngelscriptNativeEngineTest::FSourceInput::FromText(TEXT("Nested.as"), TEXT("struct Grid { array<array<int>> Explicit; int[][] Shorthand; };"));
 		Snapshot->AddFile(TEXT("Nested.as"), Source.GetUtf8Bytes()); Snapshot->Freeze();
 		AS_NAMESPACE_QUALIFIER asCSourceManager Sources(Snapshot); asCDiagnosticsEngine Diagnostics(Sources);
-		asSBuilderOptions Options; Options.StableScope = TEXT("nested-tests"); Options.TypeContext = Fixture.Context; Options.Dependencies.Add(Intermediate);
+		asSBuilderOptions Options; Options.StableScope = TEXT("nested-tests"); Options.TypeContext = Fixture.Context; Options.Dependencies.Add(Intermediate.Get());
 		asCBuilder Builder(Snapshot, Diagnostics, Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		const asCObjectType* Grid = nullptr;

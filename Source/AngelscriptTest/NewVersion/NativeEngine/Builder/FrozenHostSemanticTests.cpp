@@ -16,7 +16,7 @@ private:
 	struct FHost
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		std::shared_ptr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
 		asCScriptFunction* Add = nullptr;
 		asCObjectType* Item = nullptr;
 		asCScriptFunction* Read = nullptr;
@@ -85,14 +85,14 @@ if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return f
 		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics{Sources};
 		AS_NAMESPACE_QUALIFIER asSBuilderOptions Options;
 		explicit FBuilderInput(const FString& Source, TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> TypeContext,
-			const std::shared_ptr<asCMetadataImage>& Host)
+			asCMetadataImage* Host)
 		{
 			const auto Input = AngelscriptNativeEngineTest::FSourceInput::FromText(TEXT("Main.as"), Source);
 			Snapshot->AddFile(TEXT("Main.as"), Input.GetUtf8Bytes());
 			Snapshot->Freeze();
 			Options.StableScope = TEXT("frozen-host.source");
 			Options.TypeContext = TypeContext;
-			Options.Dependencies.Add(Host);
+			if (Host) Options.Dependencies.Add(Host);
 		}
 		FString DescribeFailure(const asCBuilder& Builder) const
 		{
@@ -119,7 +119,7 @@ public:
 	{
 		FHost Host;
 		ASSERT_THAT(IsTrue(Host.Initialize()));
-		FBuilderInput Input(TEXT("int F() { return Host::Add(42); }"), Host.Context, Host.Image);
+		FBuilderInput Input(TEXT("int F() { return Host::Add(42); }"), Host.Context, Host.Image.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		const bool Built = Builder.RunThrough();
 		ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
@@ -138,11 +138,11 @@ public:
 	{
 		FHost Host;
 		ASSERT_THAT(IsTrue(Host.Initialize()));
-		FBuilderInput Allowed(TEXT("int F(const Item Value) { return Value.Read(); }"), Host.Context, Host.Image);
+		FBuilderInput Allowed(TEXT("int F(const Item Value) { return Value.Read(); }"), Host.Context, Host.Image.Get());
 		asCBuilder AllowedBuilder(Allowed.Snapshot, Allowed.Diagnostics, Allowed.Options);
 		const bool AllowedBuilt = AllowedBuilder.RunThrough();
 		ASSERT_THAT(IsTrue(AllowedBuilt, Allowed.DescribeFailure(AllowedBuilder)));
-		FBuilderInput Denied(TEXT("int F(const Item Value) { return Value.Mutate(); }"), Host.Context, Host.Image);
+		FBuilderInput Denied(TEXT("int F(const Item Value) { return Value.Mutate(); }"), Host.Context, Host.Image.Get());
 		asCBuilder DeniedBuilder(Denied.Snapshot, Denied.Diagnostics, Denied.Options);
 		ASSERT_THAT(IsFalse(DeniedBuilder.RunThrough()));
 	}
@@ -158,12 +158,12 @@ public:
 		AS_NAMESPACE_QUALIFIER asCSourceManager Sources(Snapshot);
 		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics(Sources);
 		AS_NAMESPACE_QUALIFIER asCCompilationSession Session(Snapshot, Diagnostics, TEXT("frozen-host"), Host.Context);
-		ASSERT_THAT(IsFalse(Session.AddExternalDefinitions(Draft)));
+		ASSERT_THAT(IsFalse(Session.AddExternalDefinitions(Draft.Get())));
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Foreign = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
 		AS_NAMESPACE_QUALIFIER asCCompilationSession ForeignSession(Snapshot, Diagnostics, TEXT("frozen-host-foreign"), Foreign);
-		ASSERT_THAT(IsFalse(ForeignSession.AddExternalDefinitions(Host.Image)));
+		ASSERT_THAT(IsFalse(ForeignSession.AddExternalDefinitions(Host.Image.Get())));
 		Host.Add->name = "Tampered";
-		ASSERT_THAT(IsFalse(Session.AddExternalDefinitions(Host.Image)));
+		ASSERT_THAT(IsFalse(Session.AddExternalDefinitions(Host.Image.Get())));
 	}
 
 	TEST_METHOD(OmittedHostDefaultWithoutTypedValueIsUnsupported)
@@ -172,7 +172,7 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		asCString* Default = asNEW(asCString)("7");
 		Host.Add->defaultArgs.PushLast(Default);
-		FBuilderInput Input(TEXT("int F() { return Host::Add(); }"), Host.Context, Host.Image);
+		FBuilderInput Input(TEXT("int F() { return Host::Add(); }"), Host.Context, Host.Image.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		const bool Built = Builder.RunThrough();
 		FString Errors;
@@ -184,17 +184,17 @@ public:
 
 	TEST_METHOD(ReleasedCallerImageDoesNotInvalidateSelectedHostFunction)
 	{
-		std::shared_ptr<asCMetadataImage> HostImage;
+		TUniquePtr<asCMetadataImage> HostImage;
 		AS_NAMESPACE_QUALIFIER asSStableKey Key;
 		{
 			FHost Host;
 			ASSERT_THAT(IsTrue(Host.Initialize()));
 			Key = Host.Add->GetStableKey();
-			HostImage = Host.Image;
-			FBuilderInput Input(TEXT("int F() { return Host::Add(42); }"), Host.Context, Host.Image);
+			FBuilderInput Input(TEXT("int F() { return Host::Add(42); }"), Host.Context, Host.Image.Get());
 			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 			const bool Built = Builder.RunThrough();
 			ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
+			HostImage = MoveTemp(Host.Image);
 		}
 		ASSERT_THAT(IsTrue(bool(HostImage)));
 		ASSERT_THAT(IsNotNull(HostImage->FindFunction(Key)));

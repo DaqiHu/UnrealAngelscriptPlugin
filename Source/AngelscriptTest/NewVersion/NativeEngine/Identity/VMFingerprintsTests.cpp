@@ -39,7 +39,7 @@ private:
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context =
 			MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		std::shared_ptr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
 		asCObjectType* Type = nullptr;
 		asCObjectProperty* X = nullptr;
 		asCObjectProperty* Y = nullptr;
@@ -507,7 +507,7 @@ public:
 		FPointImage Point;
 		ASSERT_THAT(IsTrue(Point.BuildPoint()));
 		FEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Point.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Point.Image))));
 		Point.Type->AddRef();
 		Engine.Reset();
 		ASSERT_THAT(AreEqual(asEMetadataImageState::Retired, Point.Image->GetState()));
@@ -520,7 +520,7 @@ public:
 		ASSERT_THAT(IsNull(Point.Type->GetEngine()));
 		ASSERT_THAT(IsTrue(Point.Type->GetTypeId() < 0));
 		FEngineOwner Other;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Retired, Other.Ptr->RegisterMetadataImage(Point.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Retired, Other.Ptr->RegisterMetadataImage(MoveTemp(Point.Image))));
 		Point.Type->Release();
 	}
 

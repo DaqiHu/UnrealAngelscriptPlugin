@@ -117,46 +117,18 @@ asEFingerprintStatus asCTypeInfo::TryGetLayoutHash(asSLayoutHash& OutHash, TCons
 // interface
 int asCTypeInfo::AddRef() const
 {
-	if (metadataOwner)
-	{
-		std::lock_guard<std::mutex> lock(metadataReferenceMutex);
-		if (externalRefCount.get() == 0) metadataExternalLease = metadataOwner->shared_from_this();
-		return externalRefCount.atomicInc();
-	}
 	return externalRefCount.atomicInc();
 }
 
 // interface
 int asCTypeInfo::Release() const
 {
-	if (metadataOwner)
-	{
-		std::shared_ptr<asCMetadataImage> releasedLease;
-		int remaining;
-		{
-			std::lock_guard<std::mutex> lock(metadataReferenceMutex);
-			asASSERT(externalRefCount.get() > 0);
-			remaining = externalRefCount.atomicDec();
-			if (remaining == 0) releasedLease.swap(metadataExternalLease);
-		}
-		// Destruction may delete this object. No member access after this reset.
-		releasedLease.reset();
-		return remaining;
-	}
 	int r = externalRefCount.atomicDec();
-
-	if (r == 0)
+	if (metadataOwner) return r;
+	if (r == 0 && internalRefCount.get() == 0)
 	{
-		// There are no more external references, if there are also no
-		// internal references then it is time to delete the object type
-		if (internalRefCount.get() == 0)
-		{
-			// If the engine is no longer set, then it has already been
-			// released and we must take care of the deletion ourselves
-			asDELETE(const_cast<asCTypeInfo*>(this), asCTypeInfo);
-		}
+		asDELETE(const_cast<asCTypeInfo*>(this), asCTypeInfo);
 	}
-
 	return r;
 }
 
@@ -309,8 +281,9 @@ int asCTypeInfo::GetTypeId() const
 // interface
 asIScriptEngine *asCTypeInfo::GetEngine() const
 {
+	if (engine) return engine;
 	if (metadataOwner) return metadataOwner->GetBoundEngine();
-	return engine;
+	return nullptr;
 }
 
 // interface

@@ -33,7 +33,7 @@ private:
 	struct FHostTypes
 	{
 		TSharedRef<asCTypeContext, ESPMode::ThreadSafe> Types = MakeShared<asCTypeContext, ESPMode::ThreadSafe>();
-		std::shared_ptr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
 
 		bool Initialize()
 		{
@@ -182,7 +182,7 @@ public:
 		auto Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.GetDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
 		asCExecutableSnapshot* Snapshot = nullptr;
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
 		ON_SCOPE_EXIT { Snapshot->Release(); };
@@ -205,7 +205,7 @@ public:
 	{
 		FHostTypes Host;
 		ASSERT_THAT(IsTrue(Host.Initialize()));
-		FSourceExecutionInput Input(TEXT("struct Grid {TMap<int,TArray<TArray<int>>> Values;} int Good(){return yield();}"), Host.Types, Host.Image);
+		FSourceExecutionInput Input(TEXT("struct Grid {TMap<int,TArray<TArray<int>>> Values;} int Good(){return yield();}"), Host.Types, Host.Image.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
 		ASSERT_THAT(IsTrue(Builder.GetDefinitions()->ValidateFrozenDefinitions()));
@@ -218,7 +218,7 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		for (const TCHAR* Type : {TEXT("Unknown<int>"), TEXT("TArray<int,int>"), TEXT("TMap<int>")})
 		{
-			FSourceExecutionInput Input(FString::Printf(TEXT("struct Bad {%s Value;}"), Type), Host.Types, Host.Image);
+			FSourceExecutionInput Input(FString::Printf(TEXT("struct Bad {%s Value;}"), Type), Host.Types, Host.Image.Get());
 			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 			ASSERT_THAT(IsFalse(Builder.RunThrough(), Type));
 		}

@@ -54,6 +54,7 @@
 #include "as_tokendef.h"
 #include "as_metadata_image.h"
 #include "as_execution_snapshot.h"
+#include "Templates/UniquePtr.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -307,7 +308,11 @@ public:
 	asCScriptEngine();
 	virtual ~asCScriptEngine();
 	// Semantic registration only: does not prepare VM bytecode or callables.
-	asEMetadataRegistrationResult RegisterMetadataImage(const std::shared_ptr<asCMetadataImage>& Image);
+	asEMetadataRegistrationResult RegisterMetadataImage(TUniquePtr<asCMetadataImage> Image);
+	asEMetadataRegistrationResult RegisterMetadataImage(
+		TUniquePtr<asCMetadataImage> Image,
+		const TMap<const asCTypeInfo*, int>& PublishedTypeIds,
+		const TMap<const asCScriptFunction*, int>& PublishedFunctionIds);
 	void RetireMetadataImages();
 	bool AcquireVmObjectLease();
 	void ReleaseVmObjectLease();
@@ -335,7 +340,7 @@ public:
 	asCGlobalProperty* FindMetadataGlobalProperty(const char* Namespace, const char* Name) const;
 	asCGlobalProperty* FindMetadataGlobalProperty(const asSStableKey& Key) const;
 	TPair<asUINT, asUINT> GetMetadataRegistrationCounts() const;
-	TArray<std::shared_ptr<const asCMetadataImage>> GetRegisteredMetadataImages() const;
+	TArray<const asCMetadataImage*> GetRegisteredMetadataImages() const;
 
 	// LEGACY remains the source-module Build default until the final cutover gate.
 	// Explicit CANONICAL selection publishes Bytecode from sealed-AST CodeGen.
@@ -689,7 +694,7 @@ private:
 	asUINT vmObjectLeases = 0;
 	asUINT vmOperations = 0;
 	bool vmDrainActive = false;
-	TArray<std::shared_ptr<asCMetadataImage>> metadataImages;
+	TArray<TUniquePtr<asCMetadataImage>> metadataImages;
 	TMap<asSStableKey, asCTypeInfo*> metadataTypesByKey;
 	TMap<FString, asCTypeInfo*, FDefaultSetAllocator, asCMetadataImage::asTNameKeyFuncs<asCTypeInfo*>> metadataTypesByName;
 	TMap<int, asCTypeInfo*> metadataTypesById;

@@ -102,7 +102,7 @@ private:
   ASSERT_THAT(AreEqual(DecodeExpected,asCByteCodeImageCodec::Decode(Bytes,D)));
   ASSERT_THAT(IsNull(D.Get()));
   FNativeEngineOwner E;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(T.F.Image)));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(MoveTemp(T.F.Image))));
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->BindNativeFunction(T.Probe->GetStableKey(),asFUNCTION(Observe),asCALL_GENERIC)));
   auto Recovery=T.Make(true); asCExecutableSnapshot* Kept=nullptr;
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->LinkByteCodeImage(*Recovery,Kept)));
@@ -151,7 +151,7 @@ public:
     ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,asCByteCodeImageCodec::Decode(Bytes,D))); I=MoveTemp(D);
    }
    FNativeEngineOwner E;
-   ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(T.F.Image)));
+   ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(MoveTemp(T.F.Image))));
    ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->BindNativeFunction(T.Probe->GetStableKey(),asFUNCTION(Observe),asCALL_GENERIC)));
    asCExecutableSnapshot* S=nullptr;
    ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->LinkByteCodeImage(*I,S))); S->Release();
@@ -180,7 +180,7 @@ public:
   ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,B.Finish(I)));
   FNativeEngineOwner E;
   ASSERT_THAT(AreEqual(0,E.Ptr->SetEngineProperty(asEP_INIT_STACK_SIZE,64)));
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(T.F.Image)));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(MoveTemp(T.F.Image))));
   asCExecutableSnapshot* S=nullptr;
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->LinkByteCodeImage(*I,S))); S->Release();
   auto* Executable=E.Ptr->FindPublishedExecutable(T.Run->GetStableKey());

@@ -4,6 +4,7 @@
 #include "as_config.h"
 #include "frontend/as_builder_stages.h"
 #include "as_scriptengine.h"
+#include "Templates/UniquePtr.h"
 #include "as_module.h"
 
 #include "Misc/MemStack.h"
@@ -27,7 +28,8 @@ public:
 	const asCCompilationSession* GetCompilationSession() const;
 	TConstArrayView<asSSemanticSourceInput> GetLexedSources() const;
 	TConstArrayView<asSDirectiveProcessResult> GetPreprocessedSources() const;
-	std::shared_ptr<asCMetadataImage> GetDefinitions() const;
+	asCMetadataImage* GetDefinitions() const;
+	TUniquePtr<asCMetadataImage> TakeDefinitions();
 	static FAngelscriptPreprocessResult CompileDeclarations(
 		const asCSourceManager& SourceManager,
 		const asCPreprocessorConfiguration& Configuration,

@@ -89,7 +89,7 @@ private:
    ExpectedMode==asTM_NONE?ByteImm32(21):ByteLocal(4),false,bNull?nullptr:Target,Recovery);
   ASSERT_THAT(IsNotNull(Image.Get()));
   FNativeEngineOwner Engine;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,Engine.Ptr->RegisterMetadataImage(F.Image)));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,Engine.Ptr->RegisterMetadataImage(MoveTemp(F.Image))));
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,Engine.Ptr->BindNativeFunction(Shape->GetStableKey(),asFUNCTION(Observe),asCALL_GENERIC)));
   if (!bScript) { ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,Engine.Ptr->BindNativeFunction(Target->GetStableKey(),asFUNCTION(Observe),asCALL_GENERIC))); }
   TArray<uint8> Bytes;
@@ -165,7 +165,7 @@ public:
   { Req.Parameters[0].StorageDwords=1; asEncodeByteCodeRequirementContract(Req,Req.ContractWitness); }
   ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::Succeeded,asCByteCodeVerifier::Verify(*I)));
   FNativeEngineOwner E;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(F.Image)));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(MoveTemp(F.Image))));
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->BindNativeFunction(S->GetStableKey(),asFUNCTION(Observe),asCALL_GENERIC)));
   asCExecutableSnapshot* Snapshot=nullptr;
   auto Status=E.Ptr->LinkByteCodeImage(*I,Snapshot); if (Snapshot) Snapshot->Release();

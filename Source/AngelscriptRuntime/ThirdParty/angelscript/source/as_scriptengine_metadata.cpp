@@ -1,6 +1,7 @@
 /* Maintained Unreal AngelScript fork — transactional semantic registration. */
 #include "as_scriptengine.h"
 #include "as_namespace.h"
+#include "as_type_id_registry.h"
 #include "frontend/as_type_context.h"
 #include "Containers/Set.h"
 #include <algorithm>
@@ -30,35 +31,75 @@ namespace
 	}
 }
 
-asEMetadataRegistrationResult asCScriptEngine::RegisterMetadataImage(const std::shared_ptr<asCMetadataImage>& Image)
+asEMetadataRegistrationResult asCScriptEngine::RegisterMetadataImage(TUniquePtr<asCMetadataImage> Image)
+{
+	const TMap<const asCTypeInfo*, int> TypeIds;
+	const TMap<const asCScriptFunction*, int> FunctionIds;
+	return RegisterMetadataImage(MoveTemp(Image), TypeIds, FunctionIds);
+}
+
+asEMetadataRegistrationResult asCScriptEngine::RegisterMetadataImage(
+	TUniquePtr<asCMetadataImage> Image,
+	const TMap<const asCTypeInfo*, int>& PublishedTypeIds,
+	const TMap<const asCScriptFunction*, int>& PublishedFunctionIds)
 {
 	if (!Image) return asEMetadataRegistrationResult::InvalidArgument;
+	asCMetadataImage* const Root = Image.Get();
 	std::lock_guard<std::mutex> EngineLock(metadataRegistrationMutex);
 	if (shuttingDown || vmRetirementRequested || metadataRegistrationRetired) return asEMetadataRegistrationResult::Retired;
-	if (!Image->IsFrozen()) return asEMetadataRegistrationResult::InvalidState;
-	TArray<std::shared_ptr<asCMetadataImage>> Closure;
+	if (!Root->IsFrozen()) return asEMetadataRegistrationResult::InvalidState;
+	TArray<asCMetadataImage*> Closure;
 	TSet<asCMetadataImage*> Visited;
-	std::function<void(const std::shared_ptr<asCMetadataImage>&)> Visit = [&](const auto& Item)
+	std::function<void(asCMetadataImage*)> Visit = [&](asCMetadataImage* Item)
 	{
-		if (Visited.Contains(Item.get())) return;
-		Visited.Add(Item.get());
-		for (const auto& Dependency : Item->Dependencies) Visit(Dependency);
+		if (!Item || Visited.Contains(Item)) return;
+		Visited.Add(Item);
+		for (asCMetadataImage* Dependency : Item->GetDependencies()) Visit(Dependency);
 		Closure.Add(Item);
 	};
-	Visit(Image);
+	Visit(Root);
+	auto IsAdopted = [&](asCMetadataImage* Ptr) -> bool
+	{
+		if (Ptr == Root) return true;
+		for (const TUniquePtr<asCMetadataImage>& Owned : metadataImages)
+			if (Owned.Get() == Ptr) return true;
+		return false;
+	};
+	for (asCMetadataImage* Item : Closure)
+	{
+		if (!IsAdopted(Item)) return asEMetadataRegistrationResult::InvalidState;
+	}
 	// Every Engine acquires images in this order, so overlapping dependency DAGs
 	// cannot form a lock cycle across two competing Engine registration calls.
 	std::vector<asCMetadataImage*> LockOrder;
-	for (const auto& Item : Closure) LockOrder.push_back(Item.get());
+	for (asCMetadataImage* Item : Closure) LockOrder.push_back(Item);
 	std::sort(LockOrder.begin(), LockOrder.end(), std::less<asCMetadataImage*>{});
 	std::vector<std::unique_lock<std::mutex>> ImageLocks;
 	for (auto* Item : LockOrder) ImageLocks.emplace_back(Item->MutationMutex);
-	if (Image->GetState() == asEMetadataImageState::Retired) return asEMetadataRegistrationResult::Retired;
-	if (Image->BoundEngine) return Image->BoundEngine == this ? asEMetadataRegistrationResult::AlreadyRegistered : asEMetadataRegistrationResult::ForeignEngine;
-	for (const auto& Item : Closure)
+	auto EngineFromImage = [](asCMetadataImage* Item) -> asCScriptEngine*
+	{
+		for (asCTypeInfo* Type : Item->Types)
+		{
+			if (Type && Type->engine) return Type->engine;
+		}
+		for (asCScriptFunction* Function : Item->Functions)
+		{
+			if (Function && Function->engine) return Function->engine;
+		}
+		return nullptr;
+	};
+	if (Root->GetState() == asEMetadataImageState::Retired) return asEMetadataRegistrationResult::Retired;
+	if (asCScriptEngine* Existing = EngineFromImage(Root))
+	{
+		return Existing == this ? asEMetadataRegistrationResult::AlreadyRegistered : asEMetadataRegistrationResult::ForeignEngine;
+	}
+	for (asCMetadataImage* Item : Closure)
 	{
 		if (Item->GetState() == asEMetadataImageState::Retired) return asEMetadataRegistrationResult::Retired;
-		if (Item->BoundEngine && Item->BoundEngine != this) return asEMetadataRegistrationResult::ForeignEngine;
+		if (asCScriptEngine* Existing = EngineFromImage(Item))
+		{
+			if (Existing != this) return asEMetadataRegistrationResult::ForeignEngine;
+		}
 		if (Item->GetState() != asEMetadataImageState::Frozen && Item->GetState() != asEMetadataImageState::Attached)
 			return asEMetadataRegistrationResult::InvalidState;
 		if (Item->Options.PointerByteSize != sizeof(void*) || Item->Options.TargetProfile != "native" ||
@@ -78,11 +119,38 @@ asEMetadataRegistrationResult asCScriptEngine::RegisterMetadataImage(const std::
 	auto GlobalsByName = metadataGlobalsByName;
 	int NextType = nextMetadataTypeId;
 	int NextFunction = nextMetadataFunctionId;
+	asUINT UnpublishedTypes = 0;
+	asUINT UnpublishedFunctions = 0;
+	for (asCMetadataImage* Item : Closure)
+	{
+		if (EngineFromImage(Item) == this) continue;
+		for (asCTypeInfo* Type : Item->Types)
+		{
+			if (!PublishedTypeIds.Find(Type)) ++UnpublishedTypes;
+		}
+		for (asCScriptFunction* Function : Item->Functions)
+		{
+			if (!PublishedFunctionIds.Find(Function)) ++UnpublishedFunctions;
+		}
+	}
+	asSTypeIdReservation Unpublished;
+	if (UnpublishedTypes > 0 || UnpublishedFunctions > 0)
+	{
+		asSTypeIdReservationRequest Request;
+		Request.TypeSequenceCount = UnpublishedTypes;
+		Request.FunctionIdCount = UnpublishedFunctions;
+		if (asCTypeIdRegistry::Get().Reserve(Request, Unpublished) != asTYPE_ID_RESERVE_SUCCEEDED)
+		{
+			return asEMetadataRegistrationResult::InvalidState;
+		}
+	}
+	int NextReservedType = Unpublished.FirstTypeSequence;
+	int NextReservedFunction = Unpublished.FirstFunctionId;
 	TMap<const asCTypeInfo*, int> ClosureTypeIds;
 	TMap<const asCScriptFunction*, int> ClosureFunctionIds;
-	for (const auto& Item : Closure)
+	for (asCMetadataImage* Item : Closure)
 	{
-		if (Item->BoundEngine == this)
+		if (EngineFromImage(Item) == this)
 		{
 			ClosureTypeIds.Append(Item->BoundTypeIds);
 			ClosureFunctionIds.Append(Item->BoundFunctionIds);
@@ -96,11 +164,21 @@ asEMetadataRegistrationResult asCScriptEngine::RegisterMetadataImage(const std::
 			const auto* Object = CastToObjectType(Type);
 			const bool IsSpecialization = Object && Object->GetMetadataTemplateDefinition();
 			if (!IsSpecialization && (TypesByName.Contains(Name) || GlobalsByName.Contains(Name))) return asEMetadataRegistrationResult::NameConflict;
-			if (NextType > asTYPEID_MASK_SEQNBR) return asEMetadataRegistrationResult::InvalidState;
-			int Id = NextType++;
-			if (Type->flags & asOBJ_SCRIPT_OBJECT) Id |= asTYPEID_SCRIPTOBJECT;
-			else if (Type->flags & asOBJ_TEMPLATE) Id |= asTYPEID_TEMPLATE;
-			else if (!(Type->flags & asOBJ_ENUM)) Id |= asTYPEID_APPOBJECT;
+			int Id = 0;
+			if (const int* Published = PublishedTypeIds.Find(Type))
+			{
+				Id = *Published;
+				if (asCTypeIdAllocator::IsFixedPrimitiveTypeId(Id) || TypesById.Contains(Id))
+					return asEMetadataRegistrationResult::InvalidIdentity;
+				const int Sequence = asCTypeIdAllocator::TypeSequenceFromTypeId(Id) + 1;
+				if (Sequence > NextType) NextType = Sequence;
+			}
+			else
+			{
+				Id = asCTypeIdAllocator::EncodeObjectTypeId(NextReservedType++, Type->flags);
+				const int Sequence = asCTypeIdAllocator::TypeSequenceFromTypeId(Id) + 1;
+				if (Sequence > NextType) NextType = Sequence;
+			}
 			TypesByKey.Add(Type->GetStableKey(), Type); TypesById.Add(Id, Type);
 			// Specializations share the authored template name. Their complete
 			// identity, not an invented display string, selects the actual object.
@@ -112,8 +190,18 @@ asEMetadataRegistrationResult asCScriptEngine::RegisterMetadataImage(const std::
 			if (!Function->IsMetadataCallableSignature() &&
 				(FunctionsByKey.Contains(Function->GetStableKey()) || TypesByKey.Contains(Function->GetStableKey()) || GlobalsByKey.Contains(Function->GetStableKey())))
 				return asEMetadataRegistrationResult::IdentityConflict;
-			if (NextFunction == MAX_int32) return asEMetadataRegistrationResult::InvalidState;
-			const int Id = NextFunction++;
+			int Id = 0;
+			if (const int* Published = PublishedFunctionIds.Find(Function))
+			{
+				Id = *Published;
+				if (Id <= 0 || FunctionsById.Contains(Id)) return asEMetadataRegistrationResult::InvalidIdentity;
+				if (Id + 1 > NextFunction && Id != MAX_int32) NextFunction = Id + 1;
+			}
+			else
+			{
+				Id = NextReservedFunction++;
+				if (Id + 1 > NextFunction && Id != MAX_int32) NextFunction = Id + 1;
+			}
 			if (!Function->IsMetadataCallableSignature()) FunctionsByKey.Add(Function->GetStableKey(), Function);
 			FunctionsById.Add(Id, Function);
 			ClosureFunctionIds.Add(Function, Id);
@@ -128,24 +216,29 @@ asEMetadataRegistrationResult asCScriptEngine::RegisterMetadataImage(const std::
 			GlobalsByKey.Add(Key, Global); GlobalsByName.Add(Name, Global);
 		}
 	}
-	for (const auto& Item : Closure)
+	for (asCMetadataImage* Item : Closure)
 	{
-		if (Item->BoundEngine == this) continue;
+		if (EngineFromImage(Item) == this) continue;
 		Item->State.store(asEMetadataImageState::Attaching, std::memory_order_release);
-		// Retain bindings only for this image's actual dependency DAG, never
-		// unrelated siblings that happened to participate in the transaction.
 		for (const auto& Pair : ClosureTypeIds)
 			if (Item->CanReference(Pair.Key)) Item->BoundTypeIds.Add(Pair.Key, Pair.Value);
 		for (const auto& Pair : ClosureFunctionIds)
 			if (Item->Owns(Pair.Key)) Item->BoundFunctionIds.Add(Pair.Key, Pair.Value);
-		Item->BoundEngine = this;
-		metadataImages.Add(Item);
+		for (asCTypeInfo* Type : Item->Types)
+		{
+			if (Type) Type->engine = this;
+		}
+		for (asCScriptFunction* Function : Item->Functions)
+		{
+			if (Function) Function->engine = this;
+		}
 	}
+	metadataImages.Add(MoveTemp(Image));
 	metadataTypesByKey = MoveTemp(TypesByKey); metadataTypesByName = MoveTemp(TypesByName); metadataTypesById = MoveTemp(TypesById);
 	metadataFunctionsByKey = MoveTemp(FunctionsByKey); metadataFunctionsById = MoveTemp(FunctionsById);
 	metadataGlobalsByKey = MoveTemp(GlobalsByKey); metadataGlobalsByName = MoveTemp(GlobalsByName);
 	nextMetadataTypeId = NextType; nextMetadataFunctionId = NextFunction;
-	for (const auto& Item : Closure) Item->State.store(asEMetadataImageState::Attached, std::memory_order_release);
+	for (asCMetadataImage* Item : Closure) Item->State.store(asEMetadataImageState::Attached, std::memory_order_release);
 	// Engine queries take EngineLock; image binding queries take their image
 	// lock. Neither can see IDs or visibility from a partially committed graph.
 	return asEMetadataRegistrationResult::Succeeded;
@@ -153,7 +246,7 @@ asEMetadataRegistrationResult asCScriptEngine::RegisterMetadataImage(const std::
 
 void asCScriptEngine::RetireMetadataImages()
 {
-	TArray<std::shared_ptr<asCMetadataImage>> ReleasedImages;
+	TArray<TUniquePtr<asCMetadataImage>> ReleasedImages;
 	{
 		std::lock_guard<std::mutex> EngineLock(metadataRegistrationMutex);
 		if (metadataRegistrationRetired) return;
@@ -161,7 +254,7 @@ void asCScriptEngine::RetireMetadataImages()
 		if (!vmRetirementRequested.exchange(true)) ++executablePublicationGeneration;
 		if (vmObjectLeases || vmOperations || vmDrainActive) return;
 		std::vector<asCMetadataImage*> LockOrder;
-		for (const auto& Item : metadataImages) LockOrder.push_back(Item.get());
+		for (const TUniquePtr<asCMetadataImage>& Item : metadataImages) LockOrder.push_back(Item.Get());
 		std::sort(LockOrder.begin(), LockOrder.end(), std::less<asCMetadataImage*>{});
 		std::vector<std::unique_lock<std::mutex>> ImageLocks;
 		for (auto* Item : LockOrder) ImageLocks.emplace_back(Item->MutationMutex);
@@ -191,6 +284,14 @@ void asCScriptEngine::RetireMetadataImages()
 		for (const auto& Item : metadataImages)
 		{
 			Item->BoundEngine = nullptr;
+			for (asCTypeInfo* Type : Item->Types)
+			{
+				if (Type) Type->engine = nullptr;
+			}
+			for (asCScriptFunction* Function : Item->Functions)
+			{
+				if (Function) Function->engine = nullptr;
+			}
 			Item->BoundTypeIds.Empty(); Item->BoundFunctionIds.Empty();
 			Item->State.store(asEMetadataImageState::Retired, std::memory_order_release);
 		}
@@ -240,12 +341,12 @@ TPair<asUINT, asUINT> asCScriptEngine::GetMetadataRegistrationCounts() const
 	return {static_cast<asUINT>(metadataTypesByKey.Num()), static_cast<asUINT>(metadataFunctionsById.Num())};
 }
 
-TArray<std::shared_ptr<const asCMetadataImage>> asCScriptEngine::GetRegisteredMetadataImages() const
+TArray<const asCMetadataImage*> asCScriptEngine::GetRegisteredMetadataImages() const
 {
 	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
-	TArray<std::shared_ptr<const asCMetadataImage>> Result;
+	TArray<const asCMetadataImage*> Result;
 	Result.Reserve(metadataImages.Num());
-	for (const auto& Image : metadataImages) Result.Add(Image);
+	for (const TUniquePtr<asCMetadataImage>& Image : metadataImages) Result.Add(Image.Get());
 	return Result;
 }
 
@@ -297,7 +398,7 @@ auto Context = MakeShared<asCTypeContext, ESPMode::ThreadSafe>();
 	asASSERT(Result == asEMetadataResult::Succeeded);
 	Result = Image->FinalizeLayouts(); asASSERT(Result == asEMetadataResult::Succeeded);
 	Result = Image->Freeze(); asASSERT(Result == asEMetadataResult::Succeeded);
-	const auto Registration = RegisterMetadataImage(Image);
+	const auto Registration = RegisterMetadataImage(MoveTemp(Image));
 	asASSERT(Registration == asEMetadataRegistrationResult::Succeeded);
 	if (Registration != asEMetadataRegistrationResult::Succeeded) configFailed = true;
 	UNUSED_VAR(Result); UNUSED_VAR(IdentityResult);

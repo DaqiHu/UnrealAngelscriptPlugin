@@ -57,7 +57,7 @@ public:
 		const asCCompilationSession* Session = Builder.GetCompilationSession();
 		ASSERT_THAT(IsNotNull(Session));
 		ASSERT_THAT(IsFalse(Session->IsASTVerified()));
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Session, Builder.GetDefinitions().get(), asSByteCodeEmissionOptions());
+		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Session, Builder.GetDefinitions(), asSByteCodeEmissionOptions());
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::NotReady, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 	}
@@ -94,7 +94,7 @@ public:
 			}
 		}
 		ASSERT_THAT(IsTrue(bRecovery));
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Session, Builder.GetDefinitions().get(), asSByteCodeEmissionOptions());
+		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Session, Builder.GetDefinitions(), asSByteCodeEmissionOptions());
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::InvalidInput, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 	}
@@ -104,7 +104,7 @@ public:
 		FSourceExecutionInput Input(TEXT("int Run() { return 42; }"));
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::DefinitionsBuilt)));
-		ASSERT_THAT(IsNotNull(Builder.GetDefinitions().get()));
+		ASSERT_THAT(IsNotNull(Builder.GetDefinitions()));
 		ASSERT_THAT(IsFalse(Builder.GetDefinitions()->IsFrozen()));
 		const asCCompilationSession* Session = Builder.GetCompilationSession();
 		ASSERT_THAT(IsTrue(Session->IsASTVerified()));
@@ -134,7 +134,7 @@ public:
 		ASSERT_THAT(IsTrue(Foreign.FinalizeAndFreeze()));
 
 		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(
-			Builder.GetCompilationSession(), Foreign.Image.get(), asSByteCodeEmissionOptions());
+			Builder.GetCompilationSession(), Foreign.Image.Get(), asSByteCodeEmissionOptions());
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::InvalidInput, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 	}
@@ -245,7 +245,7 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::Succeeded, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNotNull(Emitted.Image.Get()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.GetDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
 		asCExecutableSnapshot* Snapshot = nullptr;
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();

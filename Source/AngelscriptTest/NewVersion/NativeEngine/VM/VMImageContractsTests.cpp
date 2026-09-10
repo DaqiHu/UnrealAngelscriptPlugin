@@ -89,7 +89,7 @@ public:
 
 		FDetachedDefinitionFixture Fixture;
 		Fixture.Scope = TEXT("vm-image-main");
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->AddDependency(Host.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->AddDependency(Host.Image.Get())));
 		asCObjectType* FieldType = Fixture.DefineType(TEXT("FieldType"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT);
 		asCObjectType* Base = Fixture.DefineType(TEXT("Base"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT);
 		asCObjectType* Owner = Fixture.DefineType(TEXT("Owner"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT);

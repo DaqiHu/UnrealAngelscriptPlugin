@@ -124,7 +124,7 @@ public:
 			ASSERT_THAT(IsNotNull(Callback)); ASSERT_THAT(IsNotNull(Run));
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			FNativeEngineOwner Engine;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 			if (Kind == asFUNC_SYSTEM)
 				ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->BindNativeFunction(Callback->GetStableKey(), asFUNCTION(CallableSDKTests::GenericFortyTwo), asCALL_GENERIC)));
 			TUniquePtr<asCByteCodeImage> Image;
@@ -147,7 +147,7 @@ public:
 		auto* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(IsTrue(CallableSDKTests::BuildIndirect(*Callback, *Run, Image)));
 		asCExecutableSnapshot* Installed = nullptr;
@@ -218,7 +218,7 @@ public:
 		asCScriptFunction* Shape = Fixture.DefineFunction(TEXT("DelegateShape"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Fixture.Image)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Dtor->GetStableKey(), asFUNCTION(CallableSDKTests::DestructReceiver), asCALL_GENERIC)));
 		asCByteCodeImageBuilder Builder;

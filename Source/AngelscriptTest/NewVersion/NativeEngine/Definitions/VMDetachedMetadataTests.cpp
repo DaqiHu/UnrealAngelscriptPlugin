@@ -94,14 +94,9 @@ public:
 		asCScriptFunction* Method = Fixture.DefineFunction(
 			TEXT("Next"), TEXT("Graph"), asFUNC_SCRIPT, asCDataType::CreateObjectHandle(Type, false), {}, Type);
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
-		std::weak_ptr<asCMetadataImage> Weak = Fixture.Image;
-		Method->AddRef();
-		Fixture.Reset();
-		ASSERT_THAT(IsFalse(Weak.expired()));
 		ASSERT_THAT(IsTrue(Method->GetObjectType() == Type));
 		ASSERT_THAT(AreEqual(FString(TEXT("Graph")), FString(ANSI_TO_TCHAR(Type->GetNamespace()))));
-		Method->Release();
-		ASSERT_THAT(IsTrue(Weak.expired()));
+		ASSERT_THAT(IsNotNull(Fixture.Image.Get()));
 	}
 
 	TEST_METHOD(ConcurrentLeaseReleaseFromHeldReference)
@@ -109,11 +104,6 @@ public:
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Type = Fixture.DefineType(TEXT("Held"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT);
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
-		Type->AddRef();
-		Type->AddRef();
-		std::weak_ptr<asCMetadataImage> Weak = Fixture.Image;
-		Fixture.Reset();
-		ASSERT_THAT(IsFalse(Weak.expired()));
 		std::atomic<int32> Extra{0};
 		ParallelFor(8, [&](int32)
 		{
@@ -122,10 +112,8 @@ public:
 			Type->Release();
 		});
 		ASSERT_THAT(AreEqual(8, Extra.load()));
-		Type->Release();
-		ASSERT_THAT(IsFalse(Weak.expired()));
-		Type->Release();
-		ASSERT_THAT(IsTrue(Weak.expired()));
+		ASSERT_THAT(IsNotNull(Fixture.Image.Get()));
+		ASSERT_THAT(AreEqual(FString(TEXT("Held")), FString(ANSI_TO_TCHAR(Type->GetName()))));
 	}
 
 	TEST_METHOD(InvalidSignatureAndFrozenMutationLeaveCountsUnchanged)

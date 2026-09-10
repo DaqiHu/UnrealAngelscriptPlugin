@@ -607,7 +607,10 @@ namespace
 		return Context->GetIdentityRegistry().InternTypeUse(Descriptor, OutKey) == asETypeIdentityStatus::Succeeded;
 	}
 
-	asEByteCodeLinkStatus CheckLiveImage(asCScriptEngine& Engine, const asCMetadataImage* Image)
+	asEByteCodeLinkStatus CheckLiveAttachment(
+		asCScriptEngine& Engine,
+		asIScriptEngine* Owner,
+		const asCMetadataImage* Image)
 	{
 		if (!Image) return asEByteCodeLinkStatus::MissingDeclaration;
 		const asEMetadataImageState State = Image->GetState();
@@ -616,11 +619,13 @@ namespace
 		{
 			return asEByteCodeLinkStatus::SchemaMismatch;
 		}
-		if (asCScriptEngine* Bound = Image->GetBoundEngine())
-		{
-			if (Bound != &Engine) return asEByteCodeLinkStatus::InvalidArgument;
-		}
+		if (Owner && Owner != &Engine) return asEByteCodeLinkStatus::InvalidArgument;
 		return asEByteCodeLinkStatus::Succeeded;
+	}
+
+	asEByteCodeLinkStatus CheckLiveImage(asCScriptEngine& Engine, const asCTypeInfo& Type)
+	{
+		return CheckLiveAttachment(Engine, Type.GetEngine(), Type.GetMetadataImage());
 	}
 
 	asEByteCodeLinkStatus CompareTypeRequirement(
@@ -628,7 +633,7 @@ namespace
 		const asSByteCodeRequirement& Requirement,
 		asCTypeInfo& Type)
 	{
-		const asEByteCodeLinkStatus Attachment = CheckLiveImage(Engine, Type.GetMetadataImage());
+		const asEByteCodeLinkStatus Attachment = CheckLiveImage(Engine, Type);
 		if (Attachment != asEByteCodeLinkStatus::Succeeded) return Attachment;
 		asSSchemaHash Schema;
 		asSLayoutHash Layout;
@@ -660,7 +665,8 @@ namespace
 		const asSByteCodeRequirement& Requirement,
 		asCScriptFunction& Function)
 	{
-		const asEByteCodeLinkStatus Attachment = CheckLiveImage(Engine, Function.GetMetadataImage());
+		const asEByteCodeLinkStatus Attachment = CheckLiveAttachment(
+			Engine, Function.GetEngine(), Function.GetMetadataImage());
 		if (Attachment != asEByteCodeLinkStatus::Succeeded) return Attachment;
 		asSStableKey ReturnTypeUse;
 		if (!InternLiveTypeUse(Function.GetMetadataImage(), Function.GetReturnDataType(), ReturnTypeUse))
@@ -755,7 +761,7 @@ namespace
 	{
 		asCTypeInfo* OwnerInfo = Engine.FindMetadataType(Requirement.OwnerKey);
 		if (!OwnerInfo) return asEByteCodeLinkStatus::MissingDeclaration;
-		const asEByteCodeLinkStatus Attachment = CheckLiveImage(Engine, OwnerInfo->GetMetadataImage());
+		const asEByteCodeLinkStatus Attachment = CheckLiveImage(Engine, *OwnerInfo);
 		if (Attachment != asEByteCodeLinkStatus::Succeeded) return Attachment;
 		asCObjectType* Owner = CastToObjectType(OwnerInfo);
 		if (!Owner) return asEByteCodeLinkStatus::MissingDeclaration;

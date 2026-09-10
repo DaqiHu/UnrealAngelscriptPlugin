@@ -16,7 +16,7 @@ struct asSExternalCallable
 		asCFunctionType* Signature = nullptr;
 		asCScriptFunction* Function = nullptr;
 		asSStableKey OwnerKey;
-		std::shared_ptr<asCMetadataImage> Image;
+		asCMetadataImage* Image = nullptr;
 		FString QualifiedName;
 		bool bConstMethod = false;
 		bool HasTypedDefaults = false;

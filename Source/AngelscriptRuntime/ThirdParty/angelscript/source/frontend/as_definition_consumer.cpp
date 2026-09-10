@@ -90,7 +90,7 @@ namespace
 	}
 
 	asSDefinitionConsumerResult asCDefinitionConsumer::Consume(const asCCompilationSession& Session,
-		TConstArrayView<std::shared_ptr<asCMetadataImage>> Dependencies) const
+		TConstArrayView<asCMetadataImage*> Dependencies) const
 	{
 		asSDefinitionConsumerResult Result;
 		auto Fail = [&](asEDefinitionConsumerStatus Status, const asCASTNode* Node, const TCHAR* Message)
@@ -209,11 +209,12 @@ namespace
 				return Result;
 			}
 		}
-		TFunction<asCTypeInfo*(const std::shared_ptr<asCMetadataImage>&, const asSStableKey&)> FindType =
-			[&](const std::shared_ptr<asCMetadataImage>& Owner, const asSStableKey& Key) -> asCTypeInfo*
+		TFunction<asCTypeInfo*(asCMetadataImage*, const asSStableKey&)> FindType =
+			[&](asCMetadataImage* Owner, const asSStableKey& Key) -> asCTypeInfo*
 		{
+			if (!Owner) return nullptr;
 			if (auto* Found = Owner->FindType(Key)) return Found;
-			for (const auto& Dependency : Owner->GetDependencies())
+			for (asCMetadataImage* Dependency : Owner->GetDependencies())
 				if (auto* Found = FindType(Dependency, Key)) return Found;
 			return nullptr;
 		};
@@ -228,14 +229,14 @@ namespace
 			}
 			else if (const auto* Nominal = dyn_cast<asCNominalType>(Input.GetType()))
 			{
-				asCTypeInfo* Type = FindType(Image, Nominal->GetDeclarationIdentity());
+				asCTypeInfo* Type = FindType(Image.Get(), Nominal->GetDeclarationIdentity());
 				if (!Type) return false;
 				Out = asCDataType::CreateType(Type, false);
 			}
 			else if (const auto* Generic = dyn_cast<asCGenericType>(Input.GetType()))
 			{
 				const auto* Template = dyn_cast<asCNominalType>(Generic->GetTemplateType());
-				asCTypeInfo* Definition = Template ? FindType(Image, Template->GetDeclarationIdentity()) : nullptr;
+				asCTypeInfo* Definition = Template ? FindType(Image.Get(), Template->GetDeclarationIdentity()) : nullptr;
 				if (!Definition || !(Definition->flags & asOBJ_TEMPLATE) || (Definition->flags & asOBJ_CALLABLE_TYPE)) return false;
 				TArray<asCDataType> Arguments;
 				for (const auto& Argument : Generic->GetArguments())

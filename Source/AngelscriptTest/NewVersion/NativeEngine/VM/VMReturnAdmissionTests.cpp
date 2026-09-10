@@ -122,7 +122,7 @@ public:
   ASSERT_THAT(IsNotNull(Image.Get()));
   ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::Succeeded, asCByteCodeVerifier::Verify(*Image)));
   FNativeEngineOwner Engine;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Case.Definitions.Image)));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Definitions.Image))));
   asCExecutableSnapshot* Snapshot = nullptr;
   const auto Status = Engine.Ptr->LinkByteCodeImage(*Image, Snapshot);
   if (Snapshot) Snapshot->Release();
@@ -135,7 +135,7 @@ public:
   ASSERT_THAT(IsTrue(Case.Define(ttInt, asTM_NONE, true)));
   auto Image = Case.Make(1 + AS_PTR_SIZE, 1 + AS_PTR_SIZE, true, true);
   FNativeEngineOwner Engine;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Case.Definitions.Image)));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Definitions.Image))));
   asCExecutableSnapshot* Snapshot = nullptr;
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
   const auto* Executable = Engine.Ptr->FindPublishedExecutable(Case.Function->GetStableKey());
@@ -152,7 +152,7 @@ public:
   ASSERT_THAT(IsTrue(Case.Define(ttInt, asTM_NONE, false, ttInt64)));
   auto Image = Case.Make(1, 1, true, true);
   FNativeEngineOwner Engine;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Case.Definitions.Image)));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Definitions.Image))));
   asCExecutableSnapshot* Snapshot = nullptr;
   auto Status = Engine.Ptr->LinkByteCodeImage(*Image, Snapshot);
   if (Snapshot) Snapshot->Release();
@@ -168,7 +168,7 @@ public:
   auto* Run = Definitions.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Definitions.Image->Primitive(ttInt), {});
   ASSERT_THAT(IsTrue(Definitions.FinalizeAndFreeze()));
   FNativeEngineOwner Engine;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Definitions.Image)));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Definitions.Image))));
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->BindNativeFunction(Probe->GetStableKey(), asFUNCTION(Observe), asCALL_GENERIC)));
   asCByteCodeImageBuilder Builder;
   asUINT ProbeSlot=0, InnerSlot=0, RunSlot=0;

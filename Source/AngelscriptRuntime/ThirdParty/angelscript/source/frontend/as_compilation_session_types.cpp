@@ -9,19 +9,19 @@
 #include "Containers/Set.h"
 
 BEGIN_AS_NAMESPACE
-bool asCCompilationSession::AddExternalDefinitions(const std::shared_ptr<asCMetadataImage>& Image)
+bool asCCompilationSession::AddExternalDefinitions(asCMetadataImage* Image)
 	{
 		if (Phase != asECompilationPhase::Collecting || !Image) return false;
 		if (ExternalDefinitions.Contains(Image)) return true;
-		TArray<std::shared_ptr<asCMetadataImage>> Closure;
+		TArray<asCMetadataImage*> Closure;
 		TSet<const asCMetadataImage*> Visited;
-		TFunction<bool(const std::shared_ptr<asCMetadataImage>&)> Visit = [&](const std::shared_ptr<asCMetadataImage>& Item)
+		TFunction<bool(asCMetadataImage*)> Visit = [&](asCMetadataImage* Item)
 		{
 			if (!Item || !Item->IsFrozen() || !Item->ValidateFrozenDefinitions() || !Item->GetIdentityContext() ||
 				Item->GetIdentityContext()->GetIdentityRegistryOwner() != Context.GetTypeContext()->GetIdentityRegistryOwner()) return false;
-			if (Visited.Contains(Item.get()) || ExternalDefinitions.Contains(Item)) return true;
-			Visited.Add(Item.get());
-			for (const auto& Dependency : Item->GetDependencies()) if (!Visit(Dependency)) return false;
+			if (Visited.Contains(Item) || ExternalDefinitions.Contains(Item)) return true;
+			Visited.Add(Item);
+			for (asCMetadataImage* Dependency : Item->GetDependencies()) if (!Visit(Dependency)) return false;
 			Closure.Add(Item);
 			return true;
 		};

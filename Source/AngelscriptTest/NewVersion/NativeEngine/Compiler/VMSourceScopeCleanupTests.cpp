@@ -70,8 +70,8 @@ namespace VMSourceScopeCleanupPrivate
 			GLastExecuteError = FString::Printf(TEXT("emit-%d"), int32(Emitted.EmissionStatus));
 			return false;
 		}
-		if (Engine.RegisterMetadataImage(Builder.GetDefinitions()) != asEMetadataRegistrationResult::Succeeded
-			&& Engine.RegisterMetadataImage(Builder.GetDefinitions()) != asEMetadataRegistrationResult::AlreadyRegistered)
+		if (Engine.RegisterMetadataImage(Builder.TakeDefinitions()) != asEMetadataRegistrationResult::Succeeded
+			&& Engine.RegisterMetadataImage(Builder.TakeDefinitions()) != asEMetadataRegistrationResult::AlreadyRegistered)
 		{
 			GLastExecuteError = TEXT("register-defs");
 			return false;
@@ -114,7 +114,7 @@ namespace VMSourceScopeCleanupPrivate
 			GLastCleanupError = TEXT("host-init");
 			return false;
 		}
-		FSourceExecutionInput Input(FString(BoxSource()) + Body, Host.Fixture.Context, Host.Fixture.Image);
+		FSourceExecutionInput Input(FString(BoxSource()) + Body, Host.Fixture.Context, Host.Fixture.Image.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		if (!Builder.RunThrough())
 		{
@@ -122,7 +122,7 @@ namespace VMSourceScopeCleanupPrivate
 			return false;
 		}
 		FNativeEngineOwner Engine;
-		if (Engine.Ptr->RegisterMetadataImage(Host.Fixture.Image) != asEMetadataRegistrationResult::Succeeded)
+		if (Engine.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image)) != asEMetadataRegistrationResult::Succeeded)
 		{
 			GLastCleanupError = TEXT("register");
 			return false;
