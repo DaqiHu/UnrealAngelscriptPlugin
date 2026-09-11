@@ -5,8 +5,8 @@
 #include "Components/SceneComponent.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_objecttype.h"
-#include "source/as_scriptengine.h"
+#include "as_objecttype.h"
+#include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 USceneComponent* FAngelscriptUSceneComponentBinds::GetChildComponentByClass(

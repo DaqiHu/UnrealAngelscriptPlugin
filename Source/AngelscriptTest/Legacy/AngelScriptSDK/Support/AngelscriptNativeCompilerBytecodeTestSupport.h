@@ -1,7 +1,7 @@
 #pragma once
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_bytecode.h"
+#include "as_bytecode.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptCompilerBytecodeTestSupport

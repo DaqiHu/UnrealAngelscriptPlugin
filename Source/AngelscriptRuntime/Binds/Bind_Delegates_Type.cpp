@@ -7,8 +7,8 @@
 #include "UObject/UnrealType.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_context.h"
-#include "source/as_objecttype.h"
+#include "as_context.h"
+#include "as_objecttype.h"
 #include "EndAngelscriptHeaders.h"
 
 static FString CreateCppNameForDelegate(UDelegateFunction* Function)

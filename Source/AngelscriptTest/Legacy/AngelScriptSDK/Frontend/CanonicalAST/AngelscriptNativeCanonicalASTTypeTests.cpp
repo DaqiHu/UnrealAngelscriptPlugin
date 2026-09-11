@@ -4,12 +4,12 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_ast_context.h"
+#include "frontend/as_ast_context.h"
 #include "source/as_ast_type.h"
 #include "source/as_runtime_type_bridge.h"
-#include "source/as_scriptengine.h"
-#include "source/as_tokendef.h"
-#include "source/as_typeinfo.h"
+#include "as_scriptengine.h"
+#include "as_tokendef.h"
+#include "as_typeinfo.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

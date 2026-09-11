@@ -35,13 +35,13 @@
 #include "Binds/Helper_FunctionSignature.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_config.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_objecttype.h"
-#include "source/as_scriptobject.h"
-#include "source/as_context.h"
-#include "source/as_generic.h"
+#include "as_config.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
+#include "as_objecttype.h"
+#include "as_scriptobject.h"
+#include "as_context.h"
+#include "as_generic.h"
 #include "EndAngelscriptHeaders.h"
 
 using namespace AngelscriptClassGeneratorNames;

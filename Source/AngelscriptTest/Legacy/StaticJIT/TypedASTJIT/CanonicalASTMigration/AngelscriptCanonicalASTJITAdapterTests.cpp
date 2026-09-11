@@ -16,12 +16,12 @@
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_dump.h"
 #include "source/as_ast_lifetime.h"
-#include "source/as_datatype.h"
-#include "source/as_module.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_sema.h"
-#include "source/as_source_manager.h"
+#include "as_datatype.h"
+#include "as_module.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
+#include "frontend/as_sema.h"
+#include "frontend/as_source_manager.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS && AS_CAN_GENERATE_JIT

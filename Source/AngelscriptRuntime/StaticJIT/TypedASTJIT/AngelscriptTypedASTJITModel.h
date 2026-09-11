@@ -5,8 +5,8 @@
 #include "StaticJIT/AngelscriptJITProvider.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_datatype.h"
-#include "source/as_module.h"
+#include "as_datatype.h"
+#include "as_module.h"
 #include "EndAngelscriptHeaders.h"
 
 struct FAngelscriptTypedASTJITGenerationCapabilityProfile;

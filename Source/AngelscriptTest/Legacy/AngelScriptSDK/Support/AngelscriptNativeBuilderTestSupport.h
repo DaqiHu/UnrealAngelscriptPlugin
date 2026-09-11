@@ -8,9 +8,9 @@
 #include <cstring>
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_builder.h"
-#include "source/as_module.h"
-#include "source/as_scriptengine.h"
+#include "as_builder.h"
+#include "as_module.h"
+#include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptBuilderTestSupport

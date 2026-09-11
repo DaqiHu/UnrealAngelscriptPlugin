@@ -5,7 +5,7 @@
 // Raw SDK string utility coverage.
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_string_util.h"
+#include "as_string_util.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

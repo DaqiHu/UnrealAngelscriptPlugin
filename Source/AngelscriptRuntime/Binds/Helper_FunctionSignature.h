@@ -12,7 +12,7 @@
 
 #include "StartAngelscriptHeaders.h"
 //#include "as_scriptfunction.h"
-#include "source/as_scriptfunction.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 static const FName NAME_Signature_ScriptName("ScriptName");

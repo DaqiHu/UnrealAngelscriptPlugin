@@ -6,11 +6,11 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_module.h"
-#include "source/as_parser.h"
+#include "as_module.h"
+#include "frontend/as_parser.h"
 #include "source/as_scriptcode.h"
-#include "source/as_scriptengine.h"
-#include "source/as_tokendef.h"
+#include "as_scriptengine.h"
+#include "as_tokendef.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

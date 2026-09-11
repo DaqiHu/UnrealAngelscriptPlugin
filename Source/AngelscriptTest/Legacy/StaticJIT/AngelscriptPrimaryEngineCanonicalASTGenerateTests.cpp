@@ -16,8 +16,8 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "angelscript.h"
-#include "source/as_module.h"
-#include "source/as_scriptengine.h"
+#include "as_module.h"
+#include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS && AS_CAN_GENERATE_JIT

@@ -13,15 +13,15 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_bytecode_codegen.h"
-#include "source/as_module.h"
-#include "source/as_ast_context.h"
+#include "as_module.h"
+#include "frontend/as_ast_context.h"
 #include "source/as_ast_sidecar.h"
-#include "source/as_objecttype.h"
+#include "as_objecttype.h"
 #include "source/as_runtime_type_bridge.h"
-#include "source/as_property.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_typeinfo.h"
+#include "as_property.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
+#include "as_typeinfo.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptCacheRestore_Private

@@ -12,12 +12,12 @@
 #include <string>
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_builder.h"
-#include "source/as_bytecode.h"
-#include "source/as_parser.h"
+#include "as_builder.h"
+#include "as_bytecode.h"
+#include "frontend/as_parser.h"
 #include "source/as_scriptcode.h"
 #include "source/as_scriptnode.h"
-#include "source/as_tokenizer.h"
+#include "frontend/as_tokenizer.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptNativeTestSupport

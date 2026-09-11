@@ -10,9 +10,9 @@
 //#include "as_objecttype.h"
 //#include "as_module.h"
 //#include "as_scriptfunction.h"
-#include "source/as_objecttype.h"
-#include "source/as_module.h"
-#include "source/as_scriptfunction.h"
+#include "as_objecttype.h"
+#include "as_module.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_EDITOR

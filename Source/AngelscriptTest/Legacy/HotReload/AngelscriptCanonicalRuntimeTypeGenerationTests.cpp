@@ -6,9 +6,9 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_public_view.h"
-#include "source/as_module.h"
-#include "source/as_runtime_type_binding.h"
-#include "source/as_scriptengine.h"
+#include "as_module.h"
+#include "as_runtime_type_binding.h"
+#include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

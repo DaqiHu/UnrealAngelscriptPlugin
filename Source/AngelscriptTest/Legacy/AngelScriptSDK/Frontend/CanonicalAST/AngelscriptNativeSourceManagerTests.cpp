@@ -6,13 +6,13 @@
 #include <cstring>
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_ast_context.h"
-#include "source/as_builder.h"
-#include "source/as_parser.h"
+#include "frontend/as_ast_context.h"
+#include "as_builder.h"
+#include "frontend/as_parser.h"
 #include "source/as_scriptcode.h"
-#include "source/as_scriptengine.h"
-#include "source/as_sema.h"
-#include "source/as_source_manager.h"
+#include "as_scriptengine.h"
+#include "frontend/as_sema.h"
+#include "frontend/as_source_manager.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

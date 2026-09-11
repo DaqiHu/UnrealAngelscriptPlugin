@@ -19,7 +19,7 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "angelscript.h"
-#include "source/as_scriptfunction.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

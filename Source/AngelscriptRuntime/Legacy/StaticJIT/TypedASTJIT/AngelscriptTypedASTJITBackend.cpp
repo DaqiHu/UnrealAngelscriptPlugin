@@ -15,11 +15,11 @@
 #include "Misc/ScopeLock.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_ast_context.h"
-#include "source/as_namespace.h"
-#include "source/as_property.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptfunction.h"
+#include "frontend/as_ast_context.h"
+#include "as_namespace.h"
+#include "as_property.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 #if AS_CAN_GENERATE_JIT

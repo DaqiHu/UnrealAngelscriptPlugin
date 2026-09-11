@@ -18,7 +18,7 @@
 #include "StaticJIT/StaticJITHeader.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_thread.h"
+#include "as_thread.h"
 #include "EndAngelscriptHeaders.h"
 
 #include <type_traits>

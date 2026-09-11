@@ -7,9 +7,9 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_dump.h"
-#include "source/as_parser.h"
+#include "frontend/as_parser.h"
 #include "source/as_scriptcode.h"
-#include "source/as_sema.h"
+#include "frontend/as_sema.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

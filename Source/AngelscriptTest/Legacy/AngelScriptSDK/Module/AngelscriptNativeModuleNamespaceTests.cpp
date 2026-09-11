@@ -7,7 +7,7 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_module.h"
+#include "as_module.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

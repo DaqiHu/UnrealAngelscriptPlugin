@@ -6,7 +6,7 @@
 // Raw SDK memory behavior coverage.
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_memory.h"
+#include "as_memory.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

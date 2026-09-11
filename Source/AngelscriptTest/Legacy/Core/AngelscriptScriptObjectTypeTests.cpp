@@ -8,7 +8,7 @@
 #include "UObject/UObjectGlobals.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_scriptengine.h"
+#include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 // Test Layer: Runtime Integration

@@ -4,8 +4,8 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptfunction.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 #include <cstring>

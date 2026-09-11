@@ -6,7 +6,7 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_config.h"
+#include "as_config.h"
 #include "EndAngelscriptHeaders.h"
 
 #include <type_traits>

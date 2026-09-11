@@ -19,8 +19,8 @@
 #include "Serialization/JsonWriter.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptfunction.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogStaticJITDiagnostics, Log, All);

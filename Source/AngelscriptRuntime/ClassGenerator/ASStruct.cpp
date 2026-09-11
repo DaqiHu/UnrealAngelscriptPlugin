@@ -6,11 +6,11 @@
 #include "AngelscriptInclude.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_config.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptobject.h"
-#include "source/as_objecttype.h"
-#include "source/as_context.h"
+#include "as_config.h"
+#include "as_scriptengine.h"
+#include "as_scriptobject.h"
+#include "as_objecttype.h"
+#include "as_context.h"
 #include "EndAngelscriptHeaders.h"
 
 struct FASStructOps : UASStruct::ICppStructOps

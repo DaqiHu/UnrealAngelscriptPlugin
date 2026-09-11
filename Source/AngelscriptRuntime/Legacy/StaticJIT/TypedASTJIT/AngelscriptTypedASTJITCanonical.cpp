@@ -1,13 +1,13 @@
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITCanonical.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_ast_context.h"
+#include "frontend/as_ast_context.h"
 #include "source/as_ast_lifetime.h"
 #include "source/as_ast_traversal.h"
 #include "source/as_runtime_type_bridge.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_source_manager.h"
-#include "source/as_typeinfo.h"
+#include "as_scriptfunction.h"
+#include "frontend/as_source_manager.h"
+#include "as_typeinfo.h"
 #include "EndAngelscriptHeaders.h"
 
 #if AS_CAN_GENERATE_JIT

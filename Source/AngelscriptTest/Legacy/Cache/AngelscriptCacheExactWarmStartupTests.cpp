@@ -19,13 +19,13 @@
 #include "Shared/AngelscriptTestFixture.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_ast_context.h"
+#include "frontend/as_ast_context.h"
 #include "source/as_ast_diagnostics.h"
 #include "source/as_ast_public_view.h"
 #include "source/as_ast_sidecar.h"
-#include "source/as_decl.h"
-#include "source/as_module.h"
-#include "source/as_scriptfunction.h"
+#include "frontend/as_decl.h"
+#include "as_module.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

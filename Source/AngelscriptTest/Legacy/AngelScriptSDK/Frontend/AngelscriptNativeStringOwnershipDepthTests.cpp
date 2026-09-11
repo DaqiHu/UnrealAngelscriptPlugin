@@ -8,8 +8,8 @@
 #include <utility>
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_string.h"
-#include "source/as_string_util.h"
+#include "as_string.h"
+#include "as_string_util.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

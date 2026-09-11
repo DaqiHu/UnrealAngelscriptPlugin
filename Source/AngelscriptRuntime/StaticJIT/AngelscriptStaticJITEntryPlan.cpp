@@ -5,8 +5,8 @@
 #include "AngelscriptType.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_typeinfo.h"
+#include "as_scriptfunction.h"
+#include "as_typeinfo.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptStaticJITEntryPlan_Private

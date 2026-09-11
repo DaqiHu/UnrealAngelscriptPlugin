@@ -12,7 +12,7 @@
 #include "UObject/UObjectIterator.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_objecttype.h"
+#include "as_objecttype.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

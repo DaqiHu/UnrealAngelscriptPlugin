@@ -8,9 +8,9 @@
 //#include "as_context.h"
 //#include "as_scriptfunction.h"
 //#include "as_objecttype.h"
-#include "source/as_context.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_objecttype.h"
+#include "as_context.h"
+#include "as_scriptfunction.h"
+#include "as_objecttype.h"
 #include "EndAngelscriptHeaders.h"
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptArrayType : public FAngelscriptType

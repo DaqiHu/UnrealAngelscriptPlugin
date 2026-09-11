@@ -7,8 +7,8 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_datatype.h"
-#include "source/as_tokendef.h"
+#include "as_datatype.h"
+#include "as_tokendef.h"
 #include "EndAngelscriptHeaders.h"
 
 using AngelscriptNativeTestSupport::AppendGeneratedAsLine;

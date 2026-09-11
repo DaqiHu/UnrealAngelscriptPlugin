@@ -6,8 +6,8 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_dump.h"
-#include "source/as_module.h"
-#include "source/as_scriptengine.h"
+#include "as_module.h"
+#include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 #include <string>

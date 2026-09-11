@@ -3,8 +3,8 @@
 #include "Misc/AutomationTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_module.h"
-#include "source/as_scriptfunction.h"
+#include "as_module.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptStaticJITAotRuntimeRouteTestSupport

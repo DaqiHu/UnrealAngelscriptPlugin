@@ -4,8 +4,8 @@
 #include "StaticJIT/AngelscriptJITExecutionContext.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_callfunc.h"
-#include "source/as_scriptfunction.h"
+#include "as_callfunc.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptTypedASTJIT

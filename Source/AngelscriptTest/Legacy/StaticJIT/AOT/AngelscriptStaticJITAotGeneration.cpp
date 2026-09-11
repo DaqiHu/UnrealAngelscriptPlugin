@@ -24,10 +24,10 @@
 #include "Misc/ScopeExit.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_ast_context.h"
-#include "source/as_module.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_scriptengine.h"
+#include "frontend/as_ast_context.h"
+#include "as_module.h"
+#include "as_scriptfunction.h"
+#include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptStaticJITAotGeneration

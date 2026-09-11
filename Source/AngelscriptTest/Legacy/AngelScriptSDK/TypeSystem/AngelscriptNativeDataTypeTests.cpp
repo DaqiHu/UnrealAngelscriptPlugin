@@ -5,8 +5,8 @@
 #include "Misc/ScopeExit.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_datatype.h"
-#include "source/as_scriptengine.h"
+#include "as_datatype.h"
+#include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

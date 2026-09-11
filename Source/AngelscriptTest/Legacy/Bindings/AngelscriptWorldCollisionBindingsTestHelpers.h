@@ -11,8 +11,8 @@
 #include "Templates/Function.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_context.h"
-#include "source/as_scriptfunction.h"
+#include "as_context.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

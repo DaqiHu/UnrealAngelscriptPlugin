@@ -9,7 +9,7 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "AngelscriptInclude.h"
-#include "source/as_objecttype.h"
+#include "as_objecttype.h"
 #include "EndAngelscriptHeaders.h"
 
 static const FName NAME_ENUM_UnderlyingType("UnderlyingType");

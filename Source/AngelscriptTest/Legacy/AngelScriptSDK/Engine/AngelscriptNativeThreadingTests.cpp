@@ -12,7 +12,7 @@
 #include "Misc/ScopeExit.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_thread.h"
+#include "as_thread.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

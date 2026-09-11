@@ -6,9 +6,9 @@
 #include "UObject/GarbageCollection.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_context.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptfunction.h"
+#include "as_context.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 FString FAngelscriptMapType::GetAngelscriptTypeName() const

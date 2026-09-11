@@ -8,7 +8,7 @@
 #include "StaticJIT/Backends/AngelscriptStaticJITBackend.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_scriptfunction.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS && AS_CAN_GENERATE_JIT

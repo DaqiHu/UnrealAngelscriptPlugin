@@ -9,9 +9,9 @@
 //#include "as_string.h"
 //#include "as_scriptfunction.h"
 //#include "as_objecttype.h"
-#include "source/as_string.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_objecttype.h"
+#include "as_string.h"
+#include "as_scriptfunction.h"
+#include "as_objecttype.h"
 #include "EndAngelscriptHeaders.h"
 
 #include "StaticJIT/StaticJITConfig.h"

@@ -15,7 +15,7 @@
 #include <atomic>
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_atomic.h"
+#include "as_atomic.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

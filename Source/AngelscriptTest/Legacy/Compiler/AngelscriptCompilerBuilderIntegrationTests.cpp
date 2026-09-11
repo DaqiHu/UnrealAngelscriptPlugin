@@ -10,10 +10,10 @@
 #include "Misc/ScopeExit.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_builder.h"
-#include "source/as_module.h"
-#include "source/as_property.h"
-#include "source/as_scriptengine.h"
+#include "as_builder.h"
+#include "as_module.h"
+#include "as_property.h"
+#include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

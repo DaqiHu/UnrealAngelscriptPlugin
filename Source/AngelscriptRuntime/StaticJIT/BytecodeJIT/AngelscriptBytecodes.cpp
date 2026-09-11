@@ -13,10 +13,10 @@
 //#include "as_callfunc.h"
 //#include "as_objecttype.h"
 //#include "as_scriptengine.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_callfunc.h"
-#include "source/as_objecttype.h"
-#include "source/as_scriptengine.h"
+#include "as_scriptfunction.h"
+#include "as_callfunc.h"
+#include "as_objecttype.h"
+#include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 static FAngelscriptBytecode UnimplementedBytecode;

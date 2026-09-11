@@ -3,7 +3,7 @@
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITBackend.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_source_provenance.h"
+#include "frontend/as_source_provenance.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS && AS_WITH_STATIC_JIT_DIAGNOSTICS \

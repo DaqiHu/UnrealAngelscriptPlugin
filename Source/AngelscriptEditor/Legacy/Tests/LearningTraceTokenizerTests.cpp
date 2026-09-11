@@ -14,8 +14,8 @@
 #include "Misc/ScopeExit.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_scriptengine.h"
-#include "source/as_tokenizer.h"
+#include "as_scriptengine.h"
+#include "frontend/as_tokenizer.h"
 #include "EndAngelscriptHeaders.h"
 
 #include "angelscript.h"

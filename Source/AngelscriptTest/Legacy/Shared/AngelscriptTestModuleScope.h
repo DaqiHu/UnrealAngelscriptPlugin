@@ -7,8 +7,8 @@
 #include "AngelscriptTestUtilities.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_scriptengine.h"
-#include "source/as_module.h"
+#include "as_scriptengine.h"
+#include "as_module.h"
 #include "EndAngelscriptHeaders.h"
 
 /**

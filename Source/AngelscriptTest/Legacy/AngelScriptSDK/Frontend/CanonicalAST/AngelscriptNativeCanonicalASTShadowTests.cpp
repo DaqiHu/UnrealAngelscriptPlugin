@@ -6,15 +6,15 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_dump.h"
-#include "source/as_builder.h"
-#include "source/as_module.h"
-#include "source/as_objecttype.h"
-#include "source/as_parser.h"
+#include "as_builder.h"
+#include "as_module.h"
+#include "as_objecttype.h"
+#include "frontend/as_parser.h"
 #include "source/as_scriptcode.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_sema.h"
-#include "source/as_typeinfo.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
+#include "frontend/as_sema.h"
+#include "as_typeinfo.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

@@ -5,10 +5,10 @@
 #include "Core/AngelscriptEngine.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_datatype.h"
-#include "source/as_module.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptfunction.h"
+#include "as_datatype.h"
+#include "as_module.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptRuntimeJITSnapshot_Private

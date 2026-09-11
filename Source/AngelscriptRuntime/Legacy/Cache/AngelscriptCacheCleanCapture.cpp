@@ -23,11 +23,11 @@
 #include "as_restore.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
-#include "source/as_ast_context.h"
+#include "frontend/as_ast_context.h"
 #include "source/as_ast_dump.h"
 #include "source/as_ast_sidecar.h"
 #include "source/as_ast_public_view.h"
-#include "source/as_ast_verifier.h"
+#include "frontend/as_ast_verifier.h"
 
 namespace AngelscriptCacheCleanCapture_Private
 {

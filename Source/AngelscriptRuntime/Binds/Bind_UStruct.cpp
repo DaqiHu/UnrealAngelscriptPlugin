@@ -21,8 +21,8 @@
 #include "StartAngelscriptHeaders.h"
 //#include "as_context.h"
 //#include "as_objecttype.h"
-#include "source/as_context.h"
-#include "source/as_objecttype.h"
+#include "as_context.h"
+#include "as_objecttype.h"
 #include "EndAngelscriptHeaders.h"
 
 #include "StaticJIT/AngelscriptStaticJIT.h"

@@ -28,11 +28,11 @@
 
 #include "Editor.h"
 #include "StartAngelscriptHeaders.h"
-#include "source/as_bytecode.h"
-#include "source/as_context.h"
-#include "source/as_module.h"
-#include "source/as_objecttype.h"
-#include "source/as_scriptfunction.h"
+#include "as_bytecode.h"
+#include "as_context.h"
+#include "as_module.h"
+#include "as_objecttype.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 #include "UObject/StructOnScope.h"

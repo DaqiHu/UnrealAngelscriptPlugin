@@ -8,11 +8,11 @@
 #endif
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_module.h"
-#include "source/as_objecttype.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_typeinfo.h"
+#include "as_module.h"
+#include "as_objecttype.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
+#include "as_typeinfo.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace

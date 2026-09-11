@@ -14,8 +14,8 @@
 #include "UObject/Stack.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_generic.h"
-#include "source/as_scriptfunction.h"
+#include "as_generic.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace

@@ -4,12 +4,12 @@
 #include "Support/AngelscriptNativeExecutionTestSupport.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_ast_context.h"
+#include "frontend/as_ast_context.h"
 #include "source/as_ast_dump.h"
 #include "source/as_ast_traversal.h"
-#include "source/as_ast_verifier.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_source_manager.h"
+#include "frontend/as_ast_verifier.h"
+#include "as_scriptfunction.h"
+#include "frontend/as_source_manager.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptNativeTestSupport

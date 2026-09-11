@@ -3,10 +3,10 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_bytecode.h"
-#include "source/as_callfunc.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_typeinfo.h"
+#include "as_bytecode.h"
+#include "as_callfunc.h"
+#include "as_scriptfunction.h"
+#include "as_typeinfo.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

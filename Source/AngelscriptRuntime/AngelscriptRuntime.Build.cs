@@ -124,9 +124,7 @@ namespace UnrealBuildTool.Rules
 			PublicIncludePaths.Add(Path.Combine(ModuleDirectory, "Core", "Commandlets"));
 			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Core", "Commandlets"));
 
-			var AngelscriptThirdPartyPath = Path.Combine(ModuleDirectory, "ThirdParty", "angelscript");
-			PublicIncludePaths.Add(Path.Combine(AngelscriptThirdPartyPath, "source"));
-			PublicIncludePaths.Add(AngelscriptThirdPartyPath);
+			PublicIncludePaths.Add(Path.Combine(ModuleDirectory, "angelscript"));
 
 			if (Target.Configuration == UnrealTargetConfiguration.Debug || Target.Configuration == UnrealTargetConfiguration.DebugGame)
 			{

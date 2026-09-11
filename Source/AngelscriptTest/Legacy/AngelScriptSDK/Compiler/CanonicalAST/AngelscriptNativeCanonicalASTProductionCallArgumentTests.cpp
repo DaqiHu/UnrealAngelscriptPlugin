@@ -5,11 +5,11 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_generic.h"
-#include "source/as_module.h"
-#include "source/as_sema.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptfunction.h"
+#include "as_generic.h"
+#include "as_module.h"
+#include "frontend/as_sema.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 #include <string>

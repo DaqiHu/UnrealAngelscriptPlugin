@@ -5,11 +5,11 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_dump.h"
-#include "source/as_decl.h"
-#include "source/as_expr.h"
-#include "source/as_module.h"
-#include "source/as_scriptengine.h"
-#include "source/as_scriptfunction.h"
+#include "frontend/as_decl.h"
+#include "frontend/as_expr.h"
+#include "as_module.h"
+#include "as_scriptengine.h"
+#include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"
 
 #include <string>

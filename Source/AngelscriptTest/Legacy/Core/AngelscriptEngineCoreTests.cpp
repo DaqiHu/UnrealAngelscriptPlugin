@@ -8,9 +8,9 @@
 #include "UObject/UnrealType.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_context.h"
-#include "source/as_module.h"
-#include "source/as_scriptengine.h"
+#include "as_context.h"
+#include "as_module.h"
+#include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 // Test Layer: Runtime Integration

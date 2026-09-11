@@ -20,16 +20,16 @@
 #include "AngelscriptSettings.h"
 //#include "as_property.h"
 //#include "as_scriptfunction.h"
-#include "source/as_property.h"
-#include "source/as_scriptfunction.h"
+#include "as_property.h"
+#include "as_scriptfunction.h"
 
 #include "StartAngelscriptHeaders.h"
 //#include "as_scriptfunction.h"
 //#include "as_objecttype.h"
 //#include "as_scriptengine.h"
-#include "source/as_scriptfunction.h"
-#include "source/as_objecttype.h"
-#include "source/as_scriptengine.h"
+#include "as_scriptfunction.h"
+#include "as_objecttype.h"
+#include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace UE::Angelscript::Private

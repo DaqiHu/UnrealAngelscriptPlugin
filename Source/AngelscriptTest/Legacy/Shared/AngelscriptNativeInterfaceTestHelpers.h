@@ -6,8 +6,8 @@
 #include "ClassGenerator/AngelscriptClassGenerator.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_scriptengine.h"
-#include "source/as_objecttype.h"
+#include "as_scriptengine.h"
+#include "as_objecttype.h"
 #include "EndAngelscriptHeaders.h"
 
 /**

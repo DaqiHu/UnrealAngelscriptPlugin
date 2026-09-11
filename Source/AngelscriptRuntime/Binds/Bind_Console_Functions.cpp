@@ -8,8 +8,8 @@
 #include "AngelscriptSharedPtr.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_context.h"
-#include "source/as_module.h"
+#include "as_context.h"
+#include "as_module.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace

@@ -3,7 +3,7 @@
 #include "Misc/ScopeLock.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "source/as_context.h"
+#include "as_context.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace

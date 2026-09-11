@@ -27,7 +27,7 @@ SOFTWARE.
 
 ## Third-Party: AngelScript Library
 
-The `ThirdParty/angelscript/` directory contains code from the AngelScript
+The `Source/AngelscriptRuntime/angelscript/` directory contains first-party reconstruction source derived from the AngelScript
 scripting library, distributed under the zlib license:
 
 ```
