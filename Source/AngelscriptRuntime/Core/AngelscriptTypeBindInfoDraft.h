@@ -1,7 +1,7 @@
 #pragma once
 #include "AngelscriptTypeBindInfoStore.h"
 #include "as_module_definition_set.h"
-#include "frontend/as_binding_declaration.h"
+#include "frontend/Compile/as_binding_declaration.h"
 
 /** Mutable, engine-independent metadata owned by one application of a snapshot. */
 class ANGELSCRIPTRUNTIME_API FAngelscriptTypeBindInfoDraft final

@@ -2,7 +2,7 @@
 #include "as_module_definition_set.h"
 #include "as_property.h"
 #include "as_scriptengine.h"
-#include "frontend/as_type_context.h"
+#include "frontend/AST/as_type_context.h"
 #include <thread>
 #include <vector>
 

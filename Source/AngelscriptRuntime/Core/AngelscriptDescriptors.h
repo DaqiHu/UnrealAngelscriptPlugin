@@ -5,7 +5,7 @@
 
 #include "Core/AngelscriptType.h"
 #include "Core/Artifacts/AngelscriptArtifactIdentity.h"
-#include "frontend/as_stable_key.h"
+#include "frontend/Basic/as_stable_key.h"
 
 class UClass;
 class UDelegateFunction;

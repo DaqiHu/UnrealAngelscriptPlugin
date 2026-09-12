@@ -2,12 +2,12 @@
 #include "NativeSourceExecutionTestSupport.h"
 #include "as_datatype.h"
 #include "as_generic.h"
-#include "frontend/as_ast_cast.h"
-#include "frontend/as_ast_codec.h"
-#include "frontend/as_ast_projection.h"
-#include "frontend/as_ast_visitor.h"
-#include "frontend/as_compilation_session.h"
-#include "frontend/as_expr.h"
+#include "frontend/AST/as_ast_cast.h"
+#include "frontend/AST/as_ast_codec.h"
+#include "frontend/AST/as_ast_projection.h"
+#include "frontend/AST/as_ast_visitor.h"
+#include "frontend/Compile/as_compilation_session.h"
+#include "frontend/AST/as_expr.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

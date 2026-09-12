@@ -3,7 +3,7 @@
 #include "as_module_definition_set.h"
 #include "as_engine_compile_registration.h"
 #include "../Compiler/NativeSourceExecutionTestSupport.h"
-#include "frontend/as_type_context.h"
+#include "frontend/AST/as_type_context.h"
 #include <atomic>
 #include <thread>
 #include <vector>

@@ -3,14 +3,14 @@
 #include "as_builder.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
-#include "frontend/as_ast_context.h"
-#include "frontend/as_compilation_session.h"
-#include "frontend/as_parser.h"
-#include "frontend/as_preprocessor.h"
-#include "frontend/as_sema.h"
-#include "frontend/as_stable_key.h"
-#include "frontend/as_tokenizer.h"
-#include "frontend/as_type_context.h"
+#include "frontend/AST/as_ast_context.h"
+#include "frontend/Compile/as_compilation_session.h"
+#include "frontend/Parser/as_parser.h"
+#include "frontend/Lexer/as_preprocessor.h"
+#include "frontend/Sema/as_sema.h"
+#include "frontend/Basic/as_stable_key.h"
+#include "frontend/Lexer/as_tokenizer.h"
+#include "frontend/AST/as_type_context.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 TEST_CLASS_WITH_FLAGS(CanonicalNamespace, "Angelscript.UnitTest.NativeEngine", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

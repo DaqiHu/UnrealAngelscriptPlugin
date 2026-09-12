@@ -8,7 +8,7 @@
 #include "Misc/Paths.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_ast_fwd.h"
+#include "frontend/AST/as_ast_fwd.h"
 #include "source/as_bytecode_codegen.h"
 #include "as_module.h"
 #include "as_scriptengine.h"

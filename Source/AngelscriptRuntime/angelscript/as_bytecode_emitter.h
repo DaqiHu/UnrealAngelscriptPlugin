@@ -2,8 +2,8 @@
 #pragma once
 
 #include "as_builder.h"
-#include "frontend/as_diagnostics.h"
-#include "frontend/as_stable_key.h"
+#include "frontend/Basic/as_diagnostics.h"
+#include "frontend/Basic/as_stable_key.h"
 
 BEGIN_AS_NAMESPACE
 

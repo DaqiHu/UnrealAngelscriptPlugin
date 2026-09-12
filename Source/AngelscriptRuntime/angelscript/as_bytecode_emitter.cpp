@@ -6,13 +6,13 @@
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 #include "as_typeinfo.h"
-#include "frontend/as_ast_cast.h"
-#include "frontend/as_body_fragment.h"
-#include "frontend/as_compilation_session.h"
-#include "frontend/as_decl.h"
-#include "frontend/as_source_manager.h"
-#include "frontend/as_source_snapshot.h"
-#include "frontend/as_stmt.h"
+#include "frontend/AST/as_ast_cast.h"
+#include "frontend/Sema/as_body_fragment.h"
+#include "frontend/Compile/as_compilation_session.h"
+#include "frontend/AST/as_decl.h"
+#include "frontend/Basic/as_source_manager.h"
+#include "frontend/Basic/as_source_snapshot.h"
+#include "frontend/AST/as_stmt.h"
 
 BEGIN_AS_NAMESPACE
 

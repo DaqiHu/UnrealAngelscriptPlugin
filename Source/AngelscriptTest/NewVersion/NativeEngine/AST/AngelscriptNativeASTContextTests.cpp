@@ -1,8 +1,8 @@
 #include "CQTest.h"
 
-#include "frontend/as_ast_context.h"
-#include "frontend/as_ast_cast.h"
-#include "frontend/as_ast_verifier.h"
+#include "frontend/AST/as_ast_context.h"
+#include "frontend/AST/as_ast_cast.h"
+#include "frontend/AST/as_ast_verifier.h"
 
 #include "Async/Async.h"
 

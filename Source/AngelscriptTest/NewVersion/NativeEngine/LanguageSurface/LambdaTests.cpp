@@ -1,8 +1,8 @@
 #include "CQTest.h"
 #include "../NativeEngineTestSupport.h"
 #include "../Compiler/NativeSourceExecutionTestSupport.h"
-#include "frontend/as_ast_codec.h"
-#include "frontend/as_type_context.h"
+#include "frontend/AST/as_ast_codec.h"
+#include "frontend/AST/as_type_context.h"
 #include "Misc/ScopeExit.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS

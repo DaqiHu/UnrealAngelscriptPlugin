@@ -156,8 +156,8 @@ class asCTokenizer {};
 END_AS_NAMESPACE
 '@
 Assert-Snippet -Name 'accept-include-path' -ShouldFail $false -Source @'
-#include "frontend/as_parser.h"
-#include "frontend/as_tokenizer.h"
+#include "frontend/Parser/as_parser.h"
+#include "frontend/Lexer/as_tokenizer.h"
 '@
 Assert-Snippet -Name 'accept-comment-and-string' -ShouldFail $false -Source @'
 // The frontend directory remains useful organization.

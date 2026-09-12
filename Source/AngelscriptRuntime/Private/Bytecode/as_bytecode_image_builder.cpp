@@ -4,9 +4,9 @@
 #include "as_scriptfunction.h"
 #include "as_property.h"
 #include "as_datatype.h"
-#include "frontend/as_canonical_encoding.h"
-#include "frontend/as_type_context.h"
-#include "frontend/as_type_identity.h"
+#include "frontend/Basic/as_canonical_encoding.h"
+#include "frontend/AST/as_type_context.h"
+#include "frontend/Sema/as_type_identity.h"
 #include "Containers/StringConv.h"
 #include "HAL/UnrealMemory.h"
 

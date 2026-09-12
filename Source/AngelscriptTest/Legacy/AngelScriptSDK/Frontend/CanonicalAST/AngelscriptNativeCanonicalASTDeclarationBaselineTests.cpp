@@ -5,8 +5,8 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_ast_context.h"
-#include "frontend/as_parser.h"
+#include "frontend/AST/as_ast_context.h"
+#include "frontend/Parser/as_parser.h"
 #include "source/as_scriptcode.h"
 #include "source/as_scriptnode.h"
 #include "EndAngelscriptHeaders.h"

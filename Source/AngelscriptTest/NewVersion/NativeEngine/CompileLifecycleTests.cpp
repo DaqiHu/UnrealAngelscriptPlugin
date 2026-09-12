@@ -5,12 +5,12 @@
 #include "as_engine_compile_registration.h"
 #include "as_module_definition_set.h"
 #include "as_module_definition_set.h"
-#include "frontend/as_definition_consumer.h"
+#include "frontend/Compile/as_definition_consumer.h"
 #include "as_objecttype.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
 #include "as_typeinfo.h"
-#include "frontend/as_type_context.h"
+#include "frontend/AST/as_type_context.h"
 #include "Misc/ScopeExit.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS

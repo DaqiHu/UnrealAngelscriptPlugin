@@ -4,7 +4,7 @@
 #include "as_array.h"
 #include "as_datatype.h"
 #include "as_string.h"
-#include "frontend/as_type_identity.h"
+#include "frontend/Sema/as_type_identity.h"
 
 BEGIN_AS_NAMESPACE
 

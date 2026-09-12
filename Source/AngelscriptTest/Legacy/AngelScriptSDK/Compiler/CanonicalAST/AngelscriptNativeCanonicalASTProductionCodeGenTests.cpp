@@ -9,7 +9,7 @@
 #include "source/as_ast_dump.h"
 #include "source/as_ast_traversal.h"
 #include "source/as_bytecode_codegen.h"
-#include "frontend/as_decl.h"
+#include "frontend/AST/as_decl.h"
 #include "as_module.h"
 #include "as_objecttype.h"
 #include "as_property.h"

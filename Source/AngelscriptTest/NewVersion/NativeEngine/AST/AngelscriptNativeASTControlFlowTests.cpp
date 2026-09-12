@@ -1,8 +1,8 @@
 #include "CQTest.h"
 
-#include "frontend/as_ast_context.h"
-#include "frontend/as_ast_verifier.h"
-#include "frontend/as_ast_visitor.h"
+#include "frontend/AST/as_ast_context.h"
+#include "frontend/AST/as_ast_verifier.h"
+#include "frontend/AST/as_ast_visitor.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

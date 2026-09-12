@@ -1,7 +1,7 @@
 #include "as_bytecode_emitter_internal.h"
 #include "as_bytecode_opcode.h"
 #include "as_property.h"
-#include "frontend/as_type.h"
+#include "frontend/AST/as_type.h"
 #include "HAL/UnrealMemory.h"
 
 BEGIN_AS_NAMESPACE

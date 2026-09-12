@@ -4,7 +4,7 @@
 #include "as_objecttype.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
-#include "frontend/as_type_context.h"
+#include "frontend/AST/as_type_context.h"
 #include "Misc/ScopeExit.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS

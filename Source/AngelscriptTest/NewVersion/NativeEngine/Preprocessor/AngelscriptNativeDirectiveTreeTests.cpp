@@ -1,7 +1,7 @@
 #include "CQTest.h"
 #include "NativePreprocessorTestSupport.h"
 
-#include "frontend/as_directive_tree.h"
+#include "frontend/Lexer/as_directive_tree.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

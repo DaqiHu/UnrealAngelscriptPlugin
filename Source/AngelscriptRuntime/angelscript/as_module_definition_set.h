@@ -5,7 +5,7 @@
 #include "as_datatype.h"
 #include "as_metadata_list_pattern.h"
 #include "as_property.h"
-#include "frontend/as_stable_key.h"
+#include "frontend/Basic/as_stable_key.h"
 #include "as_metadata_fingerprint.h"
 #include "Templates/UniquePtr.h"
 #include "Containers/Array.h"

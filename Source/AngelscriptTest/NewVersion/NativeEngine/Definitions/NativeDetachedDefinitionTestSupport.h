@@ -5,7 +5,7 @@
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 #include "as_property.h"
-#include "frontend/as_type_context.h"
+#include "frontend/AST/as_type_context.h"
 
 #include "Templates/SharedPointer.h"
 

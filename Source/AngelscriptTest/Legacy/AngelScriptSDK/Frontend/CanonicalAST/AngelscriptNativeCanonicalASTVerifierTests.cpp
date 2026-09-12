@@ -4,10 +4,10 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_ast_context.h"
+#include "frontend/AST/as_ast_context.h"
 #include "source/as_ast_dump.h"
 #include "source/as_ast_lifetime.h"
-#include "frontend/as_ast_verifier.h"
+#include "frontend/AST/as_ast_verifier.h"
 #include "as_tokendef.h"
 #include "EndAngelscriptHeaders.h"
 

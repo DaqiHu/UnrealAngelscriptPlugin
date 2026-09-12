@@ -7,7 +7,7 @@
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_lifetime.h"
 #include "source/as_ast_sidecar.h"
-#include "frontend/as_sema.h"
+#include "frontend/Sema/as_sema.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

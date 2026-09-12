@@ -24,7 +24,7 @@
 #include "Misc/ScopeExit.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_ast_context.h"
+#include "frontend/AST/as_ast_context.h"
 #include "as_module.h"
 #include "as_scriptfunction.h"
 #include "as_scriptengine.h"

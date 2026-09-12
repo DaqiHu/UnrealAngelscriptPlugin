@@ -5,8 +5,8 @@
 #include "as_builder.h"
 #include "as_objecttype.h"
 #include "as_scriptengine.h"
-#include "frontend/as_type_context.h"
-#include "frontend/as_compilation_session.h"
+#include "frontend/AST/as_type_context.h"
+#include "frontend/Compile/as_compilation_session.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 TEST_CLASS_WITH_FLAGS(GenericDefinitions, "Angelscript.UnitTest.NativeEngine", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

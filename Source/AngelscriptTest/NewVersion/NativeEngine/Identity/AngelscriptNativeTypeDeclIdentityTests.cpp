@@ -1,6 +1,6 @@
 #include "CQTest.h"
 
-#include "frontend/as_type_identity.h"
+#include "frontend/Sema/as_type_identity.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

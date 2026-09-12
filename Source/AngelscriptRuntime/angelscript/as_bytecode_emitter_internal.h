@@ -2,10 +2,10 @@
 #include "as_bytecode_image_builder.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
-#include "frontend/as_decl.h"
-#include "frontend/as_expr.h"
-#include "frontend/as_stmt.h"
-#include "frontend/as_ast_cast.h"
+#include "frontend/AST/as_decl.h"
+#include "frontend/AST/as_expr.h"
+#include "frontend/AST/as_stmt.h"
+#include "frontend/AST/as_ast_cast.h"
 
 #include "Containers/Map.h"
 

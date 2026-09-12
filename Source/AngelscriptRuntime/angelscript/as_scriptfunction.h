@@ -51,7 +51,7 @@
 
 #include <mutex>
 #include <memory>
-#include "frontend/as_stable_key.h"
+#include "frontend/Basic/as_stable_key.h"
 
 BEGIN_AS_NAMESPACE
 

@@ -3,7 +3,7 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_source_provenance.h"
+#include "frontend/Basic/as_source_provenance.h"
 #include "source/as_scriptcode.h"
 #include "EndAngelscriptHeaders.h"
 

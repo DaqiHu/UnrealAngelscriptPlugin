@@ -2,7 +2,7 @@
 #include "as_bytecode_image_builder.h"
 #include "as_bytecode_verifier.h"
 #include "as_bytecode_image_codec.h"
-#include "frontend/as_stable_key.h"
+#include "frontend/Basic/as_stable_key.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

@@ -1,5 +1,5 @@
 #include "CQTest.h"
-#include "frontend/as_binding_declaration.h"
+#include "frontend/Compile/as_binding_declaration.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 BEGIN_AS_NAMESPACE

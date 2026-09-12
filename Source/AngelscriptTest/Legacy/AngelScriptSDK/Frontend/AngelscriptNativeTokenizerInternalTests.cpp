@@ -4,7 +4,7 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_tokenizer.h"
+#include "frontend/Lexer/as_tokenizer.h"
 #include "as_tokendef.h"
 #include "EndAngelscriptHeaders.h"
 

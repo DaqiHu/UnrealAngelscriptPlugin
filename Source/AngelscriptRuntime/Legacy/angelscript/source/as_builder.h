@@ -40,7 +40,7 @@
 #define AS_BUILDER_H
 
 #include "as_config.h"
-#include "frontend/as_builder_stages.h"
+#include "frontend/Compile/as_builder_stages.h"
 #include "as_symboltable.h"
 #include "as_scriptengine.h"
 #include "as_module.h"

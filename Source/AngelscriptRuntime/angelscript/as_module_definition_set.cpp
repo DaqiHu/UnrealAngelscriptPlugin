@@ -8,8 +8,8 @@
 #include "as_memory.h"
 #include "Containers/StringConv.h"
 #include "Containers/Set.h"
-#include "frontend/as_canonical_encoding.h"
-#include "frontend/as_type_context.h"
+#include "frontend/Basic/as_canonical_encoding.h"
+#include "frontend/AST/as_type_context.h"
 #include "Hash/Blake3.h"
 
 #include <algorithm>

@@ -1,9 +1,9 @@
 #include "as_bytecode_emitter_internal.h"
 #include "as_property.h"
-#include "frontend/as_compilation_session.h"
-#include "frontend/as_diagnostics.h"
-#include "frontend/as_source_snapshot.h"
-#include "frontend/as_type.h"
+#include "frontend/Compile/as_compilation_session.h"
+#include "frontend/Basic/as_diagnostics.h"
+#include "frontend/Basic/as_source_snapshot.h"
+#include "frontend/AST/as_type.h"
 
 BEGIN_AS_NAMESPACE
 

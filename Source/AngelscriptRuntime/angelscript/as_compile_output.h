@@ -2,7 +2,7 @@
 
 #include "as_config.h"
 #include "Core/AngelscriptDescriptors.h"
-#include "frontend/as_diagnostics.h"
+#include "frontend/Basic/as_diagnostics.h"
 
 BEGIN_AS_NAMESPACE
 

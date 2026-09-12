@@ -7,7 +7,7 @@
 #include "StartAngelscriptHeaders.h"
 #include "as_generic.h"
 #include "as_module.h"
-#include "frontend/as_sema.h"
+#include "frontend/Sema/as_sema.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"

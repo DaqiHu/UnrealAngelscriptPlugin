@@ -2,7 +2,7 @@
 #define AS_BUILDER_H
 
 #include "as_config.h"
-#include "frontend/as_builder_stages.h"
+#include "frontend/Compile/as_builder_stages.h"
 #include "as_compile_output.h"
 #include "as_scriptengine.h"
 #include "Templates/UniquePtr.h"

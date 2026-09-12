@@ -1,6 +1,6 @@
 #include "CQTest.h"
 
-#include "frontend/as_type_context.h"
+#include "frontend/AST/as_type_context.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

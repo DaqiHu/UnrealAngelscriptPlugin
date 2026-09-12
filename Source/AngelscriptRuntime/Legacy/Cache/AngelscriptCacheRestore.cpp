@@ -14,7 +14,7 @@
 #include "StartAngelscriptHeaders.h"
 #include "source/as_bytecode_codegen.h"
 #include "as_module.h"
-#include "frontend/as_ast_context.h"
+#include "frontend/AST/as_ast_context.h"
 #include "source/as_ast_sidecar.h"
 #include "as_objecttype.h"
 #include "source/as_runtime_type_bridge.h"

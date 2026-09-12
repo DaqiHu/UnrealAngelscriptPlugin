@@ -2,12 +2,12 @@
 
 #include "../NativeEngineTestSupport.h"
 
-#include "frontend/as_diagnostics.h"
-#include "frontend/as_frontend_options.h"
-#include "frontend/as_identifier_table.h"
-#include "frontend/as_preprocessor.h"
-#include "frontend/as_source_manager.h"
-#include "frontend/as_tokenizer.h"
+#include "frontend/Basic/as_diagnostics.h"
+#include "frontend/Lexer/as_frontend_options.h"
+#include "frontend/Basic/as_identifier_table.h"
+#include "frontend/Lexer/as_preprocessor.h"
+#include "frontend/Basic/as_source_manager.h"
+#include "frontend/Lexer/as_tokenizer.h"
 
 namespace AngelscriptNativePreprocessorTest
 {

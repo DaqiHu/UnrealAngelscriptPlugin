@@ -1,7 +1,7 @@
 #include "CQTest.h"
 #include "NativePreprocessorTestSupport.h"
 
-#include "frontend/as_preprocessing_record.h"
+#include "frontend/Lexer/as_preprocessing_record.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

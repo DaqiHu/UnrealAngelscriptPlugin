@@ -4,7 +4,7 @@
 #include "Core/AngelscriptEngine.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_ast_context.h"
+#include "frontend/AST/as_ast_context.h"
 #include "as_scriptfunction.h"
 #include "as_typeinfo.h"
 #include "EndAngelscriptHeaders.h"

@@ -1,7 +1,7 @@
 #include "as_module_definition_set.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
-#include "frontend/as_type_context.h"
+#include "frontend/AST/as_type_context.h"
 
 BEGIN_AS_NAMESPACE
 bool asCModuleDefinitionSet::ValidateListPattern(const asSMetadataListPattern& Pattern, asUINT GenericArity, int Depth, int& NodeBudget) const

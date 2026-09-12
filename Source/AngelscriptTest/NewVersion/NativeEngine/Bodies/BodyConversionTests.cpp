@@ -1,9 +1,9 @@
 #include "CQTest.h"
 #include "../NativeEngineTestSupport.h"
-#include "frontend/as_ast_cast.h"
-#include "frontend/as_ast_codec.h"
-#include "frontend/as_ast_projection.h"
-#include "frontend/as_ast_visitor.h"
+#include "frontend/AST/as_ast_cast.h"
+#include "frontend/AST/as_ast_codec.h"
+#include "frontend/AST/as_ast_projection.h"
+#include "frontend/AST/as_ast_visitor.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 namespace BodyConversionTests

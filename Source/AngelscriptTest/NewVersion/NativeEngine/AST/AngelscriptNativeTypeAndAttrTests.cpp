@@ -1,8 +1,8 @@
 #include "CQTest.h"
 
-#include "frontend/as_attr.h"
-#include "frontend/as_type.h"
-#include "frontend/as_type_loc.h"
+#include "frontend/AST/as_attr.h"
+#include "frontend/AST/as_type.h"
+#include "frontend/AST/as_type_loc.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

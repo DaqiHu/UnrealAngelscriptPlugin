@@ -15,7 +15,7 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "source/as_ast_dump.h"
-#include "frontend/as_ast_fwd.h"
+#include "frontend/AST/as_ast_fwd.h"
 #include "source/as_ast_kind.h"
 #include "source/as_ast_lifetime.h"
 #include "source/as_ast_type.h"
@@ -23,13 +23,13 @@
 #include "as_generic.h"
 #include "as_module.h"
 #include "as_objecttype.h"
-#include "frontend/as_parser.h"
+#include "frontend/Parser/as_parser.h"
 #include "source/as_runtime_type_bridge.h"
 #include "source/as_scriptcode.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
-#include "frontend/as_sema.h"
-#include "frontend/as_stmt.h"
+#include "frontend/Sema/as_sema.h"
+#include "frontend/AST/as_stmt.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

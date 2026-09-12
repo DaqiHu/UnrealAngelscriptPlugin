@@ -20,8 +20,8 @@
 #include "as_module.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
-#include "frontend/as_sema.h"
-#include "frontend/as_source_manager.h"
+#include "frontend/Sema/as_sema.h"
+#include "frontend/Basic/as_source_manager.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS && AS_CAN_GENERATE_JIT

@@ -2,7 +2,7 @@
 #include "../NativeEngineTestSupport.h"
 #include "../Compiler/NativeSourceExecutionTestSupport.h"
 #include "../VM/NativeVMTestSupport.h"
-#include "frontend/as_definition_consumer.h"
+#include "frontend/Compile/as_definition_consumer.h"
 #include "Misc/ScopeExit.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS

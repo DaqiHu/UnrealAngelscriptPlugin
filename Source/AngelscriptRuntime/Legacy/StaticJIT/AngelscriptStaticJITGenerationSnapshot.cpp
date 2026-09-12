@@ -10,11 +10,11 @@
 #include "StaticJIT/AngelscriptJITGeneration.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_ast_context.h"
+#include "frontend/AST/as_ast_context.h"
 #include "source/as_ast_kind.h"
 #include "source/as_ast_public_view.h"
 #include "source/as_ast_traversal.h"
-#include "frontend/as_decl.h"
+#include "frontend/AST/as_decl.h"
 #include "as_module.h"
 #include "as_callfunc.h"
 #include "as_objecttype.h"

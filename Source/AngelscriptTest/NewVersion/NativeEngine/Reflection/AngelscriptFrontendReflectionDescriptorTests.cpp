@@ -4,10 +4,10 @@
 #include "../NativeEngineTestSupport.h"
 #include "Core/AngelscriptDescriptors.h"
 #include "Core/AngelscriptEngine.h"
-#include "frontend/as_ast_cast.h"
-#include "frontend/as_identifier_table.h"
-#include "frontend/as_preprocess_result.h"
-#include "frontend/as_tokenizer.h"
+#include "frontend/AST/as_ast_cast.h"
+#include "frontend/Basic/as_identifier_table.h"
+#include "frontend/Lexer/as_preprocess_result.h"
+#include "frontend/Lexer/as_tokenizer.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

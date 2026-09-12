@@ -1,6 +1,6 @@
 #include "CQTest.h"
 #include "../NativeEngineTestSupport.h"
-#include "frontend/as_descriptor_consumer.h"
+#include "frontend/Compile/as_descriptor_consumer.h"
 #include "Core/AngelscriptEngine.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS

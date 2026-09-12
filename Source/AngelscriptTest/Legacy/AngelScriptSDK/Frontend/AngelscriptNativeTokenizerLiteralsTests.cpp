@@ -6,7 +6,7 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "as_tokendef.h"
-#include "frontend/as_tokenizer.h"
+#include "frontend/Lexer/as_tokenizer.h"
 #include "EndAngelscriptHeaders.h"
 
 #if WITH_ANGELSCRIPT_UNITTESTS

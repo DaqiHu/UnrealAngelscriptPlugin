@@ -42,7 +42,7 @@
 #include "as_string.h"
 #include "as_atomic.h"
 #include "as_datatype.h"
-#include "frontend/as_stable_key.h"
+#include "frontend/Basic/as_stable_key.h"
 #include "as_metadata_fingerprint.h"
 #include <memory>
 #include <mutex>

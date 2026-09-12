@@ -8,9 +8,9 @@
 #include "as_callfunc.h"
 #include "as_metadata_fingerprint.h"
 #include "as_datatype.h"
-#include "frontend/as_canonical_encoding.h"
-#include "frontend/as_type_context.h"
-#include "frontend/as_type_identity.h"
+#include "frontend/Basic/as_canonical_encoding.h"
+#include "frontend/AST/as_type_context.h"
+#include "frontend/Sema/as_type_identity.h"
 #include "HAL/UnrealMemory.h"
 
 BEGIN_AS_NAMESPACE

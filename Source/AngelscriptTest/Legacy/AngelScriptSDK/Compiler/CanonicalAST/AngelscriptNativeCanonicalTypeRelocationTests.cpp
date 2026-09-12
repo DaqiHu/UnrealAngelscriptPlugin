@@ -4,7 +4,7 @@
 #include "CQTest.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_ast_context.h"
+#include "frontend/AST/as_ast_context.h"
 #include "as_runtime_type_binding.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"

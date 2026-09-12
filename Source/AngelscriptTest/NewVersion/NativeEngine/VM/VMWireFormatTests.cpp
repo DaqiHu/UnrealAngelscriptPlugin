@@ -2,7 +2,7 @@
 #include "as_bytecode_image_builder.h"
 #include "as_bytecode_image_codec.h"
 #include "as_bytecode_verifier.h"
-#include "frontend/as_stable_key.h"
+#include "frontend/Basic/as_stable_key.h"
 #include "Hash/Blake3.h"
 #include "HAL/UnrealMemory.h"
 

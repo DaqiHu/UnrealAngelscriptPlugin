@@ -3,7 +3,7 @@
 #include "as_builder.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
-#include "frontend/as_ast_visitor.h"
+#include "frontend/AST/as_ast_visitor.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 TEST_CLASS_WITH_FLAGS(ListInitializerDefinitions, "Angelscript.UnitTest.NativeEngine", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

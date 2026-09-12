@@ -46,10 +46,10 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "angelscript.h"
-#include "frontend/as_ast_context.h"
+#include "frontend/AST/as_ast_context.h"
 #include "source/as_ast_traversal.h"
-#include "frontend/as_decl.h"
-#include "frontend/as_expr.h"
+#include "frontend/AST/as_decl.h"
+#include "frontend/AST/as_expr.h"
 #include "as_objecttype.h"
 #include "as_property.h"
 #include "as_scriptengine.h"

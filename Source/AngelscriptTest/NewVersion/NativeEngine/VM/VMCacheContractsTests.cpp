@@ -8,8 +8,8 @@
 #include "as_property.h"
 #include "as_scriptfunction.h"
 #include "as_typeinfo.h"
-#include "frontend/as_type_context.h"
-#include "frontend/as_type_identity.h"
+#include "frontend/AST/as_type_context.h"
+#include "frontend/Sema/as_type_identity.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

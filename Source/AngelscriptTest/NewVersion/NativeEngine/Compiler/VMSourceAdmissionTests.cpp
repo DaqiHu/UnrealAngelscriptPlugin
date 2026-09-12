@@ -2,11 +2,11 @@
 #include "NativeSourceExecutionTestSupport.h"
 #include "../Definitions/NativeDetachedDefinitionTestSupport.h"
 #include "as_scriptfunction.h"
-#include "frontend/as_ast_cast.h"
-#include "frontend/as_compilation_session.h"
-#include "frontend/as_decl.h"
-#include "frontend/as_stmt.h"
-#include "frontend/as_type_context.h"
+#include "frontend/AST/as_ast_cast.h"
+#include "frontend/Compile/as_compilation_session.h"
+#include "frontend/AST/as_decl.h"
+#include "frontend/AST/as_stmt.h"
+#include "frontend/AST/as_type_context.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

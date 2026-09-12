@@ -1,6 +1,6 @@
 #include "CQTest.h"
-#include "frontend/as_ast_context.h"
-#include "frontend/as_constant_evaluator.h"
+#include "frontend/AST/as_ast_context.h"
+#include "frontend/Sema/as_constant_evaluator.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 namespace AngelscriptIntegralConstantTests

@@ -17,10 +17,10 @@
 #include "StaticJIT/TypedASTJIT/AngelscriptTypedASTJITModel.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_ast_context.h"
+#include "frontend/AST/as_ast_context.h"
 #include "source/as_ast_type.h"
-#include "frontend/as_decl.h"
-#include "frontend/as_expr.h"
+#include "frontend/AST/as_decl.h"
+#include "frontend/AST/as_expr.h"
 #include "as_module.h"
 #include "EndAngelscriptHeaders.h"
 

@@ -3,7 +3,7 @@
 
 #include "as_bytecode_opcode.h"
 #include "as_metadata_fingerprint.h"
-#include "frontend/as_stable_key.h"
+#include "frontend/Basic/as_stable_key.h"
 
 #include "Containers/Array.h"
 #include "Containers/UnrealString.h"

@@ -2,7 +2,7 @@
 #pragma once
 
 #include "as_config.h"
-#include "frontend/as_stable_key.h"
+#include "frontend/Basic/as_stable_key.h"
 
 #include "Containers/ArrayView.h"
 #include "Containers/UnrealString.h"

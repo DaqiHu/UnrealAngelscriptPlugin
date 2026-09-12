@@ -15,7 +15,7 @@
 #include "Misc/ScopeLock.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_ast_context.h"
+#include "frontend/AST/as_ast_context.h"
 #include "as_namespace.h"
 #include "as_property.h"
 #include "as_scriptengine.h"

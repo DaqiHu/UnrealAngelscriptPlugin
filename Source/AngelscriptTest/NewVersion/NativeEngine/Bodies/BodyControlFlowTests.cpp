@@ -1,6 +1,6 @@
 #include "CQTest.h"
 #include "../NativeEngineTestSupport.h"
-#include "frontend/as_ast_cast.h"
+#include "frontend/AST/as_ast_cast.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Hash/Blake3.h"
-#include "frontend/as_stable_key.h"
+#include "frontend/Basic/as_stable_key.h"
 
 struct ANGELSCRIPTRUNTIME_API FAngelscriptHash256
 {

@@ -5,8 +5,8 @@
 #include "as_property.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
-#include "frontend/as_canonical_encoding.h"
-#include "frontend/as_type_context.h"
+#include "frontend/Basic/as_canonical_encoding.h"
+#include "frontend/AST/as_type_context.h"
 #include "Async/ParallelFor.h"
 #include "Hash/Blake3.h"
 

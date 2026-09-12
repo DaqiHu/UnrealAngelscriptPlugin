@@ -15,7 +15,7 @@
 
 #include "StartAngelscriptHeaders.h"
 #include "as_scriptengine.h"
-#include "frontend/as_tokenizer.h"
+#include "frontend/Lexer/as_tokenizer.h"
 #include "EndAngelscriptHeaders.h"
 
 #include "angelscript.h"

@@ -1,11 +1,11 @@
 #include "CQTest.h"
 
 #include "../NativeEngineTestSupport.h"
-#include "frontend/as_ast_cast.h"
-#include "frontend/as_body_fragment.h"
-#include "frontend/as_compilation_session.h"
-#include "frontend/as_identifier_table.h"
-#include "frontend/as_tokenizer.h"
+#include "frontend/AST/as_ast_cast.h"
+#include "frontend/Sema/as_body_fragment.h"
+#include "frontend/Compile/as_compilation_session.h"
+#include "frontend/Basic/as_identifier_table.h"
+#include "frontend/Lexer/as_tokenizer.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 

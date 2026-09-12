@@ -37,7 +37,7 @@
 
 
 #include "as_scriptengine.h"
-#include "frontend/as_type_identity.h"
+#include "frontend/Sema/as_type_identity.h"
 
 #include "as_config.h"
 #include "as_builder.h"

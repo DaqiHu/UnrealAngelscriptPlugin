@@ -8,11 +8,11 @@
 #include "source/as_ast_dump.h"
 #include "source/as_ast_sidecar.h"
 #include "as_builder.h"
-#include "frontend/as_decl.h"
+#include "frontend/AST/as_decl.h"
 #include "as_module.h"
-#include "frontend/as_parser.h"
+#include "frontend/Parser/as_parser.h"
 #include "as_scriptengine.h"
-#include "frontend/as_sema.h"
+#include "frontend/Sema/as_sema.h"
 #include "EndAngelscriptHeaders.h"
 
 #include <string>

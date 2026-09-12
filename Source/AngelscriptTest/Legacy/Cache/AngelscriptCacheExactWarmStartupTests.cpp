@@ -19,11 +19,11 @@
 #include "Shared/AngelscriptTestFixture.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_ast_context.h"
+#include "frontend/AST/as_ast_context.h"
 #include "source/as_ast_diagnostics.h"
 #include "source/as_ast_public_view.h"
 #include "source/as_ast_sidecar.h"
-#include "frontend/as_decl.h"
+#include "frontend/AST/as_decl.h"
 #include "as_module.h"
 #include "as_scriptfunction.h"
 #include "EndAngelscriptHeaders.h"

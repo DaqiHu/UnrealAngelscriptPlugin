@@ -8,7 +8,7 @@
 #include "UObject/UObjectGlobals.h"
 
 #include "StartAngelscriptHeaders.h"
-#include "frontend/as_ast_context.h"
+#include "frontend/AST/as_ast_context.h"
 #include "as_module.h"
 #include "EndAngelscriptHeaders.h"
 

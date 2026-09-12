@@ -1,11 +1,11 @@
 #include "CQTest.h"
 #include "NativeEngineTestSupport.h"
 
-#include "frontend/as_diagnostics.h"
-#include "frontend/as_source_location.h"
-#include "frontend/as_source_manager.h"
-#include "frontend/as_source_provenance.h"
-#include "frontend/as_source_snapshot.h"
+#include "frontend/Basic/as_diagnostics.h"
+#include "frontend/Basic/as_source_location.h"
+#include "frontend/Basic/as_source_manager.h"
+#include "frontend/Basic/as_source_provenance.h"
+#include "frontend/Basic/as_source_snapshot.h"
 
 #include "Async/ParallelFor.h"
 

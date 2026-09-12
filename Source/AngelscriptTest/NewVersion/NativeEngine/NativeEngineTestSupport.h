@@ -5,10 +5,10 @@
 #include "Containers/StringConv.h"
 #include "Containers/StringView.h"
 #include "Containers/UnrealString.h"
-#include "frontend/as_ast_cast.h"
-#include "frontend/as_compilation_session.h"
-#include "frontend/as_identifier_table.h"
-#include "frontend/as_tokenizer.h"
+#include "frontend/AST/as_ast_cast.h"
+#include "frontend/Compile/as_compilation_session.h"
+#include "frontend/Basic/as_identifier_table.h"
+#include "frontend/Lexer/as_tokenizer.h"
 
 namespace AngelscriptNativeEngineTest
 {

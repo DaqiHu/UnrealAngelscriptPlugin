@@ -3,7 +3,7 @@
 #include "as_execution_snapshot.h"
 #include "as_namespace.h"
 #include "as_type_id_registry.h"
-#include "frontend/as_type_context.h"
+#include "frontend/AST/as_type_context.h"
 #include "Containers/Set.h"
 #include <algorithm>
 #include <functional>

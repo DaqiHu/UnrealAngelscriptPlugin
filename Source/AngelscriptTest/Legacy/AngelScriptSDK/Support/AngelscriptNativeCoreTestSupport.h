@@ -14,10 +14,10 @@
 #include "StartAngelscriptHeaders.h"
 #include "as_builder.h"
 #include "as_bytecode.h"
-#include "frontend/as_parser.h"
+#include "frontend/Parser/as_parser.h"
 #include "source/as_scriptcode.h"
 #include "source/as_scriptnode.h"
-#include "frontend/as_tokenizer.h"
+#include "frontend/Lexer/as_tokenizer.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace AngelscriptNativeTestSupport
