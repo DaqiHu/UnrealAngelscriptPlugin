@@ -64,13 +64,13 @@ namespace
 		asCObjectType* Type = Fixture.DefineType(Name, TEXT(""), asOBJ_REF | asOBJ_GC | asOBJ_SCRIPT_OBJECT);
 		if (!Type) return nullptr;
 		asCObjectProperty* Next = nullptr;
-		if (Fixture.Image->AddProperty(*Type, "Next", asCDataType::CreateObjectHandle(Type, false), Next) != asEMetadataResult::Succeeded)
+		if (Fixture.Set->AddProperty(*Type, "Next", asCDataType::CreateObjectHandle(Type, false), Next) != asEMetadataResult::Succeeded)
 		{
 			return nullptr;
 		}
-		OutDtor = Fixture.DefineFunction(TEXT("Destruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {}, Type);
+		OutDtor = Fixture.DefineFunction(TEXT("Destruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {}, Type);
 		if (!OutDtor) return nullptr;
-		if (Fixture.Image->AddBehaviour(*Type, asBEHAVE_DESTRUCT, *OutDtor) != asEMetadataResult::Succeeded)
+		if (Fixture.Set->AddBehaviour(*Type, asBEHAVE_DESTRUCT, *OutDtor) != asEMetadataResult::Succeeded)
 		{
 			return nullptr;
 		}
@@ -93,13 +93,13 @@ public:
 		FDetachedDefinitionFixture Fixture;
 		asCScriptFunction* Dtor = nullptr;
 		asCObjectType* Type = DefineRootNode(Fixture, TEXT("YieldNode"), Dtor);
-		asCScriptFunction* Yield = Fixture.DefineFunction(TEXT("Yield"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {});
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+		asCScriptFunction* Yield = Fixture.DefineFunction(TEXT("Yield"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {});
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsNotNull(Type));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		const int32 NextOffset = Type->localProperties.GetLength() ? Type->localProperties[0]->byteOffset : 0;
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		DisableRootLifetimeAutoGc(Engine.Ptr);
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Dtor->GetStableKey(), asFUNCTION(GenericRootDestruct), asCALL_GENERIC)));
@@ -135,7 +135,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
 		ASSERT_THAT(AreEqual(asEXECUTION_SUSPENDED, Context->Execute()));
@@ -162,7 +162,7 @@ public:
 		ASSERT_THAT(IsNotNull(Type));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		DisableRootLifetimeAutoGc(Engine.Ptr);
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Dtor->GetStableKey(), asFUNCTION(GenericRootDestruct), asCALL_GENERIC)));
@@ -184,7 +184,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
@@ -225,15 +225,15 @@ public:
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Type = Fixture.DefineType(TEXT("Broken"), TEXT(""), asOBJ_REF | asOBJ_GC | asOBJ_SCRIPT_OBJECT);
 		asCScriptFunction* Ctor = Fixture.DefineFunction(
-			TEXT("Construct"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {}, Type);
+			TEXT("Construct"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {}, Type);
 		asCScriptFunction* Dtor = Fixture.DefineFunction(
-			TEXT("Destruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {}, Type);
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->AddBehaviour(*Type, asBEHAVE_CONSTRUCT, *Ctor)));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->AddBehaviour(*Type, asBEHAVE_DESTRUCT, *Dtor)));
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+			TEXT("Destruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {}, Type);
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->AddBehaviour(*Type, asBEHAVE_CONSTRUCT, *Ctor)));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->AddBehaviour(*Type, asBEHAVE_DESTRUCT, *Dtor)));
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		DisableRootLifetimeAutoGc(Engine.Ptr);
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Ctor->GetStableKey(), asFUNCTION(GenericRootThrow), asCALL_GENERIC)));
@@ -263,7 +263,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
 		ASSERT_THAT(AreEqual(asEXECUTION_EXCEPTION, Context->Execute()));
@@ -285,12 +285,12 @@ public:
 		FDetachedDefinitionFixture FixtureB;
 		asCScriptFunction* DtorB = nullptr;
 		asCObjectType* TypeB = DefineRootNode(FixtureB, TEXT("EngineBNode"), DtorB);
-		asCScriptFunction* RunB = FixtureB.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureB.Image->Primitive(ttInt), {});
+		asCScriptFunction* RunB = FixtureB.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureB.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(FixtureB.FinalizeAndFreeze()));
 		FNativeEngineOwner EngineA;
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(MoveTemp(FixtureA.Image))));
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(FixtureB.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->InstallDefinitionSet(FixtureA.TakeSet())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->InstallDefinitionSet(FixtureB.TakeSet())));
 		DisableRootLifetimeAutoGc(EngineA.Ptr);
 		DisableRootLifetimeAutoGc(EngineB.Ptr);
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
@@ -313,7 +313,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, EngineA.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*EngineA.Ptr, *Image, Snapshot)));
 		asIScriptContext* Context = EngineA.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(RunA)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
@@ -341,11 +341,11 @@ public:
 		asCObjectType* Type = DefineRootNode(Fixture, TEXT("NestedNode"), Dtor);
 		asCDataType ReturnType = asCDataType::CreateObjectHandle(Type, false);
 		asCScriptFunction* Inner = Fixture.DefineFunction(TEXT("Inner"), TEXT(""), asFUNC_SCRIPT, ReturnType, {});
-		asCScriptFunction* Collect = Fixture.DefineFunction(TEXT("Collect"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {});
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+		asCScriptFunction* Collect = Fixture.DefineFunction(TEXT("Collect"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {});
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		DisableRootLifetimeAutoGc(Engine.Ptr);
 		GRootEngine = Engine.Ptr;
 		GRootType = Type;
@@ -387,7 +387,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));

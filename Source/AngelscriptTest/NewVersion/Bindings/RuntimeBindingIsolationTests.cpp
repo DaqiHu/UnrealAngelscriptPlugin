@@ -100,7 +100,7 @@ TEST_CLASS_WITH_FLAGS(Isolation, "Angelscript.UnitTest.RuntimeBindings.Engine",
 		FAngelscriptBindingDiagnostic Diagnostic; auto A = FAngelscriptEngine::CreateForBindings(Store.ToSharedRef(), Diagnostic);
 		auto B = FAngelscriptEngine::CreateForBindings(Store.ToSharedRef(), Diagnostic); ASSERT_THAT(IsTrue(A.IsValid() && B.IsValid()));
 		ASSERT_THAT(AreEqual(1, ProviderCount)); ASSERT_THAT(IsTrue(A->Engine != B->Engine));
-		ASSERT_THAT(IsTrue(A->GetBindingInstallation()->GetImage() != B->GetBindingInstallation()->GetImage()));
+		ASSERT_THAT(IsTrue(A->GetBindingInstallation()->GetSet() != B->GetBindingInstallation()->GetSet()));
 		ASSERT_THAT(IsTrue(A->GetBindingInstallation()->FindType(TEXT("Pair")) != B->GetBindingInstallation()->FindType(TEXT("Pair"))));
 		ASSERT_THAT(IsTrue(Function(*A, TEXT("int Add(int A, int B)")) != Function(*B, TEXT("int Add(int A, int B)"))));
 		ASSERT_THAT(IsTrue(A->GetBindingContext()->GetEngine() == A->Engine)); ASSERT_THAT(IsTrue(B->GetBindingContext()->GetEngine() == B->Engine));
@@ -240,8 +240,8 @@ TEST_CLASS_WITH_FLAGS(RuntimeBindingIsolation, "Angelscript.UnitTest.Bindings",
 		ASSERT_THAT(IsTrue(TypeB->GetEngine() == B->Engine));
 		ASSERT_THAT(IsTrue(A->Engine->GetTypeInfoById(PublishedTypeId) == TypeA));
 		ASSERT_THAT(IsTrue(B->Engine->GetTypeInfoById(PublishedTypeId) == TypeB));
-		ASSERT_THAT(IsNull(A->GetBindingInstallation()->GetImage()->GetBoundEngine()));
-		ASSERT_THAT(IsNull(B->GetBindingInstallation()->GetImage()->GetBoundEngine()));
+		ASSERT_THAT(IsNull(A->GetBindingInstallation()->GetSet()->GetBoundEngine()));
+		ASSERT_THAT(IsNull(B->GetBindingInstallation()->GetSet()->GetBoundEngine()));
 		int PublishedFunctionId = -1;
 		if (const FAngelscriptTypeBindInfo* PairInfo = Store->GetType(PairHandle))
 		{

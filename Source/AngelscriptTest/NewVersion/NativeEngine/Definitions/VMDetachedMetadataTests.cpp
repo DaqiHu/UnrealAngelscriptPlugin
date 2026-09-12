@@ -15,18 +15,18 @@ public:
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Counter = Fixture.DefineType(TEXT("Counter"), TEXT("Gameplay"), asOBJ_REF | asOBJ_SCRIPT_OBJECT);
 		ASSERT_THAT(IsNotNull(Counter));
-		asCObjectProperty* Value = Fixture.DefineProperty(*Counter, "Value", Fixture.Image->Primitive(ttInt));
+		asCObjectProperty* Value = Fixture.DefineProperty(*Counter, "Value", Fixture.Set->Primitive(ttInt));
 		ASSERT_THAT(IsNotNull(Value));
 		asCScriptFunction* Read = Fixture.DefineFunction(
-			TEXT("Read"), TEXT("Gameplay"), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {}, Counter);
+			TEXT("Read"), TEXT("Gameplay"), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {}, Counter);
 		ASSERT_THAT(IsNotNull(Read));
 		asSMetadataParameter Parameter;
 		Parameter.Name = "Amount";
-		Parameter.Type = Fixture.Image->Primitive(ttInt);
+		Parameter.Type = Fixture.Set->Primitive(ttInt);
 		Parameter.Type.MakeReference(true);
 		Parameter.Flags = asTM_INREF;
 		asCScriptFunction* Global = Fixture.DefineFunction(
-			TEXT("Add"), TEXT("Gameplay"), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), MakeArrayView(&Parameter, 1));
+			TEXT("Add"), TEXT("Gameplay"), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), MakeArrayView(&Parameter, 1));
 		ASSERT_THAT(IsNotNull(Global));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash Schema;
@@ -47,7 +47,7 @@ public:
 		IntReturn.Scope = TEXT("vm-detached.return");
 		asCObjectType* LeftOwner = IntReturn.DefineType(TEXT("Owner"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT);
 		asCScriptFunction* Left = IntReturn.DefineFunction(
-			TEXT("Read"), TEXT(""), asFUNC_SCRIPT, IntReturn.Image->Primitive(ttInt), {}, LeftOwner);
+			TEXT("Read"), TEXT(""), asFUNC_SCRIPT, IntReturn.Set->Primitive(ttInt), {}, LeftOwner);
 		ASSERT_THAT(IsNotNull(Left));
 		ASSERT_THAT(IsTrue(IntReturn.FinalizeAndFreeze()));
 
@@ -55,7 +55,7 @@ public:
 		Int64Return.Scope = TEXT("vm-detached.return");
 		asCObjectType* RightOwner = Int64Return.DefineType(TEXT("Owner"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT);
 		asCScriptFunction* Right = Int64Return.DefineFunction(
-			TEXT("Read"), TEXT(""), asFUNC_SCRIPT, Int64Return.Image->Primitive(ttInt64), {}, RightOwner);
+			TEXT("Read"), TEXT(""), asFUNC_SCRIPT, Int64Return.Set->Primitive(ttInt64), {}, RightOwner);
 		ASSERT_THAT(IsNotNull(Right));
 		ASSERT_THAT(IsTrue(Int64Return.FinalizeAndFreeze()));
 		ASSERT_THAT(IsTrue(Left->GetStableKey() == Right->GetStableKey()));
@@ -73,16 +73,16 @@ public:
 
 	TEST_METHOD(ShellFreezeStillRejectsFingerprints)
 	{
-		auto Image = asCMetadataImage::Create();
+		auto Set = asCModuleDefinitionSet::Create();
 		asCObjectType* Type = nullptr;
 		uint8 Bytes[32] = {};
 		Bytes[0] = 9;
 		AS_NAMESPACE_QUALIFIER asSStableKey Key;
 		ASSERT_THAT(IsTrue(AS_NAMESPACE_QUALIFIER asSStableKey::TryCreate(MakeArrayView(Bytes), Key)));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Image->CreateObjectType(Key, "Shell", "", asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, Type)));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Image->FinalizeLayouts()));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Image->Freeze()));
+			Set->CreateObjectType(Key, "Shell", "", asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, Type)));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Set->FinalizeLayouts()));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Set->Freeze()));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash Schema;
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEFingerprintStatus::UnauthenticatedDefinition, Type->TryGetSchemaHash(Schema)));
 	}
@@ -96,7 +96,7 @@ public:
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		ASSERT_THAT(IsTrue(Method->GetObjectType() == Type));
 		ASSERT_THAT(AreEqual(FString(TEXT("Graph")), FString(ANSI_TO_TCHAR(Type->GetNamespace()))));
-		ASSERT_THAT(IsNotNull(Fixture.Image.Get()));
+		ASSERT_THAT(IsNotNull(Fixture.Set.Get()));
 	}
 
 	TEST_METHOD(ConcurrentLeaseReleaseFromHeldReference)
@@ -112,7 +112,7 @@ public:
 			Type->Release();
 		});
 		ASSERT_THAT(AreEqual(8, Extra.load()));
-		ASSERT_THAT(IsNotNull(Fixture.Image.Get()));
+		ASSERT_THAT(IsNotNull(Fixture.Set.Get()));
 		ASSERT_THAT(AreEqual(FString(TEXT("Held")), FString(ANSI_TO_TCHAR(Type->GetName()))));
 	}
 
@@ -121,17 +121,17 @@ public:
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Type = Fixture.DefineType(TEXT("Owner"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT);
 		ASSERT_THAT(IsNotNull(Type));
-		const int32 TypeCount = Fixture.Image->GetTypes().Num();
-		const int32 FunctionCount = Fixture.Image->GetFunctions().Num();
+		const int32 TypeCount = Fixture.Set->GetTypes().Num();
+		const int32 FunctionCount = Fixture.Set->GetFunctions().Num();
 		asCScriptFunction* Rejected = Fixture.DefineFunction(
 			TEXT("Bad"), TEXT(""), asFUNC_SCRIPT, asCDataType(), {}, Type);
 		ASSERT_THAT(IsNull(Rejected));
-		ASSERT_THAT(AreEqual(TypeCount, Fixture.Image->GetTypes().Num()));
-		ASSERT_THAT(AreEqual(FunctionCount, Fixture.Image->GetFunctions().Num()));
+		ASSERT_THAT(AreEqual(TypeCount, Fixture.Set->GetTypes().Num()));
+		ASSERT_THAT(AreEqual(FunctionCount, Fixture.Set->GetFunctions().Num()));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		asCObjectProperty* Late = nullptr;
 		ASSERT_THAT(AreEqual(asEMetadataResult::InvalidState,
-			Fixture.Image->AddProperty(*Type, "Late", Fixture.Image->Primitive(ttInt), Late)));
+			Fixture.Set->AddProperty(*Type, "Late", Fixture.Set->Primitive(ttInt), Late)));
 		ASSERT_THAT(AreEqual(0, static_cast<int32>(Type->GetPropertyCount())));
 	}
 };

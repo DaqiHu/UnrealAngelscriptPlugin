@@ -43,8 +43,8 @@ namespace
 		{
 			Fixture.Scope = TEXT("vm-source-object-host");
 			asSMetadataParameter Param = MakeObjectIntParam("n");
-			Param.Type = Fixture.Image->Primitive(ttInt);
-			Mark = Fixture.DefineFunction(TEXT("Mark"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), MakeArrayView(&Param, 1));
+			Param.Type = Fixture.Set->Primitive(ttInt);
+			Mark = Fixture.DefineFunction(TEXT("Mark"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), MakeArrayView(&Param, 1));
 			return Mark && Fixture.FinalizeAndFreeze();
 		}
 	};
@@ -58,17 +58,17 @@ namespace
 	{
 		asCScriptFunction* Function = FindRun(Builder);
 		if (!Function) return false;
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Builder, *Function);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		if (Emitted.Status != asEByteCodeImageStatus::Succeeded || !Emitted.Image.Get()) return false;
 		FNativeEngineOwner Owned;
 		asCScriptEngine* Use = Engine ? Engine : Owned.Ptr;
-		if (Use->RegisterMetadataImage(Builder.TakeDefinitions()) != asEMetadataRegistrationResult::Succeeded
-			&& Use->RegisterMetadataImage(Builder.TakeDefinitions()) != asEMetadataRegistrationResult::AlreadyRegistered)
+		if (RegisterCompiledDefinitions(*Use, Builder) != asEMetadataRegistrationResult::Succeeded
+			&& RegisterCompiledDefinitions(*Use, Builder) != asEMetadataRegistrationResult::AlreadyRegistered)
 		{
 			return false;
 		}
 		asCExecutableSnapshot* Snapshot = nullptr;
-		if (Use->LinkByteCodeImage(*Emitted.Image, Snapshot) != asEByteCodeLinkStatus::Succeeded) return false;
+		if (asLinkByteCodeImage(*Use, *Emitted.Image, Snapshot) != asEByteCodeLinkStatus::Succeeded) return false;
 		asIScriptContext* Context = Use->CreateContext();
 		if (Context->Prepare(Function) != 0 || Context->Execute() != asEXECUTION_FINISHED)
 		{
@@ -195,11 +195,11 @@ public:
 		ResetObjectMarkTrace();
 		FObjectHost Host;
 		ASSERT_THAT(IsTrue(Host.Initialize()));
-		FSourceExecutionInput Input(TEXT("class Box { int Id; Box(int Initial) { Id = Initial; } ~Box() { Host::Mark(Id); } } int Run() { Box A(1); Box B(2); return 0; }"), Host.Fixture.Context, Host.Fixture.Image.Get());
+		FSourceExecutionInput Input(TEXT("class Box { int Id; Box(int Initial) { Id = Initial; } ~Box() { Host::Mark(Id); } } int Run() { Box A(1); Box B(2); return 0; }"), Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Host.Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Host.Mark->GetStableKey(), asFUNCTION(GenericObjectMark), asCALL_GENERIC)));
 		int32 Value = 0;

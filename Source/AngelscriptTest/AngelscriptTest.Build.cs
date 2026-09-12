@@ -15,6 +15,8 @@ namespace UnrealBuildTool.Rules
 
 			PublicIncludePaths.Add(ModuleDirectory);
 			PrivateIncludePaths.Add(ModuleDirectory);
+			PrivateIncludePaths.Add(Path.GetFullPath(Path.Combine(
+				ModuleDirectory, "..", "AngelscriptRuntime", "Private", "Bytecode")));
 
 			PublicDependencyModuleNames.AddRange(new string[]
 			{

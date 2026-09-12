@@ -1,4 +1,4 @@
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_objecttype.h"
 #include "as_property.h"
 #include "as_scriptfunction.h"
@@ -37,7 +37,7 @@ namespace asMetadataAccess
 	}
 }
 
-bool asCMetadataImage::CanUseAccessSpecifier(const asCObjectType& Owner, const asSAccessSpecifier* Policy) const
+bool asCModuleDefinitionSet::CanUseAccessSpecifier(const asCObjectType& Owner, const asSAccessSpecifier* Policy) const
 {
 	if (!Policy) return true;
 	TSet<const asCObjectType*> Visited;
@@ -51,11 +51,11 @@ bool asCMetadataImage::CanUseAccessSpecifier(const asCObjectType& Owner, const a
 	return false;
 }
 
-asEMetadataResult asCMetadataImage::DefineAccessSpecifier(asCObjectType& Owner, const asSAccessSpecifier& Definition, asSAccessSpecifier*& Out)
+asEMetadataResult asCModuleDefinitionSet::DefineAccessSpecifier(asCObjectType& Owner, const asSAccessSpecifier& Definition, asSAccessSpecifier*& Out)
 {
 	Out = nullptr;
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
+	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
 	if (!Owns(&Owner)) return asEMetadataResult::ForeignOwner;
 	if (!asMetadataAccess::ValidPolicy(Definition)) return asEMetadataResult::InvalidArgument;
 	if (Owner.GetAccessSpecifier(Definition.name.AddressOf())) return asEMetadataResult::DuplicateName;
@@ -66,10 +66,10 @@ asEMetadataResult asCMetadataImage::DefineAccessSpecifier(asCObjectType& Owner, 
 	return asEMetadataResult::Succeeded;
 }
 
-asEMetadataResult asCMetadataImage::SetPropertyAccess(asCObjectType& Owner, asCObjectProperty& Property, asSAccessSpecifier& Policy)
+asEMetadataResult asCModuleDefinitionSet::SetPropertyAccess(asCObjectType& Owner, asCObjectProperty& Property, asSAccessSpecifier& Policy)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
+	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
 	if (!Owns(&Owner) || !CanUseAccessSpecifier(Owner, &Policy)) return asEMetadataResult::ForeignOwner;
 	bool Found = false;
 	for (asUINT Index = 0; Index < Owner.localProperties.GetLength(); ++Index) Found |= Owner.localProperties[Index] == &Property;
@@ -79,17 +79,17 @@ asEMetadataResult asCMetadataImage::SetPropertyAccess(asCObjectType& Owner, asCO
 	return asEMetadataResult::Succeeded;
 }
 
-asEMetadataResult asCMetadataImage::SetFunctionAccess(asCScriptFunction& Function, asSAccessSpecifier& Policy)
+asEMetadataResult asCModuleDefinitionSet::SetFunctionAccess(asCScriptFunction& Function, asSAccessSpecifier& Policy)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
+	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
 	if (!Owns(&Function) || !Function.objectType || !CanUseAccessSpecifier(*Function.objectType, &Policy)) return asEMetadataResult::ForeignOwner;
 	Function.accessSpecifier = &Policy;
 	InvalidateLayouts();
 	return asEMetadataResult::Succeeded;
 }
 
-bool asCMetadataImage::CollectAccessSnapshot(TMap<const asSAccessSpecifier*, asSAccessPolicySnapshot>& Policies,
+bool asCModuleDefinitionSet::CollectAccessSnapshot(TMap<const asSAccessSpecifier*, asSAccessPolicySnapshot>& Policies,
 	TMap<const asCObjectProperty*, asSMemberAccessSnapshot>& Properties,
 	TMap<const asCScriptFunction*, asSMemberAccessSnapshot>& Methods) const
 {
@@ -123,7 +123,7 @@ bool asCMetadataImage::CollectAccessSnapshot(TMap<const asSAccessSpecifier*, asS
 	return true;
 }
 
-bool asCMetadataImage::CaptureAccessSnapshot()
+bool asCModuleDefinitionSet::CaptureAccessSnapshot()
 {
 	TMap<const asSAccessSpecifier*, asSAccessPolicySnapshot> Policies;
 	TMap<const asCObjectProperty*, asSMemberAccessSnapshot> Properties;
@@ -133,7 +133,7 @@ bool asCMetadataImage::CaptureAccessSnapshot()
 	return true;
 }
 
-bool asCMetadataImage::ValidateAccessSnapshot() const
+bool asCModuleDefinitionSet::ValidateAccessSnapshot() const
 {
 	TMap<const asSAccessSpecifier*, asSAccessPolicySnapshot> Policies;
 	TMap<const asCObjectProperty*, asSMemberAccessSnapshot> Properties;

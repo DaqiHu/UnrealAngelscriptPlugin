@@ -1,10 +1,13 @@
 /* Maintained Unreal AngelScript fork — detached staged compilation driver. */
 #include "as_builder.h"
+#include "as_module_definition_set.h"
 #include "as_namespace.h"
 #include "as_property.h"
 #include "frontend/as_ast_projection.h"
 #include "frontend/as_definition_consumer.h"
 #include "frontend/as_descriptor_consumer.h"
+#include "as_bytecode_emitter.h"
+#include "as_scriptfunction.h"
 #include "frontend/as_identifier_table.h"
 #include "frontend/as_preprocess_result.h"
 #include "frontend/as_tokenizer.h"
@@ -30,7 +33,8 @@ class asCBuilderState
 		TArray<asSSemanticSourceInput> Inputs;
 		TArray<asSDirectiveProcessResult> Preprocessed;
 		TUniquePtr<asCCompilationSession> Session;
-		TUniquePtr<asCMetadataImage> Definitions;
+		TUniquePtr<asCModuleDefinitionSet> ModuleDefinitions;
+		TUniquePtr<asCCompileOutput> CompileOutput;
 		asEBuilderStage Stage = asEBuilderStage::SourceReady;
 		TArray<asSBuilderStageResult> Results;
 
@@ -63,9 +67,30 @@ class asCBuilderState
 			return Text;
 		}
 
+		asCModuleDefinitionSet* Definitions() const
+		{
+			return ModuleDefinitions.Get();
+		}
+
+		TArray<asCModuleDefinitionSet*> CollectExternalSets(bool& Success) const
+		{
+			TArray<asCModuleDefinitionSet*> Sets;
+			for (asCModuleDefinitionSet* Set : Options.Dependencies)
+			{
+				if (!Set || !Set->IsImmutable())
+				{
+					Success = false;
+					continue;
+				}
+				Sets.Add(Set);
+			}
+			return Sets;
+		}
+
 		FString DefinitionText() const
 		{
 			TArray<FString> Lines;
+			asCModuleDefinitionSet* Definitions = this->Definitions();
 			if (!Definitions) return {};
 			auto TypeText = [](const asCDataType& Type)
 			{
@@ -159,8 +184,51 @@ class asCBuilderState
 			Writer->Close();
 			Results.Add(MoveTemp(Result));
 			Stage = Success ? Attempt : asEBuilderStage::Failed;
-			if (!Success) Definitions.Reset();
+			if (!Success) ModuleDefinitions.Reset();
+			RefreshCompileOutput();
 			return Success;
+		}
+
+		void RefreshCompileOutput()
+		{
+			if (!CompileOutput) CompileOutput = MakeUnique<asCCompileOutput>();
+			asCCollectingDiagnosticConsumer Consumer;
+			Diagnostics.EmitTo(Consumer);
+			TArray<asSDiagnosticRecord> Records;
+			Records.Append(Consumer.GetRecords().GetData(), Consumer.GetRecords().Num());
+			CompileOutput->ReplaceDiagnostics(MoveTemp(Records));
+			if (ModuleDefinitions)
+			{
+				TArray<TSharedRef<FAngelscriptModuleDesc>> Modules;
+				TSharedRef<FAngelscriptModuleDesc> Module = MakeShared<FAngelscriptModuleDesc>();
+				Module->ModuleName = Inputs.Num() ? Inputs[0].LogicalSourceKey : TEXT("Main.as");
+				for (asCTypeInfo* Type : ModuleDefinitions->GetTypes())
+				{
+					if (!Type || (Type->nameSpace && Type->nameSpace->name.GetLength())) continue;
+					TSharedRef<FAngelscriptClassDesc> Class = MakeShared<FAngelscriptClassDesc>();
+					Class->ClassName = UTF8_TO_TCHAR(Type->GetName());
+					Class->ScriptType = nullptr;
+					for (asCScriptFunction* Function : ModuleDefinitions->GetFunctions())
+					{
+						if (!Function || Function->objectType != Type) continue;
+						TSharedRef<FAngelscriptFunctionDesc> Method = MakeShared<FAngelscriptFunctionDesc>();
+						Method->FunctionName = UTF8_TO_TCHAR(Function->GetName());
+						Method->ScriptFunction = nullptr;
+						Class->Methods.Add(Method);
+					}
+					Module->Classes.Add(Class);
+				}
+				Modules.Add(Module);
+				CompileOutput->GetDefinitionOutput().ReplaceModules(MoveTemp(Modules));
+				return;
+			}
+			if (!Session || !Session->IsPublishable()) return;
+			FAngelscriptPreprocessResult Projected;
+			FAngelscriptDescriptorConsumer DescriptorConsumer;
+			if (DescriptorConsumer.Project(*Session, Sources, Projected, true))
+			{
+				CompileOutput->GetDefinitionOutput().ReplaceModules(MoveTemp(Projected.Modules));
+			}
 		}
 	};
 
@@ -210,14 +278,29 @@ TConstArrayView<asSSemanticSourceInput> asCBuilder::GetLexedSources() const
 	return frontendState ? MakeArrayView(frontendState->Inputs) : TConstArrayView<asSSemanticSourceInput>{};
 }
 
-asCMetadataImage* asCBuilder::GetDefinitions() const
+const asCModuleDefinitionSet* asCBuilder::GetModuleDefinitionSet() const
 {
-	return frontendState ? frontendState->Definitions.Get() : nullptr;
+	return frontendState ? frontendState->ModuleDefinitions.Get() : nullptr;
 }
 
-TUniquePtr<asCMetadataImage> asCBuilder::TakeDefinitions()
+TUniquePtr<asCModuleDefinitionSet> asCBuilder::TakeModuleDefinitionSet()
 {
-	return frontendState ? MoveTemp(frontendState->Definitions) : nullptr;
+	return frontendState ? MoveTemp(frontendState->ModuleDefinitions) : nullptr;
+}
+
+asCModuleDefinitionSet* asCBuilder::GetModuleDefinitionSet()
+{
+	return frontendState ? frontendState->ModuleDefinitions.Get() : nullptr;
+}
+
+const asCCompileOutput* asCBuilder::GetCompileOutput() const
+{
+	return frontendState ? frontendState->CompileOutput.Get() : nullptr;
+}
+
+TUniquePtr<asCCompileOutput> asCBuilder::TakeCompileOutput()
+{
+	return frontendState ? MoveTemp(frontendState->CompileOutput) : nullptr;
 }
 
 bool asCBuilder::RunThrough(asEBuilderStage Target)
@@ -272,7 +355,17 @@ if (!frontendState || Target >= asEBuilderStage::Failed || uint8(Target) != uint
 	case asEBuilderStage::DeclarationsCollected:
 		State.Session = MakeUnique<asCCompilationSession>(State.Sources.GetSnapshot(), State.Diagnostics, State.Options.StableScope,
 			State.Options.TypeContext.IsValid() ? State.Options.TypeContext.ToSharedRef() : MakeShared<asCTypeContext, ESPMode::ThreadSafe>());
-		for (const auto& Dependency : State.Options.Dependencies) Success &= State.Session->AddExternalDefinitions(Dependency);
+		{
+			const TArray<asCModuleDefinitionSet*> External = State.CollectExternalSets(Success);
+			if (Success)
+			{
+				for (asCModuleDefinitionSet* Set : External) Success &= State.Session->AddExternalDefinitions(Set);
+			}
+			else
+			{
+				Error = TEXT("definition-set-dependency-must-be-immutable");
+			}
+		}
 		for (int32 Index = 0; Index < State.Preprocessed.Num(); ++Index)
 			Success &= State.Session->CollectSource(State.Preprocessor, State.Preprocessed[Index], State.Inputs[Index].LogicalSourceKey);
 		Success &= State.Session->CloseDeclarationBarrier();
@@ -301,26 +394,55 @@ if (!frontendState || Target >= asEBuilderStage::Failed || uint8(Target) != uint
 	case asEBuilderStage::DefinitionsBuilt:
 		{
 			asCDefinitionConsumer Consumer;
-			auto Result = Consumer.Consume(*State.Session, State.Options.Dependencies);
+			const TArray<asCModuleDefinitionSet*> External = State.CollectExternalSets(Success);
+			if (!Success)
+			{
+				Error = TEXT("definition-set-dependency-must-be-immutable");
+				break;
+			}
+			auto Result = Consumer.Consume(*State.Session, External);
 			Success = Result.Succeeded();
-			if (Success) State.Definitions = MoveTemp(Result.Image);
+			if (Success)
+			{
+				State.ModuleDefinitions = MoveTemp(Result.Definitions);
+				if (State.ModuleDefinitions)
+				{
+					State.ModuleDefinitions->AttachDependencies(State.Options.Dependencies);
+				}
+				Success = State.ModuleDefinitions.IsValid();
+			}
 			else for (const auto& Diagnostic : Result.Diagnostics) Error += Diagnostic.Message + TEXT("\n");
 			Text = State.DefinitionText();
 		}
 		break;
 	case asEBuilderStage::LayoutsFinalized:
-		MetadataStatus = State.Definitions->FinalizeLayouts();
-		Success = MetadataStatus.GetValue() == asEMetadataResult::Succeeded;
-		Text = State.DefinitionText();
+		{
+			asCModuleDefinitionSet* Definitions = State.Definitions();
+			if (!Definitions) { Success = false; break; }
+			MetadataStatus = Definitions->FinalizeLayouts();
+			Success = MetadataStatus.GetValue() == asEMetadataResult::Succeeded;
+			Text = State.DefinitionText();
+		}
 		break;
 	case asEBuilderStage::DefinitionsFrozen:
-		MetadataStatus = State.Definitions->Freeze();
-		Success = MetadataStatus.GetValue() == asEMetadataResult::Succeeded;
-		if (Success && State.Session)
 		{
-			State.Session->BindFrozenDefinitions(State.Definitions.Get());
+			asCModuleDefinitionSet* Definitions = State.Definitions();
+			if (!Definitions) { Success = false; break; }
+			MetadataStatus = Definitions->Freeze();
+			Success = MetadataStatus.GetValue() == asEMetadataResult::Succeeded;
+			if (Success && State.Session)
+			{
+				State.Session->BindFrozenDefinitions(Definitions);
+			}
+			Text = State.DefinitionText();
 		}
-		Text = State.DefinitionText();
+		break;
+	case asEBuilderStage::ByteCodeEmitted:
+		{
+			const asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(*this);
+			Success = Emitted.EmissionStatus == asEByteCodeEmissionStatus::Succeeded;
+			if (!Success) Error = Emitted.Failure.StableFragmentKey.IsEmpty() ? TEXT("bytecode-emit-failed") : Emitted.Failure.StableFragmentKey;
+		}
 		break;
 	default: return false;
 	}

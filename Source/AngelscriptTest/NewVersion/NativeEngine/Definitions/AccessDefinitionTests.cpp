@@ -15,14 +15,14 @@ private:
 	struct FFixture
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCModuleDefinitionSet> Set = asCModuleDefinitionSet::Create();
 		asCObjectType* Owner = nullptr;
 		asCScriptFunction* Method = nullptr;
 		asCObjectProperty* Property = nullptr;
 		bool Initialize()
 		{
-			if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded || !AddType("Owner", "", Owner) || !AddMethod("Read", "", Owner, Method)) return false;
-			return Image->AddProperty(*Owner, "Value", Image->Primitive(ttInt), Property) == asEMetadataResult::Succeeded;
+			if (Set->SetIdentityContext(Context) != asEMetadataResult::Succeeded || !AddType("Owner", "", Owner) || !AddMethod("Read", "", Owner, Method)) return false;
+			return Set->AddProperty(*Owner, "Value", Set->Primitive(ttInt), Property) == asEMetadataResult::Succeeded;
 		}
 		bool AddType(const char* Name, const char* Namespace, asCObjectType*& Out)
 		{
@@ -31,7 +31,7 @@ private:
 			if (*Namespace) Descriptor.NamespacePath.Add(UTF8_TO_TCHAR(Namespace));
 			AS_NAMESPACE_QUALIFIER asSStableKey Key;
 			return Context->GetIdentityRegistry().InternNominalType(Descriptor, Key) == AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded &&
-				Image->CreateObjectType(Key, Name, Namespace, asOBJ_REF | asOBJ_SCRIPT_OBJECT, Out) == asEMetadataResult::Succeeded;
+				Set->CreateObjectType(Key, Name, Namespace, asOBJ_REF | asOBJ_SCRIPT_OBJECT, Out) == asEMetadataResult::Succeeded;
 		}
 		bool AddMethod(const char* Name, const char* Namespace, asCObjectType* Type, asCScriptFunction*& Out)
 		{
@@ -43,10 +43,10 @@ private:
 			Context->InternPrimitiveTypeUse(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Void, Descriptor.ReturnType);
 			AS_NAMESPACE_QUALIFIER asSStableKey Key;
 			return Context->GetIdentityRegistry().InternFunction(Descriptor, Key) == AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded &&
-				Image->CreateFunction(Key, Name, Namespace, asFUNC_SCRIPT, Out) == asEMetadataResult::Succeeded &&
-				Image->DefineFunction(*Out, Image->Primitive(ttVoid), {}, Type) == asEMetadataResult::Succeeded;
+				Set->CreateFunction(Key, Name, Namespace, asFUNC_SCRIPT, Out) == asEMetadataResult::Succeeded &&
+				Set->DefineFunction(*Out, Set->Primitive(ttVoid), {}, Type) == asEMetadataResult::Succeeded;
 		}
-		bool Freeze() { return Image->FinalizeLayouts() == asEMetadataResult::Succeeded && Image->Freeze() == asEMetadataResult::Succeeded && Image->ValidateFrozenDefinitions(); }
+		bool Freeze() { return Set->FinalizeLayouts() == asEMetadataResult::Succeeded && Set->Freeze() == asEMetadataResult::Succeeded && Set->ValidateFrozenDefinitions(); }
 	};
 	static asSAccessSpecifier Policy(const char* Name = "Trusted")
 	{
@@ -59,54 +59,54 @@ public:
 	{
 		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize()));
 		auto Authored = Policy(); asSAccessSpecifier* Actual = nullptr;
-		ASSERT_THAT(IsTrue(Fixture.Image->DefineAccessSpecifier(*Fixture.Owner, Authored, Actual) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->DefineAccessSpecifier(*Fixture.Owner, Authored, Actual) == asEMetadataResult::Succeeded));
 		Authored.permissions[0].accessName = "ChangedCallerInput";
 		ASSERT_THAT(IsTrue(Actual->permissions[0].accessName == "Friend"));
 		ASSERT_THAT(IsTrue(Fixture.Owner->GetAccessSpecifier("Trusted") == Actual));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetPropertyAccess(*Fixture.Owner, *Fixture.Property, *Actual) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetFunctionAccess(*Fixture.Method, *Actual) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->SetPropertyAccess(*Fixture.Owner, *Fixture.Property, *Actual) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->SetFunctionAccess(*Fixture.Method, *Actual) == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(Fixture.Property->accessSpecifier == Actual && Fixture.Method->accessSpecifier == Actual));
 		ASSERT_THAT(IsTrue(Fixture.Freeze())); ASSERT_THAT(IsNull(Fixture.Method->GetEngine()));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetFunctionAccess(*Fixture.Method, *Actual) == asEMetadataResult::InvalidState));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetPropertyAccess(*Fixture.Owner, *Fixture.Property, *Actual) == asEMetadataResult::InvalidState));
+		ASSERT_THAT(IsTrue(Fixture.Set->SetFunctionAccess(*Fixture.Method, *Actual) == asEMetadataResult::InvalidState));
+		ASSERT_THAT(IsTrue(Fixture.Set->SetPropertyAccess(*Fixture.Owner, *Fixture.Property, *Actual) == asEMetadataResult::InvalidState));
 	}
 	TEST_METHOD(InvalidAndDuplicatePoliciesCannotPartiallyPublish)
 	{
 		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize())); asSAccessSpecifier* Actual = nullptr;
-		auto Invalid = Policy(""); ASSERT_THAT(IsTrue(Fixture.Image->DefineAccessSpecifier(*Fixture.Owner, Invalid, Actual) == asEMetadataResult::InvalidArgument));
+		auto Invalid = Policy(""); ASSERT_THAT(IsTrue(Fixture.Set->DefineAccessSpecifier(*Fixture.Owner, Invalid, Actual) == asEMetadataResult::InvalidArgument));
 		ASSERT_THAT(IsNull(Actual)); ASSERT_THAT(AreEqual(asUINT(0), Fixture.Owner->accessSpecifiers.GetLength()));
 		Invalid = Policy(); Invalid.bIsProtected = true;
-		ASSERT_THAT(IsTrue(Fixture.Image->DefineAccessSpecifier(*Fixture.Owner, Invalid, Actual) == asEMetadataResult::InvalidArgument));
-		ASSERT_THAT(IsTrue(Fixture.Image->DefineAccessSpecifier(*Fixture.Owner, Policy(), Actual) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->DefineAccessSpecifier(*Fixture.Owner, Invalid, Actual) == asEMetadataResult::InvalidArgument));
+		ASSERT_THAT(IsTrue(Fixture.Set->DefineAccessSpecifier(*Fixture.Owner, Policy(), Actual) == asEMetadataResult::Succeeded));
 		asSAccessSpecifier* Rejected = Actual;
-		ASSERT_THAT(IsTrue(Fixture.Image->DefineAccessSpecifier(*Fixture.Owner, Policy(), Rejected) == asEMetadataResult::DuplicateName));
+		ASSERT_THAT(IsTrue(Fixture.Set->DefineAccessSpecifier(*Fixture.Owner, Policy(), Rejected) == asEMetadataResult::DuplicateName));
 		ASSERT_THAT(IsNull(Rejected)); ASSERT_THAT(AreEqual(asUINT(1), Fixture.Owner->accessSpecifiers.GetLength()));
 		ASSERT_THAT(IsTrue(Fixture.Freeze()));
 	}
 	TEST_METHOD(UnownedAndUnrelatedPoliciesCannotBindActualMembers)
 	{
 		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize()));
-		auto Unowned = Policy(); ASSERT_THAT(IsTrue(Fixture.Image->SetFunctionAccess(*Fixture.Method, Unowned) == asEMetadataResult::ForeignOwner));
+		auto Unowned = Policy(); ASSERT_THAT(IsTrue(Fixture.Set->SetFunctionAccess(*Fixture.Method, Unowned) == asEMetadataResult::ForeignOwner));
 		asCObjectType* Other = nullptr; ASSERT_THAT(IsTrue(Fixture.AddType("Other", "", Other)));
 		asSAccessSpecifier* Unrelated = nullptr;
-		ASSERT_THAT(IsTrue(Fixture.Image->DefineAccessSpecifier(*Other, Policy(), Unrelated) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetPropertyAccess(*Fixture.Owner, *Fixture.Property, *Unrelated) == asEMetadataResult::ForeignOwner));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetPropertyAccess(*Other, *Fixture.Property, *Unrelated) == asEMetadataResult::ForeignOwner));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetFunctionAccess(*Fixture.Method, *Unrelated) == asEMetadataResult::ForeignOwner));
+		ASSERT_THAT(IsTrue(Fixture.Set->DefineAccessSpecifier(*Other, Policy(), Unrelated) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->SetPropertyAccess(*Fixture.Owner, *Fixture.Property, *Unrelated) == asEMetadataResult::ForeignOwner));
+		ASSERT_THAT(IsTrue(Fixture.Set->SetPropertyAccess(*Other, *Fixture.Property, *Unrelated) == asEMetadataResult::ForeignOwner));
+		ASSERT_THAT(IsTrue(Fixture.Set->SetFunctionAccess(*Fixture.Method, *Unrelated) == asEMetadataResult::ForeignOwner));
 		ASSERT_THAT(IsNull(Fixture.Method->accessSpecifier)); ASSERT_THAT(IsNull(Fixture.Property->accessSpecifier));
 	}
 	TEST_METHOD(FrozenPolicyContentsAndMemberRebindingAreAuthenticated)
 	{
 		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize())); asSAccessSpecifier* First = nullptr; asSAccessSpecifier* Second = nullptr;
-		ASSERT_THAT(IsTrue(Fixture.Image->DefineAccessSpecifier(*Fixture.Owner, Policy(), First) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->DefineAccessSpecifier(*Fixture.Owner, Policy("Other"), Second) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetFunctionAccess(*Fixture.Method, *First) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->DefineAccessSpecifier(*Fixture.Owner, Policy(), First) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->DefineAccessSpecifier(*Fixture.Owner, Policy("Other"), Second) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->SetFunctionAccess(*Fixture.Method, *First) == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(Fixture.Freeze()));
-		First->permissions[0].bReadOnly = false; ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
-		First->permissions[0].bReadOnly = true; ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
-		Fixture.Method->accessSpecifier = Second; ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
-		Fixture.Method->accessSpecifier = First; ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
-		Fixture.Property->isPrivate = true; ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
+		First->permissions[0].bReadOnly = false; ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
+		First->permissions[0].bReadOnly = true; ASSERT_THAT(IsTrue(Fixture.Set->ValidateFrozenDefinitions()));
+		Fixture.Method->accessSpecifier = Second; ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
+		Fixture.Method->accessSpecifier = First; ASSERT_THAT(IsTrue(Fixture.Set->ValidateFrozenDefinitions()));
+		Fixture.Property->isPrivate = true; ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
 	}
 	TEST_METHOD(ActualDetachedCallerNamesAndNamespacesDrivePermissionUnion)
 	{
@@ -115,7 +115,7 @@ public:
 		ASSERT_THAT(IsTrue(Fixture.AddType("Friend", "", FriendType) && Fixture.AddMethod("Read", "", FriendType, Friend)));
 		ASSERT_THAT(IsTrue(Fixture.AddMethod("GlobalRead", "TrustedNamespace", nullptr, NamespaceFriend) && Fixture.AddMethod("Stranger", "", nullptr, Stranger)));
 		auto Authored = Policy(); asSAccessPermission Edit; Edit.accessName = "TrustedNamespace"; Edit.bEditDefaults = true; Authored.permissions.PushLast(Edit);
-		asSAccessSpecifier* Actual = nullptr; ASSERT_THAT(IsTrue(Fixture.Image->DefineAccessSpecifier(*Fixture.Owner, Authored, Actual) == asEMetadataResult::Succeeded));
+		asSAccessSpecifier* Actual = nullptr; ASSERT_THAT(IsTrue(Fixture.Set->DefineAccessSpecifier(*Fixture.Owner, Authored, Actual) == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(Fixture.Freeze()));
 		struct FCase { asCScriptFunction* Caller; bool Read; bool Write; bool Edit; };
 		for (const auto& Case : {FCase{Friend, true, false, false}, FCase{NamespaceFriend, false, false, true}, FCase{Stranger, false, false, false}})
@@ -127,17 +127,17 @@ public:
 	TEST_METHOD(TamperedFrozenPolicyCannotRegisterWithEngine)
 	{
 		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize())); asSAccessSpecifier* Actual = nullptr;
-		ASSERT_THAT(IsTrue(Fixture.Image->DefineAccessSpecifier(*Fixture.Owner, Policy(), Actual) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetPropertyAccess(*Fixture.Owner, *Fixture.Property, *Actual) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->DefineAccessSpecifier(*Fixture.Owner, Policy(), Actual) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->SetPropertyAccess(*Fixture.Owner, *Fixture.Property, *Actual) == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(Fixture.Freeze()));
 		asCScriptEngine* Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
 		Actual->permissions[0].bReadOnly = false;
-		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Engine->InstallDefinitionSet(MoveTemp(Fixture.Set)) != asEMetadataRegistrationResult::Succeeded));
 		Actual->permissions[0].bReadOnly = true;
-		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Engine->InstallDefinitionSet(MoveTemp(Fixture.Set)) == asEMetadataRegistrationResult::Succeeded));
 		ASSERT_THAT(IsTrue(Engine->FindMetadataType(Fixture.Owner->GetStableKey()) == Fixture.Owner));
 	}
 
@@ -149,7 +149,7 @@ public:
 		{
 			const FString Name = FString::Printf(TEXT("Policy%d"), Index); auto Value = Policy(TCHAR_TO_UTF8(*Name));
 			asSAccessSpecifier* Actual = nullptr;
-			Results[Index] = Fixture.Image->DefineAccessSpecifier(*Fixture.Owner, Value, Actual) == asEMetadataResult::Succeeded && Actual ? 1 : 0;
+			Results[Index] = Fixture.Set->DefineAccessSpecifier(*Fixture.Owner, Value, Actual) == asEMetadataResult::Succeeded && Actual ? 1 : 0;
 		});
 		for (const int32 Result : Results) ASSERT_THAT(AreEqual(1, Result));
 		ASSERT_THAT(AreEqual(asUINT(16), Fixture.Owner->accessSpecifiers.GetLength())); ASSERT_THAT(IsTrue(Fixture.Freeze()));
@@ -162,15 +162,15 @@ public:
 		asCScriptEngine* Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
 		const auto Before = Engine->GetMetadataRegistrationCounts();
-		Fixture.Property->type = Fixture.Image->Primitive(ttInt64);
-		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded));
+		Fixture.Property->type = Fixture.Set->Primitive(ttInt64);
+		ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Engine->InstallDefinitionSet(MoveTemp(Fixture.Set)) != asEMetadataRegistrationResult::Succeeded));
 		ASSERT_THAT(IsTrue(Engine->GetMetadataRegistrationCounts() == Before));
-		Fixture.Property->type = Fixture.Image->Primitive(ttFloat32);
-		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
+		Fixture.Property->type = Fixture.Set->Primitive(ttFloat32);
+		ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
 		Fixture.Property->type = Original;
-		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Engine->InstallDefinitionSet(MoveTemp(Fixture.Set)) == asEMetadataRegistrationResult::Succeeded));
 		ASSERT_THAT(IsTrue(Engine->FindMetadataType(Fixture.Owner->GetStableKey()) == Fixture.Owner));
 	}
 
@@ -178,7 +178,7 @@ public:
 	{
 		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize())); ASSERT_THAT(IsTrue(Fixture.Freeze()));
 		auto ForeignContext = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		auto Foreign = asCMetadataImage::Create();
+		auto Foreign = asCModuleDefinitionSet::Create();
 		ASSERT_THAT(IsTrue(Foreign->SetIdentityContext(ForeignContext) == asEMetadataResult::Succeeded));
 		AS_NAMESPACE_QUALIFIER asSNominalTypeDescriptor Descriptor;
 		Descriptor.StableScope = TEXT("foreign-field"); Descriptor.Name = TEXT("Other"); Descriptor.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::Class;
@@ -188,9 +188,9 @@ public:
 		ASSERT_THAT(IsTrue(Foreign->FinalizeLayouts() == asEMetadataResult::Succeeded && Foreign->Freeze() == asEMetadataResult::Succeeded));
 		const asCDataType Original = Fixture.Property->type;
 		Fixture.Property->type = asCDataType::CreateObjectHandle(Other, false);
-		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
 		Fixture.Property->type = Original;
-		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Fixture.Set->ValidateFrozenDefinitions()));
 	}
 
 	TEST_METHOD(ExposedMethodObjectTypeMustMatchDeclarationOwner)
@@ -203,12 +203,12 @@ public:
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
 		const auto Before = Engine->GetMetadataRegistrationCounts();
 		Fixture.Method->objectType = nullptr;
-		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Engine->InstallDefinitionSet(MoveTemp(Fixture.Set)) != asEMetadataRegistrationResult::Succeeded));
 		Fixture.Method->objectType = Other;
-		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
 		auto ForeignContext = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		auto Foreign = asCMetadataImage::Create();
+		auto Foreign = asCModuleDefinitionSet::Create();
 		ASSERT_THAT(IsTrue(Foreign->SetIdentityContext(ForeignContext) == asEMetadataResult::Succeeded));
 		AS_NAMESPACE_QUALIFIER asSNominalTypeDescriptor Descriptor;
 		Descriptor.StableScope = TEXT("foreign-owner"); Descriptor.Name = TEXT("Foreign"); Descriptor.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::Class;
@@ -217,11 +217,11 @@ public:
 		ASSERT_THAT(IsTrue(Foreign->CreateObjectType(Key, "Foreign", "", asOBJ_REF | asOBJ_SCRIPT_OBJECT, ForeignType) == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(Foreign->FinalizeLayouts() == asEMetadataResult::Succeeded && Foreign->Freeze() == asEMetadataResult::Succeeded));
 		Fixture.Method->objectType = ForeignType;
-		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
 		Fixture.Method->objectType = Original;
-		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Fixture.Set->ValidateFrozenDefinitions()));
 		ASSERT_THAT(IsTrue(Engine->GetMetadataRegistrationCounts() == Before));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->InstallDefinitionSet(MoveTemp(Fixture.Set)) == asEMetadataRegistrationResult::Succeeded));
 	}
 };
 #endif

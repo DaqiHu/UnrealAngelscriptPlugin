@@ -640,8 +640,8 @@ namespace AngelscriptOfflineContract
 		{
 			ObserveType(ScriptEngine.GetEnumByIndex(Index));
 		}
-		for (const auto& Image : static_cast<asCScriptEngine&>(ScriptEngine).GetRegisteredMetadataImages())
-			for (asCTypeInfo* Type : Image->GetTypes())
+		for (const auto& Set : static_cast<asCScriptEngine&>(ScriptEngine).GetRegisteredDefinitionSets())
+			for (asCTypeInfo* Type : Set->GetTypes())
 				if (Type->GetFlags() & asOBJ_CALLABLE_TYPE) ObserveType(Type);
 		for (asUINT Index = 0; Index < ScriptEngine.GetTypedefCount(); ++Index)
 		{

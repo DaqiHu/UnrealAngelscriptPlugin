@@ -1,7 +1,7 @@
 /* Maintained Unreal AngelScript fork — typed AST to real detached definitions. */
 #pragma once
 
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "frontend/as_source_location.h"
 
 BEGIN_AS_NAMESPACE
@@ -19,16 +19,16 @@ class asCCompilationSession;
 	struct asSDefinitionConsumerResult
 	{
 		asEDefinitionConsumerStatus Status = asEDefinitionConsumerStatus::InvalidPhase;
-		TUniquePtr<asCMetadataImage> Image;
+		TUniquePtr<asCModuleDefinitionSet> Definitions;
 		TArray<asSDefinitionDiagnostic> Diagnostics;
-		bool Succeeded() const { return Status == asEDefinitionConsumerStatus::Succeeded && Image.IsValid(); }
+		bool Succeeded() const { return Status == asEDefinitionConsumerStatus::Succeeded && Definitions.IsValid(); }
 	};
 	class ANGELSCRIPTRUNTIME_API asCDefinitionConsumer final
 	{
 	public:
-		// Returns complete semantic edges in a Building image. Layout validation
-		// and Freeze remain explicit subsequent stages; no AST pointer is retained.
+		// Returns complete semantic edges in a Building definition set. Layout
+		// validation and Freeze remain explicit subsequent stages; no AST pointer is retained.
 		asSDefinitionConsumerResult Consume(const asCCompilationSession& Session,
-			TConstArrayView<asCMetadataImage*> Dependencies = {}) const;
+			TConstArrayView<asCModuleDefinitionSet*> Dependencies = {}) const;
 	};
 END_AS_NAMESPACE

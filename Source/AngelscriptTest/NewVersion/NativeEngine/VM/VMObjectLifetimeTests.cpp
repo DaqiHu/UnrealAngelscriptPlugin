@@ -114,17 +114,17 @@ public:
 		ResetLifetimeTraces();
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Type = Fixture.DefineType(TEXT("Point"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
-		asCObjectProperty* X = Fixture.DefineProperty(*Type, "x", Fixture.Image->Primitive(ttInt));
+		asCObjectProperty* X = Fixture.DefineProperty(*Type, "x", Fixture.Set->Primitive(ttInt));
 		asCScriptFunction* Ctor = Fixture.DefineFunction(
-			TEXT("Construct"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {}, Type);
+			TEXT("Construct"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {}, Type);
 		asCScriptFunction* Dtor = Fixture.DefineFunction(
-			TEXT("Destruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {}, Type);
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->AddBehaviour(*Type, asBEHAVE_CONSTRUCT, *Ctor)));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->AddBehaviour(*Type, asBEHAVE_DESTRUCT, *Dtor)));
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+			TEXT("Destruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {}, Type);
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->AddBehaviour(*Type, asBEHAVE_CONSTRUCT, *Ctor)));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->AddBehaviour(*Type, asBEHAVE_DESTRUCT, *Dtor)));
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Ctor->GetStableKey(), asFUNCTION(GenericLifeConstruct), asCALL_GENERIC)));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
@@ -132,7 +132,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image = MakeAllocFreeImage(Type, X, Ctor, Run);
 		ASSERT_THAT(IsNotNull(Image.Get()));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
@@ -147,7 +147,7 @@ public:
 	{
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Type = Fixture.DefineType(TEXT("Wide"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
-		Fixture.DefineProperty(*Type, "x", Fixture.Image->Primitive(ttInt));
+		Fixture.DefineProperty(*Type, "x", Fixture.Set->Primitive(ttInt));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		Type->alignment = 1024;
 		void* Payload = asVmAllocateObject(Type);
@@ -166,10 +166,10 @@ public:
 	{
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Type = Fixture.DefineType(TEXT("Point"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
-		Fixture.DefineProperty(*Type, "x", Fixture.Image->Primitive(ttInt));
+		Fixture.DefineProperty(*Type, "x", Fixture.Set->Primitive(ttInt));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		alignas(16) uint8 Native[64];
 		FMemory::Memset(Native, 0xAB, sizeof(Native));
 		*reinterpret_cast<asUINT*>(Native) = asSVmObjectHeader::MagicValue;
@@ -185,20 +185,20 @@ public:
 		ResetLifetimeTraces();
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Box = Fixture.DefineType(TEXT("Box"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
-		Fixture.DefineProperty(*Box, "tag", Fixture.Image->Primitive(ttInt));
+		Fixture.DefineProperty(*Box, "tag", Fixture.Set->Primitive(ttInt));
 		asCScriptFunction* BoxDtor = Fixture.DefineFunction(
-			TEXT("BoxDestruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {}, Box);
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->AddBehaviour(*Box, asBEHAVE_DESTRUCT, *BoxDtor)));
+			TEXT("BoxDestruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {}, Box);
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->AddBehaviour(*Box, asBEHAVE_DESTRUCT, *BoxDtor)));
 		asCObjectType* Outer = Fixture.DefineType(TEXT("Outer"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
 		asCDataType BoxValue = asCDataType::CreateType(Box, false);
 		Fixture.DefineProperty(*Outer, "first", BoxValue);
 		Fixture.DefineProperty(*Outer, "second", BoxValue);
 		asCScriptFunction* OuterDtor = Fixture.DefineFunction(
-			TEXT("OuterDestruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {}, Outer);
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->AddBehaviour(*Outer, asBEHAVE_DESTRUCT, *OuterDtor)));
+			TEXT("OuterDestruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {}, Outer);
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->AddBehaviour(*Outer, asBEHAVE_DESTRUCT, *OuterDtor)));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(BoxDtor->GetStableKey(), asFUNCTION(GenericMember0Destruct), asCALL_GENERIC)));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
@@ -217,14 +217,14 @@ public:
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Type = Fixture.DefineType(TEXT("Point"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT);
 		asCScriptFunction* Dtor = Fixture.DefineFunction(
-			TEXT("Destruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {}, Type);
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->AddBehaviour(*Type, asBEHAVE_DESTRUCT, *Dtor)));
+			TEXT("Destruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {}, Type);
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->AddBehaviour(*Type, asBEHAVE_DESTRUCT, *Dtor)));
 		asCDataType ReturnType = asCDataType::CreateType(Type, false);
 		ReturnType.MakeReference(true);
 		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, ReturnType, {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Dtor->GetStableKey(), asFUNCTION(GenericLifeDestruct), asCALL_GENERIC)));
 		asCByteCodeImageBuilder Builder;
@@ -246,7 +246,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));

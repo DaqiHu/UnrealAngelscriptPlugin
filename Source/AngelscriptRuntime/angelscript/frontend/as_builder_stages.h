@@ -2,7 +2,7 @@
 #pragma once
 
 #include "frontend/as_compilation_session.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 
 BEGIN_AS_NAMESPACE
 class asCBuilderState;
@@ -15,7 +15,7 @@ class asCBuilderState;
 	enum class asEBuilderStage : uint8
 	{
 		SourceReady, Lexed, Preprocessed, DeclarationsCollected, DeclarationsResolved,
-		BodiesAnalyzed, ASTVerified, DefinitionsBuilt, LayoutsFinalized, DefinitionsFrozen, Failed
+		BodiesAnalyzed, ASTVerified, DefinitionsBuilt, LayoutsFinalized, DefinitionsFrozen, ByteCodeEmitted, Failed
 	};
 
 	struct asSBuilderOptions
@@ -24,7 +24,7 @@ class asCBuilderState;
 		int32 WorkerCount = 1;
 		TMap<FString, bool> PreprocessorFlags;
 		TSharedPtr<asCTypeContext, ESPMode::ThreadSafe> TypeContext;
-		TArray<asCMetadataImage*> Dependencies;
+		TArray<asCModuleDefinitionSet*> Dependencies;
 	};
 
 	// An immutable observation of a completed attempt, not another AST or an

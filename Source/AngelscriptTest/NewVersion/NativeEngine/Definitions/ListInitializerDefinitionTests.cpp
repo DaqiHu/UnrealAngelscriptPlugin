@@ -12,7 +12,7 @@ private:
 	struct FFixture
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		TUniquePtr<asCMetadataImage> Host = asCMetadataImage::Create();
+		TUniquePtr<asCModuleDefinitionSet> Host = MakeUnique<asCModuleDefinitionSet>();
 		asCObjectType* Type = nullptr;
 		asCScriptFunction* Factory = nullptr;
 		bool Initialize(bool Generic = false)
@@ -63,7 +63,7 @@ auto Snapshot = MakeShared<asCSourceSnapshot, ESPMode::ThreadSafe>();
 				if (const auto* List = dyn_cast<asCInitListExpr>(&Node)) { if (List->GetInitializerIdentity() == Factory->GetStableKey()) ++Lists; }
 				if (isa<asCValueInitExpr>(&Node)) ++Defaults;
 			});
-			return Builder.GetDefinitions()->ValidateFrozenDefinitions();
+			return Builder.GetModuleDefinitionSet()->ValidateFrozenDefinitions();
 		}
 	};
 public:

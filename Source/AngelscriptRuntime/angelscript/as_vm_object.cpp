@@ -45,7 +45,7 @@ bool asVmHasCleanupAuthority(const asCScriptEngine* Engine)
 void* asVmAllocateObject(asCObjectType* Type)
 {
 	if (!Type) return nullptr;
-	if (Type->GetMetadataImage() && Type->GetMetadataImage()->GetState() == asEMetadataImageState::Retired) return nullptr;
+	if (Type->GetDefinitionSet() && Type->GetDefinitionSet()->GetState() == asEDefinitionSetState::Retired) return nullptr;
 	asCScriptEngine* Engine = static_cast<asCScriptEngine*>(Type->GetEngine());
 	if (Engine && !Engine->AcquireVmObjectLease()) return nullptr;
 	Type->AddRef();

@@ -1,5 +1,5 @@
 #include "CQTest.h"
-#include "NativeVMTestSupport.h"
+#include "../Compiler/NativeSourceExecutionTestSupport.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 
@@ -9,55 +9,44 @@ TEST_CLASS_WITH_FLAGS(VMLinking, "Angelscript.UnitTest.NativeEngine",
 public:
 	TEST_METHOD(LinkResolvesOriginalFunctionPointers)
 	{
-		FDetachedDefinitionFixture Fixture;
-		asCScriptFunction* Function = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
-		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
+		FSourceExecutionInput Input(TEXT("int Run() { return 42; }"));
+		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
+		asCScriptFunction* Function = FindSourceFunction(Builder, "Run");
+		ASSERT_THAT(IsNotNull(Function));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
-		asCByteCodeImageBuilder Builder;
-		asUINT Slot = 0;
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Function, Slot)));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 4, 0)));
-		asSByteCodeOperand Push = ByteImm32(42);
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_PshC4, MakeArrayView(&Push, 1))));
-		asSByteCodeOperand Ret = ByteImm16(0);
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1))));
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.EndFunction()));
-		TUniquePtr<asCByteCodeImage> Image;
-		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
-		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
-		ASSERT_THAT(IsNotNull(Snapshot));
-		ASSERT_THAT(IsTrue(Snapshot->FindFunction(Function->GetStableKey()) == Function));
-		Snapshot->Release();
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, Builder)));
+		ASSERT_THAT(IsTrue(Engine.Ptr->FindMetadataFunction(Function->GetStableKey()) == Function));
+		asIScriptContext* Context = Engine.Ptr->CreateContext();
+		ASSERT_THAT(IsNotNull(Context));
+		ASSERT_THAT(AreEqual(0, Context->Prepare(Function)));
+		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
+		ASSERT_THAT(AreEqual(42, static_cast<int32>(Context->GetReturnDWord())));
+		Context->Release();
 	}
 
 	TEST_METHOD(MissingDeclarationAndBodyConflictReject)
 	{
-		FDetachedDefinitionFixture Fixture;
-		asCScriptFunction* Function = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
-		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
-		asCByteCodeImageBuilder Builder;
-		asUINT Slot = 0;
-		Builder.AddFunctionRequirement(*Function, Slot);
-		Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), 4, 0);
-		asSByteCodeOperand Push = ByteImm32(1);
-		Builder.Emit(asBC_PshC4, MakeArrayView(&Push, 1));
-		asSByteCodeOperand Ret = ByteImm16(0);
-		Builder.Emit(asBC_RET, MakeArrayView(&Ret, 1));
-		Builder.EndFunction();
-		TUniquePtr<asCByteCodeImage> Image;
-		Builder.Finish(Image);
+		FSourceExecutionInput Input(TEXT("int Run() { return 1; } class Dup { int V; }"));
+		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
+		asCScriptFunction* Function = FindSourceFunction(Builder, "Run");
+		ASSERT_THAT(IsNotNull(Function));
 		FNativeEngineOwner Engine;
-		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::MissingDeclaration, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
-		ASSERT_THAT(IsNull(Snapshot));
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
-		asCExecutableSnapshot* Second = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::BodyConflict, Engine.Ptr->LinkByteCodeImage(*Image, Second)));
-		ASSERT_THAT(IsNull(Second));
-		Snapshot->Release();
+		asIScriptContext* Context = Engine.Ptr->CreateContext();
+		ASSERT_THAT(AreNotEqual(0, Context->Prepare(Function)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, Builder)));
+		ASSERT_THAT(AreEqual(0, Context->Prepare(Function)));
+		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
+		ASSERT_THAT(AreEqual(1, static_cast<int32>(Context->GetReturnDWord())));
+		FSourceExecutionInput SecondInput(TEXT("class Dup { int V; }"));
+		asCBuilder Second(SecondInput.Snapshot, SecondInput.Diagnostics, SecondInput.Options);
+		ASSERT_THAT(IsTrue(Second.RunThrough(), DescribeBuilderFailure(Second)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::IdentityConflict, RegisterCompiledDefinitions(*Engine.Ptr, Second)));
+		ASSERT_THAT(AreEqual(0, Context->Prepare(Function)));
+		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
+		ASSERT_THAT(AreEqual(1, static_cast<int32>(Context->GetReturnDWord())));
+		Context->Release();
 	}
 };
 

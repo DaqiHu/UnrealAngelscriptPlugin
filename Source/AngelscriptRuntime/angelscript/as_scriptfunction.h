@@ -46,6 +46,8 @@
 #include "as_datatype.h"
 #include "as_atomic.h"
 #include "as_buildartifact.h"
+#include "Containers/Array.h"
+#include "Containers/ArrayView.h"
 
 #include <mutex>
 #include <memory>
@@ -53,7 +55,8 @@
 
 BEGIN_AS_NAMESPACE
 
-class asCMetadataImage;
+class asCModuleDefinitionSet;
+class asCModuleDefinitionSet;
  enum class asEFunctionIdentityKind : uint8; 
 
 class asCScriptEngine;
@@ -276,6 +279,8 @@ public:
 
 	// For JIT compilation
 	asDWORD             *GetByteCode(asUINT *length = 0);
+	TConstArrayView<asDWORD> GetStableByteCode() const;
+	void SetStableByteCode(TArray<asDWORD> Bytes);
 
 	// User data
 	void                *SetUserData(void *userData, asPWORD type);
@@ -303,7 +308,7 @@ public:
 	bool IsMetadataStatic() const { return metadataStaticDeclaration; }
 	bool IsMetadataLocal() const { return traits.GetTrait(asTRAIT_LOCAL); }
 	bool IsMetadataCallableSignature() const { return metadataCallableSignature; }
-	asCMetadataImage* GetMetadataImage() const { return metadataOwner; }
+	asCModuleDefinitionSet* GetDefinitionSet() const { return metadataOwner; }
 	const asCDataType& GetReturnDataType() const { return returnType; }
 	const asCDataType* GetParameterDataType(asUINT index) const
 	{
@@ -537,6 +542,7 @@ public:
 		asCArray<asSBuildArtifactDependency> artifactDependencies;
 	};
 	ScriptFunctionData          *scriptData;
+	TArray<asDWORD>              stableByteCode;
 
 	// Used by asFUNC_SYSTEM
 	asSSystemFunctionInterface  *sysFuncIntf;
@@ -589,9 +595,9 @@ public:
 #endif
 
 private:
-	friend class asCMetadataImage;
-	asCScriptFunction(asCMetadataImage& owner, const asSStableKey& key, asEFuncType funcType);
-	asCMetadataImage* metadataOwner = nullptr;
+	friend class asCModuleDefinitionSet;
+	asCScriptFunction(asCModuleDefinitionSet& owner, const asSStableKey& key, asEFuncType funcType);
+	asCModuleDefinitionSet* metadataOwner = nullptr;
 	asSStableKey metadataStableKey;
 	mutable std::mutex metadataReferenceMutex;
 

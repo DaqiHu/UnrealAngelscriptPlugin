@@ -17,19 +17,6 @@ class asCScriptEngine;
 class asCTypeInfo;
 class asCExecutableSnapshot;
 
-enum class asEByteCodeLinkStatus : asBYTE
-{
-	Succeeded,
-	InvalidArgument,
-	Unverified,
-	MissingDeclaration,
-	SchemaMismatch,
-	BodyConflict,
-	ResourceFailure,
-	MissingBinding,
-	Retired
-};
-
 class ANGELSCRIPTRUNTIME_API asCExecutableFunction
 {
 public:

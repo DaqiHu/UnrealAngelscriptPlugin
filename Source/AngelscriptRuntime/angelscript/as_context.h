@@ -110,7 +110,6 @@ private:
 	bool m_vmCleanup = false;
 public:
 	int             Prepare(asIScriptFunction *func);
-	int             Prepare(asCExecutableSnapshot* Snapshot, const asSStableKey& Key);
 	int             Unprepare();
 	int             Execute();
 	int             Abort();

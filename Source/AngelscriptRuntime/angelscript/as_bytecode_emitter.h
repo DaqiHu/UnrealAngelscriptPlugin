@@ -1,15 +1,15 @@
 /* Maintained Unreal AngelScript fork — bounded canonical AST to symbolic bytecode. */
 #pragma once
 
-#include "as_bytecode_image_builder.h"
 #include "as_builder.h"
 #include "frontend/as_diagnostics.h"
 #include "frontend/as_stable_key.h"
 
 BEGIN_AS_NAMESPACE
 
+class asCByteCodeImage;
 class asCCompilationSession;
-class asCMetadataImage;
+class asCModuleDefinitionSet;
 
 enum class asEByteCodeEmissionStatus : asBYTE
 {
@@ -43,8 +43,6 @@ struct asSByteCodeEmissionFailure
 
 struct asSByteCodeEmissionResult
 {
-	TUniquePtr<asCByteCodeImage> Image;
-	asEByteCodeImageStatus Status = asEByteCodeImageStatus::InvalidArgument;
 	asEByteCodeEmissionStatus EmissionStatus = asEByteCodeEmissionStatus::InvalidInput;
 	asSByteCodeEmissionFailure Failure;
 };
@@ -54,9 +52,16 @@ class ANGELSCRIPTRUNTIME_API asCByteCodeEmitter
 public:
 	static asSByteCodeEmissionResult Emit(
 		const asCCompilationSession* Session,
-		const asCMetadataImage* FrozenDefinitions,
+		const asCModuleDefinitionSet* FrozenDefinitions,
 		const asSByteCodeEmissionOptions& Options);
+	static asSByteCodeEmissionResult Emit(asCBuilder& Builder);
 	static asSByteCodeEmissionResult Emit(asCBuilder& Builder, asCScriptFunction& Function);
 };
+
+ANGELSCRIPTRUNTIME_API asSByteCodeEmissionResult asEmitByteCodeImage(
+	const asCCompilationSession* Session,
+	const asCModuleDefinitionSet* FrozenDefinitions,
+	const asSByteCodeEmissionOptions& Options,
+	TUniquePtr<asCByteCodeImage>& OutImage);
 
 END_AS_NAMESPACE

@@ -158,7 +158,7 @@ public:
 
 	asCArray<int> methods;
 	asCMapByName<asCScriptFunction*> methodTable;
-	// Image-owned semantic relations, valid before registration and after retirement.
+	// Set-owned semantic relations, valid before registration and after retirement.
 	asCArray<asCScriptFunction*> metadataMethods;
 	asCArray<asCScriptFunction*> metadataFactories;
 	struct asSMetadataBehaviour
@@ -198,7 +198,7 @@ public:
 	asCObjectType* GetMetadataTemplateDefinition() const { return metadataTemplateDefinition; }
 	bool HasFixedTemplateLayout() const { return metadataFixedTemplateLayout; }
 	private:
-	friend class asCMetadataImage;
+	friend class asCModuleDefinitionSet;
 	asCObjectType* metadataTemplateDefinition = nullptr;
 	bool metadataFixedTemplateLayout = false;
 	public:
@@ -388,8 +388,8 @@ public:
 	}
 
 protected:
-	friend class asCMetadataImage;
-	asCObjectType(asCMetadataImage& owner, const asSStableKey& key);
+	friend class asCModuleDefinitionSet;
+	asCObjectType(asCModuleDefinitionSet& owner, const asSStableKey& key);
 	friend class asCScriptEngine;
 	friend class asCConfigGroup;
 	friend class asCModule;

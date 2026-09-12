@@ -46,10 +46,11 @@ bool FAngelscriptTypeBindInfoDraft::Create(TSharedRef<const FAngelscriptTypeBind
 		Diagnostic = TEXT("Layouts require a valid sealed binding store."); return false;
 	}
 	TUniquePtr<FAngelscriptTypeBindInfoDraft> Draft(new FAngelscriptTypeBindInfoDraft(Store));
-	Draft->Image = asCMetadataImage::Create();
-	Draft->TemplateImage = asCMetadataImage::Create();
-	if (Draft->Image->SetIdentityContext(Draft->Context) != asEMetadataResult::Succeeded
-		|| Draft->TemplateImage->SetIdentityContext(Draft->Context) != asEMetadataResult::Succeeded)
+	Draft->Set = asCModuleDefinitionSet::Create();
+	Draft->TemplateSet = asCModuleDefinitionSet::Create();
+	if (!Draft->Set || !Draft->TemplateSet
+		|| Draft->Set->SetIdentityContext(Draft->Context) != asEMetadataResult::Succeeded
+		|| Draft->TemplateSet->SetIdentityContext(Draft->Context) != asEMetadataResult::Succeeded)
 	{
 		Diagnostic = TEXT("Layouts could not attach the canonical type context."); return false;
 	}
@@ -74,42 +75,42 @@ bool FAngelscriptTypeBindInfoDraft::Create(TSharedRef<const FAngelscriptTypeBind
 		if (D.Kind == EAngelscriptTypeBindKind::Enum)
 		{
 			asCEnumType* Type = nullptr;
-			Status = Draft->Image->CreateEnumType(Draft->Nominals[Index], TCHAR_TO_UTF8(*D.Name), TCHAR_TO_UTF8(*D.Namespace), Type);
+			Status = Draft->Set->CreateEnumType(Draft->Nominals[Index], TCHAR_TO_UTF8(*D.Name), TCHAR_TO_UTF8(*D.Namespace), Type);
 			Draft->Types[Index] = Type;
 		}
 		else if (D.Kind == EAngelscriptTypeBindKind::Alias)
 		{
 			asCTypedefType* Type = nullptr;
-			Status = Draft->Image->CreateTypedefType(Draft->Nominals[Index], TCHAR_TO_UTF8(*D.Name), TCHAR_TO_UTF8(*D.Namespace), Type);
+			Status = Draft->Set->CreateTypedefType(Draft->Nominals[Index], TCHAR_TO_UTF8(*D.Name), TCHAR_TO_UTF8(*D.Namespace), Type);
 			Draft->Types[Index] = Type;
 		}
 		else
 		{
 			asCObjectType* Type = nullptr;
-			asCMetadataImage* TargetImage = D.Kind == EAngelscriptTypeBindKind::Template ? Draft->TemplateImage.Get() : Draft->Image.Get();
-			Status = TargetImage->CreateObjectType(Draft->Nominals[Index], TCHAR_TO_UTF8(*D.Name), TCHAR_TO_UTF8(*D.Namespace), D.ObjectFlags, Type);
+			asCModuleDefinitionSet* TargetSet = D.Kind == EAngelscriptTypeBindKind::Template ? Draft->TemplateSet.Get() : Draft->Set.Get();
+			Status = TargetSet->CreateObjectType(Draft->Nominals[Index], TCHAR_TO_UTF8(*D.Name), TCHAR_TO_UTF8(*D.Namespace), D.ObjectFlags, Type);
 			Draft->Types[Index] = Type;
 			if (Status == asEMetadataResult::Succeeded)
 			{
 				if (D.Kind == EAngelscriptTypeBindKind::Template)
-					Status = TargetImage->SetTypeDeclarationFacts(*Type, Nominal.Kind, Nominal.GenericArity);
+					Status = TargetSet->SetTypeDeclarationFacts(*Type, Nominal.Kind, Nominal.GenericArity);
 				if (Status == asEMetadataResult::Succeeded) Status = D.Kind == EAngelscriptTypeBindKind::Interface
-					? TargetImage->SetInterfaceDeclaration(*Type)
+					? TargetSet->SetInterfaceDeclaration(*Type)
 					: D.Kind == EAngelscriptTypeBindKind::Template
-						? TargetImage->SetFixedTemplateLayout(*Type, D.NativeSize, D.NativeAlignment)
-						: TargetImage->SetNativeLayout(*Type, D.NativeSize, D.NativeAlignment);
+						? TargetSet->SetFixedTemplateLayout(*Type, D.NativeSize, D.NativeAlignment)
+						: TargetSet->SetNativeLayout(*Type, D.NativeSize, D.NativeAlignment);
 			}
 		}
 		if (Status != asEMetadataResult::Succeeded)
 			return DraftFailure(D.Source, D.Name, TEXT("invalid native type definition or alignment"), Diagnostic);
 		if (D.Kind != EAngelscriptTypeBindKind::Template
-			&& Draft->Image->SetTypeDeclarationFacts(*Draft->Types[Index], Nominal.Kind, Nominal.GenericArity) != asEMetadataResult::Succeeded)
+			&& Draft->Set->SetTypeDeclarationFacts(*Draft->Types[Index], Nominal.Kind, Nominal.GenericArity) != asEMetadataResult::Succeeded)
 			return DraftFailure(D.Source, D.Name, TEXT("invalid declaration facts"), Diagnostic);
 	}
-	if (Draft->TemplateImage->FinalizeLayouts() != asEMetadataResult::Succeeded
-		|| Draft->TemplateImage->Freeze() != asEMetadataResult::Succeeded
-		|| !Draft->TemplateImage->ValidateFrozenDefinitions()
-		|| Draft->Image->AddDependency(Draft->TemplateImage.Get()) != asEMetadataResult::Succeeded)
+	if (Draft->TemplateSet->FinalizeLayouts() != asEMetadataResult::Succeeded
+		|| Draft->TemplateSet->Freeze() != asEMetadataResult::Succeeded
+		|| !Draft->TemplateSet->ValidateFrozenDefinitions()
+		|| Draft->Set->AddDependency(Draft->TemplateSet.Get()) != asEMetadataResult::Succeeded)
 	{
 		Diagnostic = TEXT("Layouts: template declarations could not be frozen as a dependency."); return false;
 	}
@@ -144,14 +145,14 @@ bool FAngelscriptTypeBindInfoDraft::Create(TSharedRef<const FAngelscriptTypeBind
 		if (!D.BaseType.IsEmpty())
 		{
 			auto* Base = CastToObjectType(Draft->FindType(D.BaseType, D.Namespace));
-			if (!Object || !Base || Draft->Image->SetBaseType(*Object, *Base) != asEMetadataResult::Succeeded)
+			if (!Object || !Base || Draft->Set->SetBaseType(*Object, *Base) != asEMetadataResult::Succeeded)
 				return DraftFailure(D.Source, D.Name + TEXT(" : ") + D.BaseType, TEXT("missing, invalid or cyclic base type"), Diagnostic);
 			AddEdge(Index, Base, D.Source, D.Name + TEXT(" : ") + D.BaseType);
 		}
 		for (const auto& Name : D.Interfaces)
 		{
 			auto* Interface = CastToObjectType(Draft->FindType(Name, D.Namespace));
-			if (!Object || !Interface || Draft->Image->AddInterface(*Object, *Interface) != asEMetadataResult::Succeeded)
+			if (!Object || !Interface || Draft->Set->AddInterface(*Object, *Interface) != asEMetadataResult::Succeeded)
 				return DraftFailure(D.Source, D.Name + TEXT(" : ") + Name, TEXT("missing or invalid interface"), Diagnostic);
 			AddEdge(Index, Interface, D.Source, D.Name + TEXT(" : ") + Name);
 		}
@@ -160,7 +161,7 @@ bool FAngelscriptTypeBindInfoDraft::Create(TSharedRef<const FAngelscriptTypeBind
 			asSBindingDeclaration Parsed; asCDataType Type;
 			if (!Parse(D.AliasTarget, D, D.Source, Parsed, Type)) return false;
 			if (!Parsed.Name.IsEmpty() || !Parsed.Function.IsZero() ||
-				Draft->Image->SetAlias(*CastToTypedefType(Draft->Types[Index]), Type) != asEMetadataResult::Succeeded)
+				Draft->Set->SetAlias(*CastToTypedefType(Draft->Types[Index]), Type) != asEMetadataResult::Succeeded)
 				return DraftFailure(D.Source, D.Name, TEXT("invalid alias target"), Diagnostic);
 			if (!Type.IsReference() && !Type.IsObjectHandle()) AddEdge(Index, Type.GetTypeInfo(), D.Source, D.Name);
 		}
@@ -170,7 +171,7 @@ bool FAngelscriptTypeBindInfoDraft::Create(TSharedRef<const FAngelscriptTypeBind
 			if (Member.Kind == EAngelscriptTypeBindMemberKind::EnumValue)
 			{
 				auto* Enum = CastToEnumType(Draft->Types[Index]);
-				if (!Enum || Draft->Image->AddEnumValue(*Enum, TCHAR_TO_UTF8(*Member.Declaration), Member.EnumValue) != asEMetadataResult::Succeeded)
+				if (!Enum || Draft->Set->AddEnumValue(*Enum, TCHAR_TO_UTF8(*Member.Declaration), Member.EnumValue) != asEMetadataResult::Succeeded)
 					return DraftFailure(Source, Member.Declaration, TEXT("invalid enum value"), Diagnostic);
 			}
 			else if (Member.Kind == EAngelscriptTypeBindMemberKind::Property)
@@ -206,7 +207,7 @@ bool FAngelscriptTypeBindInfoDraft::Create(TSharedRef<const FAngelscriptTypeBind
 	for (int32 Index = 0; Index < Records.Num(); ++Index) if (!Visit(Index)) return false;
 	// Publish native type sizes only within this private draft so the checked
 	// property API can validate forward member extents. The image stays mutable.
-	if (Draft->Image->FinalizeLayouts() != asEMetadataResult::Succeeded)
+	if (Draft->Set->FinalizeLayouts() != asEMetadataResult::Succeeded)
 	{
 		Diagnostic = TEXT("Layouts: incomplete or invalid native type/alias layout."); return false;
 	}
@@ -215,12 +216,12 @@ bool FAngelscriptTypeBindInfoDraft::Create(TSharedRef<const FAngelscriptTypeBind
 		const auto& Member = *Property.Record;
 		asSNativePropertyAddress Address; Address.Offset = Member.PropertyOffset;
 		asCObjectProperty* Installed = nullptr;
-		if (Draft->Image->DefineNativeProperty(*CastToObjectType(Draft->Types[Property.Owner]), TCHAR_TO_UTF8(*Property.Name),
+		if (Draft->Set->DefineNativeProperty(*CastToObjectType(Draft->Types[Property.Owner]), TCHAR_TO_UTF8(*Property.Name),
 			Property.Type, Address, Installed) != asEMetadataResult::Succeeded)
 			return DraftFailure(Member.Source.File.IsEmpty() ? Records[Property.Owner].Declaration.Source : Member.Source,
 				Member.Declaration, TEXT("invalid native property offset, extent or alignment"), Diagnostic);
 	}
-	if (Draft->Image->FinalizeLayouts() != asEMetadataResult::Succeeded)
+	if (Draft->Set->FinalizeLayouts() != asEMetadataResult::Succeeded)
 	{
 		Diagnostic = TEXT("Layouts: native member layout finalization failed."); return false;
 	}
@@ -251,10 +252,10 @@ asCTypeInfo* FAngelscriptTypeBindInfoDraft::FindType(const FString& Name, const 
 asCTypeInfo* FAngelscriptTypeBindInfoDraft::FindTypeByKey(const asSStableKey& Key) const
 {
 	if (Key.IsZero()) return nullptr;
-	if (Image) if (auto* Type = Image->FindType(Key)) return Type;
-	if (ImageView) if (auto* Type = ImageView->FindType(Key)) return Type;
-	if (TemplateImage) if (auto* Type = TemplateImage->FindType(Key)) return Type;
-	for (asCMetadataImage* Late : LateImages) if (Late) if (auto* Type = Late->FindType(Key)) return Type;
+	if (Set) if (auto* Type = Set->FindType(Key)) return Type;
+	if (SetView) if (auto* Type = SetView->FindType(Key)) return Type;
+	if (TemplateSet) if (auto* Type = TemplateSet->FindType(Key)) return Type;
+	for (asCModuleDefinitionSet* Late : LateSets) if (Late) if (auto* Type = Late->FindType(Key)) return Type;
 	return nullptr;
 }
 
@@ -270,14 +271,14 @@ const FAngelscriptTypeBindDeclaration* FAngelscriptTypeBindInfoDraft::FindDeclar
 
 bool FAngelscriptTypeBindInfoDraft::ResolveTypeUse(const asSStableKey& Key, asCDataType& Out, FString& Diagnostic)
 {
-	return ResolveTypeUseInImage(Key, Image.Get(), Out, Diagnostic);
+	return ResolveTypeUseInImage(Key, Set.Get(), Out, Diagnostic);
 }
 
 bool FAngelscriptTypeBindInfoDraft::ResolveTypeUseInImage(const asSStableKey& Key,
-	asCMetadataImage* Target, asCDataType& Out, FString& Diagnostic)
+	asCModuleDefinitionSet* Target, asCDataType& Out, FString& Diagnostic)
 {
 	Out = {}; Diagnostic.Reset();
-	if (!Target || Target->GetState() != asEMetadataImageState::Building)
+	if (!Target || Target->GetState() != asEDefinitionSetState::Building)
 	{
 		Diagnostic = TEXT("template type use requires a mutable dependent image"); return false;
 	}
@@ -381,9 +382,9 @@ bool FAngelscriptTypeBindInfoDraft::ResolveTypeUseInImage(const asSStableKey& Ke
 }
 
 bool FAngelscriptTypeBindInfoDraft::MaterializeTemplateDeclaration(const FString& Declaration,
-	TUniquePtr<asCMetadataImage>& OutImage, asCObjectType*& OutType, FString& Diagnostic)
+	TUniquePtr<asCModuleDefinitionSet>& OutSet, asCObjectType*& OutType, FString& Diagnostic)
 {
-	OutImage.Reset(); OutType = nullptr; Diagnostic.Reset();
+	OutSet.Reset(); OutType = nullptr; Diagnostic.Reset();
 	asSBindingDeclarationContext Environment; Environment.StableScope = StableScope;
 	asSBindingDeclaration Parsed; asSBindingDeclarationDiagnostic Error;
 	if (!asCBindingDeclarationParser::Parse(Declaration, Environment, Context.Get(),
@@ -399,13 +400,13 @@ bool FAngelscriptTypeBindInfoDraft::MaterializeTemplateDeclaration(const FString
 		if (!Existing->GetMetadataTemplateDefinition()) { Diagnostic = TEXT("declaration is not a concrete template instance"); return false; }
 		OutType = Existing; return true;
 	}
-	auto Late = asCMetadataImage::Create(Image->GetOptions());
-	if (Late->SetIdentityContext(Context) != asEMetadataResult::Succeeded
-		|| Late->AddDependency(Image.Get()) != asEMetadataResult::Succeeded)
+	TUniquePtr<asCModuleDefinitionSet> Late = asCModuleDefinitionSet::Create(Set->GetOptions());
+	if (!Late || Late->SetIdentityContext(Context) != asEMetadataResult::Succeeded
+		|| Late->AddDependency(Set.Get()) != asEMetadataResult::Succeeded)
 	{
 		Diagnostic = TEXT("could not create a dependent template image"); return false;
 	}
-	for (asCMetadataImage* Prior : LateImages)
+	for (asCModuleDefinitionSet* Prior : LateSets)
 	{
 		if (Late->AddDependency(Prior) != asEMetadataResult::Succeeded)
 		{
@@ -421,7 +422,7 @@ bool FAngelscriptTypeBindInfoDraft::MaterializeTemplateDeclaration(const FString
 	{
 		OutType = nullptr; Diagnostic = TEXT("dependent template image failed complete definition validation"); return false;
 	}
-	LateImages.Add(Late.Get());
-	OutImage = MoveTemp(Late);
+	LateSets.Add(Late.Get());
+	OutSet = MoveTemp(Late);
 	return true;
 }

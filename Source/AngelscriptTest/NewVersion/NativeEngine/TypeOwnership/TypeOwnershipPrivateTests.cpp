@@ -15,12 +15,12 @@ private:
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context =
 			MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCModuleDefinitionSet> Set = MakeUnique<asCModuleDefinitionSet>();
 		asCObjectType* Template = nullptr;
 
 		bool Initialize()
 		{
-			if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return false;
+			if (Set->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return false;
 			asSNominalTypeDescriptor Descriptor;
 			Descriptor.StableScope = TEXT("type-ownership-private-host");
 			Descriptor.Kind = asETypeDeclKind::Struct;
@@ -31,23 +31,23 @@ private:
 			{
 				return false;
 			}
-			if (Image->CreateObjectType(Key, "array", "", asOBJ_VALUE | asOBJ_TEMPLATE, Template) != asEMetadataResult::Succeeded)
+			if (Set->CreateObjectType(Key, "array", "", asOBJ_VALUE | asOBJ_TEMPLATE, Template) != asEMetadataResult::Succeeded)
 			{
 				return false;
 			}
-			if (Image->SetTypeDeclarationFacts(*Template, asETypeDeclKind::Struct, 1) != asEMetadataResult::Succeeded)
+			if (Set->SetTypeDeclarationFacts(*Template, asETypeDeclKind::Struct, 1) != asEMetadataResult::Succeeded)
 			{
 				return false;
 			}
-			return Image->SetFixedTemplateLayout(*Template, 16, 8) == asEMetadataResult::Succeeded
-				&& Image->FinalizeLayouts() == asEMetadataResult::Succeeded
-				&& Image->Freeze() == asEMetadataResult::Succeeded;
+			return Set->SetFixedTemplateLayout(*Template, 16, 8) == asEMetadataResult::Succeeded
+				&& Set->FinalizeLayouts() == asEMetadataResult::Succeeded
+				&& Set->Freeze() == asEMetadataResult::Succeeded;
 		}
 	};
 
-	static asCObjectType* FindType(asCMetadataImage& Image, const char* Name)
+	static asCObjectType* FindType(asCModuleDefinitionSet& Definitions, const char* Name)
 	{
-		return TypeOwnershipTest::FindImageType(Image, Name);
+		return TypeOwnershipTest::FindSetType(Definitions, Name);
 	}
 
 public:
@@ -71,9 +71,9 @@ public:
 		FNativeEngineOwner EngineA;
 		FNativeEngineOwner EngineB;
 		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,
-			EngineA.Ptr->RegisterMetadataImage(BuilderA->TakeDefinitions())));
+			RegisterCompiledDefinitions(*EngineA.Ptr, *BuilderA)));
 		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,
-			EngineB.Ptr->RegisterMetadataImage(BuilderB->TakeDefinitions())));
+			RegisterCompiledDefinitions(*EngineB.Ptr, *BuilderB)));
 		ASSERT_THAT(IsTrue(TypeA->GetEngine() == EngineA.Ptr));
 		ASSERT_THAT(IsTrue(TypeB->GetEngine() == EngineB.Ptr));
 		ASSERT_THAT(IsTrue(TypeA->GetTypeId() != TypeB->GetTypeId()));
@@ -83,7 +83,7 @@ public:
 		ASSERT_THAT(IsNull(EngineB.Ptr->GetTypeInfoById(TypeA->GetTypeId())));
 		ASSERT_THAT(IsNull(EngineA.Ptr->GetTypeInfoById(TypeB->GetTypeId())));
 		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::InvalidArgument,
-			EngineB.Ptr->RegisterMetadataImage(BuilderA->TakeDefinitions())));
+			RegisterCompiledDefinitions(*EngineB.Ptr, *BuilderA)));
 	}
 
 	TEST_METHOD(SpecializationStaysWithEngine)
@@ -92,16 +92,16 @@ public:
 		FArrayHost HostB;
 		ASSERT_THAT(IsTrue(HostA.Initialize()));
 		ASSERT_THAT(IsTrue(HostB.Initialize()));
-		FSourceExecutionInput InputA(TEXT("class ScriptThing { int[] Values; }"), HostA.Context, HostA.Image.Get());
-		FSourceExecutionInput InputB(TEXT("class ScriptThing { int[] Values; }"), HostB.Context, HostB.Image.Get());
+		FSourceExecutionInput InputA(TEXT("class ScriptThing { int[] Values; }"), HostA.Context, HostA.Set.Get());
+		FSourceExecutionInput InputB(TEXT("class ScriptThing { int[] Values; }"), HostB.Context, HostB.Set.Get());
 		InputA.Options.StableScope = TEXT("type-ownership-private-spec-a");
 		InputB.Options.StableScope = TEXT("type-ownership-private-spec-b");
 		TUniquePtr<asCBuilder> BuilderA = MakeUnique<asCBuilder>(InputA.Snapshot, InputA.Diagnostics, InputA.Options);
 		TUniquePtr<asCBuilder> BuilderB = MakeUnique<asCBuilder>(InputB.Snapshot, InputB.Diagnostics, InputB.Options);
 		ASSERT_THAT(IsTrue(BuilderA->RunThrough(), DescribeBuilderFailure(*BuilderA)));
 		ASSERT_THAT(IsTrue(BuilderB->RunThrough(), DescribeBuilderFailure(*BuilderB)));
-		asCObjectType* ThingA = FindType(*BuilderA->GetDefinitions(), "ScriptThing");
-		asCObjectType* ThingB = FindType(*BuilderB->GetDefinitions(), "ScriptThing");
+		asCObjectType* ThingA = FindType(*BuilderA->GetModuleDefinitionSet(), "ScriptThing");
+		asCObjectType* ThingB = FindType(*BuilderB->GetModuleDefinitionSet(), "ScriptThing");
 		ASSERT_THAT(IsNotNull(ThingA));
 		ASSERT_THAT(IsNotNull(ThingB));
 		asCObjectType* SpecA = static_cast<asCObjectType*>(ThingA->properties[0]->type.GetTypeInfo());
@@ -113,13 +113,13 @@ public:
 		FNativeEngineOwner EngineA;
 		FNativeEngineOwner EngineB;
 		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,
-			EngineA.Ptr->RegisterMetadataImage(MoveTemp(HostA.Image))));
+			EngineA.Ptr->InstallDefinitionSet(MoveTemp(HostA.Set))));
 		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,
-			EngineA.Ptr->RegisterMetadataImage(BuilderA->TakeDefinitions())));
+			RegisterCompiledDefinitions(*EngineA.Ptr, *BuilderA)));
 		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,
-			EngineB.Ptr->RegisterMetadataImage(MoveTemp(HostB.Image))));
+			EngineB.Ptr->InstallDefinitionSet(MoveTemp(HostB.Set))));
 		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,
-			EngineB.Ptr->RegisterMetadataImage(BuilderB->TakeDefinitions())));
+			RegisterCompiledDefinitions(*EngineB.Ptr, *BuilderB)));
 		ASSERT_THAT(IsTrue(SpecA->GetEngine() == EngineA.Ptr));
 		ASSERT_THAT(IsTrue(SpecB->GetEngine() == EngineB.Ptr));
 		ASSERT_THAT(IsTrue(EngineA.Ptr->FindMetadataType(SpecA->GetStableKey()) == SpecA));

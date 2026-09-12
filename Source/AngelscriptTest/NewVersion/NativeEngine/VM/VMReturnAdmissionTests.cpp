@@ -16,14 +16,14 @@ private:
   {
    asCObjectType* Owner = bMethod ? Definitions.DefineType(TEXT("Item"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT) : nullptr;
    asSMetadataParameter Param;
-   Param.Type = Definitions.Image->Primitive(Token);
+   Param.Type = Definitions.Set->Primitive(Token);
    Param.Flags = Mode;
    if (Mode != asTM_NONE) Param.Type.MakeReference(true);
-   asCDataType ReturnType = Definitions.Image->Primitive(Return);
+   asCDataType ReturnType = Definitions.Set->Primitive(Return);
    if (bStackReturn)
    {
     auto* Value = Definitions.DefineType(TEXT("ValueResult"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
-    if (!Value || !Definitions.DefineProperty(*Value, "x", Definitions.Image->Primitive(ttInt))) return false;
+    if (!Value || !Definitions.DefineProperty(*Value, "x", Definitions.Set->Primitive(ttInt))) return false;
     ReturnType = asCDataType::CreateType(Value, false);
    }
    Function = Definitions.DefineFunction(TEXT("Value"), TEXT(""), asFUNC_SCRIPT, ReturnType, MakeArrayView(&Param, 1), Owner);
@@ -122,9 +122,9 @@ public:
   ASSERT_THAT(IsNotNull(Image.Get()));
   ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::Succeeded, asCByteCodeVerifier::Verify(*Image)));
   FNativeEngineOwner Engine;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Definitions.Image))));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->InstallDefinitionSet(Case.Definitions.TakeSet())));
   asCExecutableSnapshot* Snapshot = nullptr;
-  const auto Status = Engine.Ptr->LinkByteCodeImage(*Image, Snapshot);
+  const auto Status = asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot);
   if (Snapshot) Snapshot->Release();
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, Status));
   ASSERT_THAT(IsNull(Engine.Ptr->FindPublishedExecutable(Case.Function->GetStableKey())));
@@ -135,9 +135,9 @@ public:
   ASSERT_THAT(IsTrue(Case.Define(ttInt, asTM_NONE, true)));
   auto Image = Case.Make(1 + AS_PTR_SIZE, 1 + AS_PTR_SIZE, true, true);
   FNativeEngineOwner Engine;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Definitions.Image))));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->InstallDefinitionSet(Case.Definitions.TakeSet())));
   asCExecutableSnapshot* Snapshot = nullptr;
-  ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+  ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
   const auto* Executable = Engine.Ptr->FindPublishedExecutable(Case.Function->GetStableKey());
   ASSERT_THAT(IsNotNull(Executable));
   const auto& Code = Executable->scriptData->byteCode;
@@ -152,9 +152,9 @@ public:
   ASSERT_THAT(IsTrue(Case.Define(ttInt, asTM_NONE, false, ttInt64)));
   auto Image = Case.Make(1, 1, true, true);
   FNativeEngineOwner Engine;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Definitions.Image))));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->InstallDefinitionSet(Case.Definitions.TakeSet())));
   asCExecutableSnapshot* Snapshot = nullptr;
-  auto Status = Engine.Ptr->LinkByteCodeImage(*Image, Snapshot);
+  auto Status = asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot);
   if (Snapshot) Snapshot->Release();
   ASSERT_THAT(AreNotEqual(asEByteCodeLinkStatus::Succeeded, Status));
   ASSERT_THAT(IsNull(Engine.Ptr->FindPublishedExecutable(Case.Function->GetStableKey())));
@@ -162,13 +162,13 @@ public:
  TEST_METHOD(RepeatedNestedCallsPreserveResultsArgumentsAndStackPosition)
  {
   FDetachedDefinitionFixture Definitions;
-  asSMetadataParameter Param; Param.Type = Definitions.Image->Primitive(ttInt);
-  auto* Probe = Definitions.DefineFunction(TEXT("Probe"), TEXT(""), asFUNC_SYSTEM, Definitions.Image->Primitive(ttVoid), MakeArrayView(&Param, 1));
-  auto* Inner = Definitions.DefineFunction(TEXT("Inner"), TEXT(""), asFUNC_SCRIPT, Definitions.Image->Primitive(ttInt), MakeArrayView(&Param, 1));
-  auto* Run = Definitions.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Definitions.Image->Primitive(ttInt), {});
+  asSMetadataParameter Param; Param.Type = Definitions.Set->Primitive(ttInt);
+  auto* Probe = Definitions.DefineFunction(TEXT("Probe"), TEXT(""), asFUNC_SYSTEM, Definitions.Set->Primitive(ttVoid), MakeArrayView(&Param, 1));
+  auto* Inner = Definitions.DefineFunction(TEXT("Inner"), TEXT(""), asFUNC_SCRIPT, Definitions.Set->Primitive(ttInt), MakeArrayView(&Param, 1));
+  auto* Run = Definitions.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Definitions.Set->Primitive(ttInt), {});
   ASSERT_THAT(IsTrue(Definitions.FinalizeAndFreeze()));
   FNativeEngineOwner Engine;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Definitions.Image))));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->InstallDefinitionSet(Definitions.TakeSet())));
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->BindNativeFunction(Probe->GetStableKey(), asFUNCTION(Observe), asCALL_GENERIC)));
   asCByteCodeImageBuilder Builder;
   asUINT ProbeSlot=0, InnerSlot=0, RunSlot=0;
@@ -202,7 +202,7 @@ public:
   TUniquePtr<asCByteCodeImage> Image;
   ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
   asCExecutableSnapshot* Snapshot=nullptr;
-  ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image,Snapshot)));
+  ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image,Snapshot)));
   auto* Context=Engine.Ptr->CreateContext();
   Observed.Reset(); StackPositions.Reset();
   for (int32 Repeat=0;Repeat<3;++Repeat)

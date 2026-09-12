@@ -1,5 +1,5 @@
 #include "as_bytecode_image_builder.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 #include "as_property.h"
@@ -30,11 +30,11 @@ namespace
 		Out.Append(Source.GetData(), Source.Num());
 	}
 
-	bool InternDataTypeUse(const asCMetadataImage* Image, const asCDataType& Type, asSStableKey& OutKey)
+	bool InternDataTypeUse(const asCModuleDefinitionSet* Set, const asCDataType& Type, asSStableKey& OutKey)
 	{
 		OutKey = {};
-		if (!Image || !Image->GetIdentityContext().IsValid()) return false;
-		asCTypeContext* Context = const_cast<asCTypeContext*>(Image->GetIdentityContext().Get());
+		if (!Set || !Set->GetIdentityContext().IsValid()) return false;
+		asCTypeContext* Context = const_cast<asCTypeContext*>(Set->GetIdentityContext().Get());
 		asSStableTypeUseDescriptor Descriptor;
 		if (Type.IsReadOnly() || Type.IsHandleToConst())
 		{
@@ -78,13 +78,13 @@ namespace
 		return Context->GetIdentityRegistry().InternTypeUse(Descriptor, OutKey) == asETypeIdentityStatus::Succeeded;
 	}
 
-	asCTypeInfo* FindTypeInImageOrDependencies(const asCMetadataImage* Image, const asSStableKey& Key)
+	asCTypeInfo* FindTypeInSetOrDependencies(const asCModuleDefinitionSet* Set, const asSStableKey& Key)
 	{
-		if (!Image) return nullptr;
-		if (asCTypeInfo* Found = const_cast<asCMetadataImage*>(Image)->FindType(Key)) return Found;
-		for (asCMetadataImage* Dependency : Image->GetDependencies())
+		if (!Set) return nullptr;
+		if (asCTypeInfo* Found = const_cast<asCModuleDefinitionSet*>(Set)->FindType(Key)) return Found;
+		for (asCModuleDefinitionSet* Dependency : Set->GetDependencies())
 		{
-			if (asCTypeInfo* Found = FindTypeInImageOrDependencies(Dependency, Key)) return Found;
+			if (asCTypeInfo* Found = FindTypeInSetOrDependencies(Dependency, Key)) return Found;
 		}
 		return nullptr;
 	}
@@ -258,11 +258,11 @@ asEByteCodeImageStatus asCByteCodeImageBuilder::AddTypeRequirement(const asCType
 	const asEByteCodeImageStatus Status = AddRequirement(Requirement, OutSlot);
 	if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 	TArray<asSStableKey> Pending = Requirement.ReferencedKeys;
-	const asCMetadataImage* Image = Type.GetMetadataImage();
+	const asCModuleDefinitionSet* Set = Type.GetDefinitionSet();
 	while (Pending.Num() > 0)
 	{
 		const asSStableKey Key = Pending.Pop();
-		asCTypeInfo* Referenced = FindTypeInImageOrDependencies(Image, Key);
+		asCTypeInfo* Referenced = FindTypeInSetOrDependencies(Set, Key);
 		if (!Referenced) return asEByteCodeImageStatus::Incomplete;
 		asUINT Nested = 0;
 		asSByteCodeRequirement NestedRequirement = MakeTypeRequirement(*Referenced);
@@ -290,8 +290,8 @@ asEByteCodeImageStatus asCByteCodeImageBuilder::AddFunctionRequirement(const asC
 	Requirement.Role = asEByteCodeRequirementRole::Function;
 	Requirement.Key = Function.GetStableKey();
 	Requirement.Name = UTF8_TO_TCHAR(Function.GetName());
-	const asCMetadataImage* Image = Function.GetMetadataImage();
-	if (!InternDataTypeUse(Image, Function.GetReturnDataType(), Requirement.ReturnTypeUse))
+	const asCModuleDefinitionSet* Set = Function.GetDefinitionSet();
+	if (!InternDataTypeUse(Set, Function.GetReturnDataType(), Requirement.ReturnTypeUse))
 	{
 		return asEByteCodeImageStatus::CorruptWitness;
 	}
@@ -306,7 +306,7 @@ asEByteCodeImageStatus asCByteCodeImageBuilder::AddFunctionRequirement(const asC
 		const asCDataType* ParameterType = Function.GetParameterDataType(Index);
 		if (!ParameterType) return asEByteCodeImageStatus::InvalidArgument;
 		asSByteCodeParameterContract Parameter;
-		if (!InternDataTypeUse(Image, *ParameterType, Parameter.TypeUse))
+		if (!InternDataTypeUse(Set, *ParameterType, Parameter.TypeUse))
 		{
 			return asEByteCodeImageStatus::CorruptWitness;
 		}
@@ -350,7 +350,7 @@ asEByteCodeImageStatus asCByteCodeImageBuilder::AddFunctionRequirement(const asC
 	if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 	for (const asSStableKey& Key : Requirement.ReferencedKeys)
 	{
-		if (asCTypeInfo* Referenced = FindTypeInImageOrDependencies(Image, Key))
+		if (asCTypeInfo* Referenced = FindTypeInSetOrDependencies(Set, Key))
 		{
 			asUINT Nested = 0;
 			const asEByteCodeImageStatus NestedStatus = AddTypeRequirement(*Referenced, Nested);

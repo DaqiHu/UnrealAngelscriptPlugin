@@ -973,8 +973,8 @@ FAngelscriptStateDump::FTableResult FAngelscriptStateDump::DumpScriptEngineState
 	AddStat(TEXT("ObjectTypeCount"), LexToString(ScriptEngine->GetObjectTypeCount()));
 	AddStat(TEXT("EnumCount"), LexToString(ScriptEngine->GetEnumCount()));
 	asUINT CallableTypeCount = 0;
-	for (const auto& Image : static_cast<asCScriptEngine*>(ScriptEngine)->GetRegisteredMetadataImages())
-		for (const asCTypeInfo* Type : Image->GetTypes())
+	for (const auto& Set : static_cast<asCScriptEngine*>(ScriptEngine)->GetRegisteredDefinitionSets())
+		for (const asCTypeInfo* Type : Set->GetTypes())
 			if (Type->GetFlags() & asOBJ_CALLABLE_TYPE) ++CallableTypeCount;
 	AddStat(TEXT("CallableTypeCount"), LexToString(CallableTypeCount));
 	AddStat(TEXT("TypedefCount"), LexToString(ScriptEngine->GetTypedefCount()));

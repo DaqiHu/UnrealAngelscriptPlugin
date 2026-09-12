@@ -866,7 +866,7 @@ void asCScriptEngine::DeleteDiscardedModules()
 
 asCScriptEngine::~asCScriptEngine()
 {
-	RetireMetadataImages();
+	RetireDefinitionSets();
 	// TODO: clean-up: Clean up redundant code
 
 	inDestructor = true;
@@ -1126,7 +1126,7 @@ int asCScriptEngine::Release() const
 int asCScriptEngine::ShutDownAndRelease()
 {
 	if (shuttingDown.exchange(true)) return Release();
-	RetireMetadataImages(); // Close admission; live runtime leases defer detachment.
+	RetireDefinitionSets(); // Close admission; live runtime leases defer detachment.
 	DrainVmRetirement();
 	bool PendingRuntimeDrain;
 	{
@@ -2948,8 +2948,8 @@ asUINT asCScriptEngine::GetGlobalFunctionCount() const
 {
 	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
 	asUINT Count = 0;
-	for (const auto& Image : metadataImages)
-		for (auto* Function : Image->GetFunctions())
+	for (const auto& Set : definitionSets)
+		for (auto* Function : Set->GetFunctions())
 			if (Function->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Global && Function->funcType != asFUNC_CALLABLE_SIGNATURE) ++Count;
 	return Count;
 }
@@ -2958,8 +2958,8 @@ asUINT asCScriptEngine::GetGlobalFunctionCount() const
 asIScriptFunction *asCScriptEngine::GetGlobalFunctionByIndex(asUINT index) const
 {
 	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
-	for (const auto& Image : metadataImages)
-		for (auto* Function : Image->GetFunctions())
+	for (const auto& Set : definitionSets)
+		for (auto* Function : Set->GetFunctions())
 			if (Function->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Global && Function->funcType != asFUNC_CALLABLE_SIGNATURE)
 			{
 				if (index == 0) return Function;
@@ -5175,7 +5175,7 @@ int asCScriptEngine::GarbageCollect(asDWORD flags, asUINT iterations)
 		std::lock_guard<std::mutex> Lock(executablePublicationMutex);
 		--vmOperations;
 	}
-	if (vmRetirementRequested) RetireMetadataImages();
+	if (vmRetirementRequested) RetireDefinitionSets();
 	Release();
 	return r;
 }
@@ -5238,7 +5238,7 @@ void asCScriptEngine::DrainVmRetirement()
 		std::lock_guard<std::mutex> Lock(executablePublicationMutex);
 		vmDrainActive = false;
 	}
-	RetireMetadataImages();
+	RetireDefinitionSets();
 	Release();
 }
 
@@ -5277,12 +5277,12 @@ void asCScriptEngine::ForwardGCReleaseReferences(void *ref, asITypeInfo *type)
 
 int asCScriptEngine::GetTypeIdFromDataType(const asCDataType &dtIn) const
 {
-	if (dtIn.GetTypeInfo() && dtIn.GetTypeInfo()->GetMetadataImage())
+	if (dtIn.GetTypeInfo() && dtIn.GetTypeInfo()->GetDefinitionSet())
 	{
 		std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
 		auto* Type = dtIn.GetTypeInfo();
 		if (metadataTypesByKey.FindRef(Type->GetStableKey()) != Type) return -1;
-		return Type->GetMetadataImage()->GetBoundDataTypeId(dtIn);
+		return Type->GetDefinitionSet()->GetBoundDataTypeId(dtIn);
 	}
 	if( dtIn.IsNullHandle() ) return asTYPEID_VOID;
 

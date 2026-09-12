@@ -1,7 +1,7 @@
 #include "CQTest.h"
 #include "TypeOwnershipTestSupport.h"
 #include "Core/AngelscriptTypeBindInfoStore.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_scriptengine.h"
 #include "as_type_id_registry.h"
 #include "as_typeinfo.h"
@@ -71,9 +71,9 @@ public:
 		int TypeId = -1;
 		FString Diagnostic;
 		ASSERT_THAT(IsTrue(RecordAndPublishPair(Store, TypeId, Diagnostic), *Diagnostic));
-		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
-		ASSERT_THAT(IsNotNull(Image.Get()));
-		Image.Reset();
+		TUniquePtr<asCModuleDefinitionSet> Set = asCModuleDefinitionSet::Create();
+		ASSERT_THAT(IsNotNull(Set.Get()));
+		Set.Reset();
 		FAngelscriptPublishedClassInfo Info;
 		ASSERT_THAT(AreEqual(asTYPE_QUERY_SUCCEEDED, Store.GetPublishedClassInfo(TypeId, Info)));
 		ASSERT_THAT(AreEqual(FString(TEXT("Pair")), Info.Name));
@@ -99,8 +99,8 @@ public:
 		int TypeId = -1;
 		FString Diagnostic;
 		ASSERT_THAT(IsTrue(RecordAndPublishPair(Store, TypeId, Diagnostic), *Diagnostic));
-		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
-		Image.Reset();
+		TUniquePtr<asCModuleDefinitionSet> Set = asCModuleDefinitionSet::Create();
+		Set.Reset();
 		FAngelscriptPublishedClassInfo Info;
 		ASSERT_THAT(AreEqual(asTYPE_QUERY_SUCCEEDED, Store.GetPublishedClassInfo(TypeId, Info)));
 		ASSERT_THAT(AreEqual(TypeId, Info.TypeId));

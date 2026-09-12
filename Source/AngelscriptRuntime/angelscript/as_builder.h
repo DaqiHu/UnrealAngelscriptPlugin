@@ -3,6 +3,7 @@
 
 #include "as_config.h"
 #include "frontend/as_builder_stages.h"
+#include "as_compile_output.h"
 #include "as_scriptengine.h"
 #include "Templates/UniquePtr.h"
 #include "as_module.h"
@@ -22,14 +23,17 @@ public:
 	asCBuilder(TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot,
 		asCDiagnosticsEngine& Diagnostics, const asSBuilderOptions& Options);
 	bool RunStage(asEBuilderStage Stage);
-	bool RunThrough(asEBuilderStage Stage = asEBuilderStage::DefinitionsFrozen);
+	bool RunThrough(asEBuilderStage Stage = asEBuilderStage::ByteCodeEmitted);
 	asEBuilderStage GetStage() const;
 	const asSBuilderStageResult* GetStageResult(asEBuilderStage Stage) const;
 	const asCCompilationSession* GetCompilationSession() const;
 	TConstArrayView<asSSemanticSourceInput> GetLexedSources() const;
 	TConstArrayView<asSDirectiveProcessResult> GetPreprocessedSources() const;
-	asCMetadataImage* GetDefinitions() const;
-	TUniquePtr<asCMetadataImage> TakeDefinitions();
+	const asCModuleDefinitionSet* GetModuleDefinitionSet() const;
+	asCModuleDefinitionSet* GetModuleDefinitionSet();
+	TUniquePtr<asCModuleDefinitionSet> TakeModuleDefinitionSet();
+	const asCCompileOutput* GetCompileOutput() const;
+	TUniquePtr<asCCompileOutput> TakeCompileOutput();
 	static FAngelscriptPreprocessResult CompileDeclarations(
 		const asCSourceManager& SourceManager,
 		const asCPreprocessorConfiguration& Configuration,

@@ -35,16 +35,16 @@ public:
 	TEST_METHOD(NullSessionOrDefinitionsReturnInvalidInput)
 	{
 		asSByteCodeEmissionOptions Options;
-		asSByteCodeEmissionResult NullSession = asCByteCodeEmitter::Emit(
-			nullptr, nullptr, Options);
+		FSessionEmission NullSession = EmitSessionImage(
+			nullptr, static_cast<const asCModuleDefinitionSet*>(nullptr), Options);
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::InvalidInput, NullSession.EmissionStatus));
 		ASSERT_THAT(IsNull(NullSession.Image.Get()));
 
 		FSourceExecutionInput Input(TEXT("int Run() { return 42; }"));
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
-		asSByteCodeEmissionResult NullDefs = asCByteCodeEmitter::Emit(
-			Builder.GetCompilationSession(), nullptr, Options);
+		FSessionEmission NullDefs = EmitSessionImage(
+			Builder.GetCompilationSession(), static_cast<const asCModuleDefinitionSet*>(nullptr), Options);
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::InvalidInput, NullDefs.EmissionStatus));
 		ASSERT_THAT(IsNull(NullDefs.Image.Get()));
 	}
@@ -57,7 +57,7 @@ public:
 		const asCCompilationSession* Session = Builder.GetCompilationSession();
 		ASSERT_THAT(IsNotNull(Session));
 		ASSERT_THAT(IsFalse(Session->IsASTVerified()));
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Session, Builder.GetDefinitions(), asSByteCodeEmissionOptions());
+		FSessionEmission Emitted = EmitSessionImage(Session, Builder.GetModuleDefinitionSet(), asSByteCodeEmissionOptions());
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::NotReady, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 	}
@@ -71,7 +71,7 @@ public:
 		ASSERT_THAT(IsNotNull(Session));
 		ASSERT_THAT(IsTrue(Session->AreBodiesAnalyzed()));
 		ASSERT_THAT(IsFalse(Session->IsASTVerified()));
-		asSByteCodeEmissionResult Emitted = EmitFromSession(Builder);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::NotReady, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 	}
@@ -94,7 +94,7 @@ public:
 			}
 		}
 		ASSERT_THAT(IsTrue(bRecovery));
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Session, Builder.GetDefinitions(), asSByteCodeEmissionOptions());
+		FSessionEmission Emitted = EmitSessionImage(Session, Builder.GetModuleDefinitionSet(), asSByteCodeEmissionOptions());
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::InvalidInput, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 	}
@@ -104,11 +104,11 @@ public:
 		FSourceExecutionInput Input(TEXT("int Run() { return 42; }"));
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::DefinitionsBuilt)));
-		ASSERT_THAT(IsNotNull(Builder.GetDefinitions()));
-		ASSERT_THAT(IsFalse(Builder.GetDefinitions()->IsFrozen()));
+		ASSERT_THAT(IsNotNull(Builder.GetModuleDefinitionSet()));
+		ASSERT_THAT(IsFalse(Builder.GetModuleDefinitionSet()->IsFrozen()));
 		const asCCompilationSession* Session = Builder.GetCompilationSession();
 		ASSERT_THAT(IsTrue(Session->IsASTVerified()));
-		asSByteCodeEmissionResult Emitted = EmitFromSession(Builder);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::NotReady, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 	}
@@ -128,13 +128,13 @@ public:
 		Foreign.Context = TypeContext;
 		Foreign.Scope = TEXT("vm-source");
 		asCScriptFunction* ForeignRun = Foreign.DefineFunction(
-			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Foreign.Image->Primitive(ttInt), {});
+			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Foreign.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsNotNull(ForeignRun));
 		ASSERT_THAT(IsTrue(ExpectedKey == ForeignRun->GetStableKey()));
 		ASSERT_THAT(IsTrue(Foreign.FinalizeAndFreeze()));
 
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(
-			Builder.GetCompilationSession(), Foreign.Image.Get(), asSByteCodeEmissionOptions());
+		FSessionEmission Emitted = EmitSessionImage(
+			Builder.GetCompilationSession(), Foreign.Set.Get(), asSByteCodeEmissionOptions());
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::InvalidInput, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 	}
@@ -146,7 +146,7 @@ public:
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		asSByteCodeEmissionOptions Options;
 		Options.PointerByteSize = 4;
-		asSByteCodeEmissionResult Emitted = EmitFromSession(Builder, Options);
+		FSessionEmission Emitted = EmitFromSession(Builder, Options);
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::UnsupportedLowering, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 	}
@@ -158,7 +158,7 @@ public:
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		asSByteCodeEmissionOptions Options;
 		Options.MaxFrameDWords = 1;
-		asSByteCodeEmissionResult Emitted = EmitFromSession(Builder, Options);
+		FSessionEmission Emitted = EmitFromSession(Builder, Options);
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::ResourceLimit, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 	}
@@ -171,7 +171,7 @@ public:
 		asCScriptFunction* Function = VMSourceAdmissionPrivate::RequireFunction(Builder, "Run");
 		ASSERT_THAT(IsNotNull(Function));
 		ASSERT_THAT(IsNull(Function->GetEngine()));
-		asSByteCodeEmissionResult Emitted = EmitFromSession(Builder);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::Succeeded, Emitted.EmissionStatus));
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 		ASSERT_THAT(IsNotNull(Emitted.Image.Get()));
@@ -187,7 +187,7 @@ public:
 			"int Bad(Range Values) { int Sum = 0; foreach (auto Value : Values) { Sum += Value; } return Sum; }"));
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
-		asSByteCodeEmissionResult Emitted = EmitFromSession(Builder);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::UnsupportedLowering, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 		ASSERT_THAT(AreEqual(static_cast<uint16>(AS_NAMESPACE_QUALIFIER asEStmtKind::Foreach), Emitted.Failure.NodeKind));
@@ -195,7 +195,7 @@ public:
 
 	TEST_METHOD(DiagnosticsSurviveProducerDestruction)
 	{
-		asSByteCodeEmissionResult Emitted;
+		FSessionEmission Emitted;
 		asSStableKey FunctionKey;
 		{
 			FSourceExecutionInput Input(TEXT("int Run() { return 42; }"));
@@ -223,7 +223,7 @@ public:
 		asCScriptFunction* Function = VMSourceAdmissionPrivate::RequireFunction(Builder, "Add");
 		ASSERT_THAT(IsNotNull(Function));
 		const TArray<int> Before = VMSourceAdmissionPrivate::CopyParameterOffsets(*Function);
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Builder, *Function);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::Succeeded, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNotNull(Emitted.Image.Get()));
 		const TArray<int> After = VMSourceAdmissionPrivate::CopyParameterOffsets(*Function);
@@ -241,13 +241,13 @@ public:
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		asCScriptFunction* Function = VMSourceAdmissionPrivate::RequireFunction(Builder, "Run");
 		ASSERT_THAT(IsNotNull(Function));
-		asSByteCodeEmissionResult Emitted = EmitFromSession(Builder);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeEmissionStatus::Succeeded, Emitted.EmissionStatus));
 		ASSERT_THAT(IsNotNull(Emitted.Image.Get()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, Builder)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Emitted.Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Function)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));

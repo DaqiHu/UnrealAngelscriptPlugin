@@ -36,7 +36,7 @@
 //
 
 #include "as_datatype.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_config.h"
 #include "as_tokendef.h"
 #include "as_typeinfo.h"
@@ -110,8 +110,8 @@ asCDataType asCDataType::CreateType(asCTypeInfo *ti, bool isConst)
 	dt.tokenType        = ttIdentifier;
 	dt.typeInfo         = ti;
 	dt.isReadOnly       = isConst;
-	if (ti && ti->GetMetadataImage())
-		dt.SetMetadataOptions(ti->GetMetadataImage()->GetOptions().FloatIsFloat64, ti->GetMetadataImage()->GetOptions().PointerByteSize);
+	if (ti && ti->GetDefinitionSet())
+		dt.SetMetadataOptions(ti->GetDefinitionSet()->GetOptions().FloatIsFloat64, ti->GetDefinitionSet()->GetOptions().PointerByteSize);
 
 	return dt;
 }
@@ -137,8 +137,8 @@ asCDataType asCDataType::CreateObjectHandle(asCTypeInfo *ot, bool isConst)
 	dt.typeInfo         = ot;
 	dt.isObjectHandle   = true;
 	dt.isConstHandle    = isConst;
-	if (ot && ot->GetMetadataImage())
-		dt.SetMetadataOptions(ot->GetMetadataImage()->GetOptions().FloatIsFloat64, ot->GetMetadataImage()->GetOptions().PointerByteSize);
+	if (ot && ot->GetDefinitionSet())
+		dt.SetMetadataOptions(ot->GetDefinitionSet()->GetOptions().FloatIsFloat64, ot->GetDefinitionSet()->GetOptions().PointerByteSize);
 
 	return dt;
 }
@@ -260,8 +260,8 @@ asCString asCDataType::Format(asSNameSpace *currNs, bool includeNamespace, bool 
 			str += TokenWord ? TokenWord : "<token>";
 		}
 	}
-	else if( IsArrayType() && typeInfo && (typeInfo->GetMetadataImage()
-		? !typeInfo->GetMetadataImage()->GetOptions().ExpandDefaultArrayToTemplate
+	else if( IsArrayType() && typeInfo && (typeInfo->GetDefinitionSet()
+		? !typeInfo->GetDefinitionSet()->GetOptions().ExpandDefaultArrayToTemplate
 		: typeInfo->engine && !typeInfo->engine->ep.expandDefaultArrayToTemplate) )
 	{
 		asCObjectType *ot = CastToObjectType(typeInfo);
@@ -526,7 +526,7 @@ bool asCDataType::IsObjectConst() const
 // TODO: 3.0.0: This should be removed
 bool asCDataType::IsArrayType() const
 {
-	if (typeInfo && typeInfo->GetMetadataImage()) return typeInfo->GetMetadataImage()->IsDefaultArrayType(typeInfo);
+	if (typeInfo && typeInfo->GetDefinitionSet()) return typeInfo->GetDefinitionSet()->IsDefaultArrayType(typeInfo);
 	// This is only true if the type used is the default array type, i.e. the one used for the [] syntax form
 	if( typeInfo && typeInfo->engine && typeInfo->engine->defaultArrayObjectType )
 		return typeInfo->name == typeInfo->engine->defaultArrayObjectType->name;

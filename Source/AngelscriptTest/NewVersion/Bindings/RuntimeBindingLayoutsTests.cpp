@@ -59,8 +59,8 @@ TEST_CLASS_WITH_FLAGS(Layouts, "Angelscript.UnitTest.RuntimeBindings.Types",
 		auto* Field = HolderType->GetFirstProperty("Value"); ASSERT_THAT(IsNotNull(Field));
 		ASSERT_THAT(AreEqual(int32(STRUCT_OFFSET(FHolder, Pair)), Field->byteOffset));
 		ASSERT_THAT(IsTrue(Field->type.GetTypeInfo() == Draft->FindType(TEXT("Pair"), TEXT("Fixture"))));
-		ASSERT_THAT(IsFalse(Draft->GetImage()->IsFrozen()));
-		ASSERT_THAT(IsNull(Draft->GetImage()->GetBoundEngine()));
+		ASSERT_THAT(IsFalse(Draft->GetSet()->IsFrozen()));
+		ASSERT_THAT(IsNull(Draft->GetSet()->GetBoundEngine()));
 	}
 	TEST_METHOD(MutualObjectHandleReferencesDoNotFormALayoutCycle)
 	{

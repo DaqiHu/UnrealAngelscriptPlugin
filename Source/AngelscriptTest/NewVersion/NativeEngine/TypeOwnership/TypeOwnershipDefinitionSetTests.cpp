@@ -7,15 +7,15 @@
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 
-TEST_CLASS_WITH_FLAGS(Image, "Angelscript.UnitTest.NativeEngine.TypeOwnership",
+TEST_CLASS_WITH_FLAGS(TypeOwnershipDefinitionSet, "Angelscript.UnitTest.NativeEngine.TypeOwnership",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
 public:
 	TEST_METHOD(UniqueCreate)
 	{
-		TUniquePtr<asCMetadataImage> Created = asCMetadataImage::Create();
+		TUniquePtr<asCModuleDefinitionSet> Created = asCModuleDefinitionSet::Create();
 		ASSERT_THAT(IsNotNull(Created.Get()));
-		ASSERT_THAT(IsTrue(Created->GetState() == asEMetadataImageState::Building));
+		ASSERT_THAT(IsTrue(Created->GetState() == asEDefinitionSetState::Building));
 	}
 
 	TEST_METHOD(DiscardAfterAdopt)
@@ -30,8 +30,8 @@ public:
 		asCScriptFunction* Sum = Pair.Sum;
 		FNativeEngineOwner Engine;
 		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,
-			Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
-		ASSERT_THAT(IsNull(Fixture.Image.Get()));
+			RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
+		ASSERT_THAT(IsNull(Fixture.Set.Get()));
 		ASSERT_THAT(IsNotNull(Type));
 		ASSERT_THAT(IsTrue(Type->GetEngine() == Engine.Ptr));
 		ASSERT_THAT(IsTrue(Type->GetTypeId() > asTYPEID_LAST_PRIMITIVE));
@@ -43,12 +43,12 @@ public:
 
 	TEST_METHOD(NoSharedPtr)
 	{
-		static_assert(!std::is_base_of_v<std::enable_shared_from_this<asCMetadataImage>, asCMetadataImage>);
-		static_assert(std::is_same_v<decltype(asCMetadataImage::Create()), TUniquePtr<asCMetadataImage>>);
-		TUniquePtr<asCMetadataImage> First = asCMetadataImage::Create();
-		TUniquePtr<asCMetadataImage> Second = asCMetadataImage::Create();
+		static_assert(!std::is_base_of_v<std::enable_shared_from_this<asCModuleDefinitionSet>, asCModuleDefinitionSet>);
+		static_assert(std::is_same_v<decltype(asCModuleDefinitionSet::Create()), TUniquePtr<asCModuleDefinitionSet>>);
+		TUniquePtr<asCModuleDefinitionSet> First = asCModuleDefinitionSet::Create();
+		TUniquePtr<asCModuleDefinitionSet> Second = asCModuleDefinitionSet::Create();
 		ASSERT_THAT(IsTrue(First.Get() != Second.Get()));
-		ASSERT_THAT(IsFalse(std::is_copy_constructible_v<asCMetadataImage>));
+		ASSERT_THAT(IsFalse(std::is_copy_constructible_v<asCModuleDefinitionSet>));
 	}
 
 	TEST_METHOD(TwoUniqueHelpers)
@@ -67,9 +67,9 @@ public:
 		FNativeEngineOwner EngineA;
 		FNativeEngineOwner EngineB;
 		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,
-			EngineA.Ptr->RegisterMetadataImage(MoveTemp(First.Image))));
+			RegisterCompiledDefinitions(*EngineA.Ptr, MoveTemp(First.Set))));
 		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,
-			EngineB.Ptr->RegisterMetadataImage(MoveTemp(Second.Image))));
+			RegisterCompiledDefinitions(*EngineB.Ptr, MoveTemp(Second.Set))));
 		ASSERT_THAT(IsTrue(PairA.Type != PairB.Type));
 		ASSERT_THAT(IsTrue(PairA.Type->GetEngine() == EngineA.Ptr));
 		ASSERT_THAT(IsTrue(PairB.Type->GetEngine() == EngineB.Ptr));

@@ -15,9 +15,9 @@ private:
   asCScriptFunction* Recovery=nullptr;
   bool Define()
   {
-   asSMetadataParameter P; P.Type=F.Image->Primitive(ttInt);
-   Run=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttInt),MakeArrayView(&P,1));
-   Recovery=F.DefineFunction(TEXT("Recovery"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttInt),{});
+   asSMetadataParameter P; P.Type=F.Set->Primitive(ttInt);
+   Run=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttInt),MakeArrayView(&P,1));
+   Recovery=F.DefineFunction(TEXT("Recovery"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttInt),{});
    return Run && Recovery && F.FinalizeAndFreeze();
   }
   TUniquePtr<asCByteCodeImage> Make(ECase Which)
@@ -73,9 +73,9 @@ private:
   ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,asCByteCodeImageCodec::Encode(*I,Bytes)));
   ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,asCByteCodeImageCodec::Decode(Bytes,D)));
   FNativeEngineOwner E;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(MoveTemp(T.F.Image))));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->InstallDefinitionSet(T.F.TakeSet())));
   asCExecutableSnapshot* S=nullptr;
-  ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->LinkByteCodeImage(*D,S)));
+  ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,asLinkByteCodeImage(*E.Ptr, *D,S)));
   auto* C=E.Ptr->CreateContext();
   for (int Repeat=0;Repeat<3;++Repeat)
   {
@@ -106,7 +106,7 @@ public:
  {
   FDetachedDefinitionFixture F;
   auto* Type=F.DefineType(TEXT("Item"),TEXT(""),asOBJ_REF | asOBJ_SCRIPT_OBJECT);
-  auto* Run=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttVoid),{});
+  auto* Run=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttVoid),{});
   ASSERT_THAT(IsTrue(F.FinalizeAndFreeze()));
   asCByteCodeImageBuilder B; asUINT TypeSlot=0,RunSlot=0;
   ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,B.AddTypeRequirement(*Type,TypeSlot)));

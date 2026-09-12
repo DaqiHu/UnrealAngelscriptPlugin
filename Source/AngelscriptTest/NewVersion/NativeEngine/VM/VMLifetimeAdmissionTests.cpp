@@ -24,8 +24,8 @@ private:
 			if (!Type) return false;
 			if (bConstructor)
 				Constructor = Definitions.DefineFunction(TEXT("Item"), TEXT(""), asFUNC_SCRIPT,
-					Definitions.Image->Primitive(ttVoid), {}, Type, AS_NAMESPACE_QUALIFIER asEFunctionIdentityKind::Constructor);
-			Run = Definitions.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Definitions.Image->Primitive(ttVoid), {});
+					Definitions.Set->Primitive(ttVoid), {}, Type, AS_NAMESPACE_QUALIFIER asEFunctionIdentityKind::Constructor);
+			Run = Definitions.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Definitions.Set->Primitive(ttVoid), {});
 			if (!Run || (bConstructor && !Constructor) || !Definitions.FinalizeAndFreeze()) return false;
 			asUINT RunSlot = 0;
 			if (Builder.AddTypeRequirement(*Type, TypeSlot) != asEByteCodeImageStatus::Succeeded

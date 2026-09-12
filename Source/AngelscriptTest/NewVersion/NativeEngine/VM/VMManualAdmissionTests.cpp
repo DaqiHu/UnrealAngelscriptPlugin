@@ -20,11 +20,11 @@ private:
   asCObjectType* Type=nullptr;
   bool Define()
   {
-   asSMetadataParameter P; P.Type=F.Image->Primitive(ttInt);
-   Probe=F.DefineFunction(TEXT("Probe"),TEXT(""),asFUNC_SYSTEM,F.Image->Primitive(ttInt),MakeArrayView(&P,1));
-   Run=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttInt),{});
-   Peer=F.DefineFunction(TEXT("Peer"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttInt),{});
-   Recovery=F.DefineFunction(TEXT("Recovery"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttInt),{});
+   asSMetadataParameter P; P.Type=F.Set->Primitive(ttInt);
+   Probe=F.DefineFunction(TEXT("Probe"),TEXT(""),asFUNC_SYSTEM,F.Set->Primitive(ttInt),MakeArrayView(&P,1));
+   Run=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttInt),{});
+   Peer=F.DefineFunction(TEXT("Peer"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttInt),{});
+   Recovery=F.DefineFunction(TEXT("Recovery"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttInt),{});
    Type=F.DefineType(TEXT("Item"),TEXT(""),asOBJ_REF | asOBJ_SCRIPT_OBJECT);
    return Probe && Run && Peer && Recovery && Type && F.FinalizeAndFreeze();
   }
@@ -102,16 +102,16 @@ private:
   ASSERT_THAT(AreEqual(DecodeExpected,asCByteCodeImageCodec::Decode(Bytes,D)));
   ASSERT_THAT(IsNull(D.Get()));
   FNativeEngineOwner E;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(MoveTemp(T.F.Image))));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->InstallDefinitionSet(T.F.TakeSet())));
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->BindNativeFunction(T.Probe->GetStableKey(),asFUNCTION(Observe),asCALL_GENERIC)));
   auto Recovery=T.Make(true); asCExecutableSnapshot* Kept=nullptr;
-  ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->LinkByteCodeImage(*Recovery,Kept)));
+  ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,asLinkByteCodeImage(*E.Ptr, *Recovery,Kept)));
   auto* KeptExecutable=E.Ptr->FindPublishedExecutable(T.Recovery->GetStableKey()); Kept->Release();
   Cells[0]=91; Cells[1]=17; Cells[2]=92; Calls=0;
   // A caller-controlled validation bit cannot authorize publication.
   I->bValidated=true;
   asCExecutableSnapshot* Rejected=nullptr;
-  auto Status=E.Ptr->LinkByteCodeImage(*I,Rejected); if (Rejected) Rejected->Release();
+  auto Status=asLinkByteCodeImage(*E.Ptr, *I,Rejected); if (Rejected) Rejected->Release();
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Unverified,Status));
   ASSERT_THAT(IsNull(Rejected));
   ASSERT_THAT(IsFalse(I->bValidated));
@@ -151,10 +151,10 @@ public:
     ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,asCByteCodeImageCodec::Decode(Bytes,D))); I=MoveTemp(D);
    }
    FNativeEngineOwner E;
-   ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(MoveTemp(T.F.Image))));
+   ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->InstallDefinitionSet(T.F.TakeSet())));
    ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->BindNativeFunction(T.Probe->GetStableKey(),asFUNCTION(Observe),asCALL_GENERIC)));
    asCExecutableSnapshot* S=nullptr;
-   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->LinkByteCodeImage(*I,S))); S->Release();
+   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,asLinkByteCodeImage(*E.Ptr, *I,S))); S->Release();
    auto* C=E.Ptr->CreateContext(); Calls=0; Cells[0]=91; Cells[1]=17; Cells[2]=92;
    ASSERT_THAT(AreEqual(0,C->Prepare(T.Run))); ASSERT_THAT(AreEqual(asEXECUTION_FINISHED,C->Execute()));
    ASSERT_THAT(AreEqual(42,static_cast<int32>(C->GetReturnDWord())));
@@ -180,9 +180,9 @@ public:
   ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,B.Finish(I)));
   FNativeEngineOwner E;
   ASSERT_THAT(AreEqual(0,E.Ptr->SetEngineProperty(asEP_INIT_STACK_SIZE,64)));
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(MoveTemp(T.F.Image))));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->InstallDefinitionSet(T.F.TakeSet())));
   asCExecutableSnapshot* S=nullptr;
-  ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->LinkByteCodeImage(*I,S))); S->Release();
+  ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,asLinkByteCodeImage(*E.Ptr, *I,S))); S->Release();
   auto* Executable=E.Ptr->FindPublishedExecutable(T.Run->GetStableKey());
   ASSERT_THAT(IsNotNull(Executable));
   // Four local DWORDs plus thirty-two literal QWORD pushes require at least 68 DWORDs.

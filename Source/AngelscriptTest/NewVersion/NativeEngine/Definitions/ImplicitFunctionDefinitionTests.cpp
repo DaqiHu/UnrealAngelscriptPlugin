@@ -13,20 +13,20 @@ private:
 	struct FFixture
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCModuleDefinitionSet> Set = asCModuleDefinitionSet::Create();
 		AS_NAMESPACE_QUALIFIER asSStableKey Void, Int, EnclosingKey;
 		asCScriptFunction* Enclosing = nullptr;
 		bool Initialize()
 		{
-if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return false;
+if (Set->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return false;
 			Context->InternPrimitiveTypeUse(asEPrimitiveType::Void, Void);
 			Context->InternPrimitiveTypeUse(asEPrimitiveType::Int32, Int);
 			asSFunctionIdentityDescriptor Identity;
 			Identity.StableScope = TEXT("implicit-definition-test"); Identity.Name = TEXT("Enclosing");
 			Identity.Kind = asEFunctionIdentityKind::Global; Identity.ReturnType = Void;
 			return Context->GetIdentityRegistry().InternFunction(Identity, EnclosingKey) == asETypeIdentityStatus::Succeeded &&
-				Image->CreateFunction(EnclosingKey, "Enclosing", "", asFUNC_SCRIPT, Enclosing) == asEMetadataResult::Succeeded &&
-				Image->DefineFunction(*Enclosing, Image->Primitive(ttVoid), {}) == asEMetadataResult::Succeeded;
+				Set->CreateFunction(EnclosingKey, "Enclosing", "", asFUNC_SCRIPT, Enclosing) == asEMetadataResult::Succeeded &&
+				Set->DefineFunction(*Enclosing, Set->Primitive(ttVoid), {}) == asEMetadataResult::Succeeded;
 		}
 	};
 public:
@@ -54,15 +54,15 @@ public:
 	TEST_METHOD(NamedFunctionRegistersWithSamePointerAndRetainsItsDefinition)
 	{
 		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize()));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetFunctionDeclarationFacts(*Fixture.Enclosing, static_cast<asEFunctionIdentityKind>(7)) == asEMetadataResult::InvalidArgument));
-		ASSERT_THAT(IsTrue(Fixture.Image->FinalizeLayouts() == asEMetadataResult::Succeeded && Fixture.Image->Freeze() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Fixture.Set->SetFunctionDeclarationFacts(*Fixture.Enclosing, static_cast<asEFunctionIdentityKind>(7)) == asEMetadataResult::InvalidArgument));
+		ASSERT_THAT(IsTrue(Fixture.Set->FinalizeLayouts() == asEMetadataResult::Succeeded && Fixture.Set->Freeze() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->ValidateFrozenDefinitions()));
 		asCScriptEngine* Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->InstallDefinitionSet(MoveTemp(Fixture.Set)) == asEMetadataRegistrationResult::Succeeded));
 		asCScriptFunction* Retained = Fixture.Enclosing;
 		ASSERT_THAT(IsTrue(Engine->FindMetadataFunction(Fixture.EnclosingKey) == Retained));
-		Fixture.Image.Reset();
+		Fixture.Set.Reset();
 		ASSERT_THAT(IsTrue(Retained->GetStableKey() == Fixture.EnclosingKey && Retained->name == "Enclosing"));
 	}
 	TEST_METHOD(ClassDefaultHasAnOwnerButIsNotAnOrdinaryMethod)
@@ -71,16 +71,16 @@ FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize()));
 		asSNominalTypeDescriptor Record; Record.StableScope = TEXT("implicit-definition-test"); Record.Name = TEXT("Record"); Record.Kind = asETypeDeclKind::Class;
 		asSStableKey RecordKey, FunctionKey; asCObjectType* Type = nullptr; asCScriptFunction* Function = nullptr;
 		ASSERT_THAT(IsTrue(Fixture.Context->GetIdentityRegistry().InternNominalType(Record, RecordKey) == asETypeIdentityStatus::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->CreateObjectType(RecordKey, "Record", "", asOBJ_SCRIPT_OBJECT | asOBJ_REF, Type) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->CreateObjectType(RecordKey, "Record", "", asOBJ_SCRIPT_OBJECT | asOBJ_REF, Type) == asEMetadataResult::Succeeded));
 		asSFunctionIdentityDescriptor Identity; Identity.StableScope = Record.StableScope; Identity.Owner = RecordKey;
 		Identity.Kind = asEFunctionIdentityKind::ClassDefault; Identity.ReturnType = Fixture.Void;
 		ASSERT_THAT(IsTrue(Fixture.Context->GetIdentityRegistry().InternFunction(Identity, FunctionKey) == asETypeIdentityStatus::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->CreateFunction(FunctionKey, "", "", asFUNC_SCRIPT, Function) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->DefineFunction(*Function, Fixture.Image->Primitive(ttVoid), {}, Type) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->SetFunctionDeclarationFacts(*Function, asEFunctionIdentityKind::ClassDefault, Type) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->CreateFunction(FunctionKey, "", "", asFUNC_SCRIPT, Function) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->DefineFunction(*Function, Fixture.Set->Primitive(ttVoid), {}, Type) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->SetFunctionDeclarationFacts(*Function, asEFunctionIdentityKind::ClassDefault, Type) == asEMetadataResult::Succeeded));
 		ASSERT_THAT(AreEqual(asUINT(0), Type->GetMethodCount()));
-		ASSERT_THAT(IsTrue(Fixture.Image->FinalizeLayouts() == asEMetadataResult::Succeeded && Fixture.Image->Freeze() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Fixture.Set->FinalizeLayouts() == asEMetadataResult::Succeeded && Fixture.Set->Freeze() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->ValidateFrozenDefinitions()));
 		Identity.ReturnType = Fixture.Int; asSStableKey Rejected;
 		ASSERT_THAT(IsTrue(Fixture.Context->GetIdentityRegistry().InternFunction(Identity, Rejected) != asETypeIdentityStatus::Succeeded));
 	}

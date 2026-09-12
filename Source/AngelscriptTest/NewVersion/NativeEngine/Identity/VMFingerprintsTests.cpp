@@ -1,6 +1,6 @@
 #include "CQTest.h"
 #include "as_metadata_fingerprint.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_objecttype.h"
 #include "as_property.h"
 #include "as_scriptengine.h"
@@ -35,11 +35,11 @@ private:
 		void Reset() { if (Ptr) Ptr->ShutDownAndRelease(); Ptr = nullptr; }
 	};
 
-	struct FPointImage
+	struct FPointSet
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context =
 			MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCModuleDefinitionSet> Set = asCModuleDefinitionSet::Create();
 		asCObjectType* Type = nullptr;
 		asCObjectProperty* X = nullptr;
 		asCObjectProperty* Y = nullptr;
@@ -62,12 +62,12 @@ private:
 				: AS_NAMESPACE_QUALIFIER asETypeDeclKind::Class;
 			AS_NAMESPACE_QUALIFIER asSStableKey Key;
 			return Context->GetIdentityRegistry().InternNominalType(Descriptor, Key) == AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded
-				&& Image->CreateObjectType(Key, TCHAR_TO_UTF8(Name), "", Flags, Out) == asEMetadataResult::Succeeded;
+				&& Set->CreateObjectType(Key, TCHAR_TO_UTF8(Name), "", Flags, Out) == asEMetadataResult::Succeeded;
 		}
 
 		bool AddIntField(asCObjectType& Owner, const char* Name, eTokenType Token, asCObjectProperty*& Out)
 		{
-			return Image->AddProperty(Owner, Name, Image->Primitive(Token), Out) == asEMetadataResult::Succeeded;
+			return Set->AddProperty(Owner, Name, Set->Primitive(Token), Out) == asEMetadataResult::Succeeded;
 		}
 
 		bool AddMethod(asCObjectType& Owner, const char* Name, eTokenType ReturnToken, asCScriptFunction*& Out)
@@ -87,14 +87,14 @@ private:
 			}
 			AS_NAMESPACE_QUALIFIER asSStableKey Key;
 			return Context->GetIdentityRegistry().InternFunction(Descriptor, Key) == AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded
-				&& Image->CreateFunction(Key, Name, "", asFUNC_SCRIPT, Out) == asEMetadataResult::Succeeded
-				&& Image->DefineFunction(*Out, Image->Primitive(ReturnToken), {}, &Owner) == asEMetadataResult::Succeeded
-				&& Image->SetFunctionDeclarationFacts(*Out, AS_NAMESPACE_QUALIFIER asEFunctionIdentityKind::Method, &Owner) == asEMetadataResult::Succeeded;
+				&& Set->CreateFunction(Key, Name, "", asFUNC_SCRIPT, Out) == asEMetadataResult::Succeeded
+				&& Set->DefineFunction(*Out, Set->Primitive(ReturnToken), {}, &Owner) == asEMetadataResult::Succeeded
+				&& Set->SetFunctionDeclarationFacts(*Out, AS_NAMESPACE_QUALIFIER asEFunctionIdentityKind::Method, &Owner) == asEMetadataResult::Succeeded;
 		}
 
 		bool BuildPoint(bool bUnrelatedFirst = false, eTokenType XType = ttInt, const char* YName = "y", bool bReverseFields = false)
 		{
-			if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return false;
+			if (Set->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return false;
 			if (!InternPrimitive(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32, Int32Use)) return false;
 			if (!InternPrimitive(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int64, Int64Use)) return false;
 			if (bUnrelatedFirst)
@@ -114,9 +114,9 @@ private:
 			{
 				if (!AddIntField(*Type, "x", XType, X) || !AddIntField(*Type, YName, ttInt, Y)) return false;
 			}
-			return Image->FinalizeLayouts() == asEMetadataResult::Succeeded
-				&& Image->Freeze() == asEMetadataResult::Succeeded
-				&& Image->ValidateFrozenDefinitions();
+			return Set->FinalizeLayouts() == asEMetadataResult::Succeeded
+				&& Set->Freeze() == asEMetadataResult::Succeeded
+				&& Set->ValidateFrozenDefinitions();
 		}
 	};
 
@@ -207,8 +207,8 @@ private:
 public:
 	TEST_METHOD(IndependentPointsAgreeOnKeyWitnessAndHash)
 	{
-		FPointImage First;
-		FPointImage Second;
+		FPointSet First;
+		FPointSet Second;
 		ASSERT_THAT(IsTrue(First.BuildPoint(true)));
 		ASSERT_THAT(IsTrue(Second.BuildPoint(false)));
 		ASSERT_THAT(IsTrue(First.Type->GetStableKey() == Second.Type->GetStableKey()));
@@ -236,7 +236,7 @@ public:
 
 	TEST_METHOD(GoldenCanonicalBytesFixFieldOrderAndDomains)
 	{
-		FPointImage Point;
+		FPointSet Point;
 		ASSERT_THAT(IsTrue(Point.BuildPoint()));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash Schema;
 		AS_NAMESPACE_QUALIFIER asSLayoutHash Layout;
@@ -258,7 +258,7 @@ public:
 
 	TEST_METHOD(OneFactChangesAffectDeclaredDomains)
 	{
-		FPointImage Baseline;
+		FPointSet Baseline;
 		ASSERT_THAT(IsTrue(Baseline.BuildPoint()));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash BaselineSchema;
 		AS_NAMESPACE_QUALIFIER asSLayoutHash BaselineLayout;
@@ -269,7 +269,7 @@ public:
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEFingerprintStatus::Succeeded,
 			Baseline.Type->TryGetLayoutHash(BaselineLayout, &BaselineLayoutWitness)));
 
-		FPointImage WiderX;
+		FPointSet WiderX;
 		ASSERT_THAT(IsTrue(WiderX.BuildPoint(false, ttInt64)));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash WiderSchema;
 		AS_NAMESPACE_QUALIFIER asSLayoutHash WiderLayout;
@@ -285,7 +285,7 @@ public:
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEFingerprintEquality::Different,
 			CompareLayoutFingerprints(BaselineLayout, BaselineLayoutWitness, WiderLayout, WiderLayoutWitness)));
 
-		FPointImage Renamed;
+		FPointSet Renamed;
 		ASSERT_THAT(IsTrue(Renamed.BuildPoint(false, ttInt, "z")));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash RenamedSchema;
 		AS_NAMESPACE_QUALIFIER asSLayoutHash RenamedLayout;
@@ -299,7 +299,7 @@ public:
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEFingerprintEquality::Different,
 			CompareSchemaFingerprints(BaselineSchema, BaselineSchemaWitness, RenamedSchema, RenamedSchemaWitness)));
 
-		FPointImage Reversed;
+		FPointSet Reversed;
 		ASSERT_THAT(IsTrue(Reversed.BuildPoint(false, ttInt, "y", true)));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash ReversedSchema;
 		TConstArrayView<uint8> ReversedSchemaWitness;
@@ -311,23 +311,23 @@ public:
 
 	TEST_METHOD(MethodReturnChangesSchemaButNotIdentity)
 	{
-		FPointImage IntReturn;
-		ASSERT_THAT(IsTrue(IntReturn.Image->SetIdentityContext(IntReturn.Context) == asEMetadataResult::Succeeded));
+		FPointSet IntReturn;
+		ASSERT_THAT(IsTrue(IntReturn.Set->SetIdentityContext(IntReturn.Context) == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(IntReturn.CreateType(TEXT("Point"), TEXT("vm-fingerprints"), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, IntReturn.Type)));
 		ASSERT_THAT(IsTrue(IntReturn.AddIntField(*IntReturn.Type, "x", ttInt, IntReturn.X)));
 		ASSERT_THAT(IsTrue(IntReturn.AddIntField(*IntReturn.Type, "y", ttInt, IntReturn.Y)));
 		ASSERT_THAT(IsTrue(IntReturn.AddMethod(*IntReturn.Type, "Read", ttInt, IntReturn.Method)));
-		ASSERT_THAT(IsTrue(IntReturn.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(IntReturn.Image->Freeze() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(IntReturn.Set->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(IntReturn.Set->Freeze() == asEMetadataResult::Succeeded));
 
-		FPointImage Int64Return;
-		ASSERT_THAT(IsTrue(Int64Return.Image->SetIdentityContext(Int64Return.Context) == asEMetadataResult::Succeeded));
+		FPointSet Int64Return;
+		ASSERT_THAT(IsTrue(Int64Return.Set->SetIdentityContext(Int64Return.Context) == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(Int64Return.CreateType(TEXT("Point"), TEXT("vm-fingerprints"), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, Int64Return.Type)));
 		ASSERT_THAT(IsTrue(Int64Return.AddIntField(*Int64Return.Type, "x", ttInt, Int64Return.X)));
 		ASSERT_THAT(IsTrue(Int64Return.AddIntField(*Int64Return.Type, "y", ttInt, Int64Return.Y)));
 		ASSERT_THAT(IsTrue(Int64Return.AddMethod(*Int64Return.Type, "Read", ttInt64, Int64Return.Method)));
-		ASSERT_THAT(IsTrue(Int64Return.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Int64Return.Image->Freeze() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Int64Return.Set->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Int64Return.Set->Freeze() == asEMetadataResult::Succeeded));
 
 		ASSERT_THAT(IsTrue(IntReturn.Type->GetStableKey() == Int64Return.Type->GetStableKey()));
 		ASSERT_THAT(IsTrue(IntReturn.Method->GetStableKey() == Int64Return.Method->GetStableKey()));
@@ -355,7 +355,7 @@ public:
 
 	TEST_METHOD(FunctionBodyAndSourceLocationDoNotChangeTypeFingerprints)
 	{
-		FPointImage Point;
+		FPointSet Point;
 		ASSERT_THAT(IsTrue(Point.BuildPoint()));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash BeforeSchema;
 		AS_NAMESPACE_QUALIFIER asSLayoutHash BeforeLayout;
@@ -386,16 +386,16 @@ public:
 	TEST_METHOD(InjectedEqualDigestsWithDifferentWitnessesAreCollisions)
 	{
 		FCollidingDigest Provider;
-		FPointImage Left;
-		FPointImage Right;
-		Left.Image->SetFingerprintDigestProvider(&Provider);
-		Right.Image->SetFingerprintDigestProvider(&Provider);
+		FPointSet Left;
+		FPointSet Right;
+		Left.Set->SetFingerprintDigestProvider(&Provider);
+		Right.Set->SetFingerprintDigestProvider(&Provider);
 		ASSERT_THAT(IsTrue(Left.BuildPoint()));
-		ASSERT_THAT(IsTrue(Right.Image->SetIdentityContext(Right.Context) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Right.Set->SetIdentityContext(Right.Context) == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(Right.CreateType(TEXT("Other"), TEXT("vm-fingerprints.other"), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, Right.Type)));
 		ASSERT_THAT(IsTrue(Right.AddIntField(*Right.Type, "value", ttInt, Right.X)));
-		ASSERT_THAT(IsTrue(Right.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Right.Image->Freeze() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Right.Set->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Right.Set->Freeze() == asEMetadataResult::Succeeded));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash LeftHash;
 		AS_NAMESPACE_QUALIFIER asSSchemaHash RightHash;
 		TConstArrayView<uint8> LeftWitness;
@@ -412,15 +412,15 @@ public:
 
 	TEST_METHOD(UnauthenticatedShellFreezeRejectsFingerprintQuery)
 	{
-		auto Image = asCMetadataImage::Create();
+		auto Set = asCModuleDefinitionSet::Create();
 		asCObjectType* Type = nullptr;
 		uint8 Bytes[32] = {};
 		Bytes[0] = 1;
 		AS_NAMESPACE_QUALIFIER asSStableKey Key;
 		ASSERT_THAT(IsTrue(AS_NAMESPACE_QUALIFIER asSStableKey::TryCreate(MakeArrayView(Bytes), Key)));
-		ASSERT_THAT(IsTrue(Image->CreateObjectType(Key, "Shell", "", asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, Type) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Image->Freeze() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Set->CreateObjectType(Key, "Shell", "", asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, Type) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Set->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Set->Freeze() == asEMetadataResult::Succeeded));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash Schema;
 		TConstArrayView<uint8> Witness;
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEFingerprintStatus::UnauthenticatedDefinition,
@@ -431,8 +431,8 @@ public:
 
 	TEST_METHOD(BuildingAndIncompleteStatesRejectFingerprints)
 	{
-		FPointImage Building;
-		ASSERT_THAT(IsTrue(Building.Image->SetIdentityContext(Building.Context) == asEMetadataResult::Succeeded));
+		FPointSet Building;
+		ASSERT_THAT(IsTrue(Building.Set->SetIdentityContext(Building.Context) == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(Building.CreateType(TEXT("Point"), TEXT("vm-fingerprints"), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, Building.Type)));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash Schema;
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEFingerprintStatus::NotReady, Building.Type->TryGetSchemaHash(Schema)));
@@ -443,34 +443,34 @@ public:
 
 	TEST_METHOD(HandleCycleTerminatesAndValueCyclePublishesNoHash)
 	{
-		FPointImage Cycle;
-		ASSERT_THAT(IsTrue(Cycle.Image->SetIdentityContext(Cycle.Context) == asEMetadataResult::Succeeded));
+		FPointSet Cycle;
+		ASSERT_THAT(IsTrue(Cycle.Set->SetIdentityContext(Cycle.Context) == asEMetadataResult::Succeeded));
 		asCObjectType* A = nullptr;
 		asCObjectType* B = nullptr;
 		ASSERT_THAT(IsTrue(Cycle.CreateType(TEXT("A"), TEXT("vm-fingerprints.cycle"), asOBJ_REF | asOBJ_SCRIPT_OBJECT, A)));
 		ASSERT_THAT(IsTrue(Cycle.CreateType(TEXT("B"), TEXT("vm-fingerprints.cycle"), asOBJ_REF | asOBJ_SCRIPT_OBJECT, B)));
 		asCObjectProperty* AB = nullptr;
 		asCObjectProperty* BA = nullptr;
-		ASSERT_THAT(IsTrue(Cycle.Image->AddProperty(*A, "Other", asCDataType::CreateObjectHandle(B, false), AB) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Cycle.Image->AddProperty(*B, "Other", asCDataType::CreateObjectHandle(A, false), BA) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Cycle.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Cycle.Image->Freeze() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Cycle.Set->AddProperty(*A, "Other", asCDataType::CreateObjectHandle(B, false), AB) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Cycle.Set->AddProperty(*B, "Other", asCDataType::CreateObjectHandle(A, false), BA) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Cycle.Set->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Cycle.Set->Freeze() == asEMetadataResult::Succeeded));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash SchemaA;
 		AS_NAMESPACE_QUALIFIER asSSchemaHash SchemaB;
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEFingerprintStatus::Succeeded, A->TryGetSchemaHash(SchemaA)));
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEFingerprintStatus::Succeeded, B->TryGetSchemaHash(SchemaB)));
 
-		FPointImage ValueCycle;
-		ASSERT_THAT(IsTrue(ValueCycle.Image->SetIdentityContext(ValueCycle.Context) == asEMetadataResult::Succeeded));
+		FPointSet ValueCycle;
+		ASSERT_THAT(IsTrue(ValueCycle.Set->SetIdentityContext(ValueCycle.Context) == asEMetadataResult::Succeeded));
 		asCObjectType* Left = nullptr;
 		asCObjectType* Right = nullptr;
 		asCObjectProperty* First = nullptr;
 		asCObjectProperty* Second = nullptr;
 		ASSERT_THAT(IsTrue(ValueCycle.CreateType(TEXT("Left"), TEXT("vm-fingerprints.value-cycle"), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, Left)));
 		ASSERT_THAT(IsTrue(ValueCycle.CreateType(TEXT("Right"), TEXT("vm-fingerprints.value-cycle"), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT, Right)));
-		ASSERT_THAT(IsTrue(ValueCycle.Image->AddProperty(*Left, "Value", asCDataType::CreateType(Right, false), First) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(ValueCycle.Image->AddProperty(*Right, "Value", asCDataType::CreateType(Left, false), Second) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(AreEqual(asEMetadataResult::RecursiveValueType, ValueCycle.Image->FinalizeLayouts()));
+		ASSERT_THAT(IsTrue(ValueCycle.Set->AddProperty(*Left, "Value", asCDataType::CreateType(Right, false), First) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(ValueCycle.Set->AddProperty(*Right, "Value", asCDataType::CreateType(Left, false), Second) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(AreEqual(asEMetadataResult::RecursiveValueType, ValueCycle.Set->FinalizeLayouts()));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash Rejected;
 		TConstArrayView<uint8> RejectedWitness;
 		ASSERT_THAT(AreNotEqual(AS_NAMESPACE_QUALIFIER asEFingerprintStatus::Succeeded,
@@ -483,7 +483,7 @@ public:
 
 	TEST_METHOD(ConcurrentReadsAgree)
 	{
-		FPointImage Point;
+		FPointSet Point;
 		ASSERT_THAT(IsTrue(Point.BuildPoint()));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash Expected;
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEFingerprintStatus::Succeeded, Point.Type->TryGetSchemaHash(Expected)));
@@ -504,13 +504,13 @@ public:
 
 	TEST_METHOD(RetiredAuthenticDefinitionsRemainInspectable)
 	{
-		FPointImage Point;
+		FPointSet Point;
 		ASSERT_THAT(IsTrue(Point.BuildPoint()));
 		FEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Point.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->InstallDefinitionSet(MoveTemp(Point.Set))));
 		Point.Type->AddRef();
 		Engine.Reset();
-		ASSERT_THAT(AreEqual(asEMetadataImageState::Retired, Point.Image->GetState()));
+		ASSERT_THAT(AreEqual(asEDefinitionSetState::Retired, Point.Set->GetState()));
 		AS_NAMESPACE_QUALIFIER asSSchemaHash Schema;
 		TConstArrayView<uint8> Witness;
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEFingerprintStatus::Succeeded,
@@ -520,32 +520,32 @@ public:
 		ASSERT_THAT(IsNull(Point.Type->GetEngine()));
 		ASSERT_THAT(IsTrue(Point.Type->GetTypeId() < 0));
 		FEngineOwner Other;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Retired, Other.Ptr->RegisterMetadataImage(MoveTemp(Point.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Retired, Other.Ptr->InstallDefinitionSet(MoveTemp(Point.Set))));
 		Point.Type->Release();
 	}
 
 	TEST_METHOD(EnumBaseInterfaceGenericAccessAndListChangeSchema)
 	{
-		auto MakeEnum = [](int Value, asCEnumType*& Out) -> FPointImage
+		auto MakeEnum = [](int Value, asCEnumType*& Out) -> FPointSet
 		{
-			FPointImage Fixture;
-			Fixture.Image->SetIdentityContext(Fixture.Context);
+			FPointSet Fixture;
+			Fixture.Set->SetIdentityContext(Fixture.Context);
 			AS_NAMESPACE_QUALIFIER asSNominalTypeDescriptor Descriptor;
 			Descriptor.StableScope = TEXT("vm-fingerprints.enum");
 			Descriptor.Name = TEXT("Color");
 			Descriptor.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::Enum;
 			AS_NAMESPACE_QUALIFIER asSStableKey Key;
 			Fixture.Context->GetIdentityRegistry().InternNominalType(Descriptor, Key);
-			Fixture.Image->CreateEnumType(Key, "Color", "", Out);
-			Fixture.Image->AddEnumValue(*Out, "Red", Value);
-			Fixture.Image->FinalizeLayouts();
-			Fixture.Image->Freeze();
+			Fixture.Set->CreateEnumType(Key, "Color", "", Out);
+			Fixture.Set->AddEnumValue(*Out, "Red", Value);
+			Fixture.Set->FinalizeLayouts();
+			Fixture.Set->Freeze();
 			return Fixture;
 		};
 		asCEnumType* FirstEnum = nullptr;
 		asCEnumType* SecondEnum = nullptr;
-		FPointImage EnumA = MakeEnum(1, FirstEnum);
-		FPointImage EnumB = MakeEnum(2, SecondEnum);
+		FPointSet EnumA = MakeEnum(1, FirstEnum);
+		FPointSet EnumB = MakeEnum(2, SecondEnum);
 		AS_NAMESPACE_QUALIFIER asSSchemaHash EnumSchemaA;
 		AS_NAMESPACE_QUALIFIER asSSchemaHash EnumSchemaB;
 		TConstArrayView<uint8> EnumWitnessA;

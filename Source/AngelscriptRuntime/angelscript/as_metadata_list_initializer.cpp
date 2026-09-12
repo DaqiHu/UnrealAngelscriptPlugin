@@ -1,10 +1,10 @@
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 #include "frontend/as_type_context.h"
 
 BEGIN_AS_NAMESPACE
-bool asCMetadataImage::ValidateListPattern(const asSMetadataListPattern& Pattern, asUINT GenericArity, int Depth, int& NodeBudget) const
+bool asCModuleDefinitionSet::ValidateListPattern(const asSMetadataListPattern& Pattern, asUINT GenericArity, int Depth, int& NodeBudget) const
 {
 	if (Depth > 64 || --NodeBudget < 0) return false;
 	if (Pattern.Kind == asEMetadataListPatternKind::Value)
@@ -31,10 +31,10 @@ bool asCMetadataImage::ValidateListPattern(const asSMetadataListPattern& Pattern
 	return true;
 }
 
-asEMetadataResult asCMetadataImage::SetListInitializer(asCObjectType& Type, asCScriptFunction& Factory, const asSMetadataListPattern& Pattern)
+asEMetadataResult asCModuleDefinitionSet::SetListInitializer(asCObjectType& Type, asCScriptFunction& Factory, const asSMetadataListPattern& Pattern)
 {
 std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEMetadataImageState::Building) return asEMetadataResult::InvalidState;
+	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
 	if (!Owns(&Type) || !CanReference(&Factory)) return asEMetadataResult::ForeignOwner;
 	if (Type.GetMetadataTemplateDefinition() || ListInitializers.Contains(&Type)) return asEMetadataResult::InvalidState;
 	if (!IdentityContext.IsValid() || !Factory.metadataSignatureDefined || Factory.returnType.GetTypeInfo() != &Type) return asEMetadataResult::InvalidSignature;
@@ -49,7 +49,7 @@ std::lock_guard<std::mutex> Lock(MutationMutex);
 	return asEMetadataResult::Succeeded;
 }
 
-const asSMetadataListInitializer* asCMetadataImage::GetListInitializer(const asCObjectType& Type) const
+const asSMetadataListInitializer* asCModuleDefinitionSet::GetListInitializer(const asCObjectType& Type) const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	// A returned view is stable only for a frozen image. Draft mutation retains
@@ -58,7 +58,7 @@ const asSMetadataListInitializer* asCMetadataImage::GetListInitializer(const asC
 	return ListInitializers.Find(&Type);
 }
 
-bool asCMetadataImage::ValidateListInitializers() const
+bool asCModuleDefinitionSet::ValidateListInitializers() const
 {
 	for (const auto& Entry : ListInitializers)
 	{

@@ -5,7 +5,7 @@
 #include "frontend/as_ast_visitor.h"
 #include "frontend/as_ast_verifier.h"
 #include "frontend/as_type.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_typeinfo.h"
 
 #include "Templates/Function.h"

@@ -1,6 +1,6 @@
 #include "frontend/as_compilation_session.h"
 #include "frontend/as_ast_cast.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 
@@ -16,12 +16,12 @@ bool asCCompilationSession::ResolveListInitializer(asCQualType Type, asSListInit
 		}
 		if (!Nominal) return false;
 		const asCObjectType* Target = nullptr;
-		for (const auto& Image : ExternalDefinitions)
-			if (const auto* Candidate = Image->FindType(Nominal->GetDeclarationIdentity());
+		for (const auto& Set : ExternalDefinitions)
+			if (const auto* Candidate = Set->FindType(Nominal->GetDeclarationIdentity());
 				Candidate && (Candidate->flags & (asOBJ_REF | asOBJ_VALUE)) && !(Candidate->flags & asOBJ_CALLABLE_TYPE))
 			{ Target = static_cast<const asCObjectType*>(Candidate); break; }
 		if (!Target) return false;
-		const auto* Initializer = Target->GetMetadataImage()->GetListInitializer(*Target);
+		const auto* Initializer = Target->GetDefinitionSet()->GetListInitializer(*Target);
 		if (!Initializer || !Initializer->Factory) return false;
 		auto& Registry = Context.GetTypeContext()->GetIdentityRegistry();
 		TFunction<asCQualType(const asCDataType&, int)> ConvertType = [&](const asCDataType& Input, int Depth) -> asCQualType

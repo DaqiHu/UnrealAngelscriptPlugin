@@ -13,18 +13,18 @@ public:
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		asCScriptFunction* Function = nullptr;
-		for (asCScriptFunction* Candidate : Builder.GetDefinitions()->GetFunctions())
+		for (asCScriptFunction* Candidate : Builder.GetModuleDefinitionSet()->GetFunctions())
 		{
 			if (Candidate && Candidate->name == "Run") Function = Candidate;
 		}
 		ASSERT_THAT(IsNotNull(Function));
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Builder, *Function);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 		ASSERT_THAT(IsNotNull(Emitted.Image.Get()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, Builder)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Emitted.Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Function)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
@@ -39,17 +39,17 @@ public:
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		asCScriptFunction* Function = nullptr;
-		for (asCScriptFunction* Candidate : Builder.GetDefinitions()->GetFunctions())
+		for (asCScriptFunction* Candidate : Builder.GetModuleDefinitionSet()->GetFunctions())
 		{
 			if (Candidate && Candidate->name == "Run") Function = Candidate;
 		}
 		ASSERT_THAT(IsNotNull(Function));
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Builder, *Function);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, Builder)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Emitted.Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Function)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
@@ -64,17 +64,17 @@ public:
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		asCScriptFunction* Function = nullptr;
-		for (asCScriptFunction* Candidate : Builder.GetDefinitions()->GetFunctions())
+		for (asCScriptFunction* Candidate : Builder.GetModuleDefinitionSet()->GetFunctions())
 		{
 			if (Candidate && Candidate->name == "Run") Function = Candidate;
 		}
 		ASSERT_THAT(IsNotNull(Function));
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Builder, *Function);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, Builder)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Emitted.Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Function)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
@@ -89,17 +89,17 @@ public:
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		asCScriptFunction* Function = nullptr;
-		for (asCScriptFunction* Candidate : Builder.GetDefinitions()->GetFunctions())
+		for (asCScriptFunction* Candidate : Builder.GetModuleDefinitionSet()->GetFunctions())
 		{
 			if (Candidate && Candidate->name == "Run") Function = Candidate;
 		}
 		ASSERT_THAT(IsNotNull(Function));
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Builder, *Function);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, Builder)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Emitted.Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Function)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
@@ -114,17 +114,17 @@ public:
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		asCScriptFunction* Function = nullptr;
-		for (asCScriptFunction* Candidate : Builder.GetDefinitions()->GetFunctions())
+		for (asCScriptFunction* Candidate : Builder.GetModuleDefinitionSet()->GetFunctions())
 		{
 			if (Candidate && Candidate->name == "Run") Function = Candidate;
 		}
 		ASSERT_THAT(IsNotNull(Function));
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Builder, *Function);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, Builder)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Emitted.Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Function)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
@@ -139,17 +139,17 @@ public:
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		asCScriptFunction* Function = nullptr;
-		for (asCScriptFunction* Candidate : Builder.GetDefinitions()->GetFunctions())
+		for (asCScriptFunction* Candidate : Builder.GetModuleDefinitionSet()->GetFunctions())
 		{
 			if (Candidate && Candidate->name == "Add") Function = Candidate;
 		}
 		ASSERT_THAT(IsNotNull(Function));
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Builder, *Function);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, Builder)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Emitted.Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Function)));
 		ASSERT_THAT(AreEqual(0, Context->SetArgDWord(0, 7)));
@@ -166,17 +166,17 @@ public:
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		asCScriptFunction* Function = nullptr;
-		for (asCScriptFunction* Candidate : Builder.GetDefinitions()->GetFunctions())
+		for (asCScriptFunction* Candidate : Builder.GetModuleDefinitionSet()->GetFunctions())
 		{
 			if (Candidate && Candidate->name == "Run") Function = Candidate;
 		}
 		ASSERT_THAT(IsNotNull(Function));
-		asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(Builder, *Function);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, Builder)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Emitted.Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Function)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));

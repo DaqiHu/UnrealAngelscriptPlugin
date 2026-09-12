@@ -71,7 +71,7 @@ private:
    TUniquePtr<asCByteCodeImage> Image;
    if (B.Finish(Image) != asEByteCodeImageStatus::Succeeded) return false;
    asCExecutableSnapshot* Snapshot = nullptr;
-   const auto Status = E.Ptr->LinkByteCodeImage(*Image, Snapshot);
+   const auto Status = asLinkByteCodeImage(*E.Ptr, *Image, Snapshot);
    if (Snapshot) Snapshot->Release(); // Only the Engine retains published code.
    return Status == asEByteCodeLinkStatus::Succeeded;
   }
@@ -95,16 +95,16 @@ private:
    Type = F.DefineType(TEXT("Owned"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT | (Gc ? asOBJ_GC : 0));
    if (!Type) return false;
    if (Cycle) { Next = F.DefineProperty(*Type, "Next", asCDataType::CreateObjectHandle(Type, false)); if (!Next) return false; }
-   Dtor = F.DefineFunction(TEXT("Destruct"), TEXT(""), ScriptDestructor ? asFUNC_SCRIPT : asFUNC_SYSTEM, F.Image->Primitive(ttVoid), {}, Type);
-   Counter = F.DefineFunction(TEXT("Count"), TEXT(""), asFUNC_SYSTEM, F.Image->Primitive(ttVoid), {});
-   Helper = F.DefineFunction(TEXT("Helper"), TEXT(""), asFUNC_SCRIPT, F.Image->Primitive(ttVoid), {});
-   Run = F.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, F.Image->Primitive(ttInt), {});
-   Suspend = F.DefineFunction(TEXT("Suspend"), TEXT(""), asFUNC_SYSTEM, F.Image->Primitive(ttVoid), {});
-   Shutdown = F.DefineFunction(TEXT("Shutdown"), TEXT(""), asFUNC_SYSTEM, F.Image->Primitive(ttVoid), {});
-   Wait = F.DefineFunction(TEXT("Wait"), TEXT(""), asFUNC_SYSTEM, F.Image->Primitive(ttVoid), {});
+   Dtor = F.DefineFunction(TEXT("Destruct"), TEXT(""), ScriptDestructor ? asFUNC_SCRIPT : asFUNC_SYSTEM, F.Set->Primitive(ttVoid), {}, Type);
+   Counter = F.DefineFunction(TEXT("Count"), TEXT(""), asFUNC_SYSTEM, F.Set->Primitive(ttVoid), {});
+   Helper = F.DefineFunction(TEXT("Helper"), TEXT(""), asFUNC_SCRIPT, F.Set->Primitive(ttVoid), {});
+   Run = F.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, F.Set->Primitive(ttInt), {});
+   Suspend = F.DefineFunction(TEXT("Suspend"), TEXT(""), asFUNC_SYSTEM, F.Set->Primitive(ttVoid), {});
+   Shutdown = F.DefineFunction(TEXT("Shutdown"), TEXT(""), asFUNC_SYSTEM, F.Set->Primitive(ttVoid), {});
+   Wait = F.DefineFunction(TEXT("Wait"), TEXT(""), asFUNC_SYSTEM, F.Set->Primitive(ttVoid), {});
    if (!Dtor || !Counter || !Helper || !Run || !Suspend || !Shutdown || !Wait
-    || F.Image->AddBehaviour(*Type, asBEHAVE_DESTRUCT, *Dtor) != asEMetadataResult::Succeeded || !F.FinalizeAndFreeze()
-    || E.Ptr->RegisterMetadataImage(MoveTemp(F.Image)) != asEMetadataRegistrationResult::Succeeded) return false;
+    || F.Set->AddBehaviour(*Type, asBEHAVE_DESTRUCT, *Dtor) != asEMetadataResult::Succeeded || !F.FinalizeAndFreeze()
+    || E.Ptr->InstallDefinitionSet(F.TakeSet()) != asEMetadataRegistrationResult::Succeeded) return false;
    E.Ptr->SetEngineProperty(asEP_AUTO_GARBAGE_COLLECT, 0);
    if (E.Ptr->BindNativeFunction(Counter->GetStableKey(), asFUNCTION(Count), asCALL_GENERIC) != asEByteCodeLinkStatus::Succeeded
     || E.Ptr->BindNativeFunction(Suspend->GetStableKey(), asFUNCTION(Yield), asCALL_GENERIC) != asEByteCodeLinkStatus::Succeeded
@@ -182,7 +182,7 @@ public:
    T.F.Context->GetIdentityRegistry().InternTypeUse(TypeDescriptor,TypeKey)));
   asCGlobalProperty* Global=nullptr;
   ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-   T.F.Image->CreateGlobalProperty(Key,TypeKey,"RetainedCell","",T.F.Image->Primitive(ttInt,true),Global)));
+   T.F.Set->CreateGlobalProperty(Key,TypeKey,"RetainedCell","",T.F.Set->Primitive(ttInt,true),Global)));
   ASSERT_THAT(IsTrue(T.Start(false,false)));
   int32 Original=41, Replacement=99;
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,T.E.Ptr->BindGlobalStorage(Key,&Original)));

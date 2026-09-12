@@ -1,5 +1,6 @@
 #include "CQTest.h"
 #include "../NativeEngineTestSupport.h"
+#include "../Compiler/NativeSourceExecutionTestSupport.h"
 #include "../VM/NativeVMTestSupport.h"
 #include "frontend/as_definition_consumer.h"
 #include "Misc/ScopeExit.h"
@@ -60,7 +61,7 @@ namespace CallableSDKTests
 	static_assert(!HasOldSignatureQuery<asITypeInfo> && !HasOldSignatureQuery<asCTypeInfo>);
 	static_assert(!HasOldChildQueries<asITypeInfo> && !HasOldChildQueries<asCTypeInfo>);
 	static_assert(!HasOldDataTypeQuery<asCDataType>);
-	static_assert(!HasOldFactory<asCMetadataImage, asCCallableType> && !HasOldChildFactory<asCMetadataImage, asCCallableType>);
+	static_assert(!HasOldFactory<asCModuleDefinitionSet, asCCallableType> && !HasOldChildFactory<asCModuleDefinitionSet, asCCallableType>);
 
 }
 
@@ -87,8 +88,8 @@ public:
 
 	TEST_METHOD(OldNominalFactoryAndChildFactoryAreAbsent)
 	{
-		ASSERT_THAT(IsFalse(CallableSDKTests::HasOldFactory<asCMetadataImage, asCCallableType>));
-		ASSERT_THAT(IsFalse(CallableSDKTests::HasOldChildFactory<asCMetadataImage, asCCallableType>));
+		ASSERT_THAT(IsFalse(CallableSDKTests::HasOldFactory<asCModuleDefinitionSet, asCCallableType>));
+		ASSERT_THAT(IsFalse(CallableSDKTests::HasOldChildFactory<asCModuleDefinitionSet, asCCallableType>));
 	}
 
 	TEST_METHOD(NominalDelegateAndEventShareOnlyTheirStructuralSignature)
@@ -100,18 +101,18 @@ public:
 		ASSERT_THAT(IsTrue(Run.Session->VerifyAST()));
 		const auto Result = asCDefinitionConsumer().Consume(*Run.Session);
 		ASSERT_THAT(IsTrue(Result.Succeeded()));
-		ASSERT_THAT(AreEqual(2, Result.Image->GetTypes().Num()));
-		auto* Left = static_cast<asCCallableType*>(Result.Image->GetTypes()[0]);
-		auto* Right = static_cast<asCCallableType*>(Result.Image->GetTypes()[1]);
+		ASSERT_THAT(AreEqual(2, Result.Definitions->GetTypes().Num()));
+		auto* Left = static_cast<asCCallableType*>(Result.Definitions->GetTypes()[0]);
+		auto* Right = static_cast<asCCallableType*>(Result.Definitions->GetTypes()[1]);
 		ASSERT_THAT(IsNotNull(Left)); ASSERT_THAT(IsNotNull(Right));
 		ASSERT_THAT(IsTrue(Left->GetStableKey() != Right->GetStableKey()));
 		ASSERT_THAT(IsTrue(Left->GetCallableSignature() == Right->GetCallableSignature()));
 		auto* Signature = static_cast<asCScriptFunction*>(Left->GetCallableSignature());
 		ASSERT_THAT(IsTrue(Signature->IsMetadataCallableSignature()));
 		ASSERT_THAT(IsTrue(Signature->GetStableKey() != Left->GetStableKey()));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Result.Image->FinalizeLayouts()));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Result.Image->Freeze()));
-		ASSERT_THAT(IsTrue(Result.Image->ValidateFrozenDefinitions()));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Result.Definitions->FinalizeLayouts()));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Result.Definitions->Freeze()));
+		ASSERT_THAT(IsTrue(Result.Definitions->ValidateFrozenDefinitions()));
 	}
 
 	TEST_METHOD(NamedScriptAndGenericNativeCallbacksExecuteFortyTwoIndirectly)
@@ -119,18 +120,18 @@ public:
 		for (const asEFuncType Kind : {asFUNC_SCRIPT, asFUNC_SYSTEM})
 		{
 			FDetachedDefinitionFixture Fixture;
-			auto* Callback = Fixture.DefineFunction(TEXT("FortyTwo"), TEXT(""), Kind, Fixture.Image->Primitive(ttInt), {});
-			auto* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+			auto* Callback = Fixture.DefineFunction(TEXT("FortyTwo"), TEXT(""), Kind, Fixture.Set->Primitive(ttInt), {});
+			auto* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 			ASSERT_THAT(IsNotNull(Callback)); ASSERT_THAT(IsNotNull(Run));
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			FNativeEngineOwner Engine;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 			if (Kind == asFUNC_SYSTEM)
 				ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->BindNativeFunction(Callback->GetStableKey(), asFUNCTION(CallableSDKTests::GenericFortyTwo), asCALL_GENERIC)));
 			TUniquePtr<asCByteCodeImage> Image;
 			ASSERT_THAT(IsTrue(CallableSDKTests::BuildIndirect(*Callback, *Run, Image)));
 			asCExecutableSnapshot* Snapshot = nullptr;
-			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 			ON_SCOPE_EXIT { Snapshot->Release(); };
 			auto* Context = Engine.Ptr->CreateContext();
 			ON_SCOPE_EXIT { Context->Release(); };
@@ -143,15 +144,15 @@ public:
 	TEST_METHOD(ReturnTypeMismatchCannotReplaceTheInstalledCallable)
 	{
 		FDetachedDefinitionFixture Fixture;
-		auto* Callback = Fixture.DefineFunction(TEXT("FortyTwo"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
-		auto* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+		auto* Callback = Fixture.DefineFunction(TEXT("FortyTwo"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
+		auto* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(IsTrue(CallableSDKTests::BuildIndirect(*Callback, *Run, Image)));
 		asCExecutableSnapshot* Installed = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Installed)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Installed)));
 		ON_SCOPE_EXIT { Installed->Release(); };
 		asSStableKey WrongReturn;
 		ASSERT_THAT(AreEqual(asETypeIdentityStatus::Succeeded, Fixture.Context->InternPrimitiveTypeUse(asEPrimitiveType::Float64, WrongReturn)));
@@ -165,7 +166,7 @@ public:
 			}
 		ASSERT_THAT(IsTrue(Changed));
 		asCExecutableSnapshot* Rejected = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, Engine.Ptr->LinkByteCodeImage(*Image, Rejected)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, asLinkByteCodeImage(*Engine.Ptr, *Image, Rejected)));
 		ASSERT_THAT(IsNull(Rejected));
 		auto* Context = Engine.Ptr->CreateContext();
 		ON_SCOPE_EXIT { Context->Release(); };
@@ -185,9 +186,9 @@ public:
 			ASSERT_THAT(IsTrue(Run.Session->VerifyAST()));
 			const auto Result = asCDefinitionConsumer().Consume(*Run.Session);
 			ASSERT_THAT(IsTrue(Result.Succeeded()));
-			ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Result.Image->FinalizeLayouts()));
-			ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Result.Image->Freeze()));
-			Retained = static_cast<asCCallableType*>(Result.Image->GetTypes()[0]);
+			ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Result.Definitions->FinalizeLayouts()));
+			ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Result.Definitions->Freeze()));
+			Retained = static_cast<asCCallableType*>(Result.Definitions->GetTypes()[0]);
 			ASSERT_THAT(IsNotNull(Retained));
 			TypeKey = Retained->GetStableKey();
 			SignatureKey = static_cast<asCScriptFunction*>(Retained->GetCallableSignature())->GetStableKey();
@@ -197,7 +198,7 @@ public:
 		ASSERT_THAT(IsTrue(Retained->GetStableKey() == TypeKey));
 		ASSERT_THAT(IsTrue(static_cast<asCScriptFunction*>(Retained->GetCallableSignature())->GetStableKey() == SignatureKey));
 		ASSERT_THAT(AreEqual(1u, Retained->GetCallableSignature()->GetParamCount()));
-		ASSERT_THAT(IsTrue(Retained->GetMetadataImage()->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Retained->GetDefinitionSet()->ValidateFrozenDefinitions()));
 	}
 	TEST_METHOD(BoundNamedCallbackReleasesItsReceiverExactlyOnce)
 	{
@@ -205,20 +206,20 @@ public:
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Type = Fixture.DefineType(TEXT("Target"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT);
 		asCScriptFunction* Dtor = Fixture.DefineFunction(
-			TEXT("Destruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {}, Type);
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->AddBehaviour(*Type, asBEHAVE_DESTRUCT, *Dtor)));
-		asCScriptFunction* Value = Fixture.DefineFunction(TEXT("Value"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {}, Type);
+			TEXT("Destruct"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {}, Type);
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->AddBehaviour(*Type, asBEHAVE_DESTRUCT, *Dtor)));
+		asCScriptFunction* Value = Fixture.DefineFunction(TEXT("Value"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {}, Type);
 		auto Reference = asCDataType::CreateType(Type, false); Reference.MakeReference(true);
 		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Reference, {});
 		asSMetadataParameter Fn;
 		Fn.Name = "fn";
-		Fn.Type = Fixture.Image->Primitive(ttInt64);
+		Fn.Type = Fixture.Set->Primitive(ttInt64);
 		asCScriptFunction* Invoke = Fixture.DefineFunction(
-			TEXT("Invoke"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), MakeArrayView(&Fn, 1));
-		asCScriptFunction* Shape = Fixture.DefineFunction(TEXT("DelegateShape"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+			TEXT("Invoke"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), MakeArrayView(&Fn, 1));
+		asCScriptFunction* Shape = Fixture.DefineFunction(TEXT("DelegateShape"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Dtor->GetStableKey(), asFUNCTION(CallableSDKTests::DestructReceiver), asCALL_GENERIC)));
 		asCByteCodeImageBuilder Builder;
@@ -253,7 +254,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));

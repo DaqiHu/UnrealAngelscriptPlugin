@@ -760,22 +760,13 @@ int asCContext::Prepare(asIScriptFunction *func)
 
 	BindExecutableFor(m_currentFunction);
 	m_initialExecutable = m_currentExecutable;
-	if (m_currentFunction && m_currentFunction->funcType == asFUNC_SCRIPT && !m_currentExecutable)
+	if (m_currentFunction && m_currentFunction->funcType == asFUNC_SCRIPT && !m_currentExecutable
+		&& !(m_currentFunction->scriptData && m_currentFunction->scriptData->byteCode.GetLength() > 0))
 	{
 		return asNO_FUNCTION;
 	}
 
 	return asSUCCESS;
-}
-
-int asCContext::Prepare(asCExecutableSnapshot* Snapshot, const asSStableKey& Key)
-{
-	if (!Snapshot || Key.IsZero()) return asNO_FUNCTION;
-	asCExecutableFunction* Executable = Snapshot->FindExecutable(Key);
-	if (!Executable || !Executable->Declaration) return asNO_FUNCTION;
-	if (m_engine != Snapshot->Engine) return asINVALID_ARG;
-	if (m_engine->FindPublishedExecutable(Key) != Executable) return asNO_FUNCTION;
-	return Prepare(Executable->Declaration);
 }
 
 void asCContext::ReleaseBoundSnapshot()
@@ -809,6 +800,10 @@ void asCContext::BindExecutableFor(asCScriptFunction* Function)
 
 asCScriptFunction::ScriptFunctionData* asCContext::ActiveScriptData() const
 {
+	if (m_currentFunction && m_currentFunction->scriptData && m_currentFunction->scriptData->byteCode.GetLength() > 0)
+	{
+		return m_currentFunction->scriptData;
+	}
 	if (m_currentExecutable && m_currentExecutable->scriptData) return m_currentExecutable->scriptData;
 	return nullptr;
 }

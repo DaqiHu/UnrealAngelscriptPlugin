@@ -147,7 +147,8 @@ namespace
 			const asCRecordDecl& Record,
 			const asCCompilationSession& Session,
 			const asCSourceManager& SourceManager,
-			FAngelscriptModuleDesc& Module)
+			FAngelscriptModuleDesc& Module,
+			bool bIncludeUnattributedRecords)
 		{
 			if (HasAttr(Record, TEXT("UENUM")))
 			{
@@ -168,7 +169,7 @@ namespace
 				return true;
 			}
 
-			if (!HasAttr(Record, TEXT("UCLASS")) && !HasAttr(Record, TEXT("USTRUCT"))) return true;
+			if (!HasAttr(Record, TEXT("UCLASS")) && !HasAttr(Record, TEXT("USTRUCT")) && !bIncludeUnattributedRecords) return true;
 			TSharedRef<FAngelscriptClassDesc> Class = MakeShared<FAngelscriptClassDesc>();
 			Class->ClassName = Record.GetName();
 			Class->bIsStruct = HasAttr(Record, TEXT("USTRUCT"));
@@ -207,18 +208,19 @@ namespace
 			TConstArrayView<asCDecl*> Declarations,
 			const asCCompilationSession& Session,
 			const asCSourceManager& SourceManager,
-			FAngelscriptModuleDesc& Module)
+			FAngelscriptModuleDesc& Module,
+			bool bIncludeUnattributedRecords)
 		{
 			for (const asCDecl* Declaration : Declarations)
 			{
 				if (!Declaration || Declaration->IsInvalid()) return false;
 				if (const asCNamespaceDecl* Namespace = dyn_cast<asCNamespaceDecl>(Declaration))
 				{
-					if (!ProjectDeclarations(Namespace->GetDecls(), Session, SourceManager, Module)) return false;
+					if (!ProjectDeclarations(Namespace->GetDecls(), Session, SourceManager, Module, bIncludeUnattributedRecords)) return false;
 				}
 				else if (const asCRecordDecl* Record = dyn_cast<asCRecordDecl>(Declaration))
 				{
-					if (!ProjectRecord(*Record, Session, SourceManager, Module)) return false;
+					if (!ProjectRecord(*Record, Session, SourceManager, Module, bIncludeUnattributedRecords)) return false;
 				}
 				else if (const asCCallableTypeDecl* Callable = dyn_cast<asCCallableTypeDecl>(Declaration))
 				{
@@ -298,10 +300,11 @@ namespace
 	bool FAngelscriptDescriptorConsumer::Project(
 		const asCCompilationSession& Session,
 		const asCSourceManager& SourceManager,
-		FAngelscriptPreprocessResult& InOutResult) const
+		FAngelscriptPreprocessResult& InOutResult,
+		bool bIncludeUnattributedRecords) const
 	{
 		InOutResult.Modules.Reset();
-		if (!Session.IsPublishable() || Session.GetPhase() != asECompilationPhase::DeclarationsResolved)
+		if (!Session.IsPublishable())
 		{
 			InOutResult.RejectPublishableOutput();
 			return false;
@@ -320,7 +323,7 @@ namespace
 				return false;
 			}
 			Module->Semantic.Lifecycle = EAngelscriptDescriptorLifecycle::Resolved;
-			if (!ProjectDeclarations(Fragment.GetTopLevelDecls(), Session, SourceManager, Module.Get()))
+			if (!ProjectDeclarations(Fragment.GetTopLevelDecls(), Session, SourceManager, Module.Get(), bIncludeUnattributedRecords))
 			{
 				InOutResult.RejectPublishableOutput();
 				return false;

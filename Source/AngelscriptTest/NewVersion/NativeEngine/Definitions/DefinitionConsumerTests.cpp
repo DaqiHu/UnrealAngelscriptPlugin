@@ -1,5 +1,6 @@
 #include "CQTest.h"
 #include "../NativeEngineTestSupport.h"
+#include "../Compiler/NativeSourceExecutionTestSupport.h"
 #include "frontend/as_definition_consumer.h"
 #include "frontend/as_compilation_session.h"
 #include "frontend/as_tokenizer.h"
@@ -47,9 +48,9 @@ const auto Input = AngelscriptNativeEngineTest::FSourceInput::FromText(TEXT("Def
 		asCScriptEngine* Ptr = static_cast<asCScriptEngine*>(asCreateScriptEngine());
 		~FEngineOwner() { if (Ptr) Ptr->ShutDownAndRelease(); }
 	};
-	static asCTypeInfo* FindType(const asCMetadataImage& Image, const char* Name)
+	static asCTypeInfo* FindType(const asCModuleDefinitionSet& Set, const char* Name)
 	{
-		for (auto* Type : Image.GetTypes()) if (Type->name == Name) return Type;
+		for (auto* Type : Set.GetTypes()) if (Type->name == Name) return Type;
 		return nullptr;
 	}
 
@@ -64,10 +65,10 @@ public:
 		ASSERT_THAT(IsTrue(Input.Session->VerifyAST()));
 		auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session);
 		ASSERT_THAT(IsTrue(Result.Succeeded()));
-		ASSERT_THAT(AreEqual(4, Result.Image->GetTypes().Num()));
+		ASSERT_THAT(AreEqual(4, Result.Definitions->GetTypes().Num()));
 		asCTypeInfo* LeftItem = nullptr;
 		asCTypeInfo* RightItem = nullptr;
-		for (auto* Type : Result.Image->GetTypes())
+		for (auto* Type : Result.Definitions->GetTypes())
 		{
 			if (!Type->GetMetadataDeclarationOwner()) continue;
 			if (Type->GetMetadataDeclarationOwner()->name == "Left") LeftItem = Type;
@@ -76,10 +77,10 @@ public:
 		ASSERT_THAT(IsNotNull(LeftItem));
 		ASSERT_THAT(IsNotNull(RightItem));
 		ASSERT_THAT(IsFalse(LeftItem->GetStableKey() == RightItem->GetStableKey()));
-		ASSERT_THAT(IsTrue(Result.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Result.Image->Freeze() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Result.Definitions->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Result.Definitions->Freeze() == asEMetadataResult::Succeeded));
 		FEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Result.Image)) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Result.Definitions)) == asEMetadataRegistrationResult::Succeeded));
 		ASSERT_THAT(AreEqual(LeftItem, Engine.Ptr->FindMetadataType("N::Left", "Item")));
 		ASSERT_THAT(AreEqual(RightItem, Engine.Ptr->FindMetadataType("N::Right", "Item")));
 		ASSERT_THAT(IsNull(Engine.Ptr->FindMetadataType("N", "Item")));
@@ -94,7 +95,7 @@ public:
 		ASSERT_THAT(IsFalse(Input.Session->ResolveDeclarations(1)));
 		const auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session);
 		ASSERT_THAT(IsFalse(Result.Succeeded()));
-		ASSERT_THAT(IsFalse(bool(Result.Image)));
+		ASSERT_THAT(IsFalse(Result.Definitions.IsValid()));
 	}
 
 	TEST_METHOD(RequiresTheExplicitVerifiedASTBarrier)
@@ -106,7 +107,7 @@ public:
 		const auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session);
 		ASSERT_THAT(IsFalse(Result.Succeeded()));
 		ASSERT_THAT(IsTrue(Result.Status == AS_NAMESPACE_QUALIFIER asEDefinitionConsumerStatus::InvalidPhase));
-		ASSERT_THAT(IsNull(Result.Image.Get()));
+		ASSERT_THAT(IsNull(Result.Definitions.Get()));
 		ASSERT_THAT(AreEqual(1, Result.Diagnostics.Num()));
 	}
 
@@ -120,8 +121,8 @@ public:
 		ASSERT_THAT(IsTrue(Input.Session->VerifyAST()));
 		const auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session);
 		ASSERT_THAT(IsTrue(Result.Succeeded()));
-		auto* First = static_cast<asCObjectType*>(FindType(*Result.Image, "First"));
-		auto* Second = static_cast<asCObjectType*>(FindType(*Result.Image, "Second"));
+		auto* First = static_cast<asCObjectType*>(FindType(*Result.Definitions, "First"));
+		auto* Second = static_cast<asCObjectType*>(FindType(*Result.Definitions, "Second"));
 		ASSERT_THAT(IsNotNull(First));
 		ASSERT_THAT(IsNotNull(Second));
 		ASSERT_THAT(IsTrue(First->localProperties[0]->type.GetTypeInfo() == Second));
@@ -132,10 +133,10 @@ public:
 		ASSERT_THAT(IsTrue(Method->objectType == First));
 		ASSERT_THAT(IsTrue(Method->GetId() < 0));
 		ASSERT_THAT(IsNull(First->GetEngine()));
-		ASSERT_THAT(IsTrue(Result.Image->GetState() == asEMetadataImageState::Building));
-		ASSERT_THAT(IsTrue(Result.Image->Freeze() == asEMetadataResult::IncompleteDefinition));
-		ASSERT_THAT(IsTrue(Result.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Result.Image->Freeze() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Result.Definitions->GetState() == asEDefinitionSetState::Building));
+		ASSERT_THAT(IsTrue(Result.Definitions->Freeze() == asEMetadataResult::IncompleteDefinition));
+		ASSERT_THAT(IsTrue(Result.Definitions->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Result.Definitions->Freeze() == asEMetadataResult::Succeeded));
 		ASSERT_THAT(AreEqual(FString(TEXT("Model")), FString(UTF8_TO_TCHAR(First->GetNamespace()))));
 	}
 
@@ -149,10 +150,10 @@ public:
 		ASSERT_THAT(IsTrue(Input.Session->VerifyAST()));
 		const auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session);
 		ASSERT_THAT(IsTrue(Result.Succeeded()));
-		auto* Base = static_cast<asCObjectType*>(FindType(*Result.Image, "Base"));
-		auto* Derived = static_cast<asCObjectType*>(FindType(*Result.Image, "Derived"));
-		auto* Reader = static_cast<asCObjectType*>(FindType(*Result.Image, "Reader"));
-		auto* Mode = static_cast<asCEnumType*>(FindType(*Result.Image, "Mode"));
+		auto* Base = static_cast<asCObjectType*>(FindType(*Result.Definitions, "Base"));
+		auto* Derived = static_cast<asCObjectType*>(FindType(*Result.Definitions, "Derived"));
+		auto* Reader = static_cast<asCObjectType*>(FindType(*Result.Definitions, "Reader"));
+		auto* Mode = static_cast<asCEnumType*>(FindType(*Result.Definitions, "Mode"));
 		ASSERT_THAT(IsNotNull(Derived));
 		ASSERT_THAT(IsTrue(Derived->derivedFrom == Base));
 		ASSERT_THAT(IsTrue(Derived->GetInterface(0) == Reader));
@@ -161,7 +162,7 @@ public:
 		int EnumValue = 0;
 		ASSERT_THAT(AreEqual(FString(TEXT("On")), FString(UTF8_TO_TCHAR(Mode->GetEnumValueByIndex(1, &EnumValue)))));
 		ASSERT_THAT(AreEqual(9, EnumValue));
-		ASSERT_THAT(IsTrue(Result.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Result.Definitions->FinalizeLayouts() == asEMetadataResult::Succeeded));
 		ASSERT_THAT(AreEqual(2, static_cast<int>(Derived->GetPropertyCount())));
 		ASSERT_THAT(AreEqual(4, Derived->localProperties[0]->byteOffset));
 		ASSERT_THAT(AreEqual(8, Derived->size));
@@ -177,11 +178,11 @@ public:
 		ASSERT_THAT(IsTrue(Input.Session->VerifyAST()));
 		const auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session);
 		ASSERT_THAT(IsTrue(Result.Succeeded()));
-		auto* Left = static_cast<asCObjectType*>(FindType(*Result.Image, "Left"));
-		ASSERT_THAT(IsTrue(Result.Image->FinalizeLayouts() == asEMetadataResult::RecursiveValueType));
-		ASSERT_THAT(IsTrue(Result.Image->Freeze() == asEMetadataResult::IncompleteDefinition));
+		auto* Left = static_cast<asCObjectType*>(FindType(*Result.Definitions, "Left"));
+		ASSERT_THAT(IsTrue(Result.Definitions->FinalizeLayouts() == asEMetadataResult::RecursiveValueType));
+		ASSERT_THAT(IsTrue(Result.Definitions->Freeze() == asEMetadataResult::IncompleteDefinition));
 		ASSERT_THAT(AreEqual(-1, Left->size));
-		ASSERT_THAT(IsTrue(Result.Image->GetState() == asEMetadataImageState::Building));
+		ASSERT_THAT(IsTrue(Result.Definitions->GetState() == asEDefinitionSetState::Building));
 	}
 
 	TEST_METHOD(DelegateAndEventShareActualStructuralSignatureNotFunctionIdentity)
@@ -194,8 +195,8 @@ public:
 		ASSERT_THAT(IsTrue(Input.Session->VerifyAST()));
 		auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session);
 		ASSERT_THAT(IsTrue(Result.Succeeded()));
-		auto* Callback = static_cast<asCCallableType*>(FindType(*Result.Image, "Callback"));
-		auto* Changed = static_cast<asCCallableType*>(FindType(*Result.Image, "Changed"));
+		auto* Callback = static_cast<asCCallableType*>(FindType(*Result.Definitions, "Callback"));
+		auto* Changed = static_cast<asCCallableType*>(FindType(*Result.Definitions, "Changed"));
 		ASSERT_THAT(IsNotNull(Callback));
 		ASSERT_THAT(IsNotNull(Changed));
 		auto* Signature = static_cast<asCScriptFunction*>(Callback->GetCallableSignature());
@@ -206,13 +207,13 @@ public:
 		ASSERT_THAT(IsTrue(Callback->GetMetadataDeclarationKind() == AS_NAMESPACE_QUALIFIER asETypeDeclKind::Delegate));
 		ASSERT_THAT(IsTrue(Changed->GetMetadataDeclarationKind() == AS_NAMESPACE_QUALIFIER asETypeDeclKind::Event));
 		AS_NAMESPACE_QUALIFIER asSStableTypeUseDescriptor Descriptor;
-		ASSERT_THAT(IsTrue(Result.Image->GetIdentityContext()->GetIdentityRegistry().ResolveTypeUse(Signature->GetStableKey(), Descriptor) == AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded));
+		ASSERT_THAT(IsTrue(Result.Definitions->GetIdentityContext()->GetIdentityRegistry().ResolveTypeUse(Signature->GetStableKey(), Descriptor) == AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded));
 		ASSERT_THAT(IsTrue(Descriptor.Kind == AS_NAMESPACE_QUALIFIER asETypeUseKind::Callable));
 		ASSERT_THAT(AreEqual(FString(TEXT("arg0")), FString(UTF8_TO_TCHAR(Signature->parameterNames[0].AddressOf()))));
-		ASSERT_THAT(IsTrue(Result.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Result.Image->Freeze() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Result.Definitions->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Result.Definitions->Freeze() == asEMetadataResult::Succeeded));
 		FEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Result.Image)) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Result.Definitions)) == asEMetadataRegistrationResult::Succeeded));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetTypeInfoById(Callback->GetTypeId()) == Callback));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetFunctionById(Signature->GetId()) == Signature));
 		ASSERT_THAT(IsNull(Engine.Ptr->FindMetadataFunction(Signature->GetStableKey())));
@@ -235,17 +236,17 @@ public:
 		auto Second = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*SecondInput.Session);
 		ASSERT_THAT(IsTrue(First.Succeeded()));
 		ASSERT_THAT(IsTrue(Second.Succeeded()));
-		ASSERT_THAT(IsTrue(First.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(First.Image->Freeze() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Second.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Second.Image->Freeze() == asEMetadataResult::Succeeded));
-		auto* FirstSignature = First.Image->GetFunctions()[0];
-		auto* SecondSignature = Second.Image->GetFunctions()[0];
+		ASSERT_THAT(IsTrue(First.Definitions->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(First.Definitions->Freeze() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Second.Definitions->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Second.Definitions->Freeze() == asEMetadataResult::Succeeded));
+		auto* FirstSignature = First.Definitions->GetFunctions()[0];
+		auto* SecondSignature = Second.Definitions->GetFunctions()[0];
 		ASSERT_THAT(IsTrue(FirstSignature != SecondSignature));
 		ASSERT_THAT(IsTrue(FirstSignature->GetStableKey() == SecondSignature->GetStableKey()));
 		FEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(First.Image)) == asEMetadataRegistrationResult::Succeeded));
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Second.Image)) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(First.Definitions)) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Second.Definitions)) == asEMetadataRegistrationResult::Succeeded));
 		ASSERT_THAT(IsTrue(FirstSignature->GetId() != SecondSignature->GetId()));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetFunctionById(FirstSignature->GetId()) == FirstSignature));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetFunctionById(SecondSignature->GetId()) == SecondSignature));
@@ -261,18 +262,18 @@ public:
 		ASSERT_THAT(IsTrue(Input.Session->VerifyAST()));
 		auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session);
 		ASSERT_THAT(IsTrue(Result.Succeeded()));
-		ASSERT_THAT(IsTrue(Result.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Result.Image->Freeze() == asEMetadataResult::Succeeded));
-		Result.Image->GetFunctions()[0]->returnType = Result.Image->Primitive(ttBool);
+		ASSERT_THAT(IsTrue(Result.Definitions->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Result.Definitions->Freeze() == asEMetadataResult::Succeeded));
+		Result.Definitions->GetFunctions()[0]->returnType = Result.Definitions->Primitive(ttBool);
 		FEngineOwner Engine;
 		const auto Before = Engine.Ptr->GetMetadataRegistrationCounts();
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(MoveTemp(Result.Image)) == asEMetadataRegistrationResult::InvalidIdentity));
+		ASSERT_THAT(IsTrue(RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Result.Definitions)) == asEMetadataRegistrationResult::InvalidIdentity));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetMetadataRegistrationCounts() == Before));
 	}
 
 	TEST_METHOD(DefinitionsOutliveSessionAndSourceWithoutBorrowedAST)
 	{
-		TUniquePtr<asCMetadataImage> Kept;
+		TUniquePtr<asCModuleDefinitionSet> Kept;
 		asCTypeInfo* Retained = nullptr;
 		{
 			FInput Input(TEXT("namespace Kept { class Node { Node@ Next; }; }"));
@@ -283,10 +284,10 @@ public:
 			ASSERT_THAT(IsTrue(Input.Session->VerifyAST()));
 			auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session);
 			ASSERT_THAT(IsTrue(Result.Succeeded()));
-			ASSERT_THAT(IsTrue(Result.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-			ASSERT_THAT(IsTrue(Result.Image->Freeze() == asEMetadataResult::Succeeded));
-			Retained = FindType(*Result.Image, "Node");
-			Kept = MoveTemp(Result.Image);
+			ASSERT_THAT(IsTrue(Result.Definitions->FinalizeLayouts() == asEMetadataResult::Succeeded));
+			ASSERT_THAT(IsTrue(Result.Definitions->Freeze() == asEMetadataResult::Succeeded));
+			Retained = FindType(*Result.Definitions, "Node");
+			Kept = MoveTemp(Result.Definitions);
 		}
 		ASSERT_THAT(IsNotNull(Kept.Get()));
 		ASSERT_THAT(AreEqual(FString(TEXT("Kept")), FString(UTF8_TO_TCHAR(Retained->GetNamespace()))));
@@ -306,9 +307,9 @@ public:
 		ASSERT_THAT(IsTrue(Input.Session->VerifyAST()));
 		const auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session);
 		ASSERT_THAT(IsTrue(Result.Succeeded()));
-		ASSERT_THAT(IsTrue(Result.Image->GetIdentityContext().Get() == &Context.Get()));
-		ASSERT_THAT(IsTrue(Result.Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		auto* Samples = static_cast<asCObjectType*>(FindType(*Result.Image, "Samples"));
+		ASSERT_THAT(IsTrue(Result.Definitions->GetIdentityContext().Get() == &Context.Get()));
+		ASSERT_THAT(IsTrue(Result.Definitions->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		auto* Samples = static_cast<asCObjectType*>(FindType(*Result.Definitions, "Samples"));
 		ASSERT_THAT(AreEqual(4, Samples->localProperties[0]->type.GetSizeInMemoryBytes()));
 		ASSERT_THAT(AreEqual(8, Samples->localProperties[1]->type.GetSizeInMemoryBytes()));
 		ASSERT_THAT(AreEqual(8, Samples->localProperties[1]->byteOffset));
@@ -323,12 +324,12 @@ public:
 		ASSERT_THAT(IsTrue(Input.Session->ResolveDeclarations(1)));
 		ASSERT_THAT(IsTrue(Input.Session->AnalyzeBodies(1)));
 		ASSERT_THAT(IsTrue(Input.Session->VerifyAST()));
-		TUniquePtr<asCMetadataImage> Dependency = asCMetadataImage::Create();
-		TArray<asCMetadataImage*> Dependencies{Dependency.Get()};
+		TUniquePtr<asCModuleDefinitionSet> Dependency = MakeUnique<asCModuleDefinitionSet>();
+		TArray<asCModuleDefinitionSet*> Dependencies{Dependency.Get()};
 		const auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session, Dependencies);
 		ASSERT_THAT(IsFalse(Result.Succeeded()));
 		ASSERT_THAT(IsTrue(Result.Status == AS_NAMESPACE_QUALIFIER asEDefinitionConsumerStatus::InvalidDependency));
-		ASSERT_THAT(IsNull(Result.Image.Get()));
+		ASSERT_THAT(IsNull(Result.Definitions.Get()));
 	}
 
 	TEST_METHOD(RecoveryInputCannotPublishAnEmptySuccessImage)
@@ -338,7 +339,7 @@ public:
 		ASSERT_THAT(IsFalse(Input.Session->ResolveDeclarations(1)));
 		const auto Result = AS_NAMESPACE_QUALIFIER asCDefinitionConsumer().Consume(*Input.Session);
 		ASSERT_THAT(IsFalse(Result.Succeeded()));
-		ASSERT_THAT(IsNull(Result.Image.Get()));
+		ASSERT_THAT(IsNull(Result.Definitions.Get()));
 	}
 };
 #endif

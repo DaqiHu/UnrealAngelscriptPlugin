@@ -1,6 +1,7 @@
 #include "CQTest.h"
 #include "../NativeEngineTestSupport.h"
 #include "as_builder.h"
+#include "as_module_definition_set.h"
 #include "as_objecttype.h"
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
@@ -16,7 +17,7 @@ private:
 	struct FHost
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCModuleDefinitionSet> Set = MakeUnique<asCModuleDefinitionSet>();
 		asCScriptFunction* Add = nullptr;
 		asCObjectType* Item = nullptr;
 		asCScriptFunction* Read = nullptr;
@@ -24,7 +25,7 @@ private:
 		AS_NAMESPACE_QUALIFIER asSStableKey IntType;
 		bool Initialize()
 		{
-if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return false;
+if (Set->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return false;
 			Context->InternPrimitiveTypeUse(asEPrimitiveType::Int32, IntType);
 			asSFunctionIdentityDescriptor AddIdentity;
 			AddIdentity.StableScope = TEXT("frozen-host");
@@ -36,11 +37,11 @@ if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return f
 			asSStableKey AddKey;
 			asSMetadataParameter Parameter;
 			Parameter.Name = "Value";
-			Parameter.Type = Image->Primitive(ttInt);
+			Parameter.Type = Set->Primitive(ttInt);
 			if (Context->GetIdentityRegistry().InternFunction(AddIdentity, AddKey) != asETypeIdentityStatus::Succeeded
-				|| Image->CreateFunction(AddKey, "Add", "Host", asFUNC_SCRIPT, Add) != asEMetadataResult::Succeeded
-				|| Image->DefineFunction(*Add, Image->Primitive(ttInt), {Parameter}) != asEMetadataResult::Succeeded
-				|| Image->SetFunctionDeclarationFacts(*Add, asEFunctionIdentityKind::Global) != asEMetadataResult::Succeeded)
+				|| Set->CreateFunction(AddKey, "Add", "Host", asFUNC_SCRIPT, Add) != asEMetadataResult::Succeeded
+				|| Set->DefineFunction(*Add, Set->Primitive(ttInt), {Parameter}) != asEMetadataResult::Succeeded
+				|| Set->SetFunctionDeclarationFacts(*Add, asEFunctionIdentityKind::Global) != asEMetadataResult::Succeeded)
 				return false;
 			asSNominalTypeDescriptor ItemIdentity;
 			ItemIdentity.StableScope = TEXT("frozen-host");
@@ -48,7 +49,7 @@ if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return f
 			ItemIdentity.Kind = asETypeDeclKind::Class;
 			asSStableKey ItemKey;
 			if (Context->GetIdentityRegistry().InternNominalType(ItemIdentity, ItemKey) != asETypeIdentityStatus::Succeeded
-				|| Image->CreateObjectType(ItemKey, "Item", "", asOBJ_REF | asOBJ_SCRIPT_OBJECT, Item) != asEMetadataResult::Succeeded)
+				|| Set->CreateObjectType(ItemKey, "Item", "", asOBJ_REF | asOBJ_SCRIPT_OBJECT, Item) != asEMetadataResult::Succeeded)
 				return false;
 			asSFunctionIdentityDescriptor ReadIdentity;
 			ReadIdentity.StableScope = TEXT("frozen-host");
@@ -59,9 +60,9 @@ if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return f
 			ReadIdentity.Modifiers = asEFunctionIdentityModifiers::ConstMethod;
 			asSStableKey ReadKey;
 			if (Context->GetIdentityRegistry().InternFunction(ReadIdentity, ReadKey) != asETypeIdentityStatus::Succeeded
-				|| Image->CreateFunction(ReadKey, "Read", "", asFUNC_SCRIPT, Read) != asEMetadataResult::Succeeded
-				|| Image->DefineFunction(*Read, Image->Primitive(ttInt), {}, Item) != asEMetadataResult::Succeeded
-				|| Image->SetFunctionDeclarationFacts(*Read, asEFunctionIdentityKind::Method, Item) != asEMetadataResult::Succeeded)
+				|| Set->CreateFunction(ReadKey, "Read", "", asFUNC_SCRIPT, Read) != asEMetadataResult::Succeeded
+				|| Set->DefineFunction(*Read, Set->Primitive(ttInt), {}, Item) != asEMetadataResult::Succeeded
+				|| Set->SetFunctionDeclarationFacts(*Read, asEFunctionIdentityKind::Method, Item) != asEMetadataResult::Succeeded)
 				return false;
 			Read->SetReadOnly(true);
 			asSFunctionIdentityDescriptor MutateIdentity = ReadIdentity;
@@ -70,12 +71,12 @@ if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return f
 			MutateIdentity.Modifiers = asEFunctionIdentityModifiers::None;
 			asSStableKey MutateKey;
 			return Context->GetIdentityRegistry().InternFunction(MutateIdentity, MutateKey) == asETypeIdentityStatus::Succeeded
-				&& Image->CreateFunction(MutateKey, "Mutate", "", asFUNC_SCRIPT, Mutate) == asEMetadataResult::Succeeded
-				&& Image->DefineFunction(*Mutate, Image->Primitive(ttInt), {}, Item) == asEMetadataResult::Succeeded
-				&& Image->SetFunctionDeclarationFacts(*Mutate, asEFunctionIdentityKind::Method, Item) == asEMetadataResult::Succeeded
-				&& Image->FinalizeLayouts() == asEMetadataResult::Succeeded
-				&& Image->Freeze() == asEMetadataResult::Succeeded
-				&& Image->ValidateFrozenDefinitions();
+				&& Set->CreateFunction(MutateKey, "Mutate", "", asFUNC_SCRIPT, Mutate) == asEMetadataResult::Succeeded
+				&& Set->DefineFunction(*Mutate, Set->Primitive(ttInt), {}, Item) == asEMetadataResult::Succeeded
+				&& Set->SetFunctionDeclarationFacts(*Mutate, asEFunctionIdentityKind::Method, Item) == asEMetadataResult::Succeeded
+				&& Set->FinalizeLayouts() == asEMetadataResult::Succeeded
+				&& Set->Freeze() == asEMetadataResult::Succeeded
+				&& Set->ValidateFrozenDefinitions();
 		}
 	};
 	struct FBuilderInput
@@ -85,7 +86,7 @@ if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return f
 		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics{Sources};
 		AS_NAMESPACE_QUALIFIER asSBuilderOptions Options;
 		explicit FBuilderInput(const FString& Source, TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> TypeContext,
-			asCMetadataImage* Host)
+			asCModuleDefinitionSet* Host)
 		{
 			const auto Input = AngelscriptNativeEngineTest::FSourceInput::FromText(TEXT("Main.as"), Source);
 			Snapshot->AddFile(TEXT("Main.as"), Input.GetUtf8Bytes());
@@ -119,7 +120,7 @@ public:
 	{
 		FHost Host;
 		ASSERT_THAT(IsTrue(Host.Initialize()));
-		FBuilderInput Input(TEXT("int F() { return Host::Add(42); }"), Host.Context, Host.Image.Get());
+		FBuilderInput Input(TEXT("int F() { return Host::Add(42); }"), Host.Context, Host.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		const bool Built = Builder.RunThrough();
 		ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
@@ -138,11 +139,11 @@ public:
 	{
 		FHost Host;
 		ASSERT_THAT(IsTrue(Host.Initialize()));
-		FBuilderInput Allowed(TEXT("int F(const Item Value) { return Value.Read(); }"), Host.Context, Host.Image.Get());
+		FBuilderInput Allowed(TEXT("int F(const Item Value) { return Value.Read(); }"), Host.Context, Host.Set.Get());
 		asCBuilder AllowedBuilder(Allowed.Snapshot, Allowed.Diagnostics, Allowed.Options);
 		const bool AllowedBuilt = AllowedBuilder.RunThrough();
 		ASSERT_THAT(IsTrue(AllowedBuilt, Allowed.DescribeFailure(AllowedBuilder)));
-		FBuilderInput Denied(TEXT("int F(const Item Value) { return Value.Mutate(); }"), Host.Context, Host.Image.Get());
+		FBuilderInput Denied(TEXT("int F(const Item Value) { return Value.Mutate(); }"), Host.Context, Host.Set.Get());
 		asCBuilder DeniedBuilder(Denied.Snapshot, Denied.Diagnostics, Denied.Options);
 		ASSERT_THAT(IsFalse(DeniedBuilder.RunThrough()));
 	}
@@ -151,7 +152,7 @@ public:
 	{
 		FHost Host;
 		ASSERT_THAT(IsTrue(Host.Initialize()));
-		auto Draft = asCMetadataImage::Create();
+		auto Draft = MakeUnique<asCModuleDefinitionSet>();
 		ASSERT_THAT(IsTrue(Draft->SetIdentityContext(Host.Context) == asEMetadataResult::Succeeded));
 		auto Snapshot = MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>();
 		Snapshot->Freeze();
@@ -161,9 +162,9 @@ public:
 		ASSERT_THAT(IsFalse(Session.AddExternalDefinitions(Draft.Get())));
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Foreign = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
 		AS_NAMESPACE_QUALIFIER asCCompilationSession ForeignSession(Snapshot, Diagnostics, TEXT("frozen-host-foreign"), Foreign);
-		ASSERT_THAT(IsFalse(ForeignSession.AddExternalDefinitions(Host.Image.Get())));
+		ASSERT_THAT(IsFalse(ForeignSession.AddExternalDefinitions(Host.Set.Get())));
 		Host.Add->name = "Tampered";
-		ASSERT_THAT(IsFalse(Session.AddExternalDefinitions(Host.Image.Get())));
+		ASSERT_THAT(IsFalse(Session.AddExternalDefinitions(Host.Set.Get())));
 	}
 
 	TEST_METHOD(OmittedHostDefaultWithoutTypedValueIsUnsupported)
@@ -172,7 +173,7 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		asCString* Default = asNEW(asCString)("7");
 		Host.Add->defaultArgs.PushLast(Default);
-		FBuilderInput Input(TEXT("int F() { return Host::Add(); }"), Host.Context, Host.Image.Get());
+		FBuilderInput Input(TEXT("int F() { return Host::Add(); }"), Host.Context, Host.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		const bool Built = Builder.RunThrough();
 		FString Errors;
@@ -184,20 +185,20 @@ public:
 
 	TEST_METHOD(ReleasedCallerImageDoesNotInvalidateSelectedHostFunction)
 	{
-		TUniquePtr<asCMetadataImage> HostImage;
+		TUniquePtr<asCModuleDefinitionSet> HostSet;
 		AS_NAMESPACE_QUALIFIER asSStableKey Key;
 		{
 			FHost Host;
 			ASSERT_THAT(IsTrue(Host.Initialize()));
 			Key = Host.Add->GetStableKey();
-			FBuilderInput Input(TEXT("int F() { return Host::Add(42); }"), Host.Context, Host.Image.Get());
+			FBuilderInput Input(TEXT("int F() { return Host::Add(42); }"), Host.Context, Host.Set.Get());
 			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 			const bool Built = Builder.RunThrough();
 			ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
-			HostImage = MoveTemp(Host.Image);
+			HostSet = MoveTemp(Host.Set);
 		}
-		ASSERT_THAT(IsTrue(bool(HostImage)));
-		ASSERT_THAT(IsNotNull(HostImage->FindFunction(Key)));
+		ASSERT_THAT(IsTrue(bool(HostSet)));
+		ASSERT_THAT(IsNotNull(HostSet->FindFunction(Key)));
 	}
 };
 #endif

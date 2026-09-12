@@ -50,6 +50,7 @@ BEGIN_AS_NAMESPACE
 
 struct asSNameSpace;
 class asCTypeInfo;
+class asCModuleDefinitionSet;
 
 enum class asENativeAddressMode : asBYTE
 {
@@ -151,7 +152,7 @@ public:
 	asCGlobalProperty();
 	~asCGlobalProperty();
 	const asSStableKey& GetStableKey() const { return metadataStableKey; }
-	asCMetadataImage* GetMetadataImage() const { return metadataOwner; }
+	asCModuleDefinitionSet* GetDefinitionSet() const { return metadataOwner; }
 
 	void AddRef();
 	void Release();
@@ -196,8 +197,8 @@ public:
 #endif
 
 private:
-	friend class asCMetadataImage;
-	asCMetadataImage* metadataOwner = nullptr;
+	friend class asCModuleDefinitionSet;
+	asCModuleDefinitionSet* metadataOwner = nullptr;
 	asSStableKey metadataStableKey;
 	asSStableKey metadataTypeUseKey;
 	// Native host declarations may be mutable; executable storage is bound separately.

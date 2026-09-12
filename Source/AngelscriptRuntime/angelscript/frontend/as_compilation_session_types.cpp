@@ -1,7 +1,7 @@
 #include "frontend/as_compilation_session.h"
 #include "frontend/as_ast_cast.h"
 #include "frontend/as_type.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_scriptfunction.h"
 #include "as_objecttype.h"
 #include "as_typeinfo.h"
@@ -9,23 +9,28 @@
 #include "Containers/Set.h"
 
 BEGIN_AS_NAMESPACE
-bool asCCompilationSession::AddExternalDefinitions(asCMetadataImage* Image)
+void asCCompilationSession::BindFrozenDefinitions(const asCModuleDefinitionSet* Set)
 	{
-		if (Phase != asECompilationPhase::Collecting || !Image) return false;
-		if (ExternalDefinitions.Contains(Image)) return true;
-		TArray<asCMetadataImage*> Closure;
-		TSet<const asCMetadataImage*> Visited;
-		TFunction<bool(asCMetadataImage*)> Visit = [&](asCMetadataImage* Item)
+		FrozenDefinitionSet = Set;
+	}
+
+bool asCCompilationSession::AddExternalDefinitions(asCModuleDefinitionSet* Set)
+	{
+		if (Phase != asECompilationPhase::Collecting || !Set) return false;
+		if (ExternalDefinitions.Contains(Set)) return true;
+		TArray<asCModuleDefinitionSet*> Closure;
+		TSet<const asCModuleDefinitionSet*> Visited;
+		TFunction<bool(asCModuleDefinitionSet*)> Visit = [&](asCModuleDefinitionSet* Item)
 		{
 			if (!Item || !Item->IsFrozen() || !Item->ValidateFrozenDefinitions() || !Item->GetIdentityContext() ||
 				Item->GetIdentityContext()->GetIdentityRegistryOwner() != Context.GetTypeContext()->GetIdentityRegistryOwner()) return false;
 			if (Visited.Contains(Item) || ExternalDefinitions.Contains(Item)) return true;
 			Visited.Add(Item);
-			for (asCMetadataImage* Dependency : Item->GetDependencies()) if (!Visit(Dependency)) return false;
+			for (asCModuleDefinitionSet* Dependency : Item->GetDependencies()) if (!Visit(Dependency)) return false;
 			Closure.Add(Item);
 			return true;
 		};
-		if (!Visit(Image)) return false;
+		if (!Visit(Set)) return false;
 		TMap<FString, asCType*> Added;
 		auto& Registry = Context.GetTypeContext()->GetIdentityRegistry();
 		for (const auto& Item : Closure)
@@ -65,7 +70,7 @@ bool asCCompilationSession::AddExternalDefinitions(asCMetadataImage* Image)
 				Callable.Key = Function->GetStableKey();
 				Callable.Function = Function;
 				Callable.OwnerKey = Descriptor.Owner;
-				Callable.Image = Item;
+				Callable.Set = Item;
 				Callable.bConstMethod = Function->IsReadOnly();
 				FString Name = UTF8_TO_TCHAR(Function->name.AddressOf());
 				FString Qualified = Name;

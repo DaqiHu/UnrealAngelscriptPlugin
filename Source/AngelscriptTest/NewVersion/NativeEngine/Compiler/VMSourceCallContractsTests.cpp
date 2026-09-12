@@ -94,29 +94,29 @@ namespace VMSourceCallContractsPrivate
 		{
 			Fixture.Scope = TEXT("vm-source-call-host");
 			asSMetadataParameter FillParam = MakeIntParam("X", asTM_OUTREF);
-			FillParam.Type = Fixture.Image->Primitive(ttInt);
+			FillParam.Type = Fixture.Set->Primitive(ttInt);
 			FillParam.Type.MakeReference(true);
-			Fill = Fixture.DefineFunction(TEXT("Fill"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), MakeArrayView(&FillParam, 1));
+			Fill = Fixture.DefineFunction(TEXT("Fill"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), MakeArrayView(&FillParam, 1));
 			asSMetadataParameter BumpParam = MakeIntParam("X", asTM_INOUTREF);
-			BumpParam.Type = Fixture.Image->Primitive(ttInt);
+			BumpParam.Type = Fixture.Set->Primitive(ttInt);
 			BumpParam.Type.MakeReference(true);
-			Bump = Fixture.DefineFunction(TEXT("Bump"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), MakeArrayView(&BumpParam, 1));
+			Bump = Fixture.DefineFunction(TEXT("Bump"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), MakeArrayView(&BumpParam, 1));
 			asSMetadataParameter PeekParam = MakeIntParam("X", asTM_INREF, true);
-			PeekParam.Type = Fixture.Image->Primitive(ttInt, true);
+			PeekParam.Type = Fixture.Set->Primitive(ttInt, true);
 			PeekParam.Type.MakeReference(true);
-			Peek = Fixture.DefineFunction(TEXT("Peek"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), MakeArrayView(&PeekParam, 1));
+			Peek = Fixture.DefineFunction(TEXT("Peek"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), MakeArrayView(&PeekParam, 1));
 			asSMetadataParameter MarkParam = MakeIntParam("n");
-			MarkParam.Type = Fixture.Image->Primitive(ttInt);
-			Mark = Fixture.DefineFunction(TEXT("Mark"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), MakeArrayView(&MarkParam, 1));
+			MarkParam.Type = Fixture.Set->Primitive(ttInt);
+			Mark = Fixture.DefineFunction(TEXT("Mark"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), MakeArrayView(&MarkParam, 1));
 			asSMetadataParameter PackParams[2] = {MakeIntParam("a"), MakeIntParam("b")};
-			PackParams[0].Type = Fixture.Image->Primitive(ttInt);
-			PackParams[1].Type = Fixture.Image->Primitive(ttInt);
-			Pack = Fixture.DefineFunction(TEXT("Pack"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), MakeArrayView(PackParams, 2));
+			PackParams[0].Type = Fixture.Set->Primitive(ttInt);
+			PackParams[1].Type = Fixture.Set->Primitive(ttInt);
+			Pack = Fixture.DefineFunction(TEXT("Pack"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), MakeArrayView(PackParams, 2));
 			asSMetadataParameter ScaledParams[2] = {MakeIntParam("A"), MakeIntParam("B", asTM_NONE, false, "4")};
-			ScaledParams[0].Type = Fixture.Image->Primitive(ttInt);
-			ScaledParams[1].Type = Fixture.Image->Primitive(ttInt);
+			ScaledParams[0].Type = Fixture.Set->Primitive(ttInt);
+			ScaledParams[1].Type = Fixture.Set->Primitive(ttInt);
 			ScaledParams[1].DefaultArgument = "4";
-			Scaled = Fixture.DefineFunction(TEXT("Scaled"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), MakeArrayView(ScaledParams, 2));
+			Scaled = Fixture.DefineFunction(TEXT("Scaled"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), MakeArrayView(ScaledParams, 2));
 			return Fill && Bump && Peek && Mark && Pack && Scaled && Fixture.FinalizeAndFreeze();
 		}
 	};
@@ -137,17 +137,17 @@ namespace VMSourceCallContractsPrivate
 		asCExecutableSnapshot*& Snapshot,
 		TUniquePtr<asCByteCodeImage>& Image)
 	{
-		asSByteCodeEmissionResult Emitted = EmitFromSession(Builder);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		if (Emitted.EmissionStatus != asEByteCodeEmissionStatus::Succeeded || !Emitted.Image.Get())
 		{
 			return false;
 		}
-		if (Engine.RegisterMetadataImage(Builder.TakeDefinitions()) != asEMetadataRegistrationResult::Succeeded
-			&& Engine.RegisterMetadataImage(Builder.TakeDefinitions()) != asEMetadataRegistrationResult::AlreadyRegistered)
+		if (RegisterCompiledDefinitions(Engine, Builder) != asEMetadataRegistrationResult::Succeeded
+			&& RegisterCompiledDefinitions(Engine, Builder) != asEMetadataRegistrationResult::AlreadyRegistered)
 		{
 			return false;
 		}
-		if (Engine.LinkByteCodeImage(*Emitted.Image, Snapshot) != asEByteCodeLinkStatus::Succeeded)
+		if (asLinkByteCodeImage(Engine, *Emitted.Image, Snapshot) != asEByteCodeLinkStatus::Succeeded)
 		{
 			return false;
 		}
@@ -311,11 +311,11 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		FSourceExecutionInput Input(
 			TEXT("int Run() { int A = 0; Host::Fill(A); Host::Bump(A); return Host::Peek(A); }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Host.Fixture.Set))));
 		ASSERT_THAT(IsTrue(BindHost(*Engine.Ptr, Host)));
 		int32 Value = 0;
 		ASSERT_THAT(IsTrue(ExecuteNamed(Builder, "Run", Value, Engine.Ptr)));
@@ -331,11 +331,11 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		FSourceExecutionInput Input(
 			TEXT("class Holder { int Value; } int Run() { Holder H; H.Value = 0; Host::Fill(H.Value); Host::Bump(H.Value); return Host::Peek(H.Value); }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Host.Fixture.Set))));
 		ASSERT_THAT(IsTrue(BindHost(*Engine.Ptr, Host)));
 		int32 Value = 0;
 		ASSERT_THAT(IsTrue(ExecuteNamed(Builder, "Run", Value, Engine.Ptr)));
@@ -351,11 +351,11 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		FSourceExecutionInput Input(
 			TEXT("void ForwardFill(int&out X) { Host::Fill(X); } void ForwardBump(int&inout X) { Host::Bump(X); } int ForwardPeek(const int&in X) { return Host::Peek(X); } int Run() { int A = 0; ForwardFill(A); ForwardBump(A); return ForwardPeek(A); }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Host.Fixture.Set))));
 		ASSERT_THAT(IsTrue(BindHost(*Engine.Ptr, Host)));
 		int32 Value = 0;
 		ASSERT_THAT(IsTrue(ExecuteNamed(Builder, "Run", Value, Engine.Ptr)));
@@ -376,7 +376,7 @@ public:
 		FSourceExecutionInput Invalid(TEXT("void Fill(int&out X) { X = 41; } int Run() { Fill(1); return 0; }"));
 		asCBuilder InvalidBuilder(Invalid.Snapshot, Invalid.Diagnostics, Invalid.Options);
 		ASSERT_THAT(IsFalse(InvalidBuilder.RunThrough()));
-		asSByteCodeEmissionResult Emitted = EmitFromSession(InvalidBuilder);
+		FSessionEmission Emitted = EmitFromSession(InvalidBuilder);
 		ASSERT_THAT(IsTrue(Emitted.EmissionStatus != asEByteCodeEmissionStatus::Succeeded));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 	}
@@ -389,14 +389,14 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		FSourceExecutionInput ConstInput(
 			TEXT("int Run() { const int A = 0; Host::Fill(A); return A; }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder ConstBuilder(ConstInput.Snapshot, ConstInput.Diagnostics, ConstInput.Options);
 		ASSERT_THAT(IsFalse(ConstBuilder.RunThrough()));
 		ASSERT_THAT(AreEqual(0, GNativeRefCalls));
 
 		FSourceExecutionInput RvalueInput(
 			TEXT("int Run() { Host::Fill(1); return 0; }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder RvalueBuilder(RvalueInput.Snapshot, RvalueInput.Diagnostics, RvalueInput.Options);
 		ASSERT_THAT(IsFalse(RvalueBuilder.RunThrough()));
 		ASSERT_THAT(AreEqual(0, GNativeRefCalls));
@@ -415,11 +415,11 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		FSourceExecutionInput Input(
 			TEXT("int Combine(int A, int B=Host::Mark(4)) { return A*10+B; } int Run() { return Combine(3)+Combine(3); }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Host.Fixture.Set))));
 		ASSERT_THAT(IsTrue(BindHost(*Engine.Ptr, Host)));
 		int32 Value = 0;
 		ASSERT_THAT(IsTrue(ExecuteNamed(Builder, "Run", Value, Engine.Ptr)));
@@ -437,11 +437,11 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		FSourceExecutionInput Input(
 			TEXT("int Combine(int A, int B=Host::Mark(4)) { return A*10+B; } int Run() { return Combine(3, 5); }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Host.Fixture.Set))));
 		ASSERT_THAT(IsTrue(BindHost(*Engine.Ptr, Host)));
 		int32 Value = 0;
 		ASSERT_THAT(IsTrue(ExecuteNamed(Builder, "Run", Value, Engine.Ptr)));
@@ -457,12 +457,12 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		FSourceExecutionInput Input(
 			TEXT("int Run() { return Host::Scaled(3); }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsFalse(Builder.RunThrough()));
 		const FString Text = CollectDiagnosticText(Input.Diagnostics) + DescribeBuilderFailure(Builder);
 		ASSERT_THAT(IsTrue(Text.Contains(TEXT("unsupported-default"))));
-		asSByteCodeEmissionResult Emitted = EmitFromSession(Builder);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(IsTrue(Emitted.EmissionStatus != asEByteCodeEmissionStatus::Succeeded));
 		ASSERT_THAT(IsNull(Emitted.Image.Get()));
 		ASSERT_THAT(AreEqual(0, GNativeCombineCalls));
@@ -476,11 +476,11 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		FSourceExecutionInput Input(
 			TEXT("int Run() { return Host::Scaled(3, 5); }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Host.Fixture.Set))));
 		ASSERT_THAT(IsTrue(BindHost(*Engine.Ptr, Host)));
 		int32 Value = 0;
 		ASSERT_THAT(IsTrue(ExecuteNamed(Builder, "Run", Value, Engine.Ptr)));
@@ -526,11 +526,11 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		FSourceExecutionInput Input(
 			TEXT("int Positional() { return Host::Pack(Host::Mark(1), Host::Mark(2)); } int Named() { return Host::Pack(b:Host::Mark(2), a:Host::Mark(1)); }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Host.Fixture.Set))));
 		ASSERT_THAT(IsTrue(BindHost(*Engine.Ptr, Host)));
 		asCExecutableSnapshot* Snapshot = nullptr;
 		TUniquePtr<asCByteCodeImage> Image;
@@ -562,11 +562,11 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		FSourceExecutionInput Input(
 			TEXT("class Pair { int a; int b; Pair(int a, int b) { this.a = a; this.b = b; } int Read() const { return 10 * a + b; } } int Run() { Pair Local(b:Host::Mark(2), a:Host::Mark(1)); return Local.Read(); }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Host.Fixture.Set))));
 		ASSERT_THAT(IsTrue(BindHost(*Engine.Ptr, Host)));
 		int32 Value = 0;
 		ASSERT_THAT(IsTrue(ExecuteNamed(Builder, "Run", Value, Engine.Ptr)));

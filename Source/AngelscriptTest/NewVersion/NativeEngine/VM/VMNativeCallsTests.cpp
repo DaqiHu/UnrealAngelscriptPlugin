@@ -136,15 +136,15 @@ private:
 	asCScriptFunction* DefineIntAdd(FDetachedDefinitionFixture& Fixture)
 	{
 		asSMetadataParameter Params[2] = {MakeIntParam("a"), MakeIntParam("b")};
-		Params[0].Type = Fixture.Image->Primitive(ttInt);
-		Params[1].Type = Fixture.Image->Primitive(ttInt);
+		Params[0].Type = Fixture.Set->Primitive(ttInt);
+		Params[1].Type = Fixture.Set->Primitive(ttInt);
 		return Fixture.DefineFunction(
-			TEXT("Add"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), MakeArrayView(Params, 2));
+			TEXT("Add"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), MakeArrayView(Params, 2));
 	}
 
 	asCScriptFunction* DefineIntRun(FDetachedDefinitionFixture& Fixture)
 	{
-		return Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+		return Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 	}
 
 	void EmitCallNativeAdd(asCByteCodeImageBuilder& Builder, asCScriptFunction* Run, asCScriptFunction* Add, int32 Left, int32 Right)
@@ -170,12 +170,12 @@ public:
 	TEST_METHOD(BindNativeFunctionRequiresRegisteredDeclaration)
 	{
 		FDetachedDefinitionFixture Fixture;
-		asCScriptFunction* Function = Fixture.DefineFunction(TEXT("Add"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), {});
+		asCScriptFunction* Function = Fixture.DefineFunction(TEXT("Add"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
 		int Sentinel = 99;
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::MissingDeclaration, Engine.Ptr->BindNativeFunction(Function->GetStableKey(), &Sentinel)));
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->BindNativeFunction(Function->GetStableKey(), &Sentinel)));
 		ASSERT_THAT(AreEqual(99, Sentinel));
 	}
@@ -190,7 +190,7 @@ public:
 		ASSERT_THAT(IsNotNull(Run));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Add->GetStableKey(), asFUNCTION(GenericAdd), asCALL_GENERIC)));
 		asCByteCodeImageBuilder Builder;
@@ -198,7 +198,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(IsNotNull(Context));
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
@@ -219,7 +219,7 @@ public:
 		asCScriptFunction* Run = DefineIntRun(Fixture);
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		asFunctionCaller Caller(&CallNativeAdd);
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Add->GetStableKey(), asFUNCTION(NativeAdd), asCALL_CDECL, Caller)));
@@ -228,7 +228,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(IsNotNull(Context));
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
@@ -248,19 +248,19 @@ public:
 		asCObjectType* Type = Fixture.DefineType(TEXT("NativeReceiver"), TEXT(""), asOBJ_VALUE | asOBJ_APP_CLASS);
 		ASSERT_THAT(IsNotNull(Type));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Fixture.Image->SetNativeLayout(*Type, sizeof(FVmCallNativeReceiver), alignof(FVmCallNativeReceiver))));
+			Fixture.Set->SetNativeLayout(*Type, sizeof(FVmCallNativeReceiver), alignof(FVmCallNativeReceiver))));
 		asSMetadataParameter Addend = MakeIntParam("addend");
-		Addend.Type = Fixture.Image->Primitive(ttInt);
+		Addend.Type = Fixture.Set->Primitive(ttInt);
 		asCScriptFunction* Method = Fixture.DefineFunction(
-			TEXT("Add"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), MakeArrayView(&Addend, 1), Type);
+			TEXT("Add"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), MakeArrayView(&Addend, 1), Type);
 		asSMetadataParameter Receiver = MakeRefParam("receiver", MakeObjectRef(Type));
 		asCScriptFunction* Run = Fixture.DefineFunction(
-			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), MakeArrayView(&Receiver, 1));
+			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), MakeArrayView(&Receiver, 1));
 		ASSERT_THAT(IsNotNull(Method));
 		ASSERT_THAT(IsNotNull(Run));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Method->GetStableKey(), asFUNCTION(GenericAddToValue), asCALL_GENERIC)));
 		asCByteCodeImageBuilder Builder;
@@ -284,7 +284,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		FVmCallNativeReceiver ReceiverValue;
 		FMemory::Memset(&ReceiverValue, 0xAA, sizeof(ReceiverValue));
 		ReceiverValue.Value = 7;
@@ -308,7 +308,7 @@ public:
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Type = Fixture.DefineType(TEXT("NativeRecord"), TEXT(""), asOBJ_VALUE | asOBJ_APP_CLASS);
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Fixture.Image->SetNativeLayout(*Type, sizeof(FVmCallNativeRecord), alignof(FVmCallNativeRecord))));
+			Fixture.Set->SetNativeLayout(*Type, sizeof(FVmCallNativeRecord), alignof(FVmCallNativeRecord))));
 		asCObjectProperty* Tag = nullptr;
 		asCObjectProperty* Value = nullptr;
 		asCObjectProperty* Weight = nullptr;
@@ -322,18 +322,18 @@ public:
 		WeightAddress.Mode = asENativeAddressMode::Direct;
 		WeightAddress.Offset = static_cast<int>(offsetof(FVmCallNativeRecord, Weight));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Fixture.Image->DefineNativeProperty(*Type, "Tag", Fixture.Image->Primitive(ttUInt8), TagAddress, Tag)));
+			Fixture.Set->DefineNativeProperty(*Type, "Tag", Fixture.Set->Primitive(ttUInt8), TagAddress, Tag)));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Fixture.Image->DefineNativeProperty(*Type, "Value", Fixture.Image->Primitive(ttInt), ValueAddress, Value)));
+			Fixture.Set->DefineNativeProperty(*Type, "Value", Fixture.Set->Primitive(ttInt), ValueAddress, Value)));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Fixture.Image->DefineNativeProperty(*Type, "Weight", Fixture.Image->Primitive(ttFloat64), WeightAddress, Weight)));
+			Fixture.Set->DefineNativeProperty(*Type, "Weight", Fixture.Set->Primitive(ttFloat64), WeightAddress, Weight)));
 		asSMetadataParameter Record = MakeRefParam("record", MakeObjectRef(Type));
 		asCScriptFunction* Run = Fixture.DefineFunction(
-			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), MakeArrayView(&Record, 1));
+			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), MakeArrayView(&Record, 1));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		ASSERT_THAT(AreEqual(static_cast<int>(offsetof(FVmCallNativeRecord, Value)), Value->byteOffset));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		asCByteCodeImageBuilder Builder;
 		asUINT RunSlot = 0;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Run, RunSlot)));
@@ -360,7 +360,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		FVmCallNativeRecord RecordValue;
 		FMemory::Memset(&RecordValue, 0xAA, sizeof(RecordValue));
 		RecordValue.Tag = 7;
@@ -389,15 +389,15 @@ public:
 		asCObjectType* InnerType = Fixture.DefineType(TEXT("Inner"), TEXT(""), asOBJ_VALUE | asOBJ_APP_CLASS);
 		asCObjectType* OuterType = Fixture.DefineType(TEXT("OuterIndirect"), TEXT(""), asOBJ_VALUE | asOBJ_APP_CLASS);
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Fixture.Image->SetNativeLayout(*InnerType, sizeof(FVmCallNativeInner), alignof(FVmCallNativeInner))));
+			Fixture.Set->SetNativeLayout(*InnerType, sizeof(FVmCallNativeInner), alignof(FVmCallNativeInner))));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Fixture.Image->SetNativeLayout(*OuterType, sizeof(FVmCallNativeOuterIndirect), alignof(FVmCallNativeOuterIndirect))));
+			Fixture.Set->SetNativeLayout(*OuterType, sizeof(FVmCallNativeOuterIndirect), alignof(FVmCallNativeOuterIndirect))));
 		asCObjectProperty* InnerValue = nullptr;
 		asSNativePropertyAddress InnerAddress;
 		InnerAddress.Mode = asENativeAddressMode::Direct;
 		InnerAddress.Offset = static_cast<int>(offsetof(FVmCallNativeInner, Value));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Fixture.Image->DefineNativeProperty(*InnerType, "Value", Fixture.Image->Primitive(ttInt), InnerAddress, InnerValue)));
+			Fixture.Set->DefineNativeProperty(*InnerType, "Value", Fixture.Set->Primitive(ttInt), InnerAddress, InnerValue)));
 		asCObjectProperty* OuterValue = nullptr;
 		asSNativePropertyAddress OuterAddress;
 		OuterAddress.Mode = asENativeAddressMode::CompositeIndirect;
@@ -405,13 +405,13 @@ public:
 		OuterAddress.MemberOffset = static_cast<int>(offsetof(FVmCallNativeInner, Value));
 		OuterAddress.CompositeStorageType = InnerType;
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Fixture.Image->DefineNativeProperty(*OuterType, "Value", Fixture.Image->Primitive(ttInt), OuterAddress, OuterValue)));
+			Fixture.Set->DefineNativeProperty(*OuterType, "Value", Fixture.Set->Primitive(ttInt), OuterAddress, OuterValue)));
 		asSMetadataParameter Outer = MakeRefParam("outer", MakeObjectRef(OuterType));
 		asCScriptFunction* Run = Fixture.DefineFunction(
-			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), MakeArrayView(&Outer, 1));
+			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), MakeArrayView(&Outer, 1));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		asCByteCodeImageBuilder Builder;
 		asUINT RunSlot = 0;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.AddFunctionRequirement(*Run, RunSlot)));
@@ -430,7 +430,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		FVmCallNativeOuterIndirect OuterValueStorage;
 		OuterValueStorage.Inner = nullptr;
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
@@ -448,7 +448,7 @@ public:
 		asCScriptFunction* Add = DefineIntAdd(Fixture);
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::InvalidArgument,
 			Engine.Ptr->BindNativeFunction(Add->GetStableKey(), asFUNCTION(NativeAdd), asCALL_THISCALL)));
 		ASSERT_THAT(AreEqual(0, GNativeAddCalls));
@@ -461,13 +461,13 @@ public:
 		asCScriptFunction* Run = DefineIntRun(Fixture);
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		asCByteCodeImageBuilder Builder;
 		EmitCallNativeAdd(Builder, Run, Add, 20, 22);
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::MissingBinding, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::MissingBinding, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		ASSERT_THAT(IsNull(Snapshot));
 	}
 
@@ -476,30 +476,30 @@ public:
 		FDetachedDefinitionFixture Fixture;
 		asSMetadataParameter Int64Params[2];
 		Int64Params[0].Name = "a";
-		Int64Params[0].Type = Fixture.Image->Primitive(ttInt64);
+		Int64Params[0].Type = Fixture.Set->Primitive(ttInt64);
 		Int64Params[1].Name = "b";
-		Int64Params[1].Type = Fixture.Image->Primitive(ttInt64);
+		Int64Params[1].Type = Fixture.Set->Primitive(ttInt64);
 		asCScriptFunction* Add64 = Fixture.DefineFunction(
-			TEXT("Add64"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt64), MakeArrayView(Int64Params, 2));
+			TEXT("Add64"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt64), MakeArrayView(Int64Params, 2));
 		asSMetadataParameter BoolParams[2];
 		BoolParams[0].Name = "a";
-		BoolParams[0].Type = Fixture.Image->Primitive(ttBool);
+		BoolParams[0].Type = Fixture.Set->Primitive(ttBool);
 		BoolParams[1].Name = "b";
-		BoolParams[1].Type = Fixture.Image->Primitive(ttBool);
+		BoolParams[1].Type = Fixture.Set->Primitive(ttBool);
 		asCScriptFunction* AndBool = Fixture.DefineFunction(
-			TEXT("AndBool"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttBool), MakeArrayView(BoolParams, 2));
-		asCDataType OutInt = Fixture.Image->Primitive(ttInt);
+			TEXT("AndBool"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttBool), MakeArrayView(BoolParams, 2));
+		asCDataType OutInt = Fixture.Set->Primitive(ttInt);
 		OutInt.MakeReference(true);
 		asSMetadataParameter OutParam = MakeRefParam("outValue", OutInt);
 		OutParam.Flags = asTM_OUTREF;
 		asCScriptFunction* Fill = Fixture.DefineFunction(
-			TEXT("Fill"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), MakeArrayView(&OutParam, 1));
-		asCScriptFunction* RunAdd = Fixture.DefineFunction(TEXT("RunAdd"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt64), {});
-		asCScriptFunction* RunAnd = Fixture.DefineFunction(TEXT("RunAnd"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttBool), {});
-		asCScriptFunction* RunFill = Fixture.DefineFunction(TEXT("RunFill"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+			TEXT("Fill"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), MakeArrayView(&OutParam, 1));
+		asCScriptFunction* RunAdd = Fixture.DefineFunction(TEXT("RunAdd"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt64), {});
+		asCScriptFunction* RunAnd = Fixture.DefineFunction(TEXT("RunAnd"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttBool), {});
+		asCScriptFunction* RunFill = Fixture.DefineFunction(TEXT("RunFill"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Add64->GetStableKey(), asFUNCTION(GenericAddInt64), asCALL_GENERIC)));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
@@ -527,7 +527,7 @@ public:
 			TUniquePtr<asCByteCodeImage> Image;
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 			asCExecutableSnapshot* Snapshot = nullptr;
-			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 			asIScriptContext* Context = Engine.Ptr->CreateContext();
 			ASSERT_THAT(AreEqual(0, Context->Prepare(RunAdd)));
 			ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
@@ -556,7 +556,7 @@ public:
 			TUniquePtr<asCByteCodeImage> Image;
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 			asCExecutableSnapshot* Snapshot = nullptr;
-			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 			asIScriptContext* Context = Engine.Ptr->CreateContext();
 			ASSERT_THAT(AreEqual(0, Context->Prepare(RunAnd)));
 			ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
@@ -587,7 +587,7 @@ public:
 			TUniquePtr<asCByteCodeImage> Image;
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 			asCExecutableSnapshot* Snapshot = nullptr;
-			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 			asIScriptContext* Context = Engine.Ptr->CreateContext();
 			ASSERT_THAT(AreEqual(0, Context->Prepare(RunFill)));
 			ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));
@@ -601,11 +601,11 @@ public:
 	{
 		FDetachedDefinitionFixture Fixture;
 		asCScriptFunction* Fail = Fixture.DefineFunction(
-			TEXT("Fail"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {});
+			TEXT("Fail"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {});
 		asCScriptFunction* Run = DefineIntRun(Fixture);
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Fail->GetStableKey(), asFUNCTION(GenericThrow), asCALL_GENERIC)));
 		asCByteCodeImageBuilder Builder;
@@ -625,7 +625,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.Finish(Image)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
 		ASSERT_THAT(AreEqual(asEXECUTION_EXCEPTION, Context->Execute()));

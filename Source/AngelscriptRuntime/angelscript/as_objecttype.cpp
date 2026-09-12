@@ -38,7 +38,7 @@
 
 
 #include "as_objecttype.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_config.h"
 #include "as_configgroup.h"
 #include "as_scriptengine.h"
@@ -65,7 +65,7 @@ asCObjectType::asCObjectType(asCScriptEngine *in_engine) : asCTypeInfo(in_engine
 }
 
 // interface
-asCObjectType::asCObjectType(asCMetadataImage& owner, const asSStableKey& key)
+asCObjectType::asCObjectType(asCModuleDefinitionSet& owner, const asSStableKey& key)
 	: asCTypeInfo(owner, key)
 {
 	derivedFrom = nullptr;

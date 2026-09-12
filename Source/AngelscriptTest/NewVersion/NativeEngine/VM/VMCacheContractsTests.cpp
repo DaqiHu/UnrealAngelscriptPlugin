@@ -84,8 +84,8 @@ namespace VMCacheContractsPrivate
 			return nullptr;
 		}
 		asCGlobalProperty* Global = nullptr;
-		if (Fixture.Image->CreateGlobalProperty(
-			Key, TypeKey, TCHAR_TO_UTF8(Name), "", Fixture.Image->Primitive(ttInt, true), Global)
+		if (Fixture.Set->CreateGlobalProperty(
+			Key, TypeKey, TCHAR_TO_UTF8(Name), "", Fixture.Set->Primitive(ttInt, true), Global)
 			!= asEMetadataResult::Succeeded)
 		{
 			return nullptr;
@@ -344,12 +344,12 @@ namespace VMCacheContractsPrivate
 			return nullptr;
 		}
 		asCObjectType* Type = nullptr;
-		if (Fixture.Image->CreateObjectType(Key, "CacheNativeRecord", "", asOBJ_VALUE | asOBJ_APP_CLASS, Type)
+		if (Fixture.Set->CreateObjectType(Key, "CacheNativeRecord", "", asOBJ_VALUE | asOBJ_APP_CLASS, Type)
 			!= asEMetadataResult::Succeeded)
 		{
 			return nullptr;
 		}
-		if (Fixture.Image->SetNativeLayout(*Type, sizeof(FCacheNativeRecord), alignof(FCacheNativeRecord))
+		if (Fixture.Set->SetNativeLayout(*Type, sizeof(FCacheNativeRecord), alignof(FCacheNativeRecord))
 			!= asEMetadataResult::Succeeded)
 		{
 			return nullptr;
@@ -358,7 +358,7 @@ namespace VMCacheContractsPrivate
 		Address.Mode = asENativeAddressMode::Direct;
 		Address.Offset = Offset;
 		asCObjectProperty* Property = nullptr;
-		if (Fixture.Image->DefineNativeProperty(*Type, "Value", Fixture.Image->Primitive(ttInt), Address, Property)
+		if (Fixture.Set->DefineNativeProperty(*Type, "Value", Fixture.Set->Primitive(ttInt), Address, Property)
 			!= asEMetadataResult::Succeeded)
 		{
 			return nullptr;
@@ -368,7 +368,7 @@ namespace VMCacheContractsPrivate
 
 	FString GGenericError;
 
-	asCObjectType* DefineGenericIntBox(FDetachedDefinitionFixture& Fixture, TUniquePtr<asCMetadataImage>& OutHost)
+	asCObjectType* DefineGenericIntBox(FDetachedDefinitionFixture& Fixture, TUniquePtr<asCModuleDefinitionSet>& OutHost)
 	{
 		GGenericError.Reset();
 		if (!Fixture.BindContext())
@@ -376,7 +376,7 @@ namespace VMCacheContractsPrivate
 			GGenericError = TEXT("bind-context");
 			return nullptr;
 		}
-		OutHost = asCMetadataImage::Create();
+		OutHost = asCModuleDefinitionSet::Create();
 		if (OutHost->SetIdentityContext(Fixture.Context) != asEMetadataResult::Succeeded)
 		{
 			GGenericError = TEXT("host-context");
@@ -422,7 +422,7 @@ namespace VMCacheContractsPrivate
 			GGenericError = TEXT("host-freeze");
 			return nullptr;
 		}
-		if (Fixture.Image->AddDependency(OutHost.Get()) != asEMetadataResult::Succeeded)
+		if (Fixture.Set->AddDependency(OutHost.Get()) != asEMetadataResult::Succeeded)
 		{
 			GGenericError = TEXT("add-dependency");
 			return nullptr;
@@ -446,8 +446,8 @@ namespace VMCacheContractsPrivate
 			return nullptr;
 		}
 		asCObjectType* Instance = nullptr;
-		asCDataType ArgumentType = Fixture.Image->Primitive(ttInt);
-		const asEMetadataResult InstanceStatus = Fixture.Image->CreateTemplateInstance(
+		asCDataType ArgumentType = Fixture.Set->Primitive(ttInt);
+		const asEMetadataResult InstanceStatus = Fixture.Set->CreateTemplateInstance(
 			*Template, InstanceUse, MakeArrayView(&ArgumentType, 1), Instance);
 		if (InstanceStatus != asEMetadataResult::Succeeded)
 		{
@@ -470,36 +470,36 @@ public:
 		{
 			FDetachedDefinitionFixture Fixture;
 			Fixture.Scope = TEXT("vm-cache-contracts");
-			TUniquePtr<asCMetadataImage> Host;
+			TUniquePtr<asCModuleDefinitionSet> Host;
 			asCObjectType* Box = VMCacheContractsPrivate::DefineGenericIntBox(Fixture, Host);
 			ASSERT_THAT(IsTrue(Box != nullptr, *VMCacheContractsPrivate::GGenericError));
 			asCScriptFunction* Run = Fixture.DefineFunction(
-				TEXT("Run"), TEXT("Game.Cache"), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+				TEXT("Run"), TEXT("Game.Cache"), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			RunKey = Run->GetStableKey();
 			TypeKey = Box->GetStableKey();
 			FNativeEngineOwner EngineA;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*EngineA.Ptr, MoveTemp(Fixture.Set))));
 			TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42, Box, nullptr, TEXT("cache-token"));
 			ASSERT_THAT(IsNotNull(Image.Get()));
 			asCExecutableSnapshot* Snapshot = nullptr;
-			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, EngineA.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*EngineA.Ptr, *Image, Snapshot)));
 			ASSERT_THAT(IsTrue(VMCacheContractsPrivate::ExecuteInt(EngineA.Ptr, Run, 42)));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Encode(*Image, Bytes)));
 			if (Snapshot) Snapshot->Release();
 		}
 		FDetachedDefinitionFixture FixtureB;
 		FixtureB.Scope = TEXT("vm-cache-contracts");
-		TUniquePtr<asCMetadataImage> HostB;
+		TUniquePtr<asCModuleDefinitionSet> HostB;
 		asCObjectType* BoxB = VMCacheContractsPrivate::DefineGenericIntBox(FixtureB, HostB);
 		ASSERT_THAT(IsTrue(BoxB != nullptr, *VMCacheContractsPrivate::GGenericError));
 		asCScriptFunction* RunB = FixtureB.DefineFunction(
-			TEXT("Run"), TEXT("Game.Cache"), asFUNC_SCRIPT, FixtureB.Image->Primitive(ttInt), {});
+			TEXT("Run"), TEXT("Game.Cache"), asFUNC_SCRIPT, FixtureB.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(FixtureB.FinalizeAndFreeze()));
 		ASSERT_THAT(IsTrue(RunB->GetStableKey() == RunKey));
 		ASSERT_THAT(IsTrue(BoxB->GetStableKey() == TypeKey));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(FixtureB.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->InstallDefinitionSet(FixtureB.TakeSet())));
 		ASSERT_THAT(IsTrue(EngineB.Ptr->FindMetadataFunction(RunKey) == RunB));
 		ASSERT_THAT(IsTrue(EngineB.Ptr->FindMetadataType(TypeKey) == BoxB));
 		ASSERT_THAT(IsTrue(RunB->GetId() != 0));
@@ -507,7 +507,7 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		ASSERT_THAT(IsTrue(Decoded->Strings.Contains(TEXT("cache-token"))));
 		asCExecutableSnapshot* SnapshotB = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, EngineB.Ptr->LinkByteCodeImage(*Decoded, SnapshotB)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*EngineB.Ptr, *Decoded, SnapshotB)));
 		ASSERT_THAT(IsTrue(SnapshotB->FindFunction(RunKey) == RunB));
 		ASSERT_THAT(IsTrue(SnapshotB->Types.FindRef(TypeKey) == BoxB));
 		ASSERT_THAT(IsTrue(VMCacheContractsPrivate::ExecuteInt(EngineB.Ptr, RunB, 42)));
@@ -528,12 +528,12 @@ public:
 				VMCacheContractsPrivate::MakeIntParam("a"),
 				VMCacheContractsPrivate::MakeIntParam("b")
 			};
-			Params[0].Type = Fixture.Image->Primitive(ttInt);
-			Params[1].Type = Fixture.Image->Primitive(ttInt);
+			Params[0].Type = Fixture.Set->Primitive(ttInt);
+			Params[1].Type = Fixture.Set->Primitive(ttInt);
 			asCScriptFunction* Add = Fixture.DefineFunction(
-				TEXT("Add"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), MakeArrayView(Params, 2));
+				TEXT("Add"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), MakeArrayView(Params, 2));
 			asCScriptFunction* Run = Fixture.DefineFunction(
-				TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+				TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 			asCGlobalProperty* Global = VMCacheContractsPrivate::DefineGlobal(Fixture, TEXT("Cell"));
 			ASSERT_THAT(IsNotNull(Global));
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
@@ -541,7 +541,7 @@ public:
 			AddKey = Add->GetStableKey();
 			GlobalKey = Global->GetStableKey();
 			FNativeEngineOwner EngineA;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*EngineA.Ptr, MoveTemp(Fixture.Set))));
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 				EngineA.Ptr->BindNativeFunction(Add->GetStableKey(), asFUNCTION(VMCacheContractsPrivate::GenericAdd), asCALL_GENERIC)));
 			int32 StorageA = 7;
@@ -549,7 +549,7 @@ public:
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, EngineA.Ptr->BindGlobalStorage(Global->GetStableKey(), &StorageA)));
 			TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeNativeAddImage(Run, Add);
 			asCExecutableSnapshot* Snapshot = nullptr;
-			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, EngineA.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*EngineA.Ptr, *Image, Snapshot)));
 			ASSERT_THAT(IsTrue(VMCacheContractsPrivate::ExecuteInt(EngineA.Ptr, Run, 42)));
 			ASSERT_THAT(AreEqual(1, VMCacheContractsPrivate::GNativeCalls));
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Encode(*Image, Bytes)));
@@ -563,12 +563,12 @@ public:
 			VMCacheContractsPrivate::MakeIntParam("a"),
 			VMCacheContractsPrivate::MakeIntParam("b")
 		};
-		ParamsB[0].Type = FixtureB.Image->Primitive(ttInt);
-		ParamsB[1].Type = FixtureB.Image->Primitive(ttInt);
+		ParamsB[0].Type = FixtureB.Set->Primitive(ttInt);
+		ParamsB[1].Type = FixtureB.Set->Primitive(ttInt);
 		asCScriptFunction* AddB = FixtureB.DefineFunction(
-			TEXT("Add"), TEXT(""), asFUNC_SYSTEM, FixtureB.Image->Primitive(ttInt), MakeArrayView(ParamsB, 2));
+			TEXT("Add"), TEXT(""), asFUNC_SYSTEM, FixtureB.Set->Primitive(ttInt), MakeArrayView(ParamsB, 2));
 		asCScriptFunction* RunB = FixtureB.DefineFunction(
-			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureB.Image->Primitive(ttInt), {});
+			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureB.Set->Primitive(ttInt), {});
 		asCGlobalProperty* GlobalB = VMCacheContractsPrivate::DefineGlobal(FixtureB, TEXT("Cell"));
 		asCGlobalProperty* Unrelated = VMCacheContractsPrivate::DefineGlobal(FixtureB, TEXT("Keep"));
 		ASSERT_THAT(IsTrue(FixtureB.FinalizeAndFreeze()));
@@ -576,7 +576,7 @@ public:
 		ASSERT_THAT(IsTrue(AddB->GetStableKey() == AddKey));
 		ASSERT_THAT(IsTrue(GlobalB->GetStableKey() == GlobalKey));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(FixtureB.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->InstallDefinitionSet(FixtureB.TakeSet())));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			EngineB.Ptr->BindNativeFunction(AddB->GetStableKey(), asFUNCTION(VMCacheContractsPrivate::GenericAdd), asCALL_GENERIC)));
 		int32 StorageB = 9;
@@ -586,7 +586,7 @@ public:
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		asCExecutableSnapshot* SnapshotB = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, EngineB.Ptr->LinkByteCodeImage(*Decoded, SnapshotB)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*EngineB.Ptr, *Decoded, SnapshotB)));
 		ASSERT_THAT(IsTrue(SnapshotB->FindFunction(RunKey) == RunB));
 		ASSERT_THAT(IsTrue(SnapshotB->FindFunction(AddKey) == AddB));
 		ASSERT_THAT(IsTrue(VMCacheContractsPrivate::ExecuteInt(EngineB.Ptr, RunB, 42)));
@@ -606,11 +606,11 @@ public:
 			FDetachedDefinitionFixture Fixture;
 			Fixture.Scope = TEXT("vm-cache-funcdef");
 			asCObjectType* Point = Fixture.DefineType(TEXT("Point"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
-			Fixture.DefineProperty(*Point, "x", Fixture.Image->Primitive(ttInt));
+			Fixture.DefineProperty(*Point, "x", Fixture.Set->Primitive(ttInt));
 			asCScriptFunction* Method = Fixture.DefineFunction(
-				TEXT("Read"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {}, Point);
+				TEXT("Read"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {}, Point);
 			asCScriptFunction* Signature = Fixture.DefineFunction(
-				TEXT("Callback"), TEXT(""), asFUNC_CALLABLE_SIGNATURE, Fixture.Image->Primitive(ttInt), {});
+				TEXT("Callback"), TEXT(""), asFUNC_CALLABLE_SIGNATURE, Fixture.Set->Primitive(ttInt), {});
 			AS_NAMESPACE_QUALIFIER asSNominalTypeDescriptor TypeDescriptor;
 			TypeDescriptor.StableScope = Fixture.Scope;
 			TypeDescriptor.Name = TEXT("CallbackType");
@@ -620,25 +620,25 @@ public:
 				Fixture.Context->GetIdentityRegistry().InternNominalType(TypeDescriptor, TypeKey)));
 			asCCallableType* CallableType = nullptr;
 			ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-				Fixture.Image->CreateCallableType(TypeKey, "CallbackType", "", *Signature, CallableType)));
+				Fixture.Set->CreateCallableType(TypeKey, "CallbackType", "", *Signature, CallableType)));
 			asCScriptFunction* Run = Fixture.DefineFunction(
-				TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+				TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			RunKey = Run->GetStableKey();
 			MethodKey = Method->GetStableKey();
 			FNativeEngineOwner EngineA;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*EngineA.Ptr, MoveTemp(Fixture.Set))));
 			TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42, Point, Method);
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Encode(*Image, Bytes)));
 		}
 		FDetachedDefinitionFixture FixtureB;
 		FixtureB.Scope = TEXT("vm-cache-funcdef");
 		asCObjectType* PointB = FixtureB.DefineType(TEXT("Point"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
-		FixtureB.DefineProperty(*PointB, "x", FixtureB.Image->Primitive(ttInt));
+		FixtureB.DefineProperty(*PointB, "x", FixtureB.Set->Primitive(ttInt));
 		asCScriptFunction* MethodB = FixtureB.DefineFunction(
-			TEXT("Read"), TEXT(""), asFUNC_SCRIPT, FixtureB.Image->Primitive(ttInt), {}, PointB);
+			TEXT("Read"), TEXT(""), asFUNC_SCRIPT, FixtureB.Set->Primitive(ttInt), {}, PointB);
 		asCScriptFunction* SignatureB = FixtureB.DefineFunction(
-			TEXT("Callback"), TEXT(""), asFUNC_CALLABLE_SIGNATURE, FixtureB.Image->Primitive(ttInt), {});
+			TEXT("Callback"), TEXT(""), asFUNC_CALLABLE_SIGNATURE, FixtureB.Set->Primitive(ttInt), {});
 		AS_NAMESPACE_QUALIFIER asSNominalTypeDescriptor TypeDescriptorB;
 		TypeDescriptorB.StableScope = FixtureB.Scope;
 		TypeDescriptorB.Name = TEXT("CallbackType");
@@ -648,16 +648,16 @@ public:
 			FixtureB.Context->GetIdentityRegistry().InternNominalType(TypeDescriptorB, TypeKeyB)));
 		asCCallableType* CallableTypeB = nullptr;
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			FixtureB.Image->CreateCallableType(TypeKeyB, "CallbackType", "", *SignatureB, CallableTypeB)));
+			FixtureB.Set->CreateCallableType(TypeKeyB, "CallbackType", "", *SignatureB, CallableTypeB)));
 		asCScriptFunction* RunB = FixtureB.DefineFunction(
-			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureB.Image->Primitive(ttInt), {});
+			TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureB.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(FixtureB.FinalizeAndFreeze()));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(FixtureB.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->InstallDefinitionSet(FixtureB.TakeSet())));
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		asCExecutableSnapshot* SnapshotB = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, EngineB.Ptr->LinkByteCodeImage(*Decoded, SnapshotB)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*EngineB.Ptr, *Decoded, SnapshotB)));
 		ASSERT_THAT(IsTrue(SnapshotB->FindFunction(RunKey) == RunB));
 		ASSERT_THAT(IsTrue(SnapshotB->FindFunction(MethodKey) == MethodB));
 		ASSERT_THAT(IsTrue(VMCacheContractsPrivate::ExecuteInt(EngineB.Ptr, RunB, 42)));
@@ -668,15 +668,15 @@ public:
 	{
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Point = Fixture.DefineType(TEXT("Point"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
-		Fixture.DefineProperty(*Point, "x", Fixture.Image->Primitive(ttInt));
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+		Fixture.DefineProperty(*Point, "x", Fixture.Set->Primitive(ttInt));
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42, Point);
 		FNativeEngineOwner Engine;
 		asCScriptFunction* OnlyRun = Engine.Ptr->FindMetadataFunction(Run->GetStableKey());
 		ASSERT_THAT(IsNull(OnlyRun));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::MissingDeclaration, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::MissingDeclaration, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		ASSERT_THAT(IsNull(Snapshot));
 		ASSERT_THAT(IsNull(Engine.Ptr->FindPublishedExecutable(Run->GetStableKey())));
 		ASSERT_THAT(IsNull(Engine.Ptr->FindMetadataType(Point->GetStableKey())));
@@ -687,7 +687,7 @@ public:
 		FDetachedDefinitionFixture IntReturn;
 		IntReturn.Scope = TEXT("vm-cache-return");
 		asCScriptFunction* Left = IntReturn.DefineFunction(
-			TEXT("Read"), TEXT(""), asFUNC_SCRIPT, IntReturn.Image->Primitive(ttInt), {});
+			TEXT("Read"), TEXT(""), asFUNC_SCRIPT, IntReturn.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(IntReturn.FinalizeAndFreeze()));
 		TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Left, 42);
 		TArray<uint8> Bytes;
@@ -695,15 +695,15 @@ public:
 		FDetachedDefinitionFixture DoubleReturn;
 		DoubleReturn.Scope = TEXT("vm-cache-return");
 		asCScriptFunction* Right = DoubleReturn.DefineFunction(
-			TEXT("Read"), TEXT(""), asFUNC_SCRIPT, DoubleReturn.Image->Primitive(ttFloat64), {});
+			TEXT("Read"), TEXT(""), asFUNC_SCRIPT, DoubleReturn.Set->Primitive(ttFloat64), {});
 		ASSERT_THAT(IsTrue(DoubleReturn.FinalizeAndFreeze()));
 		ASSERT_THAT(IsTrue(Left->GetStableKey() == Right->GetStableKey()));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(DoubleReturn.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->InstallDefinitionSet(DoubleReturn.TakeSet())));
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		asCExecutableSnapshot* Failed = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, EngineB.Ptr->LinkByteCodeImage(*Decoded, Failed)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, asLinkByteCodeImage(*EngineB.Ptr, *Decoded, Failed)));
 		ASSERT_THAT(IsNull(Failed));
 		ASSERT_THAT(IsNull(EngineB.Ptr->FindPublishedExecutable(Right->GetStableKey())));
 	}
@@ -713,10 +713,10 @@ public:
 		FDetachedDefinitionFixture InRef;
 		InRef.Scope = TEXT("vm-cache-mode");
 		asSMetadataParameter InParam = VMCacheContractsPrivate::MakeIntParam("value", asTM_INREF);
-		InParam.Type = InRef.Image->Primitive(ttInt);
+		InParam.Type = InRef.Set->Primitive(ttInt);
 		InParam.Type.MakeReference(true);
 		asCScriptFunction* Left = InRef.DefineFunction(
-			TEXT("Write"), TEXT(""), asFUNC_SCRIPT, InRef.Image->Primitive(ttInt), MakeArrayView(&InParam, 1));
+			TEXT("Write"), TEXT(""), asFUNC_SCRIPT, InRef.Set->Primitive(ttInt), MakeArrayView(&InParam, 1));
 		ASSERT_THAT(IsTrue(InRef.FinalizeAndFreeze()));
 		TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Left, 42);
 		TArray<uint8> Bytes;
@@ -724,17 +724,17 @@ public:
 		FDetachedDefinitionFixture OutRef;
 		OutRef.Scope = TEXT("vm-cache-mode");
 		asSMetadataParameter OutParam = VMCacheContractsPrivate::MakeIntParam("value", asTM_OUTREF);
-		OutParam.Type = OutRef.Image->Primitive(ttInt);
+		OutParam.Type = OutRef.Set->Primitive(ttInt);
 		OutParam.Type.MakeReference(true);
 		asCScriptFunction* Right = OutRef.DefineFunction(
-			TEXT("Write"), TEXT(""), asFUNC_SCRIPT, OutRef.Image->Primitive(ttInt), MakeArrayView(&OutParam, 1));
+			TEXT("Write"), TEXT(""), asFUNC_SCRIPT, OutRef.Set->Primitive(ttInt), MakeArrayView(&OutParam, 1));
 		ASSERT_THAT(IsTrue(OutRef.FinalizeAndFreeze()));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(OutRef.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->InstallDefinitionSet(OutRef.TakeSet())));
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		asCExecutableSnapshot* Failed = nullptr;
-		const asEByteCodeLinkStatus Status = EngineB.Ptr->LinkByteCodeImage(*Decoded, Failed);
+		const asEByteCodeLinkStatus Status = asLinkByteCodeImage(*EngineB.Ptr, *Decoded, Failed);
 		ASSERT_THAT(IsTrue(Status == asEByteCodeLinkStatus::SchemaMismatch || Status == asEByteCodeLinkStatus::MissingDeclaration));
 		ASSERT_THAT(IsNull(Failed));
 		ASSERT_THAT(IsNull(EngineB.Ptr->FindPublishedExecutable(Right->GetStableKey())));
@@ -747,7 +747,7 @@ public:
 		FixtureA.Scope = TEXT("vm-cache-offset");
 		asCObjectType* TypeA = VMCacheContractsPrivate::DefineNativeRecord(
 			FixtureA, static_cast<int>(offsetof(VMCacheContractsPrivate::FCacheNativeRecord, Value)));
-		asCScriptFunction* RunA = FixtureA.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureA.Image->Primitive(ttInt), {});
+		asCScriptFunction* RunA = FixtureA.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureA.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(FixtureA.FinalizeAndFreeze()));
 		asCByteCodeImageBuilder Builder;
 		asUINT TypeSlot = 0;
@@ -775,14 +775,14 @@ public:
 		FDetachedDefinitionFixture FixtureB;
 		FixtureB.Scope = TEXT("vm-cache-offset");
 		asCObjectType* TypeB = VMCacheContractsPrivate::DefineNativeRecord(FixtureB, 0);
-		asCScriptFunction* RunB = FixtureB.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureB.Image->Primitive(ttInt), {});
+		asCScriptFunction* RunB = FixtureB.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, FixtureB.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(FixtureB.FinalizeAndFreeze()));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(FixtureB.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->InstallDefinitionSet(FixtureB.TakeSet())));
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		asCExecutableSnapshot* Failed = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, EngineB.Ptr->LinkByteCodeImage(*Decoded, Failed)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, asLinkByteCodeImage(*EngineB.Ptr, *Decoded, Failed)));
 		ASSERT_THAT(IsNull(Failed));
 		ASSERT_THAT(IsNull(EngineB.Ptr->FindPublishedExecutable(RunB->GetStableKey())));
 	}
@@ -791,11 +791,11 @@ public:
 	{
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Point = Fixture.DefineType(TEXT("Point"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
-		Fixture.DefineProperty(*Point, "x", Fixture.Image->Primitive(ttInt));
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+		Fixture.DefineProperty(*Point, "x", Fixture.Set->Primitive(ttInt));
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42, Point);
 		asSByteCodeRequirement* TypeReq = VMCacheContractsPrivate::FindRequirement(
 			*Image, asEByteCodeRequirementRole::Type, Point->GetStableKey());
@@ -803,7 +803,7 @@ public:
 		ASSERT_THAT(IsTrue(TypeReq->SchemaWitness.Num() > 0));
 		TypeReq->SchemaWitness[0] ^= 0x5A;
 		asCExecutableSnapshot* Failed = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, Engine.Ptr->LinkByteCodeImage(*Image, Failed)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, asLinkByteCodeImage(*Engine.Ptr, *Image, Failed)));
 		ASSERT_THAT(IsNull(Failed));
 		ASSERT_THAT(IsNull(Engine.Ptr->FindPublishedExecutable(Run->GetStableKey())));
 	}
@@ -812,47 +812,47 @@ public:
 	{
 		FDetachedDefinitionFixture Fixture;
 		asCObjectType* Point = Fixture.DefineType(TEXT("Point"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
-		Fixture.DefineProperty(*Point, "x", Fixture.Image->Primitive(ttInt));
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+		Fixture.DefineProperty(*Point, "x", Fixture.Set->Primitive(ttInt));
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		VMCacheContractsPrivate::FZeroDigest Provider;
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42, Point);
-		Fixture.Image->SetFingerprintDigestProvider(&Provider);
+		Fixture.Set->SetFingerprintDigestProvider(&Provider);
 		asCExecutableSnapshot* Failed = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, Engine.Ptr->LinkByteCodeImage(*Image, Failed)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, asLinkByteCodeImage(*Engine.Ptr, *Image, Failed)));
 		ASSERT_THAT(IsNull(Failed));
 		ASSERT_THAT(IsNull(Engine.Ptr->FindPublishedExecutable(Run->GetStableKey())));
-		Fixture.Image->SetFingerprintDigestProvider(nullptr);
+		Fixture.Set->SetFingerprintDigestProvider(nullptr);
 	}
 
 	TEST_METHOD(ForeignAttachedImageRejectsOnSecondEngine)
 	{
 		FDetachedDefinitionFixture Fixture;
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner EngineA;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*EngineA.Ptr, MoveTemp(Fixture.Set))));
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::ForeignEngine, EngineB.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::ForeignEngine, RegisterCompiledDefinitions(*EngineB.Ptr, MoveTemp(Fixture.Set))));
 		TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42);
 		asCExecutableSnapshot* Failed = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::MissingDeclaration, EngineB.Ptr->LinkByteCodeImage(*Image, Failed)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::MissingDeclaration, asLinkByteCodeImage(*EngineB.Ptr, *Image, Failed)));
 		ASSERT_THAT(IsNull(Failed));
 	}
 
 	TEST_METHOD(MalformedPointerProfileRejects)
 	{
 		FDetachedDefinitionFixture Fixture;
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42);
 		Image->PointerByteSize = 4;
 		asCExecutableSnapshot* Failed = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::InvalidArgument, Engine.Ptr->LinkByteCodeImage(*Image, Failed)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::InvalidArgument, asLinkByteCodeImage(*Engine.Ptr, *Image, Failed)));
 		ASSERT_THAT(IsNull(Failed));
 		ASSERT_THAT(IsNull(Engine.Ptr->FindPublishedExecutable(Run->GetStableKey())));
 	}
@@ -860,22 +860,22 @@ public:
 	TEST_METHOD(LateMissingFunctionLeavesInstalledBodyAndSentinel)
 	{
 		FDetachedDefinitionFixture Fixture;
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 		asCGlobalProperty* Global = VMCacheContractsPrivate::DefineGlobal(Fixture, TEXT("Cell"));
 		ASSERT_THAT(IsNotNull(Global));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		int32 Sentinel = 0x11223344;
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->BindGlobalStorage(Global->GetStableKey(), &Sentinel)));
 		TUniquePtr<asCByteCodeImage> Good = VMCacheContractsPrivate::MakeReturn(Run, 42);
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Good, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Good, Snapshot)));
 		ASSERT_THAT(IsTrue(VMCacheContractsPrivate::ExecuteInt(Engine.Ptr, Run, 42)));
 		const auto Counts = Engine.Ptr->GetMetadataRegistrationCounts();
 		TUniquePtr<asCByteCodeImage> Bad = VMCacheContractsPrivate::MakeTwoBodiesLateMissing(Run);
 		asCExecutableSnapshot* Failed = nullptr;
-		ASSERT_THAT(AreNotEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Bad, Failed)));
+		ASSERT_THAT(AreNotEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Bad, Failed)));
 		ASSERT_THAT(IsNull(Failed));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetMetadataRegistrationCounts() == Counts));
 		ASSERT_THAT(AreEqual(0x11223344, Sentinel));
@@ -891,7 +891,7 @@ public:
 		asSStableKey RunKey;
 		{
 			FDetachedDefinitionFixture Fixture;
-			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			RunKey = Run->GetStableKey();
 			TUniquePtr<asCByteCodeImage> Image = VMCacheContractsPrivate::MakeReturn(Run, 42);
@@ -902,7 +902,7 @@ public:
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		ASSERT_THAT(IsNull(EngineB.Ptr->FindMetadataFunction(RunKey)));
 		asCExecutableSnapshot* Failed = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::MissingDeclaration, EngineB.Ptr->LinkByteCodeImage(*Decoded, Failed)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::MissingDeclaration, asLinkByteCodeImage(*EngineB.Ptr, *Decoded, Failed)));
 		ASSERT_THAT(IsNull(Failed));
 		ASSERT_THAT(IsNull(EngineB.Ptr->FindMetadataFunction(RunKey)));
 		ASSERT_THAT(IsNull(EngineB.Ptr->FindPublishedExecutable(RunKey)));

@@ -1,6 +1,8 @@
 #include "as_bytecode_emitter.h"
 #include "as_bytecode_emitter_internal.h"
-#include "as_metadata_image.h"
+#include "as_bytecode_image.h"
+#include "as_bytecode_image_builder.h"
+#include "as_module_definition_set.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 #include "as_typeinfo.h"
@@ -22,19 +24,6 @@ namespace
 	constexpr asUINT DiagnosticUnsupported = 5103;
 	constexpr asUINT DiagnosticResource = 5104;
 	const TCHAR* FragmentKey = TEXT("bytecode-emitter");
-
-	asEByteCodeImageStatus MapImageStatus(asEByteCodeEmissionStatus Status)
-	{
-		switch (Status)
-		{
-		case asEByteCodeEmissionStatus::Succeeded: return asEByteCodeImageStatus::Succeeded;
-		case asEByteCodeEmissionStatus::NotReady: return asEByteCodeImageStatus::Incomplete;
-		case asEByteCodeEmissionStatus::InvalidInput: return asEByteCodeImageStatus::InvalidArgument;
-		case asEByteCodeEmissionStatus::UnsupportedLowering: return asEByteCodeImageStatus::InvalidOperand;
-		case asEByteCodeEmissionStatus::ResourceLimit: return asEByteCodeImageStatus::Overflow;
-		}
-		return asEByteCodeImageStatus::InvalidArgument;
-	}
 
 	bool SessionHasRecovery(const asCCompilationSession& Session)
 	{
@@ -102,9 +91,7 @@ namespace
 		const asCASTNode* Node,
 		FStringView Message)
 	{
-		Result.Image.Reset();
 		Result.EmissionStatus = Status;
-		Result.Status = MapImageStatus(Status);
 		Result.Failure.StableFragmentKey = FragmentKey;
 		if (Function)
 		{
@@ -137,10 +124,11 @@ namespace
 	}
 }
 
-asSByteCodeEmissionResult asCByteCodeEmitter::Emit(
+asSByteCodeEmissionResult asEmitByteCodeImage(
 	const asCCompilationSession* Session,
-	const asCMetadataImage* FrozenDefinitions,
-	const asSByteCodeEmissionOptions& Options)
+	const asCModuleDefinitionSet* FrozenDefinitions,
+	const asSByteCodeEmissionOptions& Options,
+	TUniquePtr<asCByteCodeImage>& OutImage)
 {
 	asSByteCodeEmissionResult Result;
 	if (!Session)
@@ -303,24 +291,60 @@ asSByteCodeEmissionResult asCByteCodeEmitter::Emit(
 	}
 	if (!bEmittedAny)
 	{
-		FailEmission(Result, Session, asEByteCodeEmissionStatus::InvalidInput, nullptr, Session->GetTranslationUnit(), TEXT("no-bodies"));
+		Result.EmissionStatus = asEByteCodeEmissionStatus::Succeeded;
 		return Result;
 	}
-	if (ImageBuilder.Finish(Result.Image) != asEByteCodeImageStatus::Succeeded)
+	TUniquePtr<asCByteCodeImage> Image;
+	if (ImageBuilder.Finish(Image) != asEByteCodeImageStatus::Succeeded)
 	{
-		Result.Image.Reset();
 		FailEmission(Result, Session, asEByteCodeEmissionStatus::InvalidInput, nullptr, Session->GetTranslationUnit(), TEXT("finish-image"));
 		return Result;
 	}
+	OutImage = MoveTemp(Image);
 	Result.EmissionStatus = asEByteCodeEmissionStatus::Succeeded;
-	Result.Status = asEByteCodeImageStatus::Succeeded;
+	return Result;
+}
+
+asSByteCodeEmissionResult asCByteCodeEmitter::Emit(
+	const asCCompilationSession* Session,
+	const asCModuleDefinitionSet* FrozenDefinitions,
+	const asSByteCodeEmissionOptions& Options)
+{
+	TUniquePtr<asCByteCodeImage> Unused;
+	return asEmitByteCodeImage(Session, FrozenDefinitions, Options, Unused);
+}
+
+asSByteCodeEmissionResult asCByteCodeEmitter::Emit(asCBuilder& Builder)
+{
+	TUniquePtr<asCByteCodeImage> Image;
+	asSByteCodeEmissionResult Result = asEmitByteCodeImage(
+		Builder.GetCompilationSession(),
+		Builder.GetCompilationSession() ? Builder.GetCompilationSession()->GetFrozenDefinitions() : nullptr,
+		asSByteCodeEmissionOptions(),
+		Image);
+	if (Result.EmissionStatus != asEByteCodeEmissionStatus::Succeeded) return Result;
+	asCModuleDefinitionSet* Set = Builder.GetModuleDefinitionSet();
+	if (!Set || !Image) return Result;
+	for (const asSByteCodeFunctionBody& Body : Image->GetFunctions())
+	{
+		asCScriptFunction* Function = Set->FindFunction(Body.FunctionKey);
+		if (!Function) continue;
+		TArray<asDWORD> Words;
+		Words.Reserve(Body.Instructions.Num());
+		for (const asSByteCodeInstruction& Instruction : Body.Instructions)
+		{
+			Words.Add(static_cast<asDWORD>(Instruction.Opcode));
+		}
+		Function->SetStableByteCode(MoveTemp(Words));
+	}
+	Set->AdoptEmittedByteCode(MoveTemp(Image));
 	return Result;
 }
 
 asSByteCodeEmissionResult asCByteCodeEmitter::Emit(asCBuilder& Builder, asCScriptFunction& Function)
 {
 	(void)Function;
-	return Emit(Builder.GetCompilationSession(), Builder.GetDefinitions(), asSByteCodeEmissionOptions());
+	return Emit(Builder.GetCompilationSession(), Builder.GetModuleDefinitionSet(), asSByteCodeEmissionOptions());
 }
 
 END_AS_NAMESPACE

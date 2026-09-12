@@ -8,7 +8,7 @@
 
 BEGIN_AS_NAMESPACE
 
-class asCMetadataImage;
+class asCModuleDefinitionSet;
 
 enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, DeclarationsResolved, BodiesAnalyzed, ASTVerified, Failed };
 
@@ -26,7 +26,7 @@ enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, Decl
 		asCCompilationSession(TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot, asCDiagnosticsEngine& Diagnostics,
 			FString StableScope, TSharedRef<asCTypeContext, ESPMode::ThreadSafe> TypeContext);
 		bool CollectSource(asCPreprocessor& Preprocessor, const asSDirectiveProcessResult& Input, FString LogicalSourceKey);
-		bool AddExternalDefinitions(asCMetadataImage* Image);
+		bool AddExternalDefinitions(asCModuleDefinitionSet* Set);
 		asCQualType ResolveTypeSyntax(const asSTypeSyntax& Syntax, const asCDecl& Scope);
 		bool ResolveListInitializer(asCQualType Type, asSListInitialization& Out);
 		asCRecordDecl* FindRecordDeclaration(const asSStableKey& Identity) const;
@@ -57,8 +57,9 @@ enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, Decl
 		asCType* GetDeclaredType(const asSStableKey& Identity) const { auto* Type = DeclaredTypes.Find(Identity); return Type ? *Type : nullptr; }
 		asCSema& GetSema() { return Sema; }
 		asCDiagnosticsEngine& GetDiagnosticsEngine() const { return Diagnostics; }
-		const asCMetadataImage* GetFrozenDefinitions() const { return FrozenDefinitions; }
-		void BindFrozenDefinitions(const asCMetadataImage* Image) { FrozenDefinitions = Image; }
+		const asCModuleDefinitionSet* GetFrozenDefinitions() const { return FrozenDefinitionSet; }
+		const asCModuleDefinitionSet* GetFrozenDefinitionSet() const { return FrozenDefinitionSet; }
+		void BindFrozenDefinitions(const asCModuleDefinitionSet* Set);
 
 	private:
 		bool ResolveConstantDeclarations();
@@ -86,7 +87,7 @@ enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, Decl
 		TMap<asSStableKey, asCRecordDecl*> RecordDeclarations;
 		TMap<asSStableKey, asCNamedDecl*> NominalDeclarations;
 		TMap<FString, asCType*> ExternalTypes;
-		TArray<asCMetadataImage*> ExternalDefinitions;
+		TArray<asCModuleDefinitionSet*> ExternalDefinitions;
 		TMap<FString, TArray<asSExternalCallable>> ExternalCallables;
 		TConstArrayView<asSExternalCallable> FindExternalCallables(const FString& Name) const;
 		TArray<FString> StableProjection;
@@ -97,7 +98,7 @@ enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, Decl
 		bool bHasRecoveryNodes = false;
 		FString VerificationError;
 		asSBodyAnalysisStatistics BodyStatistics;
-		const asCMetadataImage* FrozenDefinitions = nullptr;
+		const asCModuleDefinitionSet* FrozenDefinitionSet = nullptr;
 	};
 
 END_AS_NAMESPACE

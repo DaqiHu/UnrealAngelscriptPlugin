@@ -52,11 +52,27 @@
 #include "as_memory.h"
 #include "as_gc.h"
 #include "as_tokendef.h"
-#include "as_metadata_image.h"
-#include "as_execution_snapshot.h"
+#include "as_module_definition_set.h"
 #include "Templates/UniquePtr.h"
 
 BEGIN_AS_NAMESPACE
+
+class asCByteCodeImage;
+class asCExecutableSnapshot;
+class asCExecutableFunction;
+
+enum class asEByteCodeLinkStatus : asBYTE
+{
+	Succeeded,
+	InvalidArgument,
+	Unverified,
+	MissingDeclaration,
+	SchemaMismatch,
+	BodyConflict,
+	ResourceFailure,
+	MissingBinding,
+	Retired
+};
 
 enum asECompilerPipeline
 {
@@ -308,19 +324,18 @@ public:
 	asCScriptEngine();
 	virtual ~asCScriptEngine();
 	// Semantic registration only: does not prepare VM bytecode or callables.
-	asEMetadataRegistrationResult RegisterMetadataImage(TUniquePtr<asCMetadataImage> Image);
-	asEMetadataRegistrationResult RegisterMetadataImage(
-		TUniquePtr<asCMetadataImage> Image,
+	asEMetadataRegistrationResult InstallDefinitionSet(TUniquePtr<asCModuleDefinitionSet> Set);
+	asEMetadataRegistrationResult InstallDefinitionSet(
+		TUniquePtr<asCModuleDefinitionSet> Set,
 		const TMap<const asCTypeInfo*, int>& PublishedTypeIds,
 		const TMap<const asCScriptFunction*, int>& PublishedFunctionIds);
-	void RetireMetadataImages();
+	void RetireDefinitionSets();
 	bool AcquireVmObjectLease();
 	void ReleaseVmObjectLease();
 	bool BeginVmOperation(bool Cleanup = false);
 	void EndVmOperation();
 	void DrainVmRetirement();
 	bool IsVmRetirementRequested() const { return vmRetirementRequested.load(); }
-	asEByteCodeLinkStatus LinkByteCodeImage(const asCByteCodeImage& Image, class asCExecutableSnapshot*& OutSnapshot);
 	asEByteCodeLinkStatus BindNativeFunction(const asSStableKey& FunctionKey, void* Native);
 	asEByteCodeLinkStatus BindNativeFunction(TConstArrayView<asSNativeFunctionBinding> Functions, TConstArrayView<asSNativeGlobalBinding> Globals, int& FailedIndex);
 	asEByteCodeLinkStatus BindNativeFunction(const asSStableKey& FunctionKey, const asSFuncPtr& Function, asDWORD CallConv, asFunctionCaller Caller = nullptr, void* Auxiliary = nullptr, int BaseOffset = 0);
@@ -340,7 +355,7 @@ public:
 	asCGlobalProperty* FindMetadataGlobalProperty(const char* Namespace, const char* Name) const;
 	asCGlobalProperty* FindMetadataGlobalProperty(const asSStableKey& Key) const;
 	TPair<asUINT, asUINT> GetMetadataRegistrationCounts() const;
-	TArray<const asCMetadataImage*> GetRegisteredMetadataImages() const;
+	TArray<const asCModuleDefinitionSet*> GetRegisteredDefinitionSets() const;
 
 	// LEGACY remains the source-module Build default until the final cutover gate.
 	// Explicit CANONICAL selection publishes Bytecode from sealed-AST CodeGen.
@@ -694,13 +709,13 @@ private:
 	asUINT vmObjectLeases = 0;
 	asUINT vmOperations = 0;
 	bool vmDrainActive = false;
-	TArray<TUniquePtr<asCMetadataImage>> metadataImages;
+	TArray<TUniquePtr<asCModuleDefinitionSet>> definitionSets;
 	TMap<asSStableKey, asCTypeInfo*> metadataTypesByKey;
-	TMap<FString, asCTypeInfo*, FDefaultSetAllocator, asCMetadataImage::asTNameKeyFuncs<asCTypeInfo*>> metadataTypesByName;
+	TMap<FString, asCTypeInfo*, FDefaultSetAllocator, asCModuleDefinitionSet::asTNameKeyFuncs<asCTypeInfo*>> metadataTypesByName;
 	TMap<int, asCTypeInfo*> metadataTypesById;
 	TMap<asSStableKey, asCScriptFunction*> metadataFunctionsByKey;
 	TMap<asSStableKey, asCGlobalProperty*> metadataGlobalsByKey;
-	TMap<FString, asCGlobalProperty*, FDefaultSetAllocator, asCMetadataImage::asTNameKeyFuncs<asCGlobalProperty*>> metadataGlobalsByName;
+	TMap<FString, asCGlobalProperty*, FDefaultSetAllocator, asCModuleDefinitionSet::asTNameKeyFuncs<asCGlobalProperty*>> metadataGlobalsByName;
 	TMap<asSStableKey, void*> metadataGlobalBindings;
 	TMap<asSStableKey, class asCExecutableFunction*> publishedExecutables;
 	TArray<class asCExecutableSnapshot*> publishedSnapshotLeases;

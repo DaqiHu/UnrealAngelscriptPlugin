@@ -52,7 +52,7 @@ TEST_CLASS_WITH_FLAGS(Members, "Angelscript.UnitTest.RuntimeBindings.Types",
 		const auto IntAdd = Add(Globals, TEXT("int Add(int A, int B = 2)"), EAngelscriptTypeBindMemberKind::GlobalFunction);
 		const auto DoubleAdd = Add(Globals, TEXT("double Add(double A, double B)"), EAngelscriptTypeBindMemberKind::GlobalFunction);
 		FEngine Engine; ASSERT_THAT(IsTrue(Install(Engine)));
-		ASSERT_THAT(IsTrue(Installed->GetImage()->GetState() == asEMetadataImageState::Attached));
+		ASSERT_THAT(IsTrue(Installed->GetSet()->GetState() == asEDefinitionSetState::Attached));
 		auto* PairType = static_cast<asCObjectType*>(Engine.Ptr->FindMetadataType("Fixture", "Pair")); ASSERT_THAT(IsNotNull(PairType));
 		ASSERT_THAT(IsTrue(PairType == Installed->FindType(TEXT("Pair"), TEXT("Fixture"))));
 		auto* Method = Installed->FindFunction(Sum); ASSERT_THAT(IsNotNull(Method));
@@ -62,7 +62,7 @@ TEST_CLASS_WITH_FLAGS(Members, "Angelscript.UnitTest.RuntimeBindings.Types",
 		ASSERT_THAT(IsTrue(First->GetStableKey() != Second->GetStableKey()));
 		ASSERT_THAT(IsTrue(Engine.Ptr->FindMetadataFunction(First->GetStableKey()) == First));
 		ASSERT_THAT(IsTrue(Engine.Ptr->FindMetadataFunction(Second->GetStableKey()) == Second));
-		ASSERT_THAT(AreEqual(3, Installed->GetImage()->GetFunctions().Num()));
+		ASSERT_THAT(AreEqual(3, Installed->GetSet()->GetFunctions().Num()));
 	}
 	TEST_METHOD(DefaultsDirectionsAndNativeFunctionTraitsSurviveFreeze)
 	{
@@ -131,8 +131,8 @@ TEST_CLASS_WITH_FLAGS(Members, "Angelscript.UnitTest.RuntimeBindings.Types",
 		ASSERT_THAT(IsTrue(Answer->isEditorOnly));
 #endif
 		ASSERT_THAT(IsNull(Answer->GetAddressOfValue())); ASSERT_THAT(IsNull(Counter->GetAddressOfValue()));
-		ASSERT_THAT(AreEqual(2, Installed->GetImage()->GetGlobalProperties().Num()));
-		ASSERT_THAT(IsTrue(Installed->GetImage()->SetNativeGlobalFacts(*Answer, {}) == asEMetadataResult::InvalidState));
+		ASSERT_THAT(AreEqual(2, Installed->GetSet()->GetGlobalProperties().Num()));
+		ASSERT_THAT(IsTrue(Installed->GetSet()->SetNativeGlobalFacts(*Answer, {}) == asEMetadataResult::InvalidState));
 		ASSERT_THAT(AreEqual(asQWORD(42), Answer->storage));
 	}
 	TEST_METHOD(PureConstantRejectsMutableAndObjectStorageBeforePublication)
@@ -168,22 +168,22 @@ TEST_CLASS_WITH_FLAGS(Members, "Angelscript.UnitTest.RuntimeBindings.Types",
 		const auto Method = Add(Type(), TEXT("int Sum() const")); FEngine First; FEngine Second;
 		ASSERT_THAT(IsTrue(Install(First))); auto Original = MoveTemp(Installed);
 		ASSERT_THAT(IsTrue(FAngelscriptTypeBindInfoApply::Install(Store, *Second.Ptr, Installed, Diagnostic)));
-		ASSERT_THAT(IsTrue(Original->GetImage() != Installed->GetImage()));
+		ASSERT_THAT(IsTrue(Original->GetSet() != Installed->GetSet()));
 		ASSERT_THAT(IsTrue(Original->FindType(TEXT("Pair"), TEXT("Fixture")) != Installed->FindType(TEXT("Pair"), TEXT("Fixture"))));
 		ASSERT_THAT(IsTrue(Original->FindFunction(Method)->GetStableKey() == Installed->FindFunction(Method)->GetStableKey()));
 		First.Ptr->ShutDownAndRelease(); First.Ptr = nullptr;
-		ASSERT_THAT(IsTrue(Installed->GetImage()->GetBoundEngine() == Second.Ptr));
+		ASSERT_THAT(IsTrue(Installed->GetSet()->GetBoundEngine() == Second.Ptr));
 		ASSERT_THAT(IsTrue(Second.Ptr->FindMetadataFunction(Installed->FindFunction(Method)->GetStableKey()) == Installed->FindFunction(Method)));
 	}
 	TEST_METHOD(FrozenInstallationRejectsLaterMemberMutation)
 	{
 		const auto Method = Add(Type(), TEXT("int Sum() const")); FEngine Engine; ASSERT_THAT(IsTrue(Install(Engine)));
-		auto Image = Installed->GetImage(); const auto Count = Image->GetFunctions().Num();
+		auto Set = Installed->GetSet(); const auto Count = Set->GetFunctions().Num();
 		asCScriptFunction* Rejected = nullptr;
-		ASSERT_THAT(IsTrue(Image->CreateFunction(Installed->FindFunction(Method)->GetStableKey(), "Later", "Fixture", asFUNC_SYSTEM, Rejected) == asEMetadataResult::InvalidState));
-		ASSERT_THAT(IsNull(Rejected)); ASSERT_THAT(AreEqual(Count, Image->GetFunctions().Num()));
+		ASSERT_THAT(IsTrue(Set->CreateFunction(Installed->FindFunction(Method)->GetStableKey(), "Later", "Fixture", asFUNC_SYSTEM, Rejected) == asEMetadataResult::InvalidState));
+		ASSERT_THAT(IsNull(Rejected)); ASSERT_THAT(AreEqual(Count, Set->GetFunctions().Num()));
 		const auto OriginalTraits = Installed->FindFunction(Method)->traits.traits;
-		ASSERT_THAT(IsTrue(Image->SetNativeFunctionFacts(*Installed->FindFunction(Method), {}) == asEMetadataResult::InvalidState));
+		ASSERT_THAT(IsTrue(Set->SetNativeFunctionFacts(*Installed->FindFunction(Method), {}) == asEMetadataResult::InvalidState));
 		ASSERT_THAT(AreEqual(OriginalTraits, Installed->FindFunction(Method)->traits.traits));
 	}
 	TEST_METHOD(CompilePoliciesUseCapturedBuildFacts)

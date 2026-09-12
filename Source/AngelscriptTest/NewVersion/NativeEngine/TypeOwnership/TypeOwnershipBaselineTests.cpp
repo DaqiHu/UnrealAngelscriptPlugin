@@ -15,9 +15,9 @@ namespace TypeOwnershipBaselinePrivate
 {
 	using namespace TypeOwnershipTest;
 
-	asSMetadataParameter MakeIntParamLocal(const char* Name, asCMetadataImage& Image)
+	asSMetadataParameter MakeIntParamLocal(const char* Name, asCModuleDefinitionSet& Set)
 	{
-		return MakeIntParam(Name, Image);
+		return MakeIntParam(Name, Set);
 	}
 
 	asEByteCodeImageStatus EmitAddTwentyTwentyTwo(asCByteCodeImageBuilder& Builder, asCScriptFunction* Function)
@@ -79,7 +79,7 @@ namespace TypeOwnershipBaselinePrivate
 		asIScriptContext*& Context)
 	{
 		if (Builder.Finish(Image) != asEByteCodeImageStatus::Succeeded) return false;
-		if (Engine->LinkByteCodeImage(*Image, Snapshot) != asEByteCodeLinkStatus::Succeeded) return false;
+		if (asLinkByteCodeImage(*Engine, *Image, Snapshot) != asEByteCodeLinkStatus::Succeeded) return false;
 		Context = Engine->CreateContext();
 		return Context != nullptr && Context->Prepare(Function) == 0;
 	}
@@ -154,7 +154,7 @@ public:
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		ASSERT_THAT(AreEqual(-1, Pair.Type->GetTypeId()));
 		ASSERT_THAT(IsNull(Pair.Type->GetEngine()));
-		ASSERT_THAT(IsNull(Fixture.Image->GetBoundEngine()));
+		ASSERT_THAT(IsNull(Fixture.Set->GetBoundEngine()));
 		ASSERT_THAT(AreEqual(-1, Pair.Sum->GetId()));
 		ASSERT_THAT(AreEqual(-1, Pair.GetX->GetId()));
 		const char* NameX = nullptr;
@@ -175,13 +175,13 @@ public:
 		FNativeEngineOwner Engine;
 		ASSERT_THAT(AreEqual(asNOT_SUPPORTED, Engine.Ptr->GetTypeIdByDecl("Pair")));
 		ASSERT_THAT(IsNull(Engine.Ptr->GetTypeInfoByDecl("Pair")));
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		const int PairTypeId = Pair.Type->GetTypeId();
 		ASSERT_THAT(IsTrue(PairTypeId > asTYPEID_LAST_PRIMITIVE));
 		ASSERT_THAT(IsTrue((PairTypeId & asTYPEID_APPOBJECT) != 0));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetTypeInfoById(PairTypeId) == Pair.Type));
 		ASSERT_THAT(IsTrue(Pair.Type->GetEngine() == Engine.Ptr));
-		ASSERT_THAT(IsNull(Fixture.Image.Get()));
+		ASSERT_THAT(IsNull(Fixture.Set.Get()));
 		ASSERT_THAT(IsTrue(Engine.Ptr->GetFunctionById(Pair.Sum->GetId()) == Pair.Sum));
 		ASSERT_THAT(AreEqual(0, Pair.Type->GetProperty(0, nullptr, &TypeIdX, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr)));
 		ASSERT_THAT(AreEqual(asTYPEID_INT32, TypeIdX));
@@ -219,15 +219,15 @@ public:
 		ASSERT_THAT(AreEqual(-1, TypeB->GetTypeId()));
 		FNativeEngineOwner EngineA;
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineA.Ptr->RegisterMetadataImage(BuilderA->TakeDefinitions())));
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(BuilderB->TakeDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*EngineA.Ptr, *BuilderA)));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*EngineB.Ptr, *BuilderB)));
 		ASSERT_THAT(IsTrue(TypeA->GetEngine() == EngineA.Ptr));
 		ASSERT_THAT(IsTrue(TypeB->GetEngine() == EngineB.Ptr));
 		ASSERT_THAT(IsTrue(TypeA->GetTypeId() > asTYPEID_LAST_PRIMITIVE));
 		ASSERT_THAT(IsTrue(TypeB->GetTypeId() > asTYPEID_LAST_PRIMITIVE));
 		ASSERT_THAT(AreEqual(
 			asEMetadataRegistrationResult::InvalidArgument,
-			EngineB.Ptr->RegisterMetadataImage(BuilderA->TakeDefinitions())));
+			RegisterCompiledDefinitions(*EngineB.Ptr, *BuilderA)));
 		ASSERT_THAT(IsTrue(EngineB.Ptr->FindMetadataType("", "ScriptThing") == TypeB));
 		ASSERT_THAT(IsTrue(EngineA.Ptr->FindMetadataType("", "ScriptThing") == TypeA));
 		BuilderA.Reset();
@@ -280,10 +280,10 @@ public:
 
 		{
 			FDetachedDefinitionFixture Fixture;
-			asCScriptFunction* Function = Fixture.DefineFunction(TEXT("Add"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+			asCScriptFunction* Function = Fixture.DefineFunction(TEXT("Add"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			FNativeEngineOwner Engine;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 			asCByteCodeImageBuilder Builder;
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitAddTwentyTwentyTwo(Builder, Function)));
 			TUniquePtr<asCByteCodeImage> Image;
@@ -310,12 +310,12 @@ public:
 
 		{
 			FDetachedDefinitionFixture Fixture;
-			asSMetadataParameter Params[2] = {MakeIntParamLocal("a", *Fixture.Image), MakeIntParamLocal("b", *Fixture.Image)};
-			asCScriptFunction* Add = Fixture.DefineFunction(TEXT("Add"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), MakeArrayView(Params, 2));
-			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+			asSMetadataParameter Params[2] = {MakeIntParamLocal("a", *Fixture.Set), MakeIntParamLocal("b", *Fixture.Set)};
+			asCScriptFunction* Add = Fixture.DefineFunction(TEXT("Add"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), MakeArrayView(Params, 2));
+			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			FNativeEngineOwner Engine;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 			ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 				Engine.Ptr->BindNativeFunction(Add->GetStableKey(), asFUNCTION(GenericNativeAdd), asCALL_GENERIC)));
 			asCByteCodeImageBuilder Builder;
@@ -340,10 +340,10 @@ public:
 		{
 			FDetachedDefinitionFixture Fixture;
 			asCObjectType* Type = Fixture.DefineType(TEXT("Node"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
-			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			FNativeEngineOwner Engine;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 			asCByteCodeImageBuilder Builder;
 			asUINT TypeSlot = 0;
 			asUINT RunSlot = 0;
@@ -386,7 +386,7 @@ public:
 			FDetachedDefinitionFixture Fixture;
 			asCObjectType* Type = Fixture.DefineType(TEXT("HandleNode"), TEXT(""), asOBJ_REF | asOBJ_NOCOUNT);
 			asCScriptFunction* Run = Type
-				? Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {})
+				? Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {})
 				: nullptr;
 			bool bHandleCopySupported = Type && Run && Fixture.FinalizeAndFreeze();
 			FNativeEngineOwner Engine;
@@ -394,7 +394,7 @@ public:
 			asUINT TypeSlot = 0;
 			asUINT RunSlot = 0;
 			bHandleCopySupported = bHandleCopySupported
-				&& Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded
+				&& RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set)) == asEMetadataRegistrationResult::Succeeded
 				&& Builder.AddTypeRequirement(*Type, TypeSlot) == asEByteCodeImageStatus::Succeeded
 				&& Builder.AddFunctionRequirement(*Run, RunSlot) == asEByteCodeImageStatus::Succeeded
 				&& Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 16, ByteArgumentDwords(*Run)) == asEByteCodeImageStatus::Succeeded;
@@ -448,11 +448,11 @@ public:
 			FDetachedDefinitionFixture Fixture;
 			asCObjectType* Base = Fixture.DefineType(TEXT("Base"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
 			asCObjectType* Derived = Fixture.DefineType(TEXT("Derived"), TEXT(""), asOBJ_VALUE | asOBJ_SCRIPT_OBJECT);
-			ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->SetBaseType(*Derived, *Base)));
-			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("RunCast"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), {});
+			ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->SetBaseType(*Derived, *Base)));
+			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("RunCast"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			FNativeEngineOwner Engine;
-			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+			ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 			asCByteCodeImageBuilder Builder;
 			asUINT BaseSlot = 0;
 			asUINT DerivedSlot = 0;
@@ -518,9 +518,9 @@ public:
 			for (int32 Index = 0; Index < EngineCount; ++Index)
 			{
 				TUniquePtr<FEngineProgram> Program = MakeUnique<FEngineProgram>();
-				Program->Function = Program->Fixture.DefineFunction(TEXT("Add"), TEXT(""), asFUNC_SCRIPT, Program->Fixture.Image->Primitive(ttInt), {});
+				Program->Function = Program->Fixture.DefineFunction(TEXT("Add"), TEXT(""), asFUNC_SCRIPT, Program->Fixture.Set->Primitive(ttInt), {});
 				ASSERT_THAT(IsTrue(Program->Fixture.FinalizeAndFreeze()));
-				ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Program->Engine.Ptr->RegisterMetadataImage(MoveTemp(Program->Fixture.Image))));
+				ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Program->Engine.Ptr->InstallDefinitionSet(Program->Fixture.TakeSet())));
 				asCByteCodeImageBuilder Builder;
 				ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, EmitAddTwentyTwentyTwo(Builder, Program->Function)));
 				ASSERT_THAT(IsTrue(LinkAndPrepare(Program->Engine.Ptr, Builder, Program->Function, Program->Image, Program->Snapshot, Program->Context)));
@@ -600,7 +600,7 @@ public:
 		}
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		const double PrepareNs = PrepareTimer.ElapsedNs();
-		ASSERT_THAT(AreEqual(PairTypeCount, Fixture.Image->GetTypes().Num()));
+		ASSERT_THAT(AreEqual(PairTypeCount, Fixture.Set->GetTypes().Num()));
 		int32 MethodCount = 0;
 		for (const FPairMembers& Type : Types)
 		{
@@ -616,7 +616,7 @@ public:
 		ASSERT_THAT(AreEqual(PairTypeCount * MethodsPerType, MethodCount));
 		FNativeEngineOwner Engine;
 		FNsTimer AttachTimer;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		const double AttachNs = AttachTimer.ElapsedNs();
 		FNsTimer QueryTimer;
 		int32 QueriedTypes = 0;

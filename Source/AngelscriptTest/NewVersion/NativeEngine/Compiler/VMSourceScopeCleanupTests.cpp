@@ -42,8 +42,8 @@ namespace VMSourceScopeCleanupPrivate
 		{
 			Fixture.Scope = TEXT("vm-source-scope-host");
 			asSMetadataParameter Param = MakeIntParam("n");
-			Param.Type = Fixture.Image->Primitive(ttInt);
-			Mark = Fixture.DefineFunction(TEXT("Mark"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), MakeArrayView(&Param, 1));
+			Param.Type = Fixture.Set->Primitive(ttInt);
+			Mark = Fixture.DefineFunction(TEXT("Mark"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), MakeArrayView(&Param, 1));
 			return Mark && Fixture.FinalizeAndFreeze();
 		}
 	};
@@ -64,20 +64,20 @@ namespace VMSourceScopeCleanupPrivate
 			GLastExecuteError = TEXT("missing-run");
 			return false;
 		}
-		asSByteCodeEmissionResult Emitted = EmitFromSession(Builder);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		if (Emitted.EmissionStatus != asEByteCodeEmissionStatus::Succeeded || !Emitted.Image.Get())
 		{
 			GLastExecuteError = FString::Printf(TEXT("emit-%d"), int32(Emitted.EmissionStatus));
 			return false;
 		}
-		if (Engine.RegisterMetadataImage(Builder.TakeDefinitions()) != asEMetadataRegistrationResult::Succeeded
-			&& Engine.RegisterMetadataImage(Builder.TakeDefinitions()) != asEMetadataRegistrationResult::AlreadyRegistered)
+		if (RegisterCompiledDefinitions(Engine, Builder) != asEMetadataRegistrationResult::Succeeded
+			&& RegisterCompiledDefinitions(Engine, Builder) != asEMetadataRegistrationResult::AlreadyRegistered)
 		{
 			GLastExecuteError = TEXT("register-defs");
 			return false;
 		}
 		asCExecutableSnapshot* Snapshot = nullptr;
-		const asEByteCodeLinkStatus Link = Engine.LinkByteCodeImage(*Emitted.Image, Snapshot);
+		const asEByteCodeLinkStatus Link = asLinkByteCodeImage(Engine, *Emitted.Image, Snapshot);
 		if (Link != asEByteCodeLinkStatus::Succeeded)
 		{
 			GLastExecuteError = FString::Printf(TEXT("link-%d"), int32(Link));
@@ -114,7 +114,7 @@ namespace VMSourceScopeCleanupPrivate
 			GLastCleanupError = TEXT("host-init");
 			return false;
 		}
-		FSourceExecutionInput Input(FString(BoxSource()) + Body, Host.Fixture.Context, Host.Fixture.Image.Get());
+		FSourceExecutionInput Input(FString(BoxSource()) + Body, Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		if (!Builder.RunThrough())
 		{
@@ -122,7 +122,7 @@ namespace VMSourceScopeCleanupPrivate
 			return false;
 		}
 		FNativeEngineOwner Engine;
-		if (Engine.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image)) != asEMetadataRegistrationResult::Succeeded)
+		if (RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Host.Fixture.Set)) != asEMetadataRegistrationResult::Succeeded)
 		{
 			GLastCleanupError = TEXT("register");
 			return false;

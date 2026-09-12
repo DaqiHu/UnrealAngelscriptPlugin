@@ -24,11 +24,11 @@ private:
 			for (asUINT Index = 0; Index < Arguments; ++Index)
 			{
 				asSMetadataParameter Param;
-				Param.Type = Definitions.Image->Primitive(ttInt);
+				Param.Type = Definitions.Set->Primitive(ttInt);
 				Params.Add(Param);
 			}
 			if (bObjects) Type = Definitions.DefineType(TEXT("Item"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT);
-			Run = Definitions.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Definitions.Image->Primitive(bWideReturn ? ttInt64 : ttInt), Params);
+			Run = Definitions.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Definitions.Set->Primitive(bWideReturn ? ttInt64 : ttInt), Params);
 			if (!Run || !Definitions.FinalizeAndFreeze()) return false;
 			asUINT RunSlot = 0;
 			if (Builder.AddFunctionRequirement(*Run, RunSlot) != asEByteCodeImageStatus::Succeeded) return false;
@@ -252,9 +252,9 @@ public:
 		auto Image = Case.Finish();
 		ASSERT_THAT(IsNotNull(Image.Get()));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Case.Definitions.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->InstallDefinitionSet(Case.Definitions.TakeSet())));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Case.Run)));
 		ASSERT_THAT(AreEqual(asEXECUTION_FINISHED, Context->Execute()));

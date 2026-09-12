@@ -559,11 +559,11 @@ namespace
 		return asEByteCodeLinkStatus::Succeeded;
 	}
 
-	bool InternLiveTypeUse(const asCMetadataImage* Image, const asCDataType& Type, asSStableKey& OutKey)
+	bool InternLiveTypeUse(const asCModuleDefinitionSet* Set, const asCDataType& Type, asSStableKey& OutKey)
 	{
 		OutKey = {};
-		if (!Image || !Image->GetIdentityContext().IsValid()) return false;
-		asCTypeContext* Context = const_cast<asCTypeContext*>(Image->GetIdentityContext().Get());
+		if (!Set || !Set->GetIdentityContext().IsValid()) return false;
+		asCTypeContext* Context = const_cast<asCTypeContext*>(Set->GetIdentityContext().Get());
 		asSStableTypeUseDescriptor Descriptor;
 		if (Type.IsReadOnly() || Type.IsHandleToConst())
 		{
@@ -610,12 +610,12 @@ namespace
 	asEByteCodeLinkStatus CheckLiveAttachment(
 		asCScriptEngine& Engine,
 		asIScriptEngine* Owner,
-		const asCMetadataImage* Image)
+		const asCModuleDefinitionSet* Set)
 	{
-		if (!Image) return asEByteCodeLinkStatus::MissingDeclaration;
-		const asEMetadataImageState State = Image->GetState();
-		if (State == asEMetadataImageState::Retired) return asEByteCodeLinkStatus::Retired;
-		if (State == asEMetadataImageState::Attaching || State == asEMetadataImageState::Building)
+		if (!Set) return asEByteCodeLinkStatus::MissingDeclaration;
+		const asEDefinitionSetState State = Set->GetState();
+		if (State == asEDefinitionSetState::Retired) return asEByteCodeLinkStatus::Retired;
+		if (State == asEDefinitionSetState::Attaching || State == asEDefinitionSetState::Building)
 		{
 			return asEByteCodeLinkStatus::SchemaMismatch;
 		}
@@ -625,7 +625,7 @@ namespace
 
 	asEByteCodeLinkStatus CheckLiveImage(asCScriptEngine& Engine, const asCTypeInfo& Type)
 	{
-		return CheckLiveAttachment(Engine, Type.GetEngine(), Type.GetMetadataImage());
+		return CheckLiveAttachment(Engine, Type.GetEngine(), Type.GetDefinitionSet());
 	}
 
 	asEByteCodeLinkStatus CompareTypeRequirement(
@@ -666,10 +666,10 @@ namespace
 		asCScriptFunction& Function)
 	{
 		const asEByteCodeLinkStatus Attachment = CheckLiveAttachment(
-			Engine, Function.GetEngine(), Function.GetMetadataImage());
+			Engine, Function.GetEngine(), Function.GetDefinitionSet());
 		if (Attachment != asEByteCodeLinkStatus::Succeeded) return Attachment;
 		asSStableKey ReturnTypeUse;
-		if (!InternLiveTypeUse(Function.GetMetadataImage(), Function.GetReturnDataType(), ReturnTypeUse))
+		if (!InternLiveTypeUse(Function.GetDefinitionSet(), Function.GetReturnDataType(), ReturnTypeUse))
 		{
 			return asEByteCodeLinkStatus::SchemaMismatch;
 		}
@@ -691,7 +691,7 @@ namespace
 			const asCDataType* ParameterType = Function.GetParameterDataType(Index);
 			if (!ParameterType) return asEByteCodeLinkStatus::SchemaMismatch;
 			asSStableKey TypeUse;
-			if (!InternLiveTypeUse(Function.GetMetadataImage(), *ParameterType, TypeUse))
+			if (!InternLiveTypeUse(Function.GetDefinitionSet(), *ParameterType, TypeUse))
 			{
 				return asEByteCodeLinkStatus::SchemaMismatch;
 			}
@@ -932,12 +932,6 @@ asEByteCodeLinkStatus asLinkByteCodeImage(
 	}
 	OutSnapshot = Snapshot;
 	return asEByteCodeLinkStatus::Succeeded;
-}
-
-asEByteCodeLinkStatus asCScriptEngine::LinkByteCodeImage(const asCByteCodeImage& Image, asCExecutableSnapshot*& OutSnapshot)
-{
-	if (shuttingDown || vmRetirementRequested || metadataRegistrationRetired) return asEByteCodeLinkStatus::Retired;
-	return asLinkByteCodeImage(*this, Image, OutSnapshot);
 }
 
 asEByteCodeLinkStatus asCScriptEngine::BindNativeFunction(const asSStableKey& FunctionKey, const asSFuncPtr& Function, asDWORD CallConv, asFunctionCaller Caller, void* Auxiliary, int BaseOffset)

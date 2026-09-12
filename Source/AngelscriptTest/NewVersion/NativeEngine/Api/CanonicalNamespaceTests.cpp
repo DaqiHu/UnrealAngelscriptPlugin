@@ -63,13 +63,13 @@ TEST_CLASS_WITH_FLAGS(CanonicalNamespace, "Angelscript.UnitTest.NativeEngine", E
 		ASSERT_THAT(IsNull(Builder.engine));
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		const asCObjectType* Item = nullptr;
-		for (asCTypeInfo* Type : Builder.GetDefinitions()->GetTypes())
+		for (asCTypeInfo* Type : Builder.GetModuleDefinitionSet()->GetTypes())
 			if (Type->name == "Item") Item = static_cast<asCObjectType*>(Type);
 		ASSERT_THAT(IsNotNull(Item));
 		ASSERT_THAT(AreEqual(FString(TEXT("Demo")), FString(UTF8_TO_TCHAR(Item->GetNamespace()))));
-		ASSERT_THAT(IsTrue(Builder.GetDefinitions()->GetFunctions().Num() >= 0));
-		const asCScriptFunction* Any = Builder.GetDefinitions()->GetFunctions().Num()
-			? Builder.GetDefinitions()->GetFunctions()[0] : nullptr;
+		ASSERT_THAT(IsTrue(Builder.GetModuleDefinitionSet()->GetFunctions().Num() >= 0));
+		const asCScriptFunction* Any = Builder.GetModuleDefinitionSet()->GetFunctions().Num()
+			? Builder.GetModuleDefinitionSet()->GetFunctions()[0] : nullptr;
 		if (Any)
 		{
 			const AS_NAMESPACE_QUALIFIER asSStableKey& FunctionKey = Any->GetStableKey();

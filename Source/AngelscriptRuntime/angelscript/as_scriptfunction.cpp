@@ -38,7 +38,7 @@
 
 
 #include "as_scriptfunction.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_config.h"
 #include "as_tokendef.h"
 #include "as_scriptengine.h"
@@ -384,7 +384,7 @@ asCScriptFunction::asCScriptFunction(asCScriptEngine *engine, asCModule *mod, as
 		engine->gc.AddScriptObjectToGC(this, &engine->functionBehaviours);
 }
 
-asCScriptFunction::asCScriptFunction(asCMetadataImage& owner,
+asCScriptFunction::asCScriptFunction(asCModuleDefinitionSet& owner,
 	const asSStableKey& key, asEFuncType kind)
 	: asCScriptFunction(nullptr, nullptr, kind)
 {
@@ -1999,6 +1999,16 @@ asDWORD *asCScriptFunction::GetByteCode(asUINT *length)
 		return scriptData->byteCode.AddressOf();
 
 	return 0;
+}
+
+TConstArrayView<asDWORD> asCScriptFunction::GetStableByteCode() const
+{
+	return MakeArrayView(stableByteCode);
+}
+
+void asCScriptFunction::SetStableByteCode(TArray<asDWORD> Bytes)
+{
+	stableByteCode = MoveTemp(Bytes);
 }
 
 // interface

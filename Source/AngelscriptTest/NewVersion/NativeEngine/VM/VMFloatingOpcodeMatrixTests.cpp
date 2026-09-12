@@ -111,9 +111,9 @@ namespace VMFloatingOpcodeMatrixPrivate
 
 		bool Start(const TCHAR* Name, eTokenType Return, asUINT FrameSize)
 		{
-			Function = Fixture.DefineFunction(Name, TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(Return), {});
+			Function = Fixture.DefineFunction(Name, TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(Return), {});
 			if (!Function || !Fixture.FinalizeAndFreeze()) return false;
-			if (Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded) return false;
+			if (RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set)) != asEMetadataRegistrationResult::Succeeded) return false;
 			asUINT Slot = 0;
 			if (Builder.AddFunctionRequirement(*Function, Slot) != asEByteCodeImageStatus::Succeeded) return false;
 			return Builder.BeginFunction(Function->GetStableKey(), Function->GetStableKey(), FrameSize, 0)
@@ -125,7 +125,7 @@ namespace VMFloatingOpcodeMatrixPrivate
 			if (Builder.EndFunction() != asEByteCodeImageStatus::Succeeded) return false;
 			if (Builder.Finish(Image) != asEByteCodeImageStatus::Succeeded) return false;
 			asCExecutableSnapshot* Linked = nullptr;
-			if (Engine.Ptr->LinkByteCodeImage(*Image, Linked) != asEByteCodeLinkStatus::Succeeded) return false;
+			if (asLinkByteCodeImage(*Engine.Ptr, *Image, Linked) != asEByteCodeLinkStatus::Succeeded) return false;
 			Snapshot = Linked;
 			Context = Engine.Ptr->CreateContext();
 			return Context && Context->Prepare(Function) == 0;

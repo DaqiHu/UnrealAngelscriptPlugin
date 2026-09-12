@@ -1,7 +1,7 @@
 #pragma once
 
 #include "AngelscriptTypeBindInfo.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_type_id_registry.h"
 
 class FAngelscriptReflectedTypeSnapshot;

@@ -14,7 +14,7 @@ private:
 	struct FFixture
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCModuleDefinitionSet> Set = asCModuleDefinitionSet::Create();
 		asCObjectType* Owner = nullptr;
 		asCScriptFunction* ToInt = nullptr;
 		asCScriptFunction* ToFloat = nullptr;
@@ -22,7 +22,7 @@ private:
 		AS_NAMESPACE_QUALIFIER asSStableKey FloatType;
 		bool Initialize()
 		{
-if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return false;
+if (Set->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return false;
 			Context->InternPrimitiveTypeUse(asEPrimitiveType::Int32, IntType);
 			Context->InternPrimitiveTypeUse(asEPrimitiveType::Float64, FloatType);
 			asSNominalTypeDescriptor Nominal;
@@ -31,7 +31,7 @@ if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return f
 			Nominal.Kind = asETypeDeclKind::Class;
 			asSStableKey OwnerKey;
 			return Context->GetIdentityRegistry().InternNominalType(Nominal, OwnerKey) == asETypeIdentityStatus::Succeeded
-				&& Image->CreateObjectType(OwnerKey, "Source", "", asOBJ_REF | asOBJ_SCRIPT_OBJECT, Owner) == asEMetadataResult::Succeeded
+				&& Set->CreateObjectType(OwnerKey, "Source", "", asOBJ_REF | asOBJ_SCRIPT_OBJECT, Owner) == asEMetadataResult::Succeeded
 				&& AddConversion("opImplConv", IntType, ttInt, ToInt)
 				&& AddConversion("opImplConv", FloatType, ttFloat64, ToFloat);
 		}
@@ -46,15 +46,15 @@ asSFunctionIdentityDescriptor Descriptor;
 			Descriptor.ConversionDestination = Destination;
 			asSStableKey Key;
 			return Context->GetIdentityRegistry().InternFunction(Descriptor, Key) == asETypeIdentityStatus::Succeeded
-				&& Image->CreateFunction(Key, Name, "", asFUNC_SCRIPT, Out) == asEMetadataResult::Succeeded
-				&& Image->DefineFunction(*Out, Image->Primitive(Token), {}, Owner) == asEMetadataResult::Succeeded
-				&& Image->SetFunctionDeclarationFacts(*Out, asEFunctionIdentityKind::Conversion, Owner) == asEMetadataResult::Succeeded;
+				&& Set->CreateFunction(Key, Name, "", asFUNC_SCRIPT, Out) == asEMetadataResult::Succeeded
+				&& Set->DefineFunction(*Out, Set->Primitive(Token), {}, Owner) == asEMetadataResult::Succeeded
+				&& Set->SetFunctionDeclarationFacts(*Out, asEFunctionIdentityKind::Conversion, Owner) == asEMetadataResult::Succeeded;
 		}
 		bool Freeze()
 		{
-			return Image->FinalizeLayouts() == asEMetadataResult::Succeeded
-				&& Image->Freeze() == asEMetadataResult::Succeeded
-				&& Image->ValidateFrozenDefinitions();
+			return Set->FinalizeLayouts() == asEMetadataResult::Succeeded
+				&& Set->Freeze() == asEMetadataResult::Succeeded
+				&& Set->ValidateFrozenDefinitions();
 		}
 	};
 	struct FBuilderInput
@@ -98,18 +98,18 @@ FFixture Fixture;
 		ASSERT_THAT(IsTrue(Fixture.Initialize()));
 		ASSERT_THAT(IsTrue(Fixture.Freeze()));
 		const asCDataType Original = Fixture.ToInt->returnType;
-		Fixture.ToInt->returnType = Fixture.Image->Primitive(ttBool);
-		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
+		Fixture.ToInt->returnType = Fixture.Set->Primitive(ttBool);
+		ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
 		asCScriptEngine* Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->InstallDefinitionSet(MoveTemp(Fixture.Set)) != asEMetadataRegistrationResult::Succeeded));
 		Fixture.ToInt->returnType = Original;
-		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Fixture.Set->ValidateFrozenDefinitions()));
 		Fixture.ToInt->traits.SetTrait(asTRAIT_CONSTRUCTOR, true);
-		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
 		Fixture.ToInt->traits.SetTrait(asTRAIT_CONSTRUCTOR, false);
-		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Engine->InstallDefinitionSet(MoveTemp(Fixture.Set)) == asEMetadataRegistrationResult::Succeeded));
 		ASSERT_THAT(IsTrue(Engine->FindMetadataFunction(Fixture.ToInt->GetStableKey()) == Fixture.ToInt));
 	}
 
@@ -120,13 +120,13 @@ FFixture Fixture;
 		ASSERT_THAT(IsTrue(Fixture.Freeze()));
 		asCObjectType* Original = Fixture.ToInt->objectType;
 		Fixture.ToInt->objectType = nullptr;
-		ASSERT_THAT(IsFalse(Fixture.Image->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsFalse(Fixture.Set->ValidateFrozenDefinitions()));
 		asCScriptEngine* Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) != asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Engine->InstallDefinitionSet(MoveTemp(Fixture.Set)) != asEMetadataRegistrationResult::Succeeded));
 		Fixture.ToInt->objectType = Original;
-		ASSERT_THAT(IsTrue(Fixture.Image->ValidateFrozenDefinitions()));
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(MoveTemp(Fixture.Image)) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(Fixture.Set->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Engine->InstallDefinitionSet(MoveTemp(Fixture.Set)) == asEMetadataRegistrationResult::Succeeded));
 	}
 
 	TEST_METHOD(ConversionDeclarationFactsRejectVoidAndParameterizedShapes)
@@ -147,14 +147,14 @@ FFixture Fixture;
 		ASSERT_THAT(AreEqual(asETypeIdentityStatus::Succeeded,
 			Fixture.Context->GetIdentityRegistry().InternFunction(Descriptor, Key)));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Fixture.Image->CreateFunction(Key, "opConv", "", asFUNC_SCRIPT, Parameterized)));
+			Fixture.Set->CreateFunction(Key, "opConv", "", asFUNC_SCRIPT, Parameterized)));
 		asSMetadataParameter Argument;
 		Argument.Name = "Extra";
-		Argument.Type = Fixture.Image->Primitive(ttInt);
+		Argument.Type = Fixture.Set->Primitive(ttInt);
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			Fixture.Image->DefineFunction(*Parameterized, Fixture.Image->Primitive(ttInt), {Argument}, Fixture.Owner)));
+			Fixture.Set->DefineFunction(*Parameterized, Fixture.Set->Primitive(ttInt), {Argument}, Fixture.Owner)));
 		ASSERT_THAT(AreEqual(asEMetadataResult::InvalidSignature,
-			Fixture.Image->SetFunctionDeclarationFacts(*Parameterized, asEFunctionIdentityKind::Conversion, Fixture.Owner)));
+			Fixture.Set->SetFunctionDeclarationFacts(*Parameterized, asEFunctionIdentityKind::Conversion, Fixture.Owner)));
 	}
 
 	TEST_METHOD(BuilderPublishesDestinationDistinctConversionsAndRejectsVoidShape)
@@ -162,15 +162,15 @@ FFixture Fixture;
 		FBuilderInput Valid(TEXT("class Source { int opImplConv() const; float64 opImplConv() const; }"));
 		asCBuilder Builder(Valid.Snapshot, Valid.Diagnostics, Valid.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
-		TUniquePtr<asCMetadataImage> Image = Builder.TakeDefinitions();
-		ASSERT_THAT(IsTrue(bool(Image)));
-		ASSERT_THAT(IsTrue(Image->ValidateFrozenDefinitions()));
+		TUniquePtr<asCModuleDefinitionSet> Set = Builder.TakeModuleDefinitionSet();
+		ASSERT_THAT(IsTrue(bool(Set)));
+		ASSERT_THAT(IsTrue(Set->ValidateFrozenDefinitions()));
 		TArray<const asCScriptFunction*> Conversions;
-		for (const asCScriptFunction* Function : Image->GetFunctions())
+		for (const asCScriptFunction* Function : Set->GetFunctions())
 			if (Function->name == "opImplConv") Conversions.Add(Function);
 		ASSERT_THAT(AreEqual(2, Conversions.Num()));
 		ASSERT_THAT(IsFalse(Conversions[0]->GetStableKey() == Conversions[1]->GetStableKey()));
-		auto Context = Image->GetIdentityContext();
+		auto Context = Set->GetIdentityContext();
 		ASSERT_THAT(IsTrue(Context.IsValid()));
 		for (const asCScriptFunction* Function : Conversions)
 		{
@@ -184,7 +184,7 @@ FFixture Fixture;
 		FBuilderInput Invalid(TEXT("class Source { void opConv(); int Later(); }"));
 		asCBuilder Rejected(Invalid.Snapshot, Invalid.Diagnostics, Invalid.Options);
 		ASSERT_THAT(IsFalse(Rejected.RunThrough()));
-		ASSERT_THAT(IsFalse(bool(Rejected.GetDefinitions())));
+		ASSERT_THAT(IsFalse(bool(Rejected.GetModuleDefinitionSet())));
 	}
 };
 #endif

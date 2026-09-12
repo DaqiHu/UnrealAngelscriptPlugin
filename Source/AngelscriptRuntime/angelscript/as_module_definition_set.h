@@ -30,6 +30,15 @@ class asCGlobalProperty;
 struct asSNameSpace;
 class asCScriptEngine;
 class asCTypeContext;
+class asCByteCodeImage;
+class asCByteCodeEmitter;
+class asCBuilder;
+class asCBuilderState;
+class asCCompilationSession;
+class asCDefinitionConsumer;
+class asCEngineCompileRegistration;
+struct asSByteCodeEmissionOptions;
+struct asSByteCodeEmissionResult;
 	enum class asETypeDeclKind : uint8;
 	enum class asEFunctionIdentityKind : uint8;
 
@@ -41,7 +50,7 @@ struct asSMetadataOptions
 	asCString TargetProfile = "native";
 };
 
-enum class asEMetadataImageState : asBYTE
+enum class asEDefinitionSetState : asBYTE
 {
 	Building, Frozen, Attaching, Attached, Retired
 };
@@ -93,34 +102,32 @@ struct asSNativeGlobalFacts
 	bool EditorOnly = false;
 };
 
-// An image is a unique intermediate helper for actual runtime metadata, never
-// proxy records. Callers hold TUniquePtr; Engine adopt takes unique ownership.
-// Dependency edges are non-owning. Draft mutation is serialized by this API.
-// Frozen images are immutable and dependencies can only name already frozen images.
-// Array views and legacy public field inspection require an externally quiet
-// draft or a frozen image; direct writes to legacy fields are not this API's
-// mutation protocol. A producer-owned canonical identity context authenticates
-// keys at integration time; accepting a nonzero shell key does not do so.
-class ANGELSCRIPTRUNTIME_API asCMetadataImage final
+// One compile unit's unique owner of TypeInfo/Function/Global until batch
+// Engine registration. Not asCModule.
+class ANGELSCRIPTRUNTIME_API asCModuleDefinitionSet
 {
 public:
-	static TUniquePtr<asCMetadataImage> Create(const asSMetadataOptions& Options = {});
-	~asCMetadataImage();
-	asCMetadataImage(const asCMetadataImage&) = delete;
-	asCMetadataImage& operator=(const asCMetadataImage&) = delete;
+	asCModuleDefinitionSet();
+	explicit asCModuleDefinitionSet(const asSMetadataOptions& Options);
+	static TUniquePtr<asCModuleDefinitionSet> Create(const asSMetadataOptions& Options = {});
+	~asCModuleDefinitionSet();
+	asCModuleDefinitionSet(const asCModuleDefinitionSet&) = delete;
+	asCModuleDefinitionSet& operator=(const asCModuleDefinitionSet&) = delete;
 
 	const asSMetadataOptions& GetOptions() const { return Options; }
-	asEMetadataImageState GetState() const { return State.load(std::memory_order_acquire); }
-	bool IsFrozen() const { return GetState() != asEMetadataImageState::Building; }
+	asEDefinitionSetState GetState() const { return State.load(std::memory_order_acquire); }
+	bool IsFrozen() const { return GetState() != asEDefinitionSetState::Building; }
+	bool IsImmutable() const { return IsFrozen(); }
 	bool IsDestroying() const { return bDestroying; }
 	TConstArrayView<asCTypeInfo*> GetTypes() const { return MakeArrayView(Types); }
 	TConstArrayView<asCScriptFunction*> GetFunctions() const { return MakeArrayView(Functions); }
 	TConstArrayView<asCGlobalProperty*> GetGlobalProperties() const { return MakeArrayView(Globals); }
-	TConstArrayView<asCMetadataImage*> GetDependencies() const { return MakeArrayView(Dependencies); }
+	TConstArrayView<asCModuleDefinitionSet*> GetDependencies() const { return MakeArrayView(Dependencies); }
 	bool Owns(const asCTypeInfo* Type) const;
 	bool Owns(const asCScriptFunction* Function) const;
 	bool CanReference(const asCTypeInfo* Type) const;
 	bool CanReference(const asCScriptFunction* Function) const;
+	asCTypeInfo* FindType(const char* Name) const;
 	asCTypeInfo* FindType(const asSStableKey& Key) const;
 	asCScriptFunction* FindFunction(const asSStableKey& Key) const;
 	asCGlobalProperty* FindGlobalProperty(const asSStableKey& Key) const;
@@ -135,7 +142,7 @@ public:
 	int GetBoundTypeId(const asCTypeInfo* Type) const;
 	int GetBoundFunctionId(const asCScriptFunction* Function) const;
 	int GetBoundDataTypeId(const asCDataType& Type) const;
-	asEMetadataResult AddDependency(asCMetadataImage* Dependency);
+	asEMetadataResult AddDependency(asCModuleDefinitionSet* Dependency);
 	asEMetadataResult CreateObjectType(const asSStableKey& Key,
 		const char* Name, const char* Namespace, asQWORD Flags, asCObjectType*& Out);
 	asEMetadataResult CreateEnumType(const asSStableKey& Key,
@@ -190,18 +197,42 @@ public:
 	asEFingerprintStatus TryGetLayoutHash(const asCTypeInfo& Type, asSLayoutHash& OutHash,
 		TConstArrayView<uint8>* OutWitness = nullptr) const;
 	void SetFingerprintDigestProvider(const asIFingerprintDigestProvider* Provider);
+	void AttachDependencies(TConstArrayView<asCModuleDefinitionSet*> InDependencies);
+	void AdoptEmittedByteCode(TUniquePtr<asCByteCodeImage> InImage);
+	asCByteCodeImage* PeekEmittedByteCode() const;
+	TUniquePtr<asCByteCodeImage> TakeEmittedByteCode();
 
 private:
-	friend class asCScriptEngine; // Engine binding is a later, whole-image transaction.
+	friend class asCScriptEngine;
 	friend class asCTypeInfo;
+	friend class asCObjectType;
+	friend class asCEnumType;
+	friend class asCTypedefType;
+	friend class asCCallableType;
+	friend class asCScriptFunction;
+	friend class asCGlobalProperty;
+	friend class asCEngineCompileRegistration;
+	friend class asCDefinitionConsumer;
+	friend class asCCompilationSession;
+	friend class asCBuilder;
+	friend class asCBuilderState;
+	friend class asCByteCodeEmitter;
+	friend class FAngelscriptTypeBindInfoDraft;
+	friend class FAngelscriptTypeBindInfoApply;
+	friend class FAngelscriptTypeBindInfoInstallation;
+	friend struct FDetachedDefinitionFixture;
 	friend struct asSMetadataFingerprintEncoder;
-	explicit asCMetadataImage(const asSMetadataOptions& InOptions);
+	friend ANGELSCRIPTRUNTIME_API asSByteCodeEmissionResult asEmitByteCodeImage(
+		const asCCompilationSession*,
+		const asCModuleDefinitionSet*,
+		const asSByteCodeEmissionOptions&,
+		TUniquePtr<asCByteCodeImage>&);
 	asEMetadataResult ValidateNew(const asSStableKey& Key, const char* Name,
 		const char* Namespace, bool IsType) const;
 	asSNameSpace* InternNamespace(const char* Name);
 	asEMetadataResult ValidateDataType(const asCDataType& Type, bool AllowVoid, bool AllowWildcard = false) const;
 	asCDataType NormalizeOptions(const asCDataType& Type) const;
-	bool ReferencesImage(const asCMetadataImage* Image) const;
+	bool ReferencesSet(const asCModuleDefinitionSet* Set) const;
 	bool ValidateFrozenIdentity() const;
 	bool ValidateListInitializers() const;
 	bool ValidateListPattern(const asSMetadataListPattern& Pattern, asUINT GenericArity, int Depth, int& NodeBudget) const;
@@ -230,7 +261,7 @@ private:
 	void InvalidateLayouts() { bLayoutsFinalized = false; }
 
 	const asSMetadataOptions Options;
-	std::atomic<asEMetadataImageState> State{asEMetadataImageState::Building};
+	std::atomic<asEDefinitionSetState> State{asEDefinitionSetState::Building};
 	mutable std::mutex MutationMutex;
 	TArray<asCTypeInfo*> Types;
 	TArray<asCScriptFunction*> Functions;
@@ -244,7 +275,7 @@ private:
 	TMap<asSStableKey, asCGlobalProperty*> GlobalsByKey;
 	TMap<FString, asCGlobalProperty*, FDefaultSetAllocator, asTNameKeyFuncs<asCGlobalProperty*>> GlobalsByName;
 	TArray<asSNameSpace*> Namespaces;
-	TArray<asCMetadataImage*> Dependencies;
+	TArray<asCModuleDefinitionSet*> Dependencies;
 	TMap<asSStableKey, asCTypeInfo*> TypesByKey;
 	TMap<asSStableKey, asCScriptFunction*> FunctionsByKey;
 	TMap<FString, asCTypeInfo*, FDefaultSetAllocator, asTNameKeyFuncs<asCTypeInfo*>> TypesByName;
@@ -277,6 +308,7 @@ private:
 		TArray<uint8> LayoutWitness;
 	};
 	mutable TMap<const asCTypeInfo*, asSCachedFingerprint> Fingerprints;
+	TUniquePtr<asCByteCodeImage> EmittedByteCode;
 	asEFingerprintStatus EnsureFingerprintsLocked(const asCTypeInfo& Type, const asSCachedFingerprint*& Out) const;
 };
 

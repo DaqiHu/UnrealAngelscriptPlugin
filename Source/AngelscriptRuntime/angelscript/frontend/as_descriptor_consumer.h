@@ -33,7 +33,8 @@ struct asSCollectedParameterDescription
 		bool Project(
 			const asCCompilationSession& Session,
 			const asCSourceManager& SourceManager,
-			FAngelscriptPreprocessResult& InOutResult) const;
+			FAngelscriptPreprocessResult& InOutResult,
+			bool bIncludeUnattributedRecords = false) const;
 	};
 
 END_AS_NAMESPACE

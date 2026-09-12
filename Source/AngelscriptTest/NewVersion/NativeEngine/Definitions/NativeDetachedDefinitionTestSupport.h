@@ -1,6 +1,7 @@
 #pragma once
 
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
+#include "as_engine_compile_registration.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 #include "as_property.h"
@@ -14,12 +15,12 @@ struct FDetachedDefinitionFixture
 {
 	TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context =
 		MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-	TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
+	TUniquePtr<asCModuleDefinitionSet> Set = asCModuleDefinitionSet::Create();
 	FString Scope = TEXT("vm-detached");
 
 	bool BindContext()
 	{
-		return Image && Image->SetIdentityContext(Context) == asEMetadataResult::Succeeded;
+		return Set && Set->SetIdentityContext(Context) == asEMetadataResult::Succeeded;
 	}
 
 	asCObjectType* DefineType(const TCHAR* Name, const TCHAR* Namespace, asQWORD Flags)
@@ -43,7 +44,7 @@ struct FDetachedDefinitionFixture
 		}
 		const auto Utf8Name = StringCast<ANSICHAR>(Name);
 		const auto Utf8Namespace = StringCast<ANSICHAR>(Namespace ? Namespace : TEXT(""));
-		if (Image->CreateObjectType(Key, Utf8Name.Get(), Utf8Namespace.Get(), Flags, Type) != asEMetadataResult::Succeeded)
+		if (Set->CreateObjectType(Key, Utf8Name.Get(), Utf8Namespace.Get(), Flags, Type) != asEMetadataResult::Succeeded)
 		{
 			return nullptr;
 		}
@@ -96,15 +97,15 @@ struct FDetachedDefinitionFixture
 		asCScriptFunction* Function = nullptr;
 		const auto Utf8Name = StringCast<ANSICHAR>(Name);
 		const auto Utf8Namespace = StringCast<ANSICHAR>(Namespace ? Namespace : TEXT(""));
-		if (Image->CreateFunction(Key, Utf8Name.Get(), Utf8Namespace.Get(), Kind, Function) != asEMetadataResult::Succeeded)
+		if (Set->CreateFunction(Key, Utf8Name.Get(), Utf8Namespace.Get(), Kind, Function) != asEMetadataResult::Succeeded)
 		{
 			return nullptr;
 		}
-		if (Image->DefineFunction(*Function, ReturnType, Parameters, Owner) != asEMetadataResult::Succeeded)
+		if (Set->DefineFunction(*Function, ReturnType, Parameters, Owner) != asEMetadataResult::Succeeded)
 		{
 			return nullptr;
 		}
-		if (Image->SetFunctionDeclarationFacts(*Function, Descriptor.Kind, Owner) != asEMetadataResult::Succeeded)
+		if (Set->SetFunctionDeclarationFacts(*Function, Descriptor.Kind, Owner) != asEMetadataResult::Succeeded)
 		{
 			return nullptr;
 		}
@@ -114,7 +115,7 @@ struct FDetachedDefinitionFixture
 	asCObjectProperty* DefineProperty(asCObjectType& Owner, const char* Name, const asCDataType& Type)
 	{
 		asCObjectProperty* Property = nullptr;
-		if (Image->AddProperty(Owner, Name, Type, Property) != asEMetadataResult::Succeeded)
+		if (Set->AddProperty(Owner, Name, Type, Property) != asEMetadataResult::Succeeded)
 		{
 			return nullptr;
 		}
@@ -123,14 +124,24 @@ struct FDetachedDefinitionFixture
 
 	bool FinalizeAndFreeze()
 	{
-		return Image->FinalizeLayouts() == asEMetadataResult::Succeeded
-			&& Image->Freeze() == asEMetadataResult::Succeeded
-			&& Image->ValidateFrozenDefinitions();
+		if (!Set) return false;
+		if (!(Set->FinalizeLayouts() == asEMetadataResult::Succeeded
+			&& Set->Freeze() == asEMetadataResult::Succeeded
+			&& Set->ValidateFrozenDefinitions()))
+		{
+			return false;
+		}
+		return Set.IsValid() && Set->IsImmutable();
+	}
+
+	TUniquePtr<asCModuleDefinitionSet> TakeSet()
+	{
+		return MoveTemp(Set);
 	}
 
 	void Reset()
 	{
-		Image.Reset();
+		Set.Reset();
 	}
 
 private:
@@ -176,3 +187,13 @@ private:
 		return Context->GetIdentityRegistry().InternTypeUse(Descriptor, OutKey) == AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded;
 	}
 };
+
+inline asEMetadataRegistrationResult RegisterCompiledDefinitions(
+	asCScriptEngine& Engine,
+	TUniquePtr<asCModuleDefinitionSet> Set)
+{
+	asCEngineCompileRegistration Registration(Engine);
+	TArray<TUniquePtr<asCModuleDefinitionSet>> Units;
+	if (Set) Units.Add(MoveTemp(Set));
+	return Registration.Register(MoveTemp(Units));
+}

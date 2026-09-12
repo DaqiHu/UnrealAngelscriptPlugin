@@ -130,11 +130,11 @@ namespace TypeOwnershipTest
 		return Parameter;
 	}
 
-	inline asSMetadataParameter MakeIntParam(const char* Name, asCMetadataImage& Image)
+	inline asSMetadataParameter MakeIntParam(const char* Name, asCModuleDefinitionSet& Set)
 	{
 		asSMetadataParameter Parameter;
 		Parameter.Name = Name;
-		Parameter.Type = Image.Primitive(ttInt);
+		Parameter.Type = Set.Primitive(ttInt);
 		return Parameter;
 	}
 
@@ -163,7 +163,7 @@ namespace TypeOwnershipTest
 		asSNativePropertyAddress Address;
 		Address.Mode = asENativeAddressMode::Direct;
 		Address.Offset = Offset;
-		return Fixture.Image->DefineNativeProperty(Type, Name, Fixture.Image->Primitive(ttInt), Address, Out)
+		return Fixture.Set->DefineNativeProperty(Type, Name, Fixture.Set->Primitive(ttInt), Address, Out)
 			== asEMetadataResult::Succeeded;
 	}
 
@@ -178,7 +178,7 @@ namespace TypeOwnershipTest
 		{
 			return false;
 		}
-		if (Fixture.Image->SetNativeLayout(*Out.Type, sizeof(FTypeOwnershipPair), alignof(FTypeOwnershipPair))
+		if (Fixture.Set->SetNativeLayout(*Out.Type, sizeof(FTypeOwnershipPair), alignof(FTypeOwnershipPair))
 			!= asEMetadataResult::Succeeded)
 		{
 			return false;
@@ -188,10 +188,10 @@ namespace TypeOwnershipTest
 		{
 			return false;
 		}
-		Out.Sum = Fixture.DefineFunction(TEXT("Sum"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), {}, Out.Type);
-		Out.GetX = Fixture.DefineFunction(TEXT("GetX"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), {}, Out.Type);
-		Out.GetY = Fixture.DefineFunction(TEXT("GetY"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), {}, Out.Type);
-		Out.One = Fixture.DefineFunction(TEXT("One"), TEXT(""), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), {}, Out.Type);
+		Out.Sum = Fixture.DefineFunction(TEXT("Sum"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), {}, Out.Type);
+		Out.GetX = Fixture.DefineFunction(TEXT("GetX"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), {}, Out.Type);
+		Out.GetY = Fixture.DefineFunction(TEXT("GetY"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), {}, Out.Type);
+		Out.One = Fixture.DefineFunction(TEXT("One"), TEXT(""), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), {}, Out.Type);
 		if (!Out.Sum || !Out.GetX || !Out.GetY || !Out.One)
 		{
 			return false;
@@ -201,10 +201,10 @@ namespace TypeOwnershipTest
 			return true;
 		}
 		asSMetadataParameter Self = MakeObjectRefParam("self", Out.Type);
-		Out.RunSum = Fixture.DefineFunction(TEXT("RunSum"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), MakeArrayView(&Self, 1));
-		Out.RunGetX = Fixture.DefineFunction(TEXT("RunGetX"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), MakeArrayView(&Self, 1));
-		Out.RunGetY = Fixture.DefineFunction(TEXT("RunGetY"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), MakeArrayView(&Self, 1));
-		Out.RunOne = Fixture.DefineFunction(TEXT("RunOne"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttInt), MakeArrayView(&Self, 1));
+		Out.RunSum = Fixture.DefineFunction(TEXT("RunSum"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), MakeArrayView(&Self, 1));
+		Out.RunGetX = Fixture.DefineFunction(TEXT("RunGetX"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), MakeArrayView(&Self, 1));
+		Out.RunGetY = Fixture.DefineFunction(TEXT("RunGetY"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), MakeArrayView(&Self, 1));
+		Out.RunOne = Fixture.DefineFunction(TEXT("RunOne"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttInt), MakeArrayView(&Self, 1));
 		return Out.RunSum && Out.RunGetX && Out.RunGetY && Out.RunOne;
 	}
 
@@ -256,7 +256,7 @@ namespace TypeOwnershipTest
 		asCExecutableSnapshot* Snapshot = nullptr;
 		asIScriptContext* Context = nullptr;
 		if (Builder.Finish(Image) != asEByteCodeImageStatus::Succeeded
-			|| Engine->LinkByteCodeImage(*Image, Snapshot) != asEByteCodeLinkStatus::Succeeded)
+			|| asLinkByteCodeImage(*Engine, *Image, Snapshot) != asEByteCodeLinkStatus::Succeeded)
 		{
 			if (Snapshot) Snapshot->Release();
 			return MIN_int32;
@@ -276,9 +276,9 @@ namespace TypeOwnershipTest
 		return Result;
 	}
 
-	inline asCObjectType* FindImageType(asCMetadataImage& Image, const char* Name)
+	inline asCObjectType* FindSetType(asCModuleDefinitionSet& Set, const char* Name)
 	{
-		for (asCTypeInfo* Type : Image.GetTypes())
+		for (asCTypeInfo* Type : Set.GetTypes())
 		{
 			if (Type && Type->name == Name)
 			{
@@ -300,7 +300,7 @@ namespace TypeOwnershipTest
 		{
 			return false;
 		}
-		OutType = FindImageType(*Builder->GetDefinitions(), "ScriptThing");
+		OutType = FindSetType(*Builder->GetModuleDefinitionSet(), "ScriptThing");
 		return OutType != nullptr;
 	}
 }

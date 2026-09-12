@@ -3,7 +3,10 @@
 #include "../NativeEngineTestSupport.h"
 #include "../VM/NativeVMTestSupport.h"
 #include "as_bytecode_emitter.h"
+#include "as_bytecode_image.h"
+#include "as_bytecode_opcode.h"
 #include "as_builder.h"
+#include "as_module_definition_set.h"
 #include "as_scriptfunction.h"
 
 #include <memory>
@@ -22,14 +25,14 @@ struct FSourceExecutionInput
 	explicit FSourceExecutionInput(
 		const FString& Source,
 		TSharedPtr<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> TypeContext,
-		asCMetadataImage* Host)
+		asCModuleDefinitionSet* Host)
 	{
 		Initialize({{TEXT("Main.as"), Source}}, TypeContext, Host);
 	}
 	explicit FSourceExecutionInput(
 		TArray<TPair<FString, FString>> Files,
 		TSharedPtr<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> TypeContext = nullptr,
-		asCMetadataImage* Host = nullptr)
+		asCModuleDefinitionSet* Host = nullptr)
 	{
 		Initialize(MoveTemp(Files), TypeContext, Host);
 	}
@@ -38,7 +41,7 @@ private:
 	void Initialize(
 		TArray<TPair<FString, FString>> Files,
 		TSharedPtr<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> TypeContext,
-		asCMetadataImage* Host)
+		asCModuleDefinitionSet* Host)
 	{
 		for (const TPair<FString, FString>& File : Files)
 		{
@@ -60,11 +63,14 @@ private:
 
 inline asCScriptFunction* FindSourceFunction(asCBuilder& Builder, const char* Name)
 {
-	for (asCScriptFunction* Candidate : Builder.GetDefinitions()->GetFunctions())
+	if (asCModuleDefinitionSet* Set = Builder.GetModuleDefinitionSet())
 	{
-		if (Candidate && Candidate->name == Name)
+		for (asCScriptFunction* Candidate : Set->GetFunctions())
 		{
-			return Candidate;
+			if (Candidate && Candidate->name == Name)
+			{
+				return Candidate;
+			}
 		}
 	}
 	return nullptr;
@@ -84,12 +90,68 @@ inline FString DescribeBuilderFailure(const asCBuilder& Builder)
 	return Out;
 }
 
-inline asSByteCodeEmissionResult EmitFromSession(
+struct FSessionEmission
+{
+	TUniquePtr<asCByteCodeImage> Image;
+	asEByteCodeImageStatus Status = asEByteCodeImageStatus::InvalidArgument;
+	asEByteCodeEmissionStatus EmissionStatus = asEByteCodeEmissionStatus::InvalidInput;
+	asSByteCodeEmissionFailure Failure;
+};
+
+inline FSessionEmission MakeSessionEmission(
+	const asSByteCodeEmissionResult& Result,
+	TUniquePtr<asCByteCodeImage> Image)
+{
+	FSessionEmission Emitted;
+	Emitted.Image = MoveTemp(Image);
+	Emitted.EmissionStatus = Result.EmissionStatus;
+	Emitted.Failure = Result.Failure;
+	Emitted.Status = Emitted.Image
+		? asEByteCodeImageStatus::Succeeded
+		: (Result.EmissionStatus == asEByteCodeEmissionStatus::Succeeded
+			? asEByteCodeImageStatus::Succeeded
+			: asEByteCodeImageStatus::InvalidArgument);
+	return Emitted;
+}
+
+inline FSessionEmission EmitSessionImage(
+	const asCCompilationSession* Session,
+	const asCModuleDefinitionSet* FrozenDefinitions,
+	const asSByteCodeEmissionOptions& Options = asSByteCodeEmissionOptions())
+{
+	TUniquePtr<asCByteCodeImage> Image;
+	const asSByteCodeEmissionResult Result = asEmitByteCodeImage(Session, FrozenDefinitions, Options, Image);
+	return MakeSessionEmission(Result, MoveTemp(Image));
+}
+
+inline FSessionEmission EmitFromSession(
 	asCBuilder& Builder,
 	const asSByteCodeEmissionOptions& Options = asSByteCodeEmissionOptions())
 {
-	return asCByteCodeEmitter::Emit(
+	TUniquePtr<asCByteCodeImage> Image;
+	const asSByteCodeEmissionResult Result = asEmitByteCodeImage(
 		Builder.GetCompilationSession(),
-		Builder.GetDefinitions(),
-		Options);
+		Builder.GetModuleDefinitionSet(),
+		Options,
+		Image);
+	return MakeSessionEmission(Result, MoveTemp(Image));
+}
+
+inline bool FunctionStableHasOpcode(const asCScriptFunction& Function, asEBCInstr Opcode)
+{
+	for (const asDWORD Word : Function.GetStableByteCode())
+	{
+		if (Word == static_cast<asDWORD>(Opcode))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+inline asEMetadataRegistrationResult RegisterCompiledDefinitions(
+	asCScriptEngine& Engine,
+	asCBuilder& Builder)
+{
+	return RegisterCompiledDefinitions(Engine, Builder.TakeModuleDefinitionSet());
 }

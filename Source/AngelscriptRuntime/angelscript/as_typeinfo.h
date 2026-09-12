@@ -52,7 +52,8 @@ BEGIN_AS_NAMESPACE
  enum class asETypeDeclKind : uint8; 
 
 class asCScriptEngine;
-class asCMetadataImage;
+class asCModuleDefinitionSet;
+class asCModuleDefinitionSet;
 class asCModule;
 class asCObjectType;
 class asCEnumType;
@@ -152,7 +153,7 @@ public:
 	const asSStableKey& GetStableKey() const { return metadataStableKey; }
 	asETypeDeclKind GetMetadataDeclarationKind() const { return static_cast<asETypeDeclKind>(metadataDeclarationKind); }
 	asUINT GetMetadataGenericArity() const { return metadataGenericArity; }
-	asCMetadataImage* GetMetadataImage() const { return metadataOwner; }
+	asCModuleDefinitionSet* GetDefinitionSet() const { return metadataOwner; }
 	asCTypeInfo* GetMetadataDeclarationOwner() const { return metadataDeclarationOwner; }
 	asEFingerprintStatus TryGetSchemaHash(asSSchemaHash& OutHash, TConstArrayView<uint8>* OutWitness = nullptr) const;
 	asEFingerprintStatus TryGetLayoutHash(asSLayoutHash& OutHash, TConstArrayView<uint8>* OutWitness = nullptr) const;
@@ -200,17 +201,17 @@ public:
 	asCArray<asPWORD> userData;
 
 protected:
-	friend class asCMetadataImage;
+	friend class asCModuleDefinitionSet;
 	friend class asCScriptEngine;
 	friend class asCConfigGroup;
 	friend class asCModule;
 	friend class asCObjectType;
 	asCTypeInfo();
-	asCTypeInfo(asCMetadataImage& owner, const asSStableKey& key);
+	asCTypeInfo(asCModuleDefinitionSet& owner, const asSStableKey& key);
 
 	mutable asCAtomic externalRefCount;
 	asCAtomic         internalRefCount;
-	asCMetadataImage* metadataOwner = nullptr;
+	asCModuleDefinitionSet* metadataOwner = nullptr;
 	asSStableKey metadataStableKey;
 	asBYTE metadataDeclarationKind = 0;
 	asUINT metadataGenericArity = 0;
@@ -241,8 +242,8 @@ public:
 	const char *GetEnumValueByIndex(asUINT index, int *outValue) const;
 
 protected:
-	friend class asCMetadataImage;
-	asCEnumType(asCMetadataImage& owner, const asSStableKey& key) : asCTypeInfo(owner, key) {}
+	friend class asCModuleDefinitionSet;
+	asCEnumType(asCModuleDefinitionSet& owner, const asSStableKey& key) : asCTypeInfo(owner, key) {}
 	asCEnumType() : asCTypeInfo() {}
 };
 
@@ -261,8 +262,8 @@ public:
 	int GetTypedefTypeId() const;
 
 protected:
-	friend class asCMetadataImage;
-	asCTypedefType(asCMetadataImage& owner, const asSStableKey& key) : asCTypeInfo(owner, key) {}
+	friend class asCModuleDefinitionSet;
+	asCTypedefType(asCModuleDefinitionSet& owner, const asSStableKey& key) : asCTypeInfo(owner, key) {}
 	asCTypedefType() : asCTypeInfo() {}
 };
 
@@ -282,8 +283,8 @@ public:
 	asCObjectType     *parentClass; // doesn't increase refCount
 
 protected:
-	friend class asCMetadataImage;
-	asCCallableType(asCMetadataImage& owner, const asSStableKey& key, asCScriptFunction* func);
+	friend class asCModuleDefinitionSet;
+	asCCallableType(asCModuleDefinitionSet& owner, const asSStableKey& key, asCScriptFunction* func);
 	asCCallableType() : asCTypeInfo(), callableSignature(0), parentClass(0) {}
 };
 

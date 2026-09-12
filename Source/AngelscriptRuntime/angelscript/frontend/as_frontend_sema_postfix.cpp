@@ -300,7 +300,7 @@ namespace asPostfixSema
 		for (const asSExternalCallable& Candidate : Candidates)
 		{
 			asCScriptFunction* Function = Candidate.Function;
-			if (!Function || !Function->GetMetadataImage() || Function->GetStableKey() != Candidate.Key) continue;
+			if (!Function || !Function->GetDefinitionSet() || Function->GetStableKey() != Candidate.Key) continue;
 			const int32 ParameterCount = static_cast<int32>(Function->parameterTypes.GetLength());
 			if (Arguments.Num() > ParameterCount) continue;
 			TArray<int32> Ordinals;

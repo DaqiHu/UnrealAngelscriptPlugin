@@ -59,7 +59,7 @@ public:
 		ASSERT_THAT(IsTrue(FAngelscriptTypeBindInfoDraft::Create(Store, Draft, Diagnostic)));
 		auto* Type = static_cast<AS_NAMESPACE_QUALIFIER asCObjectType*>(Draft->FindType(Record->Declaration.Name)); ASSERT_THAT(IsNotNull(Type));
 		ASSERT_THAT(IsTrue(Type->derivedFrom == Draft->FindType(Snapshot->Find(Base)->Declaration.Name)));
-		ASSERT_THAT(IsNull(Draft->GetImage()->GetBoundEngine())); ASSERT_THAT(IsNull(FAngelscriptEngine::TryGetCurrentEngine()));
+		ASSERT_THAT(IsNull(Draft->GetSet()->GetBoundEngine())); ASSERT_THAT(IsNull(FAngelscriptEngine::TryGetCurrentEngine()));
 	}
 	TEST_METHOD(StructLayoutAndPropertyUsesMatchNativeReflection)
 	{

@@ -1,4 +1,5 @@
 #include "AngelscriptTypeBindInfoApply.h"
+#include "as_engine_compile_registration.h"
 #include "as_scriptengine.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
@@ -862,14 +863,14 @@ namespace
 		D.Kind = asEDeclarationIdentityKind::GlobalVariable; D.Name = Name;
 		return Registry.InternDeclaration(D, Out) == asETypeIdentityStatus::Succeeded;
 	}
-	asCScriptEngine* EngineFromAttachedImage(const asCMetadataImage* Image)
+	asCScriptEngine* EngineFromAttachedSet(const asCModuleDefinitionSet* Set)
 	{
-		if (!Image) return nullptr;
-		for (asCTypeInfo* Type : Image->GetTypes())
+		if (!Set) return nullptr;
+		for (asCTypeInfo* Type : Set->GetTypes())
 		{
 			if (Type && Type->GetEngine()) return static_cast<asCScriptEngine*>(Type->GetEngine());
 		}
-		for (asCScriptFunction* Function : Image->GetFunctions())
+		for (asCScriptFunction* Function : Set->GetFunctions())
 		{
 			if (Function && Function->GetEngine()) return static_cast<asCScriptEngine*>(Function->GetEngine());
 		}
@@ -877,7 +878,7 @@ namespace
 	}
 	asEMetadataRegistrationResult BuildPublishedIdMaps(
 		const FAngelscriptTypeBindInfoStore& Store,
-		asCMetadataImage& Image,
+		asCModuleDefinitionSet& Set,
 		FAngelscriptTypeBindInfoInstallation* Prepared,
 		TMap<const asCTypeInfo*, int>& TypeIds,
 		TMap<const asCScriptFunction*, int>& FunctionIds)
@@ -891,7 +892,7 @@ namespace
 				: nullptr;
 			if (!Type && Record.Declaration.Kind != EAngelscriptTypeBindKind::Namespace)
 			{
-				for (asCTypeInfo* Candidate : Image.GetTypes())
+				for (asCTypeInfo* Candidate : Set.GetTypes())
 				{
 					if (!Candidate) continue;
 					if (FString(UTF8_TO_TCHAR(Candidate->GetName())) == Record.Declaration.Name
@@ -930,7 +931,7 @@ namespace
 				}
 				if (!Function)
 				{
-					for (asCScriptFunction* Candidate : Image.GetFunctions())
+					for (asCScriptFunction* Candidate : Set.GetFunctions())
 					{
 						if (!Candidate) continue;
 						if (FString(UTF8_TO_TCHAR(Candidate->GetName())) == Name)
@@ -952,7 +953,7 @@ bool FAngelscriptTypeBindInfoApply::ConnectNative(const FAngelscriptTypeBindInfo
 	AS_NAMESPACE_QUALIFIER asCScriptEngine& Engine, FString& Diagnostic)
 {
 	Diagnostic.Reset();
-	if (EngineFromAttachedImage(Installation.GetImage()) != &Engine)
+	if (EngineFromAttachedSet(Installation.GetSet()) != &Engine)
 	{
 		Diagnostic = TEXT("Native calls: installation belongs to another engine."); return false;
 	}
@@ -1838,16 +1839,22 @@ bool FAngelscriptTypeBindInfoInstallation::MaterializeTemplateInstance(const FSt
 	asCScriptEngine& Engine, asCObjectType*& OutType, FString& Diagnostic) const
 {
 	OutType = nullptr; Diagnostic.Reset();
-	if (EngineFromAttachedImage(GetImage()) != &Engine)
+	if (EngineFromAttachedSet(GetSet()) != &Engine)
 	{
 		Diagnostic = TEXT("template instance target engine does not own this installation"); return false;
 	}
-	TUniquePtr<asCMetadataImage> NewImage;
-	if (!Draft->MaterializeTemplateDeclaration(Declaration, NewImage, OutType, Diagnostic)) return false;
+	TUniquePtr<asCModuleDefinitionSet> NewSet;
+	if (!Draft->MaterializeTemplateDeclaration(Declaration, NewSet, OutType, Diagnostic)) return false;
 	if (!BuildTemplateOperations(OutType, Diagnostic)) { OutType = nullptr; return false; }
-	if (NewImage && Engine.RegisterMetadataImage(MoveTemp(NewImage)) != asEMetadataRegistrationResult::Succeeded)
+	if (NewSet)
 	{
-		OutType = nullptr; Diagnostic = TEXT("target engine rejected the complete dependent template image"); return false;
+		asCEngineCompileRegistration Registration(Engine);
+		TArray<TUniquePtr<asCModuleDefinitionSet>> Units;
+		Units.Add(MoveTemp(NewSet));
+		if (Registration.Register(MoveTemp(Units)) != asEMetadataRegistrationResult::Succeeded)
+		{
+			OutType = nullptr; Diagnostic = TEXT("target engine rejected the complete dependent template image"); return false;
+		}
 	}
 	return true;
 }
@@ -1860,7 +1867,7 @@ bool FAngelscriptTypeBindInfoApply::Prepare(TSharedRef<const FAngelscriptTypeBin
 	if (!FAngelscriptTypeBindInfoDraft::Create(Store, Installation->Draft, Diagnostic)) return false;
 	Installation->NativeFunctionMaps.Append(Store->GetNativeFunctionMaps());
 	if (Stage) *Stage = EAngelscriptBindingStage::Members;
-	auto& Draft = *Installation->Draft; auto Image = Draft.GetImage();
+	auto& Draft = *Installation->Draft; auto Set = Draft.GetSet();
 	const auto Types = Store->GetTypes();
 	for (int32 TypeIndex = 0; TypeIndex < Types.Num(); ++TypeIndex)
 	{
@@ -1898,7 +1905,7 @@ bool FAngelscriptTypeBindInfoApply::Prepare(TSharedRef<const FAngelscriptTypeBin
 				PropertyFacts.EditorOnly = EnumHasAnyFlags(M.Traits, EAngelscriptBindFunctionTrait::EditorOnly);
 				PropertyFacts.Deprecated = EnumHasAnyFlags(M.Traits, EAngelscriptBindFunctionTrait::Deprecated);
 				PropertyFacts.DeprecationMessage = TCHAR_TO_UTF8(*M.DeprecationMessage);
-				if (Image->SetNativePropertyFacts(*Owner, *Installed.Property, PropertyFacts) != asEMetadataResult::Succeeded)
+				if (Set->SetNativePropertyFacts(*Owner, *Installed.Property, PropertyFacts) != asEMetadataResult::Succeeded)
 					return Fail(TEXT("invalid native property facts"));
 			}
 			else if (M.Kind == EAngelscriptTypeBindMemberKind::GlobalProperty)
@@ -1908,11 +1915,11 @@ bool FAngelscriptTypeBindInfoApply::Prepare(TSharedRef<const FAngelscriptTypeBin
 				if (!GlobalIdentity(Draft.GetTypeContext()->GetIdentityRegistry(), D.Namespace, Parsed.Name, Key))
 					return Fail(TEXT("invalid global declaration identity"));
 				if (!Draft.ResolveTypeUse(Parsed.Type, Type, Reason)) return Fail(Reason);
-				if (Image->CreateNativeGlobalProperty(Key, Parsed.Type, TCHAR_TO_UTF8(*Parsed.Name), TCHAR_TO_UTF8(*D.Namespace), Type, Installed.Global) != asEMetadataResult::Succeeded)
+				if (Set->CreateNativeGlobalProperty(Key, Parsed.Type, TCHAR_TO_UTF8(*Parsed.Name), TCHAR_TO_UTF8(*D.Namespace), Type, Installed.Global) != asEMetadataResult::Succeeded)
 					return Fail(TEXT("invalid or duplicate native global property"));
 				asSNativeGlobalFacts GlobalFacts; GlobalFacts.PureConstant = M.bPureConstant; GlobalFacts.ConstantValue = M.ConstantValue;
 				GlobalFacts.EditorOnly = EnumHasAnyFlags(M.Traits, EAngelscriptBindFunctionTrait::EditorOnly);
-				if (Image->SetNativeGlobalFacts(*Installed.Global, GlobalFacts) != asEMetadataResult::Succeeded)
+				if (Set->SetNativeGlobalFacts(*Installed.Global, GlobalFacts) != asEMetadataResult::Succeeded)
 					return Fail(TEXT("invalid native global facts or pure constant storage type"));
 			}
 			else
@@ -1939,28 +1946,28 @@ bool FAngelscriptTypeBindInfoApply::Prepare(TSharedRef<const FAngelscriptTypeBin
 				const bool Factory = Environment.FunctionKind == asEFunctionIdentityKind::Factory;
 				const auto Kind = Owner && Owner->IsInterface() && !Global ? asFUNC_INTERFACE : asFUNC_SYSTEM;
 				const FString Namespace = FString::Join(Parsed.Signature.NamespacePath, TEXT("::"));
-				if (Image->CreateFunction(Parsed.Function, TCHAR_TO_UTF8(*Parsed.Name), TCHAR_TO_UTF8(*Namespace), Kind, Installed.Function) != asEMetadataResult::Succeeded)
+				if (Set->CreateFunction(Parsed.Function, TCHAR_TO_UTF8(*Parsed.Name), TCHAR_TO_UTF8(*Namespace), Kind, Installed.Function) != asEMetadataResult::Succeeded)
 					return Fail(TEXT("duplicate or invalid function identity"));
-				if (Image->DefineFunction(*Installed.Function, Return, Parameters, Global || Factory ? nullptr : Owner) != asEMetadataResult::Succeeded ||
-					Image->SetFunctionDeclarationFacts(*Installed.Function, Environment.FunctionKind, Global ? nullptr : Owner) != asEMetadataResult::Succeeded)
+				if (Set->DefineFunction(*Installed.Function, Return, Parameters, Global || Factory ? nullptr : Owner) != asEMetadataResult::Succeeded ||
+					Set->SetFunctionDeclarationFacts(*Installed.Function, Environment.FunctionKind, Global ? nullptr : Owner) != asEMetadataResult::Succeeded)
 					return Fail(TEXT("invalid signature or callable owner"));
 				if (Parsed.Signature.Modifiers == asEFunctionIdentityModifiers::ConstMethod) Facts.Traits |= asTRAIT_CONST;
-				if (Image->SetNativeFunctionFacts(*Installed.Function, Facts) != asEMetadataResult::Succeeded)
+				if (Set->SetNativeFunctionFacts(*Installed.Function, Facts) != asEMetadataResult::Succeeded)
 					return Fail(TEXT("invalid native function facts"));
 				if (M.Kind == EAngelscriptTypeBindMemberKind::Constructor || M.Kind == EAngelscriptTypeBindMemberKind::Destructor || M.Kind == EAngelscriptTypeBindMemberKind::Behaviour)
 				{
-					if (M.Native.Behaviour >= asBEHAVE_MAX || Image->AddBehaviour(*Owner, M.Native.Behaviour, *Installed.Function) != asEMetadataResult::Succeeded)
+					if (M.Native.Behaviour >= asBEHAVE_MAX || Set->AddBehaviour(*Owner, M.Native.Behaviour, *Installed.Function) != asEMetadataResult::Succeeded)
 						return Fail(TEXT("invalid callable behaviour"));
 				}
 			}
 			Installation->Members.Add(MoveTemp(Installed));
 		}
 	}
-	if (Image->FinalizeLayouts() != asEMetadataResult::Succeeded || Image->Freeze() != asEMetadataResult::Succeeded || !Image->ValidateFrozenDefinitions())
+	if (Set->FinalizeLayouts() != asEMetadataResult::Succeeded || Set->Freeze() != asEMetadataResult::Succeeded || !Set->ValidateFrozenDefinitions())
 	{
 		Diagnostic = TEXT("Members: complete image failed layout, freeze or canonical definition validation."); return false;
 	}
-	for (asCTypeInfo* Type : Image->GetTypes())
+	for (asCTypeInfo* Type : Set->GetTypes())
 		if (auto* Object = CastToObjectType(Type); Object && Object->GetMetadataTemplateDefinition()
 			&& !Installation->BuildTemplateOperations(Object, Diagnostic)) return false;
 	Out = MoveTemp(Installation);
@@ -1981,27 +1988,29 @@ bool FAngelscriptTypeBindInfoApply::Install(TSharedRef<const FAngelscriptTypeBin
 	{
 		Diagnostic = TEXT("Members: could not publish process IDs for the binding store."); return false;
 	}
-	if (TUniquePtr<AS_NAMESPACE_QUALIFIER asCMetadataImage> Templates = Prepared->TakeTemplateImage())
-	{
-		const auto TemplateStatus = Engine.RegisterMetadataImage(MoveTemp(Templates));
-		if (TemplateStatus != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded
-			&& TemplateStatus != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::AlreadyRegistered)
-		{
-			Diagnostic = TEXT("Members: target engine rejected the template helper image."); return false;
-		}
-	}
 	TMap<const AS_NAMESPACE_QUALIFIER asCTypeInfo*, int> TypeIds;
 	TMap<const AS_NAMESPACE_QUALIFIER asCScriptFunction*, int> FunctionIds;
-	if (AS_NAMESPACE_QUALIFIER asCMetadataImage* Image = Prepared->GetImage())
+	if (AS_NAMESPACE_QUALIFIER asCModuleDefinitionSet* OwnedSet = Prepared->GetSet())
 	{
-		const auto MapStatus = BuildPublishedIdMaps(Store.Get(), *Image, Prepared.Get(), TypeIds, FunctionIds);
+		const auto MapStatus = BuildPublishedIdMaps(Store.Get(), *OwnedSet, Prepared.Get(), TypeIds, FunctionIds);
 		if (MapStatus != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded)
 		{
 			Diagnostic = TEXT("Members: published process IDs could not be mapped onto the frozen image."); return false;
 		}
 	}
-	if (Engine.RegisterMetadataImage(Prepared->TakeImage(), TypeIds, FunctionIds)
-		!= AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded)
+	TArray<TUniquePtr<AS_NAMESPACE_QUALIFIER asCModuleDefinitionSet>> Units;
+	if (TUniquePtr<AS_NAMESPACE_QUALIFIER asCModuleDefinitionSet> Templates = Prepared->TakeTemplateSet())
+	{
+		Units.Add(MoveTemp(Templates));
+	}
+	if (TUniquePtr<AS_NAMESPACE_QUALIFIER asCModuleDefinitionSet> Main = Prepared->TakeSet())
+	{
+		Units.Add(MoveTemp(Main));
+	}
+	AS_NAMESPACE_QUALIFIER asCEngineCompileRegistration Registration(Engine);
+	const auto Installed = Registration.Register(MoveTemp(Units), TypeIds, FunctionIds);
+	if (Installed != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded
+		&& Installed != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::AlreadyRegistered)
 	{
 		Diagnostic = TEXT("Members: target engine rejected the complete frozen image."); return false;
 	}
@@ -2013,29 +2022,30 @@ bool FAngelscriptTypeBindInfoApply::Install(TSharedRef<const FAngelscriptTypeBin
 AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult FAngelscriptTypeBindInfoApply::MaterializePublishedTypes(
 	TSharedRef<const FAngelscriptTypeBindInfoStore> Store,
 	AS_NAMESPACE_QUALIFIER asCScriptEngine& Engine,
-	TUniquePtr<AS_NAMESPACE_QUALIFIER asCMetadataImage> Image)
+	TUniquePtr<AS_NAMESPACE_QUALIFIER asCModuleDefinitionSet> Set)
 {
 	if (!Store->IsPublished()) return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidState;
 	TUniquePtr<FAngelscriptTypeBindInfoInstallation> Prepared;
 	FString Diagnostic;
-	if (!Image)
+	TArray<TUniquePtr<AS_NAMESPACE_QUALIFIER asCModuleDefinitionSet>> Units;
+	if (!Set)
 	{
 		if (!Prepare(Store, Prepared, Diagnostic)) return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidState;
-		if (TUniquePtr<AS_NAMESPACE_QUALIFIER asCMetadataImage> Templates = Prepared->TakeTemplateImage())
+		if (TUniquePtr<AS_NAMESPACE_QUALIFIER asCModuleDefinitionSet> Templates = Prepared->TakeTemplateSet())
 		{
-			const auto Status = Engine.RegisterMetadataImage(MoveTemp(Templates));
-			if (Status != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded
-				&& Status != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::AlreadyRegistered)
-			{
-				return Status;
-			}
+			Units.Add(MoveTemp(Templates));
 		}
-		Image = Prepared->TakeImage();
+		Set = Prepared->TakeSet();
 	}
-	if (!Image) return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidArgument;
+	if (!Set) return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidArgument;
 	TMap<const AS_NAMESPACE_QUALIFIER asCTypeInfo*, int> TypeIds;
 	TMap<const AS_NAMESPACE_QUALIFIER asCScriptFunction*, int> FunctionIds;
-	const auto MapStatus = BuildPublishedIdMaps(Store.Get(), *Image, Prepared.Get(), TypeIds, FunctionIds);
-	if (MapStatus != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded) return MapStatus;
-	return Engine.RegisterMetadataImage(MoveTemp(Image), TypeIds, FunctionIds);
+	if (Set)
+	{
+		const auto MapStatus = BuildPublishedIdMaps(Store.Get(), *Set, Prepared.Get(), TypeIds, FunctionIds);
+		if (MapStatus != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded) return MapStatus;
+	}
+	Units.Add(MoveTemp(Set));
+	AS_NAMESPACE_QUALIFIER asCEngineCompileRegistration Registration(Engine);
+	return Registration.Register(MoveTemp(Units), TypeIds, FunctionIds);
 }

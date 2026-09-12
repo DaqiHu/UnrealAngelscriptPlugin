@@ -144,9 +144,9 @@ public:
 		ASSERT_THAT(IsTrue(Rejected.IsZero()));
 	}
 
-	TEST_METHOD(MetadataImageExposesNoAnonymousOriginFactory)
+	TEST_METHOD(DefinitionSetExposesNoAnonymousOriginFactory)
 	{
-		ASSERT_THAT(IsFalse(HasOriginFactory<asCMetadataImage>));
+		ASSERT_THAT(IsFalse(HasOriginFactory<asCModuleDefinitionSet>));
 	}
 
 	TEST_METHOD(NamedFunctionRoundtripAndExecutionPreserveFortyTwo)
@@ -165,9 +165,9 @@ public:
 		auto Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, Builder)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Emitted.Image, Snapshot)));
 		ON_SCOPE_EXIT { Snapshot->Release(); };
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ON_SCOPE_EXIT { Context->Release(); };

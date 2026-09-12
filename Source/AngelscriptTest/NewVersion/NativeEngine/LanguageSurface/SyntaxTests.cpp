@@ -33,11 +33,11 @@ private:
 	struct FHostTypes
 	{
 		TSharedRef<asCTypeContext, ESPMode::ThreadSafe> Types = MakeShared<asCTypeContext, ESPMode::ThreadSafe>();
-		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCModuleDefinitionSet> Set = MakeUnique<asCModuleDefinitionSet>();
 
 		bool Initialize()
 		{
-			if (Image->SetIdentityContext(Types) != asEMetadataResult::Succeeded) return false;
+			if (Set->SetIdentityContext(Types) != asEMetadataResult::Succeeded) return false;
 			for (const TPair<FString, uint32>& Entry : TArray<TPair<FString, uint32>>{{TEXT("TArray"), 1}, {TEXT("TMap"), 2}})
 			{
 				asSNominalTypeDescriptor Descriptor;
@@ -49,9 +49,9 @@ private:
 				asCObjectType* Type = nullptr;
 				const auto Name = StringCast<ANSICHAR>(*Entry.Key);
 				if (Types->GetIdentityRegistry().InternNominalType(Descriptor, Key) != asETypeIdentityStatus::Succeeded
-					|| Image->CreateObjectType(Key, Name.Get(), "", asOBJ_VALUE | asOBJ_TEMPLATE, Type) != asEMetadataResult::Succeeded
-					|| Image->SetTypeDeclarationFacts(*Type, asETypeDeclKind::Struct, Entry.Value) != asEMetadataResult::Succeeded
-					|| Image->SetFixedTemplateLayout(*Type, 16, 8) != asEMetadataResult::Succeeded) return false;
+					|| Set->CreateObjectType(Key, Name.Get(), "", asOBJ_VALUE | asOBJ_TEMPLATE, Type) != asEMetadataResult::Succeeded
+					|| Set->SetTypeDeclarationFacts(*Type, asETypeDeclKind::Struct, Entry.Value) != asEMetadataResult::Succeeded
+					|| Set->SetFixedTemplateLayout(*Type, 16, 8) != asEMetadataResult::Succeeded) return false;
 			}
 			asSStableKey IntKey, YieldKey;
 			Types->InternPrimitiveTypeUse(asEPrimitiveType::Int32, IntKey);
@@ -62,11 +62,11 @@ private:
 			Yield.ReturnType = IntKey;
 			asCScriptFunction* Function = nullptr;
 			return Types->GetIdentityRegistry().InternFunction(Yield, YieldKey) == asETypeIdentityStatus::Succeeded
-				&& Image->CreateFunction(YieldKey, "yield", "", asFUNC_SYSTEM, Function) == asEMetadataResult::Succeeded
-				&& Image->DefineFunction(*Function, Image->Primitive(ttInt), {}) == asEMetadataResult::Succeeded
-				&& Image->SetFunctionDeclarationFacts(*Function, asEFunctionIdentityKind::Global) == asEMetadataResult::Succeeded
-				&& Image->FinalizeLayouts() == asEMetadataResult::Succeeded
-				&& Image->Freeze() == asEMetadataResult::Succeeded;
+				&& Set->CreateFunction(YieldKey, "yield", "", asFUNC_SYSTEM, Function) == asEMetadataResult::Succeeded
+				&& Set->DefineFunction(*Function, Set->Primitive(ttInt), {}) == asEMetadataResult::Succeeded
+				&& Set->SetFunctionDeclarationFacts(*Function, asEFunctionIdentityKind::Global) == asEMetadataResult::Succeeded
+				&& Set->FinalizeLayouts() == asEMetadataResult::Succeeded
+				&& Set->Freeze() == asEMetadataResult::Succeeded;
 		}
 	};
 
@@ -182,9 +182,9 @@ public:
 		auto Emitted = EmitFromSession(Builder);
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Emitted.Status));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions())));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, Builder)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Emitted.Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Emitted.Image, Snapshot)));
 		ON_SCOPE_EXIT { Snapshot->Release(); };
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ON_SCOPE_EXIT { Context->Release(); };
@@ -205,10 +205,10 @@ public:
 	{
 		FHostTypes Host;
 		ASSERT_THAT(IsTrue(Host.Initialize()));
-		FSourceExecutionInput Input(TEXT("struct Grid {TMap<int,TArray<TArray<int>>> Values;} int Good(){return yield();}"), Host.Types, Host.Image.Get());
+		FSourceExecutionInput Input(TEXT("struct Grid {TMap<int,TArray<TArray<int>>> Values;} int Good(){return yield();}"), Host.Types, Host.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough(), DescribeBuilderFailure(Builder)));
-		ASSERT_THAT(IsTrue(Builder.GetDefinitions()->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Builder.GetModuleDefinitionSet()->ValidateFrozenDefinitions()));
 		ASSERT_THAT(IsNotNull(FindSourceFunction(Builder, "Good")));
 	}
 
@@ -218,7 +218,7 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		for (const TCHAR* Type : {TEXT("Unknown<int>"), TEXT("TArray<int,int>"), TEXT("TMap<int>")})
 		{
-			FSourceExecutionInput Input(FString::Printf(TEXT("struct Bad {%s Value;}"), Type), Host.Types, Host.Image.Get());
+			FSourceExecutionInput Input(FString::Printf(TEXT("struct Bad {%s Value;}"), Type), Host.Types, Host.Set.Get());
 			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 			ASSERT_THAT(IsFalse(Builder.RunThrough(), Type));
 		}

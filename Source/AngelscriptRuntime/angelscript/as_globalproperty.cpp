@@ -34,7 +34,7 @@
 #include "as_config.h"
 #include "as_property.h"
 #include "as_scriptengine.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 
 BEGIN_AS_NAMESPACE
 

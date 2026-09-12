@@ -35,7 +35,7 @@
 
 
 #include "as_typeinfo.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_config.h"
 #include "as_scriptengine.h"
 
@@ -75,7 +75,7 @@ asCTypeInfo::asCTypeInfo(asCScriptEngine *in_engine)
 	nameSpace = engine->nameSpaces[0];
 }
 
-asCTypeInfo::asCTypeInfo(asCMetadataImage& owner, const asSStableKey& key)
+asCTypeInfo::asCTypeInfo(asCModuleDefinitionSet& owner, const asSStableKey& key)
 	: asCTypeInfo()
 {
 	metadataOwner = &owner;
@@ -496,7 +496,7 @@ asCCallableType::asCCallableType(asCScriptEngine *en, asCScriptFunction *func) :
 	func->callableType = this;
 }
 
-asCCallableType::asCCallableType(asCMetadataImage& owner,
+asCCallableType::asCCallableType(asCModuleDefinitionSet& owner,
 	const asSStableKey& key, asCScriptFunction* func)
 	: asCTypeInfo(owner, key), callableSignature(func), parentClass(nullptr)
 {

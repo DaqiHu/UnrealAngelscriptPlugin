@@ -50,9 +50,9 @@ namespace VMSourceUnwindPrivate
 		{
 			Fixture.Scope = TEXT("vm-source-unwind-host");
 			asSMetadataParameter Param = MakeIntParam("n");
-			Param.Type = Fixture.Image->Primitive(ttInt);
-			Mark = Fixture.DefineFunction(TEXT("Mark"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Image->Primitive(ttInt), MakeArrayView(&Param, 1));
-			Fail = Fixture.DefineFunction(TEXT("Fail"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Image->Primitive(ttVoid), {});
+			Param.Type = Fixture.Set->Primitive(ttInt);
+			Mark = Fixture.DefineFunction(TEXT("Mark"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Set->Primitive(ttInt), MakeArrayView(&Param, 1));
+			Fail = Fixture.DefineFunction(TEXT("Fail"), TEXT("Host"), asFUNC_SYSTEM, Fixture.Set->Primitive(ttVoid), {});
 			return Mark && Fail && Fixture.FinalizeAndFreeze();
 		}
 	};
@@ -64,7 +64,7 @@ namespace VMSourceUnwindPrivate
 
 	bool SetupEngine(asCScriptEngine& Engine, FUnwindHost& Host, asCBuilder& Builder)
 	{
-		if (Engine.RegisterMetadataImage(MoveTemp(Host.Fixture.Image)) != asEMetadataRegistrationResult::Succeeded)
+		if (RegisterCompiledDefinitions(Engine, MoveTemp(Host.Fixture.Set)) != asEMetadataRegistrationResult::Succeeded)
 		{
 			GLastError = TEXT("register-host");
 			return false;
@@ -75,7 +75,7 @@ namespace VMSourceUnwindPrivate
 			GLastError = TEXT("bind");
 			return false;
 		}
-		const asEMetadataRegistrationResult Status = Engine.RegisterMetadataImage(Builder.TakeDefinitions());
+		const asEMetadataRegistrationResult Status = RegisterCompiledDefinitions(Engine, Builder);
 		if (Status != asEMetadataRegistrationResult::Succeeded && Status != asEMetadataRegistrationResult::AlreadyRegistered)
 		{
 			GLastError = TEXT("register-source");
@@ -91,7 +91,7 @@ namespace VMSourceUnwindPrivate
 			GLastError = TEXT("compile:") + DescribeBuilderFailure(Builder);
 			return false;
 		}
-		asSByteCodeEmissionResult Emitted = EmitFromSession(Builder);
+		FSessionEmission Emitted = EmitFromSession(Builder);
 		if (Emitted.EmissionStatus != asEByteCodeEmissionStatus::Succeeded || !Emitted.Image.Get())
 		{
 			GLastError = FString::Printf(TEXT("emit-%d"), int32(Emitted.EmissionStatus));
@@ -122,10 +122,10 @@ public:
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::EmitImage(Builder, Image), VMSourceUnwindPrivate::GLastError));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(IsTrue(Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions()) == asEMetadataRegistrationResult::Succeeded
-			|| Engine.Ptr->RegisterMetadataImage(Builder.TakeDefinitions()) == asEMetadataRegistrationResult::AlreadyRegistered));
+		ASSERT_THAT(IsTrue(RegisterCompiledDefinitions(*Engine.Ptr, Builder) == asEMetadataRegistrationResult::Succeeded
+			|| RegisterCompiledDefinitions(*Engine.Ptr, Builder) == asEMetadataRegistrationResult::AlreadyRegistered));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asCScriptFunction* Run = FindSourceFunction(Builder, "Run");
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
@@ -143,14 +143,14 @@ public:
 		FSourceExecutionInput Input(
 			FString(VMSourceUnwindPrivate::BoxSource())
 			+ TEXT("int Run() { Box A(1); Box B(2); int D = 0; return 1/D; } int Recovery() { return 97; }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::EmitImage(Builder, Image), VMSourceUnwindPrivate::GLastError));
 		FNativeEngineOwner Engine;
 		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::SetupEngine(*Engine.Ptr, Host, Builder), VMSourceUnwindPrivate::GLastError));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asCScriptFunction* Run = FindSourceFunction(Builder, "Run");
 		asCScriptFunction* Recovery = FindSourceFunction(Builder, "Recovery");
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
@@ -172,14 +172,14 @@ public:
 		FSourceExecutionInput Input(
 			FString(VMSourceUnwindPrivate::BoxSource())
 			+ TEXT("int Run() { Box A(1); Box B(2); Host::Fail(); return 0; } int Recovery() { return 97; }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::EmitImage(Builder, Image), VMSourceUnwindPrivate::GLastError));
 		FNativeEngineOwner Engine;
 		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::SetupEngine(*Engine.Ptr, Host, Builder), VMSourceUnwindPrivate::GLastError));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asCScriptFunction* Run = FindSourceFunction(Builder, "Run");
 		asCScriptFunction* Recovery = FindSourceFunction(Builder, "Recovery");
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
@@ -202,14 +202,14 @@ public:
 			FString(VMSourceUnwindPrivate::BoxSource())
 			+ TEXT("class Broken { Broken() { Box Local(1); Host::Fail(); } } ")
 			+ TEXT("int Run() { Broken X(); return 0; } int Recovery() { return 97; }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::EmitImage(Builder, Image), VMSourceUnwindPrivate::GLastError));
 		FNativeEngineOwner Engine;
 		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::SetupEngine(*Engine.Ptr, Host, Builder), VMSourceUnwindPrivate::GLastError));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asCScriptFunction* Run = FindSourceFunction(Builder, "Run");
 		asCScriptFunction* Recovery = FindSourceFunction(Builder, "Recovery");
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
@@ -231,14 +231,14 @@ public:
 			FString(VMSourceUnwindPrivate::BoxSource())
 			+ TEXT("class Broken { Broken() { Box Local(1); Host::Fail(); } ~Broken() { Host::Mark(99); } } ")
 			+ TEXT("int Run() { Broken X(); return 0; } int Recovery() { return 97; }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::EmitImage(Builder, Image), VMSourceUnwindPrivate::GLastError));
 		FNativeEngineOwner Engine;
 		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::SetupEngine(*Engine.Ptr, Host, Builder), VMSourceUnwindPrivate::GLastError));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asCScriptFunction* Run = FindSourceFunction(Builder, "Run");
 		asCScriptFunction* Recovery = FindSourceFunction(Builder, "Recovery");
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
@@ -261,7 +261,7 @@ public:
 			+ TEXT("class Inner { Box Completed; Inner() { Completed = Box(2); Host::Fail(); } } ")
 			+ TEXT("class Outer { Box First; Inner Nested; Outer() { First = Box(1); Nested = Inner(); } } ")
 			+ TEXT("int Run() { Outer Value(); return 0; } int Recovery() { return 97; }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		TUniquePtr<asCByteCodeImage> Image;
 		if (!VMSourceUnwindPrivate::EmitImage(Builder, Image))
@@ -272,7 +272,7 @@ public:
 		FNativeEngineOwner Engine;
 		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::SetupEngine(*Engine.Ptr, Host, Builder), VMSourceUnwindPrivate::GLastError));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asCScriptFunction* Run = FindSourceFunction(Builder, "Run");
 		asCScriptFunction* Recovery = FindSourceFunction(Builder, "Recovery");
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
@@ -294,7 +294,7 @@ public:
 		FSourceExecutionInput Input(
 			FString(VMSourceUnwindPrivate::BoxSource())
 			+ TEXT("int Rec(int N) { Box Hold(N); return Rec(N + 1); } int Recovery() { return 97; }"),
-			Host.Fixture.Context, Host.Fixture.Image.Get());
+			Host.Fixture.Context, Host.Fixture.Set.Get());
 		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 		TUniquePtr<asCByteCodeImage> Image;
 		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::EmitImage(Builder, Image), VMSourceUnwindPrivate::GLastError));
@@ -302,7 +302,7 @@ public:
 		ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::SetupEngine(*Engine.Ptr, Host, Builder), VMSourceUnwindPrivate::GLastError));
 		Engine.Ptr->SetEngineProperty(asEP_MAX_STACK_SIZE, 256);
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Image, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot)));
 		asCScriptFunction* Rec = FindSourceFunction(Builder, "Rec");
 		asCScriptFunction* Recovery = FindSourceFunction(Builder, "Recovery");
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
@@ -326,14 +326,14 @@ public:
 		VMSourceUnwindPrivate::FUnwindHost Host;
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		TArray<uint8> Bytes;
-		TUniquePtr<asCMetadataImage> SourceDefs;
+		TUniquePtr<asCModuleDefinitionSet> SourceDefs;
 		asSStableKey RunKey;
 		asSStableKey RecoveryKey;
 		{
 			FSourceExecutionInput Input(
 				FString(VMSourceUnwindPrivate::BoxSource())
 				+ TEXT("int Run() { Box A(1); Host::Fail(); return 0; } int Recovery() { return 97; }"),
-				Host.Fixture.Context, Host.Fixture.Image.Get());
+				Host.Fixture.Context, Host.Fixture.Set.Get());
 			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
 			TUniquePtr<asCByteCodeImage> Image;
 			ASSERT_THAT(IsTrue(VMSourceUnwindPrivate::EmitImage(Builder, Image), VMSourceUnwindPrivate::GLastError));
@@ -343,24 +343,24 @@ public:
 			ASSERT_THAT(IsNotNull(Recovery));
 			RunKey = Run->GetStableKey();
 			RecoveryKey = Recovery->GetStableKey();
-			SourceDefs = Builder.TakeDefinitions();
+			SourceDefs = Builder.TakeModuleDefinitionSet();
 			ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Encode(*Image, Bytes)));
 			ASSERT_THAT(IsTrue(Image->Functions.Num() > 0 && Image->Functions[0].Source.Num() > 0));
 		}
 		FNativeEngineOwner EngineB;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(Host.Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*EngineB.Ptr, MoveTemp(Host.Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			EngineB.Ptr->BindNativeFunction(Host.Mark->GetStableKey(), asFUNCTION(VMSourceUnwindPrivate::GenericMark), asCALL_GENERIC)));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			EngineB.Ptr->BindNativeFunction(Host.Fail->GetStableKey(), asFUNCTION(VMSourceUnwindPrivate::GenericFail), asCALL_GENERIC)));
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, EngineB.Ptr->RegisterMetadataImage(MoveTemp(SourceDefs))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*EngineB.Ptr, MoveTemp(SourceDefs))));
 		asCScriptFunction* RunB = EngineB.Ptr->FindMetadataFunction(RunKey);
 		asCScriptFunction* RecoveryB = EngineB.Ptr->FindMetadataFunction(RecoveryKey);
 		ASSERT_THAT(IsNotNull(RunB));
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, EngineB.Ptr->LinkByteCodeImage(*Decoded, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*EngineB.Ptr, *Decoded, Snapshot)));
 		asIScriptContext* Context = EngineB.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(RunB)));
 		ASSERT_THAT(AreEqual(asEXECUTION_EXCEPTION, Context->Execute()));

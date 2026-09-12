@@ -1,6 +1,6 @@
 #include "CQTest.h"
 #include "as_metadata_fingerprint.h"
-#include "as_metadata_image.h"
+#include "as_module_definition_set.h"
 #include "as_objecttype.h"
 #include "as_property.h"
 #include "frontend/as_type_context.h"
@@ -37,20 +37,20 @@ private:
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context =
 			MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		TUniquePtr<asCMetadataImage> Image = asCMetadataImage::Create();
+		TUniquePtr<asCModuleDefinitionSet> Set = asCModuleDefinitionSet::Create();
 		asCObjectType* Type = nullptr;
 
 		bool CreateNative(const TCHAR* Name, asUINT Size, asUINT Alignment)
 		{
-			if (Image->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return false;
+			if (Set->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return false;
 			AS_NAMESPACE_QUALIFIER asSNominalTypeDescriptor Descriptor;
 			Descriptor.StableScope = TEXT("vm-native-layout");
 			Descriptor.Name = Name;
 			Descriptor.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::Struct;
 			AS_NAMESPACE_QUALIFIER asSStableKey Key;
 			return Context->GetIdentityRegistry().InternNominalType(Descriptor, Key) == AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded
-				&& Image->CreateObjectType(Key, TCHAR_TO_UTF8(Name), "", asOBJ_VALUE | asOBJ_APP_CLASS, Type) == asEMetadataResult::Succeeded
-				&& Image->SetNativeLayout(*Type, Size, Alignment) == asEMetadataResult::Succeeded;
+				&& Set->CreateObjectType(Key, TCHAR_TO_UTF8(Name), "", asOBJ_VALUE | asOBJ_APP_CLASS, Type) == asEMetadataResult::Succeeded
+				&& Set->SetNativeLayout(*Type, Size, Alignment) == asEMetadataResult::Succeeded;
 		}
 
 		asEMetadataResult Direct(const char* Name, eTokenType Token, int Offset, asCObjectProperty*& Out)
@@ -58,7 +58,7 @@ private:
 			asSNativePropertyAddress Address;
 			Address.Mode = asENativeAddressMode::Direct;
 			Address.Offset = Offset;
-			return Image->DefineNativeProperty(*Type, Name, Image->Primitive(Token), Address, Out);
+			return Set->DefineNativeProperty(*Type, Name, Set->Primitive(Token), Address, Out);
 		}
 	};
 
@@ -76,8 +76,8 @@ public:
 			Fixture.Direct("Value", ttInt, static_cast<int>(offsetof(FNativeRecord, Value)), Value)));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
 			Fixture.Direct("Weight", ttFloat64, static_cast<int>(offsetof(FNativeRecord, Weight)), Weight)));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->FinalizeLayouts()));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->Freeze()));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->FinalizeLayouts()));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->Freeze()));
 		ASSERT_THAT(AreEqual(static_cast<int>(sizeof(FNativeRecord)), Fixture.Type->size));
 		ASSERT_THAT(AreEqual(static_cast<int>(alignof(FNativeRecord)), Fixture.Type->alignment));
 		ASSERT_THAT(AreEqual(static_cast<int>(offsetof(FNativeRecord, Tag)), Tag->byteOffset));
@@ -112,15 +112,15 @@ public:
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded,
 			InlineType.Context->GetIdentityRegistry().InternNominalType(InnerDesc, InnerKey)));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			InlineType.Image->CreateObjectType(InnerKey, "Inner", "", asOBJ_VALUE | asOBJ_APP_CLASS, InnerType)));
+			InlineType.Set->CreateObjectType(InnerKey, "Inner", "", asOBJ_VALUE | asOBJ_APP_CLASS, InnerType)));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			InlineType.Image->SetNativeLayout(*InnerType, sizeof(FNativeInner), alignof(FNativeInner))));
+			InlineType.Set->SetNativeLayout(*InnerType, sizeof(FNativeInner), alignof(FNativeInner))));
 		asCObjectProperty* InnerValue = nullptr;
 		asSNativePropertyAddress InnerAddress;
 		InnerAddress.Mode = asENativeAddressMode::Direct;
 		InnerAddress.Offset = static_cast<int>(offsetof(FNativeInner, Value));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			InlineType.Image->DefineNativeProperty(*InnerType, "Value", InlineType.Image->Primitive(ttInt), InnerAddress, InnerValue)));
+			InlineType.Set->DefineNativeProperty(*InnerType, "Value", InlineType.Set->Primitive(ttInt), InnerAddress, InnerValue)));
 		asCObjectProperty* InlineMember = nullptr;
 		asSNativePropertyAddress InlineAddress;
 		InlineAddress.Mode = asENativeAddressMode::CompositeInline;
@@ -128,9 +128,9 @@ public:
 		InlineAddress.MemberOffset = static_cast<int>(offsetof(FNativeInner, Value));
 		InlineAddress.CompositeStorageType = InnerType;
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			InlineType.Image->DefineNativeProperty(*InlineType.Type, "Value", InlineType.Image->Primitive(ttInt), InlineAddress, InlineMember)));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, InlineType.Image->FinalizeLayouts()));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, InlineType.Image->Freeze()));
+			InlineType.Set->DefineNativeProperty(*InlineType.Type, "Value", InlineType.Set->Primitive(ttInt), InlineAddress, InlineMember)));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, InlineType.Set->FinalizeLayouts()));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, InlineType.Set->Freeze()));
 
 		FNativeType IndirectType;
 		ASSERT_THAT(IsTrue(IndirectType.CreateNative(TEXT("OuterIndirect"), sizeof(FNativeOuterIndirect), alignof(FNativeOuterIndirect))));
@@ -139,12 +139,12 @@ public:
 		ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded,
 			IndirectType.Context->GetIdentityRegistry().InternNominalType(InnerDesc, IndirectInnerKey)));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			IndirectType.Image->CreateObjectType(IndirectInnerKey, "Inner", "", asOBJ_VALUE | asOBJ_APP_CLASS, IndirectInner)));
+			IndirectType.Set->CreateObjectType(IndirectInnerKey, "Inner", "", asOBJ_VALUE | asOBJ_APP_CLASS, IndirectInner)));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			IndirectType.Image->SetNativeLayout(*IndirectInner, sizeof(FNativeInner), alignof(FNativeInner))));
+			IndirectType.Set->SetNativeLayout(*IndirectInner, sizeof(FNativeInner), alignof(FNativeInner))));
 		asCObjectProperty* IndirectInnerValue = nullptr;
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			IndirectType.Image->DefineNativeProperty(*IndirectInner, "Value", IndirectType.Image->Primitive(ttInt), InnerAddress, IndirectInnerValue)));
+			IndirectType.Set->DefineNativeProperty(*IndirectInner, "Value", IndirectType.Set->Primitive(ttInt), InnerAddress, IndirectInnerValue)));
 		asCObjectProperty* IndirectMember = nullptr;
 		asSNativePropertyAddress IndirectAddress;
 		IndirectAddress.Mode = asENativeAddressMode::CompositeIndirect;
@@ -152,9 +152,9 @@ public:
 		IndirectAddress.MemberOffset = static_cast<int>(offsetof(FNativeInner, Value));
 		IndirectAddress.CompositeStorageType = IndirectInner;
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
-			IndirectType.Image->DefineNativeProperty(*IndirectType.Type, "Value", IndirectType.Image->Primitive(ttInt), IndirectAddress, IndirectMember)));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, IndirectType.Image->FinalizeLayouts()));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, IndirectType.Image->Freeze()));
+			IndirectType.Set->DefineNativeProperty(*IndirectType.Type, "Value", IndirectType.Set->Primitive(ttInt), IndirectAddress, IndirectMember)));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, IndirectType.Set->FinalizeLayouts()));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, IndirectType.Set->Freeze()));
 
 		AS_NAMESPACE_QUALIFIER asSLayoutHash InlineHash;
 		AS_NAMESPACE_QUALIFIER asSLayoutHash IndirectHash;
@@ -197,8 +197,8 @@ public:
 			Fixture.Direct("Value", ttInt, static_cast<int>(offsetof(FNativeRecord, Value)), Value)));
 		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded,
 			Fixture.Direct("Weight", ttFloat64, static_cast<int>(offsetof(FNativeRecord, Weight)), Weight)));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->FinalizeLayouts()));
-		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Image->Freeze()));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->FinalizeLayouts()));
+		ASSERT_THAT(AreEqual(asEMetadataResult::Succeeded, Fixture.Set->Freeze()));
 		asCObjectProperty* Late = nullptr;
 		ASSERT_THAT(AreEqual(asEMetadataResult::InvalidState,
 			Fixture.Direct("Late", ttInt, static_cast<int>(offsetof(FNativeRecord, Value)), Late)));
@@ -215,8 +215,8 @@ public:
 			asCObjectProperty* Value = nullptr;
 			if (Fixture.Direct("Tag", ttUInt8, static_cast<int>(offsetof(FNativeRecord, Tag)), Tag) != asEMetadataResult::Succeeded) return false;
 			if (Fixture.Direct("Value", ttInt, ValueOffset, Value) != asEMetadataResult::Succeeded) return false;
-			if (Fixture.Image->FinalizeLayouts() != asEMetadataResult::Succeeded) return false;
-			if (Fixture.Image->Freeze() != asEMetadataResult::Succeeded) return false;
+			if (Fixture.Set->FinalizeLayouts() != asEMetadataResult::Succeeded) return false;
+			if (Fixture.Set->Freeze() != asEMetadataResult::Succeeded) return false;
 			TConstArrayView<uint8> Witness;
 			if (Fixture.Type->TryGetLayoutHash(OutHash, &Witness) != AS_NAMESPACE_QUALIFIER asEFingerprintStatus::Succeeded) return false;
 			OutWitness.Append(Witness.GetData(), Witness.Num());

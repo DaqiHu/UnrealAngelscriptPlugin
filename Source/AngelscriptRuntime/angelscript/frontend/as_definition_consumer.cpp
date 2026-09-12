@@ -90,7 +90,7 @@ namespace
 	}
 
 	asSDefinitionConsumerResult asCDefinitionConsumer::Consume(const asCCompilationSession& Session,
-		TConstArrayView<asCMetadataImage*> Dependencies) const
+		TConstArrayView<asCModuleDefinitionSet*> Dependencies) const
 	{
 		asSDefinitionConsumerResult Result;
 		auto Fail = [&](asEDefinitionConsumerStatus Status, const asCASTNode* Node, const TCHAR* Message)
@@ -118,15 +118,15 @@ namespace
 		Options.ExpandDefaultArrayToTemplate = Settings.ExpandDefaultArrayToTemplate;
 		Options.PointerByteSize = Settings.PointerByteSize;
 		Options.TargetProfile = TCHAR_TO_UTF8(*Settings.TargetProfile);
-		auto Image = asCMetadataImage::Create(Options);
-		if (!Image || Image->SetIdentityContext(TypeContext) != asEMetadataResult::Succeeded)
+		TUniquePtr<asCModuleDefinitionSet> Set = asCModuleDefinitionSet::Create(Options);
+		if (!Set || Set->SetIdentityContext(TypeContext) != asEMetadataResult::Succeeded)
 		{
 			Fail(asEDefinitionConsumerStatus::InvalidIdentity, TranslationUnit, TEXT("The definition image must retain the exact immutable TypeContext."));
 			return Result;
 		}
 		for (const auto& Dependency : Dependencies)
 		{
-			if (Image->AddDependency(Dependency) != asEMetadataResult::Succeeded)
+			if (Set->AddDependency(Dependency) != asEMetadataResult::Succeeded)
 			{
 				Fail(asEDefinitionConsumerStatus::InvalidDependency, TranslationUnit, TEXT("Definition dependencies must be compatible frozen images."));
 				return Result;
@@ -160,28 +160,28 @@ namespace
 				if (Record->GetDeclaredTypeKind() == asETypeDeclKind::Enum)
 				{
 					asCEnumType* Type = nullptr;
-					Status = Image->CreateEnumType(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), Type);
+					Status = Set->CreateEnumType(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), Type);
 					if (Type) Types.Add(Decl, Type);
 				}
 				else
 				{
 					asCObjectType* Type = nullptr;
 					const asQWORD Flags = asOBJ_SCRIPT_OBJECT | (Record->GetDeclaredTypeKind() == asETypeDeclKind::Struct ? asOBJ_VALUE : asOBJ_REF);
-					Status = Image->CreateObjectType(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), Flags, Type);
+					Status = Set->CreateObjectType(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), Flags, Type);
 					if (Type) Types.Add(Decl, Type);
 					if (Status == asEMetadataResult::Succeeded && Record->GetDeclaredTypeKind() == asETypeDeclKind::Interface)
-						Status = Image->SetInterfaceDeclaration(*Type);
+						Status = Set->SetInterfaceDeclaration(*Type);
 				}
 			}
 			else if (const auto* Callable = dyn_cast<asCCallableTypeDecl>(Decl))
 			{
 				asCScriptFunction* Signature = nullptr;
 				if (!Callable->GetResolvedSignature()) Status = asEMetadataResult::InvalidSignature;
-				else Status = Image->CreateCallableSignature(Callable->GetResolvedSignature()->GetStableIdentity(), Signature);
+				else Status = Set->CreateCallableSignature(Callable->GetResolvedSignature()->GetStableIdentity(), Signature);
 				if (Status == asEMetadataResult::Succeeded)
 				{
 					asCCallableType* Type = nullptr;
-					Status = Image->CreateCallableType(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), *Signature, Type);
+					Status = Set->CreateCallableType(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), *Signature, Type);
 					if (Type) Types.Add(Decl, Type);
 					Functions.Add(Decl, Signature);
 				}
@@ -189,13 +189,13 @@ namespace
 			else if (isa<asCFunctionDecl>(Decl))
 			{
 				asCScriptFunction* Function = nullptr;
-				Status = Image->CreateFunction(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), asFUNC_SCRIPT, Function);
+				Status = Set->CreateFunction(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), asFUNC_SCRIPT, Function);
 				if (Function) Functions.Add(Decl, Function);
 			}
 			else if (isa<asCTypeAliasDecl>(Decl))
 			{
 				asCTypedefType* Alias = nullptr;
-				Status = Image->CreateTypedefType(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), Alias);
+				Status = Set->CreateTypedefType(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), Alias);
 				if (Alias) Types.Add(Decl, Alias);
 			}
 			else
@@ -209,12 +209,12 @@ namespace
 				return Result;
 			}
 		}
-		TFunction<asCTypeInfo*(asCMetadataImage*, const asSStableKey&)> FindType =
-			[&](asCMetadataImage* Owner, const asSStableKey& Key) -> asCTypeInfo*
+		TFunction<asCTypeInfo*(asCModuleDefinitionSet*, const asSStableKey&)> FindType =
+			[&](asCModuleDefinitionSet* Owner, const asSStableKey& Key) -> asCTypeInfo*
 		{
 			if (!Owner) return nullptr;
 			if (auto* Found = Owner->FindType(Key)) return Found;
-			for (asCMetadataImage* Dependency : Owner->GetDependencies())
+			for (asCModuleDefinitionSet* Dependency : Owner->GetDependencies())
 				if (auto* Found = FindType(Dependency, Key)) return Found;
 			return nullptr;
 		};
@@ -225,18 +225,18 @@ namespace
 			{
 				const auto Token = PrimitiveToken(Builtin->GetPrimitive());
 				if (Token == ttUnrecognizedToken) return false;
-				Out = Image->Primitive(Token);
+				Out = Set->Primitive(Token);
 			}
 			else if (const auto* Nominal = dyn_cast<asCNominalType>(Input.GetType()))
 			{
-				asCTypeInfo* Type = FindType(Image.Get(), Nominal->GetDeclarationIdentity());
+				asCTypeInfo* Type = FindType(Set.Get(), Nominal->GetDeclarationIdentity());
 				if (!Type) return false;
 				Out = asCDataType::CreateType(Type, false);
 			}
 			else if (const auto* Generic = dyn_cast<asCGenericType>(Input.GetType()))
 			{
 				const auto* Template = dyn_cast<asCNominalType>(Generic->GetTemplateType());
-				asCTypeInfo* Definition = Template ? FindType(Image.Get(), Template->GetDeclarationIdentity()) : nullptr;
+				asCTypeInfo* Definition = Template ? FindType(Set.Get(), Template->GetDeclarationIdentity()) : nullptr;
 				if (!Definition || !(Definition->flags & asOBJ_TEMPLATE) || (Definition->flags & asOBJ_CALLABLE_TYPE)) return false;
 				TArray<asCDataType> Arguments;
 				for (const auto& Argument : Generic->GetArguments())
@@ -246,7 +246,7 @@ namespace
 					Arguments.Add(Converted);
 				}
 				asCObjectType* Instance = nullptr;
-				if (Image->CreateTemplateInstance(*static_cast<asCObjectType*>(Definition), Generic->GetStableIdentity(), Arguments, Instance) != asEMetadataResult::Succeeded) return false;
+				if (Set->CreateTemplateInstance(*static_cast<asCObjectType*>(Definition), Generic->GetStableIdentity(), Arguments, Instance) != asEMetadataResult::Succeeded) return false;
 				Out = asCDataType::CreateType(Instance, false);
 			}
 			else return false; // Never reparse printed type names or infer host template layout.
@@ -265,7 +265,7 @@ namespace
 				? static_cast<asCObjectType*>(OwnerType) : nullptr;
 			if (!Access) continue;
 			::asSAccessSpecifier* Actual = nullptr;
-			if (!Owner || Image->DefineAccessSpecifier(*Owner, ConvertAccess(*Access), Actual) != asEMetadataResult::Succeeded)
+			if (!Owner || Set->DefineAccessSpecifier(*Owner, ConvertAccess(*Access), Actual) != asEMetadataResult::Succeeded)
 			{
 				Fail(asEDefinitionConsumerStatus::InvalidDefinition, Decl, TEXT("A resolved access policy cannot form a valid detached definition."));
 				return Result;
@@ -284,9 +284,9 @@ namespace
 			{
 				const asETypeDeclKind Kind = isa<asCTypeAliasDecl>(Decl) ? asETypeDeclKind::Typedef :
 					isa<asCRecordDecl>(Decl) ? cast<asCRecordDecl>(Decl)->GetDeclaredTypeKind() : cast<asCCallableTypeDecl>(Decl)->GetDeclaredTypeKind();
-				Status = Image->SetTypeDeclarationFacts(*Type, Kind, 0, OwnerType);
+				Status = Set->SetTypeDeclarationFacts(*Type, Kind, 0, OwnerType);
 				if (Status == asEMetadataResult::Succeeded && Owner && (Type->flags & asOBJ_CALLABLE_TYPE))
-					Status = Image->AddChildCallableType(*Owner, *static_cast<asCCallableType*>(Type));
+					Status = Set->AddChildCallableType(*Owner, *static_cast<asCCallableType*>(Type));
 			}
 			if (Status == asEMetadataResult::Succeeded)
 				if (const auto* Record = dyn_cast<asCRecordDecl>(Decl))
@@ -302,8 +302,8 @@ namespace
 							!(Type->flags & (asOBJ_VALUE | asOBJ_REF)))
 						{ Status = asEMetadataResult::InvalidSignature; break; }
 						auto* BaseObject = static_cast<asCObjectType*>(BaseType.GetTypeInfo());
-						Status = BaseObject->IsInterface() ? Image->AddInterface(*static_cast<asCObjectType*>(Type), *BaseObject) :
-							Image->SetBaseType(*static_cast<asCObjectType*>(Type), *BaseObject);
+						Status = BaseObject->IsInterface() ? Set->AddInterface(*static_cast<asCObjectType*>(Type), *BaseObject) :
+							Set->SetBaseType(*static_cast<asCObjectType*>(Type), *BaseObject);
 						if (Status != asEMetadataResult::Succeeded) break;
 					}
 				}
@@ -314,12 +314,12 @@ namespace
 				if (!ResolveType(Variable->GetResolvedQualType(), Type)) Status = asEMetadataResult::InvalidSignature;
 				else if (Owner)
 				{
-					Status = Image->AddProperty(*Owner, TCHAR_TO_UTF8(*Variable->GetName()), Type, Property,
+					Status = Set->AddProperty(*Owner, TCHAR_TO_UTF8(*Variable->GetName()), Type, Property,
 						Decl->GetAccess() == asEAccessSpecifier::Private, Decl->GetAccess() == asEAccessSpecifier::Protected);
 					if (Status == asEMetadataResult::Succeeded && Variable->GetAuthoredAccessUse())
 					{
 						::asSAccessSpecifier* Policy = PublishedAccess.FindRef(Variable->GetAuthoredAccessUse()->Resolved);
-						Status = Policy ? Image->SetPropertyAccess(*Owner, *Property, *Policy) : asEMetadataResult::InvalidSignature;
+						Status = Policy ? Set->SetPropertyAccess(*Owner, *Property, *Policy) : asEMetadataResult::InvalidSignature;
 					}
 				}
 				else
@@ -328,7 +328,7 @@ namespace
 					asCGlobalProperty* Global = nullptr;
 					if (Variable->GetResolvedQualType().GetStableIdentity(TypeContext->GetIdentityRegistry(), TypeKey) != asETypeIdentityStatus::Succeeded)
 						Status = asEMetadataResult::InvalidSignature;
-					else Status = Image->CreateGlobalProperty(Variable->GetStableIdentity(), TypeKey, TCHAR_TO_UTF8(*Variable->GetName()),
+					else Status = Set->CreateGlobalProperty(Variable->GetStableIdentity(), TypeKey, TCHAR_TO_UTF8(*Variable->GetName()),
 						TCHAR_TO_UTF8(*NamespaceOf(*Decl)), Type, Global);
 				}
 			}
@@ -336,13 +336,13 @@ namespace
 			{
 				if (!OwnerType || !(OwnerType->flags & asOBJ_ENUM) || !Constant->HasResolvedValue() || Constant->GetValue() < MIN_int32 || Constant->GetValue() > MAX_int32)
 					Status = asEMetadataResult::InvalidArgument;
-				else Status = Image->AddEnumValue(*static_cast<asCEnumType*>(OwnerType), TCHAR_TO_UTF8(*Constant->GetName()), static_cast<int>(Constant->GetValue()));
+				else Status = Set->AddEnumValue(*static_cast<asCEnumType*>(OwnerType), TCHAR_TO_UTF8(*Constant->GetName()), static_cast<int>(Constant->GetValue()));
 			}
 			else if (const auto* Alias = dyn_cast<asCTypeAliasDecl>(Decl))
 			{
 				asCDataType Target;
 				if (!ResolveType(Alias->GetResolvedQualType(), Target)) Status = asEMetadataResult::InvalidSignature;
-				else Status = Image->SetAlias(*static_cast<asCTypedefType*>(Types.FindRef(Decl)), Target);
+				else Status = Set->SetAlias(*static_cast<asCTypedefType*>(Types.FindRef(Decl)), Target);
 			}
 			if (asCScriptFunction* Function = Functions.FindRef(Decl))
 			{
@@ -376,7 +376,7 @@ namespace
 				}
 				if (Status == asEMetadataResult::Succeeded && !DefinedSignatures.Contains(Function))
 				{
-					Status = Image->DefineFunction(*Function, ReturnType, Converted, FunctionDecl ? Owner : nullptr);
+					Status = Set->DefineFunction(*Function, ReturnType, Converted, FunctionDecl ? Owner : nullptr);
 					if (Status == asEMetadataResult::Succeeded && FunctionDecl)
 					{
 						Function->SetReadOnly(FunctionDecl->IsConstMethod());
@@ -393,22 +393,22 @@ namespace
 						Function->traits.SetTrait(asTRAIT_DEPRECATED, (uint16(FunctionDecl->GetModifiers()) & uint16(asEFunctionModifiers::Deprecated)) != 0);
 						Function->traits.SetTrait(asTRAIT_DEFAULTS_ONLY, (uint16(FunctionDecl->GetModifiers()) & uint16(asEFunctionModifiers::Defaults)) != 0);
 						Function->traits.SetTrait(asTRAIT_UNSAFE_DURING_CONSTRUCTION, (uint16(FunctionDecl->GetModifiers()) & uint16(asEFunctionModifiers::UnsafeDuringConstruction)) != 0);
-						Image->SetFunctionLocal(*Function, (uint16(FunctionDecl->GetModifiers()) & uint16(asEFunctionModifiers::Local)) != 0);
+						Set->SetFunctionLocal(*Function, (uint16(FunctionDecl->GetModifiers()) & uint16(asEFunctionModifiers::Local)) != 0);
 						Function->SetPrivate(Decl->GetAccess() == asEAccessSpecifier::Private);
 						Function->SetProtected(Decl->GetAccess() == asEAccessSpecifier::Protected);
 						if (Status == asEMetadataResult::Succeeded && FunctionDecl->GetAuthoredAccessUse())
 						{
 							::asSAccessSpecifier* Policy = PublishedAccess.FindRef(FunctionDecl->GetAuthoredAccessUse()->Resolved);
-							Status = Policy ? Image->SetFunctionAccess(*Function, *Policy) : asEMetadataResult::InvalidSignature;
+							Status = Policy ? Set->SetFunctionAccess(*Function, *Policy) : asEMetadataResult::InvalidSignature;
 						}
 						const auto Kind = FunctionDecl->GetFunctionKind() == asEFunctionKind::Constructor ? asEFunctionIdentityKind::Constructor :
 							FunctionDecl->GetFunctionKind() == asEFunctionKind::Destructor ? asEFunctionIdentityKind::Destructor :
 							FunctionDecl->GetFunctionKind() == asEFunctionKind::ClassDefault ? asEFunctionIdentityKind::ClassDefault :
 							FunctionDecl->GetFunctionKind() == asEFunctionKind::Conversion ? asEFunctionIdentityKind::Conversion :
 							Owner ? asEFunctionIdentityKind::Method : asEFunctionIdentityKind::Global;
-						if (Status == asEMetadataResult::Succeeded) Status = Image->SetFunctionDeclarationFacts(*Function, Kind, Owner);
+						if (Status == asEMetadataResult::Succeeded) Status = Set->SetFunctionDeclarationFacts(*Function, Kind, Owner);
 						if (Status == asEMetadataResult::Succeeded && Owner && (Kind == asEFunctionIdentityKind::Constructor || Kind == asEFunctionIdentityKind::Destructor))
-							Status = Image->AddBehaviour(*Owner, Kind == asEFunctionIdentityKind::Constructor ? asBEHAVE_CONSTRUCT : asBEHAVE_DESTRUCT, *Function);
+							Status = Set->AddBehaviour(*Owner, Kind == asEFunctionIdentityKind::Constructor ? asBEHAVE_CONSTRUCT : asBEHAVE_DESTRUCT, *Function);
 					}
 					DefinedSignatures.Add(Function);
 				}
@@ -420,7 +420,7 @@ namespace
 			}
 		}
 		Result.Status = asEDefinitionConsumerStatus::Succeeded;
-		Result.Image = MoveTemp(Image);
+		Result.Definitions = MoveTemp(Set);
 		return Result;
 	}
 END_AS_NAMESPACE

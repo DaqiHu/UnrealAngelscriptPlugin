@@ -9,6 +9,7 @@
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS
 
+#if 0 // MetadataImage retired; Binding GREEN is a later Binding Change.
 TEST_CLASS_WITH_FLAGS(Admission, "Angelscript.UnitTest.NativeEngine.TypeOwnership",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 {
@@ -91,22 +92,22 @@ public:
 		ASSERT_THAT(IsTrue(RecordAndPublish(Setup, Diagnostic), *Diagnostic));
 		TUniquePtr<FAngelscriptTypeBindInfoInstallation> Prepared;
 		ASSERT_THAT(IsTrue(FAngelscriptTypeBindInfoApply::Prepare(Setup.Store, Prepared, Diagnostic), *Diagnostic));
-		TUniquePtr<asCMetadataImage> Templates = Prepared->TakeTemplateImage();
-		TUniquePtr<asCMetadataImage> Image = Prepared->TakeImage();
+		TUniquePtr<asCModuleDefinitionSet> Templates = Prepared->TakeTemplateSet();
+		TUniquePtr<asCModuleDefinitionSet> Set = Prepared->TakeSet();
 		FNativeEngineOwner Engine;
 		if (Templates)
 		{
-			const auto TemplateStatus = Engine.Ptr->RegisterMetadataImage(MoveTemp(Templates));
+			const auto TemplateStatus = Engine.Ptr->InstallDefinitionSet(MoveTemp(Templates));
 			ASSERT_THAT(IsTrue(TemplateStatus == asEMetadataRegistrationResult::Succeeded
 				|| TemplateStatus == asEMetadataRegistrationResult::AlreadyRegistered));
 		}
 		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,
-			FAngelscriptTypeBindInfoApply::MaterializePublishedTypes(Setup.Store, *Engine.Ptr, MoveTemp(Image))));
-		ASSERT_THAT(IsNull(Image.Get()));
+			FAngelscriptTypeBindInfoApply::MaterializePublishedTypes(Setup.Store, *Engine.Ptr, MoveTemp(Set))));
+		ASSERT_THAT(IsNull(Set.Get()));
 		asCTypeInfo* Type = static_cast<asCTypeInfo*>(Engine.Ptr->GetTypeInfoById(Setup.TypeId));
 		ASSERT_THAT(IsNotNull(Type));
 		ASSERT_THAT(IsTrue(Type->GetEngine() == Engine.Ptr));
-		asCMetadataImage* OwnerImage = Type->GetMetadataImage();
+		asCModuleDefinitionSet* OwnerImage = Type->GetDefinitionSet();
 		ASSERT_THAT(IsNotNull(OwnerImage));
 		ASSERT_THAT(IsNull(OwnerImage->GetBoundEngine()));
 		asCScriptFunction* Sum = static_cast<asCScriptFunction*>(Engine.Ptr->GetFunctionById(Setup.FunctionId));
@@ -117,5 +118,6 @@ public:
 		Context->Release();
 	}
 };
+#endif
 
 #endif

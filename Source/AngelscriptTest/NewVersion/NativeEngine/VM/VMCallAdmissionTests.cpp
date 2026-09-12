@@ -13,11 +13,11 @@ private:
 	{
 		asSMetadataParameter Parameter;
 		Parameter.Name = "value";
-		Parameter.Type = Fixture.Image->Primitive(Token);
+		Parameter.Type = Fixture.Set->Primitive(Token);
 		Parameter.Flags = Mode;
 		if (Mode != asTM_NONE) Parameter.Type.MakeReference(true);
 		return Fixture.DefineFunction(TEXT("Take"), TEXT(""), asFUNC_SYSTEM,
-			Fixture.Image->Primitive(ttVoid), MakeArrayView(&Parameter, 1));
+			Fixture.Set->Primitive(ttVoid), MakeArrayView(&Parameter, 1));
 	}
 
 	static TUniquePtr<asCByteCodeImage> CallImage(asCScriptFunction& Callee, asCScriptFunction& Run,
@@ -66,7 +66,7 @@ public:
 		{
 			FDetachedDefinitionFixture Fixture;
 			asCScriptFunction* Callee = DefineCallee(Fixture, Token);
-			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttVoid), {});
+			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttVoid), {});
 			ASSERT_THAT(IsNotNull(Callee));
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			TUniquePtr<asCByteCodeImage> Image = CallImage(*Callee, *Run, asBC_PshC4, ByteImm32(1));
@@ -83,7 +83,7 @@ public:
 		{
 			FDetachedDefinitionFixture Fixture;
 			asCScriptFunction* Callee = DefineCallee(Fixture, Token);
-			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttVoid), {});
+			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttVoid), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			TUniquePtr<asCByteCodeImage> Image = CallImage(*Callee, *Run, asBC_PshC8, ByteImm64(0), true);
 			ASSERT_THAT(IsNotNull(Image.Get()));
@@ -102,7 +102,7 @@ public:
 		{
 			FDetachedDefinitionFixture Fixture;
 			asCScriptFunction* Callee = DefineCallee(Fixture, ttInt, Mode);
-			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttVoid), {});
+			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttVoid), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			TUniquePtr<asCByteCodeImage> Image = CallImage(*Callee, *Run, asBC_PshC8, ByteImm64(123));
 			ASSERT_THAT(IsNotNull(Image.Get()));
@@ -118,7 +118,7 @@ public:
 			{
 				FDetachedDefinitionFixture Fixture;
 				asCScriptFunction* Callee = DefineCallee(Fixture, ttInt, Mode);
-				asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttVoid), {});
+				asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttVoid), {});
 				ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 				TUniquePtr<asCByteCodeImage> Image = CallImage(*Callee, *Run, Push, ByteLocal(2), true);
 				ASSERT_THAT(IsNotNull(Image.Get()));
@@ -133,7 +133,7 @@ public:
 		{
 			FDetachedDefinitionFixture Fixture;
 			asCScriptFunction* Callee = DefineCallee(Fixture, ttDouble);
-			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttVoid), {});
+			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttVoid), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			TUniquePtr<asCByteCodeImage> Image = CallImage(*Callee, *Run, asBC_PshC8, ByteImm64(0));
 			ASSERT_THAT(IsNotNull(Image.Get()));
@@ -150,7 +150,7 @@ public:
 	{
 		FDetachedDefinitionFixture Fixture;
 		asCScriptFunction* Callee = DefineCallee(Fixture, ttDouble);
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttVoid), {});
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttVoid), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		TUniquePtr<asCByteCodeImage> Image = CallImage(*Callee, *Run, asBC_PshC4, ByteImm32(0));
 		ASSERT_THAT(IsNotNull(Image.Get()));
@@ -160,11 +160,11 @@ public:
 		Requirement->Parameters[0].StorageKind = asEByteCodeStorageKind::Value;
 		asEncodeByteCodeRequirementContract(*Requirement, Requirement->ContractWitness);
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Callee->GetStableKey(), asFUNCTION(TwiceDouble), asCALL_GENERIC)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		const asEByteCodeLinkStatus Status = Engine.Ptr->LinkByteCodeImage(*Image, Snapshot);
+		const asEByteCodeLinkStatus Status = asLinkByteCodeImage(*Engine.Ptr, *Image, Snapshot);
 		if (Snapshot) Snapshot->Release();
 		ASSERT_THAT(AreNotEqual(asEByteCodeLinkStatus::Succeeded, Status));
 		ASSERT_THAT(IsNull(Run->scriptData));
@@ -175,10 +175,10 @@ public:
 		FDetachedDefinitionFixture Fixture;
 		asSMetadataParameter Parameter;
 		Parameter.Name = "value";
-		Parameter.Type = Fixture.Image->Primitive(ttDouble);
+		Parameter.Type = Fixture.Set->Primitive(ttDouble);
 		asCScriptFunction* Callee = Fixture.DefineFunction(TEXT("Twice"), TEXT(""), asFUNC_SYSTEM,
-			Fixture.Image->Primitive(ttDouble), MakeArrayView(&Parameter, 1));
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttDouble), {});
+			Fixture.Set->Primitive(ttDouble), MakeArrayView(&Parameter, 1));
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttDouble), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		int64 Bits = 0;
 		const double TwentyOne = 21.0;
@@ -190,11 +190,11 @@ public:
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Callee->GetStableKey(), asFUNCTION(TwiceDouble), asCALL_GENERIC)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, Engine.Ptr->LinkByteCodeImage(*Decoded, Snapshot)));
+		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded, asLinkByteCodeImage(*Engine.Ptr, *Decoded, Snapshot)));
 		asIScriptContext* Context = Engine.Ptr->CreateContext();
 		ASSERT_THAT(AreEqual(0, Context->Prepare(Run)));
 		const int Result = Context->Execute();
@@ -208,7 +208,7 @@ public:
 	TEST_METHOD(EqualHeightAddressValueMergeRejects)
 	{
 		FDetachedDefinitionFixture Fixture;
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttVoid), {});
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttVoid), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		asCByteCodeImageBuilder Builder;
 		asUINT RunSlot = 0;
@@ -247,14 +247,14 @@ public:
 		asCObjectType* Owner = Fixture.DefineType(TEXT("Receiver"), TEXT(""), asOBJ_REF | asOBJ_SCRIPT_OBJECT);
 		asSMetadataParameter Params[2];
 		Params[0].Name = "wide";
-		Params[0].Type = Fixture.Image->Primitive(ttDouble);
+		Params[0].Type = Fixture.Set->Primitive(ttDouble);
 		Params[1].Name = "reference";
-		Params[1].Type = Fixture.Image->Primitive(ttInt);
+		Params[1].Type = Fixture.Set->Primitive(ttInt);
 		Params[1].Type.MakeReference(true);
 		Params[1].Flags = asTM_INOUTREF;
 		asCScriptFunction* Method = Fixture.DefineFunction(TEXT("Take"), TEXT(""), asFUNC_SYSTEM,
-			Fixture.Image->Primitive(ttVoid), MakeArrayView(Params, 2), Owner);
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttVoid), {});
+			Fixture.Set->Primitive(ttVoid), MakeArrayView(Params, 2), Owner);
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttVoid), {});
 		ASSERT_THAT(IsNotNull(Method));
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		asCByteCodeImageBuilder Builder;
@@ -289,7 +289,7 @@ public:
 		{
 			FDetachedDefinitionFixture Fixture;
 			asCScriptFunction* Callee = DefineCallee(Fixture, ttDouble);
-			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttVoid), {});
+			asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttVoid), {});
 			ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 			TUniquePtr<asCByteCodeImage> Image = CallImage(*Callee, *Run, asBC_PshC8, ByteImm64(0));
 			ASSERT_THAT(IsNotNull(Image.Get()));
@@ -318,7 +318,7 @@ public:
 	{
 		FDetachedDefinitionFixture Fixture;
 		asCScriptFunction* Callee = DefineCallee(Fixture, ttDouble);
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttVoid), {});
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttVoid), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		TUniquePtr<asCByteCodeImage> Image = CallImage(*Callee, *Run, asBC_PshC8, ByteImm64(0));
 		ASSERT_THAT(IsNotNull(Image.Get()));
@@ -332,11 +332,11 @@ public:
 		TUniquePtr<asCByteCodeImage> Decoded;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, asCByteCodeImageCodec::Decode(Bytes, Decoded)));
 		FNativeEngineOwner Engine;
-		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, Engine.Ptr->RegisterMetadataImage(MoveTemp(Fixture.Image))));
+		ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded, RegisterCompiledDefinitions(*Engine.Ptr, MoveTemp(Fixture.Set))));
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,
 			Engine.Ptr->BindNativeFunction(Callee->GetStableKey(), asFUNCTION(TwiceDouble), asCALL_GENERIC)));
 		asCExecutableSnapshot* Snapshot = nullptr;
-		const asEByteCodeLinkStatus Status = Engine.Ptr->LinkByteCodeImage(*Decoded, Snapshot);
+		const asEByteCodeLinkStatus Status = asLinkByteCodeImage(*Engine.Ptr, *Decoded, Snapshot);
 		if (Snapshot) Snapshot->Release();
 		ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch, Status));
 		ASSERT_THAT(IsNull(Run->scriptData));
@@ -345,7 +345,7 @@ public:
 	TEST_METHOD(SwapPtrRequiresTwoCompletePointers)
 	{
 		FDetachedDefinitionFixture Fixture;
-		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Image->Primitive(ttVoid), {});
+		asCScriptFunction* Run = Fixture.DefineFunction(TEXT("Run"), TEXT(""), asFUNC_SCRIPT, Fixture.Set->Primitive(ttVoid), {});
 		ASSERT_THAT(IsTrue(Fixture.FinalizeAndFreeze()));
 		asCByteCodeImageBuilder Builder;
 		ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded, Builder.BeginFunction(Run->GetStableKey(), Run->GetStableKey(), 8, 0)));

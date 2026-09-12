@@ -11,9 +11,9 @@ private:
  static asCScriptFunction* Define(FDetachedDefinitionFixture& F, const TCHAR* Name, eTokenType Token,
   asDWORD Mode = asTM_NONE, eTokenType Return = ttInt, bool bNoParameter = false, bool bScript = false, asCObjectType* Owner = nullptr)
  {
-  asSMetadataParameter P; P.Type = F.Image->Primitive(Token); P.Flags = Mode;
+  asSMetadataParameter P; P.Type = F.Set->Primitive(Token); P.Flags = Mode;
   if (Mode != asTM_NONE) P.Type.MakeReference(true);
-  return F.DefineFunction(Name, TEXT(""), bScript ? asFUNC_SCRIPT : asFUNC_SYSTEM, F.Image->Primitive(Return),
+  return F.DefineFunction(Name, TEXT(""), bScript ? asFUNC_SCRIPT : asFUNC_SYSTEM, F.Set->Primitive(Return),
    bNoParameter ? TConstArrayView<asSMetadataParameter>() : MakeArrayView(&P,1), Owner);
  }
  // Build a valid direct-call instruction first, then express its expected contract as CallPtr.
@@ -82,14 +82,14 @@ private:
   auto* Shape=Define(F,TEXT("Expected"),ttInt,ExpectedMode);
   auto* Owner=bMethod ? F.DefineType(TEXT("Receiver"),TEXT(""),asOBJ_REF | asOBJ_SCRIPT_OBJECT) : nullptr;
   auto* Target=Define(F,TEXT("DistinctActual"),ActualToken,ActualMode,ActualReturn,bNoParameter,bScript,Owner);
-  auto* Run=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttInt),{});
-  auto* Recovery=F.DefineFunction(TEXT("Recovery"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttInt),{});
+  auto* Run=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttInt),{});
+  auto* Recovery=F.DefineFunction(TEXT("Recovery"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttInt),{});
   ASSERT_THAT(IsTrue(F.FinalizeAndFreeze()));
   auto Image=Make(*Shape,*Run,ExpectedMode==asTM_NONE?asBC_PshC4:asBC_PSF,
    ExpectedMode==asTM_NONE?ByteImm32(21):ByteLocal(4),false,bNull?nullptr:Target,Recovery);
   ASSERT_THAT(IsNotNull(Image.Get()));
   FNativeEngineOwner Engine;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,Engine.Ptr->RegisterMetadataImage(MoveTemp(F.Image))));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,Engine.Ptr->InstallDefinitionSet(F.TakeSet())));
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,Engine.Ptr->BindNativeFunction(Shape->GetStableKey(),asFUNCTION(Observe),asCALL_GENERIC)));
   if (!bScript) { ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,Engine.Ptr->BindNativeFunction(Target->GetStableKey(),asFUNCTION(Observe),asCALL_GENERIC))); }
   TArray<uint8> Bytes;
@@ -97,7 +97,7 @@ private:
   TUniquePtr<asCByteCodeImage> Decoded;
   ASSERT_THAT(AreEqual(asEByteCodeImageStatus::Succeeded,asCByteCodeImageCodec::Decode(Bytes,Decoded)));
   asCExecutableSnapshot* Snapshot=nullptr;
-  ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,Engine.Ptr->LinkByteCodeImage(*Decoded,Snapshot)));
+  ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,asLinkByteCodeImage(*Engine.Ptr, *Decoded,Snapshot)));
   auto* C=Engine.Ptr->CreateContext(); Calls=0;
   const bool bMatch=ActualToken==ttInt && ActualMode==ExpectedMode && ActualReturn==ttInt && !bNoParameter && !bNull && !bMethod;
   for (int Repeat=0; Repeat<3; ++Repeat)
@@ -120,7 +120,7 @@ public:
   for (eTokenType Token:{ttDouble,ttInt64})
   {
    FDetachedDefinitionFixture F; auto* S=Define(F,TEXT("Shape"),Token);
-   auto* R=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttInt),{});
+   auto* R=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttInt),{});
    ASSERT_THAT(IsTrue(F.FinalizeAndFreeze())); auto I=Make(*S,*R,asBC_PshC4,ByteImm32(1));
    ASSERT_THAT(IsNotNull(I.Get())); CheckBoth(*I,asEByteCodeVerifyStatus::StackUnderflow);
   }
@@ -130,7 +130,7 @@ public:
   for (eTokenType Token:{ttDouble,ttInt64})
   {
    FDetachedDefinitionFixture F; auto* S=Define(F,TEXT("Shape"),Token);
-   auto* R=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttInt),{});
+   auto* R=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttInt),{});
    ASSERT_THAT(IsTrue(F.FinalizeAndFreeze())); auto I=Make(*S,*R,asBC_PshC8,ByteImm64(0),true);
    ASSERT_THAT(IsNotNull(I.Get())); CheckBoth(*I,asEByteCodeVerifyStatus::Succeeded);
   }
@@ -140,7 +140,7 @@ public:
   for (asDWORD Mode:{asDWORD(asTM_INREF),asDWORD(asTM_OUTREF),asDWORD(asTM_INOUTREF)})
   {
    FDetachedDefinitionFixture F; auto* S=Define(F,TEXT("Shape"),ttInt,Mode);
-   auto* R=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttInt),{});
+   auto* R=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttInt),{});
    ASSERT_THAT(IsTrue(F.FinalizeAndFreeze())); auto Bad=Make(*S,*R,asBC_PshC8,ByteImm64(0));
    ASSERT_THAT(IsNotNull(Bad.Get())); CheckBoth(*Bad,asEByteCodeVerifyStatus::InvalidOperand);
    auto Good=Make(*S,*R,asBC_PSF,ByteLocal(4),true); CheckBoth(*Good,asEByteCodeVerifyStatus::Succeeded);
@@ -149,7 +149,7 @@ public:
  TEST_METHOD(MissingCallSiteSignatureRejectsLegacyEncoding)
  {
   FDetachedDefinitionFixture F; auto* S=Define(F,TEXT("Shape"),ttInt);
-  auto* R=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttInt),{});
+  auto* R=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttInt),{});
   ASSERT_THAT(IsTrue(F.FinalizeAndFreeze())); auto I=Make(*S,*R,asBC_PshC4,ByteImm32(1));
   ASSERT_THAT(IsNotNull(I.Get()));
   for (auto& Fn:I->Functions) for (auto& Ins:Fn.Instructions) if (Ins.Opcode==asBC_CallPtr) Ins.Operands.SetNum(1);
@@ -158,17 +158,17 @@ public:
  TEST_METHOD(ForgedExpectedWidthRejectsAtTarget)
  {
   FDetachedDefinitionFixture F; auto* S=Define(F,TEXT("Shape"),ttDouble);
-  auto* R=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Image->Primitive(ttInt),{});
+  auto* R=F.DefineFunction(TEXT("Run"),TEXT(""),asFUNC_SCRIPT,F.Set->Primitive(ttInt),{});
   ASSERT_THAT(IsTrue(F.FinalizeAndFreeze())); auto I=Make(*S,*R,asBC_PshC4,ByteImm32(1));
   ASSERT_THAT(IsNotNull(I.Get()));
   for (auto& Req:I->Requirements) if (Req.Key==S->GetStableKey())
   { Req.Parameters[0].StorageDwords=1; asEncodeByteCodeRequirementContract(Req,Req.ContractWitness); }
   ASSERT_THAT(AreEqual(asEByteCodeVerifyStatus::Succeeded,asCByteCodeVerifier::Verify(*I)));
   FNativeEngineOwner E;
-  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->RegisterMetadataImage(MoveTemp(F.Image))));
+  ASSERT_THAT(AreEqual(asEMetadataRegistrationResult::Succeeded,E.Ptr->InstallDefinitionSet(F.TakeSet())));
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::Succeeded,E.Ptr->BindNativeFunction(S->GetStableKey(),asFUNCTION(Observe),asCALL_GENERIC)));
   asCExecutableSnapshot* Snapshot=nullptr;
-  auto Status=E.Ptr->LinkByteCodeImage(*I,Snapshot); if (Snapshot) Snapshot->Release();
+  auto Status=asLinkByteCodeImage(*E.Ptr, *I,Snapshot); if (Snapshot) Snapshot->Release();
   ASSERT_THAT(AreEqual(asEByteCodeLinkStatus::SchemaMismatch,Status));
   ASSERT_THAT(IsNull(E.Ptr->FindPublishedExecutable(R->GetStableKey())));
  }

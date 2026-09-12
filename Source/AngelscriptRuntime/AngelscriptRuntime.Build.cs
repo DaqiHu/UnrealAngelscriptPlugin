@@ -125,6 +125,7 @@ namespace UnrealBuildTool.Rules
 			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Core", "Commandlets"));
 
 			PublicIncludePaths.Add(Path.Combine(ModuleDirectory, "angelscript"));
+			PrivateIncludePaths.Add(Path.Combine(ModuleDirectory, "Private", "Bytecode"));
 
 			if (Target.Configuration == UnrealTargetConfiguration.Debug || Target.Configuration == UnrealTargetConfiguration.DebugGame)
 			{

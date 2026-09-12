@@ -1,6 +1,7 @@
 #include "CQTest.h"
 #include "Misc/ScopeExit.h"
 #include "../NativeEngineTestSupport.h"
+#include "../Compiler/NativeSourceExecutionTestSupport.h"
 #include "as_builder.h"
 #include "as_objecttype.h"
 #include "as_scriptengine.h"
@@ -14,7 +15,7 @@ private:
 	struct FFixture
 	{
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		TUniquePtr<asCMetadataImage> Host = asCMetadataImage::Create();
+		TUniquePtr<asCModuleDefinitionSet> Host = MakeUnique<asCModuleDefinitionSet>();
 		asCObjectType* Template = nullptr;
 		AS_NAMESPACE_QUALIFIER asSStableKey Declaration;
 		bool Initialize(bool Fixed = true)
@@ -38,52 +39,55 @@ asSStableKey Argument, Result;
 			Context->GetIdentityRegistry().InternTypeUse(Descriptor, Result);
 			return Result;
 		}
-		TUniquePtr<asCMetadataImage> Draft()
+		TUniquePtr<asCModuleDefinitionSet> Draft()
 		{
-			auto Image = asCMetadataImage::Create(); Image->SetIdentityContext(Context); Image->AddDependency(Host.Get()); return Image;
+			auto Set = MakeUnique<asCModuleDefinitionSet>();
+			Set->SetIdentityContext(Context);
+			Set->AddDependency(Host.Get());
+			return Set;
 		}
 	};
 public:
 	TEST_METHOD(ConcreteArgumentsProduceDistinctActualObjectTypes)
 	{
 		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize()));
-		auto Image = Fixture.Draft();
+		auto Set = Fixture.Draft();
 		asCObjectType* Integers = nullptr; asCObjectType* Floats = nullptr;
-		ASSERT_THAT(IsTrue(Image->CreateTemplateInstance(*Fixture.Template, Fixture.Use(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32), {Image->Primitive(ttInt)}, Integers) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Image->CreateTemplateInstance(*Fixture.Template, Fixture.Use(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Float32), {Image->Primitive(ttFloat32)}, Floats) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Set->CreateTemplateInstance(*Fixture.Template, Fixture.Use(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32), {Set->Primitive(ttInt)}, Integers) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Set->CreateTemplateInstance(*Fixture.Template, Fixture.Use(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Float32), {Set->Primitive(ttFloat32)}, Floats) == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(Integers != Floats && Integers->GetStableKey() != Floats->GetStableKey()));
 		ASSERT_THAT(IsTrue(Integers->GetMetadataTemplateDefinition() == Fixture.Template));
 		ASSERT_THAT(IsTrue(Integers->templateSubTypes[0].GetTokenType() == ttInt));
 		ASSERT_THAT(IsTrue(Floats->templateSubTypes[0].GetTokenType() == ttFloat32));
-		ASSERT_THAT(IsTrue(Image->FinalizeLayouts() == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Image->Freeze() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Set->FinalizeLayouts() == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Set->Freeze() == asEMetadataResult::Succeeded));
 		ASSERT_THAT(AreEqual(asUINT(16), Integers->GetSize()));
-		ASSERT_THAT(IsTrue(Image->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Set->ValidateFrozenDefinitions()));
 	}
 	TEST_METHOD(TemplateLayoutMustBeExplicitNotGuessedFromOneInstantiation)
 	{
 		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize(false)));
-		auto Image = Fixture.Draft(); asCObjectType* Rejected = nullptr;
-		ASSERT_THAT(IsTrue(Image->CreateTemplateInstance(*Fixture.Template, Fixture.Use(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32), {Image->Primitive(ttInt)}, Rejected) == asEMetadataResult::IncompleteDefinition));
-		ASSERT_THAT(IsNull(Rejected)); ASSERT_THAT(AreEqual(0, Image->GetTypes().Num()));
+		auto Set = Fixture.Draft(); asCObjectType* Rejected = nullptr;
+		ASSERT_THAT(IsTrue(Set->CreateTemplateInstance(*Fixture.Template, Fixture.Use(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32), {Set->Primitive(ttInt)}, Rejected) == asEMetadataResult::IncompleteDefinition));
+		ASSERT_THAT(IsNull(Rejected)); ASSERT_THAT(AreEqual(0, Set->GetTypes().Num()));
 	}
 	TEST_METHOD(ArgumentKeyMismatchDoesNotPublishASpecialization)
 	{
 		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize()));
-		auto Image = Fixture.Draft(); asCObjectType* Rejected = nullptr;
-		ASSERT_THAT(IsTrue(Image->CreateTemplateInstance(*Fixture.Template, Fixture.Use(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32), {Image->Primitive(ttFloat32)}, Rejected) == asEMetadataResult::InvalidSignature));
-		ASSERT_THAT(IsNull(Rejected)); ASSERT_THAT(AreEqual(0, Image->GetTypes().Num()));
+		auto Set = Fixture.Draft(); asCObjectType* Rejected = nullptr;
+		ASSERT_THAT(IsTrue(Set->CreateTemplateInstance(*Fixture.Template, Fixture.Use(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32), {Set->Primitive(ttFloat32)}, Rejected) == asEMetadataResult::InvalidSignature));
+		ASSERT_THAT(IsNull(Rejected)); ASSERT_THAT(AreEqual(0, Set->GetTypes().Num()));
 	}
 	TEST_METHOD(RepeatedSpecializationPreservesPointerAndRejectsArgumentMutation)
 	{
 		FFixture Fixture; ASSERT_THAT(IsTrue(Fixture.Initialize()));
-		auto Image = Fixture.Draft(); asCObjectType* First = nullptr; asCObjectType* Second = nullptr;
+		auto Set = Fixture.Draft(); asCObjectType* First = nullptr; asCObjectType* Second = nullptr;
 		const auto Key = Fixture.Use(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32);
-		ASSERT_THAT(IsTrue(Image->CreateTemplateInstance(*Fixture.Template, Key, {Image->Primitive(ttInt)}, First) == asEMetadataResult::Succeeded));
-		ASSERT_THAT(IsTrue(Image->CreateTemplateInstance(*Fixture.Template, Key, {Image->Primitive(ttInt)}, Second) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Set->CreateTemplateInstance(*Fixture.Template, Key, {Set->Primitive(ttInt)}, First) == asEMetadataResult::Succeeded));
+		ASSERT_THAT(IsTrue(Set->CreateTemplateInstance(*Fixture.Template, Key, {Set->Primitive(ttInt)}, Second) == asEMetadataResult::Succeeded));
 		ASSERT_THAT(IsTrue(First == Second));
-		ASSERT_THAT(IsTrue(Image->AddTemplateArgument(*First, Image->Primitive(ttInt)) == asEMetadataResult::InvalidState));
-		ASSERT_THAT(AreEqual(1, Image->GetTypes().Num()));
+		ASSERT_THAT(IsTrue(Set->AddTemplateArgument(*First, Set->Primitive(ttInt)) == asEMetadataResult::InvalidState));
+		ASSERT_THAT(AreEqual(1, Set->GetTypes().Num()));
 	}
 	TEST_METHOD(CorruptFrozenEnvironmentIsRejectedBeforeSourceResolution)
 	{
@@ -106,14 +110,14 @@ auto Snapshot = MakeShared<asCSourceSnapshot, ESPMode::ThreadSafe>();
 		asCBuilder Builder(Snapshot, Diagnostics, Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		const asCObjectType* Record = nullptr;
-		for (const auto* Type : Builder.GetDefinitions()->GetTypes()) if (Type->name == "Values") Record = static_cast<const asCObjectType*>(Type);
+		for (const auto* Type : Builder.GetModuleDefinitionSet()->GetTypes()) if (Type->name == "Values") Record = static_cast<const asCObjectType*>(Type);
 		ASSERT_THAT(IsNotNull(Record)); ASSERT_THAT(AreEqual(asUINT(2), Record->GetPropertyCount()));
 		ASSERT_THAT(IsTrue(Record->properties[0]->type.GetTypeInfo() == Record->properties[1]->type.GetTypeInfo()));
-		ASSERT_THAT(IsTrue(Record->properties[0]->type.GetTypeInfo()->GetMetadataImage() == Builder.GetDefinitions()));
-		ASSERT_THAT(IsNull(Builder.GetDefinitions()->GetBoundEngine()));
+		ASSERT_THAT(IsTrue(Record->properties[0]->type.GetTypeInfo()->GetDefinitionSet() == Builder.GetModuleDefinitionSet()));
+		ASSERT_THAT(IsNull(Builder.GetModuleDefinitionSet()->GetBoundEngine()));
 		asCScriptEngine* Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
 		ON_SCOPE_EXIT { Engine->ShutDownAndRelease(); };
-		ASSERT_THAT(IsTrue(Engine->RegisterMetadataImage(Builder.TakeDefinitions()) == asEMetadataRegistrationResult::Succeeded));
+		ASSERT_THAT(IsTrue(RegisterCompiledDefinitions(*Engine, Builder) == asEMetadataRegistrationResult::Succeeded));
 		const auto* Concrete = Record->properties[0]->type.GetTypeInfo();
 		ASSERT_THAT(IsTrue(Engine->FindMetadataType(Concrete->GetStableKey()) == Concrete));
 		ASSERT_THAT(IsTrue(Engine->FindMetadataType("", "array") == Fixture.Template));
@@ -132,12 +136,12 @@ auto Snapshot = MakeShared<asCSourceSnapshot, ESPMode::ThreadSafe>();
 		asCBuilder Builder(Snapshot, Diagnostics, Options);
 		ASSERT_THAT(IsTrue(Builder.RunThrough()));
 		const asCObjectType* Grid = nullptr;
-		for (const auto* Type : Builder.GetDefinitions()->GetTypes()) if (Type->name == "Grid") Grid = static_cast<const asCObjectType*>(Type);
+		for (const auto* Type : Builder.GetModuleDefinitionSet()->GetTypes()) if (Type->name == "Grid") Grid = static_cast<const asCObjectType*>(Type);
 		ASSERT_THAT(IsNotNull(Grid)); ASSERT_THAT(AreEqual(asUINT(2), Grid->GetPropertyCount()));
 		ASSERT_THAT(IsTrue(Grid->properties[0]->type.GetTypeInfo() == Grid->properties[1]->type.GetTypeInfo()));
 		const auto* Outer = static_cast<const asCObjectType*>(Grid->properties[0]->type.GetTypeInfo());
 		ASSERT_THAT(IsTrue(Outer->templateSubTypes[0].GetTypeInfo() != nullptr));
-		ASSERT_THAT(IsTrue(Builder.GetDefinitions()->ValidateFrozenDefinitions()));
+		ASSERT_THAT(IsTrue(Builder.GetModuleDefinitionSet()->ValidateFrozenDefinitions()));
 	}
 };
 #endif
