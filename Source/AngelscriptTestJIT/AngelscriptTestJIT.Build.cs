@@ -13,6 +13,7 @@ namespace UnrealBuildTool.Rules
 			bUseUnity = false;
 			PrivateDefinitions.Add("AS_ENABLE_EDITOR_JITTED_CODE=1");
 			PrivateIncludePaths.Add(ModuleDirectory);
+			bool bCompileReplacementTests = AngelscriptBuildSettings.ShouldCompileTests(Target, this);
 
 			PublicDependencyModuleNames.AddRange(new string[]
 			{
@@ -20,6 +21,11 @@ namespace UnrealBuildTool.Rules
 				"CoreUObject",
 				"AngelscriptRuntime",
 			});
+
+			if (bCompileReplacementTests)
+			{
+				PrivateDependencyModuleNames.Add("AngelscriptTest");
+			}
 		}
 	}
 }

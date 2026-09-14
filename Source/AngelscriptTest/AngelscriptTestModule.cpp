@@ -1,5 +1,11 @@
 #include "Core/AngelscriptTestModule.h"
 
+#if WITH_ANGELSCRIPT_TESTS
+#include "NewVersion/Framework/Catalog/AngelscriptTestCode.h"
+#include "CoreGlobals.h"
+#include "Misc/CoreDelegates.h"
+#endif
+
 #if WITH_ANGELSCRIPT_UNITTESTS
 #include "Preprocessor/AngelscriptPreprocessorTestHelpers.h"
 #include "AngelscriptTestEnginePool.h"
@@ -22,6 +28,13 @@ DEFINE_LOG_CATEGORY(LogPreprocessorDump);
 
 void FAngelscriptTestModule::StartupModule()
 {
+#if WITH_ANGELSCRIPT_TESTS
+	TestCodeActivationBarrier = MakeUnique<AngelscriptTest::FAngelscriptTestCodeActivationBarrier>(
+		[this]() { ActivateTestCode(); });
+	TestCodeActivationBarrier->Install(
+		IsEngineStartupModuleLoadingComplete(),
+		FCoreDelegates::OnAllModuleLoadingPhasesComplete);
+#endif
 #if WITH_ANGELSCRIPT_UNITTESTS
 	const bool bPrewarmEngine = FParse::Param(FCommandLine::Get(), TEXT("AngelscriptTestPrewarmEngine"));
 	StartupTestEnginePool(bPrewarmEngine);
@@ -31,8 +44,34 @@ void FAngelscriptTestModule::StartupModule()
 
 void FAngelscriptTestModule::ShutdownModule()
 {
+#if WITH_ANGELSCRIPT_TESTS
+	if (TestCodeActivationBarrier.IsValid())
+	{
+		TestCodeActivationBarrier->Shutdown();
+		TestCodeActivationBarrier.Reset();
+	}
+#endif
 #if WITH_ANGELSCRIPT_UNITTESTS
 	ShutdownTestEnginePool();
 #endif
 	UE_LOG(LogAngelscriptTest, Log, TEXT("AngelscriptTest replacement module shell shut down."));
 }
+
+#if WITH_ANGELSCRIPT_TESTS
+void FAngelscriptTestModule::ActivateTestCode()
+{
+	const AngelscriptTest::FAngelscriptTestStatus Status =
+		AngelscriptTest::FAngelscriptTestCode::GetInstance().ActivateRegistrations();
+	for (const AngelscriptTest::FAngelscriptTestError& Error : Status.GetErrors())
+	{
+		UE_LOG(
+			LogAngelscriptTest,
+			Error,
+			TEXT("Test code registration failed [%s] %s (%s:%d)"),
+			*Error.Code,
+			*Error.Message,
+			*Error.SourcePath,
+			Error.SourceLine);
+	}
+}
+#endif
