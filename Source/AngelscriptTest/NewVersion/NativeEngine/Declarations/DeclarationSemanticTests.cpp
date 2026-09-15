@@ -19,14 +19,17 @@ namespace DeclarationSemanticTests
 {
 	struct FSessionRun
 	{
-		TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot = MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>();
-		AS_NAMESPACE_QUALIFIER asCSourceManager SourceManager{Snapshot};
+		TArray<TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>> SharedSources;
+		AS_NAMESPACE_QUALIFIER asCSourceManager SourceManager;
 		AS_NAMESPACE_QUALIFIER asCIdentifierTable Identifiers;
-		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics{SourceManager};
+		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics;
 		TUniquePtr<AS_NAMESPACE_QUALIFIER asCCompilationSession> Session;
 
 		explicit FSessionRun(const TArray<TPair<FString, FString>>& Sources, TMap<FString, bool> Flags = {},
 			TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> TypeContext = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>())
+			: SharedSources(AngelscriptNativeEngineTest::FFrontendSessionRun::MakeSharedSources(Sources))
+			, SourceManager(SharedSources)
+			, Diagnostics(SourceManager)
 		{
 			TArray<AS_NAMESPACE_QUALIFIER asCSourceFileID> Files;
 			TArray<TArray<uint8>> Encoded;
@@ -36,10 +39,9 @@ namespace DeclarationSemanticTests
 				TArray<uint8> Bytes;
 				Bytes.Append(Input.GetUtf8Bytes().GetData(), Input.GetUtf8Bytes().Num());
 				Encoded.Add(MoveTemp(Bytes));
-				Files.Add(Snapshot->AddFile(Source.Key, Encoded.Last()));
+				Files.Add(AS_NAMESPACE_QUALIFIER asCSourceFileID(static_cast<asUINT>(Encoded.Num())));
 			}
-			Snapshot->Freeze();
-			Session = MakeUnique<AS_NAMESPACE_QUALIFIER asCCompilationSession>(Snapshot, Diagnostics, TEXT("game"), MoveTemp(TypeContext));
+			Session = MakeUnique<AS_NAMESPACE_QUALIFIER asCCompilationSession>(SourceManager, Diagnostics, TEXT("game"), MoveTemp(TypeContext));
 			for (int32 Index = 0; Index < Sources.Num(); ++Index)
 			{
 				AS_NAMESPACE_QUALIFIER asCTokenizer Tokenizer(SourceManager, SourceManager.MakeRange(Files[Index], 0, Encoded[Index].Num()), AS_NAMESPACE_QUALIFIER asSLexOptions(AS_NAMESPACE_QUALIFIER asEUnicodeIdentifierPolicy::AsciiOnly, AS_NAMESPACE_QUALIFIER asETriviaMode::RetainTrivia), Identifiers, Diagnostics);
@@ -449,20 +451,29 @@ namespace DeclarationSemanticTests
 				FSessionRun Run({{TEXT("Targets.as"), Source}}); Run.Session->CloseDeclarationBarrier();
 				ASSERT_THAT(IsFalse(Run.Session->ResolveDeclarations(1)));
 				const auto Diagnostics = Run.GetDiagnostics(); ASSERT_THAT(AreEqual(1, Diagnostics.Num()));
-				ASSERT_THAT(AreEqual(3002u, Diagnostics[0].DiagnosticID));
+				ASSERT_THAT(AreEqual(static_cast<asUINT>(AS_NAMESPACE_QUALIFIER asEDiagnosticCatalogID::InvalidAttributeTarget), Diagnostics[0].DiagnosticID));
 				ASSERT_THAT(AreEqual(0, Run.Session->Lookup(TEXT("Bad")).Num()));
 			}
 		}
 
 		TEST_METHOD(MalformedAnnotationPayloadAndDanglingAnnotationAreErrors)
 		{
-			const TCHAR* Sources[] = { TEXT("UCLASS(Meta=(Category=)) class Good {};"), TEXT("UCLASS(,Bad) class Good {};"), TEXT("UCLASS()") };
-			for (const TCHAR* Source : Sources)
+			struct FCase
 			{
-				FSessionRun Run({{TEXT("Attrs.as"), Source}}); Run.Session->CloseDeclarationBarrier();
+				const TCHAR* Source;
+				asUINT DiagnosticID;
+			};
+			const FCase Cases[] = {
+				{TEXT("UCLASS(Meta=(Category=)) class Good {};"), static_cast<asUINT>(AS_NAMESPACE_QUALIFIER asEDiagnosticCatalogID::MalformedAnnotationPayload)},
+				{TEXT("UCLASS(,Bad) class Good {};"), static_cast<asUINT>(AS_NAMESPACE_QUALIFIER asEDiagnosticCatalogID::MalformedAnnotationPayload)},
+				{TEXT("UCLASS()"), static_cast<asUINT>(AS_NAMESPACE_QUALIFIER asEDiagnosticCatalogID::AnnotationRequiresDeclaration)},
+			};
+			for (const FCase& Case : Cases)
+			{
+				FSessionRun Run({{TEXT("Attrs.as"), Case.Source}}); Run.Session->CloseDeclarationBarrier();
 				ASSERT_THAT(IsFalse(Run.Session->ResolveDeclarations(1)));
-				const auto Diagnostics = Run.GetDiagnostics(); ASSERT_THAT(AreEqual(1, Diagnostics.Num()));
-				ASSERT_THAT(AreEqual(static_cast<asUINT>(AS_NAMESPACE_QUALIFIER asEDeclarationDiagnostic::InvalidAnnotation), Diagnostics[0].DiagnosticID));
+				const auto Diagnostics = Run.GetDiagnostics(); ASSERT_THAT(AreEqual(1, Diagnostics.Num(), Case.Source));
+				ASSERT_THAT(AreEqual(Case.DiagnosticID, Diagnostics[0].DiagnosticID, Case.Source));
 				ASSERT_THAT(IsFalse(Run.Session->IsPublishable()));
 			}
 		}

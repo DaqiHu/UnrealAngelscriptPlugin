@@ -2,7 +2,7 @@
 #pragma once
 
 #include "frontend/AST/as_expr.h"
-#include "frontend/Basic/as_source_snapshot.h"
+#include "frontend/Basic/as_source_manager.h"
 #include "frontend/AST/as_type.h"
 #include "frontend/AST/as_type_context.h"
 
@@ -25,8 +25,8 @@ struct asCASTNodeHandle
 	class ANGELSCRIPTRUNTIME_API asCASTContext
 	{
 	public:
-		explicit asCASTContext(TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> InSnapshot);
-		asCASTContext(TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> InSnapshot,
+		explicit asCASTContext(asCSourceManager InSources);
+		asCASTContext(asCSourceManager InSources,
 			TSharedRef<asCTypeContext, ESPMode::ThreadSafe> InTypeContext);
 		~asCASTContext();
 
@@ -57,14 +57,16 @@ struct asCASTNodeHandle
 		asCASTNodeHandle GetHandle(const asCASTNode* Node) const;
 		asCASTNode* Resolve(asCASTNodeHandle Handle) const;
 		bool VerifyAndSeal(const asCASTNode* Root, asSASTVerificationResult& OutResult);
+		bool FreezeForTooling();
 		bool IsSealed() const;
+		bool IsFrozenForTooling() const;
 		int32 GetNodeCount() const;
 		// The view is stable after VerifyAndSeal, or while the caller otherwise
 		// provides the same worker-join barrier required before sealing. It is not
 		// a promise of concurrent iteration during allocation.
 		TConstArrayView<asCASTNode*> GetNodes() const { return MakeArrayView(Nodes); }
 		uint64 GetContextID() const { return ContextID; }
-		const TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe>& GetSourceSnapshot() const { return Snapshot; }
+		const asCSourceManager& GetSources() const { return Sources; }
 		const TSharedRef<asCTypeContext, ESPMode::ThreadSafe>& GetTypeContext() const { return TypeContext; }
 
 	private:
@@ -74,7 +76,7 @@ struct asCASTNodeHandle
 		template <typename T, typename... Args>
 		T* CreateLocked(Args&&... Arguments)
 		{
-			if (bSealed) return nullptr;
+			if (bSealed || bFrozenForTooling) return nullptr;
 			T* Result = new T(Forward<Args>(Arguments)...);
 			const uint32 LocalID = static_cast<uint32>(Nodes.Num() + 1);
 			Result->BindOwner(this, LocalID);
@@ -97,7 +99,8 @@ struct asCASTNodeHandle
 		uint64 ContextID = 0;
 		mutable FCriticalSection MutationMutex;
 		bool bSealed = false;
-		TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot;
+		bool bFrozenForTooling = false;
+		asCSourceManager Sources;
 		TSharedRef<asCTypeContext, ESPMode::ThreadSafe> TypeContext;
 		TArray<asCASTNode*> Nodes;
 		TArray<asSAllocation> Allocations;

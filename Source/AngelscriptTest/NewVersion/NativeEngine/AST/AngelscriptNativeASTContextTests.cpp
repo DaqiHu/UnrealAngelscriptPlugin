@@ -1,4 +1,5 @@
 #include "CQTest.h"
+#include "../NativeEngineTestSupport.h"
 
 #include "frontend/AST/as_ast_context.h"
 #include "frontend/AST/as_ast_cast.h"
@@ -10,18 +11,15 @@
 
 namespace TypedASTContextTests
 {
-	static TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot()
+	static AS_NAMESPACE_QUALIFIER asCSourceManager Snapshot()
 	{
-		auto Result = MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>();
 		const uint8 Bytes[] = {'c', 'l', 'a', 's', 's', ' ', 'A'};
-		Result->AddFile(TEXT("A.as"), MakeArrayView(Bytes));
-		Result->Freeze();
-		return Result;
+		return AngelscriptNativeEngineTest::MakeSourceManagerFromBytes(TEXT("A.as"), MakeArrayView(Bytes));
 	}
 
-	static AS_NAMESPACE_QUALIFIER asCSourceRange Range(const AS_NAMESPACE_QUALIFIER asCSourceSnapshot& Snapshot, asUINT Begin, asUINT End)
+	static AS_NAMESPACE_QUALIFIER asCSourceRange Range(const AS_NAMESPACE_QUALIFIER asCSourceManager& Sources, asUINT Begin, asUINT End)
 	{
-		return {{Snapshot.GetSnapshotID(), AS_NAMESPACE_QUALIFIER asCSourceFileID(1), Begin}, {Snapshot.GetSnapshotID(), AS_NAMESPACE_QUALIFIER asCSourceFileID(1), End}};
+		return Sources.MakeRange(AS_NAMESPACE_QUALIFIER asCSourceFileID(1), Begin, End);
 	}
 
 	TEST_CLASS_WITH_FLAGS(
@@ -33,9 +31,9 @@ namespace TypedASTContextTests
 		{
 			auto Source = Snapshot();
 			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
-			auto* First = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(7, Range(*Source, 0, 1));
+			auto* First = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(7, Range(Source, 0, 1));
 			for (int32 Index = 0; Index < 128; ++Index)
-				Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(Index, Range(*Source, 1, 2));
+				Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(Index, Range(Source, 1, 2));
 			ASSERT_THAT(IsTrue(Context.Owns(First)));
 			ASSERT_THAT(AreEqual(static_cast<int64>(7), First->GetValue()));
 			ASSERT_THAT(AreEqual(129, Context.GetNodeCount()));
@@ -124,8 +122,8 @@ namespace TypedASTContextTests
 			auto Source = Snapshot();
 			AS_NAMESPACE_QUALIFIER asCASTContext First(Source);
 			AS_NAMESPACE_QUALIFIER asCASTContext Second(Source);
-			auto* FirstNode = First.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(1, Range(*Source, 0, 1));
-			auto* SecondNode = Second.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(2, Range(*Source, 0, 1));
+			auto* FirstNode = First.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(1, Range(Source, 0, 1));
+			auto* SecondNode = Second.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(2, Range(Source, 0, 1));
 			const AS_NAMESPACE_QUALIFIER asCASTNodeHandle FirstHandle = First.GetHandle(FirstNode);
 			const AS_NAMESPACE_QUALIFIER asCASTNodeHandle SecondHandle = Second.GetHandle(SecondNode);
 			ASSERT_THAT(AreEqual(FirstHandle.LocalID, SecondHandle.LocalID));
@@ -138,7 +136,7 @@ namespace TypedASTContextTests
 		{
 			auto Source = Snapshot();
 			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
-			auto* Literal = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(1, Range(*Source, 0, 1));
+			auto* Literal = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(1, Range(Source, 0, 1));
 			ASSERT_THAT(IsTrue(AS_NAMESPACE_QUALIFIER dyn_cast<AS_NAMESPACE_QUALIFIER asCExpr>(Literal) == Literal));
 			ASSERT_THAT(IsTrue(AS_NAMESPACE_QUALIFIER dyn_cast<AS_NAMESPACE_QUALIFIER asCDecl>(Literal) == nullptr));
 			ASSERT_THAT(IsTrue(AS_NAMESPACE_QUALIFIER dyn_cast<AS_NAMESPACE_QUALIFIER asCExpr>(static_cast<AS_NAMESPACE_QUALIFIER asCStmt*>(nullptr)) == nullptr));
@@ -148,9 +146,9 @@ namespace TypedASTContextTests
 		{
 			auto Source = Snapshot();
 			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
-			auto* Root = Context.Create<AS_NAMESPACE_QUALIFIER asCCompoundStmt>(Range(*Source, 0, 7));
-			auto* Before = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(1, Range(*Source, 1, 2));
-			auto* After = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(2, Range(*Source, 3, 4));
+			auto* Root = Context.Create<AS_NAMESPACE_QUALIFIER asCCompoundStmt>(Range(Source, 0, 7));
+			auto* Before = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(1, Range(Source, 1, 2));
+			auto* After = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(2, Range(Source, 3, 4));
 			ASSERT_THAT(IsTrue(Before->SetExpressionSemantics(
 				Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32),
 				AS_NAMESPACE_QUALIFIER asEValueCategory::PRValue)));
@@ -162,7 +160,7 @@ namespace TypedASTContextTests
 			ASSERT_THAT(IsTrue(Context.VerifyAndSeal(Root, Verification)));
 			ASSERT_THAT(IsTrue(Context.IsSealed()));
 			ASSERT_THAT(IsFalse(Root->AddStatement(After)));
-			ASSERT_THAT(IsTrue(Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(2, Range(*Source, 0, 1)) == nullptr));
+			ASSERT_THAT(IsTrue(Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(2, Range(Source, 0, 1)) == nullptr));
 			ASSERT_THAT(AreEqual(1, Root->GetStatements().Num()));
 		}
 
@@ -176,7 +174,7 @@ namespace TypedASTContextTests
 
 			auto Source = Snapshot();
 			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
-			auto* Root = Context.Create<AS_NAMESPACE_QUALIFIER asCCompoundStmt>(Range(*Source, 0, 7));
+			auto* Root = Context.Create<AS_NAMESPACE_QUALIFIER asCCompoundStmt>(Range(Source, 0, 7));
 			TArray<TFuture<FWorkerResult>> Workers;
 			for (int32 WorkerIndex = 0; WorkerIndex < 8; ++WorkerIndex)
 			{
@@ -184,8 +182,8 @@ namespace TypedASTContextTests
 				{
 					FWorkerResult Result;
 					Result.SharedType = Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32);
-					Result.Fragment = Context.Create<AS_NAMESPACE_QUALIFIER asCCompoundStmt>(Range(*Source, 0, 7));
-					auto* Literal = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(WorkerIndex, Range(*Source, 1, 2));
+					Result.Fragment = Context.Create<AS_NAMESPACE_QUALIFIER asCCompoundStmt>(Range(Source, 0, 7));
+					auto* Literal = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(WorkerIndex, Range(Source, 1, 2));
 					Literal->SetExpressionSemantics(Result.SharedType, AS_NAMESPACE_QUALIFIER asEValueCategory::PRValue);
 					Result.Fragment->AddStatement(Literal);
 					return Result;
@@ -207,10 +205,14 @@ namespace TypedASTContextTests
 
 		TEST_METHOD(ContextOwnsTheSourceSnapshotLease)
 		{
-			TSharedPtr<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Source = Snapshot();
-			TWeakPtr<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Weak = Source;
+			TSharedPtr<const FAngelscriptSource, ESPMode::ThreadSafe> Source =
+				AngelscriptNativeEngineTest::MakeSharedSource(TEXT("A.as"), TEXT("class A"));
+			TWeakPtr<const FAngelscriptSource, ESPMode::ThreadSafe> Weak = Source;
 			{
-				AS_NAMESPACE_QUALIFIER asCASTContext Context(Source.ToSharedRef());
+				TArray<TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>> Sources;
+				Sources.Add(Source.ToSharedRef());
+				AS_NAMESPACE_QUALIFIER asCSourceManager Manager(Sources);
+				AS_NAMESPACE_QUALIFIER asCASTContext Context(MoveTemp(Manager));
 				Source.Reset();
 				ASSERT_THAT(IsTrue(Weak.IsValid()));
 			}
@@ -251,7 +253,8 @@ namespace TypedASTContextTests
 
 		TEST_METHOD(KnownKeyCannotDisguiseAnotherBuiltinPrimitive)
 		{
-			AS_NAMESPACE_QUALIFIER asCASTContext Context(Snapshot());
+			auto Source = Snapshot();
+			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
 			auto* Actual = Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::UInt64);
 			auto* Mismatch = Context.Create<AS_NAMESPACE_QUALIFIER asCBuiltinType>(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32, Actual->GetStableIdentity());
 			ASSERT_THAT(IsNotNull(Mismatch));
@@ -263,7 +266,8 @@ namespace TypedASTContextTests
 
 		TEST_METHOD(NominalUseCannotNameAnotherDeclarationKey)
 		{
-			AS_NAMESPACE_QUALIFIER asCASTContext Context(Snapshot());
+			auto Source = Snapshot();
+			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
 			auto& Registry = Context.GetTypeContext()->GetIdentityRegistry();
 			AS_NAMESPACE_QUALIFIER asSNominalTypeDescriptor Descriptor;
 			Descriptor.StableScope = TEXT("ast"); Descriptor.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::Class; Descriptor.Name = TEXT("A");
@@ -282,7 +286,8 @@ namespace TypedASTContextTests
 
 		TEST_METHOD(CallableSignatureKeyCannotDisguiseDifferentParameterTypes)
 		{
-			AS_NAMESPACE_QUALIFIER asCASTContext Context(Snapshot());
+			auto Source = Snapshot();
+			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
 			auto* Int = Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32);
 			auto* Bool = Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Bool);
 			AS_NAMESPACE_QUALIFIER asCQualType IntUse;
@@ -302,7 +307,8 @@ namespace TypedASTContextTests
 
 		TEST_METHOD(CallableSignatureKeyCannotDisguiseParameterPassingMode)
 		{
-			AS_NAMESPACE_QUALIFIER asCASTContext Context(Snapshot());
+			auto Source = Snapshot();
+			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
 			auto& Registry = Context.GetTypeContext()->GetIdentityRegistry();
 			auto* Int = Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32);
 			AS_NAMESPACE_QUALIFIER asCQualType Value, Reference;

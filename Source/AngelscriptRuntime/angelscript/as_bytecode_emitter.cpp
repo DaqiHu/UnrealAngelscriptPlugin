@@ -11,7 +11,6 @@
 #include "frontend/Compile/as_compilation_session.h"
 #include "frontend/AST/as_decl.h"
 #include "frontend/Basic/as_source_manager.h"
-#include "frontend/Basic/as_source_snapshot.h"
 #include "frontend/AST/as_stmt.h"
 
 BEGIN_AS_NAMESPACE
@@ -69,7 +68,7 @@ namespace
 			return;
 		}
 		Failure.NodeKind = Node->GetRawKind();
-		asCSourceManager Manager(Session.GetASTContext().GetSourceSnapshot());
+		asCSourceManager Manager(Session.GetASTContext().GetSources());
 		asSSourceLineColumn LineColumn;
 		if (Manager.TryGetLineColumn(Node->GetSourceRange().Begin, LineColumn))
 		{
@@ -207,11 +206,36 @@ asSByteCodeEmissionResult asEmitByteCodeImage(
 			FunctionsByKey.Add(Candidate->GetStableKey(), Candidate);
 		}
 	}
-	for (asCTypeInfo* Type : FrozenDefinitions->GetTypes())
+	TArray<const asCModuleDefinitionSet*> TypeSets;
+	TypeSets.Add(FrozenDefinitions);
+	for (int32 SetIndex = 0; SetIndex < TypeSets.Num(); ++SetIndex)
 	{
-		if (asCObjectType* Object = CastToObjectType(Type))
+		const asCModuleDefinitionSet* TypeSet = TypeSets[SetIndex];
+		if (!TypeSet)
 		{
-			TypesByKey.Add(Object->GetStableKey(), Object);
+			continue;
+		}
+		for (asCTypeInfo* Type : TypeSet->GetTypes())
+		{
+			if (asCObjectType* Object = CastToObjectType(Type))
+			{
+				TypesByKey.Add(Object->GetStableKey(), Object);
+			}
+		}
+		for (asCModuleDefinitionSet* Dependency : TypeSet->GetDependencies())
+		{
+			if (Dependency && !TypeSets.Contains(Dependency))
+			{
+				TypeSets.Add(Dependency);
+			}
+		}
+	}
+	TMap<asSStableKey, asCGlobalProperty*> GlobalsByKey;
+	for (asCGlobalProperty* Global : FrozenDefinitions->GetGlobalProperties())
+	{
+		if (Global)
+		{
+			GlobalsByKey.Add(Global->GetStableKey(), Global);
 		}
 	}
 
@@ -249,6 +273,7 @@ asSByteCodeEmissionResult asEmitByteCodeImage(
 		Frame.ParameterDwords = ParamSize;
 		Frame.Functions = FunctionsByKey;
 		Frame.Types = TypesByKey;
+		Frame.Globals = GlobalsByKey;
 		for (asCStmt* Stmt : CurrentBody->GetStatements())
 		{
 			if (!asEmitStmt(Frame, Stmt))

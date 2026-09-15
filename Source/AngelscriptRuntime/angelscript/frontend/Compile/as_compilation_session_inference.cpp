@@ -22,10 +22,8 @@ bool asCCompilationSession::ResolveInferredDeclarations()
 				Variable->MarkInvalid();
 				const TCHAR* Message = Color == 1 ? TEXT("auto-initializer-dependency-cycle") : TEXT("auto-initializer-dependency-budget");
 				StableDiagnostics.Add(Variable->GetSemanticKey() + TEXT(":") + Message);
-				auto Fragment = Diagnostics.CreateFragment(Variable->GetSemanticKey());
-				asSDiagnosticRecord Record; Record.DiagnosticID = 4102; Record.Severity = asEDiagnosticSeverity::Error;
-				Record.PrimaryRange = Variable->GetSourceRange(); Record.Arguments.Add(asSDiagnosticArgument::FromText(Message));
-				Fragment.Report(MoveTemp(Record)); Diagnostics.Submit(MoveTemp(Fragment)); return false;
+				SubmitSemanticGroup(Variable->GetSourceRange(), Message, Variable->GetSemanticKey());
+				return false;
 			}
 			Colors.Add(Variable, 1);
 			asCSema Initializer(Context, Diagnostics, StableScope);
@@ -48,7 +46,10 @@ bool asCCompilationSession::ResolveInferredDeclarations()
 			Colors.Add(Variable, 2);
 			if (!Parsed || !Analyzed || Variable->IsInvalid() || !Variable->GetResolvedQualType().IsValid())
 			{
-				Variable->MarkInvalid(); StableDiagnostics.Add(Variable->GetSemanticKey() + TEXT(":auto-initializer-analysis-failed")); return false;
+				Variable->MarkInvalid();
+				StableDiagnostics.Add(Variable->GetSemanticKey() + TEXT(":auto-initializer-analysis-failed"));
+				SubmitSemanticGroup(Variable->GetSourceRange(), TEXT("auto-initializer-analysis-failed"), Variable->GetSemanticKey());
+				return false;
 			}
 			return true;
 		};

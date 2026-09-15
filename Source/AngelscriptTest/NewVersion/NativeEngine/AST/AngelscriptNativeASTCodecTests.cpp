@@ -106,26 +106,23 @@ namespace TypedASTCodecTests
 			Bytes[Position + Byte] = static_cast<uint8>(Value >> (Byte * 8));
 	}
 
-	static TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot()
+	static AS_NAMESPACE_QUALIFIER asCSourceManager Snapshot()
 	{
-		auto Result = MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>();
 		const uint8 Bytes[] = {'r','e','t','u','r','n',' ','1',';'};
-		Result->AddFile(TEXT("Codec.as"), MakeArrayView(Bytes));
-		Result->Freeze();
-		return Result;
+		return AngelscriptNativeEngineTest::MakeSourceManagerFromBytes(TEXT("Codec.as"), MakeArrayView(Bytes));
 	}
 
-	static AS_NAMESPACE_QUALIFIER asCSourceRange Range(const AS_NAMESPACE_QUALIFIER asCSourceSnapshot& Source, asUINT Begin, asUINT End)
+	static AS_NAMESPACE_QUALIFIER asCSourceRange Range(const AS_NAMESPACE_QUALIFIER asCSourceManager& Source, asUINT Begin, asUINT End)
 	{
-		return {{Source.GetSnapshotID(), AS_NAMESPACE_QUALIFIER asCSourceFileID(1), Begin}, {Source.GetSnapshotID(), AS_NAMESPACE_QUALIFIER asCSourceFileID(1), End}};
+		return Source.MakeRange(AS_NAMESPACE_QUALIFIER asCSourceFileID(1), Begin, End);
 	}
 
 	static bool MakeProjection(AS_NAMESPACE_QUALIFIER asCASTProjection& Out)
 	{
 		auto Source = Snapshot();
 		AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
-		auto* Compound = Context.Create<AS_NAMESPACE_QUALIFIER asCCompoundStmt>(Range(*Source, 0, 9));
-		auto* Literal = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(1, Range(*Source, 7, 8));
+		auto* Compound = Context.Create<AS_NAMESPACE_QUALIFIER asCCompoundStmt>(Range(Source, 0, 9));
+		auto* Literal = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(1, Range(Source, 7, 8));
 		if (!Literal->SetExpressionSemantics(
 			Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32),
 			AS_NAMESPACE_QUALIFIER asEValueCategory::PRValue)) return false;
@@ -136,23 +133,20 @@ namespace TypedASTCodecTests
 		return AS_NAMESPACE_QUALIFIER asCASTProjection::Build(Context, Compound, Out, Error);
 	}
 
-	static TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> ControlSnapshot()
+	static AS_NAMESPACE_QUALIFIER asCSourceManager ControlSnapshot()
 	{
-		auto Result = MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>();
 		const uint8 Bytes[] =
 		{
 			's','w','i','t','c','h','(','x',')','{','c','a','s','e',' ','1',':',
 			'f','a','l','l','t','h','r','o','u','g','h',';','d','e','f','a','u','l','t',
 			':','b','r','e','a','k',';','}'
 		};
-		Result->AddFile(TEXT("CodecControl.as"), MakeArrayView(Bytes));
-		Result->Freeze();
-		return Result;
+		return AngelscriptNativeEngineTest::MakeSourceManagerFromBytes(TEXT("CodecControl.as"), MakeArrayView(Bytes));
 	}
 
 	static AS_NAMESPACE_QUALIFIER asCIntegerLiteral* TypedInteger(
 		AS_NAMESPACE_QUALIFIER asCASTContext& Context,
-		const AS_NAMESPACE_QUALIFIER asCSourceSnapshot& Source,
+		const AS_NAMESPACE_QUALIFIER asCSourceManager& Source,
 		int64 Value,
 		asUINT Begin,
 		asUINT End)
@@ -216,7 +210,8 @@ namespace TypedASTCodecTests
 
 		TEST_METHOD(TypedBuiltinPayloadMustAuthenticateAgainstItsRetainedIdentity)
 		{
-			AS_NAMESPACE_QUALIFIER asCASTContext Context(Snapshot());
+			auto Source = Snapshot();
+			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
 			auto* Type = Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32);
 			AS_NAMESPACE_QUALIFIER asSASTVerificationResult Verify;
 			ASSERT_THAT(IsTrue(Context.VerifyAndSeal(Type, Verify)));
@@ -246,12 +241,12 @@ namespace TypedASTCodecTests
 			auto Source = Snapshot();
 			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
 			auto* Type = Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32);
-			auto* Left = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(41, Range(*Source, 0, 1));
-			auto* Right = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(1, Range(*Source, 2, 3));
+			auto* Left = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(41, Range(Source, 0, 1));
+			auto* Right = Context.Create<AS_NAMESPACE_QUALIFIER asCIntegerLiteral>(1, Range(Source, 2, 3));
 			auto* Add = Context.Create<AS_NAMESPACE_QUALIFIER asCBinaryOperator>(
 				AS_NAMESPACE_QUALIFIER asEBinaryOperator::Add, Left, Right,
-				Range(*Source, 1, 2), Range(*Source, 0, 3));
-			auto* Root = Context.Create<AS_NAMESPACE_QUALIFIER asCCompoundStmt>(Range(*Source, 0, 9));
+				Range(Source, 1, 2), Range(Source, 0, 3));
+			auto* Root = Context.Create<AS_NAMESPACE_QUALIFIER asCCompoundStmt>(Range(Source, 0, 9));
 			ASSERT_THAT(IsTrue(Left->SetExpressionSemantics(Type, AS_NAMESPACE_QUALIFIER asEValueCategory::PRValue)));
 			ASSERT_THAT(IsTrue(Right->SetExpressionSemantics(Type, AS_NAMESPACE_QUALIFIER asEValueCategory::PRValue)));
 			ASSERT_THAT(IsTrue(Add->SetExpressionSemantics(Type, AS_NAMESPACE_QUALIFIER asEValueCategory::PRValue)));
@@ -306,17 +301,17 @@ namespace TypedASTCodecTests
 			auto Source = Snapshot();
 			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
 			auto* Variable = Context.Create<AS_NAMESPACE_QUALIFIER asCVarDecl>(
-				AS_NAMESPACE_QUALIFIER asEDeclKind::Var, TEXT("Score"), Range(*Source, 0, 9));
+				AS_NAMESPACE_QUALIFIER asEDeclKind::Var, TEXT("Score"), Range(Source, 0, 9));
 			AS_NAMESPACE_QUALIFIER asSTypeSyntax Syntax;
 			Syntax.NameParts = {TEXT("Score")};
-			Syntax.ComponentRanges = {Range(*Source, 0, 5)};
-			Syntax.Range = Range(*Source, 0, 9);
+			Syntax.ComponentRanges = {Range(Source, 0, 5)};
+			Syntax.Range = Range(Source, 0, 9);
 			AS_NAMESPACE_QUALIFIER asSTypeSyntax GenericArgument;
 			GenericArgument.NameParts = {TEXT("int")};
-			GenericArgument.ComponentRanges = {Range(*Source, 6, 9)};
-			GenericArgument.Range = Range(*Source, 6, 9);
+			GenericArgument.ComponentRanges = {Range(Source, 6, 9)};
+			GenericArgument.Range = Range(Source, 6, 9);
 			Syntax.GenericArguments.Add(MoveTemp(GenericArgument));
-			Syntax.ArrayDimensions.Add(Range(*Source, 7, 9));
+			Syntax.ArrayDimensions.Add(Range(Source, 7, 9));
 			ASSERT_THAT(IsTrue(Variable->SetTypeSyntax(MoveTemp(Syntax))));
 			ASSERT_THAT(IsTrue(Variable->SetResolvedType(
 				Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32))));
@@ -325,18 +320,18 @@ namespace TypedASTCodecTests
 			Nested.Name = TEXT("Count");
 			Nested.Kind = AS_NAMESPACE_QUALIFIER asEAnnotationValueKind::Scalar;
 			Nested.Value = TEXT("2");
-			Nested.Range = Range(*Source, 4, 8);
-			Nested.ValueRange = Range(*Source, 7, 8);
+			Nested.Range = Range(Source, 4, 8);
+			Nested.ValueRange = Range(Source, 7, 8);
 			AS_NAMESPACE_QUALIFIER asSAnnotationArgument Group;
 			Group.Name = TEXT("Meta");
 			Group.Kind = AS_NAMESPACE_QUALIFIER asEAnnotationValueKind::Group;
-			Group.Range = Range(*Source, 0, 9);
-			Group.ValueRange = Range(*Source, 4, 9);
+			Group.Range = Range(Source, 0, 9);
+			Group.ValueRange = Range(Source, 4, 9);
 			Group.Arguments.Add(MoveTemp(Nested));
 			auto* Attribute = Context.Create<AS_NAMESPACE_QUALIFIER asCAnnotationAttr>(
 				AS_NAMESPACE_QUALIFIER asEAnnotationKind::UProperty,
 				TArray<AS_NAMESPACE_QUALIFIER asSAnnotationArgument>{MoveTemp(Group)},
-				Range(*Source, 0, 9), AS_NAMESPACE_QUALIFIER asEAttrTarget::Variable);
+				Range(Source, 0, 9), AS_NAMESPACE_QUALIFIER asEAttrTarget::Variable);
 			ASSERT_THAT(IsTrue(Variable->AddAttr(Attribute)));
 			AS_NAMESPACE_QUALIFIER asSASTVerificationResult Verify;
 			ASSERT_THAT(IsTrue(Context.VerifyAndSeal(Variable, Verify)));
@@ -454,13 +449,13 @@ namespace TypedASTCodecTests
 				Context.GetTypeContext()->GetIdentityRegistry().InternFunction(
 					FunctionDescriptor, FunctionIdentity)));
 			auto* Function = Context.Create<AS_NAMESPACE_QUALIFIER asCFunctionDecl>(
-				TEXT("Invoke"), Range(*Source, 0, 1));
+				TEXT("Invoke"), Range(Source, 0, 1));
 			ASSERT_THAT(IsTrue(Function->SetStableIdentity(FunctionIdentity)));
 			ASSERT_THAT(IsTrue(Function->SetResolvedSignature(Signature)));
 			ASSERT_THAT(IsTrue(Function->SetResolvedReturnType(Type)));
-			auto* Callee = Context.Create<AS_NAMESPACE_QUALIFIER asCDeclRefExpr>(Function, Range(*Source, 0, 1));
-			auto* String = Context.Create<AS_NAMESPACE_QUALIFIER asCStringLiteral>(TEXT("hello"), Range(*Source, 2, 7));
-			auto* Call = Context.Create<AS_NAMESPACE_QUALIFIER asCCallExpr>(Callee, Range(*Source, 0, 9));
+			auto* Callee = Context.Create<AS_NAMESPACE_QUALIFIER asCDeclRefExpr>(Function, Range(Source, 0, 1));
+			auto* String = Context.Create<AS_NAMESPACE_QUALIFIER asCStringLiteral>(TEXT("hello"), Range(Source, 2, 7));
+			auto* Call = Context.Create<AS_NAMESPACE_QUALIFIER asCCallExpr>(Callee, Range(Source, 0, 9));
 			ASSERT_THAT(IsTrue(Call->AddArgument(String)));
 			ASSERT_THAT(IsTrue(Call->SetArgumentSourceOrdinals(TArray<int32>{0})));
 			ASSERT_THAT(IsTrue(Callee->SetExpressionSemantics(Signature, AS_NAMESPACE_QUALIFIER asEValueCategory::PRValue)));
@@ -493,22 +488,22 @@ namespace TypedASTCodecTests
 		{
 			auto Source = ControlSnapshot();
 			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
-			auto* Selector = TypedInteger(Context, *Source, 0, 7, 8);
+			auto* Selector = TypedInteger(Context, Source, 0, 7, 8);
 			auto* Switch = Context.Create<AS_NAMESPACE_QUALIFIER asCSwitchStmt>(
-				Selector, Range(*Source, 0, 9), Range(*Source, 0, 44));
-			auto* Label = TypedInteger(Context, *Source, 1, 15, 16);
+				Selector, Range(Source, 0, 9), Range(Source, 0, 44));
+			auto* Label = TypedInteger(Context, Source, 1, 15, 16);
 			auto* Case = Context.Create<AS_NAMESPACE_QUALIFIER asCCaseStmt>(
-				Switch, Label, Range(*Source, 10, 14), Range(*Source, 16, 17),
-				Range(*Source, 10, 29));
+				Switch, Label, Range(Source, 10, 14), Range(Source, 16, 17),
+				Range(Source, 10, 29));
 			ASSERT_THAT(IsTrue(Case->SetResolvedValueBits(1)));
 			auto* Default = Context.Create<AS_NAMESPACE_QUALIFIER asCDefaultStmt>(
-				Switch, Range(*Source, 29, 36), Range(*Source, 36, 37),
-				Range(*Source, 29, 43));
+				Switch, Range(Source, 29, 36), Range(Source, 36, 37),
+				Range(Source, 29, 43));
 			auto* Fallthrough = Context.Create<AS_NAMESPACE_QUALIFIER asCFallthroughStmt>(
-				Default, Range(*Source, 17, 29));
+				Default, Range(Source, 17, 29));
 			ASSERT_THAT(IsTrue(Case->AddStatement(Fallthrough)));
 			ASSERT_THAT(IsTrue(Default->AddStatement(Context.Create<AS_NAMESPACE_QUALIFIER asCBreakStmt>(
-				Switch, Range(*Source, 37, 43)))));
+				Switch, Range(Source, 37, 43)))));
 			ASSERT_THAT(IsTrue(Switch->AddClause(Case)));
 			ASSERT_THAT(IsTrue(Switch->AddClause(Default)));
 			AS_NAMESPACE_QUALIFIER asSASTVerificationResult Verify;
@@ -579,19 +574,19 @@ namespace TypedASTCodecTests
 		{
 			auto Source = ControlSnapshot();
 			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
-			auto* InitA = Context.Create<AS_NAMESPACE_QUALIFIER asCNullStmt>(Range(*Source, 0, 1));
-			auto* InitB = Context.Create<AS_NAMESPACE_QUALIFIER asCNullStmt>(Range(*Source, 1, 2));
-			auto* Condition = Context.Create<AS_NAMESPACE_QUALIFIER asCBooleanLiteral>(true, Range(*Source, 2, 3));
+			auto* InitA = Context.Create<AS_NAMESPACE_QUALIFIER asCNullStmt>(Range(Source, 0, 1));
+			auto* InitB = Context.Create<AS_NAMESPACE_QUALIFIER asCNullStmt>(Range(Source, 1, 2));
+			auto* Condition = Context.Create<AS_NAMESPACE_QUALIFIER asCBooleanLiteral>(true, Range(Source, 2, 3));
 			ASSERT_THAT(IsTrue(Condition->SetExpressionSemantics(
 				Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Bool),
 				AS_NAMESPACE_QUALIFIER asEValueCategory::PRValue)));
-			auto* IncrementA = TypedInteger(Context, *Source, 1, 3, 4);
-			auto* IncrementB = TypedInteger(Context, *Source, 2, 4, 5);
-			auto* Body = Context.Create<AS_NAMESPACE_QUALIFIER asCNullStmt>(Range(*Source, 5, 6));
+			auto* IncrementA = TypedInteger(Context, Source, 1, 3, 4);
+			auto* IncrementB = TypedInteger(Context, Source, 2, 4, 5);
+			auto* Body = Context.Create<AS_NAMESPACE_QUALIFIER asCNullStmt>(Range(Source, 5, 6));
 			auto* For = Context.Create<AS_NAMESPACE_QUALIFIER asCForStmt>(
 				TArray<AS_NAMESPACE_QUALIFIER asCStmt*>{InitA, InitB}, Condition,
 				TArray<AS_NAMESPACE_QUALIFIER asCExpr*>{IncrementA, IncrementB}, Body,
-				Range(*Source, 0, 5), Range(*Source, 0, 6));
+				Range(Source, 0, 5), Range(Source, 0, 6));
 			AS_NAMESPACE_QUALIFIER asSASTVerificationResult Verify;
 			ASSERT_THAT(IsTrue(Context.VerifyAndSeal(For, Verify)));
 
@@ -628,12 +623,12 @@ namespace TypedASTCodecTests
 			ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded,
 				Context.GetTypeContext()->GetIdentityRegistry().InternFunction(
 					Descriptor, InitializerIdentity)));
-			auto* ValueInit = Context.Create<AS_NAMESPACE_QUALIFIER asCValueInitExpr>(Range(*Source, 1, 2));
-			auto* Explicit = TypedInteger(Context, *Source, 7, 3, 4);
+			auto* ValueInit = Context.Create<AS_NAMESPACE_QUALIFIER asCValueInitExpr>(Range(Source, 1, 2));
+			auto* Explicit = TypedInteger(Context, Source, 7, 3, 4);
 			ASSERT_THAT(IsTrue(ValueInit->SetExpressionSemantics(
 				Type, AS_NAMESPACE_QUALIFIER asEValueCategory::PRValue)));
 			auto* Initializer = Context.Create<AS_NAMESPACE_QUALIFIER asCInitListExpr>(
-				TArray<AS_NAMESPACE_QUALIFIER asCExpr*>{ValueInit, Explicit}, Range(*Source, 0, 5));
+				TArray<AS_NAMESPACE_QUALIFIER asCExpr*>{ValueInit, Explicit}, Range(Source, 0, 5));
 			ASSERT_THAT(IsTrue(Initializer->SetInitializerBinding(
 				InitializerIdentity, TArray<int32>{1, 1})));
 			ASSERT_THAT(IsTrue(Initializer->SetExpressionSemantics(
@@ -689,10 +684,10 @@ namespace TypedASTCodecTests
 		{
 			auto Source = Snapshot();
 			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
-			auto* Initializer = TypedInteger(Context, *Source, 7, 7, 8);
+			auto* Initializer = TypedInteger(Context, Source, 7, 7, 8);
 			auto* Constant = Context.Create<AS_NAMESPACE_QUALIFIER asCEnumConstantDecl>(
-				TEXT("Entry"), 7, true, Range(*Source, 0, 9));
-			ASSERT_THAT(IsTrue(Constant->SetDeferredInitializerRange(Range(*Source, 7, 8))));
+				TEXT("Entry"), 7, true, Range(Source, 0, 9));
+			ASSERT_THAT(IsTrue(Constant->SetDeferredInitializerRange(Range(Source, 7, 8))));
 			ASSERT_THAT(IsTrue(Constant->SetInitializer(Initializer)));
 			ASSERT_THAT(IsTrue(Constant->SetResolvedValue(7)));
 			AS_NAMESPACE_QUALIFIER asSASTVerificationResult Verify;
@@ -874,7 +869,8 @@ namespace TypedASTCodecTests
 
 		TEST_METHOD(DecodedIdentityRequiresAnExplicitMatchingRegistry)
 		{
-			AS_NAMESPACE_QUALIFIER asCASTContext Context(Snapshot());
+			auto Source = Snapshot();
+			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
 			auto* Type = Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32);
 			AS_NAMESPACE_QUALIFIER asSASTVerificationResult Verify;
 			ASSERT_THAT(IsTrue(Context.VerifyAndSeal(Type, Verify)));
@@ -905,7 +901,8 @@ namespace TypedASTCodecTests
 
 		TEST_METHOD(ProjectionRejectsUnownedIdentityBeforePublishingRecords)
 		{
-			AS_NAMESPACE_QUALIFIER asCASTContext Context(Snapshot());
+			auto Source = Snapshot();
+			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
 			AS_NAMESPACE_QUALIFIER asCStableIdentityRegistry ForeignRegistry;
 			AS_NAMESPACE_QUALIFIER asSStableTypeUseDescriptor Descriptor;
 			Descriptor.Kind = AS_NAMESPACE_QUALIFIER asETypeUseKind::Primitive;
@@ -1188,7 +1185,8 @@ namespace TypedASTCodecTests
 
 		TEST_METHOD(VerificationFailureCannotSealOrPublishMismatchedTypeIdentity)
 		{
-			AS_NAMESPACE_QUALIFIER asCASTContext Context(Snapshot());
+			auto Source = Snapshot();
+			AS_NAMESPACE_QUALIFIER asCASTContext Context(Source);
 			auto* Int = Context.GetBuiltinType(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32);
 			auto* Forged = Context.Create<AS_NAMESPACE_QUALIFIER asCBuiltinType>(AS_NAMESPACE_QUALIFIER asEPrimitiveType::Bool, Int->GetStableIdentity());
 			AS_NAMESPACE_QUALIFIER asSASTVerificationResult Verify;

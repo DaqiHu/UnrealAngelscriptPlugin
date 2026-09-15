@@ -1,5 +1,6 @@
 #include "frontend/AST/as_ast_context.h"
 #include "frontend/AST/as_ast_verifier.h"
+#include "frontend/AST/as_ast_visitor.h"
 #include "frontend/AST/as_ast_cast.h"
 
 #include <atomic>
@@ -8,15 +9,15 @@ BEGIN_AS_NAMESPACE
 
 static std::atomic<uint64> GNextASTContextID{1};
 
-	asCASTContext::asCASTContext(TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> InSnapshot)
-		: asCASTContext(MoveTemp(InSnapshot), MakeShared<asCTypeContext, ESPMode::ThreadSafe>())
+	asCASTContext::asCASTContext(asCSourceManager InSources)
+		: asCASTContext(MoveTemp(InSources), MakeShared<asCTypeContext, ESPMode::ThreadSafe>())
 	{
 	}
 
-	asCASTContext::asCASTContext(TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> InSnapshot,
+	asCASTContext::asCASTContext(asCSourceManager InSources,
 		TSharedRef<asCTypeContext, ESPMode::ThreadSafe> InTypeContext)
 		: ContextID(GNextASTContextID.fetch_add(1, std::memory_order_relaxed))
-		, Snapshot(MoveTemp(InSnapshot))
+		, Sources(MoveTemp(InSources))
 		, TypeContext(MoveTemp(InTypeContext))
 	{
 	}
@@ -74,7 +75,7 @@ static std::atomic<uint64> GNextASTContextID{1};
 		FScopeLock Lock(&MutationMutex);
 		const uint8 Key = static_cast<uint8>(Primitive);
 		if (asCBuiltinType** Existing = BuiltinTypes.Find(Key)) return *Existing;
-		if (bSealed) return nullptr;
+		if (bSealed || bFrozenForTooling) return nullptr;
 		asSStableKey Identity;
 		if (TypeContext->InternPrimitiveTypeUse(Primitive, Identity) != asETypeIdentityStatus::Succeeded) return nullptr;
 		asCBuiltinType* Created = CreateLocked<asCBuiltinType>(Primitive, Identity);
@@ -110,7 +111,7 @@ static std::atomic<uint64> GNextASTContextID{1};
 			asCNominalType* Nominal = dyn_cast<asCNominalType>(*Existing);
 			return Nominal && Nominal->GetDeclarationIdentity() == DeclarationIdentity ? Nominal : nullptr;
 		}
-		if (bSealed) return nullptr;
+		if (bSealed || bFrozenForTooling) return nullptr;
 		asCNominalType* Created = CreateLocked<asCNominalType>(DeclarationIdentity, TypeUseIdentity);
 		if (!Created || Created->IsInvalid()) return nullptr;
 		CanonicalTypes.Add(TypeUseIdentity, Created);
@@ -148,7 +149,7 @@ static std::atomic<uint64> GNextASTContextID{1};
 		}
 		if (asCType** Existing = CanonicalTypes.Find(TypeUseIdentity))
 			return dyn_cast<asCGenericType>(*Existing);
-		if (bSealed) return nullptr;
+		if (bSealed || bFrozenForTooling) return nullptr;
 		asCGenericType* Created = CreateLocked<asCGenericType>(TemplateType, MoveTemp(Arguments), TypeUseIdentity);
 		if (!Created || Created->IsInvalid()) return nullptr;
 		CanonicalTypes.Add(TypeUseIdentity, Created);
@@ -191,7 +192,7 @@ static std::atomic<uint64> GNextASTContextID{1};
 		}
 		if (asCType** Existing = CanonicalTypes.Find(TypeUseIdentity))
 			return dyn_cast<asCFunctionType>(*Existing);
-		if (bSealed) return nullptr;
+		if (bSealed || bFrozenForTooling) return nullptr;
 		asCFunctionType* Created = CreateLocked<asCFunctionType>(
 			ReturnType, MoveTemp(Parameters), TypeUseIdentity, MoveTemp(PassingModes));
 		if (!Created || Created->IsInvalid()) return nullptr;
@@ -215,6 +216,81 @@ static std::atomic<uint64> GNextASTContextID{1};
 	{
 		FScopeLock Lock(&MutationMutex);
 		return bSealed;
+	}
+
+	bool asCASTContext::IsFrozenForTooling() const
+	{
+		FScopeLock Lock(&MutationMutex);
+		return bFrozenForTooling;
+	}
+
+	bool asCASTContext::FreezeForTooling()
+	{
+		FScopeLock Lock(&MutationMutex);
+		if (bSealed)
+		{
+			return false;
+		}
+		if (bFrozenForTooling)
+		{
+			return true;
+		}
+		const uint64 SnapshotID = Sources.GetSnapshotID();
+		for (asCASTNode* Node : Nodes)
+		{
+			if (!Node || Node->GetOwnerContext() != this)
+			{
+				return false;
+			}
+			if (Node->GetFamily() != asEASTNodeFamily::Type)
+			{
+				const asCSourceRange& Range = Node->GetSourceRange();
+				TConstArrayView<uint8> Bytes;
+				if (!Range.IsOrdered()
+					|| Range.Begin.SnapshotID != SnapshotID
+					|| !Sources.TryGetBytes(Range.Begin.FileID, Bytes)
+					|| Range.End.ByteOffset > static_cast<asUINT>(Bytes.Num()))
+				{
+					return false;
+				}
+			}
+			TArray<const asCASTNode*> Children;
+			if (asCASTVisitor::CollectOwningChildren(*Node, Children))
+			{
+				for (const asCASTNode* Child : Children)
+				{
+					if (Child && Child->GetOwnerContext() != this)
+					{
+						return false;
+					}
+				}
+			}
+			TArray<asSASTCrossReference> CrossReferences;
+			if (asCASTVisitor::CollectCrossReferences(*Node, CrossReferences))
+			{
+				for (const asSASTCrossReference& Reference : CrossReferences)
+				{
+					if (Reference.Target && Reference.Target->GetOwnerContext() != this)
+					{
+						return false;
+					}
+				}
+			}
+			TArray<asSASTSemanticTypeReference> TypeReferences;
+			if (asCASTVisitor::CollectSemanticTypeReferences(*Node, TypeReferences))
+			{
+				for (const asSASTSemanticTypeReference& Reference : TypeReferences)
+				{
+					const asCType* Type = Reference.Type.GetType();
+					if (Type && Type->GetOwnerContext() != this)
+					{
+						return false;
+					}
+				}
+			}
+		}
+		bFrozenForTooling = true;
+		return true;
 	}
 
 	int32 asCASTContext::GetNodeCount() const

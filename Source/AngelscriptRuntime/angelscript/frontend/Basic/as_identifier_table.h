@@ -9,6 +9,7 @@
 #include "Containers/Array.h"
 #include "Containers/ArrayView.h"
 #include "Containers/Map.h"
+#include "HAL/CriticalSection.h"
 #include "Templates/UniquePtr.h"
 
 BEGIN_AS_NAMESPACE
@@ -58,6 +59,7 @@ enum class asEReflectionSpelling : uint8
 		static asETokenKind ClassifyTokenKind(TConstArrayView<uint8> Utf8Spelling);
 		static asEReflectionSpelling ClassifyReflectionSpelling(TConstArrayView<uint8> Utf8Spelling);
 
+		mutable FCriticalSection InternLock;
 		TArray<TUniquePtr<asCIdentifierInfo>> Entries;
 		TMap<uint64, TArray<asCIdentifierInfo*>> EntriesByHash;
 		asUINT UniqueEntryAllocationCount = 0;

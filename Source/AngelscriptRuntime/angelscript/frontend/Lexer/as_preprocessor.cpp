@@ -43,21 +43,25 @@ namespace
 			return asEDirectiveKind::Invalid;
 		}
 
+		asCDiagnostic Diag(
+			asCDiagnosticFragment& Fragment,
+			asEPreprocessorDiagnosticID DiagnosticID,
+			const asCSourceRange& Range)
+		{
+			return Fragment.Diag(Range, static_cast<asUINT>(DiagnosticID));
+		}
+
 		void Report(
 			asCDiagnosticFragment& Fragment,
 			asEPreprocessorDiagnosticID DiagnosticID,
 			const asCSourceRange& Range,
 			FStringView Argument = FStringView())
 		{
-			asSDiagnosticRecord Record;
-			Record.DiagnosticID = static_cast<asUINT>(DiagnosticID);
-			Record.Severity = asEDiagnosticSeverity::Error;
-			Record.PrimaryRange = Range;
+			asCDiagnostic Diagnostic = Diag(Fragment, DiagnosticID, Range);
 			if (!Argument.IsEmpty())
 			{
-				Record.Arguments.Add(asSDiagnosticArgument::FromText(Argument));
+				Diagnostic << Argument;
 			}
-			Fragment.Report(MoveTemp(Record));
 		}
 
 		struct asSConditionalFrame
@@ -464,7 +468,7 @@ namespace
 		asSDirectiveProcessResult Result;
 		Result.SnapshotID = SourceManager.GetSnapshotID();
 		Result.ConfigurationDigest = Configuration.GetDigest();
-		Result.SourceSnapshot = SourceManager.GetSnapshot();
+		Result.Sources = SourceManager;
 		if (!SourceManager.IsReady() || InputTokens.IsEmpty() || Diagnostics == nullptr)
 		{
 			return Result;

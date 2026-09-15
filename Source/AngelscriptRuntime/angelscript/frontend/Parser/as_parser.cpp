@@ -19,10 +19,10 @@ FString asCParser::Text(int32 Index) const
 		}
 		const TCHAR* FixedSpelling = asGetTokenSpelling(Token.Kind);
 		if (FixedSpelling && FixedSpelling[0] != 0) return FixedSpelling;
-		if (SourceSnapshot)
+		if (Sources.IsReady())
 		{
 			TConstArrayView<uint8> Bytes;
-			if (SourceSnapshot->TryGetBytes(Token.Range.Begin.FileID, Bytes) &&
+			if (Sources.TryGetBytes(Token.Range.Begin.FileID, Bytes) &&
 				Token.Range.End.ByteOffset <= static_cast<asUINT>(Bytes.Num()))
 			{
 				const int32 Length = static_cast<int32>(Token.Range.Length());
@@ -38,6 +38,11 @@ FString asCParser::Text(int32 Index) const
 	FString asCParser::Join(int32 Begin, int32 End) const
 	{
 		FString Result; for (int32 I=Begin; I<End; ++I) Result += Text(I); return Result;
+	}
+
+	asCDiagnostic asCParser::Diag(const asCSourceRange& Range, asUINT ID)
+	{
+		return Sema.Diag(Range, ID);
 	}
 
 	asCSourceRange asCParser::Span(int32 Begin, int32 End) const
@@ -71,20 +76,20 @@ FString asCParser::Text(int32 Index) const
 			++Cursor;
 			if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind != asETokenKind::LeftParen)
 			{
-				Sema.ActOnRecovery(Span(Begin, Begin), TEXT("annotation-requires-parentheses"), static_cast<asUINT>(asEDeclarationDiagnostic::InvalidAnnotation));
+				Sema.ActOnRecovery(Span(Begin, Begin), TEXT("annotation-requires-parentheses"));
 				return Result;
 			}
 			const int32 Close = FindMatching(Cursor, asETokenKind::LeftParen, asETokenKind::RightParen);
 			if (Close == INDEX_NONE)
 			{
-				Recover(Begin, TEXT("unterminated-annotation"), static_cast<asUINT>(asEDeclarationDiagnostic::InvalidAnnotation));
+				Recover(Begin, TEXT("unterminated-annotation"));
 				return Result;
 			}
 			TArray<asSAnnotationArgument> Arguments;
 			const bool bValid = ParseAnnotationPayload(Cursor + 1, Close, Arguments);
 			Cursor = Close + 1;
 			if (bValid) Result.Add(Sema.CreateAnnotation(Kind, MoveTemp(Arguments), Span(Begin, Close)));
-			else Sema.ActOnRecovery(Span(Begin, Close), TEXT("malformed-annotation-payload"), static_cast<asUINT>(asEDeclarationDiagnostic::InvalidAnnotation));
+			else Sema.ActOnRecovery(Span(Begin, Close), TEXT("malformed-annotation-payload"));
 		}
 		return Result;
 	}
@@ -141,7 +146,7 @@ FString asCParser::Text(int32 Index) const
 
 	bool asCParser::Collect(const asSDirectiveProcessResult& Input, asCDeclarationFragment& Fragment)
 	{
-		Tokens.Reset(); Cursor=0; SourceSnapshot=Input.SourceSnapshot; if(!Input.IsValid())return false;
+		Tokens.Reset(); Cursor=0; Sources=Input.Sources; if(!Input.IsValid())return false;
 		for(const asCToken& Token:Input.ActiveTokens)if(!asIsTrivia(Token.Kind)&&Token.Kind!=asETokenKind::EndOfFile)Tokens.Add(Token);
 		Sema.BeginFragment(Fragment); while(Cursor<Tokens.Num()) ParseDeclaration(); Sema.EndFragment(); return !Fragment.HasErrors();
 	}
@@ -152,7 +157,7 @@ FString asCParser::Text(int32 Index) const
 		TArray<asCAttr*> Attrs = ParseAnnotations();
 		if (Cursor >= Tokens.Num())
 		{
-			if (!Attrs.IsEmpty()) Sema.ActOnRecovery(Span(Before, Cursor - 1), TEXT("annotation-requires-declaration"), static_cast<asUINT>(asEDeclarationDiagnostic::InvalidAnnotation));
+			if (!Attrs.IsEmpty()) Sema.ActOnRecovery(Span(Before, Cursor - 1), TEXT("annotation-requires-declaration"));
 			return Attrs.IsEmpty();
 		}
 		if (ParseRemovedDeclaration()) return false;
@@ -206,17 +211,27 @@ FString asCParser::Text(int32 Index) const
 		if(Tokens[Cursor].Kind==asETokenKind::KwEnum)return ParseRecord(MoveTemp(Attrs), asETypeDeclKind::Enum);
 		if (Tokens[Cursor].Kind == asETokenKind::Semicolon)
 		{
-			if (!Attrs.IsEmpty()) Sema.ActOnRecovery(Span(Before, Cursor), TEXT("annotation-requires-declaration"), static_cast<asUINT>(asEDeclarationDiagnostic::InvalidAnnotation));
+			if (!Attrs.IsEmpty()) Sema.ActOnRecovery(Span(Before, Cursor), TEXT("annotation-requires-declaration"));
 			++Cursor; return Attrs.IsEmpty();
 		}
-		if(!ParseTypedDeclaration(MoveTemp(Attrs)))Recover(Before,TEXT("malformed declaration"));
+		if(!ParseTypedDeclaration(MoveTemp(Attrs)))Recover(Before,TEXT("malformed-declaration"));
 		return true;
 	}
 
 	bool asCParser::ParseNamespace(TArray<asCAttr*> Attrs)
 	{
-		const int32 Begin=Cursor++; if(!Tokens.IsValidIndex(Cursor)||Tokens[Cursor].Kind!=asETokenKind::Identifier)return false; FString Name=Text(Cursor++);
-		if(!Tokens.IsValidIndex(Cursor)||Tokens[Cursor].Kind!=asETokenKind::LeftBrace)return false;
+		const int32 Begin=Cursor++;
+		if(!Tokens.IsValidIndex(Cursor)||Tokens[Cursor].Kind!=asETokenKind::Identifier)
+		{
+			Recover(Begin, TEXT("malformed-namespace"));
+			return false;
+		}
+		FString Name=Text(Cursor++);
+		if(!Tokens.IsValidIndex(Cursor)||Tokens[Cursor].Kind!=asETokenKind::LeftBrace)
+		{
+			Recover(Begin, TEXT("malformed-namespace"));
+			return false;
+		}
 		auto* Decl=Sema.ActOnNamespace(MoveTemp(Name),Span(Begin,Cursor),Attrs); ++Cursor; Sema.PushContext(Decl);
 		while(Cursor<Tokens.Num()&&Tokens[Cursor].Kind!=asETokenKind::RightBrace)ParseDeclaration();
 		const int32 Close = Cursor < Tokens.Num() ? Cursor : (Cursor > Begin ? Cursor - 1 : Begin);
@@ -226,7 +241,13 @@ FString asCParser::Text(int32 Index) const
 
 	bool asCParser::ParseRecord(TArray<asCAttr*> Attrs, asETypeDeclKind DeclaredTypeKind)
 	{
-		const int32 Begin=Cursor++; if(!Tokens.IsValidIndex(Cursor)||Tokens[Cursor].Kind!=asETokenKind::Identifier)return false; FString Name=Text(Cursor++); TArray<FString> Bases;
+		const int32 Begin=Cursor++;
+		if(!Tokens.IsValidIndex(Cursor)||Tokens[Cursor].Kind!=asETokenKind::Identifier)
+		{
+			Recover(Begin, TEXT("malformed-record"));
+			return false;
+		}
+		FString Name=Text(Cursor++); TArray<FString> Bases;
 		if (Tokens.IsValidIndex(Cursor) && Tokens[Cursor].Kind == asETokenKind::Colon)
 		{
 			++Cursor;
@@ -242,10 +263,19 @@ FString asCParser::Text(int32 Index) const
 				++Cursor;
 			}
 		}
-		if(!Tokens.IsValidIndex(Cursor)||Tokens[Cursor].Kind!=asETokenKind::LeftBrace)return false;
+		if(!Tokens.IsValidIndex(Cursor)||Tokens[Cursor].Kind!=asETokenKind::LeftBrace)
+		{
+			Recover(Begin, TEXT("malformed-record"));
+			return false;
+		}
 		if(DeclaredTypeKind==asETypeDeclKind::Enum)
 		{
-			const int32 Close=FindMatching(Cursor,asETokenKind::LeftBrace,asETokenKind::RightBrace); if(Close==INDEX_NONE)return false;
+			const int32 Close=FindMatching(Cursor,asETokenKind::LeftBrace,asETokenKind::RightBrace);
+			if(Close==INDEX_NONE)
+			{
+				Recover(Begin, TEXT("malformed-record"));
+				return false;
+			}
 			auto* Decl=Sema.ActOnRecord(MoveTemp(Name),Span(Begin,Close),DeclaredTypeKind,Bases,Attrs); ++Cursor; Sema.PushContext(Decl);
 			ParseEnumBody(*Decl,Close); Sema.PopContext(); Cursor=Close+1;
 			if(Cursor<Tokens.Num()&&Tokens[Cursor].Kind==asETokenKind::Semicolon)++Cursor; return true;
@@ -330,7 +360,7 @@ FString asCParser::Text(int32 Index) const
 
 	asCExpr* asCParser::ParseConstantExpression(const asSDirectiveProcessResult& Input, asCSourceRange Range)
 	{
-		Tokens.Reset(); Cursor = 0; ExpressionDepth = 0; SourceSnapshot = Input.SourceSnapshot;
+		Tokens.Reset(); Cursor = 0; ExpressionDepth = 0; Sources = Input.Sources;
 		if (!Input.IsValid() || !Range.IsOrdered()) return nullptr;
 		for (const asCToken& Token : Input.ActiveTokens)
 		{
@@ -408,8 +438,8 @@ FString asCParser::Text(int32 Index) const
 
 	asCStmt* asCParser::ParseClassDefaultStatement(const asSDirectiveProcessResult& Input)
 	{
-		Tokens.Reset(); Cursor = 0; ExpressionDepth = 0; SourceSnapshot = Input.SourceSnapshot;
-		if (!Input.IsValid() || !SourceSnapshot.IsValid()) return nullptr;
+		Tokens.Reset(); Cursor = 0; ExpressionDepth = 0; Sources = Input.Sources;
+		if (!Input.IsValid() || !Sources.IsReady()) return nullptr;
 		for (const asCToken& Token : Input.ActiveTokens)
 			if (!asIsTrivia(Token.Kind) && Token.Kind != asETokenKind::EndOfFile) Tokens.Add(Token);
 		if (Tokens.IsEmpty() || Tokens[Cursor].Kind != asETokenKind::KwDefault) return nullptr;
@@ -870,8 +900,11 @@ FString asCParser::Text(int32 Index) const
 			if (Tokens[Cursor].Kind == asETokenKind::Dot)
 			{
 				++Cursor;
+				Sema.NoteIncompleteMember(Result);
 				if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind != asETokenKind::Identifier)
+				{
 					return Sema.ActOnRecoveryExpression(Result->GetSourceRange(), TEXT("member-name-required"));
+				}
 				const asCSourceRange NameRange = Tokens[Cursor].Range;
 				FString Name = Text(Cursor++);
 				if (Tokens.IsValidIndex(Cursor) && Tokens[Cursor].Kind == asETokenKind::LeftParen)
@@ -928,7 +961,11 @@ FString asCParser::Text(int32 Index) const
 				Cursor += 2;
 			}
 			Argument.Value = ParseExpression();
-			if (!Argument.Value) return false;
+			if (!Argument.Value)
+			{
+				Arguments.Add(MoveTemp(Argument));
+				return false;
+			}
 			Arguments.Add(MoveTemp(Argument));
 			if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind != asETokenKind::Comma) break;
 			++Cursor;
@@ -976,7 +1013,11 @@ FString asCParser::Text(int32 Index) const
 				else
 				{
 					asCExpr* Element = ParseExpression();
-					if (!Element) return Sema.ActOnRecoveryExpression(Span(Begin, FMath::Min(Cursor, Tokens.Num() - 1)), TEXT("malformed-list-initializer"));
+					if (!Element)
+					{
+						Sema.NoteIncompleteInitList();
+						return Sema.ActOnRecoveryExpression(Span(Begin, FMath::Min(Cursor, Tokens.Num() - 1)), TEXT("malformed-list-initializer"));
+					}
 					Elements.Add(Element);
 				}
 				if (Tokens.IsValidIndex(Cursor) && Tokens[Cursor].Kind == asETokenKind::RightBrace) break;
@@ -985,7 +1026,11 @@ FString asCParser::Text(int32 Index) const
 				if (Tokens.IsValidIndex(Cursor) && Tokens[Cursor].Kind == asETokenKind::RightBrace)
 					Elements.Add(Sema.ActOnValueInit(Tokens[Cursor].Range));
 			}
-			if (!Tokens.IsValidIndex(Cursor)) return Sema.ActOnRecoveryExpression(Span(Begin, Tokens.Num() - 1), TEXT("list-initializer-unclosed"));
+			if (!Tokens.IsValidIndex(Cursor))
+			{
+				Sema.NoteIncompleteInitList();
+				return Sema.ActOnRecoveryExpression(Span(Begin, Tokens.Num() - 1), TEXT("list-initializer-unclosed"));
+			}
 			return Sema.ActOnInitList(MoveTemp(Elements), Span(Begin, Cursor++));
 		}
 		if (Tokens[Cursor].Kind == asETokenKind::NumericLiteral)
@@ -1062,7 +1107,10 @@ FString asCParser::Text(int32 Index) const
 		++Cursor;
 		TArray<asSParsedCallArgument> Arguments;
 		if (!ParseCallArguments(Arguments))
+		{
+			Sema.NoteIncompleteCall(Name, MoveTemp(Arguments));
 			return Sema.ActOnRecoveryExpression(Span(Begin, FMath::Min(Cursor, Tokens.Num() - 1)), TEXT("malformed-call-argument"));
+		}
 		return Sema.ActOnCallWithArguments(MoveTemp(Name), MoveTemp(Arguments), Span(Begin, Cursor - 1));
 	}
 

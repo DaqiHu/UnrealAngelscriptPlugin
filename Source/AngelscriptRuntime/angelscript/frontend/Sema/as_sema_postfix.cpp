@@ -127,80 +127,23 @@ namespace asPostfixSema
 	asCFunctionDecl* asCSema::ResolveCall(TConstArrayView<asCDecl*> Candidates, TConstArrayView<asSParsedCallArgument> Arguments,
 		TArray<asCExpr*>& OutArguments, TArray<int32>& OutOrdinals, asCSourceRange Range, bool bPreferNonConstOnTie)
 	{
-		asCFunctionDecl* Best = nullptr;
-		TArray<int32> BestOrdinals;
-		int32 BestScore = MAX_int32;
-		bool bAmbiguous = false;
-		for (asCDecl* CandidateDecl : Candidates)
+		asSCallAssessmentRequest Request;
+		Request.ScriptCandidates.Append(Candidates.GetData(), Candidates.Num());
+		Request.Range = Range;
+		Request.Mode = asECallAssessmentMode::Complete;
+		Request.bPreferNonConstOnTie = bPreferNonConstOnTie;
+		for (const asSParsedCallArgument& Argument : Arguments)
 		{
-			asCFunctionDecl* Candidate = dyn_cast<asCFunctionDecl>(CandidateDecl);
-			if (!Candidate || Candidate->IsInvalid() || !Candidate->GetResolvedSignature()) continue;
-			const auto Parameters = Candidate->GetParameters();
-			if (Arguments.Num() > Parameters.Num()) continue;
-			TArray<int32> Ordinals;
-			Ordinals.Init(INDEX_NONE, Parameters.Num());
-			int32 NextPositional = 0, Score = 0;
-			bool bValid = true, bSawNamed = false;
-			for (int32 SourceIndex = 0; SourceIndex < Arguments.Num(); ++SourceIndex)
-			{
-				const asSParsedCallArgument& Argument = Arguments[SourceIndex];
-				int32 ParameterIndex = INDEX_NONE;
-				if (!Argument.Name.IsEmpty())
-				{
-					bSawNamed = true;
-					for (int32 Index = 0; Index < Parameters.Num(); ++Index)
-						if (Parameters[Index]->GetName() == Argument.Name) { ParameterIndex = Index; break; }
-				}
-				else if (!bSawNamed) ParameterIndex = NextPositional++;
-				if (!Ordinals.IsValidIndex(ParameterIndex) || Ordinals[ParameterIndex] != INDEX_NONE || !Argument.Value) { bValid = false; break; }
-				Ordinals[ParameterIndex] = SourceIndex;
-				const asCQualType Formal = Parameters[ParameterIndex]->GetResolvedQualType();
-				const asCQualType Actual = Argument.Value->GetExpressionQualType();
-				const asETypeReferenceDirection Direction = Parameters[ParameterIndex]->GetTypeSyntax().Reference;
-				if (isa<asCInitListExpr>(Argument.Value))
-				{
-					asSListInitialization Contract;
-					if (!ListInitializationLookup || !ListInitializationLookup(Formal, Contract)) { bValid = false; break; }
-					++Score; continue;
-				}
-				if (dyn_cast<asCNullPtrLiteral>(Argument.Value))
-				{
-					if (!Formal.IsHandle() || Direction == asETypeReferenceDirection::Out || Direction == asETypeReferenceDirection::InOut) { bValid = false; break; }
-					++Score; continue;
-				}
-				if (!Actual.IsValid()) { bValid = false; break; }
-				if ((Direction == asETypeReferenceDirection::None || Direction == asETypeReferenceDirection::In)
-					&& (!asPostfixSema::SameType(Actual.GetType(), Formal.GetType()) || Formal.IsHandle() != Actual.IsHandle()))
-				{
-					bool AmbiguousConversion = false;
-					if (SelectUserConversion(Argument.Value, asPostfixSema::ValueType(Formal), false, AmbiguousConversion)) { Score += 2; continue; }
-					if (AmbiguousConversion) { bValid = false; break; }
-				}
-				if (Formal.IsHandle() != Actual.IsHandle()) { bValid = false; break; }
-				if ((Direction == asETypeReferenceDirection::Out || Direction == asETypeReferenceDirection::InOut)
-					&& (Argument.Value->GetValueCategory() != asEValueCategory::LValue || Argument.Value->IsReadOnly()
-						|| !asPostfixSema::SameType(Actual.GetType(), Formal.GetType()))) { bValid = false; break; }
-				if (Actual.IsHandle() && Actual.IsConst() && !Formal.IsConst()) { bValid = false; break; }
-				if (asPostfixSema::SameType(Actual.GetType(), Formal.GetType())) continue;
-				if (!Actual.IsHandle() && asPostfixSema::Numeric(Actual.GetType()) && asPostfixSema::Numeric(Formal.GetType())) ++Score;
-				else { bValid = false; break; }
-			}
-			for (int32 Index = 0; bValid && Index < Parameters.Num(); ++Index)
-				if (Ordinals[Index] == INDEX_NONE && (!Parameters[Index]->HasDeferredInitializer() || Parameters[Index]->IsInvalid())) bValid = false;
-			if (!bValid) continue;
-			if (Score < BestScore) { Best = Candidate; BestScore = Score; BestOrdinals = MoveTemp(Ordinals); bAmbiguous = false; }
-			else if (Score == BestScore)
-			{
-				if (bPreferNonConstOnTie && Best && Candidate->IsConstMethod() != Best->IsConstMethod())
-				{
-					if (!Candidate->IsConstMethod()) { Best = Candidate; BestOrdinals = MoveTemp(Ordinals); }
-				}
-				else bAmbiguous = true;
-			}
+			asSCallArgumentFact Fact;
+			Fact.Name = Argument.Name;
+			Fact.Value = Argument.Value;
+			Request.Arguments.Add(Fact);
 		}
-		if (!Best || bAmbiguous) return nullptr;
+		const asSCallAssessment Assessment = AssessCall(Request);
+		asCFunctionDecl* Best = Assessment.SelectedScript();
+		if (!Best || Assessment.bAmbiguous) return nullptr;
 		if (!CheckCallContext(*Best, Range)) return nullptr;
-		OutOrdinals = MoveTemp(BestOrdinals);
+		OutOrdinals = Assessment.Selected()->FormalToSource;
 		for (int32 Index = 0; Index < OutOrdinals.Num(); ++Index)
 		{
 			asCVarDecl* Parameter = Best->GetParameters()[Index];
@@ -293,77 +236,42 @@ namespace asPostfixSema
 		TConstArrayView<asSParsedCallArgument> Arguments, TArray<asCExpr*>& OutArguments,
 		TArray<int32>& OutOrdinals, asCSourceRange Range)
 	{
+		asSCallAssessmentRequest Request;
+		Request.HostCandidates.Append(Candidates.GetData(), Candidates.Num());
+		Request.Range = Range;
+		Request.Mode = asECallAssessmentMode::Complete;
+		for (const asSParsedCallArgument& Argument : Arguments)
+		{
+			asSCallArgumentFact Fact;
+			Fact.Name = Argument.Name;
+			Fact.Value = Argument.Value;
+			Request.Arguments.Add(Fact);
+		}
+		const asSCallAssessment Assessment = AssessCall(Request);
+		if (!Assessment.Selected() || Assessment.bAmbiguous)
+		{
+			for (const asSCandidateAssessment& Candidate : Assessment.Candidates)
+			{
+				if (Candidate.Rejection == asECandidateRejection::UnsupportedDefault)
+				{
+					ReportBodyError(Range, TEXT("unsupported-default"));
+					break;
+				}
+			}
+			return nullptr;
+		}
 		const asSExternalCallable* Best = nullptr;
-		int32 BestScore = MAX_int32;
-		bool bAmbiguous = false;
-		TArray<int32> BestOrdinals;
 		for (const asSExternalCallable& Candidate : Candidates)
 		{
-			asCScriptFunction* Function = Candidate.Function;
-			if (!Function || !Function->GetDefinitionSet() || Function->GetStableKey() != Candidate.Key) continue;
-			const int32 ParameterCount = static_cast<int32>(Function->parameterTypes.GetLength());
-			if (Arguments.Num() > ParameterCount) continue;
-			TArray<int32> Ordinals;
-			Ordinals.Init(INDEX_NONE, ParameterCount);
-			int32 NextPositional = 0;
-			int32 Score = 0;
-			bool bValid = true;
-			bool bSawNamed = false;
-			bool bUnsupportedDefault = false;
-			for (int32 SourceIndex = 0; SourceIndex < Arguments.Num(); ++SourceIndex)
+			if (Candidate.Function == Assessment.Selected()->HostCallable.Function
+				&& Candidate.Key == Assessment.Selected()->HostCallable.Key)
 			{
-				const asSParsedCallArgument& Argument = Arguments[SourceIndex];
-				int32 ParameterIndex = INDEX_NONE;
-				if (!Argument.Name.IsEmpty())
-				{
-					bSawNamed = true;
-					for (int32 Index = 0; Index < ParameterCount; ++Index)
-						if (Function->parameterNames[Index] == TCHAR_TO_UTF8(*Argument.Name)) { ParameterIndex = Index; break; }
-				}
-				else if (!bSawNamed) ParameterIndex = NextPositional++;
-				if (!Ordinals.IsValidIndex(ParameterIndex) || Ordinals[ParameterIndex] != INDEX_NONE || !Argument.Value)
-				{
-					bValid = false;
-					break;
-				}
-				Ordinals[ParameterIndex] = SourceIndex;
-				if (!FormalMatchesExpr(Function->parameterTypes[ParameterIndex], *Argument.Value))
-				{
-					asCQualType Formal = QualTypeFromHost(Context, Function->parameterTypes[ParameterIndex]);
-					bool AmbiguousConversion = false;
-					if (Formal.IsValid() && SelectUserConversion(Argument.Value, asPostfixSema::ValueType(Formal), false, AmbiguousConversion))
-					{
-						Score += 2;
-						continue;
-					}
-					if (AmbiguousConversion) { bValid = false; break; }
-					bValid = false;
-					break;
-				}
+				Best = &Candidate;
+				break;
 			}
-			for (int32 Index = 0; bValid && Index < ParameterCount; ++Index)
-			{
-				if (Ordinals[Index] != INDEX_NONE) continue;
-				if (Index < static_cast<int32>(Function->defaultArgs.GetLength()) && Function->defaultArgs[Index]
-					&& Function->defaultArgs[Index]->GetLength() > 0)
-				{
-					bUnsupportedDefault = true;
-					bValid = false;
-					break;
-				}
-				bValid = false;
-			}
-			if (bUnsupportedDefault)
-			{
-				ReportBodyError(Range, TEXT("unsupported-default"));
-				return nullptr;
-			}
-			if (!bValid) continue;
-			if (Score < BestScore) { Best = &Candidate; BestScore = Score; BestOrdinals = MoveTemp(Ordinals); bAmbiguous = false; }
-			else if (Score == BestScore) bAmbiguous = true;
 		}
-		if (!Best || bAmbiguous) return nullptr;
-		OutOrdinals = MoveTemp(BestOrdinals);
+		if (!Best) return nullptr;
+		OutOrdinals = Assessment.Selected()->FormalToSource;
 		for (int32 Index = 0; Index < OutOrdinals.Num(); ++Index)
 		{
 			asCExpr* Argument = Arguments[OutOrdinals[Index]].Value;

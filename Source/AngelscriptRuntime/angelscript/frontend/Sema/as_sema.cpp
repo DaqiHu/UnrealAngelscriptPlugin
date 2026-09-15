@@ -3,6 +3,7 @@
 #include "frontend/AST/as_ast_cast.h"
 #include "frontend/AST/as_attr.h"
 #include "frontend/AST/as_type_context.h"
+#include "Containers/Set.h"
 #include "Containers/StringConv.h"
 #include <charconv>
 #include <cmath>
@@ -75,15 +76,10 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 			{
 				Decl->MarkInvalid();
 				CurrentFragment->MarkError();
-				if (DiagnosticFragment)
-				{
-					asSDiagnosticRecord Record;
-					Record.DiagnosticID = 3002;
-					Record.Severity = asEDiagnosticSeverity::Error;
-					Record.PrimaryRange = Attr ? Attr->GetSourceRange() : Decl->GetSourceRange();
-					Record.Arguments.Add(asSDiagnosticArgument::FromText(TEXT("invalid-attribute-target")));
-					DiagnosticFragment->Report(MoveTemp(Record));
-				}
+				ReportSyntax(
+					Attr ? Attr->GetSourceRange() : Decl->GetSourceRange(),
+					TEXT("invalid-attribute-target"),
+					static_cast<asUINT>(asEDiagnosticCatalogID::InvalidAttributeTarget));
 				continue;
 			}
 			Decl->AddAttr(Attr);
@@ -162,10 +158,75 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 		return Decl;
 	}
 
+	asCDiagnostic asCSema::Diag(const asCSourceRange& Range, asUINT ID)
+	{
+		if (!DiagnosticFragment)
+		{
+			return asCDiagnostic();
+		}
+		return DiagnosticFragment->Diag(Range, ID);
+	}
+
+	void asCSema::ReportSyntax(const asCSourceRange& Range, FString Message, asUINT DiagnosticID)
+	{
+		bExpressionErrors = true;
+		if (CurrentInitializer)
+		{
+			CurrentInitializer->MarkInvalid();
+		}
+		if (CurrentBody)
+		{
+			CurrentBody->MarkError(Message);
+		}
+		if (!DiagnosticFragment || DiagnosticID == 0)
+		{
+			return;
+		}
+		asSDiagnosticGroup Group;
+		Group.Primary.DiagnosticID = DiagnosticID;
+		Group.Primary.Severity = asEDiagnosticSeverity::Error;
+		Group.Primary.PrimaryRange = Range;
+		Group.Primary.bHasLocation = Range.IsOrdered() || Range.Begin.IsValid();
+		if (!Message.IsEmpty())
+		{
+			Group.Primary.Arguments.Add(asSDiagnosticArgument::FromText(Message));
+		}
+		if (Message.Contains(TEXT("missing-semicolon")) && Context.GetSources().IsValidRange(Range))
+		{
+			asSDiagnosticFixAlternative Fix;
+			Fix.Title = TEXT("insert semicolon");
+			asSSourceEdit Edit;
+			FStringView Key;
+			uint64 Revision = 0;
+			if (Context.GetSources().TryGetLogicalSourceKey(Range.End.FileID, Key)
+				&& Context.GetSources().TryGetContentRevision(Range.End.FileID, Revision))
+			{
+				Edit.LogicalSourceKey = FString(Key);
+				Edit.ExpectedRevision = Revision;
+				Edit.Range = Context.GetSources().MakeRange(Range.End.FileID, Range.End.ByteOffset, Range.End.ByteOffset);
+				Edit.ReplacementUtf8 = { ';' };
+				Fix.SourceEdits.Add(MoveTemp(Edit));
+				Group.Fixes.Add(MoveTemp(Fix));
+			}
+		}
+		DiagnosticFragment->ReportGroup(MoveTemp(Group));
+	}
+
 	asCRecoveryDecl* asCSema::ActOnRecovery(asCSourceRange Range, FString Message, asUINT DiagnosticID)
 	{
 		auto* Decl = Context.Create<asCRecoveryDecl>(Range); if (CurrentFragment) CurrentFragment->MarkError(); Attach(Decl, {});
-		if (DiagnosticFragment && DiagnosticID != 0) { asSDiagnosticRecord Record; Record.DiagnosticID = DiagnosticID; Record.Severity = asEDiagnosticSeverity::Error; Record.PrimaryRange = Range; Record.Arguments.Add(asSDiagnosticArgument::FromText(Message)); DiagnosticFragment->Report(MoveTemp(Record)); }
+		if (DiagnosticID == 3001 || DiagnosticID == 0)
+		{
+			if (const asUINT Mapped = asDiagnosticIdFromSyntaxReason(Message))
+			{
+				DiagnosticID = Mapped;
+			}
+			else if (DiagnosticID == 0)
+			{
+				return Decl;
+			}
+		}
+		ReportSyntax(Range, MoveTemp(Message), DiagnosticID);
 		return Decl;
 	}
 
@@ -231,8 +292,21 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 		BodyScopes.Reset();
 		ControlTargets.Reset();
 		NextLocalOrdinal = 0;
+		IncompleteMemberBase = nullptr;
+		IncompleteCallName.Reset();
+		IncompleteCallArguments.Reset();
+		ExpectedTypeName.Reset();
+		bIncompleteArgumentIsInitList = false;
+		bLiveCursorScopeNoted = false;
+		LiveCursorScopes.Reset();
+		AccessCaller = nullptr;
+		FString FragmentKey = Fragment.GetWorkItem().StableFunctionKey.ToHexString();
+		if (FragmentKey.IsEmpty() || Fragment.GetWorkItem().StableFunctionKey.IsZero())
+		{
+			FragmentKey = TEXT("body");
+		}
 		DiagnosticFragment = MakeUnique<asCDiagnosticFragment>(
-			Diagnostics.CreateFragment(Fragment.GetWorkItem().StableFunctionKey.ToHexString()));
+			Diagnostics.CreateFragment(FragmentKey));
 	}
 
 	void asCSema::EndBody()
@@ -248,6 +322,72 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 		BodyScopes.Reset();
 		ControlTargets.Reset();
 		CurrentBody = nullptr;
+		IncompleteMemberBase = nullptr;
+		IncompleteCallName.Reset();
+		IncompleteCallArguments.Reset();
+		ExpectedTypeName.Reset();
+		bIncompleteArgumentIsInitList = false;
+		bLiveCursorScopeNoted = false;
+		LiveCursorScopes.Reset();
+	}
+
+	void asCSema::NoteIncompleteMember(asCExpr* Base)
+	{
+		IncompleteMemberBase = Base;
+	}
+
+	void asCSema::NoteIncompleteCall(FString Name, TArray<asSParsedCallArgument> Arguments)
+	{
+		if (!IncompleteCallName.IsEmpty())
+		{
+			return;
+		}
+		IncompleteCallName = MoveTemp(Name);
+		IncompleteCallArguments = MoveTemp(Arguments);
+	}
+
+	void asCSema::NoteIncompleteInitList()
+	{
+		bIncompleteArgumentIsInitList = true;
+	}
+
+	void asCSema::NoteLiveCursorScope()
+	{
+		if (bLiveCursorScopeNoted)
+		{
+			return;
+		}
+		bLiveCursorScopeNoted = true;
+		LiveCursorScopes = BodyScopes;
+	}
+
+	void asCSema::NoteExpectedReturnType()
+	{
+		if (!ExpectedTypeName.IsEmpty())
+		{
+			return;
+		}
+		if (const asCFunctionDecl* Function = GetCurrentFunction())
+		{
+			ExpectedTypeName = Function->GetReturnTypeSpelling();
+		}
+	}
+
+	void asCSema::CollectVisibleLocalSymbols(TArray<FString>& OutNames, TArray<FString>& OutTypeNames) const
+	{
+		const TArray<TMap<FString, asCVarDecl*>>& Scopes = bLiveCursorScopeNoted ? LiveCursorScopes : BodyScopes;
+		for (int32 ScopeIndex = Scopes.Num() - 1; ScopeIndex >= 0; --ScopeIndex)
+		{
+			for (const TPair<FString, asCVarDecl*>& Entry : Scopes[ScopeIndex])
+			{
+				if (Entry.Key.IsEmpty() || OutNames.Contains(Entry.Key))
+				{
+					continue;
+				}
+				OutNames.Add(Entry.Key);
+				OutTypeNames.Add(Entry.Value ? Entry.Value->GetTypeSpelling() : FString());
+			}
+		}
 	}
 
 
@@ -342,9 +482,87 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 	asCFunctionDecl* asCSema::GetCurrentFunction() const
 	{
 		if (CurrentBody) return CurrentBody->GetWorkItem().Function;
+		if (AccessCaller) return AccessCaller;
 		if (CurrentInitializer && CurrentInitializer->GetDeclContext())
 			return dyn_cast<asCFunctionDecl>(CurrentInitializer->GetDeclContext()->GetOwnerDecl());
 		return nullptr;
+	}
+
+	void asCSema::AttachTypoSuggestions(asSDiagnosticGroup& Group, const asCSourceRange& Range, const FString& Written)
+	{
+		TMap<FString, asCVarDecl*> Visible;
+		for (const TMap<FString, asCVarDecl*>& Scope : BodyScopes)
+		{
+			for (const TPair<FString, asCVarDecl*>& Entry : Scope)
+			{
+				if (!Entry.Key.IsEmpty()) Visible.Add(Entry.Key, Entry.Value);
+			}
+		}
+		if (CurrentBody && CurrentBody->GetWorkItem().Function)
+		{
+			for (asCVarDecl* Parameter : CurrentBody->GetWorkItem().Function->GetParameters())
+			{
+				if (Parameter && !Parameter->GetName().IsEmpty()) Visible.Add(Parameter->GetName(), Parameter);
+			}
+		}
+		TArray<FString> Matches;
+		for (const TPair<FString, asCVarDecl*>& Candidate : Visible)
+		{
+			if (Candidate.Key.Equals(Written, ESearchCase::CaseSensitive)) continue;
+			const int32 LengthDelta = FMath::Abs(Candidate.Key.Len() - Written.Len());
+			if (LengthDelta > 1) continue;
+			TArray<int32> Previous;
+			TArray<int32> Current;
+			Previous.SetNum(Written.Len() + 1);
+			Current.SetNum(Written.Len() + 1);
+			for (int32 Column = 0; Column <= Written.Len(); ++Column) Previous[Column] = Column;
+			for (int32 Row = 1; Row <= Candidate.Key.Len(); ++Row)
+			{
+				Current[0] = Row;
+				for (int32 Column = 1; Column <= Written.Len(); ++Column)
+				{
+					const int32 Cost = Candidate.Key[Row - 1] == Written[Column - 1] ? 0 : 1;
+					Current[Column] = FMath::Min3(Current[Column - 1] + 1, Previous[Column] + 1, Previous[Column - 1] + Cost);
+				}
+				Swap(Previous, Current);
+			}
+			if (Previous[Written.Len()] == 1) Matches.Add(Candidate.Key);
+		}
+		Matches.Sort();
+		for (const FString& Match : Matches)
+		{
+			asSDiagnosticRecord Note;
+			Note.DiagnosticID = static_cast<asUINT>(asEDiagnosticCatalogID::DidYouMean);
+			Note.Severity = asEDiagnosticSeverity::Note;
+			asCVarDecl* Declaration = Visible.FindRef(Match);
+			const asCSourceRange NoteRange = Declaration ? Declaration->GetSourceRange() : Range;
+			Note.PrimaryRange = NoteRange;
+			Note.bHasLocation = NoteRange.IsOrdered() || NoteRange.Begin.IsValid();
+			Note.Arguments.Add(asSDiagnosticArgument::FromText(Match));
+			Group.Notes.Add(MoveTemp(Note));
+		}
+		if (Matches.Num() != 1 || !Context.GetSources().IsValidRange(Range)) return;
+		asSDiagnosticFixAlternative Fix;
+		Fix.Title = FString::Printf(TEXT("replace with %s"), *Matches[0]);
+		asSSourceEdit Edit;
+		FStringView Key;
+		uint64 Revision = 0;
+		if (Context.GetSources().TryGetLogicalSourceKey(Range.Begin.FileID, Key)
+			&& Context.GetSources().TryGetContentRevision(Range.Begin.FileID, Revision))
+		{
+			Edit.LogicalSourceKey = FString(Key);
+			Edit.ExpectedRevision = Revision;
+			Edit.Range = Range;
+			TConstArrayView<uint8> Original;
+			if (Context.GetSources().TryGetBytes(Range, Original))
+			{
+				Edit.ExpectedOriginalUtf8.Append(Original.GetData(), Original.Num());
+			}
+			const FTCHARToUTF8 Converted(*Matches[0]);
+			Edit.ReplacementUtf8.Append(reinterpret_cast<const uint8*>(Converted.Get()), Converted.Length());
+			Fix.SourceEdits.Add(MoveTemp(Edit));
+			Group.Fixes.Add(MoveTemp(Fix));
+		}
 	}
 
 	void asCSema::ReportBodyError(const asCSourceRange& Range, FString Message)
@@ -352,15 +570,24 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 		bExpressionErrors = true;
 		if (CurrentInitializer) CurrentInitializer->MarkInvalid();
 		if (CurrentBody) CurrentBody->MarkError(Message);
-		if (DiagnosticFragment)
+		if (!DiagnosticFragment) return;
+		asUINT ID = asDiagnosticIdFromSemanticReason(Message);
+		if (ID == 0) ID = static_cast<asUINT>(asEDiagnosticCatalogID::GenericSemantic);
+		asSDiagnosticGroup Group;
+		Group.Primary.DiagnosticID = ID;
+		Group.Primary.Severity = asEDiagnosticSeverity::Error;
+		Group.Primary.PrimaryRange = Range;
+		Group.Primary.bHasLocation = Range.IsOrdered() || Range.Begin.IsValid();
+		FString Argument = Message;
+		if (Message.StartsWith(TEXT("unresolved-reference:")))
 		{
-			asSDiagnosticRecord Record;
-			Record.DiagnosticID = 4001;
-			Record.Severity = asEDiagnosticSeverity::Error;
-			Record.PrimaryRange = Range;
-			Record.Arguments.Add(asSDiagnosticArgument::FromText(Message));
-			DiagnosticFragment->Report(MoveTemp(Record));
+			Argument = Message.Mid(21);
+			AttachTypoSuggestions(Group, Range, Argument);
 		}
+		else if (Message.StartsWith(TEXT("unresolved-call:"))) Argument = Message.Mid(16);
+		else if (Message.StartsWith(TEXT("duplicate-local:"))) Argument = Message.Mid(16);
+		Group.Primary.Arguments.Add(asSDiagnosticArgument::FromText(Argument));
+		DiagnosticFragment->ReportGroup(MoveTemp(Group));
 	}
 
 	asCIntegerLiteral* asCSema::ActOnIntegerLiteral(int64 Value, asCSourceRange Range)

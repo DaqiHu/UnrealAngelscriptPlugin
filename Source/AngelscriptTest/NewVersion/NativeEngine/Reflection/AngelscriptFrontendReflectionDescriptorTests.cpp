@@ -15,19 +15,22 @@ namespace AngelscriptFrontendReflectionDescriptorTests
 {
 	struct FSemanticRun
 	{
-		TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot =
-			MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>();
-		AS_NAMESPACE_QUALIFIER asCSourceManager SourceManager{Snapshot};
+		TArray<TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>> SharedSources;
+		AS_NAMESPACE_QUALIFIER asCSourceManager SourceManager;
 		AS_NAMESPACE_QUALIFIER asCIdentifierTable Identifiers;
 		AS_NAMESPACE_QUALIFIER asCPreprocessorConfiguration Configuration;
-		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics{SourceManager};
-		AS_NAMESPACE_QUALIFIER asCPreprocessor Preprocessor{SourceManager, Configuration, Diagnostics};
+		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics;
+		AS_NAMESPACE_QUALIFIER asCPreprocessor Preprocessor;
 		AS_NAMESPACE_QUALIFIER FAngelscriptPreprocessResult Result;
 
 		FSemanticRun(
 			const TArray<TPair<FString, FString>>& Sources,
 			TMap<FString, bool> Flags = {})
-			: Configuration(MoveTemp(Flags))
+			: SharedSources(AngelscriptNativeEngineTest::FFrontendSessionRun::MakeSharedSources(Sources))
+			, SourceManager(SharedSources)
+			, Configuration(MoveTemp(Flags))
+			, Diagnostics(SourceManager)
+			, Preprocessor(SourceManager, Configuration, Diagnostics)
 		{
 			TArray<AS_NAMESPACE_QUALIFIER asCSourceFileID> FileIDs;
 			TArray<TArray<uint8>> Encoded;
@@ -36,9 +39,8 @@ namespace AngelscriptFrontendReflectionDescriptorTests
 				const auto Input = AngelscriptNativeEngineTest::FSourceInput::FromText(Source.Key, Source.Value);
 				TArray<uint8>& Bytes = Encoded.AddDefaulted_GetRef();
 				Bytes.Append(Input.GetUtf8Bytes().GetData(), Input.GetUtf8Bytes().Num());
-				FileIDs.Add(Snapshot->AddFile(Source.Key, Bytes));
+				FileIDs.Add(AS_NAMESPACE_QUALIFIER asCSourceFileID(static_cast<asUINT>(Encoded.Num())));
 			}
-			Snapshot->Freeze();
 
 			TArray<AS_NAMESPACE_QUALIFIER asSSemanticSourceInput> Inputs;
 			for (int32 Index = 0; Index < Sources.Num(); ++Index)

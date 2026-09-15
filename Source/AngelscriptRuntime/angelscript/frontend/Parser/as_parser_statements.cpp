@@ -11,10 +11,16 @@ bool asCParser::ParseBody(const asSDirectiveProcessResult& Input, asCBodyFragmen
 		Tokens.Reset();
 		Cursor = 0;
 		ExpressionDepth = 0;
-		SourceSnapshot = Input.SourceSnapshot;
-		if (!Input.IsValid() || !Input.SourceSnapshot.IsValid())
+		Sources = Input.Sources;
+		if (!Input.IsValid() || !Input.Sources.IsReady())
 		{
 			Fragment.MarkError(TEXT("body-input-invalid"));
+			asCSourceRange Range;
+			if (Input.Sources.IsReady() && Input.Sources.GetFileCount() > 0)
+			{
+				Range = Input.Sources.MakeRange(asCSourceFileID(1), 0, 0);
+			}
+			Sema.ActOnRecoveryStatement(Range, TEXT("body-input-invalid"));
 			return false;
 		}
 		for (const asCToken& Token : Input.ActiveTokens)
@@ -24,6 +30,8 @@ bool asCParser::ParseBody(const asSDirectiveProcessResult& Input, asCBodyFragmen
 		if (Tokens.IsEmpty() || Tokens[0].Kind != asETokenKind::LeftBrace)
 		{
 			Fragment.MarkError(TEXT("body-missing-opening-brace"));
+			const asCSourceRange Range = Tokens.IsEmpty() ? asCSourceRange() : Tokens[0].Range;
+			Sema.ActOnRecoveryStatement(Range, TEXT("body-missing-opening-brace"));
 			return false;
 		}
 		asCCompoundStmt* Body = ParseCompoundStatement();
@@ -48,6 +56,7 @@ bool asCParser::ParseBody(const asSDirectiveProcessResult& Input, asCBodyFragmen
 			const int32 End = FMath::Max(Begin, Tokens.Num() - 1);
 			Statements.Add(Sema.ActOnRecoveryStatement(Span(Begin, End), TEXT("unterminated-compound")));
 			asCCompoundStmt* Compound = Sema.ActOnCompound(MoveTemp(Statements), Span(Begin, End));
+			Sema.NoteLiveCursorScope();
 			Sema.PopBodyScope();
 			return Compound;
 		}
@@ -421,7 +430,10 @@ bool asCParser::ParseBody(const asSDirectiveProcessResult& Input, asCBodyFragmen
 				if (!Value) return RecoverBody(Begin, TEXT("malformed-return-expression"));
 			}
 			if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind != asETokenKind::Semicolon)
+			{
+				Sema.NoteExpectedReturnType();
 				return RecoverBody(Begin, TEXT("return-missing-semicolon"));
+			}
 			return Sema.ActOnReturn(Value, Span(Begin, Cursor++));
 		}
 		if (Tokens[Cursor].Kind == asETokenKind::KwCase || Tokens[Cursor].Kind == asETokenKind::KwDefault)
@@ -454,7 +466,11 @@ bool asCParser::ParseBody(const asSDirectiveProcessResult& Input, asCBodyFragmen
 
 	asCStmt* asCParser::RecoverBody(int32 Begin, FString Message)
 	{
-		int32 End = FMath::Clamp(Cursor, 0, Tokens.Num() - 1);
+		int32 End = FMath::Clamp(Begin, 0, Tokens.Num() - 1);
+		if (Cursor > Begin)
+		{
+			End = FMath::Clamp(Cursor - 1, 0, Tokens.Num() - 1);
+		}
 		while (Cursor < Tokens.Num() && Tokens[Cursor].Kind != asETokenKind::Semicolon
 			&& Tokens[Cursor].Kind != asETokenKind::RightBrace
 			&& Tokens[Cursor].Kind != asETokenKind::KwCase

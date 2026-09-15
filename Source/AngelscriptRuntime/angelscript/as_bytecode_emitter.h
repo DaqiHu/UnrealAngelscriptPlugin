@@ -2,6 +2,7 @@
 #pragma once
 
 #include "as_builder.h"
+#include "as_bytecode_emission.h"
 #include "frontend/Basic/as_diagnostics.h"
 #include "frontend/Basic/as_stable_key.h"
 
@@ -11,15 +12,6 @@ class asCByteCodeImage;
 class asCCompilationSession;
 class asCModuleDefinitionSet;
 
-enum class asEByteCodeEmissionStatus : asBYTE
-{
-	Succeeded = 0,
-	NotReady,
-	InvalidInput,
-	UnsupportedLowering,
-	ResourceLimit
-};
-
 struct asSByteCodeEmissionOptions
 {
 	asUINT PointerByteSize = sizeof(void*);
@@ -28,23 +20,6 @@ struct asSByteCodeEmissionOptions
 	asUINT MaxStrings = 4096;
 	asUINT MaxFunctions = 4096;
 	bool bFloatIsFloat64 = true;
-};
-
-struct asSByteCodeEmissionFailure
-{
-	asSStableKey FunctionKey;
-	uint16 NodeKind = 0;
-	int32 Line = 0;
-	int32 Column = 0;
-	FString StableSourceKey;
-	FString StableFragmentKey;
-	TArray<asSDiagnosticRecord> Diagnostics;
-};
-
-struct asSByteCodeEmissionResult
-{
-	asEByteCodeEmissionStatus EmissionStatus = asEByteCodeEmissionStatus::InvalidInput;
-	asSByteCodeEmissionFailure Failure;
 };
 
 class ANGELSCRIPTRUNTIME_API asCByteCodeEmitter

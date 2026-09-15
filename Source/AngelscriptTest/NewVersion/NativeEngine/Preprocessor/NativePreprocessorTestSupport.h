@@ -13,7 +13,7 @@ namespace AngelscriptNativePreprocessorTest
 {
 	struct FPreprocessorRun
 	{
-		TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot;
+		TArray<TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>> SharedSources;
 		AS_NAMESPACE_QUALIFIER asCSourceManager SourceManager;
 		AS_NAMESPACE_QUALIFIER asCIdentifierTable IdentifierTable;
 		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics;
@@ -23,15 +23,15 @@ namespace AngelscriptNativePreprocessorTest
 		TArray<AS_NAMESPACE_QUALIFIER asSDiagnosticRecord> DiagnosticRecords;
 
 		FPreprocessorRun(FStringView SourceText, TMap<FString, bool> Flags)
-			: Snapshot(MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>())
-			, SourceManager(Snapshot)
+			: SharedSources(AngelscriptNativeEngineTest::MakeSourceList(
+				TEXT("/Angelscript/Game/Preprocessor.as"), SourceText))
+			, SourceManager(SharedSources)
 			, Diagnostics(SourceManager)
+			, FileID(AS_NAMESPACE_QUALIFIER asCSourceFileID(1))
 		{
 			const AngelscriptNativeEngineTest::FSourceInput Input =
 				AngelscriptNativeEngineTest::FSourceInput::FromText(
 					TEXT("/Angelscript/Game/Preprocessor.as"), SourceText);
-			FileID = Snapshot->AddFile(Input.GetLogicalPath(), Input.GetUtf8Bytes());
-			Snapshot->Freeze();
 
 			AS_NAMESPACE_QUALIFIER asCTokenizer Tokenizer(
 				SourceManager,

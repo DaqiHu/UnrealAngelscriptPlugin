@@ -13,14 +13,7 @@ bool asCCompilationSession::ResolveAccessPolicies()
 			const auto* Named = dyn_cast<asCNamedDecl>(&Decl);
 			const FString Coordinate = Named ? Named->GetSemanticKey() : TEXT("access");
 			StableDiagnostics.Add(Coordinate + TEXT(":") + Message);
-			auto Fragment = Diagnostics.CreateFragment(Coordinate);
-			asSDiagnosticRecord Record;
-			Record.DiagnosticID = 4104;
-			Record.Severity = asEDiagnosticSeverity::Error;
-			Record.PrimaryRange = Decl.GetSourceRange();
-			Record.Arguments.Add(asSDiagnosticArgument::FromText(Message));
-			Fragment.Report(MoveTemp(Record));
-			Diagnostics.Submit(MoveTemp(Fragment));
+			SubmitSemanticGroup(Decl.GetSourceRange(), Message, Coordinate);
 		};
 		for (asCASTNode* Node : Context.GetNodes())
 		{

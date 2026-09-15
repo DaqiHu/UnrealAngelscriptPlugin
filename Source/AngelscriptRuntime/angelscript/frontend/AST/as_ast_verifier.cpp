@@ -37,12 +37,12 @@ BEGIN_AS_NAMESPACE
 		bool IsValidRange(const asCASTContext& Context, const asCSourceRange& Range)
 		{
 			if (!Range.IsOrdered()
-				|| Range.Begin.SnapshotID != Context.GetSourceSnapshot()->GetSnapshotID())
+				|| Range.Begin.SnapshotID != Context.GetSources().GetSnapshotID())
 			{
 				return false;
 			}
 			TConstArrayView<uint8> Bytes;
-			return Context.GetSourceSnapshot()->TryGetBytes(Range.Begin.FileID, Bytes)
+			return Context.GetSources().TryGetBytes(Range.Begin.FileID, Bytes)
 				&& Range.End.ByteOffset <= static_cast<asUINT>(Bytes.Num());
 		}
 

@@ -367,7 +367,7 @@ namespace
 						Mode == asEParameterPassingMode::InOut ? asTM_INOUTREF : asTM_NONE;
 					if (FunctionDecl && Parameters[Index]->GetInitializer())
 					{
-						asCSourceManager Sources(AST.GetSourceSnapshot());
+						asCSourceManager Sources(AST.GetSources());
 						TConstArrayView<uint8> Bytes;
 						if (!Sources.TryGetBytes(Parameters[Index]->GetDeferredInitializerRange(), Bytes)) { Status = asEMetadataResult::InvalidSignature; break; }
 						Parameter.DefaultArgument.Assign(reinterpret_cast<const char*>(Bytes.GetData()), Bytes.Num());

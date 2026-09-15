@@ -12,10 +12,7 @@ bool asCCompilationSession::ValidateRecordDeclarations()
 			const auto* Named = dyn_cast<asCNamedDecl>(&Decl);
 			const FString Coordinate = Named ? Named->GetSemanticKey() : TEXT("record");
 			StableDiagnostics.Add(Coordinate + TEXT(":") + Message);
-			auto Fragment = Diagnostics.CreateFragment(Coordinate);
-			asSDiagnosticRecord Record; Record.DiagnosticID = 4103; Record.Severity = asEDiagnosticSeverity::Error;
-			Record.PrimaryRange = Decl.GetSourceRange(); Record.Arguments.Add(asSDiagnosticArgument::FromText(Message));
-			Fragment.Report(MoveTemp(Record)); Diagnostics.Submit(MoveTemp(Fragment));
+			SubmitSemanticGroup(Decl.GetSourceRange(), Message, Coordinate);
 		};
 		auto BaseRecord = [&](const asCType* Type) -> asCRecordDecl*
 		{
@@ -26,7 +23,8 @@ bool asCCompilationSession::ValidateRecordDeclarations()
 		TFunction<bool(asCRecordDecl*, int)> Validate = [&](asCRecordDecl* Record, int Depth)
 		{
 			if (Colors.FindRef(Record) == 2) return !Record->IsInvalid();
-			if (Colors.FindRef(Record) == 1 || Depth > 256) { Error(*Record, TEXT("cyclic-or-overdeep-inheritance")); return false; }
+			if (Colors.FindRef(Record) == 1) { Error(*Record, TEXT("inheritance-cycle")); return false; }
+			if (Depth > 256) { Error(*Record, TEXT("inheritance-depth-budget")); return false; }
 			Colors.Add(Record, 1);
 			int ObjectBases = 0; TSet<asSStableKey> BaseKeys;
 			for (const asCType* Base : Record->GetResolvedBases())

@@ -88,6 +88,14 @@ namespace
 			return Byte >= '0' && Byte <= '9';
 		}
 
+		bool IsUtf8ByteOrderMark(const asCCharacterStream& Stream)
+		{
+			return Stream.GetRemainingByteCount() >= 3
+				&& Stream.Peek() == 0xEF
+				&& Stream.Peek(1) == 0xBB
+				&& Stream.Peek(2) == 0xBF;
+		}
+
 		bool IsUnicodeIdentifierStart(uint32 CodePoint)
 		{
 			return CodePoint > 0xFFFF
@@ -164,7 +172,8 @@ namespace
 
 			const asETokenFlags Flags = GetCurrentFlags();
 			const uint8 Byte = Stream.Peek();
-			if (Byte == ' ' || Byte == '\t' || Byte == '\r' || Byte == '\n')
+			if (Byte == ' ' || Byte == '\t' || Byte == '\r' || Byte == '\n'
+				|| IsUtf8ByteOrderMark(Stream))
 			{
 				if (!LexWhitespace(OutToken, Flags)) { return false; }
 				if (Options.GetTriviaMode() == asETriviaMode::SkipTrivia) { continue; }
@@ -195,6 +204,11 @@ namespace
 		bool bSawNewline = false;
 		while (!Stream.IsAtEnd())
 		{
+			if (IsUtf8ByteOrderMark(Stream))
+			{
+				Stream.Advance(3);
+				continue;
+			}
 			const uint8 Byte = Stream.Peek();
 			if (Byte != ' ' && Byte != '\t' && Byte != '\r' && Byte != '\n') { break; }
 			bSawNewline |= Byte == '\n';
@@ -445,12 +459,7 @@ namespace
 		asELexDiagnosticID DiagnosticID,
 		const asCSourceRange& Range)
 	{
-		if (!DiagnosticFragment.IsValid()) { return; }
-		asSDiagnosticRecord Record;
-		Record.DiagnosticID = static_cast<asUINT>(DiagnosticID);
-		Record.Severity = asEDiagnosticSeverity::Error;
-		Record.PrimaryRange = Range;
-		DiagnosticFragment->Report(MoveTemp(Record));
+		Diag(Range, static_cast<asUINT>(DiagnosticID));
 	}
 
 	bool asCTokenizer::LexPunctuation(asCToken& OutToken, asETokenFlags Flags)
@@ -485,6 +494,21 @@ namespace
 		bAtStartOfLine = false;
 		bHasLeadingSpace = false;
 		return true;
+	}
+
+	asCDiagnostic asCTokenizer::Diag(const asCSourceRange& Range, asUINT ID)
+	{
+		if (bDiagnosticsFlushed || !DiagnosticFragment.IsValid())
+		{
+			return asCDiagnostic();
+		}
+
+		asCDiagnostic Diagnostic = DiagnosticFragment->Diag(Range, ID);
+		if (ID != 0)
+		{
+			bHasErrors = true;
+		}
+		return Diagnostic;
 	}
 
 	bool asCTokenizer::FlushDiagnostics()

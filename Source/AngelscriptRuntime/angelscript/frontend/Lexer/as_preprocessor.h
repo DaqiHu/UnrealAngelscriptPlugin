@@ -69,7 +69,7 @@ class asCIdentifierTable;
 		bool bValid = false;
 		uint64 SnapshotID = 0;
 		uint64 ConfigurationDigest = 0;
-		TSharedPtr<asCSourceSnapshot, ESPMode::ThreadSafe> SourceSnapshot;
+		asCSourceManager Sources;
 		// Token identifier pointers remain valid independently of the caller's lexer.
 		TSharedPtr<asCIdentifierTable, ESPMode::ThreadSafe> IdentifierOwner;
 		TArray<asCToken> RawTokens;

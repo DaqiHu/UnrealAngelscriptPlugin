@@ -16,11 +16,7 @@ bool asCCompilationSession::ResolveConstantDeclarations()
 		{
 			Valid = false; Constant.MarkInvalid();
 			StableDiagnostics.Add(Constant.GetSemanticKey() + TEXT(":") + Message);
-			auto Fragment = Diagnostics.CreateFragment(Constant.GetSemanticKey());
-			asSDiagnosticRecord Record;
-			Record.DiagnosticID = 4101; Record.Severity = asEDiagnosticSeverity::Error;
-			Record.PrimaryRange = Failure ? Failure->GetSourceRange() : Constant.GetSourceRange();
-			Record.Arguments.Add(asSDiagnosticArgument::FromText(Message)); Fragment.Report(MoveTemp(Record)); Diagnostics.Submit(MoveTemp(Fragment));
+			SubmitSemanticGroup(Failure ? Failure->GetSourceRange() : Constant.GetSourceRange(), Message, Constant.GetSemanticKey());
 		};
 		auto LookupTypeName = [&](const FString& Name, const asCDecl& Scope)
 		{

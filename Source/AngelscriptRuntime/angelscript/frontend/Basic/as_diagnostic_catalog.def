@@ -1,0 +1,71 @@
+/* as_diagnostic_catalog.def — explicit numeric IDs. Do not reuse reserved generics. */
+#ifndef AS_DIAGNOSTIC
+#error "Define AS_DIAGNOSTIC(Name, ID, Stage, Category, Severity, WarningGroup, Format) before including this file."
+#endif
+
+/* Lexer 1001–1006 */
+AS_DIAGNOSTIC(InvalidUtf8, 1001, Lexer, Lexical, Error, None, "invalid UTF-8 sequence")
+AS_DIAGNOSTIC(UnicodeIdentifierDisallowed, 1002, Lexer, Lexical, Error, None, "Unicode identifier is not allowed")
+AS_DIAGNOSTIC(EmbeddedNul, 1003, Lexer, Lexical, Error, None, "embedded NUL in source")
+AS_DIAGNOSTIC(UnexpectedCharacter, 1004, Lexer, Lexical, Error, None, "unexpected character")
+AS_DIAGNOSTIC(UnterminatedString, 1005, Lexer, Lexical, Error, None, "unterminated string")
+AS_DIAGNOSTIC(UnterminatedBlockComment, 1006, Lexer, Lexical, Error, None, "unterminated block comment")
+
+/* Preprocessor 2001–2014 */
+AS_DIAGNOSTIC(UnknownFlag, 2001, Preprocessor, Syntax, Error, None, "unknown preprocessor flag '{0}'")
+AS_DIAGNOSTIC(MalformedCondition, 2002, Preprocessor, Syntax, Error, None, "malformed preprocessor condition")
+AS_DIAGNOSTIC(UnexpectedElif, 2003, Preprocessor, Syntax, Error, None, "unexpected #elif")
+AS_DIAGNOSTIC(UnexpectedElse, 2004, Preprocessor, Syntax, Error, None, "unexpected #else")
+AS_DIAGNOSTIC(UnexpectedEndif, 2005, Preprocessor, Syntax, Error, None, "unexpected #endif")
+AS_DIAGNOSTIC(ElifAfterElse, 2006, Preprocessor, Syntax, Error, None, "#elif after #else")
+AS_DIAGNOSTIC(DuplicateElse, 2007, Preprocessor, Syntax, Error, None, "duplicate #else")
+AS_DIAGNOSTIC(MissingEndif, 2008, Preprocessor, Syntax, Error, None, "missing #endif")
+AS_DIAGNOSTIC(UnsupportedDirective, 2009, Preprocessor, Syntax, Error, None, "unsupported preprocessor directive")
+AS_DIAGNOSTIC(InvalidRestrictionOperation, 2010, Preprocessor, Syntax, Error, None, "invalid restriction operation")
+AS_DIAGNOSTIC(InvalidRestrictionPolicy, 2011, Preprocessor, Syntax, Error, None, "invalid restriction policy")
+AS_DIAGNOSTIC(MissingRestrictionPattern, 2012, Preprocessor, Syntax, Error, None, "missing restriction pattern")
+AS_DIAGNOSTIC(ExtraRestrictionArgument, 2013, Preprocessor, Syntax, Error, None, "extra restriction argument")
+AS_DIAGNOSTIC(UnsupportedInclude, 2014, Preprocessor, Syntax, Error, None, "unsupported #include")
+
+/* Parser / declaration — retain 3001–3008; 3003 remains a reserved generic */
+AS_DIAGNOSTIC(GenericRecovery, 3001, Parser, Syntax, Error, None, "{0}")
+AS_DIAGNOSTIC(GenericDeclaration, 3002, Sema, Semantic, Error, None, "{0}")
+AS_DIAGNOSTIC(ReservedGeneric3003, 3003, Builder, Internal, Error, None, "{0}")
+AS_DIAGNOSTIC(RemovedAsset, 3004, Parser, Syntax, Error, None, "removed asset syntax")
+AS_DIAGNOSTIC(RemovedImport, 3005, Parser, Syntax, Error, None, "removed import syntax")
+AS_DIAGNOSTIC(InvalidCallable, 3006, Parser, Syntax, Error, None, "invalid callable")
+AS_DIAGNOSTIC(InvalidAnnotation, 3007, Parser, Syntax, Error, None, "invalid annotation")
+AS_DIAGNOSTIC(RemovedLanguageFeature, 3008, Parser, Syntax, Error, None, "removed language feature")
+#define AS_SYNTAX_DIAGNOSTIC(Name, ID, Reason, Format) AS_DIAGNOSTIC(Name, ID, Parser, Syntax, Error, None, Format)
+#include "frontend/Basic/as_diagnostic_syntax.def"
+#undef AS_SYNTAX_DIAGNOSTIC
+
+/* Semantic / session families — reserved until 3.2 migrates producers */
+AS_DIAGNOSTIC(GenericSemantic, 4001, Sema, Semantic, Error, None, "{0}")
+AS_DIAGNOSTIC(GenericStatement, 4002, Sema, Semantic, Error, None, "{0}")
+AS_DIAGNOSTIC(UnresolvedReference, 4003, Sema, Semantic, Error, None, "unresolved reference '{0}'")
+AS_DIAGNOSTIC(UnknownType, 4004, Sema, Semantic, Error, None, "unknown type '{0}'")
+AS_DIAGNOSTIC(DuplicateDeclaration, 4005, Sema, Semantic, Error, None, "duplicate declaration '{0}'")
+AS_DIAGNOSTIC(IncompatibleConversion, 4006, Sema, Semantic, Error, None, "incompatible conversion from '{0}' to '{1}'")
+AS_DIAGNOSTIC(InvalidQualifier, 4007, Sema, Semantic, Error, None, "invalid type qualifier")
+AS_DIAGNOSTIC(GenericArity, 4008, Sema, Semantic, Error, None, "generic argument count does not match '{0}'")
+AS_DIAGNOSTIC(GenericConstant, 4101, Sema, Semantic, Error, None, "{0}")
+AS_DIAGNOSTIC(GenericInference, 4102, Sema, Semantic, Error, None, "{0}")
+AS_DIAGNOSTIC(GenericRecord, 4103, Sema, Semantic, Error, None, "{0}")
+AS_DIAGNOSTIC(GenericAccess, 4104, Sema, Semantic, Error, None, "{0}")
+AS_DIAGNOSTIC(UnusedName, 4201, Sema, Semantic, Warning, Unused, "unused name '{0}'")
+AS_DIAGNOSTIC(ReservedGeneric4202, 4202, Sema, Semantic, Error, None, "{0}")
+AS_DIAGNOSTIC(ImplicitCaseFallthrough, 4203, Sema, Semantic, Warning, Unused, "implicit case fallthrough")
+AS_DIAGNOSTIC(DeprecatedFunctionCall, 4204, Sema, Semantic, Warning, Deprecated, "deprecated function call")
+AS_DIAGNOSTIC(NodiscardCallResultUnused, 4205, Sema, Semantic, Warning, Unused, "nodiscard call result unused")
+AS_DIAGNOSTIC(ReservedOrdering4300, 4300, Sema, Semantic, Warning, Unused, "{0}")
+AS_DIAGNOSTIC(ReservedOrdering4301, 4301, Sema, Semantic, Error, None, "{0}")
+#define AS_SEMANTIC_DIAGNOSTIC(Name, ID, Reason, Format) AS_DIAGNOSTIC(Name, ID, Sema, Semantic, Error, None, Format)
+#include "frontend/Basic/as_diagnostic_semantic.def"
+#undef AS_SEMANTIC_DIAGNOSTIC
+
+/* Builder / driver */
+AS_DIAGNOSTIC(BuilderStage, 5001, Builder, Internal, Error, None, "{0}")
+AS_DIAGNOSTIC(InputAdmission, 5002, Driver, Driver, Error, None, "{0}")
+AS_DIAGNOSTIC(AttachedNote, 6001, Driver, Driver, Note, None, "{0}")
+AS_DIAGNOSTIC(DidYouMean, 6002, Sema, Semantic, Note, None, "did you mean '{0}'?")

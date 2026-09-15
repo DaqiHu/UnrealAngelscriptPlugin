@@ -5,7 +5,6 @@
 #include "frontend/Basic/as_source_location.h"
 #include "frontend/Basic/as_source_manager.h"
 #include "frontend/Basic/as_source_provenance.h"
-#include "frontend/Basic/as_source_snapshot.h"
 
 #include "Async/ParallelFor.h"
 
@@ -13,18 +12,12 @@
 
 namespace
 {
-	TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> MakeSnapshot(
+	AS_NAMESPACE_QUALIFIER asCSourceManager MakeManager(
 		FStringView LogicalPath,
 		FStringView SourceText,
 		AS_NAMESPACE_QUALIFIER asCSourceFileID& OutFileID)
 	{
-		const AngelscriptNativeEngineTest::FSourceInput Input =
-			AngelscriptNativeEngineTest::FSourceInput::FromText(LogicalPath, SourceText);
-		TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot =
-			MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>();
-		OutFileID = Snapshot->AddFile(Input.GetLogicalPath(), Input.GetUtf8Bytes());
-		Snapshot->Freeze();
-		return Snapshot;
+		return AngelscriptNativeEngineTest::MakeSourceManager(LogicalPath, SourceText, &OutFileID);
 	}
 }
 
@@ -36,10 +29,8 @@ TEST_CLASS_WITH_FLAGS(
 	TEST_METHOD(HalfOpenRangeSelectsExactUtf8Bytes)
 	{
 		AS_NAMESPACE_QUALIFIER asCSourceFileID FileID;
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Utf8.as"), TEXT("A\u03c0BC"), FileID);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager(Snapshot);
-
+		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager =
+			MakeManager(TEXT("/Angelscript/Game/Utf8.as"), TEXT("A\u03c0BC"), FileID);
 		const AS_NAMESPACE_QUALIFIER asCSourceRange Range = Manager.MakeRange(FileID, 1, 3);
 		TConstArrayView<uint8> Slice;
 		ASSERT_THAT(IsTrue(Manager.TryGetBytes(Range, Slice), TEXT("The UTF-8 byte range should resolve.")));
@@ -53,10 +44,8 @@ TEST_CLASS_WITH_FLAGS(
 	TEST_METHOD(InvalidRangesAreRejected)
 	{
 		AS_NAMESPACE_QUALIFIER asCSourceFileID FileID;
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Invalid.as"), TEXT("abc"), FileID);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager(Snapshot);
-
+		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager =
+			MakeManager(TEXT("/Angelscript/Game/Invalid.as"), TEXT("abc"), FileID);
 		TConstArrayView<uint8> Slice;
 		ASSERT_THAT(IsFalse(Manager.TryGetBytes(Manager.MakeRange(FileID, 2, 1), Slice)));
 		ASSERT_THAT(IsFalse(Manager.TryGetBytes(Manager.MakeRange(FileID, 0, 4), Slice)));
@@ -67,13 +56,10 @@ TEST_CLASS_WITH_FLAGS(
 	{
 		AS_NAMESPACE_QUALIFIER asCSourceFileID FirstFileID;
 		AS_NAMESPACE_QUALIFIER asCSourceFileID SecondFileID;
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> FirstSnapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Same.as"), TEXT("first"), FirstFileID);
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> SecondSnapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Same.as"), TEXT("first"), SecondFileID);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager FirstManager(FirstSnapshot);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager SecondManager(SecondSnapshot);
-
+		const AS_NAMESPACE_QUALIFIER asCSourceManager FirstManager =
+			MakeManager(TEXT("/Angelscript/Game/Same.as"), TEXT("first"), FirstFileID);
+		const AS_NAMESPACE_QUALIFIER asCSourceManager SecondManager =
+			MakeManager(TEXT("/Angelscript/Game/Same.as"), TEXT("first"), SecondFileID);
 		ASSERT_THAT(AreEqual(FirstFileID.Value, SecondFileID.Value));
 		const AS_NAMESPACE_QUALIFIER asCSourceRange Mixed(
 			FirstManager.MakeLocation(FirstFileID, 0),
@@ -87,13 +73,10 @@ TEST_CLASS_WITH_FLAGS(
 	{
 		AS_NAMESPACE_QUALIFIER asCSourceFileID FirstFileID;
 		AS_NAMESPACE_QUALIFIER asCSourceFileID SecondFileID;
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> FirstSnapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Stable.as"), TEXT("value"), FirstFileID);
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> SecondSnapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Stable.as"), TEXT("value"), SecondFileID);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager FirstManager(FirstSnapshot);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager SecondManager(SecondSnapshot);
-
+		const AS_NAMESPACE_QUALIFIER asCSourceManager FirstManager =
+			MakeManager(TEXT("/Angelscript/Game/Stable.as"), TEXT("value"), FirstFileID);
+		const AS_NAMESPACE_QUALIFIER asCSourceManager SecondManager =
+			MakeManager(TEXT("/Angelscript/Game/Stable.as"), TEXT("value"), SecondFileID);
 		AS_NAMESPACE_QUALIFIER asSStableSourceAnchor Anchor;
 		ASSERT_THAT(IsTrue(FirstManager.TryCreateStableAnchor(
 			FirstManager.MakeRange(FirstFileID, 1, 4), Anchor)));
@@ -110,10 +93,8 @@ TEST_CLASS_WITH_FLAGS(
 	TEST_METHOD(LineMapIsLazyAndUsesUtf8ByteColumns)
 	{
 		AS_NAMESPACE_QUALIFIER asCSourceFileID FileID;
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Lines.as"), TEXT("one\n\u03c0x\n"), FileID);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager(Snapshot);
-
+		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager =
+			MakeManager(TEXT("/Angelscript/Game/Lines.as"), TEXT("one\n\u03c0x\n"), FileID);
 		ASSERT_THAT(IsFalse(Manager.HasMaterializedLineMap(FileID)));
 		AS_NAMESPACE_QUALIFIER asSSourceLineColumn LineColumn;
 		ASSERT_THAT(IsTrue(Manager.TryGetLineColumn(Manager.MakeLocation(FileID, 6), LineColumn)));
@@ -125,9 +106,8 @@ TEST_CLASS_WITH_FLAGS(
 	TEST_METHOD(ConcurrentLineQueriesPublishOneEquivalentMap)
 	{
 		AS_NAMESPACE_QUALIFIER asCSourceFileID FileID;
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Parallel.as"), TEXT("zero\none\ntwo"), FileID);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager(Snapshot);
+		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager =
+			MakeManager(TEXT("/Angelscript/Game/Parallel.as"), TEXT("zero\none\ntwo"), FileID);
 		TArray<AS_NAMESPACE_QUALIFIER asSSourceLineColumn> Results;
 		Results.SetNum(64);
 
@@ -145,33 +125,25 @@ TEST_CLASS_WITH_FLAGS(
 
 	TEST_METHOD(OriginQueriesReturnOverlapsAndParentChain)
 	{
-		const AngelscriptNativeEngineTest::FSourceInput Input =
-			AngelscriptNativeEngineTest::FSourceInput::FromText(
-				TEXT("/Angelscript/Game/Origin.as"), TEXT("abcdef"));
-		TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot =
-			MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>();
-		const AS_NAMESPACE_QUALIFIER asCSourceFileID FileID = Snapshot->AddFile(
-			Input.GetLogicalPath(), Input.GetUtf8Bytes());
-		const AS_NAMESPACE_QUALIFIER asCSourceManager ConstructionManager(Snapshot);
+		AS_NAMESPACE_QUALIFIER asCSourceFileID FileID;
+		AS_NAMESPACE_QUALIFIER asCSourceManager Manager =
+			MakeManager(TEXT("/Angelscript/Game/Origin.as"), TEXT("abcdef"), FileID);
 
 		AS_NAMESPACE_QUALIFIER asSSourceOriginRecord Direct;
 		Direct.Kind = AS_NAMESPACE_QUALIFIER asESourceOriginKind::Direct;
-		Direct.ProducedRange = ConstructionManager.MakeRange(FileID, 0, 6);
+		Direct.ProducedRange = Manager.MakeRange(FileID, 0, 6);
 		Direct.Producer = TEXT("spelled");
-		const AS_NAMESPACE_QUALIFIER asCSourceOriginID DirectID = Snapshot->AddOrigin(Direct);
+		const AS_NAMESPACE_QUALIFIER asCSourceOriginID DirectID = Manager.AddOrigin(Direct);
 
 		AS_NAMESPACE_QUALIFIER asSSourceOriginRecord Synthetic;
 		Synthetic.Kind = AS_NAMESPACE_QUALIFIER asESourceOriginKind::Synthetic;
-		Synthetic.ProducedRange = ConstructionManager.MakeRange(FileID, 2, 4);
-		Synthetic.ParentRange = ConstructionManager.MakeRange(FileID, 1, 3);
+		Synthetic.ProducedRange = Manager.MakeRange(FileID, 2, 4);
+		Synthetic.ParentRange = Manager.MakeRange(FileID, 1, 3);
 		Synthetic.ParentOrigin = DirectID;
 		Synthetic.Producer = TEXT("test-transform");
-		const AS_NAMESPACE_QUALIFIER asCSourceOriginID SyntheticID = Snapshot->AddOrigin(Synthetic);
+		const AS_NAMESPACE_QUALIFIER asCSourceOriginID SyntheticID = Manager.AddOrigin(Synthetic);
 		ASSERT_THAT(IsTrue(DirectID.IsValid()));
 		ASSERT_THAT(IsTrue(SyntheticID.IsValid()));
-		Snapshot->Freeze();
-
-		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager(Snapshot);
 		TArray<AS_NAMESPACE_QUALIFIER asSSourceOriginRecord> Overlaps;
 		ASSERT_THAT(IsTrue(Manager.FindOrigins(Manager.MakeRange(FileID, 2, 3), Overlaps)));
 		ASSERT_THAT(AreEqual(2, Overlaps.Num()));
@@ -185,9 +157,8 @@ TEST_CLASS_WITH_FLAGS(
 		ASSERT_THAT(AreEqual(FString(TEXT("spelled")), Chain[1].Producer));
 
 		AS_NAMESPACE_QUALIFIER asCSourceFileID OtherFileID;
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> OtherSnapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Origin.as"), TEXT("abcdef"), OtherFileID);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager OtherManager(OtherSnapshot);
+		const AS_NAMESPACE_QUALIFIER asCSourceManager OtherManager =
+			MakeManager(TEXT("/Angelscript/Game/Origin.as"), TEXT("abcdef"), OtherFileID);
 		ASSERT_THAT(IsFalse(OtherManager.TryResolveOriginChain(SyntheticID, Chain)));
 	}
 
@@ -195,13 +166,10 @@ TEST_CLASS_WITH_FLAGS(
 	{
 		AS_NAMESPACE_QUALIFIER asCSourceFileID OriginalFileID;
 		AS_NAMESPACE_QUALIFIER asCSourceFileID ChangedFileID;
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> OriginalSnapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Revision.as"), TEXT("before"), OriginalFileID);
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> ChangedSnapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Revision.as"), TEXT("after"), ChangedFileID);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager OriginalManager(OriginalSnapshot);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager ChangedManager(ChangedSnapshot);
-
+		const AS_NAMESPACE_QUALIFIER asCSourceManager OriginalManager =
+			MakeManager(TEXT("/Angelscript/Game/Revision.as"), TEXT("before"), OriginalFileID);
+		const AS_NAMESPACE_QUALIFIER asCSourceManager ChangedManager =
+			MakeManager(TEXT("/Angelscript/Game/Revision.as"), TEXT("after"), ChangedFileID);
 		AS_NAMESPACE_QUALIFIER asSStableSourceAnchor Anchor;
 		ASSERT_THAT(IsTrue(OriginalManager.TryCreateStableAnchor(
 			OriginalManager.MakeRange(OriginalFileID, 0, 6), Anchor)));
@@ -213,9 +181,8 @@ TEST_CLASS_WITH_FLAGS(
 	TEST_METHOD(StructuredDiagnosticsDeferRenderingAndKeepTypedArguments)
 	{
 		AS_NAMESPACE_QUALIFIER asCSourceFileID FileID;
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Diagnostic.as"), TEXT("bad value"), FileID);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager(Snapshot);
+		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager =
+			MakeManager(TEXT("/Angelscript/Game/Diagnostic.as"), TEXT("bad value"), FileID);
 		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics(Manager);
 		AS_NAMESPACE_QUALIFIER asCDiagnosticFragment Fragment = Diagnostics.CreateFragment(TEXT("parser/body-0"));
 
@@ -249,12 +216,10 @@ TEST_CLASS_WITH_FLAGS(
 	{
 		AS_NAMESPACE_QUALIFIER asCSourceFileID FileID;
 		AS_NAMESPACE_QUALIFIER asCSourceFileID ForeignFileID;
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Fix.as"), TEXT("old name"), FileID);
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> ForeignSnapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Fix.as"), TEXT("old name"), ForeignFileID);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager(Snapshot);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager ForeignManager(ForeignSnapshot);
+		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager =
+			MakeManager(TEXT("/Angelscript/Game/Fix.as"), TEXT("old name"), FileID);
+		const AS_NAMESPACE_QUALIFIER asCSourceManager ForeignManager =
+			MakeManager(TEXT("/Angelscript/Game/Fix.as"), TEXT("old name"), ForeignFileID);
 		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics(Manager);
 
 		AS_NAMESPACE_QUALIFIER asSDiagnosticRecord Valid;
@@ -291,10 +256,8 @@ TEST_CLASS_WITH_FLAGS(
 	TEST_METHOD(ParallelFragmentMergeMatchesSingleThreadOrder)
 	{
 		AS_NAMESPACE_QUALIFIER asCSourceFileID FileID;
-		const TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot =
-			MakeSnapshot(TEXT("/Angelscript/Game/Ordering.as"), TEXT("abcdefgh"), FileID);
-		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager(Snapshot);
-
+		const AS_NAMESPACE_QUALIFIER asCSourceManager Manager =
+			MakeManager(TEXT("/Angelscript/Game/Ordering.as"), TEXT("abcdefgh"), FileID);
 		auto Populate = [&Manager, FileID](AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine& Diagnostics, bool bParallel)
 		{
 			auto SubmitFragment = [&Manager, FileID, &Diagnostics](int32 FragmentIndex)

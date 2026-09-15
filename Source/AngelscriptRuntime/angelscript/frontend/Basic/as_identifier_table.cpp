@@ -4,6 +4,8 @@
 
 #include "frontend/Basic/as_identifier_table.h"
 
+#include "Misc/ScopeLock.h"
+
 BEGIN_AS_NAMESPACE
 
 namespace
@@ -18,6 +20,7 @@ namespace
 
 	const asCIdentifierInfo* asCIdentifierTable::Intern(TConstArrayView<uint8> Utf8Spelling)
 	{
+		FScopeLock Lock(&InternLock);
 		if (Utf8Spelling.IsEmpty())
 		{
 			return nullptr;

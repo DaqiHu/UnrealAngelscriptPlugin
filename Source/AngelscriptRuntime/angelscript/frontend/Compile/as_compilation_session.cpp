@@ -79,18 +79,18 @@ namespace
 	}
 
 	asCCompilationSession::asCCompilationSession(
-		TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot,
+		asCSourceManager Sources,
 		asCDiagnosticsEngine& InDiagnostics,
 		FString InStableScope)
-		: asCCompilationSession(MoveTemp(Snapshot), InDiagnostics, MoveTemp(InStableScope), MakeShared<asCTypeContext, ESPMode::ThreadSafe>())
+		: asCCompilationSession(MoveTemp(Sources), InDiagnostics, MoveTemp(InStableScope), MakeShared<asCTypeContext, ESPMode::ThreadSafe>())
 	{
 	}
 
 	asCCompilationSession::asCCompilationSession(
-		TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot,
+		asCSourceManager Sources,
 		asCDiagnosticsEngine& InDiagnostics, FString InStableScope,
 		TSharedRef<asCTypeContext, ESPMode::ThreadSafe> TypeContext)
-		: Context(MoveTemp(Snapshot), MoveTemp(TypeContext))
+		: Context(MoveTemp(Sources), MoveTemp(TypeContext))
 		, Diagnostics(InDiagnostics)
 		, Sema(Context, InDiagnostics, InStableScope)
 		, StableScope(MoveTemp(InStableScope))
@@ -121,7 +121,7 @@ namespace
 			asSDirectiveProcessResult Input;
 			Input.SnapshotID = Source.SnapshotID;
 			Input.ConfigurationDigest = Source.ConfigurationDigest;
-			Input.SourceSnapshot = Source.SourceSnapshot;
+			Input.Sources = Source.Sources;
 			Input.IdentifierOwner = Source.IdentifierOwner;
 			for (const asCToken& Token : Source.ActiveTokens)
 			{
@@ -195,7 +195,7 @@ namespace
 		bHasErrors = false;
 		bHasRecoveryNodes = false;
 		asCStableIdentityRegistry& Registry = Context.GetTypeContext()->GetIdentityRegistry();
-		const auto& Snapshot = Context.GetSourceSnapshot();
+		const asCSourceManager& Snapshot = Context.GetSources();
 		for (const asCDeclarationFragment& Fragment : Fragments)
 		{
 			bHasErrors |= Fragment.HasErrors();
@@ -221,7 +221,7 @@ namespace
 				Info.BeginOffset = Declaration->GetSourceRange().Begin.ByteOffset;
 				Info.EndOffset = Declaration->GetSourceRange().End.ByteOffset;
 				FStringView LogicalSourceKey;
-				if (Snapshot->TryGetLogicalSourceKey(Declaration->GetSourceRange().Begin.FileID, LogicalSourceKey)) Info.LogicalSourceKey = FString(LogicalSourceKey);
+				if (Snapshot.TryGetLogicalSourceKey(Declaration->GetSourceRange().Begin.FileID, LogicalSourceKey)) Info.LogicalSourceKey = FString(LogicalSourceKey);
 				if (const asCNamedDecl* Named = dyn_cast<asCNamedDecl>(Declaration)) Info.QualifiedName = JoinScope(Scope, Named->GetName());
 				Infos.Add(MoveTemp(Info));
 				if (auto* Namespace = dyn_cast<asCNamespaceDecl>(Declaration)) Gather(*Namespace, JoinScope(Scope, Namespace->GetName()));
@@ -240,11 +240,15 @@ namespace
 		});
 		TMap<const asCDecl*, const asSDeclarationInfo*> InfoByDeclaration;
 		for (const asSDeclarationInfo& Info : Infos) InfoByDeclaration.Add(Info.Declaration, &Info);
-		auto Fail = [&](asCDecl* Decl, const FString& Message)
+		auto Fail = [&](asCDecl* Decl, const FString& Message, const asCDecl* Related = nullptr, const FString* CatalogReason = nullptr)
 		{
 			Decl->MarkInvalid();
 			bHasErrors = true;
 			StableDiagnostics.Add(Message);
+			TArray<asCSourceRange> RelatedRanges;
+			if (Related) RelatedRanges.Add(Related->GetSourceRange());
+			SubmitSemanticGroup(Decl->GetSourceRange(), CatalogReason ? FStringView(*CatalogReason) : FStringView(Message),
+				Message, RelatedRanges);
 		};
 		auto Parent = [](const asCDecl* Decl) -> asCDecl*
 		{
@@ -267,7 +271,7 @@ namespace
 		{
 			const auto* Primary = InfoByDeclaration.FindRef(Existing);
 			Fail(Decl, FString::Printf(TEXT("duplicate:%s:%s:%s"), *Decl->GetName(),
-				Primary ? *Primary->LogicalSourceKey : TEXT("<unknown>"), *Info.LogicalSourceKey));
+				Primary ? *Primary->LogicalSourceKey : TEXT("<unknown>"), *Info.LogicalSourceKey), Existing);
 		};
 
 		// Pass 1: admit all nominals with semantic owner edges before resolving any
@@ -364,9 +368,9 @@ namespace
 			return Type.GetType();
 		};
 		for (const auto& Info : Infos) if (auto* Alias = dyn_cast<asCTypeAliasDecl>(Info.Declaration)) ResolveAlias(Alias);
-		auto ResolveSyntax = [&](const asSTypeSyntax& Syntax, const FString& Scope, asCQualType& Out)
+		auto ResolveSyntax = [&](const asSTypeSyntax& Syntax, const FString& Scope, asCQualType& Out, FString* OutReason = nullptr)
 		{
-			Out = ResolveStructuredType(Syntax, [&](const FString& Name, bool Global) { return ResolveNamedType(Name, Scope, Global); });
+			Out = ResolveStructuredType(Syntax, [&](const FString& Name, bool Global) { return ResolveNamedType(Name, Scope, Global); }, 0, OutReason);
 			return Out.IsValid();
 		};
 		auto PassingMode = [](const asSTypeSyntax& Syntax)
@@ -432,19 +436,25 @@ namespace
 				const auto Parameters = Function ? Function->GetParameters() : Callable->GetParameters();
 				asCQualType ReturnType;
 				const bool ClassDefault = Function && Function->GetFunctionKind() == asEFunctionKind::ClassDefault;
+				FString ReturnReason;
 				bool bValid = ClassDefault ? asCQualType::TryCreate(Context.GetBuiltinType(asEPrimitiveType::Void), asETypeQualifiers::None, ReturnType)
-					: ResolveSyntax(ReturnSyntax, Info.Scope, ReturnType);
+					: ResolveSyntax(ReturnSyntax, Info.Scope, ReturnType, &ReturnReason);
 				asSStableTypeUseDescriptor Signature;
 				Signature.Kind = asETypeUseKind::Callable;
 				bValid = bValid && ReturnType.GetStableIdentity(Registry, Signature.ReturnType) == asETypeIdentityStatus::Succeeded;
-				if (!bValid) Fail(Named, (Function ? TEXT("unresolved-return:") : TEXT("unresolved-callable-return:")) + Info.QualifiedName);
+				if (!bValid)
+				{
+					Fail(Named, (Function ? TEXT("unresolved-return:") : TEXT("unresolved-callable-return:")) + Info.QualifiedName,
+						nullptr, ReturnReason.IsEmpty() ? nullptr : &ReturnReason);
+				}
 				TArray<asCQualType> ParameterTypes;
 				TSet<FString> ParameterNames;
 				for (int32 Ordinal = 0; Ordinal < Parameters.Num(); ++Ordinal)
 				{
 					asCVarDecl* Parameter = Parameters[Ordinal];
 					asCQualType Type;
-					bool bParameterValid = ResolveSyntax(Parameter->GetTypeSyntax(), Info.Scope, Type);
+					FString ParameterReason;
+					bool bParameterValid = ResolveSyntax(Parameter->GetTypeSyntax(), Info.Scope, Type, &ParameterReason);
 					if (const auto* Builtin = dyn_cast<asCBuiltinType>(Type.GetType())) bParameterValid &= Builtin->GetPrimitive() != asEPrimitiveType::Void;
 					if (!Parameter->GetName().IsEmpty())
 					{
@@ -462,7 +472,8 @@ namespace
 					}
 					else
 					{
-						Fail(Parameter, FString::Printf(TEXT("invalid-callable-parameter:%s:%d"), *Info.QualifiedName, Ordinal));
+						Fail(Parameter, FString::Printf(TEXT("invalid-callable-parameter:%s:%d"), *Info.QualifiedName, Ordinal),
+							nullptr, ParameterReason.IsEmpty() ? nullptr : &ParameterReason);
 						bValid = false;
 					}
 				}
@@ -543,11 +554,19 @@ namespace
 						// A declaration shell with no resolved type is not a fake
 						// semantic type. Infer exactly once after lookup is built.
 					}
-					else if (ResolveSyntax(Syntax, Info.Scope, Type) && Type.GetStableIdentity(Registry, TypeKey) == asETypeIdentityStatus::Succeeded) Variable->SetResolvedType(Type.GetType());
 					else
 					{
-						Variable->SetResolvedType(Context.Create<asCErrorType>());
-						Fail(Variable, TEXT("unresolved-type:") + Info.QualifiedName + TEXT(":") + Variable->GetTypeSpelling());
+						FString TypeReason;
+						if (ResolveSyntax(Syntax, Info.Scope, Type, &TypeReason) && Type.GetStableIdentity(Registry, TypeKey) == asETypeIdentityStatus::Succeeded)
+						{
+							Variable->SetResolvedType(Type.GetType());
+						}
+						else
+						{
+							Variable->SetResolvedType(Context.Create<asCErrorType>());
+							Fail(Variable, TEXT("unresolved-type:") + Info.QualifiedName + TEXT(":") + Variable->GetTypeSpelling(),
+								nullptr, TypeReason.IsEmpty() ? nullptr : &TypeReason);
+						}
 					}
 				}
 				if (!isa<asCAccessSpecifierDecl>(Named)) InternCoordinate(Named);
@@ -834,6 +853,11 @@ namespace
 		return {};
 	}
 
+	TConstArrayView<asCDecl*> asCCompilationSession::LookupInScope(const FString& Name, const asCDecl& Declaration) const
+	{
+		return LookupInBodyScope(Name, Declaration);
+	}
+
 	TConstArrayView<asCDecl*> asCCompilationSession::LookupInBodyScope(const FString& Name, const asCDecl& Declaration) const
 	{
 		TArray<FString> Parts;
@@ -855,6 +879,26 @@ namespace
 			if (ScopeName.FindLastChar(TEXT(':'), Separator)) ScopeName.LeftInline(FMath::Max(0, Separator - 1));
 			else ScopeName.Reset();
 		}
+	}
+
+	void asCCompilationSession::SubmitSemanticGroup(const asCSourceRange& Range, FStringView CatalogReason,
+		FStringView FragmentKey, TConstArrayView<asCSourceRange> RelatedRanges)
+	{
+		asUINT ID = asDiagnosticIdFromSemanticReason(CatalogReason);
+		if (ID == 0)
+		{
+			return;
+		}
+		asCDiagnosticFragment Fragment = Diagnostics.CreateFragment(FragmentKey);
+		asSDiagnosticGroup Group;
+		Group.Primary.DiagnosticID = ID;
+		Group.Primary.Severity = asEDiagnosticSeverity::Error;
+		Group.Primary.PrimaryRange = Range;
+		Group.Primary.bHasLocation = Range.IsOrdered() || Range.Begin.IsValid();
+		Group.Primary.Arguments.Add(asSDiagnosticArgument::FromText(CatalogReason));
+		for (const asCSourceRange& Related : RelatedRanges) Group.Primary.RelatedRanges.Add(Related);
+		Fragment.ReportGroup(MoveTemp(Group));
+		Diagnostics.Submit(MoveTemp(Fragment));
 	}
 
 	FString asCCompilationSession::SerializeStableProjection() const

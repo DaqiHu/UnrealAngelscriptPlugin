@@ -19,19 +19,21 @@ TEST_CLASS_WITH_FLAGS(DefinitionConsumer, "Angelscript.UnitTest.NativeEngine",
 private:
 	struct FInput
 	{
-		TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot = MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>();
-		AS_NAMESPACE_QUALIFIER asCSourceManager SourceManager{Snapshot};
-		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics{SourceManager};
+		TArray<TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>> SharedSources;
+		AS_NAMESPACE_QUALIFIER asCSourceManager SourceManager;
+		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics;
 		AS_NAMESPACE_QUALIFIER asCIdentifierTable Identifiers;
 		TUniquePtr<AS_NAMESPACE_QUALIFIER asCCompilationSession> Session;
 		bool Collected = false;
 		explicit FInput(const FString& Text, TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Context =
 			MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>())
+			: SharedSources(AngelscriptNativeEngineTest::MakeSourceList(TEXT("Definitions.as"), Text))
+			, SourceManager(SharedSources)
+			, Diagnostics(SourceManager)
 		{
-const auto Input = AngelscriptNativeEngineTest::FSourceInput::FromText(TEXT("Definitions.as"), Text);
-			const auto File = Snapshot->AddFile(TEXT("Definitions.as"), Input.GetUtf8Bytes());
-			Snapshot->Freeze();
-			Session = MakeUnique<asCCompilationSession>(Snapshot, Diagnostics, TEXT("definition-tests"), Context);
+			const auto Input = AngelscriptNativeEngineTest::FSourceInput::FromText(TEXT("Definitions.as"), Text);
+			const auto File = AS_NAMESPACE_QUALIFIER asCSourceFileID(1);
+			Session = MakeUnique<asCCompilationSession>(SourceManager, Diagnostics, TEXT("definition-tests"), Context);
 			AS_NAMESPACE_QUALIFIER asCTokenizer Tokenizer(SourceManager, SourceManager.MakeRange(File, 0, Input.GetUtf8Bytes().Num()),
 				asSLexOptions(asEUnicodeIdentifierPolicy::AsciiOnly, asETriviaMode::RetainTrivia), Identifiers, Diagnostics);
 			TArray<asCToken> Tokens;

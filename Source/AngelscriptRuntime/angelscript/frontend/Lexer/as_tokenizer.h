@@ -40,6 +40,8 @@ enum class asELexDiagnosticID : asUINT
 		bool IsValid() const { return Stream.IsValid(); }
 		bool Lex(asCToken& OutToken);
 		bool FlushDiagnostics();
+		bool HasErrors() const { return bHasErrors; }
+		asCDiagnostic Diag(const asCSourceRange& Range, asUINT ID);
 		asUINT GetCurrentByteOffset() const { return Stream.GetByteOffset(); }
 
 	private:
@@ -74,6 +76,7 @@ enum class asELexDiagnosticID : asUINT
 		bool bAtStartOfLine = true;
 		bool bHasLeadingSpace = false;
 		bool bDiagnosticsFlushed = false;
+		bool bHasErrors = false;
 	};
 
 END_AS_NAMESPACE

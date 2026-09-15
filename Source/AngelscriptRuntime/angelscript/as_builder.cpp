@@ -1,6 +1,7 @@
 /* Maintained Unreal AngelScript fork — detached staged compilation driver. */
 #include "as_builder.h"
 #include "as_module_definition_set.h"
+#include "Containers/Set.h"
 #include "as_namespace.h"
 #include "as_property.h"
 #include "frontend/AST/as_ast_projection.h"
@@ -9,22 +10,55 @@
 #include "as_bytecode_emitter.h"
 #include "as_scriptfunction.h"
 #include "frontend/Basic/as_identifier_table.h"
+#include "frontend/Lexer/as_frontend_options.h"
 #include "frontend/Lexer/as_preprocess_result.h"
 #include "frontend/Lexer/as_tokenizer.h"
+#include "Async/Async.h"
+#include "Async/Future.h"
 #include "Dom/JsonObject.h"
+#include "HAL/PlatformTLS.h"
+#include "Math/UnrealMathUtility.h"
+#include "Misc/Optional.h"
+#include "Misc/ScopeLock.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 
+#include <atomic>
+
 BEGIN_AS_NAMESPACE
+
+namespace
+{
+	asSBuilderOptions NormalizeBuilderOptions(asSBuilderOptions Options)
+	{
+		Options.WorkerCount = FMath::Max(1, Options.WorkerCount);
+		Options.LexBatchSize = FMath::Max(1, Options.LexBatchSize);
+		return Options;
+	}
+}
+
 class asCBuilderState
 	{
 	public:
-		asCBuilderState(TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot,
-			asCDiagnosticsEngine& InDiagnostics, const asSBuilderOptions& InOptions)
-			: Sources(Snapshot), Diagnostics(InDiagnostics), Options(InOptions), Configuration(Options.PreprocessorFlags),
-			  Preprocessor(Sources, Configuration, Diagnostics) { Results.Reserve(uint8(asEBuilderStage::Failed)); }
+		asCBuilderState(
+			asCSourceManager InSources,
+			const asSBuilderOptions& InOptions,
+			bool bValid,
+			FString AdmissionError)
+			: Sources(MoveTemp(InSources))
+			, OwnedDiagnostics(MakeUnique<asCDiagnosticsEngine>(Sources, InOptions.Diagnostics))
+			, Diagnostics(*OwnedDiagnostics)
+			, Options(NormalizeBuilderOptions(InOptions))
+			, Configuration(Options.PreprocessorFlags)
+			, Preprocessor(Sources, Configuration, Diagnostics)
+			, bPendingAdmissionValid(bValid)
+			, PendingAdmissionError(MoveTemp(AdmissionError))
+		{
+			Results.Reserve(uint8(asEBuilderStage::Failed));
+		}
 
 		asCSourceManager Sources;
+		TUniquePtr<asCDiagnosticsEngine> OwnedDiagnostics;
 		asCDiagnosticsEngine& Diagnostics;
 		const asSBuilderOptions Options;
 		asCPreprocessorConfiguration Configuration;
@@ -32,19 +66,43 @@ class asCBuilderState
 		asCIdentifierTable Identifiers;
 		TArray<asSSemanticSourceInput> Inputs;
 		TArray<asSDirectiveProcessResult> Preprocessed;
+		TArray<FString> PreprocessedKeys;
 		TUniquePtr<asCCompilationSession> Session;
 		TUniquePtr<asCModuleDefinitionSet> ModuleDefinitions;
 		TUniquePtr<asCCompileOutput> CompileOutput;
 		asEBuilderStage Stage = asEBuilderStage::SourceReady;
 		TArray<asSBuilderStageResult> Results;
+		TArray<asIBuilderCallbacks*> Callbacks;
+		bool bAdmissionPublished = false;
+		bool bPendingAdmissionValid = false;
+		FString PendingAdmissionError;
+#if WITH_ANGELSCRIPT_TESTS
+		TSet<FString> DebugForceLexFalseKeys;
+		TSet<FString> DebugForceAcquisitionFailKeys;
+		int32 DebugPeakWorkers = 0;
+		int32 DebugProcessInvocationCount = 0;
+		uint32 DebugLexCallerThreadId = 0;
+		TArray<FString> DebugProcessedKeys;
+		TArray<uint32> DebugWorkThreadIds;
+#endif
+
+		bool PublishAdmission()
+		{
+			if (bAdmissionPublished)
+			{
+				return Stage != asEBuilderStage::Failed;
+			}
+			bAdmissionPublished = true;
+			return Record(
+				asEBuilderStage::SourceReady,
+				bPendingAdmissionValid,
+				Options.StableScope,
+				bPendingAdmissionValid ? FString() : PendingAdmissionError);
+		}
 
 		bool HasErrors() const
 		{
-			asCCollectingDiagnosticConsumer Consumer;
-			Diagnostics.EmitTo(Consumer);
-			for (const auto& Record : Consumer.GetRecords())
-				if (Record.Severity == asEDiagnosticSeverity::Error) return true;
-			return false;
+			return Diagnostics.HasLanguageFailure();
 		}
 
 		FString TokenText(TConstArrayView<asCToken> Tokens) const
@@ -147,9 +205,9 @@ class asCBuilderState
 			return FString::Join(Lines, TEXT("\n"));
 		}
 
-		bool Record(asEBuilderStage Attempt, bool Success, FString Text, FString Error = {}, FString ASTJson = {}, TOptional<asEMetadataResult> MetadataStatus = {})
+		bool Record(asEBuilderStage Attempt, bool Success, FString Text, FString Error = {}, FString ASTJson = {}, TOptional<asEMetadataResult> MetadataStatus = {}, const asSByteCodeEmissionResult* Emission = nullptr)
 		{
-			if (!Success)
+			if (!Success && !Diagnostics.HasLanguageFailure())
 			{
 				auto Fragment = Diagnostics.CreateFragment(TEXT("builder-stage"));
 				asSDiagnosticRecord Diagnostic;
@@ -166,6 +224,11 @@ class asCBuilderState
 			Result.Error = MoveTemp(Error);
 			Result.Text = MoveTemp(Text);
 			Result.MetadataStatus = MetadataStatus;
+			Result.DiagnosticResult = Diagnostics.CaptureResult();
+			if (Emission)
+			{
+				asIngestByteCodeEmissionResult(Result, *Emission);
+			}
 			asCCollectingDiagnosticConsumer Consumer;
 			Diagnostics.EmitTo(Consumer);
 			Result.Diagnostics.Append(Consumer.GetRecords().GetData(), Consumer.GetRecords().Num());
@@ -192,11 +255,7 @@ class asCBuilderState
 		void RefreshCompileOutput()
 		{
 			if (!CompileOutput) CompileOutput = MakeUnique<asCCompileOutput>();
-			asCCollectingDiagnosticConsumer Consumer;
-			Diagnostics.EmitTo(Consumer);
-			TArray<asSDiagnosticRecord> Records;
-			Records.Append(Consumer.GetRecords().GetData(), Consumer.GetRecords().Num());
-			CompileOutput->ReplaceDiagnostics(MoveTemp(Records));
+			CompileOutput->ReplaceDiagnosticResult(Diagnostics.CaptureResult());
 			if (ModuleDefinitions)
 			{
 				TArray<TSharedRef<FAngelscriptModuleDesc>> Modules;
@@ -241,14 +300,295 @@ asCBuilder::asCBuilder(asCScriptEngine *_engine, asCModule *_module)
 
 asCBuilder::~asCBuilder() = default;
 
-asCBuilder::asCBuilder(TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot,
-	asCDiagnosticsEngine& Diagnostics, const asSBuilderOptions& Options)
+namespace
+{
+	struct asSLexFileProduct
+	{
+		FString Key;
+		asSSemanticSourceInput Input;
+		TOptional<asSDirectiveProcessResult> Preprocessed;
+		bool bHardFail = false;
+		uint32 ThreadId = 0;
+	};
+
+	struct asSLexWorkContext
+	{
+		asCBuilderState* State = nullptr;
+		FCriticalSection QueueLock;
+		TArray<asCSourceFileID> Remaining;
+		int32 BatchSize = 1;
+		std::atomic<int32> Active{0};
+		std::atomic<int32> Peak{0};
+		std::atomic<int32> ProcessCount{0};
+		FCriticalSection ObservationLock;
+		TArray<FString> ProcessedKeys;
+		TArray<uint32> WorkThreadIds;
+		TArray<TArray<asSLexFileProduct>> Locals;
+	};
+
+	void LexOneFile(asSLexWorkContext& Context, asCSourceFileID File, asSLexFileProduct& Out)
+	{
+		asCBuilderState& State = *Context.State;
+		Out.ThreadId = FPlatformTLS::GetCurrentThreadId();
+		FStringView KeyView;
+		TConstArrayView<uint8> Bytes;
+		if (!State.Sources.TryGetLogicalSourceKey(File, KeyView))
+		{
+			Out.bHardFail = true;
+			return;
+		}
+		Out.Key = FString(KeyView);
+		Out.Input.LogicalSourceKey = Out.Key;
+
+#if WITH_ANGELSCRIPT_TESTS
+		if (State.DebugForceAcquisitionFailKeys.Contains(Out.Key))
+		{
+			Out.bHardFail = true;
+			return;
+		}
+#endif
+		if (!State.Sources.TryGetBytes(File, Bytes))
+		{
+			Out.bHardFail = true;
+			return;
+		}
+
+#if WITH_ANGELSCRIPT_TESTS
+		if (State.DebugForceLexFalseKeys.Contains(Out.Key))
+		{
+			Out.bHardFail = true;
+			return;
+		}
+#endif
+
+		asCTokenizer Lexer(
+			State.Sources,
+			State.Sources.MakeRange(File, 0, Bytes.Num()),
+			asSLexOptions(asEUnicodeIdentifierPolicy::AsciiOnly, asETriviaMode::RetainTrivia),
+			State.Identifiers,
+			State.Diagnostics);
+		for (;;)
+		{
+			asCToken Token;
+			if (!Lexer.Lex(Token))
+			{
+				Out.bHardFail = true;
+				break;
+			}
+			Out.Input.RawTokens.Add(Token);
+			if (Token.Kind == asETokenKind::EndOfFile)
+			{
+				break;
+			}
+		}
+		Lexer.FlushDiagnostics();
+		if (Out.bHardFail || Lexer.HasErrors())
+		{
+			return;
+		}
+
+		asSDirectiveProcessResult Processed = State.Preprocessor.Process(Out.Input.RawTokens);
+		Context.ProcessCount.fetch_add(1, std::memory_order_relaxed);
+		{
+			FScopeLock Lock(&Context.ObservationLock);
+			Context.ProcessedKeys.Add(Out.Key);
+		}
+		Out.Preprocessed = MoveTemp(Processed);
+	}
+
+	void RunLexWorker(asSLexWorkContext& Context, int32 WorkerIndex)
+	{
+		for (;;)
+		{
+			TArray<asCSourceFileID> Batch;
+			{
+				FScopeLock Lock(&Context.QueueLock);
+				for (int32 Index = 0; Index < Context.BatchSize && Context.Remaining.Num() > 0; ++Index)
+				{
+					Batch.Add(Context.Remaining.Pop(EAllowShrinking::No));
+				}
+			}
+			if (Batch.IsEmpty())
+			{
+				break;
+			}
+
+			const int32 Now = Context.Active.fetch_add(1, std::memory_order_relaxed) + 1;
+			int32 Peak = Context.Peak.load(std::memory_order_relaxed);
+			while (Now > Peak
+				&& !Context.Peak.compare_exchange_weak(Peak, Now, std::memory_order_relaxed))
+			{
+			}
+
+			for (const asCSourceFileID File : Batch)
+			{
+				asSLexFileProduct Product;
+				LexOneFile(Context, File, Product);
+				{
+					FScopeLock Lock(&Context.ObservationLock);
+					Context.WorkThreadIds.Add(Product.ThreadId);
+				}
+				Context.Locals[WorkerIndex].Add(MoveTemp(Product));
+			}
+			Context.Active.fetch_sub(1, std::memory_order_relaxed);
+		}
+	}
+
+	bool RunLexWave(asCBuilderState& State)
+	{
+		State.Inputs.Reset();
+		State.Preprocessed.Reset();
+		State.PreprocessedKeys.Reset();
+
+		const int32 WorkerCount = FMath::Max(1, State.Options.WorkerCount);
+		const int32 BatchSize = FMath::Max(1, State.Options.LexBatchSize);
+		const asUINT FileCount = State.Sources.GetFileCount();
+#if WITH_ANGELSCRIPT_TESTS
+		State.DebugLexCallerThreadId = FPlatformTLS::GetCurrentThreadId();
+		State.DebugPeakWorkers = 0;
+		State.DebugProcessInvocationCount = 0;
+		State.DebugProcessedKeys.Reset();
+		State.DebugWorkThreadIds.Reset();
+#endif
+		if (FileCount == 0)
+		{
+			return !State.HasErrors();
+		}
+
+		asSLexWorkContext Context;
+		Context.State = &State;
+		Context.BatchSize = BatchSize;
+		Context.Locals.SetNum(WorkerCount);
+		for (asUINT Index = 1; Index <= FileCount; ++Index)
+		{
+			Context.Remaining.Add(asCSourceFileID(Index));
+		}
+
+		if (WorkerCount == 1)
+		{
+			RunLexWorker(Context, 0);
+		}
+		else
+		{
+			TArray<TFuture<void>> Workers;
+			Workers.Reserve(WorkerCount);
+			for (int32 Index = 0; Index < WorkerCount; ++Index)
+			{
+				Workers.Add(Async(EAsyncExecution::Thread, [&Context, Index]()
+				{
+					RunLexWorker(Context, Index);
+				}));
+			}
+			for (TFuture<void>& Worker : Workers)
+			{
+				Worker.Wait();
+			}
+		}
+
+		TArray<asSLexFileProduct> Joined;
+		for (TArray<asSLexFileProduct>& Local : Context.Locals)
+		{
+			Joined.Append(MoveTemp(Local));
+		}
+		Joined.Sort([](const asSLexFileProduct& Left, const asSLexFileProduct& Right)
+		{
+			return Left.Key < Right.Key;
+		});
+
+		bool Success = true;
+		for (asSLexFileProduct& Product : Joined)
+		{
+			Success &= !Product.bHardFail;
+			State.Inputs.Add(MoveTemp(Product.Input));
+			if (Product.Preprocessed.IsSet())
+			{
+				Success &= Product.Preprocessed->IsValid();
+				State.PreprocessedKeys.Add(Product.Key);
+				State.Preprocessed.Add(MoveTemp(*Product.Preprocessed));
+			}
+		}
+		Success &= !State.HasErrors();
+
+#if WITH_ANGELSCRIPT_TESTS
+		State.DebugPeakWorkers = Context.Peak.load(std::memory_order_relaxed);
+		State.DebugProcessInvocationCount = Context.ProcessCount.load(std::memory_order_relaxed);
+		State.DebugProcessedKeys = MoveTemp(Context.ProcessedKeys);
+		State.DebugWorkThreadIds = MoveTemp(Context.WorkThreadIds);
+#endif
+		return Success;
+	}
+
+	FString ValidateSharedBuilderInput(
+		TConstArrayView<TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>> Sources,
+		const asSBuilderOptions& Options)
+	{
+		if (Sources.Num() == 0)
+		{
+			return TEXT("empty-source-batch");
+		}
+		if (Options.StableScope.IsEmpty())
+		{
+			return TEXT("empty-stable-scope");
+		}
+		TArray<FString> Paths;
+		for (const TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>& Source : Sources)
+		{
+			if (!Source->bHasSourceText)
+			{
+				return TEXT("unprepared-source");
+			}
+			const FString Path(Source->GetPath());
+			if (Path.IsEmpty())
+			{
+				return TEXT("empty-logical-path");
+			}
+			asUINT Length = 0;
+			if (!asTryConvertSourceByteLength(static_cast<uint64>(Source->GetSourceText().Len()), Length))
+			{
+				return TEXT("source-length-overflow");
+			}
+			for (const FString& Existing : Paths)
+			{
+				if (FStringView(Existing).Equals(Path, ESearchCase::CaseSensitive))
+				{
+					return TEXT("duplicate-logical-path");
+				}
+			}
+			Paths.Add(Path);
+		}
+		return {};
+	}
+}
+
+asCBuilder::asCBuilder(
+	TConstArrayView<TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>> Sources,
+	const asSBuilderOptions& Options,
+	TConstArrayView<asIBuilderCallbacks*> Callbacks)
 	: asCBuilder(nullptr, nullptr)
 {
-frontendState = std::make_shared<asCBuilderState>(Snapshot, Diagnostics, Options);
-	const bool Valid = Snapshot->IsFrozen() && Snapshot->GetFileCount() > 0 && !Options.StableScope.IsEmpty() && Options.WorkerCount > 0
-		&& Diagnostics.CreateFragment(TEXT("builder-input")).GetSnapshotID() == Snapshot->GetSnapshotID();
-	frontendState->Record(asEBuilderStage::SourceReady, Valid, Options.StableScope, Valid ? FString{} : TEXT("invalid-builder-input"));
+	const FString AdmissionError = ValidateSharedBuilderInput(Sources, Options);
+	const bool bValid = AdmissionError.IsEmpty();
+	asCSourceManager Manager;
+	if (bValid)
+	{
+		Manager = asCSourceManager(Sources);
+		if (!Manager.IsReady())
+		{
+			frontendState = std::make_shared<asCBuilderState>(
+				asCSourceManager(),
+				Options,
+				false,
+				TEXT("invalid-builder-input"));
+			frontendState->Callbacks.Append(Callbacks.GetData(), Callbacks.Num());
+			return;
+		}
+	}
+	frontendState = std::make_shared<asCBuilderState>(
+		MoveTemp(Manager),
+		Options,
+		bValid,
+		AdmissionError);
+	frontendState->Callbacks.Append(Callbacks.GetData(), Callbacks.Num());
 }
 
 asEBuilderStage asCBuilder::GetStage() const
@@ -263,7 +603,17 @@ const asSBuilderStageResult* asCBuilder::GetStageResult(asEBuilderStage Stage) c
 	return nullptr;
 }
 
+const asCSourceManager* asCBuilder::GetSourceManager() const
+{
+	return frontendState ? &frontendState->Sources : nullptr;
+}
+
 const asCCompilationSession* asCBuilder::GetCompilationSession() const
+{
+	return frontendState ? frontendState->Session.Get() : nullptr;
+}
+
+asCCompilationSession* asCBuilder::GetCompilationSession()
 {
 	return frontendState ? frontendState->Session.Get() : nullptr;
 }
@@ -271,6 +621,15 @@ const asCCompilationSession* asCBuilder::GetCompilationSession() const
 TConstArrayView<asSDirectiveProcessResult> asCBuilder::GetPreprocessedSources() const
 {
 	return frontendState ? MakeArrayView(frontendState->Preprocessed) : TConstArrayView<asSDirectiveProcessResult>{};
+}
+
+TSharedRef<const asCDiagnosticResult, ESPMode::ThreadSafe> asCBuilder::CaptureDiagnosticResult() const
+{
+	if (frontendState)
+	{
+		return frontendState->Diagnostics.CaptureResult();
+	}
+	return MakeShared<asCDiagnosticResult, ESPMode::ThreadSafe>();
 }
 
 TConstArrayView<asSSemanticSourceInput> asCBuilder::GetLexedSources() const
@@ -303,57 +662,100 @@ TUniquePtr<asCCompileOutput> asCBuilder::TakeCompileOutput()
 	return frontendState ? MoveTemp(frontendState->CompileOutput) : nullptr;
 }
 
+#if WITH_ANGELSCRIPT_TESTS
+namespace
+{
+	int32 GDebugDeclarationsResolvedEntries = 0;
+}
+
+void asCBuilder::DebugResetDeclarationsResolvedEntries()
+{
+	GDebugDeclarationsResolvedEntries = 0;
+}
+
+int32 asCBuilder::DebugGetDeclarationsResolvedEntries()
+{
+	return GDebugDeclarationsResolvedEntries;
+}
+
+void asCBuilder::DebugForceLexFalse(const FString& LogicalSourceKey)
+{
+	if (frontendState)
+	{
+		frontendState->DebugForceLexFalseKeys.Add(LogicalSourceKey);
+	}
+}
+
+void asCBuilder::DebugForceAcquisitionFailure(const FString& LogicalSourceKey)
+{
+	if (frontendState)
+	{
+		frontendState->DebugForceAcquisitionFailKeys.Add(LogicalSourceKey);
+	}
+}
+
+int32 asCBuilder::DebugGetPeakWorkers() const
+{
+	return frontendState ? frontendState->DebugPeakWorkers : 0;
+}
+
+int32 asCBuilder::DebugGetProcessInvocationCount() const
+{
+	return frontendState ? frontendState->DebugProcessInvocationCount : 0;
+}
+
+uint32 asCBuilder::DebugGetLexCallerThreadId() const
+{
+	return frontendState ? frontendState->DebugLexCallerThreadId : 0;
+}
+
+TArray<FString> asCBuilder::DebugGetProcessedLogicalKeys() const
+{
+	return frontendState ? frontendState->DebugProcessedKeys : TArray<FString>{};
+}
+
+TArray<uint32> asCBuilder::DebugGetWorkThreadIds() const
+{
+	return frontendState ? frontendState->DebugWorkThreadIds : TArray<uint32>{};
+}
+#endif
+
 bool asCBuilder::RunThrough(asEBuilderStage Target)
 {
-if (!frontendState || GetStage() == asEBuilderStage::Failed || Target >= asEBuilderStage::Failed || Target < GetStage()) return false;
+	if (!frontendState || !frontendState->PublishAdmission()) return false;
+	if (GetStage() == asEBuilderStage::Failed || Target >= asEBuilderStage::Failed || Target < GetStage()) return false;
 	while (GetStage() < Target) if (!RunStage(static_cast<asEBuilderStage>(uint8(GetStage()) + 1))) return false;
 	return true;
 }
 
 bool asCBuilder::RunStage(asEBuilderStage Target)
 {
-if (!frontendState || Target >= asEBuilderStage::Failed || uint8(Target) != uint8(GetStage()) + 1) return false;
+	if (!frontendState || !frontendState->PublishAdmission()) return false;
+	if (Target >= asEBuilderStage::Failed || uint8(Target) != uint8(GetStage()) + 1) return false;
 	asCBuilderState& State = *frontendState;
 	bool Success = true;
 	FString Text, Error, ASTJson;
 	TOptional<asEMetadataResult> MetadataStatus;
+	asSByteCodeEmissionResult Emitted;
+	const asSByteCodeEmissionResult* Emission = nullptr;
 	switch (Target)
 	{
 	case asEBuilderStage::Lexed:
-		for (asUINT Index = 1; Index <= State.Sources.GetSnapshot()->GetFileCount(); ++Index)
-		{
-			const asCSourceFileID File{Index};
-			FStringView Key;
-			TConstArrayView<uint8> Bytes;
-			if (!State.Sources.GetSnapshot()->TryGetLogicalSourceKey(File, Key) || !State.Sources.GetSnapshot()->TryGetBytes(File, Bytes)) { Success = false; break; }
-			asSSemanticSourceInput& Input = State.Inputs.AddDefaulted_GetRef();
-			Input.LogicalSourceKey = FString(Key);
-			asCTokenizer Lexer(State.Sources, State.Sources.MakeRange(File, 0, Bytes.Num()),
-				asSLexOptions(asEUnicodeIdentifierPolicy::AsciiOnly, asETriviaMode::RetainTrivia), State.Identifiers, State.Diagnostics);
-			for (;;)
-			{
-				asCToken Token;
-				if (!Lexer.Lex(Token)) { Success = false; break; }
-				Input.RawTokens.Add(Token);
-				if (Token.Kind == asETokenKind::EndOfFile) break;
-			}
-			Lexer.FlushDiagnostics();
-		}
-		State.Inputs.Sort([](const auto& A, const auto& B) { return A.LogicalSourceKey < B.LogicalSourceKey; });
+		Success = RunLexWave(State);
 		for (const auto& Input : State.Inputs) Text += Input.LogicalSourceKey + TEXT("\n") + State.TokenText(Input.RawTokens);
-		Success &= !State.HasErrors();
 		break;
 	case asEBuilderStage::Preprocessed:
-		for (const auto& Input : State.Inputs)
+		for (int32 Index = 0; Index < State.Preprocessed.Num(); ++Index)
 		{
-			auto Processed = State.Preprocessor.Process(Input.RawTokens);
-			Success &= Processed.IsValid();
-			Text += Input.LogicalSourceKey + TEXT("\n") + State.TokenText(Processed.ActiveTokens);
-			State.Preprocessed.Add(MoveTemp(Processed));
+			Success &= State.Preprocessed[Index].IsValid();
+			const FString& Key = State.PreprocessedKeys.IsValidIndex(Index)
+				? State.PreprocessedKeys[Index]
+				: FString();
+			Text += Key + TEXT("\n") + State.TokenText(State.Preprocessed[Index].ActiveTokens);
 		}
 		break;
 	case asEBuilderStage::DeclarationsCollected:
-		State.Session = MakeUnique<asCCompilationSession>(State.Sources.GetSnapshot(), State.Diagnostics, State.Options.StableScope,
+		State.Session = MakeUnique<asCCompilationSession>(State.Sources, State.Diagnostics, State.Options.StableScope,
 			State.Options.TypeContext.IsValid() ? State.Options.TypeContext.ToSharedRef() : MakeShared<asCTypeContext, ESPMode::ThreadSafe>());
 		{
 			const TArray<asCModuleDefinitionSet*> External = State.CollectExternalSets(Success);
@@ -367,11 +769,17 @@ if (!frontendState || Target >= asEBuilderStage::Failed || uint8(Target) != uint
 			}
 		}
 		for (int32 Index = 0; Index < State.Preprocessed.Num(); ++Index)
-			Success &= State.Session->CollectSource(State.Preprocessor, State.Preprocessed[Index], State.Inputs[Index].LogicalSourceKey);
+			Success &= State.Session->CollectSource(
+				State.Preprocessor,
+				State.Preprocessed[Index],
+				State.PreprocessedKeys.IsValidIndex(Index) ? State.PreprocessedKeys[Index] : FString());
 		Success &= State.Session->CloseDeclarationBarrier();
 		for (const auto& Input : State.Inputs) Text += Input.LogicalSourceKey + TEXT("\n");
 		break;
 	case asEBuilderStage::DeclarationsResolved:
+#if WITH_ANGELSCRIPT_TESTS
+		++GDebugDeclarationsResolvedEntries;
+#endif
 		Success = State.Session->ResolveDeclarations(State.Options.WorkerCount);
 		Text = State.Session->SerializeStableProjection();
 		Error = State.Session->SerializeStableDiagnostics();
@@ -439,7 +847,8 @@ if (!frontendState || Target >= asEBuilderStage::Failed || uint8(Target) != uint
 		break;
 	case asEBuilderStage::ByteCodeEmitted:
 		{
-			const asSByteCodeEmissionResult Emitted = asCByteCodeEmitter::Emit(*this);
+			Emitted = asCByteCodeEmitter::Emit(*this);
+			Emission = &Emitted;
 			Success = Emitted.EmissionStatus == asEByteCodeEmissionStatus::Succeeded;
 			if (!Success) Error = Emitted.Failure.StableFragmentKey.IsEmpty() ? TEXT("bytecode-emit-failed") : Emitted.Failure.StableFragmentKey;
 		}
@@ -447,7 +856,14 @@ if (!frontendState || Target >= asEBuilderStage::Failed || uint8(Target) != uint
 	default: return false;
 	}
 	if (!Success && Error.IsEmpty()) Error = FString::Printf(TEXT("stage-%u-failed"), uint8(Target));
-	return State.Record(Target, Success, MoveTemp(Text), MoveTemp(Error), MoveTemp(ASTJson), MetadataStatus);
+	return State.Record(Target, Success, MoveTemp(Text), MoveTemp(Error), MoveTemp(ASTJson), MetadataStatus, Emission);
+}
+
+void asIngestByteCodeEmissionResult(asSBuilderStageResult& Stage, const asSByteCodeEmissionResult& Emitted)
+{
+	Stage.bHasEmission = true;
+	Stage.EmissionStatus = Emitted.EmissionStatus;
+	Stage.EmissionFailure = Emitted.Failure;
 }
 
 	FAngelscriptPreprocessResult asCBuilder::CompileDeclarations(
@@ -501,7 +917,7 @@ asCDiagnosticsEngine* Diagnostics = &InDiagnostics;
 			return Fail(TEXT("invalid-semantic-input"));
 		}
 
-		Result.SemanticSession = MakeShared<asCCompilationSession>(SourceManager.GetSnapshot(), *Diagnostics, MoveTemp(StableScope));
+		Result.SemanticSession = MakeShared<asCCompilationSession>(SourceManager, *Diagnostics, MoveTemp(StableScope));
 		TSet<FString> LogicalSourceKeys;
 		bool bCollected = true;
 		for (const asSSemanticSourceInput& Source : Sources)

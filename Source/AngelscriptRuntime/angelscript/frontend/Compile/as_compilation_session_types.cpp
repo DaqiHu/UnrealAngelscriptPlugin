@@ -105,50 +105,74 @@ bool asCCompilationSession::AddExternalDefinitions(asCModuleDefinitionSet* Set)
 	}
 
 	asCQualType asCCompilationSession::ResolveStructuredType(const asSTypeSyntax& Syntax,
-		const TFunction<asCType*(const FString&, bool)>& LookupType, int32 Depth)
+		const TFunction<asCType*(const FString&, bool)>& LookupType, int32 Depth, FString* OutReason)
 	{
-		if (Depth > 64 || !Syntax.IsValid()) return {};
+		auto Fail = [&](const TCHAR* Reason) -> asCQualType
+		{
+			if (OutReason && OutReason->IsEmpty()) *OutReason = Reason;
+			return {};
+		};
+		if (Depth > 64 || !Syntax.IsValid()) return Fail(TEXT("unresolved-type"));
 		asCType* Type = LookupType(Syntax.GetQualifiedName(), Syntax.bGlobal);
-		if (!Type) return {};
+		if (!Type) return Fail(TEXT("unresolved-type"));
 		auto& Registry = Context.GetTypeContext()->GetIdentityRegistry();
 		TArray<asCQualType> Arguments;
 		for (const auto& Argument : Syntax.GenericArguments)
 		{
-			auto Resolved = ResolveStructuredType(Argument, LookupType, Depth + 1);
-			if (!Resolved.IsValid()) return {};
-			if (const auto* Builtin = dyn_cast<asCBuiltinType>(Resolved.GetType()); Builtin && Builtin->GetPrimitive() == asEPrimitiveType::Void) return {};
+			auto Resolved = ResolveStructuredType(Argument, LookupType, Depth + 1, OutReason);
+			if (!Resolved.IsValid()) return Fail(TEXT("unresolved-type"));
+			if (const auto* Builtin = dyn_cast<asCBuiltinType>(Resolved.GetType()); Builtin && Builtin->GetPrimitive() == asEPrimitiveType::Void)
+				return Fail(TEXT("invalid-qualifier"));
 			Arguments.Add(Resolved);
 		}
 		auto Instantiate = [&](asCType* Template, TArray<asCQualType> ActualArguments) -> asCType*
 		{
 			const auto* Nominal = dyn_cast<asCNominalType>(Template);
 			asSNominalTypeDescriptor Decl;
-			if (!Nominal || Registry.ResolveNominalType(Nominal->GetDeclarationIdentity(), Decl) != asETypeIdentityStatus::Succeeded ||
-				Decl.GenericArity != asUINT(ActualArguments.Num())) return nullptr;
+			if (!Nominal || Registry.ResolveNominalType(Nominal->GetDeclarationIdentity(), Decl) != asETypeIdentityStatus::Succeeded)
+			{
+				if (OutReason && OutReason->IsEmpty()) *OutReason = TEXT("unresolved-type");
+				return nullptr;
+			}
+			if (Decl.GenericArity != asUINT(ActualArguments.Num()))
+			{
+				if (OutReason && OutReason->IsEmpty()) *OutReason = TEXT("generic-arity");
+				return nullptr;
+			}
 			asSStableTypeUseDescriptor Use;
 			Use.Kind = asETypeUseKind::Nominal; Use.Declaration = Nominal->GetDeclarationIdentity();
 			for (const auto& Argument : ActualArguments)
 			{
 				asSStableKey Key;
-				if (Argument.GetStableIdentity(Registry, Key) != asETypeIdentityStatus::Succeeded) return nullptr;
+				if (Argument.GetStableIdentity(Registry, Key) != asETypeIdentityStatus::Succeeded)
+				{
+					if (OutReason && OutReason->IsEmpty()) *OutReason = TEXT("unresolved-type");
+					return nullptr;
+				}
 				Use.Arguments.Add(Key);
 			}
 			asSStableKey Key;
-			if (Registry.InternTypeUse(Use, Key) != asETypeIdentityStatus::Succeeded) return nullptr;
+			if (Registry.InternTypeUse(Use, Key) != asETypeIdentityStatus::Succeeded)
+			{
+				if (OutReason && OutReason->IsEmpty()) *OutReason = TEXT("unresolved-type");
+				return nullptr;
+			}
 			return Context.GetGenericType(Template, MoveTemp(ActualArguments), Key);
 		};
 		if (!Arguments.IsEmpty()) Type = Instantiate(Type, MoveTemp(Arguments));
 		else if (const auto* Nominal = dyn_cast<asCNominalType>(Type))
 		{
 			asSNominalTypeDescriptor Decl;
-			if (Registry.ResolveNominalType(Nominal->GetDeclarationIdentity(), Decl) != asETypeIdentityStatus::Succeeded || Decl.GenericArity) return {};
+			if (Registry.ResolveNominalType(Nominal->GetDeclarationIdentity(), Decl) != asETypeIdentityStatus::Succeeded)
+				return Fail(TEXT("unresolved-type"));
+			if (Decl.GenericArity) return Fail(TEXT("generic-arity"));
 		}
 		if (!Type) return {};
 		for (const auto& Dimension : Syntax.ArrayDimensions)
 		{
-			if (!Dimension.IsOrdered()) return {};
+			if (!Dimension.IsOrdered()) return Fail(TEXT("unresolved-type"));
 			asCQualType Element;
-			if (!asCQualType::TryCreate(Type, asETypeQualifiers::None, Element)) return {};
+			if (!asCQualType::TryCreate(Type, asETypeQualifiers::None, Element)) return Fail(TEXT("invalid-qualifier"));
 			asCType* Template = LookupType(Context.GetTypeContext()->GetOptions().ArrayTemplateTypeName, false);
 			Type = Instantiate(Template, {Element});
 			if (!Type) return {};
@@ -158,9 +182,10 @@ bool asCCompilationSession::AddExternalDefinitions(asCModuleDefinitionSet* Set)
 		if (Syntax.bHandle) Qualifiers = Qualifiers | asETypeQualifiers::Handle;
 		if (Syntax.Reference != asETypeReferenceDirection::None) Qualifiers = Qualifiers | asETypeQualifiers::Reference;
 		if (const auto* Builtin = dyn_cast<asCBuiltinType>(Type))
-			if (Syntax.bHandle || (Builtin->GetPrimitive() == asEPrimitiveType::Void && Qualifiers != asETypeQualifiers::None)) return {};
+			if (Syntax.bHandle || (Builtin->GetPrimitive() == asEPrimitiveType::Void && Qualifiers != asETypeQualifiers::None))
+				return Fail(TEXT("invalid-qualifier"));
 		asCQualType Result;
-		asCQualType::TryCreate(Type, Qualifiers, Result);
+		if (!asCQualType::TryCreate(Type, Qualifiers, Result)) return Fail(TEXT("invalid-qualifier"));
 		return Result;
 	}
 

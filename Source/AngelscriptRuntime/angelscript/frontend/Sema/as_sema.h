@@ -11,6 +11,7 @@
 #include "frontend/Lexer/as_preprocessor.h"
 #include "frontend/Sema/as_list_initializer.h"
 #include "frontend/Sema/as_external_semantics.h"
+#include "frontend/Sema/as_call_assessment.h"
 
 #include "Templates/Function.h"
 
@@ -131,9 +132,40 @@ using asFBodyNameLookup = TFunction<TConstArrayView<asCDecl*>(const FString&)>;
 		void PopControlTarget();
 		asCRecoveryExpr* ActOnRecoveryExpression(asCSourceRange Range, FString Message);
 		asCRecoveryStmt* ActOnRecoveryStatement(asCSourceRange Range, FString Message);
+		void ReportSyntax(const asCSourceRange& Range, FString Message, asUINT DiagnosticID);
 		void PushContext(asCDeclContext* InContext) { ContextStack.Add(InContext); }
 		void PopContext() { if (!ContextStack.IsEmpty()) ContextStack.Pop(); }
 		asCASTContext& GetASTContext() const { return Context; }
+		asCDiagnostic Diag(const asCSourceRange& Range, asUINT ID);
+		asSCallAssessment AssessCall(const asSCallAssessmentRequest& Request) const;
+		bool CanAccessMember(const asCDecl* Member) const;
+		void SetAccessCaller(asCFunctionDecl* Function, asFNominalDeclLookup Lookup = {})
+		{
+			AccessCaller = Function;
+			if (Lookup)
+			{
+				NominalDeclLookup = MoveTemp(Lookup);
+			}
+			else if (!Function && !CurrentBody)
+			{
+				NominalDeclLookup = {};
+			}
+		}
+		void NoteIncompleteMember(asCExpr* Base);
+		void NoteIncompleteCall(FString Name, TArray<asSParsedCallArgument> Arguments);
+		void NoteIncompleteInitList();
+		void NoteLiveCursorScope();
+		void NoteExpectedReturnType();
+		void CollectVisibleLocalSymbols(TArray<FString>& OutNames, TArray<FString>& OutTypeNames) const;
+		asCExpr* GetIncompleteMemberBase() const { return IncompleteMemberBase; }
+		const FString& GetIncompleteCallName() const { return IncompleteCallName; }
+		const FString& GetExpectedTypeName() const { return ExpectedTypeName; }
+		bool IsIncompleteArgumentInitList() const { return bIncompleteArgumentIsInitList; }
+		TConstArrayView<asSParsedCallArgument> GetIncompleteCallArguments() const
+		{
+			return MakeArrayView(IncompleteCallArguments);
+		}
+		int32 GetIncompleteCallArgumentCount() const { return IncompleteCallArguments.Num(); }
 
 	private:
 		bool Attach(asCDecl* Decl, TConstArrayView<asCAttr*> Attrs);
@@ -143,6 +175,7 @@ using asFBodyNameLookup = TFunction<TConstArrayView<asCDecl*>(const FString&)>;
 		asCExpr* ConvertInitList(asCInitListExpr& List, asCQualType Target);
 		void ReportBodyError(const asCSourceRange& Range, FString Message);
 		void ReportBodyWarning(const asCSourceRange& Range, FString Message);
+		void AttachTypoSuggestions(asSDiagnosticGroup& Group, const asCSourceRange& Range, const FString& Written);
 		asCExpr* ConvertTo(asCExpr* Value, asCType* Type);
 		asCExpr* ConvertTo(asCExpr* Value, asCQualType Type);
 		asCRecordDecl* ResolveRecord(const asCType* Type) const;
@@ -151,11 +184,13 @@ using asFBodyNameLookup = TFunction<TConstArrayView<asCDecl*>(const FString&)>;
 		bool IsEditDefaultsContext() const;
 		bool IsConstructionContext() const;
 		bool CheckCallContext(const asCFunctionDecl& Function, const asCSourceRange& Range);
-		bool CanAccessMember(const asCDecl* Member) const;
 		asCFunctionDecl* SelectUserConversion(asCExpr* Value, asCQualType Target, bool bExplicit, bool& bAmbiguous) const;
 		asCExpr* ConvertUserDefined(asCExpr* Value, asCQualType Target, bool bExplicit);
 		asCExpr* TryActOnMixinCall(asCExpr* Base, const FString& Name, TConstArrayView<asSParsedCallArgument> Arguments, asCSourceRange Range);
 		void LookupMembers(asCRecordDecl* Record, const FString& Name, TArray<asCDecl*>& Out, int32 Depth = 0) const;
+		asSCandidateAssessment AssessScriptCandidate(asCFunctionDecl* Candidate, const asSCallAssessmentRequest& Request) const;
+		asSCandidateAssessment AssessHostCandidate(const asSExternalCallable& Candidate, const asSCallAssessmentRequest& Request) const;
+		asSCandidateAssessment AssessIndirectCandidate(asCFunctionType* Signature, const asSCallAssessmentRequest& Request) const;
 		asCFunctionDecl* ResolveCall(TConstArrayView<asCDecl*> Candidates, TConstArrayView<asSParsedCallArgument> Arguments,
 			TArray<asCExpr*>& OutArguments, TArray<int32>& OutOrdinals, asCSourceRange Range,
 			bool bPreferNonConstOnTie = false);
@@ -189,6 +224,14 @@ using asFBodyNameLookup = TFunction<TConstArrayView<asCDecl*>(const FString&)>;
 		};
 		TArray<asSControlTarget> ControlTargets;
 		int32 NextLocalOrdinal = 0;
+		asCFunctionDecl* AccessCaller = nullptr;
+		asCExpr* IncompleteMemberBase = nullptr;
+		FString IncompleteCallName;
+		TArray<asSParsedCallArgument> IncompleteCallArguments;
+		FString ExpectedTypeName;
+		bool bIncompleteArgumentIsInitList = false;
+		bool bLiveCursorScopeNoted = false;
+		TArray<TMap<FString, asCVarDecl*>> LiveCursorScopes;
 	};
 
 END_AS_NAMESPACE

@@ -18,6 +18,7 @@ enum class asEDeclarationDiagnostic : asUINT
 	{
 	public:
 		explicit asCParser(asCSema& InSema) : Sema(InSema) {}
+		asCDiagnostic Diag(const asCSourceRange& Range, asUINT ID);
 		bool Collect(const asSDirectiveProcessResult& Input, asCDeclarationFragment& Fragment);
 		bool ParseBody(const asSDirectiveProcessResult& Input, asCBodyFragment& Fragment);
 		bool ParseInitializer(const asSDirectiveProcessResult& Input, asCVarDecl& Declaration);
@@ -62,7 +63,7 @@ enum class asEDeclarationDiagnostic : asUINT
 
 		asCSema& Sema;
 		TArray<asCToken> Tokens;
-		TSharedPtr<asCSourceSnapshot, ESPMode::ThreadSafe> SourceSnapshot;
+		asCSourceManager Sources;
 		int32 Cursor = 0;
 	};
 

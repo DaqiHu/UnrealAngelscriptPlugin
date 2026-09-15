@@ -22,8 +22,8 @@ enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, Decl
 	class ANGELSCRIPTRUNTIME_API asCCompilationSession
 	{
 	public:
-		asCCompilationSession(TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot, asCDiagnosticsEngine& Diagnostics, FString StableScope);
-		asCCompilationSession(TSharedRef<asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot, asCDiagnosticsEngine& Diagnostics,
+		asCCompilationSession(asCSourceManager Sources, asCDiagnosticsEngine& Diagnostics, FString StableScope);
+		asCCompilationSession(asCSourceManager Sources, asCDiagnosticsEngine& Diagnostics,
 			FString StableScope, TSharedRef<asCTypeContext, ESPMode::ThreadSafe> TypeContext);
 		bool CollectSource(asCPreprocessor& Preprocessor, const asSDirectiveProcessResult& Input, FString LogicalSourceKey);
 		bool AddExternalDefinitions(asCModuleDefinitionSet* Set);
@@ -42,6 +42,8 @@ enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, Decl
 		TConstArrayView<asCDeclarationFragment> GetFragments() const { return MakeArrayView(Fragments); }
 		asCTranslationUnitDecl* GetTranslationUnit() const { return TranslationUnit; }
 		TConstArrayView<asCDecl*> Lookup(const FString& Name) const;
+		TConstArrayView<asCDecl*> LookupInScope(const FString& Name, const asCDecl& Declaration) const;
+		TConstArrayView<asSExternalCallable> FindExternalCallables(const FString& Name) const;
 		TConstArrayView<asCBodyFragment> GetBodyFragments() const { return MakeArrayView(BodyFragments); }
 		FString SerializeStableProjection() const;
 		FString SerializeStableBodyProjection() const;
@@ -69,7 +71,10 @@ enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, Decl
 		asSDirectiveProcessResult GetRetainedBodyInput(const asCSourceRange& Range) const;
 		TConstArrayView<asCDecl*> LookupInBodyScope(const FString& Name, const asCDecl& Declaration) const;
 		asCQualType ResolveStructuredType(const asSTypeSyntax& Syntax,
-			const TFunction<asCType*(const FString&, bool)>& LookupType, int32 Depth = 0);
+			const TFunction<asCType*(const FString&, bool)>& LookupType, int32 Depth = 0,
+			FString* OutReason = nullptr);
+		void SubmitSemanticGroup(const asCSourceRange& Range, FStringView CatalogReason, FStringView FragmentKey,
+			TConstArrayView<asCSourceRange> RelatedRanges = {});
 
 		asECompilationPhase Phase = asECompilationPhase::Collecting;
 		asCASTContext Context;
@@ -89,7 +94,6 @@ enum class asECompilationPhase : uint8 { Collecting, DeclarationsCollected, Decl
 		TMap<FString, asCType*> ExternalTypes;
 		TArray<asCModuleDefinitionSet*> ExternalDefinitions;
 		TMap<FString, TArray<asSExternalCallable>> ExternalCallables;
-		TConstArrayView<asSExternalCallable> FindExternalCallables(const FString& Name) const;
 		TArray<FString> StableProjection;
 		TArray<FString> StableDiagnostics;
 		TArray<FString> StableBodyProjection;

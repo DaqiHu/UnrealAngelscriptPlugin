@@ -20,15 +20,11 @@ namespace AngelscriptBuilderStageTests
 	private:
 		struct FInput
 		{
-			TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot = MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>();
-			AS_NAMESPACE_QUALIFIER asCSourceManager Sources{Snapshot};
-			AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics{Sources};
+			TArray<TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>> Sources;
 			AS_NAMESPACE_QUALIFIER asSBuilderOptions Options;
 			explicit FInput(const FString& Source, int32 Workers = 1)
 			{
-				const auto Input = AngelscriptNativeEngineTest::FSourceInput::FromText(TEXT("Main.as"), Source);
-				Snapshot->AddFile(TEXT("Main.as"), Input.GetUtf8Bytes());
-				Snapshot->Freeze();
+				Sources = AngelscriptNativeEngineTest::MakeSourceList(TEXT("Main.as"), Source);
 				Options.StableScope = TEXT("builder.tests");
 				Options.WorkerCount = Workers;
 			}
@@ -56,7 +52,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(ExplicitGlobalBaseNameDoesNotBindANamespacedShadow)
 		{
 			FInput Input(TEXT("class Base {} namespace N { class Base {} class Derived : ::Base {} }"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough()));
 			const asCObjectType* Derived = nullptr;
 			for (const auto* Type : Builder.GetModuleDefinitionSet()->GetTypes()) if (Type->name == "Derived") Derived = static_cast<const asCObjectType*>(Type);
@@ -67,7 +63,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(ClassDefaultStatementsShareOneActualLexicalBodyScope)
 		{
 			FInput Input(TEXT("class Item { int Value; default int Initial = 7; default Value = Initial; }"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			const bool Built = Builder.RunThrough();
 			ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
 			ASSERT_THAT(AreEqual(1, Builder.GetCompilationSession()->GetBodyFragments().Num()));
@@ -87,7 +83,7 @@ namespace AngelscriptBuilderStageTests
 			for (const auto& Case : Cases)
 			{
 				FInput Input(FString::Printf(TEXT("class C { int F() %s { return 42; } }"), Case.Spelling));
-				asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+				asCBuilder Builder(Input.Sources, Input.Options);
 				ASSERT_THAT(IsTrue(Builder.RunThrough())); ASSERT_THAT(AreEqual(1, Builder.GetModuleDefinitionSet()->GetFunctions().Num()));
 				auto* Function = Builder.GetModuleDefinitionSet()->GetFunctions()[0]; ASSERT_THAT(IsTrue(Function->traits.GetTrait(Case.Trait)));
 				ASSERT_THAT(IsTrue(Builder.GetModuleDefinitionSet()->ValidateFrozenDefinitions()));
@@ -104,7 +100,7 @@ namespace AngelscriptBuilderStageTests
 				TEXT("class A { int F() final { return 1; } } class B : A { int F() { return 2; } }"),
 				TEXT("class A { int F() { return 1; } } class B : A { float64 F() { return 2.0; } }")})
 			{
-				FInput Input(Source); asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+				FInput Input(Source); asCBuilder Builder(Input.Sources, Input.Options);
 				ASSERT_THAT(IsTrue(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::DeclarationsCollected)));
 				ASSERT_THAT(IsFalse(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::DeclarationsResolved)));
 				ASSERT_THAT(IsNull(Builder.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::BodiesAnalyzed)));
@@ -113,7 +109,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(ExactBaseOverrideAndDistinctOverloadsProduceRealDefinitions)
 		{
 			FInput Input(TEXT("class A { int F(int Value) { return Value; } } class B : A { int F(int Value) override { return Value + 1; } int F() { return 0; } }"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough())); ASSERT_THAT(AreEqual(3, Builder.GetModuleDefinitionSet()->GetFunctions().Num()));
 			bool FoundOverride = false;
 			for (const auto* Function : Builder.GetModuleDefinitionSet()->GetFunctions()) FoundOverride |= Function->IsOverride();
@@ -125,7 +121,7 @@ namespace AngelscriptBuilderStageTests
 			asCScriptFunction* Retained = nullptr;
 			{
 				FInput Input(TEXT("namespace N { int AddOne(int Value) { return Value + 1; } int Read() { return AddOne(41); } }"));
-				asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+				asCBuilder Builder(Input.Sources, Input.Options);
 				ASSERT_THAT(IsTrue(Builder.RunThrough()));
 				ASSERT_THAT(AreEqual(2, Builder.GetModuleDefinitionSet()->GetFunctions().Num()));
 				for (auto* Function : Builder.GetModuleDefinitionSet()->GetFunctions())
@@ -147,7 +143,7 @@ namespace AngelscriptBuilderStageTests
 			for (int32 Index = 0; Index < 16; ++Index)
 				Source += FString::Printf(TEXT("int Read%d() { return AddOne(%d); }\n"), Index, Index);
 			FInput SerialInput(Source, 1), ParallelInput(Source, 8);
-			asCBuilder Serial(SerialInput.Snapshot, SerialInput.Diagnostics, SerialInput.Options), Parallel(ParallelInput.Snapshot, ParallelInput.Diagnostics, ParallelInput.Options);
+			asCBuilder Serial(SerialInput.Sources, SerialInput.Options), Parallel(ParallelInput.Sources, ParallelInput.Options);
 			ASSERT_THAT(IsTrue(Serial.RunThrough())); ASSERT_THAT(IsTrue(Parallel.RunThrough()));
 			ASSERT_THAT(AreEqual(17, Parallel.GetModuleDefinitionSet()->GetFunctions().Num()));
 			ASSERT_THAT(AreEqual(8, Parallel.GetCompilationSession()->GetBodyAnalysisStatistics().StartedWorkers));
@@ -158,12 +154,13 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(AutoGlobalsInferOnceThroughForwardInitializerDependencies)
 		{
 			FInput Input(TEXT("const auto Answer = Base + 2; const auto Base = 40; enum E { Value = Answer } int Read() { return Answer; }"), 4);
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::DeclarationsResolved)));
 			const auto* Variable = AS_NAMESPACE_QUALIFIER cast<AS_NAMESPACE_QUALIFIER asCVarDecl>(Builder.GetCompilationSession()->Lookup(TEXT("Answer"))[0]);
 			ASSERT_THAT(IsTrue(Variable->GetResolvedQualType().IsConst()));
 			const auto* Initializer = Variable->GetInitializer(); ASSERT_THAT(IsNotNull(Initializer));
-			ASSERT_THAT(IsTrue(Builder.RunThrough()));
+			const bool Built = Builder.RunThrough();
+			ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
 			ASSERT_THAT(IsTrue(Variable->GetInitializer() == Initializer));
 			const auto* Global = Builder.GetModuleDefinitionSet()->FindGlobalProperty(Variable->GetStableIdentity());
 			ASSERT_THAT(IsNotNull(Global)); ASSERT_THAT(IsTrue(Global->type.GetTokenType() == ttInt && Global->type.IsReadOnly()));
@@ -173,7 +170,7 @@ namespace AngelscriptBuilderStageTests
 		{
 			for (const TCHAR* Source : {TEXT("auto First = Second; auto Second = First;"), TEXT("auto Missing;"), TEXT("auto Invalid = null;"), TEXT("auto Invalid = {1, 2};")})
 			{
-				FInput Input(Source); asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+				FInput Input(Source); asCBuilder Builder(Input.Sources, Input.Options);
 				ASSERT_THAT(IsFalse(Builder.RunThrough())); ASSERT_THAT(IsFalse(bool(Builder.GetModuleDefinitionSet())));
 				ASSERT_THAT(IsFalse(Builder.GetCompilationSession()->IsPublishable()));
 			}
@@ -182,7 +179,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(FunctionDefinitionModifiersReachActualTraitsAndFrozenAuthentication)
 		{
 			FInput Input(TEXT("local int Hidden() { return 1; } mixin int Twice(int Value) { return Value * 2; } class C { int Read() final { return 1; } C(int Value) {} }"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough()));
 			asCScriptFunction* Hidden = nullptr; asCScriptFunction* Twice = nullptr; asCScriptFunction* Read = nullptr; asCScriptFunction* Constructor = nullptr;
 			for (auto* Function : Builder.GetModuleDefinitionSet()->GetFunctions())
@@ -202,7 +199,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(EnumExplicitFloatConversionRetainsTypedConstantSemantics)
 		{
 			FInput Input(TEXT("const float64 Scale = 2.0; enum E { Answer = int(21.25 * Scale), Selected = 1.0 < 2.0 ? Answer : 0 }"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			const bool Built = Builder.RunThrough();
 			ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
 			const auto* Enum = static_cast<const asCEnumType*>(Builder.GetModuleDefinitionSet()->GetTypes()[0]);
@@ -213,7 +210,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(ParsedClassDefaultsProduceOneImplicitActualFunctionInSourceOrder)
 		{
 			FInput Input(TEXT("class Settings { int A; int B; default A = 20; default B = A + 22; }"), 4);
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			const bool Built = Builder.RunThrough();
 			ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
 			const auto* Type = static_cast<const asCObjectType*>(Builder.GetModuleDefinitionSet()->GetTypes()[0]);
@@ -231,7 +228,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(GlobalInitializerAndDefaultArgumentsAreAnalyzedBeforeBodies)
 		{
 			FInput Input(TEXT("namespace N { const int Answer = 6 * 7; int Add(int Value = 42) { return Value; } int Use() { return Add(); } }"), 4);
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::DeclarationsResolved)));
 			const auto* Session = Builder.GetCompilationSession();
 			const auto* Global = AS_NAMESPACE_QUALIFIER cast<AS_NAMESPACE_QUALIFIER asCVarDecl>(Session->Lookup(TEXT("Answer"))[0]);
@@ -254,7 +251,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(InvalidDefaultInitializerCannotPublishDefinitions)
 		{
 			FInput Input(TEXT("int Add(int Value = Missing()) { return Value; }"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::DeclarationsResolved)));
 			ASSERT_THAT(IsFalse(Builder.RunThrough()));
 			ASSERT_THAT(IsFalse(bool(Builder.GetModuleDefinitionSet())));
@@ -264,7 +261,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(TypedefKeepsItsEntityIdentityButCanonicalizesFunctionTypeUses)
 		{
 			FInput Input(TEXT("typedef int Count; Count Read(Count Value) { return Value; }"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough()));
 			const auto* Session = Builder.GetCompilationSession();
 			const auto* Alias = AS_NAMESPACE_QUALIFIER cast<AS_NAMESPACE_QUALIFIER asCTypeAliasDecl>(Session->Lookup(TEXT("Count"))[0]);
@@ -279,7 +276,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(CyclicAliasesFailBeforeBodyAnalysis)
 		{
 			FInput Input(TEXT("typedef Other First; typedef First Other; First Read();"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::DeclarationsCollected)));
 			ASSERT_THAT(IsFalse(Builder.RunStage(AS_NAMESPACE_QUALIFIER asEBuilderStage::DeclarationsResolved)));
 			ASSERT_THAT(IsTrue(Builder.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::DeclarationsResolved)->Error.Contains(TEXT("cyclic-type-alias"))));
@@ -294,7 +291,7 @@ namespace AngelscriptBuilderStageTests
 			asCScriptFunction* Method = nullptr;
 			{
 				FInput Input(TEXT("class Item { access Friends = private, Reader(readonly), *(editdefaults); access:Friends int Value; access:Friends int Read() const; }"));
-				asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+				asCBuilder Builder(Input.Sources, Input.Options);
 				const bool Built = Builder.RunThrough();
 				ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
 				Definitions = Builder.TakeModuleDefinitionSet();
@@ -329,7 +326,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(InvalidAccessPolicyDoesNotPublishDefinitions)
 		{
 			FInput Input(TEXT("class Item { access:Missing int Value; } int Later() { return 1; }"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsFalse(Builder.RunThrough()));
 			ASSERT_THAT(IsFalse(bool(Builder.GetModuleDefinitionSet())));
 		}
@@ -337,7 +334,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(MemberAccessAndConstructionReachActualDefinitionObjects)
 		{
 			FInput Input(TEXT("class Value { int Number; Value(int Initial) { Number = Initial; } int Read() const { return Number; } }; int Use() { Value Local(7); return Local.Read(); }"), 4);
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			const bool Built = Builder.RunThrough();
 			ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
 			const auto* Type = static_cast<const asCObjectType*>(Builder.GetModuleDefinitionSet()->GetTypes()[0]);
@@ -352,7 +349,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(IndependentStagesPublishActualDefinitionsOnlyAfterExplicitFreeze)
 		{
 			FInput Input(TEXT("class Payload { int Value; int Read() { return 7; } };"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsNull(Builder.engine));
 			ASSERT_THAT(IsTrue(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::BodiesAnalyzed)));
 			ASSERT_THAT(IsFalse(Builder.GetCompilationSession()->GetASTContext().IsSealed()));
@@ -377,8 +374,8 @@ namespace AngelscriptBuilderStageTests
 		{
 			FInput FullInput(TEXT("int First() { return 1; } int Second() { return 2; }"));
 			FInput SplitInput(TEXT("int First() { return 1; } int Second() { return 2; }"), 4);
-			asCBuilder Full(FullInput.Snapshot, FullInput.Diagnostics, FullInput.Options);
-			asCBuilder Split(SplitInput.Snapshot, SplitInput.Diagnostics, SplitInput.Options);
+			asCBuilder Full(FullInput.Sources, FullInput.Options);
+			asCBuilder Split(SplitInput.Sources, SplitInput.Options);
 			ASSERT_THAT(IsTrue(Full.RunThrough()));
 			for (uint8 Step = 1; Step < uint8(AS_NAMESPACE_QUALIFIER asEBuilderStage::Failed); ++Step)
 			{
@@ -396,7 +393,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(EqualFunctionSignaturesShareTheCanonicalTypeButNotFunctionDefinitions)
 		{
 			FInput Input(TEXT("int First(int Left) { return Left; } int Second(int Right) { return Right; }"), 2);
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough()));
 			const auto* Session = Builder.GetCompilationSession();
 			const auto* First = AS_NAMESPACE_QUALIFIER cast<AS_NAMESPACE_QUALIFIER asCFunctionDecl>(Session->Lookup(TEXT("First"))[0]);
@@ -413,7 +410,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(IllegalOrderDoesNotConsumeOrPoisonTheCurrentStage)
 		{
 			FInput Input(TEXT("int Value() { return 3; }"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsFalse(Builder.RunStage(AS_NAMESPACE_QUALIFIER asEBuilderStage::DefinitionsFrozen)));
 			ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEBuilderStage::SourceReady, Builder.GetStage()));
 			ASSERT_THAT(IsTrue(Builder.RunStage(AS_NAMESPACE_QUALIFIER asEBuilderStage::Lexed)));
@@ -427,7 +424,7 @@ namespace AngelscriptBuilderStageTests
 		{
 			FInput Input(TEXT("#if ENABLED\nint Selected() { return 1; }\n#else\ninvalid @@@\n#endif\n"));
 			Input.Options.PreprocessorFlags.Add(TEXT("ENABLED"), true);
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::Preprocessed)));
 			ASSERT_THAT(IsNull(Builder.GetCompilationSession()));
 			ASSERT_THAT(AreEqual(1, Builder.GetPreprocessedSources().Num()));
@@ -439,7 +436,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(RecoveryStopsDefinitionPublicationAndKeepsFailureObservation)
 		{
 			FInput Input(TEXT("int Broken() { return Missing; }"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsFalse(Builder.RunThrough()));
 			ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEBuilderStage::Failed, Builder.GetStage()));
 			ASSERT_THAT(IsFalse(bool(Builder.GetModuleDefinitionSet())));
@@ -454,8 +451,8 @@ namespace AngelscriptBuilderStageTests
 		{
 			FInput Forward(TEXT("int First(int Value=Second()) { return Value; } int Second(int Value=7) { return Value; } int Use() { return First(); }"), 4);
 			FInput Reverse(TEXT("int Second(int Value=7) { return Value; } int First(int Value=Second()) { return Value; } int Use() { return First(); }"), 1);
-			asCBuilder A(Forward.Snapshot, Forward.Diagnostics, Forward.Options);
-			asCBuilder B(Reverse.Snapshot, Reverse.Diagnostics, Reverse.Options);
+			asCBuilder A(Forward.Sources, Forward.Options);
+			asCBuilder B(Reverse.Sources, Reverse.Options);
 			ASSERT_THAT(IsTrue(A.RunThrough())); ASSERT_THAT(IsTrue(B.RunThrough()));
 			ASSERT_THAT(AreEqual(A.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::DefinitionsFrozen)->Text, B.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::DefinitionsFrozen)->Text));
 		}
@@ -463,7 +460,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(CyclicDefaultDependenciesCannotPublishDefinitions)
 		{
 			FInput Input(TEXT("int First(int Value=Second()) { return Value; } int Second(int Value=First()) { return Value; }"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsFalse(Builder.RunThrough()));
 			ASSERT_THAT(IsFalse(bool(Builder.GetModuleDefinitionSet())));
 			ASSERT_THAT(IsTrue(Builder.GetCompilationSession()->SerializeStableBodyDiagnostics().Contains(TEXT("initializer-dependency-cycle"))));
@@ -472,7 +469,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(EnumExpressionsResolveBeforeHostDeclarationOutput)
 		{
 			FInput Input(TEXT("enum Flags { A=6*7, B=A+1, C=1<<4, D=C|2, E };"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::DeclarationsResolved)));
 			auto* Enumeration = AS_NAMESPACE_QUALIFIER cast<AS_NAMESPACE_QUALIFIER asCRecordDecl>(Builder.GetCompilationSession()->Lookup(TEXT("Flags"))[0]);
 			const int64 Expected[] = {42, 43, 16, 18, 19};
@@ -491,7 +488,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(EnumForwardAndGlobalConstantDependenciesUseOriginalTypedExpressions)
 		{
 			FInput Input(TEXT("enum Answer { Result=Answer::Base+Offset, Base=40 }; const int Offset=1+1;"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			const bool Built = Builder.RunThrough();
 			ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
 			const auto* Result = AS_NAMESPACE_QUALIFIER cast<AS_NAMESPACE_QUALIFIER asCEnumConstantDecl>(Builder.GetCompilationSession()->Lookup(TEXT("Result"))[0]);
@@ -504,7 +501,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(EnumShortCircuitDoesNotEvaluateUnselectedConstantFailure)
 		{
 			FInput Input(TEXT("enum Choice { Value=false ? 1/0 : 42 };"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough()));
 			ASSERT_THAT(AreEqual(int64(42), AS_NAMESPACE_QUALIFIER cast<AS_NAMESPACE_QUALIFIER asCEnumConstantDecl>(Builder.GetCompilationSession()->Lookup(TEXT("Value"))[0])->GetValue()));
 		}
@@ -514,7 +511,7 @@ namespace AngelscriptBuilderStageTests
 			for (const TCHAR* Source : {TEXT("enum Bad { A=1/0 };"), TEXT("enum Bad { A=2147483647, B };"),
 				TEXT("enum Bad { A=1<<32 };"), TEXT("enum Bad { A=B, B=A };"), TEXT("int Get(){return 1;} enum Bad { A=Get() };"), TEXT("enum Bad { A=1.5 }; ")})
 			{
-				FInput Input(Source); asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+				FInput Input(Source); asCBuilder Builder(Input.Sources, Input.Options);
 				ASSERT_THAT(IsFalse(Builder.RunThrough()));
 				ASSERT_THAT(IsFalse(bool(Builder.GetModuleDefinitionSet())));
 				ASSERT_THAT(IsFalse(Builder.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::DeclarationsResolved)->Succeeded));
@@ -524,16 +521,18 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(InvalidOptionsRejectBeforeLexing)
 		{
 			FInput Input(TEXT("void Valid() {}"), 0);
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
-			ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEBuilderStage::Failed, Builder.GetStage()));
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsFalse(Builder.RunThrough()));
+			ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEBuilderStage::Failed, Builder.GetStage()));
+			ASSERT_THAT(IsNotNull(Builder.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::SourceReady)));
+			ASSERT_THAT(IsFalse(Builder.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::SourceReady)->Succeeded));
 			ASSERT_THAT(IsNull(Builder.GetCompilationSession()));
 		}
 
 		TEST_METHOD(EmptyTranslationUnitHasAValidVerifiedSourceAnchor)
 		{
 			FInput Input(TEXT(""));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough()));
 			ASSERT_THAT(AreEqual(0, Builder.GetModuleDefinitionSet()->GetTypes().Num()));
 			ASSERT_THAT(AreEqual(0, Builder.GetModuleDefinitionSet()->GetFunctions().Num()));
@@ -544,17 +543,23 @@ namespace AngelscriptBuilderStageTests
 		{
 			FInput Input(TEXT("void Work() {}"));
 			FInput Foreign(TEXT("void Elsewhere() {}"));
-			asCBuilder Builder(Input.Snapshot, Foreign.Diagnostics, Input.Options);
-			ASSERT_THAT(AreEqual(AS_NAMESPACE_QUALIFIER asEBuilderStage::Failed, Builder.GetStage()));
-			ASSERT_THAT(IsFalse(Builder.RunThrough()));
-			ASSERT_THAT(IsNull(Builder.GetCompilationSession()));
+			asCBuilder Builder(Input.Sources, Input.Options);
+			asCBuilder Other(Foreign.Sources, Foreign.Options);
+			ASSERT_THAT(IsTrue(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::SourceReady)));
+			ASSERT_THAT(IsTrue(Other.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::SourceReady)));
+			TConstArrayView<uint8> Slice;
+			const AS_NAMESPACE_QUALIFIER asCSourceRange Mixed(
+				Builder.GetSourceManager()->MakeLocation(AS_NAMESPACE_QUALIFIER asCSourceFileID(1), 0),
+				Other.GetSourceManager()->MakeLocation(AS_NAMESPACE_QUALIFIER asCSourceFileID(1), 1));
+			ASSERT_THAT(IsFalse(Builder.GetSourceManager()->TryGetBytes(Mixed, Slice)));
+			ASSERT_THAT(IsFalse(Other.GetSourceManager()->TryGetBytes(Mixed, Slice)));
 		}
 
 		TEST_METHOD(BodyLookupUsesItsNamespaceBeforeUnrelatedSameNameDeclarations)
 		{
 			FInput Input(TEXT("namespace A { class Item {}; int Read() { Item Local; return 1; } int Use() { return Read(); } } "
 				"namespace B { class Item {}; int Read() { Item Local; return 2; } int Use() { return Read(); } }"), 4);
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough()));
 			const auto* Session = Builder.GetCompilationSession();
 			ASSERT_THAT(AreEqual(4, Session->GetBodyFragments().Num()));
@@ -565,7 +570,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(UnrelatedNamespaceDeclarationsAreNotImplicitlyVisible)
 		{
 			FInput Input(TEXT("namespace A { int Hidden() { return 1; } } namespace B { int Use() { return Hidden(); } }"), 2);
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsFalse(Builder.RunThrough()));
 			ASSERT_THAT(IsFalse(Builder.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::BodiesAnalyzed)->Succeeded));
 			ASSERT_THAT(IsFalse(bool(Builder.GetModuleDefinitionSet())));
@@ -574,7 +579,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(UnknownConditionalFlagStopsBeforeDeclarationCollection)
 		{
 			FInput Input(TEXT("#if MISSING\nvoid Work() {}\n#endif\n"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsFalse(Builder.RunThrough()));
 			ASSERT_THAT(IsNull(Builder.GetCompilationSession()));
 			const auto* Attempt = Builder.GetStageResult(AS_NAMESPACE_QUALIFIER asEBuilderStage::Preprocessed);
@@ -591,8 +596,8 @@ namespace AngelscriptBuilderStageTests
 				Source += FString::Printf(TEXT("int Function%d() { return %d; }\n"), Index, Index);
 			FInput SerialInput(Source, 1);
 			FInput ParallelInput(Source, 8);
-			asCBuilder Serial(SerialInput.Snapshot, SerialInput.Diagnostics, SerialInput.Options);
-			asCBuilder Parallel(ParallelInput.Snapshot, ParallelInput.Diagnostics, ParallelInput.Options);
+			asCBuilder Serial(SerialInput.Sources, SerialInput.Options);
+			asCBuilder Parallel(ParallelInput.Sources, ParallelInput.Options);
 			ASSERT_THAT(IsTrue(Serial.RunThrough()));
 			ASSERT_THAT(IsTrue(Parallel.RunThrough()));
 			ASSERT_THAT(AreEqual(8, Parallel.GetCompilationSession()->GetBodyAnalysisStatistics().StartedWorkers));
@@ -608,7 +613,7 @@ namespace AngelscriptBuilderStageTests
 			TUniquePtr<asCModuleDefinitionSet> Definitions;
 			{
 				FInput Input(TEXT("class Kept {};"));
-				asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+				asCBuilder Builder(Input.Sources, Input.Options);
 				ASSERT_THAT(IsTrue(Builder.RunThrough()));
 				Definitions = Builder.TakeModuleDefinitionSet();
 			}
@@ -621,8 +626,8 @@ namespace AngelscriptBuilderStageTests
 		{
 			FInput IntegerInput(TEXT("struct Payload { int Value; };"));
 			FInput FloatInput(TEXT("struct Payload { float32 Value; };"));
-			asCBuilder IntegerBuilder(IntegerInput.Snapshot, IntegerInput.Diagnostics, IntegerInput.Options);
-			asCBuilder FloatBuilder(FloatInput.Snapshot, FloatInput.Diagnostics, FloatInput.Options);
+			asCBuilder IntegerBuilder(IntegerInput.Sources, IntegerInput.Options);
+			asCBuilder FloatBuilder(FloatInput.Sources, FloatInput.Options);
 			ASSERT_THAT(IsTrue(IntegerBuilder.RunThrough()));
 			ASSERT_THAT(IsTrue(FloatBuilder.RunThrough()));
 			ASSERT_THAT(AreEqual(IntegerBuilder.GetModuleDefinitionSet()->GetTypes()[0]->GetSize(), FloatBuilder.GetModuleDefinitionSet()->GetTypes()[0]->GetSize()));
@@ -633,7 +638,7 @@ namespace AngelscriptBuilderStageTests
 		TEST_METHOD(LayoutFailureRetainsExactReasonAndDoesNotFreezeTheDraft)
 		{
 			FInput Input(TEXT("struct Left { Right Next; }; struct Right { Left Previous; };"));
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			ASSERT_THAT(IsTrue(Builder.RunThrough(AS_NAMESPACE_QUALIFIER asEBuilderStage::DefinitionsBuilt)));
 			auto Draft = Builder.GetModuleDefinitionSet();
 			ASSERT_THAT(IsFalse(Builder.RunStage(AS_NAMESPACE_QUALIFIER asEBuilderStage::LayoutsFinalized)));

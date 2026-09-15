@@ -81,16 +81,12 @@ if (Set->SetIdentityContext(Context) != asEMetadataResult::Succeeded) return fal
 	};
 	struct FBuilderInput
 	{
-		TSharedRef<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe> Snapshot = MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>();
-		AS_NAMESPACE_QUALIFIER asCSourceManager Sources{Snapshot};
-		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics{Sources};
+		TArray<TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>> Sources;
 		AS_NAMESPACE_QUALIFIER asSBuilderOptions Options;
 		explicit FBuilderInput(const FString& Source, TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> TypeContext,
 			asCModuleDefinitionSet* Host)
 		{
-			const auto Input = AngelscriptNativeEngineTest::FSourceInput::FromText(TEXT("Main.as"), Source);
-			Snapshot->AddFile(TEXT("Main.as"), Input.GetUtf8Bytes());
-			Snapshot->Freeze();
+			Sources = AngelscriptNativeEngineTest::MakeSourceList(TEXT("Main.as"), Source);
 			Options.StableScope = TEXT("frozen-host.source");
 			Options.TypeContext = TypeContext;
 			if (Host) Options.Dependencies.Add(Host);
@@ -121,7 +117,7 @@ public:
 		FHost Host;
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		FBuilderInput Input(TEXT("int F() { return Host::Add(42); }"), Host.Context, Host.Set.Get());
-		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+		asCBuilder Builder(Input.Sources, Input.Options);
 		const bool Built = Builder.RunThrough();
 		ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
 		const AS_NAMESPACE_QUALIFIER asCFunctionDecl* Function = AS_NAMESPACE_QUALIFIER dyn_cast<AS_NAMESPACE_QUALIFIER asCFunctionDecl>(
@@ -140,11 +136,11 @@ public:
 		FHost Host;
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		FBuilderInput Allowed(TEXT("int F(const Item Value) { return Value.Read(); }"), Host.Context, Host.Set.Get());
-		asCBuilder AllowedBuilder(Allowed.Snapshot, Allowed.Diagnostics, Allowed.Options);
+		asCBuilder AllowedBuilder(Allowed.Sources, Allowed.Options);
 		const bool AllowedBuilt = AllowedBuilder.RunThrough();
 		ASSERT_THAT(IsTrue(AllowedBuilt, Allowed.DescribeFailure(AllowedBuilder)));
 		FBuilderInput Denied(TEXT("int F(const Item Value) { return Value.Mutate(); }"), Host.Context, Host.Set.Get());
-		asCBuilder DeniedBuilder(Denied.Snapshot, Denied.Diagnostics, Denied.Options);
+		asCBuilder DeniedBuilder(Denied.Sources, Denied.Options);
 		ASSERT_THAT(IsFalse(DeniedBuilder.RunThrough()));
 	}
 
@@ -154,14 +150,12 @@ public:
 		ASSERT_THAT(IsTrue(Host.Initialize()));
 		auto Draft = MakeUnique<asCModuleDefinitionSet>();
 		ASSERT_THAT(IsTrue(Draft->SetIdentityContext(Host.Context) == asEMetadataResult::Succeeded));
-		auto Snapshot = MakeShared<AS_NAMESPACE_QUALIFIER asCSourceSnapshot, ESPMode::ThreadSafe>();
-		Snapshot->Freeze();
-		AS_NAMESPACE_QUALIFIER asCSourceManager Sources(Snapshot);
+		AS_NAMESPACE_QUALIFIER asCSourceManager Sources;
 		AS_NAMESPACE_QUALIFIER asCDiagnosticsEngine Diagnostics(Sources);
-		AS_NAMESPACE_QUALIFIER asCCompilationSession Session(Snapshot, Diagnostics, TEXT("frozen-host"), Host.Context);
+		AS_NAMESPACE_QUALIFIER asCCompilationSession Session(Sources, Diagnostics, TEXT("frozen-host"), Host.Context);
 		ASSERT_THAT(IsFalse(Session.AddExternalDefinitions(Draft.Get())));
 		TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> Foreign = MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
-		AS_NAMESPACE_QUALIFIER asCCompilationSession ForeignSession(Snapshot, Diagnostics, TEXT("frozen-host-foreign"), Foreign);
+		AS_NAMESPACE_QUALIFIER asCCompilationSession ForeignSession(Sources, Diagnostics, TEXT("frozen-host-foreign"), Foreign);
 		ASSERT_THAT(IsFalse(ForeignSession.AddExternalDefinitions(Host.Set.Get())));
 		Host.Add->name = "Tampered";
 		ASSERT_THAT(IsFalse(Session.AddExternalDefinitions(Host.Set.Get())));
@@ -174,7 +168,7 @@ public:
 		asCString* Default = asNEW(asCString)("7");
 		Host.Add->defaultArgs.PushLast(Default);
 		FBuilderInput Input(TEXT("int F() { return Host::Add(); }"), Host.Context, Host.Set.Get());
-		asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+		asCBuilder Builder(Input.Sources, Input.Options);
 		const bool Built = Builder.RunThrough();
 		FString Errors;
 		for (uint8 Stage = 0; Stage < uint8(AS_NAMESPACE_QUALIFIER asEBuilderStage::Failed); ++Stage)
@@ -192,7 +186,7 @@ public:
 			ASSERT_THAT(IsTrue(Host.Initialize()));
 			Key = Host.Add->GetStableKey();
 			FBuilderInput Input(TEXT("int F() { return Host::Add(42); }"), Host.Context, Host.Set.Get());
-			asCBuilder Builder(Input.Snapshot, Input.Diagnostics, Input.Options);
+			asCBuilder Builder(Input.Sources, Input.Options);
 			const bool Built = Builder.RunThrough();
 			ASSERT_THAT(IsTrue(Built, Input.DescribeFailure(Builder)));
 			HostSet = MoveTemp(Host.Set);

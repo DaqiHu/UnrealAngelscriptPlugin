@@ -490,23 +490,40 @@ namespace
 	void asCSema::ReportBodyWarning(const asCSourceRange& Range, FString Message)
 	{
 		if (!DiagnosticFragment) return;
-		asSDiagnosticRecord Record;
-		Record.DiagnosticID = 4002;
-		Record.Severity = asEDiagnosticSeverity::Warning;
-		Record.PrimaryRange = Range;
-		Record.Arguments.Add(asSDiagnosticArgument::FromText(MoveTemp(Message)));
-		DiagnosticFragment->Report(MoveTemp(Record));
+		asUINT ID = asDiagnosticIdFromSemanticReason(Message);
+		if (ID == 0) ID = static_cast<asUINT>(asEDiagnosticCatalogID::GenericStatement);
+		asSDiagnosticGroup Group;
+		Group.Primary.DiagnosticID = ID;
+		Group.Primary.Severity = asEDiagnosticSeverity::Warning;
+		Group.Primary.PrimaryRange = Range;
+		Group.Primary.bHasLocation = Range.IsOrdered() || Range.Begin.IsValid();
+		Group.Primary.Arguments.Add(asSDiagnosticArgument::FromText(Message));
+		DiagnosticFragment->ReportGroup(MoveTemp(Group));
 	}
 
 	asCRecoveryExpr* asCSema::ActOnRecoveryExpression(asCSourceRange Range, FString Message)
 	{
-		ReportBodyError(Range, MoveTemp(Message));
+		if (const asUINT Mapped = asDiagnosticIdFromSyntaxReason(Message))
+		{
+			ReportSyntax(Range, Message, Mapped);
+		}
+		else
+		{
+			ReportBodyError(Range, Message);
+		}
 		return Context.Create<asCRecoveryExpr>(Context.Create<asCErrorType>(), MoveTemp(Range));
 	}
 
 	asCRecoveryStmt* asCSema::ActOnRecoveryStatement(asCSourceRange Range, FString Message)
 	{
-		ReportBodyError(Range, MoveTemp(Message));
+		if (const asUINT Mapped = asDiagnosticIdFromSyntaxReason(Message))
+		{
+			ReportSyntax(Range, Message, Mapped);
+		}
+		else
+		{
+			ReportBodyError(Range, Message);
+		}
 		return Context.Create<asCRecoveryStmt>(MoveTemp(Range));
 	}
 
