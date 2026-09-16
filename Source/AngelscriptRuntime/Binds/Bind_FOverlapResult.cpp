@@ -42,6 +42,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FOverlapResult(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FOverlapResult_ = Binds.ExistingClassForTarget("FOverlapResult");
 		FOverlapResult_.Property("int ItemIndex", &FOverlapResult::ItemIndex);
 		FOverlapResult_.Method("void SetComponent(UPrimitiveComponent InComp)", &FAngelscriptFOverlapResultBinds::SetComponent);

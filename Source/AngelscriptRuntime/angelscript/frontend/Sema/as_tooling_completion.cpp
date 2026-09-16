@@ -15,7 +15,7 @@ namespace
 	{
 		asSBuilderOptions Options = Inputs.Options;
 		Options.Dependencies.Reset();
-		for (const TSharedPtr<asCModuleDefinitionSet, ESPMode::ThreadSafe>& Owned : Inputs.OwnedDefinitionSets)
+		for (const TSharedPtr<asCDefinitions, ESPMode::ThreadSafe>& Owned : Inputs.OwnedDefinitions)
 		{
 			Options.Dependencies.Add(Owned.Get());
 		}

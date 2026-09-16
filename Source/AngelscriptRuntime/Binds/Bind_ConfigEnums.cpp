@@ -22,6 +22,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_ConfigEnums(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto ETraceTypeQuery_ = Binds.EnumForTarget("ETraceTypeQuery");
 		auto ECollisionChannel_ = Binds.EnumForTarget("ECollisionChannel");
 		auto EObjectTypeQuery_ = Binds.EnumForTarget("EObjectTypeQuery");

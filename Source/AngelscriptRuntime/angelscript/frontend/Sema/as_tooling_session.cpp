@@ -46,14 +46,14 @@ bool asCToolingSession::ValidateInputs() const
 	{
 		return false;
 	}
-	for (asCModuleDefinitionSet* Dependency : Inputs->Options.Dependencies)
+	for (asCDefinitions* Dependency : Inputs->Options.Dependencies)
 	{
 		if (!Dependency)
 		{
 			return false;
 		}
 		bool bOwned = false;
-		for (const TSharedPtr<asCModuleDefinitionSet, ESPMode::ThreadSafe>& Owned : Inputs->OwnedDefinitionSets)
+		for (const TSharedPtr<asCDefinitions, ESPMode::ThreadSafe>& Owned : Inputs->OwnedDefinitions)
 		{
 			if (Owned.Get() == Dependency)
 			{
@@ -66,20 +66,20 @@ bool asCToolingSession::ValidateInputs() const
 			return false;
 		}
 	}
-	for (const TSharedPtr<asCModuleDefinitionSet, ESPMode::ThreadSafe>& Owned : Inputs->OwnedDefinitionSets)
+	for (const TSharedPtr<asCDefinitions, ESPMode::ThreadSafe>& Owned : Inputs->OwnedDefinitions)
 	{
 		if (!Owned.IsValid() || !Owned->IsFrozen())
 		{
 			return false;
 		}
-		for (asCModuleDefinitionSet* Nested : Owned->GetDependencies())
+		for (asCDefinitions* Nested : Owned->GetDependencies())
 		{
 			if (!Nested)
 			{
 				return false;
 			}
 			bool bOwnedNested = false;
-			for (const TSharedPtr<asCModuleDefinitionSet, ESPMode::ThreadSafe>& Candidate : Inputs->OwnedDefinitionSets)
+			for (const TSharedPtr<asCDefinitions, ESPMode::ThreadSafe>& Candidate : Inputs->OwnedDefinitions)
 			{
 				if (Candidate.Get() == Nested)
 				{
@@ -113,7 +113,7 @@ asSAnalysisResponse asCToolingSession::Analyze(const asSCancellationToken& Cance
 
 	asSBuilderOptions Options = Inputs->Options;
 	Options.Dependencies.Reset();
-	for (const TSharedPtr<asCModuleDefinitionSet, ESPMode::ThreadSafe>& Owned : Inputs->OwnedDefinitionSets)
+	for (const TSharedPtr<asCDefinitions, ESPMode::ThreadSafe>& Owned : Inputs->OwnedDefinitions)
 	{
 		Options.Dependencies.Add(Owned.Get());
 	}

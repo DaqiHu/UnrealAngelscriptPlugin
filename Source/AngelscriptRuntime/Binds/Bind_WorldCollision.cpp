@@ -578,6 +578,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_WorldCollision_TypeDeclarations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		BindAsyncTraceTypeDeclarations(Binds);
 		BindTraceHandleTypeDeclarations(Binds);
 		BindTraceDatumTypeDeclarations(Binds);
@@ -589,6 +590,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_WorldCollision_TypeInfrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		BindTraceHandleTypeInfrastructure(Binds);
 		BindTraceDatumTypeInfrastructure(Binds);
 		BindOverlapDatumTypeInfrastructure(Binds);
@@ -599,6 +601,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_WorldCollision_ManualBindings(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		BindTraceHandle(Binds);
 		BindTraceDatum(Binds);
 		BindOverlapDatum(Binds);

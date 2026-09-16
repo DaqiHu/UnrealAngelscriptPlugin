@@ -244,6 +244,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UStruct_TypeDeclarations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		if (Binds.IsRecording())
 		{
 			FString Diagnostic;
@@ -272,6 +273,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UStruct_TypeInfrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		for (FAngelscriptStructBind& DBBind : Binds.GetTargetBindDatabase().Structs)
 		{
 			if (DBBind.ResolvedStruct != nullptr)
@@ -286,6 +288,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UStruct_ReflectionBindings(
 	EAngelscriptBindPhase::ReflectionBindings,
 	[](FAngelscriptBinds& TargetBinds)
 	{
+		if (TargetBinds.IsHostTarget()) return;
 		FAngelscriptTypeDatabase& TargetTypeDatabase = TargetBinds.GetTargetTypeDatabase();
 		for (FAngelscriptStructBind& DBBind : TargetBinds.GetTargetBindDatabase().Structs)
 		{
@@ -503,6 +506,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UStruct_TypeDeclarations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		if (Binds.IsRecording())
 		{
 			FString Diagnostic;
@@ -528,6 +532,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UStruct_TypeInfrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		if (Binds.IsRecording()) return;
 		for (const TObjectPtr<UScriptStruct>& StructPtr : GetOrCaptureUStructTypes(Binds))
 		{
@@ -543,6 +548,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UStruct_ReflectionBindings(
 	EAngelscriptBindPhase::ReflectionBindings,
 	[](FAngelscriptBinds& TargetBinds)
 	{
+		if (TargetBinds.IsHostTarget()) return;
 		if (TargetBinds.IsRecording()) return;
 		FAngelscriptTypeDatabase& TargetTypeDatabase = TargetBinds.GetTargetTypeDatabase();
 		FAngelscriptBindDatabase& TargetBindDatabase = TargetBinds.GetTargetBindDatabase();

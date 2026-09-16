@@ -15,14 +15,14 @@ namespace
 	{
 		if (Left.Options.StableScope != Right.Options.StableScope
 			|| Left.Options.TypeContext.Get() != Right.Options.TypeContext.Get()
-			|| Left.OwnedDefinitionSets.Num() != Right.OwnedDefinitionSets.Num()
+			|| Left.OwnedDefinitions.Num() != Right.OwnedDefinitions.Num()
 			|| Left.Sources.Num() != Right.Sources.Num())
 		{
 			return false;
 		}
-		for (int32 Index = 0; Index < Left.OwnedDefinitionSets.Num(); ++Index)
+		for (int32 Index = 0; Index < Left.OwnedDefinitions.Num(); ++Index)
 		{
-			if (Left.OwnedDefinitionSets[Index].Get() != Right.OwnedDefinitionSets[Index].Get())
+			if (Left.OwnedDefinitions[Index].Get() != Right.OwnedDefinitions[Index].Get())
 			{
 				return false;
 			}

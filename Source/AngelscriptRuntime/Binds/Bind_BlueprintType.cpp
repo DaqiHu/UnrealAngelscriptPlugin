@@ -1,4 +1,5 @@
 #include "AngelscriptBinds.h"
+#include "AngelscriptBindWriteWorkers.h"
 #include "Core/AngelscriptTypeBindInfoReflection.h"
 #include "AngelscriptEngine.h"
 #include "AngelscriptType.h"
@@ -1070,6 +1071,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_ReflectionBindings(
 	EAngelscriptBindPhase::ReflectionBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		if (Binds.IsRecording())
 		{
 			FString Diagnostic;
@@ -1493,6 +1495,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_ReflectionBindings(
 	EAngelscriptBindPhase::ReflectionBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		if (Binds.IsRecording())
 		{
 			FString Diagnostic;
@@ -1504,6 +1507,10 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_ReflectionBindings(
 				Binds.GetRecordingStore()->ReportFailure(Snapshot.IsValid()
 					? Diagnostic : TEXT("Blueprint reflection bindings require a captured reflected snapshot."));
 			}
+			return;
+		}
+		if (Binds.IsHostTarget())
+		{
 			return;
 		}
 		FAngelscriptScopeTimer Timer(TEXT("blueprinttype bindings"));
@@ -1740,31 +1747,45 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_ReflectionBindings(
 		const double TGetterSetter = FPlatformTime::Seconds();
 
 		// ---- Phase 4: Inherit + BindProperties + DB write ----
+		// Shell/base relations are established first. Own-member property writes
+		// then claim one UClass at a time through as.Bind.WriteWorkers.
+		const int32 WriteWorkers = FAngelscriptBindWriteWorkers::ResolveCount();
+		(void)WriteWorkers;
 		for (auto& BindOrder : ClassesToBind)
 		{
-			auto ClassType = BindOrder.Type;
-			auto* SuperClass = BindOrder.Class->GetSuperClass();
-
 			if (BindOrder.ScriptType == nullptr)
 			{
 				continue;
 			}
-
-			FString TypeName = BindOrder.Type->GetAngelscriptTypeName();
-			FAngelscriptBinds ClassBinds = Binds.ExistingClassForTarget(TypeName);
-
 			if (BindOrder.InheritScriptType != nullptr)
 			{
-				// Inherit everything from superclass
 				BindOrder.ScriptType->CopySystemType(BindOrder.InheritScriptType);
 			}
-
-			// Bind UObject properties
-			BindProperties(ClassBinds, ClassType.ToSharedRef(), BindOrder.DBBind.Properties);
-
-			BindOrder.DBBind.TypeName = TypeName;
-			BindOrder.DBBind.UnrealPath = BindOrder.Class->GetPathName();
-			Binds.GetTargetBindDatabase().Classes.Add(BindOrder.DBBind);
+		}
+		const bool bWroteMembers = FAngelscriptBindWriteWorkers::RunClassWave(ClassesToBind.Num(),
+			[&Binds, &ClassesToBind](int32 Index)
+			{
+				FBindOrder& BindOrder = ClassesToBind[Index];
+				if (BindOrder.ScriptType == nullptr || !BindOrder.Type.IsValid() || BindOrder.Class == nullptr)
+				{
+					return;
+				}
+				const FString TypeName = BindOrder.Type->GetAngelscriptTypeName();
+				FAngelscriptBinds ClassBinds = Binds.ExistingClassForTarget(TypeName);
+				BindProperties(ClassBinds, BindOrder.Type.ToSharedRef(), BindOrder.DBBind.Properties);
+				BindOrder.DBBind.TypeName = TypeName;
+				BindOrder.DBBind.UnrealPath = BindOrder.Class->GetPathName();
+			});
+		if (!bWroteMembers)
+		{
+			return;
+		}
+		for (auto& BindOrder : ClassesToBind)
+		{
+			if (BindOrder.DBBind.TypeName.Len() != 0)
+			{
+				Binds.GetTargetBindDatabase().Classes.Add(BindOrder.DBBind);
+			}
 		}
 
 		const double TPropsInherit = FPlatformTime::Seconds();
@@ -2661,6 +2682,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_ReferenceClassDeclaratio
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		if (Binds.IsRecording())
 		{
 			FString Diagnostic;
@@ -2699,6 +2721,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_StaticClasses(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		for (FAngelscriptClassBind& DBBind : Binds.GetTargetBindDatabase().Classes)
 		{
 			if (DBBind.ResolvedClass != nullptr)
@@ -2741,11 +2764,16 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_ReferenceClassDeclaratio
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		if (Binds.IsRecording())
 		{
 			FString Diagnostic;
 			if (!FAngelscriptTypeBindInfoReflection::RecordLoadedDeclarations(*Binds.GetRecordingStore(), Diagnostic, EAngelscriptReflectedDeclarationFilter::Classes))
 				Binds.GetRecordingStore()->ReportFailure(Diagnostic);
+			return;
+		}
+		if (Binds.IsHostTarget())
+		{
 			return;
 		}
 		for (const TObjectPtr<UClass>& ClassPtr : GetOrCaptureBlueprintTypeClasses(Binds))
@@ -2771,9 +2799,11 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_StaticClasses(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		// Detached reflected identities are directly usable as class values. The
 		// compatibility StaticClass surface remains a legacy Engine setting.
 		if (Binds.IsRecording()) return;
+		if (Binds.IsHostTarget()) return;
 		for (const TObjectPtr<UClass>& ClassPtr : GetOrCaptureBlueprintTypeClasses(Binds))
 		{
 			UClass* Class = ClassPtr.Get();
@@ -2792,6 +2822,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TObjectPtr_TypeDeclarations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bTemplate = true;
 		Flags.TemplateType = "<T>";
@@ -2807,6 +2838,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSubclassOf_TypeDeclarations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bTemplate = true;
 		Flags.TemplateType = "<T>";
@@ -2822,6 +2854,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TWeakObjectPtr_TypeDeclarations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bTemplate = true;
 		Flags.TemplateType = "<T>";
@@ -2837,6 +2870,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TObjectPtr_MethodSurface(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto TObjectPtr_ = Binds.ExistingClassForTarget("TObjectPtr<T>");
 		TObjectPtr_.Constructor("void f()", &FAngelscriptBlueprintTypeBinds::ConstructObjectPtr);
 		TObjectPtr_.Constructor(
@@ -2878,6 +2912,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSubclassOf_MethodSurface(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto TSubclassOf_ = Binds.ExistingClassForTarget("TSubclassOf<T>");
 		TSubclassOf_.Constructor(
 			"void f()",
@@ -2938,6 +2973,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TWeakObjectPtr_MethodSurface(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto TWeakObjectPtr_ = Binds.ExistingClassForTarget("TWeakObjectPtr<T>");
 		TWeakObjectPtr_.Constructor(
 			"void f()",
@@ -2993,9 +3029,11 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintType_Infrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		// Reflected records already retain their native class adapters. The work
 		// below only populates the mutable legacy TypeDatabase.
 		if (Binds.IsRecording()) return;
+		if (Binds.IsHostTarget()) return;
 		RegisterBlueprintTypeReferenceClasses(Binds);
 
 		// Register the type used by TSubclassOf.

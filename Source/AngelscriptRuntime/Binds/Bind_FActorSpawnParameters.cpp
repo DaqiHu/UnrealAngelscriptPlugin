@@ -45,6 +45,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FActorSpawnParameters_TypeDeclarations
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto NameMode = Binds.EnumForTarget("ESpawnActorNameMode");
 		NameMode["Required_Fatal"] = FActorSpawnParameters::ESpawnActorNameMode::Required_Fatal;
 		NameMode["Required_ErrorAndReturnNull"] = FActorSpawnParameters::ESpawnActorNameMode::Required_ErrorAndReturnNull;
@@ -60,6 +61,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FActorSpawnParameters_TypeInfrastructu
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FActorSpawnParametersType>());
 	});
 
@@ -68,6 +70,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FActorSpawnParameters(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto SpawnParameters = Binds.ExistingClassForTarget("FActorSpawnParameters");
 		SpawnParameters.Constructor("void f()", &FAngelscriptActorSpawnParametersBinds::Construct)
 			.NoDiscard()

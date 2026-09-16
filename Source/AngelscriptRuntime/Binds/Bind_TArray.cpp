@@ -1081,6 +1081,42 @@ namespace
 
 
 
+namespace
+{
+	int32 HostIntArrayNum(FScriptArray* Self)
+	{
+		return Self ? Self->Num() : 0;
+	}
+
+	void HostIntArrayAdd(FScriptArray* Self, const int32& Value)
+	{
+		if (!Self)
+		{
+			return;
+		}
+		const int32 Index = Self->Add(1, sizeof(int32), alignof(int32));
+		*reinterpret_cast<int32*>(static_cast<uint8*>(Self->GetData()) + (sizeof(int32) * Index)) = Value;
+	}
+
+	int32* HostIntArrayIndex(FScriptArray* Self, int32 Index)
+	{
+		if (!Self || Index < 0 || Index >= Self->Num())
+		{
+			return nullptr;
+		}
+		return reinterpret_cast<int32*>(static_cast<uint8*>(Self->GetData()) + (sizeof(int32) * Index));
+	}
+
+	void HostIntArrayDestruct(FScriptArray* Self)
+	{
+		if (Self)
+		{
+			Self->Empty(0, sizeof(int32), alignof(int32));
+			Self->~FScriptArray();
+		}
+	}
+}
+
 AS_FORCE_LINK const FAngelscriptBind Bind_TArray_TypeDeclarations(
 	TEXT("TArray.Declaration"),
 	EAngelscriptBindPhase::TypeDeclarations,
@@ -1105,6 +1141,18 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TArray_MethodSurface(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget())
+		{
+			auto IntArray = Binds.SpecializeTemplateForTarget("TArray", "int");
+			IntArray.Constructor("void f()", FUNC_TRIVIAL(FArrayOperations::Construct));
+			IntArray.Destructor("void f()", &HostIntArrayDestruct);
+			IntArray.Method("int Num() const", &HostIntArrayNum);
+			IntArray.Method("void Add(const int&in Value)", &HostIntArrayAdd);
+			IntArray.Method("int& opIndex(int Index)", &HostIntArrayIndex);
+			IntArray.Method("const int& opIndex(int Index) const", &HostIntArrayIndex);
+			return;
+		}
+
 		auto TArray_ = Binds.ExistingClassForTarget("TArray<T>");
 		TArray_.Constructor("void f()", FUNC_TRIVIAL(FArrayOperations::Construct));
 
@@ -1303,7 +1351,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TArray_TypeInfrastructure(
 		Binds.RegisterTypeForTarget(ArrayType);
 		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptArrayIteratorType>());
 		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptArrayConstIteratorType>());
-		if (Binds.IsRecording()) return;
+		if (Binds.IsRecording() || Binds.IsHostTarget()) return;
 
 		Binds.GetTargetTypeDatabase().ArrayTemplateTypeInfo = Binds.GetTargetScriptEngine().GetTypeInfoByName("TArray");
 		Binds.GetTargetScriptEngine().RegisterDefaultArrayType("TArray<T>");

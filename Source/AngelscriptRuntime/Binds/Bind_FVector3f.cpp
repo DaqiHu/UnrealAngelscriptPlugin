@@ -222,6 +222,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector3f_TypeDeclarations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Flags.ExtraFlags |= asOBJ_BASICMATHTYPE;
@@ -233,6 +234,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector3f_TypeInfrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto VectorType = MakeShared<FVector3fType>();
 		Binds.RegisterTypeForTarget(VectorType);
 		FToStringHelper::Register(Binds, TEXT("FVector3f"), &FAngelscriptFVector3fBinds::AppendToString);
@@ -243,6 +245,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector3f(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FVector3f_ = Binds.ExistingClassForTarget("FVector3f");
 
 		FVector3f_.Constructor("void f(float32 X, float32 Y, float32 Z)", &FAngelscriptFVector3fBinds::ConstructXYZ, "FVector3f", true)

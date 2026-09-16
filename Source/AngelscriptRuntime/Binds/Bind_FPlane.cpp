@@ -44,6 +44,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FPlane(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FPlane_ = Binds.ExistingClassForTarget("FPlane");
 
 		FPlane_.Constructor(

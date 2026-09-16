@@ -135,6 +135,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FLinearColor_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Binds.ValueClassForTarget<FLinearColor>("FLinearColor", Flags);
@@ -145,6 +146,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FLinearColor_Infrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FLinearColorType>());
 		FToStringHelper::Register(Binds, TEXT("FLinearColor"), &FAngelscriptFLinearColorBinds::AppendToString);
 	});
@@ -154,6 +156,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FLinearColor(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FLinearColor_ = Binds.ExistingClassForTarget("FLinearColor");
 
 		FLinearColor_.Constructor("void f()", &FAngelscriptFLinearColorBinds::ConstructDefault)

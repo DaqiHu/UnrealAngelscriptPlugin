@@ -34,6 +34,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FMatrix(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Matrix = Binds.ExistingClassForTarget("FMatrix");
 		Matrix.Method("bool opEquals(const FMatrix& Other) const", METHODPR_TRIVIAL(bool, FMatrix, operator==, (const FMatrix&) const));
 		Matrix.Method("FMatrix opMul(const FMatrix& Other) const", METHODPR_TRIVIAL(FMatrix, FMatrix, operator*, (const FMatrix&) const));

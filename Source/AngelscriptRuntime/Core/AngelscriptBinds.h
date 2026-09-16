@@ -67,6 +67,7 @@ struct FAngelscriptBinds;
 struct FAngelscriptEngine;
 struct FToStringType;
 class FBlueprintEventSignatureRegistry;
+class asCDefinitions;
 
 using FAngelscriptBindCallback = void (*)(FAngelscriptBinds&);
 
@@ -120,6 +121,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBind
 		FString& OutDiagnostic);
 	static TArray<FAngelscriptBindMetadata> GetRegisteredBindMetadata();
 	static const UE::Angelscript::Private::FAngelscriptBindCollection& GetRegisteredCollection();
+	static bool EnsureProcessHostCollection(FString& OutDiagnostic);
+	static const UE::Angelscript::Private::FAngelscriptBindCollection* GetProcessHostCollection();
+#if WITH_DEV_AUTOMATION_TESTS
+	static int32 GetProcessHostCaptureCountForTesting();
+#endif
 
 #if WITH_DEV_AUTOMATION_TESTS
 	FAngelscriptBind(
@@ -262,6 +268,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBindState
 	int32 ActiveBindSourceLine = 0;
 	bool bDirectBindFailed = false;
 	FString DirectBindFailureDiagnostic;
+	uint32 HostIdentitySerial = 1;
+	int32 HostWriteWorkerCount = 1;
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 DirectCallbackExecutionCountForTesting = 0;
 #endif
@@ -366,8 +374,10 @@ private:
 struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 {
 	explicit FAngelscriptBinds(FAngelscriptEngine& InTargetEngine);
+	explicit FAngelscriptBinds(asCDefinitions& InHostDefinitions, FAngelscriptBindState& InHostBindState);
 	explicit FAngelscriptBinds(FAngelscriptTypeBindInfoStore& InStore, bool bInDeclarationOnly = false)
 		: RecordingStore(&InStore), bDeclarationOnly(bInDeclarationOnly) {}
+	bool IsHostTarget() const { return HostDefinitions != nullptr; }
 	bool IsRecording() const { return RecordingStore != nullptr; }
 	bool IsDeclarationOnly() const { return bDeclarationOnly; }
 	FAngelscriptTypeBindInfoStore* GetRecordingStore() const { return RecordingStore; }
@@ -394,6 +404,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 		FAngelscriptFunctionBinding Binding) const;
 	bool HasRegistrationFailure() const;
 	const FString& GetRegistrationFailureDiagnostic() const;
+	FAngelscriptBinds SpecializeTemplateForTarget(FBindString TemplateName, FBindString ArgumentDecl);
+	void SetHostBaseTypeForTarget(FBindString BaseName);
 
 	template<typename T>
 	FAngelscriptBinds ValueClassForTarget(FBindString Name, FBindFlags Flags)
@@ -742,6 +754,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 	struct ANGELSCRIPTRUNTIME_API FNamespace
 	{
 		FAngelscriptEngine* TargetEngine = nullptr;
+		asCDefinitions* HostDefinitions = nullptr;
+		FString* HostNamespace = nullptr;
 		FAngelscriptTypeBindInfoStore* RecordingStore = nullptr;
 		FBindString PrevNamespace;
 
@@ -835,6 +849,12 @@ private:
 	FAngelscriptBinds(FAngelscriptEngine& InTargetEngine, FBindString Name);
 
 	FAngelscriptEngine* TargetEngine = nullptr;
+	asCDefinitions* HostDefinitions = nullptr;
+	FAngelscriptBindState* HostBindState = nullptr;
+	FString HostNamespace;
+	uint32 HostIdentitySerial = 1;
+	bool IsHostExplicitAuthoringEnabled() const;
+	asSStableKey MakeHostBindKey(const char* Kind, const char* Name) const;
 	FAngelscriptTypeBindInfoStore* RecordingStore = nullptr;
 	FAngelscriptTypeBindHandle RecordingType;
 	bool bDeclarationOnly = false;

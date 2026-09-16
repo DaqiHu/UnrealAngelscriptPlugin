@@ -1,4 +1,5 @@
 #include "AngelscriptBinds.h"
+#include "AngelscriptBindWriteWorkers.h"
 #include "AngelscriptBindsInternal.h"
 #include "AngelscriptTypeBindInfoStore.h"
 
@@ -22,6 +23,8 @@
 //#include "as_scriptfunction.h"
 #include "as_property.h"
 #include "as_scriptfunction.h"
+#include "as_definitions.h"
+#include "as_datatype.h"
 
 #include "StartAngelscriptHeaders.h"
 //#include "as_scriptfunction.h"
@@ -30,6 +33,8 @@
 #include "as_scriptfunction.h"
 #include "as_objecttype.h"
 #include "as_scriptengine.h"
+#include "as_typeinfo.h"
+#include "frontend/AST/as_type_context.h"
 #include "EndAngelscriptHeaders.h"
 
 namespace UE::Angelscript::Private
@@ -237,6 +242,158 @@ namespace UE::Angelscript::Private
 		return true;
 	}
 
+	asSStableKey FAngelscriptBindCollection::MakeHostKey(const char* Kind, const char* Namespace, const char* Name)
+	{
+		uint8 Bytes[32] = {};
+		const uint32 Serial = HostIdentitySerial++;
+		const uint32 Words[8] = {
+			FCrc::StrCrc32(Kind ? Kind : ""),
+			FCrc::StrCrc32(Namespace ? Namespace : ""),
+			FCrc::StrCrc32(Name ? Name : ""),
+			Serial,
+			0x484F5354,
+			0,
+			0,
+			0
+		};
+		FMemory::Memcpy(Bytes, Words, sizeof(Words));
+		asSStableKey Key;
+		check(asSStableKey::TryCreate(MakeArrayView(Bytes), Key));
+		return Key;
+	}
+
+	void FAngelscriptBindCollection::CaptureHostInspection()
+	{
+		HostInspection.Reset();
+		const asCDefinitions* Graph = GetHostDefinitions();
+		if (!Graph) return;
+		for (asCTypeInfo* Type : Graph->GetTypes())
+		{
+			if (!Type) continue;
+			FAngelscriptHostDeclarationView View;
+			View.Namespace = UTF8_TO_TCHAR(Type->GetNamespace());
+			View.Name = UTF8_TO_TCHAR(Type->GetName());
+			View.Kind = TEXT("Type");
+			HostInspection.Add(MoveTemp(View));
+		}
+		for (asCScriptFunction* Function : Graph->GetFunctions())
+		{
+			if (!Function) continue;
+			FAngelscriptHostDeclarationView View;
+			View.Namespace = UTF8_TO_TCHAR(Function->GetNamespace());
+			View.Name = UTF8_TO_TCHAR(Function->GetName());
+			View.Kind = TEXT("Function");
+			HostInspection.Add(MoveTemp(View));
+		}
+		for (asCGlobalProperty* Global : Graph->GetGlobals())
+		{
+			if (!Global) continue;
+			FAngelscriptHostDeclarationView View;
+			View.Namespace = UTF8_TO_TCHAR(Global->nameSpace ? Global->nameSpace->name.AddressOf() : "");
+			View.Name = UTF8_TO_TCHAR(Global->name.AddressOf());
+			View.Kind = TEXT("Global");
+			if (const void* Address = Global->GetRegisteredAddress())
+			{
+				if (Global->type.GetTokenType() == ttInt)
+				{
+					View.IntValue = *static_cast<const int32*>(Address);
+				}
+			}
+			HostInspection.Add(MoveTemp(View));
+		}
+	}
+
+	bool FAngelscriptBindCollection::ExecuteToHost(FString& OutDiagnostic)
+	{
+		if (!bSealed)
+		{
+			OutDiagnostic = TEXT("Cannot execute AngelScript binds before collection finalization.");
+			return false;
+		}
+		if (!LateRegistrationFailureDiagnostic.IsEmpty())
+		{
+			OutDiagnostic = LateRegistrationFailureDiagnostic;
+			return false;
+		}
+		if (FrozenHost)
+		{
+			OutDiagnostic.Reset();
+			return true;
+		}
+		asSDefinitionOptions Options;
+		Options.Kind = asETypeInfoKind::HostProcess;
+		HostBindState.HostWriteWorkerCount = FAngelscriptBindWriteWorkers::ResolveCount();
+		BuildingHost = asCDefinitions::Create(Options);
+		if (!BuildingHost)
+		{
+			OutDiagnostic = TEXT("Failed to create HostProcess definitions.");
+			return false;
+		}
+		static TSharedRef<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> ProcessHostTypeContext =
+			MakeShared<AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe>();
+		if (BuildingHost->SetIdentityContext(ProcessHostTypeContext) != asEDefinitionResult::Succeeded)
+		{
+			OutDiagnostic = TEXT("Failed to attach HostProcess identity context.");
+			BuildingHost.Reset();
+			return false;
+		}
+		FAngelscriptBinds HostBinds(*BuildingHost, HostBindState);
+		for (const FAngelscriptBindRecord& Record : Records)
+		{
+			TGuardValue<FName> ActiveOwnerGuard(HostBindState.ActiveBindOwnerModule, Record.OwnerModule);
+			TGuardValue<FName> ActiveProviderGuard(HostBindState.ActiveBindProvider, Record.BindName);
+			TGuardValue<EAngelscriptBindPhase> ActivePhaseGuard(HostBindState.ActiveBindPhase, Record.Phase);
+			TGuardValue<const ANSICHAR*> ActiveSourceFileGuard(HostBindState.ActiveBindSourceFile, Record.SourceFile);
+			TGuardValue<int32> ActiveSourceLineGuard(HostBindState.ActiveBindSourceLine, Record.SourceLine);
+			++CallbackInvocationCounts.FindOrAdd(Record.BindName);
+			Record.Callback(HostBinds);
+			if (HostBinds.HasRegistrationFailure())
+			{
+				OutDiagnostic = HostBinds.GetRegistrationFailureDiagnostic();
+				if (OutDiagnostic.IsEmpty())
+				{
+					OutDiagnostic = FString::Printf(
+						TEXT("HostProcess bind '%s' failed without a diagnostic."),
+						*Record.BindName.ToString());
+				}
+				BuildingHost.Reset();
+				return false;
+			}
+		}
+		if (BuildingHost->FinalizeLayouts() != asEDefinitionResult::Succeeded
+			|| BuildingHost->Freeze() != asEDefinitionResult::Succeeded)
+		{
+			OutDiagnostic = TEXT("HostProcess graph failed to freeze.");
+			BuildingHost.Reset();
+			return false;
+		}
+		FrozenHost = asCDefinitions::AdoptGraph(MoveTemp(BuildingHost));
+		CaptureHostInspection();
+		OutDiagnostic.Reset();
+		return true;
+	}
+
+	const asCDefinitions* FAngelscriptBindCollection::GetHostDefinitions() const
+	{
+		return FrozenHost ? FrozenHost.Get() : BuildingHost.Get();
+	}
+
+	asCDefinitionGraphLease FAngelscriptBindCollection::RetainHostGraph() const
+	{
+		return FrozenHost ? FrozenHost.Get()->RetainGraph() : asCDefinitionGraphLease();
+	}
+
+	int32 FAngelscriptBindCollection::GetCallbackInvocationCount(FName BindName) const
+	{
+		if (const int32* Count = CallbackInvocationCounts.Find(BindName)) return *Count;
+		return 0;
+	}
+
+	void FAngelscriptBindCollection::InspectHostDeclarations(TArray<FAngelscriptHostDeclarationView>& Out) const
+	{
+		Out = HostInspection;
+	}
+
 	bool FAngelscriptBindCollection::PrepareForEngineInitialization(
 		const TConstArrayView<FString> ModuleNames,
 		const TFunctionRef<bool(FName, FString&)> LoadModule,
@@ -386,6 +543,49 @@ const UE::Angelscript::Private::FAngelscriptBindCollection& FAngelscriptBind::Ge
 {
 	return GetRegisteredBindCollection();
 }
+
+static TUniquePtr<UE::Angelscript::Private::FAngelscriptBindCollection> GProcessHostCollection;
+static int32 GProcessHostCaptureCount = 0;
+
+bool FAngelscriptBind::EnsureProcessHostCollection(FString& OutDiagnostic)
+{
+	if (GProcessHostCollection && GProcessHostCollection->GetHostDefinitions()
+		&& GProcessHostCollection->GetHostDefinitions()->GetState() == asEDefinitionState::Frozen)
+	{
+		OutDiagnostic.Reset();
+		return true;
+	}
+	GProcessHostCollection = MakeUnique<UE::Angelscript::Private::FAngelscriptBindCollection>();
+	for (const FAngelscriptBindRecord& Record : GetRegisteredBindCollection().GetRecords())
+	{
+		if (!GProcessHostCollection->Append(Record, OutDiagnostic))
+		{
+			GProcessHostCollection.Reset();
+			return false;
+		}
+	}
+	if (!GProcessHostCollection->Finalize(OutDiagnostic)
+		|| !GProcessHostCollection->ExecuteToHost(OutDiagnostic))
+	{
+		GProcessHostCollection.Reset();
+		return false;
+	}
+	++GProcessHostCaptureCount;
+	OutDiagnostic.Reset();
+	return true;
+}
+
+const UE::Angelscript::Private::FAngelscriptBindCollection* FAngelscriptBind::GetProcessHostCollection()
+{
+	return GProcessHostCollection.Get();
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+int32 FAngelscriptBind::GetProcessHostCaptureCountForTesting()
+{
+	return GProcessHostCaptureCount;
+}
+#endif
 
 TArray<FAngelscriptBindMetadata> FAngelscriptBind::GetRegisteredBindMetadata()
 {
@@ -595,6 +795,10 @@ static void ExecuteDirectBindArchitectureProbe(FAngelscriptBinds& Binds)
 	if (Binds.IsRecording())
 	{
 		Binds.AddDirectBindArchitectureProbeEffect();
+		return;
+	}
+	if (Binds.IsHostTarget())
+	{
 		return;
 	}
 	if (Binds.GetTargetEngine().ShouldInjectDirectBindFailureForTesting())
@@ -1401,6 +1605,74 @@ bool FAngelscriptBinds::ShouldSkipBlueprintCallableFunction(const UFunction* Fun
 
 FAngelscriptBinds FAngelscriptBinds::ReferenceClassForTarget(FBindString Name, UClass* UnrealClass) const
 {
+	if (HostDefinitions)
+	{
+		FAngelscriptBinds Binds(*HostDefinitions, *HostBindState);
+		Binds.HostNamespace = HostNamespace;
+		Binds.HostIdentitySerial = HostIdentitySerial;
+		Binds.ClassName = Name;
+		if (UnrealClass == nullptr)
+		{
+			Binds.RecordRegistrationFailure(TEXT("host reference class"), Name, asINVALID_ARG);
+			return Binds;
+		}
+		FString TypeName = Name.ToFString();
+		int32 TemplatePos = INDEX_NONE;
+		if (TypeName.FindChar(TEXT('<'), TemplatePos))
+		{
+			TypeName.LeftInline(TemplatePos);
+		}
+		const auto TypeNameAnsi = StringCast<ANSICHAR>(*TypeName);
+		if (asCTypeInfo* Existing = HostDefinitions->FindType(TypeNameAnsi.Get()))
+		{
+			Binds.ClassName = TypeName;
+			Binds.ScriptType = Existing;
+			return Binds;
+		}
+		constexpr asQWORD ReferenceFlags = asOBJ_REF | asOBJ_NOCOUNT | asOBJ_IMPLICIT_HANDLE;
+		const int32 Size = UnrealClass->GetStructureSize();
+		asUINT Alignment = static_cast<asUINT>(FMath::Max(UnrealClass->GetMinAlignment(), 1));
+		while (Alignment > 1 && (static_cast<asUINT>(Size) % Alignment) != 0)
+		{
+			Alignment >>= 1;
+		}
+		asSStableKey TypeKey = Binds.MakeHostBindKey("type", TypeNameAnsi.Get());
+		if (TSharedPtr<const AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> HostContext =
+			HostDefinitions->GetIdentityContext())
+		{
+			AS_NAMESPACE_QUALIFIER asSNominalTypeDescriptor Descriptor;
+			Descriptor.StableScope = TEXT("host-process");
+			Descriptor.Name = TypeName;
+			Descriptor.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::Class;
+			AS_NAMESPACE_QUALIFIER asCTypeContext* MutableContext =
+				const_cast<AS_NAMESPACE_QUALIFIER asCTypeContext*>(HostContext.Get());
+			if (MutableContext->GetIdentityRegistry().InternNominalType(Descriptor, TypeKey)
+				!= AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded)
+			{
+				Binds.RecordRegistrationFailure(TEXT("host reference class identity"), Name, asINVALID_ARG);
+				return Binds;
+			}
+		}
+		asCObjectType* Type = nullptr;
+		const char* Ns = TCHAR_TO_UTF8(*HostNamespace);
+		if (HostDefinitions->CreateObjectType(TypeKey, TypeNameAnsi.Get(), Ns, ReferenceFlags, Type)
+			!= asEDefinitionResult::Succeeded)
+		{
+			Binds.RecordRegistrationFailure(TEXT("host reference class"), Name, asINVALID_ARG);
+			return Binds;
+		}
+		if (HostDefinitions->SetNativeLayout(*Type, static_cast<asUINT>(Size), Alignment)
+			!= asEDefinitionResult::Succeeded)
+		{
+			Binds.RecordRegistrationFailure(TEXT("host reference class"), Name, asINVALID_ARG);
+			return Binds;
+		}
+		Type->size = Size;
+		Type->alignment = static_cast<int>(Alignment);
+		Binds.ClassName = TypeName;
+		Binds.ScriptType = Type;
+		return Binds;
+	}
 	if (IsRecording())
 	{
 		FAngelscriptTypeBindDeclaration Declaration;
@@ -1565,7 +1837,286 @@ FAngelscriptBinds FAngelscriptBinds::ExistingClassForTarget(FBindString Name) co
 			RecordingStore->ReportFailure(FString::Printf(TEXT("Recorded type '%s::%s' has not been declared."), *Namespace, *TypeName));
 		return Binds;
 	}
+	if (HostDefinitions)
+	{
+		FAngelscriptBinds Binds(*HostDefinitions, *HostBindState);
+		Binds.HostNamespace = HostNamespace;
+		Binds.HostIdentitySerial = HostIdentitySerial;
+		FString TypeName = Name.ToFString();
+		int32 TemplatePosition;
+		if (TypeName.FindChar(TEXT('<'), TemplatePosition))
+		{
+			TypeName.LeftInline(TemplatePosition);
+		}
+		Binds.ClassName = TypeName;
+		Binds.ScriptType = HostDefinitions->FindType(Binds.ClassName.ToCString());
+		if (!Binds.ScriptType && Binds.IsHostExplicitAuthoringEnabled())
+		{
+			Binds.RecordRegistrationFailure(TEXT("host existing type"), Name, asINVALID_TYPE);
+		}
+		return Binds;
+	}
 	return FAngelscriptBinds(GetTargetEngine(), Name);
+}
+
+namespace
+{
+	void SkipHostSpaces(const char*& Cursor)
+	{
+		while (*Cursor == ' ' || *Cursor == '\t') ++Cursor;
+	}
+
+	asCString TakeHostToken(const char*& Cursor)
+	{
+		SkipHostSpaces(Cursor);
+		const char* Start = Cursor;
+		while (*Cursor && *Cursor != ' ' && *Cursor != '\t' && *Cursor != '(' && *Cursor != ')'
+			&& *Cursor != ',' && *Cursor != '<' && *Cursor != '>' && *Cursor != '&')
+		{
+			++Cursor;
+		}
+		return asCString(Start, static_cast<int>(Cursor - Start));
+	}
+
+	bool ParseHostDataType(asCDefinitions& Graph, const char*& Cursor, asCDataType& Out)
+	{
+		SkipHostSpaces(Cursor);
+		if (FCStringAnsi::Strncmp(Cursor, "const", 5) == 0 && (Cursor[5] == ' ' || Cursor[5] == '\t'))
+		{
+			Cursor += 5;
+			SkipHostSpaces(Cursor);
+		}
+		if (FCStringAnsi::Strncmp(Cursor, "TArray<", 7) == 0)
+		{
+			Cursor += 7;
+			asCDataType Inner;
+			if (!ParseHostDataType(Graph, Cursor, Inner)) return false;
+			SkipHostSpaces(Cursor);
+			if (*Cursor != '>') return false;
+			++Cursor;
+			asCObjectType* Template = CastToObjectType(Graph.FindType("TArray"));
+			if (!Template) return false;
+			asCObjectType* Instance = Graph.FindTemplateInstance(Template, MakeArrayView(&Inner, 1));
+			if (!Instance) return false;
+			Out = asCDataType::CreateType(Instance, false);
+			return true;
+		}
+		const asCString Token = TakeHostToken(Cursor);
+		if (Token == "int" || Token == "int32")
+		{
+			Out = Graph.Primitive(ttInt);
+		}
+		else if (Token == "int8")
+		{
+			Out = Graph.Primitive(ttInt8);
+		}
+		else if (Token == "int16")
+		{
+			Out = Graph.Primitive(ttInt16);
+		}
+		else if (Token == "int64")
+		{
+			Out = Graph.Primitive(ttInt64);
+		}
+		else if (Token == "uint" || Token == "uint32")
+		{
+			Out = Graph.Primitive(ttUInt);
+		}
+		else if (Token == "uint8")
+		{
+			Out = Graph.Primitive(ttUInt8);
+		}
+		else if (Token == "uint16")
+		{
+			Out = Graph.Primitive(ttUInt16);
+		}
+		else if (Token == "uint64")
+		{
+			Out = Graph.Primitive(ttUInt64);
+		}
+		else if (Token == "bool")
+		{
+			Out = Graph.Primitive(ttBool);
+		}
+		else if (Token == "float" || Token == "float32")
+		{
+			Out = Graph.Primitive(ttFloat);
+		}
+		else if (Token == "float64" || Token == "double")
+		{
+			Out = Graph.Primitive(ttDouble);
+		}
+		else if (Token == "void")
+		{
+			Out = Graph.Primitive(ttVoid);
+		}
+		else
+		{
+			asCTypeInfo* Type = Graph.FindType(Token.AddressOf());
+			if (!Type) return false;
+			Out = asCDataType::CreateType(Type, false);
+		}
+		SkipHostSpaces(Cursor);
+		if (*Cursor == '&')
+		{
+			++Cursor;
+			Out.MakeReference(true);
+			SkipHostSpaces(Cursor);
+			if (FCStringAnsi::Strncmp(Cursor, "in", 2) == 0) Cursor += 2;
+			else if (FCStringAnsi::Strncmp(Cursor, "out", 3) == 0) Cursor += 3;
+			else if (FCStringAnsi::Strncmp(Cursor, "inout", 5) == 0) Cursor += 5;
+		}
+		return true;
+	}
+
+	bool ParseHostDataTypeDecl(asCDefinitions& Graph, const char* Decl, asCDataType& Out)
+	{
+		const char* Cursor = Decl;
+		return ParseHostDataType(Graph, Cursor, Out);
+	}
+
+	bool ParseHostMethodSignature(asCDefinitions& Graph, const char* Decl, asCDataType& ReturnType, asCString& Name,
+		TArray<asSDefinitionParameter>& Parameters)
+	{
+		const char* Cursor = Decl;
+		if (!ParseHostDataType(Graph, Cursor, ReturnType)) return false;
+		SkipHostSpaces(Cursor);
+		Name = TakeHostToken(Cursor);
+		if (Name.GetLength() == 0) return false;
+		SkipHostSpaces(Cursor);
+		if (*Cursor != '(') return false;
+		++Cursor;
+		SkipHostSpaces(Cursor);
+		if (*Cursor == ')') return true;
+		while (*Cursor && *Cursor != ')')
+		{
+			asSDefinitionParameter Parameter;
+			if (!ParseHostDataType(Graph, Cursor, Parameter.Type)) return false;
+			SkipHostSpaces(Cursor);
+			if (*Cursor && *Cursor != ',' && *Cursor != ')' && *Cursor != '=')
+			{
+				Parameter.Name = TakeHostToken(Cursor);
+			}
+			SkipHostSpaces(Cursor);
+			if (*Cursor == '=')
+			{
+				++Cursor;
+				int32 Depth = 0;
+				while (*Cursor)
+				{
+					if (*Cursor == '(' || *Cursor == '<') ++Depth;
+					else if ((*Cursor == ')' || *Cursor == '>') && Depth > 0) --Depth;
+					else if ((*Cursor == ',' || *Cursor == ')') && Depth == 0) break;
+					++Cursor;
+				}
+			}
+			Parameters.Add(Parameter);
+			SkipHostSpaces(Cursor);
+			if (*Cursor == ',')
+			{
+				++Cursor;
+				continue;
+			}
+			break;
+		}
+		return *Cursor == ')';
+	}
+}
+
+FAngelscriptBinds FAngelscriptBinds::SpecializeTemplateForTarget(FBindString TemplateName, FBindString ArgumentDecl)
+{
+	if (!HostDefinitions)
+	{
+		FAngelscriptBinds Failed(GetTargetEngine(), TemplateName);
+		Failed.RecordRegistrationFailure(TEXT("host template specialization"), TemplateName, asNOT_SUPPORTED);
+		return Failed;
+	}
+	FAngelscriptBinds Binds(*HostDefinitions, *HostBindState);
+	Binds.HostNamespace = HostNamespace;
+	Binds.HostIdentitySerial = HostIdentitySerial;
+	Binds.ClassName = TemplateName;
+	asCObjectType* Template = CastToObjectType(HostDefinitions->FindType(TemplateName.ToCString()));
+	asCDataType Argument;
+	if (!Template || !ParseHostDataTypeDecl(*HostDefinitions, ArgumentDecl.ToCString(), Argument))
+	{
+		RecordRegistrationFailure(TEXT("host template argument"), ArgumentDecl, asINVALID_TYPE);
+		Binds.RecordRegistrationFailure(TEXT("host template argument"), ArgumentDecl, asINVALID_TYPE);
+		return Binds;
+	}
+	asCObjectType* Instance = nullptr;
+	asSStableKey Key = Binds.MakeHostBindKey("tmpl", TCHAR_TO_UTF8(*(TemplateName.ToFString() + TEXT("<") + ArgumentDecl.ToFString() + TEXT(">"))));
+	if (TSharedPtr<const AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> HostContext =
+		HostDefinitions->GetIdentityContext())
+	{
+		AS_NAMESPACE_QUALIFIER asCTypeContext* MutableContext =
+			const_cast<AS_NAMESPACE_QUALIFIER asCTypeContext*>(HostContext.Get());
+		AS_NAMESPACE_QUALIFIER asSStableKey ArgumentKey;
+		if (Argument.GetTokenType() == ttInt)
+		{
+			MutableContext->InternPrimitiveTypeUse(
+				AS_NAMESPACE_QUALIFIER asEPrimitiveType::Int32, ArgumentKey);
+		}
+		else if (asCTypeInfo* ArgumentType = Argument.GetTypeInfo())
+		{
+			if (asCObjectType* ArgumentObject = CastToObjectType(ArgumentType);
+				ArgumentObject && ArgumentObject->GetTemplateDefinition())
+			{
+				ArgumentKey = ArgumentObject->GetStableKey();
+			}
+			else
+			{
+				AS_NAMESPACE_QUALIFIER asSStableTypeUseDescriptor ArgumentUse;
+				ArgumentUse.Kind = AS_NAMESPACE_QUALIFIER asETypeUseKind::Nominal;
+				ArgumentUse.Declaration = ArgumentType->GetStableKey();
+				MutableContext->GetIdentityRegistry().InternTypeUse(ArgumentUse, ArgumentKey);
+			}
+		}
+		AS_NAMESPACE_QUALIFIER asSStableTypeUseDescriptor Use;
+		Use.Kind = AS_NAMESPACE_QUALIFIER asETypeUseKind::Nominal;
+		Use.Declaration = Template->GetStableKey();
+		if (!ArgumentKey.IsZero())
+		{
+			Use.Arguments.Add(ArgumentKey);
+		}
+		AS_NAMESPACE_QUALIFIER asSStableKey InternedKey;
+		if (MutableContext->GetIdentityRegistry().InternTypeUse(Use, InternedKey)
+			== AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded)
+		{
+			Key = InternedKey;
+		}
+	}
+	if (HostDefinitions->CreateHostTemplateInstance(*Template, Key, MakeArrayView(&Argument, 1), Instance)
+		!= asEDefinitionResult::Succeeded || !Instance)
+	{
+		RecordRegistrationFailure(TEXT("host template specialization"), ArgumentDecl, asINVALID_DECLARATION);
+		Binds.RecordRegistrationFailure(TEXT("host template specialization"), ArgumentDecl, asINVALID_DECLARATION);
+		return Binds;
+	}
+	Binds.ScriptType = Instance;
+	HostIdentitySerial = Binds.HostIdentitySerial;
+	return Binds;
+}
+
+void FAngelscriptBinds::SetHostBaseTypeForTarget(FBindString BaseName)
+{
+	if (!HostDefinitions)
+	{
+		return;
+	}
+	asCObjectType* Derived = ScriptType
+		? CastToObjectType(static_cast<asCTypeInfo*>(ScriptType))
+		: CastToObjectType(HostDefinitions->FindType(ClassName.ToCString()));
+	asCObjectType* Base = CastToObjectType(HostDefinitions->FindType(BaseName.ToCString()));
+	if (!Derived || !Base
+		|| HostDefinitions->SetBaseType(*Derived, *Base) != asEDefinitionResult::Succeeded)
+	{
+		RecordRegistrationFailure(TEXT("host base type"), BaseName, asINVALID_TYPE);
+	}
+}
+
+bool FAngelscriptBinds::IsHostExplicitAuthoringEnabled() const
+{
+	return true;
 }
 
 FAngelscriptBinds::FAngelscriptBinds(FAngelscriptEngine& InTargetEngine)
@@ -1573,10 +2124,56 @@ FAngelscriptBinds::FAngelscriptBinds(FAngelscriptEngine& InTargetEngine)
 {
 }
 
+FAngelscriptBinds::FAngelscriptBinds(asCDefinitions& InHostDefinitions, FAngelscriptBindState& InHostBindState)
+	: HostDefinitions(&InHostDefinitions)
+	, HostBindState(&InHostBindState)
+{
+}
+
+asSStableKey FAngelscriptBinds::MakeHostBindKey(const char* Kind, const char* Name) const
+{
+	uint8 Bytes[32] = {};
+	uint32& SerialCounter = HostBindState
+		? HostBindState->HostIdentitySerial
+		: const_cast<FAngelscriptBinds*>(this)->HostIdentitySerial;
+	const uint32 Serial = SerialCounter++;
+	const auto Ns = StringCast<ANSICHAR>(*HostNamespace);
+	const uint32 Words[8] = {
+		FCrc::StrCrc32(Kind ? Kind : ""),
+		FCrc::StrCrc32(Ns.Get()),
+		FCrc::StrCrc32(Name ? Name : ""),
+		Serial,
+		0x484F5354,
+		0,
+		0,
+		0
+	};
+	FMemory::Memcpy(Bytes, Words, sizeof(Words));
+	asSStableKey Key;
+	check(asSStableKey::TryCreate(MakeArrayView(Bytes), Key));
+	return Key;
+}
+
 FAngelscriptEngine& FAngelscriptBinds::GetTargetEngine() const
 {
+	if (TargetEngine == nullptr && HostBindState)
+	{
+		UE_LOG(
+			Angelscript,
+			Error,
+			TEXT("HostProcess bind '%s' requested a live engine."),
+			*HostBindState->ActiveBindProvider.ToString());
+	}
 	check(TargetEngine != nullptr);
 	return *TargetEngine;
+}
+
+FAngelscriptBindState& FAngelscriptBinds::GetTargetBindState() const
+{
+	if (HostBindState) return *HostBindState;
+	FAngelscriptBindState* BindState = GetTargetEngine().GetBindState();
+	check(BindState != nullptr);
+	return *BindState;
 }
 
 asIScriptEngine& FAngelscriptBinds::GetTargetScriptEngine() const
@@ -1584,13 +2181,6 @@ asIScriptEngine& FAngelscriptBinds::GetTargetScriptEngine() const
 	asIScriptEngine* ScriptEngine = GetTargetEngine().GetScriptEngine();
 	check(ScriptEngine != nullptr);
 	return *ScriptEngine;
-}
-
-FAngelscriptBindState& FAngelscriptBinds::GetTargetBindState() const
-{
-	FAngelscriptBindState* BindState = GetTargetEngine().GetBindState();
-	check(BindState != nullptr);
-	return *BindState;
 }
 
 FAngelscriptTypeDatabase& FAngelscriptBinds::GetTargetTypeDatabase() const
@@ -1617,6 +2207,10 @@ TArray<FToStringType>& FAngelscriptBinds::GetTargetToStringList() const
 void FAngelscriptBinds::AddToStringEffect(const FString& TypeName,
 	void (*ToString)(void*, FString&), const bool bImplicitConversion, const bool bIsHandleType) const
 {
+	if (IsHostTarget())
+	{
+		return;
+	}
 	if (IsRecording())
 	{
 		FAngelscriptBindEffect Effect;
@@ -1690,6 +2284,10 @@ FBlueprintEventSignatureRegistry& FAngelscriptBinds::GetTargetBlueprintEventSign
 
 void FAngelscriptBinds::RegisterTypeForTarget(TSharedRef<FAngelscriptType> Type) const
 {
+	if (IsHostTarget())
+	{
+		return;
+	}
 	if (IsRecording())
 	{
 		const FString Name = Type->GetAngelscriptTypeName();
@@ -1722,7 +2320,7 @@ void FAngelscriptBinds::RegisterTypeFinderForTarget(FAngelscriptType::FTypeFinde
 {
 	// Property finders belong to a mutable legacy TypeDatabase. Detached snapshots
 	// retain the adapter identity recorded by RegisterTypeForTarget instead.
-	if (IsRecording()) return;
+	if (IsRecording() || IsHostTarget()) return;
 	FAngelscriptType::RegisterTypeFinder(GetTargetTypeDatabase(), MoveTemp(Finder));
 }
 
@@ -1890,6 +2488,89 @@ FAngelscriptBoundProperty FAngelscriptBinds::RecordProperty(FBindString Signatur
 
 FAngelscriptBinds FAngelscriptBinds::ValueClassForTarget(FBindString Name, FBindFlags Flags, int32 Size)
 {
+	if (HostDefinitions)
+	{
+		FAngelscriptBinds Binds(*HostDefinitions, *HostBindState);
+		Binds.HostNamespace = HostNamespace;
+		Binds.HostIdentitySerial = HostIdentitySerial;
+		Binds.ClassName = Name;
+		auto AsFlags = asOBJ_VALUE | asOBJ_APP_CLASS | Flags.ExtraFlags;
+		if (Flags.bPOD) AsFlags |= asOBJ_POD;
+		if (Flags.bTemplate) AsFlags |= asOBJ_TEMPLATE;
+		asCObjectType* Type = nullptr;
+		const char* Ns = TCHAR_TO_UTF8(*HostNamespace);
+		FString TypeName = Name.ToFString();
+		int32 TemplatePos = INDEX_NONE;
+		if (TypeName.FindChar(TEXT('<'), TemplatePos)) TypeName.LeftInline(TemplatePos);
+		const auto TypeNameAnsi = StringCast<ANSICHAR>(*TypeName);
+		if (HostDefinitions->FindType(TypeNameAnsi.Get()))
+		{
+			Binds.RecordRegistrationFailure(TEXT("host object type"), Name, asALREADY_REGISTERED);
+			return Binds;
+		}
+		asUINT Alignment = Flags.Alignment > 0 ? static_cast<asUINT>(Flags.Alignment) : 8;
+		while (Alignment > 1 && (static_cast<asUINT>(Size) % Alignment) != 0) Alignment >>= 1;
+		asUINT Arity = 0;
+		if (Flags.bTemplate)
+		{
+			Arity = 1;
+			if (!Flags.TemplateType.IsEmpty())
+			{
+				FString Inner = Flags.TemplateType.ToFString();
+				Inner.RemoveFromStart(TEXT("<"));
+				Inner.RemoveFromEnd(TEXT(">"));
+				TArray<FString> Parts;
+				Inner.ParseIntoArray(Parts, TEXT(","), true);
+				if (Parts.Num() > 0) Arity = static_cast<asUINT>(Parts.Num());
+			}
+		}
+		asSStableKey TypeKey = Binds.MakeHostBindKey("type", TypeNameAnsi.Get());
+		if (TSharedPtr<const AS_NAMESPACE_QUALIFIER asCTypeContext, ESPMode::ThreadSafe> HostContext =
+			HostDefinitions->GetIdentityContext())
+		{
+			AS_NAMESPACE_QUALIFIER asSNominalTypeDescriptor Descriptor;
+			Descriptor.StableScope = TEXT("host-process");
+			Descriptor.Name = TypeName;
+			Descriptor.Kind = AS_NAMESPACE_QUALIFIER asETypeDeclKind::Class;
+			Descriptor.GenericArity = Arity;
+			AS_NAMESPACE_QUALIFIER asCTypeContext* MutableContext =
+				const_cast<AS_NAMESPACE_QUALIFIER asCTypeContext*>(HostContext.Get());
+			if (MutableContext->GetIdentityRegistry().InternNominalType(Descriptor, TypeKey)
+				!= AS_NAMESPACE_QUALIFIER asETypeIdentityStatus::Succeeded)
+			{
+				Binds.RecordRegistrationFailure(TEXT("host object type identity"), Name, asINVALID_ARG);
+				return Binds;
+			}
+		}
+		if (HostDefinitions->CreateObjectType(TypeKey,
+			TypeNameAnsi.Get(), Ns, AsFlags, Type) != asEDefinitionResult::Succeeded)
+		{
+			Binds.RecordRegistrationFailure(TEXT("host object type"), Name, asINVALID_ARG);
+			return Binds;
+		}
+		if (Flags.bTemplate)
+		{
+			if (HostDefinitions->SetTypeDeclarationFacts(*Type, asETypeDeclKind::Struct, Arity) != asEDefinitionResult::Succeeded
+				|| HostDefinitions->SetFixedTemplateLayout(*Type, static_cast<asUINT>(Size), Alignment)
+					!= asEDefinitionResult::Succeeded)
+			{
+				Binds.RecordRegistrationFailure(TEXT("host template type"), Name, asINVALID_ARG);
+				return Binds;
+			}
+		}
+		else if (HostDefinitions->SetNativeLayout(*Type, static_cast<asUINT>(Size), Alignment)
+			!= asEDefinitionResult::Succeeded)
+		{
+			Binds.RecordRegistrationFailure(TEXT("host object type"), Name, asINVALID_ARG);
+			return Binds;
+		}
+		Type->size = Size;
+		Type->alignment = static_cast<int>(Alignment);
+		Binds.ClassName = TypeName;
+		Binds.ScriptType = Type;
+		HostIdentitySerial = Binds.HostIdentitySerial;
+		return Binds;
+	}
 	if (IsRecording())
 	{
 		FAngelscriptTypeBindDeclaration Declaration;
@@ -2107,6 +2788,44 @@ FAngelscriptBoundFunction FAngelscriptBinds::OnBindForTarget(
 FAngelscriptBoundFunction FAngelscriptBinds::BindExternBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
 {
 	if (IsRecording()) return RecordCallable(Signature, Ptr, Caller, asCALL_CDECL_OBJFIRST, UserData, Beh);
+	if (HostDefinitions)
+	{
+		if (!IsHostExplicitAuthoringEnabled()) return FAngelscriptBoundFunction(TargetEngine, 0);
+		if (HasRegistrationFailure()) return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		asCObjectType* Type = ScriptType
+			? CastToObjectType(static_cast<asCTypeInfo*>(ScriptType))
+			: CastToObjectType(HostDefinitions->FindType(ClassName.ToCString()));
+		if (!Type)
+		{
+			RecordRegistrationFailure(TEXT("host object behaviour target"), Signature, asINVALID_TYPE);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		if (!Caller.IsBound() && !Ptr.ptr.f.func)
+		{
+			RecordRegistrationFailure(TEXT("host object behaviour native target"), Signature, asINVALID_ARG);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		asCDataType ReturnType = HostDefinitions->Primitive(ttVoid);
+		asCString Name;
+		TArray<asSDefinitionParameter> Parameters;
+		if (!ParseHostMethodSignature(*HostDefinitions, Signature.ToCString(), ReturnType, Name, Parameters))
+		{
+			RecordRegistrationFailure(TEXT("host object behaviour"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		asCScriptFunction* Function = nullptr;
+		if (HostDefinitions->CreateFunction(MakeHostBindKey("behaviour", Signature.ToCString()),
+			Name.AddressOf(), TCHAR_TO_UTF8(*HostNamespace), asFUNC_SYSTEM, Function) != asEDefinitionResult::Succeeded
+			|| HostDefinitions->DefineFunction(*Function, ReturnType, Parameters, Type) != asEDefinitionResult::Succeeded
+			|| HostDefinitions->BindNativeFunction(*Function, Ptr, asCALL_CDECL_OBJFIRST, *(asFunctionCaller*)&Caller, UserData)
+				!= asEDefinitionResult::Succeeded
+			|| HostDefinitions->AddBehaviour(*Type, Beh, *Function) != asEDefinitionResult::Succeeded)
+		{
+			RecordRegistrationFailure(TEXT("host object behaviour"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		return FAngelscriptBoundFunction(TargetEngine, 0);
+	}
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -2120,6 +2839,12 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindExternBehaviour(asEBehaviours B
 FAngelscriptBoundFunction FAngelscriptBinds::BindStaticBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
 {
 	if (IsRecording()) return RecordCallable(Signature, Ptr, Caller, asCALL_CDECL, UserData, Beh);
+	if (HostDefinitions)
+	{
+		if (!IsHostExplicitAuthoringEnabled()) return FAngelscriptBoundFunction(TargetEngine, 0);
+		RecordRegistrationFailure(TEXT("host static behaviour"), Signature, asNOT_SUPPORTED);
+		return FAngelscriptBoundFunction(TargetEngine, asERROR);
+	}
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -2133,6 +2858,43 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindStaticBehaviour(asEBehaviours B
 FAngelscriptBoundFunction FAngelscriptBinds::BindMethod(FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
 {
 	if (IsRecording()) return RecordCallable(Signature, Ptr, Caller, asCALL_THISCALL, UserData);
+	if (HostDefinitions)
+	{
+		if (!IsHostExplicitAuthoringEnabled()) return FAngelscriptBoundFunction(TargetEngine, 0);
+		if (HasRegistrationFailure()) return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		asCObjectType* Type = ScriptType
+			? CastToObjectType(static_cast<asCTypeInfo*>(ScriptType))
+			: CastToObjectType(HostDefinitions->FindType(ClassName.ToCString()));
+		if (!Type)
+		{
+			RecordRegistrationFailure(TEXT("host object method target"), Signature, asINVALID_TYPE);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		if (!Caller.IsBound() && Ptr.flag != 1)
+		{
+			RecordRegistrationFailure(TEXT("host object method native target"), Signature, asINVALID_ARG);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		asCDataType ReturnType = HostDefinitions->Primitive(ttInt);
+		asCString Name;
+		TArray<asSDefinitionParameter> Parameters;
+		if (!ParseHostMethodSignature(*HostDefinitions, Signature.ToCString(), ReturnType, Name, Parameters))
+		{
+			RecordRegistrationFailure(TEXT("host object method"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		asCScriptFunction* Function = nullptr;
+		if (HostDefinitions->CreateFunction(MakeHostBindKey("method", Name.AddressOf()),
+			Name.AddressOf(), TCHAR_TO_UTF8(*HostNamespace), asFUNC_SYSTEM, Function) != asEDefinitionResult::Succeeded
+			|| HostDefinitions->DefineFunction(*Function, ReturnType, Parameters, Type) != asEDefinitionResult::Succeeded
+			|| HostDefinitions->BindNativeFunction(*Function, Ptr, asCALL_THISCALL, *(asFunctionCaller*)&Caller, UserData)
+				!= asEDefinitionResult::Succeeded)
+		{
+			RecordRegistrationFailure(TEXT("host object method"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		return FAngelscriptBoundFunction(TargetEngine, 0);
+	}
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -2145,6 +2907,43 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindMethod(FBindString Signature, a
 FAngelscriptBoundFunction FAngelscriptBinds::BindExternMethod(FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
 {
 	if (IsRecording()) return RecordCallable(Signature, Ptr, Caller, asCALL_CDECL_OBJFIRST, UserData);
+	if (HostDefinitions)
+	{
+		if (!IsHostExplicitAuthoringEnabled()) return FAngelscriptBoundFunction(TargetEngine, 0);
+		if (HasRegistrationFailure()) return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		asCObjectType* Type = ScriptType
+			? CastToObjectType(static_cast<asCTypeInfo*>(ScriptType))
+			: CastToObjectType(HostDefinitions->FindType(ClassName.ToCString()));
+		if (!Type)
+		{
+			RecordRegistrationFailure(TEXT("host object method target"), Signature, asINVALID_TYPE);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		if (!Caller.IsBound() && !Ptr.ptr.f.func)
+		{
+			RecordRegistrationFailure(TEXT("host object method native target"), Signature, asINVALID_ARG);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		asCDataType ReturnType = HostDefinitions->Primitive(ttVoid);
+		asCString Name;
+		TArray<asSDefinitionParameter> Parameters;
+		if (!ParseHostMethodSignature(*HostDefinitions, Signature.ToCString(), ReturnType, Name, Parameters))
+		{
+			RecordRegistrationFailure(TEXT("host object method"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		asCScriptFunction* Function = nullptr;
+		if (HostDefinitions->CreateFunction(MakeHostBindKey("method", Name.AddressOf()),
+			Name.AddressOf(), TCHAR_TO_UTF8(*HostNamespace), asFUNC_SYSTEM, Function) != asEDefinitionResult::Succeeded
+			|| HostDefinitions->DefineFunction(*Function, ReturnType, Parameters, Type) != asEDefinitionResult::Succeeded
+			|| HostDefinitions->BindNativeFunction(*Function, Ptr, asCALL_CDECL_OBJFIRST, *(asFunctionCaller*)&Caller, UserData)
+				!= asEDefinitionResult::Succeeded)
+		{
+			RecordRegistrationFailure(TEXT("host object method"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		return FAngelscriptBoundFunction(TargetEngine, 0);
+	}
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -2170,6 +2969,44 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindExternMethod(FBindString Signat
 FAngelscriptBoundProperty FAngelscriptBinds::BindProperty(FBindString Signature, size_t Offset)
 {
 	if (IsRecording()) return RecordProperty(Signature, Offset);
+	if (HostDefinitions)
+	{
+		if (!IsHostExplicitAuthoringEnabled()) return FAngelscriptBoundProperty(TargetEngine, 0, false);
+		if (HasRegistrationFailure()) return FAngelscriptBoundProperty(TargetEngine, asERROR, false);
+		asCObjectType* Type = ScriptType
+			? CastToObjectType(static_cast<asCTypeInfo*>(ScriptType))
+			: CastToObjectType(HostDefinitions->FindType(ClassName.ToCString()));
+		if (!Type)
+		{
+			RecordRegistrationFailure(TEXT("host object property target"), Signature, asINVALID_TYPE);
+			return FAngelscriptBoundProperty(TargetEngine, asERROR, false);
+		}
+		const char* Cursor = Signature.ToCString();
+		asCDataType PropertyType;
+		if (!ParseHostDataType(*HostDefinitions, Cursor, PropertyType))
+		{
+			RecordRegistrationFailure(TEXT("host object property"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundProperty(TargetEngine, asERROR, false);
+		}
+		SkipHostSpaces(Cursor);
+		const asCString Name = TakeHostToken(Cursor);
+		if (Name.GetLength() == 0)
+		{
+			RecordRegistrationFailure(TEXT("host object property"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundProperty(TargetEngine, asERROR, false);
+		}
+		asSNativePropertyAddress Address;
+		Address.Mode = asENativeAddressMode::Direct;
+		Address.Offset = static_cast<int>(Offset);
+		asCObjectProperty* Property = nullptr;
+		if (HostDefinitions->DefineNativeProperty(*Type, Name.AddressOf(), PropertyType, Address, Property)
+			!= asEDefinitionResult::Succeeded || !Property)
+		{
+			RecordRegistrationFailure(TEXT("host object property"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundProperty(TargetEngine, asERROR, false);
+		}
+		return FAngelscriptBoundProperty(TargetEngine, 0, false);
+	}
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
 		return FAngelscriptBoundProperty(TargetEngine, asERROR, false);
@@ -2203,6 +3040,35 @@ FAngelscriptBoundProperty FAngelscriptBinds::BindProperty(FBindString Signature,
 FAngelscriptBoundFunction FAngelscriptBinds::BindGlobalFunctionForTarget(FBindString Signature, asSFuncPtr Function, ASAutoCaller::FunctionCaller Caller, void* UserData)
 {
 	if (IsRecording()) return RecordCallable(Signature, Function, Caller, asCALL_CDECL, UserData, asBEHAVE_MAX, nullptr, true);
+	if (HostDefinitions)
+	{
+		if (!IsHostExplicitAuthoringEnabled()) return FAngelscriptBoundFunction(TargetEngine, 0);
+		if (HasRegistrationFailure()) return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		if (!Caller.IsBound() && !Function.ptr.f.func)
+		{
+			RecordRegistrationFailure(TEXT("host global function native target"), Signature, asINVALID_ARG);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		asCDataType ReturnType = HostDefinitions->Primitive(ttVoid);
+		asCString Name;
+		TArray<asSDefinitionParameter> Parameters;
+		if (!ParseHostMethodSignature(*HostDefinitions, Signature.ToCString(), ReturnType, Name, Parameters))
+		{
+			RecordRegistrationFailure(TEXT("host global function"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		asCScriptFunction* Created = nullptr;
+		if (HostDefinitions->CreateFunction(MakeHostBindKey("global-fn", Signature.ToCString()),
+			Name.AddressOf(), TCHAR_TO_UTF8(*HostNamespace), asFUNC_SYSTEM, Created) != asEDefinitionResult::Succeeded
+			|| HostDefinitions->DefineFunction(*Created, ReturnType, Parameters, nullptr) != asEDefinitionResult::Succeeded
+			|| HostDefinitions->BindNativeFunction(*Created, Function, asCALL_CDECL, *(asFunctionCaller*)&Caller, UserData)
+				!= asEDefinitionResult::Succeeded)
+		{
+			RecordRegistrationFailure(TEXT("host global function"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		return FAngelscriptBoundFunction(TargetEngine, 0);
+	}
 	if (HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -2219,6 +3085,35 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindGlobalFunctionDirectForTarget(
 	void* UserData)
 {
 	if (IsRecording()) return RecordCallable(Signature, Function, Caller, CallConv, UserData, asBEHAVE_MAX, nullptr, true);
+	if (HostDefinitions)
+	{
+		if (!IsHostExplicitAuthoringEnabled()) return FAngelscriptBoundFunction(TargetEngine, 0);
+		if (!Function.ptr.f.func)
+		{
+			RecordRegistrationFailure(TEXT("host global function native target"), Signature, asINVALID_ARG);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		if (HasRegistrationFailure()) return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		asCDataType ReturnType = HostDefinitions->Primitive(ttVoid);
+		asCString Name;
+		TArray<asSDefinitionParameter> Parameters;
+		if (!ParseHostMethodSignature(*HostDefinitions, Signature.ToCString(), ReturnType, Name, Parameters))
+		{
+			RecordRegistrationFailure(TEXT("host global function"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		asCScriptFunction* Created = nullptr;
+		if (HostDefinitions->CreateFunction(MakeHostBindKey("global-fn", Signature.ToCString()),
+			Name.AddressOf(), TCHAR_TO_UTF8(*HostNamespace), asFUNC_SYSTEM, Created) != asEDefinitionResult::Succeeded
+			|| HostDefinitions->DefineFunction(*Created, ReturnType, Parameters, nullptr) != asEDefinitionResult::Succeeded
+			|| HostDefinitions->BindNativeFunction(*Created, Function, CallConv, *(asFunctionCaller*)&Caller, UserData)
+				!= asEDefinitionResult::Succeeded)
+		{
+			RecordRegistrationFailure(TEXT("host global function"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundFunction(TargetEngine, asERROR);
+		}
+		return FAngelscriptBoundFunction(TargetEngine, 0);
+	}
 	if (HasRegistrationFailure())
 	{
 		return FAngelscriptBoundFunction(TargetEngine, asERROR);
@@ -2258,6 +3153,40 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindMethodDirectForTarget(
 FAngelscriptBoundProperty FAngelscriptBinds::BindGlobalVariableForTarget(FBindString Signature, const void* Address)
 {
 	if (IsRecording()) return RecordProperty(Signature, 0, nullptr, Address, true);
+	if (HostDefinitions)
+	{
+		if (!IsHostExplicitAuthoringEnabled()) return FAngelscriptBoundProperty(TargetEngine, 0, true);
+		if (!Address)
+		{
+			RecordRegistrationFailure(TEXT("host global property native target"), Signature, asINVALID_ARG);
+			return FAngelscriptBoundProperty(TargetEngine, asERROR, true);
+		}
+		const char* Cursor = Signature.ToCString();
+		while (*Cursor == ' ') ++Cursor;
+		const char* Start = Cursor;
+		while (*Cursor && *Cursor != ' ') ++Cursor;
+		asCString TypeName(Start, static_cast<int>(Cursor - Start));
+		while (*Cursor == ' ') ++Cursor;
+		Start = Cursor;
+		while (*Cursor && *Cursor != ' ') ++Cursor;
+		asCString Name(Start, static_cast<int>(Cursor - Start));
+		asCDataType Type = HostDefinitions->Primitive(ttInt);
+		if (TypeName != "int" && TypeName != "int32")
+		{
+			RecordRegistrationFailure(TEXT("host global property"), Signature, asINVALID_TYPE);
+			return FAngelscriptBoundProperty(TargetEngine, asERROR, true);
+		}
+		asCGlobalProperty* Property = nullptr;
+		if (HostDefinitions->CreateNativeGlobalProperty(MakeHostBindKey("global", Name.AddressOf()),
+			MakeHostBindKey("global-use", Name.AddressOf()), Name.AddressOf(), TCHAR_TO_UTF8(*HostNamespace),
+			Type, Property) != asEDefinitionResult::Succeeded)
+		{
+			RecordRegistrationFailure(TEXT("host global property"), Signature, asINVALID_DECLARATION);
+			return FAngelscriptBoundProperty(TargetEngine, asERROR, true);
+		}
+		Property->SetRegisteredAddress(const_cast<void*>(Address));
+		return FAngelscriptBoundProperty(TargetEngine, 0, true);
+	}
 	if (HasRegistrationFailure())
 	{
 		return FAngelscriptBoundProperty(TargetEngine, asERROR, true);
@@ -2306,6 +3235,24 @@ FAngelscriptBinds::FEnumBind::FEnumBind(FAngelscriptBinds& InTargetBinds, FBindS
 		RecordingType = TargetBinds->RecordClass(MoveTemp(Declaration)).RecordingType;
 		return;
 	}
+	if (TargetBinds->IsHostTarget())
+	{
+		asCDefinitions* Graph = TargetBinds->HostDefinitions;
+		if (Graph->FindType(Name.ToCString()))
+		{
+			TypeId = 0;
+			return;
+		}
+		asCEnumType* Enum = nullptr;
+		const auto Ns = StringCast<ANSICHAR>(*TargetBinds->HostNamespace);
+		if (Graph->CreateEnumType(TargetBinds->MakeHostBindKey("enum", Name.ToCString()),
+			Name.ToCString(), Ns.Get(), Enum) != asEDefinitionResult::Succeeded)
+		{
+			TargetBinds->RecordRegistrationFailure(TEXT("host enum"), Name, asINVALID_ARG);
+		}
+		TypeId = 0;
+		return;
+	}
 	asIScriptEngine& ScriptEngine = ResolveScriptEngine();
 	TypeId = ScriptEngine.RegisterEnum(Name.ToCString());
 	if (TypeId == asALREADY_REGISTERED)
@@ -2330,6 +3277,10 @@ asIScriptEngine& FAngelscriptBinds::FEnumBind::ResolveScriptEngine() const
 asITypeInfo* FAngelscriptBinds::FEnumBind::GetTypeInfo()
 {
 	if (TargetBinds->IsRecording()) return nullptr;
+	if (TargetBinds->IsHostTarget())
+	{
+		return TargetBinds->HostDefinitions->FindType(EnumName.ToCString());
+	}
 	return ResolveScriptEngine().GetTypeInfoById(TypeId);
 }
 
@@ -2358,6 +3309,22 @@ void FAngelscriptBinds::FEnumBind::FEnumElement::operator=(int32 Value)
 		FAngelscriptTypeBindMemberHandle Handle;
 		FString Diagnostic;
 		Store.RecordMember(Bind->RecordingType, Member, Handle, Diagnostic);
+		return;
+	}
+	if (Bind->TargetBinds->IsHostTarget())
+	{
+		asCEnumType* Enum = CastToEnumType(static_cast<asCTypeInfo*>(Bind->GetTypeInfo()));
+		if (!Enum)
+		{
+			Bind->TargetBinds->RecordRegistrationFailure(TEXT("host enum value target"), Name, asINVALID_TYPE);
+			return;
+		}
+		const asEDefinitionResult Result = Bind->TargetBinds->HostDefinitions->AddEnumValue(
+			*Enum, Name.ToCString(), Value);
+		if (Result != asEDefinitionResult::Succeeded && Result != asEDefinitionResult::DuplicateName)
+		{
+			Bind->TargetBinds->RecordRegistrationFailure(TEXT("host enum value"), Name, asINVALID_ARG);
+		}
 		return;
 	}
 	asIScriptEngine& ScriptEngine = Bind->ResolveScriptEngine();
@@ -2443,6 +3410,14 @@ FAngelscriptBinds::FNamespace::FNamespace(FAngelscriptBinds& InBinds, FBindStrin
 		RecordingStore->SetNamespace(Name.ToFString());
 		return;
 	}
+	if (InBinds.IsHostTarget())
+	{
+		HostDefinitions = InBinds.HostDefinitions;
+		HostNamespace = &InBinds.HostNamespace;
+		PrevNamespace.SetDynamic(TCHAR_TO_ANSI(*InBinds.HostNamespace));
+		InBinds.HostNamespace = Name.ToFString();
+		return;
+	}
 	TargetEngine = &InBinds.GetTargetEngine();
 	asIScriptEngine& ScriptEngine = InBinds.GetTargetScriptEngine();
 	PrevNamespace.SetDynamic(ScriptEngine.GetDefaultNamespace());
@@ -2454,6 +3429,11 @@ FAngelscriptBinds::FNamespace::~FNamespace()
 	if (RecordingStore != nullptr)
 	{
 		RecordingStore->SetNamespace(PrevNamespace.ToFString());
+		return;
+	}
+	if (HostNamespace)
+	{
+		*HostNamespace = PrevNamespace.ToFString();
 		return;
 	}
 	check(TargetEngine != nullptr);

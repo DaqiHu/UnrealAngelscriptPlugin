@@ -50,6 +50,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FStringTableRegistry_Types(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Policy_ = Binds.EnumForTarget("EStringTableLoadingPolicy");
 		Policy_["Find"] = EStringTableLoadingPolicy::Find;
 		Policy_["FindOrLoad"] = EStringTableLoadingPolicy::FindOrLoad;
@@ -61,6 +62,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FStringTableRegistry(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.BindGlobalFunctionForTarget(
 			"void LOCTABLE_NEW(const FName TableId, const FString& Namespace)",
 			&FAngelscriptFStringTableRegistryBinds::NewTable)

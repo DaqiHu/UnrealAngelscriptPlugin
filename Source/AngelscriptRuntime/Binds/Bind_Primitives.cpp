@@ -130,7 +130,8 @@ AS_FORCE_LINK const FAngelscriptBind Bind_PrimitiveTypes_TypeInfrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
-		if (Binds.IsRecording()) return;
+		if (Binds.IsHostTarget()) return;
+		if (Binds.IsRecording() || Binds.IsHostTarget()) return;
 		FAngelscriptTypeDatabase& TypeDatabase = Binds.GetTargetTypeDatabase();
 		const UAngelscriptSettings* ConfigSettings = Binds.GetTargetEngine().ConfigSettings;
 		check(ConfigSettings != nullptr);
@@ -182,6 +183,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_PrimitiveTypes_ToStringContribution(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(Binds, TEXT("int8"), [](void* Ptr, FString& Str)
 		{
 			Str += FString::Printf(TEXT("%d"), *(int8*)Ptr);
@@ -243,6 +245,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_PrimitiveTypes(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		const UAngelscriptSettings* ConfigSettings = Binds.IsRecording()
 			? nullptr : Binds.GetTargetEngine().ConfigSettings;
 		const bool bDeprecateDoubleType = Binds.IsRecording()

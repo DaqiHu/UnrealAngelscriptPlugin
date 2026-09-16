@@ -144,6 +144,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSoftObjectPtr_TypeDeclarations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bTemplate = true;
 		Flags.TemplateType = "<T>";
@@ -160,6 +161,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSoftObjectPtr_TypeInfrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto TSoftObjectPtr_ = Binds.ExistingClassForTarget("TSoftObjectPtr<T>");
 		TSoftObjectPtr_.TemplateCallback(
 			"bool f(int&in Type, int&out ErrorMessage)",
@@ -212,6 +214,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSoftObjectPtr_Functions(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto TSoftObjectPtr_ = Binds.ExistingClassForTarget("TSoftObjectPtr<T>");
 		BindSoftPtrBaseMethods(TSoftObjectPtr_);
 

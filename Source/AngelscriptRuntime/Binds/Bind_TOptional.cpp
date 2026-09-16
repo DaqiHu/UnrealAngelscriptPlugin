@@ -263,6 +263,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TOptional_MethodSurface(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto TOptional_ = Binds.ExistingClassForTarget("TOptional<T>");
 
 		TOptional_.Constructor("void f()", &FAngelscriptOptionalBinds::Construct)
@@ -335,7 +336,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TOptional_TypeInfrastructure(
 	{
 		auto OptionalType = MakeShared<FAngelscriptOptionalType>();
 		Binds.RegisterTypeForTarget(OptionalType);
-		if (Binds.IsRecording()) return;
+		if (Binds.IsRecording() || Binds.IsHostTarget()) return;
 
 		FAngelscriptTypeDatabase* TargetTypeDatabase = &Binds.GetTargetTypeDatabase();
 		Binds.RegisterTypeFinderForTarget([OptionalType, TargetTypeDatabase](FProperty* Property, FAngelscriptTypeUsage& Usage) -> bool

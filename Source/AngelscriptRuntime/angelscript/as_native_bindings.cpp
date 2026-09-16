@@ -19,9 +19,9 @@ asEByteCodeLinkStatus asCScriptEngine::BindNativeFunction(TConstArrayView<asSNat
 		if (!Request.Declaration || !Request.Function.ptr.f.func) return asEByteCodeLinkStatus::InvalidArgument;
 		std::shared_ptr<asCScriptFunction> Declaration;
 		{
-			std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
-			if (shuttingDown || vmRetirementRequested || metadataRegistrationRetired) return asEByteCodeLinkStatus::Retired;
-			auto* Target = metadataFunctionsByKey.FindRef(Request.Declaration->GetStableKey());
+			std::lock_guard<std::mutex> Lock(registrationMutex);
+			if (shuttingDown || vmRetirementRequested || registrationRetired) return asEByteCodeLinkStatus::Retired;
+			auto* Target = functionsByKey.FindRef(Request.Declaration->GetStableKey());
 			if (Target != Request.Declaration) return asEByteCodeLinkStatus::MissingDeclaration;
 			if (Target->funcType != asFUNC_SYSTEM || Candidates.Contains(Target->GetStableKey())) return asEByteCodeLinkStatus::InvalidArgument;
 			Target->AddRef(); Declaration = std::shared_ptr<asCScriptFunction>(Target, [](auto* Value) { Value->Release(); });
@@ -56,16 +56,16 @@ asEByteCodeLinkStatus asCScriptEngine::BindNativeFunction(TConstArrayView<asSNat
 	// No callable or global address becomes visible until the entire batch is valid.
 	TArray<std::shared_ptr<asSSystemFunctionInterface>> Previous;
 	{
-		std::lock_guard<std::mutex> MetadataLock(metadataRegistrationMutex);
+		std::lock_guard<std::mutex> MetadataLock(registrationMutex);
 		std::lock_guard<std::mutex> PublicationLock(executablePublicationMutex);
-		if (shuttingDown || vmRetirementRequested || metadataRegistrationRetired || executablePublicationGeneration != Generation) return asEByteCodeLinkStatus::Retired;
+		if (shuttingDown || vmRetirementRequested || registrationRetired || executablePublicationGeneration != Generation) return asEByteCodeLinkStatus::Retired;
 		for (int32 Index = 0; Index < Globals.Num(); ++Index)
 		{
 			FailedIndex = Functions.Num() + Index;
 			const auto& Request = Globals[Index];
 			if (!Request.Declaration || !Request.Storage) return asEByteCodeLinkStatus::InvalidArgument;
 			const auto Key = Request.Declaration->GetStableKey();
-			if (metadataGlobalsByKey.FindRef(Key) != Request.Declaration) return asEByteCodeLinkStatus::MissingDeclaration;
+			if (globalsByKey.FindRef(Key) != Request.Declaration) return asEByteCodeLinkStatus::MissingDeclaration;
 			if (GlobalCandidates.Contains(Key)) return asEByteCodeLinkStatus::InvalidArgument;
 			GlobalCandidates.Add(Key, Request.Storage);
 		}
@@ -74,7 +74,7 @@ asEByteCodeLinkStatus asCScriptEngine::BindNativeFunction(TConstArrayView<asSNat
 			if (auto* Old = nativeInterfaces.Find(Entry.Key)) Previous.Add(*Old);
 			nativeInterfaces.Add(Entry.Key, MoveTemp(Entry.Value));
 		}
-		for (const auto& Entry : GlobalCandidates) metadataGlobalBindings.Add(Entry.Key, Entry.Value);
+		for (const auto& Entry : GlobalCandidates) globalBindings.Add(Entry.Key, Entry.Value);
 	}
 	FailedIndex = -1;
 	return asEByteCodeLinkStatus::Succeeded;

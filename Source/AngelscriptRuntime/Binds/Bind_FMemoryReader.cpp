@@ -51,6 +51,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FMemoryReaderType(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.ValueClassForTarget<FMemoryReader>("FMemoryReader", FBindFlags());
 	});
 
@@ -59,6 +60,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FMemoryReader(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Reader_ = Binds.ExistingClassForTarget("FMemoryReader");
 		Reader_.Constructor(
 			"void f(const TArray<uint8>& Data, bool ForceByteSwapping = false)",

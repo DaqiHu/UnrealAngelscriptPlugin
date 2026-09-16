@@ -64,6 +64,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FBoxSphereBounds_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Flags.ExtraFlags |= asOBJ_BASICMATHTYPE;
@@ -76,6 +77,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FBoxSphereBounds_ToStringContribution(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(Binds, TEXT("FBoxSphereBounds"), &FAngelscriptFBoxSphereBoundsBinds::AppendToString);
 	});
 
@@ -84,6 +86,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FBoxSphereBounds(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FBoxSphereBounds_ = Binds.ExistingClassForTarget("FBoxSphereBounds");
 		FBoxSphereBounds_.Constructor("void f()", &FAngelscriptFBoxSphereBoundsBinds::ConstructDefault)
 			.NoDiscard()

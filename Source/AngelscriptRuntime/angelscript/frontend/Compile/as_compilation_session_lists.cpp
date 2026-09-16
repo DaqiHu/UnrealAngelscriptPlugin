@@ -1,6 +1,6 @@
 #include "frontend/Compile/as_compilation_session.h"
 #include "frontend/AST/as_ast_cast.h"
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 
@@ -21,7 +21,7 @@ bool asCCompilationSession::ResolveListInitializer(asCQualType Type, asSListInit
 				Candidate && (Candidate->flags & (asOBJ_REF | asOBJ_VALUE)) && !(Candidate->flags & asOBJ_CALLABLE_TYPE))
 			{ Target = static_cast<const asCObjectType*>(Candidate); break; }
 		if (!Target) return false;
-		const auto* Initializer = Target->GetDefinitionSet()->GetListInitializer(*Target);
+		const auto* Initializer = Target->GetDefinitions()->GetListInitializer(*Target);
 		if (!Initializer || !Initializer->Factory) return false;
 		auto& Registry = Context.GetTypeContext()->GetIdentityRegistry();
 		TFunction<asCQualType(const asCDataType&, int)> ConvertType = [&](const asCDataType& Input, int Depth) -> asCQualType
@@ -31,7 +31,7 @@ bool asCCompilationSession::ResolveListInitializer(asCQualType Type, asSListInit
 			if (const auto* Info = Input.GetTypeInfo())
 			{
 				const asCObjectType* Instance = (Info->flags & (asOBJ_VALUE | asOBJ_REF)) && !(Info->flags & asOBJ_CALLABLE_TYPE) ? static_cast<const asCObjectType*>(Info) : nullptr;
-				const auto* Definition = Instance ? Instance->GetMetadataTemplateDefinition() : nullptr;
+				const auto* Definition = Instance ? Instance->GetTemplateDefinition() : nullptr;
 				asSStableTypeUseDescriptor Use; Use.Kind = asETypeUseKind::Nominal; Use.Declaration = Definition ? Definition->GetStableKey() : Info->GetStableKey();
 				asSStableKey BaseKey;
 				if (Registry.InternTypeUse(Use, BaseKey) != asETypeIdentityStatus::Succeeded) return {};

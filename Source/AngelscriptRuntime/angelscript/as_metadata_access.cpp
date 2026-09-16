@@ -1,4 +1,4 @@
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "as_objecttype.h"
 #include "as_property.h"
 #include "as_scriptfunction.h"
@@ -37,7 +37,7 @@ namespace asMetadataAccess
 	}
 }
 
-bool asCModuleDefinitionSet::CanUseAccessSpecifier(const asCObjectType& Owner, const asSAccessSpecifier* Policy) const
+bool asCDefinitions::CanUseAccessSpecifier(const asCObjectType& Owner, const asSAccessSpecifier* Policy) const
 {
 	if (!Policy) return true;
 	TSet<const asCObjectType*> Visited;
@@ -51,45 +51,45 @@ bool asCModuleDefinitionSet::CanUseAccessSpecifier(const asCObjectType& Owner, c
 	return false;
 }
 
-asEMetadataResult asCModuleDefinitionSet::DefineAccessSpecifier(asCObjectType& Owner, const asSAccessSpecifier& Definition, asSAccessSpecifier*& Out)
+asEDefinitionResult asCDefinitions::DefineAccessSpecifier(asCObjectType& Owner, const asSAccessSpecifier& Definition, asSAccessSpecifier*& Out)
 {
 	Out = nullptr;
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Owner)) return asEMetadataResult::ForeignOwner;
-	if (!asMetadataAccess::ValidPolicy(Definition)) return asEMetadataResult::InvalidArgument;
-	if (Owner.GetAccessSpecifier(Definition.name.AddressOf())) return asEMetadataResult::DuplicateName;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Owner)) return asEDefinitionResult::ForeignOwner;
+	if (!asMetadataAccess::ValidPolicy(Definition)) return asEDefinitionResult::InvalidArgument;
+	if (Owner.GetAccessSpecifier(Definition.name.AddressOf())) return asEDefinitionResult::DuplicateName;
 	Out = asNEW(asSAccessSpecifier);
 	*Out = Definition;
 	Owner.accessSpecifiers.PushLast(Out);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetPropertyAccess(asCObjectType& Owner, asCObjectProperty& Property, asSAccessSpecifier& Policy)
+asEDefinitionResult asCDefinitions::SetPropertyAccess(asCObjectType& Owner, asCObjectProperty& Property, asSAccessSpecifier& Policy)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Owner) || !CanUseAccessSpecifier(Owner, &Policy)) return asEMetadataResult::ForeignOwner;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Owner) || !CanUseAccessSpecifier(Owner, &Policy)) return asEDefinitionResult::ForeignOwner;
 	bool Found = false;
 	for (asUINT Index = 0; Index < Owner.localProperties.GetLength(); ++Index) Found |= Owner.localProperties[Index] == &Property;
-	if (!Found) return asEMetadataResult::ForeignOwner;
+	if (!Found) return asEDefinitionResult::ForeignOwner;
 	Property.accessSpecifier = &Policy;
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetFunctionAccess(asCScriptFunction& Function, asSAccessSpecifier& Policy)
+asEDefinitionResult asCDefinitions::SetFunctionAccess(asCScriptFunction& Function, asSAccessSpecifier& Policy)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Function) || !Function.objectType || !CanUseAccessSpecifier(*Function.objectType, &Policy)) return asEMetadataResult::ForeignOwner;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Function) || !Function.objectType || !CanUseAccessSpecifier(*Function.objectType, &Policy)) return asEDefinitionResult::ForeignOwner;
 	Function.accessSpecifier = &Policy;
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-bool asCModuleDefinitionSet::CollectAccessSnapshot(TMap<const asSAccessSpecifier*, asSAccessPolicySnapshot>& Policies,
+bool asCDefinitions::CollectAccessSnapshot(TMap<const asSAccessSpecifier*, asSAccessPolicySnapshot>& Policies,
 	TMap<const asCObjectProperty*, asSMemberAccessSnapshot>& Properties,
 	TMap<const asCScriptFunction*, asSMemberAccessSnapshot>& Methods) const
 {
@@ -123,7 +123,7 @@ bool asCModuleDefinitionSet::CollectAccessSnapshot(TMap<const asSAccessSpecifier
 	return true;
 }
 
-bool asCModuleDefinitionSet::CaptureAccessSnapshot()
+bool asCDefinitions::CaptureAccessSnapshot()
 {
 	TMap<const asSAccessSpecifier*, asSAccessPolicySnapshot> Policies;
 	TMap<const asCObjectProperty*, asSMemberAccessSnapshot> Properties;
@@ -133,7 +133,7 @@ bool asCModuleDefinitionSet::CaptureAccessSnapshot()
 	return true;
 }
 
-bool asCModuleDefinitionSet::ValidateAccessSnapshot() const
+bool asCDefinitions::ValidateAccessSnapshot() const
 {
 	TMap<const asSAccessSpecifier*, asSAccessPolicySnapshot> Policies;
 	TMap<const asCObjectProperty*, asSMemberAccessSnapshot> Properties;

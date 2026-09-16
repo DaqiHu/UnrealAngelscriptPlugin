@@ -18,6 +18,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_USkinnedMeshComponent(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FAngelscriptBinds USkinnedMeshComponent_ = Binds.ExistingClassForTarget("USkinnedMeshComponent");
 
 		USkinnedMeshComponent_.Method("void UpdateLODStatus()", METHOD_TRIVIAL(USkinnedMeshComponent, UpdateLODStatus));

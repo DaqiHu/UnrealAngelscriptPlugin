@@ -26,6 +26,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FPlatformApplicationMisc(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FAngelscriptBinds::FNamespace Namespace(Binds, "FPlatformApplicationMisc");
 		Binds.BindGlobalFunctionForTarget("void ClipboardCopy(const FString& Str)", &FAngelscriptFPlatformApplicationMiscBinds::ClipboardCopy);
 		Binds.BindGlobalFunctionForTarget("void ClipboardPaste(FString&\tDest)", &FPlatformApplicationMisc::ClipboardPaste)

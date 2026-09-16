@@ -122,6 +122,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AActor(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto AActorType = Binds.ExistingClassForTarget("AActor");
 
 		AActorType.Method("bool IsActorInitialized() const", METHOD_TRIVIAL(AActor, IsActorInitialized));
@@ -196,6 +197,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Actors(
 	EAngelscriptBindPhase::PostReflectionBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		if (Binds.IsRecording())
 		{
 			const auto& Snapshot = Binds.GetRecordingStore()->GetReflectedSnapshot();

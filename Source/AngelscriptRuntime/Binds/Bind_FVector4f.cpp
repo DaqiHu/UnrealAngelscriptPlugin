@@ -61,6 +61,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector4f_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Flags.ExtraFlags |= asOBJ_BASICMATHTYPE;
@@ -72,6 +73,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector4f_Infrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FVector4fType>());
 		FToStringHelper::Register(Binds, TEXT("FVector4f"), &FAngelscriptFVector4fBinds::AppendToString);
 	});
@@ -81,6 +83,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector4f(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FVector4f_ = Binds.ExistingClassForTarget("FVector4f");
 		FVector4f_.Constructor(
 			"void f(float32 InX, float32 InY, float32 InZ, float32 InW)",

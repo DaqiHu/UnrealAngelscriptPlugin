@@ -125,6 +125,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_WorldType(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto WorldType_ = Binds.EnumForTarget("EWorldType");
 		WorldType_["None"] = EWorldType::None;
 		WorldType_["Game"] = EWorldType::Game;
@@ -141,6 +142,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_NetMode(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto NetMode_ = Binds.EnumForTarget("ENetMode");
 		NetMode_["NM_Client"] = ENetMode::NM_Client;
 		NetMode_["NM_DedicatedServer"] = ENetMode::NM_DedicatedServer;
@@ -154,6 +156,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_World(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.BindGlobalFunctionForTarget("UObject __WorldContext()", &FAngelscriptUWorldBinds::GetWorldContext);
 		Binds.BindGlobalFunctionForTarget("UWorld GetCurrentWorld()", &FAngelscriptUWorldBinds::GetCurrentWorld);
 

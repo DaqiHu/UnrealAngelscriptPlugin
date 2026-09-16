@@ -126,6 +126,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FPaths(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FAngelscriptBinds::FNamespace Namespace(Binds, "FPaths");
 
 		Binds.BindGlobalFunctionForTarget("FString RootDir()", &FPaths::RootDir);

@@ -18,7 +18,7 @@ asCQualType asCTypeAliasDecl::GetResolvedQualType() const
 	{
 		if (!GetStableIdentity().IsZero()) return GetStableIdentity().ToHexString();
 		FStringView LogicalSourceKey;
-		if (GetOwnerContext()) GetOwnerContext()->GetSourceSnapshot()->TryGetLogicalSourceKey(GetSourceRange().Begin.FileID, LogicalSourceKey);
+		if (GetOwnerContext()) GetOwnerContext()->GetSources().TryGetLogicalSourceKey(GetSourceRange().Begin.FileID, LogicalSourceKey);
 		return FString::Printf(TEXT("source-decl:%s:%s:%u:%u"), *FString(LogicalSourceKey), *GetName(),
 			GetSourceRange().Begin.ByteOffset, GetSourceRange().End.ByteOffset);
 	}

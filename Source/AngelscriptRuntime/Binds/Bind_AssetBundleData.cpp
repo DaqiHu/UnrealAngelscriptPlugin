@@ -60,6 +60,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AssetBundleData_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Binds.ValueClassForTarget<FAssetBundleEntry>("FAssetBundleEntry", Flags);
 		Binds.ValueClassForTarget<FAssetBundleData>("FAssetBundleData", Flags);
@@ -70,6 +71,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AssetBundleData(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Entry = Binds.ExistingClassForTarget("FAssetBundleEntry");
 		Entry.Constructor("void f()", &FAngelscriptAssetBundleDataBinds::ConstructEntryDefault, "FAssetBundleEntry", true);
 		Entry.Constructor("void f(FName BundleName)", &FAngelscriptAssetBundleDataBinds::ConstructEntry, "FAssetBundleEntry", true);

@@ -65,6 +65,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRandomStream_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Binds.ValueClassForTarget<FRandomStream>("FRandomStream", Flags);
@@ -76,6 +77,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRandomStream(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FRandomStream_ = Binds.ExistingClassForTarget("FRandomStream");
 		FRandomStream_.Constructor("void f()", &FAngelscriptFRandomStreamBinds::ConstructDefault);
 		FRandomStream_.Constructor("void f(int32 InSeed)", &FAngelscriptFRandomStreamBinds::ConstructIntSeed);
@@ -102,6 +104,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRandomStream_ToStringContribution(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(Binds, TEXT("FRandomStream"), &FAngelscriptFRandomStreamBinds::AppendToString);
 	});
 

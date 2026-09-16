@@ -398,6 +398,10 @@ static void BindFStringCore(FAngelscriptBinds& Binds)
 
 	// Handling as string
 	FString_.Method("int Len() const", METHOD_TRIVIAL(FString, Len));
+	if (Binds.IsHostTarget())
+	{
+		return;
+	}
 	FString_.Method("bool IsNumeric() const", METHOD_TRIVIAL(FString, IsNumeric));
 	FString_.Method("FString Reverse() const", METHOD_TRIVIAL(FString, Reverse));
 
@@ -1337,6 +1341,7 @@ FString FAngelscriptFStringBinds::ApplyFormatDouble(double Value, const FString&
 
 static void BindFStringConversion(FAngelscriptBinds& Binds)
 {
+	if (Binds.IsHostTarget()) return;
 	auto FString_ = Binds.ExistingClassForTarget("FString");
 
 	// Cross-type conversions are materialized from ordered detached ToString effects.
@@ -1499,7 +1504,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FString_TypeInfrastructure(
 	{
 		auto FString_ = Binds.ExistingClassForTarget("FString");
 		Binds.RegisterTypeForTarget(MakeShared<FStringType>());
-		if (Binds.IsRecording()) return;
+		if (Binds.IsRecording() || Binds.IsHostTarget()) return;
 		TGetStaticTypeInfo<FString>::SetForEngine(&Binds.GetTargetScriptEngine(), FString_.GetTypeInfo());
 		Binds.GetTargetScriptEngine().RegisterStringFactory("FString", new FAngelscriptFStringFactory());
 	});

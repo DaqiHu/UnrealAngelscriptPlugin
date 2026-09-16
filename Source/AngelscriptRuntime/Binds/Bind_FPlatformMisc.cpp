@@ -30,6 +30,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FPlatformMisc(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FAngelscriptBinds::FNamespace Namespace(Binds, "FPlatformMisc");
 		Binds.BindGlobalFunctionForTarget("void RequestExit(bool Force)", &FAngelscriptFPlatformMiscBinds::RequestExit);
 		Binds.BindGlobalFunctionForTarget(

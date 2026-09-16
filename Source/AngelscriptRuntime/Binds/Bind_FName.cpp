@@ -77,6 +77,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FName_Infrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FNameType>());
 		FToStringHelper::Register(Binds, TEXT("FName"), &FAngelscriptFNameBinds::AppendToString, true);
 	});
@@ -86,6 +87,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FName(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FName_ = Binds.ExistingClassForTarget("FName");
 
 		FName_.Constructor(

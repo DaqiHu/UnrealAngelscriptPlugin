@@ -45,6 +45,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FInstancedStruct(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FAngelscriptAnyStructParameter_ = Binds.ExistingClassForTarget("FAngelscriptAnyStructParameter");
 		FAngelscriptAnyStructParameter_
 			.ImplicitConstructor(

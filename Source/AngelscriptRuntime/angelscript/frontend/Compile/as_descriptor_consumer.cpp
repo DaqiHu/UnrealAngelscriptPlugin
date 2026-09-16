@@ -106,10 +106,24 @@ namespace
 
 		int32 SourceLine(const asCSourceManager& SourceManager, const asCSourceRange& Range)
 		{
-			asSSourceLineColumn Location;
-			return SourceManager.TryGetLineColumn(Range.Begin, Location)
-				? static_cast<int32>(Location.Line + 1)
-				: 1;
+			TConstArrayView<uint8> Bytes;
+			if (!SourceManager.TryGetBytes(Range.Begin.FileID, Bytes))
+			{
+				return 1;
+			}
+			asUINT Newlines = 0;
+			const asUINT Limit = Range.Begin.ByteOffset < static_cast<asUINT>(Bytes.Num())
+				? Range.Begin.ByteOffset
+				: static_cast<asUINT>(Bytes.Num());
+			for (asUINT Index = 0; Index < Limit; ++Index)
+			{
+				if (Bytes[Index] == static_cast<uint8>('\n'))
+				{
+					++Newlines;
+				}
+			}
+			// Match the previous TryGetLineColumn path: 1-based line, then +1 for host LineNumber.
+			return static_cast<int32>(Newlines + 2);
 		}
 
 		bool ProjectFunction(

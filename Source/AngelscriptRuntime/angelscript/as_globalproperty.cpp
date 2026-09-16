@@ -34,7 +34,7 @@
 #include "as_config.h"
 #include "as_property.h"
 #include "as_scriptengine.h"
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -69,7 +69,7 @@ void asCGlobalProperty::AddRef()
 
 void asCGlobalProperty::Release()
 {
-	if (metadataOwner)
+	if (definitions)
 	{
 		refCount.atomicDec();
 		return;
@@ -80,7 +80,7 @@ void asCGlobalProperty::Release()
 
 void asCGlobalProperty::DestroyInternal()
 {
-	if (metadataOwner) return;
+	if (definitions) return;
 	if( initFunc )
 	{
 		initFunc->ReleaseInternal();
@@ -90,7 +90,7 @@ void asCGlobalProperty::DestroyInternal()
 
 void *asCGlobalProperty::GetAddressOfValue()
 { 
-	if (metadataOwner) return nullptr;
+	if (definitions) return nullptr;
 	return memory;
 }
 
@@ -100,7 +100,7 @@ void *asCGlobalProperty::GetAddressOfValue()
 // any time.
 void asCGlobalProperty::AllocateMemory() 
 { 
-	if (metadataOwner) return;
+	if (definitions) return;
 	if( type.GetSizeOnStackDWords() > 2 ) 
 	{ 
 #ifndef WIP_16BYTE_ALIGNED
@@ -115,7 +115,7 @@ void asCGlobalProperty::AllocateMemory()
 
 void asCGlobalProperty::SetRegisteredAddress(void *p) 
 { 
-	if (metadataOwner) return;
+	if (definitions && !metadataNativeDeclaration) return;
 	realAddress = p;
 	if( type.IsObject() && !type.IsReference() && !type.IsObjectHandle() )
 	{
@@ -133,7 +133,7 @@ void *asCGlobalProperty::GetRegisteredAddress() const
 
 void asCGlobalProperty::SetInitFunc(asCScriptFunction *in_initFunc)
 {
-	if (metadataOwner) return;
+	if (definitions) return;
 	// This should only be done once
 	asASSERT( initFunc == 0 );
 

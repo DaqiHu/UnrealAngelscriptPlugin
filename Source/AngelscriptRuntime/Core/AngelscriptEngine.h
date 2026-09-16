@@ -44,11 +44,13 @@ class asIScriptFunction;
 class asIScriptObject;
 class asITypeInfo;
 class asCContext;
+class asCDefinitions;
+enum class asERegistrationResult : unsigned char;
+namespace UE::Angelscript::Private { class FAngelscriptBindCollection; }
 struct asSJITFunctionBinding;
 enum class EAngelscriptJITExecutionCapability : uint32;
 class FAngelscriptBindDatabase;
 struct FAngelscriptTypeDatabase;
-class FAngelscriptTypeBindInfoStore;
 class FAngelscriptTypeBindInfoInstallation;
 struct FAngelscriptBindingDiagnostic;
 struct FAngelscriptBindState;
@@ -447,8 +449,11 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngine
 	~FAngelscriptEngine();
 
 	static TUniquePtr<FAngelscriptEngine> Create(const FAngelscriptEngineConfig& InConfig, const FAngelscriptEngineDependencies& InDependencies);
-	static TUniquePtr<FAngelscriptEngine> CreateForBindings(TSharedRef<const FAngelscriptTypeBindInfoStore> Store, FAngelscriptBindingDiagnostic& Diagnostic);
 	static TUniquePtr<FAngelscriptEngine> CreateForBindings(FAngelscriptBindingDiagnostic& Diagnostic);
+	static TUniquePtr<FAngelscriptEngine> CreateForBindings(
+		const UE::Angelscript::Private::FAngelscriptBindCollection& Collection,
+		FAngelscriptBindingDiagnostic& Diagnostic);
+	asERegistrationResult InjectDefinitions(const asCDefinitions& Graph);
 #if WITH_DEV_AUTOMATION_TESTS
 	static uint64 GetBindingNativeEngineAllocationCountForTesting();
 #endif
@@ -605,6 +610,9 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptEngine
 
 	/* Initially bind all engine types to angelscript. */
 	bool BindScriptTypes();
+#if WITH_DEV_AUTOMATION_TESTS
+	static void SetForcedProcessHostCaptureFailureForTesting(const FString& Diagnostic);
+#endif
 
 	/* Initially compile all script files in global folders. */
 	void InitialCompile();
@@ -985,7 +993,6 @@ private:
 	void ShutdownBindings();
 	bool bBindingOnly = false;
 	bool bShuttingDownBindings = false;
-	TUniquePtr<FAngelscriptTypeBindInfoInstallation> BindingInstallation;
 	TArray<asIScriptContext*> BindingContexts;
 	TUniquePtr<FAngelscriptBindState> BindState;
 	TUniquePtr<TArray<FToStringType>> ToStringList;

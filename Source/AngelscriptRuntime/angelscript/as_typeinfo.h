@@ -49,11 +49,17 @@
 
 BEGIN_AS_NAMESPACE
 
- enum class asETypeDeclKind : uint8; 
+	enum class asETypeDeclKind : uint8;
+	enum class asETypeInfoKind : asBYTE
+	{
+		HostProcess,
+		ScriptEngine,
+		LiveRegister
+	};
 
 class asCScriptEngine;
-class asCModuleDefinitionSet;
-class asCModuleDefinitionSet;
+class asCDefinitions;
+class asCDefinitions;
 class asCModule;
 class asCObjectType;
 class asCEnumType;
@@ -150,11 +156,12 @@ public:
 public:
 	asCTypeInfo(asCScriptEngine *engine);
 	virtual ~asCTypeInfo();
-	const asSStableKey& GetStableKey() const { return metadataStableKey; }
-	asETypeDeclKind GetMetadataDeclarationKind() const { return static_cast<asETypeDeclKind>(metadataDeclarationKind); }
-	asUINT GetMetadataGenericArity() const { return metadataGenericArity; }
-	asCModuleDefinitionSet* GetDefinitionSet() const { return metadataOwner; }
-	asCTypeInfo* GetMetadataDeclarationOwner() const { return metadataDeclarationOwner; }
+	const asSStableKey& GetStableKey() const { return stableKey; }
+	asETypeInfoKind GetTypeInfoKind() const { return typeInfoKind; }
+	asETypeDeclKind GetDeclarationKind() const { return static_cast<asETypeDeclKind>(declarationKind); }
+	asUINT GetGenericArity() const { return genericArity; }
+	asCDefinitions* GetDefinitions() const { return definitions; }
+	asCTypeInfo* GetDeclarationOwner() const { return declarationOwner; }
 	asEFingerprintStatus TryGetSchemaHash(asSSchemaHash& OutHash, TConstArrayView<uint8>* OutWitness = nullptr) const;
 	asEFingerprintStatus TryGetLayoutHash(asSLayoutHash& OutHash, TConstArrayView<uint8>* OutWitness = nullptr) const;
 
@@ -201,21 +208,22 @@ public:
 	asCArray<asPWORD> userData;
 
 protected:
-	friend class asCModuleDefinitionSet;
+	friend class asCDefinitions;
 	friend class asCScriptEngine;
 	friend class asCConfigGroup;
 	friend class asCModule;
 	friend class asCObjectType;
 	asCTypeInfo();
-	asCTypeInfo(asCModuleDefinitionSet& owner, const asSStableKey& key);
+	asCTypeInfo(asCDefinitions& owner, const asSStableKey& key);
 
 	mutable asCAtomic externalRefCount;
 	asCAtomic         internalRefCount;
-	asCModuleDefinitionSet* metadataOwner = nullptr;
-	asSStableKey metadataStableKey;
-	asBYTE metadataDeclarationKind = 0;
-	asUINT metadataGenericArity = 0;
-	asCTypeInfo* metadataDeclarationOwner = nullptr;
+	asCDefinitions* definitions = nullptr;
+	asETypeInfoKind typeInfoKind = asETypeInfoKind::ScriptEngine;
+	asSStableKey stableKey;
+	asBYTE declarationKind = 0;
+	asUINT genericArity = 0;
+	asCTypeInfo* declarationOwner = nullptr;
 	mutable std::mutex metadataReferenceMutex;
 
 };
@@ -242,8 +250,8 @@ public:
 	const char *GetEnumValueByIndex(asUINT index, int *outValue) const;
 
 protected:
-	friend class asCModuleDefinitionSet;
-	asCEnumType(asCModuleDefinitionSet& owner, const asSStableKey& key) : asCTypeInfo(owner, key) {}
+	friend class asCDefinitions;
+	asCEnumType(asCDefinitions& owner, const asSStableKey& key) : asCTypeInfo(owner, key) {}
 	asCEnumType() : asCTypeInfo() {}
 };
 
@@ -262,8 +270,8 @@ public:
 	int GetTypedefTypeId() const;
 
 protected:
-	friend class asCModuleDefinitionSet;
-	asCTypedefType(asCModuleDefinitionSet& owner, const asSStableKey& key) : asCTypeInfo(owner, key) {}
+	friend class asCDefinitions;
+	asCTypedefType(asCDefinitions& owner, const asSStableKey& key) : asCTypeInfo(owner, key) {}
 	asCTypedefType() : asCTypeInfo() {}
 };
 
@@ -283,8 +291,8 @@ public:
 	asCObjectType     *parentClass; // doesn't increase refCount
 
 protected:
-	friend class asCModuleDefinitionSet;
-	asCCallableType(asCModuleDefinitionSet& owner, const asSStableKey& key, asCScriptFunction* func);
+	friend class asCDefinitions;
+	asCCallableType(asCDefinitions& owner, const asSStableKey& key, asCScriptFunction* func);
 	asCCallableType() : asCTypeInfo(), callableSignature(0), parentClass(0) {}
 };
 

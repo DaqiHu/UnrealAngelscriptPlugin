@@ -79,6 +79,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_SoftObjectPath(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto SoftObjectPath_ = Binds.ExistingClassForTarget("FSoftObjectPath");
 		SoftObjectPath_.Constructor("void f(const FString& Path)", &FAngelscriptSoftObjectPathBinds::ConstructObjectPathFromString);
 		SoftObjectPath_.Constructor("void f(const UObject InObject)", &FAngelscriptSoftObjectPathBinds::ConstructObjectPathFromObject);
@@ -112,6 +113,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_SoftObjectPath_ToStringContributions(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(Binds, TEXT("FSoftObjectPath"), &FAngelscriptSoftObjectPathBinds::AppendObjectPathToString);
 		FToStringHelper::Register(Binds, TEXT("FSoftClassPath"), &FAngelscriptSoftObjectPathBinds::AppendClassPathToString);
 	});

@@ -1,7 +1,7 @@
 #include "frontend/Compile/as_compilation_session.h"
 #include "frontend/AST/as_ast_cast.h"
 #include "frontend/AST/as_type.h"
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "as_scriptfunction.h"
 #include "as_objecttype.h"
 #include "as_typeinfo.h"
@@ -9,24 +9,25 @@
 #include "Containers/Set.h"
 
 BEGIN_AS_NAMESPACE
-void asCCompilationSession::BindFrozenDefinitions(const asCModuleDefinitionSet* Set)
+void asCCompilationSession::BindFrozenDefinitions(const asCDefinitions* Set)
 	{
-		FrozenDefinitionSet = Set;
+		FrozenDefinitions = Set;
 	}
 
-bool asCCompilationSession::AddExternalDefinitions(asCModuleDefinitionSet* Set)
+bool asCCompilationSession::AddExternalDefinitions(asCDefinitions* Set)
 	{
 		if (Phase != asECompilationPhase::Collecting || !Set) return false;
 		if (ExternalDefinitions.Contains(Set)) return true;
-		TArray<asCModuleDefinitionSet*> Closure;
-		TSet<const asCModuleDefinitionSet*> Visited;
-		TFunction<bool(asCModuleDefinitionSet*)> Visit = [&](asCModuleDefinitionSet* Item)
+		TArray<asCDefinitions*> Closure;
+		TSet<const asCDefinitions*> Visited;
+		TFunction<bool(asCDefinitions*)> Visit = [&](asCDefinitions* Item)
 		{
-			if (!Item || !Item->IsFrozen() || !Item->ValidateFrozenDefinitions() || !Item->GetIdentityContext() ||
+			if (!Item || !Item->IsFrozen() || !Item->GetIdentityContext() ||
 				Item->GetIdentityContext()->GetIdentityRegistryOwner() != Context.GetTypeContext()->GetIdentityRegistryOwner()) return false;
+			if (Item->GetOptions().Kind != asETypeInfoKind::HostProcess && !Item->ValidateFrozenDefinitions()) return false;
 			if (Visited.Contains(Item) || ExternalDefinitions.Contains(Item)) return true;
 			Visited.Add(Item);
-			for (asCModuleDefinitionSet* Dependency : Item->GetDependencies()) if (!Visit(Dependency)) return false;
+			for (asCDefinitions* Dependency : Item->GetDependencies()) if (!Visit(Dependency)) return false;
 			Closure.Add(Item);
 			return true;
 		};
@@ -65,7 +66,14 @@ bool asCCompilationSession::AddExternalDefinitions(asCModuleDefinitionSet* Set)
 			{
 				if (!Function || Function->IsMetadataCallableSignature() || Function->name.GetLength() == 0) continue;
 				asSFunctionIdentityDescriptor Descriptor;
-				if (Registry.ResolveFunction(Function->GetStableKey(), Descriptor) != asETypeIdentityStatus::Succeeded) return false;
+				if (Registry.ResolveFunction(Function->GetStableKey(), Descriptor) != asETypeIdentityStatus::Succeeded)
+				{
+					// HostProcess still writes CRC keys for most binds. Compile
+					// against that freeze must publish interned types without
+					// requiring every function to be interned first.
+					if (Item->GetOptions().Kind == asETypeInfoKind::HostProcess) continue;
+					return false;
+				}
 				asSExternalCallable Callable;
 				Callable.Key = Function->GetStableKey();
 				Callable.Function = Function;

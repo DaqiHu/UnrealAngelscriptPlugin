@@ -43,6 +43,14 @@ AS_FORCE_LINK const FAngelscriptBind Bind_USceneComponent(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget())
+		{
+			Binds.ReferenceClassForTarget("USceneComponent", USceneComponent::StaticClass())
+				.Method(
+					"void SetRelativeLocation(const FVector& NewLocation)",
+					&FAngelscriptUSceneComponentBinds::SetRelativeLocation);
+			return;
+		}
 		auto USceneComponent_ = Binds.ExistingClassForTarget("USceneComponent");
 		USceneComponent_.Method("int32 GetNumChildrenComponents() const", METHOD_TRIVIAL(USceneComponent, GetNumChildrenComponents));
 		USceneComponent_.Method(
@@ -89,6 +97,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FScopedMovementUpdate_TypeInfrastructu
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FScopedMovementUpdate_ = Binds.ValueClassForTarget<FAngelscriptUSceneComponentBinds::FScriptScopedMovementUpdate>(
 			"FScopedMovementUpdate",
 			FBindFlags());

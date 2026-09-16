@@ -18,6 +18,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_ULocalPlayer(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto ULocalPlayer_ = Binds.ExistingClassForTarget("ULocalPlayer");
 
 		ULocalPlayer_.Method("UGameInstance GetGameInstance() const", METHOD_TRIVIAL(ULocalPlayer, GetGameInstance));

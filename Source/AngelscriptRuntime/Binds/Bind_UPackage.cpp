@@ -15,6 +15,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UPackage(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto UPackage_ = Binds.ExistingClassForTarget("UPackage");
 
 		UPackage_.Method("bool IsDirty() const", METHOD_TRIVIAL(UPackage, IsDirty));

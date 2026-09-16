@@ -259,7 +259,7 @@ asSCursorContext asCToolingSession::PrepareCursor(
 	{
 		asSBuilderOptions Options = Inputs->Options;
 		Options.Dependencies.Reset();
-		for (const TSharedPtr<asCModuleDefinitionSet, ESPMode::ThreadSafe>& OwnedSet : Inputs->OwnedDefinitionSets)
+		for (const TSharedPtr<asCDefinitions, ESPMode::ThreadSafe>& OwnedSet : Inputs->OwnedDefinitions)
 		{
 			Options.Dependencies.Add(OwnedSet.Get());
 		}

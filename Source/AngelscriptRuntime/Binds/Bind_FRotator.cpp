@@ -133,6 +133,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRotator_Type(
 	TEXT("FRotator.Type"), EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Flags.ExtraFlags |= asOBJ_BASICMATHTYPE;
@@ -143,6 +144,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRotator_Infrastructure(
 	TEXT("FRotator.Infrastructure"), EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FRotatorType>());
 		FToStringHelper::Register(Binds, TEXT("FRotator"), &FAngelscriptFRotatorBinds::AppendToString);
 
@@ -151,6 +153,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRotator(
 	TEXT("FRotator.Functions"), EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FRotator_ = Binds.ExistingClassForTarget("FRotator");
 		FRotator_.Constructor(
 			"void f(float64 Pitch, float64 Yaw, float64 Roll)",

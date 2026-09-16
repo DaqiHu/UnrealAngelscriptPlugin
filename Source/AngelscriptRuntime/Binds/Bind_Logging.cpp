@@ -86,6 +86,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Logging(
 			"void Log(const FString& Text)",
 			&FAngelscriptLoggingBinds::Log)
 			.CompileOutIfNoLog();
+		if (Binds.IsHostTarget()) return;
 		Binds.BindGlobalFunctionForTarget(
 			"void LogInfo(const FString& Text)",
 			&FAngelscriptLoggingBinds::LogInfo)

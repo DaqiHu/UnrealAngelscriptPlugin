@@ -44,6 +44,7 @@
 #include "as_string.h"
 #include "as_array.h"
 #include "as_datatype.h"
+#include "as_typeinfo.h"
 #include "as_atomic.h"
 #include "as_buildartifact.h"
 #include "Containers/Array.h"
@@ -55,8 +56,8 @@
 
 BEGIN_AS_NAMESPACE
 
-class asCModuleDefinitionSet;
-class asCModuleDefinitionSet;
+class asCDefinitions;
+class asCDefinitions;
  enum class asEFunctionIdentityKind : uint8; 
 
 class asCScriptEngine;
@@ -303,12 +304,14 @@ public:
 
 	asCScriptFunction(asCScriptEngine *engine, asCModule *mod, asEFuncType funcType);
 	~asCScriptFunction();
-	const asSStableKey& GetStableKey() const { return metadataStableKey; }
-	asEFunctionIdentityKind GetMetadataDeclarationKind() const { return static_cast<asEFunctionIdentityKind>(metadataDeclarationKind); }
+	const asSStableKey& GetStableKey() const { return stableKey; }
+	asETypeInfoKind GetTypeInfoKind() const { return typeInfoKind; }
+	asEFunctionIdentityKind GetDeclarationKind() const { return static_cast<asEFunctionIdentityKind>(declarationKind); }
+	std::shared_ptr<asSSystemFunctionInterface> GetProcessInterface() const { return processInterface; }
 	bool IsMetadataStatic() const { return metadataStaticDeclaration; }
 	bool IsMetadataLocal() const { return traits.GetTrait(asTRAIT_LOCAL); }
 	bool IsMetadataCallableSignature() const { return metadataCallableSignature; }
-	asCModuleDefinitionSet* GetDefinitionSet() const { return metadataOwner; }
+	asCDefinitions* GetDefinitions() const { return definitions; }
 	const asCDataType& GetReturnDataType() const { return returnType; }
 	const asCDataType* GetParameterDataType(asUINT index) const
 	{
@@ -595,24 +598,26 @@ public:
 #endif
 
 private:
-	friend class asCModuleDefinitionSet;
-	asCScriptFunction(asCModuleDefinitionSet& owner, const asSStableKey& key, asEFuncType funcType);
-	asCModuleDefinitionSet* metadataOwner = nullptr;
-	asSStableKey metadataStableKey;
+	friend class asCDefinitions;
+	asCScriptFunction(asCDefinitions& owner, const asSStableKey& key, asEFuncType funcType);
+	asCDefinitions* definitions = nullptr;
+	asETypeInfoKind typeInfoKind = asETypeInfoKind::ScriptEngine;
+	std::shared_ptr<asSSystemFunctionInterface> processInterface;
+	asSStableKey stableKey;
 	mutable std::mutex metadataReferenceMutex;
 
 	bool metadataSignatureDefined = false;
 	bool metadataCallableSignature = false;
 	asCCallableType* metadataNominalCallableType = nullptr;
-	asBYTE metadataDeclarationKind = 0;
-	asUINT metadataGenericArity = 0;
-	asCTypeInfo* metadataDeclarationOwner = nullptr;
+	asBYTE declarationKind = 0;
+	asUINT genericArity = 0;
+	asCTypeInfo* declarationOwner = nullptr;
 	bool metadataStaticDeclaration = false;
 
 };
 
 const char * const DELEGATE_FACTORY = "$dlgte";
-asCScriptFunction *CreateDelegate(asCScriptFunction *func, void *obj);
+AS_API asCScriptFunction *CreateDelegate(asCScriptFunction *func, void *obj);
 
 END_AS_NAMESPACE
 

@@ -40,6 +40,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_CollisionProfile(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FAngelscriptBinds::FNamespace Namespace(Binds, "CollisionProfile");
 
 		TArray<TSharedPtr<FName>> CollisionProfiles;

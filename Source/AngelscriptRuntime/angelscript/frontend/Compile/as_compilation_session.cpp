@@ -5,7 +5,7 @@
 #include "frontend/AST/as_ast_visitor.h"
 #include "frontend/AST/as_ast_verifier.h"
 #include "frontend/AST/as_type.h"
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "as_typeinfo.h"
 
 #include "Templates/Function.h"

@@ -22,6 +22,7 @@ struct asSByteCodeEmitFrame
 	TMap<asCDecl*, int32> Locals;
 	TMap<asSStableKey, asCScriptFunction*> Functions;
 	TMap<asSStableKey, asCObjectType*> Types;
+	TMap<asSStableKey, asCGlobalProperty*> Globals;
 	TArray<TPair<int32, asCObjectType*>> LiveObjects;
 	TArray<int32> ConstructedSlots;
 	TArray<asUINT> BreakLabels;

@@ -771,6 +771,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FMath(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		const bool bDeprecateDouble = UAngelscriptSettings::Get().bDeprecateDoubleType;
 
 		FAngelscriptBinds::FNamespace Namespace(

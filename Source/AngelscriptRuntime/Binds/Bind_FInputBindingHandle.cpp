@@ -64,6 +64,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FInputBindingHandle_Types(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		const FBindFlags Flags;
 		Binds.ValueClassForTarget<FInputBindingHandle>("FInputBindingHandle", Flags);
 		Binds.ValueClassForTarget<FEnhancedInputActionEventBinding>("FEnhancedInputActionEventBinding", Flags);
@@ -80,6 +81,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FInputBindingHandle(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FInputBindingHandle_ = Binds.ExistingClassForTarget("FInputBindingHandle");
 		FInputBindingHandle_.Method("bool opEquals(const FInputBindingHandle& Other) const", METHODPR_TRIVIAL(bool, FInputBindingHandle, operator==, (const FInputBindingHandle&) const));
 		FInputBindingHandle_.Method("uint32 GetHandle() const", METHOD_TRIVIAL(FInputBindingHandle, GetHandle));

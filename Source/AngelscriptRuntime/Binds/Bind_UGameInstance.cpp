@@ -52,6 +52,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UGameInstance(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto UGameInstance_ = Binds.ExistingClassForTarget("UGameInstance");
 		UGameInstance_.Method("ULocalPlayer CreateInitialPlayer(FString& OutError)", METHOD_TRIVIAL(UGameInstance, CreateInitialPlayer));
 		UGameInstance_.Method("ULocalPlayer CreateLocalPlayer(int32 ControllerId, FString& OutError, bool bSpawnPlayerController)", METHODPR_TRIVIAL(ULocalPlayer*, UGameInstance, CreateLocalPlayer, (int32, FString&, bool)));

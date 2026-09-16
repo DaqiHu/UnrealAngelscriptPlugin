@@ -467,6 +467,18 @@ void asCContext::DetachEngine()
 {
 	if( m_engine == 0 ) return;
 
+	if (asCThreadLocalData* tld = asCThreadManager::GetLocalData())
+	{
+		if (tld->activeContext == this)
+		{
+			tld->activeContext = nullptr;
+		}
+		if (tld->primaryContext == this)
+		{
+			tld->primaryContext = nullptr;
+		}
+	}
+
 	// Clean up all calls, included nested ones
 	do
 	{
@@ -600,6 +612,21 @@ int asCContext::Prepare(asIScriptFunction *func)
 	}
 
 	asCScriptFunction* Prepared = static_cast<asCScriptFunction*>(func);
+	// HostProcess functions have a null GetEngine(). Admit only the exact
+	// pointer already indexed by this receiving Engine. Foreign script/live
+	// functions remain asINVALID_ARG even when they also lack bytecode.
+	if( m_engine != func->GetEngine() )
+	{
+		const bool bAdmittedHost = Prepared->GetTypeInfoKind() == asETypeInfoKind::HostProcess
+			&& m_engine->FindFunction(Prepared->GetStableKey()) == Prepared;
+		if( !bAdmittedHost )
+		{
+			asCString str;
+			str.Format(TXT_FAILED_IN_FUNC_s_WITH_s_s_d, "Prepare", func->GetDeclaration(true, true, false, true), errorNames[-asINVALID_ARG], asINVALID_ARG);
+			m_engine->WriteMessage("", 0, 0, asMSGTYPE_ERROR, str.AddressOf());
+			return asINVALID_ARG;
+		}
+	}
 	if (Prepared->funcType == asFUNC_SCRIPT
 		&& m_engine
 		&& !m_engine->FindPublishedExecutable(Prepared->GetStableKey())
@@ -648,15 +675,6 @@ int asCContext::Prepare(asIScriptFunction *func)
 	else
 	{
 		asASSERT( m_engine );
-
-		// Make sure the function is from the same engine as the context to avoid mixups
-		if( m_engine != func->GetEngine() )
-		{
-			asCString str;
-			str.Format(TXT_FAILED_IN_FUNC_s_WITH_s_s_d, "Prepare", func->GetDeclaration(true, true, false, true), errorNames[-asINVALID_ARG], asINVALID_ARG);
-			m_engine->WriteMessage("", 0, 0, asMSGTYPE_ERROR, str.AddressOf());
-			return asINVALID_ARG;
-		}
 
 		if( m_initialFunction )
 		{
@@ -4173,8 +4191,8 @@ void asCContext::ExecuteNext()
 					&& Actual->returnType == Expected->returnType
 					&& Actual->DoesReturnOnStack() == Expected->DoesReturnOnStack()
 					&& Actual->parameterTypes.GetLength() == Expected->parameterTypes.GetLength()
-					&& (Actual->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Constructor)
-						== (Expected->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Constructor)
+					&& (Actual->GetDeclarationKind() == asEFunctionIdentityKind::Constructor)
+						== (Expected->GetDeclarationKind() == asEFunctionIdentityKind::Constructor)
 					&& (!ActualReceiver || Actual->IsReadOnly() == Expected->IsReadOnly());
 				for (asUINT Parameter = 0; bMatch && Parameter < Actual->parameterTypes.GetLength(); ++Parameter)
 					bMatch = Actual->parameterTypes[Parameter] == Expected->parameterTypes[Parameter]

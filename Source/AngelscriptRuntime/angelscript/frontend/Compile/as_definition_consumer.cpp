@@ -90,7 +90,7 @@ namespace
 	}
 
 	asSDefinitionConsumerResult asCDefinitionConsumer::Consume(const asCCompilationSession& Session,
-		TConstArrayView<asCModuleDefinitionSet*> Dependencies) const
+		TConstArrayView<asCDefinitions*> Dependencies) const
 	{
 		asSDefinitionConsumerResult Result;
 		auto Fail = [&](asEDefinitionConsumerStatus Status, const asCASTNode* Node, const TCHAR* Message)
@@ -113,20 +113,20 @@ namespace
 		}
 		const auto& TypeContext = AST.GetTypeContext();
 		const auto& Settings = TypeContext->GetOptions();
-		asSMetadataOptions Options;
+		asSDefinitionOptions Options;
 		Options.FloatIsFloat64 = Settings.FloatIsFloat64;
 		Options.ExpandDefaultArrayToTemplate = Settings.ExpandDefaultArrayToTemplate;
 		Options.PointerByteSize = Settings.PointerByteSize;
 		Options.TargetProfile = TCHAR_TO_UTF8(*Settings.TargetProfile);
-		TUniquePtr<asCModuleDefinitionSet> Set = asCModuleDefinitionSet::Create(Options);
-		if (!Set || Set->SetIdentityContext(TypeContext) != asEMetadataResult::Succeeded)
+		TUniquePtr<asCDefinitions> Set = asCDefinitions::Create(Options);
+		if (!Set || Set->SetIdentityContext(TypeContext) != asEDefinitionResult::Succeeded)
 		{
 			Fail(asEDefinitionConsumerStatus::InvalidIdentity, TranslationUnit, TEXT("The definition image must retain the exact immutable TypeContext."));
 			return Result;
 		}
 		for (const auto& Dependency : Dependencies)
 		{
-			if (Set->AddDependency(Dependency) != asEMetadataResult::Succeeded)
+			if (Set->AddDependency(Dependency) != asEDefinitionResult::Succeeded)
 			{
 				Fail(asEDefinitionConsumerStatus::InvalidDependency, TranslationUnit, TEXT("Definition dependencies must be compatible frozen images."));
 				return Result;
@@ -154,7 +154,7 @@ namespace
 			if (!Named || isa<asCNamespaceDecl>(Decl) || isa<asCVarDecl>(Decl) || isa<asCEnumConstantDecl>(Decl)
 				|| isa<asCAccessSpecifierDecl>(Decl)) continue;
 			const FString Namespace = NamespaceOf(*Decl);
-			asEMetadataResult Status = asEMetadataResult::InvalidArgument;
+			asEDefinitionResult Status = asEDefinitionResult::InvalidArgument;
 			if (const auto* Record = dyn_cast<asCRecordDecl>(Decl))
 			{
 				if (Record->GetDeclaredTypeKind() == asETypeDeclKind::Enum)
@@ -169,16 +169,16 @@ namespace
 					const asQWORD Flags = asOBJ_SCRIPT_OBJECT | (Record->GetDeclaredTypeKind() == asETypeDeclKind::Struct ? asOBJ_VALUE : asOBJ_REF);
 					Status = Set->CreateObjectType(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), Flags, Type);
 					if (Type) Types.Add(Decl, Type);
-					if (Status == asEMetadataResult::Succeeded && Record->GetDeclaredTypeKind() == asETypeDeclKind::Interface)
+					if (Status == asEDefinitionResult::Succeeded && Record->GetDeclaredTypeKind() == asETypeDeclKind::Interface)
 						Status = Set->SetInterfaceDeclaration(*Type);
 				}
 			}
 			else if (const auto* Callable = dyn_cast<asCCallableTypeDecl>(Decl))
 			{
 				asCScriptFunction* Signature = nullptr;
-				if (!Callable->GetResolvedSignature()) Status = asEMetadataResult::InvalidSignature;
+				if (!Callable->GetResolvedSignature()) Status = asEDefinitionResult::InvalidSignature;
 				else Status = Set->CreateCallableSignature(Callable->GetResolvedSignature()->GetStableIdentity(), Signature);
-				if (Status == asEMetadataResult::Succeeded)
+				if (Status == asEDefinitionResult::Succeeded)
 				{
 					asCCallableType* Type = nullptr;
 					Status = Set->CreateCallableType(Named->GetStableIdentity(), TCHAR_TO_UTF8(*Named->GetName()), TCHAR_TO_UTF8(*Namespace), *Signature, Type);
@@ -203,18 +203,18 @@ namespace
 				Fail(asEDefinitionConsumerStatus::UnsupportedDefinition, Decl, TEXT("This declaration has no maintained semantic definition form."));
 				return Result;
 			}
-			if (Status != asEMetadataResult::Succeeded)
+			if (Status != asEDefinitionResult::Succeeded)
 			{
 				Fail(asEDefinitionConsumerStatus::InvalidDefinition, Decl, TEXT("Cannot create an identity-authenticated definition shell."));
 				return Result;
 			}
 		}
-		TFunction<asCTypeInfo*(asCModuleDefinitionSet*, const asSStableKey&)> FindType =
-			[&](asCModuleDefinitionSet* Owner, const asSStableKey& Key) -> asCTypeInfo*
+		TFunction<asCTypeInfo*(asCDefinitions*, const asSStableKey&)> FindType =
+			[&](asCDefinitions* Owner, const asSStableKey& Key) -> asCTypeInfo*
 		{
 			if (!Owner) return nullptr;
 			if (auto* Found = Owner->FindType(Key)) return Found;
-			for (asCModuleDefinitionSet* Dependency : Owner->GetDependencies())
+			for (asCDefinitions* Dependency : Owner->GetDependencies())
 				if (auto* Found = FindType(Dependency, Key)) return Found;
 			return nullptr;
 		};
@@ -246,7 +246,7 @@ namespace
 					Arguments.Add(Converted);
 				}
 				asCObjectType* Instance = nullptr;
-				if (Set->CreateTemplateInstance(*static_cast<asCObjectType*>(Definition), Generic->GetStableIdentity(), Arguments, Instance) != asEMetadataResult::Succeeded) return false;
+				if (Set->CreateTemplateInstance(*static_cast<asCObjectType*>(Definition), Generic->GetStableIdentity(), Arguments, Instance) != asEDefinitionResult::Succeeded) return false;
 				Out = asCDataType::CreateType(Instance, false);
 			}
 			else return false; // Never reparse printed type names or infer host template layout.
@@ -265,7 +265,7 @@ namespace
 				? static_cast<asCObjectType*>(OwnerType) : nullptr;
 			if (!Access) continue;
 			::asSAccessSpecifier* Actual = nullptr;
-			if (!Owner || Set->DefineAccessSpecifier(*Owner, ConvertAccess(*Access), Actual) != asEMetadataResult::Succeeded)
+			if (!Owner || Set->DefineAccessSpecifier(*Owner, ConvertAccess(*Access), Actual) != asEDefinitionResult::Succeeded)
 			{
 				Fail(asEDefinitionConsumerStatus::InvalidDefinition, Decl, TEXT("A resolved access policy cannot form a valid detached definition."));
 				return Result;
@@ -279,16 +279,16 @@ namespace
 			asCTypeInfo* OwnerType = Types.FindRef(RecordOwner(*Decl));
 			asCObjectType* Owner = OwnerType && (OwnerType->flags & (asOBJ_VALUE | asOBJ_REF)) && !(OwnerType->flags & asOBJ_CALLABLE_TYPE)
 				? static_cast<asCObjectType*>(OwnerType) : nullptr;
-			asEMetadataResult Status = asEMetadataResult::Succeeded;
+			asEDefinitionResult Status = asEDefinitionResult::Succeeded;
 			if (asCTypeInfo* Type = Types.FindRef(Decl))
 			{
 				const asETypeDeclKind Kind = isa<asCTypeAliasDecl>(Decl) ? asETypeDeclKind::Typedef :
 					isa<asCRecordDecl>(Decl) ? cast<asCRecordDecl>(Decl)->GetDeclaredTypeKind() : cast<asCCallableTypeDecl>(Decl)->GetDeclaredTypeKind();
 				Status = Set->SetTypeDeclarationFacts(*Type, Kind, 0, OwnerType);
-				if (Status == asEMetadataResult::Succeeded && Owner && (Type->flags & asOBJ_CALLABLE_TYPE))
+				if (Status == asEDefinitionResult::Succeeded && Owner && (Type->flags & asOBJ_CALLABLE_TYPE))
 					Status = Set->AddChildCallableType(*Owner, *static_cast<asCCallableType*>(Type));
 			}
-			if (Status == asEMetadataResult::Succeeded)
+			if (Status == asEDefinitionResult::Succeeded)
 				if (const auto* Record = dyn_cast<asCRecordDecl>(Decl))
 				{
 					auto* Type = Types.FindRef(Decl);
@@ -300,26 +300,26 @@ namespace
 							!ResolveType(BaseQual, BaseType) || !BaseType.GetTypeInfo() ||
 							!(BaseType.GetTypeInfo()->flags & (asOBJ_VALUE | asOBJ_REF)) || (BaseType.GetTypeInfo()->flags & asOBJ_CALLABLE_TYPE) ||
 							!(Type->flags & (asOBJ_VALUE | asOBJ_REF)))
-						{ Status = asEMetadataResult::InvalidSignature; break; }
+						{ Status = asEDefinitionResult::InvalidSignature; break; }
 						auto* BaseObject = static_cast<asCObjectType*>(BaseType.GetTypeInfo());
 						Status = BaseObject->IsInterface() ? Set->AddInterface(*static_cast<asCObjectType*>(Type), *BaseObject) :
 							Set->SetBaseType(*static_cast<asCObjectType*>(Type), *BaseObject);
-						if (Status != asEMetadataResult::Succeeded) break;
+						if (Status != asEDefinitionResult::Succeeded) break;
 					}
 				}
 			if (const auto* Variable = dyn_cast<asCVarDecl>(Decl))
 			{
 				asCDataType Type;
 				asCObjectProperty* Property = nullptr;
-				if (!ResolveType(Variable->GetResolvedQualType(), Type)) Status = asEMetadataResult::InvalidSignature;
+				if (!ResolveType(Variable->GetResolvedQualType(), Type)) Status = asEDefinitionResult::InvalidSignature;
 				else if (Owner)
 				{
 					Status = Set->AddProperty(*Owner, TCHAR_TO_UTF8(*Variable->GetName()), Type, Property,
 						Decl->GetAccess() == asEAccessSpecifier::Private, Decl->GetAccess() == asEAccessSpecifier::Protected);
-					if (Status == asEMetadataResult::Succeeded && Variable->GetAuthoredAccessUse())
+					if (Status == asEDefinitionResult::Succeeded && Variable->GetAuthoredAccessUse())
 					{
 						::asSAccessSpecifier* Policy = PublishedAccess.FindRef(Variable->GetAuthoredAccessUse()->Resolved);
-						Status = Policy ? Set->SetPropertyAccess(*Owner, *Property, *Policy) : asEMetadataResult::InvalidSignature;
+						Status = Policy ? Set->SetPropertyAccess(*Owner, *Property, *Policy) : asEDefinitionResult::InvalidSignature;
 					}
 				}
 				else
@@ -327,7 +327,7 @@ namespace
 					asSStableKey TypeKey;
 					asCGlobalProperty* Global = nullptr;
 					if (Variable->GetResolvedQualType().GetStableIdentity(TypeContext->GetIdentityRegistry(), TypeKey) != asETypeIdentityStatus::Succeeded)
-						Status = asEMetadataResult::InvalidSignature;
+						Status = asEDefinitionResult::InvalidSignature;
 					else Status = Set->CreateGlobalProperty(Variable->GetStableIdentity(), TypeKey, TCHAR_TO_UTF8(*Variable->GetName()),
 						TCHAR_TO_UTF8(*NamespaceOf(*Decl)), Type, Global);
 				}
@@ -335,13 +335,13 @@ namespace
 			else if (const auto* Constant = dyn_cast<asCEnumConstantDecl>(Decl))
 			{
 				if (!OwnerType || !(OwnerType->flags & asOBJ_ENUM) || !Constant->HasResolvedValue() || Constant->GetValue() < MIN_int32 || Constant->GetValue() > MAX_int32)
-					Status = asEMetadataResult::InvalidArgument;
+					Status = asEDefinitionResult::InvalidArgument;
 				else Status = Set->AddEnumValue(*static_cast<asCEnumType*>(OwnerType), TCHAR_TO_UTF8(*Constant->GetName()), static_cast<int>(Constant->GetValue()));
 			}
 			else if (const auto* Alias = dyn_cast<asCTypeAliasDecl>(Decl))
 			{
 				asCDataType Target;
-				if (!ResolveType(Alias->GetResolvedQualType(), Target)) Status = asEMetadataResult::InvalidSignature;
+				if (!ResolveType(Alias->GetResolvedQualType(), Target)) Status = asEDefinitionResult::InvalidSignature;
 				else Status = Set->SetAlias(*static_cast<asCTypedefType*>(Types.FindRef(Decl)), Target);
 			}
 			if (asCScriptFunction* Function = Functions.FindRef(Decl))
@@ -351,17 +351,17 @@ namespace
 				const auto* Signature = FunctionDecl ? FunctionDecl->GetResolvedSignature() : CallableDecl->GetResolvedSignature();
 				const auto Parameters = FunctionDecl ? FunctionDecl->GetParameters() : CallableDecl->GetParameters();
 				asCDataType ReturnType;
-				TArray<asSMetadataParameter> Converted;
+				TArray<asSDefinitionParameter> Converted;
 				if (!Signature || Signature->GetParameterTypes().Num() != Parameters.Num() ||
 					Signature->GetParameterPassingModes().Num() != Parameters.Num() || !ResolveType(Signature->GetReturnType(), ReturnType))
-					Status = asEMetadataResult::InvalidSignature;
+					Status = asEDefinitionResult::InvalidSignature;
 				else for (int Index = 0; Index < Parameters.Num(); ++Index)
 				{
-					asSMetadataParameter Parameter;
+					asSDefinitionParameter Parameter;
 					// Structural signatures have no authored parameter-name identity.
 					// Nominal declarations retain authored names in AST/host output.
 					Parameter.Name = TCHAR_TO_UTF8(*(CallableDecl ? FString::Printf(TEXT("arg%d"), Index) : Parameters[Index]->GetName()));
-					if (!ResolveType(Signature->GetParameterTypes()[Index], Parameter.Type)) { Status = asEMetadataResult::InvalidSignature; break; }
+					if (!ResolveType(Signature->GetParameterTypes()[Index], Parameter.Type)) { Status = asEDefinitionResult::InvalidSignature; break; }
 					const auto Mode = Signature->GetParameterPassingModes()[Index];
 					Parameter.Flags = Mode == asEParameterPassingMode::In ? asTM_INREF : Mode == asEParameterPassingMode::Out ? asTM_OUTREF :
 						Mode == asEParameterPassingMode::InOut ? asTM_INOUTREF : asTM_NONE;
@@ -369,15 +369,15 @@ namespace
 					{
 						asCSourceManager Sources(AST.GetSources());
 						TConstArrayView<uint8> Bytes;
-						if (!Sources.TryGetBytes(Parameters[Index]->GetDeferredInitializerRange(), Bytes)) { Status = asEMetadataResult::InvalidSignature; break; }
+						if (!Sources.TryGetBytes(Parameters[Index]->GetDeferredInitializerRange(), Bytes)) { Status = asEDefinitionResult::InvalidSignature; break; }
 						Parameter.DefaultArgument.Assign(reinterpret_cast<const char*>(Bytes.GetData()), Bytes.Num());
 					}
 					Converted.Add(MoveTemp(Parameter));
 				}
-				if (Status == asEMetadataResult::Succeeded && !DefinedSignatures.Contains(Function))
+				if (Status == asEDefinitionResult::Succeeded && !DefinedSignatures.Contains(Function))
 				{
 					Status = Set->DefineFunction(*Function, ReturnType, Converted, FunctionDecl ? Owner : nullptr);
-					if (Status == asEMetadataResult::Succeeded && FunctionDecl)
+					if (Status == asEDefinitionResult::Succeeded && FunctionDecl)
 					{
 						Function->SetReadOnly(FunctionDecl->IsConstMethod());
 						Function->SetFinal((uint16(FunctionDecl->GetModifiers()) & uint16(asEFunctionModifiers::Final)) != 0);
@@ -396,24 +396,24 @@ namespace
 						Set->SetFunctionLocal(*Function, (uint16(FunctionDecl->GetModifiers()) & uint16(asEFunctionModifiers::Local)) != 0);
 						Function->SetPrivate(Decl->GetAccess() == asEAccessSpecifier::Private);
 						Function->SetProtected(Decl->GetAccess() == asEAccessSpecifier::Protected);
-						if (Status == asEMetadataResult::Succeeded && FunctionDecl->GetAuthoredAccessUse())
+						if (Status == asEDefinitionResult::Succeeded && FunctionDecl->GetAuthoredAccessUse())
 						{
 							::asSAccessSpecifier* Policy = PublishedAccess.FindRef(FunctionDecl->GetAuthoredAccessUse()->Resolved);
-							Status = Policy ? Set->SetFunctionAccess(*Function, *Policy) : asEMetadataResult::InvalidSignature;
+							Status = Policy ? Set->SetFunctionAccess(*Function, *Policy) : asEDefinitionResult::InvalidSignature;
 						}
 						const auto Kind = FunctionDecl->GetFunctionKind() == asEFunctionKind::Constructor ? asEFunctionIdentityKind::Constructor :
 							FunctionDecl->GetFunctionKind() == asEFunctionKind::Destructor ? asEFunctionIdentityKind::Destructor :
 							FunctionDecl->GetFunctionKind() == asEFunctionKind::ClassDefault ? asEFunctionIdentityKind::ClassDefault :
 							FunctionDecl->GetFunctionKind() == asEFunctionKind::Conversion ? asEFunctionIdentityKind::Conversion :
 							Owner ? asEFunctionIdentityKind::Method : asEFunctionIdentityKind::Global;
-						if (Status == asEMetadataResult::Succeeded) Status = Set->SetFunctionDeclarationFacts(*Function, Kind, Owner);
-						if (Status == asEMetadataResult::Succeeded && Owner && (Kind == asEFunctionIdentityKind::Constructor || Kind == asEFunctionIdentityKind::Destructor))
+						if (Status == asEDefinitionResult::Succeeded) Status = Set->SetFunctionDeclarationFacts(*Function, Kind, Owner);
+						if (Status == asEDefinitionResult::Succeeded && Owner && (Kind == asEFunctionIdentityKind::Constructor || Kind == asEFunctionIdentityKind::Destructor))
 							Status = Set->AddBehaviour(*Owner, Kind == asEFunctionIdentityKind::Constructor ? asBEHAVE_CONSTRUCT : asBEHAVE_DESTRUCT, *Function);
 					}
 					DefinedSignatures.Add(Function);
 				}
 			}
-			if (Status != asEMetadataResult::Succeeded)
+			if (Status != asEDefinitionResult::Succeeded)
 			{
 				Fail(asEDefinitionConsumerStatus::InvalidDefinition, Decl, TEXT("A resolved declaration cannot form a valid detached semantic definition."));
 				return Result;

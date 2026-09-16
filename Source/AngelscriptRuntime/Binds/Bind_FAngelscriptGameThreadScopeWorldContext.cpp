@@ -25,6 +25,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FAngelscriptGameThreadScopeWorldContex
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Scope_ = Binds.ValueClassForTarget<FAngelscriptGameThreadScopeWorldContext>(
 			"FAngelscriptGameThreadScopeWorldContext",
 			FBindFlags());

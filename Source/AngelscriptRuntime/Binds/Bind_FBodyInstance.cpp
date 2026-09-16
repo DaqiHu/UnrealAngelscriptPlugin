@@ -23,6 +23,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FBodyInstance(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FBodyInstance_ = Binds.ExistingClassForTarget("FBodyInstance");
 
 		FBodyInstance_.Method("UBodySetup GetBodySetup() const", METHOD_TRIVIAL(FBodyInstance, GetBodySetup));

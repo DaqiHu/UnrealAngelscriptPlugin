@@ -149,6 +149,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FRange(
 	EAngelscriptBindPhase::PostReflectionBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FloatBound = Binds.ExistingClassForTarget<FFloatRangeBound>("FFloatRangeBound");
 		FloatBound.Constructor("void f(float32 Value)", &FFloatRangeBoundBinds::ConstructValue, "FFloatRangeBound", true);
 		FloatBound.Method("bool opEquals(const FFloatRangeBound& Other) const", METHODPR_TRIVIAL(bool, FFloatRangeBound, operator==, (const FFloatRangeBound&) const));

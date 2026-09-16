@@ -16,6 +16,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UFXSystemComponent(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FXSystemComponent = Binds.ExistingClassForTarget("UFXSystemComponent");
 
 		FXSystemComponent.Method("void DeactivateImmediate()", METHODPR_TRIVIAL(void, UFXSystemComponent, DeactivateImmediate, ()));

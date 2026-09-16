@@ -41,9 +41,9 @@ public:
 	TConstArrayView<asSSemanticSourceInput> GetLexedSources() const;
 	TConstArrayView<asSDirectiveProcessResult> GetPreprocessedSources() const;
 	TSharedRef<const asCDiagnosticResult, ESPMode::ThreadSafe> CaptureDiagnosticResult() const;
-	const asCModuleDefinitionSet* GetModuleDefinitionSet() const;
-	asCModuleDefinitionSet* GetModuleDefinitionSet();
-	TUniquePtr<asCModuleDefinitionSet> TakeModuleDefinitionSet();
+	const asCDefinitions* GetDefinitions() const;
+	asCDefinitions* GetDefinitions();
+	TUniquePtr<asCDefinitions> TakeDefinitions();
 	const asCCompileOutput* GetCompileOutput() const;
 	TUniquePtr<asCCompileOutput> TakeCompileOutput();
 #if WITH_ANGELSCRIPT_TESTS

@@ -154,6 +154,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Json_TypeDeclarations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto EJsonValueType = Binds.EnumForTarget("EJsonType");
 		EJsonValueType["None"] = EJson::None;
 		EJsonValueType["Null"] = EJson::Null;
@@ -174,6 +175,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Json(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto JsonValue = Binds.ExistingClassForTarget("FJsonValue");
 		JsonValue.Constructor("void f()", &FAngelscriptJsonBinds::ConstructValue);
 		JsonValue.Destructor("void f()", &FAngelscriptJsonBinds::DestructValue);

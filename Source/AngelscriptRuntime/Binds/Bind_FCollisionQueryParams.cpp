@@ -424,6 +424,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FCollisionQueryParams_TypeDeclarations
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto QueryMobilityType = Binds.EnumForTarget("EQueryMobilityType");
 		QueryMobilityType["Any"] = EQueryMobilityType::Any;
 		QueryMobilityType["Static"] = EQueryMobilityType::Static;
@@ -458,6 +459,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FCollisionQueryParams_TypeInfrastructu
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FCollisionQueryParamsType>());
 		Binds.RegisterTypeForTarget(MakeShared<FCollisionEnabledMaskType>());
 		Binds.RegisterTypeForTarget(MakeShared<FComponentQueryParamsType>());
@@ -470,6 +472,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FCollisionQueryParams_ManualBindings(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		BindFCollisionQueryParamsEarly(Binds);
 		BindFCollisionEnabledMaskEarly(Binds);
 		BindFComponentQueryParamsEarly(Binds);

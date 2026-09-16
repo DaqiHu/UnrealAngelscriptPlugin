@@ -50,7 +50,7 @@ BEGIN_AS_NAMESPACE
 
 struct asSNameSpace;
 class asCTypeInfo;
-class asCModuleDefinitionSet;
+class asCDefinitions;
 
 enum class asENativeAddressMode : asBYTE
 {
@@ -151,8 +151,8 @@ class ANGELSCRIPTRUNTIME_API asCGlobalProperty
 public:
 	asCGlobalProperty();
 	~asCGlobalProperty();
-	const asSStableKey& GetStableKey() const { return metadataStableKey; }
-	asCModuleDefinitionSet* GetDefinitionSet() const { return metadataOwner; }
+	const asSStableKey& GetStableKey() const { return stableKey; }
+	asCDefinitions* GetDefinitions() const { return definitions; }
 
 	void AddRef();
 	void Release();
@@ -197,9 +197,9 @@ public:
 #endif
 
 private:
-	friend class asCModuleDefinitionSet;
-	asCModuleDefinitionSet* metadataOwner = nullptr;
-	asSStableKey metadataStableKey;
+	friend class asCDefinitions;
+	asCDefinitions* definitions = nullptr;
+	asSStableKey stableKey;
 	asSStableKey metadataTypeUseKey;
 	// Native host declarations may be mutable; executable storage is bound separately.
 	bool metadataNativeDeclaration = false;

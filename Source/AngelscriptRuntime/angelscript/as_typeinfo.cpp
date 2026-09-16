@@ -35,7 +35,7 @@
 
 
 #include "as_typeinfo.h"
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "as_config.h"
 #include "as_scriptengine.h"
 
@@ -67,6 +67,7 @@ asCTypeInfo::asCTypeInfo(asCScriptEngine *in_engine)
 	size = 0;
 	flags = 0;
 	typeId = -1; // start as -1 to signal that it hasn't been defined
+	typeInfoKind = asETypeInfoKind::LiveRegister;
 
 	scriptSectionIdx = -1;
 	declaredAt = 0;
@@ -75,15 +76,20 @@ asCTypeInfo::asCTypeInfo(asCScriptEngine *in_engine)
 	nameSpace = engine->nameSpaces[0];
 }
 
-asCTypeInfo::asCTypeInfo(asCModuleDefinitionSet& owner, const asSStableKey& key)
+asCTypeInfo::asCTypeInfo(asCDefinitions& owner, const asSStableKey& key)
 	: asCTypeInfo()
 {
-	metadataOwner = &owner;
-	metadataStableKey = key;
+	definitions = &owner;
+	stableKey = key;
+	typeInfoKind = owner.GetOptions().Kind;
 }
 
 asCTypeInfo::~asCTypeInfo()
 {
+	if (definitions && definitions->DestroyCounters)
+	{
+		definitions->DestroyCounters->Types.fetch_add(1);
+	}
 }
 
 asEFingerprintStatus asCTypeInfo::TryGetSchemaHash(asSSchemaHash& OutHash, TConstArrayView<uint8>* OutWitness) const
@@ -93,11 +99,11 @@ asEFingerprintStatus asCTypeInfo::TryGetSchemaHash(asSSchemaHash& OutHash, TCons
 	{
 		*OutWitness = {};
 	}
-	if (!metadataOwner)
+	if (!definitions)
 	{
 		return asEFingerprintStatus::InvalidDefinition;
 	}
-	return metadataOwner->TryGetSchemaHash(*this, OutHash, OutWitness);
+	return definitions->TryGetSchemaHash(*this, OutHash, OutWitness);
 }
 
 asEFingerprintStatus asCTypeInfo::TryGetLayoutHash(asSLayoutHash& OutHash, TConstArrayView<uint8>* OutWitness) const
@@ -107,11 +113,11 @@ asEFingerprintStatus asCTypeInfo::TryGetLayoutHash(asSLayoutHash& OutHash, TCons
 	{
 		*OutWitness = {};
 	}
-	if (!metadataOwner)
+	if (!definitions)
 	{
 		return asEFingerprintStatus::InvalidDefinition;
 	}
-	return metadataOwner->TryGetLayoutHash(*this, OutHash, OutWitness);
+	return definitions->TryGetLayoutHash(*this, OutHash, OutWitness);
 }
 
 // interface
@@ -124,7 +130,7 @@ int asCTypeInfo::AddRef() const
 int asCTypeInfo::Release() const
 {
 	int r = externalRefCount.atomicDec();
-	if (metadataOwner) return r;
+	if (definitions) return r;
 	if (r == 0 && internalRefCount.get() == 0)
 	{
 		asDELETE(const_cast<asCTypeInfo*>(this), asCTypeInfo);
@@ -140,7 +146,7 @@ int asCTypeInfo::AddRefInternal()
 int asCTypeInfo::ReleaseInternal()
 {
 	int r = internalRefCount.atomicDec();
-	if (metadataOwner) return r;
+	if (definitions) return r;
 
 	if (r == 0)
 	{
@@ -262,7 +268,7 @@ asUINT asCTypeInfo::GetSize() const
 // interface
 int asCTypeInfo::GetTypeId() const
 {
-	if (metadataOwner) return metadataOwner->GetBoundTypeId(this);
+	if (definitions) return definitions->GetBoundTypeId(this);
 	if (!engine) return -1;
 	if (typeId == -1)
 	{
@@ -282,7 +288,7 @@ int asCTypeInfo::GetTypeId() const
 asIScriptEngine *asCTypeInfo::GetEngine() const
 {
 	if (engine) return engine;
-	if (metadataOwner) return metadataOwner->GetBoundEngine();
+	if (definitions) return definitions->GetBoundEngine();
 	return nullptr;
 }
 
@@ -447,9 +453,9 @@ asCTypedefType::~asCTypedefType()
 
 void asCTypedefType::DestroyInternal()
 {
-	if (metadataOwner)
+	if (definitions)
 	{
-		if (metadataOwner->IsDestroying()) aliasForType = asCDataType();
+		if (definitions->IsDestroying()) aliasForType = asCDataType();
 		return;
 	}
 	if (engine == 0) return;
@@ -473,7 +479,7 @@ void asCTypedefType::DestroyInternal()
 // interface
 int asCTypedefType::GetTypedefTypeId() const
 {
-	if (metadataOwner) return metadataOwner->GetBoundDataTypeId(aliasForType);
+	if (definitions) return definitions->GetBoundDataTypeId(aliasForType);
 	if (!engine) return -1;
 	return engine->GetTypeIdFromDataType(aliasForType);
 }
@@ -496,7 +502,7 @@ asCCallableType::asCCallableType(asCScriptEngine *en, asCScriptFunction *func) :
 	func->callableType = this;
 }
 
-asCCallableType::asCCallableType(asCModuleDefinitionSet& owner,
+asCCallableType::asCCallableType(asCDefinitions& owner,
 	const asSStableKey& key, asCScriptFunction* func)
 	: asCTypeInfo(owner, key), callableSignature(func), parentClass(nullptr)
 {
@@ -510,9 +516,9 @@ asCCallableType::~asCCallableType()
 
 void asCCallableType::DestroyInternal()
 {
-	if (metadataOwner)
+	if (definitions)
 	{
-		if (metadataOwner->IsDestroying()) { callableSignature = nullptr; parentClass = nullptr; }
+		if (definitions->IsDestroying()) { callableSignature = nullptr; parentClass = nullptr; }
 		return;
 	}
 	if (engine == 0) return;

@@ -52,6 +52,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AngelscriptDelegateWithPayload(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto DelegateType = Binds.ExistingClassForTarget("FAngelscriptDelegateWithPayload");
 		DelegateType.Method("void ExecuteIfBound() const", &FAngelscriptDelegateWithPayload::ExecuteIfBound);
 		DelegateType.Method("bool IsBound() const", &FAngelscriptDelegateWithPayload::IsBound);

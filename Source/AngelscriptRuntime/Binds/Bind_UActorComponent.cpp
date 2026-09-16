@@ -123,6 +123,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UActorComponent(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto ComponentType = Binds.ExistingClassForTarget("UActorComponent");
 		ComponentType.Method(
 			"void MarkRenderStateDirty()",
@@ -188,6 +189,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Components(
 	EAngelscriptBindPhase::PostReflectionBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		if (Binds.IsRecording())
 		{
 			const auto& Snapshot = Binds.GetRecordingStore()->GetReflectedSnapshot();

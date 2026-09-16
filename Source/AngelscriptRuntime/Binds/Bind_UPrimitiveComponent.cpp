@@ -39,6 +39,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UPrimitiveComponent(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto PrimitiveComponent_ = Binds.ExistingClassForTarget("UPrimitiveComponent");
 		PrimitiveComponent_.Method("FVector GetBoundingBoxExtents() const", &FAngelscriptUPrimitiveComponentBinds::GetBoundingBoxExtents);
 		PrimitiveComponent_.Method("FVector GetBoundsOrigin() const", &FAngelscriptUPrimitiveComponentBinds::GetBoundsOrigin);

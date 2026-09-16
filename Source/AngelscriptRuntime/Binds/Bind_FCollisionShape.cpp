@@ -80,6 +80,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FCollisionShape_Types(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto CollisionShape_ = Binds.EnumForTarget("ECollisionShape");
 		CollisionShape_["Line"] = ECollisionShape::Line;
 		CollisionShape_["Box"] = ECollisionShape::Box;
@@ -97,6 +98,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FCollisionShape(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FCollisionShape_ = Binds.ExistingClassForTarget("FCollisionShape");
 		FCollisionShape_.Constructor(
 			"void f()",

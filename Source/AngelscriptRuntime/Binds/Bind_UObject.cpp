@@ -168,6 +168,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UObject_Base(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto UObject_ = Binds.ExistingClassForTarget("UObject");
 		UObject_.Method("void AddToRoot()", METHOD_TRIVIAL(UObject, AddToRoot));
 		UObject_.Method("void RemoveFromRoot()", METHOD_TRIVIAL(UObject, RemoveFromRoot));
@@ -231,6 +232,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UObject_ToStringContribution(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(Binds, TEXT("UObject"), &FAngelscriptUObjectBinds::AppendToString,
 			/*bImplicitConversion = */false, /*bIsHandleType = */true);
 	});
@@ -243,6 +245,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UClass_Base(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto UClass_ = Binds.ExistingClassForTarget("UClass");
 		UClass_.Method("UObject GetDefaultObject() const", &FAngelscriptUObjectBinds::GetDefaultObject);
 		UClass_.Method("FString GetSourceFilePath() const", &FAngelscriptUObjectBinds::GetClassSourceFilePath);
@@ -273,6 +276,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UFunction_Base(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto UFunction_ = Binds.ExistingClassForTarget("UFunction");
 		UFunction_.Method("FString GetSourceFilePath() const", &FAngelscriptUObjectBinds::GetFunctionSourceFilePath);
 		UFunction_.Method("int GetSourceLineNumber() const", &FAngelscriptUObjectBinds::GetFunctionSourceLineNumber);
@@ -360,6 +364,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UObject_Operations(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.BindGlobalVariableForTarget("const UObject null", &GAngelscriptNullObject);
 
 		Binds.BindGlobalFunctionForTarget("UPackage GetTransientPackage()", FUNC_TRIVIAL(GetTransientPackage));

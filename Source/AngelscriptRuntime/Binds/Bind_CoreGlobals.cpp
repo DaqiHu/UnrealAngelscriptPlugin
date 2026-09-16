@@ -71,6 +71,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_CoreGlobals(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FAngelscriptBoundFunction IsRunningCommandletFunction =
 			Binds.BindGlobalFunctionForTarget(
 				"bool IsRunningCommandlet() no_discard",

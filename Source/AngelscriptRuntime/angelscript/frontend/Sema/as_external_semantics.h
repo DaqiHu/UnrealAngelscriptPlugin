@@ -1,7 +1,7 @@
 /* Transient read-only views of frozen host callables. Metadata remains the owner. */
 #pragma once
 
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "frontend/Sema/as_type_identity.h"
 #include <memory>
 
@@ -16,7 +16,7 @@ struct asSExternalCallable
 		asCFunctionType* Signature = nullptr;
 		asCScriptFunction* Function = nullptr;
 		asSStableKey OwnerKey;
-		asCModuleDefinitionSet* Set = nullptr;
+		asCDefinitions* Set = nullptr;
 		FString QualifiedName;
 		bool bConstMethod = false;
 		bool HasTypedDefaults = false;

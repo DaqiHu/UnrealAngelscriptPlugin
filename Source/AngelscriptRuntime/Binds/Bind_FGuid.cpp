@@ -57,6 +57,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_EGuidFormats(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto EGuidFormats_ = Binds.EnumForTarget("EGuidFormats");
 		EGuidFormats_["Digits"] = EGuidFormats::Digits;
 		EGuidFormats_["DigitsWithHyphens"] = EGuidFormats::DigitsWithHyphens;
@@ -73,6 +74,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FGuid(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FGuid_ = Binds.ExistingClassForTarget("FGuid");
 
 		FGuid_.Constructor(

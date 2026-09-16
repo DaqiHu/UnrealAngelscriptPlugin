@@ -89,6 +89,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FunctionLibraryMixins(
 	EAngelscriptBindPhase::PostReflectionBindings,
 	[](FAngelscriptBinds& Binds)
 {
+	if (Binds.IsHostTarget()) return;
 	auto LevelStreaming_ = Binds.ExistingClassForTarget("ULevelStreaming");
 #if WITH_EDITOR
 	// Phase 2 of Bind_Defaults (EOrder::Late+100) auto-registers this member via the

@@ -64,6 +64,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UAssetManager_ToStringContributions(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(Binds, TEXT("FPrimaryAssetType"), &FAngelscriptUAssetManagerBinds::AppendPrimaryAssetTypeToString);
 		FToStringHelper::Register(Binds, TEXT("FPrimaryAssetId"), &FAngelscriptUAssetManagerBinds::AppendPrimaryAssetIdToString);
 	});
@@ -73,6 +74,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UAssetManager(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FPrimaryAssetType_ = Binds.ExistingClassForTarget("FPrimaryAssetType");
 		FPrimaryAssetType_.Constructor("void f(FName InName)", &FAngelscriptUAssetManagerBinds::ConstructPrimaryAssetType, "FPrimaryAssetType", true);
 		FPrimaryAssetType_.Method("FName GetName() const", METHOD_TRIVIAL(FPrimaryAssetType, GetName));

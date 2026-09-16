@@ -40,6 +40,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FAnchors(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FAnchors_ = Binds.ExistingClassForTarget("FAnchors");
 		FAnchors_.Constructor(
 			"void f(float32 UnifromAnchors)",

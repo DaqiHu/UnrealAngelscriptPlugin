@@ -3,6 +3,7 @@
 
 #include "as_config.h"
 #include "as_datatype.h"
+#include "as_typeinfo.h"
 #include "as_metadata_list_pattern.h"
 #include "as_property.h"
 #include "frontend/Basic/as_stable_key.h"
@@ -41,34 +42,44 @@ struct asSByteCodeEmissionOptions;
 struct asSByteCodeEmissionResult;
 	enum class asETypeDeclKind : uint8;
 	enum class asEFunctionIdentityKind : uint8;
+	class asCTypeIdAllocator;
 
-struct asSMetadataOptions
+struct asSDefinitionDestroyCounters
+{
+	std::atomic<int32> Types{0};
+	std::atomic<int32> Functions{0};
+	std::atomic<int32> Namespaces{0};
+};
+
+struct asSDefinitionOptions
 {
 	bool FloatIsFloat64 = true;
 	bool ExpandDefaultArrayToTemplate = true;
 	asUINT PointerByteSize = sizeof(void*);
 	asCString TargetProfile = "native";
+	asETypeInfoKind Kind = asETypeInfoKind::ScriptEngine;
+	asCTypeIdAllocator* TypeIdAllocator = nullptr;
 };
 
-enum class asEDefinitionSetState : asBYTE
+enum class asEDefinitionState : asBYTE
 {
 	Building, Frozen, Attaching, Attached, Retired
 };
 
-enum class asEMetadataResult : asBYTE
+enum class asEDefinitionResult : asBYTE
 {
 	Succeeded, InvalidArgument, InvalidState, ForeignOwner, DuplicateIdentity,
 	DuplicateName, UnfrozenDependency, IncompleteDefinition, InvalidLayout,
 	RecursiveValueType, InvalidSignature
 };
 
-enum class asEMetadataRegistrationResult : asBYTE
+enum class asERegistrationResult : asBYTE
 {
 	Succeeded, InvalidArgument, InvalidState, InvalidIdentity, InvalidLayout,
 	IdentityConflict, NameConflict, AlreadyRegistered, ForeignEngine, Retired
 };
 
-struct asSMetadataParameter
+struct asSDefinitionParameter
 {
 	asCString Name;
 	asCDataType Type;
@@ -102,108 +113,139 @@ struct asSNativeGlobalFacts
 	bool EditorOnly = false;
 };
 
-// One compile unit's unique owner of TypeInfo/Function/Global until batch
-// Engine registration. Not asCModule.
-class ANGELSCRIPTRUNTIME_API asCModuleDefinitionSet
+class asCDefinitions;
+
+class ANGELSCRIPTRUNTIME_API asCDefinitionGraphLease
 {
 public:
-	asCModuleDefinitionSet();
-	explicit asCModuleDefinitionSet(const asSMetadataOptions& Options);
-	static TUniquePtr<asCModuleDefinitionSet> Create(const asSMetadataOptions& Options = {});
-	~asCModuleDefinitionSet();
-	asCModuleDefinitionSet(const asCModuleDefinitionSet&) = delete;
-	asCModuleDefinitionSet& operator=(const asCModuleDefinitionSet&) = delete;
+	asCDefinitionGraphLease() = default;
+	explicit asCDefinitionGraphLease(TUniquePtr<asCDefinitions>&& Producer);
+	asCDefinitions* Get() const { return Graph.Get(); }
+	asCDefinitions& operator*() const { return *Graph; }
+	asCDefinitions* operator->() const { return Graph.Get(); }
+	explicit operator bool() const { return Graph.IsValid(); }
 
-	const asSMetadataOptions& GetOptions() const { return Options; }
-	asEDefinitionSetState GetState() const { return State.load(std::memory_order_acquire); }
-	bool IsFrozen() const { return GetState() != asEDefinitionSetState::Building; }
+private:
+	friend class asCDefinitions;
+	explicit asCDefinitionGraphLease(TSharedPtr<asCDefinitions, ESPMode::ThreadSafe> InGraph)
+		: Graph(MoveTemp(InGraph))
+	{
+	}
+	TSharedPtr<asCDefinitions, ESPMode::ThreadSafe> Graph;
+};
+
+// One compile unit's unique owner of TypeInfo/Function/Global until batch
+// Engine registration. Not asCModule.
+class ANGELSCRIPTRUNTIME_API asCDefinitions
+{
+public:
+	asCDefinitions();
+	explicit asCDefinitions(const asSDefinitionOptions& Options);
+	static TUniquePtr<asCDefinitions> Create(const asSDefinitionOptions& Options = {});
+	static asCDefinitionGraphLease AdoptGraph(TUniquePtr<asCDefinitions>&& Producer);
+	asCDefinitionGraphLease RetainGraph();
+	void SetDestroyCounters(asSDefinitionDestroyCounters* Counters);
+	~asCDefinitions();
+	asCDefinitions(const asCDefinitions&) = delete;
+	asCDefinitions& operator=(const asCDefinitions&) = delete;
+
+	const asSDefinitionOptions& GetOptions() const { return Options; }
+	asEDefinitionState GetState() const { return State.load(std::memory_order_acquire); }
+	bool IsFrozen() const { return GetState() != asEDefinitionState::Building; }
 	bool IsImmutable() const { return IsFrozen(); }
 	bool IsDestroying() const { return bDestroying; }
 	TConstArrayView<asCTypeInfo*> GetTypes() const { return MakeArrayView(Types); }
 	TConstArrayView<asCScriptFunction*> GetFunctions() const { return MakeArrayView(Functions); }
+	TConstArrayView<asCGlobalProperty*> GetGlobals() const { return MakeArrayView(Globals); }
 	TConstArrayView<asCGlobalProperty*> GetGlobalProperties() const { return MakeArrayView(Globals); }
-	TConstArrayView<asCModuleDefinitionSet*> GetDependencies() const { return MakeArrayView(Dependencies); }
+	TConstArrayView<asCDefinitions*> GetDependencies() const { return MakeArrayView(Dependencies); }
 	bool Owns(const asCTypeInfo* Type) const;
 	bool Owns(const asCScriptFunction* Function) const;
 	bool CanReference(const asCTypeInfo* Type) const;
 	bool CanReference(const asCScriptFunction* Function) const;
 	asCTypeInfo* FindType(const char* Name) const;
 	asCTypeInfo* FindType(const asSStableKey& Key) const;
+	asCObjectType* FindTemplateInstance(const asCObjectType* Template, TConstArrayView<asCDataType> Arguments) const;
 	asCScriptFunction* FindFunction(const asSStableKey& Key) const;
 	asCGlobalProperty* FindGlobalProperty(const asSStableKey& Key) const;
-	asEMetadataResult CreateGlobalProperty(const asSStableKey& Key, const asSStableKey& TypeUseKey,
+	asEDefinitionResult CreateGlobalProperty(const asSStableKey& Key, const asSStableKey& TypeUseKey,
 		const char* Name, const char* Namespace, const asCDataType& Type, asCGlobalProperty*& Out);
-	asEMetadataResult CreateNativeGlobalProperty(const asSStableKey& Key, const asSStableKey& TypeUseKey,
+	asEDefinitionResult CreateNativeGlobalProperty(const asSStableKey& Key, const asSStableKey& TypeUseKey,
 		const char* Name, const char* Namespace, const asCDataType& Type, asCGlobalProperty*& Out);
 	asCDataType Primitive(eTokenType Token, bool IsConst = false) const;
-	asEMetadataResult SetIdentityContext(TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> Context);
+	asEDefinitionResult SetIdentityContext(TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> Context);
 	TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> GetIdentityContext() const;
 	asCScriptEngine* GetBoundEngine() const;
 	int GetBoundTypeId(const asCTypeInfo* Type) const;
 	int GetBoundFunctionId(const asCScriptFunction* Function) const;
 	int GetBoundDataTypeId(const asCDataType& Type) const;
-	asEMetadataResult AddDependency(asCModuleDefinitionSet* Dependency);
-	asEMetadataResult CreateObjectType(const asSStableKey& Key,
+	asEDefinitionResult AddDependency(asCDefinitions* Dependency);
+	asEDefinitionResult CreateObjectType(const asSStableKey& Key,
 		const char* Name, const char* Namespace, asQWORD Flags, asCObjectType*& Out);
-	asEMetadataResult CreateEnumType(const asSStableKey& Key,
+	asEDefinitionResult CreateEnumType(const asSStableKey& Key,
 		const char* Name, const char* Namespace, asCEnumType*& Out);
-	asEMetadataResult CreateTypedefType(const asSStableKey& Key,
+	asEDefinitionResult CreateTypedefType(const asSStableKey& Key,
 		const char* Name, const char* Namespace, asCTypedefType*& Out);
-	asEMetadataResult CreateCallableType(const asSStableKey& Key,
+	asEDefinitionResult CreateCallableType(const asSStableKey& Key,
 		const char* Name, const char* Namespace, asCScriptFunction& Signature, asCCallableType*& Out);
-	asEMetadataResult CreateFunction(const asSStableKey& Key,
+	asEDefinitionResult CreateFunction(const asSStableKey& Key,
 		const char* Name, const char* Namespace, asEFuncType Kind, asCScriptFunction*& Out);
 	// A structural Callable TypeUse is a signature, not a Function entity.
 	// Multiple nominal delegate/event types may share this image-owned object.
-	asEMetadataResult CreateCallableSignature(const asSStableKey& SignatureKey, asCScriptFunction*& Out);
-	asEMetadataResult DefineFunction(asCScriptFunction& Function, const asCDataType& ReturnType,
-		TConstArrayView<asSMetadataParameter> Parameters, asCObjectType* Owner = nullptr);
-	asEMetadataResult SetTypeDeclarationFacts(asCTypeInfo& Type, asETypeDeclKind Kind,
+	asEDefinitionResult CreateCallableSignature(const asSStableKey& SignatureKey, asCScriptFunction*& Out);
+	asEDefinitionResult DefineFunction(asCScriptFunction& Function, const asCDataType& ReturnType,
+		TConstArrayView<asSDefinitionParameter> Parameters, asCObjectType* Owner = nullptr);
+	asEDefinitionResult SetTypeDeclarationFacts(asCTypeInfo& Type, asETypeDeclKind Kind,
 		asUINT GenericArity = 0, asCTypeInfo* Owner = nullptr);
-	asEMetadataResult SetFunctionDeclarationFacts(asCScriptFunction& Function, asEFunctionIdentityKind Kind,
+	asEDefinitionResult SetFunctionDeclarationFacts(asCScriptFunction& Function, asEFunctionIdentityKind Kind,
 		asCTypeInfo* Owner = nullptr, asUINT GenericArity = 0, bool IsStatic = false);
-	asEMetadataResult SetFunctionLocal(asCScriptFunction& Function, bool IsLocal);
-	asEMetadataResult SetNativeFunctionFacts(asCScriptFunction& Function, const asSNativeFunctionFacts& Facts);
-	asEMetadataResult SetNativePropertyFacts(asCObjectType& Owner, asCObjectProperty& Property, const asSNativePropertyFacts& Facts);
-	asEMetadataResult SetNativeGlobalFacts(asCGlobalProperty& Global, const asSNativeGlobalFacts& Facts);
-	asEMetadataResult DefineAccessSpecifier(asCObjectType& Owner, const asSAccessSpecifier& Definition, asSAccessSpecifier*& Out);
-	asEMetadataResult SetPropertyAccess(asCObjectType& Owner, asCObjectProperty& Property, asSAccessSpecifier& Policy);
-	asEMetadataResult SetFunctionAccess(asCScriptFunction& Function, asSAccessSpecifier& Policy);
-	asEMetadataResult SetListInitializer(asCObjectType& Type, asCScriptFunction& Factory, const asSMetadataListPattern& Pattern);
+	asEDefinitionResult SetFunctionLocal(asCScriptFunction& Function, bool IsLocal);
+	asEDefinitionResult SetNativeFunctionFacts(asCScriptFunction& Function, const asSNativeFunctionFacts& Facts);
+	asEDefinitionResult BindNativeFunction(asCScriptFunction& Function, const asSFuncPtr& FunctionPtr,
+		asDWORD CallConv, asFunctionCaller Caller = nullptr, void* Auxiliary = nullptr);
+	asEDefinitionResult SetNativePropertyFacts(asCObjectType& Owner, asCObjectProperty& Property, const asSNativePropertyFacts& Facts);
+	asEDefinitionResult SetNativeGlobalFacts(asCGlobalProperty& Global, const asSNativeGlobalFacts& Facts);
+	asEDefinitionResult DefineAccessSpecifier(asCObjectType& Owner, const asSAccessSpecifier& Definition, asSAccessSpecifier*& Out);
+	asEDefinitionResult SetPropertyAccess(asCObjectType& Owner, asCObjectProperty& Property, asSAccessSpecifier& Policy);
+	asEDefinitionResult SetFunctionAccess(asCScriptFunction& Function, asSAccessSpecifier& Policy);
+	asEDefinitionResult SetListInitializer(asCObjectType& Type, asCScriptFunction& Factory, const asSMetadataListPattern& Pattern);
 	const asSMetadataListInitializer* GetListInitializer(const asCObjectType& Type) const;
-	asEMetadataResult AddProperty(asCObjectType& Owner, const char* Name,
+	asEDefinitionResult AddProperty(asCObjectType& Owner, const char* Name,
 		const asCDataType& Type, asCObjectProperty*& Out, bool IsPrivate = false, bool IsProtected = false);
-	asEMetadataResult DefineNativeProperty(asCObjectType& Owner, const char* Name,
+	asEDefinitionResult DefineNativeProperty(asCObjectType& Owner, const char* Name,
 		const asCDataType& Type, const asSNativePropertyAddress& Address, asCObjectProperty*& Out);
-	asEMetadataResult SetBaseType(asCObjectType& Type, asCObjectType& Base);
-	asEMetadataResult SetInterfaceDeclaration(asCObjectType& Type);
-	asEMetadataResult AddInterface(asCObjectType& Type, asCObjectType& Interface);
-	asEMetadataResult AddBehaviour(asCObjectType& Type, asEBehaviours Behaviour, asCScriptFunction& Function);
-	asEMetadataResult AddTemplateArgument(asCObjectType& Type, const asCDataType& Argument);
-	asEMetadataResult SetDefaultArrayType(asCObjectType& Type);
+	asEDefinitionResult SetBaseType(asCObjectType& Type, asCObjectType& Base);
+	asEDefinitionResult SetInterfaceDeclaration(asCObjectType& Type);
+	asEDefinitionResult AddInterface(asCObjectType& Type, asCObjectType& Interface);
+	asEDefinitionResult AddBehaviour(asCObjectType& Type, asEBehaviours Behaviour, asCScriptFunction& Function);
+	asEDefinitionResult AddTemplateArgument(asCObjectType& Type, const asCDataType& Argument);
+	asEDefinitionResult SetDefaultArrayType(asCObjectType& Type);
 	bool IsDefaultArrayType(const asCTypeInfo* Type) const;
-	asEMetadataResult AddEnumValue(asCEnumType& Type, const char* Name, int Value);
-	asEMetadataResult SetAlias(asCTypedefType& Type, const asCDataType& Alias);
-	asEMetadataResult AddChildCallableType(asCObjectType& Type, asCCallableType& CallableType);
-	asEMetadataResult SetNativeLayout(asCObjectType& Type, asUINT Size, asUINT Alignment);
-	asEMetadataResult SetFixedTemplateLayout(asCObjectType& Type, asUINT Size, asUINT Alignment);
-	asEMetadataResult CreateTemplateInstance(asCObjectType& Template, const asSStableKey& TypeUseKey,
+	asEDefinitionResult AddEnumValue(asCEnumType& Type, const char* Name, int Value);
+	asEDefinitionResult SetAlias(asCTypedefType& Type, const asCDataType& Alias);
+	asEDefinitionResult AddChildCallableType(asCObjectType& Type, asCCallableType& CallableType);
+	asEDefinitionResult SetNativeLayout(asCObjectType& Type, asUINT Size, asUINT Alignment);
+	asEDefinitionResult SetFixedTemplateLayout(asCObjectType& Type, asUINT Size, asUINT Alignment);
+	asEDefinitionResult CreateTemplateInstance(asCObjectType& Template, const asSStableKey& TypeUseKey,
+		TConstArrayView<asCDataType> Arguments, asCObjectType*& Out);
+	asEDefinitionResult CreateHostTemplateInstance(asCObjectType& Template, const asSStableKey& Key,
 		TConstArrayView<asCDataType> Arguments, asCObjectType*& Out);
 	bool ValidateFrozenDefinitions() const;
-	asEMetadataResult FinalizeLayouts();
-	asEMetadataResult Freeze();
+	asEDefinitionResult FinalizeLayouts();
+	asEDefinitionResult Freeze();
 	asEFingerprintStatus TryGetSchemaHash(const asCTypeInfo& Type, asSSchemaHash& OutHash,
 		TConstArrayView<uint8>* OutWitness = nullptr) const;
 	asEFingerprintStatus TryGetLayoutHash(const asCTypeInfo& Type, asSLayoutHash& OutHash,
 		TConstArrayView<uint8>* OutWitness = nullptr) const;
 	void SetFingerprintDigestProvider(const asIFingerprintDigestProvider* Provider);
-	void AttachDependencies(TConstArrayView<asCModuleDefinitionSet*> InDependencies);
+	void AttachDependencies(TConstArrayView<asCDefinitions*> InDependencies);
 	void AdoptEmittedByteCode(TUniquePtr<asCByteCodeImage> InImage);
 	asCByteCodeImage* PeekEmittedByteCode() const;
 	TUniquePtr<asCByteCodeImage> TakeEmittedByteCode();
 
 private:
 	friend class asCScriptEngine;
+	friend class asCDefinitionGraphLease;
 	friend class asCTypeInfo;
 	friend class asCObjectType;
 	friend class asCEnumType;
@@ -224,20 +266,20 @@ private:
 	friend struct asSMetadataFingerprintEncoder;
 	friend ANGELSCRIPTRUNTIME_API asSByteCodeEmissionResult asEmitByteCodeImage(
 		const asCCompilationSession*,
-		const asCModuleDefinitionSet*,
+		const asCDefinitions*,
 		const asSByteCodeEmissionOptions&,
 		TUniquePtr<asCByteCodeImage>&);
-	asEMetadataResult ValidateNew(const asSStableKey& Key, const char* Name,
+	asEDefinitionResult ValidateNew(const asSStableKey& Key, const char* Name,
 		const char* Namespace, bool IsType) const;
 	asSNameSpace* InternNamespace(const char* Name);
-	asEMetadataResult ValidateDataType(const asCDataType& Type, bool AllowVoid, bool AllowWildcard = false) const;
+	asEDefinitionResult ValidateDataType(const asCDataType& Type, bool AllowVoid, bool AllowWildcard = false) const;
 	asCDataType NormalizeOptions(const asCDataType& Type) const;
-	bool ReferencesSet(const asCModuleDefinitionSet* Set) const;
+	bool ReferencesSet(const asCDefinitions* Set) const;
 	bool ValidateFrozenIdentity() const;
 	bool ValidateListInitializers() const;
 	bool ValidateListPattern(const asSMetadataListPattern& Pattern, asUINT GenericArity, int Depth, int& NodeBudget) const;
 	bool ValidateGlobalIdentity(const asCGlobalProperty& Global) const;
-	asEMetadataResult CreateGlobalPropertyInternal(const asSStableKey& Key, const asSStableKey& TypeUseKey,
+	asEDefinitionResult CreateGlobalPropertyInternal(const asSStableKey& Key, const asSStableKey& TypeUseKey,
 		const char* Name, const char* Namespace, const asCDataType& Type, asCGlobalProperty*& Out, bool Native);
 	bool ValidateTypeUse(const asSStableKey& Key, const asCDataType& Actual, int Depth = 0) const;
 	bool ValidateFrozenLayout() const;
@@ -260,8 +302,8 @@ private:
 	bool ValidateAccessSnapshot() const;
 	void InvalidateLayouts() { bLayoutsFinalized = false; }
 
-	const asSMetadataOptions Options;
-	std::atomic<asEDefinitionSetState> State{asEDefinitionSetState::Building};
+	const asSDefinitionOptions Options;
+	std::atomic<asEDefinitionState> State{asEDefinitionState::Building};
 	mutable std::mutex MutationMutex;
 	TArray<asCTypeInfo*> Types;
 	TArray<asCScriptFunction*> Functions;
@@ -275,7 +317,7 @@ private:
 	TMap<asSStableKey, asCGlobalProperty*> GlobalsByKey;
 	TMap<FString, asCGlobalProperty*, FDefaultSetAllocator, asTNameKeyFuncs<asCGlobalProperty*>> GlobalsByName;
 	TArray<asSNameSpace*> Namespaces;
-	TArray<asCModuleDefinitionSet*> Dependencies;
+	TArray<asCDefinitions*> Dependencies;
 	TMap<asSStableKey, asCTypeInfo*> TypesByKey;
 	TMap<asSStableKey, asCScriptFunction*> FunctionsByKey;
 	TMap<FString, asCTypeInfo*, FDefaultSetAllocator, asTNameKeyFuncs<asCTypeInfo*>> TypesByName;
@@ -298,6 +340,8 @@ private:
 	asCScriptEngine* BoundEngine = nullptr;
 	TMap<const asCTypeInfo*, int> BoundTypeIds;
 	TMap<const asCScriptFunction*, int> BoundFunctionIds;
+	asSDefinitionDestroyCounters* DestroyCounters = nullptr;
+	TWeakPtr<asCDefinitions, ESPMode::ThreadSafe> Self;
 
 	const asIFingerprintDigestProvider* FingerprintDigestProvider = nullptr;
 	struct asSCachedFingerprint

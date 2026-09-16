@@ -24,6 +24,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UPoseableMeshComponent(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto UPoseableMeshComponent_ = Binds.ExistingClassForTarget("UPoseableMeshComponent");
 		UPoseableMeshComponent_.Method("void AllocateTransformData()", &FAngelscriptUPoseableMeshComponentBinds::AllocateTransformData);
 		UPoseableMeshComponent_.Method("void RefreshBoneTransforms()", &FAngelscriptUPoseableMeshComponentBinds::RefreshBoneTransforms);

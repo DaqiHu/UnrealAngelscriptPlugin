@@ -185,6 +185,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FQuat4f_Type(
 	TEXT("FQuat4f.Type"), EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Flags.ExtraFlags |= asOBJ_BASICMATHTYPE;
@@ -195,6 +196,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FQuat4f_Infrastructure(
 	TEXT("FQuat4f.Infrastructure"), EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FQuat4fType>());
 		FToStringHelper::Register(Binds, TEXT("FQuat4f"), &FAngelscriptFQuat4fBinds::AppendToString);
 
@@ -203,6 +205,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FQuat4f(
 	TEXT("FQuat4f.Functions"), EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FQuat4f_ = Binds.ExistingClassForTarget("FQuat4f");
 		FQuat4f_.Constructor("void f()", &FAngelscriptFQuat4fBinds::ConstructDefault)
 			.NoDiscard()

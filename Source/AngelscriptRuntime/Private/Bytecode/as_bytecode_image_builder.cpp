@@ -1,5 +1,5 @@
 #include "as_bytecode_image_builder.h"
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 #include "as_property.h"
@@ -30,7 +30,7 @@ namespace
 		Out.Append(Source.GetData(), Source.Num());
 	}
 
-	bool InternDataTypeUse(const asCModuleDefinitionSet* Set, const asCDataType& Type, asSStableKey& OutKey)
+	bool InternDataTypeUse(const asCDefinitions* Set, const asCDataType& Type, asSStableKey& OutKey)
 	{
 		OutKey = {};
 		if (!Set || !Set->GetIdentityContext().IsValid()) return false;
@@ -78,11 +78,11 @@ namespace
 		return Context->GetIdentityRegistry().InternTypeUse(Descriptor, OutKey) == asETypeIdentityStatus::Succeeded;
 	}
 
-	asCTypeInfo* FindTypeInSetOrDependencies(const asCModuleDefinitionSet* Set, const asSStableKey& Key)
+	asCTypeInfo* FindTypeInSetOrDependencies(const asCDefinitions* Set, const asSStableKey& Key)
 	{
 		if (!Set) return nullptr;
-		if (asCTypeInfo* Found = const_cast<asCModuleDefinitionSet*>(Set)->FindType(Key)) return Found;
-		for (asCModuleDefinitionSet* Dependency : Set->GetDependencies())
+		if (asCTypeInfo* Found = const_cast<asCDefinitions*>(Set)->FindType(Key)) return Found;
+		for (asCDefinitions* Dependency : Set->GetDependencies())
 		{
 			if (asCTypeInfo* Found = FindTypeInSetOrDependencies(Dependency, Key)) return Found;
 		}
@@ -258,7 +258,7 @@ asEByteCodeImageStatus asCByteCodeImageBuilder::AddTypeRequirement(const asCType
 	const asEByteCodeImageStatus Status = AddRequirement(Requirement, OutSlot);
 	if (Status != asEByteCodeImageStatus::Succeeded) return Status;
 	TArray<asSStableKey> Pending = Requirement.ReferencedKeys;
-	const asCModuleDefinitionSet* Set = Type.GetDefinitionSet();
+	const asCDefinitions* Set = Type.GetDefinitions();
 	while (Pending.Num() > 0)
 	{
 		const asSStableKey Key = Pending.Pop();
@@ -290,7 +290,7 @@ asEByteCodeImageStatus asCByteCodeImageBuilder::AddFunctionRequirement(const asC
 	Requirement.Role = asEByteCodeRequirementRole::Function;
 	Requirement.Key = Function.GetStableKey();
 	Requirement.Name = UTF8_TO_TCHAR(Function.GetName());
-	const asCModuleDefinitionSet* Set = Function.GetDefinitionSet();
+	const asCDefinitions* Set = Function.GetDefinitions();
 	if (!InternDataTypeUse(Set, Function.GetReturnDataType(), Requirement.ReturnTypeUse))
 	{
 		return asEByteCodeImageStatus::CorruptWitness;
@@ -327,7 +327,7 @@ asEByteCodeImageStatus asCByteCodeImageBuilder::AddFunctionRequirement(const asC
 		| (Function.IsOverride() ? 4u : 0u)
 		| (Function.IsProperty() ? 8u : 0u)
 		| (Function.IsReadOnly() ? 16u : 0u)
-		| (Function.GetMetadataDeclarationKind() == asEFunctionIdentityKind::Constructor ? 32u : 0u)
+		| (Function.GetDeclarationKind() == asEFunctionIdentityKind::Constructor ? 32u : 0u)
 		| (Function.DoesReturnOnStack() ? 64u : 0u);
 	{
 		asCCanonicalEncoding Signature(asECanonicalIdentityDomain::Function);
@@ -380,6 +380,22 @@ asEByteCodeImageStatus asCByteCodeImageBuilder::AddPropertyRequirement(
 	if (Property.type.GetTypeInfo())
 	{
 		Requirement.ReferencedKeys.AddUnique(Property.type.GetTypeInfo()->GetStableKey());
+	}
+	asEncodeByteCodeRequirementContract(Requirement, Requirement.ContractWitness);
+	return AddRequirement(Requirement, OutSlot);
+}
+
+asEByteCodeImageStatus asCByteCodeImageBuilder::AddGlobalRequirement(
+	const asCGlobalProperty& Global,
+	asUINT& OutSlot)
+{
+	asSByteCodeRequirement Requirement;
+	Requirement.Role = asEByteCodeRequirementRole::Global;
+	Requirement.Key = Global.GetStableKey();
+	Requirement.Name = UTF8_TO_TCHAR(Global.name.AddressOf());
+	if (Global.type.GetTypeInfo())
+	{
+		Requirement.ReferencedKeys.AddUnique(Global.type.GetTypeInfo()->GetStableKey());
 	}
 	asEncodeByteCodeRequirementContract(Requirement, Requirement.ContractWitness);
 	return AddRequirement(Requirement, OutSlot);

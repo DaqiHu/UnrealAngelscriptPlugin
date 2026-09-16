@@ -43,6 +43,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Debugging(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 #if WITH_EDITOR
 		if (!Binds.IsRecording())
 		{

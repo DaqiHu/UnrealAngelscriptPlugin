@@ -45,6 +45,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FNumberFormattingOptions_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Binds.ValueClassForTarget<FNumberFormattingOptions>("FNumberFormattingOptions", Flags);
@@ -56,6 +57,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FNumberFormattingOptions(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Options_ = Binds.ExistingClassForTarget("FNumberFormattingOptions");
 		Options_.Constructor(
 			"void f()",

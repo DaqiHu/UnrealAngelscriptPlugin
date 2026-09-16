@@ -122,6 +122,11 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FText_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget())
+		{
+			Binds.ValueClassForTarget<FText>("FText", FBindFlags());
+			return;
+		}
 		auto IdenticalMode = Binds.EnumForTarget("ETextIdenticalModeFlags");
 		IdenticalMode["None"] = ETextIdenticalModeFlags::None;
 		IdenticalMode["DeepCompare"] = ETextIdenticalModeFlags::DeepCompare;
@@ -142,9 +147,10 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FText_Infrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FTextType>());
 		auto Text = Binds.ExistingClassForTarget("FText");
-		if (!Binds.IsRecording())
+		if (!Binds.IsRecording() && !Binds.IsHostTarget())
 		{
 			TGetStaticTypeInfo<FText>::SetForEngine(Binds.GetTargetEngine().GetScriptEngine(), Text.GetTypeInfo());
 		}
@@ -156,6 +162,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FText(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Text = Binds.ExistingClassForTarget("FText");
 		Text.Constructor("void f()", &FAngelscriptFTextBinds::ConstructDefault, "FText", true).NoDiscard();
 		Text.Constructor("void f(const FText& Other)", &FAngelscriptFTextBinds::ConstructCopy, "FText", true).NoDiscard();

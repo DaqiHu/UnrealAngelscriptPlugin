@@ -35,6 +35,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AVolume(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto AVolume_ = Binds.ExistingClassForTarget("AVolume");
 		AVolume_.Method("FBoxSphereBounds GetBounds() const", METHOD_TRIVIAL(AVolume, GetBounds));
 		AVolume_.Method(

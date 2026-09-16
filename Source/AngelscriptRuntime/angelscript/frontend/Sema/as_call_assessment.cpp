@@ -336,7 +336,7 @@ asSCandidateAssessment asCSema::AssessHostCandidate(
 	asSCandidateAssessment Out;
 	Out.HostCallable = Candidate;
 	asCScriptFunction* Function = Candidate.Function;
-	if (!Function || !Function->GetDefinitionSet() || Function->GetStableKey() != Candidate.Key)
+	if (!Function || !Function->GetDefinitions() || Function->GetStableKey() != Candidate.Key)
 	{
 		asCallAssessment::Reject(Out, asECandidateRejection::InvalidCandidate);
 		return Out;

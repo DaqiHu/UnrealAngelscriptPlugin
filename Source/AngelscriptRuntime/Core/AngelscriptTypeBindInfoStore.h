@@ -1,7 +1,7 @@
 #pragma once
 
 #include "AngelscriptTypeBindInfo.h"
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "as_type_id_registry.h"
 
 class FAngelscriptReflectedTypeSnapshot;
@@ -53,7 +53,7 @@ public:
 	FAngelscriptTypeBindHandle FindScope(const FString& Namespace = FString()) const;
 	const FAngelscriptTypeBindInfo* GetType(FAngelscriptTypeBindHandle Handle) const;
 	const FAngelscriptTypeBindInfoMember* GetMember(FAngelscriptTypeBindMemberHandle Handle) const;
-	AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult PublishProcessIds() const;
+	AS_NAMESPACE_QUALIFIER asERegistrationResult PublishProcessIds() const;
 	int GetPublishedTypeId(FAngelscriptTypeBindHandle Handle) const;
 	int GetPublishedFunctionId(FAngelscriptTypeBindMemberHandle Handle) const;
 	AS_NAMESPACE_QUALIFIER asETypeQueryResult GetPublishedClassInfo(

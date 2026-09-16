@@ -185,6 +185,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FQuat_Type(
 	TEXT("FQuat.Type"), EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Flags.ExtraFlags |= asOBJ_BASICMATHTYPE;
@@ -195,6 +196,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FQuat_Infrastructure(
 	TEXT("FQuat.Infrastructure"), EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FQuatType>());
 		FToStringHelper::Register(Binds, TEXT("FQuat"), &FAngelscriptFQuatBinds::AppendToString);
 
@@ -203,6 +205,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FQuat(
 	TEXT("FQuat.Functions"), EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FQuat_ = Binds.ExistingClassForTarget("FQuat");
 		FQuat_.Constructor("void f()", &FAngelscriptFQuatBinds::ConstructDefault)
 			.NoDiscard()

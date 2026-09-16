@@ -345,6 +345,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSet_MethodSurface(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto TSet_ = Binds.ExistingClassForTarget("TSet<T>");
 		TSet_.Constructor("void f()", FUNC_TRIVIAL(FAngelscriptSetBinds::Construct));
 
@@ -447,7 +448,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TSet_TypeInfrastructure(
 		Binds.RegisterTypeForTarget(SetType);
 		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptSetIteratorType>());
 		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptSetConstIteratorType>());
-		if (Binds.IsRecording()) return;
+		if (Binds.IsRecording() || Binds.IsHostTarget()) return;
 
 		FAngelscriptTypeDatabase* TargetTypeDatabase = &Binds.GetTargetTypeDatabase();
 		Binds.RegisterTypeFinderForTarget([SetType, TargetTypeDatabase](FProperty* Property, FAngelscriptTypeUsage& Usage) -> bool

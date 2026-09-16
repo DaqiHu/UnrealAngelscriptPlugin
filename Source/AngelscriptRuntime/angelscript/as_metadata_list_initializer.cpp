@@ -1,10 +1,10 @@
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 #include "frontend/AST/as_type_context.h"
 
 BEGIN_AS_NAMESPACE
-bool asCModuleDefinitionSet::ValidateListPattern(const asSMetadataListPattern& Pattern, asUINT GenericArity, int Depth, int& NodeBudget) const
+bool asCDefinitions::ValidateListPattern(const asSMetadataListPattern& Pattern, asUINT GenericArity, int Depth, int& NodeBudget) const
 {
 	if (Depth > 64 || --NodeBudget < 0) return false;
 	if (Pattern.Kind == asEMetadataListPatternKind::Value)
@@ -12,7 +12,7 @@ bool asCModuleDefinitionSet::ValidateListPattern(const asSMetadataListPattern& P
 		if (!Pattern.Children.IsEmpty()) return false;
 		if (Pattern.TemplateParameterIndex != ~asUINT(0))
 			return !Pattern.ValueType.IsValid() && Pattern.TemplateParameterIndex < GenericArity;
-		return ValidateDataType(Pattern.ValueType, false) == asEMetadataResult::Succeeded && !Pattern.ValueType.IsReference();
+		return ValidateDataType(Pattern.ValueType, false) == asEDefinitionResult::Succeeded && !Pattern.ValueType.IsReference();
 	}
 	if (Pattern.ValueType.IsValid() || Pattern.TemplateParameterIndex != ~asUINT(0)) return false;
 	if (Pattern.Kind == asEMetadataListPatternKind::Repeat || Pattern.Kind == asEMetadataListPatternKind::RepeatSame)
@@ -31,25 +31,25 @@ bool asCModuleDefinitionSet::ValidateListPattern(const asSMetadataListPattern& P
 	return true;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetListInitializer(asCObjectType& Type, asCScriptFunction& Factory, const asSMetadataListPattern& Pattern)
+asEDefinitionResult asCDefinitions::SetListInitializer(asCObjectType& Type, asCScriptFunction& Factory, const asSMetadataListPattern& Pattern)
 {
 std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type) || !CanReference(&Factory)) return asEMetadataResult::ForeignOwner;
-	if (Type.GetMetadataTemplateDefinition() || ListInitializers.Contains(&Type)) return asEMetadataResult::InvalidState;
-	if (!IdentityContext.IsValid() || !Factory.metadataSignatureDefined || Factory.returnType.GetTypeInfo() != &Type) return asEMetadataResult::InvalidSignature;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type) || !CanReference(&Factory)) return asEDefinitionResult::ForeignOwner;
+	if (Type.GetTemplateDefinition() || ListInitializers.Contains(&Type)) return asEDefinitionResult::InvalidState;
+	if (!IdentityContext.IsValid() || !Factory.metadataSignatureDefined || Factory.returnType.GetTypeInfo() != &Type) return asEDefinitionResult::InvalidSignature;
 	asSFunctionIdentityDescriptor Identity;
 	if (IdentityContext->GetIdentityRegistry().ResolveFunction(Factory.GetStableKey(), Identity) != asETypeIdentityStatus::Succeeded ||
 		Identity.Owner != Type.GetStableKey() ||
-		(Identity.Kind != asEFunctionIdentityKind::Factory && Identity.Kind != asEFunctionIdentityKind::Behaviour)) return asEMetadataResult::InvalidSignature;
+		(Identity.Kind != asEFunctionIdentityKind::Factory && Identity.Kind != asEFunctionIdentityKind::Behaviour)) return asEDefinitionResult::InvalidSignature;
 	int Budget = 4096;
-	if (Pattern.Kind != asEMetadataListPatternKind::List || !ValidateListPattern(Pattern, Type.metadataGenericArity, 0, Budget)) return asEMetadataResult::InvalidSignature;
+	if (Pattern.Kind != asEMetadataListPatternKind::List || !ValidateListPattern(Pattern, Type.genericArity, 0, Budget)) return asEDefinitionResult::InvalidSignature;
 	asSMetadataListInitializer Entry; Entry.Factory = &Factory; Entry.Pattern = Pattern;
 	ListInitializers.Add(&Type, MoveTemp(Entry));
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-const asSMetadataListInitializer* asCModuleDefinitionSet::GetListInitializer(const asCObjectType& Type) const
+const asSMetadataListInitializer* asCDefinitions::GetListInitializer(const asCObjectType& Type) const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	// A returned view is stable only for a frozen image. Draft mutation retains
@@ -58,13 +58,13 @@ const asSMetadataListInitializer* asCModuleDefinitionSet::GetListInitializer(con
 	return ListInitializers.Find(&Type);
 }
 
-bool asCModuleDefinitionSet::ValidateListInitializers() const
+bool asCDefinitions::ValidateListInitializers() const
 {
 	for (const auto& Entry : ListInitializers)
 	{
 		if (!Owns(Entry.Key) || !CanReference(Entry.Value.Factory) || Entry.Value.Factory->returnType.GetTypeInfo() != Entry.Key) return false;
 		int Budget = 4096;
-		if (Entry.Value.Pattern.Kind != asEMetadataListPatternKind::List || !ValidateListPattern(Entry.Value.Pattern, Entry.Key->metadataGenericArity, 0, Budget)) return false;
+		if (Entry.Value.Pattern.Kind != asEMetadataListPatternKind::List || !ValidateListPattern(Entry.Value.Pattern, Entry.Key->genericArity, 0, Budget)) return false;
 	}
 	return true;
 }

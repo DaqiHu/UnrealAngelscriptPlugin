@@ -34,6 +34,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FPlane4f(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FPlane4f_ = Binds.ExistingClassForTarget("FPlane4f");
 		FPlane4f_.Constructor(
 			"void f(const FVector3f& InLocation, const FVector3f& InNormal)",

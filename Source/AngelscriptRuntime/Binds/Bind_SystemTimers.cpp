@@ -39,6 +39,17 @@ AS_FORCE_LINK const FAngelscriptBind Bind_SystemTimers(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget())
+		{
+			FBindFlags Flags;
+			Flags.bPOD = true;
+			Binds.ValueClassForTarget<FTimerHandle>("FTimerHandle", Flags);
+			FAngelscriptBinds::FNamespace Namespace(Binds, "System");
+			Binds.BindGlobalFunctionForTarget(
+				"void ClearAndInvalidateTimerHandle(FTimerHandle& Handle)",
+				&FAngelscriptSystemTimersBinds::ClearAndInvalidateTimer);
+			return;
+		}
 		FAngelscriptBinds::FNamespace Namespace(Binds, "System");
 		Binds.BindGlobalFunctionForTarget(
 			"FTimerHandle SetTimer(const UObject Object, const FName& FunctionName, float32 Time, bool bLooping = false)",

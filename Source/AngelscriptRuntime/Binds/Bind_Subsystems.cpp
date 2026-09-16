@@ -50,6 +50,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Subsystems(
 	EAngelscriptBindPhase::PostReflectionBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		{
 			FAngelscriptBinds::FNamespace Namespace(Binds, "USubsystemLibrary");
 			Binds.BindGlobalFunctionForTarget(

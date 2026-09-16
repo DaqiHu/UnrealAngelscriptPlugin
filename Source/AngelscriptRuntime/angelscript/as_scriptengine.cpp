@@ -52,8 +52,11 @@
 #include "as_scriptfunction.h"
 #include "as_vm_object.h"
 #include "as_debug.h"
+#include "as_type_id_registry.h"
+#include "as_property.h"
 
 #include "AngelscriptEngine.h"
+#include "Misc/Crc.h"
 #include "ClassGenerator/ASClass.h"
 
 #include <stdlib.h>
@@ -831,7 +834,7 @@ asCScriptEngine::asCScriptEngine()
 
 	defaultArrayObjectType = 0;
 
-	InitializeMetadataBuiltins();
+	InitializeDefinitionBuiltins();
 
 #ifndef AS_NO_EXCEPTIONS
 	translateExceptionCallback = false;
@@ -866,7 +869,7 @@ void asCScriptEngine::DeleteDiscardedModules()
 
 asCScriptEngine::~asCScriptEngine()
 {
-	RetireDefinitionSets();
+	RetireExternalDefinitions();
 	// TODO: clean-up: Clean up redundant code
 
 	inDestructor = true;
@@ -1126,7 +1129,7 @@ int asCScriptEngine::Release() const
 int asCScriptEngine::ShutDownAndRelease()
 {
 	if (shuttingDown.exchange(true)) return Release();
-	RetireDefinitionSets(); // Close admission; live runtime leases defer detachment.
+	RetireExternalDefinitions(); // Close admission; live runtime leases defer detachment.
 	DrainVmRetirement();
 	bool PendingRuntimeDrain;
 	{
@@ -1272,8 +1275,15 @@ int asCScriptEngine::SetDefaultNamespace(const char *nameSpace)
 	if( r < 0 )
 		return ConfigError(r, "SetDefaultNamespace", nameSpace, 0);
 
-	for( asUINT n = 0; n < nsStrings.GetLength(); n++ )
-		defaultNamespace = AddNameSpace(nsStrings[n].AddressOf());
+	if (nsStrings.GetLength() == 0)
+	{
+		defaultNamespace = AddNameSpace("");
+	}
+	else
+	{
+		for( asUINT n = 0; n < nsStrings.GetLength(); n++ )
+			defaultNamespace = AddNameSpace(nsStrings[n].AddressOf());
+	}
 
 	return 0;
 }
@@ -1570,8 +1580,8 @@ asCString asCScriptEngine::GetFunctionDeclaration(int funcId)
 // internal
 asCScriptFunction *asCScriptEngine::GetScriptFunction(int funcId) const
 {
-	std::lock_guard<std::mutex> MetadataLock(metadataRegistrationMutex);
-	if (asCScriptFunction* Function = metadataFunctionsById.FindRef(funcId)) return Function;
+	std::lock_guard<std::mutex> MetadataLock(registrationMutex);
+	if (asCScriptFunction* Function = functionsById.FindRef(funcId)) return Function;
 	if( funcId < 0 || funcId >= (int)scriptFunctions.GetLength() )
 		return 0;
 
@@ -1599,10 +1609,265 @@ int asCScriptEngine::CreateContext(asIScriptContext **context, bool isInternal)
 	return 0;
 }
 
+namespace
+{
+	FString LiveDirectoryName(const char* Namespace, const char* Name)
+	{
+		return FString(UTF8_TO_TCHAR(Namespace ? Namespace : "")) + TEXT("::") + UTF8_TO_TCHAR(Name ? Name : "");
+	}
+
+	void SkipLiveWs(const char*& Cursor)
+	{
+		while (*Cursor == ' ' || *Cursor == '\t' || *Cursor == '\r' || *Cursor == '\n') ++Cursor;
+	}
+
+	bool ParseLiveIdent(const char*& Cursor, asCString& Out)
+	{
+		SkipLiveWs(Cursor);
+		if (!((*Cursor >= 'A' && *Cursor <= 'Z') || (*Cursor >= 'a' && *Cursor <= 'z') || *Cursor == '_'))
+		{
+			return false;
+		}
+		const char* Start = Cursor;
+		while ((*Cursor >= 'A' && *Cursor <= 'Z') || (*Cursor >= 'a' && *Cursor <= 'z')
+			|| (*Cursor >= '0' && *Cursor <= '9') || *Cursor == '_')
+		{
+			++Cursor;
+		}
+		Out = asCString(Start, static_cast<int>(Cursor - Start));
+		return Out.GetLength() > 0;
+	}
+
+	bool ParseLiveDataType(asCScriptEngine& Engine, asCDefinitions& Graph, const char*& Cursor, asCDataType& Out)
+	{
+		asCString Name;
+		if (!ParseLiveIdent(Cursor, Name)) return false;
+		if (Name == "void") { Out = Graph.Primitive(ttVoid); return true; }
+		if (Name == "int" || Name == "int32") { Out = Graph.Primitive(ttInt); return true; }
+		if (Name == "int8") { Out = Graph.Primitive(ttInt8); return true; }
+		if (Name == "int16") { Out = Graph.Primitive(ttInt16); return true; }
+		if (Name == "int64") { Out = Graph.Primitive(ttInt64); return true; }
+		if (Name == "uint" || Name == "uint32") { Out = Graph.Primitive(ttUInt); return true; }
+		if (Name == "uint8") { Out = Graph.Primitive(ttUInt8); return true; }
+		if (Name == "uint16") { Out = Graph.Primitive(ttUInt16); return true; }
+		if (Name == "uint64") { Out = Graph.Primitive(ttUInt64); return true; }
+		if (Name == "float") { Out = Graph.Primitive(ttFloat); return true; }
+		if (Name == "double") { Out = Graph.Primitive(ttDouble); return true; }
+		if (Name == "bool") { Out = Graph.Primitive(ttBool); return true; }
+		(void)Engine;
+		return false;
+	}
+
+	bool ParseLiveProperty(asCScriptEngine& Engine, asCDefinitions& Graph, const char* Declaration,
+		asCDataType& Type, asCString& Name)
+	{
+		if (!Declaration) return false;
+		const char* Cursor = Declaration;
+		if (!ParseLiveDataType(Engine, Graph, Cursor, Type)) return false;
+		if (!ParseLiveIdent(Cursor, Name)) return false;
+		SkipLiveWs(Cursor);
+		return *Cursor == 0;
+	}
+
+	bool ParseLiveFunction(asCScriptEngine& Engine, asCDefinitions& Graph, const char* Declaration,
+		asCDataType& ReturnType, asCString& Name, TArray<asSDefinitionParameter>& Parameters)
+	{
+		if (!Declaration) return false;
+		const char* Cursor = Declaration;
+		if (!ParseLiveDataType(Engine, Graph, Cursor, ReturnType)) return false;
+		if (!ParseLiveIdent(Cursor, Name)) return false;
+		SkipLiveWs(Cursor);
+		if (*Cursor != '(') return false;
+		++Cursor;
+		SkipLiveWs(Cursor);
+		if (*Cursor != ')')
+		{
+			for (;;)
+			{
+				asSDefinitionParameter Parameter;
+				if (!ParseLiveDataType(Engine, Graph, Cursor, Parameter.Type)) return false;
+				asCString ParameterName;
+				ParseLiveIdent(Cursor, ParameterName);
+				Parameter.Name = ParameterName;
+				Parameters.Add(Parameter);
+				SkipLiveWs(Cursor);
+				if (*Cursor == ',') { ++Cursor; continue; }
+				break;
+			}
+		}
+		if (*Cursor != ')') return false;
+		++Cursor;
+		SkipLiveWs(Cursor);
+		asCString Trailing;
+		if (ParseLiveIdent(Cursor, Trailing) && Trailing != "const") return false;
+		SkipLiveWs(Cursor);
+		return *Cursor == 0;
+	}
+
+	bool IsMutableLiveType(asCTypeInfo* Type, asCScriptEngine* Engine)
+	{
+		return Type && Type->GetTypeInfoKind() == asETypeInfoKind::LiveRegister && Type->GetEngine() == Engine;
+	}
+}
+
+asCDefinitions* asCScriptEngine::EnsureLiveDefinitions()
+{
+	if (!liveDefinitions)
+	{
+		asSDefinitionOptions Options;
+		Options.Kind = asETypeInfoKind::LiveRegister;
+		liveDefinitions = asCDefinitions::Create(Options);
+	}
+	if (liveDefinitions)
+	{
+		liveDefinitions->BoundEngine = this;
+	}
+	return liveDefinitions.Get();
+}
+
+asSStableKey asCScriptEngine::MakeLiveStableKey(const char* Kind, const char* Namespace, const char* Name)
+{
+	uint8 Bytes[32] = {};
+	const uint32 Serial = liveIdentitySerial++;
+	const uint32 Words[8] = {
+		FCrc::StrCrc32(Kind ? Kind : ""),
+		FCrc::StrCrc32(Namespace ? Namespace : ""),
+		FCrc::StrCrc32(Name ? Name : ""),
+		Serial,
+		static_cast<uint32>(reinterpret_cast<UPTRINT>(this)),
+		static_cast<uint32>(reinterpret_cast<UPTRINT>(this) >> 32),
+		0x4C495645,
+		0
+	};
+	FMemory::Memcpy(Bytes, Words, sizeof(Words));
+	asSStableKey Key;
+	check(asSStableKey::TryCreate(MakeArrayView(Bytes), Key));
+	return Key;
+}
+
+int asCScriptEngine::PublishLiveType(asCTypeInfo& Type)
+{
+	asSTypeIdReservationRequest Request;
+	Request.TypeSequenceCount = 1;
+	asSTypeIdReservation Reservation;
+	if (asCTypeIdRegistry::Get().Reserve(Request, Reservation) != asTYPE_ID_RESERVE_SUCCEEDED)
+	{
+		return asOUT_OF_MEMORY;
+	}
+	const int Id = asCTypeIdAllocator::EncodeObjectTypeId(Reservation.FirstTypeSequence, Type.flags);
+	Type.engine = this;
+	Type.typeId = Id;
+	liveDefinitions->BoundTypeIds.Add(&Type, Id);
+	typesByKey.Add(Type.GetStableKey(), &Type);
+	typesByName.Add(LiveDirectoryName(Type.GetNamespace(), Type.GetName()), &Type);
+	typesById.Add(Id, &Type);
+	const int Sequence = asCTypeIdAllocator::TypeSequenceFromTypeId(Id) + 1;
+	if (Sequence > nextTypeId) nextTypeId = Sequence;
+	return Id;
+}
+
+int asCScriptEngine::PublishLiveFunction(asCScriptFunction& Function)
+{
+	asSTypeIdReservationRequest Request;
+	Request.FunctionIdCount = 1;
+	asSTypeIdReservation Reservation;
+	if (asCTypeIdRegistry::Get().Reserve(Request, Reservation) != asTYPE_ID_RESERVE_SUCCEEDED)
+	{
+		return asOUT_OF_MEMORY;
+	}
+	const int Id = Reservation.FirstFunctionId;
+	Function.engine = this;
+	Function.id = Id;
+	liveDefinitions->BoundFunctionIds.Add(&Function, Id);
+	functionsByKey.Add(Function.GetStableKey(), &Function);
+	functionsById.Add(Id, &Function);
+	if (Id + 1 > nextFunctionId) nextFunctionId = Id + 1;
+	return Id;
+}
+
+int asCScriptEngine::RegisterLiveCallable(asCObjectType& Type, const char* Declaration, const asSFuncPtr& FunctionPtr,
+	asDWORD CallConv, asFunctionCaller Caller, void* Auxiliary, asEBehaviours* Behaviour)
+{
+	asCDefinitions* Graph = EnsureLiveDefinitions();
+	if (!Graph) return ConfigError(asOUT_OF_MEMORY, Behaviour ? "RegisterObjectBehaviour" : "RegisterObjectMethod", Type.GetName(), Declaration);
+	asCDataType ReturnType;
+	asCString Name;
+	TArray<asSDefinitionParameter> Parameters;
+	if (!ParseLiveFunction(*this, *Graph, Declaration, ReturnType, Name, Parameters))
+	{
+		return ConfigError(asINVALID_DECLARATION, Behaviour ? "RegisterObjectBehaviour" : "RegisterObjectMethod", Type.GetName(), Declaration);
+	}
+	const char* KeyKind = Behaviour ? "behaviour" : "method";
+	asCScriptFunction* Function = nullptr;
+	if (Graph->CreateFunction(MakeLiveStableKey(KeyKind, Type.GetNamespace(), Name.AddressOf()),
+		Name.AddressOf(), Type.GetNamespace(), asFUNC_SYSTEM, Function) != asEDefinitionResult::Succeeded
+		|| Graph->DefineFunction(*Function, ReturnType, Parameters, &Type) != asEDefinitionResult::Succeeded
+		|| Graph->BindNativeFunction(*Function, FunctionPtr, CallConv, Caller, Auxiliary) != asEDefinitionResult::Succeeded)
+	{
+		return ConfigError(asINVALID_DECLARATION, Behaviour ? "RegisterObjectBehaviour" : "RegisterObjectMethod", Type.GetName(), Declaration);
+	}
+	if (Behaviour && Graph->AddBehaviour(Type, *Behaviour, *Function) != asEDefinitionResult::Succeeded)
+	{
+		return ConfigError(asINVALID_ARG, "RegisterObjectBehaviour", Type.GetName(), Declaration);
+	}
+	const int Id = PublishLiveFunction(*Function);
+	if (Id < 0) return ConfigError(Id, Behaviour ? "RegisterObjectBehaviour" : "RegisterObjectMethod", Type.GetName(), Declaration);
+	if (auto Interface = Function->GetProcessInterface())
+	{
+		std::lock_guard<std::mutex> Publish(executablePublicationMutex);
+		if (shuttingDown || vmRetirementRequested || registrationRetired)
+		{
+			return ConfigError(asINVALID_CONFIGURATION, Behaviour ? "RegisterObjectBehaviour" : "RegisterObjectMethod", Type.GetName(), Declaration);
+		}
+		nativeInterfaces.Add(Function->GetStableKey(), Interface);
+	}
+	return Id;
+}
+
 // interface
 int asCScriptEngine::RegisterObjectProperty(const char *obj, const char *declaration, int byteOffset, int compositeOffset, bool isCompositeIndirect, const asUINT accessorType, bool isProtected)
 {
-	return asNOT_SUPPORTED; // Use an explicit typed metadata draft and whole-image registration.
+	if (!obj || !declaration) return ConfigError(asINVALID_ARG, "RegisterObjectProperty", obj, declaration);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterObjectProperty", obj, declaration);
+	}
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	asCTypeInfo* Type = typesByName.FindRef(LiveDirectoryName(Namespace, obj));
+	if (!Type) return ConfigError(asINVALID_OBJECT, "RegisterObjectProperty", obj, declaration);
+	if (Type->GetTypeInfoKind() == asETypeInfoKind::HostProcess || !IsMutableLiveType(Type, this))
+	{
+		return ConfigError(asNOT_SUPPORTED, "RegisterObjectProperty", obj, declaration);
+	}
+	asCObjectType* Object = CastToObjectType(Type);
+	asCDefinitions* Graph = EnsureLiveDefinitions();
+	if (!Object || !Graph || !Graph->Owns(Object))
+	{
+		return ConfigError(asINVALID_OBJECT, "RegisterObjectProperty", obj, declaration);
+	}
+	asCDataType PropertyType;
+	asCString PropertyName;
+	if (!ParseLiveProperty(*this, *Graph, declaration, PropertyType, PropertyName))
+	{
+		return ConfigError(asINVALID_DECLARATION, "RegisterObjectProperty", obj, declaration);
+	}
+	if (compositeOffset != 0 || isCompositeIndirect)
+	{
+		return ConfigError(asNOT_SUPPORTED, "RegisterObjectProperty", obj, declaration);
+	}
+	asSNativePropertyAddress Address;
+	Address.Offset = byteOffset;
+	asCObjectProperty* Property = nullptr;
+	const asEDefinitionResult Result = Graph->DefineNativeProperty(*Object, PropertyName.AddressOf(), PropertyType, Address, Property);
+	if (Result != asEDefinitionResult::Succeeded)
+	{
+		return ConfigError(Result == asEDefinitionResult::InvalidLayout ? asINVALID_ARG : asINVALID_DECLARATION,
+			"RegisterObjectProperty", obj, declaration);
+	}
+	if (Property) Property->isProtected = isProtected;
+	(void)accessorType;
+	return asSUCCESS;
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 	int r;
 	asCDataType dt;
@@ -1662,7 +1927,32 @@ int asCScriptEngine::RegisterObjectProperty(const char *obj, const char *declara
 // interface
 int asCScriptEngine::RegisterInterface(const char *name)
 {
-	return asNOT_SUPPORTED;
+	if (!name || !*name) return ConfigError(asINVALID_NAME, "RegisterInterface", name, 0);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterInterface", name, 0);
+	}
+	asCDefinitions* Graph = EnsureLiveDefinitions();
+	if (!Graph) return ConfigError(asOUT_OF_MEMORY, "RegisterInterface", name, 0);
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	if (typesByName.Contains(LiveDirectoryName(Namespace, name))
+		|| globalsByName.Contains(LiveDirectoryName(Namespace, name)))
+	{
+		return ConfigError(asALREADY_REGISTERED, "RegisterInterface", name, 0);
+	}
+	asCObjectType* Type = nullptr;
+	if (Graph->CreateObjectType(MakeLiveStableKey("interface", Namespace, name), name, Namespace,
+		asOBJ_REF | asOBJ_SCRIPT_OBJECT, Type) != asEDefinitionResult::Succeeded
+		|| Graph->SetInterfaceDeclaration(*Type) != asEDefinitionResult::Succeeded)
+	{
+		return ConfigError(asINVALID_NAME, "RegisterInterface", name, 0);
+	}
+	Type->size = 0;
+	Type->alignment = 1;
+	const int Id = PublishLiveType(*Type);
+	if (Id < 0) return ConfigError(Id, "RegisterInterface", name, 0);
+	return Id;
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 	if( name == 0 ) return ConfigError(asINVALID_NAME, "RegisterInterface", 0, 0);
 
@@ -1727,7 +2017,48 @@ int asCScriptEngine::RegisterInterface(const char *name)
 // interface
 int asCScriptEngine::RegisterInterfaceMethod(const char *intf, const char *declaration)
 {
-	return asNOT_SUPPORTED;
+	if (!intf || !declaration) return ConfigError(asINVALID_ARG, "RegisterInterfaceMethod", intf, declaration);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterInterfaceMethod", intf, declaration);
+	}
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	asCTypeInfo* Type = typesByName.FindRef(LiveDirectoryName(Namespace, intf));
+	if (!Type) return ConfigError(asINVALID_TYPE, "RegisterInterfaceMethod", intf, declaration);
+	asCObjectType* Object = CastToObjectType(Type);
+	if (!Object || !Object->IsInterface()) return ConfigError(asINVALID_TYPE, "RegisterInterfaceMethod", intf, declaration);
+	if (Type->GetTypeInfoKind() == asETypeInfoKind::HostProcess || !IsMutableLiveType(Type, this))
+	{
+		return ConfigError(asNOT_SUPPORTED, "RegisterInterfaceMethod", intf, declaration);
+	}
+	asCDefinitions* Graph = EnsureLiveDefinitions();
+	if (!Graph || !Graph->Owns(Object)) return ConfigError(asINVALID_TYPE, "RegisterInterfaceMethod", intf, declaration);
+	asCDataType ReturnType;
+	asCString Name;
+	TArray<asSDefinitionParameter> Parameters;
+	if (!ParseLiveFunction(*this, *Graph, declaration, ReturnType, Name, Parameters))
+	{
+		return ConfigError(asINVALID_DECLARATION, "RegisterInterfaceMethod", intf, declaration);
+	}
+	for (asUINT Index = 0; Index < Object->GetMethodCount(); ++Index)
+	{
+		if (asIScriptFunction* Existing = Object->GetMethodByIndex(Index);
+			Existing && Existing->GetName() && Name == Existing->GetName())
+		{
+			return ConfigError(asALREADY_REGISTERED, "RegisterInterfaceMethod", intf, declaration);
+		}
+	}
+	asCScriptFunction* Function = nullptr;
+	if (Graph->CreateFunction(MakeLiveStableKey("interface-method", Namespace, Name.AddressOf()),
+		Name.AddressOf(), Namespace, asFUNC_INTERFACE, Function) != asEDefinitionResult::Succeeded
+		|| Graph->DefineFunction(*Function, ReturnType, Parameters, Object) != asEDefinitionResult::Succeeded)
+	{
+		return ConfigError(asINVALID_DECLARATION, "RegisterInterfaceMethod", intf, declaration);
+	}
+	const int Id = PublishLiveFunction(*Function);
+	if (Id < 0) return ConfigError(Id, "RegisterInterfaceMethod", intf, declaration);
+	return Id;
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 	asCDataType dt;
 	asCBuilder bld(this, 0);
@@ -1778,7 +2109,41 @@ int asCScriptEngine::RegisterInterfaceMethod(const char *intf, const char *decla
 //[UE++]: Widen object flags to preserve APV2 private high bits on the stock 2.38 layout.
 int asCScriptEngine::RegisterObjectType(const char *name, int byteSize, asQWORD flags)
 {
-	return asNOT_SUPPORTED;
+	if (!name || !*name) return ConfigError(asINVALID_NAME, "RegisterObjectType", name, 0);
+	if (!((flags & asOBJ_VALUE) || (flags & asOBJ_REF)) || ((flags & asOBJ_VALUE) && (flags & asOBJ_REF)))
+	{
+		return ConfigError(asINVALID_ARG, "RegisterObjectType", name, 0);
+	}
+	if ((flags & asOBJ_VALUE) && byteSize <= 0) return ConfigError(asINVALID_ARG, "RegisterObjectType", name, 0);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterObjectType", name, 0);
+	}
+	asCDefinitions* Graph = EnsureLiveDefinitions();
+	if (!Graph) return ConfigError(asOUT_OF_MEMORY, "RegisterObjectType", name, 0);
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	if (typesByName.Contains(LiveDirectoryName(Namespace, name)))
+	{
+		return ConfigError(asALREADY_REGISTERED, "RegisterObjectType", name, 0);
+	}
+	asCObjectType* Type = nullptr;
+	if (Graph->CreateObjectType(MakeLiveStableKey("type", Namespace, name), name, Namespace, flags, Type)
+		!= asEDefinitionResult::Succeeded)
+	{
+		return ConfigError(asINVALID_ARG, "RegisterObjectType", name, 0);
+	}
+	asUINT Alignment = 8;
+	while (Alignment > 1 && (static_cast<asUINT>(byteSize) % Alignment) != 0) Alignment >>= 1;
+	if (Graph->SetNativeLayout(*Type, static_cast<asUINT>(byteSize), Alignment) != asEDefinitionResult::Succeeded)
+	{
+		return ConfigError(asINVALID_ARG, "RegisterObjectType", name, 0);
+	}
+	Type->size = byteSize;
+	Type->alignment = static_cast<int>(Alignment);
+	const int Id = PublishLiveType(*Type);
+	if (Id < 0) return ConfigError(Id, "RegisterObjectType", name, 0);
+	return Id;
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 	int r;
 
@@ -2043,7 +2408,24 @@ int asCScriptEngine::RegisterObjectType(const char *name, int byteSize, asQWORD 
 // interface
 int asCScriptEngine::RegisterObjectBehaviour(const char *datatype, asEBehaviours behaviour, const char *decl, const asSFuncPtr &funcPointer, asDWORD callConv, asFunctionCaller caller, void *auxiliary, int compositeOffset, bool isCompositeIndirect)
 {
-	return asNOT_SUPPORTED;
+	if (!datatype || !decl) return ConfigError(asINVALID_ARG, "RegisterObjectBehaviour", datatype, decl);
+	if (compositeOffset != 0 || isCompositeIndirect) return ConfigError(asNOT_SUPPORTED, "RegisterObjectBehaviour", datatype, decl);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterObjectBehaviour", datatype, decl);
+	}
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	asCTypeInfo* Type = typesByName.FindRef(LiveDirectoryName(Namespace, datatype));
+	if (!Type) return ConfigError(asINVALID_TYPE, "RegisterObjectBehaviour", datatype, decl);
+	if (Type->GetTypeInfoKind() == asETypeInfoKind::HostProcess || !IsMutableLiveType(Type, this))
+	{
+		return ConfigError(asNOT_SUPPORTED, "RegisterObjectBehaviour", datatype, decl);
+	}
+	asCObjectType* Object = CastToObjectType(Type);
+	if (!Object) return ConfigError(asINVALID_TYPE, "RegisterObjectBehaviour", datatype, decl);
+	asEBehaviours Kind = behaviour;
+	return RegisterLiveCallable(*Object, decl, funcPointer, callConv, caller, auxiliary, &Kind);
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 	if( datatype == 0 ) return ConfigError(asINVALID_ARG, "RegisterObjectBehaviour", datatype, decl);
 
@@ -2580,7 +2962,40 @@ int asCScriptEngine::AddBehaviourFunction(asCScriptFunction &func, asSSystemFunc
 // interface
 int asCScriptEngine::RegisterGlobalProperty(const char *declaration, void *pointer)
 {
-	return asNOT_SUPPORTED;
+	if (!declaration || !pointer) return ConfigError(asINVALID_ARG, "RegisterGlobalProperty", declaration, 0);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterGlobalProperty", declaration, 0);
+	}
+	asCDefinitions* Graph = EnsureLiveDefinitions();
+	if (!Graph) return ConfigError(asOUT_OF_MEMORY, "RegisterGlobalProperty", declaration, 0);
+	asCDataType Type;
+	asCString Name;
+	if (!ParseLiveProperty(*this, *Graph, declaration, Type, Name))
+	{
+		return ConfigError(asINVALID_DECLARATION, "RegisterGlobalProperty", declaration, 0);
+	}
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	if (typesByName.Contains(LiveDirectoryName(Namespace, Name.AddressOf()))
+		|| globalsByName.Contains(LiveDirectoryName(Namespace, Name.AddressOf())))
+	{
+		return ConfigError(asALREADY_REGISTERED, "RegisterGlobalProperty", declaration, 0);
+	}
+	asCGlobalProperty* Property = nullptr;
+	const asSStableKey PropertyKey = MakeLiveStableKey("global", Namespace, Name.AddressOf());
+	if (Graph->CreateNativeGlobalProperty(PropertyKey, PropertyKey, Name.AddressOf(), Namespace, Type, Property)
+		!= asEDefinitionResult::Succeeded || !Property)
+	{
+		return ConfigError(asINVALID_DECLARATION, "RegisterGlobalProperty", declaration, 0);
+	}
+	Property->SetRegisteredAddress(pointer);
+	globalsByKey.Add(Property->GetStableKey(), Property);
+	globalsByName.Add(LiveDirectoryName(Namespace, Name.AddressOf()), Property);
+	globalBindings.Add(Property->GetStableKey(), pointer);
+	registeredGlobalProps.PushLast(Property);
+	Property->AddRef();
+	return asSUCCESS;
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 	// Don't accept a null pointer
 	if( pointer == 0 )
@@ -2695,7 +3110,24 @@ int asCScriptEngine::GetGlobalPropertyByIndex(asUINT index, const char **name, c
 // interface
 int asCScriptEngine::RegisterObjectMethod(const char *obj, const char *declaration, const asSFuncPtr &funcPointer, asDWORD callConv, asFunctionCaller caller, void *auxiliary, int compositeOffset, bool isCompositeIndirect, const asUINT accessorType)
 {
-	return asNOT_SUPPORTED;
+	if (!obj || !declaration) return ConfigError(asINVALID_ARG, "RegisterObjectMethod", obj, declaration);
+	if (compositeOffset != 0 || isCompositeIndirect) return ConfigError(asNOT_SUPPORTED, "RegisterObjectMethod", obj, declaration);
+	(void)accessorType;
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterObjectMethod", obj, declaration);
+	}
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	asCTypeInfo* Type = typesByName.FindRef(LiveDirectoryName(Namespace, obj));
+	if (!Type) return ConfigError(asINVALID_OBJECT, "RegisterObjectMethod", obj, declaration);
+	if (Type->GetTypeInfoKind() == asETypeInfoKind::HostProcess || !IsMutableLiveType(Type, this))
+	{
+		return ConfigError(asNOT_SUPPORTED, "RegisterObjectMethod", obj, declaration);
+	}
+	asCObjectType* Object = CastToObjectType(Type);
+	if (!Object) return ConfigError(asINVALID_OBJECT, "RegisterObjectMethod", obj, declaration);
+	return RegisterLiveCallable(*Object, declaration, funcPointer, callConv, caller, auxiliary, nullptr);
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 	if( obj == 0 )
 		return ConfigError(asINVALID_ARG, "RegisterObjectMethod", obj, declaration);
@@ -2856,7 +3288,53 @@ int asCScriptEngine::RegisterMethodToObjectType(asCObjectType *objectType, const
 // interface
 int asCScriptEngine::RegisterGlobalFunction(const char *declaration, const asSFuncPtr &funcPointer, asDWORD callConv, asFunctionCaller caller, void *auxiliary)
 {
-	return asNOT_SUPPORTED;
+	if (!declaration) return ConfigError(asINVALID_ARG, "RegisterGlobalFunction", declaration, 0);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterGlobalFunction", declaration, 0);
+	}
+	asCDefinitions* Graph = EnsureLiveDefinitions();
+	if (!Graph) return ConfigError(asOUT_OF_MEMORY, "RegisterGlobalFunction", declaration, 0);
+	asCDataType ReturnType;
+	asCString Name;
+	TArray<asSDefinitionParameter> Parameters;
+	if (!ParseLiveFunction(*this, *Graph, declaration, ReturnType, Name, Parameters))
+	{
+		return ConfigError(asINVALID_DECLARATION, "RegisterGlobalFunction", declaration, 0);
+	}
+	if (callConv != asCALL_GENERIC && !caller.IsBound())
+	{
+		return ConfigError(asNOT_SUPPORTED, "RegisterGlobalFunction", declaration, 0);
+	}
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	for (asCScriptFunction* Existing : Graph->GetFunctions())
+	{
+		if (Existing && Existing->objectType == nullptr && Existing->name == Name)
+		{
+			return ConfigError(asALREADY_REGISTERED, "RegisterGlobalFunction", declaration, 0);
+		}
+	}
+	asCScriptFunction* Function = nullptr;
+	if (Graph->CreateFunction(MakeLiveStableKey("globalfunc", Namespace, Name.AddressOf()),
+		Name.AddressOf(), Namespace, asFUNC_SYSTEM, Function) != asEDefinitionResult::Succeeded
+		|| Graph->DefineFunction(*Function, ReturnType, Parameters) != asEDefinitionResult::Succeeded
+		|| Graph->BindNativeFunction(*Function, funcPointer, callConv, caller, auxiliary) != asEDefinitionResult::Succeeded)
+	{
+		return ConfigError(asINVALID_DECLARATION, "RegisterGlobalFunction", declaration, 0);
+	}
+	const int Id = PublishLiveFunction(*Function);
+	if (Id < 0) return ConfigError(Id, "RegisterGlobalFunction", declaration, 0);
+	if (auto Interface = Function->GetProcessInterface())
+	{
+		std::lock_guard<std::mutex> Publish(executablePublicationMutex);
+		if (shuttingDown || vmRetirementRequested || registrationRetired)
+		{
+			return ConfigError(asINVALID_CONFIGURATION, "RegisterGlobalFunction", declaration, 0);
+		}
+		nativeInterfaces.Add(Function->GetStableKey(), Interface);
+	}
+	return Id;
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 #ifdef AS_MAX_PORTABILITY
 	if( callConv != asCALL_GENERIC )
@@ -2946,25 +3424,61 @@ int asCScriptEngine::RegisterGlobalFunction(const char *declaration, const asSFu
 // interface
 asUINT asCScriptEngine::GetGlobalFunctionCount() const
 {
-	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
 	asUINT Count = 0;
-	for (const auto& Set : definitionSets)
+	auto CountSet = [&](const asCDefinitions* Set)
+	{
+		if (!Set) return;
 		for (auto* Function : Set->GetFunctions())
-			if (Function->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Global && Function->funcType != asFUNC_CALLABLE_SIGNATURE) ++Count;
+			if (Function && Function->objectType == nullptr && Function->funcType != asFUNC_CALLABLE_SIGNATURE
+				&& (Function->id > 0 || Set->GetBoundFunctionId(Function) > 0)) ++Count;
+	};
+	for (const auto& Set : definitionSets) CountSet(Set.Get());
+	CountSet(liveDefinitions.Get());
+	for (const asCDefinitionGraphLease& Lease : admittedHostGraphs)
+	{
+		CountSet(Lease.Get());
+	}
 	return Count;
 }
 
 // interface
 asIScriptFunction *asCScriptEngine::GetGlobalFunctionByIndex(asUINT index) const
 {
-	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
-	for (const auto& Set : definitionSets)
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	auto VisitSet = [&](const asCDefinitions* Set) -> asIScriptFunction*
+	{
+		if (!Set) return nullptr;
 		for (auto* Function : Set->GetFunctions())
-			if (Function->GetMetadataDeclarationKind() == asEFunctionIdentityKind::Global && Function->funcType != asFUNC_CALLABLE_SIGNATURE)
+		{
+			if (!Function || Function->objectType != nullptr || Function->funcType == asFUNC_CALLABLE_SIGNATURE
+				|| (Function->id <= 0 && Set->GetBoundFunctionId(Function) <= 0))
 			{
-				if (index == 0) return Function;
-				--index;
+				continue;
 			}
+			if (index == 0) return Function;
+			--index;
+		}
+		return nullptr;
+	};
+	for (const auto& Set : definitionSets)
+	{
+		if (asIScriptFunction* Function = VisitSet(Set.Get()))
+		{
+			return Function;
+		}
+	}
+	if (asIScriptFunction* Function = VisitSet(liveDefinitions.Get()))
+	{
+		return Function;
+	}
+	for (const asCDefinitionGraphLease& Lease : admittedHostGraphs)
+	{
+		if (asIScriptFunction* Function = VisitSet(Lease.Get()))
+		{
+			return Function;
+		}
+	}
 	return nullptr;
 }
 
@@ -3184,7 +3698,27 @@ int asCScriptEngine::ConfigError(int err, const char *funcName, const char *arg1
 // interface
 int asCScriptEngine::RegisterDefaultArrayType(const char *type)
 {
-	return asNOT_SUPPORTED;
+	if (!type || !*type) return ConfigError(asINVALID_TYPE, "RegisterDefaultArrayType", type, 0);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterDefaultArrayType", type, 0);
+	}
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	asCTypeInfo* Type = typesByName.FindRef(LiveDirectoryName(Namespace, type));
+	asCObjectType* Object = CastToObjectType(Type);
+	if (!Object || !(Object->flags & asOBJ_TEMPLATE))
+	{
+		return ConfigError(asINVALID_TYPE, "RegisterDefaultArrayType", type, 0);
+	}
+	if (defaultArrayObjectType == Object) return asSUCCESS;
+	if (defaultArrayObjectType && !defaultArrayObjectType->GetDefinitions())
+	{
+		defaultArrayObjectType->ReleaseInternal();
+	}
+	defaultArrayObjectType = Object;
+	if (!Object->GetDefinitions()) Object->AddRefInternal();
+	return asSUCCESS;
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 	asCBuilder bld(this, 0);
 	asCDataType dt;
@@ -3214,7 +3748,26 @@ int asCScriptEngine::GetDefaultArrayTypeId() const
 // interface
 int asCScriptEngine::RegisterStringFactory(const char *datatype, asIStringFactory *factory)
 {
-	return asNOT_SUPPORTED;
+	if (!factory || !datatype || !*datatype)
+	{
+		return ConfigError(asINVALID_ARG, "RegisterStringFactory", datatype, 0);
+	}
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterStringFactory", datatype, 0);
+	}
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	asCTypeInfo* Type = typesByName.FindRef(LiveDirectoryName(Namespace, datatype));
+	if (!Type) return ConfigError(asINVALID_TYPE, "RegisterStringFactory", datatype, 0);
+	asCDataType Bound = asCDataType::CreateType(Type, true);
+	if (Bound.IsReference() || Bound.IsObjectHandle())
+	{
+		return ConfigError(asINVALID_TYPE, "RegisterStringFactory", datatype, 0);
+	}
+	stringType = Bound;
+	stringFactory = factory;
+	return asSUCCESS;
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 	if (factory == 0)
 		return ConfigError(asINVALID_ARG, "RegisterStringFactory", datatype, 0);
@@ -5175,18 +5728,29 @@ int asCScriptEngine::GarbageCollect(asDWORD flags, asUINT iterations)
 		std::lock_guard<std::mutex> Lock(executablePublicationMutex);
 		--vmOperations;
 	}
-	if (vmRetirementRequested) RetireDefinitionSets();
+	if (vmRetirementRequested) RetireExternalDefinitions();
 	Release();
 	return r;
 }
 
 bool asCScriptEngine::AcquireVmObjectLease()
 {
-	const asIScriptContext* Active = asGetActiveContext();
-	const bool OwnedWork = asVmHasCleanupAuthority(this) ||
-		(Active && Active->GetEngine() == this && Active->GetState() == asEXECUTION_ACTIVE);
 	std::lock_guard<std::mutex> Lock(executablePublicationMutex);
-	if (metadataRegistrationRetired || (!OwnedWork && (vmRetirementRequested || shuttingDown))) return false;
+	if (registrationRetired)
+	{
+		return false;
+	}
+	// OwnedWork is only consulted during shutdown/retirement.
+	if (vmRetirementRequested || shuttingDown)
+	{
+		const asIScriptContext* Active = asGetActiveContext();
+		const bool OwnedWork = asVmHasCleanupAuthority(this) ||
+			(Active && Active->GetEngine() == this && Active->GetState() == asEXECUTION_ACTIVE);
+		if (!OwnedWork)
+		{
+			return false;
+		}
+	}
 	++vmObjectLeases;
 	AddRef();
 	return true;
@@ -5206,7 +5770,7 @@ void asCScriptEngine::ReleaseVmObjectLease()
 bool asCScriptEngine::BeginVmOperation(bool Cleanup)
 {
 	std::lock_guard<std::mutex> Lock(executablePublicationMutex);
-	if (metadataRegistrationRetired || (!Cleanup && (shuttingDown || vmRetirementRequested))) return false;
+	if (registrationRetired || (!Cleanup && (shuttingDown || vmRetirementRequested))) return false;
 	++vmOperations;
 	AddRef();
 	return true;
@@ -5238,7 +5802,7 @@ void asCScriptEngine::DrainVmRetirement()
 		std::lock_guard<std::mutex> Lock(executablePublicationMutex);
 		vmDrainActive = false;
 	}
-	RetireDefinitionSets();
+	RetireExternalDefinitions();
 	Release();
 }
 
@@ -5277,12 +5841,12 @@ void asCScriptEngine::ForwardGCReleaseReferences(void *ref, asITypeInfo *type)
 
 int asCScriptEngine::GetTypeIdFromDataType(const asCDataType &dtIn) const
 {
-	if (dtIn.GetTypeInfo() && dtIn.GetTypeInfo()->GetDefinitionSet())
+	if (dtIn.GetTypeInfo() && dtIn.GetTypeInfo()->GetDefinitions())
 	{
-		std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
+		std::lock_guard<std::mutex> Lock(registrationMutex);
 		auto* Type = dtIn.GetTypeInfo();
-		if (metadataTypesByKey.FindRef(Type->GetStableKey()) != Type) return -1;
-		return Type->GetDefinitionSet()->GetBoundDataTypeId(dtIn);
+		if (typesByKey.FindRef(Type->GetStableKey()) != Type) return -1;
+		return Type->GetDefinitions()->GetBoundDataTypeId(dtIn);
 	}
 	if( dtIn.IsNullHandle() ) return asTYPEID_VOID;
 
@@ -5351,8 +5915,8 @@ asCDataType asCScriptEngine::GetDataTypeFromTypeId(int typeId) const
 {
 	if (typeId < 0) return asCDataType();
 	{
-		std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
-		if (asCTypeInfo* Type = metadataTypesById.FindRef(typeId & (asTYPEID_MASK_OBJECT | asTYPEID_MASK_SEQNBR)))
+		std::lock_guard<std::mutex> Lock(registrationMutex);
+		if (asCTypeInfo* Type = typesById.FindRef(typeId & (asTYPEID_MASK_OBJECT | asTYPEID_MASK_SEQNBR)))
 		{
 			asCDataType Result = asCDataType::CreateType(Type, false);
 			if (typeId & asTYPEID_OBJHANDLE) Result.MakeHandle(true, true);
@@ -6195,7 +6759,38 @@ asCCallableType *asCScriptEngine::FindMatchingCallableType(asCScriptFunction *fu
 // TODO: typedef: Accept complex types for the typedefs
 int asCScriptEngine::RegisterTypedef(const char *type, const char *decl)
 {
-	return asNOT_SUPPORTED;
+	if (!type || !*type || !decl) return ConfigError(asINVALID_NAME, "RegisterTypedef", type, decl);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterTypedef", type, decl);
+	}
+	asCDefinitions* Graph = EnsureLiveDefinitions();
+	if (!Graph) return ConfigError(asOUT_OF_MEMORY, "RegisterTypedef", type, decl);
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	if (typesByName.Contains(LiveDirectoryName(Namespace, type))
+		|| globalsByName.Contains(LiveDirectoryName(Namespace, type)))
+	{
+		return ConfigError(asALREADY_REGISTERED, "RegisterTypedef", type, decl);
+	}
+	const char* Cursor = decl;
+	asCDataType Alias;
+	if (!ParseLiveDataType(*this, *Graph, Cursor, Alias))
+	{
+		return ConfigError(asINVALID_TYPE, "RegisterTypedef", type, decl);
+	}
+	SkipLiveWs(Cursor);
+	if (*Cursor != 0) return ConfigError(asINVALID_TYPE, "RegisterTypedef", type, decl);
+	asCTypedefType* Typedef = nullptr;
+	if (Graph->CreateTypedefType(MakeLiveStableKey("typedef", Namespace, type), type, Namespace, Typedef)
+		!= asEDefinitionResult::Succeeded
+		|| Graph->SetAlias(*Typedef, Alias) != asEDefinitionResult::Succeeded)
+	{
+		return ConfigError(asINVALID_TYPE, "RegisterTypedef", type, decl);
+	}
+	const int Id = PublishLiveType(*Typedef);
+	if (Id < 0) return ConfigError(Id, "RegisterTypedef", type, decl);
+	return Id;
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 	if( type == 0 ) return ConfigError(asINVALID_NAME, "RegisterTypedef", type, decl);
 
@@ -6272,19 +6867,41 @@ int asCScriptEngine::RegisterTypedef(const char *type, const char *decl)
 // interface
 asUINT asCScriptEngine::GetTypedefCount() const
 {
-	return CountMetadataTypes(asOBJ_TYPEDEF);
+	return CountTypes(asOBJ_TYPEDEF);
 }
 
 // interface
 asITypeInfo *asCScriptEngine::GetTypedefByIndex(asUINT index) const
 {
-	return MetadataTypeByIndex(index, asOBJ_TYPEDEF);
+	return TypeByIndex(index, asOBJ_TYPEDEF);
 }
 
 // interface
 int asCScriptEngine::RegisterEnum(const char *name)
 {
-	return asNOT_SUPPORTED;
+	if (!name || !*name) return ConfigError(asINVALID_NAME, "RegisterEnum", name, 0);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterEnum", name, 0);
+	}
+	asCDefinitions* Graph = EnsureLiveDefinitions();
+	if (!Graph) return ConfigError(asOUT_OF_MEMORY, "RegisterEnum", name, 0);
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	if (typesByName.Contains(LiveDirectoryName(Namespace, name))
+		|| globalsByName.Contains(LiveDirectoryName(Namespace, name)))
+	{
+		return ConfigError(asALREADY_REGISTERED, "RegisterEnum", name, 0);
+	}
+	asCEnumType* Enum = nullptr;
+	if (Graph->CreateEnumType(MakeLiveStableKey("enum", Namespace, name), name, Namespace, Enum)
+		!= asEDefinitionResult::Succeeded)
+	{
+		return ConfigError(asINVALID_NAME, "RegisterEnum", name, 0);
+	}
+	const int Id = PublishLiveType(*Enum);
+	if (Id < 0) return ConfigError(Id, "RegisterEnum", name, 0);
+	return Id;
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 	//	Check the name
 	if( NULL == name )
@@ -6344,7 +6961,27 @@ int asCScriptEngine::RegisterEnum(const char *name)
 // interface
 int asCScriptEngine::RegisterEnumValue(const char *typeName, const char *valueName, int value)
 {
-	return asNOT_SUPPORTED;
+	if (!typeName || !valueName || !*valueName) return ConfigError(asINVALID_NAME, "RegisterEnumValue", typeName, valueName);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (shuttingDown || vmRetirementRequested || registrationRetired)
+	{
+		return ConfigError(asINVALID_CONFIGURATION, "RegisterEnumValue", typeName, valueName);
+	}
+	const char* Namespace = defaultNamespace ? defaultNamespace->name.AddressOf() : "";
+	asCTypeInfo* Type = typesByName.FindRef(LiveDirectoryName(Namespace, typeName));
+	if (!Type || !(Type->flags & asOBJ_ENUM)) return ConfigError(asINVALID_TYPE, "RegisterEnumValue", typeName, valueName);
+	if (Type->GetTypeInfoKind() == asETypeInfoKind::HostProcess || !IsMutableLiveType(Type, this))
+	{
+		return ConfigError(asNOT_SUPPORTED, "RegisterEnumValue", typeName, valueName);
+	}
+	asCEnumType* Enum = CastToEnumType(Type);
+	asCDefinitions* Graph = EnsureLiveDefinitions();
+	if (!Enum || !Graph || !Graph->Owns(Enum)) return ConfigError(asINVALID_TYPE, "RegisterEnumValue", typeName, valueName);
+	if (Graph->AddEnumValue(*Enum, valueName, value) != asEDefinitionResult::Succeeded)
+	{
+		return ConfigError(asALREADY_REGISTERED, "RegisterEnumValue", typeName, valueName);
+	}
+	return asSUCCESS;
 #if 0 // Preserved dormant backend reference; not a supported configuration path.
 	asCDataType dt;
 	int r;
@@ -6388,37 +7025,37 @@ int asCScriptEngine::RegisterEnumValue(const char *typeName, const char *valueNa
 // interface
 asUINT asCScriptEngine::GetEnumCount() const
 {
-	return CountMetadataTypes(asOBJ_ENUM);
+	return CountTypes(asOBJ_ENUM);
 }
 
 // interface
 asITypeInfo *asCScriptEngine::GetEnumByIndex(asUINT index) const
 {
-	return MetadataTypeByIndex(index, asOBJ_ENUM);
+	return TypeByIndex(index, asOBJ_ENUM);
 }
 
 // interface
 asUINT asCScriptEngine::GetObjectTypeCount() const
 {
-	return CountMetadataTypes(asOBJ_VALUE | asOBJ_REF, asOBJ_CALLABLE_TYPE);
+	return CountTypes(asOBJ_VALUE | asOBJ_REF, asOBJ_CALLABLE_TYPE);
 }
 
 // interface
 asITypeInfo *asCScriptEngine::GetObjectTypeByIndex(asUINT index) const
 {
-	return MetadataTypeByIndex(index, asOBJ_VALUE | asOBJ_REF, asOBJ_CALLABLE_TYPE);
+	return TypeByIndex(index, asOBJ_VALUE | asOBJ_REF, asOBJ_CALLABLE_TYPE);
 }
 
 // interface
 asITypeInfo *asCScriptEngine::GetTypeInfoByName(const char *name) const
 {
-	if (auto* Type = FindMetadataType(defaultNamespace->name.AddressOf(), name)) return Type;
+	if (auto* Type = FindType(defaultNamespace->name.AddressOf(), name)) return Type;
 	return allRegisteredTypesByName.FindFirst(name);
 }
 
 asITypeInfo* asCScriptEngine::GetTypeInfo(const char *name, asSNameSpace* ns) const
 {
-	if (ns) if (auto* Type = FindMetadataType(ns->name.AddressOf(), name)) return Type;
+	if (ns) if (auto* Type = FindType(ns->name.AddressOf(), name)) return Type;
 	asITypeInfo* Type = nullptr;
 	allRegisteredTypesByName.FindAllUntil(name, [&](asITypeInfo* CheckType)
 	{
@@ -6434,9 +7071,9 @@ asITypeInfo* asCScriptEngine::GetTypeInfo(const char *name, asSNameSpace* ns) co
 // interface
 asITypeInfo *asCScriptEngine::GetTypeInfoById(int typeId) const
 {
-	std::lock_guard<std::mutex> Lock(metadataRegistrationMutex);
+	std::lock_guard<std::mutex> Lock(registrationMutex);
 	int baseId = typeId & (asTYPEID_MASK_OBJECT | asTYPEID_MASK_SEQNBR);
-	if (auto* Type = metadataTypesById.FindRef(baseId)) return Type;
+	if (auto* Type = typesById.FindRef(baseId)) return Type;
 	if( typeId <= asTYPEID_FLOAT64 )
 		return nullptr;
 

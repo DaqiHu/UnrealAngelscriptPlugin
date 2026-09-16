@@ -54,6 +54,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FMargin(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FMargin_ = Binds.ExistingClassForTarget("FMargin");
 
 		FMargin_.Constructor(

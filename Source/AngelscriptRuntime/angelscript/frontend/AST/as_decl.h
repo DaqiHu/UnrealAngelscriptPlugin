@@ -63,6 +63,12 @@ struct asSAccessPermissionModifier
 				(Range.Begin.SnapshotID != SourceRange.Begin.SnapshotID || Range.Begin.FileID != SourceRange.Begin.FileID))) return false;
 			SourceRange = Range; return true;
 		}
+#if WITH_ANGELSCRIPT_TESTS
+		void DebugForceSourceRange(asCSourceRange Range)
+		{
+			SourceRange = Range;
+		}
+#endif
 		bool IsInvalid() const { return (NodeFlags & InvalidFlag) != 0; }
 		bool IsSealed() const { return (NodeFlags & SealedFlag) != 0; }
 		bool CanMutate() const { return !IsSealed(); }

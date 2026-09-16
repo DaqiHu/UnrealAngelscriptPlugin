@@ -46,6 +46,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FSphere3f_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Flags.ExtraFlags |= asOBJ_BASICMATHTYPE;
@@ -58,6 +59,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FSphere3f(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FSphere3f_ = Binds.ExistingClassForTarget("FSphere3f");
 		FSphere3f_.Constructor("void f()", &FAngelscriptFSphere3fBinds::ConstructDefault)
 			.NoDiscard()

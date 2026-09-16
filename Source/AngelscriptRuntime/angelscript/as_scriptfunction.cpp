@@ -38,7 +38,7 @@
 
 
 #include "as_scriptfunction.h"
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "as_config.h"
 #include "as_tokendef.h"
 #include "as_scriptengine.h"
@@ -170,7 +170,7 @@ void RegisterScriptFunction(asCScriptEngine *engine)
 	engine->scriptFunctions[r]->returnType.MakeHandle(true);
 }
 
-asCScriptFunction *CreateDelegate(asCScriptFunction *func, void *obj)
+AS_API asCScriptFunction *CreateDelegate(asCScriptFunction *func, void *obj)
 {
 	if( func == 0 || obj == 0 )
 	{
@@ -178,9 +178,18 @@ asCScriptFunction *CreateDelegate(asCScriptFunction *func, void *obj)
 		return 0;
 	}
 
+	// HostProcess functions have a null GetEngine(). Prefer the active Context's
+	// receiving Engine so the delegate wrapper can participate in local GC.
+	asCScriptEngine* Engine = static_cast<asCScriptEngine*>(func->GetEngine());
+	if( !Engine )
+	{
+		if( asIScriptContext* Context = asGetActiveContext() )
+			Engine = static_cast<asCScriptEngine*>(Context->GetEngine());
+	}
+
 	// Create an instance of a asCScriptFunction with the type asFUNC_DELEGATE
 	// The delegate shouldn't have a function id and is not added to the engine->scriptFunctions
-	asCScriptFunction *delegate = asNEW(asCScriptFunction)(static_cast<asCScriptEngine*>(func->GetEngine()), 0, asFUNC_DELEGATE);
+	asCScriptFunction *delegate = asNEW(asCScriptFunction)(Engine, 0, asFUNC_DELEGATE);
 	if( delegate )
 		delegate->MakeDelegate(func, obj);
 
@@ -194,7 +203,9 @@ void asCScriptFunction::MakeDelegate(asCScriptFunction *func, void *obj)
 	func->AddRef();
 	funcForDelegate = func;
 
-	func->GetEngine()->AddRefScriptObject(obj, func->GetObjectType());
+	asCScriptEngine* Owner = engine ? engine : static_cast<asCScriptEngine*>(func->GetEngine());
+	if( Owner )
+		Owner->AddRefScriptObject(obj, func->GetObjectType());
 	objForDelegate = obj;
 
 	// The return type and parameters are copied from the delegated method to this object
@@ -357,6 +368,7 @@ asCScriptFunction::asCScriptFunction(asCScriptEngine *engine, asCModule *mod, as
 	}
 
 	this->engine           = engine;
+	typeInfoKind           = engine ? asETypeInfoKind::LiveRegister : asETypeInfoKind::ScriptEngine;
 	this->scriptData       = 0;
 	module                 = mod;
 	runtimeTypeGeneration  = 0;
@@ -384,13 +396,14 @@ asCScriptFunction::asCScriptFunction(asCScriptEngine *engine, asCModule *mod, as
 		engine->gc.AddScriptObjectToGC(this, &engine->functionBehaviours);
 }
 
-asCScriptFunction::asCScriptFunction(asCModuleDefinitionSet& owner,
+asCScriptFunction::asCScriptFunction(asCDefinitions& owner,
 	const asSStableKey& key, asEFuncType kind)
 	: asCScriptFunction(nullptr, nullptr, kind)
 {
-	metadataOwner = &owner;
-	metadataStableKey = key;
+	definitions = &owner;
+	stableKey = key;
 	id = -1;
+	typeInfoKind = owner.GetOptions().Kind;
 }
 
 void asCScriptFunction::AllocateScriptFunctionData()
@@ -420,7 +433,11 @@ void asCScriptFunction::DeallocateScriptFunctionData()
 // internal
 asCScriptFunction::~asCScriptFunction()
 {
-	if (metadataOwner)
+	if (definitions && definitions->DestroyCounters)
+	{
+		definitions->DestroyCounters->Functions.fetch_add(1);
+	}
+	if (definitions)
 	{
 		DestroyInternal();
 		return;
@@ -432,8 +449,18 @@ asCScriptFunction::~asCScriptFunction()
 	if( engine && id != 0 && funcType != asFUNC_DUMMY )
 		engine->RemoveScriptFunction(this);
 
-	// If the engine pointer is 0, then DestroyInternal has already been called and there is nothing more to do
-	if( engine == 0 ) return;
+	// Detached host delegates have no Engine. Release the captured function
+	// without calling Engine-owned cleanup.
+	if( engine == 0 )
+	{
+		if( funcForDelegate )
+		{
+			funcForDelegate->Release();
+			funcForDelegate = 0;
+		}
+		objForDelegate = 0;
+		return;
+	}
 
 	DestroyInternal();
 
@@ -445,7 +472,7 @@ asCScriptFunction::~asCScriptFunction()
 void asCScriptFunction::DestroyHalfCreated()
 {
 	// The image owns this allocation even while its signature is incomplete.
-	if (metadataOwner) return;
+	if (definitions) return;
 	asASSERT( externalRefCount.get() == 0 && internalRefCount.get() == 1 );
 
 	// Set the funcType to dummy so the destructor won't complain
@@ -463,9 +490,9 @@ void asCScriptFunction::DestroyHalfCreated()
 // internal
 void asCScriptFunction::DestroyInternal()
 {
-	if (metadataOwner)
+	if (definitions)
 	{
-		if (!metadataOwner->IsDestroying()) return;
+		if (!definitions->IsDestroying()) return;
 		for (asUINT i = 0; i < defaultArgs.GetLength(); ++i)
 			if (defaultArgs[i]) asDELETE(defaultArgs[i], asCString);
 		defaultArgs.SetLength(0);
@@ -523,7 +550,7 @@ void asCScriptFunction::DestroyInternal()
 // interface
 int asCScriptFunction::GetId() const
 {
-	if (metadataOwner) return metadataOwner->GetBoundFunctionId(this);
+	if (definitions) return definitions->GetBoundFunctionId(this);
 	return id;
 }
 
@@ -532,7 +559,7 @@ int asCScriptFunction::AddRef() const
 {
 	gcFlag = false;
 	const int result = externalRefCount.atomicInc();
-	if (!metadataOwner && result == 1 && runtimeTypeGeneration)
+	if (!definitions && result == 1 && runtimeTypeGeneration)
 		runtimeTypeGeneration->AddRef();
 	return result;
 }
@@ -540,7 +567,7 @@ int asCScriptFunction::AddRef() const
 // interface
 int asCScriptFunction::Release() const
 {
-	if (metadataOwner)
+	if (definitions)
 	{
 		return externalRefCount.atomicDec();
 	}
@@ -591,7 +618,7 @@ int asCScriptFunction::AddRefInternal()
 int asCScriptFunction::ReleaseInternal()
 {
 	int r = internalRefCount.atomicDec();
-	if (metadataOwner) return r;
+	if (definitions) return r;
 	if( r == 0 &&
 		funcType != asFUNC_DUMMY )
 	{
@@ -609,7 +636,7 @@ int asCScriptFunction::ReleaseInternal()
 // interface
 int asCScriptFunction::GetTypeId() const
 {
-	if (metadataOwner) return metadataNominalCallableType ? metadataOwner->GetBoundTypeId(metadataNominalCallableType) : -1;
+	if (definitions) return metadataNominalCallableType ? definitions->GetBoundTypeId(metadataNominalCallableType) : -1;
 	if (!engine) return -1;
 	// This const cast is ok, the object won't be modified
 	asCDataType dt = asCDataType::CreateType(engine->FindMatchingCallableType(const_cast<asCScriptFunction*>(this)), false);
@@ -771,7 +798,7 @@ asCString asCScriptFunction::GetDeclarationStr(bool includeObjectName, bool incl
 		else
 			str += "_unnamed_type_::";
 	}
-	else if (!metadataOwner && callableType && callableType->parentClass && includeObjectName)
+	else if (!definitions && callableType && callableType->parentClass && includeObjectName)
 	{
 		if (includeNamespace && callableType->parentClass->nameSpace->name != "")
 			str += callableType->parentClass->nameSpace->name + "::";
@@ -1721,7 +1748,7 @@ void asCScriptFunction::ReleaseReferences(
 	}
 
 	// Delegate
-	if( objForDelegate )
+	if( objForDelegate && engine && funcForDelegate )
 		engine->ReleaseScriptObject(objForDelegate, funcForDelegate->GetObjectType());
 	objForDelegate = 0;
 	if( funcForDelegate )
@@ -1743,7 +1770,7 @@ int asCScriptFunction::GetReturnTypeId(asDWORD *flags) const
 			*flags = asTM_NONE;
 	}
 
-	return metadataOwner ? metadataOwner->GetBoundDataTypeId(returnType) : engine ? engine->GetTypeIdFromDataType(returnType) : -1;
+	return definitions ? definitions->GetBoundDataTypeId(returnType) : engine ? engine->GetTypeIdFromDataType(returnType) : -1;
 }
 
 // interface
@@ -1759,7 +1786,7 @@ int asCScriptFunction::GetParam(asUINT index, int *out_typeId, asDWORD *out_flag
 		return asINVALID_ARG;
 
 	if( out_typeId )
-		*out_typeId = metadataOwner ? metadataOwner->GetBoundDataTypeId(parameterTypes[index]) : engine ? engine->GetTypeIdFromDataType(parameterTypes[index]) : -1;
+		*out_typeId = definitions ? definitions->GetBoundDataTypeId(parameterTypes[index]) : engine ? engine->GetTypeIdFromDataType(parameterTypes[index]) : -1;
 
 	if( out_flags )
 	{
@@ -1791,7 +1818,7 @@ int asCScriptFunction::GetParam(asUINT index, int *out_typeId, asDWORD *out_flag
 asIScriptEngine *asCScriptFunction::GetEngine() const
 {
 	if (engine) return engine;
-	if (metadataOwner) return metadataOwner->GetBoundEngine();
+	if (definitions) return definitions->GetBoundEngine();
 	return nullptr;
 }
 
@@ -1799,7 +1826,7 @@ asIScriptEngine *asCScriptFunction::GetEngine() const
 const char *asCScriptFunction::GetDeclaration(bool includeObjectName, bool includeNamespace, bool includeParamNames, bool forDisplay) const
 {
 	thread_local asCString metadataString;
-	asCString *tempString = metadataOwner ? &metadataString : &asCThreadManager::GetLocalData()->string;
+	asCString *tempString = definitions ? &metadataString : &asCThreadManager::GetLocalData()->string;
 	*tempString = GetDeclarationStr(includeObjectName, includeNamespace, includeParamNames, forDisplay);
 	return tempString->AddressOf();
 }
@@ -2055,7 +2082,7 @@ void asCScriptFunction::EnumReferences(asIScriptEngine *)
 	asASSERT( funcType == asFUNC_DELEGATE );
 
 	// Delegate
-	if( objForDelegate )
+	if( objForDelegate && engine )
 		engine->GCEnumCallback(objForDelegate);
 }
 
@@ -2067,7 +2094,7 @@ void asCScriptFunction::ReleaseAllHandles(asIScriptEngine *)
 	// Release paramaters
 
 	// Delegate
-	if( objForDelegate )
+	if( objForDelegate && engine && funcForDelegate )
 		engine->ReleaseScriptObject(objForDelegate, funcForDelegate->GetObjectType());
 	objForDelegate = 0;
 }

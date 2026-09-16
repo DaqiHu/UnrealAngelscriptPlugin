@@ -92,6 +92,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UUserWidget(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto UserWidget = Binds.ExistingClassForTarget("UUserWidget");
 		UserWidget.Method("FText GetPaletteCategory() const", &FAngelscriptUUserWidgetBinds::GetPaletteCategory);
 		UserWidget.Method("void SetPaletteCategory(const FText& InPaletteCategory)", &FAngelscriptUUserWidgetBinds::SetPaletteCategory);

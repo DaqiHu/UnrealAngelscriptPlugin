@@ -110,6 +110,10 @@ bool asEmitReturn(asSByteCodeEmitFrame& Frame, asCReturnStmt* Stmt)
 bool asEmitStmt(asSByteCodeEmitFrame& Frame, asCStmt* Stmt)
 {
 	if (!Stmt) return false;
+	if (auto* ClassDefault = dyn_cast<asCClassDefaultStmt>(Stmt))
+	{
+		return asEmitStmt(Frame, ClassDefault->GetStatement());
+	}
 	if (!asEmitNoteSource(Frame, Stmt)) return false;
 	if (auto* Return = dyn_cast<asCReturnStmt>(Stmt))
 	{

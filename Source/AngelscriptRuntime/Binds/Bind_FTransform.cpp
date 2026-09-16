@@ -155,6 +155,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FTransform_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Flags.ExtraFlags |= asOBJ_BASICMATHTYPE;
@@ -166,6 +167,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FTransform_Infrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FTransformType>());
 		FToStringHelper::Register(Binds, TEXT("FTransform"), &FAngelscriptFTransformBinds::AppendToString);
 	});
@@ -175,6 +177,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FTransform(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FTransform_ = Binds.ExistingClassForTarget("FTransform");
 
 		FTransform_.Constructor(

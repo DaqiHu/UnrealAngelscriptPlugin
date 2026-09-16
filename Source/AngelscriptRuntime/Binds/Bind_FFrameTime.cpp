@@ -35,6 +35,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FFrameTime(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FrameNumber = Binds.ExistingClassForTarget("FFrameNumber");
 		FrameNumber.Constructor("void f(int32 Value)", &FAngelscriptFrameTimeBinds::ConstructFrameNumber, "FFrameNumber", true);
 		auto FrameTime = Binds.ExistingClassForTarget("FFrameTime");

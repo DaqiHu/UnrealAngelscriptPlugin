@@ -161,6 +161,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FTransform3f_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Flags.ExtraFlags |= asOBJ_BASICMATHTYPE;
@@ -172,6 +173,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FTransform3f_Infrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FTransform3fType>());
 		FToStringHelper::Register(Binds, TEXT("FTransform3f"), &FAngelscriptFTransform3fBinds::AppendToString);
 	});
@@ -181,6 +183,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FTransform3f(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FTransform3f_ = Binds.ExistingClassForTarget("FTransform3f");
 
 		FTransform3f_.Constructor(

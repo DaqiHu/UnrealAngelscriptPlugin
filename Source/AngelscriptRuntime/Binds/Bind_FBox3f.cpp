@@ -70,6 +70,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FBox3f_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Flags.ExtraFlags |= asOBJ_BASICMATHTYPE;
@@ -82,6 +83,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FBox3f_ToStringContribution(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(Binds, TEXT("FBox3f"), &FAngelscriptFBox3fBinds::AppendToString);
 	});
 
@@ -90,6 +92,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FBox3f(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FBox3f_ = Binds.ExistingClassForTarget("FBox3f");
 		FBox3f_.Constructor("void f()", &FAngelscriptFBox3fBinds::ConstructDefault)
 			.NoDiscard()

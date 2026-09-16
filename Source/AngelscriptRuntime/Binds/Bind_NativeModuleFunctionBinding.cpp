@@ -661,6 +661,7 @@ namespace
 		EAngelscriptBindPhase::GeneratedBindings,
 		[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		if (Binds.IsRecording())
 		{
 			RecordExistingNativeModuleFunctionBindings(Binds);

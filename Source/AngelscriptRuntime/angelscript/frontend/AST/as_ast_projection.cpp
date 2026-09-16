@@ -17,7 +17,7 @@ namespace
 		}
 
 		bool MakeAnchor(
-			const asCSourceSnapshot& Snapshot,
+			const asCSourceManager& Snapshot,
 			const asCSourceRange& Range,
 			asSStableSourceAnchor& Out)
 		{
@@ -38,7 +38,7 @@ namespace
 		}
 
 		bool ProjectTypeSyntax(
-			const asCSourceSnapshot& Snapshot,
+			const asCSourceManager& Snapshot,
 			const asSTypeSyntax& Syntax,
 			asSASTProjectedTypeSyntax& Out)
 		{
@@ -77,7 +77,7 @@ namespace
 		}
 
 		bool FlattenAnnotationArguments(
-			const asCSourceSnapshot& Snapshot,
+			const asCSourceManager& Snapshot,
 			TConstArrayView<asSAnnotationArgument> Arguments,
 			uint32 Parent,
 			TArray<asSASTProjectedAnnotationArgument>& Out)
@@ -100,7 +100,7 @@ namespace
 		}
 
 		bool ProjectAuthoredAccessUse(
-			const asCSourceSnapshot& Snapshot,
+			const asCSourceManager& Snapshot,
 			const asSAuthoredAccessUse* Use,
 			asSASTProjectedAuthoredAccessUse& Out)
 		{
@@ -672,7 +672,7 @@ namespace
 		}
 
 		bool AssignPayload(
-			const asCSourceSnapshot& Snapshot,
+			const asCSourceManager& Snapshot,
 			const asCASTNode& Node,
 			asFASTProjectionPayload& Out)
 		{
@@ -2029,7 +2029,7 @@ namespace
 			asSASTProjectionRecord Record;
 			Record.Family = Node->GetFamily(); Record.Kind = Node->GetRawKind();
 			if (Node->GetFamily() != asEASTNodeFamily::Type
-				&& !MakeAnchor(*Context.GetSourceSnapshot(), Node->GetSourceRange(), Record.Source))
+				&& !MakeAnchor(Context.GetSources(), Node->GetSourceRange(), Record.Source))
 			{
 				OutError = TEXT("node source range cannot be projected"); return false;
 			}
@@ -2043,7 +2043,7 @@ namespace
 					AccessUse = Variable->GetAuthoredAccessUse();
 				else if (const auto* Function = dyn_cast<asCFunctionDecl>(&Declaration))
 					AccessUse = Function->GetAuthoredAccessUse();
-				if (!ProjectAuthoredAccessUse(*Context.GetSourceSnapshot(), AccessUse,
+				if (!ProjectAuthoredAccessUse(Context.GetSources(), AccessUse,
 					Record.Declaration.AuthoredAccess))
 				{
 					OutError = TEXT("authored custom access source cannot be projected"); return false;
@@ -2102,7 +2102,7 @@ namespace
 				Record.StableIdentity = static_cast<const asCType&>(*Node).GetStableIdentity();
 			else if (const auto* Named = dyn_cast<asCNamedDecl>(Node))
 				Record.StableIdentity = Named->GetStableIdentity();
-			if (!AssignPayload(*Context.GetSourceSnapshot(), *Node, Record.Payload))
+			if (!AssignPayload(Context.GetSources(), *Node, Record.Payload))
 			{
 				OutError = TEXT("concrete node payload cannot be projected"); return false;
 			}

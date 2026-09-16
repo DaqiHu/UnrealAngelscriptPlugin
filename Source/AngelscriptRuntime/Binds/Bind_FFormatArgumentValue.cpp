@@ -34,6 +34,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FFormatArgumentValue_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Binds.ValueClassForTarget<FFormatArgumentValue>("FFormatArgumentValue", Flags);
@@ -44,6 +45,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FFormatArgumentValue_Infrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FFormatArgumentValueType>());
 	});
 
@@ -52,6 +54,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FFormatArgumentValue(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Value = Binds.ExistingClassForTarget("FFormatArgumentValue");
 
 		Value.Constructor(

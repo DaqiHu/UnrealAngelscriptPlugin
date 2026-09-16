@@ -380,18 +380,18 @@ namespace
 	}
 }
 
-AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult FAngelscriptTypeBindInfoStore::PublishProcessIds() const
+AS_NAMESPACE_QUALIFIER asERegistrationResult FAngelscriptTypeBindInfoStore::PublishProcessIds() const
 {
 	auto& Mutable = const_cast<FAngelscriptTypeBindInfoStore&>(*this);
-	if (!Mutable.FailureDiagnostic.IsEmpty() || !Mutable.bSealed) return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidState;
-	if (Mutable.bPublished) return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::AlreadyRegistered;
+	if (!Mutable.FailureDiagnostic.IsEmpty() || !Mutable.bSealed) return AS_NAMESPACE_QUALIFIER asERegistrationResult::InvalidState;
+	if (Mutable.bPublished) return AS_NAMESPACE_QUALIFIER asERegistrationResult::AlreadyRegistered;
 	asUINT TypeCount = 0;
 	asUINT FunctionCount = 0;
 	for (const FAngelscriptTypeBindInfo& Type : Mutable.Types)
 	{
 		if (!HasPublishableLayout(Type.Declaration))
 		{
-			return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidLayout;
+			return AS_NAMESPACE_QUALIFIER asERegistrationResult::InvalidLayout;
 		}
 		if (Type.Declaration.Kind != EAngelscriptTypeBindKind::Namespace) ++TypeCount;
 		for (const FAngelscriptTypeBindInfoMember& Member : Type.Members)
@@ -402,7 +402,7 @@ AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult FAngelscriptTypeBindInfoSto
 	if (TypeCount == 0 && FunctionCount == 0)
 	{
 		Mutable.bPublished = true;
-		return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded;
+		return AS_NAMESPACE_QUALIFIER asERegistrationResult::Succeeded;
 	}
 	AS_NAMESPACE_QUALIFIER asSTypeIdReservationRequest Request;
 	Request.TypeSequenceCount = TypeCount;
@@ -411,7 +411,7 @@ AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult FAngelscriptTypeBindInfoSto
 	if (AS_NAMESPACE_QUALIFIER asCTypeIdRegistry::Get().Reserve(Request, Reservation)
 		!= AS_NAMESPACE_QUALIFIER asTYPE_ID_RESERVE_SUCCEEDED)
 	{
-		return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::InvalidState;
+		return AS_NAMESPACE_QUALIFIER asERegistrationResult::InvalidState;
 	}
 	int NextType = Reservation.FirstTypeSequence;
 	int NextFunction = Reservation.FirstFunctionId;
@@ -428,7 +428,7 @@ AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult FAngelscriptTypeBindInfoSto
 		}
 	}
 	Mutable.bPublished = true;
-	return AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded;
+	return AS_NAMESPACE_QUALIFIER asERegistrationResult::Succeeded;
 }
 
 int FAngelscriptTypeBindInfoStore::GetPublishedTypeId(FAngelscriptTypeBindHandle Handle) const

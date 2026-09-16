@@ -23,6 +23,7 @@ public:
 	asEByteCodeImageStatus AddTypeRequirement(const asCTypeInfo& Type, asUINT& OutSlot);
 	asEByteCodeImageStatus AddFunctionRequirement(const asCScriptFunction& Function, asUINT& OutSlot);
 	asEByteCodeImageStatus AddPropertyRequirement(const asCObjectType& Owner, const asCObjectProperty& Property, asUINT& OutSlot);
+	asEByteCodeImageStatus AddGlobalRequirement(const asCGlobalProperty& Global, asUINT& OutSlot);
 	asEByteCodeImageStatus AddString(const FString& Value, asUINT& OutSlot);
 
 	asUINT NewLabel();

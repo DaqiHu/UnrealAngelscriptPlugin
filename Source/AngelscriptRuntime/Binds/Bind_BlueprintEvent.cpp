@@ -588,6 +588,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_BlueprintEvents(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		if (!Binds.IsRecording())
 		{
 			const TArray<TSharedRef<FAngelscriptType>>& Types = Binds.GetTargetTypeDatabase().RegisteredTypes;

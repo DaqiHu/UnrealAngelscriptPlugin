@@ -2,7 +2,7 @@
 #include "as_bytecode_emitter_internal.h"
 #include "as_bytecode_image.h"
 #include "as_bytecode_image_builder.h"
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 #include "as_typeinfo.h"
@@ -125,7 +125,7 @@ namespace
 
 asSByteCodeEmissionResult asEmitByteCodeImage(
 	const asCCompilationSession* Session,
-	const asCModuleDefinitionSet* FrozenDefinitions,
+	const asCDefinitions* FrozenDefinitions,
 	const asSByteCodeEmissionOptions& Options,
 	TUniquePtr<asCByteCodeImage>& OutImage)
 {
@@ -206,11 +206,11 @@ asSByteCodeEmissionResult asEmitByteCodeImage(
 			FunctionsByKey.Add(Candidate->GetStableKey(), Candidate);
 		}
 	}
-	TArray<const asCModuleDefinitionSet*> TypeSets;
+	TArray<const asCDefinitions*> TypeSets;
 	TypeSets.Add(FrozenDefinitions);
 	for (int32 SetIndex = 0; SetIndex < TypeSets.Num(); ++SetIndex)
 	{
-		const asCModuleDefinitionSet* TypeSet = TypeSets[SetIndex];
+		const asCDefinitions* TypeSet = TypeSets[SetIndex];
 		if (!TypeSet)
 		{
 			continue;
@@ -222,7 +222,7 @@ asSByteCodeEmissionResult asEmitByteCodeImage(
 				TypesByKey.Add(Object->GetStableKey(), Object);
 			}
 		}
-		for (asCModuleDefinitionSet* Dependency : TypeSet->GetDependencies())
+		for (asCDefinitions* Dependency : TypeSet->GetDependencies())
 		{
 			if (Dependency && !TypeSets.Contains(Dependency))
 			{
@@ -332,7 +332,7 @@ asSByteCodeEmissionResult asEmitByteCodeImage(
 
 asSByteCodeEmissionResult asCByteCodeEmitter::Emit(
 	const asCCompilationSession* Session,
-	const asCModuleDefinitionSet* FrozenDefinitions,
+	const asCDefinitions* FrozenDefinitions,
 	const asSByteCodeEmissionOptions& Options)
 {
 	TUniquePtr<asCByteCodeImage> Unused;
@@ -348,7 +348,7 @@ asSByteCodeEmissionResult asCByteCodeEmitter::Emit(asCBuilder& Builder)
 		asSByteCodeEmissionOptions(),
 		Image);
 	if (Result.EmissionStatus != asEByteCodeEmissionStatus::Succeeded) return Result;
-	asCModuleDefinitionSet* Set = Builder.GetModuleDefinitionSet();
+	asCDefinitions* Set = Builder.GetDefinitions();
 	if (!Set || !Image) return Result;
 	for (const asSByteCodeFunctionBody& Body : Image->GetFunctions())
 	{
@@ -369,7 +369,7 @@ asSByteCodeEmissionResult asCByteCodeEmitter::Emit(asCBuilder& Builder)
 asSByteCodeEmissionResult asCByteCodeEmitter::Emit(asCBuilder& Builder, asCScriptFunction& Function)
 {
 	(void)Function;
-	return Emit(Builder.GetCompilationSession(), Builder.GetModuleDefinitionSet(), asSByteCodeEmissionOptions());
+	return Emit(Builder.GetCompilationSession(), Builder.GetDefinitions(), asSByteCodeEmissionOptions());
 }
 
 END_AS_NAMESPACE

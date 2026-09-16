@@ -2,7 +2,7 @@
 #include "as_property.h"
 #include "frontend/Compile/as_compilation_session.h"
 #include "frontend/Basic/as_diagnostics.h"
-#include "frontend/Basic/as_source_snapshot.h"
+#include "frontend/Basic/as_source_manager.h"
 #include "frontend/AST/as_type.h"
 
 BEGIN_AS_NAMESPACE
@@ -34,9 +34,19 @@ namespace
 
 asCObjectType* asEmitFindObjectType(asSByteCodeEmitFrame& Frame, asCType* Type)
 {
-	const auto* Nominal = dyn_cast<asCNominalType>(Type);
-	if (!Nominal) return nullptr;
-	return Frame.Types.FindRef(Nominal->GetDeclarationIdentity());
+	if (const auto* Nominal = dyn_cast<asCNominalType>(Type))
+	{
+		return Frame.Types.FindRef(Nominal->GetDeclarationIdentity());
+	}
+	if (const auto* Generic = dyn_cast<asCGenericType>(Type))
+	{
+		if (asCObjectType* Instantiated = Frame.Types.FindRef(Generic->GetStableIdentity()))
+		{
+			return Instantiated;
+		}
+		return asEmitFindObjectType(Frame, Generic->GetTemplateType());
+	}
+	return nullptr;
 }
 
 bool asEmitDestroyFrom(asSByteCodeEmitFrame& Frame, int32 FirstLive, bool bPopLive, bool bRecordCleanup)
@@ -102,15 +112,15 @@ bool asEmitNoteSource(asSByteCodeEmitFrame& Frame, const asCStmt* Stmt)
 	Record.Column = 1;
 	if (Frame.Session)
 	{
-		const asCSourceSnapshot& Snapshot = Frame.Session->GetDiagnosticsEngine().GetSnapshot();
+		const asCSourceManager& Sources = Frame.Session->GetDiagnosticsEngine().GetSources();
 		asSSourceLineColumn LineColumn;
-		if (Snapshot.TryGetLineColumn(Stmt->GetSourceRange().Begin, LineColumn))
+		if (Sources.TryGetLineColumn(Stmt->GetSourceRange().Begin, LineColumn))
 		{
 			Record.Line = static_cast<int32>(LineColumn.Line);
 			Record.Column = static_cast<int32>(LineColumn.Column);
 		}
 		FStringView FileKey;
-		if (Snapshot.TryGetLogicalSourceKey(Stmt->GetSourceRange().Begin.FileID, FileKey))
+		if (Sources.TryGetLogicalSourceKey(Stmt->GetSourceRange().Begin.FileID, FileKey))
 		{
 			asUINT StringSlot = 0;
 			if (Frame.Builder->AddString(FString(FileKey), StringSlot) != asEByteCodeImageStatus::Succeeded) return false;

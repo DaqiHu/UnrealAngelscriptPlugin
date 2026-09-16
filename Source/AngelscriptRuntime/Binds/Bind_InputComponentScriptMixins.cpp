@@ -23,6 +23,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_InputComponentScriptMixins(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		// Detached reflection recording already captures these UFUNCTION wrappers and
 		// their generated/reflective dispatch. The legacy function-map overrides are
 		// meaningful only for direct Engine registration.

@@ -38,6 +38,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FIntVector2_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Binds.ValueClassForTarget<FIntVector2>("FIntVector2", Flags);
@@ -49,6 +50,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FIntVector2_ToStringContribution(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(Binds, TEXT("FIntVector2"), &FAngelscriptFIntVector2Binds::AppendToString);
 	});
 
@@ -57,6 +59,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FIntVector2(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FIntVector2_ = Binds.ExistingClassForTarget("FIntVector2");
 		FIntVector2_.Constructor(
 			"void f(int32 X, int32 Y)",

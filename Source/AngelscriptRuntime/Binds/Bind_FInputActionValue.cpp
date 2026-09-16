@@ -54,6 +54,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FInputActionValue(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Value_ = Binds.ExistingClassForTarget("FInputActionValue");
 		Value_.Constructor("void f(float32 InValue)", &FAngelscriptFInputActionValueBinds::ConstructAxis1D, "FInputActionValue", true);
 		Value_.Constructor("void f(FVector2D InValue)", &FAngelscriptFInputActionValueBinds::ConstructAxis2D, "FInputActionValue", true);

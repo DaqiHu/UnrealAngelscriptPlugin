@@ -457,6 +457,21 @@ bool asEmitExpr(asSByteCodeEmitFrame& Frame, asCExpr* Expr, int32& OutLocal)
 				if (Slot == MAX_int32) return false;
 				Frame.Locals.Add(Decl, Slot);
 			}
+			else if (asCGlobalProperty* Global = Frame.Globals.FindRef(Var->GetStableIdentity()))
+			{
+				asUINT GlobalSlot = 0;
+				if (Frame.Builder->AddGlobalRequirement(*Global, GlobalSlot) != asEByteCodeImageStatus::Succeeded)
+				{
+					return false;
+				}
+				OutLocal = static_cast<int32>(Frame.AllocLocal(DwordWidth(PrimitiveOf(DeclRef))));
+				asSByteCodeOperand Ops[2];
+				Ops[0].Kind = asEByteCodeOperandKind::Local;
+				Ops[0].Immediate = static_cast<int64>(OutLocal);
+				Ops[1].Kind = asEByteCodeOperandKind::GlobalSlot;
+				Ops[1].Slot = GlobalSlot;
+				return Frame.Builder->Emit(asBC_CpyGtoV4, MakeArrayView(Ops, 2)) == asEByteCodeImageStatus::Succeeded;
+			}
 		}
 		else if (auto* EnumConstant = dyn_cast<asCEnumConstantDecl>(Decl))
 		{

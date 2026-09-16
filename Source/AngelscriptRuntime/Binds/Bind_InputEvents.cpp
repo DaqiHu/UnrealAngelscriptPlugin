@@ -303,6 +303,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_InputEvents_ToStringContribution(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(Binds, TEXT("FKey"), &FAngelscriptInputEventsBinds::AppendKeyToString);
 	});
 
@@ -311,6 +312,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_InputEvents(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FKey_ = Binds.ExistingClassForTarget("FKey");
 		FKey_.Constructor("void f(const FName& KeyName)", &FAngelscriptInputEventsBinds::ConstructKey);
 

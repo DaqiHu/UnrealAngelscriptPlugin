@@ -2,7 +2,7 @@
 #pragma once
 
 #include "as_builder.h"
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "frontend/AST/as_ast_context.h"
 #include "frontend/Basic/as_diagnostics.h"
 #include "frontend/Sema/as_call_assessment.h"
@@ -50,7 +50,7 @@ struct asSAnalysisInputs
 {
 	TArray<TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>> Sources;
 	asSBuilderOptions Options;
-	TArray<TSharedPtr<asCModuleDefinitionSet, ESPMode::ThreadSafe>> OwnedDefinitionSets;
+	TArray<TSharedPtr<asCDefinitions, ESPMode::ThreadSafe>> OwnedDefinitions;
 	uint64 Identity = 0;
 };
 

@@ -27,6 +27,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FBox2D(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Box = Binds.ExistingClassForTarget("FBox2D");
 		Box.Constructor("void f(const FVector2D& InMin, const FVector2D& InMax)", &FAngelscriptFBox2DBinds::Construct, "FBox2D", true);
 		Box.Method("bool opEquals(const FBox2D& Other) const", METHODPR_TRIVIAL(bool, FBox2D, operator==, (const FBox2D&) const));

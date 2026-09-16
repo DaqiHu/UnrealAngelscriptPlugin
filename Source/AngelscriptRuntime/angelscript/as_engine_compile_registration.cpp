@@ -13,7 +13,7 @@ namespace
 	FString SubmittedTypeDisplayName(const asCTypeInfo& Type)
 	{
 		TArray<FString> Owners;
-		for (const asCTypeInfo* Owner = Type.GetMetadataDeclarationOwner(); Owner; Owner = Owner->GetMetadataDeclarationOwner())
+		for (const asCTypeInfo* Owner = Type.GetDeclarationOwner(); Owner; Owner = Owner->GetDeclarationOwner())
 		{
 			Owners.Insert(UTF8_TO_TCHAR(Owner->GetName()), 0);
 		}
@@ -27,53 +27,53 @@ namespace
 	}
 }
 
-asEMetadataRegistrationResult asCEngineCompileRegistration::Register(TArray<TUniquePtr<asCModuleDefinitionSet>> Sets)
+asERegistrationResult asCEngineCompileRegistration::Register(TArray<TUniquePtr<asCDefinitions>> Sets)
 {
 	const TMap<const asCTypeInfo*, int> TypeIds;
 	const TMap<const asCScriptFunction*, int> FunctionIds;
 	return Register(MoveTemp(Sets), TypeIds, FunctionIds);
 }
 
-asEMetadataRegistrationResult asCEngineCompileRegistration::Register(
-	TArray<TUniquePtr<asCModuleDefinitionSet>> Sets,
+asERegistrationResult asCEngineCompileRegistration::Register(
+	TArray<TUniquePtr<asCDefinitions>> Sets,
 	const TMap<const asCTypeInfo*, int>& PublishedTypeIds,
 	const TMap<const asCScriptFunction*, int>& PublishedFunctionIds)
 {
-	if (Sets.IsEmpty()) return asEMetadataRegistrationResult::InvalidArgument;
+	if (Sets.IsEmpty()) return asERegistrationResult::InvalidArgument;
 	TSet<FString> SubmittedNames;
-	for (const TUniquePtr<asCModuleDefinitionSet>& Set : Sets)
+	for (const TUniquePtr<asCDefinitions>& Set : Sets)
 	{
-		if (!Set || !Set->IsImmutable()) return asEMetadataRegistrationResult::InvalidArgument;
+		if (!Set || !Set->IsImmutable()) return asERegistrationResult::InvalidArgument;
 		for (asCTypeInfo* Type : Set->GetTypes())
 		{
 			if (!Type) continue;
 			const asCObjectType* Object = CastToObjectType(Type);
-			if (Object && Object->GetMetadataTemplateDefinition()) continue;
+			if (Object && Object->GetTemplateDefinition()) continue;
 			const FString Name = SubmittedTypeDisplayName(*Type);
 			if (Name == TEXT("::")) continue;
 			if (SubmittedNames.Contains(Name))
 			{
-				return asEMetadataRegistrationResult::NameConflict;
+				return asERegistrationResult::NameConflict;
 			}
 			SubmittedNames.Add(Name);
 		}
 	}
 	for (int32 Index = 0; Index < Sets.Num(); ++Index)
 	{
-		TUniquePtr<asCModuleDefinitionSet>& Set = Sets[Index];
+		TUniquePtr<asCDefinitions>& Set = Sets[Index];
 		TArray<asCScriptFunction*> Functions;
 		for (asCScriptFunction* Function : Set->GetFunctions()) Functions.Add(Function);
 		TUniquePtr<asCByteCodeImage> ByteCode = Set->TakeEmittedByteCode();
-		const asEMetadataRegistrationResult Installed = (Index + 1 == Sets.Num())
-			? Engine.InstallDefinitionSet(MoveTemp(Set), PublishedTypeIds, PublishedFunctionIds)
-			: Engine.InstallDefinitionSet(MoveTemp(Set));
-		if (Installed != asEMetadataRegistrationResult::Succeeded) return Installed;
+		const asERegistrationResult Installed = (Index + 1 == Sets.Num())
+			? Engine.RegisterExternalDefinitions(MoveTemp(Set), PublishedTypeIds, PublishedFunctionIds)
+			: Engine.RegisterExternalDefinitions(MoveTemp(Set));
+		if (Installed != asERegistrationResult::Succeeded) return Installed;
 		if (ByteCode)
 		{
 			asCExecutableSnapshot* Snapshot = nullptr;
 			if (asLinkByteCodeImage(Engine, *ByteCode, Snapshot) != asEByteCodeLinkStatus::Succeeded)
 			{
-				return asEMetadataRegistrationResult::InvalidLayout;
+				return asERegistrationResult::InvalidLayout;
 			}
 			if (Snapshot) Snapshot->Release();
 		}
@@ -92,7 +92,7 @@ asEMetadataRegistrationResult asCEngineCompileRegistration::Register(
 			Function->scriptData->objVariablesOnHeap = Executable->scriptData->objVariablesOnHeap;
 		}
 	}
-	return asEMetadataRegistrationResult::Succeeded;
+	return asERegistrationResult::Succeeded;
 }
 
 END_AS_NAMESPACE

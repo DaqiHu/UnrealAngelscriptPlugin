@@ -40,6 +40,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FLatentActionInfo(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FLatentActionInfo_ = Binds.ExistingClassForTarget("FLatentActionInfo");
 		FLatentActionInfo_.Constructor(
 			"void f(int32 InLinkage, int32 InUUID, const FName InFunctionName, UObject InCallbackTarget)",

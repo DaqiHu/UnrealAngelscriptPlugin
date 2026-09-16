@@ -703,8 +703,9 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Delegate_Declarations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FAngelscriptScopeTimer Timer(TEXT("delegate declarations"));
-		if (Binds.IsDeclarationOnly())
+		if (Binds.IsDeclarationOnly() || Binds.IsHostTarget())
 		{
 			Binds.ValueClassForTarget<FScriptDelegate>("_FScriptDelegate", {});
 			Binds.ValueClassForTarget<FMulticastScriptDelegate>("_FMulticastScriptDelegate", {});
@@ -792,7 +793,12 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Delegates(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FAngelscriptScopeTimer Timer(TEXT("delegate bindings"));
+		if (Binds.IsHostTarget())
+		{
+			return;
+		}
 
 		if (!Binds.IsRecording())
 			for (UDelegateFunction* Function : TObjectRange<UDelegateFunction>())

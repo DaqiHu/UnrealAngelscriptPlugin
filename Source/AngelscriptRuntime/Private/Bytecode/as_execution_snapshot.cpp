@@ -39,19 +39,35 @@ void asCExecutableFunction::AllocateScriptData()
 
 asCExecutableSnapshot::~asCExecutableSnapshot()
 {
-	if (asCScriptEngine* Publisher = Engine.exchange(nullptr))
+	asCScriptEngine* Publisher = Engine.exchange(nullptr);
+	if (Publisher)
 	{
 		Publisher->DetachPublishedSnapshot(this);
+		Executables.Reset();
+		for (auto& Pair : Functions)
+		{
+			if (Pair.Value) Pair.Value->Release();
+		}
+		for (auto& Pair : Types)
+		{
+			if (Pair.Value) Pair.Value->Release();
+		}
 	}
-	Executables.Reset();
-	for (auto& Pair : Functions)
+	else
 	{
-		if (Pair.Value) Pair.Value->Release();
+		// Retirement already dropped the publisher and may have asDELETE'd
+		// declaration objects. Do not Release them again.
+		for (auto& Pair : Executables)
+		{
+			if (Pair.Value)
+			{
+				Pair.Value->Declaration = nullptr;
+			}
+		}
+		Executables.Reset();
 	}
-	for (auto& Pair : Types)
-	{
-		if (Pair.Value) Pair.Value->Release();
-	}
+	Functions.Empty();
+	Types.Empty();
 }
 
 END_AS_NAMESPACE

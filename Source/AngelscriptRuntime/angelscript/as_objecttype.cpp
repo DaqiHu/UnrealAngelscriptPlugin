@@ -38,7 +38,7 @@
 
 
 #include "as_objecttype.h"
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "as_config.h"
 #include "as_configgroup.h"
 #include "as_scriptengine.h"
@@ -65,7 +65,7 @@ asCObjectType::asCObjectType(asCScriptEngine *in_engine) : asCTypeInfo(in_engine
 }
 
 // interface
-asCObjectType::asCObjectType(asCModuleDefinitionSet& owner, const asSStableKey& key)
+asCObjectType::asCObjectType(asCDefinitions& owner, const asSStableKey& key)
 	: asCTypeInfo(owner, key)
 {
 	derivedFrom = nullptr;
@@ -90,9 +90,9 @@ asITypeInfo *asCObjectType::GetChildCallableType(asUINT index) const
 // internal
 void asCObjectType::DestroyInternal()
 {
-	if (metadataOwner)
+	if (definitions)
 	{
-		if (!metadataOwner->IsDestroying()) return;
+		if (!definitions->IsDestroying()) return;
 		for (asUINT i = 0; i < localProperties.GetLength(); ++i)
 			asDELETE(localProperties[i], asCObjectProperty);
 		localProperties.SetLength(0);
@@ -274,7 +274,7 @@ bool asCObjectType::DerivesOrShadows(const asITypeInfo *objType) const
 // interface
 int asCObjectType::GetSubTypeId(asUINT subtypeIndex) const
 {
-	if (metadataOwner) return subtypeIndex < templateSubTypes.GetLength() ? metadataOwner->GetBoundDataTypeId(templateSubTypes[subtypeIndex]) : -1;
+	if (definitions) return subtypeIndex < templateSubTypes.GetLength() ? definitions->GetBoundDataTypeId(templateSubTypes[subtypeIndex]) : -1;
 	if (!engine) return -1;
 	// This method is only supported for templates and template specializations
 	if( templateSubTypes.GetLength() == 0 )
@@ -319,14 +319,14 @@ bool asCObjectType::IsInterface() const
 // interface
 asUINT asCObjectType::GetFactoryCount() const
 {
-	if (metadataOwner) return metadataFactories.GetLength();
+	if (definitions) return metadataFactories.GetLength();
 	return (asUINT)beh.factories.GetLength();
 }
 
 // interface
 asIScriptFunction *asCObjectType::GetFactoryByIndex(asUINT index) const
 {
-	if (metadataOwner) return index < metadataFactories.GetLength() ? metadataFactories[index] : nullptr;
+	if (definitions) return index < metadataFactories.GetLength() ? metadataFactories[index] : nullptr;
 	if( index >= beh.factories.GetLength() )
 		return 0;
 
@@ -338,7 +338,7 @@ asIScriptFunction *asCObjectType::GetFactoryByDecl(const char *decl) const
 {
 	// Signature parsing belongs to the shared frontend (Builder/registration
 	// adapter), not a second string parser hidden in metadata queries.
-	if (metadataOwner && !engine) return nullptr;
+	if (definitions && !engine) return nullptr;
 	if( beh.factories.GetLength() == 0 )
 		return 0;
 
@@ -349,14 +349,14 @@ asIScriptFunction *asCObjectType::GetFactoryByDecl(const char *decl) const
 // interface
 asUINT asCObjectType::GetMethodCount() const
 {
-	if (metadataOwner) return metadataMethods.GetLength();
+	if (definitions) return metadataMethods.GetLength();
 	return (asUINT)methods.GetLength();
 }
 
 // interface
 asIScriptFunction *asCObjectType::GetMethodByIndex(asUINT index) const
 {
-	if (metadataOwner) return index < metadataMethods.GetLength() ? metadataMethods[index] : nullptr;
+	if (definitions) return index < metadataMethods.GetLength() ? metadataMethods[index] : nullptr;
 	if( index >= methods.GetLength() )
 		return 0;
 
@@ -367,7 +367,7 @@ asIScriptFunction *asCObjectType::GetMethodByIndex(asUINT index) const
 // interface
 asIScriptFunction *asCObjectType::GetMethodByIndex(asUINT index, bool getVirtual) const
 {
-	if (metadataOwner) return GetMethodByIndex(index);
+	if (definitions) return GetMethodByIndex(index);
 	if( getVirtual )
 		return GetMethodByIndex(index);
 
@@ -384,7 +384,7 @@ asIScriptFunction *asCObjectType::GetMethodByIndex(asUINT index, bool getVirtual
 // interface
 asIScriptFunction *asCObjectType::GetMethodByName(const char *in_name) const
 {
-	if (metadataOwner)
+	if (definitions)
 	{
 		asCScriptFunction* result = nullptr;
 		for (asUINT i = 0; i < metadataMethods.GetLength(); ++i)
@@ -418,7 +418,7 @@ asIScriptFunction *asCObjectType::GetMethodByName(const char *in_name) const
 // interface
 asIScriptFunction *asCObjectType::GetMethodByName(const char *in_name, bool getVirtual) const
 {
-	if (metadataOwner) return GetMethodByName(in_name);
+	if (definitions) return GetMethodByName(in_name);
 	int id = -1;
 	FindMethodUntil(in_name, [&](asCScriptFunction* func)
 	{
@@ -443,7 +443,7 @@ asIScriptFunction *asCObjectType::GetMethodByName(const char *in_name, bool getV
 // interface
 asIScriptFunction *asCObjectType::GetMethodByDecl(const char *decl) const
 {
-	if (metadataOwner && !engine) return nullptr;
+	if (definitions && !engine) return nullptr;
 	if( methods.GetLength() == 0 )
 		return 0;
 
@@ -491,7 +491,7 @@ int asCObjectType::GetProperty(asUINT index, const char **out_name, int *out_typ
 	if( out_name )
 		*out_name = prop->name.AddressOf();
 	if( out_typeId )
-		*out_typeId = metadataOwner ? metadataOwner->GetBoundDataTypeId(prop->type) : engine ? engine->GetTypeIdFromDataType(prop->type) : -1;
+		*out_typeId = definitions ? definitions->GetBoundDataTypeId(prop->type) : engine ? engine->GetTypeIdFromDataType(prop->type) : -1;
 	if( out_isPrivate )
 		*out_isPrivate = prop->isPrivate;
 	if( out_isProtected )
@@ -543,7 +543,7 @@ const char *asCObjectType::GetPropertyDeclaration(asUINT index, bool includeName
 		return 0;
 
 	thread_local asCString metadataString;
-	asCString *tempString = metadataOwner ? &metadataString : &asCThreadManager::GetLocalData()->string;
+	asCString *tempString = definitions ? &metadataString : &asCThreadManager::GetLocalData()->string;
 	if( properties[index]->isPrivate )
 		*tempString = "private ";
 	else if( properties[index]->isProtected )
@@ -564,7 +564,7 @@ asITypeInfo *asCObjectType::GetBaseType() const
 
 asUINT asCObjectType::GetBehaviourCount() const
 {
-	if (metadataOwner) return metadataBehaviours.GetLength();
+	if (definitions) return metadataBehaviours.GetLength();
 	// Count the number of behaviours (except factory functions)
 	asUINT count = 0;
 	
@@ -589,7 +589,7 @@ asUINT asCObjectType::GetBehaviourCount() const
 
 asIScriptFunction *asCObjectType::GetBehaviourByIndex(asUINT index, asEBehaviours *outBehaviour) const
 {
-	if (metadataOwner)
+	if (definitions)
 	{
 		if (index >= metadataBehaviours.GetLength()) return nullptr;
 		if (outBehaviour) *outBehaviour = metadataBehaviours[index].kind;
@@ -693,11 +693,11 @@ asCObjectProperty *asCObjectType::AddPropertyToClass(const asCString &propName, 
 //[UE++]: Preserve APV2 local/inherited property ownership while exposing the stock restore helper signature.
 asCObjectProperty *asCObjectType::AddPropertyToClass(const asCString &propName, const asCDataType &dt, bool isPrivate, bool isProtected, bool isInherited)
 {
-	if (metadataOwner)
+	if (definitions)
 	{
 		asCObjectProperty* property = nullptr;
 		if (isInherited) return nullptr;
-		metadataOwner->AddProperty(*this, propName.AddressOf(), dt, property, isPrivate, isProtected);
+		definitions->AddProperty(*this, propName.AddressOf(), dt, property, isPrivate, isProtected);
 		return property;
 	}
 	asASSERT( flags & asOBJ_SCRIPT_OBJECT );
@@ -744,7 +744,7 @@ asCObjectProperty *asCObjectType::AddPropertyToClass(const asCString &propName, 
 // internal
 void asCObjectType::ReleaseAllProperties()
 {
-	if (metadataOwner) return;
+	if (definitions) return;
 	for( asUINT n = 0; n < localProperties.GetLength(); n++ )
 	{
 		if( localProperties[n] ) 
@@ -780,7 +780,7 @@ void asCObjectType::ReleaseAllProperties()
 // internal
 void asCObjectType::ReleaseAllFunctions()
 {
-	if (metadataOwner) return;
+	if (definitions) return;
 	beh.factory     = 0;
 	beh.copyfactory = 0;
 	for( asUINT a = 0; a < beh.factories.GetLength(); a++ )

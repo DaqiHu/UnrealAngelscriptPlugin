@@ -513,6 +513,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TMap_MethodSurface(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto TMap_ = Binds.ExistingClassForTarget("TMap<K,V>");
 		TMap_.Constructor("void f()", FUNC_TRIVIAL(FAngelscriptMapBinds::Construct));
 
@@ -667,7 +668,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_TMap_TypeInfrastructure(
 		Binds.RegisterTypeForTarget(MapType);
 		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptMapIteratorType>());
 		Binds.RegisterTypeForTarget(MakeShared<FAngelscriptMapConstIteratorType>());
-		if (Binds.IsRecording()) return;
+		if (Binds.IsRecording() || Binds.IsHostTarget()) return;
 
 		FAngelscriptTypeDatabase* TargetTypeDatabase = &Binds.GetTargetTypeDatabase();
 		Binds.RegisterTypeFinderForTarget([MapType, TargetTypeDatabase](FProperty* Property, FAngelscriptTypeUsage& Usage) -> bool

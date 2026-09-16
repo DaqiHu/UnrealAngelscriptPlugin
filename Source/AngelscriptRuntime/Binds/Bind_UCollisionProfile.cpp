@@ -30,6 +30,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UCollisionProfile(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FAngelscriptBinds::FNamespace Namespace(Binds, "UCollisionProfile");
 		Binds.BindGlobalFunctionForTarget(
 			"ECollisionChannel ConvertToCollisionChannel(bool TraceType, int32 Index)",

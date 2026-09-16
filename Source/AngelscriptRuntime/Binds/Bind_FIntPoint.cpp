@@ -62,6 +62,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FIntPoint_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Binds.ValueClassForTarget<FIntPoint>("FIntPoint", Flags);
@@ -73,6 +74,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FIntPoint(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FIntPoint_ = Binds.ExistingClassForTarget("FIntPoint");
 		FIntPoint_.Constructor(
 			"void f(int32 X, int32 Y)",
@@ -119,6 +121,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FIntPoint_ToStringContribution(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(Binds, TEXT("FIntPoint"), &FAngelscriptFIntPointBinds::AppendToString);
 	});
 

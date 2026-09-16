@@ -95,6 +95,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AssetRegistry_ToStringContribution(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(
 			Binds,
 			TEXT("FTopLevelAssetPath"),
@@ -106,6 +107,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AssetRegistry(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto AssetDataType = Binds.ExistingClassForTarget("FAssetData");
 		AssetDataType.Method("FSoftObjectPath GetSoftObjectPath() const", METHOD_TRIVIAL(FAssetData, GetSoftObjectPath));
 		AssetDataType.Method("FString GetObjectPathString() const", METHOD_TRIVIAL(FAssetData, GetObjectPathString));

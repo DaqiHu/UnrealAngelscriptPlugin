@@ -58,6 +58,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UDataTable(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto UDataTable_ = Binds.ExistingClassForTarget("UDataTable");
 
 		UDataTable_.Method("void EmptyTable()", METHOD_TRIVIAL(UDataTable, EmptyTable));

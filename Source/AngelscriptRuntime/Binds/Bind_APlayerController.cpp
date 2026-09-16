@@ -62,6 +62,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AController(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto AController_ = Binds.ExistingClassForTarget("AController");
 		AController_.Method("APawn GetPawn() const", &FAngelscriptAPlayerControllerBinds::GetPawn);
 		AController_.Method("ACharacter GetCharacter() const", &FAngelscriptAPlayerControllerBinds::GetCharacter);
@@ -76,6 +77,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_APlayerController(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto APlayerController_ = Binds.ExistingClassForTarget("APlayerController");
 		APlayerController_.Method("void SetPlayer(UPlayer InPlayer)", METHOD_TRIVIAL(APlayerController, SetPlayer));
 		APlayerController_.Method("ULocalPlayer GetLocalPlayer() const", METHOD_TRIVIAL(APlayerController, GetLocalPlayer));
@@ -90,6 +92,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_APawn(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto APawn_ = Binds.ExistingClassForTarget("APawn");
 		APawn_.Method("AController GetController() const", &FAngelscriptAPlayerControllerBinds::GetController);
 		APawn_.Method("APlayerController GetPlayerController() const", &FAngelscriptAPlayerControllerBinds::GetPlayerController);

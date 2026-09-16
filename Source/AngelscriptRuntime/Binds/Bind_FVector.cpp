@@ -299,6 +299,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector(
 		FVector_.Method("FVector& opAssign(const FVector& Other)", METHODPR_TRIVIAL(FVector&, FVector, operator=, (const FVector&)));
 
 		FVector_.Method("FVector opAdd(const FVector& Other) const", METHODPR_TRIVIAL(FVector, FVector, operator+, (const FVector&) const));
+		if (Binds.IsHostTarget()) return;
 		FVector_.Method("FVector opSub(const FVector& Other) const", METHODPR_TRIVIAL(FVector, FVector, operator-, (const FVector&) const));
 		FVector_.Method("FVector opMul(const FVector& Other) const", METHODPR_TRIVIAL(FVector, FVector, operator*, (const FVector&) const));
 		FVector_.Method("FVector opDiv(const FVector& Other) const", METHODPR_TRIVIAL(FVector, FVector, operator/, (const FVector&) const));

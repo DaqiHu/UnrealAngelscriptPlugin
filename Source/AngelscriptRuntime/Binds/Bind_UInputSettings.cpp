@@ -31,6 +31,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UInputSettings(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto UInputSettings_ = Binds.ExistingClassForTarget("UInputSettings");
 
 		UInputSettings_.Method("FName GetUniqueActionName(const FName BaseActionMappingName)", METHODPR_TRIVIAL(FName, UInputSettings, GetUniqueActionName, (const FName)));

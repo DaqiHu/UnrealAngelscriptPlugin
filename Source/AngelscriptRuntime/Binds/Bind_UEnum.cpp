@@ -131,6 +131,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Enums(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		if (Binds.IsRecording())
 		{
 			FString Diagnostic;
@@ -333,6 +334,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_EGetByNameFlags(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto EGetByNameFlags_ = Binds.EnumForTarget("EGetByNameFlags");
 		EGetByNameFlags_["None"] = EGetByNameFlags::None;
 		EGetByNameFlags_["ErrorIfNotFound"] = EGetByNameFlags::ErrorIfNotFound;
@@ -345,6 +347,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UEnum(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto UEnum_ = Binds.ExistingClassForTarget("UEnum");
 		UEnum_.Method("FName GetNameByIndex(int32 InIndex) const", METHOD_TRIVIAL(UEnum, GetNameByIndex));
 		UEnum_.Method("int32 GetIndexByName(FName InName, EGetByNameFlags Flags = EGetByNameFlags::None) const", METHOD_TRIVIAL(UEnum, GetIndexByName));

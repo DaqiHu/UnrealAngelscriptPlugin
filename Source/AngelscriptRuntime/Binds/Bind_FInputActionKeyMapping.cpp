@@ -17,6 +17,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FInputActionKeyMapping(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FInputActionKeyMapping_ = Binds.ExistingClassForTarget("FInputActionKeyMapping");
 
 		FInputActionKeyMapping_.Method("bool opEquals(const FInputActionKeyMapping& Other) const", METHOD_TRIVIAL(FInputActionKeyMapping, operator==));

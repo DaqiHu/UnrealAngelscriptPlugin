@@ -51,6 +51,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FFileHelper_Types(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto EFileWrite_ = Binds.EnumForTarget("EFileWrite");
 		EFileWrite_["None"] = FILEWRITE_None;
 		EFileWrite_["NoFail"] = FILEWRITE_NoFail;
@@ -85,6 +86,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FFileHelper(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FAngelscriptBinds::FNamespace Namespace(Binds, "FFileHelper");
 		Binds.BindGlobalFunctionForTarget(
 			"bool LoadFileToString(FString& Result, const FString& Filename, FFileHelper::EHashOptions HashOptions = FFileHelper::EHashOptions::None, uint32 ReadFlags = uint32(EFileRead::None))",

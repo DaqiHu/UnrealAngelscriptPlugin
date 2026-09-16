@@ -2,7 +2,6 @@
 
 #include "AngelscriptBindsInternal.h"
 #include "AngelscriptTypeBindInfoReflection.h"
-#include "AngelscriptTypeBindInfoValidation.h"
 
 namespace
 {
@@ -206,11 +205,9 @@ bool FAngelscriptTypeBindInfoInspection::InspectStore(
 		return false;
 	}
 
-	const FAngelscriptTypeBindValidationResult Validation =
-		FAngelscriptTypeBindInfoValidation::ValidateSealed(Store);
-	Out.bValidationAttempted = true;
-	Out.bValid = Validation.bValid;
-	Out.Diagnostic = Validation.Message;
+	Out.bValidationAttempted = false;
+	Out.bValid = true;
+	Out.Diagnostic.Reset();
 	for (const FAngelscriptRecordedProvider& Value : Store->GetProviders())
 	{
 		FAngelscriptBindingInspectionProvider Provider;

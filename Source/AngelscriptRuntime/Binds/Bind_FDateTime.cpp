@@ -168,6 +168,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FDateTime_ToStringContribution(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(Binds, TEXT("FDateTime"), &FAngelscriptFDateTimeBinds::AppendToString);
 	});
 
@@ -176,6 +177,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FDateTime(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FDateTime_ = Binds.ExistingClassForTarget("FDateTime");
 		FDateTime_.Constructor(
 			"void f(int Year, int Month, int Day, int Hour = 0, int Minute = 0, int Second = 0, int Millisecond = 0)",

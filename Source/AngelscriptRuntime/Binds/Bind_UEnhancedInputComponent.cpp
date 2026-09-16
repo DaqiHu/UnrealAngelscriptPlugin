@@ -86,6 +86,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UEnhancedInputComponent(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto InputComponent_ = Binds.ExistingClassForTarget("UEnhancedInputComponent");
 		InputComponent_.Method("void SetShouldFireDelegatesInEditor(const bool bInNewValue)", METHODPR_TRIVIAL(void, UEnhancedInputComponent, SetShouldFireDelegatesInEditor, (const bool)));
 		InputComponent_.Method("bool ShouldFireDelegatesInEditor() const", METHOD_TRIVIAL(UEnhancedInputComponent, ShouldFireDelegatesInEditor));

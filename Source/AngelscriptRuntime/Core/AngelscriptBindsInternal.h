@@ -1,6 +1,15 @@
 #pragma once
 
 #include "Core/AngelscriptBinds.h"
+#include "as_definitions.h"
+
+struct FAngelscriptHostDeclarationView
+{
+	FString Namespace;
+	FString Name;
+	FString Kind;
+	int32 IntValue = 0;
+};
 
 struct FAngelscriptBindRecord
 {
@@ -31,7 +40,11 @@ namespace UE::Angelscript::Private
 			EAngelscriptBindPhase FirstPhase,
 			EAngelscriptBindPhase LastPhase,
 			FString& OutDiagnostic) const;
-
+		bool ExecuteToHost(FString& OutDiagnostic);
+		const asCDefinitions* GetHostDefinitions() const;
+		asCDefinitionGraphLease RetainHostGraph() const;
+		int32 GetCallbackInvocationCount(FName BindName) const;
+		void InspectHostDeclarations(TArray<FAngelscriptHostDeclarationView>& Out) const;
 		TConstArrayView<FAngelscriptBindRecord> GetRecords() const
 		{
 			return Records;
@@ -48,5 +61,13 @@ namespace UE::Angelscript::Private
 		FString LateRegistrationFailureDiagnostic;
 		bool bSealed = false;
 		bool bPreparing = false;
+		TUniquePtr<asCDefinitions> BuildingHost;
+		asCDefinitionGraphLease FrozenHost;
+		FAngelscriptBindState HostBindState;
+		TMap<FName, int32> CallbackInvocationCounts;
+		TArray<FAngelscriptHostDeclarationView> HostInspection;
+		uint32 HostIdentitySerial = 1;
+		asSStableKey MakeHostKey(const char* Kind, const char* Namespace, const char* Name);
+		void CaptureHostInspection();
 	};
 }

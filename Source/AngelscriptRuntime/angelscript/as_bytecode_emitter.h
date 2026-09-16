@@ -10,7 +10,7 @@ BEGIN_AS_NAMESPACE
 
 class asCByteCodeImage;
 class asCCompilationSession;
-class asCModuleDefinitionSet;
+class asCDefinitions;
 
 struct asSByteCodeEmissionOptions
 {
@@ -27,7 +27,7 @@ class ANGELSCRIPTRUNTIME_API asCByteCodeEmitter
 public:
 	static asSByteCodeEmissionResult Emit(
 		const asCCompilationSession* Session,
-		const asCModuleDefinitionSet* FrozenDefinitions,
+		const asCDefinitions* FrozenDefinitions,
 		const asSByteCodeEmissionOptions& Options);
 	static asSByteCodeEmissionResult Emit(asCBuilder& Builder);
 	static asSByteCodeEmissionResult Emit(asCBuilder& Builder, asCScriptFunction& Function);
@@ -35,7 +35,7 @@ public:
 
 ANGELSCRIPTRUNTIME_API asSByteCodeEmissionResult asEmitByteCodeImage(
 	const asCCompilationSession* Session,
-	const asCModuleDefinitionSet* FrozenDefinitions,
+	const asCDefinitions* FrozenDefinitions,
 	const asSByteCodeEmissionOptions& Options,
 	TUniquePtr<asCByteCodeImage>& OutImage);
 

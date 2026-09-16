@@ -1,8 +1,6 @@
 #include "AngelscriptEngine.h"
 #include "AngelscriptBinds.h"
-#include "AngelscriptTypeBindInfoRecorder.h"
-#include "AngelscriptTypeBindInfoApply.h"
-#include "AngelscriptTypeBindInfoValidation.h"
+#include "AngelscriptBindsInternal.h"
 #include "AngelscriptBindDatabase.h"
 #include "AngelscriptSourceProvider.h"
 #include "AngelscriptMemoryTags.h"
@@ -1171,92 +1169,6 @@ FAngelscriptEngine* FAngelscriptEngine::TryGetByScriptEngine(
 		: nullptr;
 }
 
-TUniquePtr<FAngelscriptEngine> FAngelscriptEngine::CreateForBindings(
-	TSharedRef<const FAngelscriptTypeBindInfoStore> Store, FAngelscriptBindingDiagnostic& Diagnostic)
-{
-	Diagnostic = {};
-	const FAngelscriptTypeBindValidationResult Validation =
-		FAngelscriptTypeBindInfoValidation::ValidateSealed(Store);
-	if (!Validation.bValid)
-	{
-		Diagnostic.Stage = Validation.Stage;
-		Diagnostic.Message = Validation.Message;
-		return {};
-	}
-	auto Owner = TUniquePtr<FAngelscriptEngine>(new FAngelscriptEngine(FBindingConstruction{}));
-	Diagnostic.Stage = EAngelscriptBindingStage::Engine;
-	Owner->Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
-	#if WITH_DEV_AUTOMATION_TESTS
-	++GBindingNativeEngineAllocationCount;
-	#endif
-	if (!Owner->Engine)
-	{
-		Diagnostic.Message = TEXT("Could not create the native binding Engine."); return {};
-	}
-	Owner->Engine->SetUserData(Owner.Get(), GetAngelscriptRuntimeEngineOwnerUserDataType());
-	Owner->TypeDatabase = MakeUnique<FAngelscriptTypeDatabase>();
-	Owner->BindState = MakeUnique<FAngelscriptBindState>();
-	Owner->ToStringList = MakeUnique<TArray<FToStringType>>();
-	if (Store->PublishProcessIds() != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::Succeeded
-		&& Store->PublishProcessIds() != AS_NAMESPACE_QUALIFIER asEMetadataRegistrationResult::AlreadyRegistered)
-	{
-		Diagnostic.Message = TEXT("Could not publish process IDs for the binding store."); return {};
-	}
-	if (!FAngelscriptTypeBindInfoApply::Install(Store, *static_cast<asCScriptEngine*>(Owner->Engine),
-		Owner->BindingInstallation, Diagnostic.Message, &Diagnostic.Stage)) return {};
-	Diagnostic.Stage = EAngelscriptBindingStage::Members;
-	for (const FAngelscriptBindEffect& Effect : Store->GetEffects())
-	{
-		switch (Effect.Kind)
-		{
-		case EAngelscriptBindEffectKind::ToString:
-		{
-			asITypeInfo* TypeInfo = Owner->Engine->GetTypeInfoByName(TCHAR_TO_ANSI(*Effect.Name));
-			Owner->ToStringList->Add({Effect.Name, TypeInfo, Effect.ToString,
-				Effect.bImplicitConversion, Effect.bHandleType});
-			break;
-		}
-		case EAngelscriptBindEffectKind::SkipFunction:
-			Owner->BindState->SkipBindNames.Add(MakeTuple(FName(*Effect.Name), FName(*Effect.SecondaryName)));
-			break;
-		case EAngelscriptBindEffectKind::SkipClass:
-			Owner->BindState->SkipBindClasses.Add(FName(*Effect.Name));
-			break;
-		case EAngelscriptBindEffectKind::DeprecateFunction:
-#if WITH_EDITOR
-			if (UFunction* Function = FindObject<UFunction>(nullptr, *Effect.Name))
-			{
-				Function->SetMetaData(TEXT("DeprecatedFunction"), TEXT(""));
-				Function->SetMetaData(TEXT("DeprecationMessage"), *Effect.SecondaryName);
-			}
-#endif
-			break;
-		case EAngelscriptBindEffectKind::DirectBindArchitectureProbe:
-#if WITH_DEV_AUTOMATION_TESTS
-			if (Owner->ShouldInjectDirectBindFailureForTesting() || Effect.SecondaryName == TEXT("inject-failure"))
-			{
-				Diagnostic.Message = FString::Printf(TEXT("Finalization provider '%s' at %s:%d rejected fresh Engine publication: injected direct-bind failure."),
-					*Effect.Source.Provider.ToString(), *Effect.Source.File, Effect.Source.Line);
-				return {};
-			}
-			++Owner->BindState->DirectCallbackExecutionCountForTesting;
-#endif
-			break;
-		}
-	}
-	Diagnostic.Stage = EAngelscriptBindingStage::Native;
-	if (!FAngelscriptTypeBindInfoApply::ConnectNative(*Owner->BindingInstallation,
-		*static_cast<asCScriptEngine*>(Owner->Engine), Diagnostic.Message)) return {};
-	Diagnostic.Stage = EAngelscriptBindingStage::Engine;
-	if (!Owner->CreateBindingContext())
-	{
-		Diagnostic.Message = TEXT("Could not create the owned binding Context."); return {};
-	}
-	Owner->bReadyForPublication = true;
-	Diagnostic = {};
-	return Owner;
-}
-
 #if WITH_DEV_AUTOMATION_TESTS
 uint64 FAngelscriptEngine::GetBindingNativeEngineAllocationCountForTesting()
 {
@@ -1272,38 +1184,77 @@ TUniquePtr<FAngelscriptEngine> FAngelscriptEngine::CreateForBindings(FAngelscrip
 		return {};
 	}
 
-	FAngelscriptBindRecordingPolicy Policy;
-	Policy.Platform = FName(FPlatformProperties::IniPlatformName());
-	Policy.bRuntimeModuleOnly = true;
-	if (const UAngelscriptSettings* Settings = GetDefault<UAngelscriptSettings>())
-	{
-		Policy.bScriptFloatIsFloat64 = Settings->bScriptFloatIsFloat64;
-		Policy.bDeprecateDoubleType = Settings->bDeprecateDoubleType;
-		Policy.bForceConstWithinDevelopmentOnlyFunctions =
-			Settings->bForceConstWithinDevelopmentOnlyFunctions;
-	}
-	TSharedPtr<const FAngelscriptTypeBindInfoStore> Store;
-	if (!FAngelscriptTypeBindInfoRecorder::Capture(
-		FAngelscriptBind::GetRegisteredCollection(), Policy, Store, Diagnostic.Message))
+	if (!FAngelscriptBind::EnsureProcessHostCollection(Diagnostic.Message))
 	{
 		return {};
 	}
-	if (!Store.IsValid())
+
+	const UE::Angelscript::Private::FAngelscriptBindCollection* Host =
+		FAngelscriptBind::GetProcessHostCollection();
+	if (!Host)
 	{
-		Diagnostic.Message = TEXT("The complete Runtime provider capture returned no sealed snapshot.");
+		Diagnostic.Message = TEXT("Process host collection is unavailable after capture.");
 		return {};
 	}
-	return CreateForBindings(Store.ToSharedRef(), Diagnostic);
+
+	return CreateForBindings(*Host, Diagnostic);
 }
 
-const FAngelscriptTypeBindInfoInstallation* FAngelscriptEngine::GetBindingInstallation() const { return BindingInstallation.Get(); }
+TUniquePtr<FAngelscriptEngine> FAngelscriptEngine::CreateForBindings(
+	const UE::Angelscript::Private::FAngelscriptBindCollection& Collection,
+	FAngelscriptBindingDiagnostic& Diagnostic)
+{
+	Diagnostic = {};
+	Diagnostic.Stage = EAngelscriptBindingStage::Engine;
+	const asCDefinitions* Graph = Collection.GetHostDefinitions();
+	if (!Graph || Graph->GetState() != asEDefinitionState::Frozen)
+	{
+		Diagnostic.Message = TEXT("CreateForBindings requires a frozen HostProcess collection.");
+		return {};
+	}
+	auto Owner = TUniquePtr<FAngelscriptEngine>(new FAngelscriptEngine(FBindingConstruction{}));
+	Owner->Engine = static_cast<asCScriptEngine*>(asCreateScriptEngine());
+#if WITH_DEV_AUTOMATION_TESTS
+	++GBindingNativeEngineAllocationCount;
+#endif
+	if (!Owner->Engine)
+	{
+		Diagnostic.Message = TEXT("Could not create the native binding Engine.");
+		return {};
+	}
+	Owner->Engine->SetUserData(Owner.Get(), GetAngelscriptRuntimeEngineOwnerUserDataType());
+	Owner->TypeDatabase = MakeUnique<FAngelscriptTypeDatabase>();
+	Owner->BindState = MakeUnique<FAngelscriptBindState>();
+	Owner->ToStringList = MakeUnique<TArray<FToStringType>>();
+	const asERegistrationResult Injected = Owner->Engine->InjectDefinitions(*Graph);
+	if (Injected != asERegistrationResult::Succeeded
+		&& Injected != asERegistrationResult::AlreadyRegistered)
+	{
+		Diagnostic.Message = TEXT("Could not inject the retained HostProcess graph.");
+		return {};
+	}
+	Owner->bReadyForPublication = true;
+	Diagnostic = {};
+	return Owner;
+}
+
+asERegistrationResult FAngelscriptEngine::InjectDefinitions(const asCDefinitions& Graph)
+{
+	if (!Engine)
+	{
+		return asERegistrationResult::InvalidState;
+	}
+	return Engine->InjectDefinitions(Graph);
+}
+
+const FAngelscriptTypeBindInfoInstallation* FAngelscriptEngine::GetBindingInstallation() const { return nullptr; }
 asIScriptContext* FAngelscriptEngine::GetBindingContext() const { return BindingContexts.IsEmpty() ? nullptr : BindingContexts[0]; }
 int32 FAngelscriptEngine::GetBindingContextCount() const { return BindingContexts.Num(); }
 bool FAngelscriptEngine::IsBindingEngine() const { return bBindingOnly; }
 
 asIScriptContext* FAngelscriptEngine::CreateBindingContext()
 {
-	if (!bBindingOnly || bShuttingDownBindings || !Engine || !BindingInstallation) return nullptr;
+	if (!bBindingOnly || bShuttingDownBindings || !Engine) return nullptr;
 	auto* Context = Engine->CreateContext();
 	if (Context) BindingContexts.Add(Context);
 	return Context;
@@ -1330,7 +1281,6 @@ void FAngelscriptEngine::ShutdownBindings()
 	}
 	TypeDatabase.Reset();
 	BindState.Reset();
-	BindingInstallation.Reset();
 	if (ScriptEngine)
 	{
 		ScriptEngine->SetUserData(nullptr, GetAngelscriptRuntimeEngineOwnerUserDataType());
@@ -3268,6 +3218,15 @@ FAngelscriptContextPool::~FAngelscriptContextPool()
 		Context->Release();
 }
 
+#if WITH_DEV_AUTOMATION_TESTS
+static FString GForcedProcessHostCaptureFailureForTesting;
+
+void FAngelscriptEngine::SetForcedProcessHostCaptureFailureForTesting(const FString& Diagnostic)
+{
+	GForcedProcessHostCaptureFailureForTesting = Diagnostic;
+}
+#endif
+
 bool FAngelscriptEngine::BindScriptTypes()
 {
 	AS_PERF_SCOPE_STARTUP_BIND_SCRIPT_TYPES();
@@ -3284,15 +3243,38 @@ bool FAngelscriptEngine::BindScriptTypes()
 	};
 	#endif
 
-	FAngelscriptBinds DirectBinds(*this);
-	FString DirectBindDiagnostic;
-	if (!FAngelscriptBind::ExecuteRegisteredBinds(DirectBinds, DirectBindDiagnostic))
+	FString HostDiagnostic;
+#if WITH_DEV_AUTOMATION_TESTS
+	if (!GForcedProcessHostCaptureFailureForTesting.IsEmpty())
 	{
 		UE_LOG(
 			Angelscript,
 			Error,
-			TEXT("Direct AngelScript binding execution failed: %s"),
-			*DirectBindDiagnostic);
+			TEXT("Process host capture failed: %s"),
+			*GForcedProcessHostCaptureFailureForTesting);
+		return false;
+	}
+#endif
+	if (!FAngelscriptBind::EnsureProcessHostCollection(HostDiagnostic))
+	{
+		UE_LOG(Angelscript, Error, TEXT("Process host capture failed: %s"), *HostDiagnostic);
+		return false;
+	}
+
+	const UE::Angelscript::Private::FAngelscriptBindCollection* Host =
+		FAngelscriptBind::GetProcessHostCollection();
+	const asCDefinitions* Graph = Host ? Host->GetHostDefinitions() : nullptr;
+	if (!Graph || Graph->GetState() != asEDefinitionState::Frozen)
+	{
+		UE_LOG(Angelscript, Error, TEXT("Process host capture failed: host graph is not frozen."));
+		return false;
+	}
+
+	const asERegistrationResult Injected = InjectDefinitions(*Graph);
+	if (Injected != asERegistrationResult::Succeeded
+		&& Injected != asERegistrationResult::AlreadyRegistered)
+	{
+		UE_LOG(Angelscript, Error, TEXT("Could not inject the retained HostProcess graph."));
 		return false;
 	}
 	return true;

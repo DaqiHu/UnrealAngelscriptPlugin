@@ -23,6 +23,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AssetManagerScriptMixins(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		// Detached reflection records these UFUNCTION wrappers and their dispatch.
 		// The legacy function-map overrides apply only to direct Engine registration.
 		if (Binds.IsRecording())

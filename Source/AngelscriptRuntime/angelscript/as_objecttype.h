@@ -195,11 +195,11 @@ public:
 	asCArray<asCDataType> templateSubTypes;   // increases refCount for typeinfo held in datatype
 	// Detached specialization edges are borrowed through the image dependency
 	// graph; host templates must explicitly promise argument-independent layout.
-	asCObjectType* GetMetadataTemplateDefinition() const { return metadataTemplateDefinition; }
+	asCObjectType* GetTemplateDefinition() const { return templateDefinition; }
 	bool HasFixedTemplateLayout() const { return metadataFixedTemplateLayout; }
 	private:
-	friend class asCModuleDefinitionSet;
-	asCObjectType* metadataTemplateDefinition = nullptr;
+	friend class asCDefinitions;
+	asCObjectType* templateDefinition = nullptr;
 	bool metadataFixedTemplateLayout = false;
 	public:
 	bool                  acceptValueSubType;
@@ -388,8 +388,8 @@ public:
 	}
 
 protected:
-	friend class asCModuleDefinitionSet;
-	asCObjectType(asCModuleDefinitionSet& owner, const asSStableKey& key);
+	friend class asCDefinitions;
+	asCObjectType(asCDefinitions& owner, const asSStableKey& key);
 	friend class asCScriptEngine;
 	friend class asCConfigGroup;
 	friend class asCModule;

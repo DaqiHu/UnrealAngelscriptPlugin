@@ -123,6 +123,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector2D_Type(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags Flags;
 		Flags.bPOD = true;
 		Flags.ExtraFlags |= asOBJ_BASICMATHTYPE;
@@ -134,6 +135,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector2D_Infrastructure(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		Binds.RegisterTypeForTarget(MakeShared<FVector2DType>());
 		FToStringHelper::Register(Binds, TEXT("FVector2D"), &FAngelscriptFVector2DBinds::AppendToString);
 	});
@@ -143,6 +145,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FVector2D(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FVector2D_ = Binds.ExistingClassForTarget("FVector2D");
 		FVector2D_.Constructor(
 			"void f(float64 X, float64 Y)",

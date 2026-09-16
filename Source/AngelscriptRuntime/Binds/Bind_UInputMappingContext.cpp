@@ -71,6 +71,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UInputAction_Late(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Action_ = Binds.ExistingClassForTarget("UInputAction");
 		Action_.Method("void SetValueType(EInputActionValueType InValueType)", &FAngelscriptUInputMappingContextBinds::SetValueType);
 		Action_.Method("EInputActionValueType GetValueType() const", &FAngelscriptUInputMappingContextBinds::GetValueType);
@@ -87,6 +88,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FEnhancedActionKeyMapping_Late(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Mapping_ = Binds.ExistingClassForTarget("FEnhancedActionKeyMapping");
 		Mapping_.Constructor(
 			"void f(const UInputAction InAction, FKey InKey)",
@@ -113,6 +115,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_UInputMappingContext_Late(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto Context_ = Binds.ExistingClassForTarget("UInputMappingContext");
 		Context_.Method("FEnhancedActionKeyMapping& MapKey(const UInputAction Action, FKey ToKey)", &FAngelscriptUInputMappingContextBinds::MapKey);
 		Context_.Method(

@@ -1,11 +1,13 @@
 /* Maintained Unreal AngelScript fork — engine-independent definition ownership. */
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "as_bytecode_image.h"
+#include "as_callfunc.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 #include "as_property.h"
 #include "as_namespace.h"
 #include "as_memory.h"
+#include "as_type_id_registry.h"
 #include "Containers/StringConv.h"
 #include "Containers/Set.h"
 #include "frontend/Basic/as_canonical_encoding.h"
@@ -38,121 +40,182 @@ namespace
 	}
 }
 
-TUniquePtr<asCModuleDefinitionSet> asCModuleDefinitionSet::Create(const asSMetadataOptions& Options)
+TUniquePtr<asCDefinitions> asCDefinitions::Create(const asSDefinitionOptions& Options)
 {
 	if ((Options.PointerByteSize != 4 && Options.PointerByteSize != 8) || !Options.TargetProfile.GetLength())
 		return nullptr;
-	return TUniquePtr<asCModuleDefinitionSet>(new asCModuleDefinitionSet(Options));
+	return TUniquePtr<asCDefinitions>(new asCDefinitions(Options));
 }
 
-asCModuleDefinitionSet::asCModuleDefinitionSet() : asCModuleDefinitionSet(asSMetadataOptions{}) {}
+asCDefinitions::asCDefinitions() : asCDefinitions(asSDefinitionOptions{}) {}
 
-asCModuleDefinitionSet::asCModuleDefinitionSet(const asSMetadataOptions& InOptions) : Options(InOptions) {}
+asCDefinitions::asCDefinitions(const asSDefinitionOptions& InOptions) : Options(InOptions) {}
 
-asCModuleDefinitionSet::~asCModuleDefinitionSet()
+asCDefinitionGraphLease::asCDefinitionGraphLease(TUniquePtr<asCDefinitions>&& Producer)
+{
+	asCDefinitions* Raw = Producer.Release();
+	if (!Raw)
+	{
+		return;
+	}
+	Graph = TSharedPtr<asCDefinitions, ESPMode::ThreadSafe>(Raw);
+	Raw->Self = Graph;
+}
+
+asCDefinitionGraphLease asCDefinitions::AdoptGraph(TUniquePtr<asCDefinitions>&& Producer)
+{
+	return asCDefinitionGraphLease(MoveTemp(Producer));
+}
+
+asCDefinitionGraphLease asCDefinitions::RetainGraph()
+{
+	return asCDefinitionGraphLease(Self.Pin());
+}
+
+void asCDefinitions::SetDestroyCounters(asSDefinitionDestroyCounters* Counters)
+{
+	DestroyCounters = Counters;
+}
+
+asEDefinitionResult asCDefinitions::BindNativeFunction(asCScriptFunction& Function, const asSFuncPtr& FunctionPtr,
+	asDWORD CallConv, asFunctionCaller Caller, void* Auxiliary)
+{
+	std::lock_guard<std::mutex> Lock(MutationMutex);
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Function)) return asEDefinitionResult::ForeignOwner;
+	if (Function.funcType != asFUNC_SYSTEM || !Function.metadataSignatureDefined)
+		return asEDefinitionResult::InvalidArgument;
+	auto Interface = std::make_shared<asSSystemFunctionInterface>();
+	if (DetectCallingConvention(Function.objectType != nullptr, FunctionPtr, static_cast<int>(CallConv),
+		Auxiliary, Caller, Interface.get()) < 0)
+	{
+		return asEDefinitionResult::InvalidSignature;
+	}
+	if (!Interface->CallFrame.Prepare(&Function)) return asEDefinitionResult::InvalidSignature;
+	Interface->paramSize = Interface->CallFrame.ArgumentDwords;
+	if ((Interface->callConv == ICC_GENERIC_FUNC || Interface->callConv == ICC_GENERIC_METHOD)
+		&& PrepareSystemFunctionGeneric(&Function, Interface.get(), nullptr) != 0)
+	{
+		return asEDefinitionResult::InvalidSignature;
+	}
+	Function.processInterface = MoveTemp(Interface);
+	return asEDefinitionResult::Succeeded;
+}
+
+asCDefinitions::~asCDefinitions()
 {
 	bDestroying = true;
+	if (DestroyCounters)
+	{
+		DestroyCounters->Namespaces.fetch_add(Namespaces.Num());
+	}
 	for (asCGlobalProperty* Global : Globals) asDELETE(Global, asCGlobalProperty);
 	for (asCScriptFunction* Function : Functions) asDELETE(Function, asCScriptFunction);
 	for (asCTypeInfo* Type : Types) asDELETE(Type, asCTypeInfo);
 	for (asSNameSpace* Namespace : Namespaces) asDELETE(Namespace, asSNameSpace);
 }
 
-bool asCModuleDefinitionSet::Owns(const asCTypeInfo* Type) const { return Type && Type->GetDefinitionSet() == this; }
-bool asCModuleDefinitionSet::Owns(const asCScriptFunction* Function) const { return Function && Function->GetDefinitionSet() == this; }
+bool asCDefinitions::Owns(const asCTypeInfo* Type) const { return Type && Type->GetDefinitions() == this; }
+bool asCDefinitions::Owns(const asCScriptFunction* Function) const { return Function && Function->GetDefinitions() == this; }
 
-bool asCModuleDefinitionSet::IsDefaultArrayType(const asCTypeInfo* Type) const
+bool asCDefinitions::IsDefaultArrayType(const asCTypeInfo* Type) const
 {
 	return DefaultArrayType == Type;
 }
 
-bool asCModuleDefinitionSet::ReferencesSet(const asCModuleDefinitionSet* Set) const
+bool asCDefinitions::ReferencesSet(const asCDefinitions* Set) const
 {
 	if (this == Set) return true;
-	for (asCModuleDefinitionSet* Dependency : Dependencies)
+	for (asCDefinitions* Dependency : Dependencies)
 		if (Dependency && Dependency->ReferencesSet(Set)) return true;
 	return false;
 }
 
-bool asCModuleDefinitionSet::CanReference(const asCTypeInfo* Type) const
+bool asCDefinitions::CanReference(const asCTypeInfo* Type) const
 {
-	return Type && Type->GetDefinitionSet() && ReferencesSet(Type->GetDefinitionSet());
+	return Type && Type->GetDefinitions() && ReferencesSet(Type->GetDefinitions());
 }
-bool asCModuleDefinitionSet::CanReference(const asCScriptFunction* Function) const
+bool asCDefinitions::CanReference(const asCScriptFunction* Function) const
 {
-	return Function && Function->GetDefinitionSet() && ReferencesSet(Function->GetDefinitionSet());
+	return Function && Function->GetDefinitions() && ReferencesSet(Function->GetDefinitions());
 }
 
-asCTypeInfo* asCModuleDefinitionSet::FindType(const asSStableKey& Key) const
+asCTypeInfo* asCDefinitions::FindType(const asSStableKey& Key) const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	auto Found = TypesByKey.Find(Key);
 	return Found ? *Found : nullptr;
 }
-asCScriptFunction* asCModuleDefinitionSet::FindFunction(const asSStableKey& Key) const
+asCScriptFunction* asCDefinitions::FindFunction(const asSStableKey& Key) const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	auto Found = FunctionsByKey.Find(Key);
 	return Found ? *Found : nullptr;
 }
 
-asCGlobalProperty* asCModuleDefinitionSet::FindGlobalProperty(const asSStableKey& Key) const
+asCGlobalProperty* asCDefinitions::FindGlobalProperty(const asSStableKey& Key) const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	return GlobalsByKey.FindRef(Key);
 }
 
-asEMetadataResult asCModuleDefinitionSet::CreateGlobalProperty(const asSStableKey& Key,
+asEDefinitionResult asCDefinitions::CreateGlobalProperty(const asSStableKey& Key,
 	const asSStableKey& TypeUseKey, const char* Name, const char* Namespace,
 	const asCDataType& Type, asCGlobalProperty*& Out)
 {
 	return CreateGlobalPropertyInternal(Key, TypeUseKey, Name, Namespace, Type, Out, false);
 }
 
-asEMetadataResult asCModuleDefinitionSet::CreateNativeGlobalProperty(const asSStableKey& Key,
+asEDefinitionResult asCDefinitions::CreateNativeGlobalProperty(const asSStableKey& Key,
 	const asSStableKey& TypeUseKey, const char* Name, const char* Namespace,
 	const asCDataType& Type, asCGlobalProperty*& Out)
 {
 	return CreateGlobalPropertyInternal(Key, TypeUseKey, Name, Namespace, Type, Out, true);
 }
 
-asEMetadataResult asCModuleDefinitionSet::CreateGlobalPropertyInternal(const asSStableKey& Key,
+asEDefinitionResult asCDefinitions::CreateGlobalPropertyInternal(const asSStableKey& Key,
 	const asSStableKey& TypeUseKey, const char* Name, const char* Namespace,
 	const asCDataType& Type, asCGlobalProperty*& Out, bool Native)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	Out = nullptr;
 	const auto Status = ValidateNew(Key, Name, Namespace, false);
-	if (Status != asEMetadataResult::Succeeded) return Status;
-	if (GlobalsByName.Contains(QualifiedName(Namespace, Name))) return asEMetadataResult::DuplicateName;
+	if (Status != asEDefinitionResult::Succeeded) return Status;
+	if (GlobalsByName.Contains(QualifiedName(Namespace, Name))) return asEDefinitionResult::DuplicateName;
 	if ((!Native && !Type.IsReadOnly() && !Type.IsHandleToConst()) || Type.IsReference() ||
-		ValidateDataType(Type, false) != asEMetadataResult::Succeeded) return asEMetadataResult::InvalidSignature;
+		ValidateDataType(Type, false) != asEDefinitionResult::Succeeded) return asEDefinitionResult::InvalidSignature;
 	asCGlobalProperty Candidate;
 	asSNameSpace TemporaryNamespace;
 	TemporaryNamespace.name = Namespace;
 	Candidate.name = Name; Candidate.nameSpace = &TemporaryNamespace; Candidate.type = NormalizeOptions(Type);
-	Candidate.metadataOwner = this; Candidate.memory = nullptr; Candidate.id = asUINT(-1);
-	Candidate.metadataStableKey = Key; Candidate.metadataTypeUseKey = TypeUseKey;
+	Candidate.definitions = this; Candidate.memory = nullptr; Candidate.id = asUINT(-1);
+	Candidate.stableKey = Key; Candidate.metadataTypeUseKey = TypeUseKey;
 	Candidate.metadataNativeDeclaration = Native;
-	if (!ValidateGlobalIdentity(Candidate)) return asEMetadataResult::InvalidSignature;
+	if (!ValidateGlobalIdentity(Candidate)) return asEDefinitionResult::InvalidSignature;
 	asCGlobalProperty* Global = asNEW(asCGlobalProperty);
 	Global->name = Name; Global->nameSpace = InternNamespace(Namespace); Global->type = NormalizeOptions(Type);
-	Global->metadataOwner = this; Global->metadataStableKey = Key; Global->metadataTypeUseKey = TypeUseKey;
+	Global->definitions = this; Global->stableKey = Key; Global->metadataTypeUseKey = TypeUseKey;
 	Global->metadataNativeDeclaration = Native;
 	Global->id = asUINT(-1); Global->memory = nullptr; Global->refCount.set(0);
 	Globals.Add(Global); GlobalsByKey.Add(Key, Global); GlobalsByName.Add(QualifiedName(Namespace, Name), Global);
 	InvalidateLayouts();
 	Out = Global;
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-bool asCModuleDefinitionSet::ValidateGlobalIdentity(const asCGlobalProperty& Global) const
+bool asCDefinitions::ValidateGlobalIdentity(const asCGlobalProperty& Global) const
 {
-if (!IdentityContext || Global.metadataOwner != this || !Global.nameSpace || Global.module || Global.initFunc || Global.realAddress || Global.memory || Global.memoryAllocated ||
+	if (Global.metadataNativeDeclaration
+		&& (!IdentityContext || Options.Kind == asETypeInfoKind::HostProcess))
+	{
+		return Global.definitions == this && Global.nameSpace
+			&& !Global.module && !Global.initFunc && !Global.type.IsReference();
+	}
+if (!IdentityContext || Global.definitions != this || !Global.nameSpace || Global.module || Global.initFunc || Global.realAddress || Global.memory || Global.memoryAllocated ||
 		(!Global.metadataNativeDeclaration && !Global.type.IsReadOnly() && !Global.type.IsHandleToConst()) || Global.type.IsReference()) return false;
 	const auto& Registry = IdentityContext->GetIdentityRegistry();
 	asSDeclarationIdentityDescriptor Decl;
-	if (Registry.ResolveDeclaration(Global.metadataStableKey, Decl) != asETypeIdentityStatus::Succeeded ||
+	if (Registry.ResolveDeclaration(Global.stableKey, Decl) != asETypeIdentityStatus::Succeeded ||
 		Decl.Kind != asEDeclarationIdentityKind::GlobalVariable || Decl.Name != UTF8_TO_TCHAR(Global.name.AddressOf())) return false;
 	TArray<FString> Names;
 	asSStableKey Owner = Decl.Owner;
@@ -168,68 +231,68 @@ if (!IdentityContext || Global.metadataOwner != this || !Global.nameSpace || Glo
 		ValidateTypeUse(Global.metadataTypeUseKey, Global.type);
 }
 
-asCDataType asCModuleDefinitionSet::Primitive(eTokenType Token, bool IsConst) const
+asCDataType asCDefinitions::Primitive(eTokenType Token, bool IsConst) const
 {
 	asCDataType Type = asCDataType::CreatePrimitive(Token, IsConst, Options.FloatIsFloat64);
 	Type.SetMetadataOptions(Options.FloatIsFloat64, Options.PointerByteSize);
 	return Type;
 }
-asCDataType asCModuleDefinitionSet::NormalizeOptions(const asCDataType& Type) const
+asCDataType asCDefinitions::NormalizeOptions(const asCDataType& Type) const
 {
 	asCDataType Copy(Type);
 	Copy.SetMetadataOptions(Options.FloatIsFloat64, Options.PointerByteSize);
 	return Copy;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetIdentityContext(TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> Context)
+asEDefinitionResult asCDefinitions::SetIdentityContext(TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> Context)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Context.IsValid()) return asEMetadataResult::InvalidArgument;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Context.IsValid()) return asEDefinitionResult::InvalidArgument;
 	const auto& Settings = Context->GetOptions();
 	if (Settings.PointerByteSize != Options.PointerByteSize || Settings.FloatIsFloat64 != Options.FloatIsFloat64 ||
 		Settings.ExpandDefaultArrayToTemplate != Options.ExpandDefaultArrayToTemplate || Settings.TargetProfile != UTF8_TO_TCHAR(Options.TargetProfile.AddressOf()))
-		return asEMetadataResult::InvalidArgument;
+		return asEDefinitionResult::InvalidArgument;
 	decltype(TypesByName) ReboundNames;
 	for (asCTypeInfo* Type : Types)
 	{
-		if (const auto* Object = CastToObjectType(Type); Object && Object->GetMetadataTemplateDefinition()) continue;
+		if (const auto* Object = CastToObjectType(Type); Object && Object->GetTemplateDefinition()) continue;
 		const FString NameKey = TypeNameKey(Context.Get(), Type->GetStableKey(), Type->GetNamespace(), Type->GetName());
-		if (ReboundNames.Contains(NameKey)) return asEMetadataResult::DuplicateName;
+		if (ReboundNames.Contains(NameKey)) return asEDefinitionResult::DuplicateName;
 		ReboundNames.Add(NameKey, Type);
 	}
 	IdentityContext = MoveTemp(Context);
 	TypesByName = MoveTemp(ReboundNames);
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> asCModuleDefinitionSet::GetIdentityContext() const
+TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> asCDefinitions::GetIdentityContext() const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	return IdentityContext;
 }
 
-asCScriptEngine* asCModuleDefinitionSet::GetBoundEngine() const
+asCScriptEngine* asCDefinitions::GetBoundEngine() const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	return BoundEngine;
 }
 
-int asCModuleDefinitionSet::GetBoundTypeId(const asCTypeInfo* Type) const
+int asCDefinitions::GetBoundTypeId(const asCTypeInfo* Type) const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	const int* Id = BoundTypeIds.Find(Type);
 	return Owns(Type) && Id ? *Id : -1;
 }
 
-int asCModuleDefinitionSet::GetBoundFunctionId(const asCScriptFunction* Function) const
+int asCDefinitions::GetBoundFunctionId(const asCScriptFunction* Function) const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	const int* Id = BoundFunctionIds.Find(Function);
 	return Owns(Function) && Id ? *Id : -1;
 }
 
-int asCModuleDefinitionSet::GetBoundDataTypeId(const asCDataType& Type) const
+int asCDefinitions::GetBoundDataTypeId(const asCDataType& Type) const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	int Id = -1;
@@ -263,7 +326,7 @@ int asCModuleDefinitionSet::GetBoundDataTypeId(const asCDataType& Type) const
 	return Id;
 }
 
-bool asCModuleDefinitionSet::ValidateFrozenLayout() const
+bool asCDefinitions::ValidateFrozenLayout() const
 {
 	if (!bLayoutsFinalized || FrozenLayouts.Num() != Types.Num()) return false;
 	int PropertyCount = 0;
@@ -282,7 +345,7 @@ bool asCModuleDefinitionSet::ValidateFrozenLayout() const
 				const int* Offset = FrozenPropertyOffsets.Find(Property);
 				const asCDataType* FrozenType = FrozenPropertyTypes.Find(Property);
 				if (!Offset || *Offset != Property->byteOffset || !FrozenType || !(*FrozenType == Property->type)
-					|| ValidateDataType(Property->type, false) != asEMetadataResult::Succeeded) return false;
+					|| ValidateDataType(Property->type, false) != asEDefinitionResult::Succeeded) return false;
 				++PropertyCount;
 			}
 		}
@@ -290,11 +353,11 @@ bool asCModuleDefinitionSet::ValidateFrozenLayout() const
 	return PropertyCount == FrozenPropertyOffsets.Num() && PropertyCount == FrozenPropertyTypes.Num();
 }
 
-bool asCModuleDefinitionSet::ValidateTypeUse(const asSStableKey& Key, const asCDataType& Actual, int Depth) const
+bool asCDefinitions::ValidateTypeUse(const asSStableKey& Key, const asCDataType& Actual, int Depth) const
 {
 if (!IdentityContext.IsValid()) return false;
 	const auto& Registry = IdentityContext->GetIdentityRegistry();
-	if (Depth > 64 || ValidateDataType(Actual, true, true) != asEMetadataResult::Succeeded) return false;
+	if (Depth > 64 || ValidateDataType(Actual, true, true) != asEDefinitionResult::Succeeded) return false;
 	asSStableTypeUseDescriptor Expected;
 	if (Registry.ResolveTypeUse(Key, Expected) != asETypeIdentityStatus::Succeeded) return false;
 	asSStableTypeUseDescriptor Observed = Expected;
@@ -307,7 +370,7 @@ if (!IdentityContext.IsValid()) return false;
 	{
 		Observed.Kind = asETypeUseKind::Nominal;
 		asCObjectType* Object = CastToObjectType(Type);
-		Observed.Declaration = Object && Object->GetMetadataTemplateDefinition() ? Object->GetMetadataTemplateDefinition()->GetStableKey() : Type->GetStableKey();
+		Observed.Declaration = Object && Object->GetTemplateDefinition() ? Object->GetTemplateDefinition()->GetStableKey() : Type->GetStableKey();
 		const int Count = Object ? Object->templateSubTypes.GetLength() : 0;
 		if (Expected.Arguments.Num() != Count) return false;
 		for (int Index = 0; Index < Count; ++Index)
@@ -340,7 +403,7 @@ if (!IdentityContext.IsValid()) return false;
 	return Registry.ValidateTypeUse(Key, Observed) == asETypeIdentityStatus::Succeeded;
 }
 
-bool asCModuleDefinitionSet::ValidateFrozenIdentity() const
+bool asCDefinitions::ValidateFrozenIdentity() const
 {
 if (!IdentityContext.IsValid()) return false;
 	if (!ValidateListInitializers()) return false;
@@ -355,9 +418,9 @@ if (!IdentityContext.IsValid()) return false;
 		if (!ValidateGlobalIdentity(*Global)) return false;
 	for (asCTypeInfo* Type : Types)
 	{
-		if (asCObjectType* Instance = CastToObjectType(Type); Instance && Instance->GetMetadataTemplateDefinition())
+		if (asCObjectType* Instance = CastToObjectType(Type); Instance && Instance->GetTemplateDefinition())
 		{
-			const auto* Template = Instance->GetMetadataTemplateDefinition();
+			const auto* Template = Instance->GetTemplateDefinition();
 			asSStableTypeUseDescriptor Use;
 			if (!CanReference(Template) || !Template->HasFixedTemplateLayout() ||
 				Registry.ResolveTypeUse(Instance->GetStableKey(), Use) != asETypeIdentityStatus::Succeeded ||
@@ -370,9 +433,9 @@ if (!IdentityContext.IsValid()) return false;
 		if (Registry.ResolveNominalType(Type->GetStableKey(), Descriptor) != asETypeIdentityStatus::Succeeded) return false;
 		Descriptor.Name = UTF8_TO_TCHAR(Type->name.AddressOf());
 		Descriptor.NamespacePath = NamespacePath(Type->nameSpace);
-		Descriptor.Owner = Type->metadataDeclarationOwner ? Type->metadataDeclarationOwner->GetStableKey() : asSStableKey{};
-		Descriptor.Kind = static_cast<asETypeDeclKind>(Type->metadataDeclarationKind);
-		Descriptor.GenericArity = Type->metadataGenericArity;
+		Descriptor.Owner = Type->declarationOwner ? Type->declarationOwner->GetStableKey() : asSStableKey{};
+		Descriptor.Kind = static_cast<asETypeDeclKind>(Type->declarationKind);
+		Descriptor.GenericArity = Type->genericArity;
 		if (Registry.ValidateNominalType(Type->GetStableKey(), Descriptor) != asETypeIdentityStatus::Succeeded) return false;
 	}
 	for (asCScriptFunction* Function : Functions)
@@ -382,7 +445,7 @@ if (!IdentityContext.IsValid()) return false;
 		if (Function->metadataCallableSignature)
 		{
 			asSStableTypeUseDescriptor Signature;
-			if (Function->funcType != asFUNC_CALLABLE_SIGNATURE || Function->objectType || Function->metadataDeclarationOwner ||
+			if (Function->funcType != asFUNC_CALLABLE_SIGNATURE || Function->objectType || Function->declarationOwner ||
 				Registry.ResolveTypeUse(Function->GetStableKey(), Signature) != asETypeIdentityStatus::Succeeded ||
 				Signature.Kind != asETypeUseKind::Callable || Signature.Qualifiers != asETypeUseQualifiers::None ||
 				Signature.Parameters.Num() != int(Function->parameterTypes.GetLength()) ||
@@ -402,11 +465,11 @@ if (!IdentityContext.IsValid()) return false;
 		if (Registry.ResolveFunction(Function->GetStableKey(), Descriptor) != asETypeIdentityStatus::Succeeded) return false;
 		Descriptor.Name = UTF8_TO_TCHAR(Function->name.AddressOf());
 		Descriptor.NamespacePath = NamespacePath(Function->nameSpace);
-		Descriptor.Owner = Function->metadataDeclarationOwner ? Function->metadataDeclarationOwner->GetStableKey() : asSStableKey{};
-		Descriptor.Kind = static_cast<asEFunctionIdentityKind>(Function->metadataDeclarationKind);
+		Descriptor.Owner = Function->declarationOwner ? Function->declarationOwner->GetStableKey() : asSStableKey{};
+		Descriptor.Kind = static_cast<asEFunctionIdentityKind>(Function->declarationKind);
 		if (Function->traits.GetTrait(asTRAIT_CONSTRUCTOR) != (Descriptor.Kind == asEFunctionIdentityKind::Constructor) ||
 			Function->traits.GetTrait(asTRAIT_DESTRUCTOR) != (Descriptor.Kind == asEFunctionIdentityKind::Destructor)) return false;
-		Descriptor.GenericArity = Function->metadataGenericArity;
+		Descriptor.GenericArity = Function->genericArity;
 		Descriptor.DefinitionModifiers = Function->metadataStaticDeclaration ? asEFunctionDefinitionModifiers::Static : asEFunctionDefinitionModifiers::None;
 		if (Function->IsFinal()) Descriptor.DefinitionModifiers = Descriptor.DefinitionModifiers | asEFunctionDefinitionModifiers::Final;
 		if (Function->IsOverride()) Descriptor.DefinitionModifiers = Descriptor.DefinitionModifiers | asEFunctionDefinitionModifiers::Override;
@@ -423,7 +486,7 @@ if (!IdentityContext.IsValid()) return false;
 		if (Function->traits.GetTrait(asTRAIT_DEFAULTS_ONLY)) Descriptor.DefinitionModifiers = Descriptor.DefinitionModifiers | asEFunctionDefinitionModifiers::Defaults;
 		if (Function->traits.GetTrait(asTRAIT_UNSAFE_DURING_CONSTRUCTION)) Descriptor.DefinitionModifiers = Descriptor.DefinitionModifiers | asEFunctionDefinitionModifiers::UnsafeDuringConstruction;
 		if ((Descriptor.Kind == asEFunctionIdentityKind::Method || Descriptor.Kind == asEFunctionIdentityKind::Conversion)
-			&& (static_cast<asCTypeInfo*>(Function->objectType) != Function->metadataDeclarationOwner
+			&& (static_cast<asCTypeInfo*>(Function->objectType) != Function->declarationOwner
 				|| !Function->objectType || !CanReference(Function->objectType))) return false;
 		Descriptor.Modifiers = Function->IsReadOnly() ? asEFunctionIdentityModifiers::ConstMethod : asEFunctionIdentityModifiers::None;
 		if (Descriptor.Parameters.Num() != int(Function->parameterTypes.GetLength()) || !ValidateTypeUse(Descriptor.ReturnType, Function->returnType, 0)) return false;
@@ -442,54 +505,54 @@ if (!IdentityContext.IsValid()) return false;
 	return true;
 }
 
-bool asCModuleDefinitionSet::ValidateFrozenDefinitions() const
+bool asCDefinitions::ValidateFrozenDefinitions() const
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	return IsFrozen() && ValidateFrozenLayout() && ValidateFrozenIdentity() && ValidateAccessSnapshot();
 }
 
-asEMetadataResult asCModuleDefinitionSet::ValidateDataType(const asCDataType& Type, bool AllowVoid, bool AllowWildcard) const
+asEDefinitionResult asCDefinitions::ValidateDataType(const asCDataType& Type, bool AllowVoid, bool AllowWildcard) const
 {
 	if (!Type.IsValid() || Type.IsAuto() || Type.IsUnresolvedObject() || Type.IsErrorDataType() || Type.IsNullHandle())
-		return asEMetadataResult::InvalidSignature;
+		return asEDefinitionResult::InvalidSignature;
 	if (Type.GetTypeInfo())
-		return CanReference(Type.GetTypeInfo()) ? asEMetadataResult::Succeeded : asEMetadataResult::ForeignOwner;
+		return CanReference(Type.GetTypeInfo()) ? asEDefinitionResult::Succeeded : asEDefinitionResult::ForeignOwner;
 	if (Type.GetTokenType() == ttVoid)
-		return AllowVoid && !Type.IsReference() ? asEMetadataResult::Succeeded : asEMetadataResult::InvalidSignature;
+		return AllowVoid && !Type.IsReference() ? asEDefinitionResult::Succeeded : asEDefinitionResult::InvalidSignature;
 	if (Type.GetTokenType() == ttQuestion)
-		return AllowWildcard && Type.IsReference() ? asEMetadataResult::Succeeded : asEMetadataResult::InvalidSignature;
+		return AllowWildcard && Type.IsReference() ? asEDefinitionResult::Succeeded : asEDefinitionResult::InvalidSignature;
 	switch (Type.GetTokenType())
 	{
 	case ttBool: case ttInt8: case ttUInt8: case ttInt16: case ttUInt16:
 	case ttInt: case ttUInt: case ttInt64: case ttUInt64:
 	case ttFloat32: case ttFloat64: case ttFloat: case ttDouble:
-		return asEMetadataResult::Succeeded;
-	default: return asEMetadataResult::InvalidSignature;
+		return asEDefinitionResult::Succeeded;
+	default: return asEDefinitionResult::InvalidSignature;
 	}
 }
 
-asEMetadataResult asCModuleDefinitionSet::ValidateNew(const asSStableKey& Key,
+asEDefinitionResult asCDefinitions::ValidateNew(const asSStableKey& Key,
 	const char* Name, const char* Namespace, bool IsType) const
 {
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (Key.IsZero() || !Name || !Namespace) return asEMetadataResult::InvalidArgument;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (Key.IsZero() || !Name || !Namespace) return asEDefinitionResult::InvalidArgument;
 	if (!*Name)
 	{
 		asSFunctionIdentityDescriptor Identity;
 		if (IsType || !IdentityContext.IsValid() ||
 			IdentityContext->GetIdentityRegistry().ResolveFunction(Key, Identity) != asETypeIdentityStatus::Succeeded ||
 			(Identity.Kind != asEFunctionIdentityKind::ClassDefault))
-			return asEMetadataResult::InvalidArgument;
+			return asEDefinitionResult::InvalidArgument;
 	}
-	if (TypesByKey.Contains(Key) || FunctionsByKey.Contains(Key) || GlobalsByKey.Contains(Key)) return asEMetadataResult::DuplicateIdentity;
-	if (IsType && TypesByName.Contains(TypeNameKey(IdentityContext.Get(), Key, Namespace, Name))) return asEMetadataResult::DuplicateName;
+	if (TypesByKey.Contains(Key) || FunctionsByKey.Contains(Key) || GlobalsByKey.Contains(Key)) return asEDefinitionResult::DuplicateIdentity;
+	if (IsType && TypesByName.Contains(TypeNameKey(IdentityContext.Get(), Key, Namespace, Name))) return asEDefinitionResult::DuplicateName;
 	// The producer must retain its canonical identity registry/context. Nonzero
 	// is a shell precondition, not authentication of an arbitrary digest; Engine
 	// registration must validate the image against that producer-owned context.
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asSNameSpace* asCModuleDefinitionSet::InternNamespace(const char* Name)
+asSNameSpace* asCDefinitions::InternNamespace(const char* Name)
 {
 	for (asSNameSpace* Namespace : Namespaces)
 		if (Namespace->name == Name) return Namespace;
@@ -499,129 +562,129 @@ asSNameSpace* asCModuleDefinitionSet::InternNamespace(const char* Name)
 	return Namespace;
 }
 
-asEMetadataResult asCModuleDefinitionSet::AddDependency(asCModuleDefinitionSet* Dependency)
+asEDefinitionResult asCDefinitions::AddDependency(asCDefinitions* Dependency)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Dependency || Dependency == this) return asEMetadataResult::InvalidArgument;
-	if (!Dependency->IsFrozen()) return asEMetadataResult::UnfrozenDependency;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Dependency || Dependency == this) return asEDefinitionResult::InvalidArgument;
+	if (!Dependency->IsFrozen()) return asEDefinitionResult::UnfrozenDependency;
 	if (Dependency->Options.PointerByteSize != Options.PointerByteSize || Dependency->Options.TargetProfile != Options.TargetProfile)
-		return asEMetadataResult::InvalidLayout;
-	if (Dependency->ReferencesSet(this)) return asEMetadataResult::InvalidArgument;
-	for (asCModuleDefinitionSet* Existing : Dependencies) if (Existing == Dependency) return asEMetadataResult::Succeeded;
+		return asEDefinitionResult::InvalidLayout;
+	if (Dependency->ReferencesSet(this)) return asEDefinitionResult::InvalidArgument;
+	for (asCDefinitions* Existing : Dependencies) if (Existing == Dependency) return asEDefinitionResult::Succeeded;
 	Dependencies.Add(Dependency);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::CreateObjectType(const asSStableKey& Key,
+asEDefinitionResult asCDefinitions::CreateObjectType(const asSStableKey& Key,
 	const char* Name, const char* Namespace, asQWORD Flags, asCObjectType*& Out)
 {
 	Out = nullptr;
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	auto Result = ValidateNew(Key, Name, Namespace, true);
-	if (Result != asEMetadataResult::Succeeded) return Result;
+	if (Result != asEDefinitionResult::Succeeded) return Result;
 	if ((Flags & (asOBJ_ENUM | asOBJ_TYPEDEF | asOBJ_CALLABLE_TYPE | asOBJ_LIST_PATTERN)) ||
 		!(Flags & (asOBJ_VALUE | asOBJ_REF)) || ((Flags & asOBJ_VALUE) && (Flags & asOBJ_REF)))
-		return asEMetadataResult::InvalidArgument;
+		return asEDefinitionResult::InvalidArgument;
 	Out = asNEW(asCObjectType)(*this, Key);
 	Out->name = Name; Out->nameSpace = InternNamespace(Namespace); Out->flags = Flags;
-	Out->metadataDeclarationKind = static_cast<asBYTE>((Flags & asOBJ_VALUE) ? asETypeDeclKind::Struct : asETypeDeclKind::Class);
+	Out->declarationKind = static_cast<asBYTE>((Flags & asOBJ_VALUE) ? asETypeDeclKind::Struct : asETypeDeclKind::Class);
 	Out->size = -1; Out->alignment = 1;
 	Types.Add(Out); TypesByKey.Add(Key, Out); TypesByName.Add(TypeNameKey(IdentityContext.Get(), Key, Namespace, Name), Out);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::CreateEnumType(const asSStableKey& Key,
+asEDefinitionResult asCDefinitions::CreateEnumType(const asSStableKey& Key,
 	const char* Name, const char* Namespace, asCEnumType*& Out)
 {
 	Out = nullptr;
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	auto Result = ValidateNew(Key, Name, Namespace, true);
-	if (Result != asEMetadataResult::Succeeded) return Result;
+	if (Result != asEDefinitionResult::Succeeded) return Result;
 	Out = asNEW(asCEnumType)(*this, Key);
 	Out->name = Name; Out->nameSpace = InternNamespace(Namespace); Out->flags = asOBJ_ENUM;
-	Out->metadataDeclarationKind = static_cast<asBYTE>(asETypeDeclKind::Enum);
+	Out->declarationKind = static_cast<asBYTE>(asETypeDeclKind::Enum);
 	Out->size = 4; Out->alignment = 4;
 	Types.Add(Out); TypesByKey.Add(Key, Out); TypesByName.Add(TypeNameKey(IdentityContext.Get(), Key, Namespace, Name), Out);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::CreateTypedefType(const asSStableKey& Key,
+asEDefinitionResult asCDefinitions::CreateTypedefType(const asSStableKey& Key,
 	const char* Name, const char* Namespace, asCTypedefType*& Out)
 {
 	Out = nullptr;
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	auto Result = ValidateNew(Key, Name, Namespace, true);
-	if (Result != asEMetadataResult::Succeeded) return Result;
+	if (Result != asEDefinitionResult::Succeeded) return Result;
 	Out = asNEW(asCTypedefType)(*this, Key);
 	Out->name = Name; Out->nameSpace = InternNamespace(Namespace); Out->flags = asOBJ_TYPEDEF;
-	Out->metadataDeclarationKind = static_cast<asBYTE>(asETypeDeclKind::Typedef);
+	Out->declarationKind = static_cast<asBYTE>(asETypeDeclKind::Typedef);
 	Out->size = -1; Out->alignment = 1;
 	Types.Add(Out); TypesByKey.Add(Key, Out); TypesByName.Add(TypeNameKey(IdentityContext.Get(), Key, Namespace, Name), Out);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::CreateCallableType(const asSStableKey& Key,
+asEDefinitionResult asCDefinitions::CreateCallableType(const asSStableKey& Key,
 	const char* Name, const char* Namespace, asCScriptFunction& Signature, asCCallableType*& Out)
 {
 	Out = nullptr;
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	auto Result = ValidateNew(Key, Name, Namespace, true);
-	if (Result != asEMetadataResult::Succeeded) return Result;
-	if (!Owns(&Signature)) return asEMetadataResult::ForeignOwner;
+	if (Result != asEDefinitionResult::Succeeded) return Result;
+	if (!Owns(&Signature)) return asEDefinitionResult::ForeignOwner;
 	if (Signature.funcType != asFUNC_CALLABLE_SIGNATURE || (!Signature.metadataCallableSignature && Signature.metadataNominalCallableType))
-		return asEMetadataResult::InvalidSignature;
+		return asEDefinitionResult::InvalidSignature;
 	Out = asNEW(asCCallableType)(*this, Key, &Signature);
 	if (!Signature.metadataCallableSignature) Signature.metadataNominalCallableType = Out;
-	Out->metadataDeclarationKind = static_cast<asBYTE>(asETypeDeclKind::CallableType);
+	Out->declarationKind = static_cast<asBYTE>(asETypeDeclKind::CallableType);
 	Out->name = Name; Out->nameSpace = InternNamespace(Namespace);
 	Out->size = Options.PointerByteSize; Out->alignment = Options.PointerByteSize;
 	Types.Add(Out); TypesByKey.Add(Key, Out); TypesByName.Add(TypeNameKey(IdentityContext.Get(), Key, Namespace, Name), Out);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::CreateFunction(const asSStableKey& Key,
+asEDefinitionResult asCDefinitions::CreateFunction(const asSStableKey& Key,
 	const char* Name, const char* Namespace, asEFuncType Kind, asCScriptFunction*& Out)
 {
 	Out = nullptr;
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	auto Result = ValidateNew(Key, Name, Namespace, false);
-	if (Result != asEMetadataResult::Succeeded) return Result;
+	if (Result != asEDefinitionResult::Succeeded) return Result;
 	// A delegate instance is a runtime allocation with GC/callable state, not a
 	// function declaration. Funcdef signatures describe delegate/event types.
 	if (Kind != asFUNC_SCRIPT && Kind != asFUNC_SYSTEM && Kind != asFUNC_CALLABLE_SIGNATURE && Kind != asFUNC_INTERFACE)
-		return asEMetadataResult::InvalidArgument;
+		return asEDefinitionResult::InvalidArgument;
 	Out = asNEW(asCScriptFunction)(*this, Key, Kind);
 	Out->name = Name; Out->nameSpace = InternNamespace(Namespace);
 	Out->returnType = Primitive(ttVoid);
 	Functions.Add(Out); FunctionsByKey.Add(Key, Out);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::CreateCallableSignature(const asSStableKey& SignatureKey, asCScriptFunction*& Out)
+asEDefinitionResult asCDefinitions::CreateCallableSignature(const asSStableKey& SignatureKey, asCScriptFunction*& Out)
 {
 Out = nullptr;
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!IdentityContext.IsValid()) return asEMetadataResult::InvalidArgument;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!IdentityContext.IsValid()) return asEDefinitionResult::InvalidArgument;
 	asSStableTypeUseDescriptor Descriptor;
 	if (IdentityContext->GetIdentityRegistry().ResolveTypeUse(SignatureKey, Descriptor) != asETypeIdentityStatus::Succeeded ||
 		Descriptor.Kind != asETypeUseKind::Callable || Descriptor.Qualifiers != asETypeUseQualifiers::None)
-		return asEMetadataResult::InvalidSignature;
+		return asEDefinitionResult::InvalidSignature;
 	if (asCScriptFunction* Existing = FunctionsByKey.FindRef(SignatureKey))
 	{
-		if (!Existing->metadataCallableSignature) return asEMetadataResult::DuplicateIdentity;
+		if (!Existing->metadataCallableSignature) return asEDefinitionResult::DuplicateIdentity;
 		Out = Existing;
-		return asEMetadataResult::Succeeded;
+		return asEDefinitionResult::Succeeded;
 	}
 	const auto Result = ValidateNew(SignatureKey, "$signature", "", false);
-	if (Result != asEMetadataResult::Succeeded) return Result;
+	if (Result != asEDefinitionResult::Succeeded) return Result;
 	Out = asNEW(asCScriptFunction)(*this, SignatureKey, asFUNC_CALLABLE_SIGNATURE);
 	Out->metadataCallableSignature = true;
 	Out->name = "$signature";
@@ -630,15 +693,15 @@ Out = nullptr;
 	Functions.Add(Out);
 	FunctionsByKey.Add(SignatureKey, Out);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::DefineFunction(asCScriptFunction& Function,
-	const asCDataType& ReturnType, TConstArrayView<asSMetadataParameter> Parameters, asCObjectType* Owner)
+asEDefinitionResult asCDefinitions::DefineFunction(asCScriptFunction& Function,
+	const asCDataType& ReturnType, TConstArrayView<asSDefinitionParameter> Parameters, asCObjectType* Owner)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Function) || (Owner && !Owns(Owner))) return asEMetadataResult::ForeignOwner;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Function) || (Owner && !Owns(Owner))) return asEDefinitionResult::ForeignOwner;
 	if (Function.funcType == asFUNC_INTERFACE && (!Owner || !Owner->IsInterface()))
 	{
 		if (!Function.metadataSignatureDefined)
@@ -647,27 +710,27 @@ asEMetadataResult asCModuleDefinitionSet::DefineFunction(asCScriptFunction& Func
 			FunctionsByKey.Remove(Function.GetStableKey());
 			asDELETE(&Function, asCScriptFunction);
 		}
-		return asEMetadataResult::InvalidArgument;
+		return asEDefinitionResult::InvalidArgument;
 	}
-	if (Function.metadataSignatureDefined) return asEMetadataResult::InvalidState;
+	if (Function.metadataSignatureDefined) return asEDefinitionResult::InvalidState;
 	auto Result = ValidateDataType(ReturnType, true);
-	if (Result != asEMetadataResult::Succeeded) return Result;
+	if (Result != asEDefinitionResult::Succeeded) return Result;
 	bool HasDefault = false;
 	for (const auto& Parameter : Parameters)
 	{
 		Result = ValidateDataType(Parameter.Type, false, true);
-		if (Result != asEMetadataResult::Succeeded) return Result;
+		if (Result != asEDefinitionResult::Succeeded) return Result;
 		if (Parameter.Flags > asTM_INOUTREF || (Parameter.Flags != asTM_NONE && !Parameter.Type.IsReference()))
-			return asEMetadataResult::InvalidSignature;
-		if (HasDefault && !Parameter.DefaultArgument.GetLength()) return asEMetadataResult::InvalidSignature;
+			return asEDefinitionResult::InvalidSignature;
+		if (HasDefault && !Parameter.DefaultArgument.GetLength()) return asEDefinitionResult::InvalidSignature;
 		HasDefault |= Parameter.DefaultArgument.GetLength() != 0;
 	}
 	// Validation above is transactional: a rejected parameter must not attach a
 	// partial method to its owner or change the previous uncompleted signature.
 	Function.returnType = NormalizeOptions(ReturnType);
 	Function.objectType = Owner;
-	Function.metadataDeclarationOwner = Owner;
-	Function.metadataDeclarationKind = static_cast<asBYTE>(Owner ? asEFunctionIdentityKind::Method : asEFunctionIdentityKind::Global);
+	Function.declarationOwner = Owner;
+	Function.declarationKind = static_cast<asBYTE>(Owner ? asEFunctionIdentityKind::Method : asEFunctionIdentityKind::Global);
 	for (const auto& Parameter : Parameters)
 	{
 		Function.parameterTypes.PushLast(NormalizeOptions(Parameter.Type));
@@ -682,36 +745,36 @@ asEMetadataResult asCModuleDefinitionSet::DefineFunction(asCScriptFunction& Func
 	}
 	Function.metadataSignatureDefined = true;
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetNativeGlobalFacts(asCGlobalProperty& Global, const asSNativeGlobalFacts& Facts)
+asEDefinitionResult asCDefinitions::SetNativeGlobalFacts(asCGlobalProperty& Global, const asSNativeGlobalFacts& Facts)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (GlobalsByKey.FindRef(Global.GetStableKey()) != &Global || Global.metadataOwner != this)
-		return asEMetadataResult::ForeignOwner;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (GlobalsByKey.FindRef(Global.GetStableKey()) != &Global || Global.definitions != this)
+		return asEDefinitionResult::ForeignOwner;
 	if (!Global.metadataNativeDeclaration || (Facts.PureConstant && (!Global.type.IsReadOnly() ||
-		(!Global.type.IsPrimitive() && !Global.type.IsEnumType())))) return asEMetadataResult::InvalidArgument;
+		(!Global.type.IsPrimitive() && !Global.type.IsEnumType())))) return asEDefinitionResult::InvalidArgument;
 	Global.isPureConstant = Facts.PureConstant;
 	Global.storage = Facts.PureConstant ? Facts.ConstantValue : 0;
 #if WITH_EDITOR
 	Global.isEditorOnly = Facts.EditorOnly;
 #endif
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetNativeFunctionFacts(asCScriptFunction& Function, const asSNativeFunctionFacts& Facts)
+asEDefinitionResult asCDefinitions::SetNativeFunctionFacts(asCScriptFunction& Function, const asSNativeFunctionFacts& Facts)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Function)) return asEMetadataResult::ForeignOwner;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Function)) return asEDefinitionResult::ForeignOwner;
 	if (!Function.metadataSignatureDefined || Facts.DeterminesOutputTypeArgument < -1 ||
 		Facts.DeterminesOutputTypeArgument > 127 || Facts.DeterminesOutputTypeArgument >= int(Function.parameterTypes.GetLength()) ||
 		Facts.CompileOut < asECompileOutType::CompileCalls || Facts.CompileOut > asECompileOutType::CompileOutAsMethodChain)
-		return asEMetadataResult::InvalidArgument;
-	if ((Facts.Traits & asTRAIT_PRIVATE) && (Facts.Traits & asTRAIT_PROTECTED)) return asEMetadataResult::InvalidArgument;
+		return asEDefinitionResult::InvalidArgument;
+	if ((Facts.Traits & asTRAIT_PRIVATE) && (Facts.Traits & asTRAIT_PROTECTED)) return asEDefinitionResult::InvalidArgument;
 	Function.traits.traits = Facts.Traits;
 	Function.compileOutType = Facts.CompileOut;
 	Function.determinesOutputTypeArgumentIndex = int8(Facts.DeterminesOutputTypeArgument);
@@ -719,15 +782,15 @@ asEMetadataResult asCModuleDefinitionSet::SetNativeFunctionFacts(asCScriptFuncti
 	Function.deprecationMessage = Facts.DeprecationMessage;
 #endif
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetNativePropertyFacts(asCObjectType& Owner, asCObjectProperty& Property, const asSNativePropertyFacts& Facts)
+asEDefinitionResult asCDefinitions::SetNativePropertyFacts(asCObjectType& Owner, asCObjectProperty& Property, const asSNativePropertyFacts& Facts)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Owner) || !Owner.localProperties.Exists(&Property)) return asEMetadataResult::ForeignOwner;
-	if (!Property.isNativeAddress) return asEMetadataResult::InvalidArgument;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Owner) || !Owner.localProperties.Exists(&Property)) return asEDefinitionResult::ForeignOwner;
+	if (!Property.isNativeAddress) return asEDefinitionResult::InvalidArgument;
 	Property.exposedType = asCObjectProperty::GenerateExposedType(Facts.Editable, Facts.Readable, Facts.Writeable);
 	Property.isProtected = Facts.Protected; Property.isPrivate = false; Property.isAppBindProperty = true;
 #if WITH_EDITOR
@@ -735,60 +798,60 @@ asEMetadataResult asCModuleDefinitionSet::SetNativePropertyFacts(asCObjectType& 
 	Property.DeprecationMessage = Facts.DeprecationMessage;
 #endif
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetTypeDeclarationFacts(asCTypeInfo& Type, asETypeDeclKind Kind,
+asEDefinitionResult asCDefinitions::SetTypeDeclarationFacts(asCTypeInfo& Type, asETypeDeclKind Kind,
 	asUINT GenericArity, asCTypeInfo* Owner)
 {
 std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type) || (Owner && !CanReference(Owner))) return asEMetadataResult::ForeignOwner;
-	if (GenericArity > 1024 || Owner == &Type) return asEMetadataResult::InvalidArgument;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type) || (Owner && !CanReference(Owner))) return asEDefinitionResult::ForeignOwner;
+	if (GenericArity > 1024 || Owner == &Type) return asEDefinitionResult::InvalidArgument;
 	bool ValidKind = false;
 	if (CastToEnumType(&Type)) ValidKind = Kind == asETypeDeclKind::Enum;
 	else if (CastToTypedefType(&Type)) ValidKind = Kind == asETypeDeclKind::Typedef;
 	else if (CastToCallableType(&Type)) ValidKind = Kind == asETypeDeclKind::CallableType || Kind == asETypeDeclKind::Delegate || Kind == asETypeDeclKind::Event;
 	else if (auto* Object = CastToObjectType(&Type))
 		ValidKind = Kind == (Object->IsInterface() ? asETypeDeclKind::Interface : (Object->flags & asOBJ_VALUE) ? asETypeDeclKind::Struct : asETypeDeclKind::Class);
-	if (!ValidKind) return asEMetadataResult::InvalidArgument;
-	Type.metadataDeclarationKind = static_cast<asBYTE>(Kind);
-	Type.metadataGenericArity = GenericArity;
-	Type.metadataDeclarationOwner = Owner;
+	if (!ValidKind) return asEDefinitionResult::InvalidArgument;
+	Type.declarationKind = static_cast<asBYTE>(Kind);
+	Type.genericArity = GenericArity;
+	Type.declarationOwner = Owner;
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetFunctionDeclarationFacts(asCScriptFunction& Function, asEFunctionIdentityKind Kind,
+asEDefinitionResult asCDefinitions::SetFunctionDeclarationFacts(asCScriptFunction& Function, asEFunctionIdentityKind Kind,
 	asCTypeInfo* Owner, asUINT GenericArity, bool IsStatic)
 {
 std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Function) || (Owner && !CanReference(Owner))) return asEMetadataResult::ForeignOwner;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Function) || (Owner && !CanReference(Owner))) return asEDefinitionResult::ForeignOwner;
 	if (!Function.metadataSignatureDefined || GenericArity > 1024 || Kind <= asEFunctionIdentityKind::Invalid || Kind > asEFunctionIdentityKind::Conversion || Kind == asEFunctionIdentityKind::ReservedAnonymousFunction)
-		return asEMetadataResult::InvalidArgument;
-	if ((Kind == asEFunctionIdentityKind::Global) != (Owner == nullptr)) return asEMetadataResult::InvalidArgument;
+		return asEDefinitionResult::InvalidArgument;
+	if ((Kind == asEFunctionIdentityKind::Global) != (Owner == nullptr)) return asEDefinitionResult::InvalidArgument;
 	if (Kind == asEFunctionIdentityKind::ClassDefault &&
 		(Function.returnType.GetTokenType() != ttVoid || Function.returnType.GetTypeInfo() || Function.returnType.IsReference() ||
-		 Function.parameterTypes.GetLength() != 0 || GenericArity || IsStatic)) return asEMetadataResult::InvalidSignature;
+		 Function.parameterTypes.GetLength() != 0 || GenericArity || IsStatic)) return asEDefinitionResult::InvalidSignature;
 	if (Kind == asEFunctionIdentityKind::Conversion &&
 		(Function.parameterTypes.GetLength() != 0 || Function.returnType.GetTokenType() == ttVoid
 			|| Function.returnType.IsReference() || GenericArity || IsStatic))
-		return asEMetadataResult::InvalidSignature;
+		return asEDefinitionResult::InvalidSignature;
 	if (Kind == asEFunctionIdentityKind::Factory)
 	{
-		if (Function.objectType || Function.returnType.GetTypeInfo() != Owner || !Function.returnType.IsObjectHandle()) return asEMetadataResult::InvalidSignature;
+		if (Function.objectType || Function.returnType.GetTypeInfo() != Owner || !Function.returnType.IsObjectHandle()) return asEDefinitionResult::InvalidSignature;
 	}
-	else if (Owner != Function.objectType) return asEMetadataResult::InvalidSignature;
+	else if (Owner != Function.objectType) return asEDefinitionResult::InvalidSignature;
 	if ((Kind == asEFunctionIdentityKind::Constructor || Kind == asEFunctionIdentityKind::Destructor) &&
 		(Function.returnType.GetTokenType() != ttVoid || Function.returnType.IsReference() || Function.returnType.GetTypeInfo() ||
 		 (Kind == asEFunctionIdentityKind::Destructor && Function.parameterTypes.GetLength() != 0)))
-		return asEMetadataResult::InvalidSignature;
+		return asEDefinitionResult::InvalidSignature;
 	// Special declarations are represented by the behavior table, never disguised as ordinary methods.
 	// Conversion methods remain in the method table; only their identity kind is Conversion.
 	const bool bMethodLike = Kind == asEFunctionIdentityKind::Method || Kind == asEFunctionIdentityKind::Conversion;
-	const bool bWasMethodLike = Function.metadataDeclarationKind == static_cast<asBYTE>(asEFunctionIdentityKind::Method)
-		|| Function.metadataDeclarationKind == static_cast<asBYTE>(asEFunctionIdentityKind::Conversion);
+	const bool bWasMethodLike = Function.declarationKind == static_cast<asBYTE>(asEFunctionIdentityKind::Method)
+		|| Function.declarationKind == static_cast<asBYTE>(asEFunctionIdentityKind::Conversion);
 	if (Function.objectType && !bMethodLike)
 	{
 		Function.objectType->metadataMethods.RemoveValue(&Function);
@@ -799,48 +862,48 @@ std::lock_guard<std::mutex> Lock(MutationMutex);
 		Function.objectType->metadataMethods.PushLast(&Function);
 		Function.objectType->methodTable.Add(&Function);
 	}
-	Function.metadataDeclarationKind = static_cast<asBYTE>(Kind);
+	Function.declarationKind = static_cast<asBYTE>(Kind);
 	Function.traits.SetTrait(asTRAIT_CONSTRUCTOR, Kind == asEFunctionIdentityKind::Constructor);
 	Function.traits.SetTrait(asTRAIT_DESTRUCTOR, Kind == asEFunctionIdentityKind::Destructor);
-	Function.metadataGenericArity = GenericArity;
-	Function.metadataDeclarationOwner = Owner;
+	Function.genericArity = GenericArity;
+	Function.declarationOwner = Owner;
 	Function.metadataStaticDeclaration = IsStatic;
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetFunctionLocal(asCScriptFunction& Function, bool IsLocal)
+asEDefinitionResult asCDefinitions::SetFunctionLocal(asCScriptFunction& Function, bool IsLocal)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Function)) return asEMetadataResult::ForeignOwner;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Function)) return asEDefinitionResult::ForeignOwner;
 	Function.traits.SetTrait(asTRAIT_LOCAL, IsLocal);
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
 
-asEMetadataResult asCModuleDefinitionSet::AddProperty(asCObjectType& Owner, const char* Name,
+asEDefinitionResult asCDefinitions::AddProperty(asCObjectType& Owner, const char* Name,
 	const asCDataType& Type, asCObjectProperty*& Out, bool IsPrivate, bool IsProtected)
 {
 	Out = nullptr;
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Owner)) return asEMetadataResult::ForeignOwner;
-	if (!Name || !*Name || Owner.IsInterface()) return asEMetadataResult::InvalidArgument;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Owner)) return asEDefinitionResult::ForeignOwner;
+	if (!Name || !*Name || Owner.IsInterface()) return asEDefinitionResult::InvalidArgument;
 	auto Result = ValidateDataType(Type, false);
-	if (Result != asEMetadataResult::Succeeded) return Result;
+	if (Result != asEDefinitionResult::Succeeded) return Result;
 	for (asUINT Index = 0; Index < Owner.localProperties.GetLength(); ++Index)
-		if (Owner.localProperties[Index]->name == Name) return asEMetadataResult::DuplicateName;
+		if (Owner.localProperties[Index]->name == Name) return asEDefinitionResult::DuplicateName;
 	Out = asNEW(asCObjectProperty);
 	Out->name = Name; Out->type = NormalizeOptions(Type); Out->isPrivate = IsPrivate; Out->isProtected = IsProtected;
 	Owner.localProperties.PushLast(Out); Owner.properties.PushLast(Out); Owner.propertyTable.Add(Out);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
 namespace
 {
-	bool NativeMemberLayout(const asCModuleDefinitionSet& Set, const asCDataType& Type, asUINT& Size, asUINT& Alignment)
+	bool NativeMemberLayout(const asCDefinitions& Set, const asCDataType& Type, asUINT& Size, asUINT& Alignment)
 	{
 		if (Type.IsObjectHandle() || Type.IsReference())
 		{
@@ -871,37 +934,37 @@ namespace
 	}
 }
 
-asEMetadataResult asCModuleDefinitionSet::DefineNativeProperty(asCObjectType& Owner, const char* Name,
+asEDefinitionResult asCDefinitions::DefineNativeProperty(asCObjectType& Owner, const char* Name,
 	const asCDataType& Type, const asSNativePropertyAddress& Address, asCObjectProperty*& Out)
 {
 	Out = nullptr;
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Owner)) return asEMetadataResult::ForeignOwner;
-	if (!Name || !*Name || Owner.IsInterface() || (Owner.flags & asOBJ_SCRIPT_OBJECT)) return asEMetadataResult::InvalidArgument;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Owner)) return asEDefinitionResult::ForeignOwner;
+	if (!Name || !*Name || Owner.IsInterface() || (Owner.flags & asOBJ_SCRIPT_OBJECT)) return asEDefinitionResult::InvalidArgument;
 	const auto* Native = NativeLayouts.Find(&Owner);
-	if (!Native) return asEMetadataResult::IncompleteDefinition;
+	if (!Native) return asEDefinitionResult::IncompleteDefinition;
 	auto Result = ValidateDataType(Type, false);
-	if (Result != asEMetadataResult::Succeeded) return Result;
+	if (Result != asEDefinitionResult::Succeeded) return Result;
 	for (asUINT Index = 0; Index < Owner.localProperties.GetLength(); ++Index)
-		if (Owner.localProperties[Index]->name == Name) return asEMetadataResult::DuplicateName;
+		if (Owner.localProperties[Index]->name == Name) return asEDefinitionResult::DuplicateName;
 	asUINT MemberSize = 0;
 	asUINT MemberAlign = 0;
-	if (!NativeMemberLayout(*this, NormalizeOptions(Type), MemberSize, MemberAlign) || MemberSize == 0) return asEMetadataResult::InvalidLayout;
+	if (!NativeMemberLayout(*this, NormalizeOptions(Type), MemberSize, MemberAlign) || MemberSize == 0) return asEDefinitionResult::InvalidLayout;
 	int ResolvedOffset = Address.Offset;
 	int ResolvedComposite = 0;
 	bool bIndirect = false;
 	if (Address.Mode == asENativeAddressMode::Direct)
 	{
-		if (Address.Offset < 0 || Address.MemberOffset != 0 || Address.CompositeStorageType) return asEMetadataResult::InvalidLayout;
-		if ((static_cast<uint64>(Address.Offset) + MemberSize) > Native->Key) return asEMetadataResult::InvalidLayout;
-		if ((MemberAlign > 1) && (Address.Offset % static_cast<int>(MemberAlign)) != 0) return asEMetadataResult::InvalidLayout;
+		if (Address.Offset < 0 || Address.MemberOffset != 0 || Address.CompositeStorageType) return asEDefinitionResult::InvalidLayout;
+		if ((static_cast<uint64>(Address.Offset) + MemberSize) > Native->Key) return asEDefinitionResult::InvalidLayout;
+		if ((MemberAlign > 1) && (Address.Offset % static_cast<int>(MemberAlign)) != 0) return asEDefinitionResult::InvalidLayout;
 		ResolvedOffset = Address.Offset;
 	}
 	else if (Address.Mode == asENativeAddressMode::CompositeInline)
 	{
-		if (Address.Offset < 0 || Address.MemberOffset < 0 || !Address.CompositeStorageType) return asEMetadataResult::InvalidLayout;
-		if (!CanReference(Address.CompositeStorageType)) return asEMetadataResult::InvalidLayout;
+		if (Address.Offset < 0 || Address.MemberOffset < 0 || !Address.CompositeStorageType) return asEDefinitionResult::InvalidLayout;
+		if (!CanReference(Address.CompositeStorageType)) return asEDefinitionResult::InvalidLayout;
 		asUINT CompositeSize = 0;
 		if (const auto* CompositeNative = NativeLayouts.Find(CastToObjectType(Address.CompositeStorageType)))
 		{
@@ -913,17 +976,17 @@ asEMetadataResult asCModuleDefinitionSet::DefineNativeProperty(asCObjectType& Ow
 		}
 		else
 		{
-			return asEMetadataResult::IncompleteDefinition;
+			return asEDefinitionResult::IncompleteDefinition;
 		}
-		if ((static_cast<uint64>(Address.Offset) + CompositeSize) > Native->Key) return asEMetadataResult::InvalidLayout;
-		if ((static_cast<uint64>(Address.MemberOffset) + MemberSize) > CompositeSize) return asEMetadataResult::InvalidLayout;
+		if ((static_cast<uint64>(Address.Offset) + CompositeSize) > Native->Key) return asEDefinitionResult::InvalidLayout;
+		if ((static_cast<uint64>(Address.MemberOffset) + MemberSize) > CompositeSize) return asEDefinitionResult::InvalidLayout;
 		ResolvedOffset = Address.MemberOffset;
 		ResolvedComposite = Address.Offset;
 	}
 	else if (Address.Mode == asENativeAddressMode::CompositeIndirect)
 	{
-		if (Address.Offset < 0 || Address.MemberOffset < 0 || !Address.CompositeStorageType) return asEMetadataResult::InvalidLayout;
-		if ((static_cast<uint64>(Address.Offset) + Options.PointerByteSize) > Native->Key) return asEMetadataResult::InvalidLayout;
+		if (Address.Offset < 0 || Address.MemberOffset < 0 || !Address.CompositeStorageType) return asEDefinitionResult::InvalidLayout;
+		if ((static_cast<uint64>(Address.Offset) + Options.PointerByteSize) > Native->Key) return asEDefinitionResult::InvalidLayout;
 		asUINT PointeeSize = 0;
 		if (const auto* CompositeNative = NativeLayouts.Find(CastToObjectType(Address.CompositeStorageType)))
 		{
@@ -935,16 +998,16 @@ asEMetadataResult asCModuleDefinitionSet::DefineNativeProperty(asCObjectType& Ow
 		}
 		else
 		{
-			return asEMetadataResult::IncompleteDefinition;
+			return asEDefinitionResult::IncompleteDefinition;
 		}
-		if ((static_cast<uint64>(Address.MemberOffset) + MemberSize) > PointeeSize) return asEMetadataResult::InvalidLayout;
+		if ((static_cast<uint64>(Address.MemberOffset) + MemberSize) > PointeeSize) return asEDefinitionResult::InvalidLayout;
 		ResolvedOffset = Address.MemberOffset;
 		ResolvedComposite = Address.Offset;
 		bIndirect = true;
 	}
 	else
 	{
-		return asEMetadataResult::InvalidArgument;
+		return asEDefinitionResult::InvalidArgument;
 	}
 	for (asUINT Index = 0; Index < Owner.localProperties.GetLength(); ++Index)
 	{
@@ -952,10 +1015,10 @@ asEMetadataResult asCModuleDefinitionSet::DefineNativeProperty(asCObjectType& Ow
 		if (!Existing->isNativeAddress || Existing->nativeAddressMode != asENativeAddressMode::Direct || Address.Mode != asENativeAddressMode::Direct) continue;
 		asUINT ExistingSize = 0;
 		asUINT ExistingAlign = 0;
-		if (!NativeMemberLayout(*this, Existing->type, ExistingSize, ExistingAlign)) return asEMetadataResult::InvalidLayout;
+		if (!NativeMemberLayout(*this, Existing->type, ExistingSize, ExistingAlign)) return asEDefinitionResult::InvalidLayout;
 		const int ExistingEnd = Existing->byteOffset + static_cast<int>(ExistingSize);
 		const int NewEnd = ResolvedOffset + static_cast<int>(MemberSize);
-		if (ResolvedOffset < ExistingEnd && Existing->byteOffset < NewEnd) return asEMetadataResult::InvalidLayout;
+		if (ResolvedOffset < ExistingEnd && Existing->byteOffset < NewEnd) return asEDefinitionResult::InvalidLayout;
 	}
 	Out = asNEW(asCObjectProperty);
 	Out->name = Name;
@@ -967,205 +1030,317 @@ asEMetadataResult asCModuleDefinitionSet::DefineNativeProperty(asCObjectType& Ow
 	Out->nativeAddressMode = Address.Mode;
 	Owner.localProperties.PushLast(Out); Owner.properties.PushLast(Out); Owner.propertyTable.Add(Out);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetBaseType(asCObjectType& Type, asCObjectType& Base)
+asEDefinitionResult asCDefinitions::SetBaseType(asCObjectType& Type, asCObjectType& Base)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type) || !CanReference(&Base)) return asEMetadataResult::ForeignOwner;
-	if (&Type == &Base || Type.derivedFrom || Base.IsInterface()) return asEMetadataResult::InvalidArgument;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type) || !CanReference(&Base)) return asEDefinitionResult::ForeignOwner;
+	if (&Type == &Base || Type.derivedFrom || Base.IsInterface()) return asEDefinitionResult::InvalidArgument;
 	TSet<asCObjectType*> Visited;
 	for (asCObjectType* Ancestor = &Base; Ancestor; Ancestor = Ancestor->derivedFrom)
 	{
-		if (Ancestor == &Type || Visited.Contains(Ancestor)) return asEMetadataResult::RecursiveValueType;
+		if (Ancestor == &Type || Visited.Contains(Ancestor)) return asEDefinitionResult::RecursiveValueType;
 		Visited.Add(Ancestor);
 	}
 	Type.derivedFrom = &Base;
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetInterfaceDeclaration(asCObjectType& Type)
+asEDefinitionResult asCDefinitions::SetInterfaceDeclaration(asCObjectType& Type)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type)) return asEMetadataResult::ForeignOwner;
-	if (Type.localProperties.GetLength() || Type.derivedFrom) return asEMetadataResult::InvalidArgument;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type)) return asEDefinitionResult::ForeignOwner;
+	if (Type.localProperties.GetLength() || Type.derivedFrom) return asEDefinitionResult::InvalidArgument;
 	Type.isInterfaceDeclaration = true;
-	Type.metadataDeclarationKind = static_cast<asBYTE>(asETypeDeclKind::Interface);
+	Type.declarationKind = static_cast<asBYTE>(asETypeDeclKind::Interface);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::AddInterface(asCObjectType& Type, asCObjectType& Interface)
+asEDefinitionResult asCDefinitions::AddInterface(asCObjectType& Type, asCObjectType& Interface)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type) || !CanReference(&Interface)) return asEMetadataResult::ForeignOwner;
-	if (!Interface.IsInterface() || &Type == &Interface) return asEMetadataResult::InvalidArgument;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type) || !CanReference(&Interface)) return asEDefinitionResult::ForeignOwner;
+	if (!Interface.IsInterface() || &Type == &Interface) return asEDefinitionResult::InvalidArgument;
 	for (asUINT Index = 0; Index < Type.interfaces.GetLength(); ++Index)
-		if (Type.interfaces[Index] == &Interface) return asEMetadataResult::Succeeded;
+		if (Type.interfaces[Index] == &Interface) return asEDefinitionResult::Succeeded;
 	Type.interfaces.PushLast(&Interface);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::AddBehaviour(asCObjectType& Type, asEBehaviours Behaviour, asCScriptFunction& Function)
+asEDefinitionResult asCDefinitions::AddBehaviour(asCObjectType& Type, asEBehaviours Behaviour, asCScriptFunction& Function)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type) || !CanReference(&Function)) return asEMetadataResult::ForeignOwner;
-	if (!Function.metadataSignatureDefined) return asEMetadataResult::InvalidSignature;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type) || !CanReference(&Function)) return asEDefinitionResult::ForeignOwner;
+	if (!Function.metadataSignatureDefined) return asEDefinitionResult::InvalidSignature;
 	for (asUINT Index = 0; Index < Type.metadataBehaviours.GetLength(); ++Index)
 		if (Type.metadataBehaviours[Index].kind == Behaviour && Type.metadataBehaviours[Index].function == &Function)
-			return asEMetadataResult::Succeeded;
+			return asEDefinitionResult::Succeeded;
 	Type.metadataBehaviours.PushLast({Behaviour, &Function});
 	if (Behaviour == asBEHAVE_FACTORY) Type.metadataFactories.PushLast(&Function);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::AddTemplateArgument(asCObjectType& Type, const asCDataType& Argument)
+asEDefinitionResult asCDefinitions::AddTemplateArgument(asCObjectType& Type, const asCDataType& Argument)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type)) return asEMetadataResult::ForeignOwner;
-	if (Type.GetMetadataTemplateDefinition()) return asEMetadataResult::InvalidState;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type)) return asEDefinitionResult::ForeignOwner;
+	if (Type.GetTemplateDefinition()) return asEDefinitionResult::InvalidState;
 	auto Result = ValidateDataType(Argument, false);
-	if (Result != asEMetadataResult::Succeeded) return Result;
+	if (Result != asEDefinitionResult::Succeeded) return Result;
 	Type.templateSubTypes.PushLast(NormalizeOptions(Argument));
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetDefaultArrayType(asCObjectType& Type)
+asEDefinitionResult asCDefinitions::SetDefaultArrayType(asCObjectType& Type)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type)) return asEMetadataResult::ForeignOwner;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type)) return asEDefinitionResult::ForeignOwner;
 	DefaultArrayType = &Type;
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::AddEnumValue(asCEnumType& Type, const char* Name, int Value)
+asEDefinitionResult asCDefinitions::AddEnumValue(asCEnumType& Type, const char* Name, int Value)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type)) return asEMetadataResult::ForeignOwner;
-	if (!Name || !*Name) return asEMetadataResult::InvalidArgument;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type)) return asEDefinitionResult::ForeignOwner;
+	if (!Name || !*Name) return asEDefinitionResult::InvalidArgument;
 	for (asUINT Index = 0; Index < Type.enumValues.GetLength(); ++Index)
-		if (Type.enumValues[Index]->name == Name) return asEMetadataResult::DuplicateName;
+		if (Type.enumValues[Index]->name == Name) return asEDefinitionResult::DuplicateName;
 	asSEnumValue* Entry = asNEW(asSEnumValue);
 	Entry->name = Name; Entry->value = Value; Type.enumValues.PushLast(Entry);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetAlias(asCTypedefType& Type, const asCDataType& Alias)
+asEDefinitionResult asCDefinitions::SetAlias(asCTypedefType& Type, const asCDataType& Alias)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type)) return asEMetadataResult::ForeignOwner;
-	if (Type.aliasForType.IsValid()) return asEMetadataResult::InvalidState;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type)) return asEDefinitionResult::ForeignOwner;
+	if (Type.aliasForType.IsValid()) return asEDefinitionResult::InvalidState;
 	auto Result = ValidateDataType(Alias, false);
-	if (Result != asEMetadataResult::Succeeded) return Result;
+	if (Result != asEDefinitionResult::Succeeded) return Result;
 	Type.aliasForType = NormalizeOptions(Alias);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::AddChildCallableType(asCObjectType& Type, asCCallableType& CallableType)
+asEDefinitionResult asCDefinitions::AddChildCallableType(asCObjectType& Type, asCCallableType& CallableType)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type) || !Owns(&CallableType)) return asEMetadataResult::ForeignOwner;
-	if (CallableType.parentClass) return asEMetadataResult::InvalidState;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type) || !Owns(&CallableType)) return asEDefinitionResult::ForeignOwner;
+	if (CallableType.parentClass) return asEDefinitionResult::InvalidState;
 	CallableType.parentClass = &Type;
-	CallableType.metadataDeclarationOwner = &Type;
+	CallableType.declarationOwner = &Type;
 	Type.childCallableTypes.PushLast(&CallableType);
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetNativeLayout(asCObjectType& Type, asUINT Size, asUINT Alignment)
+asEDefinitionResult asCDefinitions::SetNativeLayout(asCObjectType& Type, asUINT Size, asUINT Alignment)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type)) return asEMetadataResult::ForeignOwner;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type)) return asEDefinitionResult::ForeignOwner;
 	if (!ValidAlignment(Alignment) || Size > MAX_int32 || Size % Alignment || Type.IsInterface())
-		return asEMetadataResult::InvalidLayout;
+		return asEDefinitionResult::InvalidLayout;
 	NativeLayouts.Add(&Type, {Size, Alignment});
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::SetFixedTemplateLayout(asCObjectType& Type, asUINT Size, asUINT Alignment)
+asEDefinitionResult asCDefinitions::SetFixedTemplateLayout(asCObjectType& Type, asUINT Size, asUINT Alignment)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!Owns(&Type)) return asEMetadataResult::ForeignOwner;
-	if (!(Type.flags & asOBJ_TEMPLATE) || !Type.metadataGenericArity || !ValidAlignment(Alignment) ||
-		Size > MAX_int32 || Size % Alignment || Type.IsInterface()) return asEMetadataResult::InvalidLayout;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!Owns(&Type)) return asEDefinitionResult::ForeignOwner;
+	if (!(Type.flags & asOBJ_TEMPLATE) || !Type.genericArity || !ValidAlignment(Alignment) ||
+		Size > MAX_int32 || Size % Alignment || Type.IsInterface()) return asEDefinitionResult::InvalidLayout;
 	NativeLayouts.Add(&Type, {Size, Alignment});
 	Type.metadataFixedTemplateLayout = true;
 	InvalidateLayouts();
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::CreateTemplateInstance(asCObjectType& Template, const asSStableKey& TypeUseKey,
+asEDefinitionResult asCDefinitions::CreateTemplateInstance(asCObjectType& Template, const asSStableKey& TypeUseKey,
 	TConstArrayView<asCDataType> Arguments, asCObjectType*& Out)
 {
 std::lock_guard<std::mutex> Lock(MutationMutex);
 	Out = nullptr;
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!CanReference(&Template) || Owns(&Template) || !Template.GetDefinitionSet()->IsFrozen()) return asEMetadataResult::ForeignOwner;
-	if (!Template.HasFixedTemplateLayout() || Template.size < 0 || !ValidAlignment(Template.alignment)) return asEMetadataResult::IncompleteDefinition;
-	if (!IdentityContext || !(Template.flags & asOBJ_TEMPLATE) || Template.GetMetadataTemplateDefinition() || Arguments.Num() != int(Template.metadataGenericArity)) return asEMetadataResult::InvalidSignature;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!CanReference(&Template) || Owns(&Template) || !Template.GetDefinitions()->IsFrozen()) return asEDefinitionResult::ForeignOwner;
+	if (!Template.HasFixedTemplateLayout() || Template.size < 0 || !ValidAlignment(Template.alignment)) return asEDefinitionResult::IncompleteDefinition;
+	if (!IdentityContext || !(Template.flags & asOBJ_TEMPLATE) || Template.GetTemplateDefinition() || Arguments.Num() != int(Template.genericArity)) return asEDefinitionResult::InvalidSignature;
 	const auto& Registry = IdentityContext->GetIdentityRegistry();
 	asSStableTypeUseDescriptor Use;
 	if (Registry.ResolveTypeUse(TypeUseKey, Use) != asETypeIdentityStatus::Succeeded || Use.Kind != asETypeUseKind::Nominal ||
-		Use.Declaration != Template.GetStableKey() || Use.Qualifiers != asETypeUseQualifiers::None || Use.Arguments.Num() != Arguments.Num()) return asEMetadataResult::InvalidSignature;
+		Use.Declaration != Template.GetStableKey() || Use.Qualifiers != asETypeUseQualifiers::None || Use.Arguments.Num() != Arguments.Num()) return asEDefinitionResult::InvalidSignature;
 	for (int Index = 0; Index < Arguments.Num(); ++Index)
-		if (ValidateDataType(Arguments[Index], false) != asEMetadataResult::Succeeded || !ValidateTypeUse(Use.Arguments[Index], Arguments[Index])) return asEMetadataResult::InvalidSignature;
+		if (ValidateDataType(Arguments[Index], false) != asEDefinitionResult::Succeeded || !ValidateTypeUse(Use.Arguments[Index], Arguments[Index])) return asEDefinitionResult::InvalidSignature;
 	if (auto* Existing = TypesByKey.FindRef(TypeUseKey))
 	{
 		Out = CastToObjectType(Existing);
-		return Out && Out->GetMetadataTemplateDefinition() == &Template ? asEMetadataResult::Succeeded : asEMetadataResult::DuplicateIdentity;
+		return Out && Out->GetTemplateDefinition() == &Template ? asEDefinitionResult::Succeeded : asEDefinitionResult::DuplicateIdentity;
 	}
-	if (FunctionsByKey.Contains(TypeUseKey) || GlobalsByKey.Contains(TypeUseKey)) return asEMetadataResult::DuplicateIdentity;
+	if (FunctionsByKey.Contains(TypeUseKey) || GlobalsByKey.Contains(TypeUseKey)) return asEDefinitionResult::DuplicateIdentity;
 	asCObjectType* Instance = asNEW(asCObjectType)(*this, TypeUseKey);
 	Instance->name = Template.name; Instance->nameSpace = InternNamespace(Template.nameSpace->name.AddressOf());
-	Instance->flags = Template.flags; Instance->metadataDeclarationKind = Template.metadataDeclarationKind;
-	Instance->metadataDeclarationOwner = Template.metadataDeclarationOwner;
-	Instance->metadataTemplateDefinition = &Template;
+	Instance->flags = Template.flags; Instance->declarationKind = Template.declarationKind;
+	Instance->declarationOwner = Template.declarationOwner;
+	Instance->templateDefinition = &Template;
 	for (const auto& Argument : Arguments) Instance->templateSubTypes.PushLast(NormalizeOptions(Argument));
 	Instance->size = -1; Instance->alignment = 1;
 	NativeLayouts.Add(Instance, {asUINT(Template.size), asUINT(Template.alignment)});
 	Types.Add(Instance); TypesByKey.Add(TypeUseKey, Instance);
 	InvalidateLayouts();
 	Out = Instance;
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::FinalizeLayouts()
+namespace
+{
+	bool SameTemplateArgument(const asCDataType& Left, const asCDataType& Right)
+	{
+		return Left.GetTokenType() == Right.GetTokenType()
+			&& Left.GetTypeInfo() == Right.GetTypeInfo()
+			&& Left.IsObjectHandle() == Right.IsObjectHandle()
+			&& Left.IsReference() == Right.IsReference();
+	}
+
+	bool TemplateArgumentsMatch(const asCObjectType& Instance, TConstArrayView<asCDataType> Arguments)
+	{
+		if (Instance.templateSubTypes.GetLength() != static_cast<asUINT>(Arguments.Num())) return false;
+		for (int32 Index = 0; Index < Arguments.Num(); ++Index)
+		{
+			if (!SameTemplateArgument(Instance.templateSubTypes[Index], Arguments[Index])) return false;
+		}
+		return true;
+	}
+
+}
+
+asCObjectType* asCDefinitions::FindTemplateInstance(const asCObjectType* Template, TConstArrayView<asCDataType> Arguments) const
+{
+	if (!Template) return nullptr;
+	std::lock_guard<std::mutex> Lock(MutationMutex);
+	for (asCTypeInfo* Type : Types)
+	{
+		asCObjectType* Object = CastToObjectType(Type);
+		if (!Object || Object->GetTemplateDefinition() != Template) continue;
+		if (TemplateArgumentsMatch(*Object, Arguments)) return Object;
+	}
+	return nullptr;
+}
+
+asEDefinitionResult asCDefinitions::CreateHostTemplateInstance(asCObjectType& Template, const asSStableKey& Key,
+	TConstArrayView<asCDataType> Arguments, asCObjectType*& Out)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
+	Out = nullptr;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!CanReference(&Template)) return asEDefinitionResult::ForeignOwner;
+	if (!(Template.flags & asOBJ_TEMPLATE) || Template.GetTemplateDefinition()
+		|| Arguments.Num() != static_cast<int32>(Template.genericArity) || !Template.genericArity)
+	{
+		return asEDefinitionResult::InvalidSignature;
+	}
+	if (!Template.HasFixedTemplateLayout()) return asEDefinitionResult::IncompleteDefinition;
+	asUINT Size = 0;
+	asUINT Alignment = 8;
+	if (const auto* Native = NativeLayouts.Find(&Template))
+	{
+		Size = Native->Key;
+		Alignment = Native->Value;
+	}
+	else if (Template.size >= 0 && ValidAlignment(Template.alignment))
+	{
+		Size = static_cast<asUINT>(Template.size);
+		Alignment = static_cast<asUINT>(Template.alignment);
+	}
+	else
+	{
+		return asEDefinitionResult::IncompleteDefinition;
+	}
+	bool bPrivate = false;
+	for (const asCDataType& Argument : Arguments)
+	{
+		if (ValidateDataType(Argument, false) != asEDefinitionResult::Succeeded) return asEDefinitionResult::InvalidSignature;
+		if (asCTypeInfo* Type = Argument.GetTypeInfo())
+		{
+			if (!CanReference(Type)) return asEDefinitionResult::ForeignOwner;
+			if (Type->GetTypeInfoKind() != asETypeInfoKind::HostProcess) bPrivate = true;
+		}
+	}
+	if (Options.Kind == asETypeInfoKind::HostProcess && bPrivate) return asEDefinitionResult::InvalidArgument;
+	if (Options.Kind == asETypeInfoKind::LiveRegister && !bPrivate) return asEDefinitionResult::InvalidArgument;
+	for (asCTypeInfo* Type : Types)
+	{
+		asCObjectType* Object = CastToObjectType(Type);
+		if (!Object || Object->GetTemplateDefinition() != &Template) continue;
+		if (!TemplateArgumentsMatch(*Object, Arguments)) continue;
+		Out = Object;
+		return asEDefinitionResult::Succeeded;
+	}
+	const char* Namespace = Template.nameSpace ? Template.nameSpace->name.AddressOf() : "";
+	if (Key.IsZero() || !Template.name.GetLength()) return asEDefinitionResult::InvalidArgument;
+	if (TypesByKey.Contains(Key) || FunctionsByKey.Contains(Key) || GlobalsByKey.Contains(Key))
+	{
+		return asEDefinitionResult::DuplicateIdentity;
+	}
+	asCObjectType* Instance = asNEW(asCObjectType)(*this, Key);
+	Instance->name = Template.name;
+	Instance->nameSpace = InternNamespace(Namespace);
+	Instance->flags = Template.flags;
+	Instance->declarationKind = Template.declarationKind;
+	Instance->declarationOwner = Template.declarationOwner;
+	Instance->templateDefinition = &Template;
+	Instance->genericArity = Template.genericArity;
+	for (const asCDataType& Argument : Arguments)
+	{
+		Instance->templateSubTypes.PushLast(NormalizeOptions(Argument));
+	}
+	Instance->size = -1;
+	Instance->alignment = 1;
+	NativeLayouts.Add(Instance, {Size, Alignment});
+	Types.Add(Instance);
+	TypesByKey.Add(Key, Instance);
+	InvalidateLayouts();
+	Out = Instance;
+	return asEDefinitionResult::Succeeded;
+}
+
+asEDefinitionResult asCDefinitions::FinalizeLayouts()
+{
+	std::lock_guard<std::mutex> Lock(MutationMutex);
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
 	struct FLayout { asUINT Size = 0; asUINT Alignment = 1; };
 	TMap<asCTypeInfo*, FLayout> Layouts;
 	TMap<asCTypeInfo*, uint8> Visiting;
 	TMap<asCObjectProperty*, int> Offsets;
 	TArray<asCTypeInfo*> Order;
-	asEMetadataResult Result = asEMetadataResult::Succeeded;
+	asEDefinitionResult Result = asEDefinitionResult::Succeeded;
 	std::function<bool(asCTypeInfo*, FLayout&)> TypeLayout;
 	std::function<bool(const asCDataType&, FLayout&)> DataLayout;
 	DataLayout = [&](const asCDataType& Type, FLayout& Out)
 	{
 		Result = ValidateDataType(Type, true);
-		if (Result != asEMetadataResult::Succeeded) return false;
+		if (Result != asEDefinitionResult::Succeeded) return false;
 		if (Type.IsReference() || Type.IsObjectHandle() || (Type.GetTypeInfo() && (Type.GetTypeInfo()->flags & asOBJ_REF)))
 		{
 			Out = {Options.PointerByteSize, Options.PointerByteSize}; return true;
@@ -1179,24 +1354,24 @@ asEMetadataResult asCModuleDefinitionSet::FinalizeLayouts()
 		case ttInt: case ttUInt: case ttFloat32: Out = {4, 4}; break;
 		case ttInt64: case ttUInt64: case ttFloat64: case ttDouble: Out = {8, 8}; break;
 		case ttFloat: Out = Options.FloatIsFloat64 ? FLayout{8, 8} : FLayout{4, 4}; break;
-		default: Result = asEMetadataResult::InvalidLayout; return false;
+		default: Result = asEDefinitionResult::InvalidLayout; return false;
 		}
 		return true;
 	};
 	TypeLayout = [&](asCTypeInfo* Type, FLayout& Out)
 	{
-		if (!CanReference(Type)) { Result = asEMetadataResult::ForeignOwner; return false; }
+		if (!CanReference(Type)) { Result = asEDefinitionResult::ForeignOwner; return false; }
 		if (!Owns(Type))
 		{
-			if (Type->size < 0 || !ValidAlignment(Type->alignment)) { Result = asEMetadataResult::InvalidLayout; return false; }
+			if (Type->size < 0 || !ValidAlignment(Type->alignment)) { Result = asEDefinitionResult::InvalidLayout; return false; }
 			Out = {static_cast<asUINT>(Type->size), static_cast<asUINT>(Type->alignment)}; return true;
 		}
 		if (const FLayout* Existing = Layouts.Find(Type)) { Out = *Existing; return true; }
-		if (Visiting.FindRef(Type) == 1) { Result = asEMetadataResult::RecursiveValueType; return false; }
+		if (Visiting.FindRef(Type) == 1) { Result = asEDefinitionResult::RecursiveValueType; return false; }
 		Visiting.Add(Type, 1);
 		if (asCTypedefType* Alias = CastToTypedefType(Type))
 		{
-			if (!Alias->aliasForType.IsValid()) { Result = asEMetadataResult::IncompleteDefinition; return false; }
+			if (!Alias->aliasForType.IsValid()) { Result = asEDefinitionResult::IncompleteDefinition; return false; }
 			if (!DataLayout(Alias->aliasForType, Out)) return false;
 		}
 		else if (CastToEnumType(Type)) Out = {4, 4};
@@ -1206,26 +1381,26 @@ asEMetadataResult asCModuleDefinitionSet::FinalizeLayouts()
 			Out = {};
 			if (Object->derivedFrom && !TypeLayout(Object->derivedFrom, Out)) return false;
 			if (Object->IsInterface() && (Object->localProperties.GetLength() || Object->derivedFrom))
-			{ Result = asEMetadataResult::InvalidLayout; return false; }
+			{ Result = asEDefinitionResult::InvalidLayout; return false; }
 			const auto* Native = NativeLayouts.Find(Object);
 			if (!(Object->flags & asOBJ_SCRIPT_OBJECT) && !Object->IsInterface() && !Native)
-			{ Result = asEMetadataResult::IncompleteDefinition; return false; }
+			{ Result = asEDefinitionResult::IncompleteDefinition; return false; }
 			if (Native)
 			{
 				Out = {Native->Key, Native->Value};
 				for (asUINT Index = 0; Index < Object->localProperties.GetLength(); ++Index)
 				{
 					asCObjectProperty* Property = Object->localProperties[Index];
-					if (!Property->isNativeAddress) { Result = asEMetadataResult::IncompleteDefinition; return false; }
+					if (!Property->isNativeAddress) { Result = asEDefinitionResult::IncompleteDefinition; return false; }
 					asUINT MemberSize = 0;
 					asUINT MemberAlign = 0;
-					if (!NativeMemberLayout(*this, Property->type, MemberSize, MemberAlign)) { Result = asEMetadataResult::InvalidLayout; return false; }
+					if (!NativeMemberLayout(*this, Property->type, MemberSize, MemberAlign)) { Result = asEDefinitionResult::InvalidLayout; return false; }
 					const uint64 Extent = Property->nativeAddressMode == asENativeAddressMode::Direct
 						? static_cast<uint64>(Property->byteOffset) + MemberSize
 						: (Property->isCompositeIndirect
 							? static_cast<uint64>(Property->compositeOffset) + Options.PointerByteSize
 							: static_cast<uint64>(Property->compositeOffset) + MemberSize);
-					if (Extent > Native->Key) { Result = asEMetadataResult::InvalidLayout; return false; }
+					if (Extent > Native->Key) { Result = asEDefinitionResult::InvalidLayout; return false; }
 					Offsets.Add(Property, Property->byteOffset);
 				}
 			}
@@ -1238,17 +1413,17 @@ asEMetadataResult asCModuleDefinitionSet::FinalizeLayouts()
 					FLayout Member;
 					if (!DataLayout(Property->type, Member)) return false;
 					Position = (Position + Member.Alignment - 1) & ~(uint64(Member.Alignment) - 1);
-					if (Position + Member.Size > MAX_int32) { Result = asEMetadataResult::InvalidLayout; return false; }
+					if (Position + Member.Size > MAX_int32) { Result = asEDefinitionResult::InvalidLayout; return false; }
 					Offsets.Add(Property, static_cast<int>(Position));
 					Position += Member.Size;
 					Out.Alignment = FMath::Max(Out.Alignment, Member.Alignment);
 				}
 				Position = (Position + Out.Alignment - 1) & ~(uint64(Out.Alignment) - 1);
-				if (Position > MAX_int32) { Result = asEMetadataResult::InvalidLayout; return false; }
+				if (Position > MAX_int32) { Result = asEDefinitionResult::InvalidLayout; return false; }
 				Out.Size = static_cast<asUINT>(Position);
 			}
 		}
-		else { Result = asEMetadataResult::InvalidLayout; return false; }
+		else { Result = asEDefinitionResult::InvalidLayout; return false; }
 		Visiting.Add(Type, 2); Layouts.Add(Type, Out); Order.Add(Type); return true;
 	};
 	for (asCTypeInfo* Type : Types)
@@ -1282,21 +1457,58 @@ asEMetadataResult asCModuleDefinitionSet::FinalizeLayouts()
 	// Semantic layouts are not a VM call frame. Parameter offsets, bytecode and
 	// executable callables require a separate, explicit backend preparation.
 	bLayoutsFinalized = true;
-	return asEMetadataResult::Succeeded;
+	return asEDefinitionResult::Succeeded;
 }
 
-asEMetadataResult asCModuleDefinitionSet::Freeze()
+asEDefinitionResult asCDefinitions::Freeze()
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
-	if (GetState() != asEDefinitionSetState::Building) return asEMetadataResult::InvalidState;
-	if (!bLayoutsFinalized) return asEMetadataResult::IncompleteDefinition;
+	if (GetState() != asEDefinitionState::Building) return asEDefinitionResult::InvalidState;
+	if (!bLayoutsFinalized) return asEDefinitionResult::IncompleteDefinition;
 	for (asCScriptFunction* Function : Functions)
-		if (!Function->metadataSignatureDefined) return asEMetadataResult::IncompleteDefinition;
+		if (!Function->metadataSignatureDefined) return asEDefinitionResult::IncompleteDefinition;
+	if (Options.Kind == asETypeInfoKind::HostProcess)
+	{
+		for (asCScriptFunction* Function : Functions)
+		{
+			if (Function->funcType == asFUNC_SYSTEM && !Function->processInterface)
+				return asEDefinitionResult::IncompleteDefinition;
+		}
+	}
 	for (const asCGlobalProperty* Global : Globals)
-		if (!ValidateGlobalIdentity(*Global)) return asEMetadataResult::InvalidSignature;
+		if (!ValidateGlobalIdentity(*Global)) return asEDefinitionResult::InvalidSignature;
 	if (DefaultArrayType && DefaultArrayType->templateSubTypes.GetLength() != 1)
-		return asEMetadataResult::IncompleteDefinition;
-	if (!CaptureAccessSnapshot()) return asEMetadataResult::InvalidSignature;
+		return asEDefinitionResult::IncompleteDefinition;
+	if (!CaptureAccessSnapshot()) return asEDefinitionResult::InvalidSignature;
+	if (Options.Kind == asETypeInfoKind::HostProcess)
+	{
+		const asUINT TypeCount = static_cast<asUINT>(Types.Num());
+		const asUINT FunctionCount = static_cast<asUINT>(Functions.Num());
+		if (TypeCount != 0 || FunctionCount != 0)
+		{
+			asCTypeIdAllocator& Allocator = Options.TypeIdAllocator
+				? *Options.TypeIdAllocator
+				: asCTypeIdRegistry::Get().Allocator();
+			asSTypeIdReservationRequest Request;
+			Request.TypeSequenceCount = TypeCount;
+			Request.FunctionIdCount = FunctionCount;
+			asSTypeIdReservation Reservation;
+			if (Allocator.Reserve(Request, Reservation) != asTYPE_ID_RESERVE_SUCCEEDED)
+			{
+				return asEDefinitionResult::InvalidLayout;
+			}
+			for (int32 Index = 0; Index < Types.Num(); ++Index)
+			{
+				asCTypeInfo* Type = Types[Index];
+				BoundTypeIds.Add(Type, asCTypeIdAllocator::EncodeObjectTypeId(
+					Reservation.FirstTypeSequence + Index, Type->flags));
+			}
+			for (int32 Index = 0; Index < Functions.Num(); ++Index)
+			{
+				BoundFunctionIds.Add(Functions[Index], Reservation.FirstFunctionId + Index);
+			}
+		}
+	}
 	for (asCTypeInfo* Type : Types)
 	{
 		FrozenLayouts.Add(Type, {Type->size, Type->alignment});
@@ -1312,8 +1524,8 @@ asEMetadataResult asCModuleDefinitionSet::Freeze()
 			}
 		}
 	}
-	State.store(asEDefinitionSetState::Frozen, std::memory_order_release);
-	return asEMetadataResult::Succeeded;
+	State.store(asEDefinitionState::Frozen, std::memory_order_release);
+	return asEDefinitionResult::Succeeded;
 }
 
 namespace
@@ -1384,12 +1596,12 @@ namespace
 
 struct asSMetadataFingerprintEncoder
 {
-	explicit asSMetadataFingerprintEncoder(const asCModuleDefinitionSet& InSet)
+	explicit asSMetadataFingerprintEncoder(const asCDefinitions& InSet)
 		: Set(InSet)
 	{
 	}
 
-	const asCModuleDefinitionSet& Set;
+	const asCDefinitions& Set;
 
 	bool InternDataTypeUse(const asCDataType& Type, asSStableKey& OutKey) const
 	{
@@ -1421,9 +1633,9 @@ struct asSMetadataFingerprintEncoder
 		{
 			Descriptor.Kind = asETypeUseKind::Nominal;
 			asCObjectType* Object = CastToObjectType(Info);
-			if (Object && Object->GetMetadataTemplateDefinition())
+			if (Object && Object->GetTemplateDefinition())
 			{
-				Descriptor.Declaration = Object->GetMetadataTemplateDefinition()->GetStableKey();
+				Descriptor.Declaration = Object->GetTemplateDefinition()->GetStableKey();
 				for (asUINT Index = 0; Index < Object->templateSubTypes.GetLength(); ++Index)
 				{
 					asSStableKey Argument;
@@ -1495,7 +1707,7 @@ struct asSMetadataFingerprintEncoder
 			| (Function.IsProperty() ? 8u : 0u)
 			| (Function.IsReadOnly() ? 16u : 0u));
 		Encoding.WriteUInt16(static_cast<uint16>(Function.IsReadOnly() ? asEFunctionIdentityModifiers::ConstMethod : asEFunctionIdentityModifiers::None));
-		Encoding.WriteUInt8(static_cast<uint8>(Function.GetMetadataDeclarationKind()));
+		Encoding.WriteUInt8(static_cast<uint8>(Function.GetDeclarationKind()));
 	}
 
 	void WriteListPattern(asCCanonicalEncoding& Encoding, const asSMetadataListPattern& Pattern) const
@@ -1518,9 +1730,9 @@ struct asSMetadataFingerprintEncoder
 	bool EncodeSchema(const asCTypeInfo& Type, TArray<uint8>& Out) const
 	{
 		asCCanonicalEncoding Encoding(asECanonicalIdentityDomain::Schema);
-		Encoding.WriteUInt8(static_cast<uint8>(Type.GetMetadataDeclarationKind()));
+		Encoding.WriteUInt8(static_cast<uint8>(Type.GetDeclarationKind()));
 		Encoding.WriteUInt32(SemanticFlags(Type));
-		WriteKey(Encoding, Type.GetMetadataDeclarationOwner() ? Type.GetMetadataDeclarationOwner()->GetStableKey() : asSStableKey{});
+		WriteKey(Encoding, Type.GetDeclarationOwner() ? Type.GetDeclarationOwner()->GetStableKey() : asSStableKey{});
 		const asCObjectType* Object = CastToObjectType(const_cast<asCTypeInfo*>(&Type));
 		WriteKey(Encoding, Object && Object->derivedFrom ? Object->derivedFrom->GetStableKey() : asSStableKey{});
 		TArray<asSStableKey> Interfaces;
@@ -1543,7 +1755,7 @@ struct asSMetadataFingerprintEncoder
 		{
 			WriteKey(Encoding, Key);
 		}
-		Encoding.WriteUInt32(Type.GetMetadataGenericArity());
+		Encoding.WriteUInt32(Type.GetGenericArity());
 		TArray<asSStableKey> Arguments;
 		if (Object)
 		{
@@ -1818,25 +2030,25 @@ struct asSMetadataFingerprintEncoder
 	}
 };
 
-void asCModuleDefinitionSet::SetFingerprintDigestProvider(const asIFingerprintDigestProvider* Provider)
+void asCDefinitions::SetFingerprintDigestProvider(const asIFingerprintDigestProvider* Provider)
 {
 	std::lock_guard<std::mutex> Lock(MutationMutex);
 	FingerprintDigestProvider = Provider;
 }
 
-asEFingerprintStatus asCModuleDefinitionSet::EnsureFingerprintsLocked(const asCTypeInfo& Type, const asSCachedFingerprint*& Out) const
+asEFingerprintStatus asCDefinitions::EnsureFingerprintsLocked(const asCTypeInfo& Type, const asSCachedFingerprint*& Out) const
 {
 	Out = nullptr;
 	if (!Owns(&Type) && !CanReference(&Type))
 	{
 		return asEFingerprintStatus::InvalidDefinition;
 	}
-	const asEDefinitionSetState SetState = GetState();
-	if (SetState == asEDefinitionSetState::Building)
+	const asEDefinitionState SetState = GetState();
+	if (SetState == asEDefinitionState::Building)
 	{
 		return asEFingerprintStatus::NotReady;
 	}
-	if (SetState == asEDefinitionSetState::Attaching)
+	if (SetState == asEDefinitionState::Attaching)
 	{
 		return asEFingerprintStatus::NotReady;
 	}
@@ -1852,7 +2064,10 @@ asEFingerprintStatus asCModuleDefinitionSet::EnsureFingerprintsLocked(const asCT
 	{
 		return asEFingerprintStatus::UnauthenticatedDefinition;
 	}
-	if (!ValidateFrozenIdentity())
+	// HostProcess still uses CRC keys for most symbols. Schema/layout
+	// witnesses can be encoded from the frozen graph without requiring
+	// every function to be interned first.
+	if (Options.Kind != asETypeInfoKind::HostProcess && !ValidateFrozenIdentity())
 	{
 		return asEFingerprintStatus::UnauthenticatedDefinition;
 	}
@@ -1876,7 +2091,7 @@ asEFingerprintStatus asCModuleDefinitionSet::EnsureFingerprintsLocked(const asCT
 	{
 		return asEFingerprintStatus::InvalidDefinition;
 	}
-	asCModuleDefinitionSet::asSCachedFingerprint Computed;
+	asCDefinitions::asSCachedFingerprint Computed;
 	Computed.SchemaWitness = MoveTemp(SchemaWitness);
 	Computed.LayoutWitness = MoveTemp(LayoutWitness);
 	Computed.Schema.Digest = HashWitness(MakeArrayView(Computed.SchemaWitness), FingerprintDigestProvider);
@@ -1903,7 +2118,7 @@ asEFingerprintStatus asCModuleDefinitionSet::EnsureFingerprintsLocked(const asCT
 	return asEFingerprintStatus::Succeeded;
 }
 
-asEFingerprintStatus asCModuleDefinitionSet::TryGetSchemaHash(const asCTypeInfo& Type, asSSchemaHash& OutHash,
+asEFingerprintStatus asCDefinitions::TryGetSchemaHash(const asCTypeInfo& Type, asSSchemaHash& OutHash,
 	TConstArrayView<uint8>* OutWitness) const
 {
 	OutHash = {};
@@ -1926,7 +2141,7 @@ asEFingerprintStatus asCModuleDefinitionSet::TryGetSchemaHash(const asCTypeInfo&
 	return asEFingerprintStatus::Succeeded;
 }
 
-asEFingerprintStatus asCModuleDefinitionSet::TryGetLayoutHash(const asCTypeInfo& Type, asSLayoutHash& OutHash,
+asEFingerprintStatus asCDefinitions::TryGetLayoutHash(const asCTypeInfo& Type, asSLayoutHash& OutHash,
 	TConstArrayView<uint8>* OutWitness) const
 {
 	OutHash = {};
@@ -1950,7 +2165,7 @@ asEFingerprintStatus asCModuleDefinitionSet::TryGetLayoutHash(const asCTypeInfo&
 }
 
 
-asCTypeInfo* asCModuleDefinitionSet::FindType(const char* Name) const
+asCTypeInfo* asCDefinitions::FindType(const char* Name) const
 {
 	if (!Name) return nullptr;
 	for (asCTypeInfo* Type : Types)
@@ -1962,24 +2177,24 @@ asCTypeInfo* asCModuleDefinitionSet::FindType(const char* Name) const
 	return nullptr;
 }
 
-void asCModuleDefinitionSet::AttachDependencies(TConstArrayView<asCModuleDefinitionSet*> InDependencies)
+void asCDefinitions::AttachDependencies(TConstArrayView<asCDefinitions*> InDependencies)
 {
 	if (IsImmutable()) return;
 	Dependencies.Reset();
-	for (asCModuleDefinitionSet* Dependency : InDependencies) Dependencies.Add(Dependency);
+	for (asCDefinitions* Dependency : InDependencies) Dependencies.Add(Dependency);
 }
 
-void asCModuleDefinitionSet::AdoptEmittedByteCode(TUniquePtr<asCByteCodeImage> InImage)
+void asCDefinitions::AdoptEmittedByteCode(TUniquePtr<asCByteCodeImage> InImage)
 {
 	EmittedByteCode = MoveTemp(InImage);
 }
 
-asCByteCodeImage* asCModuleDefinitionSet::PeekEmittedByteCode() const
+asCByteCodeImage* asCDefinitions::PeekEmittedByteCode() const
 {
 	return EmittedByteCode.Get();
 }
 
-TUniquePtr<asCByteCodeImage> asCModuleDefinitionSet::TakeEmittedByteCode()
+TUniquePtr<asCByteCodeImage> asCDefinitions::TakeEmittedByteCode()
 {
 	return MoveTemp(EmittedByteCode);
 }

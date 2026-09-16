@@ -52,7 +52,7 @@
 #include "as_memory.h"
 #include "as_gc.h"
 #include "as_tokendef.h"
-#include "as_module_definition_set.h"
+#include "as_definitions.h"
 #include "Templates/UniquePtr.h"
 
 BEGIN_AS_NAMESPACE
@@ -324,12 +324,15 @@ public:
 	asCScriptEngine();
 	virtual ~asCScriptEngine();
 	// Semantic registration only: does not prepare VM bytecode or callables.
-	asEMetadataRegistrationResult InstallDefinitionSet(TUniquePtr<asCModuleDefinitionSet> Set);
-	asEMetadataRegistrationResult InstallDefinitionSet(
-		TUniquePtr<asCModuleDefinitionSet> Set,
+	asERegistrationResult RegisterExternalDefinitions(TUniquePtr<asCDefinitions> Set);
+	asERegistrationResult RegisterExternalDefinitions(
+		TUniquePtr<asCDefinitions> Set,
 		const TMap<const asCTypeInfo*, int>& PublishedTypeIds,
 		const TMap<const asCScriptFunction*, int>& PublishedFunctionIds);
-	void RetireDefinitionSets();
+	asERegistrationResult InjectDefinitions(const asCDefinitions& Graph);
+	asCObjectType* FindTemplateInstance(const asCObjectType* Template, TConstArrayView<asCDataType> Arguments) const;
+	asERegistrationResult SpecializeTemplate(asCObjectType& Template, TConstArrayView<asCDataType> Arguments, asCObjectType*& Out);
+	void RetireExternalDefinitions();
 	bool AcquireVmObjectLease();
 	void ReleaseVmObjectLease();
 	bool BeginVmOperation(bool Cleanup = false);
@@ -349,13 +352,13 @@ public:
 	asEByteCodeLinkStatus CommitExecutablePublication(class asCExecutableSnapshot& Snapshot, asQWORD Generation);
 	void PublishExecutable(const asSStableKey& Key, class asCExecutableFunction* Executable);
 	void UnpublishExecutable(const asSStableKey& Key, class asCExecutableFunction* Executable);
-	asCTypeInfo* FindMetadataType(const char* Namespace, const char* Name) const;
-	asCTypeInfo* FindMetadataType(const asSStableKey& Key) const;
-	asCScriptFunction* FindMetadataFunction(const asSStableKey& Key) const;
-	asCGlobalProperty* FindMetadataGlobalProperty(const char* Namespace, const char* Name) const;
-	asCGlobalProperty* FindMetadataGlobalProperty(const asSStableKey& Key) const;
-	TPair<asUINT, asUINT> GetMetadataRegistrationCounts() const;
-	TArray<const asCModuleDefinitionSet*> GetRegisteredDefinitionSets() const;
+	asCTypeInfo* FindType(const char* Namespace, const char* Name) const;
+	asCTypeInfo* FindType(const asSStableKey& Key) const;
+	asCScriptFunction* FindFunction(const asSStableKey& Key) const;
+	asCGlobalProperty* FindGlobalProperty(const char* Namespace, const char* Name) const;
+	asCGlobalProperty* FindGlobalProperty(const asSStableKey& Key) const;
+	TPair<asUINT, asUINT> GetRegistrationCounts() const;
+	TArray<const asCDefinitions*> GetRegisteredDefinitions() const;
 
 	// LEGACY remains the source-module Build default until the final cutover gate.
 	// Explicit CANONICAL selection publishes Bytecode from sealed-AST CodeGen.
@@ -699,31 +702,40 @@ public:
 	DECLAREREADWRITELOCK(mutable engineRWLock)
 
 private:
-	void InitializeMetadataBuiltins();
-	asUINT CountMetadataTypes(asQWORD Include, asQWORD Exclude = 0) const;
-	asCTypeInfo* MetadataTypeByIndex(asUINT Index, asQWORD Include, asQWORD Exclude = 0) const;
-	mutable std::mutex metadataRegistrationMutex;
+	void InitializeDefinitionBuiltins();
+	asUINT CountTypes(asQWORD Include, asQWORD Exclude = 0) const;
+	asCTypeInfo* TypeByIndex(asUINT Index, asQWORD Include, asQWORD Exclude = 0) const;
+	mutable std::mutex registrationMutex;
 	mutable std::mutex executablePublicationMutex;
 	asQWORD executablePublicationGeneration = 0;
 	std::atomic<bool> vmRetirementRequested{false};
 	asUINT vmObjectLeases = 0;
 	asUINT vmOperations = 0;
 	bool vmDrainActive = false;
-	TArray<TUniquePtr<asCModuleDefinitionSet>> definitionSets;
-	TMap<asSStableKey, asCTypeInfo*> metadataTypesByKey;
-	TMap<FString, asCTypeInfo*, FDefaultSetAllocator, asCModuleDefinitionSet::asTNameKeyFuncs<asCTypeInfo*>> metadataTypesByName;
-	TMap<int, asCTypeInfo*> metadataTypesById;
-	TMap<asSStableKey, asCScriptFunction*> metadataFunctionsByKey;
-	TMap<asSStableKey, asCGlobalProperty*> metadataGlobalsByKey;
-	TMap<FString, asCGlobalProperty*, FDefaultSetAllocator, asCModuleDefinitionSet::asTNameKeyFuncs<asCGlobalProperty*>> metadataGlobalsByName;
-	TMap<asSStableKey, void*> metadataGlobalBindings;
+	TArray<TUniquePtr<asCDefinitions>> definitionSets;
+	TArray<asCDefinitionGraphLease> admittedHostGraphs;
+	TUniquePtr<asCDefinitions> liveDefinitions;
+	uint32 liveIdentitySerial = 1;
+	asCDefinitions* EnsureLiveDefinitions();
+	asSStableKey MakeLiveStableKey(const char* Kind, const char* Namespace, const char* Name);
+	int PublishLiveType(asCTypeInfo& Type);
+	int PublishLiveFunction(asCScriptFunction& Function);
+	int RegisterLiveCallable(asCObjectType& Type, const char* Declaration, const asSFuncPtr& FunctionPtr,
+		asDWORD CallConv, asFunctionCaller Caller, void* Auxiliary, asEBehaviours* Behaviour);
+	TMap<asSStableKey, asCTypeInfo*> typesByKey;
+	TMap<FString, asCTypeInfo*, FDefaultSetAllocator, asCDefinitions::asTNameKeyFuncs<asCTypeInfo*>> typesByName;
+	TMap<int, asCTypeInfo*> typesById;
+	TMap<asSStableKey, asCScriptFunction*> functionsByKey;
+	TMap<asSStableKey, asCGlobalProperty*> globalsByKey;
+	TMap<FString, asCGlobalProperty*, FDefaultSetAllocator, asCDefinitions::asTNameKeyFuncs<asCGlobalProperty*>> globalsByName;
+	TMap<asSStableKey, void*> globalBindings;
 	TMap<asSStableKey, class asCExecutableFunction*> publishedExecutables;
 	TArray<class asCExecutableSnapshot*> publishedSnapshotLeases;
 	TMap<asSStableKey, std::shared_ptr<asSSystemFunctionInterface>> nativeInterfaces;
-	TMap<int, asCScriptFunction*> metadataFunctionsById;
-	int nextMetadataTypeId = asTYPEID_FLOAT64 + 1;
-	int nextMetadataFunctionId = 1;
-	bool metadataRegistrationRetired = false;
+	TMap<int, asCScriptFunction*> functionsById;
+	int nextTypeId = asTYPEID_FLOAT64 + 1;
+	int nextFunctionId = 1;
+	bool registrationRetired = false;
 
 public:
 

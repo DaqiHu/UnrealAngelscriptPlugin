@@ -2,6 +2,8 @@
 #include "frontend/Parser/as_type_syntax_parser.h"
 #include "frontend/Lexer/as_tokenizer.h"
 #include "Containers/StringConv.h"
+#include "Containers/Utf8String.h"
+#include "unreal/AngelscriptSource.h"
 
 BEGIN_AS_NAMESPACE
 namespace
@@ -230,11 +232,17 @@ bool asCBindingDeclarationParser::Parse(const FString& Text, const asSBindingDec
 {
 	Out = {}; Diagnostic = {};
 	const FTCHARToUTF8 Utf8(*Text, Text.Len());
-	auto Snapshot = MakeShared<asCSourceSnapshot, ESPMode::ThreadSafe>();
-	const auto File = Snapshot->AddFile(TEXT("binding-declaration"), MakeArrayView(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length()));
-	Snapshot->Freeze();
-	Out.Source = MakeShared<asCSourceManager, ESPMode::ThreadSafe>(Snapshot);
-	Out.Range = Out.Source->MakeRange(File, 0, Utf8.Length());
+	FUtf8String Body;
+	if (Utf8.Length() > 0)
+	{
+		Body.AppendChars(reinterpret_cast<const UTF8CHAR*>(Utf8.Get()), Utf8.Length());
+	}
+	TArray<TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>> BindingSources;
+	BindingSources.Add(MakeShared<FAngelscriptSource, ESPMode::ThreadSafe>(
+		FString(TEXT("binding-declaration")),
+		MoveTemp(Body)));
+	Out.Source = MakeShared<asCSourceManager, ESPMode::ThreadSafe>(BindingSources);
+	Out.Range = Out.Source->MakeRange(asCSourceFileID(1), 0, Utf8.Length());
 	asSBindingDeclaration Candidate;
 	Candidate.Source = Out.Source; Candidate.Range = Out.Range;
 	asSHostDeclarationReader Reader{Environment, Context, Lookup, Candidate, Diagnostic};

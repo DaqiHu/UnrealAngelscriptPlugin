@@ -36,6 +36,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FGeometry(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FGeometry_ = Binds.ExistingClassForTarget("FGeometry");
 		FGeometry_.Method("FVector2D GetLocalSize() const", &FAngelscriptFGeometryBinds::GetLocalSize);
 		FGeometry_.Method("FVector2D GetAbsoluteSize() const", &FAngelscriptFGeometryBinds::GetAbsoluteSize);

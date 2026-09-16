@@ -8,7 +8,7 @@ BEGIN_AS_NAMESPACE
 
 ANGELSCRIPTRUNTIME_API asSByteCodeEmissionResult asEmitByteCodeImage(
 	const asCCompilationSession* Session,
-	const asCModuleDefinitionSet* FrozenDefinitions,
+	const asCDefinitions* FrozenDefinitions,
 	const asSByteCodeEmissionOptions& Options,
 	TUniquePtr<asCByteCodeImage>& OutImage);
 

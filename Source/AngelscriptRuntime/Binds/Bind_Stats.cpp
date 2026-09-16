@@ -49,6 +49,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Stats_Types(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FBindFlags StatFlags;
 		Binds.ValueClassForTarget<FScriptStatID>("FStatID", StatFlags);
 
@@ -61,6 +62,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Stats(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FStatID_ = Binds.ExistingClassForTarget("FStatID");
 		FStatID_.Constructor("void f(const FName& Name)", &FAngelscriptStatsBinds::ConstructStatID).NoDiscard();
 		FStatID_.Destructor("void f()", &FAngelscriptStatsBinds::DestructStatID);

@@ -88,6 +88,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FColor(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto FColor_ = Binds.ExistingClassForTarget("FColor");
 
 		FColor_.Constructor(
@@ -150,6 +151,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FColor_ToStringContribution(
 	EAngelscriptBindPhase::TypeInfrastructure,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FToStringHelper::Register(Binds, TEXT("FColor"), &FAngelscriptFColorBinds::AppendToString);
 	});
 

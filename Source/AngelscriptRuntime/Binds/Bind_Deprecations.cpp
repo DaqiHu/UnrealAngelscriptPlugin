@@ -18,6 +18,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Deprecations(
 	EAngelscriptBindPhase::TypeDeclarations,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		static const TCHAR* Paths[] = {
 			TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableLinearColor"), TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableVec4"),
 			TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableQuat"), TEXT("/Script/Niagara.NiagaraComponent:SetNiagaraVariableMatrix"),

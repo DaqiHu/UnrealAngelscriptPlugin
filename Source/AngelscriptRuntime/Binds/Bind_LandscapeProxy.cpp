@@ -24,6 +24,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_ALandscapeProxy(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		auto ALandscapeProxy_ = Binds.ExistingClassForTarget("ALandscapeProxy");
 		ALandscapeProxy_.Method(
 			"bool GetHeightAtLocation(FVector Location, float32& OutHeight) const",

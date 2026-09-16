@@ -10,7 +10,7 @@
 BEGIN_AS_NAMESPACE
 
 class asCTypeInfo;
-class asCModuleDefinitionSet;
+class asCDefinitions;
 
 enum class asEFingerprintStatus : asBYTE
 {

@@ -35,6 +35,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_FMessageDialog(
 	EAngelscriptBindPhase::ExplicitBindings,
 	[](FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget()) return;
 		FAngelscriptBinds::FNamespace Namespace(Binds, "FMessageDialog");
 		Binds.BindGlobalFunctionForTarget(
 			"EAppReturnType Open(EAppMsgType MessageType, const FText& Message, FText OptionalTitle = FText())",
