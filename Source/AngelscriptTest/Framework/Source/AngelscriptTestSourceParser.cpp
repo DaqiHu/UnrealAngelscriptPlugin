@@ -1,9 +1,10 @@
-#include "NewVersion/Framework/Source/AngelscriptTestSourceParser.h"
+#include "Framework/Source/AngelscriptTestSourceParser.h"
 
-#include "NewVersion/Framework/Source/AngelscriptTestAnnotations.h"
-#include "NewVersion/Framework/Source/AngelscriptTestCodeBuilder.h"
-#include "NewVersion/Framework/Source/AngelscriptTestSourceParseResult.h"
+#include "Framework/Source/AngelscriptTestAnnotations.h"
+#include "Framework/Source/AngelscriptTestCodeBuilder.h"
+#include "Framework/Source/AngelscriptTestSourceParseResult.h"
 
+#include "Containers/Map.h"
 #include "Containers/StringConv.h"
 
 namespace AngelscriptTest
@@ -27,10 +28,12 @@ struct FLine
 struct FHeader
 {
 	FString Version;
+	FString Begin;
 	TOptional<FString> Parent;
 	FString Summary;
 	TArray<FString> Topics;
 	bool bSawVersion = false;
+	bool bSawBegin = false;
 	bool bSawParent = false;
 	bool bSawSummary = false;
 };
@@ -269,14 +272,12 @@ bool ParseHeader(
 			++Begin;
 		}
 
-		if (Begin >= End || Bytes[Begin] != static_cast<uint8>('@'))
+		if (Begin >= End)
 		{
-			OutErrors.Add(MakeParserError(
-				TEXT("MalformedMetadataDirective"),
-				TEXT("Metadata header content must be one directive per logical line."),
-				FileTag,
-				Line.Number,
-				RawOffsets[Begin]));
+			continue;
+		}
+		if (Bytes[Begin] != static_cast<uint8>('@'))
+		{
 			continue;
 		}
 
@@ -313,6 +314,23 @@ bool ParseHeader(
 			{
 				OutHeader.Version = Value;
 				OutHeader.bSawVersion = true;
+			}
+		}
+		else if (Directive == TEXT("begin"))
+		{
+			if (OutHeader.bSawBegin)
+			{
+				OutErrors.Add(MakeParserError(
+					TEXT("DuplicateMetadataDirective"),
+					TEXT("@begin may appear only once in a metadata header."),
+					FileTag,
+					Line.Number,
+					RawOffsets[Begin]));
+			}
+			else
+			{
+				OutHeader.Begin = Value;
+				OutHeader.bSawBegin = true;
 			}
 		}
 		else if (Directive == TEXT("parent"))
@@ -444,6 +462,15 @@ FAngelscriptTestCodeBuildResult FAngelscriptTestSourceParser::Parse(
 			1,
 			Container.RawOffsets[0]));
 	}
+	if (FileHeader.bSawBegin)
+	{
+		Errors.Add(MakeParserError(
+			TEXT("FileBeginForbidden"),
+			TEXT("The file header cannot declare @begin."),
+			FileTag,
+			1,
+			Container.RawOffsets[0]));
+	}
 
 	FAngelscriptTestFileMeta FileMeta{
 		.Version = MoveTemp(FileHeader.Version),
@@ -452,6 +479,12 @@ FAngelscriptTestCodeBuildResult FAngelscriptTestSourceParser::Parse(
 		.Topics = MoveTemp(FileHeader.Topics),
 	};
 	FAngelscriptTestCodeBuilder Builder(FileMeta);
+	struct FVersionLocation
+	{
+		int32 SourceLine = 0;
+		int32 ByteOffset = 0;
+	};
+	TMap<FString, FVersionLocation> VersionLocations;
 
 	while (true)
 	{
@@ -477,14 +510,27 @@ FAngelscriptTestCodeBuildResult FAngelscriptTestSourceParser::Parse(
 		{
 			break;
 		}
-		if (!VersionHeader.bSawVersion)
+		if (VersionHeader.bSawBegin && VersionHeader.bSawVersion)
 		{
 			Errors.Add(MakeParserError(
-				TEXT("MissingVersionTag"),
-				TEXT("A version header requires @version."),
+				TEXT("CaseIdentityConflict"),
+				TEXT("A case header uses @begin or @version, not both."),
 				FileTag,
 				Lines[HeaderLineIndex].Number,
 				Container.RawOffsets[Lines[HeaderLineIndex].Start]));
+		}
+		if (!VersionHeader.bSawBegin && !VersionHeader.bSawVersion)
+		{
+			Errors.Add(MakeParserError(
+				TEXT("MissingVersionTag"),
+				TEXT("A version header requires @begin or @version."),
+				FileTag,
+				Lines[HeaderLineIndex].Number,
+				Container.RawOffsets[Lines[HeaderLineIndex].Start]));
+		}
+		if (VersionHeader.bSawBegin)
+		{
+			VersionHeader.Version = VersionHeader.Begin;
 		}
 		if (!VersionHeader.bSawSummary)
 		{
@@ -553,20 +599,19 @@ FAngelscriptTestCodeBuildResult FAngelscriptTestSourceParser::Parse(
 			}
 		}
 
+		FVersionLocation& Location = VersionLocations.FindOrAdd(VersionHeader.Version);
+		Location.SourceLine = BodyLine;
+		Location.ByteOffset = Container.RawOffsets.IsValidIndex(BodyBegin)
+			? Container.RawOffsets[BodyBegin]
+			: 0;
+
 		FAngelscriptTestVersionMeta VersionMeta{
 			.Tag = MoveTemp(VersionHeader.Version),
 			.Parent = MoveTemp(VersionHeader.Parent),
 			.Summary = MoveTemp(VersionHeader.Summary),
 			.Topics = MoveTemp(VersionHeader.Topics),
 		};
-		if (VersionMeta.Tag == TEXT("root"))
-		{
-			Builder.AddRoot(MoveTemp(VersionMeta), MoveTemp(BodySource));
-		}
-		else
-		{
-			Builder.AddVersion(MoveTemp(VersionMeta), MoveTemp(BodySource));
-		}
+		Builder.AddVersion(MoveTemp(VersionMeta), MoveTemp(BodySource));
 		LineIndex = EndMarkerLineIndex + 1;
 	}
 
@@ -574,6 +619,27 @@ FAngelscriptTestCodeBuildResult FAngelscriptTestSourceParser::Parse(
 	if (!BuildResult.IsSuccess())
 	{
 		Errors.Append(BuildResult.GetErrors());
+	}
+	for (FAngelscriptTestError& Error : Errors)
+	{
+		if (Error.Code == TEXT("VersionCycle")
+			|| Error.Code == TEXT("MissingRoot")
+			|| Error.Code == TEXT("MultipleRoots"))
+		{
+			Error.SourcePath = FString(FileTag) + TEXT(".as");
+			Error.SourceLine = 1;
+			Error.ByteOffset = 0;
+		}
+		else if (Error.Code == TEXT("DuplicateVersionTag")
+			|| Error.Code == TEXT("MissingParent"))
+		{
+			Error.SourcePath = FString(FileTag) + TEXT(".as");
+			if (const FVersionLocation* Location = VersionLocations.Find(Error.VersionTag))
+			{
+				Error.SourceLine = Location->SourceLine;
+				Error.ByteOffset = Location->ByteOffset;
+			}
+		}
 	}
 	if (!Errors.IsEmpty())
 	{

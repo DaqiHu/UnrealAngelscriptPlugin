@@ -1,5 +1,5 @@
 #include "CQTest.h"
-#include "NewVersion/Framework/Catalog/AngelscriptTestCode.h"
+#include "Framework/Catalog/AngelscriptTestCode.h"
 
 #if WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS && PLATFORM_WINDOWS
 
@@ -38,8 +38,9 @@ public:
 	{
 		auto& Code = AngelscriptTest::FAngelscriptTestCode::GetInstance();
 		ASSERT_THAT(IsTrue(Code.IsActivated()));
-		ASSERT_THAT(IsTrue(Code.Get(TEXT("Language/Counter"), TEXT("root")).IsSuccess()));
+		ASSERT_THAT(IsTrue(Code.Get(TEXT("Language/Syntax/StructFields"), TEXT("fields-two")).IsSuccess()));
 		ASSERT_THAT(IsTrue(Code.Get(TEXT("Fixture/Secondary"), TEXT("root")).IsSuccess()));
+		ASSERT_THAT(IsFalse(Code.Get(TEXT("Language/Counter"), TEXT("root")).IsSuccess()));
 
 		const FGetObservedCenter Probe = GetJitCenterProbe();
 		ASSERT_THAT(IsNotNull(Probe));
@@ -73,8 +74,17 @@ public:
 				Changed.GetCase()->GetVersionMeta().Parent.GetValue()));
 		}
 
-		auto Counter = Code.Get(TEXT("Language/Counter"), TEXT("root"));
-		ASSERT_THAT(IsTrue(Counter.IsSuccess()));
+		auto StructFields = Code.Get(TEXT("Language/Syntax/StructFields"), TEXT("fields-two"));
+		ASSERT_THAT(IsTrue(StructFields.IsSuccess()));
+		ASSERT_THAT(IsFalse(Code.Get(TEXT("Language/Syntax/StructFields"), TEXT("root")).IsSuccess()));
+		ASSERT_THAT(IsFalse(Code.Get(TEXT("Language/Counter"), TEXT("root")).IsSuccess()));
+	}
+
+	TEST_METHOD(AdoptionFieldsTwo)
+	{
+		auto& Code = AngelscriptTest::FAngelscriptTestCode::GetInstance();
+		ASSERT_THAT(IsTrue(Code.Get(TEXT("Language/Syntax/StructFields"), TEXT("fields-two")).IsSuccess()));
+		ASSERT_THAT(IsFalse(Code.Get(TEXT("Language/Syntax/StructFields"), TEXT("root")).IsSuccess()));
 	}
 
 	TEST_METHOD(ReplacementOnly)
@@ -84,8 +94,9 @@ public:
 		auto& Code = AngelscriptTest::FAngelscriptTestCode::GetInstance();
 		ASSERT_THAT(IsTrue(Code.IsActivated()));
 		ASSERT_THAT(AreEqual(0, Code.GetRegistrationErrors().Num()));
-		ASSERT_THAT(IsTrue(Code.Get(TEXT("Language/Counter"), TEXT("root")).IsSuccess()));
+		ASSERT_THAT(IsTrue(Code.Get(TEXT("Language/Syntax/StructFields"), TEXT("fields-two")).IsSuccess()));
 		ASSERT_THAT(IsTrue(Code.Get(TEXT("Fixture/Secondary"), TEXT("changed")).IsSuccess()));
+		ASSERT_THAT(IsFalse(Code.Get(TEXT("Language/Counter"), TEXT("root")).IsSuccess()));
 	}
 };
 

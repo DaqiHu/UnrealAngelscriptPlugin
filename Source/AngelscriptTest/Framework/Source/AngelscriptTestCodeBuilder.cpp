@@ -1,8 +1,11 @@
-#include "NewVersion/Framework/Source/AngelscriptTestCodeBuilder.h"
-#include "NewVersion/Framework/Source/AngelscriptTestSourceResult.h"
+#include "Framework/Source/AngelscriptTestCodeBuilder.h"
+#include "Framework/Source/AngelscriptTestAnnotations.h"
+#include "Framework/Source/AngelscriptTestSourceOriginMap.h"
+#include "Framework/Source/AngelscriptTestSourceResult.h"
 
 #include "Containers/Map.h"
 #include "Containers/Set.h"
+#include "Misc/Optional.h"
 
 namespace AngelscriptTest
 {
@@ -100,6 +103,108 @@ void ValidateTopics(
 		}
 	}
 }
+
+void ValidateSourceDescriptor(
+	const FAngelscriptTestSource& Source,
+	const FAngelscriptTestSourceDescriptor& Descriptor,
+	FStringView FileTag,
+	FStringView VersionTag,
+	TArray<FAngelscriptTestError>& OutErrors)
+{
+	const int32 CleanNum = Source.GetBytes().Num();
+	for (const FAngelscriptTestSourceDescriptor::FPoint& Point : Descriptor.Annotations.Points)
+	{
+		if (Point.Offset < 0 || Point.Offset > CleanNum)
+		{
+			OutErrors.Add(MakeBuilderError(
+				TEXT("InvalidAnnotationOffset"),
+				TEXT("A Point offset must lie in [0, clean Num]."),
+				FileTag,
+				VersionTag));
+		}
+	}
+	for (const FAngelscriptTestSourceDescriptor::FBreakpoint& Breakpoint : Descriptor.Annotations.Breakpoints)
+	{
+		if (Breakpoint.Offset < 0 || Breakpoint.Offset > CleanNum)
+		{
+			OutErrors.Add(MakeBuilderError(
+				TEXT("InvalidAnnotationOffset"),
+				TEXT("A Breakpoint offset must lie in [0, clean Num]."),
+				FileTag,
+				VersionTag));
+		}
+	}
+	for (const FAngelscriptTestSourceDescriptor::FRange& Range : Descriptor.Annotations.Ranges)
+	{
+		if (Range.Begin > Range.End || Range.Begin < 0 || Range.End > CleanNum)
+		{
+			OutErrors.Add(MakeBuilderError(
+				TEXT("InvalidSourceRange"),
+				TEXT("A Range must be half-open and lie within clean Num."),
+				FileTag,
+				VersionTag));
+		}
+	}
+
+	TArray<FAngelscriptTestSourceDescriptor::FOriginSpan> Spans = Descriptor.OriginSpans;
+	Spans.Sort([](const FAngelscriptTestSourceDescriptor::FOriginSpan& Left,
+		const FAngelscriptTestSourceDescriptor::FOriginSpan& Right)
+	{
+		return Left.CleanBegin < Right.CleanBegin;
+	});
+
+	int32 Cursor = 0;
+	int32 MappedAuthoredEnd = 0;
+	for (const FAngelscriptTestSourceDescriptor::FOriginSpan& Span : Spans)
+	{
+		if (Span.Length <= 0 || Span.CleanBegin < 0 || Span.AuthoredBegin < 0
+			|| Span.CleanBegin + Span.Length > CleanNum)
+		{
+			OutErrors.Add(MakeBuilderError(
+				TEXT("InvalidOriginSpan"),
+				TEXT("Origin spans must have positive length and stay within clean Num."),
+				FileTag,
+				VersionTag));
+			continue;
+		}
+		if (Span.CleanBegin < Cursor)
+		{
+			OutErrors.Add(MakeBuilderError(
+				TEXT("InvalidOriginSpan"),
+				TEXT("Origin spans must not overlap."),
+				FileTag,
+				VersionTag));
+			continue;
+		}
+		if (Span.CleanBegin > Cursor)
+		{
+			OutErrors.Add(MakeBuilderError(
+				TEXT("IncompleteOriginCoverage"),
+				TEXT("Origin spans must cover every clean byte without gaps."),
+				FileTag,
+				VersionTag));
+		}
+		Cursor = Span.CleanBegin + Span.Length;
+		MappedAuthoredEnd = FMath::Max(MappedAuthoredEnd, Span.AuthoredBegin + Span.Length);
+	}
+	if (Cursor < CleanNum)
+	{
+		OutErrors.Add(MakeBuilderError(
+			TEXT("IncompleteOriginCoverage"),
+			TEXT("Origin spans must cover every clean byte without gaps."),
+			FileTag,
+			VersionTag));
+	}
+	if (Descriptor.AuthoredEnd < 0 || Descriptor.AuthoredEnd < MappedAuthoredEnd)
+	{
+		OutErrors.Add(MakeBuilderError(
+			TEXT("InvalidAuthoredEnd"),
+			TEXT("AuthoredEnd must stay in authored bounds and not reverse a continuous mapping."),
+			FileTag,
+			VersionTag));
+	}
+}
+
 }
 
 struct FAngelscriptTestSourceCase::FData
@@ -222,16 +327,19 @@ struct FAngelscriptTestCodeBuilder::FData
 		FPendingNode(
 			FAngelscriptTestVersionMeta InVersionMeta,
 			FAngelscriptTestSource InSource,
-			bool bInRoot)
+			bool bInRoot,
+			TOptional<FAngelscriptTestSourceDescriptor> InDescriptor = {})
 			: VersionMeta(MoveTemp(InVersionMeta))
 			, Source(MoveTemp(InSource))
 			, bRoot(bInRoot)
+			, Descriptor(MoveTemp(InDescriptor))
 		{
 		}
 
 		FAngelscriptTestVersionMeta VersionMeta;
 		FAngelscriptTestSource Source;
 		bool bRoot = false;
+		TOptional<FAngelscriptTestSourceDescriptor> Descriptor;
 	};
 
 	explicit FData(const FAngelscriptTestFileMeta& InFileMeta)
@@ -270,7 +378,8 @@ struct FAngelscriptTestCodeBuilder::FData
 void FAngelscriptTestCodeBuilder::AddNode(
 	FAngelscriptTestVersionMeta VersionMeta,
 	FAngelscriptTestSource Source,
-	bool bRoot)
+	bool bRoot,
+	TOptional<FAngelscriptTestSourceDescriptor> Descriptor)
 {
 	if (Data->bConsumed)
 	{
@@ -326,32 +435,13 @@ void FAngelscriptTestCodeBuilder::AddNode(
 				VersionTag));
 		}
 	}
-	else
+	else if (VersionMeta.Parent.IsSet() && !IsValidVersionTag(VersionMeta.Parent.GetValue()))
 	{
-		if (VersionMeta.Tag == TEXT("root"))
-		{
-			Data->Errors.Add(MakeBuilderError(
-				TEXT("RootMustUseAddRoot"),
-				TEXT("The root version must be added with AddRoot."),
-				Data->FileMeta->Tag,
-				VersionTag));
-		}
-		if (!VersionMeta.Parent.IsSet())
-		{
-			Data->Errors.Add(MakeBuilderError(
-				TEXT("VersionParentRequired"),
-				TEXT("Every non-root version must declare a Parent."),
-				Data->FileMeta->Tag,
-				VersionTag));
-		}
-		else if (!IsValidVersionTag(VersionMeta.Parent.GetValue()))
-		{
-			Data->Errors.Add(MakeBuilderError(
-				TEXT("InvalidParentTag"),
-				TEXT("Parent must be a valid same-file version Tag."),
-				Data->FileMeta->Tag,
-				VersionTag));
-		}
+		Data->Errors.Add(MakeBuilderError(
+			TEXT("InvalidParentTag"),
+			TEXT("Parent must be a valid same-file version Tag."),
+			Data->FileMeta->Tag,
+			VersionTag));
 	}
 
 	if (!VersionTag.IsEmpty()
@@ -367,7 +457,7 @@ void FAngelscriptTestCodeBuilder::AddNode(
 			VersionTag));
 	}
 
-	Data->Nodes.Emplace(MoveTemp(VersionMeta), MoveTemp(Source), bRoot);
+	Data->Nodes.Emplace(MoveTemp(VersionMeta), MoveTemp(Source), bRoot, MoveTemp(Descriptor));
 }
 
 FAngelscriptTestCodeBuilder::FAngelscriptTestCodeBuilder(const FAngelscriptTestFileMeta& FileMeta)
@@ -384,11 +474,27 @@ void FAngelscriptTestCodeBuilder::AddRoot(
 	AddNode(MoveTemp(VersionMeta), MoveTemp(Source), true);
 }
 
+void FAngelscriptTestCodeBuilder::AddRoot(
+	FAngelscriptTestVersionMeta VersionMeta,
+	FAngelscriptTestSource Source,
+	FAngelscriptTestSourceDescriptor Descriptor)
+{
+	AddNode(MoveTemp(VersionMeta), MoveTemp(Source), true, MoveTemp(Descriptor));
+}
+
 void FAngelscriptTestCodeBuilder::AddVersion(
 	FAngelscriptTestVersionMeta VersionMeta,
 	FAngelscriptTestSource Source)
 {
 	AddNode(MoveTemp(VersionMeta), MoveTemp(Source), false);
+}
+
+void FAngelscriptTestCodeBuilder::AddVersion(
+	FAngelscriptTestVersionMeta VersionMeta,
+	FAngelscriptTestSource Source,
+	FAngelscriptTestSourceDescriptor Descriptor)
+{
+	AddNode(MoveTemp(VersionMeta), MoveTemp(Source), false, MoveTemp(Descriptor));
 }
 
 FAngelscriptTestCodeBuildResult FAngelscriptTestCodeBuilder::Build()
@@ -408,11 +514,9 @@ FAngelscriptTestCodeBuildResult FAngelscriptTestCodeBuilder::Build()
 
 	TMap<FString, int32> TagCounts;
 	TMap<FString, int32> UniqueNodeIndices;
-	int32 RootCount = 0;
 	for (int32 Index = 0; Index < Data->Nodes.Num(); ++Index)
 	{
 		const FData::FPendingNode& Node = Data->Nodes[Index];
-		RootCount += Node.bRoot ? 1 : 0;
 		int32& Count = TagCounts.FindOrAdd(Node.VersionMeta.Tag);
 		++Count;
 		if (Count == 1)
@@ -425,18 +529,11 @@ FAngelscriptTestCodeBuildResult FAngelscriptTestCodeBuilder::Build()
 		}
 	}
 
-	if (RootCount == 0)
+	if (Data->Nodes.Num() == 0)
 	{
 		BuildErrors.Add(MakeBuilderError(
 			TEXT("MissingRoot"),
-			TEXT("A file must contain exactly one root version."),
-			Data->FileMeta->Tag));
-	}
-	else if (RootCount > 1)
-	{
-		BuildErrors.Add(MakeBuilderError(
-			TEXT("MultipleRoots"),
-			TEXT("A file must contain exactly one root version."),
+			TEXT("A file must contain at least one version."),
 			Data->FileMeta->Tag));
 	}
 
@@ -513,9 +610,30 @@ FAngelscriptTestCodeBuildResult FAngelscriptTestCodeBuilder::Build()
 		}
 	}
 
+	for (FData::FPendingNode& Node : Data->Nodes)
+	{
+		if (Node.Descriptor.IsSet())
+		{
+			ValidateSourceDescriptor(
+				Node.Source,
+				Node.Descriptor.GetValue(),
+				Data->FileMeta->Tag,
+				Node.VersionMeta.Tag,
+				BuildErrors);
+		}
+	}
+
 	if (!BuildErrors.IsEmpty())
 	{
 		return FAngelscriptTestCodeBuildResult(MoveTemp(BuildErrors));
+	}
+
+	for (FData::FPendingNode& Node : Data->Nodes)
+	{
+		if (Node.Descriptor.IsSet())
+		{
+			Node.Source = ApplySourceDescriptor(MoveTemp(Node.Source), Node.Descriptor.GetValue());
+		}
 	}
 
 	TArray<int32> SortedIndices;
@@ -539,5 +657,45 @@ FAngelscriptTestCodeBuildResult FAngelscriptTestCodeBuilder::Build()
 		SourceCases.Add(FAngelscriptTestSourceCase(Data->FileMeta, Node.VersionMeta, Node.Source));
 	}
 	return FAngelscriptTestCodeBuildResult(MoveTemp(SourceCases));
+}
+
+FAngelscriptTestSource FAngelscriptTestCodeBuilder::ApplySourceDescriptor(
+	FAngelscriptTestSource Source,
+	const FAngelscriptTestSourceDescriptor& Descriptor)
+{
+	FAngelscriptTestAnnotations Annotations;
+	for (const FAngelscriptTestSourceDescriptor::FPoint& Point : Descriptor.Annotations.Points)
+	{
+		Annotations.Points.Add(Point.Name, Point.Offset);
+	}
+	for (const FAngelscriptTestSourceDescriptor::FBreakpoint& Breakpoint : Descriptor.Annotations.Breakpoints)
+	{
+		Annotations.Breakpoints.Add(Breakpoint.Name, Breakpoint.Offset);
+	}
+	for (const FAngelscriptTestSourceDescriptor::FRange& Range : Descriptor.Annotations.Ranges)
+	{
+		Annotations.Ranges.Add(Range.Name, {Range.Begin, Range.End});
+	}
+
+	FAngelscriptTestSourceOriginMap OriginMap;
+	OriginMap.HostFile = Descriptor.AuthoredPath;
+	OriginMap.HostLine = Descriptor.AuthoredLine;
+	const int32 CleanNum = Source.GetBytes().Num();
+	OriginMap.OriginalByteOffsets.Init(0, CleanNum + 1);
+	for (const FAngelscriptTestSourceDescriptor::FOriginSpan& Span : Descriptor.OriginSpans)
+	{
+		for (int32 Index = 0; Index < Span.Length; ++Index)
+		{
+			OriginMap.OriginalByteOffsets[Span.CleanBegin + Index] = Span.AuthoredBegin + Index;
+		}
+	}
+	OriginMap.OriginalByteOffsets[CleanNum] = Descriptor.AuthoredEnd;
+
+	TArray<uint8> Bytes;
+	Bytes.Append(Source.GetBytes().GetData(), CleanNum);
+	return FAngelscriptTestSource::FromParsedData(
+		MoveTemp(Bytes),
+		MoveTemp(Annotations),
+		MoveTemp(OriginMap));
 }
 }
