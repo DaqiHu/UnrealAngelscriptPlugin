@@ -30,7 +30,7 @@ This repository is imported from `TDGameStudio/AngelscriptProject` as a clean pl
 - `Source/AngelscriptTestJIT/` - Editor-only fixed StaticJIT provider used by plugin automation; never included in non-Editor targets.
 - `Source/AngelscriptTest/` - automation tests for the plugin.
 - `Source/AngelscriptUHTTool/` - UHT integration toolchain.
-- `Standalone/` - the no-Unreal CMake build, native runner, and offline compiler/analysis delivery surface.
+- `AngelscriptLSP/` - the no-Unreal CMake build, native runner, and offline compiler/analysis delivery surface (product remains dormant Standalone).
 
 ## Requirements
 
@@ -301,7 +301,7 @@ For ambiguous edits, offline asset migration, or hand-authored redirects, use th
 
 ## Standalone compiler
 
-`Standalone/` builds the maintained fork and shared language-core sources
+`AngelscriptLSP/` builds the maintained fork and shared language-core sources
 without Unreal Engine. Its native profile compiles and executes a bounded
 portable standard library; its UE profile performs compile-only validation
 against exactly one complete offline bundle. UE declarations are installed as
@@ -313,7 +313,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File Tools\RunTestSuite.ps1 -
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File Tools\RunTestSuite.ps1 -Suite StandaloneRelease -TimeoutMs 1200000
 ```
 
-See `Standalone/README.md` for build, CLI, package, security, adapter, resource,
+See `AngelscriptLSP/README.md` for build, CLI, package, security, adapter, resource,
 and support-tier contracts.
 
 ## Standalone offline contract export
