@@ -875,6 +875,9 @@ public:
 	virtual const char *GetDefaultNamespace() const = 0;
 
 	// Script modules
+	virtual asIScriptModule *GetModule(const char *name) const = 0;
+	virtual asUINT           GetModuleCount() const = 0;
+	virtual asIScriptModule *GetModuleByIndex(asUINT index) const = 0;
 
 	// Script functions
 	virtual asIScriptFunction *GetFunctionById(int funcId) const = 0;
@@ -2141,8 +2144,13 @@ enum asEBCInstr
 	asBC_SaveReturnValue		= 210,
 	asBC_CmpPtrNull		= 211,
 	asBC_ThrowException		= 212,
+	asBC_AddPtr			= 213,
+	asBC_BindPtr		= 214,
+	asBC_RemovePtr		= 215,
+	asBC_ClearPtr		= 216,
+	asBC_ClonePtr		= 217,
 
-	asBC_MAXBYTECODE	= 212,
+	asBC_MAXBYTECODE	= 217,
 
 	// Temporary tokens. Can't be output to the final program
 	asBC_VarDecl		= 251,
@@ -2451,12 +2459,12 @@ const asSBCInfo asBCInfo[256] =
 	asBCINFO(SaveReturnValue,		NO_ARG,			0),
 	asBCINFO(CmpPtrNull,	rW_ARG,		0),
 	asBCINFO(ThrowException,	W_ARG,		0),
+	asBCINFO(AddPtr,	wW_ARG,		0),
+	asBCINFO(BindPtr,	W_ARG,		0xFFFF),
+	asBCINFO(RemovePtr,	wW_ARG,		0),
+	asBCINFO(ClearPtr,	wW_ARG,		0),
+	asBCINFO(ClonePtr,	wW_rW_ARG,	0),
 
-	asBCINFO_DUMMY(213),
-	asBCINFO_DUMMY(214),
-	asBCINFO_DUMMY(215),
-	asBCINFO_DUMMY(216),
-	asBCINFO_DUMMY(217),
 	asBCINFO_DUMMY(218),
 	asBCINFO_DUMMY(219),
 	asBCINFO_DUMMY(220),

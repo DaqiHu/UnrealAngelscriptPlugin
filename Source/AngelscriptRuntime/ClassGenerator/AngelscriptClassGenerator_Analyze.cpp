@@ -239,6 +239,35 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FClassData& Cl
 			ScriptType->GetProperty(ScriptIndex, &Name, &TypeId, &bIsPrivate, &bIsProtected, &PropertyOffset);
 
 			auto PropertyType = PropertyTypes[ScriptIndex];
+			if (PropertyDesc->Meta.Contains(TEXT("BlueprintAssignable")))
+			{
+				const FString TypeName = !PropertyDesc->LiteralType.IsEmpty()
+					? PropertyDesc->LiteralType
+					: (PropertyType.ScriptClass
+						? FString(ANSI_TO_TCHAR(PropertyType.ScriptClass->GetName()))
+						: FString());
+				TSharedPtr<FAngelscriptModuleDesc> FoundInModule;
+				const TSharedPtr<FAngelscriptDelegateDesc> Existing = FAngelscriptEngine::Get().GetDelegate(TypeName, &FoundInModule);
+				TSharedPtr<FAngelscriptDelegateDesc> Declared;
+				for (const TSharedRef<FAngelscriptDelegateDesc>& Candidate : ModuleData.NewModule->Delegates)
+				{
+					if (Candidate->DelegateName == TypeName)
+					{
+						Declared = Candidate;
+						break;
+					}
+				}
+				const TSharedPtr<FAngelscriptDelegateDesc> Delegate = Declared.IsValid() ? Declared : Existing;
+				if (Delegate.IsValid() && !Delegate->bIsDynamic)
+				{
+					FAngelscriptEngine::Get().ScriptCompileError(ModuleData.NewModule, PropertyDesc->LineNumber, FString::Printf(
+						TEXT("Ordinary multicast %s cannot be UPROPERTY(BlueprintAssignable)."),
+						*TypeName));
+					ClassData.ReloadReq = EReloadRequirement::Error;
+					ModuleData.ReloadReq = EReloadRequirement::Error;
+					break;
+				}
+			}
 			if (!PropertyType.IsValid() || !PropertyType.CanCreateProperty())
 			{
 				// Emit an error, this type is not valid for usage as FProperty
@@ -1514,24 +1543,34 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FDelegateData&
 	if (DelegateData.OldDelegate.IsValid() && DelegateData.OldDelegate->ScriptType)
 		UpdatedScriptTypeMap.Add(DelegateData.OldDelegate->ScriptType, ScriptType);
 
-	// Find the signature function in the delegate's struct class
-	asIScriptFunction* ScriptSignature = nullptr;
+	if (!DelegateDesc->bIsDynamic)
+	{
+		DelegateDesc->Function = nullptr;
+		return;
+	}
 
-	if (DelegateDesc->bIsMulticast)
-		ScriptSignature = ScriptType->GetMethodByName("Broadcast");
-	else
-		ScriptSignature = ScriptType->GetMethodByName("Execute");
-
+	asIScriptFunction* ScriptSignature = ScriptType->GetCallableSignature();
 	if (ScriptSignature == nullptr)
 	{
 		FAngelscriptEngine::Get().ScriptCompileError(ModuleData.NewModule, DelegateData.NewDelegate->LineNumber, FString::Printf(
-			TEXT("Could not find generated execute method for delegate type %s"), *DelegateDesc->DelegateName));
+			TEXT("Could not find callable signature for delegate type %s"), *DelegateDesc->DelegateName));
 		DelegateData.ReloadReq = EReloadRequirement::Error;
 		return;
 	}
 
-	auto FunctionDesc = MakeShared<FAngelscriptFunctionDesc>();
+	TArray<FString> ExistingNames;
+	if (DelegateDesc->Signature.IsValid())
+	{
+		for (const FAngelscriptArgumentDesc& Existing : DelegateDesc->Signature->Arguments)
+		{
+			ExistingNames.Add(Existing.ArgumentName);
+		}
+	}
+	TSharedRef<FAngelscriptFunctionDesc> FunctionDesc = DelegateDesc->Signature.IsValid()
+		? DelegateDesc->Signature.ToSharedRef()
+		: MakeShared<FAngelscriptFunctionDesc>();
 	DelegateDesc->Signature = FunctionDesc;
+	FunctionDesc->Arguments.Reset();
 
 	int32 ReturnTypeId = ScriptSignature->GetReturnTypeId();
 	if (ReturnTypeId != asTYPEID_VOID)
@@ -1565,7 +1604,14 @@ void FAngelscriptClassGenerator::Analyze(FModuleData& ModuleData, FDelegateData&
 
 		FAngelscriptArgumentDesc ArgDesc;
 		ArgDesc.Type = Type;
-		ArgDesc.ArgumentName = ANSI_TO_TCHAR(ParamName);
+		if (i < ExistingNames.Num() && !ExistingNames[i].IsEmpty())
+		{
+			ArgDesc.ArgumentName = ExistingNames[i];
+		}
+		else
+		{
+			ArgDesc.ArgumentName = ANSI_TO_TCHAR(ParamName);
+		}
 		ArgDesc.DefaultValue = ANSI_TO_TCHAR(ParamDefaultValue);
 
 		// Some types of arguments are forced to be outparam refs
@@ -1866,14 +1912,16 @@ void FAngelscriptClassGenerator::SetupModule(FModuleData& ModuleData)
 
 		// Tag the script type as a delegate so we can classify it before the
 		// actual delegate signature function is generated.
-		if (DelegateDesc->bIsMulticast)
-			ScriptType->SetUserData(FAngelscriptType::TAG_UserData_Multicast_Delegate);
-		else
-			ScriptType->SetUserData(FAngelscriptType::TAG_UserData_Delegate);
+		if (ScriptType)
+		{
+			if (DelegateDesc->bIsMulticast)
+				ScriptType->SetUserData(FAngelscriptType::TAG_UserData_Multicast_Delegate);
+			else
+				ScriptType->SetUserData(FAngelscriptType::TAG_UserData_Delegate);
 
-		check(!DataRefByNewScriptType.Contains(ScriptType));
-
-		DataRefByNewScriptType.Add(DelegateData.NewDelegate->ScriptType, FDataRef(ModuleData, DelegateData));
+			check(!DataRefByNewScriptType.Contains(ScriptType));
+			DataRefByNewScriptType.Add(ScriptType, FDataRef(ModuleData, DelegateData));
+		}
 		DataRefByName.Add(DelegateData.NewDelegate->DelegateName, FDataRef(ModuleData, DelegateData));
 	}
 }

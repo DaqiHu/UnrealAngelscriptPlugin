@@ -83,10 +83,6 @@ void FAngelscriptClassGenerator::ReinitializeScriptObject(class asCScriptObject*
 		Context->SetObject(ScriptObject);
 		Context->Execute();
 	}
-	else
-	{
-		ensureMsgf(false, TEXT("Angelscript implemented class does not have a constructor with no arguments. This will crash soon."));
-	}
 }
 
 static UE::GC::ObjectAROFn GetARO(UClass* Class)

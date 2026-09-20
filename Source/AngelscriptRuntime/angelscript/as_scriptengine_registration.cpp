@@ -1,8 +1,12 @@
 /* Maintained Unreal AngelScript fork — transactional semantic registration. */
 #include "as_scriptengine.h"
 #include "as_execution_snapshot.h"
+#include "as_module.h"
 #include "as_namespace.h"
+#include "as_property.h"
+#include "as_scriptfunction.h"
 #include "as_type_id_registry.h"
+#include "as_typeinfo.h"
 #include "frontend/AST/as_type_context.h"
 #include "Containers/Set.h"
 #include <algorithm>
@@ -386,6 +390,144 @@ asERegistrationResult asCScriptEngine::RegisterExternalDefinitions(
 	return asERegistrationResult::Succeeded;
 }
 
+void asCScriptEngine::UnpublishDefinitionSets(TConstArrayView<asCDefinitions*> Sets)
+{
+	TArray<asSStableKey> ExecutableKeys;
+	{
+		std::lock_guard<std::mutex> EngineLock(registrationMutex);
+		TSet<asCDefinitions*> Owned;
+		for (const TUniquePtr<asCDefinitions>& Item : definitionSets)
+		{
+			Owned.Add(Item.Get());
+		}
+		for (asCDefinitions* Set : Sets)
+		{
+			if (!Set || !Owned.Contains(Set))
+			{
+				continue;
+			}
+			for (asCTypeInfo* Type : Set->Types)
+			{
+				if (!Type)
+				{
+					continue;
+				}
+				typesByKey.Remove(Type->GetStableKey());
+				typesByName.Remove(MetadataTypeName(*Type));
+				if (const int* Id = Set->BoundTypeIds.Find(Type))
+				{
+					typesById.Remove(*Id);
+				}
+			}
+			for (asCScriptFunction* Function : Set->Functions)
+			{
+				if (!Function)
+				{
+					continue;
+				}
+				if (!Function->IsMetadataCallableSignature())
+				{
+					functionsByKey.Remove(Function->GetStableKey());
+				}
+				if (const int* Id = Set->BoundFunctionIds.Find(Function))
+				{
+					functionsById.Remove(*Id);
+				}
+				ExecutableKeys.Add(Function->GetStableKey());
+			}
+			for (asCGlobalProperty* Global : Set->Globals)
+			{
+				if (!Global)
+				{
+					continue;
+				}
+				globalsByKey.Remove(Global->GetStableKey());
+				if (Global->nameSpace)
+				{
+					globalsByName.Remove(MetadataName(Global->nameSpace->name.AddressOf(), Global->name.AddressOf()));
+				}
+			}
+		}
+	}
+	for (const asSStableKey& Key : ExecutableKeys)
+	{
+		if (asCExecutableFunction* Existing = FindPublishedExecutable(Key))
+		{
+			UnpublishExecutable(Key, Existing);
+		}
+	}
+}
+
+void asCScriptEngine::RetireDefinitionSets(TConstArrayView<asCDefinitions*> Sets)
+{
+	UnpublishDefinitionSets(Sets);
+	TArray<TUniquePtr<asCDefinitions>> ReleasedSets;
+	{
+		std::lock_guard<std::mutex> EngineLock(registrationMutex);
+		TSet<asCDefinitions*> Retire;
+		for (asCDefinitions* Set : Sets)
+		{
+			if (Set)
+			{
+				Retire.Add(Set);
+			}
+		}
+		for (asUINT ModuleIndex = 0; ModuleIndex < scriptModules.GetLength(); ++ModuleIndex)
+		{
+			if (asCModule* Module = scriptModules[ModuleIndex])
+			{
+				bool bOwnsRetired = false;
+				auto MarksRetired = [&](asITypeInfo* Info) -> bool
+				{
+					asCTypeInfo* Type = static_cast<asCTypeInfo*>(Info);
+					return Type && Retire.Contains(Type->GetDefinitions());
+				};
+				for (asUINT TypeIndex = 0; !bOwnsRetired && TypeIndex < Module->GetObjectTypeCount(); ++TypeIndex)
+				{
+					bOwnsRetired = MarksRetired(Module->GetObjectTypeByIndex(TypeIndex));
+				}
+				for (asUINT EnumIndex = 0; !bOwnsRetired && EnumIndex < Module->GetEnumCount(); ++EnumIndex)
+				{
+					bOwnsRetired = MarksRetired(Module->GetEnumByIndex(EnumIndex));
+				}
+				if (bOwnsRetired)
+				{
+					Module->DetachDefinitionOwnedTypes();
+				}
+			}
+		}
+		for (int32 Index = definitionSets.Num() - 1; Index >= 0; --Index)
+		{
+			asCDefinitions* Item = definitionSets[Index].Get();
+			if (!Retire.Contains(Item))
+			{
+				continue;
+			}
+			Item->BoundEngine = nullptr;
+			for (asCTypeInfo* Type : Item->Types)
+			{
+				if (Type)
+				{
+					Type->engine = nullptr;
+				}
+			}
+			for (asCScriptFunction* Function : Item->Functions)
+			{
+				if (Function)
+				{
+					Function->engine = nullptr;
+				}
+			}
+			Item->BoundTypeIds.Empty();
+			Item->BoundFunctionIds.Empty();
+			Item->State.store(asEDefinitionState::Retired, std::memory_order_release);
+			ReleasedSets.Add(MoveTemp(definitionSets[Index]));
+			definitionSets.RemoveAt(Index);
+		}
+	}
+	ReleasedSets.Empty();
+}
+
 void asCScriptEngine::RetireExternalDefinitions()
 {
 	TArray<TUniquePtr<asCDefinitions>> ReleasedSets;
@@ -440,6 +582,13 @@ void asCScriptEngine::RetireExternalDefinitions()
 			}
 			Item->BoundTypeIds.Empty(); Item->BoundFunctionIds.Empty();
 			Item->State.store(asEDefinitionState::Retired, std::memory_order_release);
+		}
+		for (asUINT ModuleIndex = 0; ModuleIndex < scriptModules.GetLength(); ++ModuleIndex)
+		{
+			if (asCModule* Module = scriptModules[ModuleIndex])
+			{
+				Module->DetachDefinitionOwnedTypes();
+			}
 		}
 		registrationRetired = true;
 		ReleasedSets = MoveTemp(definitionSets);
@@ -562,6 +711,23 @@ asCScriptFunction* asCScriptEngine::FindFunction(const asSStableKey& Key) const
 {
 	std::lock_guard<std::mutex> Lock(registrationMutex);
 	return functionsByKey.FindRef(Key);
+}
+
+asCScriptFunction* asCScriptEngine::FindRegisteredFunction(const asSStableKey& Key) const
+{
+	std::lock_guard<std::mutex> Lock(registrationMutex);
+	if (asCScriptFunction* Function = functionsByKey.FindRef(Key))
+	{
+		return Function;
+	}
+	for (const TPair<int, asCScriptFunction*>& Pair : functionsById)
+	{
+		if (Pair.Value && Pair.Value->GetStableKey() == Key)
+		{
+			return Pair.Value;
+		}
+	}
+	return nullptr;
 }
 
 asCGlobalProperty* asCScriptEngine::FindGlobalProperty(const char* Namespace, const char* Name) const

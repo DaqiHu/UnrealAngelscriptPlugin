@@ -1,5 +1,6 @@
 #include "as_bytecode_emitter_internal.h"
 #include "as_bytecode_opcode.h"
+#include "as_objecttype.h"
 #include "as_property.h"
 #include "frontend/AST/as_type.h"
 #include "HAL/UnrealMemory.h"
@@ -236,15 +237,71 @@ namespace
 	int16 PropertyOffset(asCObjectType* Type, const FString& Name)
 	{
 		if (!Type) return -1;
+		auto FindNamed = [&Name](asCObjectProperty* Property) -> bool
+		{
+			return Property && FString(UTF8_TO_TCHAR(Property->name.AddressOf())) == Name;
+		};
 		for (asUINT Index = 0; Index < Type->localProperties.GetLength(); ++Index)
 		{
-			asCObjectProperty* Property = Type->localProperties[Index];
-			if (Property && FString(UTF8_TO_TCHAR(Property->name.AddressOf())) == Name)
+			if (FindNamed(Type->localProperties[Index]))
 			{
-				return static_cast<int16>(Property->byteOffset);
+				return static_cast<int16>(Type->localProperties[Index]->byteOffset);
+			}
+		}
+		for (asUINT Index = 0; Index < Type->properties.GetLength(); ++Index)
+		{
+			if (FindNamed(Type->properties[Index]))
+			{
+				return static_cast<int16>(Type->properties[Index]->byteOffset);
 			}
 		}
 		return -1;
+	}
+
+	asUINT MemberLoadDwords(asSByteCodeEmitFrame& Frame, asCExpr* Expr)
+	{
+		if (!Expr) return 1;
+		const asCQualType Qual = Expr->GetExpressionQualType();
+		asCType* Type = Qual.IsValid() ? Qual.GetType() : Expr->GetExpressionType();
+		if (Qual.IsHandle() || Qual.IsReference() || asEmitCallableDecl(Frame, Type))
+		{
+			return AS_PTR_SIZE;
+		}
+		if (const asCBuiltinType* Builtin = dyn_cast<asCBuiltinType>(Type))
+		{
+			return DwordWidth(Builtin->GetPrimitive());
+		}
+		if (const asCNominalType* Nominal = dyn_cast<asCNominalType>(Type))
+		{
+			if (Frame.Session)
+			{
+				if (const asCNamedDecl* Decl = Frame.Session->FindNominalDeclaration(Nominal->GetDeclarationIdentity()))
+				{
+					const FString Name = Decl->GetName();
+					if (Name.Equals(TEXT("FName"), ESearchCase::IgnoreCase)
+						|| Name.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+					{
+						return 2;
+					}
+				}
+			}
+		}
+		if (asCObjectType* Object = asEmitFindObjectType(Frame, Type))
+		{
+			if ((Object->flags & (asOBJ_REF | asOBJ_CALLABLE_TYPE)) != 0)
+			{
+				return AS_PTR_SIZE;
+			}
+			if (Object->size == 8)
+			{
+				return 2;
+			}
+			if (Object->size > 0)
+			{
+				return static_cast<asUINT>((Object->size + 3) / 4);
+			}
+		}
+		return AS_PTR_SIZE;
 	}
 
 	asCObjectType* ObjectTypeOf(asSByteCodeEmitFrame& Frame, asCExpr* Expr)
@@ -331,6 +388,19 @@ bool asEmitExpr(asSByteCodeEmitFrame& Frame, asCExpr* Expr, int32& OutLocal)
 	}
 	if (auto* Construct = dyn_cast<asCConstructExpr>(Expr))
 	{
+		if (const asCCallableTypeDecl* Callable = asEmitCallableDecl(Frame, Construct->GetExpressionType()))
+		{
+			OutLocal = static_cast<int32>(Frame.AllocLocal(AS_PTR_SIZE));
+			asSByteCodeOperand Clear;
+			Clear.Kind = asEByteCodeOperandKind::Local;
+			Clear.Immediate = OutLocal;
+			if (Frame.Builder->Emit(asBC_ClrVPtr, MakeArrayView(&Clear, 1)) != asEByteCodeImageStatus::Succeeded) return false;
+			if (Construct->GetArguments().Num() == 0) return true;
+			if (Construct->GetArguments().Num() != 1) return false;
+			int32 Source = 0;
+			if (!asEmitExpr(Frame, Construct->GetArguments()[0], Source)) return false;
+			return EmitTwoLocal(Frame, asBC_ClonePtr, OutLocal, Source);
+		}
 		const asEPrimitiveType DestPrimitive = PrimitiveOf(Construct->GetExpressionType());
 		if (DestPrimitive != asEPrimitiveType::Invalid && Construct->GetArguments().Num() == 1)
 		{
@@ -374,11 +444,13 @@ bool asEmitExpr(asSByteCodeEmitFrame& Frame, asCExpr* Expr, int32& OutLocal)
 			}
 		}
 		if (!asEmitMemberAddress(Frame, Member)) return false;
-		OutLocal = static_cast<int32>(Frame.AllocLocal());
+		const asUINT Width = MemberLoadDwords(Frame, Member);
+		OutLocal = static_cast<int32>(Frame.AllocLocal(Width));
 		asSByteCodeOperand Dest;
 		Dest.Kind = asEByteCodeOperandKind::Local;
 		Dest.Immediate = OutLocal;
-		return Frame.Builder->Emit(asBC_RDR4, MakeArrayView(&Dest, 1)) == asEByteCodeImageStatus::Succeeded;
+		const asEBCInstr Read = Width >= 2 ? asBC_RDR8 : asBC_RDR4;
+		return Frame.Builder->Emit(Read, MakeArrayView(&Dest, 1)) == asEByteCodeImageStatus::Succeeded;
 	}
 	if (auto* Default = dyn_cast<asCDefaultArgumentExpr>(Expr))
 	{
@@ -548,7 +620,8 @@ bool asEmitExpr(asSByteCodeEmitFrame& Frame, asCExpr* Expr, int32& OutLocal)
 				asSByteCodeOperand Source;
 				Source.Kind = asEByteCodeOperandKind::Local;
 				Source.Immediate = Right;
-				if (Frame.Builder->Emit(asBC_WRTV4, MakeArrayView(&Source, 1)) != asEByteCodeImageStatus::Succeeded)
+				const asEBCInstr Write = MemberLoadDwords(Frame, Member) >= 2 ? asBC_WRTV8 : asBC_WRTV4;
+				if (Frame.Builder->Emit(Write, MakeArrayView(&Source, 1)) != asEByteCodeImageStatus::Succeeded)
 				{
 					return false;
 				}
@@ -589,9 +662,26 @@ bool asEmitExpr(asSByteCodeEmitFrame& Frame, asCExpr* Expr, int32& OutLocal)
 				OutLocal = Right;
 				return true;
 			}
+			if (asCGlobalProperty* Global = DestVar ? Frame.Globals.FindRef(DestVar->GetStableIdentity()) : nullptr)
+			{
+				asUINT GlobalSlot = 0;
+				if (Frame.Builder->AddGlobalRequirement(*Global, GlobalSlot) != asEByteCodeImageStatus::Succeeded) return false;
+				asSByteCodeOperand Ops[2];
+				Ops[0].Kind = asEByteCodeOperandKind::Local;
+				Ops[0].Immediate = Right;
+				Ops[1].Kind = asEByteCodeOperandKind::GlobalSlot;
+				Ops[1].Slot = GlobalSlot;
+				if (Frame.Builder->Emit(asBC_CpyVtoG4, MakeArrayView(Ops, 2)) != asEByteCodeImageStatus::Succeeded) return false;
+				OutLocal = Right;
+				return true;
+			}
 			int32 Dest = 0;
 			if (!asEmitExpr(Frame, DestRef, Dest)) return false;
 			OutLocal = Dest;
+			if (asEmitCallableDecl(Frame, Binary->GetExpressionType(), Binary->GetRight()))
+			{
+				return EmitTwoLocal(Frame, asBC_ClonePtr, Dest, Right);
+			}
 			return EmitTwoLocal(Frame, CopyVtoV(PrimitiveOf(Binary)), Dest, Right);
 		}
 		if (Binary->GetOperator() == asEBinaryOperator::LogicalAnd || Binary->GetOperator() == asEBinaryOperator::LogicalOr)

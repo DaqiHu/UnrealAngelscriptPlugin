@@ -12,6 +12,8 @@ enum class asEDeclarationDiagnostic : asUINT
 		RemovedImport = 3005,
 		InvalidCallable = 3006,
 		InvalidAnnotation = 3007,
+		RemovedDelegateEventKeyword = 3244,
+		UnsupportedDelegateDeclarationForm = 3245,
 	};
 
 	class ANGELSCRIPTRUNTIME_API asCParser
@@ -33,6 +35,7 @@ enum class asEDeclarationDiagnostic : asUINT
 		bool ParseEnumBody(asCRecordDecl& EnumDecl, int32 CloseBrace);
 		bool ParseTypedDeclaration(TArray<asCAttr*> Attrs);
 		bool ParseCallableDeclaration(TArray<asCAttr*> Attrs);
+		bool ParseDeclareForm(TArray<asCAttr*> Attrs);
 		bool ParseTypeSyntax(int32& Index, int32 End, asSTypeSyntax& OutType) const;
 		bool ParseTypeSyntaxInternal(int32& Index, int32 End, asSTypeSyntax& OutType, int32& PendingClosers, int32 Depth) const;
 		bool ParseRemovedDeclaration();
@@ -52,7 +55,7 @@ enum class asEDeclarationDiagnostic : asUINT
 		asCExpr* ParseExpression(int32 MinimumPrecedence = 1);
 		asCExpr* ParseUnaryExpression();
 		asCExpr* ParsePrimaryExpression();
-		bool ParseCallArguments(TArray<asSParsedCallArgument>& Arguments, asETokenKind Closing = asETokenKind::RightParen);
+		bool ParseCallArguments(TArray<asSParsedCallArgument>& Arguments, asETokenKind Closing = asETokenKind::RightParen, bool bBareIdentifierTarget = false);
 		bool CaptureInitializerRange(int32& Index, int32 End, asCSourceRange& Range) const;
 		bool TryParseLocalDeclaration(TArray<asCStmt*>& OutDeclarations);
 		bool CaptureStatementRange(int32& Index, asCSourceRange& Range, int32 Depth = 0) const;

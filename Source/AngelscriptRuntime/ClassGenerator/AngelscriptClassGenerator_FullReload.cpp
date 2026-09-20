@@ -237,6 +237,14 @@ void FAngelscriptClassGenerator::CreateFullReloadStruct(FModuleData& ModuleData,
 void FAngelscriptClassGenerator::CreateFullReloadDelegate(FModuleData& Module, FDelegateData& Delegate)
 {
 	auto DelegateDesc = Delegate.NewDelegate;
+	if (!DelegateDesc.IsValid() || !DelegateDesc->bIsDynamic)
+	{
+		if (DelegateDesc.IsValid())
+		{
+			DelegateDesc->Function = nullptr;
+		}
+		return;
+	}
 
 	FName FunctionName = *(FString::Printf(TEXT("%s"),
 			*DelegateDesc->DelegateName

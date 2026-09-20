@@ -65,6 +65,8 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptDelegateOperations
 	static void ConstructFromFunction_Signature(FScriptDelegate* Delegate, UObject* Object, const FName& FunctionName, UDelegateFunction* Signature);
 	static void BindUFunction(FScriptDelegate* Delegate, asCScriptFunction* Function, UObject* Object, const FName& FunctionName);
 	static void BindUFunction_Signature(FScriptDelegate* Delegate, UObject* Object, const FName& FunctionName, UDelegateFunction* Signature);
+	static void ProcessCallPtr(asPWORD Slot, UDelegateFunction* Signature, void* ParameterBuffer);
+	static bool BindScriptIntTransform(TDelegate<int32(int32)>& Dest, asIScriptEngine* Engine, asIScriptFunction* Function, int32 Payload, FString& OutError);
 
 	static UDelegateFunction* GetDelegateSignature(void* Ptr, int TypeId)
 	{
@@ -110,6 +112,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptMulticastDelegateOperations
 
 	static void AddUFunction(FMulticastScriptDelegate* Delegate, asCScriptFunction* Function, UObject* Object, const FName& FunctionName);
 	static void AddUFunction_Signature(FMulticastScriptDelegate* Delegate, UObject* Object, const FName& FunctionName, UDelegateFunction* Signature);
+	static bool AddScriptIntListener(TMulticastDelegate<void(int32)>& Dest, asIScriptEngine* Engine, asIScriptFunction* Function, FDelegateHandle& OutHandle, FString& OutError, int32* ObservedValue = nullptr);
 
 	static void Unbind(FMulticastScriptDelegate* Delegate, UObject* Object, const FName& InFunctionName)
 	{

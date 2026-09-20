@@ -6,6 +6,8 @@
 #include "frontend/AST/as_expr.h"
 #include "frontend/AST/as_stmt.h"
 #include "frontend/AST/as_ast_cast.h"
+#include "frontend/AST/as_type.h"
+#include "frontend/Compile/as_compilation_session.h"
 
 #include "Containers/Map.h"
 
@@ -48,4 +50,17 @@ bool asEmitNoteLiveObject(asSByteCodeEmitFrame& Frame, int32 Local, asCObjectTyp
 bool asEmitCallDefaultConstructor(asSByteCodeEmitFrame& Frame, asCObjectType* Type, int32 DestLocal);
 bool asEmitNoteSource(asSByteCodeEmitFrame& Frame, const asCStmt* Stmt);
 asCObjectType* asEmitFindObjectType(asSByteCodeEmitFrame& Frame, asCType* Type);
+inline const asCCallableTypeDecl* asEmitCallableDecl(asSByteCodeEmitFrame& Frame, asCType* Type)
+{
+	if (!Type || !Frame.Session) return nullptr;
+	const asCNominalType* Nominal = dyn_cast<asCNominalType>(Type);
+	return Nominal
+		? dyn_cast<asCCallableTypeDecl>(Frame.Session->FindNominalDeclaration(Nominal->GetDeclarationIdentity()))
+		: nullptr;
+}
+inline const asCCallableTypeDecl* asEmitCallableDecl(asSByteCodeEmitFrame& Frame, asCType* Type, asCExpr* Expr)
+{
+	if (const asCCallableTypeDecl* Decl = asEmitCallableDecl(Frame, Type)) return Decl;
+	return Expr ? asEmitCallableDecl(Frame, Expr->GetExpressionType()) : nullptr;
+}
 END_AS_NAMESPACE

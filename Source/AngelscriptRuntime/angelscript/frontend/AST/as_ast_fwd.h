@@ -30,6 +30,7 @@ enum class asEASTNodeFamily : uint8
 		AccessSpecifier,
 	};
 
+	enum class asECallableFlavor : uint8 { Ordinary, Dynamic };
 	enum class asEAccessSpecifier : uint8 { Public, Protected, Private };
 	enum class asEAccessPermissionSubject : uint8 { Named, Wildcard };
 	enum class asEAccessPermissionModifier : uint8 { ReadOnly, EditDefaults, Inherited };

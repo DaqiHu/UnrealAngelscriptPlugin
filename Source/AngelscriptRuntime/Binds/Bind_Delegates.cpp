@@ -6,11 +6,19 @@
 #include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
 
+#include "Misc/ScopeExit.h"
+
 #include "StartAngelscriptHeaders.h"
 //#include "as_scriptengine.h"
 //#include "as_objecttype.h"
 #include "as_scriptengine.h"
 #include "as_objecttype.h"
+#include "as_scriptfunction.h"
+#include "as_datatype.h"
+#include "as_tokendef.h"
+BEGIN_AS_NAMESPACE
+void asProcessCallPtrSlot(asPWORD Slot, UDelegateFunction* Signature, void* ParameterBuffer);
+END_AS_NAMESPACE
 #include "EndAngelscriptHeaders.h"
 
 /**
@@ -397,6 +405,11 @@ void FAngelscriptDelegateOperations::BindUFunction_Signature(FScriptDelegate* De
 	}
 
 	Delegate->BindUFunction(InObject, InFunctionName);
+}
+
+void FAngelscriptDelegateOperations::ProcessCallPtr(asPWORD Slot, UDelegateFunction* Signature, void* ParameterBuffer)
+{
+	asProcessCallPtrSlot(Slot, Signature, ParameterBuffer);
 }
 
 void FAngelscriptDelegateOperations::ConstructFromFunction(FScriptDelegate* Delegate, asCScriptFunction* Function, UObject* Object, const FName& FunctionName)
@@ -826,3 +839,137 @@ AS_FORCE_LINK const FAngelscriptBind Bind_Delegates(
 		Delegate_.Method("UObject GetUObject() const", FUNC_TRIVIAL(FAngelscriptDelegateOperations::GetUObject));
 		Delegate_.Method("FName GetFunctionName() const", FUNC_TRIVIAL(FAngelscriptDelegateOperations::GetFunctionName));
 	});
+
+namespace
+{
+	struct FScriptCallState
+	{
+		asIScriptEngine* Engine = nullptr;
+		asIScriptFunction* Function = nullptr;
+		int32 Payload = 0;
+
+		FScriptCallState(asIScriptEngine* InEngine, asIScriptFunction* InFunction, int32 InPayload)
+			: Engine(InEngine)
+			, Function(InFunction)
+			, Payload(InPayload)
+		{
+			if (Function)
+			{
+				Function->AddRef();
+			}
+		}
+
+		~FScriptCallState()
+		{
+			if (Function)
+			{
+				Function->Release();
+			}
+		}
+	};
+
+	bool IsInt32Value(const asCDataType& Type)
+	{
+		return Type.GetTokenType() == ttInt && !Type.IsReference() && Type.GetSizeInMemoryDWords() == 1;
+	}
+
+	asIScriptContext* PrepareScriptCall(asIScriptEngine* Engine, asIScriptFunction* Function, FString& OutError)
+	{
+		if (!Engine || !Function)
+		{
+			OutError = TEXT("missing script target");
+			return nullptr;
+		}
+		asIScriptContext* Context = Engine->CreateContext();
+		if (!Context)
+		{
+			OutError = TEXT("CreateContext failed");
+			return nullptr;
+		}
+		if (Context->Prepare(Function) < 0)
+		{
+			OutError = TEXT("Prepare failed");
+			Context->Release();
+			return nullptr;
+		}
+		return Context;
+	}
+}
+
+bool FAngelscriptDelegateOperations::BindScriptIntTransform(
+	TDelegate<int32(int32)>& Dest,
+	asIScriptEngine* Engine,
+	asIScriptFunction* Function,
+	int32 Payload,
+	FString& OutError)
+{
+	Dest.Unbind();
+	asCScriptFunction* Internal = static_cast<asCScriptFunction*>(Function);
+	if (!Engine || !Internal
+		|| !IsInt32Value(Internal->returnType)
+		|| Internal->parameterTypes.GetLength() != 2
+		|| !IsInt32Value(Internal->parameterTypes[0])
+		|| !IsInt32Value(Internal->parameterTypes[1]))
+	{
+		OutError = TEXT("signature-mismatch");
+		return false;
+	}
+
+	const TSharedRef<FScriptCallState> State = MakeShared<FScriptCallState>(Engine, Function, Payload);
+	Dest.BindLambda([State](int32 Value)
+	{
+		FString InvokeError;
+		asIScriptContext* Context = PrepareScriptCall(State->Engine, State->Function, InvokeError);
+		if (!Context)
+		{
+			return 0;
+		}
+		ON_SCOPE_EXIT { Context->Release(); };
+		Context->SetArgDWord(0, static_cast<asDWORD>(Value));
+		Context->SetArgDWord(1, static_cast<asDWORD>(State->Payload));
+		if (Context->Execute() != asEXECUTION_FINISHED)
+		{
+			return 0;
+		}
+		return static_cast<int32>(Context->GetReturnDWord());
+	});
+	return true;
+}
+
+bool FAngelscriptMulticastDelegateOperations::AddScriptIntListener(
+	TMulticastDelegate<void(int32)>& Dest,
+	asIScriptEngine* Engine,
+	asIScriptFunction* Function,
+	FDelegateHandle& OutHandle,
+	FString& OutError,
+	int32* ObservedValue)
+{
+	OutHandle.Reset();
+	asCScriptFunction* Internal = static_cast<asCScriptFunction*>(Function);
+	if (!Engine || !Internal
+		|| Internal->returnType.GetTokenType() != ttVoid
+		|| Internal->parameterTypes.GetLength() != 1
+		|| !IsInt32Value(Internal->parameterTypes[0]))
+	{
+		OutError = TEXT("signature-mismatch");
+		return false;
+	}
+
+	const TSharedRef<FScriptCallState> State = MakeShared<FScriptCallState>(Engine, Function, 0);
+	OutHandle = Dest.AddLambda([State, ObservedValue](int32 Value)
+	{
+		FString InvokeError;
+		asIScriptContext* Context = PrepareScriptCall(State->Engine, State->Function, InvokeError);
+		if (!Context)
+		{
+			return;
+		}
+		ON_SCOPE_EXIT { Context->Release(); };
+		Context->SetArgDWord(0, static_cast<asDWORD>(Value));
+		if (Context->Execute() == asEXECUTION_FINISHED && ObservedValue)
+		{
+			*ObservedValue = Value;
+		}
+	});
+	return OutHandle.IsValid();
+}

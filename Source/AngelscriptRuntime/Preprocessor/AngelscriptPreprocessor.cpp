@@ -619,7 +619,7 @@ void FAngelscriptPreprocessor::AddSource(const FAngelscriptSource& Source, bool 
 	}
 	else if (Source.bHasSourceText)
 	{
-		File.RawCode = Source.SourceText;
+		File.RawCode = FString(Source.GetSourceText());
 	}
 	else if (bLoadAsynchronous)
 	{
@@ -1898,9 +1898,32 @@ void FAngelscriptPreprocessor::ProcessDefaults(FFile& File, FChunk& Chunk)
 		FString DefaultsLine = Chunk.Content.Mid(Code.StartPos + 8, EndPos - Code.StartPos - 8).TrimStartAndEnd();
 		StripCommentsFromLine(DefaultsLine);
 		GeneratedDefaults += DefaultsLine;
+		if (!DefaultsLine.IsEmpty() && !DefaultsLine.EndsWith(TEXT(";")))
+		{
+			GeneratedDefaults += TEXT(";");
+		}
+		ReplaceWithBlank(Chunk, Code.StartPos, EndPos);
 	}
 
 	Chunk.ClassDesc->DefaultsCode = GeneratedDefaults;
+
+	// The new Builder path does not synthesize __InitDefaults from DefaultsCode.
+	// Emit it in the class body so ClassGen ExecuteDefaultsFunctions can run.
+	if (!GeneratedDefaults.IsEmpty())
+	{
+		const int32 CloseBrace = Chunk.Content.Find(
+			TEXT("}"),
+			ESearchCase::CaseSensitive,
+			ESearchDir::FromEnd);
+		if (CloseBrace != INDEX_NONE)
+		{
+			Chunk.Content.InsertAt(
+				CloseBrace,
+				FString::Printf(
+					TEXT("\nvoid __InitDefaults() { %s }\n"),
+					*GeneratedDefaults));
+		}
+	}
 }
 
 
@@ -2875,6 +2898,7 @@ static FName PP_NAME_AttachSocket("AttachSocket");
 static FName PP_NAME_BlueprintReadWrite("BlueprintReadWrite");
 static FName PP_NAME_BlueprintReadOnly("BlueprintReadOnly");
 static FName PP_NAME_BlueprintHidden("BlueprintHidden");
+static FName PP_NAME_BlueprintAssignable("BlueprintAssignable");
 
 static FName PP_NAME_NotVisible("NotVisible");
 static FName PP_NAME_NotEditable("NotEditable");
@@ -2984,6 +3008,10 @@ void FAngelscriptPreprocessor::ProcessPropertyMacro(FFile& File, FChunk& Chunk, 
 		{
 			PropDesc->bBlueprintWritable = false;
 			PropDesc->bBlueprintReadable = false;
+		}
+		else if (Spec.Name == PP_NAME_BlueprintAssignable)
+		{
+			PropDesc->Meta.Add(Spec.Name, TEXT(""));
 		}
 		else if (Spec.Name == PP_NAME_EditInstanceOnly)
 		{
@@ -3425,6 +3453,12 @@ void FAngelscriptPreprocessor::ResolveSuperClass(TSharedPtr<FAngelscriptClassDes
 #endif
 
 		}
+	}
+
+	if (!ClassDesc->bSuperIsCodeClass && ClassDesc->SuperClass == TEXT("UObject"))
+	{
+		ClassDesc->bSuperIsCodeClass = true;
+		ClassDesc->CodeSuperClass = UObject::StaticClass();
 	}
 
 	if (!ClassDesc->bSuperIsCodeClass)
@@ -4256,50 +4290,6 @@ void FAngelscriptPreprocessor::ParseIntoChunks(FFile& File)
 				&& !bInString
 				&& IsStartOfIdentifier())
 			{
-				bool bIsDelegate = false;
-				bool bIsMulticast = false;
-
-				if ((RawSize - ChunkEnd) >= 6
-					&& FCString::Strncmp(&File.RawCode[ChunkEnd], TEXT("event"), 5) == 0
-					&& IsWhitespace(File.RawCode[ChunkEnd + 5]))
-				{
-					bIsDelegate = true;
-					bIsMulticast = true;
-				}
-				else if ((RawSize - ChunkEnd) >= 9
-					&& FCString::Strncmp(&File.RawCode[ChunkEnd], TEXT("delegate"), 8) == 0
-					&& IsWhitespace(File.RawCode[ChunkEnd + 8]))
-				{
-					bIsDelegate = true;
-				}
-
-				if (bIsDelegate)
-				{
-					bool bInvalidDelegate = false;
-
-					int32 BracketPos = ChunkEnd;
-					while (BracketPos < File.RawCode.Len() && File.RawCode[BracketPos] != '(')
-						BracketPos += 1;
-
-					int32 CloseBracket = FindScopeCloseBracket(File.RawCode, BracketPos);
-					if (CloseBracket != -1)
-					{
-						int32 SemiColon = FindSemicolonDirectlyAfter(File.RawCode, CloseBracket);
-						if (SemiColon != -1)
-						{
-							FDelegateDesc Delegate;
-							Delegate.ChunkIndex = File.ChunkedCode.Num();
-							Delegate.StartPosInChunk = ChunkEnd - ChunkStart;
-							Delegate.EndPosInChunk = SemiColon - ChunkStart;
-							Delegate.BracketPos = BracketPos - ChunkStart;
-							Delegate.bIsMulticast = bIsMulticast;
-							Delegate.FileLineNumber = LineNumber;
-
-							File.Delegates.Add(Delegate);
-						}
-					}
-				}
-
 				if ((RawSize - ChunkEnd) >= 5
 					&& FCString::Strncmp(&File.RawCode[ChunkEnd], TEXT("enum"), 4) == 0
 					&& IsWhitespace(File.RawCode[ChunkEnd + 4]))

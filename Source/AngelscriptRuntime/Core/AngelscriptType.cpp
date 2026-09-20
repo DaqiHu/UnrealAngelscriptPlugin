@@ -17,6 +17,7 @@
 //#include "as_scriptengine.h"
 #include "as_context.h"
 #include "as_datatype.h"
+#include "as_objecttype.h"
 #include "as_scriptengine.h"
 #include "EndAngelscriptHeaders.h"
 
@@ -298,12 +299,92 @@ FAngelscriptTypeUsage FAngelscriptTypeUsage::FromProperty(FAngelscriptTypeDataba
 	return Usage;
 }
 
+static FAngelscriptTypeUsage UsageFromScriptTypeInfo(asITypeInfo* Info)
+{
+	FAngelscriptTypeUsage Usage;
+	if (!Info)
+	{
+		return Usage;
+	}
+	const asQWORD Flags = Info->GetFlags();
+	if (Flags & asOBJ_CALLABLE_TYPE)
+	{
+		void* UserData = Info->GetUserData();
+		if (UserData == FAngelscriptType::TAG_UserData_Multicast_Delegate)
+		{
+			Usage.Type = FAngelscriptType::GetScriptMulticastDelegate();
+		}
+		else
+		{
+			Usage.Type = FAngelscriptType::GetScriptDelegate();
+		}
+		Usage.ScriptClass = Info;
+		return Usage;
+	}
+	if (Flags & asOBJ_SCRIPT_OBJECT)
+	{
+		Usage.Type = (Flags & asOBJ_VALUE)
+			? FAngelscriptType::GetScriptStruct()
+			: FAngelscriptType::GetScriptObject();
+		Usage.ScriptClass = Info;
+		return Usage;
+	}
+	if (Flags & asOBJ_ENUM)
+	{
+		Usage.Type = FAngelscriptType::GetScriptEnum();
+		Usage.ScriptClass = Info;
+		return Usage;
+	}
+	if ((Flags & asOBJ_REF) != 0)
+	{
+		Usage.Type = FAngelscriptType::GetScriptObject();
+		Usage.ScriptClass = Info;
+		return Usage;
+	}
+	Usage.Type = FAngelscriptType::GetByAngelscriptTypeName(ANSI_TO_TCHAR(Info->GetName()));
+	Usage.ScriptClass = Info;
+	return Usage;
+}
+
 FAngelscriptTypeUsage FAngelscriptTypeUsage::FromProperty(class asITypeInfo* ScriptType, int32 PropertyIndex)
 {
-	int TypeId;
-	ScriptType->GetProperty(PropertyIndex, nullptr, &TypeId);
-
-	return FAngelscriptTypeUsage::FromTypeId(TypeId);
+	asITypeInfo* Info = nullptr;
+	int TypeId = 0;
+	if (asCObjectType* ObjectType = CastToObjectType(static_cast<asCTypeInfo*>(ScriptType)))
+	{
+		if (PropertyIndex >= 0 && PropertyIndex < int32(ObjectType->properties.GetLength()))
+		{
+			if (asCObjectProperty* Property = ObjectType->properties[PropertyIndex])
+			{
+				Info = Property->type.GetTypeInfo();
+			}
+		}
+	}
+	if (ScriptType)
+	{
+		ScriptType->GetProperty(PropertyIndex, nullptr, &TypeId);
+	}
+	FAngelscriptTypeUsage Usage = FromTypeId(TypeId);
+	if (Usage.IsValid())
+	{
+		if (!Usage.ScriptClass && Info)
+		{
+			Usage.ScriptClass = Info;
+		}
+		return Usage;
+	}
+	if (Info)
+	{
+		return UsageFromScriptTypeInfo(Info);
+	}
+	if (asIScriptEngine* Engine = ScriptType ? ScriptType->GetEngine() : nullptr)
+	{
+		if (asITypeInfo* ById = Engine->GetTypeInfoById(TypeId))
+		{
+			return UsageFromScriptTypeInfo(ById);
+		}
+	}
+	return Usage;
 }
 
 FAngelscriptTypeUsage FAngelscriptTypeUsage::FromReturn(asIScriptFunction* Function)
@@ -403,6 +484,37 @@ FAngelscriptTypeUsage FAngelscriptTypeUsage::FromTypeId(int32 TypeId)
 		asITypeInfo* ScriptType = Manager.Engine->GetTypeInfoById(TypeId);
 		if (ScriptType != nullptr)
 		{
+			if (ScriptType->GetFlags() & asOBJ_CALLABLE_TYPE)
+			{
+				void* UserData = ScriptType->GetUserData();
+				if (UserData == FAngelscriptType::TAG_UserData_Multicast_Delegate)
+				{
+					Usage.Type = FAngelscriptType::GetScriptMulticastDelegate();
+				}
+				else if (UserData == FAngelscriptType::TAG_UserData_Delegate)
+				{
+					Usage.Type = FAngelscriptType::GetScriptDelegate();
+				}
+				else if (UserData != nullptr)
+				{
+					if (UDelegateFunction* DelegateSignature = Cast<UDelegateFunction>((UObject*)UserData))
+					{
+						Usage.Type = DelegateSignature->HasAnyFunctionFlags(FUNC_MulticastDelegate)
+							? FAngelscriptType::GetScriptMulticastDelegate()
+							: FAngelscriptType::GetScriptDelegate();
+					}
+				}
+				if (!Usage.Type.IsValid() && ScriptType->GetCallableSignature() != nullptr)
+				{
+					Usage.Type = FAngelscriptType::GetScriptDelegate();
+				}
+				if (Usage.Type.IsValid())
+				{
+					Usage.ScriptClass = ScriptType;
+					return Usage;
+				}
+			}
+
 			// Script objects use a specialized type that isn't in the normal by-name map
 			if (ScriptType->GetFlags() & asOBJ_SCRIPT_OBJECT)
 			{

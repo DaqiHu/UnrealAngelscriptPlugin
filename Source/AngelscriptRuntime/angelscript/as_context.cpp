@@ -53,6 +53,9 @@
 #include "AngelscriptSettings.h"
 #include "AngelscriptEngine.h"
 #include "StaticJIT/AngelscriptJITExecutionContext.h"
+#include "UObject/UnrealType.h"
+#include "UObject/UObjectGlobals.h"
+#include "ClassGenerator/ASFunction.h"
 #include <math.h> // fmodf() pow()
 
 #ifdef _MSC_VER
@@ -60,6 +63,380 @@
 #endif
 
 BEGIN_AS_NAMESPACE
+
+namespace
+{
+	constexpr asPWORD asCallableListTag = 1;
+	constexpr asPWORD asCallableBindingTag = 2;
+
+	struct asSCallableListener
+	{
+		asPWORD Callable = 0;
+		asQWORD Handle = 0;
+	};
+
+	struct asSCallableListenerList
+	{
+		asCArray<asSCallableListener> Listeners;
+		asQWORD NextHandle = 1;
+	};
+
+	struct asSCallableBinding
+	{
+		asCScriptFunction* Function = nullptr;
+		UObject* Object = nullptr;
+		FName FunctionName;
+		TArray<asDWORD> Payload;
+	};
+
+	bool asIsLiveUObject(UObject* Object)
+	{
+		return Object != nullptr && IsValid(Object) && !Object->IsUnreachable();
+	}
+
+	UASFunction* asFindBoundScriptFunction(UObject* Object, FName FunctionName, UFunction*& OutFunction)
+	{
+		OutFunction = Object ? Object->FindFunction(FunctionName) : nullptr;
+		if (UASFunction* ScriptUFunction = Cast<UASFunction>(OutFunction))
+		{
+			return ScriptUFunction;
+		}
+		for (UClass* Class = Object ? Object->GetClass() : nullptr; Class; Class = Class->GetSuperClass())
+		{
+			if (UASFunction* ScriptUFunction = Cast<UASFunction>(Class->FindFunctionByName(FunctionName, EIncludeSuperFlag::ExcludeSuper)))
+			{
+				OutFunction = ScriptUFunction;
+				return ScriptUFunction;
+			}
+		}
+		return nullptr;
+	}
+
+	int32 asPropertyScriptDwords(const FProperty* Property)
+	{
+		if (!Property || Property->HasAnyPropertyFlags(CPF_ReturnParm))
+		{
+			return 0;
+		}
+		if (CastField<FNameProperty>(Property)
+			|| CastField<FInt64Property>(Property)
+			|| CastField<FUInt64Property>(Property)
+			|| CastField<FDoubleProperty>(Property))
+		{
+			return 2;
+		}
+		if (CastField<FObjectPropertyBase>(Property))
+		{
+			return AS_PTR_SIZE;
+		}
+		const int32 Size = Property->GetSize();
+		return FMath::Max(1, FMath::DivideAndRoundUp(Size, static_cast<int32>(sizeof(asDWORD))));
+	}
+
+	bool asReadBoundNameArg(const asDWORD* ArgBase, int ArgDwords, int32 ScriptOffset, FName& OutName)
+	{
+		if (!ArgBase || ScriptOffset < 0 || ScriptOffset + AS_PTR_SIZE > ArgDwords)
+		{
+			return false;
+		}
+		asPWORD Pointer = 0;
+		FMemory::Memcpy(&Pointer, ArgBase + ScriptOffset, sizeof(asPWORD));
+		if (Pointer == 0)
+		{
+			OutName = NAME_None;
+			return true;
+		}
+		FMemory::Memcpy(&OutName, reinterpret_cast<const void*>(Pointer), sizeof(FName));
+		return true;
+	}
+
+	void asWriteBoundReturn(asCContext& Context, const FProperty* ReturnProperty, const void* Source)
+	{
+		if (!ReturnProperty || !Source)
+		{
+			return;
+		}
+		if (const FIntProperty* IntProp = CastField<FIntProperty>(ReturnProperty))
+		{
+			*(asDWORD*)&Context.m_regs.valueRegister = static_cast<asDWORD>(IntProp->GetPropertyValue(Source));
+			return;
+		}
+		if (const FNameProperty* NameProp = CastField<FNameProperty>(ReturnProperty))
+		{
+			const FName Value = NameProp->GetPropertyValue(Source);
+			FMemory::Memcpy(&Context.m_regs.valueRegister, &Value, sizeof(FName));
+		}
+	}
+
+	bool asCopyBoundArgument(
+		FProperty* Property,
+		void* Buffer,
+		const asDWORD* ArgBase,
+		int ArgDwords,
+		int32& ScriptOffset)
+	{
+		Property->InitializeValue_InContainer(Buffer);
+		const int32 Width = asPropertyScriptDwords(Property);
+		if (Width <= 0 || ScriptOffset + Width > ArgDwords)
+		{
+			return true;
+		}
+		if (FIntProperty* IntProp = CastField<FIntProperty>(Property))
+		{
+			IntProp->SetPropertyValue_InContainer(Buffer, static_cast<int32>(ArgBase[ScriptOffset]));
+		}
+		else if (FNameProperty* NameProp = CastField<FNameProperty>(Property))
+		{
+			FName Value;
+			if (asReadBoundNameArg(ArgBase, ArgDwords, ScriptOffset, Value))
+			{
+				NameProp->SetPropertyValue_InContainer(Buffer, Value);
+			}
+		}
+		ScriptOffset += Width;
+		return true;
+	}
+
+	bool asCallBoundUFunction(asCContext& Context, asSCallableBinding& Binding, asDWORD* ArgBase, int ArgDwords)
+	{
+		if (!asIsLiveUObject(Binding.Object))
+		{
+			return true;
+		}
+		UFunction* Function = nullptr;
+		UASFunction* ScriptUFunction = asFindBoundScriptFunction(Binding.Object, Binding.FunctionName, Function);
+		if (!Function)
+		{
+			Context.SetInternalException("Could not find function in object with this name. Is it declared UFUNCTION()?");
+			return false;
+		}
+		int32 ExpectedDwords = 0;
+		FProperty* ReturnProperty = nullptr;
+		for (TFieldIterator<FProperty> It(Function); It && (It->PropertyFlags & CPF_Parm); ++It)
+		{
+			if (It->HasAnyPropertyFlags(CPF_ReturnParm))
+			{
+				ReturnProperty = *It;
+				continue;
+			}
+			ExpectedDwords += asPropertyScriptDwords(*It);
+		}
+		if (ExpectedDwords != ArgDwords)
+		{
+			Context.SetInternalException("Indirect call signature mismatch");
+			return false;
+		}
+		if (ScriptUFunction)
+		{
+			asIScriptFunction* Script = ScriptUFunction->ScriptFunction;
+			if (!Script)
+			{
+				Context.SetInternalException("Could not find function in object with this name. Is it declared UFUNCTION()?");
+				return false;
+			}
+			asIScriptEngine* Engine = Script->GetEngine();
+			if (!Engine)
+			{
+				Engine = Context.GetEngine();
+			}
+			asIScriptContext* Nested = Engine ? Engine->CreateContext() : nullptr;
+			if (!Nested)
+			{
+				Context.SetInternalException("Could not create nested script context");
+				return false;
+			}
+			const int Prepared = Nested->Prepare(Script);
+			const int SetObj = Nested->SetObject(Binding.Object);
+			int32 ArgIndex = 0;
+			int32 ScriptOffset = 0;
+			for (TFieldIterator<FProperty> It(Function); It && (It->PropertyFlags & CPF_Parm); ++It)
+			{
+				FProperty* Property = *It;
+				if (Property->HasAnyPropertyFlags(CPF_ReturnParm))
+				{
+					continue;
+				}
+				const int32 Width = asPropertyScriptDwords(Property);
+				if (Width <= 0 || ScriptOffset + Width > ArgDwords)
+				{
+					continue;
+				}
+				if (CastField<FNameProperty>(Property))
+				{
+					FName Value;
+					if (asReadBoundNameArg(ArgBase, ArgDwords, ScriptOffset, Value))
+					{
+						asQWORD Bits = 0;
+						FMemory::Memcpy(&Bits, &Value, FMath::Min(sizeof(Bits), sizeof(Value)));
+						Nested->SetArgQWord(static_cast<asUINT>(ArgIndex), Bits);
+					}
+				}
+				else if (Width == 2)
+				{
+					asQWORD Value = 0;
+					FMemory::Memcpy(&Value, ArgBase + ScriptOffset, sizeof(asQWORD));
+					Nested->SetArgQWord(static_cast<asUINT>(ArgIndex), Value);
+				}
+				else
+				{
+					Nested->SetArgDWord(static_cast<asUINT>(ArgIndex), ArgBase[ScriptOffset]);
+				}
+				ScriptOffset += Width;
+				++ArgIndex;
+			}
+			const int Executed = (Prepared >= 0 && SetObj >= 0) ? Nested->Execute() : asERROR;
+			if (Executed == asEXECUTION_FINISHED && ReturnProperty)
+			{
+				if (CastField<FIntProperty>(ReturnProperty))
+				{
+					*(asDWORD*)&Context.m_regs.valueRegister = Nested->GetReturnDWord();
+				}
+				else if (CastField<FNameProperty>(ReturnProperty))
+				{
+					const asQWORD Value = Nested->GetReturnQWord();
+					FMemory::Memcpy(&Context.m_regs.valueRegister, &Value, sizeof(asQWORD));
+				}
+			}
+			const char* Exception = Nested->GetExceptionString();
+			Nested->Release();
+			if (Executed != asEXECUTION_FINISHED)
+			{
+				Context.SetInternalException(Exception && Exception[0] ? Exception : "Nested UFUNCTION call failed");
+				return false;
+			}
+			return Context.m_status != asEXECUTION_EXCEPTION;
+		}
+		const int32 BufferSize = Function->ParmsSize;
+		uint8* Buffer = static_cast<uint8*>(FMemory_Alloca(FMath::Max(BufferSize, 1)));
+		FMemory::Memzero(Buffer, FMath::Max(BufferSize, 1));
+		int32 ScriptOffset = 0;
+		for (TFieldIterator<FProperty> It(Function); It && (It->PropertyFlags & CPF_Parm); ++It)
+		{
+			FProperty* Property = *It;
+			if (Property->HasAnyPropertyFlags(CPF_ReturnParm))
+			{
+				Property->InitializeValue_InContainer(Buffer);
+				continue;
+			}
+			asCopyBoundArgument(Property, Buffer, ArgBase, ArgDwords, ScriptOffset);
+		}
+		FScriptDelegate Delegate;
+		Delegate.BindUFunction(Binding.Object, Binding.FunctionName);
+		if (Delegate.IsBound())
+		{
+			Delegate.ProcessDelegate<UObject>(Buffer);
+		}
+		else
+		{
+			Binding.Object->ProcessEvent(Function, Buffer);
+		}
+		if (ReturnProperty)
+		{
+			asWriteBoundReturn(Context, ReturnProperty, ReturnProperty->ContainerPtrToValuePtr<void>(Buffer));
+		}
+		for (TFieldIterator<FProperty> It(Function); It && (It->PropertyFlags & CPF_Parm); ++It)
+		{
+			It->DestroyValue_InContainer(Buffer);
+		}
+		return Context.m_status != asEXECUTION_EXCEPTION;
+	}
+
+	bool asIsCallableList(asPWORD Value)
+	{
+		return Value > asPWORD(0xFFFF) && (Value & asCallableListTag) != 0;
+	}
+
+	bool asIsCallableBinding(asPWORD Value)
+	{
+		return (Value & asCallableBindingTag) != 0 && !asIsCallableList(Value);
+	}
+
+	asSCallableListenerList* asCallableListFrom(asPWORD Value)
+	{
+		return reinterpret_cast<asSCallableListenerList*>(Value & ~asCallableListTag);
+	}
+
+	asSCallableBinding* asCallableBindingFrom(asPWORD Value)
+	{
+		return reinterpret_cast<asSCallableBinding*>(Value & ~asCallableBindingTag);
+	}
+
+	void asCollectCallPtrTargets(asPWORD Slot, TArray<TPair<UObject*, FName>>& OutTargets)
+	{
+		auto AddBinding = [&](asPWORD Value)
+		{
+			if (!asIsCallableBinding(Value))
+			{
+				return;
+			}
+			asSCallableBinding* Binding = asCallableBindingFrom(Value);
+			if (Binding && asIsLiveUObject(Binding->Object) && Binding->FunctionName != NAME_None)
+			{
+				OutTargets.Add(TPair<UObject*, FName>(Binding->Object, Binding->FunctionName));
+			}
+		};
+		if (asIsCallableList(Slot))
+		{
+			asSCallableListenerList* List = asCallableListFrom(Slot);
+			if (!List)
+			{
+				return;
+			}
+			for (asUINT Index = 0; Index < List->Listeners.GetLength(); ++Index)
+			{
+				AddBinding(List->Listeners[Index].Callable);
+			}
+			return;
+		}
+		AddBinding(Slot);
+	}
+
+	int asBoundUFunctionArgDwords(const asSCallableBinding& Binding)
+	{
+		UFunction* Function = nullptr;
+		asFindBoundScriptFunction(Binding.Object, Binding.FunctionName, Function);
+		if (!Function)
+		{
+			return 0;
+		}
+		int32 Dwords = 0;
+		for (TFieldIterator<FProperty> It(Function); It && (It->PropertyFlags & CPF_Parm); ++It)
+		{
+			Dwords += asPropertyScriptDwords(*It);
+		}
+		return Dwords;
+	}
+
+	void asProcessCallPtrSlot(asPWORD Slot, void* ParameterBuffer)
+	{
+		if (!ParameterBuffer)
+		{
+			return;
+		}
+		TArray<TPair<UObject*, FName>> Targets;
+		asCollectCallPtrTargets(Slot, Targets);
+		FMulticastScriptDelegate Temp;
+		for (const TPair<UObject*, FName>& Target : Targets)
+		{
+			FScriptDelegate One;
+			One.BindUFunction(Target.Key, Target.Value);
+			if (One.IsBound())
+			{
+				Temp.Add(One);
+			}
+		}
+		if (Temp.IsBound())
+		{
+			Temp.ProcessDelegate<UObject>(ParameterBuffer);
+		}
+	}
+}
+
+void asProcessCallPtrSlot(asPWORD Slot, UDelegateFunction* Signature, void* ParameterBuffer)
+{
+	(void)Signature;
+	asProcessCallPtrSlot(Slot, ParameterBuffer);
+}
 
 // We need at least 2 PTRs reserved for exception handling
 // We need at least 1 PTR reserved for calling system functions
@@ -1782,14 +2159,15 @@ bool asCContext::ReserveStackSpace(asUINT size)
 }
 
 // internal
-void asCContext::CallScriptFunction(asCScriptFunction *func)
+void asCContext::CallScriptFunction(asCScriptFunction *func, bool bAllowJIT)
 {
 	if (!func) { SetInternalException("Missing script execution binding"); return; }
 	// Try to call the JIT function directly
-	const asSJITFunctionBinding jitBinding =
-		func->AcquireJITBindingForExecution();
+	const asSJITFunctionBinding jitBinding = bAllowJIT
+		? func->AcquireJITBindingForExecution()
+		: asSJITFunctionBinding();
 	auto* jitFunction = jitBinding.VMEntry;
-	if (jitFunction != nullptr
+	if (bAllowJIT && jitFunction != nullptr
 		&& FAngelscriptEngine::AllowsJITBindingExecution(
 			m_engine, jitBinding))
 	{
@@ -1837,7 +2215,10 @@ void asCContext::CallScriptFunction(asCScriptFunction *func)
 			return;
 		}
 	}
-	func->ReleaseJITBindingAfterExecution();
+	if (bAllowJIT)
+	{
+		func->ReleaseJITBindingAfterExecution();
+	}
 
 	// We don't allow recursion beyond the point of sanity.
 	// This lets scripters see better exceptions when they create infinite recursion.
@@ -1858,6 +2239,34 @@ void asCContext::CallScriptFunction(asCScriptFunction *func)
 	m_regs.programPointer = ActiveScriptData()->byteCode.AddressOf();
 
 	PrepareScriptFunction();
+}
+
+void asCContext::CallScriptFunctionUntilReturn(asCScriptFunction *func)
+{
+	const asUINT Depth = m_callStack.GetLength();
+	CallScriptFunction(func, false);
+	if (m_status != asEXECUTION_ACTIVE || m_callStack.GetLength() == Depth)
+	{
+		return;
+	}
+
+	asPWORD* Frame = m_callStack.AddressOf() + m_callStack.GetLength() - CALLSTACK_FRAME_SIZE;
+	const asPWORD SavedTop = Frame[0];
+	Frame[0] = 0;
+	ExecuteNext();
+	Frame[0] = SavedTop;
+
+	const bool bFinished = m_status == asEXECUTION_FINISHED;
+	PopCallState();
+	const int ArgumentDwords = asVMTotalArgumentDwords(func);
+	if (ArgumentDwords > 0)
+	{
+		m_regs.stackPointer += ArgumentDwords;
+	}
+	if (bFinished)
+	{
+		m_status = asEXECUTION_ACTIVE;
+	}
 }
 
 void asCContext::PrepareScriptFunction()
@@ -4157,44 +4566,45 @@ void asCContext::ExecuteNext()
 
 	case asBC_CallPtr:
 		{
-			// Get the function pointer from the local variable
-			asCScriptFunction *func = *(asCScriptFunction**)(l_fp - asBC_SWORDARG0(l_bc));
+			const asPWORD CallableValue = *(asPWORD*)(l_fp - asBC_SWORDARG0(l_bc));
 
 			// Need to move the values back to the context
 			m_regs.programPointer    = l_bc;
 			m_regs.stackPointer      = l_sp;
 			m_regs.stackFramePointer = l_fp;
 
-			if( func == 0 )
-			{
-				// Need to update the program pointer anyway for the exception handler
-				m_regs.programPointer++;
+			const asUINT CallPc = static_cast<asUINT>(l_bc - ActiveScriptData()->byteCode.AddressOf());
+			asCScriptFunction* const* ExpectedEntry = m_currentExecutable
+				? m_currentExecutable->IndirectCallSignatures.Find(CallPc) : nullptr;
+			const asCScriptFunction* Expected = ExpectedEntry ? *ExpectedEntry : nullptr;
 
-				// Tell the exception handler to clean up the arguments to this method
-				m_needToCleanupArgs = true;
-
-				// TODO: funcdef: Should we have a different exception string?
-				SetInternalException(TXT_UNBOUND_FUNCTION);
-				return;
-			}
-			else
+			auto CallOne = [&](asCScriptFunction* func, asUINT ExtraDwords = 0, bool bSynchronous = false) -> bool
 			{
-				const asUINT CallPc = static_cast<asUINT>(l_bc - ActiveScriptData()->byteCode.AddressOf());
-				asCScriptFunction* const* ExpectedEntry = m_currentExecutable
-					? m_currentExecutable->IndirectCallSignatures.Find(CallPc) : nullptr;
-				const asCScriptFunction* Expected = ExpectedEntry ? *ExpectedEntry : nullptr;
+				if (func == 0)
+				{
+					m_regs.programPointer++;
+					m_needToCleanupArgs = true;
+					SetInternalException(TXT_UNBOUND_FUNCTION);
+					return false;
+				}
 				const bool bDelegate = func->funcType == asFUNC_DELEGATE;
 				const asCScriptFunction* Actual = bDelegate ? func->funcForDelegate : func;
 				const asCObjectType* ActualReceiver = Actual && !bDelegate && !Actual->IsMetadataStatic() ? Actual->objectType : nullptr;
 				const asCObjectType* ExpectedReceiver = Expected && !Expected->IsMetadataStatic() ? Expected->objectType : nullptr;
+				const asUINT ExpectedCount = Expected ? Expected->parameterTypes.GetLength() : 0;
+				const asUINT ActualCount = Actual ? Actual->parameterTypes.GetLength() : 0;
+				asUINT ExtraStack = 0;
+				for (asUINT Parameter = ExpectedCount; Actual && Parameter < ActualCount; ++Parameter)
+					ExtraStack += Actual->parameterTypes[Parameter].GetSizeOnStackDWords();
 				bool bMatch = Expected && Actual && ActualReceiver == ExpectedReceiver
 					&& Actual->returnType == Expected->returnType
 					&& Actual->DoesReturnOnStack() == Expected->DoesReturnOnStack()
-					&& Actual->parameterTypes.GetLength() == Expected->parameterTypes.GetLength()
+					&& ActualCount >= ExpectedCount
+					&& ExtraStack == ExtraDwords
 					&& (Actual->GetDeclarationKind() == asEFunctionIdentityKind::Constructor)
 						== (Expected->GetDeclarationKind() == asEFunctionIdentityKind::Constructor)
 					&& (!ActualReceiver || Actual->IsReadOnly() == Expected->IsReadOnly());
-				for (asUINT Parameter = 0; bMatch && Parameter < Actual->parameterTypes.GetLength(); ++Parameter)
+				for (asUINT Parameter = 0; bMatch && Parameter < ExpectedCount; ++Parameter)
 					bMatch = Actual->parameterTypes[Parameter] == Expected->parameterTypes[Parameter]
 						&& Actual->inOutFlags[Parameter] == Expected->inOutFlags[Parameter];
 				if (!bMatch)
@@ -4202,58 +4612,367 @@ void asCContext::ExecuteNext()
 					m_regs.programPointer++;
 					m_needToCleanupArgs = true;
 					SetInternalException("Indirect call signature mismatch");
-					return;
+					return false;
 				}
 				if( func->funcType == asFUNC_SCRIPT )
 				{
 					m_regs.programPointer++;
-					CallScriptFunction(func);
+					if (bSynchronous)
+					{
+						CallScriptFunctionUntilReturn(func);
+					}
+					else
+					{
+						CallScriptFunction(func);
+					}
 				}
 				else if( func->funcType == asFUNC_DELEGATE )
 				{
-					// Push the object pointer on the stack. There is always a reserved space for this so
-					// we don't don't need to worry about overflowing the allocated memory buffer
 					asASSERT( m_regs.stackPointer - AS_PTR_SIZE >= m_stackBlocks[m_stackIndex] );
 					m_regs.stackPointer -= AS_PTR_SIZE;
 					*(asPWORD*)m_regs.stackPointer = asPWORD(func->objForDelegate);
-
-					// Call the delegated method
 					if( func->funcForDelegate->funcType == asFUNC_SYSTEM )
 					{
 						m_regs.stackPointer += CallSystemFunction(func->funcForDelegate, this);
-
-						// Update program position after the call so the line number
-						// is correct in case the system function queries it
 						m_regs.programPointer++;
 					}
 					else
 					{
 						m_regs.programPointer++;
-
-						// TODO: run-time optimize: The true method could be figured out when creating the delegate
 						CallInterfaceMethod(func->funcForDelegate);
 					}
 				}
 				else
 				{
 					asASSERT( func->funcType == asFUNC_SYSTEM );
-
 					m_regs.stackPointer += CallSystemFunction(func, this);
-
-					// Update program position after the call so the line number
-					// is correct in case the system function queries it
 					m_regs.programPointer++;
 				}
+				return m_status == asEXECUTION_ACTIVE;
+			};
+
+			if (asIsCallableList(CallableValue))
+			{
+				asSCallableListenerList* List = asCallableListFrom(CallableValue);
+				int ArgDwords = 0;
+				if (Expected)
+				{
+					for (asUINT Parameter = 0; Parameter < Expected->parameterTypes.GetLength(); ++Parameter)
+					{
+						ArgDwords += Expected->parameterTypes[Parameter].GetSizeOnStackDWords();
+					}
+				}
+				else if (List)
+				{
+					for (asUINT Index = 0; Index < List->Listeners.GetLength() && ArgDwords == 0; ++Index)
+					{
+						const asPWORD Listener = List->Listeners[Index].Callable;
+						if (asIsCallableBinding(Listener))
+						{
+							if (asSCallableBinding* Binding = asCallableBindingFrom(Listener))
+							{
+								if (!Binding->Function && Binding->FunctionName != NAME_None)
+								{
+									ArgDwords = asBoundUFunctionArgDwords(*Binding);
+								}
+							}
+						}
+					}
+				}
+				const asUINT ListenerCount = List ? List->Listeners.GetLength() : 0;
+				if (!List || ListenerCount == 0)
+				{
+					m_regs.stackPointer += ArgDwords;
+					m_regs.programPointer++;
+				}
+				else
+				{
+					asDWORD* const ArgBase = m_regs.stackPointer;
+					TArray<asDWORD> SavedArgs;
+					if (ArgDwords > 0)
+					{
+						SavedArgs.SetNumUninitialized(ArgDwords);
+						FMemory::Memcpy(SavedArgs.GetData(), ArgBase, ArgDwords * sizeof(asDWORD));
+					}
+					TArray<asPWORD> Snapshot;
+					Snapshot.Reserve(static_cast<int32>(ListenerCount));
+					for (asUINT Index = 0; Index < ListenerCount; ++Index)
+					{
+						Snapshot.Add(List->Listeners[Index].Callable);
+					}
+					for (int32 Index = 0; Index < Snapshot.Num(); ++Index)
+					{
+						if (Index > 0)
+						{
+							if (ArgDwords > 0)
+							{
+								FMemory::Memcpy(ArgBase, SavedArgs.GetData(), ArgDwords * sizeof(asDWORD));
+							}
+							m_regs.stackPointer = ArgBase;
+							m_regs.programPointer = l_bc;
+						}
+						const asPWORD Listener = Snapshot[Index];
+						bool bOk = false;
+						if (asIsCallableBinding(Listener))
+						{
+							asSCallableBinding* Binding = asCallableBindingFrom(Listener);
+							if (!Binding)
+							{
+								m_regs.programPointer++;
+								m_needToCleanupArgs = true;
+								SetInternalException(TXT_UNBOUND_FUNCTION);
+								bOk = false;
+							}
+							else if (!Binding->Function && Binding->FunctionName != NAME_None)
+							{
+								bOk = asCallBoundUFunction(*this, *Binding, ArgBase, ArgDwords);
+								if (bOk)
+								{
+									m_regs.stackPointer = ArgBase + ArgDwords;
+									m_regs.programPointer = l_bc + 1;
+								}
+							}
+							else if (!Binding->Function)
+							{
+								m_regs.programPointer++;
+								m_needToCleanupArgs = true;
+								SetInternalException(TXT_UNBOUND_FUNCTION);
+								bOk = false;
+							}
+							else
+							{
+								const asUINT PayloadDwords = static_cast<asUINT>(Binding->Payload.Num());
+								if (PayloadDwords > 0)
+								{
+									asDWORD* const LiveArgs = m_regs.stackPointer;
+									m_regs.stackPointer -= PayloadDwords;
+									if (ArgDwords > 0)
+									{
+										FMemory::Memmove(m_regs.stackPointer, LiveArgs, ArgDwords * sizeof(asDWORD));
+									}
+									FMemory::Memcpy(m_regs.stackPointer + ArgDwords, Binding->Payload.GetData(), PayloadDwords * sizeof(asDWORD));
+								}
+								bOk = CallOne(Binding->Function, PayloadDwords, true);
+							}
+						}
+						else
+						{
+							bOk = CallOne(reinterpret_cast<asCScriptFunction*>(Listener), 0, true);
+						}
+						if (!bOk)
+						{
+							break;
+						}
+					}
+				}
+			}
+			else if (asIsCallableBinding(CallableValue))
+			{
+				asSCallableBinding* Binding = asCallableBindingFrom(CallableValue);
+				int ArgDwords = 0;
+				if (Expected)
+				{
+					for (asUINT Parameter = 0; Parameter < Expected->parameterTypes.GetLength(); ++Parameter)
+					{
+						ArgDwords += Expected->parameterTypes[Parameter].GetSizeOnStackDWords();
+					}
+				}
+				else if (Binding && !Binding->Function && Binding->FunctionName != NAME_None)
+				{
+					ArgDwords = asBoundUFunctionArgDwords(*Binding);
+				}
+				if (!Binding)
+				{
+					m_regs.programPointer++;
+					m_needToCleanupArgs = true;
+					SetInternalException(TXT_UNBOUND_FUNCTION);
+					return;
+				}
+				if (!Binding->Function && Binding->FunctionName != NAME_None)
+				{
+					if (!asCallBoundUFunction(*this, *Binding, m_regs.stackPointer, ArgDwords))
+					{
+						return;
+					}
+					m_regs.stackPointer += ArgDwords;
+					m_regs.programPointer++;
+				}
+				else if (!Binding->Function)
+				{
+					m_regs.programPointer++;
+					m_needToCleanupArgs = true;
+					SetInternalException(TXT_UNBOUND_FUNCTION);
+					return;
+				}
+				else
+				{
+					const asUINT PayloadDwords = static_cast<asUINT>(Binding->Payload.Num());
+					if (PayloadDwords > 0)
+					{
+						asDWORD* const ArgBase = m_regs.stackPointer;
+						m_regs.stackPointer -= PayloadDwords;
+						if (ArgDwords > 0)
+						{
+							FMemory::Memmove(m_regs.stackPointer, ArgBase, ArgDwords * sizeof(asDWORD));
+						}
+						FMemory::Memcpy(m_regs.stackPointer + ArgDwords, Binding->Payload.GetData(), PayloadDwords * sizeof(asDWORD));
+					}
+					if (!CallOne(Binding->Function, PayloadDwords))
+					{
+						return;
+					}
+				}
+			}
+			else if (!CallOne(reinterpret_cast<asCScriptFunction*>(CallableValue)))
+			{
+				return;
 			}
 
-			// Extract the values from the context again
 			l_bc = m_regs.programPointer;
 			l_sp = m_regs.stackPointer;
 			l_fp = m_regs.stackFramePointer;
-
-			// If status isn't active anymore then we must stop
 			if( m_status != asEXECUTION_ACTIVE )
 				return;
+		}
+		break;
+
+	case asBC_AddPtr:
+		{
+			asPWORD* Slot = reinterpret_cast<asPWORD*>(l_fp - asBC_SWORDARG0(l_bc));
+			const asPWORD Callable = static_cast<asPWORD>(m_regs.valueRegister);
+			if (Callable)
+			{
+				asSCallableListenerList* List = nullptr;
+				if (asIsCallableList(*Slot))
+				{
+					List = asCallableListFrom(*Slot);
+				}
+				else
+				{
+					List = asNEW(asSCallableListenerList);
+					if (asPWORD Existing = *Slot)
+					{
+						asSCallableListener Prior;
+						Prior.Callable = Existing;
+						Prior.Handle = List->NextHandle++;
+						List->Listeners.PushLast(Prior);
+					}
+					*Slot = reinterpret_cast<asPWORD>(List) | asCallableListTag;
+				}
+				asSCallableListener Entry;
+				Entry.Callable = Callable;
+				Entry.Handle = List->NextHandle++;
+				List->Listeners.PushLast(Entry);
+				m_regs.valueRegister = Entry.Handle;
+			}
+			l_bc++;
+		}
+		break;
+
+	case asBC_BindPtr:
+		{
+			const asUINT PayloadDwords = asBC_WORDARG0(l_bc);
+			asCScriptFunction* Function = reinterpret_cast<asCScriptFunction*>(static_cast<asPWORD>(m_regs.valueRegister));
+			asSCallableBinding* Binding = asNEW(asSCallableBinding);
+			if (Binding)
+			{
+				Binding->Function = Function;
+				Binding->Payload.SetNum(static_cast<int32>(PayloadDwords));
+				if (PayloadDwords > 0)
+				{
+					FMemory::Memcpy(Binding->Payload.GetData(), l_sp, PayloadDwords * sizeof(asDWORD));
+					l_sp += PayloadDwords;
+				}
+				constexpr int32 ObjectNameDwords = AS_PTR_SIZE + 2;
+				if (Function == nullptr && Binding->Payload.Num() >= ObjectNameDwords)
+				{
+					const uint8* Bytes = reinterpret_cast<const uint8*>(Binding->Payload.GetData());
+					Binding->Object = *reinterpret_cast<UObject* const*>(Bytes);
+					FName ParsedName;
+					FMemory::Memzero(&ParsedName, sizeof(ParsedName));
+					FMemory::Memcpy(&ParsedName, Bytes + sizeof(UObject*), 8);
+					Binding->FunctionName = ParsedName;
+				}
+				m_regs.valueRegister = reinterpret_cast<asPWORD>(Binding) | asCallableBindingTag;
+			}
+			l_bc++;
+		}
+		break;
+
+	case asBC_RemovePtr:
+		{
+			asPWORD* Slot = reinterpret_cast<asPWORD*>(l_fp - asBC_SWORDARG0(l_bc));
+			const asQWORD Handle = static_cast<asQWORD>(m_regs.valueRegister);
+			if (asIsCallableList(*Slot))
+			{
+				if (asSCallableListenerList* List = asCallableListFrom(*Slot))
+				{
+					for (asUINT Index = 0; Index < List->Listeners.GetLength(); ++Index)
+					{
+						if (List->Listeners[Index].Handle == Handle)
+						{
+							List->Listeners.RemoveIndex(Index);
+							break;
+						}
+					}
+				}
+			}
+			l_bc++;
+		}
+		break;
+
+	case asBC_ClearPtr:
+		{
+			asPWORD* Slot = reinterpret_cast<asPWORD*>(l_fp - asBC_SWORDARG0(l_bc));
+			if (asIsCallableList(*Slot))
+			{
+				if (asSCallableListenerList* List = asCallableListFrom(*Slot))
+				{
+					List->Listeners.SetLength(0);
+				}
+			}
+			else
+			{
+				*Slot = 0;
+			}
+			l_bc++;
+		}
+		break;
+
+	case asBC_ClonePtr:
+		{
+			asPWORD* Dest = reinterpret_cast<asPWORD*>(l_fp - asBC_SWORDARG0(l_bc));
+			const asPWORD SourceValue = *reinterpret_cast<asPWORD*>(l_fp - asBC_SWORDARG1(l_bc));
+			asSCallableListenerList* Copy = asNEW(asSCallableListenerList);
+			if (Copy)
+			{
+				if (asIsCallableList(SourceValue))
+				{
+					if (asSCallableListenerList* Source = asCallableListFrom(SourceValue))
+					{
+						Copy->NextHandle = Source->NextHandle;
+						for (asUINT Index = 0; Index < Source->Listeners.GetLength(); ++Index)
+						{
+							asSCallableListener Entry = Source->Listeners[Index];
+							Entry.Handle = Copy->NextHandle++;
+							Copy->Listeners.PushLast(Entry);
+						}
+					}
+				}
+				else if (SourceValue)
+				{
+					asSCallableListener Entry;
+					Entry.Callable = SourceValue;
+					Entry.Handle = Copy->NextHandle++;
+					Copy->Listeners.PushLast(Entry);
+				}
+				*Dest = reinterpret_cast<asPWORD>(Copy) | asCallableListTag;
+			}
+			else
+			{
+				*Dest = 0;
+			}
+			l_bc += 2;
 		}
 		break;
 
@@ -4871,8 +5590,19 @@ void asCContext::ExecuteNext()
 	case asBC_CmpPtrNull:
 		{
 			asPWORD p1 = *(asPWORD*)(l_fp - asBC_SWORDARG0(l_bc));
-			if( p1 == 0 ) *(int*)&m_regs.valueRegister =  0;
-			else *(int*)&m_regs.valueRegister = -1;
+			if (asIsCallableList(p1))
+			{
+				asSCallableListenerList* List = asCallableListFrom(p1);
+				*(int*)&m_regs.valueRegister = (List && List->Listeners.GetLength() > 0) ? -1 : 0;
+			}
+			else if (p1 == 0)
+			{
+				*(int*)&m_regs.valueRegister = 0;
+			}
+			else
+			{
+				*(int*)&m_regs.valueRegister = -1;
+			}
 			l_bc++;
 		}
 		break;
@@ -4895,11 +5625,6 @@ void asCContext::ExecuteNext()
 
 	// Don't let the optimizer optimize for size,
 	// since it requires extra conditions and jumps
-	case 213: l_bc = (asDWORD*)213; break;
-	case 214: l_bc = (asDWORD*)214; break;
-	case 215: l_bc = (asDWORD*)215; break;
-	case 216: l_bc = (asDWORD*)216; break;
-	case 217: l_bc = (asDWORD*)217; break;
 	case 218: l_bc = (asDWORD*)218; break;
 	case 219: l_bc = (asDWORD*)219; break;
 	case 220: l_bc = (asDWORD*)220; break;

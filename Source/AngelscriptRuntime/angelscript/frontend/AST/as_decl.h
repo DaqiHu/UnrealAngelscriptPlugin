@@ -442,6 +442,8 @@ struct asSAccessPermissionModifier
 	{
 	public:
 		bool IsMulticast() const { return GetKind() == asEDeclKind::Event; }
+		asECallableFlavor GetFlavor() const { return Flavor; }
+		bool SetFlavor(asECallableFlavor InFlavor) { if (!CanMutate()) return false; Flavor = InFlavor; return true; }
 		asETypeDeclKind GetDeclaredTypeKind() const { return IsMulticast() ? asETypeDeclKind::Event : asETypeDeclKind::Delegate; }
 		const asSTypeSyntax& GetReturnTypeSyntax() const { return ReturnTypeSyntax; }
 		bool SetReturnTypeSyntax(asSTypeSyntax Syntax)
@@ -470,6 +472,7 @@ struct asSAccessPermissionModifier
 		asSTypeSyntax ReturnTypeSyntax;
 		TArray<asCVarDecl*> Parameters;
 		asCFunctionType* ResolvedSignature = nullptr;
+		asECallableFlavor Flavor = asECallableFlavor::Ordinary;
 	};
 
 	class ANGELSCRIPTRUNTIME_API asCDelegateDecl final : public asCCallableTypeDecl

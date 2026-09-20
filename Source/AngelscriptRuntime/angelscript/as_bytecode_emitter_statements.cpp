@@ -1,4 +1,6 @@
 #include "as_bytecode_emitter_internal.h"
+#include "as_bytecode_opcode.h"
+#include "as_config.h"
 #include "frontend/AST/as_type.h"
 
 BEGIN_AS_NAMESPACE
@@ -126,14 +128,50 @@ bool asEmitStmt(asSByteCodeEmitFrame& Frame, asCStmt* Stmt)
 		asCExpr* Initializer = DeclStmt->GetInitializer() ? DeclStmt->GetInitializer() : Decl->GetInitializer();
 		if (auto* Construct = dyn_cast<asCConstructExpr>(Initializer))
 		{
-			const int32 Local = static_cast<int32>(Frame.AllocLocal(2));
-			Frame.Locals.Add(Decl, Local);
-			if (!asEmitConstructInto(Frame, Construct, Local)) return false;
-			if (asCObjectType* Type = asEmitFindObjectType(Frame, Construct->GetExpressionType()))
+			if (asEmitCallableDecl(Frame, Decl->GetResolvedType(), Construct))
 			{
-				if (!asEmitNoteLiveObject(Frame, Local, Type)) return false;
+				if (Construct->GetArguments().Num() == 1)
+				{
+					Initializer = Construct->GetArguments()[0];
+				}
+				else if (Construct->GetArguments().Num() == 0)
+				{
+					Initializer = nullptr;
+				}
+				else
+				{
+					return false;
+				}
 			}
-			return true;
+			else
+			{
+				const int32 Local = static_cast<int32>(Frame.AllocLocal(2));
+				Frame.Locals.Add(Decl, Local);
+				if (!asEmitConstructInto(Frame, Construct, Local)) return false;
+				if (asCObjectType* Type = asEmitFindObjectType(Frame, Construct->GetExpressionType()))
+				{
+					if (!asEmitNoteLiveObject(Frame, Local, Type)) return false;
+				}
+				return true;
+			}
+		}
+		if (asEmitCallableDecl(Frame, Decl->GetResolvedType(), Initializer))
+		{
+			const int32 Local = static_cast<int32>(Frame.AllocLocal(AS_PTR_SIZE));
+			Frame.Locals.Add(Decl, Local);
+			asSByteCodeOperand Clear;
+			Clear.Kind = asEByteCodeOperandKind::Local;
+			Clear.Immediate = Local;
+			if (Frame.Builder->Emit(asBC_ClrVPtr, MakeArrayView(&Clear, 1)) != asEByteCodeImageStatus::Succeeded) return false;
+			if (!Initializer) return true;
+			int32 Value = 0;
+			if (!asEmitExpr(Frame, Initializer, Value)) return false;
+			asSByteCodeOperand Ops[2];
+			Ops[0].Kind = asEByteCodeOperandKind::Local;
+			Ops[0].Immediate = static_cast<int64>(Local);
+			Ops[1].Kind = asEByteCodeOperandKind::Local;
+			Ops[1].Immediate = static_cast<int64>(Value);
+			return Frame.Builder->Emit(asBC_ClonePtr, MakeArrayView(Ops, 2)) == asEByteCodeImageStatus::Succeeded;
 		}
 		if (asCObjectType* Type = asEmitFindObjectType(Frame, Decl->GetResolvedType()))
 		{

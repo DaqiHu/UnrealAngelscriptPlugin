@@ -60,3 +60,5 @@ AS_SEMANTIC_DIAGNOSTIC(EnumConstantDependencyAnalysisFailed, 4454, "enum-constan
 AS_SEMANTIC_DIAGNOSTIC(AutoInitializerDependencyCycle, 4455, "auto-initializer-dependency-cycle", "auto initializer dependency cycle")
 AS_SEMANTIC_DIAGNOSTIC(AutoInitializerDependencyBudget, 4456, "auto-initializer-dependency-budget", "auto initializer dependency budget")
 AS_SEMANTIC_DIAGNOSTIC(AutoInitializerAnalysisFailed, 4457, "auto-initializer-analysis-failed", "auto initializer analysis failed")
+AS_SEMANTIC_DIAGNOSTIC(SignatureMismatch, 4458, "signature-mismatch", "signature mismatch")
+AS_SEMANTIC_DIAGNOSTIC(EscapingStackRefPayload, 4459, "escaping-stack-ref-payload", "cannot store a stack reference as a callable payload")

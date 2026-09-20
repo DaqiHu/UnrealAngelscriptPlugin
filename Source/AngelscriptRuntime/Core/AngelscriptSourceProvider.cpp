@@ -1,5 +1,6 @@
 #include "AngelscriptSourceProvider.h"
 
+#include "Containers/Utf8String.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 
@@ -45,9 +46,14 @@ bool IAngelscriptSourceProvider::LoadSourceBytes(
 	FString SourceText;
 	if (Source.bHasSourceText)
 	{
-		SourceText = Source.SourceText;
+		const FUtf8String& Text = Source.GetSourceText();
+		OutSourceBytes.Append(
+			reinterpret_cast<const uint8*>(*Text),
+			Text.Len());
+		return true;
 	}
-	else if (!LoadSourceText(Source, SourceText))
+
+	if (!LoadSourceText(Source, SourceText))
 	{
 		return false;
 	}

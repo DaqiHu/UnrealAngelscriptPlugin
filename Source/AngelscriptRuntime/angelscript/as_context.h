@@ -220,7 +220,8 @@ public:
 
 	void PushCallState();
 	void PopCallState();
-	void CallScriptFunction(asCScriptFunction *func);
+	void CallScriptFunction(asCScriptFunction *func, bool bAllowJIT = true);
+	void CallScriptFunctionUntilReturn(asCScriptFunction *func);
 	bool CallInterfaceMethod(asCScriptFunction *func);
 	void PrepareScriptFunction();
 	void BindExecutableFor(asCScriptFunction* Function);

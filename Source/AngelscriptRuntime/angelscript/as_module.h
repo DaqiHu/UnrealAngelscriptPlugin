@@ -409,6 +409,7 @@ public:
 	void               AddTypeDef(asCTypedefType* type);
 	void               AddCallableType(asCCallableType* type);
 	void               ReplaceCallableType(asCCallableType *oldType, asCCallableType *newType);
+	void               DetachDefinitionOwnedTypes();
 	//[UE--]
 
 	asCString name;

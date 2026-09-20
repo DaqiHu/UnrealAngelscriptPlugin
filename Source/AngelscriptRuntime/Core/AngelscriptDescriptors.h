@@ -284,6 +284,7 @@ struct FAngelscriptDelegateDesc
 	FAngelscriptDescriptorSemanticInfo Semantic;
 	FString DelegateName;
 	bool bIsMulticast = false;
+	bool bIsDynamic = false;
 	TSharedPtr<FAngelscriptFunctionDesc> Signature;
 	UDelegateFunction* Function = nullptr;
 	asITypeInfo* ScriptType = nullptr;

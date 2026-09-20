@@ -1,6 +1,7 @@
 #include "frontend/Sema/as_sema.h"
 #include "frontend/AST/as_ast_cast.h"
 #include "frontend/AST/as_type_context.h"
+#include "frontend/Parser/as_type_syntax.h"
 #include "as_scriptfunction.h"
 #include "as_datatype.h"
 #include "as_typeinfo.h"
@@ -388,8 +389,336 @@ namespace asPostfixSema
 		return Call;
 	}
 
+	asCCallableTypeDecl* CallableDeclFromExpr(asCExpr* Base, const asFNominalDeclLookup& NominalDeclLookup)
+	{
+		if (!Base || !NominalDeclLookup) return nullptr;
+		const auto* Nominal = dyn_cast<asCNominalType>(Base->GetExpressionType());
+		if (!Nominal) return nullptr;
+		return dyn_cast<asCCallableTypeDecl>(NominalDeclLookup(Nominal->GetDeclarationIdentity()));
+	}
+
+	bool CallableSignaturePrefixMatches(const asCFunctionDecl& Function, const asCCallableTypeDecl& Callable)
+	{
+		const asCFunctionType* Wanted = Callable.GetResolvedSignature();
+		const asCFunctionType* Have = Function.GetResolvedSignature();
+		if (!Wanted || !Have || Have->GetParameterTypes().Num() < Wanted->GetParameterTypes().Num()) return false;
+		if (!asPostfixSema::SameType(Wanted->GetReturnType().GetType(), Have->GetReturnType().GetType())) return false;
+		for (int32 Index = 0; Index < Wanted->GetParameterTypes().Num(); ++Index)
+		{
+			if (!asPostfixSema::SameType(Wanted->GetParameterTypes()[Index].GetType(), Have->GetParameterTypes()[Index].GetType()))
+				return false;
+		}
+		return true;
+	}
+
+	bool CallablePayloadIsStackRef(const asCFunctionDecl& Function, int32 Index)
+	{
+		if (Index < Function.GetParameters().Num())
+		{
+			const asCVarDecl* Parameter = Function.GetParameters()[Index];
+			if (Parameter->GetTypeSyntax().Reference != asETypeReferenceDirection::None) return true;
+			if (Parameter->GetResolvedQualType().IsReference()) return true;
+		}
+		const asCFunctionType* Have = Function.GetResolvedSignature();
+		return Have && Index < Have->GetParameterTypes().Num() && Have->GetParameterTypes()[Index].IsReference();
+	}
+
+	asCFunctionType* CallableStoreSignature(asCASTContext& Context, TConstArrayView<asCQualType> PayloadTypes,
+		asEPrimitiveType ReturnPrimitive = asEPrimitiveType::Void)
+	{
+		asCQualType ReturnType;
+		if (!asCQualType::TryCreate(Context.GetBuiltinType(ReturnPrimitive), asETypeQualifiers::None, ReturnType))
+			return nullptr;
+		auto& Registry = Context.GetTypeContext()->GetIdentityRegistry();
+		asSStableTypeUseDescriptor Descriptor;
+		Descriptor.Kind = asETypeUseKind::Callable;
+		if (ReturnType.GetStableIdentity(Registry, Descriptor.ReturnType) != asETypeIdentityStatus::Succeeded)
+			return nullptr;
+		TArray<asCQualType> Parameters;
+		TArray<asEParameterPassingMode> Modes;
+		for (const asCQualType& Payload : PayloadTypes)
+		{
+			asSStableParameter Parameter;
+			if (Payload.GetStableIdentity(Registry, Parameter.Type) != asETypeIdentityStatus::Succeeded)
+				return nullptr;
+			Parameter.PassingMode = asEParameterPassingMode::Value;
+			Descriptor.Parameters.Add(Parameter);
+			Parameters.Add(Payload);
+			Modes.Add(asEParameterPassingMode::Value);
+		}
+		asSStableKey Key;
+		if (Registry.InternTypeUse(Descriptor, Key) != asETypeIdentityStatus::Succeeded)
+			return nullptr;
+		return Context.GetFunctionType(ReturnType, MoveTemp(Parameters), Key, MoveTemp(Modes));
+	}
+
+	asCFunctionDecl* SelectCallableBindTarget(asCExpr* Value, const FString& TargetName,
+		const asCCallableTypeDecl& Callable, const asFBodyNameLookup& BodyLookup,
+		int32 PayloadCount, bool& bEscapingStackRef)
+	{
+		bEscapingStackRef = false;
+		TArray<asCDecl*> Candidates;
+		if (Value)
+		{
+			if (const auto* Reference = dyn_cast<asCDeclRefExpr>(Value))
+				if (asCDecl* Decl = Reference->GetDecl()) Candidates.Add(Decl);
+		}
+		else if (BodyLookup)
+		{
+			for (asCDecl* Decl : BodyLookup(TargetName)) Candidates.Add(Decl);
+		}
+		asCFunctionDecl* Selected = nullptr;
+		for (asCDecl* Decl : Candidates)
+		{
+			auto* Function = dyn_cast<asCFunctionDecl>(Decl);
+			if (!Function || !CallableSignaturePrefixMatches(*Function, Callable)) continue;
+			const asCFunctionType* Have = Function->GetResolvedSignature();
+			const asCFunctionType* Wanted = Callable.GetResolvedSignature();
+			if (!Have || !Wanted) continue;
+			if (Have->GetParameterTypes().Num() != Wanted->GetParameterTypes().Num() + PayloadCount) continue;
+			bool bStackRef = false;
+			for (int32 Index = Wanted->GetParameterTypes().Num(); Index < Have->GetParameterTypes().Num(); ++Index)
+			{
+				if (CallablePayloadIsStackRef(*Function, Index))
+				{
+					bStackRef = true;
+					break;
+				}
+			}
+			if (bStackRef)
+			{
+				bEscapingStackRef = true;
+				continue;
+			}
+			if (Selected) return nullptr;
+			Selected = Function;
+		}
+		return Selected;
+	}
+
 	asCExpr* asCSema::ActOnMemberCall(asCExpr* Base, FString Name, TArray<asSParsedCallArgument> Arguments, asCSourceRange NameRange, asCSourceRange Range)
 	{
+		if (asCCallableTypeDecl* Callable = CallableDeclFromExpr(Base, NominalDeclLookup))
+		{
+			if (Name == TEXT("IsBound"))
+			{
+				if (!Arguments.IsEmpty())
+					return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+				asCFunctionType* StoreSignature = CallableStoreSignature(Context, {}, asEPrimitiveType::Bool);
+				if (!StoreSignature) return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+				auto* Member = Context.Create<asCMemberExpr>(Base, Callable, NameRange, Range);
+				Member->SetExpressionSemantics(StoreSignature, asEValueCategory::PRValue);
+				auto* Call = Context.Create<asCCallExpr>(Member, Range);
+				Call->SetCallableOperation(Name);
+				Call->SetArgumentSourceOrdinals({});
+				asCQualType BoolType;
+				asCQualType::TryCreate(Context.GetBuiltinType(asEPrimitiveType::Bool), asETypeQualifiers::None, BoolType);
+				Call->SetExpressionQualType(BoolType, asEValueCategory::PRValue);
+				return Call;
+			}
+			if (Name == TEXT("Execute") || Name == TEXT("Broadcast"))
+				return ActOnIndirectCall(Base, MoveTemp(Arguments), Range);
+			if (Name == TEXT("ExecuteIfBound"))
+			{
+				asCExpr* Call = ActOnIndirectCall(Base, MoveTemp(Arguments), Range);
+				if (asCCallExpr* Indirect = dyn_cast<asCCallExpr>(Call))
+				{
+					Indirect->SetCallableOperation(Name);
+				}
+				return Call;
+			}
+			if (Name == TEXT("BindDynamic") || Name == TEXT("AddDynamic") || Name == TEXT("BindUFunction"))
+			{
+				auto FunctionHasUFunction = [](const asCFunctionDecl& Function) -> bool
+				{
+					for (const asCAttr* Attr : Function.GetAttrs())
+					{
+						if (!Attr) continue;
+						if (const asCAnnotationAttr* Annotation = dyn_cast<asCAnnotationAttr>(Attr))
+						{
+							if (Annotation->GetAnnotationKind() == asEAnnotationKind::UFunction) return true;
+						}
+						if (const asCFlagAttr* Flag = dyn_cast<asCFlagAttr>(Attr))
+						{
+							if (Flag->GetName().Equals(TEXT("UFUNCTION"), ESearchCase::IgnoreCase)) return true;
+						}
+					}
+					return false;
+				};
+				if (Arguments.Num() == 2)
+				{
+					asCExpr* Object = Arguments[0].Value;
+					if (!Object && !Arguments[0].Name.IsEmpty())
+						Object = ActOnDeclReference(Arguments[0].Name, Arguments[0].NameRange);
+					asCExpr* FunctionName = Arguments[1].Value;
+					if (!FunctionName && !Arguments[1].Name.IsEmpty())
+						FunctionName = ActOnDeclReference(Arguments[1].Name, Arguments[1].NameRange);
+					const asCQualType ObjectType = Object ? Object->GetExpressionQualType() : asCQualType{};
+					const asCQualType NameType = FunctionName ? FunctionName->GetExpressionQualType() : asCQualType{};
+					if (!Object || !FunctionName || !ObjectType.IsValid() || !NameType.IsValid())
+						return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+					const bool bAdd = Name == TEXT("AddDynamic") && Callable->IsMulticast();
+					TArray<asCQualType> StoreArgs;
+					StoreArgs.Add(ObjectType);
+					StoreArgs.Add(NameType);
+					asCFunctionType* StoreSignature = CallableStoreSignature(
+						Context, StoreArgs, bAdd ? asEPrimitiveType::UInt64 : asEPrimitiveType::Void);
+					if (!StoreSignature)
+					{
+						asCQualType Dummy;
+						if (asCQualType::TryCreate(Context.GetBuiltinType(asEPrimitiveType::UInt64), asETypeQualifiers::None, Dummy))
+						{
+							StoreArgs[0] = Dummy;
+							StoreArgs[1] = Dummy;
+							StoreSignature = CallableStoreSignature(
+								Context, StoreArgs, bAdd ? asEPrimitiveType::UInt64 : asEPrimitiveType::Void);
+						}
+					}
+					if (!StoreSignature) return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+					auto* Member = Context.Create<asCMemberExpr>(Base, Callable, NameRange, Range);
+					Member->SetExpressionSemantics(StoreSignature, asEValueCategory::PRValue);
+					auto* Call = Context.Create<asCCallExpr>(Member, Range);
+					Call->SetCallableOperation(bAdd ? TEXT("AddDynamic") : TEXT("BindUFunction"));
+					Call->AddArgument(Object);
+					Call->AddArgument(FunctionName);
+					Call->SetArgumentSourceOrdinals({0, 1});
+					asCQualType ResultType;
+					asCQualType::TryCreate(
+						Context.GetBuiltinType(bAdd ? asEPrimitiveType::UInt64 : asEPrimitiveType::Void),
+						asETypeQualifiers::None, ResultType);
+					Call->SetExpressionQualType(ResultType, asEValueCategory::PRValue);
+					return Call;
+				}
+				if (Name == TEXT("BindUFunction"))
+					return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+				FString TargetName;
+				asCExpr* TargetValue = nullptr;
+				if (Arguments.Num() >= 1)
+				{
+					TargetValue = Arguments[0].Value;
+					TargetName = Arguments[0].Name;
+				}
+				bool bEscapingStackRef = false;
+				asCFunctionDecl* Selected = SelectCallableBindTarget(
+					TargetValue, TargetName, *Callable, BodyLookup, 0, bEscapingStackRef);
+				if (!Selected)
+				{
+					return ActOnRecoveryExpression(Range,
+						bEscapingStackRef ? TEXT("escaping-stack-ref-payload") : TEXT("signature-mismatch"));
+				}
+				if (!FunctionHasUFunction(*Selected))
+					return ActOnRecoveryExpression(Range, TEXT("bind-requires-ufunction"));
+				const bool bAdd = Name == TEXT("AddDynamic") && Callable->IsMulticast();
+				asCFunctionType* StoreSignature = CallableStoreSignature(
+					Context, TConstArrayView<asCQualType>(), bAdd ? asEPrimitiveType::UInt64 : asEPrimitiveType::Void);
+				if (!StoreSignature) return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+				auto* Member = Context.Create<asCMemberExpr>(Base, Selected, NameRange, Range);
+				Member->SetExpressionSemantics(StoreSignature, asEValueCategory::PRValue);
+				auto* Call = Context.Create<asCCallExpr>(Member, Range);
+				Call->SetCallableOperation(bAdd ? TEXT("Add") : TEXT("Bind"));
+				Call->SetArgumentSourceOrdinals({});
+				asCQualType ResultType;
+				asCQualType::TryCreate(
+					Context.GetBuiltinType(bAdd ? asEPrimitiveType::UInt64 : asEPrimitiveType::Void),
+					asETypeQualifiers::None, ResultType);
+				Call->SetExpressionQualType(ResultType, asEValueCategory::PRValue);
+				return Call;
+			}
+			if (Name == TEXT("Remove"))
+			{
+				asCQualType HandleType;
+				if (!asCQualType::TryCreate(Context.GetBuiltinType(asEPrimitiveType::UInt64), asETypeQualifiers::None, HandleType))
+					return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+				if (Arguments.Num() != 1 || !Arguments[0].Value)
+					return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+				asCExpr* Handle = ConvertTo(Arguments[0].Value, HandleType);
+				if (!Handle) return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+				asCFunctionType* StoreSignature = CallableStoreSignature(Context, MakeArrayView(&HandleType, 1));
+				if (!StoreSignature) return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+				auto* Member = Context.Create<asCMemberExpr>(Base, Callable, NameRange, Range);
+				Member->SetExpressionSemantics(StoreSignature, asEValueCategory::PRValue);
+				auto* Call = Context.Create<asCCallExpr>(Member, Range);
+				Call->SetCallableOperation(Name);
+				Call->AddArgument(Handle);
+				Call->SetArgumentSourceOrdinals({0});
+				asCQualType VoidType;
+				asCQualType::TryCreate(Context.GetBuiltinType(asEPrimitiveType::Void), asETypeQualifiers::None, VoidType);
+				Call->SetExpressionQualType(VoidType, asEValueCategory::PRValue);
+				return Call;
+			}
+			if (Name == TEXT("Clear") || Name == TEXT("RemoveAll"))
+			{
+				asCFunctionType* StoreSignature = CallableStoreSignature(Context, {});
+				if (!StoreSignature) return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+				auto* Member = Context.Create<asCMemberExpr>(Base, Callable, NameRange, Range);
+				Member->SetExpressionSemantics(StoreSignature, asEValueCategory::PRValue);
+				auto* Call = Context.Create<asCCallExpr>(Member, Range);
+				Call->SetCallableOperation(Name);
+				Call->SetArgumentSourceOrdinals({});
+				asCQualType VoidType;
+				asCQualType::TryCreate(Context.GetBuiltinType(asEPrimitiveType::Void), asETypeQualifiers::None, VoidType);
+				Call->SetExpressionQualType(VoidType, asEValueCategory::PRValue);
+				return Call;
+			}
+			if (Name == TEXT("Bind") || Name == TEXT("Add") || Name == TEXT("Create"))
+			{
+				FString TargetName;
+				asCExpr* TargetValue = nullptr;
+				TArray<asCExpr*> PayloadValues;
+				if (Arguments.Num() >= 1)
+				{
+					TargetValue = Arguments[0].Value;
+					TargetName = Arguments[0].Name;
+				}
+				for (int32 Index = 1; Index < Arguments.Num(); ++Index)
+				{
+					if (!Arguments[Index].Value) return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+					PayloadValues.Add(Arguments[Index].Value);
+				}
+				bool bEscapingStackRef = false;
+				asCFunctionDecl* Selected = SelectCallableBindTarget(
+					TargetValue, TargetName, *Callable, BodyLookup, PayloadValues.Num(), bEscapingStackRef);
+				if (!Selected)
+				{
+					return ActOnRecoveryExpression(Range,
+						bEscapingStackRef ? TEXT("escaping-stack-ref-payload") : TEXT("signature-mismatch"));
+				}
+				const asCFunctionType* Have = Selected->GetResolvedSignature();
+				const asCFunctionType* Wanted = Callable->GetResolvedSignature();
+				if (!Have || !Wanted) return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+				TArray<asCQualType> PayloadTypes;
+				TArray<asCExpr*> Converted;
+				TArray<int32> Ordinals;
+				const int32 Prefix = Wanted->GetParameterTypes().Num();
+				for (int32 Index = 0; Index < PayloadValues.Num(); ++Index)
+				{
+					const asCQualType Formal = Have->GetParameterTypes()[Prefix + Index];
+					if (Formal.IsReference() || CallablePayloadIsStackRef(*Selected, Prefix + Index))
+						return ActOnRecoveryExpression(Range, TEXT("escaping-stack-ref-payload"));
+					asCExpr* Value = ConvertTo(PayloadValues[Index], Formal);
+					if (!Value) return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+					PayloadTypes.Add(Formal);
+					Converted.Add(Value);
+					Ordinals.Add(Index);
+				}
+				const bool bHandleResult = Name == TEXT("Add") && Callable->IsMulticast();
+				asCFunctionType* StoreSignature = CallableStoreSignature(
+					Context, PayloadTypes, bHandleResult ? asEPrimitiveType::UInt64 : asEPrimitiveType::Void);
+				if (!StoreSignature) return ActOnRecoveryExpression(Range, TEXT("signature-mismatch"));
+				auto* Member = Context.Create<asCMemberExpr>(Base, Selected, NameRange, Range);
+				Member->SetExpressionSemantics(StoreSignature, asEValueCategory::PRValue);
+				auto* Call = Context.Create<asCCallExpr>(Member, Range);
+				Call->SetCallableOperation(Name);
+				for (asCExpr* Value : Converted) Call->AddArgument(Value);
+				Call->SetArgumentSourceOrdinals(MoveTemp(Ordinals));
+				asCQualType ResultType;
+				asCQualType::TryCreate(
+					Context.GetBuiltinType(bHandleResult ? asEPrimitiveType::UInt64 : asEPrimitiveType::Void),
+					asETypeQualifiers::None, ResultType);
+				Call->SetExpressionQualType(ResultType, asEValueCategory::PRValue);
+				return Call;
+			}
+		}
 		TArray<asCDecl*> Candidates;
 		if (Base) LookupMembers(ResolveRecord(Base->GetExpressionType()), Name, Candidates);
 		Candidates.RemoveAll([this](asCDecl* Decl) { return !CanAccessMember(Decl); });

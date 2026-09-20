@@ -256,31 +256,6 @@ class asCBuilderState
 		{
 			if (!CompileOutput) CompileOutput = MakeUnique<asCCompileOutput>();
 			CompileOutput->ReplaceDiagnosticResult(Diagnostics.CaptureResult());
-			if (ModuleDefinitions)
-			{
-				TArray<TSharedRef<FAngelscriptModuleDesc>> Modules;
-				TSharedRef<FAngelscriptModuleDesc> Module = MakeShared<FAngelscriptModuleDesc>();
-				Module->ModuleName = Inputs.Num() ? Inputs[0].LogicalSourceKey : TEXT("Main.as");
-				for (asCTypeInfo* Type : ModuleDefinitions->GetTypes())
-				{
-					if (!Type || (Type->nameSpace && Type->nameSpace->name.GetLength())) continue;
-					TSharedRef<FAngelscriptClassDesc> Class = MakeShared<FAngelscriptClassDesc>();
-					Class->ClassName = UTF8_TO_TCHAR(Type->GetName());
-					Class->ScriptType = nullptr;
-					for (asCScriptFunction* Function : ModuleDefinitions->GetFunctions())
-					{
-						if (!Function || Function->objectType != Type) continue;
-						TSharedRef<FAngelscriptFunctionDesc> Method = MakeShared<FAngelscriptFunctionDesc>();
-						Method->FunctionName = UTF8_TO_TCHAR(Function->GetName());
-						Method->ScriptFunction = nullptr;
-						Class->Methods.Add(Method);
-					}
-					Module->Classes.Add(Class);
-				}
-				Modules.Add(Module);
-				CompileOutput->GetDefinitionOutput().ReplaceModules(MoveTemp(Modules));
-				return;
-			}
 			if (!Session || !Session->IsPublishable()) return;
 			FAngelscriptPreprocessResult Projected;
 			FAngelscriptDescriptorConsumer DescriptorConsumer;

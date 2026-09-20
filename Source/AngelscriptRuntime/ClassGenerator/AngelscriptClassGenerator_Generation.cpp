@@ -52,6 +52,10 @@ int32 FAngelscriptClassGenerator::AddClassProperties(TSharedPtr<FAngelscriptClas
 		return ClassDesc->CodeSuperClass->GetPropertiesSize();
 
 	int32 PropertiesSize = ScriptType->GetSize();
+	if (ClassDesc->CodeSuperClass != nullptr)
+	{
+		PropertiesSize = FMath::Max(PropertiesSize, ClassDesc->CodeSuperClass->GetPropertiesSize());
+	}
 	FArchive ArDummy;
 
 	UStruct* InStruct = ClassDesc->Class ? ClassDesc->Class : ClassDesc->Struct;

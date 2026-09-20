@@ -5841,12 +5841,18 @@ void asCScriptEngine::ForwardGCReleaseReferences(void *ref, asITypeInfo *type)
 
 int asCScriptEngine::GetTypeIdFromDataType(const asCDataType &dtIn) const
 {
-	if (dtIn.GetTypeInfo() && dtIn.GetTypeInfo()->GetDefinitions())
+	if (dtIn.GetTypeInfo() && dtIn.GetTypeInfo()->GetDefinitions() && !dtIn.GetTypeInfo()->engine)
 	{
 		std::lock_guard<std::mutex> Lock(registrationMutex);
 		auto* Type = dtIn.GetTypeInfo();
-		if (typesByKey.FindRef(Type->GetStableKey()) != Type) return -1;
-		return Type->GetDefinitions()->GetBoundDataTypeId(dtIn);
+		if (typesByKey.FindRef(Type->GetStableKey()) == Type)
+		{
+			const int BoundId = Type->GetDefinitions()->GetBoundDataTypeId(dtIn);
+			if (BoundId >= 0)
+			{
+				return BoundId;
+			}
+		}
 	}
 	if( dtIn.IsNullHandle() ) return asTYPEID_VOID;
 
@@ -7078,6 +7084,26 @@ asITypeInfo *asCScriptEngine::GetTypeInfoById(int typeId) const
 		return nullptr;
 
 	return mapTypeIdToTypeInfo.FindRef(baseId);
+}
+
+// interface
+asIScriptModule *asCScriptEngine::GetModule(const char *name) const
+{
+	if (!name) return 0;
+	return scriptModulesByName.FindFirst(name);
+}
+
+// interface
+asUINT asCScriptEngine::GetModuleCount() const
+{
+	return scriptModules.GetLength();
+}
+
+// interface
+asIScriptModule *asCScriptEngine::GetModuleByIndex(asUINT index) const
+{
+	if (index >= scriptModules.GetLength()) return 0;
+	return scriptModules[index];
 }
 
 // interface

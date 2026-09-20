@@ -1,5 +1,6 @@
 #pragma once
 
+#include "as_compile_output.h"
 #include "as_definitions.h"
 #include "as_scriptengine.h"
 
@@ -10,6 +11,9 @@ class ANGELSCRIPTRUNTIME_API asCEngineCompileRegistration
 public:
 	explicit asCEngineCompileRegistration(asCScriptEngine& InEngine) : Engine(InEngine) {}
 	asERegistrationResult Register(TArray<TUniquePtr<asCDefinitions>> Sets);
+	asERegistrationResult Register(
+		TArray<TUniquePtr<asCDefinitions>> Sets,
+		const asCCompileOutput& Output);
 	asERegistrationResult Register(
 		TArray<TUniquePtr<asCDefinitions>> Sets,
 		const TMap<const asCTypeInfo*, int>& PublishedTypeIds,

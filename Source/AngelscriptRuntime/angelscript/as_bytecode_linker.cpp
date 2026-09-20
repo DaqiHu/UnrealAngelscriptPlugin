@@ -12,6 +12,7 @@
 #include "frontend/AST/as_type_context.h"
 #include "frontend/Sema/as_type_identity.h"
 #include "HAL/UnrealMemory.h"
+#include "Logging/LogMacros.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -37,7 +38,7 @@ namespace
 		if (Slot >= static_cast<asUINT>(Image.Requirements.Num())) return nullptr;
 		const asSByteCodeRequirement& Requirement = Image.Requirements[Slot];
 		if (Requirement.Role != asEByteCodeRequirementRole::Function) return nullptr;
-		return Engine.FindFunction(Requirement.Key);
+		return Engine.FindRegisteredFunction(Requirement.Key);
 	}
 
 	asCObjectType* ResolveTypeSlot(asCScriptEngine& Engine, const asCByteCodeImage& Image, asUINT Slot)
@@ -96,6 +97,7 @@ namespace
 		case asBC_WRTV4:
 		case asBC_RDR4:
 		case asBC_RET:
+		case asBC_BindPtr:
 			if (Instruction.Operands.Num() > 0) reinterpret_cast<short*>(Words)[1] = static_cast<short>(Instruction.Operands[0].Immediate);
 			EmitDword(Code, Words[0]);
 			break;
@@ -161,6 +163,9 @@ namespace
 			break;
 		}
 		case asBC_CallPtr:
+		case asBC_AddPtr:
+		case asBC_RemovePtr:
+		case asBC_ClearPtr:
 		case asBC_ClrVPtr:
 		case asBC_STOREOBJ:
 		case asBC_LOADOBJ:
@@ -792,7 +797,8 @@ asEByteCodeLinkStatus asLinkByteCodeImage(
 	const asEByteCodeLinkStatus Admission = Engine.BeginExecutablePublication(Generation);
 	if (Admission != asEByteCodeLinkStatus::Succeeded) return Admission;
 	TArray<asSByteCodeFunctionLifetime> Lifetimes;
-	if (asCByteCodeVerifier::VerifyWithLifetimes(Image, Lifetimes).Status != asEByteCodeVerifyStatus::Succeeded)
+	const asSByteCodeVerifyFault VerifyFault = asCByteCodeVerifier::VerifyWithLifetimes(Image, Lifetimes);
+	if (VerifyFault.Status != asEByteCodeVerifyStatus::Succeeded)
 	{
 		return asEByteCodeLinkStatus::Unverified;
 	}
@@ -822,7 +828,7 @@ asEByteCodeLinkStatus asLinkByteCodeImage(
 		}
 		else if (Requirement.Role == asEByteCodeRequirementRole::Function)
 		{
-			asCScriptFunction* Function = Engine.FindFunction(Requirement.Key);
+			asCScriptFunction* Function = Engine.FindRegisteredFunction(Requirement.Key);
 			if (!Function)
 			{
 				Snapshot->Release();

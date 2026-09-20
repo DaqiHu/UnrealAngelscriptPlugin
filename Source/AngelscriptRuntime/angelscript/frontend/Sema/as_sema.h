@@ -53,7 +53,7 @@ using asFBodyNameLookup = TFunction<TConstArrayView<asCDecl*>(const FString&)>;
 		asCRecordDecl* ActOnRecord(FString Name, asCSourceRange Range, asETypeDeclKind DeclaredTypeKind, TConstArrayView<FString> Bases, TConstArrayView<asCAttr*> Attrs);
 		asCEnumConstantDecl* ActOnEnumConstant(FString Name, int64 Value, bool bExplicitValue, asCSourceRange Range, TConstArrayView<asCAttr*> Attrs);
 		asCFunctionDecl* ActOnFunction(FString Name, FString ReturnType, asCSourceRange Range, asCSourceRange DeferredBody, TConstArrayView<asCAttr*> Attrs);
-		asCCallableTypeDecl* ActOnCallableType(bool bMulticast, FString Name, asSTypeSyntax ReturnType, asCSourceRange Range, TConstArrayView<asCAttr*> Attrs);
+		asCCallableTypeDecl* ActOnCallableType(bool bMulticast, asECallableFlavor Flavor, FString Name, asSTypeSyntax ReturnType, asCSourceRange Range, TConstArrayView<asCAttr*> Attrs);
 		asCVarDecl* ActOnVariable(FString Name, FString Type, bool bParameter, asCSourceRange Range, TConstArrayView<asCAttr*> Attrs);
 		asCRecoveryDecl* ActOnRecovery(asCSourceRange Range, FString Message, asUINT DiagnosticID = 3001);
 		void DiagnoseRemovedFeature(asERemovedLanguageFeature Feature, asCSourceRange Range);

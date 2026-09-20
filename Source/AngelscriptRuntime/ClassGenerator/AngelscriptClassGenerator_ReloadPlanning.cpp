@@ -384,6 +384,14 @@ bool FAngelscriptClassGenerator::ShouldFullReload(FEnumData& Enum)
 
 bool FAngelscriptClassGenerator::ShouldFullReload(FDelegateData& Delegate)
 {
+	if (!Delegate.NewDelegate.IsValid() || !Delegate.NewDelegate->bIsDynamic)
+	{
+		return false;
+	}
+	if (Delegate.ReloadReq == EReloadRequirement::Error)
+	{
+		return false;
+	}
 	if (bIsDoingFullReload && Delegate.ReloadReq >= EReloadRequirement::FullReloadSuggested)
 		return true;
 	//[UE++]: Materialize brand-new delegates during soft reload

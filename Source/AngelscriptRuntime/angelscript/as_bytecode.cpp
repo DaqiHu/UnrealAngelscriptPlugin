@@ -1483,6 +1483,7 @@ bool asCByteCode::IsSimpleExpression()
 			instr->op == asBC_LINE ||
 			instr->op == asBC_FREE ||
 			instr->op == asBC_CallPtr ||
+			instr->op == asBC_BindPtr ||
 			instr->op == asBC_CALLINTF ||
 			instr->op == asBC_CALLBND || 
 			instr->op == asBC_Thiscall1 )

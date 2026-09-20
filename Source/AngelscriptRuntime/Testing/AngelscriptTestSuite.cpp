@@ -99,6 +99,10 @@ namespace
 {
 	void BindAngelscriptScriptTestSuite(FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget())
+		{
+			return;
+		}
 		FAngelscriptBinds Suite =
 			Binds.ExistingClassForTarget(
 				"UAngelscriptTestSuite");

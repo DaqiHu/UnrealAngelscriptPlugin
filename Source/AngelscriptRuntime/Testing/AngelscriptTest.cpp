@@ -300,6 +300,10 @@ namespace
 {
 	void BindAngelscriptTest(FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget())
+		{
+			return;
+		}
 		{
 			FAngelscriptBinds::FNamespace Namespace(
 				Binds,

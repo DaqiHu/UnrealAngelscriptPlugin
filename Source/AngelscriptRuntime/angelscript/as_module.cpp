@@ -1081,11 +1081,20 @@ void asCModule::InternalReset()
 	for( n = 0; n < classTypes.GetLength(); n++ )
 	{
 		asCObjectType *type = classTypes[n];
-		// The type should be destroyed now
-		type->DestroyInternal();
+		if (!type)
+		{
+			continue;
+		}
+		// Definition-owned types stay in asCDefinitions until RetireExternalDefinitions.
+		if (type->GetDefinitions())
+		{
+			type->module = 0;
+			continue;
+		}
 
 		// Remove the type from the engine
 		// Release it from the module
+		type->DestroyInternal();
 		type->module = 0;
 		type->ReleaseInternal();
 	}
@@ -1093,6 +1102,15 @@ void asCModule::InternalReset()
 	for( n = 0; n < enumTypes.GetLength(); n++ )
 	{
 		asCEnumType *type = enumTypes[n];
+		if (!type)
+		{
+			continue;
+		}
+		if (type->GetDefinitions())
+		{
+			type->module = 0;
+			continue;
+		}
 		// Remove the type from the engine
 		// Release it from the module
 		type->module = 0;
@@ -1102,10 +1120,17 @@ void asCModule::InternalReset()
 	for( n = 0; n < typeDefs.GetLength(); n++ )
 	{
 		asCTypedefType *type = typeDefs[n];
+		if (!type)
+		{
+			continue;
+		}
+		if (type->GetDefinitions())
+		{
+			type->module = 0;
+			continue;
+		}
 
-		// The type should be destroyed now
 		type->DestroyInternal();
-
 		// Release it from the module
 		type->module = 0;
 		type->ReleaseInternal();
@@ -1117,6 +1142,11 @@ void asCModule::InternalReset()
 	{
 		asCCallableType *func = callableTypes[n];
 		asASSERT(func);
+		if (func->GetDefinitions())
+		{
+			func->module = 0;
+			continue;
+		}
 		func->DestroyInternal();
 		engine->RemoveCallableType(func);
 		func->module = 0;
@@ -1564,6 +1594,14 @@ asITypeInfo *asCModule::GetTypeInfoByName(const char *in_name) const
 				return typeDefs[n];
 		}
 
+		for (asUINT n = 0; n < callableTypes.GetLength(); n++)
+		{
+			if (callableTypes[n] &&
+				callableTypes[n]->name == in_name &&
+				callableTypes[n]->nameSpace == ns)
+				return callableTypes[n];
+		}
+
 		// Recursively search parent namespace
 		ns = engine->GetParentNameSpace(ns);
 	}
@@ -1787,6 +1825,97 @@ void asCModule::AddClassType(asCObjectType* type)
 {
 	classTypes.PushLast(type);
 	allLocalTypes.Add(type);
+}
+
+void asCModule::DetachDefinitionOwnedTypes()
+{
+	asUINT Write = 0;
+	for (asUINT n = 0; n < classTypes.GetLength(); ++n)
+	{
+		asCObjectType* Type = classTypes[n];
+		if (Type && Type->GetDefinitions())
+		{
+			if (engine)
+			{
+				engine->allScriptDeclaredTypes.Remove(Type);
+			}
+			if (Type->module == this)
+			{
+				Type->module = 0;
+			}
+			allLocalTypes.Remove(Type);
+			continue;
+		}
+		if (Type)
+		{
+			classTypes[Write++] = Type;
+		}
+	}
+	classTypes.SetLength(Write);
+
+	Write = 0;
+	for (asUINT n = 0; n < enumTypes.GetLength(); ++n)
+	{
+		asCEnumType* Type = enumTypes[n];
+		if (Type && Type->GetDefinitions())
+		{
+			if (engine)
+			{
+				engine->allScriptDeclaredTypes.Remove(Type);
+			}
+			if (Type->module == this)
+			{
+				Type->module = 0;
+			}
+			allLocalTypes.Remove(Type);
+			continue;
+		}
+		if (Type)
+		{
+			enumTypes[Write++] = Type;
+		}
+	}
+	enumTypes.SetLength(Write);
+
+	Write = 0;
+	for (asUINT n = 0; n < typeDefs.GetLength(); ++n)
+	{
+		asCTypedefType* Type = typeDefs[n];
+		if (Type && Type->GetDefinitions())
+		{
+			if (Type->module == this)
+			{
+				Type->module = 0;
+			}
+			allLocalTypes.Remove(Type);
+			continue;
+		}
+		if (Type)
+		{
+			typeDefs[Write++] = Type;
+		}
+	}
+	typeDefs.SetLength(Write);
+
+	Write = 0;
+	for (asUINT n = 0; n < callableTypes.GetLength(); ++n)
+	{
+		asCCallableType* Type = callableTypes[n];
+		if (Type && Type->GetDefinitions())
+		{
+			if (Type->module == this)
+			{
+				Type->module = 0;
+			}
+			allLocalTypes.Remove(Type);
+			continue;
+		}
+		if (Type)
+		{
+			callableTypes[Write++] = Type;
+		}
+	}
+	callableTypes.SetLength(Write);
 }
 
 void asCModule::AddEnumType(asCEnumType* type)

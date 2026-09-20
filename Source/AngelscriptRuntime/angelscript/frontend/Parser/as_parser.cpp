@@ -9,6 +9,11 @@
 
 BEGIN_AS_NAMESPACE
 
+	namespace
+	{
+		bool IsSupportedDeclareSpelling(const FString& Spelling);
+	}
+
 FString asCParser::Text(int32 Index) const
 	{
 		if (!Tokens.IsValidIndex(Index)) return {};
@@ -201,7 +206,31 @@ FString asCParser::Text(int32 Index) const
 		}
 		if (Tokens[Cursor].Kind == asETokenKind::KwDelegate || Tokens[Cursor].Kind == asETokenKind::KwEvent)
 		{
-			if (!ParseCallableDeclaration(MoveTemp(Attrs))) Recover(Before, TEXT("malformed-callable-declaration"), static_cast<asUINT>(asEDeclarationDiagnostic::InvalidCallable));
+			Sema.ActOnRecovery(Tokens[Cursor].Range, TEXT("removed-delegate-event-keyword"),
+				static_cast<asUINT>(asEDeclarationDiagnostic::RemovedDelegateEventKeyword));
+			while (Cursor < Tokens.Num() && Tokens[Cursor].Kind != asETokenKind::Semicolon && Tokens[Cursor].Kind != asETokenKind::RightBrace)
+			{
+				if (Tokens[Cursor].Kind == asETokenKind::LeftBrace)
+				{
+					const int32 Close = FindMatching(Cursor, asETokenKind::LeftBrace, asETokenKind::RightBrace);
+					if (Close != INDEX_NONE) { Cursor = Close + 1; break; }
+				}
+				++Cursor;
+			}
+			if (Cursor < Tokens.Num() && Tokens[Cursor].Kind == asETokenKind::Semicolon) ++Cursor;
+			return true;
+		}
+		if (Tokens[Cursor].Kind == asETokenKind::Identifier && Text(Cursor).StartsWith(TEXT("DECLARE_")))
+		{
+			if (IsSupportedDeclareSpelling(Text(Cursor)))
+			{
+				if (!ParseDeclareForm(MoveTemp(Attrs))) Recover(Before, TEXT("malformed-callable-declaration"), static_cast<asUINT>(asEDeclarationDiagnostic::InvalidCallable));
+			}
+			else
+			{
+				Recover(Before, TEXT("unsupported-delegate-declaration-form"),
+					static_cast<asUINT>(asEDeclarationDiagnostic::UnsupportedDelegateDeclarationForm));
+			}
 			return true;
 		}
 		if(Tokens[Cursor].Kind==asETokenKind::KwNamespace)return ParseNamespace(MoveTemp(Attrs));
@@ -702,13 +731,136 @@ FString asCParser::Text(int32 Index) const
 		Cursor = Close + 1;
 		if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind != asETokenKind::Semicolon) return false;
 		const int32 End = Cursor++;
-		asCCallableTypeDecl* Declaration = Sema.ActOnCallableType(bMulticast, MoveTemp(Name), MoveTemp(ReturnType), Span(Begin, End), Attrs);
+		asCCallableTypeDecl* Declaration = Sema.ActOnCallableType(bMulticast, asECallableFlavor::Ordinary, MoveTemp(Name), MoveTemp(ReturnType), Span(Begin, End), Attrs);
 		Sema.PushContext(Declaration);
 		for (asSParsedParameter& Parameter : Parameters)
 		{
 			asCVarDecl* Decl = Sema.ActOnVariable(MoveTemp(Parameter.Name), Parameter.Type.GetSpelling(), true, Parameter.Range, {});
 			Decl->SetTypeSyntax(MoveTemp(Parameter.Type));
 			if (Parameter.Initializer.IsOrdered()) Decl->SetDeferredInitializerRange(Parameter.Initializer);
+		}
+		Sema.PopContext();
+		return true;
+	}
+
+	namespace
+	{
+		struct asSDeclareFamily
+		{
+			const TCHAR* Prefix;
+			asECallableFlavor Flavor;
+			bool bMulticast;
+			bool bRetVal;
+		};
+
+		const asSDeclareFamily* MatchDeclareFamily(const FString& Spelling, int32& OutArity)
+		{
+			static const asSDeclareFamily Families[] = {
+				{TEXT("DECLARE_DYNAMIC_MULTICAST_DELEGATE"), asECallableFlavor::Dynamic, true, false},
+				{TEXT("DECLARE_DYNAMIC_DELEGATE_RetVal"), asECallableFlavor::Dynamic, false, true},
+				{TEXT("DECLARE_DYNAMIC_DELEGATE"), asECallableFlavor::Dynamic, false, false},
+				{TEXT("DECLARE_MULTICAST_DELEGATE"), asECallableFlavor::Ordinary, true, false},
+				{TEXT("DECLARE_DELEGATE_RetVal"), asECallableFlavor::Ordinary, false, true},
+				{TEXT("DECLARE_DELEGATE"), asECallableFlavor::Ordinary, false, false},
+			};
+			static const TCHAR* Suffixes[] = {
+				TEXT(""),
+				TEXT("_OneParam"),
+				TEXT("_TwoParams"),
+				TEXT("_ThreeParams"),
+				TEXT("_FourParams"),
+				TEXT("_FiveParams"),
+				TEXT("_SixParams"),
+				TEXT("_SevenParams"),
+				TEXT("_EightParams"),
+				TEXT("_NineParams"),
+			};
+			OutArity = -1;
+			for (const asSDeclareFamily& Candidate : Families)
+			{
+				const FString Prefix = Candidate.Prefix;
+				if (!Spelling.StartsWith(Prefix)) continue;
+				const FString Rest = Spelling.Mid(Prefix.Len());
+				for (int32 Index = 0; Index < UE_ARRAY_COUNT(Suffixes); ++Index)
+				{
+					if (Rest == Suffixes[Index])
+					{
+						OutArity = Index;
+						return &Candidate;
+					}
+				}
+			}
+			return nullptr;
+		}
+
+		bool IsSupportedDeclareSpelling(const FString& Spelling)
+		{
+			int32 Arity = -1;
+			return MatchDeclareFamily(Spelling, Arity) != nullptr;
+		}
+	}
+
+	bool asCParser::ParseDeclareForm(TArray<asCAttr*> Attrs)
+	{
+		const int32 Begin = Cursor;
+		const FString Spelling = Text(Cursor);
+		int32 Arity = -1;
+		const asSDeclareFamily* Family = MatchDeclareFamily(Spelling, Arity);
+		if (!Family || Arity < 0) return false;
+		++Cursor;
+		if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind != asETokenKind::LeftParen) return false;
+		const int32 Close = FindMatching(Cursor, asETokenKind::LeftParen, asETokenKind::RightParen);
+		if (Close == INDEX_NONE) return false;
+		++Cursor;
+		asSTypeSyntax ReturnType;
+		if (Family->bRetVal)
+		{
+			if (!ParseTypeSyntax(Cursor, Close, ReturnType)) return false;
+			if (Cursor >= Close || Tokens[Cursor].Kind != asETokenKind::Comma) return false;
+			++Cursor;
+		}
+		else
+		{
+			ReturnType.NameParts.Add(TEXT("void"));
+			ReturnType.Range = Tokens[Begin].Range;
+			ReturnType.ComponentRanges.Add(Tokens[Begin].Range);
+		}
+		if (Cursor >= Close || Tokens[Cursor].Kind != asETokenKind::Identifier) return false;
+		FString Name = Text(Cursor++);
+		struct asSParsedParameter { asSTypeSyntax Type; FString Name; asCSourceRange Range; };
+		TArray<asSParsedParameter> Parameters;
+		for (int32 Index = 0; Index < Arity; ++Index)
+		{
+			if (Cursor >= Close || Tokens[Cursor].Kind != asETokenKind::Comma) return false;
+			++Cursor;
+			const int32 ParameterBegin = Cursor;
+			asSParsedParameter Parameter;
+			if (!ParseTypeSyntax(Cursor, Close, Parameter.Type)) return false;
+			if (Family->Flavor == asECallableFlavor::Dynamic)
+			{
+				if (Cursor >= Close || Tokens[Cursor].Kind != asETokenKind::Comma) return false;
+				++Cursor;
+				if (Cursor >= Close || Tokens[Cursor].Kind != asETokenKind::Identifier) return false;
+				Parameter.Name = Text(Cursor++);
+			}
+			else if (Cursor < Close && Tokens[Cursor].Kind == asETokenKind::Identifier)
+			{
+				return false;
+			}
+			Parameter.Range = Span(ParameterBegin, Cursor - 1);
+			Parameters.Add(MoveTemp(Parameter));
+		}
+		if (Cursor != Close) return false;
+		Cursor = Close + 1;
+		if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind != asETokenKind::Semicolon) return false;
+		const int32 End = Cursor++;
+		asCCallableTypeDecl* Declaration = Sema.ActOnCallableType(
+			Family->bMulticast, Family->Flavor, MoveTemp(Name), MoveTemp(ReturnType), Span(Begin, End), Attrs);
+		Sema.PushContext(Declaration);
+		for (asSParsedParameter& Parameter : Parameters)
+		{
+			asCVarDecl* Decl = Sema.ActOnVariable(MoveTemp(Parameter.Name), Parameter.Type.GetSpelling(), true, Parameter.Range, {});
+			Decl->SetTypeSyntax(MoveTemp(Parameter.Type));
 		}
 		Sema.PopContext();
 		return true;
@@ -911,7 +1063,9 @@ FString asCParser::Text(int32 Index) const
 				{
 					++Cursor;
 					TArray<asSParsedCallArgument> Arguments;
-					if (!ParseCallArguments(Arguments)) return Sema.ActOnRecoveryExpression(NameRange, TEXT("malformed-member-call"));
+					const bool bBareTarget = Name == TEXT("Bind") || Name == TEXT("Add") || Name == TEXT("Create")
+						|| Name == TEXT("BindDynamic") || Name == TEXT("AddDynamic") || Name == TEXT("BindUFunction");
+					if (!ParseCallArguments(Arguments, asETokenKind::RightParen, bBareTarget)) return Sema.ActOnRecoveryExpression(NameRange, TEXT("malformed-member-call"));
 					Result = Sema.ActOnMemberCall(Result, MoveTemp(Name), MoveTemp(Arguments), NameRange, {Result->GetSourceRange().Begin, Tokens[Cursor - 1].Range.End});
 				}
 				else Result = Sema.ActOnMember(Result, MoveTemp(Name), NameRange, {Result->GetSourceRange().Begin, NameRange.End});
@@ -949,7 +1103,7 @@ FString asCParser::Text(int32 Index) const
 		return Result;
 	}
 
-	bool asCParser::ParseCallArguments(TArray<asSParsedCallArgument>& Arguments, asETokenKind Closing)
+	bool asCParser::ParseCallArguments(TArray<asSParsedCallArgument>& Arguments, asETokenKind Closing, bool bBareIdentifierTarget)
 	{
 		while (Tokens.IsValidIndex(Cursor) && Tokens[Cursor].Kind != Closing)
 		{
@@ -959,6 +1113,37 @@ FString asCParser::Text(int32 Index) const
 				Argument.Name = Text(Cursor);
 				Argument.NameRange = Tokens[Cursor].Range;
 				Cursor += 2;
+			}
+			else if (bBareIdentifierTarget && Arguments.IsEmpty() && Tokens[Cursor].Kind == asETokenKind::Identifier
+				&& Tokens.IsValidIndex(Cursor + 1)
+				&& (Tokens[Cursor + 1].Kind == asETokenKind::Comma || Tokens[Cursor + 1].Kind == Closing))
+			{
+				if (Text(Cursor) == TEXT("this"))
+				{
+					Argument.Value = Sema.ActOnThis(false, Tokens[Cursor].Range);
+					++Cursor;
+					Arguments.Add(MoveTemp(Argument));
+					if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind != asETokenKind::Comma) break;
+					++Cursor;
+					if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind == Closing)
+					{
+						Sema.ActOnRecoveryExpression(Tokens[FMath::Min(Cursor, Tokens.Num() - 1)].Range, TEXT("call-trailing-comma"));
+						return false;
+					}
+					continue;
+				}
+				Argument.Name = Text(Cursor);
+				Argument.NameRange = Tokens[Cursor].Range;
+				++Cursor;
+				Arguments.Add(MoveTemp(Argument));
+				if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind != asETokenKind::Comma) break;
+				++Cursor;
+				if (!Tokens.IsValidIndex(Cursor) || Tokens[Cursor].Kind == Closing)
+				{
+					Sema.ActOnRecoveryExpression(Tokens[FMath::Min(Cursor, Tokens.Num() - 1)].Range, TEXT("call-trailing-comma"));
+					return false;
+				}
+				continue;
 			}
 			Argument.Value = ParseExpression();
 			if (!Argument.Value)

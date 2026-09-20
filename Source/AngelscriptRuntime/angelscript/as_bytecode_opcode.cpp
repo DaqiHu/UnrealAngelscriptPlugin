@@ -24,7 +24,8 @@ namespace
 			return OperandIndex == 0 ? 8 : 4;
 		case asBC_BSLL64: case asBC_BSRL64: case asBC_BSRA64: case asBC_POWdi:
 			return OperandIndex == 2 ? 4 : 8;
-		case asBC_PshVPtr: case asBC_ClrVPtr: case asBC_CallPtr:
+		case asBC_PshVPtr: case asBC_ClrVPtr: case asBC_CallPtr: case asBC_AddPtr:
+		case asBC_RemovePtr: case asBC_ClearPtr: case asBC_ClonePtr:
 		case asBC_LOADOBJ: case asBC_STOREOBJ: case asBC_FREE:
 		case asBC_GETOBJ: case asBC_GETOBJREF: case asBC_CmpPtr: case asBC_ChkNullV:
 		case asBC_LoadRObjR: case asBC_RefCpyV: case asBC_AllocMem:

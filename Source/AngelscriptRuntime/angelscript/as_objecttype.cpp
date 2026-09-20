@@ -491,7 +491,18 @@ int asCObjectType::GetProperty(asUINT index, const char **out_name, int *out_typ
 	if( out_name )
 		*out_name = prop->name.AddressOf();
 	if( out_typeId )
-		*out_typeId = definitions ? definitions->GetBoundDataTypeId(prop->type) : engine ? engine->GetTypeIdFromDataType(prop->type) : -1;
+	{
+		int TypeId = -1;
+		if (engine)
+		{
+			TypeId = engine->GetTypeIdFromDataType(prop->type);
+		}
+		if (TypeId <= 0 && definitions)
+		{
+			TypeId = definitions->GetBoundDataTypeId(prop->type);
+		}
+		*out_typeId = TypeId;
+	}
 	if( out_isPrivate )
 		*out_isPrivate = prop->isPrivate;
 	if( out_isProtected )

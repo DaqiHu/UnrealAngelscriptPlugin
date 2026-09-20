@@ -126,13 +126,14 @@ asCSema::asCSema(asCASTContext& InContext, asCDiagnosticsEngine& InDiagnostics, 
 		if (DeferredBody.IsOrdered()) Decl->SetDeferredBodyRange(MoveTemp(DeferredBody)); Attach(Decl, Attrs); return Decl;
 	}
 
-	asCCallableTypeDecl* asCSema::ActOnCallableType(bool bMulticast, FString Name, asSTypeSyntax ReturnType,
+	asCCallableTypeDecl* asCSema::ActOnCallableType(bool bMulticast, asECallableFlavor Flavor, FString Name, asSTypeSyntax ReturnType,
 		asCSourceRange Range, TConstArrayView<asCAttr*> Attrs)
 	{
 		asCCallableTypeDecl* Decl = bMulticast
 			? static_cast<asCCallableTypeDecl*>(Context.Create<asCEventDecl>(MoveTemp(Name), MoveTemp(Range)))
 			: static_cast<asCCallableTypeDecl*>(Context.Create<asCDelegateDecl>(MoveTemp(Name), MoveTemp(Range)));
 		Decl->SetReturnTypeSyntax(MoveTemp(ReturnType));
+		Decl->SetFlavor(Flavor);
 		Attach(Decl, Attrs);
 		return Decl;
 	}

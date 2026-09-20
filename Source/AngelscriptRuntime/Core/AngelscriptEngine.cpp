@@ -7,6 +7,9 @@
 #include "AngelscriptPerformanceStats.h"
 #include "HAL/MallocLeakDetection.h"
 #include "Binds/BlueprintEventSignatureRegistry.h"
+#include "Binds/Bind_Primitives.h"
+#include "Binds/Bind_FName.h"
+#include "Binds/Bind_Delegates.h"
 #include "Binds/Helper_GetTypeInfo.h"
 #include "Binds/Helper_ToString.h"
 #include "Preprocessor/AngelscriptPreprocessor.h"
@@ -28,6 +31,8 @@
 #include "Compilation/AngelscriptCompilationEvents.h"
 #include "Core/AngelscriptEngineExtensionRegistry.h"
 
+#include "Containers/Utf8String.h"
+#include "Containers/StringConv.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
@@ -44,6 +49,7 @@
 #include "Engine/AssetManager.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectHash.h"
+#include "UObject/UnrealType.h"
 #include "Engine/UserDefinedEnum.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Interfaces/IPluginManager.h"
@@ -84,8 +90,12 @@
 #include "as_scriptengine.h"
 #include "as_scriptfunction.h"
 #include "as_objecttype.h"
+#include "as_typeinfo.h"
 #include "as_module.h"
 #include "as_builder.h"
+#include "as_definitions.h"
+#include "as_engine_compile_registration.h"
+#include "frontend/AST/as_type_context.h"
 #include "EndAngelscriptHeaders.h"
 
 #include "Testing/AngelscriptBindExecutionObservation.h"
@@ -126,6 +136,579 @@ namespace AngelscriptEngineStaticJITIdentity_Private
 			}
 		}
 		return false;
+	}
+}
+
+namespace AngelscriptEngineBuilderJoin_Private
+{
+	FUtf8String MakeUtf8FromText(const FString& Text)
+	{
+		const FTCHARToUTF8 Converted(*Text, Text.Len());
+		FUtf8String Body;
+		if (Converted.Length() > 0)
+		{
+			Body.AppendChars(
+				reinterpret_cast<const UTF8CHAR*>(Converted.Get()),
+				Converted.Length());
+		}
+		return Body;
+	}
+
+	FString BuilderFailure(const asCBuilder& Builder)
+	{
+		for (uint8 Stage = 0; Stage < uint8(asEBuilderStage::Failed); ++Stage)
+		{
+			if (const auto* Result = Builder.GetStageResult(asEBuilderStage(Stage));
+				Result && !Result->Succeeded)
+			{
+				FString Failure = FString::Printf(
+					TEXT("Stage %d: %s"),
+					int32(Stage),
+					*Result->Error);
+				if (!Result->Json.IsEmpty())
+				{
+					Failure += TEXT(" ") + Result->Json.Left(512);
+				}
+				return Failure;
+			}
+		}
+		return TEXT("asCBuilder failed");
+	}
+
+	void FillScriptConstructBehavior(asCObjectType& Type)
+	{
+		if (Type.beh.construct != 0 || Type.engine == nullptr)
+		{
+			return;
+		}
+		auto TryBind = [&Type](asCScriptFunction* Function)
+		{
+			const bool bNamedConstructor = Function
+				&& Function->name == Type.name
+				&& Function->GetParamCount() == 0;
+			if (!Function
+				|| Function->id <= 0
+				|| Function->GetParamCount() != 0
+				|| (Function->objectType != nullptr && Function->objectType != &Type)
+				|| (!Function->traits.GetTrait(asTRAIT_CONSTRUCTOR) && !bNamedConstructor))
+			{
+				return false;
+			}
+			Type.beh.construct = Function->id;
+			if (Type.beh.constructors.IndexOf(Function->id) < 0)
+			{
+				Type.beh.constructors.PushLast(Function->id);
+			}
+			return true;
+		};
+		for (asUINT Index = 0; Index < Type.methods.GetLength(); ++Index)
+		{
+			if (TryBind(Type.engine->GetScriptFunction(Type.methods[Index])))
+			{
+				return;
+			}
+		}
+		if (asCDefinitions* Set = Type.GetDefinitions())
+		{
+			for (asCScriptFunction* Function : Set->GetFunctions())
+			{
+				if (TryBind(Function))
+				{
+					return;
+				}
+			}
+		}
+	}
+
+	void AttachRegisteredType(asCModule& Shell, asCTypeInfo* Type)
+	{
+		if (!Type)
+		{
+			return;
+		}
+		if (Type->nameSpace != nullptr && Shell.defaultNamespace != Type->nameSpace)
+		{
+			Shell.defaultNamespace = Type->nameSpace;
+		}
+		if (asCObjectType* Object = CastToObjectType(Type))
+		{
+			FillScriptConstructBehavior(*Object);
+		}
+		if (Type->module == &Shell)
+		{
+			return;
+		}
+		if (Type->module)
+		{
+			return;
+		}
+		if (!Type->GetDefinitions())
+		{
+			Type->AddRefInternal();
+		}
+		Type->module = &Shell;
+		if (asCObjectType* Object = CastToObjectType(Type))
+		{
+			FillScriptConstructBehavior(*Object);
+			Shell.AddClassType(Object);
+			return;
+		}
+		if (asCEnumType* Enum = CastToEnumType(Type))
+		{
+			Shell.AddEnumType(Enum);
+			return;
+		}
+		if (asCCallableType* Callable = CastToCallableType(Type))
+		{
+			Shell.AddCallableType(Callable);
+		}
+	}
+
+	bool AttachHostDescriptorsToShell(
+		asCScriptEngine& ScriptEngine,
+		FAngelscriptModuleDesc& Host,
+		FString& OutError)
+	{
+		asCModule* Shell = Host.ScriptModule;
+		if (!Shell)
+		{
+			OutError = FString::Printf(
+				TEXT("Module %s has no asCModule shell to attach."),
+				*Host.ModuleName);
+			return false;
+		}
+		for (const TSharedRef<FAngelscriptClassDesc>& ClassDesc : Host.Classes)
+		{
+			if (ClassDesc->bIsStaticsClass)
+			{
+				continue;
+			}
+			asCTypeInfo* Type = static_cast<asCTypeInfo*>(
+				ScriptEngine.GetTypeInfoByName(TCHAR_TO_ANSI(*ClassDesc->ClassName)));
+			if (!Type)
+			{
+				OutError = FString::Printf(
+					TEXT("Registered type %s was not found for module %s."),
+					*ClassDesc->ClassName,
+					*Host.ModuleName);
+				return false;
+			}
+			AttachRegisteredType(*Shell, Type);
+			if (!Shell->GetType(TCHAR_TO_ANSI(*ClassDesc->ClassName), Shell->defaultNamespace))
+			{
+				OutError = FString::Printf(
+					TEXT("Module %s cannot look up class %s after attach."),
+					*Host.ModuleName,
+					*ClassDesc->ClassName);
+				return false;
+			}
+		}
+		for (const TSharedRef<FAngelscriptEnumDesc>& EnumDesc : Host.Enums)
+		{
+			asCTypeInfo* Type = static_cast<asCTypeInfo*>(
+				ScriptEngine.GetTypeInfoByName(TCHAR_TO_ANSI(*EnumDesc->EnumName)));
+			if (!Type)
+			{
+				OutError = FString::Printf(
+					TEXT("Registered enum %s was not found for module %s."),
+					*EnumDesc->EnumName,
+					*Host.ModuleName);
+				return false;
+			}
+			AttachRegisteredType(*Shell, Type);
+			if (!Shell->GetType(TCHAR_TO_ANSI(*EnumDesc->EnumName), Shell->defaultNamespace))
+			{
+				OutError = FString::Printf(
+					TEXT("Module %s cannot look up enum %s after attach."),
+					*Host.ModuleName,
+					*EnumDesc->EnumName);
+				return false;
+			}
+		}
+		for (const TSharedRef<FAngelscriptDelegateDesc>& DelegateDesc : Host.Delegates)
+		{
+			asCTypeInfo* Type = static_cast<asCTypeInfo*>(
+				Shell->GetTypeInfoByName(TCHAR_TO_ANSI(*DelegateDesc->DelegateName)));
+			if (!Type)
+			{
+				Type = static_cast<asCTypeInfo*>(
+					ScriptEngine.GetTypeInfoByName(TCHAR_TO_ANSI(*DelegateDesc->DelegateName)));
+			}
+			if (!Type)
+			{
+				OutError = FString::Printf(
+					TEXT("Registered delegate %s was not found for module %s."),
+					*DelegateDesc->DelegateName,
+					*Host.ModuleName);
+				return false;
+			}
+			AttachRegisteredType(*Shell, Type);
+			if (!Shell->GetTypeInfoByName(TCHAR_TO_ANSI(*DelegateDesc->DelegateName)))
+			{
+				OutError = FString::Printf(
+					TEXT("Module %s cannot look up delegate %s after attach."),
+					*Host.ModuleName,
+					*DelegateDesc->DelegateName);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	TSharedPtr<asCTypeContext, ESPMode::ThreadSafe> HostTypeContext(const asCDefinitions* Graph)
+	{
+		TSharedPtr<asCTypeContext, ESPMode::ThreadSafe> TypeContext =
+			MakeShared<asCTypeContext, ESPMode::ThreadSafe>();
+		if (Graph)
+		{
+			if (TSharedPtr<const asCTypeContext, ESPMode::ThreadSafe> HostContext =
+				Graph->GetIdentityContext())
+			{
+				TypeContext = TSharedPtr<asCTypeContext, ESPMode::ThreadSafe>(
+					HostContext,
+					const_cast<asCTypeContext*>(HostContext.Get()));
+			}
+		}
+		return TypeContext;
+	}
+
+	asCDefinitions* ScriptSetFromHost(FAngelscriptModuleDesc& Host)
+	{
+		auto FindSet = [](asCTypeInfo* Type) -> asCDefinitions*
+		{
+			return Type ? Type->GetDefinitions() : nullptr;
+		};
+		for (const TSharedRef<FAngelscriptClassDesc>& ClassDesc : Host.Classes)
+		{
+			if (ClassDesc->bIsStaticsClass)
+			{
+				continue;
+			}
+			if (asCDefinitions* Set = FindSet(static_cast<asCTypeInfo*>(
+				Host.ScriptModule
+					? Host.ScriptModule->GetTypeInfoByName(TCHAR_TO_ANSI(*ClassDesc->ClassName))
+					: nullptr)))
+			{
+				return Set;
+			}
+		}
+		for (const TSharedRef<FAngelscriptEnumDesc>& EnumDesc : Host.Enums)
+		{
+			if (asCDefinitions* Set = FindSet(static_cast<asCTypeInfo*>(
+				Host.ScriptModule
+					? Host.ScriptModule->GetTypeInfoByName(TCHAR_TO_ANSI(*EnumDesc->EnumName))
+					: nullptr)))
+			{
+				return Set;
+			}
+		}
+		return nullptr;
+	}
+
+	FString CodeWithoutGeneratedKind(
+		const FAngelscriptModuleDesc::FCodeSection& Section,
+		EAngelscriptGeneratedSourceKind Kind)
+	{
+		if (Section.SourceProvenance.IsEmpty())
+		{
+			return Section.Code;
+		}
+
+		TArray<int32> Order;
+		for (int32 Index = 0; Index < Section.SourceProvenance.Num(); ++Index)
+		{
+			if (Section.SourceProvenance[Index].GeneratedKind == Kind)
+			{
+				Order.Add(Index);
+			}
+		}
+		if (Order.IsEmpty())
+		{
+			return Section.Code;
+		}
+
+		Order.Sort([&Section](const int32 Left, const int32 Right)
+		{
+			return Section.SourceProvenance[Left].ProcessedCodeUnitOffset
+				> Section.SourceProvenance[Right].ProcessedCodeUnitOffset;
+		});
+
+		FString Code = Section.Code;
+		for (const int32 Index : Order)
+		{
+			const FAngelscriptProcessedSourceProvenanceRange& Range =
+				Section.SourceProvenance[Index];
+			if (Range.ProcessedCodeUnitOffset < 0
+				|| Range.ProcessedCodeUnitLength <= 0
+				|| Range.ProcessedCodeUnitOffset + Range.ProcessedCodeUnitLength > Code.Len())
+			{
+				continue;
+			}
+			Code.RemoveAt(Range.ProcessedCodeUnitOffset, Range.ProcessedCodeUnitLength);
+		}
+		return Code;
+	}
+
+	bool CompileOneModuleThroughBuilder(
+		asCScriptEngine& ScriptEngine,
+		FAngelscriptModuleDesc& Host,
+		const asCDefinitions* Graph,
+		const TArray<asCDefinitions*>& AttachedScriptSets,
+		const bool bReplaceExisting,
+		int32& TempNameIndex,
+		FString& OutError)
+	{
+		FString Code;
+		for (const FAngelscriptModuleDesc::FCodeSection& Section : Host.Code)
+		{
+			// HostProcess TypeContext does not yet resolve TSubclassOf/UClass for
+			// the preprocessor StaticClass helper. Authored UCLASS bodies compile
+			// without it; ClassGen SetScriptStaticClass no-ops if the global is gone.
+			const FString SectionCode = CodeWithoutGeneratedKind(
+				Section,
+				EAngelscriptGeneratedSourceKind::StaticClassHelper);
+			Code += SectionCode;
+			if (!SectionCode.IsEmpty() && !SectionCode.EndsWith(TEXT("\n")))
+			{
+				Code += TEXT("\n");
+			}
+		}
+		if (Code.IsEmpty())
+		{
+			OutError = FString::Printf(
+				TEXT("Module %s has no source for Initial Builder join."),
+				*Host.ModuleName);
+			return false;
+		}
+
+		TArray<TSharedRef<const FAngelscriptSource, ESPMode::ThreadSafe>> Sources;
+		Sources.Add(MakeShared<FAngelscriptSource, ESPMode::ThreadSafe>(
+			Host.ModuleName,
+			MakeUtf8FromText(Code)));
+
+		asSBuilderOptions Options;
+		Options.StableScope = FString::Printf(TEXT("compile-modules-initial:%s"), *Host.ModuleName);
+		Options.TypeContext = HostTypeContext(Graph);
+		Options.Dependencies.Add(const_cast<asCDefinitions*>(Graph));
+		for (asCDefinitions* Set : AttachedScriptSets)
+		{
+			Options.Dependencies.AddUnique(Set);
+		}
+		asCBuilder Builder(Sources, Options);
+		if (!Builder.RunThrough(asEBuilderStage::LayoutsFinalized))
+		{
+			OutError = BuilderFailure(Builder);
+			return false;
+		}
+		if (asCDefinitions* Definitions = Builder.GetDefinitions())
+		{
+			for (const TSharedRef<FAngelscriptClassDesc>& ClassDesc : Host.Classes)
+			{
+				if (!ClassDesc->bSuperIsCodeClass || ClassDesc->CodeSuperClass == nullptr)
+				{
+					continue;
+				}
+				const int32 Base = ClassDesc->CodeSuperClass->GetPropertiesSize();
+				if (Base <= 0)
+				{
+					continue;
+				}
+				for (asCTypeInfo* TypeInfo : Definitions->GetTypes())
+				{
+					asCObjectType* ObjectType = CastToObjectType(TypeInfo);
+					if (ObjectType == nullptr
+						|| FCStringAnsi::Strcmp(ObjectType->GetName(), TCHAR_TO_ANSI(*ClassDesc->ClassName)) != 0)
+					{
+						continue;
+					}
+					if (ObjectType->basePropertyOffset >= Base)
+					{
+						break;
+					}
+					const int32 Delta = Base - ObjectType->basePropertyOffset;
+					for (asUINT Index = 0; Index < ObjectType->localProperties.GetLength(); ++Index)
+					{
+						if (asCObjectProperty* Property = ObjectType->localProperties[Index])
+						{
+							Property->byteOffset += Delta;
+						}
+					}
+					ObjectType->size += Delta;
+					ObjectType->basePropertyOffset = Base;
+					break;
+				}
+			}
+		}
+		if (!Builder.RunThrough(asEBuilderStage::ByteCodeEmitted))
+		{
+			OutError = BuilderFailure(Builder);
+			return false;
+		}
+		const asCCompileOutput* Output = Builder.GetCompileOutput();
+		if (!Output)
+		{
+			OutError = TEXT("Builder produced no CompileOutput.");
+			return false;
+		}
+		TArray<TUniquePtr<asCDefinitions>> Units;
+		Units.Add(Builder.TakeDefinitions());
+		if (!Units[0])
+		{
+			OutError = TEXT("Builder produced no definitions.");
+			return false;
+		}
+		asCModule* Relocated = nullptr;
+		FString RelocatedName;
+		if (bReplaceExisting)
+		{
+			Relocated = static_cast<asCModule*>(
+				ScriptEngine.GetModule(TCHAR_TO_ANSI(*Host.ModuleName)));
+			if (Relocated)
+			{
+				RelocatedName = UTF8_TO_TCHAR(Relocated->GetName());
+				const FString TrashName = FString::Printf(
+					TEXT("%s_RELOAD_%d"),
+					*Host.ModuleName,
+					TempNameIndex++);
+				Relocated->SetName(TCHAR_TO_ANSI(*TrashName));
+			}
+		}
+		asCEngineCompileRegistration Registration(ScriptEngine);
+		const asERegistrationResult Registered =
+			Registration.Register(MoveTemp(Units), *Output);
+		if (Registered != asERegistrationResult::Succeeded)
+		{
+			if (Relocated)
+			{
+				Relocated->SetName(TCHAR_TO_ANSI(*RelocatedName));
+			}
+			OutError = FString::Printf(
+				TEXT("Register failed: %d"),
+				int32(Registered));
+			return false;
+		}
+		for (const TSharedRef<FAngelscriptModuleDesc>& OutputModule :
+			Output->GetDefinitionOutput().GetModules())
+		{
+			if (OutputModule->ModuleName != Host.ModuleName || !OutputModule->ScriptModule)
+			{
+				continue;
+			}
+			Host.ScriptModule = OutputModule->ScriptModule;
+			for (const TSharedRef<FAngelscriptDelegateDesc>& Projected : OutputModule->Delegates)
+			{
+				bool bExists = false;
+				for (const TSharedRef<FAngelscriptDelegateDesc>& Existing : Host.Delegates)
+				{
+					if (Existing->DelegateName != Projected->DelegateName)
+					{
+						continue;
+					}
+					bExists = true;
+					Existing->bIsDynamic = Projected->bIsDynamic;
+					Existing->bIsMulticast = Projected->bIsMulticast;
+					if (!Existing->Signature.IsValid())
+					{
+						Existing->Signature = Projected->Signature;
+					}
+					break;
+				}
+				if (!bExists)
+				{
+					Host.Delegates.Add(Projected);
+				}
+			}
+			break;
+		}
+		if (Host.ScriptModule == nullptr)
+		{
+			OutError = FString::Printf(
+				TEXT("Module %s received no asCModule shell."),
+				*Host.ModuleName);
+			return false;
+		}
+		return AttachHostDescriptorsToShell(ScriptEngine, Host, OutError);
+	}
+
+	bool CompileInitialModulesThroughBuilder(
+		asCScriptEngine& ScriptEngine,
+		const TArray<TSharedRef<FAngelscriptModuleDesc>>& Modules,
+		const bool bReplaceExisting,
+		int32& TempNameIndex,
+		FString& OutError)
+	{
+		TArray<TSharedRef<FAngelscriptModuleDesc>> Pending;
+		TSet<FString> SeenNames;
+		for (const TSharedRef<FAngelscriptModuleDesc>& Module : Modules)
+		{
+			if (Module->bLoadedPrecompiledCode || Module->ScriptModule != nullptr)
+			{
+				continue;
+			}
+			if (Module->ModuleName.IsEmpty())
+			{
+				OutError = TEXT("Initial Builder join requires ModuleName.");
+				return false;
+			}
+			if (SeenNames.Contains(Module->ModuleName))
+			{
+				OutError = FString::Printf(
+					TEXT("Duplicate module %s"),
+					*Module->ModuleName);
+				return false;
+			}
+			SeenNames.Add(Module->ModuleName);
+			Pending.Add(Module);
+		}
+		if (Pending.IsEmpty())
+		{
+			return true;
+		}
+
+		FString HostDiagnostic;
+		if (!FAngelscriptBind::EnsureProcessHostCollection(HostDiagnostic))
+		{
+			OutError = HostDiagnostic.IsEmpty()
+				? TEXT("Process host capture failed.")
+				: HostDiagnostic;
+			return false;
+		}
+		const UE::Angelscript::Private::FAngelscriptBindCollection* Host =
+			FAngelscriptBind::GetProcessHostCollection();
+		const asCDefinitions* Graph = Host ? Host->GetHostDefinitions() : nullptr;
+		if (!Graph || Graph->GetState() != asEDefinitionState::Frozen)
+		{
+			OutError = TEXT("HostProcess graph is not frozen.");
+			return false;
+		}
+		if (FAngelscriptTypeDatabase* TypeDatabase = FAngelscriptEngine::Get().GetTypeDatabase())
+		{
+			if (!TypeDatabase->TypesByAngelscriptName.Contains(TEXT("int")))
+			{
+				FAngelscriptType::Register(*TypeDatabase, MakeShared<FIntType>());
+			}
+		}
+
+		TArray<asCDefinitions*> AttachedScriptSets;
+		for (const TSharedRef<FAngelscriptModuleDesc>& Module : Pending)
+		{
+			if (!CompileOneModuleThroughBuilder(
+				ScriptEngine,
+				*Module,
+				Graph,
+				AttachedScriptSets,
+				bReplaceExisting,
+				TempNameIndex,
+				OutError))
+			{
+				return false;
+			}
+			if (asCDefinitions* Set = ScriptSetFromHost(*Module))
+			{
+				AttachedScriptSets.AddUnique(Set);
+			}
+		}
+		return true;
 	}
 }
 
@@ -1419,6 +2002,82 @@ namespace
 
 		return bInitializationSucceeded.Load();
 	}
+
+	struct FHostScriptObjectType final : FAngelscriptType
+	{
+		virtual FString GetAngelscriptTypeName() const override
+		{
+			return TEXT("UObject");
+		}
+
+		virtual FString GetAngelscriptTypeName(const FAngelscriptTypeUsage& Usage) const override
+		{
+			if (Usage.ScriptClass != nullptr)
+			{
+				return ANSI_TO_TCHAR(Usage.ScriptClass->GetName());
+			}
+			return TEXT("UObject");
+		}
+
+		virtual UClass* GetClass(const FAngelscriptTypeUsage&) const override
+		{
+			return UObject::StaticClass();
+		}
+
+		bool CanCreateProperty(const FAngelscriptTypeUsage& Usage) const override
+		{
+			return Usage.ScriptClass != nullptr;
+		}
+
+		FProperty* CreateProperty(const FAngelscriptTypeUsage& Usage, const FPropertyParams& Params) const override
+		{
+			auto* Property = new FObjectProperty(Params.Outer, Params.PropertyName);
+			UClass* PropertyClass = UObject::StaticClass();
+			if (Usage.ScriptClass != nullptr)
+			{
+				if (void* UserData = Usage.ScriptClass->GetUserData())
+				{
+					if (reinterpret_cast<UPTRINT>(UserData) > 0xFFFF)
+					{
+						if (UClass* AsClass = Cast<UClass>(static_cast<UObject*>(UserData)))
+						{
+							PropertyClass = AsClass;
+						}
+					}
+				}
+			}
+			Property->PropertyClass = PropertyClass;
+			return Property;
+		}
+	};
+
+	void SeedHostScriptObjectType(FAngelscriptTypeDatabase& Database)
+	{
+		if (!Database.ScriptObjectType.IsValid())
+		{
+			Database.ScriptObjectType = MakeShared<FHostScriptObjectType>();
+		}
+		if (!Database.TypesByAngelscriptName.Contains(TEXT("UObject")))
+		{
+			FAngelscriptType::Register(Database, Database.ScriptObjectType.ToSharedRef());
+		}
+		if (!Database.TypesByAngelscriptName.Contains(TEXT("FName")))
+		{
+			FAngelscriptType::Register(Database, MakeShared<FNameType>());
+		}
+	}
+
+	void SeedHostScriptDelegateTypes(FAngelscriptTypeDatabase& Database, FAngelscriptBindDatabase& BindDatabase)
+	{
+		if (!Database.ScriptDelegateType.IsValid())
+		{
+			Database.ScriptDelegateType = MakeShared<FScriptDelegateType>(BindDatabase);
+		}
+		if (!Database.ScriptMulticastDelegateType.IsValid())
+		{
+			Database.ScriptMulticastDelegateType = MakeShared<FMulticastScriptDelegateType>(BindDatabase);
+		}
+	}
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -1610,6 +2269,14 @@ bool FAngelscriptEngine::InitializeWithoutInitialCompile()
 			FAngelscriptBindExecutionObservation::RecordPublicationResult(this, false);
 			#endif
 			return false;
+		}
+		if (TypeDatabase.IsValid())
+		{
+			SeedHostScriptObjectType(*TypeDatabase);
+			if (BindDatabase.IsValid())
+			{
+				SeedHostScriptDelegateTypes(*TypeDatabase, *BindDatabase);
+			}
 		}
 	}
 	if (RuntimeConfig.Purpose != EAngelscriptEnginePurpose::StaticJITGeneration)
@@ -3276,6 +3943,21 @@ bool FAngelscriptEngine::BindScriptTypes()
 	{
 		UE_LOG(Angelscript, Error, TEXT("Could not inject the retained HostProcess graph."));
 		return false;
+	}
+
+	// HostProcess inject does not replay Bind_BlueprintType TypeDatabase
+	// adapters. Preprocess ResolveSuperClass still looks up UObject there.
+	if (FAngelscriptTypeDatabase* SeedDatabase = GetTypeDatabase())
+	{
+		SeedHostScriptObjectType(*SeedDatabase);
+		if (FAngelscriptBindDatabase* SeedBindDatabase = GetBindDatabase())
+		{
+			SeedHostScriptDelegateTypes(*SeedDatabase, *SeedBindDatabase);
+		}
+		if (!SeedDatabase->TypesByAngelscriptName.Contains(TEXT("int")))
+		{
+			FAngelscriptType::Register(*SeedDatabase, MakeShared<FIntType>());
+		}
 	}
 	return true;
 }
@@ -5625,7 +6307,72 @@ ECompileResult FAngelscriptEngine::CompileModules(
 	ScriptEngine->RequestBuild();
 	ScriptEngine->PrepareEngine();
 
+	bool bCompiledThroughBuilder = false;
+	if (CompileType == ECompileType::Initial
+		|| CompileType == ECompileType::FullReload
+		|| CompileType == ECompileType::SoftReloadOnly)
+	{
+		for (const TSharedRef<FAngelscriptModuleDesc>& Module : InModules)
+		{
+			for (const FAngelscriptModuleDesc::FCodeSection& Section : Module->Code)
+			{
+				auto& Diag = Diagnostics.FindOrAdd(Section.AbsoluteFilename);
+				Diag.Diagnostics.Reset();
+				Diag.Filename = Section.AbsoluteFilename;
+				Diag.bIsCompiling = true;
+			}
+			ensureMsgf(
+				!CompilingModulesByName.Contains(Module->ModuleName),
+				TEXT("Duplicate module %s"),
+				*Module->ModuleName);
+			CompilingModulesByName.Add(Module->ModuleName, Module);
+			CompiledModules.Add(Module);
+		}
+
+		if (CompileType != ECompileType::Initial)
+		{
+			TArray<asCDefinitions*> ReplaceSets;
+			for (const TSharedRef<FAngelscriptModuleDesc>& Module : InModules)
+			{
+				if (TSharedRef<FAngelscriptModuleDesc>* Old =
+					ActiveModules.Find(MakeModuleName(Module->ModuleName)))
+				{
+					if (asCDefinitions* Set =
+						AngelscriptEngineBuilderJoin_Private::ScriptSetFromHost(**Old))
+					{
+						ReplaceSets.AddUnique(Set);
+					}
+				}
+			}
+			if (ReplaceSets.Num() > 0)
+			{
+				ScriptEngine->UnpublishDefinitionSets(ReplaceSets);
+			}
+		}
+
+		FString BuilderError;
+		if (!AngelscriptEngineBuilderJoin_Private::CompileInitialModulesThroughBuilder(
+			*ScriptEngine,
+			InModules,
+			CompileType != ECompileType::Initial,
+			TempNameIndex,
+			BuilderError))
+		{
+			for (const TSharedRef<FAngelscriptModuleDesc>& Module : InModules)
+			{
+				Module->bCompileError = true;
+				Module->ScriptModule = nullptr;
+				ScriptCompileError(Module, 1, BuilderError);
+			}
+			bHadCompileErrors = true;
+		}
+		bCompiledThroughBuilder = true;
+		ScriptEngine->deferValidationOfTemplateTypes = false;
+		ScriptEngine->deferCalculatingTemplateSize = false;
+	}
+
 	// Always compile every module in the list
+	if (!bCompiledThroughBuilder)
 	{
 		FAngelscriptScopeTimer Timer(TEXT("script compilation total"));
 		int32 ProgressUpdateCounter = 0;
@@ -6789,6 +7536,23 @@ ECompileResult FAngelscriptEngine::CompileModules(
 					bHadCompileErrors = true;
 					break;
 			}
+		}
+	}
+
+	if (DiscardedModules.Num() > 0)
+	{
+		TArray<asCDefinitions*> RetiredSets;
+		for (const TSharedRef<FAngelscriptModuleDesc>& OldModule : DiscardedModules)
+		{
+			if (asCDefinitions* Set =
+				AngelscriptEngineBuilderJoin_Private::ScriptSetFromHost(*OldModule))
+			{
+				RetiredSets.AddUnique(Set);
+			}
+		}
+		if (RetiredSets.Num() > 0)
+		{
+			ScriptEngine->RetireDefinitionSets(RetiredSets);
 		}
 	}
 

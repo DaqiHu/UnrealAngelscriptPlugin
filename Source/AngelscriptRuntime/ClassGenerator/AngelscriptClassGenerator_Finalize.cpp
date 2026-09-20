@@ -65,9 +65,8 @@ void FAngelscriptClassGenerator::SetScriptStaticClass(TSharedPtr<FAngelscriptCla
 		TCHAR_TO_ANSI(*ClassDesc->StaticClassGlobalVariableName),
 		ScriptNamespace
 	);
-	if (Property == nullptr)
+	if (ClassDesc->StaticClassGlobalVariableName.IsEmpty() || Property == nullptr)
 	{
-		ensure(false);
 		return;
 	}
 
@@ -898,12 +897,19 @@ void FAngelscriptClassGenerator::UpdateConstructAndDefaultsFunctions(TSharedPtr<
 	{
 		Class->ConstructFunction = ObjType->GetEngine()->GetFunctionById(ObjType->beh.construct);
 		
-		// Only take the defaults function if it was overridden by our class, otherwise we're going to call the parent manually anyway
-		auto* DefaultsFunction = (asCScriptFunction*)ObjType->GetMethodByDecl("void __InitDefaults()");
+		// Definition-graph types keep methods in metadataMethods; GetMethodByDecl
+		// only walks the legacy methods[] id table and misses __InitDefaults.
+		asIScriptFunction* DefaultsLookup = ObjType->GetMethodByName("__InitDefaults");
+		if (DefaultsLookup == nullptr)
+		{
+			DefaultsLookup = ObjType->GetMethodByDecl("void __InitDefaults()");
+		}
+		auto* DefaultsFunction = (asCScriptFunction*)DefaultsLookup;
 		if (DefaultsFunction != nullptr && DefaultsFunction->objectType == ObjType)
 			Class->DefaultsFunction = DefaultsFunction;
 
-		((asCScriptFunction*)Class->ConstructFunction)->isInUse = true;
+		if (Class->ConstructFunction != nullptr)
+			((asCScriptFunction*)Class->ConstructFunction)->isInUse = true;
 		if (Class->DefaultsFunction != nullptr)
 			((asCScriptFunction*)Class->DefaultsFunction)->isInUse = true;
 	}

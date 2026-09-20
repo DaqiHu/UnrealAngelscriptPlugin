@@ -261,6 +261,9 @@ public:
 	virtual const char *GetDefaultNamespace() const;
 
 	// Script modules
+	virtual asIScriptModule *GetModule(const char *name) const;
+	virtual asUINT           GetModuleCount() const;
+	virtual asIScriptModule *GetModuleByIndex(asUINT index) const;
 
 	// Script functions
 	virtual asIScriptFunction *GetFunctionById(int funcId) const;
@@ -333,6 +336,8 @@ public:
 	asCObjectType* FindTemplateInstance(const asCObjectType* Template, TConstArrayView<asCDataType> Arguments) const;
 	asERegistrationResult SpecializeTemplate(asCObjectType& Template, TConstArrayView<asCDataType> Arguments, asCObjectType*& Out);
 	void RetireExternalDefinitions();
+	void UnpublishDefinitionSets(TConstArrayView<asCDefinitions*> Sets);
+	void RetireDefinitionSets(TConstArrayView<asCDefinitions*> Sets);
 	bool AcquireVmObjectLease();
 	void ReleaseVmObjectLease();
 	bool BeginVmOperation(bool Cleanup = false);
@@ -355,6 +360,7 @@ public:
 	asCTypeInfo* FindType(const char* Namespace, const char* Name) const;
 	asCTypeInfo* FindType(const asSStableKey& Key) const;
 	asCScriptFunction* FindFunction(const asSStableKey& Key) const;
+	asCScriptFunction* FindRegisteredFunction(const asSStableKey& Key) const;
 	asCGlobalProperty* FindGlobalProperty(const char* Namespace, const char* Name) const;
 	asCGlobalProperty* FindGlobalProperty(const asSStableKey& Key) const;
 	TPair<asUINT, asUINT> GetRegistrationCounts() const;

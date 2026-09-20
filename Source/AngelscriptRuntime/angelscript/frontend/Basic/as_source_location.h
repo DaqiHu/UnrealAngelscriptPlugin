@@ -1,5 +1,5 @@
 /*
-   Maintained Unreal AngelScript fork — snapshot-bound frontend coordinates.
+   Maintained Unreal AngelScript fork — input-bound frontend coordinates.
 */
 
 #pragma once

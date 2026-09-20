@@ -11,6 +11,7 @@
 #include "UObject/GarbageCollection.h"
 #include "UObject/GarbageCollectionSchema.h"
 #include "UObject/CoreRedirects.h"
+#include "UObject/UnrealType.h"
 #include "UnversionedPropertySerialization.h"
 
 #include "Misc/ScopedSlowTask.h"
@@ -332,36 +333,131 @@ void FAngelscriptClassGenerator::DoSoftReload(FModuleData& ModuleData, FClassDat
 
 	struct FRawUnrealPropertyType : public FAngelscriptType
 	{
+		static bool IsScriptCallPtrProperty(const FAngelscriptTypeUsage& Usage)
+		{
+			const FProperty* Property = Usage.UnrealProperty;
+			return Property != nullptr
+				&& (Property->IsA<FDelegateProperty>() || Property->IsA<FMulticastDelegateProperty>());
+		}
+
 		virtual bool CanCopy(const FAngelscriptTypeUsage& Usage) const override { return true; }
 		virtual bool NeedCopy(const FAngelscriptTypeUsage& Usage) const override { return true; }
 		virtual void CopyValue(const FAngelscriptTypeUsage& Usage, void* SourcePtr, void* DestinationPtr) const
 		{
+			if (IsScriptCallPtrProperty(Usage))
+			{
+				if (SourcePtr && DestinationPtr && SourcePtr != DestinationPtr)
+				{
+					FMemory::Memcpy(DestinationPtr, SourcePtr, sizeof(asPWORD));
+				}
+				return;
+			}
 			Usage.UnrealProperty->CopyCompleteValue(DestinationPtr, SourcePtr);
 		}
 
 		virtual bool CanCompare(const FAngelscriptTypeUsage& Usage) const override { return true; }
 		virtual bool IsValueEqual(const FAngelscriptTypeUsage& Usage, void* SourcePtr, void* DestinationPtr) const override
 		{
+			if (IsScriptCallPtrProperty(Usage))
+			{
+				if (!SourcePtr || !DestinationPtr)
+				{
+					return SourcePtr == DestinationPtr;
+				}
+				return FMemory::Memcmp(SourcePtr, DestinationPtr, sizeof(asPWORD)) == 0;
+			}
 			return Usage.UnrealProperty->Identical(SourcePtr, DestinationPtr);
 		}
 
 		virtual bool CanConstruct(const FAngelscriptTypeUsage& Usage) const override { return true; }
-		virtual bool NeedConstruct(const FAngelscriptTypeUsage& Usage) const override { return true; }
+		virtual bool NeedConstruct(const FAngelscriptTypeUsage& Usage) const override
+		{
+			return !IsScriptCallPtrProperty(Usage);
+		}
 		virtual void ConstructValue(const FAngelscriptTypeUsage& Usage, void* DestinationPtr) const override
 		{
+			if (IsScriptCallPtrProperty(Usage))
+			{
+				if (DestinationPtr)
+				{
+					FMemory::Memzero(DestinationPtr, sizeof(asPWORD));
+				}
+				return;
+			}
 			Usage.UnrealProperty->InitializeValue(DestinationPtr);
 		}
 
 		virtual int32 GetValueSize(const FAngelscriptTypeUsage& Usage) const override
 		{
+			if (IsScriptCallPtrProperty(Usage))
+			{
+				return static_cast<int32>(sizeof(asPWORD));
+			}
 			return Usage.UnrealProperty->GetSize();
 		}
 
 		virtual bool CanDestruct(const FAngelscriptTypeUsage& Usage) const override { return true; }
-		virtual bool NeedDestruct(const FAngelscriptTypeUsage& Usage) const override { return true; }
+		virtual bool NeedDestruct(const FAngelscriptTypeUsage& Usage) const override
+		{
+			return !IsScriptCallPtrProperty(Usage);
+		}
 		virtual void DestructValue(const FAngelscriptTypeUsage& Usage, void* DestinationPtr) const override
 		{
+			if (IsScriptCallPtrProperty(Usage))
+			{
+				return;
+			}
 			Usage.UnrealProperty->DestroyValue(DestinationPtr);
+		}
+	};
+
+	struct FCallPtrSlotType : public FAngelscriptType
+	{
+		virtual bool CanCopy(const FAngelscriptTypeUsage& Usage) const override { return true; }
+		virtual bool NeedCopy(const FAngelscriptTypeUsage& Usage) const override { return true; }
+		virtual void CopyValue(const FAngelscriptTypeUsage& Usage, void* SourcePtr, void* DestinationPtr) const
+		{
+			(void)Usage;
+			if (SourcePtr && DestinationPtr && SourcePtr != DestinationPtr)
+			{
+				FMemory::Memcpy(DestinationPtr, SourcePtr, sizeof(asPWORD));
+			}
+		}
+
+		virtual bool CanCompare(const FAngelscriptTypeUsage& Usage) const override { return true; }
+		virtual bool IsValueEqual(const FAngelscriptTypeUsage& Usage, void* SourcePtr, void* DestinationPtr) const override
+		{
+			(void)Usage;
+			if (!SourcePtr || !DestinationPtr)
+			{
+				return SourcePtr == DestinationPtr;
+			}
+			return FMemory::Memcmp(SourcePtr, DestinationPtr, sizeof(asPWORD)) == 0;
+		}
+
+		virtual bool CanConstruct(const FAngelscriptTypeUsage& Usage) const override { return true; }
+		virtual bool NeedConstruct(const FAngelscriptTypeUsage& Usage) const override { return false; }
+		virtual void ConstructValue(const FAngelscriptTypeUsage& Usage, void* DestinationPtr) const override
+		{
+			(void)Usage;
+			if (DestinationPtr)
+			{
+				FMemory::Memzero(DestinationPtr, sizeof(asPWORD));
+			}
+		}
+
+		virtual int32 GetValueSize(const FAngelscriptTypeUsage& Usage) const override
+		{
+			(void)Usage;
+			return static_cast<int32>(sizeof(asPWORD));
+		}
+
+		virtual bool CanDestruct(const FAngelscriptTypeUsage& Usage) const override { return true; }
+		virtual bool NeedDestruct(const FAngelscriptTypeUsage& Usage) const override { return false; }
+		virtual void DestructValue(const FAngelscriptTypeUsage& Usage, void* DestinationPtr) const override
+		{
+			(void)Usage;
+			(void)DestinationPtr;
 		}
 	};
 
@@ -384,6 +480,12 @@ void FAngelscriptClassGenerator::DoSoftReload(FModuleData& ModuleData, FClassDat
 		static TSharedPtr<FAngelscriptType> GetRawUnrealPropertyType()
 		{
 			static TSharedPtr<FAngelscriptType> Type = MakeShared<FRawUnrealPropertyType>();
+			return Type;
+		}
+
+		static TSharedPtr<FAngelscriptType> GetCallPtrSlotType()
+		{
+			static TSharedPtr<FAngelscriptType> Type = MakeShared<FCallPtrSlotType>();
 			return Type;
 		}
 
@@ -428,7 +530,19 @@ void FAngelscriptClassGenerator::DoSoftReload(FModuleData& ModuleData, FClassDat
 
 					auto PropertyType = FAngelscriptTypeUsage::FromProperty(ScriptType, i);
 					if (PropertyType.IsValid())
+					{
+						const int32 ValueSize = PropertyType.GetValueSize();
+						if (PropertyType.CanCreateProperty()
+							&& (ValueSize == sizeof(FScriptDelegate) || ValueSize == sizeof(FMulticastScriptDelegate)))
+						{
+							PropertyType.Type = GetCallPtrSlotType();
+							if (UStruct* Owner = UnrealStruct)
+							{
+								PropertyType.UnrealProperty = Owner->FindPropertyByName(FName(ANSI_TO_TCHAR(Name)));
+							}
+						}
 						Append(Properties, ANSI_TO_TCHAR(Name), PropertyOffset, PropertyType);
+					}
 				}
 			}
 
@@ -476,6 +590,7 @@ void FAngelscriptClassGenerator::DoSoftReload(FModuleData& ModuleData, FClassDat
 
 		FLocalPropertyContext Lookup;
 		Lookup.ScriptType = OldScriptType;
+		Lookup.UnrealStruct = Class;
 		// Never copy c++ properties
 		Lookup.IgnoreBeforeOffset = ClassData.OldClass->CodeSuperClass->GetPropertiesSize();
 
@@ -520,6 +635,7 @@ void FAngelscriptClassGenerator::DoSoftReload(FModuleData& ModuleData, FClassDat
 	{
 		FLocalPropertyContext Lookup;
 		Lookup.ScriptType = ScriptType;
+		Lookup.UnrealStruct = Class;
 		// Never copy c++ properties
 		Lookup.IgnoreBeforeOffset = ClassData.NewClass->CodeSuperClass->GetPropertiesSize();
 

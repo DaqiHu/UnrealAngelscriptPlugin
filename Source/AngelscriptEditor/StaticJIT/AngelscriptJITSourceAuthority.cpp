@@ -3,12 +3,27 @@
 #include "AngelscriptEngine.h"
 #include "Preprocessor/AngelscriptPreprocessor.h"
 
+#include "Containers/Utf8String.h"
 #include "Misc/Paths.h"
 
 namespace AngelscriptEditor::StaticJIT
 {
 	namespace SourceAuthority_Private
 	{
+		FAngelscriptSource CopyHostSource(const FAngelscriptSource& Source)
+		{
+			FAngelscriptSource Copy;
+			Copy.VirtualPath = Source.VirtualPath;
+			Copy.Path = FString(Source.GetPath());
+			Copy.ModuleName = Source.ModuleName;
+			Copy.RelativeFilename = Source.RelativeFilename;
+			Copy.AbsoluteFilename = Source.AbsoluteFilename;
+			Copy.SourceText = Source.GetSourceText();
+			Copy.SourceKind = Source.SourceKind;
+			Copy.bHasSourceText = Source.bHasSourceText;
+			return Copy;
+		}
+
 		struct FFrozenSource
 		{
 			FAngelscriptSource Source;
@@ -47,7 +62,7 @@ namespace AngelscriptEditor::StaticJIT
 				}
 				for (const FFrozenSource& Frozen : Sources)
 				{
-					OutSources.Add(Frozen.Source);
+					OutSources.Add(CopyHostSource(Frozen.Source));
 				}
 			}
 
@@ -344,10 +359,10 @@ namespace AngelscriptEditor::StaticJIT
 			}
 
 			FFrozenSource Frozen;
-			Frozen.Source = Source;
+			Frozen.Source = CopyHostSource(Source);
 			if (Source.bHasSourceText)
 			{
-				Frozen.Text = Source.SourceText;
+				Frozen.Text = FString(Source.GetSourceText());
 			}
 			else if (!Provider->LoadSourceText(Source, Frozen.Text))
 			{
@@ -372,7 +387,7 @@ namespace AngelscriptEditor::StaticJIT
 			Frozen.bHasState = Provider->QuerySourceState(Source, Frozen.State);
 			Frozen.bHasDescriptor = Provider->QuerySourceDescriptor(
 				Source, Frozen.Descriptor);
-			Frozen.Source.SourceText = Frozen.Text;
+			Frozen.Source.SourceText = FUtf8String(Frozen.Text);
 			Frozen.Source.bHasSourceText = true;
 
 			InventoryWriter.WriteString(VirtualPath);

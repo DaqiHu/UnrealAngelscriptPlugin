@@ -1,4 +1,4 @@
-#include "AngelscriptSource.h"
+#include "unreal/AngelscriptSource.h"
 
 namespace AngelscriptSource_Private
 {
@@ -93,6 +93,11 @@ namespace AngelscriptSource_Private
 		}
 
 		return true;
+	}
+
+	void AssignHostLogicalPath(FAngelscriptSource& Source)
+	{
+		Source.Path = Source.VirtualPath.ToString();
 	}
 }
 
@@ -290,6 +295,23 @@ void FAngelscriptVirtualPath::SetParsed(
 	RelativePath = InRelativePath;
 }
 
+FAngelscriptSource::FAngelscriptSource(FString InPath, FUtf8String&& InSourceText)
+	: Path(MoveTemp(InPath))
+	, SourceText(MoveTemp(InSourceText))
+	, bHasSourceText(true)
+{
+}
+
+FStringView FAngelscriptSource::GetPath() const
+{
+	return Path;
+}
+
+const FUtf8String& FAngelscriptSource::GetSourceText() const
+{
+	return SourceText;
+}
+
 FAngelscriptSource FAngelscriptSource::FromGameFile(const FString& RelativeFilename, const FString& AbsoluteFilename)
 {
 	FAngelscriptSource Source;
@@ -298,6 +320,7 @@ FAngelscriptSource FAngelscriptSource::FromGameFile(const FString& RelativeFilen
 	Source.RelativeFilename = Source.VirtualPath.GetRelativePath();
 	Source.AbsoluteFilename = AbsoluteFilename;
 	Source.SourceKind = EAngelscriptSourceKind::Game;
+	AngelscriptSource_Private::AssignHostLogicalPath(Source);
 	return Source;
 }
 
@@ -309,6 +332,7 @@ FAngelscriptSource FAngelscriptSource::FromPluginFile(const FString& PluginName,
 	Source.RelativeFilename = Source.VirtualPath.GetRelativePath();
 	Source.AbsoluteFilename = AbsoluteFilename;
 	Source.SourceKind = EAngelscriptSourceKind::Plugin;
+	AngelscriptSource_Private::AssignHostLogicalPath(Source);
 	return Source;
 }
 
@@ -341,7 +365,8 @@ bool FAngelscriptSource::TryFromMemorySource(
 	OutSource.ModuleName = OutSource.VirtualPath.ToModuleName();
 	OutSource.RelativeFilename = OutSource.VirtualPath.GetRelativePath();
 	OutSource.SourceKind = OutSource.VirtualPath.GetSourceKind();
-	OutSource.SourceText = InSourceText;
+	OutSource.SourceText = FUtf8String(InSourceText);
 	OutSource.bHasSourceText = true;
+	AngelscriptSource_Private::AssignHostLogicalPath(OutSource);
 	return true;
 }

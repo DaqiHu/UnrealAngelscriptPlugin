@@ -121,11 +121,14 @@ class ANGELSCRIPTRUNTIME_API asCBooleanLiteral final : public asCExpr
 		TConstArrayView<asCExpr*> GetArguments() const { return MakeArrayView(Arguments); }
 		bool SetArgumentSourceOrdinals(TArray<int32> Ordinals) { if (!CanMutate() || Ordinals.Num() != Arguments.Num()) return false; ArgumentSourceOrdinals = MoveTemp(Ordinals); return true; }
 		TConstArrayView<int32> GetArgumentSourceOrdinals() const { return MakeArrayView(ArgumentSourceOrdinals); }
+		bool SetCallableOperation(FString Name) { if (!CanMutate()) return false; CallableOperation = MoveTemp(Name); return true; }
+		const FString& GetCallableOperation() const { return CallableOperation; }
 		static bool classof(const asCASTNode* Node) { return Node && Node->GetFamily() == asEASTNodeFamily::Stmt && Node->GetRawKind() == static_cast<uint16>(asEStmtKind::CallExpr); }
 	private:
 		asCExpr* Callee = nullptr;
 		TArray<asCExpr*> Arguments;
 		TArray<int32> ArgumentSourceOrdinals;
+		FString CallableOperation;
 	};
 
 

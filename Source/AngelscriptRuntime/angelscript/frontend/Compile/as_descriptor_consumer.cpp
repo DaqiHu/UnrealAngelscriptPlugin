@@ -2,7 +2,9 @@
 
 #include "frontend/AST/as_ast_cast.h"
 #include "frontend/AST/as_attr.h"
+#include "frontend/AST/as_decl.h"
 #include "frontend/AST/as_type.h"
+#include "frontend/Compile/as_compilation_session.h"
 #include "Templates/Function.h"
 
 BEGIN_AS_NAMESPACE
@@ -192,6 +194,22 @@ namespace
 			const asSStableKey DeclKey = TypeUseKey(Session.GetDeclaredType(Record.GetStableIdentity()));
 			if (!FillSemantic(Record, SourceManager, Module.Semantic.StableDeclarationKey, DeclKey, Class->Semantic)) return false;
 
+			for (const asCType* Base : Record.GetResolvedBases())
+			{
+				const asCNominalType* Nominal = dyn_cast<asCNominalType>(Base);
+				if (!Nominal) continue;
+				asCRecordDecl* Parent = Session.FindRecordDeclaration(Nominal->GetDeclarationIdentity());
+				if (!Parent) continue;
+				if (Parent->GetDeclaredTypeKind() == asETypeDeclKind::Interface)
+				{
+					Class->ImplementedInterfaces.AddUnique(Parent->GetName());
+				}
+				else if (Class->SuperClass.IsEmpty())
+				{
+					Class->SuperClass = Parent->GetName();
+				}
+			}
+
 			for (const asCDecl* Member : Record.GetDecls())
 			{
 				if (!Member || Member->IsInvalid()) return false;
@@ -243,6 +261,7 @@ namespace
 					TSharedRef<FAngelscriptDelegateDesc> Delegate = MakeShared<FAngelscriptDelegateDesc>();
 					Delegate->DelegateName = Callable->GetName();
 					Delegate->bIsMulticast = Callable->IsMulticast();
+					Delegate->bIsDynamic = Callable->GetFlavor() == asECallableFlavor::Dynamic;
 					Delegate->LineNumber = SourceLine(SourceManager, Callable->GetSourceRange());
 					Delegate->Signature = MakeShared<FAngelscriptFunctionDesc>();
 					TSharedRef<FAngelscriptFunctionDesc> Signature = Delegate->Signature.ToSharedRef();

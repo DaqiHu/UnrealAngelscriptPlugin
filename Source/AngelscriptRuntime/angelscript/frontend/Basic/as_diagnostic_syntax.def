@@ -92,3 +92,5 @@ AS_SYNTAX_DIAGNOSTIC(SwitchStatementRequiresClause, 3240, "switch-statement-requ
 AS_SYNTAX_DIAGNOSTIC(UnterminatedCompound, 3241, "unterminated-compound", "unterminated compound statement")
 AS_SYNTAX_DIAGNOSTIC(UnterminatedSwitch, 3242, "unterminated-switch", "unterminated switch")
 AS_SYNTAX_DIAGNOSTIC(InvalidAttributeTarget, 3243, "invalid-attribute-target", "invalid attribute target")
+AS_SYNTAX_DIAGNOSTIC(RemovedDelegateEventKeyword, 3244, "removed-delegate-event-keyword", "removed delegate or event keyword")
+AS_SYNTAX_DIAGNOSTIC(UnsupportedDelegateDeclarationForm, 3245, "unsupported-delegate-declaration-form", "unsupported delegate declaration form")

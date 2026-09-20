@@ -1,10 +1,12 @@
 #include "as_engine_compile_registration.h"
 #include "as_bytecode_linker.h"
 #include "as_execution_snapshot.h"
+#include "as_module.h"
 #include "as_objecttype.h"
 #include "as_scriptfunction.h"
 #include "as_typeinfo.h"
 #include "Containers/Set.h"
+#include "Logging/LogMacros.h"
 
 BEGIN_AS_NAMESPACE
 
@@ -25,6 +27,84 @@ namespace
 		}
 		return Scope + TEXT("::") + UTF8_TO_TCHAR(Type.GetName());
 	}
+
+	void AttachRegisteredType(asCModule& Shell, asCTypeInfo* Type)
+	{
+		if (!Type || Type->module) return;
+		if (!Type->GetDefinitions())
+		{
+			Type->AddRefInternal();
+		}
+		Type->module = &Shell;
+		if (asCObjectType* Object = CastToObjectType(Type))
+		{
+			Shell.AddClassType(Object);
+			return;
+		}
+		if (asCEnumType* Enum = CastToEnumType(Type))
+		{
+			Shell.AddEnumType(Enum);
+			return;
+		}
+		if (asCCallableType* Callable = CastToCallableType(Type))
+		{
+			Shell.AddCallableType(Callable);
+			return;
+		}
+		if (asCTypedefType* Typedef = CastToTypedefType(Type))
+		{
+			Shell.AddTypeDef(Typedef);
+		}
+	}
+
+	void AttachDeclaredType(asCScriptEngine& Engine, asCModule& Shell, const asSStableKey& Key)
+	{
+		if (Key.IsZero()) return;
+		AttachRegisteredType(Shell, Engine.FindType(Key));
+	}
+
+	asERegistrationResult AttachCompileOutputModules(asCScriptEngine& Engine, const asCCompileOutput& Output)
+	{
+		const TConstArrayView<TSharedRef<FAngelscriptModuleDesc>> Modules = Output.GetDefinitionOutput().GetModules();
+		if (Modules.IsEmpty()) return asERegistrationResult::Succeeded;
+		for (const TSharedRef<FAngelscriptModuleDesc>& ModuleDesc : Modules)
+		{
+			if (ModuleDesc->ModuleName.IsEmpty()) continue;
+			const FTCHARToUTF8 NameUtf8(*ModuleDesc->ModuleName);
+			asCModule* Shell = asNEW(asCModule)(NameUtf8.Get(), &Engine);
+			if (!Shell) return asERegistrationResult::InvalidState;
+			Engine.scriptModules.PushLast(Shell);
+			Engine.scriptModulesByName.Add(Shell);
+			ModuleDesc->ScriptModule = Shell;
+			for (const TSharedRef<FAngelscriptClassDesc>& ClassDesc : ModuleDesc->Classes)
+			{
+				AttachDeclaredType(Engine, *Shell, ClassDesc->Semantic.StableDeclarationKey);
+			}
+			for (const TSharedRef<FAngelscriptEnumDesc>& EnumDesc : ModuleDesc->Enums)
+			{
+				AttachDeclaredType(Engine, *Shell, EnumDesc->Semantic.StableDeclarationKey);
+			}
+			for (const TSharedRef<FAngelscriptDelegateDesc>& DelegateDesc : ModuleDesc->Delegates)
+			{
+				AttachDeclaredType(Engine, *Shell, DelegateDesc->Semantic.StableDeclarationKey);
+			}
+		}
+		return asERegistrationResult::Succeeded;
+	}
+
+	asERegistrationResult ValidateCompileOutputModuleNames(asCScriptEngine& Engine, const asCCompileOutput& Output)
+	{
+		TSet<FString> ModuleNames;
+		for (const TSharedRef<FAngelscriptModuleDesc>& ModuleDesc : Output.GetDefinitionOutput().GetModules())
+		{
+			if (ModuleDesc->ModuleName.IsEmpty()) continue;
+			if (ModuleNames.Contains(ModuleDesc->ModuleName)) return asERegistrationResult::NameConflict;
+			ModuleNames.Add(ModuleDesc->ModuleName);
+			const FTCHARToUTF8 NameUtf8(*ModuleDesc->ModuleName);
+			if (Engine.GetModule(NameUtf8.Get())) return asERegistrationResult::NameConflict;
+		}
+		return asERegistrationResult::Succeeded;
+	}
 }
 
 asERegistrationResult asCEngineCompileRegistration::Register(TArray<TUniquePtr<asCDefinitions>> Sets)
@@ -32,6 +112,17 @@ asERegistrationResult asCEngineCompileRegistration::Register(TArray<TUniquePtr<a
 	const TMap<const asCTypeInfo*, int> TypeIds;
 	const TMap<const asCScriptFunction*, int> FunctionIds;
 	return Register(MoveTemp(Sets), TypeIds, FunctionIds);
+}
+
+asERegistrationResult asCEngineCompileRegistration::Register(
+	TArray<TUniquePtr<asCDefinitions>> Sets,
+	const asCCompileOutput& Output)
+{
+	const asERegistrationResult Validated = ValidateCompileOutputModuleNames(Engine, Output);
+	if (Validated != asERegistrationResult::Succeeded) return Validated;
+	const asERegistrationResult Installed = Register(MoveTemp(Sets));
+	if (Installed != asERegistrationResult::Succeeded) return Installed;
+	return AttachCompileOutputModules(Engine, Output);
 }
 
 asERegistrationResult asCEngineCompileRegistration::Register(
@@ -71,7 +162,8 @@ asERegistrationResult asCEngineCompileRegistration::Register(
 		if (ByteCode)
 		{
 			asCExecutableSnapshot* Snapshot = nullptr;
-			if (asLinkByteCodeImage(Engine, *ByteCode, Snapshot) != asEByteCodeLinkStatus::Succeeded)
+			const asEByteCodeLinkStatus Linked = asLinkByteCodeImage(Engine, *ByteCode, Snapshot);
+			if (Linked != asEByteCodeLinkStatus::Succeeded)
 			{
 				return asERegistrationResult::InvalidLayout;
 			}
