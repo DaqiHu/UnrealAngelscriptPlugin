@@ -399,6 +399,10 @@ namespace
 {
 	void BindScriptEditorPrompts(FAngelscriptBinds& Binds)
 	{
+		if (Binds.IsHostTarget())
+		{
+			return;
+		}
 		FAngelscriptBinds::FNamespace Namespace(
 			Binds.GetTargetEngine(),
 			"EditorPrompt");
