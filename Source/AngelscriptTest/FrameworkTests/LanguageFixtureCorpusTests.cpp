@@ -356,6 +356,71 @@ public:
 		ASSERT_THAT(IsTrue(bHasClassHandleCast));
 		ASSERT_THAT(IsFalse(bHasClassCast));
 	}
+
+	TEST_METHOD(CorpusHasSyntaxCoverageChapters)
+	{
+		auto& Code = AngelscriptTest::FAngelscriptTestCode::GetInstance();
+		TArray<AngelscriptTest::FAngelscriptTestFileMeta> Files;
+		const TArray<FString> LanguageTopic = {FString(TEXT("Language"))};
+		const auto FileStatus = Code.FindFiles(LanguageTopic, Files);
+		ASSERT_THAT(IsTrue(FileStatus.IsSuccess()));
+		if (!FileStatus.IsSuccess())
+		{
+			return;
+		}
+
+		const FString RequiredTags[] = {
+			FString(TEXT("Language/Auto/InferFromLiteral")),
+			FString(TEXT("Language/Class/Constructor")),
+			FString(TEXT("Language/Inheritance/Override")),
+			FString(TEXT("Language/Destructors/ClassDestructor")),
+			FString(TEXT("Language/Typedef/Alias")),
+			FString(TEXT("Language/Mixin/FunctionMixin")),
+			FString(TEXT("Language/Interface/Declare")),
+			FString(TEXT("Language/Delegate/Declare")),
+		};
+		for (const FString& Required : RequiredTags)
+		{
+			const bool bFound = Files.ContainsByPredicate(
+				[&Required](const AngelscriptTest::FAngelscriptTestFileMeta& File)
+				{
+					return File.Tag == Required;
+				});
+			ASSERT_THAT(IsTrue(bFound));
+		}
+
+		const FString RetiredFlats[] = {
+			FString(TEXT("Language/Auto")),
+			FString(TEXT("Language/Class")),
+			FString(TEXT("Language/Inheritance")),
+			FString(TEXT("Language/Destructors")),
+			FString(TEXT("Language/Typedef")),
+			FString(TEXT("Language/Mixin")),
+		};
+		for (const FString& Retired : RetiredFlats)
+		{
+			const bool bFound = Files.ContainsByPredicate(
+				[&Retired](const AngelscriptTest::FAngelscriptTestFileMeta& File)
+				{
+					return File.Tag == Retired;
+				});
+			ASSERT_THAT(IsFalse(bFound));
+			ASSERT_THAT(IsFalse(Code.Get(Retired, TEXT("root")).IsSuccess()));
+		}
+
+		const bool bHasClassHandleCast = Files.ContainsByPredicate(
+			[](const AngelscriptTest::FAngelscriptTestFileMeta& File)
+			{
+				return File.Tag == TEXT("Language/Casting/ClassHandleCast");
+			});
+		const bool bHasClassCast = Files.ContainsByPredicate(
+			[](const AngelscriptTest::FAngelscriptTestFileMeta& File)
+			{
+				return File.Tag == TEXT("Language/Casting/ClassCast");
+			});
+		ASSERT_THAT(IsTrue(bHasClassHandleCast));
+		ASSERT_THAT(IsFalse(bHasClassCast));
+	}
 };
 
 #endif // WITH_ANGELSCRIPT_TESTS && WITH_DEV_AUTOMATION_TESTS

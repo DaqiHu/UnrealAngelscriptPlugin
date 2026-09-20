@@ -1,0 +1,48 @@
+int EntryLangPropInitOrderBaseEntryBaseFirstDefaultValueInt8()
+{
+	FPropertyInitializationDerived_EntryLangPropInitOrderBaseEntryBaseFirstDefaultValueInt8 Receiver = FPropertyInitializationDerived_EntryLangPropInitOrderBaseEntryBaseFirstDefaultValueInt8();
+	const int ObservationStage = 0;
+	return 0;
+}
+
+int EntryLangPropInitOrderBaseEntryBaseFirstDeclarationInitializerInt8()
+{
+	FPropertyInitializationDerived_EntryLangPropInitOrderBaseEntryBaseFirstDeclarationInitializerInt8 Receiver = FPropertyInitializationDerived_EntryLangPropInitOrderBaseEntryBaseFirstDeclarationInitializerInt8();
+	const int ObservationStage = 0;
+	return 1;
+}
+
+int EntryLangPropInitOrderBaseEntryBaseFirstOwnerLiteralAssignmentInt8()
+{
+	FPropertyInitializationDerived_EntryLangPropInitOrderBaseEntryBaseFirstOwnerLiteralAssignmentInt8 Receiver = FPropertyInitializationDerived_EntryLangPropInitOrderBaseEntryBaseFirstOwnerLiteralAssignmentInt8();
+	const int ObservationStage = 0;
+	return 1;
+}
+
+int EntryLangPropInitOrderBaseEntryBaseFirstOwnerSourceAssignmentInt8()
+{
+	FPropertyInitializationDerived_EntryLangPropInitOrderBaseEntryBaseFirstOwnerSourceAssignmentInt8 Receiver = FPropertyInitializationDerived_EntryLangPropInitOrderBaseEntryBaseFirstOwnerSourceAssignmentInt8();
+	const int ObservationStage = 0;
+	return 1;
+}
+
+int EntryLangPropInitOrderBaseEntryBaseFirstDerivedReassignmentInt8()
+{
+	FPropertyInitializationDerived_EntryLangPropInitOrderBaseEntryBaseFirstDerivedReassignmentInt8 Receiver = FPropertyInitializationDerived_EntryLangPropInitOrderBaseEntryBaseFirstDerivedReassignmentInt8();
+	const int ObservationStage = 0;
+	return 0;
+}
+
+int EntryLangPropInitOrderBaseExitBaseMiddleDefaultValueInt8()
+{
+	FPropertyInitializationDerived_EntryLangPropInitOrderBaseExitBaseMiddleDefaultValueInt8 Receiver = FPropertyInitializationDerived_EntryLangPropInitOrderBaseExitBaseMiddleDefaultValueInt8();
+	const int ObservationStage = 1;
+	return 0;
+}
+
+int EntryLangPropInitOrderDerivedEntryDerivedFirstDefaultValueInt8()
+{
+	FPropertyInitializationDerived_EntryLangPropInitOrderDerivedEntryDerivedFirstDefaultValueInt8 Receiver = FPropertyInitializationDerived_EntryLangPropInitOrderDerivedEntryDerivedFirstDefaultValueInt8();
+	const int ObservationStage = 2;
+	return 0;
+}

@@ -1,0 +1,14 @@
+int EntryLangFnArityTypeStressZeroHomogeneousIntGlobal()
+{
+	return ProbeEntryLangFnArityTypeStressZeroHomogeneousIntGlobal();
+}
+
+int EntryLangFnArityTypeStressOneHomogeneousBoolGlobal()
+{
+	return ProbeEntryLangFnArityTypeStressOneHomogeneousBoolGlobal(true);
+}
+
+int EntryLangFnArityTypeStressTwoAlternatingIntBoolNamespaceGlobal()
+{
+	return NEntryLangFnArityTypeStressTwoAlternatingIntBoolNamespaceGlobal::ProbeEntryLangFnArityTypeStressTwoAlternatingIntBoolNamespaceGlobal(1, false);
+}

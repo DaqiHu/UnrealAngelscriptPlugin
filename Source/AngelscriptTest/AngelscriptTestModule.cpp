@@ -1,7 +1,7 @@
 #include "Core/AngelscriptTestModule.h"
 
 #if WITH_ANGELSCRIPT_TESTS
-#include "NewVersion/Framework/Catalog/AngelscriptTestCode.h"
+#include "Framework/Catalog/AngelscriptTestCode.h"
 #include "CoreGlobals.h"
 #include "Misc/CoreDelegates.h"
 #endif

@@ -1,0 +1,46 @@
+int EntryLangConvValueObjectImplicitConstructorSameValueAssignmentDirect()
+{
+	FValueConversionSourceImplicitConstructorSameValueAssignmentDirect SourceValue(7);
+	FValueConversionSourceImplicitConstructorSameValueAssignmentDirect TargetValue;
+	TargetValue = SourceValue;
+	return ObserveValueConversionImplicitConstructorSameValueAssignmentDirect(TargetValue);
+}
+
+int EntryLangConvValueObjectImplicitOperatorIntInitializerSelected()
+{
+	FValueConversionSourceImplicitOperatorIntInitializerSelected SourceValue(7);
+	int TargetValue = SourceValue;
+	return ObserveValueConversionImplicitOperatorIntInitializerSelected(TargetValue);
+}
+
+int EntryLangConvValueObjectConstructorAndOperatorOtherValueArgumentDirect()
+{
+	FValueConversionSourceConstructorAndOperatorOtherValueArgumentDirect SourceValue(7);
+	return ObserveValueConversionConstructorAndOperatorOtherValueArgumentDirect(SourceValue);
+}
+
+int EntryLangConvValueObjectExplicitOperatorBoolExplicitCastDirect()
+{
+	FValueConversionSourceExplicitOperatorBoolExplicitCastDirect SourceValue(7);
+	bool TargetValue = bool(SourceValue);
+	return ObserveValueConversionExplicitOperatorBoolExplicitCastDirect(TargetValue);
+}
+
+int EntryLangConvValueObjectNoneSameValueDirectConstructorDirect()
+{
+	FValueConversionSourceNoneSameValueDirectConstructorDirect SourceValue(7);
+	FValueConversionSourceNoneSameValueDirectConstructorDirect TargetValue(SourceValue);
+	return ObserveValueConversionNoneSameValueDirectConstructorDirect(TargetValue);
+}
+
+int EntryLangConvValueObjectImplicitConstructorSameValueAssignmentAmbiguous()
+{
+	FValueConversionSourceImplicitConstructorSameValueAssignmentAmbiguous SourceValue(7);
+	return SelectValueAmbiguityImplicitConstructorSameValueAssignmentAmbiguous(SourceValue);
+}
+
+int EntryLangConvValueObjectNoneIntAssignmentRejected()
+{
+	FValueConversionSourceNoneIntAssignmentRejected SourceValue(7);
+	return RejectValueConversionNoneIntAssignmentRejected(SourceValue);
+}

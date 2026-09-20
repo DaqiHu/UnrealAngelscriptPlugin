@@ -99,6 +99,18 @@ namespace UnrealBuildTool.Rules
 			{
 				PrivateDependencyModuleNames.Add("CQTest");
 			}
+
+			if (Target.bBuildEditor && bCompileReplacementTests)
+			{
+				if (!PrivateDependencyModuleNames.Contains("UnrealEd"))
+				{
+					PrivateDependencyModuleNames.Add("UnrealEd");
+				}
+				if (!PrivateDependencyModuleNames.Contains("BlueprintGraph"))
+				{
+					PrivateDependencyModuleNames.Add("BlueprintGraph");
+				}
+			}
 		}
 	}
 }

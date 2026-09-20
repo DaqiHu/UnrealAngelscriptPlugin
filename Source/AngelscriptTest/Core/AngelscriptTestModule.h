@@ -4,7 +4,7 @@
 #include "Modules/ModuleManager.h"
 
 #if WITH_ANGELSCRIPT_TESTS
-#include "NewVersion/Framework/Catalog/AngelscriptTestCodeRegistration.h"
+#include "Framework/Catalog/AngelscriptTestCodeRegistration.h"
 #endif
 
 class FAngelscriptTestModule final : public IModuleInterface
