@@ -1,6 +1,6 @@
-#include "NewVersion/Framework/Catalog/AngelscriptTestCode.h"
-#include "NewVersion/Framework/Catalog/AngelscriptTestCodeRegistration.h"
-#include "NewVersion/Framework/Source/AngelscriptTestCodeBuilder.h"
+#include "Framework/Catalog/AngelscriptTestCode.h"
+#include "Framework/Catalog/AngelscriptTestCodeRegistration.h"
+#include "Framework/Source/AngelscriptTestCodeBuilder.h"
 
 #if WITH_ANGELSCRIPT_TESTS
 
