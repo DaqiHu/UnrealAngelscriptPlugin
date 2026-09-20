@@ -1,5 +1,10 @@
 # Standalone support matrix
 
+This directory is `Plugins/Angelscript/AngelscriptLSP/`. The product remains
+dormant Standalone (`as-standalone`, CMake project `AngelscriptStandalone`,
+compiler contract `ue-as-standalone-v1`). JSON-RPC is later work; this matrix
+does not describe a language-server process.
+
 This matrix describes retained dormant tooling for compiler contract
 `ue-as-standalone-v1`. Standalone is not currently build-certified against the
 reconstructed SDK. Listed fixtures are source coverage, not current passing runs;

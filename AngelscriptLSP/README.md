@@ -1,5 +1,11 @@
 # Unreal AngelScript Standalone
 
+This directory is `Plugins/Angelscript/AngelscriptLSP/`. The product remains
+dormant Standalone (`as-standalone`, CMake project `AngelscriptStandalone`,
+compiler contract `ue-as-standalone-v1`). It is not the TypeScript language
+server in `Extensions/AngelscriptVSCode/` and not an in-process JSON-RPC
+language-server process.
+
 Standalone is retained as dormant tooling during reconstruction of the UE language
 stack. Its CMake manifest and compiler adapters still reference retired SDK files
 and interfaces. This change does not restore a buildable Standalone executable;
@@ -21,8 +27,8 @@ boundaries below describe retained tooling, not current executable certification
 From the repository root:
 
 ```powershell
-python Plugins/Angelscript/Standalone/Tests/CheckRemovedAddons.py
-python Plugins/Angelscript/Standalone/Tests/CheckRemovedAddons.py --self-test
+python Plugins/Angelscript/AngelscriptLSP/Tests/CheckRemovedAddons.py
+python Plugins/Angelscript/AngelscriptLSP/Tests/CheckRemovedAddons.py --self-test
 ```
 
 This read-only audit proves package/dependency absence. It excludes explicit
