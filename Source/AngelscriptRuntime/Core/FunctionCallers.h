@@ -62,12 +62,12 @@ struct FGenericFuncPtr
 	uint8 flag; // 1 = generic, 2 = global func, 3 = method
 };
 
-#define ERASE_ARGUMENT_PACK(...) __VA_ARGS__
-#define ERASE_NO_FUNCTION() FGenericFuncPtr{}, ASAutoCaller::FunctionCaller{}
-#define ERASE_METHOD_PTR(c,m,p,r) FMethodPtrHelper<sizeof(void (c::*)())>::Convert(static_cast<r(c::*)p>(&c::m)), ASAutoCaller::MakeFunctionCaller(static_cast<r(c::*)p>(&c::m))
-#define ERASE_FUNCTION_PTR(f,p,r) FGenericFuncPtr::Make(reinterpret_cast<FTypeErasedFuncPtr>(size_t(static_cast<r(*)p>(f)))), ASAutoCaller::MakeFunctionCaller(static_cast<r(*)p>(f))
-#define ERASE_AUTO_METHOD_PTR(c,m) MakeAutoMethodPtr(&c::m), ASAutoCaller::MakeFunctionCaller(&c::m)
-#define ERASE_AUTO_FUNCTION_PTR(f) MakeAutoFunctionPtr(&f), ASAutoCaller::MakeFunctionCaller(&f)
+#define TDPLUGIN_ERASE_ARGUMENT_PACK(...) __VA_ARGS__
+#define TDPLUGIN_ERASE_NO_FUNCTION() FGenericFuncPtr{}, TDPluginASAutoCaller::FunctionCaller{}
+#define TDPLUGIN_ERASE_METHOD_PTR(c,m,p,r) FMethodPtrHelper<sizeof(void (c::*)())>::Convert(static_cast<r(c::*)p>(&c::m)), TDPluginASAutoCaller::MakeFunctionCaller(static_cast<r(c::*)p>(&c::m))
+#define TDPLUGIN_ERASE_FUNCTION_PTR(f,p,r) FGenericFuncPtr::Make(reinterpret_cast<FTypeErasedFuncPtr>(size_t(static_cast<r(*)p>(f)))), TDPluginASAutoCaller::MakeFunctionCaller(static_cast<r(*)p>(f))
+#define TDPLUGIN_ERASE_AUTO_METHOD_PTR(c,m) MakeAutoMethodPtr(&c::m), TDPluginASAutoCaller::MakeFunctionCaller(&c::m)
+#define TDPLUGIN_ERASE_AUTO_FUNCTION_PTR(f) MakeAutoFunctionPtr(&f), TDPluginASAutoCaller::MakeFunctionCaller(&f)
 
 // Declare a dummy class so that we can determine the size of a simple method pointer
 class FDummyClass {};
@@ -185,7 +185,7 @@ struct FMethodPtrHelper<DummyMethodPtrSize + 4 * sizeof(int)>
 
 #endif
 
-namespace ASAutoCaller
+namespace TDPluginASAutoCaller
 {
 	class FFakeObject;
 	using TFunctionPtr = void(*)();
@@ -388,7 +388,7 @@ enum class EAngelscriptFunctionBindingOrigin : uint8
 struct FAngelscriptFunctionBinding
 {
 	FGenericFuncPtr FunctionPointer;
-	ASAutoCaller::FunctionCaller FunctionCaller;
+	TDPluginASAutoCaller::FunctionCaller FunctionCaller;
 	void* UserData = nullptr;
 	bool bReflectiveFallbackBound = false;
 	bool bUsesGenericCall = false;

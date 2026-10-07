@@ -306,29 +306,29 @@ private:
 	{
 		FGCLifetimeNode::ScriptEngine =
 			&ScriptEngine;
-		const ASAutoCaller::FunctionCaller AddRefCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller AddRefCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				GCNodeAddRef);
-		const ASAutoCaller::FunctionCaller ReleaseCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller ReleaseCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				GCNodeRelease);
-		const ASAutoCaller::FunctionCaller GetRefCountCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller GetRefCountCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				GCNodeGetRefCount);
-		const ASAutoCaller::FunctionCaller SetFlagCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller SetFlagCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				GCNodeSetFlag);
-		const ASAutoCaller::FunctionCaller GetFlagCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller GetFlagCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				GCNodeGetFlag);
-		const ASAutoCaller::FunctionCaller EnumCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller EnumCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				GCNodeEnumReferences);
-		const ASAutoCaller::FunctionCaller ReleaseRefsCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller ReleaseRefsCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				GCNodeReleaseReferences);
-		const ASAutoCaller::FunctionCaller WeakFlagCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller WeakFlagCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				GCNodeGetWeakFlag);
 		const bool bRegistered =
 			ScriptEngine.RegisterObjectType(

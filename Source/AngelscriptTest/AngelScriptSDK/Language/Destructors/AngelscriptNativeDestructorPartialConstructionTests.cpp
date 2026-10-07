@@ -302,17 +302,17 @@ private:
 		ScriptEngine.SetUserData(
 			&State,
 			DestructorPartialStateUserDataSlot);
-		const ASAutoCaller::FunctionCaller StageCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller StageCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordDestructorPartialStage);
-		const ASAutoCaller::FunctionCaller TransferCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller TransferCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordDestructorPartialTransferStart);
-		const ASAutoCaller::FunctionCaller RelationCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller RelationCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordDestructorPartialRelation);
-		const ASAutoCaller::FunctionCaller BoundaryCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller BoundaryCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				ReachDestructorPartialBoundary);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void RecordDestructorPartialStage(int Stage)",

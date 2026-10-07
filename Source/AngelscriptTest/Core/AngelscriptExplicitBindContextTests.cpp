@@ -386,7 +386,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptExplicitBindContextTests,
 			GlobalDeclaration,
 			asFUNCTION(NoOpExplicitDirectGeneric),
 			asCALL_GENERIC,
-			ASAutoCaller::FunctionCaller::Make());
+			TDPluginASAutoCaller::FunctionCaller::Make());
 		asIScriptFunction* GlobalFunctionA =
 			EngineA->GetScriptEngine()->GetGlobalFunctionByDecl(TCHAR_TO_ANSI(*GlobalDeclaration));
 
@@ -416,7 +416,7 @@ TEST_CLASS_WITH_FLAGS(FAngelscriptExplicitBindContextTests,
 			"int Read() const",
 			asFUNCTION(NoOpExplicitDirectGeneric),
 			asCALL_GENERIC,
-			ASAutoCaller::FunctionCaller::Make());
+			TDPluginASAutoCaller::FunctionCaller::Make());
 		asITypeInfo* TypeInfoA = TypeBindsA.GetTypeInfo();
 		asIScriptFunction* MethodFunctionA =
 			TypeInfoA != nullptr ? TypeInfoA->GetMethodByDecl("int Read() const") : nullptr;

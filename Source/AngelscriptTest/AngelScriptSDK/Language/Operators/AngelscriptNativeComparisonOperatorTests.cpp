@@ -470,12 +470,12 @@ private:
 			TEXT("float64 TraceFloat64Operand(int Marker, float64 Value)");
 		const FTCHARToUTF8 Float32Utf8(*Float32Declaration);
 		const FTCHARToUTF8 Float64Utf8(*Float64Declaration);
-		const ASAutoCaller::FunctionCaller Float32Caller =
-			ASAutoCaller::MakeFunctionCaller(TraceFloat32Operand);
-		const ASAutoCaller::FunctionCaller Float64Caller =
-			ASAutoCaller::MakeFunctionCaller(TraceFloat64Operand);
-		const ASAutoCaller::FunctionCaller IntegerCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordComparisonIntegerOperand);
+		const TDPluginASAutoCaller::FunctionCaller Float32Caller =
+			TDPluginASAutoCaller::MakeFunctionCaller(TraceFloat32Operand);
+		const TDPluginASAutoCaller::FunctionCaller Float64Caller =
+			TDPluginASAutoCaller::MakeFunctionCaller(TraceFloat64Operand);
+		const TDPluginASAutoCaller::FunctionCaller IntegerCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordComparisonIntegerOperand);
 		const int Float32Result = Engine.RegisterGlobalFunction(Float32Utf8.Get(),
 				   asFUNCTION(TraceFloat32Operand),
 				   asCALL_CDECL,
@@ -639,8 +639,8 @@ private:
 	static bool RegisterReferenceFixtures(asIScriptEngine& Engine, FReferenceState& State)
 	{
 		Engine.SetUserData(&State, ReferenceStateSlot);
-		const ASAutoCaller::FunctionCaller RecordCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordReferenceOperand);
+		const TDPluginASAutoCaller::FunctionCaller RecordCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordReferenceOperand);
 		const bool bRoot = RegisterReferenceType(Engine, "FComparisonReferenceRoot");
 		const bool bDerived = RegisterReferenceType(Engine, "FComparisonReferenceDerived");
 		const bool bSibling = RegisterReferenceType(Engine, "FComparisonReferenceSibling");
@@ -722,12 +722,12 @@ private:
 	static bool RegisterOverloadFixtures(asIScriptEngine& Engine, FOverloadState& State)
 	{
 		Engine.SetUserData(&State, OverloadStateSlot);
-		const ASAutoCaller::FunctionCaller BeginCaller =
-			ASAutoCaller::MakeFunctionCaller(BeginOverloadedComparisonValue);
-		const ASAutoCaller::FunctionCaller EndCaller =
-			ASAutoCaller::MakeFunctionCaller(EndOverloadedComparisonValue);
-		const ASAutoCaller::FunctionCaller RecordCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordComparisonOverload);
+		const TDPluginASAutoCaller::FunctionCaller BeginCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(BeginOverloadedComparisonValue);
+		const TDPluginASAutoCaller::FunctionCaller EndCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(EndOverloadedComparisonValue);
+		const TDPluginASAutoCaller::FunctionCaller RecordCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordComparisonOverload);
 		return Engine.RegisterGlobalFunction("int BeginOverloadedComparisonValue(int Value)",
 				   asFUNCTION(BeginOverloadedComparisonValue),
 				   asCALL_CDECL,

@@ -196,11 +196,11 @@ private:
 		ScriptEngine.SetUserData(
 			&State,
 			DestructorDeclarationStateUserDataSlot);
-		const ASAutoCaller::FunctionCaller MarkerCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller MarkerCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordDestructorDeclarationMarker);
-		const ASAutoCaller::FunctionCaller ExceptionCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller ExceptionCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RaiseDeclaredDestructorException);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void RecordDestructorDeclarationMarker(int Marker)",

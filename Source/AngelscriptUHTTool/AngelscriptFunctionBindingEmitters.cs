@@ -236,6 +236,7 @@ internal static partial class AngelscriptFunctionBindingCodeGenerator
 		builder.AppendLine();
 		builder.AppendLine("\tstruct FNativeModuleFunctionBindingFeature : public IModularFeature");
 		builder.AppendLine("\t{");
+		builder.AppendLine("\t\tFNativeModuleFunctionBindingFeature(const FAngelscriptNativeModuleFunctionBinding* InTable, int32 InCount, const TCHAR* InModuleName, uint32 InLayoutVersion) : Table(InTable), Count(InCount), ModuleName(InModuleName), LayoutVersion(InLayoutVersion) {}");
 		builder.AppendLine("\t\tconst FAngelscriptNativeModuleFunctionBinding* Table;");
 		builder.AppendLine("\t\tint32 Count;");
 		builder.AppendLine("\t\tconst TCHAR* ModuleName;");

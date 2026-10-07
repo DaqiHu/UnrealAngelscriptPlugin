@@ -98,7 +98,7 @@ TEST_CLASS_WITH_FLAGS(FObjectRegistrationTests, "Angelscript.TestModule.AngelScr
 		}
 
 		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType("Counter", sizeof(FCounter), asOBJ_VALUE | asOBJ_POD | asGetTypeTraits<FCounter>() | asOBJ_APP_CLASS_ALLINTS) >= 0, TEXT("Object registration should register the value type")));
-		const ASAutoCaller::FunctionCaller ConstructorCaller = ASAutoCaller::MakeFunctionCaller(ConstructCounter);
+		const TDPluginASAutoCaller::FunctionCaller ConstructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(ConstructCounter);
 		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectBehaviour("Counter", asBEHAVE_CONSTRUCT, "void f()", asFUNCTION(ConstructCounter), asCALL_CDECL_OBJLAST, *(asFunctionCaller*)&ConstructorCaller) >= 0, TEXT("Object registration should register the constructor")));
 		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectProperty("Counter", "int Value", asOFFSET(FCounter, Value)) >= 0, TEXT("Object registration should register the property")));
 		asITypeInfo* const CounterType = ScriptEngine->GetTypeInfoByDecl("Counter");
@@ -226,9 +226,9 @@ TEST_CLASS_WITH_FLAGS(FObjectRegistrationTests, "Angelscript.TestModule.AngelScr
 		{
 			return;
 		}
-		const ASAutoCaller::FunctionCaller ConstructorCaller = ASAutoCaller::MakeFunctionCaller(ObjectRegistrationTest::ConstructFloatWrapper);
-		const ASAutoCaller::FunctionCaller SetValueCaller = ASAutoCaller::MakeFunctionCaller(&ObjectRegistrationTest::FFloatWrapper::SetValue);
-		const ASAutoCaller::FunctionCaller AddCaller = ASAutoCaller::MakeFunctionCaller(&ObjectRegistrationTest::FFloatWrapper::Add);
+		const TDPluginASAutoCaller::FunctionCaller ConstructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(ObjectRegistrationTest::ConstructFloatWrapper);
+		const TDPluginASAutoCaller::FunctionCaller SetValueCaller = TDPluginASAutoCaller::MakeFunctionCaller(&ObjectRegistrationTest::FFloatWrapper::SetValue);
+		const TDPluginASAutoCaller::FunctionCaller AddCaller = TDPluginASAutoCaller::MakeFunctionCaller(&ObjectRegistrationTest::FFloatWrapper::Add);
 		const int TypeResult = ScriptEngine->RegisterObjectType(
 			"FloatWrapper",
 			sizeof(ObjectRegistrationTest::FFloatWrapper),
@@ -396,7 +396,7 @@ TEST_CLASS_WITH_FLAGS(FObjectRegistrationTests, "Angelscript.TestModule.AngelScr
 			return;
 		}
 
-		const ASAutoCaller::FunctionCaller ConstructorCaller = ASAutoCaller::MakeFunctionCaller(ObjectRegistrationTest::ConstructCallerRequirementCounter);
+		const TDPluginASAutoCaller::FunctionCaller ConstructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(ObjectRegistrationTest::ConstructCallerRequirementCounter);
 		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectType("CallerRequirementCounter", sizeof(ObjectRegistrationTest::FCallerRequirementCounter), asOBJ_VALUE | asOBJ_POD | asGetTypeTraits<ObjectRegistrationTest::FCallerRequirementCounter>() | asOBJ_APP_CLASS_ALLINTS) >= 0, TEXT("Native caller-requirement test should register its value type")));
 		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectBehaviour("CallerRequirementCounter", asBEHAVE_CONSTRUCT, "void f()", asFUNCTION(ObjectRegistrationTest::ConstructCallerRequirementCounter), asCALL_CDECL_OBJLAST, *(asFunctionCaller*)&ConstructorCaller) >= 0, TEXT("Native caller-requirement test should register its constructor with an automatic caller")));
 		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectProperty("CallerRequirementCounter", "int Value", asOFFSET(ObjectRegistrationTest::FCallerRequirementCounter, Value)) >= 0, TEXT("Native caller-requirement test should register the state property")));
@@ -546,8 +546,8 @@ TEST_CLASS_WITH_FLAGS(FObjectRegistrationTests, "Angelscript.TestModule.AngelScr
 					| asOBJ_APP_CLASS_ALLINTS) >= 0,
 			TEXT("Invalid caller-convention test should register its owner type")));
 
-		const ASAutoCaller::FunctionCaller FreeFunctionCaller =
-			ASAutoCaller::MakeFunctionCaller(ObjectRegistrationTest::InvalidThiscallFreeFunction);
+		const TDPluginASAutoCaller::FunctionCaller FreeFunctionCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ObjectRegistrationTest::InvalidThiscallFreeFunction);
 		const int32 RegistrationResult = ScriptEngine->RegisterObjectMethod(
 			"InvalidCallerOwner",
 			"int Invalid(int Delta) const",

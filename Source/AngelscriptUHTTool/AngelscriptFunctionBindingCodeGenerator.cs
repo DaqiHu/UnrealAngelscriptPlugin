@@ -147,7 +147,9 @@ internal static partial class AngelscriptFunctionBindingCodeGenerator
 
 		if (emitRuntimeLinked && generatedBindings.Count > 0)
 		{
-			string outputPath = factory.MakePath($"AS_FunctionBinding_{module.ShortName}", ".gen.cpp");
+			// FilesToGenerate aggregators include this exactly once. A .gen.cpp
+			// extension also enters UE 5.8's automatic generated compile list.
+			string outputPath = factory.MakePath($"AS_FunctionBinding_{module.ShortName}", ".inc");
 			factory.CommitOutput(outputPath, BuildGeneratedFunctionBindingModule(module.ShortName, editorOnly, generatedBindings));
 			generatedPaths.Add(outputPath);
 			shardCount++;
@@ -185,7 +187,7 @@ internal static partial class AngelscriptFunctionBindingCodeGenerator
 					binding.FunctionName,
 					"NativeModuleFunctionAddress",
 					null,
-					"ERASE_NO_FUNCTION()",
+					"TDPLUGIN_ERASE_NO_FUNCTION()",
 					Path.GetFileName(outputPath),
 					shardIndex + 1));
 			}
@@ -237,7 +239,7 @@ internal static partial class AngelscriptFunctionBindingCodeGenerator
 						classObj.SourceName,
 						function.SourceName,
 						includePath,
-						analysis.Signature?.BuildEraseMacro() ?? "ERASE_NO_FUNCTION()",
+						analysis.Signature?.BuildEraseMacro() ?? "TDPLUGIN_ERASE_NO_FUNCTION()",
 						analysis.FunctionBindingCategory,
 						EditorOnlyGuard: ResolveEditorOnlyGuard(function),
 						FailureReason: analysis.FailureReason));

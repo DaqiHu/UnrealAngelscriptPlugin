@@ -1288,7 +1288,7 @@ void FAngelscriptEditorModule::GenerateFunctionEntries(
 		{
 			line = "\tBinds.RegisterGeneratedFunctionBindingForTarget(" + ClassName
 				+ "::StaticClass(), \"" + name + "\"";
-			line += ", { ERASE_METHOD_PTR(";
+			line += ", { TDPLUGIN_ERASE_METHOD_PTR(";
 			line += ClassName + ", ";
 			line += name + ", (";
 		}
@@ -1299,7 +1299,7 @@ void FAngelscriptEditorModule::GenerateFunctionEntries(
 
 			line = "\tBinds.RegisterGeneratedFunctionBindingForTarget(" + ClassName
 				+ "::StaticClass(), \"" + name + "\"";
-			line += ", { ERASE_FUNCTION_PTR(";
+			line += ", { TDPLUGIN_ERASE_FUNCTION_PTR(";
 			//line += ClassName + ", ";
 			//line += name + ", (";
 			line += ClassName + "::" + name + ", (";
@@ -1366,7 +1366,7 @@ void FAngelscriptEditorModule::GenerateFunctionEntries(
 			origRet = origRet.Right((origRet.Len() - apiCheck) - 4);
 		}
 
-		line += ", ERASE_ARGUMENT_PACK(";
+		line += ", TDPLUGIN_ERASE_ARGUMENT_PACK(";
 		line += origRet + ")) } );";
 
 		//line += finalRet;
@@ -2124,7 +2124,7 @@ void FAngelscriptEditorModule::OriginalGenerate()
 				if (Function->HasAnyFunctionFlags(FUNC_Static))
 					continue;
 
-				FString line = FString("{ ERASE_METHOD_PTR(");
+				FString line = FString("{ TDPLUGIN_ERASE_METHOD_PTR(");
 
 				line += ClassName + ", ";
 				line += Name.ToString() + ", ";
@@ -2167,7 +2167,7 @@ void FAngelscriptEditorModule::OriginalGenerate()
 
 				if (RetParm != nullptr)
 				{
-					line += "ERASE_ARGUMENT_PACK(";
+					line += "TDPLUGIN_ERASE_ARGUMENT_PACK(";
 
 					if (RetParm->HasAnyPropertyFlags(CPF_ConstParm))
 						line += "const ";
@@ -2185,7 +2185,7 @@ void FAngelscriptEditorModule::OriginalGenerate()
 
 				else
 				{
-					line += "ERASE_ARGUMENT_PACK(void)";
+					line += "TDPLUGIN_ERASE_ARGUMENT_PACK(void)";
 				}
 
 				line += ") },";

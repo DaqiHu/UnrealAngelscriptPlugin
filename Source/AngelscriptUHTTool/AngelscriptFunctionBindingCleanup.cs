@@ -13,6 +13,7 @@ internal static partial class AngelscriptFunctionBindingCodeGenerator
 		HashSet<string> livePaths = new(generatedPaths.Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
 		string runtimeOutputDirectory = Path.GetDirectoryName(Path.GetFullPath(factory.MakePath("AS_FunctionBinding_Stale", ".gen.cpp")))!;
 		DeleteStaleFiles(runtimeOutputDirectory, "AS_FunctionBinding_*.gen.cpp", livePaths);
+		DeleteStaleFiles(runtimeOutputDirectory, "AS_FunctionBinding_*.inc", livePaths);
 		DeleteStaleFiles(runtimeOutputDirectory, "AS_FunctionBinding_*.cpp", livePaths);
 		DeleteStaleFiles(runtimeOutputDirectory, "AS_FunctionTable_*.gen.cpp", livePaths);
 		DeleteStaleFiles(runtimeOutputDirectory, "AS_FunctionTable_*.cpp", livePaths);

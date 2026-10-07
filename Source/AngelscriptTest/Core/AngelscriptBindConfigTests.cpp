@@ -85,7 +85,7 @@ private:
 			&& FMemory::Memcmp(
 				&Left.FunctionCaller,
 				&Right.FunctionCaller,
-				sizeof(ASAutoCaller::FunctionCaller)) == 0;
+				sizeof(TDPluginASAutoCaller::FunctionCaller)) == 0;
 	}
 
 	static void CDECL NoOpGeneric(asIScriptGeneric* Generic)
@@ -356,8 +356,8 @@ public:
 		FAngelscriptBinds Binds(*Engine);
 
 		const FString FunctionName = TEXT("Automation_FirstRegistrationWins");
-		const FAngelscriptFunctionBinding FirstEntry = { ERASE_METHOD_PTR(AActor, K2_DestroyActor, (), ERASE_ARGUMENT_PACK(void)) };
-		const FAngelscriptFunctionBinding SecondEntry = { ERASE_NO_FUNCTION() };
+		const FAngelscriptFunctionBinding FirstEntry = { TDPLUGIN_ERASE_METHOD_PTR(AActor, K2_DestroyActor, (), TDPLUGIN_ERASE_ARGUMENT_PACK(void)) };
+		const FAngelscriptFunctionBinding SecondEntry = { TDPLUGIN_ERASE_NO_FUNCTION() };
 		Binds.RegisterFunctionBindingForTarget(AActor::StaticClass(), FunctionName, FirstEntry);
 		Binds.RegisterFunctionBindingForTarget(AActor::StaticClass(), FunctionName, SecondEntry);
 
@@ -541,7 +541,7 @@ UFunction* WithOverride = UAngelscriptUhtCoverageTestLibrary::StaticClass()->Fin
 		const FAngelscriptFunctionBinding* OverloadEntry = OverloadEntries->Find(OverloadFunction->GetName());
 		if (!this->Assert.IsNotNull(OverloadEntry, TEXT("OverloadedExportedFunctionsCanRecoverDirectBind should register the reflected overload function"))) { return; }
 
-		(void)this->Assert.IsTrue(IsFunctionEntryBound(*OverloadEntry), TEXT("OverloadedExportedFunctionsCanRecoverDirectBind should recover a direct bind instead of ERASE_NO_FUNCTION"));
+		(void)this->Assert.IsTrue(IsFunctionEntryBound(*OverloadEntry), TEXT("OverloadedExportedFunctionsCanRecoverDirectBind should recover a direct bind instead of TDPLUGIN_ERASE_NO_FUNCTION"));
 	}
 
 	TEST_METHOD(InlineDefinitionFunctionsCanRecoverDirectBind)
@@ -560,7 +560,7 @@ UFunction* WithOverride = UAngelscriptUhtCoverageTestLibrary::StaticClass()->Fin
 		const FAngelscriptFunctionBinding* InlineEntry = InlineEntries->Find(InlineFunction->GetName());
 		if (!this->Assert.IsNotNull(InlineEntry, TEXT("InlineDefinitionFunctionsCanRecoverDirectBind should register the reflected inline function"))) { return; }
 
-		(void)this->Assert.IsTrue(IsFunctionEntryBound(*InlineEntry), TEXT("InlineDefinitionFunctionsCanRecoverDirectBind should recover a direct bind instead of ERASE_NO_FUNCTION"));
+		(void)this->Assert.IsTrue(IsFunctionEntryBound(*InlineEntry), TEXT("InlineDefinitionFunctionsCanRecoverDirectBind should recover a direct bind instead of TDPLUGIN_ERASE_NO_FUNCTION"));
 	}
 
 	TEST_METHOD(InlineOutRefFunctionsCanRecoverDirectBind)
@@ -579,7 +579,7 @@ UFunction* WithOverride = UAngelscriptUhtCoverageTestLibrary::StaticClass()->Fin
 		const FAngelscriptFunctionBinding* InlineEntry = InlineEntries->Find(InlineFunction->GetName());
 		if (!this->Assert.IsNotNull(InlineEntry, TEXT("InlineOutRefFunctionsCanRecoverDirectBind should register the reflected out-ref function"))) { return; }
 
-		(void)this->Assert.IsTrue(IsFunctionEntryBound(*InlineEntry), TEXT("InlineOutRefFunctionsCanRecoverDirectBind should recover a direct bind instead of ERASE_NO_FUNCTION"));
+		(void)this->Assert.IsTrue(IsFunctionEntryBound(*InlineEntry), TEXT("InlineOutRefFunctionsCanRecoverDirectBind should recover a direct bind instead of TDPLUGIN_ERASE_NO_FUNCTION"));
 	}
 };
 

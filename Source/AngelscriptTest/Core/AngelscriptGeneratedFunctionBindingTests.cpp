@@ -138,11 +138,11 @@ public:
 
 		ASSERT_THAT(IsTrue(
 			RuntimeShardContents.Contains(TEXT(
-				"Binds.RegisterGeneratedFunctionBindingForTarget(AGameModeBase::StaticClass(), \"GetNumPlayers\", { ERASE_AUTO_METHOD_PTR(AGameModeBase, GetNumPlayers) });")),
+				"Binds.RegisterGeneratedFunctionBindingForTarget(AGameModeBase::StaticClass(), \"GetNumPlayers\", { TDPLUGIN_ERASE_AUTO_METHOD_PTR(AGameModeBase, GetNumPlayers) });")),
 			TEXT("Runtime-linked shard should preserve direct native caller metadata")));
 		ASSERT_THAT(IsTrue(
 			RuntimeShardContents.Contains(TEXT(
-				"Binds.RegisterGeneratedFunctionBindingForTarget(APlayerController::StaticClass(), \"ClientSetHUD\", { ERASE_NO_FUNCTION() });")),
+				"Binds.RegisterGeneratedFunctionBindingForTarget(APlayerController::StaticClass(), \"ClientSetHUD\", { TDPLUGIN_ERASE_NO_FUNCTION() });")),
 			TEXT("Runtime-linked shard should preserve the RPC reflective-fallback placeholder")));
 	}
 
@@ -175,7 +175,7 @@ public:
 		bPassed &= TestRunner->TestTrue(TEXT("Diagnostics should name FunctionBindingCategory"), DiagnosticsContents.StartsWith(TEXT("ModuleName,EditorOnly,ClassName,FunctionName,FunctionBindingCategory")));
 		bPassed &= TestRunner->TestTrue(TEXT("Diagnostics should contain Runtime-linked category"), DiagnosticsContents.Contains(TEXT(",NativeRuntimeLinked,")));
 		bPassed &= TestRunner->TestTrue(TEXT("Diagnostics should contain reflective fallback category"), DiagnosticsContents.Contains(TEXT(",ReflectiveFallback,")));
-		bPassed &= TestRunner->TestTrue(TEXT("Diagnostics should preserve the RPC reflective-fallback decision"), DiagnosticsContents.Contains(TEXT("Engine,false,APlayerController,ClientSetHUD,ReflectiveFallback,rpc-net-function,ERASE_NO_FUNCTION(),AS_FunctionBinding_Engine.gen.cpp,1")));
+		bPassed &= TestRunner->TestTrue(TEXT("Diagnostics should preserve the RPC reflective-fallback decision"), DiagnosticsContents.Contains(TEXT("Engine,false,APlayerController,ClientSetHUD,ReflectiveFallback,rpc-net-function,TDPLUGIN_ERASE_NO_FUNCTION(),AS_FunctionBinding_Engine.gen.cpp,1")));
 		bPassed &= TestRunner->TestFalse(TEXT("Diagnostics should not contain legacy categories"), DiagnosticsContents.Contains(TEXT(",Direct,")) || DiagnosticsContents.Contains(TEXT(",Stub,")) || DiagnosticsContents.Contains(TEXT(",ModuleBinding,")));
 		TestRunner->TestTrue(TEXT("Function binding diagnostics contract should pass"), bPassed);
 	}

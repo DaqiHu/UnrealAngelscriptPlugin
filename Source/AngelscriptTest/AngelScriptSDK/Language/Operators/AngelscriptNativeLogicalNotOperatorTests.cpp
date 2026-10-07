@@ -83,8 +83,8 @@ private:
 	static bool RegisterObserver(asIScriptEngine& Engine, FLogicalNotState& State)
 	{
 		Engine.SetUserData(&State, LogicalNotStateSlot);
-		const ASAutoCaller::FunctionCaller Caller =
-			ASAutoCaller::MakeFunctionCaller(ObserveNotOperand);
+		const TDPluginASAutoCaller::FunctionCaller Caller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ObserveNotOperand);
 		return Engine.RegisterGlobalFunction("bool ObserveNotOperand(bool Value)",
 				   asFUNCTION(ObserveNotOperand),
 				   asCALL_CDECL,

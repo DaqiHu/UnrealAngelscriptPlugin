@@ -126,13 +126,13 @@ private:
 		ScriptEngine.SetUserData(
 			&State,
 			ConstructorParameterStateUserDataSlot);
-		const ASAutoCaller::FunctionCaller ArgumentCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordConstructorArgument);
-		const ASAutoCaller::FunctionCaller ConsumedCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller ArgumentCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordConstructorArgument);
+		const TDPluginASAutoCaller::FunctionCaller ConsumedCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordConstructorParameterConsumed);
-		const ASAutoCaller::FunctionCaller SelectionCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordConstructorSelected);
+		const TDPluginASAutoCaller::FunctionCaller SelectionCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordConstructorSelected);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void RecordConstructorArgument(int Index, int Value)",
 			asFUNCTION(RecordConstructorArgument),

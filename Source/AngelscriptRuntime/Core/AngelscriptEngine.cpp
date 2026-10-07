@@ -1069,6 +1069,11 @@ UPackage* FAngelscriptEngine::GetPackage()
 
 bool FAngelscriptEngine::ShouldInitializeThreaded()
 {
+	// Editor binaries launched with -game have GIsEditor=false but still use
+	// editor reflection preparation, whose commit phase requires GameThread.
+#if WITH_EDITOR
+	return RuntimeConfig.bForceThreadedInitialize;
+#else
 	if (RuntimeConfig.bIsEditor)
 	{
 		return RuntimeConfig.bForceThreadedInitialize;
@@ -1096,6 +1101,7 @@ bool FAngelscriptEngine::ShouldInitializeThreaded()
 #endif
 
 	return !RuntimeConfig.bSkipThreadedInitialize;
+#endif
 }
 
 namespace

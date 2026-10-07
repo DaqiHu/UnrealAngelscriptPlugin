@@ -295,10 +295,10 @@ private:
 
 	static bool RegisterScriptAssignmentLifecycle(asIScriptEngine& Engine)
 	{
-		const ASAutoCaller::FunctionCaller BeginCaller = ASAutoCaller::MakeFunctionCaller(BeginScriptAssignmentValue);
-		const ASAutoCaller::FunctionCaller CopyCaller = ASAutoCaller::MakeFunctionCaller(CopyScriptAssignmentValue);
-		const ASAutoCaller::FunctionCaller AssignCaller = ASAutoCaller::MakeFunctionCaller(RecordScriptAssignment);
-		const ASAutoCaller::FunctionCaller EndCaller = ASAutoCaller::MakeFunctionCaller(EndScriptAssignmentValue);
+		const TDPluginASAutoCaller::FunctionCaller BeginCaller = TDPluginASAutoCaller::MakeFunctionCaller(BeginScriptAssignmentValue);
+		const TDPluginASAutoCaller::FunctionCaller CopyCaller = TDPluginASAutoCaller::MakeFunctionCaller(CopyScriptAssignmentValue);
+		const TDPluginASAutoCaller::FunctionCaller AssignCaller = TDPluginASAutoCaller::MakeFunctionCaller(RecordScriptAssignment);
+		const TDPluginASAutoCaller::FunctionCaller EndCaller = TDPluginASAutoCaller::MakeFunctionCaller(EndScriptAssignmentValue);
 		return Engine.RegisterGlobalFunction(
 			"int BeginScriptAssignmentValue(int Value)",
 			asFUNCTION(BeginScriptAssignmentValue),

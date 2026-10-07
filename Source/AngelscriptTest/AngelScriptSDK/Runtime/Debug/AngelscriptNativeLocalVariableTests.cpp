@@ -281,7 +281,7 @@ public:
 		ASSERT_THAT(IsTrue(NativeObjectTypeResult >= 0,
 			*FString::Printf(TEXT("Local variable product should register the native-object type. Result=%d Messages={%s}"),
 				NativeObjectTypeResult, *Engine.GetMessagesText())));
-		const ASAutoCaller::FunctionCaller ConstructorCaller = ASAutoCaller::MakeFunctionCaller(ConstructNativeDebugLocalObject);
+		const TDPluginASAutoCaller::FunctionCaller ConstructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(ConstructNativeDebugLocalObject);
 		ASSERT_THAT(IsTrue(ScriptEngine->RegisterObjectBehaviour(
 			"NativeDebugNativeObject", asBEHAVE_CONSTRUCT, "void f()",
 			asFUNCTION(ConstructNativeDebugLocalObject), asCALL_CDECL_OBJLAST,

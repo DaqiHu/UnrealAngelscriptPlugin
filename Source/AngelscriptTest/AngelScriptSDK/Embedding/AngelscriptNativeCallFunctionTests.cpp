@@ -102,7 +102,7 @@ public:
 		{
 			return;
 		}
-		const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(AddFour);
+		const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(AddFour);
 		const int RegistrationResult = SE->RegisterGlobalFunction(
 			"int AddFour(int A, int B, int C, int D)",
 			asFUNCTION(AddFour),
@@ -214,7 +214,7 @@ public:
 		{
 			return;
 		}
-		const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(MultiplyDouble);
+		const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(MultiplyDouble);
 		const int RegistrationResult = SE->RegisterGlobalFunction(
 			"double MultiplyDouble(double A, double B)",
 			asFUNCTION(MultiplyDouble),
@@ -260,7 +260,7 @@ public:
 		{
 			return;
 		}
-		const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(AccumulateValue);
+		const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(AccumulateValue);
 		const int RegistrationResult = SE->RegisterGlobalFunction(
 			"void AccumulateValue(int Value)",
 			asFUNCTION(AccumulateValue),
@@ -308,7 +308,7 @@ public:
 		{
 			return;
 		}
-		const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(IncrementAndReturn);
+		const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(IncrementAndReturn);
 		const int RegistrationResult = SE->RegisterGlobalFunction(
 			"int IncrementAndReturn(int Value)",
 			asFUNCTION(IncrementAndReturn),
@@ -354,7 +354,7 @@ public:
 		{
 			return;
 		}
-		const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(SumSix);
+		const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(SumSix);
 		const int RegistrationResult = SE->RegisterGlobalFunction(
 			"int SumSix(int A, int B, int C, int D, int E, int F)",
 			asFUNCTION(SumSix),
@@ -400,7 +400,7 @@ public:
 		{
 			return;
 		}
-		const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(WidenAndScale);
+		const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(WidenAndScale);
 		const int RegistrationResult = SE->RegisterGlobalFunction(
 			"int64 WidenAndScale(int Value)",
 			asFUNCTION(WidenAndScale),
@@ -456,7 +456,7 @@ public:
 		{
 			return;
 		}
-		const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(MixIn025);
+		const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(MixIn025);
 		const int RegistrationResult = SE->RegisterGlobalFunction(
 			"double MixIn025(int I, double D)",
 			asFUNCTION(MixIn025),
@@ -503,7 +503,7 @@ public:
 		{
 			return;
 		}
-		const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(IsPositive);
+		const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(IsPositive);
 		const int RegistrationResult = SE->RegisterGlobalFunction(
 			"bool IsPositive(int Value)",
 			asFUNCTION(IsPositive),
@@ -549,7 +549,7 @@ public:
 		{
 			return;
 		}
-		const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(DivMod);
+		const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(DivMod);
 		const int RegistrationResult = SE->RegisterGlobalFunction(
 			"void DivMod(int A, int B, int& out OutQuotient, int& out OutRemainder)",
 			asFUNCTION(DivMod),

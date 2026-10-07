@@ -280,7 +280,7 @@ public:
 		ASSERT_THAT(IsTrue(
 			GeneratedClassCPP.Contains(TEXT(
 				"Binds.RegisterGeneratedFunctionBindingForTarget(AActor::StaticClass(), \"TearOff\", "
-				"{ ERASE_METHOD_PTR(AActor, TearOff")),
+				"{ TDPLUGIN_ERASE_METHOD_PTR(AActor, TearOff")),
 			TEXT("Generated entries should preserve native caller output through the explicit generated facade")));
 		ASSERT_THAT(IsFalse(
 			GeneratedClassCPP.Contains(TEXT("FAngelscriptBinds::RegisterFunctionBinding(")),

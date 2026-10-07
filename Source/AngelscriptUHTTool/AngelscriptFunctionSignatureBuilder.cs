@@ -29,13 +29,13 @@ internal sealed record AngelscriptFunctionSignature(
 			}
 
 			return IsStatic
-				? $"ERASE_FUNCTION_PTR({OwningType}::{FunctionName}, {parameterPack}, ERASE_ARGUMENT_PACK({ReturnType}))"
-				: $"ERASE_METHOD_PTR({OwningType}, {FunctionName}, {parameterPack}, ERASE_ARGUMENT_PACK({ReturnType}))";
+				? $"TDPLUGIN_ERASE_FUNCTION_PTR({OwningType}::{FunctionName}, {parameterPack}, TDPLUGIN_ERASE_ARGUMENT_PACK({ReturnType}))"
+				: $"TDPLUGIN_ERASE_METHOD_PTR({OwningType}, {FunctionName}, {parameterPack}, TDPLUGIN_ERASE_ARGUMENT_PACK({ReturnType}))";
 		}
 
 		return IsStatic
-			? $"ERASE_AUTO_FUNCTION_PTR({OwningType}::{FunctionName})"
-			: $"ERASE_AUTO_METHOD_PTR({OwningType}, {FunctionName})";
+			? $"TDPLUGIN_ERASE_AUTO_FUNCTION_PTR({OwningType}::{FunctionName})"
+			: $"TDPLUGIN_ERASE_AUTO_METHOD_PTR({OwningType}, {FunctionName})";
 	}
 }
 

@@ -125,7 +125,7 @@ TEST_CLASS_WITH_FLAGS(FPrimitiveTypeTests,
 		asIScriptEngine* const ScriptEngine = Engine.Get();
 		ASSERT_THAT(IsNotNull(ScriptEngine, TEXT("Primitive int8 test should create a standalone engine")));
 
-		const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(PrimitiveTypeTest::RetInt8);
+		const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(PrimitiveTypeTest::RetInt8);
 		ASSERT_THAT(IsTrue(ScriptEngine->RegisterGlobalFunction("int8 RetInt8(int8 value)", asFUNCTION(PrimitiveTypeTest::RetInt8), asCALL_CDECL, *(asFunctionCaller*)&Caller) >= 0,
 			TEXT("Primitive int8 test should register the native int8 callback")));
 		ASSERT_THAT(AreEqual(-1, PrimitiveTypeTest::FindEngineGlobalPropertyIndexByName(ScriptEngine, "gvar"),

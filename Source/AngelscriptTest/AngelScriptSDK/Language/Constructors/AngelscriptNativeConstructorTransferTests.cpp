@@ -322,11 +322,11 @@ private:
 		ScriptEngine.SetUserData(
 			&State,
 			ConstructorTransferStateUserDataSlot);
-		const ASAutoCaller::FunctionCaller ObservationCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller ObservationCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordConstructorTransferState);
-		const ASAutoCaller::FunctionCaller BoundaryCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller BoundaryCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordConstructorTransferBoundary);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void RecordConstructorTransferState(int Stage, int SourceValue, int TargetValue, int AuxiliaryValue, int Relation, int DynamicMarker)",

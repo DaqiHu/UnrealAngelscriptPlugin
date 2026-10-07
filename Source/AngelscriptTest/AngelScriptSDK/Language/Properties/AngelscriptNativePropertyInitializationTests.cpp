@@ -189,10 +189,10 @@ private:
 		FPropertyInitializationState& State)
 	{
 		ScriptEngine.SetUserData(&State, PropertyInitializationStateUserDataSlot);
-		const ASAutoCaller::FunctionCaller MarkerCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordPropertyInitializationMarker);
-		const ASAutoCaller::FunctionCaller CheckpointCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordPropertyInitializationCheckpoint);
+		const TDPluginASAutoCaller::FunctionCaller MarkerCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordPropertyInitializationMarker);
+		const TDPluginASAutoCaller::FunctionCaller CheckpointCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordPropertyInitializationCheckpoint);
 		return ScriptEngine.RegisterGlobalFunction(
 			"int RecordPropertyInitializationMarker(int Marker)",
 			asFUNCTION(RecordPropertyInitializationMarker),

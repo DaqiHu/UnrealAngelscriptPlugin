@@ -30,8 +30,8 @@ public:
 	void* ScriptTypePtr = nullptr;
 	void* OwnerScriptEngine = nullptr;
 	bool bIsScriptClass = false;
-	//TMap<FName, TPair<FGenericFuncPtr, ASAutoCaller::FunctionCaller>> GenericFuncPtrMap;
-	//static TMap<FName, TMap<FName, TPair<FGenericFuncPtr, ASAutoCaller::FunctionCaller>>> GFuncMaps;
+	//TMap<FName, TPair<FGenericFuncPtr, TDPluginASAutoCaller::FunctionCaller>> GenericFuncPtrMap;
+	//static TMap<FName, TMap<FName, TPair<FGenericFuncPtr, TDPluginASAutoCaller::FunctionCaller>>> GFuncMaps;
 
 	//END WILL
 

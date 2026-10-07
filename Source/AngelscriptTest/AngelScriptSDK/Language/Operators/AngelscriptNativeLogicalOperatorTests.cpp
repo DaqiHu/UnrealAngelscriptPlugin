@@ -127,8 +127,8 @@ private:
 	static bool RegisterTrace(asIScriptEngine& Engine, FLogicalTrace& Trace)
 	{
 		Engine.SetUserData(&Trace, LogicalTraceSlot);
-		const ASAutoCaller::FunctionCaller Caller =
-			ASAutoCaller::MakeFunctionCaller(TraceLogicalOperand);
+		const TDPluginASAutoCaller::FunctionCaller Caller =
+			TDPluginASAutoCaller::MakeFunctionCaller(TraceLogicalOperand);
 		return Engine.RegisterGlobalFunction("bool TraceLogicalOperand(int Marker, bool Value)",
 				   asFUNCTION(TraceLogicalOperand),
 				   asCALL_CDECL,

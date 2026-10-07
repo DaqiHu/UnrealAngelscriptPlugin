@@ -72,12 +72,12 @@ private:
 
 	static int32 RegisterObjectLastSaveLoadSurface(asIScriptEngine& ScriptEngine)
 	{
-		const ASAutoCaller::FunctionCaller ConstructorCaller =
-			ASAutoCaller::MakeFunctionCaller(ConstructObjectLastSaveLoadProbe);
-		const ASAutoCaller::FunctionCaller DestructorCaller =
-			ASAutoCaller::MakeFunctionCaller(DestructObjectLastSaveLoadProbe);
-		const ASAutoCaller::FunctionCaller EvaluateCaller =
-			ASAutoCaller::MakeFunctionCaller(EvaluateObjectLastSaveLoadProbe);
+		const TDPluginASAutoCaller::FunctionCaller ConstructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ConstructObjectLastSaveLoadProbe);
+		const TDPluginASAutoCaller::FunctionCaller DestructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(DestructObjectLastSaveLoadProbe);
+		const TDPluginASAutoCaller::FunctionCaller EvaluateCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(EvaluateObjectLastSaveLoadProbe);
 		if (ScriptEngine.RegisterObjectType(
 				"ObjectLastSaveLoadProbe",
 				sizeof(FObjectLastSaveLoadProbe),

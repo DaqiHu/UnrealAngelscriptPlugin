@@ -28,13 +28,13 @@ AS_FORCE_LINK const FAngelscriptBind Bind_AssetManagerScriptMixins(
 		Binds.RegisterFunctionBindingForTarget(
 			UAssetManagerMixinLibrary::StaticClass(),
 			"CallOrRegister_OnCompletedInitialScan",
-			{ERASE_FUNCTION_PTR(UAssetManagerMixinLibrary::CallOrRegister_OnCompletedInitialScan, (UAssetManager*, UObject*, const FName&), ERASE_ARGUMENT_PACK(void))});
+			{TDPLUGIN_ERASE_FUNCTION_PTR(UAssetManagerMixinLibrary::CallOrRegister_OnCompletedInitialScan, (UAssetManager*, UObject*, const FName&), TDPLUGIN_ERASE_ARGUMENT_PACK(void))});
 		Binds.RegisterFunctionBindingForTarget(
 			UAssetManagerMixinLibrary::StaticClass(),
 			"GetPrimaryAssetData",
-			{ERASE_FUNCTION_PTR(UAssetManagerMixinLibrary::GetPrimaryAssetData, (UAssetManager*, const FPrimaryAssetId&, FAssetData&), ERASE_ARGUMENT_PACK(bool))});
+			{TDPLUGIN_ERASE_FUNCTION_PTR(UAssetManagerMixinLibrary::GetPrimaryAssetData, (UAssetManager*, const FPrimaryAssetId&, FAssetData&), TDPLUGIN_ERASE_ARGUMENT_PACK(bool))});
 		Binds.RegisterFunctionBindingForTarget(
 			UAssetManagerMixinLibrary::StaticClass(),
 			"GetPrimaryAssetObject",
-			{ERASE_FUNCTION_PTR(UAssetManagerMixinLibrary::GetPrimaryAssetObject, (UAssetManager*, const FPrimaryAssetId&), ERASE_ARGUMENT_PACK(UObject*))});
+			{TDPLUGIN_ERASE_FUNCTION_PTR(UAssetManagerMixinLibrary::GetPrimaryAssetObject, (UAssetManager*, const FPrimaryAssetId&), TDPLUGIN_ERASE_ARGUMENT_PACK(UObject*))});
 	});

@@ -288,7 +288,7 @@ public:
 
 		const FAngelscriptFunctionBinding ExistingFunctionBinding = {
 			FGenericFuncPtr::Make(1),
-			ASAutoCaller::FunctionCaller{},
+			TDPluginASAutoCaller::FunctionCaller{},
 			reinterpret_cast<void*>(0x2),
 			false,
 			false
@@ -367,7 +367,7 @@ bool FAngelscriptNativeModuleFunctionBindingRuntimeTests::RunExistingSlotPriorit
 	}
 
 	FScopedClassFuncMapRestore RestoreActorEntries(AActor::StaticClass());
-	const FAngelscriptFunctionBinding ExistingFunctionBinding = { FGenericFuncPtr::Make(1), ASAutoCaller::FunctionCaller{}, reinterpret_cast<void*>(0x1), false, false };
+	const FAngelscriptFunctionBinding ExistingFunctionBinding = { FGenericFuncPtr::Make(1), TDPluginASAutoCaller::FunctionCaller{}, reinterpret_cast<void*>(0x1), false, false };
 	FAngelscriptBinds Binds(FAngelscriptEngine::Get());
 	Binds.RegisterFunctionBindingForTarget(AActor::StaticClass(), ExistingFunctionName, ExistingFunctionBinding);
 

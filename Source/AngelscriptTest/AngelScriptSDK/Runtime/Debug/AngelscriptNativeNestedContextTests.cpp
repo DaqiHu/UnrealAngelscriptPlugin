@@ -256,9 +256,9 @@ public:
 		{
 			return;
 		}
-		const ASAutoCaller::FunctionCaller EnterCaller = ASAutoCaller::MakeFunctionCaller(EnterNestedContext);
-		const ASAutoCaller::FunctionCaller AbortCaller = ASAutoCaller::MakeFunctionCaller(AbortNestedContext);
-		const ASAutoCaller::FunctionCaller SuspendCaller = ASAutoCaller::MakeFunctionCaller(SuspendNestedContext);
+		const TDPluginASAutoCaller::FunctionCaller EnterCaller = TDPluginASAutoCaller::MakeFunctionCaller(EnterNestedContext);
+		const TDPluginASAutoCaller::FunctionCaller AbortCaller = TDPluginASAutoCaller::MakeFunctionCaller(AbortNestedContext);
+		const TDPluginASAutoCaller::FunctionCaller SuspendCaller = TDPluginASAutoCaller::MakeFunctionCaller(SuspendNestedContext);
 		const int EnterResult = ScriptEngine->RegisterGlobalFunction("void NativeDebugEnterInner()", asFUNCTION(EnterNestedContext), asCALL_CDECL, *(asFunctionCaller*)&EnterCaller);
 		ASSERT_THAT(IsTrue(EnterResult >= 0,
 			*FString::Printf(TEXT("Nested context product should register its raw active-context bridge. Result=%d Messages={%s}"),

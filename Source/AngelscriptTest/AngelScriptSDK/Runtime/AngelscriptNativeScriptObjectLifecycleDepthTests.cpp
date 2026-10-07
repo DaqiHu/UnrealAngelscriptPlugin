@@ -199,8 +199,8 @@ public:
 			}
 		};
 
-		const ASAutoCaller::FunctionCaller DestructorCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordOwnershipProbeDestruction);
+		const TDPluginASAutoCaller::FunctionCaller DestructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordOwnershipProbeDestruction);
 		const int32 DestructorCallbackRegistrationResult =
 			ScriptEngine->RegisterGlobalFunction(
 				"void RecordOwnershipProbeDestruction()",
@@ -526,8 +526,8 @@ public:
 			}
 		};
 
-		const ASAutoCaller::FunctionCaller DestructorCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordOwnershipProbeDestruction);
+		const TDPluginASAutoCaller::FunctionCaller DestructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordOwnershipProbeDestruction);
 		const int32 DestructorCallbackRegistrationResult =
 			ScriptEngine->RegisterGlobalFunction(
 				"void RecordOwnershipProbeDestruction()",

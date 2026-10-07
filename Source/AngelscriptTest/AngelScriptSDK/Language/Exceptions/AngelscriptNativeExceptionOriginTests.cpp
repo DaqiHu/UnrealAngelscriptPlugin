@@ -103,14 +103,14 @@ private:
 
 	static bool RegisterOriginBridge(asIScriptEngine& ScriptEngine)
 	{
-		const ASAutoCaller::FunctionCaller NativeCallbackCaller = ASAutoCaller::MakeFunctionCaller(RaiseNativeCallbackOrigin);
-		const ASAutoCaller::FunctionCaller HostExceptionCaller = ASAutoCaller::MakeFunctionCaller(RaiseHostSetExceptionOrigin);
-		const ASAutoCaller::FunctionCaller DestructorCaller = ASAutoCaller::MakeFunctionCaller(RaiseDestructorOrigin);
-		const ASAutoCaller::FunctionCaller BoundsCaller = ASAutoCaller::MakeFunctionCaller(RaiseBoundsOrigin);
-		const ASAutoCaller::FunctionCaller ConstructorCaller = ASAutoCaller::MakeFunctionCaller(RaiseConstructorOrigin);
-		const ASAutoCaller::FunctionCaller MemberCaller = ASAutoCaller::MakeFunctionCaller(RaiseMemberOrigin);
-		const ASAutoCaller::FunctionCaller ProtocolCaller = ASAutoCaller::MakeFunctionCaller(RaiseProtocolOrigin);
-		const ASAutoCaller::FunctionCaller ImportedCaller = ASAutoCaller::MakeFunctionCaller(RaiseImportedOrigin);
+		const TDPluginASAutoCaller::FunctionCaller NativeCallbackCaller = TDPluginASAutoCaller::MakeFunctionCaller(RaiseNativeCallbackOrigin);
+		const TDPluginASAutoCaller::FunctionCaller HostExceptionCaller = TDPluginASAutoCaller::MakeFunctionCaller(RaiseHostSetExceptionOrigin);
+		const TDPluginASAutoCaller::FunctionCaller DestructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(RaiseDestructorOrigin);
+		const TDPluginASAutoCaller::FunctionCaller BoundsCaller = TDPluginASAutoCaller::MakeFunctionCaller(RaiseBoundsOrigin);
+		const TDPluginASAutoCaller::FunctionCaller ConstructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(RaiseConstructorOrigin);
+		const TDPluginASAutoCaller::FunctionCaller MemberCaller = TDPluginASAutoCaller::MakeFunctionCaller(RaiseMemberOrigin);
+		const TDPluginASAutoCaller::FunctionCaller ProtocolCaller = TDPluginASAutoCaller::MakeFunctionCaller(RaiseProtocolOrigin);
+		const TDPluginASAutoCaller::FunctionCaller ImportedCaller = TDPluginASAutoCaller::MakeFunctionCaller(RaiseImportedOrigin);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void RaiseNativeCallbackOrigin()",
 			asFUNCTION(RaiseNativeCallbackOrigin),

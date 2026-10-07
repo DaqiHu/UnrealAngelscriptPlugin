@@ -183,8 +183,8 @@ namespace UnrealBuildTool.Rules
 			string GeneratedSourceName = $"AS_FunctionBinding_{ModuleName}";
 			string[] AggregatorSource =
 			{
-				$"#if __has_include(\"{GeneratedSourceName}.gen.cpp\")",
-				$"#include UE_INLINE_GENERATED_CPP_BY_NAME({GeneratedSourceName})",
+				$"#if __has_include(\"{GeneratedSourceName}.inc\")",
+				$"#include \"{GeneratedSourceName}.inc\"",
 				"#endif",
 			};
 

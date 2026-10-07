@@ -268,7 +268,7 @@ namespace ProductionScriptMixinSignatureTest
 			Signature.Declaration,
 			asFUNCTION(SubsystemGetterMetadataTest::NoOpGeneric),
 			asCALL_GENERIC,
-			ASAutoCaller::FunctionCaller::Make());
+			TDPluginASAutoCaller::FunctionCaller::Make());
 	}
 
 	bool CheckProductionScriptMixinSignature(

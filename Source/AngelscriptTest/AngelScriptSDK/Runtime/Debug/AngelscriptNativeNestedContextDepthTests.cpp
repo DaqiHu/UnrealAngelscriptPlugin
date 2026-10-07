@@ -269,7 +269,7 @@ public:
 			return;
 		}
 
-		const ASAutoCaller::FunctionCaller ProductCaller = ASAutoCaller::MakeFunctionCaller(EnterNestedDepth);
+		const TDPluginASAutoCaller::FunctionCaller ProductCaller = TDPluginASAutoCaller::MakeFunctionCaller(EnterNestedDepth);
 		const int RegisterResult = ScriptEngine->RegisterGlobalFunction(
 			"void NativeDebugEnterNestedDepth()",
 			asFUNCTION(EnterNestedDepth),

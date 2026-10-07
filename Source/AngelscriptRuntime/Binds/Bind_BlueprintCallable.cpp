@@ -230,7 +230,7 @@ void BindBlueprintCallable(
 	// Actually bind into angelscript engine
 	const asECallConvTypes GlobalBindingCallConv = FunctionBinding->bUsesGenericCall ? asCALL_GENERIC : asCALL_CDECL;
 	const asECallConvTypes BindingCallConv = FunctionBinding->bUsesGenericCall ? asCALL_GENERIC : asCALL_THISCALL;
-	const ASAutoCaller::FunctionCaller BindingCaller = FunctionBinding->bUsesGenericCall ? ASAutoCaller::FunctionCaller::Make() : FunctionBinding->FunctionCaller;
+	const TDPluginASAutoCaller::FunctionCaller BindingCaller = FunctionBinding->bUsesGenericCall ? TDPluginASAutoCaller::FunctionCaller::Make() : FunctionBinding->FunctionCaller;
 	void* BindingUserData = FunctionBinding->bUsesGenericCall ? FunctionBinding->UserData : nullptr;
 	FAngelscriptBoundFunction PrimaryBinding;
 
@@ -272,7 +272,7 @@ void BindBlueprintCallable(
 	}
 	else
 	{
-		//auto caller = ASAutoCaller::FunctionCaller::Make();
+		//auto caller = TDPluginASAutoCaller::FunctionCaller::Make();
 		//caller.MethodPtr = DirectNativePointer;
 		// Member methods should be bound as THISCALL
 		PrimaryBinding = Binds.BindMethodDirectForTarget(
@@ -413,7 +413,7 @@ void BindBlueprintCallable_FromPrep(
 
 	const asECallConvTypes GlobalBindingCallConv = FunctionBinding->bUsesGenericCall ? asCALL_GENERIC : asCALL_CDECL;
 	const asECallConvTypes BindingCallConv = FunctionBinding->bUsesGenericCall ? asCALL_GENERIC : asCALL_THISCALL;
-	const ASAutoCaller::FunctionCaller BindingCaller = FunctionBinding->bUsesGenericCall ? ASAutoCaller::FunctionCaller::Make() : FunctionBinding->FunctionCaller;
+	const TDPluginASAutoCaller::FunctionCaller BindingCaller = FunctionBinding->bUsesGenericCall ? TDPluginASAutoCaller::FunctionCaller::Make() : FunctionBinding->FunctionCaller;
 	void* BindingUserData = FunctionBinding->bUsesGenericCall ? FunctionBinding->UserData : nullptr;
 	FAngelscriptBoundFunction PrimaryBinding;
 

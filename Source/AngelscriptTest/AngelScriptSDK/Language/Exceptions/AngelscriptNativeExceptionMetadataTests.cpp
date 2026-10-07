@@ -46,7 +46,7 @@ private:
 
 	static bool RegisterMetadataBridge(asIScriptEngine& ScriptEngine)
 	{
-		const ASAutoCaller::FunctionCaller ExceptionCaller = ASAutoCaller::MakeFunctionCaller(RaiseMetadataException);
+		const TDPluginASAutoCaller::FunctionCaller ExceptionCaller = TDPluginASAutoCaller::MakeFunctionCaller(RaiseMetadataException);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void RaiseMetadataException()",
 			asFUNCTION(RaiseMetadataException),

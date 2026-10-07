@@ -254,10 +254,10 @@ private:
 		FPropertyCopyState& State)
 	{
 		ScriptEngine.SetUserData(&State, PropertyCopyStateUserDataSlot);
-		const ASAutoCaller::FunctionCaller ObservationCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordPropertyCopyObservation);
-		const ASAutoCaller::FunctionCaller BoundaryCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordPropertyCopyLifecycleBoundary);
+		const TDPluginASAutoCaller::FunctionCaller ObservationCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordPropertyCopyObservation);
+		const TDPluginASAutoCaller::FunctionCaller BoundaryCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordPropertyCopyLifecycleBoundary);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void RecordPropertyCopyObservation(int SourceValue, int TargetValue, bool SameIdentity, bool TransferStable, int ViewMarker)",
 			asFUNCTION(RecordPropertyCopyObservation),

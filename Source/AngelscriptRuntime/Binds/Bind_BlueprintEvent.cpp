@@ -757,7 +757,7 @@ static void CommitBlueprintEventBinding(
 			Signature.Declaration,
 			asFUNCTION(FAngelscriptBlueprintEventHelperBinds::CallStaticWithSignature),
 			asCALL_GENERIC,
-			ASAutoCaller::FunctionCaller::Make(),
+			TDPluginASAutoCaller::FunctionCaller::Make(),
 			Sig);
 	}
 	else if (Signature.bStaticInUnreal)
@@ -772,7 +772,7 @@ static void CommitBlueprintEventBinding(
 			Signature.Declaration,
 			asFUNCTION(FAngelscriptBlueprintEventHelperBinds::CallMixinWithSignature),
 			asCALL_GENERIC,
-			ASAutoCaller::FunctionCaller::Make(),
+			TDPluginASAutoCaller::FunctionCaller::Make(),
 			Sig);
 	}
 	else
@@ -782,7 +782,7 @@ static void CommitBlueprintEventBinding(
 			Signature.Declaration,
 			asFUNCTION(FAngelscriptBlueprintEventHelperBinds::CallEventWithSignature),
 			asCALL_GENERIC,
-			ASAutoCaller::FunctionCaller::Make(),
+			TDPluginASAutoCaller::FunctionCaller::Make(),
 			Sig);
 	}
 
@@ -1067,6 +1067,15 @@ void BindDelegateEvent(FAngelscriptBinds& Binds, UFunction* Function, bool bIsMu
 		{
 			ArgumentTypes.Add(Type);
 			ArgumentNames.Add(Property->GetName());
+			// Non-editor FName spelling can turn a legal C++ Float/Int parameter
+			// into an AngelScript keyword. Restore an identifier before binding;
+			// Unreal parameter names are case-insensitive, so this cannot alias
+			// another parameter differing only in that initial letter's case.
+			const FTCHARToUTF8 ParameterNameUtf8(*ArgumentNames.Last());
+			if (Binds.GetTargetScriptEngine().ParseToken(ParameterNameUtf8.Get(), ParameterNameUtf8.Length()) == asTC_KEYWORD)
+			{
+				ArgumentNames.Last()[0] = FChar::ToUpper(ArgumentNames.Last()[0]);
+			}
 
 			// This is a hack!
 			//  We want to add the &in to the parameter if it is a const reference,

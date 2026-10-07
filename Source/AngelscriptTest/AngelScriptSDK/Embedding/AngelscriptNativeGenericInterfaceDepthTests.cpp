@@ -277,8 +277,8 @@ private:
 		asIScriptEngine& ScriptEngine)
 	{
 		FNoDiscardAsserter Assert(Test);
-		const ASAutoCaller::FunctionCaller ConstructorCaller =
-			ASAutoCaller::MakeFunctionCaller(ConstructGenericProbe);
+		const TDPluginASAutoCaller::FunctionCaller ConstructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ConstructGenericProbe);
 		bool bSuccess = true;
 		bSuccess &= Assert.IsTrue(
 			ScriptEngine.RegisterObjectType(

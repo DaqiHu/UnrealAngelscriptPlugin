@@ -169,15 +169,15 @@ private:
 		ScriptEngine.SetUserData(
 			&State,
 			ConstructorSelectionStateUserDataSlot);
-		const ASAutoCaller::FunctionCaller SelectionCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordConstructorKindSelected);
-		const ASAutoCaller::FunctionCaller RouteCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordConstructorCallRoute);
-		const ASAutoCaller::FunctionCaller TransferCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller SelectionCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordConstructorKindSelected);
+		const TDPluginASAutoCaller::FunctionCaller RouteCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordConstructorCallRoute);
+		const TDPluginASAutoCaller::FunctionCaller TransferCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordConstructorTransferObservation);
-		const ASAutoCaller::FunctionCaller ScriptCopyCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordConstructorScriptCopy);
+		const TDPluginASAutoCaller::FunctionCaller ScriptCopyCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordConstructorScriptCopy);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void RecordConstructorKindSelected(int Marker)",
 			asFUNCTION(RecordConstructorKindSelected),

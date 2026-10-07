@@ -50,8 +50,8 @@ public:
 			return;
 		}
 
-		const ASAutoCaller::FunctionCaller ConstructorCaller = ASAutoCaller::MakeFunctionCaller(ConstructObject);
-		const ASAutoCaller::FunctionCaller DestructorCaller = ASAutoCaller::MakeFunctionCaller(DestructObject);
+		const TDPluginASAutoCaller::FunctionCaller ConstructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(ConstructObject);
+		const TDPluginASAutoCaller::FunctionCaller DestructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(DestructObject);
 		ASSERT_THAT(IsTrue(
 			ScriptEngine->RegisterObjectType(
 				"Object",

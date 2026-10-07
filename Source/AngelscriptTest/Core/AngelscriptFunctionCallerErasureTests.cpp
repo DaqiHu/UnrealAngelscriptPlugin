@@ -24,10 +24,10 @@ private:
 	};
 
 	template <typename MethodType>
-	static ASAutoCaller::TMethodPtr MakeErasedMethodPointer(MethodType Method)
+	static TDPluginASAutoCaller::TMethodPtr MakeErasedMethodPointer(MethodType Method)
 	{
 		const FGenericFuncPtr GenericMethod = MakeAutoMethodPtr(Method);
-		ASAutoCaller::TMethodPtr ErasedMethod = nullptr;
+		TDPluginASAutoCaller::TMethodPtr ErasedMethod = nullptr;
 		FMemory::Memcpy(&ErasedMethod, GenericMethod.ptr.dummy, sizeof(ErasedMethod));
 		return ErasedMethod;
 	}
@@ -42,8 +42,8 @@ public:
 		const FProbeMethod Method = &FConstRefQualifiedProbe::ReadPlus;
 
 		FGenericFuncPtr GenericMethod = MakeAutoMethodPtr(Method);
-		const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(Method);
-		ASAutoCaller::TMethodPtr ErasedMethod = MakeErasedMethodPointer(Method);
+		const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(Method);
+		TDPluginASAutoCaller::TMethodPtr ErasedMethod = MakeErasedMethodPointer(Method);
 
 		ASSERT_THAT(IsTrue(GenericMethod.IsBound(),
 			TEXT("const& qualified method caller should produce a bound generic method pointer")));

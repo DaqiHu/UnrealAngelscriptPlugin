@@ -163,9 +163,9 @@ private:
 			const FString Declaration = FString::Printf(
 				TEXT("int CallAbi(%s Value)"), NativeStorageCase.BindingDeclaration);
 			const FTCHARToUTF8 DeclarationUtf8(*Declaration);
-			const ASAutoCaller::FunctionCaller Caller = bFloat32
-				? ASAutoCaller::MakeFunctionCaller(RecordFloat32)
-				: ASAutoCaller::MakeFunctionCaller(RecordFloat64);
+			const TDPluginASAutoCaller::FunctionCaller Caller = bFloat32
+				? TDPluginASAutoCaller::MakeFunctionCaller(RecordFloat32)
+				: TDPluginASAutoCaller::MakeFunctionCaller(RecordFloat64);
 			return bFloat32
 				? ScriptEngine.RegisterGlobalFunction(
 					DeclarationUtf8.Get(), asFUNCTION(RecordFloat32), asCALL_CDECL, *(asFunctionCaller*)&Caller)
@@ -178,9 +178,9 @@ private:
 			const FString Declaration = FString::Printf(
 				TEXT("%s CallAbi()"), NativeStorageCase.BindingDeclaration);
 			const FTCHARToUTF8 DeclarationUtf8(*Declaration);
-			const ASAutoCaller::FunctionCaller Caller = bFloat32
-				? ASAutoCaller::MakeFunctionCaller(ReturnFloat32)
-				: ASAutoCaller::MakeFunctionCaller(ReturnFloat64);
+			const TDPluginASAutoCaller::FunctionCaller Caller = bFloat32
+				? TDPluginASAutoCaller::MakeFunctionCaller(ReturnFloat32)
+				: TDPluginASAutoCaller::MakeFunctionCaller(ReturnFloat64);
 			return bFloat32
 				? ScriptEngine.RegisterGlobalFunction(
 					DeclarationUtf8.Get(), asFUNCTION(ReturnFloat32), asCALL_CDECL, *(asFunctionCaller*)&Caller)

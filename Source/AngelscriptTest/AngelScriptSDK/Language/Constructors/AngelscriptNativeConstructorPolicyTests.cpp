@@ -336,8 +336,8 @@ private:
 		FConstructorPolicyState& State)
 	{
 		ScriptEngine.SetUserData(&State, ConstructorPolicyStateUserDataSlot);
-		const ASAutoCaller::FunctionCaller MarkerCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordConstructorPolicyMarker);
+		const TDPluginASAutoCaller::FunctionCaller MarkerCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordConstructorPolicyMarker);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void RecordConstructorPolicyMarker(int Marker)",
 			asFUNCTION(RecordConstructorPolicyMarker),

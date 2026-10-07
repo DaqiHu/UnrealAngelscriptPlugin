@@ -323,7 +323,7 @@ public:
 			? ScriptEngine->RegisterGlobalFunction("void cfunction_basic()", asFUNCTION(CFunctionBasicGeneric), asCALL_GENERIC)
 			: [&]()
 			{
-				const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(CFunctionBasic);
+				const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(CFunctionBasic);
 				return ScriptEngine->RegisterGlobalFunction("void cfunction_basic()", asFUNCTION(CFunctionBasic), asCALL_CDECL, *(asFunctionCaller*)&Caller);
 			}();
 		ASSERT_THAT(IsTrue(RegisterResult >= 0, TEXT("SDK execute basic-callback test should register the callback")));
@@ -401,7 +401,7 @@ public:
 			? ScriptEngine->RegisterGlobalFunction("void cfunction_one(int value)", asFUNCTION(CFunctionOneArgGeneric), asCALL_GENERIC)
 			: [&]()
 			{
-				const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(CFunctionOneArg);
+				const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(CFunctionOneArg);
 				return ScriptEngine->RegisterGlobalFunction("void cfunction_one(int value)", asFUNCTION(CFunctionOneArg), asCALL_CDECL, *(asFunctionCaller*)&Caller);
 			}();
 		ASSERT_THAT(IsTrue(FunctionId >= 0, TEXT("SDK execute one-arg test should register the callback")));
@@ -485,7 +485,7 @@ public:
 			? ScriptEngine->RegisterGlobalFunction("void cfunction_two(int left, int right)", asFUNCTION(CFunctionTwoArgsGeneric), asCALL_GENERIC)
 			: [&]()
 			{
-				const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(CFunctionTwoArgs);
+				const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(CFunctionTwoArgs);
 				return ScriptEngine->RegisterGlobalFunction("void cfunction_two(int left, int right)", asFUNCTION(CFunctionTwoArgs), asCALL_CDECL, *(asFunctionCaller*)&Caller);
 			}();
 		ASSERT_THAT(IsTrue(RegisterResult >= 0, TEXT("SDK execute two-args test should register the callback")));
@@ -540,7 +540,7 @@ public:
 			? ScriptEngine->RegisterGlobalFunction("void cfunction_four(int first, int16 second, int8 third, int fourth)", asFUNCTION(CFunctionFourArgsGeneric), asCALL_GENERIC)
 			: [&]()
 			{
-				const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(CFunctionFourArgs);
+				const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(CFunctionFourArgs);
 				return ScriptEngine->RegisterGlobalFunction("void cfunction_four(int first, int16 second, int8 third, int fourth)", asFUNCTION(CFunctionFourArgs), asCALL_CDECL, *(asFunctionCaller*)&Caller);
 			}();
 		ASSERT_THAT(IsTrue(RegisterResult >= 0, TEXT("SDK execute four-args test should register the callback")));
@@ -608,9 +608,9 @@ public:
 		int RegisterResult = asERROR;
 		if (!UsesMaxPortability())
 		{
-			const ASAutoCaller::FunctionCaller Caller = bFloatUsesFloat64
-				? ASAutoCaller::MakeFunctionCaller(CFunctionDoubleArgs)
-				: ASAutoCaller::MakeFunctionCaller(CFunctionFloatArgs);
+			const TDPluginASAutoCaller::FunctionCaller Caller = bFloatUsesFloat64
+				? TDPluginASAutoCaller::MakeFunctionCaller(CFunctionDoubleArgs)
+				: TDPluginASAutoCaller::MakeFunctionCaller(CFunctionFloatArgs);
 			RegisterResult = ScriptEngine->RegisterGlobalFunction(
 				Declaration,
 				bFloatUsesFloat64 ? asFUNCTION(CFunctionDoubleArgs) : asFUNCTION(CFunctionFloatArgs),

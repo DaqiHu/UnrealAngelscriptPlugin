@@ -140,8 +140,8 @@ int RunExplicitParityBehavior()
 		FBehaviorObservation& Observation)
 	{
 		Engine.SetUserData(&Observation, BehaviorObservationUserDataSlot);
-		const ASAutoCaller::FunctionCaller Caller =
-			ASAutoCaller::MakeFunctionCaller(RecordParityDestructor);
+		const TDPluginASAutoCaller::FunctionCaller Caller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordParityDestructor);
 		return Engine.RegisterGlobalFunction(
 			"void RecordParityDestructor(int Value)",
 			asFUNCTION(RecordParityDestructor),

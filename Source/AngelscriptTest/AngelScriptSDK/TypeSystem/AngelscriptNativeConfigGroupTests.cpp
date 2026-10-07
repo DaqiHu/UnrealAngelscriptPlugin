@@ -74,8 +74,8 @@ public:
 			asSUCCESS,
 			SE->BeginConfigGroup("TestGroup"),
 			TEXT("Current-fork config-group begin should report success")));
-		const ASAutoCaller::FunctionCaller Caller =
-			ASAutoCaller::MakeFunctionCaller(ReturnNinetyNine);
+		const TDPluginASAutoCaller::FunctionCaller Caller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ReturnNinetyNine);
 		const int FunctionId = SE->RegisterGlobalFunction(
 			"int TestGroupFunc()",
 			asFUNCTION(ReturnNinetyNine),

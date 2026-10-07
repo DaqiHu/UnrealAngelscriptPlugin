@@ -435,8 +435,8 @@ private:
 		{
 			return false;
 		}
-		const ASAutoCaller::FunctionCaller RecordCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordIncrementRejectedProducer);
+		const TDPluginASAutoCaller::FunctionCaller RecordCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordIncrementRejectedProducer);
 		return Engine.RegisterGlobalFunction("void RecordIncrementRejectedProducer()",
 				   asFUNCTION(RecordIncrementRejectedProducer),
 				   asCALL_CDECL,

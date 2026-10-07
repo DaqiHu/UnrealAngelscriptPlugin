@@ -12,8 +12,9 @@ internal static class AngelscriptFunctionBindingExporter
 	[UhtExporter(
 		Name = "AngelscriptFunctionBinding",
 		Description = "Exports Angelscript function binding data",
-		Options = UhtExporterOptions.Default,
-		CppFilters = ["AS_FunctionBinding_*.gen.cpp", "AS_FunctionBinding_*.cpp"],
+		Options = UhtExporterOptions.Default | UhtExporterOptions.CompileOutput,
+		CppFilters = ["AS_FunctionBinding_*_NativeModuleFunctionAddress_*.cpp"],
+		OtherFilters = ["AS_FunctionBinding_*.inc"],
 		ModuleName = "AngelscriptRuntime")]
 	private static void Export(IUhtExportFactory factory)
 	{

@@ -119,10 +119,10 @@ private:
 
 	static bool RegisterObservationBridge(asIScriptEngine& Engine)
 	{
-		const ASAutoCaller::FunctionCaller RecordCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordPropertyVisibilityDestructor);
-		const ASAutoCaller::FunctionCaller ReadCaller =
-			ASAutoCaller::MakeFunctionCaller(ReadPropertyVisibilityDestructor);
+		const TDPluginASAutoCaller::FunctionCaller RecordCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordPropertyVisibilityDestructor);
+		const TDPluginASAutoCaller::FunctionCaller ReadCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ReadPropertyVisibilityDestructor);
 		return Engine.RegisterGlobalFunction(
 			"void RecordPropertyVisibilityDestructor(int Value)",
 			asFUNCTION(RecordPropertyVisibilityDestructor),

@@ -174,20 +174,20 @@ private:
 		ScriptEngine.SetUserData(
 			&State,
 			ConstructorFailureStateUserDataSlot);
-		const ASAutoCaller::FunctionCaller BeginCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller BeginCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordConstructorFailureBegin);
-		const ASAutoCaller::FunctionCaller FailCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller FailCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				MaybeFailConstructorStage);
-		const ASAutoCaller::FunctionCaller CompleteCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller CompleteCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordConstructorFailureComplete);
-		const ASAutoCaller::FunctionCaller DestroyCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller DestroyCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordConstructorFailureDestroy);
-		const ASAutoCaller::FunctionCaller ConversionCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller ConversionCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				ConvertConstructorFailureInput);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void RecordConstructorFailureBegin(int Stage)",

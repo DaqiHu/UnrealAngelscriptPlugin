@@ -91,15 +91,15 @@ namespace AngelscriptNativeTestSupport
 	{
 		Engine.SetUserData(&Recorder, NativeLifecycleRecorderUserDataSlot);
 		Engine.SetUserData(FaultController, NativeLifecycleFaultUserDataSlot);
-		const ASAutoCaller::FunctionCaller DefaultConstructorCaller = ASAutoCaller::MakeFunctionCaller(ConstructNativeCaseValue);
-		const ASAutoCaller::FunctionCaller ValueConstructorCaller = ASAutoCaller::MakeFunctionCaller(ConstructNativeCaseValueWithInt);
-		const ASAutoCaller::FunctionCaller PairConstructorCaller = ASAutoCaller::MakeFunctionCaller(ConstructNativeCaseValueWithIntPair);
-		const ASAutoCaller::FunctionCaller Int64ConstructorCaller = ASAutoCaller::MakeFunctionCaller(ConstructNativeCaseValueWithInt64);
-		const ASAutoCaller::FunctionCaller CopyConstructorCaller = ASAutoCaller::MakeFunctionCaller(CopyConstructNativeCaseValue);
-		const ASAutoCaller::FunctionCaller DestructorCaller = ASAutoCaller::MakeFunctionCaller(DestructNativeCaseValue);
-		const ASAutoCaller::FunctionCaller AssignmentCaller = ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller DefaultConstructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(ConstructNativeCaseValue);
+		const TDPluginASAutoCaller::FunctionCaller ValueConstructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(ConstructNativeCaseValueWithInt);
+		const TDPluginASAutoCaller::FunctionCaller PairConstructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(ConstructNativeCaseValueWithIntPair);
+		const TDPluginASAutoCaller::FunctionCaller Int64ConstructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(ConstructNativeCaseValueWithInt64);
+		const TDPluginASAutoCaller::FunctionCaller CopyConstructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(CopyConstructNativeCaseValue);
+		const TDPluginASAutoCaller::FunctionCaller DestructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(DestructNativeCaseValue);
+		const TDPluginASAutoCaller::FunctionCaller AssignmentCaller = TDPluginASAutoCaller::MakeFunctionCaller(
 			static_cast<FNativeTrackedValue& (FNativeTrackedValue::*)(const FNativeTrackedValue&)>(&FNativeTrackedValue::operator=));
-		const ASAutoCaller::FunctionCaller ArmCopyFaultCaller = ASAutoCaller::MakeFunctionCaller(ArmNextNativeCaseValueCopyFault);
+		const TDPluginASAutoCaller::FunctionCaller ArmCopyFaultCaller = TDPluginASAutoCaller::MakeFunctionCaller(ArmNextNativeCaseValueCopyFault);
 		return Engine.RegisterObjectType(
 			"FNativeCaseValue",
 			sizeof(FNativeTrackedValue),
@@ -165,10 +165,10 @@ namespace AngelscriptNativeTestSupport
 		FNativeLifecycleRecorder& Recorder)
 	{
 		Engine.SetUserData(&Recorder, NativeLifecycleRecorderUserDataSlot);
-		const ASAutoCaller::FunctionCaller BeginCaller = ASAutoCaller::MakeFunctionCaller(BeginNativeScriptLifecycle);
-		const ASAutoCaller::FunctionCaller CopyCaller = ASAutoCaller::MakeFunctionCaller(CopyNativeScriptLifecycle);
-		const ASAutoCaller::FunctionCaller AssignCaller = ASAutoCaller::MakeFunctionCaller(AssignNativeScriptLifecycle);
-		const ASAutoCaller::FunctionCaller EndCaller = ASAutoCaller::MakeFunctionCaller(EndNativeScriptLifecycle);
+		const TDPluginASAutoCaller::FunctionCaller BeginCaller = TDPluginASAutoCaller::MakeFunctionCaller(BeginNativeScriptLifecycle);
+		const TDPluginASAutoCaller::FunctionCaller CopyCaller = TDPluginASAutoCaller::MakeFunctionCaller(CopyNativeScriptLifecycle);
+		const TDPluginASAutoCaller::FunctionCaller AssignCaller = TDPluginASAutoCaller::MakeFunctionCaller(AssignNativeScriptLifecycle);
+		const TDPluginASAutoCaller::FunctionCaller EndCaller = TDPluginASAutoCaller::MakeFunctionCaller(EndNativeScriptLifecycle);
 		return Engine.RegisterGlobalFunction(
 			"int BeginNativeScriptLifecycle(int Value)",
 			asFUNCTION(BeginNativeScriptLifecycle),
@@ -338,12 +338,12 @@ namespace AngelscriptNativeTestSupport
 	inline bool RegisterNativeCaseRange(asIScriptEngine& Engine, FNativeLifecycleRecorder& Recorder)
 	{
 		Engine.SetUserData(&Recorder, NativeLifecycleRecorderUserDataSlot);
-		const ASAutoCaller::FunctionCaller ConstructorCaller = ASAutoCaller::MakeFunctionCaller(ConstructNativeCaseRange);
-		const ASAutoCaller::FunctionCaller BeginCaller = ASAutoCaller::MakeFunctionCaller(&FNativeCaseRange::opForBegin);
-		const ASAutoCaller::FunctionCaller EndCaller = ASAutoCaller::MakeFunctionCaller(&FNativeCaseRange::opForEnd);
-		const ASAutoCaller::FunctionCaller NextCaller = ASAutoCaller::MakeFunctionCaller(&FNativeCaseRange::opForNext);
-		const ASAutoCaller::FunctionCaller ValueCaller = ASAutoCaller::MakeFunctionCaller(&FNativeCaseRange::opForValue);
-		const ASAutoCaller::FunctionCaller ExceptionCaller = ASAutoCaller::MakeFunctionCaller(RaiseNativeCaseException);
+		const TDPluginASAutoCaller::FunctionCaller ConstructorCaller = TDPluginASAutoCaller::MakeFunctionCaller(ConstructNativeCaseRange);
+		const TDPluginASAutoCaller::FunctionCaller BeginCaller = TDPluginASAutoCaller::MakeFunctionCaller(&FNativeCaseRange::opForBegin);
+		const TDPluginASAutoCaller::FunctionCaller EndCaller = TDPluginASAutoCaller::MakeFunctionCaller(&FNativeCaseRange::opForEnd);
+		const TDPluginASAutoCaller::FunctionCaller NextCaller = TDPluginASAutoCaller::MakeFunctionCaller(&FNativeCaseRange::opForNext);
+		const TDPluginASAutoCaller::FunctionCaller ValueCaller = TDPluginASAutoCaller::MakeFunctionCaller(&FNativeCaseRange::opForValue);
+		const TDPluginASAutoCaller::FunctionCaller ExceptionCaller = TDPluginASAutoCaller::MakeFunctionCaller(RaiseNativeCaseException);
 		return Engine.RegisterObjectType("FNativeCaseRange", sizeof(FNativeCaseRange), asOBJ_VALUE | asOBJ_POD | asOBJ_APP_CLASS_ALLINTS) >= 0
 			&& Engine.RegisterObjectBehaviour("FNativeCaseRange", asBEHAVE_CONSTRUCT, "void f()", asFUNCTION(ConstructNativeCaseRange), asCALL_CDECL_OBJLAST, *(asFunctionCaller*)&ConstructorCaller) >= 0
 			&& Engine.RegisterObjectProperty("FNativeCaseRange", "int Count", asOFFSET(FNativeCaseRange, Count)) >= 0

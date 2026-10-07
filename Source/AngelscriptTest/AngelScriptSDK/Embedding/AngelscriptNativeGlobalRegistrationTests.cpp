@@ -44,7 +44,7 @@ TEST_CLASS_WITH_FLAGS(FGlobalRegistrationTests,
 			return;
 		}
 
-		const ASAutoCaller::FunctionCaller Caller = ASAutoCaller::MakeFunctionCaller(GlobalRegistrationTest::DoubleValue);
+		const TDPluginASAutoCaller::FunctionCaller Caller = TDPluginASAutoCaller::MakeFunctionCaller(GlobalRegistrationTest::DoubleValue);
 		const int FunctionId = ScriptEngine->RegisterGlobalFunction(
 			"int DoubleValue(int Value)",
 			asFUNCTION(GlobalRegistrationTest::DoubleValue),

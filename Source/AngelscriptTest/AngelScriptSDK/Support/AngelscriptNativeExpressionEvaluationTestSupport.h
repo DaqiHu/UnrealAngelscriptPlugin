@@ -86,14 +86,14 @@ namespace AngelscriptNativeTestSupport
 		asIScriptEngine& Engine, FExpressionEvaluationRecorder& Recorder)
 	{
 		Engine.SetUserData(&Recorder, ExpressionEvaluationRecorderUserDataSlot);
-		const ASAutoCaller::FunctionCaller BoolCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordExpressionBool);
-		const ASAutoCaller::FunctionCaller IntCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordExpressionInt);
-		const ASAutoCaller::FunctionCaller EagerStageCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordEagerStage);
-		const ASAutoCaller::FunctionCaller EagerBoundaryCaller =
-			ASAutoCaller::MakeFunctionCaller(CompleteEagerBoundary);
+		const TDPluginASAutoCaller::FunctionCaller BoolCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordExpressionBool);
+		const TDPluginASAutoCaller::FunctionCaller IntCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordExpressionInt);
+		const TDPluginASAutoCaller::FunctionCaller EagerStageCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordEagerStage);
+		const TDPluginASAutoCaller::FunctionCaller EagerBoundaryCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(CompleteEagerBoundary);
 		return Engine.RegisterGlobalFunction("bool RecordExpressionBool(int Marker, bool Value)",
 				   asFUNCTION(RecordExpressionBool),
 				   asCALL_CDECL,

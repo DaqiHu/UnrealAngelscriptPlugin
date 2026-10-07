@@ -42,7 +42,7 @@ static void InvokeCaller(const FAngelscriptFunctionBinding& Entry, void** Argume
 	if (Entry.FunctionCaller.type == 1)
 	{
 		Entry.FunctionCaller.FuncPtr(
-			reinterpret_cast<ASAutoCaller::TFunctionPtr>(Entry.FunctionPointer.ptr.f.func),
+			reinterpret_cast<TDPluginASAutoCaller::TFunctionPtr>(Entry.FunctionPointer.ptr.f.func),
 			Arguments,
 			ReturnValue);
 		return;
@@ -53,7 +53,7 @@ static void InvokeCaller(const FAngelscriptFunctionBinding& Entry, void** Argume
 		union FMethodPtrBridge
 		{
 			FTypeErasedMethodPtr Erased;
-			ASAutoCaller::TMethodPtr Auto;
+			TDPluginASAutoCaller::TMethodPtr Auto;
 		};
 
 		FMethodPtrBridge MethodPtrBridge;
@@ -66,10 +66,10 @@ static void InvokeCaller(const FAngelscriptFunctionBinding& Entry, void** Argume
 public:
 	TEST_METHOD(DirectCallersRoundTripValueReferenceAndPointerArguments)
 	{
-FAngelscriptFunctionBinding GlobalEntry = { ERASE_AUTO_FUNCTION_PTR(GlobalAddAndBump) };
-		FAngelscriptFunctionBinding MethodEntry = { ERASE_AUTO_METHOD_PTR(FFunctionCallerHarness, AddToBias) };
-		FAngelscriptFunctionBinding ConstMethodEntry = { ERASE_AUTO_METHOD_PTR(FFunctionCallerHarness, GetBiasRef) };
-		FAngelscriptFunctionBinding PointerEntry = { ERASE_AUTO_FUNCTION_PTR(CopyFromPtr) };
+FAngelscriptFunctionBinding GlobalEntry = { TDPLUGIN_ERASE_AUTO_FUNCTION_PTR(GlobalAddAndBump) };
+		FAngelscriptFunctionBinding MethodEntry = { TDPLUGIN_ERASE_AUTO_METHOD_PTR(FFunctionCallerHarness, AddToBias) };
+		FAngelscriptFunctionBinding ConstMethodEntry = { TDPLUGIN_ERASE_AUTO_METHOD_PTR(FFunctionCallerHarness, GetBiasRef) };
+		FAngelscriptFunctionBinding PointerEntry = { TDPLUGIN_ERASE_AUTO_FUNCTION_PTR(CopyFromPtr) };
 
 		ASSERT_THAT(IsTrue(GlobalEntry.FunctionPointer.IsBound(), TEXT("Function caller round-trip test should bind the global direct-call pointer")));
 		ASSERT_THAT(IsTrue(GlobalEntry.FunctionCaller.IsBound(), TEXT("Function caller round-trip test should bind the global caller thunk")));

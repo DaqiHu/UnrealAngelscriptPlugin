@@ -220,8 +220,8 @@ private:
 		asIScriptEngine& Engine, FPrecedenceRecorder& Recorder)
 	{
 		Engine.SetUserData(&Recorder, PrecedenceRecorderUserDataSlot);
-		const ASAutoCaller::FunctionCaller MarkCaller =
-			ASAutoCaller::MakeFunctionCaller(MarkPrecedence);
+		const TDPluginASAutoCaller::FunctionCaller MarkCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(MarkPrecedence);
 		return Engine.RegisterGlobalFunction("void MarkPrecedence(int Marker)",
 				   asFUNCTION(MarkPrecedence),
 				   asCALL_CDECL,

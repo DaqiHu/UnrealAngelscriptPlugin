@@ -217,8 +217,8 @@ private:
 		ScriptEngine.SetUserData(
 			&State,
 			ConstructorBoundaryStateUserDataSlot);
-		const ASAutoCaller::FunctionCaller MarkerCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller MarkerCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordConstructorBoundaryMarker);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void RecordConstructorBoundaryMarker(int Marker)",

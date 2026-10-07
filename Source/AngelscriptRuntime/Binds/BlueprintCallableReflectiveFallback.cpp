@@ -792,7 +792,7 @@ namespace
 					Signature.Declaration,
 					asFUNCTION(CallBlueprintCallableReflectiveFallback),
 					asCALL_GENERIC,
-					ASAutoCaller::FunctionCaller::Make(),
+					TDPluginASAutoCaller::FunctionCaller::Make(),
 					ReflectiveSignature);
 				Signature.ModifyScriptFunction(GlobalBinding);
 			}
@@ -802,7 +802,7 @@ namespace
 				Signature.Declaration,
 				asFUNCTION(CallBlueprintCallableReflectiveFallback),
 				asCALL_GENERIC,
-				ASAutoCaller::FunctionCaller::Make(),
+				TDPluginASAutoCaller::FunctionCaller::Make(),
 				ReflectiveSignature);
 			Signature.ModifyScriptFunction(OutPrimaryBinding);
 			return OutPrimaryBinding.IsValid();
@@ -822,7 +822,7 @@ namespace
 				Signature.Declaration,
 				asFUNCTION(CallBlueprintCallableReflectiveFallback),
 				asCALL_GENERIC,
-				ASAutoCaller::FunctionCaller::Make(),
+				TDPluginASAutoCaller::FunctionCaller::Make(),
 				ReflectiveSignature);
 			Signature.ModifyScriptFunction(OutPrimaryBinding);
 			return OutPrimaryBinding.IsValid();
@@ -833,7 +833,7 @@ namespace
 			Signature.Declaration,
 			asFUNCTION(CallBlueprintCallableReflectiveFallback),
 			asCALL_GENERIC,
-			ASAutoCaller::FunctionCaller::Make(),
+			TDPluginASAutoCaller::FunctionCaller::Make(),
 			ReflectiveSignature);
 		Signature.ModifyScriptFunction(OutPrimaryBinding);
 		return OutPrimaryBinding.IsValid();

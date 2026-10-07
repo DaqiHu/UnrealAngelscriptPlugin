@@ -336,8 +336,8 @@ public:
 			return;
 		}
 
-		const ASAutoCaller::FunctionCaller CheckConditionCaller = ASAutoCaller::MakeFunctionCaller(CheckCondition);
-		const ASAutoCaller::FunctionCaller GetConditionCallsCaller = ASAutoCaller::MakeFunctionCaller(GetConditionCalls);
+		const TDPluginASAutoCaller::FunctionCaller CheckConditionCaller = TDPluginASAutoCaller::MakeFunctionCaller(CheckCondition);
+		const TDPluginASAutoCaller::FunctionCaller GetConditionCallsCaller = TDPluginASAutoCaller::MakeFunctionCaller(GetConditionCalls);
 		const int CheckConditionRegistration = ScriptEngine->RegisterGlobalFunction(
 			"bool CheckCondition(int Index, int Limit)",
 			asFUNCTION(CheckCondition),

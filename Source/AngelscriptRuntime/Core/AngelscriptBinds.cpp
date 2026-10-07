@@ -1429,7 +1429,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::GenericMethod(FBindString Signature
 	return OnBindForTarget(FunctionId, UserData, nullptr, TEXT("generic method"), Signature);
 }
 
-FAngelscriptBoundFunction FAngelscriptBinds::BindBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller)
+FAngelscriptBoundFunction FAngelscriptBinds::BindBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, TDPluginASAutoCaller::FunctionCaller Caller)
 {
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
@@ -1483,7 +1483,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::OnBindForTarget(const int32 Functio
 	return FAngelscriptBoundFunction(&Manager, FunctionId);
 }
 
-FAngelscriptBoundFunction FAngelscriptBinds::BindExternBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
+FAngelscriptBoundFunction FAngelscriptBinds::BindExternBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, TDPluginASAutoCaller::FunctionCaller Caller, void* UserData)
 {
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
@@ -1494,7 +1494,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindExternBehaviour(asEBehaviours B
 	return OnBindForTarget(FunctionId, UserData, nullptr, TEXT("object behaviour"), Signature);
 }
 
-FAngelscriptBoundFunction FAngelscriptBinds::BindStaticBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
+FAngelscriptBoundFunction FAngelscriptBinds::BindStaticBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, TDPluginASAutoCaller::FunctionCaller Caller, void* UserData)
 {
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
@@ -1505,7 +1505,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindStaticBehaviour(asEBehaviours B
 	return OnBindForTarget(FunctionId, UserData, nullptr, TEXT("static behaviour"), Signature);
 }
 
-FAngelscriptBoundFunction FAngelscriptBinds::BindMethod(FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
+FAngelscriptBoundFunction FAngelscriptBinds::BindMethod(FBindString Signature, asSFuncPtr Ptr, TDPluginASAutoCaller::FunctionCaller Caller, void* UserData)
 {
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
@@ -1516,7 +1516,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindMethod(FBindString Signature, a
 	return OnBindForTarget(FunctionId, UserData, nullptr, TEXT("object method"), Signature);
 }
 
-FAngelscriptBoundFunction FAngelscriptBinds::BindExternMethod(FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData)
+FAngelscriptBoundFunction FAngelscriptBinds::BindExternMethod(FBindString Signature, asSFuncPtr Ptr, TDPluginASAutoCaller::FunctionCaller Caller, void* UserData)
 {
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
@@ -1527,7 +1527,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindExternMethod(FBindString Signat
 	return OnBindForTarget(FunctionId, UserData, nullptr, TEXT("object method"), Signature);
 }
 
-FAngelscriptBoundFunction FAngelscriptBinds::BindExternMethod(FBindString Signature, asSFuncPtr Ptr, const FAngelscriptType::FBindParams& BindParams, ASAutoCaller::FunctionCaller Caller, void* UserData)
+FAngelscriptBoundFunction FAngelscriptBinds::BindExternMethod(FBindString Signature, asSFuncPtr Ptr, const FAngelscriptType::FBindParams& BindParams, TDPluginASAutoCaller::FunctionCaller Caller, void* UserData)
 {
 	if (TargetEngine != nullptr && HasRegistrationFailure())
 	{
@@ -1570,7 +1570,7 @@ FAngelscriptBoundProperty FAngelscriptBinds::BindProperty(FBindString Signature,
 	return FAngelscriptBoundProperty(&Manager, PropertyId, false);
 }
 
-FAngelscriptBoundFunction FAngelscriptBinds::BindGlobalFunctionForTarget(FBindString Signature, asSFuncPtr Function, ASAutoCaller::FunctionCaller Caller, void* UserData)
+FAngelscriptBoundFunction FAngelscriptBinds::BindGlobalFunctionForTarget(FBindString Signature, asSFuncPtr Function, TDPluginASAutoCaller::FunctionCaller Caller, void* UserData)
 {
 	if (HasRegistrationFailure())
 	{
@@ -1584,7 +1584,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindGlobalFunctionDirectForTarget(
 	FBindString Signature,
 	asSFuncPtr Function,
 	asECallConvTypes CallConv,
-	ASAutoCaller::FunctionCaller Caller,
+	TDPluginASAutoCaller::FunctionCaller Caller,
 	void* UserData)
 {
 	if (HasRegistrationFailure())
@@ -1605,7 +1605,7 @@ FAngelscriptBoundFunction FAngelscriptBinds::BindMethodDirectForTarget(
 	FBindString Signature,
 	asSFuncPtr Function,
 	asECallConvTypes CallConv,
-	ASAutoCaller::FunctionCaller Caller,
+	TDPluginASAutoCaller::FunctionCaller Caller,
 	void* UserData)
 {
 	if (HasRegistrationFailure())

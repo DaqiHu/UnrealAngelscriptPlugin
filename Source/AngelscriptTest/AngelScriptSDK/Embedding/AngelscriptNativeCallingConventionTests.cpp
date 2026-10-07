@@ -243,8 +243,8 @@ public:
 			return;
 		}
 
-		const ASAutoCaller::FunctionCaller Caller =
-			ASAutoCaller::MakeFunctionCaller(DoubleNativeValue);
+		const TDPluginASAutoCaller::FunctionCaller Caller =
+			TDPluginASAutoCaller::MakeFunctionCaller(DoubleNativeValue);
 		const int RegisterResult = ScriptEngine->RegisterGlobalFunction(
 			"int DoubleNativeValue(int Value)",
 			asFUNCTION(DoubleNativeValue),
@@ -273,12 +273,12 @@ public:
 				| asOBJ_POD
 				| asGetTypeTraits<FNativeAdder>()
 				| asOBJ_APP_CLASS_ALLINTS);
-		const ASAutoCaller::FunctionCaller DefaultConstructorCaller =
-			ASAutoCaller::MakeFunctionCaller(ConstructNativeAdder);
-		const ASAutoCaller::FunctionCaller ValueConstructorCaller =
-			ASAutoCaller::MakeFunctionCaller(ConstructNativeAdderWithBase);
-		const ASAutoCaller::FunctionCaller MethodCaller =
-			ASAutoCaller::MakeFunctionCaller(&FNativeAdder::Add);
+		const TDPluginASAutoCaller::FunctionCaller DefaultConstructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ConstructNativeAdder);
+		const TDPluginASAutoCaller::FunctionCaller ValueConstructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ConstructNativeAdderWithBase);
+		const TDPluginASAutoCaller::FunctionCaller MethodCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(&FNativeAdder::Add);
 		const int DefaultConstructorResult =
 			ScriptEngine->RegisterObjectBehaviour(
 				"NativeAdder",
@@ -317,22 +317,22 @@ public:
 			TestRunner->AddError(TEXT("SDK calling-convention thiscall test should register the value type and method"));
 		}
 
-		const ASAutoCaller::FunctionCaller ProbeDefaultConstructorCaller =
-			ASAutoCaller::MakeFunctionCaller(ConstructObjectLastProbe);
-		const ASAutoCaller::FunctionCaller ProbeValueConstructorCaller =
-			ASAutoCaller::MakeFunctionCaller(ConstructObjectLastProbeWithValue);
-		const ASAutoCaller::FunctionCaller ProbeSentinelConstructorCaller =
-			ASAutoCaller::MakeFunctionCaller(ConstructObjectLastProbeWithSentinels);
-		const ASAutoCaller::FunctionCaller ProbeCopyConstructorCaller =
-			ASAutoCaller::MakeFunctionCaller(CopyConstructObjectLastProbe);
-		const ASAutoCaller::FunctionCaller ProbeDestructorCaller =
-			ASAutoCaller::MakeFunctionCaller(DestructObjectLastProbe);
-		const ASAutoCaller::FunctionCaller ProbeFoldCaller =
-			ASAutoCaller::MakeFunctionCaller(FoldObjectLastSentinels);
-		const ASAutoCaller::FunctionCaller ProbeShiftCaller =
-			ASAutoCaller::MakeFunctionCaller(ShiftObjectLastProbe);
-		const ASAutoCaller::FunctionCaller ProbeExceptionCaller =
-			ASAutoCaller::MakeFunctionCaller(RaiseObjectLastException);
+		const TDPluginASAutoCaller::FunctionCaller ProbeDefaultConstructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ConstructObjectLastProbe);
+		const TDPluginASAutoCaller::FunctionCaller ProbeValueConstructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ConstructObjectLastProbeWithValue);
+		const TDPluginASAutoCaller::FunctionCaller ProbeSentinelConstructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ConstructObjectLastProbeWithSentinels);
+		const TDPluginASAutoCaller::FunctionCaller ProbeCopyConstructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(CopyConstructObjectLastProbe);
+		const TDPluginASAutoCaller::FunctionCaller ProbeDestructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(DestructObjectLastProbe);
+		const TDPluginASAutoCaller::FunctionCaller ProbeFoldCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(FoldObjectLastSentinels);
+		const TDPluginASAutoCaller::FunctionCaller ProbeShiftCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ShiftObjectLastProbe);
+		const TDPluginASAutoCaller::FunctionCaller ProbeExceptionCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RaiseObjectLastException);
 		bObjectLastProbeRegistered =
 			ScriptEngine->RegisterObjectType(
 				"ObjectLastProbe",

@@ -104,8 +104,8 @@ private:
 		ScriptEngine.SetUserData(
 			&State,
 			ConstructorVisibilityStateUserDataSlot);
-		const ASAutoCaller::FunctionCaller SelectionCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller SelectionCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordConstructorVisibilitySelection);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void RecordConstructorVisibilitySelection(int Marker)",

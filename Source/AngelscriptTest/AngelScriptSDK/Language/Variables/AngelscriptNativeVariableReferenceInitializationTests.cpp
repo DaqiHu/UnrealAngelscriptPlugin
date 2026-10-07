@@ -122,8 +122,8 @@ private:
 
 	static bool RegisterScriptReferenceLifecycle(asIScriptEngine& Engine)
 	{
-		const ASAutoCaller::FunctionCaller BeginCaller = ASAutoCaller::MakeFunctionCaller(BeginScriptCaseReference);
-		const ASAutoCaller::FunctionCaller EndCaller = ASAutoCaller::MakeFunctionCaller(EndScriptCaseReference);
+		const TDPluginASAutoCaller::FunctionCaller BeginCaller = TDPluginASAutoCaller::MakeFunctionCaller(BeginScriptCaseReference);
+		const TDPluginASAutoCaller::FunctionCaller EndCaller = TDPluginASAutoCaller::MakeFunctionCaller(EndScriptCaseReference);
 		return Engine.RegisterGlobalFunction(
 			"int BeginScriptCaseReference(int Value)",
 			asFUNCTION(BeginScriptCaseReference),

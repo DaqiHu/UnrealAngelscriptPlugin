@@ -240,7 +240,7 @@ TEST_CLASS_WITH_FLAGS(FContextControlTests, "Angelscript.TestModule.AngelScriptS
 		}
 		FScopedNativeDebugCallbacks DebugCallbacks;
 
-		const ASAutoCaller::FunctionCaller SuspendCaller = ASAutoCaller::MakeFunctionCaller(SuspendActiveContext);
+		const TDPluginASAutoCaller::FunctionCaller SuspendCaller = TDPluginASAutoCaller::MakeFunctionCaller(SuspendActiveContext);
 		ASSERT_THAT(IsTrue(ScriptEngine->RegisterGlobalFunction("void PauseExecution()", asFUNCTION(SuspendActiveContext), asCALL_CDECL, *(asFunctionCaller*)&SuspendCaller) >= 0,
 			TEXT("SDK runtime suspend test should register a native suspension callback")));
 

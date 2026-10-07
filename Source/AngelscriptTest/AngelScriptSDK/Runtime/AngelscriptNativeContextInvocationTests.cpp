@@ -96,8 +96,8 @@ public:
 		{
 			return;
 		}
-		const ASAutoCaller::FunctionCaller RecordCaller =
-			ASAutoCaller::MakeFunctionCaller(RecordObservedValue);
+		const TDPluginASAutoCaller::FunctionCaller RecordCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(RecordObservedValue);
 		ASSERT_THAT(IsTrue(
 			ScriptEngine->RegisterGlobalFunction(
 				"void RecordObserved(int Value)",

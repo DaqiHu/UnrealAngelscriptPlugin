@@ -55,6 +55,7 @@ AS_FORCE_LINK const FAngelscriptBind Bind_SystemTimers(
 
 #include "AngelscriptEngine.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include <type_traits>
 
 FTimerHandle FAngelscriptSystemTimersBinds::SetTimer(
 	const UObject* Object,
@@ -62,14 +63,22 @@ FTimerHandle FAngelscriptSystemTimersBinds::SetTimer(
 	float Time,
 	bool bLooping)
 {
-	return UKismetSystemLibrary::K2_SetTimer(
-		const_cast<UObject*>(Object),
-		FunctionName.ToString(),
-		Time,
-		bLooping,
-		false,
-		0.f,
-		0.f);
+	// The Hazelight Engine accepts FName; stock Engine versions accept FString.
+	// Keep this compatibility dispatch in the independent plugin.
+	return [Object, FunctionName, Time, bLooping](auto TimerFunction)
+	{
+		if constexpr (std::is_invocable_r_v<FTimerHandle, decltype(TimerFunction),
+			UObject*, FName, float, bool, bool, float, float>)
+		{
+			return TimerFunction(const_cast<UObject*>(Object), FunctionName,
+				Time, bLooping, false, 0.f, 0.f);
+		}
+		else
+		{
+			return TimerFunction(const_cast<UObject*>(Object), FunctionName.ToString(),
+				Time, bLooping, false, 0.f, 0.f);
+		}
+	}(&UKismetSystemLibrary::K2_SetTimer);
 }
 
 bool FAngelscriptSystemTimersBinds::IsTimerPaused(FTimerHandle Handle)

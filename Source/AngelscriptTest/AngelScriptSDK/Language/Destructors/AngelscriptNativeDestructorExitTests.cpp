@@ -447,11 +447,11 @@ private:
 		ScriptEngine.SetUserData(
 			&State,
 			DestructorExitStateUserDataSlot);
-		const ASAutoCaller::FunctionCaller TerminalCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller TerminalCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				ReachDestructorExitTerminal);
-		const ASAutoCaller::FunctionCaller GlobalReadyCaller =
-			ASAutoCaller::MakeFunctionCaller(
+		const TDPluginASAutoCaller::FunctionCaller GlobalReadyCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(
 				RecordDestructorExitGlobalReady);
 		return ScriptEngine.RegisterGlobalFunction(
 			"void ReachDestructorExitTerminal(int RouteId)",

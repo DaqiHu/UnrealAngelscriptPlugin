@@ -271,10 +271,10 @@ public:
 		}
 
 		// The first red run intentionally used the plain registration route. The
-		// current fork requires an explicit ASAutoCaller for non-generic native
+		// current fork requires an explicit TDPluginASAutoCaller for non-generic native
 		// calls; the corrected caller-backed registration is the active path and
 		// the discovered requirement is recorded in issues.md.
-		const ASAutoCaller::FunctionCaller EvaluateCaller = ASAutoCaller::MakeFunctionCaller(EvaluateBranchCondition);
+		const TDPluginASAutoCaller::FunctionCaller EvaluateCaller = TDPluginASAutoCaller::MakeFunctionCaller(EvaluateBranchCondition);
 		const int32 EvaluateRegistration = ScriptEngine->RegisterGlobalFunction(
 			"bool EvaluateBranchCondition(bool Value)",
 			asFUNCTION(EvaluateBranchCondition),
@@ -284,7 +284,7 @@ public:
 			*FString::Printf(TEXT("branch condition callback should register. Result=%d Messages={%s}"),
 			EvaluateRegistration,
 			*Engine.GetMessagesText())));
-		const ASAutoCaller::FunctionCaller ReadCaller = ASAutoCaller::MakeFunctionCaller(ReadBranchConditionCalls);
+		const TDPluginASAutoCaller::FunctionCaller ReadCaller = TDPluginASAutoCaller::MakeFunctionCaller(ReadBranchConditionCalls);
 		const int32 ReadRegistration = ScriptEngine->RegisterGlobalFunction(
 			"int ReadBranchConditionCalls()",
 			asFUNCTION(ReadBranchConditionCalls),

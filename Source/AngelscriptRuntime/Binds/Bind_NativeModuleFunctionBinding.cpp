@@ -40,7 +40,9 @@ namespace
 {
 	FDelegateHandle GNativeModuleFunctionBindingRegisteredHandle;
 	FDelegateHandle GNativeModuleFunctionBindingUnregisteredHandle;
+#if WITH_EDITOR
 	FDelegateHandle GNativeModuleFunctionBindingObjectConstructedHandle;
+#endif
 	FDelegateHandle GNativeModuleFunctionBindingPreExitHandle;
 	bool bNativeModuleFunctionBindingShuttingDown = false;
 
@@ -317,7 +319,7 @@ namespace
 
 			FAngelscriptFunctionBinding FunctionBinding;
 			FunctionBinding.FunctionPointer = MakeNativeModuleFunctionBindingGenericFuncPtr();
-			FunctionBinding.FunctionCaller = ASAutoCaller::FunctionCaller::Make();
+			FunctionBinding.FunctionCaller = TDPluginASAutoCaller::FunctionCaller::Make();
 			FunctionBinding.UserData = const_cast<FAngelscriptNativeModuleFunctionBinding*>(&Binding);
 			FunctionBinding.bUsesGenericCall = true;
 			FunctionBinding.Origin =
@@ -420,6 +422,7 @@ namespace
 		});
 	}
 
+#if WITH_EDITOR
 	void OnNativeModuleFunctionBindingObjectConstructed(UObject* Object)
 	{
 		if (Object == nullptr || !Object->IsA(UClass::StaticClass()) || bNativeModuleFunctionBindingShuttingDown)
@@ -437,6 +440,7 @@ namespace
 			InjectNativeModuleFunctionBindingState(State);
 		}
 	}
+#endif
 
 	TSharedPtr<FNativeModuleFunctionBindingTargetEngine> RegisterNativeModuleFunctionBindingTarget(
 		FAngelscriptBinds& Binds)
@@ -508,11 +512,13 @@ namespace
 			IModularFeatures::Get().OnModularFeatureUnregistered().Remove(GNativeModuleFunctionBindingUnregisteredHandle);
 			GNativeModuleFunctionBindingUnregisteredHandle.Reset();
 		}
+#if WITH_EDITOR
 		if (GNativeModuleFunctionBindingObjectConstructedHandle.IsValid())
 		{
 			FCoreUObjectDelegates::OnObjectConstructed.Remove(GNativeModuleFunctionBindingObjectConstructedHandle);
 			GNativeModuleFunctionBindingObjectConstructedHandle.Reset();
 		}
+#endif
 	}
 
 	void EnsureNativeModuleFunctionBindingSubscription()
@@ -525,10 +531,12 @@ namespace
 		{
 			GNativeModuleFunctionBindingUnregisteredHandle = IModularFeatures::Get().OnModularFeatureUnregistered().AddStatic(&OnNativeModuleFunctionBindingUnregistered);
 		}
+#if WITH_EDITOR
 		if (!GNativeModuleFunctionBindingObjectConstructedHandle.IsValid())
 		{
 			GNativeModuleFunctionBindingObjectConstructedHandle = FCoreUObjectDelegates::OnObjectConstructed.AddStatic(&OnNativeModuleFunctionBindingObjectConstructed);
 		}
+#endif
 		if (!GNativeModuleFunctionBindingPreExitHandle.IsValid())
 		{
 			GNativeModuleFunctionBindingPreExitHandle = FCoreDelegates::OnPreExit.AddStatic(&UnsubscribeNativeModuleFunctionBinding);
@@ -661,7 +669,7 @@ int32 GAngelscriptNativeModuleFunctionBindingBindGlobalFunctionForTesting(
 		Signature,
 		asFUNCTION(GAngelscriptNativeModuleFunctionBindingGenericThunk),
 		asCALL_GENERIC,
-		ASAutoCaller::FunctionCaller::Make(),
+		TDPluginASAutoCaller::FunctionCaller::Make(),
 		Binding);
 }
 #endif

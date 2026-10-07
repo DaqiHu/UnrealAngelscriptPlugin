@@ -363,7 +363,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 	template<typename Value, typename... Args>
 	FAngelscriptBoundFunction BindGlobalFunctionForTarget(FBindString Signature, Value (*Function)(Args...), void* UserData = nullptr)
 	{
-		return BindGlobalFunctionForTarget(Signature, asFUNCTION(Function), ASAutoCaller::MakeFunctionCaller(Function), UserData);
+		return BindGlobalFunctionForTarget(Signature, asFUNCTION(Function), TDPluginASAutoCaller::MakeFunctionCaller(Function), UserData);
 	}
 
 	template<typename T>
@@ -373,7 +373,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 		return BindGlobalFunctionForTarget(
 			Signature,
 			asFUNCTION(FunctionPointer),
-			ASAutoCaller::MakeFunctionCaller(FunctionPointer),
+			TDPluginASAutoCaller::MakeFunctionCaller(FunctionPointer),
 			UserData);
 	}
 
@@ -388,7 +388,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 		FAngelscriptBoundFunction Result = BindGlobalFunctionForTarget(
 			Signature,
 			asFUNCTION(Function),
-			ASAutoCaller::MakeFunctionCaller(Function),
+			TDPluginASAutoCaller::MakeFunctionCaller(Function),
 			UserData);
 		return Result.NativeFunction(FunctionName.ToCString_EnsureConstant(), bTrivial);
 	}
@@ -401,14 +401,14 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 		FBindString Signature,
 		asSFuncPtr Function,
 		asECallConvTypes CallConv,
-		ASAutoCaller::FunctionCaller Caller,
+		TDPluginASAutoCaller::FunctionCaller Caller,
 		void* UserData = nullptr);
 	FAngelscriptBoundFunction BindMethodDirectForTarget(
 		FBindString ObjectTypeName,
 		FBindString Signature,
 		asSFuncPtr Function,
 		asECallConvTypes CallConv,
-		ASAutoCaller::FunctionCaller Caller,
+		TDPluginASAutoCaller::FunctionCaller Caller,
 		void* UserData = nullptr);
 
 	FAngelscriptBoundProperty BindGlobalVariableForTarget(FBindString Signature, const void* Address);
@@ -422,80 +422,80 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 	template<typename C, typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, Value(C::*Fun)(Args...), void* UserData = nullptr)
 	{
-		return BindMethod(Signature, asSMethodPtr<sizeof(void(C::*)())>::Convert((void(C::*)())(Fun)), ASAutoCaller::MakeFunctionCaller(Fun), UserData);
+		return BindMethod(Signature, asSMethodPtr<sizeof(void(C::*)())>::Convert((void(C::*)())(Fun)), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData);
 	}
 
 	template<typename C, typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, Value(C::*Fun)(Args...)const, void* UserData = nullptr)
 	{
-		return BindMethod(Signature, asSMethodPtr<sizeof(void(C::*)())>::Convert((void(C::*)())(Fun)), ASAutoCaller::MakeFunctionCaller(Fun), UserData);
+		return BindMethod(Signature, asSMethodPtr<sizeof(void(C::*)())>::Convert((void(C::*)())(Fun)), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData);
 	}
 
 	template<typename C, typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, Value(C::*Fun)(Args...)const&, void* UserData = nullptr)
 	{
-		return BindMethod(Signature, asSMethodPtr<sizeof(void(C::*)())>::Convert((void(C::*)())(Fun)), ASAutoCaller::MakeFunctionCaller(Fun), UserData);
+		return BindMethod(Signature, asSMethodPtr<sizeof(void(C::*)())>::Convert((void(C::*)())(Fun)), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData);
 	}
 
 	template<typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, Value(CDECL *fun)(Args...), void* UserData = nullptr)
 	{
-		return BindExternMethod(Signature, asFUNCTION(fun), ASAutoCaller::MakeFunctionCaller(fun), UserData);
+		return BindExternMethod(Signature, asFUNCTION(fun), TDPluginASAutoCaller::MakeFunctionCaller(fun), UserData);
 	}
 
 	template<typename C, typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, Value(C::*Fun)(Args...)const, FBindString MethodClass, FBindString MethodName, bool bTrivial, void* UserData = nullptr)
 	{
-		FAngelscriptBoundFunction Result = BindMethod(Signature, asSMethodPtr<sizeof(void(C::*)())>::Convert((void(C::*)())(Fun)), ASAutoCaller::MakeFunctionCaller(Fun), UserData);
+		FAngelscriptBoundFunction Result = BindMethod(Signature, asSMethodPtr<sizeof(void(C::*)())>::Convert((void(C::*)())(Fun)), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData);
 		return Result.NativeMethod(MethodName.ToCString_EnsureConstant(), bTrivial);
 	}
 
 	template<typename C, typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, Value(C::*Fun)(Args...), FBindString MethodClass, FBindString MethodName, bool bTrivial, void* UserData = nullptr)
 	{
-		FAngelscriptBoundFunction Result = BindMethod(Signature, asSMethodPtr<sizeof(void(C::*)())>::Convert((void(C::*)())(Fun)), ASAutoCaller::MakeFunctionCaller(Fun), UserData);
+		FAngelscriptBoundFunction Result = BindMethod(Signature, asSMethodPtr<sizeof(void(C::*)())>::Convert((void(C::*)())(Fun)), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData);
 		return Result.NativeMethod(MethodName.ToCString_EnsureConstant(), bTrivial);
 	}
 
 	template<typename C, typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, Value(C::*Fun)(Args...)const&, FBindString MethodClass, FBindString MethodName, bool bTrivial, void* UserData = nullptr)
 	{
-		FAngelscriptBoundFunction Result = BindMethod(Signature, asSMethodPtr<sizeof(void(C::*)())>::Convert((void(C::*)())(Fun)), ASAutoCaller::MakeFunctionCaller(Fun), UserData);
+		FAngelscriptBoundFunction Result = BindMethod(Signature, asSMethodPtr<sizeof(void(C::*)())>::Convert((void(C::*)())(Fun)), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData);
 		return Result.NativeMethod(MethodName.ToCString_EnsureConstant(), bTrivial);
 	}
 
 	template<typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, Value(CDECL *fun)(Args...), FBindString FuncName, bool bTrivial, void* UserData = nullptr)
 	{
-		FAngelscriptBoundFunction Result = BindExternMethod(Signature, asFUNCTION(fun), ASAutoCaller::MakeFunctionCaller(fun), UserData);
+		FAngelscriptBoundFunction Result = BindExternMethod(Signature, asFUNCTION(fun), TDPluginASAutoCaller::MakeFunctionCaller(fun), UserData);
 		return Result.NativeFunction(FuncName.ToCString_EnsureConstant(), bTrivial);
 	}
 
 	template<typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, Value(CDECL *fun)(Args...), FBindString FuncName, bool bTrivial, const FAngelscriptType::FBindParams& BindParams, void* UserData = nullptr)
 	{
-		FAngelscriptBoundFunction Result = BindExternMethod(Signature, asFUNCTION(fun), BindParams, ASAutoCaller::MakeFunctionCaller(fun), UserData);
+		FAngelscriptBoundFunction Result = BindExternMethod(Signature, asFUNCTION(fun), BindParams, TDPluginASAutoCaller::MakeFunctionCaller(fun), UserData);
 		return Result.NativeFunction(FuncName.ToCString_EnsureConstant(), bTrivial);
 	}
 
 	template<typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, Value(CDECL *fun)(Args...), const FAngelscriptType::FBindParams& BindParams, void* UserData = nullptr)
 	{
-		return BindExternMethod(Signature, asFUNCTION(fun), BindParams, ASAutoCaller::MakeFunctionCaller(fun), UserData);
+		return BindExternMethod(Signature, asFUNCTION(fun), BindParams, TDPluginASAutoCaller::MakeFunctionCaller(fun), UserData);
 	}
 
 	template<typename T>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, T Function, void* UserData = nullptr)
 	{
 		auto FunctionPointer = (typename TLambdaFuncPtr<T>::Type)Function;
-		return BindExternMethod(Signature, asFUNCTION(FunctionPointer), ASAutoCaller::MakeFunctionCaller(FunctionPointer), UserData);
+		return BindExternMethod(Signature, asFUNCTION(FunctionPointer), TDPluginASAutoCaller::MakeFunctionCaller(FunctionPointer), UserData);
 	}
 
 	template<typename T>
 	inline FAngelscriptBoundFunction Method(FBindString Signature, T Function, const FAngelscriptType::FBindParams& BindParams, void* UserData = nullptr)
 	{
 		auto FunctionPointer = (typename TLambdaFuncPtr<T>::Type)Function;
-		return BindExternMethod(Signature, asFUNCTION(FunctionPointer), BindParams, ASAutoCaller::MakeFunctionCaller(FunctionPointer), UserData);
+		return BindExternMethod(Signature, asFUNCTION(FunctionPointer), BindParams, TDPluginASAutoCaller::MakeFunctionCaller(FunctionPointer), UserData);
 	}
 
 	FAngelscriptBoundFunction GenericMethod(FBindString Signature, void(CDECL *Fun)(asIScriptGeneric*), void* UserData);
@@ -525,19 +525,19 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 	template<typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Factory(FBindString Signature, Value(CDECL *Fun)(Args...), void* UserData = nullptr)
 	{
-		return BindStaticBehaviour(asBEHAVE_FACTORY, Signature, asFUNCTION(Fun), ASAutoCaller::MakeFunctionCaller(Fun), UserData);
+		return BindStaticBehaviour(asBEHAVE_FACTORY, Signature, asFUNCTION(Fun), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData);
 	}
 
 	template<typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Destructor(FBindString Signature, Value(CDECL *Fun)(Args...), void* UserData = nullptr)
 	{
-		return BindExternBehaviour(asBEHAVE_DESTRUCT, Signature, asFUNCTION(Fun), ASAutoCaller::MakeFunctionCaller(Fun), UserData);
+		return BindExternBehaviour(asBEHAVE_DESTRUCT, Signature, asFUNCTION(Fun), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData);
 	}
 
 	template<typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Destructor(FBindString Signature, Value(CDECL *Fun)(Args...), FBindString FuncName, bool bTrivial, void* UserData = nullptr)
 	{
-		FAngelscriptBoundFunction Result = BindExternBehaviour(asBEHAVE_DESTRUCT, Signature, asFUNCTION(Fun), ASAutoCaller::MakeFunctionCaller(Fun), UserData);
+		FAngelscriptBoundFunction Result = BindExternBehaviour(asBEHAVE_DESTRUCT, Signature, asFUNCTION(Fun), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData);
 		return Result.NativeDestructor(FuncName.ToCString_EnsureConstant(), bTrivial);
 	}
 
@@ -556,13 +556,13 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 	template<typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Constructor(FBindString Signature, Value(CDECL *Fun)(Args...), void* UserData = nullptr)
 	{
-		return BindExternBehaviour(asBEHAVE_CONSTRUCT, Signature, asFUNCTION(Fun), ASAutoCaller::MakeFunctionCaller(Fun), UserData);
+		return BindExternBehaviour(asBEHAVE_CONSTRUCT, Signature, asFUNCTION(Fun), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData);
 	}
 
 	template<typename Value, typename... Args>
 	inline FAngelscriptBoundFunction Constructor(FBindString Signature, Value(CDECL *Fun)(Args...), FBindString FuncName, bool bTrivial, void* UserData = nullptr)
 	{
-		FAngelscriptBoundFunction Result = BindExternBehaviour(asBEHAVE_CONSTRUCT, Signature, asFUNCTION(Fun), ASAutoCaller::MakeFunctionCaller(Fun), UserData);
+		FAngelscriptBoundFunction Result = BindExternBehaviour(asBEHAVE_CONSTRUCT, Signature, asFUNCTION(Fun), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData);
 		return Result.NativeConstructor(FuncName.ToCString_EnsureConstant(), bTrivial);
 	}
 
@@ -575,13 +575,13 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 	template<typename Value, typename... Args>
 	inline FAngelscriptBoundFunction ImplicitConstructor(FBindString Signature, Value(CDECL *Fun)(Args...), void* UserData = nullptr)
 	{
-		return BindExternBehaviour(asBEHAVE_CONSTRUCT, Signature, asFUNCTION(Fun), ASAutoCaller::MakeFunctionCaller(Fun), UserData).ImplicitConstructor();
+		return BindExternBehaviour(asBEHAVE_CONSTRUCT, Signature, asFUNCTION(Fun), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData).ImplicitConstructor();
 	}
 
 	template<typename Value, typename... Args>
 	inline FAngelscriptBoundFunction ImplicitConstructor(FBindString Signature, Value(CDECL *Fun)(Args...), FBindString FuncName, bool bTrivial, void* UserData = nullptr)
 	{
-		FAngelscriptBoundFunction Result = BindExternBehaviour(asBEHAVE_CONSTRUCT, Signature, asFUNCTION(Fun), ASAutoCaller::MakeFunctionCaller(Fun), UserData);
+		FAngelscriptBoundFunction Result = BindExternBehaviour(asBEHAVE_CONSTRUCT, Signature, asFUNCTION(Fun), TDPluginASAutoCaller::MakeFunctionCaller(Fun), UserData);
 		return Result.NativeConstructor(FuncName.ToCString_EnsureConstant(), bTrivial).ImplicitConstructor();
 	}
 
@@ -594,7 +594,7 @@ struct ANGELSCRIPTRUNTIME_API FAngelscriptBinds
 	template<typename Value, typename... Args>
 	inline FAngelscriptBoundFunction TemplateCallback(FBindString Signature, Value(CDECL *Fun)(Args...))
 	{
-		return BindStaticBehaviour(asBEHAVE_TEMPLATE_CALLBACK, Signature, asFUNCTION(Fun), ASAutoCaller::MakeFunctionCaller(Fun));
+		return BindStaticBehaviour(asBEHAVE_TEMPLATE_CALLBACK, Signature, asFUNCTION(Fun), TDPluginASAutoCaller::MakeFunctionCaller(Fun));
 	}
 
 	template<typename T>
@@ -733,14 +733,14 @@ private:
 	FAngelscriptEngine& ResolveTargetEngine() const;
 	void RecordRegistrationFailure(const TCHAR* Operation, FBindString Declaration, int32 Result);
 	FAngelscriptBoundFunction OnBindForTarget(int32 FunctionId, void* UserData, const FAngelscriptType::FBindParams* BindParams, const TCHAR* Operation, FBindString Declaration);
-	FAngelscriptBoundFunction BindGlobalFunctionForTarget(FBindString Signature, asSFuncPtr Function, ASAutoCaller::FunctionCaller Caller, void* UserData);
+	FAngelscriptBoundFunction BindGlobalFunctionForTarget(FBindString Signature, asSFuncPtr Function, TDPluginASAutoCaller::FunctionCaller Caller, void* UserData);
 
-	FAngelscriptBoundFunction BindBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller);
-	FAngelscriptBoundFunction BindExternBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData = nullptr);
-	FAngelscriptBoundFunction BindStaticBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData = nullptr);
-	FAngelscriptBoundFunction BindMethod(FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData = nullptr);
-	FAngelscriptBoundFunction BindExternMethod(FBindString Signature, asSFuncPtr Ptr, ASAutoCaller::FunctionCaller Caller, void* UserData = nullptr);
-	FAngelscriptBoundFunction BindExternMethod(FBindString Signature, asSFuncPtr Ptr, const FAngelscriptType::FBindParams& BindParams, ASAutoCaller::FunctionCaller Caller, void* UserData = nullptr);
+	FAngelscriptBoundFunction BindBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, TDPluginASAutoCaller::FunctionCaller Caller);
+	FAngelscriptBoundFunction BindExternBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, TDPluginASAutoCaller::FunctionCaller Caller, void* UserData = nullptr);
+	FAngelscriptBoundFunction BindStaticBehaviour(asEBehaviours Beh, FBindString Signature, asSFuncPtr Ptr, TDPluginASAutoCaller::FunctionCaller Caller, void* UserData = nullptr);
+	FAngelscriptBoundFunction BindMethod(FBindString Signature, asSFuncPtr Ptr, TDPluginASAutoCaller::FunctionCaller Caller, void* UserData = nullptr);
+	FAngelscriptBoundFunction BindExternMethod(FBindString Signature, asSFuncPtr Ptr, TDPluginASAutoCaller::FunctionCaller Caller, void* UserData = nullptr);
+	FAngelscriptBoundFunction BindExternMethod(FBindString Signature, asSFuncPtr Ptr, const FAngelscriptType::FBindParams& BindParams, TDPluginASAutoCaller::FunctionCaller Caller, void* UserData = nullptr);
 	FAngelscriptBoundProperty BindProperty(FBindString Signature, size_t Offset);
 	FAngelscriptBoundProperty BindProperty(FBindString Signature, size_t Offset, const FAngelscriptType::FBindParams& BindParams);
 

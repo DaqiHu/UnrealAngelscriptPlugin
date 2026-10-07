@@ -241,8 +241,8 @@ namespace AngelscriptStaticJITAotFixture
 			return true;
 		}
 
-		const ASAutoCaller::FunctionCaller ConstructorCaller =
-			ASAutoCaller::MakeFunctionCaller(ConstructObjectLastNativeProbe);
+		const TDPluginASAutoCaller::FunctionCaller ConstructorCaller =
+			TDPluginASAutoCaller::MakeFunctionCaller(ConstructObjectLastNativeProbe);
 		return ScriptEngine.RegisterObjectType(
 				"FAotObjectLastProbe",
 				sizeof(FObjectLastNativeProbe),

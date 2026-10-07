@@ -204,10 +204,10 @@ private:
 	{
 		Engine.SetUserData(&Lifecycle, AngelscriptNativeTestSupport::NativeLifecycleRecorderUserDataSlot);
 		Engine.SetUserData(&Observation, LoopObservationUserDataSlot);
-		const ASAutoCaller::FunctionCaller BeginCaller = ASAutoCaller::MakeFunctionCaller(BeginScriptLoopValue);
-		const ASAutoCaller::FunctionCaller EndCaller = ASAutoCaller::MakeFunctionCaller(EndScriptLoopValue);
-		const ASAutoCaller::FunctionCaller EventCaller = ASAutoCaller::MakeFunctionCaller(RecordVariableLoopEvent);
-		const ASAutoCaller::FunctionCaller AdvanceCaller = ASAutoCaller::MakeFunctionCaller(AdvanceVariableLoop);
+		const TDPluginASAutoCaller::FunctionCaller BeginCaller = TDPluginASAutoCaller::MakeFunctionCaller(BeginScriptLoopValue);
+		const TDPluginASAutoCaller::FunctionCaller EndCaller = TDPluginASAutoCaller::MakeFunctionCaller(EndScriptLoopValue);
+		const TDPluginASAutoCaller::FunctionCaller EventCaller = TDPluginASAutoCaller::MakeFunctionCaller(RecordVariableLoopEvent);
+		const TDPluginASAutoCaller::FunctionCaller AdvanceCaller = TDPluginASAutoCaller::MakeFunctionCaller(AdvanceVariableLoop);
 		return Engine.RegisterGlobalFunction(
 			"int BeginScriptLoopValue(int Value)",
 			asFUNCTION(BeginScriptLoopValue),

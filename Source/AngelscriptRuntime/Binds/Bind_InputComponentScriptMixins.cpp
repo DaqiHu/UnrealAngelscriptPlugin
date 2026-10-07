@@ -28,17 +28,17 @@ AS_FORCE_LINK const FAngelscriptBind Bind_InputComponentScriptMixins(
 		Binds.RegisterFunctionBindingForTarget(
 			UPlayerInputScriptMixinLibrary::StaticClass(),
 			"AddActionMapping",
-			{ERASE_FUNCTION_PTR(UPlayerInputScriptMixinLibrary::AddActionMapping, (UPlayerInput*, const FInputActionKeyMapping&), ERASE_ARGUMENT_PACK(void))});
+			{TDPLUGIN_ERASE_FUNCTION_PTR(UPlayerInputScriptMixinLibrary::AddActionMapping, (UPlayerInput*, const FInputActionKeyMapping&), TDPLUGIN_ERASE_ARGUMENT_PACK(void))});
 		Binds.RegisterFunctionBindingForTarget(
 			UPlayerInputScriptMixinLibrary::StaticClass(),
 			"AddAxisMapping",
-			{ERASE_FUNCTION_PTR(UPlayerInputScriptMixinLibrary::AddAxisMapping, (UPlayerInput*, const FInputAxisKeyMapping&), ERASE_ARGUMENT_PACK(void))});
+			{TDPLUGIN_ERASE_FUNCTION_PTR(UPlayerInputScriptMixinLibrary::AddAxisMapping, (UPlayerInput*, const FInputAxisKeyMapping&), TDPLUGIN_ERASE_ARGUMENT_PACK(void))});
 		Binds.RegisterFunctionBindingForTarget(
 			UPlayerInputScriptMixinLibrary::StaticClass(),
 			"RemoveActionMapping",
-			{ERASE_FUNCTION_PTR(UPlayerInputScriptMixinLibrary::RemoveActionMapping, (UPlayerInput*, const FInputActionKeyMapping&), ERASE_ARGUMENT_PACK(void))});
+			{TDPLUGIN_ERASE_FUNCTION_PTR(UPlayerInputScriptMixinLibrary::RemoveActionMapping, (UPlayerInput*, const FInputActionKeyMapping&), TDPLUGIN_ERASE_ARGUMENT_PACK(void))});
 		Binds.RegisterFunctionBindingForTarget(
 			UPlayerInputScriptMixinLibrary::StaticClass(),
 			"RemoveAxisMapping",
-			{ERASE_FUNCTION_PTR(UPlayerInputScriptMixinLibrary::RemoveAxisMapping, (UPlayerInput*, const FInputAxisKeyMapping&), ERASE_ARGUMENT_PACK(void))});
+			{TDPLUGIN_ERASE_FUNCTION_PTR(UPlayerInputScriptMixinLibrary::RemoveAxisMapping, (UPlayerInput*, const FInputAxisKeyMapping&), TDPLUGIN_ERASE_ARGUMENT_PACK(void))});
 	});
